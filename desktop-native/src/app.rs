@@ -1992,7 +1992,12 @@ impl Hangar {
             Payload::Saved(key, source, open, result) => {
                 let (card, note) = match result {
                     Ok((_, true)) => (Some(FileCard::Empty), None),
-                    Ok((path, _)) if open && composer::openable_path(&path) => { cx.open_with_system(&path); (None, None) }
+                    Ok((path, _)) if open && composer::openable_path(&path) => {
+                        cx.open_with_system(&path);
+                        // Reabrir o que já foi salvo mantém o cartão "baixado" (Abrir e Mostrar na pasta).
+                        let kept = self.file_cards.get(&(key.clone(), source.clone())).filter(|card| matches!(card, FileCard::Saved(_))).cloned();
+                        (kept, None)
+                    }
                     Ok((path, _)) if open => {
                         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                         (None, Some((tr("open_refused").replace("{name}", &name), true)))
@@ -3746,10 +3751,16 @@ impl Hangar {
             return;
         }
         let card = (key.clone(), source.clone());
-        // Já baixado: Abrir é o arquivo salvo, sem baixar de novo.
-        if open && let Some(FileCard::Saved(saved)) = self.file_cards.get(&card)
-            && composer::openable_path(saved) && saved.is_file() {
-            cx.open_with_system(saved);
+        // Já baixado: Abrir é o arquivo salvo, sem baixar de novo. O destino real é resolvido fora da janela
+        // (volume de rede parado travaria a tela) e é ele que passa pela regra de abrir, em `Payload::Saved`.
+        if open && let Some(FileCard::Saved(saved)) = self.file_cards.get(&card) {
+            let (saved, tx, connection) = (saved.clone(), self.tx.clone(), self.connection);
+            self.runtime.spawn(async move {
+                let real = tokio::task::spawn_blocking(move || std::fs::canonicalize(&saved).ok().filter(|real| real.is_file()))
+                    .await.ok().flatten();
+                let result = real.map(|real| (real, false)).ok_or_else(|| (String::new(), true));
+                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, true, result) }).await;
+            });
             return;
         }
         if open && let Source::Cited(path) | Source::Workspace(path) = &source && let Some(real) = self.file_on_disk(path)

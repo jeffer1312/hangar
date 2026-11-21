@@ -48,6 +48,23 @@ it('miniatura reduzida que falha tenta o original uma vez antes de mostrar o err
   expect(container.textContent).toContain('falhou:foto.png');
 });
 
+it('voltar à rota que falhou tenta de novo em vez de ficar sem imagem', async () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  roots.push(root);
+  const show = (base: string) => act(async () => root.render(createElement(ImageThumb, {
+    items: [{ uri: `${base}/foto.png`, thumbUri: `${base}/foto.png?w=320`, name: 'foto.png', kind: 'image' as const }], index: 0, style: {},
+  })));
+  await show('https://lan.test');
+  await fail(container);
+  await fail(container);
+  expect(container.textContent).toContain('falhou:foto.png');
+  await show('https://ts.test');
+  expect(container.querySelector('img')!.getAttribute('src')).toBe('https://ts.test/foto.png?w=320');
+  await show('https://lan.test');
+  expect(container.querySelector('img')!.getAttribute('src')).toBe('https://lan.test/foto.png?w=320');
+});
+
 it('sem miniatura reduzida, a falha do original já mostra o erro', async () => {
   const container = await render({ uri: 'https://a.test/foto.png' });
   await fail(container);
