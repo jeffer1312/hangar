@@ -1,5 +1,6 @@
 pub mod dto;
 pub mod device_install;
+pub mod download;
 mod local;
 mod recent;
 pub use recent::RecentFailure;
@@ -530,14 +531,23 @@ impl Api {
     // Vídeo vai com `media=later`: o servidor responde assim que grava, e quadros e fala chegam por `upload-media`.
     // Sem isso, um vídeo longo passava do prazo do envio ainda no ffmpeg e o anexo parecia perdido.
     pub async fn upload(&self, name: &str, filename: &str, mime: &str, bytes: Vec<u8>) -> Result<Uploaded, Failure> {
+        self.upload_with_progress(name, filename, mime, bytes, |_, _| {}).await
+    }
+
+    /// O mesmo envio com o progresso: `report(enviado, total)` a cada pedaço que sai, no máximo 10 vezes por segundo.
+    pub async fn upload_with_progress(&self, name: &str, filename: &str, mime: &str, bytes: Vec<u8>,
+        report: impl FnMut(u64, u64) + Send + 'static) -> Result<Uploaded, Failure> {
         #[derive(serde::Deserialize)]
         struct Reply { #[serde(flatten)] uploaded: Uploaded, #[serde(default)] media_id: Option<String> }
         let mut url = self.endpoint(Some(name), Some("upload"));
         if crate::audio::is_video(filename) { url.query_pairs_mut().append_pair("media", "later"); }
+        let total = bytes.len() as u64;
         let r = self.client.post(url)
             .header(header::CONTENT_TYPE, mime)
             .header("X-Filename", crate::composer::encode_component(if filename.is_empty() { "arquivo" } else { filename }))
-            .body(bytes).timeout(Duration::from_secs(UPLOAD_SECONDS))
+            // Corpo em pedaços para contar o que sai; o tamanho declarado mantém o envio sem `chunked`, como antes.
+            .header(header::CONTENT_LENGTH, total)
+            .body(reqwest::Body::wrap_stream(download::counted_chunks(bytes, report))).timeout(Duration::from_secs(UPLOAD_SECONDS))
             .send().await.map_err(|_| Failure::transport(true))?;
         let reply: Reply = self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
         let mut uploaded = reply.uploaded;
@@ -695,8 +705,46 @@ impl Api {
     pub async fn fetch(&self, name: &str, source: &Source) -> Result<Vec<u8>, Failure> { self.fetch_sized(name, source, None).await }
 
     /// `width`: a miniatura que o servidor reduz (`?w=`, lado menor), só nas rotas de anexo e de arquivo; o servidor
-    /// manda o original quando não é imagem que ele reduz ou quando ela já é menor.
+    /// manda o original quando não é imagem que ele reduz ou quando ela já é menor. Vai para a memória, por isso o teto
+    /// de `MAX_BYTES`; o arquivo para guardar vai por `download`, direto ao disco.
     pub async fn fetch_sized(&self, name: &str, source: &Source, width: Option<u32>) -> Result<Vec<u8>, Failure> {
+        if let Source::Memory(_, bytes) = source { return Ok(bytes.0.to_vec()); }
+        let r = self.open_source(name, source, width).await?;
+        if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
+        // Resposta sem tamanho declarado para no teto enquanto chega.
+        let mut body = Vec::new();
+        let mut chunks = std::pin::pin!(r.bytes_stream());
+        while let Some(chunk) = download::next_chunk(&mut chunks, download::IDLE).await? {
+            body.extend_from_slice(&chunk);
+            if body.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
+        }
+        Ok(body)
+    }
+
+    /// Baixa o arquivo direto em `target`, passando por `<target>.part`, sem teto de tamanho e sem prazo total: só o de
+    /// silêncio (`download::IDLE`). `report(feito, total)` recebe o progresso no máximo 10 vezes por segundo; o total é o
+    /// `Content-Length`, quando veio. `None`: veio vazio e nada foi gravado. Abortar a tarefa apaga o `.part`.
+    pub async fn download(&self, name: &str, source: &Source, target: std::path::PathBuf, report: impl FnMut(u64, Option<u64>))
+        -> Result<Option<std::path::PathBuf>, Failure> {
+        if let Source::Memory(_, bytes) = source { return download::write_bytes(target, &bytes.0).await; }
+        let r = self.open_source(name, source, None).await?;
+        let total = r.content_length();
+        let mut reporter = download::Reporter::new(report);
+        let mut chunks = std::pin::pin!(r.bytes_stream());
+        // O `.part` só nasce com o primeiro pedaço: resposta vazia não deixa arquivo.
+        let mut writer: Option<download::PartWriter> = None;
+        while let Some(chunk) = download::next_chunk(&mut chunks, download::IDLE).await? {
+            if chunk.is_empty() { continue; }
+            if writer.is_none() { writer = Some(download::PartWriter::create(target.clone()).await?); }
+            let part = writer.as_mut().expect("created above");
+            part.write(&chunk).await?;
+            reporter.step(part.written(), total);
+        }
+        match writer { Some(part) => part.finish().await.map(Some), None => Ok(None) }
+    }
+
+    /// A resposta já conferida de um anexo, com o prazo de silêncio até os cabeçalhos; a conexão tem o prazo dela.
+    async fn open_source(&self, name: &str, source: &Source, width: Option<u32>) -> Result<Response, Failure> {
         let mut url = self.endpoint(Some(name), None);
         let mut remote = false;
         let width = width.map(|w| w.to_string());
@@ -716,26 +764,19 @@ impl Api {
                 url = Url::parse(address).ok().filter(|url| matches!(url.scheme(), "http" | "https")).ok_or_else(|| Failure::local("invalid_url"))?;
                 remote = true;
             }
-            Source::Memory(_, bytes) => return Ok(bytes.0.to_vec()),
+            // Quem chama já respondeu com os bytes que tem.
+            Source::Memory(..) => return Err(Failure::local("invalid_url")),
         }
         let request = if remote { self.plain.get(url) } else { self.client.get(url) };
-        let r = request.timeout(Duration::from_secs(UPLOAD_SECONDS)).send().await.map_err(|_| Failure::transport(false))?;
-        // Erro de terceiro não tem o corpo lido: nem memória, nem texto escolhido por ele na tela.
-        if matches!(source, Source::Remote(_)) && !r.status().is_success() {
-            let status = r.status().as_u16();
-            return Err(Failure { status: Some(status), detail: failure_detail(None, status), retry_after: None, uncertain: false, code: None });
-        }
-        let r = self.checked(r, false).await?;
-        if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
-        // Resposta sem tamanho declarado para no teto enquanto chega.
-        let mut body = Vec::new();
-        let mut chunks = std::pin::pin!(r.bytes_stream());
-        use futures::StreamExt;
-        while let Some(chunk) = chunks.next().await {
-            body.extend_from_slice(&chunk.map_err(|_| Failure::transport(false))?);
-            if body.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
-        }
-        Ok(body)
+        download::within(download::IDLE, async {
+            let r = request.send().await.map_err(|_| Failure::transport(false))?;
+            // Erro de terceiro não tem o corpo lido: nem memória, nem texto escolhido por ele na tela.
+            if remote && !r.status().is_success() {
+                let status = r.status().as_u16();
+                return Err(Failure { status: Some(status), detail: failure_detail(None, status), retry_after: None, uncertain: false, code: None });
+            }
+            self.checked(r, false).await
+        }).await?
     }
 
     /// Página publicada: sem `extra` é a casca isolada (com `raw=1`, o HTML cru); `["shot"]` é a imagem. O 404 diz
@@ -1756,6 +1797,49 @@ mod tests {
             assert_eq!(api.fetch("fixture", &source).await.unwrap(), b"PNG\0");
         }
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn download_lands_on_disk_through_the_part_and_a_cut_body_leaves_nothing() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for whole in [true, false] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                    request.push_str(&line);
+                    if line == "\r\n" { break; }
+                }
+                // O token vai só no cabeçalho, nunca na URL.
+                assert!(request.lines().any(|line| line.eq_ignore_ascii_case("authorization: Bearer fixture-owner")));
+                assert!(!request.lines().next().unwrap().contains("fixture-owner"));
+                let reply: &[u8] = if whole { b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world" }
+                    else { b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhell" };
+                stream.write_all(reply).await.unwrap();
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("hangar-api-download-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let api = super::Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
+        let source = super::Source::Upload("relatorio.pdf".into());
+        let mut seen = Vec::new();
+        let target = dir.join("relatorio.pdf");
+        let saved = api.download("fixture", &source, target.clone(), |done, total| seen.push((done, total))).await.unwrap();
+        assert_eq!(saved.as_deref(), Some(target.as_path()));
+        assert_eq!(std::fs::read(&target).unwrap(), b"hello world");
+        assert!(!super::download::part_path(&target).exists());
+        assert_eq!(seen.last(), Some(&(11, Some(11))));
+        let cut = dir.join("cortado.pdf");
+        assert!(api.download("fixture", &source, cut.clone(), |_, _| {}).await.is_err());
+        assert!(!cut.exists() && !super::download::part_path(&cut).exists());
+        server.await.unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

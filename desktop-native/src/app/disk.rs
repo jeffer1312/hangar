@@ -243,8 +243,32 @@ impl Uploads {
         Some(real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(plain_path(text))))
     }
 
+    /// O arquivo gravado em `target` sem passar inteiro pela memória: deste disco, cópia em blocos; do backend, o
+    /// download direto ao disco. `None`: veio vazio e nada foi gravado.
+    pub(super) async fn download(&self, api: &Api, name: &str, source: &Source, target: PathBuf, report: impl FnMut(u64, Option<u64>) + Send)
+        -> Result<Option<PathBuf>, Failure> {
+        enum Here { File(PathBuf), Bytes(Vec<u8>) }
+        let Uploads::Local { dir, cwd, jsonl } = self else { return api.download(name, source, target, report).await };
+        let (dir, cwd, jsonl, local) = (dir.clone(), cwd.clone(), jsonl.clone(), source.clone());
+        // `None`: não dá para ler daqui; o backend responde, com o erro dele se for o caso.
+        let here = blocking(move || Ok(match local {
+            Source::Upload(file) => Some(resolve(&dir, &file).map(Here::File)),
+            Source::Cited(path) => cited(&cwd, &path).map(|path| Ok(Here::File(path))),
+            Source::Transcript(id, index) => transcript_image(&jsonl, &id, index).map(|bytes| Ok(Here::Bytes(bytes))),
+            Source::Remote(_) | Source::Workspace(_) | Source::Memory(..) => None,
+        })).await?;
+        match here {
+            Some(Ok(Here::File(path))) => crate::api::download::copy_file(path, target, report).await,
+            Some(Ok(Here::Bytes(bytes))) => crate::api::download::write_bytes(target, &bytes).await,
+            Some(Err(error)) => Err(error),
+            None => api.download(name, source, target, report).await,
+        }
+    }
+
     /// Vídeo sobe pelo backend, que extrai quadros e transcreve a fala; o resto grava aqui e varre os vencidos do projeto.
-    pub(super) async fn upload(&self, api: &Api, name: &str, filename: &str, bytes: Vec<u8>, retention: Option<i64>) -> Result<Uploaded, Failure> {
+    /// `report(enviado, total)`: o progresso do envio pelo backend; gravar aqui é imediato.
+    pub(super) async fn upload(&self, api: &Api, name: &str, filename: &str, bytes: Vec<u8>, retention: Option<i64>,
+        report: impl FnMut(u64, u64) + Send + 'static) -> Result<Uploaded, Failure> {
         match self {
             Uploads::Local { dir, .. } if !VIDEO_EXTS.contains(&safe_ext(filename).as_str()) => {
                 let (dir, filename) = (dir.clone(), filename.to_owned());
@@ -254,7 +278,7 @@ impl Uploads {
                     Ok(saved)
                 }).await
             }
-            _ => api.upload(name, filename, composer::mime_for(filename), bytes).await,
+            _ => api.upload_with_progress(name, filename, composer::mime_for(filename), bytes, report).await,
         }
     }
 }
