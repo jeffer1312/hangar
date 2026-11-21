@@ -35,8 +35,8 @@ impl Section {
 /// Pedido de "Mostrar na conversa": o evento, e a linha e a hora depois de achada.
 pub(super) struct Flash { pub(super) key: SessionKey, pub(super) event: String, pub(super) row: Option<String>, pub(super) at: Option<Instant> }
 
-/// Seleção, revisão, eventos, o id do último deles (em hash) e a geração do painel.
-pub(super) type Stamp = (u64, u64, usize, u64, u64);
+/// Seleção, revisão, eventos, o id do último deles (em hash), a versão dos eventos e a geração do painel.
+pub(super) type Stamp = (u64, u64, usize, u64, u64, u64);
 
 /// A sessão e a revisão do histórico dela: reabrir a mesma sessão traz a primeira página de novo, e ela é outra dona.
 pub(super) type Owner = (SessionKey, u64);
@@ -214,6 +214,10 @@ impl Hangar {
         let list: Vec<usize> = kept.iter().copied().filter(|&i| section.holds(&items[i])).collect();
         // Só o estado da leitura, sem segurar o painel emprestado: a grade abaixo pede miniaturas.
         let listing = self.media_panel.uploads.as_ref().map(|result| result.as_ref().map(|_| ()).map_err(Clone::clone));
+        // O começo da conversa ainda vem: o que já se achou fica à mostra, e vazio só depois de tudo lido.
+        let reading = history_pending(self.history_limit, self.history_settled(), self.media_panel.full_failed.is_some());
+        let still_reading = (reading && matches!(listing, Some(Ok(()))) && !list.is_empty())
+            .then(|| div().id("media-history-loading").role(Role::Status).child(note(tr("media_panel_loading"), theme::muted())));
         let body = match listing {
             None => div().id("media-loading").role(Role::Status).child(note(tr("media_panel_loading"), theme::muted())).into_any_element(),
             Some(Err(reason)) => div().id("media-failed").role(Role::Alert).flex().flex_col().gap_2()
@@ -224,6 +228,8 @@ impl Hangar {
                         this.redraw(Area::Side, cx);
                     }))))
                 .into_any_element(),
+            Some(Ok(())) if list.is_empty() && reading => div().id("media-loading").role(Role::Status)
+                .child(note(tr("media_panel_loading"), theme::muted())).into_any_element(),
             Some(Ok(())) if list.is_empty() => {
                 let empty = if filter != Filter::All && items.iter().any(|item| section.holds(item)) { "media_empty_filter" } else {
                     match section { Section::Media => "media_empty_media", Section::Files => "media_empty_files", Section::Audio => "media_empty_audio" }
@@ -247,7 +253,7 @@ impl Hangar {
         div().size_full().flex().flex_col()
             .child(div().flex_shrink_0().px(px(PAD)).pt(px(12.)).child(tabs))
             .child(div().flex_shrink_0().px(px(PAD)).pt(px(10.)).pb(px(4.)).child(chips))
-            .child(div().id("media-scroll").flex_1().min_h_0().overflow_y_scroll().px(px(PAD)).pb(px(PAD)).children(partial).child(body))
+            .child(div().id("media-scroll").flex_1().min_h_0().overflow_y_scroll().px(px(PAD)).pb(px(PAD)).children(partial).children(still_reading).child(body))
             .into_any_element()
     }
 
@@ -269,7 +275,9 @@ impl Hangar {
             let title = day.map_or_else(|| tr("media_group_undated"), |day| gallery::day_text(gallery::day_name(day, today), true));
             grid = grid.child(media_day_title(title));
             for row in members.chunks(COLUMNS) {
-                let cells: Vec<AnyElement> = row.iter().map(|&i| self.render_media_cell(key, i, &items[i], side, cx)).collect();
+                // Laço, não `map`: cada célula pede a miniatura dela.
+                let mut cells: Vec<AnyElement> = Vec::with_capacity(row.len());
+                for &i in row { cells.push(self.render_media_cell(key, i, &items[i], side, cx)); }
                 grid = grid.child(media_grid_row(cells));
             }
         }
@@ -286,17 +294,33 @@ impl Hangar {
     fn render_media_cell(&mut self, key: &SessionKey, i: usize, item: &Item, side: f32, cx: &mut Context<Self>) -> AnyElement {
         let thumb = item.thumb().cloned();
         if let Some(thumb) = &thumb { self.ensure_media(thumb, false); }
-        let picture = thumb.as_ref().and_then(|thumb| match self.media.get(&(key.clone(), thumb.clone())) {
-            Some(MediaState::Image(picture)) => Some(picture.clone()),
-            _ => None,
-        });
-        let (open_key, source) = (key.clone(), item.source.clone());
-        let label = format!("{} · {}", item.name, gallery::origin_text(item.origin, false).unwrap_or_default());
+        let (picture, failed) = match thumb.as_ref().and_then(|thumb| self.media.get(&(key.clone(), thumb.clone()))) {
+            Some(MediaState::Image(picture)) => (Some(picture.clone()), None),
+            Some(MediaState::Failed(reason)) => (None, Some(reason.clone())),
+            _ => (None, None),
+        };
+        let (open_key, source, retry) = (key.clone(), item.source.clone(), thumb.clone());
+        let label = match &failed {
+            Some(_) => format!("{} · {}", item.name, activity::web("file_card_retry")),
+            None => format!("{} · {}", item.name, gallery::origin_text(item.origin, false).unwrap_or_default()),
+        };
+        let retrying = failed.is_some();
         media_cell(SharedString::from(format!("media-cell-{i}")), side, picture, item.kind == Kind::Video, item.name.clone(),
             gallery::origin_text(item.origin, true))
+            // A falha fica à vista e o clique busca de novo, em vez de abrir o visor sem imagem.
+            .when_some(failed, |el, reason| el.child(div().absolute().inset_0().p_1().overflow_hidden().bg(theme::inset())
+                .flex().flex_col().justify_end().gap_1().text_size(px(10.))
+                .child(div().text_color(theme::warning()).child(reason))
+                .child(div().text_color(theme::accent()).child(activity::web("file_card_retry")))))
             .cursor_pointer().focusable().tab_stop(true).role(Role::Button).aria_label(label)
             .focus_visible(|el| el.border_color(theme::accent_focus()))
-            .on_click(cx.listener(move |this, _, window, cx| this.open_gallery(open_key.clone(), source.clone(), vec![source.clone()], 0, window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| match retry.clone().filter(|_| retrying) {
+                Some(thumb) => {
+                    this.retry_media(open_key.clone(), thumb, cx);
+                    this.redraw(Area::Side, cx);
+                }
+                None => this.open_gallery(open_key.clone(), source.clone(), vec![source.clone()], 0, window, cx),
+            }))
             .into_any_element()
     }
 
@@ -435,6 +459,10 @@ pub(crate) fn media_cell(id: SharedString, side: f32, picture: Option<Arc<Render
             .px(px(5.)).rounded(px(4.)).bg(theme::scrim()).text_size(px(9.)).text_color(theme::text()).child(who)))
 }
 
+/// A aba ainda não leu a conversa inteira: `limit` 0 é o histórico todo pedido, e só vale depois de chegar. A falha
+/// dele não é leitura em curso: a aba mostra o que tem e o aviso.
+fn history_pending(limit: usize, settled: bool, failed: bool) -> bool { !failed && !(limit == 0 && settled) }
+
 /// `/home/<usuário>/x` vira `~/x`, como a pasta da aba Arquivos.
 fn abbreviate_home(path: &str) -> String {
     match std::env::home_dir().map(|home| home.to_string_lossy().into_owned()) {
@@ -447,7 +475,7 @@ fn abbreviate_home(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` da gpui colide com o atributo padrão.
-    use super::{MAX_SHOWN, MediaPanel, Owner, PAGE};
+    use super::{MAX_SHOWN, MediaPanel, Owner, PAGE, history_pending};
     use crate::delivery::SessionKey;
 
     fn owner(name: &str, revision: u64) -> Owner {
@@ -507,5 +535,13 @@ mod tests {
         while window.1 < MAX_SHOWN { window = MediaPanel::more(window.0, window.1); }
         assert_eq!(window, (0, MAX_SHOWN));
         assert_eq!(MediaPanel::more(window.0, window.1), (PAGE, MAX_SHOWN), "no teto troca em vez de crescer");
+    }
+
+    #[test]
+    fn empty_waits_for_the_whole_history_unless_it_failed() {
+        assert!(history_pending(400, true, false), "só a primeira página chegou");
+        assert!(history_pending(0, false, false), "o histórico inteiro está em voo");
+        assert!(!history_pending(0, true, false), "tudo lido: vazio é vazio");
+        assert!(!history_pending(400, true, true), "a falha mostra o aviso, não carregando para sempre");
     }
 }

@@ -2,7 +2,7 @@ import { Platform, Share } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 import { startActivityAsync } from 'expo-intent-launcher';
 import * as m from '../../paraglide/messages';
-import { keptIsCurrent, type KeptVersion } from './attachmentUrls';
+import { downloadedVersion, keptIsCurrent, type KeptVersion } from './attachmentUrls';
 
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
 
@@ -82,12 +82,14 @@ export function keptCopy(key: string, name: string, now: KeptVersion): File | nu
 }
 
 /** Baixa para a cópia guardada com progresso (0..1, ou null sem tamanho) e cancelamento pelo `signal`.
- *  Vai para um nome temporário e só substitui a cópia ao terminar, como o `localCopy`. A versão é
- *  lida ao terminar: data que chegou durante o download vale para esta cópia. */
+ *  Vai para um nome temporário e só substitui a cópia ao terminar, como o `localCopy`. A versão gravada
+ *  é a dos bytes (`downloadedVersion`): o download do expo-file-system não devolve os cabeçalhos da
+ *  resposta, então a medida do começo e a do fim são lidas e comparadas. */
 export async function downloadKept(
   key: string, uri: string, headers: Record<string, string> | undefined, name: string,
   version: () => KeptVersion, onProgress: (fraction: number | null) => void, signal: AbortSignal,
 ): Promise<File> {
+  const start = version();
   const target = keptFile(key, name);
   const tmp = new File(target.parentDirectory, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.part`);
   try {
@@ -106,7 +108,7 @@ export async function downloadKept(
     throw e;
   }
   // Sem a versão gravada a cópia continua valendo; só a data deixa de ser conferida.
-  try { versionFile(key).write(JSON.stringify(version())); } catch { /* idem */ }
+  try { versionFile(key).write(JSON.stringify(downloadedVersion(start, version()))); } catch { /* idem */ }
   return target;
 }
 

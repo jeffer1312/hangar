@@ -45,6 +45,7 @@ vi.mock('../../paraglide/messages', () => ({
   visor_anterior: () => 'previous', visor_proxima: () => 'next',
   gallery_video_swipe_hint: () => 'swipe', gallery_video_close_hint: () => 'swipe_close',
   visor_nao_carregou: () => 'did not load', comum_carregando: () => 'loading', arquivo_carregar_erro: () => 'error',
+  lista_tentar_novamente: () => 'retry',
 }));
 
 import { clampPan, Lightbox, panLimits, type LightboxProps } from './Lightbox';
@@ -295,6 +296,23 @@ it('caption, share and "in chat"', async () => {
   expect(shareFile).toHaveBeenCalledWith('https://example.test/1.png', headers, '1.png');
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="in_chat"]')!.click());
   expect(onShowInChat).toHaveBeenCalledTimes(1);
+});
+
+it('an image that does not load says so and retries; another image starts clean', async () => {
+  const { container, root } = await render();
+  const fail = () => act(() => { container.querySelector('img')!.dispatchEvent(new Event('error')); });
+  fail();
+  expect(container.textContent).toContain('error');
+  const before = container.querySelector('img');
+  await act(async () => container.querySelector<HTMLElement>('[aria-label="retry: 1.png"]')!.click());
+  expect(container.textContent).not.toContain('error');
+  expect(container.querySelector('img')).not.toBe(before);
+  fail();
+  expect(container.textContent).toContain('error');
+  await act(async () => root.render(createElement(Lightbox, {
+    visible: true, uri: 'https://example.test/2.png', filename: '2.png', onClose: vi.fn(), onStep: vi.fn(),
+  })));
+  expect(container.textContent).not.toContain('error');
 });
 
 it('without "in chat" the action is not offered', async () => {

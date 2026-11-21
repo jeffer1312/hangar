@@ -114,6 +114,16 @@ export function Lightbox({
     onClose();
   };
 
+  // A falha é da URI que falhou: outra mídia na tela começa sem ela. `attempt` remonta a imagem no Tentar novamente.
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const imageFailed = failedUri === uri;
+  const retryImage = () => {
+    haptic.selection();
+    setFailedUri(null);
+    setAttempt((n) => n + 1);
+  };
+
   const [saving, setSaving] = useState(false);
   const savingNow = useRef(false);
   const save = () => {
@@ -335,11 +345,24 @@ export function Lightbox({
               accessibilityRole="image"
               {...stepA11y}
             >
-              <Image source={{ uri, headers }} style={[styles.img, imageBackground ? { backgroundColor: imageBackground } : null]} contentFit="contain" transition={200}
-                onLoad={(e) => { natW.value = e.source.width; natH.value = e.source.height; }} />
+              {/* `recyclingKey`: a imagem anterior some na troca, em vez de aparecer com o nome da próxima. */}
+              <Image key={attempt} source={{ uri, headers }} recyclingKey={uri}
+                style={[styles.img, imageBackground ? { backgroundColor: imageBackground } : null]} contentFit="contain" transition={200}
+                onLoad={(e) => { natW.value = e.source.width; natH.value = e.source.height; }}
+                onError={() => setFailedUri(uri)} />
             </Animated.View>
           </GestureDetector>
         )}
+        {kind !== 'video' && imageFailed ? (
+          // Fora do detector de gestos: o toque no botão não vira arrasto, e o arrasto em volta continua passando.
+          <View style={[StyleSheet.absoluteFill, styles.imageError]} pointerEvents="box-none">
+            <Text style={styles.videoMsg} accessibilityRole="alert">{m.arquivo_carregar_erro()}</Text>
+            <Pressable onPress={retryImage} style={styles.retryBtn} hitSlop={6} accessibilityRole="button"
+              accessibilityLabel={`${m.lista_tentar_novamente()}: ${filename}`}>
+              <Text style={styles.videoMsg}>{m.lista_tentar_novamente()}</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
       <Animated.View style={[styles.bottom, { paddingBottom: Math.max(insets.bottom, theme.base.space[4]) }, bottomStyle]}>
         <LightboxCaption filename={filename} details={details} />
@@ -395,13 +418,14 @@ function VideoPage({ uri, headers, name }: { uri: string; headers?: Record<strin
   const [src, setSrc] = useState<string | null>(comToken ? null : uri);
   const [erro, setErro] = useState('');
   useEffect(() => {
+    // Toda troca de vídeo começa sem a falha do anterior, também o remoto (sem token).
+    setErro('');
     if (!comToken) {
       setSrc(uri);
       return;
     }
     let vivo = true;
     setSrc(null);
-    setErro('');
     localCopy(uri, headers, name)
       .then((f) => { if (vivo) setSrc(f.uri); })
       .catch((e: unknown) => { if (vivo) setErro(e instanceof Error ? e.message : String(e)); });
@@ -523,6 +547,18 @@ const styles = StyleSheet.create((theme) => ({
   videoLoading: {
     alignItems: 'center',
     gap: theme.base.space[2],
+  },
+  imageError: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.base.space[3],
+  },
+  retryBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: theme.base.space[4],
+    borderRadius: theme.base.radius.full,
+    backgroundColor: 'rgba(255,255,255,0.12)',
   },
   videoMsg: {
     color: theme.ink.onAccent,

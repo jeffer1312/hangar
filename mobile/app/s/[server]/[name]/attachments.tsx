@@ -226,19 +226,21 @@ export default function AttachmentsSheet() {
     );
   }
 
-  const body = loading ? (
-    <View style={styles.center}>
-      <ActivityIndicator color={theme.tokens.text.secondary} />
-      <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.comum_carregando()}</Text>
-    </View>
-  ) : erro ? (
-    <View style={styles.center}>
+  // A falha da lista do cofre fica em cima: o que a conversa citou (e as cópias guardadas) continua abaixo.
+  const failure = !loading && erro ? (
+    <View style={all.length === 0 ? styles.center : styles.failureBar}>
       <Text style={[styles.err, { color: theme.tokens.status.error }]} accessibilityRole="alert">{m.anexos_erro_listar()} {erro}</Text>
       <Pressable onPress={() => void load()} style={[styles.retryBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
         <Text style={[styles.retryText, { color: theme.tokens.accent.base }]}>{m.lista_tentar_novamente()}</Text>
       </Pressable>
     </View>
-  ) : all.length === 0 ? (
+  ) : null;
+  const body = loading ? (
+    <View style={styles.center}>
+      <ActivityIndicator color={theme.tokens.text.secondary} />
+      <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.comum_carregando()}</Text>
+    </View>
+  ) : erro && all.length === 0 ? null : all.length === 0 ? (
     <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.anexos_nenhum()}</Text>
   ) : list.length === 0 ? (
     <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.media_empty()}</Text>
@@ -275,7 +277,7 @@ export default function AttachmentsSheet() {
       </Text>
       <MediaTabs counts={counts} selected={tab} onSelect={(t) => { haptic.selection(); setOpenKey(null); setTab(t); }} />
       <OriginChips selected={filter} onSelect={(f) => { haptic.selection(); setOpenKey(null); setFilter(f); }} />
-      <View style={styles.body}>{body}</View>
+      <View style={styles.body}>{failure}{body}</View>
 
       {openKey !== null ? (
         <GalleryViewer entries={entries} openKey={openKey} onOpenKey={setOpenKey} onClose={() => setOpenKey(null)}
@@ -331,6 +333,11 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: 'center',
     gap: theme.base.space[2],
     paddingVertical: theme.base.space[4],
+  },
+  failureBar: {
+    alignItems: 'center',
+    gap: theme.base.space[2],
+    paddingBottom: theme.base.space[3],
   },
   muted: {
     fontSize: theme.base.text.sm,

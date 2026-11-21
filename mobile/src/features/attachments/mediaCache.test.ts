@@ -24,9 +24,9 @@ vi.mock('react-native', () => ({ Platform: { OS: 'ios' }, Share: { share: vi.fn(
 vi.mock('../../paraglide/messages', () => ({}));
 
 import { downloadKept, keptCopy, keyHash } from './mediaCache';
-import { keptIsCurrent, keptKey, type KeptVersion } from './attachmentUrls';
+import { downloadedVersion, keptIsCurrent, keptKey, type KeptVersion } from './attachmentUrls';
 
-const item = { source: 'cited' as const, ref: '/tmp/out/report.pdf' };
+const item = { source: 'cited' as const, ref: '/tmp/out/report.pdf', eventId: 'e1' };
 const key = keptKey('s1', 'sess', item);
 const download = (version: () => KeptVersion) =>
   downloadKept(key, 'https://a.test/f', undefined, 'report.pdf', version, () => {}, new AbortController().signal);
@@ -37,6 +37,25 @@ it('the key is the path only: sizes arriving later do not move the copy', () => 
   expect(key).toBe('s1::sess::cited:/tmp/out/report.pdf');
   expect(keptKey('s2', 'sess', item)).not.toBe(key);
   expect(keptKey('s1', 'other', item)).not.toBe(key);
+  expect(keptKey('s1', 'sess', { ...item, eventId: 'e2' })).toBe(key);
+});
+
+it('conversation images with the same position in different messages keep apart; paths do not', () => {
+  const image = (eventId: string) => ({ source: 'transcript' as const, ref: '0', eventId });
+  expect(keptKey('s1', 'sess', image('e1'))).not.toBe(keptKey('s1', 'sess', image('e2')));
+  expect(keptKey('s1', 'sess', image('e1'))).toBe(keptKey('s1', 'sess', image('e1')));
+  for (const source of ['upload', 'cited', 'remote'] as const) {
+    expect(keptKey('s1', 'sess', { source, ref: 'a.png', eventId: 'e1' })).toBe(keptKey('s1', 'sess', { source, ref: 'a.png', eventId: 'e2' }));
+  }
+});
+
+it('a file that changed during the download keeps the date of the start: the copy is not current', async () => {
+  let now: KeptVersion = { size: 10, mtime: 5 };
+  fs.onDownload = () => { now = { size: 10, mtime: 6 }; };
+  await download(() => now);
+  expect(keptCopy(key, 'report.pdf', now)).toBeNull();
+  expect(downloadedVersion({ size: null, mtime: 5 }, { size: 10, mtime: 6 })).toEqual({ size: 10, mtime: 5 });
+  expect(downloadedVersion({ size: null, mtime: null }, { size: 10, mtime: 6 })).toEqual({ size: 10, mtime: 6 });
 });
 
 it('size and date measured during the download are stored with the copy and find it afterwards', async () => {

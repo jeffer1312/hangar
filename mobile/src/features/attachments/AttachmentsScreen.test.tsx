@@ -70,7 +70,7 @@ vi.mock('../../paraglide/messages', () => Object.fromEntries(
     + 'media_tab_files media_tab_audio media_filter_all media_filter_agent media_filter_user media_origin_agent media_origin_user '
     + 'media_empty media_day_today media_day_yesterday media_day_undated media_when_today media_when_yesterday media_when_date '
     + 'media_folder_uploads media_cancel_download media_again media_downloading_pct media_downloading_pct_of media_downloaded '
-    + 'media_download_failed gallery_counter gallery_jump_not_found')
+    + 'media_download_failed media_changed_during_download gallery_counter gallery_jump_not_found')
     .split(' ').map((k) => [k, (p?: Record<string, unknown>) => (p ? `${k}:${Object.values(p).join(',')}` : k)]),
 ));
 
@@ -126,6 +126,19 @@ describe('media and files', () => {
     expect(find(second.container, 'anexos_ver:foto.png')).toBeDefined();
     expect(second.container.textContent).toContain('media_title');
     act(() => second.root.unmount());
+  });
+
+  it('a failed uploads listing stays above what the conversation cited, with retry', async () => {
+    h.list.mockRejectedValueOnce(new Error('caiu')).mockResolvedValueOnce({ files: [file('foto.png')] });
+    h.events = [{ kind: 'assistant_msg', id: 'a1', text: 'pronto: /tmp/out/r.pdf', ts: 10 }];
+    const { container, root } = await render();
+    expect(container.textContent).toContain('anexos_erro_listar caiu');
+    await click(container, 'media_tab_files:1');
+    expect(container.textContent).toContain('r.pdf');
+    await click(container, 'lista_tentar_novamente');
+    expect(container.textContent).not.toContain('anexos_erro_listar');
+    expect(container.textContent).toContain('r.pdf');
+    act(() => root.unmount());
   });
 
   it('audio plays in the list and "transcribe again" sends to the chat and goes back', async () => {
@@ -223,7 +236,10 @@ describe('media and files', () => {
   it.each(['notas.docx', 'tabela.xlsx', 'pacote.zip', 'dados.csv', 'leia.txt'])('%s downloads, then goes to the system', async (filename) => {
     h.list.mockResolvedValueOnce({ files: [file(filename)] });
     const done = { uri: 'file:///cache/x', size: 10 };
-    h.download.mockResolvedValueOnce(done);
+    // A cópia só existe depois do download; a tela a confere antes de abrir.
+    let downloaded = false;
+    h.download.mockImplementationOnce(async () => { downloaded = true; return done; });
+    h.kept.mockImplementation(() => (downloaded ? done : null));
     h.deliverLocal.mockResolvedValueOnce('opened');
     const { container, root } = await render();
     await click(container, 'media_tab_files:1');
@@ -307,7 +323,10 @@ describe('media and files', () => {
 
   it('a file that does not open says why, and a failed download offers "again"', async () => {
     h.list.mockResolvedValue({ files: [file('pacote.rar')] });
-    h.download.mockResolvedValueOnce({ uri: 'file:///x', size: 3 }).mockRejectedValueOnce(new Error('server returned HTTP 404'));
+    const copy = { uri: 'file:///x', size: 3 };
+    let downloaded = false;
+    h.download.mockImplementationOnce(async () => { downloaded = true; return copy; }).mockRejectedValueOnce(new Error('server returned HTTP 404'));
+    h.kept.mockImplementation(() => (downloaded ? copy : null));
     h.deliverLocal.mockResolvedValueOnce('no-app');
     const { container, root } = await render();
     await click(container, 'media_tab_files:1');
@@ -322,6 +341,19 @@ describe('media and files', () => {
     expect(again.container.textContent).toContain('media_download_failed:file_card_missing');
     expect(find(again.container, 'media_again: pacote.rar')).toBeDefined();
     act(() => again.root.unmount());
+  });
+
+  it('a download that no longer matches the server is not opened and offers "again"', async () => {
+    h.list.mockResolvedValueOnce({ files: [file('pacote.zip')] });
+    h.download.mockResolvedValueOnce({ uri: 'file:///cache/x', size: 10 });
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    await click(container, 'file_card_download: pacote.zip');
+    expect(h.kept).toHaveBeenLastCalledWith('s1::sess::upload:pacote.zip', 'pacote.zip', { size: 10, mtime: 0 });
+    expect(h.deliverLocal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('media_download_failed:media_changed_during_download');
+    expect(find(container, 'media_again: pacote.zip')).toBeDefined();
+    act(() => root.unmount());
   });
 
   it('servidor sem token avisa sessão expirada e não abre nada', async () => {

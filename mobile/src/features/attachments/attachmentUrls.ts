@@ -46,9 +46,11 @@ export function attachmentSize(a: Pick<Ref, 'source' | 'ref'>, meta: AttachmentM
 /** Chave da cópia guardada: servidor + sessão + caminho, não a URL, porque a URL muda com a rota
  *  (rede local ↔ Tailscale) e o arquivo baixado deixaria de ser achado sem conexão. Data e tamanho
  *  ficam fora: chegam depois do download começar, e a chave mudaria entre gravar e ler. Eles vão
- *  junto da cópia (`KeptVersion`) e são conferidos na leitura. */
-export function keptKey(serverId: string, sessionName: string, item: Pick<Ref, 'source' | 'ref'>): string {
-  return `${serverId}::${sessionName}::${item.source}:${item.ref}`;
+ *  junto da cópia (`KeptVersion`) e são conferidos na leitura. A imagem da conversa leva o evento:
+ *  o `ref` dela é só a posição na mensagem, e repete de uma mensagem para outra. */
+export function keptKey(serverId: string, sessionName: string, item: Pick<Ref, 'source' | 'ref' | 'eventId'>): string {
+  const ref = item.source === 'transcript' ? `${item.eventId}#${item.ref}` : item.ref;
+  return `${serverId}::${sessionName}::${item.source}:${ref}`;
 }
 
 /** Versão do arquivo no servidor, do que se sabe dela. */
@@ -60,6 +62,13 @@ export function keptIsCurrent(stored: KeptVersion | null, keptBytes: number | nu
   if (now.size != null && keptBytes != null && now.size !== keptBytes) return false;
   if (now.mtime != null && stored?.mtime != null && now.mtime !== stored.mtime) return false;
   return true;
+}
+
+/** A versão que vale para os bytes baixados, da medida do começo (`start`) e do fim (`end`). A data
+ *  do começo vence: se o arquivo mudou no meio, a do fim descreveria bytes que talvez não vieram, e a
+ *  cópia passaria por atual. Data que só chegou no meio vale para a cópia. */
+export function downloadedVersion(start: KeptVersion, end: KeptVersion): KeptVersion {
+  return { size: end.size ?? start.size, mtime: start.mtime ?? end.mtime };
 }
 
 export function attachmentMtime(a: Pick<Ref, 'source' | 'ref'>, meta: AttachmentMeta): number | null {

@@ -12,6 +12,7 @@ import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import { superficie } from '../../theme/superficie';
 import { AudioChip } from '../../chat/AudioChip';
+import { useRouteBase } from '../../net/routeBase';
 import { attachmentHeaders, attachmentName, attachmentThumbUri, attachmentUri, keptKey, type KeptVersion } from './attachmentUrls';
 import { deliverLocalFile, downloadKept, keptCopy } from './mediaCache';
 import { expiryText } from './gallery';
@@ -35,6 +36,8 @@ export const MediaCell = memo(function MediaCell({ item, size, server, sessionNa
   item: MediaFileItem; size: number; server: Server; sessionName: string; onOpen: (item: MediaFileItem) => void;
 }) {
   const name = attachmentName(item);
+  // A troca de rota (rede local ↔ Tailscale) redesenha a célula mesmo com o `memo`; a URL sai do `baseOf`.
+  useRouteBase(server);
   const thumb = attachmentThumbUri(item, sessionName, server, size) ?? attachmentUri(item, sessionName, server);
   const [failed, setFailed] = useState<string | null>(null);
   const broken = failed === thumb;
@@ -99,7 +102,7 @@ function useDownload(item: MediaFileItem, server: Server, sessionName: string, s
   const keepKey = keptKey(serverId, sessionName, item);
   const size = item.size ?? null;
   const mtime = item.mtime ?? null;
-  // O download lê a versão ao terminar: a medida que chega no meio vale para a cópia gravada.
+  // O download lê a versão no começo e ao terminar: a medida que chega no meio vale para a cópia gravada.
   const version = useRef<KeptVersion>({ size, mtime });
   useEffect(() => { version.current = { size, mtime }; }, [size, mtime]);
   const [state, setState] = useState<DownloadState>(() => keptState(keepKey, name, { size, mtime }));
@@ -159,10 +162,17 @@ function useDownload(item: MediaFileItem, server: Server, sessionName: string, s
       last = pct;
       setState({ kind: 'loading', progress: p });
     }, ctrl.signal)
-      .then((file) => {
+      .then(() => {
         if (!alive.current) return;
-        setState({ kind: 'done', file });
-        return open(file);
+        // Conferida contra a medida de agora: o arquivo pode ter mudado no servidor durante o download.
+        const current = keptCopy(keepKey, name, version.current);
+        if (!current) {
+          haptic.error();
+          setState({ kind: 'error', reason: m.media_changed_during_download() });
+          return;
+        }
+        setState({ kind: 'done', file: current });
+        return open(current);
       })
       .catch((e: unknown) => {
         if (!alive.current) return;

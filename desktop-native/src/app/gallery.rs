@@ -119,9 +119,13 @@ pub(super) fn collect(events: &[ChatEvent]) -> Vec<Item> {
 pub(super) fn with_uploads(mut items: Vec<Item>, uploads: &[UploadFile]) -> Vec<Item> {
     let by_name: HashMap<&str, &UploadFile> = uploads.iter().map(|file| (file.filename.as_str(), file)).collect();
     let mut known: HashSet<String> = HashSet::new();
+    // A capa de um vídeo do cofre: o primeiro quadro que o servidor gravou ao lado dele.
+    let first_frame = |video: &str| uploads.iter().map(|f| &f.filename).filter(|f| frame_of(video, f)).min().cloned().map(Source::Upload);
     for item in &mut items {
         if let Source::Upload(name) = &item.source {
             if let Some(file) = by_name.get(name.as_str()) { item.size = Some(file.size); }
+            // Vídeo da mensagem cujo quadro não veio nela: a capa sai do cofre; a que a mensagem trouxe fica.
+            if item.kind == Kind::Video && item.poster.is_none() { item.poster = first_frame(name); }
             known.insert(name.clone());
         }
         if let Some(Source::Upload(poster)) = &item.poster { known.insert(poster.clone()); }
@@ -134,8 +138,7 @@ pub(super) fn with_uploads(mut items: Vec<Item>, uploads: &[UploadFile]) -> Vec<
     extra.sort_by(|a, b| a.mtime.total_cmp(&b.mtime));
     for file in extra {
         let name = file.filename.clone();
-        let poster = crate::audio::is_video(&name).then(|| uploads.iter().map(|f| &f.filename).filter(|f| frame_of(&name, f)).min().cloned())
-            .flatten().map(Source::Upload);
+        let poster = if crate::audio::is_video(&name) { first_frame(&name) } else { None };
         let item = Item { source: Source::Upload(name.clone()), kind: kind_of(&name, composer::previewable(&name)), name,
             origin: Some(Origin::User), event: None, ts: Some(file.mtime), size: Some(file.size), folder: None, poster };
         let at = items.iter().position(|other| other.ts.is_some_and(|ts| ts > file.mtime)).unwrap_or(items.len());
@@ -247,7 +250,8 @@ impl Hangar {
             event.id.hash(&mut hasher);
             hasher.finish()
         });
-        let stamp = (self.selection, self.revision, self.chat.events.len(), last, self.media_panel.generation);
+        // `version` cobre o evento trocado no lugar (resposta reescrita, entrega marcada), que não muda tamanho nem último id.
+        let stamp = (self.selection, self.revision, self.chat.events.len(), last, self.chat.version(), self.media_panel.generation);
         if let Some((cached, items)) = &self.media_panel.items && *cached == stamp { return items.clone(); }
         let key = self.selected_key();
         let mut items = collect(&self.chat.events);
@@ -374,6 +378,20 @@ mod tests {
         assert_eq!(merged[0].size, Some(700));
         assert_eq!((merged[1].kind, merged[1].origin, merged[1].event.as_ref()), (Kind::Audio, Some(Origin::User), None));
         assert_eq!(merged[3].poster, Some(Source::Upload("8-v-q1.jpg".into())));
+    }
+
+    #[test]
+    fn video_in_a_message_takes_its_cover_from_uploads_and_keeps_its_own() {
+        let items = collect(&[event("user_msg", "u1", "📎arquivo:/srv/up/8-v.mp4", 50.),
+            event("user_msg", "u2", "📎arquivo:/srv/up/9-w.mp4 📎imagem:/srv/up/9-w-q2.jpg", 60.)]);
+        assert_eq!(items[0].poster, None);
+        let file = |name: &str| UploadFile { filename: name.into(), size: 1, mtime: 50. };
+        let uploads = [file("8-v.mp4"), file("8-v-q2.jpg"), file("8-v-q1.jpg"), file("9-w.mp4"), file("9-w-q1.jpg")];
+        let merged = with_uploads(items, &uploads);
+        let names: Vec<&str> = merged.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["8-v.mp4", "9-w.mp4"], "os quadros não viram fotos a mais");
+        assert_eq!(merged[0].poster, Some(Source::Upload("8-v-q1.jpg".into())), "a capa sai do cofre");
+        assert_eq!(merged[1].poster, Some(Source::Upload("9-w-q2.jpg".into())), "a capa da mensagem fica");
     }
 
     #[test]
