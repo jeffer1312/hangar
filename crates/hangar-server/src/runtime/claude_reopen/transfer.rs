@@ -57,7 +57,7 @@ impl Request {
             && !self.source_jsonl.is_empty()
             && self.model.as_ref().is_none_or(|m| !m.trim().is_empty())
             && self.effort.as_deref().is_none_or(|e| {
-                ["none", "minimal", "low", "medium", "high", "xhigh", "max"].contains(&e)
+                ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].contains(&e)
             })
     }
 }
@@ -1249,6 +1249,21 @@ mod tests {
         let mut idle = base;
         idle["when_idle"] = json!(true);
         assert!(serde_json::from_value::<Request>(idle).unwrap().when_idle);
+    }
+
+    #[test]
+    fn transfer_body_accepts_every_codex_effort_and_refuses_unknown_ones() {
+        let base = json!({"credential_id":"codex:/account","source_life":"k:key","source_jsonl":"/source.jsonl"});
+        let with = |effort: &str| {
+            let mut body = base.clone();
+            body["effort"] = json!(effort);
+            serde_json::from_value::<Request>(body).unwrap().valid()
+        };
+        for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] {
+            assert!(with(effort), "{effort}");
+        }
+        assert!(!with("ultracode"));
+        assert!(!with(""));
     }
 
     #[test]
