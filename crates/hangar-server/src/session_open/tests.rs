@@ -1534,6 +1534,20 @@ fn the_initial_prompt_is_the_first_message_of_the_claude_terminal() {
     }
 }
 
+/// No Windows o prompt inicial fica fora do comando do pane (vai pela fila da chave): o psmux roda o
+/// comando pelo PowerShell, que cortava o argumento na primeira aspa dupla.
+#[test]
+fn on_windows_the_claude_initial_prompt_stays_out_of_the_pane_command() {
+    let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_terminal_initial_prompt_ignored").unwrap();
+    let spec = resolve_fixture(&fixture).unwrap().spec;
+    let prompt = r#"a folha "Mais ações" em C:\x\\y, do 'Expo' (`mobile/`)"#;
+    let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
+        server_env: &Default::default(), settings: None, read_only: None, windows: true, initial_prompt: Some(prompt), engine_route: None, resume: false, allow_bypass: false };
+    let command = claude::pane(&spec, "sid", &ctx).command;
+    assert!(!command.iter().any(|arg| arg.contains("Mais")), "o prompt foi para o comando do pane: {command:?}");
+    assert_eq!(command[command.len() - 2..], ["--permission-mode".to_owned(), "bypassPermissions".to_owned()]);
+}
+
 /// Pasta pedida com `~` é normalizada na entrada; o pane, a pré-confiança e o transcript usam o
 /// caminho absoluto (o Python registrava o texto cru: chave da confiança e pasta do transcript com `~`).
 #[test]

@@ -130,8 +130,9 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
         claude.extend(["--settings".into(), settings_json(settings)]);
     }
     // O prompt inicial é o posicional do `claude`, depois das opções; começando com `-`, o `--`
-    // impede que vire flag.
-    if let Some(prompt) = ctx.initial_prompt.filter(|p| !p.is_empty()) {
+    // impede que vire flag. No Windows ele vai pela fila da chave (`terminal_life`): o psmux roda o
+    // comando pelo PowerShell, que corta o argumento na primeira aspa dupla.
+    if let Some(prompt) = ctx.initial_prompt.filter(|p| !p.is_empty() && !ctx.windows) {
         if prompt.starts_with('-') { claude.push("--".into()); }
         claude.push(prompt.into());
     }

@@ -287,6 +287,10 @@ impl OpenHost for ServerHost {
             if let Some(jsonl) = &born.jsonl { self.st.list.seed(&born.name, jsonl); }
             self.st.list.invalidate();
             if let Some(home) = &born.codex_terminal { self.publish_codex_birth(&born.name, home).await; }
+            if born.first_message && let Some(runtime) = self.st.state.runtime.get().cloned() {
+                let name = born.name.clone();
+                tokio::spawn(async move { crate::runtime::claude_terminal::deliver_first_message(&runtime, &name).await });
+            }
             if !born.remember_provider { return Vec::new(); }
             let (base, provider) = (self.env.claude_base.clone(), born.provider.name());
             match tokio::task::spawn_blocking(move || remember_provider(&base, provider)).await {

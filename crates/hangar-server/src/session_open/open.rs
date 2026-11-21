@@ -19,8 +19,9 @@ use super::{Account, AgentProvider, OpenCaller, OpenError, PermissionMode, Resol
 #[derive(Clone, Debug)]
 /// `codex_terminal`: a pasta da conta do terminal Codex que nasceu (o nascimento conta como uso dela).
 /// `restored`: a mesma sessão voltando depois do reboot; o par e o grupo do nome são dela.
+/// `first_message`: o prompt inicial do Claude com terminal espera na fila da chave (Windows).
 pub struct Born { pub name: String, pub provider: AgentProvider, pub jsonl: Option<String>, pub remember_provider: bool, pub codex_terminal: Option<String>,
-    pub restored: bool }
+    pub restored: bool, pub first_message: bool }
 
 pub trait OpenHost: Send + Sync {
     /// A pasta pessoal do dono (registros, `~/.claude.json`, `~/.hangar`).
@@ -737,7 +738,7 @@ async fn headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, previous_non
     persist(host, spec, diary, "sidecar_gravado", &sidecars.join("claude-headless"), &meta)?;
     if let Some(adopting) = adopting.as_deref_mut() { adopting.adopted().await; }
     let jsonl = claude::transcript(spec, &sid, &host.server_projects()).to_string_lossy().into_owned();
-    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: Some(jsonl.clone()), remember_provider, codex_terminal: None, restored: false };
+    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: Some(jsonl.clone()), remember_provider, codex_terminal: None, restored: false, first_message: false };
     let mut warnings = left;
     warnings.extend(announce(host, spec, diary, &born, "sidecar_gravado").await);
     Ok((Some(jsonl), warnings, route))
@@ -802,7 +803,7 @@ async fn codex_headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, codex_
     // A thread que já existe: a subida a retoma (`thread/resume`) em vez de abrir outra.
     if let Some(thread) = resume { meta.insert("thread_id".into(), json!(thread)); }
     persist(host, spec, diary, "confiar_pasta", &crate::runtime::codex_sidecar::dir(host.home()), &meta)?;
-    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: None, remember_provider, codex_terminal: None, restored: false };
+    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: None, remember_provider, codex_terminal: None, restored: false, first_message: false };
     warnings.extend(announce(host, spec, diary, &born, "sidecar_gravado").await);
     if initial_prompt.is_some_and(|p| !p.is_empty()) { progress_step(&spec.name, "recado", json!({})); }
     warnings.extend(host.warm_codex(&spec.name, initial_prompt).await);
@@ -882,6 +883,17 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
             }
         }
     };
+    // No Windows o do Claude vai na fila da chave, que a adoção abre (`claude::pane` não o põe no comando).
+    let queue_dir = host.server_projects().parent().map(|base| base.join(".hangar-queue")).unwrap_or_default();
+    let first_message = initial_prompt.filter(|p| claude && host.terminal().windows && !p.is_empty());
+    if let Some(text) = first_message {
+        progress_step(&spec.name, "recado", json!({}));
+        if let Err(error) = crate::runtime::claude_terminal::queue_first_message(&queue_dir, &spec.key, &spec.name, text) {
+            diary.refused("erro", "prompt_inicial_nao_gravado", Some("criar_terminal"), Some(error.code.as_str()));
+            forget_record(host, &spec.key);
+            return Err(OpenError::new(500, "erro_criacao_sessao", format!("o prompt inicial não entrou na fila: {}", error.message)));
+        }
+    }
     if let Err(error) = terminal::spawn(host.mux(), host.terminal(), &pane).await {
         // O stderr é saída crua: fica no log privado, num campo que o relatório não leva.
         tracing::warn!(code = error.code, stderr = %error.stderr, "terminal da sessão não criado");
@@ -899,13 +911,17 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         if let Some(path) = &queued && let Err(error) = std::fs::remove_file(path) {
             tracing::warn!(kind = ?error.kind(), "prompt inicial da abertura que não nasceu ficou na fila");
         }
+        if first_message.is_some() && let Err(error) = crate::runtime::claude_terminal::forget_first_message(&queue_dir, &spec.key) {
+            tracing::warn!(kind = ?error.kind(), "prompt inicial da abertura que não nasceu ficou na fila");
+        }
         return Err(creation(match error.code {
             "terminal_morreu_ao_nascer" => format!("o terminal fechou logo depois de abrir: {}", error.stderr),
             _ => "falha ao criar sessao no tmux".to_owned(),
         }));
     }
     diary.step("limpar_estado_anterior");
-    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: jsonl.clone(), remember_provider, codex_terminal: codex_home.map(str::to_owned), restored: restore };
+    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: jsonl.clone(), remember_provider, codex_terminal: codex_home.map(str::to_owned), restored: restore,
+        first_message: first_message.is_some() };
     warnings.extend(announce(host, spec, diary, &born, "terminal_criado").await);
     Ok((jsonl, warnings, route))
 }

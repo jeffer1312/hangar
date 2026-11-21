@@ -62,6 +62,39 @@ fn generation(state_path: &Path) -> Result<u64, RuntimeError> {
     }
 }
 
+/// Prompt inicial do Claude com terminal no Windows: entra na fila da chave antes de o pane nascer, porque o
+/// comando do psmux não leva texto livre (o PowerShell corta na primeira aspa dupla). Bloqueante.
+pub(crate) fn queue_first_message(queue_dir: &Path, key: &str, name: &str, text: &str) -> Result<(), RuntimeError> {
+    super::codex_terminal::queue_before_adoption(queue_dir, key, name, text)
+}
+
+/// O pane que não nasceu leva junto a fila com o prompt inicial. Bloqueante.
+pub(crate) fn forget_first_message(queue_dir: &Path, key: &str) -> std::io::Result<()> {
+    let (state, lease) = super::codex_terminal::queue_files(queue_dir, key);
+    let _lease = super::codex_terminal::lease_blocking(&lease)?;
+    super::queue::discard(&state, queue_dir, true)
+}
+
+/// Quanto o Claude recém-aberto tem para subir antes de o prompt inicial desistir de esperar por ele.
+const FIRST_MESSAGE_WAIT: Duration = Duration::from_secs(300);
+
+/// Adota o Claude que acabou de nascer assim que ele abre: sem isto a fila só entrega o prompt inicial na
+/// primeira escrita ou com a lista aberta. Esgotado o prazo, o texto fica na fila e a falha vai ao diário.
+pub async fn deliver_first_message(registry: &RuntimeRegistry, name: &str) {
+    let deadline = tokio::time::Instant::now() + FIRST_MESSAGE_WAIT;
+    loop {
+        match registry.drain(name).await {
+            Ok(_) => return,
+            Err(error) if tokio::time::Instant::now() >= deadline => {
+                tracing::warn!(session = %name, code = %error.code, "prompt inicial do Claude com terminal ficou na fila");
+                registry.report("runtime.first_message_failed", name, &error.code, "o Claude com terminal não abriu a tempo de receber o prompt inicial");
+                return;
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(500)).await,
+        }
+    }
+}
+
 /// O Claude de um pane sem conversa provada.
 pub struct BareClaude { pub pane_pid: i64, pub agent: i64, pub cwd: String, pub key: String, pub created: f64 }
 
@@ -339,6 +372,22 @@ mod tests {
         assert!(!claim_holds(&claim, None, &exists), "Claude aberto sem a chave do Hangar");
         assert!(!claim_holds(&claim, Some("k"), &|_| false), "sem o transcript dela");
         assert!(!claim_holds(&PluginClaim { key: "k".into(), conversation: "../x".into() }, Some("k"), &|_| true));
+    }
+
+    /// O prompt inicial do Windows chega à fila da chave inteiro (aspas, contrabarras, apóstrofo, quebra de
+    /// linha), esperando a adoção; o pane que não nasceu apaga a fila.
+    #[test]
+    fn the_first_message_waits_whole_in_the_key_queue() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = "a folha \"Mais ações\" em C:\\x\\\\y; do 'Expo' (`mobile/`)\nsegunda linha";
+        queue_first_message(dir.path(), "chave-1", "s1", text).unwrap();
+        let (state, _) = super::super::codex_terminal::queue_files(dir.path(), "chave-1");
+        let saved: super::super::queue::State = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+        assert_eq!((saved.name.as_str(), saved.rows.len()), ("s1", 1));
+        let row = &saved.rows[0];
+        assert_eq!((row["text"].as_str(), row["pre_transcript"].as_bool(), row["delivered"].as_bool()), (Some(text), Some(true), Some(false)));
+        forget_first_message(dir.path(), "chave-1").unwrap();
+        assert!(!state.exists());
     }
 
     #[test]
