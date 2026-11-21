@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use hangar_api::{chat::ChatEvent, session::SessionRow};
+use hangar_api::{chat::{ChatEvent, ChatKind, HandoffDivider}, session::SessionRow};
 use serde_json::Value;
 
 use crate::transcript::{InternalInfo, LineParser, Provider, pyjson};
@@ -287,6 +287,50 @@ fn active_events(
         }
         Ok((items, committed, previous))
     })
+}
+
+/// O divisor entre a conversa de origem e a do agente novo: quem respondia antes e quem responde agora.
+fn handoff_divider(record: &Value, id: &str) -> ChatEvent {
+    let text = |value: &Value| value.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+    let (origin, destination) = (&record["origin_meta"], &record["destination_meta"]);
+    let handoff = HandoffDivider { from_provider: text(&record["source"]["provider"]), from_model: text(&origin["model"]),
+        to_provider: Some("codex".into()), to_model: text(&destination["model"]), to_effort: text(&destination["effort"]) };
+    ChatEvent { kind: ChatKind::Other("handoff".into()), id: format!("transfer:{id}:handoff"), handoff: Some(handoff), ..ChatEvent::default() }
+}
+
+/// O divisor da troca de agente no `/history` do chat, antes do primeiro evento depois da fronteira (no fim,
+/// sem turno novo ainda). Conversa que não veio de transferência fica igual; registro ilegível também, com
+/// aviso no log: o histórico não falha por causa do divisor. `false`: o registro ainda não pôde ser lido (troca
+/// publicando agora), e a resposta não deve valer como cache.
+pub(crate) fn insert_handoff_divider(home: &Path, name: &str, jsonl: &Path, events: &mut Vec<ChatEvent>) -> bool {
+    // Um contexto por sessão, como o do chat ao vivo: o prefixo importado só é conferido de novo quando o arquivo muda.
+    static CONTEXTS: std::sync::OnceLock<Mutex<HashMap<(PathBuf, String), LiveContext>>> = std::sync::OnceLock::new();
+    let contexts = CONTEXTS.get_or_init(Default::default);
+    let slot = (home.to_owned(), name.to_owned());
+    let context = {
+        let mut all = contexts.lock().unwrap_or_else(|e| e.into_inner());
+        // ponytail: sessão fechada não sai sozinha; zerar com muitas só custa reler o registro de cada uma.
+        if all.len() >= 256 && !all.contains_key(&slot) { all.clear(); }
+        all.entry(slot.clone()).or_insert_with(|| LiveContext::new(home.to_owned(), name.to_owned())).clone()
+    };
+    let filter = match context.filter(jsonl) {
+        Ok(Some(filter)) => filter,
+        // Conversa sem transferência não fica no mapa: ele só guarda as que têm divisor. Conferir de novo é
+        // ler o sidecar, perto da leitura do transcript que veio antes.
+        Ok(None) => { contexts.lock().unwrap_or_else(|e| e.into_inner()).remove(&slot); return true; }
+        Err(error) => {
+            tracing::warn!(session=%name, kind=?error.kind(), code="handoff_divider_unreadable", "divisor da troca de agente fora do histórico");
+            return false;
+        }
+    };
+    // Offsets são o início da linha. Janela sem nada da conversa de origem (histórico cortado no meio do
+    // Codex): o divisor não é desta página.
+    if !events.iter().any(|event| event.offset.is_some_and(|start| start < filter.offset)) { return true; }
+    let at = events.iter().position(|event| event.offset.is_some_and(|start| start >= filter.offset)).unwrap_or(events.len());
+    let mut divider = filter.divider.clone();
+    divider.ts = at.checked_sub(1).and_then(|before| events[before].ts).or_else(|| events.get(at).and_then(|after| after.ts));
+    events.insert(at, divider);
+    true
 }
 
 fn prefix_event(event: &mut ChatEvent, id: &str, provider: &str) {
@@ -808,7 +852,7 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
 #[derive(Clone)]
 pub(crate) struct LiveContext { home:std::path::PathBuf, name:String, cache:Arc<Mutex<Option<(PathBuf,(u64,u64),u64,Arc<LiveFilter>)>>> }
 
-pub(crate) struct LiveFilter { id:String, offset:u64, imported:HashSet<String> }
+pub(crate) struct LiveFilter { id:String, offset:u64, imported:HashSet<String>, divider:ChatEvent }
 impl LiveContext {
     pub(crate) fn new(home:PathBuf,name:String)->Self { Self {home,name,cache:Default::default()} }
     /// Resolvido uma vez por arquivo de rollout: o registro concluído e o prefixo importado não mudam
@@ -848,7 +892,8 @@ impl LiveContext {
         if !matches_rollout(&record,path,owner) {return Ok(None)};
         check_record(&record,path,owner)?;
         let offset=stable_read(path,|reader,length|check_prefix(reader,length,&record["boundary"]))?;
-        Ok(Some(LiveFilter {id:required(&record,"id")?.into(),offset,imported:imported_ids(&record["boundary"])?.into_iter().map(str::to_owned).collect()}))
+        let id=required(&record,"id")?;
+        Ok(Some(LiveFilter {id:id.into(),offset,imported:imported_ids(&record["boundary"])?.into_iter().map(str::to_owned).collect(),divider:handoff_divider(&record,id)}))
     }
 }
 #[cfg(unix)]

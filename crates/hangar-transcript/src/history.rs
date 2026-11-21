@@ -422,6 +422,8 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
                     Provider::Orq => super::parse_orq(&value, req.jsonl.parent()),
                 };
                 if let Some(fold) = notices.as_mut() { fold.feed(obj, &mut evs); }
+                // Início da linha, como no leitor ao vivo: o divisor da troca de agente se posiciona por ele.
+                for ev in &mut evs { ev.offset.get_or_insert(line_at); }
                 let ts = if req.provider == Provider::Orq {
                     obj.get("ts").and_then(Value::as_str).and_then(py::iso_timestamp).unwrap_or(0.0)
                 } else { ts_of_obj(obj) };

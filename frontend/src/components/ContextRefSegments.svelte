@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { elementLabel, parseContextRefs, type QuoteRef } from '@hangar/core';
+  import { codeLabel, elementLabel, parseContextRefs, type QuoteRef } from '@hangar/core';
   import { renderMarkdown } from '../lib/markdown';
   import * as m from '../paraglide/messages';
 
   // Mensagem do usuário com blocos <hangar-ref>: a citação em destaque com o comentário fora dela, o
-  // elemento como cartão compacto, e o texto digitado como sempre (texto puro, sem markdown).
+  // elemento como cartão compacto, as linhas de arquivo com o nome, as linhas e o código em fonte
+  // monoespaçada, e o texto digitado como sempre (texto puro, sem markdown).
   interface Props {
     text: string;
     /** Toque na citação: rola até a resposta de origem. Ausente = citação estática. */
@@ -44,6 +45,14 @@
             <div class="cref-text">{@html renderMarkdown(ref.text)}</div>
           </div>
         </blockquote>
+      {:else if ref.kind === 'code'}
+        {@const label = codeLabel(ref)}
+        <div class="cref-quote cref-code">
+          <span class="cref-head">{m.cite_code()}</span>
+          <span class="cref-code-name" title={ref.path}>{label}</span>
+          {#if !label.startsWith(ref.path)}<span class="cref-el-url">{ref.path}</span>{/if}
+          <pre class="cref-code-text" data-lang={ref.lang || undefined}>{ref.text}</pre>
+        </div>
       {:else}
         <div class="cref-el">
           <span class="cref-head">{m.cite_element()}</span>
@@ -95,6 +104,18 @@
   .cref-text :global(p + p) { margin-top: var(--space-1); }
   .cref-text :global(code) { font-family: var(--font-mono); font-size: 0.875em; }
   .cref-text :global(pre) { margin: var(--space-1) 0; white-space: pre-wrap; font-size: 0.875em; }
+  .cref-code { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .cref-code-name { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); overflow-wrap: anywhere; }
+  .cref-code-text {
+    position: relative;
+    margin: var(--space-1) 0 0;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+    white-space: pre;
+    max-height: 12lh;
+    overflow: auto;
+  }
   .cref-el {
     position: relative;
     display: flex;

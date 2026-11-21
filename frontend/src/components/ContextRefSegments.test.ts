@@ -12,6 +12,10 @@ const element: ContextRef = {
   tag: 'button', selector: 'form > button', html: '<button>Entrar agora</button>', comment: '',
 };
 
+const code: ContextRef = {
+  kind: 'code', path: 'desktop-native/src/app/files.rs', start: 12, end: 14, lang: 'rs', text: 'fn a() {\n    b();\n}', comment: 'renomeie',
+};
+
 function montar(Comp: typeof ContextRefSegments | typeof UserBubble, props: Record<string, unknown>) {
   const target = document.createElement('div');
   document.body.appendChild(target);
@@ -51,6 +55,18 @@ describe('ContextRefSegments', () => {
     const det = target.querySelector('details')!;
     expect(det.open).toBe(false);
     expect(det.querySelector('pre')?.textContent).toBe('<button>Entrar agora</button>');
+    unmount(comp);
+  });
+});
+
+describe('ContextRefSegments: linhas de arquivo', () => {
+  it('cartão com o nome e as linhas, o caminho, o código cru e o comentário fora', () => {
+    const { target, comp } = montar(ContextRefSegments, { text: composeWithContextRefs([code], '') });
+    expect(target.querySelector('.cref-code .cref-head')?.textContent).toBe(m.cite_code());
+    expect(target.querySelector('.cref-code-name')?.textContent).toBe('files.rs L12–L14');
+    expect(target.querySelector('.cref-code .cref-el-url')?.textContent).toBe('desktop-native/src/app/files.rs');
+    expect(target.querySelector('.cref-code-text')?.textContent).toBe('fn a() {\n    b();\n}');
+    expect(target.querySelector('.cref-comment')?.textContent).toBe('renomeie');
     unmount(comp);
   });
 });

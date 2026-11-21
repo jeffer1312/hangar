@@ -57,6 +57,7 @@ export const SF_SYMBOLS: Partial<Record<IconName, SFSymbol>> = {
   Eye: 'eye',
   EyeOff: 'eye.slash',
   File: 'doc',
+  FileCode: 'chevron.left.forwardslash.chevron.right',
   FilePlus: 'doc.badge.plus',
   FileText: 'doc.text',
   Flag: 'flag',

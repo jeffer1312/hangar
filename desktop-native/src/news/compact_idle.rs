@@ -65,7 +65,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
     let [commands, attach, recent] = app::composer_icons(cx);
     let left = [commands, attach, recent, app::composer_mic(tr("dictation_start"), cx)].map(|button| button.w(px(26.)).h(px(26.)))
         .map(|button| button.tab_stop(false).into_any_element());
-    let right = [app::model_pill("ctl-model", "Opus 5.5".into(), Some(tr_shared("reasoning_level_high", &[])), None, cx)
+    let right = [app::model_pill("ctl-model", "claude", "Opus 5.5".into(), Some(tr_shared("reasoning_level_high", &[])), None, cx)
         .tab_stop(false).into_any_element()];
     let send = app::send_button("send", false, tr("send"), cx).tab_stop(false);
     let composer = app::composer_card(false).w_full().child(field).child(app::composer_control_row(left, right, send));

@@ -314,6 +314,9 @@ pub enum Action {
     Remove { entry_id:String },
     /// O X do painel: tira a entrada que ainda espera a vez. `"cancelled"`, `"not_waiting"` ou `"absent"`.
     Cancel { entry_id:String },
+    /// Troca a entrada que espera por uma cópia `new_id` com a hora de agora, numa gravação só: falha nunca deixa as
+    /// duas na fila. `"restamped"`, `"not_waiting"` ou `"absent"`.
+    Restamp { entry_id:String, new_id:String, pre_transcript:bool },
     /// Troca o texto da entrada que espera; a intenção adiada guardada na operação leva o texto novo.
     Edit { entry_id:String, text:String },
     /// Põe a entrada antes de `before_id`; `None` é o fim da fila. Só entre as que esperam.
@@ -1019,6 +1022,18 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
                 // A intenção adiada desta entrada sai junto: o Recover não a rematerializa como linha nova.
                 state.operations.retain(|key,op|key.starts_with(CALL_PREFIX) || op.entry_id.as_deref()!=Some(entry_id.as_str()));
                 json!("cancelled")
+            }
+        },
+        Action::Restamp { entry_id, new_id, pre_transcript } => match waiting_index(state,&entry_id) {
+            Err(outcome)=>json!(outcome),
+            Ok(index)=>{
+                let row = state.rows[index].clone();
+                let (text,pre_transcript) = (row["text"].as_str().unwrap_or_default().to_owned(),pre_transcript || row["pre_transcript"]==true);
+                apply(state,Action::Cancel { entry_id },clock,call_id)?;
+                let copy = if row["conversation"]==true { Action::AppendConversation { text,pre_transcript,entry_id:Some(new_id) } }
+                    else { Action::Append { text,delivered:false,ts:None,pre_transcript,entry_id:Some(new_id) } };
+                apply(state,copy,clock,call_id)?;
+                json!("restamped")
             }
         },
         Action::Edit { entry_id, text } => {

@@ -17,6 +17,25 @@ pub struct ContextUse {
     pub window: u64,
 }
 
+/// Troca de agente pedida pelo seletor de modelos (`POST /conta` com `when_idle`): espera a sessão
+/// ficar livre (`waiting`), troca (`running`) ou falhou (`failed`, com o código). Só existe no Rust.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HandoffState { #[default] Waiting, Running, Failed }
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Handoff {
+    pub state: HandoffState,
+    pub provider: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    pub account: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
 /// Par de fora do grupo da sessão. `level` é o acesso DESTA sessão sob ele (`full`/`view`);
 /// `pending` = o par tem acesso completo e esta sessão ainda não (espera o "Liberar").
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +214,9 @@ pub struct SessionRow {
     /// Onde a sessão adormecida reabre ao acordar (`terminal` ou `headless`), quando a marca diz.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wake_surface: Option<String>,
+    /// Troca de agente pedida e ainda não concluída; só existe no Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<Handoff>,
 }
 
 fn default_provider() -> String {

@@ -11,6 +11,7 @@ import { confirmFirstInput, readFirstInput, useNewConversation } from '../stores
 import { ChatHeader } from './ChatHeader';
 import { LoopChip } from './LoopChip';
 import { RenameSuggestion } from './RenameSuggestion';
+import { HandoffBand } from './HandoffBand';
 import { CodexCommandsChip } from './LiveWork';
 import { useActivity } from '../features/activity/useActivity';
 import { useAgentSubagents } from '../features/activity/useAgentSubagents';
@@ -208,6 +209,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
   }));
   const currentSession = fetchedSession === undefined ? listSession : fetchedSession;
   const codexPreThread = currentSession?.provider === 'codex' && currentSession.tracked === false;
+  // Relida também quando o provedor da lista muda: a troca de agente faz a sessão Claude virar Codex.
   useEffect(() => {
     if (!ready || servidorSumiu) return;
     setFetchedSession(undefined);
@@ -247,7 +249,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
       clearTimeout(timer);
       subscription.remove();
     };
-  }, [ready, servidorSumiu, serverId, name]);
+  }, [ready, servidorSumiu, serverId, name, rowsProvider]);
   const provider: Provider | null = codexPreThread ? 'codex' : rowsProvider ?? fetchedSession?.provider ?? null;
   const agentConversation = useMemo(() => events.find(event => event.kind !== 'notice' && !event.id.startsWith('queued-'))?.id,
     [events, eventsRevision]);
@@ -555,6 +557,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
         panelOpen={panelOpen}
       />
       <RenameSuggestion serverId={serverId} name={name} userMessages={userMessages} />
+      <HandoffBand serverId={serverId} name={name} />
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} serverId={serverId} name={name} orq={orq}
                  provider={provider} semTerminal={semTerminal} temPergunta={!!askPayload}
                  recarregar={recarregavel ? { bloqueado: recarregarBloqueado, onPress: recarregar } : undefined}

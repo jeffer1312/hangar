@@ -627,6 +627,15 @@ export async function confirmarNavForServer(s: Server, name: string): Promise<vo
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
+// Cancela a troca de agente que espera o turno acabar; 409 quando ela já começou ou não existe mais.
+export async function cancelHandoffForServer(s: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/conta`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(8000),
+  }, s);
+  if (!res.ok) throw new Error(await errorDetail(res));
+}
+
 // Custo de UM servidor (baseUrl+token explicitos), sem mexer no ativo. Igual fetchSessionsForServer:
 // a visao agregada chama todos em paralelo; um servidor lento/offline falha rapido (timeout 4s) e e
 // pulado, sem segurar os demais.

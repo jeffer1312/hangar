@@ -245,10 +245,14 @@ pub enum Operation {
     ReadFile {
         cwd: String,
         path: String,
+        #[serde(default)]
+        large: bool,
     },
     ReadAt {
         alvo: String,
         path: String,
+        #[serde(default)]
+        large: bool,
     },
     WriteFile {
         cwd: String,
@@ -521,8 +525,8 @@ pub fn execute(op: Operation) -> Result<Value> {
             path,
             so_modificados,
         } => files::list(Path::new(&cwd), path.as_deref(), so_modificados),
-        ReadFile { cwd, path } => files::read(&files::resolve(Path::new(&cwd), &path)?, &path),
-        ReadAt { alvo, path } => files::read(Path::new(&alvo), &path),
+        ReadFile { cwd, path, large } => files::read(&files::resolve(Path::new(&cwd), &path)?, &path, large),
+        ReadAt { alvo, path, large } => files::read(Path::new(&alvo), &path, large),
         WriteFile {
             cwd,
             path,

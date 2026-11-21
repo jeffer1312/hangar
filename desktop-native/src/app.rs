@@ -83,6 +83,8 @@ mod servers;
 pub(crate) use servers::{ServerEntry, new_id as new_server_id};
 // Partes de vista que a miniatura das novidades (`crate::news`) também desenha.
 pub(crate) use rows::{agent_card, agent_clock};
+pub(crate) use files::comment_card;
+pub(crate) use quotes::ref_chip;
 pub(crate) use desktop_look::{call_button as desktop_call_button, desktop_summary, group_block as desktop_group_block, summary_button as desktop_summary_button};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
@@ -105,6 +107,8 @@ pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_
 pub(crate) use accounts::{CLIPROXY_INSTALL_ITEMS, CliproxyBrand, CliproxyItem, cliproxy_account_row, cliproxy_default_name, cliproxy_fast_field,
     cliproxy_install_item, cliproxy_name_preview, cliproxy_steps, cliproxy_update_available_banner, cliproxy_update_button,
     cliproxy_update_done_banner, cliproxy_update_running_banner, login_heading, target_row};
+/// As peças do seletor de modelos e da troca de agente, para a animação da novidade.
+pub(crate) use controls::picker as model_picker;
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
     search_scope_summary, search_status_line, search_who};
@@ -234,9 +238,10 @@ pub(crate) fn composer_icons(cx: &App) -> [Button; 3] {
 /// O microfone parado do compositor.
 pub(crate) fn composer_mic(label: String, cx: &App) -> Button { chrome::icon_button("dictation-toggle", IconName::Mic, label, cx) }
 
-/// Pílula do modelo com o esforço e o Fast ao lado.
-pub(crate) fn model_pill(id: impl Into<ElementId>, text: String, effort: Option<String>, fast: Option<String>, cx: &App) -> Button {
+/// Pílula do modelo com o símbolo do agente antes do nome (como no T3 Code) e o esforço e o Fast ao lado.
+pub(crate) fn model_pill(id: impl Into<ElementId>, provider: &str, text: String, effort: Option<String>, fast: Option<String>, cx: &App) -> Button {
     chrome::pill_button(id, cx).gap(px(6.))
+        .when(!provider.is_empty(), |el| el.child(chrome::provider_glyph(provider, 14.)))
         .child(div().max_w(px(150.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
         .when_some(effort, |el, effort| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(effort)))
         .when_some(fast, |el, fast| el.child(div().id("ctl-fast-active").flex_shrink_0().text_xs().text_color(theme::muted()).child(fast)))
@@ -522,6 +527,12 @@ enum Payload {
 #[derive(Clone, Debug, PartialEq)]
 enum Reply {
     Catalog(controls::Ctl),
+    /// Catálogo do Codex que recebe a conversa na troca de agente, com o número da leitura: só a da abertura atual vale.
+    HandoffCatalog(u64),
+    /// Resposta ao pedido de troca de agente pelo seletor de modelos.
+    Handoff,
+    /// Cancelamento da troca que esperava.
+    HandoffCancel,
     // Valor aplicado e o que a fonte ao vivo mostrava no gesto.
     Applied(controls::Ctl, String, Option<String>),
     Cost(u64),
@@ -1699,7 +1710,7 @@ impl Hangar {
         self.connect_reset();
         self.devices = devices::Devices::default();
         self.shared = shared_config::SharedConfig::default();
-        self.controls = controls::Controls::default();
+        self.controls = std::mem::take(&mut self.controls).after_connection();
         self.accounts = accounts::Accounts::default();
         self.orchestration = orchestration::Orchestration::default();
         self.shortcuts = shortcuts::Shortcuts::default();
@@ -2030,7 +2041,9 @@ impl Hangar {
                 return;
             }
             Payload::Reply(key, reply, result) => {
-                let lost = self.selected_key().as_ref() == Some(&key) && result.as_ref().err().is_some_and(|e| self.chat_auth_lost(e));
+                // Leitura do catálogo do Codex já trocada não abre o diálogo de conexão: ela é descartada logo adiante.
+                let current = !matches!(reply, Reply::HandoffCatalog(read) if !self.handoff_read_current(&key, read));
+                let lost = current && self.selected_key().as_ref() == Some(&key) && result.as_ref().err().is_some_and(|e| self.chat_auth_lost(e));
                 if lost
                     && !matches!(reply, Reply::Diff(_)) { self.open_connection(window, cx); }
                 let owner=key.clone();
@@ -4406,6 +4419,11 @@ impl Hangar {
             Some(Item::Event(i)) => self.chat.events.get(*i).filter(|event| notice_line::is_notice_line(event)).map(|event| (*i, self.notice_row_hidden(event))),
             _ => None,
         };
+        // Divisor da troca de agente: a conversa seguiu noutro modelo a partir daqui.
+        if let Some(Item::Event(i)) = self.conversation.items.get(index) && self.chat.events.get(*i).is_some_and(|event| event.kind == "handoff") {
+            let line = self.render_handoff_line(*i);
+            return row_frame(line, false, None).id(SharedString::from(id)).into_any_element();
+        }
         if matches!(notice, Some((_, true))) {
             return div().id(SharedString::from(id)).into_any_element();
         }
@@ -8189,6 +8207,9 @@ impl Hangar {
         let card = if readable && !read_only {
             self.render_ask(busy, window, cx).or_else(|| if pane_shown { None } else { self.render_options(busy, window, cx) })
         } else { None };
+        // A faixa da troca não cede ao cartão nem ao plano: o Cancelar segue à vista com a pergunta aberta, e a falha
+        // aparece acima das ações do plano.
+        let handoff_band = if readable && !read_only { self.render_handoff_band(cx) } else { None };
         let plan_bar = if readable && !read_only && card.is_none() {
             self.render_plan_bar(busy, cx).or_else(|| self.render_headless_plan(cx)).or_else(|| self.render_plan_preview(cx))
                 .or_else(|| self.render_rename_suggestion(cx))
@@ -8231,6 +8252,7 @@ impl Hangar {
             .children(outgoing.into_iter().map(|text| in_column(div().w_full().flex().flex_col().items_end().gap_1().py_1()
                 .child(user_bubble(conversation_text(div().whitespace_normal().line_clamp(6).text_ellipsis(), true).child(text)).opacity(0.6))
                 .child(div().text_xs().text_color(theme::muted()).child(tr("sending"))))))
+            .when_some(handoff_band, |el, band| el.child(in_column(band)))
             .when_some(plan_bar, |el, bar| el.child(in_column(bar)))
             .when_some(action_note, |el, note| el.child(note))
             .when_some(problem_banner(&self.chat.state, panel_stalled), |el, problem| el.child(in_column(div().text_sm().text_color(theme::warning()).child(problem))))

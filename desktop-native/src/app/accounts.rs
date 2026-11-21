@@ -36,7 +36,7 @@ const STALE_AFTER: f64 = 600.;
 const RENEW_DAYS: i64 = 3;
 
 #[derive(Clone, Deserialize)]
-struct Credential {
+pub(super) struct Credential {
     id: String,
     #[serde(rename = "tipo")] kind: String,
     auth_method: Option<String>,
@@ -197,6 +197,8 @@ pub(super) struct Accounts {
     /// Contas da máquina da sessão aberta quando ela é de outro servidor, e de qual servidor vieram.
     session_list: Remote<Vec<Credential>>,
     session_server: Option<String>,
+    /// Falha da última releitura dessa lista, com a anterior ainda valendo; some com a próxima leitura boa.
+    session_notice: Option<String>,
     session_engines: Remote<Engines>,
     engine_server: Option<String>,
     engines: Remote<Engines>,
@@ -763,6 +765,7 @@ impl Hangar {
             // `reset`, não `default`: o número do pedido segue subindo, e a resposta de uma ida anterior a esta máquina
             // não passa pela nova.
             self.accounts.session_list.reset();
+            self.accounts.session_notice = None;
             self.accounts.session_server = Some(server.clone());
         } else if self.accounts.session_list.loading { return; }
         let seq = self.accounts.session_list.start();
@@ -774,6 +777,34 @@ impl Hangar {
     /// A lista que o cartão de contas e a pílula do topo leem: a da máquina da sessão aberta.
     pub(super) fn session_accounts(&self) -> &Remote<Vec<Credential>> {
         if self.open_api.is_some() { &self.accounts.session_list } else { &self.accounts.list }
+    }
+
+    /// Por que a última releitura dessa lista falhou, com a anterior ainda na tela.
+    pub(super) fn session_accounts_notice(&self) -> Option<&str> {
+        if self.open_api.is_some() { self.accounts.session_notice.as_deref() } else { self.accounts.notice.as_deref() }
+    }
+
+    /// Relê as contas da máquina da sessão, salvo com uma leitura a caminho: a lista que já chegou fica à vista
+    /// até a nova, e a leitura que falhou não fica presa.
+    pub(super) fn ensure_session_accounts(&mut self, cx: &mut Context<Self>) {
+        if !self.session_accounts().loading { self.load_session_accounts(cx); }
+    }
+
+    /// Contas Codex conectadas da máquina da sessão, a de mais folga primeiro e sem as cheias: quem recebe a conversa na
+    /// troca de agente do seletor de modelos. `None` enquanto a lista não chegou; a leitura que falhou é lista vazia.
+    pub(super) fn handoff_accounts(&self) -> Option<Vec<controls::HandoffAccount>> {
+        let list = match self.session_accounts().value.as_ref()? { Ok(list) => list.as_slice(), Err(_) => &[][..] };
+        let mut out: Vec<(f64, controls::HandoffAccount)> = list.iter()
+            .filter(|c| c.kind == "codex" && c.id.starts_with("codex:") && c.logged_in() == Some(true))
+            .filter_map(|c| {
+                let account = c.codex_account.clone().filter(|a| !a.is_empty())?;
+                // A janela mais cheia da conta, como a lista do backend; sem leitura conta como livre.
+                let pct = c.quota.as_ref().map_or(0., |q| q.windows.iter().filter(|w| !w.por_modelo).map(|w| w.pct).fold(0., f64::max));
+                let label = c.alias.clone().filter(|a| !a.is_empty()).unwrap_or_else(|| c.name.clone());
+                (pct < 99.).then(|| (pct, controls::HandoffAccount { credential: c.id.clone(), account, label }))
+            }).collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Some(out.into_iter().map(|(_, account)| account).collect())
     }
 
     /// Contas Claude e se há uma Codex, na lista do anel: o que o anel oferece para levar a conversa. `None` enquanto a lista
@@ -906,8 +937,19 @@ impl Hangar {
             }
             AccountsReply::SessionList(seq, server, result) => {
                 if accounts.session_server.as_deref() == Some(server.as_str()) {
-                    accounts.session_list.finish(seq, result.map_err(|e| Self::failure(&e))
-                        .and_then(|v| serde_json::from_value::<Vec<Credential>>(v).map_err(|_| tr("invalid_response"))));
+                    match result.map_err(|e| Self::failure(&e))
+                        .and_then(|v| serde_json::from_value::<Vec<Credential>>(v).map_err(|_| tr("invalid_response"))) {
+                        // Como a da máquina ativa: a lista anterior fica (as contas Codex seguem no seletor) e a falha aparece nele.
+                        Err(error) if accounts.session_list.ok().is_some() => if seq == accounts.session_list.seq {
+                            accounts.session_list.loading = false;
+                            accounts.session_notice = Some(error);
+                        },
+                        // Primeira leitura que falha, sem lista anterior: o motivo fica no aviso, que o seletor mostra.
+                        parsed => {
+                            let error = parsed.as_ref().err().cloned();
+                            if accounts.session_list.finish(seq, parsed) { accounts.session_notice = error; }
+                        }
+                    }
                 }
             }
             AccountsReply::SessionEngines(seq, server, result) => {

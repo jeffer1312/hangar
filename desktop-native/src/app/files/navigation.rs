@@ -30,6 +30,14 @@ impl Hangar {
         if !self.files_visible() { return false; }
         let tab = &self.files.tabs[self.files.active];
         let Some(Ok(doc)) = &tab.content else { return true; };
+        // Na tabela a busca é a do código: troca para ele e abre a busca do editor.
+        if tab.reader.mode.reading() && doc.table.is_some() {
+            let editor = doc.editor.clone();
+            self.files.tabs[self.files.active].reader.set_mode(reader::ReaderMode::Source);
+            editor.update(cx, |state, cx| state.open_search(false, cx));
+            cx.notify();
+            return true;
+        }
         if tab.reader.mode.reading() {
             let Some(view) = doc.markdown.clone() else { return true; };
             let id = tab.id;

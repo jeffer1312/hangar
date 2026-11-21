@@ -10,6 +10,8 @@ pub const COMPOSER_ACCOUNT: &str = "composer-account";
 /// O microfone do compositor; o da animação de novidade não registra.
 pub const DICTATION_TOGGLE: &str = "dictation-toggle";
 pub const CTL_MODE: &str = "ctl-mode";
+/// A pílula do modelo, que abre o seletor de modelos.
+pub const CTL_MODEL: &str = "ctl-model";
 pub const QUEUE_PANEL: &str = "queue-panel";
 /// Família das linhas e abas de sessão; a âncora de cada uma é `session_row`.
 pub const SESSION_ROW: &str = "session-row";
@@ -29,7 +31,7 @@ pub const TOPBAR_REVIEWS: &str = "topbar-reviews";
 pub const SIDE_REVIEW: &str = "side-review";
 
 pub const ALL: &[&str] = &[NEW_SESSION, TOPBAR_SEARCH, TOPBAR_PRESENCE, COMPOSER, COMPOSER_ACCOUNT, DICTATION_TOGGLE, CTL_MODE,
-    QUEUE_PANEL, SESSION_ROW, CITE, TAB_KIDS, RENAME_APPLY, RAIL, COMPOSER_GIT, PICK_ELEMENT, SCHEDULED_TASKS, TOPBAR_REVIEWS,
+    CTL_MODEL, QUEUE_PANEL, SESSION_ROW, CITE, TAB_KIDS, RENAME_APPLY, RAIL, COMPOSER_GIT, PICK_ELEMENT, SCHEDULED_TASKS, TOPBAR_REVIEWS,
     SIDE_REVIEW];
 
 /// A linha (ou aba) da sessão `name` da máquina `server`, em qualquer modo de navegação.

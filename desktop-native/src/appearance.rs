@@ -581,6 +581,32 @@ pub fn remember_model(key: &str, model: &str, effort: &str) {
     }
 }
 
+/// Modelos marcados com estrela no seletor, como `provider:id`, na ordem em que foram marcados. Bloqueante.
+/// Sem arquivo é lista vazia; falha de leitura é `None`, para quem chama não gravar por cima dos favoritos que não leu.
+pub fn favorite_models() -> Option<Vec<String>> {
+    let Some(dir) = dir() else { return Some(Vec::new()) };
+    match std::fs::read(dir.join("favorite-models.json")) {
+        // Conteúdo ilegível não volta com outra leitura: começa vazio e a próxima estrela o regrava.
+        Ok(bytes) => Some(serde_json::from_slice(&bytes).unwrap_or_default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+        Err(error) => {
+            eprintln!("favoritos do seletor não leram: {error}");
+            None
+        }
+    }
+}
+
+/// Grava os favoritos do seletor; falha de disco só os esquece, com o motivo no log.
+pub fn save_favorite_models(list: &[String]) {
+    let Some(dir) = dir() else { return };
+    // Temporário e troca: disco cheio no meio da escrita não apaga os favoritos já gravados.
+    let (file, tmp) = (dir.join("favorite-models.json"), dir.join("favorite-models.json.tmp"));
+    if let Ok(bytes) = serde_json::to_vec(list)
+        && let Err(error) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&tmp, bytes)).and_then(|_| std::fs::rename(&tmp, &file)) {
+        eprintln!("favoritos do seletor não gravaram: {error}");
+    }
+}
+
 /// Sem arquivo, ou arquivo ilegível, abre no padrão; o motivo da falha de leitura volta para ser mostrado.
 pub fn load() -> Result<Appearance, String> {
     *IMAGE_NAME.write().unwrap_or_else(|e| e.into_inner()) = read_image_name();

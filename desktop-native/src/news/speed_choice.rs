@@ -29,7 +29,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         .into_any_element(), false);
     let field = div().text_size(px(13.5)).min_h(px(22.)).flex().items_center().overflow_hidden()
         .child(div().truncate().text_color(cx.theme().muted_foreground).child(tr("composer").replace("{agent}", "Claude")));
-    let pill = app::model_pill("news-speed-model", MODEL.into(), None, app::speed_label(Some(app::SPEED_TIERS[selected])), cx).tab_stop(false);
+    let pill = app::model_pill("news-speed-model", "codex", MODEL.into(), None, app::speed_label(Some(app::SPEED_TIERS[selected])), cx).tab_stop(false);
     let send = app::send_button("news-speed-send", false, tr("send"), cx).tab_stop(false);
     let composer = app::composer_card(false).w_full().child(field).child(app::composer_control_row([], [pill.into_any_element()], send));
     div().id("news-speed-choice").w(width).overflow_hidden().p(px(14.)).rounded(px(9.)).border_1().border_color(theme::border().alpha(0.06))
