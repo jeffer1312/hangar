@@ -118,6 +118,8 @@ export function Lightbox({
   const [failedUri, setFailedUri] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const imageFailed = failedUri === uri;
+  // Sair da mídia que falhou esquece a falha: voltar a ela tenta carregar de novo.
+  useLayoutEffect(() => { setFailedUri((u) => (u === uri ? u : null)); }, [uri]);
   const retryImage = () => {
     haptic.selection();
     setFailedUri(null);
