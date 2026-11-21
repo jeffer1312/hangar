@@ -62,6 +62,7 @@ export function ImageThumb({ items, index, style, revealTs }: Props) {
   // As falhas valem para estes endereços: a rota que muda (rede local ↔ Tailscale), mesmo de volta à anterior, tenta de novo.
   const candidatesKey = candidates.join('\n');
   const [fails, setFails] = useState<{ key: string; uris: readonly string[] }>({ key: candidatesKey, uris: [] });
+  if (fails.key !== candidatesKey) setFails({ key: candidatesKey, uris: [] });
   const failedUris = fails.key === candidatesKey ? fails.uris : [];
   const shown = candidates.find((uri) => !failedUris.includes(uri));
   const setFalhou = () => {
