@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
-import { act, createElement } from 'react';
+import { act, createElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import * as m from '../../paraglide/messages';
 
 // O mock padrão do reanimated já responde movimento reduzido.
 vi.mock('expo-router', () => ({ useIsFocused: () => true, useRouter: () => ({ push: vi.fn() }) }));
-vi.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children }: { children?: unknown }) => createElement('div', null, children) }));
+vi.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children }: { children?: ReactNode }) => createElement('div', null, children) }));
 // O visor e a grade trazem o cache de arquivos e o player de áudio, que são nativos; a animação não os usa.
 vi.mock('../attachments/mediaCache', () => ({ canShareFile: false, localCopy: vi.fn(), saveImage: vi.fn(), shareFile: vi.fn(),
   downloadKept: vi.fn(), deliverLocalFile: vi.fn(), keptCopy: () => null }));
