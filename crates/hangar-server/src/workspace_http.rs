@@ -24,6 +24,8 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("/api/sessions/{name}/files/resolver","POST"), ("/api/sessions/{name}/file","GET"),
     ("/api/sessions/{name}/file/text","GET"), ("/api/sessions/{name}/file/text","POST"),
     ("/api/sessions/{name}/file/page","POST"),
+    ("/api/sessions/{name}/files/rename","POST"), ("/api/sessions/{name}/files/trash","POST"),
+    ("/api/sessions/{name}/files/create","POST"),
 ];
 
 pub(crate) fn decoded(path: &str) -> std::borrow::Cow<'_, str> {
@@ -60,6 +62,9 @@ fn schema(tail: &str) -> Option<(&'static [Field], bool)> {
         "git/tag" => (&[("name",T,true),("sha",N,false),("message",N,false)], true),
         "files/write" | "file/text" => (&[("path",T,true),("text",T,true),("digest",N,false)], true),
         "files/resolver" => (&[("caminhos",L,true)], true),
+        "files/rename" => (&[("path",T,true),("name",T,true)], true),
+        "files/trash" => (&[("path",T,true)], true),
+        "files/create" => (&[("path",N,false),("name",T,true),("dir",B,false)], true),
         "file/page" => (&[("path",M,true)], true),
         "/api/fs/mkdir" => (&[("root",T,true),("path",N,false),("name",T,true)], false),
         "/api/fs/git/fetch" | "/api/fs/git/pull" => (&[("root",T,true),("path",N,false)], true),

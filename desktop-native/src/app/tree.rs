@@ -2,12 +2,14 @@
 //! busca por nome ou conteúdo no topo, pastas com seta, ícone por tipo, o nome na cor do estado no git e o clique abrindo o arquivo
 //! no visor. Servidor nesta máquina lê o disco e acompanha as mudanças com um vigia; servidor de fora, pelas rotas.
 mod cited;
+mod ops;
 mod source;
 
 use super::*;
 use super::panes::Area;
 use std::path::Path;
 use source::{FileSource, Listing};
+use ops::item_menu;
 pub(super) use source::{read_local, resolve};
 
 const ROW_H: f32 = 26.;
@@ -61,6 +63,11 @@ pub(super) struct Tree {
     watch_error: bool,
     _watch_task: Option<Task<()>>,
     cited: cited::CitedView,
+    /// Seção dos citados aberta, e com a lista inteira em vez das primeiras.
+    cited_open: bool,
+    cited_more: bool,
+    /// O campo do diálogo de nome (renomear, novo arquivo ou pasta) enquanto ele está aberto.
+    name_dialog: Option<Subscription>,
 }
 
 impl Tree {
@@ -73,7 +80,8 @@ impl Tree {
         Self { open: false, owner: None, generation: 0, source: None, custom_root: None, root_error: None, picking: None, dirs: HashMap::new(), expanded: HashSet::new(),
             selected: None, reveal: None, rows: Vec::new(), scroll: UniformListScrollHandle::new(), focus: cx.focus_handle(), search,
             query: String::new(), search_mode: SearchMode::Names, search_generation: 0, results: None, active: 0, search_task: None, reloading: false, reload_again: false,
-            watcher: None, watched: HashSet::new(), watch_error: false, _watch_task: None, cited: Default::default() }
+            watcher: None, watched: HashSet::new(), watch_error: false, _watch_task: None, cited: Default::default(),
+            cited_open: true, cited_more: false, name_dialog: None }
     }
 
     /// Linhas à vista: a raiz e, dentro de cada pasta aberta, o que ela tem, com a linha de estado quando falta conteúdo.
@@ -304,13 +312,12 @@ impl Hangar {
         if self.connection_dialog || window.has_active_dialog(cx) || self.open_read_only()
             || !self.selected.as_ref().is_some_and(|session| session.readable()) { return; }
         self.file_add(window, cx);
-        self.tree.cited.on = false;
         let mode = if contents { SearchMode::Contents } else { SearchMode::Names };
         self.tree_search_mode(mode, window, cx);
         let owner = self.session_owner();
         // O campo precisa estar montado antes de receber o foco.
         cx.on_next_frame(window, move |this, window, cx| {
-            if this.session_owner() != owner || !this.tree.open || !this.side.open || this.tree.cited.on
+            if this.session_owner() != owner || !this.tree.open || !this.side.open
                 || this.tree.search_mode != mode || window.has_active_dialog(cx) { return; }
             this.tree_focus_search(window, cx);
             this.tree.search.update(cx, |input, cx| input.select_all(window, cx));
@@ -359,6 +366,16 @@ impl Hangar {
             },
             "right" => if let Some(path) = selected.filter(|path| self.tree.entry(path) == Some((true, false))) { self.tree_toggle_dir(path, cx); },
             "enter" | "space" => if let Some(path) = selected { self.tree_activate(path, window, cx); },
+            "f2" => if let Some(path) = selected.filter(|_| self.tree_writable()) {
+                let dir = self.tree.entry(&path).is_some_and(|(dir, _)| dir);
+                let target = self.tree_item(&path, dir);
+                if target.session.is_some() { self.tree_rename_dialog(target, window, cx); }
+            },
+            "delete" => if let Some(path) = selected.filter(|_| self.tree_writable()) {
+                let dir = self.tree.entry(&path).is_some_and(|(dir, _)| dir);
+                let target = self.tree_item(&path, dir);
+                if target.session.is_some() { self.tree_confirm_trash(target, window, cx); }
+            },
             _ => return,
         }
         cx.stop_propagation();
@@ -481,7 +498,8 @@ impl Hangar {
                 let selected = self.tree.selected.as_deref() == Some(row.path.as_str());
                 let open = dir && self.tree.expanded.contains(&row.path);
                 let path = row.path.clone();
-                let color = mark.map(mark_color).unwrap_or(if selected { theme::text() } else { theme::muted() });
+                let menu = item_menu(cx.entity().downgrade(), self.tree_item(&row.path, dir));
+                let color = mark.map(mark_color).unwrap_or(if selected { theme::text() } else { theme::text().opacity(0.86) });
                 div().id(SharedString::from(format!("tree-{}", row.path))).role(Role::TreeItem).aria_label(row.name.clone())
                     .aria_selected(selected).when(dir, |el| el.aria_expanded(open))
                     .h_full().pl(px(pad)).pr_2().flex().items_center().gap(px(4.)).rounded(px(6.)).cursor_pointer()
@@ -493,10 +511,11 @@ impl Hangar {
                     .child(div().size(px(14.)).flex_none().flex().items_center().justify_center()
                         .when(dir, |el| el.child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 11., theme::faint()))))
                     .child(crate::fileicons::tree_icon(&row.name, dir, open))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(color).child(row.name.clone()))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(color).child(row.name.clone()))
                     // A letra repete a cor: o estado não depende só dela.
                     .when_some(mark, |el, mark| el.child(div().flex_none().font_family(theme::MONO).text_size(px(10.)).text_color(mark_color(mark))
                         .child(if mark == '?' { 'U' } else if mark == 'U' { 'C' } else { mark }.to_string())))
+                    .context_menu(menu)
                     .into_any_element()
             }
         };
@@ -527,44 +546,20 @@ impl Hangar {
             .into_any_element())
     }
 
-    /// O corpo do painel no modo Arquivos: busca, e embaixo a árvore ou os resultados.
+    /// O corpo do painel no modo Arquivos: a busca, os citados na conversa e, embaixo, a pasta (ou os resultados).
     pub(super) fn render_tree(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.tree_sync(cx);
-        let cited_on = self.tree.cited.on;
-        let cited_label = match self.cited_count() {
-            Some(n) => super::costs::web_with("arq_vista_citados", &[("n", n.to_string())]),
-            None => super::costs::web_with("arq_vista_citados", &[("n", "…".to_owned())]),
-        };
-        let views = div().flex().gap(px(4.)).px_3().pt_1().pb(px(10.))
-            .child(Button::new("tree-view-tree").ghost().small().selected(!cited_on).label(activity::web("arq_vista_arvore"))
-                .on_click(cx.listener(|this, _, _, cx| this.cited_toggle(false, cx))))
-            .child(Button::new("tree-view-cited").ghost().small().selected(cited_on).label(cited_label)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.tree_search_mode(SearchMode::Names, window, cx);
-                    this.cited_toggle(true, cx);
-                })))
-            .child(div().flex_1())
-            .when(self.session_api().is_some_and(|api| api.is_loopback()) && !cited_on, |el| el
-                .child(chrome::icon_button("tree-other-folder", IconName::FolderOpen, tr("tree_other_folder"), cx)
-                    .on_click(cx.listener(|this, _, window, cx| this.tree_choose_root(window, cx)))));
-        let custom = self.tree.custom_root(&self.session_owner()).map(|root| root.display().to_string());
-        let root_bar = (!cited_on && (custom.is_some() || self.tree.root_error.is_some())).then(|| div().flex().flex_col().gap_1().px_3().pb_2()
-            .when_some(custom, |el, root| el.child(div().flex().items_center().gap_2()
-                .child(chrome::small_icon(IconName::Folder, 14., theme::accent()))
-                .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme::muted()).child(root))
-                .child(Button::new("tree-session-folder").ghost().small().icon(IconName::ArrowLeft).label(tr("tree_session_folder"))
-                    .on_click(cx.listener(|this, _, _, cx| this.tree_set_root(None, cx))))))
-            .when_some(self.tree.root_error.clone(), |el, error| el.child(div().text_xs().text_color(theme::warning()).child(error))));
-        let modes = div().flex().items_center().gap_1().px_3().pb_2()
-            .child(div().flex_1().min_w_0().text_xs().text_color(theme::faint()).child(tr("tree_search_scope")))
-            .child(Button::new("tree-search-names").ghost().small().selected(self.tree.search_mode == SearchMode::Names)
-                .label(activity::web("arq_modo_nomes"))
-                .on_click(cx.listener(|this, _, window, cx| this.tree_search_mode(SearchMode::Names, window, cx))))
-            .child(Button::new("tree-search-contents").ghost().small().selected(self.tree.search_mode == SearchMode::Contents)
-                .label(activity::web("arq_modo_conteudo"))
-                .on_click(cx.listener(|this, _, window, cx| this.tree_search_mode(SearchMode::Contents, window, cx))));
-        let searching = !self.tree.query.is_empty() && !cited_on;
-        let search = div().flex().items_center().gap_1().px_3().pb_2()
+        let mode = self.tree.search_mode;
+        let toggle = |id: &'static str, label: String, child: AnyElement, on: bool, to: SearchMode, cx: &mut Context<Self>| Button::new(id)
+            .ghost().xsmall().selected(on).tooltip(label.clone()).accessibility_label(label).child(child)
+            .on_click(cx.listener(move |this, _, window, cx| this.tree_search_mode(to, window, cx)));
+        let modes = div().flex().items_center().gap(px(2.))
+            .child(toggle("tree-search-names", activity::web("arq_modo_nomes"),
+                div().text_size(px(11.5)).font_weight(FontWeight::MEDIUM).child("Aa").into_any_element(), mode == SearchMode::Names, SearchMode::Names, cx))
+            .child(toggle("tree-search-contents", activity::web("arq_modo_conteudo"),
+                chrome::small_icon(IconName::Type, 13., theme::muted()).into_any_element(), mode == SearchMode::Contents, SearchMode::Contents, cx));
+        let searching = !self.tree.query.is_empty();
+        let search = div().flex().items_center().px_3().pt(px(10.)).pb(px(6.))
             .child(div().id("tree-search").flex_1().min_w_0()
                 .capture_action(cx.listener(|this, _: &MoveUp, _, cx| this.tree_step_result(-1, cx)))
                 .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.tree_step_result(1, cx)))
@@ -573,28 +568,53 @@ impl Hangar {
                     this.tree.search.update(cx, |input, cx| input.set_value("", window, cx));
                 }))
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    if event.keystroke.key == "enter" && !this.tree.query.is_empty() && !this.tree.cited.on { this.tree_open_result(this.tree.active, window, cx); }
+                    if event.keystroke.key == "enter" && !this.tree.query.is_empty() { this.tree_open_result(this.tree.active, window, cx); }
                 }))
-                .child(Input::new(&self.tree.search).small().cleanable(true).aria_label(if self.tree.search_mode == SearchMode::Contents {
+                .child(Input::new(&self.tree.search).small().cleanable(true).aria_label(if mode == SearchMode::Contents {
                     tr("tree_search_contents_placeholder")
                 } else { activity::web("arq_buscar") })
-                    .prefix(chrome::small_icon(IconName::Search, 14., theme::faint()))))
+                    .prefix(chrome::small_icon(IconName::Search, 14., theme::faint()))
+                    .suffix(modes)));
+        let cited = self.render_cited_section(cx);
+        let custom = self.tree.custom_root(&self.session_owner()).map(|root| root.display().to_string());
+        let root_bar = (custom.is_some() || self.tree.root_error.is_some()).then(|| div().flex().flex_col().gap_1().px_3().pb_2()
+            .when_some(custom.clone(), |el, root| el.child(div().flex().items_center().gap_2()
+                .child(chrome::small_icon(IconName::Folder, 14., theme::accent()))
+                .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme::muted()).child(root))
+                .child(Button::new("tree-session-folder").ghost().small().icon(IconName::ArrowLeft).label(tr("tree_session_folder"))
+                    .on_click(cx.listener(|this, _, _, cx| this.tree_set_root(None, cx))))))
+            .when_some(self.tree.root_error.clone(), |el, error| el.child(div().text_xs().text_color(theme::warning()).child(error))));
+        // A pasta como cabeçalho de seção, com as ações dela; o ramo é o do git da sessão.
+        let branch = custom.is_none().then(|| self.selected.as_ref().and_then(|s| s.branch.clone())).flatten();
+        let writable = self.tree_root_writable();
+        let project = div().flex().items_center().gap(px(2.)).h(px(30.)).pl(px(14.)).pr_2().mt_1()
+            .child(div().min_w(px(48.)).flex_shrink(1.).truncate().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme::muted()).child(self.tree_root_label().to_uppercase()))
+            .when_some(branch, |el, branch| el.child(div().ml(px(6.)).min_w_0().flex_shrink(8.).truncate().font_family(theme::MONO)
+                .text_size(px(11.)).text_color(theme::faint()).child(branch)))
+            .child(div().flex_1())
+            .when(writable, |el| el
+                .child(chrome::icon_button("tree-new-file", IconName::FilePlus, tr("tree_new_file"), cx)
+                    .on_click(cx.listener(|this, _, window, cx| this.tree_create_dialog(None, false, window, cx))))
+                .child(chrome::icon_button("tree-new-folder", IconName::Folder, tr("tree_new_folder"), cx)
+                    .on_click(cx.listener(|this, _, window, cx| this.tree_create_dialog(None, true, window, cx)))))
             .child(chrome::icon_button("tree-collapse", IconName::ChevronsDownUp, activity::web("arq_recolher_tudo"), cx)
                 .disabled(self.tree.expanded.is_empty())
                 .on_click(cx.listener(|this, _, _, cx| this.tree_collapse_all(cx))))
             .child(chrome::icon_button("tree-reload", IconName::RefreshCw, activity::web("arq_recarregar"), cx)
                 .disabled(self.tree.source.is_none())
-                .on_click(cx.listener(|this, _, _, cx| { this.tree.cited.reset(); this.tree_reload(cx); this.tree_begin_search(cx); })));
+                .on_click(cx.listener(|this, _, _, cx| { this.tree.cited.reset(); this.tree_reload(cx); this.tree_begin_search(cx); })))
+            .when(self.session_api().is_some_and(|api| api.is_loopback()), |el| el
+                .child(chrome::icon_button("tree-other-folder", IconName::FolderOpen, tr("tree_other_folder"), cx)
+                    .on_click(cx.listener(|this, _, window, cx| this.tree_choose_root(window, cx)))));
         let note = |text: String, color: Hsla| div().px_4().py_2().text_xs().text_color(color).child(text).into_any_element();
-        let body = if cited_on {
-            self.render_cited(cx)
-        } else if searching {
+        let body = if searching {
             match &self.tree.results {
                 None => note(activity::web("arq_carregando"), theme::muted()),
                 Some(Err(reason)) => note(reason.clone(), theme::warning()),
-                Some(Ok((hits, _))) if hits.is_empty() => note(activity::web(if self.tree.search_mode == SearchMode::Contents { "arq_sem_conteudo" } else { "arq_sem_nome" }), theme::muted()),
+                Some(Ok((hits, _))) if hits.is_empty() => note(activity::web(if mode == SearchMode::Contents { "arq_sem_conteudo" } else { "arq_sem_nome" }), theme::muted()),
                 Some(Ok((hits, truncated))) => div().flex_1().min_h_0().flex().flex_col()
-                    .child(uniform_list(if self.tree.search_mode == SearchMode::Contents { "tree-content-results" } else { "tree-results" }, hits.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                    .child(uniform_list(if mode == SearchMode::Contents { "tree-content-results" } else { "tree-results" }, hits.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
                         range.filter_map(|ix| this.tree_result_row(ix, cx)).collect::<Vec<_>>()
                     })).track_scroll(&self.tree.scroll).flex_1())
                     .when(*truncated, |el| el.child(note(activity::web("arq_primeiros_200"), theme::faint())))
@@ -610,20 +630,16 @@ impl Hangar {
                 })).track_scroll(&self.tree.scroll).size_full())
                 .into_any_element()
         };
-        let live = match self.tree.source.as_ref() {
-            Some(source) if source.is_local() && self.tree.watch_error => Some((tr("tree_watch_failed"), theme::warning())),
-            Some(source) if source.is_local() => Some((tr("tree_local"), theme::faint())),
-            Some(_) => Some((tr("tree_remote"), theme::faint())),
-            None => None,
-        };
+        // Só a falha aparece: ler do disco ou pelo servidor é o normal e não ocupa linha.
+        let failed = self.tree.source.as_ref().is_some_and(|s| s.is_local()) && self.tree.watch_error;
         div().size_full().flex().flex_col().pt_1()
-            .child(views)
-            .children(root_bar)
-            .when(!cited_on, |el| el.child(modes))
             .child(search)
+            .children(cited)
+            .child(project)
+            .children(root_bar)
             .child(body)
-            .when_some(live, |el, (text, color)| el.child(div().flex_shrink_0().px_4().py(px(6.)).border_t_1().border_color(theme::border())
-                .text_size(px(11.)).text_color(color).child(text)))
+            .when(failed, |el| el.child(div().flex_shrink_0().px_4().py(px(6.)).border_t_1().border_color(theme::border())
+                .text_size(px(11.)).text_color(theme::warning()).child(tr("tree_watch_failed"))))
             .into_any_element()
     }
 }

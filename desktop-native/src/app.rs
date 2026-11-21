@@ -548,7 +548,6 @@ enum Reply {
     OrqPanel(u64),
     /// A geração da leitura (`Side::files_gen`).
     GitFiles(u64),
-    Diff(String),
     /// Rótulo do atalho e se o pedido foi No Hangar.
     Shell(String, bool),
     /// Rótulo e id do terminal de atalho que o clique no bloco aceso fechou.
@@ -2075,8 +2074,7 @@ impl Hangar {
                 // Leitura do catálogo do Codex já trocada não abre o diálogo de conexão: ela é descartada logo adiante.
                 let current = !matches!(reply, Reply::HandoffCatalog(read) if !self.handoff_read_current(&key, read));
                 let lost = current && self.selected_key().as_ref() == Some(&key) && result.as_ref().err().is_some_and(|e| self.chat_auth_lost(e));
-                if lost
-                    && !matches!(reply, Reply::Diff(_)) { self.open_connection(window, cx); }
+                if lost { self.open_connection(window, cx); }
                 let owner=key.clone();
                 self.with_bound_conversation(&owner,cx,move |this,cx|this.receive_reply(key,reply,result,window,cx));
                 cx.notify();
