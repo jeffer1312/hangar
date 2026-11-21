@@ -1990,17 +1990,17 @@ impl Hangar {
                 return;
             }
             Payload::Saved(key, source, open, result) => {
+                // Reabrir o que já foi salvo mantém o cartão "baixado" (Abrir e Mostrar na pasta), abrindo ou não.
+                let kept = self.file_cards.get(&(key.clone(), source.clone())).filter(|card| matches!(card, FileCard::Saved(_))).cloned();
                 let (card, note) = match result {
                     Ok((_, true)) => (Some(FileCard::Empty), None),
                     Ok((path, _)) if open && composer::openable_path(&path) => {
                         cx.open_with_system(&path);
-                        // Reabrir o que já foi salvo mantém o cartão "baixado" (Abrir e Mostrar na pasta).
-                        let kept = self.file_cards.get(&(key.clone(), source.clone())).filter(|card| matches!(card, FileCard::Saved(_))).cloned();
                         (kept, None)
                     }
                     Ok((path, _)) if open => {
                         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                        (None, Some((tr("open_refused").replace("{name}", &name), true)))
+                        (kept, Some((tr("open_refused").replace("{name}", &name), true)))
                     }
                     Ok((path, _)) => {
                         let note = tr("saved").replace("{path}", &path.display().to_string());
