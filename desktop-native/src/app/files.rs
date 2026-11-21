@@ -768,11 +768,14 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, window, cx| {
                         let tab = &mut this.files.tabs[this.files.active];
                         let reading = tab.reader.mode.reading();
-                        // Voltando para a tabela depois de editar: ela é montada de novo com o texto atual.
+                        // Voltando para a tabela depois de editar: ela é montada de novo com o texto atual. Acima do teto da
+                        // abertura a tabela sai e a aba fica no código; Recarregar a traz de volta.
                         if let (false, Some(Ok(doc))) = (reading, tab.content.as_mut()) && doc.table_stale {
-                            let text = doc.editor.read(cx).value().to_string();
-                            doc.table = table::delimiter(&tab.path).map(|delim| Arc::new(table::parse(&text, delim)));
+                            let text = doc.editor.read(cx).text();
+                            doc.table = table::delimiter(&tab.path).filter(|_| text.len() <= table::TABLE_MAX_BYTES)
+                                .map(|delim| Arc::new(table::parse(&text.to_string(), delim)));
                             doc.table_stale = false;
+                            if doc.table.is_none() { cx.notify(); return; }
                         }
                         this.set_reader_mode(if reading { reader::ReaderMode::Source } else { reader::ReaderMode::Reading }, window, cx);
                     })))))

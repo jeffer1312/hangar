@@ -40,7 +40,10 @@ fn line_at(editor: &EditorState, y: Pixels) -> Option<u32> {
     if height <= px(0.) { return None; }
     let row = ((y - bounds.origin.y) / height).floor().max(0.) as usize;
     let last = editor.text().lines_len().saturating_sub(1);
-    Some(editor.display_map().display_row_to_buffer_line(row).min(last) as u32)
+    // Abaixo da última linha desenhada o kit devolve a primeira: a linha visual fica presa à última.
+    let map = editor.display_map();
+    let row = row.min(map.display_row_count().saturating_sub(1));
+    Some(map.display_row_to_buffer_line(row).min(last) as u32)
 }
 
 /// O ponto está nos números da linha, fora da faixa das setas de dobrar.
@@ -124,11 +127,7 @@ impl Hangar {
         select_lines(&editor, start, end, cx);
         let range = lines_range(editor.read(cx), start, end);
         // O trecho segue o teto da citação: o caminho e as linhas já dizem ao agente onde ler o resto.
-        let text = {
-            let rope = editor.read(cx).text();
-            let end = rope.char_index_to_offset(rope.offset_to_char_index(range.start) + crate::context_refs::TEXT_MAX).min(range.end);
-            rope.slice(range.start..end).to_string()
-        };
+        let text = editor.read(cx).text().slice(range.clone()).chars().take(crate::context_refs::TEXT_MAX).collect::<String>();
         if let Some(doc) = self.comment_doc(id) {
             doc.comment.selected.set(vec![RangeDecoration::new(range).with_style(RangeDecorationStyle::Fill).with_color(theme::accent().opacity(0.18))], cx);
         }
@@ -195,8 +194,9 @@ impl Hangar {
         let measure = canvas(move |bounds, _, _| area.set(bounds), |_, _, _, _| {}).absolute().inset_0();
         let card = doc.comment.draft.as_ref().and_then(|draft| {
             let state = doc.editor.read(cx);
-            let start = state.text().line_start_offset(draft.end as usize);
-            let line = state.range_to_bounds(&(start..start))?;
+            // Fim da linha lógica: com quebra visual, o cartão fica abaixo da última continuação.
+            let end = lines_range(state, draft.end, draft.end).end;
+            let line = state.range_to_bounds(&(end..end))?;
             let area = doc.comment.area.get();
             let top = line.bottom() - area.origin.y;
             (top >= px(0.) && top < area.size.height).then_some((top, draft))

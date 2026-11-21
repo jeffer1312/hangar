@@ -218,6 +218,7 @@ impl Hangar {
         if doc.read_seq != seq || doc.saving { return; }
         let previous = (doc.disk_changed, doc.error.clone(), doc.poll_error.clone());
         (doc.checking, doc.reloading) = (false, false);
+        let mut to_source = false;
         match result {
             Ok(mut content) if reload => {
                 // A classificação de arquivo grande vale para o texto relido: ele pode ter crescido ou diminuído. Grande,
@@ -226,13 +227,17 @@ impl Hangar {
                 let reclassified = large != doc.large();
                 doc.large_size = large.then_some(content.text.len());
                 if let Some(markdown) = doc.markdown.as_ref().filter(|_| !large) { markdown.update(cx, |state, cx| state.set_text(&content.text, cx)); }
-                // Cresceu além do teto: a prévia de Markdown sai e a aba mostra o código. O caminho inverso não cria a
-                // prévia: ela volta ao reabrir a aba.
-                if large && doc.markdown.is_some() {
-                    (doc.markdown, doc._markdown_changed) = (None, None);
+                // Cresceu além do teto: a prévia de Markdown sai. O caminho inverso não cria a prévia: ela volta ao
+                // reabrir a aba.
+                if large && doc.markdown.is_some() { (doc.markdown, doc._markdown_changed) = (None, None); }
+                // A tabela segue a releitura nos dois sentidos: sai acima do teto e volta quando o arquivo diminui.
+                doc.table = content.table.take();
+                doc.table_stale = false;
+                // Sem prévia nem tabela não há o que ler: a aba mostra o código.
+                if tab.reader.mode.reading() && doc.markdown.is_none() && doc.table.is_none() {
                     tab.reader.set_mode(super::reader::ReaderMode::Source);
+                    to_source = true;
                 }
-                if doc.table.is_some() { doc.table = content.table.take(); doc.table_stale = false; }
                 let text = if large { std::mem::take(&mut content.text) } else { content.text.clone() };
                 doc.editor.update(cx, |state, cx| {
                     let cursor = state.cursor_position();
@@ -258,6 +263,8 @@ impl Hangar {
         }
         if reload { doc.editor.update(cx, |state, cx| state.set_readonly(!doc.editable(), cx)); }
         if reload || previous != (doc.disk_changed, doc.error.clone(), doc.poll_error.clone()) { cx.notify(); }
+        // O foco estava no visor de leitura, que saiu: passa ao editor.
+        if to_source && restore_cursor { self.focus_file(window, cx); }
     }
 }
 
