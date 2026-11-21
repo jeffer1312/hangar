@@ -100,7 +100,7 @@ pub fn connected(st: &AppState) -> Value {
         .inspect_err(|error| tracing::warn!(%error, "cliproxy: contas do proxy ilegíveis; o assistente mostra nenhuma"))
         .unwrap_or_default();
     json!(records.iter().filter(|(_, r)| r["disabled"] != true && r["type"].is_string())
-        .map(|(_, r)| json!({"type": r["type"], "email": r["email"].as_str().unwrap_or("")}))
+        .map(|(_, r)| json!({"type": r["type"], "email": r["email"].as_str().unwrap_or(""), "binding": proxy::binding_id(r), "prefix":r["prefix"]}))
         .collect::<Vec<_>>())
 }
 
@@ -257,7 +257,16 @@ pub async fn handle(st: &AppState, method: &Method, path: &str, bytes: &[u8]) ->
             match (method, callback) {
                 (&Method::GET, false) => match login::status(&m, state).await {
                     // A conta nova ganha o prefixo que a deixa fixável por sessão.
-                    Ok(login::Status::Ok) => json_response(StatusCode::OK, json!({"status": "ok", "naming": proxy::naming(&st.accounts).await})),
+                    Ok(login::Status::Ok { auth_id }) => {
+                        let naming = proxy::naming(&st.accounts).await;
+                        let account = auth_id.and_then(|id| {
+                            proxy::credentials(&st.accounts.env).ok()?.into_iter().find_map(|(path, record)| {
+                                if path.file_name()?.to_str()? != id || record["disabled"] == true { return None; }
+                                Some(json!({"type":record["type"], "email":record["email"], "binding":proxy::binding_id(&record), "prefix":record["prefix"]}))
+                            })
+                        });
+                        json_response(StatusCode::OK, json!({"status": "ok", "naming": naming, "account":account}))
+                    },
                     Ok(login::Status::Wait) => json_response(StatusCode::OK, json!({"status": "wait"})),
                     Ok(login::Status::Failed(e)) => json_response(StatusCode::OK, json!({"status": "error", "error": e})),
                     Err(error) => login_error(error),

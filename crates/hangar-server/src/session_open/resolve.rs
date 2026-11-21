@@ -75,6 +75,7 @@ pub trait OpenFacts {
     fn config_dirs(&self) -> Result<Vec<String>, OpenError>;
     /// Nomes válidos do `engines.json`.
     fn engines(&self) -> Vec<String>;
+    fn engine_account(&self, engine: &str, requested: Option<&str>) -> Result<(Option<String>, Option<String>), OpenError>;
     fn supports_fast(&self, engine: Option<&str>, model: Option<&str>) -> bool;
     /// Ultra Fast: Fast no modelo, conta fixa Pro ou Pro Max e a regra do Ultra Fast no config do proxy.
     fn supports_ultrafast(&self, engine: Option<&str>, model: Option<&str>, account: Option<&str>) -> bool;
@@ -190,6 +191,20 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
             }
         },
     };
+    let bound_request;
+    let mut engine_binding = None;
+    let request = if !guest && provider == AgentProvider::Claude && let Some(engine) = request.engine.as_deref().filter(|e| !e.is_empty()) {
+        let (account, binding) = facts.engine_account(engine, request.engine_account.as_deref())?;
+        engine_binding = binding;
+        if request.resume_engine_binding.as_ref().is_some_and(|expected| engine_binding.as_ref() != Some(expected)) {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "O vínculo do motor mudou desde o fechamento da conversa."));
+        }
+        if request.resume_existing && request.resume_engine_binding.is_none() && request.engine_account.is_none() && account.is_some() {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "Selecione a conta vinculada ao motor antes de retomar a conversa."));
+        }
+        bound_request = SessionOpenRequest { engine_account: account, ..request.clone() };
+        &bound_request
+    } else { request };
     // O padrão salvo pelo dono preenche o que o pedido não disse e vence a criadora; a permissão
     // dela só vale quando o pedido traz `inherit: true`.
     let saved = if guest { None } else {
@@ -378,7 +393,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     let account = match (provider, engine) {
         (AgentProvider::Codex, _) => Account::Codex { account_id: codex_account.unwrap_or_else(|| "default".into()) },
         (_, Some(engine)) => Account::Engine {
-            name: engine.into(), account: request.engine_account.clone(), config_dir: config_dir.clone(), context_window,
+            name: engine.into(), account: request.engine_account.clone(), binding: engine_binding, config_dir: config_dir.clone(), context_window,
             context_window_unknown,
         },
         (AgentProvider::Omp, _) if truthy(&request.omp_profile) => Account::Omp {

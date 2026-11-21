@@ -16,16 +16,17 @@ export function SessionAccountSummary({ server, session, label, onPress }: {
   useEffect(() => {
     let active = true;
     setState({ loading: true });
-    void getCredentialsForServer(server).then(credentials => {
+    void getCredentialsForServer(server, false, undefined, !!session.engine).then(credentials => {
       if (active) setState({ loading: false, credential: sessionCredential(session, credentials) });
     }).catch(error => {
       if (active) setState({ loading: false, error: error instanceof Error ? error.message : m.native_invalid_response() });
     });
     return () => { active = false; };
-  }, [server, session.conta, session.config_dir, session.codex_home, session.codex_account, retry]);
+  }, [server, session.conta, session.config_dir, session.codex_home, session.codex_account, session.engine, session.engine_account, session.engine_binding, retry]);
   const credential = state.credential;
-  const quota = credential?.cota ? resumoCota({ ...credential.cota, id: credential.id }) : '';
-  const accountName = credential?.apelido || credential?.nome || label;
+  const noBinding = credential?.cliproxy && !session.engine_account;
+  const quota = !noBinding && credential?.cota ? resumoCota({ ...credential.cota, id: credential.id }) : '';
+  const accountName = noBinding ? m.cliproxy_no_bound_account() : credential?.apelido || credential?.nome || label;
   const detail = state.loading ? m.comum_carregando() : state.error ? m.conta_erro_listar({ erro: state.error }) : quota || m.conta_cota_sem_leitura();
   const content = <>
     <Icon name="CircleUser" size={22} color={theme.tokens.accent.base} />

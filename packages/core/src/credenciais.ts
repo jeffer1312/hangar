@@ -37,7 +37,7 @@ export interface CodexLoginAttempt {
   verification_url?: string;
   error?: { code: string; params: Record<string, string> };
 }
-export type TipoCredencial = 'claude' | 'chave' | 'codex';
+export type TipoCredencial = 'claude' | 'chave' | 'codex' | 'cliproxy';
 export interface CotaResumo extends Omit<CotaContaResumo, 'id'> {
   ts?: number | null;
   idade_s?: number | null;
@@ -72,6 +72,8 @@ export interface Credencial {
   chave_mascarada?: string | null;
   usos: string[];
   cota?: CotaResumo | null;
+  cliproxy_quota?: CotaResumo | null;
+  cliproxy?: boolean;
   aceita_cookie?: boolean;
   cookie_definido?: boolean;
   /** false = chave do próprio agente (o `apikey` do Kimi): o app lista, mas não apaga. */

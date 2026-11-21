@@ -575,11 +575,9 @@ fn engine_route(host: &dyn OpenHost, spec: &SessionSpec) -> Result<Option<claude
                 hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1."));
         }
     }
-    match &spec.account {
-        Account::Engine { name, account: Some(account), .. } => Ok(Some(super::facts::fixed_account(
-            &crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(host.env().clone())), name, account)?)),
-        _ => Ok(None),
-    }
+    let Account::Engine { name, account, binding, .. } = &spec.account else { return Ok(None) };
+    let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(host.env().clone()));
+    super::facts::session_engine_route(&accounts, name, account.as_deref(), binding.as_deref())
 }
 
 /// O pane do Claude, o transcript da conversa nova e a rota da conta ChatGPT fixa do motor.
@@ -657,6 +655,7 @@ pub(crate) fn headless_sidecar(spec: &SessionSpec, sid: &str, previous_non_plan:
     });
     if let Some(tier) = spec.service_tier { meta["service_tier"] = json!(tier.name()); }
     if let Some(settings) = settings { meta["claude_settings"] = settings.clone(); }
+    if let Account::Engine { binding: Some(binding), .. } = &spec.account { meta["engine_binding"] = json!(binding); }
     if let Some(route) = route {
         meta["engine_account"] = json!(route.account);
         meta["engine_credential_id"] = json!(route.credential_id);

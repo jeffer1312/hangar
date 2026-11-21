@@ -242,10 +242,14 @@ fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut Ses
     use crate::session_open::OpenFacts;
     let facts=crate::session_open::facts::LocalFacts::new(env.clone(),runtime);
     let mut warnings=Vec::new();
-    if let Account::Engine { name,account,config_dir,.. }=&next.account {
+    if let Account::Engine { name,account,binding,config_dir,.. }=&next.account {
         // Ilegível não diz que o motor sumiu: tirar a sessão dele seria trocar a conta calado.
         let engines=crate::session_open::facts::engine_names(env)
             .map_err(|_|refused("reopen_engines_unreadable","o catálogo de motores (engines.json) não pôde ser lido; nada foi reaberto"))?;
+        if account.is_some() || binding.is_some() || engines.contains(name) {
+            crate::session_open::facts::session_engine_route(&crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref())
+                .map_err(|error| refused("launch_engine_account", &error.msg))?;
+        }
         if !engines.contains(name) {
             if account.is_some() {return Err(refused("reopen_engine_missing","motor da conta ChatGPT fixa indisponível; nada foi reaberto"));}
             // A escolha lida é do motor: numa conta Anthropic ela criaria uma sessão inviável.
@@ -355,7 +359,7 @@ fn spec_of(procs:&dyn ProcessView,pid:i64,key:&str,name:&str,cwd:String,created:
         .or_else(||argv.iter().find_map(|a|a.strip_prefix(&format!("{name}=")).map(str::to_owned)));
     let config_dir=env("CLAUDE_CONFIG_DIR");
     let account=match env("CP_ENGINE") {
-        Some(engine)=>Account::Engine { name:engine,account:env("CP_ENGINE_ACCOUNT"),config_dir,
+        Some(engine)=>Account::Engine { name:engine,account:env("CP_ENGINE_ACCOUNT"),binding:env("CP_ENGINE_BINDING"),config_dir,
             context_window:env("CLAUDE_CODE_MAX_CONTEXT_TOKENS").and_then(|v|v.parse().ok()),context_window_unknown:false },
         None=>config_dir.map_or(Account::Default,|config_dir|Account::Claude { config_dir }),
     };
@@ -474,7 +478,10 @@ impl RuntimeRegistry {
         let spec=&current.spec;
         // A pasta do processo vivo, não a do spec: é nela que a CLI gravou a conversa.
         let mut meta=json!({"session_id":current.sid,"cwd":spec.cwd,"config_dir":target.metadata.config_dir,"model":spec.model});
-        if let Account::Engine { name,context_window,.. }=&spec.account { meta["engine"]=json!(name); meta["context_window"]=json!(context_window); }
+        if let Account::Engine { name,account,binding,context_window,.. }=&spec.account {
+            meta["engine"]=json!(name); meta["context_window"]=json!(context_window);
+            meta["engine_account"]=json!(account); meta["engine_binding"]=json!(binding);
+        }
         Ok(meta)
     }
 
@@ -883,8 +890,8 @@ impl RuntimeRegistry {
             }
         } else {None};
         let route=match &next.account {
-            Account::Engine { name:engine,account:Some(account),.. }=>Some(crate::session_open::facts::fixed_account(
-                &crate::accounts::AccountService::new(env.clone()),engine,account).map_err(|e|refused("launch_engine_account",&e.msg))?),
+            Account::Engine { name:engine,account,binding,.. }=>crate::session_open::facts::session_engine_route(
+                &crate::accounts::AccountService::new(env.clone()),engine,account.as_deref(),binding.as_deref()).map_err(|e|refused("launch_engine_account",&e.msg))?,
             _=>None,
         };
         if matches!(next.account,Account::Engine{..}) {

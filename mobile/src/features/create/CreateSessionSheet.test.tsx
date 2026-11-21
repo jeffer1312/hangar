@@ -272,7 +272,8 @@ vi.mock('../../paraglide/messages', () => ({
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
     'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable ' +
     'native_ctl_speed native_ctl_speed_normal native_ctl_speed_ultrafast native_ctl_speed_normal_hint native_ctl_speed_fast_hint ' +
-    'native_ctl_speed_ultrafast_hint native_ctl_speed_ultrafast_unavailable ' +
+    'native_ctl_speed_ultrafast_hint native_ctl_speed_ultrafast_unavailable cliproxy_bound_account cliproxy_no_bound_account ' +
+    'cliproxy_choose_connected_account conta_cota_sem_leitura ' +
     'reasoning_level_low reasoning_level_medium reasoning_level_high reasoning_level_xhigh reasoning_level_max reasoning_level_ultra ' +
     'native_mode_plan native_mode_manual native_mode_auto native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk chat_mode_plan config_motores_modelo_padrao ' +
     'codex_contexto_titulo codex_contexto_padrao codex_contexto_salvando comum_falha_aplicar config_server_tentar_de_novo home_new_conversation ' +
@@ -1510,8 +1511,12 @@ describe('CreateSessionSheet Codex', () => {
     root.unmount();
   });
 
-  it.each([true, false])('Ultra Fast Claude com motor segue supports_ultrafast do modelo (%s)', async (ultrafast) => {
-    calls.engines.mockResolvedValue({ motores: { local: { label: 'Motor local', model: 'sol' } } });
+  it.each([true, false])('Ultra Fast Claude consulta e usa a conta vinculada ao motor (%s)', async (ultrafast) => {
+    const account = ultrafast ? 'pro' : 'plus';
+    const bound = { account, plan: account, email: `${account}@example.test`, label: account, credential_id: `codex:/test/${account}` };
+    calls.engines.mockResolvedValue({ motores: { local: { label: 'Motor local', model: 'sol',
+      cliproxy_binding: 'linked-account', cliproxy_bound_account: bound, cliproxy_accounts: [bound],
+    } } });
     calls.models.mockResolvedValue({ kind: 'engine', reduced: false, supports_fast: true, supports_ultrafast: ultrafast,
       models: [{ id: 'sol', name: 'Sol', supports_fast: true, supports_ultrafast: ultrafast }] });
     const { container, root } = await renderSheet(false, false);
@@ -1525,7 +1530,9 @@ describe('CreateSessionSheet Codex', () => {
     expect(ultra.disabled).toBe(!ultrafast);
     await act(async () => ultra.click());
     await send(container);
+    expect(calls.models.mock.calls.at(-1)?.at(-1)).toBe(account);
     const payload = calls.create.mock.calls[0][1];
+    expect(payload.engine_account).toBe(account);
     if (ultrafast) expect(payload.service_tier).toBe('ultrafast');
     else expect(payload).not.toHaveProperty('service_tier');
     root.unmount();

@@ -115,6 +115,8 @@ pub enum Account {
     /// relida a cada reabertura (`SessionSpec::refresh_engine_window`).
     Engine {
         name: String, account: Option<String>, config_dir: Option<String>, context_window: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        binding: Option<String>,
         #[serde(default, skip_serializing_if = "is_false")]
         context_window_unknown: bool,
     },
@@ -225,6 +227,10 @@ pub struct SessionOpenRequest {
     /// a regra dos 95% não a troca.
     #[serde(skip)]
     pub account_bound: bool,
+    #[serde(skip)]
+    pub resume_existing: bool,
+    #[serde(skip)]
+    pub resume_engine_binding: Option<String>,
     /// Fora do fio: a sessão nasce com `disableAllHooks`, que desliga também as travas do Hangar (cofre).
     /// Só a sessão de conserto de hook que bloqueia liga; cliente nenhum pede.
     #[serde(skip)]

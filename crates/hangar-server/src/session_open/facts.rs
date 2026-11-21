@@ -171,15 +171,41 @@ pub fn fixed_account(accounts: &AccountService, engine: &str, account: &str) -> 
     let local = cliproxy_base(&env.home).filter(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == *local)
         .ok_or_else(|| cliproxy("a conta ChatGPT só pode ser fixada no CLIProxyAPI local"))?;
     if !crate::accounts::catalog::valid_name(account) { return Err(cliproxy("CLIProxyAPI: identificador de conta inválido")); }
-    if !proxy::is_proxy_only(account) {
-        // Erro da lista de contas Codex mantém o código dela, não vira erro do proxy.
-        accounts.visible_codex_accounts().map_err(|e| OpenError::new(e.status, e.code, e.message))?;
-    }
-    let entry = proxy::resolve(accounts, account, None).map_err(cliproxy)?;
+    let (binding, entry) = match proxy::engine_bound_entry(accounts, engine, Some(account)).map_err(cliproxy)? {
+        Some((binding, entry)) => (Some(binding), entry),
+        None => {
+            if !proxy::is_proxy_only(account) {
+                accounts.visible_codex_accounts().map_err(|e| OpenError::new(e.status, e.code, e.message))?;
+            }
+            (None, proxy::resolve(accounts, account, None).map_err(cliproxy)?)
+        }
+    };
     let credential_id = entry["credential_id"].as_str().unwrap_or_default().to_owned();
     let home = credential_id.strip_prefix("codex:").map(str::to_owned);
     let prefix = entry["prefix"].as_str().unwrap_or_default().to_owned();
-    Ok(super::claude::EngineRoute { account: account.to_owned(), credential_id, home, base_url: local, prefix })
+    Ok(super::claude::EngineRoute { account: account.to_owned(), credential_id, home, base_url: local, prefix, binding })
+}
+
+pub(crate) fn session_engine_route(accounts: &AccountService, engine: &str, account: Option<&str>, binding: Option<&str>) -> Result<Option<super::claude::EngineRoute>, OpenError> {
+    let mismatch = || cliproxy("O vínculo deste motor mudou. Confirme a conta da conversa antes de reabri-la.");
+    match account {
+        Some(account) => {
+            let canonical;
+            let account = if let Some(binding) = binding {
+                let Some((current, entry)) = crate::engines::proxy::engine_bound_entry(accounts, engine, None).map_err(cliproxy)? else { return Err(mismatch()) };
+                if current != binding { return Err(mismatch()); }
+                canonical = entry;
+                canonical["account"].as_str().ok_or_else(mismatch)?
+            } else { account };
+            let route = fixed_account(accounts, engine, account)?;
+            if route.binding.as_deref() != binding { return Err(mismatch()); }
+            Ok(Some(route))
+        }
+        None => {
+            if binding.is_some() || crate::engines::proxy::engine_binding(&accounts.env, engine).is_some() { return Err(mismatch()); }
+            Ok(None)
+        }
+    }
 }
 
 /// `cliproxy_accounts.prefix_model` sem o prefixo: o modelo como a conta o expõe.
@@ -377,6 +403,13 @@ impl OpenFacts for LocalFacts {
     fn engines(&self) -> Vec<String> {
         self.engines_file().as_object().into_iter().flatten().map(|(name, _)| name.clone())
             .filter(|name| crate::accounts::catalog::valid_name(name)).collect()
+    }
+
+    fn engine_account(&self, engine: &str, requested: Option<&str>) -> Result<(Option<String>, Option<String>), OpenError> {
+        match crate::engines::proxy::engine_bound_entry(&self.accounts, engine, requested).map_err(cliproxy)? {
+            Some((binding, entry)) => Ok((entry["account"].as_str().map(str::to_owned), Some(binding))),
+            None => Ok((requested.map(str::to_owned), None)),
+        }
     }
 
     fn supports_fast(&self, engine: Option<&str>, model: Option<&str>) -> bool {

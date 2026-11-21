@@ -240,6 +240,7 @@ pub fn fill_pane_row(row: &mut SessionRow, provider: &str, pid_env: Option<i64>,
         (Some(p), Some(_)) => env(procs, p, "CP_ENGINE_ACCOUNT"),
         _ => None,
     };
+    row.engine_binding = pid_env.filter(|_| row.engine_account.is_some()).and_then(|p| env(procs, p, "CP_ENGINE_BINDING"));
     row.conta = if let Some(engine) = &row.engine {
         if row.engine_account.is_some() { pid_env.and_then(|p| env(procs, p, "CP_ENGINE_CREDENTIAL_ID")) } else { Some(format!("chave:{engine}")) }
     } else {

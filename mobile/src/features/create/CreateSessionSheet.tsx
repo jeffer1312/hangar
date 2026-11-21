@@ -204,7 +204,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [accountChosen, setAccountChosen] = useState(false);
   // Conta que a troca automática deixou para trás; a pílula avisa até a próxima escolha.
   const [switchedFrom, setSwitchedFrom] = useState('');
-  const [motores, setMotores] = useState<Record<string, { label?: string; model?: string }>>({});
+  const [motores, setMotores] = useState<Awaited<ReturnType<typeof getEnginesForServer>>['motores']>({});
   const [engine, setEngine] = useState('');
   const [modelos, setModelos] = useState<ModelOption[]>([]);
   const [modelo, setModelo] = useState('');
@@ -214,7 +214,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [loadedDefaultsKey, setLoadedDefaultsKey] = useState<string | null>(null);
   const [defaultsError, setDefaultsError] = useState('');
   const [defaultsTry, setDefaultsTry] = useState(0);
-  const defaultsKey = `${provider}:${provider === 'claude' ? engine : ''}`;
+  const engineConfig = provider === 'claude' ? motores[engine] : undefined;
+  const proxyEngine = !!(engineConfig?.cliproxy_accounts || engineConfig?.cliproxy_binding);
+  const boundAccount = engineConfig?.cliproxy_bound_account;
+  const engineAccount = boundAccount?.account;
+  const bindingBlocked = !!engineConfig?.cliproxy_binding && !engineAccount;
+  const proxyQuota = engineConfig?.cliproxy_binding ? cotas.find(c => c.id === `cliproxy-binding:${engineConfig.cliproxy_binding}`) : undefined;
+  const defaultsKey = `${provider}:${provider === 'claude' ? engine : ''}:${engineAccount ?? ''}`;
   const defaultsReady = loadedDefaultsKey === defaultsKey;
   const choiceTouched = useRef(false);
   const permissionTouched = useRef(false);
@@ -233,11 +239,11 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const fastVisible = provider === 'codex' || (provider === 'claude' && !!engine && catalogFast);
   const fastAvailable = !modelsLoading && (provider === 'codex'
     ? codexFastModel?.id !== 'default' && codexFastModel?.service_tiers?.some((tier) => tier.id === 'priority' && tier.hidden !== true) === true
-    : fastVisible && selectedModel?.supports_fast === true);
+    : fastVisible && (selectedModel ?? displayModel)?.supports_fast === true);
   // Ultra Fast: tier do modelo no Codex (contas Pro); no motor, a conta fixa escolhida precisa ser Pro.
   const ultrafastAvailable = fastAvailable && (provider === 'codex'
     ? codexFastModel?.service_tiers?.some((tier) => tier.id === 'ultrafast' && tier.hidden !== true) === true
-    : selectedModel?.supports_ultrafast === true);
+    : (selectedModel ?? displayModel)?.supports_ultrafast === true);
   useEffect(() => { if (!fastAvailable) setServiceTier(undefined); }, [fastAvailable]);
   useEffect(() => { if (!ultrafastAvailable) setServiceTier((cur) => cur === 'ultrafast' ? undefined : cur); }, [ultrafastAvailable]);
   const speed = fastAvailable && serviceTier ? serviceTier : 'default';
@@ -412,8 +418,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setLoadedDefaultsKey(null);
     setPermissao('');
     permissionTouched.current = false;
-    void getSessionDefaultsForServer(active, provider, catalogEngine, controller.signal)
-      .then((value) => {
+    const query = [active, provider, catalogEngine, controller.signal] as const;
+    const request = engineAccount ? getSessionDefaultsForServer(...query, engineAccount) : getSessionDefaultsForServer(...query);
+    void request.then((value) => {
         if (!alive) return;
         if (value && !choiceTouched.current) desired.current = { model: value.model, effort: value.effort };
         if (!permissionTouched.current) setPermissao(value?.permission ?? '');
@@ -423,7 +430,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (alive) setDefaultsError(loadErrorText(cause, m.criar_sessao_erro()));
       });
     return () => { alive = false; controller.abort(); };
-  }, [enabled, active, provider, catalogEngine, defaultsKey, defaultsTry]);
+  }, [enabled, active, provider, catalogEngine, engineAccount, defaultsKey, defaultsTry]);
 
   // modelos quando o destino efetivo do catálogo muda
   useEffect(() => {
@@ -435,7 +442,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setServiceTier(undefined);
     setEsforco('');
     setSubagente('');
-  }, [provider, catalogEngine, catalogConfig, catalogAccount, active]);
+  }, [provider, catalogEngine, catalogConfig, catalogAccount, engineAccount, active]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -467,7 +474,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         : provider === 'claude' && semEsforco(model) ? [] : EFFORT_LEVELS[provider] ?? [];
       if (effort && levels.includes(effort)) setEsforco(effort);
     };
-    const request = modelOptionsForServer(active, provider, catalogEngine, catalogConfig, catalogAccount, controller.signal);
+    const query = [active, provider, catalogEngine, catalogConfig, catalogAccount, controller.signal] as const;
+    const request = engineAccount ? modelOptionsForServer(...query, engineAccount) : modelOptionsForServer(...query);
     void request
       .then((r) => {
         if (!alive) return;
@@ -490,7 +498,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       retry.cancel();
       controller.abort();
     };
-  }, [enabled, defaultsReady, provider, catalogEngine, catalogConfig, catalogAccount, active, active?.id, active?.baseUrl, active?.token, modelsTry, startModelsRetry]);
+  }, [enabled, defaultsReady, provider, catalogEngine, catalogConfig, catalogAccount, engineAccount, active, active?.id, active?.baseUrl, active?.token, modelsTry, startModelsRetry]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -585,13 +593,14 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       // A conta trocada pela cota também vai: é a que a tela mostra.
       config_dir: provider === 'claude' && (accountChosen || !!switchedFrom) ? selectedConfig : null,
       engine: provider === 'claude' ? engine || null : null,
+      ...(engineAccount ? { engine_account: engineAccount } : {}),
       model: (provider === 'claude' || provider === 'pi' || provider === 'kimi' || provider === 'omp') ? modelo || null : null,
       effort: (provider === 'claude' || provider === 'pi' || provider === 'omp') ? esforco || null : null,
       permission_mode: provider === 'claude' ? permissao || null : null,
       subagent_model: provider === 'claude' && !engine ? subagente || null : null,
       ...(canHeadless ? { headless } : {}),
     };
-  const body = picked && defaultsReady && !seedPending && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
+  const body = picked && defaultsReady && !bindingBlocked && !seedPending && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
 
   // Reserva pré-aquecida enquanto a tela está aberta, na frente e compondo; o form remonta por
   // máquina, então desmontar também cobre a troca de servidor.
@@ -775,6 +784,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   };
   const accountChoice = ((): Choice | null => {
     if (provider !== 'claude' && provider !== 'codex') return null;
+    if (proxyEngine) {
+      const label = boundAccount ? [boundAccount.email || boundAccount.label, boundAccount.plan].filter(Boolean).join(' · ') : m.cliproxy_no_bound_account();
+      return { icon: 'CircleUser', label, aria: m.cliproxy_bound_account(), disabled: true };
+    }
     const aria = provider === 'claude' ? m.comum_conta_claude() : m.native_create_codex_account();
     if (provider === 'claude' ? configsLoading : codexLoading) {
       return { icon: 'CircleUser', label: m.comum_carregando(), aria, disabled: true };
@@ -822,7 +835,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // Leitura nova falhou e ficaram os números da anterior: sem o motivo, eles pareceriam atuais.
   const cotaAntiga = motivoCotaAntiga(cotaSelecionada);
   // Conta com a janela em 100% não responde: o aviso diz isso em cor de alerta, além dos números.
-  const quotaNotice = provider === 'claude' && cotaSelecionada ? (
+  const quotaNotice = proxyEngine ? (boundAccount ? <Text style={styles.hint}>{resumoCota(proxyQuota) || m.conta_cota_sem_leitura()}</Text> : null)
+    : provider === 'claude' && cotaSelecionada ? (
     <Text style={[styles.hint, janelaCheia ? styles.hintAlerta : null]} accessibilityRole={janelaCheia ? 'alert' : undefined}>
       {janelaCheia ? `${m.cota_conta_no_limite({ janela: janelaCheia })} ` : ''}
       {resumoCota(cotaSelecionada) ||
@@ -853,7 +867,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       </View> : null}
       {providersError ? <Text style={styles.error} accessibilityRole="alert">{providersError}</Text> : null}
       {!retomavel && listaReduzida ? <Text style={styles.hint}>{m.criar_lista_reduzida()}</Text> : null}
-      {!retomavel && erroModelos ? <Text style={styles.hint} accessibilityRole="alert">{m.criar_abre_padrao({ erro: erroModelos } as any)}</Text> : null}
+      {bindingBlocked ? <Text style={styles.error} accessibilityRole="alert">
+        {engineConfig?.cliproxy_binding_error || engineConfig?.cliproxy_error || m.cliproxy_choose_connected_account()}
+      </Text> : null}
+      {!retomavel && !bindingBlocked && erroModelos ? <Text style={styles.hint} accessibilityRole="alert">
+        {boundAccount ? erroModelos : m.criar_abre_padrao({ erro: erroModelos } as any)}
+      </Text> : null}
       {contextBusy ? <Text style={styles.hint} accessibilityLiveRegion="polite">{m.comum_carregando()}</Text> : null}
       {!contextOpen && context.error ? <Text style={styles.error} accessibilityRole="alert">{context.error}</Text> : null}
       {retomavel ? <Text style={styles.hint}>{m.nova_conversa_retomada_selecionada()}</Text> : null}

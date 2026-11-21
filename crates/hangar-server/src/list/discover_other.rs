@@ -641,6 +641,7 @@ pub fn headless_rows(dirs: &Dirs, procs: &dyn ProcessView, problems: &mut Proble
         };
         row.engine = engine;
         row.engine_account = account;
+        row.engine_binding = text(&meta, "engine_binding");
         links::fill_location(&mut row, "claude", dirs, problems);
         links::fill_links(&mut row, dirs, problems);
         let jsonl = row.jsonl.clone();

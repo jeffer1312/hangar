@@ -72,6 +72,8 @@ pub struct SessionRow {
     pub engine: Option<String>,
     #[serde(default)]
     pub engine_account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_binding: Option<String>,
     #[serde(default)]
     pub codex_home: Option<String>,
     /// Nível de serviço do Codex (`default`/`priority`): do sidecar, e o snapshot ao vivo vence.

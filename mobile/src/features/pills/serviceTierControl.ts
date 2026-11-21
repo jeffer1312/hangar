@@ -36,6 +36,9 @@ export function useServiceTierControl({ serverId, name, provider, model: selecte
   const sseTier = chat.use((s) => s.stateEvent?.codex_service_tier ?? null);
   const liveTier = sseTier ?? session?.codex_service_tier ?? null;
   const engine = session?.engine;
+  const engineAccount = session?.engine_account;
+  const engineBinding = session?.engine_binding;
+  const codexAccount = session?.codex_account;
   const isCodex = provider === 'codex';
   const candidate = isCodex || ((!provider || provider === 'claude') && !!engine);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -60,7 +63,7 @@ export function useServiceTierControl({ serverId, name, provider, model: selecte
     setError(null);
     setNotice(null);
     return () => { seq.current++; };
-  }, [server, name, provider, engine, listedModel, statusModel, selectedModel]);
+  }, [server, name, provider, engine, engineAccount, engineBinding, codexAccount, listedModel, statusModel, selectedModel]);
 
   // O ACK cobre o atraso do SSE, mas não pode vencer uma mudança posterior no terminal.
   useEffect(() => {
@@ -111,7 +114,7 @@ export function useServiceTierControl({ serverId, name, provider, model: selecte
     }
   }, [candidate, server, name, isCodex, engine]);
 
-  useEffect(() => { if (open) void load(); }, [open, load, listedModel, statusModel, selectedModel]);
+  useEffect(() => { if (open) void load(); }, [open, load, engineAccount, engineBinding, codexAccount, listedModel, statusModel, selectedModel]);
 
   const tier = isCodex
     ? (confirmed && confirmed.before === liveTier ? confirmed.tier : liveTier ?? catalog?.tier)

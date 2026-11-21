@@ -73,6 +73,7 @@ pub struct Quotas {
     pub cache: Arc<Mutex<Option<cache::QuotaCache>>>,
     /// Um refresh de rede por vez; quem só lê o cache não entra nesta fila.
     pub refresh: Arc<Mutex<()>>,
+    proxy_reads: Arc<Mutex<()>>,
     pub runtime: Arc<std::sync::OnceLock<Arc<crate::runtime::gateway::RuntimeRegistry>>>,
     pub diag: Arc<std::sync::OnceLock<crate::diag::DiagClient>>,
     pub endpoints: other::Endpoints,
@@ -87,6 +88,7 @@ pub struct Quotas {
 enum Origin {
     Account(Provider, Account),
     Other(other::Reader),
+    CliProxy(String),
 }
 
 /// A leitura curta de cota da abertura sai pela rede; os testes de integração a desligam, porque as
@@ -266,6 +268,22 @@ impl AccountService {
         }
     }
 
+    async fn read_cliproxy_quota(&self, binding: &str) -> Value {
+        const MANAGEMENT: &str = "cliproxy-management";
+        const LIMITED: &str = "cliproxy-gerenciamento-http-429";
+        let _guard = self.quotas.proxy_reads.lock().await;
+        let blocked = {
+            let cache = self.quotas.cache.lock().await;
+            cache.as_ref().is_some_and(|c| !c.needs_refresh(MANAGEMENT, now(), true))
+        };
+        if blocked { return reading("indisponivel", vec![], Some("cliproxy-gerenciamento-espera")); }
+        let value = codex::read_via_proxy(&self.env, binding).await;
+        if value["motivo"] == LIMITED && let Some(cache) = self.quotas.cache.lock().await.as_mut() {
+            cache.update(MANAGEMENT, value.clone(), now());
+        }
+        value
+    }
+
     async fn quotas_owned(
         &self,
         bridge: Option<AccountsBridge>,
@@ -319,6 +337,13 @@ impl AccountService {
             let path = crate::accounts::catalog::resolved(&account.home);
             sources.push((json!({"id":format!("codex:{}",path.to_string_lossy()),
                 "label":if account.is_default {"Codex"} else {&account.id},"provedor":"codex","ativa":false}),Origin::Account(Provider::Codex,account)));
+        }
+        match crate::engines::proxy::quota_bindings(&self.env) {
+            Ok(bindings) => sources.extend(bindings.into_iter().map(|(binding, label)| (
+                json!({"id":crate::engines::proxy::quota_id(&binding),"label":label,"provedor":"cliproxy","ativa":false}),
+                Origin::CliProxy(binding),
+            ))),
+            Err(_) => catalog_failed("cliproxy_quota_accounts_unavailable", "cliproxy"),
         }
         let mut endpoints = vec![];
         for source in &config.sources {
@@ -391,6 +416,7 @@ impl AccountService {
                                     .await;
                                 (value, signature, None)
                             }
+                            Origin::CliProxy(binding) => (service.read_cliproxy_quota(&binding).await, None, None),
                             Origin::Other(reader) => {
                                 let outcome = other::read(
                                     &other_client,
@@ -418,6 +444,7 @@ impl AccountService {
         let mut held = self.quotas.cache.lock().await;
         let cache = held.get_or_insert_with(|| cache::QuotaCache::load(&self.quota_path()));
         for ((id, value, signature, contact), at) in readings {
+            if value["motivo"] == "cliproxy-gerenciamento-espera" { continue; }
             if value["motivo"] == "credencial-alterada" {
                 cache.remove(&id);
             }

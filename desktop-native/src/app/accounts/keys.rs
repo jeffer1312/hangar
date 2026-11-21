@@ -173,6 +173,9 @@ pub(super) struct EngineForm {
     /// Endereço gravado e se há chave gravada: com os dois, testar usa a chave do disco.
     saved_url: String,
     key_set: bool,
+    proxy_accounts: Option<Vec<crate::api::dto::CliProxyAccount>>,
+    binding: Option<String>,
+    binding_changed: bool,
     vision: Option<bool>,
     /// Modelos que o provedor listou; `None` = ainda não testou.
     models: Option<Vec<ProviderModel>>,
@@ -350,6 +353,7 @@ impl Hangar {
         }
         let mut form = EngineForm { kind, saved: saved.clone(), title, lead, badge_url: engine.base_url.clone(), label, name, url, key, model, subagent,
             window: context, compact, output, flags, gateway: None, betas_touched: false, saved_url: engine.base_url, key_set, vision: engine.vision, models: None, picks: None,
+            proxy_accounts: engine.cliproxy_accounts, binding: engine.cliproxy_binding, binding_changed: false,
             testing: None, auto_test: false, tested: None, saving: None, error: None, syncing: None, synced: None, why: None,
             detecting: None, detected: None, keyless: false, unnamed: 0, naming_error: None, mgmt, naming: None,
             derived: Derived::default(),
@@ -474,6 +478,7 @@ impl Hangar {
             "label": match form.kind { FormKind::Edit => form.label.clone(), _ if name.is_empty() => form.title.clone(), _ => name },
             "base_url": url, "model": model,
         });
+        if form.binding_changed { body["cliproxy_binding"] = json!(form.binding); }
         if form.keyless { body["use_cliproxy_key"] = json!(true); } else if !key.is_empty() { body["api_key"] = json!(key); }
         if form.kind != FormKind::Key {
             let blank = |n: Option<Option<u64>>| n.flatten().map_or(json!(""), |n| json!(n));
@@ -749,6 +754,35 @@ impl Hangar {
             url = url.child(tone(text.clone(), color));
         }
         body = body.child(url);
+        if let Some(accounts) = &f.proxy_accounts {
+            let mut choices = div().flex().flex_wrap().gap(px(6.));
+            for (account, binding) in accounts.iter().filter_map(|a| Some((a, a.binding.as_ref().filter(|_| a.prefix.is_some())?))) {
+                let label = if account.email.is_empty() { &account.label } else { &account.email };
+                let selected = f.binding.as_deref() == Some(binding.as_str());
+                let binding = binding.clone();
+                choices = choices.child(Button::new(SharedString::from(format!("engine-binding-{binding}"))).outline().small()
+                    .label(label.clone()).disabled(busy || selected).on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(form) = this.accounts.form.as_mut().filter(|f| !f.busy()) {
+                            form.binding = Some(binding.clone());
+                            form.binding_changed = true;
+                            cx.notify();
+                        }
+                    })));
+            }
+            if f.binding.is_some() {
+                choices = choices.child(Button::new("engine-unbind").ghost().small().label(tr_shared("cliproxy_unbind_account", &[]))
+                    .disabled(busy).on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(form) = this.accounts.form.as_mut().filter(|f| !f.busy()) {
+                            form.binding = None;
+                            form.binding_changed = true;
+                            cx.notify();
+                        }
+                    })));
+            } else {
+                choices = choices.child(help(tr_shared("cliproxy_no_bound_account", &[])));
+            }
+            body = body.child(field(tr_shared("cliproxy_bound_account", &[]), choices));
+        }
 
         if f.keyless && (f.unnamed > 0 || f.naming_error.is_some()) {
             let label = tr_shared("cliproxy_senha_placeholder", &[]);

@@ -16,7 +16,16 @@ pub const CODE_MODE_ENV: &str = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
 
 /// A rota da conta ChatGPT fixa do motor no `hangar-engine` (`cliproxy.engine_env`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: Option<String>, pub base_url: String, pub prefix: String }
+pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: Option<String>, pub base_url: String, pub prefix: String, pub binding: Option<String> }
+
+impl EngineRoute {
+    pub fn append_args(&self, command: &mut Vec<String>) {
+        command.extend(["--account".into(), self.account.clone()]);
+        if let Some(home) = &self.home { command.extend(["--account-home".into(), home.clone()]); }
+        command.extend(["--account-base-url".into(), self.base_url.clone()]);
+        if let Some(binding) = &self.binding { command.extend(["--account-binding".into(), binding.clone()]); }
+    }
+}
 
 /// Endereço e segredo da ponte do plugin do Hangar.
 #[derive(Clone, Debug)]
@@ -185,11 +194,7 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     // O ambiente do motor entra dentro do pane (`hangar-engine --exec`): a chave nunca passa por `-e`.
     if let Account::Engine { name, context_window, .. } = &spec.account {
         command.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
-        if let Some(route) = ctx.engine_route {
-            command.extend(["--account".into(), route.account.clone()]);
-            if let Some(home) = &route.home { command.extend(["--account-home".into(), home.clone()]); }
-            command.extend(["--account-base-url".into(), route.base_url.clone()]);
-        }
+        if let Some(route) = ctx.engine_route { route.append_args(&mut command); }
         if let Some(model) = &spec.model {
             command.extend(["--model".into(), model.clone()]);
             if let Some(window) = context_window { command.extend(["--context".into(), window.to_string()]); }

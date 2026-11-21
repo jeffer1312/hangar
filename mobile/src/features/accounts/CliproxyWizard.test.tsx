@@ -41,7 +41,7 @@ const install = (patch: Partial<CliproxyInstall> = {}): CliproxyInstall =>
   ({ state: 'managed', version: 'v1', latest: 'v1', update_available: false, running: true, job: null, ...patch });
 const proxy = (patch: Partial<CliproxyDeteccao> = {}): CliproxyDeteccao => ({
   found: true, base_url: 'http://127.0.0.1:8317/v1', models: [{ id: 'claude-sonnet-x', context_length: null, vision: null }, { id: 'gpt-6.1-sol', context_length: 872000, vision: null }], error: null,
-  connected: [{ type: 'codex', email: 'velho@x.com' }], install: install(), ...patch,
+  connected: [{ type: 'codex', email: 'velho@x.com', binding: 'old-binding' }], install: install(), ...patch,
 });
 const roots: Array<ReturnType<typeof createRoot>> = [];
 beforeEach(() => {
@@ -94,8 +94,8 @@ describe('assistente do CLIProxyAPI no celular', () => {
     expect(calls.callback).not.toHaveBeenCalled();
     expect(view.container.textContent).toContain('não parece o endereço de volta');
 
-    calls.status.mockResolvedValue({ status: 'ok' });
-    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'velho@x.com' }, { type: 'codex', email: 'novo@x.com' }] }));
+    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'novo@x.com', binding: 'new-binding' } });
+    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'velho@x.com', binding: 'old-binding' }, { type: 'codex', email: 'novo@x.com', binding: 'new-binding' }] }));
     const callback = 'http://localhost:1455/auth/callback?code=abc&state=st1';
     await fill(view.container, 'Endereço da barra do navegador', callback);
     await click(view.container, 'Concluir login');
@@ -112,6 +112,7 @@ describe('assistente do CLIProxyAPI no celular', () => {
     expect(calls.put).toHaveBeenCalledExactlyOnceWith(server, 'gpt-novo', {
       label: 'GPT novo', base_url: 'http://127.0.0.1:8317/v1', model: 'gpt-6.1-sol', subagent_model: 'gpt-6.1-sol',
       use_cliproxy_key: true, create_only: true, experimental_betas: true, fast: true, context_window: 828400,
+      cliproxy_binding: 'new-binding',
     });
     expect(view.onSaved).toHaveBeenCalledTimes(1);
     expect(view.container.textContent).toContain('Tudo pronto');
@@ -130,19 +131,41 @@ describe('assistente do CLIProxyAPI no celular', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); await settle(); });
     expect(calls.status).toHaveBeenCalledTimes(1);
 
-    calls.status.mockResolvedValue({ status: 'ok' });
-    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'velho@x.com' }, { type: 'codex', email: 'novo@x.com' }] }));
+    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'novo@x.com', binding: 'new-binding' } });
+    calls.detect.mockResolvedValue(proxy({ connected: [{ type: 'codex', email: 'velho@x.com', binding: 'old-binding' }, { type: 'codex', email: 'novo@x.com', binding: 'new-binding' }] }));
     await fill(view.container, 'Endereço da barra do navegador', 'http://localhost:1455/auth/callback?code=abc&state=st1');
     await click(view.container, 'Concluir login');
     expect(view.container.textContent).toContain('Conta conectada.');
   });
 
-  it('conta que já está no proxy segue para o nome sem abrir login', async () => {
+  it('grava o vínculo da conta escolhida sem depender do nome do motor', async () => {
+    calls.detect.mockResolvedValue(proxy({ connected: [
+      { type: 'codex', email: 'pessoal@x.com', binding: 'plus-binding', prefix: 'pessoal' },
+      { type: 'codex', email: 'pro@x.com', binding: 'pro-binding', prefix: 'pro' },
+    ], models: [
+      { id: 'pessoal/gpt-5.5', context_length: null, vision: null },
+      { id: 'pro/gpt-6.2-sol', context_length: null, vision: null },
+    ] }));
     const view = await show();
-    expect(view.container.textContent).toContain('velho@x.com');
-    await click(view.container, 'Usar esta conta');
+    const useAccount = [...view.container.querySelectorAll('button')].filter(b => b.getAttribute('aria-label') === 'Usar esta conta');
+    await act(async () => { useAccount[1]!.click(); await settle(); });
     expect(calls.login).not.toHaveBeenCalled();
-    expect(view.container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Nome"]')!.value).toBe('GPT velho');
+    await fill(view.container, 'Nome', 'Meu motor');
+    expect(button(view.container, 'gpt-5.5')).toBeUndefined();
+    await click(view.container, 'Concluir');
+    expect(calls.put).toHaveBeenCalledExactlyOnceWith(server, 'meu-motor', expect.objectContaining({
+      cliproxy_binding: 'pro-binding', model: 'gpt-6.2-sol', subagent_model: 'gpt-6.2-sol',
+    }));
+  });
+
+  it('não adivinha a conta quando o login não informa a identidade', async () => {
+    const view = await show();
+    await click(view.container, 'ChatGPT, Recomendado');
+    calls.status.mockResolvedValue({ status: 'ok' });
+    await fill(view.container, 'Endereço da barra do navegador', 'http://localhost:1455/auth/callback?code=abc&state=st1');
+    await click(view.container, 'Concluir login');
+    expect(button(view.container, 'Usar esta conta')).toBeTruthy();
+    expect(calls.put).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -155,7 +178,7 @@ describe('assistente do CLIProxyAPI no celular', () => {
   });
 
   it('recusa nome vazio e nome de motor que já existe sem gravar', async () => {
-    calls.status.mockResolvedValue({ status: 'ok' });
+    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'velho@x.com', binding: 'old-binding' } });
     const view = await show(['gpt-velho']);
     await click(view.container, 'ChatGPT, Recomendado');
     await fill(view.container, 'Endereço da barra do navegador', 'http://127.0.0.1:1455/auth/callback?state=st1');
@@ -171,7 +194,7 @@ describe('assistente do CLIProxyAPI no celular', () => {
   });
 
   it('modelo com prefixo de conta (solo/gpt-…) conta como GPT e grava o Fast com o identificador inteiro', async () => {
-    calls.status.mockResolvedValue({ status: 'ok' });
+    calls.status.mockResolvedValue({ status: 'ok', account: { type: 'codex', email: 'velho@x.com', binding: 'old-binding' } });
     calls.detect.mockResolvedValue(proxy({ models: [{ id: 'solo/gpt-6.1-sol', context_length: 872000, vision: null }] }));
     const view = await show();
     await click(view.container, 'ChatGPT, Recomendado');

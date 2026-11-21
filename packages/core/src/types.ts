@@ -143,6 +143,8 @@ export interface SessionInfo {
   plan_hidden?: boolean | null;
   // Motor de modelo desta sessão (nome no engines.json). null/undefined = conta Anthropic.
   engine?: string | null;
+  engine_account?: string | null;
+  engine_binding?: string | null;
   codex_service_tier?: string | null;
   // Conta da sessão como ID do /api/cotas ("claude:<dir>", "chave:<motor>") — a pílula de cota do
   // topo mostra o uso da conta da sessão ATIVA. null = não dá pra saber (kimi/pi sem motor).

@@ -5,7 +5,7 @@ use super::{store, proxy};
 use crate::orchestration::truthy;
 
 #[derive(Default)]
-pub struct Selection<'a> { pub model: Option<&'a str>, pub context: Option<Value>, pub account: Option<&'a str>, pub account_home: Option<&'a str>, pub account_base: Option<&'a str> }
+pub struct Selection<'a> { pub model: Option<&'a str>, pub context: Option<Value>, pub account: Option<&'a str>, pub account_home: Option<&'a str>, pub account_base: Option<&'a str>, pub binding: Option<&'a str> }
 
 pub fn catalog_model(model: &str) -> &str {
     static GPT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(||regex::Regex::new(r"\Agpt-\d[^/]*\[1m\]\z").unwrap());
@@ -30,6 +30,10 @@ pub fn derive(accounts: &AccountService, name: &str, selection: Selection<'_>) -
     if truthy(&record["subagent_model"]) && !record["subagent_model"].is_string() { return Err("subagent_model: esperado texto".into()); }
     let base = record["base_url"].as_str().ok_or("base_url: esperado texto")?;
     let key = record["api_key"].as_str().ok_or("api_key: esperado texto")?;
+    let binding = record["cliproxy_binding"].as_str();
+    if binding != selection.binding || (binding.is_some() && selection.account.is_none()) {
+        return Err("O vínculo deste motor não é o da conversa. Confirme a conta ChatGPT antes de reabrir.".into());
+    }
     let mut env = BTreeMap::new();
     let mut window = if selection.model.is_some_and(|s|!s.is_empty()) { selection.context.clone() } else { record.get("context_window").cloned() };
     if let Some(account) = selection.account {
@@ -38,7 +42,14 @@ pub fn derive(accounts: &AccountService, name: &str, selection: Selection<'_>) -
         let expected = store::base_url(expected)?;
         if !reqwest::Url::parse(&expected).ok().and_then(|u|u.host_str().map(store::local_host)).unwrap_or(false) { return Err("CLIProxyAPI: conta fixa exige um endereço local".into()); }
         if store::base_url(base)? != expected { return Err("CLIProxyAPI: endereço do motor mudou; conta fixa não pode usar outro provedor".into()); }
-        let account = proxy::resolve(accounts,account,home)?;
+        let account = if let Some(binding) = binding {
+            let entry = proxy::resolve_binding(accounts, binding)?;
+            if entry["account"] != account || entry["credential_id"].as_str().and_then(|id| id.strip_prefix("codex:")) != home {
+                return Err("A credencial ChatGPT do motor mudou antes da abertura.".into());
+            }
+            env.insert("CP_ENGINE_BINDING".into(), binding.to_owned());
+            entry
+        } else { proxy::resolve(accounts,account,home)? };
         let prefix = account["prefix"].as_str().unwrap();
         model = proxy::prefix_model(&model,prefix)?; subagent = proxy::prefix_model(&subagent,prefix)?;
         if window.as_ref().is_none_or(Value::is_null) && model == proxy::prefix_model(record["model"].as_str().unwrap_or(""),prefix)? { window = record.get("context_window").cloned(); }

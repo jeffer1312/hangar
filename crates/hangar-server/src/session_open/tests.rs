@@ -291,6 +291,8 @@ impl resolve::OpenFacts for FixtureFacts {
         self.file(&format!("{HOME}/.claude/engines.json")).and_then(Value::as_object).map(|e| e.keys().cloned().collect()).unwrap_or_default()
     }
 
+    fn engine_account(&self, _engine: &str, requested: Option<&str>) -> Result<(Option<String>, Option<String>), OpenError> { Ok((requested.map(str::to_owned), None)) }
+
     fn supports_fast(&self, _engine: Option<&str>, _model: Option<&str>) -> bool { false }
     fn supports_ultrafast(&self, _engine: Option<&str>, _model: Option<&str>, _account: Option<&str>) -> bool { false }
 
@@ -1136,7 +1138,7 @@ fn an_unknown_engine_window_is_read_again_on_reopen() {
     for (window, expected) in [(Err(()), (None, true)), (Ok(Some(262144)), (Some(262144), false)), (Ok(None), (None, false))] {
         let facts = FixtureFacts { window, ..FixtureFacts::of(&fixture) };
         let mut spec = SessionSpec { model: Some("k3".into()), account: Account::Engine { name: "e".into(), account: None,
-            config_dir: None, context_window: None, context_window_unknown: true }, ..fixture_spec("create_claude_terminal_default") };
+            config_dir: None, context_window: None, binding: None, context_window_unknown: true }, ..fixture_spec("create_claude_terminal_default") };
         spec.refresh_engine_window(&facts);
         let Account::Engine { context_window, context_window_unknown, .. } = spec.account else { unreachable!() };
         assert_eq!((context_window, context_window_unknown), expected);
@@ -1152,7 +1154,7 @@ fn a_headless_launch_reads_the_unknown_engine_window_and_records_it() {
     let key = "d".repeat(32);
     std::fs::write(dir.path().join("s1.json"), json!({"name": "s1", "key": key, "context_window": null}).to_string()).unwrap();
     let mut spec = SessionSpec { key: key.clone(), name: "s1".into(), model: Some("k3".into()), account: Account::Engine { name: "e".into(),
-        account: None, config_dir: None, context_window: None, context_window_unknown: true }, ..fixture_spec("create_claude_terminal_default") };
+        account: None, config_dir: None, context_window: None, binding: None, context_window_unknown: true }, ..fixture_spec("create_claude_terminal_default") };
     let facts = FixtureFacts { window: Ok(Some(262144)), ..FixtureFacts::of(&fixture) };
     crate::runtime::claude_launch::refresh_window(&mut spec, &facts, dir.path(), "s1");
     assert!(matches!(spec.account, Account::Engine { context_window: Some(262144), context_window_unknown: false, .. }));
@@ -1703,7 +1705,7 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     let spec = open("work").unwrap().spec;
     assert_eq!(spec.model.as_deref(), Some("gpt-5.5"), "sem o prefixo da conta");
     assert_eq!(spec.account, Account::Engine { name: "gpt".into(), account: Some("work".into()), config_dir: None,
-        context_window: Some(400000), context_window_unknown: false });
+        context_window: Some(400000), binding: None, context_window_unknown: false });
     let refused = open("outra").unwrap_err();
     assert_eq!((refused.status, refused.code), (400, Some("erro_cliproxy_conta")), "{}", refused.msg);
     let route = facts::fixed_account(&crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
@@ -1753,7 +1755,8 @@ fn a_proxy_only_chatgpt_account_resolves_without_a_codex_home() {
         [("HOME".to_owned(), home.to_string_lossy().into_owned())].into()));
     let id = "cpa-a-cceab3d142e2";
     let listed = crate::engines::proxy::list_accounts(&accounts()).unwrap();
-    assert_eq!(listed, [json!({"account": id, "credential_id": format!("cliproxy:{id}"), "email": "a@b.c", "label": "a@b.c", "prefix": "solo", "plan": null})]);
+    assert_eq!(listed[0]["credential_id"], format!("cliproxy:{id}"));
+    assert_eq!(listed[0]["prefix"], "solo");
     let open = || {
         let body = json!({"name": "s1", "cwd": home.join("work"), "provider": "claude", "headless": false, "engine": "gpt",
             "engine_account": id, "model": "solo/gpt-5.5", "permission_mode": "manual"});

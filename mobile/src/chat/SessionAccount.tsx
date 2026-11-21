@@ -26,7 +26,8 @@ function matchesTransition(transition: AccountTransition, scope: string, session
     && session.engine === expected.engine && session.guest_kind === expected.guest_kind
     && session.conta === expected.conta && normalizedPath(session.jsonl) === normalizedPath(expected.jsonl)
     && (session.config_dir == null || normalizedPath(session.config_dir) === normalizedPath(expected.config_dir ?? expected.conta?.replace(/^claude:/, '')))
-    && (session.engine_account == null || session.engine_account === expected.engine_account);
+    && (session.engine_account == null || session.engine_account === expected.engine_account)
+    && (session.engine_binding == null || session.engine_binding === expected.engine_binding);
   return matches(transition.source) || matches(transition.destination)
     || matches({ ...transition.destination, jsonl: transition.source.jsonl });
 }
@@ -36,7 +37,7 @@ const serverIdentity = (serverId: string, name: string, server?: Server) => JSON
 ]);
 const sessionIdentity = (scope: string, session: AccountSession | null) => JSON.stringify([
   scope, session?.jsonl, session?.provider, session?.engine, session?.conta,
-  session?.config_dir, session?.engine_account, session?.guest_kind, session?.lifecycle_id,
+  session?.config_dir, session?.engine_account, session?.engine_binding, session?.guest_kind, session?.lifecycle_id,
 ]);
 
 export function SessionAccount({ serverId, name }: { serverId: string; name: string }) {
@@ -102,25 +103,23 @@ export function SessionAccount({ serverId, name }: { serverId: string; name: str
       const engines = await getEnginesForServer(server);
       const engine = engines.motores[session.engine];
       if (engines.arquivo_corrompido || !engine) throw new Error(m.native_invalid_response());
-      if (engine.cliproxy_error) throw new Error(engine.cliproxy_error);
+      if (engine.cliproxy_binding_error || engine.cliproxy_error) throw new Error(engine.cliproxy_binding_error || engine.cliproxy_error);
       if (!engine.cliproxy_accounts?.length) return { targets: [], restricted: true };
-      const credentials = await getCredentialsForServer(server);
+      const credentials = await getCredentialsForServer(server, false, undefined, true);
       const targets: SwitchTarget[] = [];
       for (const account of engine.cliproxy_accounts) {
-        if (!account.account.trim()) continue;
-        // Conta só do proxy: sem credencial Codex no Hangar e sem cota.
+        if (!account.account.trim() || (engine.cliproxy_binding && engine.cliproxy_bound_account?.account !== account.account)) continue;
+        // Conta só do proxy não precisa de login Codex no Hangar.
         if (/^cliproxy:./.test(account.credential_id)) {
-          targets.push({ path: account.credential_id, engineAccount: account.account,
+          targets.push({ path: account.credential_id, engineAccount: account.account, engineBinding: engine.cliproxy_binding,
             label: account.label || account.email || account.account, pct: null, full: false, low: false });
           continue;
         }
         if (!/^codex:./.test(account.credential_id)) continue;
         const credential = credentials.find(c => c.id === account.credential_id && c.tipo === 'codex');
         if (!credential) continue;
-        const windows = credential.cota?.estado === 'lida' ? credential.cota.janelas.filter(w => Number.isFinite(w.pct)).map(w => w.pct) : [];
-        const pct = windows.length ? Math.max(...windows) : null;
-        targets.push({ path: account.credential_id, engineAccount: account.account,
-          label: account.label || account.email || account.account, pct, full: pct !== null && pct >= 99, low: pct !== null && pct >= 95 });
+        targets.push({ path: account.credential_id, engineAccount: account.account, engineBinding: engine.cliproxy_binding,
+          label: account.label || account.email || account.account, pct: null, full: false, low: false });
       }
       return { targets: accountOptions(targets, credentials), credentials };
     };
@@ -145,7 +144,10 @@ export function SessionAccount({ serverId, name }: { serverId: string; name: str
   const displayedSession = success && feedback.transition ? feedback.transition.destination : session;
   const label = displayedSession ? sessionAccountLabel(displayedSession) : null;
   const activeTarget = displayedSession ? current.targets.find(target => isCurrentAccount(target, displayedSession)) : undefined;
-  const activeCredential = displayedSession ? sessionCredential(displayedSession, 'credentials' in current ? current.credentials ?? [] : []) ?? activeTarget?.credential : undefined;
+  const accountRow = displayedSession ? sessionCredential(displayedSession, 'credentials' in current ? current.credentials ?? [] : [])
+    ?? (displayedSession.engine_binding ? undefined : activeTarget?.credential) : undefined;
+  const noBinding = accountRow?.cliproxy && !displayedSession?.engine_account;
+  const activeCredential = noBinding ? undefined : accountRow;
   const shownTargets = current.targets.filter(target => !displayedSession || !isCurrentAccount(target, displayedSession));
   const requestSwitch = (target: SwitchTarget) => {
     if (!server || refused || !session || session.provider !== 'claude' || session.guest_kind === 'pair'
@@ -171,7 +173,7 @@ export function SessionAccount({ serverId, name }: { serverId: string; name: str
         release(); return;
       }
       const next: AccountSession = target.engineAccount
-        ? { ...session, conta: target.path, engine_account: target.engineAccount }
+        ? { ...session, conta: target.path, engine_account: target.engineAccount, engine_binding: target.engineBinding }
         : { ...session, conta: `claude:${target.path}`, config_dir: target.path, jsonl: movedTranscript(session.jsonl, target.path) };
       const transition: AccountTransition = { scope, source: session, destination: next };
       const resultIsCurrent = () => {
@@ -208,7 +210,7 @@ export function SessionAccount({ serverId, name }: { serverId: string; name: str
   </View>;
   return <ScrollView style={styles.scroll} contentInsetAdjustmentBehavior="never" contentContainerStyle={[styles.content, { paddingBottom: theme.base.space[8] + insets.bottom }]}>
     {!ready ? loading : refused ? <Text accessibilityRole="alert" style={styles.error}>{m.chat_servidor_removido()}</Text> : <>
-      <SessionAccountCard current label={activeTarget?.label || activeCredential?.apelido || activeCredential?.nome || label || m.native_invalid_response()}
+      <SessionAccountCard current label={noBinding ? m.cliproxy_no_bound_account() : activeTarget?.label || activeCredential?.apelido || activeCredential?.nome || label || m.native_invalid_response()}
         context={displayedSession?.engine ? label : null} credential={activeCredential} path={displayedSession?.conta?.replace(/^(claude|codex):/, '')} />
       {!session ? sessionError ? failure(sessionError) : listed ? <Text style={styles.error}>{m.chat_sessao_encerrada()}</Text> : bucket?.error ? failure(bucket.error) : loading
         : session.provider !== 'claude' || session.guest_kind === 'pair' ? <Text style={styles.text}>{m.conta_mesma_so_claude()}</Text>

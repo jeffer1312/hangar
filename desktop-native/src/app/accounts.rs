@@ -54,6 +54,7 @@ pub(super) struct Credential {
     #[serde(rename = "chave_mascarada")] masked_key: Option<String>,
     #[serde(rename = "usos", default)] uses: Vec<String>,
     #[serde(rename = "cota")] quota: Option<Quota>,
+    cliproxy_quota: Option<Quota>,
     #[serde(rename = "aceita_cookie", default)] accepts_cookie: bool,
     #[serde(rename = "cookie_definido", default)] cookie_set: bool,
     #[serde(rename = "gerenciada")] managed: Option<bool>,
@@ -117,6 +118,9 @@ struct Engine {
     #[serde(default)] api_key_definida: bool,
     cliproxy_accounts: Option<Vec<crate::api::dto::CliProxyAccount>>,
     cliproxy_error: Option<String>,
+    cliproxy_binding: Option<String>,
+    cliproxy_bound_account: Option<crate::api::dto::CliProxyAccount>,
+    cliproxy_binding_error: Option<String>,
 }
 
 pub(super) struct Engines { map: HashMap<String, Engine>, broken_file: Option<String> }
@@ -414,6 +418,7 @@ fn model_names<'a>(list: &'a [Credential], engines: &'a HashMap<String, Engine>)
 
 /// Em que grupo a credencial entra; `None` é a cópia que o app gravou no Kimi de um modelo já listado.
 fn group_of(c: &Credential, models: &HashSet<&str>) -> Option<Group> {
+    if c.kind == "cliproxy" { return None; }
     if c.id.strip_prefix("kimi:").is_some_and(|name| models.contains(name)) { return None; }
     // Conta Codex do app é assinatura mesmo com o login ilegível (prazo, CLI fora do ar): só a chave de API sai.
     let codex_subscription = c.kind == "codex" && (c.auth() == "none" || (c.codex_account.is_some() && c.auth() != "api_key"));
@@ -489,6 +494,12 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
                 subtitle.push(muted(tr("accounts_list_runs_in_claude_code")));
                 if let Some(version) = proxy_version.filter(|_| engine.cliproxy_accounts.is_some()) {
                     subtitle.push(muted(tr("accounts_proxy_version").replace("{version}", version)));
+                }
+                if let Some(account) = &engine.cliproxy_bound_account {
+                    subtitle.push(muted(if account.email.is_empty() { account.label.clone() } else { account.email.clone() }));
+                    subtitle.extend(account.plan.clone().map(muted));
+                } else if engine.cliproxy_binding.is_some() || engine.cliproxy_accounts.is_some() {
+                    subtitle.push(muted(engine.cliproxy_binding_error.clone().unwrap_or_else(|| crate::i18n::tr_shared("cliproxy_no_bound_account", &[]))));
                 }
                 if has_kimi_copy { subtitle.push(muted(tr("accounts_kimi_copy"))); }
                 if !engine.model.is_empty() { chips.push(engine.model.clone()); }
@@ -628,19 +639,14 @@ fn parse_engines(value: &Value) -> Result<Engines, String> {
 fn proxy_account_targets(session: &SessionInfo, list: &[Credential], engine: &Engine) -> Vec<super::sidebar::AccountTarget> {
     if engine.cliproxy_error.is_some() { return Vec::new(); }
     engine.cliproxy_accounts.as_deref().unwrap_or_default().iter().filter_map(|a| {
-        // Conta só do proxy não tem credencial Codex no Hangar nem cota para mostrar.
-        if a.credential_id.strip_prefix("cliproxy:").is_some_and(|id| !id.is_empty()) {
-            if session.engine_account.as_deref() == Some(a.account.as_str()) { return None; }
-            let label = if a.label.is_empty() { a.email.clone() } else { a.label.clone() };
-            return Some(super::sidebar::AccountTarget { path: String::new(), label, pct: None, low: false, full: false,
-                engine_account: Some(a.account.clone()), login: None });
-        }
-        let c = list.iter().find(|c| c.kind == "codex" && c.id == a.credential_id && c.id.starts_with("codex:")
-            && c.codex_account.as_deref() == Some(a.account.as_str()) && c.logged_in() == Some(true))?;
-        if session.engine_account.as_deref() == Some(a.account.as_str()) && session.conta.as_deref() == Some(c.id.as_str()) { return None; }
-        let pct = c.read_windows().and_then(|windows| windows.iter().filter(|w| matches!(w.label.as_str(), "5h" | "7d")
+        if engine.cliproxy_binding.is_some() && !engine.cliproxy_bound_account.as_ref().is_some_and(|bound| bound.account == a.account) { return None; }
+        if !["codex:", "cliproxy:"].iter().any(|prefix| a.credential_id.strip_prefix(*prefix).is_some_and(|id| !id.is_empty())) { return None; }
+        if session.engine_account.as_deref() == Some(a.account.as_str()) && session.engine_binding == engine.cliproxy_binding { return None; }
+        let credential = list.iter().find(|c| c.id == a.credential_id);
+        let quota = credential.and_then(|c| if c.kind == "codex" { c.cliproxy_quota.as_ref() } else { c.quota.as_ref() });
+        let pct = quota.filter(|q| q.state == "lida").and_then(|q| q.windows.iter().filter(|w| !w.por_modelo
             && w.reset_at.is_none_or(|at| at > now())).map(|w| w.pct).reduce(f64::max));
-        let label = c.alias.clone().filter(|a| !a.is_empty()).unwrap_or_else(||
+        let label = credential.and_then(|c| c.alias.clone()).filter(|a| !a.is_empty()).unwrap_or_else(||
             if a.label.is_empty() { a.email.clone() } else { a.label.clone() });
         Some(super::sidebar::AccountTarget { path: String::new(), label, pct, low: pct.is_some_and(|p| p >= 95.),
             full: pct.is_some_and(|p| p >= 99.), engine_account: Some(a.account.clone()), login: None })
@@ -773,7 +779,7 @@ impl Hangar {
         } else if self.accounts.session_list.loading { return; }
         let seq = self.accounts.session_list.start();
         let done = self.accounts_send_later();
-        self.runtime.spawn(async move { done(AccountsReply::SessionList(seq, server, api.server_read(&["credenciais"], &[], 30).await)).await });
+        self.runtime.spawn(async move { done(AccountsReply::SessionList(seq, server, api.server_read(&["credenciais"], &[("proxy_accounts", "true")], 30).await)).await });
         cx.notify();
     }
 

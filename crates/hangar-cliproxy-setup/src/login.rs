@@ -65,7 +65,7 @@ impl Error {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Status {
     Wait,
-    Ok,
+    Ok { auth_id: Option<String> },
     Failed(String),
 }
 
@@ -154,7 +154,7 @@ pub async fn status(m: &Management, state: &str) -> Result<Status, Error> {
 
 pub fn parse_status(body: &Value) -> Status {
     match body["status"].as_str() {
-        Some("ok") => Status::Ok,
+        Some("ok") => Status::Ok { auth_id: body["auth_id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned) },
         Some("error") => Status::Failed(body["error"].as_str().unwrap_or("").to_owned()),
         _ => Status::Wait,
     }
@@ -178,7 +178,8 @@ mod tests {
 
     #[test]
     fn status_reads_the_three_answers() {
-        assert_eq!(parse_status(&json!({"status": "ok"})), Status::Ok);
+        assert_eq!(parse_status(&json!({"status": "ok"})), Status::Ok { auth_id: None });
+        assert_eq!(parse_status(&json!({"status": "ok", "auth_id": "codex-pro.json"})), Status::Ok { auth_id: Some("codex-pro.json".into()) });
         assert_eq!(parse_status(&json!({"status": "wait"})), Status::Wait);
         assert_eq!(parse_status(&json!({"status": "error", "error": "negado"})), Status::Failed("negado".into()));
     }

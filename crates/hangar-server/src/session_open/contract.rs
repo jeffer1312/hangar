@@ -172,6 +172,7 @@ impl OpenFacts for Facts {
     fn existing_dir(&self, cwd: &str) -> Option<String> { self.local.existing_dir(cwd) }
     fn config_dirs(&self) -> Result<Vec<String>, OpenError> { self.local.config_dirs() }
     fn engines(&self) -> Vec<String> { self.local.engines() }
+    fn engine_account(&self, engine: &str, requested: Option<&str>) -> Result<(Option<String>, Option<String>), OpenError> { self.local.engine_account(engine, requested) }
     fn supports_fast(&self, engine: Option<&str>, model: Option<&str>) -> bool { self.local.supports_fast(engine, model) }
     fn supports_ultrafast(&self, engine: Option<&str>, model: Option<&str>, account: Option<&str>) -> bool {
         self.local.supports_ultrafast(engine, model, account)
