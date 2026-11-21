@@ -1298,7 +1298,7 @@ const styles = StyleSheet.create((theme) => ({
   folderScreen: { flex: 1, paddingHorizontal: theme.base.space[3], paddingBottom: theme.base.space[3] },
   formScroll: { gap: theme.base.space[3], paddingHorizontal: theme.base.space[3], paddingBottom: theme.base.space[8] },
   group: { backgroundColor: superficie(theme), borderRadius: theme.base.radius.lg, overflow: 'hidden' },
-  sep: { height: StyleSheet.hairlineWidth, marginLeft: 42, backgroundColor: theme.tokens.border.default },
+  sep: { height: StyleSheet.hairlineWidth, marginLeft: theme.base.space[10] + theme.base.space[0.5], backgroundColor: theme.tokens.border.default },
   pickerWrap: { minHeight: 380, flex: 1 },
   more: { minHeight: 36, paddingHorizontal: theme.base.space[2], justifyContent: 'center' },
   extras: { gap: theme.base.space[3], padding: theme.base.space[2] },
