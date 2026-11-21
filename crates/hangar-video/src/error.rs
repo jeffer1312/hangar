@@ -6,8 +6,6 @@ pub enum VideoError {
     Unavailable(String),
     /// A libmpv recusou criar ou configurar o player.
     Init(String),
-    /// Cabeçalho vazio ou com quebra de linha: viraria outro cabeçalho no pedido.
-    InvalidHeader,
 }
 
 impl fmt::Display for VideoError {
@@ -15,7 +13,6 @@ impl fmt::Display for VideoError {
         match self {
             VideoError::Unavailable(why) => write!(f, "libmpv unavailable: {why}"),
             VideoError::Init(why) => write!(f, "libmpv refused to start: {why}"),
-            VideoError::InvalidHeader => f.write_str("invalid HTTP header for the video request"),
         }
     }
 }

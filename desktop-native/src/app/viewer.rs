@@ -963,21 +963,23 @@ fn video_stage(aspect: f32, limit: (f32, f32), full: bool) -> (f32, f32) {
 
 impl Hangar {
     /// Toca um vídeo da conversa no app, no diálogo do visor. Sessão desta máquina toca o próprio arquivo; outra vai
-    /// pela rota do servidor com o token no cabeçalho. Sem a libmpv o player diz o que falta, e "Abrir no player do
-    /// sistema" continua aqui.
+    /// pela rota do servidor através da ponte local, que é quem leva o token. Sem a libmpv o player diz o que falta, e
+    /// "Abrir no player do sistema" continua aqui.
     pub(super) fn open_video(&mut self, key: SessionKey, source: Source, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::video::{Upstream, VideoPlayer, VideoSource};
         let Some(api) = self.api_for(&key.server) else { return };
         let name = source_name(&source);
-        let address = match self.uploads_for(&key).local_path(&source) {
-            Some(path) => Some((path.to_string_lossy().into_owned(), Vec::new())),
-            None => api.stream(&key.name, &source).map(|(url, token)| (url, vec![hangar_video::bearer(&token)])),
+        let video = match self.uploads_for(&key).local_path(&source) {
+            Some(path) => Some(VideoSource::Local(path.to_string_lossy().into_owned())),
+            None => api.stream(&key.name, &source).and_then(|(url, token)| Upstream::new(&url, &token)).map(VideoSource::Remote),
         };
-        let Some((address, headers)) = address else {
+        let Some(video) = video else {
             self.action_feedback.insert(key, (tr("video_failed").replace("{reason}", &tr("video_no_route")), true));
             cx.notify();
             return;
         };
-        let player = cx.new(|cx| crate::video::VideoPlayer::new(address, headers, cx));
+        let runtime = self.runtime.handle().clone();
+        let player = cx.new(|cx| VideoPlayer::new(video, &runtime, cx));
         let (hangar, shown, closed) = (cx.entity().downgrade(), player.clone(), player.clone());
         let openable = composer::openable(&composer::safe_name(&name));
         window.open_dialog(cx, move |dialog, window, cx| {

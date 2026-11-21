@@ -22,7 +22,8 @@ impl Os {
 
 /// Onde procurar, na ordem: o caminho de `HANGAR_LIBMPV`, a pasta do executável (Windows e o `Frameworks` do pacote
 /// do macOS, onde um instalador a deixaria), os nomes que o carregador do sistema procura sozinho e, no macOS, as
-/// pastas do Homebrew, que um app aberto pelo Finder não enxerga.
+/// pastas do Homebrew, que um app aberto pelo Finder não enxerga. No Windows não há nome solto: a busca padrão olha a
+/// pasta atual e o PATH, e uma `libmpv-2.dll` plantada ali rodaria dentro do app.
 pub(crate) fn candidates(os: Os, explicit: Option<OsString>, exe_dir: Option<&Path>) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(path) = explicit.filter(|path| !path.is_empty()) { out.push(PathBuf::from(path)); }
@@ -39,7 +40,7 @@ pub(crate) fn candidates(os: Os, explicit: Option<OsString>, exe_dir: Option<&Pa
             Os::Linux | Os::Other => {}
         }
     }
-    out.extend(names.iter().map(PathBuf::from));
+    if os != Os::Windows { out.extend(names.iter().map(PathBuf::from)); }
     if os == Os::Macos {
         for dir in ["/opt/homebrew/lib", "/usr/local/lib"] { out.extend(names.iter().map(|name| Path::new(dir).join(name))); }
     }
@@ -72,8 +73,8 @@ impl Library {
     fn load(candidates: &[PathBuf]) -> Result<Library, VideoError> {
         let mut tried = Vec::new();
         for path in candidates {
-            // SAFETY: carregar roda os construtores da biblioteca; é a libmpv que o usuário instalou ou apontou.
-            let lib = match unsafe { libloading::Library::new(path) } {
+            if cfg!(windows) && !path.is_absolute() { tried.push(format!("{}: not an absolute path", path.display())); continue; }
+            let lib = match open(path) {
                 Ok(lib) => lib,
                 Err(error) => { tried.push(format!("{}: {error}", path.display())); continue; }
             };
@@ -91,6 +92,21 @@ impl Library {
         }
         Err(VideoError::Unavailable(if tried.is_empty() { "no candidate for this system".into() } else { tried.join("; ") }))
     }
+}
+
+/// Windows: só o caminho dado, e as DLLs de que ela depende vêm da pasta dela, da do app e do System32, nunca da pasta
+/// atual nem do PATH.
+#[cfg(windows)]
+fn open(path: &Path) -> Result<libloading::Library, libloading::Error> {
+    use libloading::os::windows::{LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, Library};
+    // SAFETY: carregar roda os construtores da biblioteca; é a libmpv que o usuário instalou ou apontou.
+    unsafe { Library::load_with_flags(path, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) }.map(Into::into)
+}
+
+#[cfg(not(windows))]
+fn open(path: &Path) -> Result<libloading::Library, libloading::Error> {
+    // SAFETY: carregar roda os construtores da biblioteca; é a libmpv que o usuário instalou ou apontou.
+    unsafe { libloading::Library::new(path) }
 }
 
 /// SAFETY de quem chama: `T` é o tipo de ponteiro de função do protótipo C de `name`.
@@ -143,9 +159,9 @@ mod tests {
     }
 
     #[test]
-    fn windows_looks_beside_the_executable_before_the_search_path() {
-        assert_eq!(names(candidates(Os::Windows, None, Some(Path::new("C:/Hangar")))),
-            ["C:/Hangar/libmpv-2.dll", "C:/Hangar/mpv-2.dll", "libmpv-2.dll", "mpv-2.dll"]);
+    fn windows_never_loads_a_bare_name() {
+        assert_eq!(names(candidates(Os::Windows, None, Some(Path::new("C:/Hangar")))), ["C:/Hangar/libmpv-2.dll", "C:/Hangar/mpv-2.dll"]);
+        assert_eq!(names(candidates(Os::Windows, Some("C:/mpv/libmpv-2.dll".into()), None)), ["C:/mpv/libmpv-2.dll"]);
     }
 
     #[test]

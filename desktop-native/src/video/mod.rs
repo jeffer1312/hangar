@@ -1,7 +1,10 @@
 //! Vídeo tocado dentro do app (`hangar_video`, sobre a libmpv): o quadro e os controles. Quem abre escolhe onde o
-//! player mora (hoje o diálogo do visor) e passa o endereço já resolvido: caminho local ou a rota do servidor, com o
-//! token no cabeçalho.
+//! player mora (hoje o diálogo do visor) e passa o endereço já resolvido: caminho local ou a rota do servidor, que a
+//! libmpv só alcança pela ponte local (`proxy`), a única que leva o token.
+mod proxy;
 mod surface;
+
+pub use proxy::Upstream;
 
 use std::{cell::{Cell, RefCell}, rc::Rc, time::{Duration, Instant}};
 use gpui_kit::{component::{button::*, *}, *};
@@ -26,6 +29,14 @@ pub const CONTROLS_H: f32 = 44.;
 
 enum Phase { Opening, Ready, Failed(VideoError) }
 
+/// O que o player abre.
+pub enum VideoSource {
+    /// Arquivo desta máquina, pelo caminho.
+    Local(String),
+    /// Rota de outra máquina: a libmpv pede à ponte local, sem credencial.
+    Remote(Upstream),
+}
+
 /// O que o pincel do quadro usa: ele roda na pintura, fora do `render`.
 struct Core {
     player: Option<Player>,
@@ -45,30 +56,51 @@ pub struct VideoPlayer {
     scrubbing: bool,
     /// A tela cheia foi este player que ligou: fechar o vídeo a desliga.
     fullscreen_by_us: bool,
+    /// Fechado pelo `release`: um `Player::open` que termine depois sai sem ser guardado.
+    released: bool,
+    /// A ponte do vídeo remoto; sai junto com o player.
+    proxy: Option<proxy::Proxy>,
     _open: Task<()>,
     _watch: Task<()>,
 }
 
 impl VideoPlayer {
-    /// `source`: caminho local ou URL http(s). `headers` vão em todo pedido do vídeo, inclusive os de faixa da busca.
-    pub fn new(source: String, headers: Vec<(String, String)>, cx: &mut Context<Self>) -> Self {
+    /// `runtime`: onde a ponte do vídeo remoto atende.
+    pub fn new(source: VideoSource, runtime: &tokio::runtime::Handle, cx: &mut Context<Self>) -> Self {
         // Um aviso guardado basta: a tela relê o estado inteiro quando acorda.
         let (tx, rx) = async_channel::bounded::<()>(1);
-        let options = Options { format: FORMAT, headers };
-        let open = cx.background_spawn(async move { Player::open(&source, &options, move |_| { let _ = tx.try_send(()); }) });
-        let _open = cx.spawn(async move |this, cx| {
-            let result = open.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(player) => { this.core.borrow_mut().player = Some(player); this.phase = Phase::Ready; }
-                    Err(error) => {
-                        crate::log_line(&format!("video: {error}"));
-                        this.phase = Phase::Failed(error);
-                    }
-                }
-                cx.notify();
-            });
-        });
+        let mut proxy = None;
+        let address = match source {
+            VideoSource::Local(path) => Ok(path),
+            VideoSource::Remote(upstream) => proxy::start(runtime, upstream)
+                .map(|started| { let address = started.address().to_owned(); proxy = Some(started); address })
+                .map_err(|error| VideoError::Init(format!("local proxy: {error}"))),
+        };
+        let (phase, _open) = match address {
+            Err(error) => {
+                crate::log_line(&format!("video: {error}"));
+                (Phase::Failed(error), Task::ready(()))
+            }
+            Ok(address) => {
+                let options = Options { format: FORMAT };
+                let open = cx.background_spawn(async move { Player::open(&address, &options, move |_| { let _ = tx.try_send(()); }) });
+                (Phase::Opening, cx.spawn(async move |this, cx| {
+                    let result = open.await;
+                    let _ = this.update(cx, |this, cx| {
+                        // Fechado enquanto abria: o player sai aqui, sem tocar para um diálogo que já não existe.
+                        if this.released { return; }
+                        match result {
+                            Ok(player) => { this.core.borrow_mut().player = Some(player); this.phase = Phase::Ready; }
+                            Err(error) => {
+                                crate::log_line(&format!("video: {error}"));
+                                this.phase = Phase::Failed(error);
+                            }
+                        }
+                        cx.notify();
+                    });
+                }))
+            }
+        };
         let _watch = cx.spawn(async move |this, cx| {
             while rx.recv().await.is_ok() {
                 if this.update(cx, |this, cx| this.changed(cx)).is_err() { break; }
@@ -82,8 +114,8 @@ impl VideoPlayer {
         }).detach();
         VideoPlayer {
             core: Rc::new(RefCell::new(Core { player: None, surface: surface::Surface::new(), target: (0, 0), unpainted_since: None })),
-            phase: Phase::Opening, state: Snapshot::default(), focus: cx.focus_handle(), bar: Rc::new(Cell::new(None)),
-            scrubbing: false, fullscreen_by_us: false, _open, _watch,
+            phase, state: Snapshot::default(), focus: cx.focus_handle(), bar: Rc::new(Cell::new(None)),
+            scrubbing: false, fullscreen_by_us: false, released: false, proxy, _open, _watch,
         }
     }
 
@@ -93,8 +125,10 @@ impl VideoPlayer {
     /// Largura sobre altura do vídeo, quando ele já disse o tamanho.
     pub fn aspect(&self) -> Option<f32> { self.state.video_size.map(|(w, h)| w as f32 / h.max(1) as f32) }
 
-    /// Fecha a libmpv, solta a textura e desfaz a tela cheia que este player ligou.
+    /// Fecha a libmpv e a ponte, solta a textura e desfaz a tela cheia que este player ligou.
     pub fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.released = true;
+        self.proxy = None;
         {
             let mut core = self.core.borrow_mut();
             core.player = None;

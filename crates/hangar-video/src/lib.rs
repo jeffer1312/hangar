@@ -13,4 +13,4 @@ pub use error::VideoError;
 pub use frame::FrameRef;
 pub use library::Library;
 pub use player::{Change, Options, PixelFormat, Player, Snapshot};
-pub use text::{bearer, clock};
+pub use text::clock;

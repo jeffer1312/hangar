@@ -7,7 +7,6 @@ use crate::error::VideoError;
 use crate::ffi::{self, RenderParam};
 use crate::frame::{Buffer, FrameRef, render_size};
 use crate::library::Library;
-use crate::text::header_fields;
 
 /// Ordem dos bytes de cada pixel no buffer. O quarto byte sai sempre 255.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,11 +16,11 @@ impl PixelFormat {
     fn mpv(self) -> &'static CStr { match self { PixelFormat::Rgba => c"rgb0", PixelFormat::Bgra => c"bgr0" } }
 }
 
+/// Sem cabeçalho nem credencial: vídeo de outra máquina chega por uma URL que já não precisa de nenhum (a ponte local do
+/// app), porque o ffmpeg segue manifesto e redirecionamento para onde o conteúdo mandar.
 #[derive(Clone, Debug)]
 pub struct Options {
     pub format: PixelFormat,
-    /// Vão em todo pedido HTTP do vídeo, inclusive os de faixa (Range) que a busca faz.
-    pub headers: Vec<(String, String)>,
 }
 
 /// O que mudou desde o último aviso: a tela redesenha nos dois casos.
@@ -61,17 +60,19 @@ impl Default for Snapshot {
 
 /// Opções de antes do `mpv_initialize`. As `true` são obrigatórias; as outras só existem em parte das versões e
 /// builds (sem Lua não há `osc` nem `ytdl`), e a falta delas não impede tocar.
-const OPTIONS: [(&str, &str, bool); 18] = [
+const OPTIONS: [(&str, &str, bool); 20] = [
     ("vo", "libmpv", true),
     ("keep-open", "yes", true),
-    // O cabeçalho do dono vai por https a outra máquina: sem verificar o certificado, quem estivesse no caminho o leria.
-    ("tls-verify", "yes", true),
     ("idle", "yes", false),
     ("hwdec", "auto-safe", false),
     ("config", "no", false),
     ("load-scripts", "no", false),
     // Sem isso uma URL http passaria pelo yt-dlp do sistema antes de abrir.
     ("ytdl", "no", false),
+    // O arquivo não leva a libmpv a outros endereços: playlist, capítulos ordenados e referências do mov ficam de fora.
+    ("load-unsafe-playlists", "no", false),
+    ("access-references", "no", false),
+    ("ordered-chapters", "no", false),
     ("osc", "no", false),
     ("input-default-bindings", "no", false),
     ("input-vo-keyboard", "no", false),
@@ -168,7 +169,6 @@ impl Player {
     /// Bloqueante (carrega a biblioteca e inicia o núcleo): fora da thread da interface. `source` é um caminho local
     /// ou uma URL http(s); `notify` é chamado de outras threads a cada mudança.
     pub fn open(source: &str, options: &Options, notify: impl Fn(Change) + Send + Sync + 'static) -> Result<Player, VideoError> {
-        let headers = header_fields(&options.headers)?;
         let source = CString::new(source).map_err(|_| VideoError::Init("source with NUL".into()))?;
         let lib = Library::shared()?;
         let api = &lib.api;
@@ -176,7 +176,7 @@ impl Player {
         // SAFETY: sem argumentos; nulo é a falha documentada.
         let raw = unsafe { (api.create)() };
         if raw.is_null() { return Err(VideoError::Init("mpv_create failed (LC_NUMERIC must be \"C\")".into())); }
-        let render = match configure(api, raw, &headers) {
+        let render = match configure(api, raw) {
             Ok(render) => render,
             Err(why) => {
                 // SAFETY: handle criado acima e ainda sem nenhuma outra thread.
@@ -308,7 +308,7 @@ fn shutdown(inner: Arc<Inner>, render: Option<JoinHandle<()>>, events: Option<Jo
     }
 }
 
-fn configure(api: &ffi::Api, raw: *mut ffi::Handle, headers: &[String]) -> Result<*mut ffi::RenderContext, String> {
+fn configure(api: &ffi::Api, raw: *mut ffi::Handle) -> Result<*mut ffi::RenderContext, String> {
     let set = |name: &str, value: &str| -> Result<(), String> {
         let (cname, cvalue) = (CString::new(name).map_err(|_| name.to_owned())?, CString::new(value).map_err(|_| name.to_owned())?);
         // SAFETY: handle criado e ainda não iniciado; strings vivas durante a chamada.
@@ -318,7 +318,6 @@ fn configure(api: &ffi::Api, raw: *mut ffi::Handle, headers: &[String]) -> Resul
     for (name, value, required) in OPTIONS {
         if let Err(why) = set(name, value) && required { return Err(why); }
     }
-    for header in headers { set("http-header-fields-append", header)?; }
     // SAFETY: handle configurado.
     let code = unsafe { (api.initialize)(raw) };
     if code < 0 { return Err(format!("mpv_initialize: {}", error_text(api, code))); }
@@ -469,7 +468,7 @@ fn c_numeric_locale() {}
 
 #[cfg(test)]
 mod tests {
-    use super::{Snapshot, apply};
+    use super::{OPTIONS, Snapshot, apply};
     use crate::ffi::{self, EventProperty};
     use std::ffi::{c_int, c_void};
 
@@ -486,6 +485,14 @@ mod tests {
         assert_eq!(state.video_size, Some((1280, 720)));
         apply(&mut state, 10, &EventProperty { name: std::ptr::null(), format: ffi::FORMAT_NONE, data: std::ptr::null_mut() });
         assert_eq!(state.video_size, None);
+    }
+
+    #[test]
+    fn mpv_gets_no_header_and_follows_no_reference() {
+        assert!(OPTIONS.iter().all(|(name, _, _)| !name.starts_with("http-header") && !name.starts_with("tls")));
+        for option in ["load-unsafe-playlists", "access-references", "ordered-chapters"] {
+            assert!(OPTIONS.iter().any(|(name, value, _)| *name == option && *value == "no"), "{option}");
+        }
     }
 
     #[test]
