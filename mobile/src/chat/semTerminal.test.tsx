@@ -690,6 +690,21 @@ describe('ações e atualização da conversa na rota', () => {
     } finally { act(() => root.unmount()); }
   });
 
+  it('troca de agente na lista relê a sessão; a linha sumir da lista não relê', async () => {
+    const row: (typeof sessionsState.rows)[number] = { serverId: 's1', name: 'sess', provider: 'claude' };
+    sessionsState.rows = [row];
+    const { root } = await render(createElement(ChatScreen));
+    try {
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [{ ...row, provider: 'codex' }];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(2);
+    } finally { act(() => root.unmount()); }
+  });
+
   it('a conversa mantém a lista de sessões viva enquanto está aberta, com a gaveta fechada', async () => {
     const { root } = await render(createElement(ChatScreen));
     expect(sessionsState.holders).toBe(1);

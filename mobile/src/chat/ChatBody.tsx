@@ -209,6 +209,10 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
   }));
   const currentSession = fetchedSession === undefined ? listSession : fetchedSession;
   const codexPreThread = currentSession?.provider === 'codex' && currentSession.tracked === false;
+  // A linha sumir da lista não é troca de agente: só um provedor conhecido diferente pede outra leitura.
+  const knownProvider = useRef(rowsProvider);
+  if (rowsProvider) knownProvider.current = rowsProvider;
+  const followedProvider = rowsProvider ?? knownProvider.current;
   // Relida também quando o provedor da lista muda: a troca de agente faz a sessão Claude virar Codex.
   useEffect(() => {
     if (!ready || servidorSumiu) return;
@@ -249,7 +253,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
       clearTimeout(timer);
       subscription.remove();
     };
-  }, [ready, servidorSumiu, serverId, name, rowsProvider]);
+  }, [ready, servidorSumiu, serverId, name, followedProvider]);
   const provider: Provider | null = codexPreThread ? 'codex' : rowsProvider ?? fetchedSession?.provider ?? null;
   const agentConversation = useMemo(() => events.find(event => event.kind !== 'notice' && !event.id.startsWith('queued-'))?.id,
     [events, eventsRevision]);
