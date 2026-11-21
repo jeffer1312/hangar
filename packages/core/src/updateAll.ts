@@ -153,7 +153,8 @@ async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOpti
   return { offline, targets: candidates.filter((server, index) => !identities[index] || representatives.get(identities[index]) === server) };
 }
 
-export interface MachineNotes { server: Server; notes: UpdateNotes | null }
+/** `version`: "no ar → nova", da busca feita aqui; vazia quando o servidor não informa as duas. */
+export interface MachineNotes { server: Server; notes: UpdateNotes | null; version?: string }
 /** `failed`: todas as que ficam de fora; `offline` é a parte delas que está fora do ar; `reasons`, o motivo das outras. */
 export interface PreparedUpdateAll { run: MachineNotes[]; failed: Server[]; offline: Server[]; reasons?: Readonly<Record<string, string>> }
 
@@ -208,7 +209,8 @@ export async function prepareUpdateAll(servers: readonly Server[], opts: Prepare
     try {
       const notes = await getUpdateNotesEm(server, opts.fetch);
       report(server, checkOf(snapshot));
-      return { server, notes };
+      const v = snapshot.versao_legivel;
+      return { server, notes, version: v?.backend && v.remoto ? `${v.backend} → ${v.remoto}` : '' };
     } catch (error) {
       registerDiagnostic({ evento: 'update_all.notes_failed', nivel: 'aviso',
         codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);

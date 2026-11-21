@@ -341,15 +341,20 @@ impl Progress {
         rows.into_iter().filter_map(|row| Some((self.reads.get(&row.key)?.notes.clone(), self.developer.get(&row.key)?.clone()))).unzip()
     }
 
-    /// Há o que fazer: uma máquina com versão nova cujos avisos foram lidos, ou o app desta máquina.
-    fn actionable(&self) -> bool {
-        self.app_offer || self.rows.iter().any(|row| row.status == Status::Available
-            && self.reads.get(&row.key).is_some_and(|read| !read.notes.excluded()))
+    /// As máquinas que o Atualizar roda: versão nova e avisos lidos.
+    fn runnable(&self) -> HashSet<&str> {
+        self.rows.iter().filter(|row| row.status == Status::Available
+            && self.reads.get(&row.key).is_some_and(|read| !read.notes.excluded())).map(|row| row.key.as_str()).collect()
     }
 
+    /// Há o que fazer: uma máquina que o Atualizar roda, ou o app desta máquina.
+    fn actionable(&self) -> bool { self.app_offer || !self.runnable().is_empty() }
+
+    /// O "Entendi" só é exigido pelos avisos de quem vai rodar; os das outras ficam à vista.
     fn can_start(&self) -> bool {
-        self.phase == Phase::Review && self.loaded() && self.actionable()
-            && (!self.shown_notes().0.iter().any(Notes::warned) || self.understood.get())
+        let runnable = self.runnable();
+        let warned = self.shown_notes().0.iter().any(|notes| notes.warned() && runnable.contains(notes.server()));
+        self.phase == Phase::Review && self.loaded() && self.actionable() && (!warned || self.understood.get())
     }
 
     fn counted(&self) -> (usize, usize) {
@@ -363,7 +368,10 @@ impl Progress {
         match self.phase {
             Phase::Review if !self.loaded() => tr_shared("update_all_summary_checking", &[("n", &self.counted().1.to_string())]),
             Phase::Review if self.actionable() => tr_shared("update_all_summary_ready", &[]),
-            Phase::Review => tr_shared("update_all_up_to_date", &[]),
+            // "Em dia" só com todas as que responderam confirmando; falha ou trava não é sucesso.
+            Phase::Review if self.rows.iter().all(|row| matches!(row.status, Status::Current | Status::Offline(_))) =>
+                tr_shared("update_all_up_to_date", &[]),
+            Phase::Review => tr_shared("update_all_summary_none", &[]),
             Phase::Running if self.done() => self.outcome(),
             Phase::Running if !self.rows.iter().any(|row| row.status.busy()) => tr_shared("update_all_summary_app", &[]),
             Phase::Running => {
@@ -483,7 +491,8 @@ impl Render for Progress {
     }
 }
 
-pub(super) struct Batch { progress: Entity<Progress>, generation: u64 }
+/// `prep`: a leitura da abertura; fechar antes do Atualizar a interrompe, em vez de deixá-la buscar e ler avisos à toa.
+pub(super) struct Batch { progress: Entity<Progress>, generation: u64, prep: Option<tokio::task::JoinHandle<()>> }
 
 enum Event { Prepared(Vec<Machine>, HashMap<String, String>), Changed(String, Status, Vec<String>), Unknown(String) }
 
@@ -698,12 +707,12 @@ impl Updater {
         });
         self.survey.generation += 1;
         let generation = self.survey.generation;
-        self.batch = Some(Batch { progress, generation });
+        self.batch = Some(Batch { progress, generation, prep: None });
         self.run = Run::Searching;
         cx.notify();
         self.open_batch(window, cx);
         let (tx, rx) = async_channel::unbounded();
-        self.runtime.spawn(async move {
+        let prep = self.runtime.spawn(async move {
             let (machines, aliases, down) = prepare_machines(reach).await;
             let readable: Vec<Machine> = machines.iter().filter(|m| !down.contains(&m.key)).cloned().collect();
             if tx.send(ReviewEvent::Identified(machines, aliases, down)).await.is_err() { return; }
@@ -715,6 +724,7 @@ impl Updater {
                 }
             })).await;
         });
+        if let Some(batch) = &mut self.batch { batch.prep = Some(prep); }
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             while let Ok(event) = rx.recv().await {
@@ -839,6 +849,7 @@ impl Updater {
     fn batch_closed(&mut self, cx: &mut Context<Self>) {
         let Some(batch) = &self.batch else { return };
         if batch.progress.read(cx).phase == Phase::Review {
+            if let Some(prep) = &batch.prep { prep.abort(); }
             self.batch = None;
             if matches!(self.run, Run::Searching) { self.run = Run::Idle; }
         } else if !self.busy() { self.batch = None; }
@@ -1047,7 +1058,7 @@ mod tests {
             let dict: Value = serde_json::from_str(source).unwrap();
             for key in ["button", "title", "short", "available", "checking", "starting", "running", "waiting", "up_to_date", "held_branch",
                 "held_changes", "held_running", "held_missing", "offline", "updated", "updated_manual", "failed", "silent", "timeout", "warnings",
-                "summary_checking", "summary_ready", "summary_progress", "summary_app", "done_title", "done_ok", "done_issues",
+                "summary_checking", "summary_ready", "summary_none", "summary_progress", "summary_app", "done_title", "done_ok", "done_issues",
                 "count_updated_one", "count_updated_other", "count_current_one", "count_current_other", "count_offline_one",
                 "count_offline_other", "count_issue_one", "count_issue_other", "offline_skip", "offline_skipped", "close_background",
                 "close", "cancel", "start", "app_label", "app_waiting", "app_downloading", "app_downloading_plain", "app_installing", "app_current", "app_later"] {
@@ -1362,6 +1373,8 @@ mod tests {
         p.change(&a.key, Status::Current, vec![]);
         assert!(!p.can_start(), "tudo em dia e sem app novo: nada a fazer");
         assert_eq!(p.summary(), "Em dia");
+        p.change(&a.key, Status::Failed("fixture".into()), vec![]);
+        assert_eq!(p.summary(), "Nenhuma máquina pode ser atualizada agora", "falha não aparece como em dia");
         p.app_offer = true;
         assert!(p.can_start(), "o app desta máquina também conta");
         assert_eq!(row_text(&p.rows[1], Phase::Running), "Fora do ar · ficou de fora");

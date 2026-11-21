@@ -182,6 +182,41 @@ describe('folha "Atualizar?"', () => {
     expect(el.textContent).not.toContain(m.update_all_warnings_failed({ server: off.label }));
   });
 
+  it('no "Atualizar todas" a versão vem do preparo, sem outra busca na ativa', async () => {
+    const checks = createMachineChecks([server]);
+    const request: ConfirmRequest = { server, count: 2, resolve: vi.fn(), checks,
+      machines: Promise.resolve({ run: [{ server, notes: null, version: 'v2.0 → v2.1' }], failed: [], offline: [] }) };
+    await act(async () => root.render(<UpdateConfirmSheet request={request} onClose={vi.fn()} />));
+    await act(async () => { await Promise.resolve(); });
+    expect(el.textContent).toContain('v2.0 → v2.1');
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(button(m.update_confirm_action()).disabled).toBe(false);
+  });
+
+  it('leitura das máquinas que cai encerra as linhas que procuravam, sem dizer "pronto"', async () => {
+    const other = { ...server, id: 'other', label: 'fixture-other' };
+    const checks = createMachineChecks([server, other]);
+    checks.set('other', { status: 'em_dia' });
+    const request: ConfirmRequest = { server, count: 2, resolve: vi.fn(), checks, machines: Promise.reject(new Error('fixture-crash')) };
+    await act(async () => root.render(<UpdateConfirmSheet request={request} onClose={vi.fn()} />));
+    await act(async () => { await Promise.resolve(); });
+    expect(el.textContent).not.toContain(m.update_all_checking());
+    expect(el.textContent).toContain(m.update_all_failed({ erro: m.update_notes_failed() }));
+    expect(el.textContent).toContain(m.update_all_summary_none());
+    expect(el.textContent).not.toContain(m.update_all_summary_ready());
+  });
+
+  it('consulta terminada sem máquina para rodar não diz "pronto"', async () => {
+    const checks = createMachineChecks([server]);
+    checks.set('srv', { status: 'falhou', error: 'fixture-search' });
+    const request: ConfirmRequest = { server, count: 2, resolve: vi.fn(), checks,
+      machines: Promise.resolve({ run: [], failed: [server], offline: [], reasons: { srv: 'fixture-search' } }) };
+    await act(async () => root.render(<UpdateConfirmSheet request={request} onClose={vi.fn()} />));
+    await act(async () => { await Promise.resolve(); });
+    expect(el.textContent).toContain(m.update_all_summary_none());
+    expect(el.textContent).not.toContain(m.update_all_summary_ready());
+  });
+
   it('sem máquina para rodar (todas falharam, ou a leitura caiu) o Atualizar fica travado', async () => {
     await allSheet(Promise.resolve({ run: [], failed: [server], offline: [] }));
     expect(el.textContent).toContain(m.update_all_warnings_failed({ server: server.label }));

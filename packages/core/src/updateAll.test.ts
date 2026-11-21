@@ -225,6 +225,12 @@ describe('API e execução por máquina', () => {
     expect(calls).not.toContain('nosearch/api/update/notes');
   });
 
+  it('o preparo guarda a versão que a busca leu, para a folha não buscar de novo', async () => {
+    read = (id) => json(id === 'named' ? { ...ready(), versao_legivel: { repo: null, backend: 'v1.0', remoto: 'v1.1' } } : ready());
+    const prepared = await prepareUpdateAll(['named', 'plain'].map((id) => server(id)), options);
+    expect(prepared.run.map((entry) => [entry.server.id, entry.version])).toEqual([['named', 'v1.0 → v1.1'], ['plain', '']]);
+  });
+
   it('avisos que não vieram deixam a máquina de fora com o motivo dos avisos', async () => {
     notes = (id) => id === 'nonotes' ? json({ detail: 'fixture-notes' }, 503) : json({ target: 'v2', warnings: [], news: [] });
     const prepared = await prepareUpdateAll(['ok', 'nonotes'].map((id) => server(id)), options);

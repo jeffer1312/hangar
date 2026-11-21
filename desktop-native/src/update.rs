@@ -1123,7 +1123,7 @@ impl Updater {
             }
             ServerStep::Held(hold) if hold.stops() => self.fail(hold.text(), cx),
             _ if plan.app => self.install_app(window, cx),
-            _ => { self.batch_app(all::AppStep::Current, cx); cx.notify() }
+            _ => { self.app_not_now(cx); cx.notify() }
         }
     }
 

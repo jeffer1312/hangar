@@ -23,8 +23,8 @@ const loadFailed = (request: ConfirmRequest): Loaded =>
   ({ notes: null, version: '', failed: true, groups: [], unreachable: [], runnable: request.machines ? 0 : 1 });
 
 async function load(request: ConfirmRequest): Promise<Loaded> {
-  const version = await loadVersion(request.server);
   if (!request.machines) {
+    const version = await loadVersion(request.server);
     try {
       const raw = await getUpdateNotesEm(request.server);
       const notes = raw ? forClient(raw, 'mobile') : null;
@@ -34,12 +34,15 @@ async function load(request: ConfirmRequest): Promise<Loaded> {
       return { ...loadFailed(request), ...version };
     }
   }
+  // No "Atualizar todas" a busca já foi feita no preparo: a versão vem dele, sem outro procurar=1 na ativa.
   let prepared: Awaited<NonNullable<ConfirmRequest['machines']>>;
-  try { prepared = await request.machines; } catch { return { ...loadFailed(request), ...version }; }
+  try { prepared = await request.machines; } catch { return loadFailed(request); }
   const { run, failed } = prepared;
   // A versão nova é a mesma em todas: as novidades vêm da ativa, ou de outra que respondeu.
   const source = run.find((entry) => entry.server.id === request.server.id && entry.notes) ?? run.find((entry) => entry.notes);
-  return { ...version, notes: source?.notes ? forClient(source.notes, 'mobile') : null, failed: false, unreachable: failed, runnable: run.length,
+  const version = run.find((entry) => entry.server.id === request.server.id && entry.version)?.version
+    ?? run.find((entry) => entry.version)?.version ?? '';
+  return { version, notes: source?.notes ? forClient(source.notes, 'mobile') : null, failed: false, unreachable: failed, runnable: run.length,
     groups: run.filter((entry) => entry.notes?.warnings.length).map((entry) => ({
       server: entry.server, title: m.update_all_warnings_from({ server: entry.server.label }), warnings: entry.notes!.warnings,
       incomplete: entry.notes!.incomplete === true })) };
@@ -98,7 +101,7 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
       ? m.update_confirm_all_title({ n: String(request.count) })
       : m.mobile_machines_confirm_operation({ action: m.mobile_machines_update(), name: request.server.label })} />
     <Text style={[styles.body, { color: c.muted }]}>{all ? m.update_confirm_all_body() : m.mobile_machines_confirm_operation_body()}</Text>
-    {request.checks ? <MachineCheckList checks={request.checks} ready={!!loaded} /> : null}
+    {request.checks ? <MachineCheckList checks={request.checks} loaded={loaded} /> : null}
     {!loaded && !request.checks ? <View style={[styles.actions, { alignItems: 'center' }]}>
       <ActivityIndicator color={c.muted} />
       <Text style={[styles.body, { color: c.muted }]}>{m.update_notes_loading()}</Text>
@@ -121,11 +124,17 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
 }
 
 /** Uma linha por máquina, preenchida enquanto cada uma responde; a fora do ar já aparece de fora. */
-function MachineCheckList({ checks, ready }: { checks: MachineChecks; ready: boolean }) {
-  const rows = useSyncExternalStore(checks.subscribe, checks.get);
+function MachineCheckList({ checks, loaded }: { checks: MachineChecks; loaded: Loaded | null }) {
+  const stored = useSyncExternalStore(checks.subscribe, checks.get);
+  // A leitura caiu: a linha que ainda procurava não vai mais responder.
+  const rows = loaded?.failed ? stored.map((row) => row.check.status === 'consultando'
+    ? { ...row, check: { status: 'falhou' as const, error: m.update_notes_failed() } } : row) : stored;
   const online = rows.filter((row) => row.check.status !== 'fora_do_ar');
   const answered = online.filter((row) => row.check.status !== 'consultando').length;
-  const summary = ready && answered === online.length ? m.update_all_summary_ready() : m.update_all_summary_checking({ n: String(online.length) });
+  const finished = !!loaded && answered === online.length;
+  // Sem nenhuma máquina para rodar, o fim da consulta não é "pronto".
+  const summary = !finished ? m.update_all_summary_checking({ n: String(online.length) })
+    : loaded.runnable > 0 ? m.update_all_summary_ready() : m.update_all_summary_none();
   return <View>
     <UpdateSummary text={summary} progress={online.length ? answered / online.length : 1} />
     {rows.map(({ server, check }) => <UpdateRow key={server.id} label={server.label} text={checkText(check)} tone={checkTone(check)} />)}

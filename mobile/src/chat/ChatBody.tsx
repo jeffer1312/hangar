@@ -209,11 +209,21 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
   }));
   const currentSession = fetchedSession === undefined ? listSession : fetchedSession;
   const codexPreThread = currentSession?.provider === 'codex' && currentSession.tracked === false;
-  // A linha sumir da lista não é troca de agente: só um provedor conhecido diferente pede outra leitura.
+  // A linha sumir da lista não é troca de agente: só um provedor conhecido diferente pede outra leitura. A linha que
+  // volta depois de uma leitura sem a sessão também pede (`epoch`), senão o chat ficaria como encerrado.
   const sessionKey = `${serverId}\n${name}`;
-  const knownProvider = useRef({ key: sessionKey, provider: rowsProvider });
-  if (knownProvider.current.key !== sessionKey || rowsProvider) knownProvider.current = { key: sessionKey, provider: rowsProvider };
+  const knownProvider = useRef({ key: sessionKey, provider: rowsProvider, missing: false, epoch: 0 });
+  if (knownProvider.current.key !== sessionKey) {
+    knownProvider.current = { key: sessionKey, provider: rowsProvider, missing: false, epoch: 0 };
+  } else if (rowsProvider) {
+    const back = knownProvider.current.missing && fetchedSession === null;
+    knownProvider.current = { ...knownProvider.current, provider: rowsProvider, missing: false,
+      epoch: knownProvider.current.epoch + (back ? 1 : 0) };
+  } else {
+    knownProvider.current.missing = true;
+  }
   const followedProvider = rowsProvider ?? knownProvider.current.provider;
+  const reappeared = knownProvider.current.epoch;
   // Relida também quando o provedor da lista muda: a troca de agente faz a sessão Claude virar Codex.
   useEffect(() => {
     if (!ready || servidorSumiu) return;
@@ -254,7 +264,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
       clearTimeout(timer);
       subscription.remove();
     };
-  }, [ready, servidorSumiu, serverId, name, followedProvider]);
+  }, [ready, servidorSumiu, serverId, name, followedProvider, reappeared]);
   const provider: Provider | null = codexPreThread ? 'codex' : rowsProvider ?? fetchedSession?.provider ?? null;
   const agentConversation = useMemo(() => events.find(event => event.kind !== 'notice' && !event.id.startsWith('queued-'))?.id,
     [events, eventsRevision]);
