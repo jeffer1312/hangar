@@ -25,9 +25,11 @@ pub(crate) fn path(home: &Path, key: &str) -> io::Result<PathBuf> {
     Ok(dir(home).join(format!("{key}.json")))
 }
 
-pub fn write(home: &Path, spec: &SessionSpec) -> io::Result<()> {
+pub fn write(home: &Path, spec: &SessionSpec) -> io::Result<()> { write_at(home, &path(home, &spec.key)?, spec) }
+
+pub(crate) fn confirm_binding(home: &Path, spec: &SessionSpec) -> io::Result<()> {
     if let Some(conversation) = &spec.conversation { save_binding_history(home, spec, conversation)?; }
-    write_at(home, &path(home, &spec.key)?, spec)
+    Ok(())
 }
 
 fn write_at(home: &Path, path: &Path, spec: &SessionSpec) -> io::Result<()> {
@@ -237,6 +239,20 @@ mod tests {
         write(home.path(), &spec).unwrap();
         assert_eq!(archived_claude(home.path(), next).unwrap().account, Account::Default);
         assert!(matches!(archived_claude(home.path(), prior).unwrap().account, Account::Engine { binding: Some(_), .. }));
+    }
+
+    #[test]
+    fn unconfirmed_launch_does_not_leave_a_binding_in_the_archive() {
+        use super::*;
+        let home = tempfile::tempdir().unwrap();
+        let sid = "00000000-0000-4000-8000-000000000003";
+        let spec = claude_from_meta(&serde_json::json!({"key":"b".repeat(32),"cwd":"/work","session_id":sid,
+            "engine":"gpt-pro","engine_account":"default","engine_binding":"pro-identity"}), "chat", 10.0).unwrap();
+        write(home.path(), &spec).unwrap();
+        remove(home.path(), &spec.key).unwrap();
+        assert!(archived_claude(home.path(), sid).is_none());
+        confirm_binding(home.path(), &spec).unwrap();
+        assert_eq!(archived_claude(home.path(), sid).unwrap().account, spec.account);
     }
 
     /// SO4: o Arquivo reabre a mesma conversa com chave nova e o spec antigo fica: vale o mais recente.

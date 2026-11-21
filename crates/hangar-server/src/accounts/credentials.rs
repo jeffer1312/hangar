@@ -319,7 +319,7 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     let kimi = config.kimi_text.as_deref();
     if query.get("proxy_accounts").is_some_and(|value| value == "true")
         && crate::engines::proxy::local(&service.env).ok().flatten().is_some()
-        && let Ok(accounts) = crate::engines::proxy::list_accounts(&service) {
+        && let Ok(accounts) = crate::engines::proxy::list_quota_accounts(&service) {
         for account in accounts {
             let (Some(binding), Some(id)) = (account["binding"].as_str(), account["credential_id"].as_str()) else { continue };
             let quota_id = crate::engines::proxy::quota_id(binding);

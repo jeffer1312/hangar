@@ -254,10 +254,23 @@ pub fn prefix_model(model: &str, prefix: &str) -> Result<String,String> {
     Ok(format!("{prefix}/{model}"))
 }
 
-pub fn list_accounts(accounts: &AccountService) -> Result<Vec<Value>, String> {
+pub fn list_accounts(accounts: &AccountService) -> Result<Vec<Value>, String> { list_with_bindings(accounts, false) }
+
+pub(crate) fn list_quota_accounts(accounts: &AccountService) -> Result<Vec<Value>, String> { list_with_bindings(accounts, true) }
+
+fn list_with_bindings(accounts: &AccountService, quota_only: bool) -> Result<Vec<Value>, String> {
     let records = credentials(&accounts.env)?;
-    let associated = associated(accounts, &records)?;
-    checked_prefixes(&associated, &records)?;
+    let associated = match associated(accounts, &records) {
+        Ok(entries) => entries,
+        Err(_) if quota_only => {
+            if crate::warn_limit::allow(None, "cliproxy_quota_native_association") {
+                tracing::warn!("CLIProxyAPI: associação Codex indisponível; cotas seguem pela identidade do proxy");
+            }
+            entries(Vec::new(), &records)?
+        }
+        Err(error) => return Err(error),
+    };
+    if !quota_only { checked_prefixes(&associated, &records)?; }
     Ok(associated.into_iter().map(|(mut e, i)| {
         e["binding"] = json!(binding_id(&records[i].1));
         e

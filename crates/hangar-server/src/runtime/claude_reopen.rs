@@ -246,13 +246,12 @@ fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut Ses
         // Ilegível não diz que o motor sumiu: tirar a sessão dele seria trocar a conta calado.
         let engines=crate::session_open::facts::engine_names(env)
             .map_err(|_|refused("reopen_engines_unreadable","o catálogo de motores (engines.json) não pôde ser lido; nada foi reaberto"))?;
-        if account.is_some() || binding.is_some() || engines.contains(name) {
+        if engines.contains(name) {
             let route = crate::session_open::facts::session_engine_route(&crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref())
                 .map_err(|error| refused("launch_engine_account", &error.msg))?;
             if let Some(route) = route { *account = Some(route.account); }
-        }
-        if !engines.contains(name) {
-            if account.is_some() {return Err(refused("reopen_engine_missing","motor da conta ChatGPT fixa indisponível; nada foi reaberto"));}
+        } else {
+            if account.is_some() || binding.is_some() {return Err(refused("reopen_engine_missing","motor da conta ChatGPT fixa indisponível; nada foi reaberto"));}
             // A escolha lida é do motor: numa conta Anthropic ela criaria uma sessão inviável.
             tracing::warn!(session=%next.name,engine=%name,"motor sumiu do catálogo; a sessão volta na conta Anthropic");
             warnings.push(format!("O motor {name} saiu do catálogo: a sessão voltou na conta Anthropic, sem o modelo, o esforço e o Fast dele."));
@@ -701,17 +700,25 @@ impl RuntimeRegistry {
         if let Some(meta)=meta.as_ref().filter(|meta|asleep_of(meta).is_some()) && let Some(key)=meta["key"].as_str() {
             self.restamp_asleep(key,meta["asleep"]["since"].as_f64().unwrap_or(0.0),false).await.map_err(ReopenFailure::refused)?;
         }
-        // Outra conversa leva as escolhas de plugins e skills guardadas dela, não as do processo de agora.
+        let mut archived_binding = None;
+        // Outra conversa leva as escolhas e a identidade registradas para ela.
         if let Some(sid)=resume.filter(|sid|*sid!=current.sid) {
             let (home,sid)=(self.codex_environment().home,sid.to_owned());
-            current.settings=tokio::task::spawn_blocking(move||crate::claude_customizations::stored(&home,&sid)).await
-                .map_err(|_|ReopenFailure::refused(refused("claude_customizations_read_failed","as escolhas da conversa não puderam ser lidas")))?
-                .map_err(|(code,detail)|ReopenFailure::refused(refused(code,detail)))?;
+            let (settings, archived)=tokio::task::spawn_blocking(move||(
+                crate::claude_customizations::stored(&home,&sid),
+                crate::session_open::record::archived_claude(&home,&sid),
+            )).await.map_err(|_|ReopenFailure::refused(refused("claude_customizations_read_failed","as escolhas da conversa não puderam ser lidas")))?;
+            current.settings=settings.map_err(|(code,detail)|ReopenFailure::refused(refused(code,detail)))?;
+            if let Some(SessionSpec { account: Account::Engine { binding, .. }, .. }) = archived { archived_binding = binding; }
         }
         let sid=resume.unwrap_or(&current.sid).to_owned();
         let mut next=current.spec.with(&change);
         next.conversation=Some(sid.clone());
         if let Some(between)=between {between.adjust(&mut next);}
+        if let Some(expected) = archived_binding.as_deref()
+            && !matches!(&next.account, Account::Engine { binding: Some(binding), .. } if binding == expected) {
+            return Err(ReopenFailure::refused(refused("reopen_engine_account_mismatch", "A conversa de destino está vinculada a outra conta ChatGPT. Retome pelo Arquivo.")));
+        }
         let mut warnings;
         let automatic=matches!(change.reason,ChangeReason::RebootRestore|ChangeReason::ParkWake|ChangeReason::LimitSwitch|ChangeReason::Sleep);
         {let (env,mut spec,settings,handle)=(self.codex_environment(),next,current.settings.clone(),tokio::runtime::Handle::current());
@@ -755,6 +762,10 @@ impl RuntimeRegistry {
                     tracing::warn!(session=%name,kind=?error.kind(),"spec da reabertura não gravado");
                     self.diag.report("runtime.reopen_spec_unwritten",name,"reopen_spec_unwritten","a sessão reabriu e o registro dela não foi gravado");
                     warnings.push("A sessão reabriu, mas o registro dela não foi gravado: o restore e a próxima reabertura podem voltar como antes.".into());
+                }
+                if let Err(error) = crate::session_open::record::confirm_binding(&self.codex_environment().home, &next) {
+                    tracing::warn!(session=%name,kind=?error.kind(),"vínculo da conversa reaberta não gravado no Arquivo");
+                    warnings.push("A sessão reabriu, mas o vínculo da conversa não foi gravado no Arquivo.".into());
                 }
                 Ok(Reopened { spec:Some(next),changed:true,warnings })
             },

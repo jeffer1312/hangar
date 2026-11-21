@@ -75,7 +75,8 @@ import * as m from '../paraglide/messages';
   // passou a ter conta em 28/08/2026 (a credencial do modelo escolhido NELA, casada pela chave no
   // backend); só fica sem quando o provedor dela não é nenhuma credencial conhecida.
   const sessaoAtiva = $derived(model.tabs.find((t) => tabKeyOf(t.session) === currentKey)?.session ?? null);
-  const contaAtiva = $derived(sessaoAtiva?.conta ?? null);
+  const contaAtiva = $derived(sessaoAtiva?.engine_binding
+    ? `cliproxy-binding:${sessaoAtiva.engine_binding}` : sessaoAtiva?.conta ?? null);
   // Modelo da sessão aberta, da statusline dela: a pílula só deixa a janela por modelo (Fable)
   // concorrer quando a sessão roda nele.
   const modeloAtivo = $derived(parseStatusLine(sessaoAtiva?.status_line)?.model ?? null);

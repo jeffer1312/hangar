@@ -58,6 +58,7 @@
       const p = piorJanela([contaDaSessao], modeloAtivo);
       if (p) return { ...p, smart: false };
     }
+    if (contaAtiva?.startsWith('cliproxy-binding:')) return null;
     const p = piorJanela(linha);
     return p ? { ...p, smart: true } : null;
   });

@@ -775,7 +775,11 @@ fn persist(host: &dyn OpenHost, spec: &SessionSpec, diary: &mut Diary, stage: &'
 }
 
 async fn announce(host: &dyn OpenHost, spec: &SessionSpec, diary: &mut Diary, born: &Born, stage: &str) -> Vec<String> {
-    let warnings = host.born(born).await;
+    let mut warnings = host.born(born).await;
+    if let Err(error) = super::record::confirm_binding(host.home(), spec) {
+        tracing::warn!(kind = ?error.kind(), "vínculo da conversa não gravado no Arquivo");
+        warnings.push("A sessão abriu, mas o vínculo da conversa não foi gravado no Arquivo.".into());
+    }
     diary.events.push(json!({"evento": "sessao.criada", "nivel": "ok", "sessao": spec.name, "provider": spec.provider.name(),
         "etapa": stage, "operacao": diary.op}));
     warnings
