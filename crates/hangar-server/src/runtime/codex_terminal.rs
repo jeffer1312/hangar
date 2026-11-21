@@ -255,7 +255,7 @@ pub(super) fn pane_of<'a>(panes:&'a [Pane],name:&str) -> Option<&'a Pane> {
 /// Quanto a conversa pode ficar abrindo (sidecar `launching` ou pane sem sidecar) antes de virar erro.
 const LAUNCH_WAIT:Duration = Duration::from_secs(120);
 
-pub(super) fn queue_files(queue_dir:&Path,key:&str) -> (PathBuf,PathBuf) {
+pub(crate) fn queue_files(queue_dir:&Path,key:&str) -> (PathBuf,PathBuf) {
     let runtime = queue_dir.join("runtime");
     (runtime.join(format!("{key}.json")),runtime.join(format!("{key}.lock")))
 }
@@ -328,8 +328,8 @@ fn launch_stuck() -> RuntimeError {
 }
 
 /// Texto para a conversa que ainda abre, na fila da chave dela, como o kick-off (`pre_transcript`): a
-/// adoção (`prepare`) mantém as linhas e o ator as entrega pelo app-server. Bloqueante.
-fn queue_before_adoption(queue_dir:&Path,key:&str,name:&str,text:&str) -> Result<(),RuntimeError> {
+/// adoção (do Codex ou do Claude com terminal) mantém as linhas e o ator as entrega. Bloqueante.
+pub(crate) fn queue_before_adoption(queue_dir:&Path,key:&str,name:&str,text:&str) -> Result<(),RuntimeError> {
     let (state_path,lease_path) = queue_files(queue_dir,key);
     if let Some(dir) = state_path.parent() { std::fs::create_dir_all(dir).map_err(io_failure)?; }
     let _lease = lease_blocking(&lease_path).map_err(io_failure)?;
@@ -347,7 +347,7 @@ fn queue_before_adoption(queue_dir:&Path,key:&str,name:&str,text:&str) -> Result
 }
 
 /// A trava solta pelo ator que acabou de parar pode demorar um pouco (as tarefas de E/S dele).
-pub(super) fn lease_blocking(path:&Path) -> std::io::Result<Arc<super::queue::Lease>> {
+pub(crate) fn lease_blocking(path:&Path) -> std::io::Result<Arc<super::queue::Lease>> {
     super::queue::acquire_lease_within(path,Duration::from_secs(3))
 }
 

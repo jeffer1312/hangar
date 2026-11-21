@@ -35,6 +35,8 @@ pub struct ClaudeContext<'a> {
     pub server_env: &'a BTreeMap<String, String>,
     /// As escolhas de plugins e skills da conversa, já preparadas.
     pub settings: Option<&'a Value>,
+    /// No Windows, o arquivo com essas escolhas (`settings_file`), que o `--settings` recebe no lugar do JSON.
+    pub settings_file: Option<&'a str>,
     /// O envelope `bwrap … --` do só leitura.
     pub read_only: Option<&'a [String]>,
     pub windows: bool,
@@ -118,6 +120,24 @@ pub(crate) fn settings_json(settings: &Value) -> String {
     Value::Object(merged).to_string()
 }
 
+/// No Windows o comando do `new-session` perde as aspas do JSON e o Claude recusa abrir: as escolhas
+/// vão num arquivo. O nome é o hash do conteúdo, então conversas com as mesmas escolhas dividem o arquivo.
+pub(crate) fn settings_file(home: &Path, settings: &Value) -> std::io::Result<String> {
+    let json = settings_json(settings);
+    let dir = home.join(".hangar").join("claude-settings");
+    let path = dir.join(format!("{}.json", sha1_smol::Sha1::from(&json).digest()));
+    if !path.exists() {
+        std::fs::create_dir_all(&dir)?;
+        // Outra abertura com as mesmas escolhas pode ter gravado antes e o Claude dela segurar o arquivo:
+        // no Windows o rename por cima falha, e o conteúdo já é o certo.
+        if let Err(error) = hangar_core::fs::atomic_write(&path, json.as_bytes())
+            && !std::fs::read(&path).is_ok_and(|bytes| bytes == json.as_bytes()) {
+            return Err(error);
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// A velocidade com que uma sessão que já existe volta agora. A criação e a troca recusam velocidade sem
 /// suporte; acordar, restaurar ou reabrir sozinho não: Ultra Fast que perdeu o suporte volta em Fast, e Fast
 /// sem suporte na normal, em vez de a sessão não voltar.
@@ -151,11 +171,13 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     if let Some(effort) = &spec.effort { claude.extend(["--effort".into(), effort.clone()]); }
     if let Some(mode) = spec.permission_mode { claude.extend(["--permission-mode".into(), mode.name().into()]); }
     if let Some(settings) = ctx.settings.filter(|s| s.as_object().is_some_and(|o| !o.is_empty())) {
-        claude.extend(["--settings".into(), settings_json(settings)]);
+        let value = if ctx.windows { ctx.settings_file.map(str::to_owned) } else { Some(settings_json(settings)) };
+        if let Some(value) = value { claude.extend(["--settings".into(), value]); }
     }
     // O prompt inicial é o posicional do `claude`, depois das opções; começando com `-`, o `--`
-    // impede que vire flag.
-    if let Some(prompt) = ctx.initial_prompt.filter(|p| !p.is_empty()) {
+    // impede que vire flag. No Windows ele vai pela fila da chave (`terminal_life`): o psmux roda o
+    // comando pelo PowerShell, que corta o argumento na primeira aspa dupla.
+    if let Some(prompt) = ctx.initial_prompt.filter(|p| !p.is_empty() && !ctx.windows) {
         if prompt.starts_with('-') { claude.push("--".into()); }
         claude.push(prompt.into());
     }
