@@ -18,7 +18,7 @@ const ADOPT_STEPS: [(&str, &str); 4] = [("download", "cliproxy_adopt_step_downlo
 
 /// As duas ações que reiniciam o proxy: trocar a versão do Hangar, ou passar o de fora para ele.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Action { Update, Adopt }
+pub(in crate::app) enum Action { Update, Adopt }
 
 impl Action {
     fn kind(self) -> &'static str { match self { Self::Update => "update", Self::Adopt => "adopt" } }
