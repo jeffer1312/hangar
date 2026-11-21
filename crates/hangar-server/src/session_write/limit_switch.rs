@@ -312,9 +312,19 @@ impl Switcher {
     fn first_retry(&self,name:&str,account:&str,now:f64) -> bool {
         let account = crate::list::discover::real(account);
         let Ok(mut retried) = self.retried.lock() else { return false };
-        if retried.get(name).is_some_and(|(last,at)|*last == account && now - *at < LOGIN_RETRY_WINDOW_S) { return false; }
+        if Self::retried_within(&retried,name,&account,now) { return false; }
         retried.insert(name.to_owned(),(account,now));
         true
+    }
+
+    /// Como `first_retry`, sem gastar a tentativa.
+    fn retry_open(&self,name:&str,account:&str,now:f64) -> bool {
+        let account = crate::list::discover::real(account);
+        self.retried.lock().is_ok_and(|retried|!Self::retried_within(&retried,name,&account,now))
+    }
+
+    fn retried_within(retried:&BTreeMap<String,(String,f64)>,name:&str,account:&str,now:f64) -> bool {
+        retried.get(name).is_some_and(|(last,at)|last == account && now - *at < LOGIN_RETRY_WINDOW_S)
     }
 
     async fn switch(&self,host:&dyn Host,hit:&LimitHit) -> Outcome {
@@ -400,7 +410,8 @@ impl Switcher {
         // Reabrir no Claude levaria a fila que a troca de agente segurou para o Codex. A conta fica gasta para as outras
         // sessões, salvo token velho na memória com login bom no disco, que a reabertura resolveria.
         if host.handoff_held(&hit.name) {
-            let recoverable = matches!(hit.code.as_str(),"authentication_failed" | "api_401") && host.logged_in(&current);
+            let recoverable = matches!(hit.code.as_str(),"authentication_failed" | "api_401") && host.logged_in(&current)
+                && self.retry_open(&hit.name,&current,now);
             if !recoverable { self.mark_refused(hit,&current,now); }
             return Some(Outcome::Stayed("limit_switch_handoff"));
         }
@@ -1100,16 +1111,18 @@ mod tests {
     }
 
     /// Login recusado com a troca de agente à espera: a sessão não reabre, e a conta fica gasta para as outras salvo
-    /// token velho com login bom no disco.
+    /// token velho com login bom no disco e a recarga da janela ainda por usar.
     #[tokio::test]
     async fn a_refused_login_during_a_held_handoff_still_marks_the_account_spent() {
-        for (code,disk_login,spent) in [("authentication_failed",false,true),("authentication_failed",true,false),("oauth_org_not_allowed",true,true)] {
+        let cases = [("authentication_failed",false,false,true),("authentication_failed",true,false,false),("authentication_failed",true,true,true),("oauth_org_not_allowed",true,false,true)];
+        for (code,disk_login,retry_used,spent) in cases {
             let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",60.0)]);
             fake.handoff.store(true,std::sync::atomic::Ordering::Relaxed);
             if !disk_login { fake.no_login.lock().unwrap().push("/a".to_owned()); }
             let switcher = Switcher::default();
+            if retry_used { assert!(switcher.first_retry("s","/a",fake.now())); }
             switcher.handle_auth(&fake,AuthHit { code:code.into(),..refused("/a") }).await;
-            assert_eq!(switcher.spent.is_spent("/a",1500.0),spent,"{code} login no disco={disk_login}");
+            assert_eq!(switcher.spent.is_spent("/a",1500.0),spent,"{code} login no disco={disk_login} recarga usada={retry_used}");
             assert_eq!(fake.log(),vec!["release"],"{code}: nada reabre");
             assert_eq!(fake.diary(),vec!["limit_switch_handoff"],"{code}");
         }
