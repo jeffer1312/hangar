@@ -152,9 +152,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   relê de lá (`%%` desfeito). Opção de valor vazio nem é gravada. O código de saída vem do
   `<id>.exit`, nunca do `pane_dead_status`. Arquivo sem terminal dono é varrido. Medições completas,
   ver [Terminais de atalho no psmux](#terminais-de-atalho-no-psmux).
-- **Texto livre não vai no comando do `new-session` do psmux.** Com `(`, `` ` `` ou `;` ele roda o
-  comando pelo PowerShell 5.1, que corta o argumento na primeira `"`; sem eles, tokeniza sozinho e
-  `''` some. O prompt inicial do Claude com terminal vai pela fila da chave (`queue_first_message`).
+- **Texto livre não vai no comando do `new-session` do psmux.** Comando que começa por programa sem
+  aspas (`claude`, `hangar-engine`, `hangar-codex-tui.cmd`) roda pelo PowerShell 5.1: `"` dentro de
+  argumento se perde (corta o prompt, tira as aspas do JSON do `--settings`) e argumento vazio some.
+  O prompt inicial vai pela fila da chave no Claude (`queue_first_message`) e em base64 no Codex.
 - **Terminal real do dono no Windows é do Rust, pelo ConPTY do `portable-pty`.** O filho
   (`tmux attach`) morre ANTES de o pseudoconsole fechar, e com filho vivo o pseudoconsole vaza em
   vez de fechar; não há reposição de tamanho; o escritor é o `take_writer` (pipe puro, soltar só

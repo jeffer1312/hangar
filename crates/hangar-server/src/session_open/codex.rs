@@ -80,7 +80,7 @@ pub fn policy(mode: &str) -> Result<(&'static str, &'static str), OpenError> {
 }
 
 /// `comando_do_lancador`, na ordem dele, com a política sempre explícita (matriz, item 17).
-pub fn launcher_argv(launch: &Launch) -> Result<Vec<String>, OpenError> {
+pub fn launcher_argv(launch: &Launch, windows: bool) -> Result<Vec<String>, OpenError> {
     let (approval, sandbox) = policy(&launch.mode)?;
     let mut argv: Vec<String> = launch.launcher.clone().unwrap_or_else(|| vec![SERVER.into(), SUBCOMMAND.into()]);
     argv.extend(["--cwd".into(), launch.cwd.clone()]);
@@ -98,15 +98,16 @@ pub fn launcher_argv(launch: &Launch) -> Result<Vec<String>, OpenError> {
         argv.extend(["--tool-output-token-limit".into(), limit.to_string()]);
     }
     if let Some(prompt) = launch.prompt.as_ref().filter(|p| !p.is_empty()) {
-        argv.extend(prompt_args(prompt));
+        argv.extend(prompt_args(prompt, windows));
     }
     Ok(argv)
 }
 
 /// Quebra de linha no argumento é cortada pelo `cmd` do `hangar-codex-tui.cmd` no Windows: a mensagem
-/// com várias linhas vai em base64, alfabeto que nenhum shell corta nem toma por opção.
-pub fn prompt_args(prompt: &str) -> [String; 2] {
-    if prompt.contains(['\r', '\n']) {
+/// com várias linhas vai em base64, alfabeto que nenhum shell corta nem toma por opção. No Windows vai
+/// sempre assim: o psmux roda o comando pelo PowerShell, que corta o argumento na primeira aspa dupla.
+pub fn prompt_args(prompt: &str, windows: bool) -> [String; 2] {
+    if windows || prompt.contains(['\r', '\n']) {
         use base64::Engine;
         ["--prompt-b64".into(), base64::engine::general_purpose::STANDARD_NO_PAD.encode(prompt)]
     } else {
@@ -129,7 +130,7 @@ pub fn creation(spec: &SessionSpec, codex_home: &str, prompt: Option<&str>) -> L
 /// O pane do Codex: o lançador (no envelope do só leitura, se houver) e o `-e` da sessão.
 pub fn pane(name: &str, key: &str, launch: &Launch, jev: bool, runtime_config: &Value, read_only: Option<&[String]>, windows: bool, server_env: &BTreeMap<String,String>)
     -> Result<PaneSpec, OpenError> {
-    let mut command = launcher_argv(launch)?;
+    let mut command = launcher_argv(launch, windows)?;
     let context = crate::runtime::codex_launch::context_overrides(Path::new(&launch.codex_home), runtime_config);
     command.extend(context.into_iter().flat_map(|value| ["--config".to_owned(), value]));
     // Sem sincronização a TUI pula o preparo; o limite temporário continua sendo da abertura.
@@ -239,11 +240,11 @@ mod tests {
     /// A ordem e os nomes do `comando_do_lancador`; a política vai sempre explícita.
     #[test]
     fn the_launcher_command_follows_the_python_order_with_an_explicit_policy() {
-        assert_eq!(launcher_argv(&launch()).unwrap(), ["hangar-server", "codex-tui", "--cwd", "/w", "--codex-home", "/h/.codex", "--codex-account", "default",
+        assert_eq!(launcher_argv(&launch(), false).unwrap(), ["hangar-server", "codex-tui", "--cwd", "/w", "--codex-home", "/h/.codex", "--codex-account", "default",
             "--approval-policy", "never", "--sandbox", "danger-full-access"]);
         let full = Launch { service_tier: Some("priority".into()), resume: Some("t-1".into()), model: Some("gpt-5.5".into()), effort: Some("high".into()),
             mode: "Ask for approval".into(), tool_output_token_limit: Some(9000), prompt: Some("começa".into()), account: "b".into(), ..launch() };
-        assert_eq!(launcher_argv(&full).unwrap(), ["hangar-server", "codex-tui", "--cwd", "/w", "--service-tier", "priority", "--codex-home", "/h/.codex",
+        assert_eq!(launcher_argv(&full, false).unwrap(), ["hangar-server", "codex-tui", "--cwd", "/w", "--service-tier", "priority", "--codex-home", "/h/.codex",
             "--codex-account", "b", "--resume", "t-1", "--model", "gpt-5.5", "--effort", "high", "--approval-policy", "on-request",
             "--sandbox", "read-only", "--tool-output-token-limit", "9000", "--prompt", "começa"]);
         assert_eq!(policy("Approve for me").unwrap(), ("on-request", "workspace-write"));
@@ -253,14 +254,32 @@ mod tests {
     #[test]
     fn a_multi_line_prompt_leaves_the_pane_command_without_a_line_break() {
         let text = "Primeira linha: responda apenas MULTI-OK.\r\nSegunda linha: confirme.\núltima";
-        let argv = launcher_argv(&Launch { prompt: Some(text.into()), ..launch() }).unwrap();
+        let argv = launcher_argv(&Launch { prompt: Some(text.into()), ..launch() }, false).unwrap();
         assert!(argv.iter().all(|arg| !arg.contains(['\r', '\n'])), "{argv:?}");
         let at = argv.iter().position(|arg| arg == "--prompt-b64").expect("--prompt-b64");
         assert!(!argv[at + 1].starts_with('-') && !argv[at + 1].contains(['=', ' ', '"', '\'']), "{}", argv[at + 1]);
         let raw: Vec<String> = argv[2..].to_vec();
         let Ok(crate::codex_tui::args::Parsed::Run(args)) = crate::codex_tui::args::parse(&raw, Some("cx")) else { panic!("{raw:?}") };
         assert_eq!(args.prompt.as_deref(), Some(text));
-        assert_eq!(prompt_args("uma linha só"), ["--prompt".to_owned(), "uma linha só".to_owned()]);
+        assert_eq!(prompt_args("uma linha só", false), ["--prompt".to_owned(), "uma linha só".to_owned()]);
+    }
+
+    /// No Windows a primeira mensagem vai sempre em base64: o psmux roda o comando pelo PowerShell, que
+    /// corta o argumento na primeira aspa dupla. No Linux a de uma linha segue crua.
+    #[test]
+    fn on_windows_the_prompt_never_reaches_the_pane_command_raw() {
+        let line = r#"a folha "Mais ações" em C:\x\\y, do 'Expo' (`mobile/`)"#;
+        let pane_of = |text: &str, windows: bool| pane("cx", "k", &Launch { prompt: Some(text.into()), ..launch() }, false, &Value::Null, None,
+            windows, &BTreeMap::new()).unwrap().command;
+        for text in [line.to_owned(), format!("{line}\nsegunda linha")] {
+            let command = pane_of(&text, true);
+            assert!(!command.iter().any(|arg| arg.contains("Mais") || arg == "--prompt"), "o prompt foi cru para o comando do pane: {command:?}");
+            let at = command.iter().position(|arg| arg == "--prompt-b64").expect("--prompt-b64");
+            let raw: Vec<String> = command[2..].to_vec();
+            let Ok(crate::codex_tui::args::Parsed::Run(args)) = crate::codex_tui::args::parse(&raw, Some("cx")) else { panic!("{raw:?}") };
+            assert_eq!(args.prompt.as_deref(), Some(text.as_str()), "{}", command[at + 1]);
+        }
+        assert!(pane_of(line, false).windows(2).any(|pair| pair[0] == "--prompt" && pair[1] == line));
     }
 
     /// O `hangar-server` do `current` quando este binário é dele; de um checkout, ele mesmo; nos
@@ -283,7 +302,7 @@ mod tests {
             Some(vec![checkout.to_string_lossy().into_owned(), "codex-tui".into()]));
         assert_eq!(launcher_from(home.path(), None, false), None);
         assert_eq!(launcher_program(home.path(), true), Some(vec!["hangar-codex-tui".to_owned()]));
-        let argv = launcher_argv(&Launch { launcher: Some(vec![own.clone(), "codex-tui".into()]), ..launch() }).unwrap();
+        let argv = launcher_argv(&Launch { launcher: Some(vec![own.clone(), "codex-tui".into()]), ..launch() }, false).unwrap();
         assert_eq!(argv[..4], [own, "codex-tui".into(), "--cwd".into(), "/w".into()]);
     }
 
@@ -291,7 +310,7 @@ mod tests {
     #[test]
     fn an_unknown_mode_refuses_instead_of_full_access() {
         for mode in ["Read Only", "", "yolo"] {
-            assert_eq!(launcher_argv(&Launch { mode: mode.into(), ..launch() }).unwrap_err().code, Some("erro_permissao_invalida"), "{mode:?}");
+            assert_eq!(launcher_argv(&Launch { mode: mode.into(), ..launch() }, false).unwrap_err().code, Some("erro_permissao_invalida"), "{mode:?}");
         }
     }
 
