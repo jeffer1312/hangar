@@ -56,7 +56,7 @@ fn target(bytes:&[u8]) -> Option<Target> {
     let present=|field:&str|body.get(field).is_some_and(|v|!v.is_null());
     let chosen=["config_dir","credential_id","engine_account"].into_iter().filter(|f|present(f)).count();
     if chosen!=1 {return None;}
-    let known=["config_dir","credential_id","engine_account","source_life","source_jsonl","model","effort"];
+    let known=["config_dir","credential_id","engine_account","source_life","source_jsonl","model","effort","when_idle"];
     if body.keys().any(|k|!known.contains(&k.as_str())) {return None;}
     if present("credential_id") {return Some(Target::Codex);}
     let field=if present("config_dir") {"config_dir"} else {"engine_account"};
@@ -175,6 +175,17 @@ pub(crate) async fn reopen_in(st:&Arc<AppState>,runtime:&Arc<crate::runtime::gat
     super::relaunch::reopen_detached(st,name,async move {runtime.reopen_claude_session(&owned,change,Some(&mover)).await}).await
 }
 
+/// A transferência ao Codex dentro da mesma marca de troca de vida que os convites acompanham.
+pub(super) async fn transfer_now(st:&AppState,runtime:&Arc<crate::runtime::gateway::RuntimeRegistry>,name:&str,
+    request:crate::runtime::claude_reopen::transfer::Request) -> Result<Value,hangar_conversation_transfer::TransferError> {
+    super::relaunch::during_life_change(st,name,runtime.transfer_to_codex(name,request,st.accounts.clone(),st.dictation_models.clone())).await
+}
+
+/// A recusa da transferência no formato que os apps leem: `detail` com o código.
+pub(super) fn transfer_refusal(headers:&axum::http::HeaderMap,error:hangar_conversation_transfer::TransferError) -> Response {
+    reply(Some(headers),StatusCode::from_u16(error.status).unwrap_or(StatusCode::CONFLICT),json!({"detail":error.public()}))
+}
+
 pub async fn targets_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
     let (_,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (true,Some(name))=(owner,session_name(req.uri().path())) else {return super::not_owner(&st,peer,req).await};
@@ -204,6 +215,10 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     let (parts,body)=req.into_parts();
     let Ok(bytes)=to_bytes(body,BODY_LIMIT).await else {return too_large(&parts.headers)};
     let asked=target(&bytes);
+    // A troca de agente à espera leva a conversa ao Codex: outra conta do Claude agora passaria por cima dela.
+    if matches!(asked,Some(Target::ConfigDir(_) | Target::EngineAccount(_))) && runtime.handoff_held(&name) {
+        return transfer_refusal(&parts.headers,hangar_conversation_transfer::TransferError::new("session_transfer_busy"));
+    }
     // A transferência exige uma origem acordada e confirmada.
     if asked==Some(Target::Codex) && runtime.asleep(&name).await.is_some() {
         return reply(Some(&parts.headers),StatusCode::CONFLICT,detail_body("erro_sessao_adormecida",
@@ -217,12 +232,21 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
                 Ok(request) if request.valid()=>request,
                 _=>return super::invalid_body(&parts.headers),
             };
+            if request.when_idle {
+                if !matches!(runtime.claude_spec(&name).await,Some(Ok(_))) {
+                    return transfer_refusal(&parts.headers,hangar_conversation_transfer::TransferError::new("session_transfer_source_changed"));
+                }
+                return super::handoff::start(st.clone(),runtime,name,request,&parts.headers).await;
+            }
+            // A troca pedida pelo seletor ainda vale: a transferência direta passaria por cima dela.
+            if runtime.handoff_held(&name) {
+                return transfer_refusal(&parts.headers,hangar_conversation_transfer::TransferError::new("session_transfer_busy"));
+            }
             let (st2,owned)=(st.clone(),name.clone());
-            let outcome=tokio::spawn(async move {
-                super::relaunch::during_life_change(&st2,&owned,runtime.transfer_to_codex(&owned,request,st2.accounts.clone(),st2.dictation_models.clone())).await
-            }).await.unwrap_or_else(|_|Err(hangar_conversation_transfer::TransferError::new("session_transfer_failed").with_status(500)));
+            let outcome=tokio::spawn(async move { transfer_now(&st2,&runtime,&owned,request).await })
+                .await.unwrap_or_else(|_|Err(hangar_conversation_transfer::TransferError::new("session_transfer_failed").with_status(500)));
             st.list.invalidate();
-            return match outcome {Ok(body)=>reply(Some(&parts.headers),StatusCode::OK,body),Err(error)=>reply(Some(&parts.headers),StatusCode::from_u16(error.status).unwrap_or(StatusCode::CONFLICT),json!({"detail":error.public()}))};
+            return match outcome {Ok(body)=>reply(Some(&parts.headers),StatusCode::OK,body),Err(error)=>transfer_refusal(&parts.headers,error)};
         },
         None=>return super::invalid_body(&parts.headers),
         Some(Target::EngineAccount(account))=>return super::engine::account_route(st,runtime,name,account,parts.headers).await,
@@ -313,6 +337,7 @@ mod tests {
         assert_eq!(target(br#"{"config_dir":"/h/.claude-b"}"#),Some(Target::ConfigDir("/h/.claude-b".into())));
         assert_eq!(target(br#"{"engine_account":"acc"}"#),Some(Target::EngineAccount("acc".into())));
         assert_eq!(target(br#"{"credential_id":"codex:x","source_life":"k:a","source_jsonl":"/j"}"#),Some(Target::Codex));
+        assert_eq!(target(br#"{"credential_id":"codex:x","source_life":"k:a","source_jsonl":"/j","model":"m","when_idle":true}"#),Some(Target::Codex));
         for bad in [&br#"{"config_dir":"/a","engine_account":"b"}"#[..],br#"{"config_dir":"/a","model":"m"}"#,br#"{}"#,br#"{"x":1}"#] {
             assert_eq!(target(bad),None,"{}",String::from_utf8_lossy(bad));
         }

@@ -3,6 +3,9 @@
 use super::*;
 use gpui_kit::component::switch::Switch;
 
+pub(crate) mod picker;
+pub(in crate::app) use picker::HandoffAccount;
+
 const CLAUDE_EFFORTS: [&str; 6] = ["low", "medium", "high", "xhigh", "max", "ultracode"];
 const CLAUDE_MODES: [&str; 6] = ["plan", "auto", "manual", "acceptEdits", "bypassPermissions", "dontAsk"];
 // Acima disto a lista ganha busca e só as linhas visíveis são montadas (catálogo do Pi/OMP tem dezenas).
@@ -17,7 +20,10 @@ impl Ctl {
     }
 }
 
-struct Choice { label: String, detail: String, path: Vec<&'static str>, body: Value, current: bool, enabled: bool }
+// `provider` e `key` (`provider:id`) só nas linhas de modelo: a estrela de favorito e o trilho do seletor usam.
+#[derive(Clone)]
+struct Choice { label: String, detail: String, path: Vec<&'static str>, body: Value, current: bool, enabled: bool,
+    provider: String, key: String, pick: picker::Pick }
 
 #[derive(Debug, PartialEq)]
 pub(super) enum PlanOutcome {
@@ -79,6 +85,12 @@ pub(super) struct Controls {
     focus: Option<(FocusHandle, Subscription)>,
     // A lista rola até a linha destacada uma vez por abertura, no primeiro desenho com ela.
     revealed: std::cell::Cell<bool>,
+    // Seletor de modelos: aba do trilho escolhida, lista curta expandida, favoritos lidos do disco e o catálogo do Codex
+    // que recebe a conversa na troca.
+    picker_tab: Option<String>,
+    picker_more: bool,
+    favorites: Option<Vec<String>>,
+    handoff: Option<picker::HandoffCatalog>,
     // O atalho de permissão pediu o ciclo que ainda não conhecia: a leitura que chegar anda tantos modos quantas
     // teclas foram dadas enquanto ela não vinha.
     cycle_after_read: Option<(SessionKey, usize)>,
@@ -137,8 +149,14 @@ impl Controls {
         self.known.get(&(key.clone(), Ctl::Model)).filter(|catalog| catalog_engine_matches(catalog, session.engine.as_deref()))
     }
 
+    /// Conexão nova: tudo da anterior sai, menos os favoritos do seletor, que são do aparelho e podem ter uma estrela
+    /// ainda sem gravar no disco.
+    pub fn after_connection(self) -> Self { Self { favorites: self.favorites, ..Self::default() } }
+
     pub fn clear_plan_preview(&mut self) { self.plan = None; }
     pub fn picker_open(&self) -> bool { self.open.is_some() }
+    /// O seletor de modelos aberto: Ctrl+1…9 é dele, não da troca de sessão.
+    pub fn model_picker_open(&self) -> bool { self.open.as_ref().is_some_and(|o| o.ctl == Ctl::Model) }
 
     fn remember_model_catalog(&mut self, key: &SessionKey, catalog: Option<&Value>) {
         self.known.remove(&(key.clone(), Ctl::Model));
@@ -160,6 +178,14 @@ impl Controls {
         if let Some(known) = self.known.get_mut(&(key.clone(), Ctl::Model)) { known["current"]["service_tier"] = json!(tier); }
         if let Some(open) = self.open.as_mut().filter(|o| &o.key == key && o.ctl == Ctl::Model)
             && let Some(Ok(catalog)) = open.catalog.as_mut() { catalog["current"]["service_tier"] = json!(tier); }
+    }
+
+    /// O seletor segue aberto depois do esforço do Codex: o catálogo passa a marcar o nível confirmado, senão o anterior
+    /// seguiria marcado e não daria para voltar a ele.
+    fn confirm_codex_effort(&mut self, key: &SessionKey, effort: &str) {
+        if let Some(known) = self.known.get_mut(&(key.clone(), Ctl::Model)) && known["current"].is_object() { known["current"]["effort"] = json!(effort); }
+        if let Some(open) = self.open.as_mut().filter(|o| &o.key == key && o.ctl == Ctl::Model)
+            && let Some(Ok(catalog)) = open.catalog.as_mut() && catalog["current"].is_object() { catalog["current"]["effort"] = json!(effort); }
     }
 }
 
@@ -349,11 +375,25 @@ fn claude_effort_current(status: &str) -> Option<&'static str> {
 }
 
 // Como o web, sem caixa, sobre `origem/id nome`: acha pelo nome, pelo provider e pelo id que a statusline mostra.
+/// Os níveis de raciocínio de um modelo do catálogo do Codex; escolher um troca modelo e esforço no mesmo pedido.
+fn codex_efforts(catalog: &Value, model: &str) -> Vec<Choice> {
+    let now = &catalog["current"];
+    let on = |value: &str| model == text(now, "model") && value == text(now, "effort");
+    catalog["models"].as_array().into_iter().flatten().find(|m| text(m, "model") == model)
+        .and_then(|m| m["efforts"].as_array()).into_iter().flatten().filter_map(|e| {
+            let value = text(e, "value");
+            (!value.is_empty()).then(|| Choice { label: value.clone(), detail: text(e, "description"), path: vec!["model"],
+                body: json!({"model": model, "effort": value}), current: on(&value), enabled: true,
+                provider: "codex".into(), key: String::new(), pick: picker::Pick::Apply })
+        }).collect()
+}
+
 fn keep(choices: Vec<Choice>, query: &str) -> Vec<Choice> {
     let query = query.trim().to_lowercase();
     if query.is_empty() { return choices; }
     choices.into_iter().filter(|c| {
-        let model = c.body.get("model").and_then(Value::as_str).unwrap_or_default();
+        // A linha da troca guarda o id do Codex em `handoff`: a busca pelo id também a acha.
+        let model = c.body.get("model").or_else(|| c.body.get("handoff")).and_then(Value::as_str).unwrap_or_default();
         format!("{}/{} {}", c.detail, model, c.label).to_lowercase().contains(&query)
     }).collect()
 }
@@ -388,6 +428,7 @@ impl Hangar {
 
     /// Desenha o painel de `open` mesmo já fechado: a saída animada mostra o que estava na tela.
     pub(super) fn render_ctl_panel_for(&mut self, open: Open, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if open.ctl == Ctl::Model { self.picker_poll(cx); }
         let live = self.controls.open.replace(open);
         let panel = self.render_ctl_panel(window, cx);
         self.controls.open = live;
@@ -463,6 +504,7 @@ impl Hangar {
             _ => return,
         };
         let loaded = read.is_none().then(|| Ok(Value::Null));
+        if ctl == Ctl::Model { self.picker_opened(cx); }
         self.controls.open = Some(Open { key: key.clone(), ctl, catalog: loaded });
         self.controls.highlight = None;
         self.controls.scroll = ScrollHandle::new();
@@ -592,7 +634,10 @@ impl Hangar {
         let key = self.selected_key();
         let (provider, _) = self.provider();
         let current = self.ctl_label(ctl).unwrap_or_default();
-        let choice = |label: String, detail: String, path: Vec<&'static str>, body: Value, on: bool| Choice { label, detail, path, body, current: on, enabled: true };
+        let choice = |label: String, detail: String, path: Vec<&'static str>, body: Value, on: bool| Choice { label, detail, path, body, current: on, enabled: true,
+            provider: provider.to_owned(), key: String::new(), pick: picker::Pick::Apply };
+        // Linha de modelo: a chave de favorito é `provider:id`.
+        let keyed = |mut c: Choice, id: &str| { c.key = format!("{provider}:{id}"); c };
         let list = |v: &Value, k: &str| v.get(k).and_then(Value::as_array).cloned().unwrap_or_default();
         match (provider, ctl) {
             ("claude", Ctl::Model) => {
@@ -611,8 +656,9 @@ impl Hangar {
                 models.iter().enumerate().map(|(n, m)| {
                     let id = text(m, "id");
                     let name = Some(text(m, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| id.clone());
-                    if engine { choice(name, String::new(), vec!["engine", "model"], json!({"model": engine_model_choice(catalog, &id)}), on == Some(n)) }
-                    else { choice(name, text(m, "desc"), vec!["model-effort"], json!({"model": id, "scope": "session"}), on == Some(n)) }
+                    let row = if engine { choice(name, String::new(), vec!["engine", "model"], json!({"model": engine_model_choice(catalog, &id)}), on == Some(n)) }
+                    else { choice(name, text(m, "desc"), vec!["model-effort"], json!({"model": id, "scope": "session"}), on == Some(n)) };
+                    keyed(row, &id)
                 }).collect()
             }
             ("claude", Ctl::Effort) => {
@@ -644,17 +690,10 @@ impl Hangar {
                     let label = Some(text(m, "displayName")).filter(|n| !n.is_empty()).unwrap_or_else(|| model.clone());
                     let mut body = json!({"model": model});
                     if !effort.is_empty() { body["effort"] = json!(effort); }
-                    choice(label, text(m, "description"), vec!["model"], body, model == text(&now, "model"))
+                    keyed(choice(label, text(m, "description"), vec!["model"], body, model == text(&now, "model")), &model)
                 }).collect()
             }
-            ("codex", Ctl::Effort) => {
-                let now = catalog.get("current").cloned().unwrap_or(Value::Null);
-                let model = text(&now, "model");
-                list(catalog, "models").iter().find(|m| text(m, "model") == model).map(|m| list(m, "efforts").iter().map(|e| {
-                    let value = text(e, "value");
-                    choice(value.clone(), text(e, "description"), vec!["model"], json!({"model": model, "effort": value}), value == text(&now, "effort"))
-                }).collect()).unwrap_or_default()
-            }
+            ("codex", Ctl::Effort) => codex_efforts(catalog, &text(&catalog["current"], "model")),
             ("codex", Ctl::Mode) => ["default", "plan"].iter().map(|m| choice(tr(&format!("codex_mode_{m}")), String::new(), vec!["codex", "mode"],
                 json!({"mode": m}), current == *m)).collect(),
             ("codex", Ctl::Permission) => {
@@ -673,7 +712,8 @@ impl Hangar {
                     let (provider, id) = (text(m, "provider"), text(m, "id"));
                     let name = Some(text(m, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| id.clone());
                     let on = provider == text(&now, "provider") && id == text(&now, "id");
-                    choice(name, provider.clone(), vec!["pi", "model"], json!({"provider": provider, "model": id}), on)
+                    let key = format!("{provider}/{id}");
+                    keyed(choice(name, provider.clone(), vec!["pi", "model"], json!({"provider": provider, "model": id}), on), &key)
                 }).collect()
             }
             ("pi" | "omp", Ctl::Effort) => list(catalog, "levels").iter().filter_map(Value::as_str).map(|level| choice(level.into(), String::new(),
@@ -683,7 +723,7 @@ impl Hangar {
                 let names: Vec<String> = models.iter().map(|m| Some(text(m, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| text(m, "alias"))).collect();
                 let on = only_match(&names, &current);
                 models.iter().zip(names).enumerate().map(|(n, (m, name))| {
-                    choice(name, text(m, "provider"), vec!["kimi", "model"], json!({"model": text(m, "alias")}), on == Some(n))
+                    keyed(choice(name, text(m, "provider"), vec!["kimi", "model"], json!({"model": text(m, "alias")}), on == Some(n)), &text(m, "alias"))
                 }).collect()
             }
             ("kimi", Ctl::Effort) => {
@@ -811,6 +851,8 @@ impl Hangar {
                         }
                         let pending = value.get("pending_confirm").is_some_and(|v| !v.is_null());
                         let partial = value.get("effort_error").is_some_and(|v| !v.is_null());
+                        let codex = self.selected_key().as_ref() == Some(&key) && self.provider().0 == "codex";
+                        if codex && ctl == Ctl::Effort && !pending && !partial { self.controls.confirm_codex_effort(&key, &label); }
                         if claude_fast && !pending { self.controls.confirm_claude_fast(&key, &label); }
                         if ctl == Ctl::Model && !pending {
                             if claude_model_action {
@@ -865,6 +907,9 @@ impl Hangar {
                 };
                 self.action_feedback.insert(key, note);
             }
+            Reply::HandoffCatalog(read) => self.receive_handoff_catalog(key, read, result),
+            Reply::Handoff => self.receive_handoff(key, result),
+            Reply::HandoffCancel => self.receive_handoff_cancel(key, result),
             _ => {}
         }
     }
@@ -895,7 +940,7 @@ impl Hangar {
                 let aria = [Some(format!("{name}: {text}")), effort.clone().map(|e| format!("{}: {e}", tr("ctl_effort"))), fast.clone()]
                     .into_iter().flatten().collect::<Vec<_>>().join(" · ");
                 let id = SharedString::from(format!("ctl-{}", ctl.key()));
-                pills.push(popup::anchor(div(), id.clone()).child(super::model_pill(id, text, effort.filter(|_| busy.is_none()), fast.filter(|_| busy.is_none()), cx)
+                pills.push(popup::anchor(div(), id.clone()).child(super::model_pill(id, self.provider().0, text, effort.filter(|_| busy.is_none()), fast.filter(|_| busy.is_none()), cx)
                     .selected(open == Some(ctl)).disabled(!self.chat_online)
                     .tooltip(format!("{name} · {}", tr("ctl_effort"))).accessibility_label(aria)
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -924,6 +969,8 @@ impl Hangar {
             pills.push(popup::anchor(div(), id.clone()).child(chrome::pill_button(id, cx).gap(px(4.)).selected(open == Some(ctl)).disabled(!self.chat_online)
                 .tooltip(name.clone()).accessibility_label(format!("{name}: {text}"))
                 .when(glyph, |el| el.child(div().text_size(px(10.)).text_color(theme::faint()).child("✦")))
+                // A pílula do modelo sem esforço (Haiku, Pi sem níveis) também leva o símbolo do agente.
+                .when(ctl == Ctl::Model, |el| el.child(chrome::provider_glyph(self.provider().0, 14.)))
                 .child(div().max_w(px(130.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
                 .on_click(listener)).into_any_element());
         }
@@ -944,11 +991,19 @@ impl Hangar {
         }
         self.ctl_search.update(cx, |input, cx| input.set_value("", window, cx));
         if let Some((handle, _)) = &self.controls.focus { handle.clone().focus(window, cx); }
+        // No seletor de modelos a busca está sempre à vista: quem abre já digita.
+        if self.controls.open.as_ref().is_some_and(|o| o.ctl == Ctl::Model) { self.ctl_search.update(cx, |input, cx| input.focus(window, cx)); }
     }
 
     /// Opções do painel aberto, quando a lista já chegou; na lista longa, só as que passam na busca.
     fn open_choices(&self, cx: &App) -> Option<(Ctl, Vec<Choice>, bool)> {
         let open = self.controls.open.as_ref()?;
+        // No seletor de modelos o catálogo do agente que falhou ou não chegou não tira as linhas do Codex da troca.
+        if open.ctl == Ctl::Model {
+            let none = Value::Null;
+            let catalog = match &open.catalog { Some(Ok(catalog)) => catalog, _ => &none };
+            return Some((Ctl::Model, self.picker_rows(catalog, cx), false));
+        }
         let Some(Ok(catalog)) = &open.catalog else { return None; };
         let all = self.choices(open.ctl, catalog);
         let long = all.len() > LONG_LIST;
@@ -980,14 +1035,28 @@ impl Hangar {
         if self.selected_key().is_some_and(|key| self.controls.busy.contains_key(&key)) { return; }
         let n = row.unwrap_or_else(|| self.ctl_highlight(&choices));
         let Some(choice) = choices.into_iter().nth(n).filter(|c| c.enabled) else { return; };
-        self.composer.update(cx, |input, cx| input.focus(window, cx));
-        if choice.current { self.close_controls(); cx.notify(); return; }
-        // Escolha no painel vence o rótulo segurado do último Shift+Tab.
-        if ctl == Ctl::Mode && let Some(key) = self.selected_key() {
-            self.controls.applied.remove(&(key.clone(), ctl));
-            self.controls.mode_target.remove(&key);
+        match choice.pick {
+            // "Mostrar mais" fica no seletor; a troca e a escolha devolvem o foco ao campo.
+            picker::Pick::More => {
+                self.controls.picker_more = true;
+                self.controls.highlight = Some(n);
+                cx.notify();
+            }
+            picker::Pick::Handoff { credential, model, effort } => {
+                self.composer.update(cx, |input, cx| input.focus(window, cx));
+                self.request_handoff(credential, model, effort, cx);
+            }
+            picker::Pick::Apply => {
+                self.composer.update(cx, |input, cx| input.focus(window, cx));
+                if choice.current { self.close_controls(); cx.notify(); return; }
+                // Escolha no painel vence o rótulo segurado do último Shift+Tab.
+                if ctl == Ctl::Mode && let Some(key) = self.selected_key() {
+                    self.controls.applied.remove(&(key.clone(), ctl));
+                    self.controls.mode_target.remove(&key);
+                }
+                self.apply_ctl(ctl, choice.path, choice.body, choice.label, cx);
+            }
         }
-        self.apply_ctl(ctl, choice.path, choice.body, choice.label, cx);
     }
 
     // Um destaque só: o ponteiro move o do teclado. A atual leva o fundo accent e o tique; `inline` põe a origem ao lado
@@ -1017,67 +1086,6 @@ impl Hangar {
             .into_any_element()
     }
 
-    /// Rodapé do menu do modelo: os níveis de esforço do modelo atual, como o "Raciocínio" da tela sem sessão. Trocar o
-    /// esforço deixa o menu aberto; o catálogo lido na abertura envelhece, então o nível da linha de status vence.
-    fn render_effort_footer(&self, catalog: &Value, busy: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let levels = self.choices(Ctl::Effort, catalog);
-        if levels.is_empty() { return None; }
-        let now = self.ctl_label(Ctl::Effort).unwrap_or_default();
-        let live = levels.iter().any(|c| c.label.eq_ignore_ascii_case(now.trim()));
-        Some(div().flex().flex_col().gap(px(2.))
-            .child(popup::separator())
-            .child(popup::title(tr("new_chat_reasoning"), None))
-            // Até 5 níveis numa linha, dividindo a largura; mais que isso quebram linha sem cortar o rótulo. O escolhido
-            // aparece pelo realce, sem ícone que alargue o botão.
-            .child({
-                let many = levels.len() > 5;
-                div().id("ctl-efforts").role(Role::Group).aria_label(tr("new_chat_reasoning")).px(px(4.)).pb(px(2.)).flex().gap(px(2.))
-                .when(many, |el| el.flex_wrap())
-                .children(levels.into_iter().map(|c| {
-                    let on = if live { c.label.eq_ignore_ascii_case(now.trim()) } else { c.current };
-                    let label = effort_label(&c.label);
-                    Button::new(SharedString::from(format!("ctl-effort-{}", c.label))).ghost().xsmall().when(!many, |b| b.flex_1().min_w_0())
-                        .selected(on).label(label)
-                        .disabled(busy || !c.enabled)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if on { return; }
-                            this.apply_ctl(Ctl::Effort, c.path.clone(), c.body.clone(), c.label.clone(), cx);
-                        }))
-                }))
-            })
-            .into_any_element())
-    }
-
-    fn render_fast_footer(&self, catalog: &Value, busy: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let speed = match self.provider().0 {
-            "codex" => codex_fast_state(catalog, self.ctl_label(Ctl::Fast).as_deref()),
-            "claude" => {
-                let (Some(key), Some(session)) = (self.selected_key(), self.selected.as_ref()) else { return None; };
-                self.controls.model_catalog(&key, session)?;
-                if !catalog_engine_matches(catalog, session.engine.as_deref()) { return None; }
-                claude_fast_state(catalog)?
-            },
-            _ => return None,
-        };
-        let (labels, hints) = speed_texts();
-        let hint = if !speed.available() { tr("ctl_fast_unavailable") } else if speed.ultrafast || speed.tier == Some("ultrafast") {
-            hints[speed.selected()].clone()
-        } else { format!("{} {}", hints[speed.selected()], tr("ctl_speed_ultrafast_unavailable")) };
-        let locked = busy || !self.chat_online;
-        let enabled = if locked { [false; 3] } else { speed.enabled() };
-        let off_note = tr(if speed.fast { "ctl_speed_ultrafast_unavailable" } else { "ctl_fast_unavailable" });
-        Some(div().flex().flex_col().gap_1().px_2().py_1()
-            .child(div().text_sm().child(tr("ctl_speed")))
-            // Escolha que não pode mudar agora continua à vista, apagada; desconhecida não mostra nenhuma.
-            .child(super::settings::segments_fill("ctl-speed", &labels, &hints, speed.selected(), &enabled,
-                (locked || !speed.available()) && speed.tier.is_some(), off_note, |this, n, _, cx| {
-                    let tier = SPEED_TIERS[n];
-                    this.apply_ctl(Ctl::Fast, vec!["service-tier"], json!({"service_tier": tier}), tier.into(), cx);
-                }, cx))
-            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(hint))
-            .into_any_element())
-    }
-
     fn render_context_footer(&self, catalog: &Value, busy: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.provider().0 != "claude" { return None; }
         let (Some(key), Some(session)) = (self.selected_key(), self.selected.as_ref()) else { return None; };
@@ -1100,6 +1108,22 @@ impl Hangar {
             .into_any_element())
     }
 
+    /// O catálogo ainda lendo (esqueleto) ou que falhou (motivo e tentar de novo); `None` quando já chegou.
+    fn ctl_load_state(&self, ctl: Ctl, catalog: Option<&Result<Value, String>>, cx: &mut Context<Self>) -> Option<AnyElement> {
+        match catalog {
+            None => Some(popup::skeleton("ctl-loading", 5).into_any_element()),
+            Some(Err(reason)) => Some(div().p(px(8.)).flex().flex_col().items_start().gap(px(6.)).text_size(px(12.)).text_color(theme::danger())
+                .child(tr("ctl_failed").replace("{reason}", reason))
+                .child(Button::new("ctl-retry").outline().xsmall().label(tr("ctl_retry")).on_click(cx.listener(move |this, _, window, cx| {
+                    this.close_controls();
+                    this.open_ctl(ctl, ctl == Ctl::Model && this.provider().0 == "claude", cx);
+                    this.focus_ctl_panel(window, cx);
+                })))
+                .into_any_element()),
+            Some(Ok(_)) => None,
+        }
+    }
+
     pub(super) fn render_ctl_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let key = self.selected_key()?;
         let open = self.controls.open.as_ref().filter(|o| o.key == key)?;
@@ -1118,16 +1142,8 @@ impl Hangar {
             ("codex", Ctl::Permission) if !headless => Some("codex_permission_probe_hint"),
             _ => None,
         };
-        let body = match &open.catalog {
-            None => popup::skeleton("ctl-loading", 5).into_any_element(),
-            Some(Err(reason)) => div().p(px(8.)).flex().flex_col().items_start().gap(px(6.)).text_size(px(12.)).text_color(theme::danger())
-                .child(tr("ctl_failed").replace("{reason}", reason))
-                .child(Button::new("ctl-retry").outline().xsmall().label(tr("ctl_retry")).on_click(cx.listener(move |this, _, window, cx| {
-                    this.close_controls();
-                    this.open_ctl(ctl, ctl == Ctl::Model && this.provider().0 == "claude", cx);
-                    this.focus_ctl_panel(window, cx);
-                })))
-                .into_any_element(),
+        let body = if ctl == Ctl::Model { self.render_model_picker(open.catalog.as_ref(), busy, window, cx) } else { match &open.catalog {
+            None | Some(Err(_)) => self.ctl_load_state(ctl, open.catalog.as_ref(), cx).unwrap_or_else(|| div().into_any_element()),
             Some(Ok(catalog)) => {
                 let (_, choices, long) = self.open_choices(cx).unwrap_or((ctl, Vec::new(), false));
                 let needs_probe = probe_note.is_some() && (catalog.is_null() || choices.iter().all(|c| !c.enabled) || choices.is_empty());
@@ -1174,19 +1190,9 @@ impl Hangar {
                     .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.move_ctl(1, false, cx)))
                     .child(Input::new(&self.ctl_search).h(px(32.)).aria_label(tr("ctl_search"))
                         .prefix(chrome::small_icon(IconName::Search, 14., theme::faint()))));
-                let effort = (ctl == Ctl::Model && self.ctl_paired()).then(|| self.render_effort_footer(catalog, busy, cx)).flatten();
                 div().flex().flex_col().gap(px(2.))
                     .children(search)
-                    .when(provider == "claude" && ctl == Ctl::Model, |el| el.child(
-                        Button::new("ctl-model-refresh").ghost().small().label(tr("voice_models_refresh")).disabled(busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_ctl(Ctl::Model, true, cx);
-                                this.focus_ctl_panel(window, cx);
-                            }))))
                     .child(list)
-                    .children(effort)
-                    .children((ctl == Ctl::Model).then(|| self.render_fast_footer(catalog, busy, cx)).flatten())
-                    .children((ctl == Ctl::Model).then(|| self.render_context_footer(catalog, busy, cx)).flatten())
                     .when(ctl == Ctl::Effort, |el| el.child(popup::separator())
                         .child(div().px(px(8.)).pt(px(4.)).pb(px(2.)).text_xs().text_color(theme::muted()).child(tr("effort_hint"))))
                     .when_some(probe_note.filter(|_| needs_probe), |el, note| el.child(div().px(px(8.)).flex().items_center().gap_2()
@@ -1198,11 +1204,20 @@ impl Hangar {
                             })))))
                     .into_any_element()
             }
-        };
+        } };
         let keys = cx.listener(|this, event: &KeyDownEvent, window, cx| {
             let list_focused = this.controls.focus.as_ref().is_some_and(|(focus, _)| focus.is_focused(window))
                 || this.ctl_search.read(cx).focus_handle(cx).is_focused(window);
             if !list_focused { return; }
+            // Ctrl+1…9 no seletor de modelos: a linha de mesmo número, como no T3 Code.
+            let modifiers = &event.keystroke.modifiers;
+            if (modifiers.control || modifiers.platform) && !modifiers.alt && !modifiers.shift
+                && let Some(digit) = event.keystroke.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d))
+                && this.controls.open.as_ref().is_some_and(|o| o.ctl == Ctl::Model) {
+                this.picker_jump(digit, window, cx);
+                cx.stop_propagation();
+                return;
+            }
             match event.keystroke.key.as_str() {
                 "up" => this.move_ctl(-1, false, cx),
                 "down" => this.move_ctl(1, false, cx),
@@ -1216,7 +1231,7 @@ impl Hangar {
         });
         Some(div().p(px(popup::INSET)).rounded_md().bg(theme::popup_content_fill()).flex().flex_col().gap(px(2.))
             .when_some(self.controls.focus.as_ref(), |el, focus| el.track_focus(&focus.0).on_key_down(keys))
-            .child(popup::title(tr(&format!("ctl_{}_title", ctl.key())), Some("esc")))
+            .when(ctl != Ctl::Model, |el| el.child(popup::title(tr(&format!("ctl_{}_title", ctl.key())), Some("esc"))))
             .child(body).into_any_element())
     }
 
@@ -1792,7 +1807,7 @@ mod tests {
     #[test]
     fn search_matches_name_origin_or_id_ignoring_case() {
         let row = |label: &str, detail: &str, id: &str| Choice { label: label.into(), detail: detail.into(), path: Vec::new(),
-            body: serde_json::json!({"model": id}), current: false, enabled: true };
+            body: serde_json::json!({"model": id}), current: false, enabled: true, provider: String::new(), key: String::new(), pick: super::picker::Pick::Apply };
         let rows = || vec![row("GPT-5", "openai", "gpt-5"), row("Sonnet", "anthropic", "claude-sonnet"),
             row("gpt-oss", "groq", "oss-120b"), row("Modelo sintético 05", "google", "sint-05")];
         let labels = |q: &str| keep(rows(), q).into_iter().map(|c| c.label).collect::<Vec<_>>();

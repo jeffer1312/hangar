@@ -14,6 +14,7 @@ pub mod btw;
 pub mod codex;
 pub mod control;
 pub mod engine;
+pub mod handoff;
 pub mod input;
 pub(crate) mod delivery_timing;
 pub mod limit_switch;
@@ -86,6 +87,12 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
         return Err(response);
     }
     let Some(runtime) = runtime else { return Err(no_runtime(req.headers())) };
+    // A troca de agente à espera segurou a fila para o Codex: orientar ou "Enviar agora" entregaria ao Claude.
+    if matches!(route, WriteRoute::Steer | WriteRoute::QueueSteer) && runtime.handoff_held(&name) {
+        let mut response = json_response(StatusCode::CONFLICT, detail_body("session_transfer_busy", "a sessão está trocando de agente", json!({})));
+        cors(req.headers(), response.headers_mut());
+        return Err(response);
+    }
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return Err(too_large(&parts.headers)) };
     let shaped = table::body_ok(route, &bytes);

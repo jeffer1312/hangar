@@ -593,7 +593,7 @@ impl Watcher {
         }
         // O terminal novo só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ele.
         let since = meta.get("asleep").and_then(|mark|mark["since"].as_f64()).unwrap_or(0.0);
-        registry.restamp_asleep(&key,since).await?;
+        registry.restamp_asleep(&key,since,false).await?;
         let Err(error) = self.open_terminal(registry,name,&key,&wanted,mode.as_deref(),&pane).await else { return Ok(true) };
         if !kill_phase(&error) && let Err(put) = self.sidecar_put(name,&meta).await {
             tracing::warn!(session=%name,code=%put.code,"o Codex que não acordou ficou sem o arquivo adormecido");

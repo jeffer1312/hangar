@@ -1100,7 +1100,7 @@ impl Executor {
             // Os motivos do `_motivo_ocupada` do Python, com a frase que o app já conhece.
             if facts.open_question {return Err(error("erro_sessao_esperando_resposta"));}
             if !facts.idle {return Err(error("erro_sessao_trabalhando"));}
-            // Na troca por limite a fila foi segurada para ir com a conversa à conta nova.
+            // Na troca por limite ou de agente a fila foi segurada para ir com a conversa ao destino novo.
             if payload["queued_ok"]!=true && state.rows.iter().any(|row|row["delivered"]==false) {return Err(error("erro_fila_pendente"));}
             return Ok(reply(id,Disposition::Accepted,json!({"idle":true,"conversation":self.target.binding.conversation})));
         }
@@ -1192,6 +1192,11 @@ impl Executor {
             let result=reply(id,disposition,json!({"code":"keyboard_loan","queued":row_id.is_some(),"cleanup":"not_needed"}));
             self.action(Action::Finish {id:id.into(),status,result:serde_json::to_value(&result).unwrap()}).await?;
             return Ok(result);
+        }
+        // A troca de conta ou de agente segurou a fila: a mensagem, "Na conversa" incluída, espera nela na ordem e vai
+        // ao destino novo, mesmo com o Claude parado ou com canal nativo.
+        if row_id.is_some() && self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&self.target.name)) {
+            return self.defer(id,json!({"code":"queue_held","queued":true,"cleanup":"not_needed"})).await;
         }
         // Mensagem nova não passa à frente de outra que ficou adiada: espera na fila e a drenagem entrega na ordem.
         // A "Na conversa" entra no turno como o Orientar, à frente das comuns, mas nunca de outra "Na conversa".
@@ -1476,7 +1481,7 @@ impl Executor {
     async fn drain_once(&mut self,mut entry:Option<String>,steer:bool)->Result<Value,RuntimeError> {
         if self.batch_blocked && entry.is_none() {return Ok(json!({"drained":0,"batch_too_large":true}));}
         if self.loaned() {return Ok(json!({"drained":0,"keyboard_loan":true}));}
-        if self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.limit_held(&self.target.name)) {
+        if self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&self.target.name)) {
             return Ok(json!({"drained":0,"limit_held":true}));
         }
         let state=self.queue.snapshot().await.map_err(|_|error("queue_io"))?;
@@ -1592,6 +1597,10 @@ impl Executor {
         if !valid_operation_id(id) {return Err(error("operation_id"));}
         let entry=payload["entry_id"].as_str().filter(|entry|!entry.is_empty() && payload.as_object().is_some_and(|p|p.keys().all(|key|matches!(key.as_str(),"entry_id"|"expected_turn"))))
             .ok_or_else(||error("terminal_payload"))?.to_owned();
+        // Fila retida pela troca: nenhuma tecla, nem a que só promove a "Na conversa" já digitada.
+        if self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&self.target.name)) {
+            return Ok(reply(id,Disposition::Rejected,json!({"code":"session_transfer_busy","cleanup":"not_needed"})));
+        }
         // A que já saiu (ou nunca esteve) responde antes de ler a tela: nenhuma tecla.
         let state=self.queue.snapshot().await.map_err(|_|error("queue_io"))?;
         if !super::queue::waiting_ids(&state,self.target.created).contains(&entry) {
@@ -1718,6 +1727,11 @@ impl Executor {
     /// pode ficar para trás da fila interna; sem nenhuma, promove a fila do Claude Code como antes. A resposta da
     /// entrada leva `entry_id`.
     async fn steer_first(&mut self,id:&str)->Result<RuntimeReply,RuntimeError> {
+        // Fila retida pela troca: nenhuma tecla, como no `steer_entry`. Sem entrada esperando, ela promoveria a fila do
+        // Claude Code, que pode ter uma "Na conversa" já entregue.
+        if self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&self.target.name)) {
+            return Ok(reply(id,Disposition::Rejected,json!({"code":"session_transfer_busy","cleanup":"not_needed"})));
+        }
         let state=self.queue.snapshot().await.map_err(|_|error("queue_io"))?;
         let Some(first)=super::queue::waiting_ids(&state,self.target.created).into_iter().next() else {
             return self.execute(id,"steer",json!({}),None,false).await;

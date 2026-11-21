@@ -575,7 +575,7 @@ impl RuntimeRegistry {
         let Ok(_ingress)=super::lifecycle::ClosedIngress::acquire_within(self.ingress(),name,Duration::from_secs(1)).await else {return Ok(false)};
         let home=self.codex_environment().home;
         // A porta fechada não exclui a troca de agente nem o acordar: os dois são conferidos aqui.
-        if super::codex_relaunch::transfer_open(&home,name,None,None) || self.waking_key(name).is_some() || self.claude_sidecar(name).await?.is_some() {
+        if self.handoff_held(name) || super::codex_relaunch::transfer_open(&home,name,None,None) || self.waking_key(name).is_some() || self.claude_sidecar(name).await?.is_some() {
             return Ok(false);
         }
         // Pergunta, fila, entrega incerta, turno e painel: a guarda da reabertura.
@@ -654,7 +654,8 @@ impl RuntimeRegistry {
 
     async fn reopen_by_spec(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>) -> Result<Reopened,ReopenFailure> {
         let transfer=|| {
-            let open=super::codex_relaunch::transfer_open(&self.codex_environment().home,name,None,None);
+            // A troca de agente à espera também conta: a vida nova do Claude levaria a fila que ela segurou para o Codex.
+            let open=self.handoff_held(name) || super::codex_relaunch::transfer_open(&self.codex_environment().home,name,None,None);
             if open {Err(ReopenFailure::refused(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente")))} else {Ok(())}
         };
         transfer()?;
@@ -690,7 +691,7 @@ impl RuntimeRegistry {
         let mut current=self.claude_current(name,check,resume.is_some()).await.map_err(ReopenFailure::refused)?;
         // A vida nova só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ela.
         if let Some(meta)=meta.as_ref().filter(|meta|asleep_of(meta).is_some()) && let Some(key)=meta["key"].as_str() {
-            self.restamp_asleep(key,meta["asleep"]["since"].as_f64().unwrap_or(0.0)).await.map_err(ReopenFailure::refused)?;
+            self.restamp_asleep(key,meta["asleep"]["since"].as_f64().unwrap_or(0.0),false).await.map_err(ReopenFailure::refused)?;
         }
         // Outra conversa leva as escolhas de plugins e skills guardadas dela, não as do processo de agora.
         if let Some(sid)=resume.filter(|sid|*sid!=current.sid) {
@@ -795,8 +796,8 @@ impl RuntimeRegistry {
                     if let Some(effort)=view["effort"].as_str().filter(|e|EFFORTS.contains(e)) {spec.effort=Some(effort.into());}
                 }
             }
-            // Na troca por limite a fila foi segurada para ir com a conversa à conta nova.
-            if checks_busy && !self.limit_held(name) && self.queue_pending(&spec.key).await {return Err(busy("erro_fila_pendente"));}
+            // Na troca por limite ou de agente a fila foi segurada para ir com a conversa ao destino novo.
+            if checks_busy && !self.queue_held(name) && self.queue_pending(&spec.key).await {return Err(busy("erro_fila_pendente"));}
             if spec.permission_mode.is_none() {
                 spec.permission_mode=Some(super::claude_launch::account_mode(&env,spec.account.config_dir())?);
             }
@@ -833,7 +834,7 @@ impl RuntimeRegistry {
             return Err(refused("permission_mode_unknown","o modo de permissão da sessão não é conhecido; nada foi reaberto"));
         }
         // Parada, sem pergunta, sem fila e sem entrega incerta: os motivos do `_motivo_ocupada`.
-        if checks {handle.control(format!("guard:reopen:{}",crate::mods::state::random_hex(8)),"lifecycle_guard".into(),json!({"queued_ok":self.limit_held(name)})).await?;}
+        if checks {handle.control(format!("guard:reopen:{}",crate::mods::state::random_hex(8)),"lifecycle_guard".into(),json!({"queued_ok":self.queue_held(name)})).await?;}
         Ok(Current { sid:target.binding.conversation.clone(),generation:target.generation,previous_non_plan:observed.map(|v|v.previous_non_plan),
             settings,spec,life:Life::Terminal { target } })
     }
