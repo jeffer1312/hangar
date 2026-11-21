@@ -690,6 +690,60 @@ describe('ações e atualização da conversa na rota', () => {
     } finally { act(() => root.unmount()); }
   });
 
+  it('troca de agente na lista relê a sessão; a linha sumir da lista não relê', async () => {
+    const row: (typeof sessionsState.rows)[number] = { serverId: 's1', name: 'sess', provider: 'claude' };
+    sessionsState.rows = [row];
+    const { root } = await render(createElement(ChatScreen));
+    try {
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [{ ...row, provider: 'codex' }];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(2);
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('linha que volta depois de uma leitura sem a sessão relê, com o mesmo agente', async () => {
+    const row: (typeof sessionsState.rows)[number] = { serverId: 's1', name: 'sess', provider: 'claude' };
+    sessionsState.rows = [row];
+    vi.mocked(fetchSessionsForServer).mockResolvedValueOnce([]);
+    const { root } = await render(createElement(ChatScreen));
+    try {
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [row];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(2);
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('linha fora da lista por 2 s confirma com uma leitura; a que volta antes não relê', async () => {
+    vi.useFakeTimers();
+    const row: (typeof sessionsState.rows)[number] = { serverId: 's1', name: 'sess', provider: 'claude' };
+    sessionsState.rows = [row];
+    const { root } = await render(createElement(ChatScreen));
+    try {
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [];
+      await act(async () => root.render(createElement(ChatScreen)));
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+      sessionsState.rows = [row];
+      await act(async () => root.render(createElement(ChatScreen)));
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [];
+      await act(async () => root.render(createElement(ChatScreen)));
+      await act(async () => vi.advanceTimersByTimeAsync(2000));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(2);
+      await act(async () => vi.advanceTimersByTimeAsync(5000));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(2);
+    } finally { act(() => root.unmount()); }
+  });
+
   it('a conversa mantém a lista de sessões viva enquanto está aberta, com a gaveta fechada', async () => {
     const { root } = await render(createElement(ChatScreen));
     expect(sessionsState.holders).toBe(1);

@@ -251,16 +251,39 @@ async fn relaunch(exe: &Path) -> Result<(), String> {
 /// O motivo técnico vai junto da frase da tela: sem ele, quem lê o erro não tem o que procurar no log.
 fn with_reason(text: String, reason: &str) -> String { format!("{text} ({reason})") }
 
-async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, reqwest::Error> {
-    Ok(client.get(url).send().await?.error_for_status()?.bytes().await?.into())
+/// O andamento da troca do app, para a linha dele no lote: bytes baixados e o total, quando a release o informa.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum AppProgress { Bytes(u64, Option<u64>), Installing }
+
+type OnProgress = Arc<dyn Fn(AppProgress) + Send + Sync>;
+
+/// Avisa a cada ponto percentual (ou a cada MB sem total): por pedaço seriam milhares de redesenhos.
+fn throttled(progress: OnProgress) -> impl Fn(u64, Option<u64>) + Sync {
+    let last = std::sync::atomic::AtomicU64::new(u64::MAX);
+    move |done, total| {
+        let step = match total { Some(total) if total > 0 => done * 100 / total, _ => done >> 20 };
+        if last.swap(step, std::sync::atomic::Ordering::Relaxed) != step { progress(AppProgress::Bytes(done, total)); }
+    }
+}
+
+async fn fetch(client: &reqwest::Client, url: &str, progress: &(dyn Fn(u64, Option<u64>) + Sync)) -> Result<Vec<u8>, reqwest::Error> {
+    let mut response = client.get(url).send().await?.error_for_status()?;
+    let total = response.content_length();
+    let mut bytes = Vec::with_capacity(total.unwrap_or(0).min(512 << 20) as usize);
+    progress(0, total);
+    while let Some(chunk) = response.chunk().await? {
+        bytes.extend_from_slice(&chunk);
+        progress(bytes.len() as u64, total);
+    }
+    Ok(bytes)
 }
 
 /// A release é republicada a cada push: o binário trocado no meio da transferência corta o corpo, e uma segunda
 /// tentativa pega o arquivo novo (o sha dele é conferido depois, contra o manifesto relido).
-async fn download(client: &reqwest::Client, url: &str, pause: Duration) -> Result<Vec<u8>, String> {
-    if let Ok(bytes) = fetch(client, url).await { return Ok(bytes) }
+async fn download(client: &reqwest::Client, url: &str, pause: Duration, progress: &(dyn Fn(u64, Option<u64>) + Sync)) -> Result<Vec<u8>, String> {
+    if let Ok(bytes) = fetch(client, url, progress).await { return Ok(bytes) }
     tokio::time::sleep(pause).await;
-    fetch(client, url).await.map_err(|error| tr("app_update_download_failed").replace("{reason}", &cause(error)))
+    fetch(client, url, progress).await.map_err(|error| tr("app_update_download_failed").replace("{reason}", &cause(error)))
 }
 
 /// A frase do reqwest leva a URL assinada inteira e esconde a causa: sai a URL, entra a cadeia de origens.
@@ -281,7 +304,7 @@ fn still_offered(accepted: Offer, read: Result<Option<Offer>, CheckFail>) -> Opt
 
 /// `Ok(false)`: a oferta acabou antes da troca (a release passou a exigir mais) e nada foi mexido; sem aviso, o próximo
 /// ciclo refaz o plano.
-async fn install(client: reqwest::Client, exe: Option<PathBuf>, offer: Offer) -> Result<bool, String> {
+async fn install(client: reqwest::Client, exe: Option<PathBuf>, offer: Offer, progress: OnProgress) -> Result<bool, String> {
     // A oferta pode ter horas e a release é republicada a cada push: o sha que vale é o do manifesto de agora.
     let channel = offer.channel.clone();
     let Some(offer) = still_offered(offer, check(&client, &channel).await) else { return Ok(false) };
@@ -290,9 +313,11 @@ async fn install(client: reqwest::Client, exe: Option<PathBuf>, offer: Offer) ->
     let (disk, wanted) = (exe.clone(), offer.sha256.clone());
     let placed = tokio::task::spawn_blocking(move || std::fs::read(&disk).is_ok_and(|bytes| sha256_hex(&bytes) == wanted));
     if placed.await.unwrap_or(false) {
+        progress(AppProgress::Installing);
         return relaunch(&exe).await.map(|()| true).map_err(|reason| with_reason(tr("app_update_relaunch_failed"), &reason));
     }
-    let bytes = download(&client, &offer.url, RETRY_PAUSE).await?;
+    let bytes = download(&client, &offer.url, RETRY_PAUSE, &throttled(progress.clone())).await?;
+    progress(AppProgress::Installing);
     // O CI sobe os binários antes do manifesto: no meio da publicação o binário já é o novo e o sha ainda o antigo.
     let sha256 = if sha256_hex(&bytes) == offer.sha256 { offer.sha256 } else {
         // O binário novo pode ser de uma release que já exige mais: sem ele não há o que trocar, nem erro de checksum.
@@ -992,6 +1017,8 @@ impl Updater {
 
     fn fail(&mut self, reason: String, cx: &mut Context<Self>) {
         self.local_batch_status(all::Status::Failed(reason.clone()), cx);
+        // O servidor desta máquina falhou: o app não é trocado por cima dele.
+        self.app_not_now(cx);
         self.end_intent();
         self.run = Run::Failed(reason);
         cx.notify();
@@ -1025,7 +1052,7 @@ impl Updater {
                     else { ("app_update_confirm_server_title", "app_update_confirm_server_desc") };
                 confirm::open(window, cx, tr(title), tr(desc), vec![notes], None, move |accepted, window, cx| {
                     let acceptance = accepted.into_iter().next().unwrap_or_default();
-                    let _ = this.update(cx, |this, cx| this.search_server(acceptance, window, cx));
+                    let _ = this.update(cx, |this, cx| this.search_server(acceptance, true, window, cx));
                 });
             }
             _ if plan.app => self.confirm_channel(window, cx),
@@ -1053,38 +1080,54 @@ impl Updater {
 
     /// No clique a versão vem da rede: o `origin/main` do servidor só é renovado a cada 30 min, e a release do app sai logo
     /// depois do push. Com o estado novo, o plano é refeito antes de pedir qualquer coisa.
-    /// `acceptance`: os avisos aceitos no modal, gravados no servidor antes do `iniciar`.
-    fn search_server(&mut self, acceptance: confirm::Acceptance, window: &mut Window, cx: &mut Context<Self>) {
+    /// `acceptance`: os avisos aceitos no modal, gravados no servidor antes do `iniciar`. `search`: falso quando o modal
+    /// acabou de buscar; aí só relê o estado, sem esperar outra busca.
+    pub(super) fn search_server(&mut self, acceptance: confirm::Acceptance, search: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.local.clone() else { return };
         if !self.run.begin_server_search() {
             window.push_notification(Notification::error(tr("app_restart_busy")), cx);
+            // No lote a linha desta máquina já estava "iniciando": fica com a recusa, senão a rodada nunca acaba.
+            self.local_batch_status(all::Status::Failed(tr("app_restart_busy")), cx);
+            self.app_not_now(cx);
             return;
         }
         // Atualização só desta máquina: a linha dela na tela de Servidores reconsulta quando terminar.
         // Na rodada de todas, as linhas ficam com o desfecho.
         if self.batch.is_none() { self.survey.pending = true; }
         cx.notify();
-        let task = read_state(&self.runtime, &api, &[("procurar", "1")], 150);
+        let task = if search { read_state(&self.runtime, &api, &[("procurar", "1")], 150) } else { read_state(&self.runtime, &api, &[], 20) };
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let result = task.await.unwrap_or_else(|e| Err(Failure::local(e.to_string())));
             let _ = handle.update(cx, |_, window, cx| { let _ = this.update(cx, |this, cx| match result {
                 Err(error) => this.fail(tr("update_failed").replace("{reason}", error.detail.trim_end_matches('.')), cx),
-                Ok(state) => {
-                    this.run = Run::Idle;
-                    this.local_batch_snapshot(&state, cx);
-                    this.receive_server(Some(state), cx);
-                    let plan = if this.batch.is_some() { this.batch_plan() } else { this.plan() };
-                    match &plan.server {
-                        ServerStep::Update => this.start_server(api, acceptance, window, cx),
-                        ServerStep::Held(hold) if this.batch.is_some() && hold.stops() => { this.end_intent(); cx.notify(); }
-                        ServerStep::Held(hold) if hold.stops() => this.fail(hold.text(), cx),
-                        _ if plan.app => this.install_app(window, cx),
-                        _ => cx.notify(),
-                    }
-                }
+                Ok(state) => this.local_state_ready(api, state, acceptance, window, cx),
             }); });
         }).detach();
+    }
+
+    /// O estado do servidor desta máquina decide o passo: atualizar, só o app ou parar.
+    fn local_state_ready(&mut self, api: Api, state: Value, acceptance: confirm::Acceptance, window: &mut Window, cx: &mut Context<Self>) {
+        self.run = Run::Idle;
+        self.local_batch_snapshot(&state, cx);
+        self.receive_server(Some(state), cx);
+        let plan = if self.batch.is_some() { self.batch_plan() } else { self.plan() };
+        // Sem atualizar o servidor, a linha dele no lote sai de "iniciando" para o que ele está.
+        if !matches!(plan.server, ServerStep::Update) {
+            self.local_batch_status(match &plan.server { ServerStep::Held(hold) => all::Status::Held(hold.clone()), _ => all::Status::Current }, cx);
+        }
+        match &plan.server {
+            ServerStep::Update => self.start_server(api, acceptance, window, cx),
+            // Servidor travado no lote: o app não é trocado nesta rodada, e a linha dele diz isso em vez de ficar esperando.
+            ServerStep::Held(hold) if self.batch.is_some() && hold.stops() => {
+                self.end_intent();
+                self.app_not_now(cx);
+                cx.notify();
+            }
+            ServerStep::Held(hold) if hold.stops() => self.fail(hold.text(), cx),
+            _ if plan.app => self.install_app(window, cx),
+            _ => { self.app_not_now(cx); cx.notify() }
+        }
     }
 
     fn start_server(&mut self, api: Api, acceptance: confirm::Acceptance, window: &mut Window, cx: &mut Context<Self>) {
@@ -1114,6 +1157,7 @@ impl Updater {
                     this.end_intent();
                     this.run = Run::Idle;
                     this.local_batch_status(all::Status::Current, cx);
+                    this.app_not_now(cx);
                     this.refresh_server(cx);
                     cx.notify();
                 }
@@ -1223,7 +1267,8 @@ impl Updater {
             // O servidor atualizou; o app espera, calado, que o próximo ciclo refaça o plano com a API real.
             crate::log_line(&format!("update: app {} exige a API {} e o servidor está na {:?}; o app fica para o próximo ciclo",
                 offer.version, offer.requires_api, running));
-        }
+            self.batch_app(all::AppStep::Later, cx);
+        } else { self.batch_app(all::AppStep::Current, cx); }
         let version = self.server.as_ref().and_then(|s| s["versao_legivel"]["backend"].as_str()).unwrap_or("?").to_owned();
         let text = if manual { tr("update_done_manual") } else { tr("update_done").replace("{version}", &version) };
         window.push_notification(Notification::success(text).id::<Updater>(), cx);
@@ -1236,17 +1281,35 @@ impl Updater {
     fn install_app(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // A troca encerra este processo; as outras máquinas precisam terminar de ser acompanhadas antes.
         if self.defer_batch_app(cx) { return; }
-        let Some(offer) = self.offer.clone() else { self.end_intent(); self.run = Run::Idle; cx.notify(); return };
+        let Some(offer) = self.offer.clone() else {
+            self.batch_app(all::AppStep::Current, cx);
+            self.end_intent(); self.run = Run::Idle; cx.notify(); return
+        };
         // Canal trocado depois da procura: a oferta é da branch anterior; procura de novo em vez de instalá-la.
         if offer.channel != self.channel() {
+            self.batch_app(all::AppStep::Current, cx);
             self.end_intent();
             self.offer = None;
             self.run = Run::Idle;
             return self.check_app(cx);
         }
         self.run = Run::App;
+        let version = offer.version.clone();
+        self.batch_app(all::AppStep::Downloading { version: version.clone(), done: 0, total: None }, cx);
         cx.notify();
-        let task = self.runtime.spawn(install(self.client.clone(), self.exe.clone(), offer));
+        let (tx, rx) = async_channel::unbounded();
+        let progress: OnProgress = Arc::new(move |step| { let _ = tx.try_send(step); });
+        cx.spawn(async move |this, cx| {
+            while let Ok(step) = rx.recv().await {
+                let step = match step {
+                    AppProgress::Bytes(done, total) => all::AppStep::Downloading { version: version.clone(), done, total },
+                    AppProgress::Installing => all::AppStep::Installing,
+                };
+                // Progresso atrasado não desfaz o desfecho já mostrado (falha ou app mantido).
+                if this.update(cx, |this, cx| if matches!(this.run, Run::App) { this.batch_app(step, cx) }).is_err() { break; }
+            }
+        }).detach();
+        let task = self.runtime.spawn(install(self.client.clone(), self.exe.clone(), offer, progress));
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let result = task.await.unwrap_or_else(|e| Err(e.to_string()));
@@ -1255,15 +1318,22 @@ impl Updater {
                 Ok(false) => {
                     this.end_intent();
                     crate::log_line("a release do app passou a exigir mais que a oferta aceita: nada foi trocado");
+                    this.batch_app(all::AppStep::Later, cx);
                     this.offer = None;
                     this.run = Run::Idle;
                     this.check_app(cx);
                     cx.notify();
                 }
                 Err(reason) => {
+                    this.batch_app(all::AppStep::Failed(reason.clone()), cx);
                     // O motivo não cabe na barra: vai no aviso e fica no tooltip do "Tentar de novo".
                     let _ = handle.update(cx, |_, window, cx| window.push_notification(Notification::error(reason.clone()).id::<Updater>(), cx));
-                    this.fail(reason, cx);
+                    // No lote a falha é do app, não do servidor desta máquina: a linha dele fica com o desfecho dela.
+                    if this.batch.is_some() {
+                        crate::log_line(&format!("update_all: troca do app falhou: {reason}"));
+                        this.end_intent(); this.run = Run::Failed(reason); cx.notify();
+                    }
+                    else { this.fail(reason, cx); }
                 }
             });
         }).detach();
@@ -1909,14 +1979,26 @@ mod tests {
     async fn download_tries_again_when_the_body_is_cut() {
         // Os 100 bytes só vêm na segunda conexão.
         let (url, _) = cut_release(vec![10, 100]).await;
-        let bytes = download(&reqwest::Client::new(), &url, Duration::ZERO).await.unwrap();
+        let seen = std::sync::Mutex::new(Vec::new());
+        let bytes = download(&reqwest::Client::new(), &url, Duration::ZERO, &|done, total| seen.lock().unwrap().push((done, total))).await.unwrap();
         assert_eq!(bytes, vec![7u8; 100]);
+        assert_eq!(seen.lock().unwrap().last(), Some(&(100, Some(100))), "a linha do app termina no total");
+    }
+
+    #[test]
+    fn app_progress_reports_each_percent_once() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let report = throttled(Arc::new(move |p| sink.lock().unwrap().push(p)));
+        for done in [0, 1, 2, 10, 11, 1000] { report(done, Some(1000)); }
+        assert_eq!(*seen.lock().unwrap(), [AppProgress::Bytes(0, Some(1000)), AppProgress::Bytes(10, Some(1000)),
+            AppProgress::Bytes(1000, Some(1000))]);
     }
 
     #[tokio::test]
     async fn download_failure_names_the_cause_without_the_url() {
         let (url, hits) = cut_release(vec![10, 10]).await;
-        let error = download(&reqwest::Client::new(), &url, Duration::ZERO).await.unwrap_err();
+        let error = download(&reqwest::Client::new(), &url, Duration::ZERO, &|_, _| {}).await.unwrap_err();
         assert_eq!(hits.load(Ordering::SeqCst), 2);
         assert!(!error.contains("127.0.0.1") && !error.contains("Hangar-linux-x86_64"), "{error}");
         assert_ne!(error, tr("app_update_download_failed").replace("{reason}", ""));

@@ -1578,7 +1578,7 @@ impl Hangar {
         self.api = Some(api.clone());
         self.server = Some(api.identity());
         if let Some((key, sessions, online, error, live_terms)) = previous {
-            self.remote.insert(key, servers::RemoteList { loaded: true, online, sessions, error, api: None, live_terms });
+            self.remote.insert(key, servers::RemoteList { loaded: true, online, sessions, error, api: None, live_terms, ..Default::default() });
         }
         self.start_remote_lists();
         self.sync_updater(cx);
@@ -2100,6 +2100,8 @@ impl Hangar {
                     };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
                     let (changed, gone) = self.receive_remote(generation, key.clone(), update, cx);
+                    // Sem `changed`: a mesma frase de erro pode trocar de "sem resposta" para "recusado".
+                    self.sync_updater_offline(cx);
                     if changed {
                         self.tour_dirty = true;
                         self.sidebar_sessions_changed(window, cx);

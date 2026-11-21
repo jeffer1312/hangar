@@ -125,13 +125,17 @@ export async function distinctMachines(servers: readonly Server[], opts: Pick<Up
   return (await readMachines(servers, opts)).targets;
 }
 
-/** `offline`: não respondeu à identidade (rede ou prazo, não um status HTTP). */
-async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'>): Promise<{ targets: Server[]; offline: Set<string> }> {
+/** `offline`: já sabida fora do ar (`known`, sem pedido nenhum) ou sem resposta à identidade (rede ou prazo, não um status HTTP). */
+async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'>
+  & { known?: (serverId: string) => boolean; identifyMs?: number }): Promise<{ targets: Server[]; offline: Set<string> }> {
   const candidates = ownUpdatableServers(servers);
   const offline = new Set<string>();
   const identities = await Promise.all(candidates.map(async (server) => {
+    // Sem a identidade, um endereço parado da mesma máquina que outro vivo (rede local e Tailscale) não se junta a ele e
+    // aparece como linha própria fora do ar; aceito, porque o vivo segue na rodada.
+    if (opts.known?.(server.id)) { offline.add(server.id); return ''; }
     try {
-      const response = await getIdentificadorEm(server, opts.fetch);
+      const response = await getIdentificadorEm(server, opts.fetch, opts.identifyMs);
       return typeof response.identificador === 'string' ? response.identificador.trim() : '';
     } catch (error) {
       registerDiagnostic({ evento: 'update_all.identity_failed', nivel: 'aviso',
@@ -149,28 +153,73 @@ async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOpti
   return { offline, targets: candidates.filter((server, index) => !identities[index] || representatives.get(identities[index]) === server) };
 }
 
-export interface MachineNotes { server: Server; notes: UpdateNotes | null }
-export interface PreparedUpdateAll { run: MachineNotes[]; failed: Server[] }
+/** `version`: "no ar → nova", da busca feita aqui; vazia quando o servidor não informa as duas. */
+export interface MachineNotes { server: Server; notes: UpdateNotes | null; version?: string }
+/** `failed`: todas as que ficam de fora; `offline` é a parte delas que está fora do ar; `reasons`, o motivo das outras. */
+export interface PreparedUpdateAll { run: MachineNotes[]; failed: Server[]; offline: Server[]; reasons?: Readonly<Record<string, string>> }
+
+/** O que a consulta antes da folha achou em cada máquina, para a linha dela aparecer enquanto as outras respondem. */
+export interface UpdateAllCheck {
+  status: 'consultando' | 'disponivel' | 'em_dia' | 'travado' | 'fora_do_ar' | 'falhou';
+  reason?: UpdateHoldReason;
+  error?: string;
+}
+
+export interface PrepareUpdateAllOptions extends Pick<UpdateAllOptions, 'last' | 'fetch'> {
+  /** Máquina que o app já sabe fora do ar: fica de fora sem pedido nenhum, em vez de esperar o prazo. */
+  knownOffline?: (serverId: string) => boolean;
+  onCheck?: (serverId: string, check: UpdateAllCheck) => void;
+  /** As que seguem depois da identidade: endereços repetidos da mesma máquina saem da lista. */
+  onTargets?: (servers: Server[]) => void;
+}
+
+function checkOf(snapshot: UpdateSnapshot): UpdateAllCheck {
+  const classification = classify(snapshot);
+  if (classification === 'iniciar') return { status: 'disponivel' };
+  if (classification === 'em_dia') return { status: 'em_dia' };
+  return { status: 'travado', reason: classification.slice(8) as UpdateHoldReason };
+}
 
 /** Avisos de cada máquina a atualizar; quem não responde fica de fora (`failed`), `null` = servidor antigo. */
-export async function prepareUpdateAll(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'> = {}): Promise<PreparedUpdateAll> {
-  const { targets, offline } = await readMachines(servers, opts);
+export async function prepareUpdateAll(servers: readonly Server[], opts: PrepareUpdateAllOptions = {}): Promise<PreparedUpdateAll> {
+  const report = (server: Server, check: UpdateAllCheck) => opts.onCheck?.(server.id, check);
+  for (const server of ownUpdatableServers(servers)) {
+    report(server, { status: opts.knownOffline?.(server.id) ? 'fora_do_ar' : 'consultando' });
+  }
+  // A folha espera todas as identidades antes de ler: máquina que não diz quem é em 5 s está fora.
+  const { targets, offline } = await readMachines(servers, { ...opts, known: opts.knownOffline, identifyMs: 5000 });
+  opts.onTargets?.(targets);
+  const reasons: Record<string, string> = {};
+  const leaveOut = (server: Server, error: string): null => {
+    reasons[server.id] = error;
+    report(server, { status: 'falhou', error });
+    return null;
+  };
   const read = await Promise.all(targets.map(async (server): Promise<MachineNotes | null> => {
     // Máquina desligada atrás de VPN não recusa a conexão: a busca esperaria o prazo inteiro e prenderia a folha.
-    if (offline.has(server.id)) return null;
+    if (offline.has(server.id)) { report(server, { status: 'fora_do_ar' }); return null; }
+    // Busca o alvo antes: sem isso os avisos podem ser os da versão anterior. Sem a busca, a máquina fica de fora como
+    // falha, igual ao app nativo: a linha vermelha nunca é uma máquina que segue atualizando.
+    let snapshot: Atualizacao;
     try {
-      // Busca o alvo antes: sem isso os avisos podem ser os da versão anterior. Falhou, segue com o alvo que ela tem; a
-      // releitura antes de iniciar (`refuseUnseenWarnings`) barra o que mudou.
-      await getAtualizacaoEm(server, true, opts.fetch).catch((error: unknown) => registerDiagnostic({
-        evento: 'update_all.search_failed', nivel: 'aviso', codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl));
-      return { server, notes: await getUpdateNotesEm(server, opts.fetch) };
+      snapshot = await getAtualizacaoEm(server, true, opts.fetch);
+    } catch (error) {
+      registerDiagnostic({ evento: 'update_all.search_failed', nivel: 'aviso', codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+      return leaveOut(server, errorMessage(error));
+    }
+    try {
+      const notes = await getUpdateNotesEm(server, opts.fetch);
+      report(server, checkOf(snapshot));
+      const v = snapshot.versao_legivel;
+      return { server, notes, version: v?.backend && v.remoto ? `${v.backend} → ${v.remoto}` : '' };
     } catch (error) {
       registerDiagnostic({ evento: 'update_all.notes_failed', nivel: 'aviso',
         codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
-      return null;
+      return leaveOut(server, m.update_notes_failed());
     }
   }));
-  return { run: read.filter((entry): entry is MachineNotes => entry !== null), failed: targets.filter((_, index) => !read[index]) };
+  return { run: read.filter((entry): entry is MachineNotes => entry !== null), reasons,
+    failed: targets.filter((_, index) => !read[index]), offline: targets.filter((server) => offline.has(server.id)) };
 }
 
 export interface UpdateAllState {
@@ -189,6 +238,8 @@ export interface UpdateAllOptions {
   last?: string;
   /** Aceite da folha por id de servidor, gravado antes de iniciar cada máquina. */
   accept?: Readonly<Record<string, UpdateAcceptance>>;
+  /** O que `prepareUpdateAll` já leu: as máquinas não são identificadas de novo e a busca não se repete. */
+  prepared?: PreparedUpdateAll;
   fetch?: typeof fetch;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -213,7 +264,9 @@ export async function updateAll(
 ): Promise<UpdateAllResult[]> {
   const now = opts.now ?? (() => performance.now());
   const sleep = opts.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const unique = await distinctMachines(servers, opts);
+  // Preparadas, as que chegam já são uma por máquina.
+  const unique = opts.prepared ? ownUpdatableServers(servers) : await distinctMachines(servers, opts);
+  const searched = new Set(opts.prepared?.run.map((entry) => entry.server.id));
 
   async function run(server: Server): Promise<UpdateAllResult> {
     let previous = '';
@@ -226,7 +279,8 @@ export async function updateAll(
     publish({ status: 'consultando', warnings: [] });
     let snapshot: Atualizacao;
     try {
-      snapshot = await getAtualizacaoEm(server, true, opts.fetch);
+      // Buscada antes da folha: a leitura sem procurar traz o alvo daquela busca e o estado de agora.
+      snapshot = await getAtualizacaoEm(server, !searched.has(server.id), opts.fetch);
     } catch (error) {
       return finish({ status: httpStatus(error) !== undefined ? 'falhou' : 'fora_do_ar', error: errorMessage(error), warnings: [] });
     }

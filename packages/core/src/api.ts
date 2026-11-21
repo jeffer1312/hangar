@@ -2892,8 +2892,8 @@ export async function putAutoReportEm(s: Server, value: boolean, fetcher?: typeo
   return res?.auto_report === true;
 }
 
-export function getIdentificadorEm(s: Server, fetcher?: typeof fetch): Promise<{ identificador: string; lan_url?: string }> {
-  return apiFetchForServer(s, '/api/peers/identificador', undefined, 8000, true, fetcher);
+export function getIdentificadorEm(s: Server, fetcher?: typeof fetch, timeoutMs = 8000): Promise<{ identificador: string; lan_url?: string }> {
+  return apiFetchForServer(s, '/api/peers/identificador', undefined, timeoutMs, true, fetcher);
 }
 
 /** O mesmo reinício, no servidor que a tela está editando (que pode não ser o ativo). */

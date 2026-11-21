@@ -1,4 +1,4 @@
-import { forClient, getArrivedNews, markArrivedSeen, registrarDiag, type PreparedUpdateAll, type Server, type UpdateAcceptance, type UpdateNews } from '@hangar/core';
+import { forClient, getArrivedNews, markArrivedSeen, registrarDiag, type PreparedUpdateAll, type Server, type UpdateAcceptance, type UpdateAllCheck, type UpdateNews } from '@hangar/core';
 import { prefs } from '../../stores/prefs';
 
 // Um id por instalação, o mesmo para todos os servidores: cada um guarda até onde este aparelho já viu.
@@ -93,18 +93,37 @@ export function markShownNews(serverId: string): void {
 /** Aceite dos avisos lidos, por id de servidor; vazio quando nenhum aviso apareceu. */
 export type UpdateAcceptances = Record<string, UpdateAcceptance>;
 
+export type MachineCheck = { server: Server; check: UpdateAllCheck };
+/** As linhas da consulta do "Atualizar todas", preenchidas enquanto cada máquina responde. */
+export type MachineChecks = { get: () => readonly MachineCheck[]; subscribe: (listener: () => void) => () => void;
+  set: (serverId: string, check: UpdateAllCheck) => void; keep: (servers: readonly Server[]) => void };
+
+/** Começa com todas as máquinas; `keep` tira os endereços repetidos depois da identidade, sem tirar as fora do ar. */
+export function createMachineChecks(servers: readonly Server[]): MachineChecks {
+  let rows: readonly MachineCheck[] = servers.map((server) => ({ server, check: { status: 'consultando' } }));
+  const listeners = new Set<() => void>();
+  const emit = (next: readonly MachineCheck[]) => { rows = next; listeners.forEach((listener) => listener()); };
+  return {
+    get: () => rows,
+    subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    set: (serverId, check) => emit(rows.map((row) => row.server.id === serverId ? { ...row, check } : row)),
+    keep: (kept) => emit(rows.filter((row) => kept.some((server) => server.id === row.server.id))),
+  };
+}
+
 // A rota da folha não recebe callback: quem pede confirmação deixa o pedido aqui e espera a resposta.
-// `machines`: no "Atualizar todas", os avisos de cada máquina, lidos por quem pediu.
-export type ConfirmRequest = { server: Server; count?: number; machines?: Promise<PreparedUpdateAll>;
+// `machines`: no "Atualizar todas", os avisos de cada máquina, lidos por quem pediu; `checks`, a linha de cada uma.
+export type ConfirmRequest = { server: Server; count?: number; machines?: Promise<PreparedUpdateAll>; checks?: MachineChecks;
   resolve: (ok: boolean, accept?: UpdateAcceptances) => void };
 let request: ConfirmRequest | null = null;
 
 /** `null` = cancelou. */
-export function requestUpdateConfirm(server: Server, open: () => void, count?: number, machines?: Promise<PreparedUpdateAll>): Promise<UpdateAcceptances | null> {
+export function requestUpdateConfirm(server: Server, open: () => void, count?: number, machines?: Promise<PreparedUpdateAll>,
+  checks?: MachineChecks): Promise<UpdateAcceptances | null> {
   request?.resolve(false);
   return new Promise((resolve) => {
     let done = false;
-    request = { server, count, machines, resolve: (ok, accept = {}) => {
+    request = { server, count, machines, checks, resolve: (ok, accept = {}) => {
       if (done) return; done = true; request = null; resolve(ok ? accept : null);
     } };
     open();
