@@ -971,7 +971,7 @@ impl Hangar {
         let name = source_name(&source);
         let video = match self.uploads_for(&key).local_path(&source) {
             Some(path) => Some(VideoSource::Local(path.to_string_lossy().into_owned())),
-            None => api.stream(&key.name, &source).and_then(|(url, token)| Upstream::new(&url, &token)).map(VideoSource::Remote),
+            None => api.media_url(&key.name, &source).and_then(|(url, token)| Upstream::new(&url, &token)).map(VideoSource::Remote),
         };
         let Some(video) = video else {
             self.action_feedback.insert(key, (tr("video_failed").replace("{reason}", &tr("video_no_route")), true));

@@ -7,6 +7,7 @@ pub struct Handle { _private: [u8; 0] }
 #[repr(C)]
 pub struct RenderContext { _private: [u8; 0] }
 
+#[cfg(test)]
 pub const FORMAT_NONE: c_int = 0;
 pub const FORMAT_FLAG: c_int = 3;
 pub const FORMAT_INT64: c_int = 4;

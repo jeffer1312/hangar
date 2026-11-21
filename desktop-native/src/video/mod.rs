@@ -237,12 +237,12 @@ impl VideoPlayer {
         div().id("video-stage").relative().size_full().cursor_pointer()
             .on_click(cx.listener(|this, _, _, cx| this.toggle(cx)))
             .child(frame)
-            .when_some(waiting, |el, text| el.child(div().absolute().inset_0().flex().items_center().justify_center().role(Role::Status)
+            .when_some(waiting, |el, text| el.child(div().id("video-waiting").absolute().inset_0().flex().items_center().justify_center().role(Role::Status)
                 .child(div().px_3().py_1().rounded_md().bg(theme::scrim()).text_sm().text_color(theme::muted()).child(text))))
             .into_any_element()
     }
 
-    fn render_controls(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_controls(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let state = &self.state;
         let ready = self.ready();
         let playing = ready && !state.paused && !state.ended;
@@ -287,6 +287,7 @@ impl VideoPlayer {
             .child(Button::new("video-fullscreen").ghost().small().icon(if full { IconName::Minimize } else { IconName::Maximize })
                 .tooltip(full_label.clone()).accessibility_label(full_label)
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_fullscreen(window, cx))))
+            .into_any_element()
     }
 }
 
@@ -298,7 +299,7 @@ impl Render for VideoPlayer {
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| window.focus(&this.focus, cx)))
             .size_full().flex().flex_col().gap_2()
             // Fundo preto: o quadro encaixado deixa sobra nos lados, como em qualquer player.
-            .child(div().flex_1().min_h_0().rounded_md().overflow_hidden().bg(black()).child(stage))
+            .child(div().flex_1().min_h_0().rounded_md().overflow_hidden().bg(gpui_kit::black()).child(stage))
             .child(controls)
     }
 }
