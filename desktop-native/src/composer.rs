@@ -99,19 +99,19 @@ pub fn mime_for(name: &str) -> &'static str {
 
 pub fn is_audio(name: &str) -> bool { mime_for(name).starts_with("audio/") }
 
-/// Abrir com o programa do sistema vale para todo tipo, menos o que o sistema executaria ou o que roda script: programa,
-/// script, atalho, instalador e documento ativo (html, svg). Esses só salvam: o arquivo pode vir de outra máquina.
+/// Abrir com o programa do sistema só vale para tipo passivo conhecido: imagem, vídeo, áudio, pdf, texto e dados,
+/// documento de escritório sem macro, pacote compactado e psd. O resto só salva: o arquivo pode vir de outra máquina, e
+/// a lista do que o sistema executaria (ou abre num programa que roda script) nunca fica completa.
 pub fn openable(name: &str) -> bool {
-    !matches!(extension(name).as_str(),
-        "html" | "htm" | "xhtml" | "shtml" | "mht" | "mhtml" | "svg" | "svgz" | "xml" | "xsl" | "hta"
-        | "desktop" | "sh" | "bash" | "zsh" | "fish" | "csh" | "ksh" | "command" | "tool" | "run" | "bin" | "appimage" | "out"
-        | "py" | "pyw" | "pl" | "rb" | "php" | "js" | "mjs" | "cjs" | "jse" | "vbs" | "vbe" | "wsf" | "wsh" | "ps1" | "psm1" | "psd1"
-        | "bat" | "cmd" | "com" | "exe" | "scr" | "pif" | "cpl" | "msi" | "msp" | "msc" | "dll" | "sys" | "reg" | "inf" | "lnk" | "url"
-        | "jar" | "jnlp" | "app" | "pkg" | "dmg" | "deb" | "rpm" | "apk" | "workflow" | "scpt" | "applescript" | "terminal" | "webloc"
-        | "library-ms" | "settingcontent-ms" | "appref-ms" | "application" | "gadget" | "ade" | "adp" | "chm" | "crx" | "xpi"
-        | "msix" | "msixbundle" | "appx" | "appxbundle" | "appinstaller" | "docm" | "dotm" | "xlsm" | "xlsb" | "xltm" | "xlam"
-        | "pptm" | "potm" | "ppsm" | "ppam"
-        | "")
+    matches!(extension(name).as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "heic" | "avif" | "ico"
+        | "mp4" | "mov" | "webm" | "mkv" | "m4v" | "avi"
+        | "mp3" | "wav" | "m4a" | "ogg" | "flac" | "aac" | "opus"
+        | "pdf"
+        | "txt" | "log" | "md" | "csv" | "tsv" | "json" | "yaml" | "yml" | "toml"
+        | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" | "rtf" | "epub"
+        | "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar"
+        | "psd")
 }
 
 /// O nome conferido tem de ser o do arquivo que o sistema vai receber: um symlink `a.pdf` pode apontar para `x.bat`.
@@ -810,6 +810,11 @@ mod tests {
         let en = parse_marked("look — 📎 image: /a/1.png 📎 file: /a/2.txt").unwrap();
         assert_eq!((en.caption.as_str(), en.files.clone(), en.image_marks), ("look", vec![(true, "1.png".into()), (false, "2.txt".into())], 1));
         assert_eq!(caption("look — 📎 file: /a/2.txt"), "look");
+        // A fala do vídeo vem colada ao último caminho e pode ter `/`: o nome é só o caminho, como no core.
+        let video = parse_marked("veja — 📎 arquivo: /u/1-v.mp4 fala do vídeo: \"abre src/app\"").unwrap();
+        assert_eq!(video.files, vec![(false, "1-v.mp4".into())]);
+        let frames = parse_marked("veja — 📎 arquivo: /u/1-v.mp4 📎 imagem: /u/f1.jpg fala do vídeo: \"a/b c\"").unwrap();
+        assert_eq!(frames.files, vec![(false, "1-v.mp4".into()), (true, "f1.jpg".into())]);
     }
 
     #[test]
@@ -964,11 +969,16 @@ mod tests {
         assert_eq!(safe_name("../../.bashrc"), "bashrc");
         assert_eq!(safe_name("C:\\x\\a<b>.txt"), "ab.txt");
         assert!(openable("r.pdf") && !openable("p.html") && !openable("i.svg") && !openable("run.desktop"));
-        for passive in ["a.zip", "b.docx", "c.xlsx", "d.pptx", "e.odt", "f.tar.gz", "g.7z", "h.epub", "i.psd", "j.MP4", "k.png"] {
+        for passive in ["a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp", "f.bmp", "g.tiff", "h.tif", "i.heic", "j.avif", "k.ico",
+            "l.MP4", "m.mov", "n.webm", "o.mkv", "p.m4v", "q.avi", "r.mp3", "s.wav", "t.m4a", "u.ogg", "v.flac", "w.aac", "x.opus",
+            "y.pdf", "z.txt", "a.log", "b.md", "c.csv", "d.tsv", "e.json", "f.yaml", "g.yml", "h.toml",
+            "i.doc", "j.docx", "k.xls", "l.xlsx", "m.ppt", "n.pptx", "o.odt", "p.ods", "q.odp", "r.rtf", "s.epub",
+            "t.zip", "u.tar", "v.tar.gz", "w.tgz", "x.bz2", "y.xz", "z.7z", "a.rar", "b.psd"] {
             assert!(openable(passive), "{passive} abre");
         }
-        for active in ["a.sh", "b.EXE", "c.bat", "d.ps1", "e.lnk", "f.jar", "g.app", "h.py", "i.js", "j.htm", "k.AppImage", "semextensao", "l.msi",
-            "m.msix", "n.appx", "o.appinstaller", "p.docm", "q.xlsm", "r.xlsb", "s.xltm", "t.xlam", "u.ppsm"] {
+        for active in ["a.sh", "b.EXE", "c.bat", "d.ps1", "e.lnk", "f.jar", "g.app", "h.py", "i.js", "j.htm", "k.html", "l.svg", "m.xml",
+            "n.xlsm", "o.xlsb", "p.xll", "q.scf", "r.sct", "s.vhdx", "t.iso", "u.img", "v.one", "w.diagcab", "x.search-ms", "y.fileloc",
+            "z.inetloc", "a.docm", "b.AppImage", "c.msi", "d.desktop", "semextensao", "ponto."] {
             assert!(!openable(active), "{active} só salva");
         }
         // Vale o nome do arquivo que o sistema recebe, já resolvido: `a.pdf` que aponta para `run.bat` não abre.

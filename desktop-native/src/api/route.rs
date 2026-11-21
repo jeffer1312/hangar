@@ -44,6 +44,20 @@ pub fn route_kind(address: &str) -> Option<RouteKind> {
     with(|t| t.get(&key)?.route.as_ref().map(|(_, kind)| *kind))
 }
 
+/// O caminho em uso chega à porta do dono (esta máquina, rede local, Tailscale ou endereço salvo direto). O bilhete
+/// de página é recusado na porta do Connect e na do convidado; sem rota decidida, também não.
+pub fn reaches_owner_port(address: &str) -> bool {
+    let Some(key) = key(address) else { return false };
+    with(|t| t.get(&key).and_then(|known| known.route.as_ref().map(|(route, kind)| owner_port(route, *kind, known.invite)))).unwrap_or(false)
+}
+
+// 8766 é o convidado, 8443 o Funnel dele, 8768 o Connect; `*.hangar.dev.br` é sempre Connect ou convidado.
+fn owner_port(route: &Url, kind: RouteKind, invite: bool) -> bool {
+    let other_port = matches!(route.port_or_known_default(), Some(8766 | 8768 | 8443))
+        || route.host_str().is_some_and(|host| host.to_ascii_lowercase().ends_with(".hangar.dev.br"));
+    !invite && kind != RouteKind::Connect && !other_port
+}
+
 /// Nome da tailnet ou faixa 100.64.0.0/10: costuma depender do Tailscale ligado neste aparelho.
 pub(crate) fn tailscale_host(base: &str) -> Option<String> {
     let url = Url::parse(base).ok()?;
@@ -851,6 +865,23 @@ mod tests {
         let cgnat = "http://100.64.0.2:8765";
         set_route(&key(cgnat).unwrap(), route_of(cgnat));
         assert_eq!(route_kind(cgnat), Some(RouteKind::Tailscale));
+    }
+
+    #[test]
+    fn page_ticket_only_goes_over_a_route_to_the_owner_port() {
+        let url = |raw: &str| Url::parse(raw).unwrap();
+        assert!(owner_port(&url("http://127.0.0.1:8765/"), RouteKind::Here, false));
+        assert!(owner_port(&url("http://192.168.0.7:8765/"), RouteKind::Local, false));
+        assert!(owner_port(&url("https://casa.tail.ts.net/"), RouteKind::Tailscale, false));
+        assert!(owner_port(&url("http://100.64.0.2:8765/"), RouteKind::Saved, false));
+        assert!(!owner_port(&url("https://casa.jeff.hangar.dev.br/"), RouteKind::Connect, false), "Connect");
+        assert!(!owner_port(&url("https://casa.jeff.hangar.dev.br/"), RouteKind::Saved, false), "Connect salvo como endereço");
+        assert!(!owner_port(&url("https://casa--guest.jeff.hangar.dev.br/"), RouteKind::Saved, true), "site do convidado");
+        assert!(!owner_port(&url("https://casa.tail.ts.net:8443/"), RouteKind::Tailscale, true), "Funnel do convidado");
+        assert!(!owner_port(&url("http://192.168.0.7:8766/"), RouteKind::Saved, false), "porta do convidado");
+        assert!(!owner_port(&url("http://127.0.0.1:8768/"), RouteKind::Here, false), "porta do Connect");
+        assert!(!owner_port(&url("http://192.168.0.7:8765/"), RouteKind::Saved, true), "servidor de convite");
+        assert!(!reaches_owner_port("http://page-ticket-undecided.example:8765"), "sem rota decidida");
     }
 
     #[test]

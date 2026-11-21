@@ -2409,7 +2409,11 @@ impl Hangar {
                 };
                 let started = std::time::Instant::now();
                 media::trace(format_args!("thumb installed {source:?}"));
-                for image in self.media.insert((key, source), state) { cx.drop_image(image, Some(window)); }
+                let slot = (key, source);
+                // A busca maior que falhou não apaga a miniatura que já estava na tela.
+                if matches!(state, MediaState::Image(_)) || !self.media.has_image(&slot) {
+                    for image in self.media.insert(slot, state) { cx.drop_image(image, Some(window)); }
+                }
                 let rows = self.row_ids.len();
                 if rows > 0 { self.follow_content_changed(cx); self.list_state.remeasure_items(0..rows); }
                 media::trace(format_args!("thumb install took {:.2} ms, remeasured {rows} rows", started.elapsed().as_secs_f64() * 1000.));
@@ -3677,11 +3681,17 @@ impl Hangar {
     fn ensure_media(&mut self, source: &Source, reveal: bool) {
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
         let slot = (key.clone(), source.clone());
-        if self.media.contains(&slot) { return; }
-        self.media.start(slot);
-        media::trace(format_args!("thumb start {source:?}"));
-        let (connection, tx, source, uploads) = (self.connection, self.tx.clone(), source.clone(), self.uploads_for(&key));
         let width = media::thumb_width(media::THUMB_BOX_SIDE, self.display_scale);
+        // Roda a cada quadro: a pasta da sessão só é olhada quando há o que buscar.
+        let fresh = !self.media.contains(&slot);
+        if fresh { self.media.start_at(slot, width); } else if !self.media.grow(&slot, width) { return; }
+        let uploads = self.uploads_for(&key);
+        // Miniatura de outra máquina vem reduzida ao `w` pedido: numa tela mais densa ela é pedida de novo, maior. A
+        // daqui é o arquivo inteiro, reduzido na decodificação a um tamanho fixo.
+        if !fresh && !matches!(uploads, disk::Uploads::Remote) { return; }
+        let reveal = reveal && fresh;
+        media::trace(format_args!("thumb start {source:?}"));
+        let (connection, tx, source) = (self.connection, self.tx.clone(), source.clone());
         self.runtime.spawn(async move {
             let started = std::time::Instant::now();
             let result = match uploads.fetch_preview(&api, &key.name, &source, width).await {
@@ -3704,12 +3714,12 @@ impl Hangar {
 
     /// "Abrir no navegador" aparece no HTML citado de sessão com conexão aberta, desta máquina ou de outra: o servidor
     /// devolve o endereço dele com o bilhete da página, refeito sobre a rota até ele. Só o navegador da sessão (Linux e
-    /// Windows) o abre.
+    /// Windows) o abre, e só quando a rota chega à porta do dono: o Connect e a porta do convidado recusam o bilhete.
     fn page_openable(&self, key: Option<&SessionKey>, source: &Source, name: &str) -> bool {
         cfg!(any(target_os = "linux", target_os = "windows"))
             && matches!(source, Source::Cited(_))
             && matches!(composer::extension(name).as_str(), "html" | "htm")
-            && key.and_then(|key| self.api_for(&key.server)).is_some()
+            && key.and_then(|key| self.api_for(&key.server)).is_some_and(|api| api::route::reaches_owner_port(&api.identity()))
     }
 
     /// O servidor guarda o HTML citado como página isolada da conversa (`file/page`, mesma autorização do `/file`) e
@@ -3717,7 +3727,8 @@ impl Hangar {
     // A sessão é a do cartão: na prévia de outra aba ela não é a selecionada.
     fn open_html_page(&mut self, key: SessionKey, source: Source, cx: &mut Context<Self>) {
         let Source::Cited(path) = &source else { return };
-        let Some(api) = self.api_for(&key.server) else { return };
+        // A rota pode ter mudado para o Connect depois do desenho do botão.
+        let Some(api) = self.api_for(&key.server).filter(|api| api::route::reaches_owner_port(&api.identity())) else { return };
         let (connection, tx, path) = (self.connection, self.tx.clone(), path.clone());
         self.file_cards.insert((key.clone(), source.clone()), FileCard::Busy);
         self.runtime.spawn(async move {
@@ -3756,18 +3767,12 @@ impl Hangar {
         if open && let Some(FileCard::Saved(saved)) = self.file_cards.get(&card) {
             let (saved, tx, connection) = (saved.clone(), self.tx.clone(), self.connection);
             self.runtime.spawn(async move {
-                let real = tokio::task::spawn_blocking(move || std::fs::canonicalize(&saved).ok().filter(|real| real.is_file()))
+                let real = tokio::task::spawn_blocking(move || std::fs::canonicalize(&saved).ok().filter(|real| real.is_file())
+                    .map(|real| real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(disk::plain_path(text)))))
                     .await.ok().flatten();
                 let result = real.map(|real| (real, false)).ok_or_else(|| (String::new(), true));
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, true, result) }).await;
             });
-            return;
-        }
-        if open && let Source::Cited(path) | Source::Workspace(path) = &source && let Some(real) = self.file_on_disk(path)
-            && composer::openable_path(&real) {
-            self.file_cards.remove(&card);
-            cx.open_with_system(&real);
-            cx.notify();
             return;
         }
         let (connection, tx, runtime, uploads) = (self.connection, self.tx.clone(), self.runtime.clone(), self.uploads_for(&key));

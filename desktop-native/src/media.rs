@@ -80,12 +80,16 @@ pub(crate) fn oriented(bytes: &[u8]) -> Option<DynamicImage> {
     Some(picture)
 }
 
-/// Só o começo do arquivo: um XML que abre com `<svg` (depois de declaração, comentário ou doctype).
+/// Um XML com `<svg` nos primeiros 64 KiB, antes de qualquer `<html`: declaração, licença ou metadados do editor podem
+/// vir na frente. HTML com SVG embutido não passa; o resto quem decide é o usvg, que só aceita raiz `<svg>`.
 fn looks_like_svg(bytes: &[u8]) -> bool {
-    let head = &bytes[..bytes.len().min(4096)];
-    let head = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
-    let start = head.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(head.len());
-    head[start..].starts_with(b"<") && head.windows(4).any(|w| w == b"<svg")
+    const HEAD: usize = 64 * 1024;
+    let text = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let start = text.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(text.len());
+    let head = text[start..text.len().min(start + HEAD)].to_ascii_lowercase();
+    let find = |needle: &[u8]| head.windows(needle.len()).position(|w| w == needle);
+    let html = [find(b"<html"), find(b"<!doctype html")].into_iter().flatten().min();
+    head.starts_with(b"<") && find(b"<svg").is_some_and(|svg| html.is_none_or(|html| svg < html))
 }
 
 /// SVG rasterizado aqui. `<image>` que aponta para arquivo do disco não é lido (o SVG pode vir de outra máquina e
@@ -238,7 +242,8 @@ fn cost(state: &MediaState) -> usize {
     }
 }
 
-struct Entry { state: MediaState, seen: u64, drawn: bool }
+/// `width`: o `w` com que a miniatura foi pedida (0 quando quem guarda não pede tamanho).
+struct Entry { state: MediaState, seen: u64, drawn: bool, width: u32 }
 
 /// Cache das prévias com teto: sai primeiro a menos vista, nunca uma desenhada no último quadro.
 pub struct MediaCache<K> { map: HashMap<K, Entry>, bytes: usize, frame: u64, budget: usize }
@@ -263,13 +268,30 @@ impl<K: Eq + Hash + Clone + std::fmt::Debug> MediaCache<K> {
     }
 
     /// Marca a busca em andamento; não pesa no teto e não expulsa nada.
-    pub fn start(&mut self, key: K) { self.map.insert(key, Entry { state: MediaState::Loading, seen: self.frame, drawn: false }); }
+    pub fn start(&mut self, key: K) { self.start_at(key, 0); }
 
-    /// Grava e devolve o que saiu pelo teto, para liberar do atlas da GPU.
+    /// `start` de miniatura pedida com largura `width`, guardada para `grow` comparar.
+    pub fn start_at(&mut self, key: K, width: u32) { self.map.insert(key, Entry { state: MediaState::Loading, seen: self.frame, drawn: false, width }); }
+
+    /// A tela ficou mais densa que a miniatura guardada: `true` manda buscar de novo em `width`. A imagem atual fica
+    /// até a nova chegar, e a largura já fica marcada, para o próximo quadro não pedir outra vez.
+    pub fn grow(&mut self, key: &K, width: u32) -> bool {
+        let Some(entry) = self.map.get_mut(key).filter(|entry| matches!(entry.state, MediaState::Image(_)) && width > entry.width) else { return false };
+        entry.width = width;
+        true
+    }
+
+    pub fn has_image(&self, key: &K) -> bool { self.map.get(key).is_some_and(|entry| matches!(entry.state, MediaState::Image(_))) }
+
+    /// Grava e devolve o que saiu pelo teto, e a imagem que a nova substituiu, para liberar do atlas da GPU.
     pub fn insert(&mut self, key: K, state: MediaState) -> Vec<Arc<RenderImage>> {
         self.bytes += cost(&state);
-        if let Some(old) = self.map.insert(key, Entry { state, seen: self.frame, drawn: false }) { self.bytes -= cost(&old.state); }
+        let width = self.map.get(&key).map_or(0, |entry| entry.width);
         let mut evicted = Vec::new();
+        if let Some(old) = self.map.insert(key, Entry { state, seen: self.frame, drawn: false, width }) {
+            self.bytes -= cost(&old.state);
+            if let MediaState::Image(image) = old.state { evicted.push(image); }
+        }
         while self.bytes > self.budget {
             let Some(victim) = self.map.iter()
                 .filter(|(_, entry)| entry.seen < self.frame && !matches!(entry.state, MediaState::Loading))
@@ -348,6 +370,23 @@ mod tests {
     }
 
     #[test]
+    fn denser_screen_asks_again_without_dropping_the_shown_thumbnail() {
+        let mut cache = MediaCache::new();
+        cache.start_at(0, 240);
+        assert!(!cache.grow(&0, 480), "em curso não pede de novo");
+        assert!(cache.insert(0, picture(4)).is_empty());
+        assert!(!cache.grow(&0, 240) && !cache.grow(&0, 200), "mesma largura ou menor fica");
+        assert!(cache.grow(&0, 480), "tela mais densa pede maior");
+        assert!(cache.has_image(&0), "a imagem atual fica até a nova chegar");
+        assert!(!cache.grow(&0, 480), "a largura já fica marcada");
+        assert_eq!(cache.insert(0, picture(8)).len(), 1, "a substituída sai do atlas");
+        assert_eq!(cache.bytes, 8 * 8 * 4);
+        assert!(!cache.grow(&0, 480) && cache.grow(&0, 600), "a largura sobrevive à troca da imagem");
+        cache.insert(1, MediaState::Failed("x".into()));
+        assert!(!cache.grow(&1, 1024) && !cache.has_image(&1), "falha não é pedida maior");
+    }
+
+    #[test]
     fn thumb_width_is_the_box_in_screen_pixels_within_the_server_range() {
         assert_eq!(thumb_width(THUMB_BOX_SIDE, 1.), 240);
         assert_eq!(thumb_width(THUMB_BOX_SIDE, 2.), 480);
@@ -377,6 +416,12 @@ mod tests {
         let _ = std::fs::remove_file(&secret);
         assert!(oriented(b"<html><body>svg</body></html>").is_none());
         assert!(oriented(b"texto qualquer <svg").is_none());
+        // Comentário longo (licença, metadados do editor) antes do `<svg`: passa do antigo corte de 4 KiB.
+        let commented = format!("<?xml version=\"1.0\"?><!-- {} -->{}", "x".repeat(20_000), std::str::from_utf8(square).unwrap().trim_start_matches("<?xml version=\"1.0\"?>"));
+        assert_eq!(oriented(commented.as_bytes()).map(|image| (image.width(), image.height())), Some((512, 256)));
+        assert!(!looks_like_svg(b"<!DOCTYPE html><html><body><svg xmlns=\"http://www.w3.org/2000/svg\"/></body></html>"), "HTML com SVG embutido");
+        assert!(!looks_like_svg(b"<HTML><svg/></HTML>"));
+        assert!(!looks_like_svg(format!("<?xml version=\"1.0\"?><!-- {} --><svg/>", "x".repeat(70_000)).as_bytes()), "além de 64 KiB");
     }
 
     #[test]

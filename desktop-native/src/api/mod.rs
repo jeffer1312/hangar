@@ -560,21 +560,25 @@ impl Api {
     /// vídeo, como quando a transcrição falha, e mostra o motivo. O prazo conta só o tempo sem resposta: `pending` o
     /// renova, porque a fila de vídeos do servidor é uma por vez.
     async fn upload_media(&self, name: &str, id: &str) -> Result<(Vec<String>, String), MediaGap> {
-        const UNANSWERED: Duration = Duration::from_secs(180);
-        let mut deadline = std::time::Instant::now() + UNANSWERED;
+        // O servidor segura cada pedido até ~45 s esperando a mídia: o pedido tem de durar mais que isso.
+        self.upload_media_within(name, id, Duration::from_secs(180), Duration::from_secs(50)).await
+    }
+
+    /// O prazo geral só é conferido entre pedidos: cortar um pedido pelo que sobra dele desistiria de uma resposta
+    /// que o servidor ainda ia dar dentro da espera dele.
+    async fn upload_media_within(&self, name: &str, id: &str, unanswered: Duration, request: Duration) -> Result<(Vec<String>, String), MediaGap> {
+        let mut deadline = std::time::Instant::now() + unanswered;
         loop {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() { return Err(MediaGap::Timeout); }
+            if std::time::Instant::now() >= deadline { return Err(MediaGap::Timeout); }
             let mut url = self.endpoint(Some(name), Some("upload-media"));
             url.query_pairs_mut().append_pair("id", id);
-            // O servidor segura cada pedido até ~45 s esperando a mídia.
-            let (status, body) = match self.client.get(url).timeout(left.min(Duration::from_secs(60))).send().await {
+            let (status, body) = match self.client.get(url).timeout(request).send().await {
                 Ok(r) => { let status = r.status().as_u16(); (Some(status), r.json::<Value>().await.ok()) }
                 Err(_) => (None, None),
             };
             match media_wait(status, body.as_ref()) {
                 MediaWait::Done(frames, transcript) => return Ok((frames, transcript)),
-                MediaWait::Pending => { deadline = std::time::Instant::now() + UNANSWERED; }
+                MediaWait::Pending => { deadline = std::time::Instant::now() + unanswered; }
                 MediaWait::GiveUp(gap) => return Err(gap),
                 MediaWait::Retry => {
                     let left = deadline.saturating_duration_since(std::time::Instant::now());
@@ -1364,6 +1368,34 @@ mod tests {
         for retry in [Some(408), Some(429), Some(500), Some(503), None] { assert_eq!(media_wait(retry, None), MediaWait::Retry, "{retry:?}"); }
         assert_eq!(media_wait(Some(200), None), MediaWait::Retry, "corpo ilegível");
         assert_eq!(media_wait(Some(200), Some(&json!({"status": "outro"}))), MediaWait::Retry);
+    }
+
+    #[tokio::test]
+    async fn media_request_outlives_the_overall_deadline_once_it_started() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                request.push_str(&line);
+                if line == "\r\n" { break; }
+            }
+            assert!(request.starts_with("GET /api/sessions/fixture/upload-media?id=m1 "), "{request}");
+            // Responde depois do prazo geral, como o servidor que segura o pedido esperando a mídia.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let body = r#"{"status":"done","frames":["/u/f1.jpg"],"transcript":"oi"}"#;
+            let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            stream.write_all(reply.as_bytes()).await.unwrap();
+        });
+        let api = super::Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
+        let got = api.upload_media_within("fixture", "m1", Duration::from_millis(100), Duration::from_secs(5)).await;
+        assert_eq!(got, Ok((vec!["/u/f1.jpg".to_owned()], "oi".to_owned())));
+        server.await.unwrap();
     }
 
     #[test]

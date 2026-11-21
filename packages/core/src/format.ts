@@ -541,8 +541,11 @@ export function parseImageMessage(text: string): { caption: string; filenames: s
   // quebrada, com a legenda do lado. Medido em 21/08/2026, mandando um print do celular pra uma
   // sessão no Windows. Dividir por `\` também é seguro no Linux: o nome é GERADO pelo servidor
   // (`<epoch>-<hex>.<ext>`, uploads.py:30) e nunca contém separador.
+  // A fala do vídeo (`composer_fala_video`) vem depois do último caminho dele e pode ter `/`: sai antes
+  // do basename. O nome gerado pelo servidor não tem espaço, então o que sobra depois dele também sai.
   for (let i = 1; i < parts.length; i += 2) {
-    const name = parts[i + 1].trim().split(/[\\/]/).filter(Boolean).pop();
+    const value = parts[i + 1].replace(/\s*(?:fala do vídeo|video speech):\s*"[\s\S]*$/, '').trim();
+    const name = value.split(/[\\/]/).filter(Boolean).pop()?.split(/\s/)[0];
     if (name) (isImageMark(parts[i]) ? filenames : files).push(name);
   }
   // `filenames` VAZIO nao e "nao e mensagem de imagem": e o caso mais comum do celular — UMA foto,
