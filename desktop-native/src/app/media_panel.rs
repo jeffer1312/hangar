@@ -159,6 +159,7 @@ impl Hangar {
         let ticket = self.media_panel.ticket();
         self.media_panel.asking = Some(ticket);
         let name = key.name.clone();
+        let retry = pending.clone();
         let job = self.runtime.spawn(async move {
             let mut found = Vec::new();
             // ponytail: lotes de 50, como a conferência dos chips; o servidor procura fora da pasta só 30 por pedido.
@@ -174,10 +175,14 @@ impl Hangar {
             found
         });
         cx.spawn(async move |this, cx| {
-            let found = job.await.unwrap_or_default();
+            let found = job.await.map_err(|error| crate::log_line(&format!("mídia: a tarefa dos tamanhos citados caiu: {error}")));
             let _ = this.update(cx, |this, cx| {
                 if !MediaPanel::settle(&mut this.media_panel.asking, ticket) { return; }
-                this.media_panel.cited.extend(found);
+                match found {
+                    Ok(found) => this.media_panel.cited.extend(found),
+                    // Sem resposta nenhuma, os caminhos saem da marcação e o próximo desenho pergunta de novo.
+                    Err(()) => for path in &retry { this.media_panel.cited.remove(path); },
+                }
                 this.media_panel.generation += 1;
                 this.redraw(Area::Side, cx);
                 cx.notify();
