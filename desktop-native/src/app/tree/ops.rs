@@ -185,7 +185,12 @@ impl Hangar {
                     this.tree_reload(cx);
                     then(this, value, window, cx);
                 }
-                Err(error) => window.push_notification(Notification::error(tr("tree_op_failed").replace("{reason}", &Self::fetch_failure(&error))), cx),
+                Err(error) => {
+                    // A frase do código do servidor (já existe, não sabe de nome…); sem ela, o motivo de sempre.
+                    let code = error.code.clone().unwrap_or_else(|| error.detail.clone());
+                    let reason = crate::i18n::tr_web(&code, &Default::default()).unwrap_or_else(|| Self::fetch_failure(&error));
+                    window.push_notification(Notification::error(tr("tree_op_failed").replace("{reason}", &reason)), cx);
+                }
             });
         }).detach();
     }

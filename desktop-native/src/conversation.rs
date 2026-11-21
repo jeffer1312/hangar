@@ -383,6 +383,8 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     let mut agent_ids: HashMap<&str, &str> = HashMap::new();
     let mut agent_descs: HashMap<&str, String> = HashMap::new();
     let mut agents = Vec::new();
+    // Início do último script do Code Mode: as chamadas de dentro dele só são gravadas quando ele termina.
+    let mut script_start: Option<f64> = None;
     let mut shells: Vec<ShellRun> = Vec::new();
     // Tarefas pelo número sequencial do TaskCreate; o `bool` marca a apagada. A lista do último TodoWrite vence.
     let mut created: Vec<(ActivityTask, bool)> = Vec::new();
@@ -528,11 +530,16 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                 }
                 let Some(id) = tool_key(event) else { continue };
                 match event.tool_name.as_deref() {
+                    Some("REPL") => { script_start = event.ts; }
                     name if is_agent_call(name) => {
                         agent_calls.insert(id);
                         if is_codex_agent_spawn(name) { codex_calls.insert(id); }
                         if let Some(raw) = text("description") { agent_descs.insert(id, raw); }
-                        agents.push(agent_run(event, i, id));
+                        let mut run = agent_run(event, i, id);
+                        // Lançado de dentro de um script: a linha tem a hora do fim do script, e o começo de verdade é
+                        // o do script (antes, o agente terminava "em 0 s").
+                        if id.starts_with("repl_") && script_start.is_some() { run.started_at = script_start; }
+                        agents.push(run);
                     }
                     Some("Bash") if input.and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) => {
                         shell_pending.insert(id);
@@ -767,6 +774,17 @@ pub fn clip(source: &str, max: usize) -> (&str, bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_agent_launched_inside_a_script_counts_from_the_script_start() {
+        let call = |id: &str, name: &str, ts: f64| ChatEvent { kind: "tool_use".into(), id: format!("e-{id}"), tool_use_id: Some(id.into()),
+            tool_name: Some(name.into()), tool_input: json!({"description": "busca"}).as_object().cloned(), ts: Some(ts), ..Default::default() };
+        let events = vec![call("toolu_script", "REPL", 100.0), call("repl_agent", "Agent", 160.0),
+            ChatEvent { kind: "tool_result".into(), id: "r1".into(), tool_use_id: Some("repl_agent".into()), result: Some("feito".into()),
+                ts: Some(160.0), ..Default::default() }];
+        let agent = fold_activity(&events).agents.into_iter().find(|a| a.id == "repl_agent").unwrap();
+        assert_eq!((agent.started_at, agent.finished_at), (Some(100.0), Some(160.0)));
+    }
+
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
