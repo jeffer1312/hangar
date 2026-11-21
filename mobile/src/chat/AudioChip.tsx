@@ -11,8 +11,10 @@ const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).
 
 // Tocador na própria bolha, como o <audio controls> do web. A fonte só entra no primeiro toque:
 // a lista monta várias bolhas, e cada uma baixaria o áudio sem ninguém pedir.
-export function AudioChip({ uri, headers, name, onRemove, disabled = false }: {
+export function AudioChip({ uri, headers, name, onRemove, disabled = false, meta }: {
   uri: string; headers?: Record<string, string>; name: string; onRemove?: () => void; disabled?: boolean;
+  /** Linha de detalhe (tamanho · origem); depois do primeiro toque o tempo de reprodução vem na frente. */
+  meta?: string;
 }) {
   const { theme } = useUnistyles();
   const player = useAudioPlayer(null);
@@ -63,9 +65,11 @@ export function AudioChip({ uri, headers, name, onRemove, disabled = false }: {
             {`${m.visor_nao_carregou()} (${status.error})`}
           </Text>
         ) : carregado ? (
-          <Text style={[styles.meta, { color: theme.tokens.text.muted }]}>
-            {status.duration > 0 ? `${mmss(status.currentTime)} / ${mmss(status.duration)}` : m.comum_carregando()}
+          <Text style={[styles.meta, { color: theme.tokens.text.muted }]} numberOfLines={1}>
+            {[status.duration > 0 ? `${mmss(status.currentTime)} / ${mmss(status.duration)}` : m.comum_carregando(), meta].filter(Boolean).join(' · ')}
           </Text>
+        ) : meta ? (
+          <Text style={[styles.meta, { color: theme.tokens.text.muted }]} numberOfLines={1}>{meta}</Text>
         ) : null}
       </View>
       {onRemove ? (

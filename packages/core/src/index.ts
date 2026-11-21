@@ -29,6 +29,7 @@ export * from './toolGroups';
 export * from './htmlPage';
 export * from './pensamento';
 export * from './arquivosCitados';
+export * from './conversationMedia';
 export * from './fileIcons';
 export * from './shortcuts';
 export * from './editdiff';

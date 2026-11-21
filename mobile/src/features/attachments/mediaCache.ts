@@ -27,6 +27,52 @@ export async function localCopy(uri: string, headers: Record<string, string> | u
   return target;
 }
 
+// Cópia guardada da tela "Mídia e arquivos". A chave é servidor + sessão + caminho, não a URL: a URL
+// muda com a rota (rede local ↔ Tailscale) e o arquivo baixado deixaria de ser achado sem conexão.
+function keptFile(key: string, name: string): File {
+  const dir = new Directory(Paths.cache, 'media-files');
+  dir.create({ idempotent: true, intermediates: true });
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+  return new File(dir, `${(h >>> 0).toString(36)}-${name.replace(/[^\w.-]/g, '_')}`);
+}
+
+/** A cópia já baixada, ou null. */
+export function keptCopy(key: string, name: string): File | null {
+  try {
+    const f = keptFile(key, name);
+    return f.exists ? f : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Baixa para a cópia guardada com progresso (0..1, ou null sem tamanho) e cancelamento pelo `signal`.
+ *  Vai para um nome temporário e só substitui a cópia ao terminar, como o `localCopy`. */
+export async function downloadKept(
+  key: string, uri: string, headers: Record<string, string> | undefined, name: string,
+  onProgress: (fraction: number | null) => void, signal: AbortSignal,
+): Promise<File> {
+  const target = keptFile(key, name);
+  const tmp = new File(target.parentDirectory, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.part`);
+  try {
+    const task = File.createDownloadTask(uri, tmp, {
+      headers,
+      // Fora do fundo: cancelar pela tela precisa do JS vivo, e o arquivo é pedido agora.
+      sessionType: 'foreground',
+      signal,
+      onProgress: ({ bytesWritten, totalBytes }) => onProgress(totalBytes > 0 ? Math.min(1, bytesWritten / totalBytes) : null),
+    });
+    const done = await task.downloadAsync();
+    if (!done) throw new Error('paused');
+    tmp.moveSync(target, { overwrite: true });
+  } catch (e) {
+    if (tmp.exists) tmp.delete();
+    throw e;
+  }
+  return target;
+}
+
 export async function openPdfFile(uri: string, headers: Record<string, string> | undefined, name: string, isMounted: () => boolean): Promise<void> {
   let file: File;
   try {
@@ -72,6 +118,9 @@ const MIME: Record<string, string> = {
   csv: 'text/csv', tsv: 'text/tab-separated-values', txt: 'text/plain',
   zip: 'application/zip', tar: 'application/x-tar', gz: 'application/gzip', tgz: 'application/gzip',
   '7z': 'application/x-7z-compressed', rar: 'application/vnd.rar',
+  // A tela "Mídia e arquivos" também entrega estes ao app do sistema depois de baixar.
+  pdf: 'application/pdf', html: 'text/html', htm: 'text/html',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', aac: 'audio/aac',
 };
 
 export function mimeType(name: string): string {
@@ -84,7 +133,11 @@ export function mimeType(name: string): string {
 // iOS: a folha não diz para onde o arquivo foi (Copiar, Mail, Salvar em Arquivos), então volta 'shared'.
 // Android: 'opened' = entregue ao app que lê o tipo; a cópia fica só no cache, não foi baixada.
 export async function deliverFile(uri: string, headers: Record<string, string> | undefined, name: string): Promise<'opened' | 'shared' | 'empty' | 'cancelled' | 'no-app'> {
-  const f = await localCopy(uri, headers, name);
+  return deliverLocalFile(await localCopy(uri, headers, name), name);
+}
+
+// Arquivo já no aparelho (baixado na tela "Mídia e arquivos"): entrega sem rede.
+export async function deliverLocalFile(f: File, name: string): Promise<'opened' | 'shared' | 'empty' | 'cancelled' | 'no-app'> {
   if (f.size === 0) return 'empty';
   if (Platform.OS === 'ios') {
     const r = await Share.share({ url: f.uri });

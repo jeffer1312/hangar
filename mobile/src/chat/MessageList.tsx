@@ -27,6 +27,9 @@ import { ProviderGlyph } from '../ui/ProviderGlyph';
 import { useCiteDialog } from '../stores/citeDialog';
 import { contextRefsKey } from '../stores/contextRefs';
 import { flashQuoteSource } from '../stores/quoteFlash';
+import { chatJumpRoute, consumeChatJump, JUMP_TTL_MS, useChatJump } from '../stores/chatJump';
+import { ConversationGallery, type ConversationGalleryHandle } from './ConversationGallery';
+import { GalleryContext } from './galleryContext';
 import { echoInQueuePanel, hexParaRgb, planDisplayText, type AgentRun, type ChatEvent, type QueuePanel, type SessionInfo, type StateEvent } from '@hangar/core';
 import { useAparencia } from '../stores/aparencia';
 import { TaskList } from './TaskList';
@@ -232,6 +235,23 @@ export function MessageList({
       }, 80);
     });
   }, [stopGesture]);
+  // "Na conversa" da galeria: o começo da mensagem no topo, acesa como a origem de uma citação.
+  const goToEvent = useCallback((eventId: string) => {
+    const i = dataRef.current.findIndex((r) => r.type === 'event' && r.ev.id === eventId);
+    if (i < 0 || !lista.current) return false;
+    flashQuoteSource(eventId);
+    stopGesture();
+    void lista.current.scrollToIndex({ index: i, animated: layoutRef.current.animated, viewPosition: 0, viewOffset: layoutRef.current.quoteGap });
+    return true;
+  }, [stopGesture]);
+  const gallery = useRef<ConversationGalleryHandle>(null);
+  const openGallery = useCallback((key: string) => gallery.current?.open(key) ?? false, []);
+  const jumpRoute = sessionName && serverId ? chatJumpRoute(serverId, sessionName) : null;
+  const jump = useChatJump((s) => (jumpRoute && s.request?.route === jumpRoute ? s.request : null));
+  useEffect(() => {
+    // Outra lista da mesma sessão (a de um subagente) não acha a mensagem e deixa o pedido para esta.
+    if (jump && Date.now() - jump.at < JUMP_TTL_MS && goToEvent(jump.eventId)) consumeChatJump(jump.n);
+  }, [jump, goToEvent]);
   const working = stateEvent?.state === 'working';
   const desde = !working ? null : projection.lastSent === null ? turnSeen
     : turnSeen === null ? projection.lastSent : Math.max(projection.lastSent, turnSeen);
@@ -428,6 +448,7 @@ export function MessageList({
   const elevado = hexParaRgb(theme.tokens.bg.elevated);
 
   return (
+    <GalleryContext.Provider value={jumpRoute ? openGallery : null}>
     <View style={styles.area} onLayout={(e) => setBoxWidth(e.nativeEvent.layout.width)}>
     {/* Leitura Folha: a folha atrás da conversa; a Solidez da folha diz quanto ela tapa o fundo. */}
     {folha !== null && elevado ? (
@@ -513,7 +534,11 @@ export function MessageList({
       </Pressable>
     ) : null}
     <ToolDetailSheet ref={detail} resultOf={resultDe} sessionName={sessionName} serverId={serverId} />
+    {sessionName && serverId ? (
+      <ConversationGallery ref={gallery} events={events} serverId={serverId} sessionName={sessionName} onShowInChat={goToEvent} />
+    ) : null}
     </View>
+    </GalleryContext.Provider>
   );
 }
 
