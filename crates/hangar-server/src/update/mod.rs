@@ -413,7 +413,9 @@ pub fn prune(layout: &Layout, previous: Option<&Path>, in_use: &dyn InUse) -> Pr
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with(".trash-") {
-            let _ = std::fs::remove_dir_all(&path);
+            if let Err(e) = std::fs::remove_dir_all(&path) && !held_by_process(&e) {
+                out.failed.push(format!("a sobra {name} de uma poda anterior não foi apagada: {e}"));
+            }
             continue;
         }
         // Só pasta de versão de verdade: `.tmp` de extração e links ficam.
@@ -987,7 +989,11 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
 
     let layout = job.layout.clone();
     let pruned = blocking(move || Ok(prune(&layout, previous.as_deref(), &*in_use))).await;
-    for failure in pruned.map_or_else(|e| vec![e.to_string()], |p| p.failed) {
+    let failed = pruned.map_or_else(|e| vec![e.to_string()], |p| {
+        for dir in &p.in_use { tracing::info!(path = %dir.display(), "update: versão em uso por um processo, fica para a próxima poda"); }
+        p.failed
+    });
+    for failure in failed {
         state.warn(&failure);
     }
     if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado"})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
