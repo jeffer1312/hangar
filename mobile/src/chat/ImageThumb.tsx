@@ -14,6 +14,8 @@ export interface MediaItem {
   headers?: Record<string, string>;
   name: string;
   kind: 'image' | 'video';
+  /** Versão reduzida pelo servidor para a miniatura; o visor abre sempre o `uri` original. */
+  thumbUri?: string;
 }
 
 interface Props {
@@ -54,13 +56,27 @@ function RevealImage({ uri, headers, ts, style, onError }: { uri: string; header
 export function ImageThumb({ items, index, style, revealTs }: Props) {
   const { theme } = useUnistyles();
   const [open, setOpen] = useState<number | null>(null);
-  const [falhou, setFalhou] = useState(false);
   const item = items[index];
+  // A miniatura reduzida que falha dá lugar ao original uma vez; só então a falha aparece.
+  const candidates = item.thumbUri && item.thumbUri !== item.uri ? [item.thumbUri, item.uri] : [item.uri];
+  // As falhas valem para estes endereços: a rota que muda (rede local ↔ Tailscale), mesmo de volta à anterior, tenta de novo.
+  const candidatesKey = candidates.join('\n');
+  const [fails, setFails] = useState<{ key: string; uris: readonly string[] }>({ key: candidatesKey, uris: [] });
+  if (fails.key !== candidatesKey) setFails({ key: candidatesKey, uris: [] });
+  const failedUris = fails.key === candidatesKey ? fails.uris : [];
+  const shown = candidates.find((uri) => !failedUris.includes(uri));
+  const setFalhou = () => {
+    if (shown === undefined) return;
+    setFails((prev) => {
+      const uris = prev.key === candidatesKey ? prev.uris : [];
+      return uris.includes(shown) ? prev : { key: candidatesKey, uris: [...uris, shown] };
+    });
+  };
   const cur = open !== null ? items[open] : null;
   const step = (dir: 1 | -1) => setOpen((i) => (i === null ? i : Math.min(items.length - 1, Math.max(0, i + dir))));
 
   // Falha não some calada nem vira quadrado vazio: fica o nome, como no web.
-  if (falhou) {
+  if (shown === undefined) {
     return (
       <View style={styles.broken}>
         <Text style={[styles.brokenTxt, { color: theme.tokens.text.muted }]} numberOfLines={1}>
@@ -78,9 +94,9 @@ export function ImageThumb({ items, index, style, revealTs }: Props) {
         accessibilityLabel={item.kind === 'video' ? m.anexos_tocar({ nome: item.name }) : m.anexos_ver({ n: item.name })}
       >
         {item.kind === 'image' && revealTs !== undefined ? (
-          <RevealImage uri={item.uri} headers={item.headers} ts={revealTs} style={style} onError={() => setFalhou(true)} />
+          <RevealImage uri={shown} headers={item.headers} ts={revealTs} style={style} onError={setFalhou} />
         ) : item.kind === 'image' ? (
-          <Image source={{ uri: item.uri, headers: item.headers }} style={style} contentFit="cover" transition={150} onError={() => setFalhou(true)} />
+          <Image source={{ uri: shown, headers: item.headers }} style={style} contentFit="cover" transition={150} onError={setFalhou} />
         ) : (
           // ponytail: sem expo-video não há quadro do vídeo; a miniatura é o ▶ e o nome.
           <View style={[style, styles.video]}>

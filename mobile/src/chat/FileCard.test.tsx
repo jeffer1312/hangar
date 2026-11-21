@@ -13,6 +13,7 @@ vi.mock('../paraglide/messages', () => ({
   file_card_download: () => 'download',
   file_card_downloading: () => 'downloading',
   file_card_saved: () => 'saved',
+  file_card_opened: () => 'opened',
   file_card_empty: () => 'empty',
   file_card_missing: () => 'missing',
   file_card_failed: () => 'failed',
@@ -41,7 +42,7 @@ const press = (c: HTMLElement) => act(async () => { c.querySelector('button')!.c
 
 describe('FileCard', () => {
   it('mostra nome e extensão e baixa pela ação do sistema', async () => {
-    let done!: (v: 'done') => void;
+    let done!: (v: 'opened') => void;
     deliver.mockReturnValue(new Promise((r) => { done = r; }));
     const c = await mount();
     expect(c.textContent).toContain('rel.docx');
@@ -50,8 +51,10 @@ describe('FileCard', () => {
     expect(deliver).toHaveBeenCalledWith(expect.stringContaining('rel.docx'), { Authorization: 'Bearer t' }, 'rel.docx');
     expect(c.textContent).toContain('downloading');
     expect(c.querySelector('button')!.disabled).toBe(true);
-    await act(async () => done('done'));
-    expect(c.textContent).toContain('saved');
+    // Android entregou ao app que lê o tipo: diz que abriu, não que baixou.
+    await act(async () => done('opened'));
+    expect(c.textContent).toContain('opened');
+    expect(c.textContent).not.toContain('saved');
     expect(c.querySelector('button')!.getAttribute('aria-label')).toBe('open rel.docx');
   });
 
@@ -67,7 +70,7 @@ describe('FileCard', () => {
     deliver.mockResolvedValue(r);
     const c = await mount();
     await press(c);
-    expect(c.textContent).not.toContain('saved');
+    expect(c.textContent).not.toContain('opened');
     expect(c.textContent).not.toContain('downloading');
   });
 

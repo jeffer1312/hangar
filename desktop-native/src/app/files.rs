@@ -71,8 +71,8 @@ pub(super) enum FileReply {
 }
 
 /// Da raiz, direto do disco (servidor nesta máquina); fora dela, pela rota de arquivo citado, que só serve o que a
-/// conversa mencionou.
-enum Picture { Disk(PathBuf), Loading, Ready(Arc<RenderImage>), Failed(String), Audio, Video }
+/// conversa mencionou. `Binary`: sem prévia (pdf, planilha, zip); fica o cartão de arquivo da conversa.
+enum Picture { Disk(PathBuf), Loading, Ready(Arc<RenderImage>), Failed(String), Audio, Video, Binary }
 
 struct Document {
     editor: Entity<EditorState>,
@@ -273,10 +273,13 @@ impl Hangar {
         self.files.serial += 1;
         let id = self.files.serial;
         let local = self.tree.local_root(&self.session_owner());
-        // A leitura de texto recusa binário: imagem vem do disco ou da rota de arquivo citado; áudio toca no player e
-        // vídeo abre no programa do sistema.
+        // A leitura de texto recusa binário: imagem vem do disco ou da rota de arquivo citado; áudio toca no player,
+        // vídeo abre no programa do sistema e documento binário fica no cartão de Abrir e Baixar. SVG é desenhado aqui,
+        // sem ler o que ele aponta no disco.
         let picture = if crate::audio::is_audio(&path) { Some(Picture::Audio) }
             else if crate::audio::is_video(&path) { Some(Picture::Video) }
+            else if is_binary_document(&path) { Some(Picture::Binary) }
+            else if composer::extension(&path) == "svg" { Some(Picture::Loading) }
             else { is_image(&path).then(|| local.as_ref().and_then(|root| super::tree::resolve(root, &path).ok())
                 .map_or(Picture::Loading, Picture::Disk)) };
         let fetch_picture = matches!(picture, Some(Picture::Loading));
@@ -290,8 +293,23 @@ impl Hangar {
         if fetch_picture {
             let (api, name, path, tx) = (api.clone(), key.name.clone(), path.clone(), tx.clone());
             self.runtime.spawn(async move {
-                let result = api.fetch(&name, &Source::Cited(path)).await.and_then(|bytes|
-                    crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None).ok_or_else(|| Failure::local(UNREADABLE_PICTURE)));
+                // Decodificar (SVG até 4096²) não pode ocupar uma das duas threads do runtime.
+                let kind = composer::extension(&path);
+                let result = match api.fetch(&name, &Source::Cited(path)).await {
+                    Ok(bytes) => match tokio::task::spawn_blocking(move || crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None)).await {
+                        Ok(Some(picture)) => Ok(picture),
+                        // A tela diz só que não deu para ler; o diário guarda qual dos dois casos foi.
+                        Ok(None) => {
+                            crate::log_line(&format!("arquivos: imagem .{kind} não decodificou"));
+                            Err(Failure::local(UNREADABLE_PICTURE))
+                        }
+                        Err(error) => {
+                            crate::log_line(&format!("arquivos: a tarefa que decodificava a imagem .{kind} não terminou: {error}"));
+                            Err(Failure::local(UNREADABLE_PICTURE))
+                        }
+                    },
+                    Err(error) => Err(error),
+                };
                 let _ = tx.send(Envelope { connection, selection, payload: Payload::FileView(FileReply::Picture(id, result)) }).await;
             });
         }
@@ -369,6 +387,12 @@ impl Hangar {
             }
         };
         let Some(ix) = self.files.tabs.iter().position(|tab| tab.id == id) else { return };
+        // Binário que a extensão não denunciou: o mesmo cartão de Abrir e Baixar, em vez de só dizer "arquivo binário".
+        if matches!(&result, Err(error) if error.status == Some(415)) {
+            self.files.tabs[ix].picture = Some(Picture::Binary);
+            cx.notify();
+            return;
+        }
         let path = &self.files.tabs[ix].path;
         let word_wrap = self.files.word_wrap;
         self.files.tabs[ix].content = Some(result.map(|mut content| {
@@ -667,7 +691,6 @@ impl Hangar {
 
     fn open_file_video(&mut self, cx: &mut Context<Self>) {
         let path = self.files.tabs[self.files.active].path.clone();
-        if let Some(real) = self.file_on_disk(&path) { cx.open_with_system(&real); return; }
         let name = composer::basename(&path).to_owned();
         self.keep_file(Source::Cited(path), name, true, cx);
     }
@@ -799,11 +822,32 @@ impl Hangar {
                     .child(self.audio_controls(&format!("file:{id}"), move |this, cx| this.play_file_audio(id, path.clone(), cx), cx))
                     .into_any_element()
             }
-            (Some(Picture::Video), _) => div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
-                .child(div().text_sm().text_color(theme::muted()).child(tr("file_video_external")))
-                .child(Button::new("file-video-open").outline().small().label(tr("file_video_open"))
-                    .on_click(cx.listener(|this, _, _, cx| this.open_file_video(cx))))
-                .into_any_element(),
+            (Some(Picture::Video), _) => {
+                // Vídeo de outra máquina é baixado antes de abrir: o botão para e o estado do download aparece.
+                let card = self.selected_key().and_then(|key| self.file_cards.get(&(key, Source::Cited(tab.path.clone())))).cloned();
+                let busy = matches!(card, Some(FileCard::Busy));
+                let note = match card {
+                    Some(FileCard::Busy) => Some((activity::web("file_card_downloading"), theme::muted())),
+                    Some(FileCard::Missing) => Some((activity::web("file_card_missing"), theme::warning_text())),
+                    Some(FileCard::Empty) => Some((activity::web("file_card_empty"), theme::warning_text())),
+                    Some(FileCard::Failed(error)) => Some((format!("{} · {error}", activity::web("file_card_failed")), theme::warning_text())),
+                    _ => None,
+                };
+                div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
+                    .child(div().text_sm().text_color(theme::muted()).child(tr("file_video_external")))
+                    .child(Button::new("file-video-open").outline().small().label(tr("file_video_open")).disabled(busy)
+                        .on_click(cx.listener(|this, _, _, cx| this.open_file_video(cx))))
+                    .when_some(note, |el, (text, color)| el.child(div().id("file-video-state").role(Role::Status)
+                        .text_xs().text_color(color).child(text)))
+                    .into_any_element()
+            }
+            (Some(Picture::Binary), _) => {
+                let (key, name) = (self.selected_key(), composer::basename(&tab.path).to_owned());
+                div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
+                    .child(div().text_sm().text_color(theme::muted()).child(tr("file_no_preview")))
+                    .child(self.session_file_card(&format!("file-view-{}", tab.id), 0, key.as_ref(), Source::Cited(tab.path.clone()), name, cx))
+                    .into_any_element()
+            }
             (Some(Picture::Loading), _) | (None, None) => state(tr("file_loading"), theme::faint()),
             (Some(Picture::Failed(error)), _) | (None, Some(Err(error))) => state(error.clone(), theme::danger()),
             (None, Some(Ok(doc))) if tab.reader.mode.reading() && doc.table.is_some() =>
@@ -897,6 +941,14 @@ fn link_target(document: &str, url: &str) -> Option<String> {
     Some(parts.join(if windows { "\\" } else { "/" }))
 }
 
+/// Documentos, pacotes e formatos sem prévia aqui que a leitura de texto recusaria: vão direto ao cartão de arquivo.
+fn is_binary_document(path: &str) -> bool {
+    matches!(composer::extension(path).as_str(),
+        "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp" | "epub"
+        | "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "iso" | "dmg" | "jar" | "apk" | "exe" | "msi"
+        | "woff" | "woff2" | "ttf" | "otf" | "sqlite" | "db" | "psd" | "tif" | "tiff" | "ico" | "heic" | "avif")
+}
+
 fn is_image(path: &str) -> bool {
     let extension = std::path::Path::new(path).extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
@@ -904,6 +956,12 @@ fn is_image(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn binary_documents_go_to_the_file_card_without_a_text_read() {
+        for path in ["out/r.PDF", "/tmp/a.docx", "b.xlsx", "c.zip", "d.tar.gz", "e.7z", "f.avif"] { assert!(super::is_binary_document(path), "{path}"); }
+        for path in ["src/main.rs", "README.md", "dados.csv", "f.png", "g.svg", "h.mp4", "sem_extensao"] { assert!(!super::is_binary_document(path), "{path}"); }
+    }
+
     #[test]
     fn file_language_maps_compiled_grammars_and_plain_text() {
         for (path, expected) in [

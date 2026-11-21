@@ -1484,19 +1484,28 @@ impl NewSession {
                 }
             };
             match (first, opened) {
-                (Some((selection, text, files)), Ok(opened)) => {
+                (Some((selection, text, files)), Ok(mut opened)) => {
                     // Os anexos sobem pela rota do servidor, na sessão que acabou de nascer; um que falhe segura a mensagem.
                     let mut uploads = Vec::new();
                     let mut failed = None;
+                    let mut gaps = Vec::new();
                     for (file, bytes, image) in files {
                         match api.upload(&opened.session.name, &file, composer::mime_for(&file), bytes.to_vec()).await {
-                            Ok(up) => uploads.push((image, up)),
+                            Ok(up) => {
+                                if let Some(gap) = up.note { gaps.push(format!("{file}: {}", gap.shown())); }
+                                uploads.push((image, up));
+                            }
                             // O aviso diz qual arquivo segurou a mensagem; ela não saiu, então a falha é certa.
                             Err(error) => { failed = Some(Failure::local(format!("{file}: {}", Hangar::failure(&error)))); break; }
                         }
                     }
                     let message = composer::compose_prompt(&text, &uploads, |speech| tr("attach_video_speech").replace("{texto}", speech));
                     let result = match failed { Some(error) => Err(error), None => api.send(&opened.session.name, &message).await };
+                    // Como no campo da conversa: o vídeo que foi sem quadros nem fala fica dito, senão o agente o recebe calado.
+                    if result.is_ok() && !gaps.is_empty() {
+                        let gaps = gaps.join(" ");
+                        opened.warning = Some(match opened.warning.take() { Some(warning) => format!("{warning} {gaps}"), None => gaps });
+                    }
                     send(CreateReply::CreatedWithInput(seq, selection, text, message, result, Ok(opened))).await;
                 }
                 (_, opened) => send(CreateReply::Created(seq, opened)).await,

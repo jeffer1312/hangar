@@ -3,7 +3,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { apiEnv, configureApi, _resetApiEnvForTests } from './apiEnv';
 import { fetchCostsForServer, openEventStream, openEventStreamForServer, openSessionsStream, probeServerResponse } from './api';
 import { hmacSha256Hex, sha256Hex } from './hmac';
-import { baseOf, decidirRota, discoverConnectRoute, discoverRemoteRoute, esquecerRota, readConnectUrl, routeKind, verifyServerIdentity, _resetRotasForTests } from './rota';
+import { baseOf, decidirRota, discoverConnectRoute, discoverRemoteRoute, esquecerRota, readConnectUrl, routeKind, subscribeRoutes, verifyServerIdentity, _resetRotasForTests } from './rota';
 import type { LanInfo, Server } from './servers';
 
 const TS = 'https://maq.tail.ts.net';
@@ -328,6 +328,42 @@ describe('rota até o servidor', () => {
     await decidirRota(srv());
     expect(baseOf(srv())).toBe(LAN);
     expect(lembrados.s1).toEqual({ url: LAN, id: 'maq' });
+  });
+
+  it('avisa quem assina quando a rota muda ou é esquecida, e não repete a mesma rota', async () => {
+    env(null);
+    rede({ [TS]: maq, [LAN]: maqLocal });
+    const listener = vi.fn();
+    const stop = subscribeRoutes(listener);
+    await decidirRota(srv());
+    expect(baseOf(srv())).toBe(LAN);
+    expect(listener).toHaveBeenCalledTimes(1);
+    esquecerRota('s1');
+    expect(listener).toHaveBeenCalledTimes(2);
+    esquecerRota('s1');
+    expect(listener).toHaveBeenCalledTimes(2);
+    await decidirRota(srv({ url: LAN, id: 'maq' }));
+    expect(listener).toHaveBeenCalledTimes(3);
+    await decidirRota(srv({ url: LAN, id: 'maq' }));
+    expect(listener).toHaveBeenCalledTimes(3);
+    stop();
+    esquecerRota('s1');
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it('ouvinte que lança não para os outros nem a troca de rota', async () => {
+    env(null);
+    rede({ [TS]: maq, [LAN]: maqLocal });
+    const after = vi.fn();
+    const stopBad = subscribeRoutes(() => { throw new Error('ouvinte quebrado'); });
+    const stopAfter = subscribeRoutes(after);
+    await expect(decidirRota(srv())).resolves.toBeUndefined();
+    expect(baseOf(srv())).toBe(LAN);
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(() => esquecerRota('s1')).not.toThrow();
+    expect(after).toHaveBeenCalledTimes(2);
+    stopBad();
+    stopAfter();
   });
 
   it('o token nunca vai pro endereço local antes da prova', async () => {

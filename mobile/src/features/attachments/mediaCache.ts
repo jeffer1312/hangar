@@ -82,7 +82,8 @@ export function mimeType(name: string): string {
 // compartilha arquivo pelo Share do RN, então abre direto no app que lê o tipo. 'empty' = o servidor
 // mandou 0 bytes e não há o que entregar.
 // iOS: a folha não diz para onde o arquivo foi (Copiar, Mail, Salvar em Arquivos), então volta 'shared'.
-export async function deliverFile(uri: string, headers: Record<string, string> | undefined, name: string): Promise<'done' | 'shared' | 'empty' | 'cancelled' | 'no-app'> {
+// Android: 'opened' = entregue ao app que lê o tipo; a cópia fica só no cache, não foi baixada.
+export async function deliverFile(uri: string, headers: Record<string, string> | undefined, name: string): Promise<'opened' | 'shared' | 'empty' | 'cancelled' | 'no-app'> {
   const f = await localCopy(uri, headers, name);
   if (f.size === 0) return 'empty';
   if (Platform.OS === 'ios') {
@@ -96,7 +97,7 @@ export async function deliverFile(uri: string, headers: Record<string, string> |
     if (String(e instanceof Error ? e.message : e).includes('ActivityNotFoundException')) return 'no-app';
     throw e;
   }
-  return 'done';
+  return 'opened';
 }
 
 // Imagem do visor: no iOS a folha já traz "Salvar imagem"; no Android vai direto para a galeria.

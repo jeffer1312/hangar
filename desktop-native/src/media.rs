@@ -17,6 +17,21 @@ const GIF_FRAMES: usize = 240;
 
 pub enum MediaState { Loading, Image(Arc<RenderImage>), Failed(String) }
 
+/// Lado menor da maior caixa de miniatura da conversa (a prévia de 320×240 com `contain`). A bolha do usuário (96 px)
+/// usa a mesma: as duas dividem o cache, e uma miniatura pedida menor ficaria borrada na prévia.
+pub const THUMB_BOX_SIDE: f32 = 240.;
+// SVG não tem tamanho de pixel: o lado maior fica entre estes, e vetor ampliado continua nítido.
+const SVG_MIN_SIDE: f32 = 512.;
+const SVG_MAX_SIDE: f32 = 4096.;
+
+/// `w` das rotas de miniatura do servidor (o lado menor da imagem reduzida, de 16 a 1024): a caixa em pixels da tela.
+pub fn thumb_width(side: f32, scale: f32) -> u32 {
+    let scale = if scale.is_finite() && scale > 0. { scale } else { 1. };
+    let physical = side * scale;
+    if !physical.is_finite() { return 1024; }
+    (physical.ceil().max(0.) as u32).clamp(16, 1024)
+}
+
 // Fundo de tela: o arquivo escolhido é copiado inteiro até este tamanho e desenhado reduzido a este lado.
 pub const BACKDROP_MAX_BYTES: u64 = 25 * 1024 * 1024;
 const BACKDROP_SIDE: u32 = 2560;
@@ -54,7 +69,7 @@ fn limits() -> Limits {
 
 /// A imagem inteira, com limite de memória e já de pé pela orientação EXIF (foto de celular): é assim que ela aparece.
 pub(crate) fn oriented(bytes: &[u8]) -> Option<DynamicImage> {
-    let format = sniff(bytes)?;
+    let Some(format) = sniff(bytes) else { return svg(bytes) };
     // GIF aqui guarda só o 1º quadro; quem anima é `animated`.
     let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
     reader.limits(limits());
@@ -63,6 +78,50 @@ pub(crate) fn oriented(bytes: &[u8]) -> Option<DynamicImage> {
     let mut picture = DynamicImage::from_decoder(decoder).ok()?;
     picture.apply_orientation(orientation);
     Some(picture)
+}
+
+/// Um XML com `<svg` nos primeiros 64 KiB, antes de qualquer `<html`: declaração, licença ou metadados do editor podem
+/// vir na frente. HTML com SVG embutido não passa; o resto quem decide é o usvg, que só aceita raiz `<svg>`.
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    const HEAD: usize = 64 * 1024;
+    let text = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let start = text.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(text.len());
+    let head = text[start..text.len().min(start + HEAD)].to_ascii_lowercase();
+    let find = |needle: &[u8]| head.windows(needle.len()).position(|w| w == needle);
+    let html = [find(b"<html"), find(b"<!doctype html")].into_iter().flatten().min();
+    head.starts_with(b"<") && find(b"<svg").is_some_and(|svg| html.is_none_or(|html| svg < html))
+}
+
+/// SVG rasterizado aqui. `<image>` que aponta para arquivo do disco não é lido (o SVG pode vir de outra máquina e
+/// desenharia um arquivo desta), e o texto sai com a fonte do app, igual em toda máquina.
+fn svg(bytes: &[u8]) -> Option<DynamicImage> {
+    use resvg::{tiny_skia, usvg};
+    static FONTS: std::sync::OnceLock<Arc<usvg::fontdb::Database>> = std::sync::OnceLock::new();
+    if !looks_like_svg(bytes) { return None; }
+    let mut options = usvg::Options::default();
+    options.image_href_resolver.resolve_string = Box::new(|_: &str, _: &usvg::Options| -> Option<usvg::ImageKind> { None });
+    options.fontdb = FONTS.get_or_init(|| {
+        let mut fonts = usvg::fontdb::Database::new();
+        fonts.load_font_data(include_bytes!("../assets/fonts/Geist-SemiBold.ttf").to_vec());
+        fonts.load_font_data(include_bytes!("../assets/fonts/Geist-Bold.ttf").to_vec());
+        Arc::new(fonts)
+    }).clone();
+    let tree = usvg::Tree::from_data(bytes, &options).ok()?;
+    let size = tree.size();
+    let long = size.width().max(size.height());
+    if !long.is_finite() || long <= 0. { return None; }
+    let scale = long.clamp(SVG_MIN_SIDE, SVG_MAX_SIDE) / long;
+    let (w, h) = ((size.width() * scale).ceil().max(1.) as u32, (size.height() * scale).ceil().max(1.) as u32);
+    let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
+    resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    // O tiny-skia guarda alfa pré-multiplicado; o resto do caminho espera alfa reto.
+    let mut data = pixmap.take();
+    for pixel in data.chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        if alpha == 0 || alpha == 255 { continue; }
+        for channel in &mut pixel[..3] { *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8; }
+    }
+    RgbaImage::from_raw(w, h, data).map(DynamicImage::ImageRgba8)
 }
 
 /// Decodifica com limite de memória e reduz ao lado pedido; `None` = bytes que não são imagem legível.
@@ -183,7 +242,8 @@ fn cost(state: &MediaState) -> usize {
     }
 }
 
-struct Entry { state: MediaState, seen: u64, drawn: bool }
+/// `width`: o maior `w` já pedido (0 quando quem guarda não pede tamanho); `installed`: o da imagem guardada.
+struct Entry { state: MediaState, seen: u64, drawn: bool, width: u32, installed: u32 }
 
 /// Cache das prévias com teto: sai primeiro a menos vista, nunca uma desenhada no último quadro.
 pub struct MediaCache<K> { map: HashMap<K, Entry>, bytes: usize, frame: u64, budget: usize }
@@ -208,13 +268,41 @@ impl<K: Eq + Hash + Clone + std::fmt::Debug> MediaCache<K> {
     }
 
     /// Marca a busca em andamento; não pesa no teto e não expulsa nada.
-    pub fn start(&mut self, key: K) { self.map.insert(key, Entry { state: MediaState::Loading, seen: self.frame, drawn: false }); }
+    pub fn start(&mut self, key: K) { self.start_at(key, 0); }
 
-    /// Grava e devolve o que saiu pelo teto, para liberar do atlas da GPU.
+    /// `start` de miniatura pedida com largura `width`, guardada para `grow` comparar.
+    pub fn start_at(&mut self, key: K, width: u32) { self.map.insert(key, Entry { state: MediaState::Loading, seen: self.frame, drawn: false, width, installed: 0 }); }
+
+    /// A tela ficou mais densa que a miniatura guardada: `true` manda buscar de novo em `width`. A imagem atual fica
+    /// até a nova chegar, e a largura já fica marcada, para o próximo quadro não pedir outra vez.
+    pub fn grow(&mut self, key: &K, width: u32) -> bool {
+        let Some(entry) = self.map.get_mut(key).filter(|entry| matches!(entry.state, MediaState::Image(_)) && width > entry.width) else { return false };
+        entry.width = width;
+        true
+    }
+
+    pub fn has_image(&self, key: &K) -> bool { self.map.get(key).is_some_and(|entry| matches!(entry.state, MediaState::Image(_))) }
+
+    /// Grava e devolve o que saiu pelo teto, e a imagem que a nova substituiu, para liberar do atlas da GPU.
     pub fn insert(&mut self, key: K, state: MediaState) -> Vec<Arc<RenderImage>> {
+        let installed = self.map.get(&key).map_or(0, |entry| entry.installed);
+        self.insert_sized(key, state, installed)
+    }
+
+    /// `insert` de miniatura pedida com `width`: resposta mais estreita que a imagem já guardada chegou atrasada
+    /// (buscas de tamanhos diferentes terminam fora de ordem) e é devolvida para liberar, sem trocar a maior.
+    pub fn insert_sized(&mut self, key: K, state: MediaState, installed: u32) -> Vec<Arc<RenderImage>> {
+        if let (MediaState::Image(late), Some(entry)) = (&state, self.map.get(&key))
+            && matches!(entry.state, MediaState::Image(_)) && installed < entry.installed {
+            return vec![late.clone()];
+        }
         self.bytes += cost(&state);
-        if let Some(old) = self.map.insert(key, Entry { state, seen: self.frame, drawn: false }) { self.bytes -= cost(&old.state); }
+        let width = self.map.get(&key).map_or(installed, |entry| entry.width.max(installed));
         let mut evicted = Vec::new();
+        if let Some(old) = self.map.insert(key, Entry { state, seen: self.frame, drawn: false, width, installed }) {
+            self.bytes -= cost(&old.state);
+            if let MediaState::Image(image) = old.state { evicted.push(image); }
+        }
         while self.bytes > self.budget {
             let Some(victim) = self.map.iter()
                 .filter(|(_, entry)| entry.seen < self.frame && !matches!(entry.state, MediaState::Loading))
@@ -226,6 +314,13 @@ impl<K: Eq + Hash + Clone + std::fmt::Debug> MediaCache<K> {
         }
         trace(format_args!("cache {} entries, {:.1} MiB, evicted {}", self.map.len(), self.bytes as f64 / 1048576., evicted.len()));
         evicted
+    }
+
+    /// Tira a falha guardada para a próxima leitura buscar de novo. Só a falha: imagem ou busca em curso ficam.
+    pub fn retry(&mut self, key: &K) -> bool {
+        if !self.map.get(key).is_some_and(|entry| matches!(entry.state, MediaState::Failed(_))) { return false; }
+        if let Some(entry) = self.map.remove(key) { self.bytes -= cost(&entry.state); }
+        true
     }
 
     /// Esvazia tudo (inclusive o que estava "Carregando") e devolve as imagens para liberar.
@@ -270,6 +365,86 @@ mod tests {
         assert_eq!(evicted.len(), 1);
         assert!(cache.contains(&0) && cache.contains(&1) && !cache.contains(&2));
         assert!(cache.bytes <= BUDGET);
+    }
+
+    #[test]
+    fn retry_drops_only_a_failure() {
+        let mut cache = MediaCache::new();
+        cache.insert(0, MediaState::Failed("x".into()));
+        cache.insert(1, picture(4));
+        cache.start(2);
+        assert!(cache.retry(&0) && !cache.contains(&0), "a falha sai e a próxima leitura busca de novo");
+        assert!(!cache.retry(&1) && cache.contains(&1), "imagem pronta fica");
+        assert!(!cache.retry(&2) && cache.contains(&2), "busca em curso fica");
+        assert!(!cache.retry(&3));
+        assert_eq!(cache.bytes, 4 * 4 * 4);
+    }
+
+    #[test]
+    fn a_narrower_answer_arriving_late_never_replaces_the_wider_thumbnail() {
+        let mut cache = MediaCache::new();
+        cache.start_at(0, 240);
+        assert!(cache.insert_sized(0, picture(4), 240).is_empty());
+        assert!(cache.grow(&0, 480) && cache.grow(&0, 720), "duas buscas maiores em curso");
+        assert_eq!(cache.insert_sized(0, picture(8), 720).len(), 1, "a de 720 troca a de 240");
+        assert_eq!(cache.insert_sized(0, picture(6), 480).len(), 1, "a de 480 atrasada volta para liberar");
+        assert!(!cache.grow(&0, 720), "a de 720 fica guardada e não é pedida de novo");
+        assert_eq!(cache.bytes, 8 * 8 * 4);
+    }
+
+    #[test]
+    fn denser_screen_asks_again_without_dropping_the_shown_thumbnail() {
+        let mut cache = MediaCache::new();
+        cache.start_at(0, 240);
+        assert!(!cache.grow(&0, 480), "em curso não pede de novo");
+        assert!(cache.insert(0, picture(4)).is_empty());
+        assert!(!cache.grow(&0, 240) && !cache.grow(&0, 200), "mesma largura ou menor fica");
+        assert!(cache.grow(&0, 480), "tela mais densa pede maior");
+        assert!(cache.has_image(&0), "a imagem atual fica até a nova chegar");
+        assert!(!cache.grow(&0, 480), "a largura já fica marcada");
+        assert_eq!(cache.insert(0, picture(8)).len(), 1, "a substituída sai do atlas");
+        assert_eq!(cache.bytes, 8 * 8 * 4);
+        assert!(!cache.grow(&0, 480) && cache.grow(&0, 600), "a largura sobrevive à troca da imagem");
+        cache.insert(1, MediaState::Failed("x".into()));
+        assert!(!cache.grow(&1, 1024) && !cache.has_image(&1), "falha não é pedida maior");
+    }
+
+    #[test]
+    fn thumb_width_is_the_box_in_screen_pixels_within_the_server_range() {
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, 1.), 240);
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, 2.), 480);
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, 1.25), 300);
+        assert_eq!(thumb_width(96., 1.5), 144);
+        assert_eq!(thumb_width(900., 2.), 1024, "teto do servidor");
+        assert_eq!(thumb_width(4., 1.), 16, "piso do servidor");
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, 0.), 240, "escala inválida vale 1");
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, f32::NAN), 240);
+    }
+
+    #[test]
+    fn svg_is_rasterized_without_reading_files_from_disk() {
+        let square = br##"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12" fill="#ff0000"/></svg>"##;
+        let image = oriented(square).unwrap();
+        assert_eq!((image.width(), image.height()), (512, 256), "ícone pequeno amplia até o piso, na proporção");
+        assert_eq!(image.to_rgba8().get_pixel(10, 10).0, [255, 0, 0, 255]);
+        let thumb = thumbnail(square).unwrap();
+        assert_eq!((thumb.size(0).width.0, thumb.size(0).height.0), (512, 256));
+        let secret = std::env::temp_dir().join(format!("hangar-svg-{}.png", std::process::id()));
+        let mut png = Vec::new();
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb([0, 255, 0]))).write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+        std::fs::write(&secret, png).unwrap();
+        let linked = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="8" height="8"><image width="8" height="8" xlink:href="{}"/></svg>"#, secret.display());
+        let drawn = oriented(linked.as_bytes()).unwrap().to_rgba8();
+        assert_eq!(drawn.get_pixel(100, 100).0[3], 0, "o arquivo do disco não entra na imagem");
+        let _ = std::fs::remove_file(&secret);
+        assert!(oriented(b"<html><body>svg</body></html>").is_none());
+        assert!(oriented(b"texto qualquer <svg").is_none());
+        // Comentário longo (licença, metadados do editor) antes do `<svg`: passa do antigo corte de 4 KiB.
+        let commented = format!("<?xml version=\"1.0\"?><!-- {} -->{}", "x".repeat(20_000), std::str::from_utf8(square).unwrap().trim_start_matches("<?xml version=\"1.0\"?>"));
+        assert_eq!(oriented(commented.as_bytes()).map(|image| (image.width(), image.height())), Some((512, 256)));
+        assert!(!looks_like_svg(b"<!DOCTYPE html><html><body><svg xmlns=\"http://www.w3.org/2000/svg\"/></body></html>"), "HTML com SVG embutido");
+        assert!(!looks_like_svg(b"<HTML><svg/></HTML>"));
+        assert!(!looks_like_svg(format!("<?xml version=\"1.0\"?><!-- {} --><svg/>", "x".repeat(70_000)).as_bytes()), "além de 64 KiB");
     }
 
     #[test]

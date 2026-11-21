@@ -700,6 +700,44 @@ pub struct Uploaded {
     pub path: String,
     #[serde(default)] pub frames: Vec<String>,
     pub transcript: Option<String>,
+    /// Vídeo que seguiu sem quadros nem fala, e por quê: o envio continua, mas a pessoa precisa saber.
+    #[serde(skip)] pub note: Option<MediaGap>,
+}
+
+/// Por que a espera de `upload-media` desistiu.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MediaGap {
+    /// 404: o servidor não tem mais registro do vídeo (reiniciou no meio).
+    Unknown,
+    /// Outro 4xx definitivo.
+    Refused(u16),
+    /// Três minutos sem resposta.
+    Timeout,
+    /// `done` sem quadros nem fala.
+    Empty,
+}
+
+impl MediaGap {
+    /// Código para o diário: sem texto de tela.
+    pub fn code(self) -> String {
+        match self {
+            MediaGap::Unknown => "unknown".into(),
+            MediaGap::Refused(status) => format!("refused_{status}"),
+            MediaGap::Timeout => "timeout".into(),
+            MediaGap::Empty => "empty".into(),
+        }
+    }
+
+    /// "vídeo enviado sem quadros/fala: <motivo>".
+    pub fn shown(self) -> String {
+        let reason = match self {
+            MediaGap::Unknown => crate::i18n::tr("attach_video_gap_unknown"),
+            MediaGap::Refused(status) => crate::i18n::tr("attach_video_gap_refused").replace("{status}", &status.to_string()),
+            MediaGap::Timeout => crate::i18n::tr("attach_video_gap_timeout"),
+            MediaGap::Empty => crate::i18n::tr("attach_video_gap_empty"),
+        };
+        crate::i18n::tr("attach_video_gap").replace("{reason}", &reason)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
