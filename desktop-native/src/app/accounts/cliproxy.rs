@@ -49,6 +49,7 @@ struct InstallState {
     version: Option<String>,
     latest: Option<String>,
     handover: Option<super::proxy_update::Handover>,
+    sessions: Option<usize>,
     job: Option<Job>,
 }
 
@@ -619,7 +620,9 @@ impl Hangar {
                 (w.installing, w.task) = (false, None);
                 // Sessões no proxy: a entrega o reinicia, então pergunta antes, como a atualização.
                 if error.code.as_deref() == Some("erro_cliproxy_sessoes_ativas") {
-                    super::proxy_update::confirm_restart(super::proxy_update::Action::Adopt, None, window, cx,
+                    let sessions = w.status.as_ref().and_then(|s| s.as_ref().ok())
+                        .and_then(|s| s.install.as_ref()).and_then(|i| i.sessions);
+                    super::proxy_update::confirm_restart(super::proxy_update::Action::Adopt, sessions, window, cx,
                         |this, cx| this.wizard_install(Start::Adopt { confirm: true }, cx));
                 } else {
                     w.install_error = Some(failure_text(&error));

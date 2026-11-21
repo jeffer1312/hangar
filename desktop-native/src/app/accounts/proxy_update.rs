@@ -215,8 +215,8 @@ impl Hangar {
                         u.poll = None;
                         // Mas a releitura que o clique pediu (confirmação) ou que acompanhava a troca é da ação.
                         let asked = u.confirm.take().or(u.asked.take());
+                        // A linha fica com a última leitura: sem ela, o cartão some e leva junto o aviso da falha.
                         if let Some(action) = asked {
-                            u.install = None;
                             u.outcome = Some(Outcome::Failed(action.key("failed").replace("{reason}", &error)));
                         }
                         cx.notify();
