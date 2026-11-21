@@ -14,12 +14,24 @@ SO_COMANDO=0; [ "${1:-}" = --comando ] && SO_COMANDO=1
 COM_TERMINAL=0; [ -t 0 ] && COM_TERMINAL=1
 
 marca() { [ "$SO_COMANDO" = 1 ] && return 0; mkdir -p "$MARCA_DIR"; printf '%s\n' "$1" > "$MARCA_DIR/libmpv-ok"; }
+# O passo de atualização fica feito mesmo com falha (sem terminal não há senha a pedir), então o motivo vai para a
+# marca e para o log da instalação; quem o lê roda este script de novo.
 aviso() { # aviso <motivo> [comando]
   [ "$SO_COMANDO" = 1 ] && exit 0
   echo "vídeo do app nativo: aviso — $1. O app abre os vídeos no player do sistema."
   [ -n "${2:-}" ] && echo "  Para ter o vídeo dentro do app: $2"
   marca "falta: $1${2:+ (comando: $2)}"
+  { mkdir -p "$HOME/.hangar/logs/privado" \
+      && printf '%s install-libmpv: falta: %s%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "${2:+ (comando: $2)}" \
+        >> "$HOME/.hangar/logs/privado/install.log"; } 2>/dev/null || true
   exit 0
+}
+# Com root quando precisa: com terminal o sudo pergunta a senha, sem terminal só `sudo -n`.
+roda() {
+  if [ "$(id -u)" = 0 ]; then "$@"
+  elif [ "$COM_TERMINAL" = 1 ]; then sudo "$@"
+  else sudo -n "$@"
+  fi
 }
 
 # Só a API 2 serve (o app recusa a 1): o nome `libmpv.so.2` é o que garante isso, não o `libmpv.so` do pacote -dev.
@@ -50,13 +62,15 @@ case "$(uname -s)" in
     if linux_tem; then marca "sistema: libmpv.so.2"; exit 0; fi
     # Pacote que traz a libmpv.so.2 em cada família: no Debian/Ubuntu é o libmpv2 (o libmpv1 é a API 1);
     # no Fedora o mpv-libs vem do RPM Fusion, que nem toda máquina tem.
+    APT=0
     if command -v pacman >/dev/null 2>&1; then
       # Sem --noconfirm o [S/n] do pacman espera quem não está lá (Atualizar, --app); a senha do sudo já é a confirmação.
       CMD="pacman -S --needed --noconfirm mpv"
     elif command -v apt-get >/dev/null 2>&1; then
-      apt-cache show libmpv2 >/dev/null 2>&1 \
-        || aviso "esta distro não tem o pacote libmpv2 (o libmpv1 é a API 1, que o app não usa)"
-      CMD="apt-get install -y libmpv2"
+      # O install.sh só pergunta a senha por um pacote que a lista conhece.
+      [ "$SO_COMANDO" = 1 ] && ! apt-cache show libmpv2 >/dev/null 2>&1 && exit 0
+      # Sem o frontend não interativo, uma pergunta do debconf espera quem não está lá.
+      CMD="env DEBIAN_FRONTEND=noninteractive apt-get install -y libmpv2"; APT=1
     elif command -v dnf >/dev/null 2>&1; then
       CMD="dnf install -y mpv-libs"
     else
@@ -64,14 +78,17 @@ case "$(uname -s)" in
     fi
     [ "$SO_COMANDO" = 1 ] && { echo "$CMD"; exit 0; }
     [ "${HANGAR_LIBMPV_SEM_SUDO:-}" = 1 ] && aviso "a libmpv 2 não está instalada" "sudo $CMD"
+    [ "$(id -u)" = 0 ] || command -v sudo >/dev/null 2>&1 || aviso "sem sudo para instalar a libmpv 2" "$CMD (como root)"
     echo "vídeo do app nativo: instalando a libmpv 2 ($CMD)"
     # $CMD sem aspas de propósito: só palavras fixas, sem espaço dentro de nenhuma.
-    if [ "$(id -u)" = 0 ]; then $CMD
-    elif ! command -v sudo >/dev/null 2>&1; then aviso "sem sudo para instalar a libmpv 2" "$CMD (como root)"
-    elif [ "$COM_TERMINAL" = 1 ]; then sudo $CMD
-    else sudo -n $CMD
+    roda $CMD; rc=$?
+    # A lista de pacotes velha não conhece o libmpv2: refaz a lista uma vez, só nesse caso, e tenta de novo.
+    if [ "$rc" != 0 ] && [ "$APT" = 1 ] && ! apt-cache show libmpv2 >/dev/null 2>&1; then
+      echo "vídeo do app nativo: o apt não conhece o libmpv2; atualizando a lista de pacotes"
+      roda env DEBIAN_FRONTEND=noninteractive apt-get update && { roda $CMD; rc=$?; }
+      apt-cache show libmpv2 >/dev/null 2>&1 \
+        || aviso "esta distro não tem o pacote libmpv2 (o libmpv1 é a API 1, que o app não usa)"
     fi
-    rc=$?
     linux_tem && { marca "instalada: $CMD"; echo "vídeo do app nativo: libmpv 2 instalada"; exit 0; }
     case "$CMD" in
       dnf*) aviso "o dnf não instalou o mpv-libs (código $rc; ele vem do RPM Fusion)" "habilite o RPM Fusion e rode: sudo $CMD" ;;
@@ -85,8 +102,8 @@ case "$(uname -s)" in
     for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -z "$BREW" ] && [ -x "$b" ] && BREW=$b; done
     [ -n "$BREW" ] || aviso "a libmpv 2 não está instalada e não há Homebrew" "instale o Homebrew e rode: brew install mpv"
     echo "vídeo do app nativo: instalando o mpv pelo Homebrew"
-    # brew nunca com sudo.
-    "$BREW" install mpv; rc=$?
+    # brew nunca com sudo. Sem a atualização automática ele não para minutos baixando o índice inteiro antes.
+    HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" install mpv; rc=$?
     mac_tem && { marca "instalada: brew install mpv"; echo "vídeo do app nativo: libmpv 2 instalada"; exit 0; }
     aviso "o brew install mpv não terminou (código $rc)" "brew install mpv"
     ;;

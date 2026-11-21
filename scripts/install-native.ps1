@@ -20,9 +20,12 @@ function Marca($texto) {
 function Versao-De($texto) { if ("$texto" -match '"version":\s*"([0-9.]+)"') { $Matches[1] } else { '' } }
 # A libmpv do player de video, ao lado do exe. Roda tambem com o app ja em dia; falhar so avisa (o video abre
 # no player do sistema), entao nunca muda o codigo de saida daqui.
+# O powershell.exe do sistema: no PowerShell 7 o $PSHOME e o pwsh, sem powershell.exe.
 function Instala-Libmpv {
-    try { & (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'install-libmpv.ps1') -Destino $destDir }
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    try { & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'install-libmpv.ps1') -Destino $destDir }
     catch { Write-Host "video do app nativo: aviso - $($_.Exception.Message)" }
+    $global:LASTEXITCODE = 0
 }
 
 $arq = "$env:PROCESSOR_ARCHITEW6432$env:PROCESSOR_ARCHITECTURE"

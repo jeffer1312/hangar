@@ -25,10 +25,18 @@ function Marca($texto) {
         [IO.File]::WriteAllText((Join-Path $marcaDir 'libmpv-ok'), $texto)
     } catch { Write-Host "video do app nativo: nao consegui gravar a marca em $marcaDir ($($_.Exception.Message))" }
 }
+# O passo de atualizacao fica feito mesmo com falha (nao ha como pedir nada ali), entao o motivo vai para a marca e
+# para o log da instalacao; quem o le roda este script de novo. Com o transcript do install.ps1 aberto a escrita
+# direta pode ser recusada, e ai o transcript ja guarda o Write-Host.
 function Aviso($motivo) {
     Write-Host "video do app nativo: aviso - $motivo. O app abre os videos no player do sistema."
     Write-Host '  Para tentar de novo: scripts\install-libmpv.ps1 da pasta do Hangar (no pacote, %USERPROFILE%\.hangar\current).'
     Marca "falta: $motivo"
+    try {
+        $log = Join-Path $env:LOCALAPPDATA 'hangar\logs\privado\install.log'
+        New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
+        [IO.File]::AppendAllText($log, "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') install-libmpv: falta: $motivo`r`n")
+    } catch { }
 }
 function Sha($caminho) { (Get-FileHash -Algorithm SHA256 -LiteralPath $caminho).Hash.ToLower() }
 # Programa externo: o codigo de saida e o arquivo gerado decidem, nunca o stderr (que no 5.1 com Stop vira excecao).
@@ -63,18 +71,30 @@ try {
     catch { Aviso "o download da libmpv falhou ($($_.Exception.Message))"; exit 0 }
     if ((Sha $pacote) -ne $shaPacote) { Aviso 'o sha256 do pacote da libmpv nao confere; nada foi instalado'; exit 0 }
 
-    # O tar.exe do Windows e o bsdtar e le 7z; o 7-Zip, quando ha, fica de reserva.
+    # O tar.exe do Windows e o bsdtar e le 7z; o 7-Zip, quando ha, fica de reserva. So vale a dll inteira:
+    # o tar que falha no meio deixa um pedaco com o nome certo, e esse pedaco nao pode barrar o 7-Zip.
     $saida = Join-Path $tmp 'x'
     New-Item -ItemType Directory -Force -Path $saida | Out-Null
     $extraida = Join-Path $saida $nome
+    function Extraida-Boa { (Test-Path -LiteralPath $extraida) -and (Sha $extraida) -eq $shaDll }
+    $tentativas = @()
     $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
-    if (Test-Path -LiteralPath $tar) { $null = Roda $tar @('-xf', $pacote, '-C', $saida, $nome) }
-    if (-not (Test-Path -LiteralPath $extraida)) {
+    $boa = $false
+    if (Test-Path -LiteralPath $tar) {
+        $rc = Roda $tar @('-xf', $pacote, '-C', $saida, $nome)
+        $boa = ($rc -eq 0) -and (Extraida-Boa)
+        if (-not $boa) { $tentativas += "tar.exe codigo $rc" }
+    } else { $tentativas += 'sem tar.exe' }
+    if (-not $boa) {
+        Remove-Item -LiteralPath $extraida -Force -ErrorAction SilentlyContinue
         $sete = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
-        if (Test-Path -LiteralPath $sete) { $null = Roda $sete @('e', '-y', "-o$saida", $pacote, $nome) }
+        if (Test-Path -LiteralPath $sete) {
+            $rc = Roda $sete @('e', '-y', "-o$saida", $pacote, $nome)
+            $boa = ($rc -eq 0) -and (Extraida-Boa)
+            if (-not $boa) { $tentativas += "7-Zip codigo $rc" }
+        } else { $tentativas += 'sem 7-Zip' }
     }
-    if (-not (Test-Path -LiteralPath $extraida)) { Aviso 'nao consegui extrair a libmpv-2.dll do pacote (nem o tar.exe nem o 7-Zip)'; exit 0 }
-    if ((Sha $extraida) -ne $shaDll) { Aviso 'o sha256 da libmpv-2.dll extraida nao confere; nada foi instalado'; exit 0 }
+    if (-not $boa) { Aviso "nao consegui extrair a libmpv-2.dll inteira do pacote ($($tentativas -join ', '))"; exit 0 }
 
     # Copia ao lado e rename: o caminho da dll nunca fica pela metade. A dll em uso pelo app aberto nao se
     # sobrescreve, mas se renomeia; os restos de trocas anteriores saem quando da (mesma regra do Hangar.exe).
