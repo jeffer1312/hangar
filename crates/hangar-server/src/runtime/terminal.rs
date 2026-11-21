@@ -1727,8 +1727,8 @@ impl Executor {
     /// pode ficar para trás da fila interna; sem nenhuma, promove a fila do Claude Code como antes. A resposta da
     /// entrada leva `entry_id`.
     async fn steer_first(&mut self,id:&str)->Result<RuntimeReply,RuntimeError> {
-        // Fila retida pela troca: sem entrada esperando, a tecla promoveria a fila do Claude Code, que pode ter uma
-        // "Na conversa" já entregue.
+        // Fila retida pela troca: nenhuma tecla, como no `steer_entry`. Sem entrada esperando, ela promoveria a fila do
+        // Claude Code, que pode ter uma "Na conversa" já entregue.
         if self.options.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&self.target.name)) {
             return Ok(reply(id,Disposition::Rejected,json!({"code":"session_transfer_busy","cleanup":"not_needed"})));
         }

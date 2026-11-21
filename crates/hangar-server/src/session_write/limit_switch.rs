@@ -397,10 +397,11 @@ impl Switcher {
         let now = host.now();
         let current = host.account_dir(spec.account.config_dir());
         if crate::list::discover::real(&host.account_dir(hit.account.as_deref())) != crate::list::discover::real(&current) { return Some(Outcome::Stayed("limit_switch_stale")); }
-        // Como no limite: a conta fica gasta para as outras sessões, mas reabrir no Claude levaria a fila que a troca de
-        // agente segurou para o Codex.
+        // Reabrir no Claude levaria a fila que a troca de agente segurou para o Codex. A conta fica gasta para as outras
+        // sessões, salvo token velho na memória com login bom no disco, que a reabertura resolveria.
         if host.handoff_held(&hit.name) {
-            self.mark_refused(hit,&current,now);
+            let recoverable = matches!(hit.code.as_str(),"authentication_failed" | "api_401") && host.logged_in(&current);
+            if !recoverable { self.mark_refused(hit,&current,now); }
             return Some(Outcome::Stayed("limit_switch_handoff"));
         }
         if host.logged_in(&current) && self.first_retry(&hit.name,&current,now) {
@@ -1098,15 +1099,17 @@ mod tests {
         assert_eq!(fake.log()[2..],["reopen /c","release","continue"],"o mesmo aviso vale de novo depois da troca desfeita");
     }
 
-    /// Login recusado com a troca de agente à espera: a sessão não reabre, mas a conta fica gasta para as outras.
+    /// Login recusado com a troca de agente à espera: a sessão não reabre, e a conta fica gasta para as outras salvo
+    /// token velho com login bom no disco.
     #[tokio::test]
     async fn a_refused_login_during_a_held_handoff_still_marks_the_account_spent() {
-        for code in ["authentication_failed","oauth_org_not_allowed"] {
+        for (code,disk_login,spent) in [("authentication_failed",false,true),("authentication_failed",true,false),("oauth_org_not_allowed",true,true)] {
             let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",60.0)]);
             fake.handoff.store(true,std::sync::atomic::Ordering::Relaxed);
+            if !disk_login { fake.no_login.lock().unwrap().push("/a".to_owned()); }
             let switcher = Switcher::default();
             switcher.handle_auth(&fake,AuthHit { code:code.into(),..refused("/a") }).await;
-            assert!(switcher.spent.is_spent("/a",1500.0),"{code}");
+            assert_eq!(switcher.spent.is_spent("/a",1500.0),spent,"{code} login no disco={disk_login}");
             assert_eq!(fake.log(),vec!["release"],"{code}: nada reabre");
             assert_eq!(fake.diary(),vec!["limit_switch_handoff"],"{code}");
         }
