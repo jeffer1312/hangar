@@ -4,24 +4,31 @@ import type { DownloadOptions, DownloadProgress } from './mediaCache';
 // Dez quadros por segundo bastam para o anel e o "42%": o progresso nativo chega mais rápido que isso.
 const FRAME_MS = 100;
 
+function abortError(): Error {
+  const e = new Error('The operation was aborted.');
+  e.name = 'AbortError';
+  return e;
+}
+
 /**
- * Um download por vez com progresso e cancelamento. `progress` nulo = parado. O download segue se o
- * componente sair da tela (a lista desmonta a linha ao rolar); só a tela para de ser atualizada.
+ * Um download por vez com progresso e cancelamento. `progress` nulo = parado. Sair da tela cancela:
+ * todo download daqui termina numa folha do sistema (compartilhar, "Abrir com", galeria), e ela não
+ * pode abrir por cima de outra tela.
  */
 export function useDownload() {
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const ctl = useRef<AbortController | null>(null);
   const alive = useRef(true);
   const last = useRef(0);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; ctl.current?.abort(); };
+  }, []);
 
   const run = useCallback(async <T,>(job: (opts: DownloadOptions) => Promise<T>): Promise<T> => {
     // O `busy` da tela só muda no próximo render: o segundo toque rápido cai aqui e sai como cancelado.
-    if (ctl.current) {
-      const e = new Error('The operation was aborted.');
-      e.name = 'AbortError';
-      throw e;
-    }
+    // Desmontado (o toque esperou um import e a tela saiu): nada mais abriria o cancelamento.
+    if (ctl.current || !alive.current) throw abortError();
     const c = new AbortController();
     ctl.current = c;
     last.current = 0;

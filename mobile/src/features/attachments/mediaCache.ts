@@ -18,8 +18,12 @@ const SIDE_DIRS = ['pdf-reader', 'chat-page-source'];
 const PROBE_TIMEOUT_MS = 4000;
 // Só o Android retoma pelo pedaço já gravado; no iOS a sessão em segundo plano espera a rede sozinha.
 const RESUME_DELAYS_MS = [2000, 5000];
-// `.part` mais novo que isto pode ser de um download em andamento noutra tela.
+// Sufixo reservado do download em andamento: anexo da pessoa terminado em `.part` é arquivo, não pedaço.
+export const PART_SUFFIX = '.hangar-part';
+// Pedaço mais novo que isto pode ser de um download em andamento noutra tela.
 const STALE_PART_MS = 60 * 60 * 1000;
+// Arquivo usado há pouco pode estar sendo lido pela folha de compartilhar ou pelo app que o abriu.
+const RECENT_USE_MS = 10 * 60 * 1000;
 
 export interface DownloadProgress {
   written: number;
@@ -74,6 +78,10 @@ function abortError(): Error {
   return e;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError();
+}
+
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortError());
@@ -87,6 +95,7 @@ interface Probe { etag: string | null; size: number | null }
 
 // Um byte só: devolve o ETag (o servidor o muda quando o arquivo é regerado no mesmo caminho) e o
 // tamanho total pelo Content-Range. null = sem rede; resposta de erro do servidor vira exceção.
+// O Content-Length de um 200 não serve de tamanho: pode ser do corpo comprimido.
 export async function probe(uri: string, headers: Record<string, string> | undefined, signal?: AbortSignal): Promise<Probe | null> {
   const ctl = new AbortController();
   const stop = () => ctl.abort();
@@ -99,10 +108,8 @@ export async function probe(uri: string, headers: Record<string, string> | undef
       return { etag: r.headers.get('etag'), size: total ? Number(total[1]) : 0 };
     }
     if (!r.ok) throw new HttpStatusError(r.status);
-    const range = /\/(\d+)/.exec(r.headers.get('content-range') ?? '');
-    const length = r.headers.get('content-length');
-    const size = range ? Number(range[1]) : r.status === 200 && length ? Number(length) : null;
-    return { etag: r.headers.get('etag'), size };
+    const range = r.status === 206 ? /\/(\d+)/.exec(r.headers.get('content-range') ?? '') : null;
+    return { etag: r.headers.get('etag'), size: range ? Number(range[1]) : null };
   } catch (e) {
     if (signal?.aborted) throw abortError();
     if (e instanceof HttpStatusError) throw e;
@@ -110,6 +117,8 @@ export async function probe(uri: string, headers: Record<string, string> | undef
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', stop);
+    // Só os cabeçalhos interessam: servidor que ignora o Range mandaria o arquivo inteiro junto com o download.
+    ctl.abort();
   }
 }
 
@@ -120,6 +129,7 @@ async function downloadResuming(uri: string, headers: Record<string, string> | u
     ? ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) =>
       opts.onProgress!({ written: bytesWritten, total: totalBytes > 0 ? totalBytes : expected })
     : undefined;
+  throwIfAborted(opts.signal);
   let task = File.createDownloadTask(uri, tmp, { headers, onProgress, signal: opts.signal });
   let start = () => task.downloadAsync();
   for (let attempt = 0; ; attempt++) {
@@ -132,6 +142,7 @@ async function downloadResuming(uri: string, headers: Record<string, string> | u
       const http = /\b(HTTP|status:?) \d{3}\b/.test(e instanceof Error ? e.message : String(e));
       if (Platform.OS !== 'android' || http || attempt >= RESUME_DELAYS_MS.length || !tmp.exists || tmp.size <= 0) throw e;
       await wait(RESUME_DELAYS_MS[attempt], opts.signal);
+      throwIfAborted(opts.signal);
       task = DownloadTask.fromSavable(
         { url: uri, fileUri: tmp.uri, isDirectory: false, headers, resumeData: String(tmp.size) },
         { onProgress, signal: opts.signal },
@@ -170,10 +181,11 @@ export async function localCopy(uri: string, headers: Record<string, string> | u
   } else {
     info = await probe(uri, headers, opts.signal);
   }
-  const tmp = new File(dir, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.part`);
+  const tmp = new File(dir, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${PART_SUFFIX}`);
   try {
     await downloadResuming(uri, headers, tmp, info?.size ?? null, opts);
     if (info?.size != null && tmp.size !== info.size) throw new Error(m.file_card_failed());
+    throwIfAborted(opts.signal);
     tmp.moveSync(target, { overwrite: true });
   } catch (e) {
     if (tmp.exists) tmp.delete();
@@ -192,13 +204,13 @@ function stored(): Stored[] {
   return dir.list().filter((f): f is File => f instanceof File).map((file) => ({ key: file.name, file, entry: readEntry(file.name) }));
 }
 
-// Os usados há mais tempo saem primeiro, até caber no teto; o que acabou de ser pedido fica.
-// Sobra de versão antiga (sem registro) e `.part` abandonado saem também.
+// Os usados há mais tempo saem primeiro, até caber no teto; o que acabou de ser pedido e o usado há
+// menos de dez minutos ficam. Sobra de versão antiga (sem registro) e pedaço abandonado saem também.
 export function evict(keep?: string): void {
   const now = Date.now();
   const alive: Stored[] = [];
   for (const s of stored()) {
-    const part = s.key.endsWith('.part');
+    const part = s.key.endsWith(PART_SUFFIX);
     if (part && now - (s.file.modificationTime ?? now) > STALE_PART_MS) s.file.delete();
     else if (!part && !s.entry) s.file.delete();
     else if (!part) alive.push(s);
@@ -207,7 +219,7 @@ export function evict(keep?: string): void {
   let total = alive.reduce((n, s) => n + s.file.size, 0);
   for (const s of alive.sort((a, b) => a.entry!.used - b.entry!.used)) {
     if (total <= MEDIA_CACHE_LIMIT) break;
-    if (s.key === keep) continue;
+    if (s.key === keep || now - s.entry!.used < RECENT_USE_MS) continue;
     total -= s.file.size;
     s.file.delete();
     index.remove(s.key);
@@ -321,7 +333,7 @@ export async function cacheUsage(): Promise<CacheUsage> {
   const byKind: Record<CacheKind, number> = { image: 0, video: 0, audio: 0, document: 0 };
   let files = 0;
   for (const s of stored()) {
-    if (s.key.endsWith('.part')) continue;
+    if (s.key.endsWith(PART_SUFFIX)) continue;
     byKind[kindOf(s.key)] += s.file.size;
     files++;
   }
@@ -402,6 +414,7 @@ async function shareLocal(f: File, name: string): Promise<void> {
 
 export async function shareFile(uri: string, headers: Record<string, string> | undefined, name: string, opts?: DownloadOptions): Promise<void> {
   const f = await localCopy(uri, headers, name, opts);
+  throwIfAborted(opts?.signal);
   await shareLocal(f, name);
 }
 
@@ -409,6 +422,7 @@ export async function shareFile(uri: string, headers: Record<string, string> | u
 export async function openWith(uri: string, headers: Record<string, string> | undefined, name: string, opts?: DownloadOptions): Promise<'opened' | 'empty' | 'no-app'> {
   const f = await localCopy(uri, headers, name, opts);
   if (f.size === 0) return 'empty';
+  throwIfAborted(opts?.signal);
   try {
     await startActivityAsync('android.intent.action.VIEW', { data: f.contentUri, type: mimeType(name), flags: FLAG_GRANT_READ_URI_PERMISSION });
   } catch (e) {
@@ -426,6 +440,7 @@ export async function deliverFile(uri: string, headers: Record<string, string> |
   if (Platform.OS !== 'ios') return openWith(uri, headers, name, opts);
   const f = await localCopy(uri, headers, name, opts);
   if (f.size === 0) return 'empty';
+  throwIfAborted(opts?.signal);
   await shareLocal(f, name);
   return 'shared';
 }
@@ -477,6 +492,7 @@ export async function openPdfFile(uri: string, headers: Record<string, string> |
 // direto para a galeria. Devolve true quando gravou na galeria (o iOS não sabe o que a pessoa escolheu).
 export async function saveImage(uri: string, headers: Record<string, string> | undefined, name: string, opts?: DownloadOptions): Promise<boolean> {
   const f = await localCopy(uri, headers, name, opts);
+  throwIfAborted(opts?.signal);
   if (Platform.OS === 'ios') {
     await shareLocal(f, name);
     return false;

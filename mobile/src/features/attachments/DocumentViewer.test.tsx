@@ -101,7 +101,7 @@ describe('DocumentViewer PDF', () => {
       expect(container.querySelector('[data-testid="webview"]')).toBeNull();
       expect(native.download).not.toHaveBeenCalled();
       await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="native_pdf_open"]')!.click());
-      expect(native.download).toHaveBeenCalledExactlyOnceWith(doc.uri, expect.objectContaining({ uri: expect.stringMatching(/\.part$/) }), { headers: doc.headers });
+      expect(native.download).toHaveBeenCalledExactlyOnceWith(doc.uri, expect.objectContaining({ uri: expect.stringMatching(/\.hangar-part$/) }), { headers: doc.headers });
       expect(native.open).toHaveBeenCalledExactlyOnceWith('android.intent.action.VIEW', {
         data: expect.stringMatching(/^content:\/\/hangar\/cache\/pdf-reader\/[^/]+\/manual\.pdf$/), type: 'application/pdf', flags: 1,
       });
@@ -121,7 +121,7 @@ describe('DocumentViewer PDF', () => {
       expect(button.disabled).toBe(false);
       if (stage === 'download') {
         expect(native.open).not.toHaveBeenCalled();
-        expect(native.remove).toHaveBeenCalledWith(expect.stringMatching(/\.part$/));
+        expect(native.remove).toHaveBeenCalledWith(expect.stringMatching(/\.hangar-part$/));
       }
       await act(async () => button.click());
       expect(container.querySelector('[role="alert"]')).toBeNull();

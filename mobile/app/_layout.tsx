@@ -30,6 +30,10 @@ import { dropLegacyPendingNews, loadArrivedNews, whatsNewHref } from '../src/fea
 import { configureVideoCache } from '../src/features/attachments/videoCache';
 
 configureCore();
+// No carregamento do módulo, antes de qualquer tela: o expo-video recusa mudar o teto com algum player vivo.
+configureVideoCache().catch((e: unknown) => {
+  registrarDiag({ evento: 'video.cache_limit_failed', nivel: 'erro', codigo: 'video_cache_limit_failed', detalhe: e instanceof Error ? e.message : String(e) });
+});
 aplicarTemaSalvo();
 aplicarMaterial(useAparencia.getState(), {
   escalaTexto: isTabletLandscape(Dimensions.get('window')) ? 19 / 17 : 1,
@@ -84,14 +88,6 @@ export default function Layout() {
     apply();
     const subscription = Dimensions.addEventListener('change', ({ screen }) => apply(screen));
     return () => subscription.remove();
-  }, []);
-
-  // Teto do cache de reprodução de vídeo: o expo-video só aceita mudar antes de existir algum player.
-  useEffect(() => {
-    configureVideoCache()
-      .catch((e: unknown) => {
-        registrarDiag({ evento: 'video.cache_limit_failed', nivel: 'erro', codigo: 'video_cache_limit_failed', detalhe: e instanceof Error ? e.message : String(e) });
-      });
   }, []);
 
   useEffect(() => {

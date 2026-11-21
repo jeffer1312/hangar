@@ -92,7 +92,7 @@ vi.mock('../../paraglide/messages', () => ({
   composer_sem_acesso_fotos: () => 'no-photos',
 }));
 
-import { cacheUsage, clearMediaCache, deliverFile, evict, isAbort, isMissing, localCopy, MEDIA_CACHE_LIMIT } from './mediaCache';
+import { cacheUsage, clearMediaCache, deliverFile, evict, isAbort, isMissing, localCopy, MEDIA_CACHE_LIMIT, PART_SUFFIX, shareFile } from './mediaCache';
 
 // Guardado = arquivo na pasta e registro no índice; o nome guardado termina no nome original.
 const isCached = (_uri: string, name: string) => {
@@ -137,8 +137,50 @@ describe('localCopy', () => {
     const again = await localCopy(URI, H, 'rel.docx');
     expect(again.uri).toBe(f.uri);
     expect(fs.tasks).toHaveLength(1);
-    // Nenhum `.part` sobra na pasta.
-    expect([...fs.files.keys()].filter((k) => k.endsWith('.part'))).toEqual([]);
+    // Nenhum pedaço sobra na pasta.
+    expect([...fs.files.keys()].filter((k) => k.endsWith(PART_SUFFIX))).toEqual([]);
+  });
+
+  it('o pedido de um byte é cortado depois dos cabeçalhos, mesmo quando o servidor ignora o Range', async () => {
+    fetchMock.mockResolvedValue({ status: 200, ok: true, headers: new Headers({ etag: '"a"', 'content-length': '100' }) });
+    fs.jobs.push(writes(100));
+    await localCopy(URI, H, 'rel.docx');
+    const signal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('Content-Length de um 200 não vale como tamanho esperado (corpo pode vir comprimido)', async () => {
+    fetchMock.mockResolvedValue({ status: 200, ok: true, headers: new Headers({ etag: '"a"', 'content-length': '40' }) });
+    fs.jobs.push(writes(100));
+    const progress = vi.fn();
+    const f = await localCopy(URI, H, 'rel.docx', { onProgress: progress });
+    expect(f.size).toBe(100);
+    expect(isCached(URI, 'rel.docx')).toBe(true);
+    expect(progress).toHaveBeenCalledWith({ written: 100, total: 100 });
+  });
+
+  it('cancelar durante o pedido de um byte não cria o download', async () => {
+    const ctl = new AbortController();
+    fetchMock.mockImplementation(async () => { ctl.abort(); return probeReply('"a"', 100); });
+    const err = await localCopy(URI, H, 'rel.docx', { signal: ctl.signal }).catch((e: unknown) => e);
+    expect(isAbort(err)).toBe(true);
+    expect(fs.tasks).toHaveLength(0);
+  });
+
+  it('cancelar no fim do download não guarda a cópia nem abre a folha', async () => {
+    fs.platform.OS = 'ios';
+    fetchMock.mockResolvedValue(probeReply('"a"', 100));
+    const ctl = new AbortController();
+    fs.jobs.push(async (t) => {
+      fs.files.set(t.dest, { size: 100, mtime: Date.now() });
+      ctl.abort();
+      return t.dest;
+    });
+    const err = await shareFile(URI, H, 'rel.docx', { signal: ctl.signal }).catch((e: unknown) => e);
+    expect(isAbort(err)).toBe(true);
+    expect(isCached(URI, 'rel.docx')).toBe(false);
+    expect([...fs.files.keys()]).toEqual([]);
+    expect(fs.shared).toHaveLength(0);
   });
 
   it('baixa de novo quando o ETag mudou (arquivo regerado no mesmo caminho)', async () => {
@@ -233,7 +275,8 @@ describe('teto e limpeza', () => {
     const big = Math.floor(MEDIA_CACHE_LIMIT / 2.5);
     const names = ['a.mp4', 'b.mp4', 'c.mp4'];
     for (const [i, name] of names.entries()) {
-      vi.setSystemTime(1000 + i * 1000);
+      // Onze minutos entre um e outro: o usado há menos de dez nunca sai.
+      vi.setSystemTime(1000 + i * 11 * 60 * 1000);
       fetchMock.mockResolvedValueOnce(probeReply(`"${name}"`, big));
       fs.jobs.push(writes(big));
       await localCopy(`https://srv/${name}`, H, name);
@@ -242,6 +285,43 @@ describe('teto e limpeza', () => {
     expect(isCached('https://srv/a.mp4', 'a.mp4')).toBe(false);
     expect(isCached('https://srv/b.mp4', 'b.mp4')).toBe(true);
     expect(isCached('https://srv/c.mp4', 'c.mp4')).toBe(true);
+  });
+
+  it('acima do teto, o usado há menos de dez minutos fica (pode estar na folha ou no app que abriu)', () => {
+    const big = Math.floor(MEDIA_CACHE_LIMIT / 2.5);
+    const now = Date.now();
+    const put = (key: string, minutesAgo: number) => {
+      fs.files.set(`cache/chat-media/${key}`, { size: big, mtime: now });
+      fs.store.set(key, JSON.stringify({ etag: null, size: big, used: now - minutesAgo * 60 * 1000 }));
+    };
+    put('o-velho.mp4', 30);
+    put('a-um.mp4', 1);
+    put('b-dois.mp4', 2);
+    put('c-tres.mp4', 3);
+    evict();
+    expect(fs.files.has('cache/chat-media/o-velho.mp4')).toBe(false);
+    expect(fs.store.has('o-velho.mp4')).toBe(false);
+    for (const k of ['a-um.mp4', 'b-dois.mp4', 'c-tres.mp4']) {
+      expect(fs.files.has(`cache/chat-media/${k}`)).toBe(true);
+      expect(fs.store.has(k)).toBe(true);
+    }
+  });
+
+  it('anexo terminado em .part é arquivo guardado; só o sufixo reservado é pedaço de download', async () => {
+    const now = Date.now();
+    fs.files.set('cache/chat-media/k1-backup.part', { size: 5, mtime: 0 });
+    fs.store.set('k1-backup.part', JSON.stringify({ etag: null, size: 5, used: now }));
+    fs.files.set(`cache/chat-media/velho${PART_SUFFIX}`, { size: 3, mtime: now - 2 * 60 * 60 * 1000 });
+    fs.files.set(`cache/chat-media/novo${PART_SUFFIX}`, { size: 4, mtime: now });
+    evict();
+    expect(fs.files.has('cache/chat-media/k1-backup.part')).toBe(true);
+    expect(fs.store.has('k1-backup.part')).toBe(true);
+    expect(fs.files.has(`cache/chat-media/velho${PART_SUFFIX}`)).toBe(false);
+    // Mais novo que uma hora: pode ser de um download em andamento noutra tela.
+    expect(fs.files.has(`cache/chat-media/novo${PART_SUFFIX}`)).toBe(true);
+    const u = await cacheUsage();
+    expect(u.files).toBe(1);
+    expect(u.byKind.document).toBe(5);
   });
 
   it('sobra sem registro (cópia de versão antiga) sai na varredura', () => {
