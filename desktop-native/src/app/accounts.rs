@@ -36,7 +36,7 @@ const STALE_AFTER: f64 = 600.;
 const RENEW_DAYS: i64 = 3;
 
 #[derive(Clone, Deserialize)]
-struct Credential {
+pub(super) struct Credential {
     id: String,
     #[serde(rename = "tipo")] kind: String,
     auth_method: Option<String>,
