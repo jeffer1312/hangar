@@ -950,6 +950,56 @@ impl Hangar {
     }
 }
 
+/// Maior lado do vídeo fora da tela cheia.
+const VIDEO_W: f32 = 960.;
+
+/// Palco do vídeo na proporção dele, dentro do `limit` da janela (inteiro na tela cheia), com largura para os controles.
+fn video_stage(aspect: f32, limit: (f32, f32), full: bool) -> (f32, f32) {
+    let room = (if full { limit.0 } else { limit.0.min(VIDEO_W) }, (limit.1 - crate::video::CONTROLS_H).max(MIN_H));
+    let aspect = if aspect.is_finite() && aspect > 0. { aspect } else { 16. / 9. };
+    let width = room.0.min(room.1 * aspect).max(MIN_W.min(room.0));
+    (width, (width / aspect).min(room.1))
+}
+
+impl Hangar {
+    /// Toca um vídeo da conversa no app, no diálogo do visor. Sessão desta máquina toca o próprio arquivo; outra vai
+    /// pela rota do servidor com o token no cabeçalho. Sem a libmpv o player diz o que falta, e "Abrir no player do
+    /// sistema" continua aqui.
+    pub(super) fn open_video(&mut self, key: SessionKey, source: Source, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(api) = self.api_for(&key.server) else { return };
+        let name = source_name(&source);
+        let address = match self.uploads_for(&key).local_path(&source) {
+            Some(path) => Some((path.to_string_lossy().into_owned(), Vec::new())),
+            None => api.stream(&key.name, &source).map(|(url, token)| (url, vec![hangar_video::bearer(&token)])),
+        };
+        let Some((address, headers)) = address else {
+            self.action_feedback.insert(key, (tr("video_failed").replace("{reason}", &tr("video_no_route")), true));
+            cx.notify();
+            return;
+        };
+        let player = cx.new(|cx| crate::video::VideoPlayer::new(address, headers, cx));
+        let (hangar, shown, closed) = (cx.entity().downgrade(), player.clone(), player.clone());
+        let openable = composer::openable(&composer::safe_name(&name));
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let full = window.is_fullscreen();
+            let (w, h) = video_stage(shown.read(cx).aspect().unwrap_or(16. / 9.), limit(window), full);
+            let top = ((f32::from(window.viewport_size().height) - h - (CHROME_H - EDGE * 2.)) / 2.).max(if full { 0. } else { EDGE });
+            let (hangar, source, file) = (hangar.clone(), source.clone(), name.clone());
+            let header = div().flex().items_center().gap_2().pr(px(36.)).h(px(28.))
+                .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::text()).child(name.clone()))
+                .when(openable, |el| el.child(Button::new("video-open-system").ghost().small().icon(IconName::ExternalLink).label(tr("video_open_system"))
+                    .on_click(move |_, _, cx| { let _ = hangar.update(cx, |hangar, cx| hangar.keep_file(source.clone(), file.clone(), true, cx)); })));
+            let closed = closed.clone();
+            dialog.w(px(w + CHROME_W)).margin_top(px(top)).on_ok(enter_to_focused)
+                .child(div().flex().flex_col().gap_3().child(header)
+                    .child(div().w(px(w)).h(px(h + crate::video::CONTROLS_H + 8.)).child(shown.clone())))
+                .on_close(move |_, window, cx| closed.update(cx, |player, cx| player.release(window, cx)))
+        });
+        let focus = player.read(cx).focus();
+        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` da gpui colide com o atributo padrão.
@@ -1005,5 +1055,17 @@ mod tests {
         let (image, stage) = ((800., 400.), (400., 300.));
         let view = View { scale: 1., x: 50., y: -500. };
         assert_eq!(clamp(view, image, stage), View { scale: 1., x: 0., y: -100. });
+    }
+
+    #[test]
+    fn video_stage_keeps_the_proportion_and_room_for_the_controls() {
+        let stage = super::video_stage;
+        let controls = crate::video::CONTROLS_H;
+        assert_eq!(stage(16. / 9., (1600., 1000.), false), (960., 540.), "fora da tela cheia, até 960");
+        let (w, h) = stage(16. / 9., (1600., 1000.), true);
+        assert!((w / h - 16. / 9.).abs() < 0.01 && h <= 1000. - controls);
+        // Vídeo de celular em pé: a largura não fica menor que a dos controles.
+        assert_eq!(stage(9. / 16., (1600., 700.), false), (MIN_W, 700. - controls));
+        assert_eq!(stage(f32::NAN, (1600., 1000.), false), (960., 540.));
     }
 }

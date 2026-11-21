@@ -5427,9 +5427,14 @@ impl Hangar {
             let page_source = source.clone();
             Box::new(cx.listener(move |this, _, _, cx| this.open_html_page(page_key.clone(), page_source.clone(), cx))) as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>
         });
+        // Vídeo toca no app; Abrir segue entregando ao player do sistema.
+        let play = key.cloned().filter(|_| crate::audio::is_video(&name)).map(|play_key| {
+            let play_source = source.clone();
+            Box::new(cx.listener(move |this, _, window, cx| this.open_video(play_key.clone(), play_source.clone(), window, cx))) as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>
+        });
         let (open_source, open_name) = (source.clone(), name.clone());
         let save_name = name.clone();
-        file_card(row, n, &name, state, openable, page,
+        file_card(row, n, &name, state, openable, page, play,
             cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)),
             cx.listener(move |this, _, _, cx| this.keep_file(source.clone(), save_name.clone(), false, cx)))
     }
@@ -6620,9 +6625,10 @@ pub(crate) fn loading_thumb(id: &str, still: bool) -> AnyElement {
 
 /// Cartão de um arquivo que não tem prévia (pdf, planilha, zip, texto): ícone, nome, extensão ou o estado do último
 /// Abrir/Baixar, e os dois botões. Enquanto baixa, os botões param; na falha, Baixar vira Tentar de novo. `page`: o
-/// "Abrir no navegador" do HTML citado, que vai ao navegador da sessão, nunca ao do sistema.
+/// "Abrir no navegador" do HTML citado, que vai ao navegador da sessão, nunca ao do sistema. `play`: o "Tocar" do
+/// vídeo, no player do app.
 fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable: bool,
-    page: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    page: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>, play: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, save: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
     let web = activity::web;
     let busy = matches!(state, Some(FileCard::Busy));
@@ -6647,6 +6653,8 @@ fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable:
             .child(div().truncate().text_sm().text_color(theme::text()).child(name.to_owned()))
             .child(div().id(SharedString::from(format!("file-card-state-{row}-{n}"))).truncate().text_xs().text_color(color)
                 .when_some(role, |el, role| el.role(role)).child(detail)))
+        .when_some(play, |el, play| el.child(Button::new(SharedString::from(format!("play-{row}-{n}"))).ghost().xsmall()
+            .icon(IconName::Play).label(tr("video_play")).disabled(busy).on_click(play)))
         .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall()
             .label(web("file_card_open")).disabled(busy).on_click(open)))
         .when_some(page, |el, page| el.child(Button::new(SharedString::from(format!("page-{row}-{n}"))).ghost().xsmall()

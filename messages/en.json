@@ -11996,5 +11996,19 @@
   "gallery_counter": "{n} of {total}",
   "gallery_jump_not_found": "That message isn't in the loaded part of the conversation. Scroll up to load earlier messages.",
   "gallery_video_swipe_hint": "Swipe sideways to switch media, or down to close",
-  "gallery_video_close_hint": "Swipe down to close"
+  "gallery_video_close_hint": "Swipe down to close",
+  "native_video_play": "Play",
+  "native_video_pause": "Pause",
+  "native_video_mute": "Mute",
+  "native_video_unmute": "Unmute",
+  "native_video_fullscreen": "Full screen",
+  "native_video_exit_fullscreen": "Exit full screen",
+  "native_video_seek": "Video position",
+  "native_video_loading": "Loading the video…",
+  "native_video_buffering": "Buffering…",
+  "native_video_failed": "Couldn't play the video: {reason}",
+  "native_video_no_route": "this video has no address to play here",
+  "native_video_need_mpv_linux": "To play it here, install mpv (the mpv or libmpv package) and try again.",
+  "native_video_need_mpv": "This computer doesn't have the app's video player (libmpv).",
+  "native_video_open_system": "Open in the system player"
 }

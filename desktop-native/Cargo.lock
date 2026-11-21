@@ -3693,6 +3693,7 @@ dependencies = [
  "gpui-pre-windows",
  "hangar-api",
  "hangar-local-server",
+ "hangar-video",
  "hangar-workspace",
  "image",
  "ksni",
@@ -3725,6 +3726,14 @@ dependencies = [
  "wry",
  "zbus",
  "zune-jpeg 0.5.15",
+]
+
+[[package]]
+name = "hangar-video"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libloading",
 ]
 
 [[package]]
