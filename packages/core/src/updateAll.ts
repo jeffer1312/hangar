@@ -126,8 +126,8 @@ export async function distinctMachines(servers: readonly Server[], opts: Pick<Up
 }
 
 /** `offline`: já sabida fora do ar (`known`, sem pedido nenhum) ou sem resposta à identidade (rede ou prazo, não um status HTTP). */
-async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'> & { known?: (serverId: string) => boolean }):
-  Promise<{ targets: Server[]; offline: Set<string> }> {
+async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'>
+  & { known?: (serverId: string) => boolean; identifyMs?: number }): Promise<{ targets: Server[]; offline: Set<string> }> {
   const candidates = ownUpdatableServers(servers);
   const offline = new Set<string>();
   const identities = await Promise.all(candidates.map(async (server) => {
@@ -135,7 +135,7 @@ async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOpti
     // aparece como linha própria fora do ar; aceito, porque o vivo segue na rodada.
     if (opts.known?.(server.id)) { offline.add(server.id); return ''; }
     try {
-      const response = await getIdentificadorEm(server, opts.fetch);
+      const response = await getIdentificadorEm(server, opts.fetch, opts.identifyMs);
       return typeof response.identificador === 'string' ? response.identificador.trim() : '';
     } catch (error) {
       registerDiagnostic({ evento: 'update_all.identity_failed', nivel: 'aviso',
@@ -186,7 +186,8 @@ export async function prepareUpdateAll(servers: readonly Server[], opts: Prepare
   for (const server of ownUpdatableServers(servers)) {
     report(server, { status: opts.knownOffline?.(server.id) ? 'fora_do_ar' : 'consultando' });
   }
-  const { targets, offline } = await readMachines(servers, { ...opts, known: opts.knownOffline });
+  // A folha espera todas as identidades antes de ler: máquina que não diz quem é em 5 s está fora.
+  const { targets, offline } = await readMachines(servers, { ...opts, known: opts.knownOffline, identifyMs: 5000 });
   opts.onTargets?.(targets);
   const reasons: Record<string, string> = {};
   const leaveOut = (server: Server, error: string): null => {

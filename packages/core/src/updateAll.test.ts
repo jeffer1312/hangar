@@ -242,6 +242,7 @@ describe('API e execução por máquina', () => {
     // A busca do preparo conta como a primeira leitura.
     read = (_id, count) => json(count <= 2 ? ready() : done());
     const prepared = await prepareUpdateAll(['p1', 'p2'].map((id) => server(id)), options);
+    expect(calls).toEqual(expect.arrayContaining(['p1/api/atualizacao?procurar=1', 'p2/api/atualizacao?procurar=1']));
     calls = [];
     const result = await updateAll(prepared.run.map((entry) => entry.server), onChange, { ...options, prepared });
     expect(calls.filter((path) => path.endsWith('/identificador') || path.includes('procurar=1'))).toEqual([]);
