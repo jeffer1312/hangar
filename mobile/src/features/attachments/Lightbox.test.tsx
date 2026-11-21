@@ -230,6 +230,11 @@ it('the message gallery steps both ways, respects the ends and the strip switche
     index: 0, style: {},
   })));
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="abrir 1.png"]')!.click());
+  // A miniatura carrega o visor sob demanda: espera o módulo chegar e o Suspense mostrar o visor.
+  await act(async () => {
+    await import('./gallery');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
   expect(container.textContent).toContain('1/2');
   drag(-100);
   expect(container.textContent).toContain('2/2');
