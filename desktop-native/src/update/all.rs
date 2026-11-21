@@ -68,12 +68,12 @@ fn snapshot_status(snapshot: &Value) -> Status {
     }
 }
 
-/// A linha de uma máquina depois da leitura da abertura. Sem resposta nenhuma ela está fora do ar e fica de fora; o erro
-/// que o servidor deu é falha dela.
-fn read_status(snapshot: &Result<Value, Failure>) -> Status {
+/// A linha de uma máquina depois da leitura da abertura. Outra máquina sem resposta nenhuma está fora do ar e fica de fora;
+/// o erro do servidor, o desta máquina e o de endereço mal cadastrado (`reachable` falso) são falha dela.
+fn read_status(snapshot: &Result<Value, Failure>, reachable: bool) -> Status {
     match snapshot {
         Ok(snapshot) => snapshot_status(snapshot),
-        Err(error) if error.status.is_none() => Status::Offline(failure_text(error)),
+        Err(error) if error.status.is_none() && reachable => Status::Offline(failure_text(error)),
         Err(error) => Status::Failed(failure_text(error)),
     }
 }
@@ -229,10 +229,10 @@ pub(crate) fn status_line(label: String, status: String, color: Hsla) -> Div {
         .child(div().text_color(color).whitespace_normal().child(status))
 }
 
-/// A linha do app desta máquina no lote. `Hidden`: o app não é trocado nesta rodada (servidor travado ou que falhou, ou
-/// release que passou a exigir mais), e a linha sai em vez de ficar esperando.
+/// A linha do app desta máquina no lote. `Later`: há versão nova, mas ela não é trocada nesta rodada (servidor travado ou
+/// que falhou, ou release que passou a exigir mais); a linha diz isso em vez de ficar esperando.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum AppStep { Waiting, Downloading { version: String, done: u64, total: Option<u64> }, Installing, Current, Failed(String), Hidden }
+pub(crate) enum AppStep { Waiting, Downloading { version: String, done: u64, total: Option<u64> }, Installing, Current, Failed(String), Later }
 
 impl AppStep {
     fn busy(&self) -> bool { matches!(self, Self::Downloading { .. } | Self::Installing) }
@@ -259,7 +259,7 @@ impl AppStep {
             Self::Installing => tr_shared("update_all_app_installing", &[]),
             Self::Current => tr_shared("update_all_app_current", &[]),
             Self::Failed(error) => tr_shared("update_all_failed", &[("erro", error)]),
-            Self::Hidden => String::new(),
+            Self::Later => tr_shared("update_all_app_later", &[]),
         }
     }
 }
@@ -357,7 +357,7 @@ impl Progress {
         (taking.clone().filter(|row| !row.status.busy()).count(), taking.count())
     }
 
-    fn app_shown(&self) -> Option<&AppStep> { self.app.as_ref().filter(|app| **app != AppStep::Hidden) }
+    fn app_shown(&self) -> Option<&AppStep> { self.app.as_ref() }
 
     fn summary(&self) -> String {
         match self.phase {
@@ -378,7 +378,7 @@ impl Progress {
         let updated = count(|s| matches!(s, Status::Updated | Status::UpdatedManual));
         let current = count(|s| *s == Status::Current);
         let offline = count(|s| matches!(s, Status::Offline(_)));
-        let issue = self.rows.len() - updated - current - offline + usize::from(matches!(self.app, Some(AppStep::Failed(_))));
+        let issue = self.rows.len() - updated - current - offline + usize::from(matches!(self.app, Some(AppStep::Failed(_) | AppStep::Later)));
         let head = tr_shared(if issue == 0 { "update_all_done_ok" } else { "update_all_done_issues" }, &[]);
         let parts: Vec<String> = [("updated", updated), ("current", current), ("offline", offline), ("issue", issue)].into_iter()
             .filter(|(_, n)| *n > 0).map(|(kind, n)| plural(kind, n)).collect();
@@ -455,6 +455,7 @@ fn app_view(app: &AppStep) -> Div {
         AppStep::Downloading { .. } | AppStep::Installing => spinner("update-all-spin-app".into()),
         AppStep::Waiting => chrome::small_icon(IconName::Circle, 16., theme::faint()).into_any_element(),
         AppStep::Failed(_) => chrome::small_icon(IconName::CircleX, 16., theme::danger()).into_any_element(),
+        AppStep::Later => chrome::small_icon(IconName::CircleAlert, 16., theme::warning()).into_any_element(),
         _ => chrome::small_icon(IconName::CircleCheck, 16., theme::success()).into_any_element(),
     };
     let color = if matches!(app, AppStep::Failed(_)) { theme::danger() } else { theme::muted() };
@@ -486,7 +487,7 @@ pub(super) struct Batch { progress: Entity<Progress>, generation: u64 }
 
 enum Event { Prepared(Vec<Machine>, HashMap<String, String>), Changed(String, Status, Vec<String>), Unknown(String) }
 
-enum ReviewEvent { Identified(Vec<Machine>, HashMap<String, String>, HashSet<String>), Read(String, Result<Value, Failure>, Notes) }
+enum ReviewEvent { Identified(Vec<Machine>, HashMap<String, String>, HashSet<String>), Read(String, Result<Value, Failure>, Notes, bool) }
 
 /// Uma entrada por máquina, os apelidos de cada endereço e as que não responderam à identificação (`down`).
 async fn prepare_machines(machines: Vec<Machine>) -> (Vec<Machine>, HashMap<String, String>, HashSet<String>) {
@@ -517,17 +518,20 @@ async fn read_machine(machine: &Machine) -> Option<Status> {
 }
 
 /// A leitura da abertura: esta máquina com a versão, as novidades e o estado; as outras com os avisos e o estado.
-async fn read_for_review(machine: Machine) -> (String, Result<Value, Failure>, Notes) {
-    match &machine.api {
+/// `bool`: outra máquina com endereço válido, a única cuja falta de resposta é "fora do ar".
+async fn read_for_review(machine: Machine) -> (String, Result<Value, Failure>, Notes, bool) {
+    let reachable = !machine.local && machine.api.is_ok();
+    let (snapshot, notes) = match &machine.api {
         Ok(api) if machine.local => {
             let (state, notes) = confirm::load(api.clone()).await;
-            (machine.key, state.ok_or_else(|| Failure::local(tr_shared("update_all_silent", &[]))), notes.labeled(machine.label))
+            (state.ok_or_else(|| Failure::local(tr_shared("update_all_silent", &[]))), notes.labeled(machine.label.clone()))
         }
-        _ => {
-            let (snapshot, notes) = confirm::load_warnings(machine.api.clone(), machine.key.clone(), machine.label).await;
-            (machine.key, snapshot, notes)
-        }
+        _ => confirm::load_warnings(machine.api.clone(), machine.key.clone(), machine.label.clone()).await,
+    };
+    if let Err(error) = &snapshot {
+        crate::log_line(&format!("update_all: leitura de {} falhou ({:?}): {}", machine.label, error.status, failure_text(error)));
     }
+    (machine.key, snapshot, notes, reachable)
 }
 
 /// O registro pode mudar com o modal aberto: segue só a entrada lida que ainda existe, com os dados de agora (token).
@@ -551,7 +555,9 @@ async fn run_machine(machine: Machine, acceptance: Acceptance, mut publish: impl
         Ok(fresh) => fresh,
         Err(error) => {
             let text = failure_text(&error);
-            publish(if error.status.is_some() { Status::Failed(text) } else { Status::Offline(text) }, Vec::new());
+            // Fazia parte da rodada: sem resposta agora é problema dela, não "fora do ar · ficou de fora".
+            crate::log_line(&format!("update_all: releitura de {} falhou ({:?}): {text}", machine.label, error.status));
+            publish(Status::Failed(text), Vec::new());
             return;
         }
     };
@@ -704,8 +710,8 @@ impl Updater {
             futures::future::join_all(readable.into_iter().map(|machine| {
                 let tx = tx.clone();
                 async move {
-                    let (key, snapshot, notes) = read_for_review(machine).await;
-                    let _ = tx.send(ReviewEvent::Read(key, snapshot, notes)).await;
+                    let (key, snapshot, notes, reachable) = read_for_review(machine).await;
+                    let _ = tx.send(ReviewEvent::Read(key, snapshot, notes, reachable)).await;
                 }
             })).await;
         });
@@ -723,10 +729,11 @@ impl Updater {
         let Some(progress) = self.batch.as_ref().filter(|b| b.generation == generation).map(|b| b.progress.clone()) else { return false };
         match event {
             ReviewEvent::Identified(machines, aliases, down) => progress.update(cx, |p, cx| { p.identified(machines, aliases, &down); cx.notify(); }),
-            ReviewEvent::Read(key, snapshot, notes) => {
+            ReviewEvent::Read(key, snapshot, notes, reachable) => {
                 let local = self.local.as_ref().is_some_and(|api| api.identity() == key);
                 if local && let Ok(state) = &snapshot { self.receive_server(Some(state.clone()), cx); }
-                let status = if local && snapshot.is_ok() && self.is_channel_blocked() { Status::Held(Hold::ChannelDraft) } else { read_status(&snapshot) };
+                let status = if local && snapshot.is_ok() && self.is_channel_blocked() { Status::Held(Hold::ChannelDraft) }
+                    else { read_status(&snapshot, reachable) };
                 let app_offer = self.plan().app;
                 progress.update(cx, |p, cx| { p.record(key, snapshot, notes, status); p.app_offer = app_offer; cx.notify(); });
             }
@@ -812,15 +819,20 @@ impl Updater {
                 // O estado relido na hora (sem buscar de novo): o da abertura pode ter minutos.
                 self.search_server(acceptance, !snapshots.contains_key(&machine.key), window, cx);
             }
-            (Some(_), Some(Status::Held(hold))) if hold.stops() => self.batch_app(AppStep::Hidden, cx),
+            (Some(_), Some(Status::Held(hold))) if hold.stops() => self.app_not_now(cx),
             (Some(_), Some(Status::Current | Status::Held(_))) if plan_app => self.install_app(window, cx),
             (Some(_), Some(Status::Current | Status::Held(_))) => {}
             (None, _) if no_local_server && plan_app => self.install_app(window, cx),
             (None, _) if no_local_server => {}
             // Esta máquina fora do ar, com falha ou sem os avisos lidos: o app não é trocado por cima dela.
-            _ => self.batch_app(AppStep::Hidden, cx),
+            _ => self.app_not_now(cx),
         }
         self.finish_batch(window, cx);
+    }
+
+    /// O app não é trocado nesta rodada: com versão nova à espera a linha diz que fica para a próxima, senão que está em dia.
+    pub(super) fn app_not_now(&mut self, cx: &mut Context<Self>) {
+        self.batch_app(if self.offer.is_some() { AppStep::Later } else { AppStep::Current }, cx);
     }
 
     /// Fechar no meio da leitura desiste do lote; durante a rodada ela segue em segundo plano, e o botão do topo reabre.
@@ -1038,7 +1050,7 @@ mod tests {
                 "summary_checking", "summary_ready", "summary_progress", "summary_app", "done_title", "done_ok", "done_issues",
                 "count_updated_one", "count_updated_other", "count_current_one", "count_current_other", "count_offline_one",
                 "count_offline_other", "count_issue_one", "count_issue_other", "offline_skip", "offline_skipped", "close_background",
-                "close", "cancel", "start", "app_label", "app_waiting", "app_downloading", "app_downloading_plain", "app_installing", "app_current"] {
+                "close", "cancel", "start", "app_label", "app_waiting", "app_downloading", "app_downloading_plain", "app_installing", "app_current", "app_later"] {
                 assert!(dict[format!("update_all_{key}")].as_str().is_some(), "{key}");
             }
         }
@@ -1118,17 +1130,19 @@ mod tests {
     #[test]
     fn update_all_review_reads_each_machine_on_its_own() {
         let failure = |status| Failure { status, detail: "fixture-failure".into(), retry_after: None, uncertain: false, code: None };
-        assert!(matches!(read_status(&Err(failure(Some(503)))), Status::Failed(error) if error.contains("fixture-failure")));
-        assert!(matches!(read_status(&Err(failure(None))), Status::Offline(_)), "sem resposta é fora do ar");
-        assert_eq!(read_status(&Ok(json!({"atualizacao_disponivel": false}))), Status::Current);
-        assert_eq!(read_status(&Ok(json!({"atualizacao_disponivel": true}))), Status::Available);
+        assert!(matches!(read_status(&Err(failure(Some(503))), true), Status::Failed(error) if error.contains("fixture-failure")));
+        assert!(matches!(read_status(&Err(failure(None)), true), Status::Offline(_)), "outra máquina sem resposta é fora do ar");
+        assert!(matches!(read_status(&Err(failure(None)), false), Status::Failed(_)),
+            "esta máquina ou endereço mal cadastrado sem resposta é falha, não fora do ar");
+        assert_eq!(read_status(&Ok(json!({"atualizacao_disponivel": false})), true), Status::Current);
+        assert_eq!(read_status(&Ok(json!({"atualizacao_disponivel": true})), true), Status::Available);
         // Uma máquina fora do ar não lê os avisos: a falha da busca já basta.
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let (down, server) = mock(vec![("GET /api/atualizacao?procurar=1 ", 503, json!({"detail": "fixture-failure"})),
             ("GET /api/update/notes ", 200, json!({"warnings": []}))]);
         let (snapshot, notes) = runtime.block_on(confirm::load_warnings(down.api.clone(), down.key.clone(), down.label.clone()));
         server.join().unwrap();
-        assert!(matches!(read_status(&snapshot), Status::Failed(_)) && !notes.excluded(), "erro do servidor ainda lê os avisos");
+        assert!(matches!(read_status(&snapshot, true), Status::Failed(_)) && !notes.excluded(), "erro do servidor ainda lê os avisos");
     }
 
     #[test]
@@ -1369,6 +1383,10 @@ mod tests {
         p.app = Some(AppStep::Current);
         assert!(p.done());
         assert_eq!(p.summary(), "Tudo pronto · 2 atualizadas, 1 já estava em dia, 1 fora do ar");
+        p.app = Some(AppStep::Later);
+        assert_eq!(p.summary(), "Terminou com pendências · 2 atualizadas, 1 já estava em dia, 1 fora do ar, 1 com problema",
+            "o app que ficou para depois não deixa o fim dizer tudo pronto");
+        p.app = Some(AppStep::Current);
         p.change("b", Status::Failed("x".into()), vec![]);
         assert_eq!(p.summary(), "Terminou com pendências · 2 atualizadas, 1 fora do ar, 1 com problema");
         assert_eq!(AppStep::Downloading { version: "v".into(), done: 1, total: None }.text(), "Baixando a versão v…");

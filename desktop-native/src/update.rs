@@ -1018,7 +1018,7 @@ impl Updater {
     fn fail(&mut self, reason: String, cx: &mut Context<Self>) {
         self.local_batch_status(all::Status::Failed(reason.clone()), cx);
         // O servidor desta máquina falhou: o app não é trocado por cima dele.
-        self.batch_app(all::AppStep::Hidden, cx);
+        self.app_not_now(cx);
         self.end_intent();
         self.run = Run::Failed(reason);
         cx.notify();
@@ -1115,10 +1115,10 @@ impl Updater {
         }
         match &plan.server {
             ServerStep::Update => self.start_server(api, acceptance, window, cx),
-            // Servidor travado no lote: o app não é trocado nesta rodada, e a linha dele sai em vez de ficar esperando.
+            // Servidor travado no lote: o app não é trocado nesta rodada, e a linha dele diz isso em vez de ficar esperando.
             ServerStep::Held(hold) if self.batch.is_some() && hold.stops() => {
                 self.end_intent();
-                self.batch_app(all::AppStep::Hidden, cx);
+                self.app_not_now(cx);
                 cx.notify();
             }
             ServerStep::Held(hold) if hold.stops() => self.fail(hold.text(), cx),
@@ -1154,7 +1154,7 @@ impl Updater {
                     this.end_intent();
                     this.run = Run::Idle;
                     this.local_batch_status(all::Status::Current, cx);
-                    this.batch_app(if this.offer.is_some() { all::AppStep::Hidden } else { all::AppStep::Current }, cx);
+                    this.app_not_now(cx);
                     this.refresh_server(cx);
                     cx.notify();
                 }
@@ -1264,7 +1264,7 @@ impl Updater {
             // O servidor atualizou; o app espera, calado, que o próximo ciclo refaça o plano com a API real.
             crate::log_line(&format!("update: app {} exige a API {} e o servidor está na {:?}; o app fica para o próximo ciclo",
                 offer.version, offer.requires_api, running));
-            self.batch_app(all::AppStep::Hidden, cx);
+            self.batch_app(all::AppStep::Later, cx);
         } else { self.batch_app(all::AppStep::Current, cx); }
         let version = self.server.as_ref().and_then(|s| s["versao_legivel"]["backend"].as_str()).unwrap_or("?").to_owned();
         let text = if manual { tr("update_done_manual") } else { tr("update_done").replace("{version}", &version) };
@@ -1315,7 +1315,7 @@ impl Updater {
                 Ok(false) => {
                     this.end_intent();
                     crate::log_line("a release do app passou a exigir mais que a oferta aceita: nada foi trocado");
-                    this.batch_app(all::AppStep::Hidden, cx);
+                    this.batch_app(all::AppStep::Later, cx);
                     this.offer = None;
                     this.run = Run::Idle;
                     this.check_app(cx);
@@ -1326,7 +1326,10 @@ impl Updater {
                     // O motivo não cabe na barra: vai no aviso e fica no tooltip do "Tentar de novo".
                     let _ = handle.update(cx, |_, window, cx| window.push_notification(Notification::error(reason.clone()).id::<Updater>(), cx));
                     // No lote a falha é do app, não do servidor desta máquina: a linha dele fica com o desfecho dela.
-                    if this.batch.is_some() { this.end_intent(); this.run = Run::Failed(reason); cx.notify(); }
+                    if this.batch.is_some() {
+                        crate::log_line(&format!("update_all: troca do app falhou: {reason}"));
+                        this.end_intent(); this.run = Run::Failed(reason); cx.notify();
+                    }
                     else { this.fail(reason, cx); }
                 }
             });

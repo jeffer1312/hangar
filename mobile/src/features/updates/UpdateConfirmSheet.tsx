@@ -34,7 +34,9 @@ async function load(request: ConfirmRequest): Promise<Loaded> {
       return { ...loadFailed(request), ...version };
     }
   }
-  const { run, failed } = await request.machines;
+  let prepared: Awaited<NonNullable<ConfirmRequest['machines']>>;
+  try { prepared = await request.machines; } catch { return { ...loadFailed(request), ...version }; }
+  const { run, failed } = prepared;
   // A versão nova é a mesma em todas: as novidades vêm da ativa, ou de outra que respondeu.
   const source = run.find((entry) => entry.server.id === request.server.id && entry.notes) ?? run.find((entry) => entry.notes);
   return { ...version, notes: source?.notes ? forClient(source.notes, 'mobile') : null, failed: false, unreachable: failed, runnable: run.length,

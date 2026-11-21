@@ -38,7 +38,7 @@ export function UpdateRow({ label, text, tone, detail }: { label: string; text: 
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const color = tone === 'error' ? theme.tokens.status.error : tone === 'warn' ? theme.tokens.status.warning : undefined;
-  return <View accessible accessibilityLabel={`${label}, ${text}`} style={styles.row}>
+  return <View accessible accessibilityLabel={[label, text, detail].filter(Boolean).join(', ')} style={styles.row}>
     <View style={styles.icon}>
       {tone === 'busy' ? <ActivityIndicator size="small" color={c.muted} />
         : tone === 'ok' ? <Icon name="CircleCheck" size={18} color={theme.tokens.status.success} />

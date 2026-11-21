@@ -10800,6 +10800,7 @@
   "update_all_app_downloading_plain": "Downloading version {version}…",
   "update_all_app_installing": "Installed; the app will close and reopen by itself",
   "update_all_app_current": "Already on the latest version",
+  "update_all_app_later": "A new version exists, but it waits for the next update",
   "accounts_list_filter_all": "All",
   "accounts_list_filter_claude": "Claude",
   "accounts_list_filter_codex": "Codex",

@@ -102,7 +102,13 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
       onTargets: (targets) => checks.keep(targets) });
     const accept = await requestUpdateConfirm(notesServer, () => router.push('/update-confirm' as never), candidates.length, prepared, checks);
     if (!accept) return;
-    const ready = await prepared;
+    let ready: Awaited<typeof prepared>;
+    try { ready = await prepared; } catch (cause) {
+      setOpen(true);
+      setRound({ error: m.update_all_failed({ erro: cause instanceof Error ? cause.message : String(cause) }) });
+      haptic.error();
+      return;
+    }
     // Quem não mostrou os avisos fica fora da rodada: atualizá-la passaria por cima do aceite.
     const targets = ready.run.map((entry) => entry.server);
     // A folha já trava o Atualizar sem máquina para rodar; isto só cobre a corrida.
