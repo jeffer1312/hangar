@@ -29,14 +29,28 @@ pub struct Chat {
     unsynced: usize,
     /// Última lista do evento `queue`; sem ele, o painel nasce das bolhas da fila.
     pub queue_server: Option<crate::queue_panel::QueuePanel>,
+    /// Muda a cada evento trocado no lugar, inserido ou removido: quem deriva dos eventos sabe que precisa refazer
+    /// mesmo quando o número e o último id continuam iguais.
+    version: u64,
 }
+
+// Global: uma conversa recriada nunca repete o valor que a anterior tinha.
+static VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_version() -> u64 { VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }
 
 impl Chat {
     fn reindex(&mut self) {
         self.index = self.events.iter().enumerate().map(|(i, e)| (e.id.clone(), i)).collect();
     }
 
-    fn changed_at(&mut self, i: usize) { self.unsynced = self.unsynced.min(i); }
+    fn changed_at(&mut self, i: usize) {
+        self.unsynced = self.unsynced.min(i);
+        self.version = next_version();
+    }
+
+    /// Diferente depois de qualquer mudança nos eventos.
+    pub fn version(&self) -> u64 { self.version }
 
     fn remove_id(&mut self, id: &str) {
         if let Some(i) = self.events.iter().position(|e| e.id == id) { self.changed_at(i); }
@@ -276,6 +290,7 @@ impl Chat {
         for (i, event) in self.events.iter_mut().enumerate().filter(|(_, e)| ids.contains(&e.id)) {
             event.queued_delivered = Some(true);
             self.unsynced = self.unsynced.min(i);
+            self.version = next_version();
         }
     }
 
@@ -442,6 +457,22 @@ mod tests {
         assert_eq!(chat.take_unsynced(), 0);
         chat.invalidate();
         assert_eq!(chat.take_unsynced(), 0);
+    }
+
+    #[test]
+    fn version_moves_when_an_event_is_replaced_in_place_or_delivered() {
+        let mut chat = Chat::default();
+        chat.apply(event("assistant_msg", "a", "um"));
+        chat.apply(event("user_msg", "queued-b", "dois"));
+        let before = chat.version();
+        chat.apply(event("assistant_msg", "a", "um"));
+        assert_eq!(chat.version(), before, "o mesmo evento de novo não muda nada");
+        chat.apply(event("assistant_msg", "a", "um e /tmp/x.png"));
+        let replaced = chat.version();
+        assert_ne!(replaced, before, "mesmo tamanho e mesmo último id, mas o texto mudou");
+        chat.steered(false, &["queued-b".into()]);
+        assert_ne!(chat.version(), replaced);
+        assert_ne!(Chat::default().version(), chat.version());
     }
 
     #[test]

@@ -3513,8 +3513,9 @@ export function writeCitedFile(name: string, path: string, text: string, digest:
   });
 }
 
-// Visão "citados": quais caminhos citados existem (relativo resolvido) e quais não.
-export function resolverCitados(name: string, caminhos: string[], server?: Server | null): Promise<{ ok: Record<string, { relativo: string | null; real: string }>; faltam: string[] }> {
+// Visão "citados": quais caminhos citados existem (relativo resolvido) e quais não. `size` (bytes) e
+// `mtime` (epoch s) só vêm de servidor que já os mede: quem lê trata os dois como opcionais.
+export function resolverCitados(name: string, caminhos: string[], server?: Server | null): Promise<{ ok: Record<string, { relativo: string | null; real: string; size?: number; mtime?: number }>; faltam: string[] }> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/files/resolver`, { method: 'POST', body: JSON.stringify({ caminhos }) });
 }
 

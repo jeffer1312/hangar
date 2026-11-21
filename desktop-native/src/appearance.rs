@@ -89,7 +89,7 @@ pub enum SidebarGroup { None, Project, Machine }
 /// Aba do painel da direita, lembrada entre aberturas (`ctxPanel.aba` do web).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SideTab { Files, Activity, Git, Browser, Review, #[serde(other)] Context }
+pub enum SideTab { Files, Media, Activity, Git, Browser, Review, #[serde(other)] Context }
 
 /// Automático segue a preferência do sistema; Desktop pinta com a paleta do papel de parede.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

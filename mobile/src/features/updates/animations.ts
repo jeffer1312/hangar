@@ -12,6 +12,7 @@ import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
 import { ConnectAnimation } from './ConnectAnimation';
+import { ConversationGalleryAnimation } from './ConversationGalleryAnimation';
 import { DreamAnimation } from './DreamAnimation';
 import { FolderBranchAnimation } from './FolderBranchAnimation';
 import { HideFromListAnimation } from './HideFromListAnimation';
@@ -49,6 +50,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'compactar-parada': CompactIdleAnimation,
   'estilo-claude-desktop': DesktopToolLookAnimation,
   'etiquetas-maquina-conta': TagsPlateAnimation,
+  'galeria-da-conversa': ConversationGalleryAnimation,
   'hangar-connect': ConnectAnimation,
   'login-usuario-senha': LoginPasswordAnimation,
   'ocultar-da-lista': HideFromListAnimation,

@@ -29,10 +29,12 @@ pub const PICK_ELEMENT: &str = "browser-pick";
 pub const TOPBAR_REVIEWS: &str = "topbar-reviews";
 /// A aba Revisão do painel lateral: só existe na sessão com revisão do trabalho.
 pub const SIDE_REVIEW: &str = "side-review";
+/// A aba Mídia do painel lateral: mídia e arquivos da conversa aberta.
+pub const SIDE_MEDIA: &str = "side-media";
 
 pub const ALL: &[&str] = &[NEW_SESSION, TOPBAR_SEARCH, TOPBAR_PRESENCE, COMPOSER, COMPOSER_ACCOUNT, DICTATION_TOGGLE, CTL_MODE,
     CTL_MODEL, QUEUE_PANEL, SESSION_ROW, CITE, TAB_KIDS, RENAME_APPLY, RAIL, COMPOSER_GIT, PICK_ELEMENT, SCHEDULED_TASKS, TOPBAR_REVIEWS,
-    SIDE_REVIEW];
+    SIDE_REVIEW, SIDE_MEDIA];
 
 /// A linha (ou aba) da sessão `name` da máquina `server`, em qualquer modo de navegação.
 pub fn session_row(server: &str, name: &str) -> String { format!("{SESSION_ROW}:{server}::{name}") }

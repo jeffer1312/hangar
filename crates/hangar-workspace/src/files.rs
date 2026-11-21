@@ -573,6 +573,18 @@ pub fn resolver(cwd: &Path, paths: &[String], suffix: bool) -> Result<Value> {
     }
     Ok(json!({"ok":ok,"faltam":missing}))
 }
+/// Tamanho (bytes) e data (segundos Unix) de um achado do `resolver`: o cliente mostra o tamanho antes de baixar.
+/// Fica fora do `resolver` para a operação manter o corpo do contrato; pasta e arquivo que sumiu ficam sem os campos.
+pub fn with_stat(mut entry: Value) -> Value {
+    let meta = entry["real"].as_str().and_then(|path| std::fs::metadata(path).ok()).filter(|meta| meta.is_file());
+    if let Some(meta) = meta {
+        entry["size"] = json!(meta.len());
+        if let Some(at) = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {
+            entry["mtime"] = json!(at.as_secs());
+        }
+    }
+    entry
+}
 pub fn roots(roots: &[String]) -> Result<Value> {
     Ok(json!(roots.iter().map(|r|{let p=real(Path::new(r));json!({"name":p.file_name().map(|s|s.to_string_lossy().into_owned()).filter(|s|!s.is_empty()).unwrap_or_else(||p.to_string_lossy().into_owned()),"path":p.to_string_lossy()})}).collect::<Vec<_>>()))
 }
@@ -671,5 +683,23 @@ mod tests {
         assert_eq!((gone.status, gone.code.as_deref()), (409, Some("erro_arq_sumiu")));
         let denied = super::vanished(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
         assert_eq!(denied.status, 403);
+    }
+
+    #[test]
+    fn resolved_file_carries_size_and_mtime_and_folders_do_not() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/a.pdf"), b"12345").unwrap();
+        let found = super::resolver(dir.path(), &["sub/a.pdf".into(), "sub".into()], false).unwrap();
+        let file = super::with_stat(found["ok"]["sub/a.pdf"].clone());
+        assert_eq!(file["size"], 5);
+        let mtime = std::fs::metadata(dir.path().join("sub/a.pdf")).unwrap().modified().unwrap()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(file["mtime"], mtime);
+        assert_eq!(file["relativo"], "sub/a.pdf", "os campos de antes ficam");
+        let folder = super::with_stat(found["ok"]["sub"].clone());
+        assert!(folder.get("size").is_none() && folder.get("mtime").is_none());
+        let gone = super::with_stat(serde_json::json!({"relativo": null, "real": dir.path().join("sumiu.txt")}));
+        assert!(gone.get("size").is_none());
     }
 }

@@ -45,6 +45,8 @@ mod rename_suggest;
 mod tags;
 mod notice_line;
 mod viewer;
+mod gallery;
+mod media_panel;
 mod window_tray;
 mod presence;
 mod disk;
@@ -101,6 +103,9 @@ pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thr
 pub(crate) use connect::device_card;
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
 pub(crate) use status::parts as status_parts;
+pub(crate) use viewer::{STRIP_THUMB, play_badge, show_in_chat_button, strip_day, strip_frame, strip_row, strip_thumb, strip_window, viewer_counter,
+    viewer_stage, viewer_title};
+pub(crate) use media_panel::{media_cell, media_cell_side, media_day_title, media_filter_chip, media_filter_row, media_grid_row, media_section_tabs};
 pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news_kind_pill, news_markdown_block, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
@@ -909,6 +914,9 @@ pub struct Hangar {
     plugin_toasts_shown: std::collections::VecDeque<SharedString>,
     recent: Option<Recent>,
     media: MediaCache<(SessionKey, Source)>,
+    /// Miniaturas buscadas e decodificadas ao mesmo tempo: a grade da aba Mídia pede dezenas de uma vez, e a sessão
+    /// desta máquina leria todos os arquivos inteiros juntos.
+    media_fetches: Arc<tokio::sync::Semaphore>,
     /// Escala da janela no último desenho: a miniatura de outra máquina é pedida no tamanho da caixa em pixels da tela.
     display_scale: f32,
     // Miniatura que acabou de chegar: quando chegou e os quadros da revelação, até ela terminar.
@@ -1060,6 +1068,7 @@ pub struct Hangar {
     dictation: dictation::Dictation,
     voice: voice_ui::VoiceUi,
     player: player::Player,
+    media_panel: media_panel::MediaPanel,
     connection_origin: Option<WeakFocusHandle>,
     /// Primeira abertura com o app Electron neste computador: a tela de conexão oferece trazer as configurações dele.
     electron_offer: bool,
@@ -1313,7 +1322,7 @@ impl Hangar {
             plugin_question_seen: None,
             suggest_pick: 0, new_chat_commands_seen: None, slash_open: false, suggest_dismissed: None, command_panel: false, context_card: false, command_search, confirm: None, confirm_no_ask: false,
             mention: Default::default(),
-            terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_presentations: HashMap::new(), linked_children_open: HashSet::new(), plugin_body_scrolls: HashMap::new(), plugin_question_focus: cx.focus_handle(), plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), display_scale: 1., media_reveal: HashMap::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
+            terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_presentations: HashMap::new(), linked_children_open: HashSet::new(), plugin_body_scrolls: HashMap::new(), plugin_question_focus: cx.focus_handle(), plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), media_fetches: Arc::new(tokio::sync::Semaphore::new(6)), display_scale: 1., media_reveal: HashMap::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
             side: side::Side::default(), controls: controls::Controls::default(),
             settings: None, settings_ui, tab_focus: HashMap::new(), tabs_scroll: ScrollHandle::new(), pending_tab_reveal: None, tab_group_open: None, tab_reveal_scheduled: false,
             tab_preview: None, tab_hover: None, tab_hover_epoch: 0, tab_hover_moved: Instant::now(), tab_preview_seq: 0, tab_preview_parked: None, in_tab_preview: false,
@@ -1337,6 +1346,7 @@ impl Hangar {
             dictation: Default::default(),
             voice: voice_ui::VoiceUi { a11y_dump: Self::watch_a11y_dump(window, cx), ..Default::default() },
             player: Default::default(),
+            media_panel: Default::default(),
             connection_origin: None,
             electron_offer: saved.is_none() && crate::electron::exists(),
             setup: None,
@@ -1680,6 +1690,7 @@ impl Hangar {
         self.files_connection_dropped(cx);
         self.selection += 1;
         self.revision += 1;
+        self.media_panel.release();
         for slot in [&mut self.list_task, &mut self.session_task, &mut self.history_task] { if let Some(t) = slot.take() { t.abort(); } }
         self.leave_accounts();
         (self.selected, self.open_api, self.pending_remote) = (None, None, None);
@@ -1773,6 +1784,7 @@ impl Hangar {
         self.scroll_target_tab(&target);
         self.selection += 1;
         self.revision += 1;
+        self.media_panel.release();
         if let Some(t) = self.session_task.take() { t.abort(); }
         if let Some(t) = self.history_task.take() { t.abort(); }
         self.chat = Chat::default();
@@ -1900,6 +1912,7 @@ impl Hangar {
         self.keep_draft(cx);
         self.keep_expanded();
         self.selection += 1;
+        self.media_panel.release();
         if let Some(task) = self.session_task.take() { task.abort(); }
         if let Some(task) = self.history_task.take() { task.abort(); }
         let remote = self.open_api.is_some();
@@ -2346,7 +2359,11 @@ impl Hangar {
                     Err(error) => {
                         // O histórico inteiro (busca) falhou: volta à janela normal, e a busca e o "Carregar anteriores"
                         // podem pedir de novo em vez de ficarem presos ao que já veio.
-                        if limit == 0 { (self.history_limit, self.has_older) = (HISTORY_PAGE, true); }
+                        if limit == 0 {
+                            (self.history_limit, self.has_older) = (HISTORY_PAGE, true);
+                            let owner = self.selected_key().map(|key| (key, self.revision));
+                            self.media_panel.full_history_failed(owner, Self::failure(&error));
+                        }
                         if error.status == Some(404) {
                             if let Some(api) = self.session_api() {
                                 let tx = self.tx.clone();
@@ -2957,6 +2974,7 @@ impl Hangar {
                     self.plugin_body_scrolls.remove(&key);
                 }
                 self.revision += 1;
+                self.media_panel.release();
                 self.terminal_suggestion.clear();
                 self.plugin_band = Value::Null;
                 self.plugin_panes.clear();
@@ -3691,8 +3709,10 @@ impl Hangar {
         if !fresh && !matches!(uploads, disk::Uploads::Remote) { return; }
         let reveal = reveal && fresh;
         media::trace(format_args!("thumb start {source:?}"));
-        let (connection, tx, source) = (self.connection, self.tx.clone(), source.clone());
+        let (connection, tx, source, fetches) = (self.connection, self.tx.clone(), source.clone(), self.media_fetches.clone());
         self.runtime.spawn(async move {
+            // A vaga vale até decodificar: o que pesa é ler e decodificar, não só baixar.
+            let _slot = fetches.acquire_owned().await.ok();
             let started = std::time::Instant::now();
             let result = match uploads.fetch_preview(&api, &key.name, &source, width).await {
                 Ok(bytes) => {
@@ -3753,7 +3773,15 @@ impl Hangar {
     // Abrir entrega ao programa do sistema o próprio arquivo, quando a sessão é desta máquina, ou uma cópia privada;
     // salvar pergunta o destino. Nunca há token em URL.
     fn keep_file(&mut self, source: Source, name: String, open: bool, cx: &mut Context<Self>) {
-        let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
+        let Some(key) = self.selected_key() else { return; };
+        self.keep_file_for(key, source, name, open, cx);
+    }
+
+    /// O mesmo para a sessão `key`: o visor guarda a dele, que pode já não ser a aberta.
+    pub(super) fn keep_file_for(&mut self, key: SessionKey, source: Source, name: String, open: bool, cx: &mut Context<Self>) {
+        let selected = self.selected_key().as_ref() == Some(&key);
+        let api = if selected { self.session_api() } else { self.api_for(&key.server) };
+        let Some(api) = api else { return; };
         let safe = composer::safe_name(&name);
         // Único ponto por onde os botões passam: não abre o que o sistema executaria.
         if open && !composer::openable(&safe) {
@@ -3776,6 +3804,7 @@ impl Hangar {
             return;
         }
         let (connection, tx, runtime, uploads) = (self.connection, self.tx.clone(), self.runtime.clone(), self.uploads_for(&key));
+        let fail_key = key.clone();
         let write = move |target: Option<PathBuf>| {
             runtime.spawn(async move {
                 let result = async {
@@ -3810,7 +3839,6 @@ impl Hangar {
         };
         if open { self.file_cards.insert(card, FileCard::Busy); write(None); cx.notify(); return; }
         let prompt = cx.prompt_for_new_path(&downloads_folder(), Some(&composer::safe_name(&name)));
-        let fail_key = self.selected_key();
         cx.spawn(async move |this, cx| {
             match prompt.await {
                 Ok(Ok(Some(path))) => {
@@ -3820,7 +3848,7 @@ impl Hangar {
                 Ok(Ok(None)) => {}
                 // O diálogo do sistema falhou: dizer, não parecer que Salvar não fez nada.
                 _ => { let _ = this.update(cx, |this, cx| {
-                    if let Some(key) = fail_key { this.action_feedback.insert(key, (tr("save_failed"), true)); }
+                    this.action_feedback.insert(fail_key, (tr("save_failed"), true));
                     cx.notify();
                 }); }
             }
@@ -4564,6 +4592,11 @@ impl Hangar {
                     .child(div().absolute().top_0().left_0().right_0().opacity(0.).child(row)
                         .child(canvas(move |bounds, _, _| places.row.set(f32::from(bounds.size.height)), |_, _, _, _| {}).absolute().inset_0()))
             }
+            None => row,
+        };
+        // "Mostrar na conversa" do visor: a linha acende e apaga.
+        let row = match self.media_flash_alpha(&id) {
+            Some(alpha) => { motion::request_frame(window, cx); div().rounded(px(10.)).bg(theme::accent().opacity(alpha)).child(row) }
             None => row,
         };
         row.id(SharedString::from(id)).into_any_element()
@@ -5348,7 +5381,7 @@ impl Hangar {
                     .when(failed, |el| el.role(Role::Button).aria_label(activity::web("file_card_retry")))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let Some(key) = open_key.clone() else { return };
-                        if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_image(key, sources.clone(), index, window, cx); }
+                        if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_gallery(key, retry_source.clone(), sources.clone(), index, window, cx); }
                     }))
                     .child(thumb))
             } else { None };
@@ -5431,7 +5464,7 @@ impl Hangar {
                 .focus_visible(|el| el.border_color(theme::accent_focus()))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let Some(key) = open_key.clone() else { return };
-                    if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_image(key, sources.clone(), n, window, cx); }
+                    if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_gallery(key, retry_source.clone(), sources.clone(), n, window, cx); }
                 }))
                 .child(inner));
         }
@@ -8020,6 +8053,7 @@ impl Hangar {
                         .child(column_box(false).h_full().rounded(px(14.)).border_1().border_color(theme::border())
                             .bg(theme::sheet()).shadow(theme::sheet_shadow())));
                     self.paint_quote_flash(cx);
+                    self.paint_media_flash(cx);
                     let cite_offer = self.render_cite_offer(window, cx);
                     content = content.child(div().relative().flex_1().min_h_0().flex().flex_col()
                         // A seleção numa resposta oferece "Citar" ao soltar o mouse.

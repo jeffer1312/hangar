@@ -269,10 +269,12 @@ export const AssistantBubble = memo(function AssistantBubble({
       {sessionName && paths.length > 0 && !server ? <Text style={{ color: theme.tokens.status.error }} accessibilityRole="alert">{m.chat_servidor_removido()}</Text> : null}
       {atts.length > 0 ? (
         <View style={styles.atts}>
-          {atts.map((r) => {
+          {atts.map((r, pos) => {
             if (r.kind === 'image' || r.kind === 'video') {
               const i = galeria.findIndex((g) => g.uri === r.uri);
-              return <ImageThumb key={r.path} items={galeria} index={i} style={styles.thumb} revealTs={ts ?? null} />;
+              // Mesma ordem do `messageAttachments` do core (citados, depois remotos): a chave casa com a galeria da conversa.
+              const galleryKey = eventId && drawsLocal ? `${eventId}#${pos}` : undefined;
+              return <ImageThumb key={r.path} items={galeria} index={i} style={styles.thumb} revealTs={ts ?? null} galleryKey={galleryKey} />;
             }
             if (r.kind === 'audio') return <AudioChip key={r.path} uri={r.uri} headers={r.headers} name={r.name} />;
             const kind = r.kind;

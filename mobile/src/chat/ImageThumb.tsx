@@ -1,13 +1,17 @@
-import { useState } from 'react';
+import { lazy, Suspense, useContext, useMemo, useState } from 'react';
 import { Pressable, StyleSheet as RNStyleSheet, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { useReducedMotion } from 'react-native-reanimated';
 import * as m from '../paraglide/messages';
-import { LightboxModal } from '../features/attachments/LightboxModal';
+import type { GalleryEntry } from '../features/attachments/gallery';
+import { GalleryContext } from './galleryContext';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import { RevealFrame } from './RevealFrame';
+
+// O visor puxa os módulos nativos de arquivo: a bolha não os carrega, só o toque na miniatura.
+const GalleryViewer = lazy(() => import('../features/attachments/gallery').then((mod) => ({ default: mod.GalleryViewer })));
 
 export interface MediaItem {
   uri: string;
@@ -25,6 +29,8 @@ interface Props {
   style: object;
   /** Hora da mensagem (segundos) de imagem citada pelo agente: a que acabou de chegar brilha enquanto carrega e abre do centro. */
   revealTs?: number | null;
+  /** Chave desta mídia na conversa (`<id do evento>#<posição>`): com ela o visor passa por toda a conversa. */
+  galleryKey?: string;
 }
 
 // Mensagem mais velha que isto (segundos) é histórico: a imagem dela aparece sem a revelação.
@@ -53,9 +59,11 @@ function RevealImage({ uri, headers, ts, style, onError }: { uri: string; header
   );
 }
 
-export function ImageThumb({ items, index, style, revealTs }: Props) {
+export function ImageThumb({ items, index, style, revealTs, galleryKey }: Props) {
   const { theme } = useUnistyles();
-  const [open, setOpen] = useState<number | null>(null);
+  const openConversation = useContext(GalleryContext);
+  // Sem a galeria da conversa (eco ainda sem evento, lista sem sessão): só as mídias desta mensagem.
+  const [open, setOpen] = useState<string | null>(null);
   const item = items[index];
   // A miniatura reduzida que falha dá lugar ao original uma vez; só então a falha aparece.
   const candidates = item.thumbUri && item.thumbUri !== item.uri ? [item.thumbUri, item.uri] : [item.uri];
@@ -72,8 +80,14 @@ export function ImageThumb({ items, index, style, revealTs }: Props) {
       return uris.includes(shown) ? prev : { key: candidatesKey, uris: [...uris, shown] };
     });
   };
-  const cur = open !== null ? items[open] : null;
-  const step = (dir: 1 | -1) => setOpen((i) => (i === null ? i : Math.min(items.length - 1, Math.max(0, i + dir))));
+  const local = useMemo<GalleryEntry[]>(
+    () => items.map((x, i) => ({ key: String(i), uri: x.uri, thumbUri: x.thumbUri, headers: x.headers, name: x.name, kind: x.kind })),
+    [items],
+  );
+  const press = () => {
+    if (galleryKey && openConversation?.(galleryKey)) return;
+    setOpen(String(index));
+  };
 
   // Falha não some calada nem vira quadrado vazio: fica o nome, como no web.
   if (shown === undefined) {
@@ -89,7 +103,7 @@ export function ImageThumb({ items, index, style, revealTs }: Props) {
   return (
     <>
       <Pressable
-        onPress={() => setOpen(index)}
+        onPress={press}
         accessibilityRole="imagebutton"
         accessibilityLabel={item.kind === 'video' ? m.anexos_tocar({ nome: item.name }) : m.anexos_ver({ n: item.name })}
       >
@@ -105,17 +119,11 @@ export function ImageThumb({ items, index, style, revealTs }: Props) {
           </View>
         )}
       </Pressable>
-      <LightboxModal
-        media={cur ? {
-          uri: cur.uri,
-          headers: cur.headers,
-          filename: cur.name,
-          kind: cur.kind,
-          counter: items.length > 1 ? `${open! + 1}/${items.length}` : undefined,
-          onStep: items.length > 1 ? step : undefined,
-        } : null}
-        onClose={() => setOpen(null)}
-      />
+      {open !== null ? (
+        <Suspense fallback={null}>
+          <GalleryViewer entries={local} openKey={open} onOpenKey={setOpen} onClose={() => setOpen(null)} />
+        </Suspense>
+      ) : null}
     </>
   );
 }
