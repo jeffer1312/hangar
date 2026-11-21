@@ -4052,6 +4052,26 @@ pub(crate) mod tests {
         (target,handle)
     }
 
+    /// Troca de agente segurando a fila e nada esperando no Hangar: o Orientar não aperta tecla, porque a fila do
+    /// Claude Code pode ter uma "Na conversa" já entregue.
+    #[tokio::test]
+    async fn steer_with_no_waiting_entry_is_refused_while_a_handoff_holds_the_queue() {
+        let dir=tempfile::tempdir().unwrap();
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()));
+        let target=super::super::terminal::TerminalTarget {key:"S".into(),generation:7,name:"held".into(),
+            binding:crate::terminal_input::TerminalBinding {name:"held".into(),pane:"%78".into(),conversation:"sid".into(),generation:7,created:1,mux_argv:vec!["fixture-mux".into()],windows:false,clipboard_lock_path:None},
+            metadata:crate::terminal_facts::TerminalMetadata {config_dir:dir.path().into(),agent_pid:78,agent_birth:1000.0,legacy_import_after:None,fingerprint:"fixture-s".into(),origin:"uds:fixture".into()},
+            state_path:dir.path().join("S.json"),lease_path:dir.path().join("S.lock"),projection_dir:dir.path().into(),transcript:dir.path().join("sid.jsonl"),created:1.0,plugin_key:None};
+        let lease=acquire_lease(&target.lease_path).unwrap();
+        let store=Store::open(&target.state_path,&target.projection_dir,QueueState::new("S",7,"held",vec![])).unwrap();
+        let options=super::super::terminal::TerminalOptions {io:Arc::new(NoExternalIo),tick:Duration::from_secs(3600),lifecycle:Some(Arc::downgrade(&registry)),..Default::default()};
+        let handle=super::super::terminal::TerminalActor::spawn(target,QueueActor::start(store,lease),registry.policy.clone(),options,registry.events.clone(),Arc::new(AtomicU64::new(0)));
+        registry.hold_handoff("held",handoff_view()).unwrap();
+        let answer=handle.control("steer-held".into(),"steer_first".into(),json!({})).await.unwrap();
+        assert_eq!((answer.disposition,answer.payload["code"].as_str()),(Disposition::Rejected,Some("session_transfer_busy")));
+        handle.stop().await.unwrap();
+    }
+
     /// Parity M7: o Claude Code que não grava `sessions/<pid>.json` (ou o arquivo lido no meio da escrita)
     /// não deixa a sessão em erro a cada tique: sem sinal de troca, a conversa segue a mesma.
     #[tokio::test]
