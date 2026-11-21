@@ -57,16 +57,20 @@ export function ImageThumb({ items, index, style, revealTs }: Props) {
   const { theme } = useUnistyles();
   const [open, setOpen] = useState<number | null>(null);
   const item = items[index];
-  const shown = item.thumbUri ?? item.uri;
+  // A miniatura reduzida que falha dá lugar ao original uma vez; só então a falha aparece.
+  const candidates = item.thumbUri && item.thumbUri !== item.uri ? [item.thumbUri, item.uri] : [item.uri];
   // A falha vale para o endereço que falhou: a rota que muda (rede local ↔ Tailscale) tenta de novo.
-  const [failedUri, setFailedUri] = useState<string | null>(null);
-  const falhou = failedUri === shown;
-  const setFalhou = () => setFailedUri(shown);
+  const [failedUris, setFailedUris] = useState<readonly string[]>([]);
+  const shown = candidates.find((uri) => !failedUris.includes(uri));
+  const setFalhou = () => {
+    if (shown === undefined) return;
+    setFailedUris((list) => (list.includes(shown) ? list : [...list.filter((uri) => candidates.includes(uri)), shown]));
+  };
   const cur = open !== null ? items[open] : null;
   const step = (dir: 1 | -1) => setOpen((i) => (i === null ? i : Math.min(items.length - 1, Math.max(0, i + dir))));
 
   // Falha não some calada nem vira quadrado vazio: fica o nome, como no web.
-  if (falhou) {
+  if (shown === undefined) {
     return (
       <View style={styles.broken}>
         <Text style={[styles.brokenTxt, { color: theme.tokens.text.muted }]} numberOfLines={1}>

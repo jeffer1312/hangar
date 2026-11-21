@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as m from '../../../../src/paraglide/messages';
-import { fileAuthHeader, listUploads, uploadUrlNative } from '@hangar/core';
+import { fileAuthHeader, listUploads, registrarDiag, uploadUrlNative } from '@hangar/core';
 import type { UploadFile } from '@hangar/core';
 import { AttachmentCard } from '../../../../src/features/attachments/AttachmentCard';
 import { Lightbox } from '../../../../src/features/attachments/Lightbox';
@@ -37,6 +37,8 @@ export default function AttachmentsSheet() {
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [doc, setDoc] = useState<DocumentItem | null>(null);
   const [delivering, setDelivering] = useState<string | null>(null);
+  // O estado só chega no próximo render: dois toques seguidos passariam os dois pela checagem.
+  const deliveringLock = useRef(false);
   const ready = useServers((s) => s.ready);
   const target = useServers((s) => s.servers.find((x) => x.id === serverId) ?? null);
   // As URLs abaixo levam o endereço da rota: trocar de rede redesenha com o novo.
@@ -69,6 +71,8 @@ export default function AttachmentsSheet() {
   // Documento (docx, planilha, zip, csv…): o WebView não lê; vai como no card da conversa, pela folha
   // do sistema no iOS ou pelo app que abre o tipo no Android.
   const deliver = useCallback(async (f: UploadFile, uri: string, headers: Record<string, string>) => {
+    if (deliveringLock.current) return;
+    deliveringLock.current = true;
     haptic.selection();
     setDelivering(f.filename);
     try {
@@ -81,9 +85,14 @@ export default function AttachmentsSheet() {
       }
     } catch (e) {
       haptic.error();
-      const missing = /status:? 404\b/.test(e instanceof Error ? e.message : String(e));
+      // O download do expo-file-system só diz o status no texto; erro do core traz o número.
+      const typed = typeof (e as { status?: unknown } | null)?.status === 'number' ? (e as { status: number }).status : null;
+      const missing = typed !== null ? typed === 404 : /status:? 404\b/.test(e instanceof Error ? e.message : String(e));
+      registrarDiag({ evento: 'anexos.entrega_falhou', nivel: 'aviso', tela: 'anexos',
+        codigo: typed !== null ? String(typed) : missing ? '404' : e instanceof Error ? e.name : 'erro' });
       toast.erro(`${f.filename}: ${missing ? m.file_card_missing() : m.file_card_failed()}`);
     } finally {
+      deliveringLock.current = false;
       setDelivering(null);
     }
   }, []);
@@ -91,7 +100,8 @@ export default function AttachmentsSheet() {
   const handlePress = useCallback(
     (f: UploadFile) => {
       if (!target) { toast.erro(m.chat_servidor_removido()); return; }
-      if (Object.keys(fileAuthHeader(target)).length === 0) { toast.erro(m.sessao_expirada()); return; }
+      // `fileAuthHeader` sempre monta o cabeçalho, mesmo com o token vazio.
+      if (!target.token) { toast.erro(m.sessao_expirada()); return; }
       const k = fileKind(f.filename);
       if (k === 'image' || k === 'video') {
         setLightbox(f.filename);

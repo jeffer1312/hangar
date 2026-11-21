@@ -158,7 +158,7 @@ fn save(dir: &Path, filename: &str, bytes: &[u8]) -> Result<Uploaded, Failure> {
     use std::io::Write;
     std::fs::OpenOptions::new().write(true).create_new(true).open(&path).and_then(|mut file| file.write_all(bytes))
         .map_err(|error| refusal(500, error.to_string()))?;
-    Ok(Uploaded { path: path.to_string_lossy().into_owned(), frames: Vec::new(), transcript: Some(String::new()) })
+    Ok(Uploaded { path: path.to_string_lossy().into_owned(), frames: Vec::new(), transcript: Some(String::new()), note: None })
 }
 
 /// `prune_old`: apaga do projeto inteiro (todas as sessões) o que passou de `days` dias; erro de um arquivo não para a

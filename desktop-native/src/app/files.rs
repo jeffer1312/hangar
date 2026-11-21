@@ -294,9 +294,20 @@ impl Hangar {
             let (api, name, path, tx) = (api.clone(), key.name.clone(), path.clone(), tx.clone());
             self.runtime.spawn(async move {
                 // Decodificar (SVG até 4096²) não pode ocupar uma das duas threads do runtime.
+                let kind = composer::extension(&path);
                 let result = match api.fetch(&name, &Source::Cited(path)).await {
-                    Ok(bytes) => tokio::task::spawn_blocking(move || crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None))
-                        .await.ok().flatten().ok_or_else(|| Failure::local(UNREADABLE_PICTURE)),
+                    Ok(bytes) => match tokio::task::spawn_blocking(move || crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None)).await {
+                        Ok(Some(picture)) => Ok(picture),
+                        // A tela diz só que não deu para ler; o diário guarda qual dos dois casos foi.
+                        Ok(None) => {
+                            crate::log_line(&format!("arquivos: imagem .{kind} não decodificou"));
+                            Err(Failure::local(UNREADABLE_PICTURE))
+                        }
+                        Err(error) => {
+                            crate::log_line(&format!("arquivos: a tarefa que decodificava a imagem .{kind} não terminou: {error}"));
+                            Err(Failure::local(UNREADABLE_PICTURE))
+                        }
+                    },
                     Err(error) => Err(error),
                 };
                 let _ = tx.send(Envelope { connection, selection, payload: Payload::FileView(FileReply::Picture(id, result)) }).await;

@@ -191,6 +191,43 @@ describe('galeria de anexos', () => {
     act(() => root.unmount());
   });
 
+  it('servidor sem token avisa sessão expirada e não abre nada', async () => {
+    servers.servers = [{ ...servers.servers[0], token: '' }, servers.servers[1]];
+    h.list.mockResolvedValueOnce({ files: [file('pacote.zip'), file('relatorio.pdf'), file('clip.mp4')] });
+    const { container, root } = await render();
+    for (const name of ['pacote.zip', 'relatorio.pdf', 'clip.mp4']) {
+      await act(async () => byLabel(container, name)!.click());
+      expect(h.toast).toHaveBeenLastCalledWith('sessao_expirada');
+    }
+    expect(h.deliver).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-doc]')).toBeNull();
+    expect(container.querySelector('[data-lightbox]')).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it('dois toques seguidos entregam o documento uma vez só', async () => {
+    h.list.mockResolvedValueOnce({ files: [file('pacote.zip')] });
+    let finish!: (v: string) => void;
+    h.deliver.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { container, root } = await render();
+    await act(async () => {
+      byLabel(container, 'pacote.zip')!.click();
+      byLabel(container, 'pacote.zip')!.click();
+    });
+    expect(h.deliver).toHaveBeenCalledTimes(1);
+    await act(async () => finish('opened'));
+    act(() => root.unmount());
+  });
+
+  it('erro com status 404 tipado diz que o arquivo sumiu', async () => {
+    h.list.mockResolvedValueOnce({ files: [file('pacote.rar')] });
+    h.deliver.mockRejectedValueOnce(Object.assign(new Error('falhou'), { status: 404 }));
+    const { container, root } = await render();
+    await act(async () => byLabel(container, 'pacote.rar')!.click());
+    expect(h.toast).toHaveBeenLastCalledWith('pacote.rar: file_card_missing');
+    act(() => root.unmount());
+  });
+
   it.each([
     ['relatório final.pdf', 'pdf', 'relat%C3%B3rio%20final.pdf'],
     ['página final.html', 'html', 'p%C3%A1gina%20final.html'],

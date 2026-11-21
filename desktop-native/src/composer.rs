@@ -789,8 +789,8 @@ mod tests {
 
     #[test]
     fn prompt_uses_backend_paths_frames_and_speech_like_web() {
-        let image = Uploaded { path: "/srv/up/1-a.png".into(), frames: vec![], transcript: None };
-        let video = Uploaded { path: "/srv/up/2-b.mp4".into(), frames: vec!["/srv/up/2-b-1.jpg".into()], transcript: Some("oi".into()) };
+        let image = Uploaded { path: "/srv/up/1-a.png".into(), frames: vec![], transcript: None, note: None };
+        let video = Uploaded { path: "/srv/up/2-b.mp4".into(), frames: vec!["/srv/up/2-b-1.jpg".into()], transcript: Some("oi".into()), note: None };
         let speech = |t: &str| format!("fala do vídeo: \"{t}\"");
         assert_eq!(compose_prompt(" olha ", &[(true, image.clone()), (false, video)], speech),
             "olha — 📎 imagem: /srv/up/1-a.png 📎 arquivo: /srv/up/2-b.mp4 📎 imagem: /srv/up/2-b-1.jpg fala do vídeo: \"oi\"");

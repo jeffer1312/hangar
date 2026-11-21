@@ -4,6 +4,7 @@ const picker = vi.hoisted(() => ({
   launchImageLibraryAsync: vi.fn(),
   launchCameraAsync: vi.fn(),
   requestCameraPermissionsAsync: vi.fn(),
+  UIImagePickerControllerQualityType: { High: 0, Medium: 1, Low: 2 },
 }));
 vi.mock('expo-image-picker', () => picker);
 vi.mock('expo-document-picker', () => ({ getDocumentAsync: vi.fn() }));
@@ -34,6 +35,8 @@ describe('galeria e câmera', () => {
     picker.requestCameraPermissionsAsync.mockResolvedValue({ granted: true });
     picker.launchCameraAsync.mockResolvedValue({ canceled: false, assets: [{ ...video, fileName: null, mimeType: undefined }] });
     expect(await pickCamera()).toMatchObject({ name: 'video.mp4', mime: 'video/mp4', kind: 'file' });
-    expect(picker.launchCameraAsync).toHaveBeenCalledWith(expect.objectContaining({ mediaTypes: ['images', 'videos'] }));
+    expect(picker.launchCameraAsync).toHaveBeenCalledWith(expect.objectContaining({
+      mediaTypes: ['images', 'videos'], videoMaxDuration: 300, videoQuality: 1,
+    }));
   });
 });

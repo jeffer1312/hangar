@@ -24,8 +24,14 @@ export function subscribeRoutes(listener: () => void): () => void {
   return () => { routeListeners.delete(listener); };
 }
 
+// Um ouvinte que lança não pode parar os outros nem a troca de rota, que nunca rejeita.
 function notifyRoutes(): void {
-  for (const listener of [...routeListeners]) listener();
+  for (const listener of [...routeListeners]) {
+    try { listener(); }
+    catch (error) {
+      registrarDiag({ evento: 'rota.ouvinte_falhou', nivel: 'aviso', codigo: error instanceof Error ? error.name : 'erro' });
+    }
+  }
 }
 
 function setRoute(id: string, route: { base: string; connection: string }): void {

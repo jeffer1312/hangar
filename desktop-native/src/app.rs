@@ -3473,7 +3473,14 @@ impl Hangar {
         };
         let caption = quotes::compose_refs(&refs, &draft);
         let message = composer::compose_prompt(&caption, &uploads, |speech| tr("attach_video_speech").replace("{texto}", speech));
-        if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) { self.delivery.mark_typed(&key, field); }
+        // A faixa do anexo some com o envio: o vídeo que foi sem quadros nem fala fica dito no aviso de baixo.
+        let gaps: Vec<String> = self.attachments.get(&key).map(|list| list.iter().filter(|a| batch.contains(&a.id))
+            .filter_map(|a| match &a.state { AttachState::Uploaded(up) => up.note.map(|gap| format!("{}: {}", a.name, gap.shown())), _ => None })
+            .collect()).unwrap_or_default();
+        if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) {
+            self.delivery.mark_typed(&key, field);
+            if !gaps.is_empty() { self.action_feedback.insert(key.clone(), (gaps.join(" "), true)); }
+        }
         else if !field.is_empty() { self.return_to_field(&key, vec![field], current, window, cx); }
     }
 
@@ -3710,7 +3717,16 @@ impl Hangar {
         self.file_cards.insert((key.clone(), source.clone()), FileCard::Busy);
         self.runtime.spawn(async move {
             let result = match api.server_send(reqwest::Method::POST, &["sessions", &key.name, "file", "page"], Some(json!({"path": path})), 30).await {
-                Ok(body) => body["open_url"].as_str().and_then(|url| api.page_url(url)).ok_or_else(|| tr("invalid_response")),
+                Ok(body) => match body["open_url"].as_str() {
+                    None => {
+                        crate::log_line("página: resposta de file/page sem open_url");
+                        Err(tr("invalid_response"))
+                    }
+                    Some(url) => api.page_url(url).ok_or_else(|| {
+                        crate::log_line(&format!("página: open_url recusado ({})", crate::api::page_url_problem(url)));
+                        tr("invalid_response")
+                    }),
+                },
                 Err(error) => Err(Self::fetch_failure(&error)),
             };
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::PageOpened(key, source, result) }).await;
@@ -3756,10 +3772,22 @@ impl Hangar {
                     // Vazio não vira arquivo no disco: o card avisa e não há o que abrir.
                     if bytes.is_empty() { return Ok((PathBuf::new(), true)); }
                     // Até 100 MiB: a escrita não pode ocupar uma das duas threads do runtime.
-                    tokio::task::spawn_blocking(move || {
-                        let path = match target { Some(path) => path, None => private_copy(&safe).ok()? };
-                        std::fs::write(&path, bytes).ok().map(|()| (path, false))
-                    }).await.ok().flatten().ok_or_else(|| (tr("save_failed"), false))
+                    let shown = safe.clone();
+                    let written = tokio::task::spawn_blocking(move || {
+                        let path = match target { Some(path) => path, None => private_copy(&safe)? };
+                        std::fs::write(&path, bytes).map(|()| (path, false))
+                    }).await;
+                    match written {
+                        Ok(Ok(saved)) => Ok(saved),
+                        Ok(Err(error)) => {
+                            crate::log_line(&format!("arquivo: gravar {shown} falhou: {error}"));
+                            Err((format!("{shown}: {error}"), false))
+                        }
+                        Err(error) => {
+                            crate::log_line(&format!("arquivo: a tarefa que gravava {shown} não terminou: {error}"));
+                            Err((format!("{shown}: {}", tr("save_failed")), false))
+                        }
+                    }
                 }.await;
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, open, result) }).await;
             });
@@ -5432,9 +5460,13 @@ impl Hangar {
             let (status, color) = match &attachment.state {
                 AttachState::Waiting => (if busy { tr("attach_waiting") } else { String::new() }, theme::muted()),
                 AttachState::Uploading => (tr("attach_uploading"), theme::accent()),
-                AttachState::Uploaded(_) => (tr("attach_uploaded"), theme::muted()),
+                AttachState::Uploaded(up) => match up.note {
+                    Some(gap) => (gap.shown(), theme::warning()),
+                    None => (tr("attach_uploaded"), theme::muted()),
+                },
                 AttachState::Failed(reason) => (reason.clone(), theme::warning()),
             };
+            let gap = matches!(&attachment.state, AttachState::Uploaded(up) if up.note.is_some());
             // Miniatura de 56 como no web; o nome e o estado ficam na dica e na linha de baixo.
             let waiting = matches!(attachment.state, AttachState::Waiting) && busy;
             let failed = matches!(attachment.state, AttachState::Failed(_));
@@ -5460,7 +5492,7 @@ impl Hangar {
                     .icon(chrome::small_icon(IconName::Close, 12., theme::muted())).size(px(20.)).rounded_full().border_1().border_color(theme::border_strong())
                     .accessibility_label(tr("attach_remove").replace("{name}", &attachment.name)).tooltip(tr("attach_remove").replace("{name}", &attachment.name)).disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.remove_attachment(id, window, cx)))));
-            (tile, (!status.is_empty() && (failed || matches!(attachment.state, AttachState::Uploading))).then(|| (attachment.name.clone(), status, color)))
+            (tile, (!status.is_empty() && (failed || gap || matches!(attachment.state, AttachState::Uploading))).then(|| (attachment.name.clone(), status, color)))
         });
         let (tiles, notes): (Vec<_>, Vec<_>) = tiles.unzip();
         Some(div().flex().flex_col().gap_1()
@@ -7385,13 +7417,23 @@ fn stale_copies(mut copies: Vec<(PathBuf, std::time::SystemTime, u64)>, now: std
 }
 
 /// Bloqueante. Só arquivos comuns da pasta das cópias; erro de um não para os outros.
+/// Falha vai ao diário numa linha por varredura, nunca à tela: as cópias são só cache.
 fn sweep_private_copies(base: &std::path::Path, now: std::time::SystemTime) {
-    let Ok(entries) = std::fs::read_dir(base) else { return };
+    let entries = match std::fs::read_dir(base) {
+        Ok(entries) => entries,
+        // Antes da primeira cópia a pasta não existe: nada a varrer.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => { crate::log_line(&format!("cópias privadas: a pasta não foi lida: {error}")); return; }
+    };
     let copies = entries.flatten().filter_map(|entry| {
         let meta = entry.metadata().ok().filter(std::fs::Metadata::is_file)?;
         Some((entry.path(), meta.modified().ok()?, meta.len()))
     }).collect();
-    for path in stale_copies(copies, now) { let _ = std::fs::remove_file(path); }
+    let (mut failed, mut last) = (0usize, None);
+    for path in stale_copies(copies, now) {
+        if let Err(error) = std::fs::remove_file(path) { failed += 1; last = Some(error); }
+    }
+    if let Some(error) = last { crate::log_line(&format!("cópias privadas: {failed} não saíram; última: {error}")); }
 }
 
 // A conexão que funcionou volta na próxima abertura, como o login do app web; só o dono lê o arquivo.

@@ -351,6 +351,21 @@ describe('rota até o servidor', () => {
     expect(listener).toHaveBeenCalledTimes(3);
   });
 
+  it('ouvinte que lança não para os outros nem a troca de rota', async () => {
+    env(null);
+    rede({ [TS]: maq, [LAN]: maqLocal });
+    const after = vi.fn();
+    const stopBad = subscribeRoutes(() => { throw new Error('ouvinte quebrado'); });
+    const stopAfter = subscribeRoutes(after);
+    await expect(decidirRota(srv())).resolves.toBeUndefined();
+    expect(baseOf(srv())).toBe(LAN);
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(() => esquecerRota('s1')).not.toThrow();
+    expect(after).toHaveBeenCalledTimes(2);
+    stopBad();
+    stopAfter();
+  });
+
   it('o token nunca vai pro endereço local antes da prova', async () => {
     env(null);
     const chamadas = rede({ [TS]: maq, [LAN]: maqLocal });
