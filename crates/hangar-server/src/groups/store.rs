@@ -59,19 +59,17 @@ impl PairDir {
             .and_then(|v| v["gid"].as_str().map(str::to_owned)).unwrap_or_default();
         let mut tmp = path.clone().into_os_string();
         tmp.push(".tmp");
-        let mut removed = false;
-        for (i, file) in [path, PathBuf::from(tmp)].into_iter().enumerate() {
-            match std::fs::remove_file(file) {
-                Ok(()) => removed |= i == 0,
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-                Err(_) => {}
-            }
+        match std::fs::remove_file(&path) {
+            // Registrado já aqui: o `.tmp` que falhar depois não pode deixar a exclusão sem rastro.
+            Ok(()) => tracing::info!(code = "groups_sidecar_removed", session = name, gid, reason = why, pid = std::process::id(),
+                dir = %self.root.display(), "groups: arquivo de grupo da sessão apagado"),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            Err(_) => {}
         }
-        if removed {
-            tracing::info!(code = "groups_sidecar_removed", session = name, gid, reason = why, pid = std::process::id(),
-                dir = %self.root.display(), "groups: arquivo de grupo da sessão apagado");
+        match std::fs::remove_file(PathBuf::from(tmp)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     /// (stem, sidecar) dos `*.json` da raiz, exceto `external_pairs.json`, por ordem de stem. O
