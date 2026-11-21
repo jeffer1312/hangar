@@ -109,7 +109,13 @@ pub fn openable(name: &str) -> bool {
         | "bat" | "cmd" | "com" | "exe" | "scr" | "pif" | "cpl" | "msi" | "msp" | "msc" | "dll" | "sys" | "reg" | "inf" | "lnk" | "url"
         | "jar" | "jnlp" | "app" | "pkg" | "dmg" | "deb" | "rpm" | "apk" | "workflow" | "scpt" | "applescript" | "terminal" | "webloc"
         | "library-ms" | "settingcontent-ms" | "appref-ms" | "application" | "gadget" | "ade" | "adp" | "chm" | "crx" | "xpi"
+        | "msix" | "msixbundle" | "appx" | "appxbundle" | "appinstaller" | "docm" | "xlsm" | "pptm"
         | "")
+}
+
+/// O nome conferido tem de ser o do arquivo que o sistema vai receber: um symlink `a.pdf` pode apontar para `x.bat`.
+pub fn openable_path(path: &std::path::Path) -> bool {
+    path.file_name().is_some_and(|name| openable(&name.to_string_lossy()))
 }
 
 /// Nome de arquivo seguro para gravar no disco local: só o último componente, sem controle nem ponto inicial.
@@ -960,9 +966,13 @@ mod tests {
         for passive in ["a.zip", "b.docx", "c.xlsx", "d.pptx", "e.odt", "f.tar.gz", "g.7z", "h.epub", "i.psd", "j.MP4", "k.png"] {
             assert!(openable(passive), "{passive} abre");
         }
-        for active in ["a.sh", "b.EXE", "c.bat", "d.ps1", "e.lnk", "f.jar", "g.app", "h.py", "i.js", "j.htm", "k.AppImage", "semextensao", "l.msi"] {
+        for active in ["a.sh", "b.EXE", "c.bat", "d.ps1", "e.lnk", "f.jar", "g.app", "h.py", "i.js", "j.htm", "k.AppImage", "semextensao", "l.msi",
+            "m.msix", "n.appx", "o.appinstaller", "p.docm", "q.xlsm"] {
             assert!(!openable(active), "{active} só salva");
         }
+        // Vale o nome do arquivo que o sistema recebe, já resolvido: `a.pdf` que aponta para `run.bat` não abre.
+        assert!(openable_path(std::path::Path::new("/tmp/x/a.pdf")));
+        assert!(!openable_path(std::path::Path::new("/tmp/x/run.bat")) && !openable_path(std::path::Path::new("/")));
         // O corte nunca troca a extensão: o nome gravado é o mesmo tipo que o botão decidiu abrir.
         let tricky = safe_name(&format!("{}.html.pdf", "a".repeat(115)));
         assert!(tricky.ends_with(".pdf") && tricky.chars().count() == 120);

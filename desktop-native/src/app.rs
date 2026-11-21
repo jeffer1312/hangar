@@ -1992,7 +1992,11 @@ impl Hangar {
             Payload::Saved(key, source, open, result) => {
                 let (card, note) = match result {
                     Ok((_, true)) => (Some(FileCard::Empty), None),
-                    Ok((path, _)) if open => { cx.open_with_system(&path); (None, None) }
+                    Ok((path, _)) if open && composer::openable_path(&path) => { cx.open_with_system(&path); (None, None) }
+                    Ok((path, _)) if open => {
+                        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        (None, Some((tr("open_refused").replace("{name}", &name), true)))
+                    }
                     Ok((path, _)) => {
                         let note = tr("saved").replace("{path}", &path.display().to_string());
                         (Some(FileCard::Saved(path)), Some((note, false)))
@@ -3728,11 +3732,12 @@ impl Hangar {
         let card = (key.clone(), source.clone());
         // Já baixado: Abrir é o arquivo salvo, sem baixar de novo.
         if open && let Some(FileCard::Saved(saved)) = self.file_cards.get(&card)
-            && composer::openable(&saved.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()) && saved.is_file() {
+            && composer::openable_path(saved) && saved.is_file() {
             cx.open_with_system(saved);
             return;
         }
-        if open && let Source::Cited(path) | Source::Workspace(path) = &source && let Some(real) = self.file_on_disk(path) {
+        if open && let Source::Cited(path) | Source::Workspace(path) = &source && let Some(real) = self.file_on_disk(path)
+            && composer::openable_path(&real) {
             self.file_cards.remove(&card);
             cx.open_with_system(&real);
             cx.notify();

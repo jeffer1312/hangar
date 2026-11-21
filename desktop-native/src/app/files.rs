@@ -293,8 +293,12 @@ impl Hangar {
         if fetch_picture {
             let (api, name, path, tx) = (api.clone(), key.name.clone(), path.clone(), tx.clone());
             self.runtime.spawn(async move {
-                let result = api.fetch(&name, &Source::Cited(path)).await.and_then(|bytes|
-                    crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None).ok_or_else(|| Failure::local(UNREADABLE_PICTURE)));
+                // Decodificar (SVG até 4096²) não pode ocupar uma das duas threads do runtime.
+                let result = match api.fetch(&name, &Source::Cited(path)).await {
+                    Ok(bytes) => tokio::task::spawn_blocking(move || crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None))
+                        .await.ok().flatten().ok_or_else(|| Failure::local(UNREADABLE_PICTURE)),
+                    Err(error) => Err(error),
+                };
                 let _ = tx.send(Envelope { connection, selection, payload: Payload::FileView(FileReply::Picture(id, result)) }).await;
             });
         }
@@ -676,7 +680,6 @@ impl Hangar {
 
     fn open_file_video(&mut self, cx: &mut Context<Self>) {
         let path = self.files.tabs[self.files.active].path.clone();
-        if let Some(real) = self.file_on_disk(&path) { cx.open_with_system(&real); return; }
         let name = composer::basename(&path).to_owned();
         self.keep_file(Source::Cited(path), name, true, cx);
     }
