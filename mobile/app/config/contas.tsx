@@ -11,7 +11,7 @@ import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { CodexContaLogin } from '../../src/features/config/CodexContaLogin';
 import { ResetFeedback } from '../../src/features/accounts/CodexReset';
 import { EngineStatus, useEngines } from '../../src/features/accounts/Engines';
-import { ProxyUpdateCard, managedVersion, useProxyUpdate } from '../../src/features/accounts/ProxyUpdate';
+import { ProxyCard, managedVersion, useProxyUpdate } from '../../src/features/accounts/ProxyUpdate';
 import { ClaudeAccountCreate } from '../../src/features/accounts/ClaudeAccountCreate';
 import { AccountRow, type AccountRowData, type AccountRowHandlers } from '../../src/features/accounts/AccountRow';
 import { AccountSearch, FilterChips, SortControl, type SortOption } from '../../src/features/accounts/AccountsToolbar';
@@ -301,7 +301,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
       ) : (
         <InfoNotice text={m.maquinas_vazio()} />
       )}
-      {server ? <ProxyUpdateCard state={proxy} /> : null}
+      {server ? <ProxyCard state={proxy} onConnect={() => setCliproxyWizard(true)} /> : null}
       {loading ? <Text style={styles.muted}>{m.comum_carregando()}</Text> : null}
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
       {server ? <EngineStatus state={engines} /> : null}
@@ -340,7 +340,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
       {server && cliproxyWizard ? (
         <Suspense fallback={<Text style={styles.muted}>{m.comum_carregando()}</Text>}>
           <CliproxyWizard server={server} names={Object.keys(engines.data?.motores ?? {})}
-            onSaved={engines.saved} onClose={() => setCliproxyWizard(false)} />
+            onSaved={engines.saved} onClose={() => { setCliproxyWizard(false); void proxy.reload(); }} />
         </Suspense>
       ) : null}
 

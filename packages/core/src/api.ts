@@ -3149,22 +3149,32 @@ export interface CliproxyAccount { type: string; email: string }
 export type CliproxyInstallStep = 'download' | 'config' | 'service' | 'start';
 
 export interface CliproxyJob {
-  kind: 'install' | 'update';
+  // `adopt` = proxy de fora passando para o serviço do Hangar.
+  kind: 'install' | 'update' | 'adopt';
   step: CliproxyInstallStep;
   done: boolean;
   error: { code: string; detail: string } | null;
-  outcome: 'installed' | 'configured' | 'updated' | null;
+  outcome: 'installed' | 'configured' | 'updated' | 'adopted' | null;
 }
+
+// Se o proxy de fora pode passar para o Hangar; recusado, o código diz o motivo.
+export type CliproxyHandover = { ok: true } | { ok: false; code: string; detail: string };
 
 // `external` = proxy que o Hangar não instalou; `managed` = instalado por ele.
 export interface CliproxyInstall {
   state: 'absent' | 'external' | 'managed';
+  // No `external`, a versão que o proxy anuncia (só com a senha de gerenciamento guardada).
   version: string | null;
   latest: string | null;
   update_available: boolean;
   running: boolean;
-  // Sessões que a atualização cortaria; só no `managed`.
+  base_url?: string | null;
+  // Contas logadas no proxy.
+  accounts?: number | null;
+  // Sessões que a atualização ou a entrega cortariam.
   sessions?: number | null;
+  // Só no `external`, fora de tarefa em curso.
+  handover?: CliproxyHandover | null;
   job: CliproxyJob | null;
 }
 
@@ -3176,6 +3186,11 @@ export function getCliproxyInstallForServer(s: Server, signal?: AbortSignal): Pr
 /** Sem `confirm`, sessões no proxy recusam com 409 `erro_cliproxy_sessoes_ativas` (`params.sessions`). */
 export function updateCliproxyForServer(s: Server, confirm = false): Promise<{ job: CliproxyJob | null }> {
   return apiFetchForServer(s, '/api/engines/cliproxy/update', { method: 'POST', body: JSON.stringify({ confirm }) });
+}
+
+/** Passa o proxy de fora para o Hangar; a mesma confirmação da atualização quando há sessões nele. */
+export function adoptCliproxyForServer(s: Server, confirm = false): Promise<{ job: CliproxyJob | null }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/adopt', { method: 'POST', body: JSON.stringify({ confirm }) });
 }
 
 export type CliproxyLoginProvider = 'codex' | 'claude';

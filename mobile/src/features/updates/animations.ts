@@ -6,6 +6,7 @@ import { ClaudeNoticesAnimation } from './ClaudeNoticesAnimation';
 import { CliproxyWizardAnimation } from './CliproxyWizardAnimation';
 import { SpeedChoiceAnimation } from './SpeedChoiceAnimation';
 import { ProxyUpdateAnimation } from './ProxyUpdateAnimation';
+import { AdoptProxyAnimation } from './AdoptProxyAnimation';
 import { NoticeActionsAnimation } from './NoticeActionsAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
@@ -42,6 +43,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'cliproxy-assistente': CliproxyWizardAnimation,
   'velocidade-ultra-fast': SpeedChoiceAnimation,
   'atualizar-cliproxy': ProxyUpdateAnimation,
+  'entregar-cliproxy': AdoptProxyAnimation,
   'cofre-de-senhas': VaultAnimation,
   'codex-atividade': CodexActivityAnimation,
   'compactar-parada': CompactIdleAnimation,

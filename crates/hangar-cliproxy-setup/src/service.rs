@@ -84,7 +84,19 @@ pub fn windows_script(vbs: &Path, managed_dir: &Path) -> String {
     )
 }
 
-async fn run(step: &str, program: &str, args: &[&str]) -> Result<(), Error> {
+/// Tira o serviço do Hangar e para o proxy dele: a volta da entrega que não respondeu.
+pub fn windows_unregister_script(managed_dir: &Path) -> String {
+    format!(
+        "$ErrorActionPreference = 'Stop'\n\
+         Stop-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue\n\
+         Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.StartsWith({dir}, [StringComparison]::OrdinalIgnoreCase) }} | Stop-Process -Force\n\
+         Unregister-ScheduledTask -TaskName {task} -Confirm:$false -ErrorAction SilentlyContinue\n",
+        task = ps_quote(TASK),
+        dir = ps_quote(&managed_dir.display().to_string()),
+    )
+}
+
+pub(crate) async fn run(step: &str, program: &str, args: &[&str]) -> Result<(), Error> {
     let mut command = tokio::process::Command::new(program);
     command.args(args).stdin(std::process::Stdio::null());
     #[cfg(windows)]
@@ -126,6 +138,32 @@ pub async fn register(home: &Path, managed_dir: &Path, s: &Service) -> Result<()
     run("systemctl daemon-reload", "systemctl", &["--user", "daemon-reload"]).await?;
     run("systemctl enable", "systemctl", &["--user", "enable", UNIT]).await?;
     run("systemctl restart", "systemctl", &["--user", "restart", UNIT]).await
+}
+
+/// Para e apaga o serviço do Hangar, sem tocar no programa baixado nem no config.
+pub async fn unregister(home: &Path, managed_dir: &Path) -> Result<(), Error> {
+    let remove = |step: &str, path: &Path| match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Error { step: step.into(), detail: format!("{}: {e}", path.display()) }),
+        _ => Ok(()),
+    };
+    if cfg!(target_os = "macos") {
+        let plist = home.join("Library/LaunchAgents").join(format!("{LAUNCHD_LABEL}.plist"));
+        let path = plist.to_string_lossy().into_owned();
+        // Descarregar o que não estava carregado falha e não importa.
+        let _ = run("launchctl unload", "launchctl", &["unload", "-w", &path]).await;
+        return remove("plist", &plist);
+    }
+    if cfg!(windows) {
+        let script: Vec<u8> = windows_unregister_script(managed_dir).encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &script);
+        return run("Unregister-ScheduledTask", "powershell.exe", &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]).await;
+    }
+    let unit = home.join(".config/systemd/user").join(UNIT);
+    if unit.is_file() {
+        run("systemctl disable", "systemctl", &["--user", "disable", "--now", UNIT]).await?;
+    }
+    remove("unit", &unit)?;
+    run("systemctl daemon-reload", "systemctl", &["--user", "daemon-reload"]).await
 }
 
 #[cfg(test)]

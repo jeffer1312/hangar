@@ -36,6 +36,18 @@ pub enum Outcome {
     /// Proxy de fora do Hangar: só o config foi completado.
     Configured,
     Updated { tag: String },
+    /// Proxy de fora entregue ao Hangar: mesmo config e mesmas contas, rodando pelo serviço dele.
+    Adopted { tag: String },
+}
+
+/// Quem mantém ligado o proxy de fora: é o que a entrega desliga e, se a versão do Hangar não responder, religa.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Runner {
+    /// Nada o liga e a porta está livre: não há o que desligar.
+    Idle,
+    /// Unit de usuário, com o estado dela antes da entrega para a volta repor igual.
+    SystemdUser { unit: String, enabled: bool, active: bool },
+    LaunchAgent(std::path::PathBuf),
 }
 
 /// A senha de gerenciamento nova vai para o Hangar antes do config.
@@ -161,9 +173,13 @@ pub fn reset_management(ctx: &Context) -> Result<(), Failure> {
 /// O endereço do config; a porta padrão só quando não há config. Porta inválida para antes de mexer em arquivo
 /// ou serviço: o proxy subiria noutra porta que a tela e o login não acham. YAML ilegível fica para o `ensure`.
 fn base_url(ctx: &Context) -> Result<String, Failure> {
-    match config::read(&ctx.paths.home) {
+    base_url_at(&ctx.paths.home)
+}
+
+fn base_url_at(home: &std::path::Path) -> Result<String, Failure> {
+    match config::read(home) {
         Ok(Some(config)) => config.base_url.map_err(|_| Failure::new("cliproxy_porta_invalida",
-            format!("{}: server.port (ou port) fora de 1–65535", ctx.paths.config().display()))),
+            format!("{}: server.port (ou port) fora de 1–65535", config::path(home).display()))),
         Ok(None) => Ok(DEFAULT_BASE.into()),
         // Config que existe e não se lê não vira a porta padrão: a instalação olharia a porta errada.
         Err(config::ReadError::Io(e)) => Err(Failure::new("cliproxy_config_ilegivel", e.to_string())),
@@ -249,6 +265,112 @@ fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
 
 pub fn current(paths: &Paths) -> Install {
     detect::state(paths, std::env::var_os("PATH").as_deref(), &detect::system_units(&paths.home))
+}
+
+/// A versão que o proxy em execução anuncia, como tag; só com a senha guardada (ver `running_version`).
+pub async fn running_tag(paths: &Paths, key: Option<&str>) -> Option<String> {
+    let base = base_url_at(&paths.home).ok()?;
+    running_version(&base, key).await?.version.map(|v| format!("v{v}"))
+}
+
+async fn systemctl_says(verb: &str, unit: &str) -> String {
+    let output = tokio::process::Command::new("systemctl").args(["--user", verb, unit]).stdin(std::process::Stdio::null()).output().await;
+    output.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default()
+}
+
+/// Pasta das contas relativa no config: o proxy a resolve contra a pasta em que roda. O serviço do Hangar roda na
+/// pessoal; o de fora, rodando noutra, gravou as contas num lugar que o do Hangar não acharia.
+fn accounts_dir_moves(unit_text: &str, home: &std::path::Path) -> Option<String> {
+    let config = config::read(home).ok().flatten()?;
+    let dir = config.auth_dir.as_deref().map(str::trim).filter(|d| !d.is_empty())?;
+    if std::path::Path::new(dir).is_absolute() || dir.starts_with('~') {
+        return None;
+    }
+    let raw = detect::unit_working_dir(unit_text)?;
+    let home_text = home.to_string_lossy();
+    let expanded = raw.replace("%h", &home_text).replace("${HOME}", &home_text).replace("$HOME", &home_text);
+    let expanded = expanded.strip_prefix('~').map_or(expanded.clone(), |rest| format!("{home_text}{rest}"));
+    (!same_file(std::path::Path::new(&expanded), home)).then_some(expanded)
+}
+
+/// O proxy de fora pode passar para o Hangar? Só o que lê o mesmo config, com as contas na mesma pasta, e que um
+/// serviço conhecido liga (ou que está parado): o Hangar desliga esse serviço, nunca o desinstala.
+pub async fn handover(paths: &Paths) -> Result<Runner, Failure> {
+    let Install::External { unit, .. } = current(paths) else {
+        return Err(Failure::new("erro_cliproxy_nao_externo", "só o proxy de fora do Hangar é entregue a ele"));
+    };
+    let base = base_url_at(&paths.home)?;
+    let running = port_open(&base).await;
+    let ours = paths.config();
+    let other_config = |other: &std::path::Path| Failure::new("cliproxy_entrega_outro_config",
+        format!("o proxy de fora lê {}, não {}", other.display(), ours.display()));
+    if let Some(unit) = unit.as_deref() {
+        if detect::is_system_unit(unit) {
+            return Err(Failure::new("cliproxy_entrega_unit_de_sistema", format!("{} é de sistema: desligá-la pede administrador", unit.display())));
+        }
+        let units = detect::system_units(&paths.home);
+        let read = external_config(Some(unit), &units, &paths.home)
+            .map_err(|f| Failure::new("cliproxy_entrega_outro_config", f.detail))?;
+        if let Some(other) = read.filter(|c| !same_file(c, &ours)) {
+            return Err(other_config(other.as_path()));
+        }
+        let text = std::fs::read_to_string(unit).unwrap_or_default();
+        if let Some(dir) = accounts_dir_moves(&text, &paths.home) {
+            return Err(Failure::new("cliproxy_entrega_pasta_das_contas",
+                format!("o auth-dir é relativo e o serviço de fora roda em {dir}")));
+        }
+        let name = unit.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let active = systemctl_says("is-active", &name).await == "active";
+        if running && !active {
+            return Err(Failure::new("cliproxy_entrega_sem_servico", format!("{base} responde, mas {name} está parado")));
+        }
+        let enabled = systemctl_says("is-enabled", &name).await == "enabled";
+        return Ok(Runner::SystemdUser { unit: name, enabled, active });
+    }
+    if cfg!(target_os = "macos") && let Some(plist) = detect::launch_agents(&paths.home).into_iter().next() {
+        let text = std::fs::read_to_string(&plist).unwrap_or_default();
+        return match detect::plist_config(&text) {
+            Some(config) if same_file(&config, &ours) => Ok(Runner::LaunchAgent(plist)),
+            Some(other) => Err(other_config(other.as_path())),
+            None => Err(Failure::new("cliproxy_entrega_outro_config", format!("{} não diz qual config o proxy lê", plist.display()))),
+        };
+    }
+    if running {
+        return Err(Failure::new("cliproxy_entrega_sem_servico", format!("{base} responde, mas nenhum serviço conhecido liga esse proxy")));
+    }
+    Ok(Runner::Idle)
+}
+
+impl Runner {
+    async fn stop(&self) -> Result<(), Failure> {
+        match self {
+            Self::Idle | Self::SystemdUser { enabled: false, active: false, .. } => Ok(()),
+            Self::SystemdUser { unit, enabled: true, .. } => Ok(service::run("systemctl disable", "systemctl", &["--user", "disable", "--now", unit]).await?),
+            Self::SystemdUser { unit, .. } => Ok(service::run("systemctl stop", "systemctl", &["--user", "stop", unit]).await?),
+            Self::LaunchAgent(plist) => Ok(service::run("launchctl unload", "launchctl", &["unload", "-w", &plist.to_string_lossy()]).await?),
+        }
+    }
+
+    /// Repõe o serviço de fora como estava antes da entrega.
+    async fn restore(&self) -> Result<(), Failure> {
+        match self {
+            Self::Idle => Ok(()),
+            Self::SystemdUser { unit, enabled, active } => {
+                if *enabled {
+                    service::run("systemctl enable", "systemctl", &["--user", "enable", unit]).await?;
+                }
+                if *active {
+                    service::run("systemctl start", "systemctl", &["--user", "start", unit]).await?;
+                }
+                Ok(())
+            }
+            Self::LaunchAgent(plist) => Ok(service::run("launchctl load", "launchctl", &["load", "-w", &plist.to_string_lossy()]).await?),
+        }
+    }
+
+    fn was_running(&self) -> bool {
+        matches!(self, Self::SystemdUser { active: true, .. } | Self::LaunchAgent(_))
+    }
 }
 
 pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
@@ -365,6 +487,83 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
     Ok(Outcome::Updated { tag: latest.tag })
 }
 
+async fn wait_port(base: &str) -> bool {
+    let deadline = Instant::now() + START_TIMEOUT;
+    while Instant::now() < deadline {
+        if port_open(base).await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    false
+}
+
+/// Tira o serviço do Hangar e religa o de fora; só vale como volta se o de fora, que respondia, voltou a responder.
+async fn give_back(paths: &Paths, runner: &Runner, base: &str) -> Result<(), Failure> {
+    service::unregister(&paths.home, &paths.dir).await?;
+    runner.restore().await?;
+    if runner.was_running() && !wait_port(base).await {
+        return Err(Failure::new("cliproxy_nao_subiu", format!("o serviço de fora não voltou a responder em {base}")));
+    }
+    Ok(())
+}
+
+/// A falha da entrega, ou, se nem o serviço de fora voltou, um código próprio: só a volta certa diz "segue funcionando".
+fn handed_back(failure: Failure, back: Result<(), Failure>) -> Failure {
+    match back {
+        Ok(()) => failure,
+        Err(e) => Failure::new("cliproxy_entrega_sem_volta", format!("{}; e o serviço de fora não voltou: {}", failure.detail, e.detail)),
+    }
+}
+
+/// Passa o proxy de fora para o serviço do Hangar, com o mesmo config e a mesma pasta de contas: nada é copiado nem
+/// desinstalado. O registro só nasce depois de a versão do Hangar responder; antes disso, a falha religa o de fora.
+pub async fn adopt(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
+    // Antes do download, para a recusa chegar logo.
+    handover(&ctx.paths).await?;
+    progress(Step::Download);
+    let latest = release::latest(&ctx.github).await?;
+    let binary = release::fetch(&ctx.github, &latest, ctx.platform, &ctx.paths.dir).await?;
+    let discard = |failure: Failure| {
+        if let Some(dir) = binary.parent() && let Err(error) = std::fs::remove_dir_all(dir) {
+            tracing::warn!(dir = %dir.display(), %error, "cliproxy: entrega desfeita, mas a pasta baixada ficou");
+        }
+        failure
+    };
+    if let Some(check) = &ctx.before_swap {
+        check().await.map_err(discard)?;
+    }
+    progress(Step::Config);
+    // O download leva tempo: o serviço de fora é lido de novo, e é esse estado que a volta repõe.
+    let runner = handover(&ctx.paths).await.map_err(discard)?;
+    let version = tag_version(&latest.tag);
+    // Como na atualização, a regra do Ultra Fast só entra com a versão nova respondendo.
+    ensure(ctx, false).map_err(discard)?;
+    let base = base_url(ctx).map_err(discard)?;
+    progress(Step::Service);
+    if let Err(failure) = runner.stop().await {
+        // Parar pode ter desligado sem parar: repõe o que havia.
+        let back = runner.restore().await;
+        return Err(discard(handed_back(failure, back)));
+    }
+    let service = Service { binary: binary.clone(), config: ctx.paths.config() };
+    let started = service::register(&ctx.paths.home, &ctx.paths.dir, &service).await.map_err(Failure::from);
+    progress(Step::Start);
+    let up = match started {
+        Ok(()) => wait_ours(&base, version.as_ref(), (ctx.management_key)().as_deref()).await,
+        Err(failure) => Err(failure),
+    };
+    if let Err(failure) = up {
+        let back = give_back(&ctx.paths, &runner, &base).await;
+        return Err(discard(handed_back(failure, back)));
+    }
+    detect::write_record(&ctx.paths, &latest.tag, &binary).map_err(|e| Failure::new("cliproxy_registro_falhou", e.to_string()))?;
+    if understands_rule(version.as_ref()) && let Err(failure) = ensure(ctx, true) {
+        tracing::warn!(code = failure.code, detail = %failure.detail, "cliproxy: entregue, mas a regra do Ultra Fast não entrou no config");
+    }
+    Ok(Outcome::Adopted { tag: latest.tag })
+}
+
 impl Installer {
     pub fn start(self: &Arc<Self>, kind: &'static str, ctx: Context) -> Result<(), Busy> {
         {
@@ -372,7 +571,7 @@ impl Installer {
             if job.as_ref().is_some_and(|j| j.result.is_none()) {
                 return Err(Busy);
             }
-            *job = Some(Job { kind, step: if kind == "update" { Step::Download } else { Step::Config }, result: None });
+            *job = Some(Job { kind, step: if kind == "install" { Step::Config } else { Step::Download }, result: None });
         }
         let this = self.clone();
         tokio::spawn(async move {
@@ -383,7 +582,11 @@ impl Installer {
                         job.step = step;
                     }
                 };
-                if kind == "update" { update(&ctx, &progress).await } else { install(&ctx, &progress).await }
+                match kind {
+                    "update" => update(&ctx, &progress).await,
+                    "adopt" => adopt(&ctx, &progress).await,
+                    _ => install(&ctx, &progress).await,
+                }
             });
             // Tarefa que cai no meio também termina: sem resultado, toda tentativa seguinte veria "ocupado" até o servidor reiniciar.
             let result = work.await.unwrap_or_else(|error| {
@@ -407,6 +610,7 @@ impl Installer {
                 Outcome::Installed { .. } => "installed",
                 Outcome::Configured => "configured",
                 Outcome::Updated { .. } => "updated",
+                Outcome::Adopted { .. } => "adopted",
             })),
             Some(Err(f)) => (true, json!({ "code": f.code, "detail": f.detail }), Value::Null),
         };
@@ -447,6 +651,56 @@ mod tests {
         let lost = rolled_back(failure(), "v8.0.79", Err(Failure::new("cliproxy_servico_falhou", "systemctl")));
         assert_eq!(lost.code, "cliproxy_atualizacao_sem_volta");
         assert!(lost.detail.contains("v8.0.79") && lost.detail.contains("systemctl"));
+    }
+
+    #[test]
+    fn a_handover_that_could_not_go_back_has_its_own_code() {
+        let failure = || Failure::new("cliproxy_nao_subiu", "a v8.0.79 não respondeu");
+        assert_eq!(handed_back(failure(), Ok(())).code, "cliproxy_nao_subiu", "o de fora voltou: segue funcionando");
+        let lost = handed_back(failure(), Err(Failure::new("cliproxy_servico_falhou", "systemctl start")));
+        assert_eq!(lost.code, "cliproxy_entrega_sem_volta");
+        assert!(lost.detail.contains("systemctl start"));
+    }
+
+    /// Unit de usuário do proxy de fora na pasta pessoal do teste (a primeira que o systemd escolhe) e o config numa porta livre.
+    fn external_with_unit(home: &std::path::Path, unit: &str, config: &str) {
+        let units = home.join(".config/systemd/user");
+        std::fs::create_dir_all(&units).unwrap();
+        std::fs::write(units.join("cli-proxy-api.service"), unit).unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        std::fs::create_dir_all(home.join(".cli-proxy-api")).unwrap();
+        std::fs::write(crate::config::path(home), format!("port: {port}\napi-keys:\n  - k\n{config}")).unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_a_proxy_reading_the_same_config_is_handed_over() {
+        let home = tempfile::tempdir().unwrap();
+        external_with_unit(home.path(), "[Service]\nExecStart=/usr/bin/cli-proxy-api --config /etc/cliproxy/config.yaml\n", "");
+        let refused = handover(&Paths::new(home.path())).await.map_err(|f| f.code);
+        assert_eq!(refused, Err("cliproxy_entrega_outro_config"), "as contas do outro config sumiriam");
+    }
+
+    #[tokio::test]
+    async fn a_relative_accounts_folder_must_not_move() {
+        let home = tempfile::tempdir().unwrap();
+        let unit = "[Service]\nWorkingDirectory=/srv/cliproxy\nExecStart=/usr/bin/cli-proxy-api --config %h/.cli-proxy-api/config.yaml\n";
+        external_with_unit(home.path(), unit, "auth-dir: auths\n");
+        let refused = handover(&Paths::new(home.path())).await.map_err(|f| f.code);
+        assert_eq!(refused, Err("cliproxy_entrega_pasta_das_contas"), "o serviço do Hangar roda na pasta pessoal e não acharia as contas");
+    }
+
+    #[test]
+    fn an_absolute_or_home_accounts_folder_never_moves() {
+        let home = tempfile::tempdir().unwrap();
+        let unit = "[Service]\nWorkingDirectory=/srv/cliproxy\nExecStart=/usr/bin/cli-proxy-api\n";
+        std::fs::create_dir_all(home.path().join(".cli-proxy-api")).unwrap();
+        for dir in ["~/.cli-proxy-api", "/var/lib/cliproxy"] {
+            std::fs::write(crate::config::path(home.path()), format!("port: 8317\nauth-dir: {dir}\n")).unwrap();
+            assert_eq!(accounts_dir_moves(unit, home.path()), None, "{dir}");
+        }
+        std::fs::write(crate::config::path(home.path()), "port: 8317\nauth-dir: auths\n").unwrap();
+        assert_eq!(accounts_dir_moves(unit, home.path()), Some("/srv/cliproxy".into()));
+        assert_eq!(accounts_dir_moves("[Service]\nWorkingDirectory=%h\n", home.path()), None, "a pasta pessoal é a do serviço do Hangar");
     }
 
     fn context(home: &std::path::Path) -> Context {

@@ -51,29 +51,47 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static, 
 pub async fn status(st: &AppState) -> Value {
     let paths = Paths::new(&st.accounts.env.home);
     let state = blocking(move || install::current(&paths), Install::Absent).await;
-    let (kind, version) = match &state {
-        Install::Absent => ("absent", None),
-        Install::External { .. } => ("external", None),
-        Install::Managed { tag, .. } => ("managed", Some(tag.clone())),
+    let job = INSTALLER.job();
+    // Com uma tarefa em curso a tela relê a cada segundo: a versão e a entrega, que perguntam ao proxy e ao systemd, ficam para depois.
+    let quiet = job["done"] == false;
+    let paths = Paths::new(&st.accounts.env.home);
+    let (kind, version, handover) = match &state {
+        Install::Absent => ("absent", None, Value::Null),
+        Install::External { .. } if quiet => ("external", None, Value::Null),
+        Install::External { .. } => {
+            let key = proxy::management_key(&st.accounts.env);
+            let version = install::running_tag(&paths, key.as_deref()).await;
+            let handover = match install::handover(&paths).await {
+                Ok(_) => json!({"ok": true}),
+                Err(failure) => json!({"ok": false, "code": failure.code, "detail": failure.detail}),
+            };
+            ("external", version, handover)
+        }
+        Install::Managed { tag, .. } => ("managed", Some(tag.clone()), Value::Null),
     };
     let latest = match kind {
-        "managed" => INSTALLER.latest(&Github::default()).await
+        "managed" | "external" => INSTALLER.latest(&Github::default()).await
             .inspect_err(|code| tracing::warn!(code, "cliproxy: não consegui ler a versão mais nova no GitHub"))
             .ok().map(|r| r.tag),
         _ => None,
     };
-    let update_available = matches!((&version, &latest), (Some(v), Some(l)) if install::newer(l, v));
-    // Quantas sessões a atualização cortaria: a confirmação diz o número. Só o proxy do Hangar é atualizado daqui.
+    let update_available = kind == "managed" && matches!((&version, &latest), (Some(v), Some(l)) if install::newer(l, v));
+    // Quantas sessões a atualização ou a entrega cortariam: a confirmação diz o número.
     let sessions = match kind {
-        "managed" => engine_sessions(&st.accounts.env, &st.list).await.ok(),
+        "managed" | "external" => engine_sessions(&st.accounts.env, &st.list).await.ok(),
         _ => None,
     };
-    let running = match proxy::local(&st.accounts.env).ok().flatten() {
-        Some(local) => blocking(move || detect::port_open(&local.base_url), false).await,
+    let local = proxy::local(&st.accounts.env).ok().flatten().map(|local| local.base_url);
+    let running = match local.clone() {
+        Some(base) => blocking(move || detect::port_open(&base), false).await,
         None => false,
     };
+    let accounts = match kind {
+        "absent" => None,
+        _ => connected(st).as_array().map(Vec::len),
+    };
     json!({"state": kind, "version": version, "latest": latest, "update_available": update_available,
-        "running": running, "sessions": sessions, "job": INSTALLER.job()})
+        "running": running, "base_url": local, "accounts": accounts, "sessions": sessions, "handover": handover, "job": job})
 }
 
 /// Contas logadas no proxy, de qualquer provedor, para o assistente mostrar antes de existir motor.
@@ -178,7 +196,8 @@ pub async fn handle(st: &AppState, method: &Method, path: &str, bytes: &[u8]) ->
         // Só o estado da instalação, sem sondar modelos nem contas: é o que a página de Contas lê ao abrir.
         (&Method::GET, "install") => json_response(StatusCode::OK, status(st).await),
         (&Method::POST, "install") => started(INSTALLER.start("install", context(st))),
-        (&Method::POST, "update") => {
+        // Atualizar e entregar reiniciam o proxy: com sessão nele, só com a confirmação de quem pediu.
+        (&Method::POST, kind @ ("update" | "adopt")) => {
             let sessions = match engine_sessions(&st.accounts.env, &st.list).await { Ok(n) => n, Err(response) => return Some(response) };
             let confirmed = body(bytes)["confirm"] == true;
             if sessions > 0 && !confirmed {
@@ -188,7 +207,7 @@ pub async fn handle(st: &AppState, method: &Method, path: &str, bytes: &[u8]) ->
             if !confirmed {
                 ctx.before_swap = Some(recheck_sessions(st));
             }
-            started(INSTALLER.start("update", ctx))
+            started(INSTALLER.start(if kind == "update" { "update" } else { "adopt" }, ctx))
         }
         (&Method::POST, "management-key/reset") => {
             let ctx = context(st);

@@ -18,7 +18,25 @@ Decisões do usuário:
   `hangar-cliproxy.service`, tarefa `hangar-cliproxy` no Windows (`.vbs` sem janela, reinício em
   falha) ou launchd `dev.hangar.cliproxy`. Proxy que já existe (pacote do AUR com
   `cli-proxy-api.service`, binário no PATH) é `external`: nada é baixado nem registrado, o
-  "Continuar" só completa o config.
+  "Usar como está" só completa o config.
+- **Proxy de fora passa ao Hangar só a pedido (21/11).** Contas mostra a linha do CLIProxyAPI
+  (versão, "Do sistema" ou "Do Hangar", porta, contas e sessões) e, no de fora, "Deixar o Hangar
+  cuidar"; o passo Instalar do assistente traz a mesma escolha, marcada, ao lado de "Usar como
+  está". A entrega (`POST adopt`, tarefa `adopt`) usa o mesmo config e a mesma pasta de contas,
+  nunca copia nem reescreve conta e nunca desinstala o pacote: baixa a release, desliga o serviço
+  de fora (`systemctl --user disable --now`, ou `stop` se não estava habilitado; LaunchAgent por
+  `launchctl unload -w`), liga o `hangar-cliproxy` e só grava o `install.json` com a versão nova
+  respondendo. Não respondeu: tira o serviço do Hangar, religa o de fora como estava e espera a
+  porta; voltou dá `cliproxy_nao_subiu`, não voltou dá `cliproxy_entrega_sem_volta`. Sessões no
+  proxy pedem a mesma confirmação da atualização. Recusada antes de mexer em algo, com o motivo na
+  tela: serviço que lê outro config (`cliproxy_entrega_outro_config`), unit de sistema em
+  `/etc` ou `/usr/lib/systemd/system` (`…_unit_de_sistema`, desligar pede root), `auth-dir`
+  relativo com o serviço de fora rodando noutra pasta (`…_pasta_das_contas`: o do Hangar roda na
+  pessoal e não acharia as contas) e proxy respondendo sem serviço conhecido que o ligue
+  (`…_sem_servico`: binário no PATH rodado à mão, tarefa do Windows que não é do Hangar). Parado
+  e sem serviço, a entrega só liga o do Hangar. No macOS vale o LaunchAgent que roda
+  `cli-proxy-api` (o `brew services`), lido pelo `--config` dos `ProgramArguments`; o binário do
+  brew fora do PATH do servidor ainda é visto como ausente.
 - **Config existente: completar só o que falta.** Faltando `access.api-keys` (ou `api-keys` na
   raiz, no formato antigo) ou a senha de gerenciamento, o Hangar acrescenta por edição de linha,
   preservando comentários, confere relendo o YAML e guarda cópia

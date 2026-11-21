@@ -22,6 +22,7 @@ mod no_project;
 mod password_vault;
 mod plugins;
 mod proxy_update;
+mod adopt_cliproxy;
 mod scheduled_tasks;
 mod hide_from_list;
 mod image_reveal;
@@ -104,6 +105,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "cliproxy-assistente" => Some(cliproxy_wizard::render),
         "velocidade-ultra-fast" => Some(speed_choice::render),
         "atualizar-cliproxy" => Some(proxy_update::render),
+        "entregar-cliproxy" => Some(adopt_cliproxy::render),
         "conversa-nova" => Some(new_conversation::render),
         _ => None,
     }

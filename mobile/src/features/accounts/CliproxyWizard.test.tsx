@@ -8,13 +8,14 @@ import { overwriteGetLocale } from '../../paraglide/runtime';
 import { CliproxyWizard } from './CliproxyWizard';
 
 const calls = vi.hoisted(() => ({
-  detect: vi.fn(), install: vi.fn(), login: vi.fn(), status: vi.fn(), callback: vi.fn(), key: vi.fn(), reset: vi.fn(), put: vi.fn(), open: vi.fn(),
+  detect: vi.fn(), install: vi.fn(), adopt: vi.fn(), login: vi.fn(), status: vi.fn(), callback: vi.fn(), key: vi.fn(), reset: vi.fn(), put: vi.fn(), open: vi.fn(),
   push: vi.fn(),
 }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: calls.push }) }));
 vi.mock('@hangar/core', async original => ({
   ...await original<typeof import('@hangar/core')>(),
-  engineCliproxyForServer: calls.detect, installCliproxyForServer: calls.install, startCliproxyLoginForServer: calls.login,
+  engineCliproxyForServer: calls.detect, installCliproxyForServer: calls.install, adoptCliproxyForServer: calls.adopt,
+  startCliproxyLoginForServer: calls.login,
   getCliproxyLoginForServer: calls.status, sendCliproxyLoginCallbackForServer: calls.callback,
   putCliproxyManagementKeyForServer: calls.key, resetCliproxyManagementKeyForServer: calls.reset, putEngineForServer: calls.put,
 }));
@@ -246,13 +247,49 @@ describe('assistente do CLIProxyAPI no celular', () => {
     expect(view.container.textContent).toContain('Qual conta você quer usar?');
   });
 
+  it('proxy de fora que pode passar ao Hangar: a entrega vem marcada, mostra as etapas e segue para a conta', async () => {
+    vi.useFakeTimers();
+    const adoptJob = (step: 'download' | 'service' | 'start', done = false, error: { code: string; detail: string } | null = null): CliproxyJob =>
+      ({ kind: 'adopt', step, done, error, outcome: done && !error ? 'adopted' : null });
+    const external = (patch: Partial<CliproxyInstall> = {}) =>
+      proxy({ install: install({ state: 'external', version: 'v8.0.56', latest: 'v8.0.79', handover: { ok: true }, ...patch }) });
+    calls.detect.mockResolvedValueOnce(external());
+    calls.adopt.mockResolvedValue({ job: adoptJob('download') });
+    const view = await show();
+    expect(view.container.textContent).toContain(m.mobile_cliproxy_wizard_external_version({ version: 'v8.0.56' }));
+    expect(view.container.querySelector(`[aria-label="${m.mobile_cliproxy_wizard_adopt_title()}, ${m.mobile_cliproxy_wizard_recommended()}"]`)
+      ?.getAttribute('aria-checked')).toBe('true');
+    await click(view.container, 'Continuar');
+    expect(calls.adopt).toHaveBeenCalledExactlyOnceWith(server, false);
+    expect(calls.install).not.toHaveBeenCalled();
+
+    calls.detect.mockResolvedValueOnce(external({ job: adoptJob('service') }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });
+    expect(view.container.textContent).toContain(m.mobile_cliproxy_adopt_step_service());
+
+    // A versão do Hangar não respondeu e o serviço de fora voltou: de volta às escolhas, com o motivo.
+    calls.detect.mockResolvedValueOnce(external({ job: adoptJob('start', true, { code: 'cliproxy_nao_subiu', detail: 'x' }) }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });
+    expect(view.container.textContent).toContain(m.mobile_cliproxy_adopt_failed_back({ new: 'v8.0.79' }));
+    expect(button(view.container, m.mobile_cliproxy_wizard_retry())).toBeTruthy();
+
+    await click(view.container, m.mobile_cliproxy_wizard_retry());
+    expect(calls.adopt).toHaveBeenCalledTimes(2);
+    calls.detect.mockResolvedValueOnce(proxy({ install: install({ state: 'managed', version: 'v8.0.79', job: adoptJob('start', true) }) }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });
+    expect(view.container.textContent).toContain('Qual conta você quer usar?');
+  });
+
   it('proxy de outra origem: Continuar só completa o config e segue para a conta', async () => {
     vi.useFakeTimers();
     calls.detect.mockResolvedValueOnce(proxy({ install: install({ state: 'external', version: null }) }));
     calls.install.mockResolvedValue({ job: { kind: 'install', step: 'config', done: false, error: null, outcome: null } });
     const view = await show();
-    expect(view.container.textContent).toContain('Nada foi reinstalado');
+    // Sem a resposta de que dá para passar ao Hangar, a escolha marcada é usar como está.
+    expect(view.container.querySelector(`[aria-label="${m.mobile_cliproxy_wizard_keep_title()}"]`)?.getAttribute('aria-checked')).toBe('true');
+    expect(button(view.container, m.comum_cancelar())).toBeTruthy();
     await click(view.container, 'Continuar');
+    expect(calls.adopt).not.toHaveBeenCalled();
     calls.detect.mockResolvedValueOnce(proxy({ install: install({ state: 'external',
       job: { kind: 'install', step: 'start', done: true, error: null, outcome: 'configured' } }) }));
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); await settle(); });

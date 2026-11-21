@@ -793,8 +793,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   [plataforma.md](docs/decisoes/plataforma.md#computer-use-e-transferência-de-atalhos-são-do-rust-13112026).
 - **CLIProxyAPI é instalado e configurado pelo Hangar (`hangar-cliproxy-setup`), sem a pessoa
   digitar chave.** Serviço próprio (`hangar-cliproxy`); proxy que já existe é `external` e só tem o
-  config completado, com cópia, nunca reinstalado. Atualiza só pelo botão, confirmando com sessão
-  viva no proxy. Conta logada só no proxy entra no seletor como `cliproxy:cpa-…`, fixa por sessão.
+  config completado, com cópia, nunca reinstalado. Ele só passa ao Hangar a pedido da pessoa
+  ("Deixar o Hangar cuidar"), com o mesmo config e as mesmas contas: o serviço de fora é desligado,
+  nunca desinstalado, e volta se a versão do Hangar não responder. Atualiza só pelo botão,
+  confirmando com sessão viva no proxy. Conta logada só no proxy entra no seletor como `cliproxy:cpa-…`, fixa por sessão.
   O motor do assistente grava `fast`; ausente vale disponível, e a sessão nasce sem Fast. Ultra Fast
   só com conta fixa Pro/Pro Max e a regra do cabeçalho `X-Hangar-Speed` no config (proxy v8+). Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#cliproxyapi-instalado-e-configurado-pelo-hangar-19112026).
