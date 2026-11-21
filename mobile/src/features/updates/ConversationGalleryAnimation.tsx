@@ -139,7 +139,8 @@ export function ConversationGalleryAnimation({ width }: { width: number }) {
             { icon: 'MessageSquare', label: m.gallery_in_chat(), a11y: m.gallery_in_chat(), onPress: noop },
           ]} />
           <View style={styles.strip}>
-            {SAMPLES.map((s, i) => (
+            {/* Quatro cabem no cartão mais estreito; a mídia ativa do roteiro nunca passa da quarta. */}
+            {SAMPLES.slice(0, 4).map((s, i) => (
               <StripThumbFrame key={i} active={i === index} kind={s.kind}>
                 <Picture colors={s.colors} />
               </StripThumbFrame>
