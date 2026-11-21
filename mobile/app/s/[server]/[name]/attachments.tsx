@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { WebView } from 'react-native-webview';
 import * as m from '../../../../src/paraglide/messages';
 import { fileAuthHeader, listUploads, uploadUrlNative } from '@hangar/core';
 import type { UploadFile } from '@hangar/core';
@@ -17,6 +16,13 @@ import { DictationError, dictateUpload } from '../../../../src/features/ditado/d
 import { dictationStyleStore } from '../../../../src/features/ditado/ditadoEstiloStore';
 import { useSessions } from '../../../../src/stores/sessions';
 import { toast } from '../../../../src/ui/Toast';
+import { haptic } from '../../../../src/ui/haptics';
+import { useRouteBase } from '../../../../src/net/routeBase';
+
+const isMedia = (name: string) => {
+  const kind = fileKind(name);
+  return kind === 'image' || kind === 'video';
+};
 
 export default function AttachmentsSheet() {
   const { theme } = useUnistyles();
@@ -28,13 +34,13 @@ export default function AttachmentsSheet() {
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState<UploadFile | null>(null);
+  const [lightbox, setLightbox] = useState<number | null>(null);
   const [doc, setDoc] = useState<DocumentItem | null>(null);
-  const [docUrl, setDocUrl] = useState<{ url: string; headers?: Record<string, string>; title: string } | null>(null);
-  const [webErro, setWebErro] = useState<string | null>(null);
-  const [webCarregando, setWebCarregando] = useState(true);
+  const [delivering, setDelivering] = useState<string | null>(null);
   const ready = useServers((s) => s.ready);
   const target = useServers((s) => s.servers.find((x) => x.id === serverId) ?? null);
+  // As URLs abaixo levam o endereço da rota: trocar de rede redesenha com o novo.
+  useRouteBase(target);
 
   const load = useCallback(async () => {
     if (!target) { setErro(m.chat_servidor_removido()); setLoading(false); return; }
@@ -55,27 +61,50 @@ export default function AttachmentsSheet() {
     void load();
   }, [load, ready]);
 
-  useEffect(() => {
-    setWebErro(null);
-    setWebCarregando(true);
-  }, [docUrl?.url]);
+  const audios = files.filter((f) => fileKind(f.filename) === 'audio');
+  const others = files.filter((f) => fileKind(f.filename) !== 'audio');
+  // Fotos e vídeos formam uma galeria só no visor, como na conversa.
+  const media = others.filter((f) => isMedia(f.filename));
+
+  // Documento (docx, planilha, zip, csv…): o WebView não lê; vai como no card da conversa, pela folha
+  // do sistema no iOS ou pelo app que abre o tipo no Android.
+  const deliver = useCallback(async (f: UploadFile, uri: string, headers: Record<string, string>) => {
+    haptic.selection();
+    setDelivering(f.filename);
+    try {
+      const { deliverFile } = await import('../../../../src/features/attachments/mediaCache');
+      const r = await deliverFile(uri, headers, f.filename);
+      if (r === 'opened') haptic.success();
+      else if (r === 'empty' || r === 'no-app') {
+        haptic.error();
+        toast.erro(`${f.filename}: ${r === 'empty' ? m.file_card_empty() : m.file_card_no_app()}`);
+      }
+    } catch (e) {
+      haptic.error();
+      const missing = /status:? 404\b/.test(e instanceof Error ? e.message : String(e));
+      toast.erro(`${f.filename}: ${missing ? m.file_card_missing() : m.file_card_failed()}`);
+    } finally {
+      setDelivering(null);
+    }
+  }, []);
 
   const handlePress = useCallback(
     (f: UploadFile) => {
       if (!target) { toast.erro(m.chat_servidor_removido()); return; }
       const k = fileKind(f.filename);
-      if (k === 'image') {
-        setLightbox(f);
+      if (k === 'image' || k === 'video') {
+        setLightbox(media.findIndex((x) => x.filename === f.filename));
         return;
       }
-      if (k === 'html' || k === 'pdf' || k === 'video') {
-        setDoc({ uri: uploadUrlNative(sessionName, f.filename, target), headers: fileAuthHeader(target), name: f.filename, kind: k });
+      const uri = uploadUrlNative(sessionName, f.filename, target);
+      if (k === 'html' || k === 'pdf') {
+        setDoc({ uri, headers: fileAuthHeader(target), name: f.filename, kind: k });
         return;
       }
-      const url = uploadUrlNative(sessionName, f.filename, target);
-      setDocUrl({ url, headers: fileAuthHeader(target), title: f.filename });
+      if (delivering) return;
+      void deliver(f, uri, fileAuthHeader(target));
     },
-    [sessionName, target],
+    [sessionName, target, media, delivering, deliver],
   );
 
   // Volta para a conversa: o Composer mostra "transcrevendo" e recebe o texto ou o motivo da falha.
@@ -102,9 +131,6 @@ export default function AttachmentsSheet() {
     router.back();
   }, [serverId, sessionName, router]);
 
-  const audios = files.filter((f) => fileKind(f.filename) === 'audio');
-  const others = files.filter((f) => fileKind(f.filename) !== 'audio');
-
   if (!ready) {
     return (
       <View style={[styles.container, { backgroundColor: theme.tokens.bg.base, flex: 1, alignItems: 'center', justifyContent: 'center' }]}>
@@ -124,66 +150,8 @@ export default function AttachmentsSheet() {
     );
   }
 
-  if (docUrl) {
-    const semToken = !docUrl.headers || Object.keys(docUrl.headers).length === 0;
-    if (semToken) {
-      return (
-        <View style={[styles.container, { backgroundColor: theme.tokens.bg.base }]}>
-          <View style={[styles.bar, { borderBottomColor: theme.tokens.border.subtle }]}>
-            <Text style={[styles.docTitle, { color: theme.tokens.text.primary }]} numberOfLines={1}>
-              {docUrl.title}
-            </Text>
-            <Pressable onPress={() => setDocUrl(null)} style={[styles.docBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button" accessibilityLabel={m.anexos_fechar_visualizacao()}>
-              <Text style={{ color: theme.tokens.text.primary }}>✕</Text>
-            </Pressable>
-          </View>
-          <Text style={[styles.err, { color: theme.tokens.status.error }]} accessibilityRole="alert">
-            {m.sessao_expirada()}
-          </Text>
-        </View>
-      );
-    }
-    return (
-      <View style={[styles.container, { backgroundColor: theme.tokens.bg.base }]}>
-        <View style={[styles.bar, { borderBottomColor: theme.tokens.border.subtle }]}>
-          <Text style={[styles.docTitle, { color: theme.tokens.text.primary }]} numberOfLines={1}>
-            {docUrl.title}
-          </Text>
-          <Pressable onPress={() => setDocUrl(null)} style={[styles.docBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button" accessibilityLabel={m.anexos_fechar_visualizacao()}>
-            <Text style={{ color: theme.tokens.text.primary }}>✕</Text>
-          </Pressable>
-        </View>
-        {webCarregando && !webErro ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], padding: theme.base.space[3] }}>
-            <ActivityIndicator color={theme.tokens.text.muted} />
-            <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.comum_carregando()}</Text>
-          </View>
-        ) : null}
-        {webErro ? (
-          <Text style={[styles.err, { color: theme.tokens.status.error }]} accessibilityRole="alert">
-            {webErro}
-          </Text>
-        ) : null}
-        <WebView
-          source={{ uri: docUrl.url, headers: docUrl.headers }}
-          style={styles.webview}
-          onLoadStart={() => {
-            setWebCarregando(true);
-          }}
-          onLoad={() => setWebCarregando(false)}
-          onError={(e) => {
-            setWebCarregando(false);
-            setWebErro(e.nativeEvent.description || m.arquivo_carregar_erro());
-          }}
-          onHttpError={(e) => {
-            setWebCarregando(false);
-            const descricao = e.nativeEvent.description;
-            setWebErro(descricao ? `HTTP ${e.nativeEvent.statusCode}: ${descricao}` : m.arquivo_carregar_erro());
-          }}
-        />
-      </View>
-    );
-  }
+  const current = lightbox !== null ? media[lightbox] : null;
+  const step = (dir: 1 | -1) => setLightbox((i) => (i === null ? i : Math.min(media.length - 1, Math.max(0, i + dir))));
 
   return (
     <View style={[styles.container, { backgroundColor: theme.tokens.bg.base }]}>
@@ -219,17 +187,21 @@ export default function AttachmentsSheet() {
           ))}
           <View style={styles.grid}>
             {others.map((f) => (
-              <AttachmentCard key={f.filename} file={f} sessionName={sessionName} serverId={serverId} onPress={() => handlePress(f)} />
+              <AttachmentCard key={f.filename} file={f} sessionName={sessionName} serverId={serverId}
+                busy={delivering === f.filename} onPress={() => handlePress(f)} />
             ))}
           </View>
         </ScrollView>
       )}
 
       <Lightbox
-        visible={!!lightbox}
-        uri={lightbox ? uploadUrlNative(sessionName, lightbox.filename, target) : ''}
+        visible={!!current}
+        uri={current ? uploadUrlNative(sessionName, current.filename, target) : ''}
         headers={fileAuthHeader(target)}
-        filename={lightbox?.filename ?? ''}
+        filename={current?.filename ?? ''}
+        kind={current && fileKind(current.filename) === 'video' ? 'video' : 'image'}
+        counter={current && media.length > 1 ? `${lightbox! + 1}/${media.length}` : undefined}
+        onStep={media.length > 1 ? step : undefined}
         onClose={() => setLightbox(null)}
       />
       <DocumentViewer doc={doc} onClose={() => setDoc(null)} />
@@ -294,28 +266,5 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: theme.base.space[2],
-  },
-  bar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.base.space[2],
-    paddingBottom: theme.base.space[2],
-    borderBottomWidth: 1,
-  },
-  docTitle: {
-    flex: 1,
-    fontSize: theme.base.text.sm,
-    fontWeight: theme.base.weight.semibold,
-  },
-  docBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: theme.base.radius.full,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  webview: {
-    flex: 1,
   },
 }));

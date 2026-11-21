@@ -8,12 +8,12 @@ import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import * as m from '../paraglide/messages';
 
-type Status = 'idle' | 'loading' | 'done' | 'empty' | 'missing' | 'failed' | 'no-app';
+type Status = 'idle' | 'loading' | 'opened' | 'empty' | 'missing' | 'failed' | 'no-app';
 
 const statusText: Record<Status, (() => string) | null> = {
   idle: null,
   loading: m.file_card_downloading,
-  done: m.file_card_saved,
+  opened: m.file_card_opened,
   empty: m.file_card_empty,
   missing: m.file_card_missing,
   failed: m.file_card_failed,
@@ -42,7 +42,7 @@ export const FileCard = memo(function FileCard({ uri, headers, name }: {
       if (!alive.current) return;
       setStatus(r === 'cancelled' || r === 'shared' ? 'idle' : r);
       if (r === 'empty' || r === 'no-app') haptic.error();
-      else if (r === 'done') haptic.success();
+      else if (r === 'opened') haptic.success();
     } catch (e) {
       if (!alive.current) return;
       // O download recusa resposta fora de 2xx com "status 404" (iOS) ou "status: 404" (Android).

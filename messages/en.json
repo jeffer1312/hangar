@@ -10513,6 +10513,7 @@
   "file_card_download": "Download",
   "file_card_downloading": "Downloading…",
   "file_card_saved": "Downloaded",
+  "file_card_opened": "Opened in another app",
   "file_card_empty": "Empty file",
   "file_card_missing": "File not found",
   "file_card_failed": "Download failed",

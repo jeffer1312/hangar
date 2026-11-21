@@ -14,8 +14,12 @@ vi.mock('react-native', async (original) => ({
 vi.mock('../stores/servers', () => ({ useServers: (select: (state: unknown) => unknown) => select({ servers: [
   { id: 'route', baseUrl: 'http://route.test', token: 'fixture' },
 ] }) }));
-vi.mock('./ImageThumb', () => ({ ImageThumb: ({ items }: { items: { uri: string }[] }) =>
-  createElement('span', { 'data-images': items.map((item) => item.uri).join(',') }) }));
+vi.mock('./ImageThumb', () => ({ ImageThumb: ({ items }: { items: { uri: string; kind: string; thumbUri?: string }[] }) =>
+  createElement('span', {
+    'data-images': items.map((item) => item.uri).join(','),
+    'data-kinds': items.map((item) => item.kind).join(','),
+    'data-thumbs': items.map((item) => item.thumbUri ?? '').join(','),
+  }) }));
 vi.mock('./FileCard', () => ({ FileCard: ({ name, uri }: { name: string; uri: string }) =>
   createElement('a', { 'data-file': uri }, name) }));
 vi.mock('./BubbleActions', () => ({ BubbleActions: ({ text }: { text: string }) =>
@@ -78,6 +82,18 @@ describe('recados na bolha', () => {
     expect(container.textContent).toBe(`${m.board_peer_de({ n: 'agente' })}corpo`);
     expect(container.querySelector('[data-images]')!.getAttribute('data-images')).toContain('http://route.test/');
     expect(container.querySelector('[data-images]')!.getAttribute('data-images')).toContain('a.png');
+    act(() => root.unmount());
+  });
+
+  it('vídeo anexado vira mídia que toca no visor, não card de arquivo; a foto pede miniatura reduzida', async () => {
+    const { container, root } = await render('olha — 📎 arquivo: /up/1-clip.mov 📎 imagem: /up/2-quadro.jpg');
+    const thumb = container.querySelector('[data-images]')!;
+    expect(thumb.getAttribute('data-kinds')).toBe('video,image');
+    expect(thumb.getAttribute('data-images')).toBe(
+      'http://route.test/api/sessions/sess/uploads/1-clip.mov,http://route.test/api/sessions/sess/uploads/2-quadro.jpg');
+    // 96 pt × escala 3 do mock.
+    expect(thumb.getAttribute('data-thumbs')).toBe(',http://route.test/api/sessions/sess/uploads/2-quadro.jpg?w=288');
+    expect(container.querySelector('[data-file]')).toBeNull();
     act(() => root.unmount());
   });
 });

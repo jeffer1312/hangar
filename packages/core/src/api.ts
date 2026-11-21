@@ -120,9 +120,9 @@ export function fileUrl(name: string, path: string, download = false, server?: S
 
 // URL nativa (sem token na query) — para WebView/Image nativo que manda Authorization header.
 // PWA/browser continua no fileUrl com ?token porque <img> não manda header.
-export function fileUrlNative(name: string, path: string, server?: Server): string {
+export function fileUrlNative(name: string, path: string, server?: Server, width?: number): string {
   const base = server ? baseOf(server) : apiEnv().getBaseUrl();
-  return `${base}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`;
+  return `${base}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}${width ? `&w=${width}` : ''}`;
 }
 
 // Header Authorization para caminho nativo (mesmo token do fileUrl, mas só no header).
@@ -137,9 +137,9 @@ export function uploadUrl(name: string, filename: string, download = false, serv
   return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}${download ? '&download=1' : ''}${width ? `&w=${width}` : ''}`;
 }
 
-export function uploadUrlNative(name: string, filename: string, server?: Server): string {
+export function uploadUrlNative(name: string, filename: string, server?: Server, width?: number): string {
   const base = server ? baseOf(server) : apiEnv().getBaseUrl();
-  return `${base}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}`;
+  return `${base}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}${width ? `?w=${width}` : ''}`;
 }
 
 // Par nativo do transcriptImageUrl: o token vai no header (fileAuthHeader), nunca na URL.

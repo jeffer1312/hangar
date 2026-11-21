@@ -7,7 +7,7 @@ import { configureApi, type Server, type UploadFile } from '@hangar/core';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const h = vi.hoisted(() => ({ list: vi.fn(), dictate: vi.fn(), back: vi.fn(), push: vi.fn(), toast: vi.fn(),
-  audio: vi.fn(), card: vi.fn(), doc: vi.fn() }));
+  audio: vi.fn(), card: vi.fn(), doc: vi.fn(), lightbox: vi.fn(), deliver: vi.fn() }));
 const servers = vi.hoisted(() => ({ ready: true, activeId: 's2', servers: [
   { id: 's1', label: 'A', baseUrl: 'https://a.test', token: 'token-a' },
   { id: 's2', label: 'B', baseUrl: 'https://b.test', token: 'token-b' },
@@ -46,7 +46,13 @@ vi.mock('./AttachmentCard', () => ({
     return createElement('button', { 'aria-label': props.file.filename, onClick: props.onPress }, props.file.filename);
   },
 }));
-vi.mock('./Lightbox', () => ({ Lightbox: () => null }));
+type LightboxMockProps = { visible: boolean; uri: string; headers?: Record<string, string>; filename: string; kind?: string;
+  counter?: string; onStep?: (dir: 1 | -1) => void };
+vi.mock('./Lightbox', () => ({ Lightbox: (props: LightboxMockProps) => {
+  h.lightbox(props);
+  return props.visible ? createElement('div', { 'data-lightbox': props.kind ?? 'image' }, `${props.counter ?? ''}|${props.filename}`) : null;
+} }));
+vi.mock('./mediaCache', () => ({ deliverFile: h.deliver }));
 vi.mock('./DocumentViewer', () => ({
   DocumentViewer: ({ doc }: { doc: { kind: string; name: string; uri: string; headers?: Record<string, string> } | null }) => {
     h.doc(doc);
@@ -57,7 +63,8 @@ vi.mock('../../ui/Toast', () => ({ toast: { erro: h.toast, ok: () => {} } }));
 vi.mock('../../theme/superficie', () => ({ superficie: () => '#eee' }));
 vi.mock('../../paraglide/messages', () => Object.fromEntries(
   ('comum_carregando anexos_erro_listar anexos_nenhum lista_tentar_novamente ctx_anexos composer_transcrever_de_novo '
-    + 'arq_sessao_encerrada sessao_expirada anexos_fechar_visualizacao arquivo_carregar_erro chat_servidor_removido composer_falha_transcricao')
+    + 'arq_sessao_encerrada sessao_expirada anexos_fechar_visualizacao arquivo_carregar_erro chat_servidor_removido composer_falha_transcricao '
+    + 'file_card_empty file_card_no_app file_card_missing file_card_failed')
     .split(' ').map((k) => [k, () => k]),
 ));
 
@@ -131,11 +138,56 @@ describe('galeria de anexos', () => {
     act(() => root.unmount());
   });
 
-  it('vídeo abre no visualizador de documento', async () => {
+  it('vídeo toca no visor de mídia (que baixa antes), não no WebView com o header', async () => {
     h.list.mockResolvedValueOnce({ files: [file('clip.mp4')] });
     const { container, root } = await render();
     await act(async () => byLabel(container, 'clip.mp4')!.click());
-    expect(container.querySelector('[data-doc="video"]')?.textContent).toBe('clip.mp4');
+    expect(container.querySelector('[data-lightbox="video"]')?.textContent).toBe('|clip.mp4');
+    expect(container.querySelector('[data-doc]')).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it('fotos e vídeos da lista formam uma galeria no visor', async () => {
+    h.list.mockResolvedValueOnce({ files: [file('a.png'), file('relatorio.pdf'), file('clip.mp4'), file('b.jpg')] });
+    const { container, root } = await render();
+    await act(async () => byLabel(container, 'clip.mp4')!.click());
+    expect(container.querySelector('[data-lightbox]')?.textContent).toBe('2/3|clip.mp4');
+    const step = () => (h.lightbox.mock.lastCall![0] as LightboxMockProps).onStep!;
+    await act(async () => step()(1));
+    expect(container.querySelector('[data-lightbox="image"]')?.textContent).toBe('3/3|b.jpg');
+    expect(h.lightbox).toHaveBeenLastCalledWith(expect.objectContaining({
+      uri: 'https://a.test/api/sessions/sess/uploads/b.jpg', headers: { Authorization: 'Bearer token-a' },
+    }));
+    await act(async () => step()(1));
+    expect(container.querySelector('[data-lightbox]')?.textContent).toBe('3/3|b.jpg');
+    await act(async () => { step()(-1); });
+    await act(async () => { step()(-1); });
+    expect(container.querySelector('[data-lightbox]')?.textContent).toBe('1/3|a.png');
+    act(() => root.unmount());
+  });
+
+  it.each(['notas.docx', 'tabela.xlsx', 'pacote.zip', 'dados.csv', 'leia.txt'])('%s vai ao sistema como o card da conversa, não ao WebView', async (filename) => {
+    h.list.mockResolvedValueOnce({ files: [file(filename)] });
+    h.deliver.mockResolvedValueOnce('opened');
+    const { container, root } = await render();
+    await act(async () => byLabel(container, filename)!.click());
+    expect(h.deliver).toHaveBeenCalledExactlyOnceWith(
+      `https://a.test/api/sessions/sess/uploads/${filename}`, { Authorization: 'Bearer token-a' }, filename);
+    expect(container.querySelector('[data-doc]')).toBeNull();
+    expect(h.toast).not.toHaveBeenCalled();
+    act(() => root.unmount());
+  });
+
+  it('documento que não abre avisa o motivo', async () => {
+    h.list.mockResolvedValue({ files: [file('pacote.rar')] });
+    h.deliver.mockResolvedValueOnce('no-app').mockRejectedValueOnce(new Error('response has status: 404'));
+    const { container, root } = await render();
+    await act(async () => byLabel(container, 'pacote.rar')!.click());
+    expect(h.toast).toHaveBeenLastCalledWith('pacote.rar: file_card_no_app');
+    // O fim da entrega libera o cartão para o próximo toque.
+    await act(async () => {});
+    await act(async () => byLabel(container, 'pacote.rar')!.click());
+    expect(h.toast).toHaveBeenLastCalledWith('pacote.rar: file_card_missing');
     act(() => root.unmount());
   });
 
@@ -165,13 +217,14 @@ describe('galeria de anexos', () => {
     }));
     expect(h.card).toHaveBeenCalledWith(expect.objectContaining({ serverId: 's1' }));
     await act(async () => byLabel(container, 'clip.mp4')!.click());
-    expect(h.doc).toHaveBeenLastCalledWith(expect.objectContaining({
-      uri: 'https://a.test/api/sessions/sess/uploads/clip.mp4', headers: { Authorization: 'Bearer token-a' },
+    expect(h.lightbox).toHaveBeenLastCalledWith(expect.objectContaining({
+      uri: 'https://a.test/api/sessions/sess/uploads/clip.mp4', headers: { Authorization: 'Bearer token-a' }, kind: 'video',
     }));
     servers.servers = servers.servers.filter((s) => s.id !== 's1');
     await act(async () => root.render(createElement(AttachmentsScreen)));
     expect(container.textContent).toContain('chat_servidor_removido');
     expect(container.querySelector('[data-doc]')).toBeNull();
+    expect(container.querySelector('[data-lightbox]')).toBeNull();
     expect(h.list).toHaveBeenCalledTimes(1);
     act(() => root.unmount());
   });

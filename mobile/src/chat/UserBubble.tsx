@@ -3,12 +3,14 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ImageThumb, type MediaItem } from './ImageThumb';
 import { FileCard } from './FileCard';
-import { hasContextRefs, parseImageMessage, parsePeerMessage, parseRealtimeDelegation, transcriptImageUrlNative, uploadUrlNative, fileAuthHeader, type QuoteRef } from '@hangar/core';
+import { fileKind, hasContextRefs, parseImageMessage, parsePeerMessage, parseRealtimeDelegation, transcriptImageUrlNative, uploadUrlNative, fileAuthHeader, type QuoteRef } from '@hangar/core';
 import { ContextRefView } from './ContextRefView';
 import * as m from '../paraglide/messages';
 import { BubbleActions } from './BubbleActions';
 import { superficie } from '../theme/superficie';
 import { useServers } from '../stores/servers';
+import { useRouteBase } from '../net/routeBase';
+import { thumbWidthFor } from './thumbs';
 
 // Bolha do usuário: pequena, à direita, no fundo superficie(0.8) — o mesmo degrau da bolha do nativo,
 // e por isso acompanha Transparência e Solidez. Se parseImageMessage(text) não nulo → legenda +
@@ -55,8 +57,21 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
     : doTerminal && parsed.marcadores === parsed.filenames.length
       ? parsed.filenames.slice(0, Math.max(0, parsed.filenames.length - imageCount))
       : parsed.filenames;
+  // Recalcula as URLs quando a rota do servidor muda; o valor em si sai do `baseOf` dentro delas.
+  useRouteBase(server);
+  // Vídeo anexado vai como `arquivo:` (com os quadros como `imagem:`), mas é mídia: toca no visor.
+  const videos = parsed?.files.filter((f) => fileKind(f) === 'video') ?? [];
+  const otherFiles = parsed?.files.filter((f) => fileKind(f) !== 'video') ?? [];
   const galeria: MediaItem[] = hasImages && server ? [
-    ...filenames.map((fn): MediaItem => ({ uri: uploadUrlNative(sessionName!, fn, server), headers: fileAuthHeader(server), name: fn, kind: 'image' })),
+    ...videos.map((fn): MediaItem => ({ uri: uploadUrlNative(sessionName!, fn, server), headers: fileAuthHeader(server), name: fn, kind: 'video' })),
+    ...filenames.map((fn): MediaItem => {
+      const width = thumbWidthFor(fn);
+      return {
+        uri: uploadUrlNative(sessionName!, fn, server),
+        thumbUri: width ? uploadUrlNative(sessionName!, fn, server, width) : undefined,
+        headers: fileAuthHeader(server), name: fn, kind: 'image',
+      };
+    }),
     ...(doTerminal ? Array.from({ length: imageCount }, (_, i): MediaItem => ({
       uri: transcriptImageUrlNative(sessionName!, eventId!, i, server), headers: fileAuthHeader(server), name: m.anexos_imagem_enviada(), kind: 'image',
     })) : []),
@@ -113,9 +128,9 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
       <Text style={[styles.txt, { color: theme.tokens.status.error }]} accessibilityRole="alert">{m.chat_servidor_removido()}</Text>
     </>, caption || body);
     // Anexo que não é foto (`📎 arquivo:`): o card de download, embaixo das miniaturas.
-    const cards = parsed?.files.map((f) => (
+    const cards = otherFiles.map((f) => (
       <FileCard key={f} uri={uploadUrlNative(sessionName!, f, server)} headers={authHeaders} name={f} />
-    )) ?? [];
+    ));
     // galeria vazia = foto única absorvida como anexo real: mostra só a legenda, ou o texto original
     if (galeria.length === 0 && cards.length === 0) {
       const display = caption || body;

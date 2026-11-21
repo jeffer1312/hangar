@@ -15,7 +15,24 @@ const emCurso = new Map<string, { promise: Promise<void>; connection: string }>(
 const generations = new Map<string, object>();
 const remoteReads = new Map<string, { promise: Promise<LanInfo | null>; expires: number }>();
 const reachReads = new Map<string, { promise: Promise<unknown>; expires: number }>();
+const routeListeners = new Set<() => void>();
 const connectionKey = (server: Server) => JSON.stringify([server.baseUrl, server.token]);
+
+/** Avisa quando a rota de algum servidor muda: URL de mídia montada antes ficaria no endereço velho. */
+export function subscribeRoutes(listener: () => void): () => void {
+  routeListeners.add(listener);
+  return () => { routeListeners.delete(listener); };
+}
+
+function notifyRoutes(): void {
+  for (const listener of [...routeListeners]) listener();
+}
+
+function setRoute(id: string, route: { base: string; connection: string }): void {
+  const before = rotas.get(id);
+  rotas.set(id, route);
+  if (!before || before.base !== route.base || before.connection !== route.connection) notifyRoutes();
+}
 const isLoopbackUrl = (url: string) => /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(url);
 
 // Servidor que saiu da lista: endereço que nunca resolve (RFC 2606). Vazio iria à origem da
@@ -56,9 +73,10 @@ export function rotaDecidida(id: string, server?: Server): boolean {
 
 /** Falha de conexão: a rede pode ter mudado, a próxima conexão decide de novo. */
 export function esquecerRota(id: string): void {
-  rotas.delete(id);
+  const had = rotas.delete(id);
   emCurso.delete(id);
   generations.delete(id);
+  if (had) notifyRoutes();
 }
 
 // A resposta testa todos os endereços da máquina: quem pergunta junto divide a mesma leitura.
@@ -254,7 +272,7 @@ async function decidir(s: Server, current: () => boolean): Promise<void> {
   });
   const agora = chosen ?? (connect && await connectProof ? connect.url : primaryConfirmed ? s.baseUrl : UNCONFIRMED_BASE);
   if (!current()) return;
-  rotas.set(s.id, { base: agora, connection: connectionKey(s) });
+  setRoute(s.id, { base: agora, connection: connectionKey(s) });
   if (agora !== anterior) {
     const detalhe = agora === s.baseUrl ? 'principal' : agora === s.remote?.url ? 'tailscale' : agora === connect?.url ? 'connect' : 'rede_local';
     registrarDiag({ evento: 'rota.escolhida', detalhe, ms: Date.now() - inicio }, s.baseUrl);
@@ -265,7 +283,7 @@ async function decidir(s: Server, current: () => boolean): Promise<void> {
 export function decidirRota(s: Server): Promise<void> {
   // Mesma origem ou esta própria máquina já é o caminho mais curto.
   if (s.invite || !s.baseUrl || isLoopbackUrl(s.baseUrl)) {
-    rotas.set(s.id, { base: s.baseUrl, connection: connectionKey(s) });
+    setRoute(s.id, { base: s.baseUrl, connection: connectionKey(s) });
     return Promise.resolve();
   }
   const connection = connectionKey(s);
@@ -276,7 +294,7 @@ export function decidirRota(s: Server): Promise<void> {
   const current = () => generations.get(s.id) === generation;
   const promise = decidir(s, current).catch((e: unknown) => {
       if (!current()) return;
-      rotas.set(s.id, { base: requiresRouteProof(s) ? UNCONFIRMED_BASE : s.baseUrl, connection });
+      setRoute(s.id, { base: requiresRouteProof(s) ? UNCONFIRMED_BASE : s.baseUrl, connection });
       registrarDiag({ evento: 'rota.falhou', nivel: 'erro', codigo: e instanceof Error ? e.name : 'erro' }, s.baseUrl);
     }).finally(() => { if (current()) emCurso.delete(s.id); });
   emCurso.set(s.id, { promise, connection });

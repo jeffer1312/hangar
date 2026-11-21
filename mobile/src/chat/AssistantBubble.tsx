@@ -25,6 +25,8 @@ import { superficie } from '../theme/superficie';
 import { Icon, type IconName } from '../ui/Icon';
 import { useAparencia } from '../stores/aparencia';
 import { useServers } from '../stores/servers';
+import { useRouteBase } from '../net/routeBase';
+import { thumbWidthFor } from './thumbs';
 
 // Tema completo do unistyles (tokens + base) — UnistylesTheme não é exportado na raiz.
 type TemaApp = UnistylesThemes[keyof UnistylesThemes];
@@ -139,15 +141,25 @@ export const AssistantBubble = memo(function AssistantBubble({
   const md = useMemo(() => mkMarkdownStyle(theme), [theme]);
   // Anexos: mídia/pdf/html citados por caminho (precisam da sessão) + mídia remota por URL, que o
   // web desenha igual. Imagem e vídeo da mensagem formam UMA galeria no visor.
+  const routeBase = useRouteBase(server);
   const atts = useMemo(() => {
     const local = sessionName && server
-      ? paths.map((r) => ({ ...r, uri: fileUrlNative(sessionName, r.path, server), headers: fileAuthHeader(server) as Record<string, string> | undefined }))
+      ? paths.map((r) => {
+        const width = r.kind === 'image' ? thumbWidthFor(r.path) : undefined;
+        return {
+          ...r,
+          uri: fileUrlNative(sessionName, r.path, server),
+          thumbUri: width ? fileUrlNative(sessionName, r.path, server, width) : undefined,
+          headers: fileAuthHeader(server) as Record<string, string> | undefined,
+        };
+      })
       : [];
-    const remota = parseMediaUrls(text).map((r) => ({ ...r, uri: r.url!, headers: undefined }));
+    const remota = parseMediaUrls(text).map((r) => ({ ...r, uri: r.url!, thumbUri: undefined, headers: undefined }));
     return [...local, ...remota];
-  }, [text, sessionName, server, paths]);
+    // `routeBase`: a URL leva o endereço da rota, que muda sem trocar o objeto do servidor.
+  }, [text, sessionName, server, paths, routeBase]);
   const galeria = useMemo<MediaItem[]>(
-    () => atts.flatMap((a) => (a.kind === 'image' || a.kind === 'video' ? [{ uri: a.uri, headers: a.headers, name: a.name, kind: a.kind }] : [])),
+    () => atts.flatMap((a) => (a.kind === 'image' || a.kind === 'video' ? [{ uri: a.uri, thumbUri: a.thumbUri, headers: a.headers, name: a.name, kind: a.kind }] : [])),
     [atts],
   );
   const [doc, setDoc] = useState<DocumentItem | null>(null);
