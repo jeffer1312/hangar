@@ -8,7 +8,7 @@ const ROOT = join(__dirname, '..', '..');
 // Miniaturas desenhadas em escala (prévia de tema/fundo): o número é geometria, não layout.
 const DESENHO = new Set(['src/features/config/AppearanceArt.tsx']);
 // Só desce: cada passada por uma área baixa o teto para o que sobrou.
-const TETO = 11;
+const TETO = 7;
 
 const LITERAL = /\b(gap|rowGap|columnGap|padding\w*|margin\w*|border\w*Radius|borderRadius): ?([2-9]|\d{2,})\b|\bfontWeight: ?['"]/;
 

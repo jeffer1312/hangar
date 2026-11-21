@@ -16,8 +16,6 @@ const FILTER_LABEL: Record<AccountFilter, () => string> = {
   other: m.accounts_list_filter_other,
 };
 const EASE = Easing.bezier(0.22, 1, 0.36, 1);
-// A pílula fica recuada da borda do grupo pelo mesmo vão do preenchimento dele.
-const INSET = 3;
 
 export type SortOption = { key: string; label: string };
 
@@ -129,8 +127,8 @@ function SortRow({ label, on, dir, onPress }: { label: string; on: boolean; dir?
 }
 
 const styles = StyleSheet.create((theme) => ({
-  chips: { flexDirection: 'row', alignSelf: 'flex-start', gap: theme.base.space[0.5], padding: INSET, borderWidth: 1, borderRadius: theme.base.radius.md },
-  pill: { position: 'absolute', top: INSET, bottom: INSET, borderRadius: theme.base.radius.sm },
+  chips: { flexDirection: 'row', alignSelf: 'flex-start', gap: theme.base.space[0.5], padding: 3, borderWidth: 1, borderRadius: theme.base.radius.md },
+  pill: { position: 'absolute', top: 3, bottom: 3, borderRadius: theme.base.radius.sm },
   chip: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5], minHeight: 36, paddingHorizontal: theme.base.space[3] },
   chipText: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
   count: { borderRadius: theme.base.radius.xs, paddingHorizontal: theme.base.space[1.5] },

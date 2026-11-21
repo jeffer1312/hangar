@@ -99,6 +99,6 @@ const styles = StyleSheet.create((theme) => ({
   foot: { fontSize: theme.base.text.xs, marginTop: theme.base.space[2] },
   track: { height: 5, borderRadius: theme.base.radius.full, overflow: 'hidden', marginTop: theme.base.space[3] },
   fill: { height: '100%', borderRadius: theme.base.radius.full },
-  button: { minHeight: BUTTON, minWidth: BUTTON, paddingHorizontal: theme.base.space[4], borderRadius: BUTTON / 2, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
+  button: { minHeight: BUTTON, minWidth: BUTTON, paddingHorizontal: theme.base.space[4], borderRadius: theme.base.radius.full, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
   buttonText: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
 }));
