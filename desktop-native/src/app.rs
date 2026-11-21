@@ -45,6 +45,8 @@ mod rename_suggest;
 mod tags;
 mod notice_line;
 mod viewer;
+mod gallery;
+mod media_panel;
 mod window_tray;
 mod presence;
 mod disk;
@@ -1060,6 +1062,7 @@ pub struct Hangar {
     dictation: dictation::Dictation,
     voice: voice_ui::VoiceUi,
     player: player::Player,
+    media_panel: media_panel::MediaPanel,
     connection_origin: Option<WeakFocusHandle>,
     /// Primeira abertura com o app Electron neste computador: a tela de conexão oferece trazer as configurações dele.
     electron_offer: bool,
@@ -1337,6 +1340,7 @@ impl Hangar {
             dictation: Default::default(),
             voice: voice_ui::VoiceUi { a11y_dump: Self::watch_a11y_dump(window, cx), ..Default::default() },
             player: Default::default(),
+            media_panel: Default::default(),
             connection_origin: None,
             electron_offer: saved.is_none() && crate::electron::exists(),
             setup: None,
@@ -4566,6 +4570,11 @@ impl Hangar {
             }
             None => row,
         };
+        // "Mostrar na conversa" do visor: a linha acende e apaga.
+        let row = match self.media_flash_alpha(&id) {
+            Some(alpha) => { motion::request_frame(window, cx); div().rounded(px(10.)).bg(theme::accent().opacity(alpha)).child(row) }
+            None => row,
+        };
         row.id(SharedString::from(id)).into_any_element()
     }
 
@@ -5348,7 +5357,7 @@ impl Hangar {
                     .when(failed, |el| el.role(Role::Button).aria_label(activity::web("file_card_retry")))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let Some(key) = open_key.clone() else { return };
-                        if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_image(key, sources.clone(), index, window, cx); }
+                        if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_gallery(key, retry_source.clone(), sources.clone(), index, window, cx); }
                     }))
                     .child(thumb))
             } else { None };
@@ -5431,7 +5440,7 @@ impl Hangar {
                 .focus_visible(|el| el.border_color(theme::accent_focus()))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let Some(key) = open_key.clone() else { return };
-                    if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_image(key, sources.clone(), n, window, cx); }
+                    if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_gallery(key, retry_source.clone(), sources.clone(), n, window, cx); }
                 }))
                 .child(inner));
         }
@@ -8020,6 +8029,7 @@ impl Hangar {
                         .child(column_box(false).h_full().rounded(px(14.)).border_1().border_color(theme::border())
                             .bg(theme::sheet()).shadow(theme::sheet_shadow())));
                     self.paint_quote_flash(cx);
+                    self.paint_media_flash(cx);
                     let cite_offer = self.render_cite_offer(window, cx);
                     content = content.child(div().relative().flex_1().min_h_0().flex().flex_col()
                         // A seleção numa resposta oferece "Citar" ao soltar o mouse.

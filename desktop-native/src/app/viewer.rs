@@ -1,7 +1,8 @@
 //! Visor de imagem da conversa (`lib/visor.ts` do web): diálogo do kit com a imagem maior, zoom ancorado no cursor,
-//! arrasto com a imagem ampliada e ←/→ entre as imagens da mesma mensagem. O Esc é do diálogo, que devolve o foco
-//! à miniatura que abriu o visor.
+//! arrasto com a imagem ampliada e ←/→ (ou a faixa de baixo) entre toda imagem e vídeo da conversa, com de quem é,
+//! tamanho, data e "Mostrar na conversa". O Esc é do diálogo, que devolve o foco à miniatura que abriu o visor.
 use super::*;
+use super::gallery::{self, Item, Kind};
 use super::machines::enter_to_focused;
 use gpui_kit::{LineCap, PathBuilder, PathStyle, StrokeOptions};
 
@@ -15,9 +16,20 @@ const EDGE: f32 = 24.;
 const CHROME_H: f32 = 128.;
 /// Largura do diálogo que não é palco: respiro dos lados e a borda.
 const CHROME_W: f32 = 34.;
-/// Menor palco: a faixa de cima precisa caber nome, zoom, Abrir e Salvar.
-const MIN_W: f32 = 480.;
+/// A segunda linha do cabeçalho (tamanho, data, de quem).
+const HEADER_EXTRA: f32 = 16.;
+/// Faixa de miniaturas embaixo do palco, com o vão até ele.
+const STRIP_H: f32 = 82.;
+const THUMB_W: f32 = 86.;
+const THUMB_H: f32 = 58.;
+/// Miniaturas de cada lado da aberta na faixa: cada uma é um pedido ao servidor da sessão.
+const STRIP_SIDE: usize = 8;
+/// Menor palco: a faixa de cima precisa caber contador, zoom, Riscar, Abrir, Salvar e Mostrar na conversa.
+const MIN_W: f32 = 760.;
 const MIN_H: f32 = 160.;
+/// Palco do vídeo sem quadro: o lugar do player.
+const VIDEO_W: f32 = MIN_W;
+const VIDEO_H: f32 = MIN_W * 9. / 16.;
 
 /// Cores das marcações (a primeira é a laranja das notas de print) e espessuras da caneta, em pixels da tela.
 const PEN_COLORS: [u32; 4] = [0xea580c, 0xe11d48, 0x2563eb, 0x16a34a];
@@ -127,10 +139,10 @@ fn clamp(view: View, image: (f32, f32), stage: (f32, f32)) -> View {
     View { scale: view.scale, x: axis(view.x, image.0 * view.scale, stage.0), y: axis(view.y, image.1 * view.scale, stage.1) }
 }
 
-/// Maior palco que a janela comporta.
-fn limit(window: &Window) -> (f32, f32) {
+/// Maior palco que a janela comporta; `chrome` é a altura que não é palco.
+fn limit(window: &Window, chrome: f32) -> (f32, f32) {
     let size = window.viewport_size();
-    ((f32::from(size.width) - EDGE * 2. - CHROME_W).max(1.), (f32::from(size.height) - CHROME_H).max(MIN_H))
+    ((f32::from(size.width) - EDGE * 2. - CHROME_W).max(1.), (f32::from(size.height) - chrome).max(MIN_H))
 }
 
 /// O palco abraça a imagem na escala dada, entre o mínimo e o `limit` da janela.
@@ -162,7 +174,14 @@ const FULL_BUDGET: usize = 64 * 1024 * 1024;
 
 pub(super) fn full_images() -> FullImages { std::rc::Rc::new(std::cell::RefCell::new(media::MediaCache::with_budget(FULL_BUDGET))) }
 
-enum Shown { Loading, Image(Arc<RenderImage>), Failed(String) }
+/// `Video`: a página do vídeo, com a capa quando o servidor tirou um quadro dele.
+enum Shown { Loading, Image(Arc<RenderImage>), Video(Option<Arc<RenderImage>>), Failed(String) }
+
+impl Shown {
+    fn picture(&self) -> Option<&Arc<RenderImage>> {
+        match self { Shown::Image(image) | Shown::Video(Some(image)) => Some(image), _ => None }
+    }
+}
 
 pub(super) struct Viewer {
     hangar: WeakEntity<Hangar>,
@@ -172,7 +191,11 @@ pub(super) struct Viewer {
     runtime: Arc<Runtime>,
     full: FullImages,
     key: SessionKey,
-    sources: Vec<Source>,
+    items: Vec<Item>,
+    /// Aberto da conversa: o contador diz "na conversa" e a faixa de baixo aparece.
+    in_conversation: bool,
+    /// Bytes de cada imagem já baixada aqui: o tamanho do cabeçalho quando a lista não o sabia.
+    sizes: HashMap<Source, u64>,
     index: usize,
     shown: Shown,
     /// Número do pedido à vista: a resposta de uma imagem que já ficou para trás não entra.
@@ -216,14 +239,35 @@ fn source_name(source: &Source) -> String {
 }
 
 impl Viewer {
+    fn item(&self) -> &Item { &self.items[self.index] }
+
+    fn is_video(&self) -> bool { self.item().kind == Kind::Video }
+
     fn image_size(&self) -> Option<(f32, f32)> {
         let Shown::Image(image) = &self.shown else { return None };
         let size = image.size(0);
         Some((size.width.0 as f32, size.height.0 as f32))
     }
 
+    /// Altura do diálogo que não é palco: com a faixa de miniaturas quando há mais de um item da conversa.
+    fn chrome_h(&self) -> f32 {
+        CHROME_H + HEADER_EXTRA + if self.strip_shown() { STRIP_H } else { 0. }
+    }
+
+    fn strip_shown(&self) -> bool { self.in_conversation && self.items.len() > 1 }
+
     /// Tamanho do palco dentro de `limit`; o diálogo usa o mesmo cálculo para a própria largura.
     fn stage_box(&self, limit: (f32, f32)) -> (f32, f32) {
+        if let Shown::Video(poster) = &self.shown {
+            return match poster {
+                Some(poster) => {
+                    let size = poster.size(0);
+                    let image = (size.width.0 as f32, size.height.0 as f32);
+                    stage_for(image, fit_scale(image, limit), limit)
+                }
+                None => (VIDEO_W.min(limit.0), VIDEO_H.min(limit.1)),
+            };
+        }
         match self.image_size().zip(self.view) {
             Some((image, view)) => stage_for(image, view.scale, limit),
             None => self.held.map_or((MIN_W.min(limit.0), (MIN_H * 1.5).min(limit.1)), |(w, h)| (w.min(limit.0), h.min(limit.1))),
@@ -233,11 +277,23 @@ impl Viewer {
     fn stage_size(&self) -> Option<(f32, f32)> { self.limit.map(|limit| self.stage_box(limit)) }
 
     /// A imagem inteira sai do atlas ao trocar ou fechar, mas fica em `full`: reabrir é na hora. O cache da conversa
-    /// guarda só miniaturas.
+    /// guarda só miniaturas. Do vídeo, só a capa.
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.release(window, cx);
         self.seq += 1;
-        let slot = (self.key.clone(), self.sources[self.index].clone());
+        let video = self.is_video();
+        // Riscar é da imagem: o vídeo não tem o que marcar.
+        if video { self.pen = false; }
+        let wanted = if video { self.item().poster.clone() } else { Some(self.item().source.clone()) };
+        let Some(source) = wanted else {
+            // Vídeo sem quadro: a página dele sem capa, nada a buscar.
+            if let Some(old) = self.fetching.take() { old.abort(); }
+            self._load = Task::ready(());
+            self.shown = Shown::Video(None);
+            cx.notify();
+            return;
+        };
+        let slot = (self.key.clone(), source.clone());
         let hit = {
             let mut full = self.full.borrow_mut();
             // Cada abertura é um "quadro": a que está à vista nunca é a expulsa.
@@ -248,35 +304,40 @@ impl Viewer {
             media::trace(format_args!("viewer hit {:?}", slot.1));
             if let Some(old) = self.fetching.take() { old.abort(); }
             self._load = Task::ready(());
-            self.shown = Shown::Image(image);
+            self.shown = if video { Shown::Video(Some(image)) } else { Shown::Image(image) };
             self.view = self.image_size().zip(self.limit).map(|(image, limit)| fitted(image, limit));
             cx.notify();
             return;
         }
-        let (seq, api, name, source, uploads) = (self.seq, self.api.clone(), self.key.name.clone(), self.sources[self.index].clone(), self.uploads.clone());
+        let (seq, api, name, uploads) = (self.seq, self.api.clone(), self.key.name.clone(), self.uploads.clone());
         // ponytail: a decodificação do fundo reduz a 2560 px de lado; zoom além disso amplia pixels. Subir se incomodar.
         let job = self.runtime.spawn(async move {
             let started = std::time::Instant::now();
             media::trace(format_args!("viewer start {source:?}"));
             let bytes = uploads.fetch(&api, &name, &source).await?;
-            media::trace(format_args!("viewer fetched {source:?} {} B in {:.1} ms", bytes.len(), started.elapsed().as_secs_f64() * 1000.));
+            let size = bytes.len() as u64;
+            media::trace(format_args!("viewer fetched {source:?} {size} B in {:.1} ms", started.elapsed().as_secs_f64() * 1000.));
             let image = tokio::task::spawn_blocking(move || media::backdrop(&bytes)).await.ok().flatten();
             media::trace(format_args!("viewer ready {source:?} in {:.1} ms", started.elapsed().as_secs_f64() * 1000.));
-            Ok(image)
+            Ok((size, image))
         });
         if let Some(old) = self.fetching.replace(job.abort_handle()) { old.abort(); }
         self._load = cx.spawn(async move |this, cx| {
-            let result: Result<Option<Arc<RenderImage>>, Failure> = job.await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
+            let result: Result<(u64, Option<Arc<RenderImage>>), Failure> = job.await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
             let _ = this.update(cx, |this, cx| {
                 if this.seq != seq { return; }
-                let name = source_name(&this.sources[this.index]);
+                let name = this.item().name.clone();
                 this.shown = match result {
-                    Ok(Some(image)) => {
-                        let evicted = this.full.borrow_mut().insert(slot, media::MediaState::Image(image.clone()));
+                    Ok((size, Some(image))) => {
+                        let evicted = this.full.borrow_mut().insert(slot.clone(), media::MediaState::Image(image.clone()));
                         for old in evicted { cx.drop_image(old, None); }
-                        Shown::Image(image)
+                        // O tamanho da capa não é o do vídeo.
+                        if !video { this.sizes.insert(slot.1, size); }
+                        if video { Shown::Video(Some(image)) } else { Shown::Image(image) }
                     }
-                    Ok(None) => Shown::Failed(tr("media_failed").replace("{name}", &name).replace("{reason}", &tr("media_unreadable"))),
+                    // A capa que não veio não impede abrir o vídeo no player.
+                    _ if video => Shown::Video(None),
+                    Ok((_, None)) => Shown::Failed(tr("media_failed").replace("{name}", &name).replace("{reason}", &tr("media_unreadable"))),
                     Err(error) => Shown::Failed(tr("media_failed").replace("{name}", &name).replace("{reason}", &Hangar::fetch_failure(&error))),
                 };
                 this.view = this.image_size().zip(this.limit).map(|(image, limit)| fitted(image, limit));
@@ -288,7 +349,7 @@ impl Viewer {
 
     /// Tira a imagem do atlas da GPU; sem isso cada imagem vista ficaria lá até a janela fechar.
     fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Shown::Image(image) = std::mem::replace(&mut self.shown, Shown::Loading) { cx.drop_image(image, Some(window)); }
+        if let Shown::Image(image) | Shown::Video(Some(image)) = std::mem::replace(&mut self.shown, Shown::Loading) { cx.drop_image(image, Some(window)); }
         self.view = None;
         self.drag = None;
         // Os traços são da imagem que saiu.
@@ -411,9 +472,9 @@ impl Viewer {
         if self.marks.is_empty() || self.burning { return; }
         self.burning = true;
         self.problem = None;
-        let (api, name, source, uploads, marks) = (self.api.clone(), self.key.name.clone(), self.sources[self.index].clone(),
+        let (api, name, source, uploads, marks) = (self.api.clone(), self.key.name.clone(), self.item().source.clone(),
             self.uploads.clone(), self.marks.clone());
-        let file = burned_name(&source_name(&source));
+        let file = burned_name(&self.item().name);
         let job = self.runtime.spawn(async move {
             let bytes = uploads.fetch(&api, &name, &source).await.map_err(|error| Hangar::fetch_failure(&error))?;
             tokio::task::spawn_blocking(move || burn(&bytes, shown, &marks)).await.ok().flatten().ok_or_else(|| tr("media_unreadable"))
@@ -470,12 +531,96 @@ impl Viewer {
         });
     }
 
-    /// ←/→ andam pelas imagens da mensagem e dão a volta nas pontas.
+    /// ←/→ andam pela mídia da conversa (ou pelas imagens da mensagem) e dão a volta nas pontas.
     fn step(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let total = self.sources.len();
+        let total = self.items.len();
         if total < 2 { return; }
-        self.index = if forward { (self.index + 1) % total } else { (self.index + total - 1) % total };
+        self.go(if forward { (self.index + 1) % total } else { (self.index + total - 1) % total }, window, cx);
+    }
+
+    fn go(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.items.len() || index == self.index { return; }
+        self.index = index;
         self.load(window, cx);
+    }
+
+    /// Fecha o visor e leva a conversa à mensagem do item.
+    fn show_in_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(event) = self.item().event.clone() else { return };
+        let key = self.key.clone();
+        window.close_dialog(cx);
+        let _ = self.hangar.update(cx, |hangar, cx| hangar.show_in_conversation(key, event, cx));
+    }
+
+    /// "tamanho · data · de quem", sem o que não se sabe.
+    fn detail(&self) -> String {
+        let item = self.item();
+        let size = item.size.or_else(|| (!self.is_video()).then(|| self.sizes.get(&item.source).copied()).flatten()).map(human_size);
+        [size, gallery::when(item.ts), gallery::origin_text(item.origin, false)].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+    }
+
+    /// Página do vídeo. Hoje: a capa e o botão que entrega o vídeo ao player do sistema. O player do app entra aqui,
+    /// no lugar deste corpo, com o mesmo palco.
+    fn render_video(&self, poster: Option<Arc<RenderImage>>, cx: &mut Context<Self>) -> AnyElement {
+        let openable = composer::openable(&composer::safe_name(&self.item().name));
+        div().id("viewer-video").relative().size_full()
+            .when_some(poster, |el, poster| el.child(img(poster).absolute().inset_0().size_full().object_fit(ObjectFit::Contain)))
+            .child(div().absolute().inset_0().flex().flex_col().items_center().justify_center().gap_3()
+                .child(div().size(px(56.)).rounded_full().bg(theme::scrim()).flex().items_center().justify_center()
+                    .child(chrome::small_icon(IconName::Play, 24., theme::text())))
+                .child(div().max_w(px(VIDEO_W - 48.)).px_3().py_1().rounded_md().bg(theme::scrim()).truncate().text_sm().text_color(theme::text())
+                    .child(self.item().name.clone()))
+                .when(openable, |el| el.child(Button::new("viewer-video-open").primary().small().icon(IconName::ExternalLink)
+                    .label(tr("viewer_video_open")).on_click(cx.listener(|this, _, _, cx| this.keep(true, cx))))))
+            .into_any_element()
+    }
+
+    /// Faixa embaixo do palco: as vizinhas da aberta que cabem na largura `width`, com o dia quando muda. Miniaturas do
+    /// cache da conversa.
+    fn render_strip(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
+        let total = self.items.len();
+        // Uma vaga fica para os separadores de dia: a aberta não pode cair fora do recorte.
+        let fit = (((width + 8.) / (THUMB_W + 8.)).floor() as usize).saturating_sub(1).max(1);
+        let span = (fit.saturating_sub(1) / 2).min(STRIP_SIDE) * 2 + 1;
+        let start = self.index.saturating_sub(span / 2).min(total.saturating_sub(span));
+        let end = (start + span).min(total);
+        let (key, shown) = (&self.key, &self.items[start..end]);
+        let pictures: Vec<Option<Arc<RenderImage>>> = match self.hangar.upgrade() {
+            Some(hangar) => hangar.update(cx, |hangar, _| {
+                // Só da sessão aberta: o cache de miniaturas é dela.
+                if hangar.selected_key().as_ref() != Some(key) { return vec![None; shown.len()]; }
+                shown.iter().map(|item| {
+                    let thumb = item.thumb()?;
+                    hangar.ensure_media(thumb, false);
+                    match hangar.media.get(&(key.clone(), thumb.clone())) { Some(media::MediaState::Image(p)) => Some(p.clone()), _ => None }
+                }).collect()
+            }),
+            None => vec![None; shown.len()],
+        };
+        let today = chrono::Local::now().date_naive();
+        let mut row = div().id("viewer-strip").flex().items_center().gap_2().overflow_hidden();
+        let mut last_day = (start > 0).then(|| gallery::day_of(self.items[start - 1].ts)).flatten();
+        for i in start..end {
+            let item = &self.items[i];
+            let day = gallery::day_of(item.ts);
+            if let Some(day) = day && Some(day) != last_day {
+                row = row.child(div().flex_shrink_0().px_1().text_size(px(11.)).text_color(theme::muted())
+                    .child(gallery::day_text(gallery::day_name(day, today), false)));
+            }
+            last_day = day.or(last_day);
+            let picture = pictures[i - start].clone();
+            let on = i == self.index;
+            row = row.child(div().id(SharedString::from(format!("viewer-strip-{i}"))).relative().flex_shrink_0().w(px(THUMB_W)).h(px(THUMB_H))
+                .rounded(px(6.)).overflow_hidden().bg(theme::inset()).border_2().cursor_pointer()
+                .border_color(if on { theme::accent() } else { transparent_black() }).when(!on, |el| el.opacity(0.55))
+                .role(Role::Button).aria_selected(on).aria_label(item.name.clone())
+                .on_click(cx.listener(move |this, _, window, cx| this.go(i, window, cx)))
+                .when_some(picture, |el, picture| el.child(img(picture).size_full().object_fit(ObjectFit::Cover)))
+                .when(item.kind == Kind::Video, |el| el.child(div().absolute().inset_0().flex().items_center().justify_center()
+                    .child(div().size(px(22.)).rounded_full().bg(theme::scrim()).flex().items_center().justify_center()
+                        .child(chrome::small_icon(IconName::Play, 11., theme::text()))))));
+        }
+        div().pt_1().border_t_1().border_color(theme::border()).child(row.pt_2()).into_any_element()
     }
 
     fn zoom_at(&mut self, anchor: Option<(f32, f32)>, factor: f32, cx: &mut Context<Self>) {
@@ -516,34 +661,40 @@ impl Viewer {
 
     /// `open` entrega uma cópia ao programa do sistema; sem ele, pergunta onde salvar.
     fn keep(&mut self, open: bool, cx: &mut Context<Self>) {
-        let source = self.sources[self.index].clone();
-        let name = source_name(&source);
+        let (source, name) = (self.item().source.clone(), self.item().name.clone());
         let _ = self.hangar.update(cx, |hangar, cx| hangar.keep_file(source, name, open, cx));
     }
 }
 
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let limit = limit(window);
+        let limit = limit(window, self.chrome_h());
         if self.limit != Some(limit) {
             // Janela redimensionada: a imagem volta a caber inteira.
             self.limit = Some(limit);
             self.view = self.image_size().map(|image| fitted(image, limit));
         }
         let (stage_w, stage_h) = self.stage_box(limit);
-        if self.image_size().is_some() { self.held = Some((stage_w, stage_h)); }
-        let total = self.sources.len();
+        if self.shown.picture().is_some() { self.held = Some((stage_w, stage_h)); }
+        let total = self.items.len();
         let zoomed = match (self.view, self.image_size(), self.stage_size()) {
             (Some(view), Some(image), Some(stage)) => view.scale > fit_scale(image, stage) + 0.001,
             _ => false,
         };
         let percent = self.view.map(|view| format!("{}%", (view.scale * 100.).round() as i32));
         let has_image = matches!(self.shown, Shown::Image(_));
-        let openable = composer::openable(&composer::safe_name(&source_name(&self.sources[self.index])));
+        let openable = composer::openable(&composer::safe_name(&self.item().name));
+        let counter = if self.in_conversation {
+            tr("media_counter").replace("{n}", &(self.index + 1).to_string()).replace("{total}", &total.to_string())
+        } else { format!("{} / {}", self.index + 1, total) };
+        let detail = self.detail();
+        let in_chat = self.item().event.is_some();
 
-        let header = div().flex().items_center().gap_2().pr(px(36.)).h(px(28.))
-            .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::text()).child(source_name(&self.sources[self.index])))
-            .when(total > 1, |el| el.child(div().text_xs().text_color(theme::muted()).child(format!("{} / {}", self.index + 1, total))))
+        let header = div().flex().items_center().gap_2().pr(px(36.)).h(px(28. + HEADER_EXTRA))
+            .child(div().flex_1().min_w_0().flex().flex_col()
+                .child(div().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(self.item().name.clone()))
+                .when(!detail.is_empty(), |el| el.child(div().truncate().text_xs().text_color(theme::muted()).child(detail))))
+            .when(total > 1 || self.in_conversation, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(counter)))
             .child(div().flex().items_center().gap_1()
                 .child(Button::new("viewer-zoom-out").ghost().small().icon(IconName::Minus).tooltip(tr("viewer_zoom_out")).disabled(!has_image)
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_at(None, 1. / STEP, cx))))
@@ -563,7 +714,10 @@ impl Render for Viewer {
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.finish_note(cx);
                     if this.marks.is_empty() { this.keep(false, cx) } else { this.save_burned(window, cx) }
-                })));
+                })))
+            .when(in_chat, |el| el.child(Button::new("viewer-show-in-chat").ghost().small().icon(IconName::MessageSquare)
+                .label(tr("viewer_show_in_chat"))
+                .on_click(cx.listener(|this, _, window, cx| this.show_in_conversation(window, cx)))));
 
         let tools = self.pen.then(|| {
             let kinds = [(Tool::Pen, IconName::Pencil, "viewer_tool_pen"), (Tool::Rect, IconName::Square, "viewer_tool_rect"),
@@ -632,6 +786,7 @@ impl Render for Viewer {
                 img(image.clone()).absolute().left(px(view.x)).top(px(view.y)).w(px(w)).h(px(h)).into_any_element()
             }
             (Shown::Image(_), None) => div().into_any_element(),
+            (Shown::Video(poster), _) => self.render_video(poster.clone(), cx),
             (Shown::Loading, _) => div().id("viewer-loading").size_full().flex().items_center().justify_center().role(Role::Status)
                 .text_sm().text_color(theme::muted()).child(tr("media_loading")).into_any_element(),
             (Shown::Failed(reason), _) => div().id("viewer-failed").size_full().flex().items_center().justify_center().px_6().role(Role::Alert)
@@ -708,25 +863,34 @@ impl Render for Viewer {
                 .child(edge("viewer-previous", IconName::ChevronLeft, tr("viewer_previous"), false))
                 .child(edge("viewer-next", IconName::ChevronRight, tr("viewer_next"), true)));
 
+        let strip = self.strip_shown().then(|| self.render_strip(stage_w, cx));
         div().id("viewer").track_focus(&self.focus).key_context("Viewer").on_key_down(cx.listener(Self::on_key))
-            .flex().flex_col().gap_3().child(header).children(tools).child(stage)
+            .flex().flex_col().gap_3().child(header).children(tools).child(stage).children(strip)
     }
 }
 
 impl Hangar {
-    /// Abre o visor em `sources[index]`; `sources` são as imagens da mensagem, na ordem em que aparecem.
+    /// Abre o visor em `sources[index]`; `sources` são as imagens da mensagem (ou o anexo, o diagrama), na ordem em
+    /// que aparecem. Fora da conversa: sem a faixa e sem "Mostrar na conversa".
     pub(super) fn open_image(&mut self, key: SessionKey, sources: Vec<Source>, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let items = sources.into_iter().map(|source| { let name = source_name(&source); Item::bare(source, name) }).collect();
+        self.open_viewer(key, items, index, false, window, cx);
+    }
+
+    /// Abre o visor em `items[index]`; `in_conversation`: a lista é a mídia da conversa inteira.
+    pub(super) fn open_viewer(&mut self, key: SessionKey, items: Vec<Item>, index: usize, in_conversation: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.api_for(&key.server) else { return };
-        if index >= sources.len() { return; }
+        if index >= items.len() { return; }
         let (hangar, runtime, uploads, full) = (cx.entity().downgrade(), self.runtime.clone(), self.uploads_for(&key), self.full_images.clone());
         let viewer = cx.new(|cx| {
             // Rede de segurança para um fechamento que não passe pelo `on_close`: a entidade morre com o diálogo.
             cx.on_release(|viewer: &mut Viewer, cx| {
                 if let Some(job) = viewer.fetching.take() { job.abort(); }
-                if let Shown::Image(image) = &viewer.shown { cx.drop_image(image.clone(), None); }
+                if let Some(image) = viewer.shown.picture() { cx.drop_image(image.clone(), None); }
             }).detach();
             Viewer {
-                hangar, api, uploads, runtime, full, key, sources, index, shown: Shown::Loading, seq: 0, _load: Task::ready(()), fetching: None,
+                hangar, api, uploads, runtime, full, key, items, in_conversation, sizes: HashMap::new(), index, shown: Shown::Loading, seq: 0,
+                _load: Task::ready(()), fetching: None,
                 focus: cx.focus_handle(), stage: None, limit: None, held: None, view: None, drag: None,
                 pen: false, pen_color: 0, pen_width: 1, tool: Tool::Rect, marks: Vec::new(), drawing: None, editing: None,
                 burning: false, problem: None,
@@ -736,8 +900,9 @@ impl Hangar {
         let (shown, closed) = (viewer.clone(), viewer.clone());
         window.open_dialog(cx, move |dialog, window, cx| {
             // Do tamanho da imagem até o da janela, centrado; o construtor roda a cada quadro e acompanha zoom e troca.
-            let (w, h) = shown.read(cx).stage_box(limit(window));
-            let top = ((f32::from(window.viewport_size().height) - h - (CHROME_H - EDGE * 2.)) / 2.).max(EDGE);
+            let chrome = shown.read(cx).chrome_h();
+            let (w, h) = shown.read(cx).stage_box(limit(window, chrome));
+            let top = ((f32::from(window.viewport_size().height) - h - (chrome - EDGE * 2.)) / 2.).max(EDGE);
             let closed = closed.clone();
             dialog.w(px(w + CHROME_W)).margin_top(px(top)).on_ok(enter_to_focused).child(shown.clone())
                 .on_close(move |_, window, cx| closed.update(cx, |viewer, cx| viewer.release(window, cx)))
