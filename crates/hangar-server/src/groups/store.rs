@@ -370,6 +370,10 @@ mod tests {
         let output = Arc::new(Mutex::new(Vec::new()));
         let capture = Capture(output.clone());
         let subscriber = tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || capture.clone()).finish();
+        // Com um capturador só no processo, o ponto de log que outro teste registra em paralelo
+        // guarda o interesse da thread dele (nenhum) e fica desligado aqui. Com dois vivos, o
+        // interesse passa a contar todos, este incluído.
+        let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
         tracing::subscriber::with_default(subscriber, work);
         String::from_utf8(output.lock().unwrap().clone()).unwrap()
     }
