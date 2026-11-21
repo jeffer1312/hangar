@@ -315,8 +315,8 @@ fn is_current(layout: &Layout, dir: &Path) -> bool {
     matches!((real(&layout.current()), real(dir)), (Ok(a), Ok(b)) if a == b)
 }
 
-/// Tira a pasta do lugar para `versions/.trash-<n>`: no Windows o `rename` recusa pasta com processo
-/// vivo, e uma pasta pela metade nunca fica com nome de versão.
+/// Tira a pasta do lugar para `versions/.trash-<n>`: uma pasta pela metade nunca fica com nome de
+/// versão.
 fn to_trash(layout: &Layout, dir: &Path) -> std::io::Result<PathBuf> {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let trash = layout.versions().join(format!(".trash-{}-{stamp}", std::process::id()));
@@ -368,8 +368,9 @@ pub trait InUse {
 
 /// Em uso de verdade. Linux: algum processo do `/proc` com `exe`, `cwd` ou arquivo mapeado
 /// (`maps`) dentro da pasta; processo que não se deixa ler (outro usuário) é ignorado. Fora do
-/// Linux, não: no Windows a própria troca de nome da poda recusa pasta com processo vivo (acesso
-/// negado) e a poda conta isso como em uso.
+/// Linux, não: no Windows quem a poda conta como em uso é o acesso negado, na troca de nome
+/// (processo com a pasta como `cwd`) ou no apagar (executável rodando de dentro dela, que a troca
+/// de nome deixa passar).
 pub struct ProcInUse;
 
 impl InUse for ProcInUse {
@@ -425,6 +426,8 @@ pub fn prune(layout: &Layout, previous: Option<&Path>, in_use: &dyn InUse) -> Pr
         match to_trash(layout, &path) {
             Ok(trash) => match std::fs::remove_dir_all(&trash) {
                 Ok(()) => out.removed.push(path),
+                // A sobra `.trash-*` sai numa poda seguinte, quando o processo tiver saído.
+                Err(e) if held_by_process(&e) => out.in_use.push(path),
                 Err(e) => out.failed.push(format!("a versão {name} saiu do lugar mas não foi apagada: {e}")),
             },
             Err(e) if held_by_process(&e) => out.in_use.push(path),

@@ -730,6 +730,32 @@ fn update_prune_keeps_current_and_previous_and_skips_in_use() {
     assert_eq!(leftovers.len(), 3, "sem lixeira sobrando: {leftovers:?}");
 }
 
+#[cfg(windows)]
+#[test]
+fn update_prune_counts_a_running_exe_as_in_use_and_clears_the_leftover_later() {
+    let home = tempfile::tempdir().unwrap();
+    let layout = Layout::new(home.path());
+    let busy = version_dir(&layout, "0.1.0.7");
+    let current = version_dir(&layout, "0.1.0.10");
+    swap(&layout, &current).unwrap();
+    let system = std::env::var("SystemRoot").unwrap();
+    let exe = busy.join("ping.exe");
+    std::fs::copy(Path::new(&system).join("System32").join("ping.exe"), &exe).unwrap();
+    let mut child = std::process::Command::new(&exe).args(["-n", "60", "127.0.0.1"]).current_dir(home.path())
+        .stdout(std::process::Stdio::null()).spawn().unwrap();
+
+    let held = prune(&layout, None, &ProcInUse);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let after = prune(&layout, None, &ProcInUse);
+
+    assert!(held.failed.is_empty(), "{:?}", held.failed);
+    assert_eq!(held.in_use.len(), 1);
+    assert!(after.failed.is_empty(), "{:?}", after.failed);
+    let leftovers: Vec<_> = std::fs::read_dir(layout.versions()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(leftovers.len(), 1, "a lixeira sai depois que o processo termina: {leftovers:?}");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn update_proc_in_use_sees_a_process_working_in_the_folder() {
