@@ -1833,11 +1833,13 @@ mod tests {
         let saved = api.download("fixture", &source, target.clone(), |done, total| seen.push((done, total))).await.unwrap();
         assert_eq!(saved.as_deref(), Some(target.as_path()));
         assert_eq!(std::fs::read(&target).unwrap(), b"hello world");
-        assert!(!super::download::part_path(&target).exists());
+        // Nenhum `.part` sobra, nem do inteiro nem do cortado.
+        let left = || std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(left(), ["relatorio.pdf"]);
         assert_eq!(seen.last(), Some(&(11, Some(11))));
         let cut = dir.join("cortado.pdf");
         assert!(api.download("fixture", &source, cut.clone(), |_, _| {}).await.is_err());
-        assert!(!cut.exists() && !super::download::part_path(&cut).exists());
+        assert_eq!(left(), ["relatorio.pdf"]);
         server.await.unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }

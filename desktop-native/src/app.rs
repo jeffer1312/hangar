@@ -442,10 +442,11 @@ enum Payload {
     // Miniatura já decodificada fora da thread da janela; `None` = bytes que não são imagem legível.
     // A miniatura e os quadros da revelação dela.
     Media(SessionKey, Source, u32, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
-    /// Resultado de Abrir/Salvar: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no servidor.
-    Saved(SessionKey, Source, bool, Result<(PathBuf, bool), (String, bool)>),
-    /// Quanto do Abrir/Salvar já chegou e o tamanho, se o servidor disse.
-    SaveProgress(SessionKey, Source, u64, Option<u64>),
+    /// Resultado de Abrir/Salvar da geração `u64`: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no
+    /// servidor.
+    Saved(SessionKey, Source, u64, bool, Result<(PathBuf, bool), (String, bool)>),
+    /// Quanto do Abrir/Salvar da geração `u64` já chegou e o tamanho, se o servidor disse.
+    SaveProgress(SessionKey, Source, u64, u64, Option<u64>),
     /// Quanto do anexo `id` já saiu, do total.
     UploadProgress(SessionKey, u64, u64, u64),
     /// "Abrir no navegador" do HTML citado: o endereço da página com o bilhete dela, ou a falha já em frase.
@@ -771,8 +772,9 @@ pub struct Hangar {
     /// Quando a nota do Jev de cada conversa entrou: o prazo de uma nota não apaga a seguinte, de mesmo texto.
     jev_note_at: HashMap<SessionKey, Instant>,
     file_cards: HashMap<(SessionKey, Source), FileCard>,
-    /// O Abrir/Salvar em voo de cada cartão, para o Cancelar; o resultado de um que não está aqui foi cancelado.
-    downloads: HashMap<(SessionKey, Source), tokio::task::AbortHandle>,
+    /// O Abrir/Salvar em voo de cada cartão, com a geração dele, para o Cancelar; mensagem de outra geração é de tarefa
+    /// cancelada ou trocada.
+    downloads: api::download::Running<(SessionKey, Source), tokio::task::AbortHandle>,
     /// Painel "Na fila": edição em curso, recolhido e arrasto.
     queue: queue::QueueUi,
     /// A mensagem enviada em viagem até o lugar dela, e onde as pontas da viagem foram desenhadas.
@@ -1328,7 +1330,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None, list_down_since: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), downloads: HashMap::new(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
+            flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), downloads: Default::default(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
             note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), work_reviews: HashMap::new(), work_review: Default::default(), notice_acted: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
@@ -2030,21 +2032,29 @@ impl Hangar {
                 }
                 return;
             }
-            Payload::SaveProgress(key, source, done, total) => {
+            Payload::SaveProgress(key, source, generation, done, total) => {
                 let card = (key, source);
-                // Só o cartão ainda baixando: o cancelado já saiu do mapa.
-                if self.downloads.contains_key(&card) && let Some(state) = self.file_cards.get_mut(&card)
+                // Só a tarefa atual do cartão: a cancelada ou trocada não mexe no anel da nova.
+                if self.downloads.is_current(&card, generation) && let Some(state) = self.file_cards.get_mut(&card)
                     && matches!(state, FileCard::Downloading { .. }) {
                     *state = FileCard::Downloading { done, total };
                     cx.notify();
                 }
                 return;
             }
-            Payload::Saved(key, source, open, result) => {
+            Payload::Saved(key, source, generation, open, result) => {
                 // Reabrir o que já foi salvo mantém o cartão "baixado" (Abrir e Mostrar na pasta), abrindo ou não.
                 let kept = self.file_cards.get(&(key.clone(), source.clone())).filter(|card| matches!(card, FileCard::Saved(_))).cloned();
-                // Cancelado enquanto o resultado vinha: nada abre nem aparece.
-                if self.downloads.remove(&(key.clone(), source.clone())).is_none() { return; }
+                // Cancelado ou trocado enquanto o resultado vinha: nada abre nem aparece, e a tarefa nova do cartão
+                // continua. A cópia privada que ninguém vai abrir sai; o destino escolhido no Salvar fica. Reabrir não é
+                // download: vale só enquanto o cartão segue "baixado", e o arquivo dele nunca sai.
+                let current = if generation == REOPEN { kept.is_some() } else { self.downloads.finish(&(key.clone(), source.clone()), generation) };
+                if !current {
+                    if generation != REOPEN && open && let Ok((path, false)) = result && is_private_copy(&path) {
+                        std::thread::spawn(move || { let _ = std::fs::remove_file(path); });
+                    }
+                    return;
+                }
                 let (card, note) = match result {
                     Ok((_, true)) => (Some(FileCard::Empty), None),
                     Ok((path, _)) if open && composer::openable_path(&path) => {
@@ -3838,20 +3848,18 @@ impl Hangar {
         // (volume de rede parado travaria a tela) e é ele que passa pela regra de abrir, em `Payload::Saved`.
         if open && let Some(FileCard::Saved(saved)) = self.file_cards.get(&card) {
             let (saved, tx, connection) = (saved.clone(), self.tx.clone(), self.connection);
-            let task = self.runtime.spawn(async move {
+            self.runtime.spawn(async move {
                 let real = tokio::task::spawn_blocking(move || std::fs::canonicalize(&saved).ok().filter(|real| real.is_file())
                     .map(|real| real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(disk::plain_path(text)))))
                     .await.ok().flatten();
                 let result = real.map(|real| (real, false)).ok_or_else(|| (String::new(), true));
-                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, true, result) }).await;
-            }).abort_handle();
-            // O cartão segue "baixado"; o resultado é esperado como o de um download, para não ser lido como cancelado.
-            if let Some(old) = self.downloads.insert(card, task) { old.abort(); }
+                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, REOPEN, true, result) }).await;
+            });
             return;
         }
         let (connection, tx, runtime, uploads) = (self.connection, self.tx.clone(), self.runtime.clone(), self.uploads_for(&key));
         let fail_key = key.clone();
-        let write = move |target: Option<PathBuf>| -> tokio::task::AbortHandle {
+        let write = move |target: Option<PathBuf>, generation: u64| -> tokio::task::AbortHandle {
             runtime.spawn(async move {
                 let result = async {
                     let target = match target {
@@ -3867,7 +3875,7 @@ impl Hangar {
                     let (progress, progress_key, progress_source) = (tx.clone(), key.clone(), source.clone());
                     // Sem esperar vaga na fila: o aviso seguinte cobre o que se perder.
                     let report = move |done, total| { let _ = progress.try_send(Envelope { connection, selection: None,
-                        payload: Payload::SaveProgress(progress_key.clone(), progress_source.clone(), done, total) }); };
+                        payload: Payload::SaveProgress(progress_key.clone(), progress_source.clone(), generation, done, total) }); };
                     match uploads.download(&api, &key.name, &source, target, report).await {
                         Ok(Some(path)) => Ok((path, false)),
                         // Vazio não vira arquivo no disco: o card avisa e não há o que abrir.
@@ -3879,15 +3887,15 @@ impl Hangar {
                         }
                     }
                 }.await;
-                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, open, result) }).await;
+                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, generation, open, result) }).await;
             }).abort_handle()
         };
-        if open { let task = write(None); self.start_download(card, task); cx.notify(); return; }
+        if open { self.start_download(card, |generation| write(None, generation)); cx.notify(); return; }
         let prompt = cx.prompt_for_new_path(&downloads_folder(), Some(&composer::safe_name(&name)));
         cx.spawn(async move |this, cx| {
             match prompt.await {
                 Ok(Ok(Some(path))) => {
-                    let _ = this.update(cx, |this, cx| { let task = write(Some(path)); this.start_download(card, task); cx.notify(); });
+                    let _ = this.update(cx, |this, cx| { this.start_download(card, |generation| write(Some(path), generation)); cx.notify(); });
                 }
                 Ok(Ok(None)) => {}
                 // O diálogo do sistema falhou: dizer, não parecer que Salvar não fez nada.
@@ -3899,15 +3907,17 @@ impl Hangar {
         }).detach();
     }
 
-    /// O cartão passa a baixar; um pedido anterior do mesmo cartão é cancelado, para só um gravar.
-    fn start_download(&mut self, card: (SessionKey, Source), task: tokio::task::AbortHandle) {
+    /// O cartão passa a baixar numa geração nova, que `spawn` leva nas mensagens; um pedido anterior do mesmo cartão é
+    /// cancelado, para só um gravar.
+    fn start_download(&mut self, card: (SessionKey, Source), spawn: impl FnOnce(u64) -> tokio::task::AbortHandle) {
+        let generation = self.downloads.next_generation();
         self.file_cards.insert(card.clone(), FileCard::STARTED);
-        if let Some(old) = self.downloads.insert(card, task) { old.abort(); }
+        if let Some(old) = self.downloads.insert(card, generation, spawn(generation)) { old.abort(); }
     }
 
     /// Cancelar do cartão: a tarefa para, o `.part` sai com ela e o cartão volta a oferecer Abrir e Baixar.
     fn cancel_download(&mut self, card: (SessionKey, Source), cx: &mut Context<Self>) {
-        if let Some(task) = self.downloads.remove(&card) { task.abort(); }
+        if let Some(task) = self.downloads.cancel(&card) { task.abort(); }
         if matches!(self.file_cards.get(&card), Some(FileCard::Downloading { .. })) { self.file_cards.remove(&card); }
         cx.notify();
     }
@@ -7546,6 +7556,14 @@ fn private_copy(name: &str) -> std::io::Result<PathBuf> {
     sweep_private_copies(&base, now);
     let stamp = now.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     Ok(base.join(format!("{stamp}-{name}")))
+}
+
+/// Geração do Abrir de um arquivo já salvo, que não baixa nada: as dos downloads começam em 1.
+const REOPEN: u64 = 0;
+
+/// Só o que está direto na pasta das cópias: o arquivo da própria sessão e o destino do Salvar nunca são apagados.
+fn is_private_copy(path: &std::path::Path) -> bool {
+    path.parent() == Some(private_copies_dir().as_path())
 }
 
 /// Cópia mais nova que isto nunca sai: o programa do sistema pode ainda estar abrindo o arquivo.
