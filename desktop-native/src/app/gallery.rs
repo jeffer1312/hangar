@@ -86,7 +86,14 @@ pub(super) fn collect(events: &[ChatEvent]) -> Vec<Item> {
         let (refs, origin) = match event.kind.as_str() {
             "user_msg" => (super::attachment_refs(event), Origin::User),
             "assistant_msg" => (super::attachment_refs(event), Origin::Agent),
-            "tool_use" => (super::tool_file_refs(event), Origin::Agent),
+            "tool_use" => {
+                let mut refs = super::tool_file_refs(event);
+                // Código e texto que o agente leu são trabalho dele, não arquivo entregue: do Read só entra a mídia.
+                if event.tool_name.as_deref().is_some_and(|name| name.eq_ignore_ascii_case("read")) {
+                    refs.retain(|(_, name, image)| kind_of(name, *image) != Kind::File);
+                }
+                (refs, Origin::Agent)
+            }
             _ => continue,
         };
         let videos: Vec<String> = refs.iter().filter(|(source, name, _)| matches!(source, Source::Upload(_)) && crate::audio::is_video(name))
@@ -233,11 +240,18 @@ impl Hangar {
     /// A lista da conversa aberta com o que o painel já sabe (tamanhos, anexos do cofre), refeita só quando a
     /// conversa ou esse conhecimento mudam: o desenho do painel e do visor não relê as mensagens a cada quadro.
     pub(super) fn media_items(&mut self) -> std::rc::Rc<Vec<Item>> {
-        let key = self.selected_key();
-        let stamp = (key.clone(), self.chat.events.len(), self.chat.events.last().map(|e| e.id.clone()), self.media_panel.generation);
+        // Sem alocar: isto roda a cada quadro do painel e do visor. A sessão muda com `selection` ou `revision`.
+        let last = self.chat.events.last().map_or(0, |event| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::hash::DefaultHasher::new();
+            event.id.hash(&mut hasher);
+            hasher.finish()
+        });
+        let stamp = (self.selection, self.revision, self.chat.events.len(), last, self.media_panel.generation);
         if let Some((cached, items)) = &self.media_panel.items && *cached == stamp { return items.clone(); }
+        let key = self.selected_key();
         let mut items = collect(&self.chat.events);
-        if key.is_some() && self.media_panel.owner == key {
+        if self.media_panel.owner.as_ref().is_some_and(|(owner, revision)| key.as_ref() == Some(owner) && *revision == self.revision) {
             if let Some(Ok(uploads)) = &self.media_panel.uploads { items = with_uploads(items, uploads); }
             items = with_found(items, &self.media_panel.cited);
         }
@@ -329,6 +343,23 @@ mod tests {
         assert_eq!(items[1].folder.as_deref(), Some("/tmp/a"));
         let visual: Vec<&str> = items.iter().filter(|i| i.visual()).map(|i| i.name.as_str()).collect();
         assert_eq!(visual, ["um.png", "1-a.mp4", "demo.mp4", "dois.png"], "o visor passa por imagem e vídeo, de mensagens diferentes");
+    }
+
+    #[test]
+    fn read_brings_only_media_and_sent_files_still_count() {
+        let tool = |id: &str, name: &str, input: serde_json::Value| ChatEvent { kind: "tool_use".into(), id: id.into(),
+            tool_name: Some(name.into()), ts: Some(1.), tool_input: input.as_object().cloned(), ..Default::default() };
+        let events = vec![
+            tool("r1", "Read", serde_json::json!({"file_path": "/repo/src/main.rs"})),
+            tool("r2", "Read", serde_json::json!({"file_path": "/repo/docs/guia.pdf"})),
+            tool("r3", "Read", serde_json::json!({"file_path": "/tmp/tela.png"})),
+            tool("r4", "Read", serde_json::json!({"file_path": "/tmp/fala.mp3"})),
+            tool("s1", "SendUserFile", serde_json::json!({"files": ["/tmp/out/relatorio.pdf"]})),
+        ];
+        let items = collect(&events);
+        let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["tela.png", "fala.mp3", "relatorio.pdf"], "o que o Read leu de código e documento fica fora dos Arquivos");
+        assert_eq!(items.iter().map(|i| i.kind).collect::<Vec<_>>(), [Kind::Image, Kind::Audio, Kind::File]);
     }
 
     #[test]

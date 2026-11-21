@@ -10,6 +10,9 @@ use crate::api::dto::UploadFile;
 pub(super) const FLASH: Duration = Duration::from_millis(1800);
 /// Miniaturas por página da grade: cada uma é um pedido ao servidor da sessão.
 const PAGE: usize = 48;
+/// Teto de miniaturas na grade ao mesmo tempo: as que estão à vista nunca saem do cache das prévias, então a grade
+/// passada do teto anda por troca, não por acréscimo.
+const MAX_SHOWN: usize = PAGE * 5;
 const PAD: f32 = 14.;
 const GAP: f32 = 4.;
 const COLUMNS: usize = 4;
@@ -32,59 +35,112 @@ impl Section {
 /// Pedido de "Mostrar na conversa": o evento, e a linha e a hora depois de achada.
 pub(super) struct Flash { pub(super) key: SessionKey, pub(super) event: String, pub(super) row: Option<String>, pub(super) at: Option<Instant> }
 
-type Stamp = (Option<SessionKey>, usize, Option<String>, u64);
+/// Seleção, revisão, eventos, o id do último deles (em hash) e a geração do painel.
+pub(super) type Stamp = (u64, u64, usize, u64, u64);
+
+/// A sessão e a revisão do histórico dela: reabrir a mesma sessão traz a primeira página de novo, e ela é outra dona.
+pub(super) type Owner = (SessionKey, u64);
 
 #[derive(Default)]
 pub(super) struct MediaPanel {
     section: Section,
     filter: Filter,
-    /// Sessão do que está abaixo: outra sessão recomeça a leitura, a aba e o filtro ficam.
-    pub(super) owner: Option<SessionKey>,
+    /// Dono do que está abaixo: outro recomeça a leitura, a aba e o filtro ficam.
+    pub(super) owner: Option<Owner>,
     /// Anexos do cofre da sessão; `None` até a primeira leitura.
     pub(super) uploads: Option<Result<Vec<UploadFile>, String>>,
     /// Mensagens da pessoa na última leitura dos anexos: anexo novo só chega com mensagem nova (ou ditado, que vira uma).
     uploads_for: Option<usize>,
-    listing: bool,
+    /// Pedido de anexos em voo: só a resposta dele o encerra.
+    listing: Option<u64>,
     /// Caminhos citados já perguntados: o achado, ou nada (não existe, ou a pergunta falhou).
     pub(super) cited: HashMap<String, Option<gallery::Found>>,
-    asking: bool,
+    /// Pergunta de tamanhos em voo, como `listing`.
+    asking: Option<u64>,
+    /// Último número de pedido dado. Não volta a zero com a troca de dono: resposta velha nunca casa com pedido novo.
+    tickets: u64,
     /// Muda quando o que se sabe muda: a lista guardada é refeita.
     pub(super) generation: u64,
     pub(super) items: Option<(Stamp, std::rc::Rc<Vec<Item>>)>,
-    /// Miniaturas à mostra na grade.
+    /// Janela da grade: quantas das mais novas pular e quantas mostrar.
+    start: usize,
     shown: usize,
-    /// Sessão cujo histórico inteiro já foi pedido para a aba.
-    loaded_all: Option<SessionKey>,
+    /// Dono cujo histórico inteiro já foi pedido para a aba.
+    loaded_all: Option<Owner>,
+    /// O histórico inteiro falhou: a lista pode estar incompleta, e só o Tentar de novo pede outra vez.
+    full_failed: Option<String>,
     pub(super) flash: Option<Flash>,
 }
 
 impl MediaPanel {
-    fn reset(&mut self, owner: SessionKey) {
-        let (section, filter, generation, flash) = (self.section, self.filter, self.generation + 1, self.flash.take());
-        *self = MediaPanel { section, filter, generation, flash, owner: Some(owner), shown: PAGE, ..Default::default() };
+    fn reset(&mut self, owner: Option<Owner>) {
+        let (section, filter, generation, tickets, flash) = (self.section, self.filter, self.generation + 1, self.tickets, self.flash.take());
+        *self = MediaPanel { section, filter, generation, tickets, flash, owner, shown: PAGE, ..Default::default() };
+    }
+
+    /// Outra sessão (ou a mesma reaberta) na tela: nada desta fica, nem o pedido do histórico inteiro.
+    pub(super) fn release(&mut self) { self.reset(None); }
+
+    /// Passa a ser de `owner`; devolve se mudou.
+    fn adopt(&mut self, owner: &Owner) -> bool {
+        if self.owner.as_ref() == Some(owner) { return false; }
+        self.reset(Some(owner.clone()));
+        true
+    }
+
+    fn ticket(&mut self) -> u64 { self.tickets += 1; self.tickets }
+
+    /// Encerra o pedido `ticket` em `slot` se ele ainda é o em voo; senão a resposta é de outro dono e é descartada.
+    fn settle(slot: &mut Option<u64>, ticket: u64) -> bool {
+        if *slot != Some(ticket) { return false; }
+        *slot = None;
+        true
+    }
+
+    fn wants_full(&self, owner: &Owner) -> bool { self.loaded_all.as_ref() != Some(owner) && self.full_failed.is_none() }
+
+    /// O histórico inteiro de `owner` falhou: a aba mostra e pode pedir de novo. Falha de outro pedido (a busca) não é dela.
+    pub(super) fn full_history_failed(&mut self, owner: Option<Owner>, reason: String) {
+        if owner.is_none() || self.loaded_all != owner { return; }
+        (self.loaded_all, self.full_failed) = (None, Some(reason));
+        self.generation += 1;
+    }
+
+    /// "Mostrar mais": a grade cresce uma página até o teto; no teto, troca a página mais nova por uma mais antiga.
+    fn more(start: usize, shown: usize) -> (usize, usize) {
+        let shown = shown.clamp(PAGE, MAX_SHOWN);
+        if shown + PAGE <= MAX_SHOWN { (start, shown + PAGE) } else { (start + PAGE, MAX_SHOWN) }
     }
 }
 
 impl Hangar {
+    /// A primeira página da conversa já chegou e nada do histórico está em voo.
+    fn history_settled(&self) -> bool {
+        self.history_installed && !self.loading && self.history_task.as_ref().is_none_or(|task| task.is_finished())
+    }
+
     /// Lê o que a aba precisa da sessão aberta: o histórico inteiro uma vez, os anexos do cofre quando chega mensagem
     /// da pessoa, e o tamanho dos caminhos citados ainda não perguntados.
     fn media_sync(&mut self, cx: &mut Context<Self>) {
         let (Some(key), Some(api)) = (self.selected_key(), self.session_api()) else { return };
-        if self.media_panel.owner.as_ref() != Some(&key) { self.media_panel.reset(key.clone()); }
-        if self.history_limit != 0 && self.media_panel.loaded_all.as_ref() != Some(&key) {
-            self.media_panel.loaded_all = Some(key.clone());
+        let owner = (key.clone(), self.revision);
+        self.media_panel.adopt(&owner);
+        // Só depois da primeira página: pedir na abertura cancelaria a página e juntaria o transcript inteiro na thread
+        // da tela antes de a conversa aparecer.
+        if self.history_limit != 0 && self.history_settled() && self.media_panel.wants_full(&owner) {
+            self.media_panel.loaded_all = Some(owner.clone());
             self.load_all(cx);
         }
         let users = self.chat.events.iter().filter(|event| event.kind == "user_msg").count();
-        if !self.media_panel.listing && self.media_panel.uploads_for != Some(users) {
-            (self.media_panel.uploads_for, self.media_panel.listing) = (Some(users), true);
-            let (uploads, name, list_api, owner) = (self.uploads_for(&key), key.name.clone(), api.clone(), key.clone());
+        if self.media_panel.listing.is_none() && self.media_panel.uploads_for != Some(users) {
+            let ticket = self.media_panel.ticket();
+            (self.media_panel.uploads_for, self.media_panel.listing) = (Some(users), Some(ticket));
+            let (uploads, name, list_api) = (self.uploads_for(&key), key.name.clone(), api.clone());
             let job = self.runtime.spawn(async move { uploads.list(&list_api, &name).await });
             cx.spawn(async move |this, cx| {
                 let result = job.await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
                 let _ = this.update(cx, |this, cx| {
-                    if this.media_panel.owner.as_ref() != Some(&owner) { return; }
-                    this.media_panel.listing = false;
+                    if !MediaPanel::settle(&mut this.media_panel.listing, ticket) { return; }
                     this.media_panel.uploads = Some(result.map_err(|error| Self::fetch_failure(&error)));
                     this.media_panel.generation += 1;
                     this.redraw(Area::Side, cx);
@@ -92,7 +148,7 @@ impl Hangar {
                 });
             }).detach();
         }
-        if self.media_panel.asking { return; }
+        if self.media_panel.asking.is_some() { return; }
         let items = self.media_items();
         let pending: Vec<String> = items.iter().filter_map(|item| match &item.source {
             Source::Cited(path) if !self.media_panel.cited.contains_key(path) => Some(path.clone()),
@@ -100,8 +156,9 @@ impl Hangar {
         }).collect();
         if pending.is_empty() { return; }
         for path in &pending { self.media_panel.cited.insert(path.clone(), None); }
-        self.media_panel.asking = true;
-        let (name, owner) = (key.name.clone(), key.clone());
+        let ticket = self.media_panel.ticket();
+        self.media_panel.asking = Some(ticket);
+        let name = key.name.clone();
         let job = self.runtime.spawn(async move {
             let mut found = Vec::new();
             // ponytail: lotes de 50, como a conferência dos chips; o servidor procura fora da pasta só 30 por pedido.
@@ -119,8 +176,7 @@ impl Hangar {
         cx.spawn(async move |this, cx| {
             let found = job.await.unwrap_or_default();
             let _ = this.update(cx, |this, cx| {
-                if this.media_panel.owner.as_ref() != Some(&owner) { return; }
-                this.media_panel.asking = false;
+                if !MediaPanel::settle(&mut this.media_panel.asking, ticket) { return; }
                 this.media_panel.cited.extend(found);
                 this.media_panel.generation += 1;
                 this.redraw(Area::Side, cx);
@@ -147,7 +203,7 @@ impl Hangar {
             let label = match chip { Filter::All => "media_filter_all", Filter::Agent => "media_filter_agent", Filter::User => "media_filter_user" };
             Button::new(SharedString::from(format!("media-filter-{i}"))).outline().xsmall().rounded_full().selected(chip == filter).label(tr(label))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    (this.media_panel.filter, this.media_panel.shown) = (chip, PAGE);
+                    (this.media_panel.filter, this.media_panel.start, this.media_panel.shown) = (chip, 0, PAGE);
                     this.redraw(Area::Side, cx);
                 }))
         }));
@@ -177,10 +233,18 @@ impl Hangar {
                 Section::Audio => div().flex().flex_col().children(list.iter().map(|&i| self.render_media_audio(&key, i, &items[i], cx))).into_any_element(),
             },
         };
+        // O que já veio continua à mostra; o aviso diz que pode faltar o começo da conversa.
+        let partial = self.media_panel.full_failed.clone().map(|reason| div().id("media-history-failed").role(Role::Alert).flex().flex_col().gap_2()
+            .child(note(tr("media_history_failed").replace("{reason}", &reason), theme::warning()))
+            .child(div().flex().child(Button::new("media-history-retry").ghost().xsmall().label(tr("retry"))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.media_panel.full_failed = None;
+                    this.redraw(Area::Side, cx);
+                })))));
         div().size_full().flex().flex_col()
             .child(div().flex_shrink_0().px(px(PAD)).pt(px(12.)).child(tabs))
             .child(div().flex_shrink_0().px(px(PAD)).pt(px(10.)).pb(px(4.)).child(chips))
-            .child(div().id("media-scroll").flex_1().min_h_0().overflow_y_scroll().px(px(PAD)).pb(px(PAD)).child(body))
+            .child(div().id("media-scroll").flex_1().min_h_0().overflow_y_scroll().px(px(PAD)).pb(px(PAD)).children(partial).child(body))
             .into_any_element()
     }
 
@@ -188,10 +252,16 @@ impl Hangar {
     fn render_media_grid(&mut self, key: &SessionKey, items: &[Item], list: &[usize], width: f32, cx: &mut Context<Self>) -> AnyElement {
         let side = ((width - PAD * 2. - GAP * (COLUMNS as f32 - 1.)) / COLUMNS as f32).floor().max(32.);
         let newest: Vec<usize> = list.iter().rev().copied().collect();
-        let shown = self.media_panel.shown.max(PAGE);
-        let days: Vec<(usize, Option<chrono::NaiveDate>)> = newest.iter().take(shown).map(|&i| (i, gallery::day_of(items[i].ts))).collect();
+        let shown = self.media_panel.shown.clamp(PAGE, MAX_SHOWN);
+        let start = self.media_panel.start.min(newest.len().saturating_sub(1));
+        let days: Vec<(usize, Option<chrono::NaiveDate>)> = newest.iter().skip(start).take(shown).map(|&i| (i, gallery::day_of(items[i].ts))).collect();
         let today = chrono::Local::now().date_naive();
-        let mut grid = div().flex().flex_col();
+        let mut grid = div().flex().flex_col().when(start > 0, |el| el.child(div().pb_2().flex().justify_center()
+            .child(Button::new("media-newer").ghost().small().label(tr("media_newer").replace("{n}", &start.to_string()))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.media_panel.start = this.media_panel.start.saturating_sub(PAGE);
+                    this.redraw(Area::Side, cx);
+                })))));
         for (day, members) in gallery::by_day(&days) {
             let title = day.map_or_else(|| tr("media_group_undated"), |day| gallery::day_text(gallery::day_name(day, today), true));
             grid = grid.child(div().mt(px(12.)).mb(px(6.)).text_size(px(11.)).text_color(theme::faint()).child(title));
@@ -200,10 +270,13 @@ impl Hangar {
                 grid = grid.child(div().flex().gap(px(GAP)).mb(px(GAP)).children(cells));
             }
         }
-        let rest = newest.len().saturating_sub(shown);
+        let rest = newest.len().saturating_sub(start + shown);
         grid.when(rest > 0, |el| el.child(div().pt_2().flex().justify_center()
                 .child(Button::new("media-more").ghost().small().label(tr("media_more").replace("{n}", &rest.to_string()))
-                    .on_click(cx.listener(|this, _, _, cx| { this.media_panel.shown = this.media_panel.shown.max(PAGE) + PAGE; this.redraw(Area::Side, cx); })))))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        (this.media_panel.start, this.media_panel.shown) = MediaPanel::more(this.media_panel.start, this.media_panel.shown);
+                        this.redraw(Area::Side, cx);
+                    })))))
             .into_any_element()
     }
 
@@ -338,5 +411,71 @@ fn abbreviate_home(path: &str) -> String {
         Some(home) if path == home => "~".into(),
         Some(home) if path.starts_with(&format!("{home}/")) => format!("~{}", &path[home.len()..]),
         _ => path.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Sem glob: o `test` da gpui colide com o atributo padrão.
+    use super::{MAX_SHOWN, MediaPanel, Owner, PAGE};
+    use crate::delivery::SessionKey;
+
+    fn owner(name: &str, revision: u64) -> Owner {
+        (SessionKey { server: "http://m/".into(), name: name.into(), jsonl: format!("/{name}.jsonl") }, revision)
+    }
+
+    #[test]
+    fn coming_back_to_a_session_asks_the_whole_history_again() {
+        let mut panel = MediaPanel::default();
+        let a = owner("a", 1);
+        assert!(panel.adopt(&a) && panel.wants_full(&a));
+        panel.loaded_all = Some(a.clone());
+        assert!(!panel.wants_full(&a), "já pedido para este dono");
+        // A → B → A: cada abertura traz a primeira página de novo, numa revisão nova.
+        panel.release();
+        assert!(panel.adopt(&owner("b", 2)));
+        let back = owner("a", 3);
+        assert!(panel.adopt(&back) && panel.wants_full(&back), "a volta à A pede o histórico inteiro outra vez");
+        assert!(!panel.adopt(&back), "o mesmo dono não recomeça a leitura");
+    }
+
+    #[test]
+    fn failed_whole_history_is_shown_and_waits_for_retry() {
+        let mut panel = MediaPanel::default();
+        let a = owner("a", 1);
+        panel.adopt(&a);
+        panel.loaded_all = Some(a.clone());
+        // Falha da busca, com outro dono, não é da aba.
+        panel.full_history_failed(Some(owner("b", 1)), "x".into());
+        assert_eq!((panel.loaded_all.as_ref(), panel.full_failed.as_ref()), (Some(&a), None));
+        panel.full_history_failed(Some(a.clone()), "sem rede".into());
+        assert_eq!((panel.loaded_all.as_ref(), panel.full_failed.as_deref()), (None, Some("sem rede")));
+        assert!(!panel.wants_full(&a), "sem pedir de novo sozinho a cada quadro");
+        panel.full_failed = None;
+        assert!(panel.wants_full(&a), "o Tentar de novo libera outro pedido");
+    }
+
+    #[test]
+    fn stale_answers_from_the_previous_owner_do_not_end_the_new_request() {
+        let mut panel = MediaPanel::default();
+        panel.adopt(&owner("a", 1));
+        let old = panel.ticket();
+        panel.listing = Some(old);
+        panel.release();
+        panel.adopt(&owner("a", 2));
+        let new = panel.ticket();
+        panel.listing = Some(new);
+        assert_ne!(old, new, "o número segue crescendo depois da troca");
+        assert!(!MediaPanel::settle(&mut panel.listing, old), "a resposta velha é descartada");
+        assert_eq!(panel.listing, Some(new), "e o pedido novo segue em voo");
+        assert!(MediaPanel::settle(&mut panel.listing, new) && panel.listing.is_none());
+    }
+
+    #[test]
+    fn grid_grows_to_the_cap_then_pages_by_replacement() {
+        let mut window = (0, PAGE);
+        while window.1 < MAX_SHOWN { window = MediaPanel::more(window.0, window.1); }
+        assert_eq!(window, (0, MAX_SHOWN));
+        assert_eq!(MediaPanel::more(window.0, window.1), (PAGE, MAX_SHOWN), "no teto troca em vez de crescer");
     }
 }

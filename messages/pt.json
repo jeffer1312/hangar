@@ -4774,6 +4774,8 @@
   "native_media_empty_audio": "Nenhum áudio nesta conversa ainda.",
   "native_media_empty_filter": "Nada aqui com este filtro.",
   "native_media_more": "Mostrar mais ({n})",
+  "native_media_newer": "Mostrar mais recentes ({n})",
+  "native_media_history_failed": "Não deu para ler a conversa inteira, então pode faltar o começo: {reason}",
   "native_media_uploads_folder": "anexos",
   "machines_tray_working": "{n} trabalhando",
   "machines_tray_waiting": "{n} aguardando",

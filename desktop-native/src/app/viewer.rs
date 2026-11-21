@@ -661,8 +661,8 @@ impl Viewer {
 
     /// `open` entrega uma cópia ao programa do sistema; sem ele, pergunta onde salvar.
     fn keep(&mut self, open: bool, cx: &mut Context<Self>) {
-        let (source, name) = (self.item().source.clone(), self.item().name.clone());
-        let _ = self.hangar.update(cx, |hangar, cx| hangar.keep_file(source, name, open, cx));
+        let (key, source, name) = (self.key.clone(), self.item().source.clone(), self.item().name.clone());
+        let _ = self.hangar.update(cx, |hangar, cx| hangar.keep_file_for(key, source, name, open, cx));
     }
 }
 

@@ -4774,6 +4774,8 @@
   "native_media_empty_audio": "No audio in this conversation yet.",
   "native_media_empty_filter": "Nothing here with this filter.",
   "native_media_more": "Show more ({n})",
+  "native_media_newer": "Show newer ({n})",
+  "native_media_history_failed": "Couldn't read the whole conversation, so the start may be missing: {reason}",
   "native_media_uploads_folder": "uploads",
   "machines_tray_working": "{n} working",
   "machines_tray_waiting": "{n} waiting",
