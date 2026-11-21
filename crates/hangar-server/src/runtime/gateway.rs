@@ -4049,16 +4049,17 @@ pub(crate) mod tests {
         (target,handle)
     }
 
-    /// Disco falhando no meio, a primeira escrita gravada ou não e as seguintes (compensação incluída) todas falhando:
-    /// o que fica no disco para a drenagem tem o texto uma vez só.
+    /// Disco falhando na primeira ou na segunda linha, a escrita que falha gravada ou não e as seguintes todas
+    /// falhando: a troca devolve erro e o que fica no disco para a drenagem tem cada texto uma vez só.
     #[test]
     fn a_failing_disk_during_restamp_leaves_the_text_exactly_once() {
         // (escritas que passam, a primeira que falha grava antes de falhar)
         for (passing,first_failure_writes) in [(0,false),(0,true),(1,false),(1,true)] {
             let dir=tempfile::tempdir().unwrap();
-            let row=json!({"id":"old","text":"a","ts":1000.0,"delivered":false,"confirmed":false});
+            let rows=vec![json!({"id":"old-a","text":"a","ts":1000.0,"delivered":false,"confirmed":false}),
+                json!({"id":"old-b","text":"b","ts":1001.0,"delivered":false,"confirmed":false})];
             let state_path=dir.path().join("K.json");
-            let mut store=Store::open(&state_path,dir.path(),QueueState::new("K",1,"s",vec![row.clone()])).unwrap();
+            let mut store=Store::open(&state_path,dir.path(),QueueState::new("K",1,"s",rows.clone())).unwrap();
             let (generation,clock)=(store.state().generation,ClockSample {monotonic_s:0.0,epoch_s:2000.0});
             let mut calls=0;
             let mut exec=|store:&mut Store,call:&str,action:Action| {
@@ -4067,10 +4068,12 @@ pub(crate) mod tests {
                 if calls==passing+1 && first_failure_writes { store.exec(generation,call,clock,action)?; }
                 Err(std::io::Error::other("fixture"))
             };
-            let _ = restamp_rows(&mut store,vec![row],false,&mut exec);
+            let case=format!("passam {passing}, a primeira falha grava: {first_failure_writes}");
+            assert!(restamp_rows(&mut store,rows,false,&mut exec).is_err(),"{case}");
             let disk=Store::open(&state_path,dir.path(),QueueState::new("K",1,"s",Vec::new())).unwrap();
-            let waiting:Vec<_>=disk.state().rows.iter().filter(|r|super::super::queue::row_waits(r)).map(|r|r["text"].clone()).collect();
-            assert_eq!(waiting,vec![json!("a")],"passam {passing}, a primeira falha grava: {first_failure_writes}");
+            let mut waiting:Vec<_>=disk.state().rows.iter().filter(|r|super::super::queue::row_waits(r)).map(|r|r["text"].as_str().unwrap_or_default().to_owned()).collect();
+            waiting.sort();
+            assert_eq!(waiting,["a","b"],"{case}");
         }
     }
 
