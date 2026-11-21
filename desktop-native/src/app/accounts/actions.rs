@@ -241,7 +241,12 @@ impl Render for AddAccount {
                     .icon(IconName::Plus).label(tr("accounts_add_connect"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         window.close_dialog(cx);
-                        let _ = this.hangar.update(cx, |hangar, cx| { hangar.accounts.add = None; hangar.open_new_key(id, model, window, cx); });
+                        let _ = this.hangar.update(cx, |hangar, cx| {
+                            hangar.accounts.add = None;
+                            // Modelo pelo CLIProxyAPI tem o assistente que instala e conecta a conta; a chave para outros
+                            // agentes segue no formulário curto.
+                            if model && id == "cliproxy" { hangar.open_cliproxy_wizard(window, cx) } else { hangar.open_new_key(id, model, window, cx) }
+                        });
                     })))
             })),
             AddStep::Subscriptions => div().flex().flex_col()
@@ -292,7 +297,8 @@ impl Hangar {
     pub(super) fn accounts_busy(&self) -> bool {
         self.accounts.sign_in.is_some() || self.accounts.change.is_some() || self.accounts.rename.as_ref().is_some_and(|r| r.saving)
             || self.accounts.form.as_ref().is_some_and(EngineForm::busy) || self.accounts.cookie.as_ref().is_some_and(|c| c.saving)
-            || self.accounts.cookie_clearing.is_some() || self.accounts.codex.is_some() || self.accounts.reset.as_ref().is_some_and(|r| r.consuming)
+            || self.accounts.cookie_clearing.is_some() || self.accounts.codex.is_some() || self.accounts.cliproxy.is_some()
+            || self.accounts.reset.as_ref().is_some_and(|r| r.consuming)
     }
 
     pub(super) fn start_sign_in(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {

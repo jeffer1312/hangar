@@ -829,6 +829,14 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
     let mut warnings = if restore { Vec::new() } else { host.leave_old_group(&spec.name).await? };
     diary.step("preparar_comando");
     let sid = resume.map_or_else(|| host.new_session_id(), str::to_owned);
+    if claude && restore && spec.service_tier.is_some() {
+        // A restauração não passa pela resolução: a velocidade salva que perdeu o suporte cai aqui.
+        let (env, saved, handle) = (host.env().clone(), spec.clone(), tokio::runtime::Handle::current());
+        spec.service_tier = tokio::task::spawn_blocking(move || {
+            let facts = super::facts::LocalFacts::new(crate::accounts::environment::AccountEnvironment::from_map(env), handle);
+            claude::relaunch_tier(&saved, &facts)
+        }).await.map_err(|_| creation("a velocidade da sessão não pôde ser conferida"))?;
+    }
     let (pane, jsonl, route) = if claude {
         let (pane, jsonl, route) = claude_plan(host, spec, &sid, read_only, initial_prompt, runtime, resume.is_some()).await?;
         (pane, Some(jsonl), route)

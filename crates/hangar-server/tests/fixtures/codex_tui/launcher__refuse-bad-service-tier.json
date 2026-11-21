@@ -95,7 +95,7 @@
    "text": ""
   },
   "stderr": {
-   "text": "usage: hangar-codex-tui [-h] [--name NAME] [--cwd CWD] [--prompt PROMPT]\n                        [--resume RESUME] [--model MODEL] [--effort EFFORT]\n                        [--approval-policy {never,on-request}]\n                        [--sandbox {read-only,workspace-write,danger-full-access}]\n                        [--tool-output-token-limit TOOL_OUTPUT_TOKEN_LIMIT]\nhangar-codex-tui: error: argument --service-tier: invalid choice: 'fast' (choose from 'default', 'priority')\n"
+   "text": "usage: hangar-codex-tui [-h] [--name NAME] [--cwd CWD] [--prompt PROMPT]\n                        [--resume RESUME] [--model MODEL] [--effort EFFORT]\n                        [--approval-policy {never,on-request}]\n                        [--sandbox {read-only,workspace-write,danger-full-access}]\n                        [--tool-output-token-limit TOOL_OUTPUT_TOKEN_LIMIT]\nhangar-codex-tui: error: argument --service-tier: invalid choice: 'fast' (choose from 'default', 'priority', 'ultrafast')\n"
   },
   "duration_ms": 115,
   "files": {

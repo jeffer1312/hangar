@@ -2,7 +2,7 @@ use std::{io::Write, process::{Command,ExitCode}};
 use crate::accounts::{AccountService,environment::AccountEnvironment};
 use super::{environment::{self,Selection},store,settings};
 
-const HELP: &str = "hangar-engine --list | --env <motor> | --exec <motor> [--model <id>] [--context <n>] [--account <id> --account-home <pasta> --account-base-url <url>] [--service-tier default|priority] -- <comando>";
+const HELP: &str = "hangar-engine --list | --env <motor> | --exec <motor> [--model <id>] [--context <n>] [--account <id> [--account-home <pasta>] --account-base-url <url>] [--service-tier default|priority|ultrafast] -- <comando>";
 
 pub fn run(args: &[String]) -> ExitCode {
     let accounts = AccountService::new(AccountEnvironment::capture());
@@ -34,7 +34,7 @@ fn execute(args: &[String], accounts: &AccountService) -> Result<u8,(u8,String)>
             "--model" => selected.model = Some(value), "--account" => selected.account = Some(value),
             "--account-home" => selected.account_home = Some(value), "--account-base-url" => selected.account_base = Some(value),
             "--context" => selected.context = Some(serde_json::from_str::<serde_json::Value>(value).ok().filter(|v|v.is_i64() || v.is_u64()).ok_or((2,"--context precisa de um número".into()))?),
-            "--service-tier" => { if !matches!(value.as_str(),"default"|"priority") { return Err((2,"--service-tier precisa de default ou priority".into())); } tier = Some(value); },
+            "--service-tier" => { if !crate::session_open::ServiceTier::NAMES.contains(&value.as_str()) { return Err((2,"--service-tier precisa de default, priority ou ultrafast".into())); } tier = Some(value); },
             _ => unreachable!(),
         }
         i += 2;

@@ -76,6 +76,8 @@ pub trait OpenFacts {
     /// Nomes válidos do `engines.json`.
     fn engines(&self) -> Vec<String>;
     fn supports_fast(&self, engine: Option<&str>, model: Option<&str>) -> bool;
+    /// Ultra Fast: Fast no modelo, conta fixa Pro ou Pro Max e a regra do Ultra Fast no config do proxy.
+    fn supports_ultrafast(&self, engine: Option<&str>, model: Option<&str>, account: Option<&str>) -> bool;
     /// Conta ChatGPT fixa do motor: confere conta e modelos e devolve o modelo sem o prefixo da conta.
     fn fixed_engine_model(&self, engine: &str, account: &str, model: Option<&str>) -> Result<String, OpenError>;
     /// Janela do modelo no catálogo do motor (`None` = o catálogo não traz o modelo ou o número).
@@ -384,10 +386,17 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         },
         (_, None) => config_dir.clone().map_or(Account::Default, |config_dir| Account::Claude { config_dir }),
     };
+    // Velocidade só onde existe: Normal num motor sem Fast não vira `--service-tier default` no corpo do provedor.
+    let service_tier = match provider {
+        AgentProvider::Codex => request.service_tier,
+        AgentProvider::Claude => request.service_tier
+            .filter(|tier| tier.is_fast() || facts.supports_fast(request.engine.as_deref(), request.model.as_deref())),
+        _ => None,
+    };
     let spec = SessionSpec {
         version: SPEC_VERSION, key: facts.new_key(), name, cwd, provider,
         surface: if headless { Surface::Headless } else { Surface::Terminal },
-        account, account_source: source, model, effort: request.effort.clone(), service_tier: request.service_tier,
+        account, account_source: source, model, effort: request.effort.clone(), service_tier,
         permission_mode, subagent_model: request.subagent_model.clone(), customizations: request.claude_customizations.clone(),
         jev: request.jev.unwrap_or_else(|| facts.defaults().jev),
         code_mode: request.code_mode && provider == AgentProvider::Claude, read_only: request.read_only,
@@ -605,10 +614,15 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
             return Err(OpenError::new(403, "claude_customizations_owner_only", "a seleção de plugins pertence ao dono"));
         }
     }
-    if request.service_tier.is_some() && provider != AgentProvider::Codex
+    if request.service_tier.is_some_and(ServiceTier::is_fast) && provider != AgentProvider::Codex
         && !(claude && facts.supports_fast(request.engine.as_deref(), request.model.as_deref()))
     {
         return Err(OpenError::new(400, "erro_criacao_sessao", "Fast exige Codex ou Claude com GPT no CLIProxyAPI local"));
+    }
+    if request.service_tier == Some(ServiceTier::Ultrafast) && claude
+        && !facts.supports_ultrafast(request.engine.as_deref(), request.model.as_deref(), request.engine_account.as_deref())
+    {
+        return Err(OpenError::new(400, "erro_criacao_sessao", crate::engines::catalog::ULTRAFAST_REFUSED));
     }
     // Antes de qualquer outra coisa da pasta: o convidado nem fica sabendo se ela existe fora da dele.
     if let OpenCaller::Guest { root } = caller && !facts.real_path(&request.cwd).starts_with(root) {
@@ -678,7 +692,7 @@ fn codex_refusal(result: Result<(), CodexCatalogError>, tier: Option<ServiceTier
     match result {
         Ok(()) => None,
         Err(CodexCatalogError::Invalid(e)) => Some(OpenError::new(422, "erro_codex_escolha_invalida", e.clone()).with_params(json!({"erro": e}))),
-        Err(CodexCatalogError::Unavailable(e)) if tier == Some(ServiceTier::Priority) =>
+        Err(CodexCatalogError::Unavailable(e)) if tier.is_some_and(ServiceTier::is_fast) =>
             Some(OpenError::new(502, "erro_codex_catalogo_invalido", format!("Fast não pôde ser conferido: {e}")).with_params(json!({"erro": e}))),
         // Catálogo fora do ar não impede abrir: a escolha segue e o CLI decide.
         Err(CodexCatalogError::Unavailable(e)) => { tracing::warn!("codex: catalogo indisponivel, escolha nao conferida: {e}"); None }

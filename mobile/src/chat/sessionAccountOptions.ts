@@ -28,8 +28,11 @@ export function accountOptions(targets: SwitchTarget[], credentials: Credencial[
     if (credential?.login?.loggedIn === false) return [];
     const windows = credential?.cota?.estado === 'lida' ? credential.cota.janelas.filter(w => !w.por_modelo && Number.isFinite(w.pct)) : [];
     const pct = windows.length ? Math.max(...windows.map(w => w.pct)) : target.pct;
+    // Conta só do proxy não tem credencial no Hangar: o login dela é o do proxy, já conferido na lista.
+    const proxyOnly = target.path.startsWith('cliproxy:');
     return [{ ...target, credential, pct, full: target.full || (pct !== null && pct >= 99),
-      low: target.low || (pct !== null && pct >= 95), unconfirmed: credential?.login?.loggedIn !== true || credential?.login?.estado === 'indisponivel' }];
+      low: target.low || (pct !== null && pct >= 95),
+      unconfirmed: !proxyOnly && (credential?.login?.loggedIn !== true || credential?.login?.estado === 'indisponivel') }];
   }).sort((a, b) => Number(!!a.unconfirmed) - Number(!!b.unconfirmed) || Number(!!a.full) - Number(!!b.full)
     || (a.pct ?? 101) - (b.pct ?? 101) || a.path.localeCompare(b.path));
 }

@@ -183,7 +183,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   que mata o grupo ao fechar (`runtime_process.WindowsJob`), e no psmux cada sessão tem servidor
   próprio, subido pelo `new-session`. Por isso o Job leva `0x800` (permite sair) e o `new-session`
   do `ProcessMux` nasce com `CREATE_BREAKAWAY_FROM_JOB`. Sem isso, todo reinício do backend
-  (atualização incluída) mata as sessões que o Rust abriu. Medição em
+  (atualização incluída) mata as sessões que o Rust abriu. O cano da sessão sem terminal
+  (`runtime/process.rs`, `spawn_outside_job`) também nasce fora do Job, para o servidor novo religar
+  ao mesmo cano; Job que recusa a saída faz o cano subir dentro dele, com `cano_breakaway_refused`
+  no log. Medição em
   [Sessão morta no reinício do backend](#sessão-morta-no-reinício-do-backend-19102026).
 - **Pacote por versão: o `current` é junction (`mklink /J`), e a troca são dois `rename`.**
   Junction não pede administrador. Não há troca atômica: o link velho vai para `current.old`, o novo

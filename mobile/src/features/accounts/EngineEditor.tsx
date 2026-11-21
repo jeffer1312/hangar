@@ -15,8 +15,10 @@ type Flag = typeof flags[number];
 type NumberField = typeof numbers[number];
 type TextField = 'name' | 'label' | 'base_url' | 'api_key' | 'model' | 'subagent_model' | NumberField;
 
-export function EngineEditor({ server, name, engine, names, onSaved, onClose }: {
+export function EngineEditor({ server, name, engine, names, onSaved, onClose, onCliproxy }: {
   server: Server; name?: string; engine?: Motor; names: string[]; onSaved: () => void; onClose: () => void;
+  /** Com ele, "usar CLIProxy" troca este formulário pelo assistente de instalação e login. */
+  onCliproxy?: () => void;
 }) {
   const c = useSettingsColors();
   const [text, setText] = useState<Record<TextField, string>>(() => ({
@@ -146,7 +148,8 @@ export function EngineEditor({ server, name, engine, names, onSaved, onClose }: 
         <PageHeader title={name ? m.mobile_accounts_engine_edit() : m.mobile_accounts_engine_new()} subtitle={server.label}
           actions={[{ label: m.comum_cancelar(), disabled: locked, onPress: close }]} />
         {!name ? <View style={styles.actions}>
-          <Pill label={m.browser_jev_aux_cliproxy_use()} disabled={locked || proxyUrl !== null} onPress={() => { void detectProxy(); }} />
+          <Pill label={m.browser_jev_aux_cliproxy_use()} disabled={locked || proxyUrl !== null}
+            onPress={() => { if (onCliproxy) onCliproxy(); else void detectProxy(); }} />
         </View> : null}
         {detecting || proxyNotice ? <Text style={styles.muted}>{detecting ? m.cliproxy_detecting() : proxyNotice}</Text> : null}
         {(['name', 'label', 'base_url', 'api_key', 'model', 'subagent_model', ...numbers] as TextField[]).map(field)}

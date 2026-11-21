@@ -19,6 +19,9 @@ export const toast = {
   erro: (msg: string) => { haptic.error(); return sonner.error(msg); },
   aviso: (msg: string) => sonner(msg, { duration: 12_000 }),
   passive: (msg: string) => sonner(msg, { duration: 3_000, toasterId: 'passive' }),
+  /** Fica até `dismiss`; o teto cobre a reabertura mais longa do servidor (12 min). */
+  progress: (msg: string) => sonner(msg, { duration: 15 * 60_000 }),
+  dismiss: (id: string | number) => sonner.dismiss(id),
   /** Aviso de um mod do Claude Code: o nome do mod é o título, como na caixa do terminal. */
   mod: (msg: string, plugin: string, ms: number) => {
     while (modVisible.length >= MOD_VISIBLE_MAX) sonner.dismiss(modVisible.shift());

@@ -16,7 +16,7 @@ pub const CODE_MODE_ENV: &str = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
 
 /// A rota da conta ChatGPT fixa do motor no `hangar-engine` (`cliproxy.engine_env`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: String, pub base_url: String, pub prefix: String }
+pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: Option<String>, pub base_url: String, pub prefix: String }
 
 /// Endereço e segredo da ponte do plugin do Hangar.
 #[derive(Clone, Debug)]
@@ -133,6 +133,30 @@ pub(crate) fn settings_file(home: &Path, settings: &Value) -> std::io::Result<St
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// A velocidade com que uma sessão que já existe volta agora. A criação e a troca recusam velocidade sem
+/// suporte; acordar, restaurar ou reabrir sozinho não: Ultra Fast que perdeu o suporte volta em Fast, e Fast
+/// sem suporte na normal, em vez de a sessão não voltar.
+pub fn relaunch_tier(spec: &SessionSpec, facts: &dyn super::OpenFacts) -> Option<super::ServiceTier> {
+    let tier = spec.service_tier?;
+    let (engine, account) = match &spec.account {
+        Account::Engine { name, account, .. } => (Some(name.as_str()), account.as_deref()),
+        _ => (None, None),
+    };
+    let model = spec.model.as_deref();
+    if !facts.supports_fast(engine, model) {
+        if tier.is_fast() {
+            tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
+        }
+        return None;
+    }
+    if tier == super::ServiceTier::Ultrafast && !facts.supports_ultrafast(engine, model, account) {
+        tracing::warn!(session = %spec.name, engine = engine.unwrap_or(""), account = account.unwrap_or(""), model = model.unwrap_or(""),
+            "Ultra Fast indisponível agora; a sessão volta em Fast");
+        return Some(super::ServiceTier::Priority);
+    }
+    Some(tier)
+}
+
 /// O pane do Claude: argv do agente (com o motor e o só leitura em volta) e o `-e` da sessão.
 pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     let mut claude: Vec<String> = vec!["claude".into(), (if ctx.resume { "--resume" } else { "--session-id" }).into(), sid.into()];
@@ -157,14 +181,18 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     if let Account::Engine { name, context_window, .. } = &spec.account {
         command.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
         if let Some(route) = ctx.engine_route {
-            command.extend(["--account".into(), route.account.clone(), "--account-home".into(), route.home.clone(),
-                "--account-base-url".into(), route.base_url.clone()]);
+            command.extend(["--account".into(), route.account.clone()]);
+            if let Some(home) = &route.home { command.extend(["--account-home".into(), home.clone()]); }
+            command.extend(["--account-base-url".into(), route.base_url.clone()]);
         }
         if let Some(model) = &spec.model {
             command.extend(["--model".into(), model.clone()]);
             if let Some(window) = context_window { command.extend(["--context".into(), window.to_string()]); }
         }
-        if let Some(tier) = spec.service_tier { command.extend(["--service-tier".into(), tier.name().into()]); }
+        // Normal é a falta do campo: só Fast e Ultra Fast (já conferidos na abertura) vão ao provedor.
+        if let Some(tier) = spec.service_tier.filter(|tier| tier.is_fast()) {
+            command.extend(["--service-tier".into(), tier.name().into()]);
+        }
         command.push("--".into());
     }
     command.extend(claude);

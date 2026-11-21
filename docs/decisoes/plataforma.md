@@ -3,6 +3,89 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## CLIProxyAPI instalado e configurado pelo Hangar (19/11/2026)
+
+Montar o proxy à mão (baixar, escrever o `config.yaml`, inventar chave e senha, logar a conta,
+copiar a chave para o motor) levava uma tarde com quem não conhecia o CLIProxyAPI. Agora o
+assistente das Configurações (nativo e Expo) faz tudo em três passos: Instalar, Conectar conta,
+Nome e modelo. O trabalho mora no crate `hangar-cliproxy-setup` (`config`, `release`, `detect`,
+`service`, `install`, `login`); o servidor só liga as rotas em `engines/cliproxy_setup.rs`.
+
+Decisões do usuário:
+
+- **Serviço próprio.** O binário vem da release de `router-for-me/CLIProxyAPI`, conferido pelo
+  `checksums.txt`, em `~/.hangar/cliproxy/bin/<versão>/`, e roda como unit de usuário
+  `hangar-cliproxy.service`, tarefa `hangar-cliproxy` no Windows (`.vbs` sem janela, reinício em
+  falha) ou launchd `dev.hangar.cliproxy`. Proxy que já existe (pacote do AUR com
+  `cli-proxy-api.service`, binário no PATH) é `external`: nada é baixado nem registrado, o
+  "Continuar" só completa o config.
+- **Config existente: completar só o que falta.** Faltando `access.api-keys` (ou `api-keys` na
+  raiz, no formato antigo) ou a senha de gerenciamento, o Hangar acrescenta por edição de linha,
+  preservando comentários, confere relendo o YAML e guarda cópia
+  `config.yaml.hangar-bak-<unix>` (0600, três últimas). Formato v8 ou antigo é mantido; `api-keys`
+  da raiz que já seja grupo de provedor nunca é sobrescrito. Sem config, nasce um v8 em
+  `127.0.0.1:8317`. A senha de gerenciamento é gravada no Hangar antes do config, para nunca
+  ficar um proxy com senha que ninguém sabe.
+- **Atualizar só pelo botão.** O `GET /api/engines/cliproxy` traz `install.update_available`
+  (release mais nova por semver, cache de 1 h). Com sessão viva em motor do proxy, o `POST
+  update` responde 409 `erro_cliproxy_sessoes_ativas` com a contagem e só segue com
+  `confirm: true`.
+- **Conta só do proxy entra no seletor.** Conta ChatGPT logada pelo proxy sem conta Codex
+  correspondente no Hangar vira `cpa-<e-mail ≤12>-<12 hex>` (`credential_id` `cliproxy:<id>`) e
+  fica fixa por sessão pelo prefixo de modelo, sem `--account-home`. Credencial solta quebrada ou
+  prefixo repetido anula só aquela conta, não as outras.
+- **Fast disponível, nunca ligado por padrão.** O motor criado pelo assistente grava `fast`;
+  ausente vale ligado (o seletor oferece Fast nos modelos `gpt-<dígito>` do proxy local), `false`
+  tira a opção. A sessão continua nascendo sem Fast; a chave do assistente diz "Permitir Fast".
+- **Ultra Fast pelo cabeçalho e por uma regra no config do proxy (20/11).** O tradutor Claude →
+  Codex do proxy (`normalizeCodexServiceTier`, v8.0.79) só aceita `fast`/`priority` e descarta o
+  resto calado. A sessão em Ultra Fast manda `priority` no corpo e `X-Hangar-Speed: ultrafast`
+  (`ANTHROPIC_CUSTOM_HEADERS`, somado aos cabeçalhos da pessoa); a regra `payload.override` (v8 em
+  `requests.payload`, legado na raiz) troca por `ultrafast` só nesses pedidos. A regra entra só no
+  config sem `payload` e com proxy v8+ (`headers:` nas regras chegou no v8.0.0; versão do externo
+  pelo `X-Cpa-Version`): num proxy mais velho valeria para todo pedido. Oferecido e aceito só com
+  conta fixa `plan_type` `pro`/`promax` e a regra presente, na criação, na reabertura e na troca.
+  Codex direto: quando o catálogo da conta lista `ultrafast` no modelo. Medido na DELPHI-02, mesma
+  resposta de ~460 tokens: normal 37–40 tok/s, Fast 57–62 (1,6×), Ultra Fast 110–120 (3×); o
+  registro do proxy mostrou `service_tier: ultrafast` saindo para a OpenAI.
+- **Motor do assistente grava `context_window`.** Sem ele o Claude Code assume 1M, e os GPT 6
+  aceitam 872 mil: a conversa passaria do limite antes de compactar (o incidente de 06/11). O
+  `GET /api/engines/cliproxy` preenche `context_length` dos modelos pelo `max_context_window` do
+  catálogo do Codex da máquina (sem catálogo, 872000 nos `gpt-6*`), e o assistente grava 95%.
+- **Pasta das contas explícita no config gerado** (`oauth.auth-dir`): o `~` padrão é o da pasta
+  pessoal do processo do proxy, e o Hangar lê as contas da pasta dele.
+- **Senha de gerenciamento poupada (20/11).** No v8.0.79 (`AuthenticateManagementKey`) pedido sem
+  senha ou com a errada conta como falha, e cinco seguidas bloqueiam o IP por 30 min, 127.0.0.1 e
+  login incluídos; a versão (`X-Cpa-Version`) só sai nessa rota. Por isso a versão só é perguntada
+  com a senha guardada, a senha recusada não é repetida por pedido de fundo até ser aceita, e a
+  troca de senha confere no máximo duas vezes, com 1,5 s de espera: o proxy relê o config em
+  ~150 ms (`configReloadDebounce`). Na atualização a regra do Ultra Fast entra só depois de a
+  versão nova responder, para a antiga, se voltar, não aplicar o tier em todo pedido.
+
+Login da conta: `POST /api/engines/cliproxy/login` pede ao proxy a página (`is_webui=true` sobe o
+receptor de volta nas portas 1455 do ChatGPT ou 54545 do Claude; porta ocupada →
+`cliproxy_login_porta_ocupada`, um login por vez na máquina). O cliente lê o andamento a cada 2 s;
+do celular ou de outro computador, o endereço `http://localhost:…` em que o navegador parou é
+colado e vai por `POST login/{state}/callback`, que só aceita loopback com `state=`. A conta já
+logada no proxy aparece como "Usar esta conta" e pula o login.
+
+O app nativo dispensa o colar quando o proxy está noutra máquina (pedido do usuário, 20/11):
+enquanto o login espera, ele escuta em `127.0.0.1` a porta e o caminho do `redirect_uri` do próprio
+link, então vale para qualquer provedor do proxy, e entrega pela mesma rota de callback só o `GET`
+com o `state` desse login. Porta ocupada (o proxy está na própria máquina e recebe a volta ele
+mesmo) não abre escuta. A escuta fecha quando o login entrega, ao voltar, ao abrir outro login, ao
+fechar o assistente ou em 15 min. O Expo continua com o colar: o navegador do celular não alcança o app.
+
+Proxy montado antes do Hangar guarda a senha de gerenciamento só como hash (o próprio proxy a
+troca na subida), e o Hangar não a recupera. Na caixa que pede a senha há "Usar uma senha nova"
+(decisão do usuário, 19/11): `POST management-key/reset` grava outra no lugar que o proxy lê (v8
+`management`, legado `remote-management`), com cópia, e espera o proxy aceitá-la antes de responder.
+A página web de gerenciamento passa a usar a senha nova.
+
+Causa do Fast ausente na DELPHI-02: o motor apontava para `127.0.0.1:8317`, mas sem
+`config.yaml` nem binário conhecido o `proxy::is_local` dava falso. Com a instalação pelo Hangar o
+config existe e o Fast aparece.
+
 ## Computer Use e transferência de atalhos são do Rust (13/11/2026)
 
 `/api/computer-control*` (leitura, `PUT`, alvos, testar SSH, preparar Windows) mora no crate

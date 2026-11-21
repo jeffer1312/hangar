@@ -53,6 +53,7 @@ hangar-send.workspace = true
 hangar-registration.workspace = true
 hangar-open-cli.workspace = true
 hangar-install-setup.workspace = true
+hangar-cliproxy-setup.workspace = true
 hangar-projects.workspace = true
 hangar-auth = { path = "../hangar-auth" }
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
