@@ -121,6 +121,21 @@ describe('CLIProxyAPI em Contas no celular', () => {
     expect(calls.connect).toHaveBeenCalledOnce();
   });
 
+  it('entrega cuja tarefa sumiu sem entrar diz que parou, e tocar com outra tarefa em curso mostra o resultado dela', async () => {
+    calls.read.mockResolvedValue(external());
+    const view = await show();
+    calls.adopt.mockResolvedValueOnce({ job: job('download', false, null, 'adopt') });
+    await click(view, m.mobile_cliproxy_adopt_button());
+    await tick();
+    expect(view.textContent).toContain(m.mobile_cliproxy_wizard_err_task_crashed());
+
+    calls.adopt.mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'erro_cliproxy_ocupado' }));
+    calls.read.mockResolvedValueOnce(external({ job: job('download', true, { code: 'cliproxy_entrega_outro_config', detail: 'x' }, 'adopt') }));
+    await click(view, m.mobile_cliproxy_update_retry());
+    await tick();
+    expect(view.textContent).toContain(m.mobile_cliproxy_handover_other_config());
+  });
+
   it('de fora que lê outro config: diz o motivo e não oferece a entrega', async () => {
     calls.read.mockResolvedValue(external({ handover: { ok: false, code: 'cliproxy_entrega_outro_config', detail: '/etc/x.yaml' } }));
     const view = await show();

@@ -47,7 +47,8 @@ pub enum Runner {
     Idle,
     /// Unit de usuário, com o estado dela antes da entrega para a volta repor igual.
     SystemdUser { unit: String, enabled: bool, active: bool },
-    LaunchAgent(std::path::PathBuf),
+    /// LaunchAgent; `loaded` diz se o launchd o tinha carregado, para a volta não ligar o que estava parado.
+    LaunchAgent { plist: std::path::PathBuf, label: String, loaded: bool },
 }
 
 /// A senha de gerenciamento nova vai para o Hangar antes do config.
@@ -273,24 +274,51 @@ pub async fn running_tag(paths: &Paths, key: Option<&str>) -> Option<String> {
     running_version(&base, key).await?.version.map(|v| format!("v{v}"))
 }
 
-async fn systemctl_says(verb: &str, unit: &str) -> String {
-    let output = tokio::process::Command::new("systemctl").args(["--user", verb, unit]).stdin(std::process::Stdio::null()).output().await;
-    output.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default()
+/// O que o `systemctl --user` responde; sem resposta (sem barramento do usuário), a entrega não sabe o que desligar.
+async fn systemctl_says(verb: &str, unit: &str) -> Result<String, Failure> {
+    let failed = |detail: String| Failure::new("cliproxy_servico_falhou", format!("systemctl --user {verb} {unit}: {detail}"));
+    let output = tokio::process::Command::new("systemctl").args(["--user", verb, unit]).stdin(std::process::Stdio::null())
+        .output().await.map_err(|e| failed(e.to_string()))?;
+    let said = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if said.is_empty() {
+        return Err(failed(String::from_utf8_lossy(&output.stderr).trim().to_owned()));
+    }
+    Ok(said)
+}
+
+async fn launchd_loaded(label: &str) -> Result<bool, Failure> {
+    let output = tokio::process::Command::new("launchctl").args(["list", label]).stdin(std::process::Stdio::null())
+        .output().await.map_err(|e| Failure::new("cliproxy_servico_falhou", format!("launchctl list {label}: {e}")))?;
+    Ok(output.status.success())
+}
+
+async fn user_id() -> Result<String, Failure> {
+    let output = tokio::process::Command::new("id").arg("-u").stdin(std::process::Stdio::null()).output().await
+        .map_err(|e| Failure::new("cliproxy_servico_falhou", format!("id -u: {e}")))?;
+    let uid = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if uid.is_empty() {
+        return Err(Failure::new("cliproxy_servico_falhou", "id -u não respondeu"));
+    }
+    Ok(uid)
 }
 
 /// Pasta das contas relativa no config: o proxy a resolve contra a pasta em que roda. O serviço do Hangar roda na
 /// pessoal; o de fora, rodando noutra, gravou as contas num lugar que o do Hangar não acharia.
-fn accounts_dir_moves(unit_text: &str, home: &std::path::Path) -> Option<String> {
+fn accounts_dir_moves(working_dir: Option<&str>, home: &std::path::Path) -> Option<String> {
     let config = config::read(home).ok().flatten()?;
     let dir = config.auth_dir.as_deref().map(str::trim).filter(|d| !d.is_empty())?;
     if std::path::Path::new(dir).is_absolute() || dir.starts_with('~') {
         return None;
     }
-    let raw = detect::unit_working_dir(unit_text)?;
+    let raw = working_dir?;
     let home_text = home.to_string_lossy();
     let expanded = raw.replace("%h", &home_text).replace("${HOME}", &home_text).replace("$HOME", &home_text);
     let expanded = expanded.strip_prefix('~').map_or(expanded.clone(), |rest| format!("{home_text}{rest}"));
     (!same_file(std::path::Path::new(&expanded), home)).then_some(expanded)
+}
+
+fn accounts_elsewhere(dir: &str) -> Failure {
+    Failure::new("cliproxy_entrega_pasta_das_contas", format!("o auth-dir é relativo e o serviço de fora roda em {dir}"))
 }
 
 /// O proxy de fora pode passar para o Hangar? Só o que lê o mesmo config, com as contas na mesma pasta, e que um
@@ -314,26 +342,43 @@ pub async fn handover(paths: &Paths) -> Result<Runner, Failure> {
         if let Some(other) = read.filter(|c| !same_file(c, &ours)) {
             return Err(other_config(other.as_path()));
         }
-        let text = std::fs::read_to_string(unit).unwrap_or_default();
-        if let Some(dir) = accounts_dir_moves(&text, &paths.home) {
-            return Err(Failure::new("cliproxy_entrega_pasta_das_contas",
-                format!("o auth-dir é relativo e o serviço de fora roda em {dir}")));
+        let text = std::fs::read_to_string(unit)
+            .map_err(|e| Failure::new("cliproxy_entrega_outro_config", format!("não consegui ler {}: {e}", unit.display())))?;
+        if let Some(dir) = accounts_dir_moves(detect::unit_working_dir(&text).as_deref(), &paths.home) {
+            return Err(accounts_elsewhere(&dir));
         }
         let name = unit.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let active = systemctl_says("is-active", &name).await == "active";
+        let active = systemctl_says("is-active", &name).await? == "active";
         if running && !active {
             return Err(Failure::new("cliproxy_entrega_sem_servico", format!("{base} responde, mas {name} está parado")));
         }
-        let enabled = systemctl_says("is-enabled", &name).await == "enabled";
+        let enabled = systemctl_says("is-enabled", &name).await? == "enabled";
         return Ok(Runner::SystemdUser { unit: name, enabled, active });
     }
     if cfg!(target_os = "macos") && let Some(plist) = detect::launch_agents(&paths.home).into_iter().next() {
-        let text = std::fs::read_to_string(&plist).unwrap_or_default();
-        return match detect::plist_config(&text) {
-            Some(config) if same_file(&config, &ours) => Ok(Runner::LaunchAgent(plist)),
-            Some(other) => Err(other_config(other.as_path())),
-            None => Err(Failure::new("cliproxy_entrega_outro_config", format!("{} não diz qual config o proxy lê", plist.display()))),
+        let text = std::fs::read_to_string(&plist)
+            .map_err(|e| Failure::new("cliproxy_entrega_outro_config", format!("não consegui ler {}: {e}", plist.display())))?;
+        // Sem `WorkingDirectory`, o launchd roda o programa na raiz.
+        let working_dir = detect::plist_string(&text, "WorkingDirectory").unwrap_or_else(|| "/".to_owned());
+        let config = match detect::plist_config(&text) {
+            Some(config) if config.is_relative() => std::path::Path::new(&working_dir).join(config),
+            Some(config) => config,
+            None => return Err(Failure::new("cliproxy_entrega_outro_config", format!("{} não diz qual config o proxy lê", plist.display()))),
         };
+        if !same_file(&config, &ours) {
+            return Err(other_config(config.as_path()));
+        }
+        if let Some(dir) = accounts_dir_moves(Some(&working_dir), &paths.home) {
+            return Err(accounts_elsewhere(&dir));
+        }
+        let label = detect::plist_string(&text, "Label")
+            .or_else(|| plist.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        let loaded = launchd_loaded(&label).await?;
+        if running && !loaded {
+            return Err(Failure::new("cliproxy_entrega_sem_servico", format!("{base} responde, mas {label} não está carregado")));
+        }
+        return Ok(Runner::LaunchAgent { plist, label, loaded });
     }
     if running {
         return Err(Failure::new("cliproxy_entrega_sem_servico", format!("{base} responde, mas nenhum serviço conhecido liga esse proxy")));
@@ -347,7 +392,13 @@ impl Runner {
             Self::Idle | Self::SystemdUser { enabled: false, active: false, .. } => Ok(()),
             Self::SystemdUser { unit, enabled: true, .. } => Ok(service::run("systemctl disable", "systemctl", &["--user", "disable", "--now", unit]).await?),
             Self::SystemdUser { unit, .. } => Ok(service::run("systemctl stop", "systemctl", &["--user", "stop", unit]).await?),
-            Self::LaunchAgent(plist) => Ok(service::run("launchctl unload", "launchctl", &["unload", "-w", &plist.to_string_lossy()]).await?),
+            Self::LaunchAgent { plist, loaded: true, .. } =>
+                Ok(service::run("launchctl unload", "launchctl", &["unload", "-w", &plist.to_string_lossy()]).await?),
+            // Descarregado, ele ainda subiria no próximo login e disputaria a porta com o do Hangar.
+            Self::LaunchAgent { label, .. } => {
+                let target = format!("gui/{}/{label}", user_id().await?);
+                Ok(service::run("launchctl disable", "launchctl", &["disable", &target]).await?)
+            }
         }
     }
 
@@ -364,12 +415,17 @@ impl Runner {
                 }
                 Ok(())
             }
-            Self::LaunchAgent(plist) => Ok(service::run("launchctl load", "launchctl", &["load", "-w", &plist.to_string_lossy()]).await?),
+            Self::LaunchAgent { plist, loaded: true, .. } =>
+                Ok(service::run("launchctl load", "launchctl", &["load", "-w", &plist.to_string_lossy()]).await?),
+            Self::LaunchAgent { label, .. } => {
+                let target = format!("gui/{}/{label}", user_id().await?);
+                Ok(service::run("launchctl enable", "launchctl", &["enable", &target]).await?)
+            }
         }
     }
 
     fn was_running(&self) -> bool {
-        matches!(self, Self::SystemdUser { active: true, .. } | Self::LaunchAgent(_))
+        matches!(self, Self::SystemdUser { active: true, .. } | Self::LaunchAgent { loaded: true, .. })
     }
 }
 
@@ -500,8 +556,10 @@ async fn wait_port(base: &str) -> bool {
 
 /// Tira o serviço do Hangar e religa o de fora; só vale como volta se o de fora, que respondia, voltou a responder.
 async fn give_back(paths: &Paths, runner: &Runner, base: &str) -> Result<(), Failure> {
-    service::unregister(&paths.home, &paths.dir).await?;
+    // Mesmo sem conseguir tirar o do Hangar, o de fora é religado: a falha volta junto, para a tela dizer que não deu.
+    let removed = service::unregister(&paths.home, &paths.dir).await.map_err(Failure::from);
     runner.restore().await?;
+    removed?;
     if runner.was_running() && !wait_port(base).await {
         return Err(Failure::new("cliproxy_nao_subiu", format!("o serviço de fora não voltou a responder em {base}")));
     }
@@ -557,7 +615,11 @@ pub async fn adopt(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Re
         let back = give_back(&ctx.paths, &runner, &base).await;
         return Err(discard(handed_back(failure, back)));
     }
-    detect::write_record(&ctx.paths, &latest.tag, &binary).map_err(|e| Failure::new("cliproxy_registro_falhou", e.to_string()))?;
+    // Sem o registro, o Hangar não reconheceria o serviço que acabou de subir: a entrega volta atrás.
+    if let Err(e) = detect::write_record(&ctx.paths, &latest.tag, &binary) {
+        let back = give_back(&ctx.paths, &runner, &base).await;
+        return Err(discard(handed_back(Failure::new("cliproxy_registro_falhou", e.to_string()), back)));
+    }
     if understands_rule(version.as_ref()) && let Err(failure) = ensure(ctx, true) {
         tracing::warn!(code = failure.code, detail = %failure.detail, "cliproxy: entregue, mas a regra do Ultra Fast não entrou no config");
     }
@@ -692,7 +754,7 @@ mod tests {
     #[test]
     fn an_absolute_or_home_accounts_folder_never_moves() {
         let home = tempfile::tempdir().unwrap();
-        let unit = "[Service]\nWorkingDirectory=/srv/cliproxy\nExecStart=/usr/bin/cli-proxy-api\n";
+        let unit = Some("/srv/cliproxy");
         std::fs::create_dir_all(home.path().join(".cli-proxy-api")).unwrap();
         for dir in ["~/.cli-proxy-api", "/var/lib/cliproxy"] {
             std::fs::write(crate::config::path(home.path()), format!("port: 8317\nauth-dir: {dir}\n")).unwrap();
@@ -700,7 +762,7 @@ mod tests {
         }
         std::fs::write(crate::config::path(home.path()), "port: 8317\nauth-dir: auths\n").unwrap();
         assert_eq!(accounts_dir_moves(unit, home.path()), Some("/srv/cliproxy".into()));
-        assert_eq!(accounts_dir_moves("[Service]\nWorkingDirectory=%h\n", home.path()), None, "a pasta pessoal é a do serviço do Hangar");
+        assert_eq!(accounts_dir_moves(Some("%h"), home.path()), None, "a pasta pessoal é a do serviço do Hangar");
     }
 
     fn context(home: &std::path::Path) -> Context {

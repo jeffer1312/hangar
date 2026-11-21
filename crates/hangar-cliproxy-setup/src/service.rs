@@ -67,6 +67,11 @@ fn ps_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
+/// A pasta com a barra no fim: sem ela, `...\cliproxy` também casaria o programa de `...\cliproxy-x`.
+fn process_prefix(managed_dir: &Path) -> String {
+    ps_quote(&format!("{}\\", managed_dir.display().to_string().trim_end_matches(['\\', '/'])))
+}
+
 /// Para a tarefa e o proxy da pasta do Hangar, regrava a tarefa apontando para o `.vbs` e liga.
 pub fn windows_script(vbs: &Path, managed_dir: &Path) -> String {
     format!(
@@ -79,7 +84,7 @@ pub fn windows_script(vbs: &Path, managed_dir: &Path) -> String {
          Register-ScheduledTask -TaskName {task} -Action $a -Trigger $t -Settings $s -Force | Out-Null\n\
          Start-ScheduledTask -TaskName {task}\n",
         task = ps_quote(TASK),
-        dir = ps_quote(&managed_dir.display().to_string()),
+        dir = process_prefix(managed_dir),
         arg = ps_quote(&format!("\"{}\"", vbs.display())),
     )
 }
@@ -90,9 +95,9 @@ pub fn windows_unregister_script(managed_dir: &Path) -> String {
         "$ErrorActionPreference = 'Stop'\n\
          Stop-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue\n\
          Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.StartsWith({dir}, [StringComparison]::OrdinalIgnoreCase) }} | Stop-Process -Force\n\
-         Unregister-ScheduledTask -TaskName {task} -Confirm:$false -ErrorAction SilentlyContinue\n",
+         if (Get-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue) {{ Unregister-ScheduledTask -TaskName {task} -Confirm:$false }}\n",
         task = ps_quote(TASK),
-        dir = ps_quote(&managed_dir.display().to_string()),
+        dir = process_prefix(managed_dir),
     )
 }
 
@@ -197,6 +202,9 @@ mod tests {
         assert_eq!(&encode_vbs("W")[..4], &[0xFF, 0xFE, b'W', 0]);
         let script = windows_script(Path::new(r"C:\Users\O'Neil\AppData\Local\hangar\hangar-cliproxy.vbs"), Path::new(r"C:\Users\O'Neil\.hangar\cliproxy"));
         assert!(script.contains(r#"-Argument '"C:\Users\O''Neil\AppData\Local\hangar\hangar-cliproxy.vbs"'"#), "{script}");
-        assert!(script.contains("-RestartCount 999") && script.contains("StartsWith('C:\\Users\\O''Neil\\.hangar\\cliproxy'"));
+        assert!(script.contains("-RestartCount 999") && script.contains("StartsWith('C:\\Users\\O''Neil\\.hangar\\cliproxy\\'"), "{script}");
+        let undo = windows_unregister_script(Path::new(r"C:\Users\O'Neil\.hangar\cliproxy\"));
+        assert!(undo.contains("StartsWith('C:\\Users\\O''Neil\\.hangar\\cliproxy\\'"), "barra no fim só uma vez: {undo}");
+        assert!(undo.contains("-ErrorAction SilentlyContinue) { Unregister-ScheduledTask"), "só a tarefa ausente é ignorada: {undo}");
     }
 }

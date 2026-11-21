@@ -110,15 +110,23 @@ export function useProxyUpdate(server: Server | null) {
     // Servidor que reiniciou perde a tarefa: o estado relido diz se a troca entrou.
     if (!job) {
       asked.current = null;
+      // Era uma instalação do assistente, que mostra o resultado dela.
+      if (next.job) return;
       const entered = action === 'update' ? next.update_available === false : next.state === 'managed';
       if (entered && next.state === 'managed' && next.version) done(action, next.version);
+      else {
+        haptic.error();
+        setOutcome({ k: 'failed', action, text: failureText(action, { code: 'cliproxy_tarefa_caiu', detail: '' }, next) });
+      }
       return;
     }
-    if (!job.done || job.kind !== action) return;
+    if (!job.done) return;
     asked.current = null;
-    if (!job.error) done(action, next.version ?? '');
-    else if (job.error.code === 'erro_cliproxy_sessoes_ativas') setOutcome({ k: 'interrupted', action });
-    else { haptic.error(); setOutcome({ k: 'failed', action, text: failureText(action, job.error, next) }); }
+    // Com outra tarefa já em curso no toque, o resultado é o dela.
+    const ran = job.kind;
+    if (!job.error) done(ran, next.version ?? '');
+    else if (job.error.code === 'erro_cliproxy_sessoes_ativas') setOutcome({ k: 'interrupted', action: ran });
+    else { haptic.error(); setOutcome({ k: 'failed', action: ran, text: failureText(ran, job.error, next) }); }
   }, [done]);
 
   const poll = useCallback(async () => {
@@ -134,8 +142,7 @@ export function useProxyUpdate(server: Server | null) {
         // Leitura que falha (o servidor reinicia na troca) só espera a próxima volta.
         const next = await read();
         if (!next || !mine()) continue;
-        const job = actionJob(next);
-        if (!job || job.done) { finish(next); return; }
+        if (!next.job || next.job.done) { finish(next); return; }
       }
     } finally { if (generation.current === my) polling.current = false; }
   }, [read, finish]);

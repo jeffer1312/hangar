@@ -223,13 +223,15 @@ impl Hangar {
                         return;
                     }
                 };
-                if install.action_job().is_some_and(|(_, job)| !job.done) {
+                // Qualquer tarefa em curso, também a instalação do assistente: ela segura o pedido seguinte.
+                if install.job.as_ref().is_some_and(|job| !job.done) {
                     u.install = Some(install);
                     self.poll_proxy_update(cx);
                     return;
                 }
                 let finished = match (install.action_job(), u.asked) {
-                    (Some((action, job)), Some(asked)) if action == asked => {
+                    // Com outra tarefa já em curso no clique, o resultado é o dela.
+                    (Some((action, job)), Some(_)) => {
                         u.asked = None;
                         match &job.error {
                             None => Some((action, install.version.clone().unwrap_or_default())),
@@ -237,6 +239,8 @@ impl Hangar {
                             Some(error) => { u.outcome = Some(Outcome::Failed(failure_text(action, &error.code, &install))); None }
                         }
                     }
+                    // Era uma instalação do assistente, que mostra o resultado dela.
+                    (None, Some(_)) if install.job.is_some() => { u.asked = None; None }
                     // O servidor reiniciou e perdeu a tarefa: o estado relido diz se a troca entrou.
                     (None, Some(asked)) => {
                         u.asked = None;
@@ -244,7 +248,11 @@ impl Hangar {
                             Action::Update => !install.update_available,
                             Action::Adopt => install.state == "managed",
                         };
-                        install.version.clone().filter(|_| entered && install.state == "managed").map(|tag| (asked, tag))
+                        let tag = install.version.clone().filter(|_| entered && install.state == "managed");
+                        if tag.is_none() {
+                            u.outcome = Some(Outcome::Failed(failure_text(asked, "cliproxy_tarefa_caiu", &install)));
+                        }
+                        tag.map(|tag| (asked, tag))
                     }
                     _ => None,
                 };
@@ -436,6 +444,10 @@ pub(crate) fn update_done_banner(tag: &str) -> Div { done_banner(Action::Update,
 
 /// O texto da falha da entrega no assistente.
 pub(super) fn adopt_failure_text(code: &str, latest: &str, version: &str) -> String {
+    // Sessão que passou a usar o proxy durante o download: não é defeito, é só tentar de novo.
+    if code == "erro_cliproxy_sessoes_ativas" {
+        return Action::Adopt.key("interrupted");
+    }
     let install = ProxyInstall { latest: Some(latest.to_owned()), version: Some(version.to_owned()), ..Default::default() };
     failure_text(Action::Adopt, code, &install)
 }

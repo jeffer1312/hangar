@@ -77,8 +77,19 @@ pub fn plist_config(plist: &str) -> Option<PathBuf> {
     let args = plist.split_once("<key>ProgramArguments</key>")?.1;
     let args = args.split_once("</array>")?.0;
     let words: Vec<String> = args.split("<string>").skip(1).filter_map(|s| s.split_once("</string>"))
-        .map(|(word, _)| word.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")).collect();
+        .map(|(word, _)| plist_text(word)).collect();
     config_flag(&words.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// O `<string>` logo depois de `<key>{key}</key>` no plist (`Label`, `WorkingDirectory`).
+pub fn plist_string(plist: &str, key: &str) -> Option<String> {
+    let rest = plist.split_once(&format!("<key>{key}</key>"))?.1.trim_start();
+    let value = rest.strip_prefix("<string>")?.split_once("</string>")?.0;
+    Some(plist_text(value)).filter(|v| !v.trim().is_empty())
+}
+
+fn plist_text(raw: &str) -> String {
+    raw.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")
 }
 
 fn config_flag(words: &[&str]) -> Option<PathBuf> {
@@ -207,6 +218,10 @@ mod tests {
         assert_eq!(plist_config(&plist(config)), Some(PathBuf::from("/Users/a b/.cli-proxy-api/config.yaml")), "caminho com espaço é um argumento só");
         assert_eq!(plist_config(&plist("<string>/opt/homebrew/bin/cli-proxy-api</string><string>-config=/srv/c.yaml</string>")), Some(PathBuf::from("/srv/c.yaml")));
         assert_eq!(plist_config(&plist("<string>/opt/homebrew/bin/cli-proxy-api</string>")), None);
+        let full = plist(config).replace("<key>RunAtLoad</key>", "<key>WorkingDirectory</key>\n  <string>/opt/homebrew/var</string><key>RunAtLoad</key>");
+        assert_eq!(plist_string(&full, "Label").as_deref(), Some("homebrew.mxcl.cliproxyapi"));
+        assert_eq!(plist_string(&full, "WorkingDirectory").as_deref(), Some("/opt/homebrew/var"));
+        assert_eq!(plist_string(&full, "RunAtLoad"), None, "valor que não é texto");
     }
 
     #[test]

@@ -201,14 +201,19 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
         if (job.done && !inFlight && !posting.current) {
           if (job.error && job.kind === 'adopt') {
             haptic.error();
-            setStage({ k: 'intro', external: true, error: failureText('adopt', job.error, next.install ?? null) });
+            // Sessão que passou a usar o proxy durante o download: não é defeito, é só tentar de novo.
+            const error = job.error.code === 'erro_cliproxy_sessoes_ativas'
+              ? m.mobile_cliproxy_adopt_interrupted() : failureText('adopt', job.error, next.install ?? null);
+            setStage({ k: 'intro', external: true, error });
           } else if (job.error) { haptic.error(); setStage({ k: 'install_failed', at: STEP_AT[job.step] ?? 0, error: installError(job.error) }); }
           else { haptic.success(); setStage({ k: 'pick' }); }
           return;
         }
         if (!job.done) {
           const at = STEP_AT[job.step] ?? 0;
-          setStage(s => s.k === 'installing' && s.at !== at ? { ...s, at } : s);
+          // Tocar com outra tarefa em curso segue a que roda: as etapas mostradas são as dela.
+          const adopting = job.kind === 'adopt';
+          setStage(s => s.k === 'installing' && (s.at !== at || !!s.adopt !== adopting) ? { ...s, at, adopt: adopting } : s);
         }
       } catch { /* queda de um instante: a próxima leitura decide */ }
       if (!stop) timer = setTimeout(() => void tick(), 1000);
