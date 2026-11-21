@@ -918,8 +918,13 @@ impl RuntimeRegistry {
                 let key=crate::mods::state::random_hex(16);
                 // A troca de conta só leva a conversa depois de encerrar: a de agora diz se ela já existe.
                 let resume=super::claude_launch::transcript(&env,next,sid).exists() || super::claude_launch::transcript(&env,&current.spec,sid).exists();
+                let settings_file=match current.settings.as_ref().filter(|s|terminal.windows && s.as_object().is_some_and(|o|!o.is_empty())) {
+                    Some(settings)=>Some(crate::session_open::claude::settings_file(&env.home,settings)
+                        .map_err(|e|refused("reopen_settings_file",&format!("as escolhas da conversa não foram gravadas ({e}); nada foi reaberto")))?),
+                    None=>None,
+                };
                 let ctx=ClaudeContext { plugin_roots:&roots,bridge:bridge.as_ref(),bridge_key:&key,runtime_config:&runtime,server_env:&env.base,
-                    settings:current.settings.as_ref(),read_only:read_only.as_deref(),windows:terminal.windows,initial_prompt:None,engine_route:route.as_ref(),
+                    settings:current.settings.as_ref(),settings_file:settings_file.as_deref(),read_only:read_only.as_deref(),windows:terminal.windows,initial_prompt:None,engine_route:route.as_ref(),
                     resume,allow_bypass:previous_non_plan==Some(PermissionMode::BypassPermissions) };
                 Ok(Start::Terminal(Box::new(crate::session_open::claude::pane(next,sid,&ctx)),terminal))
             },

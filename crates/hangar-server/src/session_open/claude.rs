@@ -35,6 +35,8 @@ pub struct ClaudeContext<'a> {
     pub server_env: &'a BTreeMap<String, String>,
     /// As escolhas de plugins e skills da conversa, já preparadas.
     pub settings: Option<&'a Value>,
+    /// No Windows, o arquivo com essas escolhas (`settings_file`), que o `--settings` recebe no lugar do JSON.
+    pub settings_file: Option<&'a str>,
     /// O envelope `bwrap … --` do só leitura.
     pub read_only: Option<&'a [String]>,
     pub windows: bool,
@@ -118,6 +120,19 @@ pub(crate) fn settings_json(settings: &Value) -> String {
     Value::Object(merged).to_string()
 }
 
+/// No Windows o comando do `new-session` perde as aspas do JSON e o Claude recusa abrir: as escolhas
+/// vão num arquivo. O nome é o hash do conteúdo, então conversas com as mesmas escolhas dividem o arquivo.
+pub(crate) fn settings_file(home: &Path, settings: &Value) -> std::io::Result<String> {
+    let json = settings_json(settings);
+    let dir = home.join(".hangar").join("claude-settings");
+    let path = dir.join(format!("{}.json", sha1_smol::Sha1::from(&json).digest()));
+    if !path.exists() {
+        std::fs::create_dir_all(&dir)?;
+        hangar_core::fs::atomic_write(&path, json.as_bytes())?;
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// O pane do Claude: argv do agente (com o motor e o só leitura em volta) e o `-e` da sessão.
 pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     let mut claude: Vec<String> = vec!["claude".into(), (if ctx.resume { "--resume" } else { "--session-id" }).into(), sid.into()];
@@ -127,7 +142,8 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     if let Some(effort) = &spec.effort { claude.extend(["--effort".into(), effort.clone()]); }
     if let Some(mode) = spec.permission_mode { claude.extend(["--permission-mode".into(), mode.name().into()]); }
     if let Some(settings) = ctx.settings.filter(|s| s.as_object().is_some_and(|o| !o.is_empty())) {
-        claude.extend(["--settings".into(), settings_json(settings)]);
+        let value = if ctx.windows { ctx.settings_file.map(str::to_owned) } else { Some(settings_json(settings)) };
+        if let Some(value) = value { claude.extend(["--settings".into(), value]); }
     }
     // O prompt inicial é o posicional do `claude`, depois das opções; começando com `-`, o `--`
     // impede que vire flag. No Windows ele vai pela fila da chave (`terminal_life`): o psmux roda o

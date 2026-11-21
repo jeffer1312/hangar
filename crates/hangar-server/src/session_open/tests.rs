@@ -1264,7 +1264,7 @@ fn the_claude_pane_is_the_expected_one() {
         let bridge = claude::PluginBridge { port: 8765, secret: "segredo".into() };
         let ctx = claude::ClaudeContext { plugin_roots: &roots, bridge: Some(&bridge), bridge_key: &"a".repeat(32),
             runtime_config: &runtime, server_env: &Default::default(), settings: Some(&settings).filter(|s| !s.is_null()),
-            read_only: read_only.as_deref(), windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
+            settings_file: None, read_only: read_only.as_deref(), windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
         let ours = terminal::new_session_argv(&terminal::tests::machine_at("<ROOT>/home/.claude"), &claude::pane(&spec, "<uuid:1>", &ctx));
         // O comando de dentro do `sh -c` do só leitura também é comparado por palavra. Diferença aceita: o
         // Rust abre com `exec` (no dash o shell ficava de pai do agente).
@@ -1528,7 +1528,7 @@ fn the_initial_prompt_is_the_first_message_of_the_claude_terminal() {
     for (prompt, tail) in [("olá", vec!["--permission-mode", "bypassPermissions", "olá"]),
                            ("-v e depois", vec!["--permission-mode", "bypassPermissions", "--", "-v e depois"])] {
         let ctx = claude::ClaudeContext { plugin_roots: &roots, bridge: None, bridge_key: "k", runtime_config: &Value::Null,
-            server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: Some(prompt), engine_route: None, resume: false, allow_bypass: false };
+            server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: false, initial_prompt: Some(prompt), engine_route: None, resume: false, allow_bypass: false };
         let command = claude::pane(&resolved.spec, "sid", &ctx).command;
         assert_eq!(command[command.len() - tail.len()..], tail.iter().map(|s| s.to_string()).collect::<Vec<_>>()[..]);
     }
@@ -1542,10 +1542,34 @@ fn on_windows_the_claude_initial_prompt_stays_out_of_the_pane_command() {
     let spec = resolve_fixture(&fixture).unwrap().spec;
     let prompt = r#"a folha "Mais ações" em C:\x\\y, do 'Expo' (`mobile/`)"#;
     let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
-        server_env: &Default::default(), settings: None, read_only: None, windows: true, initial_prompt: Some(prompt), engine_route: None, resume: false, allow_bypass: false };
+        server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: true, initial_prompt: Some(prompt), engine_route: None, resume: false, allow_bypass: false };
     let command = claude::pane(&spec, "sid", &ctx).command;
     assert!(!command.iter().any(|arg| arg.contains("Mais")), "o prompt foi para o comando do pane: {command:?}");
     assert_eq!(command[command.len() - 2..], ["--permission-mode".to_owned(), "bypassPermissions".to_owned()]);
+}
+
+/// No Windows as escolhas da conversa vão ao `--settings` por arquivo: o comando do psmux perde as
+/// aspas do JSON e o Claude recusa abrir ("Invalid JSON provided to --settings").
+#[test]
+fn on_windows_the_claude_settings_reach_the_pane_command_as_a_file() {
+    let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_terminal_initial_prompt_ignored").unwrap();
+    let spec = resolve_fixture(&fixture).unwrap().spec;
+    let settings = json!({"enabledPlugins": {"x@y": true}, "permissions": {"deny": ["Bash(rm:*)"]}});
+    let home = tempfile::tempdir().unwrap();
+    let file = claude::settings_file(home.path(), &settings).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&std::fs::read_to_string(&file).unwrap()).unwrap(), settings);
+    assert_eq!(claude::settings_file(home.path(), &settings).unwrap(), file, "as mesmas escolhas, o mesmo arquivo");
+    let server_env = std::collections::BTreeMap::new();
+    let command_of = |windows: bool, settings_file: Option<&str>| claude::pane(&spec, "sid", &claude::ClaudeContext { plugin_roots: &[],
+        bridge: None, bridge_key: "k", runtime_config: &Value::Null, server_env: &server_env, settings: Some(&settings), settings_file,
+        read_only: None, windows, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false }).command;
+    let command = command_of(true, Some(&file));
+    assert!(!command.iter().any(|arg| arg.contains('"')), "JSON cru no comando do pane: {command:?}");
+    let at = command.iter().position(|arg| arg == "--settings").expect("--settings");
+    assert_eq!(command[at + 1], file);
+    let linux = command_of(false, None);
+    let at = linux.iter().position(|arg| arg == "--settings").expect("--settings");
+    assert_eq!(serde_json::from_str::<Value>(&linux[at + 1]).unwrap(), settings);
 }
 
 /// Pasta pedida com `~` é normalizada na entrada; o pane, a pré-confiança e o transcript usam o
@@ -1563,7 +1587,7 @@ fn a_tilde_folder_is_absolute_everywhere_in_the_launch() {
     let absolute = home.join("work/proj").to_string_lossy().into_owned();
     assert_eq!(spec.cwd, absolute);
     let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
-        server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
+        server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
     let argv = terminal::new_session_argv(&terminal::tests::machine_at(&home.join(".claude").to_string_lossy()), &claude::pane(&spec, "sid", &ctx));
     assert_eq!(argv[argv.iter().position(|a| a == "-c").unwrap() + 1], absolute);
     let transcript = claude::transcript(&spec, "sid", &home.join(".claude/projects"));
@@ -1588,7 +1612,7 @@ fn code_mode_reaches_the_claude_pane_only_when_asked() {
         let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
         let spec = resolve::resolve_open(&request, &OWNER, &local_facts(&home, &runtime)).unwrap().spec;
         let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
-            server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
+            server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
         let argv = terminal::new_session_argv(&terminal::tests::machine_at(&home.join(".claude").to_string_lossy()), &claude::pane(&spec, "sid", &ctx));
         (spec.code_mode, argv.iter().any(|a| *a == format!("{}=1", claude::CODE_MODE_ENV)))
     };
@@ -1632,7 +1656,7 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     let route = facts::fixed_account(&crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
         [("HOME".to_owned(), home.to_string_lossy().into_owned())].into())), "gpt", "work").unwrap();
     let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
-        server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
+        server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
     let command = claude::pane(&spec, "sid", &claude::ClaudeContext { engine_route: Some(&route), ..ctx }).command;
     let home_text = home.join(".codex-work").to_string_lossy().into_owned();
     assert_eq!(command[..12], ["hangar-engine", "--exec", "gpt", "--account", "work", "--account-home", &home_text,

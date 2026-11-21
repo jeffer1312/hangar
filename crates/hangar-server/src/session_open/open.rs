@@ -613,8 +613,14 @@ async fn claude_plan(host: &dyn OpenHost, spec: &SessionSpec, sid: &str, read_on
     let roots = claude::plugin_roots(host.home());
     let bridge = host.bridge();
     let key = host.new_bridge_key();
+    let windows = host.terminal().windows;
+    let settings_file = match settings.as_ref().filter(|s| windows && s.as_object().is_some_and(|o| !o.is_empty())) {
+        Some(settings) => Some(claude::settings_file(host.home(), settings)
+            .map_err(|e| OpenError::new(500, "erro_criacao_sessao", format!("as escolhas da conversa não foram gravadas: {e}")))?),
+        None => None,
+    };
     let ctx = claude::ClaudeContext { plugin_roots: &roots, bridge: bridge.as_ref(), bridge_key: &key, runtime_config: runtime,
-        server_env: host.env(), settings: settings.as_ref(), read_only, windows: host.terminal().windows, initial_prompt, engine_route: route.as_ref(),
+        server_env: host.env(), settings: settings.as_ref(), settings_file: settings_file.as_deref(), read_only, windows, initial_prompt, engine_route: route.as_ref(),
         resume, allow_bypass: false };
     let pane = claude::pane(spec, sid, &ctx);
     let jsonl = claude::transcript(spec, sid, &host.server_projects()).to_string_lossy().into_owned();

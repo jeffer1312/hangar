@@ -152,10 +152,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   relê de lá (`%%` desfeito). Opção de valor vazio nem é gravada. O código de saída vem do
   `<id>.exit`, nunca do `pane_dead_status`. Arquivo sem terminal dono é varrido. Medições completas,
   ver [Terminais de atalho no psmux](#terminais-de-atalho-no-psmux).
-- **Texto livre não vai no comando do `new-session` do psmux.** Comando que começa por programa sem
-  aspas (`claude`, `hangar-engine`, `hangar-codex-tui.cmd`) roda pelo PowerShell 5.1: `"` dentro de
-  argumento se perde (corta o prompt, tira as aspas do JSON do `--settings`) e argumento vazio some.
-  O prompt inicial vai pela fila da chave no Claude (`queue_first_message`) e em base64 no Codex.
+- **Texto livre e aspas duplas não vão no comando do `new-session` do psmux.** Argumento com `"`
+  perde as aspas e se junta aos vizinhos, e argumento vazio some, com ou sem `(` no comando; espaço,
+  `(` e `'` passam. O prompt inicial vai pela fila da chave no Claude (`queue_first_message`) e em
+  base64 no Codex (`--prompt-b64`); as escolhas da conversa do Claude vão ao `--settings` por arquivo
+  (`claude::settings_file`). Ver [Aspas no comando do `new-session` do psmux](#aspas-no-comando-do-new-session-do-psmux-20112026).
 - **Terminal real do dono no Windows é do Rust, pelo ConPTY do `portable-pty`.** O filho
   (`tmux attach`) morre ANTES de o pseudoconsole fechar, e com filho vivo o pseudoconsole vaza em
   vez de fechar; não há reposição de tamanho; o escritor é o `take_writer` (pipe puro, soltar só
@@ -1253,3 +1254,28 @@ como parada pedida: o lançador sai com ele e o backend fica fora até o próxim
 `hangar-vigia` o religava em até 15 min. Na versão que sobe pelo
 Python, o `hangar-server` neto que ainda segura a porta faz a religada cair e tentar de novo, com a
 espera crescente, até ele sair.
+
+## Aspas no comando do `new-session` do psmux (20/11/2026)
+
+Medido na DELPHI-02 (Windows Server 2025, PowerShell 5.1), com um script Python que grava o
+próprio argv, lançado por `tmux new-session -d -s … "<comando>"` com o comando montado como o
+`terminal::join` monta:
+
+| Comando (depois de `python argv.py`) | argv recebido |
+|---|---|
+| `'x"y' '' '{"a":1}' z` | `["xy  {a:1} z"]` |
+| `'x"y' '' '{"a":1}' '(p)'` | `["xy  {a:1} (p)"]` |
+| `'C:/a b/c' 'it''s' z` | `["C:/a b/c", "it's", "z"]` |
+| programa por caminho entre aspas, `plain z` | `["plain", "z"]` |
+
+A aspa dupla some e junta o argumento aos vizinhos, e o `''` desaparece, com ou sem `(`. O prompt
+inicial era cortado assim (Claude no posicional, Codex no `--prompt`). O `--settings` do Claude
+leva JSON: `claude --settings '{"permissions":{"deny":["Bash(rm:*)"]}}'` pelo psmux faz o pane morrer
+na hora, e o JSON como ele chega, `{permissions:{deny:[Bash(rm:*)]}}`, dá
+`Error: Invalid JSON provided to --settings`. O mesmo conteúdo num arquivo, passado por
+`--settings C:/…/settings.json`, abre o Claude normalmente.
+
+O arquivo das escolhas mora em `~/.hangar/claude-settings/<sha1 do JSON>.json`: conversas com as
+mesmas escolhas usam o mesmo, nada fica preso a uma sessão, e a abertura e a reabertura o regravam
+se faltar. A variável `HANGAR_CLAUDE_SETTINGS` continua com o JSON, e é dela que a reabertura relê as
+escolhas: pelo `-e`, fora do comando, o mesmo JSON chegou intacto ao processo do pane.
