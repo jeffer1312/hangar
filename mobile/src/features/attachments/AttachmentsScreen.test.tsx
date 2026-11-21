@@ -387,7 +387,10 @@ describe('media and files', () => {
       button.click();
     });
     expect(h.download).toHaveBeenCalledTimes(1);
-    await act(async () => finish({ uri: 'file:///cache/x', size: 10 }));
+    // A cópia é conferida antes de abrir: depois do download ela existe.
+    const copy = { uri: 'file:///cache/x', size: 10 };
+    h.kept.mockReturnValue(copy);
+    await act(async () => finish(copy));
     expect(h.deliverLocal).toHaveBeenCalledTimes(1);
     act(() => root.unmount());
   });
