@@ -258,7 +258,7 @@ pub(super) enum AppProgress { Bytes(u64, Option<u64>), Installing }
 type OnProgress = Arc<dyn Fn(AppProgress) + Send + Sync>;
 
 /// Avisa a cada ponto percentual (ou a cada MB sem total): por pedaço seriam milhares de redesenhos.
-fn throttled(progress: OnProgress) -> impl Fn(u64, Option<u64>) {
+fn throttled(progress: OnProgress) -> impl Fn(u64, Option<u64>) + Sync {
     let last = std::sync::atomic::AtomicU64::new(u64::MAX);
     move |done, total| {
         let step = match total { Some(total) if total > 0 => done * 100 / total, _ => done >> 20 };
@@ -266,7 +266,7 @@ fn throttled(progress: OnProgress) -> impl Fn(u64, Option<u64>) {
     }
 }
 
-async fn fetch(client: &reqwest::Client, url: &str, progress: &dyn Fn(u64, Option<u64>)) -> Result<Vec<u8>, reqwest::Error> {
+async fn fetch(client: &reqwest::Client, url: &str, progress: &(dyn Fn(u64, Option<u64>) + Sync)) -> Result<Vec<u8>, reqwest::Error> {
     let mut response = client.get(url).send().await?.error_for_status()?;
     let total = response.content_length();
     let mut bytes = Vec::with_capacity(total.unwrap_or(0).min(512 << 20) as usize);
@@ -280,7 +280,7 @@ async fn fetch(client: &reqwest::Client, url: &str, progress: &dyn Fn(u64, Optio
 
 /// A release é republicada a cada push: o binário trocado no meio da transferência corta o corpo, e uma segunda
 /// tentativa pega o arquivo novo (o sha dele é conferido depois, contra o manifesto relido).
-async fn download(client: &reqwest::Client, url: &str, pause: Duration, progress: &dyn Fn(u64, Option<u64>)) -> Result<Vec<u8>, String> {
+async fn download(client: &reqwest::Client, url: &str, pause: Duration, progress: &(dyn Fn(u64, Option<u64>) + Sync)) -> Result<Vec<u8>, String> {
     if let Ok(bytes) = fetch(client, url, progress).await { return Ok(bytes) }
     tokio::time::sleep(pause).await;
     fetch(client, url, progress).await.map_err(|error| tr("app_update_download_failed").replace("{reason}", &cause(error)))

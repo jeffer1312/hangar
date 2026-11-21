@@ -86,7 +86,8 @@ describe('atualizar todas as máquinas', () => {
     expect(el.textContent).not.toContain(duplicate.label);
     await click(m.sessao_fechar());
     expect(el.textContent).not.toContain(first.label);
-    await click(m.update_all_button({ n: '3' }));
+    // Durante a rodada o botão conta as máquinas dela, já sem o endereço repetido.
+    await click(m.update_all_button({ n: '2' }));
     expect(mocks.updateAll).toHaveBeenCalledTimes(1);
     await act(async () => {
       const state: UpdateAllState = { status: 'atualizado_manual', warnings: ['fixture-warning'] };
