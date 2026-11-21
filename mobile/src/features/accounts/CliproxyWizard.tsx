@@ -6,7 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import {
-  engineCliproxyForServer, getCliproxyLoginForServer, installCliproxyForServer, putCliproxyManagementKeyForServer,
+  adoptCliproxyForServer, engineCliproxyForServer, getCliproxyLoginForServer, installCliproxyForServer, putCliproxyManagementKeyForServer,
   putEngineForServer, resetCliproxyManagementKeyForServer, sendCliproxyLoginCallbackForServer, startCliproxyLoginForServer,
   type CliproxyDeteccao, type CliproxyInstallStep, type CliproxyLoginProvider, type CliproxyJob, type Server,
 } from '@hangar/core';
@@ -16,6 +16,7 @@ import { ProviderGlyph } from '../../ui/ProviderGlyph';
 import { haptic } from '../../ui/haptics';
 import { useSettingsColors } from '../config/colors';
 import { InstallItems } from './InstallItems';
+import { confirmRestart, failureText, handoverText } from './ProxyUpdate';
 import * as m from '../../paraglide/messages';
 
 export { InstallItems };
@@ -25,8 +26,9 @@ export type Account = { provider: Provider; email: string };
 type Stage =
   | { k: 'loading' }
   | { k: 'load_error'; error: string }
-  | { k: 'intro'; external: boolean }
-  | { k: 'installing'; at: number }
+  // `error`: a entrega ao Hangar que falhou volta às duas escolhas, com o motivo embaixo.
+  | { k: 'intro'; external: boolean; error?: string }
+  | { k: 'installing'; at: number; adopt?: boolean }
   | { k: 'install_failed'; at: number; error: string }
   | { k: 'pick'; error?: string }
   | { k: 'key'; provider: Provider; error?: string }
@@ -40,7 +42,7 @@ const ENGINE_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 // O login devolve para o loopback da máquina do proxy; no celular essa página não abre e o endereço é colado.
 const CALLBACK = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//;
 
-const failure = (e: unknown) => (e ?? {}) as { status?: number; code?: string; envelope?: { msg?: unknown } };
+const failure = (e: unknown) => (e ?? {}) as { status?: number; code?: string; envelope?: { msg?: unknown; params?: { sessions?: unknown } } };
 const message = (e: unknown) => e instanceof Error ? e.message : m.erro_desconhecido();
 const detailOf = (e: unknown) => {
   const msg = failure(e).envelope?.msg;
@@ -106,6 +108,8 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
   const [model, setModel] = useState('');
   const [fast, setFast] = useState(true);
   const [saveError, setSaveError] = useState('');
+  // Proxy de fora: passar ao Hangar (o marcado de início) ou usar como está.
+  const [adoptPick, setAdoptPick] = useState(true);
   const alive = useRef(true);
   const busyNow = useRef(false);
   const infoNow = useRef<CliproxyDeteccao | null>(null);
@@ -136,7 +140,7 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
       // Mesma regra do nativo: proxy respondendo, e instalado pelo Hangar rodando ou sem instalação conhecida.
       const usable = next.found && !!next.base_url && !next.error;
       const ready = usable && (!setup || (setup.state === 'managed' && setup.running) || setup.state === 'absent' || !setup.state);
-      if (setup?.job && !setup.job.done) setStage({ k: 'installing', at: STEP_AT[setup.job.step] ?? 0 });
+      if (setup?.job && !setup.job.done) setStage({ k: 'installing', at: STEP_AT[setup.job.step] ?? 0, adopt: setup.job.kind === 'adopt' });
       else if (ready) setStage({ k: 'pick' });
       else setStage({ k: 'intro', external: setup?.state === 'external' });
     } catch (e) {
@@ -158,6 +162,25 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
     } finally { posting.current = false; }
   });
 
+  // Passa o proxy de fora ao Hangar; com sessões nele pergunta antes, como a atualização.
+  const adopt = (confirm = false) => run(async () => {
+    haptic.selection();
+    setStage({ k: 'installing', at: 0, adopt: true });
+    posting.current = true;
+    try { await adoptCliproxyForServer(server, confirm); }
+    catch (e) {
+      const code = failure(e).code;
+      if (code === 'erro_cliproxy_ocupado' || !alive.current) return;
+      if (code === 'erro_cliproxy_sessoes_ativas') {
+        setStage({ k: 'intro', external: true });
+        confirmRestart('adopt', Number(failure(e).envelope?.params?.sessions) || 0, () => void adopt(true));
+        return;
+      }
+      haptic.error();
+      setStage({ k: 'intro', external: true, error: message(e) });
+    } finally { posting.current = false; }
+  });
+
   const installing = stage.k === 'installing';
   useEffect(() => {
     if (!installing) return;
@@ -176,13 +199,21 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
         if (!job) { if (!stop) timer = setTimeout(() => void tick(), 1000); return; }
         // Com o pedido ainda em voo, uma tarefa concluída é a da tentativa anterior: só a seguinte é desta.
         if (job.done && !inFlight && !posting.current) {
-          if (job.error) { haptic.error(); setStage({ k: 'install_failed', at: STEP_AT[job.step] ?? 0, error: installError(job.error) }); }
+          if (job.error && job.kind === 'adopt') {
+            haptic.error();
+            // Sessão que passou a usar o proxy durante o download: não é defeito, é só tentar de novo.
+            const error = job.error.code === 'erro_cliproxy_sessoes_ativas'
+              ? m.mobile_cliproxy_adopt_interrupted() : failureText('adopt', job.error, next.install ?? null);
+            setStage({ k: 'intro', external: true, error });
+          } else if (job.error) { haptic.error(); setStage({ k: 'install_failed', at: STEP_AT[job.step] ?? 0, error: installError(job.error) }); }
           else { haptic.success(); setStage({ k: 'pick' }); }
           return;
         }
         if (!job.done) {
           const at = STEP_AT[job.step] ?? 0;
-          setStage(s => s.k === 'installing' && s.at !== at ? { k: 'installing', at } : s);
+          // Tocar com outra tarefa em curso segue a que roda: as etapas mostradas são as dela.
+          const adopting = job.kind === 'adopt';
+          setStage(s => s.k === 'installing' && (s.at !== at || !!s.adopt !== adopting) ? { ...s, at, adopt: adopting } : s);
         }
       } catch { /* queda de um instante: a próxima leitura decide */ }
       if (!stop) timer = setTimeout(() => void tick(), 1000);
@@ -347,7 +378,10 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
   });
 
   const step = stepOf(stage);
-  const existing: Account[] = (info?.connected ?? []).flatMap(a =>
+  const setup = info?.install;
+  const canAdopt = setup?.handover?.ok === true;
+  const adoptChosen = adoptPick && canAdopt;
+  const existing: Account[] =(info?.connected ?? []).flatMap(a =>
     a.type === 'codex' || a.type === 'claude' ? [{ provider: a.type, email: a.email }] : []);
   const body = (() => {
     switch (stage.k) {
@@ -358,18 +392,33 @@ export function CliproxyWizard({ server, names, onSaved, onClose }: {
         <Foot><Button primary label={m.mobile_cliproxy_wizard_retry()} onPress={() => void load()} /></Foot>
       </>;
       case 'intro': return stage.external ? <>
-        <Text style={[styles.lead, { color: c.text }]}>{m.mobile_cliproxy_wizard_external_lead()}</Text>
-        <Text style={[styles.muted, { color: c.muted }]}>{m.mobile_cliproxy_wizard_external_desc()}</Text>
-        <Foot><Button primary label={m.mobile_cliproxy_wizard_continue()} disabled={busy} onPress={() => void install()} /></Foot>
+        <Text style={[styles.lead, { color: c.text }]}>{setup?.version
+          ? m.mobile_cliproxy_wizard_external_version({ version: setup.version }) : m.mobile_cliproxy_wizard_external_lead()}</Text>
+        <Choice selected={adoptChosen} disabled={busy || !canAdopt} recommended title={m.mobile_cliproxy_wizard_adopt_title()}
+          desc={setup?.handover && !setup.handover.ok ? handoverText(setup.handover.code) : m.mobile_cliproxy_wizard_adopt_desc()}
+          onPress={() => setAdoptPick(true)} />
+        <Choice selected={!adoptChosen} disabled={busy} title={m.mobile_cliproxy_wizard_keep_title()} desc={m.mobile_cliproxy_wizard_keep_desc()}
+          onPress={() => setAdoptPick(false)} />
+        {stage.error ? <ErrorBox text={stage.error} /> : null}
+        <Foot>
+          <Button label={m.comum_cancelar()} disabled={busy} onPress={onClose} />
+          <Button primary label={stage.error ? m.mobile_cliproxy_wizard_retry() : m.mobile_cliproxy_wizard_continue()} disabled={busy}
+            onPress={() => void (adoptChosen ? adopt() : install())} />
+        </Foot>
       </> : <>
         <Text style={[styles.lead, { color: c.text }]}>{m.mobile_cliproxy_wizard_install_lead()}</Text>
         <Text style={[styles.muted, { color: c.muted }]}>{m.mobile_cliproxy_wizard_install_desc()}</Text>
         <InstallItems at={-1} failed={false} />
-        <Foot><Button primary label={m.mobile_cliproxy_wizard_install()} disabled={busy} onPress={() => void install()} /></Foot>
+        <Foot>
+          <Button label={m.comum_cancelar()} disabled={busy} onPress={onClose} />
+          <Button primary label={m.mobile_cliproxy_wizard_install()} disabled={busy} onPress={() => void install()} />
+        </Foot>
       </>;
       case 'installing': return <>
-        <Text style={[styles.lead, { color: c.text }]} accessibilityLiveRegion="polite">{m.mobile_cliproxy_wizard_installing()}</Text>
-        <InstallItems at={stage.at} failed={false} />
+        <Text style={[styles.lead, { color: c.text }]} accessibilityLiveRegion="polite">
+          {stage.adopt ? m.mobile_cliproxy_adopt_running() : m.mobile_cliproxy_wizard_installing()}</Text>
+        <InstallItems at={stage.at} failed={false} labels={stage.adopt ? [m.mobile_cliproxy_adopt_step_download({ new: setup?.latest ?? '' }),
+          m.mobile_cliproxy_adopt_step_config(), m.mobile_cliproxy_adopt_step_service(), m.mobile_cliproxy_adopt_step_start()] : undefined} />
         <Foot><Button primary label={m.mobile_cliproxy_wizard_installing()} disabled onPress={() => {}} /></Foot>
       </>;
       case 'install_failed': return <>
@@ -562,6 +611,27 @@ function ProviderCard({ provider, title, desc, recommended, disabled, onPress }:
   </Pressable>;
 }
 
+/** Uma das duas escolhas do proxy de fora: marcar só escolhe, quem age é o Continuar. */
+function Choice({ selected, disabled, recommended, title, desc, onPress }: {
+  selected: boolean; disabled: boolean; recommended?: boolean; title: string; desc: string; onPress: () => void;
+}) {
+  const c = useSettingsColors();
+  return <Pressable accessibilityRole="radio" accessibilityLabel={recommended ? `${title}, ${m.mobile_cliproxy_wizard_recommended()}` : title}
+    accessibilityHint={desc} accessibilityState={{ checked: selected, disabled }} disabled={disabled}
+    onPress={() => { haptic.selection(); onPress(); }}
+    style={[styles.card, { borderColor: selected ? c.accent : c.borderStrong, opacity: disabled && !selected ? 0.6 : 1 },
+      selected && { backgroundColor: c.accentDim }]}>
+    <View style={styles.cardTitle}>
+      <View style={[styles.radio, { borderColor: selected ? c.accent : c.borderStrong }]}>
+        {selected ? <View style={[styles.radioDot, { backgroundColor: c.accent }]} /> : null}
+      </View>
+      <Text style={[styles.strong, styles.flex, { color: c.text }]}>{title}</Text>
+      {recommended ? <Text style={[styles.rec, { color: c.accentText, backgroundColor: c.accentDim }]}>{m.mobile_cliproxy_wizard_recommended()}</Text> : null}
+    </View>
+    <Text style={[styles.small, { color: c.muted }]}>{desc}</Text>
+  </Pressable>;
+}
+
 // Com `onUse` é a conta que já estava no proxy: o botão segue para o nome sem abrir login.
 export function AccountLine({ account, onUse, disabled }: { account: Account; onUse?: () => void; disabled?: boolean }) {
   const c = useSettingsColors();
@@ -648,6 +718,8 @@ const styles = StyleSheet.create(theme => ({
   buttonText: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
   card: { minHeight: 44, borderWidth: 1, borderRadius: theme.base.radius.md, borderCurve: 'continuous', padding: theme.base.space[3], gap: theme.base.space[1] },
   cardTitle: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
+  radio: { width: 18, height: 18, borderRadius: theme.base.radius.full, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  radioDot: { width: 8, height: 8, borderRadius: theme.base.radius.full },
   rec: { fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.medium, paddingHorizontal: theme.base.space[2], paddingVertical: 2,
     borderRadius: theme.base.radius.full, overflow: 'hidden' },
   box: { borderWidth: 1, borderRadius: theme.base.radius.md, borderCurve: 'continuous', padding: theme.base.space[3], gap: theme.base.space[3] },

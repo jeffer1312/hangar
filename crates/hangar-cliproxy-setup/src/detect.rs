@@ -57,6 +57,42 @@ pub fn exec_overridden(units: &[PathBuf]) -> bool {
 pub fn unit_config(unit: &str) -> Option<PathBuf> {
     let exec = unit.lines().map(str::trim).find_map(|l| l.strip_prefix("ExecStart="))?;
     let words: Vec<&str> = exec.split_whitespace().map(|w| w.trim_matches(['"', '\''])).collect();
+    config_flag(&words)
+}
+
+/// LaunchAgents do usuário que rodam o proxy, fora o do Hangar: o `brew services` grava um `homebrew.mxcl.*.plist`.
+pub fn launch_agents(home: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(home.join("Library/LaunchAgents")) else { return Vec::new() };
+    let ours = format!("{}.plist", crate::service::LAUNCHD_LABEL);
+    let mut found: Vec<PathBuf> = entries.flatten().map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "plist") && p.file_name().is_some_and(|n| n.to_string_lossy() != ours))
+        .filter(|p| std::fs::read_to_string(p).is_ok_and(|text| text.contains("cli-proxy-api")))
+        .collect();
+    found.sort();
+    found
+}
+
+/// O `--config` dos `ProgramArguments` do plist: cada argumento é um `<string>`, com espaço ou não.
+pub fn plist_config(plist: &str) -> Option<PathBuf> {
+    let args = plist.split_once("<key>ProgramArguments</key>")?.1;
+    let args = args.split_once("</array>")?.0;
+    let words: Vec<String> = args.split("<string>").skip(1).filter_map(|s| s.split_once("</string>"))
+        .map(|(word, _)| plist_text(word)).collect();
+    config_flag(&words.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// O `<string>` logo depois de `<key>{key}</key>` no plist (`Label`, `WorkingDirectory`).
+pub fn plist_string(plist: &str, key: &str) -> Option<String> {
+    let rest = plist.split_once(&format!("<key>{key}</key>"))?.1.trim_start();
+    let value = rest.strip_prefix("<string>")?.split_once("</string>")?.0;
+    Some(plist_text(value)).filter(|v| !v.trim().is_empty())
+}
+
+fn plist_text(raw: &str) -> String {
+    raw.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")
+}
+
+fn config_flag(words: &[&str]) -> Option<PathBuf> {
     words.iter().enumerate().find_map(|(i, w)| {
         let flag = w.trim_start_matches('-');
         match flag.split_once('=') {
@@ -172,6 +208,31 @@ mod tests {
         assert_eq!(unit_config(&unit("/usr/bin/cli-proxy-api -config=\"/srv/c.yaml\"")), Some(PathBuf::from("/srv/c.yaml")));
         assert_eq!(unit_config(&unit("/usr/bin/cli-proxy-api")), None);
         assert_eq!(unit_config("[Unit]\nDescription=x\n"), None);
+    }
+
+    #[test]
+    fn the_config_a_launch_agent_passes_is_read() {
+        let plist = |args: &str| format!("<plist><dict><key>Label</key><string>homebrew.mxcl.cliproxyapi</string>\
+            <key>ProgramArguments</key><array>{args}</array><key>RunAtLoad</key><true/></dict></plist>");
+        let config = "<string>/opt/homebrew/bin/cli-proxy-api</string><string>--config</string><string>/Users/a b/.cli-proxy-api/config.yaml</string>";
+        assert_eq!(plist_config(&plist(config)), Some(PathBuf::from("/Users/a b/.cli-proxy-api/config.yaml")), "caminho com espaço é um argumento só");
+        assert_eq!(plist_config(&plist("<string>/opt/homebrew/bin/cli-proxy-api</string><string>-config=/srv/c.yaml</string>")), Some(PathBuf::from("/srv/c.yaml")));
+        assert_eq!(plist_config(&plist("<string>/opt/homebrew/bin/cli-proxy-api</string>")), None);
+        let full = plist(config).replace("<key>RunAtLoad</key>", "<key>WorkingDirectory</key>\n  <string>/opt/homebrew/var</string><key>RunAtLoad</key>");
+        assert_eq!(plist_string(&full, "Label").as_deref(), Some("homebrew.mxcl.cliproxyapi"));
+        assert_eq!(plist_string(&full, "WorkingDirectory").as_deref(), Some("/opt/homebrew/var"));
+        assert_eq!(plist_string(&full, "RunAtLoad"), None, "valor que não é texto");
+    }
+
+    #[test]
+    fn launch_agents_skip_the_hangar_one_and_other_programs() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("Library/LaunchAgents");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("homebrew.mxcl.cliproxyapi.plist"), "<string>/opt/homebrew/bin/cli-proxy-api</string>").unwrap();
+        std::fs::write(dir.join(format!("{}.plist", crate::service::LAUNCHD_LABEL)), "<string>cli-proxy-api</string>").unwrap();
+        std::fs::write(dir.join("other.plist"), "<string>/usr/bin/other</string>").unwrap();
+        assert_eq!(launch_agents(home.path()), vec![dir.join("homebrew.mxcl.cliproxyapi.plist")]);
     }
 
     #[test]

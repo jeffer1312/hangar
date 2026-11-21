@@ -24,7 +24,10 @@ pub(crate) use cliproxy::{Brand as CliproxyBrand, INSTALL_ITEMS as CLIPROXY_INST
     install_item as cliproxy_install_item, name_preview as cliproxy_name_preview, wizard_steps as cliproxy_steps};
 pub(crate) use codex::idempotency_key;
 pub(crate) use proxy_update::{update_available_banner as cliproxy_update_available_banner, update_button as cliproxy_update_button,
-    update_done_banner as cliproxy_update_done_banner, update_running_banner as cliproxy_update_running_banner};
+    update_done_banner as cliproxy_update_done_banner, update_running_banner as cliproxy_update_running_banner,
+    CardView as CliproxyCardView, adopt_button as cliproxy_adopt_button, adopt_done_banner as cliproxy_adopt_done_banner,
+    adopt_running_banner as cliproxy_adopt_running_banner, card_note as cliproxy_card_note, connect_button as cliproxy_connect_button,
+    proxy_card_view as cliproxy_card_view};
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use gpui_kit::component::menu::DropdownMenu;
@@ -1041,7 +1044,7 @@ impl Hangar {
             let (color, icon) = if *error { (theme::danger(), IconName::CircleAlert) } else { (theme::success(), IconName::CircleCheck) };
             page = page.child(banner(color, icon, text.clone()).mt(px(16.)));
         }
-        if let Some(proxy) = self.proxy_update_banner(cx) { page = page.child(proxy.mt(px(16.))); }
+        if let Some(proxy) = self.proxy_card(cx) { page = page.child(proxy.mt(px(16.))); }
         // Arquivo dos modelos ilegível não é "nenhum modelo": pode estar escondendo modelos de verdade.
         let engines_problem = match &accounts.engines.value {
             Some(Ok(Engines { broken_file: Some(path), .. })) => Some(tr("accounts_engines_broken").replace("{path}", path)),

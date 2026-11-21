@@ -106,7 +106,8 @@ pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_
     row_box as plugin_row_box, text_block as plugin_text_block};
 pub(crate) use accounts::{CLIPROXY_INSTALL_ITEMS, CliproxyBrand, CliproxyItem, cliproxy_account_row, cliproxy_default_name, cliproxy_fast_field,
     cliproxy_install_item, cliproxy_name_preview, cliproxy_steps, cliproxy_update_available_banner, cliproxy_update_button,
-    cliproxy_update_done_banner, cliproxy_update_running_banner, login_heading, target_row};
+    cliproxy_update_done_banner, cliproxy_update_running_banner, CliproxyCardView, cliproxy_adopt_button, cliproxy_adopt_done_banner,
+    cliproxy_adopt_running_banner, cliproxy_card_note, cliproxy_card_view, cliproxy_connect_button, login_heading, target_row};
 /// As peças do seletor de modelos e da troca de agente, para a animação da novidade.
 pub(crate) use controls::picker as model_picker;
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,

@@ -6,7 +6,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import type { CliproxyInstall, CliproxyInstallStep } from '@hangar/core';
 import { WorkingMarkPaused } from '../../ui/WorkingMark';
 import { superficie } from '../../theme/superficie';
-import { ProxyUpdateCard, type Outcome } from '../accounts/ProxyUpdate';
+import { ProxyCard, type Outcome } from '../accounts/ProxyUpdate';
 import { useScriptStep } from './scriptStep';
 
 // O cartão de versão nova do CLIProxyAPI em Contas: Atualizar, as três etapas e o concluído.
@@ -27,7 +27,7 @@ export function frameAt(t: number): { install: CliproxyInstall; outcome: Outcome
   if (t < SERVICE) return { install: running('download'), outcome: null };
   if (t < START) return { install: running('service'), outcome: null };
   if (t < DONE) return { install: running('start'), outcome: null };
-  return { install: install({ version: NEW, update_available: false }), outcome: { k: 'done', tag: NEW } };
+  return { install: install({ version: NEW, update_available: false }), outcome: { k: 'done', action: 'update', tag: NEW } };
 }
 
 export function ProxyUpdateAnimation({ width }: { width: number }) {
@@ -53,7 +53,7 @@ export function ProxyUpdateAnimation({ width }: { width: number }) {
   return (
     <View ref={stage} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.stage, { width }]}>
       <View style={styles.slot}>
-        <ProxyUpdateCard state={{ ...frame, posting: false, update: async () => {} }} />
+        <ProxyCard state={{ ...frame, posting: false, update: async () => {}, adopt: async () => {} }} onConnect={() => {}} />
       </View>
     </View>
   );

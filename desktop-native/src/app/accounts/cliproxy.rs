@@ -3,7 +3,7 @@
 use super::*;
 use super::keys::{engine_id, field, help, provider_badge, tone};
 use crate::app::settings::Disclosure;
-use gpui_kit::component::{IndexPath, select::{Select, SelectEvent, SelectState}, searchable_list::SearchableVec,
+use gpui_kit::component::{IndexPath, radio::Radio, select::{Select, SelectEvent, SelectState}, searchable_list::SearchableVec,
     stepper::{Stepper, StepperItem}, switch::Switch};
 
 mod relay;
@@ -40,10 +40,22 @@ pub(in crate::app) enum Purpose { Entry, AfterLogin, Models }
 struct JobError { code: String }
 
 #[derive(Clone, Deserialize)]
-struct Job { step: String, done: bool, error: Option<JobError> }
+struct Job { #[serde(default)] kind: String, step: String, done: bool, error: Option<JobError> }
 
 #[derive(Clone, Default, Deserialize)]
-struct InstallState { #[serde(default)] state: String, #[serde(default)] running: bool, job: Option<Job> }
+struct InstallState {
+    #[serde(default)] state: String,
+    #[serde(default)] running: bool,
+    version: Option<String>,
+    latest: Option<String>,
+    handover: Option<super::proxy_update::Handover>,
+    sessions: Option<usize>,
+    job: Option<Job>,
+}
+
+/// O que o passo Instalar pede ao servidor.
+#[derive(Clone, Copy)]
+enum Start { Follow, Install, Adopt { confirm: bool } }
 
 #[derive(Clone, Deserialize)]
 struct Connected { #[serde(rename = "type")] kind: String, #[serde(default)] email: String }
@@ -100,6 +112,8 @@ pub(super) struct CliproxyWizard {
     status: Option<Result<ProxyStatus, String>>,
     reading: bool,
     installing: bool,
+    /// Proxy de fora: passar para o Hangar (o marcado de início) ou usar como está.
+    adopt: bool,
     job: Option<Job>,
     install_error: Option<String>,
     login: LoginPhase,
@@ -307,7 +321,7 @@ impl Hangar {
         ];
         self.accounts.outcome = None;
         self.accounts.cliproxy = Some(CliproxyWizard { step: WizardStep::Install, turn: 0, task: None, status: None, reading: false,
-            installing: false, job: None, install_error: None, login: LoginPhase::Pick, login_error: None, polling: false, before: Vec::new(),
+            installing: false, adopt: true, job: None, install_error: None, login: LoginPhase::Pick, login_error: None, polling: false, before: Vec::new(),
             other_open: false, relay: None, callback, sending: false, callback_error: None, key: None, mgmt, key_saving: false, name: None, picker: None,
             models: None, models_error: None, model: String::new(), fast: true, name_error: None, saving: false, save_error: None, saved: None,
             _subscriptions: subscriptions });
@@ -344,22 +358,26 @@ impl Hangar {
         cx.notify();
     }
 
-    /// Instalar (ou completar o config do proxy de fora) e acompanhar a cada segundo até o servidor dizer que acabou.
-    /// `start` falso só acompanha a instalação que já estava em andamento.
-    fn wizard_install(&mut self, start: bool, cx: &mut Context<Self>) {
-        if self.accounts.cliproxy.as_ref().is_none_or(|w| w.installing && start) { return; }
+    /// Instalar, completar o config do proxy de fora ou passá-lo ao Hangar, e acompanhar a cada segundo até o servidor
+    /// dizer que acabou. `Start::Follow` só acompanha a tarefa que já estava em andamento.
+    fn wizard_install(&mut self, start: Start, cx: &mut Context<Self>) {
+        let starting = !matches!(start, Start::Follow);
+        if self.accounts.cliproxy.as_ref().is_none_or(|w| w.installing && starting) { return; }
         let Some((turn, api)) = self.wizard_turn() else { return };
         let done = self.wizard_send();
         let Some(w) = self.accounts.cliproxy.as_mut() else { return };
         (w.installing, w.install_error) = (true, None);
-        if start { w.job = None; }
+        if starting { w.job = None; }
         w.task = Some(self.runtime.spawn(async move {
-            if start {
-                // Outra instalação já em andamento (409) é a mesma que se quer: segue acompanhando ela.
-                if let Err(error) = api.server_post(&["engines", "cliproxy", "install"], 30).await
-                    && error.code.as_deref() != Some("erro_cliproxy_ocupado") {
-                    return done(CliproxyReply::InstallFailed(turn, error)).await;
-                }
+            let posted = match start {
+                Start::Follow => Ok(Value::Null),
+                Start::Install => api.server_post(&["engines", "cliproxy", "install"], 30).await,
+                Start::Adopt { confirm } =>
+                    api.server_send(reqwest::Method::POST, &["engines", "cliproxy", "adopt"], Some(json!({"confirm": confirm})), 30).await,
+            };
+            // Outra tarefa já em andamento (409) é a mesma que se quer: segue acompanhando ela.
+            if let Err(error) = posted && error.code.as_deref() != Some("erro_cliproxy_ocupado") {
+                return done(CliproxyReply::InstallFailed(turn, error)).await;
             }
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -570,7 +588,7 @@ impl Hangar {
                         w.status = Some(parsed);
                         if let Some(job) = running_job {
                             w.job = Some(job);
-                            self.wizard_install(false, cx);
+                            self.wizard_install(Start::Follow, cx);
                         } else if ready {
                             w.step = WizardStep::Connect;
                         }
@@ -600,7 +618,15 @@ impl Hangar {
             CliproxyReply::InstallFailed(turn, error) => {
                 let Some(w) = self.wizard(turn) else { return };
                 (w.installing, w.task) = (false, None);
-                w.install_error = Some(failure_text(&error));
+                // Sessões no proxy: a entrega o reinicia, então pergunta antes, como a atualização.
+                if error.code.as_deref() == Some("erro_cliproxy_sessoes_ativas") {
+                    let sessions = w.status.as_ref().and_then(|s| s.as_ref().ok())
+                        .and_then(|s| s.install.as_ref()).and_then(|i| i.sessions);
+                    super::proxy_update::confirm_restart(super::proxy_update::Action::Adopt, sessions, window, cx,
+                        |this, cx| this.wizard_install(Start::Adopt { confirm: true }, cx));
+                } else {
+                    w.install_error = Some(failure_text(&error));
+                }
             }
             CliproxyReply::Progress(turn, result) => {
                 let parsed = parse_status(result);
@@ -609,15 +635,25 @@ impl Hangar {
                     Err(error) => { (w.installing, w.install_error) = (false, Some(error)); }
                     Ok(status) => {
                         let job = status.install.as_ref().and_then(|i| i.job.clone());
+                        let adopted = job.as_ref().is_some_and(|job| job.done && job.kind == "adopt");
                         match &job {
                             Some(job) if !job.done => {}
-                            Some(Job { error: Some(error), .. }) => { (w.installing, w.install_error) = (false, Some(code_text(&error.code))); }
+                            Some(Job { error: Some(error), kind, .. }) => {
+                                let text = if kind == "adopt" {
+                                    let (latest, version) = status.install.as_ref()
+                                        .map(|i| (i.latest.clone().unwrap_or_default(), i.version.clone().unwrap_or_default())).unwrap_or_default();
+                                    super::proxy_update::adopt_failure_text(&error.code, &latest, &version)
+                                } else { code_text(&error.code) };
+                                (w.installing, w.install_error) = (false, Some(text));
+                            }
                             Some(_) => { (w.installing, w.step, w.login) = (false, WizardStep::Connect, LoginPhase::Pick); }
                             // O servidor reiniciou no meio: o andamento era da memória dele.
                             None => { (w.installing, w.install_error) = (false, Some(tr("cliproxy_wizard_install_lost"))); }
                         }
                         w.job = job;
                         w.status = Some(Ok(status));
+                        // A linha do CLIProxyAPI em Contas passa a dizer "Do Hangar".
+                        if adopted { self.load_proxy_install(cx); }
                     }
                 }
             }
@@ -756,16 +792,9 @@ impl Hangar {
         let external = status.install.as_ref().is_some_and(|i| i.state == "external");
         let failed = w.install_error.clone();
         let action = |id: &'static str, label: &str, cx: &mut Context<Self>| Button::new(id).primary().small().label(tr(label))
-            .loading(w.installing).disabled(w.installing).on_click(cx.listener(|this, _, _, cx| this.wizard_install(true, cx)));
-        // Proxy de fora: nada é baixado nem registrado, então a lista das quatro etapas não se aplica.
+            .loading(w.installing).disabled(w.installing).on_click(cx.listener(|this, _, _, cx| this.wizard_install(Start::Install, cx)));
         if external {
-            return match failed {
-                None => col.child(lead(tr("cliproxy_wizard_external"))).child(help(tr("cliproxy_wizard_external_help")))
-                    .child(footer().child(spacer()).child(action("cliproxy-wizard-continue",
-                        if w.installing { "cliproxy_wizard_continuing" } else { "cliproxy_wizard_continue" }, cx))),
-                Some(error) => col.child(lead(tr("cliproxy_wizard_install_stopped"))).child(banner(theme::danger(), IconName::CircleAlert, error))
-                    .child(footer().child(spacer()).child(action("cliproxy-wizard-continue", "cliproxy_wizard_retry", cx))),
-            };
+            return self.wizard_external_body(w, status.install.as_ref(), cx);
         }
         let at = w.job.as_ref().map(|job| step_index(&job.step));
         let all_done = w.job.as_ref().is_some_and(|job| job.done && job.error.is_none());
@@ -785,7 +814,57 @@ impl Hangar {
             .when(failed.is_none() && !w.installing, |el| el.child(help(tr("cliproxy_wizard_lead_help"))))
             .child(div().mt(px(2.)).flex().flex_col().gap(px(9.)).children(rows))
             .children(failed.map(|error| banner(theme::danger(), IconName::CircleAlert, error)))
-            .child(footer().child(spacer()).child(action("cliproxy-wizard-install", button, cx)))
+            .child(footer().child(spacer())
+                .child(Button::new("cliproxy-wizard-cancel").outline().small().label(tr("cancel")).disabled(w.installing)
+                    .on_click(cx.listener(|this, _, window, cx| this.close_cliproxy_wizard(window, cx))))
+                .child(action("cliproxy-wizard-install", button, cx)))
+    }
+
+    /// Proxy de fora: passar para o Hangar (download, troca de serviço e conferência) ou usar como está (só o config).
+    fn wizard_external_body(&self, w: &CliproxyWizard, install: Option<&InstallState>, cx: &mut Context<Self>) -> Div {
+        let handover = install.and_then(|i| i.handover.as_ref());
+        let can_adopt = handover.is_some_and(|h| h.ok);
+        let adopt = w.adopt && can_adopt;
+        let latest = install.and_then(|i| i.latest.clone()).unwrap_or_default();
+        let lead_text = match install.and_then(|i| i.version.as_deref()) {
+            Some(version) => tr("cliproxy_wizard_external_version").replace("{version}", version),
+            None => tr("cliproxy_wizard_external"),
+        };
+        let mut col = div().flex().flex_col().gap(px(12.)).child(lead(lead_text));
+        // As etapas aparecem só durante a entrega; a que falhou volta às duas escolhas, com o motivo embaixo.
+        if adopt && w.installing && w.job.as_ref().is_none_or(|job| job.kind == "adopt") {
+            let step = w.job.as_ref().map_or("download", |job| job.step.as_str());
+            col = col.child(div().mt(px(2.)).flex().flex_col().gap(px(9.)).children(super::proxy_update::adopt_items(&latest, step)));
+        } else {
+            let option = |value: bool, title: String, desc: String, enabled: bool, cx: &mut Context<Self>| {
+                Radio::new(SharedString::from(format!("cliproxy-wizard-{}", if value { "adopt" } else { "keep" }))).small()
+                    .label(title).checked(adopt == value).disabled(w.installing || !enabled)
+                    .child(div().text_size(px(12.)).line_height(px(17.)).text_color(theme::muted()).whitespace_normal().child(desc))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(w) = this.accounts.cliproxy.as_mut() { (w.adopt, w.install_error) = (value, None); }
+                        cx.notify();
+                    }))
+            };
+            let adopt_desc = match handover {
+                Some(h) if !h.ok => code_text(&h.code),
+                _ => tr("cliproxy_wizard_adopt_desc"),
+            };
+            let adopt_title = format!("{} · {}", tr("cliproxy_wizard_adopt_title"), tr("cliproxy_wizard_recommended"));
+            col = col.child(div().flex().flex_col().gap(px(10.)).pt(px(2.))
+                .child(option(true, adopt_title, adopt_desc, can_adopt, cx))
+                .child(option(false, tr("cliproxy_wizard_keep_title"), tr("cliproxy_wizard_keep_desc"), true, cx)));
+        }
+        let (label, start) = match (adopt, w.install_error.is_some()) {
+            (_, true) => ("cliproxy_wizard_retry", if adopt { Start::Adopt { confirm: false } } else { Start::Install }),
+            (true, false) => ("cliproxy_wizard_continue", Start::Adopt { confirm: false }),
+            (false, false) => (if w.installing { "cliproxy_wizard_continuing" } else { "cliproxy_wizard_continue" }, Start::Install),
+        };
+        col.children(w.install_error.clone().map(|error| banner(theme::danger(), IconName::CircleAlert, error)))
+            .child(footer().child(spacer())
+                .child(Button::new("cliproxy-wizard-cancel").outline().small().label(tr("cancel")).disabled(w.installing)
+                    .on_click(cx.listener(|this, _, window, cx| this.close_cliproxy_wizard(window, cx))))
+                .child(Button::new("cliproxy-wizard-continue").primary().small().label(tr(label)).loading(w.installing).disabled(w.installing)
+                    .on_click(cx.listener(move |this, _, _, cx| this.wizard_install(start, cx)))))
     }
 
     fn wizard_connect_body(&self, w: &CliproxyWizard, cx: &mut Context<Self>) -> Div {
