@@ -154,7 +154,8 @@ impl Hangar {
         self.controls.picker_more = false;
         // Cada abertura relê as contas e o catálogo do Codex: uma falha não fica presa, e a conta de mais folga é a de agora.
         self.controls.handoff = None;
-        if self.controls.favorites.is_none() { self.controls.favorites = Some(crate::appearance::favorite_models()); }
+        // Leitura que falhou não marca carregado: a próxima abertura relê, e nenhuma estrela grava por cima.
+        if self.controls.favorites.is_none() { self.controls.favorites = crate::appearance::favorite_models(); }
         if self.handoff_source_now().is_some() { self.ensure_session_accounts(cx); }
     }
 
@@ -271,13 +272,16 @@ impl Hangar {
     }
 
     fn toggle_favorite(&mut self, key: String, cx: &mut Context<Self>) {
+        // Favoritos que não leram: gravar a lista desta estrela apagaria os do disco.
+        if self.controls.favorites.is_none() { self.controls.favorites = crate::appearance::favorite_models(); }
+        if self.controls.favorites.is_none() { return; }
         // A aba à vista fica: a primeira estrela não leva a pessoa para os Favoritos.
         if self.controls.picker_tab.is_none() {
             let tab = self.controls.open.as_ref().and_then(|o| o.catalog.as_ref()).and_then(|c| c.as_ref().ok())
                 .map(|catalog| self.picker_view(catalog).tab);
             self.controls.picker_tab = tab;
         }
-        let list = self.controls.favorites.get_or_insert_with(Vec::new);
+        let Some(list) = self.controls.favorites.as_mut() else { return };
         match list.iter().position(|f| *f == key) { Some(at) => { list.remove(at); } None => list.push(key) }
         let saved = list.clone();
         // Estrelas rápidas gravam em ordem: só a lista mais nova chega ao disco.

@@ -582,8 +582,18 @@ pub fn remember_model(key: &str, model: &str, effort: &str) {
 }
 
 /// Modelos marcados com estrela no seletor, como `provider:id`, na ordem em que foram marcados. Bloqueante.
-pub fn favorite_models() -> Vec<String> {
-    dir().and_then(|d| std::fs::read(d.join("favorite-models.json")).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+/// Sem arquivo é lista vazia; falha de leitura é `None`, para quem chama não gravar por cima dos favoritos que não leu.
+pub fn favorite_models() -> Option<Vec<String>> {
+    let Some(dir) = dir() else { return Some(Vec::new()) };
+    match std::fs::read(dir.join("favorite-models.json")) {
+        // Conteúdo ilegível não volta com outra leitura: começa vazio e a próxima estrela o regrava.
+        Ok(bytes) => Some(serde_json::from_slice(&bytes).unwrap_or_default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+        Err(error) => {
+            eprintln!("favoritos do seletor não leram: {error}");
+            None
+        }
+    }
 }
 
 /// Grava os favoritos do seletor; falha de disco só os esquece, com o motivo no log.
