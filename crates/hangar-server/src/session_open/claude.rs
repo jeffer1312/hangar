@@ -128,7 +128,12 @@ pub(crate) fn settings_file(home: &Path, settings: &Value) -> std::io::Result<St
     let path = dir.join(format!("{}.json", sha1_smol::Sha1::from(&json).digest()));
     if !path.exists() {
         std::fs::create_dir_all(&dir)?;
-        hangar_core::fs::atomic_write(&path, json.as_bytes())?;
+        // Outra abertura com as mesmas escolhas pode ter gravado antes e o Claude dela segurar o arquivo:
+        // no Windows o rename por cima falha, e o conteúdo já é o certo.
+        if let Err(error) = hangar_core::fs::atomic_write(&path, json.as_bytes())
+            && !std::fs::read(&path).is_ok_and(|bytes| bytes == json.as_bytes()) {
+            return Err(error);
+        }
     }
     Ok(path.to_string_lossy().into_owned())
 }
