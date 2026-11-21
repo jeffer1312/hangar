@@ -4,6 +4,7 @@
 use super::*;
 use super::gallery::{self, Item, Kind};
 use super::machines::enter_to_focused;
+use crate::video::{Upstream, VideoPlayer, VideoSource};
 use gpui_kit::{LineCap, PathBuilder, PathStyle, StrokeOptions};
 
 /// Teto do zoom, o mesmo do visor do Zeron.
@@ -27,9 +28,12 @@ const STRIP_SIDE: usize = 8;
 /// Menor palco: a faixa de cima precisa caber contador, zoom, Riscar, Abrir, Salvar e Mostrar na conversa.
 const MIN_W: f32 = 760.;
 const MIN_H: f32 = 160.;
-/// Palco do vídeo sem quadro: o lugar do player.
+/// Palco do vídeo sem quadro e sem o player do app.
 const VIDEO_W: f32 = MIN_W;
 const VIDEO_H: f32 = MIN_W * 9. / 16.;
+/// Maior lado do player fora da tela cheia, e o vão entre o quadro e os controles dele.
+const PLAYER_W: f32 = 960.;
+const PLAYER_GAP: f32 = 8.;
 
 /// Cores das marcações (a primeira é a laranja das notas de print) e espessuras da caneta, em pixels da tela.
 const PEN_COLORS: [u32; 4] = [0xea580c, 0xe11d48, 0x2563eb, 0x16a34a];
@@ -183,6 +187,30 @@ impl Shown {
     }
 }
 
+/// O que a página do item mostra. `Poster`: a capa e "Abrir no player", com a chave do aviso de por que o vídeo não
+/// toca aqui.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Page { Image, Player, Poster(&'static str) }
+
+/// O vídeo toca no app só com a libmpv nesta máquina e um endereço que ela alcance.
+fn page_for(kind: Kind, mpv: bool, routable: bool, linux: bool) -> Page {
+    match kind {
+        Kind::Video if !mpv => Page::Poster(if linux { "video_need_mpv_linux" } else { "video_need_mpv" }),
+        Kind::Video if !routable => Page::Poster("video_no_route"),
+        Kind::Video => Page::Player,
+        _ => Page::Image,
+    }
+}
+
+/// Palco do player na proporção do vídeo, dentro do `limit` (sem teto na tela cheia), com a altura dos controles e
+/// largura para eles.
+fn video_stage(aspect: f32, limit: (f32, f32), full: bool) -> (f32, f32) {
+    let room = (if full { limit.0 } else { limit.0.min(PLAYER_W) }, (limit.1 - crate::video::CONTROLS_H - PLAYER_GAP).max(MIN_H));
+    let aspect = if aspect.is_finite() && aspect > 0. { aspect } else { 16. / 9. };
+    let width = room.0.min(room.1 * aspect).max(MIN_W.min(room.0));
+    (width, (width / aspect).min(room.1) + crate::video::CONTROLS_H + PLAYER_GAP)
+}
+
 pub(super) struct Viewer {
     hangar: WeakEntity<Hangar>,
     api: Api,
@@ -198,6 +226,13 @@ pub(super) struct Viewer {
     sizes: HashMap<Source, u64>,
     index: usize,
     shown: Shown,
+    /// O player do vídeo à vista; um só, solto ao trocar de item ou fechar.
+    player: Option<Entity<VideoPlayer>>,
+    /// Proporção do vídeo e tela cheia lidas no último quadro: o diálogo se mede antes do visor desenhar.
+    video_aspect: Option<f32>,
+    fullscreen: bool,
+    /// Chave do aviso da página do vídeo que não toca aqui.
+    video_hint: Option<&'static str>,
     /// Número do pedido à vista: a resposta de uma imagem que já ficou para trás não entra.
     seq: u64,
     _load: Task<()>,
@@ -258,6 +293,7 @@ impl Viewer {
 
     /// Tamanho do palco dentro de `limit`; o diálogo usa o mesmo cálculo para a própria largura.
     fn stage_box(&self, limit: (f32, f32)) -> (f32, f32) {
+        if self.player.is_some() { return video_stage(self.video_aspect.unwrap_or(16. / 9.), limit, self.fullscreen); }
         if let Shown::Video(poster) = &self.shown {
             return match poster {
                 Some(poster) => {
@@ -284,6 +320,17 @@ impl Viewer {
         let video = self.is_video();
         // Riscar é da imagem: o vídeo não tem o que marcar.
         if video { self.pen = false; }
+        self.video_hint = None;
+        if video {
+            // Sem a libmpv não há o que pedir; ela é procurada de novo a cada vídeo, e instalar com o app aberto vale.
+            let mpv = hangar_video::Library::shared().is_ok();
+            let route = if mpv { self.video_source() } else { None };
+            match (page_for(Kind::Video, mpv, route.is_some(), cfg!(target_os = "linux")), route) {
+                (Page::Player, Some(route)) => return self.start_player(route, window, cx),
+                (Page::Poster(hint), _) => self.video_hint = Some(hint),
+                _ => {}
+            }
+        }
         let wanted = if video { self.item().poster.clone() } else { Some(self.item().source.clone()) };
         let Some(source) = wanted else {
             // Vídeo sem quadro: a página dele sem capa, nada a buscar.
@@ -347,8 +394,40 @@ impl Viewer {
         cx.notify();
     }
 
-    /// Tira a imagem do atlas da GPU; sem isso cada imagem vista ficaria lá até a janela fechar.
+    /// Sessão desta máquina toca o próprio arquivo; outra vai pela rota do servidor através da ponte local, que é quem
+    /// leva o token.
+    fn video_source(&self) -> Option<VideoSource> {
+        let source = &self.item().source;
+        match self.uploads.local_path(source) {
+            Some(path) => Some(VideoSource::Local(path.to_string_lossy().into_owned())),
+            None => self.api.media_url(&self.key.name, source).and_then(|(url, token)| Upstream::new(&url, &token)).map(VideoSource::Remote),
+        }
+    }
+
+    /// A página do vídeo com o player do app no palco; a capa não é buscada, o quadro do vídeo a cobre.
+    fn start_player(&mut self, video: VideoSource, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(old) = self.fetching.take() { old.abort(); }
+        self._load = Task::ready(());
+        let runtime = self.runtime.handle().clone();
+        let player = cx.new(|cx| VideoPlayer::new(video, &runtime, cx));
+        self.shown = Shown::Video(None);
+        self.video_aspect = None;
+        // Espaço, setas, m e f são do player assim que a página abre.
+        let focus = player.read(cx).focus();
+        self.player = Some(player);
+        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        cx.notify();
+    }
+
+    /// O foco ao abrir: o player na página do vídeo, o visor nas outras.
+    fn focus_target(&self, cx: &App) -> FocusHandle {
+        self.player.as_ref().map_or_else(|| self.focus.clone(), |player| player.read(cx).focus())
+    }
+
+    /// Tira a imagem do atlas da GPU; sem isso cada imagem vista ficaria lá até a janela fechar. O player sai junto:
+    /// trocar de item ou fechar para o vídeo e solta a libmpv.
     fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(player) = self.player.take() { player.update(cx, |player, cx| player.release(window, cx)); }
         if let Shown::Image(image) | Shown::Video(Some(image)) = std::mem::replace(&mut self.shown, Shown::Loading) { cx.drop_image(image, Some(window)); }
         self.view = None;
         self.drag = None;
@@ -559,8 +638,8 @@ impl Viewer {
         [size, gallery::when(item.ts), gallery::origin_text(item.origin, false)].into_iter().flatten().collect::<Vec<_>>().join(" · ")
     }
 
-    /// Página do vídeo. Hoje: a capa e o botão que entrega o vídeo ao player do sistema. O player do app entra aqui,
-    /// no lugar deste corpo, com o mesmo palco.
+    /// Página do vídeo que não toca no app (sem a libmpv ou sem endereço): a capa, o porquê e o botão que entrega o
+    /// vídeo ao player do sistema.
     fn render_video(&self, poster: Option<Arc<RenderImage>>, cx: &mut Context<Self>) -> AnyElement {
         let openable = composer::openable(&composer::safe_name(&self.item().name));
         div().id("viewer-video").relative().size_full()
@@ -569,6 +648,8 @@ impl Viewer {
                 .child(play_badge(56., 24.))
                 .child(div().max_w(px(VIDEO_W - 48.)).px_3().py_1().rounded_md().bg(theme::scrim()).truncate().text_sm().text_color(theme::text())
                     .child(self.item().name.clone()))
+                .when_some(self.video_hint, |el, hint| el.child(div().max_w(px(VIDEO_W - 48.)).px_3().py_1().rounded_md().bg(theme::scrim())
+                    .whitespace_normal().text_center().text_xs().text_color(theme::muted()).child(tr(hint))))
                 .when(openable, |el| el.child(Button::new("viewer-video-open").primary().small().icon(IconName::ExternalLink)
                     .label(tr("viewer_video_open")).on_click(cx.listener(|this, _, _, cx| this.keep(true, cx))))))
             .into_any_element()
@@ -655,6 +736,13 @@ impl Viewer {
 
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let aspect = self.player.as_ref().and_then(|player| player.read(cx).aspect());
+        let fullscreen = window.is_fullscreen();
+        if (aspect, fullscreen) != (self.video_aspect, self.fullscreen) {
+            // O diálogo já se mediu com o valor velho neste quadro: o próximo o acompanha.
+            (self.video_aspect, self.fullscreen) = (aspect, fullscreen);
+            cx.notify();
+        }
         let limit = limit(window, self.chrome_h());
         if self.limit != Some(limit) {
             // Janela redimensionada: a imagem volta a caber inteira.
@@ -782,7 +870,8 @@ impl Render for Viewer {
                 .child(div().rounded_md().bg(theme::scrim()).child(Button::new(id).ghost().icon(icon).tooltip(label)
                     .on_click(cx.listener(move |this: &mut Self, _, window, cx| this.step(forward, window, cx)))))
         };
-        let stage = viewer_stage(stage_w, stage_h)
+        // O player no palco, sem zoom, arrasto nem caneta: o clique e o teclado são dele.
+        let stage = (if let Some(player) = self.player.clone() { viewer_stage(stage_w, stage_h).child(player) } else { viewer_stage(stage_w, stage_h)
             .when(self.pen, |el| el.cursor(CursorStyle::Crosshair))
             .when(zoomed && !self.pen, |el| el.cursor(if self.drag.is_some() { CursorStyle::ClosedHand } else { CursorStyle::OpenHand }))
             .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
@@ -842,7 +931,7 @@ impl Render for Viewer {
             }, |_, _, _, _| {}).absolute().size_full())
             .child(body)
             .child(ink)
-            .children(notes)
+            .children(notes) })
             .when(total > 1, |el| el
                 .child(edge("viewer-previous", IconName::ChevronLeft, tr("viewer_previous"), false))
                 .child(edge("viewer-next", IconName::ChevronRight, tr("viewer_next"), true)));
@@ -926,7 +1015,8 @@ impl Hangar {
                 if let Some(image) = viewer.shown.picture() { cx.drop_image(image.clone(), None); }
             }).detach();
             Viewer {
-                hangar, api, uploads, runtime, full, key, items, in_conversation, sizes: HashMap::new(), index, shown: Shown::Loading, seq: 0,
+                hangar, api, uploads, runtime, full, key, items, in_conversation, sizes: HashMap::new(), index, shown: Shown::Loading,
+                player: None, video_aspect: None, fullscreen: false, video_hint: None, seq: 0,
                 _load: Task::ready(()), fetching: None,
                 focus: cx.focus_handle(), stage: None, limit: None, held: None, view: None, drag: None,
                 pen: false, pen_color: 0, pen_width: 1, tool: Tool::Rect, marks: Vec::new(), drawing: None, editing: None,
@@ -944,60 +1034,9 @@ impl Hangar {
             dialog.w(px(w + CHROME_W)).margin_top(px(top)).on_ok(enter_to_focused).child(shown.clone())
                 .on_close(move |_, window, cx| closed.update(cx, |viewer, cx| viewer.release(window, cx)))
         });
-        // O kit põe o foco no diálogo ao abrir; as setas e o zoom pelo teclado precisam dele no visor.
-        let focus = viewer.read(cx).focus.clone();
-        window.defer(cx, move |window, cx| window.focus(&focus, cx));
-    }
-}
-
-/// Maior lado do vídeo fora da tela cheia.
-const VIDEO_W: f32 = 960.;
-
-/// Palco do vídeo na proporção dele, dentro do `limit` da janela (inteiro na tela cheia), com largura para os controles.
-fn video_stage(aspect: f32, limit: (f32, f32), full: bool) -> (f32, f32) {
-    let room = (if full { limit.0 } else { limit.0.min(VIDEO_W) }, (limit.1 - crate::video::CONTROLS_H).max(MIN_H));
-    let aspect = if aspect.is_finite() && aspect > 0. { aspect } else { 16. / 9. };
-    let width = room.0.min(room.1 * aspect).max(MIN_W.min(room.0));
-    (width, (width / aspect).min(room.1))
-}
-
-impl Hangar {
-    /// Toca um vídeo da conversa no app, no diálogo do visor. Sessão desta máquina toca o próprio arquivo; outra vai
-    /// pela rota do servidor através da ponte local, que é quem leva o token. Sem a libmpv o player diz o que falta, e
-    /// "Abrir no player do sistema" continua aqui.
-    pub(super) fn open_video(&mut self, key: SessionKey, source: Source, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::video::{Upstream, VideoPlayer, VideoSource};
-        let Some(api) = self.api_for(&key.server) else { return };
-        let name = source_name(&source);
-        let video = match self.uploads_for(&key).local_path(&source) {
-            Some(path) => Some(VideoSource::Local(path.to_string_lossy().into_owned())),
-            None => api.media_url(&key.name, &source).and_then(|(url, token)| Upstream::new(&url, &token)).map(VideoSource::Remote),
-        };
-        let Some(video) = video else {
-            self.action_feedback.insert(key, (tr("video_failed").replace("{reason}", &tr("video_no_route")), true));
-            cx.notify();
-            return;
-        };
-        let runtime = self.runtime.handle().clone();
-        let player = cx.new(|cx| VideoPlayer::new(video, &runtime, cx));
-        let (hangar, shown, closed) = (cx.entity().downgrade(), player.clone(), player.clone());
-        let openable = composer::openable(&composer::safe_name(&name));
-        window.open_dialog(cx, move |dialog, window, cx| {
-            let full = window.is_fullscreen();
-            let (w, h) = video_stage(shown.read(cx).aspect().unwrap_or(16. / 9.), limit(window), full);
-            let top = ((f32::from(window.viewport_size().height) - h - (CHROME_H - EDGE * 2.)) / 2.).max(if full { 0. } else { EDGE });
-            let (hangar, source, file) = (hangar.clone(), source.clone(), name.clone());
-            let header = div().flex().items_center().gap_2().pr(px(36.)).h(px(28.))
-                .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::text()).child(name.clone()))
-                .when(openable, |el| el.child(Button::new("video-open-system").ghost().small().icon(IconName::ExternalLink).label(tr("video_open_system"))
-                    .on_click(move |_, _, cx| { let _ = hangar.update(cx, |hangar, cx| hangar.keep_file(source.clone(), file.clone(), true, cx)); })));
-            let closed = closed.clone();
-            dialog.w(px(w + CHROME_W)).margin_top(px(top)).on_ok(enter_to_focused)
-                .child(div().flex().flex_col().gap_3().child(header)
-                    .child(div().w(px(w)).h(px(h + crate::video::CONTROLS_H + 8.)).child(shown.clone())))
-                .on_close(move |_, window, cx| closed.update(cx, |player, cx| player.release(window, cx)))
-        });
-        let focus = player.read(cx).focus();
+        // O kit põe o foco no diálogo ao abrir; as setas e o zoom pelo teclado precisam dele no visor (no player, na
+        // página do vídeo).
+        let focus = viewer.read(cx).focus_target(cx);
         window.defer(cx, move |window, cx| window.focus(&focus, cx));
     }
 }
@@ -1062,12 +1101,24 @@ mod tests {
     #[test]
     fn video_stage_keeps_the_proportion_and_room_for_the_controls() {
         let stage = super::video_stage;
-        let controls = crate::video::CONTROLS_H;
-        assert_eq!(stage(16. / 9., (1600., 1000.), false), (960., 540.), "fora da tela cheia, até 960");
+        let below = crate::video::CONTROLS_H + super::PLAYER_GAP;
+        assert_eq!(stage(16. / 9., (1600., 1000.), false), (960., 540. + below), "fora da tela cheia, até 960");
         let (w, h) = stage(16. / 9., (1600., 1000.), true);
-        assert!((w / h - 16. / 9.).abs() < 0.01 && h <= 1000. - controls);
+        assert!((w / (h - below) - 16. / 9.).abs() < 0.01 && h <= 1000., "o palco com os controles cabe no limite");
         // Vídeo de celular em pé: a largura não fica menor que a dos controles.
-        assert_eq!(stage(9. / 16., (1600., 700.), false), (MIN_W, 700. - controls));
-        assert_eq!(stage(f32::NAN, (1600., 1000.), false), (960., 540.));
+        assert_eq!(stage(9. / 16., (1600., 700.), false), (MIN_W, 700.));
+        assert_eq!(stage(f32::NAN, (1600., 1000.), false), (960., 540. + below));
+    }
+
+    #[test]
+    fn gallery_video_plays_inside_only_with_libmpv_and_an_address() {
+        use super::{Kind, Page, page_for};
+        assert_eq!(page_for(Kind::Video, true, true, true), Page::Player);
+        assert_eq!(page_for(Kind::Video, false, true, true), Page::Poster("video_need_mpv_linux"), "no Linux, o aviso diz para instalar o mpv");
+        assert_eq!(page_for(Kind::Video, false, true, false), Page::Poster("video_need_mpv"));
+        assert_eq!(page_for(Kind::Video, true, false, true), Page::Poster("video_no_route"));
+        // A imagem não muda com a libmpv.
+        assert_eq!(page_for(Kind::Image, true, true, true), Page::Image);
+        assert_eq!(page_for(Kind::Image, false, false, true), Page::Image);
     }
 }
