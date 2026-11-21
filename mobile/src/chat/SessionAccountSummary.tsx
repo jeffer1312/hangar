@@ -16,7 +16,8 @@ export function SessionAccountSummary({ server, session, label, onPress }: {
   useEffect(() => {
     let active = true;
     setState({ loading: true });
-    void getCredentialsForServer(server, false, undefined, !!session.engine).then(credentials => {
+    const request = session.engine ? getCredentialsForServer(server, false, undefined, true) : getCredentialsForServer(server);
+    void request.then(credentials => {
       if (active) setState({ loading: false, credential: sessionCredential(session, credentials) });
     }).catch(error => {
       if (active) setState({ loading: false, error: error instanceof Error ? error.message : m.native_invalid_response() });
