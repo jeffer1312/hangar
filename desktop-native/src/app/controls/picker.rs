@@ -594,6 +594,9 @@ impl Hangar {
             _ if handoff_tab && !matches!(handoff_state, Some((Some(Ok(_)), _))) => match handoff_state {
                 Some((Some(Err(reason)), _)) => div().p(px(8.)).text_size(px(12.)).text_color(theme::danger())
                     .child(tr("ctl_failed").replace("{reason}", reason)).into_any_element(),
+                // Leitura das contas que falhou, sem nada a caminho: o aviso em vermelho acima diz o motivo, e reabrir
+                // o seletor relê.
+                None if !self.session_accounts().loading && self.session_accounts_notice().is_some() => div().into_any_element(),
                 _ => popup::skeleton("picker-handoff-loading", 4).into_any_element(),
             },
             _ if rows.is_empty() && own_state.is_some() => div().into_any_element(),
