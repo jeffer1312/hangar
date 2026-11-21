@@ -732,7 +732,7 @@ fn update_prune_keeps_current_and_previous_and_skips_in_use() {
 
 #[cfg(windows)]
 #[test]
-fn update_prune_counts_a_running_exe_as_in_use_and_clears_the_leftover_later() {
+fn update_prune_skips_a_version_with_a_running_exe_until_it_exits() {
     let home = tempfile::tempdir().unwrap();
     let layout = Layout::new(home.path());
     let busy = version_dir(&layout, "0.1.0.7");
@@ -753,7 +753,7 @@ fn update_prune_counts_a_running_exe_as_in_use_and_clears_the_leftover_later() {
     assert_eq!(held.in_use.len(), 1);
     assert!(after.failed.is_empty(), "{:?}", after.failed);
     let leftovers: Vec<_> = std::fs::read_dir(layout.versions()).unwrap().map(|e| e.unwrap().file_name()).collect();
-    assert_eq!(leftovers.len(), 1, "a lixeira sai depois que o processo termina: {leftovers:?}");
+    assert_eq!(leftovers.len(), 1, "a versão sai depois que o processo termina, sem lixeira: {leftovers:?}");
 }
 
 #[cfg(target_os = "linux")]

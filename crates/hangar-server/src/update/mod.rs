@@ -367,10 +367,9 @@ pub trait InUse {
 }
 
 /// Em uso de verdade. Linux: algum processo do `/proc` com `exe`, `cwd` ou arquivo mapeado
-/// (`maps`) dentro da pasta; processo que não se deixa ler (outro usuário) é ignorado. Fora do
-/// Linux, não: no Windows quem a poda conta como em uso é o acesso negado, na troca de nome
-/// (processo com a pasta como `cwd`) ou no apagar (executável rodando de dentro dela, que a troca
-/// de nome deixa passar).
+/// (`maps`) dentro da pasta; processo que não se deixa ler (outro usuário) é ignorado. Windows:
+/// algum processo com o executável dentro da pasta, que a troca de nome deixaria passar e o apagar
+/// não; o processo com a pasta como `cwd` a troca de nome já recusa.
 pub struct ProcInUse;
 
 impl InUse for ProcInUse {
@@ -386,7 +385,16 @@ impl InUse for ProcInUse {
         })
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    fn in_use(&self, dir: &Path) -> bool {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        let Ok(dir) = real(dir) else { return false };
+        let mut system = System::new();
+        system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_exe(UpdateKind::Always));
+        system.processes().values().any(|p| p.exe().and_then(|exe| real(exe).ok()).is_some_and(|exe| exe.starts_with(&dir)))
+    }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
     fn in_use(&self, _dir: &Path) -> bool { false }
 }
 
@@ -415,6 +423,7 @@ pub fn prune(layout: &Layout, previous: Option<&Path>, in_use: &dyn InUse) -> Pr
         if name.starts_with(".trash-") {
             match std::fs::remove_dir_all(&path) {
                 Ok(()) => {}
+                // A sobra nasceu de um apagar que falhou e já foi aos avisos; aqui só tenta de novo.
                 Err(e) if held_by_process(&e) => out.in_use.push(path),
                 Err(e) => out.failed.push(format!("a sobra {name} de uma poda anterior não foi apagada: {e}")),
             }
@@ -430,8 +439,6 @@ pub fn prune(layout: &Layout, previous: Option<&Path>, in_use: &dyn InUse) -> Pr
         match to_trash(layout, &path) {
             Ok(trash) => match std::fs::remove_dir_all(&trash) {
                 Ok(()) => out.removed.push(path),
-                // A sobra `.trash-*` sai numa poda seguinte, quando o processo tiver saído.
-                Err(e) if held_by_process(&e) => out.in_use.push(path),
                 Err(e) => out.failed.push(format!("a versão {name} saiu do lugar mas não foi apagada: {e}")),
             },
             Err(e) if held_by_process(&e) => out.in_use.push(path),
