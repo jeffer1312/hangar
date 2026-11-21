@@ -388,7 +388,6 @@ impl Switcher {
     /// `None`: reabriu na mesma conta. Reabrir só resolve token velho na memória com um bom no disco: login
     /// apagado vai direto para outra conta.
     async fn recover_login(&self,host:&dyn Host,hit:&AuthHit) -> Option<Outcome> {
-        if host.handoff_held(&hit.name) { return Some(Outcome::Stayed("limit_switch_handoff")); }
         let spec = match host.spec(&hit.name).await {
             None=>return Some(Outcome::Stayed("limit_switch_not_rust")),
             Some(Err(code))=>return Some(Outcome::Failed(code)),
@@ -398,6 +397,12 @@ impl Switcher {
         let now = host.now();
         let current = host.account_dir(spec.account.config_dir());
         if crate::list::discover::real(&host.account_dir(hit.account.as_deref())) != crate::list::discover::real(&current) { return Some(Outcome::Stayed("limit_switch_stale")); }
+        // Como no limite: a conta fica gasta para as outras sessões, mas reabrir no Claude levaria a fila que a troca de
+        // agente segurou para o Codex.
+        if host.handoff_held(&hit.name) {
+            self.mark_refused(hit,&current,now);
+            return Some(Outcome::Stayed("limit_switch_handoff"));
+        }
         if host.logged_in(&current) && self.first_retry(&hit.name,&current,now) {
             match Self::reopen_when_free(host,&hit.name,&current,||host.reload(&hit.name)).await {
                 Ok(())=>return None,
@@ -405,13 +410,17 @@ impl Switcher {
                 Err(outcome)=>return Some(outcome),
             }
         }
+        self.mark_refused(hit,&current,now);
+        Some(self.move_away(host,&hit.name,&spec,&current).await)
+    }
+
+    fn mark_refused(&self,hit:&AuthHit,current:&str,now:f64) {
         // Conta suspensa ou fora da organização não volta com login refeito nem com token renovado.
         if matches!(hit.code.as_str(),"authentication_failed" | "api_401") {
-            self.spent.mark_login(&current,now + LOGIN_SPENT_S,now);
+            self.spent.mark_login(current,now + LOGIN_SPENT_S,now);
         } else {
-            self.spent.mark(&current,now + LOGIN_SPENT_S,now);
+            self.spent.mark(current,now + LOGIN_SPENT_S,now);
         }
-        Some(self.move_away(host,&hit.name,&spec,&current).await)
     }
 
     /// O recado para continuar; `Some` com o código quando ele não saiu.
@@ -1087,6 +1096,20 @@ mod tests {
         fake.handoff.store(false,std::sync::atomic::Ordering::Relaxed);
         switcher.handle(&fake,hit("/a",2000.0)).await;
         assert_eq!(fake.log()[2..],["reopen /c","release","continue"],"o mesmo aviso vale de novo depois da troca desfeita");
+    }
+
+    /// Login recusado com a troca de agente à espera: a sessão não reabre, mas a conta fica gasta para as outras.
+    #[tokio::test]
+    async fn a_refused_login_during_a_held_handoff_still_marks_the_account_spent() {
+        for code in ["authentication_failed","oauth_org_not_allowed"] {
+            let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",60.0)]);
+            fake.handoff.store(true,std::sync::atomic::Ordering::Relaxed);
+            let switcher = Switcher::default();
+            switcher.handle_auth(&fake,AuthHit { code:code.into(),..refused("/a") }).await;
+            assert!(switcher.spent.is_spent("/a",1500.0),"{code}");
+            assert_eq!(fake.log(),vec!["release"],"{code}: nada reabre");
+            assert_eq!(fake.diary(),vec!["limit_switch_handoff"],"{code}");
+        }
     }
 
     /// "Recebeu o recado" só com a entrega confirmada; sem ela, o diário diz que está na fila da vida nova.
