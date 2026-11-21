@@ -91,6 +91,7 @@ Passos marcados:
 | `2026-11-16-servidor-sobe-sem-python-windows` | tarefa agendada (reinícios) e lançador estável renovado |
 | `2026-11-17-atalhos-windows-sem-python` | regrava no Windows o `hangar-conta.cmd` e os lançadores do Codex que passavam pelo Python |
 | `2026-11-17-vigia-no-lancador-windows` | remove a tarefa `hangar-vigia` e o `.vbs` dela; lançador estável renovado |
+| `2026-11-21-libmpv-video-no-app` | libmpv: pacote do sistema (Linux), Homebrew (macOS), `libmpv-2.dll` ao lado do `Hangar.exe` (Windows) |
 
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
 `install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `hangar-server mcp-register` (conteúdo e

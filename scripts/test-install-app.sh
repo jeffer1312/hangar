@@ -35,7 +35,7 @@ new_sandbox() {
     p=$(command -v "$t" 2>/dev/null) && [ -x "$p" ] && ln -sf "$p" "$S/sys/$t"
   done
   # Sub-scripts do repositório: só registram que foram chamados.
-  for t in install-native.sh install-claude-wrapper.sh services-setup.sh install-hangar-send.sh \
+  for t in install-native.sh install-libmpv.sh install-claude-wrapper.sh services-setup.sh install-hangar-send.sh \
            install-skills-bridge.sh tmux-persist-setup.sh lan-setup.sh install-server-binaries.sh; do
     printf '#!/bin/sh\necho "$0 $*" >> "%s/log/scripts"\nexit 0\n' "$S" > "$R/scripts/$t"
     chmod +x "$R/scripts/$t"

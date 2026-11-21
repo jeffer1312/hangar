@@ -1639,6 +1639,8 @@ if ($SemNativo -and -not $SoChecar) {
     Titulo 'App nativo'
     Ok 'pulado (-SemNativo): o app ja esta nesta maquina'
     Mark-Item 'nativo' 'ok' 'app do Hangar'
+    # A libmpv do player de video nao depende do exe: o install-native.ps1 a poria, e ele nao roda aqui.
+    & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File "$raiz\scripts\install-libmpv.ps1"
 } elseif (-not $SoChecar) {
     Titulo 'App nativo'
     & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File "$raiz\scripts\install-native.ps1"

@@ -884,11 +884,28 @@ fi
 # ── App nativo (desktop-native, release native-latest) ───────────────────────
 # É a única janela de desktop instalada. Falhar aqui não derruba a instalação: o Hangar segue no navegador.
 say "App nativo"
+# A libmpv do player de vídeo vem do gerenciador de pacotes, com root: pelo app_sudo, para o --app pedir a senha
+# na janela dele. Falhar só avisa: o vídeo abre no player do sistema. Depois disso o install-libmpv.sh só confere.
+# Como as outras dependências, o --update não instala.
+LIBMPV_CMD=$(./scripts/install-libmpv.sh --comando 2>/dev/null || true)
+if [ -n "$LIBMPV_CMD" ] && [ "$UPDATE" = 0 ]; then
+  echo "  .. libmpv não encontrada (toca os vídeos dentro do app)"
+  nota "sudo $LIBMPV_CMD     <- precisa de senha de administrador"
+  if ask_senha "Rodar esse comando?"; then
+    # $LIBMPV_CMD sem aspas de propósito: só palavras fixas, sem espaço dentro de nenhuma.
+    app_sudo "instalar a libmpv, que toca os vídeos dentro do app" $LIBMPV_CMD \
+      || falta "a libmpv não instalou — os vídeos abrem no player do sistema (tente: sudo $LIBMPV_CMD)"
+  else
+    falta "sem a libmpv os vídeos abrem no player do sistema (depois: sudo $LIBMPV_CMD)"
+  fi
+fi
+export HANGAR_LIBMPV_SEM_SUDO=1
 if [ "$SEM_NATIVO" = 1 ]; then
   # O próprio app (assistente) se copia para o lugar de sempre; o install-native.sh baixaria a
   # native-latest por cima do binário aberto.
   ok "pulado (--sem-nativo): o app já está nesta máquina"
   mark_item nativo ok "app do Hangar"
+  ./scripts/install-libmpv.sh || true
 else
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) NATIVO_APP="$HOME/.local/bin/hangar-native" ;;
