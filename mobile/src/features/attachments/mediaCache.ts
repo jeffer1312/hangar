@@ -73,7 +73,7 @@ export const isMissing = (e: unknown) => /(status:?|HTTP) 404\b/.test(e instance
 export const isAbort = (e: unknown) => e instanceof Error && e.name === 'AbortError';
 
 function abortError(): Error {
-  const e = new Error('The operation was aborted.');
+  const e = new Error('aborted');
   e.name = 'AbortError';
   return e;
 }

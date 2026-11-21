@@ -5,7 +5,7 @@ import type { DownloadOptions, DownloadProgress } from './mediaCache';
 const FRAME_MS = 100;
 
 function abortError(): Error {
-  const e = new Error('The operation was aborted.');
+  const e = new Error('aborted');
   e.name = 'AbortError';
   return e;
 }

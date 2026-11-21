@@ -65,6 +65,8 @@ vi.mock('../../paraglide/messages', () => ({
   native_pdf_download_failed: ({ reason }: { reason: string }) => `native_pdf_download_failed:${reason}`,
   native_pdf_reader_failed: ({ reason }: { reason: string }) => `native_pdf_reader_failed:${reason}`,
   anexos_fechar_visualizacao: () => 'anexos_fechar_visualizacao',
+  anexos_baixar: ({ nome }: { nome: string }) => `anexos_baixar:${nome}`,
+  arquivo_carregar_erro: () => 'arquivo_carregar_erro',
   comum_carregando: () => 'comum_carregando',
 }));
 
