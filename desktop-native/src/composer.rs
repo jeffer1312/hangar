@@ -83,6 +83,9 @@ pub fn image_format(name: &str) -> Option<ImageFormat> {
     })
 }
 
+/// Tem prévia como imagem: os formatos de `image_format` e o SVG, desenhado aqui sem rede nem arquivo do disco.
+pub fn previewable(name: &str) -> bool { image_format(name).is_some() || extension(name) == "svg" }
+
 pub fn mime_for(name: &str) -> &'static str {
     if let Some(format) = image_format(name) { return format.mime_type(); }
     match extension(name).as_str() {
@@ -96,10 +99,17 @@ pub fn mime_for(name: &str) -> &'static str {
 
 pub fn is_audio(name: &str) -> bool { mime_for(name).starts_with("audio/") }
 
-/// Abrir com o programa do sistema só para tipos passivos; o resto (html, svg, script, atalho) só salva.
+/// Abrir com o programa do sistema vale para todo tipo, menos o que o sistema executaria ou o que roda script: programa,
+/// script, atalho, instalador e documento ativo (html, svg). Esses só salvam: o arquivo pode vir de outra máquina.
 pub fn openable(name: &str) -> bool {
-    image_format(name).is_some() || matches!(extension(name).as_str(),
-        "pdf" | "txt" | "log" | "md" | "json" | "csv" | "mp4" | "m4v" | "mov" | "webm" | "mkv" | "mp3" | "wav" | "ogg" | "m4a" | "flac" | "aac")
+    !matches!(extension(name).as_str(),
+        "html" | "htm" | "xhtml" | "shtml" | "mht" | "mhtml" | "svg" | "svgz" | "xml" | "xsl" | "hta"
+        | "desktop" | "sh" | "bash" | "zsh" | "fish" | "csh" | "ksh" | "command" | "tool" | "run" | "bin" | "appimage" | "out"
+        | "py" | "pyw" | "pl" | "rb" | "php" | "js" | "mjs" | "cjs" | "jse" | "vbs" | "vbe" | "wsf" | "wsh" | "ps1" | "psm1" | "psd1"
+        | "bat" | "cmd" | "com" | "exe" | "scr" | "pif" | "cpl" | "msi" | "msp" | "msc" | "dll" | "sys" | "reg" | "inf" | "lnk" | "url"
+        | "jar" | "jnlp" | "app" | "pkg" | "dmg" | "deb" | "rpm" | "apk" | "workflow" | "scpt" | "applescript" | "terminal" | "webloc"
+        | "library-ms" | "settingcontent-ms" | "appref-ms" | "application" | "gadget" | "ade" | "adp" | "chm" | "crx" | "xpi"
+        | "")
 }
 
 /// Nome de arquivo seguro para gravar no disco local: só o último componente, sem controle nem ponto inicial.
@@ -833,7 +843,7 @@ mod tests {
             let source = format!("[Documento](<{absolute}>) `{relative}` {home}");
             assert_eq!(cited_paths(&source), [absolute, relative, home]);
             assert_eq!(citation_markdown(&source), source);
-            assert_eq!(openable(&format!("report.{ext}")), ext == "pdf");
+            assert!(openable(&format!("report.{ext}")), "{ext} abre no programa do sistema");
             let ignored = format!("https://h/report.{ext} [remoto](https://h/report.{ext}) report.{ext}");
             assert!(cited_paths(&ignored).is_empty());
         }
@@ -947,6 +957,12 @@ mod tests {
         assert_eq!(safe_name("../../.bashrc"), "bashrc");
         assert_eq!(safe_name("C:\\x\\a<b>.txt"), "ab.txt");
         assert!(openable("r.pdf") && !openable("p.html") && !openable("i.svg") && !openable("run.desktop"));
+        for passive in ["a.zip", "b.docx", "c.xlsx", "d.pptx", "e.odt", "f.tar.gz", "g.7z", "h.epub", "i.psd", "j.MP4", "k.png"] {
+            assert!(openable(passive), "{passive} abre");
+        }
+        for active in ["a.sh", "b.EXE", "c.bat", "d.ps1", "e.lnk", "f.jar", "g.app", "h.py", "i.js", "j.htm", "k.AppImage", "semextensao", "l.msi"] {
+            assert!(!openable(active), "{active} só salva");
+        }
         // O corte nunca troca a extensão: o nome gravado é o mesmo tipo que o botão decidiu abrir.
         let tricky = safe_name(&format!("{}.html.pdf", "a".repeat(115)));
         assert!(tricky.ends_with(".pdf") && tricky.chars().count() == 120);

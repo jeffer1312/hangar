@@ -139,6 +139,12 @@ fn safe_ext(filename: &str) -> String {
     if ext.is_empty() { "bin".into() } else { ext }
 }
 
+/// `w` da miniatura pedida a outra máquina: só nas rotas que reduzem, e nunca para GIF.
+fn preview_width(source: &Source, width: u32) -> Option<u32> {
+    let name = match source { Source::Upload(name) | Source::Cited(name) | Source::Workspace(name) => name, _ => return None };
+    (composer::extension(name) != "gif").then_some(width)
+}
+
 /// `save_upload`: nome gerado aqui (segundos + 6 hex), só a extensão vem do arquivo; nunca sobrescreve.
 fn save(dir: &Path, filename: &str, bytes: &[u8]) -> Result<Uploaded, Failure> {
     if bytes.is_empty() { return Err(refusal(400, "arquivo vazio")); }
@@ -213,6 +219,28 @@ impl Uploads {
             Source::Memory(_, bytes) => Some(Ok(bytes.0.to_vec())),
         })).await?;
         match read { Some(result) => result, None => api.fetch(name, source).await }
+    }
+
+    /// Bytes de uma miniatura: daqui, o arquivo do disco, que a decodificação reduz; de outra máquina, a imagem já
+    /// reduzida pelo servidor (`width`), para não trazer o original pela rede só para mostrá-lo pequeno. GIF vem inteiro:
+    /// a redução do servidor guarda só o primeiro quadro, e a miniatura daqui anima.
+    pub(super) async fn fetch_preview(&self, api: &Api, name: &str, source: &Source, width: u32) -> Result<Vec<u8>, Failure> {
+        match self {
+            Uploads::Local { .. } => self.fetch(api, name, source).await,
+            Uploads::Remote => api.fetch_sized(name, source, preview_width(source, width)).await,
+        }
+    }
+
+    /// O arquivo desta máquina por trás do anexo, para abrir no lugar: só anexo do cofre e caminho citado da sessão local.
+    /// Toca no disco: só no clique.
+    pub(super) fn local_path(&self, source: &Source) -> Option<PathBuf> {
+        let Uploads::Local { dir, cwd, .. } = self else { return None };
+        let real = match source {
+            Source::Upload(file) => resolve(dir, file).ok()?,
+            Source::Cited(path) | Source::Workspace(path) => cited(cwd, path)?,
+            Source::Transcript(..) | Source::Remote(_) | Source::Memory(..) => return None,
+        };
+        Some(real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(plain_path(text))))
     }
 
     /// Vídeo sobe pelo backend, que extrai quadros e transcreve a fala; o resto grava aqui e varre os vencidos do projeto.
@@ -413,6 +441,35 @@ mod tests {
         std::os::unix::fs::symlink(root.join("fora.txt"), dir.join("link.txt")).unwrap();
         assert!(resolve(&dir, "dentro.txt").is_ok());
         for name in ["../fora.txt", "link.txt", "a/b", ""] { assert!(resolve(&dir, name).is_err(), "{name}"); }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remote_thumbnails_ask_for_the_reduced_image_except_gif() {
+        use super::{Source, preview_width};
+        assert_eq!(preview_width(&Source::Upload("1-a.png".into()), 480), Some(480));
+        assert_eq!(preview_width(&Source::Cited("/tmp/b.JPG".into()), 480), Some(480));
+        assert_eq!(preview_width(&Source::Workspace("out/c.webp".into()), 300), Some(300));
+        assert_eq!(preview_width(&Source::Cited("/tmp/anima.GIF".into()), 480), None, "GIF anima: vem inteiro");
+        assert_eq!(preview_width(&Source::Transcript("id".into(), 0), 480), None, "rota sem redução");
+        assert_eq!(preview_width(&Source::Remote("https://h/x.png".into()), 480), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_path_opens_the_real_file_only_inside_the_session() {
+        let root = std::env::temp_dir().join(format!("hangar-local-path-{}", std::process::id()));
+        let (dir, cwd) = (root.join("cofre"), root.join("repo"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(cwd.join("out")).unwrap();
+        std::fs::write(dir.join("1-a.pdf"), b"x").unwrap();
+        std::fs::write(cwd.join("out/r.pdf"), b"x").unwrap();
+        let local = super::Uploads::Local { dir: dir.clone(), cwd: std::fs::canonicalize(&cwd).unwrap(), jsonl: PathBuf::new() };
+        assert_eq!(local.local_path(&super::Source::Upload("1-a.pdf".into())), Some(std::fs::canonicalize(dir.join("1-a.pdf")).unwrap()));
+        assert_eq!(local.local_path(&super::Source::Cited("out/r.pdf".into())), Some(std::fs::canonicalize(cwd.join("out/r.pdf")).unwrap()));
+        assert_eq!(local.local_path(&super::Source::Upload("../repo/out/r.pdf".into())), None);
+        assert_eq!(local.local_path(&super::Source::Cited("../cofre/1-a.pdf".into())), None);
+        assert_eq!(super::Uploads::Remote.local_path(&super::Source::Upload("1-a.pdf".into())), None, "de outra máquina sempre copia");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

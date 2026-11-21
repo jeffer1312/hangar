@@ -10521,6 +10521,8 @@
   "file_card_no_app": "No app on this device opens this file",
   "native_file_card_open_browser": "Open in browser",
   "native_file_card_page_failed": "Couldn't open in the browser",
+  "native_file_card_show_in_folder": "Show in folder",
+  "native_file_no_preview": "This file type has no preview here.",
   "file_page_too_large": "The HTML is over 512 thousand characters and can't open as a page.",
   "file_page_not_utf8": "The HTML isn't UTF-8 and can't open as a page.",
   "file_page_not_html": "Only .html or .htm files open in the browser.",

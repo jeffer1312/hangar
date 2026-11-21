@@ -17,6 +17,21 @@ const GIF_FRAMES: usize = 240;
 
 pub enum MediaState { Loading, Image(Arc<RenderImage>), Failed(String) }
 
+/// Lado menor da maior caixa de miniatura da conversa (a prévia de 320×240 com `contain`). A bolha do usuário (96 px)
+/// usa a mesma: as duas dividem o cache, e uma miniatura pedida menor ficaria borrada na prévia.
+pub const THUMB_BOX_SIDE: f32 = 240.;
+// SVG não tem tamanho de pixel: o lado maior fica entre estes, e vetor ampliado continua nítido.
+const SVG_MIN_SIDE: f32 = 512.;
+const SVG_MAX_SIDE: f32 = 4096.;
+
+/// `w` das rotas de miniatura do servidor (o lado menor da imagem reduzida, de 16 a 1024): a caixa em pixels da tela.
+pub fn thumb_width(side: f32, scale: f32) -> u32 {
+    let scale = if scale.is_finite() && scale > 0. { scale } else { 1. };
+    let physical = side * scale;
+    if !physical.is_finite() { return 1024; }
+    (physical.ceil().max(0.) as u32).clamp(16, 1024)
+}
+
 // Fundo de tela: o arquivo escolhido é copiado inteiro até este tamanho e desenhado reduzido a este lado.
 pub const BACKDROP_MAX_BYTES: u64 = 25 * 1024 * 1024;
 const BACKDROP_SIDE: u32 = 2560;
@@ -54,7 +69,7 @@ fn limits() -> Limits {
 
 /// A imagem inteira, com limite de memória e já de pé pela orientação EXIF (foto de celular): é assim que ela aparece.
 pub(crate) fn oriented(bytes: &[u8]) -> Option<DynamicImage> {
-    let format = sniff(bytes)?;
+    let Some(format) = sniff(bytes) else { return svg(bytes) };
     // GIF aqui guarda só o 1º quadro; quem anima é `animated`.
     let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
     reader.limits(limits());
@@ -63,6 +78,46 @@ pub(crate) fn oriented(bytes: &[u8]) -> Option<DynamicImage> {
     let mut picture = DynamicImage::from_decoder(decoder).ok()?;
     picture.apply_orientation(orientation);
     Some(picture)
+}
+
+/// Só o começo do arquivo: um XML que abre com `<svg` (depois de declaração, comentário ou doctype).
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(4096)];
+    let head = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
+    let start = head.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(head.len());
+    head[start..].starts_with(b"<") && head.windows(4).any(|w| w == b"<svg")
+}
+
+/// SVG rasterizado aqui. `<image>` que aponta para arquivo do disco não é lido (o SVG pode vir de outra máquina e
+/// desenharia um arquivo desta), e o texto sai com a fonte do app, igual em toda máquina.
+fn svg(bytes: &[u8]) -> Option<DynamicImage> {
+    use resvg::{tiny_skia, usvg};
+    static FONTS: std::sync::OnceLock<Arc<usvg::fontdb::Database>> = std::sync::OnceLock::new();
+    if !looks_like_svg(bytes) { return None; }
+    let mut options = usvg::Options::default();
+    options.image_href_resolver.resolve_string = Box::new(|_: &str, _: &usvg::Options| -> Option<usvg::ImageKind> { None });
+    options.fontdb = FONTS.get_or_init(|| {
+        let mut fonts = usvg::fontdb::Database::new();
+        fonts.load_font_data(include_bytes!("../assets/fonts/Geist-SemiBold.ttf").to_vec());
+        fonts.load_font_data(include_bytes!("../assets/fonts/Geist-Bold.ttf").to_vec());
+        Arc::new(fonts)
+    }).clone();
+    let tree = usvg::Tree::from_data(bytes, &options).ok()?;
+    let size = tree.size();
+    let long = size.width().max(size.height());
+    if !long.is_finite() || long <= 0. { return None; }
+    let scale = long.clamp(SVG_MIN_SIDE, SVG_MAX_SIDE) / long;
+    let (w, h) = ((size.width() * scale).ceil().max(1.) as u32, (size.height() * scale).ceil().max(1.) as u32);
+    let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
+    resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    // O tiny-skia guarda alfa pré-multiplicado; o resto do caminho espera alfa reto.
+    let mut data = pixmap.take();
+    for pixel in data.chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        if alpha == 0 || alpha == 255 { continue; }
+        for channel in &mut pixel[..3] { *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8; }
+    }
+    RgbaImage::from_raw(w, h, data).map(DynamicImage::ImageRgba8)
 }
 
 /// Decodifica com limite de memória e reduz ao lado pedido; `None` = bytes que não são imagem legível.
@@ -228,6 +283,13 @@ impl<K: Eq + Hash + Clone + std::fmt::Debug> MediaCache<K> {
         evicted
     }
 
+    /// Tira a falha guardada para a próxima leitura buscar de novo. Só a falha: imagem ou busca em curso ficam.
+    pub fn retry(&mut self, key: &K) -> bool {
+        if !self.map.get(key).is_some_and(|entry| matches!(entry.state, MediaState::Failed(_))) { return false; }
+        if let Some(entry) = self.map.remove(key) { self.bytes -= cost(&entry.state); }
+        true
+    }
+
     /// Esvazia tudo (inclusive o que estava "Carregando") e devolve as imagens para liberar.
     pub fn clear(&mut self) -> Vec<Arc<RenderImage>> {
         self.bytes = 0;
@@ -270,6 +332,51 @@ mod tests {
         assert_eq!(evicted.len(), 1);
         assert!(cache.contains(&0) && cache.contains(&1) && !cache.contains(&2));
         assert!(cache.bytes <= BUDGET);
+    }
+
+    #[test]
+    fn retry_drops_only_a_failure() {
+        let mut cache = MediaCache::new();
+        cache.insert(0, MediaState::Failed("x".into()));
+        cache.insert(1, picture(4));
+        cache.start(2);
+        assert!(cache.retry(&0) && !cache.contains(&0), "a falha sai e a próxima leitura busca de novo");
+        assert!(!cache.retry(&1) && cache.contains(&1), "imagem pronta fica");
+        assert!(!cache.retry(&2) && cache.contains(&2), "busca em curso fica");
+        assert!(!cache.retry(&3));
+        assert_eq!(cache.bytes, 4 * 4 * 4);
+    }
+
+    #[test]
+    fn thumb_width_is_the_box_in_screen_pixels_within_the_server_range() {
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, 1.), 240);
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, 2.), 480);
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, 1.25), 300);
+        assert_eq!(thumb_width(96., 1.5), 144);
+        assert_eq!(thumb_width(900., 2.), 1024, "teto do servidor");
+        assert_eq!(thumb_width(4., 1.), 16, "piso do servidor");
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, 0.), 240, "escala inválida vale 1");
+        assert_eq!(thumb_width(THUMB_BOX_SIDE, f32::NAN), 240);
+    }
+
+    #[test]
+    fn svg_is_rasterized_without_reading_files_from_disk() {
+        let square = br#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12" fill="#ff0000"/></svg>"#;
+        let image = oriented(square).unwrap();
+        assert_eq!((image.width(), image.height()), (512, 256), "ícone pequeno amplia até o piso, na proporção");
+        assert_eq!(image.to_rgba8().get_pixel(10, 10).0, [255, 0, 0, 255]);
+        let thumb = thumbnail(square).unwrap();
+        assert_eq!((thumb.size(0).width.0, thumb.size(0).height.0), (512, 256));
+        let secret = std::env::temp_dir().join(format!("hangar-svg-{}.png", std::process::id()));
+        let mut png = Vec::new();
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb([0, 255, 0]))).write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+        std::fs::write(&secret, png).unwrap();
+        let linked = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="8" height="8"><image width="8" height="8" xlink:href="{}"/></svg>"#, secret.display());
+        let drawn = oriented(linked.as_bytes()).unwrap().to_rgba8();
+        assert_eq!(drawn.get_pixel(100, 100).0[3], 0, "o arquivo do disco não entra na imagem");
+        let _ = std::fs::remove_file(&secret);
+        assert!(oriented(b"<html><body>svg</body></html>").is_none());
+        assert!(oriented(b"texto qualquer <svg").is_none());
     }
 
     #[test]

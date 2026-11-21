@@ -10521,6 +10521,8 @@
   "file_card_no_app": "Nenhum app do aparelho abre este arquivo",
   "native_file_card_open_browser": "Abrir no navegador",
   "native_file_card_page_failed": "Não deu para abrir no navegador",
+  "native_file_card_show_in_folder": "Mostrar na pasta",
+  "native_file_no_preview": "Este tipo de arquivo não tem prévia aqui.",
   "file_page_too_large": "O HTML passa de 512 mil caracteres e não abre como página.",
   "file_page_not_utf8": "O HTML não está em UTF-8 e não abre como página.",
   "file_page_not_html": "Só arquivo .html ou .htm abre no navegador.",
