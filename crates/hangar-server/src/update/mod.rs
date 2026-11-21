@@ -413,8 +413,10 @@ pub fn prune(layout: &Layout, previous: Option<&Path>, in_use: &dyn InUse) -> Pr
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with(".trash-") {
-            if let Err(e) = std::fs::remove_dir_all(&path) && !held_by_process(&e) {
-                out.failed.push(format!("a sobra {name} de uma poda anterior não foi apagada: {e}"));
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => {}
+                Err(e) if held_by_process(&e) => out.in_use.push(path),
+                Err(e) => out.failed.push(format!("a sobra {name} de uma poda anterior não foi apagada: {e}")),
             }
             continue;
         }
