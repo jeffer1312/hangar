@@ -179,6 +179,14 @@ impl Controls {
         if let Some(open) = self.open.as_mut().filter(|o| &o.key == key && o.ctl == Ctl::Model)
             && let Some(Ok(catalog)) = open.catalog.as_mut() { catalog["current"]["service_tier"] = json!(tier); }
     }
+
+    /// O seletor segue aberto depois do esforço do Codex: o catálogo passa a marcar o nível confirmado, senão o anterior
+    /// seguiria marcado e não daria para voltar a ele.
+    fn confirm_codex_effort(&mut self, key: &SessionKey, effort: &str) {
+        if let Some(known) = self.known.get_mut(&(key.clone(), Ctl::Model)) && known["current"].is_object() { known["current"]["effort"] = json!(effort); }
+        if let Some(open) = self.open.as_mut().filter(|o| &o.key == key && o.ctl == Ctl::Model)
+            && let Some(Ok(catalog)) = open.catalog.as_mut() && catalog["current"].is_object() { catalog["current"]["effort"] = json!(effort); }
+    }
 }
 
 // Modo conhecido aparece traduzido; valor que o backend inventar depois aparece cru.
@@ -843,6 +851,8 @@ impl Hangar {
                         }
                         let pending = value.get("pending_confirm").is_some_and(|v| !v.is_null());
                         let partial = value.get("effort_error").is_some_and(|v| !v.is_null());
+                        let codex = self.selected_key().as_ref() == Some(&key) && self.provider().0 == "codex";
+                        if codex && ctl == Ctl::Effort && !pending && !partial { self.controls.confirm_codex_effort(&key, &label); }
                         if claude_fast && !pending { self.controls.confirm_claude_fast(&key, &label); }
                         if ctl == Ctl::Model && !pending {
                             if claude_model_action {
@@ -1025,24 +1035,28 @@ impl Hangar {
         if self.selected_key().is_some_and(|key| self.controls.busy.contains_key(&key)) { return; }
         let n = row.unwrap_or_else(|| self.ctl_highlight(&choices));
         let Some(choice) = choices.into_iter().nth(n).filter(|c| c.enabled) else { return; };
-        if choice.pick == picker::Pick::More {
-            self.controls.picker_more = true;
-            self.controls.highlight = Some(n);
-            cx.notify();
-            return;
+        match choice.pick {
+            // "Mostrar mais" fica no seletor; a troca e a escolha devolvem o foco ao campo.
+            picker::Pick::More => {
+                self.controls.picker_more = true;
+                self.controls.highlight = Some(n);
+                cx.notify();
+            }
+            picker::Pick::Handoff { credential, model, effort } => {
+                self.composer.update(cx, |input, cx| input.focus(window, cx));
+                self.request_handoff(credential, model, effort, cx);
+            }
+            picker::Pick::Apply => {
+                self.composer.update(cx, |input, cx| input.focus(window, cx));
+                if choice.current { self.close_controls(); cx.notify(); return; }
+                // Escolha no painel vence o rótulo segurado do último Shift+Tab.
+                if ctl == Ctl::Mode && let Some(key) = self.selected_key() {
+                    self.controls.applied.remove(&(key.clone(), ctl));
+                    self.controls.mode_target.remove(&key);
+                }
+                self.apply_ctl(ctl, choice.path, choice.body, choice.label, cx);
+            }
         }
-        self.composer.update(cx, |input, cx| input.focus(window, cx));
-        if let picker::Pick::Handoff { credential, model, effort } = choice.pick {
-            self.request_handoff(credential, model, effort, cx);
-            return;
-        }
-        if choice.current { self.close_controls(); cx.notify(); return; }
-        // Escolha no painel vence o rótulo segurado do último Shift+Tab.
-        if ctl == Ctl::Mode && let Some(key) = self.selected_key() {
-            self.controls.applied.remove(&(key.clone(), ctl));
-            self.controls.mode_target.remove(&key);
-        }
-        self.apply_ctl(ctl, choice.path, choice.body, choice.label, cx);
     }
 
     // Um destaque só: o ponteiro move o do teclado. A atual leva o fundo accent e o tique; `inline` põe a origem ao lado
