@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-pub(super) const FIELDS: [&str; 17] = [
+pub(super) const FIELDS: [&str; 18] = [
     "cwd",
     "provider",
     "config_dir",
