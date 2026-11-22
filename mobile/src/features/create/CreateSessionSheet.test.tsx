@@ -321,10 +321,13 @@ function createRoot(container: Element): Root {
 
 describe('CreateSessionSheet Codex', () => {
   afterEach(async () => {
-    for (const root of mountedRoots) await act(async () => root.unmount());
-    mountedRoots.clear();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
+    try {
+      for (const root of mountedRoots) await act(async () => root.unmount());
+    } finally {
+      mountedRoots.clear();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
   });
   beforeEach(() => {
     calls.contextFetch.mockReset().mockImplementation(async () => new Response(JSON.stringify({ contexto_estendido: true })));
