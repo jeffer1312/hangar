@@ -3942,12 +3942,12 @@ function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
       // "Esta rota só existe pra Claude" é resposta FINAL pra esta sessão, não falha transitória:
       // cacheia a recusa pelo mesmo TTL. Sem isto cada montagem do Composer numa sessão Pi/Kimi
       // repetia o GET e o 400 (medido: 516 numa semana).
-      if ((e as { code?: string })?.code === 'erro_rota_so_claude') {
+      if ((_catEpoca.get(sessao) ?? 0) === epoca && (e as { code?: string })?.code === 'erro_rota_so_claude') {
         _catCache.set(key, { at: Date.now(), data: e, recusa: true });
       }
       throw e;
     })
-    .finally(() => { _catEmVoo.delete(key); });
+    .finally(() => { if (_catEmVoo.get(key) === p) _catEmVoo.delete(key); });
   _catEmVoo.set(key, p);
   return p;
 }
@@ -3957,6 +3957,7 @@ function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
 function _invalidarCatalogo(name: string): void {
   _catEpoca.set(name, (_catEpoca.get(name) ?? 0) + 1);
   for (const k of _catCache.keys()) if (k.endsWith(`|${name}`)) _catCache.delete(k);
+  for (const k of _catEmVoo.keys()) if (k.endsWith(`|${name}`)) _catEmVoo.delete(k);
 }
 
 export function getModelOptions(name: string, server?: Server | null, options?: { fresh?: boolean; refresh?: boolean }): Promise<ModelOptionsResponse> {
@@ -3986,7 +3987,7 @@ export function switchClaudeProvider(server: Server, name: string, selection: Cl
   return apiFetchForServer<ClaudeProviderTarget & { ok: boolean; model: string; service_tier: 'default' }>(server,
     `/api/sessions/${encodeURIComponent(name)}/engine/provider`, {
       method: 'POST', body: JSON.stringify(selection),
-    }, 720_000).then(withSessionWarnings);
+    }, 720_000).then(withSessionWarnings).finally(() => _invalidarCatalogo(name));
 }
 
 // Fast da sessão viva (POST .../service-tier); `priority` liga, `default` volta ao padrão da conta.

@@ -1718,9 +1718,9 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     let home_text = home_text.strip_prefix(r"\\?\").unwrap_or(&home_text).to_owned();
     assert_eq!(command[..12], ["hangar-engine", "--exec", "gpt", "--account", "work", "--account-home", &home_text,
         "--account-base-url", &format!("http://127.0.0.1:{port}"), "--model", "gpt-5.5", "--context"]);
-    // Normal é a falta do campo: o pane só leva `--service-tier` com Fast ou Ultra Fast.
+    assert!(!command.contains(&"--service-tier".to_owned()));
     let normal = SessionSpec { service_tier: Some(ServiceTier::Default), ..spec.clone() };
-    assert!(!claude::pane(&normal, "sid", &ctx).command.contains(&"--service-tier".to_owned()));
+    assert!(claude::pane(&normal, "sid", &ctx).command.windows(2).any(|w| w == ["--service-tier", "default"]));
     let fast = SessionSpec { service_tier: Some(ServiceTier::Priority), ..spec.clone() };
     assert!(claude::pane(&fast, "sid", &ctx).command.windows(2).any(|w| w == ["--service-tier", "priority"]));
     assert_eq!(route.credential_id, format!("codex:{}", crate::accounts::catalog::resolved(&home.join(".codex-work")).to_string_lossy()));

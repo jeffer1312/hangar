@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
-import { parseStatusLine } from '@hangar/core';
+import { parseStatusLine, type ClaudeProviderSource } from '@hangar/core';
 import { chatStore } from '../stores/chat';
 import { useSessions } from '../stores/sessions';
 import { useServers } from '../stores/servers';
@@ -61,6 +61,14 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   const source = session?.lifecycle_id && session.jsonl && !session.guest_kind && canSwitchAccount
     ? { lifecycle_id: session.lifecycle_id, jsonl: session.jsonl, headless: !!session.headless, engine: session.engine ?? null,
       engine_account: session.engine_account ?? null, engine_binding: session.engine_binding ?? null } : null;
+  const providerCatalog = source && server && providerInventory.result?.inventory?.claude_provider_switch ? providerInventory.result.inventory : null;
+  const applyProviderModel = (id: string, origin: ClaudeProviderSource) => {
+    const current = useSessions.getState().rows.find(row => row.serverId === serverId && row.name === name);
+    const connected = useServers.getState().servers.find(row => row.id === serverId);
+    if (current?.jsonl !== origin.jsonl || current.lifecycle_id !== origin.lifecycle_id || current.provider !== 'claude'
+      || connected?.baseUrl !== server?.baseUrl || connected?.token !== server?.token) return;
+    setChosen({ model: id }); setDetail(null); setOpen(false);
+  };
   const afterDismiss = useRef<(() => void) | null>(null);
   const { height } = useWindowDimensions();
   const close = useCallback(() => { if (!providerBusy) setOpen(false); }, [providerBusy]);
@@ -158,14 +166,14 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
           : detail === 'providers' ? m.native_claude_provider_picker() : m.native_session_settings_title()}
         subtitle={`${model.display}${effort.value ? ` · ${effortLabel(effort.value)}` : ''}`}
         tab={detail ? undefined : tab} onTab={next => { setTab(next); setDetail(null); }}
-        onBack={detail && detail !== 'providers' && !providerBusy ? () => setDetail(null) : undefined} onClose={close}
+        onBack={detail && (detail !== 'providers' || !providerCatalog) && !providerBusy ? () => setDetail(null) : undefined} onClose={close}
         footer={tab === 'model' && !detail && !effort.hidden ? <SessionSettingsLink label={m.native_new_chat_reasoning()}
           value={effort.value ? effortLabel(effort.value) : '—'} disabled={effort.loading || model.loading} onPress={() => setDetail('effort')} /> : undefined}>
           {tab === 'model' ? <SessionSettingsContent title={!detail ? m.native_ctl_featured_models() : undefined}>
-            {detail === 'providers' ? source && server && providerInventory.result?.inventory?.claude_provider_switch
+            {detail === 'providers' ? source && server && providerCatalog
               ? <ClaudeProviderSettings key={JSON.stringify([serverId, name])} server={server} name={name} source={source}
-                  ready={session?.state === 'idle'} inventory={providerInventory.result.inventory} onBusy={setProviderBusy}
-                  onApplied={id => { setChosen({ model: id }); setDetail(null); setOpen(false); }} onCancel={() => setDetail(null)}
+                  ready={session?.state === 'idle'} inventory={providerCatalog} onBusy={setProviderBusy}
+                  onApplied={applyProviderModel} onCancel={() => setDetail(null)}
                   reloadProviders={providerInventory.reload} />
               : source && !providerInventory.result ? <Skeleton rows={2} />
               : providerInventory.result?.failed ? <Failure text={m.native_claude_provider_read_failed()} onRetry={providerInventory.reload} />

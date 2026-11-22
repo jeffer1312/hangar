@@ -61,11 +61,14 @@ pub fn transcript(env: &AccountEnvironment, spec: &SessionSpec, sid: &str) -> Pa
 pub(crate) fn transcript_in(base: &Path, cwd: &str, sid: &str) -> PathBuf {
     let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(cwd)).join(format!("{sid}.jsonl"));
     if expected.exists() { return expected; }
-    let moved = std::fs::read_dir(base).into_iter().flatten().flatten()
-        .map(|dir| dir.path().join(format!("{sid}.jsonl")))
+    moved_transcript(base, &format!("{sid}.jsonl")).ok().flatten().unwrap_or(expected)
+}
+
+pub(crate) fn moved_transcript(base: &Path, file: &str) -> std::io::Result<Option<PathBuf>> {
+    Ok(std::fs::read_dir(base)?.flatten()
+        .map(|dir| dir.path().join(file))
         .filter_map(|path| path.metadata().ok().filter(|meta| meta.is_file()).and_then(|meta| meta.modified().ok()).map(|at| (at, path)))
-        .max();
-    moved.map_or(expected, |(_, path)| path)
+        .max().map(|(_, path)| path))
 }
 
 /// `permissions.defaultMode` do `settings.json` da conta (a do servidor sem pasta própria), como a
@@ -113,7 +116,7 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
             tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
             None
         }
-        Some(tier) if ctx.fast => Some(tier),
+        Some(tier) if ctx.fast || (tier == crate::session_open::ServiceTier::Default && matches!(spec.account, Account::Engine { binding: Some(_), .. })) => Some(tier),
         _ => None,
     };
     let resume = transcript(ctx.env, spec, sid).exists();

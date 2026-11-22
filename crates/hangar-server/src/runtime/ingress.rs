@@ -67,6 +67,11 @@ impl IngressGates {
         self.close_as(name, wait, true, false, true, true).await
     }
     pub(super) fn release_provider_switch(&self, name: &str) { self.reopen(name, true, false, true); }
+    pub(super) fn unless_provider_switch<T>(&self, name: &str, reserve: impl FnOnce() -> Option<T>) -> Option<T> {
+        let map = self.inner.lock().unwrap();
+        if map.get(name).is_some_and(|g| g.holds > 0 && g.exclusive > 0) { return None; }
+        reserve()
+    }
     /// Fechamento retido: enquanto durar, `enter` recusa sem esperar. Desfeito por `release`.
     pub async fn hold(&self, name: &str, wait: Duration) -> Result<(), IngressBusy> { self.close_as(name, wait, true, false, false, false).await.map_err(|_| IngressBusy) }
     /// Retenção da transferência: também recusa e espera os repasses ao Python. Desfeita por `release_transfer`.
@@ -158,6 +163,8 @@ mod tests {
         assert!(gates.hold_provider_switch("chat", wait).await.is_err());
         gates.open("chat");
         gates.hold_provider_switch("chat", wait).await.unwrap();
+        assert_eq!(gates.unless_provider_switch("chat", || Some(1)), None);
+        assert_eq!(gates.unless_provider_switch("other", || Some(1)), Some(1));
         assert!(gates.close_unless_held("chat", wait).await.is_err());
         assert!(gates.hold_transfer("chat", wait).await.is_err());
         assert!(gates.close("chat", wait).await.is_err());

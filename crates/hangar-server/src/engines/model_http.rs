@@ -26,6 +26,10 @@ fn catalog_failure(code: &str) -> Response {
         "Não consegui consultar os modelos. Tente atualizar o catálogo novamente.", json!({"cause":code})).response()
 }
 
+pub(crate) fn provider_model_id(model: &str) -> bool {
+    !model.contains(['/', '[', ']']) && crate::session_open::resolve::valid_model(model)
+}
+
 pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) -> Option<Response> {
     if method!=Method::GET {return None;}
     let params:HashMap<String,String>=form_urlencoded::parse(query.unwrap_or("").as_bytes()).into_owned().collect();
@@ -85,7 +89,8 @@ pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) 
                         _ => return Some(json_response(StatusCode::CONFLICT, crate::session_open::OpenError::new(409, "erro_cliproxy_conta", "A conta vinculada mudou. Escolha novamente.").body())),
                     }
                 }
-                let models=catalog::picker(&st.accounts,engine,account,models);
+                let mut models=catalog::picker(&st.accounts,engine,account,models);
+                if route.is_some() { models.retain(|row| row["id"].as_str().is_some_and(provider_model_id)); }
                 let fast=models.iter().any(|m|m["supports_fast"]==true);
                 let ultrafast=models.iter().any(|m|m["supports_ultrafast"]==true);
                 let engines = store::state(&st.accounts.env).0;

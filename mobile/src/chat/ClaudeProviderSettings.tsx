@@ -50,7 +50,7 @@ export function ClaudeProviderSettings({ server, name, source, ready, inventory,
   source: ClaudeProviderSource;
   ready: boolean;
   inventory: EnginesResponse;
-  onApplied: (model: string) => void;
+  onApplied: (model: string, origin: ClaudeProviderSource) => void;
   onCancel: () => void;
   onBusy: (busy: boolean) => void;
   reloadProviders: () => void;
@@ -82,7 +82,11 @@ export function ClaudeProviderSettings({ server, name, source, ready, inventory,
     setChoice(row); setModel(null); setCatalog(null); setError(null); setCatalogFailed(false);
     void claudeProviderModels(server, row.target, controller.signal).then(
       models => { if (!controller.signal.aborted) setCatalog(models); },
-      () => { if (!controller.signal.aborted) { setCatalogFailed(true); setError(m.native_claude_provider_read_failed()); } },
+      (reason: unknown) => {
+        if (controller.signal.aborted) return;
+        setCatalogFailed(true);
+        setError(reason instanceof Error && reason.message ? reason.message : m.native_claude_provider_read_failed());
+      },
     );
   };
   const matching = rows.find(row => row.engine === choice?.engine && row.target?.engine_binding === choice?.target?.engine_binding
@@ -104,7 +108,7 @@ export function ClaudeProviderSettings({ server, name, source, ready, inventory,
         setError(m.native_claude_provider_changed());
         return;
       }
-      if (mounted.current) onApplied(result.model);
+      if (mounted.current) onApplied(result.model, origin);
     } catch (reason) {
       if (mounted.current) setError(reason instanceof Error && reason.message ? reason.message : m.native_claude_provider_changed());
     } finally {

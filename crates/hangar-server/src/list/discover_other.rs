@@ -595,18 +595,15 @@ fn headless_transcript(cwd: &str, sid: &str, config_dir: Option<&str>, dirs: &Di
         return expected.to_string_lossy().into_owned();
     }
     let moved = found_or_scan(&HEADLESS_FOUND, (base.clone(), file.clone()), || {
-        let entries = match std::fs::read_dir(&base) {
-            Ok(entries) => entries,
+        match crate::runtime::claude_launch::moved_transcript(&base, &file) {
+            Ok(found) => found.map(|path| path.to_string_lossy().into_owned()),
             Err(error) => {
                 if error.kind() != std::io::ErrorKind::NotFound {
                     problems.note("list_projects_unreadable", &base.to_string_lossy(), "pasta projects ilegível; transcript da sessão sem terminal pelo caminho esperado");
                 }
-                return None;
+                None
             }
-        };
-        let mut moved: Vec<PathBuf> = entries.flatten().map(|d| d.path().join(&file)).filter(|p| p.exists()).collect();
-        moved.sort();
-        moved.into_iter().next().map(|p| p.to_string_lossy().into_owned())
+        }
     });
     moved.unwrap_or_else(|| expected.to_string_lossy().into_owned())
 }

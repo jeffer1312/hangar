@@ -914,6 +914,36 @@ fn a_switch_cut_in_the_middle_settles_on_the_account_holding_the_conversation() 
     assert!(!specs.join(format!("{key}.switching")).exists());
 }
 
+#[test]
+fn interrupted_provider_switch_keeps_the_target_binding_until_every_record_is_written() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "ab".repeat(16);
+    let specs = fx.home.join(".hangar/session-specs");
+    std::fs::create_dir_all(&specs).unwrap();
+    let mark = specs.join(format!("{key}.provider-switch"));
+    let record = specs.join(format!("{key}.json"));
+    let binding = "bound-target";
+    std::fs::write(&mark, json!({"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"headless",
+        "account":{"kind":"engine","name":"target","account":"target-account","binding":binding},"account_source":"explicit",
+        "model":"gpt-target","service_tier":"default","permission_mode":"acceptEdits","jev":false,"read_only":false,
+        "created_at":1.0,"conversation":SID}).to_string()).unwrap();
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits"}));
+    std::fs::create_dir(&record).unwrap();
+    let env = AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned())].into());
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    assert!(mark.is_file());
+    std::fs::remove_dir(&record).unwrap();
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let sidecar: Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!(sidecar["engine_binding"], binding);
+    assert_eq!(sidecar["engine_account"], "target-account");
+    assert_eq!(sidecar["session_id"], SID);
+    let archived: Value = serde_json::from_slice(&std::fs::read(specs.join("conversations").join(format!("{SID}.json"))).unwrap()).unwrap();
+    assert_eq!(archived["account"]["binding"], binding);
+    assert!(!mark.exists());
+}
+
 /// Até `check` valer, com teto generoso: o teto só estoura se o código travar.
 async fn until<F:std::future::Future<Output=bool>>(what:&str,mut check:impl FnMut()->F) {
     let deadline = std::time::Instant::now()+Duration::from_secs(30);

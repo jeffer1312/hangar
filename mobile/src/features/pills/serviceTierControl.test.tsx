@@ -171,7 +171,10 @@ it('layout A abre todos os modelos e o raciocínio e volta ao resumo após aplic
   expect(container.querySelectorAll('[role="radio"]')).toHaveLength(3);
 });
 
-it('escolhe o modelo da conta e confirma sem perder o resultado da lista ao vivo', async () => {
+it.each([
+  ['a mesma conversa', false],
+  ['outra conversa no mesmo nome', true],
+])('reconcilia a confirmação com %s', async (_case, replaced) => {
   const source = { lifecycle_id: 'k:claude', jsonl: '/example/conversation.jsonl', headless: false, engine: null, engine_account: null, engine_binding: null };
   state.rows[0] = { ...state.rows[0], provider: 'claude', ...source };
   api.engines.mockResolvedValue({ claude_provider_switch: true, motores: {
@@ -205,10 +208,15 @@ it('escolhe o modelo da conta e confirma sem perder o resultado da lista ao vivo
   await click('native_claude_provider_confirm');
   const destination = { engine: 'plus', engine_account: 'plus-account', engine_binding: 'bound-plus', model: 'gpt-plus' };
   expect(api.providerWrite).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'sess', { ...destination, source });
-  state.rows[0] = { ...state.rows[0], ...destination };
+  state.rows[0] = { ...state.rows[0], ...destination, jsonl: replaced ? '/example/another.jsonl' : source.jsonl };
   await refresh();
   await act(async () => written.resolve({ ok: true, ...destination, service_tier: 'default' }));
-  expect(action('native_claude_provider_confirm')).toBeNull();
+  if (replaced) {
+    expect(action('native_claude_provider_confirm')?.disabled).toBe(true);
+    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).not.toContain('gpt-plus');
+  } else {
+    expect(action('native_claude_provider_confirm')).toBeNull();
+  }
 });
 
 it('layout A mantém Codex aberto e relê os níveis depois de trocar modelo', async () => {

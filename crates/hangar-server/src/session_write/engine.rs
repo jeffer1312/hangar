@@ -138,7 +138,7 @@ pub async fn provider(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
         return super::invalid_body(&parts.headers);
     };
     if wanted.engine.is_empty() || wanted.engine_account.is_empty() || wanted.engine_binding.is_empty()
-        || wanted.model.contains('/') || wanted.model.contains(['[', ']']) || !crate::session_open::resolve::valid_model(&wanted.model) {
+        || !crate::engines::model_http::provider_model_id(&wanted.model) {
         return super::invalid_body(&parts.headers);
     }
     if st.term.is_active(&name) {

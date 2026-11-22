@@ -274,7 +274,7 @@ fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut Ses
         if tier.is_fast() {
             return Err(refused("launch_service_tier","service_tier exige Claude com motor GPT no CLIProxyAPI local"));
         }
-        next.service_tier=None;
+        if !matches!(next.account, Account::Engine { binding: Some(_), .. }) { next.service_tier=None; }
     }
     // Mesma regra da criação e do lançamento sem terminal, antes de parar a sessão atual: com terminal o painel
     // abre sem passar pelo `plan_for`.
@@ -409,15 +409,29 @@ pub(super) async fn reconcile_account(env:&crate::accounts::environment::Account
     result.map_err(|error|refused(error.code.unwrap_or("erro_conta_reconciliacao_falhou"),&error.msg))
 }
 
-/// A marca da troca de conta em curso; sai quando a reabertura termina, de qualquer jeito.
 struct SwitchMark { path: PathBuf, keep: bool }
 impl SwitchMark {
+    fn clear(mut self) -> std::io::Result<()> {
+        self.keep = true;
+        match std::fs::remove_file(&self.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
+
     fn write(home:&std::path::Path,next:&SessionSpec) -> Result<Option<Self>,RuntimeError> {
         // Sessão adotada do terminal não tem registro: a subida não teria o que acertar.
         if crate::session_open::record::path(home,&next.key).is_err() {return Ok(None);}
         let unmarked=|_|refused("reopen_switch_mark","a troca não pôde ser marcada; nada foi reaberto");
         crate::session_open::record::write_switching(home,next).map_err(unmarked)?;
         crate::session_open::record::switching_path(home,&next.key).map(|path|Some(SwitchMark { path, keep: false })).map_err(unmarked)
+    }
+
+    fn provider(home: &std::path::Path, next: &SessionSpec) -> std::io::Result<Self> {
+        let path = crate::session_open::record::path(home, &next.key)?.with_extension("provider-switch");
+        std::fs::create_dir_all(crate::session_open::record::dir(home))?;
+        super::queue::atomic_write(&path, &serde_json::to_vec(next)?)?;
+        Ok(Self { path, keep: true })
     }
 }
 impl Drop for SwitchMark {
@@ -434,29 +448,39 @@ impl Drop for SwitchMark {
 pub fn settle_switches(env:&crate::accounts::environment::AccountEnvironment) {
     let dir=crate::session_open::record::dir(&env.home);
     let Ok(entries)=std::fs::read_dir(&dir) else {return};
-    for path in entries.flatten().map(|e|e.path()).filter(|p|p.extension().is_some_and(|x|x=="switching")) {
-        let to=std::fs::read(&path).ok().and_then(|raw|serde_json::from_slice::<SessionSpec>(&raw).ok());
-        match to {
-            Some(to) if to.conversation.as_deref().is_some_and(|sid|super::claude_launch::transcript(env,&to,sid).is_file())=>{
-                tracing::warn!(session=%to.name,"troca de conta interrompida; a sessão fica na conta em que a conversa está");
-                if let Err(error)=crate::session_open::record::write(&env.home,&to) {tracing::warn!(kind=?error.kind(),"registro da troca interrompida não gravado");}
-                settle_sidecar(env,&to);
-                if let Err(error) = crate::session_open::record::confirm_binding(&env.home, &to) {
-                    tracing::warn!(kind=?error.kind(), "vínculo da troca interrompida não gravado no Arquivo");
+    for path in entries.flatten().map(|e|e.path()).filter(|p|p.extension().is_some_and(|x|x=="switching" || x=="provider-switch")) {
+        let provider = path.extension().is_some_and(|x|x=="provider-switch");
+        let read = super::queue::read_replaced(&path).and_then(|raw| Ok(serde_json::from_slice::<SessionSpec>(&raw)?));
+        match read {
+            Ok(to) if provider || to.conversation.as_deref().is_some_and(|sid|super::claude_launch::transcript(env,&to,sid).is_file())=>{
+                let result = settle_sidecar(env,&to,provider)
+                    .and_then(|_| crate::session_open::record::write(&env.home,&to))
+                    .and_then(|_| crate::session_open::record::confirm_binding(&env.home,&to));
+                if let Err(error) = result {
+                    tracing::warn!(session=%to.name,kind=?error.kind(),"troca interrompida não gravada; marca conservada");
+                    continue;
                 }
             },
-            Some(_)=>{},
-            None=>tracing::warn!(path=%path.display(),"marca de troca de conta ilegível; descartada"),
+            Ok(_)=>{},
+            Err(error)=>{
+                tracing::warn!(path=%path.display(),kind=?error.kind(),"marca de troca de conta ilegível; marca conservada");
+                continue;
+            },
         }
-        let _=std::fs::remove_file(&path);
+        if let Err(error) = std::fs::remove_file(&path) && error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(kind=?error.kind(), "marca da troca recuperada não pôde ser removida");
+        }
     }
 }
 
 /// O sidecar sem terminal da sessão passa a dizer a conta de destino (é dele que a subida lê a conta).
-fn settle_sidecar(env:&crate::accounts::environment::AccountEnvironment,to:&SessionSpec) {
+fn settle_sidecar(env:&crate::accounts::environment::AccountEnvironment,to:&SessionSpec,provider:bool) -> std::io::Result<()> {
     let dir=env.home.join(".hangar").join("claude-headless");
-    let Ok(Some(mut meta))=super::codex_sidecar::read(&super::codex_sidecar::path(&dir,&to.name)) else {return};
-    if meta.get("key").and_then(Value::as_str)!=Some(to.key.as_str()) {return;}
+    let Some(mut meta)=super::codex_sidecar::read(&super::codex_sidecar::path(&dir,&to.name))? else {return Ok(())};
+    if meta.get("key").and_then(Value::as_str)!=Some(to.key.as_str()) {return Ok(());}
+    if provider && meta.get("session_id").and_then(Value::as_str)!=to.conversation.as_deref() {
+        return Err(std::io::Error::other("a conversa da troca interrompida mudou"));
+    }
     let route = match &to.account {
         Account::Engine { name, account, binding, .. } => crate::session_open::facts::session_engine_route(
             &crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref()).ok().flatten(),
@@ -466,10 +490,14 @@ fn settle_sidecar(env:&crate::accounts::environment::AccountEnvironment,to:&Sess
     if let Account::Engine { account:Some(account), .. } = &to.account && route.is_none() {
         fresh["engine_account"] = json!(account);
     }
+    if provider && ["engine", "engine_binding", "engine_account", "model", "service_tier"].iter().any(|field| meta.get(*field).unwrap_or(&Value::Null) != &fresh[*field]) {
+        meta.remove("cano");
+        meta.remove("problema");
+    }
     for field in ["config_dir","engine","engine_binding","engine_account","engine_credential_id","engine_account_base_url","model","effort","subagent_model","context_window","service_tier"] {
         match fresh.get(field).filter(|v|!v.is_null()) {Some(value)=>{meta.insert(field.into(),value.clone());},None=>{meta.remove(field);}}
     }
-    if let Err(error)=super::codex_sidecar::put(&dir,&to.name,&meta) {tracing::warn!(kind=?error.kind(),"sidecar da troca interrompida não gravado");}
+    super::codex_sidecar::put(&dir,&to.name,&meta)
 }
 
 impl RuntimeRegistry {
@@ -794,12 +822,8 @@ impl RuntimeRegistry {
         if !warnings.is_empty() {self.diag.report("runtime.reopen_engine_gone",name,"reopen_engine_gone","o motor saiu do catálogo e a sessão volta na conta Anthropic");}
         warnings.extend(reconcile_account(&self.codex_environment(),next.account.config_dir(),&next.cwd).await.map_err(ReopenFailure::refused)?);
         if let Some(between)=between {between.check(&current.spec,&next,&current.sid).await.map_err(ReopenFailure::refused)?;}
-        let mut start=self.prepare_start(name,&next,&current,&sid,provider_route.as_ref()).await.map_err(ReopenFailure::refused)?;
+        let start=self.prepare_start(name,&next,&current,&sid,provider_route.as_ref()).await.map_err(ReopenFailure::refused)?;
         if let Some(source) = provider_source {
-            if next.service_tier == Some(crate::session_open::ServiceTier::Default) && let Start::Terminal(pane, _) = &mut start {
-                let end = pane.command.iter().position(|arg| arg == "--").ok_or_else(|| ReopenFailure::refused(refused("reopen_engine_missing", "O comando do provedor não foi preparado.")))?;
-                pane.command.splice(end..end, ["--service-tier".into(), "default".into()]);
-            }
             let last = self.claude_current(name, BusyCheck::Refuse, false).await.map_err(ReopenFailure::refused)?;
             if self.panel_open(name) { return Err(ReopenFailure::refused(busy("terminal_panel_active"))); }
             self.check_provider_source(&last, source, meta.as_ref()).map_err(ReopenFailure::refused)?;
@@ -808,7 +832,7 @@ impl RuntimeRegistry {
             }
         }
         // Quando o transcript é movido, a recuperação pode seguir a pasta que o recebeu.
-        let mut switching = if between.is_some() {
+        let _switching = if between.is_some() {
             SwitchMark::write(&self.codex_environment().home, &next).map_err(ReopenFailure::refused)?
         } else { None };
         match self.stop_claude(name,&current,next.surface).await {
@@ -821,6 +845,16 @@ impl RuntimeRegistry {
             },
             Err(Stop::After(error))=>return Err(self.restore_claude(name,&current,error).await),
         }
+        let mut provider_mark = if provider_source.is_some() {
+            // O transcript fica no mesmo lugar; só a saída confirmada da origem autoriza recuperar o destino.
+            match SwitchMark::provider(&self.codex_environment().home, &next) {
+                Ok(mark) => Some(mark),
+                Err(error) => {
+                    let error = refused("reopen_switch_mark", &format!("a troca não pôde ser registrada ({error})"));
+                    return Err(self.restore_claude(name, &current, error).await);
+                },
+            }
+        } else { None };
         // Sem terminal, o processo antigo saiu sem gravar o que recebeu: a vida nova responde.
         if resume.is_none() && matches!(current.life,Life::Headless{..}) {
             let transcript=super::claude_launch::transcript(&self.codex_environment(),&current.spec,&current.sid);
@@ -834,13 +868,6 @@ impl RuntimeRegistry {
         match self.start_claude(name,&next,start,&sid).await {
             Ok(())=>{
                 let mut record_failed = false;
-                if provider_source.is_some() {
-                    // O transcript não muda de pasta: só a vida confirmada autoriza gravar a troca.
-                    match SwitchMark::write(&self.codex_environment().home, &next) {
-                        Ok(mark) => switching = mark,
-                        Err(_) => tracing::warn!(session=%name, "marca de recuperação do provedor não gravada"),
-                    }
-                }
                 if crate::session_open::record::path(&self.codex_environment().home,&next.key).is_ok() && let Err(error)=crate::session_open::record::write(&self.codex_environment().home,&next) {
                     record_failed = true;
                     // A sessão nova está de pé, mas o restore e a próxima troca leriam o registro velho.
@@ -853,9 +880,8 @@ impl RuntimeRegistry {
                     tracing::warn!(session=%name,kind=?error.kind(),"vínculo da conversa reaberta não gravado no Arquivo");
                     warnings.push("A sessão reabriu, mas o vínculo da conversa não foi gravado no Arquivo.".into());
                 }
-                if provider_source.is_some() && record_failed {
-                    if let Some(mark) = switching.as_mut() { mark.keep = true; }
-                    return Err(ReopenFailure { error: refused("reopen_engine_binding_write", "O Claude já reabriu no destino, mas a troca não foi gravada por inteiro. Confira a conta da conversa antes de tentar novamente."), stopped: true, landed: Some(next.surface) });
+                if provider_source.is_some() && (record_failed || provider_mark.take().is_some_and(|mark| mark.clear().is_err())) {
+                    return Err(ReopenFailure { error: refused("reopen_engine_binding_write", "O Claude já reabriu no destino, mas não consegui finalizar o registro da troca. Confira a conta da conversa antes de tentar novamente."), stopped: true, landed: Some(next.surface) });
                 }
                 Ok(Reopened { spec:Some(next),changed:true,warnings })
             },
@@ -865,6 +891,11 @@ impl RuntimeRegistry {
                 Err(ReopenFailure { error,stopped:true,landed:None })
             },
             Err(error)=>{
+                if let Some(mark) = provider_mark && let Err(undo) = mark.clear() {
+                    let message = format!("{}; o registro da troca não pôde ser desfeito ({undo}); a origem não foi reaberta", error.message);
+                    super::actor::mark_live_error(&self.live_channel(name), &error.code, &message);
+                    return Err(ReopenFailure { error: refused(&error.code, &message), stopped: true, landed: None });
+                }
                 // A conversa que não voltou para a conta de antes não é reaberta lá: seria outra conversa.
                 if let Some(between)=between && let Err(undo)=between.undo(&current.spec,&next,&current.sid).await {
                     let error=RuntimeError::new(&error.code,&format!("{}; {}",error.message,undo.message));
