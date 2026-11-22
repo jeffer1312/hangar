@@ -87,14 +87,15 @@ impl Hangar {
         let mut next = appearance::get();
         next.conversation_beta = on;
         self.apply_appearance(next, true, cx);
-        self.settings_ui.conversation_pending = Some(on);
+        self.settings_ui.conversation_pending = Some((self.connection, on));
         self.flush_conversation(cx);
     }
 
     /// A Conversa nova escolhida aqui vai ao servidor assim que ele tiver leitura boa e nenhuma gravação no ar, e
     /// só deixa de estar pendente quando o servidor confirma: gravação que falha volta na próxima resposta boa.
     fn flush_conversation(&mut self, cx: &mut Context<Self>) {
-        let Some(on) = self.settings_ui.conversation_pending else { return };
+        // Só no servidor da conexão em que a pessoa escolheu: outro servidor tem a escolha dele.
+        let Some((_, on)) = self.settings_ui.conversation_pending.filter(|(owner, _)| *owner == self.connection) else { return };
         let server = self.settings_ui.session_options.filter(|(connection, _)| *connection == self.connection).and_then(|(_, options)| options);
         if server.is_some_and(|o| o.conversation_beta == on) {
             self.settings_ui.conversation_pending = None;

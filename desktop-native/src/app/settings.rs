@@ -388,8 +388,8 @@ pub(super) struct SettingsUi {
     session_options_error: Option<String>,
     /// A conexão com uma gravação das opções ainda sem resposta: as linhas da tela Beta esperam por ela.
     session_options_saving: Option<u64>,
-    /// Conversa nova escolhida aqui que o servidor ainda não recebeu.
-    conversation_pending: Option<bool>,
+    /// Conversa nova escolhida aqui que o servidor daquela conexão ainda não recebeu.
+    conversation_pending: Option<(u64, bool)>,
     _subscriptions: Vec<Subscription>,
     _disk_watch: Task<()>,
 }
