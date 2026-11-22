@@ -2,11 +2,11 @@
 //! que é do binário vai ao C2 assinado, e a resposta só passa com a assinatura dele conferida.
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use axum::Router;
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use hangar_core::edge::Edge;
 use hangar_core::guest::Caller;
@@ -27,8 +27,10 @@ const SEARCH: &[&str] = &["q", "chat", "limit"];
 /// O WhatsApp de uma máquina: instalação, aceite e o cliente do serviço.
 pub struct WhatsApp {
     ctx: Context,
-    installer: Arc<Installer>,
+    installer: Installer,
     client: Client,
+    /// O último texto do QR e o desenho dele: o resumo relido com o mesmo QR não o desenha de novo.
+    qr: Mutex<Option<(String, Option<String>)>>,
 }
 
 struct Http {
@@ -50,15 +52,18 @@ impl WhatsApp {
 
     pub fn with_context(ctx: Context) -> Arc<Self> {
         let client = Client::new(ctx.paths.data.clone());
-        Arc::new(Self { ctx, installer: Arc::default(), client })
+        Arc::new(Self { ctx, installer: Installer::default(), client, qr: Mutex::default() })
     }
 
-    pub fn context(&self) -> &Context {
-        &self.ctx
-    }
-
-    pub fn client(&self) -> &Client {
-        &self.client
+    /// O QR do pareamento em SVG, recodificado só quando o texto muda.
+    fn qr_svg(&self, text: &str) -> Option<String> {
+        let mut cached = self.qr.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((last, svg)) = cached.as_ref() && last == text {
+            return svg.clone();
+        }
+        let svg = hangar_core::qr::svg(text);
+        *cached = Some((text.to_owned(), svg.clone()));
+        svg
     }
 }
 
@@ -87,9 +92,13 @@ async fn public(
     if let Some(response) = hangar_core::http_cors::preflight(request.method(), request.headers()) {
         return response;
     }
-    let headers = request.headers().clone();
+    // O CORS só olha se o pedido veio com `Origin`.
+    let mut origin = HeaderMap::new();
+    if let Some(value) = request.headers().get(header::ORIGIN) {
+        origin.insert(header::ORIGIN, value.clone());
+    }
     let mut response = reply(&state, peer.ok().map(|peer| peer.0), request).await;
-    hangar_core::http_cors::apply(&headers, &mut response);
+    hangar_core::http_cors::apply(&origin, &mut response);
     response
 }
 
@@ -153,7 +162,7 @@ async fn overview(wa: &WhatsApp) -> Response {
             ("running", Value::Null, json!(code))
         }
     };
-    let qr_svg = status["qr"].as_str().filter(|q| !q.is_empty()).and_then(crate::qr::qr_svg);
+    let qr_svg = status["qr"].as_str().filter(|q| !q.is_empty()).and_then(|q| wa.qr_svg(q));
     json_response(StatusCode::OK, json!({
         "installed": installed, "accepted_at": install::accepted_at(paths), "service": service,
         "job": wa.installer.job(), "status": status, "qr_svg": qr_svg, "status_error": status_error,
@@ -172,14 +181,14 @@ fn start_install(wa: &WhatsApp, body: &Value) -> Response {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: aceite não gravado");
         return refused(StatusCode::INTERNAL_SERVER_ERROR, failure.code, "não consegui gravar o aceite");
     }
-    started(wa, wa.installer.start("install", wa.ctx.clone()))
+    started(wa, install::spawn(&wa.installer, "install", wa.ctx.clone()))
 }
 
 fn start_update(wa: &WhatsApp) -> Response {
     if install::current(&wa.ctx.paths).is_none() {
         return refused(StatusCode::CONFLICT, "whatsapp_not_installed", "o WhatsApp não está instalado");
     }
-    started(wa, wa.installer.start("update", wa.ctx.clone()))
+    started(wa, install::spawn(&wa.installer, "update", wa.ctx.clone()))
 }
 
 fn started(wa: &WhatsApp, result: Result<(), Busy>) -> Response {
@@ -212,7 +221,9 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     }
     let Ok(_guard) = wa.installer.inline() else { return busy() };
     // Subindo, caindo ou esperando religar, o processo pode abrir os bancos sem ter escrito o `control.json`.
-    if install::current(&wa.ctx.paths).is_some() && install::service_process(&wa.ctx.paths).await {
+    // No Windows não há como perguntar, mas lá o arquivo aberto não se apaga e a resposta diz o que já saiu.
+    if install::current(&wa.ctx.paths).is_some()
+        && hangar_managed_binary::service::process_running(&wa.ctx.paths.home, &install::SERVICE).await {
         return refused(StatusCode::CONFLICT, "whatsapp_service_starting", "o serviço do WhatsApp está subindo; tente de novo em alguns segundos");
     }
     let data = wa.ctx.paths.data.clone();
@@ -253,8 +264,8 @@ async fn uninstall(wa: &WhatsApp, body: &Value) -> Response {
     };
     if let Err(failure) = install::uninstall(&wa.ctx).await {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: remover falhou");
-        return json_response(StatusCode::INTERNAL_SERVER_ERROR, json!({"detail": {"code": failure.code,
-            "params": {"detail": failure.detail, "logout": unlinked}, "msg": "não consegui remover o serviço do WhatsApp"}}));
+        return detail(StatusCode::INTERNAL_SERVER_ERROR, failure.code, "não consegui remover o serviço do WhatsApp",
+            json!({"detail": failure.detail, "logout": unlinked}));
     }
     wa.installer.forget();
     json_response(StatusCode::OK, json!({"uninstalled": true, "logout": unlinked}))
@@ -291,9 +302,13 @@ fn relay(reply: Reply) -> Response {
         if reply.body.iter().all(u8::is_ascii_whitespace) {
             return json_response(status, json!({}));
         }
-        return match serde_json::from_slice::<Value>(&reply.body) {
-            Ok(value) => json_response(status, value),
-            Err(_) => refused(StatusCode::BAD_GATEWAY, "whatsapp_bad_reply", "o serviço do WhatsApp respondeu algo que não é JSON"),
+        // Só se confere que é JSON em UTF-8 (o `IgnoredAny` não confere o UTF-8 dos textos): os bytes assinados
+        // passam como vieram.
+        let json = std::str::from_utf8(&reply.body).is_ok_and(|text| serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok());
+        return if json {
+            (status, [(header::CONTENT_TYPE, "application/json")], reply.body).into_response()
+        } else {
+            refused(StatusCode::BAD_GATEWAY, "whatsapp_bad_reply", "o serviço do WhatsApp respondeu algo que não é JSON")
         };
     }
     let parsed: Value = serde_json::from_slice(&reply.body).unwrap_or(Value::Null);

@@ -112,19 +112,7 @@ impl Binary {
 
     pub async fn latest(&self, github: &Github) -> Result<Release, Error> {
         let url = format!("{}/repos/{}/releases/latest", github.api, self.repo);
-        let body: serde_json::Value = client()?
-            .get(&url)
-            // A tela espera essa resposta (e as outras leituras esperam a trava dela): rede caída não pode prender 300 s.
-            .timeout(LATEST_TIMEOUT)
-            .header("accept", "application/vnd.github+json")
-            .header("user-agent", "hangar")
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| Error::Network(e.to_string()))?
-            .json()
-            .await
-            .map_err(|e| Error::Network(e.to_string()))?;
+        let body = github_json(&url).await.map_err(Error::Network)?;
         let tag = body["tag_name"].as_str().filter(|t| !t.is_empty()).ok_or_else(|| Error::Network("release sem tag".into()))?;
         Ok(Release { tag: tag.to_owned() })
     }
@@ -147,6 +135,39 @@ impl Binary {
             .map_err(|e| Error::Write(e.to_string()))??;
         Ok(dest)
     }
+}
+
+/// `GET` de JSON na API do GitHub. A tela espera essa resposta (e as outras leituras esperam a trava dela):
+/// rede caída não pode prender o prazo longo do download.
+///
+/// # Errors
+///
+/// O texto da falha de rede, de status ou de um corpo que não é JSON.
+pub async fn github_json(url: &str) -> Result<serde_json::Value, String> {
+    hangar_core::net::http_client()
+        .timeout(LATEST_TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(url)
+        .header("accept", "application/vnd.github+json")
+        .header("user-agent", "hangar")
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// A tag como semver, com ou sem o `v`.
+pub fn tag_version(tag: &str) -> Option<semver::Version> {
+    semver::Version::parse(tag.trim_start_matches('v')).ok()
+}
+
+/// `candidate` é uma versão maior que `installed`; tag que não é semver nunca é mais nova.
+pub fn newer(candidate: &str, installed: &str) -> bool {
+    matches!((tag_version(candidate), tag_version(installed)), (Some(c), Some(i)) if c > i)
 }
 
 fn client() -> Result<reqwest::Client, Error> {
@@ -181,10 +202,6 @@ pub fn checksum_for(checksums: &str, asset: &str) -> Option<String> {
     })
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, data).as_ref().iter().map(|b| format!("{b:02x}")).collect()
-}
-
 fn extract(data: &[u8], member: &str) -> Result<Vec<u8>, Error> {
     let mut content = Vec::new();
     if data.starts_with(b"PK") {
@@ -206,7 +223,7 @@ fn extract(data: &[u8], member: &str) -> Result<Vec<u8>, Error> {
 
 /// O pacote inteiro é conferido antes de extrair: o que não bate nem chega ao disco.
 pub fn install(data: &[u8], expected_sha256: &str, member: &str, dest: &Path) -> Result<(), Error> {
-    if sha256_hex(data) != expected_sha256 {
+    if crate::hex::sha256(data) != expected_sha256 {
         return Err(Error::Hash);
     }
     let content = extract(data, member)?;
@@ -242,8 +259,10 @@ fn ready(dest: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
+
+    use super::*;
+    use crate::hex::sha256 as sha256_hex;
 
     /// Os nomes que o WhatsApp vai publicar: `arm64`, prefixo próprio.
     const WHATSAPP: Binary = Binary {
@@ -285,6 +304,14 @@ mod tests {
         assert_eq!(WHATSAPP.program_file(p("macos", "aarch64")), "hangar-whatsapp");
         assert_eq!(Release { tag: "v0.1.0".into() }.version(), "0.1.0");
         assert_eq!(Release { tag: "0.1.0".into() }.version(), "0.1.0");
+    }
+
+    #[test]
+    fn newer_compares_semver_not_text() {
+        assert!(newer("v0.10.0", "v0.9.1"));
+        assert!(newer("8.0.80", "v8.0.79"), "com ou sem o v");
+        assert!(!newer("v0.1.0", "v0.1.0"));
+        assert!(!newer("nightly", "v0.1.0"), "tag que não é semver");
     }
 
     #[test]

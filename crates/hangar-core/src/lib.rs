@@ -38,6 +38,7 @@ pub mod private_acl;
 pub mod process;
 pub mod provider_state;
 pub mod pycompat;
+pub mod qr;
 pub mod query;
 pub mod session_dirs;
 pub mod queue_row;

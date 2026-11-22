@@ -4,6 +4,7 @@
 //! Resposta: `X-Hangar-Signature: <hex>`, `hex = HMAC-SHA256(key, TS_DO_PEDIDO\nSTATUS\nhex(sha256(body)))`.
 use std::path::Path;
 
+use hangar_managed_binary::hex;
 use serde::Deserialize;
 
 pub const SIGNATURE_HEADER: &str = "x-hangar-signature";
@@ -51,7 +52,7 @@ pub fn read_key(data: &Path) -> Result<Vec<u8>, ReadError> {
 }
 
 pub fn parse_key(text: &str) -> Option<Vec<u8>> {
-    let key = hex_decode(text.trim())?;
+    let key = hex::decode(text.trim())?;
     (key.len() == 32).then_some(key)
 }
 
@@ -73,29 +74,18 @@ pub fn sign_response(key: &[u8], ts: &str, status: u16, body: &[u8]) -> String {
 
 /// Confere em tempo constante a assinatura que o binário pôs na resposta ao pedido de `ts`.
 pub fn verify_response(key: &[u8], ts: &str, status: u16, body: &[u8], header: &str) -> bool {
-    let Some(tag) = hex_decode(header.trim()) else { return false };
+    let Some(tag) = hex::decode(header.trim()) else { return false };
     let message = [ts, &status.to_string(), &body_hash(body)].join("\n");
     ring::hmac::verify(&ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key), message.as_bytes(), &tag).is_ok()
 }
 
 fn mac(key: &[u8], parts: &[&str]) -> String {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
-    hex_encode(ring::hmac::sign(&key, parts.join("\n").as_bytes()).as_ref())
+    hex::encode(ring::hmac::sign(&key, parts.join("\n").as_bytes()).as_ref())
 }
 
 fn body_hash(body: &[u8]) -> String {
-    hex_encode(ring::digest::digest(&ring::digest::SHA256, body).as_ref())
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn hex_decode(text: &str) -> Option<Vec<u8>> {
-    if text.len() % 2 != 0 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok()).collect()
+    hex::sha256(body)
 }
 
 #[cfg(test)]
@@ -142,7 +132,7 @@ mod tests {
 
     #[test]
     fn the_key_is_the_decoded_bytes_not_the_text() {
-        let text = format!("{}\n", hex_encode(&key()));
+        let text = format!("{}\n", hex::encode(&key()));
         assert_eq!(parse_key(&text), Some(key()));
         assert_eq!(parse_key("abcd\n"), None, "curta");
         assert_eq!(parse_key(&"g".repeat(64)), None, "não é hex");

@@ -58,23 +58,7 @@ impl Client {
     /// [`CallError::Off`] sem serviço; [`CallError::Untrusted`] quando a resposta não tem a assinatura
     /// do binário; [`CallError::Transport`] para o resto.
     pub async fn call(&self, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>) -> Result<Reply, CallError> {
-        self.call_within(method, path, query, body, None).await
-    }
-
-    async fn call_within(&self, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>, timeout: Option<Duration>) -> Result<Reply, CallError> {
-        let body = body.map(|b| b.to_string().into_bytes()).unwrap_or_default();
-        let first = self.control()?;
-        match self.send(&first, &method, path, query, &body, timeout).await {
-            Err(Attempt::Connect(detail)) => {
-                // O binário pode ter reiniciado noutra porta: relê o `control.json` uma vez.
-                let again = self.control()?;
-                if again == first {
-                    return Err(CallError::Off(detail));
-                }
-                self.send(&again, &method, path, query, &body, timeout).await.map_err(Attempt::into_error)
-            }
-            other => other.map_err(Attempt::into_error),
-        }
+        self.send(method, path, query, body, TIMEOUT).await
     }
 
     /// `GET /v1/status` com 200: a prova de que o serviço está de pé.
@@ -83,7 +67,7 @@ impl Client {
     ///
     /// Os de [`Client::call`], e [`CallError::Transport`] para outro status ou corpo que não é JSON.
     pub async fn status(&self) -> Result<Value, CallError> {
-        self.status_with(None).await
+        self.status_within(TIMEOUT).await
     }
 
     /// [`Client::status`] com prazo próprio no lugar do [`TIMEOUT`] do cliente.
@@ -92,11 +76,7 @@ impl Client {
     ///
     /// Os de [`Client::status`]; prazo esgotado é [`CallError::Transport`].
     pub async fn status_within(&self, timeout: Duration) -> Result<Value, CallError> {
-        self.status_with(Some(timeout)).await
-    }
-
-    async fn status_with(&self, timeout: Option<Duration>) -> Result<Value, CallError> {
-        let reply = self.call_within(reqwest::Method::GET, "/v1/status", &[], None, timeout).await?;
+        let reply = self.send(reqwest::Method::GET, "/v1/status", &[], None, timeout).await?;
         if reply.status != 200 {
             return Err(CallError::Transport(format!("status respondeu {}", reply.status)));
         }
@@ -112,10 +92,27 @@ impl Client {
         }
     }
 
-    async fn send(&self, at: &Control, method: &reqwest::Method, path: &str, query: &[(&str, &str)], body: &[u8], timeout: Option<Duration>) -> Result<Reply, Attempt> {
-        let key = control::read_key(&self.data).map_err(|e| Attempt::Untrusted(format!("control.key: {e:?}")))?;
+    async fn send(&self, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>, timeout: Duration) -> Result<Reply, CallError> {
+        let body = body.map(|b| b.to_string().into_bytes()).unwrap_or_default();
+        let first = self.control()?;
+        match self.attempt(&first, &method, path, query, &body, timeout).await {
+            Err(CallError::Off(detail)) => {
+                // O binário pode ter reiniciado noutra porta: relê o `control.json` uma vez.
+                let again = self.control()?;
+                if again == first {
+                    return Err(CallError::Off(detail));
+                }
+                self.attempt(&again, &method, path, query, &body, timeout).await
+            }
+            other => other,
+        }
+    }
+
+    /// Um pedido ao binário em `at`; sem conexão na porta é [`CallError::Off`].
+    async fn attempt(&self, at: &Control, method: &reqwest::Method, path: &str, query: &[(&str, &str)], body: &[u8], timeout: Duration) -> Result<Reply, CallError> {
+        let key = control::read_key(&self.data).map_err(|e| CallError::Untrusted(format!("control.key: {e:?}")))?;
         let mut url = reqwest::Url::parse(&format!("http://127.0.0.1:{}{path}", at.port))
-            .map_err(|e| Attempt::Transport(format!("endereço: {e}")))?;
+            .map_err(|e| CallError::Transport(format!("endereço: {e}")))?;
         if !query.is_empty() {
             url.set_query(Some(&form_urlencoded::Serializer::new(String::new()).extend_pairs(query).finish()));
         }
@@ -130,43 +127,24 @@ impl Client {
         if !body.is_empty() {
             request = request.header("content-type", "application/json").body(body.to_vec());
         }
-        if let Some(timeout) = timeout {
-            request = request.timeout(timeout);
-        }
-        let mut response = request.send().await.map_err(|e| {
-            if e.is_connect() { Attempt::Connect(e.to_string()) } else { Attempt::Transport(e.to_string()) }
+        let mut response = request.timeout(timeout).send().await.map_err(|e| {
+            if e.is_connect() { CallError::Off(e.to_string()) } else { CallError::Transport(e.to_string()) }
         })?;
         let status = response.status().as_u16();
         let signature = response.headers().get(SIGNATURE_HEADER).and_then(|v| v.to_str().ok()).map(str::to_owned);
         let mut data = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|e| Attempt::Transport(e.to_string()))? {
+        while let Some(chunk) = response.chunk().await.map_err(|e| CallError::Transport(e.to_string()))? {
             if data.len() + chunk.len() > MAX_REPLY {
-                return Err(Attempt::Transport("resposta grande demais".into()));
+                return Err(CallError::Transport("resposta grande demais".into()));
             }
             data.extend_from_slice(&chunk);
         }
         let Some(signature) = signature else {
-            return Err(Attempt::Untrusted(format!("resposta {status} sem assinatura")));
+            return Err(CallError::Untrusted(format!("resposta {status} sem assinatura")));
         };
         if !control::verify_response(&key, &ts.to_string(), status, &data, &signature) {
-            return Err(Attempt::Untrusted(format!("resposta {status} com assinatura que não confere")));
+            return Err(CallError::Untrusted(format!("resposta {status} com assinatura que não confere")));
         }
         Ok(Reply { status, body: data })
-    }
-}
-
-enum Attempt {
-    Connect(String),
-    Untrusted(String),
-    Transport(String),
-}
-
-impl Attempt {
-    fn into_error(self) -> CallError {
-        match self {
-            Self::Connect(detail) => CallError::Off(detail),
-            Self::Untrusted(detail) => CallError::Untrusted(detail),
-            Self::Transport(detail) => CallError::Transport(detail),
-        }
     }
 }

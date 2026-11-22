@@ -3,12 +3,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use hangar_managed_binary::ErrorCodes;
-use hangar_managed_binary::release::{ArchNames, Binary};
+use hangar_managed_binary::release::{ArchNames, Binary, tag_version};
 use serde_json::Value;
 
-pub use hangar_managed_binary::release::{Github, Platform, Release};
-
 use crate::install::Failure;
+
+pub use hangar_managed_binary::release::{Github, Platform, Release, newer};
 
 pub const REPO: &str = "jeffer1312/hangar-whatsapp";
 
@@ -26,7 +26,6 @@ pub const MAJOR: u64 = 0;
 /// Binário com API menor que esta não fala o C2 que o Hangar usa.
 pub const MIN_API: u32 = 1;
 
-const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A release publicada mais nova da versão maior [`MAJOR`].
@@ -36,18 +35,8 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// `whatsapp_download_failed` sem resposta do GitHub; `whatsapp_no_release` sem release da versão maior.
 pub async fn latest(github: &Github) -> Result<Release, Failure> {
     let url = format!("{}/repos/{REPO}/releases?per_page=100", github.api);
-    let failed = |e: String| Failure::new(CODES.download_failed, format!("{url}: {e}"));
-    let client = hangar_core::net::http_client().timeout(LIST_TIMEOUT).build().map_err(|e| failed(e.to_string()))?;
-    let body: Value = client.get(&url)
-        .header("accept", "application/vnd.github+json")
-        .header("user-agent", "hangar")
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(|e| failed(e.to_string()))?
-        .json()
-        .await
-        .map_err(|e| failed(e.to_string()))?;
+    let body = hangar_managed_binary::release::github_json(&url).await
+        .map_err(|e| Failure::new(CODES.download_failed, format!("{url}: {e}")))?;
     pick(&body).ok_or_else(|| Failure::new("whatsapp_no_release", format!("nenhuma release {MAJOR}.x publicada em {REPO}")))
 }
 
@@ -57,14 +46,10 @@ pub fn pick(releases: &Value) -> Option<Release> {
         .iter()
         .filter(|r| r["draft"] != true && r["prerelease"] != true)
         .filter_map(|r| r["tag_name"].as_str())
-        .filter_map(|tag| semver_of(tag).map(|v| (v, tag)))
+        .filter_map(|tag| tag_version(tag).map(|v| (v, tag)))
         .filter(|(v, _)| v.major == MAJOR && v.pre.is_empty())
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, tag)| Release { tag: tag.to_owned() })
-}
-
-pub fn newer(candidate: &str, installed: &str) -> bool {
-    matches!((semver_of(candidate), semver_of(installed)), (Some(c), Some(i)) if c > i)
 }
 
 /// `hangar-whatsapp <versão> (api <n>)`, a saída do `--version`.
@@ -95,10 +80,6 @@ pub async fn check(binary: &Path) -> Result<String, Failure> {
         return Err(Failure::new("whatsapp_api_too_old", format!("hangar-whatsapp {version} fala a API {api}; o Hangar precisa da {MIN_API}")));
     }
     Ok(version)
-}
-
-fn semver_of(tag: &str) -> Option<semver::Version> {
-    semver::Version::parse(tag.trim_start_matches('v')).ok()
 }
 
 #[cfg(test)]

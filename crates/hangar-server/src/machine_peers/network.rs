@@ -402,22 +402,7 @@ pub async fn revoke_device(label: &str, saved: Option<(String, String)>, connect
     tracing::warn!(code = "connect.peer_revoke_failed", peer = label, device = %device, "o aparelho do Connect ficou valendo na outra máquina: {failure}");
 }
 pub fn qr_svg(url: &str) -> Result<String, Error> {
-    let qr = qrcode::QrCode::new(url.as_bytes())
-        .map_err(|_| Error::invalid("endereço de pareamento longo demais"))?;
-    let n = qr.width();
-    let mut path = String::new();
-    for y in 0..n {
-        for x in 0..n {
-            if qr[(x, y)] == qrcode::Color::Dark {
-                path.push_str(&format!("M{},{}h1v1h-1z", x + 1, y + 1));
-            }
-        }
-    }
-    Ok(format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\"><path d=\"{path}\"/></svg>",
-        n + 2,
-        n + 2
-    ))
+    hangar_core::qr::svg(url).ok_or_else(|| Error::invalid("endereço de pareamento longo demais"))
 }
 pub async fn pairing(s: &Service, kind: &str) -> Result<Value, Error> {
     let states = reach(s).await;

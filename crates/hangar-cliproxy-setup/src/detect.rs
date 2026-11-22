@@ -2,6 +2,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use hangar_managed_binary::record::{self, Installed};
+
 /// `~/.hangar/cliproxy`: programa por versão e o `install.json`.
 #[derive(Clone, Debug)]
 pub struct Paths {
@@ -110,7 +112,7 @@ pub fn unit_working_dir(unit: &str) -> Option<String> {
 }
 
 pub fn state(paths: &Paths, path_var: Option<&std::ffi::OsStr>, units: &[PathBuf]) -> Install {
-    if let Some((tag, binary)) = managed(paths) {
+    if let Some(Installed { tag, binary }) = record::read(&paths.record()) {
         return Install::Managed { tag, binary };
     }
     let binary = path_var.and_then(|var| on_path(var, &crate::release::BINARY.program_file(crate::release::Platform::local())));
@@ -119,13 +121,6 @@ pub fn state(paths: &Paths, path_var: Option<&std::ffi::OsStr>, units: &[PathBuf
         return Install::External { binary, unit };
     }
     Install::Absent
-}
-
-fn managed(paths: &Paths) -> Option<(String, PathBuf)> {
-    let record: serde_json::Value = serde_json::from_slice(&std::fs::read(paths.record()).ok()?).ok()?;
-    let tag = record["tag"].as_str().filter(|t| !t.is_empty())?.to_owned();
-    let binary = PathBuf::from(record["binary"].as_str()?);
-    binary.is_file().then_some((tag, binary))
 }
 
 fn on_path(var: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
@@ -141,9 +136,7 @@ pub fn port_open(base_url: &str) -> bool {
 }
 
 pub fn write_record(paths: &Paths, tag: &str, binary: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(&paths.dir)?;
-    let body = serde_json::json!({ "tag": tag, "binary": binary.to_string_lossy() });
-    hangar_core::fs::atomic_write(&paths.record(), body.to_string().as_bytes())
+    record::write(&paths.record(), tag, binary)
 }
 
 #[cfg(test)]

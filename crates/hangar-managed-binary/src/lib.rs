@@ -1,6 +1,9 @@
 //! Programa de fora que o Hangar baixa de uma release do GitHub, guarda por versão em `bin/<versão>/` e
 //! mantém de pé como serviço do usuário (systemd, launchd ou tarefa do Windows). Cada consumidor diz o
 //! repositório, os nomes publicados, o serviço e o prefixo dos códigos de erro.
+pub mod hex;
+pub mod jobs;
+pub mod record;
 pub mod release;
 pub mod service;
 

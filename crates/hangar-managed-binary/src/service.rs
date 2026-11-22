@@ -119,18 +119,26 @@ fn process_prefix(managed_dir: &Path) -> String {
     ps_quote(&format!("{}\\", managed_dir.display().to_string().trim_end_matches(['\\', '/'])))
 }
 
+/// As linhas que param a tarefa `task` (já entre aspas) e o programa que roda da pasta do Hangar.
+fn ps_stop(task: &str, managed_dir: &Path) -> String {
+    format!(
+        "Stop-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue\n\
+         Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.StartsWith({dir}, [StringComparison]::OrdinalIgnoreCase) }} | Stop-Process -Force\n",
+        dir = process_prefix(managed_dir),
+    )
+}
+
 /// Para a tarefa e o programa da pasta do Hangar e regrava a tarefa apontando para o `.vbs`; com `start`, liga.
 pub fn windows_script(id: &ServiceId, vbs: &Path, managed_dir: &Path, start: bool) -> String {
     let task = ps_quote(id.task);
     let mut script = format!(
         "$ErrorActionPreference = 'Stop'\n\
-         Stop-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue\n\
-         Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.StartsWith({dir}, [StringComparison]::OrdinalIgnoreCase) }} | Stop-Process -Force\n\
+         {stop}\
          $a = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument {arg}\n\
          $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME\n\
          $s = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew\n\
          Register-ScheduledTask -TaskName {task} -Action $a -Trigger $t -Settings $s -Force | Out-Null\n",
-        dir = process_prefix(managed_dir),
+        stop = ps_stop(&task, managed_dir),
         arg = ps_quote(&format!("\"{}\"", vbs.display())),
     );
     if start {
@@ -145,13 +153,12 @@ pub fn windows_start_script(id: &ServiceId) -> String {
 
 /// Tira o serviço e para o programa da pasta do Hangar.
 pub fn windows_unregister_script(id: &ServiceId, managed_dir: &Path) -> String {
+    let task = ps_quote(id.task);
     format!(
         "$ErrorActionPreference = 'Stop'\n\
-         Stop-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue\n\
-         Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.StartsWith({dir}, [StringComparison]::OrdinalIgnoreCase) }} | Stop-Process -Force\n\
+         {stop}\
          if (Get-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue) {{ Unregister-ScheduledTask -TaskName {task} -Confirm:$false }}\n",
-        task = ps_quote(id.task),
-        dir = process_prefix(managed_dir),
+        stop = ps_stop(&task, managed_dir),
     )
 }
 
@@ -193,10 +200,11 @@ async fn powershell(step: &str, script: &str) -> Result<(), Error> {
     run(step, "powershell.exe", &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]).await
 }
 
-fn write_vbs(home: &Path, s: &Service) -> Result<PathBuf, Error> {
+/// Grava o `.vbs` e regrava a tarefa do Windows; com `start`, liga no mesmo script.
+async fn register_task(home: &Path, managed_dir: &Path, s: &Service, start: bool) -> Result<(), Error> {
     let vbs = windows_vbs_path(home, &s.id);
     write("vbs", &vbs, &encode_vbs(&windows_vbs(s)))?;
-    Ok(vbs)
+    powershell("Register-ScheduledTask", &windows_script(&s.id, &vbs, managed_dir, start)).await
 }
 
 /// Grava e registra o serviço apontando para `s.executable`, sem subir o programa.
@@ -206,8 +214,7 @@ pub async fn install(home: &Path, managed_dir: &Path, s: &Service) -> Result<(),
         return write("plist", &launchd_plist_path(home, &s.id), launchd_plist(s).as_bytes());
     }
     if cfg!(windows) {
-        let vbs = write_vbs(home, s)?;
-        return powershell("Register-ScheduledTask", &windows_script(&s.id, &vbs, managed_dir, false)).await;
+        return register_task(home, managed_dir, s, false).await;
     }
     write("unit", &systemd_unit_path(home, &s.id), systemd_unit(s).as_bytes())?;
     run("systemctl daemon-reload", "systemctl", &["--user", "daemon-reload"]).await?;
@@ -232,8 +239,7 @@ pub async fn start(home: &Path, id: &ServiceId) -> Result<(), Error> {
 pub async fn register(home: &Path, managed_dir: &Path, s: &Service) -> Result<(), Error> {
     // No Windows, registrar e ligar vão num script só: uma chamada ao PowerShell em vez de duas.
     if cfg!(windows) {
-        let vbs = write_vbs(home, s)?;
-        return powershell("Register-ScheduledTask", &windows_script(&s.id, &vbs, managed_dir, true)).await;
+        return register_task(home, managed_dir, s, true).await;
     }
     install(home, managed_dir, s).await?;
     start(home, &s.id).await
@@ -261,6 +267,31 @@ pub async fn unregister(home: &Path, managed_dir: &Path, id: &ServiceId) -> Resu
     }
     remove("unit", &unit)?;
     run("systemctl daemon-reload", "systemctl", &["--user", "daemon-reload"]).await
+}
+
+/// Algum processo do serviço existe pelo gerenciador, ou vai existir logo (o `Restart=always` esperando o
+/// `RestartSec`). Sem como perguntar (Windows) ou sem a unit, `false`.
+pub async fn process_running(home: &Path, id: &ServiceId) -> bool {
+    if cfg!(target_os = "macos") {
+        let output = tokio::process::Command::new("launchctl").args(["list", id.launchd_label])
+            .stdin(std::process::Stdio::null()).output().await;
+        return output.is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("\"PID\" = "));
+    }
+    if cfg!(windows) || !systemd_unit_path(home, id).is_file() {
+        return false;
+    }
+    let output = tokio::process::Command::new("systemctl")
+        .args(["--user", "show", "-p", "MainPID", "-p", "ActiveState", "-p", "SubState", id.unit])
+        .stdin(std::process::Stdio::null()).output().await;
+    output.is_ok_and(|o| o.status.success() && systemd_busy(&String::from_utf8_lossy(&o.stdout)))
+}
+
+/// Saída `Chave=valor` do `systemctl show`: processo vivo, ou unit subindo, parando ou à espera de religar.
+fn systemd_busy(show: &str) -> bool {
+    let field = |key: &str| show.lines().find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('=')).unwrap_or_default();
+    !matches!(field("MainPID"), "" | "0")
+        || matches!(field("ActiveState"), "active" | "activating" | "reloading" | "deactivating" | "refreshing")
+        || field("SubState") == "auto-restart"
 }
 
 #[cfg(test)]
@@ -322,6 +353,17 @@ mod tests {
         assert_eq!(systemd_unit_path(home, &WHATSAPP), Path::new("/home/u/.config/systemd/user/hangar-whatsapp.service"));
         assert_eq!(launchd_plist_path(home, &WHATSAPP), Path::new("/home/u/Library/LaunchAgents/dev.hangar.whatsapp.plist"));
         assert!(windows_vbs_path(home, &WHATSAPP).ends_with("hangar/hangar-whatsapp.vbs"));
+    }
+
+    #[test]
+    fn a_unit_waiting_to_restart_counts_as_busy() {
+        let show = |pid: &str, active: &str, sub: &str| format!("MainPID={pid}\nActiveState={active}\nSubState={sub}\n");
+        assert!(systemd_busy(&show("4321", "active", "running")));
+        assert!(systemd_busy(&show("0", "activating", "auto-restart")), "na janela do RestartSec o MainPID é 0");
+        assert!(systemd_busy(&show("0", "deactivating", "stop-sigterm")));
+        assert!(!systemd_busy(&show("0", "inactive", "dead")));
+        assert!(!systemd_busy(&show("0", "failed", "failed")));
+        assert!(!systemd_busy(""), "sem resposta do systemd");
     }
 
     #[test]

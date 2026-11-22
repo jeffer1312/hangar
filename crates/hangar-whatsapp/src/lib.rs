@@ -4,7 +4,6 @@ pub mod client;
 pub mod control;
 pub mod http;
 pub mod install;
-pub mod qr;
 pub mod release;
 
 pub use http::{WhatsApp, api_path, router};
