@@ -340,10 +340,13 @@ fn live_spinner(lines: &[&str]) -> Option<String> {
     }).map(|(_, s)| String::from(s.split("   ").next().unwrap_or(s)))
 }
 
-/// Título de painel da faixa dos mods ("● ▾ PM-20124 coleta…"): o ponto é o estado do painel, não uma resposta do
-/// Claude. Tomado por resposta, ele escondia a linha viva acima da faixa, e "Waiting for 1 background agent" sumia.
+/// Título de painel da faixa dos mods ("● ▾ PM-20124 coleta…   [-]"): o ponto é o estado do painel, não uma resposta
+/// do Claude. Tomado por resposta, ele escondia a linha viva acima da faixa, e "Waiting for 1 background agent" sumia.
+/// O controle de minimizar no fim separa o título de uma resposta que comece com a mesma seta.
 fn mods_band_title(line: &str) -> bool {
-    trim(line).strip_prefix('●').map(left).is_some_and(|rest| rest.starts_with(['▾', '▸']))
+    let line = trim(line);
+    line.strip_prefix('●').map(left).is_some_and(|rest| rest.starts_with(['▾', '▸']))
+        && (line.ends_with("[-]") || line.ends_with("[+]"))
 }
 
 fn status_line(lines: &[&str]) -> Option<String> {
@@ -798,6 +801,9 @@ mod tests {
         let band = "● ▾ PM-20124 coleta: troca de sessão no 403 (Execução manual)        8/9 passos · 2h 30m [-]\n  ━━━━━━━━ ━━━━━━━━  89%\n▸ ms_def · develop · Jenkins sem build";
         let pane = format!("● resposta\n\n✻ Waiting for 1 background agent to finish\n{band}\n{RULE}\n❯ \n{RULE}\n  ⏵⏵ bypass permissions on · 2 background tasks · ↓ to manage\n  ● main\n  ◯ pmedico:kubectl  Aguardando conclusão   40s · ↓ 79.2k tokens\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Waiting for 1 background agent to finish"));
+        // Resposta que começa com a mesma seta segue sendo resposta: o resumo do turno anterior acima dela não volta.
+        let pane = format!("● anterior\n\n{DONE}\n\n❯ pergunta\n\n● ▸ primeiro item da lista\n\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).spinner, None);
         // Caixa no modo de comando.
         let pane = format!("{DONE}\n\n● resposta\n\n* Precipitating… (2m 12s)\n\n{RULE}\n! ls\n{RULE}\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Precipitating… (2m 12s)"));
