@@ -195,7 +195,7 @@ fn ticket(nonce: &str, secret: &str, account_device: Option<&str>) -> (String, S
 fn released(store: &Store, nonce: &str, account_device: &str) -> String {
     let secret = format!("segredo-{nonce}");
     let (text, signature) = ticket(nonce, &secret, Some(account_device));
-    let id = store.redeem_from(&text, &signature, &secret, None).unwrap();
+    let (id, _) = store.redeem_from(&text, &signature, &secret, None).unwrap();
     let Poll::Approved(Some(token)) = store.status(&id, &secret).unwrap() else { panic!("{nonce} não saiu aprovado") };
     token
 }
@@ -204,7 +204,7 @@ fn released(store: &Store, nonce: &str, account_device: &str) -> String {
 fn approved_here(store: &Store, nonce: &str) -> String {
     let secret = format!("segredo-{nonce}");
     let (text, signature) = ticket(nonce, &secret, None);
-    let id = store.redeem_from(&text, &signature, &secret, None).unwrap();
+    let (id, _) = store.redeem_from(&text, &signature, &secret, None).unwrap();
     store.approve(&id, None).unwrap();
     let Poll::Approved(Some(token)) = store.status(&id, &secret).unwrap() else { panic!("{nonce} não saiu aprovado") };
     token
@@ -454,7 +454,7 @@ async fn a_refused_read_suspends_the_account_devices_until_a_good_read() {
     // Aprovado aqui pelo aparelho da conta: a revogação de D o levaria junto.
     let d_id = m.store.verify(d.as_bytes()).unwrap();
     let (text, signature) = ticket("n3", "segredo-n3", None);
-    let child_id = m.store.redeem_from(&text, &signature, "segredo-n3", None).unwrap();
+    let (child_id, _) = m.store.redeem_from(&text, &signature, "segredo-n3", None).unwrap();
     m.store.approve(&child_id, Some(&d_id)).unwrap();
     let Poll::Approved(Some(child)) = m.store.status(&child_id, "segredo-n3").unwrap() else { panic!("n3 não saiu aprovado") };
 
