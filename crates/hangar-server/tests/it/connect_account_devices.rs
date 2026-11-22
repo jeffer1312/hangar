@@ -158,8 +158,8 @@ async fn machine(service: SocketAddr, link: bool) -> Machine {
     if link {
         state::write(&connect_dir, &linked).unwrap();
     }
-    let (python, upstream) = spawn_fake().await;
-    let mut app = AppState::new(config(upstream, "127.0.0.1"));
+    let (python, _) = spawn_fake().await;
+    let mut app = AppState::new(config("127.0.0.1"));
     let store = store_at(connect_dir.clone(), &linked);
     let supervisor = Arc::new(Supervisor::new(connect_dir, dir.path().join("logs"), store.clone(), 1));
     app.connect_devices = store.clone();
