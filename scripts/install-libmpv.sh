@@ -6,6 +6,7 @@
 # Uso: scripts/install-libmpv.sh             instala se faltar
 #      scripts/install-libmpv.sh --comando   só imprime o comando de instalação (sem sudo), vazio se nada falta
 # HANGAR_LIBMPV_SEM_SUDO=1: quem chama já tentou com o sudo dele (install.sh); aqui só confere e marca.
+# HANGAR_LIBMPV_SEM_INSTALAR=1: o install.sh --update, que não instala dependência; também sem o Homebrew.
 set -uo pipefail
 
 [ -n "${HOME:-}" ] || { echo "vídeo do app nativo: sem HOME, nada a fazer"; exit 0; }
@@ -77,7 +78,8 @@ case "$(uname -s)" in
       aviso "não sei o pacote da libmpv 2 nesta distro" "instale a libmpv.so.2 (pacote do mpv) pelo gerenciador da distro"
     fi
     [ "$SO_COMANDO" = 1 ] && { echo "$CMD"; exit 0; }
-    [ "${HANGAR_LIBMPV_SEM_SUDO:-}" = 1 ] && aviso "a libmpv 2 não está instalada" "sudo $CMD"
+    { [ "${HANGAR_LIBMPV_SEM_SUDO:-}" = 1 ] || [ "${HANGAR_LIBMPV_SEM_INSTALAR:-}" = 1 ]; } \
+      && aviso "a libmpv 2 não está instalada" "sudo $CMD"
     [ "$(id -u)" = 0 ] || command -v sudo >/dev/null 2>&1 || aviso "sem sudo para instalar a libmpv 2" "$CMD (como root)"
     echo "vídeo do app nativo: instalando a libmpv 2 ($CMD)"
     # $CMD sem aspas de propósito: só palavras fixas, sem espaço dentro de nenhuma.
@@ -103,6 +105,7 @@ case "$(uname -s)" in
     BREW=$(command -v brew 2>/dev/null || true)
     for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -z "$BREW" ] && [ -x "$b" ] && BREW=$b; done
     [ -n "$BREW" ] || aviso "a libmpv 2 não está instalada e não há Homebrew" "instale o Homebrew e rode: brew install mpv"
+    [ "${HANGAR_LIBMPV_SEM_INSTALAR:-}" = 1 ] && aviso "a libmpv 2 não está instalada" "brew install mpv"
     echo "vídeo do app nativo: instalando o mpv pelo Homebrew"
     # brew nunca com sudo. Sem a atualização automática ele não para minutos baixando o índice inteiro antes.
     HOMEBREW_NO_AUTO_UPDATE=1 "$BREW" install mpv; rc=$?

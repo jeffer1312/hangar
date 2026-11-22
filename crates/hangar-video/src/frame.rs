@@ -58,14 +58,16 @@ pub struct FrameRef<'a> {
 const MAX_RENDER: (u32, u32) = (3840, 2160);
 
 /// Tamanho do quadro desenhado: o vídeo encaixado em `target` (a área na tela, em pixels físicos) sem ampliar, com a
-/// proporção dele (a libmpv poria tarjas pretas se fosse outra) e largura múltipla de 16.
+/// proporção dele (a libmpv poria tarjas pretas se fosse outra) e largura múltipla de 16. Quando a largura mínima de 16
+/// faria a altura passar do alvo (vídeo muito estreito ou alvo minúsculo), a altura fica no alvo e a libmpv põe as
+/// tarjas: o quadro nunca passa do alvo nem de `MAX_RENDER`.
 pub(crate) fn render_size(video: (u32, u32), target: (u32, u32)) -> Option<(u32, u32)> {
     let (vw, vh) = (video.0 as f64, video.1 as f64);
     if vw < 1. || vh < 1. { return None; }
     let (tw, th) = (target.0.clamp(16, MAX_RENDER.0) as f64, target.1.clamp(16, MAX_RENDER.1) as f64);
     let scale = (tw / vw).min(th / vh).min(1.);
     let width = ((vw * scale) as u32 / 16 * 16).max(16);
-    let height = ((width as f64 * vh / vw).round() as u32).max(1);
+    let height = ((width as f64 * vh / vw).round() as u32).clamp(1, th as u32);
     Some((width, height))
 }
 
@@ -82,6 +84,12 @@ mod tests {
         assert!(h <= 600 && (w as f64 / h as f64 - 1170. / 2532.).abs() < 0.02, "{w}x{h}");
         assert_eq!(render_size((0, 1080), (800, 600)), None);
         assert_eq!(render_size((8000, 4000), (9000, 9000)).map(|(w, _)| w <= 3840), Some(true));
+    }
+
+    #[test]
+    fn render_size_never_passes_the_target_when_the_minimum_width_kicks_in() {
+        assert_eq!(render_size((1080, 1920), (16, 16)), Some((16, 16)), "alvo minúsculo");
+        assert_eq!(render_size((9, 1920), (3840, 2160)), Some((16, 2160)), "vídeo estreito demais fica em MAX_RENDER");
     }
 
     #[test]

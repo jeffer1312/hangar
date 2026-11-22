@@ -15,6 +15,7 @@ pub const FORMAT_DOUBLE: c_int = 5;
 
 pub const EVENT_NONE: c_int = 0;
 pub const EVENT_SHUTDOWN: c_int = 1;
+pub const EVENT_COMMAND_REPLY: c_int = 5;
 pub const EVENT_END_FILE: c_int = 7;
 pub const EVENT_FILE_LOADED: c_int = 8;
 pub const EVENT_PROPERTY_CHANGE: c_int = 22;

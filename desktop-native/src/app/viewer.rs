@@ -203,9 +203,9 @@ fn page_for(kind: Kind, mpv: bool, routable: bool, linux: bool) -> Page {
 }
 
 /// Palco do player na proporção do vídeo, dentro do `limit` (sem teto na tela cheia), com a altura dos controles e
-/// largura para eles.
+/// largura para eles. Em janela baixa o quadro encolhe abaixo de `MIN_H`: com os controles, o palco nunca passa do limite.
 fn video_stage(aspect: f32, limit: (f32, f32), full: bool) -> (f32, f32) {
-    let room = (if full { limit.0 } else { limit.0.min(PLAYER_W) }, (limit.1 - crate::video::CONTROLS_H - PLAYER_GAP).max(MIN_H));
+    let room = (if full { limit.0 } else { limit.0.min(PLAYER_W) }, (limit.1 - crate::video::CONTROLS_H - PLAYER_GAP).max(1.));
     let aspect = if aspect.is_finite() && aspect > 0. { aspect } else { 16. / 9. };
     let width = room.0.min(room.1 * aspect).max(MIN_W.min(room.0));
     (width, (width / aspect).min(room.1) + crate::video::CONTROLS_H + PLAYER_GAP)
@@ -323,14 +323,36 @@ impl Viewer {
         self.video_hint = None;
         if video {
             // Sem a libmpv não há o que pedir; ela é procurada de novo a cada vídeo, e instalar com o app aberto vale.
-            let mpv = hangar_video::Library::shared().is_ok();
-            let route = if mpv { self.video_source() } else { None };
-            match (page_for(Kind::Video, mpv, route.is_some(), cfg!(target_os = "linux")), route) {
-                (Page::Player, Some(route)) => return self.start_player(route, window, cx),
-                (Page::Poster(hint), _) => self.video_hint = Some(hint),
-                _ => {}
-            }
+            if hangar_video::Library::shared().is_ok() { return self.resolve_video(window, cx); }
+            if let Page::Poster(hint) = page_for(Kind::Video, false, false, cfg!(target_os = "linux")) { self.video_hint = Some(hint); }
         }
+        self.load_picture(cx);
+    }
+
+    /// O caminho local do vídeo toca no disco, que pode ser uma pasta de rede fora do ar: sai fora da thread da
+    /// interface, e o player só abre com a resposta do item que ainda está à vista.
+    fn resolve_video(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(old) = self.fetching.take() { old.abort(); }
+        let (seq, uploads, source) = (self.seq, self.uploads.clone(), self.item().source.clone());
+        let local = self.runtime.spawn_blocking(move || uploads.local_path(&source));
+        self._load = cx.spawn_in(window, async move |this, cx| {
+            let local = local.await.ok().flatten();
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.seq != seq { return; }
+                let route = this.video_source(local);
+                match (page_for(Kind::Video, true, route.is_some(), cfg!(target_os = "linux")), route) {
+                    (Page::Player, Some(route)) => this.start_player(route, window, cx),
+                    (Page::Poster(hint), _) => { this.video_hint = Some(hint); this.load_picture(cx); }
+                    _ => this.load_picture(cx),
+                }
+            });
+        });
+        cx.notify();
+    }
+
+    /// A imagem, ou a capa do vídeo que não toca aqui.
+    fn load_picture(&mut self, cx: &mut Context<Self>) {
+        let video = self.is_video();
         let wanted = if video { self.item().poster.clone() } else { Some(self.item().source.clone()) };
         let Some(source) = wanted else {
             // Vídeo sem quadro: a página dele sem capa, nada a buscar.
@@ -396,11 +418,11 @@ impl Viewer {
 
     /// Sessão desta máquina toca o próprio arquivo; outra vai pela rota do servidor através da ponte local, que é quem
     /// leva o token.
-    fn video_source(&self) -> Option<VideoSource> {
-        let source = &self.item().source;
-        match self.uploads.local_path(source) {
+    /// `local`: o arquivo desta máquina, já resolvido fora da thread da interface (`resolve_video`).
+    fn video_source(&self, local: Option<std::path::PathBuf>) -> Option<VideoSource> {
+        match local {
             Some(path) => Some(VideoSource::Local(path.to_string_lossy().into_owned())),
-            None => self.api.media_url(&self.key.name, source).and_then(|(url, token)| Upstream::new(&url, &token)).map(VideoSource::Remote),
+            None => self.api.media_url(&self.key.name, &self.item().source).and_then(|(url, token)| Upstream::new(&url, &token)).map(VideoSource::Remote),
         }
     }
 
@@ -428,6 +450,8 @@ impl Viewer {
     /// trocar de item ou fechar para o vídeo e solta a libmpv.
     fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(player) = self.player.take() { player.update(cx, |player, cx| player.release(window, cx)); }
+        // Um vídeo ainda resolvendo o caminho não abre o player depois de fechar o visor.
+        if self.is_video() { self._load = Task::ready(()); }
         if let Shown::Image(image) | Shown::Video(Some(image)) = std::mem::replace(&mut self.shown, Shown::Loading) { cx.drop_image(image, Some(window)); }
         self.view = None;
         self.drag = None;
@@ -1108,6 +1132,8 @@ mod tests {
         // Vídeo de celular em pé: a largura não fica menor que a dos controles.
         assert_eq!(stage(9. / 16., (1600., 700.), false), (MIN_W, 700.));
         assert_eq!(stage(f32::NAN, (1600., 1000.), false), (960., 540. + below));
+        // Janela baixa: o limite já é o mínimo, e os controles cabem nele em vez de somar por cima.
+        assert!(stage(16. / 9., (1600., MIN_H), false).1 <= MIN_H);
     }
 
     #[test]

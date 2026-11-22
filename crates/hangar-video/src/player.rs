@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -49,14 +50,20 @@ pub struct Snapshot {
     dims: (u32, u32),
     /// O arquivo não abriu ou a reprodução caiu; o texto é o da libmpv.
     pub error: Option<String>,
+    /// O último comando que a libmpv recusou ao executar (um seek antes de o arquivo abrir), com o número da resposta
+    /// para cada recusa ser outra. Não impede tocar: quem mostra só registra.
+    pub command_error: Option<(u64, String)>,
 }
 
 impl Default for Snapshot {
     fn default() -> Self {
         Snapshot { loaded: false, position: None, duration: None, paused: false, volume: 100., muted: false, ended: false,
-            buffering: false, cached_until: None, video_size: None, dims: (0, 0), error: None }
+            buffering: false, cached_until: None, video_size: None, dims: (0, 0), error: None, command_error: None }
     }
 }
+
+/// Prefixo do erro do render: só ele some quando o render volta a sair.
+const RENDER_ERROR: &str = "render: ";
 
 /// Opções de antes do `mpv_initialize`. As `true` são obrigatórias; as outras só existem em parte das versões e
 /// builds (sem Lua não há `osc` nem `ytdl`), e a falta delas não impede tocar.
@@ -146,6 +153,10 @@ unsafe extern "C" fn on_update(ctx: *mut c_void) {
 
 struct Slot { buffer: Buffer, seq: u64 }
 
+/// Comandos enviados e ainda sem resposta, pelo `reply_userdata`: a resposta diz qual foi recusado.
+#[derive(Default)]
+struct Commands { next: u64, pending: HashMap<u64, String> }
+
 struct Inner {
     lib: Arc<Library>,
     handle: Handle,
@@ -153,6 +164,7 @@ struct Inner {
     wake: Arc<Wake>,
     state: Mutex<Snapshot>,
     slot: Mutex<Slot>,
+    commands: Mutex<Commands>,
     closing: AtomicBool,
     format: PixelFormat,
     notify: Box<dyn Fn(Change) + Send + Sync>,
@@ -187,7 +199,7 @@ impl Player {
         let wake = Arc::new(Wake { signal: Mutex::new(Signal { pending: true, force: false, closed: false, target: FIRST_TARGET }), cond: Condvar::new() });
         let inner = Arc::new(Inner {
             lib: lib.clone(), handle: Handle(raw), render: Render(render), wake: wake.clone(), state: Mutex::new(Snapshot::default()),
-            slot: Mutex::new(Slot { buffer: Buffer::new(), seq: 0 }), closing: AtomicBool::new(false), format: options.format,
+            slot: Mutex::new(Slot { buffer: Buffer::new(), seq: 0 }), commands: Mutex::default(), closing: AtomicBool::new(false), format: options.format,
             notify: Box::new(notify),
         });
         // SAFETY: contexto vivo; `wake` vive no `Inner`, que só sai depois de o callback ser retirado no `shutdown`.
@@ -233,9 +245,9 @@ impl Player {
         self.set_paused(false);
     }
 
+    /// Quem alterna é o núcleo (`cycle pause`): dois toques antes de o estado novo chegar não pausam duas vezes.
     pub fn toggle(&self) {
-        let state = self.snapshot();
-        if state.paused || state.ended { self.play() } else { self.set_paused(true) }
+        if lock(&self.inner.state).ended { self.play() } else { self.command(&["cycle", "pause"]) }
     }
 
     pub fn set_paused(&self, paused: bool) { self.command(&["set", "pause", if paused { "yes" } else { "no" }]); }
@@ -265,15 +277,24 @@ impl Player {
         self.command_strings(&refs);
     }
 
-    /// Assíncrono: a libmpv copia os argumentos e responde depois, sem travar quem chamou. A recusa imediata (comando
-    /// mal formado) vai ao estado como erro.
+    /// Assíncrono: a libmpv copia os argumentos e responde depois (`COMMAND_REPLY`), sem travar quem chamou. A recusa
+    /// imediata (comando mal formado) vai ao estado como erro.
     fn command_strings(&self, args: &[&CStr]) {
         let mut pointers: Vec<*const c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
         pointers.push(std::ptr::null());
         let api = &self.inner.lib.api;
+        // Registrado antes de enviar: a resposta pode chegar antes de o envio voltar.
+        let id = {
+            let mut commands = lock(&self.inner.commands);
+            commands.next += 1;
+            let id = commands.next;
+            commands.pending.insert(id, args.first().map_or_else(String::new, |name| name.to_string_lossy().into_owned()));
+            id
+        };
         // SAFETY: lista terminada em nulo de strings vivas durante a chamada; o handle vive até o `shutdown`.
-        let code = unsafe { (api.command_async)(self.inner.handle.0, 0, pointers.as_mut_ptr()) };
+        let code = unsafe { (api.command_async)(self.inner.handle.0, id, pointers.as_mut_ptr()) };
         if code < 0 {
+            lock(&self.inner.commands).pending.remove(&id);
             lock(&self.inner.state).error = Some(error_text(api, code));
             (self.inner.notify)(Change::State);
         }
@@ -368,12 +389,13 @@ fn run_render(inner: Arc<Inner>) {
             // Uma vez só: o próximo aviso tentaria de novo e encheria o estado do mesmo erro.
             if !failed {
                 failed = true;
-                lock(&inner.state).error = Some(format!("render: {}", error_text(api, code)));
+                lock(&inner.state).error = Some(format!("{RENDER_ERROR}{}", error_text(api, code)));
                 (inner.notify)(Change::State);
             }
             continue;
         }
-        failed = false;
+        // O aviso do quadro, logo abaixo, leva o estado sem o erro junto: a tela relê tudo a cada aviso.
+        if std::mem::take(&mut failed) { clear_render_error(&mut lock(&inner.state)); }
         back.make_opaque();
         {
             let mut slot = lock(&inner.slot);
@@ -411,6 +433,10 @@ fn run_events(inner: Arc<Inner>) {
                     // SAFETY: `data` de `PROPERTY_CHANGE` é um `mpv_event_property`.
                     apply(&mut state, event.reply_userdata, unsafe { &*event.data.cast::<ffi::EventProperty>() });
                 }
+                ffi::EVENT_COMMAND_REPLY => {
+                    let mut commands = lock(&inner.commands);
+                    command_reply(&mut state, &mut commands.pending, event.reply_userdata, event.error, |code| error_text(api, code));
+                }
                 _ => {}
             }
             (*state != before, state.video_size != before.video_size)
@@ -444,6 +470,19 @@ fn apply(state: &mut Snapshot, id: u64, prop: &ffi::EventProperty) {
     state.video_size = (state.dims.0 > 0 && state.dims.1 > 0).then_some(state.dims);
 }
 
+/// O render voltou a sair: some o erro dele, e só o dele (fim de arquivo e comando recusado ficam).
+fn clear_render_error(state: &mut Snapshot) {
+    if state.error.as_deref().is_some_and(|error| error.starts_with(RENDER_ERROR)) { state.error = None; }
+}
+
+/// A resposta tira o comando da espera; só a recusa vira `command_error`, com o nome do comando.
+fn command_reply(state: &mut Snapshot, pending: &mut HashMap<u64, String>, id: u64, code: c_int, text: impl FnOnce(c_int) -> String) {
+    let name = pending.remove(&id);
+    if code >= 0 { return; }
+    let name = name.filter(|name| !name.is_empty()).unwrap_or_else(|| "command".to_owned());
+    state.command_error = Some((id, format!("{name}: {}", text(code))));
+}
+
 fn error_text(api: &ffi::Api, code: c_int) -> String {
     // SAFETY: a libmpv devolve uma string estática para qualquer código.
     let text = unsafe { (api.error_string)(code) };
@@ -468,9 +507,34 @@ fn c_numeric_locale() {}
 
 #[cfg(test)]
 mod tests {
-    use super::{OPTIONS, Snapshot, apply};
+    use super::{OPTIONS, Snapshot, apply, clear_render_error, command_reply};
     use crate::ffi::{self, EventProperty};
+    use std::collections::HashMap;
     use std::ffi::{c_int, c_void};
+
+    #[test]
+    fn render_back_clears_only_its_own_error() {
+        let mut state = Snapshot { error: Some("render: falhou".into()), ..Snapshot::default() };
+        clear_render_error(&mut state);
+        assert_eq!(state.error, None);
+        for kept in ["loading failed", "seek: error running command"] {
+            let mut state = Snapshot { error: Some(kept.into()), ..Snapshot::default() };
+            clear_render_error(&mut state);
+            assert_eq!(state.error.as_deref(), Some(kept), "erro que não é do render fica");
+        }
+    }
+
+    #[test]
+    fn command_reply_reports_only_refusals_and_by_name() {
+        let mut state = Snapshot::default();
+        let mut pending = HashMap::from([(1, "cycle".to_owned()), (2, "seek".to_owned())]);
+        command_reply(&mut state, &mut pending, 1, 0, |_| unreachable!("sucesso não tem texto de erro"));
+        assert_eq!(state.command_error, None, "resposta boa não é erro");
+        command_reply(&mut state, &mut pending, 2, -12, |code| format!("erro {code}"));
+        assert_eq!(state.command_error, Some((2, "seek: erro -12".into())));
+        assert!(pending.is_empty(), "as duas respostas saem da espera");
+        assert_eq!(state.error, None, "comando recusado não derruba o player");
+    }
 
     fn prop<T>(format: c_int, value: &mut T) -> EventProperty {
         EventProperty { name: std::ptr::null(), format, data: (value as *mut T).cast::<c_void>() }

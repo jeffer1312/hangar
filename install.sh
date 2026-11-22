@@ -900,6 +900,8 @@ if [ -n "$LIBMPV_CMD" ] && [ "$UPDATE" = 0 ]; then
   fi
 fi
 export HANGAR_LIBMPV_SEM_SUDO=1
+# No macOS o Homebrew instala sem sudo: o --update precisa dizer que não instala.
+[ "$UPDATE" = 1 ] && export HANGAR_LIBMPV_SEM_INSTALAR=1
 if [ "$SEM_NATIVO" = 1 ]; then
   # O próprio app (assistente) se copia para o lugar de sempre; o install-native.sh baixaria a
   # native-latest por cima do binário aberto.

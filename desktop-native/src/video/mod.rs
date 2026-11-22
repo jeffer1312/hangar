@@ -90,7 +90,8 @@ impl VideoPlayer {
                         // Fechado enquanto abria: o player sai aqui, sem tocar para um diálogo que já não existe.
                         if this.released { return; }
                         match result {
-                            Ok(player) => { this.core.borrow_mut().player = Some(player); this.phase = Phase::Ready; }
+                            // O aviso de um erro logo na abertura pode ter chegado antes do player: o estado é lido já.
+                            Ok(player) => { this.core.borrow_mut().player = Some(player); this.phase = Phase::Ready; this.changed(cx); }
                             Err(error) => {
                                 crate::log_line(&format!("video: {error}"));
                                 this.phase = Phase::Failed(error);
@@ -150,6 +151,9 @@ impl VideoPlayer {
         // A libmpv mantém o erro no estado; o log recebe cada erro novo uma vez só.
         if let Some(error) = &state.error && self.state.error.as_ref() != Some(error) {
             crate::log_line(&format!("video: {error}"));
+        }
+        if let Some((_, error)) = &state.command_error && self.state.command_error != state.command_error {
+            crate::log_line(&format!("video: comando recusado: {error}"));
         }
         self.state = state;
         cx.notify();
@@ -234,8 +238,11 @@ impl VideoPlayer {
             let scale = window.scale_factor();
             let target = ((f32::from(bounds.size.width) * scale) as u32, (f32::from(bounds.size.height) * scale) as u32);
             if core.target != target { core.target = target; player.set_target(target.0, target.1); }
+            // Pintou um quadro agora, ou não havia quadro novo: a tela está desenhando. Só comparar com o último
+            // publicado depois perderia o quadro que a thread de render publica entre a cópia e a consulta.
+            let before = core.surface.seq();
             core.surface.paint(player, bounds, window);
-            if player.frame_seq() <= core.surface.seq() { core.unpainted_since = None; }
+            if core.surface.seq() > before || player.frame_seq() <= core.surface.seq() { core.unpainted_since = None; }
         }).absolute().size_full();
         let waiting = (!self.state.loaded).then(|| tr("video_loading")).or_else(|| self.state.buffering.then(|| tr("video_buffering")));
         div().id("video-stage").relative().size_full().cursor_pointer()

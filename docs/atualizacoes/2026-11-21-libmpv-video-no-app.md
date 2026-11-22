@@ -4,7 +4,7 @@ titulo: Os vídeos da conversa passam a tocar dentro do app nativo
 comando_posix: ./scripts/install-libmpv.sh
 comando_windows: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-libmpv.ps1
 prova: ~/.hangar/native/libmpv-ok
-destrutivo: false
+destrutivo: true
 tipo: maquina
 ---
 
@@ -18,6 +18,8 @@ O passo conta como feito mesmo quando a libmpv não instala, para a atualizaçã
 numa máquina sem `sudo` sem senha. O motivo fica em `~/.hangar/native/libmpv-ok` e no log da
 instalação (`~/.hangar/logs/privado/install.log`; no Windows,
 `%LOCALAPPDATA%\hangar\logs\privado\install.log`). Para tentar de novo, rode à mão
-`scripts/install-libmpv.sh` (no Windows, `scripts\install-libmpv.ps1`) ou reinstale o Hangar.
+`~/.hangar/current/scripts/install-libmpv.sh` (no Windows,
+`%USERPROFILE%\.hangar\current\scripts\install-libmpv.ps1`; num checkout do repositório, o
+`scripts/install-libmpv.sh` a partir da raiz dele) ou reinstale o Hangar.
 No Windows, uma `libmpv-2.dll` diferente que já esteja ao lado do `Hangar.exe` é trocada pela
 versão conferida.
