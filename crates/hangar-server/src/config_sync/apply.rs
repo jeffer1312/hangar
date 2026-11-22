@@ -385,9 +385,10 @@ impl Apply {
                         self.fix_commands(item, server, name);
                     }
                 }
+                let claude_json = self.context.claude_json.clone();
                 self.merge_at(
                     item,
-                    &Path::new(&roots.home).join(".claude.json"),
+                    &claude_json,
                     Some("mcpServers"),
                     incoming,
                     "",
@@ -486,9 +487,10 @@ impl Apply {
                 return Ok(());
             }
             let home = self.accounts.env.home.clone();
+            let principal = self.accounts.env.default_claude_json();
             self.accounts
                 .create(Provider::Claude, name, |path| {
-                    let result = claude_config::seed(&home, path);
+                    let result = claude_config::seed(&home, &principal, path);
                     claude_config::write_cli_diary(&self.accounts.env, &result.diary);
                     result.result.map(|_| ()).map_err(|error| {
                         catalog::AccountError::new(

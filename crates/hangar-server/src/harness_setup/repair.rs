@@ -223,6 +223,7 @@ impl Service {
                 {
                     let result = claude_config::reconcile_account(
                         &env.home,
+                        &env.default_claude_json(),
                         &account.id,
                         None,
                         claude_config::Wait::within(Duration::from_secs(30)),

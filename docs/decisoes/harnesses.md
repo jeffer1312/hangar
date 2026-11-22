@@ -523,6 +523,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   CLI lê `~/.claude/.claude.json`, sem o MCP `hangar`. Uma regra só,
   `terminal::config_dir_to_export`, decide a variável, o arquivo da pré-confiança e o da marca de
   recarga. Ver [conta padrão sem a variável](#conta-padrão-do-claude-sem-terminal-sem-claude_config_dir-13112026).
+- **O `.claude.json` da conta padrão é o que ela lê: `AccountEnvironment::default_claude_json`.** Com
+  `CLAUDE_CONFIG_DIR` no servidor (mesmo `~/.claude`) é o de dentro da pasta; sem ela, o `~/.claude.json`.
+  Computer Use, `mcp-register`, espelho e semeadura das contas, configuração compartilhada e saúde
+  usam essa regra; o principal do Computer Use (estado e "desligado à mão") continua o
+  `~/.claude.json`. Ver [o arquivo que a conta padrão lê](#o-claudejson-da-conta-padrão-segue-o-claude_config_dir-22112026).
 - **O catálogo de comandos do Claude é do Rust, com e sem terminal.** Composição, scans,
   filtros e a sonda compartilhada ficam em `commands/`; convidado e Connect só passam pela
   autorização das suas portas. A sonda usa o contexto da sessão, que também separa o cache;
@@ -1360,6 +1365,27 @@ chama `TaskStop` e registra o resultado no próprio log de depuração. Plugin q
 declarou o modo recebe 409 `erro_parar_plugin_antigo`; sem plugin vivo, 409 `erro_parar_sem_plugin`.
 Codex segue no `codex/terminate`; Codex e os outros provedores recebem 409 `erro_parar_so_claude` nesta
 rota, respondido pelo Rust, sem passar pelo Python.
+
+## O .claude.json da conta padrão segue o CLAUDE_CONFIG_DIR (22/11/2026)
+
+Quem exporta `CLAUDE_CONFIG_DIR=~/.claude` no perfil do shell e o importa no ambiente do systemd do
+usuário sobe o servidor com a variável. Pela regra do `config_dir_to_export`, servidor com a
+variável a exporta também para a conta padrão, e o CLI lê `~/.claude/.claude.json`: numa instalação
+assim, esse era o arquivo em uso (alterado no dia), e o `~/.claude.json` estava parado havia quatro
+dias. Os escritores fixavam o
+`~/.claude.json`: o Computer Use tirava a pasta padrão da lista de contas e gravava só no
+`~/.claude.json` e nas outras contas, então as sessões da conta padrão não viam o
+`hangar-computer-control`; o `mcp-register` deixava o `hangar` de dentro da pasta sem o prazo de
+660 s; o espelho levava às contas os MCP do `~/.claude.json`, e o `open-design` registrado pela
+conta padrão nunca chegava a elas. A regra única é `default_claude_json` (`hangar-core`), com o
+mesmo critério do `config_dir_to_export`. O principal do Computer Use continua o `~/.claude.json`:
+mudar para o de dentro da pasta faria a marca `registered` de quem já tinha o registro ler a
+entrada ausente como tirada à mão, e o registro nunca mais aconteceria. Limite: tirar a entrada à
+mão só do arquivo de dentro da pasta é desfeito no próximo registro, como numa conta `~/.claude-*`;
+desligar é pela tela. O `mcp-register` ignora a variável com `--home`, que aponta para outra casa.
+O passo `2026-11-22-mcp-na-conta-padrao-com-config-dir` é de máquina porque o pacote não roda
+passo de conteúdo e nada mais regravaria o `hangar` desse arquivo; sem ele, o espelho novo levaria
+às contas o `hangar` sem prazo.
 
 ## Conta padrão do Claude sem terminal sem CLAUDE_CONFIG_DIR (13/11/2026)
 

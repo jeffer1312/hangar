@@ -150,15 +150,18 @@ pub(crate) fn paths(st: &AppState) -> Result<setup::Paths, setup::Error> {
     account_paths(&st.accounts).map_err(setup::Error::io)
 }
 
-/// `~/.claude.json` e o de cada conta do catálogo, menos a pasta padrão: a lista das rotas, do registro
-/// e do `sync_jev`.
+/// `~/.claude.json` e o de cada conta do catálogo: a lista das rotas, do registro e do `sync_jev`. A
+/// pasta padrão só entra quando as sessões dela leem o arquivo de dentro dela (`CLAUDE_CONFIG_DIR` no
+/// servidor); sem a variável, elas leem o `~/.claude.json`.
 pub(crate) fn account_paths(accounts: &crate::accounts::AccountService) -> Result<setup::Paths, String> {
+    use crate::accounts::catalog::resolved;
     let home = &accounts.env.home;
-    let default = crate::accounts::catalog::resolved(&home.join(".claude"));
+    let default = resolved(&home.join(".claude"));
+    let read_by_default = resolved(&accounts.env.default_claude_json());
     let homes = accounts.claude_accounts().map_err(|e| e.message)?
         .into_iter()
         .map(|(_, account)| account.home)
-        .filter(|account| crate::accounts::catalog::resolved(account) != default)
+        .filter(|account| resolved(account) != default || resolved(&account.join(".claude.json")) == read_by_default)
         .collect();
     Ok(setup::Paths::new(home.clone(), homes))
 }

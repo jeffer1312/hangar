@@ -122,10 +122,13 @@ impl Paths {
     pub fn ssh_config(&self) -> PathBuf {
         self.home.join(".ssh").join("config")
     }
-    /// O principal sempre; de cada conta, só o `.claude.json` que já existe.
+    /// O principal sempre; de cada conta, só o `.claude.json` que já existe e não é o próprio principal
+    /// (`CLAUDE_CONFIG_DIR` apontando para o HOME).
     pub fn config_files(&self) -> Vec<PathBuf> {
-        let accounts = self.accounts.iter().map(|dir| dir.join(".claude.json")).filter(|p| p.is_file());
-        std::iter::once(self.main_file()).chain(accounts).collect()
+        let main = self.main_file();
+        let same = |path: &Path| path == main || path.canonicalize().ok().is_some_and(|p| main.canonicalize().ok() == Some(p));
+        let accounts: Vec<PathBuf> = self.accounts.iter().map(|dir| dir.join(".claude.json")).filter(|p| p.is_file() && !same(p)).collect();
+        std::iter::once(main).chain(accounts).collect()
     }
 }
 

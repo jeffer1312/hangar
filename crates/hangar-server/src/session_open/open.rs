@@ -537,7 +537,8 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        let (held, result) = reconcile_hangar_dir(host.home().to_owned(), dir, &account, &spec.cwd, host.reconcile_limit(), guard.take(),
+        let principal = hangar_core::account_env::default_claude_json(host.home(), host.env().get("CLAUDE_CONFIG_DIR").map(String::as_str));
+        let (held, result) = reconcile_hangar_dir(host.home().to_owned(), principal, dir, &account, &spec.cwd, host.reconcile_limit(), guard.take(),
             |events| host.account_diary(events)).await;
         guard = held;
         avisos = result?;
@@ -547,7 +548,8 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
 
 /// A reconciliação da conta do Hangar `dir` (pasta já conferida) dentro do prazo, com a guarda `held` na
 /// mesma tarefa, devolvida quando ela termina. A abertura e a reabertura do Claude passam por aqui.
-pub(crate) async fn reconcile_hangar_dir(home: PathBuf, dir: &str, account: &str, cwd: &str, limit: Duration,
+/// `principal`: o `.claude.json` que a conta padrão lê, a fonte do espelho dos MCP.
+pub(crate) async fn reconcile_hangar_dir(home: PathBuf, principal: PathBuf, dir: &str, account: &str, cwd: &str, limit: Duration,
     held: Option<crate::accounts::AccountGuard>, diary: impl FnOnce(Vec<Value>))
     -> (Option<crate::accounts::AccountGuard>, Result<Vec<String>, OpenError>) {
     use crate::accounts::claude_config::{Outcome, Wait, late_outcome, reconcile_dir, refused};
@@ -556,7 +558,7 @@ pub(crate) async fn reconcile_hangar_dir(home: PathBuf, dir: &str, account: &str
     let wait = Wait::within(limit);
     // As travas esperam só até o prazo, e a guarda vai com a tarefa: a recusa no limite não deixa
     // reconciliação rodando sem ela (a exclusão da conta esperaria) nem segurando o runtime.
-    let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, &dir, Some(&project), wait)));
+    let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, &principal, &dir, Some(&project), wait)));
     let (guard, outcome) = match tokio::time::timeout(limit, task).await {
         Ok(Ok((held, outcome))) => (held, outcome),
         Ok(Err(e)) => (None, Outcome::failed(refused(format!("a reconciliação parou no meio: {e}")))),

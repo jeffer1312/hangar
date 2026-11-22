@@ -215,7 +215,7 @@ fn config(env: &AccountEnvironment, cli: &str, json_name: &str) -> Result<ValueG
 }
 pub fn mcp(env: &AccountEnvironment, cli: &str) -> Result<Value, String> {
     let doc = if cli == "claude" {
-        read(&env.home.join(".claude.json"))
+        read(&env.default_claude_json())
     } else {
         config(env, cli, "mcp.json")?
     };

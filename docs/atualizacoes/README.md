@@ -92,13 +92,16 @@ Passos marcados:
 | `2026-11-17-atalhos-windows-sem-python` | regrava no Windows o `hangar-conta.cmd` e os lançadores do Codex que passavam pelo Python |
 | `2026-11-17-vigia-no-lancador-windows` | remove a tarefa `hangar-vigia` e o `.vbs` dela; lançador estável renovado |
 | `2026-11-21-libmpv-video-no-app` | libmpv: pacote do sistema (Linux), Homebrew (macOS), `libmpv-2.dll` ao lado do `Hangar.exe` (Windows) |
+| `2026-11-22-mcp-na-conta-padrao-com-config-dir` | MCP `hangar` no `.claude.json` que a conta padrão lê com `CLAUDE_CONFIG_DIR` (fora da pasta da versão; no pacote, só passo de máquina roda) |
 
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
 `install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `hangar-server mcp-register` (conteúdo e
 atalhos), `2026-10-02-hangar-server-binarios` (o binário vem no pacote) e
 `2026-10-19-trava-do-client-api` (hook do git do checkout, só no modo desenvolvedor). A exceção
 é o `2026-10-31-links-do-pacote`: ele roda o `install-claude-wrapper.sh` para levar ao `current`
-os atalhos que ficaram fora da pasta da versão, apontando para o checkout.
+os atalhos que ficaram fora da pasta da versão, apontando para o checkout. O
+`2026-11-22-mcp-na-conta-padrao-com-config-dir` também roda o `mcp-register` com o campo: ele grava
+um `.claude.json` que nenhuma instalação por pacote regravaria.
 
 ## O que o botão faz sozinho, e o que só um passo faz
 

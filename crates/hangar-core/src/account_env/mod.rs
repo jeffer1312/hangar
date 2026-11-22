@@ -105,6 +105,11 @@ impl AccountEnvironment {
             .filter(|(name,_)|name!="HANGAR_AUTH_CONTEXT").collect()
     }
 
+    /// `default_claude_json` pelo ambiente capturado.
+    pub fn default_claude_json(&self) -> PathBuf {
+        default_claude_json(&self.home, self.base.get("CLAUDE_CONFIG_DIR").map(String::as_str))
+    }
+
     /// Raízes do omp resolvidas só pelo home e pelo ambiente capturados, sem criar nada.
     pub fn omp_directories(&self) -> Result<OmpDirectories, &'static str> {
         omp_directories(&self.home, &self.base)
@@ -152,6 +157,16 @@ impl AccountEnvironment {
     }
 }
 
+/// O `.claude.json` que a conta padrão do Claude lê. Com `CLAUDE_CONFIG_DIR` no ambiente, o Hangar a
+/// exporta às sessões da conta padrão (`config_dir_to_export`) e o CLI lê o arquivo de dentro da pasta,
+/// mesmo quando ela é o `~/.claude`; sem a variável, o do HOME.
+pub fn default_claude_json(home: &Path, config_dir: Option<&str>) -> PathBuf {
+    match config_dir.filter(|dir| !dir.is_empty()) {
+        Some(dir) => expand(dir, home).join(".claude.json"),
+        None => home.join(".claude.json"),
+    }
+}
+
 pub fn expand(value: &str, home: &Path) -> PathBuf {
     if value == "~" {
         home.into()
@@ -171,6 +186,17 @@ mod tests {
 
     fn environment(pairs: &[(&str, &str)]) -> AccountEnvironment {
         AccountEnvironment::from_pairs(pairs.iter().map(|&(k, v)| (k, v)))
+    }
+
+    /// Com `CLAUDE_CONFIG_DIR`, mesmo apontando para o `~/.claude`, a conta padrão lê o arquivo de dentro
+    /// da pasta; vazia vale ausente.
+    #[test]
+    fn default_claude_json_follows_the_config_dir() {
+        let read = |pairs: &[(&str, &str)]| environment(pairs).default_claude_json();
+        assert_eq!(read(&[("HOME", "/h")]), PathBuf::from("/h/.claude.json"));
+        assert_eq!(read(&[("HOME", "/h"), ("CLAUDE_CONFIG_DIR", "")]), PathBuf::from("/h/.claude.json"));
+        assert_eq!(read(&[("HOME", "/h"), ("CLAUDE_CONFIG_DIR", "/h/.claude")]), PathBuf::from("/h/.claude/.claude.json"));
+        assert_eq!(read(&[("HOME", "/h"), ("CLAUDE_CONFIG_DIR", "~/outra")]), PathBuf::from("/h/outra/.claude.json"));
     }
 
     /// A conta adicional não leva identidade nenhuma da principal. O lançador Python deixava passar
