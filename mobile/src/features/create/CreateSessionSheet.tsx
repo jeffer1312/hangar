@@ -6,7 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { resetCreatedChat } from '../../stores/chat';
 import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount,
-  getEnginesForServer, getSessionDefaultsForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
+  getEnginesForServer, getSessionDefaultsForServer, getConfigForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory } from '@hangar/core';
@@ -34,7 +34,7 @@ import { NewConversation, type HomePresentation } from './NewConversation';
 import { SPEED_TIERS, speedHint, speedLabel, type Tier } from '../pills/serviceTierControl';
 import { QuietPill } from './QuietPill';
 import { SettingRow } from './SettingRow';
-import { readChoices, readMachine, rememberChoices, rememberMachine, type NewChatChoices } from './choicesPrefs';
+import { readMachine, rememberMachine } from './choicesPrefs';
 import { superficie } from '../../theme/superficie';
 import { AnchoredPanel } from '../../ui/AnchoredPanel';
 import * as m from '../../paraglide/messages';
@@ -115,17 +115,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   useEffect(() => {
     if (home?.mode !== 'sessions') setInitialized(true);
   }, [home?.mode]);
-  // O form remonta por máquina: estas são as escolhas guardadas para ela.
-  const [remembered] = useState(() => readChoices(active.id));
-  // O que a pessoa quer de modelo e nível; reaplicado sempre que a lista do provider recarrega.
-  const desired = useRef<Required<Pick<NewChatChoices, 'model' | 'effort'>>>(initialEngine ? { model: '', effort: '' } : {
-    model: remembered.model ?? '', effort: remembered.effort ?? '',
-  });
+  // Modelo e nível escolhidos nesta abertura ou o padrão do servidor; reaplicado quando a lista do provider recarrega.
+  const desired = useRef({ model: '', effort: '' });
   // Aplicado uma vez, quando a lista de motores chega; depois a escolha é da pessoa.
   const seededEngine = useRef(initialEngine ?? '');
   // Aberto pelo assistente com um motor: criar (e reservar) antes de ele chegar abriria na conta Claude direta.
   const [seedPending, setSeedPending] = useState(!!initialEngine);
-  const remember = (patch: NewChatChoices) => rememberChoices(active.id, patch);
 
   const [picked, setPicked] = useState<string | null>(null);
   // Worktree escolhida no menu de branch: o repositório dela vem junto, antes de a lista geral carregar.
@@ -158,10 +153,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [projectWarning, setProjectWarning] = useState('');
   const pickGeneration = useRef(0);
 
-  const [provider, setProvider] = useState<Provider>(() => initialEngine ? 'claude'
-    : remembered.provider && SESSION_PROVIDERS.includes(remembered.provider) ? remembered.provider : 'claude');
-  // Padrão sem terminal; só Claude e Codex rodam assim.
-  const [headless, setHeadless] = useState(remembered.headless ?? true);
+  // O inicial vem da sonda de providers, que segue o último provedor que o servidor guardou.
+  const [provider, setProvider] = useState<Provider>('claude');
+  // Sem terminal é o `headless_default` do servidor; só vai no pedido o que a pessoa escolher aqui.
+  const [headlessPick, setHeadlessPick] = useState<boolean | null>(null);
+  const [serverHeadless, setServerHeadless] = useState<boolean | null>(null);
+  const headlessKnown = headlessPick ?? serverHeadless;
+  const headless = headlessKnown ?? true;
   const [providerProbe, setProviderProbe] = useState<ProviderProbe | null>(null);
   const [providersError, setProvidersError] = useState('');
   const providerTouched = useRef(false);
@@ -198,9 +196,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const cotaSelecionada = selectedConfig ? cotaDaConta(cotas, selectedConfig) : undefined;
   // Só a escolha à mão no menu de conta desliga a troca automática por cota esgotada.
   const accountTouched = useRef(false);
-  // D-003: só vai no pedido a conta que a pessoa escolheu (agora ou lembrada de antes). A ativa sem
-  // escolha não vai, e o servidor troca a que estiver a 95% ou mais. A lembrada que a tela trocou por
-  // cota esgotada vai como a que a tela mostra: a regra é a mesma do servidor.
+  // D-003: só vai no pedido a conta que a pessoa escolheu nesta tela. A ativa sem escolha não vai, e o
+  // servidor troca a que estiver a 95% ou mais. A que a tela trocou por cota esgotada vai como a que a
+  // tela mostra: a regra é a mesma do servidor.
   const [accountChosen, setAccountChosen] = useState(false);
   // Conta que a troca automática deixou para trás; a pílula avisa até a próxima escolha.
   const [switchedFrom, setSwitchedFrom] = useState('');
@@ -286,7 +284,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (generation !== codexGeneration.current || controller.signal.aborted) return;
         setCodexAccounts(accounts);
         setCodexAccount((current) => accounts.some((account) => account.id === current) ? current
-          : defaultCodexAccount(accounts, remembered.codexAccount)?.id ?? '');
+          : defaultCodexAccount(accounts)?.id ?? '');
       })
       .catch((cause: unknown) => {
         if (generation !== codexGeneration.current || controller.signal.aborted) return;
@@ -324,10 +322,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       .then((cs) => {
         if (!alive) return;
         setConfigs(cs);
-        const kept = cs.find((c) => c.path === remembered.configDir)?.path;
-        const sel = kept ?? cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
+        const sel = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
         // Retomar a carga não desfaz a conta que a pessoa já escolheu.
-        if (!accountTouched.current) setAccountChosen(!!kept);
         setSelectedConfig((current) => cs.some((c) => c.path === current) ? current : sel);
       })
       .catch((cause: unknown) => {
@@ -376,6 +372,19 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       })
       .then((cs) => {
         if (alive) setCotas(cs);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [enabled, active]);
+
+  // Só para mostrar o modo que o servidor vai usar; sem leitura, o pedido também não leva o modo.
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    void getConfigForServer(active)
+      .then((config) => {
+        const value = config.campos?.headless_default?.valor;
+        if (alive) setServerHeadless(typeof value === 'boolean' ? value : null);
       })
       .catch(() => {});
     return () => { alive = false; };
@@ -593,8 +602,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
 
   // Nome em branco: o store gera projeto + sufixo da tentativa.
   const canHeadless = hasExecutionMode(provider);
+  const headlessField = canHeadless && headlessPick !== null ? { headless: headlessPick } : {};
   const settings: Omit<NewConversationInput['body'], 'cwd'> = provider === 'codex'
-    ? { provider: 'codex', model: modelo || null, effort: esforco || null, permission_mode: headless ? permissao || null : null, codex_account: codexAccount, headless }
+    // Permissão do Codex só vale sem terminal: com o modo desconhecido, o servidor decide os dois.
+    ? { provider: 'codex', model: modelo || null, effort: esforco || null, permission_mode: headlessKnown ? permissao || null : null, codex_account: codexAccount, ...headlessField }
     : {
       provider,
       // A conta trocada pela cota também vai: é a que a tela mostra.
@@ -605,7 +616,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       effort: (provider === 'claude' || provider === 'pi' || provider === 'omp') ? esforco || null : null,
       permission_mode: provider === 'claude' ? permissao || null : null,
       subagent_model: provider === 'claude' && !engine ? subagente || null : null,
-      ...(canHeadless ? { headless } : {}),
+      ...headlessField,
     };
   const body = picked && defaultsReady && !bindingBlocked && !seedPending && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
 
@@ -619,13 +630,15 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return () => sub.remove();
   }, []);
   useEffect(() => () => reserve.current?.release(), []);
-  const reserveBody = foreground && home?.mode !== 'sessions' ? body : null;
+  // A reserva só sobe sem terminal; sem escolha, ela leva o modo lido do servidor, o mesmo que a criação vai resolver.
+  const reserveBody = foreground && home?.mode !== 'sessions' && body
+    ? (headlessPick === null && canHeadless && serverHeadless !== null ? { ...body, headless: serverHeadless } : body) : null;
   const reserveKey = reserveBody ? JSON.stringify(reserveBody) : '';
   useEffect(() => { reserve.current?.update(active, reserveBody); }, [active, reserveKey]);
   const takePrewarm = useCallback(() => reserve.current?.take() ?? null, []);
   const resumePrewarm = useCallback(() => reserve.current?.resume(), []);
 
-  // Toda escolha feita aqui volta na próxima abertura desta máquina.
+  // Nada daqui é guardado no aparelho: o padrão da próxima abertura é o do servidor.
   const chooseProvider = (p: Provider) => {
     providerTouched.current = true;
     seededEngine.current = '';
@@ -635,7 +648,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     choiceTouched.current = false;
     desired.current = { model: '', effort: '' };
     setProvider(p);
-    remember({ provider: p, model: '', effort: '' });
   };
   const chooseModel = (v: string) => {
     choiceTouched.current = true;
@@ -647,7 +659,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     desired.current = { model: v, effort };
     setModelo(v);
     setEsforco(effort);
-    remember({ model: v, effort });
   };
   const chooseEffort = (v: string) => {
     choiceTouched.current = true;
@@ -655,12 +666,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setProvidersError('');
     desired.current = { ...desired.current, effort: v };
     setEsforco(v);
-    remember({ effort: v });
   };
-  const chooseHeadless = (v: boolean) => {
-    setHeadless(v);
-    remember({ headless: v });
-  };
+  const chooseHeadless = (v: boolean) => setHeadlessPick(v);
   const choosePermission = (value: string) => {
     permissionTouched.current = true;
     setPermissao(value);
@@ -672,7 +679,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setAccountChosen(true);
     setSwitchedFrom('');
     setSelectedConfig(v);
-    remember({ configDir: v });
   };
   const chooseCodexAccount = (value: string) => {
     providerTouched.current = true;
@@ -684,7 +690,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setError('');
     setCodexProgress('');
     setCodexAccount(value);
-    remember({ codexAccount: value });
   };
 
   const handleResume = async (id = retomavel) => {

@@ -7,6 +7,7 @@ pub use recent::RecentFailure;
 pub mod route;
 pub mod sse;
 mod session_defaults;
+pub use session_defaults::SessionOptions;
 mod tour_progress;
 
 use std::time::Duration;

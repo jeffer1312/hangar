@@ -49,7 +49,12 @@ pub(super) fn merge(
             }
             Value::Object(result)
         }
-        None => current,
+        // Tarefa nova: só a pasta e o que a pessoa escolheu; opção de um provedor leva o provedor junto.
+        None => {
+            let provider_bound = changed.iter().any(|key| !matches!(*key, "cwd" | "provider" | "jev" | "headless" | "read_only"));
+            let keep = |key: &str| key == "cwd" || changed.contains(key) || (key == "provider" && provider_bound);
+            Value::Object(current.as_object().into_iter().flatten().filter(|(key, _)| keep(key)).map(|(k, v)| (k.clone(), v.clone())).collect())
+        }
     };
     if let Some(body) = result.as_object_mut() {
         body.retain(|key, value| FIELDS.contains(&key.as_str()) && !value.is_null());
@@ -110,8 +115,17 @@ mod tests {
         let current = json!({"cwd":"/workspace/app", "provider":"claude", "model":null, "name":"internal", "remember_provider":true,
             "creator":"internal", "initial_prompt":"internal", "prewarm":"internal", "link":true, "branch":"internal", "new_branch":true, "base":"main"});
         assert_eq!(
-            merge(None, current, &HashSet::new()),
+            merge(None, current, &HashSet::from(["provider"])),
             json!({"cwd":"/workspace/app", "provider":"claude"})
         );
+    }
+
+    /// Tarefa nova guarda só o que a pessoa escolheu: o padrão que a tela mostrou é decidido pelo servidor a cada rodada.
+    #[test]
+    fn a_new_template_does_not_freeze_what_the_screen_showed() {
+        let current = json!({"cwd":"/workspace/app", "provider":"codex", "model":"gpt", "effort":"high", "headless":true, "jev":false});
+        assert_eq!(merge(None, current.clone(), &HashSet::new()), json!({"cwd":"/workspace/app"}));
+        // Modelo só existe no provedor mostrado: escolher um fixa o provedor junto.
+        assert_eq!(merge(None, current, &HashSet::from(["model"])), json!({"cwd":"/workspace/app", "provider":"codex", "model":"gpt"}));
     }
 }

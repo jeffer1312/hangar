@@ -93,6 +93,9 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  --jev / --sem-jev liga ou desliga o Jev naquela sessão: com ele,
                                  `hangar-preview objetivo` navega e preenche tela sozinho. Sem
                                  nenhum dos dois vale o padrão do servidor (tela de Configurações).
+                                 --code-mode / --sem-code-mode liga ou desliga o Code Mode do
+                                 Claude Code naquela sessão (só claude). Sem nenhum dos dois vale
+                                 o padrão do servidor (tela Beta).
                                  --link liga a sessão nova a esta: entra no grupo desta sem aviso,
                                  aparece na linha de subagentes, pode ser interrompida por esta e
                                  a resposta final da tarefa volta sozinha como [de: <filha>] (só

@@ -40,6 +40,7 @@ pub mod provider_state;
 pub mod pycompat;
 pub mod query;
 pub mod session_dirs;
+pub mod session_open_fields;
 pub mod queue_row;
 pub mod terminal_lock;
 // Grupo de processos e job object do Windows: chamadas de `libc` e `windows-sys`.

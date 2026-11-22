@@ -15,12 +15,35 @@ fn parse(value: serde_json::Value) -> Result<Selection, Failure> {
     serde_json::from_value(value).map_err(|_| Failure::local("invalid_response"))
 }
 
+/// As opções da tela Beta que valem para toda abertura no servidor (`/api/session-options`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptions { pub conversation_beta: bool, pub code_mode: bool }
+
+#[derive(Deserialize)]
+struct OptionsSelection { options: SessionOptions }
+
 impl Api {
     pub async fn import_session_defaults(&self) -> Result<(), Failure> {
         let server = self.identity();
         let entries = tokio::task::spawn_blocking(move || crate::appearance::legacy_harness_defaults(&server)).await
             .map_err(|_| Failure::local("invalid_response"))?;
-        self.import_session_default_entries(entries).await
+        // A escolha da tela Beta guardada neste computador vai ao servidor uma vez, sem pisar na de lá.
+        let look = crate::appearance::get();
+        let options = self.save_session_options(SessionOptions { conversation_beta: look.conversation_beta, code_mode: look.claude_code_mode }, true).await;
+        let defaults = self.import_session_default_entries(entries).await;
+        options.and(defaults)
+    }
+
+    pub async fn read_session_options(&self) -> Result<SessionOptions, Failure> {
+        let selection: OptionsSelection = serde_json::from_value(self.server_read(&["session-options"], &[], 10).await?)
+            .map_err(|_| Failure::local("invalid_response"))?;
+        Ok(selection.options)
+    }
+
+    pub async fn save_session_options(&self, options: SessionOptions, if_absent: bool) -> Result<SessionOptions, Failure> {
+        let selection: OptionsSelection = serde_json::from_value(self.server_send_query(reqwest::Method::PUT, &["session-options"], &[],
+            Some(json!({"options": options, "if_absent": if_absent})), 10).await?).map_err(|_| Failure::local("invalid_response"))?;
+        Ok(selection.options)
     }
 
     async fn import_session_default_entries(&self, entries: Vec<(String, Choice)>) -> Result<(), Failure> {

@@ -262,7 +262,8 @@ pub struct Appearance {
     /// Conversa nova (beta): faixa do que o agente faz agora, cartão de sugestão, composer e abas redesenhados.
     /// Desligada, a conversa segue o desenho anterior; os dois convivem até o beta virar o padrão.
     pub conversation_beta: bool,
-    /// Dentro da conversa nova: as sessões do Claude criadas por este app nascem com o Code Mode experimental.
+    /// Cópia da escolha de Code Mode da tela Beta. A abertura nunca lê daqui: o padrão mora no servidor
+    /// (`/api/session-options`), e esta cópia só vai, uma vez, a um servidor que ainda não tem a escolha.
     pub claude_code_mode: bool,
     pub ask_highlight: AskHighlight,
     /// Geral: também deste computador, no mesmo arquivo; o "Voltar ao padrão" da Aparência não mexe nelas.
@@ -410,7 +411,26 @@ impl Appearance {
 static CURRENT: RwLock<Appearance> = RwLock::new(DEFAULT);
 static IMAGE_NAME: RwLock<Option<String>> = RwLock::new(None);
 
-pub fn get() -> Appearance { *CURRENT.read().unwrap_or_else(|e| e.into_inner()) }
+pub fn get() -> Appearance {
+    #[cfg(test)]
+    if let Some(value) = TEST_OVERRIDE.get() { return value; }
+    *CURRENT.read().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Os testes trocam a aparência só na própria thread: a global é lida pelos outros testes em paralelo.
+    static TEST_OVERRIDE: std::cell::Cell<Option<Appearance>> = const { std::cell::Cell::new(None) };
+}
+
+/// Roda `build` com `value` como aparência desta thread.
+#[cfg(test)]
+pub fn with_test_appearance<T>(value: Appearance, build: impl FnOnce() -> T) -> T {
+    let before = TEST_OVERRIDE.replace(Some(value));
+    let result = build();
+    TEST_OVERRIDE.set(before);
+    result
+}
 
 pub fn set(value: Appearance) { *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = value.clamped(); }
 
@@ -547,13 +567,6 @@ fn write_search_all(file: &std::path::Path, value: bool) -> Result<(), String> {
         .and_then(|_| std::fs::rename(&tmp, &file)).map_err(|error| format!("{}: {error}", file.display()))
 }
 
-/// Último modelo e esforço escolhidos na criação, pela chave servidor:provider:conta/motor (`cp_last_model` do web).
-pub fn last_model(key: &str) -> (String, String) {
-    let saved: HashMap<String, (String, String)> = dir().and_then(|d| std::fs::read(d.join("last-models.json")).ok())
-        .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    saved.get(key).cloned().unwrap_or_default()
-}
-
 /// Modelo, esforço e permissão marcados como padrão de um harness, valendo para todas as contas dele. Bloqueante.
 pub fn harness_default(key: &str) -> Option<(String, String, String)> {
     let saved: HashMap<String, (String, String, String)> = dir().and_then(|d| std::fs::read(d.join("harness-defaults.json")).ok())
@@ -567,18 +580,6 @@ pub fn legacy_harness_defaults(server: &str) -> Vec<(String, (String, String, St
         .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     let prefix = format!("{server}:");
     saved.into_iter().filter_map(|(key, value)| key.strip_prefix(&prefix).map(|scope| (scope.to_owned(), value))).collect()
-}
-
-/// Escolha em "Padrão" apaga a lembrança, como o `removeItem` do web.
-pub fn remember_model(key: &str, model: &str, effort: &str) {
-    let Some(dir) = dir() else { return };
-    let file = dir.join("last-models.json");
-    let mut saved: HashMap<String, (String, String)> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    if model.is_empty() && effort.is_empty() { saved.remove(key); } else { saved.insert(key.to_owned(), (model.to_owned(), effort.to_owned())); }
-    // Falha de disco só faz esquecer a escolha; fica no log para dar para saber por quê.
-    if let Ok(bytes) = serde_json::to_vec(&saved) && let Err(error) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(file, bytes)) {
-        eprintln!("memória do modelo não gravou: {error}");
-    }
 }
 
 /// Modelos marcados com estrela no seletor, como `provider:id`, na ordem em que foram marcados. Bloqueante.

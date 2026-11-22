@@ -5127,3 +5127,28 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   máquina como fora do ar, a queda de rede continua marcando (`countsOutage: 'network'`). Vale para o
   app e para a web, que compartilham o core. Sem teto: um link que trava num arquivo grande deixa o
   envio esperando até o prazo dele.
+
+## Padrão de abertura é do servidor (22/11/2026)
+
+- **Caso que motivou.** O PR #460 guardou o Code Mode no `appearance.json` do desktop e o punha no
+  corpo só na tela de criar (`create.rs`). Sessão aberta por `hangar-send --new`, MCP, Expo, tarefa
+  agendada, `orq` ou outro servidor nascia sem ele: `hook-resposta-pt`, aberta pela `review-pr-479`,
+  nasceu com `code_mode: false` e as duas opções ligadas no desktop.
+- **Regra.** O omitido é do `resolve_open()`. "Conversa nova" e "Code Mode" moram em
+  `~/.hangar/session-options.json` (`GET`/`PUT /api/session-options`, só do dono); o Code Mode vale
+  quando o pedido omite `code_mode`, o provedor é Claude e as duas estão ligadas. O desktop copia o
+  `appearance.json` antigo uma vez (`if_absent`); o desenho da conversa continua lendo a escolha local.
+- **Arquivo próprio, não o `session-defaults.json`.** A versão anterior lê aquele arquivo com
+  `deny_unknown_fields` em cada escopo: uma chave nova faria a volta de uma atualização recusar toda
+  criação de sessão.
+- **Travas.** Tabela única `hangar_core::session_open_fields` (campos, nome no MCP, flags do CLI,
+  quais têm padrão do servidor). O servidor confere que todo campo do `SessionOpenRequest` está nela
+  ou em `SERVER_ONLY` com o motivo, e que campo com padrão guarda o explícito (o `bool` puro do #460
+  perdia o `false`); o MCP e o `hangar-send` conferem que cada um chega ao corpo; o desktop confere
+  que o corpo não muda com nenhuma preferência guardada no computador. Contra o código do #460
+  falharam a do valor explícito, a do MCP, a do CLI e a do desktop; a da tabela pega o campo novo
+  que entrar no pedido sem entrar nela.
+- **Mesma regra nos outros clientes.** O desktop deixou de lembrar o último modelo, e o Expo o
+  provedor, modelo, esforço, modo e contas; tarefa agendada nova guarda só o que a pessoa escolheu.
+  O `hangar-send --new` não escolhe mais o provedor omitido. O `--jev` do `orq` fica: é escolha do
+  fluxo para os papéis dele.
