@@ -1,4 +1,4 @@
-import type { WhatsAppState, WhatsAppTotals } from '@hangar/core';
+import type { WhatsAppState } from '@hangar/core';
 
 /** O que a página mostra, decidido só pela resposta do `GET /api/whatsapp` (mesma regra do nativo). */
 export type WhatsAppView = 'off' | 'working' | 'stopped' | 'unreachable' | 'unpaired' | 'pairing' | 'connected' | 'outdated' | 'unknown';
@@ -46,16 +46,10 @@ export function failedJob(state: WhatsAppState): { kind: string; code: string } 
   return code ? { kind: job.kind, code } : null;
 }
 
-/** Códigos de job que têm frase própria; chegam como `whatsapp_<código>` (ou sem o prefixo). */
-export const JOB_ERRORS = [
-  'download_failed', 'sem_asset', 'sem_checksum', 'hash', 'binary_missing', 'write_failed', 'servico_falhou', 'no_release',
-  'version_unreadable', 'api_too_old', 'not_started', 'job_crashed', 'update_no_rollback', 'record_failed', 'accept_write_failed',
-] as const;
-export type JobError = typeof JOB_ERRORS[number];
-
-export function jobError(code: string): JobError | null {
-  const suffix = code.startsWith('whatsapp_') ? code.slice('whatsapp_'.length) : code;
-  return (JOB_ERRORS as readonly string[]).includes(suffix) ? suffix as JobError : null;
+/** A frase de um código, com ou sem o prefixo `whatsapp_`; sem frase própria, a genérica leva o código cru. */
+export function phrase(table: Record<string, () => string>, code: string, unknown: (p: { code: string }) => string): string {
+  const key = code.startsWith('whatsapp_') ? code.slice('whatsapp_'.length) : code;
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key]() : unknown({ code });
 }
 
 export function shouldPoll(state: WhatsAppState, awaitingPair: boolean): boolean {
@@ -74,22 +68,6 @@ export function phoneDigits(text: string): string | null {
   if (/[^0-9+\s\-().]/.test(text)) return null;
   const digits = text.replace(/\D/g, '');
   return digits.length >= 10 && digits.length <= 15 ? digits : null;
-}
-
-/** Fatias da barra da mídia (guardados, só no celular, perdidos), somando 1; sem mídia, tudo zero. */
-export function mediaShares(totals: Partial<WhatsAppTotals> | undefined): { saved: number; phoneOnly: number; lost: number } {
-  const saved = totals?.media_saved ?? 0;
-  const phoneOnly = totals?.media_phone_only ?? 0;
-  const lost = totals?.media_lost ?? 0;
-  const all = saved + phoneOnly + lost;
-  return all > 0 ? { saved: saved / all, phoneOnly: phoneOnly / all, lost: lost / all } : { saved: 0, phoneOnly: 0, lost: 0 };
-}
-
-/** Segundos desde um ISO UTC; `null` quando não dá para ler. */
-export function secondsSince(at: string | null | undefined, now = Date.now()): number | null {
-  if (!at) return null;
-  const t = Date.parse(at);
-  return Number.isNaN(t) ? null : Math.max(0, (now - t) / 1000);
 }
 
 /** Minutos que faltam até um ISO UTC futuro, arredondados para cima; passado ou ilegível = `null`. */

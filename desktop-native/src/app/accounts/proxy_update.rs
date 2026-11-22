@@ -81,7 +81,7 @@ pub(in crate::app) enum UpdateReply {
 }
 
 /// A etapa de cada linha: antes da atual, feita; a atual, girando; depois, esperando.
-fn step_states(steps: &[(&str, &str)], step: &str) -> Vec<ItemState> {
+pub(crate) fn step_states(steps: &[(&str, &str)], step: &str) -> Vec<ItemState> {
     let at = steps.iter().position(|(name, _)| *name == step).unwrap_or(0);
     (0..steps.len()).map(|i| if i < at { ItemState::Done } else if i == at { ItemState::Running } else { ItemState::Waiting }).collect()
 }

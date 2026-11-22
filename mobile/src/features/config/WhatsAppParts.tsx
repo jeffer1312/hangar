@@ -5,7 +5,8 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { intlLocale, relativeTime, type WhatsAppState, type WhatsAppTotals } from '@hangar/core';
 import { BlockHead, Muted, useInputStyle } from './ServerConfigParts';
 import { useSettingsColors, withAlpha } from './colors';
-import { STEPS, codeOf, mediaShares, minutesLeft, secondsSince, stepIndex, type WhatsAppView } from './whatsapp';
+import { STEPS, codeOf, minutesLeft, phrase, stepIndex, type WhatsAppView } from './whatsapp';
+import { InstallItems } from '../accounts/InstallItems';
 import { superficie } from '../../theme/superficie';
 import { Icon, type IconName } from '../../ui/Icon';
 import * as m from '../../paraglide/messages';
@@ -28,9 +29,6 @@ const STATUS_ERR: Record<string, () => string> = {
   pair_code_failed: m.native_whatsapp_status_err_pair_code_failed,
   pair_failed: m.native_whatsapp_status_err_pair_failed,
 };
-
-const statusErrorText = (code: string) =>
-  Object.prototype.hasOwnProperty.call(STATUS_ERR, code) ? STATUS_ERR[code]() : m.native_whatsapp_status_err_unknown({ code });
 
 const grouped = (n: number | undefined) => (n ?? 0).toLocaleString(intlLocale());
 
@@ -130,25 +128,14 @@ export function Off({ accepted, busy, onToggle, onInstall }: { accepted: boolean
 }
 
 export function Working({ state }: { state: WhatsAppState }) {
-  const { theme } = useUnistyles();
   const c = useSettingsColors();
   const update = state.job?.kind === 'update';
   const current = stepIndex(state.job?.step);
   return <>
     <Muted>{update ? m.native_whatsapp_updating_title() : m.native_whatsapp_installing_title()}</Muted>
     <Card>
-      <View accessibilityLiveRegion="polite" style={styles.stackTight}>
-        {STEPS.map((step, n) => {
-          const done = n < current;
-          const running = n === current;
-          return <View key={step} style={styles.step}>
-            <View style={styles.stepIcon}>
-              {running ? <ActivityIndicator size="small" color={c.accent} />
-                : <Icon name={done ? 'CircleCheck' : 'Circle'} size={16} color={done ? theme.tokens.status.success : c.faint} />}
-            </View>
-            <Text style={[styles.body, { color: done || running ? c.text : c.muted }]}>{STEP_LABEL[step]()}</Text>
-          </View>;
-        })}
+      <View accessibilityLiveRegion="polite">
+        <InstallItems at={current} failed={false} labels={STEPS.map((step) => STEP_LABEL[step]())} />
       </View>
       <View style={[styles.bar, { backgroundColor: c.inset }]}>
         <View style={{ width: `${Math.round(((current + 0.5) / STEPS.length) * 100)}%`, backgroundColor: c.accent }} />
@@ -174,7 +161,7 @@ export function Pair({ state, view, busy, qrWanted, asked, phone, phoneError, aw
   return <>
     <BlockHead title={m.native_whatsapp_pair_title()} />
     {status?.state === 'logged_out' ? <Muted>{m.native_whatsapp_logged_out()}</Muted> : null}
-    {errorCodeNow ? <Problem tone="error" icon="CircleAlert" text={statusErrorText(errorCodeNow)} action={m.native_server_retry()}
+    {errorCodeNow ? <Problem tone="error" icon="CircleAlert" text={phrase(STATUS_ERR, errorCodeNow, m.native_whatsapp_status_err_unknown)} action={m.native_server_retry()}
       busy={!!busy} onPress={onRetry} /> : null}
     {qrWanted ? <>
       <Card>
@@ -226,10 +213,9 @@ export function Connected({ state }: { state: WhatsAppState }) {
   const t: Partial<WhatsAppTotals> = status?.totals ?? {};
   const device = status?.device?.trim();
   const deviceName = status?.device_name?.trim();
-  const ago = secondsSince(status?.last_message_at);
+  const lastAt = status?.last_message_at ? Date.parse(status.last_message_at) : NaN;
   const since = status?.since ? new Date(status.since) : null;
   const sinceText = since && !Number.isNaN(since.getTime()) ? since.toLocaleDateString(intlLocale()) : null;
-  const shares = mediaShares(t);
   const success = theme.tokens.status.success;
   const danger = theme.tokens.status.error;
   return <>
@@ -242,8 +228,7 @@ export function Connected({ state }: { state: WhatsAppState }) {
       </View>
       <Text style={[styles.small, { color: c.muted }]}>
         {deviceName ? `${m.native_whatsapp_device_name({ name: deviceName })} ` : ''}
-        {ago === null ? m.native_whatsapp_no_message()
-          : m.native_whatsapp_last_message({ ago: relativeTime(Date.parse(status!.last_message_at!) / 1000) })}
+        {Number.isNaN(lastAt) ? m.native_whatsapp_no_message() : m.native_whatsapp_last_message({ ago: relativeTime(lastAt / 1000) })}
       </Text>
     </Card>
     <View style={styles.stats}>
@@ -254,9 +239,10 @@ export function Connected({ state }: { state: WhatsAppState }) {
     <BlockHead title={m.native_whatsapp_media_title()} help={m.native_whatsapp_media_desc()} />
     <Card>
       <View style={[styles.bar, { backgroundColor: c.inset }]} accessible={false}>
-        <View style={{ flex: shares.saved, backgroundColor: success }} />
-        <View style={{ flex: shares.phoneOnly, backgroundColor: c.accent }} />
-        <View style={{ flex: shares.lost, backgroundColor: danger }} />
+        {/* flex proporcional: cada fatia na razão do total; sem mídia, a barra fica vazia. */}
+        <View style={{ flex: t.media_saved ?? 0, backgroundColor: success }} />
+        <View style={{ flex: t.media_phone_only ?? 0, backgroundColor: c.accent }} />
+        <View style={{ flex: t.media_lost ?? 0, backgroundColor: danger }} />
       </View>
       <Legend color={success} title={m.whatsapp_media_saved({ n: grouped(t.media_saved) })} />
       <Legend color={c.accent} title={m.native_whatsapp_media_phone_only({ n: grouped(t.media_phone_only) })} hint={m.native_whatsapp_media_phone_only_hint()} />
@@ -297,7 +283,6 @@ export const styles = StyleSheet.create((theme) => ({
   flex: { flex: 1, minWidth: 0, gap: theme.base.space[0.5] },
   titleRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.base.space[1] },
   stack: { gap: theme.base.space[2] },
-  stackTight: { gap: theme.base.space[1] },
   actions: { gap: theme.base.space[2], marginTop: theme.base.space[2] },
   card: { borderRadius: theme.base.radius.md, borderWidth: 1, padding: theme.base.space[4], gap: theme.base.space[2] },
   ghostShort: { height: 90 },
@@ -322,7 +307,6 @@ export const styles = StyleSheet.create((theme) => ({
   problem: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.base.space[3], borderWidth: 1, borderRadius: theme.base.radius.md, padding: theme.base.space[3] },
   problemTitle: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
   step: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], minHeight: 28 },
-  stepIcon: { width: 20, alignItems: 'center' },
   bar: { height: 6, borderRadius: theme.base.radius.full, overflow: 'hidden', flexDirection: 'row', marginVertical: theme.base.space[1] },
   // Fundo branco fixo: o leitor do WhatsApp não lê o QR sobre o tema escuro.
   qr: { width: 200, height: 200, alignSelf: 'center', padding: theme.base.space[2], borderRadius: theme.base.radius.sm, backgroundColor: '#ffffff',

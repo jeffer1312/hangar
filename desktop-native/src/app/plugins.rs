@@ -73,7 +73,7 @@ fn in_zone<Tz: chrono::TimeZone>(iso: &str, zone: &Tz) -> Option<chrono::DateTim
     chrono::DateTime::parse_from_rfc3339(iso).ok().map(|t| t.with_timezone(zone))
 }
 
-fn date_text<Tz: chrono::TimeZone>(at: &chrono::DateTime<Tz>) -> String where Tz::Offset: std::fmt::Display {
+pub(super) fn date_text<Tz: chrono::TimeZone>(at: &chrono::DateTime<Tz>) -> String where Tz::Offset: std::fmt::Display {
     at.format(if crate::i18n::english() { "%m/%d/%Y" } else { "%d/%m/%Y" }).to_string()
 }
 

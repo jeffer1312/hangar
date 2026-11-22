@@ -447,11 +447,6 @@ export async function apiFetchForServer<T>(s: Server, path: string, init?: Reque
   }
   // 204 não tem corpo: `res.json()` falharia num pedido que deu certo.
   if (res.status === 204) return undefined as T;
-  // 202 pode vir sem corpo (pedido aceito, nada a devolver): vazio não é JSON quebrado.
-  if (res.status === 202) {
-    const text = await res.text();
-    return (text ? JSON.parse(text) : undefined) as T;
-  }
   return res.json() as Promise<T>;
 }
 

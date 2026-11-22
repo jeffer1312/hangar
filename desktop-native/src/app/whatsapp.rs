@@ -1,7 +1,10 @@
 //! WhatsApp só leitura no servidor conectado: aceite do risco, instalação, pareamento do celular e o que já foi guardado.
 //! Fala só com `/api/whatsapp*` (rotas do dono); o serviço e os dados ficam no servidor.
 use super::*;
+use super::accounts::{step_item, step_states};
 use super::device::Remote;
+use super::harness::grouped_number;
+use super::plugins::date_text;
 use super::server_config::chip;
 use super::settings::{settings_box, Page};
 use serde::Deserialize;
@@ -62,12 +65,17 @@ struct Job {
     error: Option<Value>,
 }
 
+/// Valor fora destes três faz a leitura falhar: resposta inválida, não tela inventada.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Service { Running, Stopped, Absent }
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct WaState {
     installed: bool,
     #[serde(default)]
     accepted_at: Option<String>,
-    service: String,
+    service: Service,
     #[serde(default)]
     job: Option<Job>,
     #[serde(default)]
@@ -77,9 +85,7 @@ struct WaState {
 }
 
 fn parse_state(value: Value) -> Result<WaState, String> {
-    let state: WaState = serde_json::from_value(value).map_err(|_| tr("invalid_response"))?;
-    if !matches!(state.service.as_str(), "running" | "stopped" | "absent") { return Err(tr("invalid_response")); }
-    Ok(state)
+    serde_json::from_value(value).map_err(|_| tr("invalid_response"))
 }
 
 /// O código de um erro, venha como texto ou como `{code}`.
@@ -98,7 +104,7 @@ enum View { Off, Working, Stopped, Unreachable, Unpaired, Pairing, Connected, Ou
 fn view_of(state: &WaState) -> View {
     if state.job.as_ref().is_some_and(|job| !job.done) { return View::Working; }
     if !state.installed { return View::Off; }
-    if state.service != "running" { return View::Stopped; }
+    if state.service != Service::Running { return View::Stopped; }
     let Some(status) = &state.status else { return View::Unreachable };
     match status.state.as_str() {
         "connected" => View::Connected,
@@ -120,31 +126,11 @@ fn should_poll(state: &WaState, awaiting_pair: bool) -> bool {
     matches!(view_of(state), View::Working | View::Pairing) || (awaiting_pair && view_of(state) == View::Unpaired)
 }
 
-/// Índice da etapa em curso; etapa desconhecida conta como a primeira.
-fn step_index(step: &str) -> usize { STEPS.iter().position(|(name, _)| *name == step).unwrap_or(0) }
-
 /// Só algarismos, de 10 a 15 (código do país, DDD e número); o `+`, espaços e traços somem.
 fn phone_digits(text: &str) -> Option<String> {
     let digits: String = text.chars().filter(char::is_ascii_digit).collect();
     let other = text.chars().any(|c| !c.is_ascii_digit() && !matches!(c, '+' | ' ' | '-' | '(' | ')' | '.'));
     (!other && (10..=15).contains(&digits.len())).then_some(digits)
-}
-
-/// Inteiro com o separador de milhar do idioma da tela.
-fn grouped(n: u64, english: bool) -> String {
-    let digits = n.to_string();
-    let sep = if english { ',' } else { '.' };
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 { out.push(sep); }
-        out.push(c);
-    }
-    out
-}
-
-fn local_date(at: &str, english: bool) -> Option<String> {
-    let at = chrono::DateTime::parse_from_rfc3339(at).ok()?.with_timezone(&chrono::Local);
-    Some(at.format(if english { "%m/%d/%Y" } else { "%d/%m/%Y" }).to_string())
 }
 
 fn seconds_since(at: &str) -> Option<f64> {
@@ -171,14 +157,14 @@ pub(super) enum Act { Install, Update, Pair, Logout, Wipe, Uninstall }
 
 pub(super) enum WhatsAppReply {
     Loaded(u64, Result<Value, Failure>),
-    Acted(u64, Act, Result<Value, Failure>),
+    Acted(Act, Result<Value, Failure>),
 }
 
 #[derive(Default)]
 pub(in crate::app) struct WhatsApp {
     state: Remote<WaState>,
+    /// Uma ação por vez: a resposta dela é a única em voo (trocar de servidor recria tudo e descarta a velha).
     busy: Option<Act>,
-    write_seq: u64,
     error: Option<String>,
     accepted: bool,
     /// O QR dá acesso à conta: só aparece depois que a pessoa pede, nesta visita à página.
@@ -199,6 +185,13 @@ impl Drop for WhatsApp {
     fn drop(&mut self) { if let Some(task) = self.poll.take() { task.abort(); } }
 }
 
+impl WhatsApp {
+    /// O pedido de pareamento acabou: QR escondido, formulário do número fechado, sem espera.
+    fn reset_pairing(&mut self) {
+        (self.qr_wanted, self.by_phone, self.awaiting_pair, self.phone_error) = (false, false, None, None);
+    }
+}
+
 impl Hangar {
     fn whatsapp_send_later(&self) -> impl Fn(WhatsAppReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static {
         let (tx, connection) = (self.tx.clone(), self.connection);
@@ -211,7 +204,7 @@ impl Hangar {
     pub(super) fn whatsapp_opened(&mut self, cx: &mut Context<Self>) {
         if !page_seen().swap(true, std::sync::atomic::Ordering::Relaxed) { self.runtime.spawn_blocking(crate::appearance::mark_whatsapp_page_seen); }
         let w = &mut self.whatsapp;
-        (w.qr_wanted, w.by_phone, w.phone_error, w.awaiting_pair) = (false, false, None, None);
+        w.reset_pairing();
         if w.busy.is_none() { (w.error, w.unlink_on_phone) = (None, false); }
         self.whatsapp_read(false, cx);
     }
@@ -245,15 +238,13 @@ impl Hangar {
         let Some(api) = self.api.clone() else { return };
         if self.whatsapp.busy.is_some() { return; }
         let w = &mut self.whatsapp;
-        w.write_seq += 1;
-        let seq = w.write_seq;
         (w.busy, w.error) = (Some(act), None);
         if act != Act::Wipe { w.unlink_on_phone = false; }
         let path = match act { Act::Install => "install", Act::Update => "update", Act::Pair => "pair", Act::Logout => "logout",
             Act::Wipe => "wipe", Act::Uninstall => "uninstall" };
         let done = self.whatsapp_send_later();
         self.runtime.spawn(async move {
-            done(WhatsAppReply::Acted(seq, act, api.server_send(reqwest::Method::POST, &["whatsapp", path], body, 30).await)).await
+            done(WhatsAppReply::Acted(act, api.server_send(reqwest::Method::POST, &["whatsapp", path], body, 30).await)).await
         });
         cx.notify();
     }
@@ -270,17 +261,19 @@ impl Hangar {
                         (Some(svg), _) => Some((svg.clone(), Arc::new(Image::from_bytes(ImageFormat::Svg, svg.as_bytes().to_vec())))),
                         (None, _) => None,
                     };
-                    if view_of(state) != View::Unpaired { w.awaiting_pair = None; }
-                    if view_of(state) == View::Connected { (w.qr_wanted, w.by_phone) = (false, false); }
+                    match view_of(state) {
+                        View::Connected => w.reset_pairing(),
+                        View::Unpaired => {}
+                        _ => w.awaiting_pair = None,
+                    }
                 }
                 let poll = result.as_ref().is_ok_and(|state| should_poll(state, w.awaiting_pair.is_some_and(|until| Instant::now() < until)));
                 w.state.finish(seq, result);
                 w.poll = None;
                 if poll && self.settings == Some(Page::WhatsApp) && !self.window_tray.hidden { self.whatsapp_read(true, cx); }
             }
-            WhatsAppReply::Acted(seq, act, result) => {
+            WhatsAppReply::Acted(act, result) => {
                 let w = &mut self.whatsapp;
-                if seq != w.write_seq { return; }
                 w.busy = None;
                 match result {
                     Ok(value) => {
@@ -333,8 +326,7 @@ impl Hangar {
     }
 
     fn whatsapp_cancel_pair(&mut self, cx: &mut Context<Self>) {
-        let w = &mut self.whatsapp;
-        (w.qr_wanted, w.by_phone, w.awaiting_pair, w.phone_error) = (false, false, None, None);
+        self.whatsapp.reset_pairing();
         cx.notify();
     }
 
@@ -345,7 +337,7 @@ impl Hangar {
     }
 
     fn confirm_whatsapp_wipe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let running = self.whatsapp.state.ok().is_some_and(|s| s.service == "running");
+        let running = self.whatsapp.state.ok().is_some_and(|s| s.service == Service::Running);
         let this = cx.entity().downgrade();
         chrome::confirm_alert(window, cx, tr("whatsapp_wipe_title"), tr(if running { "whatsapp_wipe_body" } else { "whatsapp_wipe_body_stopped" }),
             tr("whatsapp_wipe_ok"), ButtonVariant::Danger,
@@ -380,8 +372,13 @@ impl Hangar {
         if self.whatsapp.unlink_on_phone {
             page = page.child(notice("whatsapp-unlink-on-phone", theme::warning(), IconName::TriangleAlert, tr("whatsapp_unlink_on_phone")));
         }
+        // A releitura para com a janela na bandeja; de volta à vista, retoma.
+        let awaiting = self.whatsapp.awaiting_pair.is_some_and(|until| Instant::now() < until);
+        if self.whatsapp.poll.is_none() && self.whatsapp.busy.is_none() && self.whatsapp.state.ok().is_some_and(|s| should_poll(s, awaiting)) {
+            self.whatsapp_read(true, cx);
+        }
         let state = match &self.whatsapp.state.value {
-            Some(Ok(state)) => state.clone(),
+            Some(Ok(state)) => state,
             Some(Err(error)) => return page.child(alert_line("whatsapp-load-error", error.clone()))
                 .child(div().flex().child(Button::new("whatsapp-retry-load").outline().small().label(tr("server_retry"))
                     .on_click(cx.listener(|this, _, _, cx| { this.whatsapp.error = None; this.whatsapp_read(false, cx); })))).into_any_element(),
@@ -389,11 +386,8 @@ impl Hangar {
                 .text_color(theme::muted()).child(tr("loading"))).into_any_element(),
             None => return page.into_any_element(),
         };
-        let view = view_of(&state);
-        // A releitura para com a janela na bandeja; de volta à vista, retoma.
-        let awaiting = self.whatsapp.awaiting_pair.is_some_and(|until| Instant::now() < until);
-        if self.whatsapp.poll.is_none() && self.whatsapp.busy.is_none() && should_poll(&state, awaiting) { self.whatsapp_read(true, cx); }
-        if let Some((kind, code)) = failed_job(&state).filter(|_| view != View::Working) {
+        let view = view_of(state);
+        if let Some((kind, code)) = failed_job(state).filter(|_| view != View::Working) {
             let text = tr(if kind == "update" { "whatsapp_update_failed" } else { "whatsapp_install_failed" })
                 .replace("{reason}", &code_text("whatsapp_job_err_", &code));
             let busy = self.whatsapp.busy.is_some();
@@ -409,7 +403,7 @@ impl Hangar {
         }
         page = match view {
             View::Off => page.children(self.render_whatsapp_off(cx)),
-            View::Working => page.child(self.render_whatsapp_working(&state)),
+            View::Working => page.child(render_working(state)),
             View::Stopped => page.child(self.render_whatsapp_problem("whatsapp-stopped", tr("whatsapp_stopped_title"), tr("whatsapp_stopped_body"),
                 Some(Act::Install), cx)),
             View::Unreachable => page.child(self.render_whatsapp_problem("whatsapp-unreachable", tr("whatsapp_unreachable_title"),
@@ -417,8 +411,8 @@ impl Hangar {
             View::Unknown => page.child(self.render_whatsapp_problem("whatsapp-unknown", tr("whatsapp_unreachable_title"), tr("invalid_response"), None, cx)),
             View::Outdated => page.child(self.render_whatsapp_problem("whatsapp-outdated", tr("whatsapp_outdated_title"), tr("whatsapp_outdated_body"),
                 Some(Act::Update), cx)),
-            View::Unpaired | View::Pairing => page.child(self.render_whatsapp_pair(&state, view, cx)),
-            View::Connected => page.children(self.render_whatsapp_connected(&state)),
+            View::Unpaired | View::Pairing => page.child(self.render_whatsapp_pair(state, view, cx)),
+            View::Connected => page.children(self.render_whatsapp_connected(state)),
         };
         if state.installed && view != View::Working { page = page.child(self.render_whatsapp_actions(view, cx)); }
         page.into_any_element()
@@ -437,18 +431,6 @@ impl Hangar {
             .loading(installing).disabled(busy || !accepted)
             .on_click(cx.listener(|this, _, _, cx| this.whatsapp_install(cx))));
         vec![intro, self.mark(div().child(risk), "whatsapp_risk_title"), install]
-    }
-
-    fn render_whatsapp_working(&self, state: &WaState) -> Stateful<Div> {
-        let job = state.job.as_ref();
-        let update = job.is_some_and(|job| job.kind == "update");
-        let current = job.map_or(0, |job| step_index(&job.step));
-        settings_box().id("whatsapp-working").role(Role::Status).p_4().gap_3()
-            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr(if update { "whatsapp_updating_title" } else { "whatsapp_installing_title" })))
-            .children(STEPS.iter().enumerate().map(|(n, (_, label))| {
-                let phase = if n < current { Step::Done } else if n == current { Step::Running } else { Step::Waiting };
-                step_row(&format!("whatsapp-step-{n}"), tr(label), phase)
-            }))
     }
 
     fn render_whatsapp_problem(&self, id: &'static str, title: String, body: String, act: Option<Act>, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -536,7 +518,6 @@ impl Hangar {
 
     fn render_whatsapp_connected(&self, state: &WaState) -> Vec<AnyElement> {
         let Some(status) = &state.status else { return Vec::new() };
-        let english = crate::i18n::english();
         let t = &status.totals;
         let summary = connected_summary(ConnectedFacts {
             device: status.device.as_deref(), device_name: status.device_name.as_deref(),
@@ -546,8 +527,8 @@ impl Hangar {
         let media = settings_box().id("whatsapp-media").p_4().gap_1()
             .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_media_title")))
             .child(div().pb_1().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("whatsapp_media_desc")))
-            .child(info_line(true, tr("whatsapp_media_phone_only").replace("{n}", &grouped(t.media_phone_only, english)), hint(tr("whatsapp_media_phone_only_hint"))))
-            .child(info_line(false, tr("whatsapp_media_lost").replace("{n}", &grouped(t.media_lost, english)), hint(tr("whatsapp_media_lost_hint"))));
+            .child(info_line(true, tr("whatsapp_media_phone_only").replace("{n}", &grouped_number(t.media_phone_only)), hint(tr("whatsapp_media_phone_only_hint"))))
+            .child(info_line(false, tr("whatsapp_media_lost").replace("{n}", &grouped_number(t.media_lost)), hint(tr("whatsapp_media_lost_hint"))));
         vec![summary.into_any_element(), self.mark(div().child(media), "whatsapp_media_title").into_any_element(),
             self.mark(div().child(usage_box()), "whatsapp_usage_title").into_any_element()]
     }
@@ -635,7 +616,6 @@ pub(crate) struct ConnectedFacts<'a> {
 }
 
 pub(crate) fn connected_summary(c: ConnectedFacts<'_>) -> Stateful<Div> {
-    let english = crate::i18n::english();
     let headline = match c.device.filter(|d| !d.is_empty()) {
         Some(device) => tr("whatsapp_connected").replace("{device}", device),
         None => tr("whatsapp_connected_plain"),
@@ -648,11 +628,11 @@ pub(crate) fn connected_summary(c: ConnectedFacts<'_>) -> Stateful<Div> {
         Some(name) => format!("{} {last}", tr("whatsapp_device_name").replace("{name}", name)),
         None => last,
     };
-    let since = c.since.and_then(|at| local_date(at, english));
+    let since = c.since.and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| date_text(&at.with_timezone(&chrono::Local)));
     let messages = match since { Some(date) => tr("whatsapp_total_messages").replace("{date}", &date), None => tr("whatsapp_total_messages_plain") };
     let number = |value: u64, label: String| div().flex_1().min_w(px(140.)).p_3().rounded(px(9.)).border_1().border_color(theme::border())
         .flex().flex_col().gap(px(2.))
-        .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(grouped(value, english)))
+        .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(grouped_number(value)))
         .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(label));
     settings_box().id("whatsapp-connected").p_4().gap_2()
         .child(div().flex().items_center().gap_2()
@@ -661,7 +641,7 @@ pub(crate) fn connected_summary(c: ConnectedFacts<'_>) -> Stateful<Div> {
         .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(last))
         .child(div().pt_2().flex().flex_wrap().gap(px(10.))
             .child(number(c.messages, messages))
-            .child(number(c.chats, tr("whatsapp_total_chats").replace("{groups}", &grouped(c.groups, english))))
+            .child(number(c.chats, tr("whatsapp_total_chats").replace("{groups}", &grouped_number(c.groups))))
             .child(number(c.media_saved, tr("whatsapp_total_media"))))
 }
 
@@ -691,22 +671,20 @@ fn notice(id: &'static str, color: Hsla, icon: IconName, text: String) -> Statef
         .child(div().flex_1().min_w_0().whitespace_normal().child(text))
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Step { Done, Running, Waiting }
-
-fn step_row(id: &str, label: String, phase: Step) -> Div {
-    let (icon, color): (AnyElement, Hsla) = match phase {
-        Step::Done => (chrome::small_icon(IconName::CircleCheck, 16., theme::success()).into_any_element(), theme::text()),
-        Step::Running => (chrome::Spinner::new(SharedString::from(id.to_owned()), IconName::LoaderCircle, px(16.), theme::accent()).into_any_element(), theme::text()),
-        Step::Waiting => (chrome::small_icon(IconName::Circle, 16., theme::faint()).into_any_element(), theme::muted()),
-    };
-    div().flex().items_center().gap(px(10.)).text_size(px(13.5)).text_color(color)
-        .child(div().size(px(18.)).flex_shrink_0().flex().items_center().justify_center().child(icon)).child(label)
+/// A instalação ou atualização em curso, com as etapas na ordem do `step` do servidor.
+fn render_working(state: &WaState) -> Stateful<Div> {
+    let job = state.job.as_ref();
+    let update = job.is_some_and(|job| job.kind == "update");
+    let phases = step_states(&STEPS, job.map_or("", |job| job.step.as_str()));
+    settings_box().id("whatsapp-working").role(Role::Status).p_4().gap_3()
+        .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr(if update { "whatsapp_updating_title" } else { "whatsapp_installing_title" })))
+        .children(STEPS.iter().zip(phases).enumerate()
+            .map(|(n, ((_, label), phase))| step_item(&format!("whatsapp-step-{n}"), tr(label), phase)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{code_of, code_text, failed_job, grouped, parse_state, phone_digits, should_poll, step_index, view_of, View};
+    use super::{code_of, code_text, failed_job, parse_state, phone_digits, should_poll, step_states, view_of, CliproxyItem, View, STEPS};
     use core::prelude::v1::test;
     use serde_json::json;
 
@@ -728,8 +706,8 @@ mod tests {
             "job": {"kind": "install", "step": "service", "done": false, "error": null, "outcome": null}, "status": null, "qr_svg": null}));
         assert_eq!(view_of(&s), View::Working);
         assert!(should_poll(&s, false));
-        assert_eq!(step_index("service"), 1);
-        assert_eq!(step_index("whatever"), 0);
+        assert!(matches!(step_states(&STEPS, "service")[..], [CliproxyItem::Done, CliproxyItem::Running, CliproxyItem::Waiting]));
+        assert!(matches!(step_states(&STEPS, "whatever")[..], [CliproxyItem::Running, CliproxyItem::Waiting, CliproxyItem::Waiting]));
     }
 
     #[test]
@@ -784,15 +762,6 @@ mod tests {
         assert_eq!(phone_digits("64 9999"), None);
         assert_eq!(phone_digits("5564abc99991234"), None);
         assert_eq!(phone_digits("1234567890123456"), None);
-    }
-
-    #[test]
-    fn thousands_follow_the_language() {
-        assert_eq!(grouped(0, false), "0");
-        assert_eq!(grouped(566, false), "566");
-        assert_eq!(grouped(4195, false), "4.195");
-        assert_eq!(grouped(76501, true), "76,501");
-        assert_eq!(grouped(1234567, false), "1.234.567");
     }
 
     #[test]

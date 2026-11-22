@@ -14,8 +14,7 @@ import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { Chip, Muted } from '../../src/features/config/ServerConfigParts';
 import { useSettingsColors } from '../../src/features/config/colors';
 import {
-  PAIR_GRACE_MS, POLL_MS, failedJob, isWhatsAppState, jobError, type JobError, phoneDigits, shouldPoll, viewOf,
-  type WhatsAppView,
+  PAIR_GRACE_MS, POLL_MS, failedJob, isWhatsAppState, phoneDigits, phrase, shouldPoll, viewOf, type WhatsAppView,
 } from '../../src/features/config/whatsapp';
 import { Button, Check, Connected, Off, Pair, Problem, Working, styles, type Act } from '../../src/features/config/WhatsAppParts';
 import { useWhatsAppSeen } from '../../src/features/config/whatsappSeen';
@@ -29,23 +28,23 @@ type Load = { status: 'loading' } | { status: 'error'; error: string; code?: str
 type Confirm = 'logout' | 'wipe' | 'remove';
 
 const ERR: Record<string, () => string> = {
-  whatsapp_accept_required: m.native_whatsapp_err_accept_required,
-  whatsapp_busy: m.native_whatsapp_err_busy,
-  whatsapp_off: m.native_whatsapp_err_off,
-  whatsapp_untrusted: m.native_whatsapp_err_untrusted,
-  whatsapp_wipe_partial: m.native_whatsapp_err_wipe_partial,
-  whatsapp_wipe_failed: m.native_whatsapp_err_wipe_failed,
-  whatsapp_service_starting: m.native_whatsapp_err_service_starting,
-  whatsapp_not_installed: m.native_whatsapp_err_not_installed,
-  whatsapp_unreachable: m.native_whatsapp_err_unreachable,
-  whatsapp_accept_write_failed: m.native_whatsapp_err_accept_write_failed,
-  whatsapp_not_paired: m.native_whatsapp_err_not_paired,
-  whatsapp_outdated: m.native_whatsapp_err_outdated,
-  whatsapp_remove_failed: m.native_whatsapp_err_remove_failed,
-  whatsapp_servico_falhou: m.native_whatsapp_err_servico_falhou,
-  whatsapp_bad_reply: m.native_whatsapp_err_bad_reply,
-  whatsapp_error: m.native_whatsapp_err_error,
-  whatsapp_owner_only: m.native_whatsapp_err_owner_only,
+  accept_required: m.native_whatsapp_err_accept_required,
+  busy: m.native_whatsapp_err_busy,
+  off: m.native_whatsapp_err_off,
+  untrusted: m.native_whatsapp_err_untrusted,
+  wipe_partial: m.native_whatsapp_err_wipe_partial,
+  wipe_failed: m.native_whatsapp_err_wipe_failed,
+  service_starting: m.native_whatsapp_err_service_starting,
+  not_installed: m.native_whatsapp_err_not_installed,
+  unreachable: m.native_whatsapp_err_unreachable,
+  accept_write_failed: m.native_whatsapp_err_accept_write_failed,
+  not_paired: m.native_whatsapp_err_not_paired,
+  outdated: m.native_whatsapp_err_outdated,
+  remove_failed: m.native_whatsapp_err_remove_failed,
+  servico_falhou: m.native_whatsapp_err_servico_falhou,
+  bad_reply: m.native_whatsapp_err_bad_reply,
+  error: m.native_whatsapp_err_error,
+  owner_only: m.native_whatsapp_err_owner_only,
 };
 
 const errorCode = (e: unknown) => {
@@ -56,13 +55,12 @@ const errorCode = (e: unknown) => {
 /** Código `whatsapp_*` vira a frase da página (a genérica leva o código); o resto fica com a mensagem do servidor. */
 function errorText(e: unknown): string {
   const code = errorCode(e);
-  if (code?.startsWith('whatsapp_')) {
-    return Object.prototype.hasOwnProperty.call(ERR, code) ? ERR[code]() : m.native_whatsapp_err_unknown({ code });
-  }
+  if (code?.startsWith('whatsapp_')) return phrase(ERR, code, m.native_whatsapp_err_unknown);
   return e instanceof Error && e.message ? e.message : m.erro_desconhecido();
 }
 
-const JOB_ERR: Record<JobError, () => string> = {
+/** O motivo que completa "A instalação parou: …". */
+const JOB_ERR: Record<string, () => string> = {
   download_failed: m.native_whatsapp_job_err_download_failed,
   sem_asset: m.native_whatsapp_job_err_sem_asset,
   sem_checksum: m.native_whatsapp_job_err_sem_checksum,
@@ -78,12 +76,6 @@ const JOB_ERR: Record<JobError, () => string> = {
   update_no_rollback: m.native_whatsapp_job_err_update_no_rollback,
   record_failed: m.native_whatsapp_job_err_record_failed,
   accept_write_failed: m.native_whatsapp_job_err_accept_write_failed,
-};
-
-/** O motivo que completa "A instalação parou: …"; código desconhecido leva o código cru. */
-const jobErrorText = (code: string) => {
-  const known = jobError(code);
-  return known ? JOB_ERR[known]() : m.native_whatsapp_job_err_unknown({ code });
 };
 
 export default function WhatsApp() {
@@ -111,6 +103,14 @@ export default function WhatsApp() {
   const serverRef = useRef(server);
   serverRef.current = server;
 
+  /** O pedido de pareamento acabou: QR escondido, número fora da tela, sem espera. */
+  const resetPairing = useCallback(() => {
+    setQrWanted(false);
+    setAsked(false);
+    setAwaitUntil(null);
+    setPhoneError('');
+  }, []);
+
   const read = useCallback(() => {
     const s = serverRef.current;
     if (!s) return;
@@ -129,15 +129,12 @@ export default function WhatsApp() {
     setBusy(null);
     setWriteError('');
     setAccepted(false);
-    setQrWanted(false);
-    setAsked(false);
-    setPhoneError('');
-    setAwaitUntil(null);
+    resetPairing();
     setUnlinkOnPhone(false);
     setConfirm(null);
     read();
     return () => { gen.current++; };
-  }, [read, server?.id, server?.baseUrl, server?.token]);
+  }, [read, resetPairing, server?.id, server?.baseUrl, server?.token]);
 
   useEffect(() => { useWhatsAppSeen.getState().markSeen(); }, []);
 
@@ -154,8 +151,8 @@ export default function WhatsApp() {
 
   // Conectou: o pedido de pareamento acabou.
   useEffect(() => {
-    if (view === 'connected') { setQrWanted(false); setAsked(false); setAwaitUntil(null); }
-  }, [view]);
+    if (view === 'connected') resetPairing();
+  }, [view, resetPairing]);
 
   // Job e pareamento mudam sem aviso do servidor: relê a cada 1 s enquanto andam e a tela está à vista.
   useEffect(() => {
@@ -218,10 +215,7 @@ export default function WhatsApp() {
   };
   const cancelPair = () => {
     if (!qrWanted && !asked) { router.back(); return; }
-    setQrWanted(false);
-    setAsked(false);
-    setAwaitUntil(null);
-    setPhoneError('');
+    resetPairing();
   };
 
   const confirmed = (kind: Confirm, logoutFirst: boolean) => {
@@ -236,35 +230,33 @@ export default function WhatsApp() {
   else if (load.status === 'loading') body = <Loading />;
   else if (load.status === 'error') body = <Problem tone="error" icon="CircleAlert" text={load.error} detail={load.code}
     action={m.native_server_retry()} onPress={() => { setLoad({ status: 'loading' }); read(); }} />;
-  else {
-    const d = load.data;
-    const v = viewOf(d);
-    const failed = v === 'working' ? null : failedJob(d);
+  else if (data && view) {
+    const failed = view === 'working' ? null : failedJob(data);
     body = <>
       {failed ? <Problem tone="error" icon="CircleAlert"
         text={(failed.kind === 'update' ? m.native_whatsapp_update_failed : m.native_whatsapp_install_failed)({
-          reason: jobErrorText(failed.code) })}
+          reason: phrase(JOB_ERR, failed.code, m.native_whatsapp_job_err_unknown) })}
         // Reinstalar exige o aceite, o gravado no servidor ou o marcado agora.
-        action={m.native_server_retry()} busy={!!busy || (failed.kind !== 'update' && !accepted && !d.accepted_at)}
+        action={m.native_server_retry()} busy={!!busy || (failed.kind !== 'update' && !accepted && !data.accepted_at)}
         loading={busy === (failed.kind === 'update' ? 'update' : 'install')}
         onPress={() => (failed.kind === 'update' ? act('update', updateWhatsApp) : install())} /> : null}
-      {v === 'off' ? <Off accepted={accepted} busy={busy} onToggle={() => { haptic.selection(); setAccepted((a) => !a); }} onInstall={install} />
-        : v === 'working' ? <Working state={d} />
-        : v === 'stopped' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_stopped_title()} text={m.native_whatsapp_stopped_body()}
+      {view === 'off' ? <Off accepted={accepted} busy={busy} onToggle={() => { haptic.selection(); setAccepted((a) => !a); }} onInstall={install} />
+        : view === 'working' ? <Working state={data} />
+        : view === 'stopped' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_stopped_title()} text={m.native_whatsapp_stopped_body()}
           action={m.native_server_retry()} busy={!!busy} loading={busy === 'install'} onPress={() => act('install', installWhatsApp)} />
-        : v === 'unreachable' || v === 'unknown' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_unreachable_title()}
-          text={v === 'unreachable' ? m.native_whatsapp_unreachable_body() : m.native_invalid_response()}
+        : view === 'unreachable' || view === 'unknown' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_unreachable_title()}
+          text={view === 'unreachable' ? m.native_whatsapp_unreachable_body() : m.native_invalid_response()}
           action={m.native_server_retry()} busy={!!busy} onPress={read} />
-        : v === 'outdated' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_outdated_title()} text={m.native_whatsapp_outdated_body()}
+        : view === 'outdated' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_outdated_title()} text={m.native_whatsapp_outdated_body()}
           action={m.native_whatsapp_update()} primary busy={!!busy} loading={busy === 'update'} onPress={() => act('update', updateWhatsApp)} />
-        : v === 'connected' ? <Connected state={d} />
-        : <Pair state={d} view={v} busy={busy} qrWanted={qrWanted} asked={asked} phone={phone} phoneError={phoneError}
+        : view === 'connected' ? <Connected state={data} />
+        : <Pair state={data} view={view} busy={busy} qrWanted={qrWanted} asked={asked} phone={phone} phoneError={phoneError}
           awaiting={awaitUntil !== null && Date.now() < awaitUntil}
           onPhone={(t) => { setPhone(t); setPhoneError(''); }} onRequestCode={() => requestCode()} onShowQr={showQr}
           onBackToPhone={() => setQrWanted(false)} onChangeNumber={() => setAsked(false)} onCancel={cancelPair}
           onRetry={() => (asked && lastPhone ? requestCode(lastPhone) : showQr())} />}
-      {d.installed && v !== 'working' ? <View style={styles.actions}>
-        {v === 'connected' ? <Button kind="ghost" label={m.native_whatsapp_disconnect()} disabled={!!busy} loading={busy === 'logout'}
+      {data.installed && view !== 'working' ? <View style={styles.actions}>
+        {view === 'connected' ? <Button kind="ghost" label={m.native_whatsapp_disconnect()} disabled={!!busy} loading={busy === 'logout'}
           onPress={() => setConfirm('logout')} /> : null}
         <Button kind="danger" label={m.native_whatsapp_wipe()} disabled={!!busy} loading={busy === 'wipe'} onPress={() => setConfirm('wipe')} />
         <Button kind="ghost" label={m.native_whatsapp_remove()} disabled={!!busy} loading={busy === 'uninstall'} onPress={() => setConfirm('remove')} />

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WhatsAppState } from '@hangar/core';
-import { JOB_ERRORS, codeOf, failedJob, isWhatsAppState, jobError, mediaShares, minutesLeft, phoneDigits, secondsSince, shouldPoll, stepIndex, viewOf } from './whatsapp';
+import { codeOf, failedJob, isWhatsAppState, minutesLeft, phoneDigits, phrase, shouldPoll, stepIndex, viewOf } from './whatsapp';
 
 const base = (service: WhatsAppState['service'], status: Partial<NonNullable<WhatsAppState['status']>> | null): WhatsAppState => ({
   installed: true, accepted_at: '2026-11-22T10:00:00Z', service, job: null, qr_svg: null,
@@ -54,14 +54,16 @@ describe('failedJob', () => {
   });
 });
 
-describe('jobError', () => {
-  it('tira o prefixo whatsapp_ e só reconhece os códigos com frase própria', () => {
-    expect(jobError('whatsapp_download_failed')).toBe('download_failed');
-    expect(jobError('whatsapp_servico_falhou')).toBe('servico_falhou');
-    expect(jobError('accept_write_failed')).toBe('accept_write_failed');
-    expect(jobError('whatsapp_novo_erro')).toBeNull();
-    expect(jobError('whatsapp_')).toBeNull();
-    expect(JOB_ERRORS).toHaveLength(15);
+describe('phrase', () => {
+  const table = { download_failed: () => 'falhou o download' };
+  const unknown = ({ code }: { code: string }) => `outro: ${code}`;
+  it('tira o prefixo whatsapp_ e cai na genérica com o código cru', () => {
+    expect(phrase(table, 'whatsapp_download_failed', unknown)).toBe('falhou o download');
+    expect(phrase(table, 'download_failed', unknown)).toBe('falhou o download');
+    expect(phrase(table, 'whatsapp_novo_erro', unknown)).toBe('outro: whatsapp_novo_erro');
+    expect(phrase(table, 'whatsapp_', unknown)).toBe('outro: whatsapp_');
+    // Nome herdado de Object não é frase.
+    expect(phrase(table, 'toString', unknown)).toBe('outro: toString');
   });
 });
 
@@ -104,23 +106,8 @@ describe('phoneDigits', () => {
   });
 });
 
-describe('mediaShares', () => {
-  it('divide a barra pelo total e zera sem mídia', () => {
-    expect(mediaShares({ media_saved: 4195, media_phone_only: 3501, media_lost: 10 }).saved).toBeCloseTo(4195 / 7706);
-    expect(mediaShares({ media_saved: 1, media_phone_only: 1, media_lost: 2 })).toEqual({ saved: 0.25, phoneOnly: 0.25, lost: 0.5 });
-    expect(mediaShares(undefined)).toEqual({ saved: 0, phoneOnly: 0, lost: 0 });
-  });
-});
-
 describe('tempo', () => {
   const now = Date.parse('2026-11-22T14:00:00Z');
-  it('secondsSince lê o ISO UTC e não fica negativo', () => {
-    expect(secondsSince('2026-11-22T13:58:00Z', now)).toBe(120);
-    expect(secondsSince('2026-11-22T14:01:00Z', now)).toBe(0);
-    expect(secondsSince('ontem', now)).toBeNull();
-    expect(secondsSince(null, now)).toBeNull();
-  });
-
   it('minutesLeft arredonda para cima e some no passado', () => {
     expect(minutesLeft('2026-11-22T14:02:30Z', now)).toBe(3);
     expect(minutesLeft('2026-11-22T13:59:00Z', now)).toBeNull();
