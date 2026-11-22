@@ -56,9 +56,9 @@ pub(super) fn item_menu(hangar: WeakEntity<Hangar>, target: ItemTarget) -> impl 
 }
 
 /// Troca nas pastas abertas o caminho renomeado (e o de dentro dele); devolve as que mudaram.
-fn move_expanded(expanded: &mut HashSet<String>, old: &str, new: &str) -> Vec<String> {
-    let moved: Vec<String> = expanded.iter().filter_map(|dir| renamed_path(dir, old, new)).collect();
-    expanded.retain(|dir| renamed_path(dir, old, new).is_none());
+fn move_expanded(expanded: &mut HashSet<String>, old: &str, new: &str, windows: bool) -> Vec<String> {
+    let moved: Vec<String> = expanded.iter().filter_map(|dir| renamed_path(dir, old, new, windows)).collect();
+    expanded.retain(|dir| renamed_path(dir, old, new, windows).is_none());
     expanded.extend(moved.iter().cloned());
     moved
 }
@@ -158,18 +158,19 @@ impl Hangar {
 
     pub(super) fn tree_rename_dialog(&mut self, target: ItemTarget, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rel) = target.session.clone() else { return };
-        let (name, owner) = (base(&rel, self.tree_windows()).to_owned(), self.session_owner());
+        let windows = self.tree_windows();
+        let (name, owner) = (base(&rel, windows).to_owned(), self.session_owner());
         let title = tr("tree_rename_title").replace("{name}", &name);
         self.tree_name_dialog(title, tr("sidebar_rename"), name, window, cx, move |this, new, window, cx| {
             let old = rel.clone();
             this.tree_request(owner.clone(), "rename", json!({"path": old, "name": new}), window, cx, move |this, value, same_root, _, cx| {
                 let Some(path) = value.get("path").and_then(Value::as_str).map(str::to_owned) else { return };
-                this.files_renamed(&old, &path);
+                this.files_renamed(&old, &path, windows);
                 if same_root {
                     // Pasta renomeada: o que estava aberto nela segue aberto, lido no caminho novo.
-                    let moved = move_expanded(&mut this.tree.expanded, &old, &path);
-                    this.tree.dirs.retain(|dir, _| renamed_path(dir, &old, &path).is_none());
-                    if let Some(reveal) = this.tree.reveal.as_mut() && let Some(new) = renamed_path(reveal, &old, &path) { *reveal = new; }
+                    let moved = move_expanded(&mut this.tree.expanded, &old, &path, windows);
+                    this.tree.dirs.retain(|dir, _| renamed_path(dir, &old, &path, windows).is_none());
+                    if let Some(reveal) = this.tree.reveal.as_mut() && let Some(new) = renamed_path(reveal, &old, &path, windows) { *reveal = new; }
                     if !moved.is_empty() && let Some(source) = this.tree.source.clone() { this.tree_fetch(source, moved, false, cx); }
                     this.tree.selected = Some(path);
                 }
@@ -257,7 +258,7 @@ mod tests {
     #[test]
     fn renamed_folder_stays_open_with_its_subfolders() {
         let mut expanded: HashSet<String> = ["src", "src/x", "src/x/y", "srcx", "docs"].map(str::to_owned).into();
-        let mut moved = super::move_expanded(&mut expanded, "src/x", "src/z");
+        let mut moved = super::move_expanded(&mut expanded, "src/x", "src/z", false);
         moved.sort();
         assert_eq!(moved, ["src/z", "src/z/y"]);
         let want: HashSet<String> = ["src", "src/z", "src/z/y", "srcx", "docs"].map(str::to_owned).into();

@@ -701,15 +701,15 @@ impl Hangar {
 
     /// Arquivo ou pasta renomeado pela árvore: as abas abertas nele, ou dentro dele, seguem o nome novo, e o documento
     /// também, que é o caminho da gravação.
-    pub(super) fn files_renamed(&mut self, old: &str, new: &str) {
+    pub(super) fn files_renamed(&mut self, old: &str, new: &str, windows: bool) {
         // Abas guardadas de outra sessão ficam como estão: o mesmo caminho lá é outro arquivo.
         if self.files.owner.is_none() || self.files.owner != self.session_owner() { return; }
         for tab in &mut self.files.tabs {
             // Citado de fora da pasta da sessão com o mesmo caminho relativo não é o item renomeado.
             if matches!(&tab.content, Some(Ok(doc)) if doc.base.external) { continue; }
             // A aba aberta por caminho absoluto (citada no chat) só é reconhecida pelo caminho interno do documento.
-            let base = match &tab.content { Some(Ok(doc)) => renamed_path(&doc.base.path, old, new), _ => None };
-            let Some(path) = renamed_path(&tab.path, old, new).or_else(|| base.clone()) else { continue };
+            let base = match &tab.content { Some(Ok(doc)) => renamed_path(&doc.base.path, old, new, windows), _ => None };
+            let Some(path) = renamed_path(&tab.path, old, new, windows).or_else(|| base.clone()) else { continue };
             tab.path = path;
             if let Some(Ok(doc)) = &mut tab.content {
                 if let Some(base) = base { doc.base.path = base; }
@@ -974,9 +974,12 @@ fn is_binary_document(path: &str) -> bool {
 }
 
 /// O caminho depois de renomear `old` para `new`: o próprio item ou o que está dentro dele; `None` quando não é afetado.
-pub(super) fn renamed_path(path: &str, old: &str, new: &str) -> Option<String> {
+/// `windows`: os caminhos são de uma máquina Windows, onde `\` também separa as pastas.
+pub(super) fn renamed_path(path: &str, old: &str, new: &str, windows: bool) -> Option<String> {
     if path == old { return Some(new.to_owned()); }
-    path.strip_prefix(old)?.strip_prefix('/').map(|rest| format!("{new}/{rest}"))
+    let rest = path.strip_prefix(old)?;
+    let sep = rest.chars().next().filter(|c| *c == '/' || windows && *c == '\\')?;
+    Some(format!("{new}{sep}{}", &rest[1..]))
 }
 
 fn is_image(path: &str) -> bool {
@@ -1060,12 +1063,20 @@ mod tests {
 
     #[test]
     fn rename_moves_the_item_and_what_is_inside_it_only() {
-        assert_eq!(super::renamed_path("src/a.rs", "src/a.rs", "src/b.rs").as_deref(), Some("src/b.rs"));
-        assert_eq!(super::renamed_path("src/x/y.rs", "src/x", "src/z").as_deref(), Some("src/z/y.rs"));
+        assert_eq!(super::renamed_path("src/a.rs", "src/a.rs", "src/b.rs", false).as_deref(), Some("src/b.rs"));
+        assert_eq!(super::renamed_path("src/x/y.rs", "src/x", "src/z", false).as_deref(), Some("src/z/y.rs"));
         for untouched in ["src/a.rsx", "src/xy/y.rs", "other/src/a.rs", "src"] {
-            assert_eq!(super::renamed_path(untouched, "src/a.rs", "src/b.rs"), None, "{untouched}");
+            assert_eq!(super::renamed_path(untouched, "src/a.rs", "src/b.rs", false), None, "{untouched}");
         }
-        assert_eq!(super::renamed_path("src/xy/y.rs", "src/x", "src/z"), None);
+        assert_eq!(super::renamed_path("src/xy/y.rs", "src/x", "src/z", false), None);
+    }
+
+    /// Na árvore de uma máquina Windows o que está dentro da pasta vem com `\`; nas outras, `\` é parte do nome.
+    #[test]
+    fn rename_follows_windows_separators_only_on_windows_paths() {
+        assert_eq!(super::renamed_path("src\\x\\y.rs", "src\\x", "src\\z", true).as_deref(), Some("src\\z\\y.rs"));
+        assert_eq!(super::renamed_path("src\\x\\y.rs", "src\\x", "src\\z", false), None);
+        assert_eq!(super::renamed_path("src\\xy", "src\\x", "src\\z", true), None);
     }
 
     #[test]
