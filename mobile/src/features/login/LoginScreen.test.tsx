@@ -32,6 +32,8 @@ vi.mock('../share/InvitePanel', () => ({ InvitePanel: () => <div>fixture-invite-
 vi.mock('expo-blur', () => ({ BlurView: ({ children }: { children: ReactNode }) => children }));
 vi.mock('expo-glass-effect', () => ({ GlassView: ({ children }: { children: ReactNode }) => children, isLiquidGlassAvailable: () => false }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
+// O pacote de verdade carrega o react-native real (Flow), que o Node não lê.
+vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, getNumber: () => undefined, getBoolean: () => undefined, set: () => {}, remove: () => {} }) }));
 // A conta de verdade leva 600 mil voltas de PBKDF2; aqui a senha certa só precisa dar o hash certo.
 vi.mock('./syncCrypto', () => ({
   syncCrypto: {
