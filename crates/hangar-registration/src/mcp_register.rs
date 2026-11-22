@@ -73,9 +73,10 @@ fn claude_accounts(home: &Path, config_dir: Option<&str>) -> Vec<PathBuf> {
         .collect();
     accounts.sort();
     let main = home.join(".claude.json");
+    let same = |a: &Path, b: &Path| a == b || a.canonicalize().ok().is_some_and(|a| b.canonicalize().ok() == Some(a));
     let default = hangar_core::account_env::default_claude_json(home, config_dir);
-    let default = (default != main && default.is_file() && !accounts.contains(&default)).then_some(default);
-    std::iter::once(main).chain(default).chain(accounts).collect()
+    let listed = !default.is_file() || same(&default, &main) || accounts.iter().any(|account| same(account, &default));
+    std::iter::once(main).chain((!listed).then_some(default)).chain(accounts).collect()
 }
 
 fn claude(home: &Path, config_dir: Option<&str>, entry: &Value, out: &mut dyn Write, err: &mut dyn Write) -> bool {

@@ -157,14 +157,17 @@ impl AccountEnvironment {
     }
 }
 
+/// Marcador de pasta de conta Claude criada pelo Hangar (`~/.claude-<nome>`).
+pub const CLAUDE_ACCOUNT_MARKER: &str = ".hangar-conta";
+
 /// O `.claude.json` que a conta padrão do Claude lê. Com `CLAUDE_CONFIG_DIR` no ambiente, o Hangar a
 /// exporta às sessões da conta padrão (`config_dir_to_export`) e o CLI lê o arquivo de dentro da pasta,
-/// mesmo quando ela é o `~/.claude`; sem a variável, o do HOME.
+/// mesmo quando ela é o `~/.claude` e mesmo antes de ele existir (o CLI o cria vazio); sem a variável,
+/// o do HOME. Pasta de conta do Hangar nunca é a padrão: é o que o shell de uma sessão dela exporta.
 pub fn default_claude_json(home: &Path, config_dir: Option<&str>) -> PathBuf {
-    match config_dir.filter(|dir| !dir.is_empty()) {
-        Some(dir) => expand(dir, home).join(".claude.json"),
-        None => home.join(".claude.json"),
-    }
+    let main = home.join(".claude.json");
+    let Some(dir) = config_dir.filter(|dir| !dir.is_empty()).map(|dir| expand(dir, home)) else { return main };
+    if dir.join(CLAUDE_ACCOUNT_MARKER).is_file() { main } else { dir.join(".claude.json") }
 }
 
 pub fn expand(value: &str, home: &Path) -> PathBuf {
@@ -189,14 +192,27 @@ mod tests {
     }
 
     /// Com `CLAUDE_CONFIG_DIR`, mesmo apontando para o `~/.claude`, a conta padrão lê o arquivo de dentro
-    /// da pasta; vazia vale ausente.
+    /// da pasta, mesmo antes de ele existir; vazia e pasta de conta do Hangar valem o do HOME.
     #[test]
     fn default_claude_json_follows_the_config_dir() {
-        let read = |pairs: &[(&str, &str)]| environment(pairs).default_claude_json();
-        assert_eq!(read(&[("HOME", "/h")]), PathBuf::from("/h/.claude.json"));
-        assert_eq!(read(&[("HOME", "/h"), ("CLAUDE_CONFIG_DIR", "")]), PathBuf::from("/h/.claude.json"));
-        assert_eq!(read(&[("HOME", "/h"), ("CLAUDE_CONFIG_DIR", "/h/.claude")]), PathBuf::from("/h/.claude/.claude.json"));
-        assert_eq!(read(&[("HOME", "/h"), ("CLAUDE_CONFIG_DIR", "~/outra")]), PathBuf::from("/h/outra/.claude.json"));
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path();
+        let h = home.to_string_lossy().into_owned();
+        let read = |config_dir: Option<&str>| {
+            let mut pairs = vec![("HOME", h.as_str())];
+            pairs.extend(config_dir.map(|dir| ("CLAUDE_CONFIG_DIR", dir)));
+            environment(&pairs).default_claude_json()
+        };
+        let main = home.join(".claude.json");
+        for dir in [".claude", "outra", ".claude-conta"] {
+            std::fs::create_dir_all(home.join(dir)).unwrap();
+        }
+        assert_eq!(read(None), main);
+        assert_eq!(read(Some("")), main);
+        assert_eq!(read(Some(&format!("{h}/.claude"))), home.join(".claude/.claude.json"), "antes de o CLI criar o arquivo");
+        assert_eq!(read(Some("~/outra")), home.join("outra/.claude.json"));
+        std::fs::write(home.join(".claude-conta").join(CLAUDE_ACCOUNT_MARKER), "").unwrap();
+        assert_eq!(read(Some(&format!("{h}/.claude-conta"))), main, "a pasta de uma conta do Hangar não é a padrão");
     }
 
     /// A conta adicional não leva identidade nenhuma da principal. O lançador Python deixava passar

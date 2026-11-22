@@ -524,9 +524,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `terminal::config_dir_to_export`, decide a variável, o arquivo da pré-confiança e o da marca de
   recarga. Ver [conta padrão sem a variável](#conta-padrão-do-claude-sem-terminal-sem-claude_config_dir-13112026).
 - **O `.claude.json` da conta padrão é o que ela lê: `AccountEnvironment::default_claude_json`.** Com
-  `CLAUDE_CONFIG_DIR` no servidor (mesmo `~/.claude`) é o de dentro da pasta; sem ela, o `~/.claude.json`.
-  Computer Use, `mcp-register`, espelho e semeadura das contas, configuração compartilhada e saúde
-  usam essa regra; o principal do Computer Use (estado e "desligado à mão") continua o
+  `CLAUDE_CONFIG_DIR` no servidor (mesmo `~/.claude`) é o de dentro da pasta, ainda que não exista;
+  sem ela, ou com a pasta sendo de uma conta do Hangar (o shell de uma sessão dessa conta), o
+  `~/.claude.json`. Computer Use, `mcp-register`, espelho e semeadura das contas, configuração
+  compartilhada, importação do Codex e saúde usam essa regra; o principal do Computer Use (estado e "desligado à mão") continua o
   `~/.claude.json`. Ver [o arquivo que a conta padrão lê](#o-claudejson-da-conta-padrão-segue-o-claude_config_dir-22112026).
 - **O catálogo de comandos do Claude é do Rust, com e sem terminal.** Composição, scans,
   filtros e a sonda compartilhada ficam em `commands/`; convidado e Connect só passam pela
@@ -1382,7 +1383,10 @@ mesmo critério do `config_dir_to_export`. O principal do Computer Use continua 
 mudar para o de dentro da pasta faria a marca `registered` de quem já tinha o registro ler a
 entrada ausente como tirada à mão, e o registro nunca mais aconteceria. Limite: tirar a entrada à
 mão só do arquivo de dentro da pasta é desfeito no próximo registro, como numa conta `~/.claude-*`;
-desligar é pela tela. O `mcp-register` ignora a variável com `--home`, que aponta para outra casa.
+desligar é pela tela. O `mcp-register` ignora a variável com `--home`, que aponta para outra casa. Os comandos de
+terminal (`hangar-conta --prep`, `hangar-server open` com o servidor fora) leem a variável do shell,
+que num painel de outra conta é a pasta dela: por isso pasta com `.hangar-conta` nunca é a padrão. A
+importação do Codex já tinha a mesma regra numa cópia própria, que passou a usar esta.
 O passo `2026-11-22-mcp-na-conta-padrao-com-config-dir` é de máquina porque o pacote não roda
 passo de conteúdo e nada mais regravaria o `hangar` desse arquivo; sem ele, o espelho novo levaria
 às contas o `hangar` sem prazo.
