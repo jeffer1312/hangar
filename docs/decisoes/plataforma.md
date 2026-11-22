@@ -4661,6 +4661,44 @@ Não testado: renovação, a CA de produção e um nome que dependa só do curin
 `*.hangar.dev.br`. Cargas e logs completos em
 `.superpowers/sdd/2026-11-06-hangar-connect-rust/prova-tunel.md` da árvore principal.
 
+## Entrar pelo Connect e convidados pelo Connect (22/11/2026)
+
+O primeiro acesso do Expo e do nativo pede conta ou usuário e senha, sem endereço. Endereço e token, QR,
+convite e demonstração ficam em "Outras formas de entrar". O pedido veio do dono: "no Connect eu não
+preciso informar a máquina" e "o convidado tem que entrar também".
+
+- **Um campo para os dois.** O cliente manda só o nome ao serviço (`POST /v1/lookup`), que responde
+  `account`, `guest` com os hosts de uma conta só, ou `none`. Conta: login da conta do Connect. Convidado:
+  login de sincronização (`/api/sync/prelogin|login|vault|logout`) no host da máquina que guarda a conta
+  dele, um host por vez. A senha do convidado nunca vai ao serviço. Se o serviço antigo responder 404 no
+  lookup, o cliente trata como conta.
+- **Nome de convidado** em minúsculo ASCII, com `.` ou `@`. Conta do Connect só aceita `[a-z0-9-]`, então os
+  dois nunca se confundem. O serviço guarda `sha256("hangar-guest:" + nome)` por máquina (`PUT /v1/guests`,
+  com a chave da máquina). Hash que já é de outra conta volta em `taken`, e a página mostra "nome em uso".
+  Risco aceito: uma conta pode registrar antes o nome previsível de um convidado de outra. O hash sem sal
+  não esconde nomes adivinháveis, e quem tem a chave de uma máquina testa candidatos pelo `taken`.
+- **Contas de convidado em arquivo próprio** (`~/.hangar/guest-accounts.json`, 0600, crate
+  `hangar-guest-accounts`), administradas pelo token do dono em `/api/guest-accounts`. O aparelho do
+  Connect conta como dono. A máquina guarda a chave do cofre do convidado e cifra sozinha a lista de
+  máquinas dele, então o dono não redigita senha. Contrapartida: a máquina lê o que ela já tinha (os tokens
+  de convidado). O arquivo nunca entra na configuração compartilhada. `sync-vault.json` e
+  `/api/sync/guests` continuam como estavam, para a web e para o nativo já instalado.
+- **Login do convidado sem a Sincronização ligada.** As rotas de login funcionam sempre que há conta no
+  arquivo novo. Todo caminho do login faz uma única derivação, para o tempo de resposta não revelar se o
+  nome existe. Pela porta do Connect todo pedido chega com o mesmo endereço, então o limite conta por
+  usuário, com teto geral, e a tentativa é contada antes da derivação. Nome que já é conta de convidado
+  não vira dono do cofre antigo.
+- **Liberação de aparelho uma vez para a conta** (antes era máquina por máquina). Um aparelho já liberado
+  libera o novo com um toque, conferindo o código (`install_code`, o mesmo no celular, no Hangar e no
+  serviço). Leitura da conta recusada com o serviço no ar (máquina pendente ou desconhecida) suspende os
+  aparelhos que entraram pela conta e os aprovados por eles, até a próxima leitura boa: sem isso, um
+  aparelho revogado continuaria entrando.
+- **Conta antiga** (no cofre de sincronização, como a da convidada na VPS): "Trazer para o Connect" pede uma
+  vez a senha de sincronização do dono, recria a conta mantendo a senha da convidada e só então apaga a
+  antiga. Nome sem `.`/`@` ganha um nome novo, e o dono é avisado.
+
+Não testado de ponta a ponta antes do merge: o serviço publicado e o login real da convidada pelo celular.
+
 ## O Rust atende sozinho o que ainda repassava com trabalho real (10/11/2026)
 
 Primeira metade do fim da reserva do modo python. Com o Rust de pé, o dono não chega mais ao Python

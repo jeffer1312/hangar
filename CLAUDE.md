@@ -751,6 +751,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `GET`/`HEAD` e, em https, só o `__Host-cp_token`: máquinas do Connect dividem o mesmo site.
   Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#hangar-connect-a-entrada-é-do-rust-e-cada-aparelho-tem-credencial-própria-07112026).
+- **Primeiro acesso é pelo Connect, para o dono e para o convidado, sem endereço.** O cliente manda só
+  o nome ao serviço (`/v1/lookup`); a senha do convidado vai só à máquina dele. Contas de convidado moram
+  em `~/.hangar/guest-accounts.json` (crate `hangar-guest-accounts`, rotas `/api/guest-accounts` do
+  dono), fora da configuração compartilhada; o login delas não depende da Sincronização e faz uma
+  derivação só em todo caminho. Nome de convidado tem `.` ou `@`. Aparelho é liberado uma vez para a
+  conta toda. `sync-vault.json` e `/api/sync/guests` ficam como estão. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#entrar-pelo-connect-e-convidados-pelo-connect-22112026).
 - **Prévia de porta pelo Connect: `127.0.0.1:8769` é um listener próprio (`hangar-connect/src/preview.rs`),
   fora de `hangar_auth`.** O link de uso único abre uma página com botão, e só o `POST` dela o gasta
   e vira cookie `__Host-` por 303, com sessão de 8 h. O projeto nunca vê credencial do Hangar e guarda
