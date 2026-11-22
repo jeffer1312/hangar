@@ -28,14 +28,20 @@ fi
 
 # As sessões que o servidor restaura: a chave do spec no ambiente da sessão e o spec gravado. Sem o
 # spec (aberta antes do registro) o servidor não tem como reabri-la, e ela fica com o resurrect.
+# As internas (`@cp_hidden`: terminal de atalho, shell separado, janela de login) também saem:
+# recriadas cruas, perdem a marca e entram na lista como sessão Claude sem Claude.
 _hangar_sessions() {
-  local name key
-  while IFS= read -r name; do
+  local name hidden key
+  while IFS=$'\t' read -r name hidden; do
+    if [ "$hidden" = 1 ]; then
+      printf '%s\n' "$name"
+      continue
+    fi
     key=$(tmux show-environment -t "=$name" CP_SESSION_KEY 2>/dev/null || true)
     if [[ $key =~ ^CP_SESSION_KEY=([0-9a-fA-F]{32})$ ]] && [ -f "$HOME/.hangar/session-specs/${BASH_REMATCH[1]}.json" ]; then
       printf '%s\n' "$name"
     fi
-  done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+  done < <(tmux list-sessions -F $'#{session_name}\t#{@cp_hidden}' 2>/dev/null || true)
 }
 
 # Tira as sessões do Hangar da foto que o resurrect acabou de gravar (linhas `pane`/`window` delas).
@@ -53,7 +59,7 @@ save() {
   sync "$tmp"
   mv "$tmp" "$file"
   sync "$file" 2>/dev/null || true
-  echo "$(date '+%F %T') save: $(printf '%s\n' "$names" | wc -l) sessões do Hangar ficam com o servidor" >> "$LOG"
+  echo "$(date '+%F %T') save: $(printf '%s\n' "$names" | wc -l) sessões do Hangar fora da foto" >> "$LOG"
 }
 
 restore() {

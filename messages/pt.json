@@ -3517,6 +3517,7 @@
   "erro_transcript_ausente": "nenhum transcript pra retomar neste diretório",
   "session_transfer_resume_unsupported": "Esta conversa veio de uma transferência do Claude para o Codex; retomá-la pelo Arquivo ainda não é possível.",
   "erro_resume_so_claude": "Retomar a sessão só vale para o Claude (esta é {provider}); retome a conversa pelo Arquivo.",
+  "erro_resume_sem_claude": "Não há Claude rodando neste terminal. Abra o Claude nele ou retome a conversa pelo Arquivo.",
   "erro_session_id_invalido": "O id da conversa é inválido.",
   "erro_workflow_inexistente": "workflow run não encontrado",
   "erro_agente_inexistente": "agente não encontrado",

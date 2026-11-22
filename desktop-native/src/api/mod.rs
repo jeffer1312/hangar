@@ -315,7 +315,7 @@ fn failure_detail(body: Option<Value>, status: u16) -> String {
             // de uma recusa e o rótulo do botão vêm nos parâmetros.
             if let Some(code) = fields.get("code").and_then(Value::as_str)
                 .filter(|code| code.starts_with("erro_par_") || code.starts_with("erro_mod_") || code.starts_with("session_open_")
-                    || matches!(*code, "erro_resume_so_claude" | "erro_session_id_invalido" | "erro_conta_sem_login" | "erro_sem_conta_destino"
+                    || matches!(*code, "erro_resume_so_claude" | "erro_resume_sem_claude" | "erro_session_id_invalido" | "erro_conta_sem_login" | "erro_sem_conta_destino"
                         | "erro_liberar_sessao" | "erro_liberar_conta")) {
                 let params = fields.get("params").and_then(Value::as_object).map(|p| p.iter()
                     .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect()).unwrap_or_default();
@@ -1711,6 +1711,8 @@ mod tests {
     fn resume_refusals_use_the_web_sentence() {
         let text = failure_detail(Some(json!({"detail": {"code": "erro_resume_so_claude", "params": {"provider": "pi"}, "msg": "x"}})), 409);
         assert!(text != "x" && text.contains("pi") && text.contains("Claude"), "{text}");
+        let text = failure_detail(Some(json!({"detail": {"code": "erro_resume_sem_claude", "params": {}, "msg": "x"}})), 409);
+        assert!(text != "x" && !text.contains("erro_resume_sem_claude"), "{text}");
         let text = failure_detail(Some(json!({"detail": {"code": "erro_session_id_invalido", "params": {}, "msg": "session_id invalido"}})), 422);
         assert!(text != "session_id invalido" && !text.contains("erro_session_id_invalido"), "{text}");
     }

@@ -121,6 +121,9 @@ async fn resume(st: &Arc<AppState>, runtime: &crate::runtime::gateway::RuntimeRe
         None => {
             let row = st.list.find_row(name).await.ok().flatten();
             return match row {
+                // Linha Claude sem spec nem processo: o terminal só tem o shell, e não há Claude para trocar de conversa.
+                Some(row) if row.provider == "claude" => refused(StatusCode::CONFLICT, "erro_resume_sem_claude",
+                    "não há Claude rodando neste terminal; abra o Claude nele ou retome a conversa pelo Arquivo", json!({})),
                 // O resto não retoma por aqui: volta pelo Arquivo, que retoma cada agente com o verbo dele.
                 Some(row) => refused(StatusCode::CONFLICT, "erro_resume_so_claude", &format!("retomar a sessão só vale para o Claude (esta é {}); \
                     retome a conversa pelo Arquivo", row.provider), json!({"provider": row.provider})),
