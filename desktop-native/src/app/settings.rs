@@ -385,6 +385,14 @@ pub(super) struct SettingsUi {
     blur_hint: bool,
     /// Code Mode já ligado no settings.json do servidor (`GET /api/claude/code-mode`), por conexão; `None` antes de perguntar.
     code_mode_settings: Option<(u64, bool)>,
+    /// Opções da tela Beta no servidor (`/api/session-options`), por conexão; `None` dentro = ainda lendo.
+    session_options: Option<(u64, Option<crate::api::SessionOptions>)>,
+    /// Leitura ou gravação das opções que falhou, mostrada na linha do Code Mode.
+    session_options_error: Option<String>,
+    /// A conexão com uma gravação das opções ainda sem resposta: as linhas da tela Beta esperam por ela.
+    session_options_saving: Option<u64>,
+    /// Conversa nova escolhida aqui que o servidor daquela conexão ainda não recebeu.
+    conversation_pending: Option<(u64, bool)>,
     _subscriptions: Vec<Subscription>,
     _disk_watch: Task<()>,
 }
@@ -512,7 +520,7 @@ impl SettingsUi {
         }));
         Self { sliders, fonts, type_picks, custom_sizes, custom_open: Vec::new(),
             accent_picker, tint_picker, search, found: Vec::new(), pick: 0, hit: None, scroll: ScrollHandle::new(),
-            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, _subscriptions: subscriptions,
+            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, session_options: None, session_options_error: None, session_options_saving: None, conversation_pending: None, _subscriptions: subscriptions,
             _disk_watch: watch_disk(window, cx) }
     }
 

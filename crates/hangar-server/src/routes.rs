@@ -1011,6 +1011,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_registered))
         .route("/api/claude/code-mode", get(crate::claude_defaults::code_mode).fallback(pass_registered))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
+        .route("/api/session-options", axum::routing::get(crate::session_defaults::handle_options).put(crate::session_defaults::handle_options))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .merge(crate::scheduled_tasks::router())
         .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))
@@ -1107,6 +1108,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/device-install/start", axum::routing::post(crate::device_install::routes::start))
         .route("/api/device-install/code", axum::routing::post(crate::device_install::routes::code))
         .route("/api/device-install/certs", axum::routing::post(crate::device_install::routes::certs))
+        .route("/api/device-install/cancel", axum::routing::post(crate::device_install::routes::cancel))
         // Tela web ligada ou não: só o dono, nunca repassado.
         .route("/api/web-ui", get(crate::ui::setting).put(crate::ui::setting))
         // Consentimento do relatório automático da atualização: só o dono, nunca repassado.

@@ -970,6 +970,18 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. Não há lançador
   Python. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
+- **Padrão de abertura é do servidor; cliente só manda o que a pessoa escolheu naquela tela.**
+  Opção nova de abertura entra no `SessionOpenRequest` como `Option` (omitido = padrão do
+  servidor), com o padrão gravado no servidor (`session-defaults.json`, ou `session-options.json`
+  para as opções da tela Beta) e aplicado no `resolve_open()`; nunca numa preferência do cliente
+  (`appearance.json`, armazenamento do aparelho) posta no corpo. Todo campo do pedido está na
+  tabela do crate `hangar-session-open-fields` e é dito pelo `hangar-send --new` e pelo MCP
+  `new_session`. Travas: `every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server`
+  e `a_field_with_a_server_default_keeps_the_explicit_value` (`session_open/tests.rs`),
+  `new_session_says_every_open_field` (`mcp/tools.rs`), `new_says_every_open_field`
+  (`hangar-send/tests/open_fields.rs`) e `the_open_body_does_not_depend_on_what_this_computer_saved`
+  (`desktop-native/src/app/create/default_tests.rs`). Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#padrão-de-abertura-é-do-servidor-22112026).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
   do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
   fecha sem matar e reabre no nome novo na mesma geração; falha no meio desfaz e diz o que não voltou.

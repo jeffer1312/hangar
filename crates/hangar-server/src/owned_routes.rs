@@ -24,7 +24,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // O serviço MCP responde também aos métodos recusados, sem repasse ao Python.
     if matches!(path, "/mcp" | "/mcp/") { return true; }
     if *method == Method::GET && path == "/api/whoami" { return true; }
-    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/auto-report" | "/api/session-defaults" | "/api/tags" | "/api/notice-ignores" | "/api/tour-progress" | "/api/web-ui" | "/api/session-auto-hide") { return true; }
+    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/auto-report" | "/api/session-defaults" | "/api/session-options" | "/api/tags" | "/api/notice-ignores" | "/api/tour-progress" | "/api/web-ui" | "/api/session-auto-hide") { return true; }
     if (matches!(*method, Method::GET | Method::PUT) && path == "/api/update-channel") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
@@ -50,7 +50,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::POST && path == "/api/diag/report" { return true; }
     // SideStore no aparelho do cabo (`device_install::routes`): nunca repassado.
     if *method == Method::GET && matches!(path, "/api/device-install/devices" | "/api/device-install/progress") { return true; }
-    if *method == Method::POST && matches!(path, "/api/device-install/trust" | "/api/device-install/start" | "/api/device-install/code" | "/api/device-install/certs") { return true; }
+    if *method == Method::POST && matches!(path, "/api/device-install/trust" | "/api/device-install/start" | "/api/device-install/code" | "/api/device-install/certs" | "/api/device-install/cancel") { return true; }
     if *method == Method::POST && matches!(path, "/api/update/accept" | "/api/update/arrived/seen") { return true; }
     if *method == Method::POST && path == "/api/ask-history" { return true; }
     // Code Mode já ligado no settings.json principal (`claude_defaults::code_mode`).

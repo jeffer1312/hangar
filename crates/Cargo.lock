@@ -2114,6 +2114,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "hangar-core",
+ "hangar-session-open-fields",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2129,6 +2130,7 @@ dependencies = [
  "base64 0.23.1",
  "futures-util",
  "hangar-core",
+ "hangar-session-open-fields",
  "percent-encoding",
  "proptest",
  "regex",
@@ -2189,6 +2191,7 @@ dependencies = [
  "hangar-reviews",
  "hangar-scheduled-tasks",
  "hangar-send",
+ "hangar-session-open-fields",
  "hangar-session-tools",
  "hangar-shortcut-transfer",
  "hangar-sidecar-prune",
@@ -2252,6 +2255,10 @@ dependencies = [
  "zeroize",
  "zip",
 ]
+
+[[package]]
+name = "hangar-session-open-fields"
+version = "0.1.0"
 
 [[package]]
 name = "hangar-session-tools"

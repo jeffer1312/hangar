@@ -182,12 +182,6 @@ fn creation_tier(tier: Option<&str>, available: bool, ultrafast: bool, fresh: bo
     tier.filter(|tier| available && fresh && (matches!(*tier, "default" | "priority") || (*tier == "ultrafast" && ultrafast)))
 }
 
-fn model_memory_key(server: &str, provider: &str, account: &str, engine: &str, engine_account: &str) -> String {
-    let who = if provider == "codex" { account } else if engine.is_empty() { "-" } else { engine };
-    let key = format!("cp_last_model:{server}:{provider}:{who}");
-    if provider == "claude" && !engine_account.is_empty() { format!("{key}:account:{engine_account}") } else { key }
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct Motor {
     label: Option<String>,
@@ -344,11 +338,6 @@ impl NewSession {
             .filter(move |c| c.active || quotas.is_none_or(|list| list.iter().any(|q| q.id.strip_prefix("claude:") == Some(c.path.as_str()))))
     }
 
-    /// A chave da memória do último modelo: servidor, provider e a conta do Codex ou o motor (`chaveMemoria` do web).
-    pub(super) fn memory_key(&self) -> String {
-        model_memory_key(&self.link.api.identity(), self.provider, &self.codex_account, &self.engine, &self.engine_account)
-    }
-
     fn selected_engine(&self) -> Option<&Motor> {
         (self.provider == "claude").then(|| self.engines.ok()?.iter().find(|(name, _)| *name == self.engine).map(|(_, motor)| motor)).flatten()
     }
@@ -443,18 +432,15 @@ impl NewSession {
         }
         if let Some(config) = self.config.clone() { query.push(("config_dir".into(), config)); }
         if self.provider == "codex" { query.push(("codex_account".into(), self.codex_account.clone())); }
-        let (key, default_key) = (self.memory_key(), self.default_key());
+        let default_key = self.default_key();
         let scope = self.default_scope();
         self.request(cx, move |api, send| Box::pin(async move {
-            // O padrão marcado do harness vence a última escolha lembrada.
-            let (remembered, legacy) = tokio::task::spawn_blocking(move || {
-                let saved = crate::appearance::harness_default(&default_key);
-                (crate::appearance::last_model(&key), saved)
-            }).await.unwrap_or_default();
+            let legacy = tokio::task::spawn_blocking(move || crate::appearance::harness_default(&default_key)).await.unwrap_or_default();
             let scope: Vec<_> = scope.iter().map(|(k, v)| (*k, v.as_str())).collect();
             let saved = api.read_session_default(&scope, legacy).await;
+            // Sem padrão marcado no servidor, o modelo fica no padrão dele: nada lembrado neste computador entra.
             let remembered = saved.as_ref().ok().and_then(|saved| saved.as_ref())
-                .map(|(m, e, _)| (m.clone(), e.clone())).unwrap_or(remembered);
+                .map(|(m, e, _)| (m.clone(), e.clone())).unwrap_or_default();
             let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
             send(CreateReply::Models(seq, api.server_read(&["model-options"], &query, 30).await, remembered, saved)).await
         }));
@@ -1511,10 +1497,6 @@ mod tests {
         let ordinary: super::Motor = serde_json::from_value(serde_json::json!({"model":"k3"})).unwrap();
         assert!(ordinary.cliproxy_accounts.is_none());
         assert!(super::engine_account_ready(&ordinary, ""));
-        let key = super::model_memory_key("server", "claude", "", "proxy", "default");
-        assert_ne!(key, super::model_memory_key("server", "claude", "", "proxy", "other"));
-        assert_ne!(key, super::model_memory_key("another", "claude", "", "proxy", "default"));
-        assert_ne!(key, super::model_memory_key("server", "claude", "", "proxy", ""));
         let catalog: Vec<ModelOption> = serde_json::from_value(serde_json::json!([{"id":"gpt-base"}])).unwrap();
         assert!(super::selected_model_valid(&catalog, "claude", true, "gpt-base"));
         assert!(!super::selected_model_valid(&catalog, "claude", true, ""));
@@ -1533,10 +1515,6 @@ mod tests {
         assert_eq!(remembered("claude-model", "high"), (String::new(), String::new()));
         assert_eq!(remembered("", "high"), (String::new(), String::new()));
         assert_eq!(remembered("model-b", "medium"), ("model-b".into(), "medium".into()));
-        let key = super::model_memory_key("server-a", "codex", "account-a", "", "");
-        assert_ne!(key, super::model_memory_key("server-b", "codex", "account-a", "", ""));
-        assert_ne!(key, super::model_memory_key("server-a", "claude", "account-a", "", ""));
-        assert_ne!(key, super::model_memory_key("server-a", "codex", "account-b", "", ""));
         let mut remote = super::Remote::<super::Catalog>::default();
         let old = remote.start();
         let current = remote.start();

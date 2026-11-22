@@ -315,9 +315,12 @@ fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
 }
 
 /// A caixa de mensagem logo abaixo: a régua e, em seguida, a linha do `❯` (ou do `!` no modo de comando).
-/// Régua solta numa resposta não conta.
+/// Régua solta numa resposta não conta. A faixa dos mods, quando começa por um título de painel, fica entre as duas.
 fn composer_below(lines: &[&str]) -> bool {
-    let mut rest = lines.iter().filter(|l| !trim(l).is_empty());
+    let mut rest = lines.iter().filter(|l| !trim(l).is_empty()).peekable();
+    if rest.peek().is_some_and(|l| mods_band_title(l)) {
+        while rest.peek().is_some_and(|l| !P.rule.is_match(l)) { rest.next(); }
+    }
     rest.next().is_some_and(|l| P.rule.is_match(l)) && rest.next().is_some_and(|l| trim(l).starts_with(['❯', '!']))
 }
 
@@ -331,13 +334,22 @@ fn live_spinner(lines: &[&str]) -> Option<String> {
     let ascii = |s: &str| s.strip_prefix("* ").and_then(|rest| rest.split_once(' '))
         .is_some_and(|(verb, more)| verb.ends_with('…') && more.starts_with('('));
     let composer = (0..lines.len()).rev().find(|&i| composer_below(&lines[i..]));
-    let newest_reply = composer.and_then(|top| lines[..top].iter().rposition(|l| trim(l).starts_with('●')));
+    let newest_reply = composer.and_then(|top| lines[..top].iter().rposition(|l| trim(l).starts_with('●') && !mods_band_title(l)));
     lines.iter().enumerate().rev().map(|(i, l)| (i, trim(l))).find(|(i, s)| {
         let mut chars = s.chars();
         newest_reply.is_none_or(|reply| *i > reply)
             && (chars.next().is_some_and(|c| SPINNERS.contains(c)) && chars.next() == Some(' ')
                 || ascii(s) && composer_below(&lines[i + 1..]))
     }).map(|(_, s)| String::from(s.split("   ").next().unwrap_or(s)))
+}
+
+/// Título de painel da faixa dos mods ("● ▾ PM-20124 coleta…   [-]"): o ponto é o estado do painel, não uma resposta
+/// do Claude. Tomado por resposta, ele escondia a linha viva acima da faixa, e "Waiting for 1 background agent" sumia.
+/// O controle de minimizar no fim separa o título de uma resposta que comece com a mesma seta.
+fn mods_band_title(line: &str) -> bool {
+    let line = trim(line);
+    line.strip_prefix('●').map(left).is_some_and(|rest| rest.starts_with(['▾', '▸']))
+        && (line.ends_with("[-]") || line.ends_with("[+]"))
 }
 
 fn status_line(lines: &[&str]) -> Option<String> {
@@ -788,6 +800,16 @@ mod tests {
         assert_eq!(super::analyze(&pane).spinner, None);
         let pane = format!("{DONE}\n\n● resposta nova\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n{band}\n\n{RULE}\n❯ \n{RULE}\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Kerfuffling… (2m 26s · ↓ 4.9k tokens)"));
+        // Painel de mod aberto com o ponto de estado ("● ▾ …") entre a linha viva e a caixa: não é resposta nova.
+        let band = "● ▾ PM-20124 coleta: troca de sessão no 403 (Execução manual)        8/9 passos · 2h 30m [-]\n  ━━━━━━━━ ━━━━━━━━  89%\n▸ ms_def · develop · Jenkins sem build";
+        let pane = format!("● resposta\n\n✻ Waiting for 1 background agent to finish\n{band}\n{RULE}\n❯ \n{RULE}\n  ⏵⏵ bypass permissions on · 2 background tasks · ↓ to manage\n  ● main\n  ◯ pmedico:kubectl  Aguardando conclusão   40s · ↓ 79.2k tokens\n");
+        assert_eq!(super::analyze(&pane).label.as_deref(), Some("Waiting for 1 background agent to finish"));
+        // O quadro do `*` acima do painel com título também é a linha viva.
+        let pane = format!("{DONE}\n\n● resposta nova\n\n* Kerfuffling… (2m 26s)\n{band}\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).label.as_deref(), Some("Kerfuffling… (2m 26s)"));
+        // Resposta que começa com a mesma seta segue sendo resposta: o resumo do turno anterior acima dela não volta.
+        let pane = format!("● anterior\n\n{DONE}\n\n❯ pergunta\n\n● ▸ primeiro item da lista\n\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).spinner, None);
         // Caixa no modo de comando.
         let pane = format!("{DONE}\n\n● resposta\n\n* Precipitating… (2m 12s)\n\n{RULE}\n! ls\n{RULE}\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Precipitating… (2m 12s)"));

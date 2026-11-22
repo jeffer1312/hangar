@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 const CASES: &str = include_str!("contract/send_cases.json");
 
-const NEW_USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--resume <id da conversa>]\n";
+const NEW_USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--resume <id da conversa>]\n";
 const PAIR_USAGE: &str = "uso: hangar-send --pair <sessao|servidor::sessao> [tarefa...] [--substituir-tarefa] [--orq] | --pair --orq [tarefa...]\n";
 const CONTRACT_USAGE: &str = "uso: hangar-send --contrato [--gravar <arquivo> [--mtime <valor da leitura>]]\n";
 const UNREADABLE_SEND: &str = "— não dá para dizer se foi entregue; confira com hangar-send --list\n";
@@ -60,7 +60,26 @@ fn skip(why: &'static str, reason: &'static str) -> Override {
     Override { why, skip: Some(reason), ..Override::default() }
 }
 
+/// Os pedidos esperados de um caso sem a consulta a `/api/providers` e sem o `provider` que ela punha
+/// no corpo: o provedor omitido passou a ser decidido pelo servidor (`resolve_open`).
+fn without_provider_lookup(name: &str) -> Value {
+    let cases: Vec<Value> = serde_json::from_str(CASES).unwrap();
+    let case = cases.into_iter().find(|case| case["name"] == name).unwrap();
+    let mut http = case["expect"]["http"].clone();
+    for requests in http.as_object_mut().unwrap().values_mut() {
+        let list = requests.as_array_mut().unwrap();
+        list.retain(|request| request["path"] != "/api/providers");
+        for request in list.iter_mut().filter(|request| request["path"] == "/api/sessions") {
+            let mut body: Value = serde_json::from_str(request["body"].as_str().unwrap()).unwrap();
+            body.as_object_mut().unwrap().remove("provider");
+            request["body"] = Value::String(body.to_string());
+        }
+    }
+    http
+}
+
 fn overrides() -> BTreeMap<&'static str, Override> {
+    let lookup_gone = "padrão de abertura do servidor: o provedor omitido não é mais escolhido pelo cliente";
     let unreadable_send = |target: &str| format!("erro: resposta ilegível do envio para {target} {UNREADABLE_SEND}");
     let encoded = |path: &str| json!({"local": [{"method": "POST", "path": path, "auth": "Bearer tok-local", "json": true,
                                                   "body": "{\"text\": \"[de: cli] oi\", \"steer\": true}"}]});
@@ -126,6 +145,17 @@ fn overrides() -> BTreeMap<&'static str, Override> {
         ("contrato__gravar-not-utf8", why("surpresa 11 corrigida: sem traceback").stderr("erro: '$T/work/c.md' não é texto UTF-8\n")),
         // Erro de uso sai com 2 e a frase `uso:`, sem o `script: line N:` do bash.
         ("new__no-name", why("D14.2").code(2).stderr(NEW_USAGE)),
+        ("new__name-is-flag", why("--code-mode no uso").stderr(&format!("erro: nome de sessão não pode começar com '-' (esqueceu o nome?)\n{NEW_USAGE}"))),
+        ("new__minimal-outside", why(lookup_gone).http(without_provider_lookup("new__minimal-outside"))
+            .stdout("sessão criada: nova ($T/home) — fala com ela via: hangar-send nova \"msg\"\n")),
+        ("new__providers-none-default", why(lookup_gone).http(without_provider_lookup("new__providers-none-default"))
+            .stdout("sessão criada: nova ($T/home) — fala com ela via: hangar-send nova \"msg\"\n")),
+        ("new__remote-default-provider-and-tilde", why(lookup_gone).http(without_provider_lookup("new__remote-default-provider-and-tilde"))
+            .stdout("sessão criada: a::nova (~) — fala com ela via: hangar-send a::nova \"msg\"\n")),
+        ("new__flags-before-cwd-terminal-sem-jev-no-inherit", why(lookup_gone).http(without_provider_lookup("new__flags-before-cwd-terminal-sem-jev-no-inherit"))
+            .stdout("sessão criada: nova (/w) [jev: false] — fala com ela via: hangar-send nova \"msg\"\n")),
+        ("new__providers-500", skip(lookup_gone, "o --new não consulta mais /api/providers")),
+        ("new__providers-unreadable", skip(lookup_gone, "o --new não consulta mais /api/providers")),
         ("new__value-missing-at-end", why("D14.2").code(2).stderr("uso: --model <id>\n")),
         ("pair__no-peer", why("D14.2").code(2).stderr(PAIR_USAGE)),
         ("close__no-target", why("D14.2").code(2).stderr("uso: hangar-send --close <sessao|servidor::sessao>\n")),

@@ -113,6 +113,19 @@ pub async fn serve(st: &Arc<AppState>, name: &str, bytes: &[u8]) -> (StatusCode,
         .await.unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, detail_body("relaunch_panicked", "a retomada parou no meio; confira a sessão", json!({}))))
 }
 
+/// A recusa de quem não tem spec Claude, pelo provider da linha da lista (`None`: sem linha).
+fn without_spec(provider: Option<&str>) -> (StatusCode, Value) {
+    match provider {
+        // Linha Claude sem spec nem processo achado: em regra o terminal só tem o shell.
+        Some("claude") => (StatusCode::CONFLICT, detail_body("erro_resume_sem_claude",
+            "não encontrei Claude rodando neste terminal; abra o Claude nele ou retome a conversa pelo Arquivo", json!({}))),
+        // O resto não retoma por aqui: volta pelo Arquivo, que retoma cada agente com o verbo dele.
+        Some(provider) => (StatusCode::CONFLICT, detail_body("erro_resume_so_claude", &format!("retomar a sessão só vale para o Claude \
+            (esta é {provider}); retome a conversa pelo Arquivo"), json!({"provider": provider}))),
+        None => (StatusCode::NOT_FOUND, detail_body("erro_sessao_inexistente", "sessao nao encontrada", json!({}))),
+    }
+}
+
 async fn resume(st: &Arc<AppState>, runtime: &crate::runtime::gateway::RuntimeRegistry, name: &str, asked: Option<String>) -> (StatusCode, Value) {
     let refused = |status: StatusCode, code: &str, msg: &str, params: Value| (status, detail_body(code, msg, params));
     let spec = match runtime.claude_resume_spec(name).await {
@@ -120,12 +133,7 @@ async fn resume(st: &Arc<AppState>, runtime: &crate::runtime::gateway::RuntimeRe
         Some(Err(error)) => return refused(StatusCode::CONFLICT, &error.code, &error.message, json!({})),
         None => {
             let row = st.list.find_row(name).await.ok().flatten();
-            return match row {
-                // O resto não retoma por aqui: volta pelo Arquivo, que retoma cada agente com o verbo dele.
-                Some(row) => refused(StatusCode::CONFLICT, "erro_resume_so_claude", &format!("retomar a sessão só vale para o Claude (esta é {}); \
-                    retome a conversa pelo Arquivo", row.provider), json!({"provider": row.provider})),
-                None => refused(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "sessao nao encontrada", json!({})),
-            };
+            return without_spec(row.as_ref().map(|row| row.provider.as_str()));
         }
     };
     let env = runtime.codex_environment();
@@ -189,6 +197,16 @@ mod tests {
         assert_eq!(choose(&found, &free, false), Choice::Pick("a".into()));
         assert!(matches!(choose(&found, &free, true), Choice::Ambiguous(c) if c.len() == 2), "outra sessão na pasta: a pessoa escolhe");
         assert_eq!(choose(&found[..1], &free, true), Choice::Pick("a".into()), "uma só candidata não é ambígua");
+    }
+
+    #[test]
+    fn a_claude_row_without_claude_has_its_own_refusal() {
+        let (status, body) = without_spec(Some("claude"));
+        assert_eq!((status, body["detail"]["code"].as_str()), (StatusCode::CONFLICT, Some("erro_resume_sem_claude")));
+        let (status, body) = without_spec(Some("pi"));
+        assert_eq!((status, body["detail"]["code"].as_str()), (StatusCode::CONFLICT, Some("erro_resume_so_claude")));
+        assert_eq!(body["detail"]["params"]["provider"], "pi");
+        assert_eq!(without_spec(None).0, StatusCode::NOT_FOUND);
     }
 
     #[test]

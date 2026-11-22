@@ -60,27 +60,84 @@ pub(crate) fn saved(home: &Path, provider: &str, engine: &str, engine_account: &
     Ok(read(&path(home))?.remove(&key).flatten())
 }
 
-fn read(path: &Path) -> io::Result<BTreeMap<String, Option<Defaults>>> {
+/// O arquivo lido; `None` = nunca gravado.
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
     match crate::runtime::queue::read_replaced(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(io::Error::other),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
 }
 
+fn read(path: &Path) -> io::Result<BTreeMap<String, Option<Defaults>>> { Ok(read_json(path)?.unwrap_or_default()) }
+
+/// A trava de quem grava, para ler e reescrever o arquivo sem outra gravação no meio.
+fn write_lock(path: &Path, saving: bool) -> io::Result<Option<std::fs::File>> {
+    if !saving { return Ok(None); }
+    std::fs::create_dir_all(path.parent().ok_or_else(|| io::Error::other("pasta ausente"))?)?;
+    hangar_core::fs::lock_file(&path.with_extension("lock")).map(Some)
+}
+
 fn selection(path: &Path, key: &str, save: Option<Save>) -> io::Result<Selection> {
-    let _lock = if save.is_some() {
-        std::fs::create_dir_all(path.parent().ok_or_else(|| io::Error::other("pasta ausente"))?)?;
-        let file = std::fs::OpenOptions::new().read(true).append(true).create(true).open(path.with_extension("lock"))?;
-        file.lock()?;
-        Some(file)
-    } else { None };
+    let _lock = write_lock(path, save.is_some())?;
     let mut entries = read(path)?;
     if let Some(save) = save.filter(|save| !save.if_absent || !entries.contains_key(key)) {
         entries.insert(key.to_owned(), save.defaults);
         crate::runtime::queue::atomic_write(path, &serde_json::to_vec(&entries)?)?;
     }
     Ok(Selection { configured: entries.contains_key(key), defaults: entries.remove(key).flatten() })
+}
+
+/// As opções da tela Beta que a abertura aplica ao que o pedido não disse. Arquivo próprio: o
+/// `session-defaults.json` é lido estrito pela versão anterior, e uma chave nova nele a faria recusar
+/// toda criação depois de voltar a atualização.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionOptions { pub conversation_beta: bool, pub code_mode: bool }
+
+fn options_path(home: &Path) -> std::path::PathBuf { home.join(".hangar").join("session-options.json") }
+
+/// As opções gravadas; `None` = nunca gravadas.
+pub(crate) fn options(home: &Path) -> io::Result<Option<SessionOptions>> { read_json(&options_path(home)) }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveOptions {
+    options: SessionOptions,
+    // A cópia do `appearance.json` antigo do desktop não pisa numa escolha já gravada.
+    #[serde(default)] if_absent: bool,
+}
+
+#[derive(Serialize)]
+struct OptionsSelection { configured: bool, options: SessionOptions }
+
+fn options_selection(path: &Path, save: Option<SaveOptions>) -> io::Result<OptionsSelection> {
+    let _lock = write_lock(path, save.is_some())?;
+    // Gravação explícita substitui sem ler: é ela que recupera um arquivo ilegível.
+    let current = if save.as_ref().is_some_and(|save| !save.if_absent) { None } else { read_json(path)? };
+    if let Some(save) = save.filter(|_| current.is_none()) {
+        crate::runtime::queue::atomic_write(path, &serde_json::to_vec(&save.options)?)?;
+        return Ok(OptionsSelection { configured: true, options: save.options });
+    }
+    Ok(OptionsSelection { configured: current.is_some(), options: current.unwrap_or_default() })
+}
+
+/// `GET`/`PUT /api/session-options`: só o dono.
+pub async fn handle_options(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
+    if !(match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
+        return crate::session_write::not_owner(&state, peer, request).await;
+    }
+    let save = if request.method() == Method::PUT {
+        match to_bytes(request.into_body(), 16 * 1024).await.ok().and_then(|raw| serde_json::from_slice::<SaveOptions>(&raw).ok()) {
+            Some(save) => Some(save),
+            None => return failure(StatusCode::BAD_REQUEST, "session_options_invalid", "opções da abertura inválidas"),
+        }
+    } else { None };
+    let path = options_path(&state.accounts.env.home);
+    match tokio::task::spawn_blocking(move || options_selection(&path, save)).await {
+        Ok(Ok(selection)) => json_response(StatusCode::OK, json!(selection)),
+        _ => failure(StatusCode::SERVICE_UNAVAILABLE, "session_options_unavailable", "não foi possível ler ou guardar as opções da abertura"),
+    }
 }
 
 fn failure(status: StatusCode, code: &str, message: &str) -> Response {
@@ -116,5 +173,23 @@ pub(crate) async fn serve(state: &Arc<AppState>, request: Request) -> Response {
     match tokio::task::spawn_blocking(move || selection(&path, &key, save)).await {
         Ok(Ok(selection)) => json_response(StatusCode::OK, json!(selection)),
         _ => failure(StatusCode::SERVICE_UNAVAILABLE, "session_defaults_unavailable", "não foi possível ler ou guardar o padrão da abertura"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_explicit_save_replaces_an_unreadable_options_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-options.json");
+        std::fs::write(&path, b"{not json").unwrap();
+        let chosen = SessionOptions { conversation_beta: true, code_mode: true };
+        assert!(options_selection(&path, Some(SaveOptions { options: chosen, if_absent: true })).is_err());
+        let saved = options_selection(&path, Some(SaveOptions { options: chosen, if_absent: false })).unwrap();
+        assert!(saved.configured);
+        assert_eq!(saved.options, chosen);
+        assert_eq!(read_json::<SessionOptions>(&path).unwrap(), Some(chosen));
     }
 }
