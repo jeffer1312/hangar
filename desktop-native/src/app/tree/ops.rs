@@ -63,10 +63,23 @@ fn move_expanded(expanded: &mut HashSet<String>, old: &str, new: &str) -> Vec<St
     moved
 }
 
-/// Nome do item, para títulos e confirmações.
-fn base(path: &str) -> &str { path.trim_end_matches('/').rsplit('/').next().unwrap_or(path) }
+/// Nome do item, para títulos e confirmações. `\` só separa pastas nos caminhos de uma máquina Windows; nos outros
+/// sistemas é parte do nome.
+fn base(path: &str, windows: bool) -> &str {
+    let seps: &[char] = if windows { &['/', '\\'] } else { &['/'] };
+    let trimmed = path.trim_end_matches(seps);
+    trimmed.rsplit(seps).next().unwrap_or(trimmed)
+}
 
 impl Hangar {
+    /// Os caminhos da árvore são da máquina dos arquivos: a do app na pasta local, a do servidor na da sessão.
+    fn tree_windows(&self) -> bool {
+        match self.tree.source.as_ref().and_then(FileSource::root) {
+            Some(_) => cfg!(windows),
+            None => self.selected.as_ref().and_then(|s| s.cwd.as_deref()).is_some_and(|cwd| cwd.contains('\\')),
+        }
+    }
+
     /// Escrever pelo servidor pede sessão com escrita (o convidado só de leitura não tem).
     pub(super) fn tree_writable(&self) -> bool {
         self.session_api().is_some() && self.selected.as_ref().is_some_and(|s| !s.read_only())
@@ -145,7 +158,7 @@ impl Hangar {
 
     pub(super) fn tree_rename_dialog(&mut self, target: ItemTarget, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rel) = target.session.clone() else { return };
-        let (name, owner) = (base(&rel).to_owned(), self.session_owner());
+        let (name, owner) = (base(&rel, self.tree_windows()).to_owned(), self.session_owner());
         let title = tr("tree_rename_title").replace("{name}", &name);
         self.tree_name_dialog(title, tr("sidebar_rename"), name, window, cx, move |this, new, window, cx| {
             let old = rel.clone();
@@ -167,7 +180,7 @@ impl Hangar {
 
     /// Novo arquivo ou pasta em `parent` (`None` é a raiz da sessão).
     pub(super) fn tree_create_dialog(&mut self, parent: Option<String>, dir: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let folder = parent.as_deref().map_or_else(|| self.tree_root_label(), |p| base(p).to_owned());
+        let folder = parent.as_deref().map_or_else(|| self.tree_root_label(), |p| base(p, self.tree_windows()).to_owned());
         let title = tr(if dir { "tree_new_folder_title" } else { "tree_new_file_title" }).replace("{folder}", &folder);
         let owner = self.session_owner();
         self.tree_name_dialog(title, tr("tree_create"), String::new(), window, cx, move |this, name, window, cx| {
@@ -187,7 +200,7 @@ impl Hangar {
     pub(super) fn tree_confirm_trash(&mut self, target: ItemTarget, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rel) = target.session.clone() else { return };
         let (weak, owner) = (cx.entity().downgrade(), self.session_owner());
-        chrome::confirm_alert(window, cx, tr("tree_trash_title").replace("{name}", base(&rel)), tr("tree_trash_msg"), tr("tree_trash_ok"),
+        chrome::confirm_alert(window, cx, tr("tree_trash_title").replace("{name}", base(&rel, self.tree_windows())), tr("tree_trash_msg"), tr("tree_trash_ok"),
             ButtonVariant::Danger, move |window, cx| {
                 let rel = rel.clone();
                 let _ = weak.update(cx, |this, cx| this.tree_request(owner.clone(), "trash", json!({"path": rel}), window, cx, |_, _, _, _, _| {}));
@@ -233,9 +246,7 @@ impl Hangar {
     pub(super) fn tree_root_label(&self) -> String {
         let path = self.tree.custom_root(&self.tree.owner).map(|p| p.to_string_lossy().into_owned())
             .or_else(|| self.selected.as_ref().and_then(|s| s.cwd.clone())).unwrap_or_default();
-        // A pasta pode ser de uma máquina Windows; nos caminhos da árvore `\` é parte do nome.
-        let trimmed = path.trim_end_matches(['/', '\\']);
-        trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed).to_owned()
+        base(&path, self.tree_windows()).to_owned()
     }
 }
 

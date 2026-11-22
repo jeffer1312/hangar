@@ -826,18 +826,20 @@ pub fn beta_state_chip(state: &str, label: String, since: Option<Instant>) -> An
     div().id("header-state").flex_shrink_0().h(px(28.)).px(px(12.)).flex().items_center().gap(px(8.)).rounded_full()
         .bg(bg).border_1().border_color(fg.alpha(0.4)).text_color(fg).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).whitespace_nowrap()
         .children(icon).child(label)
-        .when_some(since, |el, since| el
-            .child(div().font_weight(FontWeight::NORMAL).text_color(theme::muted())
-                .child(crate::i18n::tr("beta_ago").replace("{time}", &format_ago(since.elapsed()))))
-            // Sem a marca animada no selo, nada garante outro desenho da raiz durante um turno longo e calado.
-            .child(div().absolute().size_0().child(AgoTick { key: "header-state-tick".into(), since })))
+        .when_some(since, |el, since| {
+            let shown = format_ago(since.elapsed());
+            el.child(div().font_weight(FontWeight::NORMAL).text_color(theme::muted())
+                    .child(crate::i18n::tr("beta_ago").replace("{time}", &shown)))
+                // Sem a marca animada no selo, nada garante outro desenho da raiz durante um turno longo e calado.
+                .child(div().absolute().size_0().child(AgoTick { key: "header-state-tick".into(), since, shown }))
+        })
         .into_any_element()
 }
 
 /// Redesenha a raiz quando o texto de `format_ago` desde `since` muda, sem pintar nada: o tempo fica em quem o
 /// desenha, com a medida e o estilo de lá.
 #[derive(IntoElement)]
-struct AgoTick { key: ElementId, since: Instant }
+struct AgoTick { key: ElementId, since: Instant, shown: String }
 
 struct AgoTickView { since: Instant }
 
@@ -847,10 +849,10 @@ impl Render for AgoTickView {
 
 impl RenderOnce for AgoTick {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let since = self.since;
+        let (since, mut shown) = (self.since, self.shown);
         let view = keyed_view(self.key, window, cx, |cx| {
             cx.spawn(async move |view, cx| {
-                let mut shown = format_ago(since.elapsed());
+                // A referência é o texto que este desenho pintou: lido de novo agora, ele podia já ter virado.
                 loop {
                     // Confere a cada segundo: o começo do turno pode mudar, e só a troca do texto redesenha.
                     cx.background_executor().timer(Duration::from_secs(1)).await;

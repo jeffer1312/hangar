@@ -707,10 +707,12 @@ impl Hangar {
         for tab in &mut self.files.tabs {
             // Citado de fora da pasta da sessão com o mesmo caminho relativo não é o item renomeado.
             if matches!(&tab.content, Some(Ok(doc)) if doc.base.external) { continue; }
-            let Some(path) = renamed_path(&tab.path, old, new) else { continue };
+            // A aba aberta por caminho absoluto (citada no chat) só é reconhecida pelo caminho interno do documento.
+            let base = match &tab.content { Some(Ok(doc)) => renamed_path(&doc.base.path, old, new), _ => None };
+            let Some(path) = renamed_path(&tab.path, old, new).or_else(|| base.clone()) else { continue };
             tab.path = path;
             if let Some(Ok(doc)) = &mut tab.content {
-                if let Some(base) = renamed_path(&doc.base.path, old, new) { doc.base.path = base; }
+                if let Some(base) = base { doc.base.path = base; }
                 // A verificação em voo leu o nome antigo e diria que o arquivo sumiu.
                 if doc.checking { (doc.read_seq, doc.checking) = (doc.read_seq.wrapping_add(1), false); }
             }

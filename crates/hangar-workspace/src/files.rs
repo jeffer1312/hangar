@@ -650,12 +650,15 @@ fn path_syntax(path: &str) -> Result<()> {
 }
 
 /// Nome de um item criado ou renomeado: uma parte só do caminho, nunca `.git`. No Windows `C:nome` também tem
-/// prefixo de unidade, e o `join` trocaria a pasta da sessão pela pasta corrente dessa unidade.
+/// prefixo de unidade, e o `join` trocaria a pasta da sessão pela pasta corrente dessa unidade. Começar por `-` é
+/// recusado como em `path_syntax`: o item na raiz não poderia mais ser aberto, renomeado nem apagado.
 fn entry_name(name: &str) -> Result<&str> {
     let name = name.trim();
     let mut parts = Path::new(name).components();
     let single = matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(part)), None) if part == name);
-    if !single || is_git_name(std::ffi::OsStr::new(name)) || name.contains(['/', '\\', '\0']) || windows_reserved(name) {
+    if !single || name.starts_with('-') || is_git_name(std::ffi::OsStr::new(name)) || name.contains(['/', '\\', '\0'])
+        || windows_reserved(name)
+    {
         return Err(file_error(400, "erro_arq_nome_invalido", "nome inválido"));
     }
     Ok(name)
@@ -772,7 +775,10 @@ pub fn rename(cwd: &Path, path: &str, name: &str) -> Result<Value> {
         let lower = name.to_lowercase();
         let own = source.file_name();
         let parent = source.parent().unwrap_or(cwd);
-        let other = std::fs::read_dir(parent).map_err(|e| io_error(e, "erro_arq_escrita_falhou"))?.flatten()
+        // A listagem incompleta não prova que só sobrou o próprio item.
+        let entries = std::fs::read_dir(parent).and_then(|dir| dir.collect::<std::io::Result<Vec<_>>>())
+            .map_err(|e| io_error(e, "erro_arq_escrita_falhou"))?;
+        let other = entries.iter()
             .any(|e| Some(e.file_name().as_os_str()) != own && e.file_name().to_string_lossy().to_lowercase() == lower);
         if other || own.is_none_or(|own| own.to_string_lossy().to_lowercase() != lower) {
             return Err(file_error(409, "erro_arq_ja_existe", "já existe um item com esse nome"));
@@ -786,10 +792,20 @@ pub fn rename(cwd: &Path, path: &str, name: &str) -> Result<Value> {
 
 /// O caminho como a árvore o mostra, com o atalho da pasta de cima, e não o resolvido.
 fn requested(path: &str, name: &str) -> String {
-    match path.trim_end_matches('/').rsplit_once('/') {
-        Some((dir, _)) => format!("{dir}/{name}"),
+    let path = path.trim_end_matches(tree_seps());
+    tree_path(match path.rfind(tree_seps()) {
+        Some(at) => format!("{}{name}", &path[..=at]),
         None => name.to_owned(),
-    }
+    })
+}
+
+fn tree_seps() -> &'static [char] {
+    if cfg!(windows) { &['/', '\\'] } else { &['/'] }
+}
+
+/// No Windows a listagem da árvore separa as pastas com `\`, e a resposta casa com ela.
+fn tree_path(path: String) -> String {
+    if cfg!(windows) { path.replace('/', "\\") } else { path }
 }
 
 #[cfg(target_os = "linux")]
@@ -874,7 +890,7 @@ pub fn trash(cwd: &Path, path: &str) -> Result<Value> {
         tracing::warn!(erro = %trash_kind(&e), "lixeira recusou o item");
         file_error(409, "erro_arq_lixeira_falhou", "não deu para mandar para a lixeira")
     })?;
-    Ok(json!({"path": path.trim_end_matches('/')}))
+    Ok(json!({"path": path.trim_end_matches(tree_seps())}))
 }
 
 /// Arquivo vazio ou pasta dentro de `path` (vazio é a raiz da sessão).
@@ -890,8 +906,8 @@ pub fn create(cwd: &Path, path: Option<&str>, name: &str, dir: bool) -> Result<V
     } else {
         std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(exists_error)?;
     }
-    let path = match path.map(|p| p.trim_end_matches('/')).filter(|p| !p.is_empty()) {
-        Some(folder) => format!("{folder}/{name}"),
+    let path = match path.map(|p| p.trim_end_matches(tree_seps())).filter(|p| !p.is_empty()) {
+        Some(folder) => tree_path(format!("{folder}/{name}")),
         None => name.to_owned(),
     };
     Ok(json!({"path": path, "dir": dir}))
@@ -933,9 +949,9 @@ mod tests {
         let cwd = dir.path();
         std::fs::create_dir(cwd.join(".git")).unwrap();
         assert_eq!(super::create(cwd, None, "docs", true).unwrap()["path"], "docs");
-        assert_eq!(super::create(cwd, Some("docs"), "a.md", false).unwrap()["path"], "docs/a.md");
+        assert_eq!(super::create(cwd, Some("docs"), "a.md", false).unwrap()["path"], super::tree_path("docs/a.md".into()));
         assert_eq!(super::create(cwd, Some("docs"), "a.md", false).unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
-        assert_eq!(super::rename(cwd, "docs/a.md", "b.md").unwrap()["path"], "docs/b.md");
+        assert_eq!(super::rename(cwd, "docs/a.md", "b.md").unwrap()["path"], super::tree_path("docs/b.md".into()));
         assert!(cwd.join("docs/b.md").is_file() && !cwd.join("docs/a.md").exists());
         super::create(cwd, Some("docs"), "c.md", false).unwrap();
         assert_eq!(super::rename(cwd, "docs/c.md", "b.md").unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
@@ -966,11 +982,14 @@ mod tests {
         std::os::unix::fs::symlink(outside.path().join("segredo.txt"), cwd.join("externo")).unwrap();
         assert_eq!(super::rename(cwd, "externo", "externo2").unwrap()["path"], "externo2");
         assert!(outside.path().join("segredo.txt").is_file());
-        // Link `a -> A` não é o próprio `A` em outra caixa: a troca apagaria o arquivo.
+        // Link `a -> A` não é o próprio `A` em outra caixa: a troca apagaria o arquivo. Só existe onde a caixa
+        // distingue nomes (no APFS padrão `a` já é o `A`).
         std::fs::write(cwd.join("A"), "conteúdo").unwrap();
-        std::os::unix::fs::symlink(cwd.join("A"), cwd.join("a")).unwrap();
-        assert_eq!(super::rename(cwd, "a", "A").unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
-        assert_eq!(std::fs::read_to_string(cwd.join("A")).unwrap(), "conteúdo");
+        if cwd.join("a").symlink_metadata().is_err() {
+            std::os::unix::fs::symlink(cwd.join("A"), cwd.join("a")).unwrap();
+            assert_eq!(super::rename(cwd, "a", "A").unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
+            assert_eq!(std::fs::read_to_string(cwd.join("A")).unwrap(), "conteúdo");
+        }
         // Pasta que é atalho: a resposta traz o caminho que a árvore mostra, não o resolvido.
         std::fs::create_dir_all(cwd.join("vendor/lib/sub")).unwrap();
         std::os::unix::fs::symlink(cwd.join("vendor/lib"), cwd.join("lib")).unwrap();
@@ -1017,6 +1036,14 @@ mod tests {
         assert!(cwd.join(".git").is_dir());
     }
 
+    /// A resposta casa com a listagem da árvore: `\` no Windows, `/` nos outros, onde `\` é parte do nome.
+    #[test]
+    fn answered_path_uses_the_listing_separator() {
+        assert_eq!(super::requested("docs/a.md", "b.md"), if cfg!(windows) { "docs\\b.md" } else { "docs/b.md" });
+        assert_eq!(super::requested("a.md", "b.md"), "b.md");
+        assert_eq!(super::requested("docs\\a.md", "b.md"), if cfg!(windows) { "docs\\b.md" } else { "b.md" });
+    }
+
     /// Fluxo alternativo e nome de dispositivo só são recusados onde o Windows os interpreta.
     #[test]
     fn windows_device_and_stream_names_are_refused_there() {
@@ -1032,7 +1059,7 @@ mod tests {
     #[test]
     fn entry_name_is_one_plain_component() {
         assert_eq!(super::entry_name(" arquivo.txt ").unwrap(), "arquivo.txt");
-        for bad in ["", ".", "..", ".git", ".GIT", ".git.", ".Git ", "x/y", "x\\y"] {
+        for bad in ["", ".", "..", ".git", ".GIT", ".git.", ".Git ", "x/y", "x\\y", "-nota"] {
             assert!(super::entry_name(bad).is_err(), "{bad}");
         }
         assert_eq!(super::entry_name("C:escape.txt").is_err(), cfg!(windows));
