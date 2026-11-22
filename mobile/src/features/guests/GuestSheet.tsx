@@ -1,13 +1,13 @@
 import { useRef, useState } from 'react';
 import { Alert, View } from 'react-native';
-import { removeGuest, saveGuest, type GuestAccount, type GuestMachine, type Server } from '@hangar/core';
+import { dropGuestAccesses, removeGuest, saveGuest, type GuestAccount, type GuestMachine, type Server } from '@hangar/core';
 import { CheckRow } from '../config/CheckRow';
 import { SectionCard } from '../config/SectionCard';
 import { MachineField, MachineGroup, MachineRow } from '../machines/MachineRows';
 import { MachineSheet, Notice } from '../machines/parts';
 import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
-import { failureText, thrownText } from './guestTools';
+import { failureText, leftText, thrownText } from './guestTools';
 import * as m from '../../paraglide/messages';
 
 /** Adicionar ou editar um convidado; a conta fica em `store`, e cada máquina marcada recebe o acesso dele. */
@@ -56,14 +56,12 @@ export function GuestSheet({ store, machines, guest, onClose, onChanged }: {
         servers: marked.map(([serverId, root]) => ({ serverId, root: root.trim() })) };
       const result = await saveGuest(store, machines, draft, prev.current);
       const nameTaken = result.storeFailed && result.errors.some((e) => e.code === 'guest_store_failed' && e.status === 409);
-      if (nameTaken && created) {
-        // Nome recusado: tira os acessos que acabaram de nascer, para outro nome começar limpo.
-        await removeGuest(store, machines, result.saved).catch(() => []);
-      } else {
-        prev.current = result.saved;
-      }
+      // Nome recusado: tira os acessos que acabaram de nascer, para outro nome começar limpo; o que ficou aparece por máquina.
+      const left = nameTaken && created ? await dropGuestAccesses(machines, result.saved) : [];
+      if (!(nameTaken && created)) prev.current = result.saved;
       if (result.errors.length) {
-        setErrors(result.errors.map((failure) => failureText(failure, labelOf)));
+        setErrors([...result.errors.map((failure) => failureText(failure, labelOf)),
+          ...left.map((failure) => leftText(failure, result.saved.user, labelOf))]);
         haptic.error();
         if (!result.storeFailed) onChanged();
         return;

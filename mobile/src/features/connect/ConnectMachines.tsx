@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { relativeTime, type AccountDevice, type ConnectMachine, type Server } from '@hangar/core';
+import { CheckRow } from '../config/CheckRow';
 import { InfoNotice } from '../config/InfoNotice';
 import { Pill } from '../config/PageHeader';
 import { SectionCard } from '../config/SectionCard';
@@ -13,6 +14,7 @@ import { Field, MachineSheet, Notice, styles as machineStyles, useMachineAction 
 import { ownServers, useServers } from '../../stores/servers';
 import { missingMachines, needsEntry, readInstallCode, sameMachine, useConnect } from './connectStore';
 import { ConnectMark } from './ConnectHero';
+import { LoginSubmit } from '../login/LoginFields';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
 
@@ -58,16 +60,29 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
   const entered = () => { if (mounted.current) onDone(); };
   const waiting = machines?.filter((machine) => entries[machine.machine_id]?.phase === 'waiting') ?? [];
   const own = ownServers(servers);
-  const missing = missingMachines(machines, servers);
-  // Uma máquina esperando aprovação não trava as outras: "Entrar em todas" pula quem já está pedindo.
-  const idle = missing.filter((machine) => !['asking', 'waiting'].includes(entries[machine.machine_id]?.phase ?? ''));
-  const later = machines?.filter((machine) => !machine.online && !own.some((server) => sameMachine(server, machine))) ?? [];
-  const offerAll = missing.length > 1 && !blocked;
-  const allHelp = later.length ? m.connect_enter_all_offline({ machines: later.map((machine) => machine.name).join(', ') }) : undefined;
-  const enterAll = () => {
+  // Ligada, fora deste aparelho e sem pedido: vem marcada, e a pessoa tira a que não quer. Guardar só as desmarcadas
+  // deixa marcada a máquina que liga depois.
+  const [unpicked, setUnpicked] = useState<ReadonlySet<string>>(() => new Set());
+  const choosable = missingMachines(machines, servers).filter((machine) => !entries[machine.machine_id]);
+  const picked = choosable.filter((machine) => !unpicked.has(machine.machine_id));
+  const toggle = (id: string) => setUnpicked((before) => {
+    const next = new Set(before);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
+  const enterPicked = () => {
     haptic.selection();
-    void useConnect.getState().enterAll().then(() => { if (mounted.current) refresh(); });
+    const ids = picked.map((machine) => machine.machine_id);
+    void useConnect.getState().enterAll(ids).then((saved) => {
+      if (!mounted.current) return;
+      const failed = ids.some((id) => useConnect.getState().entries[id]?.phase === 'failed');
+      if (failed) haptic.error();
+      // Entrou em todas as escolhidas: segue para o app. Alguma falhou: fica, e a linha dela diz o motivo.
+      if (saved.length && !failed) { haptic.success(); onDone(); }
+      else refresh();
+    });
   };
+  const enterLabel = picked.length === 1 ? m.login_guest_enter_one() : m.login_guest_enter_many({ n: String(picked.length) });
   const account = useConnect((s) => s.account?.name ?? '');
   return <>
     <View style={[styles.header, { borderColor: c.border }]}>
@@ -86,9 +101,18 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
     <SectionCard icon="Laptop" title={m.connect_your_machines()} subtitle={m.connect_machines_pull()}>
       {machines === null && !error ? <MachineRow title={loading ? m.mobile_machines_busy() : m.comum_carregando()} /> : null}
       {machines?.length === 0 ? <MachineRow title={m.connect_machines_empty()} /> : null}
-      {machines?.map((machine) => <MachineItem key={machine.machine_id} machine={machine} blocked={blocked} onEntered={entered} onOpen={onDone} />)}
-      {offerAll ? <MachineRow title={m.connect_enter_all()} description={allHelp} action disabled={!idle.length} onPress={enterAll} /> : null}
+      {machines?.map((machine) => {
+        const id = machine.machine_id;
+        if (choosable.includes(machine)) {
+          return <CheckRow key={id} title={machine.name} dot="on" checked={!unpicked.has(id)} disabled={blocked} onToggle={() => toggle(id)} />;
+        }
+        if (!machine.online && !entries[id] && !own.some((server) => sameMachine(server, machine))) {
+          return <CheckRow key={id} title={machine.name} dot="off" description={m.connect_machine_off_now()} checked={false} disabled onToggle={() => {}} />;
+        }
+        return <MachineItem key={id} machine={machine} blocked={blocked} onEntered={entered} onOpen={onDone} />;
+      })}
     </SectionCard>
+    {choosable.length > 0 && !blocked ? <LoginSubmit label={enterLabel} blocked={!picked.length} onPress={enterPicked} /> : null}
     <Notice text={error} error />
     {/* Puxar para atualizar não se vê: o erro traz o caminho à mostra. */}
     {error ? <MachineGroup>
@@ -217,7 +241,10 @@ function AccountDevices() {
       {visible.map((row) => (row.device_id === self
         ? <MachineRow key={row.device_id} title={Constants.deviceName || row.name} value={m.connect_device_this()} />
         : row.status === 'pending'
-          ? <MachineRow key={row.device_id} title={row.name} description={m.connect_account_device_asked({ when: relativeTime(row.created_at) })}
+          // O código é o que o celular que pediu mostra: quem libera confere que é ele.
+          ? <MachineRow key={row.device_id} title={row.name} description={row.install_code
+            ? m.connect_account_device_asked_code({ code: row.install_code, when: relativeTime(row.created_at) })
+            : m.connect_account_device_asked({ when: relativeTime(row.created_at) })}
             value={m.connect_account_device_release()} disabled={action.busy} onPress={() => release(row)} />
           : <MachineRow key={row.device_id} title={row.name} value={m.connect_device_revoke()} disabled={action.busy}
             onPress={() => confirm(m.connect_device_revoke_title({ name: row.name }), m.connect_account_device_revoke_body(),

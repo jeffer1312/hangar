@@ -49,8 +49,8 @@ export interface ConnectState {
   changePassword(oldPassword: string, newPassword: string): Promise<void>;
   refreshMachines(): Promise<void>;
   enter(machine: ConnectMachine): Promise<Server | null>;
-  /** Pede entrada em todas as máquinas online ainda fora deste aparelho. */
-  enterAll(): Promise<void>;
+  /** Pede entrada nas máquinas online ainda fora deste aparelho (só nas de `ids`, quando vem) e devolve as que entraram. */
+  enterAll(ids?: string[]): Promise<Server[]>;
   reenter(server: Server): Promise<void>;
   turnOnConnect(server: Server): Promise<boolean>;
   /** Registra ou relê este aparelho na conta e, liberado, a lista de aparelhos dela. Nunca rejeita: o erro fica no estado. */
@@ -246,7 +246,7 @@ export const useConnect = create<ConnectState>((set, get) => {
     if (status === 'pending' && await vouch(key)) status = await deviceStatus({ ...account, device: key });
     if (get().account?.token !== account.token) return;
     set({ device: { ...key, status }, deviceError: '' });
-    // Liberado agora: entra nas máquinas que faltam.
+    // Liberado agora: relê as máquinas para a pessoa escolher em quais entra.
     if (status === 'approved' && before?.status !== 'approved') void get().refreshMachines();
   }
 
@@ -279,14 +279,6 @@ export const useConnect = create<ConnectState>((set, get) => {
     if (status) set((state) => (state.device ? { device: { ...state.device, status } } : {}));
   }
 
-  // Liberado na conta, entra sozinho nas máquinas que faltam; a que falhou espera o toque, para não insistir a cada leitura.
-  function enterMissing() {
-    if (get().device?.status !== 'approved') return;
-    for (const machine of missingMachines(get().machines, useServers.getState().servers)) {
-      if (!get().entries[machine.machine_id]) void get().enter(machine);
-    }
-  }
-
   async function readMachines(account: ConnectAccount) {
     const read = ++machinesRead;
     // Só a leitura mais nova da mesma conta escreve: uma resposta atrasada não desfaz a recente.
@@ -298,7 +290,6 @@ export const useConnect = create<ConnectState>((set, get) => {
       const before = get().machines ?? [];
       const machines = fresh.map((row) => before.find((old) => sameRow(old, row)) ?? row);
       set({ machines, loadingMachines: false });
-      enterMissing();
     } catch (error) {
       if (!current()) return;
       if (statusOf(error) === 401) await dropAccount(m.connect_session_ended());
@@ -431,9 +422,12 @@ export const useConnect = create<ConnectState>((set, get) => {
         return null;
       }
     },
-    async enterAll() {
+    async enterAll(ids) {
       // Quem já está pedindo segue no pedido dele (`enter` não repete); entram as outras.
-      await Promise.all(missingMachines(get().machines, useServers.getState().servers).map((machine) => get().enter(machine)));
+      const chosen = missingMachines(get().machines, useServers.getState().servers)
+        .filter((machine) => !ids || ids.includes(machine.machine_id));
+      const saved = await Promise.all(chosen.map((machine) => get().enter(machine)));
+      return saved.filter((server): server is Server => !!server);
     },
     async reenter(server) {
       await get().load();

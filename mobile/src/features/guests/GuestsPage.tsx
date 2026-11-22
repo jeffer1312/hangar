@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Stack } from 'expo-router';
-import { getSyncSetupForServer, listGuests, type Server } from '@hangar/core';
+import { getSyncSetupForServer, listGuests, type GuestAccount, type Server } from '@hangar/core';
 import { Pagina } from '../config/Pagina';
 import { InfoNotice } from '../config/InfoNotice';
 import { SectionCard } from '../config/SectionCard';
@@ -10,7 +10,7 @@ import { useConnect } from '../connect/connectStore';
 import { ownServers, useServers } from '../../stores/servers';
 import { GuestSheet } from './GuestSheet';
 import { LegacySheet } from './LegacySheet';
-import { guestMachines, guestSummary, type ListedGuest } from './guestTools';
+import { guestMachines, guestSummary } from './guestTools';
 import * as m from '../../paraglide/messages';
 
 type Legacy = { server: Server; user: string };
@@ -23,10 +23,10 @@ export function GuestsPage() {
   const store = active && !active.invite ? active : null;
   const machines = useMemo(() => guestMachines(servers, accountMachines), [servers, accountMachines]);
   const mine = useMemo(() => ownServers(servers).filter((s) => !s.disabled), [servers]);
-  const [guests, setGuests] = useState<ListedGuest[] | null>(null);
+  const [guests, setGuests] = useState<GuestAccount[] | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [editing, setEditing] = useState<ListedGuest | 'new' | null>(null);
+  const [editing, setEditing] = useState<GuestAccount | 'new' | null>(null);
   const [legacy, setLegacy] = useState<Legacy[]>([]);
   const [opened, setOpened] = useState<Legacy | null>(null);
   const generation = useRef(0);

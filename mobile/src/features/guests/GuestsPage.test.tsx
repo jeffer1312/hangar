@@ -49,6 +49,7 @@ let rows: Row[];
 let listStatus = 200;
 let listGate: Promise<void> | null = null;
 let failOn: string | null = null;
+let storeStatus = 200;
 let syncSetup: Record<string, unknown> = { enabled: false, registered: false, user: null };
 let legacyGuests: { user: string; admin: unknown }[] = [];
 let calls: { origin: string; method: string; path: string; body: Record<string, unknown> | null }[] = [];
@@ -76,6 +77,7 @@ beforeEach(async () => {
   listStatus = 200;
   listGate = null;
   failOn = null;
+  storeStatus = 200;
   syncSetup = { enabled: false, registered: false, user: null };
   legacyGuests = [];
   calls = [];
@@ -96,6 +98,7 @@ beforeEach(async () => {
       return listStatus === 200 ? json(rows) : json({ detail: 'fixture-list' }, listStatus);
     }
     if (url.pathname === '/api/guest-accounts') {
+      if (storeStatus !== 200) return json({ detail: { code: 'erro_guest_name_taken', params: {}, msg: 'fixture-taken' } }, storeStatus);
       const saved = { ...(body as unknown as Row), name_taken: false };
       rows = [...rows.filter((r) => r.user !== saved.user), saved];
       return json(saved);
@@ -129,6 +132,14 @@ describe('Configurações › Convidados', () => {
     await act(async () => open());
     await vi.waitFor(() => expect(button('ana.silva')).toBeTruthy());
     expect(el.textContent).toContain(`${m.convidados_resumo({ servidores: '1' })} · ${m.guests_not_sees_mine()}`);
+  });
+
+  it('nome recusado pelo Connect aparece na linha do convidado', async () => {
+    rows = [{ ...ana(), name_taken: true }];
+    await render();
+    await vi.waitFor(() => expect(button('ana.silva')).toBeTruthy());
+    expect(el.textContent).toContain(m.guests_name_taken());
+    expect(el.textContent).not.toContain(m.guests_not_sees_mine());
   });
 
   it('vazio diz que não há convidado e oferece adicionar', async () => {
@@ -197,6 +208,29 @@ describe('Configurações › Convidados', () => {
     expect(posted(casa.baseUrl, '/api/guest-accounts')[0].body).toMatchObject({ servers: [{ server_id: 'casa' }] });
   });
 
+  it('nome em uso ao criar tira os acessos novos, e o que não saiu aparece com o nome da máquina', async () => {
+    rows = [];
+    await render();
+    await vi.waitFor(() => expect(button(m.convidados_adicionar())).toBeTruthy());
+    await click(m.convidados_adicionar());
+    await type(m.login_usuario(), 'bia.souza');
+    await type(m.login_senha(), 'fixture-guest-pw');
+    await click('fixture-casa');
+    await type(m.convidados_pasta({ servidor: 'fixture-casa' }), '/srv/bia');
+    await click('fixture-pc2');
+    await type(m.convidados_pasta({ servidor: 'fixture-pc2' }), '/srv/bia');
+    storeStatus = 409;
+    failOn = `${pc2.baseUrl}/api/guests/g-pc2/delete`;
+    await click(m.convidados_salvar());
+    await vi.waitFor(() => expect(el.textContent).toContain(m.convidados_usuario_em_uso()));
+    const left = (servidor: string) => m.guests_access_left({ servidor, usuario: 'bia.souza', erro: '\u0000' }).split('\u0000')[0];
+    expect(el.textContent).toContain(left('fixture-pc2'));
+    expect(el.textContent).not.toContain(left('fixture-casa'));
+    expect(posted(casa.baseUrl, '/api/guests/g-casa/delete')).toHaveLength(1);
+    // A limpeza não escreve a conta de novo na máquina que guarda as contas.
+    expect(posted(casa.baseUrl, '/api/guest-accounts')).toHaveLength(1);
+  });
+
   it('remover pede confirmação com o aviso, tira o acesso das máquinas e apaga a conta', async () => {
     vi.spyOn(Alert, 'alert').mockImplementation((_title, body, buttons) => {
       expect(body).toBe(m.convidados_remover_aviso({ usuario: 'ana.silva' }));
@@ -230,5 +264,29 @@ describe('Configurações › Convidados', () => {
       servers: [{ server_id: 'casa', guest_id: 'g-old', token: 'tok-old', root: '/srv/lia' }] });
     const order = calls.map((c) => c.path);
     expect(order.indexOf('/api/guest-accounts', order.indexOf('/api/sync/guests'))).toBeLessThan(order.indexOf('/api/sync/guests/lia.costa/delete'));
+  });
+
+  it('conta antiga sem ponto nem @ pede um nome novo, já sugerido, e avisa que a senha continua a mesma', async () => {
+    syncSetup = { enabled: true, registered: true, user: 'dono' };
+    legacyGuests = [{ user: 'lia', admin: { user: 'lia', password: 'fixture-lia-pw', seesOwner: false, ownerSees: true,
+      servers: [{ serverId: 'web-casa', guestId: 'g-old', token: 'tok-old', root: '/srv/lia' }] } }];
+    await render();
+    await vi.waitFor(() => expect(el.textContent).toContain(m.guests_legacy_title()));
+    await click('fixture-casa');
+    await type(m.login_senha(), 'fixture-owner-pw');
+    await click(m.login_entrar());
+    await vi.waitFor(() => expect(button('lia')).toBeTruthy());
+    await click('lia');
+    const field = el.querySelector(`input[aria-label="${m.guests_legacy_new_name()}"]`) as HTMLInputElement;
+    expect(field.value).toBe('lia@dono');
+    expect(el.textContent).toContain(m.guests_legacy_rename_help({ antigo: 'lia', novo: 'lia@dono' }));
+    // Nada mudou nas máquinas antes de a pessoa confirmar o nome.
+    expect(posted(casa.baseUrl, '/api/guest-accounts')).toHaveLength(0);
+    await type(m.guests_legacy_new_name(), 'Lia.Costa');
+    expect(el.textContent).toContain(m.guests_legacy_rename_help({ antigo: 'lia', novo: 'lia.costa' }));
+    await click(m.guests_legacy_bring());
+    await vi.waitFor(() => expect(posted(casa.baseUrl, '/api/sync/guests/lia/delete')).toHaveLength(1));
+    expect(posted(casa.baseUrl, '/api/guest-accounts')[0].body).toMatchObject({ user: 'lia.costa', password: 'fixture-lia-pw',
+      servers: [{ server_id: 'casa', guest_id: 'g-old', token: 'tok-old' }] });
   });
 });

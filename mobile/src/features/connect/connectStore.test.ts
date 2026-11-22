@@ -498,13 +498,12 @@ describe('aparelho da conta', () => {
     expect(tickets(calls)).toEqual([]);
   });
 
-  it('reutiliza o aparelho guardado e, liberado, entra sozinho em todas as máquinas, inclusive na que aparece depois', async () => {
+  it('reutiliza o aparelho guardado e, liberado, não entra sozinho: entra só nas máquinas que a pessoa escolheu', async () => {
     saveDevice();
     const pc2: ConnectMachine = { machine_id: 'pc2', name: 'pc2', host: 'pc2.acme.hangar.dev.br', online: true };
-    let machines = [online];
-    const calls = network({ device: 'approved', statuses: [{ status: 'approved', token: 'device-a' }, { status: 'approved', token: 'device-b' }],
+    const calls = network({ device: 'approved', statuses: [{ status: 'approved', token: 'device-a' }],
       route: (call) => {
-        if (call.url.pathname === '/v1/machines') return json(machines);
+        if (call.url.pathname === '/v1/machines') return json([online, pc2]);
         const id = /^\/v1\/machines\/(\w+)\/devices$/.exec(call.url.pathname)?.[1];
         if (id) return json({ url: `https://${id}.acme.hangar.dev.br`, ticket: '{"nonce":"n"}', signature: 'c2ln' });
         const isPc2 = call.url.host === 'pc2.acme.hangar.dev.br' && !call.url.pathname.startsWith('/api/connect');
@@ -512,25 +511,21 @@ describe('aparelho da conta', () => {
       } });
 
     await signIn();
-    await vi.waitFor(() => expect(servers().map((s) => s.id)).toEqual(['pc1']));
-    machines = [online, pc2];
-    await connect().refreshMachines();
-    await vi.waitFor(() => expect(servers().map((s) => s.id).sort()).toEqual(['pc1', 'pc2']));
-
-    expect(registers(calls)).toEqual([]);
-    expect(tickets(calls).map((call) => call.device)).toEqual(['ad1:ad-secret', 'ad1:ad-secret']);
-  });
-
-  it('a entrada automática que falhou espera o toque, sem repetir sozinha', async () => {
-    saveDevice();
-    const calls = network({ device: 'approved', route: (call) => (tickets([call]).length ? json({}, 500) : undefined) });
-    await signIn();
-    await vi.waitFor(() => expect(connect().entries.pc1?.phase).toBe('failed'));
-
-    await connect().refreshMachines();
+    await vi.waitFor(() => expect(connect().machines?.map((machine) => machine.machine_id)).toEqual(['pc1', 'pc2']));
     await settle();
+    expect(connect().device?.status).toBe('approved');
+    expect(tickets(calls)).toEqual([]);
+    expect(servers()).toEqual([]);
 
-    expect(tickets(calls)).toHaveLength(1);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const entering = connect().enterAll(['pc2']);
+    await elapse(6000);
+    const saved = await entering;
+
+    expect(saved.map((server) => server.id)).toEqual(['pc2']);
+    expect(servers().map((s) => s.id)).toEqual(['pc2']);
+    expect(registers(calls)).toEqual([]);
+    expect(tickets(calls).map((call) => [call.url.pathname, call.device])).toEqual([['/v1/machines/pc2/devices', 'ad1:ad-secret']]);
   });
 
   it('pendente com entrada aprovada numa máquina pede a ela que o libere na conta (migração)', async () => {

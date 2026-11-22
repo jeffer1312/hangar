@@ -11249,10 +11249,8 @@
   "connect_waiting": "Waiting",
   "connect_waiting_notice": "Approve this device on the machine {name}. The request lasts up to 10 minutes.",
   "connect_machine_added": "On this device",
-  "connect_enter_all": "Enter all",
   "connect_group_machine_gone": "This machine is no longer in your list.",
   "connect_enter_all_code": "This phone's code: {code}. Check it on the approval card.",
-  "connect_enter_all_offline": "Offline, left for later: {machines}",
   "connect_error_install_id": "Could not read this phone's identifier from the secure store. Try again.",
   "connect_install_code_unavailable": "This phone's code is unavailable: the secure store did not answer. Check the device name instead.",
   "connect_install_code_no_random": "This phone cannot generate a secure identifier, so there is no code. Check the device name instead.",
@@ -12121,5 +12119,10 @@
   "guests_legacy_account": "Old account",
   "guests_legacy_bring": "Bring to Connect",
   "guests_legacy_brought": "{usuario} now signs in through Connect, with the same password.",
-  "guests_legacy_missing": "{servidores} isn't in this device's server list. Add it before bringing the account."
+  "guests_legacy_missing": "{servidores} isn't in this device's server list. Add it before bringing the account.",
+  "guests_legacy_new_name": "New name",
+  "guests_legacy_rename_help": "On Connect the name needs a dot or @. {antigo} will sign in as {novo}, with the same password.",
+  "guests_access_left": "{servidor} kept the access created for {usuario}: {erro}",
+  "connect_machine_off_now": "Off right now",
+  "connect_account_device_asked_code": "Code {code} · asked {when}"
 }

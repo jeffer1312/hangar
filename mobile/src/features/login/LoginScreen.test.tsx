@@ -93,7 +93,7 @@ beforeEach(async () => {
       if (url.pathname === '/v1/devices' && init?.method === 'POST') return json({ device_id: 'ad1', device_secret: 'ad-secret' });
       if (url.pathname === '/v1/devices/ad1') return json({ status: deviceStatus });
       if (url.pathname === '/v1/devices') return json([]);
-      // Desligada: liberado, o celular entraria sozinho, e o pedido de entrada ficaria esperando a máquina por minutos.
+      // Desligada: aparece sem marcar, e nenhum pedido de entrada sai dela.
       if (url.pathname === '/v1/machines') return json([{ machine_id: 'pc1', name: 'fixture-pc', host: 'pc1.acme.hangar.dev.br', online: false }]);
       return json({});
     }
@@ -161,6 +161,7 @@ describe('entrar no Hangar', () => {
       expect(el.textContent).not.toContain(m.connect_release_title());
     });
     expect(el.textContent).toContain(m.connect_your_machines());
+    expect(el.textContent).toContain(m.connect_machine_off_now());
   });
 
   it('convidada vê as máquinas liberadas, marca e entra nelas', async () => {

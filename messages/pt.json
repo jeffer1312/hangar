@@ -11249,10 +11249,8 @@
   "connect_waiting": "Aguardando",
   "connect_waiting_notice": "Aprove este aparelho na máquina {name}. O pedido vale por até 10 minutos.",
   "connect_machine_added": "Neste aparelho",
-  "connect_enter_all": "Entrar em todas",
   "connect_group_machine_gone": "Esta máquina saiu da sua lista.",
   "connect_enter_all_code": "Código deste celular: {code}. Confira no cartão de quem aprova.",
-  "connect_enter_all_offline": "Offline, fica para depois: {machines}",
   "connect_error_install_id": "Não deu para ler o identificador deste celular no cofre. Tente de novo.",
   "connect_install_code_unavailable": "Código deste celular indisponível: o cofre não respondeu. Confira pelo nome do aparelho.",
   "connect_install_code_no_random": "Este celular não gera um identificador seguro, então não há código. Confira pelo nome do aparelho.",
@@ -12121,5 +12119,10 @@
   "guests_legacy_account": "Conta antiga",
   "guests_legacy_bring": "Trazer para o Connect",
   "guests_legacy_brought": "{usuario} agora entra pelo Connect, com a mesma senha.",
-  "guests_legacy_missing": "{servidores} não está na lista de servidores deste aparelho. Adicione antes de trazer a conta."
+  "guests_legacy_missing": "{servidores} não está na lista de servidores deste aparelho. Adicione antes de trazer a conta.",
+  "guests_legacy_new_name": "Nome novo",
+  "guests_legacy_rename_help": "No Connect o nome precisa ter ponto ou @. {antigo} passa a entrar como {novo}, com a mesma senha.",
+  "guests_access_left": "{servidor} ficou com o acesso criado para {usuario}: {erro}",
+  "connect_machine_off_now": "Desligada agora",
+  "connect_account_device_asked_code": "Código {code} · pediu {when}"
 }

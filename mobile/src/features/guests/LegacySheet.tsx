@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { saveGuest, type GuestMachine, type Server } from '@hangar/core';
+import { legacyGuestPlan, normalizeGuestUser, openLegacyGuests, saveGuest, suggestGuestUser, validGuestUser, type GuestMachine,
+  type LegacyAdmin, type LegacySession, type Server } from '@hangar/core';
 import { MachineField, MachineGroup, MachineHelp, MachineRow } from '../machines/MachineRows';
 import { MachineSheet, Notice } from '../machines/parts';
 import { syncFailureText } from '../login/addressSignIn';
+import { syncCrypto } from '../login/syncCrypto';
+import { useConnect } from '../connect/connectStore';
 import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import { failureText, thrownText } from './guestTools';
-import { closeLegacy, deleteLegacy, legacyPlan, openLegacy, type LegacyAdmin, type LegacySession } from './legacyGuests';
 import * as m from '../../paraglide/messages';
+
+type Renaming = { admin: LegacyAdmin; name: string };
 
 /**
  * Contas antigas de uma máquina: o dono digita uma vez a senha da sincronização dela, e cada conta vira conta do
@@ -21,16 +25,18 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
   const [session, setSession] = useState<LegacySession | null>(null);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
-  const open = useRef<string | null>(null);
-  useEffect(() => () => { if (open.current) void closeLegacy(open.current); }, []);
+  const [renaming, setRenaming] = useState<Renaming | null>(null);
+  const owner = useConnect((s) => s.account?.name) || syncUser;
+  const open = useRef<LegacySession | null>(null);
+  useEffect(() => () => { void open.current?.close(); }, []);
 
   const signIn = async () => {
     if (busy || !user.trim() || !password) return;
     setBusy(true);
     setErrors([]);
     try {
-      const opened = await openLegacy(hub, user.trim(), password);
-      open.current = opened.hub;
+      const opened = await openLegacyGuests(hub, user.trim(), password, syncCrypto);
+      open.current = opened;
       setPassword('');
       setSession(opened);
       haptic.success();
@@ -42,9 +48,16 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
     }
   };
 
-  const bring = async (admin: LegacyAdmin) => {
+  // Nome sem `.` nem `@` não serve no Connect: a pessoa escolhe o novo antes de qualquer acesso mudar.
+  const pick = (admin: LegacyAdmin) => {
+    setErrors([]);
+    if (validGuestUser(normalizeGuestUser(admin.user))) void bring(admin, admin.user);
+    else setRenaming({ admin, name: suggestGuestUser(admin.user, owner) });
+  };
+
+  const bring = async (admin: LegacyAdmin, name: string) => {
     if (!session || busy) return;
-    const plan = legacyPlan(admin, session.ownerServers, mine);
+    const plan = legacyGuestPlan(admin, session.ownerServers, mine, name);
     if ('missing' in plan) {
       setErrors([m.guests_legacy_missing({ servidores: plan.missing.join(', ') })]);
       haptic.error();
@@ -61,7 +74,8 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
         if (!result.storeFailed) onChanged();
         return;
       }
-      await deleteLegacy(session.hub, admin.user);
+      await session.remove(admin.user);
+      setRenaming(null);
       setSession({ ...session, guests: session.guests.filter((guest) => guest.user !== admin.user) });
       toast.ok(m.guests_legacy_brought({ usuario: plan.draft.user }));
       onChanged();
@@ -88,11 +102,25 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
       <MachineGroup>
         <MachineRow title={busy ? m.login_entrando() : m.login_entrar()} action disabled={busy || !user.trim() || !password} onPress={() => { void signIn(); }} />
       </MachineGroup>
+    </> : renaming ? <>
+      <MachineHelp>{m.guests_legacy_rename_help({
+        antigo: renaming.admin.user, novo: normalizeGuestUser(renaming.name) || renaming.name })}</MachineHelp>
+      <MachineGroup>
+        <MachineField label={m.guests_legacy_new_name()} value={renaming.name} editable={!busy} textContentType="username" autoComplete="off"
+          onChangeText={(name) => setRenaming({ ...renaming, name })} returnKeyType="go"
+          onSubmitEditing={() => { void bring(renaming.admin, renaming.name); }} />
+      </MachineGroup>
+      {errors.map((text) => <Notice key={text} text={text} error />)}
+      <MachineGroup>
+        <MachineRow title={busy ? m.convidados_salvando() : m.guests_legacy_bring()} action disabled={busy || !renaming.name.trim()}
+          onPress={() => { void bring(renaming.admin, renaming.name); }} />
+        <MachineRow title={m.comum_cancelar()} action disabled={busy} onPress={() => { setRenaming(null); setErrors([]); }} />
+      </MachineGroup>
     </> : <>
       <MachineGroup>
         {session.guests.length === 0 ? <MachineRow title={m.guests_legacy_empty()} /> : null}
         {session.guests.map((admin) => <MachineRow key={admin.user} title={admin.user} description={m.guests_legacy_account()}
-          value={m.guests_legacy_bring()} disabled={busy} onPress={() => { void bring(admin); }} />)}
+          value={m.guests_legacy_bring()} disabled={busy} onPress={() => pick(admin)} />)}
       </MachineGroup>
       {errors.map((text) => <Notice key={text} text={text} error />)}
     </>}

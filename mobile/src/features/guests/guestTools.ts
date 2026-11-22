@@ -4,9 +4,6 @@ import { ownServers } from '../../stores/servers';
 import { DEMO_BASE_URL } from '../../net/demo';
 import * as m from '../../paraglide/messages';
 
-/** O servidor diz quando o Connect recusou o nome (`name_taken`); a leitura do core ainda não o traz. */
-export type ListedGuest = GuestAccount & { nameTaken?: boolean };
-
 /** Máquinas que podem receber convidado, cada uma com o host do Connect que a conta conhece (vai ao cofre dela). */
 export function guestMachines(servers: Server[], account: ConnectMachine[] | null): GuestMachine[] {
   return ownServers(servers).filter((server) => !server.disabled && !server.removed && !server.ephemeral && server.baseUrl !== DEMO_BASE_URL)
@@ -26,6 +23,13 @@ export function failureText(failure: GuestFailure, labelOf: (id: string) => stri
     return failure.status === 409 ? m.convidados_usuario_em_uso() : m.guests_store_failed({ servidor: failure.label });
   }
   return m.convidados_falha_servidor({ servidor: failure.label, erro: failure.message });
+}
+
+/** Acesso recém-criado que não saiu depois do nome recusado: fica dito por máquina, para o dono tirar à mão. */
+export function leftText(failure: GuestFailure, user: string, labelOf: (id: string) => string): string {
+  const missing = failure.code === 'guest_server_missing';
+  return m.guests_access_left({ servidor: missing ? labelOf(failure.label) : failure.label, usuario: user,
+    erro: missing ? m.convidados_servidor_fora_da_lista() : failure.message });
 }
 
 /** Recusa antes de tocar nas máquinas (nome ou senha) ou erro inesperado. */

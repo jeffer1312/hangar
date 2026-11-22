@@ -43,6 +43,11 @@ const NOW = new Date((CREATED_AT + 120) * 1000);
 const row = (device_id: string, name: string, status: string) => ({ device_id, name, status, created_at: CREATED_AT, approved_at: null, revoked_at: null });
 
 const button = (label: string) => [...el.querySelectorAll('[role="button"]')].find((b) => b.getAttribute('aria-label') === label) as HTMLButtonElement | undefined;
+const checkRow = (label: string) => {
+  const found = el.querySelector(`[role="checkbox"][aria-label="${label}"]`) as HTMLButtonElement | null;
+  expect(found, label).toBeTruthy();
+  return found!;
+};
 const serviceCalls = () => vi.mocked(fetch).mock.calls.map(([input, init]) => ({ url: new URL(String(input)), method: init?.method ?? 'GET',
   device: new Headers(init?.headers).get('X-Hangar-Device') }));
 
@@ -105,8 +110,42 @@ it('pendente mostra "Liberar este celular" com o código deste aparelho e não d
   await vi.waitFor(() => expect(el.textContent).toContain(m.connect_release_title()));
   expect(el.textContent).toContain(m.connect_release_waiting());
   await vi.waitFor(() => expect(el.textContent).toContain(installCode('a'.repeat(32))));
-  expect(button('pc3')?.disabled).toBe(true);
+  const pc3Row = checkRow('pc3');
+  expect(pc3Row.disabled || pc3Row.getAttribute('aria-disabled') === 'true').toBe(true);
+  expect(button(m.login_guest_enter_one())).toBeUndefined();
   expect(el.textContent).not.toContain(m.connect_account_devices());
+});
+
+it('liberado, as ligadas vêm marcadas, a desligada não marca, e Entrar pede só as marcadas', async () => {
+  deviceStatus = 'approved';
+  machinesFail = false;
+  const pc4: ConnectMachine = { machine_id: 'pc4', name: 'pc4', host: 'pc4.acme.hangar.dev.br', online: true };
+  const pc5: ConnectMachine = { machine_id: 'pc5', name: 'pc5', host: 'pc5.acme.hangar.dev.br', online: false };
+  machineList = [pc3, pc4, pc5];
+  await render();
+  await vi.waitFor(() => expect(button(m.login_guest_enter_many({ n: '2' }))).toBeTruthy());
+  expect(checkRow('pc3').getAttribute('aria-checked')).toBe('true');
+  expect(checkRow('pc4').getAttribute('aria-checked')).toBe('true');
+  expect(checkRow('pc5').getAttribute('aria-checked')).toBe('false');
+  expect(el.textContent).toContain(m.connect_machine_off_now());
+  // Nada é pedido antes do toque.
+  expect(serviceCalls().some((call) => /^\/v1\/machines\/\w+\/devices$/.test(call.url.pathname))).toBe(false);
+
+  await act(async () => checkRow('pc4').click());
+  const enter = button(m.login_guest_enter_one());
+  expect(enter, 'o botão conta só as marcadas').toBeTruthy();
+  await act(async () => enter!.click());
+  await vi.waitFor(() => expect(serviceCalls().filter((call) => /^\/v1\/machines\/\w+\/devices$/.test(call.url.pathname))
+    .map((call) => call.url.pathname)).toEqual(['/v1/machines/pc3/devices']));
+});
+
+it('o pendente da lista de aparelhos mostra o mesmo código do celular que pediu', async () => {
+  deviceStatus = 'approved';
+  const code = installCode('b'.repeat(32));
+  accountRows = [row('ad1', 'iPhone', 'approved'), { ...row('ad2', 'Pixel', 'pending'), install_code: code }];
+  await render();
+  await vi.waitFor(() => expect(button('Pixel')).toBeTruthy());
+  expect(el.textContent).toContain(m.connect_account_device_asked_code({ code, when: m.tempo_min_atras({ n: 2 }) }));
 });
 
 it('liberado lista os aparelhos da conta, e o pendente se libera pelo alerta, com a credencial deste aparelho', async () => {
