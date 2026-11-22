@@ -245,10 +245,10 @@ async fn drop_accesses(ops: &impl GuestOps, machines: &[Machine], guest: &GuestA
     let left = &|server: &str, error: &str| tr_shared("guests_access_left", &[("servidor", server), ("usuario", &guest.user), ("erro", error)]);
     let drops = guest.servers.iter().map(|access| async move {
         let Some(machine) = resolve(machines, &access.server_id, access.base_url.as_deref()) else {
-            return Some(left(&access.server_id, &tr_shared("convidados_servidor_fora_da_lista", &[])));
+            return Some(left(access.server_id.as_str(), tr_shared("convidados_servidor_fora_da_lista", &[]).as_str()));
         };
         match ops.delete(machine, &access.guest_id).await {
-            Err(error) if !gone(&error) => Some(left(&machine.label, &describe(&error))),
+            Err(error) if !gone(&error) => Some(left(machine.label.as_str(), describe(&error).as_str())),
             _ => None,
         }
     });

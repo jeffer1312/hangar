@@ -470,8 +470,8 @@ impl Hangar {
                 let row = match result {
                     Ok(entry) => {
                         // O token sai uma vez só: vai para a lista na hora.
-                        let id = format!("{}{}", super::servers::new_id(), self.sign_in.added.len());
-                        let server = server_entry(id, entry.label, entry.base_url, entry.token);
+                        let server_id = format!("{}{}", super::servers::new_id(), self.sign_in.added.len());
+                        let server = server_entry(server_id, entry.label, entry.base_url, entry.token);
                         self.merge_servers(vec![server.clone()], cx);
                         self.sign_in.added.push(server);
                         Row::Added
