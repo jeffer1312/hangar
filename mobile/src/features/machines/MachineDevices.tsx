@@ -52,11 +52,11 @@ export function MachineDevices({ server }: { server: Server }) {
   return <>
     {rows === null && !read.error ? <MachineGroup><MachineRow title={m.comum_carregando()} /></MachineGroup> : null}
     {rows !== null && !local.length ? <MachineGroup><MachineRow title={m.machine_devices_empty()} /></MachineGroup> : null}
-    {pending.length ? <SectionCard title={m.machine_devices_pending()}>
+    {pending.length ? <SectionCard icon="Hourglass" title={m.machine_devices_pending()}>
       {pending.map((row) => <MachineRow key={row.device_id} title={row.name} description={asked(row)}
         value={m.connect_device_approve()} disabled={busy} onPress={() => askApprove(row)} />)}
     </SectionCard> : null}
-    {approved.length ? <SectionCard title={m.machine_devices_approved()}>
+    {approved.length ? <SectionCard icon="Smartphone" title={m.machine_devices_approved()}>
       {approved.map((row) => (row.device_id === server.deviceId
         ? <MachineRow key={row.device_id} title={row.name} value={m.connect_device_this()} />
         : <MachineRow key={row.device_id} title={row.name}
