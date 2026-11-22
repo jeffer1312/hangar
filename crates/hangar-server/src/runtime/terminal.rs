@@ -1719,7 +1719,9 @@ impl Executor {
     async fn entry_enqueued(&mut self, entry: &str) -> bool {
         let Ok(state) = self.queue.snapshot().await else { return false };
         let Some(row) = state.rows.iter().find(|row| row["id"] == entry) else { return false };
-        let cursors: Vec<DispatchCursor> = state.operations.values().filter(|op| op.entry_id.as_deref() == Some(entry))
+        // Só a tentativa que saiu, como na confirmação: o cursor de uma adiada provaria a fila de outra entrada igual.
+        let cursors: Vec<DispatchCursor> = state.operations.values()
+            .filter(|op| op.entry_id.as_deref() == Some(entry) && matches!(op.status, Status::Accepted | Status::Unknown | Status::Dispatching))
             .filter_map(|op| serde_json::from_value(op.dispatch_cursor.clone()).ok()).collect();
         if cursors.is_empty() || self.receipt.scan(&self.target.transcript).is_err() { return false; }
         cursors.iter().any(|cursor| self.receipt.enqueued_after(&self.target.transcript, cursor, row).unwrap_or(false))
