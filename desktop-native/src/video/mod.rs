@@ -31,8 +31,8 @@ enum Phase { Opening, Ready, Failed(VideoError) }
 
 /// O que o player abre.
 pub enum VideoSource {
-    /// Arquivo desta máquina, pelo caminho.
-    Local(String),
+    /// Arquivo desta máquina, pelo caminho como está no disco.
+    Local(std::path::PathBuf),
     /// Rota de outra máquina: a libmpv pede à ponte local, sem credencial.
     Remote(Upstream),
 }
@@ -71,9 +71,9 @@ impl VideoPlayer {
         let (tx, rx) = async_channel::bounded::<()>(1);
         let mut proxy = None;
         let address = match source {
-            VideoSource::Local(path) => Ok(path),
+            VideoSource::Local(path) => Ok(path.into_os_string()),
             VideoSource::Remote(upstream) => proxy::start(runtime, upstream)
-                .map(|started| { let address = started.address().to_owned(); proxy = Some(started); address })
+                .map(|started| { let address = std::ffi::OsString::from(started.address()); proxy = Some(started); address })
                 .map_err(|error| VideoError::Init(format!("local proxy: {error}"))),
         };
         let (phase, _open) = match address {
@@ -177,10 +177,7 @@ impl VideoPlayer {
         cx.notify();
     }
 
-    fn change_volume(&mut self, delta: f64) {
-        let volume = self.state.volume + delta;
-        self.with_player(|player| { player.set_volume(volume); if delta > 0. { player.set_muted(false); } });
-    }
+    fn change_volume(&mut self, delta: f64) { self.with_player(|player| player.change_volume(delta)); }
 
     fn toggle_fullscreen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Só desfaz no fechamento a tela cheia que este player ligou; a que já estava fica.

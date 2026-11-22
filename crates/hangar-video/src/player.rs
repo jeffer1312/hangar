@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, OsStr, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -67,7 +67,7 @@ const RENDER_ERROR: &str = "render: ";
 
 /// Opções de antes do `mpv_initialize`. As `true` são obrigatórias; as outras só existem em parte das versões e
 /// builds (sem Lua não há `osc` nem `ytdl`), e a falta delas não impede tocar.
-const OPTIONS: [(&str, &str, bool); 20] = [
+const OPTIONS: [(&str, &str, bool); 21] = [
     ("vo", "libmpv", true),
     ("keep-open", "yes", true),
     ("idle", "yes", false),
@@ -90,6 +90,8 @@ const OPTIONS: [(&str, &str, bool); 20] = [
     ("network-timeout", "30", false),
     ("user-agent", "Hangar", false),
     ("audio-client-name", "Hangar", false),
+    // O `add volume` do teclado para no teto em vez de passar dos 100.
+    ("volume-max", "100", false),
 ];
 
 /// Propriedades observadas; o índice + 1 é o `reply_userdata` do evento.
@@ -180,8 +182,8 @@ pub struct Player {
 impl Player {
     /// Bloqueante (carrega a biblioteca e inicia o núcleo): fora da thread da interface. `source` é um caminho local
     /// ou uma URL http(s); `notify` é chamado de outras threads a cada mudança.
-    pub fn open(source: &str, options: &Options, notify: impl Fn(Change) + Send + Sync + 'static) -> Result<Player, VideoError> {
-        let source = CString::new(source).map_err(|_| VideoError::Init("source with NUL".into()))?;
+    pub fn open(source: &OsStr, options: &Options, notify: impl Fn(Change) + Send + Sync + 'static) -> Result<Player, VideoError> {
+        let source = source_cstring(source)?;
         let lib = Library::shared()?;
         let api = &lib.api;
         c_numeric_locale();
@@ -267,6 +269,14 @@ impl Player {
         self.command(&["set", "volume", &format!("{:.0}", volume.clamp(0., 100.))]);
     }
 
+    /// Quem soma é o núcleo (`add volume`, preso entre 0 e o `volume-max`): dois passos antes de o estado novo chegar
+    /// valem dois. Subir tira o mudo.
+    pub fn change_volume(&self, delta: f64) {
+        let Some(step) = volume_step(delta) else { return };
+        self.command(&["add", "volume", &step]);
+        if delta > 0. { self.set_muted(false); }
+    }
+
     pub fn set_muted(&self, muted: bool) { self.command(&["set", "mute", if muted { "yes" } else { "no" }]); }
 
     pub fn stop(&self) { self.command(&["stop"]); }
@@ -278,7 +288,7 @@ impl Player {
     }
 
     /// Assíncrono: a libmpv copia os argumentos e responde depois (`COMMAND_REPLY`), sem travar quem chamou. A recusa
-    /// imediata (comando mal formado) vai ao estado como erro.
+    /// imediata (fila cheia, comando mal formado) segue `command_refused`.
     fn command_strings(&self, args: &[&CStr]) {
         let mut pointers: Vec<*const c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
         pointers.push(std::ptr::null());
@@ -294,8 +304,8 @@ impl Player {
         // SAFETY: lista terminada em nulo de strings vivas durante a chamada; o handle vive até o `shutdown`.
         let code = unsafe { (api.command_async)(self.inner.handle.0, id, pointers.as_mut_ptr()) };
         if code < 0 {
-            lock(&self.inner.commands).pending.remove(&id);
-            lock(&self.inner.state).error = Some(error_text(api, code));
+            let name = lock(&self.inner.commands).pending.remove(&id).unwrap_or_default();
+            command_refused(&mut lock(&self.inner.state), id, &name, error_text(api, code));
             (self.inner.notify)(Change::State);
         }
     }
@@ -483,6 +493,31 @@ fn command_reply(state: &mut Snapshot, pending: &mut HashMap<u64, String>, id: u
     state.command_error = Some((id, format!("{name}: {}", text(code))));
 }
 
+/// Recusa no envio, sem `COMMAND_REPLY`: só a do `loadfile` impede tocar. A de um controle passa (a fila esvazia) e
+/// vira `command_error`, como a recusa na resposta.
+fn command_refused(state: &mut Snapshot, id: u64, name: &str, text: String) {
+    if name == "loadfile" { state.error = Some(text); return; }
+    let name = if name.is_empty() { "command" } else { name };
+    state.command_error = Some((id, format!("{name}: {text}")));
+}
+
+fn volume_step(delta: f64) -> Option<String> {
+    (delta.is_finite() && delta != 0.).then(|| format!("{:.1}", delta.clamp(-100., 100.)))
+}
+
+/// No Unix o caminho vai em bytes, como está no disco: a libmpv não o reinterpreta. No Windows ela pede UTF-8.
+#[cfg(unix)]
+fn source_cstring(source: &OsStr) -> Result<CString, VideoError> {
+    use std::os::unix::ffi::OsStrExt;
+    CString::new(source.as_bytes()).map_err(|_| VideoError::Init("source with NUL".into()))
+}
+
+#[cfg(not(unix))]
+fn source_cstring(source: &OsStr) -> Result<CString, VideoError> {
+    let source = source.to_str().ok_or_else(|| VideoError::Init("source is not UTF-8".into()))?;
+    CString::new(source).map_err(|_| VideoError::Init("source with NUL".into()))
+}
+
 fn error_text(api: &ffi::Api, code: c_int) -> String {
     // SAFETY: a libmpv devolve uma string estática para qualquer código.
     let text = unsafe { (api.error_string)(code) };
@@ -507,7 +542,7 @@ fn c_numeric_locale() {}
 
 #[cfg(test)]
 mod tests {
-    use super::{OPTIONS, Snapshot, apply, clear_render_error, command_reply};
+    use super::{OPTIONS, Snapshot, apply, clear_render_error, command_refused, command_reply, volume_step};
     use crate::ffi::{self, EventProperty};
     use std::collections::HashMap;
     use std::ffi::{c_int, c_void};
@@ -534,6 +569,36 @@ mod tests {
         assert_eq!(state.command_error, Some((2, "seek: erro -12".into())));
         assert!(pending.is_empty(), "as duas respostas saem da espera");
         assert_eq!(state.error, None, "comando recusado não derruba o player");
+    }
+
+    #[test]
+    fn refused_on_send_only_loadfile_stops_the_player() {
+        let mut state = Snapshot::default();
+        for (id, name) in [(3, "seek"), (4, "set"), (5, "cycle"), (6, "stop")] {
+            command_refused(&mut state, id, name, "event queue full".into());
+            assert_eq!(state.command_error, Some((id, format!("{name}: event queue full"))));
+        }
+        assert_eq!(state.error, None, "controle recusado não derruba o player");
+        command_refused(&mut state, 7, "loadfile", "invalid parameter".into());
+        assert_eq!(state.error.as_deref(), Some("invalid parameter"));
+    }
+
+    #[test]
+    fn volume_steps_are_added_in_the_core_up_to_100() {
+        assert_eq!(volume_step(5.).as_deref(), Some("5.0"));
+        assert_eq!(volume_step(-5.).as_deref(), Some("-5.0"));
+        assert_eq!(volume_step(0.), None);
+        assert_eq!(volume_step(f64::NAN), None);
+        assert!(OPTIONS.iter().any(|(name, value, _)| *name == "volume-max" && *value == "100"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_path_reaches_mpv_with_its_own_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::OsStr::from_bytes(b"/videos/f\xe9rias.mp4");
+        assert_eq!(super::source_cstring(path).unwrap().as_bytes(), b"/videos/f\xe9rias.mp4");
+        assert!(super::source_cstring(std::ffi::OsStr::from_bytes(b"a\0b")).is_err());
     }
 
     fn prop<T>(format: c_int, value: &mut T) -> EventProperty {

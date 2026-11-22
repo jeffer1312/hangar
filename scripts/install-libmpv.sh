@@ -35,13 +35,25 @@ roda() {
   fi
 }
 
+# Classe (32/64 bits), ordem dos bytes e máquina do cabeçalho ELF.
+elf_arch() { printf '%s:%s' "$(od -An -tx1 -j4 -N2 "$1" 2>/dev/null | tr -d ' \n')" "$(od -An -tx1 -j18 -N2 "$1" 2>/dev/null | tr -d ' \n')"; }
+# O carregador recusa a libmpv de outra arquitetura (a i386 num x86_64): só vale a do mesmo ELF do shell. Sem ler o
+# cabeçalho do shell, qualquer uma vale.
+elf_compativel() { # elf_compativel <arch do shell> <arquivo>
+  [ -e "$2" ] && { [ "$1" = ":" ] || [ "$(elf_arch "$2")" = "$1" ]; }
+}
 # Só a API 2 serve (o app recusa a 1): o nome `libmpv.so.2` é o que garante isso, não o `libmpv.so` do pacote -dev.
 linux_tem() {
-  local ld d
+  local ld d f ref
+  ref=$(elf_arch "${BASH:-/bin/sh}")
   ld=$(command -v ldconfig 2>/dev/null || { [ -x /sbin/ldconfig ] && echo /sbin/ldconfig; } || true)
-  if [ -n "$ld" ] && "$ld" -p 2>/dev/null | grep -q 'libmpv\.so\.2 '; then return 0; fi
+  if [ -n "$ld" ]; then
+    while IFS= read -r f; do
+      elf_compativel "$ref" "$f" && return 0
+    done < <("$ld" -p 2>/dev/null | sed -n 's/^[[:space:]]*libmpv\.so\.2 .*=> //p')
+  fi
   for d in /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/local/lib; do
-    compgen -G "$d/libmpv.so.2*" >/dev/null && return 0
+    for f in "$d"/libmpv.so.2*; do elf_compativel "$ref" "$f" && return 0; done
   done
   return 1
 }

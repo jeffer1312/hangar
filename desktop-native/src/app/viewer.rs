@@ -321,24 +321,25 @@ impl Viewer {
         // Riscar é da imagem: o vídeo não tem o que marcar.
         if video { self.pen = false; }
         self.video_hint = None;
-        if video {
-            // Sem a libmpv não há o que pedir; ela é procurada de novo a cada vídeo, e instalar com o app aberto vale.
-            if hangar_video::Library::shared().is_ok() { return self.resolve_video(window, cx); }
-            if let Page::Poster(hint) = page_for(Kind::Video, false, false, cfg!(target_os = "linux")) { self.video_hint = Some(hint); }
-        }
+        if video { return self.resolve_video(window, cx); }
         self.load_picture(cx);
     }
 
-    /// O caminho local do vídeo toca no disco, que pode ser uma pasta de rede fora do ar: sai fora da thread da
-    /// interface, e o player só abre com a resposta do item que ainda está à vista.
+    /// A libmpv (um `dlopen` por candidato, que pode estar numa pasta de rede) e o caminho local do vídeo tocam no
+    /// disco: saem fora da thread da interface, e o player ou a capa só entram com a resposta do item ainda à vista.
+    /// Sem a libmpv ela é procurada de novo a cada vídeo: instalar com o app aberto vale.
     fn resolve_video(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(old) = self.fetching.take() { old.abort(); }
         let (seq, uploads, source) = (self.seq, self.uploads.clone(), self.item().source.clone());
-        let local = self.runtime.spawn_blocking(move || uploads.local_path(&source));
+        let found = self.runtime.spawn_blocking(move || hangar_video::Library::shared().is_ok().then(|| uploads.local_path(&source)));
         self._load = cx.spawn_in(window, async move |this, cx| {
-            let local = local.await.ok().flatten();
+            let found = found.await.ok().flatten();
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.seq != seq { return; }
+                let Some(local) = found else {
+                    if let Page::Poster(hint) = page_for(Kind::Video, false, false, cfg!(target_os = "linux")) { this.video_hint = Some(hint); }
+                    return this.load_picture(cx);
+                };
                 let route = this.video_source(local);
                 match (page_for(Kind::Video, true, route.is_some(), cfg!(target_os = "linux")), route) {
                     (Page::Player, Some(route)) => this.start_player(route, window, cx),
@@ -421,7 +422,7 @@ impl Viewer {
     /// `local`: o arquivo desta máquina, já resolvido fora da thread da interface (`resolve_video`).
     fn video_source(&self, local: Option<std::path::PathBuf>) -> Option<VideoSource> {
         match local {
-            Some(path) => Some(VideoSource::Local(path.to_string_lossy().into_owned())),
+            Some(path) => Some(VideoSource::Local(path)),
             None => self.api.media_url(&self.key.name, &self.item().source).and_then(|(url, token)| Upstream::new(&url, &token)).map(VideoSource::Remote),
         }
     }
