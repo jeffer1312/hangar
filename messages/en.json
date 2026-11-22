@@ -12196,6 +12196,7 @@
   "native_whatsapp_err_wipe_partial": "Only part of the data was deleted: a file was in use. Try deleting again.",
   "native_whatsapp_err_wipe_failed": "Couldn't delete the WhatsApp data. Try again.",
   "native_whatsapp_err_service_starting": "The WhatsApp service is starting. Try again in a few seconds.",
+  "native_whatsapp_err_service_state_unknown": "Couldn't confirm that the WhatsApp service is stopped. Try again.",
   "native_whatsapp_err_not_installed": "WhatsApp isn't installed on this server.",
   "native_whatsapp_err_unreachable": "The WhatsApp service is on but didn't answer. Try again.",
   "native_whatsapp_err_accept_write_failed": "Couldn't save the risk acceptance on this machine.",

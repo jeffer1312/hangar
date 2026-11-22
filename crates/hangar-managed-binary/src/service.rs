@@ -181,16 +181,30 @@ pub fn windows_vbs_path(home: &Path, id: &ServiceId) -> PathBuf {
 }
 
 pub async fn run(step: &str, program: &str, args: &[&str]) -> Result<(), Error> {
+    stdout(step, program, args).await.map(drop)
+}
+
+/// O comando rodado até o fim, com qualquer código de saída; só não abrir é erro.
+async fn output(step: &str, program: &str, args: &[&str]) -> Result<std::process::Output, Error> {
     let mut command = tokio::process::Command::new(program);
     command.args(args).stdin(std::process::Stdio::null());
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
-    let output = command.output().await.map_err(|e| Error { step: step.into(), detail: e.to_string() })?;
+    command.output().await.map_err(|e| Error { step: step.into(), detail: e.to_string() })
+}
+
+/// A saída de um comando que terminou bem; abrir ou sair com erro vira [`Error`] com o stderr.
+async fn stdout(step: &str, program: &str, args: &[&str]) -> Result<String, Error> {
+    let output = output(step, program, args).await?;
     if output.status.success() {
-        return Ok(());
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
+    Err(exit_error(step, &output))
+}
+
+fn exit_error(step: &str, output: &std::process::Output) -> Error {
     let detail = String::from_utf8_lossy(&output.stderr).trim().chars().take(400).collect::<String>();
-    Err(Error { step: step.into(), detail: format!("{} ({})", detail, output.status) })
+    Error { step: step.into(), detail: format!("{} ({})", detail, output.status) }
 }
 
 fn write(step: &str, path: &Path, bytes: &[u8]) -> Result<(), Error> {
@@ -290,46 +304,71 @@ pub struct ProcessState {
 }
 
 /// Algum processo do serviço existe pelo gerenciador, ou vai existir logo: [`ProcessState::running`].
-pub async fn process_running(home: &Path, id: &ServiceId) -> bool {
+///
+/// # Errors
+///
+/// O gerenciador não respondeu (comando que não abre ou sai com erro): quem guarda um apagamento recusa.
+pub async fn process_running(home: &Path, id: &ServiceId) -> Result<bool, Error> {
     // No Windows a resposta é sempre `false`: sem abrir o PowerShell à toa.
-    !cfg!(windows) && query(home, id, None).await.running
+    if cfg!(windows) {
+        return Ok(false);
+    }
+    Ok(query(home, id, None).await?.running)
 }
 
 /// Uma consulta ao gerenciador: processo de pé e, sem ele, o código da última saída. `executable` é o
 /// programa do serviço: no Windows, o código da tarefa só vale como saída dele com o programa e o `.vbs` no disco.
-pub async fn process_state(home: &Path, id: &ServiceId, executable: &Path) -> ProcessState {
+///
+/// # Errors
+///
+/// O gerenciador não respondeu; serviço sem unit ou plist no disco não é erro, é parado.
+pub async fn process_state(home: &Path, id: &ServiceId, executable: &Path) -> Result<ProcessState, Error> {
     query(home, id, Some(executable)).await
 }
 
-async fn query(home: &Path, id: &ServiceId, executable: Option<&Path>) -> ProcessState {
+async fn query(home: &Path, id: &ServiceId, executable: Option<&Path>) -> Result<ProcessState, Error> {
     if cfg!(target_os = "macos") {
-        return stdout("launchctl", &["list", id.launchd_label]).await.map(|out| launchd_state(&out)).unwrap_or_default();
+        return launchd_query(home, id, "launchctl").await;
     }
     if cfg!(windows) {
         let task = ps_quote(id.task);
         let script = format!("$ErrorActionPreference = 'Stop'\n$t = Get-ScheduledTask -TaskName {task}\n\
             \"State=$($t.State)\"\n\"LastTaskResult=$(($t | Get-ScheduledTaskInfo).LastTaskResult)\"\n");
         let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, utf16le(&script));
-        let out = stdout("powershell.exe", &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]).await;
+        let out = stdout("Get-ScheduledTask", "powershell.exe", &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]).await?;
         let present = windows_vbs_path(home, id).is_file() && executable.is_some_and(Path::is_file);
-        return out.map(|out| task_state(&out, present)).unwrap_or_default();
+        return Ok(task_state(&out, present));
     }
-    if !systemd_unit_path(home, id).is_file() {
-        return ProcessState::default();
-    }
-    let show = stdout("systemctl", &["--user", "show", "-p", "MainPID", "-p", "ActiveState", "-p", "SubState",
-        "-p", "ExecMainCode", "-p", "ExecMainStatus", id.unit]).await;
-    show.map(|out| systemd_state(&out)).unwrap_or_default()
+    systemd_query(home, id, "systemctl").await
 }
 
-/// A saída de um comando que terminou bem; qualquer falha é `None`.
-async fn stdout(program: &str, args: &[&str]) -> Option<String> {
-    let mut command = tokio::process::Command::new(program);
-    command.args(args).stdin(std::process::Stdio::null());
-    #[cfg(windows)]
-    command.creation_flags(0x0800_0000);
-    let output = command.output().await.ok().filter(|o| o.status.success())?;
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+async fn systemd_query(home: &Path, id: &ServiceId, systemctl: &str) -> Result<ProcessState, Error> {
+    if !systemd_unit_path(home, id).is_file() {
+        return Ok(ProcessState::default());
+    }
+    let show = stdout("systemctl show", systemctl, &["--user", "show", "-p", "MainPID", "-p", "ActiveState", "-p", "SubState",
+        "-p", "ExecMainCode", "-p", "ExecMainStatus", id.unit]).await?;
+    Ok(systemd_state(&show))
+}
+
+async fn launchd_query(home: &Path, id: &ServiceId, launchctl: &str) -> Result<ProcessState, Error> {
+    if !launchd_plist_path(home, id).is_file() {
+        return Ok(ProcessState::default());
+    }
+    let out = output("launchctl list", launchctl, &["list", id.launchd_label]).await?;
+    if out.status.success() {
+        return Ok(launchd_state(&String::from_utf8_lossy(&out.stdout)));
+    }
+    // Plist gravado e ainda não carregado (instalou sem subir): o launchd diz que não conhece o rótulo.
+    if launchd_not_loaded(out.status.code(), &String::from_utf8_lossy(&out.stderr)) {
+        return Ok(ProcessState::default());
+    }
+    Err(exit_error("launchctl list", &out))
+}
+
+/// `launchctl list <rótulo>` de um serviço que não está carregado: sai com 113 e "Could not find service".
+fn launchd_not_loaded(code: Option<i32>, stderr: &str) -> bool {
+    code == Some(113) || stderr.contains("Could not find service")
 }
 
 /// Linhas `Chave=valor`, como o `systemctl show` e o script da tarefa escrevem.
@@ -487,6 +526,38 @@ mod tests {
         assert_eq!(task_state("State=Running\r\nLastTaskResult=267009\r\n", true).last_exit, None);
         assert_eq!(task_state("State=Ready\r\nLastTaskResult=4294967295\r\n", true).last_exit, None, "Stop-Process -Force");
         assert_eq!(task_state("", true).last_exit, None);
+    }
+
+    /// O `systemctl` que não abre ou sai com erro é erro, nunca "parado"; sem a unit no disco não se pergunta.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_manager_that_does_not_answer_is_an_error_not_stopped() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(systemd_query(home.path(), &WHATSAPP, "/nao/existe/systemctl").await, Ok(ProcessState::default()), "sem unit");
+        let unit = systemd_unit_path(home.path(), &WHATSAPP);
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        std::fs::write(&unit, "[Unit]\n").unwrap();
+        let missing = systemd_query(home.path(), &WHATSAPP, "/nao/existe/systemctl").await.unwrap_err();
+        assert_eq!(missing.step, "systemctl show");
+        let failed = systemd_query(home.path(), &WHATSAPP, "false").await.unwrap_err();
+        assert_eq!(failed.step, "systemctl show", "{failed:?}");
+        assert_eq!(systemd_query(home.path(), &WHATSAPP, "true").await, Ok(ProcessState::default()), "respondeu sem processo");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn launchd_not_knowing_the_label_is_stopped_and_any_other_failure_an_error() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(launchd_query(home.path(), &WHATSAPP, "/nao/existe/launchctl").await, Ok(ProcessState::default()), "sem plist");
+        let plist = launchd_plist_path(home.path(), &WHATSAPP);
+        std::fs::create_dir_all(plist.parent().unwrap()).unwrap();
+        std::fs::write(&plist, "<plist/>").unwrap();
+        assert!(launchd_query(home.path(), &WHATSAPP, "/nao/existe/launchctl").await.is_err());
+        assert_eq!(launchd_query(home.path(), &WHATSAPP, "false").await.unwrap_err().step, "launchctl list");
+        assert!(launchd_not_loaded(Some(113), ""));
+        assert!(launchd_not_loaded(Some(1), "Could not find service \"dev.hangar.whatsapp\" in domain for port"));
+        assert!(!launchd_not_loaded(Some(1), "Operation not permitted"));
+        assert!(!launchd_not_loaded(None, ""), "morto por sinal");
     }
 
     #[test]

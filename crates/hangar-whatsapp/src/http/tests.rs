@@ -211,14 +211,33 @@ async fn a_stale_control_with_a_live_pid_counts_as_stopped() {
     assert!(!s.paths().data.join("messages.db").exists());
 }
 
-/// Só a saída 3 sem processo de pé vira o aviso de dados mais novos; o resto é o parado de sempre.
+/// Só a saída 3 sem processo de pé vira o aviso de dados mais novos; o resto é o parado de sempre, também
+/// quando o gerenciador não responde.
 #[test]
 fn a_service_that_quit_on_newer_data_says_so() {
-    use hangar_managed_binary::service::ProcessState;
-    assert_eq!(stopped_error(ProcessState { running: false, last_exit: Some(3) }), json!("whatsapp_schema_newer"));
-    assert_eq!(stopped_error(ProcessState { running: true, last_exit: Some(3) }), json!("whatsapp_schema_newer"), "unit antiga religando");
-    assert_eq!(stopped_error(ProcessState { running: false, last_exit: Some(1) }), Value::Null);
-    assert_eq!(stopped_error(ProcessState::default()), Value::Null);
+    assert_eq!(stopped_error(Ok(ProcessState { running: false, last_exit: Some(3) })), json!("whatsapp_schema_newer"));
+    assert_eq!(stopped_error(Ok(ProcessState { running: true, last_exit: Some(3) })), json!("whatsapp_schema_newer"), "unit antiga religando");
+    assert_eq!(stopped_error(Ok(ProcessState { running: false, last_exit: Some(1) })), Value::Null);
+    assert_eq!(stopped_error(Ok(ProcessState::default())), Value::Null);
+    let unknown = ServiceError { step: "systemctl show".into(), detail: "Failed to connect to bus".into() };
+    assert_eq!(stopped_error(Err(unknown)), Value::Null);
+}
+
+/// Apagar do disco exige o serviço confirmado parado: subindo é "subindo", sem resposta do gerenciador é
+/// recusa própria, nunca "parado".
+#[tokio::test]
+async fn wipe_from_disk_needs_the_service_confirmed_stopped() {
+    async fn refusal(running: Result<bool, ServiceError>) -> (u16, Value) {
+        let response = wipe_guard(running).unwrap_err();
+        let status = response.status().as_u16();
+        let raw = axum::body::to_bytes(response.into_body(), 1 << 16).await.unwrap();
+        (status, serde_json::from_slice(&raw).unwrap())
+    }
+    assert!(wipe_guard(Ok(false)).is_ok());
+    let (status, body) = refusal(Ok(true)).await;
+    assert_eq!((status, code(&body)), (409, "whatsapp_service_starting"));
+    let (status, body) = refusal(Err(ServiceError { step: "systemctl show".into(), detail: "Failed to connect to bus".into() })).await;
+    assert_eq!((status, code(&body)), (409, "whatsapp_service_state_unknown"), "{body}");
 }
 
 #[tokio::test]

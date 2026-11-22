@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WhatsAppState } from '@hangar/core';
-import { codeOf, failedJob, isWhatsAppState, minutesLeft, phoneDigits, phrase, shouldPoll, stepIndex, viewOf } from './whatsapp';
+import { codeOf, failedJob, isWhatsAppState, minutesLeft, phoneDigits, phrase, readErrorShows, shouldPoll, stepIndex, viewOf } from './whatsapp';
 
 const base = (service: WhatsAppState['service'], status: Partial<NonNullable<WhatsAppState['status']>> | null): WhatsAppState => ({
   installed: true, accepted_at: '2026-11-22T10:00:00Z', service, job: null, qr_svg: null,
@@ -57,6 +57,21 @@ describe('shouldPoll', () => {
     expect(shouldPoll(unpaired, false)).toBe(false);
     expect(shouldPoll(unpaired, true)).toBe(true);
     expect(shouldPoll(base('running', { state: 'connected' }), true)).toBe(false);
+  });
+
+  it('depois de uma leitura que falhou relê em qualquer estado', () => {
+    expect(shouldPoll(base('running', { state: 'connected' }), false, true)).toBe(true);
+    expect(shouldPoll(base('stopped', null), false, true)).toBe(true);
+    expect(shouldPoll(base('stopped', null), false)).toBe(false);
+  });
+});
+
+describe('readErrorShows', () => {
+  it('na carga inicial a falha aparece na hora; com dado na tela, só na terceira seguida', () => {
+    expect(readErrorShows(false, 1)).toBe(true);
+    expect(readErrorShows(true, 1)).toBe(false);
+    expect(readErrorShows(true, 2)).toBe(false);
+    expect(readErrorShows(true, 3)).toBe(true);
   });
 });
 

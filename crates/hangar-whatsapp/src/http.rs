@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use hangar_core::edge::Edge;
 use hangar_core::guest::Caller;
 use hangar_core::http::{detail, json_response};
+use hangar_managed_binary::service::{Error as ServiceError, ProcessState};
 use serde_json::{Map, Value, json};
 
 use crate::client::{CallError, Client, Reply};
@@ -177,9 +178,31 @@ async fn overview(wa: &WhatsApp) -> Response {
 }
 
 /// Com o serviço parado, `whatsapp_schema_newer` quando o último processo saiu porque os dados são de uma
-/// versão mais nova do binário: religar não adianta, só atualizar.
-fn stopped_error(process: hangar_managed_binary::service::ProcessState) -> Value {
-    if process.last_exit == Some(i32::from(install::SCHEMA_NEWER_EXIT)) { json!("whatsapp_schema_newer") } else { Value::Null }
+/// versão mais nova do binário: religar não adianta, só atualizar. Gerenciador que não responde deixa o
+/// parado de sempre e vai ao log.
+fn stopped_error(process: Result<ProcessState, ServiceError>) -> Value {
+    match process {
+        Ok(process) if process.last_exit == Some(i32::from(install::SCHEMA_NEWER_EXIT)) => json!("whatsapp_schema_newer"),
+        Ok(_) => Value::Null,
+        Err(error) => {
+            tracing::warn!(step = %error.step, detail = %error.detail, "whatsapp: estado do serviço ilegível");
+            Value::Null
+        }
+    }
+}
+
+/// Apagar do disco só com o serviço confirmado parado: subindo ou sem resposta do gerenciador, recusa.
+fn wipe_guard(running: Result<bool, ServiceError>) -> Result<(), Response> {
+    match running {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(refused(StatusCode::CONFLICT, "whatsapp_service_starting",
+            "o serviço do WhatsApp está subindo; tente de novo em alguns segundos")),
+        Err(error) => {
+            tracing::warn!(step = %error.step, detail = %error.detail, "whatsapp: estado do serviço ilegível; não apaguei");
+            Err(refused(StatusCode::CONFLICT, "whatsapp_service_state_unknown",
+                "não consegui confirmar que o serviço do WhatsApp está parado; tente de novo"))
+        }
+    }
 }
 
 fn start_install(wa: &WhatsApp, body: &Value) -> Response {
@@ -236,8 +259,8 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     // Subindo, caindo ou esperando religar, o processo pode abrir os bancos sem ter escrito o `control.json`.
     // No Windows não há como perguntar, mas lá o arquivo aberto não se apaga e a resposta diz o que já saiu.
     if install::current(&wa.ctx.paths).is_some()
-        && hangar_managed_binary::service::process_running(&wa.ctx.paths.home, &install::SERVICE).await {
-        return refused(StatusCode::CONFLICT, "whatsapp_service_starting", "o serviço do WhatsApp está subindo; tente de novo em alguns segundos");
+        && let Err(response) = wipe_guard(hangar_managed_binary::service::process_running(&wa.ctx.paths.home, &install::SERVICE).await) {
+        return response;
     }
     let data = wa.ctx.paths.data.clone();
     match tokio::task::spawn_blocking(move || wipe_data(&data)).await {

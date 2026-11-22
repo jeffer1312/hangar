@@ -63,9 +63,18 @@ export function phrase(table: Record<string, () => string>, code: string, unknow
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key]() : unknown({ code });
 }
 
-export function shouldPoll(state: WhatsAppState, awaitingPair: boolean): boolean {
+/** Leituras seguidas que falham, com a página já mostrando dados, até ela trocar pelo erro. */
+export const READ_FAILS_TO_ERROR = 3;
+
+/** Falha de leitura vira a tela de erro na carga inicial ou na terceira seguida; antes disso fica o dado anterior. */
+export function readErrorShows(hasData: boolean, failsInARow: number): boolean {
+  return !hasData || failsInARow >= READ_FAILS_TO_ERROR;
+}
+
+/** `retrying`: a última leitura falhou e o dado na tela pode estar velho, então relê em qualquer estado. */
+export function shouldPoll(state: WhatsAppState, awaitingPair: boolean, retrying = false): boolean {
   const view = viewOf(state);
-  return view === 'working' || view === 'pairing' || (awaitingPair && view === 'unpaired');
+  return retrying || view === 'working' || view === 'pairing' || (awaitingPair && view === 'unpaired');
 }
 
 /** Índice da etapa em curso; etapa desconhecida conta como a primeira. */

@@ -14,7 +14,7 @@ import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { Chip, Muted } from '../../src/features/config/ServerConfigParts';
 import { useSettingsColors } from '../../src/features/config/colors';
 import {
-  PAIR_GRACE_MS, POLL_MS, failedJob, isWhatsAppState, phoneDigits, phrase, shouldPoll, viewOf, type WhatsAppView,
+  PAIR_GRACE_MS, POLL_MS, failedJob, isWhatsAppState, phoneDigits, phrase, readErrorShows, shouldPoll, viewOf, type WhatsAppView,
 } from '../../src/features/config/whatsapp';
 import { Button, Check, Connected, Off, Pair, Problem, Working, styles, type Act } from '../../src/features/config/WhatsAppParts';
 import { useWhatsAppSeen } from '../../src/features/config/whatsappSeen';
@@ -35,6 +35,7 @@ const ERR: Record<string, () => string> = {
   wipe_partial: m.native_whatsapp_err_wipe_partial,
   wipe_failed: m.native_whatsapp_err_wipe_failed,
   service_starting: m.native_whatsapp_err_service_starting,
+  service_state_unknown: m.native_whatsapp_err_service_state_unknown,
   not_installed: m.native_whatsapp_err_not_installed,
   unreachable: m.native_whatsapp_err_unreachable,
   accept_write_failed: m.native_whatsapp_err_accept_write_failed,
@@ -100,8 +101,19 @@ export default function WhatsApp() {
   // Troca de servidor no meio de uma chamada: a resposta do anterior não pinta esta tela.
   const gen = useRef(0);
   const writeSeq = useRef(0);
+  // Poll, volta do app e releitura do fim da ação se sobrepõem: só a resposta da última leitura pinta a tela.
+  const readSeq = useRef(0);
+  const readFails = useRef(0);
+  // Uma falha isolada não para a releitura: este número muda a cada falha para o efeito agendar outra.
+  const [readRetry, setReadRetry] = useState(0);
+  // O `busy` do render ainda é o antigo no segundo toque do mesmo quadro.
+  const busyRef = useRef(false);
   const serverRef = useRef(server);
   serverRef.current = server;
+  const hasData = useRef(false);
+  hasData.current = load.status === 'ready';
+  const focusedRef = useRef(focused);
+  focusedRef.current = focused;
 
   /** O pedido de pareamento acabou: QR escondido, número fora da tela, sem espera. */
   const resetPairing = useCallback(() => {
@@ -115,21 +127,35 @@ export default function WhatsApp() {
     const s = serverRef.current;
     if (!s) return;
     const g = gen.current;
+    const seq = ++readSeq.current;
+    const latest = () => g === gen.current && seq === readSeq.current;
+    const failed = (error: Extract<Load, { status: 'error' }>) => {
+      readFails.current++;
+      if (readErrorShows(hasData.current, readFails.current)) setLoad(error);
+      else setReadRetry((n) => n + 1);
+    };
     getWhatsApp(s)
       .then((v) => {
-        if (g !== gen.current) return;
-        setLoad(isWhatsAppState(v) ? { status: 'ready', data: v } : { status: 'error', error: m.native_invalid_response() });
+        if (!latest()) return;
+        if (!isWhatsAppState(v)) { failed({ status: 'error', error: m.native_invalid_response() }); return; }
+        readFails.current = 0;
+        setLoad({ status: 'ready', data: v });
       })
-      .catch((e: unknown) => { if (g === gen.current) setLoad({ status: 'error', error: errorText(e), code: errorCode(e) }); });
+      .catch((e: unknown) => { if (latest()) failed({ status: 'error', error: errorText(e), code: errorCode(e) }); });
   }, []);
 
   useEffect(() => {
     gen.current++;
+    readFails.current = 0;
+    busyRef.current = false;
     setLoad({ status: 'loading' });
     setBusy(null);
     setWriteError('');
     setAccepted(false);
     resetPairing();
+    // O número digitado é do servidor anterior: não aparece nem é reenviado neste.
+    setPhone('');
+    setLastPhone('');
     setUnlinkOnPhone(false);
     setConfirm(null);
     read();
@@ -141,7 +167,7 @@ export default function WhatsApp() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       setAppActive(state === 'active');
-      if (state === 'active') read();
+      if (state === 'active' && focusedRef.current) read();
     });
     return () => sub.remove();
   }, [read]);
@@ -154,17 +180,19 @@ export default function WhatsApp() {
     if (view === 'connected') resetPairing();
   }, [view, resetPairing]);
 
-  // Job e pareamento mudam sem aviso do servidor: relê a cada 1 s enquanto andam e a tela está à vista.
+  // Job e pareamento mudam sem aviso do servidor: relê a cada 1 s enquanto andam e a tela está à vista, e
+  // também depois de uma leitura que falhou.
   useEffect(() => {
     if (!data || !focused || !appActive || busy) return;
-    if (!shouldPoll(data, awaitUntil !== null && Date.now() < awaitUntil)) return;
+    if (!shouldPoll(data, awaitUntil !== null && Date.now() < awaitUntil, readFails.current > 0)) return;
     const t = setTimeout(read, POLL_MS);
     return () => clearTimeout(t);
-  }, [data, focused, appActive, busy, awaitUntil, read]);
+  }, [data, focused, appActive, busy, awaitUntil, read, readRetry]);
 
   const act = (kind: Act, run: (s: Server) => Promise<unknown>) => {
     const s = serverRef.current;
-    if (!s || busy) return;
+    if (!s || busyRef.current) return;
+    busyRef.current = true;
     const g = gen.current;
     const seq = ++writeSeq.current;
     const live = () => g === gen.current && seq === writeSeq.current;
@@ -187,6 +215,7 @@ export default function WhatsApp() {
       })
       .finally(() => {
         if (!live()) return;
+        busyRef.current = false;
         setBusy(null);
         // A ação pode ter chegado antes da queda; a releitura mostra o estado real.
         read();

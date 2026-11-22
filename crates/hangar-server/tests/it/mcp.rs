@@ -848,7 +848,7 @@ async fn whoami_w09_a_guest_learns_only_the_sessions_it_reaches() {
 /// Com o serviço desligado, a rota responde `whatsapp_off` e a tool devolve o código e a frase dela.
 #[tokio::test(flavor = "multi_thread")]
 async fn whatsapp_tools_return_the_route_error_with_its_code() {
-    let s = scene().await;
+    let s = scene_shared(false, None, false, "", true).await;
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
     for (tool, args) in [("whatsapp_chats", json!({})), ("whatsapp_read", json!({"chat": "c@s.whatsapp.net"})),
                          ("whatsapp_search", json!({"query": "oi"})), ("whatsapp_request_media", json!({"chat": "c@s.whatsapp.net"}))] {
@@ -856,6 +856,19 @@ async fn whatsapp_tools_return_the_route_error_with_its_code() {
         let text = first_text(&result);
         assert!(failed(&result) && text.starts_with("whatsapp_off:") && text.contains("Configurações > WhatsApp"), "{tool}: {result}");
     }
+}
+
+/// Sem a loja de convites (configuração de convidados ilegível na subida), ninguém sabe se a sessão é
+/// compartilhada: recusa antes da rota, em vez de deixar passar.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_the_share_store_whatsapp_is_refused() {
+    let s = scene().await;
+    assert!(s.state.share.is_none());
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    let text = first_text(&result);
+    assert!(failed(&result) && text.starts_with("whatsapp_shared_check_failed:")
+        && text.contains("estado de compartilhamento indisponível"), "{result}");
 }
 
 /// Convite de convidado vivo na sessão, ou par de fora no grupo dela: recusa antes da rota. A sessão sem
@@ -886,7 +899,7 @@ async fn a_shared_session_does_not_read_whatsapp() {
 /// vê-las, não alcança a conversa e deixa passar até a rota.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_a_login_guest_sees_does_not_read_whatsapp() {
-    let s = scene().await;
+    let s = scene_shared(false, None, false, "", true).await;
     let guests = s.state.login_guests.store.clone();
     let root = s.home.to_string_lossy().into_owned();
     guests.create("Ana", &root, false, true, "ana".into(), "token-ana".into()).unwrap();

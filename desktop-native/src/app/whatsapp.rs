@@ -842,7 +842,7 @@ mod tests {
     #[test]
     fn every_refusal_the_server_sends_has_its_own_phrase() {
         let codes = ["accept_required", "busy", "off", "untrusted", "wipe_partial", "wipe_failed", "service_starting",
-            "not_installed", "unreachable", "accept_write_failed", "not_paired", "outdated", "remove_failed",
+            "service_state_unknown", "not_installed", "unreachable", "accept_write_failed", "not_paired", "outdated", "remove_failed",
             "servico_falhou", "bad_reply", "error", "owner_only"];
         for english in [false, true] {
             crate::i18n::english_in_this_thread(english);

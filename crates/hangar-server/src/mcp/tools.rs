@@ -499,7 +499,7 @@ impl Tools {
         Ok(dict(whatsapp::third_party(value, trim, whatsapp::LIMIT)))
     }
 
-    /// Falha fechada: grupo, convidados ou registro da dona que não se lê também recusa. As leituras independentes
+    /// Falha fechada: grupo, convites, convidados ou registro da dona que não se lê também recusa. As leituras independentes
     /// correm juntas; a recusa segue a ordem das conferências.
     async fn whatsapp_unshared(&self, me: &str) -> Result<(), String> {
         let link = async {
@@ -511,7 +511,9 @@ impl Tools {
         // A vida pela mesma fonte que o porteiro do convidado usa: sessão de outra vida com o mesmo nome não é dele.
         let (link, life) = tokio::join!(link, crate::login_guests::gate::session_life(&self.st, me));
         let link = link?;
-        if let Some(share) = &self.st.share && whatsapp::shared_here(&share.store, &share.pairs, me, link.as_ref()) {
+        // Sem a loja de convites (configuração de convidados ilegível na subida) não há como saber: recusa.
+        let Some(share) = &self.st.share else { return Err(unshared_failed("estado de compartilhamento indisponível")) };
+        if whatsapp::shared_here(&share.store, &share.pairs, me, link.as_ref()) {
             return Err(whatsapp::SHARED_REFUSAL.into());
         }
         let (guests, record) = tokio::join!(self.guest_unseen(me, life), self.owner_record_unshared(link));
