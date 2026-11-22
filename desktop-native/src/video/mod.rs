@@ -147,6 +147,10 @@ impl VideoPlayer {
             core.unpainted_since = None;
         }
         drop(core);
+        // A libmpv mantém o erro no estado; o log recebe cada erro novo uma vez só.
+        if let Some(error) = &state.error && self.state.error.as_ref() != Some(error) {
+            crate::log_line(&format!("video: {error}"));
+        }
         self.state = state;
         cx.notify();
     }

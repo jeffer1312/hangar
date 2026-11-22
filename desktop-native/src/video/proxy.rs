@@ -47,6 +47,8 @@ pub(super) fn start(runtime: &Handle, upstream: Upstream) -> std::io::Result<Pro
     let id = random_id()?;
     let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
     listener.set_nonblocking(true)?;
+    // O `from_std` precisa do reator do runtime; falhando aqui, o player mostra o erro em vez de esperar para sempre.
+    let listener = { let _inside = runtime.enter(); TcpListener::from_std(listener)? };
     let address = format!("http://127.0.0.1:{}/{id}", listener.local_addr()?.port());
     // Redirecionamento não é seguido: o token só vai ao endereço da sessão.
     let client = Client::builder().connect_timeout(Duration::from_secs(10)).read_timeout(Duration::from_secs(30))
@@ -57,8 +59,7 @@ pub(super) fn start(runtime: &Handle, upstream: Upstream) -> std::io::Result<Pro
 
 struct Shared { path: String, upstream: Upstream, client: Client }
 
-async fn serve(listener: std::net::TcpListener, shared: Arc<Shared>) {
-    let Ok(listener) = TcpListener::from_std(listener) else { return };
+async fn serve(listener: TcpListener, shared: Arc<Shared>) {
     // Abortar esta tarefa solta o `JoinSet`, que aborta cada pedido em andamento.
     let mut connections = JoinSet::new();
     loop {
@@ -85,19 +86,43 @@ async fn answer(mut socket: TcpStream, shared: &Shared) {
     };
     let mut response = match request(&shared.client, &shared.upstream, &asked).send().await {
         Ok(response) => response,
-        Err(_) => { let _ = socket.write_all(empty(StatusCode::BAD_GATEWAY).as_bytes()).await; return; }
+        Err(error) => {
+            crate::log_line(&format!("video proxy: upstream request to {} failed ({}): {}",
+                shared.upstream.url.path(), error_kind(&error), error.without_url()));
+            let _ = socket.write_all(empty(StatusCode::BAD_GATEWAY).as_bytes()).await;
+            return;
+        }
     };
     let status = response.status();
     if !status.is_success() && status != StatusCode::RANGE_NOT_SATISFIABLE {
+        crate::log_line(&format!("video proxy: upstream {} answered {}", shared.upstream.url.path(), status.as_u16()));
         let shown = if status.is_redirection() { StatusCode::BAD_GATEWAY } else { status };
         let _ = socket.write_all(empty(shown).as_bytes()).await;
         return;
     }
     if socket.write_all(response_head(status, response.headers()).as_bytes()).await.is_err() || asked.head { return; }
     // Falha no meio corta a conexão: o corpo chega curto e a libmpv pede de novo dali.
-    while let Ok(Some(chunk)) = response.chunk().await {
-        if socket.write_all(&chunk).await.is_err() { return; }
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => if socket.write_all(&chunk).await.is_err() { return },
+            Ok(None) => return,
+            Err(error) => {
+                crate::log_line(&format!("video proxy: upstream body from {} broke ({}): {}",
+                    shared.upstream.url.path(), error_kind(&error), error.without_url()));
+                return;
+            }
+        }
     }
+}
+
+/// O tipo da falha sem o endereço, que pode levar consulta.
+fn error_kind(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() { "timeout" }
+    else if error.is_connect() { "connect" }
+    else if error.is_body() { "body" }
+    else if error.is_decode() { "decode" }
+    else if error.is_request() { "request" }
+    else { "other" }
 }
 
 #[derive(Debug, PartialEq)]

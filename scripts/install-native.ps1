@@ -21,11 +21,20 @@ function Versao-De($texto) { if ("$texto" -match '"version":\s*"([0-9.]+)"') { $
 # A libmpv do player de video, ao lado do exe. Roda tambem com o app ja em dia; falhar so avisa (o video abre
 # no player do sistema), entao nunca muda o codigo de saida daqui.
 # O powershell.exe do sistema: no PowerShell 7 o $PSHOME e o pwsh, sem powershell.exe.
+# O filho sai 0 de proposito, entao quem diz se faltou e a marca libmpv-ok gravada nesta rodada (UTF-8, como ele grava).
 function Instala-Libmpv {
     $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $inicio = Get-Date
     try { & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'install-libmpv.ps1') -Destino $destDir }
     catch { Write-Host "video do app nativo: aviso - $($_.Exception.Message)" }
     $global:LASTEXITCODE = 0
+    try {
+        $ok = Join-Path $marcaDir 'libmpv-ok'
+        if ((Test-Path -LiteralPath $ok) -and (Get-Item -LiteralPath $ok).LastWriteTime -ge $inicio.AddSeconds(-2)) {
+            $texto = [IO.File]::ReadAllText($ok, [Text.Encoding]::UTF8).Trim()
+            if ($texto.StartsWith('falta')) { Write-Host "video do app nativo: aviso - $texto" }
+        }
+    } catch { Write-Host "video do app nativo: aviso - nao consegui ler a marca da libmpv ($($_.Exception.Message))" }
 }
 
 $arq = "$env:PROCESSOR_ARCHITEW6432$env:PROCESSOR_ARCHITECTURE"
