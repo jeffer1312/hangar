@@ -8,6 +8,8 @@ publish = false
 # dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
 [dependencies]
 hangar-core.workspace = true
+# Chaves e cifra do cofre: as mesmas dos clientes, que entram com elas.
+hangar-connect-client.workspace = true
 base64 = "=0.23.1"
 ring.workspace = true
 serde = { workspace = true, features = ["alloc"] }

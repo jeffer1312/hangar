@@ -20,6 +20,8 @@ hangar-api = { path = "../crates/hangar-api" }
 hangar-workspace = { path = "../crates/hangar-workspace" }
 # O servidor desta máquina sem a API dele: a página Status sobe e conserta o servidor parado.
 hangar-local-server = { path = "../crates/hangar-local-server" }
+# Entrar pela conta do Connect ou como convidado sem servidor local: o mesmo cliente que o servidor usa.
+hangar-connect-client = { path = "../crates/hangar-connect-client" }
 # Vídeo tocado no app pela libmpv, carregada na hora: sem o mpv, só o vídeo avisa.
 hangar-video = { path = "../crates/hangar-video" }
 serde = { version = "=1.0.229", features = ["derive"] }

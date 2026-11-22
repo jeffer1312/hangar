@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use base64::Engine;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+
+use hangar_connect_client::{Code, ConnectClient, ReqwestTransport};
 
 use super::ConnectError;
 use super::config::{frps_endpoint, valid_host, valid_label, valid_secret};
@@ -185,32 +185,16 @@ fn service_refused(status: u16) -> ConnectError {
     ConnectError::new(status, code, msg)
 }
 
-async fn call<T: DeserializeOwned>(request: reqwest::RequestBuilder) -> Result<T, ConnectError> {
-    let unreachable = || ConnectError::new(StatusCode::BAD_GATEWAY, "connect_service_unreachable", "o serviço do Connect não respondeu");
-    let response = request.send().await.map_err(|error| {
-        tracing::warn!(code = "connect_service_unreachable", "serviço do Connect fora: {}", error.without_url());
-        unreachable()
-    })?;
-    if !response.status().is_success() {
-        return Err(service_refused(response.status().as_u16()));
+/// Falha do cliente do Connect na forma das rotas: com resposta, pelo status; sem resposta, fora do ar.
+fn service_failed(error: hangar_connect_client::Error) -> ConnectError {
+    match error.status() {
+        Some(status) => service_refused(status),
+        None if error.code() == Code::NetworkFailed => {
+            tracing::warn!(code = "connect_service_unreachable", "serviço do Connect fora: {}", error.cause().unwrap_or_default());
+            ConnectError::new(StatusCode::BAD_GATEWAY, "connect_service_unreachable", "o serviço do Connect não respondeu")
+        }
+        None => Linked::invalid(),
     }
-    let bytes = response.bytes().await.map_err(|_| unreachable())?;
-    serde_json::from_slice(&bytes).map_err(|_| Linked::invalid())
-}
-
-#[derive(Deserialize)]
-struct Session { token: String }
-
-#[derive(Deserialize)]
-struct Machine {
-    machine_id: String,
-    machine_key: String,
-    host: String,
-    guest_host: String,
-    preview_host: String,
-    frps_addr: String,
-    frps_token: String,
-    service_public_key: String,
 }
 
 /// Entra na conta (ou a cria, com `create_account`) e registra a máquina. O serviço troca a chave a cada registro: quem chama precisa gravar o resultado.
@@ -219,25 +203,28 @@ pub async fn register(request: &LinkRequest) -> Result<Linked, ConnectError> {
     if !valid_label(&request.account) || !valid_label(&request.machine_name) {
         return Err(ConnectError::new(StatusCode::BAD_REQUEST, "connect_name_invalid", "nome de conta ou de máquina inválido"));
     }
-    let endpoint = |path: &str| base.join(path).map_err(|_| Linked::invalid());
-    // Sem seguir redirecionamento: a senha iria junto para outro endereço.
-    let client = hangar_core::net::http_client().redirect(reqwest::redirect::Policy::none()).timeout(SERVICE_TIMEOUT).build()
+    // O transporte não segue redirecionamento: a senha iria junto para outro endereço.
+    let transport = ReqwestTransport::new(hangar_core::net::http_client())
         .map_err(|_| ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_service_unreachable", "cliente HTTP indisponível"))?;
+    let client = ConnectClient::new(transport).with_timeout(SERVICE_TIMEOUT);
+    let service_url = base.as_str().trim_end_matches('/').to_owned();
     // Criar a conta já devolve a sessão dela, no mesmo formato do login.
-    let start = if request.create_account { "/v1/accounts" } else { "/v1/sessions" };
-    let session: Session = call(client.post(endpoint(start)?)
-        .json(&json!({"name": request.account, "password": request.password}))).await
+    let session = if request.create_account {
+        client.sign_up(&service_url, &request.account, &request.password).await
+    } else {
+        client.sign_in(&service_url, &request.account, &request.password).await
+    };
+    let session = session.map_err(service_failed)
         .map_err(|error| if request.create_account && error.status == StatusCode::CONFLICT {
             ConnectError::new(StatusCode::CONFLICT, "connect_account_taken", "já existe uma conta com esse nome")
         } else { error })?;
-    let machine: Machine = call(client.post(endpoint("/v1/machines")?).bearer_auth(&session.token)
-        .json(&json!({"name": request.machine_name}))).await
+    let machine = client.register_machine(&session, &request.machine_name).await.map_err(service_failed)
         // A conta nasceu: criar de novo daria nome já usado, então quem chama passa a entrar nela.
         .map_err(|error| if request.create_account {
             ConnectError::new(error.status, "connect_account_created_link_failed", format!("conta criada; entre com ela para ligar este computador ({})", error.msg))
         } else { error })?;
     let linked = Linked {
-        service_url: base.as_str().trim_end_matches('/').to_owned(),
+        service_url,
         account: request.account.clone(),
         machine_id: machine.machine_id,
         machine_key: machine.machine_key,

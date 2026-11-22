@@ -3662,6 +3662,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-connect-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "hangar-local-server"
 version = "0.1.0"
 dependencies = [
@@ -3692,6 +3705,7 @@ dependencies = [
  "gpui-pre-wgpu",
  "gpui-pre-windows",
  "hangar-api",
+ "hangar-connect-client",
  "hangar-local-server",
  "hangar-video",
  "hangar-workspace",

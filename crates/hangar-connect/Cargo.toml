@@ -8,6 +8,8 @@ publish = false
 # diferentes cada compilação guarda a sua cópia da dependência no target.
 [dependencies]
 hangar-core.workspace = true
+# Login da conta e registro da máquina no serviço, o mesmo cliente do app nativo.
+hangar-connect-client.workspace = true
 axum = { workspace = true }
 base64 = "=0.23.1"
 flate2 = { workspace = true }
