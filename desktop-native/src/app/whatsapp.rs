@@ -397,13 +397,15 @@ impl Hangar {
             let text = tr(if kind == "update" { "whatsapp_update_failed" } else { "whatsapp_install_failed" })
                 .replace("{reason}", &code_text("whatsapp_job_err_", &code));
             let busy = self.whatsapp.busy.is_some();
-            let retry = (view != View::Off).then(|| Button::new("whatsapp-retry-job").outline().small().label(tr("server_retry")).disabled(busy)
+            // Reinstalar exige o aceite, o gravado no servidor ou o marcado agora.
+            let accepted = kind == "update" || self.whatsapp.accepted || state.accepted_at.is_some();
+            let retry = Button::new("whatsapp-retry-job").outline().small().label(tr("server_retry")).disabled(busy || !accepted)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if kind == "update" { this.whatsapp_act(Act::Update, None, cx); } else { this.whatsapp_install(cx); }
-                })));
+                }));
             page = page.child(div().id("whatsapp-job-failed").role(Role::Alert).flex().items_center().gap_3()
                 .child(div().flex_1().min_w_0().text_sm().text_color(theme::danger()).whitespace_normal().child(text))
-                .children(retry));
+                .child(retry));
         }
         page = match view {
             View::Off => page.children(self.render_whatsapp_off(cx)),
@@ -445,8 +447,10 @@ impl Hangar {
                         .child(StyledText::new(text).with_highlights([(0..lead.len(),
                             HighlightStyle { color: Some(theme::text()), font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() })])))
             }))
-            .child(div().pt_2().child(Checkbox::new("whatsapp-accept").checked(accepted).disabled(busy).label(tr("whatsapp_accept"))
-                .on_click(cx.listener(|this, checked: &bool, _, cx| { this.whatsapp.accepted = *checked; cx.notify(); }))));
+            // A borda do kit some sobre o âmbar: a opção ganha caixa própria, como nos alertas do app.
+            .child(div().mt_2().px(px(10.)).py(px(8.)).rounded(px(8.)).border_1().border_color(theme::border_strong()).bg(theme::inset())
+                .child(Checkbox::new("whatsapp-accept").checked(accepted).disabled(busy).label(tr("whatsapp_accept"))
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| { this.whatsapp.accepted = *checked; cx.notify(); }))));
         let installing = self.whatsapp.busy == Some(Act::Install);
         let install = div().flex().child(Button::new("whatsapp-install").primary().small().label(tr("whatsapp_install"))
             .loading(installing).disabled(busy || !accepted)
@@ -520,7 +524,7 @@ impl Hangar {
         } else if !w.qr_wanted {
             card = card.child(muted(tr("whatsapp_pair_show_hint")))
                 .child(div().flex().flex_wrap().items_center().gap_2()
-                    .child(Button::new("whatsapp-show-qr").primary().small().icon(IconName::QrCode).label(tr("whatsapp_pair_show"))
+                    .child(Button::new("whatsapp-show-qr").primary().small().label(tr("whatsapp_pair_show"))
                         .loading(w.busy == Some(Act::Pair)).disabled(busy)
                         .on_click(cx.listener(|this, _, window, cx| this.whatsapp_by_qr(window, cx))))
                     .child(Button::new("whatsapp-by-phone").ghost().small().label(tr("whatsapp_pair_by_phone")).disabled(busy)
