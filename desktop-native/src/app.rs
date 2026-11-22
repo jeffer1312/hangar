@@ -552,7 +552,6 @@ enum Reply {
     OrqPanel(u64),
     /// A geração da leitura (`Side::files_gen`).
     GitFiles(u64),
-    Diff(String),
     /// Rótulo do atalho e se o pedido foi No Hangar.
     Shell(String, bool),
     /// Rótulo e id do terminal de atalho que o clique no bloco aceso fechou.
@@ -2136,8 +2135,7 @@ impl Hangar {
                 // Leitura do catálogo do Codex já trocada não abre o diálogo de conexão: ela é descartada logo adiante.
                 let current = !matches!(reply, Reply::HandoffCatalog(read) if !self.handoff_read_current(&key, read));
                 let lost = current && self.selected_key().as_ref() == Some(&key) && result.as_ref().err().is_some_and(|e| self.chat_auth_lost(e));
-                if lost
-                    && !matches!(reply, Reply::Diff(_)) { self.open_connection(window, cx); }
+                if lost { self.open_connection(window, cx); }
                 let owner=key.clone();
                 self.with_bound_conversation(&owner,cx,move |this,cx|this.receive_reply(key,reply,result,window,cx));
                 cx.notify();
@@ -5226,6 +5224,28 @@ impl Hangar {
         cx.notify();
     }
 
+    /// O campo livre com o nome da opção escolhida e o foco: o resto da resposta é o que a opção pediu para escrever.
+    /// O que já estava escrito fica depois do nome.
+    fn ask_write_from_option(&mut self, fingerprint: &str, index: usize, prefix: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ask_form.fingerprint != fingerprint { return; }
+        let Some(input) = self.ask_form.inputs.get(index).cloned() else { return };
+        let others: Vec<String> = self.chat.ask.as_ref().and_then(|ask| ask.payload.questions.get(index))
+            .map(|item| item.options.iter().filter(|o| interaction::asks_for_text(o)).map(interaction::text_prefix).collect())
+            .unwrap_or_default();
+        match &input {
+            AnyInputState::Input(state) => state.update(cx, |s, cx| {
+                if let Some(text) = interaction::text_from_option(&s.value(), &prefix, &others) { s.set_value(text, window, cx); }
+                s.focus(window, cx);
+            }),
+            AnyInputState::Textarea(state) => state.update(cx, |s, cx| {
+                if let Some(text) = interaction::text_from_option(&s.value(), &prefix, &others) { s.set_value(text, window, cx); }
+                s.focus(window, cx);
+            }),
+            _ => {}
+        }
+        self.set_pick(fingerprint, index, None, true, cx);
+    }
+
     /// Texto que entrou no campo sem digitação (ditado): conta como resposta escrita, como `edit_ask_input`.
     fn mark_ask_input_written(&mut self, field: &AnyInputState, cx: &mut Context<Self>) {
         let Some(index) = self.ask_form.inputs.iter().position(|input| input == field) else { return; };
@@ -5277,9 +5297,12 @@ impl Hangar {
             let mut options = div().flex().flex_col().gap_1();
             for (oi, option) in item.options.iter().enumerate() {
                 let (fp, current, entry) = (fingerprint.clone(), pick.clone(), item.clone());
-                let on_pick = cx.listener(move |this, _: &bool, _, cx| {
+                // Opção que pede o complemento escrito ("Canal (digite qual)"): o campo livre recebe o nome dela e o foco.
+                let write = (!item.multi_select && ask.allows_text(item) && interaction::asks_for_text(option)).then(|| interaction::text_prefix(option));
+                let on_pick = cx.listener(move |this, _: &bool, window, cx| {
                     let next = interaction::toggle(&entry, &current, oi);
                     this.set_pick(&fp, qi, Some(next), false, cx);
+                    if let Some(prefix) = write.clone() { this.ask_write_from_option(&fp, qi, prefix, window, cx); }
                 });
                 let id = SharedString::from(format!("ask-{qi}-{oi}"));
                 options = options.child(if item.multi_select {
@@ -9103,10 +9126,9 @@ impl Render for Hangar {
                 .child(div().flex_1())
                 // Sem sessão, o estado da ligação só aparece quando ela não está normal: "Conectado" não diz nada.
                 .when(session_chip || header_state != "connected", |el| el.child(if session_chip && appearance::conversation_beta() {
-                        // Rodando, o tempo do turno vem junto; a raiz redesenha a cada batida da marca, e o minuto vira sozinho.
-                        let ago = (chip_state == "working").then(|| self.turn_start()).flatten()
-                            .map(|since| tr("beta_ago").replace("{time}", &chrome::format_ago(since.elapsed())));
-                        chrome::beta_state_chip(&chip_state, tr(&format!("beta_chip_{chip_state}")), ago)
+                        // Rodando, o tempo do turno vem junto; o próprio selo redesenha a raiz quando o texto vira.
+                        let since = (chip_state == "working").then(|| self.turn_start()).flatten();
+                        chrome::beta_state_chip(&chip_state, tr(&format!("beta_chip_{chip_state}")), since)
                     } else if session_chip { chrome::state_chip(&chip_state, tr(&format!("chip_{chip_state}")), true) }
                     else { div().flex_shrink_0().text_xs().text_color(theme::status(&header_state)).child(tr(&header_state)).into_any_element() }))
                 .when_some(self.render_activity_button(window, cx), |el, button| el.child(button))

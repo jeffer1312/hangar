@@ -194,6 +194,20 @@ fn ordinary_results_do_not_rebuild_historical_activity() {
 }
 
 #[test]
+fn agent_launched_inside_a_script_starts_with_the_script_in_both_folds() {
+    let events = [
+        event(json!({"id":"script","kind":"tool_use","tool_use_id":"toolu_script","tool_name":"REPL","ts":100.0})),
+        event(json!({"id":"agent","kind":"tool_use","tool_use_id":"repl_agent","tool_name":"Agent","tool_input":{"description":"busca"},"ts":160.0})),
+        event(json!({"id":"end","kind":"tool_result","tool_use_id":"repl_agent","result":"feito","ts":160.0})),
+    ];
+    let mut fold = super::ActivityFold::default();
+    for (i, ev) in events.iter().enumerate() { fold.push(i, ev); }
+    let activity = fold.snapshot();
+    assert_eq!((activity.agents[0].started_at, activity.agents[0].finished_at), (Some(100.0), Some(160.0)));
+    assert_eq!(activity, conversation::fold_activity(&events));
+}
+
+#[test]
 fn structured_launch_id_keeps_the_agent_running_without_the_launch_text() {
     let events = [
         event(json!({"id":"agent","kind":"tool_use","tool_use_id":"a","tool_name":"Agent","tool_input":{"prompt":"Ler"}})),

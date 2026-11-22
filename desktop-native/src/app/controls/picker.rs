@@ -41,6 +41,12 @@ pub(crate) fn model_display(provider: &str, model: &str) -> String {
 /// Atalho da linha `n` (1…9) no jeito da plataforma.
 fn jump_label(n: usize) -> String { if cfg!(target_os = "macos") { format!("⌘{n}") } else { format!("Ctrl+{n}") } }
 
+/// A tecla do atalho como o `Kbd` do T3: fundo leve, sem borda, na fonte do texto.
+fn jump_key(n: usize) -> Div {
+    div().flex_shrink_0().h(px(20.)).min_w(px(20.)).px(px(4.)).flex().items_center().justify_center().rounded(px(4.))
+        .bg(theme::text().opacity(0.07)).text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(jump_label(n))
+}
+
 /// O que um desenho do seletor monta uma vez só.
 #[derive(Default)]
 struct PickerView { own: Vec<Choice>, handoff: Vec<Choice>, tab: String, has_favorites: bool }
@@ -48,24 +54,25 @@ struct PickerView { own: Vec<Choice>, handoff: Vec<Choice>, tab: String, has_fav
 /// Linha de modelo: agente, nome, visto da atual, estrela e atalho. A tela e a animação da novidade usam a mesma.
 pub(crate) fn row_view(id: SharedString, provider: &str, name: AnyElement, current: bool, lit: bool, star: Option<AnyElement>, jump: Option<usize>) -> Button {
     let more = provider.is_empty();
-    // Como no T3: o visto colado no nome, estrela e atalho na ponta.
-    popup::row(id, current).py(px(8.))
-        .when(lit && !current, |el| el.bg(theme::text().opacity(0.06)))
+    // Como no T3: a atual só leva o visto, sem fundo; o fundo é da linha em foco. Visto colado no nome, estrela e atalho
+    // na ponta.
+    popup::row(id, false).aria_selected(current).py(px(8.))
+        .when(lit, |el| el.bg(theme::text().opacity(0.09)))
         .child(div().w_full().flex().items_center().gap(px(10.))
             .when(!more, |el| el.child(chrome::provider_glyph(provider, 18.)))
             .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.)).child(div().min_w_0().child(name))
                 .when(current, |el| el.child(chrome::small_icon(IconName::Check, 15., theme::muted()))))
             .children(star)
-            .children(jump.map(|n| chrome::kbd(jump_label(n)))))
+            .children(jump.map(jump_key)))
 }
 
 /// A estrela de favorito, acesa ou não.
-pub(crate) fn star_icon(favorite: bool) -> Icon { chrome::small_icon(IconName::Star, 13., if favorite { theme::accent() } else { theme::faint() }) }
+pub(crate) fn star_icon(favorite: bool) -> Icon { chrome::small_icon(IconName::Star, 13., if favorite { theme::warning() } else { theme::faint() }) }
 
 /// Aba do trilho com a barra de destaque quando está à vista.
 pub(crate) fn rail_tab(button: Button, selected: bool) -> Div {
     div().relative().child(button)
-        .when(selected, |el| el.child(div().absolute().left(px(-5.)).top(px(10.)).w(px(3.)).h(px(18.)).rounded(px(2.)).bg(theme::accent())))
+        .when(selected, |el| el.child(div().absolute().right(px(-5.)).top(px(9.)).w(px(3.)).h(px(20.)).rounded_full().bg(theme::accent())))
 }
 
 pub(crate) fn rail_button(id: &str, selected: bool, label: String, child: AnyElement) -> Button {
@@ -81,8 +88,8 @@ pub(crate) fn rail_view(tabs: Vec<AnyElement>) -> Div {
 pub(crate) fn effort_row(label: &str, on: bool) -> Button {
     popup::row(SharedString::from(format!("picker-effort-{label}")), on).py(px(8.))
         .child(div().w_full().flex().items_center().gap_2()
-            .child(div().flex_1().min_w_0().truncate().text_size(px(15.)).child(effort_label(label)))
-            .when(on, |el| el.child(chrome::small_icon(IconName::Check, 15., theme::accent()))))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(15.)).font_weight(FontWeight::NORMAL).child(effort_label(label)))
+            .when(on, |el| el.child(chrome::small_icon(IconName::Check, 15., theme::muted()))))
 }
 
 pub(crate) fn reasoning_view(header: String, rows: Vec<AnyElement>) -> Div {
@@ -90,7 +97,7 @@ pub(crate) fn reasoning_view(header: String, rows: Vec<AnyElement>) -> Div {
     div().w(px(REASONING)).flex_none().flex().flex_col().gap(px(2.)).pl(px(6.)).border_l_1().border_color(theme::border())
         // Cabeçalho do T3: "Raciocínio" à esquerda, o modelo em foco à direita, com a linha embaixo.
         .child(div().mx(px(4.)).px(px(4.)).pt(px(8.)).pb(px(8.)).mb(px(4.)).flex().items_center().gap_2().border_b_1().border_color(theme::border())
-            .child(div().flex_none().text_size(px(15.)).text_color(theme::muted()).child(tr("new_chat_reasoning")))
+            .child(div().flex_none().text_size(px(15.)).font_weight(FontWeight::NORMAL).text_color(theme::muted()).child(tr("new_chat_reasoning")))
             .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(theme::faint()).text_right().child(header)))
         .when(empty, |el| el.child(div().px(px(8.)).py(px(6.)).text_xs().text_color(theme::muted()).child(tr("picker_no_reasoning"))))
         .children(rows)
@@ -379,7 +386,8 @@ impl Hangar {
         // O clique leva a chave da linha desenhada: a lista pode ter mudado (favorito chegando muda a aba) até ele.
         let picked = c.key.clone();
         let favorite = !c.key.is_empty() && self.favorite_list().contains(&c.key);
-        let star = (!c.key.is_empty()).then(|| {
+        // Como no T3: a estrela só aparece acesa ou na linha em foco.
+        let star = (!c.key.is_empty() && (favorite || lit)).then(|| {
             let key = c.key.clone();
             Button::new(SharedString::from(format!("picker-fav-{}", c.key))).ghost().xsmall()
                 .accessibility_label(tr(if favorite { "picker_unfavorite" } else { "picker_favorite" }))
@@ -390,7 +398,7 @@ impl Hangar {
         // Só o nome na linha, como no T3; a descrição fica na dica do nome e na busca. A dica mora no nome: a linha já
         // ouve o hover para o destaque, e o GPUI não aceita dois no mesmo elemento.
         let detail = c.detail.clone();
-        let name = div().id(SharedString::from(format!("picker-name-{}", c.key))).min_w_0().truncate().text_size(px(15.5)).font_weight(FontWeight::MEDIUM)
+        let name = div().id(SharedString::from(format!("picker-name-{}", c.key))).min_w_0().truncate().text_size(px(15.)).font_weight(FontWeight::NORMAL)
             .text_color(if more { theme::muted() } else { theme::text() }).child(c.label)
             .when(!detail.is_empty(), |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(detail.clone()).build(window, cx)));
         let provider = if more { String::new() } else { c.provider.clone() };
@@ -629,8 +637,8 @@ impl Hangar {
                 .children(rows.into_iter().enumerate().map(|(n, c)| self.picker_row(n, c, n == pick, busy, cx)))
                 .into_any_element(),
         };
-        // Busca do T3: sem caixa, sublinhada na cor de destaque.
-        let search = div().mx(px(4.)).mb(px(6.)).border_b_2().border_color(theme::accent())
+        // Busca do T3: sem caixa, com um traço fino na cor de destaque.
+        let search = div().mx(px(4.)).mb(px(6.)).border_b_1().border_color(theme::accent())
             .capture_action(cx.listener(|this, _: &MoveUp, _, cx| this.move_ctl(-1, false, cx)))
             .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.move_ctl(1, false, cx)))
             .child(Input::new(&self.ctl_search).appearance(false).h(px(40.)).text_size(px(16.)).aria_label(tr("picker_search"))

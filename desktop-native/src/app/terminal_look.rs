@@ -208,8 +208,7 @@ pub(super) fn fold_sub_with(text: String, color: Hsla, action: Option<AnyElement
 pub(super) fn assistant_text_row(content: Div, line: f32) -> Div {
     div().w_full().flex().items_start().gap(px(8.))
         .child(bullet(theme::text(), line).debug_selector(|| "term-text-dot".into()))
-        // Conversa nova: a prosa para em ~95 caracteres; diffs e saídas continuam na largura da coluna.
-        .child(content.flex_1().min_w_0().when(crate::appearance::conversation_beta(), |el| el.max_w(px(760.))))
+        .child(content.flex_1().min_w_0())
 }
 
 /// Edit, MultiEdit e o patch do Codex aparecem como "Update", e MCP como "servidor - ferramenta (MCP)": os nomes que
@@ -645,14 +644,8 @@ impl Hangar {
             let mut block = vec![fold_header(SharedString::from(key.clone()), title, open, live.is_some(), failures.len(),
                 cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)))];
             if !open {
-                // Recolhida, a linha mostra o que roda agora e a saída de cada falha, como o Claude Code.
-                if let Some(tool) = live {
-                    let call = &self.chat.events[tool.call];
-                    let summary = conversation::summarize_input(call.tool_name.as_deref(), call.tool_input.as_ref());
-                    // Comando em voo com o `$` na frente, como o Claude Code desenha.
-                    let shell = call.tool_name.as_deref().is_some_and(|name| is_any(name, SHELL_TOOLS));
-                    block.push(fold_sub(if shell { format!("$ {summary}") } else { summary }, theme::muted()));
-                }
+                // Recolhida, a dobra mostra a saída de cada falha. O comando em voo não ganha linha própria: ela surgia e
+                // sumia a cada comando e fazia a conversa pular; o título já diz o que está rodando.
                 // Conversa nova: cada falha leva o "ver saída", que abre a dobra com a saída dela.
                 let beta = crate::appearance::conversation_beta();
                 for (n, tool) in failures.iter().enumerate() {

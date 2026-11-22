@@ -609,6 +609,9 @@ fn map_operation(
             "search"
         }
         "files/resolver" => "resolver",
+        "files/rename" => "rename_path",
+        "files/trash" => "trash_path",
+        "files/create" => "create_path",
         "file" | "file/text" | "file/page" => {
             if tail == "file" {
                 bool_param(q.get("download"), false)?;

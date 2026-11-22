@@ -224,6 +224,8 @@ struct ActivityFold {
     shells: Vec<ShellRun>,
     created: Vec<(ActivityTask, bool)>,
     whole: Option<Vec<(ActivityTask, bool)>>,
+    // Hora do último script REPL: agente `repl_` lançado de dentro dele começa ali, como em `fold_activity`.
+    script_start: Option<f64>,
 }
 
 impl ActivityFold {
@@ -363,11 +365,14 @@ impl ActivityFold {
                 }
                 let Some(id) = tool_key(event) else { return false };
                 match event.tool_name.as_deref() {
+                    Some("REPL") => { self.script_start = event.ts; false }
                     name if is_agent_call(name) => {
                         self.agent_calls.insert(id.to_owned());
                         if is_codex_agent_spawn(name) { self.codex_calls.insert(id.to_owned()); }
                         if let Some(raw) = text("description") { self.agent_descs.insert(id.to_owned(), raw); }
-                        self.agents.push(agent_run(event, i, id));
+                        let mut run = agent_run(event, i, id);
+                        if id.starts_with("repl_") && self.script_start.is_some() { run.started_at = self.script_start; }
+                        self.agents.push(run);
                         true
                     }
                     Some("Bash") if input.and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) => {
