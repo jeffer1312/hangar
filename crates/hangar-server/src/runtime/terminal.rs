@@ -1152,6 +1152,8 @@ impl Executor {
                 }
             }
         }
+        let by_plugin=!keyboard_ask && expected.as_ref().is_some_and(|expected|expected.target.request_key.starts_with("plugin:") && expected.semantic["source"]!="terminal");
+        if matches!(kind,"answer_questions"|"answer_chat") && !by_plugin {one_line_answers(&mut payload["answers"]);}
         // A trava segura só o texto, que cairia na conversa nova; Parar, teclas e respostas seguem com ela.
         if kind=="input" && self.cleared(&state) && !self.expire_clear().await {return Err(error("runtime_clear_barrier"));}
         let text=payload["text"].as_str().unwrap_or("");
@@ -2015,6 +2017,13 @@ impl Executor {
     }
 }
 fn is_clear(text:&str)->bool {text.split_whitespace().next()==Some("/clear")}
+/// Digitada no pane, a quebra de linha da resposta livre seria um Enter no meio dela: as linhas viram uma.
+fn one_line_answers(answers:&mut Value) {
+    for answer in answers.as_array_mut().into_iter().flatten() {
+        let flat=answer["value"].as_str().filter(|_|answer["kind"]=="text").map(crate::session_write::answer::one_line);
+        if let Some(flat)=flat {answer["value"]=json!(flat);}
+    }
+}
 fn validate(kind:&str,payload:&Value)->Result<(),RuntimeError> {
     let fields:&[&str]=match kind {
         "input"=>&["text","pre_transcript","conversation"],"steer"=>&[],"key"|"navigation_key"|"interactive_key"=>&["key"],"terminal_input"=>&["text"],
@@ -2029,7 +2038,8 @@ fn validate(kind:&str,payload:&Value)->Result<(),RuntimeError> {
         "select"=>payload["option"].as_u64().is_some_and(|v|v>0 && v<=100) && payload.get("require_cursor").is_none_or(Value::is_boolean) && payload.get("text").is_none_or(|t|t.as_str().is_some_and(|t|valid_text(t) && !t.contains('\n'))) && payload.get("request_id").is_none_or(Value::is_string),
         "answer_questions"|"answer_chat"=>serde_json::from_value::<Vec<QuestionAnswer>>(payload["answers"].clone()).is_ok_and(|answers|!answers.is_empty() && answers.iter().all(|a|match a.kind {
             AnswerKind::Option=>!a.indices.is_empty() && a.indices.iter().all(|i|*i<100) && (a.multi||a.indices.len()==1) && !a.labels.is_empty(),
-            AnswerKind::Text=>a.type_index.is_some_and(|i|i<100) && a.value.as_ref().is_some_and(|v|valid_text(v)&&!v.contains('\n')),
+            // Parágrafos valem para o plugin; o caminho das teclas os junta numa linha antes de digitar.
+            AnswerKind::Text=>a.type_index.is_some_and(|i|i<100) && a.value.as_ref().is_some_and(|v|valid_text(v)),
             AnswerKind::Chat=>a.chat_index.is_some_and(|i|i<100),
         })) && payload.get("request_id").is_none_or(Value::is_string),
         "interrupt"=>payload.get("clear").is_none_or(Value::is_boolean),"steer_queue"=>payload.get("entry_id").is_none_or(Value::is_string),_=>true,
@@ -2058,6 +2068,18 @@ mod tests {
         assert_eq!(super::plugin_edge(Some(false), Some(&seen(500)), long), (Some(false), None), "uma linha por queda");
         assert_eq!(super::plugin_edge(Some(false), Some(&open), long), (Some(true), Some(true)), "voltou");
         assert_eq!(super::plugin_edge(Some(true), None, long), (Some(true), None), "vínculo ilegível não decide nada");
+    }
+    /// Resposta livre em parágrafos passa pela validação; para as teclas ela vira uma linha, outro controle segue recusado.
+    #[test]
+    fn answer_paragraphs_pass_validation_and_become_one_line_for_the_keys() {
+        use serde_json::json;
+        let payload=|value:&str| json!({"answers":[{"kind":"text","value":value,"type_index":0}],"interaction_id":"i"});
+        assert!(super::validate("answer_questions",&payload("primeiro\nsegundo")).is_ok());
+        assert!(super::validate("answer_chat",&payload("primeiro\nsegundo")).is_ok());
+        assert!(super::validate("answer_questions",&payload("a\u{7}b")).is_err());
+        let mut typed=payload("primeiro\n\n  segundo");
+        super::one_line_answers(&mut typed["answers"]);
+        assert_eq!(typed["answers"][0]["value"],"primeiro segundo");
     }
     /// argv ilegível (processo que sumiu, `/proc` negado) é erro com código, não "sem bypass".
     #[test]
