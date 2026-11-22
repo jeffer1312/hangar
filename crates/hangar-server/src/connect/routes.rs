@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use super::ConnectError;
 use super::account_devices;
 use super::config::valid_label;
-use super::devices::{Poll, Refusal, Store};
+use super::devices::{Poll, Refusal, Status, Store};
 use super::gate::DeviceCaller;
 use super::peers::{self, PeerLinker};
 use super::preview::LINK_PARAM;
@@ -112,8 +112,14 @@ struct RedeemBody { ticket: String, signature: String, secret: String, #[serde(d
 async fn redeem(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     let body: RedeemBody = match parse(req).await { Ok(body) => body, Err(response) => return response };
-    match blocking(&st, move |store| store.redeem_from(&body.ticket, &body.signature, &body.secret, body.install_id.as_deref())).await {
-        Ok(device_id) => reply(&headers, StatusCode::ACCEPTED, json!({"device_id": device_id, "status": "pending"})),
+    let redeemed = blocking(&st, move |store| {
+        let id = store.redeem_from(&body.ticket, &body.signature, &body.secret, body.install_id.as_deref())?;
+        // Bilhete que a conta liberou já nasce aprovado: quem resgata não espera cartão.
+        let approved = store.list().iter().any(|row| row.device_id == id && row.status == Status::Approved);
+        Ok((id, approved))
+    }).await;
+    match redeemed {
+        Ok((device_id, approved)) => reply(&headers, StatusCode::ACCEPTED, json!({"device_id": device_id, "status": if approved { "approved" } else { "pending" }})),
         Err(refusal) => refused(&headers, refusal),
     }
 }
