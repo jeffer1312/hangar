@@ -1,7 +1,7 @@
 import { memo, useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { splitTerminalRun, summarizeToolInput, summarizeToolResult, terminalFoldTitle, toolPhase, type ChatEvent } from '@hangar/core';
+import { splitTerminalRun, summarizeToolResult, terminalFoldTitle, toolPhase, type ChatEvent } from '@hangar/core';
 import { TerminalTool } from './TerminalTool';
 import { ThinkingBlock } from '../ThinkingBlock';
 import * as m from '../../paraglide/messages';
@@ -25,16 +25,14 @@ const TerminalFold = memo(function TerminalFold({ parts, resultOf, onExpand, onO
   const live = parts.findLast((tool) => toolPhase(resultOf(tool)) === 'pending');
   const errors = parts.filter((tool) => toolPhase(resultOf(tool)) === 'error');
   const title = terminalFoldTitle(parts, !!live);
-  const summary = live ? summarizeToolInput(live.tool_name, live.tool_input) : '';
-  const shell = live && ['bash', 'exec', 'exec_command', 'shell', 'shell_command'].includes(live.tool_name?.toLowerCase() ?? '');
   return <View style={styles.group}>
     <Pressable style={styles.header} accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ expanded: open }}
       onPress={() => { if (!open) onExpand?.(); setOpen((value) => !value); }}>
       <View style={[styles.dot, live && { backgroundColor: theme.tokens.accent.base }]} />
       <Text style={[styles.muted, { flex: 1 }]}>{title}</Text>
     </Pressable>
+    {/* Fechada, só as falhas: a linha do comando em voo surgia e sumia a cada comando e fazia a conversa pular. */}
     {!open ? <>
-      {live ? <Outcome text={shell ? `$ ${summary}` : summary} /> : null}
       {errors.map((tool) => <Outcome key={tool.id} text={summarizeToolResult(resultOf(tool), tool.tool_name)} failed />)}
     </> : <>
       {parts.slice(0, shown).map((tool) => <TerminalTool key={tool.id} use={tool} result={resultOf(tool)} onExpand={onExpand} onOpen={onOpen} />)}

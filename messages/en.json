@@ -5942,6 +5942,7 @@
   "native_tree_watch_failed": "Could not follow the disk. Use Reload to see changes.",
   "native_tree_other_folder": "View another folder",
   "native_tree_session_folder": "Session folder",
+  "native_side_diff_truncated": "Diff cut; the file changed more than fits here.",
   "native_git_open": "Open the session's git",
   "native_news_notice_sample_detail": "PostToolUse:Bash: ~/.claude/hooks/format.sh: file not found",
   "native_news_notice_sample_api_error": "Could not refresh the login. Try again in a minute.",

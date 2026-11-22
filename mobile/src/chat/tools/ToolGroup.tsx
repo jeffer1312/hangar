@@ -3,6 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { ChatEvent } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
+import { WorkingMark } from '../../ui/WorkingMark';
 import { ToolCard } from './ToolCard';
 import { TerminalToolGroup } from './TerminalToolGroup';
 import { DesktopToolGroup } from './DesktopToolGroup';
@@ -18,8 +19,9 @@ const TETO = 40;
 const CHIPS_ABERTO_ATE = 5;
 
 // Trecho de trabalho dobrado como no nativo: "› 3 raciocínios · rodou 2 comandos · 1 falhou".
-// Aberto, as linhas ficam num fio vertical à esquerda (nos Chips, numa tabela com borda). A chamada
-// VIVA aparece sob o cabeçalho mesmo fechado, senão o resumo escondia o que está acontecendo agora.
+// Aberto, as linhas ficam num fio vertical à esquerda (nos Chips, numa tabela com borda). Fechado,
+// a marca de trabalho no cabeçalho diz que algo roda, como no nativo: uma linha por chamada em voo
+// surgia e sumia a cada comando (no Code Mode, a cada chamada do script) e fazia a conversa pular.
 // Trecho de uma linha só não ganha cabeçalho: dobrar uma linha numa linha não resume nada.
 export const ToolGroup = memo(function ToolGroup({
   parts,
@@ -92,10 +94,8 @@ export const ToolGroup = memo(function ToolGroup({
           {chamadas ? <Text style={{ color: theme.tokens.text.muted }}>{chamadas}</Text> : null}
           {falhas ? <Text style={{ color: theme.tokens.status.warning }}>{` · ${falhas}`}</Text> : null}
         </Text>
+        {folded.live.size ? <WorkingMark size={12} color={theme.tokens.accent.base} /> : null}
       </Pressable>
-      {!aberto && folded.live.size ? (
-        <View style={styles.vivas}>{[...folded.live].map(linha)}</View>
-      ) : null}
       {aberto ? (
         <View style={chips ? undefined : [styles.fio, { borderLeftColor: theme.tokens.border.default }]}>
           {chips ? tabela(visiveis) : visiveis.map(linha)}
@@ -121,7 +121,6 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.base.radius.sm,
   },
   titulo: { flex: 1, minWidth: 0, ...theme.type.meta },
-  vivas: { paddingLeft: theme.base.space[1] },
   // Fio à esquerda em vez de caixa: o trabalho é aparte da conversa, não um cartão — superfície
   // própria aqui viraria retângulo chapado por cima do papel de parede.
   fio: { marginLeft: theme.base.space[2], paddingLeft: theme.base.space[2], borderLeftWidth: 1 },
