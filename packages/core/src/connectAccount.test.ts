@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
-import { addMachine, approveAccountDevice, changeAccountPassword, deviceStatus, endAccountSessions, listAccountDevices, listMachines, registerDevice,
-  revokeAccountDevice, signIn, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
+import { addMachine, approveAccountDevice, changeAccountPassword, deviceStatus, endAccountSessions, listAccountDevices, listMachines, lookupName,
+  registerDevice, revokeAccountDevice, signIn, signInAnywhere, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
 import { _resetRotasForTests } from './rota';
 import type { Server } from './servers';
+import type { SealedBlob, SyncCrypto } from './syncLogin';
 
 const SERVICE = 'https://connect.hangar.dev.br';
 const MACHINE_URL = 'https://pc1.acme.hangar.dev.br';
@@ -337,5 +338,177 @@ describe('upgradeToDevice', () => {
     const server = { ...owner, ...flags };
     expect(await upgradeToDevice(server)).toBe(server);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('lookupName', () => {
+  it.each([
+    [{ kind: 'account' }, { kind: 'account' }],
+    [{ kind: 'none' }, { kind: 'none' }],
+    [{ kind: 'guest', hosts: ['casa.ana.hangar.dev.br'] }, { kind: 'guest', hosts: ['casa.ana.hangar.dev.br'] }],
+  ])('responde %j', async (answer, expected) => {
+    network(() => json(answer));
+    expect(await lookupName('ana', SERVICE)).toEqual(expected);
+  });
+
+  it('manda só o nome, aparado e em minúsculas ASCII', async () => {
+    const calls = network(() => json({ kind: 'none' }));
+    await lookupName('  Lhais@Casa ', SERVICE);
+    expect(calls.map((call) => `${call.method} ${call.url.href}`)).toEqual([`POST ${SERVICE}/v1/lookup`]);
+    expect(calls[0].body).toEqual({ name: 'lhais@casa' });
+  });
+
+  it('serviço sem a rota (404) é login de conta', async () => {
+    network(() => json({}, 404));
+    expect(await lookupName('ana', SERVICE)).toEqual({ kind: 'account' });
+  });
+
+  it('429 tem código próprio', async () => {
+    network(() => json({}, 429));
+    await expect(lookupName('ana', SERVICE)).rejects.toMatchObject({ code: 'connect_too_many_attempts' });
+  });
+
+  it.each([
+    { kind: 'guest', hosts: [] },
+    { kind: 'guest', hosts: ['https://casa.ana.hangar.dev.br'] },
+    { kind: 'guest', hosts: ['casa.ana.hangar.dev.br/caminho'] },
+    { kind: 'guest' },
+    { kind: 'outro' },
+  ])('recusa resposta fora do contrato: %j', async (answer) => {
+    network(() => json(answer));
+    await expect(lookupName('ana', SERVICE)).rejects.toMatchObject({ code: 'connect_response_invalid' });
+  });
+
+  it('pedido sem resposta é rede', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
+    await expect(lookupName('ana', SERVICE)).rejects.toMatchObject({ code: 'network_failed' });
+  });
+});
+
+describe('signInAnywhere', () => {
+  const PASSWORD = 'senha-da-lhais';
+  const SALT = 'c2Fs';
+  const ITERATIONS = 600_000;
+  // Cifra falsa na fronteira: o par real (PBKDF2 + HKDF + AES-GCM) é de quem chama e tem teste próprio.
+  const syncCrypto: SyncCrypto = {
+    deriveKeys: async (password, salt, iterations) => ({ authHash: `${password}|${salt}|${iterations}`, encKey: new TextEncoder().encode(password) }),
+    decryptJson: <T,>(key: Uint8Array, blob: SealedBlob): T => {
+      if (new TextDecoder().decode(key) !== blob.iv) throw new Error('auth tag');
+      return JSON.parse(blob.data) as T;
+    },
+  };
+  const seal = (password: string, list: unknown): SealedBlob => ({ iv: password, data: JSON.stringify(list) });
+  const VAULT = [
+    { id: 'a', label: 'Casa', baseUrl: '', token: 'ta' },
+    { id: 'b', label: 'PC', baseUrl: 'https://pc.ana.hangar.dev.br', token: 'tb' },
+    { id: 'c', label: 'Desligada', baseUrl: 'endereço torto', token: 'tc', disabled: true },
+  ];
+  const deps = { crypto: syncCrypto, serviceUrl: SERVICE };
+
+  type Machine = { password?: string; down?: boolean; limited?: boolean; blob?: SealedBlob | null };
+  type GuestCall = Call & { init?: RequestInit };
+  function machines(hosts: Record<string, Machine>, lookup: unknown = { kind: 'guest', hosts: Object.keys(hosts) }) {
+    const calls: GuestCall[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+      const url = new URL(input);
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      calls.push({ url, method: init?.method ?? 'GET', body, auth: new Headers(init?.headers).get('Authorization'), headers: new Headers(init?.headers), init });
+      if (url.origin === SERVICE) return url.pathname === '/v1/lookup' ? json(lookup) : json({}, 401);
+      const host = hosts[url.hostname];
+      if (!host || host.down) throw new TypeError('Network request failed');
+      if (url.pathname === '/api/sync/prelogin') return json({ salt: SALT, iterations: ITERATIONS });
+      if (url.pathname === '/api/sync/login') {
+        if (host.limited) return json({}, 429);
+        return body?.auth_hash === `${host.password}|${SALT}|${ITERATIONS}` ? json({ ok: true }) : json({}, 401);
+      }
+      if (url.pathname === '/api/sync/logout') return json({ ok: true });
+      return json({ enc_blob: host.blob === undefined ? seal(host.password!, VAULT) : host.blob, rev: 1 });
+    }));
+    return calls;
+  }
+  const route = (call: GuestCall) => `${call.method} ${call.url.hostname}${call.url.pathname}`;
+
+  it('conta entra pelo login da conta', async () => {
+    const calls = network((url) => (url.pathname === '/v1/lookup' ? json({ kind: 'account' }) : json({ token: 'account-token' }, 201)));
+    expect(await signInAnywhere('ACME', 'senha', deps)).toEqual({ kind: 'account', account: session });
+    expect(calls.map((call) => call.url.pathname)).toEqual(['/v1/lookup', '/v1/sessions']);
+    expect(calls[1].body).toEqual({ name: 'acme', password: 'senha' });
+  });
+
+  it('senha da conta recusada vira "não confere"', async () => {
+    network((url) => (url.pathname === '/v1/lookup' ? json({ kind: 'account' }) : json({}, 401)));
+    await expect(signInAnywhere('acme', 'errada', deps)).rejects.toMatchObject({ code: 'credentials_mismatch' });
+  });
+
+  it('serviço antigo, sem lookup, segue para o login da conta', async () => {
+    const calls = network((url) => (url.pathname === '/v1/lookup' ? json({}, 404) : json({ token: 'account-token' })));
+    expect(await signInAnywhere('acme', 'senha', deps)).toMatchObject({ kind: 'account' });
+    expect(calls.map((call) => call.url.pathname)).toEqual(['/v1/lookup', '/v1/sessions']);
+  });
+
+  it('nome desconhecido não confere, e a senha não sai do aparelho', async () => {
+    const calls = machines({}, { kind: 'none' });
+    await expect(signInAnywhere('ninguem@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'credentials_mismatch' });
+    expect(calls.map(route)).toEqual(['POST connect.hangar.dev.br/v1/lookup']);
+    expect(JSON.stringify(calls.map((call) => call.body))).not.toContain(PASSWORD);
+  });
+
+  it('convidada entra pela máquina que guarda o cofre e traz as máquinas ligadas', async () => {
+    const calls = machines({ 'casa.ana.hangar.dev.br': { password: PASSWORD } });
+    const result = await signInAnywhere('Lhais@Casa', PASSWORD, deps);
+    expect(result).toMatchObject({ kind: 'guest', host: 'casa.ana.hangar.dev.br' });
+    const servers = result.kind === 'guest' ? result.servers : [];
+    // Endereço vazio no cofre foi gravado de dentro da própria máquina.
+    expect(servers.map((s) => [s.id, s.baseUrl, s.token])).toEqual([
+      ['a', 'https://casa.ana.hangar.dev.br', 'ta'], ['b', 'https://pc.ana.hangar.dev.br', 'tb']]);
+    expect(calls.map(route)).toEqual([
+      'POST connect.hangar.dev.br/v1/lookup', 'GET casa.ana.hangar.dev.br/api/sync/prelogin', 'POST casa.ana.hangar.dev.br/api/sync/login',
+      'GET casa.ana.hangar.dev.br/api/sync/vault', 'POST casa.ana.hangar.dev.br/api/sync/logout']);
+    expect(calls[1].url.searchParams.get('user')).toBe('lhais@casa');
+    expect(calls[2].body).toEqual({ user: 'lhais@casa', auth_hash: `${PASSWORD}|${SALT}|${ITERATIONS}` });
+    expect(calls.slice(1).every((call) => call.init?.credentials === 'include' && call.init.redirect === 'error')).toBe(true);
+    // Ao serviço só vai o nome.
+    expect(calls.filter((call) => call.url.origin === SERVICE).map((call) => call.body)).toEqual([{ name: 'lhais@casa' }]);
+  });
+
+  it('tenta uma máquina por vez e para na primeira que aceita', async () => {
+    const calls = machines({
+      'casa.ana.hangar.dev.br': { down: true },
+      'pc.ana.hangar.dev.br': { password: PASSWORD },
+      'velho.ana.hangar.dev.br': { password: PASSWORD },
+    });
+    expect(await signInAnywhere('lhais@casa', PASSWORD, deps)).toMatchObject({ kind: 'guest', host: 'pc.ana.hangar.dev.br' });
+    expect(calls.some((call) => call.url.hostname === 'velho.ana.hangar.dev.br')).toBe(false);
+  });
+
+  it('senha recusada numa máquina passa para a seguinte', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { password: 'outra' }, 'pc.ana.hangar.dev.br': { password: PASSWORD } });
+    expect(await signInAnywhere('lhais@casa', PASSWORD, deps)).toMatchObject({ kind: 'guest', host: 'pc.ana.hangar.dev.br' });
+  });
+
+  it('todas recusando a senha não confere', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { password: 'outra' }, 'pc.ana.hangar.dev.br': { password: 'outra' } });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'credentials_mismatch' });
+  });
+
+  it('máquina fora do ar é rede, não senha errada', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { password: 'outra' }, 'pc.ana.hangar.dev.br': { down: true } });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'network_failed' });
+  });
+
+  it('limite de tentativas tem código próprio', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { limited: true } });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'sync_too_many_attempts' });
+  });
+
+  it('cofre ilegível não vira lista vazia, e a sessão do cofre é encerrada', async () => {
+    const calls = machines({ 'casa.ana.hangar.dev.br': { password: PASSWORD, blob: seal('outra', VAULT) } });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'sync_vault_unreadable' });
+    expect(calls.map(route)).toContain('POST casa.ana.hangar.dev.br/api/sync/logout');
+  });
+
+  it('cofre vazio entra sem máquinas', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { password: PASSWORD, blob: null } });
+    expect(await signInAnywhere('lhais@casa', PASSWORD, deps)).toEqual({ kind: 'guest', host: 'casa.ana.hangar.dev.br', servers: [] });
   });
 });

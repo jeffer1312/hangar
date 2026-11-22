@@ -9,6 +9,8 @@ export * from './rota';
 export * from './share';
 export * from './accountLogin';
 export * from './connectAccount';
+export * from './syncLogin';
+export * from './guests';
 export { installCode } from './installCode';
 export { configureApi, deviceIdentityReady } from './apiEnv';
 export { configureDiag, registrar as registrarDiag, novoReq as novoReqDiag } from './diag';

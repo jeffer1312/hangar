@@ -9,6 +9,9 @@ import { sha256Hex } from './hmac';
 import { isLocalMachineUrl, isOwnMachine, normalizeMachineUrl, readMachineIdentity } from './machineImport';
 import { baseOf, readConnectUrl } from './rota';
 import type { Server } from './servers';
+import { syncSignIn, type SyncCrypto } from './syncLogin';
+
+export const CONNECT_SERVICE_URL = 'https://connect.hangar.dev.br';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const APPROVAL_POLL_MS = 3000;
@@ -106,6 +109,77 @@ export function signUp(serviceUrl: string, name: string, password: string): Prom
 
 export function signIn(serviceUrl: string, name: string, password: string): Promise<AccountSession> {
   return accountSession(serviceUrl, '/v1/sessions', name, password);
+}
+
+export type NameLookup = { kind: 'account' } | { kind: 'guest'; hosts: string[] } | { kind: 'none' };
+export type SignInResult = { kind: 'account'; account: AccountSession } | { kind: 'guest'; host: string; servers: Server[] };
+export interface SignInDeps { crypto: SyncCrypto; serviceUrl?: string }
+
+const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+// O serviço compara em minúsculas ASCII, e conta e convidado nascem assim.
+const normalizeName = (name: string) => name.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
+
+// Pedido que nem chegou a ter resposta é rede, e a tela não pode tratá-lo como senha errada.
+async function overNetwork<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (typeof (error as { code?: unknown }).code === 'string') throw error;
+    throw fail('network_failed');
+  }
+}
+
+/** Pergunta ao serviço só o nome: diz se é conta, convidado (com as máquinas que guardam o cofre dele) ou nada. */
+export async function lookupName(name: string, serviceUrl = CONNECT_SERVICE_URL): Promise<NameLookup> {
+  let answer: Record<string, unknown>;
+  try {
+    answer = record(await overNetwork(() => post(serviceUrl, '/v1/lookup', { name: normalizeName(name) })));
+  } catch (error) {
+    // Serviço anterior ao diretório de convidados: só conhece conta.
+    if ((error as { status?: number }).status === 404) return { kind: 'account' };
+    if ((error as { status?: number }).status === 429) throw fail('connect_too_many_attempts', 429);
+    throw error;
+  }
+  const { kind, hosts } = answer;
+  if (kind === 'account' || kind === 'none') return { kind };
+  if (kind !== 'guest' || !Array.isArray(hosts) || !hosts.length
+    || !hosts.every((host) => typeof host === 'string' && HOSTNAME.test(host))) throw fail('connect_response_invalid');
+  return { kind: 'guest', hosts };
+}
+
+/**
+ * Entrada pelo campo único "conta ou usuário". A senha da convidada nunca vai ao serviço: ele só recebe o nome, e o
+ * login dela roda numa máquina de cada vez, parando na primeira que aceita.
+ * Erros com `code`: `credentials_mismatch` (nome desconhecido ou senha recusada em todas), `network_failed`,
+ * `connect_too_many_attempts`/`sync_too_many_attempts` e os demais de `signIn`/`syncSignIn`.
+ */
+export async function signInAnywhere(name: string, password: string, deps: SignInDeps): Promise<SignInResult> {
+  const serviceUrl = deps.serviceUrl ?? CONNECT_SERVICE_URL;
+  const user = normalizeName(name);
+  const found = await lookupName(user, serviceUrl);
+  if (found.kind === 'none') throw fail('credentials_mismatch');
+  if (found.kind === 'account') {
+    try {
+      return { kind: 'account', account: await overNetwork(() => signIn(serviceUrl, user, password)) };
+    } catch (error) {
+      if ((error as { status?: number }).status === 401) throw fail('credentials_mismatch', 401);
+      throw error;
+    }
+  }
+  const failures: Error[] = [];
+  for (const host of found.hosts) {
+    try {
+      return { kind: 'guest', host, servers: await syncSignIn(`https://${host}`, user, password, deps.crypto) };
+    } catch (error) {
+      failures.push(error as Error);
+    }
+  }
+  const codes = failures.map((error) => (error as { code?: unknown }).code);
+  // Máquina fora do ar pode ser justamente a que aceitaria a senha: só "não confere" quando todas recusaram.
+  const other = failures.find((_, i) => codes[i] !== 'credentials_mismatch' && codes[i] !== 'sync_too_many_attempts');
+  if (other) throw other;
+  if (codes.includes('sync_too_many_attempts')) throw fail('sync_too_many_attempts', 429);
+  throw fail('credentials_mismatch', 401);
 }
 
 export async function listMachines(session: AccountSession): Promise<ConnectMachine[]> {
