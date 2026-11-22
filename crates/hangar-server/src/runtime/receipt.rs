@@ -290,8 +290,8 @@ impl ReceiptIndex {
     }
 
     /// A CLI guardou a entrada na fila dela depois do despacho: o turno em curso a puxa sozinho na próxima pausa
-    /// entre ferramentas (`absorbed_mid_turn`), sem tecla. O Claude Code 2.1.330 não desenha mais a dica
-    /// "ctrl+x ctrl+s to send now", e este registro é a prova de que ele está com ela.
+    /// entre ferramentas (`absorbed_mid_turn`), sem tecla. O Claude Code que não desenha a dica
+    /// "ctrl+x ctrl+s to send now" deixa este registro como a prova de que ele está com ela.
     pub fn enqueued_after(&self, path: &Path, cursor: &DispatchCursor, row: &Value) -> io::Result<bool> {
         if self.cursor_anchor(path, cursor)?.is_none() { return Ok(false); }
         Ok(self.enqueued.iter().any(|o| o.offset >= cursor.offset && cursor_accepts(cursor,o) && self.matching_text(row, &o.text).is_some()))

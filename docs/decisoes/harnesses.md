@@ -738,13 +738,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   some na troca de conversa do `/clear`. "Orientar" de uma entrada (`steer_entry`) digita só ela e
   aperta `ctrl+x ctrl+s`, que leva junto o que já estava na fila interna do Claude Code e interrompe
   o turno; parado, ela vai para a frente e sai na entrega comum. Se o transcript já confirmou a
-  entrada, o ator pode responder sem o atalho. Sem a marca do atalho na tela, o registro
-  `queue-operation enqueue` da entrada depois do despacho prova que a CLI a guardou: o turno a puxa
-  na próxima pausa entre ferramentas (`absorbed_mid_turn`), e o Orientar responde `steered: true`
-  sem tecla nem aviso. O Claude Code 2.1.330 não desenha mais "ctrl+x ctrl+s to send now": num
-  tmux isolado (22/11/2026), a mensagem digitada com um `sleep 40` rodando gravou o `enqueue` e foi
-  absorvida em 0,8 s, sem dica; antes disso, cada Orientar esperava 5 s e avisava "a dica não
-  apareceu" (20 avisos num dia na máquina de teste). No retorno de `/input`, `delivered` informa que a
+  entrada, o ator pode responder sem o atalho. A dica tem a vez: só quando ela não está na tela o
+  registro `queue-operation enqueue` da entrada depois do despacho prova que a CLI a guardou; o turno
+  a puxa na próxima pausa entre ferramentas (`absorbed_mid_turn`), e o Orientar marca a entrada
+  `steered` e responde `steered: true` sem tecla nem aviso. Outra entrada entregue sem confirmação
+  com o mesmo texto tira a prova. Ver [Orientar pela fila da CLI](#orientar-pela-fila-da-cli-22112026).
+  No retorno de `/input`, `delivered` informa que a
   CLI aceitou o texto e `steered` informa se o atalho foi aplicado. As ações do painel (apagar,
   editar, reordenar, Orientar) valem só para a entrada que ainda espera e passam pelo ator da
   sessão; a que a drenagem já reivindicou responde 409 `queue_entry_gone`. Com uma entrega incerta
@@ -1195,6 +1194,16 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   não viu o despacho procura no arquivo, para trás. Chamada feita dentro do script grava `content`
   vazio: o resultado sai do `toolUseResult`. Os aparelhos não sabem de Code Mode, só chamam o `REPL`
   de "Script". Ver [Code Mode](#code-mode-do-claude-code-script-entrega-e-página-20112026).
+
+## Orientar pela fila da CLI (22/11/2026)
+
+O Claude Code 2.1.330 não desenha mais "ctrl+x ctrl+s to send now". Num tmux isolado, a mensagem
+digitada com um `sleep 40` rodando gravou o `queue-operation enqueue` e foi absorvida em 0,8 s, sem
+dica; antes disso, cada Orientar esperava 5 s e avisava "a dica não apareceu" (20 avisos num dia na
+máquina de teste). A CLI que ainda desenha a dica também grava o `enqueue`, por isso a dica é
+procurada antes da prova pela fila: o atalho corta o turno na hora, a fila só na próxima pausa. O
+`enqueue` não é consumido como a linha que confirma a entrega, e duas entradas iguais entregues
+sem confirmação seriam provadas pelo mesmo registro.
 
 ## Code Mode do Claude Code: script, entrega e página (20/11/2026)
 

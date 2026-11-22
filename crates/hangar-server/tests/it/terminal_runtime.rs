@@ -845,6 +845,24 @@ async fn terminal_runtime_steer_entry_waits_for_the_late_send_now_hint() {
     h.stop().await.unwrap();
 }
 #[tokio::test]
+async fn terminal_runtime_steer_entry_presses_the_hint_even_when_the_cli_queue_already_has_it() {
+    // A CLI que ainda desenha a dica também grava o `enqueue`: o atalho corta o turno, a fila só espera a pausa.
+    let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
+    h.command(f.command("one","Um")).await.unwrap(); h.command(f.command("two","Dois")).await.unwrap();
+    let (io,transcript)=(f.io.clone(),f.target.transcript.clone());
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        use std::io::Write;
+        let mut file=std::fs::OpenOptions::new().append(true).open(&transcript).unwrap();
+        writeln!(file,"{}",json!({"type":"queue-operation","operation":"enqueue","sessionId":"sid","timestamp":chrono::Utc::now().to_rfc3339(),"content":"Dois"})).unwrap();
+        io.send_now_hint.store(true,std::sync::atomic::Ordering::Release);
+    });
+    let reply=h.control("steer-both".into(),"steer_entry".into(),json!({"entry_id":"two"})).await.unwrap();
+    assert_eq!(reply.payload["steered"],json!(true),"{}",reply.payload);
+    assert!(f.io.calls.lock().unwrap().iter().any(|c|c.args.last().is_some_and(|k|k=="C-s")),"com a dica na tela, o ctrl+x ctrl+s sai");
+    h.stop().await.unwrap();
+}
+#[tokio::test]
 async fn terminal_runtime_steer_entry_without_hint_says_so() {
     let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
     h.command(f.command("one","Um")).await.unwrap(); h.command(f.command("two","Dois")).await.unwrap();
@@ -896,7 +914,7 @@ async fn direct_delivery_does_not_warn_after_claude_records_the_prompt() {
     h.stop().await.unwrap();
 }
 
-/// Claude Code 2.1.330: sem a dica do ctrl+x ctrl+s, a mensagem guardada na fila da CLI (`queue-operation enqueue`) já
+/// Claude Code sem a dica do ctrl+x ctrl+s: a mensagem guardada na fila da CLI (`queue-operation enqueue`) já
 /// está com ele e entra no turno na próxima pausa. Orientada, sem tecla nem aviso, antes do prazo.
 #[tokio::test(start_paused = true)]
 async fn direct_delivery_counts_the_cli_queue_as_steered_without_the_hint() {
