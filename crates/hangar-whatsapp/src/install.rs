@@ -427,7 +427,10 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let api = format!("http://{}", listener.local_addr().unwrap());
         let releases = axum::Router::new().route("/repos/{owner}/{repo}/releases",
-            axum::routing::get(|| async { axum::Json(json!([{"tag_name": "v0.1.0"}, {"tag_name": "v0.0.9"}])) }));
+            axum::routing::get(|| async {
+                ([(axum::http::header::CONTENT_TYPE, "application/json")],
+                    json!([{"tag_name": "v0.1.0"}, {"tag_name": "v0.0.9"}]).to_string())
+            }));
         tokio::spawn(async move { axum::serve(listener, releases).await.unwrap() });
         let dir = tempfile::tempdir().unwrap();
         let ctx = Context { paths: Paths::new(dir.path()), platform: Platform::local(),
