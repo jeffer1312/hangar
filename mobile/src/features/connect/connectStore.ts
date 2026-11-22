@@ -2,14 +2,16 @@ import { create } from 'zustand';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
-import { addMachine, approveAccountDevice, changeAccountPassword, deviceStatus, endAccountSessions, listAccountDevices, listMachines, registerDevice,
-  registrarDiag, revokeAccountDevice, signIn, signUp, upgradeToDevice } from '@hangar/core';
+import { addMachine, approveAccountDevice, changeAccountPassword, CONNECT_SERVICE_URL, deviceStatus, endAccountSessions, installCode, listAccountDevices,
+  listMachines, registerDevice, registrarDiag, revokeAccountDevice, signIn, signInAnywhere as signInByName, signUp,
+  upgradeToDevice } from '@hangar/core';
 import type { AccountDevice, AccountDeviceKey, AccountDeviceStatus, AccountSession, ConnectMachine, Server } from '@hangar/core';
 import { validInstallField, vouchAccountDevice } from '../machines/api';
+import { syncCrypto } from '../login/syncCrypto';
 import { ownServers, useServers } from '../../stores/servers';
 import * as m from '../../paraglide/messages';
 
-export const CONNECT_SERVICE_URL = 'https://connect.hangar.dev.br';
+export { CONNECT_SERVICE_URL };
 const KEY = 'cp_connect_account_v1';
 // Fora da chave da conta: sair e entrar de novo reaproveita o aparelho já liberado.
 const DEVICE_KEY = 'cp_connect_device_v1';
@@ -19,6 +21,8 @@ export type ConnectAccount = AccountSession & { name: string };
 export type MachineEntry = { phase: 'asking' | 'waiting' | 'failed'; error?: string };
 export type ThisDevice = AccountDeviceKey & { status: AccountDeviceStatus };
 export type DeviceList = { rows: AccountDevice[] | null; error: string };
+/** A convidada não abre conta aqui: as máquinas do cofre dela voltam para a tela escolher quais entram. */
+export type NameSignIn = { kind: 'account' } | { kind: 'guest'; host: string; servers: Server[] };
 type Step = 'signin' | 'signup' | 'password' | 'machine';
 
 export interface ConnectState {
@@ -38,6 +42,8 @@ export interface ConnectState {
   load(): Promise<void>;
   signIn(name: string, password: string): Promise<void>;
   signUp(name: string, password: string): Promise<void>;
+  /** Campo único "conta ou usuário": conta abre aqui; convidada volta com as máquinas dela, sem tocar na conta. */
+  signInAnywhere(name: string, password: string): Promise<NameSignIn>;
   signOut(): Promise<void>;
   endSessions(): Promise<void>;
   changePassword(oldPassword: string, newPassword: string): Promise<void>;
@@ -66,6 +72,15 @@ const CODES: Record<string, () => string> = {
   connect_secure_random_unavailable: m.connect_error_secure_random,
   connect_response_invalid: m.mobile_machines_invalid_response,
   connect_install_id_unreadable: m.connect_error_install_id,
+  // Entrada pelo nome: conta e convidada caem no mesmo erro, para a tela não dizer qual dos dois existe.
+  credentials_mismatch: m.login_credentials_mismatch,
+  network_failed: m.connect_error_network,
+  connect_too_many_attempts: m.connect_error_limit,
+  sync_too_many_attempts: m.connect_error_limit,
+  sync_unavailable: m.login_guest_unavailable,
+  sync_request_failed: m.login_guest_unavailable,
+  sync_insecure: m.login_guest_unavailable,
+  sync_vault_unreadable: m.mobile_sync_login_vault,
 };
 
 const statusOf = (error: unknown) => (error as { status?: number }).status;
@@ -131,6 +146,16 @@ async function readInstallId(): Promise<InstallId> {
     return {};
   }
   return { id };
+}
+
+/** Código que este celular mostra para quem libera conferir; vazio quando o aparelho não tem identificador. */
+export async function readInstallCode(): Promise<string> {
+  try {
+    const { id } = await installId();
+    return id ? installCode(id) : '';
+  } catch {
+    return '';
+  }
 }
 
 /** Máquinas da conta ligadas e ainda fora deste aparelho: a tela e "Entrar em todas" usam a mesma conta. */
@@ -305,6 +330,10 @@ export const useConnect = create<ConnectState>((set, get) => {
     let session: AccountSession;
     try { session = await login(CONNECT_SERVICE_URL, name, password); }
     catch (error) { throw new Error(failure(error, step)); }
+    await adopt(session, name);
+  }
+
+  async function adopt(session: AccountSession, name: string) {
     const account = { ...session, name };
     try { await SecureStore.setItemAsync(KEY, JSON.stringify(account)); }
     catch { throw new Error(m.connect_error_vault()); }
@@ -339,6 +368,15 @@ export const useConnect = create<ConnectState>((set, get) => {
     },
     signIn: (name, password) => openAccount(signIn, 'signin', name, password),
     signUp: (name, password) => openAccount(signUp, 'signup', name, password),
+    async signInAnywhere(rawName, password) {
+      const name = rawName.trim();
+      let found: Awaited<ReturnType<typeof signInByName>>;
+      try { found = await signInByName(name, password, { crypto: syncCrypto, serviceUrl: CONNECT_SERVICE_URL }); }
+      catch (error) { throw new Error(failure(error, 'signin')); }
+      if (found.kind === 'guest') return { kind: 'guest', host: found.host, servers: found.servers };
+      await adopt(found.account, name);
+      return { kind: 'account' };
+    },
     async signOut() {
       try { await SecureStore.deleteItemAsync(KEY); }
       catch { throw new Error(m.connect_error_vault()); }

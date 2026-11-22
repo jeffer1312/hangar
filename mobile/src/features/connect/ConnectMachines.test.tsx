@@ -2,7 +2,7 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { configureApi, type ConnectMachine, type Server } from '@hangar/core';
+import { configureApi, installCode, type ConnectMachine, type Server } from '@hangar/core';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mocks = vi.hoisted(() => ({ vault: new Map<string, string>() }));
@@ -97,11 +97,14 @@ it('lista de máquinas com erro mostra "Tentar de novo", que relê a lista', asy
   expect(el.textContent).toContain(m.connect_machines_empty());
 });
 
-it('pendente mostra a espera da liberação e não deixa pedir entrada', async () => {
+it('pendente mostra "Liberar este celular" com o código deste aparelho e não deixa pedir entrada', async () => {
   machinesFail = false;
   machineList = [pc3];
+  mocks.vault.set('cp_connect_install_id_v1', 'a'.repeat(32));
   await render();
-  await vi.waitFor(() => expect(el.textContent).toContain(m.connect_device_waiting_release()));
+  await vi.waitFor(() => expect(el.textContent).toContain(m.connect_release_title()));
+  expect(el.textContent).toContain(m.connect_release_waiting());
+  await vi.waitFor(() => expect(el.textContent).toContain(installCode('a'.repeat(32))));
   expect(button('pc3')?.disabled).toBe(true);
   expect(el.textContent).not.toContain(m.connect_account_devices());
 });

@@ -2,16 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { relativeTime, type AccountDevice, type ConnectMachine, type Server } from '@hangar/core';
 import { InfoNotice } from '../config/InfoNotice';
 import { Pill } from '../config/PageHeader';
 import { SectionCard } from '../config/SectionCard';
-import { useSettingsColors } from '../config/colors';
+import { useSettingsColors, withAlpha } from '../config/colors';
 import { MachineGroup, MachineHelp, MachineRow } from '../machines/MachineRows';
 import { Field, MachineSheet, Notice, styles as machineStyles, useMachineAction } from '../machines/parts';
 import { ownServers, useServers } from '../../stores/servers';
-import { missingMachines, needsEntry, sameMachine, useConnect } from './connectStore';
+import { missingMachines, needsEntry, readInstallCode, sameMachine, useConnect } from './connectStore';
 import { ConnectMark } from './ConnectHero';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
@@ -110,15 +110,40 @@ function DeviceState() {
     <Notice text={error} error />
     <MachineGroup><MachineRow title={m.mobile_machines_retry()} action onPress={tap(() => useConnect.getState().refreshDevices())} /></MachineGroup>
   </>;
-  if (status === 'pending') return <View style={styles.waiting}>
-    <ActivityIndicator color={c.accent} />
-    <View style={styles.waitingText}><Notice text={m.connect_device_waiting_release()} /></View>
-  </View>;
+  if (status === 'pending') return <ReleaseCard />;
   if (status === 'revoked') return <>
     <Notice text={m.connect_device_revoked_notice()} error />
     <MachineGroup><MachineRow title={m.connect_device_request_again()} action onPress={tap(() => useConnect.getState().requestDeviceAgain())} /></MachineGroup>
   </>;
   return null;
+}
+
+/** A liberação vale uma vez para a conta toda; o código deixa quem libera conferir que é este celular. */
+function ReleaseCard() {
+  const c = useSettingsColors();
+  const { theme } = useUnistyles();
+  const [code, setCode] = useState('');
+  useEffect(() => {
+    let alive = true;
+    void readInstallCode().then((value) => { if (alive) setCode(value); });
+    return () => { alive = false; };
+  }, []);
+  const warn = theme.tokens.status.warning;
+  return <View style={styles.release}>
+    <Text accessibilityRole="header" style={[styles.releaseTitle, { color: c.text }]}>{m.connect_release_title()}</Text>
+    <View style={[styles.releaseBox, { borderColor: warn, backgroundColor: withAlpha(warn, 0.12) }]}>
+      <View style={styles.releaseHead}>
+        <ActivityIndicator color={warn} />
+        <Text style={[styles.releaseStrong, { color: warn }]}>{m.connect_release_waiting()}</Text>
+      </View>
+      <Text style={[styles.releaseText, { color: warn }]}>{m.connect_release_body()}</Text>
+    </View>
+    {code ? <>
+      <Text style={[styles.releaseHint, { color: c.muted }]}>{m.connect_release_code()}</Text>
+      {/* Lido letra a letra: o leitor de tela juntaria o código numa palavra. */}
+      <Text selectable accessibilityLabel={code.replace('-', '').split('').join(' ')} style={[styles.code, { color: c.text }]}>{code}</Text>
+    </> : null}
+  </View>;
 }
 
 function MachineItem({ machine, blocked, onEntered, onOpen }: { machine: ConnectMachine; blocked: boolean; onEntered: () => void; onOpen: () => void }) {
@@ -260,4 +285,12 @@ const styles = StyleSheet.create((theme) => ({
   headerSub: { fontSize: theme.base.text.sm },
   waiting: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], paddingHorizontal: theme.base.space[4] },
   waitingText: { flex: 1, minWidth: 0 },
+  release: { gap: theme.base.space[3] },
+  releaseTitle: { ...theme.type.heading },
+  releaseBox: { gap: theme.base.space[1.5], padding: theme.base.space[4], borderRadius: theme.base.radius.md, borderWidth: 1 },
+  releaseHead: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
+  releaseStrong: { ...theme.type.control },
+  releaseText: { ...theme.type.meta },
+  releaseHint: { ...theme.type.meta, textAlign: 'center' },
+  code: { ...theme.type.title, fontFamily: theme.type.mono.fontFamily, letterSpacing: 4, textAlign: 'center' },
 }));

@@ -6,9 +6,9 @@ import { ConnectHero } from './ConnectHero';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
 
-export function ConnectLogin() {
+export function ConnectLogin({ initialMode = null }: { initialMode?: 'create' | null }) {
   // `null` é a abertura; escolhido, o formulário de criar conta ou de entrar.
-  const [mode, setMode] = useState<'create' | 'login' | null>(null);
+  const [mode, setMode] = useState<'create' | 'login' | null>(initialMode);
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   // O erro é do modo em que foi pedido: trocar entre entrar e criar conta começa limpo.
