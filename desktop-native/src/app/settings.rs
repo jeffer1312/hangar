@@ -386,8 +386,8 @@ pub(super) struct SettingsUi {
     session_options: Option<(u64, Option<crate::api::SessionOptions>)>,
     /// Leitura ou gravação das opções que falhou, mostrada na linha do Code Mode.
     session_options_error: Option<String>,
-    /// Gravação das opções ainda sem resposta: as linhas da tela Beta esperam por ela.
-    session_options_saving: bool,
+    /// A conexão com uma gravação das opções ainda sem resposta: as linhas da tela Beta esperam por ela.
+    session_options_saving: Option<u64>,
     _subscriptions: Vec<Subscription>,
     _disk_watch: Task<()>,
 }
@@ -515,7 +515,7 @@ impl SettingsUi {
         }));
         Self { sliders, fonts, type_picks, custom_sizes, custom_open: Vec::new(),
             accent_picker, tint_picker, search, found: Vec::new(), pick: 0, hit: None, scroll: ScrollHandle::new(),
-            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, session_options: None, session_options_error: None, session_options_saving: false, _subscriptions: subscriptions,
+            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, session_options: None, session_options_error: None, session_options_saving: None, _subscriptions: subscriptions,
             _disk_watch: watch_disk(window, cx) }
     }
 

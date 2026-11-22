@@ -10,30 +10,14 @@ impl Hangar {
         let from_settings = self.settings_ui.code_mode_settings.is_some_and(|(_, on)| on);
         let server = self.settings_ui.session_options.and_then(|(_, options)| options);
         // Sem a leitura do servidor, ou com uma gravação no ar, as duas linhas ficam travadas.
-        let busy = server.is_none() || self.settings_ui.session_options_saving;
+        let busy = server.is_none() || self.settings_ui.session_options_saving == Some(self.connection);
         let conversation = segments("conversation-beta", &[tr("settings_conversation_beta_off"), tr("settings_conversation_beta_on")],
             a.conversation_beta as usize, 2, busy, tr("settings_next_version"),
-            |this: &mut Hangar, index, _: &mut Window, cx| {
-                let server = this.settings_ui.session_options.and_then(|(_, options)| options);
-                let Some(save) = options_to_save(server, this.settings_ui.session_options_saving, BetaChange::Conversation(index == 1)) else { return };
-                // O desenho da conversa é deste computador; o padrão da abertura é do servidor.
-                let mut next = appearance::get();
-                next.conversation_beta = index == 1;
-                this.apply_appearance(next, true, cx);
-                this.save_session_options(save, cx);
-            }, cx);
+            |this: &mut Hangar, index, _: &mut Window, cx| this.change_session_options(BetaChange::Conversation(index == 1), cx), cx);
         // Ligado pelos ajustes do Claude: travado, mas com "Ligado" marcado.
         let code_mode = segments("code-mode", &[tr("settings_code_mode_off"), tr("settings_code_mode_on")], (server.is_some_and(|o| o.code_mode) || from_settings) as usize,
             if a.conversation_beta { 2 } else { 0 }, from_settings || busy, tr("settings_next_version"),
-            |this: &mut Hangar, index, _: &mut Window, cx| {
-                let server = this.settings_ui.session_options.and_then(|(_, options)| options);
-                let Some(save) = options_to_save(server, this.settings_ui.session_options_saving, BetaChange::CodeMode(index == 1)) else { return };
-                // A cópia local acompanha: é ela que vai a um servidor que ainda não tem a escolha.
-                let mut next = appearance::get();
-                next.claude_code_mode = index == 1;
-                this.apply_appearance(next, true, cx);
-                this.save_session_options(save, cx);
-            }, cx);
+            |this: &mut Hangar, index, _: &mut Window, cx| this.change_session_options(BetaChange::CodeMode(index == 1), cx), cx);
         let hint = self.settings_ui.session_options_error.clone()
             .unwrap_or_else(|| tr(if from_settings { "settings_code_mode_settings" } else { "settings_code_mode_hint" }));
         div().flex().flex_col()
@@ -56,18 +40,22 @@ impl Hangar {
 
     fn options_reply(&self, connection: u64, task: tokio::task::JoinHandle<Result<crate::api::SessionOptions, crate::api::Failure>>, save: bool, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let result = task.await;
-            // Também quando a tarefa some: travado para sempre seria pior que regravar.
-            if save {
-                let _ = this.update(cx, |this, cx| {
-                    this.settings_ui.session_options_saving = false;
-                    cx.notify();
-                });
-            }
-            let Ok(result) = result else { return };
-            let _ = this.update(cx, |this, cx| if this.connection == connection {
+            // A tarefa que some é falha como outra: com aviso e nova tentativa, nunca a linha travada calada.
+            let result = task.await.unwrap_or_else(|error| Err(crate::api::Failure::local(error.to_string())));
+            let _ = this.update(cx, |this, cx| {
+                if save && this.settings_ui.session_options_saving == Some(connection) { this.settings_ui.session_options_saving = None; }
+                if this.connection != connection { cx.notify(); return; }
                 match result {
-                    Ok(options) => (this.settings_ui.session_options, this.settings_ui.session_options_error) = (Some((connection, Some(options))), None),
+                    Ok(options) => {
+                        (this.settings_ui.session_options, this.settings_ui.session_options_error) = (Some((connection, Some(options))), None);
+                        // A cópia deste computador muda só com o servidor confirmando: é ela que desenha a conversa
+                        // e que vai a um servidor que ainda não tem a escolha.
+                        if save {
+                            let mut next = appearance::get();
+                            (next.conversation_beta, next.claude_code_mode) = (options.conversation_beta, options.code_mode);
+                            this.apply_appearance(next, true, cx);
+                        }
+                    }
                     Err(error) => {
                         this.settings_ui.session_options_error = Some(Hangar::fetch_failure(&error));
                         // Sem leitura boa a linha fica travada: libera nova leitura depois de uma espera.
@@ -88,10 +76,12 @@ impl Hangar {
     }
 
     /// Grava no servidor; a resposta dele é o que fica marcado, e a falha aparece na linha.
-    fn save_session_options(&mut self, next: crate::api::SessionOptions, cx: &mut Context<Self>) {
+    fn change_session_options(&mut self, change: BetaChange, cx: &mut Context<Self>) {
+        let server = self.settings_ui.session_options.filter(|(connection, _)| *connection == self.connection).and_then(|(_, options)| options);
+        let Some(next) = options_to_save(server, self.settings_ui.session_options_saving == Some(self.connection), change) else { return };
         let Some(api) = self.api.clone() else { return };
         let connection = self.connection;
-        self.settings_ui.session_options_saving = true;
+        self.settings_ui.session_options_saving = Some(connection);
         cx.notify();
         let task = self.runtime.spawn(async move { api.save_session_options(next, false).await });
         self.options_reply(connection, task, true, cx);
