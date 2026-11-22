@@ -397,7 +397,7 @@ fn merge_servers(input: Vec<ServerInput>, previous: Option<&Account>) -> Result<
         if !(base_url.starts_with("https://") || base_url.starts_with("http://")) {
             return Err(Error::Invalid("base_url"));
         }
-        Ok(Server { server_id, label: text(server.label, "label", 0, 200)?, base_url, guest_id, token,
+        Ok(Server { server_id, label: text(server.label, "label", 1, 200)?, base_url, guest_id, token,
             root: text(server.root, "root", 1, 4096)? })
     }).collect()
 }
@@ -473,6 +473,18 @@ mod tests {
             assert!(matches!(store.save(save(bad, Some("x"), vec![])), Err(Error::Invalid("user"))), "{bad}");
         }
         assert!(matches!(store.save(save("ana@casa", Some("x"), vec![server(None)])), Err(Error::Invalid("token"))));
+    }
+
+    #[test]
+    fn a_server_label_needs_a_visible_character() {
+        let (_dir, store) = store();
+        for blank in ["", "   ", "\t"] {
+            let row = ServerInput { label: blank.into(), ..server(Some("tok-1")) };
+            assert!(matches!(store.save(save("ana.silva", Some("x"), vec![row])), Err(Error::Invalid("label"))), "{blank:?}");
+        }
+        let row = ServerInput { label: "  Casa ".into(), ..server(Some("tok-1")) };
+        store.save(save("ana.silva", Some("x"), vec![row])).unwrap();
+        assert_eq!(open(&store, "ana.silva", "x")[0]["label"], "Casa");
     }
 
     #[test]
