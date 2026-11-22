@@ -355,6 +355,10 @@ impl Store {
             _ => Some(g),
         }
     }
+    /// Os convidados do arquivo; arquivo ilegível é erro, nunca lista vazia.
+    pub fn guests(&self) -> Result<Vec<Guest>> {
+        Ok(self.load()?["guests"].as_array().into_iter().flatten().filter_map(guest).collect())
+    }
     pub fn visible(&self, viewer: Option<&Guest>, name: &str, life: Option<&str>) -> bool {
         match (viewer, self.owner(name, life, true)) {
             (None, None) => true,

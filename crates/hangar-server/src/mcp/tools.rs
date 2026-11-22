@@ -492,6 +492,13 @@ impl Tools {
         if let Some(share) = &self.st.share && whatsapp::shared_here(&share.store, &share.pairs, me, link.as_ref()) {
             return Err(whatsapp::SHARED_REFUSAL.into());
         }
+        // A vida pela mesma fonte que o porteiro do convidado usa: sessão de outra vida com o mesmo nome não é dele.
+        let life = crate::login_guests::gate::session_life(&self.st, me).await;
+        let (guests, name) = (self.st.login_guests.store.clone(), me.to_owned());
+        let seen = tokio::task::spawn_blocking(move || whatsapp::guest_sees(&guests, &name, life.as_deref())).await
+            .map_err(|_| failed("leitura dos convidados interrompida".into()))?
+            .map_err(|_| failed("arquivo de convidados ilegível".into()))?;
+        if seen { return Err(whatsapp::SHARED_REFUSAL.into()); }
         // Grupo entre máquinas: o par de fora feito noutra máquina só aparece no registro da dona.
         let (Some(link), Some(groups)) = (link, &self.st.groups) else { return Ok(()) };
         let Some(fed) = &link.fed else { return Ok(()) };

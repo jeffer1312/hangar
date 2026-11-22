@@ -75,6 +75,10 @@ async fn scene_shared(groups: bool, peers: Option<hangar_server::groups::peers::
     state.origins_home = home.clone();
     // Sem isto o WhatsApp nasceria na pasta pessoal de quem roda o teste e falaria com o serviço de verdade.
     assert!(state.whatsapp.set(hangar_whatsapp::WhatsApp::new(&home)).is_ok());
+    // Os convidados com login da cena, nunca o `guests.json` de quem roda o teste.
+    state.login_guests = Arc::new(hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings {
+        guests: root.join("guests.json"), vault: root.join("vault.json"), runtime_config: root.join("runtime-config.json"),
+        sync_enabled: false, bootstrap: String::new(), secret: vec![1], secure: false, rate_max: 10.into(), rate_window: 300.into() }));
     if share {
         state.share = Some(crate::share_pair_routes::share_state(&root.join("shares.json"), &home.join(".claude/.hangar-pair"),
             Arc::new(Mutex::new(1_000.0))));
@@ -876,4 +880,21 @@ async fn a_shared_session_does_not_read_whatsapp() {
     std::fs::remove_file(s.home.join(".claude/.hangar-pair/sem-term.json")).unwrap();
     let result = grouped.call("whatsapp_chats", json!({})).await;
     assert!(failed(&result) && first_text(&result).starts_with("whatsapp_off:"), "sem convidado nem par, a rota responde: {result}");
+}
+
+/// Convidado com login que vê as sessões do dono recusa; o que só tem a raiz cobrindo a pasta da sessão, sem
+/// vê-las, não alcança a conversa e deixa passar até a rota.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_a_login_guest_sees_does_not_read_whatsapp() {
+    let s = scene().await;
+    let guests = s.state.login_guests.store.clone();
+    let root = s.home.to_string_lossy().into_owned();
+    guests.create("Ana", &root, false, true, "ana".into(), "token-ana".into()).unwrap();
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_off:"), "raiz sem ver as sessões do dono: {result}");
+
+    guests.create("Bia", &root, true, true, "bia".into(), "token-bia".into()).unwrap();
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_shared_session:"), "vê as sessões do dono: {result}");
 }
