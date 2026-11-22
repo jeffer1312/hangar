@@ -9,25 +9,30 @@ impl Hangar {
         self.ask_session_options(cx);
         let from_settings = self.settings_ui.code_mode_settings.is_some_and(|(_, on)| on);
         let server = self.settings_ui.session_options.and_then(|(_, options)| options);
-        let conversation = segmented("conversation-beta", &[tr("settings_conversation_beta_off"), tr("settings_conversation_beta_on")],
-            a.conversation_beta as usize, true,
+        // Sem a leitura do servidor, ou com uma gravação no ar, as duas linhas ficam travadas.
+        let busy = server.is_none() || self.settings_ui.session_options_saving;
+        let conversation = segments("conversation-beta", &[tr("settings_conversation_beta_off"), tr("settings_conversation_beta_on")],
+            a.conversation_beta as usize, 2, busy, tr("settings_next_version"),
             |this: &mut Hangar, index, _: &mut Window, cx| {
+                let server = this.settings_ui.session_options.and_then(|(_, options)| options);
+                let Some(save) = options_to_save(server, this.settings_ui.session_options_saving, BetaChange::Conversation(index == 1)) else { return };
+                // O desenho da conversa é deste computador; o padrão da abertura é do servidor.
                 let mut next = appearance::get();
                 next.conversation_beta = index == 1;
                 this.apply_appearance(next, true, cx);
-                // O desenho da conversa é deste computador; o padrão da abertura é do servidor.
-                let code_mode = this.settings_ui.session_options.and_then(|(_, options)| options).map_or(next.claude_code_mode, |o| o.code_mode);
-                this.save_session_options(crate::api::SessionOptions { conversation_beta: index == 1, code_mode }, cx);
+                this.save_session_options(save, cx);
             }, cx);
-        // Ligado pelos ajustes do Claude: travado, mas com "Ligado" marcado. Sem a leitura do servidor, travado também.
+        // Ligado pelos ajustes do Claude: travado, mas com "Ligado" marcado.
         let code_mode = segments("code-mode", &[tr("settings_code_mode_off"), tr("settings_code_mode_on")], (server.is_some_and(|o| o.code_mode) || from_settings) as usize,
-            if a.conversation_beta { 2 } else { 0 }, from_settings || server.is_none(), tr("settings_next_version"),
+            if a.conversation_beta { 2 } else { 0 }, from_settings || busy, tr("settings_next_version"),
             |this: &mut Hangar, index, _: &mut Window, cx| {
+                let server = this.settings_ui.session_options.and_then(|(_, options)| options);
+                let Some(save) = options_to_save(server, this.settings_ui.session_options_saving, BetaChange::CodeMode(index == 1)) else { return };
                 // A cópia local acompanha: é ela que vai a um servidor que ainda não tem a escolha.
                 let mut next = appearance::get();
                 next.claude_code_mode = index == 1;
                 this.apply_appearance(next, true, cx);
-                this.save_session_options(crate::api::SessionOptions { conversation_beta: next.conversation_beta, code_mode: index == 1 }, cx);
+                this.save_session_options(save, cx);
             }, cx);
         let hint = self.settings_ui.session_options_error.clone()
             .unwrap_or_else(|| tr(if from_settings { "settings_code_mode_settings" } else { "settings_code_mode_hint" }));
@@ -46,12 +51,20 @@ impl Hangar {
         let connection = self.connection;
         self.settings_ui.session_options = Some((connection, None));
         let task = self.runtime.spawn(async move { api.read_session_options().await });
-        self.options_reply(connection, task, cx);
+        self.options_reply(connection, task, false, cx);
     }
 
-    fn options_reply(&self, connection: u64, task: tokio::task::JoinHandle<Result<crate::api::SessionOptions, crate::api::Failure>>, cx: &mut Context<Self>) {
+    fn options_reply(&self, connection: u64, task: tokio::task::JoinHandle<Result<crate::api::SessionOptions, crate::api::Failure>>, save: bool, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let Ok(result) = task.await else { return };
+            let result = task.await;
+            // Também quando a tarefa some: travado para sempre seria pior que regravar.
+            if save {
+                let _ = this.update(cx, |this, cx| {
+                    this.settings_ui.session_options_saving = false;
+                    cx.notify();
+                });
+            }
+            let Ok(result) = result else { return };
             let _ = this.update(cx, |this, cx| if this.connection == connection {
                 match result {
                     Ok(options) => (this.settings_ui.session_options, this.settings_ui.session_options_error) = (Some((connection, Some(options))), None),
@@ -78,8 +91,10 @@ impl Hangar {
     fn save_session_options(&mut self, next: crate::api::SessionOptions, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         let connection = self.connection;
+        self.settings_ui.session_options_saving = true;
+        cx.notify();
         let task = self.runtime.spawn(async move { api.save_session_options(next, false).await });
-        self.options_reply(connection, task, cx);
+        self.options_reply(connection, task, true, cx);
     }
 
     /// Uma consulta por conexão: o settings.json do servidor diz se o Code Mode já está ligado lá. Até a resposta, e
@@ -106,5 +121,37 @@ impl Hangar {
             }
             cx.notify();
         });
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BetaChange { Conversation(bool), CodeMode(bool) }
+
+/// A gravação manda o objeto inteiro: só parte do que o servidor confirmou, nunca de uma leitura pendente
+/// nem por cima de outra gravação ainda sem resposta.
+fn options_to_save(server: Option<crate::api::SessionOptions>, saving: bool, change: BetaChange) -> Option<crate::api::SessionOptions> {
+    if saving { return None; }
+    let mut next = server?;
+    match change {
+        BetaChange::Conversation(on) => next.conversation_beta = on,
+        BetaChange::CodeMode(on) => next.code_mode = on,
+    }
+    Some(next)
+}
+
+#[cfg(test)]
+mod beta_tests {
+    use super::{options_to_save, BetaChange};
+    use crate::api::SessionOptions;
+
+    #[test]
+    fn a_change_waits_for_the_server_read_and_for_the_save_in_flight() {
+        let server = SessionOptions { conversation_beta: true, code_mode: true };
+        assert_eq!(options_to_save(None, false, BetaChange::Conversation(false)), None);
+        assert_eq!(options_to_save(Some(server), true, BetaChange::Conversation(false)), None);
+        assert_eq!(options_to_save(Some(server), false, BetaChange::Conversation(false)),
+            Some(SessionOptions { conversation_beta: false, code_mode: true }));
+        assert_eq!(options_to_save(Some(server), false, BetaChange::CodeMode(false)),
+            Some(SessionOptions { conversation_beta: true, code_mode: false }));
     }
 }

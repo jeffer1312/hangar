@@ -113,10 +113,11 @@ struct OptionsSelection { configured: bool, options: SessionOptions }
 
 fn options_selection(path: &Path, save: Option<SaveOptions>) -> io::Result<OptionsSelection> {
     let _lock = write_lock(path, save.is_some())?;
-    let mut current = read_json(path)?;
-    if let Some(save) = save.filter(|save| !save.if_absent || current.is_none()) {
+    // Gravação explícita substitui sem ler: é ela que recupera um arquivo ilegível.
+    let current = if save.as_ref().is_some_and(|save| !save.if_absent) { None } else { read_json(path)? };
+    if let Some(save) = save.filter(|_| current.is_none()) {
         crate::runtime::queue::atomic_write(path, &serde_json::to_vec(&save.options)?)?;
-        current = Some(save.options);
+        return Ok(OptionsSelection { configured: true, options: save.options });
     }
     Ok(OptionsSelection { configured: current.is_some(), options: current.unwrap_or_default() })
 }
@@ -172,5 +173,23 @@ pub(crate) async fn serve(state: &Arc<AppState>, request: Request) -> Response {
     match tokio::task::spawn_blocking(move || selection(&path, &key, save)).await {
         Ok(Ok(selection)) => json_response(StatusCode::OK, json!(selection)),
         _ => failure(StatusCode::SERVICE_UNAVAILABLE, "session_defaults_unavailable", "não foi possível ler ou guardar o padrão da abertura"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_explicit_save_replaces_an_unreadable_options_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-options.json");
+        std::fs::write(&path, b"{not json").unwrap();
+        let chosen = SessionOptions { conversation_beta: true, code_mode: true };
+        assert!(options_selection(&path, Some(SaveOptions { options: chosen, if_absent: true })).is_err());
+        let saved = options_selection(&path, Some(SaveOptions { options: chosen, if_absent: false })).unwrap();
+        assert!(saved.configured);
+        assert_eq!(saved.options, chosen);
+        assert_eq!(read_json::<SessionOptions>(&path).unwrap(), Some(chosen));
     }
 }

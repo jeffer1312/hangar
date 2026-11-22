@@ -29,6 +29,12 @@ pub(super) fn provider_fields() -> Vec<&'static str> {
     FIELDS.into_iter().filter(|field| *field != "read_only").collect()
 }
 
+/// Trocar de provedor na tarefa nova é escolher só o provedor: a conta e o modelo que a tela preenche continuam do
+/// servidor. Editando, a troca apaga as opções do provedor anterior.
+pub(super) fn provider_switch(editing: bool) -> Vec<&'static str> {
+    if editing { provider_fields() } else { vec!["provider"] }
+}
+
 pub(super) fn merge(
     original: Option<&Value>,
     current: Value,
@@ -64,7 +70,7 @@ pub(super) fn merge(
 
 #[cfg(test)]
 mod tests {
-    use super::{merge, provider_fields};
+    use super::{merge, provider_fields, provider_switch};
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -127,5 +133,14 @@ mod tests {
         assert_eq!(merge(None, current.clone(), &HashSet::new()), json!({"cwd":"/workspace/app"}));
         // Modelo só existe no provedor mostrado: escolher um fixa o provedor junto.
         assert_eq!(merge(None, current, &HashSet::from(["model"])), json!({"cwd":"/workspace/app", "provider":"codex", "model":"gpt"}));
+    }
+
+    /// Na tarefa nova, a conta que a tela escolheu sozinha ao trocar de provedor não vira escolha.
+    #[test]
+    fn switching_provider_on_a_new_template_keeps_only_the_provider() {
+        let current = json!({"cwd":"/workspace/app", "provider":"codex", "codex_account":"default-account", "model":"gpt"});
+        let changed: HashSet<&'static str> = provider_switch(false).into_iter().collect();
+        assert_eq!(merge(None, current, &changed), json!({"cwd":"/workspace/app", "provider":"codex"}));
+        assert_eq!(provider_switch(true), provider_fields());
     }
 }
