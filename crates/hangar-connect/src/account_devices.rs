@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 
-use hangar_connect_client::{AccountSession, Code, ConnectClient, ReqwestTransport};
+use hangar_connect_client::{AccountSession, Code, ConnectClient, Error, ReqwestTransport};
 pub use hangar_connect_client::AccountDevice;
 
 use super::ConnectError;
@@ -28,6 +28,8 @@ pub enum Failure {
     MachineUnknown,
     /// 403 `device_pending`: este PC ainda espera liberação na conta.
     MachinePending,
+    /// A lista pedida com a chave desta máquina voltou revogada: a conta tirou este PC.
+    MachineRevoked,
     DeviceRefused,
     DeviceUnknown,
     DeviceRevoked,
@@ -40,7 +42,7 @@ pub enum Failure {
 impl Failure {
     /// A conta recusou a leitura a esta máquina: a revogação lá não chegaria aqui.
     pub fn machine_refused(&self) -> bool {
-        matches!(self, Self::MachinePending | Self::MachineUnknown)
+        matches!(self, Self::MachinePending | Self::MachineUnknown | Self::MachineRevoked)
     }
 }
 
@@ -71,6 +73,8 @@ impl From<Failure> for ConnectError {
                 "a conta não reconhece este computador: ligue-o de novo ao Connect"),
             Failure::MachinePending => Self::new(StatusCode::FORBIDDEN, "connect_account_machine_pending",
                 "este computador espera liberação: libere-o em \"Aparelhos da conta\" num aparelho já liberado"),
+            Failure::MachineRevoked => Self::new(StatusCode::FORBIDDEN, "connect_account_machine_revoked",
+                "a conta revogou este computador: ligue-o de novo ao Connect"),
             Failure::DeviceRefused => Self::new(StatusCode::FORBIDDEN, "connect_account_device_refused", "o serviço do Connect recusou o pedido para esse aparelho"),
             Failure::DeviceUnknown => Self::new(StatusCode::NOT_FOUND, "connect_account_device_unknown", "esse aparelho não está na conta"),
             Failure::DeviceRevoked => Self::new(StatusCode::CONFLICT, "connect_account_device_revoked", "esse aparelho foi revogado na conta"),
@@ -98,7 +102,15 @@ fn connect(linked: &Linked) -> Result<(ConnectClient<ReqwestTransport>, AccountS
 
 pub async fn list(linked: &Linked) -> Result<Vec<AccountDevice>, Failure> {
     let (client, session) = connect(linked)?;
-    Ok(client.list_account_devices(&session).await?)
+    client.list_account_devices(&session).await.map_err(listing_failure)
+}
+
+/// Na lista quem pede é esta máquina: revogado ali é ela, não um aparelho da lista.
+fn listing_failure(error: Error) -> Failure {
+    match (error.status(), error.code()) {
+        (Some(403), Code::ConnectDeviceRevoked) | (Some(409), _) => Failure::MachineRevoked,
+        _ => error.into(),
+    }
 }
 
 pub async fn approve(linked: &Linked, id: &str) -> Result<(), Failure> {
@@ -135,4 +147,23 @@ pub async fn apply_revocations(linked: &Linked, devices: &Arc<Store>) -> Result<
     off_thread(move || devices.revoke_account_devices(&revoked).map_err(|_| {
         ConnectError::new(StatusCode::SERVICE_UNAVAILABLE, "connect_store_failed", "os aparelhos do Connect não foram gravados")
     })).await.map_err(Failure::Local)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_revoked_answer_to_the_list_refuses_this_machine() {
+        for error in [Error::new(Code::ConnectDeviceRevoked, Some(403)), Error::new(Code::ConnectRequestFailed, Some(409)),
+            Error::new(Code::ConnectDevicePending, Some(403))] {
+            assert!(listing_failure(error.clone()).machine_refused(), "{error}");
+        }
+        for error in [Error::new(Code::ConnectRequestFailed, Some(403)), Error::new(Code::ConnectRequestFailed, Some(502)),
+            Error::network("sem rede")] {
+            assert!(!listing_failure(error.clone()).machine_refused(), "{error}");
+        }
+        // Fora da lista, 409 é o aparelho pedido, não esta máquina.
+        assert!(!Failure::from(Error::new(Code::ConnectRequestFailed, Some(409))).machine_refused());
+    }
 }

@@ -39,6 +39,8 @@ struct Account {
     devices: Mutex<Vec<(Value, String)>>,
     /// Este PC ainda espera liberação na conta: a lista responde como o serviço responde a ele.
     machine_pending: std::sync::atomic::AtomicBool,
+    /// A conta revogou este PC: status da recusa da lista (0 = nenhuma).
+    machine_revoked: std::sync::atomic::AtomicU16,
 }
 
 impl Account {
@@ -68,6 +70,11 @@ async fn list(State(account): State<Arc<Account>>, headers: HeaderMap) -> (Statu
     }
     if account.machine_pending.load(std::sync::atomic::Ordering::Relaxed) {
         return (StatusCode::FORBIDDEN, json!({"error": "este aparelho espera liberação", "reason": "device_pending"}).to_string());
+    }
+    match account.machine_revoked.load(std::sync::atomic::Ordering::Relaxed) {
+        403 => return (StatusCode::FORBIDDEN, json!({"error": "aparelho revogado", "reason": "device_revoked"}).to_string()),
+        409 => return (StatusCode::CONFLICT, json!({"error": "aparelho revogado", "reason": null}).to_string()),
+        _ => {}
     }
     let rows: Vec<Value> = account.devices.lock().unwrap().iter().map(|(row, _)| row.clone()).collect();
     (StatusCode::OK, json!(rows).to_string())
@@ -475,6 +482,23 @@ async fn a_refused_read_suspends_the_account_devices_until_a_good_read() {
     assert_eq!(gate(&m, &d).await, 200, "a leitura boa devolve o aparelho");
     assert_eq!(gate(&m, &child).await, 200);
     assert_eq!(gate(&m, &local).await, 200);
+}
+
+#[tokio::test]
+async fn a_machine_revoked_by_the_account_suspends_the_account_devices() {
+    for status in [403, 409] {
+        let (account, service) = spawn_service().await;
+        account.add("D", "approved", "s-d");
+        let m = machine(service, true).await;
+        let (d, local) = (released(&m.store, "n1", "D"), approved_here(&m.store, "n2"));
+        account.machine_revoked.store(status, std::sync::atomic::Ordering::Relaxed);
+        m.supervisor.sync_account_devices(&m.linked).await;
+        assert_eq!(gate(&m, &d).await, 401, "{status}: esta máquina revogada na conta suspende os aparelhos da conta");
+        assert_eq!(gate(&m, &local).await, 200, "{status}");
+        assert!(on_disk(&m, &d), "{status}: suspenso, não apagado");
+        let (_, body) = relay(&m, reqwest::Method::GET, "/api/connect/account-devices", Some(OWNER), None).await;
+        assert_eq!(body["detail"]["code"], "connect_account_machine_revoked", "{status}: {body}");
+    }
 }
 
 #[tokio::test]

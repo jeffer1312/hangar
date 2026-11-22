@@ -93,7 +93,7 @@ fn failure_text(error: &Failure) -> String {
         Some("connect_account_created_link_failed") => tr("connect_error_account_created"),
         Some("connect_preview_port_refused") => tr("connect_preview_port_refused"),
         Some("connect_account_machine_pending") => tr_shared("connect_device_waiting_release", &[]),
-        Some("connect_account_machine_unknown") => tr("connect_account_machine_unknown"),
+        Some("connect_account_machine_unknown" | "connect_account_machine_revoked") => tr("connect_account_machine_unknown"),
         Some("connect_account_device_unknown" | "connect_account_device_revoked") => tr("connect_account_device_gone"),
         _ => Hangar::fetch_failure(error),
     }
@@ -948,6 +948,7 @@ mod tests {
             uncertain: false, code: Some(code.into()) });
         assert_eq!(text("connect_account_machine_pending"), tr_shared("connect_device_waiting_release", &[]));
         assert_eq!(text("connect_account_device_unknown"), text("connect_account_device_revoked"));
+        assert_eq!(text("connect_account_machine_revoked"), text("connect_account_machine_unknown"));
         for code in ["connect_account_device_unknown", "connect_account_machine_unknown"] {
             assert!(!text(code).contains("do servidor"), "{code}: frase própria, nos dois idiomas");
         }
