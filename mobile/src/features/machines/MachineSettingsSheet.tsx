@@ -11,6 +11,7 @@ import { MachineConnection } from './MachineConnection';
 import { ServerSettings } from './ServerSettings';
 import { MachineOperations } from './MachineOperations';
 import { PeerSettings } from './PeerSettings';
+import { MachineDevices } from './MachineDevices';
 import { WebUiSetting } from './WebUiSetting';
 import { AutoReportSetting } from './AutoReportSetting';
 import { DevModeSetting } from './DevModeSetting';
@@ -42,6 +43,7 @@ export function MachineSettings({ server, view, onNavigate, onClose }: {
   if (view === 'connection' || view === 'discover' || view === 'remote') return <MachineConnection server={server} view={view} onNavigate={onNavigate} />;
   if (view === 'identity' || view === 'terminal' || view === 'diagnostics') return <ServerSettings server={server} view={view} />;
   if (view === 'tag') return <MachinePage title={m.tags_machine_title()}><TagEditor target={{ kind: 'machine', server }} /></MachinePage>;
+  if (view === 'devices') return <MachinePage title={m.machine_devices_title()}><MachineDevices server={server} /></MachinePage>;
   if (view === 'peers') return <MachinePage title={m.mobile_machines_peers_title()}><PeerSettings server={server} /></MachinePage>;
   if (view === 'maintenance') return <MachinePage title={m.mobile_machines_maintenance()}><MachineOperations server={server} /><WebUiSetting server={server} /><AutoReportSetting server={server} /><DevModeSetting server={server} /></MachinePage>;
   if (view === 'advanced') return <MachinePage title={m.mobile_machines_advanced_title()}>
@@ -89,6 +91,7 @@ function MachineEditor({ server, onNavigate, onClose }: {
     <MachineGroup>
       <MachineRow title={m.mobile_machines_connection_title()} value={status} disabled={local.busy} onPress={() => onNavigate('connection')} />
       <MachineRow title={m.tags_machine_title()} disabled={local.busy} onPress={() => onNavigate('tag')} />
+      <MachineRow title={m.machine_devices_title()} disabled={local.busy} onPress={() => onNavigate('devices')} />
       <MachineRow title={test.busy ? m.mobile_machines_busy() : m.config_maquinas_testar()} action disabled={test.busy || local.busy}
         onPress={() => test.run(() => getConfigForServer(server, 15_000), () => {}, m.config_maquinas_conexao_ok())} />
       <MachineRow title={m.mobile_machines_advanced_title()} disabled={local.busy} onPress={() => onNavigate('advanced')} />

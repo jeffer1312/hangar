@@ -13,6 +13,7 @@ import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
 import { ConnectAnimation } from './ConnectAnimation';
+import { ConnectSignInAnimation } from './ConnectSignInAnimation';
 import { ConversationGalleryAnimation } from './ConversationGalleryAnimation';
 import { DreamAnimation } from './DreamAnimation';
 import { FolderBranchAnimation } from './FolderBranchAnimation';
@@ -54,6 +55,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'etiquetas-maquina-conta': TagsPlateAnimation,
   'galeria-da-conversa': ConversationGalleryAnimation,
   'hangar-connect': ConnectAnimation,
+  'entrar-pelo-connect': ConnectSignInAnimation,
   'login-usuario-senha': LoginPasswordAnimation,
   'ocultar-da-lista': HideFromListAnimation,
   'plugins-do-claude': PluginsAnimation,

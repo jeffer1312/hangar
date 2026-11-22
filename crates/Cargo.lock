@@ -1720,6 +1720,7 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures-util",
+ "hangar-connect-client",
  "hangar-core",
  "hyper",
  "hyper-util",
@@ -1735,6 +1736,20 @@ dependencies = [
  "tokio",
  "tracing",
  "zip",
+]
+
+[[package]]
+name = "hangar-connect-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -1865,6 +1880,20 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1_smol",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "hangar-guest-accounts"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-connect-client",
+ "hangar-core",
+ "ring",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
 ]
@@ -2143,6 +2172,7 @@ dependencies = [
  "hangar-desktop-theme",
  "hangar-docs",
  "hangar-dream",
+ "hangar-guest-accounts",
  "hangar-http-file",
  "hangar-install-setup",
  "hangar-local-server",

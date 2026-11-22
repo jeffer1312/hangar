@@ -98,6 +98,8 @@ hangar-package = { path = "../hangar-package" }
 # O que cada atualização trouxe e o que cada aparelho já viu (`update_arrived`).
 hangar-update-news = { path = "../hangar-update-news" }
 hangar-notice-ignores = { path = "../hangar-notice-ignores" }
+# Contas de convidado que esta máquina guarda e entrega no login (`login_guests/`).
+hangar-guest-accounts.workspace = true
 hangar-notice-actions.workspace = true
 # Leitura das novidades e do manual (`update_notes`, `update_arrived`).
 hangar-docs.workspace = true

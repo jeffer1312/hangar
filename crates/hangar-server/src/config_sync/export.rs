@@ -1034,6 +1034,12 @@ fn appearance(
 mod review_tests {
     use super::*;
     #[test]
+    fn guest_accounts_file_never_travels() {
+        // Tem os tokens de convidado de cada máquina e a chave do cofre de cada convidado.
+        assert!(never_ref("⟦HOME⟧/.hangar/guest-accounts.json"));
+        assert!(never_ref("⟦HOME⟧/x/../.hangar/guest-accounts.json"));
+    }
+    #[test]
     fn listing_failure_is_not_an_empty_directory() {
         let home = tempfile::tempdir().unwrap();
         let file = home.path().join("not-a-directory");

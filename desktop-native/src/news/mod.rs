@@ -11,6 +11,7 @@ mod code_comments;
 mod compact_idle;
 mod composer_history;
 mod connect_approval;
+mod connect_sign_in;
 mod conversation_gallery;
 mod desktop_tool_look;
 mod dictation_pill;
@@ -111,6 +112,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "entregar-cliproxy" => Some(adopt_cliproxy::render),
         "conversa-nova" => Some(new_conversation::render),
         "galeria-da-conversa" => Some(conversation_gallery::render),
+        "entrar-pelo-connect" => Some(connect_sign_in::render),
         _ => None,
     }
 }

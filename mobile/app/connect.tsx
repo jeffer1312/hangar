@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { RefreshControl } from 'react-native';
-import { Stack, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { ConnectBoundary } from '../src/features/connect/ConnectBoundary';
 import { ConnectLogin } from '../src/features/connect/ConnectLogin';
 import { ConnectMachines } from '../src/features/connect/ConnectMachines';
@@ -12,6 +12,8 @@ import * as m from '../src/paraglide/messages';
 
 export default function ConnectRoute() {
   const router = useRouter();
+  // "Criar conta grátis" da entrada abre direto no formulário de criar.
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
   const ready = useConnect((s) => s.ready);
   const signedIn = useConnect((s) => !!s.account);
   const token = useConnect((s) => s.account?.token ?? '');
@@ -32,7 +34,7 @@ export default function ConnectRoute() {
         {!ready ? <Notice text={m.comum_carregando()} /> : null}
         {/* Sem conta, o motivo da volta ao login aparece na abertura dele. */}
         {signedIn ? <Notice text={notice} /> : null}
-        {ready ? signedIn ? <ConnectMachines onDone={() => router.replace('/')} /> : <ConnectLogin /> : null}
+        {ready ? signedIn ? <ConnectMachines onDone={() => router.replace('/')} /> : <ConnectLogin initialMode={mode === 'create' ? 'create' : null} /> : null}
       </ConnectBoundary>
     </MachinePage>
   </>;

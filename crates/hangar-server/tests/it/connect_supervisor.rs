@@ -31,7 +31,8 @@ const SERVER_ENV: &str = "HANGAR_CONNECT_TEST_SERVER_DIR";
 
 pub(crate) fn linked() -> Linked {
     Linked {
-        service_url: "https://connect.hangar.dev.br".into(),
+        // A subida lê os aparelhos da conta: o serviço de verdade nunca pode receber essa leitura.
+        service_url: "http://127.0.0.1:9".into(),
         account: "acme".into(),
         machine_id: "pc1".into(),
         machine_key: MACHINE_KEY.into(),
@@ -89,7 +90,7 @@ pub(crate) fn gate(dir: &Path) -> PathBuf {
     dir.join("login-gate")
 }
 
-fn supervisor(dir: &Path, devices: Arc<Store>, main_port: u16) -> Supervisor {
+pub(crate) fn supervisor(dir: &Path, devices: Arc<Store>, main_port: u16) -> Supervisor {
     let frpc = script(dir, "fake-frpc", &frpc_body(&gate(dir)));
     let caddy = script(dir, "fake-caddy", LONG_RUN);
     Supervisor::new(dir.to_path_buf(), dir.join("logs"), devices, main_port).with_programs(frpc, caddy)
