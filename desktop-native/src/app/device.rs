@@ -361,6 +361,7 @@ impl Hangar {
         if page != Page::Connect { self.connect_page_left(); }
         if page != Page::Devices { self.devices_page_left(); }
         if page != Page::Status { self.status_left(); }
+        if page != Page::WhatsApp { self.whatsapp_page_left(); }
         match page {
             Page::General if !self.device.rate.loading && self.device.rate_value().is_none() => self.load_rate(cx),
             Page::Diary => {
@@ -391,6 +392,7 @@ impl Hangar {
             Page::Devices => self.devices_opened(cx),
             Page::SharedConfig => self.shared_config_opened(cx),
             Page::Status => self.status_opened(cx),
+            Page::WhatsApp => self.whatsapp_opened(cx),
             _ => {}
         }
     }
