@@ -16,5 +16,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-
 
 [dev-dependencies]
 base64.workspace = true
+hangar-session-open-fields.workspace = true
 proptest.workspace = true
 tempfile.workspace = true

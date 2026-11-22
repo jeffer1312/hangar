@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, createElement, forwardRef, StrictMode, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot as createReactRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -12,7 +12,7 @@ const calls = vi.hoisted(() => ({
   activeId: 'server-b', startPending: null as Promise<void> | null,
   target: null as null | { id: string; label: string; baseUrl: string; token: string },
   accounts: vi.fn(),
-  providers: vi.fn(), defaults: vi.fn(),
+  providers: vi.fn(), defaults: vi.fn(), config: vi.fn(), me: vi.fn(),
   mutate: vi.fn(),
   contextFetch: vi.fn(),
   models: vi.fn(),
@@ -162,6 +162,8 @@ vi.mock('@hangar/core', async (original) => ({
   // Sonda de providers da folha nova: sem ela o teste fazia fetch de verdade para b.local.
   getProvidersForServer: calls.providers,
   getSessionDefaultsForServer: calls.defaults,
+  getConfigForServer: calls.config,
+  getMeForServer: calls.me,
   setServiceTier: calls.mutate, setModelEffort: calls.mutate, setCodexModel: calls.mutate,
   setEngineModel: calls.mutate, setPiModel: calls.mutate, setKimiModel: calls.mutate,
   setPermissionMode: calls.mutate,
@@ -307,8 +309,27 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+// Teste que falha antes do próprio unmount deixaria a tela viva durante os seguintes.
+const mountedRoots = new Set<Root>();
+function createRoot(container: Element): Root {
+  const root = createReactRoot(container);
+  const unmount = root.unmount.bind(root);
+  root.unmount = () => { mountedRoots.delete(root); unmount(); };
+  mountedRoots.add(root);
+  return root;
+}
+
 describe('CreateSessionSheet Codex', () => {
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  afterEach(async () => {
+    const failures: unknown[] = [];
+    for (const root of [...mountedRoots]) {
+      try { await act(async () => root.unmount()); } catch (error) { failures.push(error); }
+    }
+    mountedRoots.clear();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    if (failures.length) throw new AggregateError(failures, 'unmount_failed');
+  });
   beforeEach(() => {
     calls.contextFetch.mockReset().mockImplementation(async () => new Response(JSON.stringify({ contexto_estendido: true })));
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => calls.contextFetch(input, init));
@@ -336,6 +357,8 @@ describe('CreateSessionSheet Codex', () => {
     calls.mutate.mockReset();
     calls.providers.mockReset().mockResolvedValue({});
     calls.defaults.mockReset().mockResolvedValue(null);
+    calls.config.mockReset().mockResolvedValue({ campos: { headless_default: { valor: true, definido: true, origem: 'app' } }, somente_leitura: {} });
+    calls.me.mockReset().mockResolvedValue({ role: 'owner', name: null });
     calls.models.mockReset().mockResolvedValue({ models: [], reduced: false });
     calls.prepare.mockReset().mockResolvedValue({ status: 'ready', trust_pending: false, issues: [] });
     calls.preparation.mockReset();
@@ -555,6 +578,94 @@ describe('CreateSessionSheet Codex', () => {
     } finally { act(() => root.unmount()); }
   });
 
+  it('memória do aparelho não põe provedor, modelo e esforço no pedido', async () => {
+    localStorage.setItem('create.choices.v1:server-b', '{"provider":"codex","model":"sol","effort":"high","codexAccount":"work"}');
+    calls.providers.mockResolvedValue({ claude: { disponivel: true }, codex: { disponivel: true } });
+    calls.models.mockImplementation(async (_server, provider) => provider === 'codex'
+      ? { kind: 'codex', reduced: false, models: [{ id: 'sol', name: 'Sol', efforts: ['low', 'high'] }] }
+      : { kind: 'claude', reduced: false, models: [{ id: 'sol', name: 'Sol' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ provider: 'claude', model: null, effort: null }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('modelo e esforço lembrados no aparelho não vão no pedido sem padrão do servidor', async () => {
+    localStorage.setItem('create.choices.v1:server-b', JSON.stringify({ provider: 'claude', model: 'sonnet', effort: 'low' }));
+    calls.models.mockResolvedValue({ kind: 'claude', reduced: false, models: [{ id: 'sonnet', name: 'Sonnet' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ model: null, effort: null }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('modo de execução vem do servidor e só vai no pedido quando a pessoa escolhe', async () => {
+    localStorage.setItem('create.choices.v1:server-b', JSON.stringify({ headless: true }));
+    calls.config.mockResolvedValue({ campos: { headless_default: { valor: false, definido: true, origem: 'app' } }, somente_leitura: {} });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create.mock.calls.at(-1)?.[1]).not.toHaveProperty('headless');
+      expect(button(container, 'criar_modo_exec: criar_modo_exec_tmux')).toBeTruthy();
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('sem o modo do servidor lido, não cria nem mostra um modo; escolher o modo destrava', async () => {
+    calls.config.mockReturnValue(new Promise(() => {}));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      expect(button(container, 'criar_modo_exec: criar_modo_exec_headless')).toBeUndefined();
+      await act(async () => button(container, 'criar_modo_exec: comum_carregando')!.click());
+      await act(async () => button(container, 'criar_modo_exec_tmux')!.click());
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ headless: false }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('falha ao ler o modo do servidor aparece na tela e segura a criação até escolher o modo', async () => {
+    calls.config.mockRejectedValue(new Error('config-failed'));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(container.textContent).toContain('config-failed');
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      await act(async () => button(container, 'criar_modo_exec: comum_carregando')!.click());
+      await act(async () => button(container, 'criar_modo_exec_headless')!.click());
+      expect(container.textContent).not.toContain('config-failed');
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ headless: true }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('leitura do modo cancelada pelo sistema é refeita ao voltar ao app', async () => {
+    calls.config.mockRejectedValueOnce(nativeCanceled());
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      await appState('background');
+      await appState('active');
+      await send(container);
+      expect(calls.config).toHaveBeenCalledTimes(2);
+      expect(calls.create.mock.calls.at(-1)?.[1]).not.toHaveProperty('headless');
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('convidado não lê a configuração do dono e cria sem modo: o servidor decide', async () => {
+    calls.me.mockResolvedValue({ role: 'guest', name: 'g' });
+    calls.config.mockRejectedValue(Object.assign(new Error('403'), { status: 403 }));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(calls.config).not.toHaveBeenCalled();
+      await send(container);
+      expect(calls.create.mock.calls.at(-1)?.[1]).not.toHaveProperty('headless');
+    } finally { act(() => root.unmount()); }
+  });
+
   it('falha ao ler o padrão bloqueia a criação e permite tentar novamente', async () => {
     calls.defaults.mockRejectedValueOnce(new Error('read-failed'));
     const { container, root } = await renderSheet(false, false);
@@ -755,14 +866,16 @@ describe('CreateSessionSheet Codex', () => {
     } finally { await act(async () => root.unmount()); }
   });
 
-  it('retomada de providers preserva provider lembrado ainda disponível, modelo e esforço', async () => {
-    localStorage.setItem('create.choices.v1:server-b', '{"provider":"codex","model":"sol","effort":"high","codexAccount":"work"}');
+  it('retomada de providers preserva provider, modelo e esforço escolhidos', async () => {
     calls.providers.mockRejectedValueOnce(nativeCanceled()).mockResolvedValue({
       claude: { disponivel: true, default: true }, codex: { disponivel: true, default: false },
     });
     calls.models.mockResolvedValue({ kind: 'codex', reduced: false, models: [{ id: 'sol', name: 'Sol', efforts: ['low', 'high'] }] });
-    const { container, root } = await renderSheet(false, false);
+    const { container, root } = await renderSheet(false, true);
     try {
+      await openSettings(container);
+      await act(async () => button(container, 'Sol')!.click());
+      await act(async () => button(container, 'reasoning_level_high')!.click());
       expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toContain('Sol, high');
       await appState('background');
       await appState('active');
@@ -911,14 +1024,24 @@ describe('CreateSessionSheet Codex', () => {
     expect(calls.configs).toHaveBeenCalledTimes(1);
   });
 
-  it('cleanup de modelos por troca de conta não recupera a carga antiga', async () => {
-    localStorage.setItem('create.choices.v1:server-b', '{"provider":"codex","codexAccount":"work"}');
+  it('conta Codex lembrada no aparelho não substitui a padrão do servidor', async () => {
+    localStorage.setItem('create.choices.v1:server-b', '{"codexAccount":"work"}');
     calls.accounts.mockResolvedValue([defaultAccount, connected]);
+    const { container, root } = await renderSheet(false, true);
+    try {
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ provider: 'codex', codex_account: 'default' }));
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('cleanup de modelos por troca de conta não recupera a carga antiga', async () => {
+    calls.accounts.mockResolvedValue([connected, defaultAccount]);
     const pending = deferred<never>();
     calls.models.mockImplementation((_server, provider, _engine, _config, account) => provider === 'codex' && account === 'work'
       ? pending.promise : Promise.resolve({ models: [], reduced: false }));
-    const { container, root } = await renderSheet(false, false);
+    const { container, root } = await renderSheet(false, true);
     try {
+      await pickAccount(container, 'Trabalho');
       const oldRequest = calls.models.mock.calls.find((call) => call[4] === 'work')!;
       await pickAccount(container, 'Padrão');
       expect((oldRequest[5] as AbortSignal).aborted).toBe(true);
@@ -1437,8 +1560,8 @@ describe('CreateSessionSheet Codex', () => {
     root.unmount();
   });
 
-  it('descarta esforço guardado incompatível com Haiku', async () => {
-    localStorage.setItem('create.choices.v1:server-b', JSON.stringify({ provider: 'claude', model: 'haiku', effort: 'high' }));
+  it('descarta esforço padrão incompatível com Haiku', async () => {
+    calls.defaults.mockResolvedValue({ model: 'haiku', effort: 'high', permission: '' });
     calls.models.mockResolvedValue({ kind: 'claude', reduced: false, models: [{ id: 'haiku', name: 'Haiku' }] });
     const { container, root } = await renderSheet(false, false);
     await send(container);
@@ -1823,7 +1946,7 @@ describe('CreateSessionSheet Codex', () => {
   it.each([
     ['sem escolha, a conta ativa não vai (D-003: o servidor decide)', null, null, null],
     ['a conta ativa escolhida à mão vai', null, 'Conta A', '/a'],
-    ['a conta lembrada de uma escolha anterior vai', '/b', null, '/b'],
+    ['a conta lembrada no aparelho não vai: a seleção abre na ativa do servidor', '/b', null, null],
   ])('%s', async (_case, remembered, pick, expected) => {
     calls.configs.mockResolvedValue([{ path: '/a', label: 'Conta A', active: true }, { path: '/b', label: 'Conta B', active: false }]);
     if (remembered) localStorage.setItem(`create.choices.v1:${server.id}`, JSON.stringify({ configDir: remembered }));

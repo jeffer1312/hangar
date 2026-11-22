@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 hangar-core.workspace = true
+hangar-session-open-fields.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 chrono.workspace = true

@@ -255,6 +255,11 @@ impl resolve::OpenFacts for FixtureFacts {
         Ok(file.get(&key).cloned().and_then(|value| serde_json::from_value(value).ok()))
     }
 
+    fn session_options(&self) -> Result<Option<crate::session_defaults::SessionOptions>, String> {
+        let Some(file) = self.file(&format!("{HOME}/.hangar/session-options.json")) else { return Ok(None) };
+        serde_json::from_value(file.clone()).map(Some).map_err(|error| error.to_string())
+    }
+
     // Sem serviço de contas Codex no harness: nenhuma conta conectada.
     fn codex_logins(&self) -> Result<Vec<resolve::CodexLogin>, OpenError> { Ok(self.connected.clone()) }
 
@@ -1669,6 +1674,82 @@ fn code_mode_reaches_the_claude_pane_only_when_asked() {
     };
     assert_eq!(launch(json!({"code_mode": true})), (true, true));
     assert_eq!(launch(json!({})), (false, false));
+}
+
+/// O Code Mode marcado na tela Beta é padrão do servidor: toda abertura do Claude que não diz nada nasce
+/// com ele, venha de onde vier, e só com a conversa nova ligada também. Pedido explícito vence.
+#[test]
+fn code_mode_default_of_the_server_fills_an_omitted_request() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir_all(home.join("work/proj")).unwrap();
+    std::fs::create_dir_all(home.join(".hangar")).unwrap();
+    let open = |options: Value, extra: Value| {
+        std::fs::write(home.join(".hangar/session-options.json"), options.to_string()).unwrap();
+        let mut body = json!({"name": "s1", "cwd": "~/work/proj", "provider": "claude", "headless": false, "permission_mode": "manual"});
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+        resolve::resolve_open(&request, &OWNER, &local_facts(&home, &runtime)).unwrap().spec.code_mode
+    };
+    let both = json!({"conversation_beta": true, "code_mode": true});
+    assert!(open(both.clone(), json!({})), "omitido: vale o padrão do servidor");
+    assert!(!open(both.clone(), json!({"code_mode": false})), "pedido explícito vence o padrão");
+    assert!(!open(json!({"conversation_beta": false, "code_mode": true}), json!({})), "sem a conversa nova, o Code Mode não vale");
+    assert!(open(json!({"conversation_beta": false, "code_mode": false}), json!({"code_mode": true})), "pedido explícito liga sem padrão");
+}
+
+/// Code Mode pedido fora do Claude é recusado: sumir calado faria quem pediu achar que ele está ligado.
+#[test]
+fn an_explicit_code_mode_outside_claude_is_refused() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir_all(home.join("work/proj")).unwrap();
+    let body = json!({"name": "s1", "cwd": "~/work/proj", "provider": "pi", "headless": false, "code_mode": true});
+    let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+    let error = resolve::resolve_open(&request, &OWNER, &local_facts(&home, &runtime)).err().expect("Code Mode fora do Claude");
+    assert_eq!((error.status, error.code), (400, Some("erro_code_mode_so_claude")));
+}
+
+/// Os campos do pedido no fio, na ordem do struct, tirados da recusa do serde ao campo desconhecido.
+fn wire_fields() -> Vec<String> {
+    let error = SessionOpenRequest::parse(br#"{"cwd": "/x", "campo_que_nao_existe": 1}"#).unwrap_err();
+    let text = format!("{error:?}");
+    let list = text.split("expected one of ").nth(1).expect("o serde lista os campos esperados");
+    list.split(", ").map_while(|item| item.strip_prefix('`').and_then(|rest| rest.split('`').next())).map(str::to_owned).collect()
+}
+
+/// Trava da abertura única: todo campo do pedido de abertura está na tabela de
+/// `hangar_session_open_fields` (que o `--new` e o `new_session` conferem nos testes deles) ou é
+/// só do servidor com o motivo dito. Campo novo no `SessionOpenRequest` sem entrar lá falha aqui.
+#[test]
+fn every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server() {
+    use hangar_session_open_fields::{FIELDS, SERVER_ONLY};
+    let wire = wire_fields();
+    assert!(wire.len() > 20, "a lista do serde mudou de formato: {wire:?}");
+    let known: Vec<&str> = FIELDS.iter().map(|f| f.body).chain(SERVER_ONLY.iter().map(|(name, _)| *name)).collect();
+    let missing: Vec<&String> = wire.iter().filter(|name| !known.contains(&name.as_str())).collect();
+    assert!(missing.is_empty(), "campos do pedido fora da tabela hangar_session_open_fields: {missing:?}");
+    let stale: Vec<&&str> = known.iter().filter(|name| !wire.iter().any(|w| w == *name)).collect();
+    assert!(stale.is_empty(), "campos da tabela que o pedido não tem mais: {stale:?}");
+}
+
+/// Trava do padrão do servidor: campo cujo omitido o servidor decide guarda o valor explícito, até o
+/// `false`. Um `bool` puro não separa "a pessoa desligou" de "ninguém disse", e o padrão do servidor
+/// nunca chega a quem não preencheu.
+#[test]
+fn a_field_with_a_server_default_keeps_the_explicit_value() {
+    for field in hangar_session_open_fields::FIELDS.iter().filter(|f| f.server_default) {
+        let parsed = [json!(false), json!("priority"), json!("x")].into_iter().find_map(|sample| {
+            let body = json!({"cwd": "/x", field.body: sample.clone()});
+            SessionOpenRequest::parse(body.to_string().as_bytes()).ok().map(|request| (sample, request))
+        });
+        let (sample, request) = parsed.unwrap_or_else(|| panic!("{}: nenhum valor de exemplo serve", field.body));
+        assert_eq!(serde_json::to_value(&request).unwrap()[field.body], sample, "{}: o valor explícito se perdeu", field.body);
+        let omitted = SessionOpenRequest::parse(br#"{"cwd": "/x"}"#).unwrap();
+        assert!(serde_json::to_value(&omitted).unwrap().get(field.body).is_none(), "{}: o omitido virou valor", field.body);
+    }
 }
 
 /// Conta ChatGPT fixa do motor (`_fixed_engine_account`, `cliproxy.engine_env`): a credencial do
