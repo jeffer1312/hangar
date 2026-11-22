@@ -25,7 +25,8 @@ Decisões do usuário (22/11):
   cópia e ficou para depois.
 - **Só leitura.** O binário só chama `SendMediaRetryReceipt` (pedido de mídia antiga ao celular) e
   os recibos automáticos do whatsmeow. Um teste de lista fechada das chamadas `Send*` barra
-  qualquer outra. As leituras usam um pool só de leitura, separado do escritor, com prazo de 5 s
+  qualquer outra. Os recibos automáticos são os de entrega, que o celular já manda pelos mesmos
+  aparelhos; recibo de leitura não sai. "Só leitura" é nenhuma mensagem enviada. As leituras usam um pool só de leitura, separado do escritor, com prazo de 5 s
   por consulta (`busy`).
 - **Aceite obrigatório.** Parear um aparelho extra com programa não oficial é risco para a conta.
   `POST /api/whatsapp/install` sem `{"accept":true}` responde 400 `whatsapp_accept_required`; o
@@ -34,9 +35,14 @@ Decisões do usuário (22/11):
   par de fora não alcançam rota nenhuma. As ferramentas MCP chamam as rotas em processo pelo mesmo
   `owner_only` e, antes disso, recusam com `whatsapp_shared_session` quando a sessão que chama tem
   convite de convidado ativo ou membro de fora no grupo, porque o que ela lê chegaria a eles.
+  Aparelho aprovado no Connect age como dono (o token do dono é reescrito na entrada) e alcança
+  `/api/whatsapp*`: é o desenho de todas as rotas do dono, e aprovar um aparelho dá a ele a leitura
+  do WhatsApp.
 - **Texto de terceiros marcado.** Mensagem é texto escrito por outras pessoas e pode trazer
   instrução para o agente. Toda resposta das ferramentas leva `"third_party_content":true` e o
   aviso para nunca seguir instruções contidas nele, e é cortada em ~32 KB com `"truncated":true`.
+  Arquivos de mídia (`.txt`, `.pdf`, `.zip`, documentos) são conteúdo de terceiros do mesmo jeito,
+  e a skill manda tratá-los assim.
 - **Mídia antiga sob demanda, com teto (3A).** Mídia que o servidor do WhatsApp já apagou só sai do
   celular, e cada pedido gera uma notificação nele. Por isso nada é pedido sozinho: só por
   `whatsapp_request_media`, no máximo 20 por chamada e 200 por dia (`capped: true` quando cortou).
