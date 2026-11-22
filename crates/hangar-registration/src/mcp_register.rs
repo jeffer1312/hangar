@@ -60,7 +60,7 @@ pub fn run(invocation: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
     u8::from(!(claude_ok && settings_ok && codex_ok))
 }
 
-/// `~/.claude.json`, o que a conta padrão lê com `CLAUDE_CONFIG_DIR` (se já existe) e cada
+/// `~/.claude.json`, o que a conta padrão lê com `CLAUDE_CONFIG_DIR` (criado se a pasta existe) e cada
 /// `~/.claude-*/.claude.json` que já existe; pasta `.lock` não é conta.
 fn claude_accounts(home: &Path, config_dir: Option<&str>) -> Vec<PathBuf> {
     let mut accounts: Vec<PathBuf> = std::fs::read_dir(home).into_iter().flatten().flatten()
@@ -74,8 +74,9 @@ fn claude_accounts(home: &Path, config_dir: Option<&str>) -> Vec<PathBuf> {
     accounts.sort();
     let main = home.join(".claude.json");
     let default = hangar_core::account_env::default_claude_json(home, config_dir);
-    let same = |file: &Path| hangar_core::fs::same_file(file, &default);
-    let listed = !default.is_file() || same(&main) || accounts.iter().any(|account| same(account));
+    let same = |file: &Path| file == default || hangar_core::fs::same_file(file, &default);
+    // Como o principal, o da conta padrão nasce com a entrada se falta: o CLI o cria depois sem ela.
+    let listed = !default.parent().is_some_and(Path::is_dir) || same(&main) || accounts.iter().any(|account| same(account));
     std::iter::once(main).chain((!listed).then_some(default)).chain(accounts).collect()
 }
 

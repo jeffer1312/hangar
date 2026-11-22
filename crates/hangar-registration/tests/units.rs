@@ -71,14 +71,19 @@ fn token_with_quote_still_registers_codex_with_valid_toml() {
 }
 
 /// Com `CLAUDE_CONFIG_DIR` a conta padrão lê o `.claude.json` de dentro da pasta: ele recebe o MCP junto
-/// com o `~/.claude.json`. Com `--home` a variável é do processo, não da casa, e fica de fora.
+/// com o `~/.claude.json`, e nasce com ele quando o CLI ainda não o criou. Com `--home` a variável é do
+/// processo, não da casa, e fica de fora.
 #[test]
 fn the_file_the_default_account_reads_gets_the_mcp() {
-    for home_arg in [false, true] {
+    for (home_arg, exists) in [(false, true), (false, false), (true, true)] {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         with_token(home, "CP_AUTH_TOKEN=t\n");
-        write(&home.join(".claude/.claude.json"), "{\"oauthAccount\": {}}");
+        if exists {
+            write(&home.join(".claude/.claude.json"), "{\"oauthAccount\": {}}");
+        } else {
+            std::fs::create_dir_all(home.join(".claude")).unwrap();
+        }
         let mut inv = invocation(home, "");
         inv.vars.insert("CLAUDE_CONFIG_DIR".into(), home.join(".claude").to_string_lossy().into_owned());
         if home_arg {
@@ -87,8 +92,8 @@ fn the_file_the_default_account_reads_gets_the_mcp() {
         let (code, _, err) = run(mcp_register::run, &inv);
         assert_eq!(code, 0, "{err}");
         assert!(std::fs::read_to_string(home.join(".claude.json")).unwrap().contains("headersHelper"));
-        let inner = std::fs::read_to_string(home.join(".claude/.claude.json")).unwrap();
-        assert_eq!(inner.contains("headersHelper"), !home_arg, "{inner}");
+        let inner = std::fs::read_to_string(home.join(".claude/.claude.json")).unwrap_or_default();
+        assert_eq!(inner.contains("headersHelper"), !home_arg, "home_arg={home_arg} exists={exists}: {inner}");
     }
 }
 

@@ -1383,7 +1383,8 @@ mesmo critério do `config_dir_to_export`. O principal do Computer Use continua 
 mudar para o de dentro da pasta faria a marca `registered` de quem já tinha o registro ler a
 entrada ausente como tirada à mão, e o registro nunca mais aconteceria. Limite: tirar a entrada à
 mão só do arquivo de dentro da pasta é desfeito no próximo registro, como numa conta `~/.claude-*`;
-desligar é pela tela. O `mcp-register` ignora a variável com `--home`, que aponta para outra casa. Os comandos de
+desligar é pela tela. O `mcp-register` ignora a variável com `--home`, que aponta para outra casa, e cria o arquivo de
+dentro da pasta quando ele falta, como faz com o `~/.claude.json`: o CLI o criaria depois sem o `hangar`. Os comandos de
 terminal (`hangar-conta --prep`, `hangar-server open` com o servidor fora) leem a variável do shell,
 que num painel de outra conta é a pasta dela: por isso pasta com `.hangar-conta` nunca é a padrão. A
 importação do Codex já tinha a mesma regra numa cópia própria, que passou a usar esta.
