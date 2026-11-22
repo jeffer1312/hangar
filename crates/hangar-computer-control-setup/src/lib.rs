@@ -44,6 +44,8 @@ pub struct Error {
 pub struct Paths {
     pub home: PathBuf,
     pub accounts: Vec<PathBuf>,
+    /// A pasta de `accounts` cujo `.claude.json` a conta padrão lê: entra mesmo antes de o CLI criá-lo.
+    pub default_account: Option<PathBuf>,
 }
 
 impl Error {
@@ -79,7 +81,7 @@ impl Error {
 
 impl Paths {
     pub fn new(home: PathBuf, accounts: Vec<PathBuf>) -> Self {
-        Self { home, accounts }
+        Self { home, accounts, default_account: None }
     }
     pub fn main_file(&self) -> PathBuf {
         self.home.join(".claude.json")
@@ -123,13 +125,14 @@ impl Paths {
     pub fn ssh_config(&self) -> PathBuf {
         self.home.join(".ssh").join("config")
     }
-    /// O principal sempre; de cada conta, só o `.claude.json` que já existe e não é o próprio principal
-    /// (`CLAUDE_CONFIG_DIR` apontando para o HOME).
+    /// O principal sempre; de cada conta, só o `.claude.json` que já existe (o da conta padrão, mesmo
+    /// antes) e não é o próprio principal (`CLAUDE_CONFIG_DIR` apontando para o HOME).
     pub fn config_files(&self) -> Vec<PathBuf> {
         let main = self.main_file();
         let main_real = main.canonicalize().ok();
+        let default_file = self.default_account.as_ref().filter(|dir| dir.is_dir()).map(|dir| dir.join(".claude.json"));
         let accounts: Vec<PathBuf> = self.accounts.iter().map(|dir| dir.join(".claude.json"))
-            .filter(|p| p.is_file() && (main_real.is_none() || p.canonicalize().ok() != main_real))
+            .filter(|p| (p.is_file() || Some(p) == default_file.as_ref()) && (main_real.is_none() || p.canonicalize().ok() != main_real))
             .collect();
         std::iter::once(main).chain(accounts).collect()
     }

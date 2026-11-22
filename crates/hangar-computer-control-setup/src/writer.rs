@@ -491,6 +491,20 @@ mod tests {
         assert_eq!(std::fs::read(saved).unwrap(), br#"{"external":"preserved"}"#);
     }
 
+    /// O arquivo que a conta padrão lê entra antes de o CLI criá-lo, senão nasceria sem a entrada; as outras
+    /// contas só com o arquivo.
+    #[test]
+    fn the_default_account_file_is_listed_before_the_cli_creates_it() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let mut paths = Paths::new(home.to_owned(), vec![home.join(".claude"), home.join("acc")]);
+        paths.default_account = Some(home.join(".claude"));
+        let files = paths.config_files();
+        assert!(files.contains(&home.join(".claude").join(".claude.json")), "{files:?}");
+        assert!(!files.contains(&home.join("acc").join(".claude.json")), "{files:?}");
+    }
+
     fn with_account(home: &Path) -> Paths {
         std::fs::create_dir_all(home.join("acc")).unwrap();
         Paths::new(home.to_owned(), vec![home.join("acc")])

@@ -163,13 +163,17 @@ pub(crate) fn account_paths(accounts: &crate::accounts::AccountService) -> Resul
         .filter(|account| resolved(account) != default)
         .collect();
     let read_by_default = accounts.env.default_claude_json();
+    let mut default_account = None;
     if let Some(dir) = read_by_default.parent().filter(|_| read_by_default != home.join(".claude.json")) {
         let dir_real = resolved(dir);
-        if !homes.iter().any(|account| resolved(account) == dir_real) {
-            homes.push(dir.to_owned());
+        match homes.iter().find(|account| resolved(account) == dir_real) {
+            Some(account) => default_account = Some(account.clone()),
+            None => { homes.push(dir.to_owned()); default_account = Some(dir.to_owned()); }
         }
     }
-    Ok(setup::Paths::new(home.clone(), homes))
+    let mut paths = setup::Paths::new(home.clone(), homes);
+    paths.default_account = default_account;
+    Ok(paths)
 }
 
 fn facts(st: &AppState, config: &RuntimeConfig) -> setup::Facts {

@@ -1,5 +1,6 @@
 //! A conta Claude do Hangar (`~/.claude-<nome>`) alinhada ao `~/.claude`: atalho de cada arquivo
-//! compartilhado, cópia espelhada do `settings.json`, espelho dos `mcpServers` do `~/.claude.json`,
+//! compartilhado, cópia espelhada do `settings.json`, espelho dos `mcpServers` do `.claude.json` que a
+//! conta padrão lê (`principal`; sem ele, nada),
 //! atalho da memória de cada projeto, conferência dos plugins e a gaveta `.drift` para o que diverge.
 //! Relê o disco a cada chamada; as travas são por chamada. O comando `hangar-server conta` é a borda
 //! que os wrappers de shell (`hangar-conta`, `claude-conta`) chamam.
