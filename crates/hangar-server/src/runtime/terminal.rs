@@ -1721,7 +1721,9 @@ impl Executor {
         let Ok(state) = self.queue.snapshot().await else { return false };
         let Some(row) = state.rows.iter().find(|row| row["id"] == entry) else { return false };
         // O `enqueue` não é gasto por quem prova: outra entregue sem confirmação com o mesmo texto o usaria também.
-        if state.rows.iter().any(|other| other["id"] != entry && other["text"] == row["text"] && other["delivered"] == true && other["confirmed"] != true) { return false; }
+        let text = row["text"].as_str().unwrap_or("");
+        if state.rows.iter().any(|other| other["id"] != entry && other["delivered"] == true && other["confirmed"] != true
+            && other["desistiu"] != true && self.receipt.matching_text(other, text).is_some()) { return false; }
         // Só a tentativa que saiu, como na confirmação: o cursor de uma adiada provaria a fila de outra entrada igual.
         let cursors: Vec<DispatchCursor> = state.operations.values()
             .filter(|op| op.entry_id.as_deref() == Some(entry) && matches!(op.status, Status::Accepted | Status::Unknown | Status::Dispatching))

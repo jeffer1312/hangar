@@ -112,7 +112,7 @@ impl ReceiptIndex {
         }
     }
 
-    fn matching_text(&self, row: &Value, text: &str) -> Option<String> {
+    pub(crate) fn matching_text(&self, row: &Value, text: &str) -> Option<String> {
         if let Some(state) = &self.other_rows {
             return other_matching_text(row, text, &state.rows);
         }
