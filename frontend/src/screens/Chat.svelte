@@ -1804,7 +1804,8 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     renameReturned = s;
   }
   const contaPior = $derived.by(() => {
-    const conta = sessaoAtual?.conta;
+    const binding = sessaoAtual?.engine_binding;
+    const conta = binding ? `cliproxy-binding:${binding}` : sessaoAtual?.conta;
     const minha = conta ? faixaDeCota(quotaFeed.contas)?.find((c) => c.id === conta) : null;
     return minha ? piorJanela([minha], status?.model ?? null) : null;
   });

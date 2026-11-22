@@ -601,15 +601,22 @@ async fn prepare_baton_engine(st:&AppState,asked:&mut Value)->Result<(),OpenErro
         else{crate::session_open::resolve::choose_provider(&crate::engines::providers::read(&st.accounts).await?.selection).name().to_owned()};
         asked["provider"]=json!(provider);
     }
-    let Some(account)=asked["engine_account"].as_str()else{return Ok(());};
+    let account=asked["engine_account"].as_str().map(str::to_owned);
+    let expected=asked["engine_binding"].as_str().map(str::to_owned);
+    if account.is_none() && expected.is_none() { return Ok(()); }
     let engine=asked["engine"].as_str().unwrap_or("");
     if asked["provider"]!="claude"||engine.is_empty(){return Err(OpenError::new(400,"erro_cliproxy_conta","conta ChatGPT exige Claude com motor CLIProxyAPI local"));}
-    let (engine,account,model)=(engine.to_owned(),account.to_owned(),asked["model"].as_str().map(str::to_owned));
+    let (engine,model)=(engine.to_owned(),asked["model"].as_str().map(str::to_owned));
     let accounts=st.accounts.clone();let runtime=tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move||{
         use super::OpenFacts;
         let facts=super::facts::LocalFacts::shared(accounts.env.clone(),&accounts,runtime);
-        facts.fixed_engine_model(&engine,&account,model.as_deref()).map(|_|())
+        let (account, binding) = facts.engine_account(&engine, account.as_deref())?;
+        if expected.is_some() && binding != expected {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "A conta vinculada ao motor mudou. Reabra a tela de nova sessão."));
+        }
+        if let Some(account) = account { facts.fixed_engine_model(&engine, &account, model.as_deref())?; }
+        Ok(())
     }).await.map_err(|_|OpenError::new(500,"erro_cliproxy_conta","a validação da conta do motor foi interrompida"))?
 }
 

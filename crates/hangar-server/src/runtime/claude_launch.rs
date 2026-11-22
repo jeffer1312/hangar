@@ -141,11 +141,7 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     let mut program = Vec::new();
     if let Some((name, context_window)) = engine {
         program.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
-        if let Some(route) = ctx.engine_route {
-            program.extend(["--account".into(), route.account.clone()]);
-            if let Some(home) = &route.home { program.extend(["--account-home".into(), home.clone()]); }
-            program.extend(["--account-base-url".into(), route.base_url.clone()]);
-        }
+        if let Some(route) = ctx.engine_route { route.append_args(&mut program); }
         if let Some(model) = spec.model.as_deref().filter(|m| !m.is_empty()) {
             program.extend(["--model".into(), model.into()]);
             if let Some(window) = context_window { program.extend(["--context".into(), window.to_string()]); }
@@ -243,14 +239,10 @@ pub fn plan_for(env: &AccountEnvironment, bridge: Option<&PluginBridge>, spec: &
                 facts: &dyn crate::session_open::OpenFacts) -> Result<Launch, RuntimeError> {
     let config = super::codex_launch::runtime_config(env);
     let roots = crate::session_open::claude::plugin_roots(&env.home);
-    let (engine, account) = match &spec.account {
-        Account::Engine { name, account, .. } => (Some(name.as_str()), account.as_deref()),
-        _ => (None, None),
-    };
-    let route = match (engine, account) {
-        (Some(engine), Some(account)) => Some(crate::session_open::facts::fixed_account(
-            &crate::accounts::AccountService::new(env.clone()), engine, account)
-            .map_err(|error| refused("launch_engine_account", &error.msg))?),
+    let route = match &spec.account {
+        Account::Engine { name, account, binding, .. } => crate::session_open::facts::session_engine_route(
+            &crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref())
+            .map_err(|error| refused("launch_engine_account", &error.msg))?,
         _ => None,
     };
     let tier = crate::session_open::claude::relaunch_tier(spec, facts);

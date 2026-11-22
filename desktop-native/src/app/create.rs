@@ -1331,6 +1331,7 @@ impl NewSession {
                 body["config_dir"] = self.requested_config();
                 body["engine"] = text(&self.engine);
                 if self.proxy_accounts().is_some() { body["engine_account"] = json!(self.engine_account); }
+                if let Some(binding) = self.proxy_binding() { body["engine_binding"] = json!(binding); }
                 if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
                 // O motor exporta o próprio modelo de subagente: com ele, o campo nem aparece.
                 if self.engine.is_empty() && !self.subagent.is_empty() { body["subagent_model"] = json!(self.subagent); }
@@ -1422,6 +1423,7 @@ impl NewSession {
                 "resumo_por_modelo": self.baton_by_model});
             if provider == "codex" { body["codex_account"] = json!(self.codex_account); }
             if claude && self.proxy_accounts().is_some() { body["engine_account"] = json!(self.engine_account); }
+            if claude && let Some(binding) = self.proxy_binding() { body["engine_binding"] = json!(binding); }
             if self.headless_inherited() { body.as_object_mut().unwrap().remove("headless"); }
             if let Some(customizations) = self.customization_payload() { body["claude_customizations"] = json!(customizations); }
             if let Some(on) = code_mode { body["code_mode"] = on; }

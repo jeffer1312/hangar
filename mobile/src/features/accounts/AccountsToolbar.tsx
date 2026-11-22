@@ -127,7 +127,7 @@ function SortRow({ label, on, dir, onPress }: { label: string; on: boolean; dir?
 }
 
 const styles = StyleSheet.create((theme) => ({
-  chips: { flexDirection: 'row', alignSelf: 'flex-start', gap: 2, padding: 3, borderWidth: 1, borderRadius: theme.base.radius.md },
+  chips: { flexDirection: 'row', alignSelf: 'flex-start', gap: theme.base.space[0.5], padding: 3, borderWidth: 1, borderRadius: theme.base.radius.md },
   pill: { position: 'absolute', top: 3, bottom: 3, borderRadius: theme.base.radius.sm },
   chip: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5], minHeight: 36, paddingHorizontal: theme.base.space[3] },
   chipText: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },

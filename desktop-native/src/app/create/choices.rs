@@ -194,6 +194,9 @@ pub(super) struct Motor {
     #[serde(default)] model: String,
     cliproxy_accounts: Option<Vec<crate::api::dto::CliProxyAccount>>,
     cliproxy_error: Option<String>,
+    cliproxy_binding: Option<String>,
+    cliproxy_bound_account: Option<crate::api::dto::CliProxyAccount>,
+    cliproxy_binding_error: Option<String>,
 }
 
 fn eligible_engine_account(account: &crate::api::dto::CliProxyAccount) -> bool {
@@ -207,8 +210,11 @@ fn choose_engine_account<'a>(accounts: &'a [crate::api::dto::CliProxyAccount], s
 }
 
 fn engine_account_ready(motor: &Motor, account: &str) -> bool {
-    motor.cliproxy_error.is_none() && motor.cliproxy_accounts.as_ref().is_none_or(|list|
-        list.iter().any(|a| a.account == account && eligible_engine_account(a)))
+    motor.cliproxy_error.is_none() && if motor.cliproxy_binding.is_some() {
+        motor.cliproxy_bound_account.as_ref().is_some_and(|a| a.account == account && eligible_engine_account(a))
+    } else {
+        motor.cliproxy_accounts.as_ref().is_none_or(|list| list.iter().any(|a| a.account == account && eligible_engine_account(a)))
+    }
 }
 
 /// O Jev só existe com a chave guardada no servidor; o padrão é o `jev_padrao` lido de lá.
@@ -351,6 +357,10 @@ impl NewSession {
         self.selected_engine()?.cliproxy_accounts.as_deref()
     }
 
+    pub(super) fn proxy_binding(&self) -> Option<&str> {
+        self.selected_engine()?.cliproxy_binding.as_deref()
+    }
+
     pub(super) fn proxy_account(&self) -> Option<&crate::api::dto::CliProxyAccount> {
         self.proxy_accounts()?.iter().find(|a| a.account == self.engine_account)
     }
@@ -371,7 +381,7 @@ impl NewSession {
         if self.engines.loading { return Some(tr("loading")); }
         if let Some(Err(error)) = &self.engines.value { return Some(error.clone()); }
         let Some(motor) = self.selected_engine() else { return Some(tr("create_engine_missing").replace("{name}", &self.engine)); };
-        if let Some(error) = &motor.cliproxy_error { return Some(tr("create_proxy_error").replace("{reason}", error)); }
+        if let Some(error) = motor.cliproxy_binding_error.as_ref().or(motor.cliproxy_error.as_ref()) { return Some(tr("create_proxy_error").replace("{reason}", error)); }
         let accounts = motor.cliproxy_accounts.as_ref()?;
         if accounts.is_empty() { return Some(tr("create_proxy_no_accounts")); }
         if self.proxy_account().is_none() { return Some(tr("create_proxy_choose_account")); }
@@ -388,6 +398,13 @@ impl NewSession {
             self.engine_account_pick = None;
             return;
         };
+        let bound = self.selected_engine().filter(|m| m.cliproxy_binding.is_some())
+            .map(|m| m.cliproxy_bound_account.as_ref().map(|a| a.account.clone()).unwrap_or_default());
+        if let Some(account) = bound {
+            self.engine_account = account;
+            self.engine_account_pick = None;
+            return;
+        }
         let selected = choose_engine_account(accounts, &self.engine_account).unwrap_or_default().to_owned();
         self.engine_account = selected;
         let choices: Vec<ModelChoice> = self.proxy_accounts().unwrap_or_default().iter().filter(|a| eligible_engine_account(a)).map(|a| ModelChoice {
@@ -1187,10 +1204,14 @@ impl NewSession {
         let pick = self.engine_account_pick.as_ref().map(|(pick, _)| Select::new(pick).id("create-engine-account")
             .placeholder(tr("create_proxy_choose_account")).accessibility_label(tr("create_chatgpt_account"))
             .disabled(self.creating || self.engines.loading || invalid || self.proxy_accounts().is_none_or(|a| a.is_empty())));
-        let quota = self.proxy_account().and_then(|a| self.quota_of(&a.credential_id));
+        let quota = self.selected_engine().and_then(|m| m.cliproxy_binding.as_ref())
+            .and_then(|binding| self.quota_of(&format!("cliproxy-binding:{binding}")))
+            .or_else(|| self.proxy_account().and_then(|a| a.binding.as_ref()).and_then(|binding| self.quota_of(&format!("cliproxy-binding:{binding}"))));
         div().flex().flex_col().gap_2()
             .child(label(tr("create_chatgpt_account")))
             .children(pick)
+            .when_some(self.selected_engine().and_then(|m| m.cliproxy_bound_account.as_ref()), |el, a|
+                el.child(muted(if a.email.is_empty() { a.label.clone() } else { a.email.clone() })))
             .when_some(quota, |el, q| el.child(self.render_quota("create-engine-quota".into(), q)))
             .when(quota.is_none() && self.proxy_account().is_some(), |el| el.child(muted(tr(if self.quotas.loading { "loading" } else { "create_quota_none" }))))
             .when_some(self.quotas.value.as_ref().and_then(|q| q.as_ref().err()), |el, error| el.child(muted(tr("accounts_failed").replace("{reason}", error))))

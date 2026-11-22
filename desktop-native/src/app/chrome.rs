@@ -843,21 +843,40 @@ pub fn ring(pct: Option<f64>) -> AnyElement { ring_sized(pct, 16., 14., 2.) }
 
 /// O mesmo anel em outra medida: `side` é a caixa, `diameter` o anel e `stroke` o traço.
 pub fn ring_sized(pct: Option<f64>, side: f32, diameter: f32, stroke: f32) -> AnyElement {
+    let arc = pct.map(|pct| (0., pct.clamp(0., 100.) as f32 / 100., meter_color(pct)));
+    ring_canvas(side, diameter, stroke, arc).into_any_element()
+}
+
+/// Anel de progresso de uma transferência, no acento: `share` de 0 a 1. Sem tamanho conhecido, um quarto de arco que
+/// gira; com movimento reduzido, parado.
+pub fn progress_ring(id: impl Into<ElementId>, share: Option<f32>, side: f32, stroke: f32, still: bool) -> AnyElement {
+    let diameter = side - stroke;
+    match share {
+        Some(share) => ring_canvas(side, diameter, stroke, Some((0., share.clamp(0., 1.), theme::accent()))).into_any_element(),
+        None if still => ring_canvas(side, diameter, stroke, Some((0., 0.25, theme::accent()))).into_any_element(),
+        None => div().size(px(side)).flex_shrink_0()
+            .with_animation(id, Animation::new(Duration::from_millis(1100)).repeat(),
+                move |el, t| el.child(ring_canvas(side, diameter, stroke, Some((t, 0.25, theme::accent())))))
+            .into_any_element(),
+    }
+}
+
+/// O trilho e o arco `(início em voltas, fração, cor)`.
+fn ring_canvas(side: f32, diameter: f32, stroke: f32, arc: Option<(f32, f32, Hsla)>) -> Div {
     let track = theme::text().opacity(0.16);
-    let arc = pct.map(|pct| (pct.clamp(0., 100.) as f32 / 100., meter_color(pct)));
     div().size(px(side)).flex_shrink_0().child(canvas(|_, _, _| (), move |bounds, _, window, _| {
         let ring = Bounds::centered_at(bounds.center(), size(px(diameter), px(diameter)));
         window.paint_quad(outline(ring, track, BorderStyle::Solid).border_widths(px(stroke)).corner_radii(px(diameter / 2.)));
-        let Some((share, color)) = arc.filter(|(share, _)| *share > 0.) else { return };
+        let Some((start, share, color)) = arc.filter(|(_, share, _)| *share > 0.) else { return };
         let (center, radius) = (bounds.center(), (diameter - stroke) / 2.);
         // Um ponto a cada meio pixel de arco, do topo em sentido horário.
         let steps = (std::f32::consts::TAU * radius * share / 0.5).ceil().max(1.) as usize;
         for step in 0..=steps {
-            let angle = std::f32::consts::TAU * share * step as f32 / steps as f32 - std::f32::consts::FRAC_PI_2;
+            let angle = std::f32::consts::TAU * (start + share * step as f32 / steps as f32) - std::f32::consts::FRAC_PI_2;
             let at = point(center.x + px(radius * angle.cos()), center.y + px(radius * angle.sin()));
             window.paint_quad(fill(Bounds::centered_at(at, size(px(stroke), px(stroke))), color).corner_radii(px(stroke / 2.)));
         }
-    }).size_full()).into_any_element()
+    }).size_full())
 }
 
 fn meter_color(pct: f64) -> Hsla {

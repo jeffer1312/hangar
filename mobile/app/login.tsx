@@ -231,7 +231,7 @@ const styles = StyleSheet.create((theme, rt) => ({
     flexGrow: 1,
     justifyContent: 'flex-start',
     alignItems: 'center',
-    paddingTop: 80,
+    paddingTop: theme.base.space[10] * 2,
     paddingHorizontal: theme.base.space[6],
     paddingBottom: theme.base.space[6],
   },

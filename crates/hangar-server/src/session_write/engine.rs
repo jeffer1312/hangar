@@ -44,35 +44,34 @@ async fn facts<T:Send+'static>(env:crate::accounts::environment::AccountEnvironm
 /// (quem chama segue o caminho de sempre).
 pub(crate) async fn switch(st:&Arc<AppState>,runtime:&Arc<RuntimeRegistry>,name:&str,spec:SessionSpec,wanted:EngineChange) -> (StatusCode,Value) {
     let env=runtime.codex_environment();
-    let Account::Engine { name:engine,account:current,config_dir,context_window,.. }=spec.account.clone() else {
+    let Account::Engine { name:engine,account:current,binding:current_binding,config_dir,context_window,.. }=spec.account.clone() else {
         return (StatusCode::BAD_REQUEST,detail_body("erro_cliproxy_conta","esta sessão não usa o CLIProxyAPI local",json!({})));
     };
-    let account=wanted.account.clone().or(current.clone());
-    let Some(account)=account else {
-        return (StatusCode::BAD_REQUEST,detail_body("erro_cliproxy_conta","esta sessão não usa uma conta ChatGPT fixa",json!({})));
-    };
-    if (wanted.model.is_some() || wanted.effort.is_some()) && current.as_deref()!=Some(account.as_str()) {
-        return (StatusCode::CONFLICT,detail_body("erro_cliproxy_conta","a conta da sessão mudou; atualize a lista de modelos",json!({})));
-    }
     let parked=spec.parked();
-    let same=current.as_deref()==Some(account.as_str()) && wanted.model.is_none() && wanted.effort.is_none() && wanted.tier.is_none();
-    if same && !parked {return (StatusCode::OK,json!({"ok":true,"engine_account":account}));}
-    // O modelo com o prefixo da conta, conferido no catálogo de agora: o cache não sustenta a recusa aqui.
+    let explicit = wanted.account.is_some();
+    let requested = wanted.account.clone().or_else(|| current.clone().filter(|_| current_binding.is_none()));
     let model=wanted.model.clone().or(spec.model.clone());
-    let checked={let (engine,account,model)=(engine.clone(),account.clone(),model.clone());
-        facts(env.clone(),move|facts|{
+    let checked={let (engine, saved_binding)=(engine.clone(), current_binding.clone());
+        facts(env,move|facts|{
+            let (account, binding) = facts.engine_account(&engine, requested.as_deref())?;
+            if !explicit && binding != saved_binding {
+                return Err(crate::session_open::OpenError::new(409, "erro_cliproxy_conta", "O vínculo deste motor mudou. Confirme a conta da conversa."));
+            }
+            let account = account.ok_or_else(|| crate::session_open::OpenError::new(400, "erro_cliproxy_conta", "Esta sessão não usa uma conta ChatGPT fixa."))?;
             let base=facts.fixed_engine_model(&engine,&account,model.as_deref())?;
             let window=match &model {Some(model)=>facts.engine_window(&engine,model,Some(&account))?,None=>None};
-            Ok::<_,crate::session_open::OpenError>((base,window))
+            Ok::<_,crate::session_open::OpenError>((account,binding,base,window))
         }).await};
-    let (base,window)=match checked {
+    let (account,binding,base,window)=match checked {
         Some(Ok(found))=>found,
         Some(Err(error))=>return (StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_REQUEST),error.body()),
         None=>return (StatusCode::SERVICE_UNAVAILABLE,detail_body("erro_cliproxy_conta","o catálogo do motor não respondeu",json!({}))),
     };
+    let same=current.as_deref()==Some(account.as_str()) && binding == current_binding && wanted.model.is_none() && wanted.effort.is_none() && wanted.tier.is_none();
+    if same && !parked {return (StatusCode::OK,json!({"ok":true,"engine_account":account}));}
     let window=if wanted.model.is_some() {window} else {context_window};
     let change=SessionChange { reason:ChangeReason::AccountSwitch,surface:parked.then_some(crate::session_open::Surface::Terminal),
-        account:Some(Account::Engine { name:engine,account:Some(account.clone()),config_dir,context_window:window,context_window_unknown:false }),
+        account:Some(Account::Engine { name:engine,account:Some(account.clone()),binding,config_dir,context_window:window,context_window_unknown:false }),
         permission_mode:None,model:Some(base),effort:wanted.effort.clone(),service_tier:wanted.tier };
     let (runtime,owned)=(runtime.clone(),name.to_owned());
     match super::relaunch::reopen_detached(st,name,async move {runtime.reopen_claude_session(&owned,change,None).await}).await {
@@ -213,10 +212,16 @@ pub async fn service_tier(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
         return reply(Some(&parts.headers),StatusCode::BAD_REQUEST,detail_body("erro_fast_indisponivel","Fast exige GPT no CLIProxyAPI local",json!({})));
     }
     if tier==ServiceTier::Ultrafast {
-        let (account,model)=(match &spec.account {Account::Engine { account,.. }=>account.clone(),_=>None},runtime.claude_model_in_use(&name).await.or(spec.model.clone()));
+        let (account,binding)=match &spec.account {Account::Engine { account,binding,.. }=>(account.clone(),binding.clone()),_=>(None,None)};
+        let model=runtime.claude_model_in_use(&name).await.or(spec.model.clone());
         let accounts=st.accounts.clone();
-        let ultrafast=match tokio::task::spawn_blocking(move||crate::engines::catalog::supports_ultrafast(&accounts,engine.as_deref().unwrap_or(""),model.as_deref(),account.as_deref())).await {
-            Ok(ultrafast)=>ultrafast,
+        let ultrafast=match tokio::task::spawn_blocking(move|| {
+            let engine = engine.as_deref().unwrap_or("");
+            let route = crate::session_open::facts::session_engine_route(&accounts, engine, account.as_deref(), binding.as_deref())?;
+            Ok::<_, crate::session_open::OpenError>(crate::engines::catalog::supports_ultrafast(&accounts, engine, model.as_deref(), route.as_ref().map(|r| r.account.as_str())))
+        }).await {
+            Ok(Ok(ultrafast))=>ultrafast,
+            Ok(Err(error))=>return reply(Some(&parts.headers), StatusCode::CONFLICT, error.body()),
             Err(error)=>{
                 tracing::error!(%error,session=%name,"Ultra Fast: a conferência da conta caiu");
                 return reply(Some(&parts.headers),StatusCode::INTERNAL_SERVER_ERROR,detail_body("erro_ultrafast_conferencia","não consegui conferir o plano da conta",json!({})));

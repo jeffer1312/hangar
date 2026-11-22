@@ -1344,7 +1344,7 @@ mod tests {
     fn engine_and_other_providers_stay() {
         let spent = Spent::default();
         let (cat,quotas) = (catalog(&["/a","/b"]),[quota("/a",10.0),quota("/b",10.0)]);
-        let engine = Account::Engine { name:"kimi".into(),account:None,config_dir:None,context_window:None,context_window_unknown:false };
+        let engine = Account::Engine { name:"kimi".into(),account:None,binding:None,config_dir:None,context_window:None,context_window_unknown:false };
         assert_eq!(decide(&spec(engine),"/a",&cat,&quotas,&spent,1000.0),Decision::Stay("limit_switch_engine"));
         let mut codex = spec(claude("/a"));
         codex.provider = AgentProvider::Codex;

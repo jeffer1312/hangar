@@ -25,6 +25,7 @@ pub const FIELDS: &[(&str, char)] = &[
     ("gateway_model_discovery", 'b'),
     ("fine_grained_tool_streaming", 'b'),
     ("fast", 'b'),
+    ("cliproxy_binding", 's'),
     ("auto_compact_window", 'i'),
     ("max_output_tokens", 'i'),
 ];
@@ -260,13 +261,40 @@ fn change(
     Ok(changed)
 }
 
+fn validate_binding(accounts: &crate::accounts::AccountService, fields: &mut Map<String, Value>, models: Option<&[Value]>) -> Result<(), String> {
+    let Some(binding) = fields.get("cliproxy_binding").and_then(Value::as_str) else { return Ok(()) };
+    if !super::proxy::is_local(&accounts.env, fields["base_url"].as_str().unwrap_or(""))? {
+        return Err("CLIProxyAPI: conta vinculada exige o endereço do proxy local".into());
+    }
+    let account = super::proxy::resolve_binding(accounts, binding)?;
+    let prefix = account["prefix"].as_str().ok_or("CLIProxyAPI: conta vinculada sem prefixo")?;
+    let models = models.ok_or("CLIProxyAPI: catálogo da conta vinculada indisponível")?;
+    for field in ["model", "subagent_model"] {
+        if let Some(model) = fields.get(field).and_then(Value::as_str) {
+            let id = super::proxy::prefix_model(model, prefix)?;
+            if !models.iter().any(|row| row["id"] == id) {
+                return Err(format!("CLIProxyAPI: {model} não está disponível na conta vinculada"));
+            }
+            fields.insert(field.into(), Value::String(id.split_once('/').expect("modelo prefixado").1.to_owned()));
+        }
+    }
+    Ok(())
+}
+
 pub fn put(
-    env: &AccountEnvironment,
+    accounts: &crate::accounts::AccountService,
     name: &str,
     mut body: Map<String, Value>,
+    models: Option<&[Value]>,
 ) -> Result<(), String> {
+    let env = &accounts.env;
     change(env, |map| {
         if let Some(old) = map.get(name).and_then(Value::as_object) {
+            if old.get("cliproxy_binding").is_some_and(Value::is_string)
+                && let Some(next) = body.get("base_url").and_then(Value::as_str)
+                && normalize_base(next.trim()) != normalize_base(old["base_url"].as_str().unwrap_or("")) {
+                return Err("Desvincule a conta ChatGPT antes de trocar o endereço do motor.".into());
+            }
             if let Some(key) = old
                 .get("api_key")
                 .and_then(Value::as_str)
@@ -281,24 +309,29 @@ pub fn put(
                 }
             }
             for (field, value) in old {
-                if body.get(field).is_none_or(Value::is_null) {
+                if !body.contains_key(field) || (field != "cliproxy_binding" && body[field].is_null()) {
                     body.insert(field.clone(), value.clone());
                 }
             }
         }
-        map.insert(name.into(), Value::Object(normalize(name, &body)?));
+        let mut fields = normalize(name, &body)?;
+        validate_binding(accounts, &mut fields, models)?;
+        map.insert(name.into(), Value::Object(fields));
         Ok(true)
     })
     .map(|_| super::catalog::invalidate(env, name))
 }
 
 /// Motor novo: nome que já existe fica como está (`false`), conferido sob a mesma trava da gravação.
-pub fn create(env: &AccountEnvironment, name: &str, body: Map<String, Value>) -> Result<bool, String> {
+pub fn create(accounts: &crate::accounts::AccountService, name: &str, body: Map<String, Value>, models: Option<&[Value]>) -> Result<bool, String> {
+    let env = &accounts.env;
     let created = change(env, |map| {
         if map.contains_key(name) {
             return Ok(false);
         }
-        map.insert(name.into(), Value::Object(normalize(name, &body)?));
+        let mut fields = normalize(name, &body)?;
+        validate_binding(accounts, &mut fields, models)?;
+        map.insert(name.into(), Value::Object(fields));
         Ok(true)
     })?;
     if created {

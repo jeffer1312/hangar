@@ -77,7 +77,7 @@ export function PensamentoVivo({ texto }: { texto: string }) {
   return (
     <View style={styles.pensamento} accessibilityLiveRegion="none">
       <View style={styles.linha}>
-        <Pulso><Icon name="Brain" size={15} color={theme.tokens.accent.base} /></Pulso>
+        <Pulso><Icon name="Brain" size={THOUGHT_ICON} color={theme.tokens.accent.base} /></Pulso>
         <Text style={[styles.verbo, { color: theme.tokens.text.secondary }]}>{m.pensamento_vivo()}</Text>
         <Text style={[styles.tempo, { color: theme.tokens.text.muted }]}>
           {formatElapsed(Math.max(0, agora - inicio) / 1000)}
@@ -161,6 +161,8 @@ export function AgentCard({ description, tag, model, tempo, waiting = false, onP
 }
 
 const EMPTY_EVENTS: ChatEvent[] = [];
+// A cauda do pensamento começa na coluna do texto: depois do ícone e do vão da linha.
+const THOUGHT_ICON = 15;
 
 const styles = StyleSheet.create((theme) => ({
   linha: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], minHeight: 32 },
@@ -169,7 +171,7 @@ const styles = StyleSheet.create((theme) => ({
   // O encolhimento pesa pelo tamanho do texto: o peso alto faz os tokens cederem antes do verbo.
   detalhe: { flexShrink: 100, minWidth: 0, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] },
   pensamento: { gap: theme.base.space[0.5] },
-  cauda: { fontSize: theme.base.text.xs, fontStyle: 'italic', paddingLeft: 23 },
+  cauda: { fontSize: theme.base.text.xs, fontStyle: 'italic', paddingLeft: THOUGHT_ICON + theme.base.space[2] },
   agentes: { gap: theme.base.space[1] },
   agente: {
     flexDirection: 'row',

@@ -1096,6 +1096,7 @@ export interface CreateSessionBody {
   jev?: boolean;
   // Conta ChatGPT do CLIProxyAPI local (só Claude com motor) e Fast (`priority`) ou Ultra Fast da sessão nova.
   engine_account?: string;
+  engine_binding?: string;
   service_tier?: ServiceTier;
   // Plugins e skills só desta sessão: a diferença do padrão do catálogo (só Claude, sessão nova).
   claude_customizations?: ClaudeCustomizationDelta;
@@ -1334,8 +1335,8 @@ export interface ClaudeDefaultsBody { model?: string | null; effort?: string | n
 export interface SessionDefaults { model: string; effort: string; permission: string }
 
 export async function getSessionDefaultsForServer(server: Server, provider: Provider, engine?: string | null,
-  signal?: AbortSignal): Promise<SessionDefaults | null> {
-  const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}) });
+  signal?: AbortSignal, engineAccount?: string | null): Promise<SessionDefaults | null> {
+  const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}), ...(engineAccount ? { engine_account: engineAccount } : {}) });
   const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server,
     `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) }).catch((e: { code?: string }) => {
     // Convidado não tem padrão salvo; a recusa não é falha de leitura, que travaria a criação.
@@ -1603,8 +1604,9 @@ export function modelOptionsForServer(server: Server, provider: string, engine?:
   return apiFetchForServer(server, modelOptionsPath(provider, engine, configDir, codexAccount, engineAccount), { signal: comTeto(signal, 8000) });
 }
 
-export function getCredentialsForServer(server: Server, force = false, signal?: AbortSignal): Promise<Credencial[]> {
-  return apiFetchForServer(server, `/api/credenciais${force ? '?forcar=true' : ''}`, { signal: comTeto(signal, 8000) });
+export function getCredentialsForServer(server: Server, force = false, signal?: AbortSignal, proxyAccounts = false): Promise<Credencial[]> {
+  const query = new URLSearchParams({ ...(force ? { forcar: 'true' } : {}), ...(proxyAccounts ? { proxy_accounts: 'true' } : {}) }).toString();
+  return apiFetchForServer(server, `/api/credenciais${query ? `?${query}` : ''}`, { signal: comTeto(signal, 8000) });
 }
 export function listarCredenciais(server: Server | null, force = false): Promise<Credencial[]> {
   return server ? getCredentialsForServer(server, force) : apiFetch(`/api/credenciais${force ? '?forcar=true' : ''}`);
@@ -3056,8 +3058,11 @@ export interface Motor {
   // Só em motor do CLIProxyAPI local: as contas ChatGPT do proxy, ou o motivo de não as ter lido.
   cliproxy_accounts?: CliProxyAccount[];
   cliproxy_error?: string;
+  cliproxy_binding?: string;
+  cliproxy_bound_account?: CliProxyAccount;
+  cliproxy_binding_error?: string;
 }
-export interface CliProxyAccount { account: string; credential_id: string; email: string; label: string; prefix?: string | null }
+export interface CliProxyAccount { account: string; credential_id: string; email: string; label: string; prefix?: string | null; binding?: string; plan?: string | null }
 export interface ModeloProvedor {
   id: string;
   context_length: number | null;
@@ -3144,7 +3149,7 @@ export interface CliproxyDeteccao {
   install?: CliproxyInstall;
 }
 
-export interface CliproxyAccount { type: string; email: string }
+export interface CliproxyAccount { type: string; email: string; binding?: string | null; prefix?: string | null; plan?: string | null }
 
 export type CliproxyInstallStep = 'download' | 'config' | 'service' | 'start';
 
@@ -3194,7 +3199,7 @@ export function adoptCliproxyForServer(s: Server, confirm = false): Promise<{ jo
 }
 
 export type CliproxyLoginProvider = 'codex' | 'claude';
-export type CliproxyLoginState = { status: 'wait' | 'ok' | 'error'; error?: string };
+export type CliproxyLoginState = { status: 'wait' | 'ok' | 'error'; error?: string; account?: CliproxyAccount | null };
 
 export function installCliproxyForServer(s: Server): Promise<{ job: CliproxyJob | null }> {
   return apiFetchForServer(s, '/api/engines/cliproxy/install', { method: 'POST', body: '{}' });

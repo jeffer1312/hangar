@@ -337,6 +337,7 @@ impl Hangar {
         let state = self.file_cards.get(&(key.clone(), item.source.clone())).cloned();
         let folder = match &item.source { Source::Upload(_) => Some(tr("media_uploads_folder")), _ => item.folder.as_deref().map(abbreviate_home) };
         let (detail, color) = match &state {
+            Some(FileCard::Downloading { done, total }) => (downloading_label(*done, *total), theme::muted()),
             Some(FileCard::Busy) => (Self::media_detail(item, Some(web("file_card_downloading"))), theme::muted()),
             Some(FileCard::Saved(_)) => (Self::media_detail(item, Some(web("file_card_saved").to_lowercase())), theme::success_text()),
             Some(FileCard::Missing) => (web("file_card_missing"), theme::warning_text()),
@@ -349,6 +350,12 @@ impl Hangar {
         let save = { let (source, name) = (source.clone(), name.clone());
             move |this: &mut Self, cx: &mut Context<Self>| this.keep_file(source.clone(), name.clone(), false, cx) };
         let action = match &state {
+            // O anel do download do cartão da conversa: quanto chegou, e o clique cancela.
+            Some(FileCard::Downloading { done, total }) => {
+                let card = (key.clone(), source.clone());
+                cancel_ring(&format!("media-file-{i}"), *done, *total, cx.reduce_motion(),
+                    cx.listener(move |this, _, _, cx| this.cancel_download(card.clone(), cx)))
+            }
             Some(FileCard::Saved(path)) => {
                 let (path, openable) = (path.clone(), composer::openable(&composer::safe_name(&name)));
                 div().flex().items_center().gap_1()
@@ -383,9 +390,20 @@ impl Hangar {
         let audio_key = format!("media:{}:{:?}", key.name, item.source);
         let state = self.audio_state(&audio_key);
         let duration = state.duration.map(crate::audio::clock);
-        let detail = match &state.error {
-            Some(error) => tr("audio_failed").replace("{error}", error),
-            None => Self::media_detail(item, duration),
+        let downloading = match self.file_cards.get(&(key.clone(), item.source.clone())) {
+            Some(FileCard::Downloading { done, total }) => Some((*done, *total)),
+            _ => None,
+        };
+        // Durante o download a linha diz quanto chegou, como a de arquivos: sem tamanho declarado o anel não anda.
+        let detail = match (&state.error, downloading) {
+            (_, Some((done, total))) => downloading_label(done, total),
+            (Some(error), None) => tr("audio_failed").replace("{error}", error),
+            (None, None) => Self::media_detail(item, duration),
+        };
+        let detail_color = match (&state.error, downloading) {
+            (_, Some(_)) => theme::muted(),
+            (Some(_), None) => theme::warning_text(),
+            (None, None) => theme::faint(),
         };
         let label = tr(if state.playing { "audio_pause" } else { "audio_play" });
         let (play_source, play_name, play_key) = (item.source.clone(), item.name.clone(), audio_key.clone());
@@ -408,17 +426,23 @@ impl Hangar {
             _ => None,
         };
         let (save_source, save_name) = (item.source.clone(), item.name.clone());
+        let card = (key.clone(), item.source.clone());
+        let save = match self.file_cards.get(&card) {
+            Some(FileCard::Downloading { done, total }) => cancel_ring(&format!("media-audio-{i}"), *done, *total, cx.reduce_motion(),
+                cx.listener(move |this, _, _, cx| this.cancel_download(card.clone(), cx))),
+            _ => Button::new(SharedString::from(format!("media-audio-save-{i}"))).ghost().xsmall().icon(IconName::Download)
+                .tooltip(activity::web("file_card_download")).accessibility_label(activity::web("file_card_download"))
+                .on_click(cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx)))
+                .into_any_element(),
+        };
         div().id(SharedString::from(format!("media-audio-{i}"))).py(px(9.)).px(px(6.)).rounded(px(8.)).flex().items_center().gap(px(10.))
             .hover(|el| el.bg(theme::hover()))
             .child(play)
             .child(div().flex_1().min_w_0().flex().flex_col()
                 .child(div().truncate().text_size(px(13.)).text_color(theme::text()).child(item.name.clone()))
-                .child(div().mt(px(2.)).truncate().text_size(px(11.)).text_color(if state.error.is_some() { theme::warning_text() } else { theme::faint() })
-                    .child(detail)))
+                .child(div().mt(px(2.)).truncate().text_size(px(11.)).text_color(detail_color).child(detail)))
             .children(again)
-            .child(Button::new(SharedString::from(format!("media-audio-save-{i}"))).ghost().xsmall().icon(IconName::Download)
-                .tooltip(activity::web("file_card_download")).accessibility_label(activity::web("file_card_download"))
-                .on_click(cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx))))
+            .child(save)
             .into_any_element()
     }
 }

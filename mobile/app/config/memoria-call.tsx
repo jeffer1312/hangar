@@ -99,7 +99,7 @@ const styles = StyleSheet.create((theme) => ({
   stepLine: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], minHeight: 24 },
   small: { fontSize: theme.base.text.xs },
   say: { fontSize: theme.base.text.sm, lineHeight: 21, marginVertical: theme.base.space[1] },
-  chip: { fontFamily: MONO, fontSize: theme.base.text.xs, paddingHorizontal: theme.base.space[1], borderRadius: 4, overflow: 'hidden', flexShrink: 1 },
-  box: { fontFamily: MONO, fontSize: theme.base.text.xs, lineHeight: 18, padding: theme.base.space[3], borderRadius: 8, borderWidth: 1 },
+  chip: { fontFamily: MONO, fontSize: theme.base.text.xs, paddingHorizontal: theme.base.space[1], borderRadius: theme.base.radius.xs, overflow: 'hidden', flexShrink: 1 },
+  box: { fontFamily: MONO, fontSize: theme.base.text.xs, lineHeight: 18, padding: theme.base.space[3], borderRadius: theme.base.radius.sm, borderWidth: 1 },
   prompt: { fontFamily: MONO, fontSize: theme.base.text.xs, lineHeight: 18, padding: theme.base.space[4], borderTopWidth: 1 },
 }));
