@@ -27,8 +27,8 @@ vi.mock('../../ui/Glass', () => ({ Glass: ({ children }: { children: ReactNode }
 vi.mock('../../ui/Screen', () => ({ Screen: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: vi.fn(), erro: vi.fn() } }));
 vi.mock('../connect/ConnectHero', () => ({ ConnectMark: () => null }));
-vi.mock('./QrScanner', () => ({ QrScanner: () => null }));
-vi.mock('../share/InvitePanel', () => ({ InvitePanel: () => null }));
+vi.mock('./QrScanner', () => ({ QrScanner: () => <div>fixture-qr-scanner</div> }));
+vi.mock('../share/InvitePanel', () => ({ InvitePanel: () => <div>fixture-invite-panel</div> }));
 vi.mock('expo-blur', () => ({ BlurView: ({ children }: { children: ReactNode }) => children }));
 vi.mock('expo-glass-effect', () => ({ GlassView: ({ children }: { children: ReactNode }) => children, isLiquidGlassAvailable: () => false }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
@@ -46,11 +46,16 @@ import { LoginScreen } from './LoginScreen';
 import * as m from '../../paraglide/messages';
 
 const GUEST_HOST = 'https://notebook.acme.hangar.dev.br';
+const MACHINE_HOST = 'https://pc2.acme.hangar.dev.br';
+const ACCOUNT_KEY = 'cp_connect_account_v1';
+// Desligada: aparece sem marcar, e nenhum pedido de entrada sai dela.
+const OFF_MACHINE = { machine_id: 'pc1', name: 'fixture-pc', host: 'pc1.acme.hangar.dev.br', online: false };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 let root: Root;
 let el: HTMLDivElement;
 let lookup: () => Response | Promise<Response>;
 let deviceStatus = 'pending';
+let machineList: unknown[] = [OFF_MACHINE];
 
 const button = (label: string) => [...el.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === label) as HTMLButtonElement | undefined;
 const click = async (label: string) => {
@@ -82,6 +87,7 @@ beforeEach(async () => {
   configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: vi.fn(), origin: null, createEventSource: () => { throw new Error('sem SSE'); } });
   useConnect.setState(useConnect.getInitialState());
   deviceStatus = 'pending';
+  machineList = [OFF_MACHINE];
   lookup = () => json({ kind: 'account' });
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input);
@@ -93,8 +99,14 @@ beforeEach(async () => {
       if (url.pathname === '/v1/devices' && init?.method === 'POST') return json({ device_id: 'ad1', device_secret: 'ad-secret' });
       if (url.pathname === '/v1/devices/ad1') return json({ status: deviceStatus });
       if (url.pathname === '/v1/devices') return json([]);
-      // Desligada: aparece sem marcar, e nenhum pedido de entrada sai dela.
-      if (url.pathname === '/v1/machines') return json([{ machine_id: 'pc1', name: 'fixture-pc', host: 'pc1.acme.hangar.dev.br', online: false }]);
+      if (url.pathname === '/v1/machines') return json(machineList);
+      if (/^\/v1\/machines\/\w+\/devices$/.test(url.pathname)) return json({ url: MACHINE_HOST, ticket: '{"nonce":"n"}', signature: 'c2ln' });
+      return json({});
+    }
+    // Bilhete pré-aprovado pela conta: a primeira consulta já entrega o token.
+    if (url.origin === MACHINE_HOST) {
+      if (url.pathname === '/api/connect/redeem') return json({ device_id: 'dev1', status: 'pending' }, 202);
+      if (url.pathname === '/api/connect/redeem/status') return json({ status: 'approved', token: 'machine-token' });
       return json({});
     }
     if (url.origin === GUEST_HOST) {
@@ -214,5 +226,74 @@ describe('entrar no Hangar', () => {
     await render();
     await click(m.connect_create_free());
     expect(mocks.push).toHaveBeenCalledWith('/connect?mode=create');
+  });
+
+  it('convidada entra sem guardar conta do Connect', async () => {
+    lookup = () => json({ kind: 'guest', hosts: ['notebook.acme.hangar.dev.br'] });
+    await render();
+    await signIn('ana.silva', 'fixture-right');
+    await vi.waitFor(() => expect(button(m.login_guest_enter_one())).toBeTruthy());
+    await click(m.login_guest_enter_one());
+    expect(mocks.replace).toHaveBeenCalledWith('/');
+    expect(useConnect.getState().account).toBeNull();
+    expect(mocks.vault.has(ACCOUNT_KEY)).toBe(false);
+  });
+
+  it('convidada que sai da lista volta ao formulário com a senha limpa', async () => {
+    lookup = () => json({ kind: 'guest', hosts: ['notebook.acme.hangar.dev.br'] });
+    await render();
+    await signIn('ana.silva', 'fixture-right');
+    await vi.waitFor(() => expect(button(m.contas_sair())).toBeTruthy());
+    await click(m.contas_sair());
+    const field = el.querySelector(`input[aria-label="${m.login_senha()}"]`) as HTMLInputElement;
+    expect(field).toBeTruthy();
+    expect(field.value).toBe('');
+  });
+
+  it('conta esperando a liberação já mostra "Sair", e sair volta ao formulário com a senha limpa', async () => {
+    await render();
+    await signIn('acme', 'fixture-right');
+    await vi.waitFor(() => expect(el.textContent).toContain(m.connect_release_title()));
+    expect(button(m.connect_sign_out()), 'sair à mostra na espera').toBeTruthy();
+    await click(m.connect_sign_out());
+    await vi.waitFor(() => expect(el.querySelector(`input[aria-label="${m.login_senha()}"]`)).toBeTruthy());
+    expect((el.querySelector(`input[aria-label="${m.login_senha()}"]`) as HTMLInputElement).value).toBe('');
+    expect(mocks.vault.has(ACCOUNT_KEY)).toBe(false);
+  });
+
+  it('conta liberada só segue para o app depois de escolher as máquinas e tocar em Entrar', async () => {
+    deviceStatus = 'approved';
+    machineList = [{ machine_id: 'pc2', name: 'fixture-pc2', host: 'pc2.acme.hangar.dev.br', online: true }];
+    await render();
+    await signIn('acme', 'fixture-right');
+    await vi.waitFor(() => expect(button(m.login_guest_enter_one())).toBeTruthy());
+    expect(mocks.replace).not.toHaveBeenCalled();
+
+    await click(m.login_guest_enter_one());
+    await vi.waitFor(() => expect(mocks.replace).toHaveBeenCalledWith('/'));
+    expect(useServers.getState().servers.map((s) => s.baseUrl)).toContain(MACHINE_HOST);
+  });
+
+  it('conta que caiu por 401 deixa o aviso no formulário', async () => {
+    useConnect.setState({ notice: m.connect_session_ended() });
+    await render();
+    expect(el.querySelector(`input[aria-label="${m.login_account_or_user()}"]`)).toBeTruthy();
+    expect(el.textContent).toContain(m.connect_session_ended());
+  });
+
+  it('QR, convite e endereço com token abrem os caminhos de antes', async () => {
+    await render();
+    await click(m.login_other_ways());
+    expect(el.textContent).not.toContain('fixture-qr-scanner');
+    await click(m.login_qr());
+    expect(el.textContent).toContain('fixture-qr-scanner');
+
+    expect(el.textContent).not.toContain('fixture-invite-panel');
+    await click(m.mobile_share_invite_open());
+    expect(el.textContent).toContain('fixture-invite-panel');
+
+    await click(m.login_address_token());
+    expect(el.querySelector(`input[aria-label="${m.sessao_url_servidor()}"]`)).toBeTruthy();
+    expect(el.querySelector(`input[aria-label="${m.sessao_token()}"]`)).toBeTruthy();
   });
 });

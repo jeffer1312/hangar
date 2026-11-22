@@ -28,7 +28,11 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
   const [renaming, setRenaming] = useState<Renaming | null>(null);
   const owner = useConnect((s) => s.account?.name) || syncUser;
   const open = useRef<LegacySession | null>(null);
-  useEffect(() => () => { void open.current?.close(); }, []);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; void open.current?.close(); };
+  }, []);
 
   const signIn = async () => {
     if (busy || !user.trim() || !password) return;
@@ -36,15 +40,18 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
     setErrors([]);
     try {
       const opened = await openLegacyGuests(hub, user.trim(), password, syncCrypto);
+      // Folha fechada durante a entrada: ninguém mais fecharia esta sessão.
+      if (!mounted.current) { void opened.close(); return; }
       open.current = opened;
       setPassword('');
       setSession(opened);
       haptic.success();
     } catch (error) {
+      if (!mounted.current) return;
       setErrors([syncFailureText(error)]);
       haptic.error();
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
@@ -65,6 +72,7 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
     }
     setBusy(true);
     setErrors([]);
+    let saved = false;
     try {
       const result = await saveGuest(store, machines, plan.draft, plan.prev);
       if (result.errors.length) {
@@ -74,13 +82,16 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
         if (!result.storeFailed) onChanged();
         return;
       }
+      saved = true;
       await session.remove(admin.user);
       setRenaming(null);
       setSession({ ...session, guests: session.guests.filter((guest) => guest.user !== admin.user) });
       toast.ok(m.guests_legacy_brought({ usuario: plan.draft.user }));
       onChanged();
     } catch (error) {
-      // A conta nova pode ter sido guardada e só a remoção da antiga ter falhado: tentar de novo atualiza os mesmos acessos.
+      // A conta nova pode ter sido guardada e só a remoção da antiga ter falhado: a lista já mostra a nova, e tentar de
+      // novo atualiza os mesmos acessos.
+      if (saved) onChanged();
       const code = (error as { code?: string } | null)?.code;
       setErrors([code?.startsWith('sync_') || code === 'network_failed' ? syncFailureText(error) : thrownText(error)]);
       haptic.error();

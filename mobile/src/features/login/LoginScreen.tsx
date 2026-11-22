@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -47,10 +47,13 @@ export function LoginScreen() {
   const [scanning, setScanning] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteLink, setInviteLink] = useState('');
+  // O estado `busy` só chega no próximo render: dois toques seguidos passariam os dois.
+  const inFlight = useRef(false);
   useEffect(() => { void useConnect.getState().load(); }, []);
 
   const submit = async () => {
-    if (busy || !name.trim() || !password) return;
+    if (inFlight.current || !name.trim() || !password) return;
+    inFlight.current = true;
     setBusy(true);
     setError('');
     try {
@@ -65,6 +68,7 @@ export function LoginScreen() {
       haptic.error();
       setError(e instanceof Error && e.message ? e.message : m.login_falha());
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
@@ -113,6 +117,8 @@ export function LoginScreen() {
           <Text style={styles.subtitle}>{m.login_hangar_subtitle()}</Text>
         </View>
         <View style={styles.form}>
+          {/* A conta caiu (401) e a tela voltou ao formulário: sem o aviso, parece que ela nunca entrou. */}
+          {notice === m.connect_session_ended() ? <Notice text={notice} /> : null}
           <LoginField label={m.login_account_or_user()} value={name} onChangeText={setName} placeholder={m.login_account_or_user_hint()}
             editable={!busy} spellCheck={false} textContentType="username" autoComplete="username" returnKeyType="next" />
           <LoginField label={m.login_senha()} value={password} onChangeText={setPassword} placeholder="••••••••" editable={!busy}

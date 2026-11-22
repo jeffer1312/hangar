@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
@@ -20,8 +20,12 @@ export function AddressForm({ base: initialBase = '', token: initialToken = '' }
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // `loading` só chega no próximo render: dois toques seguidos entrariam duas vezes.
+  const inFlight = useRef(false);
 
   const signIn = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setLoading(true);
     setError('');
     try {
@@ -36,11 +40,13 @@ export function AddressForm({ base: initialBase = '', token: initialToken = '' }
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : m.login_falha());
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   };
 
   const connect = async () => {
+    if (inFlight.current) return;
     const base = baseUrl.trim();
     const tok = token.trim();
     // Monta texto de pareamento e valida pelo mesmo parsePairing do QR (regra única)
@@ -50,6 +56,7 @@ export function AddressForm({ base: initialBase = '', token: initialToken = '' }
       setError(!base || !tok ? m.login_informe_url_token() : m.login_url_token_invalidos());
       return;
     }
+    inFlight.current = true;
     setLoading(true);
     setError('');
     // add é síncrono em memória, mas persist é async: o probe só roda depois
@@ -76,6 +83,7 @@ export function AddressForm({ base: initialBase = '', token: initialToken = '' }
         setError(msg ? `${m.login_falha()}: ${msg}` : m.login_url_token_invalidos());
       }
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   };
