@@ -1,7 +1,7 @@
 ---
 id: 2026-11-22-tmux-resume-sessoes-internas
 titulo: Terminal de atalho não volta do reboot como sessão Claude falsa
-comando_posix: ! grep -qsE '\.hangar/versions/[^/ ]+/scripts/tmux-claude-resume\.sh' ~/.tmux.conf || { f=$(perl -MCwd=abs_path -e 'print abs_path(shift)' ~/.tmux.conf) && perl -pi -e 's#\.hangar/versions/[^/ ]+/scripts/tmux-claude-resume\.sh#.hangar/current/scripts/tmux-claude-resume.sh#g' "$f" && if v=$(tmux show -gv @resurrect-hook-post-save-all 2>/dev/null); then tmux set -g @resurrect-hook-post-save-all "$(printf '%s' "$v" | perl -pe 's#\.hangar/versions/[^/ ]+/scripts/tmux-claude-resume\.sh#.hangar/current/scripts/tmux-claude-resume.sh#g')"; fi; }
+comando_posix: { ! grep -qsE '\.hangar/versions/[^/ ]+/scripts/tmux-claude-resume\.sh' ~/.tmux.conf || { f=$(perl -MCwd=abs_path -e 'print abs_path(shift)' ~/.tmux.conf) && perl -pi -e 's#\.hangar/versions/[^/ ]+/scripts/tmux-claude-resume\.sh#.hangar/current/scripts/tmux-claude-resume.sh#g' "$f"; }; } && if v=$(tmux show -gv @resurrect-hook-post-save-all 2>/dev/null); then n=$(printf '%s' "$v" | perl -pe 's#\.hangar/versions/[^/ ]+/scripts/tmux-claude-resume\.sh#.hangar/current/scripts/tmux-claude-resume.sh#g') && { [ "$n" = "$v" ] || tmux set -g @resurrect-hook-post-save-all "$n"; }; fi
 prova: scripts/tmux-claude-resume.sh
 destrutivo: false
 tipo: maquina
