@@ -81,6 +81,11 @@ impl Api {
         self.device_call(Method::POST, "certs", &[], Some(body), 30).await.map(drop)
     }
 
+    /// Para o trabalho em andamento no aparelho, mesmo sem o `job` (tela reaberta).
+    pub async fn device_cancel(&self, udid: &str) -> Result<(), DeviceError> {
+        self.device_call(Method::POST, "cancel", &[], Some(json!({"udid": udid})), 30).await.map(drop)
+    }
+
     pub async fn device_progress(&self, job: &str) -> Result<Progress, DeviceError> {
         let value = self.device_call(Method::GET, "progress", &[("job", job)], None, 10).await?;
         serde_json::from_value(value).map_err(|_| lost())

@@ -1,0 +1,14 @@
+[package]
+name = "hangar-video"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Sem hangar-core e sem GPUI: o app nativo depende deste crate, e os quadros saem num buffer que quem
+# pinta copia para a textura dele.
+[dependencies]
+libloading.workspace = true
+
+# `setlocale`: a libmpv recusa criar o player com o LC_NUMERIC fora do "C".
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

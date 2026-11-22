@@ -337,6 +337,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_subagente_inexistente: () => m.erro_subagente_inexistente(),
   erro_transcript_ausente: () => m.erro_transcript_ausente(),
   erro_resume_so_claude: (p) => m.erro_resume_so_claude({ provider: String(p.provider) }),
+  erro_resume_sem_claude: () => m.erro_resume_sem_claude(),
   erro_session_id_invalido: () => m.erro_session_id_invalido(),
 
   // Conflito: nome em uso, sessao viva, pane ocupado

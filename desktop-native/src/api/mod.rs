@@ -316,7 +316,7 @@ fn failure_detail(body: Option<Value>, status: u16) -> String {
             // de uma recusa e o rótulo do botão vêm nos parâmetros.
             if let Some(code) = fields.get("code").and_then(Value::as_str)
                 .filter(|code| code.starts_with("erro_par_") || code.starts_with("erro_mod_") || code.starts_with("session_open_")
-                    || matches!(*code, "erro_resume_so_claude" | "erro_session_id_invalido" | "erro_conta_sem_login" | "erro_sem_conta_destino"
+                    || matches!(*code, "erro_resume_so_claude" | "erro_resume_sem_claude" | "erro_session_id_invalido" | "erro_conta_sem_login" | "erro_sem_conta_destino"
                         | "erro_liberar_sessao" | "erro_liberar_conta")) {
                 let params = fields.get("params").and_then(Value::as_object).map(|p| p.iter()
                     .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect()).unwrap_or_default();
@@ -785,6 +785,24 @@ impl Api {
             }
             self.checked(r, false).await
         }).await?
+    }
+
+    /// Endereço e credencial para um player que busca sozinho, por faixas (Range): a mesma rota do `fetch`, pela rede
+    /// local quando ela venceu, e o token separado para ir no cabeçalho, nunca na URL. `None`: anexo sem rota de
+    /// arquivo, ou endereço do Connect sem credencial de aparelho, onde a senha do dono nunca vai.
+    pub fn media_url(&self, name: &str, source: &Source) -> Option<(String, String)> {
+        let mut url = self.endpoint(Some(name), None);
+        match source {
+            Source::Upload(file) => { url.path_segments_mut().ok()?.extend(["uploads", file]); }
+            Source::Cited(path) | Source::Workspace(path) => {
+                url.path_segments_mut().ok()?.push("file");
+                url.query_pairs_mut().append_pair("path", path);
+                if matches!(source, Source::Workspace(_)) { url.query_pairs_mut().append_pair("root", "1"); }
+            }
+            Source::Transcript(..) | Source::Remote(_) | Source::Memory(..) => return None,
+        }
+        let token = self.socket_token(&url, &self.token)?;
+        Some((url.to_string(), token))
     }
 
     /// Página publicada: sem `extra` é a casca isolada (com `raw=1`, o HTML cru); `["shot"]` é a imagem. O 404 diz
@@ -1388,6 +1406,19 @@ mod tests {
     use core::prelude::v1::test;
 
     #[test]
+    fn media_url_keeps_the_token_out_of_the_url() {
+        // Endereço só deste teste: a tabela de rotas é global e outros testes a mudam.
+        let api = Api::new("http://stream-test.invalid:8765", "fixture-owner").unwrap();
+        let (url, token) = api.media_url("s 1", &Source::Upload("a b.mp4".into())).unwrap();
+        assert_eq!(url, "http://stream-test.invalid:8765/api/sessions/s%201/uploads/a%20b.mp4");
+        assert_eq!(token, "fixture-owner");
+        let (url, _) = api.media_url("s", &Source::Cited("/tmp/v.mov".into())).unwrap();
+        assert_eq!(url, "http://stream-test.invalid:8765/api/sessions/s/file?path=%2Ftmp%2Fv.mov");
+        assert!(!url.contains("fixture-owner"));
+        assert!(api.media_url("s", &Source::Transcript("x".into(), 0)).is_none());
+    }
+
+    #[test]
     fn page_url_keeps_path_and_ticket_over_the_route_to_the_server() {
         let open = "http://127.0.0.1:8765/api/sessions/minha%20sessao/pages/p1?page_ticket=abc";
         let lan = Url::parse("http://192.168.0.7:8765/").unwrap();
@@ -1681,6 +1712,8 @@ mod tests {
     fn resume_refusals_use_the_web_sentence() {
         let text = failure_detail(Some(json!({"detail": {"code": "erro_resume_so_claude", "params": {"provider": "pi"}, "msg": "x"}})), 409);
         assert!(text != "x" && text.contains("pi") && text.contains("Claude"), "{text}");
+        let text = failure_detail(Some(json!({"detail": {"code": "erro_resume_sem_claude", "params": {}, "msg": "x"}})), 409);
+        assert!(text != "x" && !text.contains("erro_resume_sem_claude"), "{text}");
         let text = failure_detail(Some(json!({"detail": {"code": "erro_session_id_invalido", "params": {}, "msg": "session_id invalido"}})), 422);
         assert!(text != "session_id invalido" && !text.contains("erro_session_id_invalido"), "{text}");
     }
