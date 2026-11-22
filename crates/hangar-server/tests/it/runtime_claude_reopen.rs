@@ -1422,7 +1422,7 @@ async fn the_account_route_moves_a_headless_conversation_to_the_new_account() {
 async fn a_provider_switch_preserves_the_claude_conversation_and_surface() {
     use crate::remote_browser::support::Server;
     let proxy = Server::owner(axum::Router::new().route("/v1/models", axum::routing::get(|| async {
-        axum::Json(json!({"data":[{"id":"pro/gpt-6-pro","context_length":200000},{"id":"plus/gpt-6-plus"}]}))
+        ([("content-type", "application/json")], r#"{"data":[{"id":"pro/gpt-6-pro","context_length":200000},{"id":"plus/gpt-6-plus"}]}"#)
     }))).await;
     for headless in [false, true] {
         let fx = fixture();
