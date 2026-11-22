@@ -487,7 +487,8 @@ impl Apply {
                 return Ok(());
             }
             let home = self.accounts.env.home.clone();
-            let principal = Some(self.accounts.env.default_claude_json());
+            // O ambiente de `accounts` só tem o HOME: o arquivo da conta padrão vem do contexto do servidor.
+            let principal = Some(self.context.claude_json.clone());
             self.accounts
                 .create(Provider::Claude, name, |path| {
                     let result = claude_config::seed(&home, principal.as_deref(), path);

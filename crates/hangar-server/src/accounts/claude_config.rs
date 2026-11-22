@@ -913,6 +913,9 @@ fn mirror_claude_json(home: &Path, principal: Option<&Path>, dir: &Path) -> Resu
     let failed = |e: String| refused(format!("não consegui espelhar o {label} pra conta: {e}"));
     let not_object = || refused(format!("{label} não é um objeto JSON — não dá pra espelhar pra conta"));
     let destination = dir.join(".claude.json");
+    // A variável do servidor pode ser a pasta desta conta: o arquivo já é a fonte, e regravá-lo com uma
+    // leitura velha desfaria o que o CLI gravou no meio.
+    if hangar_core::fs::same_file(principal, &destination) { return Ok(None); }
     let Some(principal) = read_claude_json(principal).map_err(failed)? else { return Ok(None) };
     let Some(copy) = read_claude_json(&destination).map_err(failed)? else { return Ok(None) };
     let (Value::Object(principal), Value::Object(copy)) = (principal, copy) else { return Err(not_object()) };
@@ -1454,6 +1457,7 @@ mod tests {
             fs::create_dir_all(home.join(path).parent().unwrap()).unwrap();
             fs::write(home.join(path), text).unwrap();
         }
+        fs::create_dir_all(home.join(".claude")).unwrap();
         let env = AccountEnvironment::from_pairs([("HOME", home.to_string_lossy().into_owned())]);
         assert_eq!(prep(&env, "conta2", None, &mut Vec::new(), &mut Vec::new()), 0);
         let copy: Value = serde_json::from_str(&fs::read_to_string(home.join(".claude-conta2/.claude.json")).unwrap()).unwrap();
