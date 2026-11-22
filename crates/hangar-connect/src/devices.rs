@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use base64::Engine;
@@ -180,6 +181,8 @@ pub struct Store {
     state: Mutex<State>,
     /// `devices.json` ficou no lugar sem ser lido: gravar por cima perderia os aparelhos que ele guarda.
     fault: Option<String>,
+    /// A conta recusou a leitura a esta máquina: revogação lá não chegaria aqui. Só memória: a próxima leitura boa desfaz.
+    account_suspended: AtomicBool,
 }
 
 impl Store {
@@ -187,7 +190,7 @@ impl Store {
         let clock = system_clock();
         let path = dir.join("devices.json");
         let (state, fault) = load(&path, clock());
-        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault }
+        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault, account_suspended: AtomicBool::new(false) }
     }
 
     /// Vai para `status().error`. shortcut: lido só na subida, a recusa fica até reiniciar o servidor; reler a cada pedido custaria disco no porteiro.
@@ -348,6 +351,11 @@ impl Store {
         })
     }
 
+    /// Liga ou desliga a recusa no porteiro dos aparelhos ligados à conta, sem apagar nenhum; devolve o valor anterior.
+    pub fn suspend_account_devices(&self, suspended: bool) -> bool {
+        self.account_suspended.swap(suspended, Ordering::Relaxed)
+    }
+
     /// Aparelho aprovado aqui passa a ser `account_device` na conta; a ligação nunca troca de dono.
     pub fn bind_account_device(&self, id: &str, account_device: &str) -> Result<(), Refusal> {
         if account_device.is_empty() {
@@ -415,8 +423,10 @@ impl Store {
     pub fn verify(&self, token: &[u8]) -> Option<DeviceId> {
         let presented = credentials::hash(token);
         let now = (self.clock)();
+        let suspended = self.account_suspended.load(Ordering::Relaxed);
         let mut state = self.lock();
-        let index = state.devices.iter().position(|d| d.status == Status::Approved && d.accepts(&presented))?;
+        let index = state.devices.iter()
+            .position(|d| d.status == Status::Approved && !(suspended && d.account_device.is_some()) && d.accepts(&presented))?;
         // Usar o token novo prova a entrega, mesmo com a resposta dela perdida no caminho. Vai ao disco: depois
         // de reiniciar, o antigo voltaria a valer e a prova sairia com ele.
         if state.devices[index].next_token_hash.as_deref().is_some_and(|next| same(next, &presented)) {

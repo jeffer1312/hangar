@@ -126,15 +126,26 @@ struct AccountSync {
 }
 
 impl AccountSync {
-    /// Falha mantém os aparelhos como estão: sem túnel o Connect também está fora, então não abre janela nova.
+    /// Serviço fora não mexe nos aparelhos: sem ele o túnel também cai. PC pendente ou desconhecido na conta
+    /// mantém o túnel de pé sem a lista, e aí os aparelhos da conta ficam suspensos até uma leitura boa.
     async fn pass(&self, linked: &Linked) {
         match account_devices::apply_revocations(linked, &self.devices).await {
-            Ok(()) => self.failing.store(false, Ordering::Relaxed),
-            Err(error) => if !self.failing.swap(true, Ordering::Relaxed) {
-                // PC pendente ou desconhecido na conta tem causa e remédio próprios.
-                let code = if error.code.starts_with("connect_account_machine_") { error.code } else { "connect_account_devices_unreadable" };
-                tracing::warn!(code, cause = error.code, "aparelhos da conta não lidos; os desta máquina ficam como estão: {}", error.msg);
-            },
+            Ok(()) => {
+                self.devices.suspend_account_devices(false);
+                self.failing.store(false, Ordering::Relaxed);
+            }
+            Err(error) => {
+                let refused = matches!(error.code, "connect_account_machine_pending" | "connect_account_machine_unknown");
+                let newly_suspended = refused && !self.devices.suspend_account_devices(true);
+                if self.failing.swap(true, Ordering::Relaxed) && !newly_suspended {
+                    return;
+                }
+                if refused {
+                    tracing::warn!(code = error.code, "aparelhos da conta não lidos; os que entraram pela conta ficam suspensos nesta máquina até a próxima leitura boa: {}", error.msg);
+                } else {
+                    tracing::warn!(code = "connect_account_devices_unreadable", cause = error.code, "aparelhos da conta não lidos; os desta máquina ficam como estão: {}", error.msg);
+                }
+            }
         }
     }
 }

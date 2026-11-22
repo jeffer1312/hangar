@@ -364,6 +364,30 @@ async fn account_devices_need_a_linked_machine() {
 }
 
 #[tokio::test]
+async fn a_refused_read_suspends_the_account_devices_until_a_good_read() {
+    let (account, service) = spawn_service().await;
+    account.add("D", "approved", "s-d");
+    let m = machine(service, true).await;
+    let (d, local) = (released(&m.store, "n1", "D"), approved_here(&m.store, "n2"));
+
+    account.machine_pending.store(true, std::sync::atomic::Ordering::Relaxed);
+    m.supervisor.sync_account_devices(&m.linked).await;
+    assert_eq!(gate(&m, &d).await, 401, "sem a lista da conta, o aparelho da conta não entra");
+    assert_eq!(gate(&m, &local).await, 200, "aprovado nesta máquina não depende da conta");
+    assert!(on_disk(&m, &d), "suspenso, não apagado");
+
+    // Serviço fora depois da recusa: a suspensão fica até uma leitura boa.
+    let gone = Linked { service_url: format!("http://127.0.0.1:{}", free_port()), ..m.linked.clone() };
+    m.supervisor.sync_account_devices(&gone).await;
+    assert_eq!(gate(&m, &d).await, 401);
+
+    account.machine_pending.store(false, std::sync::atomic::Ordering::Relaxed);
+    m.supervisor.sync_account_devices(&m.linked).await;
+    assert_eq!(gate(&m, &d).await, 200, "a leitura boa devolve o aparelho");
+    assert_eq!(gate(&m, &local).await, 200);
+}
+
+#[tokio::test]
 async fn a_machine_still_pending_in_the_account_says_so_and_removes_no_one() {
     let log = Log::default();
     let writer = log.clone();
@@ -376,7 +400,8 @@ async fn a_machine_still_pending_in_the_account_says_so_and_removes_no_one() {
     let d = released(&m.store, "n1", "D");
     m.supervisor.sync_account_devices(&m.linked).await;
     m.supervisor.sync_account_devices(&m.linked).await;
-    assert_eq!(gate(&m, &d).await, 200, "a conta não respondeu a lista: ninguém sai");
+    assert_eq!(gate(&m, &d).await, 401, "a conta não respondeu a lista: o aparelho da conta fica suspenso");
+    assert!(on_disk(&m, &d), "ninguém sai do disco");
     let text = String::from_utf8_lossy(&log.0.lock().unwrap()).into_owned();
     assert_eq!((text.matches("code=\"connect_account_machine_pending\"").count(), text.matches(CODE).count()), (1, 0), "{text}");
     let (status, body) = relay(&m, reqwest::Method::GET, "/api/connect/account-devices", Some(OWNER), None).await;
@@ -392,7 +417,8 @@ async fn a_machine_key_the_account_does_not_know_has_its_own_code() {
     let stranger = Linked { machine_key: "chave-que-a-conta-nao-conhece".into(), ..m.linked.clone() };
     state::write(&m.connect_dir(), &stranger).unwrap();
     m.supervisor.sync_account_devices(&stranger).await;
-    assert_eq!(gate(&m, &d).await, 200);
+    assert_eq!(gate(&m, &d).await, 401, "chave desconhecida também suspende os aparelhos da conta");
+    assert!(on_disk(&m, &d));
     let (_, body) = relay(&m, reqwest::Method::GET, "/api/connect/account-devices", Some(OWNER), None).await;
     assert_eq!(body["detail"]["code"], "connect_account_machine_unknown", "{body}");
 }
