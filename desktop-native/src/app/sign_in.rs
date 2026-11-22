@@ -4,7 +4,7 @@
 //! token e o Hangar deste computador ficam em "Outras formas de entrar".
 use super::*;
 use super::servers::ServerEntry;
-use hangar_connect_client::{AccountSession, CONNECT_SERVICE_URL, Code, ConnectClient, ConnectMachine, DeviceStatus, MachineEntry,
+use hangar_connect_client::{AccountSession, CONNECT_SERVICE_URL, Code, ConnectClient, ConnectMachine, DeviceKey, DeviceStatus, MachineEntry,
     ReqwestTransport, SignInResult, VaultServer, normalize_name};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -12,17 +12,53 @@ use std::sync::Mutex;
 /// Enquanto este computador espera a liberação, o status é relido neste intervalo: o serviço não avisa.
 const RECHECK: Duration = Duration::from_secs(3);
 
-/// O que fica no disco, só legível pelo dono: o id desta instalação (dá o código da liberação) e a conta, com a
-/// credencial deste computador nela.
+/// O que fica no disco, só legível pelo dono: o id desta instalação (dá o código da liberação), a conta e, fora dela,
+/// a credencial deste computador. Sair apaga a conta e deixa a credencial: entrar de novo na mesma conta não pede
+/// outra liberação.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Saved {
     install_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     account: Option<SavedAccount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<SavedDevice>,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct SavedAccount { name: String, session: AccountSession }
+
+/// A credencial vale só na conta e no serviço em que nasceu.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct SavedDevice { name: String, service_url: String, key: DeviceKey }
+
+impl Saved {
+    /// Guarda a conta; a credencial dela, quando tem, passa a ser a deste computador.
+    fn keep(&mut self, account: Option<SavedAccount>) {
+        if let Some(account) = &account && let Some(key) = &account.session.device {
+            self.device = Some(SavedDevice { name: account.name.clone(), service_url: account.session.service_url.clone(), key: key.clone() });
+        }
+        self.account = account;
+    }
+
+    /// O serviço respondeu o estado da credencial. Revogada não volta: a conta fica (a tela mostra a perda do acesso),
+    /// e a próxima entrada nela pede outra liberação.
+    fn answered(&mut self, account: SavedAccount, status: DeviceStatus) {
+        self.keep(Some(account));
+        if status == DeviceStatus::Revoked { self.device = None; }
+    }
+
+    fn device_for(&self, name: &str, service_url: &str) -> Option<DeviceKey> {
+        self.device.as_ref().filter(|d| d.name == name && d.service_url == service_url).map(|d| d.key.clone())
+    }
+
+    /// Arquivo de antes, com a credencial só dentro da conta: ela passa para fora. `true` quando mudou.
+    fn lift_device(&mut self) -> bool {
+        if self.device.is_some() { return false; }
+        let Some(account) = self.account.clone() else { return false };
+        self.keep(Some(account));
+        self.device.is_some()
+    }
+}
 
 fn saved_path() -> Option<PathBuf> { Some(appearance::dir()?.join("connect-account.json")) }
 
@@ -34,11 +70,13 @@ fn new_install_id() -> String { hangar_connect_client::crypto::random::<16>().ma
 /// O arquivo lido, ou um novo com outro id quando falta ou está ilegível; `true` quando precisa ser gravado.
 fn read_saved() -> (Saved, bool) {
     let read = saved_path().and_then(|path| std::fs::read(path).ok()).and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok());
-    match read {
+    let (mut saved, fresh) = match read {
         Some(saved) if !saved.install_id.is_empty() => (saved, false),
         Some(saved) => (Saved { install_id: new_install_id(), ..saved }, true),
-        None => (Saved { install_id: new_install_id(), account: None }, true),
-    }
+        None => (Saved { install_id: new_install_id(), ..Saved::default() }, true),
+    };
+    let lifted = saved.lift_device();
+    (saved, fresh || lifted)
 }
 
 /// Gravações em ordem: uma resposta atrasada não grava por cima da conta mais nova.
@@ -234,9 +272,11 @@ impl Hangar {
         }).detach();
     }
 
-    fn sign_in_store(&mut self, account: Option<SavedAccount>) {
+    fn sign_in_store(&mut self, account: Option<SavedAccount>) { self.sign_in_save(|saved| saved.keep(account)); }
+
+    fn sign_in_save(&mut self, change: impl FnOnce(&mut Saved)) {
         let saved = self.sign_in.saved.get_or_insert_with(|| read_saved().0);
-        saved.account = account;
+        change(saved);
         let (copy, generation) = (saved.clone(), NEXT_WRITE.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         self.runtime.spawn_blocking(move || {
             if let Err(error) = write_saved(generation, &copy) { crate::log_line(&format!("connect: a conta deste computador não foi guardada: {error}")); }
@@ -295,7 +335,8 @@ impl Hangar {
         cx.notify();
     }
 
-    /// Sair: a conta sai do disco (o id desta instalação fica) e a entrada volta ao formulário.
+    /// Sair: a conta sai do disco (o id desta instalação e a credencial deste computador ficam) e a entrada volta ao
+    /// formulário.
     fn sign_in_sign_out(&mut self, notice: Option<String>, cx: &mut Context<Self>) {
         if !matches!(self.sign_in.stage, Stage::Guest { .. }) { self.sign_in_store(None); }
         self.sign_in.seq += 1;
@@ -392,8 +433,7 @@ impl Hangar {
             }
             Reply::Signed(Ok(SignInResult::Account(session)), name) => {
                 // A credencial deste computador na mesma conta é reaproveitada: registrar outra pediria a liberação de novo.
-                let device = self.sign_in.saved.as_ref().and_then(|s| s.account.as_ref())
-                    .filter(|a| a.name == name && a.session.service_url == session.service_url).and_then(|a| a.session.device.clone());
+                let device = self.sign_in.saved.as_ref().and_then(|s| s.device_for(&name, &session.service_url));
                 let session = AccountSession { device, ..session };
                 self.sign_in_store(Some(SavedAccount { name, session: session.clone() }));
                 self.sign_in_check_device(session, window, cx);
@@ -406,7 +446,8 @@ impl Hangar {
             Reply::Device(Ok((session, status))) => {
                 self.sign_in.busy = false;
                 let name = self.sign_in.saved.as_ref().and_then(|s| s.account.as_ref()).map(|a| a.name.clone()).unwrap_or_default();
-                self.sign_in_store(Some(SavedAccount { name: name.clone(), session: session.clone() }));
+                let account = SavedAccount { name: name.clone(), session: session.clone() };
+                self.sign_in_save(|saved| saved.answered(account, status));
                 if status == DeviceStatus::Approved {
                     self.sign_in.stage = Stage::Machines { name, session, list: None, picked: Vec::new(), rows: HashMap::new() };
                     self.sign_in_load_machines(window, cx);
@@ -617,7 +658,7 @@ impl Hangar {
 mod tests {
     use super::{Row, Saved, SavedAccount, default_picks, failure_text, guest_owner, in_app, install_code, machine_server};
     use crate::i18n::tr_shared;
-    use hangar_connect_client::{AccountSession, Code, ConnectMachine, DeviceKey, Error, MachineEntry};
+    use hangar_connect_client::{AccountSession, Code, ConnectMachine, DeviceKey, DeviceStatus, Error, MachineEntry};
 
     #[test]
     fn install_code_matches_the_shared_cases() {
@@ -672,12 +713,62 @@ mod tests {
     fn saved_account_keeps_the_device_and_the_install_id() {
         let session = AccountSession { service_url: "https://connect.hangar.dev.br".into(), token: "t".into(),
             device: Some(DeviceKey { id: "d".into(), secret: "s".into() }) };
-        let saved = Saved { install_id: "0a1b".into(), account: Some(SavedAccount { name: "jeff".into(), session }) };
+        let mut saved = Saved { install_id: "0a1b".into(), ..Saved::default() };
+        saved.keep(Some(SavedAccount { name: "jeff".into(), session }));
         let back: Saved = serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
         assert!(back == saved);
         // Sem conta, o id desta instalação continua: sair não muda o código da próxima liberação.
         let out: Saved = serde_json::from_str(r#"{"install_id":"0a1b"}"#).unwrap();
-        assert!(out.account.is_none() && out.install_id == "0a1b");
+        assert!(out.account.is_none() && out.device.is_none() && out.install_id == "0a1b");
         assert_ne!(Row::Waiting, Row::Added);
+    }
+
+    fn key(id: &str) -> DeviceKey { DeviceKey { id: id.into(), secret: format!("s-{id}") } }
+
+    fn account(name: &str, device: Option<DeviceKey>) -> SavedAccount {
+        SavedAccount { name: name.into(), session: AccountSession { service_url: "https://connect.hangar.dev.br".into(), token: "t".into(), device } }
+    }
+
+    #[test]
+    fn signing_out_keeps_the_device_for_the_same_account() {
+        let mut saved = Saved { install_id: "0a1b".into(), ..Saved::default() };
+        saved.keep(Some(account("jeff", Some(key("d1")))));
+        saved.keep(None);
+        let back: Saved = serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert!(back.account.is_none());
+        assert_eq!(back.device_for("jeff", "https://connect.hangar.dev.br"), Some(key("d1")), "sair não apaga a credencial");
+        assert_eq!(back.device_for("outra", "https://connect.hangar.dev.br"), None, "outra conta pede a dela");
+        assert_eq!(back.device_for("jeff", "https://outro.servico"), None);
+        // Entrar sem credencial (conta nova) não apaga a guardada; a registrada depois a troca.
+        saved.keep(Some(account("outra", None)));
+        assert_eq!(saved.device_for("jeff", "https://connect.hangar.dev.br"), Some(key("d1")));
+        saved.keep(Some(account("outra", Some(key("d2")))));
+        assert_eq!(saved.device_for("outra", "https://connect.hangar.dev.br"), Some(key("d2")));
+    }
+
+    #[test]
+    fn a_revoked_device_is_dropped_and_an_approved_one_stays() {
+        let mut saved = Saved { install_id: "0a1b".into(), ..Saved::default() };
+        saved.answered(account("jeff", Some(key("d1"))), DeviceStatus::Approved);
+        saved.keep(None);
+        assert_eq!(saved.device_for("jeff", "https://connect.hangar.dev.br"), Some(key("d1")));
+        saved.answered(account("jeff", Some(key("d1"))), DeviceStatus::Revoked);
+        assert!(saved.account.is_some(), "a conta fica para a tela da perda do acesso");
+        saved.keep(None);
+        assert_eq!(saved.device_for("jeff", "https://connect.hangar.dev.br"), None, "revogada não é reaproveitada");
+        // 404: o pedido novo chega com outra credencial, que troca a antiga.
+        saved.answered(account("jeff", Some(key("d2"))), DeviceStatus::Pending);
+        assert_eq!(saved.device_for("jeff", "https://connect.hangar.dev.br"), Some(key("d2")));
+    }
+
+    #[test]
+    fn an_older_file_moves_the_device_out_of_the_account() {
+        let old = serde_json::to_vec(&serde_json::json!({"install_id": "0a1b", "account": {"name": "jeff",
+            "session": {"service_url": "https://connect.hangar.dev.br", "token": "t", "device": {"id": "d1", "secret": "s-d1"}}}})).unwrap();
+        let mut saved: Saved = serde_json::from_slice(&old).unwrap();
+        assert!(saved.lift_device(), "precisa ser gravado de novo");
+        saved.keep(None);
+        assert_eq!(saved.device_for("jeff", "https://connect.hangar.dev.br"), Some(key("d1")));
+        assert!(!saved.lift_device());
     }
 }
