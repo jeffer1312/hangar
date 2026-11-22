@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, createElement, forwardRef, StrictMode, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot as createReactRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -309,8 +309,23 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+// Teste que falha antes do próprio unmount deixaria a tela viva durante os seguintes.
+const mountedRoots = new Set<Root>();
+function createRoot(container: Element): Root {
+  const root = createReactRoot(container);
+  const unmount = root.unmount.bind(root);
+  root.unmount = () => { mountedRoots.delete(root); unmount(); };
+  mountedRoots.add(root);
+  return root;
+}
+
 describe('CreateSessionSheet Codex', () => {
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  afterEach(async () => {
+    for (const root of mountedRoots) await act(async () => root.unmount());
+    mountedRoots.clear();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
   beforeEach(() => {
     calls.contextFetch.mockReset().mockImplementation(async () => new Response(JSON.stringify({ contexto_estendido: true })));
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => calls.contextFetch(input, init));
