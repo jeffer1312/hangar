@@ -987,7 +987,7 @@ fn interrupted_provider_switch_keeps_the_target_binding_until_every_record_is_wr
     std::fs::write(&mark, interrupted.to_string()).unwrap();
     hangar_server::runtime::claude_reopen::settle_switches(&env);
     let fallen = hangar_server::session_open::fallen::get(&fx.home, "s1").unwrap();
-    assert_eq!((fallen.key, fallen.conversation.as_deref()), (key, Some(SID)));
+    assert_eq!((fallen.key.as_str(), fallen.conversation.as_deref()), (key.as_str(), Some(SID)));
     assert!(!mark.exists());
 
     hangar_server::session_open::fallen::remove(&fx.home, "s1").unwrap();
