@@ -102,6 +102,10 @@ pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thr
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
 pub(crate) use status::parts as status_parts;
+pub(crate) use sign_in::{account_top as sign_in_account_top, default_picks as sign_in_default_picks, enter_button as sign_in_enter_button,
+    form_field as sign_in_form_field, form_heading as sign_in_form_heading, machine_subtitle as sign_in_machine_subtitle,
+    pick_checkbox as sign_in_pick_checkbox, pick_row as sign_in_pick_row, section_heading as sign_in_section_heading, sign_in_card,
+    sign_out_button as sign_in_sign_out_button, submit_button as sign_in_submit_button};
 pub(crate) use viewer::{STRIP_THUMB, play_badge, show_in_chat_button, strip_day, strip_frame, strip_row, strip_thumb, strip_window, viewer_counter,
     viewer_stage, viewer_title};
 pub(crate) use media_panel::{media_cell, media_cell_side, media_day_title, media_filter_chip, media_filter_row, media_grid_row, media_section_tabs};
