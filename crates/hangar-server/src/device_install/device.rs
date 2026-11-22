@@ -220,8 +220,9 @@ impl DeviceLink for UsbLink {
             };
             let merged = pairing::merge_sidestore_prefs(&existing)?;
             ignore_already_done(afc.mk_dir("/Library/Preferences").await)?;
-            write_file(&mut afc, &path, &merged).await?;
-            write_file(&mut afc, pairing::ANISETTE_CONFIG_FILE, &pairing::sidestore_anisette_config()).await
+            // O cabeçalho antes do servidor: falhando aqui, as preferências da pessoa ficam como estavam.
+            write_file(&mut afc, pairing::ANISETTE_CONFIG_FILE, &pairing::sidestore_anisette_config()).await?;
+            write_file(&mut afc, &path, &merged).await
         })
     }
 

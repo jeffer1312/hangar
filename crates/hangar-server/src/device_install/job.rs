@@ -143,6 +143,16 @@ impl Job {
     fn running(&self) -> bool {
         !matches!(lock(&self.progress).stage, Stage::Done | Stage::Failed)
     }
+    /// Passa a instalar só se ninguém cancelou: o abort pedido no meio da assinatura ainda deixaria
+    /// a tarefa chegar aqui antes do próximo `await`.
+    fn enter_install(&self) -> Result<(), Failure> {
+        let mut p = lock(&self.progress);
+        if self.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(Failure::new(CANCELLED));
+        }
+        (p.stage, p.error, p.certs) = (Stage::Installing, None, None);
+        Ok(())
+    }
 }
 
 /// Pedido de início; a senha nunca sai daqui a não ser para o login.
@@ -248,10 +258,15 @@ impl DeviceInstall {
     /// sem pareamento, então responde `device_install_busy`.
     pub fn cancel(&self, udid: &str) -> Result<(), Failure> {
         let job = lock(&self.jobs).values().find(|j| j.udid == udid && j.running()).cloned().ok_or_else(|| Failure::new(NOT_WAITING))?;
-        if matches!(lock(&job.progress).stage, Stage::Installing | Stage::Pairing | Stage::Verifying) {
-            return Err(Failure::new(BUSY));
+        {
+            // Mesma trava do `enter_install`: ou o cancelamento vem antes e a instalação não começa,
+            // ou ela já começou e o pedido é recusado.
+            let progress = lock(&job.progress);
+            if matches!(progress.stage, Stage::Installing | Stage::Pairing | Stage::Verifying) {
+                return Err(Failure::new(BUSY));
+            }
+            job.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        job.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(task) = lock(&job.task).as_ref() {
             task.abort();
         }
@@ -318,7 +333,7 @@ impl DeviceInstall {
             job.set(Stage::Signing, None);
             let signed = session.sign(SignRequest { ipa: &ipa, udid: &udid, device_name: &device.name, pairing: &pairing }).await?;
             drop(session);
-            job.set(Stage::Installing, None);
+            job.enter_install()?;
             self.link.install_sidestore(&udid, &signed.app).await?;
         }
 
