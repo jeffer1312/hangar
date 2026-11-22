@@ -9,6 +9,7 @@ type AlertButton = { text: string; onPress?: () => void };
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), alert: vi.fn() }));
 vi.mock('react-native', async (original) => ({ ...await original<typeof import('react-native')>(), Alert: { alert: mocks.alert } }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
+vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, getNumber: () => undefined, getBoolean: () => undefined, set: () => {}, remove: () => {} }) }));
 import { MachineDevices } from './MachineDevices';
 import * as m from '../../paraglide/messages';
 
