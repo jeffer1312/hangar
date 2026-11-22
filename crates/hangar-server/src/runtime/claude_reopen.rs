@@ -1368,6 +1368,11 @@ impl RuntimeRegistry {
                     let place=if spec.surface==current.spec.surface {"a sessão voltou como estava"} else {"a sessão seguiu sem terminal"};
                     return ReopenFailure { error:RuntimeError::new(&error.code,&format!("{}; {place}",error.message)),stopped:true,landed:Some(spec.surface) };
                 },
+                Err(restore) if restore.code == NEW_ALIVE => {
+                    let message = format!("{}; {}", error.message, restore.message);
+                    super::actor::mark_live_error(&self.live_channel(name), &restore.code, &message);
+                    return ReopenFailure { error: refused(&restore.code, &message), stopped:true, landed:None };
+                },
                 Err(restore)=>tracing::warn!(session=%name,code=%restore.code,"a sessão não voltou pelo spec de antes"),
             }
         }

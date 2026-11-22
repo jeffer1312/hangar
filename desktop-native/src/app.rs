@@ -2770,7 +2770,10 @@ impl Hangar {
         // Resposta perdida (conexão trocada no meio) não segura a tela além do prazo do próprio pedido.
         if let Some(t) = target.as_ref() && let Some((sent, answered)) = self.sidebar.moving.get(t).copied() {
             let back = list.iter().any(|s| s.name == t.name);
-            let settled = match answered { Some(at) => back || at.elapsed() > Duration::from_secs(15), None => sent.elapsed() > Duration::from_secs(130) };
+            let settled = match answered {
+                Some(at) => back || at.elapsed() > Duration::from_secs(15),
+                None => sent.elapsed() > Duration::from_secs(crate::api::REOPEN_SECONDS),
+            };
             if !settled { return; }
             self.sidebar.moving.remove(t);
         }

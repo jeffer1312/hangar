@@ -260,17 +260,16 @@ fn newest(dir: &Path, matches: &dyn Fn(&str) -> bool) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Achado de uma varredura de pastas por (raiz, nome): o positivo vale enquanto o arquivo existe
-/// (o nome não muda de lugar); o negativo, `MISS_TTL`, para o arquivo que ainda vai nascer.
+/// Achado de uma varredura de pastas por (raiz, nome); o Claude revalida um achado que pode ganhar outra cópia.
 type Found = LazyLock<std::sync::Mutex<Capped<(PathBuf, String), (std::time::Instant, Option<String>)>>>;
 const MISS_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn found_or_scan(cache: &Found, key: (PathBuf, String), scan: impl FnOnce() -> Option<String>) -> Option<String> {
+fn found_or_scan(cache: &Found, key: (PathBuf, String), hit_ttl: Option<std::time::Duration>, scan: impl FnOnce() -> Option<String>) -> Option<String> {
     let lock = || cache.lock().unwrap_or_else(|e| e.into_inner());
     // O `stat` fora da trava: ela é de todas as sessões da rodada.
     let cached = lock().get(&key).cloned();
     match cached {
-        Some((_, Some(path))) if Path::new(&path).exists() => return Some(path),
+        Some((at, Some(path))) if hit_ttl.is_none_or(|ttl| at.elapsed() < ttl) && Path::new(&path).exists() => return Some(path),
         Some((at, None)) if at.elapsed() < MISS_TTL => return None,
         _ => {}
     }
@@ -287,7 +286,7 @@ static HEADLESS_FOUND: Found = LazyLock::new(|| std::sync::Mutex::new(Capped::ne
 // ponytail: o positivo segura o primeiro achado; um arquivo mais novo de mesmo nome em outra
 // pasta só é visto quando o guardado some.
 fn find_in_root_cached(root: &Path, key: String, matches: impl Fn(&str) -> bool) -> Option<String> {
-    found_or_scan(&OMP_FOUND, (root.to_path_buf(), key), || find_in_root(root, matches))
+    found_or_scan(&OMP_FOUND, (root.to_path_buf(), key), None, || find_in_root(root, matches))
 }
 
 /// `localizar_na_raiz`: o arquivo mais novo que casa em qualquer pasta de cwd da raiz.
@@ -594,7 +593,7 @@ fn headless_transcript(cwd: &str, sid: &str, config_dir: Option<&str>, dirs: &Di
     if expected.exists() {
         return expected.to_string_lossy().into_owned();
     }
-    let moved = found_or_scan(&HEADLESS_FOUND, (base.clone(), file.clone()), || {
+    let moved = found_or_scan(&HEADLESS_FOUND, (base.clone(), file.clone()), Some(MISS_TTL), || {
         match crate::runtime::claude_launch::moved_transcript(&base, &file) {
             Ok(found) => found.map(|path| path.to_string_lossy().into_owned()),
             Err(error) => {
@@ -677,6 +676,27 @@ mod tests {
         }
         fn start_time(&self, _: i64) -> Option<f64> { self.reads.fetch_add(1, Ordering::Relaxed); Some(1.0) }
         fn fds(&self, _: i64) -> Vec<PathBuf> { Vec::new() }
+    }
+
+    #[test]
+    fn expired_transcript_hit_can_find_a_newer_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let file = "session.jsonl";
+        let at = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        for (dir, time) in [(&a, at), (&b, at + Duration::from_secs(5))] {
+            std::fs::create_dir(dir).unwrap();
+            std::fs::File::create(dir.join(file)).unwrap().set_modified(time).unwrap();
+        }
+        let cache: Found = LazyLock::new(|| std::sync::Mutex::new(Capped::new(4)));
+        let key = (root.path().to_owned(), file.to_owned());
+        let old = a.join(file).to_string_lossy().into_owned();
+        assert_eq!(found_or_scan(&cache, key.clone(), None, || Some(old.clone())), Some(old));
+        let result = found_or_scan(&cache, key, Some(Duration::ZERO), || {
+            crate::runtime::claude_launch::moved_transcript(root.path(), file).unwrap().map(|path| path.to_string_lossy().into_owned())
+        });
+        assert_eq!(result, Some(b.join(file).to_string_lossy().into_owned()));
     }
 
     #[test]

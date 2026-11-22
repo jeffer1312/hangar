@@ -52,7 +52,7 @@ export function ClaudeProviderSettings({ server, name, source, ready, inventory,
   source: ClaudeProviderSource;
   ready: boolean;
   inventory: EnginesResponse;
-  onApplied: (model: string, origin: ClaudeProviderSource) => void;
+  onApplied: (origin: ClaudeProviderSource) => void;
   onCancel: () => void;
   onBusy: (busy: boolean) => void;
   reloadProviders: () => void;
@@ -110,7 +110,7 @@ export function ClaudeProviderSettings({ server, name, source, ready, inventory,
         setError(m.native_claude_provider_changed());
         return;
       }
-      if (mounted.current) onApplied(result.model, origin);
+      if (mounted.current) onApplied(origin);
     } catch (reason) {
       if (mounted.current) setError(reason instanceof Error && reason.message ? reason.message : m.native_claude_provider_changed());
     } finally {

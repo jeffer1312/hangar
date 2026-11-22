@@ -62,12 +62,12 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
     ? { lifecycle_id: session.lifecycle_id, jsonl: session.jsonl, headless: !!session.headless, engine: session.engine ?? null,
       engine_account: session.engine_account ?? null, engine_binding: session.engine_binding ?? null } : null;
   const providerCatalog = source && server && providerInventory.result?.inventory?.claude_provider_switch ? providerInventory.result.inventory : null;
-  const applyProviderModel = (id: string, origin: ClaudeProviderSource) => {
+  const applyProviderModel = (origin: ClaudeProviderSource) => {
     const current = useSessions.getState().rows.find(row => row.serverId === serverId && row.name === name);
     const connected = useServers.getState().servers.find(row => row.id === serverId);
     if (current?.jsonl !== origin.jsonl || current.lifecycle_id !== origin.lifecycle_id || current.provider !== 'claude'
       || connected?.baseUrl !== server?.baseUrl || connected?.token !== server?.token) return;
-    setChosen(current.model === id ? {} : { model: id }); setDetail(null); setOpen(false);
+    setChosen({}); setDetail(null); setOpen(false);
   };
   const afterDismiss = useRef<(() => void) | null>(null);
   const { height } = useWindowDimensions();

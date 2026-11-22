@@ -172,9 +172,11 @@ it('layout A abre todos os modelos e o raciocínio e volta ao resumo após aplic
 });
 
 it.each([
-  ['a mesma conversa', false],
-  ['outra conversa no mesmo nome', true],
-])('reconcilia a confirmação com %s', async (_case, replaced) => {
+  ['a mesma conversa', 'same'],
+  ['outra conversa no mesmo nome', 'replaced'],
+  ['uma escolha mais nova no mesmo histórico', 'newer'],
+])('reconcilia a confirmação com %s', async (_case, outcome) => {
+  const replaced = outcome === 'replaced';
   const source = { lifecycle_id: 'k:claude', jsonl: '/example/conversation.jsonl', headless: false, engine: null, engine_account: null, engine_binding: null };
   state.rows[0] = { ...state.rows[0], provider: 'claude', ...source };
   api.engines.mockResolvedValue({ claude_provider_switch: true, motores: {
@@ -211,7 +213,7 @@ it.each([
   expect(api.providerWrite).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'sess', { ...destination, source });
   state.rows[0] = replaced
     ? { ...state.rows[0], jsonl: '/example/another.jsonl', model: 'claude-other' }
-    : { ...state.rows[0], ...destination };
+    : { ...state.rows[0], ...destination, model: outcome === 'newer' ? 'gpt-next' : destination.model };
   await refresh();
   await act(async () => written.resolve({ ok: true, ...destination, service_tier: 'default' }));
   if (replaced) {
@@ -219,7 +221,8 @@ it.each([
     expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain('claude-other');
   } else {
     expect(action('native_claude_provider_confirm')).toBeNull();
-    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain('gpt-plus');
+    const acknowledgedModel = outcome === 'newer' ? 'gpt-next' : 'gpt-plus';
+    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain(acknowledgedModel);
     state.rows[0] = { ...state.rows[0], model: 'gpt-next' };
     await refresh();
     expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain('gpt-next');

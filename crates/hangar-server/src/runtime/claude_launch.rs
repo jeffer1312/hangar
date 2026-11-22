@@ -65,10 +65,17 @@ pub(crate) fn transcript_in(base: &Path, cwd: &str, sid: &str) -> PathBuf {
 }
 
 pub(crate) fn moved_transcript(base: &Path, file: &str) -> std::io::Result<Option<PathBuf>> {
-    Ok(std::fs::read_dir(base)?.flatten()
-        .map(|dir| dir.path().join(file))
-        .filter_map(|path| path.metadata().ok().filter(|meta| meta.is_file()).and_then(|meta| meta.modified().ok()).map(|at| (at, path)))
-        .max().map(|(_, path)| path))
+    let mut newest = None;
+    for entry in std::fs::read_dir(base)? {
+        let path = entry?.path().join(file);
+        let meta = match path.metadata() {
+            Ok(meta) => meta,
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => continue,
+            Err(error) => return Err(error),
+        };
+        if meta.is_file() { newest = newest.max(Some((meta.modified()?, path))); }
+    }
+    Ok(newest.map(|(_, path)| path))
 }
 
 /// `permissions.defaultMode` do `settings.json` da conta (a do servidor sem pasta própria), como a
