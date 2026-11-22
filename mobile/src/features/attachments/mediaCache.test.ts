@@ -17,6 +17,10 @@ const fs = vi.hoisted(() => ({
   intent: vi.fn(),
   clearVideo: vi.fn(async () => {}),
   platform: { OS: 'android' as 'android' | 'ios' },
+  diag: vi.fn(),
+  // Falhas de arrumação: a varredura do índice e a remoção do pedaço do download.
+  failIndexScan: false,
+  failPartDelete: false,
 }));
 
 vi.mock('expo-file-system', () => {
@@ -39,7 +43,10 @@ vi.mock('expo-file-system', () => {
     get size() { return fs.files.get(this.uri)?.size ?? 0; }
     get modificationTime() { return fs.files.get(this.uri)?.mtime ?? null; }
     get contentUri() { return `content://${this.uri}`; }
-    delete() { fs.files.delete(this.uri); }
+    delete() {
+      if (fs.failPartDelete && this.uri.endsWith('.hangar-part')) throw new Error('EBUSY');
+      fs.files.delete(this.uri);
+    }
     write(text: string) { fs.files.set(this.uri, { size: text.length, mtime: Date.now() }); }
     moveSync(dest: File) { fs.files.set(dest.uri, fs.files.get(this.uri)!); fs.files.delete(this.uri); this.uri = dest.uri; }
     copySync(dest: File) { fs.files.set(dest.uri, { ...fs.files.get(this.uri)! }); }
@@ -76,11 +83,15 @@ vi.mock('react-native-mmkv', () => ({
     getString: (k: string) => fs.store.get(k),
     set: (k: string, v: string) => { fs.store.set(k, v); },
     remove: (k: string) => fs.store.delete(k),
-    getAllKeys: () => [...fs.store.keys()],
+    getAllKeys: () => {
+      if (fs.failIndexScan) throw new Error('index unreadable');
+      return [...fs.store.keys()];
+    },
     clearAll: () => fs.store.clear(),
   }),
 }));
 vi.mock('react-native', () => ({ Platform: fs.platform }));
+vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(), registrarDiag: fs.diag }));
 vi.mock('expo-intent-launcher', () => ({ startActivityAsync: fs.intent }));
 vi.mock('expo-sharing', () => ({ shareAsync: async (url: string, options: Record<string, string>) => { fs.shared.push({ url, options }); } }));
 vi.mock('expo-video', () => ({ clearVideoCacheAsync: fs.clearVideo, getCurrentVideoCacheSize: () => 7 }));
@@ -122,6 +133,7 @@ const fetchMock = vi.fn();
 beforeEach(() => {
   fs.files.clear(); fs.dirs.clear(); fs.jobs.length = 0; fs.tasks.length = 0; fs.restored.length = 0;
   fs.store.clear(); fs.shared.length = 0; fs.intent.mockReset(); fs.clearVideo.mockReset(); fs.platform.OS = 'android';
+  fs.diag.mockReset(); fs.failIndexScan = false; fs.failPartDelete = false;
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
 });
@@ -271,6 +283,37 @@ describe('localCopy', () => {
     expect(isAbort(err)).toBe(true);
     expect(fs.restored).toHaveLength(0);
     expect([...fs.files.keys()]).toEqual([]);
+  });
+});
+
+describe('falha de arrumação depois do download', () => {
+  it('a limpeza que falha com a cópia já gravada não vira falha do download', async () => {
+    fetchMock.mockResolvedValue(probeReply('"a"', 100));
+    fs.jobs.push(writes(100), writes(10));
+    fs.failIndexScan = true;
+    const f = await localCopy(URI, H, 'rel.docx');
+    expect(f.size).toBe(100);
+    expect(isCached(URI, 'rel.docx')).toBe(true);
+    const kept = await downloadKept('s1::sess::cited:/a.pdf', 'https://a.test/f', H, 'a.pdf', () => ({ size: 10, mtime: 5 }));
+    expect(kept.size).toBe(10);
+    expect(fs.diag).toHaveBeenCalledWith(expect.objectContaining({ evento: 'anexos.cache_falhou', codigo: 'evict_failed' }));
+    expect(fs.diag).toHaveBeenCalledTimes(2);
+  });
+
+  it('o pedaço que não sai não troca o erro do download: 404 continua 404, cancelado continua cancelado', async () => {
+    fs.failPartDelete = true;
+    fetchMock.mockResolvedValue(probeReply('"a"', 100));
+    fs.jobs.push(async (t) => { fs.files.set(t.dest, { size: 10, mtime: 0 }); throw new Error('HTTP 404'); });
+    const missing = await localCopy(URI, H, 'rel.docx').catch((e: unknown) => e);
+    expect(isMissing(missing)).toBe(true);
+
+    const ctl = new AbortController();
+    fs.jobs.push(async (t) => { fs.files.set(t.dest, { size: 10, mtime: 0 }); ctl.abort(); return t.dest; });
+    const aborted = await downloadKept('s1::sess::cited:/b.pdf', 'https://a.test/b', H, 'b.pdf', () => ({ size: 10, mtime: 5 }), { signal: ctl.signal })
+      .catch((e: unknown) => e);
+    expect(isAbort(aborted)).toBe(true);
+    expect(fs.diag).toHaveBeenCalledWith(expect.objectContaining({ codigo: 'part_delete_failed', detalhe: 'Error: EBUSY' }));
+    expect(fs.diag).toHaveBeenCalledTimes(2);
   });
 });
 

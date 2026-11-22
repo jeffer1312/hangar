@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { registrarDiag } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
@@ -15,10 +16,12 @@ const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).
 
 // Tocador na própria bolha, como o <audio controls> do web. A fonte só entra no primeiro toque:
 // a lista monta várias bolhas, e cada uma baixaria o áudio sem ninguém pedir.
-export function AudioChip({ uri, headers, name, onRemove, disabled = false, meta }: {
+export function AudioChip({ uri, headers, name, onRemove, disabled = false, meta, hideShare = false }: {
   uri: string; headers?: Record<string, string>; name: string; onRemove?: () => void; disabled?: boolean;
   /** Linha de detalhe (tamanho · origem); depois do primeiro toque o tempo de reprodução vem na frente. */
   meta?: string;
+  /** A linha de "Mídia e arquivos" já tem o próprio botão de baixar: dois na mesma linha confundem. */
+  hideShare?: boolean;
 }) {
   const { theme } = useUnistyles();
   const player = useAudioPlayer(null);
@@ -76,7 +79,7 @@ export function AudioChip({ uri, headers, name, onRemove, disabled = false, meta
           <Text style={[styles.meta, { color: theme.tokens.text.muted }]} numberOfLines={1}>{meta}</Text>
         ) : null}
       </View>
-      {onRemove ? null : <AudioShare uri={uri} headers={headers} name={name} />}
+      {onRemove || hideShare ? null : <AudioShare uri={uri} headers={headers} name={name} />}
       {onRemove ? (
         <Pressable onPress={() => { player.pause(); onRemove(); }} disabled={disabled} style={styles.btn}
           accessibilityRole="button" accessibilityLabel={`${m.board_remover_anexo()}: ${name}`}
@@ -105,6 +108,10 @@ function AudioShare({ uri, headers, name }: { uri: string; headers?: Record<stri
       if (e instanceof Error && e.name === 'AbortError') return;
       // O toast já vibra.
       const missing = /(status:?|HTTP) 404\b/.test(e instanceof Error ? e.message : String(e));
+      if (!missing) {
+        registrarDiag({ evento: 'anexos.entrega_falhou', nivel: 'aviso', tela: 'conversa', codigo: e instanceof Error ? e.name : 'erro',
+          detalhe: (e instanceof Error ? e.message : String(e)).slice(0, 300) });
+      }
       toast.erro(`${name}: ${missing ? m.file_card_missing() : m.file_card_failed()}`);
     });
   };

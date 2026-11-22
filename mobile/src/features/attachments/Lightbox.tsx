@@ -131,6 +131,9 @@ export function Lightbox({
 
   // Salvar e compartilhar baixam pelo mesmo download, com anel e cancelamento; `pending` diz qual botão o mostra.
   const dl = useDownload();
+  const cancelDownload = dl.cancel;
+  // Passar de mídia ou fechar o visor cancela: a folha nunca abre depois, nem o anel passa para a próxima mídia.
+  useEffect(() => { cancelDownload(); }, [uri, visible, cancelDownload]);
   const [pending, setPending] = useState<'save' | 'share' | null>(null);
   // O `busy` só vale depois do próximo render: dois toques rápidos abriam duas folhas.
   const running = useRef(false);

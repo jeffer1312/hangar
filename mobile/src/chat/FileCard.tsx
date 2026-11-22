@@ -3,7 +3,7 @@ import { Platform, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { haptic } from '../ui/haptics';
 import { SvgXml } from 'react-native-svg';
-import { fmtBytes, svgIcone } from '@hangar/core';
+import { fmtBytes, registrarDiag, svgIcone } from '@hangar/core';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import { DownloadRing } from '../features/attachments/DownloadRing';
@@ -60,7 +60,12 @@ export const FileCard = memo(function FileCard({ uri, headers, name }: {
       // Cancelado pelo anel: volta ao que era, sem erro.
       if (e instanceof Error && e.name === 'AbortError') return;
       // O download recusa resposta fora de 2xx com "status 404" (iOS), "status: 404" ou "HTTP 404" (Android).
-      setStatus(/(status:?|HTTP) 404\b/.test(e instanceof Error ? e.message : String(e)) ? 'missing' : 'failed');
+      const missing = /(status:?|HTTP) 404\b/.test(e instanceof Error ? e.message : String(e));
+      if (!missing) {
+        registrarDiag({ evento: 'anexos.entrega_falhou', nivel: 'aviso', tela: 'conversa', codigo: e instanceof Error ? e.name : 'erro',
+          detalhe: (e instanceof Error ? e.message : String(e)).slice(0, 300) });
+      }
+      setStatus(missing ? 'missing' : 'failed');
       haptic.error();
     }
   }, [uri, headers, name, dl]);

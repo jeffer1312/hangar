@@ -323,6 +323,25 @@ it('salvar mostra o anel enquanto baixa, e tocar nele cancela', async () => {
   expect(toast.erro).not.toHaveBeenCalled();
 });
 
+it('passar de mídia ou fechar o visor cancela o download em andamento', async () => {
+  const { saveImage } = await import('./mediaCache');
+  const signals: AbortSignal[] = [];
+  vi.mocked(saveImage).mockImplementation((_u, _h, _n, o) => new Promise((_res, rej) => {
+    signals.push(o!.signal!);
+    o?.signal?.addEventListener('abort', () => { const e = new Error('x'); e.name = 'AbortError'; rej(e); });
+  }));
+  const { container, root, onClose, onStep } = await render();
+  const props = { filename: '1.png', onClose, onStep, visible: true };
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="salvar"]')!.click());
+  await act(async () => root.render(createElement(Lightbox, { ...props, uri: 'https://example.test/2.png' })));
+  expect(signals[0].aborted).toBe(true);
+  // O anel não passa para a próxima mídia.
+  expect(container.querySelector('[aria-label="cancelar"]')).toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="salvar"]')!.click());
+  await act(async () => root.render(createElement(Lightbox, { ...props, uri: 'https://example.test/2.png', visible: false })));
+  expect(signals[1].aborted).toBe(true);
+});
+
 it('vídeo do servidor toca pelo player com o token no header, sem baixar antes', async () => {
   video.players.length = 0;
   const { saveImage } = await import('./mediaCache');

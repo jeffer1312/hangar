@@ -68,3 +68,21 @@ it('vídeo que saiu da tela antes da vez dele não gasta rede', async () => {
   await settle();
   expect(v.created).toHaveLength(before + 1);
 });
+
+it('vídeo sem quadro (prazo, rede) tenta de novo na próxima montagem; o quadro que veio fica guardado', async () => {
+  const before = v.created.length;
+  const first = await mount('https://srv/e.mp4');
+  v.created[before].finish([]);
+  await settle();
+  expect(seen['https://srv/e.mp4']).toBeNull();
+  roots.splice(roots.indexOf(first), 1);
+  act(() => first.unmount());
+  await mount('https://srv/e.mp4');
+  expect(v.created).toHaveLength(before + 2);
+  const frame = { width: 480, height: 270 };
+  v.created[before + 1].finish([frame]);
+  await settle();
+  expect(seen['https://srv/e.mp4']).toBe(frame);
+  await mount('https://srv/e.mp4');
+  expect(v.created).toHaveLength(before + 2);
+});

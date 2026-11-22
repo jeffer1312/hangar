@@ -251,7 +251,7 @@ export const AudioRow = memo(function AudioRow({ item, server, sessionName, serv
   return (
     <View style={styles.audioRow}>
       <AudioChip uri={attachmentUri(item, sessionName, server)} headers={attachmentHeaders(item, server)} name={name}
-        meta={fileDetails(item, false)} />
+        meta={fileDetails(item, false)} hideShare />
       {onRetranscribe ? (
         <Pressable onPress={() => onRetranscribe(item)} hitSlop={8} style={[styles.mini, { borderColor: theme.tokens.border.default, backgroundColor: superficie(theme) }]}
           accessibilityRole="button" accessibilityLabel={`${m.composer_transcrever_de_novo()}: ${name}`}>

@@ -3,7 +3,7 @@ import { Directory, DownloadTask, File, Paths } from 'expo-file-system';
 import { startActivityAsync } from 'expo-intent-launcher';
 import * as Sharing from 'expo-sharing';
 import { createMMKV } from 'react-native-mmkv';
-import { fileKind } from '@hangar/core';
+import { fileKind, registrarDiag } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { downloadedVersion, keptIsCurrent, type KeptVersion } from './attachmentUrls';
 
@@ -89,6 +89,22 @@ export class HttpStatusError extends Error {
     // O mesmo texto que o download nativo usa, que é o que as telas reconhecem como 404.
     super(`response has status: ${status}`);
   }
+}
+
+// Falha de arrumação do cache não muda o resultado de quem pediu: vai ao diário com o nome e o texto do erro.
+function diagCache(codigo: string, e: unknown): void {
+  const detalhe = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  registrarDiag({ evento: 'anexos.cache_falhou', nivel: 'aviso', tela: 'anexos', codigo, detalhe: detalhe.slice(0, 300) });
+}
+
+// O erro que a tela mostra é o do download (cancelado continua cancelado, 404 continua 404), não o da limpeza do pedaço.
+function dropPart(tmp: File): void {
+  try { if (tmp.exists) tmp.delete(); } catch (d) { diagCache('part_delete_failed', d); }
+}
+
+// Roda com a cópia já gravada: o download deu certo mesmo se a limpeza falhar.
+function evictQuietly(keep: string): void {
+  try { evict(keep); } catch (e) { diagCache('evict_failed', e); }
 }
 
 export const isMissing = (e: unknown) => /(status:?|HTTP) 404\b/.test(e instanceof Error ? e.message : String(e));
@@ -210,11 +226,11 @@ export async function localCopy(uri: string, headers: Record<string, string> | u
     throwIfAborted(opts.signal);
     tmp.moveSync(target, { overwrite: true });
   } catch (e) {
-    if (tmp.exists) tmp.delete();
+    dropPart(tmp);
     throw e;
   }
   writeEntry(key, { etag: info?.etag ?? null, size: target.size, used: Date.now() });
-  evict(key);
+  evictQuietly(key);
   return target;
 }
 
@@ -266,7 +282,8 @@ export function keptCopy(key: string, name: string, now: KeptVersion): File | nu
     // Sem registro a limpeza a apagaria: não vale como cópia.
     if (!f.exists || !entry) return null;
     return keptIsCurrent(entry.version ?? null, f.size, now) ? f : null;
-  } catch {
+  } catch (e) {
+    diagCache('kept_read_failed', e);
     return null;
   }
 }
@@ -287,11 +304,11 @@ export async function downloadKept(
     throwIfAborted(opts.signal);
     tmp.moveSync(target, { overwrite: true });
   } catch (e) {
-    if (tmp.exists) tmp.delete();
+    dropPart(tmp);
     throw e;
   }
   writeEntry(target.name, { etag: null, size: target.size, used: Date.now(), version: downloadedVersion(start, version()) });
-  evict(target.name);
+  evictQuietly(target.name);
   return target;
 }
 
@@ -328,7 +345,10 @@ export async function cacheUsage(): Promise<CacheUsage> {
   try {
     const { getCurrentVideoCacheSize } = await import('expo-video');
     video = getCurrentVideoCacheSize();
-  } catch { /* sem o módulo nativo a linha mostra "—" */ }
+  } catch (e) {
+    // Sem o módulo nativo a linha mostra "—".
+    diagCache('video_cache_size_failed', e);
+  }
   return { byKind, files, total: byKind.image + byKind.video + byKind.audio + byKind.document, video };
 }
 
@@ -346,7 +366,8 @@ export async function clearMediaCache(): Promise<boolean> {
     const { clearVideoCacheAsync } = await import('expo-video');
     await clearVideoCacheAsync();
     return true;
-  } catch {
+  } catch (e) {
+    diagCache('video_cache_clear_failed', e);
     return false;
   }
 }

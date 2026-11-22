@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createVideoPlayer, type VideoThumbnail } from 'expo-video';
+import { registrarDiag } from '@hangar/core';
 
 // Quadros guardados enquanto o app vive; cada um é um bitmap nativo, por isso o teto.
 const MAX_THUMBS = 40;
@@ -29,8 +30,10 @@ async function generate(uri: string, headers?: Record<string, string>): Promise<
     const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), TIMEOUT_MS); });
     const frames = await Promise.race([player.generateThumbnailsAsync(0, { maxWidth: MAX_WIDTH }), timeout]);
     return frames?.[0] ?? null;
-  } catch {
+  } catch (e) {
     // Sem quadro fica o ▶ com o nome; o visor ainda tenta tocar e mostra o erro de verdade.
+    const detalhe = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    registrarDiag({ evento: 'anexos.miniatura_falhou', nivel: 'aviso', tela: 'anexos', codigo: 'video_thumb_failed', detalhe: detalhe.slice(0, 300) });
     return null;
   } finally {
     clearTimeout(timer);
@@ -51,6 +54,8 @@ async function pump() {
       const value = await generate(job.uri, job.headers);
       slot.value = value;
       slot.done = true;
+      // Sem quadro (prazo, rede) não fica guardado: a próxima montagem tenta de novo.
+      if (!value && slots.get(job.uri) === slot) slots.delete(job.uri);
       for (const w of slot.waiters.splice(0)) w(value);
     }
   } finally {
