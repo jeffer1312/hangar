@@ -443,7 +443,11 @@ enum Payload {
     // A miniatura e os quadros da revelação dela.
     Media(SessionKey, Source, u32, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
     /// Resultado de Abrir/Salvar: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no servidor.
-    Saved(SessionKey, Source, bool, Result<(PathBuf, bool), (String, bool)>),
+    Saved(SessionKey, Source, SaveStart, bool, Result<(PathBuf, bool), (String, bool)>),
+    /// Quanto do Abrir/Salvar da geração `u64` já chegou e o tamanho, se o servidor disse.
+    SaveProgress(SessionKey, Source, u64, u64, Option<u64>),
+    /// Quanto do anexo `id` já saiu, do total.
+    UploadProgress(SessionKey, u64, u64, u64),
     /// "Abrir no navegador" do HTML citado: o endereço da página com o bilhete dela, ou a falha já em frase.
     PageOpened(SessionKey, Source, Result<String, String>),
     ConnectionNotSaved(String),
@@ -567,7 +571,13 @@ enum Reply {
 pub struct Picked { name: String, bytes: Vec<u8> }
 
 #[derive(Clone)]
-struct Attachment { id: u64, name: String, bytes: Arc<Vec<u8>>, image: Option<Arc<Image>>, state: AttachState, upload: Option<Background> }
+/// `sent`: quanto já saiu do envio em curso (enviado, total).
+struct Attachment { id: u64, name: String, bytes: Arc<Vec<u8>>, image: Option<Arc<Image>>, state: AttachState, upload: Option<Background>, sent: Option<(u64, u64)> }
+
+/// O progresso do envio do anexo `id` para a tela, sem esperar vaga na fila: o próximo aviso cobre o que se perder.
+fn upload_reporter(tx: async_channel::Sender<Envelope>, connection: u64, key: SessionKey, id: u64) -> impl FnMut(u64, u64) + Send + 'static {
+    move |sent, total| { let _ = tx.try_send(Envelope { connection, selection: None, payload: Payload::UploadProgress(key.clone(), id, sent, total) }); }
+}
 
 /// O upload que começou ao anexar: o envio espera este em vez de subir o mesmo arquivo de novo.
 #[derive(Clone)]
@@ -651,9 +661,24 @@ impl SystemNotifications {
 #[derive(Default)]
 struct CiteCheck { owner: Option<SessionKey>, scanned: HashSet<String>, checked: HashSet<String>, dead: HashSet<String> }
 
-/// Cartão de um arquivo citado depois de Abrir ou Baixar: baixando, baixado (onde), vazio, inexistente ou a falha.
-#[derive(Clone)]
-enum FileCard { Busy, Saved(PathBuf), Empty, Missing, Failed(String), PageFailed(String) }
+/// Cartão de um arquivo citado depois de Abrir ou Baixar: preparando a página, baixando (quanto chegou e o tamanho, se
+/// o servidor disse), baixado (onde), vazio, inexistente ou a falha.
+#[derive(Clone, Debug, PartialEq)]
+enum FileCard { Busy, Downloading { done: u64, total: Option<u64> }, Saved(PathBuf), Empty, Missing, Failed(String), PageFailed(String) }
+
+impl FileCard {
+    const STARTED: FileCard = FileCard::Downloading { done: 0, total: None };
+    /// Os botões param enquanto há um pedido em voo.
+    fn busy(state: Option<&FileCard>) -> bool { matches!(state, Some(FileCard::Busy | FileCard::Downloading { .. })) }
+    /// O cartão que volta se o download que começa agora for cancelado: o que estava à mostra (baixado, falhou…) ou,
+    /// trocando um download por outro, o de antes do primeiro.
+    fn before_download(shown: Option<FileCard>, replaced: Option<FileCard>) -> Option<FileCard> {
+        match shown {
+            Some(state) if !FileCard::busy(Some(&state)) => Some(state),
+            _ => replaced,
+        }
+    }
+}
 
 /// Texto preparado de uma linha: a mensagem pronta para o `TextView`, as linhas do resultado de uma chamada ou o
 /// detalhe aberto (entrada/saída) de uma chamada.
@@ -754,6 +779,9 @@ pub struct Hangar {
     /// Quando a nota do Jev de cada conversa entrou: o prazo de uma nota não apaga a seguinte, de mesmo texto.
     jev_note_at: HashMap<SessionKey, Instant>,
     file_cards: HashMap<(SessionKey, Source), FileCard>,
+    /// O Abrir/Salvar em voo de cada cartão, com a geração dele, para o Cancelar; mensagem de outra geração é de tarefa
+    /// cancelada ou trocada. Junto da tarefa, o cartão que volta se ela for cancelada.
+    downloads: api::download::Running<(SessionKey, Source), (tokio::task::AbortHandle, Option<FileCard>)>,
     /// Painel "Na fila": edição em curso, recolhido e arrasto.
     queue: queue::QueueUi,
     /// A mensagem enviada em viagem até o lugar dela, e onde as pontas da viagem foram desenhadas.
@@ -1309,7 +1337,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None, list_down_since: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
+            flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), downloads: Default::default(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
             note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), work_reviews: HashMap::new(), work_review: Default::default(), notice_acted: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
@@ -2002,13 +2030,43 @@ impl Hangar {
                 cx.notify();
                 return;
             }
-            Payload::Saved(key, source, open, result) => {
+            Payload::UploadProgress(key, id, sent, total) => {
+                let key = self.delivery.current(key);
+                if let Some(attachment) = self.attachments.get_mut(&key).and_then(|list| list.iter_mut().find(|a| a.id == id))
+                    && attachment.state == AttachState::Uploading {
+                    attachment.sent = Some((sent, total));
+                    cx.notify();
+                }
+                return;
+            }
+            Payload::SaveProgress(key, source, generation, done, total) => {
+                let card = (key, source);
+                // Só a tarefa atual do cartão: a cancelada ou trocada não mexe no anel da nova.
+                if self.downloads.is_current(&card, generation) && let Some(state) = self.file_cards.get_mut(&card)
+                    && matches!(state, FileCard::Downloading { .. }) {
+                    *state = FileCard::Downloading { done, total };
+                    cx.notify();
+                }
+                return;
+            }
+            Payload::Saved(key, source, start, open, result) => {
                 // Reabrir o que já foi salvo mantém o cartão "baixado" (Abrir e Mostrar na pasta), abrindo ou não.
                 let kept = self.file_cards.get(&(key.clone(), source.clone())).filter(|card| matches!(card, FileCard::Saved(_))).cloned();
+                // Cancelado ou trocado enquanto o resultado vinha: nada abre nem aparece, e a tarefa nova do cartão
+                // continua. A cópia privada que este pedido criou sai com `copy`, se ninguém a abrir; o arquivo da
+                // sessão e o destino escolhido no Salvar ficam. Reabrir não é download: vale só enquanto o cartão
+                // segue "baixado" no mesmo arquivo que o pedido leu, e esse arquivo nunca sai.
+                let (current, copy) = match start {
+                    SaveStart::Reopen(saved) => (reopen_is_current(kept.as_ref(), &saved), None),
+                    SaveStart::Download(generation, copy) => (self.downloads.finish(&(key.clone(), source.clone()), generation), copy),
+                };
+                if !current { return; }
                 let (card, note) = match result {
                     Ok((_, true)) => (Some(FileCard::Empty), None),
                     Ok((path, _)) if open && composer::openable_path(&path) => {
                         cx.open_with_system(&path);
+                        // Aberta, a cópia fica para o programa do sistema; a varredura das antigas a leva depois.
+                        if let Some(copy) = copy { copy.keep(); }
                         (kept, None)
                     }
                     Ok((path, _)) if open => {
@@ -2512,7 +2570,7 @@ impl Hangar {
             Payload::Dossier(key, seq, result) => { self.receive_dossier(key, seq, result, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
-                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::PageOpened(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
+                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::SaveProgress(..) | Payload::UploadProgress(..) | Payload::PageOpened(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
                 | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::ConnectNotice(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
                 | Payload::Mermaid(..) | Payload::TourProgress(..) => unreachable!(),
@@ -3463,7 +3521,8 @@ impl Hangar {
                     }
                 }
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key.clone(), id, None) }).await;
-                let result = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention).await;
+                let report = upload_reporter(tx.clone(), connection, key.clone(), id);
+                let result = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention, report).await;
                 let failed = result.is_err();
                 if tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key.clone(), id, Some(result)) }).await.is_err() { return; }
                 if failed { break; }
@@ -3475,6 +3534,8 @@ impl Hangar {
 
     fn receive_upload(&mut self, key: SessionKey, id: u64, result: Option<Result<Uploaded, Failure>>) {
         let Some(attachment) = self.attachments.get_mut(&key).and_then(|list| list.iter_mut().find(|a| a.id == id)) else { return; };
+        // Envio novo (ou tentativa de novo) começa do zero.
+        if result.is_none() { attachment.sent = None; }
         attachment.state = match result {
             None => AttachState::Uploading,
             Some(Ok(uploaded)) => AttachState::Uploaded(uploaded),
@@ -3519,7 +3580,7 @@ impl Hangar {
         let bytes = Arc::new(bytes);
         let upload = self.background_upload(key, self.attach_seq, &name, &bytes);
         let state = if upload.is_some() { AttachState::Uploading } else { AttachState::Waiting };
-        let attachment = Attachment { id: self.attach_seq, name, bytes, image, state, upload };
+        let attachment = Attachment { id: self.attach_seq, name, bytes, image, state, upload, sent: None };
         self.attachments.entry(key.clone()).or_default().push(attachment);
         Ok(())
     }
@@ -3533,7 +3594,8 @@ impl Hangar {
         let (done, result) = tokio::sync::watch::channel(None);
         let task = self.runtime.spawn(async move {
             let retention = match uploads { disk::Uploads::Local { .. } => disk::retention(&api).await, disk::Uploads::Remote => None };
-            let outcome = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention).await;
+            let report = upload_reporter(tx.clone(), connection, key.clone(), id);
+            let outcome = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention, report).await;
             // A tela recebe antes do envio que espera: quando ele fecha o lote, o estado já está no anexo.
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key, id, Some(outcome.clone())) }).await;
             let _ = done.send(Some(outcome));
@@ -3795,55 +3857,58 @@ impl Hangar {
         if open && let Some(FileCard::Saved(saved)) = self.file_cards.get(&card) {
             let (saved, tx, connection) = (saved.clone(), self.tx.clone(), self.connection);
             self.runtime.spawn(async move {
-                let real = tokio::task::spawn_blocking(move || std::fs::canonicalize(&saved).ok().filter(|real| real.is_file())
+                let read = saved.clone();
+                let real = tokio::task::spawn_blocking(move || std::fs::canonicalize(&read).ok().filter(|real| real.is_file())
                     .map(|real| real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(disk::plain_path(text)))))
                     .await.ok().flatten();
                 let result = real.map(|real| (real, false)).ok_or_else(|| (String::new(), true));
-                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, true, result) }).await;
+                let payload = Payload::Saved(key, source, SaveStart::Reopen(saved), true, result);
+                let _ = tx.send(Envelope { connection, selection: None, payload }).await;
             });
             return;
         }
         let (connection, tx, runtime, uploads) = (self.connection, self.tx.clone(), self.runtime.clone(), self.uploads_for(&key));
         let fail_key = key.clone();
-        let write = move |target: Option<PathBuf>| {
+        let write = move |target: Option<PathBuf>, generation: u64| -> tokio::task::AbortHandle {
             runtime.spawn(async move {
+                // A cópia privada criada aqui tem dono desde já: cancelado antes de `receive` a assumir (até com o
+                // envio do resultado esperando vaga na fila), o arquivo sai junto.
+                let mut copy = None;
                 let result = async {
-                    if target.is_none() {
-                        let (local, wanted) = (uploads.clone(), source.clone());
-                        if let Ok(Some(real)) = tokio::task::spawn_blocking(move || local.local_path(&wanted)).await { return Ok((real, false)); }
-                    }
-                    let bytes = uploads.fetch(&api, &key.name, &source).await
-                        .map_err(|error| (format!("{safe}: {}", Self::fetch_failure(&error)), error.status == Some(404)))?;
-                    // Vazio não vira arquivo no disco: o card avisa e não há o que abrir.
-                    if bytes.is_empty() { return Ok((PathBuf::new(), true)); }
-                    // Até 100 MiB: a escrita não pode ocupar uma das duas threads do runtime.
-                    let shown = safe.clone();
-                    let written = tokio::task::spawn_blocking(move || {
-                        let path = match target { Some(path) => path, None => private_copy(&safe)? };
-                        std::fs::write(&path, bytes).map(|()| (path, false))
-                    }).await;
-                    match written {
-                        Ok(Ok(saved)) => Ok(saved),
-                        Ok(Err(error)) => {
-                            crate::log_line(&format!("arquivo: gravar {shown} falhou: {error}"));
-                            Err((format!("{shown}: {error}"), false))
+                    let target = match target {
+                        Some(path) => path,
+                        None => {
+                            let (local, wanted) = (uploads.clone(), source.clone());
+                            if let Ok(Some(real)) = tokio::task::spawn_blocking(move || local.local_path(&wanted)).await { return Ok((real, false)); }
+                            let name = safe.clone();
+                            match tokio::task::spawn_blocking(move || private_copy(&name)).await {
+                                Ok(Ok(path)) => { copy = Some(PrivateCopy(Some(path.clone()))); path }
+                                Ok(Err(error)) => return Err(Self::download_failure(&safe, api::download::DownloadError::Disk(error))),
+                                Err(error) => return Err(Self::download_failure(&safe, api::download::DownloadError::Task(error))),
+                            }
                         }
-                        Err(error) => {
-                            crate::log_line(&format!("arquivo: a tarefa que gravava {shown} não terminou: {error}"));
-                            Err((format!("{shown}: {}", tr("save_failed")), false))
-                        }
+                    };
+                    let (progress, progress_key, progress_source) = (tx.clone(), key.clone(), source.clone());
+                    // Sem esperar vaga na fila: o aviso seguinte cobre o que se perder.
+                    let report = move |done, total| { let _ = progress.try_send(Envelope { connection, selection: None,
+                        payload: Payload::SaveProgress(progress_key.clone(), progress_source.clone(), generation, done, total) }); };
+                    match uploads.download(&api, &key.name, &source, target, report).await {
+                        Ok(Some(path)) => Ok((path, false)),
+                        // Vazio não vira arquivo no disco: o card avisa e não há o que abrir.
+                        Ok(None) => Ok((PathBuf::new(), true)),
+                        Err(error) => Err(Self::download_failure(&safe, error)),
                     }
                 }.await;
-                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, open, result) }).await;
-            });
+                let payload = Payload::Saved(key, source, SaveStart::Download(generation, copy), open, result);
+                let _ = tx.send(Envelope { connection, selection: None, payload }).await;
+            }).abort_handle()
         };
-        if open { self.file_cards.insert(card, FileCard::Busy); write(None); cx.notify(); return; }
+        if open { self.start_download(card, |generation| write(None, generation)); cx.notify(); return; }
         let prompt = cx.prompt_for_new_path(&downloads_folder(), Some(&composer::safe_name(&name)));
         cx.spawn(async move |this, cx| {
             match prompt.await {
                 Ok(Ok(Some(path))) => {
-                    let _ = this.update(cx, |this, cx| { this.file_cards.insert(card, FileCard::Busy); cx.notify(); });
-                    write(Some(path))
+                    let _ = this.update(cx, |this, cx| { this.start_download(card, |generation| write(Some(path), generation)); cx.notify(); });
                 }
                 Ok(Ok(None)) => {}
                 // O diálogo do sistema falhou: dizer, não parecer que Salvar não fez nada.
@@ -3853,6 +3918,50 @@ impl Hangar {
                 }); }
             }
         }).detach();
+    }
+
+    /// O texto do cartão e se o arquivo não existe (404, que o cartão já diz sem frase). A causa vai ao log; a do disco
+    /// também ao cartão. Cancelar não passa aqui: a tarefa abortada não chega a devolver resultado.
+    fn download_failure(shown: &str, error: api::download::DownloadError) -> (String, bool) {
+        match error {
+            api::download::DownloadError::Fetch(error) => {
+                let missing = error.status == Some(404);
+                if !missing { crate::log_line(&format!("arquivo: baixar {shown} falhou: {error:?}")); }
+                (format!("{shown}: {}", Self::fetch_failure(&error)), missing)
+            }
+            api::download::DownloadError::Disk(error) => {
+                crate::log_line(&format!("arquivo: gravar {shown} falhou: {error}"));
+                (format!("{shown}: {error}"), false)
+            }
+            api::download::DownloadError::Task(error) => {
+                crate::log_line(&format!("arquivo: a tarefa que gravava {shown} não terminou: {error}"));
+                (format!("{shown}: {}", tr("save_failed")), false)
+            }
+        }
+    }
+
+    /// O cartão passa a baixar numa geração nova, que `spawn` leva nas mensagens; um pedido anterior do mesmo cartão é
+    /// cancelado, para só um gravar. O cartão de antes (já baixado, por exemplo) fica guardado para o Cancelar.
+    fn start_download(&mut self, card: (SessionKey, Source), spawn: impl FnOnce(u64) -> tokio::task::AbortHandle) {
+        let generation = self.downloads.next_generation();
+        let shown = self.file_cards.insert(card.clone(), FileCard::STARTED);
+        let replaced = self.downloads.cancel(&card);
+        let before = FileCard::before_download(shown, replaced.as_ref().and_then(|(_, before)| before.clone()));
+        if let Some((old, _)) = replaced { old.abort(); }
+        self.downloads.insert(card, generation, (spawn(generation), before));
+    }
+
+    /// Cancelar do cartão: a tarefa para, o `.part` sai com ela e o cartão volta ao que era antes do download (já
+    /// baixado continua baixado; sem nada antes, volta a oferecer Abrir e Baixar).
+    fn cancel_download(&mut self, card: (SessionKey, Source), cx: &mut Context<Self>) {
+        let before = self.downloads.cancel(&card).and_then(|(task, before)| { task.abort(); before });
+        if matches!(self.file_cards.get(&card), Some(FileCard::Downloading { .. })) {
+            match before {
+                Some(state) => { self.file_cards.insert(card, state); }
+                None => { self.file_cards.remove(&card); }
+            }
+        }
+        cx.notify();
     }
 
     fn can_interrupt(&self) -> bool {
@@ -5404,16 +5513,29 @@ impl Hangar {
             }
             let saved = key.as_ref().and_then(|key| match self.file_cards.get(&(key.clone(), source.clone())) {
                 Some(FileCard::Saved(path)) => Some(path.clone()), _ => None });
+            // Baixando: o progresso e o anel que cancela ficam no lugar de Abrir e Salvar, como no cartão de arquivo.
+            let progress = key.as_ref().and_then(|key| match self.file_cards.get(&(key.clone(), source.clone())) {
+                Some(FileCard::Downloading { done, total }) => Some((key.clone(), *done, *total)), _ => None })
+                .map(|(card_key, done, total)| {
+                    let card = (card_key, source.clone());
+                    (downloading_label(done, total), cancel_ring(&format!("{row}-{n}"), done, total, cx.reduce_motion(),
+                        cx.listener(move |this, _, _, cx| this.cancel_download(card.clone(), cx))))
+                });
             list = list.child(div().flex().flex_col().gap_1()
                 .when_some(preview, |el, preview| el.child(preview))
                 .when_some(player, |el, player| el.child(player))
                 .child(div().flex().items_center().gap_2().text_sm()
                     .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(name))
-                    .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall().label(tr("open"))
-                        .on_click(cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)))))
-                    .when_some(saved, |el, path| el.child(reveal_button(&format!("{row}-{n}"), path)))
-                    .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).ghost().xsmall().label(tr("save"))
-                        .on_click(cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx))))));
+                    .map(|el| match progress {
+                        Some((label, ring)) => el.child(div().id(SharedString::from(format!("download-state-{row}-{n}"))).flex_shrink_0()
+                            .text_xs().text_color(theme::muted()).role(Role::Status).child(label)).child(ring),
+                        None => el
+                            .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall().label(tr("open"))
+                                .on_click(cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)))))
+                            .when_some(saved, |el, path| el.child(reveal_button(&format!("{row}-{n}"), path)))
+                            .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).ghost().xsmall().label(tr("save"))
+                                .on_click(cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx)))),
+                    })));
         }
         list.into_any_element()
     }
@@ -5429,9 +5551,13 @@ impl Hangar {
         });
         let (open_source, open_name) = (source.clone(), name.clone());
         let save_name = name.clone();
+        let cancel_card = key.map(|key| (key.clone(), source.clone()));
+        let still = cx.reduce_motion();
         file_card(row, n, &name, state, openable, page,
             cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)),
-            cx.listener(move |this, _, _, cx| this.keep_file(source.clone(), save_name.clone(), false, cx)))
+            cx.listener(move |this, _, _, cx| this.keep_file(source.clone(), save_name.clone(), false, cx)),
+            cx.listener(move |this, _, _, cx| if let Some(card) = cancel_card.clone() { this.cancel_download(card, cx); }),
+            still)
     }
 
     /// Miniaturas da bolha do usuário (`.thumb-row` do `UserBubble` web): 96 px, 80 quando há várias. Abrir e salvar
@@ -5508,7 +5634,10 @@ impl Hangar {
             let id = attachment.id;
             let (status, color) = match &attachment.state {
                 AttachState::Waiting => (if busy { tr("attach_waiting") } else { String::new() }, theme::muted()),
-                AttachState::Uploading => (tr("attach_uploading"), theme::accent()),
+                AttachState::Uploading => (match attachment.sent.and_then(|(sent, total)| api::download::percent(sent, Some(total))) {
+                    Some(pct) => tr("attach_uploading_pct").replace("{pct}", &pct.to_string()),
+                    None => tr("attach_uploading"),
+                }, theme::accent()),
                 AttachState::Uploaded(up) => match up.note {
                     Some(gap) => (gap.shown(), theme::warning()),
                     None => (tr("attach_uploaded"), theme::muted()),
@@ -6619,17 +6748,22 @@ pub(crate) fn loading_thumb(id: &str, still: bool) -> AnyElement {
 }
 
 /// Cartão de um arquivo que não tem prévia (pdf, planilha, zip, texto): ícone, nome, extensão ou o estado do último
-/// Abrir/Baixar, e os dois botões. Enquanto baixa, os botões param; na falha, Baixar vira Tentar de novo. `page`: o
-/// "Abrir no navegador" do HTML citado, que vai ao navegador da sessão, nunca ao do sistema.
+/// Abrir/Baixar, e os dois botões. Enquanto baixa, os botões dão lugar ao anel do progresso, que cancela no clique; na
+/// falha, Baixar vira Tentar de novo. `page`: o "Abrir no navegador" do HTML citado, que vai ao navegador da sessão,
+/// nunca ao do sistema. `still`: movimento reduzido, o anel sem tamanho conhecido não gira.
+#[allow(clippy::too_many_arguments)]
 fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable: bool,
     page: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
-    open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, save: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
+    open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, save: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, still: bool) -> AnyElement {
     let web = activity::web;
-    let busy = matches!(state, Some(FileCard::Busy));
+    let busy = FileCard::busy(state.as_ref());
     let failed = matches!(state, Some(FileCard::Missing | FileCard::Failed(_)));
     let ext = composer::extension(&name).to_uppercase();
+    let progress = match &state { Some(FileCard::Downloading { done, total }) => Some((*done, *total)), _ => None };
     let (detail, color, role) = match &state {
         None => (ext, theme::faint(), None),
+        Some(FileCard::Downloading { done, total }) => (downloading_label(*done, *total), theme::muted(), Some(Role::Status)),
         Some(FileCard::Busy) => (web("file_card_downloading"), theme::muted(), Some(Role::Status)),
         Some(FileCard::Saved(_)) => (web("file_card_saved"), theme::success_text(), Some(Role::Status)),
         Some(FileCard::Empty) => (web("file_card_empty"), theme::warning_text(), Some(Role::Status)),
@@ -6647,13 +6781,39 @@ fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable:
             .child(div().truncate().text_sm().text_color(theme::text()).child(name.to_owned()))
             .child(div().id(SharedString::from(format!("file-card-state-{row}-{n}"))).truncate().text_xs().text_color(color)
                 .when_some(role, |el, role| el.role(role)).child(detail)))
-        .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall()
-            .label(web("file_card_open")).disabled(busy).on_click(open)))
-        .when_some(page, |el, page| el.child(Button::new(SharedString::from(format!("page-{row}-{n}"))).ghost().xsmall()
-            .label(tr("file_card_open_browser")).disabled(busy).on_click(page)))
-        .when_some(saved, |el, path| el.child(reveal_button(&format!("{row}-{n}"), path)))
-        .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).outline().xsmall().icon(IconName::Download)
-            .label(save_label).disabled(busy).on_click(save))
+        .when_some(progress, |el, (done, total)| el.child(cancel_ring(&format!("{row}-{n}"), done, total, still, cancel)))
+        .when(progress.is_none(), |el| el
+            .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall()
+                .label(web("file_card_open")).disabled(busy).on_click(open)))
+            .when_some(page, |el, page| el.child(Button::new(SharedString::from(format!("page-{row}-{n}"))).ghost().xsmall()
+                .label(tr("file_card_open_browser")).disabled(busy).on_click(page)))
+            .when_some(saved, |el, path| el.child(reveal_button(&format!("{row}-{n}"), path)))
+            .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).outline().xsmall().icon(IconName::Download)
+                .label(save_label).disabled(busy).on_click(save)))
+        .into_any_element()
+}
+
+/// "baixando 42% de 24,6 MB · toque para cancelar"; sem tamanho do servidor, só o que já chegou.
+fn downloading_label(done: u64, total: Option<u64>) -> String {
+    let english = crate::i18n::english();
+    match (api::download::percent(done, total), total) {
+        (Some(pct), Some(total)) => tr("file_card_downloading_pct").replace("{pct}", &pct.to_string())
+            .replace("{size}", &api::download::size_label(total, english)),
+        _ => tr("file_card_downloading_amount").replace("{done}", &api::download::size_label(done, english)),
+    }
+}
+
+/// O anel do progresso com o ✕ no meio: o clique cancela a transferência.
+fn cancel_ring(id: &str, done: u64, total: Option<u64>, still: bool, cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
+    let label = tr("file_card_cancel");
+    div().id(SharedString::from(format!("cancel-download-{id}"))).relative().flex_shrink_0().size(px(30.)).rounded_full()
+        .cursor_pointer().focusable().tab_stop(true).role(Role::Button).aria_label(label.clone())
+        .border_1().border_color(transparent_black()).focus_visible(|el| el.border_color(theme::accent_focus()))
+        .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx))
+        .on_click(cancel)
+        .child(chrome::progress_ring(SharedString::from(format!("download-ring-{id}")), api::download::share(done, total), 30., 3., still))
+        .child(div().absolute().top_0().left_0().size_full().flex().items_center().justify_center()
+            .child(chrome::small_icon(IconName::Close, 12., theme::text())))
         .into_any_element()
 }
 
@@ -7438,6 +7598,33 @@ fn private_copy(name: &str) -> std::io::Result<PathBuf> {
     sweep_private_copies(&base, now);
     let stamp = now.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     Ok(base.join(format!("{stamp}-{name}")))
+}
+
+/// Quem pediu o `Payload::Saved`.
+enum SaveStart {
+    /// O download da geração `u64`, com a cópia privada que ele criou para o Abrir, quando criou.
+    Download(u64, Option<PrivateCopy>),
+    /// Abrir de novo o arquivo de um cartão "baixado", sem baixar nada; o caminho é o que o cartão tinha no clique.
+    Reopen(PathBuf),
+}
+
+/// A cópia privada que um pedido criou: solta sem `keep`, sai do disco numa thread própria. Só a cópia nasce com dono;
+/// o arquivo da sessão e o destino do Salvar nunca passam por aqui.
+struct PrivateCopy(Option<PathBuf>);
+
+impl PrivateCopy {
+    fn keep(mut self) { self.0 = None; }
+}
+
+impl Drop for PrivateCopy {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() { std::thread::spawn(move || { let _ = std::fs::remove_file(path); }); }
+    }
+}
+
+/// O Reabrir só vale se o cartão continua "baixado" no arquivo que ele leu: um Salvar mais novo trocou o arquivo.
+fn reopen_is_current(card: Option<&FileCard>, started: &std::path::Path) -> bool {
+    matches!(card, Some(FileCard::Saved(saved)) if saved == started)
 }
 
 /// Cópia mais nova que isto nunca sai: o programa do sistema pode ainda estar abrindo o arquivo.
@@ -9279,6 +9466,25 @@ impl Render for Hangar {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn cancelled_download_brings_back_the_card_it_replaced() {
+        use super::FileCard;
+        let saved = FileCard::Saved(std::path::PathBuf::from("/tmp/relatorio.pdf"));
+        // Baixar de novo o que já estava baixado: cancelar volta a "baixado", com o mesmo caminho.
+        assert_eq!(FileCard::before_download(Some(saved.clone()), None), Some(saved.clone()));
+        assert_eq!(FileCard::before_download(Some(FileCard::Failed("x".into())), None), Some(FileCard::Failed("x".into())));
+        // Nada antes: cancelar limpa o cartão.
+        assert_eq!(FileCard::before_download(None, None), None);
+        // Um download trocado por outro: o cartão à mostra é o anel do primeiro, e o que volta é o de antes dele.
+        assert_eq!(FileCard::before_download(Some(FileCard::STARTED), Some(saved.clone())), Some(saved.clone()));
+        assert_eq!(FileCard::before_download(Some(FileCard::Downloading { done: 5, total: Some(10) }), None), None);
+        // O caminho inteiro pelo registro de downloads: começar guarda, cancelar devolve.
+        let mut running: crate::api::download::Running<&str, (u8, Option<FileCard>)> = Default::default();
+        let generation = running.next_generation();
+        running.insert("card", generation, (1, FileCard::before_download(Some(saved.clone()), None)));
+        assert_eq!(running.cancel(&"card"), Some((1, Some(saved))));
+    }
+
+    #[test]
     fn private_copies_leave_by_age_and_count_but_never_while_fresh() {
         use std::time::{Duration, SystemTime};
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
@@ -9296,6 +9502,34 @@ mod tests {
         assert_eq!(big, [std::path::PathBuf::from("antes"), std::path::PathBuf::from("velha")]);
         let future = super::stale_copies(vec![(std::path::PathBuf::from("futuro"), now + Duration::from_secs(3600), 1)], now);
         assert!(future.is_empty(), "relógio que voltou não apaga");
+    }
+
+    #[test]
+    fn reopen_counts_only_while_the_card_keeps_the_file_it_read() {
+        use super::FileCard;
+        let (a, b) = (std::path::PathBuf::from("/tmp/a.pdf"), std::path::PathBuf::from("/tmp/b.pdf"));
+        assert!(super::reopen_is_current(Some(&FileCard::Saved(a.clone())), &a));
+        // Um Salvar mais novo trocou o arquivo do cartão: a resposta do Reabrir de A não abre nem mexe no cartão de B.
+        assert!(!super::reopen_is_current(Some(&FileCard::Saved(b)), &a));
+        assert!(!super::reopen_is_current(Some(&FileCard::Downloading { done: 0, total: None }), &a));
+        assert!(!super::reopen_is_current(None, &a));
+    }
+
+    #[test]
+    fn a_private_copy_leaves_unless_kept() {
+        let dir = std::env::temp_dir().join(format!("hangar-private-copy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (dropped, kept) = (dir.join("dropped.pdf"), dir.join("kept.pdf"));
+        std::fs::write(&dropped, b"x").unwrap();
+        std::fs::write(&kept, b"x").unwrap();
+        drop(super::PrivateCopy(Some(dropped.clone())));
+        super::PrivateCopy(Some(kept.clone())).keep();
+        // A remoção roda numa thread própria.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while dropped.exists() && std::time::Instant::now() < deadline { std::thread::sleep(std::time::Duration::from_millis(10)); }
+        assert!(!dropped.exists());
+        assert!(kept.exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

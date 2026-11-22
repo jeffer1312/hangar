@@ -59,7 +59,7 @@ wry = "=0.55.1"
 [target.'cfg(target_os = "windows")'.dependencies]
 # Mesmas versões que o wry já usa: tipos COM de versões diferentes não se misturam.
 webview2-com = "=0.38.2"
-windows = { version = "=0.61.3", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "=0.61.3", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # Textura da página da conversa no device da GPUI (`SurfaceTexture`, ajuste nosso no vendorizado).
 gpui_windows = { package = "gpui-pre-windows", version = "=0.3.12" }
 

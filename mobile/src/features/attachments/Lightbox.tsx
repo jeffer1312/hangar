@@ -1,18 +1,21 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StatusBar, Text, View, type AccessibilityActionEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
-import { WebView } from 'react-native-webview';
+import { VideoView, useVideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as m from '../../paraglide/messages';
 import { Icon, type IconName } from '../../ui/Icon';
-import { canShareFile, localCopy, saveImage, shareFile } from './mediaCache';
+import { canShareFile, isAbort, saveImage, shareFile, type DownloadOptions } from './mediaCache';
+import { DownloadRing } from './DownloadRing';
+import { percentOf, useDownload } from './useDownload';
 import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import { SPACE } from '../../theme/scale';
+import { useVoiceAudioState } from '../voice/audioSession';
 import { LightboxActions, LightboxCaption, StripThumbFrame, THUMB_W, type LightboxAction } from './LightboxParts';
 
 export interface LightboxStripItem {
@@ -126,31 +129,29 @@ export function Lightbox({
     setAttempt((n) => n + 1);
   };
 
-  const [saving, setSaving] = useState(false);
-  const savingNow = useRef(false);
-  const save = () => {
-    // O `disabled` só vale depois do próximo render: dois toques rápidos abriam duas folhas.
-    if (savingNow.current) return;
-    savingNow.current = true;
+  // Salvar e compartilhar baixam pelo mesmo download, com anel e cancelamento; `pending` diz qual botão o mostra.
+  const dl = useDownload();
+  const cancelDownload = dl.cancel;
+  // Passar de mídia ou fechar o visor cancela: a folha nunca abre depois, nem o anel passa para a próxima mídia.
+  useEffect(() => { cancelDownload(); }, [uri, visible, cancelDownload]);
+  const [pending, setPending] = useState<'save' | 'share' | null>(null);
+  // O `busy` só vale depois do próximo render: dois toques rápidos abriam duas folhas.
+  const running = useRef(false);
+  const fetchThen = (which: 'save' | 'share', job: (o: DownloadOptions) => Promise<boolean>, ok?: (r: boolean) => void) => {
+    if (running.current) return;
+    running.current = true;
     haptic.selection();
-    setSaving(true);
-    saveImage(uri, headers, filename)
-      .then((gravou) => { if (gravou) toast.ok(m.file_card_saved()); })
-      .catch((e: unknown) => toast.erro(e instanceof Error ? e.message : String(e)))
-      .finally(() => { savingNow.current = false; setSaving(false); });
+    setPending(which);
+    dl.run(job)
+      .then((r) => ok?.(r))
+      .catch((e: unknown) => { if (!isAbort(e)) toast.erro(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { running.current = false; setPending(null); });
   };
-
-  const [sharing, setSharing] = useState(false);
-  const sharingNow = useRef(false);
-  const share = () => {
-    if (sharingNow.current) return;
-    sharingNow.current = true;
-    haptic.selection();
-    setSharing(true);
-    shareFile(uri, headers, filename)
-      .catch((e: unknown) => toast.erro(e instanceof Error ? e.message : String(e)))
-      .finally(() => { sharingNow.current = false; setSharing(false); });
-  };
+  const save = () => fetchThen('save', (o) => saveImage(uri, headers, filename, o), (gravou) => { if (gravou) toast.ok(m.file_card_saved()); });
+  const share = () => fetchThen('share', (o) => shareFile(uri, headers, filename, o).then(() => true));
+  const ring = dl.busy
+    ? <DownloadRing pct={percentOf(dl.progress)} onCancel={dl.cancel} label={m.file_card_cancel({ nome: filename })} onDark />
+    : null;
 
   const pinch = Gesture.Pinch()
     .onStart(() => { panUsedZoom.value = true; })
@@ -278,8 +279,8 @@ export function Lightbox({
 
   const topo = (insets.top > 0 ? insets.top : (StatusBar.currentHeight ?? 24)) + theme.base.space[2];
   const actions: LightboxAction[] = [
-    { icon: 'Download', label: m.gallery_save(), a11y: m.anexos_baixar({ nome: filename }), onPress: save, busy: saving },
-    ...(canShareFile ? [{ icon: 'Share' as IconName, label: m.gallery_share(), a11y: m.gallery_share_named({ nome: filename }), onPress: share, busy: sharing }] : []),
+    { icon: 'Download', label: m.gallery_save(), a11y: m.anexos_baixar({ nome: filename }), onPress: save, slot: pending === 'save' ? ring : null },
+    ...(canShareFile ? [{ icon: 'Share' as IconName, label: m.gallery_share(), a11y: m.gallery_share_named({ nome: filename }), onPress: share, slot: pending === 'share' ? ring : null }] : []),
     ...(onShowInChat ? [{ icon: 'MessageSquare' as IconName, label: m.gallery_in_chat(), a11y: m.gallery_in_chat(), onPress: onShowInChat }] : []),
   ];
   // Arrastar não existe para quem usa o VoiceOver: deslizar para cima/baixo passa de mídia.
@@ -302,17 +303,17 @@ export function Lightbox({
         </Pressable>
         <Text style={styles.counter} numberOfLines={1} accessibilityLiveRegion="polite">{counter ?? ''}</Text>
         {canShareFile ? (
-          <Pressable onPress={share} disabled={sharing} style={styles.roundBtn} hitSlop={2}
-            accessibilityLabel={m.gallery_share_named({ nome: filename })} accessibilityRole="button" accessibilityState={{ busy: sharing }}>
-            {sharing ? <ActivityIndicator size="small" color={theme.ink.onAccent} /> : <Icon name="Share" size={20} color={theme.ink.onAccent} />}
+          <Pressable onPress={share} disabled={dl.busy} style={styles.roundBtn} hitSlop={2}
+            accessibilityLabel={m.gallery_share_named({ nome: filename })} accessibilityRole="button" accessibilityState={{ busy: pending === 'share' }}>
+            {pending === 'share' ? <ActivityIndicator size="small" color={theme.ink.onAccent} /> : <Icon name="Share" size={20} color={theme.ink.onAccent} />}
           </Pressable>
         ) : <View style={styles.roundSpacer} />}
       </Animated.View>
       <View style={styles.stage}>
         {kind === 'video' ? (
           <Animated.View style={[styles.videoWrap, animatedStyle]}>
-            <VideoPage uri={uri} headers={headers} name={filename} />
-            {/* O WebView fica com os toques do player: passar e fechar moram nesta faixa, fora dele. */}
+            <VideoPage key={uri} uri={uri} headers={headers} />
+            {/* O player fica com os toques dos controles: passar e fechar moram nesta faixa, fora dele. */}
             <View style={styles.videoBar}>
               {onStep ? (
                 <Pressable onPress={() => onStep(-1)} style={styles.roundBtn} accessibilityRole="button" accessibilityLabel={m.visor_anterior()}>
@@ -413,62 +414,47 @@ const StripThumb = memo(function StripThumb({ item, active, onPress }: { item: L
   );
 });
 
-// Vídeo toca no WebView (o player nativo do sistema dentro dele): o app não tem expo-video. O do
-// servidor vai pro cache antes, porque o player pede o arquivo aos pedaços sem o header do token.
-function VideoPage({ uri, headers, name }: { uri: string; headers?: Record<string, string>; name: string }) {
-  const comToken = !!headers && Object.keys(headers).length > 0;
-  const [src, setSrc] = useState<string | null>(comToken ? null : uri);
-  const [erro, setErro] = useState('');
-  useEffect(() => {
-    // Toda troca de vídeo começa sem a falha do anterior, também o remoto (sem token).
-    setErro('');
-    if (!comToken) {
-      setSrc(uri);
-      return;
-    }
-    let vivo = true;
-    setSrc(null);
-    localCopy(uri, headers, name)
-      .then((f) => { if (vivo) setSrc(f.uri); })
-      .catch((e: unknown) => { if (vivo) setErro(e instanceof Error ? e.message : String(e)); });
-    return () => { vivo = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uri]);
-
-  if (erro) {
-    return (
-      <Text style={styles.videoMsg} accessibilityRole="alert">
-        {`${m.visor_nao_carregou()}\n${erro}`}
-      </Text>
-    );
-  }
-  if (!src) {
-    return (
-      <View style={styles.videoLoading}>
-        <ActivityIndicator color="#fff" />
-        <Text style={styles.videoMsg}>{m.comum_carregando()}</Text>
-      </View>
-    );
-  }
-  // Só a cópia baixada pelo app lê arquivo local; URL vinda do texto do assistente fica em http(s),
-  // senão o WebView repassaria outro esquema ao sistema.
-  const local = comToken;
-  if (!local && !/^https?:\/\//i.test(src)) {
+// Só http(s): URL vinda do texto do assistente com outro esquema não chega ao player.
+function VideoPage({ uri, headers }: { uri: string; headers?: Record<string, string> }) {
+  if (!/^https?:\/\//i.test(uri)) {
     return <Text style={styles.videoMsg} accessibilityRole="alert">{m.visor_nao_carregou()}</Text>;
   }
+  return <VideoStream uri={uri} headers={headers} />;
+}
+
+// O player nativo pede o arquivo aos pedaços (Range) com o header do token: toca enquanto chega, sem
+// baixar antes. O cache de reprodução guarda o que já veio. Sair do visor ou trocar de mídia desmonta
+// e libera o player; a voz ao vivo pausa, como no áudio.
+function VideoStream({ uri, headers }: { uri: string; headers?: Record<string, string> }) {
+  const source = useMemo(() => ({ uri, headers, useCaching: true }), [uri, headers]);
+  const player = useVideoPlayer(source, (p) => {
+    if (!useVoiceAudioState.getState().voiceActive) p.play();
+  });
+  const [status, setStatus] = useState<{ status: VideoPlayerStatus; error?: string }>(() => ({ status: player.status }));
+  useEffect(() => {
+    setStatus({ status: player.status });
+    const sub = player.addListener('statusChange', (e) => setStatus({ status: e.status, error: e.error?.message }));
+    const voice = useVoiceAudioState.subscribe((state, previous) => {
+      if (state.voiceActive && !previous.voiceActive) player.pause();
+    });
+    return () => { sub.remove(); voice(); };
+  }, [player]);
+
   return (
-    <WebView
-      source={{ uri: src }}
-      style={styles.video}
-      originWhitelist={local ? ['file://*'] : ['http://*', 'https://*']}
-      allowFileAccess={local}
-      allowingReadAccessToURL={local ? src.slice(0, src.lastIndexOf('/') + 1) : undefined}
-      allowsInlineMediaPlayback
-      allowsFullscreenVideo
-      mediaPlaybackRequiresUserAction={false}
-      onError={(e) => setErro(e.nativeEvent.description || m.arquivo_carregar_erro())}
-      onHttpError={(e) => setErro(`HTTP ${e.nativeEvent.statusCode}`)}
-    />
+    <View style={styles.video}>
+      <VideoView player={player} style={styles.video} nativeControls contentFit="contain" fullscreenOptions={{ enable: true }} />
+      {status.status === 'error' ? (
+        <View style={styles.videoOverlay} pointerEvents="none">
+          <Text style={styles.videoMsg} accessibilityRole="alert">
+            {status.error ? `${m.visor_nao_carregou()}\n${status.error}` : m.visor_nao_carregou()}
+          </Text>
+        </View>
+      ) : status.status === 'loading' ? (
+        <View style={styles.videoOverlay} pointerEvents="none">
+          <ActivityIndicator color="#fff" accessibilityLabel={m.comum_carregando()} />
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -546,9 +532,15 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     backgroundColor: '#000',
   },
-  videoLoading: {
+  videoOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     alignItems: 'center',
-    gap: theme.base.space[2],
+    justifyContent: 'center',
+    padding: theme.base.space[4],
   },
   imageError: {
     alignItems: 'center',

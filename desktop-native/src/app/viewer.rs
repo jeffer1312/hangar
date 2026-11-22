@@ -559,6 +559,17 @@ impl Viewer {
         [size, gallery::when(item.ts), gallery::origin_text(item.origin, false)].into_iter().flatten().collect::<Vec<_>>().join(" · ")
     }
 
+    fn card(&self) -> (SessionKey, Source) { (self.key.clone(), self.item().source.clone()) }
+
+    /// O download em curso do item aberto (o mesmo cartão da conversa): quanto chegou e o total, se o servidor disse.
+    fn downloading(&self, cx: &App) -> Option<(u64, Option<u64>)> {
+        let hangar = self.hangar.upgrade()?;
+        match hangar.read(cx).file_cards.get(&self.card()) {
+            Some(FileCard::Downloading { done, total }) => Some((*done, *total)),
+            _ => None,
+        }
+    }
+
     /// Página do vídeo. Hoje: a capa e o botão que entrega o vídeo ao player do sistema. O player do app entra aqui,
     /// no lugar deste corpo, com o mesmo palco.
     fn render_video(&self, poster: Option<Arc<RenderImage>>, cx: &mut Context<Self>) -> AnyElement {
@@ -570,7 +581,8 @@ impl Viewer {
                 .child(div().max_w(px(VIDEO_W - 48.)).px_3().py_1().rounded_md().bg(theme::scrim()).truncate().text_sm().text_color(theme::text())
                     .child(self.item().name.clone()))
                 .when(openable, |el| el.child(Button::new("viewer-video-open").primary().small().icon(IconName::ExternalLink)
-                    .label(tr("viewer_video_open")).on_click(cx.listener(|this, _, _, cx| this.keep(true, cx))))))
+                    .label(tr("viewer_video_open")).disabled(self.downloading(cx).is_some())
+                    .on_click(cx.listener(|this, _, _, cx| this.keep(true, cx))))))
             .into_any_element()
     }
 
@@ -674,7 +686,10 @@ impl Render for Viewer {
         let counter = if self.in_conversation {
             tr("media_counter").replace("{n}", &(self.index + 1).to_string()).replace("{total}", &total.to_string())
         } else { format!("{} / {}", self.index + 1, total) };
-        let detail = self.detail();
+        // Salvar/Abrir baixam pelo cartão da conversa: enquanto baixa, o anel dele toma o lugar de Salvar e cancela.
+        let card = self.card();
+        let downloading = self.downloading(cx);
+        let detail = match downloading { Some((done, total)) => downloading_label(done, total), None => self.detail() };
         let in_chat = self.item().event.is_some();
 
         let header = div().flex().items_center().gap_2().pr(px(36.)).h(px(28. + HEADER_EXTRA))
@@ -692,14 +707,22 @@ impl Render for Viewer {
                 .disabled(!has_image).tooltip(tr("viewer_pen_tip"))
                 .on_click(cx.listener(|this, _, _, cx| { this.pen = !this.pen; this.drag = None; cx.notify(); })))
             .when(openable, |el| el.child(Button::new("viewer-open").ghost().small().icon(IconName::ExternalLink).label(tr("open"))
-                .on_click(cx.listener(|this, _, _, cx| this.keep(true, cx)))))
-            // Com traços, Salvar grava a cópia riscada; sem eles, a original como antes.
-            .child(Button::new("viewer-save").ghost().small().icon(IconName::Download).label(tr("save")).loading(self.burning)
-                // A nota vazia em edição some aqui: sobrando nada, Salvar grava a original.
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.finish_note(cx);
-                    if this.marks.is_empty() { this.keep(false, cx) } else { this.save_burned(window, cx) }
-                })))
+                .disabled(downloading.is_some()).on_click(cx.listener(|this, _, _, cx| this.keep(true, cx)))))
+            .map(|el| match downloading {
+                Some((done, total)) => {
+                    let (hangar, card) = (self.hangar.clone(), card.clone());
+                    el.child(cancel_ring("viewer", done, total, cx.reduce_motion(), move |_, _, cx| {
+                        let _ = hangar.update(cx, |hangar, cx| hangar.cancel_download(card.clone(), cx));
+                    }))
+                }
+                // Com traços, Salvar grava a cópia riscada; sem eles, a original como antes.
+                None => el.child(Button::new("viewer-save").ghost().small().icon(IconName::Download).label(tr("save")).loading(self.burning)
+                    // A nota vazia em edição some aqui: sobrando nada, Salvar grava a original.
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.finish_note(cx);
+                        if this.marks.is_empty() { this.keep(false, cx) } else { this.save_burned(window, cx) }
+                    }))),
+            })
             .when(in_chat, |el| el.child(show_in_chat_button()
                 .on_click(cx.listener(|this, _, window, cx| this.show_in_conversation(window, cx)))));
 

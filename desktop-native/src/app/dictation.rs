@@ -349,7 +349,7 @@ async fn uploaded_or_upload(pending: Option<tokio::sync::watch::Receiver<UploadR
 async fn upload_dictation(api: Api, uploads: disk::Uploads, name: String, bytes: Vec<u8>) -> Result<String, Failure> {
     match uploads {
         disk::Uploads::Remote => api.upload_audio(&name, "ditado.wav", bytes).await,
-        local => local.upload(&api, &name, "ditado.wav", bytes, None).await,
+        local => local.upload(&api, &name, "ditado.wav", bytes, None, |_, _| {}).await,
     }.map(|saved| saved.path)
 }
 

@@ -9,6 +9,7 @@ import { GalleryContext } from './galleryContext';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import { RevealFrame } from './RevealFrame';
+import { useVideoThumb } from '../features/attachments/videoThumb';
 
 // O visor puxa os módulos nativos de arquivo: a bolha não os carrega, só o toque na miniatura.
 const GalleryViewer = lazy(() => import('../features/attachments/gallery').then((mod) => ({ default: mod.GalleryViewer })));
@@ -56,6 +57,20 @@ function RevealImage({ uri, headers, ts, style, onError }: { uri: string; header
     <RevealFrame style={style} chegou={chegou}>
       <Image source={{ uri, headers }} style={{ width: w, height: h }} contentFit="cover" transition={0} onLoad={onLoad} onError={onError} />
     </RevealFrame>
+  );
+}
+
+// O primeiro quadro chega depois (a lista só monta as linhas à vista); até lá, e se não vier, fica o ▶ com o nome.
+function VideoThumb({ uri, headers, name, style }: { uri: string; headers?: Record<string, string>; name: string; style: object }) {
+  const thumb = useVideoThumb(uri, headers);
+  return (
+    <View style={[style, styles.video]}>
+      {thumb ? <Image source={thumb} style={styles.videoFrame} contentFit="cover" transition={150} /> : null}
+      <View style={styles.playBadge}>
+        <Icon name="Play" size={thumb ? 20 : 26} color="#fff" />
+      </View>
+      {thumb ? null : <Text style={styles.videoName} numberOfLines={1}>{name}</Text>}
+    </View>
   );
 }
 
@@ -112,11 +127,7 @@ export function ImageThumb({ items, index, style, revealTs, galleryKey }: Props)
         ) : item.kind === 'image' ? (
           <Image source={{ uri: shown, headers: item.headers }} style={style} contentFit="cover" transition={150} onError={setFalhou} />
         ) : (
-          // ponytail: sem expo-video não há quadro do vídeo; a miniatura é o ▶ e o nome.
-          <View style={[style, styles.video]}>
-            <Icon name="Play" size={26} color="#fff" />
-            <Text style={styles.videoName} numberOfLines={1}>{item.name}</Text>
-          </View>
+          <VideoThumb uri={item.uri} headers={item.headers} name={item.name} style={style} />
         )}
       </Pressable>
       {open !== null ? (
@@ -135,6 +146,23 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: 'center',
     gap: theme.base.space[1],
     padding: theme.base.space[1],
+    overflow: 'hidden',
+  },
+  videoFrame: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  // Círculo escuro: o ▶ branco some sobre quadro claro.
+  playBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.base.radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
   },
   videoName: {
     color: '#fff',

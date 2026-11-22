@@ -824,9 +824,17 @@ impl Hangar {
             }
             (Some(Picture::Video), _) => {
                 // Vídeo de outra máquina é baixado antes de abrir: o botão para e o estado do download aparece.
-                let card = self.selected_key().and_then(|key| self.file_cards.get(&(key, Source::Cited(tab.path.clone())))).cloned();
-                let busy = matches!(card, Some(FileCard::Busy));
+                let card_key = self.selected_key().map(|key| (key, Source::Cited(tab.path.clone())));
+                let card = card_key.as_ref().and_then(|card| self.file_cards.get(card)).cloned();
+                let busy = FileCard::busy(card.as_ref());
+                // Baixando: o anel ao lado do botão mostra quanto chegou e cancela no clique.
+                let ring = match (&card, card_key) {
+                    (Some(FileCard::Downloading { done, total }), Some(card_key)) => Some(cancel_ring(&format!("file-video-{}", tab.id), *done, *total,
+                        cx.reduce_motion(), cx.listener(move |this, _, _, cx| this.cancel_download(card_key.clone(), cx)))),
+                    _ => None,
+                };
                 let note = match card {
+                    Some(FileCard::Downloading { done, total }) => Some((downloading_label(done, total), theme::muted())),
                     Some(FileCard::Busy) => Some((activity::web("file_card_downloading"), theme::muted())),
                     Some(FileCard::Missing) => Some((activity::web("file_card_missing"), theme::warning_text())),
                     Some(FileCard::Empty) => Some((activity::web("file_card_empty"), theme::warning_text())),
@@ -835,8 +843,10 @@ impl Hangar {
                 };
                 div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
                     .child(div().text_sm().text_color(theme::muted()).child(tr("file_video_external")))
-                    .child(Button::new("file-video-open").outline().small().label(tr("file_video_open")).disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| this.open_file_video(cx))))
+                    .child(div().flex().items_center().gap_2()
+                        .child(Button::new("file-video-open").outline().small().label(tr("file_video_open")).disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_file_video(cx))))
+                        .children(ring))
                     .when_some(note, |el, (text, color)| el.child(div().id("file-video-state").role(Role::Status)
                         .text_xs().text_color(color).child(text)))
                     .into_any_element()
