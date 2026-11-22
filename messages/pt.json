@@ -12106,7 +12106,7 @@
   "guests_update_server": "Este servidor ainda não tem a versão com convidados pelo Connect. Atualize e tente de novo.",
   "guests_password_keep": "Senha (deixe vazio para manter)",
   "guests_password_required": "Informe a senha.",
-  "guests_user_invalid": "O usuário precisa ter ponto ou @, como ana.silva ou ana@casa.",
+  "guests_user_invalid": "O usuário precisa ter ponto ou “@”, como ana.silva ou ana@casa.",
   "guests_no_access": "Não acessa",
   "guests_folder_value": "Pasta: {pasta}",
   "guests_folder_hint": "ex.: ~/Projetos/compartilhado",
@@ -12124,7 +12124,7 @@
   "guests_legacy_brought": "{usuario} agora entra pelo Connect, com a mesma senha.",
   "guests_legacy_missing": "{servidores} não está na lista de servidores deste aparelho. Adicione antes de trazer a conta.",
   "guests_legacy_new_name": "Nome novo",
-  "guests_legacy_rename_help": "No Connect o nome precisa ter ponto ou @. {antigo} passa a entrar como {novo}, com a mesma senha.",
+  "guests_legacy_rename_help": "No Connect o nome precisa ter ponto ou “@”. {antigo} passa a entrar como {novo}, com a mesma senha.",
   "guests_access_left": "{servidor} ficou com o acesso criado para {usuario}: {erro}",
   "connect_machine_off_now": "Desligada agora",
   "connect_account_device_asked_code": "Código {code} · pediu {when}"

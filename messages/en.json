@@ -12106,7 +12106,7 @@
   "guests_update_server": "This server doesn't have the version with guests through Connect yet. Update it and try again.",
   "guests_password_keep": "Password (leave empty to keep it)",
   "guests_password_required": "Enter the password.",
-  "guests_user_invalid": "The user needs a dot or @, like ana.silva or ana@home.",
+  "guests_user_invalid": "The user needs a dot or “@”, like ana.silva or ana@home.",
   "guests_no_access": "No access",
   "guests_folder_value": "Folder: {pasta}",
   "guests_folder_hint": "e.g. ~/Projects/shared",
@@ -12124,7 +12124,7 @@
   "guests_legacy_brought": "{usuario} now signs in through Connect, with the same password.",
   "guests_legacy_missing": "{servidores} isn't in this device's server list. Add it before bringing the account.",
   "guests_legacy_new_name": "New name",
-  "guests_legacy_rename_help": "On Connect the name needs a dot or @. {antigo} will sign in as {novo}, with the same password.",
+  "guests_legacy_rename_help": "On Connect the name needs a dot or “@”. {antigo} will sign in as {novo}, with the same password.",
   "guests_access_left": "{servidor} kept the access created for {usuario}: {erro}",
   "connect_machine_off_now": "Off right now",
   "connect_account_device_asked_code": "Code {code} · asked {when}"
