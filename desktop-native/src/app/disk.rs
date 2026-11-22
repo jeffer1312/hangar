@@ -259,7 +259,7 @@ impl Uploads {
         })).await?;
         match here {
             Some(Ok(Here::File(path))) => crate::api::download::copy_file(path, target, report).await,
-            Some(Ok(Here::Bytes(bytes))) => crate::api::download::write_bytes(target, &bytes).await,
+            Some(Ok(Here::Bytes(bytes))) => crate::api::download::write_bytes(target, &bytes, report).await,
             Some(Err(error)) => Err(error.into()),
             None => api.download(name, source, target, report).await,
         }

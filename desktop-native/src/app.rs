@@ -442,9 +442,8 @@ enum Payload {
     // Miniatura já decodificada fora da thread da janela; `None` = bytes que não são imagem legível.
     // A miniatura e os quadros da revelação dela.
     Media(SessionKey, Source, u32, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
-    /// Resultado de Abrir/Salvar da geração `u64`: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no
-    /// servidor.
-    Saved(SessionKey, Source, u64, bool, Result<(PathBuf, bool), (String, bool)>),
+    /// Resultado de Abrir/Salvar: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no servidor.
+    Saved(SessionKey, Source, SaveStart, bool, Result<(PathBuf, bool), (String, bool)>),
     /// Quanto do Abrir/Salvar da geração `u64` já chegou e o tamanho, se o servidor disse.
     SaveProgress(SessionKey, Source, u64, u64, Option<u64>),
     /// Quanto do anexo `id` já saiu, do total.
@@ -2050,23 +2049,24 @@ impl Hangar {
                 }
                 return;
             }
-            Payload::Saved(key, source, generation, open, result) => {
+            Payload::Saved(key, source, start, open, result) => {
                 // Reabrir o que já foi salvo mantém o cartão "baixado" (Abrir e Mostrar na pasta), abrindo ou não.
                 let kept = self.file_cards.get(&(key.clone(), source.clone())).filter(|card| matches!(card, FileCard::Saved(_))).cloned();
                 // Cancelado ou trocado enquanto o resultado vinha: nada abre nem aparece, e a tarefa nova do cartão
-                // continua. A cópia privada que ninguém vai abrir sai; o destino escolhido no Salvar fica. Reabrir não é
-                // download: vale só enquanto o cartão segue "baixado", e o arquivo dele nunca sai.
-                let current = if generation == REOPEN { kept.is_some() } else { self.downloads.finish(&(key.clone(), source.clone()), generation) };
-                if !current {
-                    if generation != REOPEN && open && let Ok((path, false)) = result && is_private_copy(&path) {
-                        std::thread::spawn(move || { let _ = std::fs::remove_file(path); });
-                    }
-                    return;
-                }
+                // continua. A cópia privada que este pedido criou sai com `copy`, se ninguém a abrir; o arquivo da
+                // sessão e o destino escolhido no Salvar ficam. Reabrir não é download: vale só enquanto o cartão
+                // segue "baixado" no mesmo arquivo que o pedido leu, e esse arquivo nunca sai.
+                let (current, copy) = match start {
+                    SaveStart::Reopen(saved) => (reopen_is_current(kept.as_ref(), &saved), None),
+                    SaveStart::Download(generation, copy) => (self.downloads.finish(&(key.clone(), source.clone()), generation), copy),
+                };
+                if !current { return; }
                 let (card, note) = match result {
                     Ok((_, true)) => (Some(FileCard::Empty), None),
                     Ok((path, _)) if open && composer::openable_path(&path) => {
                         cx.open_with_system(&path);
+                        // Aberta, a cópia fica para o programa do sistema; a varredura das antigas a leva depois.
+                        if let Some(copy) = copy { copy.keep(); }
                         (kept, None)
                     }
                     Ok((path, _)) if open => {
@@ -3857,11 +3857,13 @@ impl Hangar {
         if open && let Some(FileCard::Saved(saved)) = self.file_cards.get(&card) {
             let (saved, tx, connection) = (saved.clone(), self.tx.clone(), self.connection);
             self.runtime.spawn(async move {
-                let real = tokio::task::spawn_blocking(move || std::fs::canonicalize(&saved).ok().filter(|real| real.is_file())
+                let read = saved.clone();
+                let real = tokio::task::spawn_blocking(move || std::fs::canonicalize(&read).ok().filter(|real| real.is_file())
                     .map(|real| real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(disk::plain_path(text)))))
                     .await.ok().flatten();
                 let result = real.map(|real| (real, false)).ok_or_else(|| (String::new(), true));
-                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, REOPEN, true, result) }).await;
+                let payload = Payload::Saved(key, source, SaveStart::Reopen(saved), true, result);
+                let _ = tx.send(Envelope { connection, selection: None, payload }).await;
             });
             return;
         }
@@ -3869,6 +3871,9 @@ impl Hangar {
         let fail_key = key.clone();
         let write = move |target: Option<PathBuf>, generation: u64| -> tokio::task::AbortHandle {
             runtime.spawn(async move {
+                // A cópia privada criada aqui tem dono desde já: cancelado antes de `receive` a assumir (até com o
+                // envio do resultado esperando vaga na fila), o arquivo sai junto.
+                let mut copy = None;
                 let result = async {
                     let target = match target {
                         Some(path) => path,
@@ -3877,7 +3882,7 @@ impl Hangar {
                             if let Ok(Some(real)) = tokio::task::spawn_blocking(move || local.local_path(&wanted)).await { return Ok((real, false)); }
                             let name = safe.clone();
                             match tokio::task::spawn_blocking(move || private_copy(&name)).await {
-                                Ok(Ok(path)) => path,
+                                Ok(Ok(path)) => { copy = Some(PrivateCopy(Some(path.clone()))); path }
                                 Ok(Err(error)) => return Err(Self::download_failure(&safe, api::download::DownloadError::Disk(error))),
                                 Err(error) => return Err(Self::download_failure(&safe, api::download::DownloadError::Task(error))),
                             }
@@ -3894,7 +3899,8 @@ impl Hangar {
                         Err(error) => Err(Self::download_failure(&safe, error)),
                     }
                 }.await;
-                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, generation, open, result) }).await;
+                let payload = Payload::Saved(key, source, SaveStart::Download(generation, copy), open, result);
+                let _ = tx.send(Envelope { connection, selection: None, payload }).await;
             }).abort_handle()
         };
         if open { self.start_download(card, |generation| write(None, generation)); cx.notify(); return; }
@@ -7594,12 +7600,31 @@ fn private_copy(name: &str) -> std::io::Result<PathBuf> {
     Ok(base.join(format!("{stamp}-{name}")))
 }
 
-/// Geração do Abrir de um arquivo já salvo, que não baixa nada: as dos downloads começam em 1.
-const REOPEN: u64 = 0;
+/// Quem pediu o `Payload::Saved`.
+enum SaveStart {
+    /// O download da geração `u64`, com a cópia privada que ele criou para o Abrir, quando criou.
+    Download(u64, Option<PrivateCopy>),
+    /// Abrir de novo o arquivo de um cartão "baixado", sem baixar nada; o caminho é o que o cartão tinha no clique.
+    Reopen(PathBuf),
+}
 
-/// Só o que está direto na pasta das cópias: o arquivo da própria sessão e o destino do Salvar nunca são apagados.
-fn is_private_copy(path: &std::path::Path) -> bool {
-    path.parent() == Some(private_copies_dir().as_path())
+/// A cópia privada que um pedido criou: solta sem `keep`, sai do disco numa thread própria. Só a cópia nasce com dono;
+/// o arquivo da sessão e o destino do Salvar nunca passam por aqui.
+struct PrivateCopy(Option<PathBuf>);
+
+impl PrivateCopy {
+    fn keep(mut self) { self.0 = None; }
+}
+
+impl Drop for PrivateCopy {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() { std::thread::spawn(move || { let _ = std::fs::remove_file(path); }); }
+    }
+}
+
+/// O Reabrir só vale se o cartão continua "baixado" no arquivo que ele leu: um Salvar mais novo trocou o arquivo.
+fn reopen_is_current(card: Option<&FileCard>, started: &std::path::Path) -> bool {
+    matches!(card, Some(FileCard::Saved(saved)) if saved == started)
 }
 
 /// Cópia mais nova que isto nunca sai: o programa do sistema pode ainda estar abrindo o arquivo.
@@ -9477,6 +9502,34 @@ mod tests {
         assert_eq!(big, [std::path::PathBuf::from("antes"), std::path::PathBuf::from("velha")]);
         let future = super::stale_copies(vec![(std::path::PathBuf::from("futuro"), now + Duration::from_secs(3600), 1)], now);
         assert!(future.is_empty(), "relógio que voltou não apaga");
+    }
+
+    #[test]
+    fn reopen_counts_only_while_the_card_keeps_the_file_it_read() {
+        use super::FileCard;
+        let (a, b) = (std::path::PathBuf::from("/tmp/a.pdf"), std::path::PathBuf::from("/tmp/b.pdf"));
+        assert!(super::reopen_is_current(Some(&FileCard::Saved(a.clone())), &a));
+        // Um Salvar mais novo trocou o arquivo do cartão: a resposta do Reabrir de A não abre nem mexe no cartão de B.
+        assert!(!super::reopen_is_current(Some(&FileCard::Saved(b)), &a));
+        assert!(!super::reopen_is_current(Some(&FileCard::Downloading { done: 0, total: None }), &a));
+        assert!(!super::reopen_is_current(None, &a));
+    }
+
+    #[test]
+    fn a_private_copy_leaves_unless_kept() {
+        let dir = std::env::temp_dir().join(format!("hangar-private-copy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (dropped, kept) = (dir.join("dropped.pdf"), dir.join("kept.pdf"));
+        std::fs::write(&dropped, b"x").unwrap();
+        std::fs::write(&kept, b"x").unwrap();
+        drop(super::PrivateCopy(Some(dropped.clone())));
+        super::PrivateCopy(Some(kept.clone())).keep();
+        // A remoção roda numa thread própria.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while dropped.exists() && std::time::Instant::now() < deadline { std::thread::sleep(std::time::Duration::from_millis(10)); }
+        assert!(!dropped.exists());
+        assert!(kept.exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

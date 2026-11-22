@@ -711,16 +711,20 @@ impl Api {
     /// de `MAX_BYTES`; o arquivo para guardar vai por `download`, direto ao disco.
     pub async fn fetch_sized(&self, name: &str, source: &Source, width: Option<u32>) -> Result<Vec<u8>, Failure> {
         if let Source::Memory(_, bytes) = source { return Ok(bytes.0.to_vec()); }
-        let r = self.open_source(name, source, width).await?;
-        if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
-        // Resposta sem tamanho declarado para no teto enquanto chega.
-        let mut body = Vec::new();
-        let mut chunks = std::pin::pin!(r.bytes_stream());
-        while let Some(chunk) = download::next_chunk(&mut chunks, download::IDLE).await? {
-            body.extend_from_slice(&chunk);
-            if body.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
-        }
-        Ok(body)
+        // Prazo total além do de silêncio: quem pede para a memória segura uma vaga da prévia, e resposta que pinga um
+        // bloco antes de cada silêncio a seguraria para sempre.
+        tokio::time::timeout(Duration::from_secs(UPLOAD_SECONDS), async {
+            let r = self.open_source(name, source, width).await?;
+            if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
+            // Resposta sem tamanho declarado para no teto enquanto chega.
+            let mut body = Vec::new();
+            let mut chunks = std::pin::pin!(r.bytes_stream());
+            while let Some(chunk) = download::next_chunk(&mut chunks, download::IDLE).await? {
+                body.extend_from_slice(&chunk);
+                if body.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
+            }
+            Ok(body)
+        }).await.map_err(|_| Failure::transport(false))?
     }
 
     /// Baixa o arquivo direto em `target`, passando por `<target>.part`, sem teto de tamanho e sem prazo total: só o de
@@ -728,7 +732,7 @@ impl Api {
     /// `Content-Length`, quando veio. `None`: veio vazio e nada foi gravado. Abortar a tarefa apaga o `.part`.
     pub async fn download(&self, name: &str, source: &Source, target: std::path::PathBuf, report: impl FnMut(u64, Option<u64>))
         -> Result<Option<std::path::PathBuf>, download::DownloadError> {
-        if let Source::Memory(_, bytes) = source { return download::write_bytes(target, &bytes.0).await; }
+        if let Source::Memory(_, bytes) = source { return download::write_bytes(target, &bytes.0, report).await; }
         let r = self.open_source(name, source, None).await?;
         let total = r.content_length();
         let mut reporter = download::Reporter::new(report);
@@ -1337,10 +1341,11 @@ async fn failed_response(response: Response, post: bool, method: &str, identity:
     let status = response.status().as_u16();
     let url = response.url().clone();
     let retry_after = response.headers().get(header::RETRY_AFTER).and_then(|s| s.to_str().ok()).and_then(|s| s.parse().ok());
+    // Antes do corpo: quem espera com prazo pode cancelar a leitura, e a recusa tem que valer mesmo assim.
+    if status == 401 && let Some(identity) = identity { route::refused_at(identity, &url); }
     let body = response.json::<Value>().await.ok();
     let code = envelope_code(body.as_ref());
     recent::record(method, &url, status, code.as_deref());
-    if status == 401 && let Some(identity) = identity { route::refused_at(identity, &url); }
     let detail = failure_detail(body.clone(), status);
     (body, Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
 }

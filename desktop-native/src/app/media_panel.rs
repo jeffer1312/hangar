@@ -390,9 +390,20 @@ impl Hangar {
         let audio_key = format!("media:{}:{:?}", key.name, item.source);
         let state = self.audio_state(&audio_key);
         let duration = state.duration.map(crate::audio::clock);
-        let detail = match &state.error {
-            Some(error) => tr("audio_failed").replace("{error}", error),
-            None => Self::media_detail(item, duration),
+        let downloading = match self.file_cards.get(&(key.clone(), item.source.clone())) {
+            Some(FileCard::Downloading { done, total }) => Some((*done, *total)),
+            _ => None,
+        };
+        // Durante o download a linha diz quanto chegou, como a de arquivos: sem tamanho declarado o anel não anda.
+        let detail = match (&state.error, downloading) {
+            (_, Some((done, total))) => downloading_label(done, total),
+            (Some(error), None) => tr("audio_failed").replace("{error}", error),
+            (None, None) => Self::media_detail(item, duration),
+        };
+        let detail_color = match (&state.error, downloading) {
+            (_, Some(_)) => theme::muted(),
+            (Some(_), None) => theme::warning_text(),
+            (None, None) => theme::faint(),
         };
         let label = tr(if state.playing { "audio_pause" } else { "audio_play" });
         let (play_source, play_name, play_key) = (item.source.clone(), item.name.clone(), audio_key.clone());
@@ -429,8 +440,7 @@ impl Hangar {
             .child(play)
             .child(div().flex_1().min_w_0().flex().flex_col()
                 .child(div().truncate().text_size(px(13.)).text_color(theme::text()).child(item.name.clone()))
-                .child(div().mt(px(2.)).truncate().text_size(px(11.)).text_color(if state.error.is_some() { theme::warning_text() } else { theme::faint() })
-                    .child(detail)))
+                .child(div().mt(px(2.)).truncate().text_size(px(11.)).text_color(detail_color).child(detail)))
             .children(again)
             .child(save)
             .into_any_element()
