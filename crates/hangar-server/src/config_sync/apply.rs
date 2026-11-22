@@ -487,10 +487,10 @@ impl Apply {
                 return Ok(());
             }
             let home = self.accounts.env.home.clone();
-            let principal = self.accounts.env.default_claude_json();
+            let principal = self.accounts.env.known_default_claude_json();
             self.accounts
                 .create(Provider::Claude, name, |path| {
-                    let result = claude_config::seed(&home, &principal, path);
+                    let result = claude_config::seed(&home, principal.as_deref(), path);
                     claude_config::write_cli_diary(&self.accounts.env, &result.diary);
                     result.result.map(|_| ()).map_err(|error| {
                         catalog::AccountError::new(

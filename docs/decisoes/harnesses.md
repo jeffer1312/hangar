@@ -1386,7 +1386,10 @@ mão só do arquivo de dentro da pasta é desfeito no próximo registro, como nu
 desligar é pela tela. O `mcp-register` ignora a variável com `--home`, que aponta para outra casa, e cria o arquivo de
 dentro da pasta quando ele falta, como faz com o `~/.claude.json`: o CLI o criaria depois sem o `hangar`. Os comandos de
 terminal (`hangar-conta --prep`, `hangar-server open` com o servidor fora) leem a variável do shell,
-que num painel de outra conta é a pasta dela: por isso pasta com `.hangar-conta` nunca é a padrão. A
+que num painel de outra conta é a pasta dela: pasta com `.hangar-conta` nunca é a padrão, e aí quem
+chama não sabe qual é (`known_default_claude_json` devolve `None`): o espelho não roda (cair no
+`~/.claude.json` brigaria com o do servidor, que usa o arquivo de dentro da pasta) e a semeadura usa o
+`~/.claude.json`, que o espelho do servidor corrige na primeira abertura. A
 importação do Codex já tinha a mesma regra numa cópia própria, que passou a usar esta.
 O passo `2026-11-22-mcp-na-conta-padrao-com-config-dir` é de máquina porque o pacote não roda
 passo de conteúdo e nada mais regravaria o `hangar` desse arquivo; sem ele, o espelho novo levaria

@@ -1170,7 +1170,7 @@ fn b1_runtime_links_into_the_shared_folder_are_undone() {
     let account = home.join(".claude-conta2");
     ln(&account.join(".claude.json.lock"), home.join(".claude/.claude.json.lock"));
     ln(&account.join("mcp-needs-auth-cache.json"), home.join(".claude/mcp-needs-auth-cache.json"));
-    assert_eq!(claude_config::reconcile(&home, &home.join(".claude.json"), &account, None).result.unwrap(), Vec::<String>::new());
+    assert_eq!(claude_config::reconcile(&home, Some(home.join(".claude.json").as_path()), &account, None).result.unwrap(), Vec::<String>::new());
     for name in [".claude.json.lock", "mcp-needs-auth-cache.json"] {
         assert!(std::fs::symlink_metadata(account.join(name)).is_err(), "{name} seguiu ligado ao ~/.claude");
     }
@@ -1202,7 +1202,7 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
     let holder = std::fs::OpenOptions::new().read(true).append(true).create(true).open(home.join(".hangar-contas.lock")).unwrap();
     holder.lock().unwrap();
     std::thread::scope(|s| {
-        let waiting = s.spawn(|| claude_config::reconcile_account(&home, &home.join(".claude.json"), "conta_b", None, EACH).result);
+        let waiting = s.spawn(|| claude_config::reconcile_account(&home, Some(home.join(".claude.json").as_path()), "conta_b", None, EACH).result);
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert_eq!(std::fs::read_to_string(home.join(".claude/CLAUDE.md")).unwrap(), "# regras", "a conta_b subiu o arquivo sem a trava");
         assert!(!std::fs::symlink_metadata(home.join(".claude-conta_b/CLAUDE.md")).unwrap().file_type().is_symlink());
@@ -1217,7 +1217,7 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
     let warnings: Vec<Vec<String>> = std::thread::scope(|s| {
         let runs: Vec<_> = versions.iter().map(|(name, _)| s.spawn(|| {
             barrier.wait();
-            claude_config::reconcile_account(&home, &home.join(".claude.json"), name, None, EACH).result.unwrap()
+            claude_config::reconcile_account(&home, Some(home.join(".claude.json").as_path()), name, None, EACH).result.unwrap()
         })).collect();
         runs.into_iter().map(|r| r.join().unwrap()).collect()
     });
@@ -1276,7 +1276,7 @@ fn the_same_account_reconciling_twice_at_once_never_fails() {
         let results: Vec<_> = std::thread::scope(|s| {
             let runs: Vec<_> = (0..2).map(|_| s.spawn(|| {
                 barrier.wait();
-                claude_config::reconcile_account(&home, &home.join(".claude.json"), "conta2", Some("-p"), EACH).result
+                claude_config::reconcile_account(&home, Some(home.join(".claude.json").as_path()), "conta2", Some("-p"), EACH).result
             })).collect();
             runs.into_iter().map(|r| r.join().unwrap()).collect()
         });
@@ -1297,7 +1297,7 @@ fn a_held_configuration_lock_refuses_at_the_deadline() {
         let holder = std::fs::OpenOptions::new().read(true).write(true).create(create).truncate(false).open(&path).unwrap();
         holder.lock().unwrap();
         let started = std::time::Instant::now();
-        let outcome = claude_config::reconcile_locked(&home, &home.join(".claude.json"), &account, None, ".hangar-conta",
+        let outcome = claude_config::reconcile_locked(&home, Some(home.join(".claude.json").as_path()), &account, None, ".hangar-conta",
             claude_config::Wait::Each(std::time::Duration::from_millis(300)));
         let waited = started.elapsed();
         match outcome.result {
@@ -1500,7 +1500,7 @@ fn the_mcp_mirror_without_the_config_lock_writes_and_warns() {
     let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let capture = Capture(output.clone());
     let subscriber = tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || capture.clone()).finish();
-    let outcome = tracing::subscriber::with_default(subscriber, || claude_config::reconcile_account(&home, &home.join(".claude.json"), "conta2", None, EACH));
+    let outcome = tracing::subscriber::with_default(subscriber, || claude_config::reconcile_account(&home, Some(home.join(".claude.json").as_path()), "conta2", None, EACH));
     assert!(outcome.result.is_ok(), "{:?}", outcome.result);
     let copy: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(copy["mcpServers"], json!({"tavily": {}}), "o espelho grava sem a trava");
@@ -1562,7 +1562,7 @@ fn locks_taken_after_the_opening_deadline_reconcile_nothing() {
     let account = home.join(".claude-conta2");
     let limit = std::time::Duration::from_millis(300);
     let wait = claude_config::Wait::Within { limit, deadline: std::time::Instant::now() };
-    let outcome = claude_config::reconcile_locked(&home, &home.join(".claude.json"), &account, None, ".hangar-conta", wait);
+    let outcome = claude_config::reconcile_locked(&home, Some(home.join(".claude.json").as_path()), &account, None, ".hangar-conta", wait);
     match outcome.result {
         Err(ConfigError::Refused(detail)) => assert_eq!(detail, "a reconciliação da conta passou do limite de 0.3 s"),
         other => panic!("esperava a recusa do limite: {other:?}"),
@@ -1634,8 +1634,8 @@ proptest::proptest! {
             let _ = std::fs::remove_file(path);
             if let Some(bytes) = bytes { put(path, bytes); }
         }
-        let _ = claude_config::reconcile(&home, &home.join(".claude.json"), &account, Some("-p"));
-        let _ = claude_config::reconcile(&home, &home.join(".claude.json"), &account, None);
+        let _ = claude_config::reconcile(&home, Some(home.join(".claude.json").as_path()), &account, Some("-p"));
+        let _ = claude_config::reconcile(&home, Some(home.join(".claude.json").as_path()), &account, None);
     }
 
     /// Qualquer argumento sai com um dos códigos do contrato.
@@ -1804,7 +1804,7 @@ fn the_seed_prepares_the_pending_folder_and_leaves_publication_to_the_creation()
     casa(&home);
     let account = home.join(".claude-fresh");
     put(&account.join(".hangar-account-pending"), "");
-    assert!(claude_config::seed(&home, &home.join(".claude.json"), &account).result.is_ok());
+    assert!(claude_config::seed(&home, Some(home.join(".claude.json").as_path()), &account).result.is_ok());
     let meta = |p: &str| std::fs::symlink_metadata(account.join(p));
     assert!(meta("settings.json").unwrap().is_file());
     assert!(meta(".credentials.json").is_err());
