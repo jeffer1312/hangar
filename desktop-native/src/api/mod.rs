@@ -41,6 +41,8 @@ fn open_trace_clock() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
 
 pub const MAX_BYTES: u64 = 100 * 1024 * 1024;
 const UPLOAD_SECONDS: u64 = 180;
+/// Espera pelos cabeçalhos de um anexo baixado, antes do prazo de silêncio do corpo: o servidor pode demorar a começar.
+const HEADERS_SECONDS: u64 = UPLOAD_SECONDS;
 /// Reabrir a sessão: o servidor espera até 5 min o Claude novo e, se falhar, mais 5 min a volta.
 pub const REOPEN_SECONDS: u64 = 720;
 
@@ -743,7 +745,8 @@ impl Api {
         match writer { Some(part) => part.finish().await.map(Some), None => Ok(None) }
     }
 
-    /// A resposta já conferida de um anexo, com o prazo de silêncio até os cabeçalhos; a conexão tem o prazo dela.
+    /// A resposta já conferida de um anexo. Até os cabeçalhos o prazo é o longo (`HEADERS_SECONDS`); o de silêncio
+    /// (`download::IDLE`) vale só entre os pedaços do corpo.
     async fn open_source(&self, name: &str, source: &Source, width: Option<u32>) -> Result<Response, Failure> {
         let mut url = self.endpoint(Some(name), None);
         let mut remote = false;
@@ -768,7 +771,7 @@ impl Api {
             Source::Memory(..) => return Err(Failure::local("invalid_url")),
         }
         let request = if remote { self.plain.get(url) } else { self.client.get(url) };
-        download::within(download::IDLE, async {
+        download::within(Duration::from_secs(HEADERS_SECONDS), async {
             let r = request.send().await.map_err(|_| Failure::transport(false))?;
             // Erro de terceiro não tem o corpo lido: nem memória, nem texto escolhido por ele na tela.
             if remote && !r.status().is_success() {

@@ -118,7 +118,7 @@ function AudioShare({ uri, headers, name }: { uri: string; headers?: Record<stri
   if (dl.busy) return <DownloadRing pct={percentOf(dl.progress)} onCancel={dl.cancel} label={m.file_card_cancel({ nome: name })} />;
   return (
     <Pressable onPress={share} style={styles.btn} accessibilityRole="button"
-      accessibilityLabel={ios ? m.anexos_baixar({ nome: name }) : m.anexos_compartilhar({ nome: name })}>
+      accessibilityLabel={ios ? m.anexos_baixar({ nome: name }) : m.attachment_share({ nome: name })}>
       <Icon name={ios ? 'Download' : 'Share2'} size={16} color={theme.tokens.text.secondary} />
     </Pressable>
   );

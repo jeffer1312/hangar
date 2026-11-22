@@ -23,9 +23,8 @@ vi.mock('../paraglide/messages', () => ({
   file_card_no_app: () => 'no-app',
   file_card_progress: ({ pct, size }: { pct: string; size: string }) => `progress ${pct}% of ${size}`,
   file_card_progress_unknown: ({ size }: { size: string }) => `progress ${size}`,
-  file_card_downloaded: ({ size }: { size: string }) => `${size} downloaded`,
   file_card_cancel: ({ nome }: { nome: string }) => `cancel ${nome}`,
-  anexos_compartilhar: ({ nome }: { nome: string }) => `share ${nome}`,
+  attachment_share: ({ nome }: { nome: string }) => `share ${nome}`,
 }));
 
 import { FileCard } from './FileCard';
@@ -124,18 +123,26 @@ describe('FileCard', () => {
     expect(c.textContent).not.toContain('retry');
     await press(c, 'share rel.docx');
     expect(share).toHaveBeenCalledWith(expect.stringContaining('rel.docx'), { Authorization: 'Bearer t' }, 'rel.docx', expect.anything());
-    expect(c.textContent).toContain('2 KB downloaded');
+    // A folha não diz se a pessoa compartilhou ou fechou: nada de "baixado", e o aviso anterior sai.
+    expect(c.textContent).not.toContain('downloaded');
+    expect(c.textContent).not.toContain('saved');
+    expect(c.textContent).not.toContain('no-app');
+    expect(btn(c, 'open rel.docx')).not.toBeNull();
   });
 
-  it('folha do sistema (shared) marca como baixado, com o tamanho', async () => {
+  it('folha do sistema (shared) volta ao começo, sem dizer que baixou', async () => {
     deliver.mockImplementation(async (_u: string, _h: unknown, _n: string, o: DownloadOptions) => {
       o.onProgress?.({ written: 5 * 1024 * 1024, total: 5 * 1024 * 1024 });
       return 'shared';
     });
     const c = await mount();
     await press(c);
-    expect(c.textContent).toContain('5 MB downloaded');
+    expect(c.textContent).not.toContain('downloaded');
+    expect(c.textContent).not.toContain('saved');
     expect(c.textContent).not.toContain('opened');
+    expect(c.textContent).not.toContain('progress');
+    expect(c.textContent).toContain('DOCX');
+    expect(btn(c, 'open rel.docx')).not.toBeNull();
   });
 
   it('arquivo vazio avisa sem oferecer tentar de novo', async () => {

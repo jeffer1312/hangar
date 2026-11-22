@@ -13,10 +13,14 @@ const FLAG_GRANT_READ_URI_PERMISSION = 1;
 export const MEDIA_CACHE_LIMIT = 1024 * 1024 * 1024;
 
 const MEDIA_DIR = 'chat-media';
-// O leitor de PDF e a folha de texto da página guardam cópias próprias; o "Limpar" leva as duas.
-const SIDE_DIRS = ['pdf-reader', 'chat-page-source'];
-// Onde a versão anterior guardava as cópias de "Mídia e arquivos", fora do teto: hoje moram em `chat-media`.
-const LEGACY_DIRS = ['media-files', 'media-files-version'];
+// A folha de texto da página guarda cópias próprias; o "Limpar" as leva.
+const SIDE_DIRS = ['chat-page-source'];
+// Onde a versão anterior guardava as cópias de "Mídia e arquivos" e a versão de cada uma, fora do teto: hoje moram em
+// `chat-media`. O leitor de PDF também guardava uma segunda cópia; hoje recebe a do cache.
+const LEGACY_KEPT_DIR = 'media-files';
+const LEGACY_VERSION_DIR = 'media-files-version';
+const LEGACY_PDF_DIR = 'pdf-reader';
+const LEGACY_DIRS = [LEGACY_KEPT_DIR, LEGACY_VERSION_DIR, LEGACY_PDF_DIR];
 // Prefixo das cópias guardadas: o nome não cruza com o das cópias da conversa (`hash-nome`).
 const KEPT_PREFIX = 'kept-';
 const PROBE_TIMEOUT_MS = 4000;
@@ -242,13 +246,64 @@ function stored(): Stored[] {
   return dir.list().filter((f): f is File => f instanceof File).map((file) => ({ key: file.name, file, entry: readEntry(file.name) }));
 }
 
+function readLegacyVersion(f: File): KeptVersion {
+  try {
+    if (f.exists) {
+      const v = JSON.parse(f.textSync()) as Partial<KeptVersion>;
+      return { size: typeof v.size === 'number' ? v.size : null, mtime: typeof v.mtime === 'number' ? v.mtime : null };
+    }
+  } catch (e) {
+    diagCache('legacy_version_unreadable', e);
+  }
+  // Sem a versão a cópia continua valendo, como na versão anterior; só a data deixa de ser conferida.
+  return { size: null, mtime: null };
+}
+
+// Uma cópia antiga que não passou fica na pasta antiga até o próximo início do app, sem tentar de novo a cada leitura.
+let legacyStuck = false;
+
+function migrateQuietly(): void {
+  if (legacyStuck) return;
+  try { migrateLegacy(); } catch (e) { legacyStuck = true; diagCache('legacy_migrate_failed', e); }
+}
+
+// As cópias guardadas da versão anterior (`media-files/<hash>-<nome>`, versão em `media-files-version/<hash>.json`)
+// passam para `chat-media` como `kept-<hash>-<nome>`, com a versão no índice: o arquivo baixado para ver sem rede
+// continua lá depois da atualização. As pastas antigas só saem com todas passadas.
+function migrateLegacy(): void {
+  const pdf = new Directory(Paths.cache, LEGACY_PDF_DIR);
+  if (pdf.exists) pdf.delete();
+  const old = new Directory(Paths.cache, LEGACY_KEPT_DIR);
+  const versions = new Directory(Paths.cache, LEGACY_VERSION_DIR);
+  if (old.exists) for (const f of old.list()) {
+    if (!(f instanceof File)) continue;
+    const cut = f.name.indexOf('-');
+    if (cut <= 0) continue;
+    const version = new File(versions, `${f.name.slice(0, cut)}.json`);
+    // Pedaço de download da versão anterior (`<data>-<sorteio>.part`): não tem versão gravada e não é cópia.
+    if (f.name.endsWith('.part') && !version.exists) continue;
+    try {
+      const target = new File(mediaDir(), `${KEPT_PREFIX}${f.name}`);
+      // Já baixada de novo nesta versão: a nova vence.
+      if (target.exists) continue;
+      const stamp = readLegacyVersion(version);
+      const used = f.modificationTime ?? Date.now();
+      f.moveSync(target);
+      writeEntry(target.name, { etag: null, size: target.size, used, version: stamp });
+    } catch (e) {
+      legacyStuck = true;
+      diagCache('legacy_move_failed', e);
+    }
+  }
+  if (legacyStuck) return;
+  if (old.exists) old.delete();
+  if (versions.exists) versions.delete();
+}
+
 // Os usados há mais tempo saem primeiro, até caber no teto; o que acabou de ser pedido e o usado há
 // menos de dez minutos ficam. Sobra de versão antiga (sem registro) e pedaço abandonado saem também.
 export function evict(keep?: string): void {
-  for (const d of LEGACY_DIRS) {
-    const dir = new Directory(Paths.cache, d);
-    if (dir.exists) dir.delete();
-  }
+  migrateQuietly();
   const now = Date.now();
   const alive: Stored[] = [];
   for (const s of stored()) {
@@ -276,6 +331,8 @@ function keptFile(key: string, name: string): File {
 
 /** A cópia já baixada, ou null; também null quando o servidor diz que o arquivo mudou desde o download. */
 export function keptCopy(key: string, name: string, now: KeptVersion): File | null {
+  // Antes de qualquer download: a cópia da versão anterior já aparece como baixada, mesmo sem rede.
+  migrateQuietly();
   try {
     const f = keptFile(key, name);
     const entry = readEntry(f.name);
@@ -330,6 +387,7 @@ const kindOf = (key: string): CacheKind => {
 };
 
 export async function cacheUsage(): Promise<CacheUsage> {
+  migrateQuietly();
   const byKind: Record<CacheKind, number> = { image: 0, video: 0, audio: 0, document: 0 };
   let files = 0;
   for (const s of stored()) {
@@ -467,15 +525,9 @@ export async function deliverLocalFile(f: File, name: string): Promise<'opened' 
 export async function openPdfFile(uri: string, headers: Record<string, string> | undefined, name: string, isMounted: () => boolean): Promise<void> {
   let file: File;
   try {
-    const cached = await localCopy(uri, headers, name);
+    // A própria cópia do cache vai ao leitor, como em `openLocal`: uma segunda cópia ficava fora do teto para sempre.
+    file = await localCopy(uri, headers, name);
     if (!isMounted()) return;
-    const dir = new Directory(Paths.cache, 'pdf-reader', cached.name);
-    dir.create({ idempotent: true, intermediates: true });
-    const safe = safeName(name);
-    const filename = !safe || safe === '.' || safe === '..' ? 'documento.pdf' : safe;
-    file = new File(dir, filename);
-    // Cópia, não mover: a guardada continua servindo à próxima abertura.
-    cached.copySync(file, { overwrite: true });
   } catch (e) {
     throw new Error(m.native_pdf_download_failed({ reason: e instanceof Error ? e.message : String(e) }));
   }

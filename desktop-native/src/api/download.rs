@@ -1,7 +1,7 @@
 //! Transferência longa de arquivo: escrita num `.part` próprio ao lado do destino com troca de nome no fim, prazo por
 //! silêncio em vez de prazo total e aviso de progresso com teto de frequência.
-use std::{collections::HashMap, future::Future, hash::Hash, io::Write, path::{Path, PathBuf}, sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, Instant}};
+use std::{collections::HashMap, future::Future, hash::Hash, io::Write, path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError, atomic::{AtomicU64, Ordering}}, time::{Duration, Instant}};
 use futures::{Stream, StreamExt};
 use super::Failure;
 
@@ -13,12 +13,19 @@ pub const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 /// Escrita no disco em blocos deste tamanho, fora das threads do runtime.
 const FLUSH_AT: usize = 1 << 20;
 
-/// `<destino>.<tag>.part`. O `tag` diferente por download impede que dois para o mesmo destino gravem no mesmo arquivo,
-/// e que um novo esbarre no `.part` do cancelado que o Windows ainda não terminou de apagar.
+/// Teto do nome de arquivo nos sistemas de arquivo comuns, em bytes. No Windows o teto é de unidades UTF-16, que nunca
+/// passam do número de bytes UTF-8.
+const NAME_MAX: usize = 255;
+
+/// `<começo do destino>.hangar-<tag>.part`. O `tag` diferente por download impede que dois para o mesmo destino gravem
+/// no mesmo arquivo, e que um novo esbarre no `.part` do cancelado que o Windows ainda não terminou de apagar. O começo
+/// do nome é cortado para o `.part` caber no teto mesmo quando o destino já está perto dele.
 pub fn part_path(target: &Path, tag: &str) -> PathBuf {
-    let mut name = target.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    name.push(format!(".{tag}.part"));
-    target.with_file_name(name)
+    let suffix = format!(".hangar-{tag}.part");
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut keep = NAME_MAX.saturating_sub(suffix.len()).min(name.len());
+    while !name.is_char_boundary(keep) { keep -= 1; }
+    target.with_file_name(format!("{}{suffix}", &name[..keep]))
 }
 
 /// Processo e contador: nunca se repete neste processo, e outro processo tem outro pid.
@@ -212,17 +219,53 @@ impl PartWriter {
         result.map_err(DownloadError::Disk)
     }
 
-    /// Grava o resto, sincroniza e troca o nome: o destino só aparece inteiro.
+    /// Grava o resto, sincroniza e troca o nome: o destino só aparece inteiro. Cancelado no meio da troca de nome, o
+    /// `.part` sai, e o destino também quando a troca já tinha acontecido e ele não existia antes.
     pub async fn finish(mut self) -> Result<PathBuf, DownloadError> {
         self.flush().await?;
         let file = self.file.take();
         let (part, target) = (self.part.clone(), self.target.clone());
-        on_disk(move || {
-            if let Some(file) = file { file.sync_all()?; }
-            std::fs::rename(&part, &target)
-        }).await?;
+        // Daqui em diante quem apaga o `.part` é a tarefa de bloqueio: o `drop` no meio da troca o apagaria enquanto
+        // ela o renomeia.
         self.kept = true;
-        Ok(self.target.clone())
+        let phase = Arc::new(Mutex::new(Phase::Pending));
+        let mut guard = FinishGuard { phase: phase.clone(), target: target.clone(), armed: true };
+        let result = on_disk(move || {
+            let synced = file.map_or(Ok(()), |file| file.sync_all());
+            let mut phase = phase.lock().unwrap_or_else(PoisonError::into_inner);
+            if *phase == Phase::Cancelled {
+                let _ = std::fs::remove_file(&part);
+                return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+            }
+            let fresh = std::fs::symlink_metadata(&target).is_err();
+            match synced.and_then(|()| std::fs::rename(&part, &target)) {
+                Ok(()) => { *phase = Phase::Renamed { fresh }; Ok(()) }
+                Err(error) => { let _ = std::fs::remove_file(&part); Err(error) }
+            }
+        }).await;
+        guard.armed = false;
+        result.map(|()| self.target.clone())
+    }
+}
+
+/// A troca de nome, dividida entre `finish` e a tarefa de bloqueio que a faz.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase { Pending, Cancelled, Renamed { fresh: bool } }
+
+/// Solto antes de `finish` voltar (tarefa abortada durante a troca de nome): avisa a tarefa de bloqueio, que apaga o
+/// `.part` em vez de renomear; se ela já renomeou para um destino que não existia, como a cópia privada do Abrir, o
+/// destino sai. Destino que já existia fica: a troca o substituiu, e apagar perderia os dois.
+struct FinishGuard { phase: Arc<Mutex<Phase>>, target: PathBuf, armed: bool }
+
+impl Drop for FinishGuard {
+    fn drop(&mut self) {
+        if !self.armed { return; }
+        let mut phase = self.phase.lock().unwrap_or_else(PoisonError::into_inner);
+        match *phase {
+            Phase::Pending => *phase = Phase::Cancelled,
+            Phase::Renamed { fresh: true } => { let _ = std::fs::remove_file(&self.target); }
+            Phase::Cancelled | Phase::Renamed { fresh: false } => {}
+        }
     }
 }
 
@@ -245,12 +288,12 @@ pub async fn write_bytes(target: PathBuf, bytes: &[u8]) -> Result<Option<PathBuf
 /// Cópia de um arquivo deste disco, em blocos, com progresso e cancelável entre um bloco e outro. Vazio: `None`.
 pub async fn copy_file(from: PathBuf, target: PathBuf, report: impl FnMut(u64, Option<u64>)) -> Result<Option<PathBuf>, DownloadError> {
     use std::io::Read;
-    let unreadable = || Failure::local("invalid_response");
-    let (mut file, total) = tokio::task::spawn_blocking(move || {
+    // Erro de leitura daqui também é do disco: a causa do sistema segue até o cartão e o log.
+    let (mut file, total) = on_disk(move || {
         let file = std::fs::File::open(from)?;
         let total = file.metadata()?.len();
-        Ok::<_, std::io::Error>((file, total))
-    }).await.map_err(|_| unreadable())?.map_err(|_| unreadable())?;
+        Ok((file, total))
+    }).await?;
     if total == 0 { return Ok(None); }
     let (mut writer, mut reporter) = (PartWriter::create(target).await?, Reporter::new(report));
     let mut chunk = vec![0; FLUSH_AT];
@@ -258,9 +301,9 @@ pub async fn copy_file(from: PathBuf, target: PathBuf, report: impl FnMut(u64, O
         let (back, read, result) = tokio::task::spawn_blocking(move || {
             let result = file.read(&mut chunk);
             (file, chunk, result)
-        }).await.map_err(|_| unreadable())?;
+        }).await.map_err(DownloadError::Task)?;
         file = back;
-        let read_bytes = result.map_err(|_| unreadable())?;
+        let read_bytes = result.map_err(DownloadError::Disk)?;
         if read_bytes == 0 { break; }
         writer.write(&read[..read_bytes]).await?;
         chunk = read;
@@ -342,10 +385,37 @@ mod tests {
 
     #[test]
     fn part_path_sits_next_to_the_target_with_its_own_tag() {
-        assert_eq!(part_path(Path::new("/tmp/x/relatorio.pdf"), "7-3"), PathBuf::from("/tmp/x/relatorio.pdf.7-3.part"));
+        assert_eq!(part_path(Path::new("/tmp/x/relatorio.pdf"), "7-3"), PathBuf::from("/tmp/x/relatorio.pdf.hangar-7-3.part"));
         let (a, b) = (next_tag(), next_tag());
         assert_ne!(a, b);
         assert!(a.starts_with(&format!("{}-", std::process::id())));
+    }
+
+    #[test]
+    fn part_name_fits_the_limit_when_the_target_is_near_it() {
+        // 254 bytes, um a menos que o teto; e um com letras de dois bytes, em que o corte (235 bytes) cairia no meio de
+        // uma letra.
+        for name in [format!("{}.pdf", "a".repeat(250)), "é".repeat(127)] {
+            assert_eq!(name.len(), 254);
+            let part = part_path(&Path::new("/tmp/x").join(&name), "12345-7");
+            let file_name = part.file_name().unwrap().to_str().unwrap();
+            assert!(file_name.len() <= NAME_MAX, "{}", file_name.len());
+            assert!(file_name.ends_with(".hangar-12345-7.part"));
+            assert!(name.starts_with(file_name.trim_end_matches(".hangar-12345-7.part")));
+            assert_eq!(part.parent(), Some(Path::new("/tmp/x")));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_target_name_of_254_bytes_downloads() {
+        let dir = scratch("long");
+        let target = dir.join(format!("{}.bin", "b".repeat(250)));
+        let mut writer = PartWriter::create(target.clone()).await.unwrap();
+        writer.write(b"long").await.unwrap();
+        assert_eq!(writer.finish().await.unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), b"long");
+        assert_eq!(left(&dir).len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

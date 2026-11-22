@@ -7,7 +7,7 @@ interface FakeTask {
   state: string; resumeData?: string; released: boolean;
 }
 const fs = vi.hoisted(() => ({
-  files: new Map<string, { size: number; mtime: number }>(),
+  files: new Map<string, { size: number; mtime: number; text?: string }>(),
   dirs: new Set<string>(),
   jobs: [] as Job[],
   tasks: [] as FakeTask[],
@@ -47,7 +47,8 @@ vi.mock('expo-file-system', () => {
       if (fs.failPartDelete && this.uri.endsWith('.hangar-part')) throw new Error('EBUSY');
       fs.files.delete(this.uri);
     }
-    write(text: string) { fs.files.set(this.uri, { size: text.length, mtime: Date.now() }); }
+    write(text: string) { fs.files.set(this.uri, { size: text.length, mtime: Date.now(), text }); }
+    textSync() { return fs.files.get(this.uri)?.text ?? ''; }
     moveSync(dest: File) { fs.files.set(dest.uri, fs.files.get(this.uri)!); fs.files.delete(this.uri); this.uri = dest.uri; }
     copySync(dest: File) { fs.files.set(dest.uri, { ...fs.files.get(this.uri)! }); }
     static createDownloadTask(url: string, dest: File, opts: FakeTask['opts']) { return makeTask(url, dest.uri, opts); }
@@ -541,7 +542,26 @@ describe('cópia guardada de "Mídia e arquivos"', () => {
   it('as pastas da versão anterior saem na limpeza', async () => {
     fs.files.set('cache/media-files/abc-report.pdf', { size: 5, mtime: 0 });
     fs.files.set('cache/media-files-version/abc.json', { size: 2, mtime: 0 });
+    fs.files.set('cache/pdf-reader/x-manual.pdf/manual.pdf', { size: 4, mtime: 0 });
     await download(() => ({ size: 10, mtime: 5 }));
+    expect([...fs.files.keys()].filter((k) => k.startsWith('cache/media-files') || k.startsWith('cache/pdf-reader'))).toEqual([]);
+  });
+
+  it('a cópia guardada pela versão anterior passa para o cache com a versão e continua valendo sem rede', () => {
+    const old = `${keyHash(key)}-report.pdf`;
+    fs.files.set(`cache/media-files/${old}`, { size: 7, mtime: 3000 });
+    const versionText = JSON.stringify({ size: 7, mtime: 42 });
+    fs.files.set(`cache/media-files-version/${keyHash(key)}.json`, { size: versionText.length, mtime: 3000, text: versionText });
+    // Pedaço de download abandonado pela versão anterior: não vira cópia.
+    fs.files.set('cache/media-files/lz3k-9f2a.part', { size: 3, mtime: 3000 });
+    const kept = keptCopy(key, 'report.pdf', { size: 7, mtime: 42 });
+    expect(kept?.uri).toBe(`cache/chat-media/kept-${old}`);
+    expect(JSON.parse(fs.store.get(`kept-${old}`)!)).toEqual({ etag: null, size: 7, used: 3000, version: { size: 7, mtime: 42 } });
     expect([...fs.files.keys()].filter((k) => k.startsWith('cache/media-files'))).toEqual([]);
+    // A versão veio junto: o arquivo trocado no servidor (outra data) deixa de valer.
+    expect(keptCopy(key, 'report.pdf', { size: 7, mtime: 43 })).toBeNull();
+    // A limpeza seguinte não a apaga: tem registro.
+    evict();
+    expect(fs.files.has(`cache/chat-media/kept-${old}`)).toBe(true);
   });
 });

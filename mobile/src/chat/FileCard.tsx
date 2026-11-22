@@ -1,9 +1,9 @@
-import { memo, useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { haptic } from '../ui/haptics';
 import { SvgXml } from 'react-native-svg';
-import { fmtBytes, registrarDiag, svgIcone } from '@hangar/core';
+import { registrarDiag, svgIcone } from '@hangar/core';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import { DownloadRing } from '../features/attachments/DownloadRing';
@@ -11,11 +11,10 @@ import { percentOf, progressText, useDownload } from '../features/attachments/us
 import type { DownloadOptions } from '../features/attachments/mediaCache';
 import * as m from '../paraglide/messages';
 
-type Status = 'idle' | 'done' | 'opened' | 'empty' | 'missing' | 'failed' | 'no-app';
+type Status = 'idle' | 'opened' | 'empty' | 'missing' | 'failed' | 'no-app';
 
-const statusText: Record<Status, ((size: string) => string) | null> = {
+const statusText: Record<Status, (() => string) | null> = {
   idle: null,
-  done: (size) => (size ? m.file_card_downloaded({ size }) : m.file_card_saved()),
   opened: () => m.file_card_opened(),
   empty: () => m.file_card_empty(),
   missing: () => m.file_card_missing(),
@@ -36,9 +35,7 @@ export const FileCard = memo(function FileCard({ uri, headers, name }: {
 }) {
   const { theme } = useUnistyles();
   const [status, setStatus] = useState<Status>('idle');
-  const [size, setSize] = useState<number | null>(null);
   const dl = useDownload();
-  const lastSize = useRef<number | null>(null);
   const ios = Platform.OS === 'ios';
 
   const go = useCallback(async (action: 'deliver' | 'share') => {
@@ -46,14 +43,11 @@ export const FileCard = memo(function FileCard({ uri, headers, name }: {
     haptic.selection();
     try {
       const mc = await cache();
-      const r = await dl.run((o: DownloadOptions) => {
-        const opts: DownloadOptions = { ...o, onProgress: (p) => { lastSize.current = p.total ?? p.written; o.onProgress?.(p); } };
-        return action === 'share'
-          ? mc.shareFile(uri, headers, name, opts).then(() => 'shared' as const)
-          : mc.deliverFile(uri, headers, name, opts);
-      });
-      setSize(lastSize.current);
-      setStatus(r === 'shared' ? 'done' : r);
+      const r = await dl.run((o: DownloadOptions) => action === 'share'
+        ? mc.shareFile(uri, headers, name, o).then(() => 'shared' as const)
+        : mc.deliverFile(uri, headers, name, o));
+      // A folha do sistema não diz se a pessoa salvou ou só fechou: o card volta ao começo, sem dizer "baixado".
+      setStatus(r === 'shared' ? 'idle' : r);
       if (r === 'empty' || r === 'no-app') haptic.error();
       else if (r === 'opened') haptic.success();
     } catch (e) {
@@ -72,7 +66,7 @@ export const FileCard = memo(function FileCard({ uri, headers, name }: {
 
   const ext = name.includes('.') ? name.split('.').pop()!.toUpperCase() : '';
   const pct = percentOf(dl.progress);
-  const statusLine = dl.progress ? progressText(dl.progress) : statusText[status]?.(size != null ? fmtBytes(size) : '');
+  const statusLine = dl.progress ? progressText(dl.progress) : statusText[status]?.();
   const erro = !dl.busy && (status === 'missing' || status === 'failed' || status === 'empty' || status === 'no-app');
   // Arquivo vazio não melhora tentando de novo.
   const retry = status === 'missing' || status === 'failed';
@@ -102,7 +96,7 @@ export const FileCard = memo(function FileCard({ uri, headers, name }: {
               onPress={() => void go('share')}
               style={[styles.iconAction, { borderColor: theme.tokens.border.default }]}
               accessibilityRole="button"
-              accessibilityLabel={m.anexos_compartilhar({ nome: name })}
+              accessibilityLabel={m.attachment_share({ nome: name })}
             >
               <Icon name="Share2" size={16} color={theme.tokens.text.secondary} />
             </Pressable>

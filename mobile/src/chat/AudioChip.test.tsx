@@ -22,7 +22,7 @@ vi.mock('../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../paraglide/messages', () => ({
   anexos_pausar: ({ nome }: { nome: string }) => `pause-${nome}`,
   anexos_tocar: ({ nome }: { nome: string }) => `play-${nome}`,
-  anexos_compartilhar: ({ nome }: { nome: string }) => `share-${nome}`,
+  attachment_share: ({ nome }: { nome: string }) => `share-${nome}`,
   anexos_baixar: ({ nome }: { nome: string }) => `download-${nome}`,
   file_card_cancel: ({ nome }: { nome: string }) => `cancel-${nome}`,
   file_card_missing: () => 'missing',

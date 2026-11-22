@@ -664,13 +664,21 @@ struct CiteCheck { owner: Option<SessionKey>, scanned: HashSet<String>, checked:
 
 /// Cartão de um arquivo citado depois de Abrir ou Baixar: preparando a página, baixando (quanto chegou e o tamanho, se
 /// o servidor disse), baixado (onde), vazio, inexistente ou a falha.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum FileCard { Busy, Downloading { done: u64, total: Option<u64> }, Saved(PathBuf), Empty, Missing, Failed(String), PageFailed(String) }
 
 impl FileCard {
     const STARTED: FileCard = FileCard::Downloading { done: 0, total: None };
     /// Os botões param enquanto há um pedido em voo.
     fn busy(state: Option<&FileCard>) -> bool { matches!(state, Some(FileCard::Busy | FileCard::Downloading { .. })) }
+    /// O cartão que volta se o download que começa agora for cancelado: o que estava à mostra (baixado, falhou…) ou,
+    /// trocando um download por outro, o de antes do primeiro.
+    fn before_download(shown: Option<FileCard>, replaced: Option<FileCard>) -> Option<FileCard> {
+        match shown {
+            Some(state) if !FileCard::busy(Some(&state)) => Some(state),
+            _ => replaced,
+        }
+    }
 }
 
 /// Texto preparado de uma linha: a mensagem pronta para o `TextView`, as linhas do resultado de uma chamada ou o
@@ -773,8 +781,8 @@ pub struct Hangar {
     jev_note_at: HashMap<SessionKey, Instant>,
     file_cards: HashMap<(SessionKey, Source), FileCard>,
     /// O Abrir/Salvar em voo de cada cartão, com a geração dele, para o Cancelar; mensagem de outra geração é de tarefa
-    /// cancelada ou trocada.
-    downloads: api::download::Running<(SessionKey, Source), tokio::task::AbortHandle>,
+    /// cancelada ou trocada. Junto da tarefa, o cartão que volta se ela for cancelada.
+    downloads: api::download::Running<(SessionKey, Source), (tokio::task::AbortHandle, Option<FileCard>)>,
     /// Painel "Na fila": edição em curso, recolhido e arrasto.
     queue: queue::QueueUi,
     /// A mensagem enviada em viagem até o lugar dela, e onde as pontas da viagem foram desenhadas.
@@ -3927,17 +3935,26 @@ impl Hangar {
     }
 
     /// O cartão passa a baixar numa geração nova, que `spawn` leva nas mensagens; um pedido anterior do mesmo cartão é
-    /// cancelado, para só um gravar.
+    /// cancelado, para só um gravar. O cartão de antes (já baixado, por exemplo) fica guardado para o Cancelar.
     fn start_download(&mut self, card: (SessionKey, Source), spawn: impl FnOnce(u64) -> tokio::task::AbortHandle) {
         let generation = self.downloads.next_generation();
-        self.file_cards.insert(card.clone(), FileCard::STARTED);
-        if let Some(old) = self.downloads.insert(card, generation, spawn(generation)) { old.abort(); }
+        let shown = self.file_cards.insert(card.clone(), FileCard::STARTED);
+        let replaced = self.downloads.cancel(&card);
+        let before = FileCard::before_download(shown, replaced.as_ref().and_then(|(_, before)| before.clone()));
+        if let Some((old, _)) = replaced { old.abort(); }
+        self.downloads.insert(card, generation, (spawn(generation), before));
     }
 
-    /// Cancelar do cartão: a tarefa para, o `.part` sai com ela e o cartão volta a oferecer Abrir e Baixar.
+    /// Cancelar do cartão: a tarefa para, o `.part` sai com ela e o cartão volta ao que era antes do download (já
+    /// baixado continua baixado; sem nada antes, volta a oferecer Abrir e Baixar).
     fn cancel_download(&mut self, card: (SessionKey, Source), cx: &mut Context<Self>) {
-        if let Some(task) = self.downloads.cancel(&card) { task.abort(); }
-        if matches!(self.file_cards.get(&card), Some(FileCard::Downloading { .. })) { self.file_cards.remove(&card); }
+        let before = self.downloads.cancel(&card).and_then(|(task, before)| { task.abort(); before });
+        if matches!(self.file_cards.get(&card), Some(FileCard::Downloading { .. })) {
+            match before {
+                Some(state) => { self.file_cards.insert(card, state); }
+                None => { self.file_cards.remove(&card); }
+            }
+        }
         cx.notify();
     }
 
@@ -9423,6 +9440,25 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancelled_download_brings_back_the_card_it_replaced() {
+        use super::FileCard;
+        let saved = FileCard::Saved(std::path::PathBuf::from("/tmp/relatorio.pdf"));
+        // Baixar de novo o que já estava baixado: cancelar volta a "baixado", com o mesmo caminho.
+        assert_eq!(FileCard::before_download(Some(saved.clone()), None), Some(saved.clone()));
+        assert_eq!(FileCard::before_download(Some(FileCard::Failed("x".into())), None), Some(FileCard::Failed("x".into())));
+        // Nada antes: cancelar limpa o cartão.
+        assert_eq!(FileCard::before_download(None, None), None);
+        // Um download trocado por outro: o cartão à mostra é o anel do primeiro, e o que volta é o de antes dele.
+        assert_eq!(FileCard::before_download(Some(FileCard::STARTED), Some(saved.clone())), Some(saved.clone()));
+        assert_eq!(FileCard::before_download(Some(FileCard::Downloading { done: 5, total: Some(10) }), None), None);
+        // O caminho inteiro pelo registro de downloads: começar guarda, cancelar devolve.
+        let mut running: crate::api::download::Running<&str, (u8, Option<FileCard>)> = Default::default();
+        let generation = running.next_generation();
+        running.insert("card", generation, (1, FileCard::before_download(Some(saved.clone()), None)));
+        assert_eq!(running.cancel(&"card"), Some((1, Some(saved))));
+    }
+
     #[test]
     fn private_copies_leave_by_age_and_count_but_never_while_fresh() {
         use std::time::{Duration, SystemTime};
