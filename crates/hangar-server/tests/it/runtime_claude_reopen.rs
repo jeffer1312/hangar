@@ -960,6 +960,30 @@ fn interrupted_provider_switch_keeps_the_target_binding_until_every_record_is_wr
     let latest: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
     assert_eq!(latest["model"], "gpt-newer");
     assert!(!mark.exists());
+
+    let pid = std::process::id();
+    let birth = hangar_server::terminal_facts::agent_birth(pid).unwrap();
+    let cano = json!({"pid":pid,"process_birth":birth});
+    let mut live = sidecar;
+    live["engine_account"] = json!("old-alias");
+    live["cano"] = cano.clone();
+    fx.put_sidecar(live);
+    let mut interrupted = saved;
+    interrupted["generation"] = json!(3);
+    std::fs::write(&mark, interrupted.to_string()).unwrap();
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let adopted: Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!(adopted["cano"], cano);
+    assert_eq!(adopted["engine_account"], "target-account");
+    assert!(!mark.exists());
+
+    std::fs::remove_file(fx.sidecar_path("s1")).unwrap();
+    interrupted["spec"]["surface"] = json!("terminal");
+    std::fs::write(&mark, interrupted.to_string()).unwrap();
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let fallen = hangar_server::session_open::fallen::get(&fx.home, "s1").unwrap();
+    assert_eq!((fallen.key, fallen.conversation.as_deref()), (key, Some(SID)));
+    assert!(!mark.exists());
 }
 
 /// Até `check` valer, com teto generoso: o teto só estoura se o código travar.

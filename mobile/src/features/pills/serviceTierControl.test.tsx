@@ -218,6 +218,10 @@ it.each([
     expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain('claude-other');
   } else {
     expect(action('native_claude_provider_confirm')).toBeNull();
+    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain('gpt-plus');
+    state.rows[0] = { ...state.rows[0], model: 'gpt-next' };
+    await refresh();
+    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain('gpt-next');
   }
 });
 

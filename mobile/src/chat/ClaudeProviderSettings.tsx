@@ -25,7 +25,9 @@ export function useClaudeProviderEngines(server: Server | null, enabled: boolean
     let alive = true;
     setResult(undefined);
     void getEnginesForServer(server).then(
-      inventory => { if (alive) setResult({ server, inventory }); },
+      inventory => {
+        if (alive) setResult(inventory.claude_provider_switch && inventory.arquivo_corrompido ? { server, failed: true } : { server, inventory });
+      },
       () => { if (alive) setResult({ server, failed: true }); },
     );
     return () => { alive = false; };

@@ -849,13 +849,20 @@ impl Hangar {
     pub(super) fn provider_choices_failed(&self) -> bool {
         self.accounts.engine_server.as_deref() == Some(self.open_server().as_str())
             && !self.accounts.session_engines.loading
-            && self.accounts.session_engines.value.as_ref().is_some_and(Result::is_err)
+            && self.accounts.session_engines.value.as_ref().is_some_and(|result| match result {
+                Ok(engines) => engines.provider_switch && engines.broken_file.is_some(),
+                Err(_) => true,
+            })
+    }
+
+    pub(super) fn provider_choices_loading(&self) -> bool {
+        self.accounts.engine_server.as_deref() == Some(self.open_server().as_str()) && self.accounts.session_engines.loading
     }
 
     pub(super) fn provider_choices(&self) -> Option<Vec<ProviderChoice>> {
         if self.accounts.engine_server.as_deref() != Some(self.open_server().as_str()) { return None; }
         let engines = self.accounts.session_engines.ok()?;
-        if !engines.provider_switch { return None; }
+        if !engines.provider_switch || engines.broken_file.is_some() { return None; }
         let mut choices = engines.map.iter().filter_map(|(name, engine)| {
             let binding = engine.cliproxy_binding.as_ref()?.clone();
             let bound = engine.cliproxy_bound_account.as_ref().filter(|_| engine.cliproxy_error.is_none() && engine.cliproxy_binding_error.is_none());

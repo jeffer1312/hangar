@@ -74,7 +74,7 @@ pub(crate) async fn switch(st:&Arc<AppState>,runtime:&Arc<RuntimeRegistry>,name:
         account:Some(Account::Engine { name:engine,account:Some(account.clone()),binding,config_dir,context_window:window,context_window_unknown:false }),
         permission_mode:None,model:Some(base),effort:wanted.effort.clone(),service_tier:wanted.tier };
     let (runtime,owned)=(runtime.clone(),name.to_owned());
-    match super::relaunch::reopen_detached(st,name,async move {runtime.reopen_claude_session(&owned,change,None).await}).await {
+    match super::relaunch::reopen_detached(st,name,async move { Some(runtime.reopen_claude_engine(&owned,&spec,change).await) }).await {
         Some(Ok(reopened))=>(StatusCode::OK,reopened.answer(match wanted.tier {
             Some(tier)=>json!({"ok":true,"service_tier":tier.name()}),
             None if wanted.model.is_some()=>json!({"ok":true,"model":wanted.model}),

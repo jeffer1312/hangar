@@ -67,7 +67,7 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
     const connected = useServers.getState().servers.find(row => row.id === serverId);
     if (current?.jsonl !== origin.jsonl || current.lifecycle_id !== origin.lifecycle_id || current.provider !== 'claude'
       || connected?.baseUrl !== server?.baseUrl || connected?.token !== server?.token) return;
-    setChosen({ model: id }); setDetail(null); setOpen(false);
+    setChosen(current.model === id ? {} : { model: id }); setDetail(null); setOpen(false);
   };
   const afterDismiss = useRef<(() => void) | null>(null);
   const { height } = useWindowDimensions();
@@ -78,10 +78,10 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   };
   useEffect(() => {
     setChosen((cur) => {
-      const next = reconcileChosen(statusModel, cur);
+      const next = cur.model && cur.model === session?.model ? { ...cur, model: null } : reconcileChosen(statusModel, cur);
       return next.model === cur.model ? cur : next;
     });
-  }, [statusModel]);
+  }, [statusModel, session?.model]);
   const isCodex = provider === 'codex';
   const isClaude = !provider || provider === 'claude';
   const permission = usePermissionControl({ serverId, name, provider: isCodex ? 'codex' : isClaude ? 'claude' : null });

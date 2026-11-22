@@ -110,7 +110,7 @@ impl Hangar {
         if !self.controls_open() || self.controls.picker_tab.as_deref() != Some(TAB) { return; }
         let state = &self.controls.providers;
         let (Some((choice, model)), Some(source), Some(target), true) = (state.chosen(), state.source.clone(), self.selected_target(), state.confirming) else { return; };
-        let valid = self.provider_choices().is_some_and(|choices| choices.contains(choice));
+        let valid = !self.provider_choices_loading() && self.provider_choices().is_some_and(|choices| choices.contains(choice));
         let request = ClaudeProviderSwitch { source, engine:choice.engine.clone(), engine_account:choice.account.clone().unwrap_or_default(),
             engine_binding:choice.binding.clone(), model:model.to_owned() };
         if valid && self.switch_claude_provider(target, choice.label.clone(), request, cx) {
@@ -146,12 +146,18 @@ impl Hangar {
                 .child(confirmation(&format!("{} · {}", choice.label, choice.detail), model).children(notice))
                 .child(footer.child(div().flex().items_center().gap_2().child(back).child(cancel).child(apply)));
         }
-        let choices = self.provider_choices().unwrap_or_default();
+        let loading = self.provider_choices_loading();
+        let failed = self.provider_choices_failed();
+        let choices = if loading { Vec::new() } else { self.provider_choices().unwrap_or_default() };
         let accounts = div().w(px(225.)).flex_shrink_0().flex().flex_col().gap_1().px_2()
             .child(div().font_weight(FontWeight::SEMIBOLD).child(tr("claude_providers")))
             .child(div().text_xs().text_color(theme::muted()).child(tr("claude_provider_choose_account")))
             .child(div().id("claude-provider-accounts").flex_1().min_h_0().overflow_y_scroll()
-                .when(choices.is_empty(), |el| el.child(div().py_2().text_sm().text_color(theme::muted()).child(tr("claude_provider_empty"))))
+                .when(loading, |el| el.child(popup::skeleton("claude-provider-accounts-loading", 3)))
+                .when(failed, |el| el.child(div().py_2().text_sm().text_color(theme::warning()).child(tr("claude_provider_read_failed")))
+                    .child(Button::new("claude-provider-inventory-retry").ghost().small().label(tr("retry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.load_session_engines(cx)))))
+                .when(!loading && !failed && choices.is_empty(), |el| el.child(div().py_2().text_sm().text_color(theme::muted()).child(tr("claude_provider_empty"))))
                 .children(choices.into_iter().map(|choice| {
                     let current = state.source.as_ref().is_some_and(|s| s.engine.as_deref() == Some(choice.engine.as_str()) && s.engine_binding.as_deref() == Some(choice.binding.as_str()));
                     let picked = state.account.as_ref() == Some(&choice);
@@ -164,12 +170,12 @@ impl Hangar {
                 .child(Input::new(&self.ctl_search).appearance(false).aria_label(tr("picker_search")));
             models = match &state.models {
                 None => models.child(popup::skeleton("claude-provider-models-loading", 3)),
-                Some(Err(error)) => {
-                    let account = account.clone();
-                    models.child(div().text_sm().text_color(theme::warning()).child(error.clone()))
-                        .child(Button::new("claude-provider-retry").ghost().small().label(tr("retry"))
-                            .on_click(cx.listener(move |this, _, window, cx| this.load_provider_models(account.clone(), window, cx))))
-                }
+                Some(Err(error)) => models.child(div().text_sm().text_color(theme::warning()).child(error.clone()))
+                    .child(Button::new("claude-provider-retry").ghost().small().label(tr("retry"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_provider_picker(window, cx);
+                            this.load_session_engines(cx);
+                        }))),
                 Some(Ok(catalog)) => {
                     let query = self.ctl_search.read(cx).value().trim().to_lowercase();
                     let visible: Vec<_> = catalog.iter().filter(|model| model.to_lowercase().contains(&query)).collect();

@@ -466,12 +466,23 @@ pub fn settle_switches(env:&crate::accounts::environment::AccountEnvironment) {
         });
         match read {
             Ok(Some(to))=>{
-                let result = settle_sidecar(env,&to,provider)
-                    .and_then(|_| crate::session_open::record::write(&env.home,&to))
+                let terminal_switch = provider && to.surface == Surface::Terminal;
+                let sidecar = if terminal_switch { Ok(()) } else { settle_sidecar(env, &to, provider) };
+                let result = sidecar.and_then(|_| crate::session_open::record::write(&env.home,&to))
                     .and_then(|_| crate::session_open::record::confirm_binding(&env.home,&to));
                 if let Err(error) = result {
                     tracing::warn!(session=%to.name,kind=?error.kind(),"troca interrompida não gravada; marca conservada");
                     continue;
+                }
+                if terminal_switch {
+                    // Com o mesmo multiplexador, a restauração comum não reabre o terminal que saiu na troca.
+                    let recorded = crate::session_open::fallen::remember_provider_switch(&env.home, &to.name, crate::session_open::fallen::Fallen {
+                        key: to.key.clone(), provider: to.provider, conversation: to.conversation,
+                        permission_mode: to.permission_mode.map(|mode| mode.name().to_owned()), cwd: Some(to.cwd),
+                        died_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
+                        cause: "provider_switch_interrupted".into(),
+                    });
+                    if !recorded { continue; }
                 }
             },
             Ok(_)=>{},
@@ -491,7 +502,8 @@ fn provider_switch_current(env: &crate::accounts::environment::AccountEnvironmen
     let (state, _) = super::codex_terminal::queue_files(&env.claude_base.join(".hangar-queue"), &record.spec.key);
     let state = super::queue::read_replaced(&state)?;
     let (state, _) = super::queue::State::load(&state)?;
-    Ok(state.owner_key == record.spec.key && state.generation == record.generation && state.name == record.spec.name)
+    Ok(state.owner_key == record.spec.key && state.generation == record.generation && state.name == record.spec.name
+        && state.runtime_state["terminal_lifecycle"]["closed"] != true)
 }
 
 /// O sidecar sem terminal da sessão passa a dizer a conta de destino (é dele que a subida lê a conta).
@@ -511,9 +523,19 @@ fn settle_sidecar(env:&crate::accounts::environment::AccountEnvironment,to:&Sess
     if let Account::Engine { account:Some(account), .. } = &to.account && route.is_none() {
         fresh["engine_account"] = json!(account);
     }
-    if provider && ["engine", "engine_binding", "engine_account", "model", "service_tier"].iter().any(|field| meta.get(*field).unwrap_or(&Value::Null) != &fresh[*field]) {
-        meta.remove("cano");
-        meta.remove("problema");
+    if provider {
+        let matches_binding = ["engine", "engine_binding"].iter().all(|field| meta.get(*field).unwrap_or(&Value::Null) == &fresh[*field]);
+        if let Some(cano) = meta.get("cano").filter(|value| !value.is_null()) {
+            let gone = cano["pid"].as_i64().zip(cano["process_birth"].as_f64()).is_some_and(|(pid, birth)| {
+                super::lifecycle::process_absent(&SystemProcs::default(), pid, birth).unwrap_or(false)
+            });
+            if gone {
+                meta.remove("cano");
+            } else if !matches_binding {
+                return Err(std::io::Error::other("o processo da conta anterior não pôde ser descartado"));
+            }
+        }
+        if !matches_binding { meta.remove("problema"); }
     }
     for field in ["config_dir","engine","engine_binding","engine_account","engine_credential_id","engine_account_base_url","model","effort","subagent_model","context_window","service_tier"] {
         match fresh.get(field).filter(|v|!v.is_null()) {Some(value)=>{meta.insert(field.into(),value.clone());},None=>{meta.remove(field);}}
@@ -738,15 +760,19 @@ impl RuntimeRegistry {
     }
 
     async fn reopen_by_spec(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>) -> Result<Reopened,ReopenFailure> {
-        self.reopen_checked(name, change, between, resume, None).await
+        self.reopen_checked(name, change, between, resume, None, None).await
     }
 
     pub(crate) async fn reopen_claude_provider(&self, name: &str, source: &hangar_api::session::ClaudeProviderSource, change: SessionChange) -> Option<Result<Reopened, ReopenFailure>> {
         if let Err(error) = self.claude_spec(name).await? { return Some(Err(ReopenFailure::refused(error))); }
-        Some(self.reopen_checked(name, change, None, None, Some(source)).await)
+        Some(self.reopen_checked(name, change, None, None, Some(source), None).await)
     }
 
-    async fn reopen_checked(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>,provider_source:Option<&hangar_api::session::ClaudeProviderSource>) -> Result<Reopened,ReopenFailure> {
+    pub(crate) async fn reopen_claude_engine(&self, name: &str, source: &SessionSpec, change: SessionChange) -> Result<Reopened, ReopenFailure> {
+        self.reopen_checked(name, change, None, None, None, Some(source)).await
+    }
+
+    async fn reopen_checked(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>,provider_source:Option<&hangar_api::session::ClaudeProviderSource>,engine_source:Option<&SessionSpec>) -> Result<Reopened,ReopenFailure> {
         let transfer=|| {
             // A troca de agente à espera também conta: a vida nova do Claude levaria a fila que ela segurou para o Codex.
             let open=self.handoff_held(name) || super::codex_relaunch::transfer_open(&self.codex_environment().home,name,None,None);
@@ -789,6 +815,10 @@ impl RuntimeRegistry {
         let mut current=self.claude_current(name,check,resume.is_some()).await.map_err(ReopenFailure::refused)?;
         if let Some(source) = provider_source {
             self.check_provider_source(&current, source, meta.as_ref()).map_err(ReopenFailure::refused)?;
+        }
+        if let Some(source) = engine_source && (current.spec.key != source.key || current.spec.account != source.account
+            || current.spec.model != source.model || current.spec.service_tier != source.service_tier || current.spec.surface != source.surface) {
+            return Err(ReopenFailure::refused(refused("session_source_changed", "A sessão mudou enquanto o catálogo era conferido. Abra o seletor novamente.")));
         }
         // A vida nova só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ela.
         if let Some(meta)=meta.as_ref().filter(|meta|asleep_of(meta).is_some()) && let Some(key)=meta["key"].as_str() {
