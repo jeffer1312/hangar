@@ -12,7 +12,7 @@ const calls = vi.hoisted(() => ({
   activeId: 'server-b', startPending: null as Promise<void> | null,
   target: null as null | { id: string; label: string; baseUrl: string; token: string },
   accounts: vi.fn(),
-  providers: vi.fn(), defaults: vi.fn(), config: vi.fn(),
+  providers: vi.fn(), defaults: vi.fn(), config: vi.fn(), me: vi.fn(),
   mutate: vi.fn(),
   contextFetch: vi.fn(),
   models: vi.fn(),
@@ -163,6 +163,7 @@ vi.mock('@hangar/core', async (original) => ({
   getProvidersForServer: calls.providers,
   getSessionDefaultsForServer: calls.defaults,
   getConfigForServer: calls.config,
+  getMeForServer: calls.me,
   setServiceTier: calls.mutate, setModelEffort: calls.mutate, setCodexModel: calls.mutate,
   setEngineModel: calls.mutate, setPiModel: calls.mutate, setKimiModel: calls.mutate,
   setPermissionMode: calls.mutate,
@@ -338,6 +339,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.providers.mockReset().mockResolvedValue({});
     calls.defaults.mockReset().mockResolvedValue(null);
     calls.config.mockReset().mockResolvedValue({ campos: { headless_default: { valor: true, definido: true, origem: 'app' } }, somente_leitura: {} });
+    calls.me.mockReset().mockResolvedValue({ role: 'owner', name: null });
     calls.models.mockReset().mockResolvedValue({ models: [], reduced: false });
     calls.prepare.mockReset().mockResolvedValue({ status: 'ready', trust_pending: false, issues: [] });
     calls.preparation.mockReset();
@@ -588,6 +590,60 @@ describe('CreateSessionSheet Codex', () => {
       await send(container);
       expect(calls.create.mock.calls.at(-1)?.[1]).not.toHaveProperty('headless');
       expect(button(container, 'criar_modo_exec: criar_modo_exec_tmux')).toBeTruthy();
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('sem o modo do servidor lido, não cria nem mostra um modo; escolher o modo destrava', async () => {
+    calls.config.mockReturnValue(new Promise(() => {}));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      expect(button(container, 'criar_modo_exec: criar_modo_exec_headless')).toBeUndefined();
+      await act(async () => button(container, 'criar_modo_exec: comum_carregando')!.click());
+      await act(async () => button(container, 'criar_modo_exec_tmux')!.click());
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ headless: false }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('falha ao ler o modo do servidor aparece na tela e segura a criação até escolher o modo', async () => {
+    calls.config.mockRejectedValue(new Error('config-failed'));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(container.textContent).toContain('config-failed');
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      await act(async () => button(container, 'criar_modo_exec: comum_carregando')!.click());
+      await act(async () => button(container, 'criar_modo_exec_headless')!.click());
+      expect(container.textContent).not.toContain('config-failed');
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ headless: true }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('leitura do modo cancelada pelo sistema é refeita ao voltar ao app', async () => {
+    calls.config.mockRejectedValueOnce(nativeCanceled());
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      await appState('background');
+      await appState('active');
+      await send(container);
+      expect(calls.config).toHaveBeenCalledTimes(2);
+      expect(calls.create.mock.calls.at(-1)?.[1]).not.toHaveProperty('headless');
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('convidado não lê a configuração do dono e cria sem modo: o servidor decide', async () => {
+    calls.me.mockResolvedValue({ role: 'guest', name: 'g' });
+    calls.config.mockRejectedValue(Object.assign(new Error('403'), { status: 403 }));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(calls.config).not.toHaveBeenCalled();
+      await send(container);
+      expect(calls.create.mock.calls.at(-1)?.[1]).not.toHaveProperty('headless');
     } finally { act(() => root.unmount()); }
   });
 

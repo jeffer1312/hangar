@@ -6,7 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { resetCreatedChat } from '../../stores/chat';
 import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount,
-  getEnginesForServer, getSessionDefaultsForServer, getConfigForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
+  getEnginesForServer, getSessionDefaultsForServer, getConfigForServer, getMeForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory } from '@hangar/core';
@@ -157,9 +157,14 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [provider, setProvider] = useState<Provider>('claude');
   // Sem terminal é o `headless_default` do servidor; só vai no pedido o que a pessoa escolher aqui.
   const [headlessPick, setHeadlessPick] = useState<boolean | null>(null);
-  const [serverHeadless, setServerHeadless] = useState<boolean | null>(null);
-  const headlessKnown = headlessPick ?? serverHeadless;
-  const headless = headlessKnown ?? true;
+  // Convidado não lê a configuração do dono: como no desktop, o servidor decide e a tela mostra sem terminal.
+  const [modeRead, setModeRead] = useState<{ state: 'loading' | 'guest' } | { state: 'value'; value: boolean } | { state: 'error'; error: string }>({ state: 'loading' });
+  const [modeTry, setModeTry] = useState(0);
+  const startModeRetry = useCanceledLoadRetry(useCallback(() => setModeTry((n) => n + 1), []));
+  const serverHeadless = modeRead.state === 'value' ? modeRead.value : null;
+  // Sem escolha nem leitura, não há modo a mostrar nem pedido a montar.
+  const modeUnknown = headlessPick === null && (modeRead.state === 'loading' || modeRead.state === 'error');
+  const headless = headlessPick ?? serverHeadless ?? true;
   const [providerProbe, setProviderProbe] = useState<ProviderProbe | null>(null);
   const [providersError, setProvidersError] = useState('');
   const providerTouched = useRef(false);
@@ -377,18 +382,29 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return () => { alive = false; };
   }, [enabled, active]);
 
-  // Só para mostrar o modo que o servidor vai usar; sem leitura, o pedido também não leva o modo.
+  // O modo que o servidor vai usar: a tela o mostra e espera por ele, e o pedido não o leva.
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
-    void getConfigForServer(active)
-      .then((config) => {
-        const value = config.campos?.headless_default?.valor;
-        if (alive) setServerHeadless(typeof value === 'boolean' ? value : null);
+    const retry = startModeRetry();
+    setModeRead({ state: 'loading' });
+    // Servidor sem `/api/me` (404) é de antes dos convidados: só o dono chega a ele.
+    void getMeForServer(active).catch((cause: { status?: number }) => {
+      if (cause?.status === 404) return { role: 'owner' as const };
+      throw cause;
+    })
+      .then(async (me) => {
+        if (me.role === 'guest') { if (alive) setModeRead({ state: 'guest' }); return; }
+        const value = (await getConfigForServer(active)).campos?.headless_default?.valor;
+        if (alive) setModeRead({ state: 'value', value: typeof value === 'boolean' ? value : true });
       })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [enabled, active]);
+      .catch((cause: unknown) => {
+        if (!alive) return;
+        setModeRead({ state: 'error', error: loadErrorText(cause, m.criar_sessao_erro()) });
+        retry.failed(cause);
+      });
+    return () => { alive = false; retry.cancel(); };
+  }, [enabled, active, modeTry, startModeRetry]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -604,8 +620,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const canHeadless = hasExecutionMode(provider);
   const headlessField = canHeadless && headlessPick !== null ? { headless: headlessPick } : {};
   const settings: Omit<NewConversationInput['body'], 'cwd'> = provider === 'codex'
-    // Permissão do Codex só vale sem terminal: com o modo desconhecido, o servidor decide os dois.
-    ? { provider: 'codex', model: modelo || null, effort: esforco || null, permission_mode: headlessKnown ? permissao || null : null, codex_account: codexAccount, ...headlessField }
+    // Permissão do Codex só vale sem terminal; o corpo só existe com o modo já conhecido.
+    ? { provider: 'codex', model: modelo || null, effort: esforco || null, permission_mode: headless ? permissao || null : null, codex_account: codexAccount, ...headlessField }
     : {
       provider,
       // A conta trocada pela cota também vai: é a que a tela mostra.
@@ -618,7 +634,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       subagent_model: provider === 'claude' && !engine ? subagente || null : null,
       ...headlessField,
     };
-  const body = picked && defaultsReady && !bindingBlocked && !seedPending && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
+  const body = picked && defaultsReady && !(canHeadless && modeUnknown) && !bindingBlocked && !seedPending && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
 
   // Reserva pré-aquecida enquanto a tela está aberta, na frente e compondo; o form remonta por
   // máquina, então desmontar também cobre a troca de servidor.
@@ -770,17 +786,17 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // A mesma escolha vira pílula na conversa nova e linha no formulário completo.
   const terminalChoice: Choice = {
     icon: 'SquareTerminal',
-    label: canHeadless && headless ? m.criar_modo_exec_headless() : m.criar_modo_exec_tmux(),
+    label: canHeadless && modeUnknown ? m.comum_carregando() : canHeadless && headless ? m.criar_modo_exec_headless() : m.criar_modo_exec_tmux(),
     aria: m.criar_modo_exec(),
     menuTitle: canHeadless ? m.criar_modo_exec() : terminalOnly,
     actions: [
       {
-        id: 'headless', title: m.criar_modo_exec_headless(), state: on(canHeadless && headless), attributes: { disabled: !canHeadless },
+        id: 'headless', title: m.criar_modo_exec_headless(), state: on(canHeadless && !modeUnknown && headless), attributes: { disabled: !canHeadless },
         subtitle: !canHeadless ? terminalOnly
           : provider === 'codex' ? m.criar_modo_exec_headless_resumo_codex() : m.criar_modo_exec_headless_resumo(),
       },
       {
-        id: 'tmux', title: m.criar_modo_exec_tmux(), state: on(!canHeadless || !headless),
+        id: 'tmux', title: m.criar_modo_exec_tmux(), state: on(!canHeadless || (!modeUnknown && !headless)),
         subtitle: provider === 'codex' ? m.criar_modo_exec_tmux_resumo_codex() : m.criar_modo_exec_tmux_resumo(),
       },
     ],
@@ -873,6 +889,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       {projectWarning ? <Text style={styles.error} accessibilityRole="alert">{projectWarning}</Text> : null}
       {error ? <Text style={styles.error} accessibilityRole="alert">{error}</Text> : null}
       {catalogError ? <Text style={styles.error} accessibilityRole="alert">{catalogError}</Text> : null}
+      {canHeadless && modeUnknown && modeRead.state === 'error' ? <Text style={styles.error} accessibilityRole="alert">{modeRead.error}</Text> : null}
       {defaultsError ? <View>
         <Text style={styles.error} accessibilityRole="alert">{m.native_create_default_failed({ erro: defaultsError })}</Text>
         <Pressable accessibilityRole="button" onPress={() => setDefaultsTry((n) => n + 1)}>
