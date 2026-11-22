@@ -173,6 +173,10 @@ export function sameMachine(server: Server, machine: ConnectMachine): boolean {
 const sameRow = (a: ConnectMachine, b: ConnectMachine) =>
   a.machine_id === b.machine_id && a.name === b.name && a.host === b.host && a.online === b.online;
 
+const sameDevice = (a: AccountDevice, b: AccountDevice) =>
+  a.device_id === b.device_id && a.name === b.name && a.status === b.status && a.created_at === b.created_at
+  && a.approved_at === b.approved_at && a.revoked_at === b.revoked_at && (a.install_code ?? null) === (b.install_code ?? null);
+
 /** Recusada sem senha do dono para onde voltar: só um pedido novo devolve a entrada. */
 export const needsEntry = (server: Server) => !!server.disabled && (server.credential === 'device' || !!server.connectOff);
 
@@ -194,6 +198,7 @@ function savedDevice(raw: string | null, account: ConnectAccount): AccountDevice
 export const useConnect = create<ConnectState>((set, get) => {
   let devicesRead: Promise<void> | null = null;
   let readAgain = false;
+  let listAnswered = false;
   let machinesRead = 0;
   let newestMachines: Promise<void> = Promise.resolve();
   // `requestDeviceAgain` pula o cofre: o guardado é o revogado.
@@ -254,18 +259,34 @@ export const useConnect = create<ConnectState>((set, get) => {
     const { account } = get();
     if (!account) return;
     const same = () => get().account?.token === account.token;
-    try { await checkDevice(account); }
-    catch (error) {
-      if (!same()) return;
-      if (statusOf(error) === 401) await dropAccount(m.connect_session_ended());
-      else set({ deviceError: failure(error, 'machine') });
-      return;
+    // Liberado com a lista respondendo: a recusa dela já marca pendente ou revogado (`refusedDevice`), e o status à
+    // parte seria uma chamada a mais por releitura. Falha da lista volta a conferir o status.
+    const known = listAnswered && get().device?.status === 'approved' && !get().deviceError;
+    if (!known) {
+      listAnswered = false;
+      try { await checkDevice(account); }
+      catch (error) {
+        if (!same()) return;
+        if (statusOf(error) === 401) await dropAccount(m.connect_session_ended());
+        else set({ deviceError: failure(error, 'machine') });
+        return;
+      }
     }
     if (get().device?.status !== 'approved') return;
     try {
       const rows = await listAccountDevices(sessionOf(account));
-      if (same()) set({ devices: { rows, error: '' } });
+      if (!same()) return;
+      listAnswered = true;
+      // Releitura igual à anterior mantém o objeto: a lista na tela não redesenha.
+      set((state) => {
+        const before = state.devices.rows;
+        const next = rows.map((row) => before?.find((old) => sameDevice(old, row)) ?? row);
+        const unchanged = !state.devices.error && before !== null && before.length === next.length
+          && next.every((row, i) => row === before[i]);
+        return unchanged ? state : { devices: { rows: next, error: '' } };
+      });
     } catch (error) {
+      listAnswered = false;
       if (!same()) return;
       if (statusOf(error) === 401) await dropAccount(m.connect_session_ended());
       else { refusedDevice(error); set((state) => ({ devices: { rows: state.devices.rows, error: failure(error, 'machine') } })); }
