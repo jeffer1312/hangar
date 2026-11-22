@@ -156,6 +156,10 @@ async fn overview(wa: &WhatsApp) -> Response {
     // parado; algo que responde sem a assinatura continua "running", com o código em `status_error`.
     let (service, status, status_error) = match wa.client.status_within(crate::client::OVERVIEW_STATUS_TIMEOUT).await {
         Ok(status) => ("running", status, Value::Null),
+        Err(CallError::Off(_)) if installed => {
+            let process = hangar_managed_binary::service::process_state(&paths.home, &install::SERVICE).await;
+            (down, Value::Null, stopped_error(process))
+        }
         Err(CallError::Off(_)) => (down, Value::Null, Value::Null),
         Err(error) => {
             let (_, code, _) = call_failure(&error);
@@ -167,6 +171,12 @@ async fn overview(wa: &WhatsApp) -> Response {
         "installed": installed, "accepted_at": install::accepted_at(paths), "service": service,
         "job": wa.installer.job(), "status": status, "qr_svg": qr_svg, "status_error": status_error,
     }))
+}
+
+/// Com o serviço parado, `whatsapp_schema_newer` quando o último processo saiu porque os dados são de uma
+/// versão mais nova do binário: religar não adianta, só atualizar.
+fn stopped_error(process: hangar_managed_binary::service::ProcessState) -> Value {
+    if process.last_exit == Some(i32::from(install::SCHEMA_NEWER_EXIT)) { json!("whatsapp_schema_newer") } else { Value::Null }
 }
 
 fn start_install(wa: &WhatsApp, body: &Value) -> Response {

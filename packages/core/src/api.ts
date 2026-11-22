@@ -5025,15 +5025,20 @@ export interface WhatsAppState {
   job: WhatsAppJob | null;
   status: WhatsAppStatus | null;
   qr_svg: string | null;
+  /** De pé: por que o `status` não veio. Parado: `whatsapp_schema_newer` quando os dados são de um binário mais novo. */
+  status_error?: string | null;
 }
 
 export function getWhatsApp(s: Server): Promise<WhatsAppState> {
   return apiFetchForServer(s, '/api/whatsapp', undefined, 15_000);
 }
 
-function postWhatsApp<T>(s: Server, path: string, body?: unknown): Promise<T> {
+/** Desvincular (logout, apagar, remover) dá 30 s ao binário no servidor: a tela espera mais que isso. */
+const WHATSAPP_UNLINK_MS = 45_000;
+
+function postWhatsApp<T>(s: Server, path: string, body?: unknown, prazoMs = 30_000): Promise<T> {
   return apiFetchForServer(s, `/api/whatsapp/${path}`,
-    { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, 30_000);
+    { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, prazoMs);
 }
 
 /** O servidor recusa sem o aceite (`whatsapp_accept_required`); outro job em curso é `whatsapp_busy`. */
@@ -5051,14 +5056,14 @@ export function pairWhatsApp(s: Server, phone?: string): Promise<unknown> {
 }
 
 export function logoutWhatsApp(s: Server): Promise<void> {
-  return postWhatsApp(s, 'logout');
+  return postWhatsApp(s, 'logout', undefined, WHATSAPP_UNLINK_MS);
 }
 
 /** `logout: 'not_done'`: o serviço estava parado e o aparelho continua na lista do celular. */
 export function wipeWhatsApp(s: Server): Promise<{ logout: 'done' | 'not_done' | 'not_paired' }> {
-  return postWhatsApp(s, 'wipe', { confirm: true });
+  return postWhatsApp(s, 'wipe', { confirm: true }, WHATSAPP_UNLINK_MS);
 }
 
 export function uninstallWhatsApp(s: Server, logout: boolean): Promise<unknown> {
-  return postWhatsApp(s, 'uninstall', { confirm: true, logout });
+  return postWhatsApp(s, 'uninstall', { confirm: true, logout }, WHATSAPP_UNLINK_MS);
 }

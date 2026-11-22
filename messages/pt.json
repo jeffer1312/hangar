@@ -12183,6 +12183,8 @@
   "native_whatsapp_update": "Atualizar",
   "native_whatsapp_stopped_title": "O serviço está parado",
   "native_whatsapp_stopped_body": "O WhatsApp está instalado, mas o serviço não está rodando. Nada é guardado enquanto ele estiver parado.",
+  "native_whatsapp_schema_newer_title": "Os dados são de uma versão mais nova",
+  "native_whatsapp_schema_newer_body": "O arquivo de mensagens foi gravado por uma versão mais nova do hangar-whatsapp, e esta não consegue abri-lo. Atualize para o serviço voltar a rodar.",
   "native_whatsapp_unreachable_title": "O serviço não respondeu",
   "native_whatsapp_unreachable_body": "O serviço do WhatsApp está ligado, mas não mandou o estado dele.",
   "native_whatsapp_err_accept_required": "Marque o aceite dos riscos antes de instalar.",

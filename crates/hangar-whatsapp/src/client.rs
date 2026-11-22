@@ -8,6 +8,9 @@ use serde_json::Value;
 use crate::control::{self, Control, ReadError, SIGNATURE_HEADER};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
+/// Desvincular espera o WhatsApp responder ao logout (até 10 s no binário) e, no `wipe`, ainda para,
+/// apaga e reabre os bancos. Os clientes esperam mais que isto, senão a tela estoura antes.
+pub const UNLINK_TIMEOUT: Duration = Duration::from_secs(30);
 /// O resumo da página espera menos que o prazo dos clientes: binário travado aparece como sem resposta,
 /// não como servidor fora do ar.
 pub const OVERVIEW_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -58,7 +61,7 @@ impl Client {
     /// [`CallError::Off`] sem serviço; [`CallError::Untrusted`] quando a resposta não tem a assinatura
     /// do binário; [`CallError::Transport`] para o resto.
     pub async fn call(&self, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>) -> Result<Reply, CallError> {
-        self.send(method, path, query, body, TIMEOUT).await
+        self.send(method, path, query, body, deadline(path)).await
     }
 
     /// `GET /v1/status` com 200: a prova de que o serviço está de pé.
@@ -146,5 +149,29 @@ impl Client {
             return Err(CallError::Untrusted(format!("resposta {status} com assinatura que não confere")));
         }
         Ok(Reply { status, body: data })
+    }
+}
+
+/// O prazo de um caminho do C2: os que desvinculam o aparelho esperam o WhatsApp responder.
+fn deadline(path: &str) -> Duration {
+    match path {
+        "/v1/wipe" | "/v1/logout" => UNLINK_TIMEOUT,
+        _ => TIMEOUT,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// O `wipe` do binário pode gastar 10 s no logout e ainda parar, apagar e reabrir; o `uninstall` com
+    /// `logout` passa pelo mesmo `/v1/logout`.
+    #[test]
+    fn unlinking_waits_longer_than_the_other_calls() {
+        assert!(UNLINK_TIMEOUT >= Duration::from_secs(30));
+        assert_eq!(deadline("/v1/wipe"), UNLINK_TIMEOUT);
+        assert_eq!(deadline("/v1/logout"), UNLINK_TIMEOUT);
+        assert_eq!(deadline("/v1/chats"), TIMEOUT);
+        assert_eq!(deadline("/v1/pair"), TIMEOUT);
     }
 }

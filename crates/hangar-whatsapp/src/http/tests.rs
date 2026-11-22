@@ -211,6 +211,16 @@ async fn a_stale_control_with_a_live_pid_counts_as_stopped() {
     assert!(!s.paths().data.join("messages.db").exists());
 }
 
+/// Só a saída 3 sem processo de pé vira o aviso de dados mais novos; o resto é o parado de sempre.
+#[test]
+fn a_service_that_quit_on_newer_data_says_so() {
+    use hangar_managed_binary::service::ProcessState;
+    assert_eq!(stopped_error(ProcessState { running: false, last_exit: Some(3) }), json!("whatsapp_schema_newer"));
+    assert_eq!(stopped_error(ProcessState { running: true, last_exit: Some(3) }), json!("whatsapp_schema_newer"), "unit antiga religando");
+    assert_eq!(stopped_error(ProcessState { running: false, last_exit: Some(1) }), Value::Null);
+    assert_eq!(stopped_error(ProcessState::default()), Value::Null);
+}
+
 #[tokio::test]
 async fn a_busy_install_does_not_record_the_acceptance() {
     let s = Scene::new();

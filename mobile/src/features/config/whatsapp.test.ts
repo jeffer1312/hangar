@@ -30,6 +30,14 @@ describe('viewOf', () => {
     expect(viewOf(base('running', { state: 'connected' }))).toBe('connected');
     expect(viewOf(base('running', { state: 'novo' }))).toBe('unknown');
   });
+
+  it('parado com dados de um binário mais novo pede a atualização', () => {
+    expect(viewOf({ ...base('stopped', null), status_error: 'whatsapp_schema_newer' })).toBe('schema_newer');
+    expect(viewOf({ ...base('stopped', null), status_error: null })).toBe('stopped');
+    expect(viewOf({ ...base('stopped', null), status_error: 'whatsapp_outro' })).toBe('stopped');
+    // De pé, o status_error é de outra coisa (resposta sem assinatura, sem resposta).
+    expect(viewOf({ ...base('running', null), status_error: 'whatsapp_untrusted' })).toBe('unreachable');
+  });
 });
 
 describe('shouldPoll', () => {

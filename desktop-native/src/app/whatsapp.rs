@@ -82,6 +82,9 @@ struct WaState {
     status: Option<Status>,
     #[serde(default)]
     qr_svg: Option<String>,
+    /// Com o serviço parado, `whatsapp_schema_newer`: os dados são de um binário mais novo.
+    #[serde(default)]
+    status_error: Option<String>,
 }
 
 fn parse_state(value: Value) -> Result<WaState, String> {
@@ -99,12 +102,15 @@ fn code_of(error: &Value) -> Option<String> {
 
 /// O que a página mostra, decidido só pela resposta do `GET /api/whatsapp`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum View { Off, Working, Stopped, Unreachable, Unpaired, Pairing, Connected, Outdated, Unknown }
+enum View { Off, Working, Stopped, SchemaNewer, Unreachable, Unpaired, Pairing, Connected, Outdated, Unknown }
 
 fn view_of(state: &WaState) -> View {
     if state.job.as_ref().is_some_and(|job| !job.done) { return View::Working; }
     if !state.installed { return View::Off; }
-    if state.service != Service::Running { return View::Stopped; }
+    if state.service != Service::Running {
+        // Religar não adianta: só um binário mais novo abre esses dados.
+        return if state.status_error.as_deref() == Some("whatsapp_schema_newer") { View::SchemaNewer } else { View::Stopped };
+    }
     let Some(status) = &state.status else { return View::Unreachable };
     match status.state.as_str() {
         "connected" => View::Connected,
@@ -154,6 +160,11 @@ fn failure_text(error: &Failure) -> String {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Act { Install, Update, Pair, Logout, Wipe, Uninstall }
+
+/// Segundos de espera por ação. Desvincular dá 30 s ao binário no servidor: a tela espera mais, senão estoura antes.
+fn act_timeout(act: Act) -> u64 {
+    match act { Act::Logout | Act::Wipe | Act::Uninstall => 45, _ => 30 }
+}
 
 pub(super) enum WhatsAppReply {
     Loaded(u64, Result<Value, Failure>),
@@ -244,7 +255,7 @@ impl Hangar {
             Act::Wipe => "wipe", Act::Uninstall => "uninstall" };
         let done = self.whatsapp_send_later();
         self.runtime.spawn(async move {
-            done(WhatsAppReply::Acted(act, api.server_send(reqwest::Method::POST, &["whatsapp", path], body, 30).await)).await
+            done(WhatsAppReply::Acted(act, api.server_send(reqwest::Method::POST, &["whatsapp", path], body, act_timeout(act)).await)).await
         });
         cx.notify();
     }
@@ -406,6 +417,8 @@ impl Hangar {
             View::Working => page.child(render_working(state)),
             View::Stopped => page.child(self.render_whatsapp_problem("whatsapp-stopped", tr("whatsapp_stopped_title"), tr("whatsapp_stopped_body"),
                 Some(Act::Install), cx)),
+            View::SchemaNewer => page.child(self.render_whatsapp_problem("whatsapp-schema-newer", tr("whatsapp_schema_newer_title"),
+                tr("whatsapp_schema_newer_body"), Some(Act::Update), cx)),
             View::Unreachable => page.child(self.render_whatsapp_problem("whatsapp-unreachable", tr("whatsapp_unreachable_title"),
                 tr("whatsapp_unreachable_body"), None, cx)),
             View::Unknown => page.child(self.render_whatsapp_problem("whatsapp-unknown", tr("whatsapp_unreachable_title"), tr("invalid_response"), None, cx)),
@@ -684,7 +697,7 @@ fn render_working(state: &WaState) -> Stateful<Div> {
 
 #[cfg(test)]
 mod tests {
-    use super::{code_of, code_text, failed_job, parse_state, phone_digits, should_poll, step_states, view_of, CliproxyItem, View, STEPS};
+    use super::{act_timeout, code_of, code_text, failed_job, parse_state, phone_digits, should_poll, step_states, view_of, Act, CliproxyItem, View, STEPS};
     use core::prelude::v1::test;
     use serde_json::json;
 
@@ -731,6 +744,27 @@ mod tests {
         assert_eq!(view_of(&state(base("running", Some(json!({"state": "outdated"}))))), View::Outdated);
         assert_eq!(view_of(&state(base("running", Some(json!({"state": "connected"}))))), View::Connected);
         assert_eq!(view_of(&state(base("running", Some(json!({"state": "novo"}))))), View::Unknown);
+    }
+
+    #[test]
+    fn stopped_on_newer_data_asks_for_the_update() {
+        let with = |service: &str, error: serde_json::Value| {
+            let mut value = base(service, None);
+            value["status_error"] = error;
+            view_of(&state(value))
+        };
+        assert_eq!(with("stopped", json!("whatsapp_schema_newer")), View::SchemaNewer);
+        assert_eq!(with("stopped", json!(null)), View::Stopped);
+        assert_eq!(with("stopped", json!("whatsapp_outro")), View::Stopped);
+        // De pé, o `status_error` é de outra coisa (resposta sem assinatura, sem resposta).
+        assert_eq!(with("running", json!("whatsapp_untrusted")), View::Unreachable);
+    }
+
+    /// O servidor dá 30 s ao binário para desvincular (`UNLINK_TIMEOUT` do `hangar-whatsapp`).
+    #[test]
+    fn unlinking_waits_past_the_server_deadline() {
+        for act in [Act::Logout, Act::Wipe, Act::Uninstall] { assert!(act_timeout(act) > 30, "{act:?}"); }
+        assert_eq!(act_timeout(Act::Install), 30);
     }
 
     #[test]

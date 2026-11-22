@@ -24,7 +24,12 @@ pub const SERVICE: ServiceId = ServiceId {
     launchd_label: "dev.hangar.whatsapp",
     task: "hangar-whatsapp",
     description: "WhatsApp do Hangar (somente leitura)",
+    no_restart_exit: Some(SCHEMA_NEWER_EXIT),
 };
+
+/// O binário sai com este código quando o `messages.db` é de um esquema mais novo que o dele: só um binário
+/// mais novo abre esses dados, e religar o mesmo não adianta.
+pub const SCHEMA_NEWER_EXIT: u8 = 3;
 
 /// Versão do texto de risco que a pessoa aceitou.
 pub const ACCEPT_TEXT_VERSION: u32 = 1;
@@ -361,6 +366,14 @@ mod tests {
         assert!(!paths.record().starts_with(&paths.data) && !paths.accepted().starts_with(&paths.data));
         let unit = service::systemd_unit(&Context::new(Path::new("/home/u")).service(Path::new("/home/u/.hangar/whatsapp-service/bin/0.1.0/hangar-whatsapp")));
         assert!(unit.contains("ExecStart=\"/home/u/.hangar/whatsapp-service/bin/0.1.0/hangar-whatsapp\" --data \"/home/u/.hangar/whatsapp\"\n"), "{unit}");
+    }
+
+    /// Dados de esquema mais novo: o systemd para de religar a cada 10 s e a unit fica `failed` com a saída 3.
+    #[test]
+    fn the_unit_does_not_restart_after_the_schema_newer_exit() {
+        let ctx = Context::new(Path::new("/home/u"));
+        let unit = service::systemd_unit(&ctx.service(Path::new("/home/u/.hangar/whatsapp-service/bin/0.1.0/hangar-whatsapp")));
+        assert!(unit.contains("Restart=always\nRestartSec=10\nRestartPreventExitStatus=3\n\n[Install]\n"), "{unit}");
     }
 
     #[test]

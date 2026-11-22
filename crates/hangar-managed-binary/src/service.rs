@@ -17,6 +17,10 @@ pub struct ServiceId {
     pub task: &'static str,
     /// `Description=` da unit.
     pub description: &'static str,
+    /// Código de saída em que o programa avisa que religar não adianta. Só a unit do systemd filtra
+    /// (`RestartPreventExitStatus=`); o Agendador do Windows já não religa ação que sai com erro, e o
+    /// launchd não filtra por código e segue religando no ritmo dele.
+    pub no_restart_exit: Option<u8>,
 }
 
 /// Argumento da linha de comando do serviço.
@@ -59,9 +63,10 @@ pub fn systemd_unit(s: &Service) -> String {
             Arg::Path(path) => quote(path),
         });
     }
+    let prevent = s.id.no_restart_exit.map(|code| format!("RestartPreventExitStatus={code}\n")).unwrap_or_default();
     format!(
         "[Unit]\nDescription={}\nAfter=network.target\n\n\
-         [Service]\nType=simple\nExecStart={exec}\nRestart=always\nRestartSec=10\n\n\
+         [Service]\nType=simple\nExecStart={exec}\nRestart=always\nRestartSec=10\n{prevent}\n\
          [Install]\nWantedBy=default.target\n",
         s.id.description
     )
@@ -194,9 +199,13 @@ fn write(step: &str, path: &Path, bytes: &[u8]) -> Result<(), Error> {
     hangar_core::fs::atomic_write(path, bytes).map_err(failed)
 }
 
+/// O texto do `-EncodedCommand`, antes do base64.
+fn utf16le(script: &str) -> Vec<u8> {
+    script.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
 async fn powershell(step: &str, script: &str) -> Result<(), Error> {
-    let script: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &script);
+    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, utf16le(script));
     run(step, "powershell.exe", &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]).await
 }
 
@@ -269,29 +278,89 @@ pub async fn unregister(home: &Path, managed_dir: &Path, id: &ServiceId) -> Resu
     run("systemctl daemon-reload", "systemctl", &["--user", "daemon-reload"]).await
 }
 
-/// Algum processo do serviço existe pelo gerenciador, ou vai existir logo (o `Restart=always` esperando o
-/// `RestartSec`). Sem como perguntar (Windows) ou sem a unit, `false`.
-pub async fn process_running(home: &Path, id: &ServiceId) -> bool {
-    if cfg!(target_os = "macos") {
-        let output = tokio::process::Command::new("launchctl").args(["list", id.launchd_label])
-            .stdin(std::process::Stdio::null()).output().await;
-        return output.is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("\"PID\" = "));
-    }
-    if cfg!(windows) || !systemd_unit_path(home, id).is_file() {
-        return false;
-    }
-    let output = tokio::process::Command::new("systemctl")
-        .args(["--user", "show", "-p", "MainPID", "-p", "ActiveState", "-p", "SubState", id.unit])
-        .stdin(std::process::Stdio::null()).output().await;
-    output.is_ok_and(|o| o.status.success() && systemd_busy(&String::from_utf8_lossy(&o.stdout)))
+/// O que o gerenciador diz do processo do serviço.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProcessState {
+    /// Algum processo existe, ou vai existir logo (o `Restart=always` esperando o `RestartSec`). Sem como
+    /// perguntar (Windows) ou sem a unit, `false`.
+    pub running: bool,
+    /// Sem processo de pé, o código com que o último saiu sozinho (morte por sinal não conta). `None` sem
+    /// como saber.
+    pub last_exit: Option<i32>,
 }
 
-/// Saída `Chave=valor` do `systemctl show`: processo vivo, ou unit subindo, parando ou à espera de religar.
-fn systemd_busy(show: &str) -> bool {
-    let field = |key: &str| show.lines().find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('=')).unwrap_or_default();
-    !matches!(field("MainPID"), "" | "0")
+/// Algum processo do serviço existe pelo gerenciador, ou vai existir logo: [`ProcessState::running`].
+pub async fn process_running(home: &Path, id: &ServiceId) -> bool {
+    // No Windows a resposta é sempre `false`: sem abrir o PowerShell à toa.
+    !cfg!(windows) && process_state(home, id).await.running
+}
+
+/// Uma consulta ao gerenciador: processo de pé e, sem ele, o código da última saída.
+pub async fn process_state(home: &Path, id: &ServiceId) -> ProcessState {
+    if cfg!(target_os = "macos") {
+        return stdout("launchctl", &["list", id.launchd_label]).await.map(|out| launchd_state(&out)).unwrap_or_default();
+    }
+    if cfg!(windows) {
+        let task = ps_quote(id.task);
+        let script = format!("$ErrorActionPreference = 'Stop'\n$t = Get-ScheduledTask -TaskName {task}\n\
+            \"State=$($t.State)\"\n\"LastTaskResult=$(($t | Get-ScheduledTaskInfo).LastTaskResult)\"\n");
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, utf16le(&script));
+        let out = stdout("powershell.exe", &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]).await;
+        return out.map(|out| task_state(&out)).unwrap_or_default();
+    }
+    if !systemd_unit_path(home, id).is_file() {
+        return ProcessState::default();
+    }
+    let show = stdout("systemctl", &["--user", "show", "-p", "MainPID", "-p", "ActiveState", "-p", "SubState",
+        "-p", "ExecMainCode", "-p", "ExecMainStatus", id.unit]).await;
+    show.map(|out| systemd_state(&out)).unwrap_or_default()
+}
+
+/// A saída de um comando que terminou bem; qualquer falha é `None`.
+async fn stdout(program: &str, args: &[&str]) -> Option<String> {
+    let mut command = tokio::process::Command::new(program);
+    command.args(args).stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    let output = command.output().await.ok().filter(|o| o.status.success())?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Linhas `Chave=valor`, como o `systemctl show` e o script da tarefa escrevem.
+fn key_value<'a>(text: &'a str, key: &str) -> &'a str {
+    text.lines().find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('=')).unwrap_or_default()
+}
+
+/// Saída do `systemctl show`: processo vivo, ou unit subindo, parando ou à espera de religar. `ExecMainCode=1`
+/// é a saída normal (`CLD_EXITED`); os outros valores são sinal.
+fn systemd_state(show: &str) -> ProcessState {
+    let field = |key: &str| key_value(show, key);
+    let no_pid = matches!(field("MainPID"), "" | "0");
+    let running = !no_pid
         || matches!(field("ActiveState"), "active" | "activating" | "reloading" | "deactivating" | "refreshing")
-        || field("SubState") == "auto-restart"
+        || field("SubState") == "auto-restart";
+    let last_exit = if no_pid && field("ExecMainCode") == "1" { field("ExecMainStatus").parse().ok() } else { None };
+    ProcessState { running, last_exit }
+}
+
+/// O dicionário do `launchctl list <label>`: `"PID" = n;` com o processo de pé e `"LastExitStatus" = n;` com o
+/// status de espera cru, o código nos bits altos e o sinal nos baixos.
+fn launchd_state(list: &str) -> ProcessState {
+    let field = |key: &str| list.lines().find_map(|line| {
+        line.trim().strip_prefix(&format!("\"{key}\" = "))?.trim_end_matches(';').trim().parse::<i64>().ok()
+    });
+    if field("PID").is_some() {
+        return ProcessState { running: true, last_exit: None };
+    }
+    let last_exit = field("LastExitStatus").filter(|raw| *raw >= 0 && raw & 0xff == 0).and_then(|raw| i32::try_from(raw >> 8).ok());
+    ProcessState { running: false, last_exit }
+}
+
+/// `State=` e `LastTaskResult=` da tarefa: o `.vbs` sai com o código do programa, que vira o resultado dela.
+/// `running` continua `false`: a tarefa de pé não prova que o programa já abriu os dados.
+fn task_state(out: &str) -> ProcessState {
+    let last_exit = if key_value(out, "State") == "Running" { None } else { key_value(out, "LastTaskResult").parse().ok() };
+    ProcessState { running: false, last_exit }
 }
 
 #[cfg(test)]
@@ -303,6 +372,7 @@ mod tests {
         launchd_label: "dev.hangar.whatsapp",
         task: "hangar-whatsapp",
         description: "WhatsApp do Hangar",
+        no_restart_exit: None,
     };
 
     fn service(executable: &str, data: &str) -> Service {
@@ -356,14 +426,56 @@ mod tests {
     }
 
     #[test]
+    fn a_code_that_must_not_restart_goes_into_the_unit_only_when_asked() {
+        let id = ServiceId { no_restart_exit: Some(3), ..WHATSAPP };
+        let s = |id| Service { id, executable: "/x/p".into(), args: Vec::new() };
+        let unit = systemd_unit(&s(id));
+        assert!(unit.contains("Restart=always\nRestartSec=10\nRestartPreventExitStatus=3\n\n[Install]\n"), "{unit}");
+        assert!(!systemd_unit(&s(WHATSAPP)).contains("RestartPreventExitStatus"));
+        // O launchd não filtra por código e o Agendador já não religa saída com erro: nada muda neles.
+        assert_eq!(launchd_plist(&s(id)), launchd_plist(&s(WHATSAPP)));
+        assert_eq!(windows_vbs(&s(id)), windows_vbs(&s(WHATSAPP)));
+        let (vbs, dir) = (Path::new(r"C:\h\w.vbs"), Path::new(r"C:\h\w"));
+        assert_eq!(windows_script(&id, vbs, dir, true), windows_script(&WHATSAPP, vbs, dir, true));
+    }
+
+    #[test]
     fn a_unit_waiting_to_restart_counts_as_busy() {
         let show = |pid: &str, active: &str, sub: &str| format!("MainPID={pid}\nActiveState={active}\nSubState={sub}\n");
-        assert!(systemd_busy(&show("4321", "active", "running")));
-        assert!(systemd_busy(&show("0", "activating", "auto-restart")), "na janela do RestartSec o MainPID é 0");
-        assert!(systemd_busy(&show("0", "deactivating", "stop-sigterm")));
-        assert!(!systemd_busy(&show("0", "inactive", "dead")));
-        assert!(!systemd_busy(&show("0", "failed", "failed")));
-        assert!(!systemd_busy(""), "sem resposta do systemd");
+        let busy = |text: &str| systemd_state(text).running;
+        assert!(busy(&show("4321", "active", "running")));
+        assert!(busy(&show("0", "activating", "auto-restart")), "na janela do RestartSec o MainPID é 0");
+        assert!(busy(&show("0", "deactivating", "stop-sigterm")));
+        assert!(!busy(&show("0", "inactive", "dead")));
+        assert!(!busy(&show("0", "failed", "failed")));
+        assert!(!busy(""), "sem resposta do systemd");
+    }
+
+    /// Valores lidos de `systemd-run --user -p Restart=always [-p RestartPreventExitStatus=3] sh -c 'exit 3'`.
+    #[test]
+    fn the_last_exit_code_comes_only_from_a_normal_exit_without_a_process() {
+        let show = |pid: &str, active: &str, sub: &str, code: &str, status: &str|
+            format!("ActiveState={active}\nSubState={sub}\nMainPID={pid}\nExecMainCode={code}\nExecMainStatus={status}\n");
+        assert_eq!(systemd_state(&show("0", "failed", "failed", "1", "3")), ProcessState { running: false, last_exit: Some(3) });
+        // Unit sem o filtro, à espera de religar depois da mesma saída.
+        assert_eq!(systemd_state(&show("0", "activating", "auto-restart", "1", "3")), ProcessState { running: true, last_exit: Some(3) });
+        assert_eq!(systemd_state(&show("0", "failed", "failed", "2", "9")).last_exit, None, "morte por sinal");
+        assert_eq!(systemd_state(&show("4321", "active", "running", "0", "0")).last_exit, None, "processo de pé");
+        assert_eq!(systemd_state(&show("0", "inactive", "dead", "0", "0")).last_exit, None, "nunca saiu");
+        assert_eq!(systemd_state("").last_exit, None);
+    }
+
+    #[test]
+    fn launchd_and_the_task_report_the_last_exit_code_too() {
+        let gone = "{\n\t\"Label\" = \"dev.hangar.whatsapp\";\n\t\"LastExitStatus\" = 768;\n};\n";
+        assert_eq!(launchd_state(gone), ProcessState { running: false, last_exit: Some(3) });
+        let up = "{\n\t\"PID\" = 4321;\n\t\"LastExitStatus\" = 768;\n};\n";
+        assert_eq!(launchd_state(up), ProcessState { running: true, last_exit: None });
+        assert_eq!(launchd_state("{\n\t\"LastExitStatus\" = 9;\n};\n").last_exit, None, "sinal");
+        assert_eq!(task_state("State=Ready\r\nLastTaskResult=3\r\n"), ProcessState { running: false, last_exit: Some(3) });
+        assert_eq!(task_state("State=Running\r\nLastTaskResult=267009\r\n").last_exit, None);
+        assert_eq!(task_state("State=Ready\r\nLastTaskResult=4294967295\r\n").last_exit, None, "Stop-Process -Force");
+        assert_eq!(task_state("").last_exit, None);
     }
 
     #[test]

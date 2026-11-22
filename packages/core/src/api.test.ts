@@ -13,6 +13,7 @@ import { configureApi } from './apiEnv';
 // `getHistoryDesde` veio da main junto com o histórico condicional (304 + ETag).
 import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, transcribeUploaded, transcribeUploadedForServer, uploadFile, uploadFileForServer, uploadFromDiskForServer, uploadTimeoutMs, waitUploadMediaForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
 import { createSessionForServer, getSessionDefaultsForServer, getFolderGitForServer, folderGitActionForServer, defaultBase, freshBase, baseChoices, commitsLeftOut, resumeArchivedConversation } from './api';
+import { logoutWhatsApp, uninstallWhatsApp, updateWhatsApp, wipeWhatsApp } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
 import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer, getNewChatCommandsForServer } from './api';
 import { fetchSessionsForServer, getSessions, openSessionsStream, probeServerResponse } from './api';
@@ -1494,6 +1495,21 @@ describe('prazos e raiz explícita (sessão e git de pasta)', () => {
     expect(new URL(urls[0]).searchParams.get('root')).toBe('/home/a');
     expect(timeout).toHaveBeenCalledWith(30_000);
     expect(timeout).toHaveBeenCalledWith(150_000);
+  });
+});
+
+describe('prazos do WhatsApp', () => {
+  it('desvincular espera mais que os 30 s que o servidor dá ao binário', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'));
+    for (const unlink of [() => logoutWhatsApp(server), () => wipeWhatsApp(server), () => uninstallWhatsApp(server, true)]) {
+      timeout.mockClear();
+      await unlink();
+      expect(timeout).toHaveBeenCalledExactlyOnceWith(45_000);
+    }
+    timeout.mockClear();
+    await updateWhatsApp(server);
+    expect(timeout).toHaveBeenCalledExactlyOnceWith(30_000);
   });
 });
 
