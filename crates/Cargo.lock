@@ -2179,6 +2179,7 @@ dependencies = [
  "hangar-transcript",
  "hangar-update-news",
  "hangar-usage-diary",
+ "hangar-whatsapp",
  "hangar-work-review",
  "hangar-workflows",
  "hangar-workspace",
@@ -2354,6 +2355,27 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "libloading",
+]
+
+[[package]]
+name = "hangar-whatsapp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "form_urlencoded",
+ "hangar-core",
+ "hangar-managed-binary",
+ "qrcode",
+ "reqwest",
+ "ring",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

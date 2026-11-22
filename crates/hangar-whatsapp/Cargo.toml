@@ -1,0 +1,26 @@
+[package]
+name = "hangar-whatsapp"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-core e do hangar-managed-binary: sem elas, compilar este crate sozinho guarda
+# outra cópia de cada dependência no target.
+[dependencies]
+axum = { workspace = true }
+chrono = { workspace = true }
+form_urlencoded = { workspace = true }
+hangar-core.workspace = true
+hangar-managed-binary.workspace = true
+qrcode = { version = "=0.14.1", default-features = false }
+reqwest = { workspace = true, features = ["rustls", "multipart", "json"] }
+ring.workspace = true
+semver.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }

@@ -157,6 +157,8 @@ pub struct AppState {
     /// Avisos do Mission Control à sessão, pelo handler da rota de entrada; o estado entra quando o roteador nasce.
     pub mission_notify: Arc<crate::mission_notify::SessionNotify>,
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
+    /// WhatsApp só leitura (`hangar-whatsapp`); nasce com o roteador, pela pasta pessoal das contas.
+    pub whatsapp: std::sync::OnceLock<Arc<hangar_whatsapp::WhatsApp>>,
     /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
     pub status: Arc<crate::status::Status>,
     /// Revisão do trabalho (`work_review/v1`) das sessões ligadas a um ticket.
@@ -321,6 +323,7 @@ impl AppState {
             mission,
             mission_notify,
             ticket_actions: Default::default(),
+            whatsapp: Default::default(),
             status: Arc::default(),
             work_review,
             hangar_dir, device_install,
@@ -1079,6 +1082,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
             state.ticket_actions.get_or_init(|| hangar_ticket_actions::Engine::new(hangar_ticket_actions::Ledger::new(state.hangar_dir.join("ticket-actions")),
                 state.mission.clone(),state.connectors.clone(),state.mission_notify.clone())).clone()))
         .merge(hangar_work_review::http::router(state.edge(), state.work_review.clone()))
+        // WhatsApp só leitura: só o dono, nunca na porta do convidado (o Python não tem as rotas).
+        .merge(hangar_whatsapp::router(state.edge(),
+            state.whatsapp.get_or_init(|| hangar_whatsapp::WhatsApp::new(&state.accounts.env.home)).clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_registered))
         .route("/api/claude/commands", get(crate::commands::new_chat_route).fallback(pass_registered))
         // Senha do chaveiro: só o dono; o preflight do CORS cai no caminho sem rota.
