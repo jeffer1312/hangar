@@ -924,10 +924,15 @@ fn interrupted_provider_switch_keeps_the_target_binding_until_every_record_is_wr
     let mark = specs.join(format!("{key}.provider-switch"));
     let record = specs.join(format!("{key}.json"));
     let binding = "bound-target";
-    let saved = json!({"generation":2,"spec":{"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"headless",
+    let mut saved = json!({"generation":2,"spec":{"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"headless",
         "account":{"kind":"engine","name":"target","account":"target-account","binding":binding},"account_source":"explicit",
         "model":"gpt-target","service_tier":"default","permission_mode":"acceptEdits","jev":false,"read_only":false,
         "created_at":1.0,"conversation":SID}});
+    let mut source = saved["spec"].clone();
+    source["account"] = json!({"kind":"default"});
+    source["model"] = json!("claude-before");
+    source["service_tier"] = Value::Null;
+    saved["source"] = source;
     std::fs::write(&mark, saved.to_string()).unwrap();
     fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits"}));
     std::fs::create_dir(&record).unwrap();
@@ -983,6 +988,17 @@ fn interrupted_provider_switch_keeps_the_target_binding_until_every_record_is_wr
     hangar_server::runtime::claude_reopen::settle_switches(&env);
     let fallen = hangar_server::session_open::fallen::get(&fx.home, "s1").unwrap();
     assert_eq!((fallen.key, fallen.conversation.as_deref()), (key, Some(SID)));
+    assert!(!mark.exists());
+
+    hangar_server::session_open::fallen::remove(&fx.home, "s1").unwrap();
+    interrupted["source"]["surface"] = json!("terminal");
+    std::fs::write(&record, interrupted["source"].to_string()).unwrap();
+    std::fs::write(&mark, interrupted.to_string()).unwrap();
+    write_generation(2);
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let before_stop: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    assert_eq!(before_stop["model"], "claude-before");
+    assert!(hangar_server::session_open::fallen::get(&fx.home, "s1").is_some());
     assert!(!mark.exists());
 }
 

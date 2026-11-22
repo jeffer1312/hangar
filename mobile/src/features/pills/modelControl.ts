@@ -36,10 +36,14 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
   const chat = chatStore(serverId, name);
   const server = useServers((s) => s.servers.find((x) => x.id === serverId) ?? null);
   const statusLine = chat.use((s) => s.statusLine);
-  // A sessão da lista traz o modelo quando a statusline não é a do Hangar ou ainda não chegou.
+  // No provedor vinculado, a lista confirma o modelo antes da primeira linha de status do processo novo.
   const session = useSessions((s) => s.byServerRecord?.[serverId]?.find((x) => x.name === name)
     ?? s.rows.find((x) => x.serverId === serverId && x.name === name) ?? null);
-  const statusFields = useMemo(() => parseStatusLine(statusLine, session), [statusLine, session]);
+  const statusFields = useMemo(() => {
+    const fields = parseStatusLine(statusLine, session);
+    const boundModel = provider === 'claude' && session?.engine_binding ? session.model?.trim() : null;
+    return fields && boundModel ? { ...fields, model: boundModel } : fields;
+  }, [statusLine, session, provider]);
 
   const isCodex = provider === 'codex';
   // omp é o fork do Pi: mesmo seletor, mesmos endpoints.

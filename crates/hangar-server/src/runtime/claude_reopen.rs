@@ -57,6 +57,22 @@ enum Life {
 /// e a base fora do plano.
 struct Current { spec:SessionSpec, sid:String, generation:u64, life:Life, previous_non_plan:Option<String>, settings:Option<Value> }
 
+pub(crate) struct EngineReopenSource { spec: SessionSpec, sid: String, generation: u64 }
+
+impl EngineReopenSource {
+    fn matches(&self, current: &Current) -> bool {
+        self.sid == current.sid && self.generation == current.generation && same_engine_spec(&self.spec, &current.spec)
+    }
+}
+
+fn same_engine_spec(a: &SessionSpec, b: &SessionSpec) -> bool {
+    a.key == b.key && a.account == b.account && a.model == b.model && a.service_tier == b.service_tier && a.surface == b.surface
+}
+
+fn engine_source_changed() -> RuntimeError {
+    refused("session_source_changed", "A conversa mudou enquanto o catálogo era conferido. Abra o seletor novamente.")
+}
+
 /// Sessão ocupada (subindo, esperando resposta, trabalhando, fila pendente) diante do `claude_current`.
 #[derive(Clone,Copy,PartialEq,Eq)]
 enum BusyCheck { Skip, Refuse, RefuseUnlessStalled }
@@ -410,7 +426,7 @@ pub(super) async fn reconcile_account(env:&crate::accounts::environment::Account
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-struct ProviderSwitchRecord { generation: u64, spec: SessionSpec }
+struct ProviderSwitchRecord { generation: u64, source: SessionSpec, spec: SessionSpec }
 
 struct SwitchMark { path: PathBuf, keep: bool }
 impl SwitchMark {
@@ -430,12 +446,20 @@ impl SwitchMark {
         crate::session_open::record::switching_path(home,&next.key).map(|path|Some(SwitchMark { path, keep: false })).map_err(unmarked)
     }
 
-    fn provider(home: &std::path::Path, next: &SessionSpec, generation: u64) -> std::io::Result<Self> {
+    fn provider(home: &std::path::Path, current: &Current, next: &SessionSpec) -> std::io::Result<Self> {
         let path = crate::session_open::record::path(home, &next.key)?.with_extension("provider-switch");
         std::fs::create_dir_all(crate::session_open::record::dir(home))?;
-        let record = ProviderSwitchRecord { generation, spec: next.clone() };
+        let mut source = current.spec.clone();
+        source.conversation = Some(current.sid.clone());
+        let record = ProviderSwitchRecord { generation: current.generation + 1, source, spec: next.clone() };
         super::queue::atomic_write(&path, &serde_json::to_vec(&record)?)?;
         Ok(Self { path, keep: true })
+    }
+
+    fn restore_origin(&self) -> std::io::Result<()> {
+        let mut record: ProviderSwitchRecord = serde_json::from_slice(&super::queue::read_replaced(&self.path)?)?;
+        record.spec = record.source.clone();
+        super::queue::atomic_write(&self.path, &serde_json::to_vec(&record)?)
     }
 }
 impl Drop for SwitchMark {
@@ -456,20 +480,21 @@ pub fn settle_switches(env:&crate::accounts::environment::AccountEnvironment) {
         let provider = path.extension().is_some_and(|x|x=="provider-switch");
         let read = super::queue::read_replaced(&path).and_then(|raw| {
             if provider {
-                let record: ProviderSwitchRecord = serde_json::from_slice(&raw)?;
-                Ok(provider_switch_current(env, &record)?.then_some(record.spec))
+                provider_switch_recovery(env, serde_json::from_slice(&raw)?)
             } else {
                 let spec: SessionSpec = serde_json::from_slice(&raw)?;
                 let moved = spec.conversation.as_deref().is_some_and(|sid| super::claude_launch::transcript(env, &spec, sid).is_file());
-                Ok(moved.then_some(spec))
+                Ok(moved.then_some((spec, true)))
             }
         });
         match read {
-            Ok(Some(to))=>{
+            Ok(Some((to, committed)))=>{
                 let terminal_switch = provider && to.surface == Surface::Terminal;
-                let sidecar = if terminal_switch { Ok(()) } else { settle_sidecar(env, &to, provider) };
-                let result = sidecar.and_then(|_| crate::session_open::record::write(&env.home,&to))
-                    .and_then(|_| crate::session_open::record::confirm_binding(&env.home,&to));
+                let result = if committed {
+                    let sidecar = if terminal_switch { Ok(()) } else { settle_sidecar(env, &to, provider) };
+                    sidecar.and_then(|_| crate::session_open::record::write(&env.home,&to))
+                        .and_then(|_| crate::session_open::record::confirm_binding(&env.home,&to))
+                } else { Ok(()) };
                 if let Err(error) = result {
                     tracing::warn!(session=%to.name,kind=?error.kind(),"troca interrompida não gravada; marca conservada");
                     continue;
@@ -497,13 +522,21 @@ pub fn settle_switches(env:&crate::accounts::environment::AccountEnvironment) {
     }
 }
 
-fn provider_switch_current(env: &crate::accounts::environment::AccountEnvironment, record: &ProviderSwitchRecord) -> std::io::Result<bool> {
+fn provider_switch_recovery(env: &crate::accounts::environment::AccountEnvironment, record: ProviderSwitchRecord) -> std::io::Result<Option<(SessionSpec, bool)>> {
     crate::session_open::record::path(&env.home, &record.spec.key)?;
     let (state, _) = super::codex_terminal::queue_files(&env.claude_base.join(".hangar-queue"), &record.spec.key);
     let state = super::queue::read_replaced(&state)?;
     let (state, _) = super::queue::State::load(&state)?;
-    Ok(state.owner_key == record.spec.key && state.generation == record.generation && state.name == record.spec.name
-        && state.runtime_state["terminal_lifecycle"]["closed"] != true)
+    if state.owner_key != record.spec.key || state.name != record.spec.name || state.runtime_state["terminal_lifecycle"]["closed"] == true {
+        return Ok(None);
+    }
+    if state.generation == record.generation {
+        Ok(Some((record.spec, true)))
+    } else if state.generation.checked_add(1) == Some(record.generation) && record.source.surface == Surface::Terminal {
+        Ok(Some((record.source, false)))
+    } else {
+        Ok(None)
+    }
 }
 
 /// O sidecar sem terminal da sessão passa a dizer a conta de destino (é dele que a subida lê a conta).
@@ -768,11 +801,17 @@ impl RuntimeRegistry {
         Some(self.reopen_checked(name, change, None, None, Some(source), None).await)
     }
 
-    pub(crate) async fn reopen_claude_engine(&self, name: &str, source: &SessionSpec, change: SessionChange) -> Result<Reopened, ReopenFailure> {
+    pub(crate) async fn claude_engine_source(&self, name: &str, expected: &SessionSpec) -> Result<EngineReopenSource, ReopenFailure> {
+        let current = self.claude_current(name, BusyCheck::Skip, false).await.map_err(ReopenFailure::refused)?;
+        if !same_engine_spec(expected, &current.spec) { return Err(ReopenFailure::refused(engine_source_changed())); }
+        Ok(EngineReopenSource { spec: current.spec, sid: current.sid, generation: current.generation })
+    }
+
+    pub(crate) async fn reopen_claude_engine(&self, name: &str, source: &EngineReopenSource, change: SessionChange) -> Result<Reopened, ReopenFailure> {
         self.reopen_checked(name, change, None, None, None, Some(source)).await
     }
 
-    async fn reopen_checked(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>,provider_source:Option<&hangar_api::session::ClaudeProviderSource>,engine_source:Option<&SessionSpec>) -> Result<Reopened,ReopenFailure> {
+    async fn reopen_checked(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>,provider_source:Option<&hangar_api::session::ClaudeProviderSource>,engine_source:Option<&EngineReopenSource>) -> Result<Reopened,ReopenFailure> {
         let transfer=|| {
             // A troca de agente à espera também conta: a vida nova do Claude levaria a fila que ela segurou para o Codex.
             let open=self.handoff_held(name) || super::codex_relaunch::transfer_open(&self.codex_environment().home,name,None,None);
@@ -816,9 +855,8 @@ impl RuntimeRegistry {
         if let Some(source) = provider_source {
             self.check_provider_source(&current, source, meta.as_ref()).map_err(ReopenFailure::refused)?;
         }
-        if let Some(source) = engine_source && (current.spec.key != source.key || current.spec.account != source.account
-            || current.spec.model != source.model || current.spec.service_tier != source.service_tier || current.spec.surface != source.surface) {
-            return Err(ReopenFailure::refused(refused("session_source_changed", "A sessão mudou enquanto o catálogo era conferido. Abra o seletor novamente.")));
+        if engine_source.is_some_and(|source| !source.matches(&current)) {
+            return Err(ReopenFailure::refused(engine_source_changed()));
         }
         // A vida nova só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ela.
         if let Some(meta)=meta.as_ref().filter(|meta|asleep_of(meta).is_some()) && let Some(key)=meta["key"].as_str() {
@@ -882,30 +920,32 @@ impl RuntimeRegistry {
                 return Err(ReopenFailure::refused(refused("session_source_changed", "A conversa mudou enquanto o destino era conferido.")));
             }
         }
+        if let Some(source) = engine_source {
+            let last = self.claude_current(name, BusyCheck::Refuse, false).await.map_err(ReopenFailure::refused)?;
+            if !source.matches(&last) { return Err(ReopenFailure::refused(engine_source_changed())); }
+        }
         // Quando o transcript é movido, a recuperação pode seguir a pasta que o recebeu.
         let _switching = if between.is_some() {
             SwitchMark::write(&self.codex_environment().home, &next).map_err(ReopenFailure::refused)?
         } else { None };
+        let mut provider_mark = if provider_source.is_some() {
+            // A geração avançada prova a saída da origem; sem ela a marca só permite recuperar a origem.
+            Some(SwitchMark::provider(&self.codex_environment().home, &current, &next).map_err(|error|
+                ReopenFailure::refused(refused("reopen_switch_mark", &format!("a troca não pôde ser registrada ({error})"))))?)
+        } else { None };
         match self.stop_claude(name,&current,next.surface).await {
             Ok(())=>{},
-            Err(Stop::Before(error))=>return Err(ReopenFailure::refused(error)),
-            // O processo antigo que não saiu não é reaberto por cima: seriam dois Claude na mesma conversa.
+            Err(Stop::Before(error))=>{
+                if let Some(mark) = provider_mark.as_mut() { mark.keep = false; }
+                return Err(ReopenFailure::refused(error));
+            },
             Err(Stop::Alive(error))=>{
+                if let Some(mark) = provider_mark.as_mut() { mark.keep = false; }
                 super::actor::mark_live_error(&self.live_channel(name),&error.code,&error.message);
                 return Err(ReopenFailure { error,stopped:true,landed:None });
             },
-            Err(Stop::After(error))=>return Err(self.restore_claude(name,&current,error).await),
+            Err(Stop::After(error))=>return Err(self.restore_before_provider_switch(name, &current, provider_mark, error).await),
         }
-        let mut provider_mark = if provider_source.is_some() {
-            // O transcript fica no mesmo lugar; só a saída confirmada da origem autoriza recuperar o destino.
-            match SwitchMark::provider(&self.codex_environment().home, &next, current.generation + 1) {
-                Ok(mark) => Some(mark),
-                Err(error) => {
-                    let error = refused("reopen_switch_mark", &format!("a troca não pôde ser registrada ({error})"));
-                    return Err(self.restore_claude(name, &current, error).await);
-                },
-            }
-        } else { None };
         // Sem terminal, o processo antigo saiu sem gravar o que recebeu: a vida nova responde.
         if resume.is_none() && matches!(current.life,Life::Headless{..}) {
             let transcript=super::claude_launch::transcript(&self.codex_environment(),&current.spec,&current.sid);
@@ -942,18 +982,13 @@ impl RuntimeRegistry {
                 Err(ReopenFailure { error,stopped:true,landed:None })
             },
             Err(error)=>{
-                if let Some(mark) = provider_mark && let Err(undo) = mark.clear() {
-                    let message = format!("{}; o registro da troca não pôde ser desfeito ({undo}); a origem não foi reaberta", error.message);
-                    super::actor::mark_live_error(&self.live_channel(name), &error.code, &message);
-                    return Err(ReopenFailure { error: refused(&error.code, &message), stopped: true, landed: None });
-                }
                 // A conversa que não voltou para a conta de antes não é reaberta lá: seria outra conversa.
                 if let Some(between)=between && let Err(undo)=between.undo(&current.spec,&next,&current.sid).await {
                     let error=RuntimeError::new(&error.code,&format!("{}; {}",error.message,undo.message));
                     super::actor::mark_live_error(&self.live_channel(name),&error.code,&error.message);
                     return Err(ReopenFailure { error,stopped:true,landed:None });
                 }
-                Err(self.restore_claude(name,&current,error).await)
+                Err(self.restore_before_provider_switch(name, &current, provider_mark, error).await)
             },
         }
     }
@@ -1275,6 +1310,19 @@ impl RuntimeRegistry {
                 Err(refused("relaunch_initialize",why))
             },
         }
+    }
+
+    async fn restore_before_provider_switch(&self, name: &str, current: &Current, mark: Option<SwitchMark>, error: RuntimeError) -> ReopenFailure {
+        if let Some(mark) = mark.as_ref() && let Err(undo) = mark.restore_origin() {
+            let message = format!("{}; o registro da troca não pôde ser desfeito ({undo}); a origem não foi reaberta", error.message);
+            super::actor::mark_live_error(&self.live_channel(name), &error.code, &message);
+            return ReopenFailure { error: refused(&error.code, &message), stopped: true, landed: None };
+        }
+        let restored = self.restore_claude(name, current, error).await;
+        if restored.landed.is_some() && let Some(mark) = mark && let Err(error) = mark.clear() {
+            tracing::warn!(session=%name,kind=?error.kind(),"marca da troca restaurada não pôde ser removida");
+        }
+        restored
     }
 
     /// Falhou depois de encerrar: a sessão volta pelo spec de antes; sem terminal, se nem o terminal de antes

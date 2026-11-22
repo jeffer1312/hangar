@@ -207,6 +207,7 @@ it.each([
   await click('native_claude_provider_apply');
   await click('native_claude_provider_confirm');
   const destination = { engine: 'plus', engine_account: 'plus-account', engine_binding: 'bound-plus', model: 'gpt-plus' };
+  if (!replaced) state.statusLine = '🤖 claude-before';
   expect(api.providerWrite).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'sess', { ...destination, source });
   state.rows[0] = replaced
     ? { ...state.rows[0], jsonl: '/example/another.jsonl', model: 'claude-other' }
