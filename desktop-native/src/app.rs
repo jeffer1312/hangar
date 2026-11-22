@@ -134,6 +134,7 @@ mod sync;
 mod connect;
 mod devices;
 mod guests;
+mod sign_in;
 mod shared_config;
 mod tree;
 mod find;
@@ -1007,6 +1008,9 @@ pub struct Hangar {
     worktree_settings: worktree_settings::WorktreeSettings,
     auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
+    guests: guests::Guests,
+    /// A entrada pela conta do Connect no cartão de conexão: conta, convidado e a liberação deste computador.
+    sign_in: sign_in::SignIn,
     connect: connect::Connect,
     devices: devices::Devices,
     shared: shared_config::SharedConfig,
@@ -1358,7 +1362,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
-            server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
+            server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), guests: guests::Guests::default(), sign_in: sign_in::SignIn::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
@@ -1584,7 +1588,7 @@ impl Hangar {
     fn open_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.connection_dialog { self.connection_origin = window.focused(cx).map(|focus| focus.downgrade()); }
         self.connection_dialog = true;
-        self.address.update(cx, |input, cx| input.focus(window, cx));
+        if !self.sign_in_takes_focus(window, cx) { self.address.update(cx, |input, cx| input.focus(window, cx)); }
         cx.notify();
     }
 
@@ -9205,6 +9209,11 @@ impl Render for Hangar {
         let dialog_width = (window.viewport_size().width - px(32.)).min(px(480.));
         let entry = self.render_entry(cx);
         let entry_shown = entry.is_some();
+        // Primeiro acesso: a conta do Connect no alto, e o cartão de sempre (endereço e token, o Hangar deste computador)
+        // recolhido em "Outras formas de entrar".
+        let sign_in = (self.connection_dialog && self.sign_in_shown()).then(|| self.render_sign_in(window, cx));
+        let sign_in_others = sign_in.as_ref().map(|_| self.render_sign_in_others(cx));
+        let classic = sign_in.is_none() || self.sign_in_others_open();
         // Só montado com a conexão aberta: a raiz redesenha a cada batida das animações.
         let dialog = self.connection_dialog.then(|| div().id("connection-card").w(dialog_width).max_h(window.viewport_size().height - dialog_top - px(16.))
             .p(px(20.)).bg(theme::popup_fill(theme::raised())).border_1().border_color(theme::glass_border()).rounded(px(16.))
@@ -9219,19 +9228,21 @@ impl Render for Hangar {
                     cx.notify();
                 }
             }))
-            .map(|el| match entry {
+            .children(sign_in)
+            .children(sign_in_others)
+            .when(classic, |el| el.map(|el| match entry {
                 Some(card) => el.child(card),
                 None => el.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(tr("connection")))
                     .child(div().text_sm().text_color(theme::muted()).child(tr("connection_hint")))
                     .child(div().text_sm().child(tr("server"))).child(Input::new(&self.address).aria_label(tr("server")))
                     .child(div().text_sm().child(tr("token"))).child(Input::new(&self.token).aria_label(tr("token"))),
-            })
-            .when(self.electron_offer, |el| el.child(div().flex().flex_col().gap_2().pt_3().border_t_1().border_color(theme::glass_border())
+            }))
+            .when(classic && self.electron_offer, |el| el.child(div().flex().flex_col().gap_2().pt_3().border_t_1().border_color(theme::glass_border())
                 .child(div().text_sm().text_color(theme::muted()).child(tr("electron_import_offer_hint")))
                 .child(Button::new("electron-import").outline().label(tr("electron_import_offer"))
                     .on_click(cx.listener(|this, _, window, cx| this.import_electron(false, window, cx))))))
-            .when_some(self.error.clone(), |el, error| el.child(div().text_sm().text_color(theme::warning()).child(error)))
-            .when(!entry_shown, |el| el.child(div().flex().justify_end().gap_2()
+            .when_some(self.error.clone().filter(|_| classic), |el, error| el.child(div().text_sm().text_color(theme::warning()).child(error)))
+            .when(classic && !entry_shown, |el| el.child(div().flex().justify_end().gap_2()
                 .when(self.api.is_some(), |el| el.child(Button::new("cancel").label(tr("cancel")).on_click(cx.listener(|this, _, window, cx| {
                     this.connection_dialog = false;
                     this.restore_cleanup_connection(window, cx);

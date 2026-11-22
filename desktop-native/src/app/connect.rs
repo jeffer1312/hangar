@@ -146,7 +146,7 @@ fn parse_links(value: Value) -> Result<Vec<PeerLink>, String> {
 }
 
 /// A marca do Hangar acendendo arco por arco; `pulse` repete um respiro enquanto o Connect liga.
-fn connect_mark(id: &str, size: f32, pulse: bool, reduce: bool) -> AnyElement {
+pub(super) fn connect_mark(id: &str, size: f32, pulse: bool, reduce: bool) -> AnyElement {
     let arc = |path: &'static str| svg().path(path).absolute().top_0().left_0().size(px(size)).text_color(theme::accent());
     let mut mark = div().relative().size(px(size)).flex_shrink_0();
     if reduce { return mark.children(crate::CONNECT_MARK_ARCS.map(arc)).into_any_element(); }

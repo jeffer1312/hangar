@@ -358,6 +358,7 @@ impl Hangar {
         // Outra página: a tentativa de login perde a tela (a navegação e a busca passam por aqui).
         if page != Page::Accounts { self.accounts_page_left(); }
         if page != Page::Sync { self.sync_page_left(); }
+        if page != Page::Guests { self.guests_page_left(); }
         if page != Page::Connect { self.connect_page_left(); }
         if page != Page::Devices { self.devices_page_left(); }
         if page != Page::Status { self.status_left(); }
@@ -387,6 +388,7 @@ impl Hangar {
             Page::Servers => { self.machines_opened(cx); self.server_config_opened(page, cx); }
             Page::Windows => self.computer_opened(cx),
             Page::Sync => self.sync_opened(cx),
+            Page::Guests => self.guests_opened(cx),
             Page::Connect => self.connect_opened(cx),
             Page::Devices => self.devices_opened(cx),
             Page::SharedConfig => self.shared_config_opened(cx),

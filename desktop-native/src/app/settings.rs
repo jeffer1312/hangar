@@ -23,14 +23,14 @@ pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_ki
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
     General, Appearance, Sessions, Beta, Updates, Manual, Diary, About,
-    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    Servers, Sync, Guests, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
     const DEVICE: [Page; 7] = [Page::General, Page::Appearance, Page::Sessions, Page::Beta, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 22] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 23] = [Page::Diary, Page::Servers, Page::Sync, Page::Guests, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -45,7 +45,7 @@ impl Page {
     pub(super) fn key(self) -> &'static str {
         match self {
             Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Beta => "beta", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Guests => "guests", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -55,7 +55,7 @@ impl Page {
         match self {
             Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Beta => IconName::FlaskConical, Page::Diary => IconName::FileText,
             Page::Updates => IconName::Sparkles, Page::Manual => IconName::BookOpen,
-            Page::About => IconName::Info, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
+            Page::About => IconName::Info, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Guests => IconName::UserPlus, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
             Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
@@ -70,6 +70,7 @@ impl Page {
             Page::Jev => tr_shared("jev_title", &[]),
             Page::SharedConfig => tr_shared("shared_config_title", &[]),
             Page::Status => tr("status_title"),
+            Page::Guests => tr_shared("convidados_titulo", &[]),
             _ => tr(&format!("settings_page_{}", self.key())),
         }
     }
@@ -105,6 +106,8 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("machines_search_tailscale", Some("machines_search_tailscale_help"))]),
     (Page::Sync, &[("sync_config_ativa", Some("sync_config_ganho")), ("sync_config_ativar", Some("sync_config_direta")),
         ("sync_config_desativar", Some("sync_config_desativar_aviso")), ("sync_config_copiar", None)]),
+    (Page::Guests, &[("convidados_adicionar", Some("guests_connect_description")), ("convidados_ve_minhas", None),
+        ("guests_legacy_title", Some("guests_legacy_bring"))]),
     (Page::Connect, &[("connect_devices_title", None), ("connect_machines_title", Some("connect_machines_help")),
         ("connect_preview_title", Some("connect_preview_help"))]),
     (Page::Appearance, &APPEARANCE_ROWS),
@@ -566,6 +569,7 @@ impl Hangar {
             self.plugins_page = None;
             self.accounts_page_left();
             self.sync_page_left();
+            self.guests_page_left();
             self.connect_page_left();
             self.devices_page_left();
             self.status_left();
@@ -941,6 +945,7 @@ impl Hangar {
             Page::Voice | Page::Jev | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             Page::Servers => self.render_machines(window.viewport_size().width, cx),
             Page::Sync => self.render_sync(cx),
+            Page::Guests => self.render_guests_page(cx),
             Page::Connect => self.render_connect(cx),
             Page::SharedConfig => self.render_shared_config(cx),
             Page::Windows => self.render_computer(cx),
@@ -1263,6 +1268,16 @@ mod tests {
     fn general_search_finds_the_tray_option() {
         let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::General).expect("Geral na busca");
         assert!(rows.iter().any(|(row, _)| *row == "settings_tray"), "settings_tray fora da busca");
+    }
+
+    #[test]
+    fn guests_is_its_own_page_found_by_the_search() {
+        assert!(super::Page::sections().any(|page| page == super::Page::Guests), "Convidados fora da navegação");
+        let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Guests).expect("Convidados na busca");
+        assert!(rows.iter().any(|(row, _)| *row == "convidados_adicionar"));
+        // Saiu de dentro da Sincronização: a busca dela não aponta mais para os convidados.
+        let (_, sync) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Sync).expect("Sincronização na busca");
+        assert!(!sync.iter().any(|(row, _)| row.starts_with("convidados_")));
     }
 
     #[test]
