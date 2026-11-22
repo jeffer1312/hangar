@@ -96,6 +96,8 @@ impl Hangar {
     fn flush_conversation(&mut self, cx: &mut Context<Self>) {
         // Só no servidor da conexão em que a pessoa escolheu: outro servidor tem a escolha dele.
         let Some((_, on)) = self.settings_ui.conversation_pending.filter(|(owner, _)| *owner == self.connection) else { return };
+        // Com uma gravação no ar o valor do servidor ainda vai mudar: compara de novo quando ela responder.
+        if self.settings_ui.session_options_saving == Some(self.connection) { return; }
         let server = self.settings_ui.session_options.filter(|(connection, _)| *connection == self.connection).and_then(|(_, options)| options);
         if server.is_some_and(|o| o.conversation_beta == on) {
             self.settings_ui.conversation_pending = None;
