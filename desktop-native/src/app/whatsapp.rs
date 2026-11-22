@@ -16,6 +16,16 @@ const PAIR_GRACE: Duration = Duration::from_secs(10);
 /// As ferramentas que as sessões usam: nomes do catálogo MCP, iguais nos dois idiomas.
 const TOOLS: &str = "whatsapp_chats · whatsapp_read · whatsapp_search · whatsapp_request_media";
 
+/// Já aberta neste aparelho: lido do disco uma vez, no primeiro desenho da navegação.
+static PAGE_SEEN: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+
+fn page_seen() -> &'static std::sync::atomic::AtomicBool {
+    PAGE_SEEN.get_or_init(|| std::sync::atomic::AtomicBool::new(crate::appearance::whatsapp_page_seen()))
+}
+
+/// O selo "novo" da navegação: some na primeira abertura da página.
+pub(super) fn show_new_badge() -> bool { !page_seen().load(std::sync::atomic::Ordering::Relaxed) }
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 struct Totals { messages: u64, chats: u64, groups: u64, media_saved: u64, media_phone_only: u64, media_lost: u64 }
@@ -28,6 +38,9 @@ struct Status {
     error: Option<Value>,
     #[serde(default)]
     device: Option<String>,
+    /// Como o aparelho aparece na lista do celular; binário antigo não manda.
+    #[serde(default)]
+    device_name: Option<String>,
     #[serde(default)]
     pair_code: Option<String>,
     #[serde(default)]
@@ -196,6 +209,7 @@ impl Hangar {
     }
 
     pub(super) fn whatsapp_opened(&mut self, cx: &mut Context<Self>) {
+        if !page_seen().swap(true, std::sync::atomic::Ordering::Relaxed) { self.runtime.spawn_blocking(crate::appearance::mark_whatsapp_page_seen); }
         let w = &mut self.whatsapp;
         (w.qr_wanted, w.by_phone, w.phone_error, w.awaiting_pair) = (false, false, None, None);
         if w.busy.is_none() { (w.error, w.unlink_on_phone) = (None, false); }
@@ -560,6 +574,10 @@ impl Hangar {
         let last = match status.last_message_at.as_deref().and_then(seconds_since) {
             Some(seconds) => tr("whatsapp_last_message").replace("{ago}", &super::side::ago(seconds)),
             None => tr("whatsapp_no_message"),
+        };
+        let last = match status.device_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+            Some(name) => format!("{} {last}", tr("whatsapp_device_name").replace("{name}", name)),
+            None => last,
         };
         let since = status.since.as_deref().and_then(|at| local_date(at, english));
         let messages = match since { Some(date) => tr("whatsapp_total_messages").replace("{date}", &date), None => tr("whatsapp_total_messages_plain") };

@@ -876,6 +876,8 @@ impl Hangar {
                     .when(page_item == Page::Updates && !on && new_count > 0, |el| el.child(div().ml_auto()
                         .child(super::vault::chip(if new_count == 1 { tr("updates_new_one") } else { tr("updates_new_count").replace("{n}", &new_count.to_string()) },
                             theme::on_accent(), theme::accent()).rounded_full())))
+                    .when(page_item == Page::WhatsApp && !on && super::whatsapp::show_new_badge(), |el| el.child(div().ml_auto()
+                        .child(super::vault::chip(tr("settings_nav_new"), theme::on_accent(), theme::accent()).rounded_full())))
                     // Só o estado do servidor selecionado; de pé, sem ponto.
                     .when_some(status_dot.clone().filter(|_| page_item == Page::Status), |el, (color, _)| el.child(div().ml_auto()
                         .size(px(7.)).flex_shrink_0().rounded_full().bg(color))))
