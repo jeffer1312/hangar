@@ -208,12 +208,14 @@ it.each([
   await click('native_claude_provider_confirm');
   const destination = { engine: 'plus', engine_account: 'plus-account', engine_binding: 'bound-plus', model: 'gpt-plus' };
   expect(api.providerWrite).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'sess', { ...destination, source });
-  state.rows[0] = { ...state.rows[0], ...destination, jsonl: replaced ? '/example/another.jsonl' : source.jsonl };
+  state.rows[0] = replaced
+    ? { ...state.rows[0], jsonl: '/example/another.jsonl', model: 'claude-other' }
+    : { ...state.rows[0], ...destination };
   await refresh();
   await act(async () => written.resolve({ ok: true, ...destination, service_tier: 'default' }));
   if (replaced) {
     expect(action('native_claude_provider_confirm')?.disabled).toBe(true);
-    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).not.toContain('gpt-plus');
+    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain('claude-other');
   } else {
     expect(action('native_claude_provider_confirm')).toBeNull();
   }
