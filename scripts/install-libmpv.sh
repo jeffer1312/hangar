@@ -92,6 +92,8 @@ case "$(uname -s)" in
     linux_tem && { marca "instalada: $CMD"; echo "vídeo do app nativo: libmpv 2 instalada"; exit 0; }
     case "$CMD" in
       dnf*) aviso "o dnf não instalou o mpv-libs (código $rc; ele vem do RPM Fusion)" "habilite o RPM Fusion e rode: sudo $CMD" ;;
+      # Lista de pacotes velha dá 404 numa dependência; só -Sy seria atualização parcial, que o Arch não suporta.
+      pacman*) aviso "o pacman não instalou o mpv (código $rc; com a lista de pacotes velha é preciso atualizar o sistema)" "sudo pacman -Syu mpv" ;;
       *) aviso "a instalação da libmpv 2 não terminou (código $rc)" "sudo $CMD" ;;
     esac
     ;;
