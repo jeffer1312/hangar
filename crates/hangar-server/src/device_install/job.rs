@@ -61,6 +61,7 @@ pub const DOWNLOAD_MISMATCH: &str = "device_install_download_mismatch";
 pub const SIGN_FAILED: &str = "device_install_sign_failed";
 pub const NOT_INSTALLED: &str = "device_install_not_installed";
 pub const BUSY: &str = "device_install_busy";
+pub const CANCELLED: &str = "device_install_cancelled";
 pub const FORBIDDEN: &str = "device_install_forbidden";
 pub const UNKNOWN_JOB: &str = "device_install_unknown_job";
 pub const NOT_WAITING: &str = "device_install_not_waiting";
@@ -128,6 +129,8 @@ struct Job {
     /// Quem espera a escolha dos certificados: só em `awaiting_cert_choice`.
     cert_choice: Mutex<Option<oneshot::Sender<Option<Vec<String>>>>>,
     timed_out: std::sync::atomic::AtomicBool,
+    cancelled: std::sync::atomic::AtomicBool,
+    task: Mutex<Option<tokio::task::AbortHandle>>,
 }
 
 impl Job {
@@ -198,6 +201,8 @@ impl DeviceInstall {
             code: Mutex::default(),
             cert_choice: Mutex::default(),
             timed_out: Default::default(),
+            cancelled: Default::default(),
+            task: Mutex::default(),
         });
         {
             let mut jobs = lock(&self.jobs);
@@ -212,9 +217,15 @@ impl DeviceInstall {
         tokio::spawn(async move {
             // Tarefa interna: um pânico (isideload) vira `failed` em vez de deixar o aparelho ocupado.
             let inner = job.clone();
-            let outcome = tokio::spawn(async move { svc.run(&inner, start).await })
-                .await
-                .unwrap_or_else(|e| Err(Failure::with(DEVICE_ERROR, panic_message(e))));
+            let handle = tokio::spawn(async move { svc.run(&inner, start).await });
+            *lock(&job.task) = Some(handle.abort_handle());
+            // Cancelado antes de a tarefa ficar guardada: `cancel` não tinha o que abortar.
+            if job.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                handle.abort();
+            }
+            let outcome = handle.await.unwrap_or_else(|e| {
+                if e.is_cancelled() { Err(Failure::new(CANCELLED)) } else { Err(Failure::with(DEVICE_ERROR, panic_message(e))) }
+            });
             match outcome {
                 Ok(()) => job.set(Stage::Done, None),
                 Err(f) => {
@@ -231,6 +242,20 @@ impl DeviceInstall {
 
     pub fn progress(&self, id: &str) -> Option<Progress> {
         lock(&self.jobs).get(id).map(|j| lock(&j.progress).clone())
+    }
+
+    /// Para o trabalho do aparelho antes da instalação; depois dela, parar deixaria o SideStore
+    /// sem pareamento, então responde `device_install_busy`.
+    pub fn cancel(&self, udid: &str) -> Result<(), Failure> {
+        let job = lock(&self.jobs).values().find(|j| j.udid == udid && j.running()).cloned().ok_or_else(|| Failure::new(NOT_WAITING))?;
+        if matches!(lock(&job.progress).stage, Stage::Installing | Stage::Pairing | Stage::Verifying) {
+            return Err(Failure::new(BUSY));
+        }
+        job.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(task) = lock(&job.task).as_ref() {
+            task.abort();
+        }
+        Ok(())
     }
 
     /// Entrega o código (ou o pedido de reenvio) ao login que está esperando.

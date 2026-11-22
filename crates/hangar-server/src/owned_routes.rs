@@ -50,7 +50,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::POST && path == "/api/diag/report" { return true; }
     // SideStore no aparelho do cabo (`device_install::routes`): nunca repassado.
     if *method == Method::GET && matches!(path, "/api/device-install/devices" | "/api/device-install/progress") { return true; }
-    if *method == Method::POST && matches!(path, "/api/device-install/trust" | "/api/device-install/start" | "/api/device-install/code" | "/api/device-install/certs") { return true; }
+    if *method == Method::POST && matches!(path, "/api/device-install/trust" | "/api/device-install/start" | "/api/device-install/code" | "/api/device-install/certs" | "/api/device-install/cancel") { return true; }
     if *method == Method::POST && matches!(path, "/api/update/accept" | "/api/update/arrived/seen") { return true; }
     if *method == Method::POST && path == "/api/ask-history" { return true; }
     // Code Mode já ligado no settings.json principal (`claude_defaults::code_mode`).
