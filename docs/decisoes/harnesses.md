@@ -738,7 +738,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   some na troca de conversa do `/clear`. "Orientar" de uma entrada (`steer_entry`) digita só ela e
   aperta `ctrl+x ctrl+s`, que leva junto o que já estava na fila interna do Claude Code e interrompe
   o turno; parado, ela vai para a frente e sai na entrega comum. Se o transcript já confirmou a
-  entrada, o ator pode responder sem o atalho. No retorno de `/input`, `delivered` informa que a
+  entrada, o ator pode responder sem o atalho. Sem a marca do atalho na tela, o registro
+  `queue-operation enqueue` da entrada depois do despacho prova que a CLI a guardou: o turno a puxa
+  na próxima pausa entre ferramentas (`absorbed_mid_turn`), e o Orientar responde `steered: true`
+  sem tecla nem aviso. O Claude Code 2.1.330 não desenha mais "ctrl+x ctrl+s to send now": num
+  tmux isolado (22/11/2026), a mensagem digitada com um `sleep 40` rodando gravou o `enqueue` e foi
+  absorvida em 0,8 s, sem dica; antes disso, cada Orientar esperava 5 s e avisava "a dica não
+  apareceu" (20 avisos num dia na máquina de teste). No retorno de `/input`, `delivered` informa que a
   CLI aceitou o texto e `steered` informa se o atalho foi aplicado. As ações do painel (apagar,
   editar, reordenar, Orientar) valem só para a entrada que ainda espera e passam pelo ator da
   sessão; a que a drenagem já reivindicou responde 409 `queue_entry_gone`. Com uma entrega incerta

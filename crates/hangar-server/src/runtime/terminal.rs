@@ -1626,13 +1626,16 @@ impl Executor {
             // A dica só aparece depois dos hooks de envio da conta: espera como o Orientar, enquanto o turno é o mesmo.
             let deadline=tokio::time::Instant::now()+STEER_HINT_WAIT;
             let mut steered=driver.steer().await;
+            let mut queued=false;
             while steered.disposition==input::Disposition::Deferred && tokio::time::Instant::now()<deadline {
                 tokio::time::sleep(self.options.limits.settle).await;
                 // A dica que aparecer num turno novo não é desta mensagem: nenhuma tecla.
                 if !self.expected_work(payload) {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_work_changed","cleanup":"not_needed"})));}
+                // Guardada na fila da CLI, sem dica para promover: o próprio turno a puxa.
+                if self.entry_enqueued(&entry).await {queued=true; break;}
                 steered=driver.steer().await;
             }
-            return Ok(match steered.disposition {
+            return Ok(match if queued {input::Disposition::Accepted} else {steered.disposition} {
                 // Marcada antes da resposta: outro clique nela não aperta o ctrl+x ctrl+s de novo.
                 input::Disposition::Accepted=>{
                     self.action(Action::SetDelivered {entry_id:entry.clone(),value:true,steered:true}).await?;
@@ -1688,6 +1691,8 @@ impl Executor {
             if self.entry_confirmed(&entry).await || !self.expected_work(payload) {
                 return Ok(reply(id, Disposition::Accepted, json!({"steered": false, "drained": 1})));
             }
+            // A CLI guardou a mensagem na fila dela e a puxa na próxima pausa do turno, sem a dica para promover.
+            if self.entry_enqueued(&entry).await {return Ok(reply(id,Disposition::Accepted,json!({"steered":true,"drained":1})));}
             steered=driver.steer().await;
         }
         // O ctrl+x ctrl+s pode ter ido sem se comprovar: nem "orientou" nem "a dica não veio", e quem clicou confere.
@@ -1702,6 +1707,17 @@ impl Executor {
             return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":1,"code":"queue_steer_hint_missing"})));
         }
         Ok(reply(id,Disposition::Accepted,json!({"steered":accepted,"drained":1})))
+    }
+
+    /// A CLI já guardou a entrada na fila dela (`queue-operation enqueue` depois do despacho): o turno em curso a
+    /// puxa sozinho. É a prova no Claude Code que não desenha mais a dica do ctrl+x ctrl+s.
+    async fn entry_enqueued(&mut self, entry: &str) -> bool {
+        let Ok(state) = self.queue.snapshot().await else { return false };
+        let Some(row) = state.rows.iter().find(|row| row["id"] == entry) else { return false };
+        let cursors: Vec<DispatchCursor> = state.operations.values().filter(|op| op.entry_id.as_deref() == Some(entry))
+            .filter_map(|op| serde_json::from_value(op.dispatch_cursor.clone()).ok()).collect();
+        if cursors.is_empty() || self.receipt.scan(&self.target.transcript).is_err() { return false; }
+        cursors.iter().any(|cursor| self.receipt.enqueued_after(&self.target.transcript, cursor, row).unwrap_or(false))
     }
 
     async fn entry_confirmed(&mut self, entry: &str) -> bool {

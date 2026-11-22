@@ -896,6 +896,40 @@ async fn direct_delivery_does_not_warn_after_claude_records_the_prompt() {
     h.stop().await.unwrap();
 }
 
+/// Claude Code 2.1.330: sem a dica do ctrl+x ctrl+s, a mensagem guardada na fila da CLI (`queue-operation enqueue`) já
+/// está com ele e entra no turno na próxima pausa. Orientada, sem tecla nem aviso, antes do prazo.
+#[tokio::test(start_paused = true)]
+async fn direct_delivery_counts_the_cli_queue_as_steered_without_the_hint() {
+    let mut f = Fixture::new().await;
+    f.settle = Duration::from_millis(50);
+    f.idle.store(false, std::sync::atomic::Ordering::Release);
+    let h = f.start();
+    h.command(f.command("one", "Na fila da CLI")).await.unwrap();
+    let started = tokio::time::Instant::now();
+    let steering = h.control("steer-enqueued".into(), "steer_entry".into(), json!({"entry_id": "one"}));
+    let record = async {
+        f.wait_for("o terminal começou a procurar a indicação do atalho", || {
+            let calls = f.io.calls.lock().unwrap();
+            calls.iter().skip_while(|call| call.args.last().is_none_or(|arg| arg != "\r"))
+                .any(|call| call.args.first().is_some_and(|arg| arg == "capture-pane")
+                    && !call.args.iter().any(|arg| arg == "-e"))
+        }).await;
+        use std::io::Write;
+        let mut transcript = std::fs::OpenOptions::new().append(true).open(&f.target.transcript).unwrap();
+        writeln!(transcript, "{}", json!({
+            "type": "queue-operation", "operation": "enqueue", "sessionId": "sid",
+            "timestamp": "2026-11-22T15:04:40.137Z", "content": "Na fila da CLI"
+        })).unwrap();
+    };
+    let (reply, ()) = tokio::join!(steering, record);
+    let reply = reply.unwrap();
+    assert_eq!((reply.payload["steered"].clone(), reply.payload["drained"].clone()), (json!(true), json!(1)), "{}", reply.payload);
+    assert!(reply.payload["code"].is_null(), "{}", reply.payload);
+    assert!(started.elapsed() < Duration::from_secs(5), "a espera seguiu até o prazo com a mensagem já na fila da CLI");
+    assert!(!f.io.calls.lock().unwrap().iter().any(|call| call.args.last().is_some_and(|arg| arg == "C-s")));
+    h.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn direct_delivery_background_agent_does_not_hold_a_prompt() {
     use std::sync::atomic::Ordering;
