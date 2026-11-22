@@ -10,13 +10,22 @@ export type LegacyAdmin = {
   user: string; password: string; seesOwner: boolean; ownerSees: boolean;
   servers: { serverId: string; guestId: string; token: string; root: string }[];
 };
-/** Contas antigas lidas com o login de sincronização do dono, que fica aberto até `close`. */
+/** Máquina do cofre do dono, sem o token: o plano só precisa achá-la neste aparelho. */
+export type LegacyOwnerServer = Pick<Server, 'id' | 'label' | 'baseUrl' | 'connect'>;
+type Plan = { draft: GuestDraft; prev: GuestAccount } | { missing: string[] };
+
+/**
+ * Contas antigas lidas com o login de sincronização do dono, que fica aberto até `close`. Senha e acessos de cada
+ * conta continuam cifrados e só são abertos no `plan` da conta escolhida.
+ */
 export type LegacySession = {
   hub: string;
-  ownerServers: Server[];
-  guests: LegacyAdmin[];
+  users: string[];
+  /** `legacyGuestPlan` da conta `user`. Erro com `code` `sync_vault_unreadable` se ela não abrir. */
+  plan(user: string, mine: Server[], name?: string): Plan;
   /** Apaga a conta antiga; a que já tinha saído (404) conta como apagada. */
   remove(user: string): Promise<void>;
+  /** Sai do login e zera a chave do cofre. */
   close(): Promise<void>;
 };
 
@@ -29,33 +38,63 @@ function hubOf(server: Server): string {
   return normalizeMachineUrl(address);
 }
 
+const text = (value: unknown): value is string => typeof value === 'string';
+
+function isLegacyAdmin(value: unknown): value is LegacyAdmin {
+  const admin = (value ?? {}) as Partial<Record<keyof LegacyAdmin, unknown>>;
+  return text(admin.user) && !!admin.user && text(admin.password) && typeof admin.seesOwner === 'boolean'
+    && typeof admin.ownerSees === 'boolean' && Array.isArray(admin.servers)
+    && admin.servers.every((entry: unknown) => {
+      const { serverId, guestId, token, root } = (entry ?? {}) as Record<string, unknown>;
+      return text(serverId) && text(guestId) && text(token) && text(root);
+    });
+}
+
 /** Entra na sincronização do dono em `server` e lê as contas antigas. Erros com `code` como os do `syncSignIn`. */
 export async function openLegacyGuests(server: Server, user: string, password: string, crypto: SyncCrypto): Promise<LegacySession> {
   const session = await openSyncSession(hubOf(server), user, password, crypto);
+  const close = async () => {
+    session.encKey.fill(0);
+    await session.close();
+  };
   try {
     const vault = await session.call('/api/sync/vault');
     const rows = await session.call('/api/sync/guests');
     if (!vault.ok) throw fail('sync_request_failed', vault.status);
     if (!rows.ok) throw fail('sync_request_failed', rows.status);
-    let ownerServers: Server[];
-    let guests: LegacyAdmin[];
+    let ownerServers: LegacyOwnerServer[];
+    let sealed: Map<string, SealedBlob>;
+    const admin = (blob: SealedBlob) => {
+      const opened: unknown = crypto.decryptJson<unknown>(session.encKey, blob);
+      if (!isLegacyAdmin(opened)) throw fail('sync_vault_unreadable');
+      return opened;
+    };
     try {
       const blob = (await vault.json() as { enc_blob?: SealedBlob | null }).enc_blob;
-      const list = await rows.json() as { user: string; admin_blob: SealedBlob }[];
-      ownerServers = blob ? crypto.decryptJson<Server[]>(session.encKey, blob) : [];
-      guests = list.map((row) => crypto.decryptJson<LegacyAdmin>(session.encKey, row.admin_blob));
+      const list = await rows.json() as { admin_blob: SealedBlob }[];
+      ownerServers = (blob ? crypto.decryptJson<Server[]>(session.encKey, blob) : [])
+        .map(({ id, label, baseUrl, connect }) => ({ id, label, baseUrl, connect }));
+      // Cada conta é aberta uma vez para conferir a forma e o nome; o resto volta a ficar só cifrado.
+      sealed = new Map(list.map((row) => [admin(row.admin_blob).user, row.admin_blob]));
     } catch {
       throw fail('sync_vault_unreadable');
     }
     return {
-      hub: session.hub, ownerServers, guests, close: session.close,
+      hub: session.hub, users: [...sealed.keys()], close,
+      plan(guest, mine, name) {
+        const blob = sealed.get(guest);
+        if (!blob) throw fail('sync_vault_unreadable');
+        let opened: LegacyAdmin;
+        try { opened = admin(blob); } catch { throw fail('sync_vault_unreadable'); }
+        return legacyGuestPlan(opened, ownerServers, mine, name);
+      },
       async remove(guest) {
         const response = await session.call(`/api/sync/guests/${encodeURIComponent(guest)}/delete`, { method: 'POST' });
         if (!response.ok && response.status !== 404) throw fail('sync_request_failed', response.status);
       },
     };
   } catch (error) {
-    await session.close();
+    await close();
     throw error;
   }
 }
@@ -69,8 +108,7 @@ const hostOf = (url?: string) => {
  * nada é criado de novo. A máquina do cofre do dono é achada na lista deste aparelho pelo id ou pelo endereço.
  * `user`: nome novo, quando o antigo não serve no Connect.
  */
-export function legacyGuestPlan(admin: LegacyAdmin, ownerServers: Server[], mine: Server[], user: string = admin.user):
-  { draft: GuestDraft; prev: GuestAccount } | { missing: string[] } {
+export function legacyGuestPlan(admin: LegacyAdmin, ownerServers: LegacyOwnerServer[], mine: Server[], user: string = admin.user): Plan {
   const missing: string[] = [];
   const found = admin.servers.flatMap((entry) => {
     const owner = ownerServers.find((server) => server.id === entry.serverId);

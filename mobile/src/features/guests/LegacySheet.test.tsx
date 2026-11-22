@@ -2,7 +2,7 @@
 import React, { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { LegacySession, Server } from '@hangar/core';
+import { legacyGuestPlan, type LegacySession, type Server } from '@hangar/core';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mocks = vi.hoisted(() => ({ open: vi.fn(), save: vi.fn(), toastOk: vi.fn() }));
@@ -42,7 +42,8 @@ async function type(label: string, value: string) {
   expect(input, label).toBeTruthy();
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); });
 }
-const session = (remove: LegacySession['remove']): LegacySession => ({ hub: casa.baseUrl, ownerServers: [casa], guests: [lia], remove, close: vi.fn(async () => {}) });
+const session = (remove: LegacySession['remove']): LegacySession => ({ hub: casa.baseUrl, users: [lia.user],
+  plan: (_user, mine, name) => legacyGuestPlan(lia, [casa], mine, name), remove, close: vi.fn(async () => {}) });
 const sheet = (onChanged = vi.fn()) => <LegacySheet hub={casa} syncUser="dono" store={casa} machines={[{ server: casa }]} mine={[casa]}
   onClose={() => {}} onChanged={onChanged} />;
 const signIn = async () => {

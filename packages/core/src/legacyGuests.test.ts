@@ -42,8 +42,11 @@ describe('openLegacyGuests', () => {
     const hits = network();
     const session = await openLegacyGuests(casa, 'dono', 'senha-do-dono', crypto);
     expect(session.hub).toBe('https://casa.tail.ts.net');
-    expect(session.guests).toEqual([lia]);
-    expect(session.ownerServers.map((s) => s.id)).toEqual(['web-casa']);
+    expect(session.users).toEqual(['lia']);
+    // A máquina do cofre do dono (`web-casa`) é a `casa` deste aparelho pelo endereço.
+    expect(session.plan('lia', [casa])).toMatchObject({ draft: { user: 'lia', password: 'senha-da-lia', servers: [{ serverId: 'casa', root: '/srv/lia' }] },
+      prev: { servers: [{ serverId: 'casa', guestId: 'g-old', token: 'tok-old' }] } });
+    expect(Object.keys(session).sort()).toEqual(['close', 'hub', 'plan', 'remove', 'users']);
     expect(hits[0].path).toBe('/api/sync/prelogin?user=dono');
     expect(hits[1].body).toEqual({ user: 'dono', auth_hash: 'auth-ok' });
     await session.remove('lia');
@@ -87,6 +90,35 @@ describe('openLegacyGuests', () => {
     hits = network((hit) => (hit.path === '/api/sync/guests' ? json([{ user: 'lia', admin_blob: { iv: 'x', data: 'não é json' } }]) : undefined));
     await expect(openLegacyGuests(casa, 'dono', 'senha-do-dono', crypto)).rejects.toMatchObject({ code: 'sync_vault_unreadable' });
     expect(paths(hits).at(-1)).toBe('POST /api/sync/logout');
+  });
+
+  it.each([
+    { user: 'lia' },
+    { ...lia, password: undefined },
+    { ...lia, seesOwner: 'sim' },
+    { ...lia, servers: undefined },
+    { ...lia, servers: [{ serverId: 'web-casa', guestId: 'g-old', root: '/srv/lia' }] },
+    { ...lia, user: '' },
+  ])('conta antiga fora da forma é `sync_vault_unreadable` e sai do login: %j', async (admin) => {
+    const hits = network((hit) => (hit.path === '/api/sync/guests' ? json([{ user: 'lia', admin_blob: seal(admin) }]) : undefined));
+    await expect(openLegacyGuests(casa, 'dono', 'senha-do-dono', crypto)).rejects.toMatchObject({ code: 'sync_vault_unreadable' });
+    expect(paths(hits).at(-1)).toBe('POST /api/sync/logout');
+  });
+
+  it('`close` zera a chave do cofre', async () => {
+    network();
+    const key = new Uint8Array(32).fill(7);
+    const session = await openLegacyGuests(casa, 'dono', 'senha-do-dono', { ...crypto, deriveKeys: async () => ({ authHash: 'auth-ok', encKey: key }) });
+    await session.close();
+    expect([...key].every((byte) => byte === 0)).toBe(true);
+  });
+
+  it('conta que não está na lista não tem plano', async () => {
+    network();
+    const session = await openLegacyGuests(casa, 'dono', 'senha-do-dono', crypto);
+    let error: unknown;
+    try { session.plan('outra', [casa]); } catch (thrown) { error = thrown; }
+    expect(error).toMatchObject({ code: 'sync_vault_unreadable' });
   });
 });
 

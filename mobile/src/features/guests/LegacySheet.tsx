@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { legacyGuestPlan, normalizeGuestUser, openLegacyGuests, saveGuest, suggestGuestUser, validGuestUser, type GuestMachine,
-  type LegacyAdmin, type LegacySession, type Server } from '@hangar/core';
+import { normalizeGuestUser, openLegacyGuests, saveGuest, suggestGuestUser, validGuestUser, type GuestMachine,
+  type LegacySession, type Server } from '@hangar/core';
 import { MachineField, MachineGroup, MachineHelp, MachineRow } from '../machines/MachineRows';
 import { MachineSheet, Notice } from '../machines/parts';
 import { syncFailureText } from '../login/addressSignIn';
@@ -11,7 +11,7 @@ import { haptic } from '../../ui/haptics';
 import { failureText, thrownText } from './guestTools';
 import * as m from '../../paraglide/messages';
 
-type Renaming = { admin: LegacyAdmin; name: string };
+type Renaming = { user: string; name: string };
 
 /**
  * Contas antigas de uma máquina: o dono digita uma vez a senha da sincronização dela, e cada conta vira conta do
@@ -29,13 +29,16 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
   const owner = useConnect((s) => s.account?.name) || syncUser;
   const open = useRef<LegacySession | null>(null);
   const mounted = useRef(true);
+  // O estado `busy` só chega no próximo render: dois toques seguidos passariam os dois.
+  const inFlight = useRef(false);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; void open.current?.close(); };
   }, []);
 
   const signIn = async () => {
-    if (busy || !user.trim() || !password) return;
+    if (inFlight.current || !user.trim() || !password) return;
+    inFlight.current = true;
     setBusy(true);
     setErrors([]);
     try {
@@ -51,29 +54,32 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
       setErrors([syncFailureText(error)]);
       haptic.error();
     } finally {
+      inFlight.current = false;
       if (mounted.current) setBusy(false);
     }
   };
 
   // Nome sem `.` nem `@` não serve no Connect: a pessoa escolhe o novo antes de qualquer acesso mudar.
-  const pick = (admin: LegacyAdmin) => {
+  const pick = (legacy: string) => {
     setErrors([]);
-    if (validGuestUser(normalizeGuestUser(admin.user))) void bring(admin, admin.user);
-    else setRenaming({ admin, name: suggestGuestUser(admin.user, owner) });
+    if (validGuestUser(normalizeGuestUser(legacy))) void bring(legacy, legacy);
+    else setRenaming({ user: legacy, name: suggestGuestUser(legacy, owner) });
   };
 
-  const bring = async (admin: LegacyAdmin, name: string) => {
-    if (!session || busy) return;
-    const plan = legacyGuestPlan(admin, session.ownerServers, mine, name);
-    if ('missing' in plan) {
-      setErrors([m.guests_legacy_missing({ servidores: plan.missing.join(', ') })]);
-      haptic.error();
-      return;
-    }
+  const bring = async (legacy: string, name: string) => {
+    if (!session || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setErrors([]);
     let saved = false;
     try {
+      // A senha e os acessos da conta só são abertos aqui, e só desta conta.
+      const plan = session.plan(legacy, mine, name);
+      if ('missing' in plan) {
+        setErrors([m.guests_legacy_missing({ servidores: plan.missing.join(', ') })]);
+        haptic.error();
+        return;
+      }
       const result = await saveGuest(store, machines, plan.draft, plan.prev);
       if (result.errors.length) {
         const labelOf = (id: string) => mine.find((server) => server.id === id)?.label ?? id;
@@ -83,9 +89,9 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
         return;
       }
       saved = true;
-      await session.remove(admin.user);
+      await session.remove(legacy);
       setRenaming(null);
-      setSession({ ...session, guests: session.guests.filter((guest) => guest.user !== admin.user) });
+      setSession({ ...session, users: session.users.filter((guest) => guest !== legacy) });
       toast.ok(m.guests_legacy_brought({ usuario: plan.draft.user }));
       onChanged();
     } catch (error) {
@@ -96,6 +102,7 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
       setErrors([code?.startsWith('sync_') || code === 'network_failed' ? syncFailureText(error) : thrownText(error)]);
       haptic.error();
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
@@ -115,23 +122,23 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
       </MachineGroup>
     </> : renaming ? <>
       <MachineHelp>{m.guests_legacy_rename_help({
-        antigo: renaming.admin.user, novo: normalizeGuestUser(renaming.name) || renaming.name })}</MachineHelp>
+        antigo: renaming.user, novo: normalizeGuestUser(renaming.name) || renaming.name })}</MachineHelp>
       <MachineGroup>
         <MachineField label={m.guests_legacy_new_name()} value={renaming.name} editable={!busy} textContentType="username" autoComplete="off"
           onChangeText={(name) => setRenaming({ ...renaming, name })} returnKeyType="go"
-          onSubmitEditing={() => { void bring(renaming.admin, renaming.name); }} />
+          onSubmitEditing={() => { void bring(renaming.user, renaming.name); }} />
       </MachineGroup>
       {errors.map((text) => <Notice key={text} text={text} error />)}
       <MachineGroup>
         <MachineRow title={busy ? m.convidados_salvando() : m.guests_legacy_bring()} action disabled={busy || !renaming.name.trim()}
-          onPress={() => { void bring(renaming.admin, renaming.name); }} />
+          onPress={() => { void bring(renaming.user, renaming.name); }} />
         <MachineRow title={m.comum_cancelar()} action disabled={busy} onPress={() => { setRenaming(null); setErrors([]); }} />
       </MachineGroup>
     </> : <>
       <MachineGroup>
-        {session.guests.length === 0 ? <MachineRow title={m.guests_legacy_empty()} /> : null}
-        {session.guests.map((admin) => <MachineRow key={admin.user} title={admin.user} description={m.guests_legacy_account()}
-          value={m.guests_legacy_bring()} disabled={busy} onPress={() => pick(admin)} />)}
+        {session.users.length === 0 ? <MachineRow title={m.guests_legacy_empty()} /> : null}
+        {session.users.map((legacy) => <MachineRow key={legacy} title={legacy} description={m.guests_legacy_account()}
+          value={m.guests_legacy_bring()} disabled={busy} onPress={() => pick(legacy)} />)}
       </MachineGroup>
       {errors.map((text) => <Notice key={text} text={text} error />)}
     </>}

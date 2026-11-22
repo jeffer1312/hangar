@@ -23,6 +23,8 @@ export function GuestSheet({ store, machines, guest, onClose, onChanged }: {
   const [roots, setRoots] = useState<Record<string, string>>(() => Object.fromEntries((guest?.servers ?? []).map((s) => [s.serverId, s.root])));
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  // O estado `busy` só chega no próximo render: dois toques seguidos passariam os dois.
+  const inFlight = useRef(false);
   // O que as máquinas já têm: depois de uma gravação que falhou no meio, salvar de novo parte daqui e não cria o acesso duas vezes.
   const prev = useRef<GuestAccount | null>(guest);
   const known = new Set(machines.map((machine) => machine.server.id));
@@ -39,7 +41,7 @@ export function GuestSheet({ store, machines, guest, onClose, onChanged }: {
   });
 
   const save = async () => {
-    if (busy) return;
+    if (inFlight.current) return;
     const marked = Object.entries(roots);
     const problems = [
       !user.trim() ? m.convidados_usuario_obrigatorio() : '',
@@ -49,6 +51,7 @@ export function GuestSheet({ store, machines, guest, onClose, onChanged }: {
     ].filter(Boolean);
     setErrors(problems);
     if (problems.length) { haptic.error(); return; }
+    inFlight.current = true;
     setBusy(true);
     const created = !prev.current;
     try {
@@ -73,6 +76,7 @@ export function GuestSheet({ store, machines, guest, onClose, onChanged }: {
       setErrors([thrownText(error)]);
       haptic.error();
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
