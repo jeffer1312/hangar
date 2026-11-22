@@ -36,9 +36,12 @@ pub struct Sync {
     derive: fn(&str, &[u8]) -> String,
     lock: Mutex<()>,
     fails: Mutex<HashMap<String, Vec<f64>>>,
+    /// Quando o teto do Connect foi ao diário: a janela corre como a das tentativas.
+    ceiling_noted: Mutex<Vec<f64>>,
 }
 /// Teto de falhas somadas pela entrada do Connect, onde todo pedido tem o mesmo endereço.
 const CONNECT_CEILING: u32 = 20;
+const CONNECT_ALL: &str = "connect:*";
 const MAX_RATE_KEYS: usize = 4096;
 impl Sync {
     pub fn new(path: PathBuf, config_path: PathBuf, secret: Vec<u8>) -> Self {
@@ -56,6 +59,7 @@ impl Sync {
             rate_window: 300.into(),
             lock: Mutex::new(()),
             fails: Mutex::new(HashMap::new()),
+            ceiling_noted: Mutex::new(Vec::new()),
         }
     }
     pub fn enabled(&self) -> bool {
@@ -394,7 +398,16 @@ impl Sync {
     fn rate_keys(&self, user: &str, ip: &str) -> Vec<(String, num_bigint::BigInt)> {
         if ip != crate::devices::CONNECT_PEER { return vec![(ip.into(), self.rate_max.clone())]; }
         vec![(format!("connect:{}", hangar_guest_accounts::normalize(user)), self.rate_max.clone()),
-            ("connect:*".into(), &self.rate_max * CONNECT_CEILING)]
+            (CONNECT_ALL.into(), &self.rate_max * CONNECT_CEILING)]
+    }
+    /// O teto somado barra todo mundo que entra pelo Connect: vai ao diário, uma vez por janela.
+    fn note_connect_ceiling(&self, now: f64) {
+        let mut noted = self.ceiling_noted.lock().unwrap_or_else(|e| e.into_inner());
+        self.prune(&mut noted, now);
+        if noted.is_empty() {
+            noted.push(now);
+            self.diary.refused("sync.login_teto_connect", "teto_connect_atingido", "429");
+        }
     }
     fn prune(&self, hits: &mut Vec<f64>, now: f64) {
         hits.retain(|t| {
@@ -416,6 +429,7 @@ impl Sync {
                 let hits = all.entry(key.clone()).or_default();
                 self.prune(hits, now);
                 if num_bigint::BigInt::from(hits.len()) >= *max {
+                    if key == CONNECT_ALL { self.note_connect_ceiling(now); }
                     self.diary.access("sync.login", ip, "senha", Some("bloqueio_temporario"));
                     return Err(Failure::code(
                         429,
@@ -429,52 +443,68 @@ impl Sync {
             // Nome inventado vira chave nova a cada tentativa: a tabela não cresce sem fim.
             if all.len() > MAX_RATE_KEYS { all.retain(|_, hits| { self.prune(hits, now); !hits.is_empty() }); }
         }
-        let accepted = |generation: String, user: String| {
-            let mut all = self.fails.lock().unwrap_or_else(|e| e.into_inner());
-            for (key, _) in &keys {
-                if let Some(hits) = all.get_mut(key) && let Some(at) = hits.iter().rposition(|t| *t == now) { hits.remove(at); }
-            }
-            drop(all);
-            self.diary.access("sync.login", ip, "senha", None);
-            self.diary.event("sync.login_concluido");
-            Ok((json!({"ok":true}), generation, user))
-        };
+        let refused = std::cell::Cell::new(false);
         let refuse = || {
+            refused.set(true);
             self.diary.access("sync.login", ip, "senha", Some("credenciais_invalidas"));
             unauthorized()
         };
         let matches = |expected: &str, salt: &[u8]| bool::from((self.derive)(&auth, salt).as_bytes().ct_eq(expected.as_bytes()));
-        // A geração do cookie precisa pertencer à credencial que acabou de ser validada.
-        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        // Uma derivação por tentativa em todo caminho: o tempo não diz se o nome existe.
-        let (own, pending) = self.accounts_read(self.accounts.credential(&user))?;
-        if let Some(credential) = own {
-            if !matches(&credential.auth_verifier, &credential.verifier_salt) { return Err(refuse()); }
-            return accepted(credential.generation(), credential.user);
-        }
-        // Com a Sincronização desligada o cofre antigo não entra.
-        let vault = if self.enabled() { self.load()? } else { None };
-        let acc = match &vault { Some(vault) => account(vault, &user)?, None => None };
-        let Some(acc) = acc.filter(|v| truthy(v)) else {
-            let _ = (self.derive)(&auth, &[0; 16]);
-            // O nome pode ser de um convidado do arquivo ilegível: recusa com a falha, não com "senha errada".
-            if let Some(failure) = pending { return Err(failure); }
-            return Err(refuse());
+        let checked = || -> Result<(String, String)> {
+            // A geração do cookie precisa pertencer à credencial que acabou de ser validada.
+            let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+            // Uma derivação por tentativa em todo caminho: o tempo não diz se o nome existe.
+            let (own, pending) = self.accounts_read(self.accounts.credential(&user))?;
+            if let Some(credential) = own {
+                if !matches(&credential.auth_verifier, &credential.verifier_salt) { return Err(refuse()); }
+                return Ok((credential.generation(), credential.user));
+            }
+            // Com a Sincronização desligada o cofre antigo não entra.
+            let vault = if self.enabled() { self.load()? } else { None };
+            let acc = match &vault { Some(vault) => account(vault, &user)?, None => None };
+            let Some(acc) = acc.filter(|v| truthy(v)) else {
+                let _ = (self.derive)(&auth, &[0; 16]);
+                // O nome pode ser de um convidado do arquivo ilegível: recusa com a falha, não com "senha errada".
+                if let Some(failure) = pending { return Err(failure); }
+                return Err(refuse());
+            };
+            let salt = stored_base64(&acc["verifier_salt"])?;
+            let expected = acc.get("auth_verifier").and_then(Value::as_str).filter(|s| s.is_ascii()).ok_or_else(unreadable)?;
+            if !matches(expected, &salt) {
+                return Err(refuse());
+            }
+            Ok((generation_of(acc)?, user.clone()))
         };
-        let salt = stored_base64(&acc["verifier_salt"])?;
-        let expected = acc.get("auth_verifier").and_then(Value::as_str).filter(|s| s.is_ascii()).ok_or_else(unreadable)?;
-        if !matches(expected, &salt) {
-            return Err(refuse());
+        let checked = checked();
+        // Só a senha recusada gasta a tentativa: arquivo ilegível ou gravação que falha não é palpite de senha.
+        if !refused.get() {
+            let mut all = self.fails.lock().unwrap_or_else(|e| e.into_inner());
+            for (key, _) in &keys {
+                if let Some(hits) = all.get_mut(key) && let Some(at) = hits.iter().rposition(|t| *t == now) { hits.remove(at); }
+            }
         }
-        accepted(generation_of(acc)?, user)
+        let (generation, user) = checked?;
+        self.diary.access("sync.login", ip, "senha", None);
+        self.diary.event("sync.login_concluido");
+        Ok((json!({"ok":true}), generation, user))
     }
     /// Um nome vive num cofre só: sem ler o outro, não dá para saber se ele já é de lá, e a leitura que falha recusa.
     pub(super) fn ensure_name_free(&self, user: &str, into: NameInto) -> Result<()> {
         let taken = match into {
             NameInto::Legacy => self.accounts.contains(user).map_err(accounts_failure)?,
             NameInto::Guests => {
-                let owner = self.load()?.and_then(|vault| vault.get("user").and_then(Value::as_str).map(str::to_owned));
-                owner.is_some_and(|owner| hangar_guest_accounts::normalize(&owner) == hangar_guest_accounts::normalize(user))
+                let wanted = hangar_guest_accounts::normalize(user);
+                let same = |name: &str| hangar_guest_accounts::normalize(name) == wanted;
+                match self.load()? {
+                    None => false,
+                    Some(vault) => {
+                        let guests = match vault.get("guests").filter(|value| truthy(value)) {
+                            Some(guests) => guests.as_object().ok_or_else(unreadable)?.keys().any(|name| same(name)),
+                            None => false,
+                        };
+                        guests || vault.get("user").and_then(Value::as_str).is_some_and(same)
+                    }
+                }
             }
         };
         if taken { Err(Failure::code(409, "erro_usuario_em_uso", "usuário já existe")) } else { Ok(()) }
@@ -538,6 +568,7 @@ impl Sync {
         validate_blob(&b["enc_blob"])?;
         validate_blob(&b["admin_blob"])?;
         v::forbid_extra(b, &["user", "salt", "auth_hash", "enc_blob", "admin_blob"])?;
+        self.ensure_name_free(name, NameInto::Legacy)?;
         if vault["user"] == name {
             return Err(Failure::code(
                 409,
@@ -807,6 +838,62 @@ mod guest_login_tests {
         store::write(&sync.path, &json!({"user":"ana.silva","salt":"s","verifier_salt":STANDARD.encode([3u8; 16]),
             "auth_verifier":verifier("h",&[3u8; 16]),"enc_blob":null,"rev":0})).unwrap();
         assert_eq!(sync.owner(Some("ana.silva")).err().unwrap().status, 403);
+    }
+
+    #[test]
+    fn a_guest_of_the_old_vault_and_a_new_guest_account_do_not_share_a_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let sync = hub(dir.path(), true);
+        owner(&sync, "jeff.f");
+        let blob = json!({"iv":STANDARD.encode([0u8; 12]),"data":STANDARD.encode([0u8; 18])});
+        let old_guest = |user: &str| json!({"user":user,"salt":STANDARD.encode([1u8; 16]),"auth_hash":STANDARD.encode([2u8; 32]),
+            "enc_blob":blob,"admin_blob":blob});
+        sync.put_guest(&old_guest("Bia.Souza"), Some("jeff.f"), |n| vec![7; n]).unwrap();
+        let refused = sync.ensure_name_free("bia.souza", NameInto::Guests).err().unwrap();
+        assert_eq!((refused.status, refused.body["detail"]["code"].as_str()), (409, Some("erro_usuario_em_uso")), "conta nova com nome de convidado do cofre antigo");
+        assert!(sync.ensure_name_free("caio.lima", NameInto::Guests).is_ok());
+
+        guest(&sync, "ana.silva", "x");
+        let refused = sync.put_guest(&old_guest("ana.silva"), Some("jeff.f"), |n| vec![7; n]).err().unwrap();
+        assert_eq!((refused.status, refused.body["detail"]["code"].as_str()), (409, Some("erro_usuario_em_uso")), "convidado antigo com nome de conta nova");
+        assert!(sync.load().unwrap().unwrap()["guests"].get("ana.silva").is_none(), "nada gravado no cofre antigo");
+    }
+
+    #[test]
+    fn a_login_that_fails_without_a_refused_password_gives_the_attempt_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sync = hub(dir.path(), true);
+        sync.rate_max = 1.into();
+        owner(&sync, "jeff.f");
+        std::fs::write(sync.accounts.path(), b"{corrompido").unwrap();
+        for _ in 0..3 {
+            assert_eq!(login(&sync, "ana.silva", "x", "10.0.0.1").err().unwrap().status, 500, "arquivo de convidados corrompido não vira 429");
+        }
+        std::fs::remove_file(sync.accounts.path()).unwrap();
+        std::fs::write(&sync.path, b"{corrompido").unwrap();
+        for _ in 0..3 {
+            assert_eq!(login(&sync, "jeff.f", "owner-hash", "10.0.0.1").err().unwrap().status, 500, "cofre corrompido não vira 429");
+        }
+    }
+
+    #[test]
+    fn the_connect_ceiling_goes_to_the_diary_once_per_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sync = hub(dir.path(), true);
+        sync.rate_max = 1.into();
+        let diary = dir.path().join("diary");
+        sync.diary.directory = Some(diary.clone());
+        let noted = || std::fs::read_dir(&diary).map(|entries| entries.map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap()
+            .matches("sync.login_teto_connect").count()).sum::<usize>()).unwrap_or(0);
+        let peer = crate::devices::CONNECT_PEER;
+        let attempt = |user: String, now: f64| sync.login_snapshot(&json!({"user":user,"auth_hash":"x"}), now, peer).err().unwrap().status;
+        for now in [1000.0, 1400.0] {
+            for i in 0..CONNECT_CEILING {
+                assert_eq!(attempt(format!("nome{i}.x"), now), 401);
+            }
+            assert_eq!((attempt("outro.x".into(), now), attempt("mais.um".into(), now)), (429, 429));
+        }
+        assert_eq!(noted(), 2, "uma nota por janela");
     }
 
     #[test]
