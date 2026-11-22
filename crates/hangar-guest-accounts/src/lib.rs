@@ -11,12 +11,16 @@ mod crypto;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::watch;
 
-pub use crypto::{Blob, ITERATIONS, Keys, decrypt, derive_keys, user_hash};
+pub use crypto::{Blob, ITERATIONS, Keys, decrypt, derive_keys, user_hash, verifier};
+/// O nome como o arquivo e o serviço o guardam: a mesma regra dos clientes, que mandam o nome ao serviço.
+pub use hangar_connect_client::normalize_name as normalize;
 
 const MAX_SERVERS: usize = 64;
 const MAX_PASSWORD: usize = 1024;
@@ -25,16 +29,12 @@ pub fn path(home: &Path) -> PathBuf {
     home.join(".hangar").join("guest-accounts.json")
 }
 
-/// O nome como o arquivo e o serviço o guardam.
-pub fn normalize(user: &str) -> String {
-    user.trim().to_ascii_lowercase()
-}
-
-/// Conta do Connect não aceita `.` nem `@`: com um deles, o nome nunca colide com uma conta.
+/// O `.` ou `@` dos clientes ([`hangar_connect_client::valid_guest_user`]), que conta do Connect não aceita: com um
+/// deles, o nome nunca colide com uma conta. O arquivo guarda ainda só ASCII minúsculo, de 3 a 64.
 pub fn valid_user(user: &str) -> bool {
     (3..=64).contains(&user.len())
         && user.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._@+-".contains(&b))
-        && user.contains(['.', '@'])
+        && hangar_connect_client::valid_guest_user(user)
 }
 
 #[derive(Debug)]
@@ -113,7 +113,7 @@ impl Credential {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Doc {
     /// Base64 de 32 bytes: deriva o sal falso de nome inexistente.
     secret: String,
@@ -146,42 +146,86 @@ struct Server {
     root: String,
 }
 
+/// Data de modificação e tamanho: o arquivo lido continua o mesmo enquanto os dois não mudam.
+type Stamp = (SystemTime, u64);
+
 pub struct Store {
     path: PathBuf,
     lock: Mutex<()>,
+    /// A última leitura, para um pedido que consulta o arquivo várias vezes não o ler a cada uma.
+    cache: Mutex<Option<(Stamp, Arc<Doc>)>>,
+    /// Conta gravada ou apagada; quem publica o diretório no serviço segue este sinal.
+    changed: watch::Sender<u64>,
 }
 
 impl Store {
     pub fn new(path: PathBuf) -> Self {
-        Self { path, lock: Mutex::new(()) }
+        Self { path, lock: Mutex::new(()), cache: Mutex::new(None), changed: watch::channel(0).0 }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Ausente é `None`; ilegível é erro, nunca arquivo vazio: a próxima gravação apagaria as contas.
-    fn load(&self) -> Result<Option<Doc>, Error> {
-        match hangar_core::fs::read_replaced(&self.path) {
-            Ok(raw) => serde_json::from_slice::<Doc>(&raw).ok().filter(|doc| crypto::decode::<32>(&doc.secret).is_some())
-                .map(Some).ok_or(Error::Unreadable),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(Error::Io(error)),
-        }
+    /// Muda a cada conta gravada ou apagada por este processo.
+    pub fn changes(&self) -> watch::Receiver<u64> {
+        self.changed.subscribe()
     }
 
-    fn write(&self, doc: &Doc) -> Result<(), Error> {
+    fn cached(&self) -> MutexGuard<'_, Option<(Stamp, Arc<Doc>)>> {
+        self.cache.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `None` quando o sistema não diz: aí o arquivo é lido de novo, sem guardar.
+    fn stamp(&self) -> Option<Stamp> {
+        let meta = std::fs::metadata(&self.path).ok()?;
+        Some((meta.modified().ok()?, meta.len()))
+    }
+
+    /// Ausente é `None`; ilegível é erro, nunca arquivo vazio: a próxima gravação apagaria as contas.
+    /// A data é lida antes do conteúdo: troca no meio deixa a data velha guardada, e a próxima leitura relê.
+    fn load(&self) -> Result<Option<Arc<Doc>>, Error> {
+        let stamp = self.stamp();
+        if let Some((seen, doc)) = &*self.cached() && Some(*seen) == stamp {
+            return Ok(Some(doc.clone()));
+        }
+        let doc = match hangar_core::fs::read_replaced(&self.path) {
+            Ok(raw) => serde_json::from_slice::<Doc>(&raw).ok().filter(|doc| crypto::decode::<32>(&doc.secret).is_some())
+                .map(Arc::new).ok_or(Error::Unreadable)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::Io(error)),
+        };
+        if let Some(stamp) = stamp {
+            *self.cached() = Some((stamp, doc.clone()));
+        }
+        Ok(Some(doc))
+    }
+
+    /// O que vai ser alterado: cópia da leitura, nunca a guardada.
+    fn load_owned(&self) -> Result<Option<Doc>, Error> {
+        Ok(self.load()?.map(Arc::unwrap_or_clone))
+    }
+
+    fn write(&self, doc: Doc) -> Result<(), Error> {
         let parent = self.path.parent().ok_or_else(|| io::Error::other("arquivo sem pasta"))?;
         std::fs::create_dir_all(parent)?;
-        let bytes = serde_json::to_vec_pretty(doc).map_err(io::Error::other)?;
+        let bytes = serde_json::to_vec_pretty(&doc).map_err(io::Error::other)?;
+        *self.cached() = None;
         hangar_core::fs::atomic_write(&self.path, &bytes)?;
         // `0600` não protege no Windows: o arquivo fica só para o usuário.
         #[cfg(windows)]
         hangar_core::private_acl::restrict_path(&self.path, "")?;
+        if let Some(stamp) = self.stamp() {
+            *self.cached() = Some((stamp, Arc::new(doc)));
+        }
         Ok(())
     }
 
-    fn guard(&self) -> std::sync::MutexGuard<'_, ()> {
+    fn announce(&self) {
+        self.changed.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    fn guard(&self) -> MutexGuard<'_, ()> {
         self.lock.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -211,21 +255,26 @@ impl Store {
         if input.servers.len() > MAX_SERVERS {
             return Err(Error::Invalid("servers"));
         }
+        // Fora da trava: as 800 mil voltas da senha nova não seguram as outras gravações.
+        let fresh = match password {
+            Some(password) => {
+                let salt = crypto::random::<16>()?;
+                let keys = derive_keys(&password, &salt, ITERATIONS);
+                // Sal do verificador novo: a geração dos cookies muda e as sessões da senha antiga caem.
+                let verifier_salt = crypto::random::<16>()?;
+                Some((crypto::encode(&salt), crypto::encode(&verifier_salt), verifier(&keys.auth_hash, &verifier_salt), keys.enc_key))
+            }
+            None => None,
+        };
         let _guard = self.guard();
-        let mut doc = match self.load()? {
+        let mut doc = match self.load_owned()? {
             Some(doc) => doc,
             None => Doc { secret: crypto::encode(&crypto::random::<32>()?), accounts: BTreeMap::new(), taken: BTreeSet::new() },
         };
         let previous = doc.accounts.get(&user);
         let servers = merge_servers(input.servers, previous)?;
-        let (salt, verifier_salt, auth_verifier, enc_key) = match (password, previous) {
-            (Some(password), _) => {
-                let salt = crypto::random::<16>()?;
-                let keys = derive_keys(&password, &salt, ITERATIONS);
-                // Sal do verificador novo: a geração dos cookies muda e as sessões da senha antiga caem.
-                let verifier_salt = crypto::random::<16>()?;
-                (crypto::encode(&salt), crypto::encode(&verifier_salt), crypto::verifier(&keys.auth_hash, &verifier_salt), keys.enc_key)
-            }
+        let (salt, verifier_salt, auth_verifier, enc_key) = match (fresh, previous) {
+            (Some(fresh), _) => fresh,
             (None, Some(previous)) => {
                 let key = crypto::decode::<32>(&previous.enc_key).ok_or(Error::Unreadable)?;
                 (previous.salt.clone(), previous.verifier_salt.clone(), previous.auth_verifier.clone(), key)
@@ -240,18 +289,21 @@ impl Store {
             sees_owner: input.sees_owner, owner_sees: input.owner_sees, servers, rev };
         let result = summary(&user, &account, &doc.taken);
         doc.accounts.insert(user, account);
-        self.write(&doc)?;
+        self.write(doc)?;
+        self.announce();
         Ok(result)
     }
 
     pub fn remove(&self, user: &str) -> Result<(), Error> {
         let user = normalize(user);
         let _guard = self.guard();
-        let mut doc = self.load()?.ok_or(Error::NotFound)?;
+        let mut doc = self.load_owned()?.ok_or(Error::NotFound)?;
         doc.accounts.remove(&user).ok_or(Error::NotFound)?;
         doc.taken.remove(&user);
         // O arquivo fica, mesmo vazio: o segredo dele mantém o sal falso igual.
-        self.write(&doc)
+        self.write(doc)?;
+        self.announce();
+        Ok(())
     }
 
     /// Os hashes que o serviço guarda. `None` = nunca houve conta aqui: nada a publicar.
@@ -262,13 +314,13 @@ impl Store {
     /// Guarda os nomes que o serviço recusou, pela resposta de `PUT /v1/guests`.
     pub fn mark_taken(&self, hashes: &[String]) -> Result<(), Error> {
         let _guard = self.guard();
-        let Some(mut doc) = self.load()? else { return Ok(()) };
+        let Some(mut doc) = self.load_owned()? else { return Ok(()) };
         let taken: BTreeSet<String> = doc.accounts.keys().filter(|user| hashes.contains(&user_hash(user))).cloned().collect();
         if taken == doc.taken {
             return Ok(());
         }
         doc.taken = taken;
-        self.write(&doc)
+        self.write(doc)
     }
 
     /// `(sal, conta existe)`. Nome inexistente recebe um sal falso estável, do segredo do arquivo.
@@ -292,10 +344,7 @@ impl Store {
 
     /// A geração do cookie: muda quando a senha muda.
     pub fn generation(&self, user: &str) -> Result<Option<String>, Error> {
-        let Some(doc) = self.load()? else { return Ok(None) };
-        let Some(account) = doc.accounts.get(&normalize(user)) else { return Ok(None) };
-        let salt = crypto::decode::<16>(&account.verifier_salt).ok_or(Error::Unreadable)?;
-        Ok(Some(generation(&salt)))
+        Ok(self.credential(user)?.map(|credential| credential.generation()))
     }
 
     pub fn vault(&self, user: &str) -> Result<Option<(Blob, u64)>, Error> {
@@ -304,8 +353,8 @@ impl Store {
     }
 }
 
-/// Como o `generation_of` do cofre antigo: os quatro primeiros bytes do sal do verificador.
-fn generation(verifier_salt: &[u8]) -> String {
+/// A geração do cookie, a mesma no cofre antigo: os quatro primeiros bytes do sal do verificador.
+pub fn generation(verifier_salt: &[u8]) -> String {
     verifier_salt.iter().take(4).map(|b| format!("{b:02x}")).collect()
 }
 
@@ -454,6 +503,17 @@ mod tests {
         assert!(!store.any().unwrap());
         assert_eq!(store.user_hashes().unwrap(), Some(vec![]), "lista vazia ainda é publicada");
         assert_eq!(store.prelogin("zz.zz").unwrap().unwrap().0, fake);
+    }
+
+    #[test]
+    fn writes_are_announced_and_a_file_changed_elsewhere_is_read_again() {
+        let (_dir, store) = store();
+        let changes = store.changes();
+        store.save(save("ana.silva", Some("x"), vec![])).unwrap();
+        assert!(changes.has_changed().unwrap(), "conta gravada avisa");
+        assert_eq!(store.list().unwrap().len(), 1);
+        std::fs::write(store.path(), b"{nao-e-json").unwrap();
+        assert!(matches!(store.list(), Err(Error::Unreadable)), "a leitura guardada não esconde o arquivo trocado");
     }
 
     #[test]

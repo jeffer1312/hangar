@@ -11,7 +11,8 @@ pub(crate) use hangar_connect_client::crypto::{encrypt, random};
 /// O custo do verificador guardado, o mesmo do `sync-vault.json`.
 const VERIFIER_ITERATIONS: u32 = 200_000;
 
-pub(crate) fn verifier(auth_hash: &str, salt: &[u8]) -> String {
+/// `PBKDF2-SHA256(auth_hash, salt, 200 mil)` em base64: o verificador guardado aqui e no `sync-vault.json`.
+pub fn verifier(auth_hash: &str, salt: &[u8]) -> String {
     let mut out = [0u8; 32];
     let iterations = NonZeroU32::new(VERIFIER_ITERATIONS).expect("constante positiva");
     pbkdf2::derive(pbkdf2::PBKDF2_HMAC_SHA256, iterations, salt, auth_hash.as_bytes(), &mut out);

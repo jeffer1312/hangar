@@ -4,11 +4,21 @@ use super::{
     validation as v,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use ring::{hmac, pbkdf2};
+use hangar_guest_accounts::verifier;
+use ring::hmac;
 use serde_json::{Value, json};
 use crate::orchestration::truthy;
-use std::{collections::HashMap, num::NonZeroU32, path::PathBuf, sync::Mutex};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 use subtle::ConstantTimeEq;
+
+/// Para onde vai o nome que precisa estar livre no outro cofre.
+#[derive(Clone, Copy)]
+pub(super) enum NameInto {
+    /// Dono do cofre antigo: não pode ser conta de convidado desta máquina.
+    Legacy,
+    /// Conta de convidado nova: não pode tomar o nome do dono do cofre antigo.
+    Guests,
+}
 
 pub struct Sync {
     pub(super) diary: super::diary::Diary,
@@ -295,11 +305,9 @@ impl Sync {
                 "bad bootstrap",
             ));
         }
-        // Sem ler o arquivo novo não dá para saber se o nome já é de um convidado: recusa.
-        if self.accounts.contains(&user).map_err(accounts_failure)? {
+        self.ensure_name_free(&user, NameInto::Legacy).inspect_err(|failure| if failure.status == 409 {
             self.diary.refused("sync.cadastro_recusado", "nome_de_convidado", "409");
-            return Err(Failure::code(409, "erro_usuario_em_uso", "usuário já existe"));
-        }
+        })?;
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         if self.load()?.is_some() {
             self.diary.refused("sync.cadastro_recusado", "ja_cadastrado", "403");
@@ -331,9 +339,7 @@ impl Sync {
             if !b["enc_blob"].is_null() {
                 validate_blob(&b["enc_blob"])?;
             }
-            if self.accounts.contains(&user).map_err(accounts_failure)? {
-                return Err(Failure::code(409, "erro_usuario_em_uso", "usuário já existe"));
-            }
+            self.ensure_name_free(&user, NameInto::Legacy)?;
         }
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         self.setup_status()?;
@@ -462,9 +468,16 @@ impl Sync {
         }
         accepted(generation_of(acc)?, user)
     }
-    /// O dono do cofre antigo: conta de convidado nova não pode tomar o nome dele.
-    pub(super) fn legacy_owner(&self) -> Result<Option<String>> {
-        Ok(self.load()?.and_then(|vault| vault.get("user").and_then(Value::as_str).map(str::to_owned)))
+    /// Um nome vive num cofre só: sem ler o outro, não dá para saber se ele já é de lá, e a leitura que falha recusa.
+    pub(super) fn ensure_name_free(&self, user: &str, into: NameInto) -> Result<()> {
+        let taken = match into {
+            NameInto::Legacy => self.accounts.contains(user).map_err(accounts_failure)?,
+            NameInto::Guests => {
+                let owner = self.load()?.and_then(|vault| vault.get("user").and_then(Value::as_str).map(str::to_owned));
+                owner.is_some_and(|owner| hangar_guest_accounts::normalize(&owner) == hangar_guest_accounts::normalize(user))
+            }
+        };
+        if taken { Err(Failure::code(409, "erro_usuario_em_uso", "usuário já existe")) } else { Ok(()) }
     }
     fn put_vault(&self, b: &Value, user: &str) -> Result<Value> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -609,8 +622,7 @@ fn stored_base64(value: &Value) -> Result<Vec<u8>> {
     if position == 0 { Ok(output) } else { Err(invalid()) }
 }
 fn generation_of(v: &Value) -> Result<String> {
-    let salt = stored_base64(&v["verifier_salt"])?;
-    Ok(salt.iter().take(4).map(|b| format!("{b:02x}")).collect())
+    Ok(hangar_guest_accounts::generation(&stored_base64(&v["verifier_salt"])?))
 }
 fn sign(secret: &[u8], bytes: &[u8]) -> String {
     hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, secret), bytes)
@@ -618,17 +630,6 @@ fn sign(secret: &[u8], bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
-}
-pub fn verifier(auth: &str, salt: &[u8]) -> String {
-    let mut out = [0; 32];
-    pbkdf2::derive(
-        pbkdf2::PBKDF2_HMAC_SHA256,
-        NonZeroU32::new(200000).unwrap(),
-        salt,
-        auth.as_bytes(),
-        &mut out,
-    );
-    STANDARD.encode(out)
 }
 pub fn unauthorized() -> Failure {
     Failure::code(401, "erro_nao_autorizado", "unauthorized")

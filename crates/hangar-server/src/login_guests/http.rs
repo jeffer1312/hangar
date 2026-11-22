@@ -105,7 +105,7 @@ impl Service {
         sync.rate_window = settings.rate_window;
         Self {
             store: Store::shared(settings.guests),
-            directory: super::directory::Publisher::new(sync.accounts.clone()),
+            directory: super::directory::Publisher::default(),
             config_error: None,
             needs_initialization:false,
             lives: std::sync::OnceLock::new(),
@@ -389,10 +389,7 @@ impl Service {
             ("POST", "") => {
                 let input: hangar_guest_accounts::Save = serde_json::from_value(crate::orchestration::codec::clone_value(body))
                     .map_err(|_| Failure::code(400, "erro_convidado_invalido", "pedido inválido"))?;
-                let wanted = hangar_guest_accounts::normalize(&input.user);
-                if self.sync.legacy_owner()?.is_some_and(|owner| hangar_guest_accounts::normalize(&owner) == wanted) {
-                    return Err(Failure::code(409, "erro_usuario_em_uso", "usuário já existe"));
-                }
+                self.sync.ensure_name_free(&input.user, super::sync::NameInto::Guests)?;
                 encode(&accounts.save(input).map_err(accounts_failure)?)
             }
             ("POST", rest) => {
@@ -511,7 +508,6 @@ pub async fn route(
     let accounts = path == "/api/guest-accounts" || path.starts_with("/api/guest-accounts/");
     let admin = path == "/api/me" || path == "/api/guests" || path.starts_with("/api/guests/") || accounts
         || path == "/api/sync/setup" || path == "/api/sync/setup/disable";
-    let changes_accounts = accounts && request.method() == Method::POST;
     let admission = admin.then(|| crate::routes::owner_gate(&st, peer, &request));
     let response = st
         .login_guests
@@ -528,7 +524,6 @@ pub async fn route(
     }
     if response.status().is_success() {
         st.list.invalidate();
-        if changes_accounts { st.login_guests.directory.publish(); }
     }
     response
 }

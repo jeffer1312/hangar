@@ -14,6 +14,8 @@ base64 = "=0.23.1"
 ring.workspace = true
 serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+# Aviso de conta gravada ou apagada para quem publica o diretório; features do hangar-core.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
 
 [dev-dependencies]
 tempfile.workspace = true
