@@ -1149,7 +1149,10 @@ impl NewSession {
 
     /// Trocar de provider preserva o modo escolhido e relê as opções e permissões dele.
     fn choose_provider(&mut self, provider: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        if provider != self.provider { self.scheduled_touch(&scheduled_launch::provider_switch(self.scheduled_original.is_some())); }
+        if provider != self.provider && self.scheduled {
+            scheduled_launch::switch_provider(&mut self.scheduled_changed, self.scheduled_original.is_some());
+            self.scheduled_touch(&["provider"]);
+        }
         self.set_provider(provider, window, cx);
     }
 
