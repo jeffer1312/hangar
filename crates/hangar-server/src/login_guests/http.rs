@@ -261,7 +261,7 @@ impl Service {
                 }
                 let (u, g) = result?;
                 // O cofre dessa conta é cifrado pela máquina: o que o cliente gravasse seria apagado na próxima edição.
-                if path == "vault" && method == Method::PUT && self.sync.accounts.contains(&u).map_err(super::sync::accounts_failure)? {
+                if path == "vault" && method == Method::PUT && self.sync.accounts_read(self.sync.accounts.contains(&u))?.0 {
                     return Err(Failure::code(403, "erro_cofre_do_servidor", "o cofre deste convidado é gravado pela máquina"));
                 }
                 user = Some(u);

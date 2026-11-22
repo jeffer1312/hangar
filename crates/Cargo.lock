@@ -1878,7 +1878,6 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "subtle",
  "tempfile",
 ]
 

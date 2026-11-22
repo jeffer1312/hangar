@@ -12,7 +12,6 @@ base64 = "=0.23.1"
 ring.workspace = true
 serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
-subtle = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true

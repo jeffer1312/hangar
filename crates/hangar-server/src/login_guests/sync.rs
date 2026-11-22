@@ -22,6 +22,8 @@ pub struct Sync {
     pub rate_window: num_bigint::BigInt,
     /// Contas de convidado guardadas pela máquina: o login delas vale sem a Sincronização ligada.
     pub(super) accounts: std::sync::Arc<hangar_guest_accounts::Store>,
+    /// O verificador do login, trocado nas provas para contar as derivações.
+    derive: fn(&str, &[u8]) -> String,
     lock: Mutex<()>,
     fails: Mutex<HashMap<String, Vec<f64>>>,
 }
@@ -33,6 +35,7 @@ impl Sync {
         Self {
             diary: Default::default(),
             accounts: std::sync::Arc::new(hangar_guest_accounts::Store::new(path.with_file_name("guest-accounts.json"))),
+            derive: verifier,
             path,
             config_path,
             secret,
@@ -47,6 +50,19 @@ impl Sync {
     }
     pub fn enabled(&self) -> bool {
         crate::config_sync::runtime::sync_enabled(&self.config_path, self.enabled)
+    }
+    /// Arquivo de convidados ilegível não tira a entrada do dono da Sincronização: vale como "sem conta
+    /// nova" e vai ao diário. A falha volta junto, para quem não achar o nome no cofre antigo recusar com ela.
+    pub(super) fn accounts_read<T: Default>(&self, read: std::result::Result<T, hangar_guest_accounts::Error>) -> Result<(T, Option<Failure>)> {
+        use hangar_guest_accounts::Error;
+        match read {
+            Ok(value) => Ok((value, None)),
+            Err(error @ (Error::Unreadable | Error::Io(_))) if self.enabled() => {
+                self.diary.refused("sync.convidados_ilegiveis", "arquivo_ilegivel", "500");
+                Ok((T::default(), Some(accounts_failure(error))))
+            }
+            Err(error) => Err(accounts_failure(error)),
+        }
     }
     fn load(&self) -> Result<Option<crate::orchestration::codec::ValueGuard>> {
         let unreadable = || Failure::code(500, "sync_vault_unreadable", "cofre ilegível");
@@ -114,14 +130,18 @@ impl Sync {
     }
     pub fn authenticate(&self, cookie: &str, now: u64) -> Result<(String, Option<String>)> {
         let (user, generation) = self.verify(cookie, now).ok_or_else(unauthorized)?;
-        if let Some(current) = self.accounts.generation(&user).map_err(accounts_failure)? {
+        let (current, mut pending) = self.accounts_read(self.accounts.generation(&user))?;
+        if let Some(current) = current {
             // O login destas contas sempre grava a geração: cookie sem ela ou de senha antiga não vale.
             if generation.as_deref() != Some(current.as_str()) { return Err(unauthorized()); }
             return Ok((user, generation));
         }
         if !self.enabled() { return Err(unauthorized()); }
-        if let Some(vault) = self.load()?.filter(|value|truthy(value)) {
-            let acc = account(&vault, &user)?.ok_or_else(unauthorized)?;
+        let vault = self.load()?.filter(|value|truthy(value));
+        // Sem cofre antigo ele aceitaria qualquer nome assinado: com o arquivo novo ilegível, ninguém se resolve.
+        if vault.is_none() && let Some(failure) = pending.take() { return Err(failure); }
+        if let Some(vault) = vault {
+            let Some(acc) = account(&vault, &user)? else { return Err(pending.unwrap_or_else(unauthorized)) };
             let invalid = match generation.as_deref() {
                 Some(generation) => generation_of(acc)? != generation,
                 None => vault["user"] != user,
@@ -157,7 +177,8 @@ impl Sync {
             ("POST", "login") => self.login(body, now, ip).map(|(value, ..)| value),
             ("POST", "logout") => { self.diary.event("sync.logout"); Ok(json!({"ok":true})) },
             ("GET", "vault") => {
-                if let Some((blob, rev)) = self.accounts.vault(user.unwrap_or_default()).map_err(accounts_failure)? {
+                // Ilegível aqui: o `authenticate` já resolveu o nome pelo cofre antigo.
+                if let (Some((blob, rev)), _) = self.accounts_read(self.accounts.vault(user.unwrap_or_default()))? {
                     return Ok(json!({"enc_blob":blob,"rev":rev}));
                 }
                 let Some(vault) = self.load()?.filter(|value|truthy(value)) else {
@@ -207,6 +228,10 @@ impl Sync {
             .ok_or_else(|| Failure::code(403, "erro_so_dono", "só o dono"))?;
         if !vault.is_object() { return Err(unreadable()); }
         if vault["user"].as_str() != user {
+            return Err(Failure::code(403, "erro_so_dono", "só o dono"));
+        }
+        // Conta de convidado com o mesmo nome: o cookie dela não administra o cofre do dono.
+        if self.accounts_read(self.accounts.contains(user.unwrap_or_default()))?.0 {
             return Err(Failure::code(403, "erro_so_dono", "só o dono"));
         }
         Ok(vault)
@@ -270,6 +295,11 @@ impl Sync {
                 "bad bootstrap",
             ));
         }
+        // Sem ler o arquivo novo não dá para saber se o nome já é de um convidado: recusa.
+        if self.accounts.contains(&user).map_err(accounts_failure)? {
+            self.diary.refused("sync.cadastro_recusado", "nome_de_convidado", "409");
+            return Err(Failure::code(409, "erro_usuario_em_uso", "usuário já existe"));
+        }
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         if self.load()?.is_some() {
             self.diary.refused("sync.cadastro_recusado", "ja_cadastrado", "403");
@@ -301,6 +331,9 @@ impl Sync {
             if !b["enc_blob"].is_null() {
                 validate_blob(&b["enc_blob"])?;
             }
+            if self.accounts.contains(&user).map_err(accounts_failure)? {
+                return Err(Failure::code(409, "erro_usuario_em_uso", "usuário já existe"));
+            }
         }
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         self.setup_status()?;
@@ -328,7 +361,7 @@ impl Sync {
         self.setup_status()
     }
     fn prelogin(&self, user: &str) -> Result<Value> {
-        let own = self.accounts.prelogin(user).map_err(accounts_failure)?;
+        let (own, pending) = self.accounts_read(self.accounts.prelogin(user))?;
         if let Some((salt, true)) = &own { return Ok(json!({"salt":salt,"iterations":600000})); }
         // Com a Sincronização desligada o cofre antigo não entra: nem a conta, nem o sal falso dele.
         let vault = if self.enabled() { self.load()? } else { None };
@@ -337,6 +370,9 @@ impl Sync {
             acc.as_object().and_then(|v| v.get("salt")).ok_or_else(unreadable)?.clone()
         } else if let Some((salt, false)) = own {
             json!(salt)
+        } else if let Some(failure) = pending {
+            // O nome pode ser de um convidado do arquivo ilegível: um sal inventado o faria errar a senha calado.
+            return Err(failure);
         } else if let Some(vault) = vault.filter(|value|truthy(value)) {
             let key = stored_base64(&vault["verifier_salt"])?;
             let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
@@ -382,44 +418,49 @@ impl Sync {
                     ));
                 }
             }
-        }
-        let refuse = || {
-            self.diary.access("sync.login", ip, "senha", Some("credenciais_invalidas"));
-            let mut all = self.fails.lock().unwrap_or_else(|e| e.into_inner());
+            // A tentativa conta antes da derivação: pedidos paralelos não passam todos pelo limite.
             for (key, _) in &keys { all.entry(key.clone()).or_default().push(now); }
             // Nome inventado vira chave nova a cada tentativa: a tabela não cresce sem fim.
             if all.len() > MAX_RATE_KEYS { all.retain(|_, hits| { self.prune(hits, now); !hits.is_empty() }); }
+        }
+        let accepted = |generation: String, user: String| {
+            let mut all = self.fails.lock().unwrap_or_else(|e| e.into_inner());
+            for (key, _) in &keys {
+                if let Some(hits) = all.get_mut(key) && let Some(at) = hits.iter().rposition(|t| *t == now) { hits.remove(at); }
+            }
+            drop(all);
+            self.diary.access("sync.login", ip, "senha", None);
+            self.diary.event("sync.login_concluido");
+            Ok((json!({"ok":true}), generation, user))
+        };
+        let refuse = || {
+            self.diary.access("sync.login", ip, "senha", Some("credenciais_invalidas"));
             unauthorized()
         };
+        let matches = |expected: &str, salt: &[u8]| bool::from((self.derive)(&auth, salt).as_bytes().ct_eq(expected.as_bytes()));
         // A geração do cookie precisa pertencer à credencial que acabou de ser validada.
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        match self.accounts.login(&user, &auth).map_err(accounts_failure)? {
-            hangar_guest_accounts::Login::Accepted { user, generation } => {
-                self.diary.access("sync.login", ip, "senha", None);
-                self.diary.event("sync.login_concluido");
-                return Ok((json!({"ok":true}), generation, user));
-            }
-            hangar_guest_accounts::Login::Refused => return Err(refuse()),
-            hangar_guest_accounts::Login::Unknown | hangar_guest_accounts::Login::NoFile if !self.enabled() => return Err(refuse()),
-            hangar_guest_accounts::Login::Unknown | hangar_guest_accounts::Login::NoFile => {}
+        // Uma derivação por tentativa em todo caminho: o tempo não diz se o nome existe.
+        let (own, pending) = self.accounts_read(self.accounts.credential(&user))?;
+        if let Some(credential) = own {
+            if !matches(&credential.auth_verifier, &credential.verifier_salt) { return Err(refuse()); }
+            return accepted(credential.generation(), credential.user);
         }
-        let vault = self.load()?;
+        // Com a Sincronização desligada o cofre antigo não entra.
+        let vault = if self.enabled() { self.load()? } else { None };
         let acc = match &vault { Some(vault) => account(vault, &user)?, None => None };
-        let valid = if let Some(acc) = acc.filter(|v| truthy(v)) {
-            let salt = stored_base64(&acc["verifier_salt"])?;
-            let expected = acc.get("auth_verifier").and_then(Value::as_str).filter(|s| s.is_ascii()).ok_or_else(unreadable)?;
-            bool::from(verifier(&auth, &salt).as_bytes().ct_eq(expected.as_bytes()))
-        } else {
-            let _ = verifier(&auth, &[0; 16]);
-            false
+        let Some(acc) = acc.filter(|v| truthy(v)) else {
+            let _ = (self.derive)(&auth, &[0; 16]);
+            // O nome pode ser de um convidado do arquivo ilegível: recusa com a falha, não com "senha errada".
+            if let Some(failure) = pending { return Err(failure); }
+            return Err(refuse());
         };
-        if !valid {
+        let salt = stored_base64(&acc["verifier_salt"])?;
+        let expected = acc.get("auth_verifier").and_then(Value::as_str).filter(|s| s.is_ascii()).ok_or_else(unreadable)?;
+        if !matches(expected, &salt) {
             return Err(refuse());
         }
-        let generation = generation_of(acc.ok_or_else(unreadable)?)?;
-        self.diary.access("sync.login", ip, "senha", None);
-        self.diary.event("sync.login_concluido");
-        Ok((json!({"ok":true}), generation, user))
+        accepted(generation_of(acc)?, user)
     }
     /// O dono do cofre antigo: conta de convidado nova não pode tomar o nome dele.
     pub(super) fn legacy_owner(&self) -> Result<Option<String>> {
@@ -692,5 +733,131 @@ mod diary_io_tests {
             assert_eq!(event["errno"],21,"{operation}");
             assert_eq!(event["erro_tipo"],match operation {"load"=>"sync_vault_unreadable","save"=>"sync_vault_write_failed",_=>"sync_config_unreadable"});
         }
+    }
+}
+
+#[cfg(test)]
+mod guest_login_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::path::Path;
+
+    thread_local! { static DERIVED: Cell<usize> = const { Cell::new(0) }; }
+    fn counted(auth: &str, salt: &[u8]) -> String {
+        DERIVED.with(|c| c.set(c.get() + 1));
+        verifier(auth, salt)
+    }
+    fn derivations(run: impl FnOnce()) -> usize {
+        DERIVED.with(|c| c.set(0));
+        run();
+        DERIVED.with(Cell::get)
+    }
+    fn hub(dir: &Path, enabled: bool) -> Sync {
+        let mut sync = Sync::new(dir.join("sync-vault.json"), dir.join("runtime-config.json"), b"fixture".to_vec());
+        sync.enabled = enabled;
+        sync.bootstrap = "bootstrap".into();
+        sync.derive = counted;
+        sync
+    }
+    /// Cria a conta nova e devolve o `auth_hash` que o cliente mandaria com a senha certa.
+    fn guest(sync: &Sync, user: &str, password: &str) -> String {
+        sync.accounts.save(hangar_guest_accounts::Save { user: user.into(), password: Some(password.into()),
+            sees_owner: false, owner_sees: true, servers: vec![] }).unwrap();
+        let (salt, _) = sync.accounts.prelogin(user).unwrap().unwrap();
+        hangar_guest_accounts::derive_keys(password, &STANDARD.decode(salt).unwrap(), 600_000).auth_hash
+    }
+    fn owner(sync: &Sync, user: &str) {
+        assert!(sync.register(&json!({"user":user,"salt":"s","auth_hash":"owner-hash","bootstrap":"bootstrap"}), |n| vec![7; n]).is_ok());
+    }
+    fn login(sync: &Sync, user: &str, auth: &str, ip: &str) -> Result<(Value, String, String)> {
+        sync.login_snapshot(&json!({"user":user,"auth_hash":auth}), 1000.0, ip)
+    }
+
+    #[test]
+    fn every_login_path_derives_exactly_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let sync = hub(dir.path(), true);
+        let auth = guest(&sync, "ana.silva", "senha");
+        owner(&sync, "jeff.f");
+        let cases = [("ana.silva", auth.as_str(), true), ("ana.silva", "errada", false), ("ninguem.aqui", "x", false),
+            ("jeff.f", "owner-hash", true), ("jeff.f", "errada", false)];
+        for (i, (user, auth, ok)) in cases.into_iter().enumerate() {
+            let mut result = None;
+            assert_eq!(derivations(|| result = Some(login(&sync, user, auth, &format!("10.0.0.{i}")))), 1, "{user} {auth}");
+            assert_eq!(result.unwrap().is_ok(), ok, "{user} {auth}");
+        }
+        let off = hub(dir.path(), false);
+        assert_eq!(derivations(|| { let _ = login(&off, "ninguem.aqui", "x", "10.0.1.1"); }), 1, "nome inexistente sem Sincronização");
+        assert_eq!(derivations(|| { let _ = login(&off, "ana.silva", "errada", "10.0.1.2"); }), 1, "convidado com senha errada");
+    }
+
+    #[test]
+    fn old_vault_names_and_guest_names_do_not_mix() {
+        let dir = tempfile::tempdir().unwrap();
+        let sync = hub(dir.path(), true);
+        guest(&sync, "ana.silva", "x");
+        let refused = sync.register(&json!({"user":"Ana.Silva","salt":"s","auth_hash":"h","bootstrap":"bootstrap"}), |n| vec![7; n]).err().unwrap();
+        assert_eq!((refused.status, refused.body["detail"]["code"].as_str()), (409, Some("erro_usuario_em_uso")), "cadastro do dono");
+        let setup = json!({"user":"ana.silva","salt":STANDARD.encode([1u8; 16]),"auth_hash":STANDARD.encode([2u8; 32]),"enc_blob":null});
+        let refused = sync.setup(&setup, |n| vec![7; n]).err().unwrap();
+        assert_eq!((refused.status, refused.body["detail"]["code"].as_str()), (409, Some("erro_usuario_em_uso")), "ativação pela tela");
+        assert!(!sync.path.exists(), "nada gravado no cofre antigo");
+        // Cofre antigo de antes da conta nova, com o dono de mesmo nome: o cookie do convidado não o administra.
+        store::write(&sync.path, &json!({"user":"ana.silva","salt":"s","verifier_salt":STANDARD.encode([3u8; 16]),
+            "auth_verifier":verifier("h",&[3u8; 16]),"enc_blob":null,"rev":0})).unwrap();
+        assert_eq!(sync.owner(Some("ana.silva")).err().unwrap().status, 403);
+    }
+
+    #[test]
+    fn unreadable_guest_file_keeps_the_old_vault_owner_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let sync = hub(dir.path(), true);
+        owner(&sync, "jeff.f");
+        std::fs::write(sync.accounts.path(), b"{corrompido").unwrap();
+        let (_, generation, user) = login(&sync, "jeff.f", "owner-hash", "10.0.0.1").expect("o dono do cofre antigo entra");
+        assert!(sync.authenticate(&sync.cookie(&user, Some(&generation), 1000), 1000).is_ok());
+        assert!(sync.owner(Some("jeff.f")).is_ok());
+        let unknown = login(&sync, "ana.silva", "x", "10.0.0.2").err().unwrap();
+        assert_eq!(unknown.body["detail"]["code"], "guest_accounts_unreadable", "nome sem outro dono recusa com a falha");
+        assert_eq!(sync.prelogin("ana.silva").err().unwrap().status, 500);
+        let off = hub(dir.path(), false);
+        assert_eq!(login(&off, "jeff.f", "owner-hash", "10.0.0.3").err().unwrap().status, 500, "sem Sincronização não há outro jeito");
+    }
+
+    fn slow(_: &str, _: &[u8]) -> String {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        String::new()
+    }
+
+    #[test]
+    fn parallel_attempts_do_not_all_pass_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sync = hub(dir.path(), true);
+        guest(&sync, "ana.silva", "x");
+        sync.rate_max = 2.into();
+        sync.derive = slow;
+        let barrier = std::sync::Barrier::new(8);
+        let statuses: Vec<u16> = std::thread::scope(|scope| {
+            let running: Vec<_> = (0..8).map(|_| scope.spawn(|| {
+                barrier.wait();
+                login(&sync, "ana.silva", "errada", "10.0.0.9").err().unwrap().status
+            })).collect();
+            running.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        assert_eq!(statuses.iter().filter(|s| **s == 401).count(), 2, "{statuses:?}");
+        assert_eq!(statuses.iter().filter(|s| **s == 429).count(), 6, "{statuses:?}");
+    }
+
+    #[test]
+    fn right_password_gives_the_attempt_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sync = hub(dir.path(), true);
+        sync.rate_max = 1.into();
+        owner(&sync, "jeff.f");
+        for _ in 0..3 {
+            assert!(login(&sync, "jeff.f", "owner-hash", "10.0.0.1").is_ok(), "acerto não gasta a tentativa");
+        }
+        assert_eq!(login(&sync, "jeff.f", "errada", "10.0.0.1").err().unwrap().status, 401);
+        assert_eq!(login(&sync, "jeff.f", "owner-hash", "10.0.0.1").err().unwrap().status, 429);
     }
 }

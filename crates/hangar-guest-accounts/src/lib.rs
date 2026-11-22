@@ -99,12 +99,18 @@ pub struct ServerSummary {
     pub root: String,
 }
 
-pub enum Login {
-    /// Nenhum arquivo ainda: quem chama segue com o cofre antigo.
-    NoFile,
-    Unknown,
-    Refused,
-    Accepted { user: String, generation: String },
+/// O que confere a senha de uma conta. Quem chama faz a derivação, uma só por tentativa, exista o nome ou não.
+pub struct Credential {
+    pub user: String,
+    pub verifier_salt: [u8; 16],
+    /// `PBKDF2-SHA256(auth_hash, verifier_salt, 200 mil)` em base64, como no `sync-vault.json`.
+    pub auth_verifier: String,
+}
+
+impl Credential {
+    pub fn generation(&self) -> String {
+        generation(&self.verifier_salt)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -276,20 +282,12 @@ impl Store {
         Ok(Some((crypto::fake_salt(&secret, &user), false)))
     }
 
-    pub fn login(&self, user: &str, auth_hash: &str) -> Result<Login, Error> {
+    pub fn credential(&self, user: &str) -> Result<Option<Credential>, Error> {
         let user = normalize(user);
-        let Some(doc) = self.load()? else { return Ok(Login::NoFile) };
-        let Some(account) = doc.accounts.get(&user) else {
-            // Mesmo custo da conta existente: o tempo não diz se o nome existe.
-            let _ = crypto::verifier(auth_hash, &[0; 16]);
-            return Ok(Login::Unknown);
-        };
-        let salt = crypto::decode::<16>(&account.verifier_salt).ok_or(Error::Unreadable)?;
-        let expected = crypto::verifier(auth_hash, &salt);
-        if !bool::from(subtle::ConstantTimeEq::ct_eq(expected.as_bytes(), account.auth_verifier.as_bytes())) {
-            return Ok(Login::Refused);
-        }
-        Ok(Login::Accepted { generation: generation(&salt), user })
+        let Some(doc) = self.load()? else { return Ok(None) };
+        let Some(account) = doc.accounts.get(&user) else { return Ok(None) };
+        let verifier_salt = crypto::decode::<16>(&account.verifier_salt).ok_or(Error::Unreadable)?;
+        Ok(Some(Credential { verifier_salt, auth_verifier: account.auth_verifier.clone(), user }))
     }
 
     /// A geração do cookie: muda quando a senha muda.
@@ -379,7 +377,8 @@ mod tests {
         assert!(known);
         let salt = crypto::decode::<16>(&salt).unwrap();
         let keys = derive_keys(password, &salt, ITERATIONS);
-        let Login::Accepted { .. } = store.login(user, &keys.auth_hash).unwrap() else { panic!("senha certa recusada") };
+        let credential = store.credential(user).unwrap().unwrap();
+        assert_eq!(crypto::verifier(&keys.auth_hash, &credential.verifier_salt), credential.auth_verifier, "senha certa recusada");
         let (blob, _) = store.vault(user).unwrap().unwrap();
         serde_json::from_slice(&decrypt(&keys.enc_key, &blob).unwrap()).unwrap()
     }
@@ -437,7 +436,7 @@ mod tests {
         assert_eq!(store.prelogin("ninguem.aqui").unwrap().unwrap().0, first);
         assert_ne!(store.prelogin("outro.nome").unwrap().unwrap().0, first);
         assert_eq!(crypto::decode::<16>(&first).map(|b| b.len()), Some(16));
-        assert!(matches!(store.login("ninguem.aqui", "x").unwrap(), Login::Unknown));
+        assert!(store.credential("ninguem.aqui").unwrap().is_none());
     }
 
     #[test]
