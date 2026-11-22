@@ -136,10 +136,11 @@ export function LegacySheet({ hub, syncUser, store, machines, mine, onClose, onC
       </MachineGroup>
     </> : <>
       <MachineGroup>
-        {session.users.length === 0 ? <MachineRow title={m.guests_legacy_empty()} /> : null}
+        {session.users.length === 0 && !session.skipped ? <MachineRow title={m.guests_legacy_empty()} /> : null}
         {session.users.map((legacy) => <MachineRow key={legacy} title={legacy} description={m.guests_legacy_account()}
           value={m.guests_legacy_bring()} disabled={busy} onPress={() => pick(legacy)} />)}
       </MachineGroup>
+      {session.skipped ? <Notice text={m.guests_legacy_skipped({ n: String(session.skipped) })} error /> : null}
       {errors.map((text) => <Notice key={text} text={text} error />)}
     </>}
   </MachineSheet>;

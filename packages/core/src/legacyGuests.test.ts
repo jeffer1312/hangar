@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { _resetDiagForTests, configureDiag } from './diag';
 import { legacyGuestPlan, openLegacyGuests, type LegacyAdmin } from './legacyGuests';
 import type { Server } from './servers';
 import type { SealedBlob, SyncCrypto } from './syncLogin';
@@ -35,7 +36,7 @@ function network(route: (hit: Hit) => Response | undefined = () => undefined) {
 }
 const paths = (hits: Hit[]) => hits.map((hit) => `${hit.method} ${hit.path.split('?')[0]}`);
 
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); _resetDiagForTests(); });
 
 describe('openLegacyGuests', () => {
   it('entra com a senha do dono, decifra as contas antigas e o cofre dele, e apaga e sai pelo mesmo login', async () => {
@@ -46,7 +47,8 @@ describe('openLegacyGuests', () => {
     // A máquina do cofre do dono (`web-casa`) é a `casa` deste aparelho pelo endereço.
     expect(session.plan('lia', [casa])).toMatchObject({ draft: { user: 'lia', password: 'senha-da-lia', servers: [{ serverId: 'casa', root: '/srv/lia' }] },
       prev: { servers: [{ serverId: 'casa', guestId: 'g-old', token: 'tok-old' }] } });
-    expect(Object.keys(session).sort()).toEqual(['close', 'hub', 'plan', 'remove', 'users']);
+    expect(Object.keys(session).sort()).toEqual(['close', 'hub', 'plan', 'remove', 'skipped', 'users']);
+    expect(session.skipped).toBe(0);
     expect(hits[0].path).toBe('/api/sync/prelogin?user=dono');
     expect(hits[1].body).toEqual({ user: 'dono', auth_hash: 'auth-ok' });
     await session.remove('lia');
@@ -87,22 +89,36 @@ describe('openLegacyGuests', () => {
     await expect(openLegacyGuests(casa, 'dono', 'senha-do-dono', crypto)).rejects.toMatchObject({ code: 'sync_request_failed', status: 503 });
     expect(paths(hits).at(-1)).toBe('POST /api/sync/logout');
 
-    hits = network((hit) => (hit.path === '/api/sync/guests' ? json([{ user: 'lia', admin_blob: { iv: 'x', data: 'não é json' } }]) : undefined));
+    hits = network((hit) => (hit.path === '/api/sync/vault' ? json({ enc_blob: { iv: 'x', data: 'não é json' } }) : undefined));
+    await expect(openLegacyGuests(casa, 'dono', 'senha-do-dono', crypto)).rejects.toMatchObject({ code: 'sync_vault_unreadable' });
+    expect(paths(hits).at(-1)).toBe('POST /api/sync/logout');
+
+    hits = network((hit) => (hit.path === '/api/sync/guests' ? json({ guests: [] }) : undefined));
     await expect(openLegacyGuests(casa, 'dono', 'senha-do-dono', crypto)).rejects.toMatchObject({ code: 'sync_vault_unreadable' });
     expect(paths(hits).at(-1)).toBe('POST /api/sync/logout');
   });
 
   it.each([
-    { user: 'lia' },
-    { ...lia, password: undefined },
-    { ...lia, seesOwner: 'sim' },
-    { ...lia, servers: undefined },
-    { ...lia, servers: [{ serverId: 'web-casa', guestId: 'g-old', root: '/srv/lia' }] },
-    { ...lia, user: '' },
-  ])('conta antiga fora da forma é `sync_vault_unreadable` e sai do login: %j', async (admin) => {
-    const hits = network((hit) => (hit.path === '/api/sync/guests' ? json([{ user: 'lia', admin_blob: seal(admin) }]) : undefined));
-    await expect(openLegacyGuests(casa, 'dono', 'senha-do-dono', crypto)).rejects.toMatchObject({ code: 'sync_vault_unreadable' });
-    expect(paths(hits).at(-1)).toBe('POST /api/sync/logout');
+    { iv: 'x', data: 'não é json' },
+    seal({ user: 'ana' }),
+    seal({ ...lia, user: 'ana', password: undefined }),
+    seal({ ...lia, user: 'ana', seesOwner: 'sim' }),
+    seal({ ...lia, user: 'ana', servers: undefined }),
+    seal({ ...lia, user: 'ana', servers: [{ serverId: 'web-casa', guestId: 'g-old', root: '/srv/lia' }] }),
+    seal({ ...lia, user: '' }),
+  ])('conta antiga que não abre fica de fora e vai ao diário, sem derrubar as outras: %j', async (blob) => {
+    const events: { codigo?: string }[] = [];
+    configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
+    const hits = network((hit) => (hit.path === '/api/sync/guests'
+      ? json([{ user: 'ana', admin_blob: blob }, { user: 'lia', admin_blob: seal(lia) }]) : undefined));
+    const session = await openLegacyGuests(casa, 'dono', 'senha-do-dono', crypto);
+    expect(session.users).toEqual(['lia']);
+    expect(session.skipped).toBe(1);
+    expect(events.map((event) => event.codigo)).toEqual(['legacy_guest_unreadable']);
+    expect(JSON.stringify(events)).not.toContain('senha-da-lia');
+    expect(session.plan('lia', [casa])).toMatchObject({ draft: { user: 'lia' } });
+    expect(paths(hits).at(-1)).not.toBe('POST /api/sync/logout');
+    await session.close();
   });
 
   it('`close` zera a chave do cofre', async () => {

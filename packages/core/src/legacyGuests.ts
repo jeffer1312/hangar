@@ -1,5 +1,6 @@
 // Conta de convidado do cofre de sincronização antigo (`/api/sync/guests`): só o dono logado na sincronização da
 // máquina lê, e o `admin_blob` de cada uma (cifrado com a chave do dono) guarda a senha dela e os acessos.
+import { registrar as registrarDiag } from './diag';
 import { normalizeGuestUser, type GuestAccount, type GuestDraft } from './guests';
 import { normalizeMachineUrl } from './machineImport';
 import { openSyncSession, type SealedBlob, type SyncCrypto } from './syncLogin';
@@ -21,6 +22,8 @@ type Plan = { draft: GuestDraft; prev: GuestAccount } | { missing: string[] };
 export type LegacySession = {
   hub: string;
   users: string[];
+  /** Contas que não abriram (cifra ou forma) e ficaram fora de `users`; já registradas no diário. */
+  skipped: number;
   /** `legacyGuestPlan` da conta `user`. Erro com `code` `sync_vault_unreadable` se ela não abrir. */
   plan(user: string, mine: Server[], name?: string): Plan;
   /** Apaga a conta antiga; a que já tinha saído (404) conta como apagada. */
@@ -63,7 +66,7 @@ export async function openLegacyGuests(server: Server, user: string, password: s
     if (!vault.ok) throw fail('sync_request_failed', vault.status);
     if (!rows.ok) throw fail('sync_request_failed', rows.status);
     let ownerServers: LegacyOwnerServer[];
-    let sealed: Map<string, SealedBlob>;
+    let list: { admin_blob: SealedBlob }[];
     const admin = (blob: SealedBlob) => {
       const opened: unknown = crypto.decryptJson<unknown>(session.encKey, blob);
       if (!isLegacyAdmin(opened)) throw fail('sync_vault_unreadable');
@@ -71,16 +74,27 @@ export async function openLegacyGuests(server: Server, user: string, password: s
     };
     try {
       const blob = (await vault.json() as { enc_blob?: SealedBlob | null }).enc_blob;
-      const list = await rows.json() as { admin_blob: SealedBlob }[];
+      const body: unknown = await rows.json();
+      if (!Array.isArray(body)) throw fail('sync_vault_unreadable');
+      list = body as { admin_blob: SealedBlob }[];
       ownerServers = (blob ? crypto.decryptJson<Server[]>(session.encKey, blob) : [])
         .map(({ id, label, baseUrl, connect }) => ({ id, label, baseUrl, connect }));
-      // Cada conta é aberta uma vez para conferir a forma e o nome; o resto volta a ficar só cifrado.
-      sealed = new Map(list.map((row) => [admin(row.admin_blob).user, row.admin_blob]));
     } catch {
       throw fail('sync_vault_unreadable');
     }
+    // Cada conta é aberta uma vez para conferir a forma e o nome; o resto volta a ficar só cifrado. A que não abre
+    // fica de fora sem levar as outras junto.
+    const sealed = new Map<string, SealedBlob>();
+    let skipped = 0;
+    for (const row of list) {
+      try { sealed.set(admin(row?.admin_blob).user, row.admin_blob); }
+      catch {
+        skipped += 1;
+        registrarDiag({ evento: 'guests.legacy_unreadable', nivel: 'aviso', codigo: 'legacy_guest_unreadable' }, session.hub);
+      }
+    }
     return {
-      hub: session.hub, users: [...sealed.keys()], close,
+      hub: session.hub, users: [...sealed.keys()], skipped, close,
       plan(guest, mine, name) {
         const blob = sealed.get(guest);
         if (!blob) throw fail('sync_vault_unreadable');

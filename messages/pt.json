@@ -12132,6 +12132,7 @@
   "guests_legacy_missing": "{servidores} não está na lista de servidores deste aparelho. Adicione antes de trazer a conta.",
   "guests_legacy_new_name": "Nome novo",
   "guests_legacy_rename_help": "No Connect o nome precisa ter ponto ou “@”. {antigo} passa a entrar como {novo}, com a mesma senha.",
+  "guests_legacy_skipped": "Contas antigas que não abriram e ficaram de fora: {n}. As outras podem ser trazidas normalmente.",
   "guests_access_left": "{servidor} ficou com o acesso criado para {usuario}: {erro}",
   "connect_machine_off_now": "Desligada agora",
   "connect_account_device_asked_code": "Código {code} · pediu {when}"

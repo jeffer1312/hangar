@@ -42,7 +42,7 @@ async function type(label: string, value: string) {
   expect(input, label).toBeTruthy();
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); });
 }
-const session = (remove: LegacySession['remove']): LegacySession => ({ hub: casa.baseUrl, users: [lia.user],
+const session = (remove: LegacySession['remove'], skipped = 0): LegacySession => ({ hub: casa.baseUrl, users: [lia.user], skipped,
   plan: (_user, mine, name) => legacyGuestPlan(lia, [casa], mine, name), remove, close: vi.fn(async () => {}) });
 const sheet = (onChanged = vi.fn()) => <LegacySheet hub={casa} syncUser="dono" store={casa} machines={[{ server: casa }]} mine={[casa]}
   onClose={() => {}} onChanged={onChanged} />;
@@ -82,6 +82,15 @@ it('conta nova guardada e antiga que não saiu: a lista é relida e o erro da re
   expect(mocks.toastOk).not.toHaveBeenCalled();
   // A antiga continua na lista para tentar de novo.
   expect(button('lia.costa')).toBeTruthy();
+});
+
+it('conta antiga que não abriu fica de fora com aviso, e as outras seguem na lista', async () => {
+  mocks.open.mockResolvedValue(session(vi.fn(async () => {}), 2));
+  await act(async () => root.render(sheet()));
+  await signIn();
+  await vi.waitFor(() => expect(button('lia.costa')).toBeTruthy());
+  expect(el.textContent).toContain(m.guests_legacy_skipped({ n: '2' }));
+  expect(el.textContent).not.toContain(m.guests_legacy_empty());
 });
 
 it('folha fechada com a entrada em voo fecha a sessão que chegou depois e não mexe na tela', async () => {

@@ -12132,6 +12132,7 @@
   "guests_legacy_missing": "{servidores} isn't in this device's server list. Add it before bringing the account.",
   "guests_legacy_new_name": "New name",
   "guests_legacy_rename_help": "On Connect the name needs a dot or “@”. {antigo} will sign in as {novo}, with the same password.",
+  "guests_legacy_skipped": "Old accounts that could not be opened and were left out: {n}. The others can be brought over as usual.",
   "guests_access_left": "{servidor} kept the access created for {usuario}: {erro}",
   "connect_machine_off_now": "Off right now",
   "connect_account_device_asked_code": "Code {code} · asked {when}"
