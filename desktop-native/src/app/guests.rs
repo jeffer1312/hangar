@@ -1,7 +1,6 @@
-//! Configurações › Convidados: a conta de cada convidado fica na máquina escolhida no seletor (`/api/guest-accounts`,
-//! com o token do dono), e o convidado entra pelo Connect com usuário e senha próprios. O acesso em cada máquina marcada
-//! é criado antes, com o token que este app já tem dela (`/api/guests`); a máquina que guarda a conta deriva as chaves e
-//! cifra o cofre. A conta antiga (cofre da Sincronização) é trazida com a senha da sincronização do dono, digitada uma vez.
+//! Configurações › Convidados. A conta fica numa máquina do dono, que deriva as chaves e cifra o cofre, para o convidado
+//! entrar pelo Connect sem o serviço ver a senha. O acesso em cada máquina nasce antes, com o token que este app já tem
+//! dela: sem acesso, a conta não teria o que guardar.
 use super::*;
 use super::sync::{decrypt_json, derive_keys, secure_setup, sync_field};
 use super::create::{Root, Scan, choice, crumbs, scan_of};
@@ -10,6 +9,7 @@ use super::server_config::chip;
 use super::servers::{ServerEntry, norm};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gpui_kit::component::switch::Switch;
+use hangar_connect_client::{normalize_name as normalize_user, valid_guest_user};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -128,12 +128,11 @@ fn store_text(label: &str, error: &Failure) -> String {
     }
 }
 
-/// Como o servidor (`valid_user` em hangar-guest-accounts): minúsculas, com `.` ou `@`, que nome de conta do Connect não aceita.
-fn normalize_user(user: &str) -> String { user.trim().to_ascii_lowercase() }
-
+/// Como o servidor (`valid_user` em hangar-guest-accounts): o `.` ou `@` dos clientes e, no arquivo, só ASCII minúsculo de 3 a 64.
 fn valid_user(user: &str) -> bool {
-    (3..=64).contains(&user.len()) && user.contains(['.', '@'])
+    (3..=64).contains(&user.len())
         && user.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._@+-".contains(&b))
+        && valid_guest_user(user)
 }
 
 /// Nome que serve no Connect para a conta antiga `old`: o mesmo, se já serve; senão o antigo com `@<dono>`.
@@ -169,58 +168,59 @@ fn validate(draft: &Draft, editing: bool, guests: &[GuestAccount]) -> Option<&'s
 /// `name_refused`: a máquina que guarda a conta recusou o nome (409); a conta nova não existe.
 pub(super) struct SaveOutcome { saved: GuestAccount, errors: Vec<String>, store_failed: bool, name_refused: bool }
 
-/// Cria, altera e tira o acesso em cada máquina e só depois grava a conta. Falha numa máquina volta com o nome dela, e a
-/// entrada antiga fica na conta para tentar de novo.
+fn gone(error: &Failure) -> bool { error.status == Some(404) }
+
+fn shown(old: Option<&GuestServer>, id: &str) -> String { old.map(|o| o.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| id.to_owned()) }
+
+/// O que uma máquina deixa na conta depois de mexer nela, e a falha dela.
+type Step = (Option<GuestServer>, Option<String>);
+
+/// Uma máquina marcada: cria, altera ou, se sumiu de lá, recria o acesso. Na falha, o acesso antigo fica na conta.
+async fn mark_one(ops: &impl GuestOps, machines: &[Machine], draft: &Draft, id: &str, root: &str, old: Option<&GuestServer>) -> Step {
+    // Sem a máquina na lista não dá pra agir nela.
+    let Some(machine) = resolve(machines, id, old.and_then(|o| o.base_url.as_deref())) else { return (old.cloned(), Some(away_text(&shown(old, id)))) };
+    let entry = |guest_id: String, token: Option<String>| GuestServer {
+        server_id: id.to_owned(), label: machine.label.clone(), base_url: Some(machine.base_url().to_owned()), guest_id, root: root.to_owned(), token,
+    };
+    let result = match old {
+        None => ops.create(machine, draft, root).await.map(|(guest, token)| entry(guest, Some(token))),
+        Some(old) => match ops.update(machine, &old.guest_id, draft, root).await {
+            Ok(()) => Ok(entry(old.guest_id.clone(), old.token.clone())),
+            // Recria em vez de ficar com um id morto.
+            Err(error) if gone(&error) => ops.create(machine, draft, root).await.map(|(guest, token)| entry(guest, Some(token))),
+            Err(error) => Err(error),
+        },
+    };
+    match result {
+        Ok(done) => (Some(done), None),
+        Err(error) => (old.cloned(), Some(server_text(&machine.label, &describe(&error)))),
+    }
+}
+
+/// Uma máquina desmarcada: tira o acesso. Na falha ele fica na conta, para tirar de novo.
+async fn unmark_one(ops: &impl GuestOps, machines: &[Machine], old: &GuestServer) -> Step {
+    let Some(machine) = resolve(machines, &old.server_id, old.base_url.as_deref()) else {
+        return (Some(old.clone()), Some(away_text(&shown(Some(old), &old.server_id))));
+    };
+    match ops.delete(machine, &old.guest_id).await {
+        Err(error) if !gone(&error) => (Some(old.clone()), Some(server_text(&machine.label, &describe(&error)))),
+        _ => (None, None),
+    }
+}
+
+/// Cria, altera e tira o acesso em todas as máquinas ao mesmo tempo e só depois grava a conta. Falha numa máquina volta
+/// com o nome dela, e a entrada antiga fica na conta para tentar de novo.
 async fn save_guest(ops: &impl GuestOps, machines: &[Machine], store_label: &str, draft: &Draft, prev: Option<&GuestAccount>) -> SaveOutcome {
     let before = |id: &str| prev.and_then(|p| p.servers.iter().find(|s| s.server_id == id));
-    let gone = |error: &Failure| error.status == Some(404);
-    let entry = |machine: &Machine, server_id: &str, guest_id: String, root: &str, token: Option<String>| GuestServer {
-        server_id: server_id.to_owned(), label: machine.label.clone(), base_url: Some(machine.base_url().to_owned()), guest_id,
-        root: root.to_owned(), token,
-    };
-    let shown = |old: Option<&GuestServer>, id: &str| old.map(|o| o.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| id.to_owned());
+    let marked = draft.servers.iter().map(|(id, root)| mark_one(ops, machines, draft, id, root, before(id)));
+    let unmarked = prev.map_or(&[][..], |p| p.servers.as_slice()).iter()
+        .filter(|old| !draft.servers.iter().any(|(id, _)| *id == old.server_id))
+        .map(|old| unmark_one(ops, machines, old));
+    let (marked, unmarked) = futures::future::join(futures::future::join_all(marked), futures::future::join_all(unmarked)).await;
     let (mut kept, mut errors) = (Vec::new(), Vec::new());
-    for (id, root) in &draft.servers {
-        let old = before(id);
-        let Some(machine) = resolve(machines, id, old.and_then(|o| o.base_url.as_deref())) else {
-            // Sem a máquina na lista não dá pra agir nela; o acesso antigo fica na conta.
-            errors.push(away_text(&shown(old, id)));
-            if let Some(old) = old { kept.push(old.clone()); }
-            continue;
-        };
-        let result = match old {
-            None => ops.create(machine, draft, root).await.map(|(guest, token)| entry(machine, id, guest, root, Some(token))),
-            Some(old) => match ops.update(machine, &old.guest_id, draft, root).await {
-                Ok(()) => Ok(entry(machine, id, old.guest_id.clone(), root, old.token.clone())),
-                // Sumiu na máquina: recria em vez de ficar com um id morto.
-                Err(error) if gone(&error) => ops.create(machine, draft, root).await.map(|(guest, token)| entry(machine, id, guest, root, Some(token))),
-                Err(error) => Err(error),
-            },
-        };
-        match result {
-            Ok(done) => kept.push(done),
-            Err(error) => {
-                errors.push(server_text(&machine.label, &describe(&error)));
-                if let Some(old) = old { kept.push(old.clone()); }
-            }
-        }
-    }
-    for old in prev.map_or(&[][..], |p| p.servers.as_slice()) {
-        if draft.servers.iter().any(|(id, _)| *id == old.server_id) { continue; }
-        let Some(machine) = resolve(machines, &old.server_id, old.base_url.as_deref()) else {
-            errors.push(away_text(&shown(Some(old), &old.server_id)));
-            kept.push(old.clone());
-            continue;
-        };
-        match ops.delete(machine, &old.guest_id).await {
-            Ok(()) => {}
-            Err(error) if gone(&error) => {}
-            Err(error) => {
-                // Fica na conta pra poder tirar o acesso de novo.
-                errors.push(server_text(&machine.label, &describe(&error)));
-                kept.push(old.clone());
-            }
-        }
+    for (entry, error) in marked.into_iter().chain(unmarked) {
+        kept.extend(entry);
+        errors.extend(error);
     }
     let saved = GuestAccount { user: draft.user.clone(), sees_owner: draft.sees_owner, owner_sees: draft.owner_sees, name_taken: false, servers: kept };
     let servers: Vec<Value> = saved.servers.iter().map(|s| {
@@ -242,20 +242,17 @@ async fn save_guest(ops: &impl GuestOps, machines: &[Machine], store_label: &str
 /// Desfaz os acessos de uma conta que a máquina não gravou (nome recusado). Volta uma linha por máquina que ficou com o
 /// acesso, para o dono tirar à mão; o que já tinha saído (404) conta como tirado.
 async fn drop_accesses(ops: &impl GuestOps, machines: &[Machine], guest: &GuestAccount) -> Vec<String> {
-    let mut left = Vec::new();
-    for access in &guest.servers {
+    let left = &|server: &str, error: &str| tr_shared("guests_access_left", &[("servidor", server), ("usuario", &guest.user), ("erro", error)]);
+    let drops = guest.servers.iter().map(|access| async move {
         let Some(machine) = resolve(machines, &access.server_id, access.base_url.as_deref()) else {
-            left.push(tr_shared("guests_access_left", &[("servidor", &access.server_id), ("usuario", &guest.user),
-                ("erro", &tr_shared("convidados_servidor_fora_da_lista", &[]))]));
-            continue;
+            return Some(left(&access.server_id, &tr_shared("convidados_servidor_fora_da_lista", &[])));
         };
         match ops.delete(machine, &access.guest_id).await {
-            Ok(()) => {}
-            Err(error) if error.status == Some(404) => {}
-            Err(error) => left.push(tr_shared("guests_access_left", &[("servidor", &machine.label), ("usuario", &guest.user), ("erro", &describe(&error))])),
+            Err(error) if !gone(&error) => Some(left(&machine.label, &describe(&error))),
+            _ => None,
         }
-    }
-    left
+    });
+    futures::future::join_all(drops).await.into_iter().flatten().collect()
 }
 
 /// Tira o acesso de todas as máquinas e só apaga a conta quando todas largaram e a gravação foi aceita.
@@ -313,29 +310,39 @@ fn start_at(roots: &[Root], chosen: &str) -> Option<(Root, String)> {
     }
 }
 
-// Número global: o seletor é recriado a cada abertura, e a resposta de um anterior não pode casar com o pedido do novo.
 fn begin<T>(remote: &mut Remote<T>) -> u64 {
     (remote.seq, remote.loading) = (ticket(), true);
     remote.seq
 }
 
-struct Live { store: Api }
+/// `apis`: uma por máquina, montada uma vez, pra o criar e o recriar da mesma máquina usarem as mesmas conexões.
+struct Live { store: Api, apis: HashMap<String, Result<Api, Failure>> }
+
+impl Live {
+    fn new(store: Api, machines: &[Machine]) -> Self {
+        Self { store, apis: machines.iter().map(|m| (m.id.clone(), m.api())).collect() }
+    }
+
+    fn api(&self, machine: &Machine) -> Result<Api, Failure> {
+        self.apis.get(&machine.id).cloned().unwrap_or_else(|| machine.api())
+    }
+}
 
 impl GuestOps for Live {
     async fn create(&self, machine: &Machine, draft: &Draft, root: &str) -> Result<(String, String), Failure> {
         let body = json!({"name": draft.user, "root": root, "sees_owner": draft.sees_owner, "owner_sees": draft.owner_sees});
-        let value = machine.api()?.server_send(reqwest::Method::POST, &["guests"], Some(body), 30).await?;
+        let value = self.api(machine)?.server_send(reqwest::Method::POST, &["guests"], Some(body), 30).await?;
         let field = |name: &str| value.get(name).and_then(Value::as_str).map(str::to_owned);
         field("id").zip(field("token")).ok_or_else(|| Failure::local("invalid_response"))
     }
 
     async fn update(&self, machine: &Machine, id: &str, draft: &Draft, root: &str) -> Result<(), Failure> {
         let body = json!({"root": root, "sees_owner": draft.sees_owner, "owner_sees": draft.owner_sees});
-        machine.api()?.server_send(reqwest::Method::POST, &["guests", id], Some(body), 30).await.map(|_| ())
+        self.api(machine)?.server_send(reqwest::Method::POST, &["guests", id], Some(body), 30).await.map(|_| ())
     }
 
     async fn delete(&self, machine: &Machine, id: &str) -> Result<(), Failure> {
-        machine.api()?.server_post(&["guests", id, "delete"], 30).await.map(|_| ())
+        self.api(machine)?.server_post(&["guests", id, "delete"], 30).await.map(|_| ())
     }
 
     // A máquina deriva as chaves (600 mil voltas) antes de responder.
@@ -393,11 +400,15 @@ async fn open_legacy(hub: &Api, user: String, password: String) -> Result<Legacy
         // Convite fica só no aparelho que resgatou: não é servidor do dono.
         Ok((owners, guests)) => Ok(LegacySession { hub: hub.clone(), cookie, owners: owners.into_iter().filter(|s| !s.invite).collect(), guests }),
         Err(error) => {
-            // A sessão do hub dá escrita no cofre: não fica aberta à toa.
-            let _ = hub.hub(reqwest::Method::POST, &["sync", "logout"], &[], None, Some(&cookie), 10).await;
+            close_legacy(hub, &cookie).await;
             Err(error)
         }
     }
+}
+
+/// A sessão do hub dá escrita no cofre: sai assim que não serve mais.
+async fn close_legacy(hub: &Api, cookie: &str) {
+    let _ = hub.hub(reqwest::Method::POST, &["sync", "logout"], &[], None, Some(cookie), 10).await;
 }
 
 struct LoginForm { user: Entity<InputState>, password: Entity<InputState>, _subscriptions: Vec<Subscription> }
@@ -464,6 +475,8 @@ pub(in crate::app) struct Guests {
 }
 
 impl Guests {
+    fn browser(&mut self) -> Option<&mut FolderBrowser> { self.form.as_mut()?.browser.as_mut() }
+
     /// Aplica o resultado de um Salvar: com falha o formulário fica aberto e salvar de novo repete só o que faltou.
     fn apply_saved(&mut self, SaveOutcome { saved, errors, store_failed, name_refused }: SaveOutcome) {
         self.failures = errors;
@@ -495,7 +508,8 @@ pub(super) enum GuestsReply {
     FolderMade(u64, Result<String, String>),
 }
 
-// Número global: a página zera o estado ao sair, e uma resposta antiga não pode casar com o pedido novo.
+// Número global: a página zera o estado ao sair e o seletor de pasta nasce de novo a cada abertura, e uma resposta
+// antiga não pode casar com o pedido novo.
 fn ticket() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
@@ -534,9 +548,7 @@ impl Hangar {
     /// A sessão da sincronização do dono (cookie e chave) sai junto com a página.
     pub(super) fn guests_page_left(&mut self) {
         if let Some(session) = self.guests.legacy.as_mut().and_then(|view| view.session.take()) {
-            self.runtime.spawn(async move {
-                let _ = session.hub.hub(reqwest::Method::POST, &["sync", "logout"], &[], None, Some(&session.cookie), 10).await;
-            });
+            self.runtime.spawn(async move { close_legacy(&session.hub, &session.cookie).await });
         }
         self.guests = Guests::default();
     }
@@ -600,11 +612,15 @@ impl Hangar {
         self.guests_load_roots(cx);
     }
 
+    /// A API da máquina do seletor de pasta aberto, o começo de todo pedido dele. `None`: o seletor fechou.
+    fn guests_browser_api(&self) -> Option<Result<Api, String>> {
+        let server = self.guests.form.as_ref()?.browser.as_ref()?.server.clone();
+        Some(self.guest_machine_api(&server))
+    }
+
     fn guests_load_roots(&mut self, cx: &mut Context<Self>) {
-        let done = self.guests_send_later();
-        let Some(server) = self.guests.form.as_ref().and_then(|f| f.browser.as_ref()).map(|b| b.server.clone()) else { return };
-        let api = self.guest_machine_api(&server);
-        let Some(browser) = self.guests.form.as_mut().and_then(|f| f.browser.as_mut()) else { return };
+        let (done, Some(api)) = (self.guests_send_later(), self.guests_browser_api()) else { return };
+        let Some(browser) = self.guests.browser() else { return };
         let seq = begin(&mut browser.roots);
         match api {
             Err(error) => { browser.roots.finish(seq, Err(error)); }
@@ -618,17 +634,15 @@ impl Hangar {
     }
 
     fn guests_pick_root(&mut self, root: Root, cx: &mut Context<Self>) {
-        let Some(browser) = self.guests.form.as_mut().and_then(|f| f.browser.as_mut()) else { return };
+        let Some(browser) = self.guests.browser() else { return };
         let path = root.path.clone();
         browser.root = Some(root);
         self.guests_scan(path, cx);
     }
 
     fn guests_scan(&mut self, path: String, cx: &mut Context<Self>) {
-        let done = self.guests_send_later();
-        let Some(server) = self.guests.form.as_ref().and_then(|f| f.browser.as_ref()).map(|b| b.server.clone()) else { return };
-        let api = self.guest_machine_api(&server);
-        let Some(browser) = self.guests.form.as_mut().and_then(|f| f.browser.as_mut()) else { return };
+        let (done, Some(api)) = (self.guests_send_later(), self.guests_browser_api()) else { return };
+        let Some(browser) = self.guests.browser() else { return };
         let Some(root) = browser.root.as_ref().map(|r| r.path.clone()) else { return };
         (browser.dir, browser.make_error) = (path.clone(), None);
         let seq = begin(&mut browser.scan);
@@ -655,16 +669,14 @@ impl Hangar {
             if matches!(event, InputEvent::PressEnter { .. }) { this.guests_make_folder(cx); }
         });
         input.update(cx, |state, cx| state.focus(window, cx));
-        let Some(browser) = self.guests.form.as_mut().and_then(|f| f.browser.as_mut()) else { return };
+        let Some(browser) = self.guests.browser() else { return };
         (browser.naming, browser.make_error) = (Some((input, subscription)), None);
         cx.notify();
     }
 
     fn guests_make_folder(&mut self, cx: &mut Context<Self>) {
-        let done = self.guests_send_later();
-        let Some(server) = self.guests.form.as_ref().and_then(|f| f.browser.as_ref()).map(|b| b.server.clone()) else { return };
-        let api = self.guest_machine_api(&server);
-        let Some(browser) = self.guests.form.as_mut().and_then(|f| f.browser.as_mut()) else { return };
+        let (done, Some(api)) = (self.guests_send_later(), self.guests_browser_api()) else { return };
+        let Some(browser) = self.guests.browser() else { return };
         let (Some((input, _)), Some(root), None) = (browser.naming.as_ref(), browser.root.as_ref(), browser.making) else { return };
         let name = input.read(cx).value().trim().to_string();
         if name.is_empty() { return; }
@@ -748,7 +760,7 @@ impl Hangar {
         (guests.waiting, guests.notice) = (Some(seq), None);
         let done = self.guests_send_later();
         self.runtime.spawn(async move {
-            let live = Live { store };
+            let live = Live::new(store, &machines);
             let mut outcome = save_guest(&live, &machines, &label, &draft, prev.as_ref()).await;
             if outcome.name_refused && prev.is_none() {
                 // Nome recusado na conta nova: os acessos que acabaram de nascer saem, e o que não sai fica dito.
@@ -780,7 +792,7 @@ impl Hangar {
         (self.guests.waiting, self.guests.notice) = (Some(seq), None);
         let done = self.guests_send_later();
         self.runtime.spawn(async move {
-            let errors = remove_guest(&Live { store }, &machines, &label, &guest).await;
+            let errors = remove_guest(&Live::new(store, &machines), &machines, &label, &guest).await;
             done(GuestsReply::Removed(seq, errors)).await
         });
         cx.notify();
@@ -803,9 +815,7 @@ impl Hangar {
 
     fn guests_close_legacy(&mut self, cx: &mut Context<Self>) {
         if let Some(session) = self.guests.legacy.take().and_then(|view| view.session) {
-            self.runtime.spawn(async move {
-                let _ = session.hub.hub(reqwest::Method::POST, &["sync", "logout"], &[], None, Some(&session.cookie), 10).await;
-            });
+            self.runtime.spawn(async move { close_legacy(&session.hub, &session.cookie).await });
         }
         cx.notify();
     }
@@ -873,7 +883,7 @@ impl Hangar {
         (self.guests.waiting, self.guests.notice) = (Some(seq), None);
         let done = self.guests_send_later();
         self.runtime.spawn(async move {
-            let out = save_guest(&Live { store }, &machines, &label, &draft, Some(&prev)).await;
+            let out = save_guest(&Live::new(store, &machines), &machines, &label, &draft, Some(&prev)).await;
             let result = if !out.errors.is_empty() { Err((out.errors, !out.store_failed)) } else {
                 // A antiga só sai depois que a nova foi guardada inteira; já tinha saído (404) conta como apagada.
                 match session.hub.hub(reqwest::Method::POST, &["sync", "guests", admin.user.as_str(), "delete"], &[], None, Some(&session.cookie), 30).await {
@@ -1022,7 +1032,7 @@ impl Hangar {
                     .disabled(!ready || making || busy).on_click(cx.listener(|this, _, _, cx| this.guests_make_folder(cx))))
                 .child(Button::new("guests-mkdir-cancel").ghost().small().label(tr_shared("comum_cancelar", &[])).disabled(making)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(b) = this.guests.form.as_mut().and_then(|f| f.browser.as_mut()) { (b.naming, b.make_error) = (None, None); }
+                        if let Some(b) = this.guests.browser() { (b.naming, b.make_error) = (None, None); }
                         cx.notify();
                     })))
         });
