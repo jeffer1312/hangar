@@ -128,6 +128,48 @@ fn text(body:&Value,field:&str) -> Result<Option<String>,()> {
     match &body[field] {Value::Null=>Ok(None),Value::String(s) if !s.trim().is_empty()=>Ok(Some(s.trim().to_owned())),Value::String(_)=>Ok(None),_=>Err(())}
 }
 
+pub async fn provider(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if let Err(response) = crate::routes::owner_gate(&st, peer, &req).await { return response; }
+    let Some(name) = session_name(req.uri().path()) else { return super::invalid_body(req.headers()) };
+    let Some(runtime) = st.state.runtime.get().cloned() else { return super::no_runtime(req.headers()) };
+    let (parts, body) = req.into_parts();
+    let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return too_large(&parts.headers) };
+    let Ok(wanted) = serde_json::from_slice::<hangar_api::session::ClaudeProviderSwitch>(&bytes) else {
+        return super::invalid_body(&parts.headers);
+    };
+    if wanted.engine.is_empty() || wanted.engine_account.is_empty() || wanted.engine_binding.is_empty()
+        || wanted.model.contains('/') || wanted.model.contains(['[', ']']) || !crate::session_open::resolve::valid_model(&wanted.model) {
+        return super::invalid_body(&parts.headers);
+    }
+    if st.term.is_active(&name) {
+        return reply(Some(&parts.headers), StatusCode::CONFLICT, detail_body("erro_terminal_aberto", "Feche o painel do terminal antes de trocar o provedor.", json!({})));
+    }
+    let change = SessionChange {
+        reason: ChangeReason::AccountSwitch, surface: None, permission_mode: None, effort: None,
+        account: Some(Account::Engine { name:wanted.engine, account:Some(wanted.engine_account), binding:Some(wanted.engine_binding), config_dir:None, context_window:None, context_window_unknown:false }),
+        model: Some(wanted.model), service_tier: Some(ServiceTier::Default),
+    };
+    let owned = name.clone();
+    let result = super::relaunch::reopen_detached(&st, &name, async move {
+        runtime.reopen_claude_provider(&owned, &wanted.source, change).await
+    }).await;
+    let (status, value) = match result {
+        Some(Ok(reopened)) => {
+            let mut value = json!({"ok":true,"service_tier":"default"});
+            if let Some(spec) = &reopened.spec && let Account::Engine { name, account, binding, .. } = &spec.account {
+                value["engine"] = json!(name);
+                value["engine_account"] = json!(account);
+                value["engine_binding"] = json!(binding);
+                value["model"] = json!(spec.model);
+            }
+            (StatusCode::OK, reopened.answer(value))
+        }
+        Some(Err(failure)) => super::account::account_refusal(&failure, "não troquei o provedor"),
+        None => (StatusCode::CONFLICT, detail_body("erro_troca_conta", "A conversa Claude não está aberta neste servidor.", json!({}))),
+    };
+    reply(Some(&parts.headers), status, value)
+}
+
 /// `POST /engine/model` da conta fixa: o modelo do catálogo da conta, com a janela dele.
 pub async fn model(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
     let (runtime,name,spec,body,headers)=match claude_engine(&st,peer,req).await {Ok(found)=>found,Err(response)=>return response};

@@ -17,6 +17,7 @@ mod dictation_pill;
 mod login_browser;
 mod memory_dream;
 mod model_handoff;
+mod claude_providers;
 mod new_chat_mode;
 mod new_conversation;
 mod no_project;
@@ -103,6 +104,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "revisao-do-trabalho" => Some(work_review::render),
         "comentar-linhas" => Some(code_comments::render),
         "seletor-de-modelos" => Some(model_handoff::render),
+        "provedores-do-claude" => Some(claude_providers::render),
         "cliproxy-assistente" => Some(cliproxy_wizard::render),
         "velocidade-ultra-fast" => Some(speed_choice::render),
         "atualizar-cliproxy" => Some(proxy_update::render),

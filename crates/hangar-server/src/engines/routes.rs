@@ -327,7 +327,7 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
     let accounts = st.accounts.clone();
     let result = tokio::task::spawn_blocking(move || {
         if path == "/api/engines" && method == Method::GET {
-            return (200, json!({"motores":visible(&accounts),"arquivo_corrompido":store::state(&env).1,"arquivo_caminho":store::path(&env)}));
+            return (200, json!({"motores":visible(&accounts),"claude_provider_switch":true,"arquivo_corrompido":store::state(&env).1,"arquivo_caminho":store::path(&env)}));
         }
         let name = path.strip_prefix("/api/engines/").unwrap_or("");
         if method == Method::PUT && !name.is_empty() {
@@ -400,6 +400,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/model-options", "GET"),
     ("/api/sessions/{name}/model/options", "GET"),
     ("/api/sessions/{name}/engine/model", "POST"),
+    ("/api/sessions/{name}/engine/provider", "POST"),
 ];
 
 async fn syntax_before_auth(request: Request, path: &str) -> Result<Request, Response> {
@@ -407,7 +408,7 @@ async fn syntax_before_auth(request: Request, path: &str) -> Result<Request, Res
         Method::POST => {
             path == "/api/engines/modelos"
                 || path == "/api/credenciais/sincronizar"
-                || (path.starts_with("/api/sessions/") && path.ends_with("/engine/model"))
+                || (path.starts_with("/api/sessions/") && (path.ends_with("/engine/model") || path.ends_with("/engine/provider")))
         }
         Method::PUT => matches!(
             path,
@@ -447,7 +448,8 @@ pub async fn cors_layer(
         || path.trim_end_matches('/') == "/api/model-options"
         || (path.starts_with("/api/sessions/")
             && (path.trim_end_matches('/').ends_with("/model/options")
-                || path.trim_end_matches('/').ends_with("/engine/model")));
+                || path.trim_end_matches('/').ends_with("/engine/model")
+                || path.trim_end_matches('/').ends_with("/engine/provider")));
     if !owned {
         return next.run(request).await;
     }

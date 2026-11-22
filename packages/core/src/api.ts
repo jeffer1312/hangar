@@ -1604,6 +1604,30 @@ export function modelOptionsForServer(server: Server, provider: string, engine?:
   return apiFetchForServer(server, modelOptionsPath(provider, engine, configDir, codexAccount, engineAccount), { signal: comTeto(signal, 8000) });
 }
 
+export interface ClaudeProviderTarget {
+  engine: string;
+  engine_account: string;
+  engine_binding: string;
+}
+
+export interface ClaudeProviderSource {
+  lifecycle_id: string;
+  jsonl: string;
+  headless: boolean;
+  engine: string | null;
+  engine_account: string | null;
+  engine_binding: string | null;
+}
+
+export async function claudeProviderModels(server: Server, target: ClaudeProviderTarget, signal?: AbortSignal): Promise<ModelOption[]> {
+  const q = new URLSearchParams({ provider: 'claude', ...target });
+  const response = await apiFetchForServer<ClaudeProviderTarget & { models: ModelOption[] }>(server, `/api/model-options?${q}`, { signal: comTeto(signal, 20_000) }, 20_000);
+  if (response.engine !== target.engine || response.engine_account !== target.engine_account || response.engine_binding !== target.engine_binding) {
+    throw new Error('claude_provider_changed');
+  }
+  return response.models;
+}
+
 export function getCredentialsForServer(server: Server, force = false, signal?: AbortSignal, proxyAccounts = false): Promise<Credencial[]> {
   const query = new URLSearchParams({ ...(force ? { forcar: 'true' } : {}), ...(proxyAccounts ? { proxy_accounts: 'true' } : {}) }).toString();
   return apiFetchForServer(server, `/api/credenciais${query ? `?${query}` : ''}`, { signal: comTeto(signal, 8000) });
@@ -3071,6 +3095,7 @@ export interface ModeloProvedor {
 
 export interface EnginesResponse {
   motores: Record<string, Motor>;
+  claude_provider_switch?: boolean;
   // true quando engines.json existe mas não pôde ser lido (hand-edit quebrado, etc): a tela
   // precisa distinguir isto de "nenhum motor configurado" — as duas batem em `motores: {}`.
   arquivo_corrompido: boolean;
@@ -3954,6 +3979,14 @@ export function setEngineModel(
       method: 'POST',
       body: JSON.stringify(body),
     }).then(withSessionWarnings);
+}
+
+export function switchClaudeProvider(server: Server, name: string, selection: ClaudeProviderTarget & { model: string; source: ClaudeProviderSource }): Promise<ClaudeProviderTarget & { ok: boolean; model: string; service_tier: 'default' }> {
+  _invalidarCatalogo(name);
+  return apiFetchForServer<ClaudeProviderTarget & { ok: boolean; model: string; service_tier: 'default' }>(server,
+    `/api/sessions/${encodeURIComponent(name)}/engine/provider`, {
+      method: 'POST', body: JSON.stringify(selection),
+    }, 720_000).then(withSessionWarnings);
 }
 
 // Fast da sessão viva (POST .../service-tier); `priority` liga, `default` volta ao padrão da conta.

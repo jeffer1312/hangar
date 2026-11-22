@@ -3,6 +3,7 @@ import { ReviewsAnimation } from './reviews-animation';
 import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { ClaudeNoticesAnimation } from './ClaudeNoticesAnimation';
+import { ClaudeProvidersAnimation } from './ClaudeProvidersAnimation';
 import { CliproxyWizardAnimation } from './CliproxyWizardAnimation';
 import { SpeedChoiceAnimation } from './SpeedChoiceAnimation';
 import { ProxyUpdateAnimation } from './ProxyUpdateAnimation';
@@ -34,6 +35,7 @@ import { WorkReviewAnimation } from './WorkReviewAnimation';
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
   'ajustes-sessao-abas': SessionSettingsAnimation,
+  'provedores-do-claude': ClaudeProvidersAnimation,
   'revisoes-mobile': ReviewsAnimation,
   'scheduled-tasks': ScheduledTasksAnimation,
   'adormecer-ocultas': SleepHiddenAnimation,

@@ -37,27 +37,37 @@ pub(super) struct HeadlessOperation {
     pub auto:Option<Duration>,
     pub cancelled:std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
-pub struct ClosedIngress {gates:super::ingress::IngressGates,name:String,exclusive:bool}
+pub struct ClosedIngress {gates:super::ingress::IngressGates,name:String,exclusive:bool,provider_switch:bool}
 impl ClosedIngress {
     pub async fn acquire(gates:&super::ingress::IngressGates,name:&str)->Result<Self,RuntimeError> {
         Self::acquire_within(gates,name,Duration::from_secs(60)).await
     }
     pub async fn acquire_within(gates:&super::ingress::IngressGates,name:&str,wait:Duration)->Result<Self,RuntimeError> {
         gates.close(name,wait).await.map_err(|_|failure("lifecycle_ingress_busy"))?;
-        Ok(Self {gates:gates.clone(),name:name.into(),exclusive:false})
+        Ok(Self {gates:gates.clone(),name:name.into(),exclusive:false,provider_switch:false})
     }
     /// A porta retida pela troca de conversa recusa na hora, com o código da transferência.
     pub async fn acquire_unless_transfer(gates:&super::ingress::IngressGates,name:&str)->Result<Self,RuntimeError> {
         gates.close_unless_held(name,Duration::from_secs(60)).await.map_err(transfer_refusal)?;
-        Ok(Self {gates:gates.clone(),name:name.into(),exclusive:false})
+        Ok(Self {gates:gates.clone(),name:name.into(),exclusive:false,provider_switch:false})
     }
     /// Como `acquire_unless_transfer`, e a troca de conversa também não começa enquanto durar.
     pub async fn acquire_exclusive(gates:&super::ingress::IngressGates,name:&str)->Result<Self,RuntimeError> {
         gates.close_exclusive(name,Duration::from_secs(60)).await.map_err(transfer_refusal)?;
-        Ok(Self {gates:gates.clone(),name:name.into(),exclusive:true})
+        Ok(Self {gates:gates.clone(),name:name.into(),exclusive:true,provider_switch:false})
+    }
+    pub(super) async fn acquire_provider_switch(gates: &super::ingress::IngressGates, name: &str) -> Result<Self, RuntimeError> {
+        gates.hold_provider_switch(name, Duration::from_secs(5)).await.map_err(transfer_refusal)?;
+        Ok(Self {gates:gates.clone(), name:name.into(), exclusive:false, provider_switch:true})
     }
 }
-impl Drop for ClosedIngress {fn drop(&mut self) {if self.exclusive {self.gates.open_exclusive(&self.name)} else {self.gates.open(&self.name)}}}
+impl Drop for ClosedIngress {
+    fn drop(&mut self) {
+        if self.provider_switch { self.gates.release_provider_switch(&self.name) }
+        else if self.exclusive { self.gates.open_exclusive(&self.name) }
+        else { self.gates.open(&self.name) }
+    }
+}
 fn transfer_refusal(refused:super::ingress::CloseRefused)->RuntimeError {
     match refused {
         super::ingress::CloseRefused::Held=>RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"),

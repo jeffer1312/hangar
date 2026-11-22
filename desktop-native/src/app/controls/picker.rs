@@ -156,6 +156,8 @@ impl Hangar {
         self.controls.handoff = None;
         // Leitura que falhou não marca carregado: a próxima abertura relê, e nenhuma estrela grava por cima.
         if self.controls.favorites.is_none() { self.controls.favorites = crate::appearance::favorite_models(); }
+        self.controls.providers.reset();
+        if self.provider().0 == "claude" { self.load_session_engines(cx); }
         if self.handoff_source_now().is_some() { self.ensure_session_accounts(cx); }
     }
 
@@ -414,7 +416,11 @@ impl Hangar {
         let button = |id: String, selected: bool, enabled: bool, label: String, child: AnyElement, cx: &mut Context<Self>| {
             let tab = id.clone();
             let button = rail_button(&id, selected, label, child).disabled(!enabled)
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if this.controls.picker_tab.as_deref() == Some(super::providers::TAB) {
+                        this.controls.providers.reset();
+                        this.ctl_search.update(cx, |input, cx| input.set_value("", window, cx));
+                    }
                     this.controls.picker_tab = Some(tab.clone());
                     this.controls.picker_more = false;
                     this.controls.highlight = None;
@@ -432,6 +438,19 @@ impl Hangar {
         for (provider, enabled) in self.picker_providers() {
             let label = if provider != self.provider().0 && !enabled { tr("picker_handoff_no_account") } else { provider_label(&provider) };
             items.push(button(provider.clone(), tab == provider, enabled, label, chrome::provider_glyph(&provider, 20.).into_any_element(), cx));
+        }
+        use super::providers::TAB;
+        if self.provider_picker_available() {
+            let active = tab == TAB;
+            let button = super::providers::tab_button(active)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if this.controls.picker_tab.as_deref() != Some(TAB) {
+                        this.controls.picker_tab = Some(TAB.into());
+                        this.open_provider_picker(window, cx);
+                    }
+                    cx.notify();
+                }));
+            items.push(rail_tab(button, active).into_any_element());
         }
         rail_view(items)
     }
@@ -564,6 +583,10 @@ impl Hangar {
         let own = match catalog { Some(Ok(catalog)) => catalog, _ => &none };
         let view = self.picker_view(own);
         let tab = view.tab.clone();
+        if tab == super::providers::TAB {
+            let rail = self.picker_rail(&view, cx);
+            return div().flex().child(rail).child(self.render_claude_provider_picker(busy, cx)).into_any_element();
+        }
         let rail = (!searching).then(|| self.picker_rail(&view, cx));
         let rows = self.picker_rows_of(view, cx);
         let pick = self.ctl_highlight(&rows);
@@ -635,6 +658,12 @@ impl Hangar {
                 .children(reasoning))
             .children(footer)
             .children(context)
+            .when(self.provider().0 == "claude" && self.provider_choices_failed(), |el| {
+                el.child(div().px_2().pt_2().flex().items_center().gap_2()
+                    .child(div().text_xs().text_color(theme::warning()).child(tr("claude_provider_read_failed")))
+                    .child(Button::new("picker-provider-retry").ghost().small().label(tr("retry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.load_session_engines(cx)))))
+            })
             .into_any_element()
     }
 }

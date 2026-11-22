@@ -114,7 +114,7 @@ pub(crate) use accounts::{CLIPROXY_INSTALL_ITEMS, CliproxyBrand, CliproxyItem, c
     cliproxy_update_done_banner, cliproxy_update_running_banner, CliproxyCardView, cliproxy_adopt_button, cliproxy_adopt_done_banner,
     cliproxy_adopt_running_banner, cliproxy_card_note, cliproxy_card_view, cliproxy_connect_button, login_heading, target_row};
 /// As peças do seletor de modelos e da troca de agente, para a animação da novidade.
-pub(crate) use controls::picker as model_picker;
+pub(crate) use controls::{picker as model_picker, providers as provider_picker};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
     search_scope_summary, search_status_line, search_who};
@@ -1282,16 +1282,19 @@ impl Hangar {
         }
         // A lista que um app anterior guardou no "Atualizar?"; daqui em diante quem mostra é o `Updater`.
         cx.defer_in(window, |_, window, cx| crate::update::confirm::show_legacy_pending(window, cx));
-        // Só para ver e fotografar no build de debug: HANGAR_NATIVE_PREVIEW=update-confirm, whats-new ou o nome de uma
-        // animação das novidades. Espera a subida para abrir por cima do diálogo de primeira execução de um perfil vazio.
         #[cfg(debug_assertions)]
         if let Ok(name) = std::env::var("HANGAR_NATIVE_PREVIEW") {
-            cx.spawn_in(window, async move |_, cx| {
+            cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor().timer(Duration::from_secs(3)).await;
-                let _ = cx.update(|window, cx| match name.as_str() {
-                    "update-confirm" => crate::update::confirm::open_preview(false, window, cx),
-                    "whats-new" => crate::update::confirm::open_preview(true, window, cx),
-                    _ => crate::news::open_preview(name, window, cx),
+                let _ = this.update_in(cx, |this, window, cx| {
+                    // O cartão de conexão é pintado por cima dos diálogos, mesmo quando abre antes da prévia.
+                    this.connection_dialog = false;
+                    cx.notify();
+                    match name.as_str() {
+                        "update-confirm" => crate::update::confirm::open_preview(false, window, cx),
+                        "whats-new" => crate::update::confirm::open_preview(true, window, cx),
+                        _ => crate::news::open_preview(name, window, cx),
+                    }
                 });
             }).detach();
         }

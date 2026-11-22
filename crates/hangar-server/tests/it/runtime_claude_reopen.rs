@@ -1419,6 +1419,66 @@ async fn the_account_route_moves_a_headless_conversation_to_the_new_account() {
 }
 
 #[tokio::test]
+async fn a_provider_switch_preserves_the_claude_conversation_and_surface() {
+    use crate::remote_browser::support::Server;
+    let proxy = Server::owner(axum::Router::new().route("/v1/models", axum::routing::get(|| async {
+        axum::Json(json!({"data":[{"id":"pro/gpt-6-pro","context_length":200000},{"id":"plus/gpt-6-plus"}]}))
+    }))).await;
+    for headless in [false, true] {
+        let fx = fixture();
+        let key = "f3".repeat(16);
+        logged_in_default(&fx);
+        fx.transcript();
+        let project = hangar_workspace::worktrees::sanitize_cwd(&fx.cwd.to_string_lossy());
+        let transcript = fx.home.join(format!(".claude/projects/{project}/{SID}.jsonl"));
+        let history = std::fs::read(&transcript).unwrap();
+        let config = fx.home.join(".cli-proxy-api");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("config.yaml"), format!("host: 127.0.0.1\nport: {}\napi-keys: [fixture-key]\n",proxy.address.port())).unwrap();
+        let credential = json!({"type":"codex","account_id":"fixture-pro","email":"pro@example.test","prefix":"pro","plan_type":"pro"});
+        let binding = hangar_server::engines::proxy::binding_id(&credential).unwrap();
+        std::fs::write(config.join("pro.json"), credential.to_string()).unwrap();
+        std::fs::write(fx.home.join(".claude/engines.json"),json!({"target":{
+            "base_url":format!("http://{}",proxy.address),"api_key":"fixture-key","model":"gpt-6-pro","cliproxy_binding":binding
+        }}).to_string()).unwrap();
+        let registry = headless_registry(&fx).await;
+        crate::write_executable(&fx.home.join("bin/hangar-engine"), "#!/bin/sh\nwhile [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n");
+        if headless {
+            fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits","cano":null}));
+        } else { terminal_with_spec(&fx, &key); }
+        let server = serve_with_accounts(&fx, registry.clone()).await;
+        let entry = hangar_server::engines::proxy::resolve_binding(&hangar_server::accounts::AccountService::new(home_env(&fx)), &binding).unwrap();
+        let request = json!({"source":{"lifecycle_id":format!("k:{key}"),"jsonl":transcript,"headless":headless,"engine":null,"engine_account":null,"engine_binding":null},
+            "engine":"target","engine_account":entry["account"],"engine_binding":binding,"model":"gpt-6-pro"});
+        let mut rejected = request.clone();
+        rejected["model"] = json!("gpt-6-plus");
+        let before = fx.spawns();
+        assert_eq!(post(server,"engine/provider",rejected).await.0, 409);
+        assert_eq!(fx.spawns(), before);
+        let mut stale = request.clone();
+        stale["source"]["headless"] = json!(!headless);
+        assert_eq!(post(server,"engine/provider",stale).await.0, 409);
+        assert_eq!(fx.spawns(), before);
+        let (status, result) = post(server,"engine/provider",request).await;
+        assert_eq!(status, 200, "{result}");
+        assert_eq!(result["engine_binding"], binding);
+        assert_eq!(result["service_tier"], "default");
+        assert_eq!(std::fs::read(&transcript).unwrap(), history);
+        let stored = hangar_server::session_open::record::read(&fx.home, &key).unwrap().unwrap();
+        assert_eq!(stored.conversation.as_deref(), Some(SID));
+        assert_eq!(stored.surface, if headless { Surface::Headless } else { Surface::Terminal });
+        assert_eq!(stored.model.as_deref(), Some("gpt-6-pro"));
+        if !headless {
+            let command = fx.args().last().cloned().unwrap();
+            assert!(command.contains("--service-tier default") && command.contains("--account-binding"), "{command}");
+        }
+        registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+        fx.finish();
+    }
+    proxy.close().await;
+}
+
+#[tokio::test]
 async fn resume_refuses_a_bad_id_and_a_session_that_does_not_exist() {
     let fx = fixture();
     // O multiplexador de pé com outra sessão: `s1` não existe.

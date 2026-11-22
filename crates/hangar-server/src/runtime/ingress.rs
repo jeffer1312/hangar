@@ -63,6 +63,10 @@ impl IngressGates {
     /// Como `close_unless_held`, e enquanto durar a retenção (`hold`) recusa: a troca de conversa não
     /// começa sobre um rename em curso. Desfeito por `open_exclusive`.
     pub async fn close_exclusive(&self, name: &str, wait: Duration) -> Result<(), CloseRefused> { self.close_as(name, wait, false, false, true, true).await }
+    pub(super) async fn hold_provider_switch(&self, name: &str, wait: Duration) -> Result<(), CloseRefused> {
+        self.close_as(name, wait, true, false, true, true).await
+    }
+    pub(super) fn release_provider_switch(&self, name: &str) { self.reopen(name, true, false, true); }
     /// Fechamento retido: enquanto durar, `enter` recusa sem esperar. Desfeito por `release`.
     pub async fn hold(&self, name: &str, wait: Duration) -> Result<(), IngressBusy> { self.close_as(name, wait, true, false, false, false).await.map_err(|_| IngressBusy) }
     /// Retenção da transferência: também recusa e espera os repasses ao Python. Desfeita por `release_transfer`.
@@ -72,6 +76,9 @@ impl IngressGates {
         let mut guard = CloseGuard { gates: self, name, held, transfer, exclusive, armed: false };
         // Conferido sob a mesma trava que conta o fechamento: uma retenção não passa entre os dois.
         let (mut passes, mut forwarded) = self.with_gate(name, |g| {
+            if (g.holds > 0 && g.exclusive > 0) || (held && exclusive && *g.closes.borrow() > 0) {
+                return Err(CloseRefused::Busy);
+            }
             if refuse_held && g.holds > 0 { return Err(CloseRefused::Held); }
             if held && g.exclusive > 0 { return Err(CloseRefused::Busy); }
             g.closes.send_modify(|n| *n += 1);
@@ -140,6 +147,23 @@ mod tests {
         gates.hold("k", Duration::from_millis(10)).await.unwrap();
         assert!(matches!(gates.close_exclusive("k", Duration::from_secs(5)).await, Err(CloseRefused::Held)));
         gates.release("k");
+        assert!(gates.inner.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_changes_and_other_closers_cannot_overlap() {
+        let gates = IngressGates::default();
+        let wait = Duration::from_secs(5);
+        gates.close_unless_held("chat", wait).await.unwrap();
+        assert!(gates.hold_provider_switch("chat", wait).await.is_err());
+        gates.open("chat");
+        gates.hold_provider_switch("chat", wait).await.unwrap();
+        assert!(gates.close_unless_held("chat", wait).await.is_err());
+        assert!(gates.hold_transfer("chat", wait).await.is_err());
+        assert!(gates.close("chat", wait).await.is_err());
+        assert!(gates.enter("chat", wait).await.is_err());
+        gates.release_provider_switch("chat");
+        drop(gates.enter("chat", wait).await.unwrap());
         assert!(gates.inner.lock().unwrap().is_empty());
     }
 
