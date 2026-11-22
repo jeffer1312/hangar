@@ -3,15 +3,17 @@
 # leem o `server-latest.json` dessa release e conferem o sha256 de cada binário antes de usar.
 # O canal de testes (`beta`) publica na pré-release `server-beta`, que é a que o backend/app/rust_release.py procura
 # quando o checkout está nessa branch. O manifesto mantém o nome em toda release.
-# As outras branches só testam: sem build de release, sem publicar. `workflow_dispatch` nelas compila sem publicar.
+# As outras branches são testadas pelo gate.yml no pull request; `workflow_dispatch` nelas testa e compila sem
+# publicar.
 # Trocar o canal é trocar `beta` aqui, no native.yml e nos *-macos.yml.
 # Os jobs estão no server-jobs.yml. O macOS roda à parte, no server-macos.yml, depois que este run termina: nada
 # daqui nem o Package (que dispara no fim deste run) esperam por ele.
 name: Server
 
 on:
+  # Só onde publica: os pull requests são testados pelo gate.yml, e uma branch sem PR roda pelo workflow_dispatch.
   push:
-    branches: ["**"]
+    branches: [main, beta]
     paths:
       - "crates/**"
       - "backend/tests/fixtures/**"
