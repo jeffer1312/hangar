@@ -128,30 +128,59 @@ struct AccountSync {
     read: watch::Sender<bool>,
 }
 
+/// Como terminou uma leitura da conta.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pass {
+    Read,
+    /// A conta recusou a lista a esta máquina: os aparelhos da conta ficam suspensos.
+    Refused,
+    /// Serviço fora ou resposta ruim: os aparelhos ficam como estavam.
+    Failed,
+}
+
 impl AccountSync {
     /// Serviço fora não mexe nos aparelhos: sem ele o túnel também cai. PC pendente ou desconhecido na conta
     /// mantém o túnel de pé sem a lista, e aí os aparelhos da conta ficam suspensos até uma leitura boa.
-    async fn pass(&self, linked: &Linked) {
-        match account_devices::apply_revocations(linked, &self.devices).await {
+    async fn pass(&self, linked: &Linked) -> Pass {
+        self.pass_since(linked, None).await
+    }
+
+    /// `suspended_before`: a suspensão de antes da subida, que já a ligou; o aviso no log sai quando ela começa.
+    async fn pass_since(&self, linked: &Linked, suspended_before: Option<bool>) -> Pass {
+        let failure = match account_devices::apply_revocations(linked, &self.devices).await {
             Ok(()) => {
                 self.devices.suspend_account_devices(false);
                 self.failing.store(false, Ordering::Relaxed);
                 self.read.send_if_modified(|good| !std::mem::replace(good, true));
+                return Pass::Read;
             }
-            Err(error) => {
-                // Sem avisar: só a volta a `true` interessa a quem escuta.
-                self.read.send_if_modified(|good| { *good = false; false });
-                let refused = matches!(error.code, "connect_account_machine_pending" | "connect_account_machine_unknown");
-                let newly_suspended = refused && !self.devices.suspend_account_devices(true);
-                if self.failing.swap(true, Ordering::Relaxed) && !newly_suspended {
-                    return;
-                }
-                if refused {
-                    tracing::warn!(code = error.code, "aparelhos da conta não lidos; os que entraram pela conta ficam suspensos nesta máquina até a próxima leitura boa: {}", error.msg);
-                } else {
-                    tracing::warn!(code = "connect_account_devices_unreadable", cause = error.code, "aparelhos da conta não lidos; os desta máquina ficam como estão: {}", error.msg);
-                }
-            }
+            Err(failure) => failure,
+        };
+        // Sem avisar: só a volta a `true` interessa a quem escuta.
+        self.read.send_if_modified(|good| { *good = false; false });
+        let refused = failure.machine_refused();
+        let error = ConnectError::from(failure);
+        let newly_suspended = refused && {
+            let was = self.devices.suspend_account_devices(true);
+            !suspended_before.unwrap_or(was)
+        };
+        let outcome = if refused { Pass::Refused } else { Pass::Failed };
+        if self.failing.swap(true, Ordering::Relaxed) && !newly_suspended {
+            return outcome;
+        }
+        if refused {
+            tracing::warn!(code = error.code, "aparelhos da conta não lidos; os que entraram pela conta ficam suspensos nesta máquina até a próxima leitura boa: {}", error.msg);
+        } else {
+            tracing::warn!(code = "connect_account_devices_unreadable", cause = error.code, "aparelhos da conta não lidos; os desta máquina ficam como estão: {}", error.msg);
+        }
+        outcome
+    }
+
+    /// A primeira leitura de uma subida, junto com o túnel: os aparelhos da conta esperam suspensos por ela, e a
+    /// falha que não é recusa da conta os devolve como estavam antes, como faria a leitura antes do túnel.
+    async fn first_pass(&self, linked: &Linked, suspended_before: bool) {
+        if self.pass_since(linked, Some(suspended_before)).await == Pass::Failed {
+            self.devices.suspend_account_devices(suspended_before);
         }
     }
 }
@@ -303,7 +332,7 @@ impl Supervisor {
         let (sync, synced) = (self.account_sync.clone(), linked.clone());
         tokio::spawn(every(ACCOUNT_SYNC_EVERY, stop_rx.clone(), move || {
             let (sync, linked) = (sync.clone(), synced.clone());
-            async move { sync.pass(&linked).await }
+            async move { sync.pass(&linked).await; }
         }));
         let (done_tx, done) = oneshot::channel();
         let (live, bound) = (self.live.clone(), self.bound.subscribe());
@@ -331,9 +360,11 @@ impl Supervisor {
             // A subida pode baixar o frpc e o Caddy por minutos: nesse tempo a tela não pode mostrar "parado".
             live.active = true;
         }
-        // Antes do túnel: aparelho revogado na conta com a máquina desligada não entra nem por um minuto.
-        self.account_sync.pass(linked).await;
-        match self.launch(linked).await {
+        // Suspensos antes do túnel e até a primeira leitura, que corre junto com a subida: aparelho revogado na conta
+        // com a máquina desligada não entra nem por um minuto, e a subida não espera o serviço responder.
+        let suspended_before = self.devices.suspend_account_devices(true);
+        let ((), launched) = tokio::join!(self.account_sync.first_pass(linked, suspended_before), self.launch(linked));
+        match launched {
             Ok(started) => {
                 *run = Some(started);
                 Ok(())
@@ -453,7 +484,7 @@ impl Supervisor {
 
     /// Uma leitura dos aparelhos da conta, a mesma que o laço faz a cada `ACCOUNT_SYNC_EVERY`.
     pub async fn sync_account_devices(&self, linked: &Linked) {
-        self.account_sync.pass(linked).await;
+        let _ = self.account_sync.pass(linked).await;
     }
 
     /// Muda para `true` quando a conta passa a ser lida: Connect ligado depois da subida ou PC liberado na conta.

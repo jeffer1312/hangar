@@ -20,9 +20,11 @@ mod fake;
 mod tests;
 
 pub use account::{
-    AccountDevice, AccountSession, ConnectMachine, DeviceKey, DeviceStatus, MachineRegistration, NameLookup, SignInResult,
+    AccountDevice, AccountSession, ConnectMachine, DeviceKey, DeviceStatus, MachineRegistration, SignInResult, install_code,
     normalize_name, valid_guest_user,
 };
+#[cfg(test)]
+pub(crate) use account::NameLookup;
 pub use client::{CONNECT_SERVICE_URL, ConnectClient};
 pub use error::{Code, Error};
 pub use redeem::MachineEntry;

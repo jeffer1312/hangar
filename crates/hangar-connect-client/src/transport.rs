@@ -2,7 +2,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use crate::error::Error;
+use crate::error::{Code, Error};
 
 const SECRET_HEADERS: [&str; 3] = ["authorization", "x-hangar-device-secret", "cookie"];
 
@@ -43,6 +43,7 @@ pub trait Transport: Send + Sync {
 #[derive(Clone)]
 pub struct ReqwestTransport {
     client: reqwest::Client,
+    max_body: Option<usize>,
 }
 
 impl ReqwestTransport {
@@ -54,13 +55,19 @@ impl ReqwestTransport {
     pub fn new(builder: reqwest::ClientBuilder) -> Result<Self, Error> {
         let client = builder.redirect(reqwest::redirect::Policy::none()).build()
             .map_err(|_| Error::network("cliente HTTP indisponível"))?;
-        Ok(Self { client })
+        Ok(Self { client, max_body: None })
+    }
+
+    /// Corpo de resposta maior que `limit` não é lido, nem em parte: volta [`Code::ConnectResponseInvalid`].
+    pub fn with_max_body(mut self, limit: usize) -> Self {
+        self.max_body = Some(limit);
+        self
     }
 }
 
 impl Transport for ReqwestTransport {
     fn send(&self, request: Request) -> impl Future<Output = Result<Response, Error>> + Send {
-        let client = self.client.clone();
+        let (client, max_body) = (self.client.clone(), self.max_body);
         async move {
             let method = match request.method {
                 Method::Get => reqwest::Method::GET,
@@ -77,11 +84,18 @@ impl Transport for ReqwestTransport {
             if let Some(body) = request.body {
                 builder = builder.body(body);
             }
-            let response = builder.send().await.map_err(|error| Error::network(error.without_url().to_string()))?;
+            let network = |error: reqwest::Error| Error::network(error.without_url().to_string());
+            let mut response = builder.send().await.map_err(network)?;
             let status = response.status().as_u16();
             let set_cookies = response.headers().get_all(reqwest::header::SET_COOKIE).iter()
                 .filter_map(|value| value.to_str().ok().map(str::to_owned)).collect();
-            let body = response.bytes().await.map_err(|error| Error::network(error.without_url().to_string()))?.to_vec();
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(network)? {
+                if max_body.is_some_and(|limit| body.len() + chunk.len() > limit) {
+                    return Err(Error::new(Code::ConnectResponseInvalid, None));
+                }
+                body.extend_from_slice(&chunk);
+            }
             Ok(Response { status, set_cookies, body })
         }
     }

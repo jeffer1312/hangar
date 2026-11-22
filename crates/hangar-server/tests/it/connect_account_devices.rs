@@ -256,6 +256,61 @@ async fn the_first_read_of_the_account_comes_before_the_tunnel() {
     assert!(gone, "a subida já aplicou a revogação");
 }
 
+/// A subida não espera a conta: o túnel sobe com a leitura presa no serviço, e nesse meio tempo o aparelho da conta
+/// fica suspenso. A leitura boa o devolve.
+#[tokio::test]
+async fn the_tunnel_does_not_wait_for_the_first_read_and_account_devices_wait_suspended() {
+    let held = Arc::new(tokio::sync::Semaphore::new(0));
+    let release = held.clone();
+    let app = axum::Router::new().route("/v1/devices", get(move || {
+        let held = held.clone();
+        async move {
+            let _permit = held.acquire().await.unwrap();
+            (StatusCode::OK, json!([{"device_id": "D", "name": "aparelho D", "status": "approved", "created_at": 1.5}]).to_string())
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let service = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = crate::physical_tempdir();
+    let linked = linked_at(service);
+    let store = store_at(dir.path().to_path_buf(), &linked);
+    let (d, local) = (released(&store, "n1", "D"), approved_here(&store, "n2"));
+    let supervisor = Arc::new(crate::connect_supervisor::supervisor(dir.path(), store.clone(), 8765));
+    let starting = tokio::spawn({
+        let (supervisor, linked) = (supervisor.clone(), linked.clone());
+        async move { supervisor.start(&linked).await }
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !dir.path().join("frpc.toml").exists() {
+        assert!(std::time::Instant::now() < deadline, "o túnel esperou a leitura da conta");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(store.verify(d.as_bytes()).is_none(), "antes da primeira leitura o aparelho da conta não entra");
+    assert!(store.verify(local.as_bytes()).is_some(), "aprovado nesta máquina não depende da conta");
+
+    release.add_permits(1);
+    starting.await.unwrap().unwrap();
+    let back = store.verify(d.as_bytes()).is_some();
+    supervisor.stop().await;
+    assert!(back, "a leitura boa devolve o aparelho da conta");
+}
+
+/// Serviço fora na subida deixa os aparelhos como a leitura antes do túnel deixava: falha que não é recusa não suspende.
+#[tokio::test]
+async fn a_start_with_the_service_down_leaves_the_account_devices_in() {
+    let dir = crate::physical_tempdir();
+    let linked = linked_at(free_port());
+    let store = store_at(dir.path().to_path_buf(), &linked);
+    let d = released(&store, "n1", "D");
+    let supervisor = crate::connect_supervisor::supervisor(dir.path(), store.clone(), 8765);
+    supervisor.start(&linked).await.unwrap();
+    let kept = store.verify(d.as_bytes()).is_some();
+    supervisor.stop().await;
+    assert!(kept);
+}
+
 #[derive(Clone, Default)]
 struct Log(Arc<Mutex<Vec<u8>>>);
 

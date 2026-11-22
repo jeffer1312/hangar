@@ -3,13 +3,14 @@
 //! A chave de máquina e o token do `frps` ficam aqui e no `frpc.toml`. A senha da conta nunca entra.
 use std::io;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use axum::http::StatusCode;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use hangar_connect_client::{Code, ConnectClient, ReqwestTransport};
+use hangar_connect_client::{AccountSession, Code, ConnectClient, ReqwestTransport};
 
 use super::ConnectError;
 use super::config::{frps_endpoint, valid_host, valid_label, valid_secret};
@@ -17,6 +18,8 @@ use super::devices::ServiceIdentity;
 
 const STATE_FILE: &str = "connect.json";
 const SERVICE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Lista da conta maior que isso não é lida, nem em parte: corte no meio deixaria revogado de fora.
+const SERVICE_MAX_BODY: usize = 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -173,6 +176,22 @@ pub(super) fn service_base(raw: &str) -> Result<reqwest::Url, ConnectError> {
     Ok(url)
 }
 
+/// Um `reqwest` para todos os pedidos desta máquina ao serviço, que guarda as conexões abertas. Sem seguir
+/// redirecionamento: a senha da conta e a chave da máquina iriam junto para outro endereço. `None`: TLS indisponível.
+pub(super) fn service_client(timeout: Duration) -> Option<ConnectClient<ReqwestTransport>> {
+    static TRANSPORT: OnceLock<Option<ReqwestTransport>> = OnceLock::new();
+    let transport = TRANSPORT.get_or_init(|| {
+        ReqwestTransport::new(hangar_core::net::http_client()).ok().map(|transport| transport.with_max_body(SERVICE_MAX_BODY))
+    });
+    transport.clone().map(|transport| ConnectClient::new(transport).with_timeout(timeout))
+}
+
+/// Base do serviço já conferida por [`service_base`], com a chave desta máquina no lugar da sessão da conta.
+pub(super) fn machine_session(linked: &Linked) -> Result<AccountSession, ConnectError> {
+    let base = service_base(&linked.service_url)?;
+    Ok(AccountSession { service_url: base.as_str().trim_end_matches('/').to_owned(), token: linked.machine_key.clone(), device: None })
+}
+
 fn service_refused(status: u16) -> ConnectError {
     let (status, code, msg) = match status {
         401 => (StatusCode::UNAUTHORIZED, "connect_login_refused", "conta ou senha recusada pelo serviço do Connect"),
@@ -203,10 +222,8 @@ pub async fn register(request: &LinkRequest) -> Result<Linked, ConnectError> {
     if !valid_label(&request.account) || !valid_label(&request.machine_name) {
         return Err(ConnectError::new(StatusCode::BAD_REQUEST, "connect_name_invalid", "nome de conta ou de máquina inválido"));
     }
-    // O transporte não segue redirecionamento: a senha iria junto para outro endereço.
-    let transport = ReqwestTransport::new(hangar_core::net::http_client())
-        .map_err(|_| ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_service_unreachable", "cliente HTTP indisponível"))?;
-    let client = ConnectClient::new(transport).with_timeout(SERVICE_TIMEOUT);
+    let client = service_client(SERVICE_TIMEOUT)
+        .ok_or_else(|| ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_service_unreachable", "cliente HTTP indisponível"))?;
     let service_url = base.as_str().trim_end_matches('/').to_owned();
     // Criar a conta já devolve a sessão dela, no mesmo formato do login.
     let session = if request.create_account {

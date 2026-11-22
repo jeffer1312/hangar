@@ -37,7 +37,7 @@ impl<T: Transport> ConnectClient<T> {
     /// [`Code::CredentialsMismatch`] (401 no login), [`Code::SyncTooManyAttempts`] (429), [`Code::NetworkFailed`],
     /// [`Code::SyncInsecure`] (endereço http), [`Code::SyncUnavailable`] (endereço torto ou `prelogin` fora da
     /// forma), [`Code::SyncRequestFailed`] (outra recusa, com o status) e [`Code::SyncVaultUnreadable`].
-    pub async fn sync_sign_in(&self, address: &str, user: &str, password: &str) -> Result<Vec<VaultServer>, Error> {
+    pub(crate) async fn sync_sign_in(&self, address: &str, user: &str, password: &str) -> Result<Vec<VaultServer>, Error> {
         let hub = hub_address(address)?;
         let prelogin = self.sync_request(&hub, Method::Get, &format!("/api/sync/prelogin?{}", query("user", user)), None, None).await?;
         let (salt, iterations) = read_prelogin(&prelogin)?;

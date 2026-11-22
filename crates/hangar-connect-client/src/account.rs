@@ -43,13 +43,29 @@ pub enum DeviceStatus {
 pub struct AccountDevice {
     pub device_id: String,
     pub name: String,
-    pub status: DeviceStatus,
+    /// `pending`, `approved` ou `revoked`. Texto: um estado novo no serviço não derruba a lista toda.
+    pub status: String,
+    /// `machine` (PC da conta) ou `device`; serviço antigo não manda e todo mundo é aparelho.
+    #[serde(default = "device_kind")]
+    pub kind: String,
     pub created_at: f64,
+    #[serde(default)]
     pub approved_at: Option<f64>,
+    #[serde(default)]
     pub revoked_at: Option<f64>,
     /// O código que o aparelho mostra, pronto do serviço (que nunca manda o `install_id`); ausente em serviço antigo.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install_code: Option<String>,
+}
+
+impl AccountDevice {
+    pub fn is_revoked(&self) -> bool {
+        self.status == "revoked"
+    }
+}
+
+fn device_kind() -> String {
+    "device".to_owned()
 }
 
 /// O que o serviço entrega ao registrar uma máquina (`POST /v1/machines`). A chave troca a cada registro.
@@ -66,7 +82,7 @@ pub struct MachineRegistration {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NameLookup {
+pub(crate) enum NameLookup {
     Account,
     /// As máquinas que guardam o cofre do convidado, sem esquema.
     Guest { hosts: Vec<String> },
@@ -86,7 +102,7 @@ impl<T: Transport> ConnectClient<T> {
     ///
     /// [`Code::ConnectTooManyAttempts`] no 429, [`Code::ConnectResponseInvalid`] para resposta fora da forma e os de
     /// qualquer pedido ([`Code::NetworkFailed`], [`Code::ConnectRequestFailed`]). Serviço sem o diretório (404) é conta.
-    pub async fn lookup_name(&self, service_url: &str, name: &str) -> Result<NameLookup, Error> {
+    pub(crate) async fn lookup_name(&self, service_url: &str, name: &str) -> Result<NameLookup, Error> {
         let answer = match self.post(service_url, "/v1/lookup", json!({"name": normalize_name(name)}), Vec::new()).await {
             Ok(answer) => answer,
             Err(error) if error.status() == Some(404) => return Ok(NameLookup::Account),
@@ -115,7 +131,7 @@ impl<T: Transport> ConnectClient<T> {
     ///
     /// [`Code::CredentialsMismatch`] para nome desconhecido ou senha recusada (pela conta ou por todas as máquinas),
     /// [`Code::SyncTooManyAttempts`] quando o limite foi o que recusou, a primeira outra falha de máquina (rede vem
-    /// antes de "não confere": a máquina fora do ar pode ser a que aceitaria) e os de [`Self::lookup_name`].
+    /// antes de "não confere": a máquina fora do ar pode ser a que aceitaria) e os da busca do nome no serviço.
     pub async fn sign_in_anywhere(&self, service_url: &str, name: &str, password: &str) -> Result<SignInResult, Error> {
         let user = normalize_name(name);
         let hosts = match self.lookup_name(service_url, &user).await? {
@@ -244,6 +260,34 @@ impl<T: Transport> ConnectClient<T> {
         self.call(&session.service_url, &path, Method::Delete, None, auth(session)).await.map(drop)
     }
 
+    /// Migração: a máquina pede a liberação de um aparelho da conta, e o serviço só libera com o segredo dele.
+    ///
+    /// # Errors
+    ///
+    /// Os de qualquer pedido.
+    pub async fn vouch_account_device(&self, session: &AccountSession, id: &str, secret: &str) -> Result<(), Error> {
+        let path = format!("/v1/devices/{}/vouch", segment(id));
+        self.post(&session.service_url, &path, json!({"device_secret": secret}), auth(session)).await.map(drop)
+    }
+
+    /// Troca a lista de convidados da máquina (`session` com a chave dela) pela de `user_hashes`; vazia apaga.
+    /// Devolve os hashes pedidos que já são de outra conta.
+    ///
+    /// # Errors
+    ///
+    /// Os de qualquer pedido e [`Code::ConnectResponseInvalid`] com resposta fora da forma.
+    pub async fn put_guests(&self, session: &AccountSession, user_hashes: &[String]) -> Result<Vec<String>, Error> {
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(default)]
+            taken: Vec<String>,
+        }
+        let body = json!({"user_hashes": user_hashes});
+        let answer = self.call(&session.service_url, "/v1/guests", Method::Put, Some(body), bearer(session)).await?;
+        let answer: Answer = serde_json::from_value(answer).map_err(|_| fail(Code::ConnectResponseInvalid))?;
+        Ok(answer.taken.into_iter().filter(|hash| user_hashes.contains(hash)).collect())
+    }
+
     async fn account_session(&self, service_url: &str, path: &str, name: &str, password: &str) -> Result<AccountSession, Error> {
         let answer = self.post(service_url, path, json!({"name": name, "password": password}), Vec::new()).await?;
         let token = filled(&answer, "token").ok_or_else(|| fail(Code::ConnectResponseInvalid))?;
@@ -259,6 +303,19 @@ pub fn normalize_name(name: &str) -> String {
 /// Nome de convidado: tem `.` ou `@`, que conta do Connect não aceita, e nenhum espaço.
 pub fn valid_guest_user(user: &str) -> bool {
     user.contains(['.', '@']) && !user.chars().any(char::is_whitespace)
+}
+
+/// Código de conferência do celular: o mesmo que o celular calcula (`installCode` em `packages/core`, mesmos casos de
+/// teste). Sai do SHA-256 do `install_id`, não de um pedaço dele, e a lista manda só ele, nunca o id.
+/// shortcut: são 30 bits; quem tem a senha da conta e viu o código no celular ainda acha outro id com o mesmo código
+/// por força bruta (~2^30 hashes). Por isso o cartão mostra também o nome e há quanto tempo o pedido chegou.
+pub fn install_code(install_id: &str) -> String {
+    // Sem 0/O e 1/I: a pessoa compara de olho, numa tela e na outra.
+    const ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    let digest = ring::digest::digest(&ring::digest::SHA256, install_id.as_bytes());
+    let head = u32::from_be_bytes(digest.as_ref()[..4].try_into().expect("o SHA-256 tem 32 bytes")) >> 2;
+    let code: String = (0..6).map(|i| ALPHABET[((head >> (25 - 5 * i)) & 31) as usize] as char).collect();
+    format!("{}-{}", &code[..3], &code[3..])
 }
 
 pub(crate) fn bearer(session: &AccountSession) -> Vec<(&'static str, String)> {

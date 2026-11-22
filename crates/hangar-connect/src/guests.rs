@@ -3,46 +3,34 @@
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use serde::Deserialize;
-use serde_json::json;
+
+use hangar_connect_client::Code;
 
 use super::ConnectError;
-use super::state::{Linked, service_base};
+use super::state::{Linked, machine_session, service_client};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(Deserialize)]
-struct Answer {
-    #[serde(default)]
-    taken: Vec<String>,
-}
-
 /// Troca a lista desta máquina pela de `user_hashes` (vazia apaga). Devolve os hashes que já são de outra conta.
 pub async fn publish(linked: &Linked, user_hashes: &[String]) -> Result<Vec<String>, ConnectError> {
-    let url = service_base(&linked.service_url)?.join("/v1/guests").map_err(|_| Linked::invalid())?;
-    // Sem seguir redirecionamento: a chave da máquina iria junto para outro endereço.
-    let client = hangar_core::net::http_client().redirect(reqwest::redirect::Policy::none()).timeout(TIMEOUT).build()
-        .map_err(|_| ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_guests_unreachable", "cliente HTTP indisponível"))?;
-    let response = client.put(url).bearer_auth(&linked.machine_key)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(json!({"user_hashes": user_hashes}).to_string())
-        .send().await
-        .map_err(|_| ConnectError::new(StatusCode::BAD_GATEWAY, "connect_guests_unreachable", "o serviço do Connect não respondeu"))?;
-    let status = response.status();
-    if !status.is_success() {
-        // 404: serviço ainda sem o diretório. 409: máquina pendente ou revogada.
-        let code = match status.as_u16() {
-            404 => "connect_guests_unsupported",
-            401 | 403 | 409 => "connect_guests_refused",
-            429 => "connect_service_busy",
-            _ => "connect_guests_failed",
+    let session = machine_session(linked)?;
+    let client = service_client(TIMEOUT)
+        .ok_or_else(|| ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_guests_unreachable", "cliente HTTP indisponível"))?;
+    client.put_guests(&session, user_hashes).await.map_err(|error| {
+        let code = match error.status() {
+            // 404: serviço ainda sem o diretório. 409: máquina pendente ou revogada.
+            Some(404) => "connect_guests_unsupported",
+            Some(401 | 403 | 409) => "connect_guests_refused",
+            Some(429) => "connect_service_busy",
+            Some(_) => "connect_guests_failed",
+            None if error.code() == Code::NetworkFailed => {
+                return ConnectError::new(StatusCode::BAD_GATEWAY, "connect_guests_unreachable", "o serviço do Connect não respondeu");
+            }
+            None => return ConnectError::new(StatusCode::BAD_GATEWAY, "connect_guests_invalid", "o serviço do Connect devolveu uma resposta inválida"),
         };
-        return Err(ConnectError::new(StatusCode::BAD_GATEWAY, code, format!("o serviço do Connect recusou os convidados (HTTP {})", status.as_u16())));
-    }
-    let invalid = || ConnectError::new(StatusCode::BAD_GATEWAY, "connect_guests_invalid", "o serviço do Connect devolveu uma resposta inválida");
-    let bytes = response.bytes().await.map_err(|_| invalid())?;
-    let answer: Answer = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    Ok(answer.taken.into_iter().filter(|hash| user_hashes.contains(hash)).collect())
+        let status = error.status().unwrap_or_default();
+        ConnectError::new(StatusCode::BAD_GATEWAY, code, format!("o serviço do Connect recusou os convidados (HTTP {status})"))
+    })
 }
 
 #[cfg(test)]

@@ -112,14 +112,11 @@ struct RedeemBody { ticket: String, signature: String, secret: String, #[serde(d
 async fn redeem(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     let body: RedeemBody = match parse(req).await { Ok(body) => body, Err(response) => return response };
-    let redeemed = blocking(&st, move |store| {
-        let id = store.redeem_from(&body.ticket, &body.signature, &body.secret, body.install_id.as_deref())?;
-        // Bilhete que a conta liberou já nasce aprovado: quem resgata não espera cartão.
-        let approved = store.list().iter().any(|row| row.device_id == id && row.status == Status::Approved);
-        Ok((id, approved))
-    }).await;
+    let redeemed = blocking(&st, move |store| store.redeem_from(&body.ticket, &body.signature, &body.secret, body.install_id.as_deref())).await;
     match redeemed {
-        Ok((device_id, approved)) => reply(&headers, StatusCode::ACCEPTED, json!({"device_id": device_id, "status": if approved { "approved" } else { "pending" }})),
+        // Bilhete que a conta liberou já nasce aprovado: quem resgata não espera cartão.
+        Ok((device_id, status)) => reply(&headers, StatusCode::ACCEPTED,
+            json!({"device_id": device_id, "status": if status == Status::Approved { "approved" } else { "pending" }})),
         Err(refusal) => refused(&headers, refusal),
     }
 }
@@ -419,7 +416,7 @@ async fn account_devices_list(State(st): State<Arc<AppState>>, ConnectInfo(peer)
     let linked = match account_gate(&st, peer, &req).await { Ok(linked) => linked, Err(response) => return response };
     match account_devices::list(&linked).await {
         Ok(rows) => reply(&headers, StatusCode::OK, json!(rows)),
-        Err(failure) => failed(&headers, failure),
+        Err(failure) => failed(&headers, failure.into()),
     }
 }
 
@@ -428,7 +425,7 @@ async fn account_device_approve(State(st): State<Arc<AppState>>, ConnectInfo(pee
     let linked = match account_gate(&st, peer, &req).await { Ok(linked) => linked, Err(response) => return response };
     match account_devices::approve(&linked, &id).await {
         Ok(()) => reply(&headers, StatusCode::OK, json!({"ok": true})),
-        Err(failure) => failed(&headers, failure),
+        Err(failure) => failed(&headers, failure.into()),
     }
 }
 
@@ -436,10 +433,8 @@ async fn account_device_approve(State(st): State<Arc<AppState>>, ConnectInfo(pee
 async fn account_device_revoke(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
     let headers = req.headers().clone();
     let linked = match account_gate(&st, peer, &req).await { Ok(linked) => linked, Err(response) => return response };
-    // Já revogado ou fora da conta lá: o que falta é tirar daqui, senão o aparelho entra até a próxima leitura.
-    if let Err(failure) = account_devices::revoke(&linked, &id).await
-        && !matches!(failure.code, "connect_account_device_revoked" | "connect_account_device_unknown") {
-        return failed(&headers, failure);
+    if let Err(failure) = account_devices::revoke(&linked, &id).await {
+        return failed(&headers, failure.into());
     }
     match blocking(&st, move |store| store.revoke_account_devices(&[id])).await {
         Ok(()) => reply(&headers, StatusCode::OK, json!({"ok": true})),
@@ -460,7 +455,7 @@ async fn account_device_self(State(st): State<Arc<AppState>>, ConnectInfo(peer):
     };
     let body: VouchBody = match parse(req).await { Ok(body) => body, Err(response) => return response };
     if let Err(failure) = account_devices::vouch(&linked, &body.device_id, &body.device_secret).await {
-        return failed(&headers, failure);
+        return failed(&headers, failure.into());
     }
     // Ligado ao aparelho da conta: revogá-lo lá tira também a credencial antiga daqui.
     let account_device = body.device_id;

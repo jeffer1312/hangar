@@ -421,8 +421,9 @@ async fn account_devices_are_parsed_and_answered() {
         _ => json(404, json!({})),
     });
     let devices = client.list_account_devices(&session()).await.unwrap();
-    assert_eq!((devices[0].status, devices[0].created_at, devices[0].approved_at), (DeviceStatus::Pending, 1763812345.25, None));
+    assert_eq!((devices[0].status.as_str(), devices[0].created_at, devices[0].approved_at), ("pending", 1763812345.25, None));
     assert_eq!((devices[0].install_code.as_deref(), devices[1].install_code.as_deref()), (Some("K7Q2"), None));
+    assert_eq!(devices[1].kind, "device", "serviço antigo sem `kind`: aparelho");
     assert_eq!((devices[1].created_at, devices[1].approved_at), (1.0, Some(2.5)));
     client.approve_account_device(&session(), "d 1").await.unwrap();
     client.revoke_account_device(&session(), "d 1").await.unwrap();

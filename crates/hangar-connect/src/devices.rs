@@ -5,7 +5,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use base64::Engine;
@@ -22,18 +21,7 @@ pub const MAX_TICKET_AHEAD: u64 = 5 * 60;
 pub type DeviceId = String;
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
-/// Código de conferência do celular: o mesmo que o celular calcula (`installCode` em `packages/core`, mesmos casos de
-/// teste). Sai do SHA-256 do `install_id`, não de um pedaço dele, e a lista manda só ele, nunca o id.
-/// shortcut: são 30 bits; quem tem a senha da conta e viu o código no celular ainda acha outro id com o mesmo código
-/// por força bruta (~2^30 hashes). Por isso o cartão mostra também o nome e há quanto tempo o pedido chegou.
-pub fn install_code(install_id: &str) -> String {
-    // Sem 0/O e 1/I: a pessoa compara de olho, numa tela e na outra.
-    const ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-    let digest = ring::digest::digest(&ring::digest::SHA256, install_id.as_bytes());
-    let head = u32::from_be_bytes(digest.as_ref()[..4].try_into().expect("o SHA-256 tem 32 bytes")) >> 2;
-    let code: String = (0..6).map(|i| ALPHABET[((head >> (25 - 5 * i)) & 31) as usize] as char).collect();
-    format!("{}-{}", &code[..3], &code[3..])
-}
+pub use hangar_connect_client::install_code;
 
 /// Chave que junta os pedidos do mesmo celular no cartão de quem aprova, sem expor o id. Prefixo próprio: não coincide
 /// com o hash de onde sai o código.
@@ -181,8 +169,10 @@ pub struct Store {
     state: Mutex<State>,
     /// `devices.json` ficou no lugar sem ser lido: gravar por cima perderia os aparelhos que ele guarda.
     fault: Option<String>,
-    /// A conta recusou a leitura a esta máquina: revogação lá não chegaria aqui. Só memória: a próxima leitura boa desfaz.
-    account_suspended: AtomicBool,
+    /// A conta recusou a leitura a esta máquina: revogação lá não chegaria aqui. `Some` são os aparelhos da conta e o
+    /// que eles aprovaram aqui, refeito a cada mudança no registro. Só memória: a próxima leitura boa desfaz.
+    /// Sempre travado depois de `state`.
+    suspended: Mutex<Option<HashSet<DeviceId>>>,
 }
 
 impl Store {
@@ -190,7 +180,7 @@ impl Store {
         let clock = system_clock();
         let path = dir.join("devices.json");
         let (state, fault) = load(&path, clock());
-        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault, account_suspended: AtomicBool::new(false) }
+        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault, suspended: Mutex::new(None) }
     }
 
     /// Vai para `status().error`. shortcut: lido só na subida, a recusa fica até reiniciar o servidor; reler a cada pedido custaria disco no porteiro.
@@ -212,6 +202,10 @@ impl Store {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    fn lock_suspended(&self) -> MutexGuard<'_, Option<HashSet<DeviceId>>> {
+        self.suspended.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Grava antes de valer: nonce gasto ou token entregue nunca ficam só na memória.
     fn update<T>(&self, change: impl FnOnce(&mut State, u64) -> Result<T, Refusal>) -> Result<T, Refusal> {
         let now = (self.clock)();
@@ -225,17 +219,21 @@ impl Store {
             }
             write(&self.path, &next)?;
             *state = next;
+            if let Some(suspended) = self.lock_suspended().as_mut() {
+                *suspended = account_cascade(&state);
+            }
         }
         Ok(value)
     }
 
     /// `signature` confere os bytes de `ticket` como vieram: o bilhete nunca é serializado de novo.
     pub fn redeem(&self, ticket: &str, signature: &str, secret: &str) -> Result<DeviceId, Refusal> {
-        self.redeem_from(ticket, signature, secret, None)
+        self.redeem_from(ticket, signature, secret, None).map(|(id, _)| id)
     }
 
-    /// `install_id` vem do celular e só agrupa os pedidos dele no cartão de aprovação.
-    pub fn redeem_from(&self, ticket: &str, signature: &str, secret: &str, install_id: Option<&str>) -> Result<DeviceId, Refusal> {
+    /// `install_id` vem do celular e só agrupa os pedidos dele no cartão de aprovação. Bilhete que a conta liberou
+    /// nasce [`Status::Approved`]; os outros, [`Status::Pending`].
+    pub fn redeem_from(&self, ticket: &str, signature: &str, secret: &str, install_id: Option<&str>) -> Result<(DeviceId, Status), Refusal> {
         if install_id.is_some_and(|id| id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')) {
             return Err(Refusal::InstallId);
         }
@@ -273,7 +271,7 @@ impl Store {
             state.devices.push(Device { id: id.clone(), name, status,
                 created_at: now, denied_at: None, verifier: Some(verifier), token_hash: None, next_token_hash: None, unconfirmed_token_hashes: Vec::new(), last_seen: None,
                 approved_by: None, approved_at: account_device.is_some().then_some(now), install_id: install_id.map(str::to_owned), account_device });
-            Ok(id)
+            Ok((id, status))
         })
     }
 
@@ -353,7 +351,12 @@ impl Store {
 
     /// Liga ou desliga a recusa no porteiro dos aparelhos ligados à conta, sem apagar nenhum; devolve o valor anterior.
     pub fn suspend_account_devices(&self, suspended: bool) -> bool {
-        self.account_suspended.swap(suspended, Ordering::Relaxed)
+        if !suspended {
+            return self.lock_suspended().take().is_some();
+        }
+        let state = self.lock();
+        // A revogação na conta leva junto o que o aparelho aprovou aqui: a suspensão também.
+        self.lock_suspended().replace(account_cascade(&state)).is_some()
     }
 
     /// Aparelho aprovado aqui passa a ser `account_device` na conta; a ligação nunca troca de dono.
@@ -424,14 +427,10 @@ impl Store {
         let presented = credentials::hash(token);
         let now = (self.clock)();
         let mut state = self.lock();
-        // A revogação na conta leva junto o que o aparelho aprovou aqui: a suspensão também.
-        let suspended: HashSet<DeviceId> = if self.account_suspended.load(Ordering::Relaxed) {
-            state.devices.iter().filter(|d| d.account_device.is_some()).flat_map(|d| cascade(&state, &d.id)).collect()
-        } else {
-            HashSet::new()
-        };
+        let suspended = self.lock_suspended();
         let index = state.devices.iter()
-            .position(|d| d.status == Status::Approved && !suspended.contains(&d.id) && d.accepts(&presented))?;
+            .position(|d| d.status == Status::Approved && !suspended.as_ref().is_some_and(|s| s.contains(&d.id)) && d.accepts(&presented))?;
+        drop(suspended);
         // Usar o token novo prova a entrega, mesmo com a resposta dela perdida no caminho. Vai ao disco: depois
         // de reiniciar, o antigo voltaria a valer e a prova sairia com ele.
         if state.devices[index].next_token_hash.as_deref().is_some_and(|next| same(next, &presented)) {
@@ -454,6 +453,11 @@ impl Store {
     pub fn proof_key(&self, id: &str) -> Option<String> {
         self.lock().devices.iter().find(|d| d.id == id && d.status == Status::Approved).and_then(|d| d.token_hash.clone())
     }
+}
+
+/// Os aparelhos ligados à conta e o que eles aprovaram aqui.
+fn account_cascade(state: &State) -> HashSet<DeviceId> {
+    state.devices.iter().filter(|d| d.account_device.is_some()).flat_map(|d| cascade(state, &d.id)).collect()
 }
 
 /// O aparelho e tudo que nasceu da aprovação dele, direta ou por outro.
@@ -582,7 +586,7 @@ mod tests {
 
     fn redeem(store: &Store, nonce: &str, secret: &str, extra: Value) -> Result<DeviceId, Refusal> {
         let (text, signature) = ticket(nonce, secret, extra);
-        store.redeem_from(&text, &signature, secret, None)
+        store.redeem_from(&text, &signature, secret, None).map(|(id, _)| id)
     }
 
     #[test]
@@ -655,10 +659,31 @@ mod tests {
         let dir = dir();
         let store = store(&dir);
         let (text, signature) = ticket("n1", "s1", json!({}));
-        let pending = store.redeem_from(&text, &signature, "s1", Some("install-1")).unwrap();
+        let (pending, status) = store.redeem_from(&text, &signature, "s1", Some("install-1")).unwrap();
+        assert_eq!(status, Status::Pending);
         let (text, signature) = ticket("n2", "s2", json!({"preapproved": true, "account_device": "D"}));
-        store.redeem_from(&text, &signature, "s2", Some("install-1")).unwrap();
+        assert_eq!(store.redeem_from(&text, &signature, "s2", Some("install-1")).unwrap().1, Status::Approved, "liberado na conta já nasce aprovado");
         assert_eq!(store.status(&pending, "s1").unwrap(), Poll::Pending, "o pedido pendente continua");
+    }
+
+    #[test]
+    fn the_suspension_covers_account_devices_that_arrive_while_it_is_on() {
+        let dir = dir();
+        let store = store(&dir);
+        let local = redeem(&store, "n0", "s0", json!({})).unwrap();
+        store.approve(&local, None).unwrap();
+        let Poll::Approved(Some(local_token)) = store.status(&local, "s0").unwrap() else { panic!("local sem token") };
+        assert!(!store.suspend_account_devices(true));
+        let released = redeem(&store, "n1", "s1", json!({"preapproved": true, "account_device": "D"})).unwrap();
+        let Poll::Approved(Some(token)) = store.status(&released, "s1").unwrap() else { panic!("D sem token") };
+        assert_eq!(store.verify(token.as_bytes()), None, "aparelho da conta resgatado com a suspensão ligada fica de fora");
+        let child = redeem(&store, "n2", "s2", json!({})).unwrap();
+        store.approve(&child, Some(&released)).unwrap();
+        let Poll::Approved(Some(child_token)) = store.status(&child, "s2").unwrap() else { panic!("filho sem token") };
+        assert_eq!(store.verify(child_token.as_bytes()), None, "o que ele aprovou aqui também");
+        assert_eq!(store.verify(local_token.as_bytes()), Some(local), "aprovado nesta máquina não depende da conta");
+        assert!(store.suspend_account_devices(false));
+        assert_eq!(store.verify(token.as_bytes()), Some(released));
     }
 
     #[test]
