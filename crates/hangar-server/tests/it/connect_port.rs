@@ -13,8 +13,36 @@ use hangar_server::routes::{AppState, front_address, serve_connect};
 
 pub(crate) const GUEST: &str = "convidado-token";
 
+/// No Linux a porta fica presa até o fim do processo por um socket sem `listen`: o servidor a abre por cima com
+/// `SO_REUSEADDR`, e nenhum outro bind na porta 0 a recebe. Nos outros sistemas esse truque não vale.
 pub(crate) fn free_port() -> SocketAddr {
+    #[cfg(target_os = "linux")]
+    {
+        static RESERVED: Mutex<Vec<socket2::Socket>> = Mutex::new(Vec::new());
+        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
+        socket.set_reuse_address(true).unwrap();
+        socket.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into()).unwrap();
+        let addr = socket.local_addr().unwrap().as_socket().unwrap();
+        RESERVED.lock().unwrap().push(socket);
+        addr
+    }
+    #[cfg(not(target_os = "linux"))]
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+}
+
+/// Entre o `free_port` e o servidor abrir a porta, outro teste em paralelo não pode pegá-la: o `wait_up` falaria
+/// com o servidor dele.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_free_port_stays_reserved_for_the_server_that_opens_it() {
+    let addr = free_port();
+    // O `TcpListener` da std já liga SO_REUSEADDR no Unix; quem não liga só fica com a porta se ninguém a segura.
+    let other = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
+    assert!(other.bind(&addr.into()).is_err(), "outro bind sem SO_REUSEADDR pegou a porta");
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_reuseaddr(true).unwrap();
+    socket.bind(addr).unwrap();
+    socket.listen(16).unwrap();
 }
 
 pub(crate) async fn wait_up(addr: SocketAddr) {

@@ -991,6 +991,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Broadcast do dono para as sessões escolhidas.
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_registered))
         .route("/api/sessions/{name}/engine/model", axum::routing::post(crate::session_write::engine::model).fallback(pass_registered))
+        .route("/api/sessions/{name}/engine/provider", axum::routing::post(crate::session_write::engine::provider).fallback(pass_registered))
         .route("/api/costs", get(crate::costs_routes::costs).fallback(pass_registered))
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_registered))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_registered))

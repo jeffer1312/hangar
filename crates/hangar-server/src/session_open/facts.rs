@@ -114,6 +114,27 @@ impl LocalFacts {
         }).collect())
     }
 
+    pub(crate) fn fixed_engine_selection(&self, engine: &str, account: &str, model: Option<&str>) -> Result<(String, Option<u64>), OpenError> {
+        if !self.engines().iter().any(|e| e == engine) { return Err(OpenError::new(400, "erro_motor_invalido", "motor inválido")); }
+        let route = fixed_account(&self.accounts, engine, account)?;
+        let engines = self.engines_file();
+        let cfg = &engines[engine];
+        let models = self.account_models(engine, &route.prefix)?;
+        let chosen = model.filter(|m| !m.is_empty()).or(cfg["model"].as_str()).unwrap_or("");
+        let base = base_model(chosen, &route.prefix)?;
+        let subagent = cfg["subagent_model"].as_str().filter(|m| !m.is_empty()).unwrap_or(chosen);
+        let subagent = base_model(subagent, &route.prefix)?;
+        let primary = models.iter().find(|m| m["id"].as_str() == Some(catalog_model(&base)))
+            .ok_or_else(|| cliproxy("CLIProxyAPI: modelo principal indisponível nesta conta"))?;
+        if !models.iter().any(|m| m["id"].as_str() == Some(catalog_model(&subagent))) {
+            return Err(cliproxy("CLIProxyAPI: modelo dos subagentes indisponível nesta conta"));
+        }
+        let window = if catalog_model(&base) != base { Some(1_000_000) } else {
+            [&primary["context_length"], &primary["context_window"]].into_iter().filter_map(whole).find(|n| *n != 0)
+        };
+        Ok((base, window))
+    }
+
     fn terminal_creator(&self, name: &str) -> Option<CreatorFacts> {
         let panes = self.panes();
         let pane = panes.iter().find(|p| p.session == name && !p.hidden)?;
@@ -206,6 +227,15 @@ pub(crate) fn session_engine_route(accounts: &AccountService, engine: &str, acco
             Ok(None)
         }
     }
+}
+
+pub(crate) fn claude_provider_route(accounts: &AccountService, engine: &str, account: &str, binding: &str) -> Result<super::claude::EngineRoute, OpenError> {
+    let changed = || OpenError::new(409, "erro_cliproxy_conta", "A conta vinculada mudou ou está indisponível. Escolha novamente.");
+    if account.is_empty() || binding.is_empty() { return Err(changed()); }
+    let route = session_engine_route(accounts, engine, Some(account), Some(binding)).map_err(|_| changed())?
+        .ok_or_else(changed)?;
+    if route.account != account { return Err(changed()); }
+    Ok(route)
 }
 
 /// `cliproxy_accounts.prefix_model` sem o prefixo: o modelo como a conta o expõe.
@@ -435,21 +465,7 @@ impl OpenFacts for LocalFacts {
     /// o prefixo dela) e o modelo principal e o dos subagentes disponíveis nele. Devolve o modelo sem o
     /// prefixo da conta.
     fn fixed_engine_model(&self, engine: &str, account: &str, model: Option<&str>) -> Result<String, OpenError> {
-        if !self.engines().iter().any(|e| e == engine) { return Err(OpenError::new(400, "erro_motor_invalido", "motor inválido")); }
-        let route = fixed_account(&self.accounts, engine, account)?;
-        let engines = self.engines_file();
-        let cfg = &engines[engine];
-        let models = self.account_models(engine, &route.prefix)?;
-        let selected = model.filter(|m| !m.is_empty()).or(cfg["model"].as_str()).unwrap_or("");
-        let base = base_model(selected, &route.prefix)?;
-        let subagent = cfg["subagent_model"].as_str().filter(|m| !m.is_empty()).unwrap_or(selected);
-        for (label, chosen) in [("principal", selected), ("dos subagentes", subagent)] {
-            let id = base_model(chosen, &route.prefix)?;
-            if !models.iter().any(|m| m["id"].as_str() == Some(catalog_model(&id))) {
-                return Err(cliproxy(format!("CLIProxyAPI: modelo {label} indisponível nesta conta")));
-            }
-        }
-        Ok(base)
+        self.fixed_engine_selection(engine, account, model).map(|(base, _)| base)
     }
 
     /// `create_session`: o id de catálogo do modelo (sem o `[1m]` do GPT) no `/v1/models` do motor (o

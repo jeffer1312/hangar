@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
-import { parseStatusLine } from '@hangar/core';
+import { parseStatusLine, type ClaudeProviderSource } from '@hangar/core';
 import { chatStore } from '../stores/chat';
 import { useSessions } from '../stores/sessions';
 import { useServers } from '../stores/servers';
 import { sessionAccountLabel } from './sessionAccountLabel';
 import { SessionAccountSummary } from './SessionAccountSummary';
+import { ClaudeProviderSettings, useClaudeProviderEngines } from './ClaudeProviderSettings';
 import { AnchoredPanel } from '../ui/AnchoredPanel';
 import { Sheet } from '../ui/Sheet';
 import { UsagePanel } from './UsagePanel';
@@ -54,20 +55,33 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   const [chosen, setChosen] = useState<Chosen>({});
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'model' | 'session' | 'usage'>('model');
-  const [detail, setDetail] = useState<'models' | 'effort' | 'mode' | 'approval' | null>(null);
+  const [detail, setDetail] = useState<'models' | 'effort' | 'mode' | 'approval' | 'providers' | null>(null);
+  const [providerBusy, setProviderBusy] = useState(false);
+  const providerInventory = useClaudeProviderEngines(server, open && canSwitchAccount && !!session?.lifecycle_id);
+  const source = session?.lifecycle_id && session.jsonl && !session.guest_kind && canSwitchAccount
+    ? { lifecycle_id: session.lifecycle_id, jsonl: session.jsonl, headless: !!session.headless, engine: session.engine ?? null,
+      engine_account: session.engine_account ?? null, engine_binding: session.engine_binding ?? null } : null;
+  const providerCatalog = source && server && providerInventory.result?.inventory?.claude_provider_switch ? providerInventory.result.inventory : null;
+  const applyProviderModel = (origin: ClaudeProviderSource) => {
+    const current = useSessions.getState().rows.find(row => row.serverId === serverId && row.name === name);
+    const connected = useServers.getState().servers.find(row => row.id === serverId);
+    if (current?.jsonl !== origin.jsonl || current.lifecycle_id !== origin.lifecycle_id || current.provider !== 'claude'
+      || connected?.baseUrl !== server?.baseUrl || connected?.token !== server?.token) return;
+    setChosen({}); setDetail(null); setOpen(false);
+  };
   const afterDismiss = useRef<(() => void) | null>(null);
   const { height } = useWindowDimensions();
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => { if (!providerBusy) setOpen(false); }, [providerBusy]);
   const navigateAfterClose = (path: string) => {
     afterDismiss.current = () => router.push(path as never);
     close();
   };
   useEffect(() => {
     setChosen((cur) => {
-      const next = reconcileChosen(statusModel, cur);
+      const next = cur.model && cur.model === session?.model ? { ...cur, model: null } : reconcileChosen(statusModel, cur);
       return next.model === cur.model ? cur : next;
     });
-  }, [statusModel]);
+  }, [statusModel, session?.model]);
   const isCodex = provider === 'codex';
   const isClaude = !provider || provider === 'claude';
   const permission = usePermissionControl({ serverId, name, provider: isCodex ? 'codex' : isClaude ? 'claude' : null });
@@ -145,17 +159,26 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
       afterDismiss.current = null;
       close();
       action?.();
-    }} sizes={['auto']} scrollable>
+    }} sizes={['auto']} scrollable dismissible={!providerBusy}>
       <SessionSettingsFrame height={Math.min(600, height * 0.78) - 16}
         title={detail === 'models' ? m.native_ctl_all_models() : detail === 'effort' ? m.native_new_chat_reasoning()
-          : detail === 'mode' ? m.native_ctl_mode_title() : detail === 'approval' ? m.composer_codex_approval() : m.native_session_settings_title()}
+          : detail === 'mode' ? m.native_ctl_mode_title() : detail === 'approval' ? m.composer_codex_approval()
+          : detail === 'providers' ? m.native_claude_provider_picker() : m.native_session_settings_title()}
         subtitle={`${model.display}${effort.value ? ` · ${effortLabel(effort.value)}` : ''}`}
         tab={detail ? undefined : tab} onTab={next => { setTab(next); setDetail(null); }}
-        onBack={detail ? () => setDetail(null) : undefined} onClose={close}
+        onBack={detail && (detail !== 'providers' || !providerCatalog) && !providerBusy ? () => setDetail(null) : undefined} onClose={close}
         footer={tab === 'model' && !detail && !effort.hidden ? <SessionSettingsLink label={m.native_new_chat_reasoning()}
           value={effort.value ? effortLabel(effort.value) : '—'} disabled={effort.loading || model.loading} onPress={() => setDetail('effort')} /> : undefined}>
           {tab === 'model' ? <SessionSettingsContent title={!detail ? m.native_ctl_featured_models() : undefined}>
-            {detail === 'effort' ? <>
+            {detail === 'providers' ? source && server && providerCatalog
+              ? <ClaudeProviderSettings key={JSON.stringify([serverId, name])} server={server} name={name} source={source}
+                  ready={session?.state === 'idle'} inventory={providerCatalog} onBusy={setProviderBusy}
+                  onApplied={applyProviderModel} onCancel={() => setDetail(null)}
+                  reloadProviders={providerInventory.reload} />
+              : source && !providerInventory.result ? <Skeleton rows={2} />
+              : providerInventory.result?.failed ? <Failure text={m.native_claude_provider_read_failed()} onRetry={providerInventory.reload} />
+              : <Empty text={m.native_claude_provider_changed()} />
+            : detail === 'effort' ? <>
               <Notice text={effort.notice} />
               {effort.loading ? <Skeleton rows={3} /> : effort.error ? <Failure text={effort.error} onRetry={() => void effort.load()} /> : !effort.items.length ? <Empty text={m.modelo_sem_niveis()} />
                 : <SettingsList comfortable searchable={false} items={effort.items.map(it => ({ id: it.id ?? it.label, label: effortLabel(it.label), hint: it.hint, selected: it.selected, disabled: effort.applying }))}
@@ -166,7 +189,15 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
                 : <SettingsList comfortable searchable={detail === 'models' ? 'always' : false} items={(detail === 'models' ? model.items : featured).map(it => ({ id: modelItemKey(it), label: it.label, hint: it.hint, selected: it.selected, disabled: !!it.unavailable }))}
                   onPick={id => pickModel(model, id, () => setDetail(null))} />}
               {detail ? model.refresh ? <SmallButton label={m.native_voice_models_refresh()} onPress={() => void model.refresh?.()} /> : null
-                : <SessionSettingsLink label={m.native_ctl_all_models()} onPress={() => setDetail('models')} />}
+                : <>
+                  <SessionSettingsLink label={m.native_ctl_all_models()} onPress={() => setDetail('models')} />
+                  {source && open && !providerInventory.result ?
+                    <SessionSettingsLink label={m.native_claude_provider_picker()} value={m.comum_carregando()} icon="Cpu" disabled onPress={() => setDetail('providers')} /> : null}
+                  {source && providerInventory.result?.inventory?.claude_provider_switch ?
+                    <SessionSettingsLink label={m.native_claude_provider_picker()} icon="Cpu" onPress={() => setDetail('providers')} /> : null}
+                  {source && providerInventory.result?.failed ?
+                    <Failure text={m.native_claude_provider_read_failed()} onRetry={providerInventory.reload} /> : null}
+                </>}
             </>}
           </SessionSettingsContent> : tab === 'session' ? <SessionSettingsContent>
             {detail === 'mode' ? modeControls : detail === 'approval' ? approvalControls : <>

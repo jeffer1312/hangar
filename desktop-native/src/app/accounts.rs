@@ -123,7 +123,16 @@ struct Engine {
     cliproxy_binding_error: Option<String>,
 }
 
-pub(super) struct Engines { map: HashMap<String, Engine>, broken_file: Option<String> }
+pub(super) struct Engines { map: HashMap<String, Engine>, broken_file: Option<String>, provider_switch: bool }
+
+#[derive(Clone, Eq, PartialEq)]
+pub(super) struct ProviderChoice {
+    pub engine: String,
+    pub label: String,
+    pub detail: String,
+    pub account: Option<String>,
+    pub binding: String,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Group { Subscriptions, Models, Others }
@@ -633,7 +642,8 @@ fn parse_engines(value: &Value) -> Result<Engines, String> {
     let map = value.get("motores").cloned().map(serde_json::from_value::<HashMap<String, Engine>>).transpose()
         .map_err(|_| tr("invalid_response"))?.unwrap_or_default();
     let broken = value.get("arquivo_corrompido").and_then(Value::as_bool) == Some(true);
-    Ok(Engines { map, broken_file: broken.then(|| value.get("arquivo_caminho").and_then(Value::as_str).unwrap_or("engines.json").to_owned()) })
+    Ok(Engines { map, broken_file: broken.then(|| value.get("arquivo_caminho").and_then(Value::as_str).unwrap_or("engines.json").to_owned()),
+        provider_switch: value["claude_provider_switch"] == true })
 }
 
 fn proxy_account_targets(session: &SessionInfo, list: &[Credential], engine: &Engine) -> Vec<super::sidebar::AccountTarget> {
@@ -823,7 +833,7 @@ impl Hangar {
         Some((list.iter().filter(|c| c.kind == "claude").count(), list.iter().any(|c| c.kind == "codex")))
     }
 
-    fn load_session_engines(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn load_session_engines(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.open_api.clone().or_else(|| self.api.clone()) else { return; };
         let server = self.open_server();
         if self.accounts.engine_server.as_deref() != Some(server.as_str()) {
@@ -834,6 +844,36 @@ impl Hangar {
         let done = self.accounts_send_later();
         self.runtime.spawn(async move { done(AccountsReply::SessionEngines(seq, server, api.server_read(&["engines"], &[], 15).await)).await; });
         cx.notify();
+    }
+
+    pub(super) fn provider_choices_failed(&self) -> bool {
+        self.accounts.engine_server.as_deref() == Some(self.open_server().as_str())
+            && !self.accounts.session_engines.loading
+            && self.accounts.session_engines.value.as_ref().is_some_and(|result| match result {
+                Ok(engines) => engines.provider_switch && engines.broken_file.is_some(),
+                Err(_) => true,
+            })
+    }
+
+    pub(super) fn provider_choices_loading(&self) -> bool {
+        self.accounts.engine_server.as_deref() == Some(self.open_server().as_str()) && self.accounts.session_engines.loading
+    }
+
+    pub(super) fn provider_choices(&self) -> Option<Vec<ProviderChoice>> {
+        if self.accounts.engine_server.as_deref() != Some(self.open_server().as_str()) { return None; }
+        let engines = self.accounts.session_engines.ok()?;
+        if !engines.provider_switch || engines.broken_file.is_some() { return None; }
+        let mut choices = engines.map.iter().filter_map(|(name, engine)| {
+            let binding = engine.cliproxy_binding.as_ref()?.clone();
+            let bound = engine.cliproxy_bound_account.as_ref().filter(|_| engine.cliproxy_error.is_none() && engine.cliproxy_binding_error.is_none());
+            let label = engine.label.as_ref().filter(|name| !name.is_empty()).unwrap_or(name).clone();
+            let detail = bound.map(|target| {
+                if target.label.is_empty() { target.email.clone() } else { target.label.clone() }
+            }).filter(|label| !label.is_empty()).unwrap_or_else(|| tr("claude_provider_unavailable"));
+            Some(ProviderChoice { engine: name.clone(), label, detail, account: bound.map(|a| a.account.clone()), binding })
+        }).collect::<Vec<_>>();
+        choices.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.engine.cmp(&b.engine)));
+        Some(choices)
     }
 
     fn session_engine(&self) -> Option<&Engine> {
