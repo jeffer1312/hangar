@@ -12113,5 +12113,13 @@
   "guests_not_sees_mine": "não vê as suas sessões",
   "guests_name_taken": "Nome em uso por outra conta do Connect. Escolha outro nome.",
   "guests_store_failed": "Os acessos mudaram, mas {servidor} não guardou a conta. Toque em Salvar de novo.",
-  "guests_removed": "Convidado removido."
+  "guests_removed": "Convidado removido.",
+  "guests_legacy_title": "Contas antigas",
+  "guests_legacy_server_help": "Contas de convidado da sincronização de {usuario}. Entre uma vez para trazer cada uma para o Connect.",
+  "guests_legacy_login_help": "Digite o usuário e a senha da sincronização de {servidor}. A senha não fica guardada neste aparelho.",
+  "guests_legacy_empty": "Nenhuma conta antiga neste servidor.",
+  "guests_legacy_account": "Conta antiga",
+  "guests_legacy_bring": "Trazer para o Connect",
+  "guests_legacy_brought": "{usuario} agora entra pelo Connect, com a mesma senha.",
+  "guests_legacy_missing": "{servidores} não está na lista de servidores deste aparelho. Adicione antes de trazer a conta."
 }

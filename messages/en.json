@@ -12113,5 +12113,13 @@
   "guests_not_sees_mine": "doesn't see your sessions",
   "guests_name_taken": "Name already used by another Connect account. Choose another name.",
   "guests_store_failed": "The access changed, but {servidor} didn't keep the account. Tap Save again.",
-  "guests_removed": "Guest removed."
+  "guests_removed": "Guest removed.",
+  "guests_legacy_title": "Old accounts",
+  "guests_legacy_server_help": "Guest accounts from {usuario}'s sync. Sign in once to bring each one to Connect.",
+  "guests_legacy_login_help": "Enter the sync user and password of {servidor}. The password isn't kept on this device.",
+  "guests_legacy_empty": "No old accounts on this server.",
+  "guests_legacy_account": "Old account",
+  "guests_legacy_bring": "Bring to Connect",
+  "guests_legacy_brought": "{usuario} now signs in through Connect, with the same password.",
+  "guests_legacy_missing": "{servidores} isn't in this device's server list. Add it before bringing the account."
 }
