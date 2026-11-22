@@ -889,7 +889,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       {projectWarning ? <Text style={styles.error} accessibilityRole="alert">{projectWarning}</Text> : null}
       {error ? <Text style={styles.error} accessibilityRole="alert">{error}</Text> : null}
       {catalogError ? <Text style={styles.error} accessibilityRole="alert">{catalogError}</Text> : null}
-      {canHeadless && modeUnknown && modeRead.state === 'error' ? <Text style={styles.error} accessibilityRole="alert">{modeRead.error}</Text> : null}
+      {canHeadless && modeUnknown && modeRead.state === 'error' ? <View>
+        <Text style={styles.error} accessibilityRole="alert">{modeRead.error}</Text>
+        <Pressable accessibilityRole="button" onPress={() => setModeTry((n) => n + 1)}>
+          <Text style={styles.hint}>{m.native_retry()}</Text>
+        </Pressable>
+      </View> : null}
       {defaultsError ? <View>
         <Text style={styles.error} accessibilityRole="alert">{m.native_create_default_failed({ erro: defaultsError })}</Text>
         <Pressable accessibilityRole="button" onPress={() => setDefaultsTry((n) => n + 1)}>
