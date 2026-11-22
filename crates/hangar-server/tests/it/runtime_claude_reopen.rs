@@ -924,13 +924,21 @@ fn interrupted_provider_switch_keeps_the_target_binding_until_every_record_is_wr
     let mark = specs.join(format!("{key}.provider-switch"));
     let record = specs.join(format!("{key}.json"));
     let binding = "bound-target";
-    std::fs::write(&mark, json!({"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"headless",
+    let saved = json!({"generation":2,"spec":{"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"headless",
         "account":{"kind":"engine","name":"target","account":"target-account","binding":binding},"account_source":"explicit",
         "model":"gpt-target","service_tier":"default","permission_mode":"acceptEdits","jev":false,"read_only":false,
-        "created_at":1.0,"conversation":SID}).to_string()).unwrap();
+        "created_at":1.0,"conversation":SID}});
+    std::fs::write(&mark, saved.to_string()).unwrap();
     fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits"}));
     std::fs::create_dir(&record).unwrap();
     let env = AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned())].into());
+    let runtime = env.claude_base.join(".hangar-queue/runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let write_generation = |generation| {
+        let state = hangar_server::runtime::queue::State::new(&key, generation, "s1", Vec::new());
+        std::fs::write(runtime.join(format!("{key}.json")), serde_json::to_vec(&state).unwrap()).unwrap();
+    };
+    write_generation(2);
     hangar_server::runtime::claude_reopen::settle_switches(&env);
     assert!(mark.is_file());
     std::fs::remove_dir(&record).unwrap();
@@ -941,6 +949,16 @@ fn interrupted_provider_switch_keeps_the_target_binding_until_every_record_is_wr
     assert_eq!(sidecar["session_id"], SID);
     let archived: Value = serde_json::from_slice(&std::fs::read(specs.join("conversations").join(format!("{SID}.json"))).unwrap()).unwrap();
     assert_eq!(archived["account"]["binding"], binding);
+    assert!(!mark.exists());
+
+    let mut newer = saved["spec"].clone();
+    newer["model"] = json!("gpt-newer");
+    std::fs::write(&record, newer.to_string()).unwrap();
+    std::fs::write(&mark, saved.to_string()).unwrap();
+    write_generation(3);
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let latest: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    assert_eq!(latest["model"], "gpt-newer");
     assert!(!mark.exists());
 }
 

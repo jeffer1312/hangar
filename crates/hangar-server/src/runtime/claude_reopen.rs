@@ -409,6 +409,9 @@ pub(super) async fn reconcile_account(env:&crate::accounts::environment::Account
     result.map_err(|error|refused(error.code.unwrap_or("erro_conta_reconciliacao_falhou"),&error.msg))
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ProviderSwitchRecord { generation: u64, spec: SessionSpec }
+
 struct SwitchMark { path: PathBuf, keep: bool }
 impl SwitchMark {
     fn clear(mut self) -> std::io::Result<()> {
@@ -427,10 +430,11 @@ impl SwitchMark {
         crate::session_open::record::switching_path(home,&next.key).map(|path|Some(SwitchMark { path, keep: false })).map_err(unmarked)
     }
 
-    fn provider(home: &std::path::Path, next: &SessionSpec) -> std::io::Result<Self> {
+    fn provider(home: &std::path::Path, next: &SessionSpec, generation: u64) -> std::io::Result<Self> {
         let path = crate::session_open::record::path(home, &next.key)?.with_extension("provider-switch");
         std::fs::create_dir_all(crate::session_open::record::dir(home))?;
-        super::queue::atomic_write(&path, &serde_json::to_vec(next)?)?;
+        let record = ProviderSwitchRecord { generation, spec: next.clone() };
+        super::queue::atomic_write(&path, &serde_json::to_vec(&record)?)?;
         Ok(Self { path, keep: true })
     }
 }
@@ -450,9 +454,18 @@ pub fn settle_switches(env:&crate::accounts::environment::AccountEnvironment) {
     let Ok(entries)=std::fs::read_dir(&dir) else {return};
     for path in entries.flatten().map(|e|e.path()).filter(|p|p.extension().is_some_and(|x|x=="switching" || x=="provider-switch")) {
         let provider = path.extension().is_some_and(|x|x=="provider-switch");
-        let read = super::queue::read_replaced(&path).and_then(|raw| Ok(serde_json::from_slice::<SessionSpec>(&raw)?));
+        let read = super::queue::read_replaced(&path).and_then(|raw| {
+            if provider {
+                let record: ProviderSwitchRecord = serde_json::from_slice(&raw)?;
+                Ok(provider_switch_current(env, &record)?.then_some(record.spec))
+            } else {
+                let spec: SessionSpec = serde_json::from_slice(&raw)?;
+                let moved = spec.conversation.as_deref().is_some_and(|sid| super::claude_launch::transcript(env, &spec, sid).is_file());
+                Ok(moved.then_some(spec))
+            }
+        });
         match read {
-            Ok(to) if provider || to.conversation.as_deref().is_some_and(|sid|super::claude_launch::transcript(env,&to,sid).is_file())=>{
+            Ok(Some(to))=>{
                 let result = settle_sidecar(env,&to,provider)
                     .and_then(|_| crate::session_open::record::write(&env.home,&to))
                     .and_then(|_| crate::session_open::record::confirm_binding(&env.home,&to));
@@ -471,6 +484,14 @@ pub fn settle_switches(env:&crate::accounts::environment::AccountEnvironment) {
             tracing::warn!(kind=?error.kind(), "marca da troca recuperada não pôde ser removida");
         }
     }
+}
+
+fn provider_switch_current(env: &crate::accounts::environment::AccountEnvironment, record: &ProviderSwitchRecord) -> std::io::Result<bool> {
+    crate::session_open::record::path(&env.home, &record.spec.key)?;
+    let (state, _) = super::codex_terminal::queue_files(&env.claude_base.join(".hangar-queue"), &record.spec.key);
+    let state = super::queue::read_replaced(&state)?;
+    let (state, _) = super::queue::State::load(&state)?;
+    Ok(state.owner_key == record.spec.key && state.generation == record.generation && state.name == record.spec.name)
 }
 
 /// O sidecar sem terminal da sessão passa a dizer a conta de destino (é dele que a subida lê a conta).
@@ -847,7 +868,7 @@ impl RuntimeRegistry {
         }
         let mut provider_mark = if provider_source.is_some() {
             // O transcript fica no mesmo lugar; só a saída confirmada da origem autoriza recuperar o destino.
-            match SwitchMark::provider(&self.codex_environment().home, &next) {
+            match SwitchMark::provider(&self.codex_environment().home, &next, current.generation + 1) {
                 Ok(mark) => Some(mark),
                 Err(error) => {
                     let error = refused("reopen_switch_mark", &format!("a troca não pôde ser registrada ({error})"));

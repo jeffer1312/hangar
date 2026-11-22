@@ -3954,10 +3954,12 @@ function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
 
 // Troca aplicada (modelo/effort/permissão): a LISTA não muda, mas o default/atual pode — 60s de
 // cache velho num rótulo errado é pior que um GET a mais na próxima abertura.
-function _invalidarCatalogo(name: string): void {
+function _invalidarCatalogo(name: string, dropPending = false): void {
   _catEpoca.set(name, (_catEpoca.get(name) ?? 0) + 1);
   for (const k of _catCache.keys()) if (k.endsWith(`|${name}`)) _catCache.delete(k);
-  for (const k of _catEmVoo.keys()) if (k.endsWith(`|${name}`)) _catEmVoo.delete(k);
+  if (dropPending) {
+    for (const k of _catEmVoo.keys()) if (k.endsWith(`|${name}`)) _catEmVoo.delete(k);
+  }
 }
 
 export function getModelOptions(name: string, server?: Server | null, options?: { fresh?: boolean; refresh?: boolean }): Promise<ModelOptionsResponse> {
@@ -3987,7 +3989,7 @@ export function switchClaudeProvider(server: Server, name: string, selection: Cl
   return apiFetchForServer<ClaudeProviderTarget & { ok: boolean; model: string; service_tier: 'default' }>(server,
     `/api/sessions/${encodeURIComponent(name)}/engine/provider`, {
       method: 'POST', body: JSON.stringify(selection),
-    }, 720_000).then(withSessionWarnings).finally(() => _invalidarCatalogo(name));
+    }, 720_000).then(withSessionWarnings).finally(() => _invalidarCatalogo(name, true));
 }
 
 // Fast da sessão viva (POST .../service-tier); `priority` liga, `default` volta ao padrão da conta.
