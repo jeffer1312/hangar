@@ -11,12 +11,14 @@ impl Hangar {
         let server = self.settings_ui.session_options.and_then(|(_, options)| options);
         // Sem a leitura do servidor, ou com uma gravação no ar, as duas linhas ficam travadas.
         let busy = server.is_none() || self.settings_ui.session_options_saving == Some(self.connection);
+        // O que vale é o do servidor; a cópia deste computador só aparece enquanto a leitura não chega.
+        let conversation_beta = server.map_or(a.conversation_beta, |o| o.conversation_beta);
         let conversation = segments("conversation-beta", &[tr("settings_conversation_beta_off"), tr("settings_conversation_beta_on")],
-            a.conversation_beta as usize, 2, busy, tr("settings_next_version"),
+            conversation_beta as usize, 2, busy, tr("settings_next_version"),
             |this: &mut Hangar, index, _: &mut Window, cx| this.change_session_options(BetaChange::Conversation(index == 1), cx), cx);
         // Ligado pelos ajustes do Claude: travado, mas com "Ligado" marcado.
         let code_mode = segments("code-mode", &[tr("settings_code_mode_off"), tr("settings_code_mode_on")], (server.is_some_and(|o| o.code_mode) || from_settings) as usize,
-            if a.conversation_beta { 2 } else { 0 }, from_settings || busy, tr("settings_next_version"),
+            if conversation_beta { 2 } else { 0 }, from_settings || busy, tr("settings_next_version"),
             |this: &mut Hangar, index, _: &mut Window, cx| this.change_session_options(BetaChange::CodeMode(index == 1), cx), cx);
         let hint = self.settings_ui.session_options_error.clone()
             .unwrap_or_else(|| tr(if from_settings { "settings_code_mode_settings" } else { "settings_code_mode_hint" }));
@@ -24,7 +26,7 @@ impl Hangar {
             .child(self.page_top("settings_page_beta", tr("settings_beta_lead")))
             .child(settings_box().mt(px(20.))
                 .child(self.row(IconName::MessageSquare, "settings_conversation_beta", Some(tr("settings_conversation_beta_hint")), true, conversation))
-                .child(self.row(IconName::Code, "settings_code_mode", Some(hint), a.conversation_beta, code_mode)))
+                .child(self.row(IconName::Code, "settings_code_mode", Some(hint), conversation_beta, code_mode)))
             .into_any_element()
     }
 
