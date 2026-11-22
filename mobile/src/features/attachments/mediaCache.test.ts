@@ -102,6 +102,7 @@ vi.mock('../../paraglide/messages', () => ({
   native_pdf_reader_failed: ({ reason }: { reason: string }) => reason,
   arq_pdf_sem_leitor: () => 'no-reader',
   composer_sem_acesso_fotos: () => 'no-photos',
+  media_changed_during_download: () => 'changed',
 }));
 
 import {
@@ -259,8 +260,30 @@ describe('localCopy', () => {
     const f = await p;
     expect(f.size).toBe(100);
     expect(fs.restored).toHaveLength(1);
-    expect(fs.restored[0].state).toMatchObject({ url: URI, isDirectory: false, headers: H, resumeData: '40' });
+    // A retomada só vale para a mesma versão: o servidor devolve o arquivo inteiro se o ETag mudou.
+    expect(fs.restored[0].state).toEqual({ url: URI, fileUri: fs.tasks[0].dest, isDirectory: false, headers: { ...H, 'If-Range': '"a"' }, resumeData: '40' });
     expect(fs.tasks.every((t) => t.released)).toBe(true);
+  });
+
+  it('sem ETag o pedaço não é retomado: o download recomeça do zero', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValue({ status: 206, ok: true, headers: new Headers({ 'content-range': 'bytes 0-0/100' }) });
+    fs.jobs.push(async (t) => {
+      fs.files.set(t.dest, { size: 40, mtime: Date.now() });
+      throw new Error('Download failed: Software caused connection abort');
+    });
+    fs.jobs.push(async (t) => {
+      expect(t.resumeData).toBeUndefined();
+      expect(fs.files.has(t.dest)).toBe(false);
+      fs.files.set(t.dest, { size: 100, mtime: Date.now() });
+      return t.dest;
+    });
+    const p = localCopy(URI, H, 'rel.docx');
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await p).size).toBe(100);
+    expect(fs.restored).toHaveLength(0);
+    expect(fs.tasks).toHaveLength(2);
+    expect(fs.tasks[1].opts.headers).toEqual(H);
   });
 
   it('erro HTTP no meio do download não se retoma', async () => {
@@ -370,6 +393,9 @@ describe('teto e limpeza', () => {
     const u = await cacheUsage();
     expect(u.files).toBe(1);
     expect(u.byKind.document).toBe(5);
+    // O pedaço não conta como anexo, mas aparece para o "Limpar" continuar disponível.
+    expect(u.leftover).toBe(4);
+    expect(u.total).toBe(5);
   });
 
   it('sobra sem registro (cópia de versão antiga) sai na varredura', () => {
@@ -464,7 +490,22 @@ describe('cópia guardada de "Mídia e arquivos"', () => {
     expect(downloadedVersion({ size: null, mtime: null }, { size: 10, mtime: 6 })).toEqual({ size: 10, mtime: 6 });
   });
 
+  it('a date that only arrived during the download needs the same ETag before and after, or the copy is not kept', async () => {
+    for (const [first, second] of [['"v1"', '"v2"'], [null, null]] as const) {
+      fetchMock.mockReset();
+      for (const etag of [first, second]) {
+        fetchMock.mockResolvedValueOnce({ status: 206, ok: true, headers: new Headers(etag ? { etag, 'content-range': 'bytes 0-0/10' } : { 'content-range': 'bytes 0-0/10' }) });
+      }
+      let now: KeptVersion = { size: null, mtime: null };
+      await expect(download(() => now, async (t) => { now = { size: 10, mtime: 5 }; return writes(10)(t); })).rejects.toThrow('changed');
+      expect(keptCopy(key, 'report.pdf', now)).toBeNull();
+      expect([...fs.files.keys()].filter((k) => k.endsWith(PART_SUFFIX))).toEqual([]);
+    }
+  });
+
   it('size and date measured during the download are stored with the copy and find it afterwards', async () => {
+    // Mesmo ETag antes e depois: os bytes são da versão que a data descreve.
+    fetchMock.mockResolvedValue(probeReply('"v1"', 10));
     let now: KeptVersion = { size: null, mtime: null };
     const file = await download(() => now, async (t) => { now = { size: 10, mtime: 5 }; return writes(10)(t); });
     expect(file.uri).toBe(`cache/chat-media/kept-${keyHash(key)}-report.pdf`);

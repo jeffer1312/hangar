@@ -10574,6 +10574,7 @@
   "media_cache_playback": "Vídeos assistidos",
   "media_cache_playback_help": "O que o player já trouxe, até {limit}",
   "media_cache_empty": "Nada guardado neste aparelho.",
+  "media_cache_leftover": "{size} de downloads interrompidos",
   "media_cache_clear": "Limpar",
   "media_cache_clearing": "Limpando…",
   "media_cache_clear_title": "Limpar os anexos baixados?",

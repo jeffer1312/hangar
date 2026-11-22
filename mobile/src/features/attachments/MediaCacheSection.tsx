@@ -69,7 +69,8 @@ export function MediaCacheSection() {
   );
   else {
     const u = load.usage;
-    const empty = u.total === 0 && !u.video;
+    // Pedaço de download interrompido não é anexo, mas é o "Limpar" que o apaga.
+    const empty = u.total === 0 && !u.video && !u.leftover;
     body = (
       <View style={styles.pad}>
         <View style={styles.headLine}>
@@ -89,6 +90,7 @@ export function MediaCacheSection() {
           ) : null)}
         </View>
         {empty ? <Text style={[styles.help, { color: c.muted }]}>{m.media_cache_empty()}</Text> : null}
+        {u.leftover > 0 ? <Text style={[styles.help, { color: c.muted }]}>{m.media_cache_leftover({ size: fmtBytes(u.leftover) })}</Text> : null}
         <View style={styles.legend}>
           {KINDS.map(({ kind, label, alpha }) => (
             <View key={kind} style={styles.legendRow}>

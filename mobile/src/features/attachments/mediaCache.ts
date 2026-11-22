@@ -166,8 +166,12 @@ export async function probe(uri: string, headers: Record<string, string> | undef
 }
 
 // A queda de rede no Android deixa o pedaço gravado, e o resumo do download nativo de lá é o tamanho
-// dele: o pedido continua com Range. Erro HTTP ou cancelamento não se retomam.
-async function downloadResuming(uri: string, headers: Record<string, string> | undefined, tmp: File, expected: number | null, opts: DownloadOptions): Promise<void> {
+// dele: o pedido continua com Range e `If-Range` no ETag. Arquivo trocado no servidor responde 200 com
+// o arquivo inteiro, que o download nativo grava do zero: o pedaço nunca se junta a outra versão. Sem
+// ETag não há como provar isso, e o pedaço é jogado fora. Erro HTTP ou cancelamento não se retomam.
+async function downloadResuming(
+  uri: string, headers: Record<string, string> | undefined, tmp: File, expected: number | null, etag: string | null, opts: DownloadOptions,
+): Promise<void> {
   const onProgress = opts.onProgress
     ? ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) =>
       opts.onProgress!({ written: bytesWritten, total: totalBytes > 0 ? totalBytes : expected })
@@ -186,11 +190,17 @@ async function downloadResuming(uri: string, headers: Record<string, string> | u
       if (Platform.OS !== 'android' || http || attempt >= RESUME_DELAYS_MS.length || !tmp.exists || tmp.size <= 0) throw e;
       await wait(RESUME_DELAYS_MS[attempt], opts.signal);
       throwIfAborted(opts.signal);
-      task = DownloadTask.fromSavable(
-        { url: uri, fileUri: tmp.uri, isDirectory: false, headers, resumeData: String(tmp.size) },
-        { onProgress, signal: opts.signal },
-      );
-      start = () => task.resumeAsync();
+      if (etag) {
+        task = DownloadTask.fromSavable(
+          { url: uri, fileUri: tmp.uri, isDirectory: false, headers: { ...headers, 'If-Range': etag }, resumeData: String(tmp.size) },
+          { onProgress, signal: opts.signal },
+        );
+        start = () => task.resumeAsync();
+      } else {
+        dropPart(tmp);
+        task = File.createDownloadTask(uri, tmp, { headers, onProgress, signal: opts.signal });
+        start = () => task.downloadAsync();
+      }
       continue;
     }
     task.release();
@@ -226,7 +236,7 @@ export async function localCopy(uri: string, headers: Record<string, string> | u
   }
   const tmp = new File(dir, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${PART_SUFFIX}`);
   try {
-    await downloadResuming(uri, headers, tmp, info?.size ?? null, opts);
+    await downloadResuming(uri, headers, tmp, info?.size ?? null, info?.etag ?? null, opts);
     if (info?.size != null && tmp.size !== info.size) throw new Error(m.file_card_failed());
     throwIfAborted(opts.signal);
     tmp.moveSync(target, { overwrite: true });
@@ -355,23 +365,31 @@ export function keptCopy(key: string, name: string, now: KeptVersion): File | nu
 /** Baixa para a cópia guardada pelo mesmo download do cache (progresso, cancelamento pelo `signal`,
  *  retomada no Android). A versão gravada é a dos bytes (`downloadedVersion`): o download do
  *  expo-file-system não devolve os cabeçalhos da resposta, então a medida do começo e a do fim são
- *  lidas e comparadas. */
+ *  lidas e comparadas. Data que só chegou durante o download vale para os bytes apenas com o mesmo
+ *  ETag antes e depois: sem essa prova a cópia não é gravada como atual. */
 export async function downloadKept(
   key: string, uri: string, headers: Record<string, string> | undefined, name: string,
   version: () => KeptVersion, opts: DownloadOptions = {},
 ): Promise<File> {
   const start = version();
+  const before = await probe(uri, headers, opts.signal);
   const target = keptFile(key, name);
   const tmp = new File(mediaDir(), `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${PART_SUFFIX}`);
+  let end = start;
   try {
-    await downloadResuming(uri, headers, tmp, start.size, opts);
+    await downloadResuming(uri, headers, tmp, start.size, before?.etag ?? null, opts);
     throwIfAborted(opts.signal);
+    end = version();
+    if (start.mtime == null && end.mtime != null) {
+      const after = await probe(uri, headers, opts.signal).catch((e: unknown) => { if (isAbort(e)) throw e; return null; });
+      if (!before?.etag || after?.etag !== before.etag) throw new Error(m.media_changed_during_download());
+    }
     tmp.moveSync(target, { overwrite: true });
   } catch (e) {
     dropPart(tmp);
     throw e;
   }
-  writeEntry(target.name, { etag: null, size: target.size, used: Date.now(), version: downloadedVersion(start, version()) });
+  writeEntry(target.name, { etag: null, size: target.size, used: Date.now(), version: downloadedVersion(start, end) });
   evictQuietly(target.name);
   return target;
 }
@@ -383,6 +401,8 @@ export interface CacheUsage {
   files: number;
   /** Bytes dos anexos baixados (o teto é `MEDIA_CACHE_LIMIT`). */
   total: number;
+  /** Bytes de downloads interrompidos (`.hangar-part`): não são anexos, mas o "Limpar" os apaga. */
+  leftover: number;
   /** Bytes do cache de reprodução do expo-video; null = o módulo não respondeu. */
   video: number | null;
 }
@@ -397,8 +417,9 @@ export async function cacheUsage(): Promise<CacheUsage> {
   migrateQuietly();
   const byKind: Record<CacheKind, number> = { image: 0, video: 0, audio: 0, document: 0 };
   let files = 0;
+  let leftover = 0;
   for (const s of stored()) {
-    if (s.key.endsWith(PART_SUFFIX)) continue;
+    if (s.key.endsWith(PART_SUFFIX)) { leftover += s.file.size; continue; }
     byKind[kindOf(s.key)] += s.file.size;
     files++;
   }
@@ -414,7 +435,7 @@ export async function cacheUsage(): Promise<CacheUsage> {
     // Sem o módulo nativo a linha mostra "—".
     diagCache('video_cache_size_failed', e);
   }
-  return { byKind, files, total: byKind.image + byKind.video + byKind.audio + byKind.document, video };
+  return { byKind, files, total: byKind.image + byKind.video + byKind.audio + byKind.document, leftover, video };
 }
 
 /**

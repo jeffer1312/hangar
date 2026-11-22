@@ -10574,6 +10574,7 @@
   "media_cache_playback": "Watched videos",
   "media_cache_playback_help": "What the player already fetched, up to {limit}",
   "media_cache_empty": "Nothing stored on this device.",
+  "media_cache_leftover": "{size} from interrupted downloads",
   "media_cache_clear": "Clear",
   "media_cache_clearing": "Clearing…",
   "media_cache_clear_title": "Clear downloaded attachments?",

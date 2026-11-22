@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { createVideoPlayer, type VideoThumbnail } from 'expo-video';
+import { Platform } from 'react-native';
+import { createVideoPlayer, type VideoPlayer, type VideoThumbnail } from 'expo-video';
 import { registrarDiag } from '@hangar/core';
 
 // Quadros guardados enquanto o app vive; cada um é um bitmap nativo, por isso o teto.
@@ -14,21 +15,42 @@ const slots = new Map<string, Slot>();
 const queue: { uri: string; headers?: Record<string, string> }[] = [];
 let running = false;
 
-function remember(uri: string, slot: Slot) {
-  slots.delete(uri);
-  slots.set(uri, slot);
+// Os usados há mais tempo saem primeiro; o que ainda espera a vez fica.
+function prune() {
   for (const [k, s] of slots) {
     if (slots.size <= MAX_THUMBS) break;
     if (s.done) slots.delete(k);
   }
 }
 
+function remember(uri: string, slot: Slot) {
+  slots.delete(uri);
+  slots.set(uri, slot);
+  prune();
+}
+
+// iOS: o item do player só existe depois de a fonte carregar, e antes disso o pedido de quadro volta
+// vazio na hora. O Android lê o quadro direto da fonte e não precisa esperar.
+function sourceReady(player: VideoPlayer, subs: { remove(): void }[]): Promise<void> {
+  if (Platform.OS !== 'ios' || player.status === 'readyToPlay') return Promise.resolve();
+  if (player.status === 'error') return Promise.reject(new Error('video source failed'));
+  return new Promise((resolve, reject) => {
+    subs.push(player.addListener('statusChange', ({ status, error }) => {
+      if (status === 'readyToPlay') resolve();
+      else if (status === 'error') reject(new Error(error?.message ?? 'video source failed'));
+    }));
+  });
+}
+
 async function generate(uri: string, headers?: Record<string, string>): Promise<VideoThumbnail | null> {
   const player = createVideoPlayer({ uri, headers });
+  const subs: { remove(): void }[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    // Um prazo só para carregar a fonte e tirar o quadro.
     const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), TIMEOUT_MS); });
-    const frames = await Promise.race([player.generateThumbnailsAsync(0, { maxWidth: MAX_WIDTH }), timeout]);
+    const work = sourceReady(player, subs).then(() => player.generateThumbnailsAsync(0, { maxWidth: MAX_WIDTH }));
+    const frames = await Promise.race([work, timeout]);
     return frames?.[0] ?? null;
   } catch (e) {
     // Sem quadro fica o ▶ com o nome; o visor ainda tenta tocar e mostra o erro de verdade.
@@ -37,6 +59,7 @@ async function generate(uri: string, headers?: Record<string, string>): Promise<
     return null;
   } finally {
     clearTimeout(timer);
+    for (const s of subs) s.remove();
     player.release();
   }
 }
@@ -56,6 +79,8 @@ async function pump() {
       slot.done = true;
       // Sem quadro (prazo, rede) não fica guardado: a próxima montagem tenta de novo.
       if (!value && slots.get(job.uri) === slot) slots.delete(job.uri);
+      // Uma rajada de pedidos passa do teto enquanto todos esperam; ao concluir, o excesso sai.
+      prune();
       for (const w of slot.waiters.splice(0)) w(value);
     }
   } finally {
@@ -65,12 +90,13 @@ async function pump() {
 
 /** Primeiro quadro do vídeo para a miniatura da conversa; null enquanto não há (ou se não deu). */
 export function useVideoThumb(uri: string, headers?: Record<string, string>): VideoThumbnail | null {
-  const [thumb, setThumb] = useState<VideoThumbnail | null>(() => slots.get(uri)?.value ?? null);
+  // O quadro guarda o vídeo de onde veio: trocar de vídeo não mostra o quadro do anterior.
+  const [thumb, setThumb] = useState<{ uri: string; value: VideoThumbnail | null }>(() => ({ uri, value: slots.get(uri)?.value ?? null }));
   useEffect(() => {
     let slot = slots.get(uri);
     if (slot?.done) {
       remember(uri, slot);
-      setThumb(slot.value);
+      setThumb({ uri, value: slot.value });
       return;
     }
     if (!slot) {
@@ -81,10 +107,10 @@ export function useVideoThumb(uri: string, headers?: Record<string, string>): Vi
     const s = slot;
     let alive = true;
     s.wanted++;
-    s.waiters.push((v) => { if (alive) setThumb(v); });
+    s.waiters.push((v) => { if (alive) setThumb({ uri, value: v }); });
     void pump();
     return () => { alive = false; s.wanted--; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uri]);
-  return thumb;
+  return thumb.uri === uri ? thumb.value : null;
 }

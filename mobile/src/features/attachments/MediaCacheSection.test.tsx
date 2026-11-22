@@ -36,6 +36,7 @@ vi.mock('../../paraglide/messages', () => ({
   media_cache_playback: () => 'watched',
   media_cache_playback_help: ({ limit }: { limit: string }) => `up to ${limit}`,
   media_cache_empty: () => 'empty',
+  media_cache_leftover: ({ size }: { size: string }) => `leftover ${size}`,
   media_cache_clear: () => 'clear',
   media_cache_clearing: () => 'clearing',
   media_cache_clear_title: () => 'clear?',
@@ -129,4 +130,13 @@ it('falha ao medir aparece com o motivo e deixa tentar de novo', async () => {
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   expect(c.textContent).toContain('empty');
+});
+
+it('download interrompido deixa o "Limpar" disponível sem contar como anexo', async () => {
+  h.usage.mockResolvedValue({ ...usage({ image: 0, video: 0, audio: 0, document: 0 }, 0), files: 0, leftover: 3 * MB });
+  const c = await mount();
+  expect(c.textContent).not.toContain('empty');
+  expect(c.textContent).toContain('leftover 3 MB');
+  expect(c.textContent).toContain('documents0 B');
+  expect(c.querySelector<HTMLButtonElement>('[aria-label="clear"]')!.disabled).toBe(false);
 });
