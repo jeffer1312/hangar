@@ -209,19 +209,12 @@ impl DeviceLink for UsbLink {
             let ha = HouseArrestClient::connect(&p).await.map_err(from_idevice)?;
             let mut afc = ha.vend_container(app_bundle.to_string()).await.map_err(from_idevice)?;
             let path = format!("/Library/Preferences/{app_bundle}.plist");
-            let existing = match afc.open(path.clone(), AfcFopenMode::RdOnly).await {
-                Ok(mut f) => {
-                    let bytes = f.read_entire().await.map_err(from_idevice)?;
-                    f.close().await.map_err(from_idevice)?;
-                    bytes
-                }
-                Err(e) if is_not_found(&e) => Vec::new(),
-                Err(e) => return Err(from_idevice(e)),
-            };
-            let merged = pairing::merge_sidestore_prefs(&existing)?;
+            // Os dois lidos e mesclados antes de gravar: arquivo ilegível para tudo sem tocar no outro.
+            let merged = pairing::merge_sidestore_prefs(&read_or_empty(&mut afc, &path).await?)?;
+            let header = pairing::merge_anisette_config(&read_or_empty(&mut afc, pairing::ANISETTE_CONFIG_FILE).await?)?;
             ignore_already_done(afc.mk_dir("/Library/Preferences").await)?;
             // O cabeçalho antes do servidor: falhando aqui, as preferências da pessoa ficam como estavam.
-            write_file(&mut afc, pairing::ANISETTE_CONFIG_FILE, &pairing::sidestore_anisette_config()).await?;
+            write_file(&mut afc, pairing::ANISETTE_CONFIG_FILE, &header).await?;
             write_file(&mut afc, &path, &merged).await
         })
     }
@@ -317,6 +310,19 @@ fn ignore_already_done(r: Result<(), IdeviceError>) -> Result<(), DeviceError> {
     match r {
         Err(e) if !is_not_found(&e) && !matches!(e, IdeviceError::Afc(AfcError::ObjectExists)) => Err(from_idevice(e)),
         _ => Ok(()),
+    }
+}
+
+/// Conteúdo do arquivo no container; ausente vira vazio.
+async fn read_or_empty(afc: &mut AfcClient, path: &str) -> Result<Vec<u8>, DeviceError> {
+    match afc.open(path.to_string(), AfcFopenMode::RdOnly).await {
+        Ok(mut f) => {
+            let bytes = f.read_entire().await.map_err(from_idevice)?;
+            f.close().await.map_err(from_idevice)?;
+            Ok(bytes)
+        }
+        Err(e) if is_not_found(&e) => Ok(Vec::new()),
+        Err(e) => Err(from_idevice(e)),
     }
 }
 

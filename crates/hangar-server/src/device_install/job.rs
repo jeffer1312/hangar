@@ -62,6 +62,7 @@ pub const SIGN_FAILED: &str = "device_install_sign_failed";
 pub const NOT_INSTALLED: &str = "device_install_not_installed";
 pub const BUSY: &str = "device_install_busy";
 pub const CANCELLED: &str = "device_install_cancelled";
+pub const NOTHING_TO_CANCEL: &str = "device_install_nothing_to_cancel";
 pub const FORBIDDEN: &str = "device_install_forbidden";
 pub const UNKNOWN_JOB: &str = "device_install_unknown_job";
 pub const NOT_WAITING: &str = "device_install_not_waiting";
@@ -136,6 +137,10 @@ struct Job {
 impl Job {
     fn set(&self, stage: Stage, error: Option<Failure>) {
         let mut p = lock(&self.progress);
+        // Cancelado já é `failed`: uma etapa que a tarefa ainda grave antes do abort não o desfaz.
+        if self.cancelled.load(std::sync::atomic::Ordering::Relaxed) && stage != Stage::Failed {
+            return;
+        }
         p.stage = stage;
         p.error = error;
         p.certs = None;
@@ -143,14 +148,14 @@ impl Job {
     fn running(&self) -> bool {
         !matches!(lock(&self.progress).stage, Stage::Done | Stage::Failed)
     }
-    /// Passa a instalar só se ninguém cancelou: o abort pedido no meio da assinatura ainda deixaria
-    /// a tarefa chegar aqui antes do próximo `await`.
-    fn enter_install(&self) -> Result<(), Failure> {
+    /// Entra numa etapa que o cancelamento não pode cortar (assinar, instalar) só se ninguém
+    /// cancelou: o abort pedido antes ainda deixaria a tarefa chegar aqui antes do próximo `await`.
+    fn enter(&self, stage: Stage) -> Result<(), Failure> {
         let mut p = lock(&self.progress);
         if self.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(Failure::new(CANCELLED));
         }
-        (p.stage, p.error, p.certs) = (Stage::Installing, None, None);
+        (p.stage, p.error, p.certs) = (stage, None, None);
         Ok(())
     }
 }
@@ -254,18 +259,20 @@ impl DeviceInstall {
         lock(&self.jobs).get(id).map(|j| lock(&j.progress).clone())
     }
 
-    /// Para o trabalho do aparelho antes da instalação; depois dela, parar deixaria o SideStore
-    /// sem pareamento, então responde `device_install_busy`.
+    /// Para o trabalho do aparelho antes da assinatura. Depois, parar poderia gastar um certificado
+    /// da conta sem guardar a chave ou deixar o SideStore sem pareamento: `device_install_busy`.
     pub fn cancel(&self, udid: &str) -> Result<(), Failure> {
-        let job = lock(&self.jobs).values().find(|j| j.udid == udid && j.running()).cloned().ok_or_else(|| Failure::new(NOT_WAITING))?;
+        let job = lock(&self.jobs).values().find(|j| j.udid == udid && j.running()).cloned().ok_or_else(|| Failure::new(NOTHING_TO_CANCEL))?;
         {
-            // Mesma trava do `enter_install`: ou o cancelamento vem antes e a instalação não começa,
-            // ou ela já começou e o pedido é recusado.
-            let progress = lock(&job.progress);
-            if matches!(progress.stage, Stage::Installing | Stage::Pairing | Stage::Verifying) {
+            // Mesma trava do `enter`: ou o cancelamento vem antes e a etapa não começa, ou ela já
+            // começou e o pedido é recusado.
+            let mut progress = lock(&job.progress);
+            if matches!(progress.stage, Stage::Signing | Stage::Installing | Stage::Pairing | Stage::Verifying) {
                 return Err(Failure::new(BUSY));
             }
             job.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            // Já `failed`: um novo `/start` no aparelho não espera o abort chegar.
+            (progress.stage, progress.error, progress.certs) = (Stage::Failed, Some(Failure::new(CANCELLED)), None);
         }
         if let Some(task) = lock(&job.task).as_ref() {
             task.abort();
@@ -330,10 +337,10 @@ impl DeviceInstall {
         // da trava; duas instalações ao mesmo tempo podem se atropelar ali. Trava por conta se importar.
         {
             let _one = SIGNING.lock().await;
-            job.set(Stage::Signing, None);
+            job.enter(Stage::Signing)?;
             let signed = session.sign(SignRequest { ipa: &ipa, udid: &udid, device_name: &device.name, pairing: &pairing }).await?;
             drop(session);
-            job.enter_install()?;
+            job.enter(Stage::Installing)?;
             self.link.install_sidestore(&udid, &signed.app).await?;
         }
 

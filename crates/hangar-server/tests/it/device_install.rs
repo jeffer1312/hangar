@@ -229,16 +229,26 @@ async fn cancel_frees_the_device_for_a_new_start() {
     s.wait(&job, "awaiting_code", None).await;
     let (status, body) = s.post("cancel", json!({"udid": UDID})).await;
     assert_eq!(status, 200, "{body}");
-    s.wait(&job, "failed", Some("device_install_cancelled")).await;
-    assert!(s.link.installs.lock().unwrap().is_empty());
+    // Logo depois do ok, sem esperar o abort: o aparelho já está livre.
     s.start().await;
+    assert!(s.link.installs.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cancelled_job_reports_cancelled() {
+    let s = serve(link(), signer()).await;
+    let job = s.start().await;
+    s.wait(&job, "awaiting_code", None).await;
+    assert_eq!(s.post("cancel", json!({"udid": UDID})).await.0, 200);
+    s.wait(&job, "failed", Some("device_install_cancelled")).await;
+    assert!(s.signer.signed.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn cancel_without_a_running_install_is_a_conflict() {
     let s = serve(link(), signer()).await;
     let (status, body) = s.post("cancel", json!({"udid": UDID})).await;
-    assert_eq!((status, body["error"]["code"].as_str()), (409, Some("device_install_not_waiting")));
+    assert_eq!((status, body["error"]["code"].as_str()), (409, Some("device_install_nothing_to_cancel")));
 }
 
 #[tokio::test]

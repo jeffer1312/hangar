@@ -45,25 +45,33 @@ fn xml(d: &Dictionary) -> Result<Vec<u8>, DeviceError> {
 }
 
 /// Anisette que o SideStore usa no aparelho; sem isso o login dele cai no -80045 da Apple. O
-/// `mac-ani` é o mesmo que o login do Hangar usa primeiro (`apple::ANISETTE`).
+/// servidor é o primeiro da lista provada do login do Hangar.
 fn sidestore_prefs() -> [(&'static str, plist::Value); 3] {
     [
         ("useOnDeviceAnisette", false.into()),
-        ("menuAnisetteURL", "https://mac-ani.jkcoxson.com".into()),
+        ("menuAnisetteURL", super::apple::ANISETTE[0].into()),
         ("disableAnisetteRotation", true.into()),
     ]
 }
 
 pub const ANISETTE_CONFIG_FILE: &str = "/Library/anisette-config.json";
 
-/// Cabeçalho que o SideStore manda à Apple no login. Com `macOS;` a Apple responde 503 e, com a
-/// versão antiga do sistema, -22410; o padrão do SideStore 0.7.0 cai nos dois.
-pub fn sidestore_anisette_config() -> Vec<u8> {
-    serde_json::to_vec_pretty(&serde_json::json!({
-        "clientInfo": "<MacBookPro13,3> <Mac OS X;26.6;25F84> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
-        "userAgent": "akd/1.0 CFNetwork/811.5.4 Darwin/16.7.0",
-    }))
-    .expect("json fixo")
+/// Cabeçalho que o SideStore manda à Apple no login: a Apple recusa quem se identifica como
+/// `macOS;` e aceita `Mac OS X;` com uma versão atual do sistema.
+const CLIENT_INFO: &str = "<MacBookPro13,3> <Mac OS X;26.6;25F84> <com.apple.AuthKit/1 (com.apple.akd/1.0)>";
+const USER_AGENT: &str = "akd/1.0 CFNetwork/811.5.4 Darwin/16.7.0";
+
+/// Grava o cabeçalho por cima do `anisette-config.json` que já existe; as outras chaves ficam.
+pub fn merge_anisette_config(existing: &[u8]) -> Result<Vec<u8>, DeviceError> {
+    // Arquivo ilegível é erro, nunca sobrescrito: apagaria o que a pessoa ajustou no SideStore.
+    let mut config: serde_json::Map<String, serde_json::Value> = if existing.is_empty() {
+        serde_json::Map::new()
+    } else {
+        serde_json::from_slice(existing).map_err(|e| DeviceError::Other(format!("anisette config: {e}")))?
+    };
+    config.insert("clientInfo".into(), CLIENT_INFO.into());
+    config.insert("userAgent".into(), USER_AGENT.into());
+    serde_json::to_vec_pretty(&config).map_err(|e| DeviceError::Other(e.to_string()))
 }
 
 /// Grava as três chaves por cima do plist de preferências que já existe; vazio vira dict novo.
@@ -110,13 +118,26 @@ mod tests {
         assert_eq!(parsed(&merge_sidestore_prefs(&bin).unwrap()), want);
     }
 
-    // A Apple responde 503 a `macOS;` no X-Mme-Client-Info; `Mac OS X;` passa.
     #[test]
     fn anisette_config_identifies_as_mac_os_x() {
-        let v: serde_json::Value = serde_json::from_slice(&sidestore_anisette_config()).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&merge_anisette_config(b"").unwrap()).unwrap();
         let client = v["clientInfo"].as_str().unwrap();
         assert!(client.contains("<Mac OS X;") && !client.contains("macOS;"), "{client}");
         assert!(!v["userAgent"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn anisette_config_keeps_other_keys_and_replaces_the_header() {
+        let old = br#"{"clientInfo": "<MacBookPro13,3> <macOS;13.1;22C65>", "customLocale": "pt_BR"}"#;
+        let v: serde_json::Value = serde_json::from_slice(&merge_anisette_config(old).unwrap()).unwrap();
+        assert_eq!(v["customLocale"], "pt_BR");
+        assert!(v["clientInfo"].as_str().unwrap().contains("<Mac OS X;"));
+        assert!(merge_anisette_config(b"not json").is_err());
+    }
+
+    #[test]
+    fn prefs_point_at_the_first_proven_anisette() {
+        assert_eq!(parsed(&merge_sidestore_prefs(b"").unwrap())["menuAnisetteURL"], plist::Value::from(super::super::apple::ANISETTE[0]));
     }
 
     #[test]

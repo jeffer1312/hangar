@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use zeroize::Zeroize;
 
 use super::apple::CodeReply;
-use super::job::{BAD_REQUEST, BUSY, Failure, FORBIDDEN, NOT_WAITING, SERVICE_MISSING, Start, UNKNOWN_JOB};
+use super::job::{BAD_REQUEST, BUSY, Failure, FORBIDDEN, NOT_WAITING, NOTHING_TO_CANCEL, SERVICE_MISSING, Start, UNKNOWN_JOB};
 use super::DeviceError;
 use crate::routes::AppState;
 
@@ -100,7 +100,7 @@ pub async fn cancel(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let Some(Udid { udid }) = body(req).await else { return bad_body() };
     match st.device_install.cancel(&udid) {
         Ok(()) => reply(StatusCode::OK, json!({"ok": true})),
-        Err(f) if f.code == NOT_WAITING || f.code == BUSY => failure(StatusCode::CONFLICT, f),
+        Err(f) if f.code == NOTHING_TO_CANCEL || f.code == BUSY => failure(StatusCode::CONFLICT, f),
         Err(f) => failure(StatusCode::INTERNAL_SERVER_ERROR, f),
     }
 }
