@@ -369,10 +369,17 @@ async fn a_refused_read_suspends_the_account_devices_until_a_good_read() {
     account.add("D", "approved", "s-d");
     let m = machine(service, true).await;
     let (d, local) = (released(&m.store, "n1", "D"), approved_here(&m.store, "n2"));
+    // Aprovado aqui pelo aparelho da conta: a revogação de D o levaria junto.
+    let d_id = m.store.verify(d.as_bytes()).unwrap();
+    let (text, signature) = ticket("n3", "segredo-n3", None);
+    let child_id = m.store.redeem_from(&text, &signature, "segredo-n3", None).unwrap();
+    m.store.approve(&child_id, Some(&d_id)).unwrap();
+    let Poll::Approved(Some(child)) = m.store.status(&child_id, "segredo-n3").unwrap() else { panic!("n3 não saiu aprovado") };
 
     account.machine_pending.store(true, std::sync::atomic::Ordering::Relaxed);
     m.supervisor.sync_account_devices(&m.linked).await;
     assert_eq!(gate(&m, &d).await, 401, "sem a lista da conta, o aparelho da conta não entra");
+    assert_eq!(gate(&m, &child).await, 401, "o que o aparelho da conta aprovou aqui fica suspenso junto");
     assert_eq!(gate(&m, &local).await, 200, "aprovado nesta máquina não depende da conta");
     assert!(on_disk(&m, &d), "suspenso, não apagado");
 
@@ -384,6 +391,7 @@ async fn a_refused_read_suspends_the_account_devices_until_a_good_read() {
     account.machine_pending.store(false, std::sync::atomic::Ordering::Relaxed);
     m.supervisor.sync_account_devices(&m.linked).await;
     assert_eq!(gate(&m, &d).await, 200, "a leitura boa devolve o aparelho");
+    assert_eq!(gate(&m, &child).await, 200);
     assert_eq!(gate(&m, &local).await, 200);
 }
 

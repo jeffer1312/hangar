@@ -423,10 +423,15 @@ impl Store {
     pub fn verify(&self, token: &[u8]) -> Option<DeviceId> {
         let presented = credentials::hash(token);
         let now = (self.clock)();
-        let suspended = self.account_suspended.load(Ordering::Relaxed);
         let mut state = self.lock();
+        // A revogação na conta leva junto o que o aparelho aprovou aqui: a suspensão também.
+        let suspended: HashSet<DeviceId> = if self.account_suspended.load(Ordering::Relaxed) {
+            state.devices.iter().filter(|d| d.account_device.is_some()).flat_map(|d| cascade(&state, &d.id)).collect()
+        } else {
+            HashSet::new()
+        };
         let index = state.devices.iter()
-            .position(|d| d.status == Status::Approved && !(suspended && d.account_device.is_some()) && d.accepts(&presented))?;
+            .position(|d| d.status == Status::Approved && !suspended.contains(&d.id) && d.accepts(&presented))?;
         // Usar o token novo prova a entrega, mesmo com a resposta dela perdida no caminho. Vai ao disco: depois
         // de reiniciar, o antigo voltaria a valer e a prova sairia com ele.
         if state.devices[index].next_token_hash.as_deref().is_some_and(|next| same(next, &presented)) {
