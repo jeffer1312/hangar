@@ -20,7 +20,8 @@ type WireAccount = { user: string; sees_owner: boolean; owner_sees: boolean; nam
 
 const fail = (code: string) => Object.assign(new Error(code), { code });
 // Mesma regra do servidor (`valid_user` em hangar-guest-accounts): minúsculas, com `.` ou `@`, que nome de conta do
-// Connect não aceita.
+// Connect não aceita. O serviço do Connect compara nomes em minúsculas ASCII, então a entrada por nome
+// (`connectAccount`) normaliza com esta mesma função.
 export const normalizeGuestUser = (user: string) => user.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
 export const validGuestUser = (user: string) => /^[a-z0-9._@+-]{3,64}$/.test(user) && /[.@]/.test(user);
 

@@ -5,6 +5,7 @@ import { probeServerResponse } from './api';
 import { apiEnv } from './apiEnv';
 import { registrar as registrarDiag } from './diag';
 import { SERVIDOR_CANDIDATO } from './esfriamento';
+import { normalizeGuestUser } from './guests';
 import { sha256Hex } from './hmac';
 import { isLocalMachineUrl, isOwnMachine, normalizeMachineUrl, readMachineIdentity } from './machineImport';
 import { baseOf, readConnectUrl } from './rota';
@@ -119,8 +120,6 @@ export type SignInResult = { kind: 'account'; account: AccountSession } | { kind
 export interface SignInDeps { crypto: SyncCrypto; serviceUrl?: string }
 
 const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
-// O serviço compara em minúsculas ASCII, e conta e convidado nascem assim.
-const normalizeName = (name: string) => name.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
 
 // Pedido que nem chegou a ter resposta é rede, e a tela não pode tratá-lo como senha errada.
 async function overNetwork<T>(call: () => Promise<T>): Promise<T> {
@@ -136,7 +135,7 @@ async function overNetwork<T>(call: () => Promise<T>): Promise<T> {
 export async function lookupName(name: string, serviceUrl = CONNECT_SERVICE_URL): Promise<NameLookup> {
   let answer: Record<string, unknown>;
   try {
-    answer = record(await overNetwork(() => post(serviceUrl, '/v1/lookup', { name: normalizeName(name) })));
+    answer = record(await overNetwork(() => post(serviceUrl, '/v1/lookup', { name: normalizeGuestUser(name) })));
   } catch (error) {
     // Serviço anterior ao diretório de convidados: só conhece conta.
     if ((error as { status?: number }).status === 404) return { kind: 'account' };
@@ -158,7 +157,7 @@ export async function lookupName(name: string, serviceUrl = CONNECT_SERVICE_URL)
  */
 export async function signInAnywhere(name: string, password: string, deps: SignInDeps): Promise<SignInResult> {
   const serviceUrl = deps.serviceUrl ?? CONNECT_SERVICE_URL;
-  const user = normalizeName(name);
+  const user = normalizeGuestUser(name);
   const found = await lookupName(user, serviceUrl);
   if (found.kind === 'none') throw fail('credentials_mismatch');
   if (found.kind === 'account') {
