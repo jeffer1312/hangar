@@ -74,7 +74,7 @@ case "$1" in
   show-environment) grep "^$4=" "$S.env" || exit 1;;
   set-environment) echo "$4=$5" >> "$S.env";;
   display-message)
-    read_state || exit 1
+    read_state || {{ printf "can't find session: %s\n" "$4" >&2; exit 1; }}
     case "$5" in
       '#{{pane_pid}}') echo "$PID";;
       $'#{{session_name}}\t#{{pane_id}}\t#{{session_created}}') printf '%s\t%%7\t%s\n' "$NAME" "$BORN";;
@@ -914,6 +914,94 @@ fn a_switch_cut_in_the_middle_settles_on_the_account_holding_the_conversation() 
     assert!(!specs.join(format!("{key}.switching")).exists());
 }
 
+#[test]
+fn interrupted_provider_switch_keeps_the_target_binding_until_every_record_is_written() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "ab".repeat(16);
+    let specs = fx.home.join(".hangar/session-specs");
+    std::fs::create_dir_all(&specs).unwrap();
+    let mark = specs.join(format!("{key}.provider-switch"));
+    let record = specs.join(format!("{key}.json"));
+    let binding = "bound-target";
+    let mut saved = json!({"generation":2,"spec":{"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"headless",
+        "account":{"kind":"engine","name":"target","account":"target-account","binding":binding},"account_source":"explicit",
+        "model":"gpt-target","service_tier":"default","permission_mode":"acceptEdits","jev":false,"read_only":false,
+        "created_at":1.0,"conversation":SID}});
+    let mut source = saved["spec"].clone();
+    source["account"] = json!({"kind":"default"});
+    source["model"] = json!("claude-before");
+    source["service_tier"] = Value::Null;
+    saved["source"] = source;
+    std::fs::write(&mark, saved.to_string()).unwrap();
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits"}));
+    std::fs::create_dir(&record).unwrap();
+    let env = AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned())].into());
+    let runtime = env.claude_base.join(".hangar-queue/runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let write_generation = |generation| {
+        let state = hangar_server::runtime::queue::State::new(&key, generation, "s1", Vec::new());
+        std::fs::write(runtime.join(format!("{key}.json")), serde_json::to_vec(&state).unwrap()).unwrap();
+    };
+    write_generation(2);
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    assert!(mark.is_file());
+    std::fs::remove_dir(&record).unwrap();
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let sidecar: Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!(sidecar["engine_binding"], binding);
+    assert_eq!(sidecar["engine_account"], "target-account");
+    assert_eq!(sidecar["session_id"], SID);
+    let archived: Value = serde_json::from_slice(&std::fs::read(specs.join("conversations").join(format!("{SID}.json"))).unwrap()).unwrap();
+    assert_eq!(archived["account"]["binding"], binding);
+    assert!(!mark.exists());
+
+    let mut newer = saved["spec"].clone();
+    newer["model"] = json!("gpt-newer");
+    std::fs::write(&record, newer.to_string()).unwrap();
+    std::fs::write(&mark, saved.to_string()).unwrap();
+    write_generation(3);
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let latest: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    assert_eq!(latest["model"], "gpt-newer");
+    assert!(!mark.exists());
+
+    let pid = std::process::id();
+    let birth = hangar_server::terminal_facts::agent_birth(pid).unwrap();
+    let cano = json!({"pid":pid,"process_birth":birth});
+    let mut live = sidecar;
+    live["engine_account"] = json!("old-alias");
+    live["cano"] = cano.clone();
+    fx.put_sidecar(live);
+    let mut interrupted = saved;
+    interrupted["generation"] = json!(3);
+    std::fs::write(&mark, interrupted.to_string()).unwrap();
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let adopted: Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!(adopted["cano"], cano);
+    assert_eq!(adopted["engine_account"], "target-account");
+    assert!(!mark.exists());
+
+    std::fs::remove_file(fx.sidecar_path("s1")).unwrap();
+    interrupted["spec"]["surface"] = json!("terminal");
+    std::fs::write(&mark, interrupted.to_string()).unwrap();
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let fallen = hangar_server::session_open::fallen::get(&fx.home, "s1").unwrap();
+    assert_eq!((fallen.key.as_str(), fallen.conversation.as_deref()), (key.as_str(), Some(SID)));
+    assert!(!mark.exists());
+
+    hangar_server::session_open::fallen::remove(&fx.home, "s1").unwrap();
+    interrupted["source"]["surface"] = json!("terminal");
+    std::fs::write(&record, interrupted["source"].to_string()).unwrap();
+    std::fs::write(&mark, interrupted.to_string()).unwrap();
+    write_generation(2);
+    hangar_server::runtime::claude_reopen::settle_switches(&env);
+    let before_stop: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    assert_eq!(before_stop["model"], "claude-before");
+    assert!(hangar_server::session_open::fallen::get(&fx.home, "s1").is_some());
+    assert!(!mark.exists());
+}
+
 /// Até `check` valer, com teto generoso: o teto só estoura se o código travar.
 async fn until<F:std::future::Future<Output=bool>>(what:&str,mut check:impl FnMut()->F) {
     let deadline = std::time::Instant::now()+Duration::from_secs(30);
@@ -1416,6 +1504,66 @@ async fn the_account_route_moves_a_headless_conversation_to_the_new_account() {
     let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
     assert_eq!((meta["headless"].as_bool(),meta["config_dir"].as_str(),meta["session_id"].as_str()),(Some(true),b.to_str(),Some(SID)));
     registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_provider_switch_preserves_the_claude_conversation_and_surface() {
+    use crate::remote_browser::support::Server;
+    let proxy = Server::owner(axum::Router::new().route("/v1/models", axum::routing::get(|| async {
+        ([("content-type", "application/json")], r#"{"data":[{"id":"pro/gpt-6-pro","context_length":200000},{"id":"plus/gpt-6-plus"}]}"#)
+    }))).await;
+    for headless in [false, true] {
+        let fx = fixture();
+        let key = "f3".repeat(16);
+        logged_in_default(&fx);
+        fx.transcript();
+        let project = hangar_workspace::worktrees::sanitize_cwd(&fx.cwd.to_string_lossy());
+        let transcript = fx.home.join(format!(".claude/projects/{project}/{SID}.jsonl"));
+        let history = std::fs::read(&transcript).unwrap();
+        let config = fx.home.join(".cli-proxy-api");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("config.yaml"), format!("host: 127.0.0.1\nport: {}\napi-keys: [fixture-key]\n",proxy.address.port())).unwrap();
+        let credential = json!({"type":"codex","account_id":"fixture-pro","email":"pro@example.test","prefix":"pro","plan_type":"pro"});
+        let binding = hangar_server::engines::proxy::binding_id(&credential).unwrap();
+        std::fs::write(config.join("pro.json"), credential.to_string()).unwrap();
+        std::fs::write(fx.home.join(".claude/engines.json"),json!({"target":{
+            "base_url":format!("http://{}",proxy.address),"api_key":"fixture-key","model":"gpt-6-pro","cliproxy_binding":binding
+        }}).to_string()).unwrap();
+        let registry = headless_registry(&fx).await;
+        crate::write_executable(&fx.home.join("bin/hangar-engine"), "#!/bin/sh\nwhile [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n");
+        if headless {
+            fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits","cano":null}));
+        } else { terminal_with_spec(&fx, &key); }
+        let server = serve_with_accounts(&fx, registry.clone()).await;
+        let entry = hangar_server::engines::proxy::resolve_binding(&hangar_server::accounts::AccountService::new(home_env(&fx)), &binding).unwrap();
+        let request = json!({"source":{"lifecycle_id":format!("k:{key}"),"jsonl":transcript,"headless":headless,"engine":null,"engine_account":null,"engine_binding":null},
+            "engine":"target","engine_account":entry["account"],"engine_binding":binding,"model":"gpt-6-pro"});
+        let mut rejected = request.clone();
+        rejected["model"] = json!("gpt-6-plus");
+        let before = fx.spawns();
+        assert_eq!(post(server,"engine/provider",rejected).await.0, 409);
+        assert_eq!(fx.spawns(), before);
+        let mut stale = request.clone();
+        stale["source"]["headless"] = json!(!headless);
+        assert_eq!(post(server,"engine/provider",stale).await.0, 409);
+        assert_eq!(fx.spawns(), before);
+        let (status, result) = post(server,"engine/provider",request).await;
+        assert_eq!(status, 200, "{result}");
+        assert_eq!(result["engine_binding"], binding);
+        assert_eq!(result["service_tier"], "default");
+        assert_eq!(std::fs::read(&transcript).unwrap(), history);
+        let stored = hangar_server::session_open::record::read(&fx.home, &key).unwrap().unwrap();
+        assert_eq!(stored.conversation.as_deref(), Some(SID));
+        assert_eq!(stored.surface, if headless { Surface::Headless } else { Surface::Terminal });
+        assert_eq!(stored.model.as_deref(), Some("gpt-6-pro"));
+        if !headless {
+            let command = fx.args().last().cloned().unwrap();
+            assert!(command.contains("--service-tier default") && command.contains("--account-binding"), "{command}");
+        }
+        registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+        fx.finish();
+    }
+    proxy.close().await;
 }
 
 #[tokio::test]

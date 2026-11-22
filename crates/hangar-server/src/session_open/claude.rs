@@ -152,6 +152,7 @@ pub(crate) fn settings_file(home: &Path, settings: &Value) -> std::io::Result<St
 /// sem suporte na normal, em vez de a sessão não voltar.
 pub fn relaunch_tier(spec: &SessionSpec, facts: &dyn super::OpenFacts) -> Option<super::ServiceTier> {
     let tier = spec.service_tier?;
+    if tier == super::ServiceTier::Default && matches!(spec.account, Account::Engine { binding: Some(_), .. }) { return Some(tier); }
     let (engine, account, binding) = match &spec.account {
         Account::Engine { name, account, binding, .. } => (Some(name.as_str()), account.as_deref(), binding.as_deref()),
         _ => (None, None, None),
@@ -204,8 +205,8 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
             command.extend(["--model".into(), model.clone()]);
             if let Some(window) = context_window { command.extend(["--context".into(), window.to_string()]); }
         }
-        // Normal é a falta do campo: só Fast e Ultra Fast (já conferidos na abertura) vão ao provedor.
-        if let Some(tier) = spec.service_tier.filter(|tier| tier.is_fast()) {
+        // Normal explícito também limpa o Fast que veio das configurações do Claude.
+        if let Some(tier) = spec.service_tier {
             command.extend(["--service-tier".into(), tier.name().into()]);
         }
         command.push("--".into());

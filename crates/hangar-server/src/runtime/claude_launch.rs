@@ -61,11 +61,31 @@ pub fn transcript(env: &AccountEnvironment, spec: &SessionSpec, sid: &str) -> Pa
 pub(crate) fn transcript_in(base: &Path, cwd: &str, sid: &str) -> PathBuf {
     let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(cwd)).join(format!("{sid}.jsonl"));
     if expected.exists() { return expected; }
-    let moved = std::fs::read_dir(base).into_iter().flatten().flatten()
-        .map(|dir| dir.path().join(format!("{sid}.jsonl")))
-        .filter_map(|path| path.metadata().ok().filter(|meta| meta.is_file()).and_then(|meta| meta.modified().ok()).map(|at| (at, path)))
-        .max();
-    moved.map_or(expected, |(_, path)| path)
+    moved_transcript(base, &format!("{sid}.jsonl")).ok().flatten().unwrap_or(expected)
+}
+
+pub(crate) fn moved_transcript(base: &Path, file: &str) -> std::io::Result<Option<PathBuf>> {
+    let mut newest = None;
+    let mut incomplete = None;
+    for entry in std::fs::read_dir(base)? {
+        let candidate = (|| -> std::io::Result<_> {
+            let path = entry?.path().join(file);
+            let meta = path.metadata()?;
+            if meta.is_file() { Ok(Some((meta.modified()?, path))) } else { Ok(None) }
+        })();
+        match candidate {
+            Ok(found) => newest = newest.max(found),
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {},
+            Err(error) => { incomplete.get_or_insert(error); },
+        }
+    }
+    if let Some(error) = incomplete {
+        if newest.is_none() { return Err(error); }
+        if crate::warn_limit::allow(None, "claude_projects_partial") {
+            tracing::warn!(kind=?error.kind(), "a busca de histórico foi parcial; usando a cópia legível mais recente");
+        }
+    }
+    Ok(newest.map(|(_, path)| path))
 }
 
 /// `permissions.defaultMode` do `settings.json` da conta (a do servidor sem pasta própria), como a
@@ -113,7 +133,7 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
             tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
             None
         }
-        Some(tier) if ctx.fast => Some(tier),
+        Some(tier) if ctx.fast || (tier == crate::session_open::ServiceTier::Default && matches!(spec.account, Account::Engine { binding: Some(_), .. })) => Some(tier),
         _ => None,
     };
     let resume = transcript(ctx.env, spec, sid).exists();

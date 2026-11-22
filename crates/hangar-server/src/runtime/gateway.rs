@@ -490,11 +490,13 @@ impl RuntimeRegistry {
     /// ainda espera; a troca que já transfere segue, e o pedido novo recebe `None`.
     pub fn hold_handoff(&self,name:&str,view:hangar_api::session::Handoff) -> Option<u64> {
         static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
-        let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
-        if all.get(name).is_some_and(|p|p.view.state==HandoffState::Running) { return None; }
-        let generation=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
-        all.insert(name.to_owned(),PendingHandoff { generation,view,cancelled:false });
-        drop(all);
+        let generation = self.ingress.unless_provider_switch(name, || {
+            let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
+            if all.get(name).is_some_and(|p|p.view.state==HandoffState::Running) { return None; }
+            let generation=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+            all.insert(name.to_owned(),PendingHandoff { generation,view,cancelled:false });
+            Some(generation)
+        })?;
         // ponytail: a troca vive só na memória; servidor reiniciado no meio a perde, e o diário e o log mostram o
         // início sem o "encerrada". Gravar em disco se isso acontecer de fato.
         tracing::info!(session=%name,generation,"troca de agente à espera do turno");
