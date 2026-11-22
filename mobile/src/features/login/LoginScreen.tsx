@@ -15,7 +15,7 @@ import { QrScanner } from './QrScanner';
 import { parsePairing } from './pairing';
 import { AddressForm } from './AddressForm';
 import { GuestPicker } from './GuestPicker';
-import { ConnectMark } from '../connect/ConnectHero';
+import { LoginHeader } from './LoginHeader';
 import { ConnectBoundary } from '../connect/ConnectBoundary';
 import { ConnectMachines } from '../connect/ConnectMachines';
 import { useConnect } from '../connect/connectStore';
@@ -112,11 +112,7 @@ export function LoginScreen() {
         </View>
       </ConnectBoundary>
       : <Glass variant="modal" style={styles.card}>
-        <View style={styles.header}>
-          <ConnectMark size={64} />
-          <Text accessibilityRole="header" style={styles.title}>{m.login_hangar_title()}</Text>
-          <Text style={styles.subtitle}>{m.login_hangar_subtitle()}</Text>
-        </View>
+        <LoginHeader />
         <View style={styles.form}>
           {/* A conta caiu (401) e a tela voltou ao formulário: sem o aviso, parece que ela nunca entrou. */}
           {notice === m.connect_session_ended() ? <Notice text={notice} /> : null}
@@ -192,9 +188,6 @@ const styles = StyleSheet.create((theme) => ({
   machines: { gap: theme.base.space[4] },
   inviteForm: { padding: theme.base.space[4], gap: theme.base.space[3] },
   card: { width: '100%', padding: theme.base.space[6], gap: theme.base.space[5] },
-  header: { alignItems: 'center', gap: theme.base.space[2] },
-  title: { ...theme.type.title, color: theme.tokens.text.primary, textAlign: 'center' },
-  subtitle: { fontSize: theme.base.text.sm, color: theme.tokens.text.muted, textAlign: 'center', lineHeight: 21 },
   form: { gap: theme.base.space[4] },
   link: { minHeight: 44, justifyContent: 'center', alignItems: 'center' },
   linkText: { ...theme.type.control },
