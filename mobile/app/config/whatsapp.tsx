@@ -1,42 +1,33 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, AppState, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { AppState, ScrollView, Text, View } from 'react-native';
 import { useIsFocused, useRouter } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { SvgXml } from 'react-native-svg';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useUnistyles } from 'react-native-unistyles';
 import {
-  getWhatsApp, installWhatsApp, intlLocale, logoutWhatsApp, pairWhatsApp, relativeTime, uninstallWhatsApp, updateWhatsApp, wipeWhatsApp,
-  type Server, type WhatsAppState, type WhatsAppTotals,
+  getWhatsApp, installWhatsApp, logoutWhatsApp, pairWhatsApp, uninstallWhatsApp, updateWhatsApp, wipeWhatsApp,
+  type Server, type WhatsAppState,
 } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader } from '../../src/features/config/PageHeader';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
-import { BlockHead, Chip, Muted, useInputStyle } from '../../src/features/config/ServerConfigParts';
-import { useSettingsColors, withAlpha } from '../../src/features/config/colors';
+import { Chip, Muted } from '../../src/features/config/ServerConfigParts';
+import { useSettingsColors } from '../../src/features/config/colors';
 import {
-  PAIR_GRACE_MS, POLL_MS, STEPS, codeOf, failedJob, isWhatsAppState, jobError, type JobError, mediaShares, minutesLeft, phoneDigits, secondsSince, shouldPoll, stepIndex, viewOf,
+  PAIR_GRACE_MS, POLL_MS, failedJob, isWhatsAppState, jobError, type JobError, phoneDigits, shouldPoll, viewOf,
   type WhatsAppView,
 } from '../../src/features/config/whatsapp';
+import { Button, Check, Connected, Off, Pair, Problem, Working, styles, type Act } from '../../src/features/config/WhatsAppParts';
 import { useWhatsAppSeen } from '../../src/features/config/whatsappSeen';
 import { superficie } from '../../src/theme/superficie';
-import { Icon, type IconName } from '../../src/ui/Icon';
 import { Sheet } from '../../src/ui/Sheet';
 import { haptic } from '../../src/ui/haptics';
 import { useServers } from '../../src/stores/servers';
 import * as m from '../../src/paraglide/messages';
 
-type Act = 'install' | 'update' | 'pair' | 'logout' | 'wipe' | 'uninstall';
 type Load = { status: 'loading' } | { status: 'error'; error: string; code?: string } | { status: 'ready'; data: WhatsAppState };
 type Confirm = 'logout' | 'wipe' | 'remove';
 
-// As ferramentas que as sessões usam: nomes do catálogo MCP, iguais nos dois idiomas.
-const TOOLS = 'whatsapp_chats · whatsapp_read · whatsapp_search · whatsapp_request_media';
-const STEP_LABEL: Record<typeof STEPS[number], () => string> = {
-  download: m.native_whatsapp_step_download,
-  service: m.native_whatsapp_step_service,
-  start: m.native_whatsapp_step_start,
-};
 const ERR: Record<string, () => string> = {
   whatsapp_accept_required: m.native_whatsapp_err_accept_required,
   whatsapp_busy: m.native_whatsapp_err_busy,
@@ -57,13 +48,6 @@ function errorText(e: unknown): string {
   }
   return e instanceof Error && e.message ? e.message : m.erro_desconhecido();
 }
-
-const STATUS_ERR: Record<string, () => string> = {
-  pair_timeout: m.native_whatsapp_status_err_pair_timeout,
-  connect_failed: m.native_whatsapp_status_err_connect_failed,
-  pair_code_failed: m.native_whatsapp_status_err_pair_code_failed,
-  pair_failed: m.native_whatsapp_status_err_pair_failed,
-};
 
 const JOB_ERR: Record<JobError, () => string> = {
   download_failed: m.native_whatsapp_job_err_download_failed,
@@ -88,11 +72,6 @@ const jobErrorText = (code: string) => {
   const known = jobError(code);
   return known ? JOB_ERR[known]() : m.native_whatsapp_job_err_unknown({ code });
 };
-
-const statusErrorText = (code: string) =>
-  Object.prototype.hasOwnProperty.call(STATUS_ERR, code) ? STATUS_ERR[code]() : m.native_whatsapp_status_err_unknown({ code });
-
-const grouped = (n: number | undefined) => (n ?? 0).toLocaleString(intlLocale());
 
 export default function WhatsApp() {
   const server = useServers((s) => s.active());
@@ -308,264 +287,6 @@ function Loading() {
   </View>;
 }
 
-function Card({ children }: { children: ReactNode }) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  return <View style={[styles.card, { borderColor: c.border, backgroundColor: superficie(theme, 0.6) }]}>{children}</View>;
-}
-
-function Button({ kind = 'primary', label, onPress, disabled = false, loading = false }: {
-  kind?: 'primary' | 'ghost' | 'danger'; label: string; onPress: () => void; disabled?: boolean; loading?: boolean;
-}) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  const danger = theme.tokens.status.error;
-  const look = kind === 'primary'
-    ? { backgroundColor: disabled ? c.inset : c.accent, borderColor: 'transparent' }
-    : { backgroundColor: superficie(theme, 0.6), borderColor: kind === 'danger' ? withAlpha(danger, 0.35) : c.border };
-  const color = kind === 'primary' ? (disabled ? c.faint : theme.ink.onAccent) : kind === 'danger' ? danger : c.accentText;
-  return <Pressable onPress={onPress} disabled={disabled || loading} accessibilityRole="button" accessibilityLabel={label}
-    accessibilityState={{ disabled: disabled || loading, busy: loading }}
-    style={({ pressed }) => [styles.button, look, kind !== 'primary' && disabled && { opacity: 0.5 }, pressed && { opacity: 0.8 }]}>
-    {loading ? <ActivityIndicator size="small" color={color} /> : null}
-    <Text style={[styles.buttonText, { color }, kind !== 'primary' && styles.buttonTextLight]}>{label}</Text>
-  </Pressable>;
-}
-
-function Link({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) {
-  const c = useSettingsColors();
-  return <Pressable onPress={onPress} disabled={disabled} accessibilityRole="button" accessibilityLabel={label}
-    accessibilityState={{ disabled: !!disabled }} hitSlop={10} style={[styles.link, disabled && { opacity: 0.5 }]}>
-    <Text style={[styles.linkText, { color: c.accentText }]}>{label}</Text>
-  </Pressable>;
-}
-
-function Check({ checked, label, onToggle, disabled }: { checked: boolean; label: string; onToggle: () => void; disabled?: boolean }) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  return <Pressable onPress={onToggle} disabled={disabled} accessibilityRole="checkbox" accessibilityLabel={label}
-    accessibilityState={{ checked, disabled: !!disabled }} hitSlop={6} style={styles.check}>
-    <View style={[styles.box, checked ? { backgroundColor: c.accent, borderColor: c.accent } : { borderColor: c.borderStrong }]}>
-      {checked ? <Icon name="Check" size={14} color={theme.ink.onAccent} /> : null}
-    </View>
-    <Text style={[styles.checkText, { color: c.text }]}>{label}</Text>
-  </Pressable>;
-}
-
-/** Faixa de aviso: erro (vermelha) ou atenção (âmbar), com título, detalhe e ação opcionais. */
-function Problem({ tone, icon, title, text, detail, action, onPress, primary, busy, loading }: {
-  tone: 'error' | 'warning'; icon: IconName; title?: string; text: string; detail?: string; action?: string; onPress?: () => void;
-  primary?: boolean; busy?: boolean; loading?: boolean;
-}) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  const color = tone === 'error' ? theme.tokens.status.error : theme.tokens.status.warning;
-  return <View style={styles.stack}>
-    <View accessibilityRole="alert" style={[styles.problem, { borderColor: withAlpha(color, 0.3), backgroundColor: withAlpha(color, 0.08) }]}>
-      <Icon name={icon} size={16} color={color} />
-      <View style={styles.flex}>
-        {title ? <Text style={[styles.problemTitle, { color: c.text }]}>{title}</Text> : null}
-        <Text selectable style={[styles.body, { color: title ? c.muted : color }]}>{text}</Text>
-        {detail ? <Text selectable style={[styles.small, { color: c.faint }]}>{detail}</Text> : null}
-      </View>
-    </View>
-    {action && onPress ? <Button kind={primary || tone === 'error' ? 'primary' : 'ghost'} label={action} onPress={onPress}
-      disabled={busy} loading={loading} /> : null}
-  </View>;
-}
-
-function Off({ accepted, busy, onToggle, onInstall }: { accepted: boolean; busy: Act | null; onToggle: () => void; onInstall: () => void }) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  const risks: Array<[IconName, string, string, boolean]> = [
-    ['TriangleAlert', m.native_whatsapp_risk_unofficial_title(), m.native_whatsapp_risk_unofficial(), true],
-    ['Eye', m.native_whatsapp_risk_readonly_title(), m.native_whatsapp_risk_readonly(), false],
-    ['HardDrive', m.native_whatsapp_risk_local_title(), m.native_whatsapp_risk_local(), false],
-    ['KeyRound', m.native_whatsapp_risk_who_title(), m.native_whatsapp_risk_who(), false],
-  ];
-  return <>
-    <Muted>{m.native_whatsapp_intro()}</Muted>
-    <BlockHead title={m.native_whatsapp_risk_title()} />
-    <Card>
-      {risks.map(([icon, lead, text, warn], i) => (
-        <View key={lead} style={[styles.risk, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border }]}>
-          <View style={[styles.iconBox, { backgroundColor: c.inset }]}>
-            <Icon name={icon} size={15} color={warn ? theme.tokens.status.warning : c.muted} />
-          </View>
-          <Text style={[styles.body, styles.flex, { color: c.muted }]}>
-            <Text style={[styles.strong, { color: warn ? theme.tokens.status.warning : c.text }]}>{lead}</Text> {text}
-          </Text>
-        </View>
-      ))}
-    </Card>
-    <Check checked={accepted} label={m.native_whatsapp_accept()} onToggle={onToggle} disabled={!!busy} />
-    <Button label={m.native_whatsapp_install()} onPress={onInstall} disabled={!accepted || !!busy} loading={busy === 'install'} />
-  </>;
-}
-
-function Working({ state }: { state: WhatsAppState }) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  const update = state.job?.kind === 'update';
-  const current = stepIndex(state.job?.step);
-  return <>
-    <Muted>{update ? m.native_whatsapp_updating_title() : m.native_whatsapp_installing_title()}</Muted>
-    <Card>
-      <View accessibilityLiveRegion="polite" style={styles.stackTight}>
-        {STEPS.map((step, n) => {
-          const done = n < current;
-          const running = n === current;
-          return <View key={step} style={styles.step}>
-            <View style={styles.stepIcon}>
-              {running ? <ActivityIndicator size="small" color={c.accent} />
-                : <Icon name={done ? 'CircleCheck' : 'Circle'} size={16} color={done ? theme.tokens.status.success : c.faint} />}
-            </View>
-            <Text style={[styles.body, { color: done || running ? c.text : c.muted }]}>{STEP_LABEL[step]()}</Text>
-          </View>;
-        })}
-      </View>
-      <View style={[styles.bar, { backgroundColor: c.inset }]}>
-        <View style={{ width: `${Math.round(((current + 0.5) / STEPS.length) * 100)}%`, backgroundColor: c.accent }} />
-      </View>
-    </Card>
-  </>;
-}
-
-function Pair({ state, view, busy, qrWanted, asked, phone, phoneError, awaiting, onPhone, onRequestCode, onShowQr, onBackToPhone, onChangeNumber, onCancel, onRetry }: {
-  state: WhatsAppState; view: WhatsAppView; busy: Act | null; qrWanted: boolean; asked: boolean; phone: string; phoneError: string; awaiting: boolean;
-  onPhone: (t: string) => void; onRequestCode: () => void; onShowQr: () => void; onBackToPhone: () => void; onChangeNumber: () => void;
-  onCancel: () => void; onRetry: () => void;
-}) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  const input = useInputStyle();
-  const status = state.status;
-  const errorCodeNow = codeOf(status?.error);
-  const pairCode = view === 'pairing' ? status?.pair_code : null;
-  const qr = view === 'pairing' ? state.qr_svg : null;
-  const enough = phone.replace(/\D/g, '').length >= 10;
-  const left = minutesLeft(status?.pair_code_expires_at);
-  return <>
-    <BlockHead title={m.native_whatsapp_pair_title()} />
-    {status?.state === 'logged_out' ? <Muted>{m.native_whatsapp_logged_out()}</Muted> : null}
-    {errorCodeNow ? <Problem tone="error" icon="CircleAlert" text={statusErrorText(errorCodeNow)} action={m.native_server_retry()}
-      busy={!!busy} onPress={onRetry} /> : null}
-    {qrWanted ? <>
-      <Card>
-        <Text style={[styles.body, { color: c.muted }]}>{m.whatsapp_pair_qr_lead()}</Text>
-        {[m.native_whatsapp_pair_step1(), m.native_whatsapp_pair_step2(), m.native_whatsapp_pair_step3()].map((t, n) => (
-          <Text key={t} style={[styles.body, { color: c.text }]}>{`${n + 1}. ${t}`}</Text>
-        ))}
-        <View style={styles.qr} accessible accessibilityRole="image" accessibilityLabel={qr ? m.native_whatsapp_pair_step3() : m.native_whatsapp_pair_waiting()}>
-          {qr ? <SvgXml xml={qr} width="100%" height="100%" />
-            : <Text style={[styles.small, styles.qrWaiting]}>{m.native_whatsapp_pair_waiting()}</Text>}
-        </View>
-        <Text style={[styles.small, { color: c.muted }]}>{m.native_whatsapp_pair_qr_note()}</Text>
-      </Card>
-      <Link label={m.whatsapp_pair_back_phone()} onPress={onBackToPhone} disabled={!!busy} />
-    </> : asked && pairCode ? <>
-      <Card>
-        <Text style={[styles.body, { color: c.muted }]}>{m.whatsapp_pair_code_lead()}</Text>
-        <Text selectable accessibilityLiveRegion="polite" style={[styles.code, { color: c.text, fontFamily: theme.base.fontMono }]}>{pairCode}</Text>
-        <Text style={[styles.small, { color: c.muted }]}>
-          {m.native_whatsapp_pair_code_note()}{left !== null ? `${m.whatsapp_pair_code_valid({ n: String(left) })}` : ''}
-        </Text>
-      </Card>
-      <Button kind="ghost" label={m.whatsapp_pair_change_number()} onPress={onChangeNumber} disabled={!!busy} />
-    </> : asked && (busy === 'pair' || view === 'pairing' || awaiting) ? <Card>
-      <View style={styles.step}>
-        <ActivityIndicator size="small" color={c.accent} />
-        <Text accessibilityLiveRegion="polite" style={[styles.body, { color: c.muted }]}>{m.native_whatsapp_pair_waiting()}</Text>
-      </View>
-    </Card> : <>
-      <Card>
-        <Text style={[styles.body, { color: c.muted }]}>{m.native_whatsapp_pair_phone_hint()}</Text>
-        <TextInput {...input} value={phone} onChangeText={onPhone} placeholder={m.native_whatsapp_pair_phone_placeholder()}
-          accessibilityLabel={m.native_whatsapp_pair_phone_hint()} keyboardType="phone-pad" textContentType="telephoneNumber"
-          autoComplete="tel" autoCorrect={false} returnKeyType="done" editable={!busy}
-          onSubmitEditing={() => { if (enough) onRequestCode(); }} />
-        {phoneError ? <Text accessibilityRole="alert" style={[styles.small, { color: theme.tokens.status.error }]}>{phoneError}</Text> : null}
-        <Button label={m.native_whatsapp_pair_request_code()} onPress={onRequestCode} disabled={!enough || !!busy} loading={busy === 'pair'} />
-      </Card>
-      <Link label={m.whatsapp_pair_show_qr_other()} onPress={onShowQr} disabled={!!busy} />
-    </>}
-    <Button kind="ghost" label={m.native_cancel()} onPress={onCancel} disabled={!!busy} />
-  </>;
-}
-
-function Connected({ state }: { state: WhatsAppState }) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  const status = state.status;
-  const t: Partial<WhatsAppTotals> = status?.totals ?? {};
-  const device = status?.device?.trim();
-  const deviceName = status?.device_name?.trim();
-  const ago = secondsSince(status?.last_message_at);
-  const since = status?.since ? new Date(status.since) : null;
-  const sinceText = since && !Number.isNaN(since.getTime()) ? since.toLocaleDateString(intlLocale()) : null;
-  const shares = mediaShares(t);
-  const success = theme.tokens.status.success;
-  const danger = theme.tokens.status.error;
-  return <>
-    <Card>
-      <View style={styles.step}>
-        <View style={[styles.dot, { backgroundColor: success }]} />
-        <Text style={[styles.strong, styles.flex, { color: success }]}>
-          {device ? m.native_whatsapp_connected({ device }) : m.native_whatsapp_connected_plain()}
-        </Text>
-      </View>
-      <Text style={[styles.small, { color: c.muted }]}>
-        {deviceName ? `${m.native_whatsapp_device_name({ name: deviceName })} ` : ''}
-        {ago === null ? m.native_whatsapp_no_message()
-          : m.native_whatsapp_last_message({ ago: relativeTime(Date.parse(status!.last_message_at!) / 1000) })}
-      </Text>
-    </Card>
-    <View style={styles.stats}>
-      <Stat value={grouped(t.messages)} label={sinceText ? m.native_whatsapp_total_messages({ date: sinceText }) : m.native_whatsapp_total_messages_plain()} />
-      <Stat value={grouped(t.chats)} label={m.native_whatsapp_total_chats({ groups: grouped(t.groups) })} />
-      <Stat value={grouped(t.media_saved)} label={m.native_whatsapp_total_media()} />
-    </View>
-    <BlockHead title={m.native_whatsapp_media_title()} help={m.native_whatsapp_media_desc()} />
-    <Card>
-      <View style={[styles.bar, { backgroundColor: c.inset }]} accessible={false}>
-        <View style={{ flex: shares.saved, backgroundColor: success }} />
-        <View style={{ flex: shares.phoneOnly, backgroundColor: c.accent }} />
-        <View style={{ flex: shares.lost, backgroundColor: danger }} />
-      </View>
-      <Legend color={success} title={m.whatsapp_media_saved({ n: grouped(t.media_saved) })} />
-      <Legend color={c.accent} title={m.native_whatsapp_media_phone_only({ n: grouped(t.media_phone_only) })} hint={m.native_whatsapp_media_phone_only_hint()} />
-      <Legend color={danger} title={m.native_whatsapp_media_lost({ n: grouped(t.media_lost) })} hint={m.native_whatsapp_media_lost_hint()} />
-    </Card>
-    <BlockHead title={m.native_whatsapp_usage_title()} />
-    <Card>
-      <Text style={[styles.small, { color: c.muted }]}>{m.native_whatsapp_usage_tools()}</Text>
-      <Text selectable style={[styles.small, { color: c.text, fontFamily: theme.base.fontMono }]}>{TOOLS}</Text>
-      <Text style={[styles.body, { color: c.text }]}>{m.native_whatsapp_usage_skill()}</Text>
-      <Text style={[styles.small, { color: c.muted }]}>{m.native_whatsapp_usage_skill_hint()}</Text>
-    </Card>
-  </>;
-}
-
-function Stat({ value, label }: { value: string; label: string }) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  return <View style={[styles.stat, { borderColor: c.border, backgroundColor: superficie(theme, 0.6) }]} accessible accessibilityLabel={`${value} ${label}`}>
-    <Text style={[styles.statValue, { color: c.text }]} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
-    <Text style={[styles.small, { color: c.muted }]}>{label}</Text>
-  </View>;
-}
-
-function Legend({ color, title, hint }: { color: string; title: string; hint?: string }) {
-  const c = useSettingsColors();
-  return <View style={styles.legend}>
-    <View style={[styles.dot, styles.legendDot, { backgroundColor: color }]} />
-    <View style={styles.flex}>
-      <Text style={[styles.body, { color: c.text }]}>{title}</Text>
-      {hint ? <Text style={[styles.small, { color: c.muted }]}>{hint}</Text> : null}
-    </View>
-  </View>;
-}
-
 /** Folha de confirmação: Remover oferece desconectar antes, porque depois só o celular tira o aparelho da lista. */
 function ConfirmSheet({ kind, running, connected, onConfirm, onClose }: {
   kind: Confirm; running: boolean; connected: boolean; onConfirm: (kind: Confirm, logoutFirst: boolean) => void; onClose: () => void;
@@ -589,50 +310,3 @@ function ConfirmSheet({ kind, running, connected, onConfirm, onClose }: {
     </ScrollView>
   </Sheet>;
 }
-
-const styles = StyleSheet.create((theme) => ({
-  fill: { flex: 1 },
-  flex: { flex: 1, minWidth: 0, gap: theme.base.space[0.5] },
-  titleRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.base.space[1] },
-  stack: { gap: theme.base.space[2] },
-  stackTight: { gap: theme.base.space[1] },
-  actions: { gap: theme.base.space[2], marginTop: theme.base.space[2] },
-  card: { borderRadius: theme.base.radius.md, borderWidth: 1, padding: theme.base.space[4], gap: theme.base.space[2] },
-  ghostShort: { height: 90 },
-  ghostTall: { height: 150 },
-  body: { fontSize: theme.base.text.sm, lineHeight: 20 },
-  small: { fontSize: theme.base.text.xs, lineHeight: 18 },
-  strong: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
-  risk: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.base.space[3], paddingVertical: theme.base.space[2] },
-  iconBox: { width: 28, height: 28, borderRadius: theme.base.radius.sm, alignItems: 'center', justifyContent: 'center' },
-  // 44 pt: alvo de toque mínimo.
-  check: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], paddingHorizontal: theme.base.space[1] },
-  box: { width: 22, height: 22, borderRadius: theme.base.radius.xs, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-  checkText: { flex: 1, fontSize: theme.base.text.sm, lineHeight: 20 },
-  button: {
-    minHeight: 48, borderRadius: theme.base.radius.md, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: theme.base.space[2], paddingHorizontal: theme.base.space[4],
-  },
-  buttonText: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
-  buttonTextLight: { fontWeight: theme.base.weight.medium },
-  link: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', paddingHorizontal: theme.base.space[1] },
-  linkText: { fontSize: theme.base.text.sm },
-  problem: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.base.space[3], borderWidth: 1, borderRadius: theme.base.radius.md, padding: theme.base.space[3] },
-  problemTitle: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
-  step: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], minHeight: 28 },
-  stepIcon: { width: 20, alignItems: 'center' },
-  bar: { height: 6, borderRadius: theme.base.radius.full, overflow: 'hidden', flexDirection: 'row', marginVertical: theme.base.space[1] },
-  // Fundo branco fixo: o leitor do WhatsApp não lê o QR sobre o tema escuro.
-  qr: { width: 200, height: 200, alignSelf: 'center', padding: theme.base.space[2], borderRadius: theme.base.radius.sm, backgroundColor: '#ffffff',
-    alignItems: 'center', justifyContent: 'center', marginVertical: theme.base.space[2] },
-  qrWaiting: { color: '#000000', textAlign: 'center' },
-  code: { fontSize: theme.base.text.xl, letterSpacing: 4, textAlign: 'center', fontWeight: theme.base.weight.semibold, paddingVertical: theme.base.space[2] },
-  stats: { flexDirection: 'row', gap: theme.base.space[2] },
-  stat: { flex: 1, minWidth: 0, borderWidth: 1, borderRadius: theme.base.radius.md, padding: theme.base.space[3], gap: theme.base.space[0.5] },
-  statValue: { fontSize: theme.base.text.lg, fontWeight: theme.base.weight.semibold },
-  dot: { width: 9, height: 9, borderRadius: theme.base.radius.full },
-  legend: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.base.space[2] },
-  legendDot: { marginTop: theme.base.space[1.5] },
-  sheet: { paddingHorizontal: theme.base.space[4], gap: theme.base.space[3] },
-  sheetTitle: { fontSize: theme.base.text.base, fontWeight: theme.base.weight.semibold },
-}));

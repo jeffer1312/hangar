@@ -429,28 +429,9 @@ impl Hangar {
         let intro = self.mark(settings_box().p_4().gap_2()
             .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_intro_title")))
             .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("whatsapp_intro"))), "whatsapp_intro_title");
-        let risks = [("whatsapp_risk_unofficial_title", "whatsapp_risk_unofficial"), ("whatsapp_risk_readonly_title", "whatsapp_risk_readonly"),
-            ("whatsapp_risk_local_title", "whatsapp_risk_local"), ("whatsapp_risk_who_title", "whatsapp_risk_who")];
-        let warning = theme::warning();
         let accepted = self.whatsapp.accepted;
-        let risk = div().id("whatsapp-risk").p_4().rounded(px(14.)).border_1().border_color(warning.alpha(0.3)).bg(warning.alpha(0.08))
-            .flex().flex_col().gap_2()
-            .child(div().flex().items_center().gap_2()
-                .child(chrome::small_icon(IconName::TriangleAlert, 15., theme::warning_text()))
-                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning_text()).child(tr("whatsapp_risk_title"))))
-            .children(risks.into_iter().map(|(lead, body)| {
-                let lead = tr(lead);
-                let text = format!("{lead} {}", tr(body));
-                div().flex().items_start().gap_2()
-                    .child(div().w(px(10.)).flex_shrink_0().text_sm().text_color(theme::muted()).child("•"))
-                    .child(div().flex_1().min_w_0().text_sm().whitespace_normal().text_color(theme::muted())
-                        .child(StyledText::new(text).with_highlights([(0..lead.len(),
-                            HighlightStyle { color: Some(theme::text()), font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() })])))
-            }))
-            // A borda do kit some sobre o âmbar: a opção ganha caixa própria, como nos alertas do app.
-            .child(div().mt_2().px(px(10.)).py(px(8.)).rounded(px(8.)).border_1().border_color(theme::border_strong()).bg(theme::inset())
-                .child(Checkbox::new("whatsapp-accept").checked(accepted).disabled(busy).label(tr("whatsapp_accept"))
-                    .on_click(cx.listener(|this, checked: &bool, _, cx| { this.whatsapp.accepted = *checked; cx.notify(); }))));
+        let risk = risk_box(Checkbox::new("whatsapp-accept").checked(accepted).disabled(busy).label(tr("whatsapp_accept"))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| { this.whatsapp.accepted = *checked; cx.notify(); })));
         let installing = self.whatsapp.busy == Some(Act::Install);
         let install = div().flex().child(Button::new("whatsapp-install").primary().small().label(tr("whatsapp_install"))
             .loading(installing).disabled(busy || !accepted)
@@ -495,8 +476,7 @@ impl Hangar {
         let busy = w.busy.is_some();
         let status = state.status.as_ref();
         let muted = |text: String| div().text_sm().text_color(theme::muted()).whitespace_normal().child(text);
-        let mut card = settings_box().id("whatsapp-pair").p_4().gap_3()
-            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_pair_title")));
+        let mut card = pair_card();
         if status.is_some_and(|s| s.state == "logged_out") { card = card.child(muted(tr("whatsapp_logged_out"))); }
         if let Some(code) = status.and_then(|s| s.error.as_ref()).and_then(code_of) {
             card = card.child(div().id("whatsapp-pair-error").role(Role::Alert).flex().items_center().gap_3()
@@ -531,21 +511,8 @@ impl Hangar {
                         .on_click(cx.listener(|this, _, window, cx| this.whatsapp_by_phone(window, cx)))));
         } else {
             let qr = w.qr.as_ref().map(|(_, image)| image.clone()).filter(|_| view == View::Pairing);
-            let square = div().flex_shrink_0().size(px(176.)).p(px(8.)).rounded(px(10.)).bg(gpui_kit::white()).flex().items_center().justify_center()
-                .child(match qr {
-                    Some(qr) => img(qr).size_full().into_any_element(),
-                    None => div().text_size(px(12.5)).text_color(gpui_kit::black()).child(tr("whatsapp_pair_waiting")).into_any_element(),
-                });
-            let steps = ["whatsapp_pair_step1", "whatsapp_pair_step2", "whatsapp_pair_step3"];
-            card = card.child(div().flex().flex_wrap().items_start().gap(px(18.))
-                .child(div().id("whatsapp-qr").child(square))
-                .child(div().flex_1().min_w(px(220.)).flex().flex_col().gap_2()
-                    .children(steps.iter().enumerate().map(|(n, key)| div().flex().items_start().gap_2().text_sm()
-                        .child(div().w(px(16.)).flex_shrink_0().text_color(theme::muted()).child(format!("{}.", n + 1)))
-                        .child(div().flex_1().min_w_0().whitespace_normal().child(tr(key)))))
-                    .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("whatsapp_pair_qr_note")))
-                    .child(div().flex().child(Button::new("whatsapp-by-phone").ghost().small().label(tr("whatsapp_pair_by_phone")).disabled(busy)
-                        .on_click(cx.listener(|this, _, window, cx| this.whatsapp_by_phone(window, cx)))))));
+            card = card.child(qr_row(qr, Button::new("whatsapp-by-phone").ghost().small().label(tr("whatsapp_pair_by_phone")).disabled(busy)
+                .on_click(cx.listener(|this, _, window, cx| this.whatsapp_by_phone(window, cx)))));
         }
         if w.qr_wanted || w.by_phone {
             card = card.child(div().flex().child(Button::new("whatsapp-cancel-pair").outline().small().label(tr("cancel")).disabled(busy)
@@ -571,47 +538,18 @@ impl Hangar {
         let Some(status) = &state.status else { return Vec::new() };
         let english = crate::i18n::english();
         let t = &status.totals;
-        let headline = match status.device.as_deref().filter(|d| !d.is_empty()) {
-            Some(device) => tr("whatsapp_connected").replace("{device}", device),
-            None => tr("whatsapp_connected_plain"),
-        };
-        let last = match status.last_message_at.as_deref().and_then(seconds_since) {
-            Some(seconds) => tr("whatsapp_last_message").replace("{ago}", &super::side::ago(seconds)),
-            None => tr("whatsapp_no_message"),
-        };
-        let last = match status.device_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
-            Some(name) => format!("{} {last}", tr("whatsapp_device_name").replace("{name}", name)),
-            None => last,
-        };
-        let since = status.since.as_deref().and_then(|at| local_date(at, english));
-        let messages = match since { Some(date) => tr("whatsapp_total_messages").replace("{date}", &date), None => tr("whatsapp_total_messages_plain") };
-        let number = |value: u64, label: String| div().flex_1().min_w(px(140.)).p_3().rounded(px(9.)).border_1().border_color(theme::border())
-            .flex().flex_col().gap(px(2.))
-            .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(grouped(value, english)))
-            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(label));
-        let summary = settings_box().id("whatsapp-connected").p_4().gap_2()
-            .child(div().flex().items_center().gap_2()
-                .child(div().size(px(9.)).rounded_full().flex_shrink_0().bg(theme::success()))
-                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(headline)))
-            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(last))
-            .child(div().pt_2().flex().flex_wrap().gap(px(10.))
-                .child(number(t.messages, messages))
-                .child(number(t.chats, tr("whatsapp_total_chats").replace("{groups}", &grouped(t.groups, english))))
-                .child(number(t.media_saved, tr("whatsapp_total_media"))));
-        let line = |first: bool, title: String, hint: Div| div().py(px(9.)).when(!first, |el| el.border_t_1().border_color(theme::border()))
-            .flex().flex_col().gap(px(2.)).child(div().text_sm().child(title)).child(hint);
-        let hint = |text: String| div().text_xs().text_color(theme::muted()).whitespace_normal().child(text);
+        let summary = connected_summary(ConnectedFacts {
+            device: status.device.as_deref(), device_name: status.device_name.as_deref(),
+            last_seconds: status.last_message_at.as_deref().and_then(seconds_since), since: status.since.as_deref(),
+            messages: t.messages, chats: t.chats, groups: t.groups, media_saved: t.media_saved,
+        });
         let media = settings_box().id("whatsapp-media").p_4().gap_1()
             .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_media_title")))
             .child(div().pb_1().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("whatsapp_media_desc")))
-            .child(line(true, tr("whatsapp_media_phone_only").replace("{n}", &grouped(t.media_phone_only, english)), hint(tr("whatsapp_media_phone_only_hint"))))
-            .child(line(false, tr("whatsapp_media_lost").replace("{n}", &grouped(t.media_lost, english)), hint(tr("whatsapp_media_lost_hint"))));
-        let usage = settings_box().id("whatsapp-usage").p_4().gap_1()
-            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_usage_title")))
-            .child(line(true, tr("whatsapp_usage_tools"), div().text_xs().font_family(theme::MONO).text_color(theme::muted()).whitespace_normal().child(TOOLS)))
-            .child(line(false, tr("whatsapp_usage_skill"), hint(tr("whatsapp_usage_skill_hint"))));
+            .child(info_line(true, tr("whatsapp_media_phone_only").replace("{n}", &grouped(t.media_phone_only, english)), hint(tr("whatsapp_media_phone_only_hint"))))
+            .child(info_line(false, tr("whatsapp_media_lost").replace("{n}", &grouped(t.media_lost, english)), hint(tr("whatsapp_media_lost_hint"))));
         vec![summary.into_any_element(), self.mark(div().child(media), "whatsapp_media_title").into_any_element(),
-            self.mark(div().child(usage), "whatsapp_usage_title").into_any_element()]
+            self.mark(div().child(usage_box()), "whatsapp_usage_title").into_any_element()]
     }
 
     fn render_whatsapp_actions(&self, view: View, cx: &mut Context<Self>) -> Div {
@@ -632,6 +570,115 @@ impl Hangar {
         self.mark(row, "whatsapp_remove")
     }
 }
+
+// Partes de vista que a página e a miniatura da novidade (`crate::news`) desenham iguais.
+
+/// O aviso dos riscos com a caixa do aceite, que quem chama monta (com ou sem clique).
+pub(crate) fn risk_box(accept: Checkbox) -> Stateful<Div> {
+    let risks = [("whatsapp_risk_unofficial_title", "whatsapp_risk_unofficial"), ("whatsapp_risk_readonly_title", "whatsapp_risk_readonly"),
+        ("whatsapp_risk_local_title", "whatsapp_risk_local"), ("whatsapp_risk_who_title", "whatsapp_risk_who")];
+    let warning = theme::warning();
+    div().id("whatsapp-risk").p_4().rounded(px(14.)).border_1().border_color(warning.alpha(0.3)).bg(warning.alpha(0.08))
+        .flex().flex_col().gap_2()
+        .child(div().flex().items_center().gap_2()
+            .child(chrome::small_icon(IconName::TriangleAlert, 15., theme::warning_text()))
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning_text()).child(tr("whatsapp_risk_title"))))
+        .children(risks.into_iter().map(|(lead, body)| {
+            let lead = tr(lead);
+            let text = format!("{lead} {}", tr(body));
+            div().flex().items_start().gap_2()
+                .child(div().w(px(10.)).flex_shrink_0().text_sm().text_color(theme::muted()).child("•"))
+                .child(div().flex_1().min_w_0().text_sm().whitespace_normal().text_color(theme::muted())
+                    .child(StyledText::new(text).with_highlights([(0..lead.len(),
+                        HighlightStyle { color: Some(theme::text()), font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() })])))
+        }))
+        // A borda do kit some sobre o âmbar: a opção ganha caixa própria, como nos alertas do app.
+        .child(div().mt_2().px(px(10.)).py(px(8.)).rounded(px(8.)).border_1().border_color(theme::border_strong()).bg(theme::inset())
+            .child(accept))
+}
+
+/// A caixa do pareamento com o título; o conteúdo entra depois.
+pub(crate) fn pair_card() -> Stateful<Div> {
+    settings_box().id("whatsapp-pair").p_4().gap_3()
+        .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_pair_title")))
+}
+
+/// O QR ao lado dos passos; sem QR, o quadrado diz que está esperando o código.
+pub(crate) fn qr_row(qr: Option<Arc<Image>>, by_phone: Button) -> Div {
+    let square = div().flex_shrink_0().size(px(176.)).p(px(8.)).rounded(px(10.)).bg(gpui_kit::white()).flex().items_center().justify_center()
+        .child(match qr {
+            Some(qr) => img(qr).size_full().into_any_element(),
+            None => div().text_size(px(12.5)).text_color(gpui_kit::black()).child(tr("whatsapp_pair_waiting")).into_any_element(),
+        });
+    let steps = ["whatsapp_pair_step1", "whatsapp_pair_step2", "whatsapp_pair_step3"];
+    div().flex().flex_wrap().items_start().gap(px(18.))
+        .child(div().id("whatsapp-qr").child(square))
+        .child(div().flex_1().min_w(px(220.)).flex().flex_col().gap_2()
+            .children(steps.iter().enumerate().map(|(n, key)| div().flex().items_start().gap_2().text_sm()
+                .child(div().w(px(16.)).flex_shrink_0().text_color(theme::muted()).child(format!("{}.", n + 1)))
+                .child(div().flex_1().min_w_0().whitespace_normal().child(tr(key)))))
+            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("whatsapp_pair_qr_note")))
+            .child(div().flex().child(by_phone)))
+}
+
+/// O que o resumo de conectado mostra; `device` já vem mascarado do servidor.
+pub(crate) struct ConnectedFacts<'a> {
+    pub device: Option<&'a str>,
+    pub device_name: Option<&'a str>,
+    pub last_seconds: Option<f64>,
+    /// Data RFC 3339 da mensagem mais antiga guardada.
+    pub since: Option<&'a str>,
+    pub messages: u64,
+    pub chats: u64,
+    pub groups: u64,
+    pub media_saved: u64,
+}
+
+pub(crate) fn connected_summary(c: ConnectedFacts<'_>) -> Stateful<Div> {
+    let english = crate::i18n::english();
+    let headline = match c.device.filter(|d| !d.is_empty()) {
+        Some(device) => tr("whatsapp_connected").replace("{device}", device),
+        None => tr("whatsapp_connected_plain"),
+    };
+    let last = match c.last_seconds {
+        Some(seconds) => tr("whatsapp_last_message").replace("{ago}", &super::side::ago(seconds)),
+        None => tr("whatsapp_no_message"),
+    };
+    let last = match c.device_name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("{} {last}", tr("whatsapp_device_name").replace("{name}", name)),
+        None => last,
+    };
+    let since = c.since.and_then(|at| local_date(at, english));
+    let messages = match since { Some(date) => tr("whatsapp_total_messages").replace("{date}", &date), None => tr("whatsapp_total_messages_plain") };
+    let number = |value: u64, label: String| div().flex_1().min_w(px(140.)).p_3().rounded(px(9.)).border_1().border_color(theme::border())
+        .flex().flex_col().gap(px(2.))
+        .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(grouped(value, english)))
+        .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(label));
+    settings_box().id("whatsapp-connected").p_4().gap_2()
+        .child(div().flex().items_center().gap_2()
+            .child(div().size(px(9.)).rounded_full().flex_shrink_0().bg(theme::success()))
+            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(headline)))
+        .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(last))
+        .child(div().pt_2().flex().flex_wrap().gap(px(10.))
+            .child(number(c.messages, messages))
+            .child(number(c.chats, tr("whatsapp_total_chats").replace("{groups}", &grouped(c.groups, english))))
+            .child(number(c.media_saved, tr("whatsapp_total_media"))))
+}
+
+/// Como as sessões leem: as ferramentas e a skill.
+pub(crate) fn usage_box() -> Stateful<Div> {
+    settings_box().id("whatsapp-usage").p_4().gap_1()
+        .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_usage_title")))
+        .child(info_line(true, tr("whatsapp_usage_tools"), div().text_xs().font_family(theme::MONO).text_color(theme::muted()).whitespace_normal().child(TOOLS)))
+        .child(info_line(false, tr("whatsapp_usage_skill"), hint(tr("whatsapp_usage_skill_hint"))))
+}
+
+fn info_line(first: bool, title: String, hint: Div) -> Div {
+    div().py(px(9.)).when(!first, |el| el.border_t_1().border_color(theme::border()))
+        .flex().flex_col().gap(px(2.)).child(div().text_sm().child(title)).child(hint)
+}
+
+fn hint(text: String) -> Div { div().text_xs().text_color(theme::muted()).whitespace_normal().child(text) }
 
 fn alert_line(id: &'static str, text: String) -> Stateful<Div> {
     div().id(id).role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(text)

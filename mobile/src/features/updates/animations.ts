@@ -31,6 +31,7 @@ import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 import { SessionSettingsAnimation } from './SessionSettingsAnimation';
 import { StatusAnimation } from './StatusAnimation';
 import { WorkReviewAnimation } from './WorkReviewAnimation';
+import { WhatsAppReadonlyAnimation } from './WhatsAppReadonlyAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
@@ -66,6 +67,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'sugestao-de-nome': RenameSuggestionAnimation,
   'tela-de-status': StatusAnimation,
   'worktree-atualizada': WorktreeFreshAnimation,
+  'whatsapp-somente-leitura': WhatsAppReadonlyAnimation,
 };
 
 export const animationFor = (name: string | null): ComponentType<{ width: number }> | null =>

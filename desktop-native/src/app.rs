@@ -97,6 +97,8 @@ pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, e
 pub(crate) use rename_suggest::{Strip as RenameStrip, beta_rename_strip, rename_strip};
 pub(crate) use controls::{SPEED_TIERS, speed_label, speed_texts};
 pub(crate) use settings::segments_preview;
+pub(crate) use whatsapp::{ConnectedFacts as WhatsAppConnected, connected_summary as whatsapp_connected_summary, pair_card as whatsapp_pair_card,
+    qr_row as whatsapp_qr_row, risk_box as whatsapp_risk_box, usage_box as whatsapp_usage_box};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use create::{base_button, base_row, mode_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
