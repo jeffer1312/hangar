@@ -23,9 +23,11 @@ export interface AccountDeviceKey { id: string; secret: string }
 export interface AccountSession { serviceUrl: string; token: string; device?: AccountDeviceKey }
 export interface ConnectMachine { machine_id: string; name: string; host: string; online: boolean }
 export type AccountDeviceStatus = 'pending' | 'approved' | 'revoked';
-/** Linha de `GET /v1/devices`; tempos em segundos. */
+/** Linha de `GET /v1/devices`; tempos em segundos. `install_code`: o mesmo código que o celular mostra (`installCode`),
+ *  pronto do serviço, que nunca manda o `install_id`; ausente em serviço antigo ou aparelho sem identificador. */
 export interface AccountDevice {
   device_id: string; name: string; status: AccountDeviceStatus; created_at: number; approved_at: number | null; revoked_at: number | null;
+  install_code?: string | null;
 }
 
 const fail = (code: string, status?: number) => Object.assign(new Error(code), { code, status });
@@ -82,7 +84,8 @@ export async function listAccountDevices(session: AccountSession): Promise<Accou
   const valid = (item: unknown): item is AccountDevice => {
     const row = record(item);
     return filled(row.device_id) && typeof row.name === 'string' && STATUSES.includes(row.status) && when(row.created_at)
-      && (row.approved_at === null || when(row.approved_at)) && (row.revoked_at === null || when(row.revoked_at));
+      && (row.approved_at === null || when(row.approved_at)) && (row.revoked_at === null || when(row.revoked_at))
+      && (row.install_code === undefined || row.install_code === null || typeof row.install_code === 'string');
   };
   if (!Array.isArray(rows) || !rows.every(valid)) throw fail('connect_response_invalid');
   return rows;

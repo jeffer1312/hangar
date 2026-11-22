@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { listGuests, removeGuest, saveGuest, type GuestAccount, type GuestDraft, type GuestMachine } from './guests';
+import { dropGuestAccesses, listGuests, removeGuest, saveGuest, suggestGuestUser, validGuestUser, type GuestAccount, type GuestDraft,
+  type GuestMachine } from './guests';
 import { _resetRotasForTests } from './rota';
 import type { Server } from './servers';
 
@@ -59,15 +60,56 @@ afterEach(() => { vi.unstubAllGlobals(); });
 describe('listGuests', () => {
   it('lê as contas na máquina que as guarda, com a credencial do dono', async () => {
     const hits = network(() => json([{
-      user: 'lhais@casa', sees_owner: true, owner_sees: false,
+      user: 'lhais@casa', sees_owner: true, owner_sees: false, name_taken: false,
       servers: [{ server_id: 'a', label: 'Casa', guest_id: 'g1', root: '/r', base_url: 'https://casa.ana.hangar.dev.br' }],
     }]));
     expect(await listGuests(casa)).toEqual([{
-      user: 'lhais@casa', seesOwner: true, ownerSees: false,
+      user: 'lhais@casa', seesOwner: true, ownerSees: false, nameTaken: false,
       servers: [{ serverId: 'a', label: 'Casa', guestId: 'g1', root: '/r', baseUrl: 'https://casa.ana.hangar.dev.br' }],
     }]);
     expect(hits.map(line)).toEqual(['GET casa.tail.ts.net/api/guest-accounts']);
     expect(hits[0].auth).toBe('Bearer owner-a');
+  });
+
+  it('traz o nome recusado pelo Connect; servidor que não manda o campo conta como livre', async () => {
+    network(() => json([
+      { user: 'ana.silva', sees_owner: false, owner_sees: true, name_taken: true, servers: [] },
+      { user: 'bia.souza', sees_owner: false, owner_sees: true, servers: [] },
+    ]));
+    expect((await listGuests(casa)).map((g) => [g.user, g.nameTaken])).toEqual([['ana.silva', true], ['bia.souza', false]]);
+  });
+});
+
+describe('nome de convidado', () => {
+  it.each([['ana.silva', true], ['ana@casa', true], ['ana', false], ['a.', false], ['Ana.Silva', false], ['ana silva.x', false],
+    ['ana/x.y', false], [`${'a'.repeat(63)}.`, true], [`${'a'.repeat(64)}.`, false]])('%s serve no Connect: %s', (user, ok) => {
+    expect(validGuestUser(user)).toBe(ok);
+  });
+
+  it('a sugestão mantém o nome que já serve e completa o que não serve com o dono', () => {
+    expect(suggestGuestUser('Lia.Costa', 'dono')).toBe('lia.costa');
+    expect(suggestGuestUser('Lia', 'JeffersonFelizardo')).toBe('lia@jeffersonfelizardo');
+    expect(suggestGuestUser('lia costa', 'dono')).toBe('liacosta@dono');
+    expect(suggestGuestUser('', '')).toBe('convidado@hangar');
+    for (const old of ['Lia', 'x', 'a b', 'z'.repeat(80)]) expect(validGuestUser(suggestGuestUser(old, 'dono'))).toBe(true);
+  });
+});
+
+describe('dropGuestAccesses', () => {
+  const created: GuestAccount = { ...existing, servers: [...existing.servers, { serverId: 'z', label: 'Sumiu', guestId: 'g-z', root: '' }] };
+
+  it('tira os acessos das máquinas sem gravar a conta, e diz por máquina o que ficou', async () => {
+    const hits = network((hit) => (hit.host === 'pc.lan' ? refusal(500, 'erro_guests_store') : undefined));
+    expect(await dropGuestAccesses(machines, created)).toEqual([
+      expect.objectContaining({ label: 'PC', code: 'erro_guests_store', status: 500 }),
+      { label: 'z', code: 'guest_server_missing', message: '' },
+    ]);
+    expect(hits.map(line)).toEqual(['POST casa.tail.ts.net/api/guests/g-old-a/delete', 'POST pc.lan/api/guests/g-old-b/delete']);
+  });
+
+  it('acesso que já tinha saído conta como tirado', async () => {
+    network((hit) => (hit.host === 'pc.lan' ? refusal(404, 'erro_convidado_inexistente') : undefined));
+    expect(await dropGuestAccesses(machines, existing)).toEqual([]);
   });
 });
 

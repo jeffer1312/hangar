@@ -46,29 +46,46 @@ async function readPrelogin(hub: string, user: string): Promise<{ salt: string; 
   return { salt, iterations };
 }
 
-/** Erros com `code`: `credentials_mismatch`, `sync_too_many_attempts`, `network_failed`, `sync_insecure`,
- *  `sync_unavailable`, `sync_request_failed` e `sync_vault_unreadable`. */
-export async function syncSignIn(address: string, user: string, password: string, crypto: SyncCrypto): Promise<Server[]> {
-  const hub = hubAddress(address);
+/** Login de sincronização aberto numa máquina: `call` leva o cookie dele, e `close` o encerra (ele dá escrita no cofre). */
+export type SyncSession = {
+  hub: string;
+  encKey: Uint8Array;
+  call(path: string, init?: RequestInit): Promise<Response>;
+  close(): Promise<void>;
+};
+
+/** Prelogin, derivação e login em `hub` (endereço já normalizado). Erros com `code`: `credentials_mismatch`,
+ *  `sync_too_many_attempts`, `network_failed`, `sync_unavailable` e `sync_request_failed`. */
+export async function openSyncSession(hub: string, user: string, password: string, crypto: SyncCrypto): Promise<SyncSession> {
   const { salt, iterations } = await readPrelogin(hub, user);
   const { authHash, encKey } = await crypto.deriveKeys(password, salt, iterations);
   const login = await request(hub, '/api/sync/login', { method: 'POST', body: JSON.stringify({ user, auth_hash: authHash }) });
   if (login.status === 429) throw fail('sync_too_many_attempts', 429);
   if (login.status === 401) throw fail('credentials_mismatch', 401);
   if (!login.ok) throw fail('sync_request_failed', login.status);
-  const read = await request(hub, '/api/sync/vault');
+  return {
+    hub, encKey,
+    call: (path, init) => request(hub, path, init),
+    close: () => request(hub, '/api/sync/logout', { method: 'POST' }).then(() => {}, () => {}),
+  };
+}
+
+/** Erros com `code`: os do `openSyncSession`, `sync_insecure` e `sync_vault_unreadable`. */
+export async function syncSignIn(address: string, user: string, password: string, crypto: SyncCrypto): Promise<Server[]> {
+  const hub = hubAddress(address);
+  const session = await openSyncSession(hub, user, password, crypto);
   // O cookie do login dá escrita no cofre e só servia para esta leitura.
-  const logout = () => request(hub, '/api/sync/logout', { method: 'POST' }).catch(() => {});
+  const read = await session.call('/api/sync/vault').catch(async (error: unknown) => { await session.close(); throw error; });
   if (!read.ok) {
-    await logout();
+    await session.close();
     throw fail('sync_request_failed', read.status);
   }
   const vault = await read.json().catch(() => null) as { enc_blob?: SealedBlob | null } | null;
-  await logout();
+  await session.close();
   if (vault?.enc_blob === null) return [];
   try {
     // Endereço vazio ou de loopback foi gravado de dentro da própria máquina.
-    const list = crypto.decryptJson<Server[]>(encKey, vault!.enc_blob!).filter((server) => !server.disabled)
+    const list = crypto.decryptJson<Server[]>(session.encKey, vault!.enc_blob!).filter((server) => !server.disabled)
       .map((server) => ({ ...server, baseUrl: !server.baseUrl || isLocalMachineUrl(server.baseUrl) ? hub : server.baseUrl }));
     return parseMachineImportPayload(JSON.stringify(list));
   } catch {

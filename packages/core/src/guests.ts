@@ -6,7 +6,8 @@ import type { Server } from './servers';
 
 /** `token` só existe no acesso criado e ainda não gravado na conta (o GET não o devolve): repetir com `saved` o leva. */
 export type GuestServer = { serverId: string; label: string; guestId: string; root: string; baseUrl?: string; token?: string };
-export type GuestAccount = { user: string; seesOwner: boolean; ownerSees: boolean; servers: GuestServer[] };
+/** `nameTaken`: o serviço do Connect disse que o nome já é de outra conta; só vem da leitura. */
+export type GuestAccount = { user: string; seesOwner: boolean; ownerSees: boolean; servers: GuestServer[]; nameTaken?: boolean };
 /** `password` só é obrigatória ao criar; ausente na edição mantém a senha. */
 export type GuestDraft = { user: string; password?: string; seesOwner: boolean; ownerSees: boolean; servers: { serverId: string; root: string }[] };
 /** Máquina que pode receber o convidado. `connectUrl`: host do Connect dela, que vai ao cofre no lugar do endereço salvo. */
@@ -15,12 +16,22 @@ export type GuestMachine = { server: Server; connectUrl?: string };
 export type GuestFailure = { label: string; code: string; message: string; status?: number };
 
 type WireServer = { server_id: string; label: string; guest_id: string; root: string; base_url?: string; token?: string };
-type WireAccount = { user: string; sees_owner: boolean; owner_sees: boolean; servers: WireServer[] };
+type WireAccount = { user: string; sees_owner: boolean; owner_sees: boolean; name_taken?: boolean; servers: WireServer[] };
 
 const fail = (code: string) => Object.assign(new Error(code), { code });
-// Mesma regra do servidor: minúsculas, com `.` ou `@`, que nome de conta do Connect não aceita.
+// Mesma regra do servidor (`valid_user` em hangar-guest-accounts): minúsculas, com `.` ou `@`, que nome de conta do
+// Connect não aceita.
 export const normalizeGuestUser = (user: string) => user.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
-const validUser = (user: string) => /[.@]/.test(user) && !/\s/.test(user);
+export const validGuestUser = (user: string) => /^[a-z0-9._@+-]{3,64}$/.test(user) && /[.@]/.test(user);
+
+/** Nome que serve no Connect para a conta antiga `old`: o mesmo, se já serve; senão o antigo com `@<dono>`. */
+export function suggestGuestUser(old: string, owner: string): string {
+  const user = normalizeGuestUser(old);
+  if (validGuestUser(user)) return user;
+  const clean = (text: string) => normalizeGuestUser(text).replace(/[^a-z0-9._+-]/g, '');
+  const tail = (clean(owner) || 'hangar').slice(0, 32);
+  return `${(clean(user) || 'convidado').slice(0, 63 - tail.length)}@${tail}`;
+}
 
 const failure = (label: string, error: unknown): GuestFailure => {
   const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
@@ -34,7 +45,7 @@ const gone = (e: unknown) => (e as { status?: number } | null)?.status === 404;
 export async function listGuests(store: Server): Promise<GuestAccount[]> {
   const rows = await apiFetchForServer<WireAccount[]>(store, '/api/guest-accounts');
   return rows.map((row) => ({
-    user: row.user, seesOwner: row.sees_owner, ownerSees: row.owner_sees,
+    user: row.user, seesOwner: row.sees_owner, ownerSees: row.owner_sees, nameTaken: row.name_taken === true,
     servers: row.servers.map((s) => ({
       serverId: s.server_id, label: s.label, guestId: s.guest_id, root: s.root, ...(s.base_url ? { baseUrl: s.base_url } : {}),
     })),
@@ -51,7 +62,7 @@ export async function saveGuest(
 ): Promise<{ saved: GuestAccount; errors: GuestFailure[]; storeFailed: boolean }> {
   const user = normalizeGuestUser(draft.user);
   // Antes de tocar nas máquinas: recusa depois deixaria acesso criado sem conta.
-  if (!validUser(user)) throw fail('guest_user_invalid');
+  if (!validGuestUser(user)) throw fail('guest_user_invalid');
   if (!prev && !draft.password) throw fail('guest_password_required');
   const byId = new Map(machines.map((m) => [m.server.id, m]));
   const before = new Map((prev?.servers ?? []).map((s) => [s.serverId, s]));
@@ -127,6 +138,28 @@ export async function saveGuest(
     return { saved, errors, storeFailed: true };
   }
   return { saved, errors, storeFailed: false };
+}
+
+/**
+ * Desfaz os acessos de uma conta que a máquina não gravou (nome recusado), sem escrever nela. Volta uma falha por
+ * máquina que ficou com o acesso; o que já tinha saído (404) conta como tirado.
+ */
+export async function dropGuestAccesses(machines: GuestMachine[], guest: GuestAccount): Promise<GuestFailure[]> {
+  const byId = new Map(machines.map((m) => [m.server.id, m]));
+  const errors: GuestFailure[] = [];
+  for (const access of guest.servers) {
+    const machine = byId.get(access.serverId);
+    if (!machine) {
+      errors.push({ label: access.serverId, code: 'guest_server_missing', message: '' });
+      continue;
+    }
+    try {
+      await deleteGuestForServer(machine.server, access.guestId);
+    } catch (e) {
+      if (!gone(e)) errors.push(failure(machine.server.label, e));
+    }
+  }
+  return errors;
 }
 
 /** Tira o acesso de todas as máquinas e só apaga a conta quando todas largaram e a gravação foi aceita. */

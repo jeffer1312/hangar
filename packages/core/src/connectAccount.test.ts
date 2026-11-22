@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
 import { addMachine, approveAccountDevice, changeAccountPassword, deviceStatus, endAccountSessions, listAccountDevices, listMachines, lookupName,
   registerDevice, revokeAccountDevice, signIn, signInAnywhere, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
+import { installCode } from './installCode';
 import { _resetRotasForTests } from './rota';
 import type { Server } from './servers';
 import type { SealedBlob, SyncCrypto } from './syncLogin';
@@ -262,7 +263,16 @@ describe('aparelho da conta', () => {
     expect(calls.map(credential)).toEqual(Array(3).fill(['Bearer account-token', 'ad1', 'ad-secret']));
   });
 
-  it.each([{ ...row, status: 'denied' }, { ...row, created_at: 'ontem' }, { ...row, name: 7 }, { ...row, approved_at: 'x' }])(
+  it('o código de conferência do pendente vem pronto do serviço e é o mesmo que o celular calcula', async () => {
+    const code = installCode('install-1');
+    network(() => json([{ ...row, install_code: code }, { ...row, device_id: 'ad3', install_code: null }]));
+    const [withCode, without] = await listAccountDevices(released);
+    expect(withCode.install_code).toBe(code);
+    expect(without.install_code).toBeNull();
+  });
+
+  it.each([{ ...row, status: 'denied' }, { ...row, created_at: 'ontem' }, { ...row, name: 7 }, { ...row, approved_at: 'x' },
+    { ...row, install_code: 7 }])(
     'recusa linha da lista fora do contrato: %j', async (item) => {
       network(() => json([row, item]));
       await expect(listAccountDevices(released)).rejects.toMatchObject({ code: 'connect_response_invalid' });
