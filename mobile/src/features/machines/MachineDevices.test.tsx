@@ -10,6 +10,11 @@ const mocks = vi.hoisted(() => ({ fetch: vi.fn(), alert: vi.fn() }));
 vi.mock('react-native', async (original) => ({ ...await original<typeof import('react-native')>(), Alert: { alert: mocks.alert } }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, getNumber: () => undefined, getBoolean: () => undefined, set: () => {}, remove: () => {} }) }));
+// Pacotes externos carregariam o react-native de verdade (Flow), fora dos aliases do vitest.
+vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => children }));
+vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
+vi.mock('expo-blur', () => ({ BlurView: ({ children }: { children: React.ReactNode }) => children }));
+vi.mock('expo-glass-effect', () => ({ GlassView: ({ children }: { children: React.ReactNode }) => children, isLiquidGlassAvailable: () => false }));
 import { MachineDevices } from './MachineDevices';
 import * as m from '../../paraglide/messages';
 
