@@ -267,7 +267,8 @@ impl DeviceInstall {
             // Mesma trava do `enter`: ou o cancelamento vem antes e a etapa não começa, ou ela já
             // começou e o pedido é recusado.
             let mut progress = lock(&job.progress);
-            if matches!(progress.stage, Stage::Signing | Stage::Installing | Stage::Pairing | Stage::Verifying) {
+            // A escolha de certificado acontece dentro da assinatura e tem a desistência própria (`choose_certs(None)`).
+            if matches!(progress.stage, Stage::Signing | Stage::AwaitingCertChoice | Stage::Installing | Stage::Pairing | Stage::Verifying) {
                 return Err(Failure::new(BUSY));
             }
             job.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);

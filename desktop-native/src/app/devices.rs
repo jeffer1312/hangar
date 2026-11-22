@@ -128,7 +128,9 @@ impl Stage {
     fn running(self) -> bool { !matches!(self, Stage::Done | Stage::Failed) }
 
     /// O servidor só cancela antes de assinar: depois, a conta ou o SideStore ficariam pela metade.
-    pub(super) fn cancellable(self) -> bool { self.running() && !matches!(self, Stage::Signing | Stage::Installing | Stage::Pairing | Stage::Verifying) }
+    pub(super) fn cancellable(self) -> bool {
+        self.running() && !matches!(self, Stage::Signing | Stage::AwaitingCertChoice | Stage::Installing | Stage::Pairing | Stage::Verifying)
+    }
 }
 
 /// Em que ponto do iOS a tela está.
@@ -748,7 +750,7 @@ mod tests {
     fn devices_cancel_only_before_the_install() {
         let cancellable: Vec<Stage> = ["login", "awaiting_code", "checking_limit", "downloading", "signing", "awaiting_cert_choice",
             "installing", "pairing", "verifying", "done", "failed"].iter().filter_map(|s| Stage::parse(s)).filter(|s| s.cancellable()).collect();
-        assert_eq!(cancellable, [Stage::Login, Stage::AwaitingCode, Stage::CheckingLimit, Stage::Downloading, Stage::AwaitingCertChoice]);
+        assert_eq!(cancellable, [Stage::Login, Stage::AwaitingCode, Stage::CheckingLimit, Stage::Downloading]);
     }
 
     #[test]
