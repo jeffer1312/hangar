@@ -204,6 +204,12 @@ impl Installer {
         Ok(InlineGuard(self))
     }
 
+    /// Há tarefa ou operação em curso agora; quem grava algo antes de [`Installer::start`] pergunta aqui.
+    pub fn busy(&self) -> bool {
+        let slot = self.slot();
+        slot.inline || slot.job.as_ref().is_some_and(|j| j.result.is_none())
+    }
+
     /// Esquece a última tarefa: depois de remover, o resultado da instalação não vale mais.
     pub fn forget(&self) {
         let mut slot = self.slot();
@@ -274,7 +280,8 @@ pub fn accept(paths: &Paths) -> Result<(), Failure> {
 /// Falha do download, da conferência do `--version`, do registro do serviço ou da subida.
 pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
     let client = Client::new(ctx.paths.data.clone());
-    if let Some(found) = current(&ctx.paths) && client.running().is_some() {
+    // De pé só com um status assinado: pid vivo no `control.json` pode ser outro processo.
+    if let Some(found) = current(&ctx.paths) && client.status().await.is_ok() {
         return Ok(Outcome::Installed { tag: found.tag });
     }
     let installed = install_stopped(ctx, progress).await?;
@@ -339,7 +346,7 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
     let binary = release::BINARY.fetch(&ctx.github, &latest, ctx.platform, &ctx.paths.service).await?;
     let version = release::check(&binary).await?;
     let client = Client::new(ctx.paths.data.clone());
-    let before = client.running().map(|c| c.pid);
+    let before = client.claimed().map(|c| c.pid);
     progress(Step::Service);
     service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&binary)).await?;
     progress(Step::Start);
@@ -381,8 +388,9 @@ pub async fn uninstall(ctx: &Context) -> Result<(), Failure> {
     }
 }
 
-/// Algum processo do serviço existe pelo gerenciador, mesmo sem `control.json` (subindo ou caindo).
-/// Sem como perguntar (Windows), `false`: lá o arquivo aberto não se apaga, e a falha aparece ao apagar.
+/// Algum processo do serviço existe pelo gerenciador, ou vai existir logo (o `Restart=always` esperando
+/// o `RestartSec`), mesmo sem `control.json`. Sem como perguntar (Windows), `false`: lá o arquivo aberto
+/// não se apaga, e quem apaga diz o que já saiu.
 pub async fn service_process(paths: &Paths) -> bool {
     if cfg!(target_os = "macos") {
         let output = tokio::process::Command::new("launchctl").args(["list", SERVICE.launchd_label])
@@ -393,9 +401,17 @@ pub async fn service_process(paths: &Paths) -> bool {
         return false;
     }
     let output = tokio::process::Command::new("systemctl")
-        .args(["--user", "show", "-p", "MainPID", "--value", SERVICE.unit])
+        .args(["--user", "show", "-p", "MainPID", "-p", "ActiveState", "-p", "SubState", SERVICE.unit])
         .stdin(std::process::Stdio::null()).output().await;
-    output.is_ok_and(|o| o.status.success() && !matches!(String::from_utf8_lossy(&o.stdout).trim(), "" | "0"))
+    output.is_ok_and(|o| o.status.success() && systemd_busy(&String::from_utf8_lossy(&o.stdout)))
+}
+
+/// Saída `Chave=valor` do `systemctl show`: processo vivo, ou unit subindo, parando ou à espera de religar.
+fn systemd_busy(show: &str) -> bool {
+    let field = |key: &str| show.lines().find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('=')).unwrap_or_default();
+    !matches!(field("MainPID"), "" | "0")
+        || matches!(field("ActiveState"), "active" | "activating" | "reloading" | "deactivating" | "refreshing")
+        || field("SubState") == "auto-restart"
 }
 
 /// Espera o processo novo responder ao `status` com assinatura válida e a versão esperada.
@@ -403,7 +419,7 @@ async fn wait_up(client: &Client, version: &str, before: Option<u32>) -> Result<
     let deadline = Instant::now() + START_TIMEOUT;
     let mut last = String::from("sem control.json");
     while Instant::now() < deadline {
-        match client.running() {
+        match client.claimed() {
             Some(control) if Some(control.pid) == before => last = "ainda o processo anterior".into(),
             Some(_) => match client.status().await {
                 Ok(status) => match status["version"].as_str() {
@@ -474,10 +490,23 @@ mod tests {
     }
 
     #[test]
+    fn a_unit_waiting_to_restart_counts_as_busy() {
+        let show = |pid: &str, active: &str, sub: &str| format!("MainPID={pid}\nActiveState={active}\nSubState={sub}\n");
+        assert!(systemd_busy(&show("4321", "active", "running")));
+        assert!(systemd_busy(&show("0", "activating", "auto-restart")), "na janela do RestartSec o MainPID é 0");
+        assert!(systemd_busy(&show("0", "deactivating", "stop-sigterm")));
+        assert!(!systemd_busy(&show("0", "inactive", "dead")));
+        assert!(!systemd_busy(&show("0", "failed", "failed")));
+        assert!(!systemd_busy(""), "sem resposta do systemd");
+    }
+
+    #[test]
     fn one_job_or_inline_operation_at_a_time() {
         let installer = Installer::default();
+        assert!(!installer.busy());
         let guard = installer.inline().unwrap();
         assert_eq!(installer.inline().err(), Some(Busy));
+        assert!(installer.busy());
         drop(guard);
         installer.slot().job = Some(Job { kind: "install", step: Step::Service, result: None });
         assert_eq!(installer.inline().err(), Some(Busy));

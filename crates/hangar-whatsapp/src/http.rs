@@ -36,6 +36,13 @@ struct Http {
     whatsapp: Arc<WhatsApp>,
 }
 
+/// Apagamento que parou: o arquivo que falhou e os que já tinham saído.
+struct Partial {
+    detail: String,
+    failed: String,
+    removed: Vec<String>,
+}
+
 impl WhatsApp {
     pub fn new(home: &Path) -> Arc<Self> {
         Self::with_context(Context::new(home))
@@ -135,18 +142,16 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
 async fn overview(wa: &WhatsApp) -> Response {
     let paths = &wa.ctx.paths;
     let installed = install::current(paths).is_some();
-    let running = wa.client.running().is_some();
-    let service = if running { "running" } else if installed { "stopped" } else { "absent" };
-    let (status, status_error) = if running {
-        match wa.client.status().await {
-            Ok(status) => (status, Value::Null),
-            Err(error) => {
-                let (_, code, _) = call_failure(&error);
-                (Value::Null, json!(code))
-            }
+    let down = if installed { "stopped" } else { "absent" };
+    // De pé só com o status assinado. Sem conexão (pid do `control.json` reaproveitado, porta fechada) é
+    // parado; algo que responde sem a assinatura continua "running", com o código em `status_error`.
+    let (service, status, status_error) = match wa.client.status().await {
+        Ok(status) => ("running", status, Value::Null),
+        Err(CallError::Off(_)) => (down, Value::Null, Value::Null),
+        Err(error) => {
+            let (_, code, _) = call_failure(&error);
+            ("running", Value::Null, json!(code))
         }
-    } else {
-        (Value::Null, Value::Null)
     };
     let qr_svg = status["qr"].as_str().filter(|q| !q.is_empty()).and_then(crate::qr::qr_svg);
     json_response(StatusCode::OK, json!({
@@ -158,6 +163,10 @@ async fn overview(wa: &WhatsApp) -> Response {
 fn start_install(wa: &WhatsApp, body: &Value) -> Response {
     if body["accept"] != true {
         return refused(StatusCode::BAD_REQUEST, "whatsapp_accept_required", "ligar o WhatsApp exige aceitar o aviso de risco");
+    }
+    // Recusa de ocupado antes de gravar: um 409 não registra aceite.
+    if wa.installer.busy() {
+        return busy();
     }
     if let Err(failure) = install::accept(&wa.ctx.paths) {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: aceite não gravado");
@@ -195,20 +204,28 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     if body["confirm"] != true {
         return refused(StatusCode::BAD_REQUEST, "whatsapp_confirm_required", "apagar exige {\"confirm\":true}");
     }
-    if wa.client.running().is_some() {
-        return forward(wa, Method::POST, "/v1/wipe", &[], Some(&json!({"confirm": true}))).await;
+    // De pé é o serviço respondendo: só a falta de conexão leva ao ramo do disco, com as guardas dele.
+    match wa.client.call(reqwest::Method::POST, "/v1/wipe", &[], Some(&json!({"confirm": true}))).await {
+        Ok(reply) => return relay(reply),
+        Err(CallError::Off(_)) => {}
+        Err(error) => return call_error(&error),
     }
     let Ok(_guard) = wa.installer.inline() else { return busy() };
-    // Subindo ou caindo, o processo pode estar com os bancos abertos sem ter escrito o `control.json`.
+    // Subindo, caindo ou esperando religar, o processo pode abrir os bancos sem ter escrito o `control.json`.
     if install::current(&wa.ctx.paths).is_some() && install::service_process(&wa.ctx.paths).await {
         return refused(StatusCode::CONFLICT, "whatsapp_service_starting", "o serviço do WhatsApp está subindo; tente de novo em alguns segundos");
     }
     let data = wa.ctx.paths.data.clone();
     match tokio::task::spawn_blocking(move || wipe_data(&data)).await {
         Ok(Ok(())) => json_response(StatusCode::OK, json!({"logout": "not_done"})),
-        Ok(Err(detail)) => {
-            tracing::warn!(%detail, "whatsapp: apagar os dados falhou");
-            refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "não consegui apagar os dados do WhatsApp")
+        Ok(Err(partial)) => {
+            tracing::warn!(detail = %partial.detail, removed = ?partial.removed, "whatsapp: apagar os dados falhou");
+            let (code, msg) = if partial.removed.is_empty() {
+                ("whatsapp_wipe_failed", "não consegui apagar os dados do WhatsApp")
+            } else {
+                ("whatsapp_wipe_partial", "apaguei só parte dos dados do WhatsApp")
+            };
+            detail(StatusCode::INTERNAL_SERVER_ERROR, code, msg, json!({"removed": partial.removed, "failed": partial.failed}))
         }
         Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
     }
@@ -237,7 +254,7 @@ async fn uninstall(wa: &WhatsApp, body: &Value) -> Response {
     if let Err(failure) = install::uninstall(&wa.ctx).await {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: remover falhou");
         return json_response(StatusCode::INTERNAL_SERVER_ERROR, json!({"detail": {"code": failure.code,
-            "params": {"detail": failure.detail}, "msg": "não consegui remover o serviço do WhatsApp"}}));
+            "params": {"detail": failure.detail, "logout": unlinked}, "msg": "não consegui remover o serviço do WhatsApp"}}));
     }
     wa.installer.forget();
     json_response(StatusCode::OK, json!({"uninstalled": true, "logout": unlinked}))
@@ -341,19 +358,22 @@ fn pick(query: &str, allowed: &[&str]) -> Vec<(String, String)> {
 }
 
 /// Apaga bancos (com o WAL e o journal do SQLite) e mídia; `control.*` fica, para o binário subir igual.
-fn wipe_data(data: &Path) -> Result<(), String> {
+/// Parar no meio (no Windows, arquivo aberto) devolve o que já saiu.
+fn wipe_data(data: &Path) -> Result<(), Partial> {
+    let mut removed = Vec::new();
+    let stop = |name: String, e: std::io::Error, removed: Vec<String>| Partial { detail: format!("{name}: {e}"), failed: name, removed };
     for db in ["messages.db", "session.db"] {
         for suffix in ["", "-wal", "-shm", "-journal"] {
-            let path = data.join(format!("{db}{suffix}"));
-            match std::fs::remove_file(&path) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("{}: {e}", path.display())),
-                _ => {}
+            let name = format!("{db}{suffix}");
+            match std::fs::remove_file(data.join(&name)) {
+                Ok(()) => removed.push(name),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(stop(name, e, removed)),
             }
         }
     }
-    let media = data.join("media");
-    match std::fs::remove_dir_all(&media) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("{}: {e}", media.display())),
+    match std::fs::remove_dir_all(data.join("media")) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(stop("media".into(), e, removed)),
         _ => Ok(()),
     }
 }

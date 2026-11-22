@@ -27,6 +27,8 @@ struct Scene {
 enum Signing {
     Signed,
     Unsigned,
+    /// O primeiro pedido leva um 307 sem assinatura para o mesmo endereço; o seguinte é atendido assinado.
+    Redirect,
 }
 
 impl Scene {
@@ -92,7 +94,14 @@ async fn fake_c2(request: Request, signing: Signing, seen: &Mutex<Vec<String>>) 
     let uri = request.uri().path_and_query().map_or("/", |p| p.as_str()).to_owned();
     let header = request.headers().get(control::SIGNATURE_HEADER).and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
     let body = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap();
-    seen.lock().unwrap().push(format!("{method} {uri}"));
+    let first = {
+        let mut seen = seen.lock().unwrap();
+        seen.push(format!("{method} {uri}"));
+        seen.len() == 1
+    };
+    if signing == Signing::Redirect && first {
+        return (StatusCode::TEMPORARY_REDIRECT, [("location", uri.as_str())]).into_response();
+    }
     let (ts, _) = header.split_once('.').unwrap_or_default();
     let valid = ts.parse::<i64>().is_ok_and(|ts| control::sign_request(&KEY, &method, &uri, ts, &body) == header);
     let (status, out): (u16, Vec<u8>) = if !valid {
@@ -110,7 +119,7 @@ async fn fake_c2(request: Request, signing: Signing, seen: &Mutex<Vec<String>>) 
         }
     };
     let mut response = (StatusCode::from_u16(status).unwrap(), out.clone()).into_response();
-    if signing == Signing::Signed {
+    if signing != Signing::Unsigned {
         let signature = control::sign_response(&KEY, ts, status, &out);
         response.headers_mut().insert(control::SIGNATURE_HEADER, signature.parse().unwrap());
     }
@@ -176,6 +185,56 @@ async fn an_unsigned_reply_is_502() {
     assert!(body.get("messages").is_none(), "o corpo sem assinatura não passa");
     let (status, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
     assert_eq!((status, &body["status"], &body["status_error"]), (200, &Value::Null, &json!("whatsapp_untrusted")));
+}
+
+#[tokio::test]
+async fn a_redirect_is_not_followed() {
+    let s = Scene::new();
+    s.serve(Signing::Redirect).await;
+    let (status, body) = s.call(Method::GET, "/api/whatsapp/messages?chat=5564999", true, None).await;
+    assert_eq!((status, code(&body)), (502, "whatsapp_untrusted"), "o 307 não tem assinatura");
+    assert_eq!(s.seen.lock().unwrap().len(), 1, "o pedido assinado não foi reenviado ao Location");
+}
+
+/// `control.json` velho com um pid que voltou a existir (outro processo) e a porta fechada.
+#[tokio::test]
+async fn a_stale_control_with_a_live_pid_counts_as_stopped() {
+    let s = Scene::new();
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+    s.write_control(closed, std::process::id());
+    let (status, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!(status, 200);
+    assert_eq!((&body["service"], &body["status"], &body["status_error"]), (&json!("absent"), &Value::Null, &Value::Null));
+    std::fs::write(s.paths().data.join("messages.db"), b"x").unwrap();
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
+    assert_eq!((status, body), (200, json!({"logout": "not_done"})), "sem serviço de verdade, o Hangar apaga");
+    assert!(!s.paths().data.join("messages.db").exists());
+}
+
+#[tokio::test]
+async fn a_busy_install_does_not_record_the_acceptance() {
+    let s = Scene::new();
+    let _guard = s.wa.installer.inline().unwrap();
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/install", true, Some(r#"{"accept":true}"#)).await;
+    assert_eq!((status, code(&body)), (409, "whatsapp_busy"));
+    assert!(!s.paths().accepted().exists());
+}
+
+/// Um arquivo que não sai no meio (no Windows, aberto pelo serviço): a resposta diz o que já saiu.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_wipe_that_stops_midway_says_what_is_gone() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Scene::new();
+    let data = &s.paths().data;
+    std::fs::create_dir_all(data.join("media")).unwrap();
+    std::fs::write(data.join("messages.db"), b"x").unwrap();
+    std::fs::write(data.join("media/a.jpg"), b"x").unwrap();
+    std::fs::set_permissions(data.join("media"), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
+    std::fs::set_permissions(data.join("media"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!((status, code(&body)), (500, "whatsapp_wipe_partial"), "{body}");
+    assert_eq!(body["detail"]["params"], json!({"removed": ["messages.db"], "failed": "media"}));
 }
 
 #[tokio::test]

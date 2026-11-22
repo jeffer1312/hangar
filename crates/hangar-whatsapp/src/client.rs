@@ -36,12 +36,15 @@ pub struct Client {
 
 impl Client {
     pub fn new(data: PathBuf) -> Self {
-        let http = hangar_core::net::http_client().timeout(TIMEOUT).no_proxy().build().unwrap_or_default();
+        // Sem seguir redirecionamento: quem ocupar a porta velha não desvia o pedido assinado para outro lugar.
+        let http = hangar_core::net::http_client().timeout(TIMEOUT).no_proxy()
+            .redirect(reqwest::redirect::Policy::none()).build().unwrap_or_default();
         Self { data, http }
     }
 
-    /// O `control.json` com o processo dele vivo; é o que diz que o serviço está de pé.
-    pub fn running(&self) -> Option<Control> {
+    /// O `control.json` com o processo dele vivo. Não prova que o serviço está de pé (o pid pode ter sido
+    /// reaproveitado depois de um reboot): a prova é um [`Client::status`] assinado.
+    pub fn claimed(&self) -> Option<Control> {
         control::read_control(&self.data).ok().filter(control::alive)
     }
 
@@ -67,7 +70,7 @@ impl Client {
         }
     }
 
-    /// `GET /v1/status` com 200.
+    /// `GET /v1/status` com 200: a prova de que o serviço está de pé.
     ///
     /// # Errors
     ///
