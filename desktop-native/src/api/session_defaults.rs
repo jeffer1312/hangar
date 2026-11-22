@@ -20,7 +20,7 @@ fn parse(value: serde_json::Value) -> Result<Selection, Failure> {
 pub struct SessionOptions { pub conversation_beta: bool, pub code_mode: bool }
 
 #[derive(Deserialize)]
-struct OptionsSelection { options: SessionOptions }
+struct OptionsSelection { configured: bool, options: SessionOptions }
 
 impl Api {
     pub async fn import_session_defaults(&self) -> Result<(), Failure> {
@@ -34,9 +34,11 @@ impl Api {
         options.and(defaults)
     }
 
-    pub async fn read_session_options(&self) -> Result<SessionOptions, Failure> {
+    /// Sem nada gravado no servidor, a cópia deste computador vai para lá, sem pisar numa gravação que chegue antes.
+    pub async fn read_session_options(&self, local: SessionOptions) -> Result<SessionOptions, Failure> {
         let selection: OptionsSelection = serde_json::from_value(self.server_read(&["session-options"], &[], 10).await?)
             .map_err(|_| Failure::local("invalid_response"))?;
+        if !selection.configured { return self.save_session_options(local, true).await; }
         Ok(selection.options)
     }
 
@@ -171,5 +173,44 @@ mod tests {
             assert_eq!(uri.query_pairs().collect::<std::collections::BTreeMap<_, _>>(),
                 [("provider".into(), "claude".into()), ("engine".into(), "proxy".into()), ("engine_account".into(), "one".into())].into());
         }
+    }
+
+    /// Servidor que nunca gravou as opções não responde "desligado" por cima da escolha deste computador.
+    #[tokio::test]
+    async fn reading_unset_options_imports_this_computer_copy() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for reply in [
+                json!({"configured":false, "options":{"conversation_beta":false, "code_mode":false}}),
+                json!({"configured":true, "options":{"conversation_beta":true, "code_mode":true}}),
+            ] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                    head.push_str(&line);
+                    if line == "\r\n" { break; }
+                }
+                let length = head.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:")
+                    .map(|n| n.trim().parse::<usize>().unwrap())).unwrap_or(0);
+                let mut body = vec![0; length];
+                stream.read_exact(&mut body).await.unwrap();
+                requests.push((head.lines().next().unwrap().to_owned(), (!body.is_empty())
+                    .then(|| serde_json::from_slice::<serde_json::Value>(&body).unwrap())));
+                let reply = reply.to_string();
+                stream.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        let api = Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
+        let local = SessionOptions { conversation_beta: true, code_mode: true };
+        assert_eq!(api.read_session_options(local).await.unwrap(), local);
+        let requests = server.await.unwrap();
+        assert_eq!(requests.iter().map(|(head, _)| head.split_whitespace().next().unwrap()).collect::<Vec<_>>(), ["GET", "PUT"]);
+        assert_eq!(requests[1].1, Some(json!({"options":{"conversation_beta":true, "code_mode":true}, "if_absent":true})));
     }
 }

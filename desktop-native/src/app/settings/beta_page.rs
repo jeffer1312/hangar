@@ -36,7 +36,9 @@ impl Hangar {
         let Some(api) = self.api.clone() else { return };
         let connection = self.connection;
         self.settings_ui.session_options = Some((connection, None));
-        let task = self.runtime.spawn(async move { api.read_session_options().await });
+        let look = appearance::get();
+        let local = crate::api::SessionOptions { conversation_beta: look.conversation_beta, code_mode: look.claude_code_mode };
+        let task = self.runtime.spawn(async move { api.read_session_options(local).await });
         self.options_reply(connection, task, false, cx);
     }
 
@@ -50,10 +52,10 @@ impl Hangar {
                 match result {
                     Ok(options) => {
                         (this.settings_ui.session_options, this.settings_ui.session_options_error) = (Some((connection, Some(options))), None);
-                        // A cópia deste computador muda só com o servidor confirmando: é ela que desenha a conversa
-                        // e que vai a um servidor que ainda não tem a escolha.
-                        if save {
-                            let mut next = appearance::get();
+                        // A cópia deste computador segue o que o servidor diz: é ela que desenha a conversa e que vai
+                        // a um servidor que ainda não tem a escolha.
+                        let mut next = appearance::get();
+                        if (next.conversation_beta, next.claude_code_mode) != (options.conversation_beta, options.code_mode) {
                             (next.conversation_beta, next.claude_code_mode) = (options.conversation_beta, options.code_mode);
                             this.apply_appearance(next, true, cx);
                         }
