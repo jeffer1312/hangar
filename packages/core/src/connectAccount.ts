@@ -119,6 +119,7 @@ export type NameLookup = { kind: 'account' } | { kind: 'guest'; hosts: string[] 
 export type SignInResult = { kind: 'account'; account: AccountSession } | { kind: 'guest'; host: string; servers: Server[] };
 export interface SignInDeps { crypto: SyncCrypto; serviceUrl?: string }
 
+const CONNECT_HOST_SUFFIX = '.hangar.dev.br';
 const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
 // Pedido que nem chegou a ter resposta é rede, e a tela não pode tratá-lo como senha errada.
@@ -168,6 +169,8 @@ export async function signInAnywhere(name: string, password: string, deps: SignI
       throw error;
     }
   }
+  // A senha derivada da convidada vai a cada máquina: o serviço não pode apontar uma de fora do Connect.
+  if (!found.hosts.every((host) => host.endsWith(CONNECT_HOST_SUFFIX))) throw fail('connect_response_invalid');
   const failures: Error[] = [];
   for (const host of found.hosts) {
     try {

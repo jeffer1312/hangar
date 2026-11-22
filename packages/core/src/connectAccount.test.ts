@@ -517,6 +517,16 @@ describe('signInAnywhere', () => {
     expect(calls.map(route)).toContain('POST casa.ana.hangar.dev.br/api/sync/logout');
   });
 
+  it.each([
+    ['casa.outro.com'],
+    ['hangar.dev.br'],
+    ['casa.hangar.dev.br.outro.com'],
+  ])('máquina fora de .hangar.dev.br é resposta inválida, e nada vai a ela: %s', async (host) => {
+    const calls = machines({ [host]: { password: PASSWORD } }, { kind: 'guest', hosts: ['casa.ana.hangar.dev.br', host] });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'connect_response_invalid' });
+    expect(calls.map(route)).toEqual(['POST connect.hangar.dev.br/v1/lookup']);
+  });
+
   it('cofre vazio entra sem máquinas', async () => {
     machines({ 'casa.ana.hangar.dev.br': { password: PASSWORD, blob: null } });
     expect(await signInAnywhere('lhais@casa', PASSWORD, deps)).toEqual({ kind: 'guest', host: 'casa.ana.hangar.dev.br', servers: [] });
