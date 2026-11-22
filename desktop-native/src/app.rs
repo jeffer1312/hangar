@@ -5110,16 +5110,20 @@ impl Hangar {
     }
 
     /// O campo livre com o nome da opção escolhida e o foco: o resto da resposta é o que a opção pediu para escrever.
+    /// O que já estava escrito fica depois do nome.
     fn ask_write_from_option(&mut self, fingerprint: &str, index: usize, prefix: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.ask_form.fingerprint != fingerprint { return; }
         let Some(input) = self.ask_form.inputs.get(index).cloned() else { return };
+        let others: Vec<String> = self.chat.ask.as_ref().and_then(|ask| ask.payload.questions.get(index))
+            .map(|item| item.options.iter().filter(|o| interaction::asks_for_text(o)).map(interaction::text_prefix).collect())
+            .unwrap_or_default();
         match &input {
             AnyInputState::Input(state) => state.update(cx, |s, cx| {
-                if !s.value().starts_with(prefix.as_str()) { s.set_value(prefix.clone(), window, cx); }
+                if let Some(text) = interaction::text_from_option(&s.value(), &prefix, &others) { s.set_value(text, window, cx); }
                 s.focus(window, cx);
             }),
             AnyInputState::Textarea(state) => state.update(cx, |s, cx| {
-                if !s.value().starts_with(prefix.as_str()) { s.set_value(prefix.clone(), window, cx); }
+                if let Some(text) = interaction::text_from_option(&s.value(), &prefix, &others) { s.set_value(text, window, cx); }
                 s.focus(window, cx);
             }),
             _ => {}

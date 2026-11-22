@@ -44,11 +44,29 @@ pub(in crate::app) struct CitedView {
     list: Option<Result<Vec<Cited>, String>>,
     /// Geração da árvore e quantos eventos a conversa tinha na última leitura: só relê quando um dos dois muda.
     read_for: Option<(u64, usize)>,
+    /// A leitura em voo, uma por vez: num turno longo cada evento novo dispararia outra e descartaria a anterior.
+    in_flight: Option<u64>,
+    seq: u64,
 }
 
 impl CitedView {
-    /// Outra sessão: a lista da anterior some.
-    pub(in crate::app) fn reset(&mut self) { (self.list, self.read_for) = (None, None); }
+    /// Outra sessão: a lista da anterior some, e a resposta que ainda vier dela cai.
+    pub(in crate::app) fn reset(&mut self) { (self.list, self.read_for, self.in_flight) = (None, None, None); }
+
+    /// Começa a leitura de `stamp` quando ele mudou e nenhuma está em voo; devolve o número dela.
+    fn begin(&mut self, stamp: (u64, usize)) -> Option<u64> {
+        if self.in_flight.is_some() || self.read_for == Some(stamp) { return None; }
+        self.seq += 1;
+        (self.read_for, self.in_flight) = (Some(stamp), Some(self.seq));
+        Some(self.seq)
+    }
+
+    /// A resposta vale mesmo com a conversa tendo andado: a próxima renderização relê se o carimbo mudou.
+    fn finish(&mut self, seq: u64, list: Result<Vec<Cited>, String>) -> bool {
+        if self.in_flight != Some(seq) { return false; }
+        (self.in_flight, self.list) = (None, Some(list));
+        true
+    }
 }
 
 /// No disco: absoluto (ou `~/`) como está, relativo pela pasta da sessão e depois pelas pastas dos `cd` da conversa;
@@ -103,15 +121,14 @@ impl Hangar {
 
     fn cited_sync(&mut self, cx: &mut Context<Self>) {
         let stamp = (self.tree.generation, self.chat.events.len());
-        if self.tree.cited.read_for == Some(stamp) { return; }
         // Espera a árvore saber se a pasta é desta máquina; antes disso não dá para escolher entre disco e backend.
         let Some(source) = self.tree.source.as_ref() else { return };
         let local = source.root().map(Path::to_path_buf);
         let (Some(api), Some(session)) = (self.session_api(), self.selected.as_ref()) else { return };
-        self.tree.cited.read_for = Some(stamp);
-        let (paths, dirs) = self.cited_paths();
-        if paths.is_empty() { self.tree.cited.list = Some(Ok(Vec::new())); return; }
         let name = session.name.clone();
+        let Some(seq) = self.tree.cited.begin(stamp) else { return };
+        let (paths, dirs) = self.cited_paths();
+        if paths.is_empty() { self.tree.cited.finish(seq, Ok(Vec::new())); return; }
         let job = self.runtime.spawn(async move {
             if let Some(root) = local {
                 return tokio::task::spawn_blocking(move || resolve_local(&root, paths, dirs)).await.map_err(|_| Failure::local("invalid_response"));
@@ -133,9 +150,7 @@ impl Hangar {
             // Tarefa que morreu vira erro na vista, não "carregando" para sempre.
             let result = job.await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
             let _ = this.update(cx, |this, cx| {
-                if this.tree.cited.read_for != Some(stamp) { return; }
-                this.tree.cited.list = Some(result.map_err(|error| Self::fetch_failure(&error)));
-                this.redraw(Area::Side, cx);
+                if this.tree.cited.finish(seq, result.map_err(|error| Self::fetch_failure(&error))) { this.redraw(Area::Side, cx); }
             });
         }).detach();
     }
@@ -251,7 +266,27 @@ fn abbreviate(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LONG, SHORT, Toggle, limit_and_toggle};
+    use super::{CitedView, LONG, SHORT, Toggle, limit_and_toggle};
+
+    #[test]
+    fn one_read_in_flight_and_its_answer_counts_even_after_new_events() {
+        let mut view = CitedView::default();
+        let first = view.begin((1, 10)).unwrap();
+        // Eventos chegando com a leitura em voo não disparam outra.
+        assert_eq!(view.begin((1, 11)), None);
+        assert_eq!(view.begin((1, 12)), None);
+        assert!(view.finish(first, Ok(Vec::new())));
+        assert!(view.list.is_some());
+        // A conversa andou: a próxima leitura sai; a mesma contagem não relê.
+        let second = view.begin((1, 12)).unwrap();
+        assert!(view.finish(second, Ok(Vec::new())));
+        assert_eq!(view.begin((1, 12)), None);
+        // Resposta de antes da troca de sessão cai.
+        let stale = view.begin((1, 13)).unwrap();
+        view.reset();
+        assert!(!view.finish(stale, Ok(Vec::new())));
+        assert!(view.list.is_none());
+    }
 
     #[test]
     fn the_open_list_offers_less_and_the_search_offers_nothing() {

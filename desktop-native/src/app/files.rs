@@ -972,7 +972,7 @@ fn is_binary_document(path: &str) -> bool {
 }
 
 /// O caminho depois de renomear `old` para `new`: o próprio item ou o que está dentro dele; `None` quando não é afetado.
-fn renamed_path(path: &str, old: &str, new: &str) -> Option<String> {
+pub(super) fn renamed_path(path: &str, old: &str, new: &str) -> Option<String> {
     if path == old { return Some(new.to_owned()); }
     path.strip_prefix(old)?.strip_prefix('/').map(|rest| format!("{new}/{rest}"))
 }

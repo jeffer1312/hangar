@@ -359,7 +359,7 @@ pub(super) struct GitPanel {
     review: Option<Entity<super::reviews::BranchReviews>>,
     /// Trocou a branch: o chip da faixa desta pasta é esquecido.
     forget_chip: Option<Rc<dyn Fn(&mut App)>>,
-    /// Arquivo clicado no painel Contexto: entra aberto e a lista rola até ele a cada leitura.
+    /// Arquivo clicado no painel Contexto: entra aberto e a lista rola até ele uma vez.
     focus_path: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
@@ -425,8 +425,10 @@ impl GitPanel {
         let round = self.round;
         // Arquivo chega dobrado; só fica aberto o que a pessoa abriu.
         let mut open: HashSet<String> = self.work.files.iter().filter(|e| !e.folded).map(|e| e.path.clone()).collect();
-        // O arquivo pedido segue como alvo enquanto a janela vive: a releitura logo após abrir voltaria a lista ao topo.
-        let focus = self.focus_path.clone();
+        // O arquivo pedido é alvo até a lista rolar até ele; depois, a releitura (commit, descarte) respeita o que a
+        // pessoa dobrou e onde rolou. Fora da lista ele deixa de ser alvo.
+        let focus = self.focus_path.clone().filter(|focus| files.iter().any(|(path, _)| path == focus));
+        self.focus_path = focus.clone();
         open.extend(focus.clone());
         // Arquivo que some e volta (commitado, trocado de branch) conta como novo e entra marcado.
         let current: HashSet<String> = files.iter().map(|(p, _)| p.clone()).collect();
@@ -456,6 +458,7 @@ impl GitPanel {
                 this.work.refresh(index);
                 if focused && let Some(row) = this.work.rows.iter().position(|row| matches!(row, Row::Header(f) if *f == index)) {
                     this.work.list.scroll_to(ListOffset { item_ix: row, offset_in_item: px(0.) });
+                    this.focus_path = None;
                 }
             });
         }

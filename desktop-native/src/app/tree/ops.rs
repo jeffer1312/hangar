@@ -3,6 +3,7 @@
 //! e só dentro da pasta da sessão; mostrar e abrir com o app padrão só quando o arquivo está no disco desta máquina.
 use super::*;
 use gpui_kit::component::{WindowExt, menu::PopupMenu};
+use crate::app::files::renamed_path;
 use std::rc::Rc;
 
 /// O que o menu sabe do item: o caminho na pasta da sessão (sem ele, nada de renomear, criar nem lixeira), o caminho
@@ -38,7 +39,7 @@ pub(super) fn item_menu(hangar: WeakEntity<Hangar>, target: ItemTarget) -> impl 
             })
             .separator()
             .item({
-                let cite = rel.clone().map_or_else(|| full.clone(), |rel| format!("@{rel}"));
+                let cite = rel.clone().map_or_else(|| full.clone(), |rel| crate::app::mention::at_mention(&rel));
                 item(&hangar, tr("tree_cite"), IconName::AtSign, move |this, window, cx| this.tree_cite(cite.clone(), window, cx))
             })
             .item({ let full = full.clone(); item(&hangar, tr("tree_copy_path"), IconName::Copy, move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(full.clone()))) })
@@ -52,6 +53,14 @@ pub(super) fn item_menu(hangar: WeakEntity<Hangar>, target: ItemTarget) -> impl 
                         .on_click(move |_, window, cx| { let _ = weak.update(cx, |this, cx| this.tree_confirm_trash(trash_target.clone(), window, cx)); }))
             })
     }
+}
+
+/// Troca nas pastas abertas o caminho renomeado (e o de dentro dele); devolve as que mudaram.
+fn move_expanded(expanded: &mut HashSet<String>, old: &str, new: &str) -> Vec<String> {
+    let moved: Vec<String> = expanded.iter().filter_map(|dir| renamed_path(dir, old, new)).collect();
+    expanded.retain(|dir| renamed_path(dir, old, new).is_none());
+    expanded.extend(moved.iter().cloned());
+    moved
 }
 
 /// Nome do item, para títulos e confirmações.
@@ -137,7 +146,14 @@ impl Hangar {
             this.tree_request(owner.clone(), "rename", json!({"path": old, "name": new}), window, cx, move |this, value, same_root, _, cx| {
                 let Some(path) = value.get("path").and_then(Value::as_str).map(str::to_owned) else { return };
                 this.files_renamed(&old, &path);
-                if same_root { this.tree.selected = Some(path); }
+                if same_root {
+                    // Pasta renomeada: o que estava aberto nela segue aberto, lido no caminho novo.
+                    let moved = move_expanded(&mut this.tree.expanded, &old, &path);
+                    this.tree.dirs.retain(|dir, _| renamed_path(dir, &old, &path).is_none());
+                    if let Some(reveal) = this.tree.reveal.as_mut() && let Some(new) = renamed_path(reveal, &old, &path) { *reveal = new; }
+                    if !moved.is_empty() && let Some(source) = this.tree.source.clone() { this.tree_fetch(source, moved, false, cx); }
+                    this.tree.selected = Some(path);
+                }
                 this.redraw(Area::Side, cx);
             });
         });
@@ -212,5 +228,20 @@ impl Hangar {
         let path = self.tree.custom_root(&self.tree.owner).map(|p| p.to_string_lossy().into_owned())
             .or_else(|| self.selected.as_ref().and_then(|s| s.cwd.clone())).unwrap_or_default();
         base(&path).to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    #[test]
+    fn renamed_folder_stays_open_with_its_subfolders() {
+        let mut expanded: HashSet<String> = ["src", "src/x", "src/x/y", "srcx", "docs"].map(str::to_owned).into();
+        let mut moved = super::move_expanded(&mut expanded, "src/x", "src/z");
+        moved.sort();
+        assert_eq!(moved, ["src/z", "src/z/y"]);
+        let want: HashSet<String> = ["src", "src/z", "src/z/y", "srcx", "docs"].map(str::to_owned).into();
+        assert_eq!(expanded, want);
     }
 }

@@ -205,6 +205,14 @@ pub fn text_prefix(option: &AskOption) -> String {
     format!("{}: ", base.trim())
 }
 
+/// O campo livre ao escolher a opção que pede texto: o prefixo dela na frente do que já foi escrito, trocando o de
+/// outra opção (`others`) sem apagar o resto. `None` quando o campo já começa por ela.
+pub fn text_from_option(current: &str, prefix: &str, others: &[String]) -> Option<String> {
+    if current.starts_with(prefix) { return None; }
+    let rest = others.iter().find_map(|other| current.strip_prefix(other.as_str())).unwrap_or(current);
+    Some(format!("{prefix}{}", rest.trim_start()))
+}
+
 /// Seletor com as linhas "Type something." e "Chat about this": o do AskUserQuestion, mas também menus do próprio
 /// Claude Code (mods). Quem decide se o card nativo responde é `Chat::ask_pane`.
 pub fn ask_picker(options: &[String]) -> bool {
@@ -381,6 +389,12 @@ mod tests {
         assert!(super::asks_for_text(&opt("Já tenho a PM", "Informe a chave em Other.")));
         assert!(!super::asks_for_text(&opt("Inline nesta sessão (Recomendado)", "Executo tudo aqui, em sequência.")));
         assert_eq!(super::text_prefix(&opt("Canal (digite qual)", "")), "Canal: ");
+        let others = ["Canal: ".to_owned(), "Outro: ".to_owned()];
+        assert_eq!(super::text_from_option("", "Canal: ", &others).as_deref(), Some("Canal: "));
+        // O que a pessoa já escreveu fica, depois do prefixo.
+        assert_eq!(super::text_from_option("slack", "Canal: ", &others).as_deref(), Some("Canal: slack"));
+        assert_eq!(super::text_from_option("Outro: x", "Canal: ", &others).as_deref(), Some("Canal: x"));
+        assert_eq!(super::text_from_option("Canal: slack", "Canal: ", &others), None);
         assert_eq!(super::text_prefix(&opt("Já tenho a PM", "")), "Já tenho a PM: ");
         assert!(super::asks_for_text(&opt("Email (enter address)", "")));
         assert_eq!(super::text_prefix(&opt("Email (enter address)", "")), "Email: ");

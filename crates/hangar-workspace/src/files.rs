@@ -655,10 +655,15 @@ fn entry_name(name: &str) -> Result<&str> {
     let name = name.trim();
     let mut parts = Path::new(name).components();
     let single = matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(part)), None) if part == name);
-    if !single || name.eq_ignore_ascii_case(".git") || name.contains(['/', '\\', '\0']) {
+    if !single || is_git_name(std::ffi::OsStr::new(name)) || name.contains(['/', '\\', '\0']) {
         return Err(file_error(400, "erro_arq_nome_invalido", "nome inválido"));
     }
     Ok(name)
+}
+
+/// `.git` como o disco o entende: Windows e macOS não distinguem caixa, e o Windows tira ponto e espaço do fim do nome.
+fn is_git_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|name| name.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".git"))
 }
 
 /// O caminho da sessão, com `/`, para o app achar o item na árvore.
@@ -686,7 +691,8 @@ fn own_entry(cwd: &Path, path: &str) -> Result<PathBuf> {
     if entry == root {
         return Err(file_error(400, "erro_arq_raiz_da_sessao", "a pasta da sessão não muda por aqui"));
     }
-    if entry.strip_prefix(&root).is_ok_and(|rest| rest.components().any(|c| c.as_os_str() == ".git")) {
+    // O último nome não passa pelo `real`: `.GIT` ou `.git.` chegariam ao `.git` de verdade.
+    if entry.strip_prefix(&root).is_ok_and(|rest| rest.components().any(|c| is_git_name(c.as_os_str()))) {
         return Err(file_error(403, "erro_arq_area_do_git", "área interna do git"));
     }
     if entry.symlink_metadata().is_err() {
@@ -798,6 +804,9 @@ mod tests {
             assert_eq!(super::rename(cwd, "docs/b.md", bad).unwrap_err().code.as_deref(), Some("erro_arq_nome_invalido"), "{bad}");
         }
         assert_eq!(super::rename(cwd, ".git", "x").unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
+        // Em disco que não distingue caixa, `.GIT` é o mesmo `.git`; em qualquer sistema a guarda recusa antes.
+        assert_eq!(super::trash(cwd, ".GIT").unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
+        assert_eq!(super::rename(cwd, ".git.", "x").unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
         assert_eq!(super::rename(cwd, "../fora", "x").unwrap_err().status, 400);
         assert_eq!(super::trash(cwd, "").unwrap_err().code.as_deref(), Some("erro_arq_raiz_da_sessao"));
     }
@@ -829,7 +838,7 @@ mod tests {
     #[test]
     fn entry_name_is_one_plain_component() {
         assert_eq!(super::entry_name(" arquivo.txt ").unwrap(), "arquivo.txt");
-        for bad in ["", ".", "..", ".git", "x/y", "x\\y"] {
+        for bad in ["", ".", "..", ".git", ".GIT", ".git.", ".Git ", "x/y", "x\\y"] {
             assert!(super::entry_name(bad).is_err(), "{bad}");
         }
         assert_eq!(super::entry_name("C:escape.txt").is_err(), cfg!(windows));
