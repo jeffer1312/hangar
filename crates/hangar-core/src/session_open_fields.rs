@@ -62,10 +62,11 @@ pub const SCHEDULED_LAUNCH: &[&str] = &[
     "permission_mode", "subagent_model", "claude_customizations", "jev", "code_mode", "omp_profile", "read_only", "headless",
 ];
 
-/// Campos do pedido que nem o CLI nem o MCP dizem, com o motivo.
+/// Campos do pedido que nem o CLI nem o MCP dizem, com o motivo. Nenhum deles é padrão de abertura.
 pub const SERVER_ONLY: &[(&str, &str)] = &[
     ("creator", "quem abre sai da identidade de quem chama (pane, chave), nunca do que ele escreve"),
     ("prewarm", "a reserva pré-aquecida existe só com a tela de criar aberta"),
+    ("engine_binding", "confere o vínculo da conta do motor que a tela de criar mostrou; CLI e MCP não mostram vínculo"),
 ];
 
 #[cfg(test)]
