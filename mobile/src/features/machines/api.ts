@@ -122,6 +122,26 @@ function peers(value: unknown): Peer[] {
 }
 /** A regra do `install_id` no servidor (`redeem_from` em `hangar-connect`). */
 export const validInstallField = (value: string) => /^[A-Za-z0-9_-]{1,64}$/.test(value);
+
+/** Aparelho no `devices.json` da máquina. `account_device`: liberado pela conta do Connect (servidor antigo não manda). */
+export type LocalDevice = { device_id: string; name: string; status: 'pending' | 'approved' | 'denied'; created_at?: number;
+  last_seen?: number | null; install_code?: string; account_device?: string };
+const optionalNumber = (value: unknown) => value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value));
+export async function readDevices(s: Server, signal: AbortSignal): Promise<LocalDevice[]> {
+  const value = await request(s, '/api/connect/devices', signal);
+  if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.device_id === 'string' && typeof d.name === 'string'
+    && ['pending', 'approved', 'denied'].includes(String(d.status)) && optionalNumber(d.created_at) && optionalNumber(d.last_seen)
+    && (d.install_code === undefined || typeof d.install_code === 'string')
+    && (d.account_device === undefined || d.account_device === null || typeof d.account_device === 'string'))) throw invalid();
+  return value as LocalDevice[];
+}
+export async function approveDevice(s: Server, id: string, signal: AbortSignal): Promise<void> {
+  await request(s, `/api/connect/devices/${encodeURIComponent(id)}/approve`, signal, 'POST');
+}
+/** Recusa quem espera aprovação e revoga quem já entrou, com tudo o que ele aprovou. */
+export async function removeDevice(s: Server, id: string, signal: AbortSignal): Promise<void> {
+  await request(s, `/api/connect/devices/${encodeURIComponent(id)}`, signal, 'DELETE');
+}
 /** Migração: a máquina onde este aparelho já foi aprovado prova o segredo dele ao serviço e o libera na conta. */
 export async function vouchAccountDevice(s: Server, deviceId: string, deviceSecret: string, signal: AbortSignal): Promise<void> {
   await request(s, '/api/connect/account-devices/self', signal, 'POST', { device_id: deviceId, device_secret: deviceSecret });

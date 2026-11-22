@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi } from '@hangar/core';
-import { discover, readIdentifier, readPeers, reason, registerBoth } from './api';
+import { discover, readDevices, readIdentifier, readPeers, reason, registerBoth } from './api';
 import * as m from '../../paraglide/messages';
 
 const server = { id: 'api-owner', label: 'fixture-owner', baseUrl: 'https://owner.test', token: 'owner-secret' };
@@ -28,6 +28,14 @@ describe('respostas públicas de máquinas', () => {
   it('guarda a causa de a conta do Connect não ter entrado na busca', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify([{ nome: 'fixture-found', base_url: 'https://found.test', connect_error: { code: 'fixture-code', msg: 'fixture-cause' } }]), { status: 200 }));
     expect((await discover(server, new AbortController().signal))[0].connect_error).toBe('fixture-cause');
+  });
+
+  it('aparelhos da máquina: aceita `account_device` ausente ou texto e recusa a forma errada', async () => {
+    const row = { device_id: 'a', name: 'iPhone', status: 'approved', created_at: 1, last_seen: null };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([row, { ...row, device_id: 'b', account_device: 'ad1' }]), { status: 200 }));
+    expect((await readDevices(server, new AbortController().signal)).map((d) => d.account_device)).toEqual([undefined, 'ad1']);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([{ ...row, account_device: 7 }]), { status: 200 }));
+    await expect(readDevices(server, new AbortController().signal)).rejects.toThrow(m.mobile_machines_invalid_response());
   });
 
   it('traduz a recusa pública de endereço duplicado do aparelho', () => {
