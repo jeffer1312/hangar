@@ -10,6 +10,7 @@ import { Sheet } from '../../ui/Sheet';
 import { Icon } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { LoginField, LoginSubmit } from './LoginFields';
+import { messageStyles } from './messageStyles';
 import { QrScanner } from './QrScanner';
 import { parsePairing } from './pairing';
 import { AddressForm } from './AddressForm';
@@ -123,11 +124,11 @@ export function LoginScreen() {
             editable={!busy} spellCheck={false} textContentType="username" autoComplete="username" returnKeyType="next" />
           <LoginField label={m.login_senha()} value={password} onChangeText={setPassword} placeholder="••••••••" editable={!busy}
             secureTextEntry textContentType="password" autoComplete="current-password" returnKeyType="go" onSubmitEditing={() => { void submit(); }} />
-          {error ? <View style={styles.errorBox}><Text accessibilityRole="alert" style={styles.errorText}>{error}</Text></View> : null}
+          {error ? <View style={messageStyles.errorBox}><Text accessibilityRole="alert" style={messageStyles.errorText}>{error}</Text></View> : null}
           <LoginSubmit label={m.login_entrar()} text={busy ? m.login_entrando() : m.login_entrar()} blocked={busy || !name.trim() || !password}
             onPress={() => { void submit(); }} />
           {/* A senha da convidada é derivada no aparelho, o que leva tempo no celular. */}
-          {busy ? <Text accessibilityRole="alert" style={styles.waitText}>{m.mobile_sync_login_wait()}</Text> : null}
+          {busy ? <Text accessibilityRole="alert" style={messageStyles.waitText}>{m.mobile_sync_login_wait()}</Text> : null}
           <Pressable accessibilityRole="button" accessibilityLabel={m.connect_create_free()} disabled={busy} style={styles.link}
             onPress={() => { haptic.selection(); router.push('/connect?mode=create' as never); }}>
             <Text style={[styles.linkText, { color: theme.tokens.accent.base }]}>{m.connect_create_free()}</Text>
@@ -141,7 +142,7 @@ export function LoginScreen() {
           </Pressable>
           {others ? <>
             <Other label={m.login_qr()} onPress={() => setScanning(true)} />
-            {scanError ? <Text accessibilityRole="alert" style={styles.errorText}>{scanError}</Text> : null}
+            {scanError ? <Text accessibilityRole="alert" style={messageStyles.errorText}>{scanError}</Text> : null}
             <Other label={m.login_address_token()} expanded={!!manual}
               onPress={() => setManual(manual ? null : { base: '', token: '' })} />
             {manual ? <AddressForm key={`${manual.base}|${manual.token}`} base={manual.base} token={manual.token} /> : null}
@@ -195,15 +196,6 @@ const styles = StyleSheet.create((theme) => ({
   title: { ...theme.type.title, color: theme.tokens.text.primary, textAlign: 'center' },
   subtitle: { fontSize: theme.base.text.sm, color: theme.tokens.text.muted, textAlign: 'center', lineHeight: 21 },
   form: { gap: theme.base.space[4] },
-  errorBox: {
-    backgroundColor: theme.tokens.status.error + '14',
-    borderWidth: 1,
-    borderColor: theme.tokens.status.error + '33',
-    borderRadius: theme.base.radius.sm,
-    padding: theme.base.space[3],
-  },
-  errorText: { fontSize: theme.base.text.sm, color: theme.tokens.status.error },
-  waitText: { fontSize: theme.base.text.sm, color: theme.tokens.text.muted, textAlign: 'center' },
   link: { minHeight: 44, justifyContent: 'center', alignItems: 'center' },
   linkText: { ...theme.type.control },
   others: { gap: theme.base.space[2], borderTopWidth: 1, borderTopColor: theme.tokens.border.default, paddingTop: theme.base.space[2] },

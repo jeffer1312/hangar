@@ -3,6 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { LoginField, LoginSubmit } from './LoginFields';
+import { messageStyles } from './messageStyles';
 import { parsePairing } from './pairing';
 import { signInAtAddress } from './addressSignIn';
 import { useServers } from '../../stores/servers';
@@ -99,9 +100,9 @@ export function AddressForm({ base: initialBase = '', token: initialToken = '' }
         spellCheck={false} textContentType="username" />
       <LoginField label={m.login_senha()} value={password} onChangeText={setPassword} placeholder="••••••••••••••••" secureTextEntry textContentType="password" />
     </> : <LoginField label={m.sessao_token()} value={token} onChangeText={setToken} placeholder="••••••••••••••••" secureTextEntry textContentType="password" />}
-    {error ? <View style={styles.errorBox}><Text accessibilityRole="alert" style={styles.errorText}>{error}</Text></View> : null}
+    {error ? <View style={messageStyles.errorBox}><Text accessibilityRole="alert" style={messageStyles.errorText}>{error}</Text></View> : null}
     <LoginSubmit label={submitLabel} text={loading ? m.login_conectando() : submitLabel} blocked={blocked} onPress={withPassword ? signIn : connect} />
-    {loading && withPassword ? <Text accessibilityRole="alert" style={styles.waitText}>{m.mobile_sync_login_wait()}</Text> : null}
+    {loading && withPassword ? <Text accessibilityRole="alert" style={messageStyles.waitText}>{m.mobile_sync_login_wait()}</Text> : null}
     <Pressable style={styles.secondary} onPress={() => { setWithPassword(!withPassword); setError(''); }} disabled={loading}
       accessibilityRole="button" accessibilityLabel={toggleLabel}>
       <Text style={styles.secondaryText}>{toggleLabel}</Text>
@@ -111,15 +112,6 @@ export function AddressForm({ base: initialBase = '', token: initialToken = '' }
 
 const styles = StyleSheet.create((theme) => ({
   form: { gap: theme.base.space[4], paddingTop: theme.base.space[2] },
-  errorBox: {
-    backgroundColor: theme.tokens.status.error + '14',
-    borderWidth: 1,
-    borderColor: theme.tokens.status.error + '33',
-    borderRadius: theme.base.radius.sm,
-    padding: theme.base.space[3],
-  },
-  errorText: { fontSize: theme.base.text.sm, color: theme.tokens.status.error },
-  waitText: { fontSize: theme.base.text.sm, color: theme.tokens.text.muted, textAlign: 'center' },
   secondary: { minHeight: 44, justifyContent: 'center', alignItems: 'center' },
   secondaryText: { color: theme.tokens.text.secondary, fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
 }));
