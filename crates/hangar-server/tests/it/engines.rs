@@ -17,7 +17,10 @@ async fn engines_catalog_without_python() {
     let body: Value = response.json().await.unwrap_or(Value::Null);
     task.abort();
     assert_eq!(status, 200, "catálogo próprio com o Python fora: {body}");
-    assert_eq!(body, json!({"motores": {}, "arquivo_corrompido": false, "arquivo_caminho": home.path().join(".claude/engines.json")}));
+    assert_eq!(body["motores"], json!({}));
+    assert_eq!(body["arquivo_corrompido"], false);
+    assert_eq!(body["arquivo_caminho"], json!(home.path().join(".claude/engines.json")));
+    assert_eq!(body["claude_provider_switch"], true);
 }
 
 proptest::proptest! {
