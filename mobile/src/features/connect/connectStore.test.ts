@@ -548,6 +548,30 @@ describe('aparelho da conta', () => {
     expect(tickets(calls).map((call) => [call.url.pathname, call.device])).toEqual([['/v1/machines/pc2/devices', 'ad1:ad-secret']]);
   });
 
+  it('entrar com outra caixa no nome usa a conta em minúsculas e reaproveita o aparelho guardado', async () => {
+    vault.set(DEVICE_KEY, JSON.stringify({ name: 'Acme', serviceUrl: CONNECT_SERVICE_URL, id: 'ad1', secret: 'ad-secret' }));
+    const calls = network({ device: 'approved' });
+    await connect().signIn(' ACME ', 'long-password');
+    await settle();
+
+    expect(calls.find((call) => call.url.pathname === '/v1/sessions' && call.method === 'POST')?.body?.name).toBe('acme');
+    expect(connect().account?.name).toBe('acme');
+    expect(JSON.parse(vault.get(ACCOUNT_KEY)!).name).toBe('acme');
+    expect(connect().device).toEqual({ id: 'ad1', secret: 'ad-secret', status: 'approved' });
+    expect(registers(calls)).toEqual([]);
+  });
+
+  it('conta guardada com maiúsculas abre em minúsculas e acha o aparelho', async () => {
+    vault.set(ACCOUNT_KEY, JSON.stringify({ serviceUrl: CONNECT_SERVICE_URL, token: 'account-token', name: 'Acme' }));
+    saveDevice();
+    const calls = network({ device: 'approved' });
+    await connect().load();
+    expect(connect().account?.name).toBe('acme');
+    await connect().refreshDevices();
+    expect(connect().device?.id).toBe('ad1');
+    expect(registers(calls)).toEqual([]);
+  });
+
   it('pendente com entrada aprovada numa máquina pede a ela que o libere na conta (migração)', async () => {
     await seed([entry]);
     saveDevice();

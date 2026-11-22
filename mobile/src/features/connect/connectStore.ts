@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { addMachine, approveAccountDevice, changeAccountPassword, CONNECT_SERVICE_URL, deviceStatus, endAccountSessions, installCode, listAccountDevices,
-  listMachines, registerDevice, registrarDiag, revokeAccountDevice, signIn, signInAnywhere as signInByName, signUp,
+  listMachines, normalizeGuestUser, registerDevice, registrarDiag, revokeAccountDevice, signIn, signInAnywhere as signInByName, signUp,
   upgradeToDevice } from '@hangar/core';
 import type { AccountDevice, AccountDeviceKey, AccountDeviceStatus, AccountSession, ConnectMachine, Server } from '@hangar/core';
 import { validInstallField, vouchAccountDevice } from '../machines/api';
@@ -192,7 +192,9 @@ function savedDevice(raw: string | null, account: ConnectAccount): AccountDevice
   try { saved = raw ? JSON.parse(raw) as Record<string, unknown> | null : null; }
   catch { return null; }
   // Aparelho de outra conta (ou serviço) não vale aqui: esta conta registra o seu.
-  if (!saved || saved.name !== account.name || saved.serviceUrl !== account.serviceUrl) return null;
+  // A caixa do nome não muda a conta: o aparelho guardado como "Ana" vale para "ana".
+  if (!saved || typeof saved.name !== 'string' || normalizeGuestUser(saved.name) !== normalizeGuestUser(account.name)
+    || saved.serviceUrl !== account.serviceUrl) return null;
   return typeof saved.id === 'string' && typeof saved.secret === 'string' ? { id: saved.id, secret: saved.secret } : null;
 }
 
@@ -339,7 +341,7 @@ export const useConnect = create<ConnectState>((set, get) => {
   }
 
   async function openAccount(login: typeof signIn, step: Step, rawName: string, password: string) {
-    const name = rawName.trim();
+    const name = normalizeGuestUser(rawName);
     let session: AccountSession;
     try { session = await login(CONNECT_SERVICE_URL, name, password); }
     catch (error) { throw new Error(failure(error, step)); }
@@ -347,7 +349,7 @@ export const useConnect = create<ConnectState>((set, get) => {
   }
 
   async function adopt(session: AccountSession, name: string) {
-    const account = { ...session, name };
+    const account = { ...session, name: normalizeGuestUser(name) };
     try { await SecureStore.setItemAsync(KEY, JSON.stringify(account)); }
     catch { throw new Error(m.connect_error_vault()); }
     vouched.clear();
@@ -374,7 +376,7 @@ export const useConnect = create<ConnectState>((set, get) => {
         const raw = await SecureStore.getItemAsync(KEY);
         const saved: unknown = raw === null ? null : JSON.parse(raw);
         if (saved !== null && !isAccount(saved)) throw new Error('connect_account_unreadable');
-        set({ ready: true, account: isAccount(saved) ? saved : null });
+        set({ ready: true, account: isAccount(saved) ? { ...saved, name: normalizeGuestUser(saved.name) } : null });
       } catch {
         registrarDiag({ evento: 'connect.conta_ilegivel', nivel: 'aviso', codigo: 'connect_account_unreadable' });
         set({ ready: true, notice: m.connect_error_vault() });
@@ -383,7 +385,7 @@ export const useConnect = create<ConnectState>((set, get) => {
     signIn: (name, password) => openAccount(signIn, 'signin', name, password),
     signUp: (name, password) => openAccount(signUp, 'signup', name, password),
     async signInAnywhere(rawName, password) {
-      const name = rawName.trim();
+      const name = normalizeGuestUser(rawName);
       let found: Awaited<ReturnType<typeof signInByName>>;
       try { found = await signInByName(name, password, { crypto: syncCrypto, serviceUrl: CONNECT_SERVICE_URL }); }
       catch (error) { throw new Error(failure(error, 'signin')); }
