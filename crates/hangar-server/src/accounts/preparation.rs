@@ -440,7 +440,7 @@ impl AccountService {
     /// O preparo da pasta pendente de uma conta Claude, aqui mesmo: os eventos vão ao diário do
     /// servidor, e a resposta e o log levam o motivo de uma falha, o mesmo que o comando mostra. Bloqueante.
     pub fn seed_claude(&self, path: &Path) -> Result<(), AccountError> {
-        let outcome = super::claude_config::seed(&self.env.home, self.env.known_default_claude_json().as_deref(), path);
+        let outcome = super::claude_config::seed(&self.env.home, Some(self.env.default_claude_json().as_path()), path);
         crate::diag::record_blocking(crate::diag::diary_dir_in(&self.env).as_deref(), &outcome.diary, "conta");
         outcome.result.map(drop).map_err(|error| {
             tracing::warn!(%error, "o preparo da conta Claude falhou");

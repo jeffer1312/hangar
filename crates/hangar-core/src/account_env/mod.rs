@@ -110,7 +110,7 @@ impl AccountEnvironment {
         default_claude_json(&self.home, self.base.get("CLAUDE_CONFIG_DIR").map(String::as_str))
     }
 
-    /// `known_default_claude_json` pelo ambiente capturado.
+    /// `known_default_claude_json` pelo ambiente capturado: só para o comando de terminal.
     pub fn known_default_claude_json(&self) -> Option<PathBuf> {
         known_default_claude_json(&self.home, self.base.get("CLAUDE_CONFIG_DIR").map(String::as_str))
     }
@@ -177,9 +177,11 @@ pub fn known_default_claude_json(home: &Path, config_dir: Option<&str>) -> Optio
     (!marked).then(|| dir.join(".claude.json"))
 }
 
-/// `known_default_claude_json`, com o `~/.claude.json` quando não dá para saber.
+/// O `.claude.json` que as sessões da conta padrão abertas por este processo leem: a variável vai a elas
+/// mesmo quando é a pasta de uma conta do Hangar (`config_dir_to_export`). É o critério do servidor; o
+/// comando de terminal usa `known_default_claude_json`.
 pub fn default_claude_json(home: &Path, config_dir: Option<&str>) -> PathBuf {
-    known_default_claude_json(home, config_dir).unwrap_or_else(|| home.join(".claude.json"))
+    config_dir.filter(|dir| !dir.is_empty()).map_or_else(|| home.join(".claude.json"), |dir| expand(dir, home).join(".claude.json"))
 }
 
 pub fn expand(value: &str, home: &Path) -> PathBuf {
@@ -204,7 +206,8 @@ mod tests {
     }
 
     /// Com `CLAUDE_CONFIG_DIR`, mesmo apontando para o `~/.claude`, a conta padrão lê o arquivo de dentro
-    /// da pasta, mesmo antes de ele existir; vazia e pasta de conta do Hangar valem o do HOME.
+    /// da pasta, mesmo antes de ele existir; vazia vale o do HOME. Pasta de conta do Hangar: o servidor a
+    /// segue; o comando de terminal (`known_`) não sabe qual é a padrão.
     #[test]
     fn default_claude_json_follows_the_config_dir() {
         let root = tempfile::tempdir().unwrap();
@@ -224,7 +227,8 @@ mod tests {
         assert_eq!(read(Some(&format!("{h}/.claude"))), home.join(".claude/.claude.json"), "antes de o CLI criar o arquivo");
         assert_eq!(read(Some("~/outra")), home.join("outra/.claude.json"));
         std::fs::write(home.join(".claude-conta").join(CLAUDE_ACCOUNT_MARKER), "").unwrap();
-        assert_eq!(read(Some(&format!("{h}/.claude-conta"))), main, "a pasta de uma conta do Hangar não é a padrão");
+        assert_eq!(read(Some(&format!("{h}/.claude-conta"))), home.join(".claude-conta/.claude.json"),
+            "o servidor exporta a variável dele à conta padrão mesmo sendo pasta de conta (`config_dir_to_export`)");
         let known = environment(&[("HOME", h.as_str()), ("CLAUDE_CONFIG_DIR", &format!("{h}/.claude-conta"))]).known_default_claude_json();
         assert_eq!(known, None, "de dentro de outra conta não dá para saber a padrão");
     }

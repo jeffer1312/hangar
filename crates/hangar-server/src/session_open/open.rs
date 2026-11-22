@@ -55,6 +55,10 @@ pub trait OpenHost: Send + Sync {
     fn account_diary(&self, events: Vec<Value>);
     /// Quanto a abertura espera a reconciliação da conta; os testes encurtam.
     fn reconcile_limit(&self) -> Duration { RECONCILE_LIMIT }
+    /// O `.claude.json` cujos MCP a reconciliação espelha na conta: o que a conta padrão lê.
+    fn mcp_principal(&self) -> Option<PathBuf> {
+        Some(hangar_core::account_env::default_claude_json(self.home(), self.env().get("CLAUDE_CONFIG_DIR").map(String::as_str)))
+    }
     /// Id da conversa (`--session-id`) e chave da ponte do plugin, novos a cada vida.
     fn new_session_id(&self) -> String;
     fn new_bridge_key(&self) -> String;
@@ -537,8 +541,7 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        let principal = hangar_core::account_env::known_default_claude_json(host.home(), host.env().get("CLAUDE_CONFIG_DIR").map(String::as_str));
-        let (held, result) = reconcile_hangar_dir(host.home().to_owned(), principal, dir, &account, &spec.cwd, host.reconcile_limit(), guard.take(),
+        let (held, result) = reconcile_hangar_dir(host.home().to_owned(), host.mcp_principal(), dir, &account, &spec.cwd, host.reconcile_limit(), guard.take(),
             |events| host.account_diary(events)).await;
         guard = held;
         avisos = result?;

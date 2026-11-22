@@ -1194,7 +1194,8 @@ fn prep(env: &AccountEnvironment, name: &str, project: Option<&str>, out: &mut d
         Err(error) => return refusal(err, &error),
     };
     let outcome = match guard(&env.home, &dir) {
-        Ok(_guard) => reconcile_account(&env.home, env.known_default_claude_json().as_deref(), name, project, Wait::Each(LOCK_WAIT)),
+        // Sem espelho: o ambiente do shell pode não ser o do servidor, e as duas fontes se alternariam nas contas.
+        Ok(_guard) => reconcile_account(&env.home, None, name, project, Wait::Each(LOCK_WAIT)),
         Err(error) => return refusal(err, &error),
     };
     write_cli_diary(env, &outcome.diary);
@@ -1440,6 +1441,23 @@ mod tests {
         assert_eq!(copy(), json!({}), "sem saber a conta padrão, nada é espelhado");
         assert!(reconcile(home, Some(home.join(".claude/.claude.json").as_path()), &home.join(".claude-conta2"), None).result.is_ok());
         assert_eq!(copy()["mcpServers"], json!({"atual": {"command": "a"}}));
+    }
+
+    /// O `--prep` de terminal não espelha: o ambiente do shell pode não ser o do servidor, e as duas
+    /// fontes se alternariam nas contas.
+    #[test]
+    fn the_terminal_prep_does_not_mirror() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        for (path, text) in [(".claude.json", r#"{"mcpServers": {"velho": {"command": "v"}}}"#),
+            (".claude-conta2/.hangar-conta", ""), (".claude-conta2/.claude.json", "{}")] {
+            fs::create_dir_all(home.join(path).parent().unwrap()).unwrap();
+            fs::write(home.join(path), text).unwrap();
+        }
+        let env = AccountEnvironment::from_pairs([("HOME", home.to_string_lossy().into_owned())]);
+        assert_eq!(prep(&env, "conta2", None, &mut Vec::new(), &mut Vec::new()), 0);
+        let copy: Value = serde_json::from_str(&fs::read_to_string(home.join(".claude-conta2/.claude.json")).unwrap()).unwrap();
+        assert_eq!(copy, json!({}));
     }
 
     /// A recém-movida fica mesmo mais velha que as irmãs; na entrada seguinte, a cópia com o mtime antigo

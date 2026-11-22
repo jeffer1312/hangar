@@ -38,7 +38,8 @@ pub struct Error {
     pub params: Value,
 }
 
-/// Caminhos de uma máquina. `accounts` são as pastas de conta Claude fora de `~/.claude`.
+/// Caminhos de uma máquina. `accounts` são as pastas de conta Claude fora de `~/.claude`, mais a pasta do
+/// `CLAUDE_CONFIG_DIR` cujo `.claude.json` a conta padrão lê (pode ser o próprio `~/.claude`).
 #[derive(Clone, Debug)]
 pub struct Paths {
     pub home: PathBuf,

@@ -524,11 +524,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `terminal::config_dir_to_export`, decide a variável, o arquivo da pré-confiança e o da marca de
   recarga. Ver [conta padrão sem a variável](#conta-padrão-do-claude-sem-terminal-sem-claude_config_dir-13112026).
 - **O `.claude.json` da conta padrão é o que ela lê: `AccountEnvironment::default_claude_json`.** Com
-  `CLAUDE_CONFIG_DIR` no servidor (mesmo `~/.claude`) é o de dentro da pasta, ainda que não exista;
-  sem ela, ou com a pasta sendo de uma conta do Hangar (o shell de uma sessão dessa conta), o
-  `~/.claude.json`. Computer Use, `mcp-register`, espelho e semeadura das contas, configuração
-  compartilhada, importação do Codex e saúde usam essa regra; o principal do Computer Use (estado e "desligado à mão") continua o
-  `~/.claude.json`. Ver [o arquivo que a conta padrão lê](#o-claudejson-da-conta-padrão-segue-o-claude_config_dir-22112026).
+  `CLAUDE_CONFIG_DIR` no servidor (mesmo `~/.claude`, mesmo pasta de uma conta do Hangar) é o de
+  dentro da pasta, ainda que não exista, como no `config_dir_to_export`; sem ela, o `~/.claude.json`.
+  Computer Use, `mcp-register`, espelho e semeadura das contas, configuração compartilhada,
+  importação do Codex e saúde usam essa regra; o principal do Computer Use (estado e "desligado à
+  mão") continua o `~/.claude.json`. Comando de terminal (`hangar-conta --prep`, `hangar-server open`
+  com o servidor fora) não espelha os MCP: só o servidor, por uma fonte só. Ver [o arquivo que a conta padrão lê](#o-claudejson-da-conta-padrão-segue-o-claude_config_dir-22112026).
 - **O catálogo de comandos do Claude é do Rust, com e sem terminal.** Composição, scans,
   filtros e a sonda compartilhada ficam em `commands/`; convidado e Connect só passam pela
   autorização das suas portas. A sonda usa o contexto da sessão, que também separa o cache;
@@ -1384,12 +1385,14 @@ mudar para o de dentro da pasta faria a marca `registered` de quem já tinha o r
 entrada ausente como tirada à mão, e o registro nunca mais aconteceria. Limite: tirar a entrada à
 mão só do arquivo de dentro da pasta é desfeito no próximo registro, como numa conta `~/.claude-*`;
 desligar é pela tela. O `mcp-register` ignora a variável com `--home`, que aponta para outra casa, e cria o arquivo de
-dentro da pasta quando ele falta, como faz com o `~/.claude.json`: o CLI o criaria depois sem o `hangar`. Os comandos de
-terminal (`hangar-conta --prep`, `hangar-server open` com o servidor fora) leem a variável do shell,
-que num painel de outra conta é a pasta dela: pasta com `.hangar-conta` nunca é a padrão, e aí quem
-chama não sabe qual é (`known_default_claude_json` devolve `None`): o espelho não roda (cair no
-`~/.claude.json` brigaria com o do servidor, que usa o arquivo de dentro da pasta) e a semeadura usa o
-`~/.claude.json`, que o espelho do servidor corrige na primeira abertura. A
+dentro da pasta quando ele falta, como faz com o `~/.claude.json`: o CLI o criaria depois sem o `hangar`.
+Servidor subido de dentro do painel de uma conta do Hangar tem a pasta dela na variável e a exporta
+à conta padrão; o lado do servidor segue a variável também aí, ou a importação do Codex leria um
+arquivo e as sessões outro. Os comandos de terminal (`hangar-conta --prep`, `hangar-server open` com
+o servidor fora) leem a variável do shell, que pode não ser a do servidor (SSH, tarefa do Windows,
+painel de outra conta): eles não espelham os MCP, senão as duas fontes se alternariam nas contas, e o
+espelho do servidor completa na abertura seguinte. O `hangar-conta --new` semeia pelo critério de
+terminal (`known_default_claude_json`; pasta com `.hangar-conta` vale `~/.claude.json`). A
 importação do Codex já tinha a mesma regra numa cópia própria, que passou a usar esta.
 O passo `2026-11-22-mcp-na-conta-padrao-com-config-dir` é de máquina porque o pacote não roda
 passo de conteúdo e nada mais regravaria o `hangar` desse arquivo; sem ele, o espelho novo levaria
