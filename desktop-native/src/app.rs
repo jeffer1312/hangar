@@ -9211,7 +9211,7 @@ impl Render for Hangar {
         let entry_shown = entry.is_some();
         // Primeiro acesso: a conta do Connect no alto, e o cartão de sempre (endereço e token, o Hangar deste computador)
         // recolhido em "Outras formas de entrar".
-        let sign_in = (self.connection_dialog && self.sign_in_shown()).then(|| self.render_sign_in(window, cx));
+        let sign_in = (self.connection_dialog && self.sign_in_shown()).then(|| self.render_first_sign_in(window, cx));
         let sign_in_others = sign_in.as_ref().map(|_| self.render_sign_in_others(cx));
         let classic = sign_in.is_none() || self.sign_in_others_open();
         // Só montado com a conexão aberta: a raiz redesenha a cada batida das animações.

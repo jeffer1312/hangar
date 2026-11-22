@@ -401,15 +401,15 @@ mod guest_accounts {
     #[tokio::test]
     async fn unknown_name_gets_a_stable_fake_salt() {
         let home = crate::physical_tempdir();
-        let service = service(home.path(), false, 10);
-        assert_eq!(call(&service, false, CONNECT, "GET", "/api/sync/prelogin?user=ninguem.aqui", None, None).await.0, 404,
+        let first_life = service(home.path(), false, 10);
+        assert_eq!(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=ninguem.aqui", None, None).await.0, 404,
             "sem conta de convidado e sem Sincronização a rota continua fechada");
-        assert_eq!(call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", Some("x"))), None).await.0, 200);
+        assert_eq!(call(&first_life, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", Some("x"))), None).await.0, 200);
         let salt = |body: Value| body["salt"].as_str().unwrap().to_owned();
-        let first = salt(call(&service, false, CONNECT, "GET", "/api/sync/prelogin?user=ninguem.aqui", None, None).await.1);
-        let again = salt(call(&service, false, CONNECT, "GET", "/api/sync/prelogin?user=Ninguem.Aqui", None, None).await.1);
-        let other = salt(call(&service, false, CONNECT, "GET", "/api/sync/prelogin?user=outro.nome", None, None).await.1);
-        let real = salt(call(&service, false, CONNECT, "GET", "/api/sync/prelogin?user=ana.silva", None, None).await.1);
+        let first = salt(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=ninguem.aqui", None, None).await.1);
+        let again = salt(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=Ninguem.Aqui", None, None).await.1);
+        let other = salt(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=outro.nome", None, None).await.1);
+        let real = salt(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=ana.silva", None, None).await.1);
         assert_eq!(first, again);
         assert_ne!(first, other);
         assert_ne!(first, real);
@@ -440,10 +440,10 @@ mod guest_accounts {
     #[tokio::test]
     async fn old_sync_routes_stay_as_they_were() {
         let home = crate::physical_tempdir();
-        let service = service(home.path(), false, 10);
-        assert_eq!(call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", Some("x"))), None).await.0, 200);
+        let disabled = service(home.path(), false, 10);
+        assert_eq!(call(&disabled, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", Some("x"))), None).await.0, 200);
         for (method, path) in [("GET", "/api/sync/guests"), ("GET", "/api/sync/status"), ("POST", "/api/sync/register")] {
-            assert_eq!(call(&service, true, "127.0.0.1", method, path, Some(json!({})), None).await.0, 404, "{method} {path}: desligada segue fechada");
+            assert_eq!(call(&disabled, true, "127.0.0.1", method, path, Some(json!({})), None).await.0, 404, "{method} {path}: desligada segue fechada");
         }
 
         let enabled = service(home.path(), true, 10);

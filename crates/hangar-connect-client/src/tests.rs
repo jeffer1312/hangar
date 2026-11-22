@@ -169,8 +169,8 @@ async fn unknown_name_does_not_match_and_the_password_stays_here() {
 async fn guest_enters_by_the_machine_that_keeps_the_vault() {
     let client = guests(vec![("casa.ana.hangar.dev.br", Machine { password: PASSWORD, ..Machine::default() })], None);
     let result = client.sign_in_anywhere(SERVICE, "Lhais@Casa", PASSWORD).await.unwrap();
-    let SignInResult::Guest { host, servers } = result else { panic!("devia ser convidada") };
-    assert_eq!(host, "casa.ana.hangar.dev.br");
+    let SignInResult::Guest { host: vault_host, servers } = result else { panic!("devia ser convidada") };
+    assert_eq!(vault_host, "casa.ana.hangar.dev.br");
     // Endereço vazio no cofre foi gravado de dentro da própria máquina; a desligada fica fora.
     assert_eq!(servers, [
         VaultServer { id: "a".into(), label: "Casa".into(), base_url: "https://casa.ana.hangar.dev.br".into(), token: "ta".into() },

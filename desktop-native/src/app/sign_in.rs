@@ -502,7 +502,7 @@ impl Hangar {
     }
 
     /// O alto do cartão de conexão na entrada pelo Connect: o formulário, a espera da liberação ou a escolha das máquinas.
-    pub(super) fn render_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_first_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.sign_in_ensure(window, cx);
         let busy = self.sign_in.busy;
         let muted = |text: String| div().text_sm().text_color(theme::muted()).whitespace_normal().child(text);
