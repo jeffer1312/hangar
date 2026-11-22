@@ -1,4 +1,5 @@
-//! Diretório de convidados no serviço do Connect: depois de cada gravação e na subida, a lista de hashes
+//! Diretório de convidados no serviço do Connect: depois de cada gravação, na subida e quando a conta passa a
+//! ser lida (Connect ligado, PC liberado), a lista de hashes
 //! das contas desta máquina vai ao serviço. Falha não volta à tela: vai ao log e ao diário.
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,9 +23,23 @@ impl Publisher {
     }
 
     pub(super) fn bind(&mut self, accounts: Arc<Store>, supervisor: Arc<Supervisor>, diary: Option<PathBuf>) {
+        let read = supervisor.account_read();
         self.accounts = accounts;
         self.supervisor = Some(supervisor);
         self.diary = diary;
+        self.follow(read);
+    }
+
+    /// Connect ligado depois da subida, ou PC liberado na conta depois de recusado: a lista vai de novo.
+    fn follow(&self, mut read: tokio::sync::watch::Receiver<bool>) {
+        let me = self.clone();
+        tokio::spawn(async move {
+            while read.changed().await.is_ok() {
+                if *read.borrow_and_update() {
+                    me.publish();
+                }
+            }
+        });
     }
 
     /// Sem Connect ligado não há o que publicar; arquivo que nunca existiu também não.

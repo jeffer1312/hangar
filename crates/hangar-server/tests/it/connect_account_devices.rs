@@ -283,6 +283,33 @@ async fn an_unreachable_service_keeps_the_devices_and_says_so_once() {
     assert_eq!(text.matches(CODE).count(), 1, "{text}");
 }
 
+/// O diretório de convidados escuta este aviso para publicar de novo quando o PC é liberado na conta.
+#[tokio::test]
+async fn a_good_read_after_a_refused_one_is_announced_once() {
+    let (account, service) = spawn_service().await;
+    account.machine_pending.store(true, std::sync::atomic::Ordering::Relaxed);
+    let m = machine(service, true).await;
+    let mut read = m.supervisor.account_read();
+    m.supervisor.sync_account_devices(&m.linked).await;
+    assert!(!read.has_changed().unwrap(), "recusa não avisa");
+    assert!(!*read.borrow());
+
+    account.machine_pending.store(false, std::sync::atomic::Ordering::Relaxed);
+    m.supervisor.sync_account_devices(&m.linked).await;
+    assert!(read.has_changed().unwrap(), "PC liberado: a leitura boa avisa");
+    assert!(*read.borrow_and_update());
+
+    m.supervisor.sync_account_devices(&m.linked).await;
+    assert!(!read.has_changed().unwrap(), "leitura boa seguida não avisa de novo");
+
+    account.machine_pending.store(true, std::sync::atomic::Ordering::Relaxed);
+    m.supervisor.sync_account_devices(&m.linked).await;
+    account.machine_pending.store(false, std::sync::atomic::Ordering::Relaxed);
+    m.supervisor.sync_account_devices(&m.linked).await;
+    assert!(read.has_changed().unwrap(), "recusada e liberada de novo: avisa outra vez");
+    assert!(*read.borrow_and_update());
+}
+
 async fn relay(m: &Machine, method: reqwest::Method, path: &str, token: Option<&str>, body: Option<Value>) -> (u16, Value) {
     let mut request = client().request(method, format!("http://{}{path}", m.main));
     if let Some(token) = token {

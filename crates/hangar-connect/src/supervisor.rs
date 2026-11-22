@@ -123,6 +123,9 @@ struct AccountSync {
     devices: Arc<Store>,
     /// A falha já foi registrada: serviço fora por horas daria uma linha por minuto.
     failing: Arc<AtomicBool>,
+    /// A última leitura da conta foi boa. Vira `true` na primeira leitura boa da ligação e na que vem depois
+    /// de uma falha: quem depende da conta (o diretório de convidados) publica de novo aí.
+    read: watch::Sender<bool>,
 }
 
 impl AccountSync {
@@ -133,8 +136,11 @@ impl AccountSync {
             Ok(()) => {
                 self.devices.suspend_account_devices(false);
                 self.failing.store(false, Ordering::Relaxed);
+                self.read.send_if_modified(|good| !std::mem::replace(good, true));
             }
             Err(error) => {
+                // Sem avisar: só a volta a `true` interessa a quem escuta.
+                self.read.send_if_modified(|good| { *good = false; false });
                 let refused = matches!(error.code, "connect_account_machine_pending" | "connect_account_machine_unknown");
                 let newly_suspended = refused && !self.devices.suspend_account_devices(true);
                 if self.failing.swap(true, Ordering::Relaxed) && !newly_suspended {
@@ -165,7 +171,7 @@ pub(super) async fn off_thread<T: Send + 'static>(op: impl FnOnce() -> Result<T,
 impl Supervisor {
     pub fn new(dir: PathBuf, log_dir: PathBuf, devices: Arc<Store>, main_port: u16) -> Self {
         let live = Live { port_error: (main_port == CONNECT_PORT).then(main_port_message), ..Live::default() };
-        let account_sync = AccountSync { devices: devices.clone(), failing: Arc::default() };
+        let account_sync = AccountSync { devices: devices.clone(), failing: Arc::default(), read: watch::channel(false).0 };
         Self { dir, log_dir, main_port, devices, account_sync, programs: None, live: Arc::new(Mutex::new(live)), bound: watch::channel(false).0,
             guest_port: watch::channel(false).0, preview_port: watch::channel(false).0, run: tokio::sync::Mutex::new(None), linking: tokio::sync::Mutex::new(()), peer_links: Links::default(),
             preview_reached: AtomicBool::new(false) }
@@ -450,6 +456,11 @@ impl Supervisor {
         self.account_sync.pass(linked).await;
     }
 
+    /// Muda para `true` quando a conta passa a ser lida: Connect ligado depois da subida ou PC liberado na conta.
+    pub fn account_read(&self) -> watch::Receiver<bool> {
+        self.account_sync.read.subscribe()
+    }
+
     pub fn preview_answered(&self) {
         self.preview_reached.store(true, Ordering::Relaxed);
     }
@@ -462,6 +473,8 @@ impl Supervisor {
         let dir = self.dir.clone();
         off_thread(move || state::remove(&dir)).await?;
         self.preview_reached.store(false, Ordering::Relaxed);
+        // A próxima ligação avisa de novo na primeira leitura boa.
+        self.account_sync.read.send_replace(false);
         self.devices.set_identity(None);
         self.halt(&mut run).await;
         // Subida que falhou antes da supervisão deixa de pé o filho de uma vida anterior.
