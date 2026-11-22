@@ -436,7 +436,9 @@ async fn account_device_approve(State(st): State<Arc<AppState>>, ConnectInfo(pee
 async fn account_device_revoke(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
     let headers = req.headers().clone();
     let linked = match account_gate(&st, peer, &req).await { Ok(linked) => linked, Err(response) => return response };
-    if let Err(failure) = account_devices::revoke(&linked, &id).await {
+    // Já revogado ou fora da conta lá: o que falta é tirar daqui, senão o aparelho entra até a próxima leitura.
+    if let Err(failure) = account_devices::revoke(&linked, &id).await
+        && !matches!(failure.code, "connect_account_device_revoked" | "connect_account_device_unknown") {
         return failed(&headers, failure);
     }
     match blocking(&st, move |store| store.revoke_account_devices(&[id])).await {
