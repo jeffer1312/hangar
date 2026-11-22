@@ -86,6 +86,11 @@ impl Paths {
     pub fn main_file(&self) -> PathBuf {
         self.home.join(".claude.json")
     }
+    /// Arquivo de uma conta que ganha a entrada pelo espelho quando nunca foi aberta. O principal e o
+    /// da conta padrão, não: a sessão os lê como estão.
+    pub fn is_mirrored_account(&self, path: &Path) -> bool {
+        path != self.main_file() && self.default_account.as_ref().is_none_or(|dir| dir.join(".claude.json") != path)
+    }
     /// Entrada guardada ao desligar: a marca de "desligado à mão".
     pub fn parked_file(&self) -> PathBuf {
         self.home.join(".hangar").join("computer-control.json")

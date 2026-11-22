@@ -45,10 +45,9 @@ pub fn write_entry(
     let previous = crate::state::env_of(known.as_ref(), paths, enabled)?;
     let env = managed_env(paths, &entry.agent_config, previous, &jev()?);
     let wanted = json!({"command": entry.command, "args": [], "env": env});
-    let main = paths.main_file();
     let mut written = Written::default();
     for file in files {
-        let account = file.path != main;
+        let account = paths.is_mirrored_account(&file.path);
         // Conta nunca aberta (vazia ou `{}`) ganha a entrada pelo espelho na primeira reconciliação.
         if account && file.data.is_empty() {
             continue;
@@ -127,7 +126,7 @@ pub(crate) fn register_entry(
     let binary = paths.binary().to_string_lossy().into_owned();
     let package = |entry: &Map<String, Value>| entry.get("command").and_then(Value::as_str) == Some(binary.as_str());
     let main = paths.main_file();
-    let opened = |file: &crate::FileEntry| file.path == main || !file.data.is_empty();
+    let opened = |file: &crate::FileEntry| !paths.is_mirrored_account(&file.path) || !file.data.is_empty();
     if files.iter().filter(|file| opened(*file)).all(|file| file.entry.as_ref().is_some_and(|entry| package(entry))) {
         // Entrada ativa de antes da marca (ligada à mão ou por versão antiga): só a marca entra.
         mark(paths)?;
@@ -147,7 +146,7 @@ pub(crate) fn register_entry(
     };
     let mut written = Written::default();
     for file in files {
-        let account = file.path != main;
+        let account = paths.is_mirrored_account(&file.path);
         if !opened(&file) {
             continue;
         }
@@ -503,6 +502,12 @@ mod tests {
         let files = paths.config_files();
         assert!(files.contains(&home.join(".claude").join(".claude.json")), "{files:?}");
         assert!(!files.contains(&home.join("acc").join(".claude.json")), "{files:?}");
+        std::fs::create_dir_all(home.join("acc")).unwrap();
+        std::fs::write(paths.main_file(), b"{}").unwrap();
+        write_entry(&paths, &entry(), || Ok(Map::new())).unwrap();
+        let default = std::fs::read_to_string(home.join(".claude").join(".claude.json")).expect("o arquivo da conta padrão nasce com a entrada");
+        assert!(default.contains(NAME), "{default}");
+        assert!(!home.join("acc").join(".claude.json").exists(), "conta nunca aberta segue para o espelho");
     }
 
     fn with_account(home: &Path) -> Paths {
