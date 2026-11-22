@@ -823,6 +823,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `hangar-server` desce antes para o `hangar-core`, ou vira trait no core que o servidor
   implementa. Nenhum crate depende do `hangar-server`. Motivo e plano da divisão em
   [plataforma.md](docs/decisoes/plataforma.md#módulo-novo-nasce-como-crate-próprio-06112026).
+  Exceção: `hangar-connect-client`, crate folha compartilhado com o `desktop-native`, que não pode
+  depender do `hangar-core` ([motivo](docs/decisoes/plataforma.md#entrar-pelo-connect-e-convidados-pelo-connect-22112026)).
 - **Motores, login de convidados e peers são do Rust.** Catálogo, CLIProxy, espelhos e instalação
   ficam em `engines/`, `harness_setup/` e `codex_setup/`; identidade, permissões, raízes e lista do
   convidado em `login_guests/`; configuração, descoberta e canal dos peers em `machine_peers/`.

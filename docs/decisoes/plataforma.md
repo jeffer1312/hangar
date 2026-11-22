@@ -4686,16 +4686,28 @@ preciso informar a máquina" e "o convidado tem que entrar também".
 - **Login do convidado sem a Sincronização ligada.** As rotas de login funcionam sempre que há conta no
   arquivo novo. Todo caminho do login faz uma única derivação, para o tempo de resposta não revelar se o
   nome existe. Pela porta do Connect todo pedido chega com o mesmo endereço, então o limite conta por
-  usuário, com teto geral, e a tentativa é contada antes da derivação. Nome que já é conta de convidado
-  não vira dono do cofre antigo.
+  usuário, com teto geral, e a tentativa é contada antes da derivação. Só a senha recusada gasta a
+  tentativa: arquivo ilegível ou gravação que falha a devolvem. O teto geral atingido vai ao diário
+  (`sync.login_teto_connect`), uma vez por janela. Um nome vive num cofre só: conta de convidado nova não
+  toma o nome do dono nem de um convidado do cofre antigo, e `/api/sync/guests` não grava convidado com
+  nome de conta nova.
 - **Liberação de aparelho uma vez para a conta** (antes era máquina por máquina). Um aparelho já liberado
   libera o novo com um toque, conferindo o código (`install_code`, o mesmo no celular, no Hangar e no
-  serviço). Leitura da conta recusada com o serviço no ar (máquina pendente ou desconhecida) suspende os
+  serviço). Leitura da conta recusada com o serviço no ar (máquina pendente, desconhecida ou revogada:
+  403 `device_revoked` ou 409 na lista pedida com a chave da máquina) suspende os
   aparelhos que entraram pela conta e os aprovados por eles, até a próxima leitura boa: sem isso, um
   aparelho revogado continuaria entrando.
 - **Conta antiga** (no cofre de sincronização, como a da convidada na VPS): "Trazer para o Connect" pede uma
   vez a senha de sincronização do dono, recria a conta mantendo a senha da convidada e só então apaga a
   antiga. Nome sem `.`/`@` ganha um nome novo, e o dono é avisado.
+- **`hangar-connect-client` não depende do `hangar-core`**, exceção à regra "módulo novo nasce como crate
+  próprio sobre o `hangar-core`". É crate folha compartilhado com o `desktop-native`, que entra pelo
+  Connect sem servidor local e não pode depender do core: as features de `serde_json` do servidor
+  (`arbitrary_precision`) mudariam os números do nativo, e as dependências do core mudariam o lockfile
+  dele. O servidor e o `hangar-connect` o usam por cima.
+- **Aparelhos desta máquina continuam com tela própria no nativo.** Os aprovados aqui sem vínculo de conta
+  e os pedidos pendentes de app antigo (`GET /api/connect/devices`, sem `account_device`) se aprovam,
+  recusam e perdem o acesso ali; os que vieram pela conta ficam em "Aparelhos da conta".
 
 Não testado de ponta a ponta antes do merge: o serviço publicado e o login real da convidada pelo celular.
 
