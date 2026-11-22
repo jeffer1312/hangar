@@ -803,6 +803,12 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   O motor do assistente grava `fast`; ausente vale disponível, e a sessão nasce sem Fast. Ultra Fast
   só com conta fixa Pro/Pro Max e a regra do cabeçalho `X-Hangar-Speed` no config (proxy v8+). Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#cliproxyapi-instalado-e-configurado-pelo-hangar-19112026).
+- **WhatsApp é só leitura, por um binário de fora (`jeffer1312/hangar-whatsapp`), só do dono.** Nada
+  é enviado: o binário só chama `SendMediaRetryReceipt` e recibos automáticos (teste de lista fechada).
+  Instalar exige aceite (`accepted.json`); o router usa `Edge::owner_only` e a 8766 não o monta; as
+  ferramentas recusam em sessão compartilhada e marcam texto de terceiros. Mídia antiga só a pedido,
+  com teto. Loopback com HMAC nos dois sentidos: resposta sem assinatura é 502 `whatsapp_untrusted`.
+  Evidência em [plataforma.md](docs/decisoes/plataforma.md#whatsapp-só-leitura-22112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,

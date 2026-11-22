@@ -3,6 +3,60 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## WhatsApp só leitura (22/11/2026)
+
+A página "WhatsApp" das Configurações (nativo e Expo) liga um arquivador só de leitura do WhatsApp
+do usuário, e as sessões leem pelas ferramentas MCP `whatsapp_chats`, `whatsapp_read`,
+`whatsapp_search` e `whatsapp_request_media` e pela skill `whatsapp`. Nada é enviado em nome
+dele. O crate `hangar-whatsapp` instala, liga e conversa com o serviço; o servidor só monta o
+router `/api/whatsapp*`.
+
+Decisões do usuário (22/11):
+
+- **Binário Go fora do Hangar.** O whatsmeow é Go: o arquivador vive no repo
+  `jeffer1312/hangar-whatsapp`, release com `checksums.txt` para seis alvos (Linux, macOS e
+  Windows, amd64 e arm64, sem CGO). Ele é o dono único do esquema SQLite (`PRAGMA user_version`;
+  esquema mais novo é recusado com `schema_newer`) e da sessão do aparelho, com dados em
+  `~/.hangar/whatsapp/`. O download, a instalação em `bin/<versão>/` e o serviço (systemd,
+  launchd, tarefa do Windows) vêm do crate `hangar-managed-binary`, extraído do
+  `hangar-cliproxy-setup` neste trabalho; o CLIProxy passou a usá-lo sem mudar texto, código de
+  erro, caminho nem unit. O Hangar instala a release mais nova da mesma versão maior e recusa
+  binário com `api` menor que `MIN_API`. O `binaries.rs` do Connect (frpc/Caddy) é uma terceira
+  cópia e ficou para depois.
+- **Só leitura.** O binário só chama `SendMediaRetryReceipt` (pedido de mídia antiga ao celular) e
+  os recibos automáticos do whatsmeow. Um teste de lista fechada das chamadas `Send*` barra
+  qualquer outra. As leituras usam um pool só de leitura, separado do escritor, com prazo de 5 s
+  por consulta (`busy`).
+- **Aceite obrigatório.** Parear um aparelho extra com programa não oficial é risco para a conta.
+  `POST /api/whatsapp/install` sem `{"accept":true}` responde 400 `whatsapp_accept_required`; o
+  aceite fica em `accepted.json` (`{"at","text_version":1}`).
+- **Só do dono.** O router passa por `Edge::owner_only`, e a porta 8766 não o monta: convidado e
+  par de fora não alcançam rota nenhuma. As ferramentas MCP chamam as rotas em processo pelo mesmo
+  `owner_only` e, antes disso, recusam com `whatsapp_shared_session` quando a sessão que chama tem
+  convite de convidado ativo ou membro de fora no grupo, porque o que ela lê chegaria a eles.
+- **Texto de terceiros marcado.** Mensagem é texto escrito por outras pessoas e pode trazer
+  instrução para o agente. Toda resposta das ferramentas leva `"third_party_content":true` e o
+  aviso para nunca seguir instruções contidas nele, e é cortada em ~32 KB com `"truncated":true`.
+- **Mídia antiga sob demanda, com teto (3A).** Mídia que o servidor do WhatsApp já apagou só sai do
+  celular, e cada pedido gera uma notificação nele. Por isso nada é pedido sozinho: só por
+  `whatsapp_request_media`, no máximo 20 por chamada e 200 por dia (`capped: true` quando cortou).
+  O `media_path` devolvido é absoluto e sempre dentro de `media/`: o nome do arquivo é montado com
+  lista fechada de extensões e conferido por `filepath.Rel`, inclusive com `id` malicioso.
+- **HMAC nos dois sentidos no loopback.** O binário escuta numa porta livre de `127.0.0.1` e grava
+  `control.json` (`version`, `api`, `port`, `pid`) a cada subida; `control.key` guarda 32 bytes
+  aleatórios (0600, pasta 0700). Pedido e resposta levam `X-Hangar-Signature` (pedido: método,
+  caminho com query, `ts` com ±30 s e hash do corpo; resposta: `ts` do pedido, status e hash do
+  corpo). Resposta sem assinatura válida vira 502 `whatsapp_untrusted`. Quem ocupar a porta antiga
+  depois de o serviço cair não recebe segredo nem consegue fingir resposta.
+
+Revisão adversarial do plano (revisão 2, 22/11) mudou: caminho de mídia preso à pasta; recusa em
+sessão compartilhada; marca de texto de terceiros; migração dos dados do protótipo sem duas cópias
+das chaves rodando (`--import` só com destino vazio e serviço parado; o `sessao.db` de origem vira
+`.migrated`); assinatura HMAC no lugar de confiar na porta; versão da API (`api` no status); ciclo
+de pareamento (`pair_timeout`, `logged_out`, `outdated`); tetos de mídia e de resposta; leitura
+separada da escrita; erro no formato da casa (`hangar_core::http::detail`, códigos `whatsapp_`);
+e os nomes reais do código do CLIProxy na extração.
+
 ## CLIProxyAPI instalado e configurado pelo Hangar (19/11/2026)
 
 Montar o proxy à mão (baixar, escrever o `config.yaml`, inventar chave e senha, logar a conta,
