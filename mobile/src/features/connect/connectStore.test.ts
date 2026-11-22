@@ -116,6 +116,26 @@ describe('conta do Connect', () => {
     expect(connect().account?.token).toBe('account-token');
   });
 
+  it.each([
+    ['JSON fora da forma', JSON.stringify({ serviceUrl: CONNECT_SERVICE_URL, name: 'acme' })],
+    ['JSON quebrado', '{'],
+  ])('conta guardada ilegível (%s) vai ao diário e avisa, sem entrar', async (_case, raw) => {
+    const events: { codigo?: string }[] = [];
+    configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
+    vault.set(ACCOUNT_KEY, raw);
+    await connect().load();
+    expect(connect()).toMatchObject({ ready: true, account: null, notice: m.connect_error_vault() });
+    expect(events.map((event) => event.codigo)).toEqual(['connect_account_unreadable']);
+  });
+
+  it('sem conta guardada não avisa nada', async () => {
+    const events: unknown[] = [];
+    configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
+    await connect().load();
+    expect(connect()).toMatchObject({ ready: true, account: null, notice: '' });
+    expect(events).toEqual([]);
+  });
+
   it('não entra quando o cofre recusa guardar o token', async () => {
     network();
     const set = vi.spyOn(vault, 'set').mockImplementation(() => { throw new Error('fixture-vault'); });

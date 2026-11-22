@@ -7,6 +7,7 @@ const TEXT: Record<string, () => string> = {
   sync_too_many_attempts: m.sync_muitas_tentativas,
   sync_insecure: m.mobile_sync_login_https,
   sync_vault_unreadable: m.mobile_sync_login_vault,
+  sync_vault_missing: m.mobile_sync_login_vault,
   sync_unavailable: m.mobile_sync_login_unavailable,
   network_failed: m.falha_conexao,
 };

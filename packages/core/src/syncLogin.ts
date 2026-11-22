@@ -21,10 +21,11 @@ const MAX_ITERATIONS = 2_000_000;
 const fail = (code: string, status?: number) => Object.assign(new Error(code), { code, status });
 
 async function request(hub: string, path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   try {
     return await fetch(`${hub}${path}`, {
-      credentials: 'include', redirect: 'error', ...init, signal: comTeto(undefined, REQUEST_TIMEOUT_MS),
-      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include', redirect: 'error', ...init, signal: comTeto(undefined, REQUEST_TIMEOUT_MS), headers,
     });
   } catch {
     throw fail('network_failed');
@@ -70,7 +71,8 @@ export async function openSyncSession(hub: string, user: string, password: strin
   };
 }
 
-/** Erros com `code`: os do `openSyncSession`, `sync_insecure` e `sync_vault_unreadable`. */
+/** Erros com `code`: os do `openSyncSession`, `sync_insecure`, `sync_vault_missing` (resposta sem cofre) e
+ *  `sync_vault_unreadable`. */
 export async function syncSignIn(address: string, user: string, password: string, crypto: SyncCrypto): Promise<Server[]> {
   const hub = hubAddress(address);
   const session = await openSyncSession(hub, user, password, crypto);
@@ -83,9 +85,15 @@ export async function syncSignIn(address: string, user: string, password: string
   const vault = await read.json().catch(() => null) as { enc_blob?: SealedBlob | null } | null;
   await session.close();
   if (vault?.enc_blob === null) return [];
+  // Resposta sem o campo não é cofre vazio: a lista sumiria calada.
+  if (!vault?.enc_blob) {
+    registrarDiag({ evento: 'sync.cofre_sem_blob', nivel: 'erro', codigo: 'sync_vault_missing' }, hub);
+    throw fail('sync_vault_missing');
+  }
+  const sealed = vault.enc_blob;
   try {
     // Endereço vazio ou de loopback foi gravado de dentro da própria máquina.
-    const list = crypto.decryptJson<Server[]>(session.encKey, vault!.enc_blob!).filter((server) => !server.disabled)
+    const list = crypto.decryptJson<Server[]>(session.encKey, sealed).filter((server) => !server.disabled)
       .map((server) => ({ ...server, baseUrl: !server.baseUrl || isLocalMachineUrl(server.baseUrl) ? hub : server.baseUrl }));
     return parseMachineImportPayload(JSON.stringify(list));
   } catch {

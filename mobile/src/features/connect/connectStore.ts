@@ -81,6 +81,7 @@ const CODES: Record<string, () => string> = {
   sync_request_failed: m.login_guest_unavailable,
   sync_insecure: m.login_guest_unavailable,
   sync_vault_unreadable: m.mobile_sync_login_vault,
+  sync_vault_missing: m.mobile_sync_login_vault,
 };
 
 const statusOf = (error: unknown) => (error as { status?: number }).status;
@@ -372,6 +373,7 @@ export const useConnect = create<ConnectState>((set, get) => {
       try {
         const raw = await SecureStore.getItemAsync(KEY);
         const saved: unknown = raw === null ? null : JSON.parse(raw);
+        if (saved !== null && !isAccount(saved)) throw new Error('connect_account_unreadable');
         set({ ready: true, account: isAccount(saved) ? saved : null });
       } catch {
         registrarDiag({ evento: 'connect.conta_ilegivel', nivel: 'aviso', codigo: 'connect_account_unreadable' });
