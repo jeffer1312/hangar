@@ -969,7 +969,7 @@ impl RuntimeRegistry {
             settings: private.get("settings").filter(|v| !v.is_null()).cloned(),
         };
         let start = self
-            .prepare_start(name, &spec, &current, &sid)
+            .prepare_start(name, &spec, &current, &sid, None)
             .await
             .map_err(|_| error("session_transfer_restore_failed"))?;
         self.start_claude(name, &spec, start, &sid)
