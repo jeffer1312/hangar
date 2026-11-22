@@ -1692,7 +1692,12 @@ impl Executor {
                 return Ok(reply(id, Disposition::Accepted, json!({"steered": false, "drained": 1})));
             }
             // A CLI guardou a mensagem na fila dela e a puxa na próxima pausa do turno, sem a dica para promover.
-            if self.entry_enqueued(&entry).await {return Ok(reply(id,Disposition::Accepted,json!({"steered":true,"drained":1})));}
+            if self.entry_enqueued(&entry).await {
+                // Sem a marca, a desistência por falta de prova daria como "não chegou" o que a CLI ainda tem na fila.
+                self.action(Action::SetDelivered {entry_id:entry.clone(),value:true,steered:true}).await?;
+                self.publish().await?;
+                return Ok(reply(id,Disposition::Accepted,json!({"steered":true,"drained":1})));
+            }
             steered=driver.steer().await;
         }
         // O ctrl+x ctrl+s pode ter ido sem se comprovar: nem "orientou" nem "a dica não veio", e quem clicou confere.

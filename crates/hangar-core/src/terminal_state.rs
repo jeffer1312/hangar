@@ -315,9 +315,12 @@ fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
 }
 
 /// A caixa de mensagem logo abaixo: a régua e, em seguida, a linha do `❯` (ou do `!` no modo de comando).
-/// Régua solta numa resposta não conta.
+/// Régua solta numa resposta não conta. A faixa dos mods, quando começa por um título de painel, fica entre as duas.
 fn composer_below(lines: &[&str]) -> bool {
-    let mut rest = lines.iter().filter(|l| !trim(l).is_empty());
+    let mut rest = lines.iter().filter(|l| !trim(l).is_empty()).peekable();
+    if rest.peek().is_some_and(|l| mods_band_title(l)) {
+        while rest.peek().is_some_and(|l| !P.rule.is_match(l)) { rest.next(); }
+    }
     rest.next().is_some_and(|l| P.rule.is_match(l)) && rest.next().is_some_and(|l| trim(l).starts_with(['❯', '!']))
 }
 
@@ -801,6 +804,9 @@ mod tests {
         let band = "● ▾ PM-20124 coleta: troca de sessão no 403 (Execução manual)        8/9 passos · 2h 30m [-]\n  ━━━━━━━━ ━━━━━━━━  89%\n▸ ms_def · develop · Jenkins sem build";
         let pane = format!("● resposta\n\n✻ Waiting for 1 background agent to finish\n{band}\n{RULE}\n❯ \n{RULE}\n  ⏵⏵ bypass permissions on · 2 background tasks · ↓ to manage\n  ● main\n  ◯ pmedico:kubectl  Aguardando conclusão   40s · ↓ 79.2k tokens\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Waiting for 1 background agent to finish"));
+        // O quadro do `*` acima do painel com título também é a linha viva.
+        let pane = format!("{DONE}\n\n● resposta nova\n\n* Kerfuffling… (2m 26s)\n{band}\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).label.as_deref(), Some("Kerfuffling… (2m 26s)"));
         // Resposta que começa com a mesma seta segue sendo resposta: o resumo do turno anterior acima dela não volta.
         let pane = format!("● anterior\n\n{DONE}\n\n❯ pergunta\n\n● ▸ primeiro item da lista\n\n{RULE}\n❯ \n{RULE}\n");
         assert_eq!(super::analyze(&pane).spinner, None);

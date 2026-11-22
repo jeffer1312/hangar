@@ -230,6 +230,19 @@ fn terminal_runtime_absent_cursor_needs_current_conversation_and_new_timestamp()
     }
 }
 
+#[test]
+fn absent_cursor_enqueue_needs_current_conversation_and_new_timestamp() {
+    let dir=tempfile::tempdir().unwrap(); let path=dir.path().join("chat.jsonl");
+    let mut index=ReceiptIndex::new("claude","sid"); let cursor=index.capture(&path).unwrap();
+    let row=json!({"text":"Olá"});
+    for (sid,ts) in [("sid","2020-01-01T00:00:00Z".to_string()),("other",chrono::Utc::now().to_rfc3339())] {
+        std::fs::write(&path,format!("{}\n",json!({"type":"queue-operation","operation":"enqueue","sessionId":sid,"timestamp":ts,"content":"Olá"}))).unwrap();
+        index.scan(&path).unwrap(); assert!(!index.enqueued_after(&path,&cursor,&row).unwrap(),"{sid}");
+    }
+    std::fs::write(&path,format!("{}\n",json!({"type":"queue-operation","operation":"enqueue","sessionId":"sid","timestamp":chrono::Utc::now().to_rfc3339(),"content":"Olá"}))).unwrap();
+    index.scan(&path).unwrap(); assert!(index.enqueued_after(&path,&cursor,&row).unwrap());
+}
+
 /// O Codex grava a conversa só no `session_meta`, não nas linhas da fala.
 fn codex_rollout(path:&std::path::Path, conversation:Option<&str>) {
     let now = chrono::Utc::now().to_rfc3339();

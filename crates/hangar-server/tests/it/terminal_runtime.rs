@@ -927,6 +927,8 @@ async fn direct_delivery_counts_the_cli_queue_as_steered_without_the_hint() {
     assert!(reply.payload["code"].is_null(), "{}", reply.payload);
     assert!(started.elapsed() < Duration::from_secs(5), "a espera seguiu até o prazo com a mensagem já na fila da CLI");
     assert!(!f.io.calls.lock().unwrap().iter().any(|call| call.args.last().is_some_and(|arg| arg == "C-s")));
+    // Sem a marca, a desistência por falta de prova daria como "não chegou" o que a CLI ainda tem na fila.
+    assert_eq!(f.state()["rows"][0]["steered"], true, "{}", f.state());
     h.stop().await.unwrap();
 }
 

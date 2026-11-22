@@ -52,7 +52,7 @@ pub struct ReceiptIndex {
     tail: Vec<u8>,
     occurrences: Vec<Occurrence>,
     /// Claude: entradas que a CLI guardou na fila dela (`queue-operation enqueue`), com o início da linha.
-    enqueued: Vec<(u64,String)>,
+    enqueued: Vec<Occurrence>,
     scan_offset: u64,
     /// Conversa do `session_meta` do rollout: o Codex não grava a conversa em cada linha.
     meta_conversation: Option<String>,
@@ -209,7 +209,12 @@ impl ReceiptIndex {
                     Some("attachment") if obj["attachment"]["type"] == "queued_command" => (content_text(&obj["attachment"]["prompt"]),"steer"),
                     // Guardada na fila da CLI ainda não é entrega: só diz que o turno em curso vai puxá-la.
                     Some("queue-operation") if obj["operation"] == "enqueue" => {
-                        if let Some(text) = obj["content"].as_str() { self.enqueued.push((start,text.to_owned())); }
+                        if let Some(text) = obj["content"].as_str() {
+                            self.enqueued.push(Occurrence { id:String::new(),conversation:self.conversation.clone(),file_identity:id.clone(),
+                                offset:start,end_offset:offset,text:text.to_owned(),kind:"enqueue".into(),
+                                timestamp:obj["timestamp"].as_str().and_then(crate::transcript::ts_of_iso),
+                                recorded_conversation:obj["sessionId"].as_str().map(str::to_owned),identity_unprovable:false });
+                        }
                         continue;
                     }
                     _ => continue,
@@ -289,7 +294,7 @@ impl ReceiptIndex {
     /// "ctrl+x ctrl+s to send now", e este registro é a prova de que ele está com ela.
     pub fn enqueued_after(&self, path: &Path, cursor: &DispatchCursor, row: &Value) -> io::Result<bool> {
         if self.cursor_anchor(path, cursor)?.is_none() { return Ok(false); }
-        Ok(self.enqueued.iter().any(|(offset,text)| *offset >= cursor.offset && self.matching_text(row, text).is_some()))
+        Ok(self.enqueued.iter().any(|o| o.offset >= cursor.offset && cursor_accepts(cursor,o) && self.matching_text(row, &o.text).is_some()))
     }
 
     /// O cursor vale para o arquivo lido: mesma conversa, mesmo arquivo e os bytes antes do despacho intactos.
