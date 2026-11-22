@@ -12071,5 +12071,19 @@
   "gallery_counter": "{n} de {total}",
   "gallery_jump_not_found": "A mensagem não está no trecho carregado da conversa. Role para cima para carregar as anteriores.",
   "gallery_video_swipe_hint": "Arraste para os lados para trocar de mídia, ou para baixo para fechar",
-  "gallery_video_close_hint": "Arraste para baixo para fechar"
+  "gallery_video_close_hint": "Arraste para baixo para fechar",
+  "native_video_play": "Tocar",
+  "native_video_pause": "Pausar",
+  "native_video_mute": "Silenciar",
+  "native_video_unmute": "Ativar o som",
+  "native_video_fullscreen": "Tela cheia",
+  "native_video_exit_fullscreen": "Sair da tela cheia",
+  "native_video_seek": "Posição do vídeo",
+  "native_video_loading": "Carregando o vídeo…",
+  "native_video_buffering": "Carregando…",
+  "native_video_failed": "Não deu para tocar o vídeo: {reason}",
+  "native_video_no_route": "este vídeo não tem endereço para tocar aqui",
+  "native_video_need_mpv_linux": "Para tocar aqui, instale o mpv (pacote mpv ou libmpv) e tente de novo.",
+  "native_video_need_mpv": "Este computador não tem o player de vídeo do app (libmpv).",
+  "native_video_open_system": "Abrir no player do sistema"
 }

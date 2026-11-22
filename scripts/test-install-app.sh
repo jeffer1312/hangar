@@ -40,6 +40,14 @@ new_sandbox() {
     printf '#!/bin/sh\necho "$0 $*" >> "%s/log/scripts"\nexit 0\n' "$S" > "$R/scripts/$t"
     chmod +x "$R/scripts/$t"
   done
+  # A libmpv: o --comando responde o que estiver em `$S/libmpv-cmd` (sem o arquivo, nada falta).
+  cat > "$R/scripts/install-libmpv.sh" <<EOF
+#!/bin/sh
+echo "\$0 \$* sem_instalar=\${HANGAR_LIBMPV_SEM_INSTALAR:-}" >> "$S/log/scripts"
+[ "\${1:-}" = --comando ] && [ -f "$S/libmpv-cmd" ] && cat "$S/libmpv-cmd"
+exit 0
+EOF
+  chmod +x "$R/scripts/install-libmpv.sh"
   # O hangar-server do checkout: registra os argumentos; `$S/server-fails-<subcomando>` o faz falhar.
   cat > "$R/scripts/hangar-server-command" <<EOF
 #!/bin/sh
@@ -467,6 +475,33 @@ chmod +x "$B/apt-get"
 TEST_ASKPASS="$B/askpass" run_install "$S/out" "${APP_ARGS[@]}"
 expect_line "nopasswd: tmux instalado" "$S/out" '^##HANGAR-ITEM## tmux ok tmux$'
 if [ -f "$S/log/stdin" ] && [ ! -s "$S/log/stdin" ]; then pass "nopasswd: o comando não recebe a senha"; else flunk "nopasswd: o comando não recebe a senha" "$S/log/stdin"; fi
+
+# --- Caso: libmpv que falta: no --app a senha vem do auxiliar e o pacote vai pelo sudo -n ---
+new_sandbox libmpv-app
+echo 'apt-get install -y libmpv2' > "$S/libmpv-cmd"
+fake sudo "$SUDO_APP"; fake apt-get 'exit 0'; askpass_says 'echo s3nha-certa'
+TEST_ASKPASS="$B/askpass" run_install "$S/out" "${APP_ARGS[@]}"
+expect_line "libmpv-app: o auxiliar recebe o motivo" "$S/log/calls" '^askpass instalar a libmpv'
+expect_line "libmpv-app: pacote pelo sudo -n" "$S/log/calls" '^sudo -n apt-get install -y libmpv2$'
+expect_no "libmpv-app: instalada não vira falta" "$S/out" 'a libmpv não instalou'
+
+# --- Caso: o pacote da libmpv falha: só avisa, com o comando, e a instalação vai até o fim ---
+new_sandbox libmpv-falha
+echo 'apt-get install -y libmpv2' > "$S/libmpv-cmd"
+fake sudo "$SUDO_APP"; fake apt-get 'exit 100'; askpass_says 'echo s3nha-certa'
+TEST_ASKPASS="$B/askpass" run_install "$S/out" "${APP_ARGS[@]}"
+expect_line "libmpv-falha: falta com o comando" "$S/out" 'a libmpv não instalou .*sudo apt-get install -y libmpv2'
+expect_line "libmpv-falha: chega ao fim" "$S/out" '^##HANGAR-FIM## '
+
+# --- Caso: o --update não instala a libmpv, nem pelo sudo nem pelo Homebrew do macOS ---
+new_sandbox libmpv-update
+run_install "$S/out" "${APP_ARGS[@]}"
+echo 'apt-get install -y libmpv2' > "$S/libmpv-cmd"
+fake sudo "$SUDO_APP"; fake apt-get 'exit 0'; askpass_says 'echo s3nha-certa'
+TEST_ASKPASS="$B/askpass" run_install "$S/out2" "${APP_ARGS[@]}" --update
+expect_no "libmpv-update: não pede senha" "$S/log/calls" '^askpass instalar a libmpv'
+expect_no "libmpv-update: não roda o pacote" "$S/log/calls" 'libmpv2'
+expect_line "libmpv-update: o script recebe a ordem de não instalar" "$S/log/scripts" 'install-libmpv\.sh +sem_instalar=1$'
 
 # --- Caso: sudo que aceita a senha mas não a guarda: não manda a senha ao comando ---
 new_sandbox sem-cache

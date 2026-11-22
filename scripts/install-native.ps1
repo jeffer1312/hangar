@@ -1,6 +1,7 @@
 # Instala o app nativo do Hangar (desktop-native) da release `native-latest` no Windows, conferido
 # pelo sha256 do manifesto antes de tocar em qualquer coisa. Maquina sem build na release sai 0 com
-# aviso: a maquina fica com o Electron que ja tinha, ou com o navegador. Arquivo so em ASCII: o PowerShell 5.1 le sem BOM como cp1252.
+# aviso: a maquina fica com o Electron que ja tinha, ou com o navegador. Tambem poe a libmpv do player de video ao
+# lado do exe (scripts/install-libmpv.ps1). Arquivo so em ASCII: o PowerShell 5.1 le sem BOM como cp1252.
 # Uso: powershell -ExecutionPolicy Bypass -File scripts/install-native.ps1 [-Forcar]
 param([switch]$Forcar)
 $ErrorActionPreference = 'Stop'
@@ -17,6 +18,24 @@ function Marca($texto) {
     [IO.File]::WriteAllText($marca, $texto)
 }
 function Versao-De($texto) { if ("$texto" -match '"version":\s*"([0-9.]+)"') { $Matches[1] } else { '' } }
+# A libmpv do player de video, ao lado do exe. Roda tambem com o app ja em dia; falhar so avisa (o video abre
+# no player do sistema), entao nunca muda o codigo de saida daqui.
+# O powershell.exe do sistema: no PowerShell 7 o $PSHOME e o pwsh, sem powershell.exe.
+# O filho sai 0 de proposito, entao quem diz se faltou e a marca libmpv-ok gravada nesta rodada (UTF-8, como ele grava).
+function Instala-Libmpv {
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $inicio = Get-Date
+    try { & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'install-libmpv.ps1') -Destino $destDir }
+    catch { Write-Host "video do app nativo: aviso - $($_.Exception.Message)" }
+    $global:LASTEXITCODE = 0
+    try {
+        $ok = Join-Path $marcaDir 'libmpv-ok'
+        if ((Test-Path -LiteralPath $ok) -and (Get-Item -LiteralPath $ok).LastWriteTime -ge $inicio.AddSeconds(-2)) {
+            $texto = [IO.File]::ReadAllText($ok, [Text.Encoding]::UTF8).Trim()
+            if ($texto.StartsWith('falta')) { Write-Host "video do app nativo: aviso - $texto" }
+        }
+    } catch { Write-Host "video do app nativo: aviso - nao consegui ler a marca da libmpv ($($_.Exception.Message))" }
+}
 
 $arq = "$env:PROCESSOR_ARCHITEW6432$env:PROCESSOR_ARCHITECTURE"
 if ($arq -notmatch 'AMD64') {
@@ -42,6 +61,7 @@ try {
     $instalada = if (Test-Path $marca) { Versao-De ([IO.File]::ReadAllText($marca)) } else { '' }
     if (-not $Forcar -and (Test-Path $app) -and $versao -and $instalada -eq $versao) {
         Write-Host "app nativo ja na versao $versao"
+        Instala-Libmpv
         exit 0
     }
     if ($bruto -notmatch ('"' + [regex]::Escape($pacote) + '":\s*"([0-9a-f]{64})"')) {
@@ -112,6 +132,7 @@ try {
         Write-Host "app nativo: sem a senha do backend (CP_AUTH_TOKEN) em $env_; na primeira abertura o app pede o endereco e a senha"
     }
 
+    Instala-Libmpv
     Marca $bruto
     Write-Host "app nativo $versao instalado em $app"
 } finally {

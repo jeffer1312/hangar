@@ -232,7 +232,7 @@ impl Uploads {
     }
 
     /// O arquivo desta máquina por trás do anexo, para abrir no lugar: só anexo do cofre e caminho citado da sessão local.
-    /// Toca no disco: só no clique.
+    /// Toca no disco (pode ser pasta de rede): só fora da thread da interface.
     pub(super) fn local_path(&self, source: &Source) -> Option<PathBuf> {
         let Uploads::Local { dir, cwd, .. } = self else { return None };
         let real = match source {

@@ -151,6 +151,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   O `install-native` roda na etapa `nativo`, como o `install-chromium`: script estreito, só com a
   marca, na main e com a API que cabe; falha é aviso. Roda depois da prova de vida, inclusive na
   atualização automática e na topologia manual; não desfaz a atualização do servidor.
+- **A libmpv do player de vídeo do nativo é extra: nunca para instalação nem atualização.**
+  `scripts/install-libmpv.sh` (Linux pelo pacote da distro, só `libmpv.so.2`; macOS pelo Homebrew) e
+  `scripts/install-libmpv.ps1` (Windows: build fixo do shinchiro, sha256 do pacote e da dll, `libmpv-2.dll`
+  ao lado do `Hangar.exe`) saem sempre 0 e gravam `~/.hangar/native/libmpv-ok`. Sem terminal, o Linux só
+  tenta `sudo -n`; o `install.sh` pede a senha pelo `app_sudo`, e o `--update` não instala. A troca do app
+  só renomeia o exe, então a dll fica; trocar o build é trocar URL, os dois sha256 e o
+  `resources/THIRD_PARTY_NOTICES.md` juntos.
 - **No Windows, `npm ci` na raiz só com o front parado**, e pasta que o atualizador cria dentro de
   `frontend/` entra no `.gitignore` — sobra não ignorada vira "mudança local" e desliga o dist do CI.
 - **Passo com comando diferente por sistema usa `comando_posix` e `comando_windows`.** `comando`

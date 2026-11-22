@@ -786,6 +786,24 @@ impl Api {
         }).await?
     }
 
+    /// Endereço e credencial para um player que busca sozinho, por faixas (Range): a mesma rota do `fetch`, pela rede
+    /// local quando ela venceu, e o token separado para ir no cabeçalho, nunca na URL. `None`: anexo sem rota de
+    /// arquivo, ou endereço do Connect sem credencial de aparelho, onde a senha do dono nunca vai.
+    pub fn media_url(&self, name: &str, source: &Source) -> Option<(String, String)> {
+        let mut url = self.endpoint(Some(name), None);
+        match source {
+            Source::Upload(file) => { url.path_segments_mut().ok()?.extend(["uploads", file]); }
+            Source::Cited(path) | Source::Workspace(path) => {
+                url.path_segments_mut().ok()?.push("file");
+                url.query_pairs_mut().append_pair("path", path);
+                if matches!(source, Source::Workspace(_)) { url.query_pairs_mut().append_pair("root", "1"); }
+            }
+            Source::Transcript(..) | Source::Remote(_) | Source::Memory(..) => return None,
+        }
+        let token = self.socket_token(&url, &self.token)?;
+        Some((url.to_string(), token))
+    }
+
     /// Página publicada: sem `extra` é a casca isolada (com `raw=1`, o HTML cru); `["shot"]` é a imagem. O 404 diz
     /// pelo `code` se a página expirou (`erro_pagina_expirou`) ou se o servidor não tem imagem (`erro_pagina_sem_imagem`).
     pub async fn page(&self, name: &str, id: &str, extra: &[&str], query: &[(&str, &str)]) -> Result<Vec<u8>, Failure> {
@@ -1385,6 +1403,19 @@ mod tests {
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
+
+    #[test]
+    fn media_url_keeps_the_token_out_of_the_url() {
+        // Endereço só deste teste: a tabela de rotas é global e outros testes a mudam.
+        let api = Api::new("http://stream-test.invalid:8765", "fixture-owner").unwrap();
+        let (url, token) = api.media_url("s 1", &Source::Upload("a b.mp4".into())).unwrap();
+        assert_eq!(url, "http://stream-test.invalid:8765/api/sessions/s%201/uploads/a%20b.mp4");
+        assert_eq!(token, "fixture-owner");
+        let (url, _) = api.media_url("s", &Source::Cited("/tmp/v.mov".into())).unwrap();
+        assert_eq!(url, "http://stream-test.invalid:8765/api/sessions/s/file?path=%2Ftmp%2Fv.mov");
+        assert!(!url.contains("fixture-owner"));
+        assert!(api.media_url("s", &Source::Transcript("x".into(), 0)).is_none());
+    }
 
     #[test]
     fn page_url_keeps_path_and_ticket_over_the_route_to_the_server() {

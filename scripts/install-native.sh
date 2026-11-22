@@ -2,7 +2,8 @@
 # Instala o app nativo do Hangar (desktop-native) da release `native-latest`, no pacote do sistema e
 # do processador desta máquina, conferido pelo sha256 do manifesto antes de tocar em qualquer coisa.
 # Máquina sem build na release sai 0 com aviso: fica a interface no navegador (ou o Electron de quem já o tinha).
-# No Linux também garante o Chromium do navegador do painel (scripts/install-chromium.sh).
+# No Linux também garante o Chromium do navegador do painel (scripts/install-chromium.sh), e nos dois a libmpv do
+# player de vídeo (scripts/install-libmpv.sh).
 # Uso: scripts/install-native.sh [--forcar]   (sem --forcar, pula quando a versão instalada já é a da release)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -32,6 +33,8 @@ fi
 # O navegador do painel lateral é um Chromium sem janela: sem ele o app funciona, só sem a linha "Navegador".
 # Por isso nunca para a instalação, e roda antes da checagem de versão para valer também em quem já está em dia.
 case "$PACOTE" in *linux*) ./scripts/install-chromium.sh || true ;; esac
+# A libmpv do player de vídeo: sem ela o vídeo abre no player do sistema. Mesmo motivo para vir antes da versão.
+./scripts/install-libmpv.sh || true
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 baixa() { curl -fsSL --retry 2 --connect-timeout 15 -o "$2" "$1"; }

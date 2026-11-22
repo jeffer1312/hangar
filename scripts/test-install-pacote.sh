@@ -217,6 +217,7 @@ native_box() {
   mkdir -p "$N/scripts" "$N/backend" "$H" "$NREL/pkg"
   cp "$REPO/scripts/install-native.sh" "$N/scripts/"
   printf '#!/bin/sh\nexit 0\n' > "$N/scripts/install-chromium.sh"; chmod +x "$N/scripts/install-chromium.sh"
+  printf '#!/bin/sh\nexit 0\n' > "$N/scripts/install-libmpv.sh"; chmod +x "$N/scripts/install-libmpv.sh"
   printf '#!/bin/sh\nmkdir -p "$HOME/.local/bin" && printf "#!/bin/sh\\n" > "$HOME/.local/bin/hangar-native" && chmod +x "$HOME/.local/bin/hangar-native"\n' > "$NREL/pkg/install-linux.sh"
   chmod +x "$NREL/pkg/install-linux.sh"
   tar -czf "$NREL/Hangar-linux-x86_64.tar.gz" -C "$NREL/pkg" install-linux.sh
