@@ -12,7 +12,7 @@ use super::protocol::RuntimeError;
 use super::terminal::TerminalTarget;
 use crate::list::procs::{ProcessView,SystemProcs};
 use crate::session_open::claude::ClaudeContext;
-use crate::session_open::terminal::{PaneSpec,TerminalEnv};
+use crate::session_open::terminal::{Mux, MuxOutput, PaneSpec, TerminalEnv};
 use crate::session_open::{Account,ChangeReason,PermissionMode,SessionChange,SessionSpec,Surface};
 use serde_json::{Value,json};
 use std::path::PathBuf;
@@ -134,6 +134,19 @@ fn tree(root:i64) -> Result<Vec<(i64,f64)>,RuntimeError> {
     let procs=SystemProcs::default();
     let children=procs.children(Duration::ZERO).map_err(|_|refused("lifecycle_process_read","os processos da máquina não puderam ser lidos"))?;
     Ok(crate::list::discover::descendants(root,&children).into_iter().filter_map(|pid|procs.start_time(pid).map(|birth|(pid,birth))).collect())
+}
+
+fn cleanup_uncertain(detail: &str) -> RuntimeError {
+    refused(NEW_ALIVE, &format!("{detail}; nada foi reaberto por cima do Claude sem confirmar a saída"))
+}
+
+fn failed_terminal_pid(output: &MuxOutput) -> Result<Option<i64>, RuntimeError> {
+    match output.code {
+        Some(0) => output.stdout.trim().parse::<i64>().ok().filter(|pid| *pid > 0).map(Some)
+            .ok_or_else(|| cleanup_uncertain("o multiplexador não informou o processo do terminal")),
+        Some(1) if crate::list::mux::is_absence(&output.stderr) => Ok(None),
+        _ => Err(cleanup_uncertain("o multiplexador não confirmou se o terminal saiu")),
+    }
 }
 
 async fn wait_gone(lives:Vec<(i64,f64)>,limit:Duration) -> Result<(),RuntimeError> {
@@ -1394,19 +1407,25 @@ impl RuntimeRegistry {
         if let Some((target,_))=self.claude_terminal_entry(name).await {let _=self.close_claude_entry(&target.key,target.generation).await;}
         let watcher=self.watcher_ref().ok_or_else(||refused(NEW_ALIVE,"sem a vigia do terminal para fechar a tentativa"))?;
         let session=crate::session_open::terminal::target(cfg!(windows),name);
-        let lives=match watcher.mux_text(&["display-message","-p","-t",&session,"#{pane_pid}"]).await.and_then(|pid|pid.trim().parse::<i64>().ok()) {
-            Some(pid)=>tree(pid)?,
-            None=>Vec::new(),
-        };
-        let _=watcher.mux_text(&["kill-session","-t",&session]).await;
-        wait_gone(lives,EXIT_WAIT).await.map_err(|_|refused(NEW_ALIVE,"o Claude novo não saiu; a sessão não volta por cima dele para não haver dois na mesma conversa"))
+        let mux = watcher.spawn_mux();
+        let program = watcher.mux_program();
+        let pane = mux.run(vec![program.clone(), "display-message".into(), "-p".into(), "-t".into(), session.clone(), "#{pane_pid}".into()]).await;
+        let Some(pid) = failed_terminal_pid(&pane)? else { return Ok(()); };
+        let lives = tree(pid).map_err(|error| cleanup_uncertain(&error.message))?;
+        let killed = mux.run(vec![program, "kill-session".into(), "-t".into(), session]).await;
+        if killed.code != Some(0) && !(killed.code == Some(1) && crate::list::mux::is_absence(&killed.stderr)) {
+            return Err(cleanup_uncertain("o multiplexador não confirmou o fechamento do terminal"));
+        }
+        wait_gone(lives,EXIT_WAIT).await.map_err(|error| cleanup_uncertain(&error.message))
     }
 
     async fn drop_failed_headless(&self,name:&str,key:&str) -> Result<(),RuntimeError> {
         if let Some((generation,_))=self.claude_headless_view(name).await {let _=self.close_claude_entry(key,generation).await;}
-        let Ok(Some(meta))=self.claude_sidecar(name).await else {return Ok(())};
-        let Some(cano)=meta.get("cano").filter(|c|c.is_object()).and_then(|c|serde_json::from_value::<super::process::Cano>(c.clone()).ok()) else {return Ok(())};
-        let lives=tree(i64::from(cano.pid))?;
+        let meta = self.claude_sidecar(name).await.map_err(|error| cleanup_uncertain(&error.message))?;
+        let Some(cano) = meta.as_ref().and_then(|meta| meta.get("cano")).filter(|cano| !cano.is_null()) else { return Ok(()); };
+        let cano = serde_json::from_value::<super::process::Cano>(cano.clone())
+            .map_err(|_| cleanup_uncertain("o processo do Claude sem terminal não pôde ser identificado"))?;
+        let lives = tree(i64::from(cano.pid)).map_err(|error| cleanup_uncertain(&error.message))?;
         if let Err(error)=super::process::kill(&cano,key,&self.claude_sidecars()).await {
             tracing::warn!(session=%name,code=error.code(),"cano da reabertura que falhou não foi encerrado");
         }
@@ -1488,6 +1507,18 @@ impl RuntimeRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_terminal_cleanup_requires_proof_of_absence() {
+        let absent = MuxOutput { code: Some(1), stderr: "no server running on /tmp/tmux-test/default".into(), ..Default::default() };
+        assert!(failed_terminal_pid(&absent).unwrap().is_none());
+        let pane = MuxOutput { code: Some(0), stdout: "1234\n".into(), ..Default::default() };
+        assert_eq!(failed_terminal_pid(&pane).unwrap(), Some(1234));
+        for output in [MuxOutput::default(), MuxOutput { code: Some(1), stderr: "unknown command".into(), ..Default::default() },
+            MuxOutput { code: Some(0), ..Default::default() }] {
+            assert_eq!(failed_terminal_pid(&output).unwrap_err().code, NEW_ALIVE);
+        }
+    }
 
     /// Sessão adotada do terminal (`terminal_<hex>`) não tem registro: a troca de conta segue sem marca;
     /// a do lançador fica marcada até a vida nova ser gravada.
