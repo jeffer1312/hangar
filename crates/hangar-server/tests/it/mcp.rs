@@ -36,6 +36,11 @@ async fn scene_built(groups: bool, peers: Option<hangar_server::groups::peers::P
 }
 
 async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>, owned: bool, server: &str) -> Scene {
+    scene_shared(groups, peers, owned, server, false).await
+}
+
+/// `share`: a loja de convites e de pares externos em `shares.json` e `.hangar-pair` da cena.
+async fn scene_shared(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>, owned: bool, server: &str, share: bool) -> Scene {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     list_support::sessions(root, 2);
@@ -68,6 +73,12 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
     state.chromium = || None;
     state.mission = Arc::new(hangar_mission::Store::new(root.join("mission")));
     state.origins_home = home.clone();
+    // Sem isto o WhatsApp nasceria na pasta pessoal de quem roda o teste e falaria com o serviço de verdade.
+    assert!(state.whatsapp.set(hangar_whatsapp::WhatsApp::new(&home)).is_ok());
+    if share {
+        state.share = Some(crate::share_pair_routes::share_state(&root.join("shares.json"), &home.join(".claude/.hangar-pair"),
+            Arc::new(Mutex::new(1_000.0))));
+    }
     if let Some(peers) = peers { state.peers = Arc::new(peers); }
     if groups {
         use hangar_server::groups::{orq::OrqVault, service::GroupService, store::PairDir};
@@ -190,7 +201,8 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
     let names = |tools: &[Value]| tools.iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
     let known = names(&python);
     let all = names(listed.as_array().unwrap());
-    for tool in ["request_secret", "vault_list", "vault_exec", "vault_file", "vault_fill"] {
+    for tool in ["request_secret", "vault_list", "vault_exec", "vault_file", "vault_fill", "mission",
+                 "whatsapp_chats", "whatsapp_read", "whatsapp_search", "whatsapp_request_media"] {
         assert!(all.iter().any(|n| n == tool), "falta {tool} no catálogo");
     }
     let listed: Vec<Value> = listed.as_array().unwrap().iter()
@@ -827,4 +839,41 @@ async fn whoami_w09_a_guest_learns_only_the_sessions_it_reaches() {
     assert_eq!(whoami_as_guest(&s, &[("s1", Kind::Share)], "zeta").await, unknown(hint), "inexistente: a mesma resposta");
     assert_eq!(whoami_as_guest(&s, &[("s0", Kind::Share)], "s0").await, found("s0", "nome"));
     assert_eq!(whoami_as_guest(&s, &[("s0", Kind::Pair)], "s0").await, found("s0", "nome"), "o par lê");
+}
+
+/// Com o serviço desligado, a rota responde `whatsapp_off` e a tool devolve o código e a frase dela.
+#[tokio::test(flavor = "multi_thread")]
+async fn whatsapp_tools_return_the_route_error_with_its_code() {
+    let s = scene().await;
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    for (tool, args) in [("whatsapp_chats", json!({})), ("whatsapp_read", json!({"chat": "c@s.whatsapp.net"})),
+                         ("whatsapp_search", json!({"query": "oi"})), ("whatsapp_request_media", json!({"chat": "c@s.whatsapp.net"}))] {
+        let result = mcp.call(tool, args).await;
+        let text = first_text(&result);
+        assert!(failed(&result) && text.starts_with("whatsapp_off:") && text.contains("Configurações > WhatsApp"), "{tool}: {result}");
+    }
+}
+
+/// Convite de convidado vivo na sessão, ou par de fora no grupo dela: recusa antes da rota. A sessão sem
+/// nada disso passa e chega à rota (aqui, `whatsapp_off`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shared_session_does_not_read_whatsapp() {
+    let s = scene_shared(true, None, false, "", true).await;
+    let share = s.state.share.clone().unwrap();
+    share.store.create("s0", None, hangar_server::share::store::Kind::Share, false).unwrap();
+    let mut invited = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    let result = invited.call("whatsapp_read", json!({"chat": "c@s.whatsapp.net"})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_shared_session:"), "{result}");
+
+    share.pairs.add(hangar_server::share::pairs::ExternalPair { share_id: "sh1".into(), local_session: "outra".into(),
+        alias: "ana".into(), peer_owner: "Ana".into(), peer_session: "dela".into(), peer_address: "https://ana.tail.ts.net:8443".into(),
+        peer_token: "t".repeat(24), created_at: 1.0 }).unwrap();
+    write_json(&s.home.join(".claude/.hangar-pair/sem-term.json"), json!({"peers": ["ana::dela"], "task": "", "gid": "g1", "harness": {}}));
+    let mut grouped = Mcp::open(s.addr, &[("x-hangar-key", "k123")]).await;
+    let result = grouped.call("whatsapp_chats", json!({})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_shared_session:"), "par de fora no grupo: {result}");
+
+    std::fs::remove_file(s.home.join(".claude/.hangar-pair/sem-term.json")).unwrap();
+    let result = grouped.call("whatsapp_chats", json!({})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_off:"), "sem convidado nem par, a rota responde: {result}");
 }
