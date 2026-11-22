@@ -682,6 +682,10 @@ fn is_git_name(name: &std::ffi::OsStr) -> bool {
 /// fora. A pasta de cima é a que passa pelas guardas da leitura; a raiz da sessão nunca é alvo.
 fn own_entry(cwd: &Path, path: &str) -> Result<PathBuf> {
     path_syntax(path)?;
+    // `.git::$INDEX_ALLOCATION` abre o próprio `.git`, e `NUL` um dispositivo.
+    if cfg!(windows) && Path::new(path).components().any(|c| c.as_os_str().to_str().is_none_or(windows_reserved)) {
+        return Err(file_error(400, "erro_arq_caminho_invalido", "caminho inválido"));
+    }
     let joined = cwd.join(path);
     let name = joined.file_name().filter(|n| *n != "." && *n != "..")
         .ok_or_else(|| file_error(400, "erro_arq_caminho_invalido", "caminho inválido"))?;
@@ -707,15 +711,21 @@ fn own_entry(cwd: &Path, path: &str) -> Result<PathBuf> {
         return Err(file_error(404, "erro_arq_inexistente", "caminho não existe"));
     }
     // A pasta de cima já veio com nomes longos; falta o do item. Sem conseguir lê-lo, recusa.
-    if cfg!(windows) && long_name(&entry).is_none_or(|long| long.file_name().is_none_or(is_git_name)) {
-        return Err(git_area());
+    if cfg!(windows) {
+        let long = long_name(&entry).map_err(|e| {
+            tracing::warn!(tipo = ?e.kind(), os = ?e.raw_os_error(), "nome longo do item ilegível");
+            io_error(e, "erro_arq_escrita_falhou")
+        })?;
+        if long.file_name().is_none_or(is_git_name) {
+            return Err(git_area());
+        }
     }
     Ok(entry)
 }
 
 /// O nome que o disco guarda para o caminho, sem seguir o link do fim.
 #[cfg(windows)]
-fn long_name(path: &Path) -> Option<PathBuf> {
+fn long_name(path: &Path) -> std::io::Result<PathBuf> {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
     let mut buffer = vec![0u16; 1024];
@@ -725,18 +735,18 @@ fn long_name(path: &Path) -> Option<PathBuf> {
             windows_sys::Win32::Storage::FileSystem::GetLongPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32)
         } as usize;
         if n == 0 {
-            return None;
+            return Err(std::io::Error::last_os_error());
         }
         if n < buffer.len() {
-            return Some(PathBuf::from(std::ffi::OsString::from_wide(&buffer[..n])));
+            return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer[..n])));
         }
         buffer.resize(n, 0);
     }
 }
 
 #[cfg(not(windows))]
-fn long_name(_: &Path) -> Option<PathBuf> {
-    None
+fn long_name(path: &Path) -> std::io::Result<PathBuf> {
+    Ok(path.to_path_buf())
 }
 
 fn exists_error(e: std::io::Error) -> WorkspaceError {
@@ -799,6 +809,7 @@ fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     let error = std::io::Error::last_os_error();
     // Sistema de arquivos sem a troca exclusiva.
     if matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)) {
+        tracing::warn!(os = ?error.raw_os_error(), "renameat2 sem RENAME_NOREPLACE: troca conferida antes, sem garantia contra corrida");
         return rename_checked(from, to);
     }
     Err(error)
@@ -847,7 +858,13 @@ fn rename_checked(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// O tipo do erro da lixeira, sem o caminho que a mensagem dele carrega.
 fn trash_kind(error: &trash::Error) -> String {
-    format!("{error:?}").chars().take_while(char::is_ascii_alphanumeric).collect()
+    let kind: String = format!("{error:?}").chars().take_while(char::is_ascii_alphanumeric).collect();
+    match error {
+        trash::Error::Os { code, .. } => format!("{kind} os={code}"),
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        trash::Error::FileSystem { source, .. } => format!("{kind} {:?} os={:?}", source.kind(), source.raw_os_error()),
+        _ => kind,
+    }
 }
 
 /// Manda para a lixeira do sistema da máquina da sessão; nunca apaga de vez.
@@ -996,6 +1013,7 @@ mod tests {
         assert_ne!(short, ".git", "o volume da pasta temporária não gera nomes 8.3: o teste não prova nada aqui");
         assert_eq!(super::trash(&cwd, &short).unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
         assert_eq!(super::rename(&cwd, &short, "x").unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
+        assert_eq!(super::trash(&cwd, ".git::$INDEX_ALLOCATION").unwrap_err().code.as_deref(), Some("erro_arq_caminho_invalido"));
         assert!(cwd.join(".git").is_dir());
     }
 

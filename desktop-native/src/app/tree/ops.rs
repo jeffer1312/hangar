@@ -64,7 +64,7 @@ fn move_expanded(expanded: &mut HashSet<String>, old: &str, new: &str) -> Vec<St
 }
 
 /// Nome do item, para títulos e confirmações.
-fn base(path: &str) -> &str { path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path) }
+fn base(path: &str) -> &str { path.trim_end_matches('/').rsplit('/').next().unwrap_or(path) }
 
 impl Hangar {
     /// Escrever pelo servidor pede sessão com escrita (o convidado só de leitura não tem).
@@ -233,7 +233,9 @@ impl Hangar {
     pub(super) fn tree_root_label(&self) -> String {
         let path = self.tree.custom_root(&self.tree.owner).map(|p| p.to_string_lossy().into_owned())
             .or_else(|| self.selected.as_ref().and_then(|s| s.cwd.clone())).unwrap_or_default();
-        base(&path).to_owned()
+        // A pasta pode ser de uma máquina Windows; nos caminhos da árvore `\` é parte do nome.
+        let trimmed = path.trim_end_matches(['/', '\\']);
+        trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed).to_owned()
     }
 }
 
