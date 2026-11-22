@@ -56,7 +56,9 @@ jobs:
       contents: write
       actions: write
     with:
-      branch: ${{ github.head_ref }}
+      # Nunca o nome da branch: um PR da beta para a main passaria `beta` e ligaria a publicação do server-jobs.yml
+      # (e a concorrência dos runs de push dela).
+      branch: pr-${{ github.event.pull_request.number }}
       sistemas: >-
         [
           {"os": "ubuntu-latest", "platform": "linux-x86_64", "exe": "", "target": "x86_64-unknown-linux-gnu",

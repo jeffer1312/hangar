@@ -1559,3 +1559,10 @@ está no CI) não exercitam a atualização nem a criação de sessão.
   `hangar-api` e `hangar-workspace`, mas o desktop também depende de `hangar-local-server` e
   `hangar-video`: mudança neles não rodava o `Native`. O `gate-areas.py` segue os `path` dos
   `Cargo.toml` (inclusive os `workspace = true`), e o filtro do `native.yml` ganhou os dois.
+- **Área é também o que o teste lê.** Os testes do servidor leem `scripts/`, `docs/atualizacoes/`,
+  fixtures de `packages/core/src/` e `messages/`; os do desktop, `docs/novidades/`, `docs/manual/`
+  e as mesmas fixtures. Essas pastas acionam a parte delas no portão. O filtro do `server.yml` não
+  as ganhou: o `package.yml` usa aquele filtro para decidir se reaproveita os binários da release.
+- **Branch passada ao `server-jobs.yml` é `pr-<número>`, nunca a do PR.** Um PR da `beta` para a
+  `main` passaria `beta`, que liga a publicação da `server-beta` e cai na concorrência dos runs de
+  push dela.

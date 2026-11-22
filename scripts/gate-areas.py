@@ -15,10 +15,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # Mudou o próprio portão: tudo roda, senão um portão quebrado passaria sem ser exercitado.
 GATE = ("scripts/gate-areas.py", ".github/workflows/gate.yml")
 
-SERVER = ("crates/", "backend/tests/fixtures/", "plugins/hangar/hooks/",
-          ".github/workflows/server.yml", ".github/workflows/server-jobs.yml")
-NATIVE = ("desktop-native/", "messages/", "VERSION", "crates/Cargo.toml",
-          ".github/workflows/native.yml", ".github/workflows/native-check.yml")
+# Além do código, o que os testes leem do resto do repositório (scripts, passos de atualização, fixtures do core,
+# mensagens, novidades e manual).
+SERVER = ("crates/", "backend/tests/fixtures/", "plugins/hangar/hooks/", "scripts/", "docs/atualizacoes/",
+          "packages/core/src/", "messages/", ".github/workflows/server.yml", ".github/workflows/server-jobs.yml")
+NATIVE = ("desktop-native/", "messages/", "VERSION", "crates/Cargo.toml", "packages/core/src/", "docs/manual/",
+          "docs/novidades/", ".github/workflows/native.yml", ".github/workflows/native-check.yml")
 MOBILE = ("mobile/", "packages/core/", "messages/", "project.inlang/", "scripts/i18n-compile.mjs",
           "package.json", "package-lock.json")
 
