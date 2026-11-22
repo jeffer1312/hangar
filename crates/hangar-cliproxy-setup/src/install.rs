@@ -111,13 +111,13 @@ impl Failure {
 impl From<release::Error> for Failure {
     fn from(e: release::Error) -> Self {
         let detail = format!("{e:?}");
-        Self::new(e.code(), detail)
+        Self::new(release::code(&e), detail)
     }
 }
 
 impl From<service::Error> for Failure {
     fn from(e: service::Error) -> Self {
-        Self::new(e.code(), format!("{}: {}", e.step, e.detail))
+        Self::new(e.code(&release::CODES), format!("{}: {}", e.step, e.detail))
     }
 }
 
@@ -760,7 +760,7 @@ impl Installer {
         if let Some((_, value)) = cached.as_ref().filter(|entry| fresh(entry)) {
             return value.clone();
         }
-        let value = release::latest(github).await.map_err(|e| e.code().to_owned());
+        let value = release::latest(github).await.map_err(|e| release::code(&e).to_owned());
         *cached = Some((Instant::now(), value.clone()));
         value
     }

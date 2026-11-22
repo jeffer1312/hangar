@@ -1637,19 +1637,15 @@ dependencies = [
 name = "hangar-cliproxy-setup"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.1",
- "flate2",
  "hangar-core",
+ "hangar-managed-binary",
  "reqwest",
- "ring",
  "semver",
  "serde-saphyr",
  "serde_json",
- "tar",
  "tempfile",
  "tokio",
  "tracing",
- "zip",
 ]
 
 [[package]]
@@ -1909,6 +1905,22 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "tracing",
+]
+
+[[package]]
+name = "hangar-managed-binary"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "flate2",
+ "hangar-core",
+ "reqwest",
+ "ring",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "tokio",
+ "zip",
 ]
 
 [[package]]

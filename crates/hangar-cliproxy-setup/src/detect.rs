@@ -113,7 +113,7 @@ pub fn state(paths: &Paths, path_var: Option<&std::ffi::OsStr>, units: &[PathBuf
     if let Some((tag, binary)) = managed(paths) {
         return Install::Managed { tag, binary };
     }
-    let binary = path_var.and_then(|var| on_path(var, crate::release::Platform::local().binary()));
+    let binary = path_var.and_then(|var| on_path(var, &crate::release::BINARY.program_file(crate::release::Platform::local())));
     let unit = units.iter().find(|p| p.is_file()).cloned();
     if binary.is_some() || unit.is_some() {
         return Install::External { binary, unit };
@@ -240,7 +240,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let bin = home.path().join("usr-bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let program = bin.join(crate::release::Platform::local().binary());
+        let program = bin.join(crate::release::BINARY.program_file(crate::release::Platform::local()));
         std::fs::write(&program, b"x").unwrap();
         let var = std::env::join_paths([bin]).unwrap();
         assert!(matches!(state(&Paths::new(home.path()), Some(&var), &[]), Install::External { binary: Some(p), .. } if p == program));
