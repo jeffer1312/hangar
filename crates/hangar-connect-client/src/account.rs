@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::client::{ConnectClient, filled, segment};
+use crate::client::{CONNECT_DOMAIN, ConnectClient, filled, segment};
 use crate::error::{Code, Error, fail, fail_with};
 use crate::sync_login::VaultServer;
 use crate::transport::{Method, Transport};
@@ -115,7 +115,7 @@ impl<T: Transport> ConnectClient<T> {
             Some("guest") => {
                 let hosts = answer.get("hosts").and_then(Value::as_array)
                     .and_then(|hosts| hosts.iter()
-                        .map(|host| host.as_str().filter(|host| valid_hostname(host)).map(str::to_owned))
+                        .map(|host| host.as_str().filter(|host| valid_hostname(host) && in_connect_domain(host)).map(str::to_owned))
                         .collect::<Option<Vec<_>>>())
                     .filter(|hosts| !hosts.is_empty());
                 hosts.map(|hosts| NameLookup::Guest { hosts }).ok_or_else(|| fail(Code::ConnectResponseInvalid))
@@ -330,6 +330,11 @@ pub(crate) fn auth(session: &AccountSession) -> Vec<(&'static str, String)> {
         headers.push(("X-Hangar-Device-Secret", device.secret.clone()));
     }
     headers
+}
+
+/// A senha da convidada vai às máquinas indicadas: só as abaixo do domínio do Connect, nunca um host qualquer.
+fn in_connect_domain(host: &str) -> bool {
+    host.strip_suffix(CONNECT_DOMAIN).is_some_and(|rest| rest.len() > 1 && rest.ends_with('.'))
 }
 
 fn valid_hostname(host: &str) -> bool {

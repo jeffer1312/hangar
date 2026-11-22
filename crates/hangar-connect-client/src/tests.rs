@@ -133,6 +133,18 @@ async fn lookup_refuses_hosts_out_of_shape_and_no_answer_is_network() {
 }
 
 #[tokio::test]
+async fn hosts_outside_the_connect_domain_are_refused_before_the_password_leaves() {
+    for bad in ["casa.outro.com", "hangar.dev.br", "casahangar.dev.br", "casa.hangar.dev.br.outro.com"] {
+        let client = guests(vec![(bad, Machine { password: PASSWORD, ..Machine::default() })], None);
+        assert_eq!(code(client.sign_in_anywhere(SERVICE, "lhais@casa", PASSWORD).await), Code::ConnectResponseInvalid, "{bad}");
+        assert_eq!(client.transport.routes(), ["POST connect.hangar.dev.br/v1/lookup"], "{bad}");
+    }
+    // Um host de fora invalida a resposta inteira, mesmo junto de um do domínio.
+    let mixed = client(|_| json(200, json!({"kind": "guest", "hosts": ["casa.ana.hangar.dev.br", "casa.outro.com"]})));
+    assert_eq!(code(mixed.lookup_name(SERVICE, "ana").await), Code::ConnectResponseInvalid);
+}
+
+#[tokio::test]
 async fn http_service_outside_loopback_is_refused_before_any_request() {
     let client = client(|_| json(200, json!({"token": "t"})));
     assert_eq!(code(client.sign_in("http://connect.hangar.dev.br", "acme", "senha").await), Code::ConnectServiceInsecure);

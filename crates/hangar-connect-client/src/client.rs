@@ -10,6 +10,9 @@ use crate::transport::{Method, Request, Transport};
 
 pub const CONNECT_SERVICE_URL: &str = "https://connect.hangar.dev.br";
 
+/// O domínio do Connect: toda máquina que o serviço indica mora abaixo dele.
+pub(crate) const CONNECT_DOMAIN: &str = "hangar.dev.br";
+
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Conta do Connect, liberação do aparelho, entrada nas máquinas e login do convidado, sem servidor local.
@@ -18,11 +21,23 @@ pub struct ConnectClient<T> {
     pub(crate) timeout: Duration,
     /// PBKDF2 de 600 mil voltas: as provas trocam por uma conta barata.
     pub(crate) derive: fn(&str, &[u8], u32) -> Keys,
+    /// Falha de fundo que não muda o resultado, como a saída do login do convidado: leva só o código.
+    pub(crate) warn: fn(&str),
+}
+
+fn tracing_warn(line: &str) {
+    tracing::warn!("{line}");
 }
 
 impl<T: Transport> ConnectClient<T> {
     pub fn new(transport: T) -> Self {
-        Self { transport, timeout: REQUEST_TIMEOUT, derive: derive_keys }
+        Self { transport, timeout: REQUEST_TIMEOUT, derive: derive_keys, warn: tracing_warn }
+    }
+
+    /// Para onde vão as falhas de fundo (padrão: `tracing::warn!`); o app nativo não tem assinante do `tracing`.
+    pub fn on_warning(mut self, warn: fn(&str)) -> Self {
+        self.warn = warn;
+        self
     }
 
     /// Prazo de cada pedido ao serviço e às máquinas (padrão 15 s). O login do convidado tem o dele.

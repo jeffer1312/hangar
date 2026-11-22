@@ -55,7 +55,10 @@ impl<T: Transport> ConnectClient<T> {
             .find(|pair| pair.trim_start().starts_with("cp_sync=")).map(|pair| pair.trim().to_owned());
         let read = self.sync_request(&hub, Method::Get, "/api/sync/vault", None, cookie.as_deref()).await;
         // Sai mesmo com a leitura falhando: a sessão não fica aberta à toa.
-        let _ = self.sync_request(&hub, Method::Post, "/api/sync/logout", None, cookie.as_deref()).await;
+        let logout = self.sync_request(&hub, Method::Post, "/api/sync/logout", None, cookie.as_deref()).await;
+        if let Some(code) = logout_failure(&logout) {
+            (self.warn)(&format!("connect: saída do login do convidado não confirmada codigo={code}"));
+        }
         let read = read?;
         if !(200..300).contains(&read.status) {
             return Err(fail_with(Code::SyncRequestFailed, read.status));
@@ -80,6 +83,15 @@ impl<T: Transport> ConnectClient<T> {
             return Err(Error::network("redirecionamento recusado"));
         }
         Ok(response)
+    }
+}
+
+/// O código da saída que falhou (o do erro, ou o status recusado); `None` quando saiu.
+fn logout_failure(logout: &Result<Response, Error>) -> Option<String> {
+    match logout {
+        Ok(response) if (200..300).contains(&response.status) => None,
+        Ok(response) => Some(format!("{} status={}", Code::SyncRequestFailed.as_str(), response.status)),
+        Err(error) => Some(error.code().as_str().to_owned()),
     }
 }
 
