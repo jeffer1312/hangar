@@ -126,8 +126,10 @@ impl Paths {
     /// (`CLAUDE_CONFIG_DIR` apontando para o HOME).
     pub fn config_files(&self) -> Vec<PathBuf> {
         let main = self.main_file();
-        let same = |path: &Path| path == main || path.canonicalize().ok().is_some_and(|p| main.canonicalize().ok() == Some(p));
-        let accounts: Vec<PathBuf> = self.accounts.iter().map(|dir| dir.join(".claude.json")).filter(|p| p.is_file() && !same(p)).collect();
+        let main_real = main.canonicalize().ok();
+        let accounts: Vec<PathBuf> = self.accounts.iter().map(|dir| dir.join(".claude.json"))
+            .filter(|p| p.is_file() && (main_real.is_none() || p.canonicalize().ok() != main_real))
+            .collect();
         std::iter::once(main).chain(accounts).collect()
     }
 }

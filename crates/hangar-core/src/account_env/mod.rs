@@ -167,7 +167,9 @@ pub const CLAUDE_ACCOUNT_MARKER: &str = ".hangar-conta";
 pub fn default_claude_json(home: &Path, config_dir: Option<&str>) -> PathBuf {
     let main = home.join(".claude.json");
     let Some(dir) = config_dir.filter(|dir| !dir.is_empty()).map(|dir| expand(dir, home)) else { return main };
-    if dir.join(CLAUDE_ACCOUNT_MARKER).is_file() { main } else { dir.join(".claude.json") }
+    // Marcador que é link ou pasta não faz conta, como no catálogo (`storage::real_file`).
+    let marked = std::fs::symlink_metadata(dir.join(CLAUDE_ACCOUNT_MARKER)).is_ok_and(|m| m.is_file());
+    if marked { main } else { dir.join(".claude.json") }
 }
 
 pub fn expand(value: &str, home: &Path) -> PathBuf {

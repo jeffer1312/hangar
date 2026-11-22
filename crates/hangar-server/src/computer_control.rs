@@ -163,10 +163,11 @@ pub(crate) fn account_paths(accounts: &crate::accounts::AccountService) -> Resul
         .filter(|account| resolved(account) != default)
         .collect();
     let read_by_default = accounts.env.default_claude_json();
-    if let Some(dir) = read_by_default.parent().filter(|_| read_by_default != home.join(".claude.json"))
-        && !homes.iter().any(|account| resolved(account) == resolved(dir))
-    {
-        homes.push(dir.to_owned());
+    if let Some(dir) = read_by_default.parent().filter(|_| read_by_default != home.join(".claude.json")) {
+        let dir_real = resolved(dir);
+        if !homes.iter().any(|account| resolved(account) == dir_real) {
+            homes.push(dir.to_owned());
+        }
     }
     Ok(setup::Paths::new(home.clone(), homes))
 }
