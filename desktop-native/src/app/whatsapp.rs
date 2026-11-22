@@ -706,7 +706,7 @@ fn step_row(id: &str, label: String, phase: Step) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{code_of, failed_job, grouped, parse_state, phone_digits, should_poll, step_index, view_of, View};
+    use super::{code_of, code_text, failed_job, grouped, parse_state, phone_digits, should_poll, step_index, view_of, View};
     use core::prelude::v1::test;
     use serde_json::json;
 
@@ -793,5 +793,22 @@ mod tests {
         assert_eq!(grouped(4195, false), "4.195");
         assert_eq!(grouped(76501, true), "76,501");
         assert_eq!(grouped(1234567, false), "1.234.567");
+    }
+
+    #[test]
+    fn every_refusal_the_server_sends_has_its_own_phrase() {
+        let codes = ["accept_required", "busy", "off", "untrusted", "wipe_partial", "wipe_failed", "service_starting",
+            "not_installed", "unreachable", "accept_write_failed", "not_paired", "outdated", "remove_failed",
+            "servico_falhou", "bad_reply", "error", "owner_only"];
+        for english in [false, true] {
+            crate::i18n::english_in_this_thread(english);
+            let generic = crate::i18n::tr("whatsapp_err_unknown");
+            let generic = generic.split('(').next().unwrap_or_default();
+            for code in codes {
+                let text = code_text("whatsapp_err_", &format!("whatsapp_{code}"));
+                assert!(!text.starts_with(generic), "{code} (english={english}) caiu na frase genérica: {text}");
+            }
+        }
+        assert_eq!(code_text("whatsapp_err_", "whatsapp_novo"), crate::i18n::tr("whatsapp_err_unknown").replace("{code}", "whatsapp_novo"));
     }
 }

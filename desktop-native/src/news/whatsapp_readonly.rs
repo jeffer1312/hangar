@@ -49,16 +49,22 @@ pub(super) fn render(started: Instant, _width: Pixels, window: &mut Window, cx: 
     let stage = match step {
         0 | 1 => {
             let accepted = step == 1;
-            stage.child(app::whatsapp_risk_box(Checkbox::new("news-whatsapp-accept").checked(accepted).tab_stop(false).label(tr("whatsapp_accept"))))
+            // O aviso inteiro não cabe no quadro: presa ao pé, a cena mostra o fim dos riscos, o aceite e o botão.
+            let form = div().absolute().left_0().right_0().bottom_0().flex().flex_col().gap_3()
+                .child(app::whatsapp_risk_box(Checkbox::new("news-whatsapp-accept").checked(accepted).tab_stop(false).label(tr("whatsapp_accept"))))
                 .child(div().flex().child(Button::new("news-whatsapp-install").primary().small().label(tr("whatsapp_install"))
-                    .disabled(!accepted).tab_stop(false)))
+                    .disabled(!accepted).tab_stop(false)));
+            stage.child(div().relative().flex_1().min_h_0().child(form))
         }
+        // A coluna dos passos é mais estreita que na página: o rótulo menor cabe, e se ainda faltar espaço encolhe com reticências.
         2 => stage.child(app::whatsapp_pair_card().child(app::whatsapp_qr_row(Some(QR.with(Arc::clone)),
-            Button::new("news-whatsapp-by-phone").ghost().small().label(tr("whatsapp_pair_by_phone")).tab_stop(false)))),
+            Button::new("news-whatsapp-by-phone").ghost().xsmall().label(tr("whatsapp_pair_by_phone")).tab_stop(false)
+                .flex_shrink(1.).min_w_0().max_w_full()))),
+        // O resumo não encolhe (senão a caixa corta os totais); quem cede altura é a caixa do uso, que se corta por dentro.
         _ => stage.child(app::whatsapp_connected_summary(app::WhatsAppConnected {
             device: Some(DEVICE), device_name: Some("Hangar"), last_seconds: Some(120.), since: Some("2025-06-01T12:00:00Z"),
             messages: 4195, chats: 128, groups: 23, media_saved: 566,
-        })).child(app::whatsapp_usage_box()),
+        }).flex_shrink_0()).child(app::whatsapp_usage_box().min_h_0()),
     };
     stage.into_any_element()
 }

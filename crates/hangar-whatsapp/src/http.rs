@@ -145,7 +145,7 @@ async fn overview(wa: &WhatsApp) -> Response {
     let down = if installed { "stopped" } else { "absent" };
     // De pé só com o status assinado. Sem conexão (pid do `control.json` reaproveitado, porta fechada) é
     // parado; algo que responde sem a assinatura continua "running", com o código em `status_error`.
-    let (service, status, status_error) = match wa.client.status().await {
+    let (service, status, status_error) = match wa.client.status_within(crate::client::OVERVIEW_STATUS_TIMEOUT).await {
         Ok(status) => ("running", status, Value::Null),
         Err(CallError::Off(_)) => (down, Value::Null, Value::Null),
         Err(error) => {

@@ -8,6 +8,9 @@ use serde_json::Value;
 use crate::control::{self, Control, ReadError, SIGNATURE_HEADER};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
+/// O resumo da página espera menos que o prazo dos clientes: binário travado aparece como sem resposta,
+/// não como servidor fora do ar.
+pub const OVERVIEW_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 /// O C2 corta em 200 mensagens por página; o teto só impede que uma resposta sem fim encha a memória.
 const MAX_REPLY: usize = 16 << 20;
 
@@ -55,16 +58,20 @@ impl Client {
     /// [`CallError::Off`] sem serviço; [`CallError::Untrusted`] quando a resposta não tem a assinatura
     /// do binário; [`CallError::Transport`] para o resto.
     pub async fn call(&self, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>) -> Result<Reply, CallError> {
+        self.call_within(method, path, query, body, None).await
+    }
+
+    async fn call_within(&self, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>, timeout: Option<Duration>) -> Result<Reply, CallError> {
         let body = body.map(|b| b.to_string().into_bytes()).unwrap_or_default();
         let first = self.control()?;
-        match self.send(&first, &method, path, query, &body).await {
+        match self.send(&first, &method, path, query, &body, timeout).await {
             Err(Attempt::Connect(detail)) => {
                 // O binário pode ter reiniciado noutra porta: relê o `control.json` uma vez.
                 let again = self.control()?;
                 if again == first {
                     return Err(CallError::Off(detail));
                 }
-                self.send(&again, &method, path, query, &body).await.map_err(Attempt::into_error)
+                self.send(&again, &method, path, query, &body, timeout).await.map_err(Attempt::into_error)
             }
             other => other.map_err(Attempt::into_error),
         }
@@ -76,7 +83,20 @@ impl Client {
     ///
     /// Os de [`Client::call`], e [`CallError::Transport`] para outro status ou corpo que não é JSON.
     pub async fn status(&self) -> Result<Value, CallError> {
-        let reply = self.call(reqwest::Method::GET, "/v1/status", &[], None).await?;
+        self.status_with(None).await
+    }
+
+    /// [`Client::status`] com prazo próprio no lugar do [`TIMEOUT`] do cliente.
+    ///
+    /// # Errors
+    ///
+    /// Os de [`Client::status`]; prazo esgotado é [`CallError::Transport`].
+    pub async fn status_within(&self, timeout: Duration) -> Result<Value, CallError> {
+        self.status_with(Some(timeout)).await
+    }
+
+    async fn status_with(&self, timeout: Option<Duration>) -> Result<Value, CallError> {
+        let reply = self.call_within(reqwest::Method::GET, "/v1/status", &[], None, timeout).await?;
         if reply.status != 200 {
             return Err(CallError::Transport(format!("status respondeu {}", reply.status)));
         }
@@ -92,7 +112,7 @@ impl Client {
         }
     }
 
-    async fn send(&self, at: &Control, method: &reqwest::Method, path: &str, query: &[(&str, &str)], body: &[u8]) -> Result<Reply, Attempt> {
+    async fn send(&self, at: &Control, method: &reqwest::Method, path: &str, query: &[(&str, &str)], body: &[u8], timeout: Option<Duration>) -> Result<Reply, Attempt> {
         let key = control::read_key(&self.data).map_err(|e| Attempt::Untrusted(format!("control.key: {e:?}")))?;
         let mut url = reqwest::Url::parse(&format!("http://127.0.0.1:{}{path}", at.port))
             .map_err(|e| Attempt::Transport(format!("endereço: {e}")))?;
@@ -109,6 +129,9 @@ impl Client {
             .header(SIGNATURE_HEADER, control::sign_request(&key, method.as_str(), &uri, ts, body));
         if !body.is_empty() {
             request = request.header("content-type", "application/json").body(body.to_vec());
+        }
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
         }
         let mut response = request.send().await.map_err(|e| {
             if e.is_connect() { Attempt::Connect(e.to_string()) } else { Attempt::Transport(e.to_string()) }

@@ -33,6 +33,19 @@ const ERR: Record<string, () => string> = {
   whatsapp_busy: m.native_whatsapp_err_busy,
   whatsapp_off: m.native_whatsapp_err_off,
   whatsapp_untrusted: m.native_whatsapp_err_untrusted,
+  whatsapp_wipe_partial: m.native_whatsapp_err_wipe_partial,
+  whatsapp_wipe_failed: m.native_whatsapp_err_wipe_failed,
+  whatsapp_service_starting: m.native_whatsapp_err_service_starting,
+  whatsapp_not_installed: m.native_whatsapp_err_not_installed,
+  whatsapp_unreachable: m.native_whatsapp_err_unreachable,
+  whatsapp_accept_write_failed: m.native_whatsapp_err_accept_write_failed,
+  whatsapp_not_paired: m.native_whatsapp_err_not_paired,
+  whatsapp_outdated: m.native_whatsapp_err_outdated,
+  whatsapp_remove_failed: m.native_whatsapp_err_remove_failed,
+  whatsapp_servico_falhou: m.native_whatsapp_err_servico_falhou,
+  whatsapp_bad_reply: m.native_whatsapp_err_bad_reply,
+  whatsapp_error: m.native_whatsapp_err_error,
+  whatsapp_owner_only: m.native_whatsapp_err_owner_only,
 };
 
 const errorCode = (e: unknown) => {

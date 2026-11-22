@@ -272,6 +272,27 @@ async fn the_overview_carries_the_status_and_the_qr() {
     assert!(body["qr_svg"].as_str().unwrap().starts_with("<svg"), "{body}");
 }
 
+/// Binário que aceita a conexão e nunca responde: o resumo sai no prazo dele, antes do prazo dos clientes.
+#[tokio::test]
+async fn a_hung_service_makes_the_overview_unreachable_within_its_own_deadline() {
+    let s = Scene::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    s.write_control(port, std::process::id());
+    let started = std::time::Instant::now();
+    let (status, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    let elapsed = started.elapsed();
+    assert_eq!(status, 200);
+    assert_eq!((&body["service"], &body["status"], &body["status_error"]), (&json!("running"), &Value::Null, &json!("whatsapp_unreachable")));
+    assert!((4..10).contains(&elapsed.as_secs()), "resumo levou {elapsed:?}");
+}
+
 #[tokio::test]
 async fn wipe_goes_to_the_service_when_up_and_to_the_disk_when_stopped() {
     let s = Scene::new();
