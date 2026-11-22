@@ -812,8 +812,8 @@ pub fn state_chip(state: &str, label: String, large: bool) -> AnyElement {
 }
 
 /// Selo do estado no cabeçalho da conversa nova: pílula com borda na cor do estado, o arco do Hangar animado enquanto
-/// roda, o nome do estado em negrito e, rodando, há quanto tempo o turno começou.
-pub fn beta_state_chip(state: &str, label: String, ago: Option<String>) -> AnyElement {
+/// roda, o nome do estado em negrito e, rodando, há quanto tempo (`since`) o turno começou.
+pub fn beta_state_chip(state: &str, label: String, since: Option<Instant>) -> AnyElement {
     let (bg, fg) = theme::pill(state);
     let icon = match state {
         // Parado de propósito: a conversa já anima o trabalho em andamento; aqui basta o ponto e o tempo.
@@ -826,8 +826,46 @@ pub fn beta_state_chip(state: &str, label: String, ago: Option<String>) -> AnyEl
     div().id("header-state").flex_shrink_0().h(px(28.)).px(px(12.)).flex().items_center().gap(px(8.)).rounded_full()
         .bg(bg).border_1().border_color(fg.alpha(0.4)).text_color(fg).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).whitespace_nowrap()
         .children(icon).child(label)
-        .when_some(ago, |el, ago| el.child(div().font_weight(FontWeight::NORMAL).text_color(theme::muted()).child(ago)))
+        .when_some(since, |el, since| el
+            .child(div().font_weight(FontWeight::NORMAL).text_color(theme::muted())
+                .child(crate::i18n::tr("beta_ago").replace("{time}", &format_ago(since.elapsed()))))
+            // Sem a marca animada no selo, nada garante outro desenho da raiz durante um turno longo e calado.
+            .child(div().absolute().size_0().child(AgoTick { key: "header-state-tick".into(), since })))
         .into_any_element()
+}
+
+/// Redesenha a raiz quando o texto de `format_ago` desde `since` muda, sem pintar nada: o tempo fica em quem o
+/// desenha, com a medida e o estilo de lá.
+#[derive(IntoElement)]
+struct AgoTick { key: ElementId, since: Instant }
+
+struct AgoTickView { since: Instant }
+
+impl Render for AgoTickView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
+}
+
+impl RenderOnce for AgoTick {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let since = self.since;
+        let view = keyed_view(self.key, window, cx, |cx| {
+            cx.spawn(async move |view, cx| {
+                let mut shown = format_ago(since.elapsed());
+                loop {
+                    // Confere a cada segundo: o começo do turno pode mudar, e só a troca do texto redesenha.
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    let Ok(text) = view.update(cx, |view: &mut AgoTickView, cx| {
+                        let text = format_ago(view.since.elapsed());
+                        (WINDOW_ACTIVE.get() && text != shown).then(|| { cx.notify(); text })
+                    }) else { break };
+                    if let Some(text) = text { shown = text; }
+                }
+            }).detach();
+            AgoTickView { since }
+        });
+        view.update(cx, |view, _| view.since = since);
+        view
+    }
 }
 
 pub fn meter(pct: f64) -> AnyElement {

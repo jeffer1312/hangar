@@ -132,17 +132,18 @@ pub(crate) fn beta_rename_strip<E: IntoElement>(suggestion: &str, state: Strip, 
     // Um botão do kit: entra no Tab e responde a Enter e Espaço como ao clique; o contorno pontilhado mora no filho.
     let name = edit(Button::new("rename-suggest-edit")
         .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
-        .h_auto().p_0().rounded(px(5.)).disabled(busy)
+        .h_auto().p_0().min_w_0().flex_shrink(1.).rounded(px(5.)).disabled(busy)
         .tooltip(tr("beta_rename_click")).accessibility_label(format!("{}: {suggestion}", tr("beta_rename_edit")))
-        .child(div().flex().items_center().gap(px(4.)).px(px(4.)).rounded(px(5.)).border_1().border_dashed()
+        .child(div().min_w_0().flex().items_center().gap(px(4.)).px(px(4.)).rounded(px(5.)).border_1().border_dashed()
             .border_color(theme::border_strong()).text_color(theme::text())
-            .child(div().font_family(theme::MONO).text_size(px(12.5)).child(suggestion.to_string()))
+            // O nome encolhe e corta com reticências: inteiro, ele cobriria os botões em conversa estreita.
+            .child(div().min_w_0().truncate().font_family(theme::MONO).text_size(px(12.5)).child(suggestion.to_string()))
             .child(chrome::small_icon(IconName::Pencil, 12., theme::faint()))));
     div().id("rename-suggest").py(px(6.)).flex().items_center().gap_2().border_t_1().border_color(theme::border())
         .role(Role::Group).aria_label(title)
         .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.)).text_sm().text_color(theme::muted())
             .child(div().flex_none().child(tr("rename_beta_label")))
-            .child(div().flex_none().child(name))
+            .child(name)
             .when(state.weak, |el| el.child(div().min_w_0().truncate().text_xs().text_color(theme::faint()).child(tr("rename_beta_weak")))))
         .child(again(Button::new("rename-suggest-again").small().ghost().label(tr_shared("rename_suggest_again", &[]))
             .loading(state.again).disabled(busy)))

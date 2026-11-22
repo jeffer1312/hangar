@@ -159,8 +159,7 @@ impl Hangar {
         let counts = CitedKind::CHIPS.map(|k| all.iter().filter(|c| k.matches(c)).count());
         let kinds = counts[1..].iter().filter(|n| **n > 0).count();
         let open = self.tree.cited_open;
-        let limit = if self.tree.cited_more || !query.is_empty() { LONG } else { SHORT };
-        let hidden = rows.len().saturating_sub(limit);
+        let (limit, toggle) = limit_and_toggle(rows.len(), self.tree.cited_more, !query.is_empty());
         let header = div().id("tree-cited-header").h(px(28.)).px(px(14.)).flex().items_center().gap(px(6.)).cursor_pointer()
             .role(Role::Button).aria_expanded(open).aria_label(tr("tree_cited_section"))
             .hover(|el| el.bg(theme::hover()))
@@ -187,8 +186,8 @@ impl Hangar {
             })));
         let none = (open && rows.is_empty() && failed.is_none())
             .then(|| div().pl(px(36.)).pr_4().py_1().text_xs().text_color(theme::muted()).child(activity::web("arq_sem_nome")));
-        let more = (open && (hidden > 0 || (self.tree.cited_more && rows.len() > SHORT && query.is_empty()))).then(|| {
-            let label = if hidden > 0 { tr("tree_more").replace("{n}", &hidden.to_string()) } else { tr("tree_less") };
+        let more = toggle.filter(|_| open).map(|toggle| {
+            let label = match toggle { Toggle::More(n) => tr("tree_more").replace("{n}", &n.to_string()), Toggle::Less => tr("tree_less") };
             div().id("tree-cited-more").h(px(24.)).pl(px(36.)).flex().items_center().text_size(px(12.)).text_color(theme::faint())
                 .cursor_pointer().hover(|el| el.text_color(theme::text()))
                 .on_click(cx.listener(|this, _, _, cx| { this.tree.cited_more = !this.tree.cited_more; this.redraw(Area::Side, cx); }))
@@ -208,9 +207,12 @@ impl Hangar {
     fn cited_row(&self, item: Cited, cx: &mut Context<Self>) -> AnyElement {
         let shown = item.relative.clone().unwrap_or_else(|| abbreviate(&item.real));
         let (folder, name) = shown.rsplit_once('/').map_or((String::new(), shown.clone()), |(f, n)| (f.to_owned(), n.to_owned()));
-        let open = item.relative.clone().unwrap_or(item.raw.clone());
+        // Com outra pasta escolhida no painel, o relativo é dessa pasta, não da sessão: abre pelo caminho inteiro e fica
+        // sem as escritas, como a linha da árvore.
+        let custom = self.tree.custom_root(&self.tree.owner).is_some();
+        let open = item.relative.clone().map_or_else(|| item.raw.clone(), |rel| self.tree.file_path(rel));
         let local = self.tree.source.as_ref().is_some_and(FileSource::is_local);
-        let target = ops::ItemTarget { session: item.relative.clone(), open: open.clone(), disk: local.then(|| PathBuf::from(&item.real)),
+        let target = ops::ItemTarget { session: item.relative.clone().filter(|_| !custom), open: open.clone(), disk: local.then(|| PathBuf::from(&item.real)),
             full: item.real.clone(), dir: false };
         div().h(px(ROW_H)).w_full().px_1().child(div().id(SharedString::from(format!("tree-cited-{}", item.real)))
             .role(Role::ListBoxOption).aria_label(shown.clone())
@@ -225,10 +227,39 @@ impl Hangar {
     }
 }
 
+/// O botão embaixo da lista.
+#[derive(Debug, PartialEq)]
+enum Toggle { More(usize), Less }
+
+/// Quantas linhas mostrar e o botão: "mais N" só nas primeiras e sem busca, porque aberta a lista já está no teto;
+/// aberta, "menos" recolhe. A busca mostra até o teto e não tem botão.
+fn limit_and_toggle(rows: usize, more: bool, searching: bool) -> (usize, Option<Toggle>) {
+    match (searching, more) {
+        (true, _) => (LONG, None),
+        (false, true) => (LONG, (rows > SHORT).then_some(Toggle::Less)),
+        (false, false) => (SHORT, (rows > SHORT).then(|| Toggle::More(rows.min(LONG) - SHORT))),
+    }
+}
+
 /// `/home/<usuário>/x` vira `~/x`, como a pasta mostrada no web.
 fn abbreviate(path: &str) -> String {
     match home_dir().map(|h| h.to_string_lossy().into_owned()) {
         Some(home) if path.starts_with(&format!("{home}/")) => format!("~{}", &path[home.len()..]),
         _ => path.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LONG, SHORT, Toggle, limit_and_toggle};
+
+    #[test]
+    fn the_open_list_offers_less_and_the_search_offers_nothing() {
+        assert_eq!(limit_and_toggle(60, false, false), (SHORT, Some(Toggle::More(LONG - SHORT))));
+        assert_eq!(limit_and_toggle(12, false, false), (SHORT, Some(Toggle::More(12 - SHORT))));
+        assert_eq!(limit_and_toggle(60, true, false), (LONG, Some(Toggle::Less)));
+        assert_eq!(limit_and_toggle(SHORT, false, false), (SHORT, None));
+        assert_eq!(limit_and_toggle(60, false, true), (LONG, None));
+        assert_eq!(limit_and_toggle(60, true, true), (LONG, None));
     }
 }

@@ -8929,10 +8929,9 @@ impl Render for Hangar {
                 .child(div().flex_1())
                 // Sem sessão, o estado da ligação só aparece quando ela não está normal: "Conectado" não diz nada.
                 .when(session_chip || header_state != "connected", |el| el.child(if session_chip && appearance::conversation_beta() {
-                        // Rodando, o tempo do turno vem junto; a raiz redesenha a cada batida da marca, e o minuto vira sozinho.
-                        let ago = (chip_state == "working").then(|| self.turn_start()).flatten()
-                            .map(|since| tr("beta_ago").replace("{time}", &chrome::format_ago(since.elapsed())));
-                        chrome::beta_state_chip(&chip_state, tr(&format!("beta_chip_{chip_state}")), ago)
+                        // Rodando, o tempo do turno vem junto; o próprio selo redesenha a raiz quando o texto vira.
+                        let since = (chip_state == "working").then(|| self.turn_start()).flatten();
+                        chrome::beta_state_chip(&chip_state, tr(&format!("beta_chip_{chip_state}")), since)
                     } else if session_chip { chrome::state_chip(&chip_state, tr(&format!("chip_{chip_state}")), true) }
                     else { div().flex_shrink_0().text_xs().text_color(theme::status(&header_state)).child(tr(&header_state)).into_any_element() }))
                 .when_some(self.render_activity_button(window, cx), |el, button| el.child(button))

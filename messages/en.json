@@ -9727,6 +9727,7 @@
   "native_file_reload_title": "Reload and discard changes?",
   "native_file_reload_body": "The current version on disk will replace your text. Your changes will be lost.",
   "native_tree_search_contents_placeholder": "Search text in files",
+  "native_tree_session_changed": "The session changed while the dialog was open. Nothing was changed.",
   "native_file_other_session_title": "Unsaved files in {session}",
   "native_file_other_session_body": "Return to the session to save your changes, or discard them to open this file.",
   "native_file_discard_open": "Discard and open",

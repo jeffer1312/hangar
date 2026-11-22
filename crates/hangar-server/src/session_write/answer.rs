@@ -151,9 +151,12 @@ pub fn validate(items: &[Item]) -> Result<(), String> {
 }
 
 /// Texto em várias linhas numa linha só, cada quebra (com o branco em volta) virando um espaço.
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     text.split(['\n', '\r']).map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join(" ")
 }
+
+/// Parágrafos com a quebra do Windows (`\r\n`) ou só `\r`: o terminal recusa o `\r`, e o plugin lê `\n`.
+fn unix_lines(text: &str) -> String { text.replace("\r\n", "\n").replace('\r', "\n") }
 
 /// `runtime_terminal._validate_text`: texto de terminal não é branco nem tem caractere de controle.
 fn text_ok(text: &str) -> bool { !text.trim().is_empty() && !text.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\t')) }
@@ -185,8 +188,8 @@ fn validate_control(items: &[Item], request_id: &Value) -> Result<(), String> {
 pub enum Plan {
     /// O controle `answer_questions` com este corpo.
     Control(Value),
-    /// "Conversar sobre isso" sem pergunta segurada: as respostas viram texto.
-    Chat,
+    /// "Conversar sobre isso" sem pergunta segurada: o controle `answer_chat` com este corpo, as respostas viram texto.
+    Chat(Value),
 }
 
 pub fn terminal_plan(body: &Body, expected: &ExpectedInteraction, panel_open: bool) -> Result<Plan, Answer> {
@@ -205,11 +208,11 @@ pub fn terminal_plan(body: &Body, expected: &ExpectedInteraction, panel_open: bo
     // Digitada na pergunta do terminal, a quebra de linha seria um Enter no meio da resposta: as linhas viram uma.
     // Pelo plugin a resposta vai inteira, com os parágrafos.
     let answers: Vec<Item> = body.answers.iter().cloned()
-        .map(|mut a| { if !plugin && a.kind == "text" { a.value = a.value.map(|v| one_line(&v)); } a }).collect();
+        .map(|mut a| { if a.kind == "text" { a.value = a.value.map(|v| if plugin { unix_lines(&v) } else { one_line(&v) }); } a }).collect();
     let mut payload = json!({"answers": answers.iter().map(Item::to_json).collect::<Vec<_>>(), "interaction_id": body.interaction_id});
     if !body.request_id.is_null() { payload["request_id"] = body.request_id.clone(); }
     validate_control(&answers, &body.request_id).map_err(|msg| refused(&msg))?;
-    if !plugin && body.answers.iter().any(|a| a.kind == "chat") { return Ok(Plan::Chat); }
+    if !plugin && body.answers.iter().any(|a| a.kind == "chat") { return Ok(Plan::Chat(payload)); }
     Ok(Plan::Control(payload))
 }
 
@@ -325,11 +328,7 @@ async fn terminal(ctx: &Ctx, body: &Body, expected: &ExpectedInteraction, handle
     match terminal_plan(body, expected, ctx.st.term.is_active(&ctx.name)) {
         Err(refusal) => refusal,
         Ok(Plan::Control(payload)) => control_answer(&handle.control(random_hex(16), "answer_questions".into(), payload).await),
-        Ok(Plan::Chat) => {
-            let mut payload = json!({"answers":body.answers_json(), "interaction_id":body.interaction_id});
-            if !body.request_id.is_null() { payload["request_id"] = body.request_id.clone(); }
-            chat_answer(&handle.control(random_hex(16), "answer_chat".into(), payload).await)
-        }
+        Ok(Plan::Chat(payload)) => chat_answer(&handle.control(random_hex(16), "answer_chat".into(), payload).await),
     }
 }
 

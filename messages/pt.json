@@ -9727,6 +9727,7 @@
   "native_file_reload_title": "Recarregar e descartar alterações?",
   "native_file_reload_body": "A versão atual do disco substituirá seu texto. Suas alterações serão perdidas.",
   "native_tree_search_contents_placeholder": "Buscar texto nos arquivos",
+  "native_tree_session_changed": "A sessão mudou enquanto o diálogo estava aberto. Nada foi alterado.",
   "native_file_other_session_title": "Arquivos não salvos em {session}",
   "native_file_other_session_body": "Volte à sessão para salvar suas alterações, ou descarte-as para abrir este arquivo.",
   "native_file_discard_open": "Descartar e abrir",

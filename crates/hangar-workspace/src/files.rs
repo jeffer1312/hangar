@@ -16,13 +16,7 @@ pub const MAX_ENTRIES: usize = 1000;
 pub const MAX_HITS: usize = 200;
 
 pub fn resolve(cwd: &Path, path: &str) -> Result<PathBuf> {
-    if path.starts_with('-') || path.contains('\0') || Path::new(path).is_absolute() {
-        return Err(file_error(
-            400,
-            "erro_arq_caminho_invalido",
-            "caminho inválido",
-        ));
-    }
+    path_syntax(path)?;
     let root = real(cwd);
     let target = real(&cwd.join(path));
     if !target.starts_with(&root) {
@@ -647,10 +641,21 @@ pub fn scan(root: &str, path: Option<&str>, roots: &[String]) -> Result<Value> {
     });
     Ok(json!({"entries":list,"error":null}))
 }
-/// Nome de um item criado ou renomeado: uma parte só do caminho, nunca `.git`.
+/// Caminho que o cliente manda, antes de juntar à pasta da sessão.
+fn path_syntax(path: &str) -> Result<()> {
+    if path.starts_with('-') || path.contains('\0') || Path::new(path).is_absolute() {
+        return Err(file_error(400, "erro_arq_caminho_invalido", "caminho inválido"));
+    }
+    Ok(())
+}
+
+/// Nome de um item criado ou renomeado: uma parte só do caminho, nunca `.git`. No Windows `C:nome` também tem
+/// prefixo de unidade, e o `join` trocaria a pasta da sessão pela pasta corrente dessa unidade.
 fn entry_name(name: &str) -> Result<&str> {
     let name = name.trim();
-    if name.is_empty() || name == "." || name == ".." || name.eq_ignore_ascii_case(".git") || name.contains(['/', '\\', '\0']) {
+    let mut parts = Path::new(name).components();
+    let single = matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(part)), None) if part == name);
+    if !single || name.eq_ignore_ascii_case(".git") || name.contains(['/', '\\', '\0']) {
         return Err(file_error(400, "erro_arq_nome_invalido", "nome inválido"));
     }
     Ok(name)
@@ -661,15 +666,16 @@ fn session_relative(cwd: &Path, target: &Path) -> String {
     target.strip_prefix(real(cwd)).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default()
 }
 
-/// O item em si, não o destino de um atalho: renomear ou apagar um link mexe no link. A pasta de cima é a que passa
-/// pelas mesmas guardas da leitura; a raiz da sessão nunca é alvo.
+/// O item em si, não o destino de um atalho: renomear ou apagar um link mexe no link, mesmo que ele aponte para
+/// fora. A pasta de cima é a que passa pelas guardas da leitura; a raiz da sessão nunca é alvo.
 fn own_entry(cwd: &Path, path: &str) -> Result<PathBuf> {
-    resolve(cwd, path)?;
+    path_syntax(path)?;
     let joined = cwd.join(path);
     let name = joined.file_name().filter(|n| *n != "." && *n != "..")
         .ok_or_else(|| file_error(400, "erro_arq_caminho_invalido", "caminho inválido"))?;
     let root = real(cwd);
-    if real(&joined) == root {
+    let link = joined.symlink_metadata().is_ok_and(|meta| meta.file_type().is_symlink());
+    if !link && real(&joined) == root {
         return Err(file_error(400, "erro_arq_raiz_da_sessao", "a pasta da sessão não muda por aqui"));
     }
     let parent = real(joined.parent().unwrap_or(cwd));
@@ -682,6 +688,9 @@ fn own_entry(cwd: &Path, path: &str) -> Result<PathBuf> {
     }
     if entry.strip_prefix(&root).is_ok_and(|rest| rest.components().any(|c| c.as_os_str() == ".git")) {
         return Err(file_error(403, "erro_arq_area_do_git", "área interna do git"));
+    }
+    if entry.symlink_metadata().is_err() {
+        return Err(file_error(404, "erro_arq_inexistente", "caminho não existe"));
     }
     Ok(entry)
 }
@@ -702,10 +711,17 @@ pub fn rename(cwd: &Path, path: &str, name: &str) -> Result<Value> {
     if target == source {
         return Ok(json!({"path": session_relative(cwd, &source)}));
     }
-    let same = |a: &Path, b: &Path| a.symlink_metadata().ok().zip(b.symlink_metadata().ok())
-        .is_some_and(|_| real(a) == real(b) && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase());
-    if target.symlink_metadata().is_ok() && !same(&source, &target) {
-        return Err(file_error(409, "erro_arq_ja_existe", "já existe um item com esse nome"));
+    // Ocupado é outra entrada da pasta com esse nome em qualquer caixa, comparada sem seguir link: só sobra o
+    // próprio item, na troca de maiúsculas de um sistema que não as distingue.
+    if target.symlink_metadata().is_ok() {
+        let lower = name.to_lowercase();
+        let own = source.file_name();
+        let parent = source.parent().unwrap_or(cwd);
+        let other = std::fs::read_dir(parent).map_err(|e| io_error(e, "erro_arq_escrita_falhou"))?.flatten()
+            .any(|e| Some(e.file_name().as_os_str()) != own && e.file_name().to_string_lossy().to_lowercase() == lower);
+        if other || own.is_none_or(|own| own.to_string_lossy().to_lowercase() != lower) {
+            return Err(file_error(409, "erro_arq_ja_existe", "já existe um item com esse nome"));
+        }
     }
     std::fs::rename(&source, &target).map_err(|e| io_error(e, "erro_arq_escrita_falhou"))?;
     Ok(json!({"path": session_relative(cwd, &target)}))
@@ -796,6 +812,27 @@ mod tests {
         assert_eq!(super::rename(cwd, "atalho.txt", "outro.txt").unwrap()["path"], "outro.txt");
         assert!(cwd.join("alvo.txt").is_file());
         assert!(cwd.join("outro.txt").symlink_metadata().unwrap().file_type().is_symlink());
+        // Link para fora da sessão: renomear mexe só no link, sem passar pela guarda do destino.
+        let fora = tempfile::tempdir().unwrap();
+        std::fs::write(fora.path().join("segredo.txt"), "s").unwrap();
+        std::os::unix::fs::symlink(fora.path().join("segredo.txt"), cwd.join("externo")).unwrap();
+        assert_eq!(super::rename(cwd, "externo", "externo2").unwrap()["path"], "externo2");
+        assert!(fora.path().join("segredo.txt").is_file());
+        // Link `a -> A` não é o próprio `A` em outra caixa: a troca apagaria o arquivo.
+        std::fs::write(cwd.join("A"), "conteúdo").unwrap();
+        std::os::unix::fs::symlink(cwd.join("A"), cwd.join("a")).unwrap();
+        assert_eq!(super::rename(cwd, "a", "A").unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
+        assert_eq!(std::fs::read_to_string(cwd.join("A")).unwrap(), "conteúdo");
+    }
+
+    /// Nome com prefixo de unidade sairia da pasta no Windows; nos outros sistemas é um nome comum.
+    #[test]
+    fn entry_name_is_one_plain_component() {
+        assert_eq!(super::entry_name(" arquivo.txt ").unwrap(), "arquivo.txt");
+        for bad in ["", ".", "..", ".git", "x/y", "x\\y"] {
+            assert!(super::entry_name(bad).is_err(), "{bad}");
+        }
+        assert_eq!(super::entry_name("C:escape.txt").is_err(), cfg!(windows));
     }
 
     #[test]

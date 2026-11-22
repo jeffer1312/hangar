@@ -47,6 +47,22 @@ fn terminal_plan_never_supplies_a_missing_public_id_from_the_pending_question() 
     assert_eq!(terminal_plan(&current,&expected,true).err().unwrap().1["detail"]["code"], "erro_terminal_aberto");
 }
 
+/// Parágrafos: pelo plugin seguem inteiros (`\r\n` vira `\n`); digitados no terminal, inclusive no "Conversar", viram uma linha.
+#[test]
+fn terminal_plan_keeps_paragraphs_for_the_plugin_and_one_line_for_the_keys() {
+    let text = |value: &str| json!({"kind":"text","value":value,"type_index":0});
+    let mut plugin = expected(InteractionKind::Question);
+    plugin.target.request_key = "plugin:ask:1".into();
+    let answered = body(json!({"answers":[text("primeiro\r\nsegundo\rterceiro")],"interaction_id":"shown-a"}));
+    let Plan::Control(payload) = terminal_plan(&answered, &plugin, false).unwrap() else { panic!("controle") };
+    assert_eq!(payload["answers"][0]["value"], "primeiro\nsegundo\nterceiro");
+    let Plan::Control(payload) = terminal_plan(&answered, &expected(InteractionKind::Question), false).unwrap() else { panic!("controle") };
+    assert_eq!(payload["answers"][0]["value"], "primeiro segundo terceiro");
+    let chat = body(json!({"answers":[text("primeiro\nsegundo"),{"kind":"chat","chat_index":1}],"interaction_id":"shown-a"}));
+    let Plan::Chat(payload) = terminal_plan(&chat, &expected(InteractionKind::Question), false).unwrap() else { panic!("conversar") };
+    assert_eq!((payload["answers"][0]["value"].as_str(), payload["interaction_id"].as_str()), (Some("primeiro segundo"), Some("shown-a")));
+}
+
 #[test]
 fn bodies_preserve_identity_and_native_zero_and_relay_only_normalization() {
     for invalid in [

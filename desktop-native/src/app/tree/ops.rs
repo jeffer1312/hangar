@@ -130,14 +130,14 @@ impl Hangar {
 
     pub(super) fn tree_rename_dialog(&mut self, target: ItemTarget, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rel) = target.session.clone() else { return };
-        let name = base(&rel).to_owned();
+        let (name, owner) = (base(&rel).to_owned(), self.session_owner());
         let title = tr("tree_rename_title").replace("{name}", &name);
         self.tree_name_dialog(title, tr("sidebar_rename"), name, window, cx, move |this, new, window, cx| {
             let old = rel.clone();
-            this.tree_request("rename", json!({"path": old, "name": new}), window, cx, move |this, value, _, cx| {
+            this.tree_request(owner.clone(), "rename", json!({"path": old, "name": new}), window, cx, move |this, value, same_root, _, cx| {
                 let Some(path) = value.get("path").and_then(Value::as_str).map(str::to_owned) else { return };
                 this.files_renamed(&old, &path);
-                this.tree.selected = Some(path);
+                if same_root { this.tree.selected = Some(path); }
                 this.redraw(Area::Side, cx);
             });
         });
@@ -147,9 +147,12 @@ impl Hangar {
     pub(super) fn tree_create_dialog(&mut self, parent: Option<String>, dir: bool, window: &mut Window, cx: &mut Context<Self>) {
         let folder = parent.as_deref().map_or_else(|| self.tree_root_label(), |p| base(p).to_owned());
         let title = tr(if dir { "tree_new_folder_title" } else { "tree_new_file_title" }).replace("{folder}", &folder);
+        let owner = self.session_owner();
         self.tree_name_dialog(title, tr("tree_create"), String::new(), window, cx, move |this, name, window, cx| {
             let parent = parent.clone();
-            this.tree_request("create", json!({"path": parent, "name": name, "dir": dir}), window, cx, move |this, value, window, cx| {
+            this.tree_request(owner.clone(), "create", json!({"path": parent, "name": name, "dir": dir}), window, cx, move |this, value, same_root, window, cx| {
+                // A árvore passou a mostrar outra pasta: o caminho criado não é dela, e abri-lo pegaria o de mesmo nome lá.
+                if !same_root { return; }
                 let Some(path) = value.get("path").and_then(Value::as_str).map(str::to_owned) else { return };
                 if let Some(parent) = parent.clone() { this.tree.expanded.insert(parent); }
                 this.tree.reveal = Some(path.clone());
@@ -161,29 +164,38 @@ impl Hangar {
 
     pub(super) fn tree_confirm_trash(&mut self, target: ItemTarget, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rel) = target.session.clone() else { return };
-        let weak = cx.entity().downgrade();
+        let (weak, owner) = (cx.entity().downgrade(), self.session_owner());
         chrome::confirm_alert(window, cx, tr("tree_trash_title").replace("{name}", base(&rel)), tr("tree_trash_msg"), tr("tree_trash_ok"),
             ButtonVariant::Danger, move |window, cx| {
                 let rel = rel.clone();
-                let _ = weak.update(cx, |this, cx| this.tree_request("trash", json!({"path": rel}), window, cx, |_, _, _, _| {}));
+                let _ = weak.update(cx, |this, cx| this.tree_request(owner.clone(), "trash", json!({"path": rel}), window, cx, |_, _, _, _, _| {}));
                 true
             });
     }
 
-    /// Manda a escrita ao servidor da sessão; deu certo, relê a árvore e os citados. Falha vira aviso com o motivo.
-    fn tree_request(&mut self, route: &'static str, body: Value, window: &mut Window, cx: &mut Context<Self>,
-        then: impl FnOnce(&mut Hangar, Value, &mut Window, &mut Context<Hangar>) + 'static) {
+    /// Manda a escrita ao servidor da sessão em que o diálogo abriu (`owner`); outra sessão escolhida nesse meio recusa
+    /// com aviso, porque o mesmo caminho lá é outro arquivo. Deu certo, relê a árvore, os citados e a busca; `then` sabe se
+    /// a árvore ainda mostra a pasta em que a escrita foi feita. Falha vira aviso com o motivo.
+    fn tree_request(&mut self, owner: Option<SessionOwner>, route: &'static str, body: Value, window: &mut Window, cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Hangar, Value, bool, &mut Window, &mut Context<Hangar>) + 'static) {
+        if owner.is_none() || self.session_owner() != owner {
+            window.push_notification(Notification::warning(tr("tree_session_changed")), cx);
+            return;
+        }
         let (Some(api), Some(session)) = (self.session_api(), self.selected.as_ref()) else { return };
-        let (name, owner) = (session.name.clone(), self.session_owner());
+        let name = session.name.clone();
+        let root = self.tree.custom_root(&owner).map(Path::to_path_buf);
         let job = self.runtime.spawn(async move { api.act(&name, &["files", route], Some(body), false, 30).await });
         cx.spawn_in(window, async move |this, cx| {
             let result = job.await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(value) => {
                     if this.session_owner() != owner { return; }
+                    let same_root = this.tree.custom_root(&owner).map(Path::to_path_buf) == root;
                     this.tree.cited.reset();
                     this.tree_reload(cx);
-                    then(this, value, window, cx);
+                    this.tree_begin_search(cx);
+                    then(this, value, same_root, window, cx);
                 }
                 Err(error) => {
                     // A frase do código do servidor (já existe, não sabe de nome…); sem ela, o motivo de sempre.
