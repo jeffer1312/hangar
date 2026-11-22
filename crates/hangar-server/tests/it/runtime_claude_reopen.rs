@@ -74,7 +74,7 @@ case "$1" in
   show-environment) grep "^$4=" "$S.env" || exit 1;;
   set-environment) echo "$4=$5" >> "$S.env";;
   display-message)
-    read_state || exit 1
+    read_state || {{ printf "can't find session: %s\n" "$4" >&2; exit 1; }}
     case "$5" in
       '#{{pane_pid}}') echo "$PID";;
       $'#{{session_name}}\t#{{pane_id}}\t#{{session_created}}') printf '%s\t%%7\t%s\n' "$NAME" "$BORN";;
