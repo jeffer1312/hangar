@@ -160,6 +160,9 @@ pub struct Row {
     pub install_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_group: Option<String>,
+    /// O aparelho da conta por onde ele entrou: a tela desta máquina mostra só os que não têm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_device: Option<String>,
 }
 
 pub struct Store {
@@ -418,7 +421,8 @@ impl Store {
         state.devices.iter().map(|d| {
             let install = d.install_id.as_deref().filter(|_| d.status == Status::Pending);
             Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, created_at: d.created_at,
-                install_code: install.map(install_code), install_group: install.map(install_group) }
+                install_code: install.map(install_code), install_group: install.map(install_group),
+                account_device: d.account_device.clone() }
         }).collect()
     }
 
@@ -640,6 +644,18 @@ mod tests {
         assert_eq!(store.verify(tokens[2].1.as_bytes()), Some(tokens[2].0.clone()), "outro aparelho da conta fica");
         let reloaded = super::tests::store(&dir);
         assert_eq!(reloaded.list().iter().map(|r| r.device_id.clone()).collect::<Vec<_>>(), vec![tokens[2].0.clone()], "a revogação foi ao disco");
+    }
+
+    #[test]
+    fn the_list_says_which_devices_came_through_the_account() {
+        let dir = dir();
+        let store = store(&dir);
+        let released = redeem(&store, "n1", "s1", json!({"preapproved": true, "account_device": "D"})).unwrap();
+        let local = redeem(&store, "n2", "s2", json!({})).unwrap();
+        let rows: Vec<Value> = store.list().iter().map(|row| serde_json::to_value(row).unwrap()).collect();
+        let row = |id: &DeviceId| rows.iter().find(|row| row["device_id"] == json!(id)).unwrap().clone();
+        assert_eq!(row(&released)["account_device"], "D");
+        assert!(row(&local).get("account_device").is_none(), "sem vínculo, o campo não vai: {}", row(&local));
     }
 
     #[test]
