@@ -289,8 +289,14 @@ function migrateLegacy(): void {
       if (target.exists) continue;
       const stamp = readLegacyVersion(version);
       const used = f.modificationTime ?? Date.now();
-      f.moveSync(target);
-      writeEntry(target.name, { etag: null, size: target.size, used, version: stamp });
+      // Registro antes de mover: arquivo em `chat-media` sem registro sai no `evict` como sobra.
+      writeEntry(target.name, { etag: null, size: f.size, used, version: stamp });
+      try {
+        f.moveSync(target);
+      } catch (e) {
+        index.remove(target.name);
+        throw e;
+      }
     } catch (e) {
       legacyStuck = true;
       diagCache('legacy_move_failed', e);
@@ -533,8 +539,8 @@ export async function openPdfFile(uri: string, headers: Record<string, string> |
     if (root.exists) root.delete();
     const dir = new Directory(root, file.name);
     dir.create({ idempotent: true, intermediates: true });
-    const safeName = name.replace(/[^\w.-]/g, '_');
-    const target = new File(dir, !safeName || safeName === '.' || safeName === '..' ? 'documento.pdf' : safeName);
+    const clean = safeName(name);
+    const target = new File(dir, !clean || clean === '.' || clean === '..' ? 'documento.pdf' : clean);
     file.copySync(target);
     file = target;
   } catch (e) {
