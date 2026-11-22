@@ -93,10 +93,10 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
             .child(app::sign_in_enter_button("news-sign-in-enter", picked.len(), false).tab_stop(false))
     };
 
-    // O formulário fica no fluxo mesmo apagado: a altura não pula quando a lista o troca.
+    // A lista, a mais alta das duas, fica no fluxo mesmo apagada: a altura não pula na troca e o botão de entrar não corta.
     let stage = div().relative().when(compact, |el| el.h(px(COMPACT_HEIGHT)))
-        .child(form.opacity(if f.list { 0. } else { 1. }))
-        .child(list.absolute().top_0().left_0().right_0().opacity(if f.list { 1. } else { 0. }));
+        .child(list.opacity(if f.list { 1. } else { 0. }))
+        .child(form.absolute().top_0().left_0().right_0().opacity(if f.list { 0. } else { 1. }));
     // Miniatura só leitura: a tampa por cima não deixa o mouse levar o foco para os botões.
     div().id("news-connect-sign-in").relative().w(width).p(px(if compact { 8. } else { 14. })).rounded(px(9.)).border_1()
         .border_color(theme::border().alpha(0.06)).overflow_hidden().text_color(theme::text())
