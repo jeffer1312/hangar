@@ -22,7 +22,7 @@ impl Hangar {
         let code_mode = segments("code-mode", &[tr("settings_code_mode_off"), tr("settings_code_mode_on")],
             (server.map_or(a.claude_code_mode, |o| o.code_mode) || from_settings) as usize,
             if server_beta { 2 } else { 0 }, from_settings || busy, tr("settings_next_version"),
-            |this: &mut Hangar, index, _: &mut Window, cx| { this.change_session_options(BetaChange::CodeMode(index == 1), cx); }, cx);
+            |this: &mut Hangar, index, _: &mut Window, cx| this.change_session_options(BetaChange::CodeMode(index == 1), cx), cx);
         let hint = self.settings_ui.session_options_error.clone()
             .unwrap_or_else(|| tr(if from_settings { "settings_code_mode_settings" } else { "settings_code_mode_hint" }));
         div().flex().flex_col()
@@ -91,26 +91,28 @@ impl Hangar {
         self.flush_conversation(cx);
     }
 
-    /// A Conversa nova escolhida aqui vai ao servidor assim que ele tiver leitura boa e nenhuma gravação no ar.
+    /// A Conversa nova escolhida aqui vai ao servidor assim que ele tiver leitura boa e nenhuma gravação no ar, e
+    /// só deixa de estar pendente quando o servidor confirma: gravação que falha volta na próxima resposta boa.
     fn flush_conversation(&mut self, cx: &mut Context<Self>) {
         let Some(on) = self.settings_ui.conversation_pending else { return };
         let server = self.settings_ui.session_options.filter(|(connection, _)| *connection == self.connection).and_then(|(_, options)| options);
-        if server.is_some_and(|o| o.conversation_beta == on) || self.change_session_options(BetaChange::Conversation(on), cx) {
+        if server.is_some_and(|o| o.conversation_beta == on) {
             self.settings_ui.conversation_pending = None;
+            return;
         }
+        self.change_session_options(BetaChange::Conversation(on), cx);
     }
 
-    /// Grava no servidor; a resposta dele é o que fica marcado, e a falha aparece na linha. `false` = não saiu agora.
-    fn change_session_options(&mut self, change: BetaChange, cx: &mut Context<Self>) -> bool {
+    /// Grava no servidor; a resposta dele é o que fica marcado, e a falha aparece na linha.
+    fn change_session_options(&mut self, change: BetaChange, cx: &mut Context<Self>) {
         let server = self.settings_ui.session_options.filter(|(connection, _)| *connection == self.connection).and_then(|(_, options)| options);
-        let Some(next) = options_to_save(server, self.settings_ui.session_options_saving == Some(self.connection), change) else { return false };
-        let Some(api) = self.api.clone() else { return false };
+        let Some(next) = options_to_save(server, self.settings_ui.session_options_saving == Some(self.connection), change) else { return };
+        let Some(api) = self.api.clone() else { return };
         let connection = self.connection;
         self.settings_ui.session_options_saving = Some(connection);
         cx.notify();
         let task = self.runtime.spawn(async move { api.save_session_options(next, false).await });
         self.options_reply(connection, task, true, cx);
-        true
     }
 
     /// Uma consulta por conexão: o settings.json do servidor diz se o Code Mode já está ligado lá. Até a resposta, e
