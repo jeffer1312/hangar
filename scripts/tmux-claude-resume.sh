@@ -31,8 +31,12 @@ fi
 # As internas (`@cp_hidden`: terminal de atalho, shell separado, janela de login) também saem:
 # recriadas cruas, perdem a marca e entram na lista como sessão Claude sem Claude.
 _hangar_sessions() {
-  local name hidden key
+  local name hidden key sessions
+  # Multiplexador que recusa o formato com `@cp_hidden` ainda tira as sessões com spec.
+  sessions=$(tmux list-sessions -F $'#{session_name}\t#{@cp_hidden}' 2>/dev/null) \
+    || sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null) || true
   while IFS=$'\t' read -r name hidden; do
+    [ -n "$name" ] || continue
     if [ "$hidden" = 1 ]; then
       printf '%s\n' "$name"
       continue
@@ -41,7 +45,7 @@ _hangar_sessions() {
     if [[ $key =~ ^CP_SESSION_KEY=([0-9a-fA-F]{32})$ ]] && [ -f "$HOME/.hangar/session-specs/${BASH_REMATCH[1]}.json" ]; then
       printf '%s\n' "$name"
     fi
-  done < <(tmux list-sessions -F $'#{session_name}\t#{@cp_hidden}' 2>/dev/null || true)
+  done <<<"$sessions"
 }
 
 # Tira as sessões do Hangar da foto que o resurrect acabou de gravar (linhas `pane`/`window` delas).
