@@ -13,8 +13,9 @@ const FLAG_GRANT_READ_URI_PERMISSION = 1;
 export const MEDIA_CACHE_LIMIT = 1024 * 1024 * 1024;
 
 const MEDIA_DIR = 'chat-media';
-// A folha de texto da página guarda cópias próprias; o "Limpar" as leva.
-const SIDE_DIRS = ['chat-page-source'];
+// A folha de texto da página e o leitor de PDF guardam cópias próprias; o "Limpar" as leva.
+const PDF_OPEN_DIR = 'pdf-open';
+const SIDE_DIRS = ['chat-page-source', PDF_OPEN_DIR];
 // Onde a versão anterior guardava as cópias de "Mídia e arquivos" e a versão de cada uma, fora do teto: hoje moram em
 // `chat-media`. O leitor de PDF também guardava uma segunda cópia; hoje recebe a do cache.
 const LEGACY_KEPT_DIR = 'media-files';
@@ -525,9 +526,17 @@ export async function deliverLocalFile(f: File, name: string): Promise<'opened' 
 export async function openPdfFile(uri: string, headers: Record<string, string> | undefined, name: string, isMounted: () => boolean): Promise<void> {
   let file: File;
   try {
-    // A própria cópia do cache vai ao leitor, como em `openLocal`: uma segunda cópia ficava fora do teto para sempre.
     file = await localCopy(uri, headers, name);
     if (!isMounted()) return;
+    // O leitor mostra o nome do arquivo: vai uma cópia com o nome limpo, e só a do último PDF aberto fica guardada.
+    const root = new Directory(Paths.cache, PDF_OPEN_DIR);
+    if (root.exists) root.delete();
+    const dir = new Directory(root, file.name);
+    dir.create({ idempotent: true, intermediates: true });
+    const safeName = name.replace(/[^\w.-]/g, '_');
+    const target = new File(dir, !safeName || safeName === '.' || safeName === '..' ? 'documento.pdf' : safeName);
+    file.copySync(target);
+    file = target;
   } catch (e) {
     throw new Error(m.native_pdf_download_failed({ reason: e instanceof Error ? e.message : String(e) }));
   }
