@@ -46,6 +46,18 @@ export function failedJob(state: WhatsAppState): { kind: string; code: string } 
   return code ? { kind: job.kind, code } : null;
 }
 
+/** Códigos de job que têm frase própria; chegam como `whatsapp_<código>` (ou sem o prefixo). */
+export const JOB_ERRORS = [
+  'download_failed', 'sem_asset', 'sem_checksum', 'hash', 'binary_missing', 'write_failed', 'servico_falhou', 'no_release',
+  'version_unreadable', 'api_too_old', 'not_started', 'job_crashed', 'update_no_rollback', 'record_failed', 'accept_write_failed',
+] as const;
+export type JobError = typeof JOB_ERRORS[number];
+
+export function jobError(code: string): JobError | null {
+  const suffix = code.startsWith('whatsapp_') ? code.slice('whatsapp_'.length) : code;
+  return (JOB_ERRORS as readonly string[]).includes(suffix) ? suffix as JobError : null;
+}
+
 export function shouldPoll(state: WhatsAppState, awaitingPair: boolean): boolean {
   const view = viewOf(state);
   return view === 'working' || view === 'pairing' || (awaitingPair && view === 'unpaired');

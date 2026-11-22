@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WhatsAppState } from '@hangar/core';
-import { codeOf, failedJob, isWhatsAppState, mediaShares, minutesLeft, phoneDigits, secondsSince, shouldPoll, stepIndex, viewOf } from './whatsapp';
+import { JOB_ERRORS, codeOf, failedJob, isWhatsAppState, jobError, mediaShares, minutesLeft, phoneDigits, secondsSince, shouldPoll, stepIndex, viewOf } from './whatsapp';
 
 const base = (service: WhatsAppState['service'], status: Partial<NonNullable<WhatsAppState['status']>> | null): WhatsAppState => ({
   installed: true, accepted_at: '2026-11-22T10:00:00Z', service, job: null, qr_svg: null,
@@ -51,6 +51,17 @@ describe('failedJob', () => {
     expect(failedJob({ ...s, job: { ...s.job, error: 'checksum' } })).toEqual({ kind: 'update', code: 'checksum' });
     expect(failedJob({ ...s, job: { ...s.job, error: null } })).toBeNull();
     expect(failedJob({ ...s, job: { ...s.job, done: false } })).toBeNull();
+  });
+});
+
+describe('jobError', () => {
+  it('tira o prefixo whatsapp_ e só reconhece os códigos com frase própria', () => {
+    expect(jobError('whatsapp_download_failed')).toBe('download_failed');
+    expect(jobError('whatsapp_servico_falhou')).toBe('servico_falhou');
+    expect(jobError('accept_write_failed')).toBe('accept_write_failed');
+    expect(jobError('whatsapp_novo_erro')).toBeNull();
+    expect(jobError('whatsapp_')).toBeNull();
+    expect(JOB_ERRORS).toHaveLength(15);
   });
 });
 

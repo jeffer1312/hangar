@@ -15,7 +15,7 @@ import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { BlockHead, Chip, Muted, useInputStyle } from '../../src/features/config/ServerConfigParts';
 import { useSettingsColors, withAlpha } from '../../src/features/config/colors';
 import {
-  PAIR_GRACE_MS, POLL_MS, STEPS, codeOf, failedJob, isWhatsAppState, mediaShares, minutesLeft, phoneDigits, secondsSince, shouldPoll, stepIndex, viewOf,
+  PAIR_GRACE_MS, POLL_MS, STEPS, codeOf, failedJob, isWhatsAppState, jobError, type JobError, mediaShares, minutesLeft, phoneDigits, secondsSince, shouldPoll, stepIndex, viewOf,
   type WhatsAppView,
 } from '../../src/features/config/whatsapp';
 import { useWhatsAppSeen } from '../../src/features/config/whatsappSeen';
@@ -63,6 +63,30 @@ const STATUS_ERR: Record<string, () => string> = {
   connect_failed: m.native_whatsapp_status_err_connect_failed,
   pair_code_failed: m.native_whatsapp_status_err_pair_code_failed,
   pair_failed: m.native_whatsapp_status_err_pair_failed,
+};
+
+const JOB_ERR: Record<JobError, () => string> = {
+  download_failed: m.native_whatsapp_job_err_download_failed,
+  sem_asset: m.native_whatsapp_job_err_sem_asset,
+  sem_checksum: m.native_whatsapp_job_err_sem_checksum,
+  hash: m.native_whatsapp_job_err_hash,
+  binary_missing: m.native_whatsapp_job_err_binary_missing,
+  write_failed: m.native_whatsapp_job_err_write_failed,
+  servico_falhou: m.native_whatsapp_job_err_servico_falhou,
+  no_release: m.native_whatsapp_job_err_no_release,
+  version_unreadable: m.native_whatsapp_job_err_version_unreadable,
+  api_too_old: m.native_whatsapp_job_err_api_too_old,
+  not_started: m.native_whatsapp_job_err_not_started,
+  job_crashed: m.native_whatsapp_job_err_job_crashed,
+  update_no_rollback: m.native_whatsapp_job_err_update_no_rollback,
+  record_failed: m.native_whatsapp_job_err_record_failed,
+  accept_write_failed: m.native_whatsapp_job_err_accept_write_failed,
+};
+
+/** O motivo que completa "A instalação parou: …"; código desconhecido leva o código cru. */
+const jobErrorText = (code: string) => {
+  const known = jobError(code);
+  return known ? JOB_ERR[known]() : m.native_whatsapp_job_err_unknown({ code });
 };
 
 const statusErrorText = (code: string) =>
@@ -227,8 +251,10 @@ export default function WhatsApp() {
     body = <>
       {failed ? <Problem tone="error" icon="CircleAlert"
         text={(failed.kind === 'update' ? m.native_whatsapp_update_failed : m.native_whatsapp_install_failed)({
-          reason: m.native_whatsapp_job_err_unknown({ code: failed.code }) })}
-        action={v === 'off' ? undefined : m.native_server_retry()} busy={!!busy}
+          reason: jobErrorText(failed.code) })}
+        // Reinstalar exige o aceite, o gravado no servidor ou o marcado agora.
+        action={m.native_server_retry()} busy={!!busy || (failed.kind !== 'update' && !accepted && !d.accepted_at)}
+        loading={busy === (failed.kind === 'update' ? 'update' : 'install')}
         onPress={() => (failed.kind === 'update' ? act('update', updateWhatsApp) : install())} /> : null}
       {v === 'off' ? <Off accepted={accepted} busy={busy} onToggle={() => { haptic.selection(); setAccepted((a) => !a); }} onInstall={install} />
         : v === 'working' ? <Working state={d} />
