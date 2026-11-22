@@ -33,8 +33,9 @@ pub(super) fn provider_fields() -> Vec<&'static str> {
 /// servidor. Editando, a troca apaga as opções do provedor anterior.
 pub(super) fn switch_provider(changed: &mut HashSet<&'static str>, editing: bool) {
     if editing { changed.extend(provider_fields()); return; }
-    // A escolha feita no provedor anterior não vale no novo; pasta, Jev e modos valem em todos.
-    changed.retain(|key| matches!(*key, "cwd" | "jev" | "headless" | "read_only"));
+    // A escolha feita no provedor anterior não vale no novo; pasta, Jev e modos valem em todos. O Fast segue na tela
+    // depois da troca, e a abertura o deixa vazio onde ele não vale.
+    changed.retain(|key| matches!(*key, "cwd" | "jev" | "headless" | "read_only" | "service_tier"));
     changed.insert("provider");
 }
 
@@ -141,10 +142,10 @@ mod tests {
     /// Na tarefa nova, o que a tela preencheu no provedor novo e o que a pessoa escolheu no anterior não viram escolha.
     #[test]
     fn switching_provider_on_a_new_template_keeps_only_the_provider() {
-        let current = json!({"cwd":"/workspace/app", "provider":"codex", "codex_account":"default-account", "model":"gpt", "jev":true});
-        let mut changed: HashSet<&'static str> = HashSet::from(["model", "effort", "jev"]);
+        let current = json!({"cwd":"/workspace/app", "provider":"codex", "codex_account":"default-account", "model":"gpt", "jev":true, "service_tier":"priority"});
+        let mut changed: HashSet<&'static str> = HashSet::from(["model", "effort", "jev", "service_tier"]);
         switch_provider(&mut changed, false);
-        assert_eq!(merge(None, current, &changed), json!({"cwd":"/workspace/app", "provider":"codex", "jev":true}));
+        assert_eq!(merge(None, current, &changed), json!({"cwd":"/workspace/app", "provider":"codex", "jev":true, "service_tier":"priority"}));
         let mut editing = HashSet::new();
         switch_provider(&mut editing, true);
         assert_eq!(editing, provider_fields().into_iter().collect());
