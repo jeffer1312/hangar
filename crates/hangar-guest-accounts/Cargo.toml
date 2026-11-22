@@ -1,0 +1,18 @@
+[package]
+name = "hangar-guest-accounts"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas, compilar este crate sozinho guarda outra cópia de cada
+# dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
+[dependencies]
+hangar-core.workspace = true
+base64 = "=0.23.1"
+ring.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+subtle = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true

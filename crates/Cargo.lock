@@ -1870,6 +1870,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-guest-accounts"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-core",
+ "ring",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-http-file"
 version = "0.1.0"
 dependencies = [
@@ -2141,6 +2154,7 @@ dependencies = [
  "hangar-desktop-theme",
  "hangar-docs",
  "hangar-dream",
+ "hangar-guest-accounts",
  "hangar-http-file",
  "hangar-install-setup",
  "hangar-local-server",
