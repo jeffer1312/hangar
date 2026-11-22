@@ -699,6 +699,23 @@ mod tests {
         assert_eq!(result, Some(b.join(file).to_string_lossy().into_owned()));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn incomplete_history_scan_keeps_a_readable_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let file = "session.jsonl";
+        let unreadable = root.path().join("unreadable");
+        std::fs::create_dir(&unreadable).unwrap();
+        std::os::unix::fs::symlink(file, unreadable.join(file)).unwrap();
+        assert!(crate::runtime::claude_launch::moved_transcript(root.path(), file).is_err());
+
+        let readable = root.path().join("readable");
+        std::fs::create_dir(&readable).unwrap();
+        let history = readable.join(file);
+        std::fs::write(&history, "{}\n").unwrap();
+        assert_eq!(crate::runtime::claude_launch::moved_transcript(root.path(), file).unwrap(), Some(history));
+    }
+
     #[test]
     fn native_directory_slugs_match_the_preserved_python_cases() {
         #[cfg(not(windows))]

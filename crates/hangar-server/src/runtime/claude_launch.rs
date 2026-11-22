@@ -66,14 +66,24 @@ pub(crate) fn transcript_in(base: &Path, cwd: &str, sid: &str) -> PathBuf {
 
 pub(crate) fn moved_transcript(base: &Path, file: &str) -> std::io::Result<Option<PathBuf>> {
     let mut newest = None;
+    let mut incomplete = None;
     for entry in std::fs::read_dir(base)? {
-        let path = entry?.path().join(file);
-        let meta = match path.metadata() {
-            Ok(meta) => meta,
-            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => continue,
-            Err(error) => return Err(error),
-        };
-        if meta.is_file() { newest = newest.max(Some((meta.modified()?, path))); }
+        let candidate = (|| -> std::io::Result<_> {
+            let path = entry?.path().join(file);
+            let meta = path.metadata()?;
+            if meta.is_file() { Ok(Some((meta.modified()?, path))) } else { Ok(None) }
+        })();
+        match candidate {
+            Ok(found) => newest = newest.max(found),
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {},
+            Err(error) => { incomplete.get_or_insert(error); },
+        }
+    }
+    if let Some(error) = incomplete {
+        if newest.is_none() { return Err(error); }
+        if crate::warn_limit::allow(None, "claude_projects_partial") {
+            tracing::warn!(kind=?error.kind(), "a busca de histórico foi parcial; usando a cópia legível mais recente");
+        }
     }
     Ok(newest.map(|(_, path)| path))
 }
