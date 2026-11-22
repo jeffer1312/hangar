@@ -1,4 +1,4 @@
-//! Trava da abertura única: todo campo da tabela de abertura (`hangar_core::session_open_fields`) tem
+//! Trava da abertura única: todo campo da tabela de abertura (`hangar_session_open_fields`) tem
 //! flag no `--new` e chega ao corpo do `POST /api/sessions` com a chave do pedido.
 #![cfg(unix)]
 
@@ -7,7 +7,7 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{Answer, FakeHost, FakeServer, Home, Route};
-use hangar_core::session_open_fields::{Cli, FIELDS};
+use hangar_session_open_fields::{Cli, FIELDS};
 use serde_json::Value;
 
 #[test]

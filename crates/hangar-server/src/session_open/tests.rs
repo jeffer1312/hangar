@@ -1699,6 +1699,19 @@ fn code_mode_default_of_the_server_fills_an_omitted_request() {
     assert!(open(json!({"conversation_beta": false, "code_mode": false}), json!({"code_mode": true})), "pedido explícito liga sem padrão");
 }
 
+/// Code Mode pedido fora do Claude é recusado: sumir calado faria quem pediu achar que ele está ligado.
+#[test]
+fn an_explicit_code_mode_outside_claude_is_refused() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir_all(home.join("work/proj")).unwrap();
+    let body = json!({"name": "s1", "cwd": "~/work/proj", "provider": "pi", "headless": false, "code_mode": true});
+    let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+    let error = resolve::resolve_open(&request, &OWNER, &local_facts(&home, &runtime)).err().expect("Code Mode fora do Claude");
+    assert_eq!((error.status, error.code), (400, Some("erro_code_mode_so_claude")));
+}
+
 /// Os campos do pedido no fio, na ordem do struct, tirados da recusa do serde ao campo desconhecido.
 fn wire_fields() -> Vec<String> {
     let error = SessionOpenRequest::parse(br#"{"cwd": "/x", "campo_que_nao_existe": 1}"#).unwrap_err();
@@ -1708,16 +1721,16 @@ fn wire_fields() -> Vec<String> {
 }
 
 /// Trava da abertura única: todo campo do pedido de abertura está na tabela de
-/// `hangar_core::session_open_fields` (que o `--new` e o `new_session` conferem nos testes deles) ou é
+/// `hangar_session_open_fields` (que o `--new` e o `new_session` conferem nos testes deles) ou é
 /// só do servidor com o motivo dito. Campo novo no `SessionOpenRequest` sem entrar lá falha aqui.
 #[test]
 fn every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server() {
-    use hangar_core::session_open_fields::{FIELDS, SERVER_ONLY};
+    use hangar_session_open_fields::{FIELDS, SERVER_ONLY};
     let wire = wire_fields();
     assert!(wire.len() > 20, "a lista do serde mudou de formato: {wire:?}");
     let known: Vec<&str> = FIELDS.iter().map(|f| f.body).chain(SERVER_ONLY.iter().map(|(name, _)| *name)).collect();
     let missing: Vec<&String> = wire.iter().filter(|name| !known.contains(&name.as_str())).collect();
-    assert!(missing.is_empty(), "campos do pedido fora da tabela hangar_core::session_open_fields: {missing:?}");
+    assert!(missing.is_empty(), "campos do pedido fora da tabela hangar_session_open_fields: {missing:?}");
     let stale: Vec<&&str> = known.iter().filter(|name| !wire.iter().any(|w| w == *name)).collect();
     assert!(stale.is_empty(), "campos da tabela que o pedido não tem mais: {stale:?}");
 }
@@ -1727,7 +1740,7 @@ fn every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server() {
 /// nunca chega a quem não preencheu.
 #[test]
 fn a_field_with_a_server_default_keeps_the_explicit_value() {
-    for field in hangar_core::session_open_fields::FIELDS.iter().filter(|f| f.server_default) {
+    for field in hangar_session_open_fields::FIELDS.iter().filter(|f| f.server_default) {
         let parsed = [json!(false), json!("priority"), json!("x")].into_iter().find_map(|sample| {
             let body = json!({"cwd": "/x", field.body: sample.clone()});
             SessionOpenRequest::parse(body.to_string().as_bytes()).ok().map(|request| (sample, request))

@@ -5137,7 +5137,11 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
 - **Regra.** O omitido é do `resolve_open()`. "Conversa nova" e "Code Mode" moram em
   `~/.hangar/session-options.json` (`GET`/`PUT /api/session-options`, só do dono); o Code Mode vale
   quando o pedido omite `code_mode`, o provedor é Claude e as duas estão ligadas. O desktop copia o
-  `appearance.json` antigo uma vez (`if_absent`); o desenho da conversa continua lendo a escolha local.
+  `appearance.json` antigo uma vez (`if_absent`), e só se a pessoa mexeu nele: a cópia intocada
+  (`false`, `false`) não é escolha, ou o primeiro computador a conectar decidiria por todos. O desenho
+  da conversa continua lendo a escolha local, que o servidor nunca muda; "Conversa nova" muda mesmo
+  com o servidor fora e chega a ele quando ele responde. `code_mode: true` explícito fora do Claude é
+  recusado (`erro_code_mode_so_claude`).
 - **Sem terminal, o Code Mode vai no `env` do `--settings`.** O Claude Code 2.1.330, com `-p` ou
   pelo SDK, recusa a variável vinda do ambiente do processo (motivo `not_passed`) e só a aceita no
   `env` do `--settings`. Medido no CLI com as opções do lançamento sem terminal: com a variável no
@@ -5148,7 +5152,7 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
 - **Arquivo próprio, não o `session-defaults.json`.** A versão anterior lê aquele arquivo com
   `deny_unknown_fields` em cada escopo: uma chave nova faria a volta de uma atualização recusar toda
   criação de sessão.
-- **Travas.** Tabela única `hangar_core::session_open_fields` (campos, nome no MCP, flags do CLI,
+- **Travas.** Tabela única no crate `hangar-session-open-fields` (campos, nome no MCP, flags do CLI,
   quais têm padrão do servidor). O servidor confere que todo campo do `SessionOpenRequest` está nela
   ou em `SERVER_ONLY` com o motivo, e que campo com padrão guarda o explícito (o `bool` puro do #460
   perdia o `false`); o MCP e o `hangar-send` conferem que cada um chega ao corpo; o desktop confere

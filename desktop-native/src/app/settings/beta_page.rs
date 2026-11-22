@@ -9,24 +9,27 @@ impl Hangar {
         self.ask_session_options(cx);
         let from_settings = self.settings_ui.code_mode_settings.is_some_and(|(_, on)| on);
         let server = self.settings_ui.session_options.and_then(|(_, options)| options);
-        // Sem a leitura do servidor, ou com uma gravação no ar, as duas linhas ficam travadas.
+        // Sem a leitura do servidor, ou com uma gravação no ar, o Code Mode fica travado.
         let busy = server.is_none() || self.settings_ui.session_options_saving == Some(self.connection);
-        // O que vale é o do servidor; a cópia deste computador só aparece enquanto a leitura não chega.
-        let conversation_beta = server.map_or(a.conversation_beta, |o| o.conversation_beta);
+        // O desenho da conversa é deste computador e muda mesmo com o servidor fora; o servidor recebe a escolha
+        // quando puder.
         let conversation = segments("conversation-beta", &[tr("settings_conversation_beta_off"), tr("settings_conversation_beta_on")],
-            conversation_beta as usize, 2, busy, tr("settings_next_version"),
-            |this: &mut Hangar, index, _: &mut Window, cx| this.change_session_options(BetaChange::Conversation(index == 1), cx), cx);
+            a.conversation_beta as usize, 2, false, tr("settings_next_version"),
+            |this: &mut Hangar, index, _: &mut Window, cx| this.choose_conversation(index == 1, cx), cx);
+        // A abertura só liga o Code Mode com a Conversa nova do servidor ligada; antes da leitura vale a cópia daqui.
+        let server_beta = server.map_or(a.conversation_beta, |o| o.conversation_beta);
         // Ligado pelos ajustes do Claude: travado, mas com "Ligado" marcado.
-        let code_mode = segments("code-mode", &[tr("settings_code_mode_off"), tr("settings_code_mode_on")], (server.is_some_and(|o| o.code_mode) || from_settings) as usize,
-            if conversation_beta { 2 } else { 0 }, from_settings || busy, tr("settings_next_version"),
-            |this: &mut Hangar, index, _: &mut Window, cx| this.change_session_options(BetaChange::CodeMode(index == 1), cx), cx);
+        let code_mode = segments("code-mode", &[tr("settings_code_mode_off"), tr("settings_code_mode_on")],
+            (server.map_or(a.claude_code_mode, |o| o.code_mode) || from_settings) as usize,
+            if server_beta { 2 } else { 0 }, from_settings || busy, tr("settings_next_version"),
+            |this: &mut Hangar, index, _: &mut Window, cx| { this.change_session_options(BetaChange::CodeMode(index == 1), cx); }, cx);
         let hint = self.settings_ui.session_options_error.clone()
             .unwrap_or_else(|| tr(if from_settings { "settings_code_mode_settings" } else { "settings_code_mode_hint" }));
         div().flex().flex_col()
             .child(self.page_top("settings_page_beta", tr("settings_beta_lead")))
             .child(settings_box().mt(px(20.))
                 .child(self.row(IconName::MessageSquare, "settings_conversation_beta", Some(tr("settings_conversation_beta_hint")), true, conversation))
-                .child(self.row(IconName::Code, "settings_code_mode", Some(hint), conversation_beta, code_mode)))
+                .child(self.row(IconName::Code, "settings_code_mode", Some(hint), server_beta, code_mode)))
             .into_any_element()
     }
 
@@ -52,13 +55,14 @@ impl Hangar {
                 match result {
                     Ok(options) => {
                         (this.settings_ui.session_options, this.settings_ui.session_options_error) = (Some((connection, Some(options))), None);
-                        // A cópia deste computador segue o que o servidor diz: é ela que desenha a conversa e que vai
-                        // a um servidor que ainda não tem a escolha.
+                        // A cópia do Code Mode é a que vai a um servidor que ainda não tem a escolha: acompanha a
+                        // gravação confirmada. O desenho da conversa nunca muda pelo servidor.
                         let mut next = appearance::get();
-                        if (next.conversation_beta, next.claude_code_mode) != (options.conversation_beta, options.code_mode) {
-                            (next.conversation_beta, next.claude_code_mode) = (options.conversation_beta, options.code_mode);
+                        if save && next.claude_code_mode != options.code_mode {
+                            next.claude_code_mode = options.code_mode;
                             this.apply_appearance(next, true, cx);
                         }
+                        this.flush_conversation(cx);
                     }
                     Err(error) => {
                         this.settings_ui.session_options_error = Some(Hangar::fetch_failure(&error));
@@ -79,16 +83,34 @@ impl Hangar {
         }).detach();
     }
 
-    /// Grava no servidor; a resposta dele é o que fica marcado, e a falha aparece na linha.
-    fn change_session_options(&mut self, change: BetaChange, cx: &mut Context<Self>) {
+    fn choose_conversation(&mut self, on: bool, cx: &mut Context<Self>) {
+        let mut next = appearance::get();
+        next.conversation_beta = on;
+        self.apply_appearance(next, true, cx);
+        self.settings_ui.conversation_pending = Some(on);
+        self.flush_conversation(cx);
+    }
+
+    /// A Conversa nova escolhida aqui vai ao servidor assim que ele tiver leitura boa e nenhuma gravação no ar.
+    fn flush_conversation(&mut self, cx: &mut Context<Self>) {
+        let Some(on) = self.settings_ui.conversation_pending else { return };
         let server = self.settings_ui.session_options.filter(|(connection, _)| *connection == self.connection).and_then(|(_, options)| options);
-        let Some(next) = options_to_save(server, self.settings_ui.session_options_saving == Some(self.connection), change) else { return };
-        let Some(api) = self.api.clone() else { return };
+        if server.is_some_and(|o| o.conversation_beta == on) || self.change_session_options(BetaChange::Conversation(on), cx) {
+            self.settings_ui.conversation_pending = None;
+        }
+    }
+
+    /// Grava no servidor; a resposta dele é o que fica marcado, e a falha aparece na linha. `false` = não saiu agora.
+    fn change_session_options(&mut self, change: BetaChange, cx: &mut Context<Self>) -> bool {
+        let server = self.settings_ui.session_options.filter(|(connection, _)| *connection == self.connection).and_then(|(_, options)| options);
+        let Some(next) = options_to_save(server, self.settings_ui.session_options_saving == Some(self.connection), change) else { return false };
+        let Some(api) = self.api.clone() else { return false };
         let connection = self.connection;
         self.settings_ui.session_options_saving = Some(connection);
         cx.notify();
         let task = self.runtime.spawn(async move { api.save_session_options(next, false).await });
         self.options_reply(connection, task, true, cx);
+        true
     }
 
     /// Uma consulta por conexão: o settings.json do servidor diz se o Code Mode já está ligado lá. Até a resposta, e

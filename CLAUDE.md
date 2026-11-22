@@ -968,7 +968,7 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   servidor), com o padrão gravado no servidor (`session-defaults.json`, ou `session-options.json`
   para as opções da tela Beta) e aplicado no `resolve_open()`; nunca numa preferência do cliente
   (`appearance.json`, armazenamento do aparelho) posta no corpo. Todo campo do pedido está na
-  tabela `hangar_core::session_open_fields` e é dito pelo `hangar-send --new` e pelo MCP
+  tabela do crate `hangar-session-open-fields` e é dito pelo `hangar-send --new` e pelo MCP
   `new_session`. Travas: `every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server`
   e `a_field_with_a_server_default_keeps_the_explicit_value` (`session_open/tests.rs`),
   `new_session_says_every_open_field` (`mcp/tools.rs`), `new_says_every_open_field`

@@ -696,6 +696,9 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
     if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) {
         return Err(OpenError::new(409, "erro_permissao_so_claude", "modo de permissao so vale para claude"));
     }
+    if request.code_mode == Some(true) && !claude {
+        return Err(OpenError::new(400, "erro_code_mode_so_claude", "Code Mode so vale para provider claude"));
+    }
     if truthy(&request.omp_profile) && provider != AgentProvider::Omp {
         return Err(OpenError::new(400, "erro_perfil_so_omp", "perfil so vale para provider omp"));
     }

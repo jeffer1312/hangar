@@ -61,7 +61,8 @@ pub(super) fn merge(
         }
         // Tarefa nova: só a pasta e o que a pessoa escolheu; opção de um provedor leva o provedor junto.
         None => {
-            let provider_bound = changed.iter().any(|key| !matches!(*key, "cwd" | "provider" | "jev" | "headless" | "read_only"));
+            // Sem terminal só vale no Claude e no Codex: conta como opção do provedor.
+            let provider_bound = changed.iter().any(|key| !matches!(*key, "cwd" | "provider" | "jev" | "read_only"));
             let keep = |key: &str| key == "cwd" || changed.contains(key) || (key == "provider" && provider_bound);
             Value::Object(current.as_object().into_iter().flatten().filter(|(key, _)| keep(key)).map(|(k, v)| (k.clone(), v.clone())).collect())
         }
@@ -136,7 +137,9 @@ mod tests {
         let current = json!({"cwd":"/workspace/app", "provider":"codex", "model":"gpt", "effort":"high", "headless":true, "jev":false});
         assert_eq!(merge(None, current.clone(), &HashSet::new()), json!({"cwd":"/workspace/app"}));
         // Modelo só existe no provedor mostrado: escolher um fixa o provedor junto.
-        assert_eq!(merge(None, current, &HashSet::from(["model"])), json!({"cwd":"/workspace/app", "provider":"codex", "model":"gpt"}));
+        assert_eq!(merge(None, current.clone(), &HashSet::from(["model"])), json!({"cwd":"/workspace/app", "provider":"codex", "model":"gpt"}));
+        // Sem terminal só vale no Claude e no Codex: escolher o modo fixa o provedor mostrado.
+        assert_eq!(merge(None, current, &HashSet::from(["headless"])), json!({"cwd":"/workspace/app", "provider":"codex", "headless":true}));
     }
 
     /// Na tarefa nova, o que a tela preencheu no provedor novo e o que a pessoa escolheu no anterior não viram escolha.

@@ -984,7 +984,7 @@ mod tests {
         let catalog: Value = serde_json::from_str(include_str!("catalog.json")).unwrap();
         let tool = catalog.as_array().unwrap().iter().find(|t| t["name"] == "new_session").unwrap();
         let properties = tool["inputSchema"]["properties"].as_object().unwrap();
-        for field in hangar_core::session_open_fields::FIELDS {
+        for field in hangar_session_open_fields::FIELDS {
             assert!(properties.contains_key(field.mcp), "o catálogo do new_session não tem `{}` ({})", field.mcp, field.body);
             if matches!(field.body, "name" | "cwd") { continue; }
             let parsed = [json!(true), json!("x")].into_iter().find_map(|sample| {

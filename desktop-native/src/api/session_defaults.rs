@@ -27,9 +27,11 @@ impl Api {
         let server = self.identity();
         let entries = tokio::task::spawn_blocking(move || crate::appearance::legacy_harness_defaults(&server)).await
             .map_err(|_| Failure::local("invalid_response"))?;
-        // A escolha da tela Beta guardada neste computador vai ao servidor uma vez, sem pisar na de lá.
+        // A escolha da tela Beta guardada neste computador vai ao servidor uma vez, sem pisar na de lá. A cópia que
+        // ninguém mexeu não é escolha: gravá-la faria o primeiro computador a conectar decidir por todos.
         let look = crate::appearance::get();
-        let options = self.save_session_options(SessionOptions { conversation_beta: look.conversation_beta, code_mode: look.claude_code_mode }, true).await;
+        let local = SessionOptions { conversation_beta: look.conversation_beta, code_mode: look.claude_code_mode };
+        let options = if local == SessionOptions::default() { Ok(()) } else { self.save_session_options(local, true).await.map(drop) };
         let defaults = self.import_session_default_entries(entries).await;
         options.and(defaults)
     }
@@ -38,7 +40,7 @@ impl Api {
     pub async fn read_session_options(&self, local: SessionOptions) -> Result<SessionOptions, Failure> {
         let selection: OptionsSelection = serde_json::from_value(self.server_read(&["session-options"], &[], 10).await?)
             .map_err(|_| Failure::local("invalid_response"))?;
-        if !selection.configured { return self.save_session_options(local, true).await; }
+        if !selection.configured && local != SessionOptions::default() { return self.save_session_options(local, true).await; }
         Ok(selection.options)
     }
 
@@ -184,6 +186,7 @@ mod tests {
             let mut requests = Vec::new();
             for reply in [
                 json!({"configured":false, "options":{"conversation_beta":false, "code_mode":false}}),
+                json!({"configured":false, "options":{"conversation_beta":false, "code_mode":false}}),
                 json!({"configured":true, "options":{"conversation_beta":true, "code_mode":true}}),
             ] {
                 let (stream, _) = listener.accept().await.unwrap();
@@ -207,10 +210,12 @@ mod tests {
             requests
         });
         let api = Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
+        // Cópia que ninguém mexeu não é escolha: não marca o servidor como configurado.
+        assert_eq!(api.read_session_options(SessionOptions::default()).await.unwrap(), SessionOptions::default());
         let local = SessionOptions { conversation_beta: true, code_mode: true };
         assert_eq!(api.read_session_options(local).await.unwrap(), local);
         let requests = server.await.unwrap();
-        assert_eq!(requests.iter().map(|(head, _)| head.split_whitespace().next().unwrap()).collect::<Vec<_>>(), ["GET", "PUT"]);
-        assert_eq!(requests[1].1, Some(json!({"options":{"conversation_beta":true, "code_mode":true}, "if_absent":true})));
+        assert_eq!(requests.iter().map(|(head, _)| head.split_whitespace().next().unwrap()).collect::<Vec<_>>(), ["GET", "GET", "PUT"]);
+        assert_eq!(requests[2].1, Some(json!({"options":{"conversation_beta":true, "code_mode":true}, "if_absent":true})));
     }
 }

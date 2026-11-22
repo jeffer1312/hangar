@@ -467,7 +467,7 @@ fn validate(input: &TaskInput) -> Result<(), Error> {
             }
         }
         Target::New { launch, base, .. } => {
-            let allowed = hangar_core::session_open_fields::SCHEDULED_LAUNCH;
+            let allowed = hangar_session_open_fields::SCHEDULED_LAUNCH;
             let Some(object) = launch.as_object() else {
                 return Err(Error::invalid(
                     "As opções da conversa precisam ser um objeto.",
