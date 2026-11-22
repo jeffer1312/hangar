@@ -3,7 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
-import { parseInviteLink, type Server } from '@hangar/core';
+import { normalizeGuestUser, parseInviteLink, type Server } from '@hangar/core';
 import { Screen } from '../../ui/Screen';
 import { Glass } from '../../ui/Glass';
 import { Sheet } from '../../ui/Sheet';
@@ -63,7 +63,7 @@ export function LoginScreen() {
       const found = await useConnect.getState().signInAnywhere(name, password);
       haptic.success();
       setPassword('');
-      if (found.kind === 'guest') setGuest({ user: name.trim().toLowerCase(), servers: found.servers });
+      if (found.kind === 'guest') setGuest({ user: normalizeGuestUser(name), servers: found.servers });
       else setAccountOpen(true);
     } catch (e) {
       haptic.error();
