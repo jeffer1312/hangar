@@ -3,7 +3,6 @@
 use serde_json::{Map, Value, json};
 
 use crate::groups::model::Sidecar;
-use crate::login_guests::store::{Failure, Store as GuestStore};
 use crate::share::pairs::PairStore;
 use crate::share::store::ShareStore;
 
@@ -26,17 +25,10 @@ pub(super) enum Trim {
 /// Convite ou par vivo na própria sessão, ou endereço de par externo entre os membros do grupo dela.
 /// Registro de convite de outra vida com o mesmo nome também conta: na dúvida, não lê.
 pub(super) fn shared_here(store: &ShareStore, pairs: &PairStore, me: &str, link: Option<&Sidecar>) -> bool {
-    let now = store.now();
-    if store.all().iter().any(|x| x.session == me && x.active(now)) { return true; }
-    if !pairs.by_local(me).is_empty() { return true; }
+    if store.session_has_active(me) || !pairs.by_local(me).is_empty() { return true; }
+    let Some(link) = link else { return false };
     let outside = pairs.addresses();
-    link.is_some_and(|s| s.peers.iter().any(|p| outside.contains(p)))
-}
-
-/// Algum convidado com login vê a sessão, pela regra que filtra a lista e as rotas dele (`Store::visible`):
-/// a sessão é dele, ou é do dono e ele vê as do dono. Bloqueia (lê o arquivo de convidados).
-pub(super) fn guest_sees(store: &GuestStore, me: &str, life: Option<&str>) -> Result<bool, Failure> {
-    Ok(store.guests()?.iter().any(|guest| store.visible(Some(guest), me, life)))
+    link.peers.iter().any(|p| outside.contains(p))
 }
 
 /// Se o registro da dona de um grupo entre máquinas tem membro de fora; sem a lista `outside` não dá para saber.
@@ -60,18 +52,14 @@ pub(super) fn third_party(value: Value, trim: Trim, limit: usize) -> Value {
         Trim::Tail(key) => (key, false),
         Trim::None => return out,
     };
-    if size(&out) <= limit { return out; }
-    let Some(items) = out.get_mut(key).and_then(Value::as_array_mut).map(std::mem::take) else { return out };
-    let keep = |n: usize| if oldest_first { items[items.len() - n..].to_vec() } else { items[..n].to_vec() };
-    // O maior número de itens que cabe: o tamanho cresce com cada item mantido.
-    let (mut fits, mut over) = (0, items.len() + 1);
-    while over - fits > 1 {
-        let mid = fits + (over - fits) / 2;
-        out[key] = Value::Array(keep(mid));
-        if size(&out) <= limit { fits = mid } else { over = mid }
-    }
-    out[key] = Value::Array(keep(fits));
-    if fits < items.len() {
+    let Some(mut items) = out.get_mut(key).and_then(Value::as_array_mut).map(std::mem::take) else { return out };
+    // O texto com a lista vazia mais o de cada item mantido, somado da ponta que fica.
+    let envelope = size(&out, 0);
+    let total = items.len();
+    let fits = if oldest_first { fitting(items.iter().rev(), envelope, limit) } else { fitting(items.iter(), envelope, limit) };
+    if oldest_first { items = items.split_off(total - fits); } else { items.truncate(fits); }
+    out[key] = Value::Array(items);
+    if fits < total {
         out["truncated"] = json!(true);
         // As mais antigas saíram: `before_id` da primeira que ficou continua a leitura.
         if oldest_first { out["more"] = json!(true); }
@@ -79,11 +67,40 @@ pub(super) fn third_party(value: Value, trim: Trim, limit: usize) -> Value {
     out
 }
 
-fn size(value: &Value) -> usize { serde_json::to_string_pretty(value).map_or(usize::MAX, |text| text.len()) }
+/// Quantos itens, na ordem dada, cabem em `limit` com o resto da resposta medindo `envelope` (lista vazia, `[]`).
+/// A lista não vazia gasta 2 bytes a mais que `[]`; cada item no fundo dela, a quebra, o recuo e a vírgula.
+fn fitting<'a>(items: impl Iterator<Item = &'a Value>, envelope: usize, limit: usize) -> usize {
+    let mut used = envelope.saturating_add(2);
+    items.take_while(|item| {
+        used = used.saturating_add(size(item, 2)).saturating_add(6);
+        used <= limit
+    }).count()
+}
+
+/// Bytes do JSON indentado de `value` posto `depth` níveis para dentro, sem montar o texto: cada quebra de
+/// linha dele ganha o recuo de 2 por nível.
+fn size(value: &Value, depth: usize) -> usize {
+    #[derive(Default)]
+    struct Measure { bytes: usize, lines: usize }
+    impl std::io::Write for Measure {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes += buf.len();
+            self.lines += buf.iter().filter(|&&b| b == b'\n').count();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut measure = Measure::default();
+    match serde_json::to_writer_pretty(&mut measure, value) {
+        Ok(()) => measure.bytes.saturating_add(2 * depth * measure.lines),
+        Err(_) => usize::MAX,
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::login_guests::store::Store as GuestStore;
     use crate::share::pairs::ExternalPair;
     use crate::share::store::Kind;
     use std::sync::Arc;
@@ -137,24 +154,37 @@ mod tests {
     fn a_login_guest_that_sees_the_session_refuses() {
         let dir = tempfile::tempdir().unwrap();
         let store = guest_store(dir.path());
-        assert!(!guest_sees(&store, "s0", None).unwrap(), "sem convidado");
+        assert!(!store.seen_by_any_guest("s0", None).unwrap(), "sem convidado");
 
         // Raiz cobrindo a pasta da sessão, sem ver as sessões do dono: a lista dele não traz `s0`.
         add_guest(&store, "ana", dir.path(), false);
-        assert!(!guest_sees(&store, "s0", None).unwrap(), "não vê as sessões do dono");
+        assert!(!store.seen_by_any_guest("s0", None).unwrap(), "não vê as sessões do dono");
 
-        store.claim("s1", "ana", None).unwrap();
-        assert!(guest_sees(&store, "s1", None).unwrap(), "a sessão é da convidada");
+        store.claim("s1", "ana", Some("v1")).unwrap();
+        assert!(store.seen_by_any_guest("s1", Some("v1")).unwrap(), "a sessão é da convidada");
+        assert!(!store.seen_by_any_guest("s1", Some("v2")).unwrap(), "outra vida com o mesmo nome não é dela");
 
         add_guest(&store, "bia", dir.path(), true);
-        assert!(guest_sees(&store, "s0", None).unwrap(), "vê as sessões do dono");
+        assert!(store.seen_by_any_guest("s0", None).unwrap(), "vê as sessões do dono");
+    }
+
+    /// Conferir não adota a vida da sessão no arquivo, como o `owner` do porteiro faz.
+    #[test]
+    fn checking_a_guest_session_does_not_write_its_life() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = guest_store(dir.path());
+        add_guest(&store, "ana", dir.path(), false);
+        store.claim("s1", "ana", None).unwrap();
+        let before = std::fs::read(dir.path().join("guests.json")).unwrap();
+        assert!(store.seen_by_any_guest("s1", Some("v1")).unwrap());
+        assert_eq!(std::fs::read(dir.path().join("guests.json")).unwrap(), before);
     }
 
     #[test]
     fn an_unreadable_guests_file_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("guests.json"), "{torto").unwrap();
-        assert!(guest_sees(&guest_store(dir.path()), "s0", None).is_err());
+        assert!(guest_store(dir.path()).seen_by_any_guest("s0", None).is_err());
     }
 
     #[test]
@@ -200,6 +230,24 @@ mod tests {
         assert_eq!(out["chats"][0]["chat"], json!("c0"), "a mais recente fica");
         assert_eq!(out["truncated"], json!(true));
         assert!(out.get("more").is_none(), "lista sem paginação não ganha `more`");
+    }
+
+    /// A conta sem montar o texto corta onde o texto de verdade cortaria: mais um item já não cabe.
+    #[test]
+    fn the_cut_keeps_every_item_that_fits() {
+        let item = |i: usize| json!({"id": i, "nested": {"list": [1, {"deep": "x".repeat(i % 7 * 40)}], "empty": []}});
+        for limit in [300, 2_000, 9_999] {
+            let out = third_party(json!({"messages": (0..100).map(item).collect::<Vec<_>>(), "more": false}), Trim::OldestFirst("messages"), limit);
+            let kept = out["messages"].as_array().unwrap().len();
+            assert!(serde_json::to_string_pretty(&out).unwrap().len() <= limit, "{limit}");
+            assert!(kept < 100, "{limit}");
+            // Medido como no corte, antes das marcas de cortado.
+            let mut wider = out.clone();
+            wider["messages"] = json!((100 - kept - 1..100).map(item).collect::<Vec<_>>());
+            wider["truncated"] = json!(false);
+            wider["more"] = json!(false);
+            assert!(serde_json::to_string_pretty(&wider).unwrap().len() > limit, "{limit}: mais um item caberia");
+        }
     }
 
     #[test]

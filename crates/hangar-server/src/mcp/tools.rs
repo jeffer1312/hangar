@@ -320,6 +320,33 @@ struct WhatsAppSearch { query: String, chat: Option<String>, limit: Option<u32> 
 #[derive(Deserialize)]
 struct WhatsAppMedia { chat: String, id: Option<String>, since: Option<String> }
 
+// A rota de cada tool do WhatsApp, a mesma no despacho e no teste.
+impl WhatsAppChats {
+    fn path(&self) -> String { hangar_whatsapp::api_path("chats", &[("q", opt(&self.query)), ("limit", &limit_text(self.limit))]) }
+}
+
+impl WhatsAppRead {
+    fn path(&self) -> String {
+        hangar_whatsapp::api_path("messages", &[("chat", &self.chat), ("since", opt(&self.since)), ("until", opt(&self.until)),
+            ("before_id", opt(&self.before_id)), ("limit", &limit_text(self.limit))])
+    }
+}
+
+impl WhatsAppSearch {
+    fn path(&self) -> String {
+        hangar_whatsapp::api_path("search", &[("q", &self.query), ("chat", opt(&self.chat)), ("limit", &limit_text(self.limit))])
+    }
+}
+
+impl WhatsAppMedia {
+    fn body(self) -> Value {
+        let mut body = json!({"chat": self.chat});
+        if let Some(id) = self.id.filter(|v| !v.is_empty()) { body["id"] = json!(id); }
+        if let Some(since) = self.since.filter(|v| !v.is_empty()) { body["since"] = json!(since); }
+        body
+    }
+}
+
 fn opt(value: &Option<String>) -> &str { value.as_deref().unwrap_or_default() }
 
 fn limit_text(limit: Option<u32>) -> String { limit.map(|n| n.to_string()).unwrap_or_default() }
@@ -383,34 +410,19 @@ impl Tools {
             "vault_file" => match args(name, raw) { Ok(a) => self.vault_file(headers, a).await, Err(e) => Err(e) },
             "vault_fill" => match args(name, raw) { Ok(a) => self.vault_fill(headers, a).await, Err(e) => Err(e) },
             "whatsapp_chats" => match args::<WhatsAppChats>(name, raw) {
-                Ok(a) => {
-                    let path = hangar_whatsapp::api_path("chats", &[("q", opt(&a.query)), ("limit", &limit_text(a.limit))]);
-                    self.whatsapp(headers, Method::GET, &path, None, Trim::Tail("chats")).await
-                }
+                Ok(a) => self.whatsapp(headers, Method::GET, &a.path(), None, Trim::Tail("chats")).await,
                 Err(e) => Err(e),
             },
             "whatsapp_read" => match args::<WhatsAppRead>(name, raw) {
-                Ok(a) => {
-                    let path = hangar_whatsapp::api_path("messages", &[("chat", &a.chat), ("since", opt(&a.since)), ("until", opt(&a.until)),
-                        ("before_id", opt(&a.before_id)), ("limit", &limit_text(a.limit))]);
-                    self.whatsapp(headers, Method::GET, &path, None, Trim::OldestFirst("messages")).await
-                }
+                Ok(a) => self.whatsapp(headers, Method::GET, &a.path(), None, Trim::OldestFirst("messages")).await,
                 Err(e) => Err(e),
             },
             "whatsapp_search" => match args::<WhatsAppSearch>(name, raw) {
-                Ok(a) => {
-                    let path = hangar_whatsapp::api_path("search", &[("q", &a.query), ("chat", opt(&a.chat)), ("limit", &limit_text(a.limit))]);
-                    self.whatsapp(headers, Method::GET, &path, None, Trim::Tail("messages")).await
-                }
+                Ok(a) => self.whatsapp(headers, Method::GET, &a.path(), None, Trim::Tail("messages")).await,
                 Err(e) => Err(e),
             },
             "whatsapp_request_media" => match args::<WhatsAppMedia>(name, raw) {
-                Ok(a) => {
-                    let mut body = json!({"chat": a.chat});
-                    if let Some(id) = a.id.filter(|v| !v.is_empty()) { body["id"] = json!(id); }
-                    if let Some(since) = a.since.filter(|v| !v.is_empty()) { body["since"] = json!(since); }
-                    self.whatsapp(headers, Method::POST, "/api/whatsapp/media/request", Some(body), Trim::None).await
-                }
+                Ok(a) => self.whatsapp(headers, Method::POST, "/api/whatsapp/media/request", Some(a.body()), Trim::None).await,
                 Err(e) => Err(e),
             },
             _ => Err(format!("Unknown tool: {name}")),
@@ -468,8 +480,14 @@ impl Tools {
     }
 
     async fn ok_from(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> Result<Value, String> {
+        self.answer(caller, method, path, body, detail).await
+    }
+
+    /// Corpo de sucesso da rota, ou o erro na forma de `fail` (`detail`, ou `coded` com o código na frente).
+    async fn answer(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>, fail: fn(u16, &Value) -> String)
+        -> Result<Value, String> {
         let (status, value) = self.route_from(caller, method, path, body).await;
-        if (200..300).contains(&status) { Ok(value) } else { Err(detail(status, &value)) }
+        if (200..300).contains(&status) { Ok(value) } else { Err(fail(status, &value)) }
     }
 
     /// Uma leitura do WhatsApp pela rota do dono, depois de conferir que a sessão não é vista por mais ninguém. A voz
@@ -477,43 +495,52 @@ impl Tools {
     async fn whatsapp(&self, headers: &HeaderMap, method: Method, path: &str, body: Option<Value>, trim: Trim) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
         if !voice { self.whatsapp_unshared(&me).await?; }
-        let (status, value) = self.route_from(Some(&me), method, path, body).await;
-        if !(200..300).contains(&status) { return Err(coded(status, &value)); }
+        let value = self.answer(Some(&me), method, path, body, coded).await?;
         Ok(dict(whatsapp::third_party(value, trim, whatsapp::LIMIT)))
     }
 
-    /// Falha fechada: grupo ou registro da dona que não se lê também recusa.
+    /// Falha fechada: grupo, convidados ou registro da dona que não se lê também recusa. As leituras independentes
+    /// correm juntas; a recusa segue a ordem das conferências.
     async fn whatsapp_unshared(&self, me: &str) -> Result<(), String> {
-        let failed = |why: String| format!("{}: {why}; a sessão não lê o WhatsApp sem saber se é compartilhada", whatsapp::CHECK_FAILED);
-        let link = match &self.st.groups {
-            Some(groups) => groups.link(me).await.map_err(|_| failed("grupo da sessão ilegível".into()))?,
-            None => None,
+        let link = async {
+            match &self.st.groups {
+                Some(groups) => groups.link(me).await.map_err(|_| unshared_failed("grupo da sessão ilegível")),
+                None => Ok(None),
+            }
         };
+        // A vida pela mesma fonte que o porteiro do convidado usa: sessão de outra vida com o mesmo nome não é dele.
+        let (link, life) = tokio::join!(link, crate::login_guests::gate::session_life(&self.st, me));
+        let link = link?;
         if let Some(share) = &self.st.share && whatsapp::shared_here(&share.store, &share.pairs, me, link.as_ref()) {
             return Err(whatsapp::SHARED_REFUSAL.into());
         }
-        // A vida pela mesma fonte que o porteiro do convidado usa: sessão de outra vida com o mesmo nome não é dele.
-        let life = crate::login_guests::gate::session_life(&self.st, me).await;
+        let (guests, record) = tokio::join!(self.guest_unseen(me, life), self.owner_record_unshared(link));
+        guests.and(record)
+    }
+
+    /// Nenhum convidado com login vê a sessão.
+    async fn guest_unseen(&self, me: &str, life: Option<String>) -> Result<(), String> {
         let (guests, name) = (self.st.login_guests.store.clone(), me.to_owned());
-        let seen = tokio::task::spawn_blocking(move || whatsapp::guest_sees(&guests, &name, life.as_deref())).await
-            .map_err(|_| failed("leitura dos convidados interrompida".into()))?
-            .map_err(|_| failed("arquivo de convidados ilegível".into()))?;
-        if seen { return Err(whatsapp::SHARED_REFUSAL.into()); }
-        // Grupo entre máquinas: o par de fora feito noutra máquina só aparece no registro da dona.
+        let seen = tokio::task::spawn_blocking(move || guests.seen_by_any_guest(&name, life.as_deref())).await
+            .map_err(|_| unshared_failed("leitura dos convidados interrompida"))?
+            .map_err(|_| unshared_failed("arquivo de convidados ilegível"))?;
+        if seen { Err(whatsapp::SHARED_REFUSAL.into()) } else { Ok(()) }
+    }
+
+    /// Grupo entre máquinas: o par de fora feito noutra máquina só aparece no registro da dona.
+    async fn owner_record_unshared(&self, link: Option<Sidecar>) -> Result<(), String> {
         let (Some(link), Some(groups)) = (link, &self.st.groups) else { return Ok(()) };
         let Some(fed) = &link.fed else { return Ok(()) };
         let path = format!("/api/groups/{}", segment(&link.gid));
         let record = if fed.owner == groups.server_id() {
-            let (status, value) = self.route(Method::GET, &path, None).await;
-            if !(200..300).contains(&status) { return Err(failed(format!("registro do grupo: {}", coded(status, &value)))); }
-            value
+            self.answer(None, Method::GET, &path, None, coded).await.map_err(|e| unshared_failed(&format!("registro do grupo: {e}")))?
         } else {
-            self.st.peers.call_group(&fed.owner, reqwest::Method::GET, &path, None).await.map_err(|e| failed(e.text(&fed.owner)))?
+            self.st.peers.call_group(&fed.owner, reqwest::Method::GET, &path, None).await.map_err(|e| unshared_failed(&e.text(&fed.owner)))?
         };
         match whatsapp::record_has_outside(&record) {
             Some(false) => Ok(()),
             Some(true) => Err(whatsapp::SHARED_REFUSAL.into()),
-            None => Err(failed(format!("a dona '{}' não disse quem é de fora no grupo", fed.owner))),
+            None => Err(unshared_failed(&format!("a dona '{}' não disse quem é de fora no grupo", fed.owner))),
         }
     }
 
@@ -1107,8 +1134,7 @@ mod tests {
     #[test]
     fn whatsapp_arguments_follow_the_catalog() {
         let read: WhatsAppRead = args("whatsapp_read", json!({"chat": "c", "before_id": "m9", "limit": 20}).as_object().unwrap().clone()).unwrap();
-        assert_eq!(hangar_whatsapp::api_path("messages", &[("chat", &read.chat), ("since", opt(&read.since)), ("before_id", opt(&read.before_id)),
-            ("limit", &limit_text(read.limit))]), "/api/whatsapp/messages?chat=c&before_id=m9&limit=20");
+        assert_eq!(read.path(), "/api/whatsapp/messages?chat=c&before_id=m9&limit=20");
         let err = args::<WhatsAppRead>("whatsapp_read", json!({"since": "x"}).as_object().unwrap().clone()).err().unwrap();
         assert!(err.contains("missing field `chat`") && err.contains("chat (string)"), "{err}");
     }
@@ -1277,6 +1303,10 @@ mod tests {
         }
         assert!(resumed(&json!({"name": "s", "avisos": []}), None).structured_content.unwrap().get("avisos").is_none());
     }
+}
+
+fn unshared_failed(why: &str) -> String {
+    format!("{}: {why}; a sessão não lê o WhatsApp sem saber se é compartilhada", whatsapp::CHECK_FAILED)
 }
 
 /// O código na frente, quando a rota deu um: o agente decide por ele (`erro_contrato_mudou`, `mission_gate_pending`).
