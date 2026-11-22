@@ -1,11 +1,9 @@
-//! Primeiro acesso pelo Connect, no cartão de conexão: o mesmo formulário do celular, com um campo só, "conta ou usuário".
-//! A conta entra no serviço, libera este computador uma vez para a conta toda e escolhe as máquinas; a convidada entra
-//! pela máquina que guarda o cofre dela e vê só as máquinas liberadas. A senha dela nunca vai ao serviço. Endereço e
-//! token e o Hangar deste computador ficam em "Outras formas de entrar".
+//! Primeiro acesso pelo Connect, com o mesmo formulário do celular. A convidada entra pela máquina que guarda o cofre
+//! dela, para a senha nunca passar pelo serviço.
 use super::*;
 use super::servers::ServerEntry;
 use hangar_connect_client::{AccountSession, CONNECT_SERVICE_URL, Code, ConnectClient, ConnectMachine, DeviceKey, DeviceStatus, MachineEntry,
-    ReqwestTransport, SignInResult, VaultServer, normalize_name};
+    ReqwestTransport, SignInResult, VaultServer, install_code, normalize_name};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -50,14 +48,6 @@ impl Saved {
     fn device_for(&self, name: &str, service_url: &str) -> Option<DeviceKey> {
         self.device.as_ref().filter(|d| d.name == name && d.service_url == service_url).map(|d| d.key.clone())
     }
-
-    /// Arquivo de antes, com a credencial só dentro da conta: ela passa para fora. `true` quando mudou.
-    fn lift_device(&mut self) -> bool {
-        if self.device.is_some() { return false; }
-        let Some(account) = self.account.clone() else { return false };
-        self.keep(Some(account));
-        self.device.is_some()
-    }
 }
 
 fn saved_path() -> Option<PathBuf> { Some(appearance::dir()?.join("connect-account.json")) }
@@ -70,13 +60,11 @@ fn new_install_id() -> String { hangar_connect_client::crypto::random::<16>().ma
 /// O arquivo lido, ou um novo com outro id quando falta ou está ilegível; `true` quando precisa ser gravado.
 fn read_saved() -> (Saved, bool) {
     let read = saved_path().and_then(|path| std::fs::read(path).ok()).and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok());
-    let (mut saved, fresh) = match read {
+    match read {
         Some(saved) if !saved.install_id.is_empty() => (saved, false),
         Some(saved) => (Saved { install_id: new_install_id(), ..saved }, true),
         None => (Saved { install_id: new_install_id(), ..Saved::default() }, true),
-    };
-    let lifted = saved.lift_device();
-    (saved, fresh || lifted)
+    }
 }
 
 /// Gravações em ordem: uma resposta atrasada não grava por cima da conta mais nova.
@@ -103,21 +91,13 @@ fn write_saved(generation: u64, saved: &Saved) -> std::io::Result<()> {
     std::fs::rename(&tmp, &path)
 }
 
-/// Código de conferência deste computador: o mesmo que o cartão de quem libera mostra (`installCode` do core e
-/// `install_code` do hangar-connect, mesmos casos em `installCode.fixtures.json`).
-fn install_code(install_id: &str) -> String {
-    // Sem 0/O e 1/I: a pessoa compara de olho, numa tela e na outra.
-    const ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-    let digest = ring::digest::digest(&ring::digest::SHA256, install_id.as_bytes());
-    let head = u32::from_be_bytes([digest.as_ref()[0], digest.as_ref()[1], digest.as_ref()[2], digest.as_ref()[3]]) >> 2;
-    let code: String = (0..6).map(|i| ALPHABET[((head >> (25 - 5 * i)) & 31) as usize] as char).collect();
-    format!("{}-{}", &code[..3], &code[3..])
-}
-
 fn device_name() -> String { format!("Hangar desktop {}", super::invite::device_label()) }
 
-fn client() -> Result<ConnectClient<ReqwestTransport>, String> {
-    ReqwestTransport::new(reqwest::Client::builder()).map(ConnectClient::new).map_err(|error| failure_text(&error, false))
+type Client = Arc<ConnectClient<ReqwestTransport>>;
+
+fn new_client() -> Result<Client, String> {
+    ReqwestTransport::new(reqwest::Client::builder()).map(|transport| Arc::new(ConnectClient::new(transport)))
+        .map_err(|error| failure_text(&error, false))
 }
 
 /// A frase de cada falha pelo código do cliente. Nome desconhecido e senha recusada têm uma frase só, e rede tem a dela:
@@ -161,7 +141,7 @@ fn enter_label(n: usize) -> String {
 }
 
 /// As máquinas que já vêm marcadas: as ligadas que ainda não estão neste app.
-fn default_picks(list: &[ConnectMachine], saved: &[ServerEntry]) -> Vec<String> {
+pub(crate) fn default_picks(list: &[ConnectMachine], saved: &[ServerEntry]) -> Vec<String> {
     list.iter().filter(|m| m.online && !in_app(saved, &m.host)).map(|m| m.machine_id.clone()).collect()
 }
 
@@ -170,18 +150,27 @@ fn in_app(saved: &[ServerEntry], host: &str) -> bool {
     saved.iter().any(|s| super::servers::norm(&s.address) == address || s.connect.as_ref().is_some_and(|c| super::servers::norm(&c.url) == address))
 }
 
-/// A entrada de uma máquina no app: endereço do Connect com a credencial de aparelho, como a rota já guarda o Connect
-/// salvo como endereço.
-fn machine_server(entry: MachineEntry, id: String) -> ServerEntry {
-    ServerEntry { id, label: entry.label, address: entry.base_url, token: entry.token, ..Default::default() }
-}
-
-fn guest_server(server: &VaultServer, id: String) -> ServerEntry {
-    ServerEntry { id, label: server.label.clone(), address: server.base_url.clone(), token: server.token.clone(), ..Default::default() }
+/// A entrada de uma máquina no app, da conta ou da convidada: o endereço com a credencial que a entrada deu, como a rota
+/// já guarda o Connect salvo como endereço.
+fn server_entry(id: String, label: String, address: String, token: String) -> ServerEntry {
+    ServerEntry { id, label, address, token, ..Default::default() }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Row { Asking, Waiting, Failed(String), Added }
+pub(crate) enum Row { Asking, Waiting, Failed(String), Added }
+
+/// As máquinas que "Entrar" leva: ligadas, marcadas e que ainda não entraram.
+fn to_enter<'a>(list: &'a [ConnectMachine], picked: &'a [String], rows: &'a HashMap<String, Row>) -> impl Iterator<Item = &'a ConnectMachine> {
+    list.iter().filter(|m| m.online && picked.contains(&m.machine_id) && rows.get(&m.machine_id) != Some(&Row::Added))
+}
+
+/// As falhas da rodada, na ordem da lista. Só das marcadas: a de uma rodada anterior, desmarcada depois, já foi dita.
+fn failures(list: &[ConnectMachine], picked: &[String], rows: &HashMap<String, Row>) -> Vec<String> {
+    list.iter().filter(|m| picked.contains(&m.machine_id)).filter_map(|m| match rows.get(&m.machine_id) {
+        Some(Row::Failed(error)) => Some(error.clone()),
+        _ => None,
+    }).collect()
+}
 
 #[derive(Default)]
 enum Stage {
@@ -208,7 +197,8 @@ pub(in crate::app) struct SignIn {
     saved: Option<Saved>,
     /// As máquinas que entraram nesta rodada, já gravadas: a primeira abre quando a rodada termina.
     added: Vec<ServerEntry>,
-    failed: Vec<String>,
+    /// Um cliente para a entrada inteira, releituras da espera incluídas: cada um abre as próprias conexões.
+    client: Option<Client>,
 }
 
 impl SignIn {
@@ -227,8 +217,8 @@ enum Reply {
     Done,
 }
 
-async fn check_device(session: AccountSession, install_id: String) -> Reply {
-    let client = match client() { Ok(client) => client, Err(error) => return Reply::Device(Err(error)) };
+async fn check_device(client: Result<Client, String>, session: AccountSession, install_id: String) -> Reply {
+    let client = match client { Ok(client) => client, Err(error) => return Reply::Device(Err(error)) };
     let fail = |error: hangar_connect_client::Error| if error.status() == Some(401) { Reply::Ended } else { Reply::Device(Err(failure_text(&error, false))) };
     if let Some(key) = session.device.clone() {
         match client.device_status(&session, &key).await {
@@ -274,6 +264,13 @@ impl Hangar {
 
     fn sign_in_store(&mut self, account: Option<SavedAccount>) { self.sign_in_save(|saved| saved.keep(account)); }
 
+    fn sign_in_client(&mut self) -> Result<Client, String> {
+        if let Some(client) = &self.sign_in.client { return Ok(client.clone()); }
+        let client = new_client()?;
+        self.sign_in.client = Some(client.clone());
+        Ok(client)
+    }
+
     fn sign_in_save(&mut self, change: impl FnOnce(&mut Saved)) {
         let saved = self.sign_in.saved.get_or_insert_with(|| read_saved().0);
         change(saved);
@@ -306,7 +303,8 @@ impl Hangar {
 
     fn sign_in_check_device(&mut self, session: AccountSession, window: &mut Window, cx: &mut Context<Self>) {
         let install_id = self.sign_in.saved.as_ref().map(|s| s.install_id.clone()).unwrap_or_default();
-        self.sign_in_spawn(window, cx, move |tx| async move { let _ = tx.send(check_device(session, install_id).await).await; });
+        let client = self.sign_in_client();
+        self.sign_in_spawn(window, cx, move |tx| async move { let _ = tx.send(check_device(client, session, install_id).await).await; });
     }
 
     fn sign_in_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -322,9 +320,10 @@ impl Hangar {
         form.password.update(cx, |state, cx| state.set_value("", window, cx));
         let creating = self.sign_in.creating;
         (self.sign_in.busy, self.sign_in.error) = (true, None);
+        let client = self.sign_in_client();
         self.sign_in_spawn(window, cx, move |tx| async move {
             let user = normalize_name(&name);
-            let result = match client() {
+            let result = match client {
                 Err(error) => Err(error),
                 Ok(client) if creating => client.sign_up(CONNECT_SERVICE_URL, &user, &password).await.map(SignInResult::Account)
                     .map_err(|error| failure_text(&error, true)),
@@ -341,7 +340,7 @@ impl Hangar {
         if !matches!(self.sign_in.stage, Stage::Guest { .. }) { self.sign_in_store(None); }
         self.sign_in.seq += 1;
         (self.sign_in.stage, self.sign_in.busy, self.sign_in.error) = (Stage::Form, false, notice);
-        (self.sign_in.added, self.sign_in.failed) = (Vec::new(), Vec::new());
+        self.sign_in.added = Vec::new();
         cx.notify();
     }
 
@@ -349,8 +348,9 @@ impl Hangar {
         let Stage::Machines { session, list, .. } = &mut self.sign_in.stage else { return };
         *list = None;
         let session = session.clone();
+        let client = self.sign_in_client();
         self.sign_in_spawn(window, cx, move |tx| async move {
-            let reply = match client() {
+            let reply = match client {
                 Err(error) => Reply::Machines(Err(error)),
                 Ok(client) => match client.list_machines(&session).await {
                     Err(error) if error.status() == Some(401) => Reply::Ended,
@@ -373,15 +373,15 @@ impl Hangar {
         if self.sign_in.busy { return; }
         if matches!(self.sign_in.stage, Stage::Guest { .. }) { return self.sign_in_enter_guest(window, cx); }
         let install_id = self.sign_in.saved.as_ref().map(|s| s.install_id.clone()).unwrap_or_default();
+        let client = self.sign_in_client();
         let Stage::Machines { session, list: Some(Ok(list)), picked, rows, .. } = &mut self.sign_in.stage else { return };
-        let chosen: Vec<ConnectMachine> = list.iter()
-            .filter(|m| m.online && picked.contains(&m.machine_id) && rows.get(&m.machine_id) != Some(&Row::Added)).cloned().collect();
+        let chosen: Vec<ConnectMachine> = to_enter(list, picked, rows).cloned().collect();
         if chosen.is_empty() { return; }
         for machine in &chosen { rows.insert(machine.machine_id.clone(), Row::Asking); }
         let session = session.clone();
-        (self.sign_in.busy, self.sign_in.added, self.sign_in.failed) = (true, Vec::new(), Vec::new());
+        (self.sign_in.busy, self.sign_in.added) = (true, Vec::new());
         self.sign_in_spawn(window, cx, move |tx| async move {
-            let client = match client() {
+            let client = match client {
                 Ok(client) => client,
                 Err(error) => {
                     for machine in &chosen { let _ = tx.send(Reply::Entered(machine.machine_id.clone(), Err(error.clone()))).await; }
@@ -410,7 +410,7 @@ impl Hangar {
         let Stage::Guest { servers: list, picked, .. } = &self.sign_in.stage else { return };
         let base = super::servers::new_id();
         let entries: Vec<ServerEntry> = list.iter().filter(|s| picked.contains(&s.id)).enumerate()
-            .map(|(n, server)| guest_server(server, format!("{base}{n}"))).collect();
+            .map(|(n, server)| server_entry(format!("{base}{n}"), server.label.clone(), server.base_url.clone(), server.token.clone())).collect();
         let Some(first) = entries.first().cloned() else { return };
         self.merge_servers(entries, cx);
         self.sign_in_finish(first, window, cx);
@@ -418,8 +418,8 @@ impl Hangar {
 
     /// A rodada terminou com máquina na lista: a entrada some e a primeira abre.
     fn sign_in_finish(&mut self, first: ServerEntry, window: &mut Window, cx: &mut Context<Self>) {
-        let (saved, form) = (self.sign_in.saved.take(), self.sign_in.form.take());
-        self.sign_in = SignIn { saved, form, seq: self.sign_in.seq + 1, ..SignIn::default() };
+        let (saved, form, client) = (self.sign_in.saved.take(), self.sign_in.form.take(), self.sign_in.client.take());
+        self.sign_in = SignIn { saved, form, client, seq: self.sign_in.seq + 1, ..SignIn::default() };
         self.activate_server(first, window, cx);
     }
 
@@ -470,19 +470,23 @@ impl Hangar {
                 let row = match result {
                     Ok(entry) => {
                         // O token sai uma vez só: vai para a lista na hora.
-                        let server = machine_server(entry, format!("{}{}", super::servers::new_id(), self.sign_in.added.len()));
+                        let id = format!("{}{}", super::servers::new_id(), self.sign_in.added.len());
+                        let server = server_entry(id, entry.label, entry.base_url, entry.token);
                         self.merge_servers(vec![server.clone()], cx);
                         self.sign_in.added.push(server);
                         Row::Added
                     }
-                    Err(error) => { self.sign_in.failed.push(error.clone()); Row::Failed(error) }
+                    Err(error) => Row::Failed(error),
                 };
                 if let Stage::Machines { rows, .. } = &mut self.sign_in.stage { rows.insert(id, row); }
             }
             Reply::Done => {
                 self.sign_in.busy = false;
                 if let Some(first) = self.sign_in.added.first().cloned() {
-                    let failed = std::mem::take(&mut self.sign_in.failed);
+                    let failed = match &self.sign_in.stage {
+                        Stage::Machines { list: Some(Ok(list)), picked, rows, .. } => failures(list, picked, rows),
+                        _ => Vec::new(),
+                    };
                     self.sign_in_finish(first, window, cx);
                     // As que não entraram não somem caladas: a primeira já abriu, e o aviso diz quantas faltaram.
                     if !failed.is_empty() { window.push_notification(Notification::warning(failed.join("\n")), cx); }
@@ -515,31 +519,15 @@ impl Hangar {
         cx.notify();
     }
 
-    fn render_account_top(label: String, cx: &mut Context<Self>) -> Div {
-        div().flex().items_center().gap_2().text_sm().text_color(theme::muted())
-            .child(label)
-            .child(div().flex_1())
-            .child(Button::new("sign-in-out").ghost().small().label(tr_shared("connect_sign_out", &[]))
-                .on_click(cx.listener(|this, _, _, cx| this.sign_in_sign_out(None, cx))))
+    /// `tag`: o selo da convidada antes do nome.
+    fn render_account_top(tag: Option<String>, label: String, cx: &mut Context<Self>) -> Div {
+        account_top(tag, label, sign_out_button("sign-in-out").on_click(cx.listener(|this, _, _, cx| this.sign_in_sign_out(None, cx))))
     }
 
     fn render_pick_row(id: String, title: String, subtitle: String, dot: Option<bool>, on: bool, enabled: bool, row: Option<&Row>, cx: &mut Context<Self>) -> Div {
-        let state = match row {
-            Some(Row::Asking) => Some((tr_shared("login_entrando", &[]), theme::muted())),
-            Some(Row::Waiting) => Some((tr_shared("connect_waiting", &[]), theme::warning())),
-            Some(Row::Added) => Some((tr_shared("connect_machine_added", &[]), theme::success())),
-            Some(Row::Failed(error)) => Some((error.clone(), theme::danger())),
-            None => None,
-        };
-        div().flex().items_center().gap_3().px_3().py(px(10.)).rounded(px(10.)).border_1().border_color(theme::border())
-            .when_some(dot, |el, online| el.child(div().size(px(9.)).rounded_full().flex_shrink_0()
-                .bg(if online { theme::success() } else { theme::muted() })))
-            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
-                .child(div().font_weight(FontWeight::SEMIBOLD).truncate().child(title.clone()))
-                .child(div().text_sm().text_color(theme::muted()).truncate().child(subtitle))
-                .when_some(state, |el, (text, color)| el.child(div().text_sm().text_color(color).whitespace_normal().child(text))))
-            .child(Checkbox::new(SharedString::from(format!("sign-in-pick-{id}"))).checked(on).disabled(!enabled).accessibility_label(title)
-                .on_click(cx.listener(move |this, on: &bool, _, cx| this.sign_in_toggle(id.clone(), *on, cx))))
+        let check = pick_checkbox(&format!("sign-in-pick-{id}"), title.clone(), on, enabled)
+            .on_click(cx.listener(move |this, on: &bool, _, cx| this.sign_in_toggle(id.clone(), *on, cx)));
+        pick_row(title, subtitle, dot, row, check)
     }
 
     /// O alto do cartão de conexão na entrada pelo Connect: o formulário, a espera da liberação ou a escolha das máquinas.
@@ -549,25 +537,18 @@ impl Hangar {
         let muted = |text: String| div().text_sm().text_color(theme::muted()).whitespace_normal().child(text);
         let alert = |text: String| div().id("sign-in-error").role(Role::Alert).px_3().py(px(10.)).rounded(px(8.)).bg(theme::danger().alpha(0.12))
             .text_sm().text_color(theme::danger()).whitespace_normal().child(text);
-        let heading = |text: String| div().text_base().font_weight(FontWeight::SEMIBOLD).child(text);
-        let card = div().flex().flex_col().gap_3();
+        let card = sign_in_card();
         match &self.sign_in.stage {
             Stage::Form => {
                 let Some(form) = self.sign_in.form.as_ref() else { return card };
-                let field = |label: String, input: &Entity<InputState>| div().flex().flex_col().gap(px(4.))
-                    .child(div().text_xs().text_color(theme::muted()).child(label.clone()))
-                    .child(Input::new(input).disabled(busy).aria_label(label));
+                let field = |label: String, input: &Entity<InputState>| form_field(label.clone(), Input::new(input).disabled(busy).aria_label(label));
                 let creating = self.sign_in.creating;
-                card.child(div().flex().justify_center().pt_2().child(super::connect::connect_mark("sign-in-mark", 56., busy, cx.reduce_motion())))
-                    .child(div().text_center().text_size(px(19.)).font_weight(FontWeight::SEMIBOLD).child(tr_shared("login_hangar_title", &[])))
-                    .child(div().text_center().text_sm().text_color(theme::muted()).whitespace_normal().child(tr_shared("login_hangar_subtitle", &[])))
+                card.child(form_heading("sign-in-mark", busy, cx.reduce_motion()))
                     .child(field(tr_shared("login_account_or_user", &[]), &form.user))
                     .child(field(tr("login_senha"), &form.password))
                     .when(creating, |el| el.child(muted(tr_shared("connect_account_rules", &[]))))
                     .when_some(self.sign_in.error.clone(), |el, error| el.child(alert(error)))
-                    .child(Button::new("sign-in-go").primary().w_full().loading(busy).disabled(busy)
-                        .label(tr_shared(if creating { "connect_sign_up" } else if busy { "login_entrando" } else { "login_entrar" }, &[]))
-                        .on_click(cx.listener(|this, _, window, cx| this.sign_in_submit(window, cx))))
+                    .child(submit_button("sign-in-go", creating, busy).on_click(cx.listener(|this, _, window, cx| this.sign_in_submit(window, cx))))
                     .child(div().flex().justify_center().child(Button::new("sign-in-mode").ghost().small().disabled(busy)
                         .label(tr_shared(if creating { "connect_have_account" } else { "connect_create_free" }, &[]))
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -583,8 +564,8 @@ impl Hangar {
                     wait.child(div().font_weight(FontWeight::SEMIBOLD).child(tr_shared("connect_release_waiting", &[])))
                         .child(tr_shared("connect_release_body", &[]))
                 };
-                card.child(Self::render_account_top(tr_shared("connect_signed_in_as", &[("name", name)]), cx))
-                    .child(heading(tr_shared("connect_release_title_desktop", &[])))
+                card.child(Self::render_account_top(None, tr_shared("connect_signed_in_as", &[("name", name)]), cx))
+                    .child(section_heading(tr_shared("connect_release_title_desktop", &[])))
                     .child(wait)
                     .when(!*revoked, |el| match code {
                         Some(code) => el.child(div().text_sm().text_color(theme::muted()).text_center().child(tr_shared("connect_release_code", &[])))
@@ -597,8 +578,8 @@ impl Hangar {
                     .when_some(self.sign_in.error.clone(), |el, error| el.child(alert(error)))
             }
             Stage::Machines { name, list, picked, rows, .. } => {
-                let top = Self::render_account_top(tr_shared("connect_signed_in_as", &[("name", name)]), cx);
-                let card = card.child(top).child(heading(tr_shared("connect_your_machines", &[])));
+                let top = Self::render_account_top(None, tr_shared("connect_signed_in_as", &[("name", name)]), cx);
+                let card = card.child(top).child(section_heading(tr_shared("connect_your_machines", &[])));
                 let list = match list {
                     None => return card.child(div().id("sign-in-machines-loading").role(Role::Status).child(muted(tr_shared("comum_carregando", &[])))),
                     Some(Err(error)) => return card.child(alert(error.clone()))
@@ -608,33 +589,26 @@ impl Hangar {
                     Some(Ok(list)) => list.clone(),
                 };
                 let (picked, rows) = (picked.clone(), rows.clone());
-                let count = list.iter().filter(|m| m.online && picked.contains(&m.machine_id) && rows.get(&m.machine_id) != Some(&Row::Added)).count();
+                let count = to_enter(&list, &picked, &rows).count();
                 let (mut card, added_row) = (card, Row::Added);
                 for machine in &list {
                     let added = rows.get(&machine.machine_id) == Some(&added_row) || in_app(&self.servers, &machine.host);
-                    let subtitle = if machine.online { machine.host.clone() } else { tr_shared("connect_machine_off_now", &[]) };
                     let row = rows.get(&machine.machine_id).or(added.then_some(&added_row));
-                    card = card.child(Self::render_pick_row(machine.machine_id.clone(), machine.name.clone(), subtitle, Some(machine.online),
+                    card = card.child(Self::render_pick_row(machine.machine_id.clone(), machine.name.clone(), machine_subtitle(machine), Some(machine.online),
                         picked.contains(&machine.machine_id) && machine.online, machine.online && !busy, row, cx));
                 }
-                card.child(Button::new("sign-in-enter").primary().w_full().loading(busy).disabled(busy || count == 0)
-                    .label(enter_label(count)).on_click(cx.listener(|this, _, window, cx| this.sign_in_enter(window, cx))))
+                card.child(enter_button("sign-in-enter", count, busy).on_click(cx.listener(|this, _, window, cx| this.sign_in_enter(window, cx))))
             }
             Stage::Guest { user, servers, picked } => {
-                let tag = div().px_2().py(px(2.)).rounded_full().bg(theme::accent_dim()).text_xs().text_color(theme::accent_text())
-                    .child(tr_shared("login_guest_tag", &[]));
-                let top = div().flex().items_center().gap_2().text_sm().text_color(theme::muted()).child(tag).child(user.clone()).child(div().flex_1())
-                    .child(Button::new("sign-in-out").ghost().small().label(tr_shared("connect_sign_out", &[]))
-                        .on_click(cx.listener(|this, _, _, cx| this.sign_in_sign_out(None, cx))));
-                let mut card = card.child(top).child(heading(tr_shared("login_guest_machines", &[])));
+                let top = Self::render_account_top(Some(tr_shared("login_guest_tag", &[])), user.clone(), cx);
+                let mut card = card.child(top).child(section_heading(tr_shared("login_guest_machines", &[])));
                 if servers.is_empty() { card = card.child(muted(tr_shared("connect_machines_empty", &[]))); }
                 let count = servers.iter().filter(|s| picked.contains(&s.id)).count();
                 for server in servers.clone() {
                     card = card.child(Self::render_pick_row(server.id.clone(), server.label.clone(), guest_owner(&server.base_url), None,
                         picked.contains(&server.id), true, None, cx));
                 }
-                card.child(Button::new("sign-in-enter").primary().w_full().disabled(count == 0).label(enter_label(count))
-                    .on_click(cx.listener(|this, _, window, cx| this.sign_in_enter(window, cx))))
+                card.child(enter_button("sign-in-enter", count, false).on_click(cx.listener(|this, _, window, cx| this.sign_in_enter(window, cx))))
                     .child(div().text_center().text_xs().text_color(theme::muted()).whitespace_normal().child(tr_shared("login_guest_hint", &[])))
             }
         }
@@ -654,9 +628,77 @@ impl Hangar {
     }
 }
 
+// As partes da tela por dados simples: a miniatura da novidade `entrar-pelo-connect` desenha com as mesmas.
+
+/// O cartão da entrada: as partes abaixo, uma embaixo da outra.
+pub(crate) fn sign_in_card() -> Div { div().flex().flex_col().gap_3() }
+
+/// A marca do Connect, o título e a frase do formulário.
+pub(crate) fn form_heading(mark_id: &str, busy: bool, reduce_motion: bool) -> Div {
+    div().flex().flex_col().gap_3()
+        .child(div().flex().justify_center().pt_2().child(super::connect::connect_mark(mark_id, 56., busy, reduce_motion)))
+        .child(div().text_center().text_size(px(19.)).font_weight(FontWeight::SEMIBOLD).child(tr_shared("login_hangar_title", &[])))
+        .child(div().text_center().text_sm().text_color(theme::muted()).whitespace_normal().child(tr_shared("login_hangar_subtitle", &[])))
+}
+
+pub(crate) fn form_field(label: String, input: impl IntoElement) -> Div {
+    div().flex().flex_col().gap(px(4.)).child(div().text_xs().text_color(theme::muted()).child(label)).child(input)
+}
+
+pub(crate) fn submit_button(id: &'static str, creating: bool, busy: bool) -> Button {
+    Button::new(id).primary().w_full().loading(busy).disabled(busy)
+        .label(tr_shared(if creating { "connect_sign_up" } else if busy { "login_entrando" } else { "login_entrar" }, &[]))
+}
+
+pub(crate) fn section_heading(text: String) -> Div { div().text_base().font_weight(FontWeight::SEMIBOLD).child(text) }
+
+pub(crate) fn sign_out_button(id: &'static str) -> Button { Button::new(id).ghost().small().label(tr_shared("connect_sign_out", &[])) }
+
+/// A conta (ou a convidada, com o selo `tag`) e o Sair.
+pub(crate) fn account_top(tag: Option<String>, label: String, sign_out: Button) -> Div {
+    div().flex().items_center().gap_2().text_sm().text_color(theme::muted())
+        .when_some(tag, |el, tag| el.child(div().px_2().py(px(2.)).rounded_full().bg(theme::accent_dim()).text_xs()
+            .text_color(theme::accent_text()).child(tag)))
+        .child(label)
+        .child(div().flex_1())
+        .child(sign_out)
+}
+
+pub(crate) fn pick_checkbox(id: &str, title: String, on: bool, enabled: bool) -> Checkbox {
+    Checkbox::new(SharedString::from(id.to_owned())).checked(on).disabled(!enabled).accessibility_label(title)
+}
+
+/// Uma máquina da escolha: o ponto de ligada (só nas da conta), nome, endereço, o andamento da entrada e a marcação.
+pub(crate) fn pick_row(title: String, subtitle: String, dot: Option<bool>, row: Option<&Row>, check: Checkbox) -> Div {
+    let state = match row {
+        Some(Row::Asking) => Some((tr_shared("login_entrando", &[]), theme::muted())),
+        Some(Row::Waiting) => Some((tr_shared("connect_waiting", &[]), theme::warning())),
+        Some(Row::Added) => Some((tr_shared("connect_machine_added", &[]), theme::success())),
+        Some(Row::Failed(error)) => Some((error.clone(), theme::danger())),
+        None => None,
+    };
+    div().flex().items_center().gap_3().px_3().py(px(10.)).rounded(px(10.)).border_1().border_color(theme::border())
+        .when_some(dot, |el, online| el.child(div().size(px(9.)).rounded_full().flex_shrink_0()
+            .bg(if online { theme::success() } else { theme::muted() })))
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+            .child(div().font_weight(FontWeight::SEMIBOLD).truncate().child(title))
+            .child(div().text_sm().text_color(theme::muted()).truncate().child(subtitle))
+            .when_some(state, |el, (text, color)| el.child(div().text_sm().text_color(color).whitespace_normal().child(text))))
+        .child(check)
+}
+
+pub(crate) fn machine_subtitle(machine: &ConnectMachine) -> String {
+    if machine.online { machine.host.clone() } else { tr_shared("connect_machine_off_now", &[]) }
+}
+
+pub(crate) fn enter_button(id: &'static str, count: usize, busy: bool) -> Button {
+    Button::new(id).primary().w_full().loading(busy).disabled(busy || count == 0).label(enter_label(count))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Row, Saved, SavedAccount, default_picks, failure_text, guest_owner, in_app, install_code, machine_server};
+    use super::{Row, Saved, SavedAccount, default_picks, failure_text, failures, guest_owner, in_app, install_code, server_entry, to_enter};
+    use std::collections::HashMap;
     use crate::i18n::tr_shared;
     use hangar_connect_client::{AccountSession, Code, ConnectMachine, DeviceKey, DeviceStatus, Error, MachineEntry};
 
@@ -704,9 +746,21 @@ mod tests {
     fn entered_machine_is_saved_with_the_device_credential() {
         let entry = MachineEntry { id: "m1".into(), label: "notebook".into(), base_url: "https://notebook.jeff.hangar.dev.br".into(),
             token: "device-token".into(), device_id: "d1".into() };
-        let server = machine_server(entry, "srv-1".into());
+        let server = server_entry("srv-1".into(), entry.label, entry.base_url, entry.token);
         assert_eq!((server.address.as_str(), server.token.as_str(), server.label.as_str()), ("https://notebook.jeff.hangar.dev.br", "device-token", "notebook"));
         assert!(!server.invite && !server.disabled && server.connect.is_none());
+    }
+
+    #[test]
+    fn enter_takes_the_picked_online_machines_and_reports_only_this_round() {
+        let list = [machine("notebook", true), machine("casa", true), machine("vps", false), machine("escritorio", true)];
+        let picked: Vec<String> = ["notebook", "casa", "vps"].map(String::from).into();
+        let rows = HashMap::from([("casa".to_string(), Row::Added), ("notebook".to_string(), Row::Failed("rede".into())),
+            ("escritorio".to_string(), Row::Failed("antiga".into()))]);
+        let ids: Vec<&str> = to_enter(&list, &picked, &rows).map(|m| m.machine_id.as_str()).collect();
+        assert_eq!(ids, ["notebook"], "desligada, já dentro e desmarcada ficam fora");
+        // A falha da desmarcada é de uma rodada anterior e não volta no aviso.
+        assert_eq!(failures(&list, &picked, &rows), ["rede"]);
     }
 
     #[test]
@@ -720,7 +774,6 @@ mod tests {
         // Sem conta, o id desta instalação continua: sair não muda o código da próxima liberação.
         let out: Saved = serde_json::from_str(r#"{"install_id":"0a1b"}"#).unwrap();
         assert!(out.account.is_none() && out.device.is_none() && out.install_id == "0a1b");
-        assert_ne!(Row::Waiting, Row::Added);
     }
 
     fn key(id: &str) -> DeviceKey { DeviceKey { id: id.into(), secret: format!("s-{id}") } }
@@ -759,16 +812,5 @@ mod tests {
         // 404: o pedido novo chega com outra credencial, que troca a antiga.
         saved.answered(account("jeff", Some(key("d2"))), DeviceStatus::Pending);
         assert_eq!(saved.device_for("jeff", "https://connect.hangar.dev.br"), Some(key("d2")));
-    }
-
-    #[test]
-    fn an_older_file_moves_the_device_out_of_the_account() {
-        let old = serde_json::to_vec(&serde_json::json!({"install_id": "0a1b", "account": {"name": "jeff",
-            "session": {"service_url": "https://connect.hangar.dev.br", "token": "t", "device": {"id": "d1", "secret": "s-d1"}}}})).unwrap();
-        let mut saved: Saved = serde_json::from_slice(&old).unwrap();
-        assert!(saved.lift_device(), "precisa ser gravado de novo");
-        saved.keep(None);
-        assert_eq!(saved.device_for("jeff", "https://connect.hangar.dev.br"), Some(key("d1")));
-        assert!(!saved.lift_device());
     }
 }
