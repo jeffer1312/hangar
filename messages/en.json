@@ -11288,6 +11288,8 @@
   "connect_error_expired": "The request expired without approval. Try again to ask once more.",
   "connect_error_token_lost": "The approval arrived but the delivery was lost. Try again to ask once more.",
   "connect_error_secure_random": "This device has no secure random generator, so the request cannot be sent. Update the app.",
+  "connect_saved_unreadable": "Could not read the account saved on this computer. Sign in again and, if asked, approve this computer again.",
+  "connect_saved_not_written": "Could not save the account on this computer. Next time you open the app, it may not be as it is now.",
   "connect_error_network": "No answer. Check your internet and try again.",
   "connect_error_limit": "Too many attempts. Wait a moment and try again.",
   "connect_error_unavailable": "The service has a problem right now. Try again shortly.",

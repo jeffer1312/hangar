@@ -408,7 +408,10 @@ async fn open_legacy(hub: &Api, user: String, password: String) -> Result<Legacy
 
 /// A sessão do hub dá escrita no cofre: sai assim que não serve mais.
 async fn close_legacy(hub: &Api, cookie: &str) {
-    let _ = hub.hub(reqwest::Method::POST, &["sync", "logout"], &[], None, Some(cookie), 10).await;
+    if let Err(error) = hub.hub(reqwest::Method::POST, &["sync", "logout"], &[], None, Some(cookie), 10).await {
+        let code = error.code.clone().or_else(|| error.status.map(|status| status.to_string())).unwrap_or_else(|| "failed".into());
+        crate::log_line(&format!("convidados: saída do hub não confirmada codigo={code}"));
+    }
 }
 
 struct LoginForm { user: Entity<InputState>, password: Entity<InputState>, _subscriptions: Vec<Subscription> }

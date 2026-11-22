@@ -54,16 +54,38 @@ fn saved_path() -> Option<PathBuf> { Some(appearance::dir()?.join("connect-accou
 
 fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
 
-/// Sem gerador seguro não há id: o pedido sai sem ele e sem código, conferido só pelo nome do computador.
-fn new_install_id() -> String { hangar_connect_client::crypto::random::<16>().map(|bytes| hex(&bytes)).unwrap_or_default() }
+/// Sem gerador seguro não há id, e sem id o pedido não sai: a liberação seria conferida só pelo nome do computador.
+/// `Err`: o código para o diário.
+fn install_id_from(random: std::io::Result<[u8; 16]>) -> Result<String, &'static str> {
+    random.map(|bytes| hex(&bytes)).map_err(|_| Code::ConnectSecureRandomUnavailable.as_str())
+}
 
-/// O arquivo lido, ou um novo com outro id quando falta ou está ilegível; `true` quando precisa ser gravado.
-fn read_saved() -> (Saved, bool) {
-    let read = saved_path().and_then(|path| std::fs::read(path).ok()).and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok());
+/// O arquivo guardado. Arquivo que existe e não foi lido nunca passa por primeiro acesso: a conta e a credencial
+/// deste computador podem estar nele.
+enum Loaded { Missing, Read(Saved), Unreadable(&'static str) }
+
+fn parse_saved(read: std::io::Result<Vec<u8>>) -> Loaded {
     match read {
-        Some(saved) if !saved.install_id.is_empty() => (saved, false),
-        Some(saved) => (Saved { install_id: new_install_id(), ..saved }, true),
-        None => (Saved { install_id: new_install_id(), ..Saved::default() }, true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Loaded::Missing,
+        Err(_) => Loaded::Unreadable("read_failed"),
+        Ok(bytes) => serde_json::from_slice(&bytes).map_or(Loaded::Unreadable("parse_failed"), Loaded::Read),
+    }
+}
+
+fn load_saved() -> Loaded {
+    match saved_path() {
+        Some(path) => parse_saved(std::fs::read(path)),
+        None => Loaded::Unreadable("no_config_dir"),
+    }
+}
+
+/// De onde a entrada começa. `Some(código)`: o arquivo não foi lido, a tela avisa e ele só é regravado quando a pessoa
+/// entrar.
+fn starting_point(loaded: Loaded) -> (Saved, Option<&'static str>) {
+    match loaded {
+        Loaded::Read(saved) => (saved, None),
+        Loaded::Missing => (Saved::default(), None),
+        Loaded::Unreadable(code) => (Saved::default(), Some(code)),
     }
 }
 
@@ -96,7 +118,7 @@ fn device_name() -> String { format!("Hangar desktop {}", super::invite::device_
 type Client = Arc<ConnectClient<ReqwestTransport>>;
 
 fn new_client() -> Result<Client, String> {
-    ReqwestTransport::new(reqwest::Client::builder()).map(|transport| Arc::new(ConnectClient::new(transport)))
+    ReqwestTransport::new(reqwest::Client::builder()).map(|transport| Arc::new(ConnectClient::new(transport).on_warning(crate::log_line)))
         .map_err(|error| failure_text(&error, false))
 }
 
@@ -199,6 +221,8 @@ pub(in crate::app) struct SignIn {
     added: Vec<ServerEntry>,
     /// Um cliente para a entrada inteira, releituras da espera incluídas: cada um abre as próprias conexões.
     client: Option<Client>,
+    /// A gravação falhou e a tela já disse: as releituras da espera regravam a cada volta e não repetem o aviso.
+    save_warned: bool,
 }
 
 impl SignIn {
@@ -217,7 +241,8 @@ enum Reply {
     Done,
 }
 
-async fn check_device(client: Result<Client, String>, session: AccountSession, install_id: String) -> Reply {
+/// `install_id`: só o pedido novo o leva; sem ele esse pedido não sai e a falha volta à tela.
+async fn check_device(client: Result<Client, String>, session: AccountSession, install_id: Result<String, String>) -> Reply {
     let client = match client { Ok(client) => client, Err(error) => return Reply::Device(Err(error)) };
     let fail = |error: hangar_connect_client::Error| if error.status() == Some(401) { Reply::Ended } else { Reply::Device(Err(failure_text(&error, false))) };
     if let Some(key) = session.device.clone() {
@@ -228,6 +253,7 @@ async fn check_device(client: Result<Client, String>, session: AccountSession, i
             Err(error) => return fail(error),
         }
     }
+    let install_id = match install_id { Ok(id) => id, Err(error) => return Reply::Device(Err(error)) };
     match client.register_device(&session, &device_name(), Some(install_id.as_str())).await {
         Ok(key) => Reply::Device(Ok((AccountSession { device: Some(key), ..session }, DeviceStatus::Pending))),
         Err(error) => fail(error),
@@ -262,7 +288,9 @@ impl Hangar {
         }).detach();
     }
 
-    fn sign_in_store(&mut self, account: Option<SavedAccount>) { self.sign_in_save(|saved| saved.keep(account)); }
+    fn sign_in_store(&mut self, account: Option<SavedAccount>, window: &mut Window, cx: &mut Context<Self>) {
+        self.sign_in_save(|saved| saved.keep(account), true, window, cx);
+    }
 
     fn sign_in_client(&mut self) -> Result<Client, String> {
         if let Some(client) = &self.sign_in.client { return Ok(client.clone()); }
@@ -271,13 +299,43 @@ impl Hangar {
         Ok(client)
     }
 
-    fn sign_in_save(&mut self, change: impl FnOnce(&mut Saved)) {
-        let saved = self.sign_in.saved.get_or_insert_with(|| read_saved().0);
+    /// `on_screen`: a gravação vem do que a pessoa fez, e a falha também aparece na tela; a da abertura vai só ao diário.
+    fn sign_in_save(&mut self, change: impl FnOnce(&mut Saved), on_screen: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let saved = self.sign_in.saved.get_or_insert_with(|| starting_point(load_saved()).0);
         change(saved);
         let (copy, generation) = (saved.clone(), NEXT_WRITE.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-        self.runtime.spawn_blocking(move || {
-            if let Err(error) = write_saved(generation, &copy) { crate::log_line(&format!("connect: a conta deste computador não foi guardada: {error}")); }
-        });
+        let (done, written) = futures::channel::oneshot::channel();
+        self.runtime.spawn_blocking(move || { let _ = done.send(write_saved(generation, &copy)); });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(result) = written.await else { return };
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => this.sign_in.save_warned = false,
+                Err(error) => {
+                    crate::log_line(&format!("connect: a conta deste computador não foi guardada codigo={:?}", error.kind()));
+                    if on_screen && !this.sign_in.save_warned {
+                        this.sign_in.save_warned = true;
+                        window.push_notification(Notification::warning(tr_shared("connect_saved_not_written", &[])), cx);
+                    }
+                }
+            });
+        }).detach();
+    }
+
+    /// O id desta instalação para o pedido que o leva. Sem gerador seguro o pedido não sai: a falha vai ao diário e
+    /// volta como a frase da tela.
+    fn sign_in_install_id(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<String, String> {
+        if let Some(id) = self.sign_in.saved.as_ref().map(|s| s.install_id.clone()).filter(|id| !id.is_empty()) { return Ok(id); }
+        match install_id_from(hangar_connect_client::crypto::random::<16>()) {
+            Ok(id) => {
+                let copy = id.clone();
+                self.sign_in_save(|saved| saved.install_id = copy, true, window, cx);
+                Ok(id)
+            }
+            Err(code) => {
+                crate::log_line(&format!("connect: o id desta instalação não foi gerado codigo={code}"));
+                Err(tr_shared("connect_error_secure_random", &[]))
+            }
+        }
     }
 
     /// Os campos nascem na primeira vez que a entrada aparece; com a conta guardada, ela retoma de onde parou.
@@ -292,9 +350,18 @@ impl Hangar {
             self.sign_in.form = Some(Form { user, password, _subscriptions: subscriptions.into() });
         }
         if self.sign_in.saved.is_some() { return; }
-        let (saved, fresh) = read_saved();
+        let (mut saved, unread) = starting_point(load_saved());
+        if let Some(code) = unread {
+            crate::log_line(&format!("connect: a conta guardada deste computador não foi lida codigo={code}"));
+            self.sign_in.error = Some(tr_shared("connect_saved_unreadable", &[]));
+        }
+        // Sem gerador agora, o pedido que precisar do id tenta de novo e diz na tela.
+        let mut fresh = false;
+        if saved.install_id.is_empty() && let Ok(id) = install_id_from(hangar_connect_client::crypto::random::<16>()) {
+            (saved.install_id, fresh) = (id, true);
+        }
         self.sign_in.saved = Some(saved.clone());
-        if fresh { self.sign_in_store(saved.account.clone()); }
+        if fresh && unread.is_none() { self.sign_in_save(|_| {}, false, window, cx); }
         if let Some(account) = saved.account {
             self.sign_in.busy = true;
             self.sign_in_check_device(account.session, window, cx);
@@ -302,7 +369,7 @@ impl Hangar {
     }
 
     fn sign_in_check_device(&mut self, session: AccountSession, window: &mut Window, cx: &mut Context<Self>) {
-        let install_id = self.sign_in.saved.as_ref().map(|s| s.install_id.clone()).unwrap_or_default();
+        let install_id = self.sign_in_install_id(window, cx);
         let client = self.sign_in_client();
         self.sign_in_spawn(window, cx, move |tx| async move { let _ = tx.send(check_device(client, session, install_id).await).await; });
     }
@@ -336,8 +403,8 @@ impl Hangar {
 
     /// Sair: a conta sai do disco (o id desta instalação e a credencial deste computador ficam) e a entrada volta ao
     /// formulário.
-    fn sign_in_sign_out(&mut self, notice: Option<String>, cx: &mut Context<Self>) {
-        if !matches!(self.sign_in.stage, Stage::Guest { .. }) { self.sign_in_store(None); }
+    fn sign_in_sign_out(&mut self, notice: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.sign_in.stage, Stage::Guest { .. }) { self.sign_in_store(None, window, cx); }
         self.sign_in.seq += 1;
         (self.sign_in.stage, self.sign_in.busy, self.sign_in.error) = (Stage::Form, false, notice);
         self.sign_in.added = Vec::new();
@@ -372,11 +439,22 @@ impl Hangar {
     fn sign_in_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sign_in.busy { return; }
         if matches!(self.sign_in.stage, Stage::Guest { .. }) { return self.sign_in_enter_guest(window, cx); }
-        let install_id = self.sign_in.saved.as_ref().map(|s| s.install_id.clone()).unwrap_or_default();
+        if !matches!(&self.sign_in.stage, Stage::Machines { list: Some(Ok(list)), picked, rows, .. } if to_enter(list, picked, rows).next().is_some()) {
+            return;
+        }
+        let install_id = self.sign_in_install_id(window, cx);
         let client = self.sign_in_client();
         let Stage::Machines { session, list: Some(Ok(list)), picked, rows, .. } = &mut self.sign_in.stage else { return };
         let chosen: Vec<ConnectMachine> = to_enter(list, picked, rows).cloned().collect();
-        if chosen.is_empty() { return; }
+        // Sem o id o pedido não sai: cada máquina marcada mostra o porquê.
+        let install_id = match install_id {
+            Ok(id) => id,
+            Err(error) => {
+                for machine in &chosen { rows.insert(machine.machine_id.clone(), Row::Failed(error.clone())); }
+                cx.notify();
+                return;
+            }
+        };
         for machine in &chosen { rows.insert(machine.machine_id.clone(), Row::Asking); }
         let session = session.clone();
         (self.sign_in.busy, self.sign_in.added) = (true, Vec::new());
@@ -435,7 +513,7 @@ impl Hangar {
                 // A credencial deste computador na mesma conta é reaproveitada: registrar outra pediria a liberação de novo.
                 let device = self.sign_in.saved.as_ref().and_then(|s| s.device_for(&name, &session.service_url));
                 let session = AccountSession { device, ..session };
-                self.sign_in_store(Some(SavedAccount { name, session: session.clone() }));
+                self.sign_in_store(Some(SavedAccount { name, session: session.clone() }), window, cx);
                 self.sign_in_check_device(session, window, cx);
             }
             Reply::Device(Err(error)) => {
@@ -447,7 +525,7 @@ impl Hangar {
                 self.sign_in.busy = false;
                 let name = self.sign_in.saved.as_ref().and_then(|s| s.account.as_ref()).map(|a| a.name.clone()).unwrap_or_default();
                 let account = SavedAccount { name: name.clone(), session: session.clone() };
-                self.sign_in_save(|saved| saved.answered(account, status));
+                self.sign_in_save(|saved| saved.answered(account, status), true, window, cx);
                 if status == DeviceStatus::Approved {
                     self.sign_in.stage = Stage::Machines { name, session, list: None, picked: Vec::new(), rows: HashMap::new() };
                     self.sign_in_load_machines(window, cx);
@@ -457,7 +535,7 @@ impl Hangar {
                     if !revoked { self.sign_in_recheck(window, cx); }
                 }
             }
-            Reply::Ended => self.sign_in_sign_out(Some(tr_shared("connect_session_ended", &[])), cx),
+            Reply::Ended => self.sign_in_sign_out(Some(tr_shared("connect_session_ended", &[])), window, cx),
             Reply::Machines(result) => {
                 let saved = self.servers.clone();
                 if let Stage::Machines { list, picked, .. } = &mut self.sign_in.stage {
@@ -514,6 +592,12 @@ impl Hangar {
     fn sign_in_request_again(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Stage::Release { session, .. } = &self.sign_in.stage else { return };
         let session = AccountSession { device: None, ..session.clone() };
+        // O pedido novo leva o id; sem ele a espera ignoraria a falha, então ela fica na tela aqui.
+        if let Err(error) = self.sign_in_install_id(window, cx) {
+            self.sign_in.error = Some(error);
+            cx.notify();
+            return;
+        }
         self.sign_in.busy = true;
         self.sign_in_check_device(session, window, cx);
         cx.notify();
@@ -521,7 +605,7 @@ impl Hangar {
 
     /// `tag`: o selo da convidada antes do nome.
     fn render_account_top(tag: Option<String>, label: String, cx: &mut Context<Self>) -> Div {
-        account_top(tag, label, sign_out_button("sign-in-out").on_click(cx.listener(|this, _, _, cx| this.sign_in_sign_out(None, cx))))
+        account_top(tag, label, sign_out_button("sign-in-out").on_click(cx.listener(|this, _, window, cx| this.sign_in_sign_out(None, window, cx))))
     }
 
     fn render_pick_row(id: String, title: String, subtitle: String, dot: Option<bool>, on: bool, enabled: bool, row: Option<&Row>, cx: &mut Context<Self>) -> Div {
@@ -697,7 +781,8 @@ pub(crate) fn enter_button(id: &'static str, count: usize, busy: bool) -> Button
 
 #[cfg(test)]
 mod tests {
-    use super::{Row, Saved, SavedAccount, default_picks, failure_text, failures, guest_owner, in_app, install_code, server_entry, to_enter};
+    use super::{Loaded, Reply, Row, Saved, SavedAccount, check_device, default_picks, failure_text, failures, guest_owner, in_app, install_code,
+        install_id_from, new_client, parse_saved, server_entry, starting_point, to_enter};
     use std::collections::HashMap;
     use crate::i18n::tr_shared;
     use hangar_connect_client::{AccountSession, Code, ConnectMachine, DeviceKey, DeviceStatus, Error, MachineEntry};
@@ -774,6 +859,36 @@ mod tests {
         // Sem conta, o id desta instalação continua: sair não muda o código da próxima liberação.
         let out: Saved = serde_json::from_str(r#"{"install_id":"0a1b"}"#).unwrap();
         assert!(out.account.is_none() && out.device.is_none() && out.install_id == "0a1b");
+    }
+
+    #[test]
+    fn a_saved_file_that_exists_but_does_not_read_is_never_a_first_access() {
+        assert!(matches!(parse_saved(Err(std::io::ErrorKind::NotFound.into())), Loaded::Missing));
+        assert!(matches!(parse_saved(Err(std::io::ErrorKind::PermissionDenied.into())), Loaded::Unreadable("read_failed")));
+        assert!(matches!(parse_saved(Ok(b"{nao e json".to_vec())), Loaded::Unreadable("parse_failed")));
+        assert!(matches!(parse_saved(Ok(br#"{"install_id":"0a1b"}"#.to_vec())), Loaded::Read(ref saved) if saved.install_id == "0a1b"));
+        // Só o arquivo que falta começa calado; o ilegível leva o código para o diário e o aviso para a tela.
+        assert_eq!(starting_point(Loaded::Missing).1, None);
+        let (saved, unread) = starting_point(Loaded::Unreadable("parse_failed"));
+        assert_eq!(unread, Some("parse_failed"));
+        assert!(saved.account.is_none() && saved.install_id.is_empty(), "nada do arquivo ilegível é inventado");
+        let read = Saved { install_id: "0a1b".into(), ..Saved::default() };
+        assert!(starting_point(Loaded::Read(read.clone())) == (read, None));
+    }
+
+    #[test]
+    fn no_secure_random_is_an_error_never_an_empty_id() {
+        assert_eq!(install_id_from(Err(std::io::Error::other("sem fonte"))), Err("connect_secure_random_unavailable"));
+        assert_eq!(install_id_from(Ok([0xab; 16])), Ok("ab".repeat(16)));
+    }
+
+    #[tokio::test]
+    async fn a_new_request_without_the_install_id_is_not_sent() {
+        let session = AccountSession { service_url: "http://127.0.0.1:9".into(), token: "t".into(), device: None };
+        let client = new_client().expect("cliente do Connect");
+        let reply = check_device(Ok(client), session, Err("sem gerador".into())).await;
+        // Mandado, o pedido daria a frase da rede, não a do gerador.
+        assert!(matches!(reply, Reply::Device(Err(ref error)) if error == "sem gerador"));
     }
 
     fn key(id: &str) -> DeviceKey { DeviceKey { id: id.into(), secret: format!("s-{id}") } }

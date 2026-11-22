@@ -11288,6 +11288,8 @@
   "connect_error_expired": "O pedido venceu sem aprovação. Tente de novo para pedir outra vez.",
   "connect_error_token_lost": "A aprovação chegou, mas a entrega se perdeu. Tente de novo para pedir outra vez.",
   "connect_error_secure_random": "Este aparelho não tem um gerador seguro de números, então o pedido não pode sair. Atualize o app.",
+  "connect_saved_unreadable": "Não deu para ler a conta guardada neste computador. Entre de novo; se pedir, libere este computador outra vez.",
+  "connect_saved_not_written": "Não deu para gravar a conta neste computador. Ao abrir o app de novo, ela pode não estar como agora.",
   "connect_error_network": "Sem resposta. Confira a internet e tente de novo.",
   "connect_error_limit": "Muitas tentativas. Espere um pouco e tente de novo.",
   "connect_error_unavailable": "O serviço está com problema agora. Tente de novo em instantes.",
