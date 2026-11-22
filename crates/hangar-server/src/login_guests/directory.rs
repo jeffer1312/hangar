@@ -95,6 +95,8 @@ impl Publisher {
             }
         };
         let Some(dir) = self.diary.clone() else { return };
-        let _ = tokio::task::spawn_blocking(move || crate::diag::record_blocking(Some(&dir), &[event], "convidados")).await;
+        if let Err(error) = tokio::task::spawn_blocking(move || crate::diag::record_blocking(Some(&dir), &[event], "convidados")).await {
+            tracing::warn!(panicked = error.is_panic(), "registro do diretório de convidados não chegou ao diário");
+        }
     }
 }
