@@ -12126,6 +12126,11 @@
   "native_whatsapp_logged_out": "Your phone unlinked this device. The saved messages are still here; link it again to keep receiving.",
   "native_whatsapp_status_err_pair_timeout": "The code expired before your phone read it. Ask for another one.",
   "native_whatsapp_status_err_unknown": "WhatsApp reported an error ({code}).",
+  "native_whatsapp_status_err_connect_failed": "Couldn't connect to WhatsApp. Check this machine's internet connection and try again.",
+  "native_whatsapp_status_err_pair_code_failed": "WhatsApp didn't create a code for this number. Check the number, with the country code, and try again.",
+  "native_whatsapp_status_err_pair_failed": "The phone didn't finish linking. Try again.",
+  "native_whatsapp_device_name": "Shows on your phone as \"{name}\".",
+  "native_settings_nav_new": "new",
   "native_whatsapp_connected": "Connected · {device}",
   "native_whatsapp_connected_plain": "Connected",
   "native_whatsapp_last_message": "Last message received {ago}.",
@@ -12169,5 +12174,12 @@
   "native_whatsapp_err_busy": "An installation or update is already running.",
   "native_whatsapp_err_off": "The WhatsApp service isn't running on this server.",
   "native_whatsapp_err_untrusted": "The WhatsApp service's reply had no valid signature and was discarded.",
-  "native_whatsapp_err_unknown": "The server refused ({code})."
+  "native_whatsapp_err_unknown": "The server refused ({code}).",
+  "whatsapp_pair_show_qr_other": "Show QR (another device)",
+  "whatsapp_pair_qr_lead": "To scan from another device.",
+  "whatsapp_pair_back_phone": "Back to the code by phone number",
+  "whatsapp_pair_code_lead": "Enter this code on your phone:",
+  "whatsapp_pair_code_valid": "Valid for {n} min.",
+  "whatsapp_pair_change_number": "Change the number",
+  "whatsapp_media_saved": "{n} saved"
 }

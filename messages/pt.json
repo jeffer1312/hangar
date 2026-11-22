@@ -12126,6 +12126,11 @@
   "native_whatsapp_logged_out": "O celular desconectou este aparelho. As mensagens guardadas continuam aqui; conecte de novo para voltar a receber.",
   "native_whatsapp_status_err_pair_timeout": "O código expirou antes de o celular ler. Peça outro.",
   "native_whatsapp_status_err_unknown": "O WhatsApp informou um erro ({code}).",
+  "native_whatsapp_status_err_connect_failed": "Não deu para conectar ao WhatsApp. Confira a internet desta máquina e tente de novo.",
+  "native_whatsapp_status_err_pair_code_failed": "O WhatsApp não gerou o código para este número. Confira o número, com o código do país, e tente de novo.",
+  "native_whatsapp_status_err_pair_failed": "O celular não concluiu a conexão. Tente de novo.",
+  "native_whatsapp_device_name": "Aparece no celular como \"{name}\".",
+  "native_settings_nav_new": "novo",
   "native_whatsapp_connected": "Conectado · {device}",
   "native_whatsapp_connected_plain": "Conectado",
   "native_whatsapp_last_message": "Última mensagem recebida {ago}.",
@@ -12169,5 +12174,12 @@
   "native_whatsapp_err_busy": "Já há uma instalação ou atualização em andamento.",
   "native_whatsapp_err_off": "O serviço do WhatsApp não está rodando neste servidor.",
   "native_whatsapp_err_untrusted": "A resposta do serviço do WhatsApp não tinha assinatura válida e foi descartada.",
-  "native_whatsapp_err_unknown": "O servidor recusou ({code})."
+  "native_whatsapp_err_unknown": "O servidor recusou ({code}).",
+  "whatsapp_pair_show_qr_other": "Mostrar QR (outro aparelho)",
+  "whatsapp_pair_qr_lead": "Para escanear de outro aparelho.",
+  "whatsapp_pair_back_phone": "Voltar para o código pelo número",
+  "whatsapp_pair_code_lead": "Digite este código no celular:",
+  "whatsapp_pair_code_valid": "Vale por {n} min.",
+  "whatsapp_pair_change_number": "Trocar o número",
+  "whatsapp_media_saved": "{n} guardados"
 }
