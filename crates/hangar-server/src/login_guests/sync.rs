@@ -20,13 +20,19 @@ pub struct Sync {
     pub secure: bool,
     pub rate_max: num_bigint::BigInt,
     pub rate_window: num_bigint::BigInt,
+    /// Contas de convidado guardadas pela máquina: o login delas vale sem a Sincronização ligada.
+    pub(super) accounts: std::sync::Arc<hangar_guest_accounts::Store>,
     lock: Mutex<()>,
     fails: Mutex<HashMap<String, Vec<f64>>>,
 }
+/// Teto de falhas somadas pela entrada do Connect, onde todo pedido tem o mesmo endereço.
+const CONNECT_CEILING: u32 = 20;
+const MAX_RATE_KEYS: usize = 4096;
 impl Sync {
     pub fn new(path: PathBuf, config_path: PathBuf, secret: Vec<u8>) -> Self {
         Self {
             diary: Default::default(),
+            accounts: std::sync::Arc::new(hangar_guest_accounts::Store::new(path.with_file_name("guest-accounts.json"))),
             path,
             config_path,
             secret,
@@ -108,6 +114,12 @@ impl Sync {
     }
     pub fn authenticate(&self, cookie: &str, now: u64) -> Result<(String, Option<String>)> {
         let (user, generation) = self.verify(cookie, now).ok_or_else(unauthorized)?;
+        if let Some(current) = self.accounts.generation(&user).map_err(accounts_failure)? {
+            // O login destas contas sempre grava a geração: cookie sem ela ou de senha antiga não vale.
+            if generation.as_deref() != Some(current.as_str()) { return Err(unauthorized()); }
+            return Ok((user, generation));
+        }
+        if !self.enabled() { return Err(unauthorized()); }
         if let Some(vault) = self.load()?.filter(|value|truthy(value)) {
             let acc = account(&vault, &user)?.ok_or_else(unauthorized)?;
             let invalid = match generation.as_deref() {
@@ -142,9 +154,12 @@ impl Sync {
             }
             ("POST", "register") => self.diary.trace("sync.cadastrar", || self.register(body, entropy)),
             ("GET", "prelogin") => self.prelogin(user.unwrap_or_default()),
-            ("POST", "login") => self.login(body, now, ip).map(|(value, _)| value),
+            ("POST", "login") => self.login(body, now, ip).map(|(value, ..)| value),
             ("POST", "logout") => { self.diary.event("sync.logout"); Ok(json!({"ok":true})) },
             ("GET", "vault") => {
+                if let Some((blob, rev)) = self.accounts.vault(user.unwrap_or_default()).map_err(accounts_failure)? {
+                    return Ok(json!({"enc_blob":blob,"rev":rev}));
+                }
                 let Some(vault) = self.load()?.filter(|value|truthy(value)) else {
                     return Ok(json!({"enc_blob":null,"rev":0}));
                 };
@@ -313,10 +328,15 @@ impl Sync {
         self.setup_status()
     }
     fn prelogin(&self, user: &str) -> Result<Value> {
-        let vault = self.load()?;
+        let own = self.accounts.prelogin(user).map_err(accounts_failure)?;
+        if let Some((salt, true)) = &own { return Ok(json!({"salt":salt,"iterations":600000})); }
+        // Com a Sincronização desligada o cofre antigo não entra: nem a conta, nem o sal falso dele.
+        let vault = if self.enabled() { self.load()? } else { None };
         let acc = match &vault { Some(vault) => account(vault, user)?, None => None };
         let salt = if let Some(acc) = acc.filter(|v| truthy(v)) {
             acc.as_object().and_then(|v| v.get("salt")).ok_or_else(unreadable)?.clone()
+        } else if let Some((salt, false)) = own {
+            json!(salt)
         } else if let Some(vault) = vault.filter(|value|truthy(value)) {
             let key = stored_base64(&vault["verifier_salt"])?;
             let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
@@ -324,34 +344,65 @@ impl Sync {
         } else { json!(STANDARD.encode(b"unregistered----")) };
         Ok(json!({"salt":salt,"iterations":600000}))
     }
-    pub(super) fn login(&self, b: &Value, now: f64, ip: &str) -> Result<(Value, String)> {
+    /// `(resposta, geração, usuário do cookie)`: conta do arquivo novo entra pelo nome em minúsculas.
+    pub(super) fn login(&self, b: &Value, now: f64, ip: &str) -> Result<(Value, String, String)> {
         self.diary.trace("sync.login", || self.login_snapshot(b, now, ip))
     }
-    fn login_snapshot(&self, b: &Value, now: f64, ip: &str) -> Result<(Value, String)> {
+    /// Pela entrada do Connect o endereço é sempre o mesmo: conta por usuário, com um teto somado.
+    fn rate_keys(&self, user: &str, ip: &str) -> Vec<(String, num_bigint::BigInt)> {
+        if ip != crate::devices::CONNECT_PEER { return vec![(ip.into(), self.rate_max.clone())]; }
+        vec![(format!("connect:{}", hangar_guest_accounts::normalize(user)), self.rate_max.clone()),
+            ("connect:*".into(), &self.rate_max * CONNECT_CEILING)]
+    }
+    fn prune(&self, hits: &mut Vec<f64>, now: f64) {
+        hits.retain(|t| {
+            let elapsed=now-*t;
+            if elapsed==f64::NEG_INFINITY { return true; }
+            if !elapsed.is_finite() { return false; }
+            // Para limite inteiro, x < limite equivale a floor(x) < limite, sem estreitar o limite.
+            format!("{:.0}",elapsed.floor()).parse::<num_bigint::BigInt>()
+                .is_ok_and(|elapsed|elapsed < self.rate_window)
+        });
+    }
+    fn login_snapshot(&self, b: &Value, now: f64, ip: &str) -> Result<(Value, String, String)> {
         let user = v::text(b, "user", 0, usize::MAX)?;
         let auth = v::text(b, "auth_hash", 0, usize::MAX)?;
+        let keys = self.rate_keys(&user, ip);
         {
             let mut all = self.fails.lock().unwrap_or_else(|e| e.into_inner());
-            let hits = all.entry(ip.into()).or_default();
-            hits.retain(|t| {
-                let elapsed=now-*t;
-                if elapsed==f64::NEG_INFINITY { return true; }
-                if !elapsed.is_finite() { return false; }
-                // Para limite inteiro, x < limite equivale a floor(x) < limite, sem estreitar o limite.
-                format!("{:.0}",elapsed.floor()).parse::<num_bigint::BigInt>()
-                    .is_ok_and(|elapsed|elapsed < self.rate_window)
-            });
-            if num_bigint::BigInt::from(hits.len()) >= self.rate_max {
-                self.diary.access("sync.login", ip, "senha", Some("bloqueio_temporario"));
-                return Err(Failure::code(
-                    429,
-                    "erro_muitas_tentativas",
-                    "too many attempts",
-                ));
+            for (key, max) in &keys {
+                let hits = all.entry(key.clone()).or_default();
+                self.prune(hits, now);
+                if num_bigint::BigInt::from(hits.len()) >= *max {
+                    self.diary.access("sync.login", ip, "senha", Some("bloqueio_temporario"));
+                    return Err(Failure::code(
+                        429,
+                        "erro_muitas_tentativas",
+                        "too many attempts",
+                    ));
+                }
             }
         }
+        let refuse = || {
+            self.diary.access("sync.login", ip, "senha", Some("credenciais_invalidas"));
+            let mut all = self.fails.lock().unwrap_or_else(|e| e.into_inner());
+            for (key, _) in &keys { all.entry(key.clone()).or_default().push(now); }
+            // Nome inventado vira chave nova a cada tentativa: a tabela não cresce sem fim.
+            if all.len() > MAX_RATE_KEYS { all.retain(|_, hits| { self.prune(hits, now); !hits.is_empty() }); }
+            unauthorized()
+        };
         // A geração do cookie precisa pertencer à credencial que acabou de ser validada.
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        match self.accounts.login(&user, &auth).map_err(accounts_failure)? {
+            hangar_guest_accounts::Login::Accepted { user, generation } => {
+                self.diary.access("sync.login", ip, "senha", None);
+                self.diary.event("sync.login_concluido");
+                return Ok((json!({"ok":true}), generation, user));
+            }
+            hangar_guest_accounts::Login::Refused => return Err(refuse()),
+            hangar_guest_accounts::Login::Unknown | hangar_guest_accounts::Login::NoFile if !self.enabled() => return Err(refuse()),
+            hangar_guest_accounts::Login::Unknown | hangar_guest_accounts::Login::NoFile => {}
+        }
         let vault = self.load()?;
         let acc = match &vault { Some(vault) => account(vault, &user)?, None => None };
         let valid = if let Some(acc) = acc.filter(|v| truthy(v)) {
@@ -363,19 +414,16 @@ impl Sync {
             false
         };
         if !valid {
-            self.diary.access("sync.login", ip, "senha", Some("credenciais_invalidas"));
-            self.fails
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .entry(ip.into())
-                .or_default()
-                .push(now);
-            return Err(unauthorized());
+            return Err(refuse());
         }
         let generation = generation_of(acc.ok_or_else(unreadable)?)?;
         self.diary.access("sync.login", ip, "senha", None);
         self.diary.event("sync.login_concluido");
-        Ok((json!({"ok":true}), generation))
+        Ok((json!({"ok":true}), generation, user))
+    }
+    /// O dono do cofre antigo: conta de convidado nova não pode tomar o nome dele.
+    pub(super) fn legacy_owner(&self) -> Result<Option<String>> {
+        Ok(self.load()?.and_then(|vault| vault.get("user").and_then(Value::as_str).map(str::to_owned)))
     }
     fn put_vault(&self, b: &Value, user: &str) -> Result<Value> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -462,6 +510,16 @@ impl Sync {
     }
 }
 fn unreadable() -> Failure { Failure::code(500, "sync_vault_unreadable", "cofre ilegível") }
+pub(super) fn accounts_failure(error: hangar_guest_accounts::Error) -> Failure {
+    use hangar_guest_accounts::Error;
+    match error {
+        Error::Invalid(field) => Failure::code(400, "erro_convidado_invalido", &format!("campo inválido: {field}")),
+        Error::PasswordRequired => Failure::code(400, "erro_senha_obrigatoria", "senha obrigatória para criar o convidado"),
+        Error::NotFound => Failure::code(404, "erro_convidado_inexistente", "convidado não existe"),
+        Error::Unreadable => Failure::code(500, "guest_accounts_unreadable", "contas de convidado ilegíveis"),
+        Error::Io(error) => Failure::code(500, "guest_accounts_io_failed", "não foi possível ler ou gravar as contas de convidado").with_io(&error),
+    }
+}
 fn account<'a>(v: &'a Value, user: &str) -> Result<Option<&'a Value>> {
     if !truthy(v) { return Ok(None); }
     let root = v.as_object().ok_or_else(unreadable)?;

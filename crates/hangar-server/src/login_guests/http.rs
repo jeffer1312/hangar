@@ -63,6 +63,7 @@ pub struct Service {
     pub(crate) needs_initialization: bool,
     pub(crate) lives: std::sync::OnceLock<Arc<crate::share::life::Lives>>,
     pub(super) sync: Sync,
+    pub directory: super::directory::Publisher,
     pub now: fn() -> u64,
     pub entropy: fn(usize) -> Vec<u8>,
 }
@@ -84,6 +85,11 @@ impl Service {
         }
         let mut service = Self::new(settings);
         service.sync.diary.directory = crate::diag::diary_dir_in(&state.accounts.env);
+        service.sync.accounts = Arc::new(hangar_guest_accounts::Store::new(hangar_guest_accounts::path(home)));
+        let diary = service.sync.diary.directory.clone();
+        service.directory.bind(service.sync.accounts.clone(), state.connect_supervisor.clone(), diary);
+        // Na subida: o serviço pode ter perdido a lista, ou a gravação anterior não chegou a ele.
+        service.directory.publish();
         service
     }
     pub fn uninitialized(home:&std::path::Path,claude:&std::path::Path)->Self {
@@ -99,6 +105,7 @@ impl Service {
         sync.rate_window = settings.rate_window;
         Self {
             store: Store::shared(settings.guests),
+            directory: super::directory::Publisher::new(sync.accounts.clone()),
             config_error: None,
             needs_initialization:false,
             lives: std::sync::OnceLock::new(),
@@ -138,7 +145,7 @@ impl Service {
         }
         let query = parts.uri.query().map(str::to_owned);
         let expects_body = match (method.as_str(), path.as_str()) {
-            ("POST", "/api/guests" | "/api/sync/setup" | "/api/sync/register" | "/api/sync/login" | "/api/sync/guests") => true,
+            ("POST", "/api/guests" | "/api/guest-accounts" | "/api/sync/setup" | "/api/sync/register" | "/api/sync/login" | "/api/sync/guests") => true,
             ("PUT", "/api/sync/vault") => true,
             ("POST", path) => path.strip_prefix("/api/guests/").is_some_and(|id| !id.contains('/')),
             _ => false,
@@ -222,7 +229,10 @@ impl Service {
             if setup && !owner {
                 return Err(super::sync::unauthorized());
             }
-            if !setup && !self.sync.enabled() {
+            // Conta de convidado guardada aqui entra sem a Sincronização ligada e sem dono registrado.
+            let guest_login = matches!(path, "prelogin" | "login" | "vault" | "logout");
+            if !setup && !self.sync.enabled()
+                && !(guest_login && self.sync.accounts.any().map_err(super::sync::accounts_failure)?) {
                 return Err(Failure {
                     os_error: None,
                     status: 404,
@@ -250,6 +260,10 @@ impl Service {
                     Err(_) => {}
                 }
                 let (u, g) = result?;
+                // O cofre dessa conta é cifrado pela máquina: o que o cliente gravasse seria apagado na próxima edição.
+                if path == "vault" && method == Method::PUT && self.sync.accounts.contains(&u).map_err(super::sync::accounts_failure)? {
+                    return Err(Failure::code(403, "erro_cofre_do_servidor", "o cofre deste convidado é gravado pela máquina"));
+                }
                 user = Some(u);
                 generation = g;
             }
@@ -272,8 +286,8 @@ impl Service {
                 .transpose()?;
             let body = normalized.as_deref().unwrap_or(body);
             let (value, login_generation) = if path == "login" && method == Method::POST {
-                let (value, generation) = self.sync.login(body, rate_now(), ip)?;
-                (value, Some(generation))
+                let (value, generation, user) = self.sync.login(body, rate_now(), ip)?;
+                (value, Some((generation, user)))
             } else {
                 (self.sync.handle(
                     method.as_str(), path, body, user.as_deref(),
@@ -282,8 +296,7 @@ impl Service {
             };
             let mut set_cookie = None;
             if path == "login" && method == Method::POST {
-                let u = body["user"].as_str().unwrap_or_default();
-                let g = login_generation.as_deref().expect("login validado com geração");
+                let (g, u) = login_generation.as_ref().expect("login validado com geração");
                 set_cookie =
                     Some(self.cookie_header(&self.sync.cookie(u, Some(g), now), https)?);
             } else if authenticated {
@@ -325,6 +338,9 @@ impl Service {
                 "fora do acesso do convidado",
             ));
         }
+        if let Some(rest) = path.strip_prefix("/api/guest-accounts") {
+            return self.guest_accounts(method, rest, body).map(|value| (value, None));
+        }
         let model = if method == Method::POST && path == "/api/guests" {
             Some("NewGuest")
         } else if method == Method::POST
@@ -361,9 +377,38 @@ impl Service {
         };
         Ok((value, None))
     }
+    /// Só do dono, que já passou pelo porteiro: as contas que esta máquina guarda (`hangar-guest-accounts`).
+    fn guest_accounts(&self, method: &Method, rest: &str, body: &Value) -> super::store::Result<Value> {
+        use super::sync::accounts_failure;
+        let accounts = &self.sync.accounts;
+        fn encode(value: &impl serde::Serialize) -> super::store::Result<Value> {
+            serde_json::to_value(value).map_err(|_| Failure::code(500, "guests_worker_failed", "operação de convidados interrompida"))
+        }
+        match (method.as_str(), rest) {
+            ("GET", "") => encode(&accounts.list().map_err(accounts_failure)?),
+            ("POST", "") => {
+                let input: hangar_guest_accounts::Save = serde_json::from_value(crate::orchestration::codec::clone_value(body))
+                    .map_err(|_| Failure::code(400, "erro_convidado_invalido", "pedido inválido"))?;
+                let wanted = hangar_guest_accounts::normalize(&input.user);
+                if self.sync.legacy_owner()?.is_some_and(|owner| hangar_guest_accounts::normalize(&owner) == wanted) {
+                    return Err(Failure::code(409, "erro_usuario_em_uso", "usuário já existe"));
+                }
+                encode(&accounts.save(input).map_err(accounts_failure)?)
+            }
+            ("POST", rest) => {
+                let user = rest.strip_prefix('/').and_then(|tail| tail.strip_suffix("/delete"))
+                    .filter(|user| !user.is_empty() && !user.contains('/'))
+                    .ok_or_else(|| Failure { os_error: None, status: 404, body: json!({"detail":"Not Found"}) })?;
+                accounts.remove(user).map_err(accounts_failure)?;
+                Ok(json!({"ok":true}))
+            }
+            _ => Err(Failure { os_error: None, status: 405, body: json!({"detail":"Method Not Allowed"}) }),
+        }
+    }
     /// O logout não confere sessão nenhuma: quem decide pela entrada do Connect é esta conferência.
+    /// Conta de convidado guardada aqui vale sem a Sincronização ligada (`authenticate` decide).
     pub fn sync_session_valid(&self, headers: &HeaderMap) -> bool {
-        self.sync.enabled() && self.sync.authenticate(&cookie(headers, "cp_sync").unwrap_or_default(), (self.now)()).is_ok()
+        self.sync.authenticate(&cookie(headers, "cp_sync").unwrap_or_default(), (self.now)()).is_ok()
     }
     fn cookie_header(&self, cookie: &str, https: bool) -> super::store::Result<String> {
         let cookie=quote_cookie(cookie)?;
@@ -463,8 +508,10 @@ pub async fn route(
 ) -> Response {
     let (forward, owner) = match crate::routes::gate(&st, peer, &request).await { Ok(value)=>value, Err(error)=>return crate::auth::unavailable(error) };
     let path = percent_encoding::percent_decode_str(request.uri().path()).decode_utf8_lossy();
-    let admin = path == "/api/me" || path == "/api/guests" || path.starts_with("/api/guests/")
+    let accounts = path == "/api/guest-accounts" || path.starts_with("/api/guest-accounts/");
+    let admin = path == "/api/me" || path == "/api/guests" || path.starts_with("/api/guests/") || accounts
         || path == "/api/sync/setup" || path == "/api/sync/setup/disable";
+    let changes_accounts = accounts && request.method() == Method::POST;
     let admission = admin.then(|| crate::routes::owner_gate(&st, peer, &request));
     let response = st
         .login_guests
@@ -481,6 +528,7 @@ pub async fn route(
     }
     if response.status().is_success() {
         st.list.invalidate();
+        if changes_accounts { st.login_guests.directory.publish(); }
     }
     response
 }
@@ -506,11 +554,12 @@ const ROUTES:&[(&str,&str)]=&[
     ("/api/sync/guests","GET"),("/api/sync/guests","POST"),("/api/sync/guests/{user}/delete","POST"),
     ("/api/sync/setup","GET"),("/api/sync/setup","POST"),("/api/sync/setup/disable","POST"),
     ("/api/guests","POST"),("/api/guests/{gid}","POST"),("/api/guests/{gid}/delete","POST"),
+    ("/api/guest-accounts","GET"),("/api/guest-accounts","POST"),("/api/guest-accounts/{user}/delete","POST"),
     ("/api/me","GET"),
 ];
 pub fn owns_path(raw:&str)->bool {
     let path=percent_encoding::percent_decode_str(raw).decode_utf8_lossy();
-    ["/api/me","/api/guests","/api/sync"].iter().any(|root|path==*root || path.strip_prefix(*root).is_some_and(|tail|tail.starts_with('/')))
+    ["/api/me","/api/guests","/api/guest-accounts","/api/sync"].iter().any(|root|path==*root || path.strip_prefix(*root).is_some_and(|tail|tail.starts_with('/')))
 }
 /// CORS precede autenticação e tamanho apenas nas responsabilidades desta migração.
 pub async fn public_contract(request:Request,next:axum::middleware::Next)->Response {

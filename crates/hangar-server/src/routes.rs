@@ -947,6 +947,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/me", axum::routing::any(crate::login_guests::route))
         .route("/api/guests", axum::routing::any(crate::login_guests::route))
         .route("/api/guests/{*rest}", axum::routing::any(crate::login_guests::route))
+        .route("/api/guest-accounts", axum::routing::any(crate::login_guests::route))
+        .route("/api/guest-accounts/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/sync/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/hangar-terminals/{ident}/term", get(crate::term::hangar_ws).fallback(pass_registered))
         .route("/__hangar_server/health", get(health))

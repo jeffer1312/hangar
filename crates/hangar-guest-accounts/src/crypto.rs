@@ -64,7 +64,7 @@ pub fn decrypt(key: &[u8; 32], blob: &Blob) -> Option<Vec<u8>> {
     let iv: [u8; 12] = STANDARD.decode(&blob.iv).ok()?.try_into().ok()?;
     let mut data = STANDARD.decode(&blob.data).ok()?;
     let key = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM, key).ok()?);
-    key.open_in_place(aead::Nonce::assume_unique_for_key(iv), aead::Aad::empty(), &mut data).ok().map(<[u8]>::to_vec)
+    key.open_in_place(aead::Nonce::assume_unique_for_key(iv), aead::Aad::empty(), &mut data).ok().map(|plain| plain.to_vec())
 }
 
 pub(crate) fn fake_salt(secret: &[u8], user: &str) -> String {
@@ -113,7 +113,7 @@ mod tests {
         let mut master = [0u8; 32];
         pbkdf2::derive(pbkdf2::PBKDF2_HMAC_SHA256, NonZeroU32::MIN, b"0123456789abcdef", b"senha", &mut master);
         let prk = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, &[0u8; 32]), &master);
-        let okm = |info: &[u8]| hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, prk.as_ref()), &[info, &[1u8]].concat());
+        let okm = |info: &[u8]| hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, prk.as_ref()), &[info, &[1u8][..]].concat());
         assert_eq!(keys.auth_hash, STANDARD.encode(okm(b"cp-auth").as_ref()));
         assert_eq!(&keys.enc_key[..], okm(b"cp-enc").as_ref());
     }
