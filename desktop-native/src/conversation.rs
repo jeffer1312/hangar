@@ -537,7 +537,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                         if let Some(raw) = text("description") { agent_descs.insert(id, raw); }
                         let mut run = agent_run(event, i, id);
                         // Lançado de dentro de um script: a linha tem a hora do fim do script, e o começo de verdade é
-                        // o do script (antes, o agente terminava "em 0 s").
+                        // o do script.
                         if id.starts_with("repl_") && script_start.is_some() { run.started_at = script_start; }
                         agents.push(run);
                     }

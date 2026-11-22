@@ -352,11 +352,11 @@ it('grupo fechado não ganha linha da chamada em voo, na Árvore, nos Chips e no
       const props = { parts: [repl, ...inners], onAbrir: () => {}, look };
       act(() => root.render(createElement(ToolGroup, { ...props, resultOf: (t) => (t.id === 'repl' ? done : null) })));
       expect(container.textContent).not.toContain('cargo-em-voo');
-      const emVoo = container.textContent;
+      const inFlight = container.textContent;
       act(() => root.render(createElement(ToolGroup, { ...props, resultOf: (t) => ({ ...done, id: `r-${t.id}`, tool_use_id: t.tool_use_id }) })));
       expect(container.textContent).not.toContain('cargo-em-voo');
       expect(container.textContent?.length).toBeGreaterThan(0);
-      expect(emVoo?.length).toBeGreaterThan(0);
+      expect(inFlight?.length).toBeGreaterThan(0);
     }
   } finally {
     act(() => root.unmount());

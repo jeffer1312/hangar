@@ -64,7 +64,7 @@ fn move_expanded(expanded: &mut HashSet<String>, old: &str, new: &str) -> Vec<St
 }
 
 /// Nome do item, para títulos e confirmações.
-fn base(path: &str) -> &str { path.trim_end_matches('/').rsplit('/').next().unwrap_or(path) }
+fn base(path: &str) -> &str { path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path) }
 
 impl Hangar {
     /// Escrever pelo servidor pede sessão com escrita (o convidado só de leitura não tem).
@@ -79,9 +79,15 @@ impl Hangar {
 
     /// O alvo de uma linha da árvore. Com outra pasta escolhida no painel, o item não é da sessão: sem as escritas.
     pub(super) fn tree_item(&self, rel: &str, dir: bool) -> ItemTarget {
-        let disk = self.tree.source.as_ref().and_then(FileSource::root).map(|root| root.join(rel));
+        let disk = self.tree.source.as_ref().and_then(FileSource::root)
+            .map(|root| root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR)));
+        // A pasta da sessão é de outra máquina: o separador é o do caminho dela.
+        let remote = |cwd: String| {
+            let sep = if cwd.contains('\\') { "\\" } else { "/" };
+            format!("{}{sep}{}", cwd.trim_end_matches(['/', '\\']), rel.replace('/', sep))
+        };
         let full = disk.as_ref().map(|p| p.to_string_lossy().into_owned())
-            .or_else(|| self.selected.as_ref().and_then(|s| s.cwd.clone()).map(|cwd| format!("{}/{rel}", cwd.trim_end_matches('/'))))
+            .or_else(|| self.selected.as_ref().and_then(|s| s.cwd.clone()).map(remote))
             .unwrap_or_else(|| rel.to_owned());
         let session = self.tree.custom_root(&self.tree.owner).is_none().then(|| rel.to_owned());
         ItemTarget { session, open: self.tree.file_path(rel.to_owned()), disk, full, dir }
