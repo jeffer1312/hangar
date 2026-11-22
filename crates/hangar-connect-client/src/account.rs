@@ -38,15 +38,15 @@ pub enum DeviceStatus {
     Revoked,
 }
 
-/// Linha de `GET /v1/devices`; tempos em segundos.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Linha de `GET /v1/devices`; tempos em segundos, com fração (o serviço grava o relógio inteiro).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AccountDevice {
     pub device_id: String,
     pub name: String,
     pub status: DeviceStatus,
-    pub created_at: i64,
-    pub approved_at: Option<i64>,
-    pub revoked_at: Option<i64>,
+    pub created_at: f64,
+    pub approved_at: Option<f64>,
+    pub revoked_at: Option<f64>,
     /// O código que o aparelho mostra, pronto do serviço (que nunca manda o `install_id`); ausente em serviço antigo.
     #[serde(default)]
     pub install_code: Option<String>,

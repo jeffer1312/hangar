@@ -413,17 +413,17 @@ async fn machines_are_listed_with_the_account_token_only_and_checked() {
 async fn account_devices_are_parsed_and_answered() {
     let client = client(|request| match crate::fake::route(request).as_str() {
         "GET connect.hangar.dev.br/v1/devices" => json(200, json!([
-            {"device_id": "d1", "name": "iPhone", "status": "pending", "created_at": 10, "approved_at": null, "revoked_at": null,
+            {"device_id": "d1", "name": "iPhone", "status": "pending", "created_at": 1763812345.25, "approved_at": null, "revoked_at": null,
                 "install_code": "K7Q2"},
-            {"device_id": "d2", "name": "Velho", "status": "approved", "created_at": 1, "approved_at": 2, "revoked_at": null},
+            {"device_id": "d2", "name": "Velho", "status": "approved", "created_at": 1, "approved_at": 2.5, "revoked_at": null},
         ])),
         "POST connect.hangar.dev.br/v1/devices/d%201/approve" | "DELETE connect.hangar.dev.br/v1/devices/d%201" => Ok(Response { status: 204, ..Response::default() }),
         _ => json(404, json!({})),
     });
     let devices = client.list_account_devices(&session()).await.unwrap();
-    assert_eq!((devices[0].status, devices[0].created_at, devices[0].approved_at), (DeviceStatus::Pending, 10, None));
+    assert_eq!((devices[0].status, devices[0].created_at, devices[0].approved_at), (DeviceStatus::Pending, 1763812345.25, None));
     assert_eq!((devices[0].install_code.as_deref(), devices[1].install_code.as_deref()), (Some("K7Q2"), None));
-    assert_eq!(devices[1].approved_at, Some(2));
+    assert_eq!((devices[1].created_at, devices[1].approved_at), (1.0, Some(2.5)));
     client.approve_account_device(&session(), "d 1").await.unwrap();
     client.revoke_account_device(&session(), "d 1").await.unwrap();
 }
