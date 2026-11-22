@@ -5033,8 +5033,10 @@ export function getWhatsApp(s: Server): Promise<WhatsAppState> {
   return apiFetchForServer(s, '/api/whatsapp', undefined, 15_000);
 }
 
-/** Desvincular (logout, apagar, remover) dá 30 s ao binário no servidor: a tela espera mais que isso. */
+/** Desvincular (logout, apagar) dá 30 s ao binário no servidor: a tela espera mais que isso. */
 const WHATSAPP_UNLINK_MS = 45_000;
+/** Remover soma o logout a parar, desregistrar e apagar o serviço. */
+const WHATSAPP_UNINSTALL_MS = 90_000;
 
 function postWhatsApp<T>(s: Server, path: string, body?: unknown, prazoMs = 30_000): Promise<T> {
   return apiFetchForServer(s, `/api/whatsapp/${path}`,
@@ -5065,5 +5067,5 @@ export function wipeWhatsApp(s: Server): Promise<{ logout: 'done' | 'not_done' |
 }
 
 export function uninstallWhatsApp(s: Server, logout: boolean): Promise<unknown> {
-  return postWhatsApp(s, 'uninstall', { confirm: true, logout }, WHATSAPP_UNLINK_MS);
+  return postWhatsApp(s, 'uninstall', { confirm: true, logout }, WHATSAPP_UNINSTALL_MS);
 }

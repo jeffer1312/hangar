@@ -247,6 +247,10 @@ export default function WhatsApp() {
         : view === 'schema_newer' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_schema_newer_title()}
           text={m.native_whatsapp_schema_newer_body()}
           action={m.native_whatsapp_update()} primary busy={!!busy} loading={busy === 'update'} onPress={() => act('update', updateWhatsApp)} />
+        // Botão secundário: só procura de novo, porque a versão posterior pode sair com o job ainda na memória.
+        : view === 'schema_newer_latest' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_schema_newer_title()}
+          text={m.native_whatsapp_schema_newer_latest_body()}
+          action={m.native_whatsapp_check_again()} busy={!!busy} loading={busy === 'update'} onPress={() => act('update', updateWhatsApp)} />
         : view === 'unreachable' || view === 'unknown' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_unreachable_title()}
           text={view === 'unreachable' ? m.native_whatsapp_unreachable_body() : m.native_invalid_response()}
           action={m.native_server_retry()} busy={!!busy} onPress={read} />

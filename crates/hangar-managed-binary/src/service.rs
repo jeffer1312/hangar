@@ -292,11 +292,16 @@ pub struct ProcessState {
 /// Algum processo do serviço existe pelo gerenciador, ou vai existir logo: [`ProcessState::running`].
 pub async fn process_running(home: &Path, id: &ServiceId) -> bool {
     // No Windows a resposta é sempre `false`: sem abrir o PowerShell à toa.
-    !cfg!(windows) && process_state(home, id).await.running
+    !cfg!(windows) && query(home, id, None).await.running
 }
 
-/// Uma consulta ao gerenciador: processo de pé e, sem ele, o código da última saída.
-pub async fn process_state(home: &Path, id: &ServiceId) -> ProcessState {
+/// Uma consulta ao gerenciador: processo de pé e, sem ele, o código da última saída. `executable` é o
+/// programa do serviço: no Windows, o código da tarefa só vale como saída dele com o programa e o `.vbs` no disco.
+pub async fn process_state(home: &Path, id: &ServiceId, executable: &Path) -> ProcessState {
+    query(home, id, Some(executable)).await
+}
+
+async fn query(home: &Path, id: &ServiceId, executable: Option<&Path>) -> ProcessState {
     if cfg!(target_os = "macos") {
         return stdout("launchctl", &["list", id.launchd_label]).await.map(|out| launchd_state(&out)).unwrap_or_default();
     }
@@ -306,7 +311,8 @@ pub async fn process_state(home: &Path, id: &ServiceId) -> ProcessState {
             \"State=$($t.State)\"\n\"LastTaskResult=$(($t | Get-ScheduledTaskInfo).LastTaskResult)\"\n");
         let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, utf16le(&script));
         let out = stdout("powershell.exe", &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]).await;
-        return out.map(|out| task_state(&out)).unwrap_or_default();
+        let present = windows_vbs_path(home, id).is_file() && executable.is_some_and(Path::is_file);
+        return out.map(|out| task_state(&out, present)).unwrap_or_default();
     }
     if !systemd_unit_path(home, id).is_file() {
         return ProcessState::default();
@@ -357,9 +363,12 @@ fn launchd_state(list: &str) -> ProcessState {
 }
 
 /// `State=` e `LastTaskResult=` da tarefa: o `.vbs` sai com o código do programa, que vira o resultado dela.
-/// `running` continua `false`: a tarefa de pé não prova que o programa já abriu os dados.
-fn task_state(out: &str) -> ProcessState {
-    let last_exit = if key_value(out, "State") == "Running" { None } else { key_value(out, "LastTaskResult").parse().ok() };
+/// Sem o programa ou o `.vbs` no disco (`files_present` falso), o resultado é do Windows, não do programa: o 3
+/// também é `ERROR_PATH_NOT_FOUND`. `running` continua `false`: a tarefa de pé não prova que o programa já abriu
+/// os dados.
+fn task_state(out: &str, files_present: bool) -> ProcessState {
+    let ran = files_present && key_value(out, "State") != "Running";
+    let last_exit = if ran { key_value(out, "LastTaskResult").parse().ok() } else { None };
     ProcessState { running: false, last_exit }
 }
 
@@ -472,10 +481,12 @@ mod tests {
         let up = "{\n\t\"PID\" = 4321;\n\t\"LastExitStatus\" = 768;\n};\n";
         assert_eq!(launchd_state(up), ProcessState { running: true, last_exit: None });
         assert_eq!(launchd_state("{\n\t\"LastExitStatus\" = 9;\n};\n").last_exit, None, "sinal");
-        assert_eq!(task_state("State=Ready\r\nLastTaskResult=3\r\n"), ProcessState { running: false, last_exit: Some(3) });
-        assert_eq!(task_state("State=Running\r\nLastTaskResult=267009\r\n").last_exit, None);
-        assert_eq!(task_state("State=Ready\r\nLastTaskResult=4294967295\r\n").last_exit, None, "Stop-Process -Force");
-        assert_eq!(task_state("").last_exit, None);
+        assert_eq!(task_state("State=Ready\r\nLastTaskResult=3\r\n", true), ProcessState { running: false, last_exit: Some(3) });
+        assert_eq!(task_state("State=Ready\r\nLastTaskResult=3\r\n", false).last_exit, None,
+            "sem o programa ou o .vbs, o 3 é ERROR_PATH_NOT_FOUND do Windows");
+        assert_eq!(task_state("State=Running\r\nLastTaskResult=267009\r\n", true).last_exit, None);
+        assert_eq!(task_state("State=Ready\r\nLastTaskResult=4294967295\r\n", true).last_exit, None, "Stop-Process -Force");
+        assert_eq!(task_state("", true).last_exit, None);
     }
 
     #[test]

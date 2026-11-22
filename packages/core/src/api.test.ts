@@ -1502,11 +1502,15 @@ describe('prazos do WhatsApp', () => {
   it('desvincular espera mais que os 30 s que o servidor dá ao binário', async () => {
     const timeout = vi.spyOn(AbortSignal, 'timeout');
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'));
-    for (const unlink of [() => logoutWhatsApp(server), () => wipeWhatsApp(server), () => uninstallWhatsApp(server, true)]) {
+    for (const unlink of [() => logoutWhatsApp(server), () => wipeWhatsApp(server)]) {
       timeout.mockClear();
       await unlink();
       expect(timeout).toHaveBeenCalledExactlyOnceWith(45_000);
     }
+    // Remover soma o logout a parar, desregistrar e apagar o serviço.
+    timeout.mockClear();
+    await uninstallWhatsApp(server, true);
+    expect(timeout).toHaveBeenCalledExactlyOnceWith(90_000);
     timeout.mockClear();
     await updateWhatsApp(server);
     expect(timeout).toHaveBeenCalledExactlyOnceWith(30_000);

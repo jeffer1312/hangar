@@ -38,6 +38,15 @@ describe('viewOf', () => {
     // De pé, o status_error é de outra coisa (resposta sem assinatura, sem resposta).
     expect(viewOf({ ...base('running', null), status_error: 'whatsapp_untrusted' })).toBe('unreachable');
   });
+
+  it('atualizar que não achou versão mais nova para de oferecer a atualização', () => {
+    const after = (kind: string, outcome: unknown): WhatsAppState => ({ ...base('stopped', null), status_error: 'whatsapp_schema_newer',
+      job: { kind, step: 'download', done: true, error: null, outcome } });
+    expect(viewOf(after('update', 'already_latest'))).toBe('schema_newer_latest');
+    expect(viewOf(after('update', 'updated'))).toBe('schema_newer');
+    expect(viewOf(after('install', 'already_latest'))).toBe('schema_newer');
+    expect(viewOf({ ...after('update', 'already_latest'), status_error: null })).toBe('stopped');
+  });
 });
 
 describe('shouldPoll', () => {

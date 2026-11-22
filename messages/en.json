@@ -12185,6 +12185,8 @@
   "native_whatsapp_stopped_body": "WhatsApp is installed, but the service isn't running. Nothing is saved while it's stopped.",
   "native_whatsapp_schema_newer_title": "The data is from a newer version",
   "native_whatsapp_schema_newer_body": "The message file was written by a newer version of hangar-whatsapp, and this one can't open it. Update it so the service runs again.",
+  "native_whatsapp_schema_newer_latest_body": "hangar-whatsapp is already on the latest version. Only a later version opens this data; until one comes out, the service stays stopped.",
+  "native_whatsapp_check_again": "Check for a new version",
   "native_whatsapp_unreachable_title": "The service didn't respond",
   "native_whatsapp_unreachable_body": "The WhatsApp service is on, but it didn't send its state.",
   "native_whatsapp_err_accept_required": "Accept the risks before installing.",

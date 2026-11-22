@@ -150,17 +150,20 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
 /// `GET /api/whatsapp`: instalação, aceite, serviço, tarefa e o `status` do C2 com o QR em SVG.
 async fn overview(wa: &WhatsApp) -> Response {
     let paths = &wa.ctx.paths;
-    let installed = install::current(paths).is_some();
+    let current = install::current(paths);
+    let installed = current.is_some();
     let down = if installed { "stopped" } else { "absent" };
     // De pé só com o status assinado. Sem conexão (pid do `control.json` reaproveitado, porta fechada) é
     // parado; algo que responde sem a assinatura continua "running", com o código em `status_error`.
     let (service, status, status_error) = match wa.client.status_within(crate::client::OVERVIEW_STATUS_TIMEOUT).await {
         Ok(status) => ("running", status, Value::Null),
-        Err(CallError::Off(_)) if installed => {
-            let process = hangar_managed_binary::service::process_state(&paths.home, &install::SERVICE).await;
-            (down, Value::Null, stopped_error(process))
-        }
-        Err(CallError::Off(_)) => (down, Value::Null, Value::Null),
+        Err(CallError::Off(_)) => match &current {
+            Some(current) => {
+                let process = hangar_managed_binary::service::process_state(&paths.home, &install::SERVICE, &current.binary).await;
+                (down, Value::Null, stopped_error(process))
+            }
+            None => (down, Value::Null, Value::Null),
+        },
         Err(error) => {
             let (_, code, _) = call_failure(&error);
             ("running", Value::Null, json!(code))

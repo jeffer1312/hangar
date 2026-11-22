@@ -63,6 +63,9 @@ struct Job {
     done: bool,
     #[serde(default)]
     error: Option<Value>,
+    /// `installed`, `updated` ou `already_latest`, depois de terminar sem erro.
+    #[serde(default)]
+    outcome: Option<Value>,
 }
 
 /// Valor fora destes três faz a leitura falhar: resposta inválida, não tela inventada.
@@ -102,14 +105,18 @@ fn code_of(error: &Value) -> Option<String> {
 
 /// O que a página mostra, decidido só pela resposta do `GET /api/whatsapp`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum View { Off, Working, Stopped, SchemaNewer, Unreachable, Unpaired, Pairing, Connected, Outdated, Unknown }
+enum View { Off, Working, Stopped, SchemaNewer, SchemaNewerLatest, Unreachable, Unpaired, Pairing, Connected, Outdated, Unknown }
 
 fn view_of(state: &WaState) -> View {
     if state.job.as_ref().is_some_and(|job| !job.done) { return View::Working; }
     if !state.installed { return View::Off; }
     if state.service != Service::Running {
-        // Religar não adianta: só um binário mais novo abre esses dados.
-        return if state.status_error.as_deref() == Some("whatsapp_schema_newer") { View::SchemaNewer } else { View::Stopped };
+        // Religar não adianta: só um binário mais novo abre esses dados. Atualizar que não achou outro também não.
+        return match state.status_error.as_deref() {
+            Some("whatsapp_schema_newer") if already_latest(state) => View::SchemaNewerLatest,
+            Some("whatsapp_schema_newer") => View::SchemaNewer,
+            _ => View::Stopped,
+        };
     }
     let Some(status) = &state.status else { return View::Unreachable };
     match status.state.as_str() {
@@ -119,6 +126,11 @@ fn view_of(state: &WaState) -> View {
         "unpaired" | "logged_out" => View::Unpaired,
         _ => View::Unknown,
     }
+}
+
+/// A última atualização terminou sem achar release mais nova que a instalada.
+fn already_latest(state: &WaState) -> bool {
+    state.job.as_ref().is_some_and(|job| job.done && job.kind == "update" && job.outcome.as_ref().and_then(Value::as_str) == Some("already_latest"))
 }
 
 /// O job que terminou com erro: o tipo dele (`install`/`update`) e o código.
@@ -161,9 +173,10 @@ fn failure_text(error: &Failure) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Act { Install, Update, Pair, Logout, Wipe, Uninstall }
 
-/// Segundos de espera por ação. Desvincular dá 30 s ao binário no servidor: a tela espera mais, senão estoura antes.
+/// Segundos de espera por ação. Desvincular dá 30 s ao binário no servidor: a tela espera mais, senão estoura
+/// antes. Remover ainda para, desregistra e apaga o serviço depois do logout.
 fn act_timeout(act: Act) -> u64 {
-    match act { Act::Logout | Act::Wipe | Act::Uninstall => 45, _ => 30 }
+    match act { Act::Uninstall => 90, Act::Logout | Act::Wipe => 45, _ => 30 }
 }
 
 pub(super) enum WhatsAppReply {
@@ -419,6 +432,12 @@ impl Hangar {
                 Some(Act::Install), cx)),
             View::SchemaNewer => page.child(self.render_whatsapp_problem("whatsapp-schema-newer", tr("whatsapp_schema_newer_title"),
                 tr("whatsapp_schema_newer_body"), Some(Act::Update), cx)),
+            // Botão secundário: só procura de novo, porque a versão posterior pode sair com o job ainda na memória.
+            View::SchemaNewerLatest => page.child(problem_box("whatsapp-schema-newer-latest", tr("whatsapp_schema_newer_title"),
+                tr("whatsapp_schema_newer_latest_body"))
+                .child(div().pt_1().flex().child(Button::new("whatsapp-check-again").outline().small().label(tr("whatsapp_check_again"))
+                    .loading(self.whatsapp.busy == Some(Act::Update)).disabled(self.whatsapp.busy.is_some())
+                    .on_click(cx.listener(|this, _, _, cx| this.whatsapp_act(Act::Update, None, cx)))))),
             View::Unreachable => page.child(self.render_whatsapp_problem("whatsapp-unreachable", tr("whatsapp_unreachable_title"),
                 tr("whatsapp_unreachable_body"), None, cx)),
             View::Unknown => page.child(self.render_whatsapp_problem("whatsapp-unknown", tr("whatsapp_unreachable_title"), tr("invalid_response"), None, cx)),
@@ -458,12 +477,7 @@ impl Hangar {
             None => Button::new("whatsapp-reload").outline().small().label(tr("server_retry")).disabled(busy)
                 .on_click(cx.listener(|this, _, _, cx| this.whatsapp_read(false, cx))),
         };
-        settings_box().id(id).role(Role::Alert).p_4().gap_2()
-            .child(div().flex().items_center().gap_2()
-                .child(chrome::small_icon(IconName::TriangleAlert, 15., theme::warning()))
-                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(title)))
-            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(body))
-            .child(div().pt_1().flex().child(action))
+        problem_box(id, title, body).child(div().pt_1().flex().child(action))
     }
 
     fn render_whatsapp_pair(&self, state: &WaState, view: View, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -671,6 +685,15 @@ fn info_line(first: bool, title: String, hint: Div) -> Div {
         .flex().flex_col().gap(px(2.)).child(div().text_sm().child(title)).child(hint)
 }
 
+/// O aviso de um problema, sem ação: quem tem ação a acrescenta embaixo.
+fn problem_box(id: &'static str, title: String, body: String) -> Stateful<Div> {
+    settings_box().id(id).role(Role::Alert).p_4().gap_2()
+        .child(div().flex().items_center().gap_2()
+            .child(chrome::small_icon(IconName::TriangleAlert, 15., theme::warning()))
+            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(title)))
+        .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(body))
+}
+
 fn hint(text: String) -> Div { div().text_xs().text_color(theme::muted()).whitespace_normal().child(text) }
 
 fn alert_line(id: &'static str, text: String) -> Stateful<Div> {
@@ -760,10 +783,28 @@ mod tests {
         assert_eq!(with("running", json!("whatsapp_untrusted")), View::Unreachable);
     }
 
+    #[test]
+    fn an_update_that_found_nothing_newer_stops_offering_the_update() {
+        let after = |kind: &str, outcome: serde_json::Value| {
+            let mut value = base("stopped", None);
+            value["status_error"] = json!("whatsapp_schema_newer");
+            value["job"] = json!({"kind": kind, "step": "download", "done": true, "error": null, "outcome": outcome});
+            view_of(&state(value))
+        };
+        assert_eq!(after("update", json!("already_latest")), View::SchemaNewerLatest);
+        assert_eq!(after("update", json!("updated")), View::SchemaNewer);
+        assert_eq!(after("install", json!("already_latest")), View::SchemaNewer);
+        let mut stopped = base("stopped", None);
+        stopped["job"] = json!({"kind": "update", "step": "download", "done": true, "error": null, "outcome": "already_latest"});
+        assert_eq!(view_of(&state(stopped)), View::Stopped, "parado por outro motivo continua oferecendo religar");
+    }
+
     /// O servidor dá 30 s ao binário para desvincular (`UNLINK_TIMEOUT` do `hangar-whatsapp`).
     #[test]
     fn unlinking_waits_past_the_server_deadline() {
         for act in [Act::Logout, Act::Wipe, Act::Uninstall] { assert!(act_timeout(act) > 30, "{act:?}"); }
+        // Remover soma o logout (até 30 s) a parar, desregistrar e apagar o serviço.
+        assert_eq!(act_timeout(Act::Uninstall), 90);
         assert_eq!(act_timeout(Act::Install), 30);
     }
 

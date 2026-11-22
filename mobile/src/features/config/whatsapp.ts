@@ -1,7 +1,7 @@
 import type { WhatsAppState } from '@hangar/core';
 
 /** O que a página mostra, decidido só pela resposta do `GET /api/whatsapp` (mesma regra do nativo). */
-export type WhatsAppView = 'off' | 'working' | 'stopped' | 'schema_newer' | 'unreachable' | 'unpaired' | 'pairing' | 'connected' | 'outdated' | 'unknown';
+export type WhatsAppView = 'off' | 'working' | 'stopped' | 'schema_newer' | 'schema_newer_latest' | 'unreachable' | 'unpaired' | 'pairing' | 'connected' | 'outdated' | 'unknown';
 
 /** As etapas do job, na ordem do `step` do servidor. */
 export const STEPS = ['download', 'service', 'start'] as const;
@@ -20,8 +20,12 @@ export function isWhatsAppState(v: unknown): v is WhatsAppState {
 export function viewOf(state: WhatsAppState): WhatsAppView {
   if (state.job && !state.job.done) return 'working';
   if (!state.installed) return 'off';
-  // Parado porque os dados são de um binário mais novo: religar não adianta, só atualizar.
-  if (state.service !== 'running') return state.status_error === 'whatsapp_schema_newer' ? 'schema_newer' : 'stopped';
+  // Parado porque os dados são de um binário mais novo: religar não adianta, só atualizar; e atualizar que
+  // não achou outro também não.
+  if (state.service !== 'running') {
+    if (state.status_error !== 'whatsapp_schema_newer') return 'stopped';
+    return alreadyLatest(state) ? 'schema_newer_latest' : 'schema_newer';
+  }
   if (!state.status) return 'unreachable';
   switch (state.status.state) {
     case 'connected': return 'connected';
@@ -30,6 +34,12 @@ export function viewOf(state: WhatsAppState): WhatsAppView {
     case 'unpaired': case 'logged_out': return 'unpaired';
     default: return 'unknown';
   }
+}
+
+/** A última atualização terminou sem achar release mais nova que a instalada. */
+function alreadyLatest(state: WhatsAppState): boolean {
+  const job = state.job;
+  return !!job?.done && job.kind === 'update' && job.outcome === 'already_latest';
 }
 
 /** O código de um erro, venha como texto ou como `{code}`. */

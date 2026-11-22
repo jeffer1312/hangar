@@ -67,6 +67,8 @@ pub struct Failure {
 pub enum Outcome {
     Installed,
     Updated,
+    /// Atualizar não achou release mais nova que a instalada: nada mudou.
+    AlreadyLatest,
 }
 
 /// Uma instalação, atualização ou remoção por vez; o andamento fica em memória para o `GET` da tela.
@@ -122,6 +124,7 @@ impl jobs::Outcome for Outcome {
         match self {
             Self::Installed => "installed",
             Self::Updated => "updated",
+            Self::AlreadyLatest => "already_latest",
         }
     }
 }
@@ -270,7 +273,7 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
     progress(Step::Download);
     let latest = release::latest(&ctx.github).await?;
     if !release::newer(&latest.tag, &old.tag) {
-        return Ok(Outcome::Updated);
+        return Ok(Outcome::AlreadyLatest);
     }
     let binary = release::BINARY.fetch(&ctx.github, &latest, ctx.platform, &ctx.paths.service).await?;
     let version = release::check(&binary).await?;
@@ -413,5 +416,27 @@ mod tests {
         installer.forget();
         installer.start("update", Step::Download, |_| async { Ok(Outcome::Updated) }).unwrap().await.unwrap();
         assert_eq!(installer.job()["outcome"], "updated");
+        installer.forget();
+        installer.start("update", Step::Download, |_| async { Ok(Outcome::AlreadyLatest) }).unwrap().await.unwrap();
+        assert_eq!(installer.job()["outcome"], "already_latest");
+    }
+
+    /// Sem release mais nova que a instalada, atualizar não baixa nem religa nada e diz isso.
+    #[tokio::test]
+    async fn updating_to_the_installed_release_says_it_is_already_the_latest() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = format!("http://{}", listener.local_addr().unwrap());
+        let releases = axum::Router::new().route("/repos/{owner}/{repo}/releases",
+            axum::routing::get(|| async { axum::Json(json!([{"tag_name": "v0.1.0"}, {"tag_name": "v0.0.9"}])) }));
+        tokio::spawn(async move { axum::serve(listener, releases).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Context { paths: Paths::new(dir.path()), platform: Platform::local(),
+            github: Github { api, download: "http://127.0.0.1:9/nada".into() } };
+        let binary = ctx.paths.service.join("bin/0.1.0/hangar-whatsapp");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"x").unwrap();
+        write_record(&ctx.paths, &Installed { tag: "v0.1.0".into(), binary: binary.clone() }).unwrap();
+        assert_eq!(update(&ctx, &|_| {}).await, Ok(Outcome::AlreadyLatest));
+        assert_eq!(current(&ctx.paths), Some(Installed { tag: "v0.1.0".into(), binary }), "o registro não mudou");
     }
 }
