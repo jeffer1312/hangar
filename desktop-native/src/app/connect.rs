@@ -1,5 +1,6 @@
 //! Hangar Connect deste servidor: a ligação com a conta, o endereço público e os aparelhos da conta.
 //! Aparelho novo é liberado uma vez na conta, em "Aparelhos da conta", e passa a entrar em todas as máquinas dela.
+//! O que entrou só nesta máquina, sem a conta, fica em "Aparelhos desta máquina".
 use super::*;
 use super::device::Remote;
 use super::server_config::chip;
@@ -58,18 +59,41 @@ fn parse_devices(value: Value) -> Result<Vec<Device>, String> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowActions { Answer, Revoke, This }
 
-fn row_actions(device: &Device, this_machine: &str) -> RowActions {
+/// O PC da conta tem como nome, na lista, o `machine_id` do vínculo: é por ele que esta máquina se reconhece, nunca pelo rótulo.
+fn row_actions(device: &Device, this_machine_id: &str) -> RowActions {
     match device.status {
-        DeviceStatus::Approved if device.kind == DeviceKind::Machine && device.name == this_machine => RowActions::This,
+        DeviceStatus::Approved if device.kind == DeviceKind::Machine && device.name == this_machine_id => RowActions::This,
         DeviceStatus::Pending => RowActions::Answer,
         _ => RowActions::Revoke,
     }
 }
 
-enum DeviceView<'a> { Loading, Failed(&'a str), Empty, Loaded(&'a [Device]) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LocalStatus { Pending, Approved, #[serde(other)] Denied }
+
+/// Uma linha de `GET /api/connect/devices`: aparelho aprovado ou esperando nesta máquina.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub(super) struct LocalDevice {
+    device_id: String, name: String, status: LocalStatus, #[serde(default)] last_seen: Option<u64>,
+    /// O código que o celular mostra, pronto do servidor; servidor antigo não manda.
+    #[serde(default)] install_code: Option<String>,
+    /// Entrou pela conta: aparece em "Aparelhos da conta", não aqui.
+    #[serde(default)] account_device: Option<String>,
+}
+
+/// Só os que não vieram pela conta; recusado só fica guardado para o aparelho ler a recusa. Pendente primeiro.
+fn parse_local_devices(value: Value) -> Result<Vec<LocalDevice>, String> {
+    let mut all: Vec<LocalDevice> = serde_json::from_value(value).map_err(|_| tr("invalid_response"))?;
+    all.retain(|device| device.status != LocalStatus::Denied && device.account_device.is_none());
+    all.sort_by_key(|device| device.status != LocalStatus::Pending);
+    Ok(all)
+}
+
+enum DeviceView<'a, T> { Loading, Failed(&'a str), Empty, Loaded(&'a [T]) }
 
 /// O que a lista mostra. Numa releitura o valor anterior fica na tela: `Loading` é só a primeira.
-fn device_view(list: &Remote<Vec<Device>>) -> DeviceView<'_> {
+fn device_view<T>(list: &Remote<Vec<T>>) -> DeviceView<'_, T> {
     match &list.value {
         None => DeviceView::Loading,
         Some(Err(error)) => DeviceView::Failed(error),
@@ -233,6 +257,11 @@ pub(in crate::app) struct Connect {
     /// O aparelho da conta com Liberar, Recusar ou Tirar acesso em voo: um por vez.
     answering: Option<String>,
     device_error: Option<String>,
+    /// Aparelhos desta máquina que não vieram pela conta: aprovados aqui e pedidos de app antigo.
+    local: Remote<Vec<LocalDevice>>,
+    /// O aparelho desta máquina com Aprovar, Recusar ou Tirar acesso em voo: um por vez.
+    local_answering: Option<String>,
+    local_error: Option<String>,
     form: Option<LinkForm>,
     preview_url: Option<String>,
     /// A porta da prévia aberta no servidor: o link pode ter saído da tela, a prévia não.
@@ -255,7 +284,7 @@ impl Connect {
     /// Religar ao mesmo servidor guarda o que está na tela, inclusive o que foi digitado. As respostas da conexão
     /// anterior não chegam mais (o filtro descarta), então nada fica esperando por elas.
     pub(super) fn carry_over(mut self) -> Self {
-        (self.saving, self.preview_busy, self.linking, self.answering) = (false, false, None, None);
+        (self.saving, self.preview_busy, self.linking, self.answering, self.local_answering) = (false, false, None, None, None);
         self
     }
 
@@ -335,6 +364,8 @@ pub(super) enum ConnectReply {
     Saved(Result<Value, Failure>),
     Devices(u64, Result<Value, Failure>),
     Answered(Result<Value, Failure>),
+    LocalDevices(u64, Result<Value, Failure>),
+    LocalAnswered(Result<Value, Failure>),
     PreviewOpened(Result<Value, Failure>),
     PreviewClosed(Result<Value, Failure>),
     PreviewState(Result<Value, Failure>),
@@ -356,9 +387,10 @@ impl Hangar {
     pub(super) fn connect_reset(&mut self) { self.connect = Connect::default(); }
 
     pub(super) fn connect_opened(&mut self, cx: &mut Context<Self>) {
-        (self.connect.error, self.connect.device_error) = (None, None);
+        (self.connect.error, self.connect.device_error, self.connect.local_error) = (None, None, None);
         self.load_connect(cx);
         self.load_connect_devices(cx);
+        self.load_local_devices(cx);
         self.load_connect_preview();
         self.load_account_machines(cx);
         self.load_peer_links();
@@ -409,6 +441,51 @@ impl Hangar {
         let seq = self.connect.devices.start();
         let done = self.connect_send_later();
         self.runtime.spawn(async move { done(ConnectReply::Devices(seq, api.server_read(&["connect", "account-devices"], &[], 10).await)).await });
+        cx.notify();
+    }
+
+    fn load_local_devices(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let seq = self.connect.local.start();
+        let done = self.connect_send_later();
+        self.runtime.spawn(async move { done(ConnectReply::LocalDevices(seq, api.server_read(&["connect", "devices"], &[], 10).await)).await });
+        cx.notify();
+    }
+
+    /// Aprovar aqui dá acesso de dono a esta máquina: pede confirmação, como Tirar acesso.
+    fn confirm_local_approve(&mut self, device: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let machine = self.vault_machine_label(&self.active_key(), cx);
+        let this = cx.entity().downgrade();
+        chrome::confirm_alert(window, cx, tr("connect_local_approve_title").replace("{name}", &name),
+            tr("connect_local_approve_body").replace("{machine}", &machine), tr_shared("connect_device_approve", &[]), ButtonVariant::Primary,
+            move |_, cx| {
+                let _ = this.update(cx, |this, cx| this.answer_local_device(device.clone(), true, cx));
+                true
+            });
+    }
+
+    fn confirm_local_revoke(&mut self, device: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let machine = self.vault_machine_label(&self.active_key(), cx);
+        let this = cx.entity().downgrade();
+        chrome::confirm_alert(window, cx, tr_shared("connect_device_revoke_title", &[("name", &name)]),
+            tr("connect_local_revoke_body").replace("{machine}", &machine), tr_shared("connect_device_revoke", &[]), ButtonVariant::Danger,
+            move |_, cx| {
+                let _ = this.update(cx, |this, cx| this.answer_local_device(device.clone(), false, cx));
+                true
+            });
+    }
+
+    /// `approve` aprova o pendente; sem ele, a máquina o apaga: é o Recusar do pendente e o Tirar acesso do aprovado.
+    fn answer_local_device(&mut self, device: String, approve: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        if self.connect.local_answering.is_some() { return; }
+        (self.connect.local_answering, self.connect.local_error) = (Some(device.clone()), None);
+        let done = self.connect_send_later();
+        self.runtime.spawn(async move {
+            let result = if approve { api.server_send(reqwest::Method::POST, &["connect", "devices", &device, "approve"], None, 15).await }
+                else { api.server_send(reqwest::Method::DELETE, &["connect", "devices", &device], None, 15).await };
+            done(ConnectReply::LocalAnswered(result)).await
+        });
         cx.notify();
     }
 
@@ -537,6 +614,7 @@ impl Hangar {
                     None => { self.load_connect(cx); self.load_account_machines(cx); }
                 }
                 self.load_connect_devices(cx);
+                self.load_local_devices(cx);
             }
             ConnectReply::Machines(seq, result) => {
                 let result = result.map_err(|error| failure_text(&error)).and_then(parse_account);
@@ -556,6 +634,15 @@ impl Hangar {
                 self.connect.answering = None;
                 self.connect.device_error = result.err().map(|error| failure_text(&error));
                 self.load_connect_devices(cx);
+            }
+            ConnectReply::LocalDevices(seq, result) => {
+                let result = result.map_err(|error| failure_text(&error)).and_then(parse_local_devices);
+                if !self.connect.local.finish(seq, result) { return; }
+            }
+            ConnectReply::LocalAnswered(result) => {
+                self.connect.local_answering = None;
+                self.connect.local_error = result.err().map(|error| failure_text(&error));
+                self.load_local_devices(cx);
             }
             ConnectReply::PreviewOpened(result) => {
                 self.connect.preview_busy = false;
@@ -588,6 +675,7 @@ impl Hangar {
         if self.settings == Some(Page::Connect) && !self.connect.saving {
             self.load_connect(cx);
             self.load_connect_devices(cx);
+            self.load_local_devices(cx);
             self.load_connect_preview();
             // A lista da conta pergunta ao serviço: a cada rodada só quando um pedido de ligar está andando.
             if self.connect.linking_in_progress() { self.load_account_machines(cx); }
@@ -596,7 +684,7 @@ impl Hangar {
     }
 
     /// Pendente: Liberar e Recusar; liberado: Tirar acesso; esta máquina, nenhum botão. O ícone e a legenda dizem se é PC.
-    fn render_device_row(&self, device: &Device, this_machine: &str, first: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_device_row(&self, device: &Device, this_machine_id: &str, first: bool, cx: &mut Context<Self>) -> AnyElement {
         let machine = device.kind == DeviceKind::Machine;
         let kind = tr(if machine { "connect_kind_machine" } else { "connect_kind_device" });
         let caption = match device.status {
@@ -608,7 +696,7 @@ impl Hangar {
         let blocked = self.connect.answering.is_some();
         let button = |action: &str| Button::new(SharedString::from(format!("connect-{action}-{}", device.device_id))).small().flex_shrink_0().disabled(blocked);
         let (id, name) = (device.device_id.clone(), device.name.clone());
-        let right = match row_actions(device, this_machine) {
+        let right = match row_actions(device, this_machine_id) {
             RowActions::This => chip(tr("connect_machine_this"), theme::accent_text(), theme::accent_dim()).into_any_element(),
             RowActions::Revoke => button("revoke").outline().label(tr_shared("connect_device_revoke", &[])).loading(busy)
                 .on_click(cx.listener(move |this, _, window, cx| this.confirm_revoke(id.clone(), name.clone(), window, cx))).into_any_element(),
@@ -631,7 +719,7 @@ impl Hangar {
             .into_any_element()
     }
 
-    fn render_connect_devices(&self, this_machine: &str, cx: &mut Context<Self>) -> Div {
+    fn render_connect_devices(&self, this_machine_id: &str, cx: &mut Context<Self>) -> Div {
         let section = div().flex().flex_col().gap_2()
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("connect_devices_title")))
             .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_devices_add")))
@@ -645,9 +733,64 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, _, cx| this.load_connect_devices(cx))))),
             DeviceView::Empty => section.child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr_shared("connect_account_devices_empty", &[]))),
             DeviceView::Loaded(devices) => {
-                let rows: Vec<AnyElement> = devices.iter().enumerate().map(|(at, device)| self.render_device_row(device, this_machine, at == 0, cx)).collect();
+                let rows: Vec<AnyElement> = devices.iter().enumerate().map(|(at, device)| self.render_device_row(device, this_machine_id, at == 0, cx)).collect();
                 section.child(settings_box().children(rows))
                     .child(div().text_xs().text_color(theme::faint()).whitespace_normal().child(tr_shared("connect_account_devices_help", &[])))
+            }
+        }
+    }
+
+    /// Pendente: Aprovar e Recusar, com o código que o celular mostra; aprovado: Tirar acesso, com quando foi visto.
+    fn render_local_row(&self, device: &LocalDevice, first: bool, cx: &mut Context<Self>) -> AnyElement {
+        let pending = device.status == LocalStatus::Pending;
+        let caption = if pending {
+            device.install_code.as_ref().map_or_else(|| tr("connect_local_pending"), |code| tr("connect_local_pending_code").replace("{code}", code))
+        } else {
+            device.last_seen.map_or_else(|| tr("connect_local_never_seen"),
+                |at| tr("connect_local_last_seen").replace("{when}", &super::side::ago(super::side::now_seconds() - at as f64)))
+        };
+        let busy = self.connect.local_answering.as_deref() == Some(device.device_id.as_str());
+        let blocked = self.connect.local_answering.is_some();
+        let button = |action: &str| Button::new(SharedString::from(format!("connect-local-{action}-{}", device.device_id))).small().flex_shrink_0().disabled(blocked);
+        let (id, name) = (device.device_id.clone(), device.name.clone());
+        let right = if pending {
+            let deny = id.clone();
+            div().flex().items_center().gap_2()
+                .child(button("deny").outline().label(tr_shared("connect_device_deny", &[]))
+                    .on_click(cx.listener(move |this, _, _, cx| this.answer_local_device(deny.clone(), false, cx))))
+                .child(button("approve").primary().label(tr_shared("connect_device_approve", &[])).loading(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.confirm_local_approve(id.clone(), name.clone(), window, cx))))
+                .into_any_element()
+        } else {
+            button("revoke").outline().label(tr_shared("connect_device_revoke", &[])).loading(busy)
+                .on_click(cx.listener(move |this, _, window, cx| this.confirm_local_revoke(id.clone(), name.clone(), window, cx))).into_any_element()
+        };
+        div().flex().items_center().gap_3().px_3().py_2().when(!first, |el| el.border_t_1().border_color(theme::border()))
+            .child(chrome::small_icon(IconName::Smartphone, 16., theme::muted()))
+            .child(div().flex_1().min_w_0().flex().flex_col()
+                .child(div().text_sm().whitespace_normal().child(device.name.clone()))
+                .child(div().text_xs().text_color(if pending { theme::warning() } else { theme::muted() }).child(caption)))
+            .child(right)
+            .into_any_element()
+    }
+
+    /// Os aparelhos que entraram só nesta máquina, sem a conta: aprovados aqui e pedidos de app antigo.
+    fn render_local_devices(&self, cx: &mut Context<Self>) -> Div {
+        let section = div().flex().flex_col().gap_2()
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("connect_local_devices_title")))
+            .children(self.connect.local_error.clone().map(|error| div().id("connect-local-error").role(Role::Alert)
+                .text_sm().text_color(theme::danger()).whitespace_normal().child(error)));
+        match device_view(&self.connect.local) {
+            DeviceView::Loading => section.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))),
+            DeviceView::Failed(error) => section
+                .child(div().id("connect-local-devices-error").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.to_owned()))
+                .child(div().child(Button::new("connect-local-devices-retry").outline().small().label(tr("server_retry"))
+                    .on_click(cx.listener(|this, _, _, cx| this.load_local_devices(cx))))),
+            DeviceView::Empty => section.child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("connect_local_devices_empty"))),
+            DeviceView::Loaded(devices) => {
+                let rows: Vec<AnyElement> = devices.iter().enumerate().map(|(at, device)| self.render_local_row(device, at == 0, cx)).collect();
+                section.child(settings_box().children(rows))
+                    .child(div().text_xs().text_color(theme::faint()).whitespace_normal().child(tr("connect_local_devices_help")))
             }
         }
     }
@@ -810,7 +953,9 @@ impl Hangar {
         }
         let (state, saving) = (phase(&status), self.connect.saving);
         let host = status.host.clone().unwrap_or_default();
-        let this_machine = identity_of(&host).map_or_else(|| self.vault_machine_label(&self.active_key(), cx), |(machine, _)| machine.to_owned());
+        // O id do vínculo; antes da lista da conta chegar, o primeiro rótulo do endereço, que o serviço monta com ele.
+        let this_machine_id = self.connect.machines.ok().map(|list| list.this.machine_id.clone())
+            .or_else(|| identity_of(&host).map(|(machine, _)| machine.to_owned())).unwrap_or_default();
         // Ligado em qualquer fase (parado, subindo, pronto) dá para desligar.
         let off = |cx: &mut Context<Self>| Button::new("connect-off").outline().small().label(tr("connect_off")).disabled(saving)
             .on_click(cx.listener(|this, _, window, cx| this.confirm_unlink(window, cx)));
@@ -843,7 +988,7 @@ impl Hangar {
         }
         // A lista é da conta, lida com a chave desta máquina: sem ligação não há conta para perguntar.
         if state != Phase::Unlinked {
-            page = page.child(self.render_connect_devices(&this_machine, cx));
+            page = page.child(self.render_connect_devices(&this_machine_id, cx)).child(self.render_local_devices(cx));
         }
         if state == Phase::Ready {
             page = page.child(self.render_account_machines(&host, cx)).children(self.render_connect_preview(cx));
@@ -854,12 +999,29 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{address_preview, device_view, identity_of, machine_label, open_preview_port, parse_account, parse_devices, parse_links, parse_port, parse_preview, parse_status, phase, row_actions, take_password, Device, DeviceKind, DeviceStatus, DeviceView, InputState, Phase, Remote, RowActions};
+    use super::{address_preview, device_view, identity_of, machine_label, open_preview_port, parse_account, parse_devices, parse_links, parse_local_devices, parse_port, parse_preview, parse_status, phase, row_actions, take_password, Device, DeviceKind, DeviceStatus, DeviceView, InputState, LocalStatus, Phase, Remote, RowActions};
     use crate::i18n::tr_shared;
     // O nome explícito vence qualquer `test` trazido por glob.
     use core::prelude::v1::test;
     use gpui::{Context, Entity, IntoElement, Render, TestAppContext, Window, div, prelude::*};
     use serde_json::json;
+
+    /// O que entrou pela conta fica em "Aparelhos da conta"; aqui, só o desta máquina, com o pedido esperando primeiro.
+    #[test]
+    fn local_devices_leave_out_the_account_ones_and_the_refused() {
+        let devices = parse_local_devices(json!([
+            {"device_id": "a1", "name": "Pixel", "status": "approved", "last_seen": 10, "created_at": 1},
+            {"device_id": "b2", "name": "iPhone da conta", "status": "approved", "last_seen": null, "created_at": 1, "account_device": "D"},
+            {"device_id": "c3", "name": "Recusado", "status": "denied", "last_seen": null, "created_at": 1},
+            {"device_id": "d4", "name": "App antigo", "status": "pending", "last_seen": null, "created_at": 2, "install_code": "123 456"}])).unwrap();
+        let rows: Vec<(&str, LocalStatus, Option<&str>)> = devices.iter()
+            .map(|device| (device.device_id.as_str(), device.status, device.install_code.as_deref())).collect();
+        assert_eq!(rows, [("d4", LocalStatus::Pending, Some("123 456")), ("a1", LocalStatus::Approved, None)]);
+        assert!(parse_local_devices(json!({"devices": []})).is_err());
+        let mut list = Remote::default();
+        list.set(parse_local_devices(json!([{"device_id": "b2", "name": "x", "status": "approved", "created_at": 1, "account_device": "D"}])));
+        assert!(matches!(device_view(&list), DeviceView::Empty), "só aparelhos da conta: a lista desta máquina fica vazia");
+    }
 
     #[test]
     fn machine_saved_with_its_connect_route_is_in_the_list() {
@@ -934,12 +1096,13 @@ mod tests {
     #[test]
     fn this_machine_row_has_no_actions() {
         let devices = parse_devices(json!([
-            {"device_id": "a1", "name": "notebook", "kind": "machine", "status": "approved", "created_at": 1.0},
-            {"device_id": "b2", "name": "notebook", "status": "approved", "created_at": 1.0},
-            {"device_id": "c3", "name": "casa", "kind": "machine", "status": "pending", "created_at": 1.0}])).unwrap();
-        let actions: Vec<(&str, RowActions)> = devices.iter().map(|device| (device.device_id.as_str(), row_actions(device, "notebook"))).collect();
-        assert_eq!(actions, [("c3", RowActions::Answer), ("a1", RowActions::This), ("b2", RowActions::Revoke)],
-            "PC novo pendente se libera aqui; celular com o mesmo nome desta máquina não é ela");
+            {"device_id": "a1", "name": "pc1", "kind": "machine", "status": "approved", "created_at": 1.0},
+            {"device_id": "b2", "name": "pc1", "status": "approved", "created_at": 1.0},
+            {"device_id": "c3", "name": "casa", "kind": "machine", "status": "pending", "created_at": 1.0},
+            {"device_id": "d4", "name": "notebook", "kind": "machine", "status": "approved", "created_at": 1.0}])).unwrap();
+        let actions: Vec<(&str, RowActions)> = devices.iter().map(|device| (device.device_id.as_str(), row_actions(device, "pc1"))).collect();
+        assert_eq!(actions, [("c3", RowActions::Answer), ("a1", RowActions::This), ("b2", RowActions::Revoke), ("d4", RowActions::Revoke)],
+            "esta máquina é a do id do vínculo (pc1), não a do rótulo (notebook); celular com o mesmo nome não é ela");
     }
 
     #[test]
