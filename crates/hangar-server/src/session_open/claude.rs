@@ -116,7 +116,9 @@ pub fn jev_pairs(on: bool, runtime: &Value) -> Vec<(String, String)> {
 }
 
 /// `apply_settings` numa linha de comando sem `--settings`: as escolhas da conversa em JSON compacto.
-pub(crate) fn settings_json(settings: &Value) -> String {
+pub(crate) fn settings_json(settings: &Value) -> String { settings_value(settings).to_string() }
+
+pub(crate) fn settings_value(settings: &Value) -> Value {
     let mut merged = Map::new();
     for key in ["enabledPlugins", "skillOverrides", "disableAllHooks"] {
         if let Some(value) = settings.get(key) { merged.insert(key.into(), value.clone()); }
@@ -126,7 +128,7 @@ pub(crate) fn settings_json(settings: &Value) -> String {
         for rule in deny.as_array().into_iter().flatten() { if !seen.contains(rule) { seen.push(rule.clone()); } }
         merged.insert("permissions".into(), json!({"deny": seen}));
     }
-    Value::Object(merged).to_string()
+    Value::Object(merged)
 }
 
 /// No Windows o comando do `new-session` perde as aspas do JSON e o Claude recusa abrir: as escolhas

@@ -5138,6 +5138,13 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   `~/.hangar/session-options.json` (`GET`/`PUT /api/session-options`, só do dono); o Code Mode vale
   quando o pedido omite `code_mode`, o provedor é Claude e as duas estão ligadas. O desktop copia o
   `appearance.json` antigo uma vez (`if_absent`); o desenho da conversa continua lendo a escolha local.
+- **Sem terminal, o Code Mode vai no `env` do `--settings`.** O Claude Code 2.1.330, com `-p` ou
+  pelo SDK, recusa a variável vinda do ambiente do processo (motivo `not_passed`) e só a aceita no
+  `env` do `--settings`. Medido no CLI com as opções do lançamento sem terminal: com a variável no
+  ambiente o modelo não recebe a REPL; no `--settings`, recebe `Poll` e `REPL`. Antes disso o Code
+  Mode nunca valeu em sessão sem terminal. Com terminal a variável no ambiente continua valendo. O
+  CLI ainda recusa fora da API da Anthropic (motor, CLIProxy) e em modelo anterior ao Opus 5.5 e
+  Sonnet 5.5.
 - **Arquivo próprio, não o `session-defaults.json`.** A versão anterior lê aquele arquivo com
   `deny_unknown_fields` em cada escopo: uma chave nova faria a volta de uma atualização recusar toda
   criação de sessão.
