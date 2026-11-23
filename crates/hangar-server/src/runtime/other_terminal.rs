@@ -907,8 +907,14 @@ impl Observer {
                 let prior = live.borrow().clone();
                 let mut next = super::protocol::LiveState {
                     binding: Some(self.binding.clone()),
-                    public_state: serde_json::to_value(&observed.state)
-                        .map_err(|_| failed("other_terminal_state_invalid"))?,
+                    public_state: {
+                        let mut value = serde_json::to_value(&observed.state)
+                            .map_err(|_| failed("other_terminal_state_invalid"))?;
+                        // A lista lê o estado pelo retrato do registro, que só leva o `public_state`.
+                        let footer = footer_model(observed.footer.as_ref());
+                        if !footer.is_null() { value["footer_model"] = footer; }
+                        value
+                    },
                     error: None,
                     ..prior.as_deref().cloned().unwrap_or_default()
                 };
@@ -937,7 +943,6 @@ impl Observer {
                         changed = true;
                     }
                     changed |= replace(&mut view["view"]["in_progress"], json!(progress));
-                    changed |= replace(&mut view["view"]["footer_model"], footer_model(observed.footer.as_ref()));
                     changed | replace(&mut view["view"]["working_revision"], json!(self.working_revision))
                 });
                 frames.send_replace(Some(Arc::new(frame)));

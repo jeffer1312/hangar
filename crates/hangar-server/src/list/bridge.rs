@@ -711,7 +711,7 @@ impl ListBridge {
                 if snapshot["view"]["conversation"].as_str() != Some(conversation.as_str()) { return None; }
                 let mut state: list_facts::RowState = serde_json::from_value(snapshot["view"]["public_state"].clone()).ok()?;
                 state.last_activity = row.last_activity;
-                Some((state, super::agy_context::footer_model(&snapshot["view"]["footer_model"])))
+                Some((state, super::agy_context::footer_model(&snapshot["view"]["public_state"]["footer_model"])))
             })();
             match read {
                 Some((state, footer)) => {
