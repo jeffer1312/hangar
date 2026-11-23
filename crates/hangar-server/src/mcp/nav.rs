@@ -192,7 +192,19 @@ mod tests {
         std::fs::create_dir_all(&nav).unwrap();
         std::fs::write(nav.join("_srv.json"), b"{not json").unwrap();
         assert!(local_app(home.path()).unwrap_err().0.contains("não deu para ler"), "corrompido: recusa daqui");
-        std::fs::write(nav.join("_srv.json"), json!({"porta": 1, "token": "t", "pid": u32::MAX}).to_string()).unwrap();
+    }
+
+    // Pid que sabidamente morreu só se consegue no Linux; no Windows a conferência não decide por um número inventado.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_registration_with_a_dead_pid_is_the_local_app_restarting() {
+        let home = tempfile::tempdir().unwrap();
+        let nav = home.path().join(".hangar/nav");
+        std::fs::create_dir_all(&nav).unwrap();
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        std::fs::write(nav.join("_srv.json"), json!({"porta": 1, "token": "t", "pid": dead}).to_string()).unwrap();
         assert!(local_app(home.path()).unwrap_err().0.contains("não está mais rodando"), "pid morto: o app daqui reiniciando");
     }
 
