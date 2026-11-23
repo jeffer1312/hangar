@@ -206,8 +206,8 @@ describe('SessionRow', () => {
     { provider: 'claude', label: 'Claude', path: 'm4.7144' },
     { provider: 'codex', label: 'Codex', path: 'M22.2819' },
     { provider: 'kimi', label: 'Kimi', path: 'M21.765' },
-    { provider: 'pi', label: 'Pi', letter: 'π' },
-    { provider: 'omp', label: 'OMP', letter: 'Ω' },
+    { provider: 'pi', label: 'Pi', path: 'M1.167' },
+    { provider: 'omp', label: 'OMP', path: 'M1.286' },
     { provider: undefined, label: 'Claude', path: 'M 4.00' },
   ] as const)('marca de $label só no avatar, inclusive na linha compacta', async ({ provider, label, ...mark }) => {
     for (const compact of [false, true]) {

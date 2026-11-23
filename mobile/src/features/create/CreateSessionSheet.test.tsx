@@ -284,7 +284,7 @@ vi.mock('../../paraglide/messages', () => ({
     'tags_apply_all tags_apply_ok tags_apply_offline tags_apply_old tags_apply_absent tags_apply_failed tags_apply_retry tags_saving ' +
     'criar_criar criar_agente comum_voltar comum_cancelar criar_escolher_pasta native_create_worktrees native_create_worktrees_merged native_create_worktree_session ' +
     'mobile_create_antigravity_account mobile_antigravity_default_account mobile_antigravity_signed_in mobile_antigravity_login_unknown ' +
-    'mobile_antigravity_accounts_error mobile_antigravity_sign_in_first mobile_antigravity_terms_hint erro_agy_ausente'
+    'mobile_antigravity_accounts_error mobile_antigravity_sign_in_first mobile_antigravity_signed_out mobile_antigravity_terms_hint erro_agy_ausente'
   ).split(' ').map((k) => [k, () => k])),
 }));
 

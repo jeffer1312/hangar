@@ -16,8 +16,8 @@ const CASES: &str = include_str!("contract/hangar_open_cases.json");
 fn expected_change(case: &str) -> Option<(u8, &'static str)> {
     Some(match case {
         // Traceback do Python vira frase, com o mesmo código 1.
-        "provider-missing" => (1, "hangar: uso: hangar-open <claude|pi|omp|kimi> [args do CLI]\n"),
-        "provider-unknown" => (1, "hangar: provider desconhecido 'codex': use claude, pi, omp ou kimi\n"),
+        "provider-missing" => (1, "hangar: uso: hangar-open <claude|pi|omp|kimi|antigravity> [args do CLI]\n"),
+        "provider-unknown" => (1, "hangar: provider desconhecido 'codex': use claude, pi, omp, kimi ou antigravity\n"),
         // Servidor morto por sinal diz a frase e sai 1.
         "server-killed-signal" => (1, "hangar: o hangar-server parou pelo sinal 9 sem abrir a sessão\n"),
         // O código final é o do `tmux attach`, que o atalho de shell executa: aqui só o nome sai.
