@@ -45,7 +45,6 @@ pub const FIELDS: &[OpenField] = &[
     field("service_tier", "service_tier", &["--service-tier", "priority"], true),
     field("permission_mode", "permissao", &["--permissao", "manual"], true),
     field("subagent_model", "subagent_model", &["--subagente", "haiku"], true),
-    field("code_mode", "code_mode", &["--code-mode"], true),
     field("claude_customizations", "claude_customizations", &["--customizations", "{}"], false),
     field("jev", "jev", &["--jev"], true),
     field("omp_profile", "omp_profile", &["--profile", "p1"], false),
