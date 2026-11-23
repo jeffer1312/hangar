@@ -42,6 +42,7 @@ mod worktree_fresh;
 mod reviews;
 mod tickets;
 mod work_review;
+mod whatsapp_readonly;
 
 use std::{cell::Cell, time::{Duration, Instant}};
 use gpui_kit::*;
@@ -112,6 +113,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "entregar-cliproxy" => Some(adopt_cliproxy::render),
         "conversa-nova" => Some(new_conversation::render),
         "galeria-da-conversa" => Some(conversation_gallery::render),
+        "whatsapp-somente-leitura" => Some(whatsapp_readonly::render),
         "entrar-pelo-connect" => Some(connect_sign_in::render),
         _ => None,
     }

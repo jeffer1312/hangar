@@ -23,6 +23,9 @@ pub(crate) use cliproxy::{Brand as CliproxyBrand, INSTALL_ITEMS as CLIPROXY_INST
     account_row as cliproxy_account_row, default_name as cliproxy_default_name, fast_field as cliproxy_fast_field,
     install_item as cliproxy_install_item, name_preview as cliproxy_name_preview, wizard_steps as cliproxy_steps};
 pub(crate) use codex::idempotency_key;
+// As linhas de etapa da instalação também servem à página do WhatsApp.
+pub(super) use cliproxy::step_item;
+pub(super) use proxy_update::step_states;
 pub(crate) use proxy_update::{update_available_banner as cliproxy_update_available_banner, update_button as cliproxy_update_button,
     update_done_banner as cliproxy_update_done_banner, update_running_banner as cliproxy_update_running_banner,
     CardView as CliproxyCardView, adopt_button as cliproxy_adopt_button, adopt_done_banner as cliproxy_adopt_done_banner,

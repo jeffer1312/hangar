@@ -323,6 +323,12 @@ impl ShareStore {
         self.lock().values().cloned().collect()
     }
 
+    /// Algum registro vivo da sessão, de qualquer tipo, sem copiar os registros.
+    pub fn session_has_active(&self, session: &str) -> bool {
+        let now = self.now();
+        self.lock().values().any(|x| x.session == session && x.active(now))
+    }
+
     pub fn revoke(&self, id: &str) -> io::Result<bool> {
         let now = self.now();
         let mut state = self.lock();

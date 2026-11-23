@@ -21,6 +21,7 @@ mod remote_browser;
 mod accounts;
 pub(crate) mod chrome;
 mod computer;
+mod whatsapp;
 mod controls;
 mod plan_review;
 mod create;
@@ -96,6 +97,8 @@ pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, e
 pub(crate) use rename_suggest::{Strip as RenameStrip, beta_rename_strip, rename_strip};
 pub(crate) use controls::{SPEED_TIERS, speed_label, speed_texts};
 pub(crate) use settings::segments_preview;
+pub(crate) use whatsapp::{ConnectedFacts as WhatsAppConnected, connected_summary as whatsapp_connected_summary, pair_card as whatsapp_pair_card,
+    qr_row as whatsapp_qr_row, risk_box as whatsapp_risk_box, usage_box as whatsapp_usage_box};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use create::{base_button, base_row, mode_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
@@ -493,6 +496,7 @@ enum Payload {
     // Máquinas: identificador, alcance e reinício do servidor conectado.
     Machines(machines::MachinesReply),
     Computer(computer::ComputerReply),
+    WhatsApp(whatsapp::WhatsAppReply),
     // Diálogo Nova sessão: a resposta vai ao diálogo que a pediu, se ele ainda for o aberto.
     Create(EntityId, create::CreateReply),
     Transfer(EntityId, create::TransferReply),
@@ -1033,6 +1037,7 @@ pub struct Hangar {
     presence: presence::Presence,
     system_notifications: SystemNotifications,
     computer: computer::Computer,
+    whatsapp: whatsapp::WhatsApp,
     new_session: Option<Entity<create::NewSession>>,
     sidebar: sidebar::Sidebar,
     machines_tray: machines_tray::Tray,
@@ -1367,7 +1372,7 @@ impl Hangar {
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
             server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), guests: guests::Guests::default(), sign_in: sign_in::SignIn::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
-            costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
+            costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), whatsapp: whatsapp::WhatsApp::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
             window_tray: window_tray::WindowTray::new(tray_tx), presence: Default::default(),
@@ -1769,6 +1774,7 @@ impl Hangar {
         self.machines = machines::Machines::default();
         self.system_notifications = SystemNotifications::default();
         self.computer = computer::Computer::default();
+        self.whatsapp = whatsapp::WhatsApp::default();
     }
 
     /// Sessão da lista do servidor ativo.
@@ -2534,6 +2540,7 @@ impl Hangar {
             Payload::SharedConfig(reply) => { self.receive_shared_config(reply, cx); return; }
             Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
             Payload::Computer(reply) => { self.receive_computer(reply, window, cx); return; }
+            Payload::WhatsApp(reply) => { self.receive_whatsapp(reply, cx); return; }
             Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
             Payload::Transfer(dialog, reply) => { self.receive_agent_transfer(dialog, reply, window, cx); return; }
             Payload::PluginPressed(result) => { self.receive_plugin_press(result, window, cx); return; }

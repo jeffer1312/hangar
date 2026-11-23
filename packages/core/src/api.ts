@@ -4981,3 +4981,92 @@ export function requestMermaid(
 ): Promise<Response> {
   return apiFetchRes('/api/mermaid', { method: 'POST', body: JSON.stringify(body), signal }, server ?? undefined, false, false);
 }
+
+// WhatsApp só leitura do servidor (rotas do dono `/api/whatsapp*`). Erro vem com código `whatsapp_*`.
+export type WhatsAppService = 'running' | 'stopped' | 'absent';
+export type WhatsAppLinkState = 'unpaired' | 'pairing' | 'connected' | 'logged_out' | 'outdated';
+
+/** `error` aceito como texto ou `{code}`: o servidor já mandou dos dois jeitos. */
+export interface WhatsAppJob {
+  kind: 'install' | 'update' | string;
+  /** Ausente ou `null` conta como a primeira etapa. */
+  step?: string | null;
+  done: boolean;
+  error: string | { code: string } | null;
+  outcome?: unknown;
+}
+
+export interface WhatsAppTotals {
+  messages: number; chats: number; groups: number; media_saved: number; media_phone_only: number; media_lost: number;
+}
+
+export interface WhatsAppStatus {
+  api?: number;
+  version?: string;
+  state: WhatsAppLinkState | string;
+  error: string | { code: string } | null;
+  /** Número mascarado. */
+  device: string | null;
+  /** Como o aparelho aparece na lista do celular; binário antigo não manda. */
+  device_name?: string | null;
+  qr?: string | null;
+  qr_expires_at?: string | null;
+  pair_code: string | null;
+  pair_code_expires_at?: string | null;
+  tz?: string;
+  totals?: Partial<WhatsAppTotals>;
+  since: string | null;
+  last_message_at: string | null;
+}
+
+export interface WhatsAppState {
+  installed: boolean;
+  accepted_at: string | null;
+  service: WhatsAppService;
+  job: WhatsAppJob | null;
+  status: WhatsAppStatus | null;
+  qr_svg: string | null;
+  /** De pé: por que o `status` não veio. Parado: `whatsapp_schema_newer` quando os dados são de um binário mais novo. */
+  status_error?: string | null;
+}
+
+export function getWhatsApp(s: Server): Promise<WhatsAppState> {
+  return apiFetchForServer(s, '/api/whatsapp', undefined, 15_000);
+}
+
+/** Desvincular (logout, apagar) dá 30 s ao binário no servidor: a tela espera mais que isso. */
+const WHATSAPP_UNLINK_MS = 45_000;
+/** Remover soma o logout a parar, desregistrar e apagar o serviço. */
+const WHATSAPP_UNINSTALL_MS = 90_000;
+
+function postWhatsApp<T>(s: Server, path: string, body?: unknown, timeoutMs = 30_000): Promise<T> {
+  return apiFetchForServer(s, `/api/whatsapp/${path}`,
+    { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, timeoutMs);
+}
+
+/** O servidor recusa sem o aceite (`whatsapp_accept_required`); outro job em curso é `whatsapp_busy`. */
+export function installWhatsApp(s: Server): Promise<{ job: WhatsAppJob }> {
+  return postWhatsApp(s, 'install', { accept: true });
+}
+
+export function updateWhatsApp(s: Server): Promise<{ job: WhatsAppJob }> {
+  return postWhatsApp(s, 'update');
+}
+
+/** Com `phone` (só algarismos, com o código do país) o celular recebe um código; sem ele, o servidor gera o QR. */
+export function pairWhatsApp(s: Server, phone?: string): Promise<unknown> {
+  return postWhatsApp(s, 'pair', phone ? { phone } : undefined);
+}
+
+export function logoutWhatsApp(s: Server): Promise<void> {
+  return postWhatsApp(s, 'logout', undefined, WHATSAPP_UNLINK_MS);
+}
+
+/** `logout: 'not_done'`: o serviço estava parado e o aparelho continua na lista do celular. */
+export function wipeWhatsApp(s: Server): Promise<{ logout: 'done' | 'not_done' | 'not_paired' }> {
+  return postWhatsApp(s, 'wipe', { confirm: true }, WHATSAPP_UNLINK_MS);
+}
+
+export function uninstallWhatsApp(s: Server, logout: boolean): Promise<unknown> {
+  return postWhatsApp(s, 'uninstall', { confirm: true, logout }, WHATSAPP_UNINSTALL_MS);
+}

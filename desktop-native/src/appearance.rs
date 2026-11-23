@@ -567,6 +567,21 @@ fn write_search_all(file: &std::path::Path, value: bool) -> Result<(), String> {
         .and_then(|_| std::fs::rename(&tmp, &file)).map_err(|error| format!("{}: {error}", file.display()))
 }
 
+/// A página WhatsApp já foi aberta neste aparelho. Sem pasta ou com leitura falhando conta como vista: o selo "novo"
+/// não pode ficar para sempre. Bloqueante.
+pub fn whatsapp_page_seen() -> bool {
+    let Some(dir) = dir() else { return true };
+    std::fs::metadata(dir.join("whatsapp-seen")).map_or_else(|error| error.kind() != std::io::ErrorKind::NotFound, |_| true)
+}
+
+/// Bloqueante: chamar fora da thread da janela.
+pub fn mark_whatsapp_page_seen() {
+    let Some(dir) = dir() else { return };
+    if let Err(error) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join("whatsapp-seen"), "1\n")) {
+        crate::log_line(&format!("página WhatsApp vista não gravou: {error}"));
+    }
+}
+
 /// Modelo, esforço e permissão marcados como padrão de um harness, valendo para todas as contas dele. Bloqueante.
 pub fn harness_default(key: &str) -> Option<(String, String, String)> {
     let saved: HashMap<String, (String, String, String)> = dir().and_then(|d| std::fs::read(d.join("harness-defaults.json")).ok())
