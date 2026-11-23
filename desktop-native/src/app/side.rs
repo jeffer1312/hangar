@@ -1041,7 +1041,7 @@ impl Hangar {
         // Os internos seguem as regras do "+" e do menu da sessão: some o bloco que não vale para esta sessão.
         let session = self.selected.as_ref();
         let (terminal, browser) = (self.side_menu_terminal(), self.side_menu_browser());
-        let mode = session.is_some_and(|s| matches!(s.provider.as_str(), "claude" | "codex"));
+        let mode = session.is_some_and(|s| super::create::has_surfaces(&s.provider));
         let external = self.external_terminal_available();
         list.retain(|(_, s, _)| match s { Shortcut::Terminal => terminal, Shortcut::Browser => browser, Shortcut::Mode => mode,
             Shortcut::External => external, _ => true });

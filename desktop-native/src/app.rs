@@ -7619,7 +7619,7 @@ fn pair_badges(session: &SessionInfo) -> impl Iterator<Item = Div> {
 }
 
 fn agent_name(provider: &str) -> &'static str {
-    match provider { "codex" => "Codex", "kimi" => "Kimi", "pi" => "Pi", "omp" => "OMP", _ => "Claude" }
+    match provider { "codex" => "Codex", "kimi" => "Kimi", "pi" => "Pi", "omp" => "OMP", "antigravity" => "Antigravity", _ => "Claude" }
 }
 
 fn human_size(bytes: u64) -> String {

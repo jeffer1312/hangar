@@ -258,6 +258,12 @@ impl Render for AddAccount {
                         .on_click(cx.listener(|this, _, window, cx| {
                             window.close_dialog(cx);
                             let _ = this.hangar.update(cx, |hangar, cx| { hangar.accounts.add = None; hangar.start_codex(None, false, window, cx); });
+                        }))))
+                .child(choice(tr("accounts_add_antigravity"), tr("accounts_add_antigravity_desc"),
+                    Button::new("accounts-add-pick-antigravity").outline().small().icon(IconName::Plus).label(tr("accounts_add_connect"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            window.close_dialog(cx);
+                            let _ = this.hangar.update(cx, |hangar, cx| { hangar.accounts.add = None; hangar.start_agy(None, window, cx); });
                         })))),
             AddStep::Claude => match self.base.clone() {
                 Some((id, name)) => div().flex().flex_col().gap(px(14.))
@@ -297,7 +303,7 @@ impl Hangar {
     pub(super) fn accounts_busy(&self) -> bool {
         self.accounts.sign_in.is_some() || self.accounts.change.is_some() || self.accounts.rename.as_ref().is_some_and(|r| r.saving)
             || self.accounts.form.as_ref().is_some_and(EngineForm::busy) || self.accounts.cookie.as_ref().is_some_and(|c| c.saving)
-            || self.accounts.cookie_clearing.is_some() || self.accounts.codex.is_some() || self.accounts.cliproxy.is_some()
+            || self.accounts.cookie_clearing.is_some() || self.accounts.codex.is_some() || self.accounts.antigravity.is_some() || self.accounts.cliproxy.is_some()
             || self.accounts.reset.as_ref().is_some_and(|r| r.consuming)
     }
 
@@ -545,6 +551,7 @@ impl Hangar {
         // Codex para de ler (como o web ao desmontar): a tentativa e a importação seguem no servidor. A redefinição
         // pedida fica com a chave dela: voltar e repetir tem de ser a mesma tentativa, e a resposta ainda acha quem pediu.
         (self.accounts.form, self.accounts.cookie, self.accounts.codex) = (None, None, None);
+        self.agy_left();
         let Some(s) = self.accounts.sign_in.take() else { return };
         let Some(api) = self.api.clone().filter(|_| s.open && !s.starting && !s.sending) else { return };
         let (label, turn) = (s.label.clone(), login_turn(&api, &s.label));
