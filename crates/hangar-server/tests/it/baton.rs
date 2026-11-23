@@ -1665,8 +1665,9 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
         release.0.write_all(b"go\n").unwrap();
         let mut finished_rx=finished_rx;
         let wait=Duration::from_secs(25);
-        // Liberação e último efeito observados juntos. O aviso do vigia pode chegar depois da liberação legítima,
-        // então quem decide a ordem é o `new-session-done` já estar no disco quando a entrada abre.
+        // Liberação e último efeito do Mux observados juntos. O aviso do vigia pode chegar depois da liberação legítima,
+        // então quem decide a ordem é o `new-session-done` já estar no disco quando a entrada abre. O que a abertura faz
+        // depois de o tmux sair (anúncio, vínculo) não é observado aqui.
         let (completed,closed,released_early)=match early {
             Some(ok)=>(tokio::time::timeout(wait,&mut finished_rx).await.is_ok_and(|r|r.is_ok()),ok,true),
             None=>match tokio::time::timeout(wait,async {tokio::select! {
