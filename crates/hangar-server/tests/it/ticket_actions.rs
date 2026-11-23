@@ -41,7 +41,7 @@ async fn ticket_group_is_projected_from_real_sidecars_and_members_can_report() {
     assert_eq!(item.session.as_deref(),Some("coordinator"));
     assert_eq!(item.stage.as_deref(),Some("execucao"));
     assert_eq!(item.history.last().unwrap().by,"backend");
-    groups.leave("backend").await.unwrap();
+    groups.leave("backend", "test").await.unwrap();
     let response=app.oneshot(request("POST","/api/mission/report",json!({"session":"backend","key":"b".repeat(32),"note":"Depois de sair"}))).await.unwrap();
     assert_eq!(response.status(),200);
 }

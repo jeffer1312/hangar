@@ -251,7 +251,7 @@ impl OpenHost for ServerHost {
     fn leave_old_group<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Vec<String>, OpenError>> {
         Box::pin(async move {
             let Some(groups) = &self.st.groups else { return Ok(Vec::new()) };
-            match crate::groups::exit::leave_and_notify(&self.st, groups, name).await {
+            match crate::groups::exit::leave_and_notify(&self.st, groups, name, "open_reused_name").await {
                 Ok((_, failures)) => Ok(exit_warnings(&failures)),
                 Err(_) if groups.has_sidecar(name) => Err(OpenError::new(409, "erro_grupo_limpeza_falhou",
                     format!("o grupo da sessão antiga '{name}' não foi desfeito; tente de novo"))),

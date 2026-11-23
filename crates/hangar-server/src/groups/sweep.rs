@@ -166,7 +166,7 @@ impl SweepEnv for AppEnv {
 
     fn leave<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Vec<String>, GroupError>> {
         Box::pin(async move {
-            let (ex, warnings) = leave_and_notify(&self.st, &self.groups, name).await?;
+            let (ex, warnings) = leave_and_notify(&self.st, &self.groups, name, "sweep_dead_member").await?;
             if !warnings.is_empty() {
                 tracing::warn!(code = "groups_dead_member_peer_not_notified", session = name, count = warnings.len(), "groups: a saída não avisou todos os ex-companheiros de fora");
             }
@@ -184,8 +184,10 @@ impl SweepEnv for AppEnv {
     }
 }
 
-/// A tarefa de 2 s. `None` sem serviço de grupos (as rotas e a varredura seguem no Python).
+/// A tarefa de 2 s. `None` sem serviço de grupos ou fora da subida principal: servidor montado
+/// pelos testes enxerga a `HOME` real e daria como mortas as sessões do servidor de verdade.
 pub fn spawn(st: Arc<AppState>) -> Option<JoinHandle<()>> {
+    if !st.startup.prepares() { return None; }
     let groups = st.groups.clone()?;
     Some(tokio::spawn(async move {
         let mut sweeper = Sweeper::new(groups.clone(), Arc::new(AppEnv { st, groups }));

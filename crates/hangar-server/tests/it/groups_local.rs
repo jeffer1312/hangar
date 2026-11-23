@@ -400,7 +400,7 @@ async fn leave_write_failure_restores_snapshot() {
     let before: Vec<_> = ["a", "b", "c"].iter().map(|n| dir.sidecar(n).unwrap()).collect();
     // `a` sai e `b` é regravado; a escrita de `c` falha porque o temporário dele é uma pasta.
     std::fs::create_dir(dir.root().join("c.json.tmp")).unwrap();
-    let err = svc.leave("a").await.err().expect("a escrita de c precisa falhar");
+    let err = svc.leave("a", "test").await.err().expect("a escrita de c precisa falhar");
     assert!(matches!(err, GroupError::Store(_)), "{err:?}");
     let after: Vec<_> = ["a", "b", "c"].iter().map(|n| dir.sidecar(n).unwrap()).collect();
     assert_eq!(after, before, "sem saída pela metade");
@@ -502,7 +502,7 @@ async fn unreadable_sidecar_counts_as_no_group() {
     let (svc, dir) = service(&tmp, FakeOrq::new(OrqPhase::Ended, None));
     std::fs::create_dir_all(dir.root()).unwrap();
     std::fs::write(dir.root().join("a.json"), "{").unwrap();
-    assert!(svc.leave("a").await.unwrap().is_empty());
+    assert!(svc.leave("a", "test").await.unwrap().is_empty());
     let out = svc.join(owned("a", &["b"], false)).await.unwrap();
     assert_eq!((out.members.as_slice(), out.newcomers.as_slice()), (&["a".to_owned(), "b".into()][..], &["a".to_owned(), "b".into()][..]));
     assert_eq!(dir.sidecar("a").unwrap().unwrap().peers, ["b"]);
@@ -518,7 +518,7 @@ async fn leave_and_dissolve_wait_for_a_join_in_flight() {
     // Join de dois, preso na promoção: sem a trava, a saída de `exec` acharia o grupo e devolveria `arb`.
     let first = tokio::spawn({ let svc = svc.clone(); async move { svc.join(owned("arb", &["exec"], true)).await } });
     orq.entered.notified().await;
-    let mut leave = tokio::spawn({ let svc = svc.clone(); async move { svc.leave("exec").await } });
+    let mut leave = tokio::spawn({ let svc = svc.clone(); async move { svc.leave("exec", "test").await } });
     assert!(tokio::time::timeout(std::time::Duration::from_millis(300), &mut leave).await.is_err(), "a saída espera a trava");
     orq.release.notify_one();
     assert!(first.await.unwrap().is_err());
@@ -614,9 +614,9 @@ async fn every_group_write_tells_the_list() {
     assert_eq!(bumps.load(Ordering::SeqCst), 1, "join");
     svc.rename("a", "c").await.unwrap();
     assert_eq!(bumps.load(Ordering::SeqCst), 2, "rename");
-    svc.leave("c").await.unwrap();
+    svc.leave("c", "test").await.unwrap();
     assert_eq!(bumps.load(Ordering::SeqCst), 3, "leave");
-    svc.leave("zzz").await.unwrap();
+    svc.leave("zzz", "test").await.unwrap();
     assert_eq!(bumps.load(Ordering::SeqCst), 3, "sair sem grupo não escreve nada");
     svc.restore(out.before).await.unwrap();
     assert_eq!(bumps.load(Ordering::SeqCst), 4, "restore");
@@ -640,7 +640,7 @@ async fn leave_archives_contract_file() {
     let (svc, dir) = service(&tmp, FakeOrq::new(OrqPhase::Ended, None));
     let out = svc.join(owned("a", &["b"], false)).await.unwrap();
     std::fs::write(dir.contract_path(&out.gid), "combinado\n").unwrap();
-    assert_eq!(svc.leave("a").await.unwrap(), ["b"]);
+    assert_eq!(svc.leave("a", "test").await.unwrap(), ["b"]);
     assert!(dir.sidecar("a").unwrap().is_none() && dir.sidecar("b").unwrap().is_none());
     assert!(!dir.contract_path(&out.gid).exists());
     let archived: Vec<String> = std::fs::read_dir(tmp.path().join("arquivo")).unwrap()
@@ -648,7 +648,7 @@ async fn leave_archives_contract_file() {
     assert_eq!(archived.len(), 1);
     assert!(archived[0].starts_with(&format!("grupo-{}-", out.gid)), "{archived:?}");
     // Idempotente: quem já saiu não tem ex-companheiros.
-    assert!(svc.leave("a").await.unwrap().is_empty());
+    assert!(svc.leave("a", "test").await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -657,7 +657,7 @@ async fn leave_counts_live_and_unknown_orq_as_alive() {
         let tmp = tempfile::tempdir().unwrap();
         let (svc, dir) = service(&tmp, FakeOrq::new(phase, None));
         svc.join(owned("arb", &["exec"], true)).await.unwrap();
-        svc.leave("exec").await.unwrap();
+        svc.leave("exec", "test").await.unwrap();
         assert_eq!(dir.sidecar("arb").unwrap().is_some(), keeps, "{phase:?}");
     }
 }

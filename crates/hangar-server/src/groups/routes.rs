@@ -344,7 +344,7 @@ pub(super) async fn unpair(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     let asked = match Asked::take(st, peer, req).await { Ok(a) => a, Err(response) => return response };
     let held = match asked.enter().await { Ok(held) => held, Err(busy) => return busy };
     if let Some(refused) = asked.orchestrator(std::slice::from_ref(&asked.name)).await { return refused; }
-    let (ex, tell) = match super::exit::leave(&asked.st, &asked.groups, &asked.name, None).await { Ok(left) => left, Err(error) => return asked.store_failed(&error) };
+    let (ex, tell) = match super::exit::leave(&asked.st, &asked.groups, &asked.name, None, "route_unpair").await { Ok(left) => left, Err(error) => return asked.store_failed(&error) };
     drop(held);
     if ex.is_empty() { return asked.reply(StatusCode::OK, json!({"ok": true, "warning": null})); }
     let mut errs = super::exit::notify_exit(&asked.st, &asked.groups, &asked.name, &tell).await;

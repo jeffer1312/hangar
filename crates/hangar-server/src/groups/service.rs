@@ -156,7 +156,7 @@ impl GroupService {
                 harness: &input.harness, orq: input.orq, outside: &outside, linked: input.linked };
             let plan = local::plan_join(&read, &join, &fresh_gid).map_err(GroupError::Refused)?;
             let unmerged = plan.merged.iter().filter(|loser| !dir.merge_contract(loser, &plan.gid)).cloned().collect();
-            if let Err(e) = apply(&dir, &[], &plan.writes) {
+            if let Err(e) = apply(&dir, &[], &plan.writes, "join") {
                 restore_logged(&dir, &plan.before);
                 return Err(e.into());
             }
@@ -199,12 +199,13 @@ impl GroupService {
 
     /// Devolve os ex-companheiros. O contrato é arquivado depois de soltar o lock: faxina não
     /// desfaz uma saída que já valeu.
-    pub async fn leave(&self, name: &str) -> Result<Vec<String>, GroupError> {
-        self.leave_with(name, &*self.orq).await
+    /// `why`: a rotina que pediu a saída (varredura, rota, fechamento), para o log de exclusão.
+    pub async fn leave(&self, name: &str, why: &'static str) -> Result<Vec<String>, GroupError> {
+        self.leave_with(name, &*self.orq, why).await
     }
 
     /// `leave` com a fase do `orq` de outra fonte: a que o Python mandou no pedido, sem pergunta de volta.
-    pub async fn leave_with(&self, name: &str, orq: &dyn OrqFacts) -> Result<Vec<String>, GroupError> {
+    pub async fn leave_with(&self, name: &str, orq: &dyn OrqFacts, why: &'static str) -> Result<Vec<String>, GroupError> {
         let (peers, archive, wrote) = {
             let _guard = self.lock.lock().await;
             let dir = self.dir.clone();
@@ -223,7 +224,7 @@ impl GroupService {
             };
             blocking(move || -> Result<(Vec<String>, Option<String>, bool), GroupError> {
                 let Some(plan) = local::plan_leave(&reader(&dir), &owner, alive) else { return Ok((Vec::new(), None, false)) };
-                if let Err(e) = apply(&dir, &plan.clears, &plan.writes) {
+                if let Err(e) = apply(&dir, &plan.clears, &plan.writes, why) {
                     restore_logged(&dir, &plan.before);
                     return Err(GroupError::from(e));
                 }
@@ -255,7 +256,7 @@ impl GroupService {
                 let young = std::time::SystemTime::now().duration_since(modified).unwrap_or_default() < grace;
                 if matches!(phase, OrqPhase::Live | OrqPhase::Unknown) || (phase == OrqPhase::NotStarted && young) { continue; }
                 let (d, s) = (self.dir.clone(), stem.clone());
-                match blocking(move || d.clear_sidecar(&s)).await? {
+                match blocking(move || d.clear_sidecar(&s, "lone_orq_dissolved")).await? {
                     Ok(()) => dissolved.push((stem, sidecar.gid)),
                     Err(error) => {
                         tracing::warn!(code = "groups_lone_orq_clear_failed", name = %stem, %error, "groups: o grupo orq sozinho não foi dissolvido");
@@ -282,7 +283,7 @@ impl GroupService {
             let read = reader(&dir);
             let (clears, writes) = local::plan_rename(&read, &old, &new);
             let before: Snapshot = clears.iter().chain(writes.iter().map(|(n, _)| n)).map(|n| (n.clone(), read(n))).collect();
-            apply(&dir, &clears, &writes).map_err(|e| { restore_logged(&dir, &before); GroupError::from(e) })
+            apply(&dir, &clears, &writes, "rename").map_err(|e| { restore_logged(&dir, &before); GroupError::from(e) })
         }).await?;
         self.changed();
         done
@@ -305,7 +306,7 @@ impl GroupService {
             let read = reader(&dir);
             let writes = local::plan_external_link(&read, &local, &address, &harness, &outside, &fresh_gid).map_err(GroupError::Refused)?;
             let before: Snapshot = writes.iter().map(|(n, _)| (n.clone(), read(n))).collect();
-            if let Err(e) = apply(&dir, &[], &writes) {
+            if let Err(e) = apply(&dir, &[], &writes, "external_link") {
                 restore_logged(&dir, &before);
                 return Err(e.into());
             }
@@ -325,7 +326,7 @@ impl GroupService {
                 let read = reader(&dir);
                 let (clears, writes, archive) = local::plan_external_unlink(&read, &local, &address);
                 let before: Snapshot = clears.iter().chain(writes.iter().map(|(n, _)| n)).map(|n| (n.clone(), read(n))).collect();
-                if let Err(e) = apply(&dir, &clears, &writes) {
+                if let Err(e) = apply(&dir, &clears, &writes, "external_unlink") {
                     restore_logged(&dir, &before);
                     return Err(GroupError::from(e));
                 }
@@ -373,8 +374,8 @@ fn reader(dir: &PairDir) -> impl Fn(&str) -> Option<Sidecar> + '_ {
     }
 }
 
-pub(super) fn apply(dir: &PairDir, clears: &[String], writes: &[(String, Sidecar)]) -> Result<(), StoreError> {
-    for name in clears { dir.clear_sidecar(name)?; }
+pub(super) fn apply(dir: &PairDir, clears: &[String], writes: &[(String, Sidecar)], why: &str) -> Result<(), StoreError> {
+    for name in clears { dir.clear_sidecar(name, why)?; }
     for (name, sidecar) in writes { dir.write_sidecar(name, sidecar)?; }
     Ok(())
 }
@@ -388,7 +389,7 @@ fn restore_members(dir: &PairDir, before: &Snapshot) -> Vec<(String, StoreError)
     let mut failures = Vec::new();
     for (name, state) in before {
         let done = match state {
-            None => dir.clear_sidecar(name),
+            None => dir.clear_sidecar(name, "restore"),
             Some(s) => dir.write_sidecar(name, s),
         };
         if let Err(error) = done {
