@@ -1238,7 +1238,7 @@ mod tests {
         let desk = Arc::new(FakeDesk::default());
         desk.windows.lock().unwrap().push(desk_window("old"));
         let browser = viewing(desk.clone());
-        let request = remote_request(34061);
+        let request = remote_request(free_port());
         browser.open(request.clone()).await.unwrap();
         desk.windows.lock().unwrap().push(desk_window("new"));
         until_typed(&desk).await;
@@ -1252,7 +1252,7 @@ mod tests {
         let desk = Arc::new(FakeDesk::default());
         desk.no_input.store(true, Ordering::Relaxed);
         let browser = viewing(desk.clone());
-        let request = remote_request(34062);
+        let request = remote_request(free_port());
         browser.open(request.clone()).await.unwrap();
         desk.windows.lock().unwrap().push(desk_window("login"));
         browser.view("op").await;
