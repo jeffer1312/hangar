@@ -154,9 +154,13 @@ impl Keyring {
 
     fn ask_default(&self, backend: &dyn Backend) -> DefaultOpen {
         let outcome = backend.open_default();
-        if outcome == DefaultOpen::NoAnswer {
-            self.stuck.store(true, std::sync::atomic::Ordering::Relaxed);
-            tracing::warn!(code = "keyring_default_no_answer", "o daemon não respondeu ao pedido do chaveiro padrão");
+        match outcome {
+            DefaultOpen::NoAnswer => {
+                self.stuck.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::warn!(code = "keyring_default_no_answer", "o daemon não respondeu ao pedido do chaveiro padrão");
+            }
+            DefaultOpen::Refused => tracing::warn!(code = "keyring_default_refused", "o daemon recusou abrir o chaveiro padrão"),
+            DefaultOpen::Opened => tracing::info!(code = "keyring_default_opened", "chaveiro padrão aberto"),
         }
         outcome
     }
@@ -185,7 +189,10 @@ impl Keyring {
         let reading = self.read().ok_or(UnlockError::Failed)?;
         if reading.login == KeyringState::Locked { return Ok(Step::LoginStuck); }
         if !reading.default_waits() { return Ok(Step::Done(reading.combined())); }
-        if !backend.display() { return Err(UnlockError::DefaultLocked); }
+        if !backend.display() {
+            tracing::info!(code = "keyring_default_no_display", "sem tela para o prompter; o chaveiro padrão fica trancado");
+            return Err(UnlockError::DefaultLocked);
+        }
         if skip_ask || self.ask_default(backend) == DefaultOpen::NoAnswer { return Ok(Step::DefaultStuck); }
         match self.read().ok_or(UnlockError::Failed)?.combined() {
             KeyringState::Locked => Err(UnlockError::DefaultLocked),
@@ -260,7 +267,10 @@ impl Backend for System {
     fn display(&self) -> bool { crate::display_env::user_manager_has_display() }
 
     fn open_default(&self) -> DefaultOpen {
-        let Ok(rt) = tokio::runtime::Handle::try_current() else { return DefaultOpen::Refused };
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(code = "keyring_default_no_runtime", "pedido do chaveiro padrão fora do runtime");
+            return DefaultOpen::Refused;
+        };
         let cached = self.conn.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let conn = match cached {
             Some(conn) => conn,
@@ -437,7 +447,11 @@ async fn open_default_when_ready(keyring: std::sync::Arc<Keyring>) {
         match tokio::task::spawn_blocking(move || k.open_default_unattended()).await {
             // estavel: código de produção, não teste; é o intervalo entre olhadas no ambiente do systemd à espera da tela.
             Ok(Unattended::Later) => tokio::time::sleep(Duration::from_secs(5)).await,
-            _ => return,
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(code = "keyring_default_task_failed", %error, "tentativa do chaveiro padrão caiu");
+                return;
+            }
         }
     }
     tracing::info!(code = "keyring_default_no_display", "sem tela para abrir o chaveiro padrão; o aviso fica");
