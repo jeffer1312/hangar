@@ -234,7 +234,8 @@ impl Installer {
             return Ok(());
         }
         self.step(generation, "conferir");
-        service.probe.invalidate_cli(cli);
+        let program = commands::program(cli);
+        service.probe.invalidate_cli(program);
         let card = Self::card(&service, cli).await?;
         if !card.as_ref().is_some_and(|c| c["instalado"] == true) {
             self.fail(generation,Some("conferir"),&format!("o comando terminou, mas o CLI não aparece nem no PATH deste serviço ({}) nem na pasta de config dele",service.accounts.env.base.get("PATH").map(String::as_str).unwrap_or_default()));
@@ -242,10 +243,10 @@ impl Installer {
         }
         self.step(generation, "wrapper");
         if cfg!(windows) {
-            if health::wrapper(&service.accounts.env, cli, true)["ok"] != true {
+            if health::wrapper(&service.accounts.env, program, true)["ok"] != true {
                 let result = service.repair("wrapper").await.map_err(|e| e.message)?;
                 self.log(generation, &format!("$ wrapper\n{result}"));
-                if health::wrapper(&service.accounts.env, cli, true)["ok"] == false {
+                if health::wrapper(&service.accounts.env, program, true)["ok"] == false {
                     self.fail(
                         generation,
                         Some("wrapper"),
@@ -256,7 +257,7 @@ impl Installer {
             } else {
                 self.log(
                     generation,
-                    &format!("[wrapper] {cli} já é carregado pelo perfil do PowerShell"),
+                    &format!("[wrapper] {program} já é carregado pelo perfil do PowerShell"),
                 );
             }
         } else {
@@ -278,7 +279,7 @@ impl Installer {
                         );
                         return Ok(());
                     }
-                    let item = health::wrapper(&service.accounts.env, cli, false);
+                    let item = health::wrapper(&service.accounts.env, program, false);
                     if item["ok"] == false {
                         self.fail(
                             generation,

@@ -1,9 +1,46 @@
 //! Comandos conferidos compartilhados pelo painel e pelo instalador local.
 use crate::{accounts::environment::AccountEnvironment, cli_probe};
 use serde_json::{Value, json};
-pub const NAMES: [&str; 4] = ["codex", "pi", "omp", "kimi"];
+pub const NAMES: [&str; 6] = ["claude", "codex", "pi", "omp", "kimi", "antigravity"];
+/// O programa do id de instalação: o card do Antigravity se chama pelo produto, o binário é `agy`.
+pub fn program(id: &str) -> &str {
+    match id {
+        "antigravity" => "agy",
+        other => other,
+    }
+}
 pub fn command(cli: &str, windows: bool) -> Option<Vec<String>> {
     let args: Vec<&str> = match cli {
+        "claude" if windows => vec![
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "irm https://claude.ai/install.ps1 | iex",
+        ],
+        "claude" => vec![
+            "bash",
+            "-o",
+            "pipefail",
+            "-c",
+            "curl -fsSL https://claude.ai/install.sh | bash",
+        ],
+        "antigravity" if windows => vec![
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "irm https://antigravity.google/cli/install.ps1 | iex",
+        ],
+        "antigravity" => vec![
+            "bash",
+            "-o",
+            "pipefail",
+            "-c",
+            "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+        ],
         "codex" => vec!["npm", "install", "-g", "@openai/codex"],
         "pi" => vec![
             "npm",
@@ -66,5 +103,31 @@ pub fn public(windows: bool) -> Value {
     )
 }
 pub fn manual() -> Value {
-    json!({"codex":"https://github.com/openai/codex","pi":"https://pi.dev/docs/latest","omp":"https://github.com/can1357/oh-my-pi","kimi":"https://kimi.com/code"})
+    json!({"claude":"https://code.claude.com/docs/en/setup","codex":"https://github.com/openai/codex","pi":"https://pi.dev/docs/latest","omp":"https://github.com/can1357/oh-my-pi","kimi":"https://kimi.com/code","antigravity":"https://antigravity.google/docs/getting-started"})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(cli: &str, windows: bool) -> Vec<String> { command(cli, windows).unwrap() }
+
+    #[test]
+    fn the_antigravity_card_installs_and_probes_agy() {
+        assert_eq!(program("antigravity"), "agy");
+        assert_eq!(program("claude"), "claude");
+        assert_eq!(program("codex"), "codex");
+        assert!(NAMES.contains(&"antigravity") && NAMES.contains(&"claude"));
+        assert_eq!(args("antigravity", false), ["bash", "-o", "pipefail", "-c", "curl -fsSL https://antigravity.google/cli/install.sh | bash"]);
+        assert_eq!(args("antigravity", true), ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://antigravity.google/cli/install.ps1 | iex"]);
+        assert_eq!(manual()["antigravity"], "https://antigravity.google/docs/getting-started");
+    }
+
+    #[test]
+    fn claude_installs_by_the_official_script() {
+        assert_eq!(args("claude", false), ["bash", "-o", "pipefail", "-c", "curl -fsSL https://claude.ai/install.sh | bash"]);
+        assert_eq!(args("claude", true), ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://claude.ai/install.ps1 | iex"]);
+        assert_eq!(display(&args("claude", false)), "curl -fsSL https://claude.ai/install.sh | bash");
+        assert_eq!(manual()["claude"], "https://code.claude.com/docs/en/setup");
+    }
 }

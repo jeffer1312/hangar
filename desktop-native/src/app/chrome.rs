@@ -516,9 +516,13 @@ pub fn provider_glyph(provider: &str, size: f32) -> Div {
     }
 }
 
-/// Logo vetorial do provider (Claude, Codex/OpenAI, Kimi); `None` para quem não tem marca.
+/// Logo vetorial do provider; `None` para quem não tem marca.
 pub fn provider_logo(provider: &str, size: f32, color: Hsla) -> Option<Svg> {
-    let path = match provider { "claude" => "providers/claude.svg", "codex" => "providers/codex.svg", "kimi" => "providers/kimi.svg", _ => return None };
+    let path = match provider {
+        "claude" => "providers/claude.svg", "codex" => "providers/codex.svg", "kimi" => "providers/kimi.svg",
+        "pi" => "providers/pi.svg", "omp" => "providers/omp.svg", "antigravity" => "providers/antigravity.svg",
+        _ => return None,
+    };
     Some(svg().path(path).size(px(size)).flex_shrink_0().text_color(color))
 }
 
@@ -561,12 +565,10 @@ pub fn session_avatar(look: &AvatarLook, side: f32, motion: Option<(f32, f32)>) 
         else if working && motion.is_none() { accent } else { theme::muted().opacity(0.4) };
     let logo = side * 20. / 36.;
     let glyph = look.glyph.as_ref();
-    let (color, mark) = theme::provider(glyph);
-    // Pi e omp não têm logo vetorial: a letra deles, como no `provider_glyph`; sem agente, a marca do Hangar.
+    let (color, _) = theme::provider(glyph);
+    // Sem agente conhecido, a marca do Hangar.
     let inner = match provider_logo(glyph, logo, if glyph == "codex" { theme::text() } else { color }) {
         Some(svg) => svg.into_any_element(),
-        None if matches!(glyph, "pi" | "omp") => div().text_size(px(logo)).line_height(px(logo)).font_weight(FontWeight::BOLD)
-            .text_color(color).child(mark).into_any_element(),
         None => hangar_mark(logo, theme::muted()).into_any_element(),
     };
     let badge = (side * 14. / 36.).max(8.);

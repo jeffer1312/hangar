@@ -133,7 +133,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
     (Page::Orchestration, &[("orchestration_intro", None), ("orchestration_unrestricted", None)]),
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help")),
         ("keyboard_title", Some("keyboard_lead")), ("keyboard_hold_title", Some("keyboard_hold_help"))]),
-    (Page::Harnesses, &[("harness_legend", None)]),
+    (Page::Harnesses, &[("agents_subtitle", None)]),
     // Cada bloco da Status: a busca rola até ele, pela mesma marca do pulo da lista de atenção.
     (Page::Status, &[("status_memory", None), ("status_cpu", None), ("status_days_title", Some("status_legend_crash")),
         ("status_machines_title", Some("status_machines_hint")), ("status_sessions_title", None), ("status_slow_title", Some("status_slow_legend")),
@@ -935,8 +935,8 @@ impl Hangar {
         let servers_wide = page == Page::Servers;
         // O artigo do Manual leva o "Nesta página" ao lado do texto.
         let article_wide = page == Page::Manual && self.article_wide(window);
-        // Status é um painel de gráficos: ocupa a largura toda ao lado da navegação.
-        let status_wide = page == Page::Status;
+        // Status é um painel de gráficos e Agentes uma tabela com painel ao lado: ocupam a largura toda ao lado da navegação.
+        let status_wide = matches!(page, Page::Status | Page::Harnesses);
         let body = match page {
             Page::Updates => self.render_updates(window, cx),
             Page::Manual => self.render_manual(window, cx),
