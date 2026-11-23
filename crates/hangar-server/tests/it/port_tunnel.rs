@@ -80,9 +80,13 @@ fn handshake(addr: SocketAddr, path_and_query: &str) -> reqwest::RequestBuilder 
         .header("sec-websocket-version", "13").header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
 }
 
+/// Código da recusa no corpo, conferido igual no cabeçalho `x-hangar-tunnel`.
 async fn code_of(response: reqwest::Response) -> String {
+    let header = response.headers().get("x-hangar-tunnel").map(|value| value.to_str().unwrap().to_owned());
     let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
-    body["detail"]["code"].as_str().unwrap_or_default().to_owned()
+    let code = body["detail"]["code"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(header.as_deref(), Some(code.as_str()), "cabeçalho x-hangar-tunnel");
+    code
 }
 
 /// Próxima mensagem de dados; `None` quando a conexão acabou.
@@ -124,6 +128,15 @@ async fn out_of_range_and_hangar_ports_are_refused_with_422() {
     }
     let missing = handshake(main, &format!("/api/port-tunnel?token={OWNER}")).send().await.unwrap();
     assert_eq!(missing.status(), 422);
+    assert_eq!(code_of(missing).await, "port_tunnel_port_refused");
+}
+
+#[tokio::test]
+async fn wrong_token_is_refused_with_401_and_the_header() {
+    let (_python, main) = owner_server().await;
+    let response = handshake(main, &format!("/api/port-tunnel?port={}&token=errado", closed_port())).send().await.unwrap();
+    assert_eq!(response.status(), 401);
+    assert_eq!(code_of(response).await, "erro_nao_autorizado");
 }
 
 #[tokio::test]

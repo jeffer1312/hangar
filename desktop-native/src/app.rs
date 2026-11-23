@@ -151,7 +151,7 @@ mod find;
 mod costs;
 mod mission;
 pub(crate) use mission::ticket_card_view;
-pub(crate) use ports_panel::{port_actions, port_buttons, port_link_buttons, port_link_view, port_note, port_row_view};
+pub(crate) use ports_panel::{port_actions, port_buttons, port_note, port_row_view};
 pub(crate) use activity::{side_tab_button, side_tab_slot};
 pub(crate) use work_review::{choice_button as review_choice_button, decision_card as review_decision_card, decision_frame_width as review_frame_width,
     decision_nav as review_decision_nav, decision_nav_row as review_decision_nav_row, frames_row as review_frames_row, render_band as review_band,

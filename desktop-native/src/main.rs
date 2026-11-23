@@ -25,6 +25,8 @@ mod motion;
 mod news;
 mod plugin_ui;
 mod port_forward;
+#[cfg(target_os = "linux")]
+mod socks;
 mod queue_panel;
 mod single_instance;
 mod term_view;

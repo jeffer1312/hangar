@@ -91,6 +91,7 @@ hangar-deploy.workspace = true
 hangar-port-preview.workspace = true
 hangar-port-tunnel.workspace = true
 hangar-session-ports.workspace = true
+hangar-port-stop.workspace = true
 hangar-connect.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }

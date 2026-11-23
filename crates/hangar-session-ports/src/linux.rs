@@ -3,11 +3,13 @@ use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use crate::{Listener, by_port, reachable_locally};
+use std::os::unix::fs::MetadataExt;
+
+use crate::{Listener, Outside, ProcessInfo, Scan, is_devtools, reachable_locally, sorted};
 
 const LISTEN: u8 = 0x0A;
 
-pub(crate) fn listening(candidates: &[u32]) -> io::Result<Vec<Listener>> {
+pub(crate) fn scan(candidates: &[u32]) -> io::Result<Scan> {
     let mut sockets: HashMap<u64, u16> = listen_sockets(&fs::read_to_string("/proc/net/tcp")?).collect();
     // Sem IPv6 no kernel o arquivo não existe.
     match fs::read_to_string("/proc/net/tcp6") {
@@ -15,7 +17,74 @@ pub(crate) fn listening(candidates: &[u32]) -> io::Result<Vec<Listener>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    Ok(by_port(owners(&sockets, candidates, fd_inodes, comm)))
+    Ok(split(&sockets, candidates, fd_inodes, comm))
+}
+
+/// Os sockets dos candidatos viram `listeners`; o resto, `outside`, sem procurar dono.
+fn split(
+    sockets: &HashMap<u64, u16>,
+    candidates: &[u32],
+    fd_inodes: impl FnMut(u32) -> Option<Vec<u64>>,
+    name: impl FnMut(u32) -> String,
+) -> Scan {
+    let (listeners, held) = owners(sockets, candidates, fd_inodes, name);
+    let mut outside: Vec<(u16, u64)> = sockets.iter().filter(|(inode, _)| !held.contains(inode)).map(|(inode, port)| (*port, *inode)).collect();
+    outside.sort_unstable();
+    Scan { listeners: sorted(listeners), outside: outside.into_iter().map(|(port, inode)| Outside { port, inode: Some(inode) }).collect() }
+}
+
+/// Varre os fds dos processos deste usuário até achar todos os inodes ou gastar o teto.
+pub(crate) fn holders(inodes: &HashSet<u64>, fd_budget: usize) -> HashMap<u64, u32> {
+    let (Ok(me), Ok(entries)) = (fs::metadata("/proc/self"), fs::read_dir("/proc")) else { return HashMap::new() };
+    let pids = entries.flatten().filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok()).collect();
+    walk(pids, inodes, fd_budget, |pid| {
+        let dir = std::path::Path::new("/proc").join(pid.to_string());
+        // O fd de outro usuário não se deixa ler: nem tenta.
+        if !fs::metadata(&dir).is_ok_and(|m| m.uid() == me.uid()) { return None; }
+        Some(fs::read_dir(dir.join("fd")).ok()?.flatten().map(|fd| socket_inode(&fd.path())).collect())
+    })
+}
+
+/// Do pid maior para o menor: o servidor novo tem pid alto, e o teto não se gasta antes nos processos
+/// antigos da sessão gráfica. `fds`: o inode de socket de cada fd do pid (`None` = outro tipo de fd).
+// ponytail: depois que o pid_max dá a volta, o novo tem pid baixo e volta a ficar por último.
+fn walk(mut pids: Vec<u32>, inodes: &HashSet<u64>, fd_budget: usize, mut fds: impl FnMut(u32) -> Option<Vec<Option<u64>>>) -> HashMap<u64, u32> {
+    pids.sort_unstable_by(|a, b| b.cmp(a));
+    let mut found = HashMap::new();
+    let mut budget = fd_budget;
+    for pid in pids {
+        if found.len() == inodes.len() { break; }
+        let Some(fds) = fds(pid) else { continue };
+        for inode in fds {
+            if budget == 0 { return found; }
+            budget -= 1;
+            if let Some(inode) = inode && inodes.contains(&inode) {
+                found.entry(inode).or_insert(pid);
+            }
+        }
+    }
+    found
+}
+
+pub(crate) fn process_info(pid: u32) -> ProcessInfo {
+    let environ = fs::read(format!("/proc/{pid}/environ")).unwrap_or_default();
+    let cmdline = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+    ProcessInfo {
+        session_key: environ_var(&environ, b"CP_SESSION_KEY"),
+        devtools: is_devtools(cmdline.split(|b| *b == 0).map(String::from_utf8_lossy)),
+        process: comm(pid),
+    }
+}
+
+fn environ_var(environ: &[u8], name: &[u8]) -> Option<String> {
+    environ.split(|b| *b == 0)
+        .find_map(|item| item.strip_prefix(name)?.strip_prefix(b"="))
+        .filter(|value| !value.is_empty())
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+}
+
+fn socket_inode(fd: &std::path::Path) -> Option<u64> {
+    fs::read_link(fd).ok()?.to_str()?.strip_prefix("socket:[")?.strip_suffix(']')?.parse().ok()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,16 +136,17 @@ fn listen_sockets(table: &str) -> impl Iterator<Item = (u64, u16)> + '_ {
         .map(|e| (e.inode, e.port))
 }
 
-/// Procura os sockets só nos fds dos candidatos; pid que não se deixa ler fica de fora.
+/// Procura os sockets só nos fds dos candidatos; pid que não se deixa ler fica de fora. Devolve
+/// também os inodes que algum candidato segura.
 fn owners(
     sockets: &HashMap<u64, u16>,
     candidates: &[u32],
     mut fd_inodes: impl FnMut(u32) -> Option<Vec<u64>>,
     mut name: impl FnMut(u32) -> String,
-) -> Vec<Listener> {
-    let mut found = Vec::new();
+) -> (Vec<Listener>, HashSet<u64>) {
+    let (mut found, mut held) = (Vec::new(), HashSet::new());
     if sockets.is_empty() {
-        return found;
+        return (found, held);
     }
     let mut seen = HashSet::new();
     for &pid in candidates {
@@ -88,18 +158,16 @@ fn owners(
         if ports.is_empty() {
             continue;
         }
+        held.extend(inodes.iter().filter(|inode| sockets.contains_key(inode)));
         let process = name(pid);
         found.extend(ports.into_iter().map(|port| Listener { port, pid, process: process.clone() }));
     }
-    found
+    (found, held)
 }
 
 fn fd_inodes(pid: u32) -> Option<Vec<u64>> {
     let entries = fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
-    Some(entries.flatten()
-        .filter_map(|entry| fs::read_link(entry.path()).ok())
-        .filter_map(|target| target.to_str()?.strip_prefix("socket:[")?.strip_suffix(']')?.parse().ok())
-        .collect())
+    Some(entries.flatten().filter_map(|entry| socket_inode(&entry.path())).collect())
 }
 
 fn comm(pid: u32) -> String {
@@ -156,11 +224,60 @@ mod tests {
             }
         };
         let names = |pid: u32| if pid == 10 { "postgres".to_owned() } else { "node".to_owned() };
-        let found = by_port(owners(&sockets, &[10, 40, 20, 10], fds, names));
-        assert_eq!(found, vec![
+        let found = split(&sockets, &[10, 40, 20, 10], fds, names);
+        assert_eq!(found.listeners, vec![
             Listener { port: 5432, pid: 10, process: "postgres".into() },
             Listener { port: 7331, pid: 20, process: "node".into() },
         ]);
         assert_eq!(scanned, vec![10, 40, 20]);
+        // O 8317 (inode 10673) é de um processo que não foi lido.
+        assert_eq!(found.outside, vec![Outside { port: 8317, inode: Some(10673) }]);
+    }
+
+    #[test]
+    fn the_other_half_of_a_divided_port_stays_outside() {
+        // 5432 em v4 (26902) é do candidato; o v6 (26903) é de outro processo.
+        let sockets: HashMap<u64, u16> = listen_sockets(TCP).chain(listen_sockets(TCP6)).collect();
+        let found = split(&sockets, &[10], |_| Some(vec![26902]), |_| "node".to_owned());
+        assert_eq!(found.listeners, vec![Listener { port: 5432, pid: 10, process: "node".into() }]);
+        assert_eq!(found.outside.iter().map(|o| (o.port, o.inode)).collect::<Vec<_>>(),
+            vec![(5432, Some(26903)), (7331, Some(18355)), (8317, Some(10673))]);
+    }
+
+    #[test]
+    fn the_session_key_is_read_whole_and_only_by_its_exact_name() {
+        let environ = b"HOME=/h\0CP_SESSION_KEY_OLD=x\0CP_SESSION_KEY=abc=d\0PATH=/bin\0";
+        assert_eq!(environ_var(environ, b"CP_SESSION_KEY").as_deref(), Some("abc=d"));
+        assert_eq!(environ_var(b"CP_SESSION_KEY=\0", b"CP_SESSION_KEY"), None);
+        assert_eq!(environ_var(b"", b"CP_SESSION_KEY"), None);
+    }
+
+    #[test]
+    fn the_walk_starts_at_the_highest_pid_so_the_budget_reaches_a_new_server() {
+        // 10 e 20 são processos antigos com muitos fds; o servidor novo 9000 segura o inode 77.
+        let fds = |pid: u32| match pid {
+            9000 => Some(vec![None, Some(77)]),
+            40 => None,
+            _ => Some(vec![None; 5]),
+        };
+        let wanted = HashSet::from([77]);
+        assert_eq!(walk(vec![10, 20, 40, 9000], &wanted, 2, fds), HashMap::from([(77, 9000)]));
+        // O teto vale: com um fd só, o 77 (o segundo fd do 9000) não é lido.
+        assert!(walk(vec![10, 9000], &wanted, 1, fds).is_empty());
+    }
+
+    #[test]
+    fn this_process_holds_its_own_listener_and_the_walk_stops_at_the_budget() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let me = std::process::id();
+        let found = scan(&[me]).unwrap();
+        assert!(found.listeners.iter().any(|l| l.port == port && l.pid == me), "{found:?}");
+        let inode = fd_inodes(me).unwrap().into_iter().find(|inode| {
+            fs::read_to_string("/proc/net/tcp").unwrap().lines().filter_map(parse_line).any(|e| e.inode == *inode && e.port == port)
+        }).unwrap();
+        let wanted = HashSet::from([inode]);
+        assert_eq!(holders(&wanted, usize::MAX).get(&inode), Some(&me));
+        assert!(holders(&wanted, 0).is_empty());
     }
 }

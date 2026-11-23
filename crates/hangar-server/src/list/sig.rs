@@ -215,7 +215,7 @@ mod tests {
         let mut row: SessionRow = serde_json::from_value(json!({"name": "s", "pair_peers": ["a"], "pair_gid": "g", "pair_task": "T"})).unwrap();
         let none = list_sig([&row]);
         assert!(none.ends_with(r#"["a"], "g", "T", null]]"#));
-        row.ports = vec![hangar_api::session::PortEntry { port: 8123, process: "python3".into(), pid: 7 }];
+        row.ports = vec![hangar_api::session::PortEntry { port: 8123, process: "python3".into(), pid: 7, shared: false }];
         let one = list_sig([&row]);
         assert_ne!(none, one);
         row.ports[0].port = 8124;

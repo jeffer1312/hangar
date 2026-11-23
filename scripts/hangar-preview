@@ -338,7 +338,7 @@ async function chamarServidor(nome, verbo, cmdArgs, aba = flags.aba, sair = erro
   let detalhe = {};
   try { detalhe = JSON.parse(texto).detail ?? {}; } catch { /* corpo sem JSON */ }
   if (r.status === 409 && detalhe.code === 'browser_host_none') return sair('nenhum app do Hangar com esta sessão aberta: abra a sessão no app desktop e repita');
-  if (r.status === 403 && detalhe.code === 'browser_host_not_allowed') return sair('o app não autorizou este servidor a usar o navegador dele');
+  if (r.status === 403 && detalhe.code === 'browser_host_not_allowed') return sair('o app desktop recusou usar o navegador dele');
   return sair(detalhe.msg ? semToken(detalhe.msg) : `o servidor recusou: ${r.status} ${semToken(texto)}`);
 }
 

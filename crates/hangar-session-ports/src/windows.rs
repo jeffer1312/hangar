@@ -8,15 +8,21 @@ use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
 
 use crate::win_table::{V4_WORDS, V6_WORDS, rows};
-use crate::{Listener, by_port, reachable_locally};
+use crate::{Listener, Outside, Scan, reachable_locally, sorted};
 
-pub(crate) fn listening(candidates: &[u32]) -> io::Result<Vec<Listener>> {
+pub(crate) fn scan(candidates: &[u32]) -> io::Result<Scan> {
     let wanted: HashSet<u32> = candidates.iter().copied().collect();
     let mut found = rows(&table(AF_INET)?, V4_WORDS);
     found.extend(rows(&table(AF_INET6)?, V6_WORDS));
-    Ok(by_port(found.into_iter()
-        .filter(|&(addr, _, pid)| wanted.contains(&pid) && reachable_locally(addr))
-        .map(|(_, port, pid)| Listener { port, pid, process: image_name(pid) })))
+    let (mine, others): (Vec<_>, Vec<_>) = found.into_iter()
+        .filter(|&(addr, _, _)| reachable_locally(addr))
+        .partition(|&(_, _, pid)| wanted.contains(&pid));
+    let mut outside: Vec<u16> = others.into_iter().map(|(_, port, _)| port).collect();
+    outside.sort_unstable();
+    Ok(Scan {
+        listeners: sorted(mine.into_iter().map(|(_, port, pid)| Listener { port, pid, process: image_name(pid) })),
+        outside: outside.into_iter().map(|port| Outside { port, inode: None }).collect(),
+    })
 }
 
 fn table(family: u16) -> io::Result<Vec<u32>> {

@@ -2080,6 +2080,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-port-stop"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "hangar-port-tunnel"
 version = "0.1.0"
 dependencies = [
@@ -2219,6 +2226,7 @@ dependencies = [
  "hangar-package",
  "hangar-plugins",
  "hangar-port-preview",
+ "hangar-port-stop",
  "hangar-port-tunnel",
  "hangar-projects",
  "hangar-psmux",

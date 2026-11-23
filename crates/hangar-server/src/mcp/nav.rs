@@ -87,7 +87,7 @@ pub fn host_answer(status: u16, body: &Value) -> Result<String, Unavailable> {
     let detail = &body["detail"];
     Err(Unavailable(match (status, detail["code"].as_str()) {
         (409, Some("browser_host_none")) => "nenhum app do Hangar com esta sessão aberta: abra a sessão no app desktop e repita".into(),
-        (403, Some("browser_host_not_allowed")) => "o app não autorizou este servidor a usar o navegador dele".into(),
+        (403, Some("browser_host_not_allowed")) => "o app desktop recusou usar o navegador dele".into(),
         _ => detail["msg"].as_str().or_else(|| detail.as_str()).map_or_else(|| format!("HTTP {status}"), str::to_owned),
     }))
 }
@@ -178,7 +178,7 @@ mod tests {
         let none = json!({"detail": {"code": "browser_host_none", "msg": "x"}});
         assert!(host_answer(409, &none).unwrap_err().0.starts_with("nenhum app do Hangar"));
         let denied = json!({"detail": {"code": "browser_host_not_allowed", "msg": "x"}});
-        assert_eq!(host_answer(403, &denied), Err(Unavailable("o app não autorizou este servidor a usar o navegador dele".into())));
+        assert_eq!(host_answer(403, &denied), Err(Unavailable("o app desktop recusou usar o navegador dele".into())));
         let gone = json!({"detail": {"code": "browser_host_gone", "msg": "o app caiu; o shot pode ter sido executado"}});
         assert_eq!(host_answer(502, &gone).unwrap_err().0, "o app caiu; o shot pode ter sido executado");
     }

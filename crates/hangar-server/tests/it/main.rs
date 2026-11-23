@@ -15,6 +15,7 @@ mod connect_supervisor;
 mod connect_share;
 mod connect_preview;
 mod port_tunnel;
+mod port_stop;
 mod connect_account_devices;
 mod cli_probe;
 mod provider_discovery;

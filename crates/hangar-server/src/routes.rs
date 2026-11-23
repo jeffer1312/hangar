@@ -966,6 +966,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sync/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/hangar-terminals/{ident}/term", get(crate::term::hangar_ws).fallback(pass_registered))
         .route("/api/port-tunnel", get(crate::port_tunnel::route).fallback(pass_any))
+        // Parar o servidor de uma porta da sessão: só o dono, nunca na 8766.
+        .route("/api/sessions/{name}/ports/{port}/stop", axum::routing::post(crate::port_stop::route).fallback(pass_any))
         .route("/__hangar_server/health", get(health))
         .route("/api/client-api", get(client_api).fallback(pass_any))
         // As rotas privadas não existem nesta porta.

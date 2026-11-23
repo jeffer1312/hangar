@@ -35,6 +35,8 @@ export interface PortEntry {
   port: number;
   process: string;
   pid: number;
+  /** Outro processo, fora da sessão, também escuta nesta porta: `localhost:<port>` pode cair nele. */
+  shared?: boolean;
 }
 
 export interface SessionInfo {

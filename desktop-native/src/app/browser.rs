@@ -35,6 +35,9 @@ pub(super) enum PanelEvent {
     Shot { key: String, bytes: Vec<u8> },
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     Element { key: String, element: crate::context_refs::Element, png: Option<Vec<u8>> },
+    /// O motor vai nascer com o proxy em erro: o `Hangar` relê o proxy (do agente, se `agent`) e chama `proxy_reread`.
+    #[cfg(target_os = "linux")]
+    RefreshProxy { key: String, agent: bool },
 }
 
 #[cfg(all(test, not(target_os = "macos")))]
@@ -388,6 +391,18 @@ pub(super) struct BrowserPanel {
     popup: Option<Popup>,
     /// Endereço a abrir quando o motor terminar de nascer; `Some` enquanto ele nasce.
     starting: Option<(String, By)>,
+    /// Sessão de outra máquina: a porta do SOCKS do servidor dela (`Hangar::session_proxy`), lida quando o motor nasce.
+    #[cfg(target_os = "linux")]
+    pub(super) proxy: Option<Result<u16, String>>,
+    /// O do contexto onde o agente remoto navega (`Hangar::agent_proxy`), longe dos cookies e da rede da pessoa.
+    #[cfg(target_os = "linux")]
+    pub(super) agent_proxy: Option<Result<u16, String>>,
+    /// O motor de agora nasceu no contexto do agente.
+    #[cfg(target_os = "linux")]
+    engine_agent: bool,
+    /// O proxy já foi relido para este nascimento: em erro de novo, o motor nasce com o erro, sem pedir outra vez.
+    #[cfg(target_os = "linux")]
+    proxy_reread: bool,
     _start: Option<Task<()>>,
     events: async_channel::Sender<crate::browser::Event>,
     address: Entity<InputState>,
@@ -530,7 +545,7 @@ impl BrowserPanel {
             cx.on_blur(&focus, window, |this, _, _| if let Some(engine) = this.engine() { engine.focus(false) }),
         ];
         Self { key, #[cfg(not(target_os = "macos"))] controller: None, #[cfg(not(target_os = "macos"))] cdp: None,
-            #[cfg(not(target_os = "macos"))] relay: Default::default(), #[cfg(not(target_os = "macos"))] viewer: Rc::default(), #[cfg(target_os = "linux")] frames: Default::default(), #[cfg(not(target_os = "macos"))] import_pending: false, #[cfg(not(target_os = "macos"))] importing: false, #[cfg(not(target_os = "macos"))] import_site: None, #[cfg(not(target_os = "macos"))] login_hint: None, #[cfg(not(target_os = "macos"))] hint_checked: None, #[cfg(not(target_os = "macos"))] login_request: None, #[cfg(not(target_os = "macos"))] login_reply: None, #[cfg(target_os = "linux")] cookie_sources: Vec::new(), engine: None, #[cfg(target_os = "linux")] popup: None, starting: None, _start: None, events, address, dialog_input, page: model::PageState::default(), invalid: None, #[cfg(not(target_os = "macos"))] cookies_status: None, #[cfg(target_os = "linux")] last_fill: None, focus,
+            #[cfg(not(target_os = "macos"))] relay: Default::default(), #[cfg(not(target_os = "macos"))] viewer: Rc::default(), #[cfg(target_os = "linux")] frames: Default::default(), #[cfg(not(target_os = "macos"))] import_pending: false, #[cfg(not(target_os = "macos"))] importing: false, #[cfg(not(target_os = "macos"))] import_site: None, #[cfg(not(target_os = "macos"))] login_hint: None, #[cfg(not(target_os = "macos"))] hint_checked: None, #[cfg(not(target_os = "macos"))] login_request: None, #[cfg(not(target_os = "macos"))] login_reply: None, #[cfg(target_os = "linux")] cookie_sources: Vec::new(), engine: None, #[cfg(target_os = "linux")] popup: None, starting: None, #[cfg(target_os = "linux")] proxy: None, #[cfg(target_os = "linux")] agent_proxy: None, #[cfg(target_os = "linux")] engine_agent: false, #[cfg(target_os = "linux")] proxy_reread: false, _start: None, events, address, dialog_input, page: model::PageState::default(), invalid: None, #[cfg(not(target_os = "macos"))] cookies_status: None, #[cfg(target_os = "linux")] last_fill: None, focus,
             origin: Rc::default(), #[cfg(target_os = "linux")] emulated: None, page_scale: Rc::new(Cell::new(1.)), #[cfg(target_os = "windows")] still: None, #[cfg(target_os = "windows")] released: Vec::new(), #[cfg(target_os = "windows")] cover_gen: 0, #[cfg(target_os = "linux")] page_zoom: (1., 0., 0.), shown: false, local_notice: None, #[cfg(target_os = "linux")] cursor: CursorStyle::Arrow, #[cfg(target_os = "linux")] cursor_probe: (false, None), page_errors: Default::default(), error_count: 0, errors_open: false, shooting: false, #[cfg(not(target_os = "macos"))] pick: Default::default(), copied: false, dismissed_notice: 0, address_stale: false, #[cfg(not(target_os = "macos"))] agent: None, #[cfg(not(target_os = "macos"))] agent_running: 0,
             #[cfg(not(target_os = "macos"))] agent_seq: 0, #[cfg(not(target_os = "macos"))] paused: None, #[cfg(not(target_os = "macos"))] session_working: false, #[cfg(target_os = "windows")] agent_finished_at: None, #[cfg(not(target_os = "macos"))] _activity: None, #[cfg(target_os = "windows")] idle: Cell::new(0), #[cfg(not(target_os = "macos"))] sidecar: Default::default(), #[cfg(target_os = "linux")] scale: Rc::default(), _drain: drain, _subscriptions: subscriptions }
     }
@@ -538,6 +553,14 @@ impl BrowserPanel {
     /// Motor vivo e controlador ligado: os verbos do `/cmd` já respondem.
     #[cfg(not(target_os = "macos"))]
     pub(super) fn verbs_ready(&self) -> bool { self.controller.is_some() && self.engine().is_some_and(|e| e.alive()) }
+
+    /// Quem navega por `by` usa o contexto do agente remoto: só o canal anfitrião dá um (`agent_proxy`).
+    #[cfg(target_os = "linux")]
+    fn agent_context(&self, by: By) -> bool { by == By::Agent && self.agent_proxy.is_some() }
+
+    /// O motor de agora (se há) é o do contexto de `by`: a página da pessoa nunca recebe o agente, nem o contrário.
+    #[cfg(target_os = "linux")]
+    pub(super) fn engine_in(&self, by: By) -> bool { self.engine.is_none() || self.engine_agent == self.agent_context(by) }
 
     /// A página na tela: o popup aberto, senão a da sessão.
     fn engine(&self) -> Option<&Rc<Engine>> {
@@ -801,6 +824,9 @@ impl BrowserPanel {
         // Motor que falhou (ou o Chromium que caiu) volta a ser tentado no próximo `open`.
         #[cfg(not(target_os = "macos"))]
         if matches!(&self.engine, Some(Err(_))) || self.engine().is_some_and(|e| !e.alive()) { self.drop_engine(); }
+        // Pessoa e agente remoto não dividem página: quem chega pelo outro contexto troca o motor.
+        #[cfg(target_os = "linux")]
+        if !self.engine_in(by) { self.drop_engine(); }
         if self.engine.is_some() {
             self.navigate(url, by, window, cx);
         } else if self.starting.replace((url, by)).is_none() {
@@ -822,27 +848,56 @@ impl BrowserPanel {
         if by == By::User && self.shown { self.focus.focus(window, cx); }
     }
 
+    /// Resposta ao `RefreshProxy`, com o proxy já relido: o motor que esperava nasce agora.
+    #[cfg(target_os = "linux")]
+    pub(super) fn proxy_reread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.starting.is_none() || self.engine.is_some() { return; }
+        self.proxy_reread = true;
+        self.start(window, cx);
+    }
+
     fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "linux")]
+        let agent = self.starting.as_ref().is_some_and(|(_, by)| self.agent_context(*by));
+        // Erro guardado de antes (sem conexão com a máquina, por exemplo) não decide "Tentar de novo": o `Hangar` relê.
+        #[cfg(target_os = "linux")]
+        if !std::mem::take(&mut self.proxy_reread) && matches!(if agent { &self.agent_proxy } else { &self.proxy }, Some(Err(_))) {
+            cx.emit(PanelEvent::RefreshProxy { key: self.key.clone(), agent });
+            return;
+        }
         let starter = Engine::prepare(window, cx);
         let events = self.events.clone();
+        #[cfg(target_os = "linux")]
+        let proxy = match agent {
+            true => self.agent_proxy.clone().map(|p| p.map(|port| (port, crate::socks::AGENT_BYPASS))),
+            false => self.proxy.clone().map(|p| p.map(|port| (port, crate::socks::BYPASS))),
+        }.transpose();
         self._start = Some(cx.spawn_in(window, async move |this, cx| {
             // Corpo da tarefa, fora de `update`: a App não está emprestada, então o laço de mensagens que o WebView2
             // roda até nascer pode executar outras tarefas da GPUI sem pânico.
             // No Linux o motor nasce sem travar a interface; o WebView2 nasce numa chamada síncrona.
             #[cfg(target_os = "linux")]
-            let engine = match starter { Ok(starter) => starter.start(events).await, Err(e) => Err(e) }.map(Rc::new);
+            let engine = match starter.and_then(|starter| proxy.map(|proxy| (starter, proxy))) {
+                Ok((starter, proxy)) => starter.start_in(proxy, events).await,
+                Err(e) => Err(e),
+            }.map(Rc::new);
             #[cfg(not(target_os = "linux"))]
             let engine = starter.and_then(|starter| starter.start(events)).map(Rc::new);
             if let Err(e) = &engine { eprintln!("[nav] motor do navegador falhou: {e}"); }
             // Painel fechado no meio: o motor cai junto com o resultado.
             let _ = this.update_in(cx, |this, window, cx| {
                 this.engine = Some(engine);
+                #[cfg(target_os = "linux")]
+                { this.engine_agent = agent; }
                 // O motor novo conta os avisos do zero.
                 this.dismissed_notice = 0;
                 #[cfg(not(target_os = "macos"))]
                 if let Some(Ok(engine)) = &this.engine { let engine = engine.clone(); this.attach(&engine, cx); }
                 // Motor que não nasceu guarda o endereço pedido: é o que "Tentar de novo" volta a abrir.
                 match this.starting.take() {
+                    // O pedido trocou de dono enquanto o motor nascia: a página não abre no contexto do outro.
+                    #[cfg(target_os = "linux")]
+                    Some((url, by)) if this.engine().is_some() && !this.engine_in(by) => { this.drop_engine(); this.go(url, by, window, cx) }
                     Some((url, by)) if this.engine().is_some() => this.navigate(url, by, window, cx),
                     Some((url, _)) => this.page.url = Some(url),
                     None => {}
@@ -2215,14 +2270,31 @@ impl Hangar {
     }
 
     pub(super) fn browser_for(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) -> Entity<BrowserPanel> {
-        if let Some(browser) = self.side.browsers.get(&key) { return browser.clone(); }
+        // Relido a cada pedido: a conexão da máquina pode só ter chegado agora, e o motor que ainda vai nascer usa este.
+        #[cfg(target_os = "linux")]
+        let proxy = self.session_proxy(&key);
+        if let Some(browser) = self.side.browsers.get(&key) {
+            #[cfg(target_os = "linux")]
+            browser.update(cx, |panel, _| panel.proxy = proxy);
+            return browser.clone();
+        }
         let browser = cx.new(|cx| BrowserPanel::new(key.clone(), window, cx));
-        cx.subscribe(&browser, |this, _, event: &PanelEvent, cx| match event {
+        #[cfg(target_os = "linux")]
+        browser.update(cx, |panel, _| panel.proxy = proxy);
+        cx.subscribe_in(&browser, window, |this, browser, event: &PanelEvent, window, cx| match event {
             PanelEvent::Shot { key, bytes } => this.attach_page_shot(key, bytes.clone(), cx),
             #[cfg(not(target_os = "macos"))]
             PanelEvent::Element { key, element, png } => this.attach_page_element(key, element.clone(), png.clone(), cx),
             #[cfg(target_os = "macos")]
             PanelEvent::Element { .. } => {}
+            #[cfg(target_os = "linux")]
+            PanelEvent::RefreshProxy { key, agent } => {
+                if *agent { this.arm_agent(browser, key, cx); } else {
+                    let proxy = this.session_proxy(key);
+                    browser.update(cx, |panel, _| panel.proxy = proxy);
+                }
+                browser.update(cx, |panel, cx| panel.proxy_reread(window, cx));
+            }
         }).detach();
         self.side.browsers.insert(key, browser.clone());
         browser

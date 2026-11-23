@@ -449,6 +449,17 @@ impl ListBridge {
             .await.map_err(|e| joined(e, "pane do agente interrompido"))
     }
 
+    /// Os pids das sessões e os que a parada de servidor nunca sinaliza (`ports::of_session`), pela
+    /// descoberta compartilhada e pelas chaves da lista publicada; `None` = a sessão não está na lista.
+    pub(crate) async fn port_stop_pids(&self, name: &str) -> Result<Option<super::ports::StopFacts>, ListError> {
+        let (rows, agent_pids, panes, children) = self.discovery(None).await?;
+        if !rows.iter().any(|row| row.name == name) { return Ok(None); }
+        let keys = super::ports::session_keys(&self.snapshot().await?.rows);
+        let (dirs, name) = (self.dirs()?, name.to_owned());
+        tokio::task::spawn_blocking(move || Some(super::ports::of_session(&rows, &panes, &agent_pids, &children, &dirs, keys, &name)))
+            .await.map_err(|e| joined(e, "pids da sessão interrompidos"))
+    }
+
     /// Mudança de membro ou de modo: a próxima pergunta não serve a lista de antes.
     pub fn invalidate(&self) { self.epoch.fetch_add(1, Ordering::SeqCst); }
 

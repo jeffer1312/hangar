@@ -31,7 +31,7 @@ pub enum Reply {
 pub enum Refusal {
     /// Nenhum anfitrião ligado deu foco nesta sessão.
     NoHost,
-    /// A pessoa respondeu "Agora não" no app.
+    /// O app desktop recusou o pedido.
     NotAllowed,
     /// O canal caiu com o pedido em curso.
     Gone,
@@ -63,11 +63,9 @@ impl Refusal {
     pub fn message(self, verb: &str) -> String {
         match self {
             Refusal::NoHost => "nenhum app desktop do Hangar está com esta sessão aberta".into(),
-            Refusal::NotAllowed => "o app desktop não autorizou este servidor a usar o navegador dele".into(),
+            Refusal::NotAllowed => "o app desktop recusou usar o navegador dele".into(),
             Refusal::Gone => format!("o app desktop desligou no meio do comando; o {verb} pode ter sido executado"),
-            // Na primeira vez o app pergunta se o servidor pode usar o navegador; quem demora a responder
-            // o cartão estoura o prazo, e o agente precisa saber que repetir depois resolve.
-            Refusal::Timeout => format!("o app desktop não respondeu o {verb} no prazo (se é a primeira vez, o app pode estar esperando a pessoa permitir este servidor; repita depois)"),
+            Refusal::Timeout => format!("o app desktop não respondeu o {verb} no prazo"),
             Refusal::Unsupported => format!("{verb} não funciona no navegador de outra máquina"),
         }
     }

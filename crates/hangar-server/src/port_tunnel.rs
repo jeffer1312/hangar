@@ -5,11 +5,16 @@ use std::sync::Arc;
 
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::body::Body;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 
 use crate::routes::{AppState, cors, owner_gate, pass};
 use crate::share::gate::Watcher;
+
+/// Toda recusa do túnel leva o código também aqui: o 502 do Caddy ou do frp com o servidor fora não
+/// o traz, e o cliente separa "servidor fora" de "nada escutando" sem ler o corpo.
+const TUNNEL_HEADER: &str = "x-hangar-tunnel";
 
 /// O cookie vai sozinho em pedido de qualquer página do mesmo site, até a prévia de projeto de outra
 /// máquina do Connect: tira o cookie e diz se sobrou credencial explícita (`?token=` ou Bearer).
@@ -25,13 +30,13 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     }
     let fwd = match owner_gate(&st, peer, &req).await {
         Ok(fwd) => fwd,
-        Err(response) => return response,
+        Err(response) => return tagged(response).await,
     };
     // O aparelho do Connect traz o vigia: revogado, o túnel aberto cai.
     let watcher = req.extensions().get::<Watcher>().cloned();
     let (mut parts, body) = req.into_parts();
     let Ok(ws) = WebSocketUpgrade::from_request_parts(&mut parts, &()).await else {
-        return pass(&st, Request::from_parts(parts, body), &fwd).await;
+        return tagged(pass(&st, Request::from_parts(parts, body), &fwd).await).await;
     };
     let port = hangar_port_tunnel::port_of(parts.uri.query()).filter(|port| !st.connect_previews.refused(*port));
     let Some(port) = port else {
@@ -46,5 +51,21 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 fn refusal(headers: &HeaderMap, status: StatusCode, code: &str, msg: &str) -> Response {
     let mut response = hangar_core::http::detail(status, code, msg, serde_json::json!({}));
     cors(headers, response.headers_mut());
+    response.headers_mut().insert(TUNNEL_HEADER, HeaderValue::from_str(code).expect("código ASCII"));
     response
+}
+
+/// Recusa de outro portão: o código sai do corpo (`detail.code`, ou `detail.error_code` do 503).
+async fn tagged(response: Response) -> Response {
+    let (mut parts, body) = response.into_parts();
+    // ponytail: recusa é JSON curto; o teto só barra corpo que não é recusa.
+    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
+        return Response::from_parts(parts, Body::empty());
+    };
+    let detail = serde_json::from_slice::<serde_json::Value>(&bytes).ok().map(|value| value["detail"].clone());
+    let code = detail.as_ref().and_then(|d| d["code"].as_str().or(d["error_code"].as_str()));
+    if let Some(value) = code.and_then(|code| HeaderValue::from_str(code).ok()) {
+        parts.headers.insert(TUNNEL_HEADER, value);
+    }
+    Response::from_parts(parts, Body::from(bytes))
 }

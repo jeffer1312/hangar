@@ -6,10 +6,23 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 ## Portas da sessão, túnel e navegador emprestado (23/11/2026)
 
 O agente sobe um servidor na máquina da sessão (Next na 3000, Postgres na 5432), e o Hangar mostra a
-porta sozinho. No nativo, cada porta abre no navegador embutido ou é encaminhada até o computador de
-quem usa. No Expo, abre pela prévia. E o agente pode dirigir o navegador do app desktop de outra
-máquina. Referência do pedido: o T3 Code 0.1.11 ("Servers", "Tunnelled automatically", "Forward a
-port").
+porta sozinho. No nativo, cada porta abre no navegador embutido ou no do computador, é encaminhada
+até o computador de quem usa, ou tem o servidor parado. No Expo, abre numa WebView do app com túnel.
+E o agente pode dirigir o navegador do app desktop de outra máquina.
+
+**De onde vieram as ideias.** O pedido partiu do vídeo do T3 Code 0.1.11. Na segunda rodada o código
+dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparação peça por peça está em
+`docs/superpowers/specs/2026-11-23-t3code-comparacao.md`.
+- Ideia do T3, adaptada: dono da porta pela variável herdada, DevTools fora, sonda de mesma máquina,
+  `::1`/`::` livres antes de usar o número, teto de 64 conexões, uid no Linux, SOCKS por servidor
+  num contexto de navegador próprio, `0.0.0.0` como `localhost`, parar o grupo do servidor e a
+  WebView com túnel no celular.
+- Só do Hangar: escopo systemd e busca só entre os pids da sessão, porta dividida mantida com aviso
+  (o T3 a apaga), código da recusa em cabeçalho com os status mantidos, lista de portas no celular,
+  prévia pelo Connect, túnel pela rota que o app já usa (rede local, Tailscale, Connect) com ping e
+  meia-saída, e o navegador do app emprestado ao agente de outra máquina, com a rede de quem usa
+  fechada para ele. O T3 dirige o navegador só da própria máquina e roda um Chromium sem janela no
+  servidor remoto; aqui o uso é sempre com o app aberto.
 
 - **Quais portas são da sessão.** O crate `hangar-session-ports` lê os sockets em LISTEN e procura o
   dono só entre os pids candidatos, nunca em todos os processos da máquina. No Linux lê
@@ -21,10 +34,15 @@ port").
     pega o `nohup … &` adotado pelo init;
   - um escopo visto em duas sessões não vale para nenhuma: é o do servidor tmux antigo ou do login;
   - depois, os descendentes da raiz (pane ou cano);
-  - por fim, os terminais de atalho, que contam para a sessão dona.
+  - depois, os terminais de atalho, que contam para a sessão dona;
+  - por fim, quem escuta fora de toda árvore e escopo (`setsid`, outro pai) entra na sessão cuja
+    `CP_SESSION_KEY` herdou, lida em `/proc/<pid>/environ` só desses pids.
 
   Agente, cano e app-server do Codex ficam fora, porque as portas de loopback deles não são
-  servidores da pessoa. A leitura é reaproveitada pelos mesmos candidatos dentro do prazo do cache
+  servidores da pessoa. Processo com `--remote-debugging-port` também: é o Chrome de DevTools que o
+  agente sobe, não um site. Porta em que outro processo, fora da sessão, também escuta (v4 de um, v6
+  de outro) sai com `shared: true`, e a tela avisa "Outra coisa também escuta nessa porta": o
+  `localhost:N` pode cair no outro. O T3 apaga essa linha; aqui ela fica, porque é da sessão. A leitura é reaproveitada pelos mesmos candidatos dentro do prazo do cache
   de processos, para o tique e um `GET` simultâneo lerem uma vez só. Leitura que falha registra
   `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`. Esse código
   está em `DIAGNOSTIC` e nunca chega à tela. A linha do convidado (convite e login) sai sem `ports`:
@@ -47,7 +65,9 @@ port").
   | Porta do Hangar (`connect_previews.refused`) ou fora de 1..65535 | 422 `port_tunnel_port_refused` |
   | Sem `?token=` nem Bearer | 403 `port_tunnel_token_required` |
 
-  Uma mensagem tem no máximo 1 MiB. Binário vazio do cliente quer dizer "terminei de mandar": o
+  Toda recusa leva o código também no cabeçalho `x-hangar-tunnel`, e os clientes classificam por ele,
+  nunca pelo status: o Caddy do Connect devolve 502 com a 8768 fora, igual ao "nada escutando".
+  Recusa sem o cabeçalho é servidor fora, Caddy ou Hangar antigo. Uma mensagem tem no máximo 1 MiB. Binário vazio do cliente quer dizer "terminei de mandar": o
   servidor fecha a escrita no TCP e continua mandando a resposta, como o `nc`. O Close não serve
   para isso, porque depois dele o servidor não pode mandar mais nada. O TCP fechando fecha o
   WebSocket com 1000.
@@ -64,16 +84,79 @@ port").
   do convidado não tem a rota: o porteiro dela responde 403 antes de qualquer conexão com a porta. O
   aparelho do Connect traz o `Watcher`, e aparelho revogado derruba o túnel aberto.
 - **Encaminhar no nativo.** `desktop-native/src/port_forward.rs` escuta só em `127.0.0.1` deste
-  computador, com o mesmo número quando está livre e o seguinte quando não está. A tela diz
-  "encaminhada como 3001". Porta em que algo já responde também conta como ocupada: no Windows, o
-  bind em `127.0.0.1` vence um servidor local em `0.0.0.0` na mesma porta e o tapa calado. Cada
-  conexão aceita abre o WebSocket pela rota que o app usa naquele instante (rede local, Tailscale
-  ou Connect), relida a cada conexão. Pelo Connect, o túnel exige o computador aprovado como
-  aparelho, e a senha do dono nunca vai na URL.
+  computador, com o mesmo número quando está livre e o seguinte quando não está (até +100). A tela
+  diz "encaminhada como 3001". Ocupada é a porta em que algo já responde em `127.0.0.1` (no
+  Windows, o bind ali vence um servidor local em `0.0.0.0` e o tapa calado) ou que está em uso em
+  `::1` ou `::`: um servidor local só no IPv6 responderia ao `localhost` do navegador no lugar.
+  - **Sonda de mesma máquina, antes de escutar.** 16 bytes aleatórios vão pelo túnel até uma escuta
+    deste computador. Chegaram: "o servidor é este computador", e nada é encaminhado, porque o túnel
+    de lá discaria o próprio encaminhamento, em laço (`is_loopback` não pega servidor salvo pelo
+    IP do Tailscale da própria máquina). O túnel diz que nada escuta, ou outro serviço responde: é
+    outra máquina. O resto, em 3 s, é desconhecido e também não encaminha. Sonda e busca de porta
+    rodam fora da thread da tela; a linha diz "Abrindo…".
+  - **Teto e dono.** Até 64 conexões vivas por encaminhamento; a de cima fecha na hora, e a tela diz.
+    No Linux, conexão de outro usuário do computador (dono pela tabela `/proc/net/tcp`) fecha: a
+    escuta não tem senha, e o Hangar se instala em máquina de outras pessoas.
+  - Cada conexão aceita abre o WebSocket pela rota que o app usa naquele instante (rede local,
+    Tailscale ou Connect). Pelo Connect, o túnel exige o computador aprovado como aparelho, e a senha
+    do dono nunca vai na URL.
+- **Página de outra máquina no Linux: SOCKS por servidor, sem trocar a porta.** Um SOCKS5 em
+  `127.0.0.1:0` por servidor remoto do dono, vivo enquanto o app vive (`desktop-native/src/socks.rs`),
+  e um contexto do Chromium do painel com esse proxy, por `Target.createBrowserContext` com
+  `proxyServer` e `proxyBypassList` `*,<-loopback>`: só o loopback vai ao SOCKS, e cada CONNECT vira um
+  túnel até a mesma porta lá. Loopback nunca conecta direto aqui. A página fica em
+  `http://localhost:3000`, com a origem, o OAuth, o HMR e os cookies de lá, separados por servidor e
+  fora do perfil da pessoa. A troca de porta mudava a origem e misturava os cookies de `localhost`
+  de todas as máquinas. `0.0.0.0` e `[::]`, que o Vite imprime, viram `localhost` antes do pedido.
+  O mesmo uid da escuta vale aqui.
+  - Medido no Chromium que o app usa: o contexto nasce com os dois parâmetros e manda `localhost` ao
+    SOCKS, com `*,<-loopback>` e com `<-loopback>`. O `<-loopback>` tira o desvio implícito do
+    loopback, e a última regra que casa vence.
+  - Limite aceito: o contexto do CDP é de memória, e o login no site do projeto some ao fechar o
+    app. Um Chromium por servidor com pasta própria fica para quando isso incomodar.
+  - Windows e macOS seguem com o encaminhamento e a troca de porta. O WebView2 só muda depois da
+    prova na VM de `--proxy-server` socks5 com `<-loopback>` por pasta de dados.
+- **Abrir no navegador do computador.** Encaminha, se a sessão é de outra máquina, e abre
+  `http://localhost:<porta local>` no navegador do sistema, que não tem o SOCKS. "Parar
+  encaminhamento" para o encaminhamento; "Parar servidor" é outra ação.
+- **Parar servidor.** `POST /api/sessions/{name}/ports/{port}/stop` (`hangar-port-stop`), só em
+  `public_routes`, com confirmação nos dois apps. A ideia é do T3, a regra de proteção é nossa.
+  - Quem segura a porta é relido na hora pela regra da lista e conferido pelo início do processo
+    (`starttime` do `/proc/<pid>/stat`): pid reusado não recebe sinal. A tabela vem de `/proc/*/stat`,
+    sem `ps`.
+  - O alvo é o grupo de processos do servidor. Quando o grupo tem processo protegido (o
+    `npm run dev &` de um shell sem controle de job), o alvo é só a árvore que nasce no processo que
+    escuta.
+  - Protegidos nunca recebem sinal: agente, cano e app-server do Codex, a raiz da sessão e o pai de
+    cada um (servidor tmux, cano), o `hangar-server` com os ancestrais e os filhos diretos dele, e os
+    pids 0 e 1. Se o próprio processo que escuta (ou um descendente) é protegido: 409
+    `port_stop_shared_group`.
+  - SIGTERM, consulta a cada 250 ms por 3 s, SIGKILL só a quem ainda é o processo original. Zumbi
+    conta como saído.
+  - Pid já de outro processo ou porta que não é mais da sessão: 404 `port_stop_not_found`. Fora do
+    Linux: 501 `port_stop_unsupported`. Depois da parada a leitura guardada dos sockets é descartada
+    e a lista sai de novo.
+- **Celular: a página abre dentro do app.** Módulo nativo `mobile/modules/port-tunnel`: uma WebView
+  cujo `localhost` é o da máquina da sessão, com um SOCKS no aparelho que abre `/api/port-tunnel` por
+  `baseOf(server)` e o token do aparelho. Várias portas ficam abertas ao mesmo tempo, uma aba cada,
+  sem host nem certificado do Connect por porta. O SOCKS não tem senha, então só aceita as portas
+  da sessão. Só servidor do dono; convite cai na prévia.
+  - iOS: `WKWebsiteDataStore.nonPersistent()` por servidor com `ProxyConfiguration` socksv5. O iOS
+    nunca manda loopback ao proxy, então a página roda no nome substituto `hglo.test`, de 9 letras
+    como `localhost`, e a barra mostra `localhost`. O app aceita iOS 16.4 e o proxy só existe no 17:
+    conferido em tempo de execução.
+  - Android: `ProxyController.setProxyOverride` com bypass `*` e `removeImplicitRules()`, posto ao
+    montar e tirado ao desmontar, porque vale para todas as WebViews do app; perfil por servidor com
+    `MULTI_PROFILE`. Medido: o System WebView 133 do emulador `hangar` tem `PROXY_OVERRIDE` e
+    `MULTI_PROFILE`.
+  - Sem suporte (iOS abaixo de 17, WebView sem `PROXY_OVERRIDE`, binário antigo), o toque abre a
+    prévia do Connect, ou a do Tailscale, no navegador do sistema; a mesma prévia é o "Link de fora".
+  - Binário novo: `runtimeVersion` `native-7`, fora do OTA.
 - **Uma prévia do Connect por vez.** O "Link de fora" do nativo e a folha Portas do Expo usam a
   mesma prévia do Connect (`/api/connect/preview`), e abrir outra fecha a anterior: as duas telas
   dizem isso. Uma prévia por porta exigiria um host por porta, e cada host gasta um certificado do
-  limite semanal de `hangar.dev.br`. O Expo tenta o Connect primeiro e cai no Tailscale
+  limite semanal de `hangar.dev.br`; por isso a página no celular vai pela WebView com túnel, e a
+  prévia fica para mandar a outra pessoa e como reserva. O Expo tenta o Connect primeiro e cai no Tailscale
   (`/api/preview`, slot 10000) quando a máquina não tem Connect ou ele está fora. Ajustes > Connect
   perdeu o campo de porta e ficou só com a prévia aberta e o botão de fechar.
 - **Porta que não é página.** As duas prévias (Connect e Tailscale) mandam um `HEAD /` antes de
@@ -112,15 +195,25 @@ port").
   ganham o canal. O túnel existe para o notebook alcançar o `localhost` da máquina da sessão, e
   uma pergunta a cada máquina só atrapalhava isso. O navegador é o painel Navegador da sessão,
   nunca o do sistema.
-- **O que o agente remoto alcança.** `localhost`, `127.x` e `::1` passam pelo túnel, pela porta
-  local do encaminhamento, e nas respostas ao agente a porta local volta a ser a remota. Faixas
-  privadas, `0.0.0.0`, broadcast, `100.64.0.0/10` (Tailscale) e esquema fora de `http`/`https` são
-  recusados; nome de DNS é resolvido e conferido antes de abrir. O navegador do notebook tem os
-  cookies do perfil e alcança a rede de lá.
-- **Limite aceito: a barreira é servir só as máquinas do dono.** A conferência vale só para a
-  navegação que o agente pede. Páginas abertas pelo agente de uma máquina do dono ainda alcançam a
-  rede do notebook por redirecionamento, `eval` e `fetch`, e um DNS que muda de resposta depois da
-  conferência (DNS rebinding) também passa.
+- **O agente remoto no Linux: contexto próprio, rede de quem usa fechada em todo pedido.** Os verbos
+  do canal rodam num contexto do Chromium com o SOCKS do servidor em modo agente (`proxyBypassList`
+  `<-loopback>`, nada direto): todo pedido passa pelo SOCKS, inclusive redirect, `fetch` do `eval` e
+  subrecurso. Loopback vai ao túnel, e o agente vê exatamente a URL que pediu, sem troca de porta.
+  O resto é resolvido no próprio SOCKS e só conecta aos endereços já conferidos, o que fecha o DNS
+  que muda de resposta depois (rebinding). Recusado:
+  - endereço dentro da rede de qualquer interface deste computador, v4 e v6 (`getifaddrs`, com a
+    máscara);
+  - nome que resolve para loopback, faixas privadas, de enlace, CGNAT (Tailscale), `0.0.0.0/8`, `198.18.0.0/15`,
+    multicast, broadcast, ULA, site-local, 6to4, Teredo, e o IPv4 dentro de IPv6 mapeado ou NAT64;
+  - nome `.local`, DNS que não responde em 30 s e lista de interfaces ilegível;
+  - esquema fora de `http`/`https` no `open`/`goto`.
+
+  Pessoa e agente nunca dividem a página: o agente não lê nem dirige a que a pessoa abriu, e abrir a
+  dele troca o motor. O `login` (a pessoa aprova no app) traz os cookies daquele site para o
+  contexto do agente. Limite conhecido: WebRTC e outros UDP não passam por SOCKS e podem sair pela
+  rede do notebook. Windows e macOS seguem com a conferência antiga: só o URL do `open`/`goto` e um
+  DNS antes, e o que ela não pega (redirect, `fetch`, rebinding) continua aceito ali, com a barreira
+  de servir só as máquinas do dono.
 - **Aceito: caminho `.png` absoluto no `browser-cmd`.** O `shot` aceita um `.png` absoluto do CLI e
   o servidor grava ali, em qualquer pasta que o usuário do sistema escreve. Só o dono, pelo token,
   chega à rota, e o agente dele já escreve nessas pastas.

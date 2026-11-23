@@ -769,11 +769,12 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   recusada, e `Sec-Fetch-Site` de fora também, salvo abrir o site numa aba. Script de service worker é
   recusado. A prévia pelo Tailscale é do crate `hangar-port-preview`, sem caminho Python. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#prévia-de-porta-pelo-connect-a-8769-é-um-listener-próprio-fora-de-hangar_auth-07112026).
-- **Portas da sessão saem na linha do dono, e túnel e navegador emprestado só abrem com token.**
-  `ports` vem de `list/ports.rs` (escopo systemd da sessão, depois descendência, depois atalhos; agente,
-  cano e app-server fora; convidado nunca recebe). `/api/port-tunnel` (só loopback, nunca porta do Hangar) e
-  `/api/browser-host` ficam em `public_routes`; o cookie é apagado antes do porteiro. O
-  navegador do app serve sozinho as máquinas do dono, sem pergunta; convite e par externo nunca. Uma prévia do Connect por vez.
+- **Portas da sessão saem na linha do dono; túnel, navegador emprestado e parar servidor só com token.**
+  `ports` vem de `list/ports.rs` (escopo, descendência, atalhos, `CP_SESSION_KEY` herdada; agente, cano, app-server e DevTools fora; convidado nunca).
+  `/api/port-tunnel` (só loopback, nunca porta do Hangar, código no `x-hangar-tunnel`), `/api/browser-host` e `ports/{port}/stop`
+  (nunca processo protegido, pid conferido pelo início) ficam em `public_routes`, sem cookie. Encaminhar escuta só em `127.0.0.1` e nunca
+  na própria máquina (sonda). No Linux a página remota e o agente usam o SOCKS do servidor (agente: tudo por ele, rede daqui recusada);
+  celular abre na WebView com túnel. O navegador do app serve só as máquinas do dono, sem pergunta.
   [Motivo](docs/decisoes/plataforma.md#portas-da-sessão-túnel-e-navegador-emprestado-23112026).
 - **Cookie do OpenCode, webhook de deploy e prévia Tailscale são do Rust.** Os crates
   `hangar-opencode-cookie`, `hangar-deploy` e `hangar-port-preview` atendem os caminhos inteiros;

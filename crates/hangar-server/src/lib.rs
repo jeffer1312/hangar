@@ -46,6 +46,7 @@ pub mod mods;
 pub mod nav_requests;
 pub mod owned_routes;
 pub mod pages;
+pub mod port_stop;
 pub mod port_tunnel;
 pub mod prewarm;
 pub(crate) mod queue_feed;

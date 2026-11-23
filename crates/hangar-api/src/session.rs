@@ -251,6 +251,9 @@ pub struct PortEntry {
     pub port: u16,
     pub process: String,
     pub pid: u32,
+    /// Outro processo, fora da sessão, também escuta nesta porta: `localhost:<port>` pode cair nele.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
 }
 
 fn default_provider() -> String {

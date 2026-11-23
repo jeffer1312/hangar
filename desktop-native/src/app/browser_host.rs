@@ -1,9 +1,11 @@
 //! Canal anfitrião (`GET /api/browser-host`): o agente de uma sessão de outra máquina dirige o navegador da sessão
 //! neste app. Um canal por servidor remoto, aberto na primeira vez que uma sessão dele aparece na tela; os verbos
 //! passam pelo mesmo executor do `/cmd` local (`run_verb`). Só servidor do dono tem canal: convite e par externo nunca.
-use std::{io, net::IpAddr, sync::{Arc, Mutex}, time::{Duration, Instant}};
+use std::{io, sync::{Arc, Mutex}, time::{Duration, Instant}};
+#[cfg(not(target_os = "linux"))]
+use std::net::IpAddr;
 
-use tokio::{io::{AsyncWrite, AsyncWriteExt}, runtime::Handle, time::timeout};
+use tokio::{io::{AsyncWrite, AsyncWriteExt}, time::timeout};
 
 use super::*;
 use super::ports_panel::owner_server;
@@ -21,6 +23,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// O mesmo prazo do CLI quando o pedido não diz o dele.
 const DEFAULT_DEADLINE: Duration = Duration::from_secs(45);
 const READY_POLL: Duration = Duration::from_millis(150);
+#[cfg(not(target_os = "linux"))]
 const LOCAL_REFUSED: &str = "endereço local deste computador recusado";
 
 /// O que o app manda ao servidor pelo canal.
@@ -64,7 +67,20 @@ impl Hosts {
 
 // --- regras puras: endereço pedido pelo agente remoto e as portas nas respostas ---
 
-/// Para onde a navegação do agente remoto pode ir.
+/// O endereço de `open`/`goto` como o `goto` do controlador o completa (sem esquema = `http://`); `None` é
+/// `about:blank`. Só web: `file:`, `chrome:`, `javascript:`... leriam este computador.
+pub(super) fn web_url(raw: &str) -> Result<Option<url::Url>, &'static str> {
+    let raw = raw.trim();
+    if raw.is_empty() { return Err("goto precisa de uma url"); }
+    if raw == "about:blank" { return Ok(None); }
+    let full = if raw.contains("://") { raw.to_owned() } else { format!("http://{raw}") };
+    let url = url::Url::parse(&full).map_err(|_| "url invalida")?;
+    if !matches!(url.scheme(), "http" | "https") { return Err("só endereços http e https"); }
+    Ok(Some(url))
+}
+
+/// Para onde a navegação do agente remoto pode ir. No Linux quem decide é o SOCKS do agente, a cada pedido.
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Target {
     /// Endereço de fora; `lookup` = nome a conferir no DNS antes de abrir.
@@ -75,6 +91,7 @@ pub(super) enum Target {
 
 /// Rede deste computador que o agente de outra máquina não alcança: privada, de enlace, CGNAT (a do Tailscale) e
 /// loopback (que só vale pelo túnel, decidido antes).
+#[cfg(not(target_os = "linux"))]
 pub(super) fn private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -90,15 +107,9 @@ pub(super) fn private_ip(ip: IpAddr) -> bool {
     }
 }
 
-/// O endereço de `open`/`goto`, como o `goto` do controlador o completa (sem esquema = `http://`).
+#[cfg(not(target_os = "linux"))]
 pub(super) fn target(raw: &str) -> Result<Target, &'static str> {
-    let raw = raw.trim();
-    if raw.is_empty() { return Err("goto precisa de uma url"); }
-    if raw == "about:blank" { return Ok(Target::Public { url: raw.into(), lookup: None }); }
-    let full = if raw.contains("://") { raw.to_owned() } else { format!("http://{raw}") };
-    let url = url::Url::parse(&full).map_err(|_| "url invalida")?;
-    // `file:`, `chrome:`, `javascript:`... leriam este computador.
-    if !matches!(url.scheme(), "http" | "https") { return Err("só endereços http e https"); }
+    let Some(url) = web_url(raw)? else { return Ok(Target::Public { url: "about:blank".into(), lookup: None }) };
     let port = url.port_or_known_default().unwrap_or(80);
     let loopback = match url.host() {
         Some(url::Host::Domain(d)) => {
@@ -118,6 +129,7 @@ pub(super) fn target(raw: &str) -> Result<Target, &'static str> {
 }
 
 /// A URL do túnel com a porta local deste computador.
+#[cfg(not(target_os = "linux"))]
 pub(super) fn with_local_port(mut url: url::Url, local: u16) -> String {
     let _ = url.set_port(Some(local));
     url.to_string()
@@ -296,6 +308,9 @@ impl Hangar {
 
     /// Pares (porta local, porta remota) dos encaminhamentos da máquina `server`.
     fn host_pairs(&self, server: &str) -> Vec<(u16, u16)> {
+        // No Linux a página do agente não passa pelo encaminhamento: um "3001 → 3000" que a pessoa abriu à mão não é
+        // a porta que ele vê.
+        if cfg!(target_os = "linux") { return Vec::new(); }
         let Some(api) = self.machine_api(server) else { return Vec::new() };
         self.ports.forwards.list(&api.identity()).into_iter().map(|f| (f.local, f.port)).collect()
     }
@@ -315,7 +330,7 @@ impl Hangar {
             return self.host_navigate(server, id, key, session, verb, args.first().cloned().unwrap_or_default(), deadline, window, cx);
         }
         let (tx, rx) = futures::channel::oneshot::channel();
-        self.run_verb(key, verb, args, request["aba"].as_i64(), None, tx, cx);
+        self.host_run_verb(key, verb, args, request["aba"].as_i64(), tx, cx);
         let pairs = self.host_pairs(&server);
         cx.spawn(async move |_, _| {
             let reply = rx.await.unwrap_or_else(|_| Reply::Text("erro: o navegador fechou no meio do comando".into()));
@@ -323,29 +338,52 @@ impl Hangar {
         }).detach();
     }
 
-    /// `open`/`goto` do agente remoto: só endereço público, ou `localhost:N` da máquina dele pelo túnel.
+    /// `open`/`goto` do agente remoto: só endereço público, ou `localhost:N` da máquina dele pelo túnel. No Linux o
+    /// endereço fica o original, e o SOCKS do contexto do agente confere cada pedido.
     #[allow(clippy::too_many_arguments)]
     fn host_navigate(&mut self, server: String, id: u64, key: String, session: String, verb: String, raw: String, deadline: Instant,
         window: &mut Window, cx: &mut Context<Self>) {
         let Some(out) = self.browser_hosts.out(&server) else { return };
+        #[cfg(target_os = "linux")]
+        let url = match web_url(&raw) {
+            Ok(url) => url.map_or_else(|| "about:blank".to_owned(), String::from),
+            Err(why) => { let _ = out.try_send(refusal(id, why)); return; }
+        };
+        #[cfg(target_os = "linux")]
+        let remote_url = url.clone();
+        #[cfg(not(target_os = "linux"))]
         let target = match target(&raw) {
             Ok(target) => target,
             Err(why) => { let _ = out.try_send(refusal(id, why)); return; }
         };
-        let (url, remote_url, lookup) = match target {
-            Target::Public { url, lookup } => (url.clone(), url, lookup),
+        #[cfg(not(target_os = "linux"))]
+        let (url, remote_url, lookup, tunnel) = match target {
+            Target::Public { url, lookup } => (url.clone(), url, lookup, None),
             Target::Tunnel { url, port } => {
                 let Some(api) = self.machine_api(&server) else { let _ = out.try_send(refusal(id, "sem conexão com a máquina da sessão")); return };
                 let token = self.server_token(&server);
-                match self.ports.forwards.open(self.runtime.handle(), &api, &token, port) {
-                    Ok(local) => (with_local_port(url.clone(), local), url.to_string(), None),
-                    Err(e) => { let _ = out.try_send(refusal(id, &format!("a porta {port} não foi encaminhada a este computador: {e}"))); return; }
-                }
+                let opening = self.ports.forwards.open(self.runtime.handle(), &api, &token, port);
+                (String::new(), url.to_string(), None, Some((opening, url, port)))
             }
         };
-        let runtime: Handle = self.runtime.handle().clone();
+        #[cfg(not(target_os = "linux"))]
+        let runtime = self.runtime.handle().clone();
         cx.spawn_in(window, async move |this, cx| {
+            // O encaminhamento abre no runtime: a sonda e a busca de porta não seguram a tela.
+            #[cfg(not(target_os = "linux"))]
+            let url = match tunnel {
+                None => url,
+                Some((opening, tunnel, port)) => match opening.wait().await {
+                    Some(Ok(local)) => with_local_port(tunnel, local),
+                    failed => {
+                        let why = failed.and_then(Result::err).map_or_else(|| "o encaminhamento foi parado".to_owned(), |e| e.to_string());
+                        let _ = out.send(refusal(id, &format!("a porta {port} não foi encaminhada a este computador: {why}"))).await;
+                        return;
+                    }
+                },
+            };
             // Nome que resolve para a rede deste computador vale como o endereço dela.
+            #[cfg(not(target_os = "linux"))]
             if let Some((host, port)) = lookup {
                 let resolved = runtime.spawn(async move { tokio::net::lookup_host((host.as_str(), port)).await.map(|a| a.collect::<Vec<_>>()) }).await;
                 if let Ok(Ok(addrs)) = resolved && addrs.iter().any(|a| private_ip(a.ip())) {
@@ -357,7 +395,7 @@ impl Hangar {
             let run = |this: &WeakEntity<Hangar>, cx: &mut AsyncWindowContext, verb: &str, args: Vec<String>| {
                 let (tx, rx) = futures::channel::oneshot::channel();
                 let (key, verb) = (key.clone(), verb.to_owned());
-                let sent = this.update(cx, |this, cx| this.run_verb(key, verb, args, None, None, tx, cx)).is_ok();
+                let sent = this.update(cx, |this, cx| this.host_run_verb(key, verb, args, None, tx, cx)).is_ok();
                 async move { if sent { rx.await.ok() } else { None } }
             };
             let first = if ready { run(&this, cx, "goto", vec![url.clone()]).await } else {
@@ -365,7 +403,7 @@ impl Hangar {
                 loop {
                     if Instant::now() > deadline { break Some(Reply::Text("erro: o navegador nao ficou pronto no prazo".into())); }
                     cx.background_executor().timer(READY_POLL).await;
-                    let ready = this.update(cx, |this, cx| this.side.browsers.get(&key).is_some_and(|b| b.read(cx).verbs_ready()));
+                    let ready = this.update(cx, |this, cx| this.side.browsers.get(&key).is_some_and(|b| agent_ready(b.read(cx))));
                     match ready {
                         Ok(true) => break run(&this, cx, "wait", vec!["--idle".into()]).await,
                         Ok(false) => {}
@@ -389,7 +427,10 @@ impl Hangar {
         // A aba Navegador da sessão remota mostrava a tela do app de lá; agora a página é a deste app.
         if let Some(remote) = self.side.remote_browsers.remove(key) { remote.update(cx, |view, cx| view.set_shown(false, cx)); }
         let browser = self.browser_for(key.to_owned(), window, cx);
-        let ready = browser.read(cx).verbs_ready();
+        #[cfg(target_os = "linux")]
+        self.arm_agent(&browser, key, cx);
+        // Página aberta pela pessoa não está pronta para o agente: o `go` dele troca o motor pelo do contexto dele.
+        let ready = agent_ready(browser.read(cx));
         if !ready { browser.update(cx, |panel, cx| panel.go(url.to_owned(), super::browser::By::Agent, window, cx)); }
         if self.browser_key().as_deref() == Some(key) { self.show_browser_tab(window, cx); } else {
             self.side.browser_open.insert(key.to_owned());
@@ -397,6 +438,40 @@ impl Hangar {
         }
         ready
     }
+
+    /// Verbo do agente remoto. No Linux só na página aberta no contexto dele: a que a pessoa abriu no painel ele não
+    /// lê nem dirige.
+    fn host_run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>,
+        reply: futures::channel::oneshot::Sender<Reply>, cx: &mut Context<Self>) {
+        #[cfg(target_os = "linux")]
+        if let Some(browser) = self.side.browsers.get(&key).cloned() {
+            self.arm_agent(&browser, &key, cx);
+            if !browser.read(cx).engine_in(super::browser::By::Agent) {
+                let _ = reply.send(Reply::Text(format!("erro: o navegador da sessao {key} esta com uma pagina aberta pela pessoa; abra a sua com open <url>")));
+                return;
+            }
+        }
+        self.run_verb(key, verb, args, tab, None, reply, cx);
+    }
+
+    /// O contexto do agente remoto no painel da sessão `key`: o SOCKS em modo agente do servidor dela, relido a cada
+    /// pedido. Sem conexão (ou servidor desta máquina) fica o erro, e o motor dele não nasce: nunca o perfil do painel.
+    #[cfg(target_os = "linux")]
+    pub(super) fn arm_agent(&mut self, browser: &Entity<super::browser::BrowserPanel>, key: &str, cx: &mut Context<Self>) {
+        let server = key.rsplit_once("::").map_or("", |(server, _)| server);
+        let proxy = match self.machine_api(server).filter(|api| !api.is_loopback()) {
+            Some(api) => { let token = self.server_token(server); self.ports.socks.ensure_agent(self.runtime.handle(), &api, &token) }
+            None => Err("sem conexão com a máquina da sessão".to_owned()),
+        };
+        browser.update(cx, |panel, _| panel.agent_proxy = Some(proxy));
+    }
+}
+
+/// Os verbos respondem, e (no Linux) no contexto do agente.
+fn agent_ready(panel: &super::browser::BrowserPanel) -> bool {
+    #[cfg(target_os = "linux")]
+    if !panel.engine_in(super::browser::By::Agent) { return false; }
+    panel.verbs_ready()
 }
 
 #[cfg(test)]
@@ -404,10 +479,22 @@ mod tests {
     use super::*;
     use core::prelude::v1::test;
 
+    #[test]
+    fn only_web_addresses_are_opened_and_a_bare_host_is_http() {
+        assert_eq!(web_url("localhost:3000/app").unwrap().map(String::from).as_deref(), Some("http://localhost:3000/app"));
+        assert_eq!(web_url("http://0.0.0.0:5173").unwrap().map(String::from).as_deref(), Some("http://0.0.0.0:5173/"));
+        assert_eq!(web_url(" about:blank "), Ok(None));
+        for raw in ["", "file:///etc/passwd", "javascript:alert(1)", "chrome://settings"] {
+            assert!(web_url(raw).is_err(), "{raw}");
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
     fn tunnel(raw: &str) -> (String, u16) {
         match target(raw) { Ok(Target::Tunnel { url, port }) => (url.to_string(), port), other => panic!("{raw}: {other:?}") }
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn localhost_goes_through_the_tunnel_with_the_local_port() {
         assert_eq!(tunnel("localhost:3000/app?x=1"), ("http://localhost:3000/app?x=1".into(), 3000));
@@ -418,6 +505,7 @@ mod tests {
         assert_eq!(with_local_port(url, 3001), "http://localhost:3001/app");
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn the_network_of_this_computer_is_refused() {
         for raw in ["http://192.168.0.1", "10.0.0.5:80", "172.16.1.1", "172.31.255.1", "169.254.169.254", "100.64.0.3",
@@ -429,6 +517,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn public_addresses_pass_and_names_are_checked_in_dns() {
         assert_eq!(target("https://example.com/x"), Ok(Target::Public { url: "https://example.com/x".into(), lookup: Some(("example.com".into(), 443)) }));

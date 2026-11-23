@@ -10,17 +10,18 @@ use crate::api::Api;
 const MAX_MESSAGE: usize = 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { Network, Handshake, Protocol, Utf8, TooLarge, QueueFull, Closed, Http(u16) }
+/// `Http` leva o status e o código do cabeçalho `x-hangar-tunnel`, que só a recusa do túnel de portas manda.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Error { Network, Handshake, Protocol, Utf8, TooLarge, QueueFull, Closed, Http(u16, Option<String>) }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Http(401) => "Autenticação do terminal recusada.",
-            Self::Http(403) => "Acesso ao terminal recusado; confira a sessão e a autenticação.",
-            Self::Http(404) => "Sessão do terminal não encontrada.",
-            Self::Http(409) => "O terminal está indisponível por um conflito de sessão.",
-            Self::Http(_) | Self::Handshake => "O servidor recusou a conexão WebSocket.",
+            Self::Http(401, _) => "Autenticação do terminal recusada.",
+            Self::Http(403, _) => "Acesso ao terminal recusado; confira a sessão e a autenticação.",
+            Self::Http(404, _) => "Sessão do terminal não encontrada.",
+            Self::Http(409, _) => "O terminal está indisponível por um conflito de sessão.",
+            Self::Http(..) | Self::Handshake => "O servidor recusou a conexão WebSocket.",
             Self::Network => "A conexão do terminal foi interrompida.",
             Self::Protocol | Self::Utf8 => "O servidor enviou um quadro WebSocket inválido.",
             Self::TooLarge => "A mensagem do terminal excede o limite de tamanho.",
@@ -199,7 +200,10 @@ pub(crate) fn accept_key(key: &str) -> String {
 }
 
 fn check_handshake(status: StatusCode, headers: &header::HeaderMap, key: &str) -> Result<(), Error> {
-    if status != StatusCode::SWITCHING_PROTOCOLS { return Err(Error::Http(status.as_u16())); }
+    if status != StatusCode::SWITCHING_PROTOCOLS {
+        let code = headers.get("x-hangar-tunnel").and_then(|v| v.to_str().ok()).map(str::to_owned);
+        return Err(Error::Http(status.as_u16(), code));
+    }
     let contains = |name, expected: &str| headers.get_all(name).iter().filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(',')).any(|v| v.trim().eq_ignore_ascii_case(expected));
     let accepts: Vec<_> = headers.get_all(header::SEC_WEBSOCKET_ACCEPT).iter().collect();
@@ -489,9 +493,11 @@ mod tests {
         assert_eq!(check_handshake(StatusCode::SWITCHING_PROTOCOLS, &headers, key), Err(Error::Handshake));
         for status in [401, 403, 404, 409] {
             let error = check_handshake(StatusCode::from_u16(status).unwrap(), &headers, key).unwrap_err();
-            assert_eq!(error, Error::Http(status));
+            assert_eq!(error, Error::Http(status, None));
             assert!(!error.to_string().is_empty());
         }
+        headers.insert("x-hangar-tunnel", "port_tunnel_refused".parse().unwrap());
+        assert_eq!(check_handshake(StatusCode::BAD_GATEWAY, &headers, key), Err(Error::Http(502, Some("port_tunnel_refused".into()))));
     }
 
     #[tokio::test]

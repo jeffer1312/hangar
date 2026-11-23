@@ -107,6 +107,11 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         .is_some_and(|id| !id.is_empty() && !id.contains('/')) {
         return true;
     }
+    // Parar o servidor de uma porta da sessão (`port_stop`): só o dono, sem rota no Python.
+    if *method == Method::POST && tail.and_then(|t| t.strip_prefix("ports/")).and_then(|t| t.strip_suffix("/stop"))
+        .is_some_and(|port| !port.is_empty() && !port.contains('/')) {
+        return true;
+    }
     // Rotas só do Codex, modos de permissão do Claude e as reaberturas (troca de modo, recarregar, conta,
     // conta ChatGPT fixa): o Rust atende as sessões dele.
     if *method == Method::POST && matches!(tail, Some("model" | "service-tier" | "codex/mode" | "codex/plan/implement" | "codex/terminate" | "question/skip" | "codex-permissions"
