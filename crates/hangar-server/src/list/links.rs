@@ -230,7 +230,7 @@ pub fn fill_pane_row(row: &mut SessionRow, provider: &str, pid_env: Option<i64>,
     let jsonl = row.jsonl.clone().filter(|_| row.tracked);
     apply_location(row, locate(provider, row.cwd.as_deref(), jsonl.as_deref(), dirs, problems));
     fill_links(row, dirs, problems);
-    if matches!(provider, "pi" | "omp" | "kimi" | "codex") {
+    if matches!(provider, "pi" | "omp" | "kimi" | "codex" | "antigravity") {
         row.provider = provider.to_owned();
     } else {
         fill_plugin_tools(row, jsonl.as_deref());
@@ -247,6 +247,12 @@ pub fn fill_pane_row(row: &mut SessionRow, provider: &str, pid_env: Option<i64>,
         match provider {
             // Casada pelas credenciais no `cotas.py`: chega pelos fatos.
             "kimi" | "pi" | "omp" => None,
+            // A conta Google é a pasta do `agy` (`GEMINI_HOME`), senão a padrão `~/.gemini`.
+            "antigravity" => {
+                let gemini = pid_env.and_then(|p| env(procs, p, "GEMINI_HOME")).map(PathBuf::from)
+                    .unwrap_or_else(|| dirs.home.join(".gemini"));
+                Some(format!("antigravity:{}", resolve_lenient(&gemini).to_string_lossy()))
+            }
             "codex" => {
                 let home = resolve_lenient(&dirs.codex_home).to_string_lossy().into_owned();
                 row.codex_home = Some(home.clone());

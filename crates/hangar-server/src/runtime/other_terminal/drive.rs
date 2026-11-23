@@ -36,6 +36,8 @@ static AGENT_ROW: LazyLock<Regex> =
 static PI_NOTICE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"Subagentasyncgroupedresultintercomdeliverywasnotacknowledgedfor.*?/tmp/pi-subagents-[^']*'?\.?").unwrap()
 });
+/// A caixa vazia do `agy` mostra a dica do modo (`Auto mode: … (shift+tab to cycle)`), não um rascunho.
+static AGY_MODE_HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Z][\w-]* mode: .*\(shift\+tab to cycle\)\z").unwrap());
 static MULTIPLE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*[❯>]?\s*\d+\.\s*\[.?\]\s").unwrap());
 static CURSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*[>❯›]\s*(\d+)\.").unwrap());
@@ -251,6 +253,9 @@ fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot
         hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
     ) {
         content = PI_NOTICE.replace_all(&compact(&content), "").into_owned();
+    }
+    if target.provider == hangar_transcript::Provider::Antigravity && AGY_MODE_HINT.is_match(content.trim()) {
+        content.clear();
     }
     let placeholders = PLACEHOLDER
         .captures_iter(&content)
