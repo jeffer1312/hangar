@@ -513,6 +513,8 @@ impl Tools {
         // A vida pela mesma fonte que o porteiro do convidado usa: sessão de outra vida com o mesmo nome não é dele.
         let (link, life) = tokio::join!(link, crate::login_guests::gate::session_life(&self.st, me));
         let link = link?;
+        // Vale com ou sem configuração de convites: o que a outra máquina compartilha não se confere daqui.
+        if whatsapp::has_remote_member(link.as_ref()) { return Err(whatsapp::SHARED_REFUSAL.into()); }
         // Os membros do grupo nesta máquina passam pelas mesmas conferências: o grupo repassa o que a sessão lê.
         let others: Vec<String> = whatsapp::local_members(me, link.as_ref()).into_iter().skip(1).map(str::to_owned).collect();
         let other_lives = futures_util::future::join_all(others.iter().map(|m| crate::login_guests::gate::session_life(&self.st, m))).await;

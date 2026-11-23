@@ -28,12 +28,15 @@ pub(super) fn local_members<'a>(me: &'a str, link: Option<&'a Sidecar>) -> Vec<&
     std::iter::once(me).chain(peers).collect()
 }
 
-/// Convite ou par vivo na própria sessão ou num membro do grupo nesta máquina (o grupo repassa o que ela lê),
-/// ou qualquer membro de outra máquina ou de fora: daqui não se confere o que a outra máquina compartilha.
+/// Convite ou par vivo na própria sessão ou num membro do grupo nesta máquina (o grupo repassa o que ela lê).
 /// Registro de convite de outra vida com o mesmo nome também conta: na dúvida, não lê.
 pub(super) fn shared_here(store: &ShareStore, pairs: &PairStore, me: &str, link: Option<&Sidecar>) -> bool {
-    if link.is_some_and(|l| l.peers.iter().any(|p| crate::groups::local::is_remote(p))) { return true; }
     local_members(me, link).iter().any(|m| store.session_has_active(m) || !pairs.by_local(m).is_empty())
+}
+
+/// Membro de outra máquina (do dono ou de fora) no grupo: daqui não se confere o que a outra máquina compartilha.
+pub(super) fn has_remote_member(link: Option<&Sidecar>) -> bool {
+    link.is_some_and(|l| l.peers.iter().any(|p| crate::groups::local::is_remote(p)))
 }
 
 /// Se o registro da dona de um grupo entre máquinas tem membro de fora; sem a lista `outside` não dá para saber.
@@ -124,12 +127,11 @@ mod tests {
     }
 
     #[test]
-    fn a_session_with_a_live_invite_or_a_member_of_another_machine_is_shared() {
+    fn a_session_with_a_live_invite_or_an_outside_pair_is_shared() {
         let dir = tempfile::tempdir().unwrap();
         let (store, pairs) = stores(dir.path());
         assert!(!shared_here(&store, &pairs, "s0", None), "sem convite nem par");
         assert!(!shared_here(&store, &pairs, "s0", Some(&group(&["s1", "s2"]))), "grupo só desta máquina, sem convite");
-        assert!(shared_here(&store, &pairs, "s0", Some(&group(&["lab::s1"]))), "membro de outra máquina do dono");
 
         store.create("s1", None, Kind::Share, false).unwrap();
         assert!(shared_here(&store, &pairs, "s1", None), "convite de convidado vivo");
@@ -139,6 +141,14 @@ mod tests {
         pairs.add(external("s2")).unwrap();
         assert!(shared_here(&store, &pairs, "s2", None), "par externo feito nesta sessão");
         assert!(shared_here(&store, &pairs, "s0", Some(&group(&["s2", "ana::dela"]))), "par de fora no grupo");
+    }
+
+    #[test]
+    fn a_group_with_a_member_of_another_machine_is_refused() {
+        assert!(!has_remote_member(None), "sem grupo");
+        assert!(!has_remote_member(Some(&group(&["s1", "s2"]))), "grupo só desta máquina");
+        assert!(has_remote_member(Some(&group(&["s1", "lab::s1"]))), "membro de outra máquina do dono");
+        assert!(has_remote_member(Some(&group(&["ana::dela"]))), "par de fora");
     }
 
     #[test]
