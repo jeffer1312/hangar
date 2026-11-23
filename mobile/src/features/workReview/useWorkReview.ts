@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { baseOf, decisionsPayload, initialReason, registrarDiag } from '@hangar/core';
-import type { WorkReview, WorkReviewChoice, WorkReviewChoices, WorkReviewResponse } from '@hangar/core';
+import { baseOf, decisionsPayload, firstPendingIndex, initialReason, registrarDiag } from '@hangar/core';
+import type { Server, WorkReview, WorkReviewChoice, WorkReviewChoices, WorkReviewDraftBody, WorkReviewResponse } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import { haptic } from '../../ui/haptics';
-import { fetchWorkReview, isStaleReview, sendWorkReviewDecisions } from './api';
+import { fetchWorkReview, isStaleReview, saveWorkReviewDraft, sendWorkReviewDecisions } from './api';
 import { useWorkReviewSummary } from './summaries';
 import * as m from '../../paraglide/messages';
 
@@ -11,6 +11,47 @@ export type WorkReviewLoad =
   | { status: 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; data: WorkReviewResponse };
+
+// Uma gravação das escolhas em voo por sessão; o que chega no meio espera, e só a última vai. Fica fora do
+// componente: sair da sessão no meio não interrompe a gravação.
+// `latest` é o que ainda não chegou ao servidor: a leitura que volta antes dele o põe por cima do guardado.
+type DraftJob = { server: Server; body: WorkReviewDraftBody };
+const drafts = new Map<string, { running: boolean; next: DraftJob | null; latest: WorkReviewDraftBody | null }>();
+// ponytail: rede fora ou servidor em erro tenta de novo a cada 5 s por 1 min; depois só a próxima escolha leva tudo.
+const DRAFT_RETRIES = 12;
+const DRAFT_RETRY_MS = 5_000;
+const draftKey = (serverId: string, name: string) => `${serverId}::${name}`;
+function saveDraft(name: string, server: Server, body: WorkReviewDraftBody) {
+  const key = draftKey(server.id, name);
+  const slot = drafts.get(key) ?? { running: false, next: null, latest: null };
+  drafts.set(key, slot);
+  slot.next = { server, body };
+  slot.latest = body;
+  if (slot.running) return;
+  slot.running = true;
+  void (async () => {
+    let tries = 0;
+    while (slot.next) {
+      const job = slot.next;
+      slot.next = null;
+      try {
+        await saveWorkReviewDraft(job.server, name, job.body);
+        tries = 0;
+      } catch (e) {
+        const { status, code } = (e ?? {}) as { status?: unknown; code?: unknown };
+        registrarDiag({ evento: 'work_review.draft_failed', nivel: 'aviso', tela: 'work_review', codigo: String(code ?? status ?? 'erro') },
+          baseOf(job.server));
+        if ((typeof status !== 'number' || status >= 500) && tries < DRAFT_RETRIES) {
+          tries++;
+          slot.next ??= job;
+          await new Promise((resolve) => setTimeout(resolve, DRAFT_RETRY_MS));
+        }
+      }
+    }
+    slot.running = false;
+    slot.latest = null;
+  })();
+}
 
 // O servidor responde "NNN: frase"; na seção o número não ajuda quem lê.
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^\d{3}: /, '');
@@ -21,6 +62,8 @@ export function useWorkReview(serverId: string, name: string, enabled = true) {
   const summary = useWorkReviewSummary(serverId, name);
   const [load, setLoad] = useState<WorkReviewLoad>({ status: 'loading' });
   const [choices, setChoices] = useState<WorkReviewChoices>({});
+  const choicesRef = useRef(choices);
+  choicesRef.current = choices;
   const [index, setIndex] = useState(0);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -54,11 +97,22 @@ export function useWorkReview(serverId: string, name: string, enabled = true) {
 
   const apply = useCallback((data: WorkReviewResponse) => {
     const next = data.linked ? data.review?.id : undefined;
-    // Rodada nova começa do zero; a mesma rodada (lotes) conserva o que a pessoa já escolheu.
-    if (reviewId.current !== next) { reviewId.current = next; setChoices({}); setIndex(0); }
+    const shown = data.linked ? data.review : null;
+    const queued = drafts.get(draftKey(serverId, name))?.latest;
+    const merged = { ...((data.linked && data.draft) || {}), ...(queued && queued.review_id === next ? queued.choices : {}) };
+    // Só o que a rodada ainda mostra: decisões de lotes já enviados saem.
+    const keep = (c: WorkReviewChoices) => Object.fromEntries(Object.entries(c).filter(([id]) => shown?.decisions.some((d) => d.id === id)));
+    const saved = keep(merged);
+    // Rodada nova abre com o que ficou guardado, na primeira que falta; a mesma rodada (lotes) conserva o que a pessoa
+    // já escolheu aqui por cima do guardado.
+    if (reviewId.current !== next) {
+      reviewId.current = next;
+      setChoices(saved);
+      setIndex(data.linked && data.review ? firstPendingIndex(data.review, saved) : 0);
+    } else setChoices((prev) => keep({ ...saved, ...prev }));
     hasData.current = true;
     setLoad({ status: 'ready', data });
-  }, []);
+  }, [serverId, name]);
 
   /** `quiet`: releitura em segundo plano; a falha vai ao diário e a tela fica com a última leitura. */
   const reload = useCallback((quiet = false) => {
@@ -89,18 +143,28 @@ export function useWorkReview(serverId: string, name: string, enabled = true) {
 
   const review: WorkReview | null = load.status === 'ready' && load.data.linked ? load.data.review : null;
 
+  // Cada escolha vai ao servidor na hora: sair, trocar de aba ou fechar o app não a perde.
+  const update = useCallback((next: WorkReviewChoices) => {
+    choicesRef.current = next;
+    setChoices(next);
+    const target = serverRef.current;
+    if (target && reviewId.current) saveDraft(name, target, { review_id: reviewId.current, choices: next });
+  }, [name]);
+
   const pick = useCallback((decisionId: string, choice: WorkReviewChoice) => {
     haptic.selection();
     setSendError(null);
-    setChoices((prev) => ({
+    const prev = choicesRef.current;
+    update({
       ...prev,
       [decisionId]: { choice: choice.id, reason: prev[decisionId]?.choice === choice.id ? prev[decisionId].reason : initialReason(choice) },
-    }));
-  }, []);
+    });
+  }, [update]);
 
   const setReason = useCallback((decisionId: string, reason: string) => {
-    setChoices((prev) => (prev[decisionId] ? { ...prev, [decisionId]: { ...prev[decisionId], reason } } : prev));
-  }, []);
+    const prev = choicesRef.current;
+    if (prev[decisionId]) update({ ...prev, [decisionId]: { ...prev[decisionId], reason } });
+  }, [update]);
 
   const send = useCallback(() => {
     const target = serverRef.current;

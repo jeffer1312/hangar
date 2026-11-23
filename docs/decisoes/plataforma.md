@@ -5480,6 +5480,16 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   `work_reviews` sai só pelo laço da lista do dono, nunca pelo do convidado (teste em `list/hub.rs`).
   Corpo: `{"reviews": {"<sessão>": {"review_id", "state", "badge": {"text","tone"}|null, "updated_at"}}}`,
   só com as sessões atuais que têm revisão, publicado quando muda o resumo ou as linhas.
+- **Escolha marcada vai ao servidor na hora (23/11/2026).** Antes as escolhas viviam só na memória do
+  cliente até o "Enviar": trocar de sessão ou fechar o app perdeu 50 decisões de uma comparação com o mock. Cada escolha
+  e cada motivo vão por `PUT /api/sessions/{nome}/work-review/draft` (`{"review_id", "choices"}`),
+  gravado em `~/.hangar/work-review-drafts/<sha1 do conector e do ticket>.json` (não é cache); o `GET` da
+  sessão devolve `draft` só da rodada lida e só com decisão e escolha que ela ainda mostra. Rodada
+  diferente da lida é 409 `stale_review`. O cliente faz uma gravação por vez por sessão e manda só a
+  última; rede fora ou 5xx tenta de novo a cada 5 s por 1 min. A escolha feita aqui vence a ainda em
+  gravação, que vence a guardada (a leitura que volta antes da gravação não a apaga), e o painel abre na
+  primeira que falta. O conector não
+  vê o rascunho: o `decide` continua com o lote inteiro.
 - **Falha em segundo plano vai ao diário.** Releitura que falha mantém o resumo anterior e registra
   `rust.work_review` com o código, uma vez por minuto por sessão e código; a tela não vê. Falha da
   leitura que a pessoa pediu (abrir o painel, enviar) aparece na seção.

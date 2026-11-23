@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  decisionsPayload, frameZoom, initialReason, parseWorkReviewDecideResponse, parseWorkReviewResponse, parseWorkReviewsEvent,
+  decisionsPayload, firstPendingIndex, frameZoom, initialReason, parseWorkReviewDecideResponse, parseWorkReviewResponse, parseWorkReviewsEvent,
   pendingCount, readyToSend, stateTone, stepStatus, waitingHeadlineText, type WorkReview, type WorkReviewChoices,
 } from './workReview';
 
@@ -47,6 +47,15 @@ const parsedWaiting = (): WorkReview => {
 };
 
 describe('parseWorkReviewResponse', () => {
+  it('lê as escolhas guardadas no servidor e larga a entrada torta', () => {
+    const res = parseWorkReviewResponse({ ...linked(waitingRaw()),
+      draft: { 47: { choice: 'manter', reason: 'regra do kit' }, 86: { choice: 7 }, 9: 'x', 10: { choice: 'igualar' } } });
+    expect(res?.linked && res.draft).toEqual({ 47: { choice: 'manter', reason: 'regra do kit' }, 10: { choice: 'igualar', reason: '' } });
+    const torto = parseWorkReviewResponse({ ...linked(waitingRaw()), draft: [1] });
+    expect(torto?.linked && torto.review?.id).toBe('r-7');
+    expect(torto?.linked && torto.draft).toBeUndefined();
+  });
+
   it('sessão sem vínculo', () => {
     expect(parseWorkReviewResponse({ linked: false })).toEqual({ linked: false });
   });
@@ -226,5 +235,15 @@ describe('zoom no trecho', () => {
     expect(z.left).toBeCloseTo(16.67, 1);
     expect(z.top).toBeCloseTo(0, 4);
     expect(z.mark).toBeNull();
+  });
+});
+
+describe('firstPendingIndex', () => {
+  it('abre na primeira decisão que falta; tudo decidido fica na primeira', () => {
+    const review = parsedWaiting();
+    expect(firstPendingIndex(review, {})).toBe(0);
+    expect(firstPendingIndex(review, { 47: { choice: 'igualar', reason: '' } })).toBe(1);
+    expect(firstPendingIndex(review, { 47: { choice: 'manter', reason: ' ' } })).toBe(0);
+    expect(firstPendingIndex(review, { 47: { choice: 'igualar', reason: '' }, 86: { choice: 'igualar', reason: '' } })).toBe(0);
   });
 });
