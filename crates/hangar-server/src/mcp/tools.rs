@@ -663,8 +663,8 @@ impl Tools {
     }
 
     async fn new_session(&self, headers: &HeaderMap, mut a: NewSession) -> Outcome {
-        if a.headless == Some(true) && let Some(provider) = a.provider.as_deref().filter(|p| !matches!(*p, "claude" | "codex" | "antigravity")) {
-            return Err(format!("headless só vale com provider claude, codex ou antigravity (veio: {provider})"));
+        if a.headless == Some(true) && let Some(provider) = a.provider.as_deref().filter(|p| !matches!(*p, "claude" | "codex")) {
+            return Err(format!("headless só vale com provider claude ou codex (veio: {provider})"));
         }
         // Quem chama precisa ser resolvido também para abrir noutra máquina, mesmo sem herdar nada.
         let (me, voice) = self.caller(headers).await?;

@@ -48,7 +48,7 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  desta sessão mesmo com padrão salvo (plan herda o modo de base).
                                  O resto omitido HERDA desta sessão: a conta (com 95% ou mais de
                                  uso, vai para a de mais folga, como --conta auto) e o sem terminal
-                                 (claude/codex/antigravity). Flag explícita vence.
+                                 (claude/codex). Flag explícita vence.
   hangar-send --new <servidor>::<nome> [cwd]  idem, NOUTRO servidor (peers.json), com as mesmas
                                  flags. cwd, --conta e --conta auto são resolvidos LÁ (cwd default
                                  = home de lá; --conta pelo nome da conta de lá).
@@ -64,7 +64,7 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  Sem --headless/--terminal, herda desta sessão; chamado de fora
                                  de uma sessão, vale o padrão escolhido no Hangar.
                                  --terminal abre com terminal; não combina com --headless.
-                                 --headless (claude, codex ou antigravity) abre SEM terminal: o agente
+                                 --headless (claude ou codex) abre a sessão SEM terminal: o agente
                                  roda fora do tmux e conversa só pelo app. Combina com --model,
                                  --effort e --permissao. Ex.: --provider codex --headless
                                  --permissao "Full Access".

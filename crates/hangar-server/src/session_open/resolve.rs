@@ -394,8 +394,10 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         // O lançador do Codex sem modo abre em Full Access (`sem_terminal.MODO_PADRAO`).
         AgentProvider::Codex => Some(permission.as_deref().and_then(PermissionMode::codex).or(inherited_codex_mode)
             .unwrap_or(PermissionMode::FullAccess)),
-        // Sem escolha, o `agy` abre no modo padrão dele.
-        AgentProvider::Antigravity => permission.as_deref().and_then(PermissionMode::antigravity),
+        // Sem escolha, o `agy` abre no modo padrão dele. Com terminal não há como abrir no modo que pergunta
+        // (`--mode` só aceita accept-edits, auto e plan): um `manual` salvo como padrão não vale ali.
+        AgentProvider::Antigravity => permission.as_deref().and_then(PermissionMode::antigravity)
+            .filter(|mode| headless || *mode != PermissionMode::Manual),
         _ => None,
     };
     let cwd = facts.existing_dir(&request.cwd).unwrap_or_else(|| request.cwd.clone());
@@ -701,6 +703,13 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         }
     }
     // O Codex sem terminal aceita o modo dele (vira sandbox e aprovação).
+    // Pedido explícito de `manual` no Antigravity com terminal: ele abriria em `auto`, que roda comando sem perguntar.
+    if provider == AgentProvider::Antigravity && !headless
+        && request.permission_mode.as_deref().and_then(PermissionMode::antigravity) == Some(PermissionMode::Manual)
+    {
+        return Err(OpenError::new(409, "erro_permissao_manual_sem_terminal",
+            "o Antigravity com terminal não abre no modo que pergunta antes de agir; use sem terminal ou outro modo"));
+    }
     if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) && provider != AgentProvider::Antigravity {
         return Err(OpenError::new(409, "erro_permissao_so_claude", "modo de permissao so vale para claude"));
     }
