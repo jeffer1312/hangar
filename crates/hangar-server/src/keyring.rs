@@ -254,6 +254,8 @@ impl Keyring {
                 Ok(Step::DefaultClosed)
             }
             Some(DefaultOpen::NoAnswer) => Ok(Step::DefaultStuck),
+            // O pedido não saiu daqui: não é o daemon dizendo que o default ficou trancado.
+            Some(DefaultOpen::Failed) => Err(UnlockError::Failed),
             Some(_) => Ok(Step::of(self.read().ok_or(UnlockError::Failed)?)),
         }
     }
@@ -551,7 +553,7 @@ async fn open_default_when_ready(keyring: std::sync::Arc<Keyring>) {
             // Três leituras que falham e para: daqui em diante só um sinal da escuta tenta de novo.
             Ok(Unattended::Unread) if unread < 2 => { unread += 1; tokio::time::sleep(Duration::from_secs(5)).await }
             Ok(Unattended::Unread) => {
-                tracing::warn!(code = "keyring_default_unread_gave_up", "leitura do chaveiro falhou três vezes; só um sinal do daemon tenta de novo");
+                tracing::warn!(code = "keyring_default_unread_gave_up", "leitura ou pedido do chaveiro padrão falhou três vezes; só um sinal do daemon tenta de novo");
                 return;
             }
             // estavel: código de produção, não teste; é o intervalo entre olhadas no ambiente do systemd à espera da tela.
