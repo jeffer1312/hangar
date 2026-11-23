@@ -750,6 +750,43 @@ impl RuntimeRegistry {
         };
         Ok(json!({"closed":true,"killed":true,"warnings":warnings}))
     }
+    /// Troca de superfície do Antigravity: o pane e o agente saem como no fechamento, mas fila, grupo, convites e
+    /// o resto da sessão ficam, porque ela segue no mesmo nome sem terminal. Quem chama segura a porta de entrada.
+    pub(crate) async fn stop_other_for_switch(&self, name: &str) -> Result<OtherTarget, RuntimeError> {
+        let target = self.entries.lock().await.values().find_map(|entry| match &entry.handle {
+            EntryHandle::OtherTerminal { target, .. } if entry.name == name => Some((**target).clone()),
+            _ => None,
+        }).ok_or_else(|| failure("other_terminal_not_open"))?;
+        let life = OtherDiscoveryState::Ready(target.clone());
+        let barrier = self.barrier(life.key()).await;
+        let _guard = barrier.lock().await;
+        self.close_locked(life.key(), life.generation(), false).await?;
+        let stopped = async {
+            if mux_present(life.binding()).await? {
+                let output = mux(life.binding(), vec!["kill-session".into(), "-t".into(), super::super::claude_terminal::session_target(life.name())]).await;
+                if output.code != Some(0) { return Err(failure("other_terminal_kill_failed")); }
+                let end = std::time::Instant::now() + Duration::from_secs(5);
+                while mux_present(life.binding()).await? {
+                    if std::time::Instant::now() >= end { return Err(failure("other_terminal_kill_unconfirmed")); }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+            if let Some(agent) = life.agent() {
+                let processes = self.other.get().ok_or_else(|| failure("other_terminal_unavailable"))?.options.processes.clone();
+                if super::super::lifecycle::wait_absent(&*processes, agent.pid, agent.birth, "other_terminal_agent_still_alive").await.is_err() {
+                    super::super::claude_reopen::stop_tree(vec![(agent.pid, agent.birth)]).await?;
+                    super::super::lifecycle::wait_absent(&*processes, agent.pid, agent.birth, "other_terminal_agent_still_alive").await?;
+                }
+            }
+            Ok::<_, RuntimeError>(())
+        }.await;
+        if let Err(error) = stopped {
+            let _ = self.open_other_terminal_locked(target.clone()).await;
+            return Err(error);
+        }
+        if let Some(config) = self.other.get() { config.opening.lock().await.remove(life.name()); }
+        Ok(target)
+    }
     pub(super) fn stop_other_watch(&self) {
         if let Some(config) = self.other.get() {
             config

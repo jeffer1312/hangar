@@ -547,6 +547,7 @@ pub(crate) async fn prepare(st:&Arc<AppState>,name:&str,asked:&Value)->Result<Pr
     let home=&st.accounts.env.home;
     let occupied=home.join(".hangar/claude-headless").join(format!("{successor}.json")).exists()
         || crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(home),&successor).exists()
+        || crate::runtime::codex_sidecar::path(&crate::runtime::antigravity_sidecar::dir(home),&successor).exists()
         || st.list.env().mux.list_panes().await.map_err(|e|super::server::reply(&super::open::mux_unavailable(e.code)))?.iter().any(|pane|pane.session==successor);
     if occupied{return Err(super::server::reply(&OpenError::new(409,"erro_nome_em_uso","ja existe uma sessao com esse nome")));}
     let cwd=body["cwd"].as_str().filter(|s|!s.is_empty()).or(origin.row.cwd.as_deref()).filter(|s|!s.is_empty())

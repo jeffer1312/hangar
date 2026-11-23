@@ -1,4 +1,4 @@
-use super::{cano::{CanoConnection,IoEvent,WireFrame},websocket::WebSocketConnection,claude::ClaudeEngine,codex::Engine as CodexEngine,local_policy,
+use super::{cano::{CanoConnection,IoEvent,WireFrame},websocket::WebSocketConnection,claude::ClaudeEngine,codex::Engine as CodexEngine,antigravity::Engine as AntigravityEngine,local_policy,
     protocol::*,queue::{Action,QueueActor,Status},receipt::ReceiptIndex};
 use crate::mods::model::{ModsCall,ModsError,SurfaceEffect};
 use serde_json::{Value,json};
@@ -8,7 +8,7 @@ use std::time::{Duration,Instant,SystemTime,UNIX_EPOCH};
 use tokio::sync::{broadcast,mpsc,oneshot,Mutex,Notify};
 use tokio::task::{JoinHandle,JoinSet};
 
-enum Core { Claude(ClaudeEngine),Codex(CodexEngine) }
+enum Core { Claude(ClaudeEngine),Codex(CodexEngine),Antigravity(AntigravityEngine) }
 
 const CONFIRM_POLL:Duration=Duration::from_millis(50);
 const CONFIRM_WINDOW:Duration=Duration::from_secs(30);
@@ -151,14 +151,15 @@ pub struct RuntimeEngine {
 impl RuntimeEngine {
     pub fn new(provider:&str,metadata:Value,generation:u64,clock:ClockSample) -> Result<Self,RuntimeError> {
         let core = match provider { "claude"=>Core::Claude(ClaudeEngine::new(metadata,generation,clock)),
-            "codex"=>Core::Codex(CodexEngine::new_checked(metadata,generation,clock)?),_=>return Err(failure("provider")) };
+            "codex"=>Core::Codex(CodexEngine::new_checked(metadata,generation,clock)?),
+            "antigravity"=>Core::Antigravity(AntigravityEngine::new_checked(metadata,generation,clock)?),_=>return Err(failure("provider")) };
         Ok(Self { interactions:None,write_sources:Default::default(),async_guards:Default::default(),core,launch:None,policy:None,publisher:None,revision:Arc::new(AtomicU64::new(0)),mods:None,mods_life:0,live:None,lifecycle:None,reconnect_waits:Default::default(),cano_birth:None })
     }
     /// O ator sobe o processo de novo quando ele cai, e reinicia/troca o sandbox (só Codex).
-    pub fn with_launch(mut self,launch:LaunchConfig) -> Self { if matches!(self.core,Core::Codex(_)) { self.launch = Some(launch); } self }
+    pub fn with_launch(mut self,launch:LaunchConfig) -> Self { if matches!(self.core,Core::Codex(_) | Core::Antigravity(_)) { self.launch = Some(launch); } self }
     /// Motor da vida nova do processo, com as ligações desta.
     fn renewed(&self,metadata:Value,generation:u64,clock:ClockSample) -> Result<Self,RuntimeError> {
-        let provider = match self.core { Core::Claude(_)=>"claude",Core::Codex(_)=>"codex" };
+        let provider = self.provider();
         let mut next = Self::new(provider,metadata,generation,clock)?;
         if let Some((key,store)) = &self.interactions {
             store.forget(key).map_err(crate::interactions::runtime_error)?;
@@ -168,29 +169,32 @@ impl RuntimeEngine {
         (next.reconnect_waits,next.cano_birth) = (self.reconnect_waits.clone(),self.cano_birth);
         Ok(next)
     }
-    fn problem(&self) -> Option<String> { match &self.core { Core::Codex(core)=>core.problem().map(str::to_owned),Core::Claude(_)=>None } }
+    fn provider(&self) -> &'static str { match self.core { Core::Claude(_)=>"claude",Core::Codex(_)=>"codex",Core::Antigravity(_)=>"antigravity" } }
+    fn problem(&self) -> Option<String> { match &self.core { Core::Codex(core)=>core.problem().map(str::to_owned),Core::Antigravity(core)=>core.problem().map(str::to_owned),Core::Claude(_)=>None } }
     fn queue_problem(&mut self,detail:Option<String>) -> Vec<Effect> {
-        match &mut self.core { Core::Codex(core)=>core.queue_problem(detail),Core::Claude(core)=>core.queue_problem(detail) }
+        match &mut self.core { Core::Codex(core)=>core.queue_problem(detail),Core::Claude(core)=>core.queue_problem(detail),Core::Antigravity(core)=>core.queue_problem(detail) }
     }
     fn batch_validator(&self) -> super::queue::BatchValidator {
-        let template=match &self.core {Core::Claude(_)=>ClaudeEngine::input_frame("batch",&json!({"text":""})),Core::Codex(core)=>core.input_frame_template()};
-        let provider=match self.core {Core::Claude(_)=>"claude",Core::Codex(_)=>"codex"};
+        let template=match &self.core {Core::Claude(_)=>ClaudeEngine::input_frame("batch",&json!({"text":""})),Core::Codex(core)=>core.input_frame_template(),
+            Core::Antigravity(core)=>core.input_frame_template()};
+        let provider=self.provider();
         local_policy::batch_validator(provider.into(),template)
     }
     fn set_problem(&mut self,code:&str,detail:Option<String>) -> Vec<Effect> {
-        match &mut self.core { Core::Codex(core)=>core.set_problem(code,detail),Core::Claude(_)=>Vec::new() }
+        match &mut self.core { Core::Codex(core)=>core.set_problem(code,detail),Core::Antigravity(core)=>core.set_problem(code,detail),Core::Claude(_)=>Vec::new() }
     }
     fn plugins_changed(&mut self) -> Vec<Effect> {
-        match &mut self.core { Core::Codex(core)=>core.plugins_changed(),Core::Claude(_)=>Vec::new() }
+        match &mut self.core { Core::Codex(core)=>core.plugins_changed(),Core::Claude(_) | Core::Antigravity(_)=>Vec::new() }
     }
     /// O problema que vem de fora do ator (`Message::Problem`), nos dois provedores.
     fn show_problem(&mut self,code:&str,detail:Option<String>) -> Vec<Effect> {
-        match &mut self.core { Core::Codex(core)=>core.set_problem(code,detail),Core::Claude(core)=>core.set_problem(code,detail) }
+        match &mut self.core { Core::Codex(core)=>core.set_problem(code,detail),Core::Claude(core)=>core.set_problem(code,detail),Core::Antigravity(core)=>core.set_problem(code,detail) }
     }
     pub fn with_interactions(mut self,key:String,store:Arc<crate::interactions::InteractionStore>) -> Result<Self,RuntimeError> {
         match &mut self.core {
             Core::Claude(core)=>core.set_interactions(key.clone(),store.clone()),
             Core::Codex(core)=>core.set_interactions(key.clone(),store.clone()),
+            Core::Antigravity(core)=>core.set_interactions(key.clone(),store.clone()),
         }?;
         self.interactions = Some((key,store));
         Ok(self)
@@ -212,12 +216,12 @@ impl RuntimeEngine {
     /// Claude sem terminal com turno aberto: o transcript é conferido contra o fim dele.
     fn turn_watch(&self) -> bool { matches!(&self.core,Core::Claude(core) if core.turn_watch()) }
     fn output_lost(&self) -> bool { matches!(&self.core,Core::Claude(core) if core.deaf()) }
-    fn active_input(&self) -> Option<String> { match &self.core { Core::Claude(core)=>core.active_input().map(str::to_owned),Core::Codex(_)=>None } }
-    fn heard(&mut self) -> Vec<Effect> { match &mut self.core { Core::Claude(core)=>core.heard(),Core::Codex(_)=>Vec::new() } }
-    fn transcript_turn_end(&mut self) -> Vec<Effect> { match &mut self.core { Core::Claude(core)=>core.transcript_turn_end(),Core::Codex(_)=>Vec::new() } }
+    fn active_input(&self) -> Option<String> { match &self.core { Core::Claude(core)=>core.active_input().map(str::to_owned),Core::Codex(_) | Core::Antigravity(_)=>None } }
+    fn heard(&mut self) -> Vec<Effect> { match &mut self.core { Core::Claude(core)=>core.heard(),Core::Codex(_) | Core::Antigravity(_)=>Vec::new() } }
+    fn transcript_turn_end(&mut self) -> Vec<Effect> { match &mut self.core { Core::Claude(core)=>core.transcript_turn_end(),Core::Codex(_) | Core::Antigravity(_)=>Vec::new() } }
     pub(super) fn with_lifecycle(mut self,lifecycle:Option<std::sync::Weak<super::gateway::RuntimeRegistry>>)->Self {self.lifecycle=lifecycle;self}
     fn advance_claude_generation(&mut self,generation:u64)->Result<(),RuntimeError> {
-        match &mut self.core {Core::Claude(core)=>core.advance_generation(generation),Core::Codex(_)=>Err(failure("lifecycle_provider"))}
+        match &mut self.core {Core::Claude(core)=>core.advance_generation(generation),Core::Codex(_) | Core::Antigravity(_)=>Err(failure("lifecycle_provider"))}
     }
     /// Processo subido agora pelo Rust: a abertura do Codex repete a política (ver `codex::Engine`).
     pub fn set_fresh_process(&mut self,fresh:bool) { if let Core::Codex(core) = &mut self.core { core.set_fresh_process(fresh); } }
@@ -234,26 +238,28 @@ impl RuntimeEngine {
     }
     pub fn mods_life(&self) -> u64 { self.mods_life }
     fn mods_call(&mut self,token:u64,call:ModsCall,left_s:f64,clock:ClockSample) -> Result<Vec<Effect>,ModsError> {
-        match &mut self.core { Core::Claude(core)=>core.mods_call(token,call,left_s,clock),Core::Codex(_)=>Err(crate::mods::model::missing()) }
+        match &mut self.core { Core::Claude(core)=>core.mods_call(token,call,left_s,clock),Core::Codex(_) | Core::Antigravity(_)=>Err(crate::mods::model::missing()) }
     }
     fn park_idle(&self,now:f64) -> Option<f64> {
-        match &self.core { Core::Claude(core)=>core.park_idle(now),Core::Codex(core)=>core.park_idle(now) }
+        match &self.core { Core::Claude(core)=>core.park_idle(now),Core::Codex(core)=>core.park_idle(now),Core::Antigravity(core)=>core.park_idle(now) }
     }
     fn idle_compact_age(&self,now:f64) -> Option<f64> {
-        match &self.core { Core::Claude(core)=>core.idle_compact_age(now),Core::Codex(_)=>None }
+        match &self.core { Core::Claude(core)=>core.idle_compact_age(now),Core::Codex(_) | Core::Antigravity(_)=>None }
     }
     fn view(&self) -> Value {
-        match &self.core { Core::Claude(core)=>core.view(),Core::Codex(core)=> {
+        match &self.core { Core::Claude(core)=>core.view(),Core::Antigravity(core)=>{
+            let mut view = core.control_view(); view["public_state"] = core.view(); view["conversation"] = view["conversation_id"].clone(); view
+        },Core::Codex(core)=> {
             let mut view = core.control_view(); view["public_state"] = core.view(); view["conversation"] = view["thread_id"].clone(); view
         } }
     }
     /// `conversation` e `deliverable` da vista, lidos a cada volta do laço: montar a vista inteira para
     /// isso copiava o catálogo de comandos todas as vezes.
-    fn conversation(&self) -> &str { match &self.core { Core::Claude(core)=>core.conversation(),Core::Codex(core)=>core.conversation() } }
-    fn deliverable(&self) -> bool { match &self.core { Core::Claude(core)=>core.deliverable(),Core::Codex(core)=>core.deliverable() } }
+    fn conversation(&self) -> &str { match &self.core { Core::Claude(core)=>core.conversation(),Core::Codex(core)=>core.conversation(),Core::Antigravity(core)=>core.conversation() } }
+    fn deliverable(&self) -> bool { match &self.core { Core::Claude(core)=>core.deliverable(),Core::Codex(core)=>core.deliverable(),Core::Antigravity(core)=>core.deliverable() } }
     fn refresh_write_sources(core:&Core,sources:&mut WriteSources,guards:&AsyncGuards) {
         for (expected,current,waker) in sources.values_mut() {
-            let next = match core { Core::Claude(core)=>core.interaction_source(expected),Core::Codex(core)=>core.interaction_source(expected) };
+            let next = match core { Core::Claude(core)=>core.interaction_source(expected),Core::Codex(core)=>core.interaction_source(expected),Core::Antigravity(core)=>core.interaction_source(expected) };
             if *current != next { *current = next; waker.wake(); }
         }
         if let Core::Codex(core) = core {
@@ -266,21 +272,21 @@ impl RuntimeEngine {
     fn apply(&mut self,input:EngineInput,clock:ClockSample) -> Result<Vec<Effect>,RuntimeError> {
         let mut sources = self.write_sources.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
         let guards = self.async_guards.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
-        let result = match &mut self.core { Core::Claude(core)=>core.apply(input,clock),Core::Codex(core)=>core.apply(input,clock) };
+        let result = match &mut self.core { Core::Claude(core)=>core.apply(input,clock),Core::Codex(core)=>core.apply(input,clock),Core::Antigravity(core)=>core.apply(input,clock) };
         Self::refresh_write_sources(&self.core,&mut sources,&guards);
         result
     }
     fn command(&mut self,command:RuntimeCommand,clock:ClockSample) -> Result<Vec<Effect>,RuntimeError> {
         let mut sources = self.write_sources.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
         let guards = self.async_guards.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
-        let result = match &mut self.core { Core::Claude(core)=>core.command(command,clock),Core::Codex(core)=>core.command(command,clock) };
+        let result = match &mut self.core { Core::Claude(core)=>core.command(command,clock),Core::Codex(core)=>core.command(command,clock),Core::Antigravity(core)=>core.command(command,clock) };
         Self::refresh_write_sources(&self.core,&mut sources,&guards);
         result
     }
     fn hydrate(&mut self,snapshot:CanoSnapshot) -> Result<Vec<Effect>,RuntimeError> {
         let mut sources = self.write_sources.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
         let guards = self.async_guards.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
-        let result = match &mut self.core { Core::Claude(core)=>core.hydrate(snapshot),Core::Codex(core)=>core.hydrate(snapshot) };
+        let result = match &mut self.core { Core::Claude(core)=>core.hydrate(snapshot),Core::Codex(core)=>core.hydrate(snapshot),Core::Antigravity(core)=>core.hydrate(snapshot) };
         Self::refresh_write_sources(&self.core,&mut sources,&guards);
         result
     }
@@ -288,7 +294,7 @@ impl RuntimeEngine {
     fn transport_lost(&mut self,detail:&str,handed:&BTreeSet<String>) -> Result<Vec<Effect>,RuntimeError> {
         let mut sources = self.write_sources.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
         let guards = self.async_guards.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
-        let effects = match &mut self.core { Core::Codex(core)=>core.transport_lost(detail,handed),Core::Claude(core)=>core.transport_lost(handed) };
+        let effects = match &mut self.core { Core::Codex(core)=>core.transport_lost(detail,handed),Core::Claude(core)=>core.transport_lost(handed),Core::Antigravity(core)=>core.transport_lost(handed) };
         Self::refresh_write_sources(&self.core,&mut sources,&guards);
         Ok(effects)
     }
@@ -296,12 +302,12 @@ impl RuntimeEngine {
     fn reattach(&mut self,snapshot:CanoSnapshot) -> Result<Vec<Effect>,RuntimeError> {
         let mut sources = self.write_sources.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
         let guards = self.async_guards.lock().map_err(|_|crate::interactions::runtime_error(crate::interactions::InteractionError::Unavailable))?;
-        let result = match &mut self.core { Core::Claude(core)=>core.reattach(snapshot),Core::Codex(core)=>core.reattach(snapshot) };
+        let result = match &mut self.core { Core::Claude(core)=>core.reattach(snapshot),Core::Codex(core)=>core.reattach(snapshot),Core::Antigravity(core)=>core.reattach(snapshot) };
         Self::refresh_write_sources(&self.core,&mut sources,&guards);
         result
     }
     fn clear_problem(&mut self,code:&str) -> Vec<Effect> {
-        match &mut self.core { Core::Claude(core)=>core.clear_problem(code),Core::Codex(core)=>core.clear_problem(code) }
+        match &mut self.core { Core::Claude(core)=>core.clear_problem(code),Core::Codex(core)=>core.clear_problem(code),Core::Antigravity(core)=>core.clear_problem(code) }
     }
     fn interaction_guard(&self,id:&str) -> Result<Option<hangar_codex::client::RawWriteGuard>,RuntimeError> {
         use crate::interactions::{InteractionError,runtime_error};
@@ -316,10 +322,10 @@ impl RuntimeEngine {
                 if open.load(Ordering::Acquire) { Ok(()) } else { Err(InteractionError::Changed.code().to_owned()) }
             })));
         }
-        let expected = match &self.core { Core::Claude(core)=>core.write_interaction(id),Core::Codex(core)=>core.write_interaction(id) };
+        let expected = match &self.core { Core::Claude(core)=>core.write_interaction(id),Core::Codex(core)=>core.write_interaction(id),Core::Antigravity(core)=>core.write_interaction(id) };
         let Some(expected) = expected.cloned() else { return Ok(None); };
         let (_,store) = self.interactions.as_ref().ok_or_else(||runtime_error(InteractionError::Unavailable))?;
-        let current = match &self.core { Core::Claude(core)=>core.interaction_source(&expected),Core::Codex(core)=>core.interaction_source(&expected) };
+        let current = match &self.core { Core::Claude(core)=>core.interaction_source(&expected),Core::Codex(core)=>core.interaction_source(&expected),Core::Antigravity(core)=>core.interaction_source(&expected) };
         let waker = Arc::new(futures_util::task::AtomicWaker::new());
         self.write_sources.lock().map_err(|_|runtime_error(InteractionError::Unavailable))?.insert(id.into(),(expected.clone(),current,waker.clone()));
         let (sources,store,id) = (self.write_sources.clone(),store.clone(),id.to_owned());
@@ -334,26 +340,26 @@ impl RuntimeEngine {
             check().map_err(|error:InteractionError|error.code().to_owned())
         })))
     }
-    fn deadline(&self) -> Option<f64> { match &self.core { Core::Claude(core)=>core.next_deadline(),Core::Codex(core)=>core.next_deadline() } }
+    fn deadline(&self) -> Option<f64> { match &self.core { Core::Claude(core)=>core.next_deadline(),Core::Codex(core)=>core.next_deadline(),Core::Antigravity(core)=>core.next_deadline() } }
     fn initialize(&mut self,id:String) -> Result<Vec<Effect>,RuntimeError> {
-        match &mut self.core { Core::Claude(core)=>core.start_initialize(id),Core::Codex(core)=>core.bootstrap(true,id) }
+        match &mut self.core { Core::Claude(core)=>core.start_initialize(id),Core::Codex(core)=>core.bootstrap(true,id),Core::Antigravity(core)=>core.bootstrap(id) }
     }
     fn interaction_write_error(&self,id:&str) -> Option<RuntimeError> {
-        match &self.core { Core::Claude(core)=>core.interaction_write_error(id),Core::Codex(core)=>core.interaction_write_error(id) }
+        match &self.core { Core::Claude(core)=>core.interaction_write_error(id),Core::Codex(core)=>core.interaction_write_error(id),Core::Antigravity(core)=>core.interaction_write_error(id) }
     }
-    fn write_is_current(&self,id:&str) -> bool { match &self.core { Core::Claude(core)=>core.write_is_current(id),Core::Codex(core)=>core.write_is_current(id) } }
-    fn volatile_write(&self,id:&str) -> bool { match &self.core { Core::Claude(_)=>false,Core::Codex(core)=>core.volatile_write(id) } }
-    fn forget_policy(&mut self,id:&RequestId) { match &mut self.core { Core::Claude(core)=>core.forget_policy(id),Core::Codex(core)=>core.forget_policy(id) } }
+    fn write_is_current(&self,id:&str) -> bool { match &self.core { Core::Claude(core)=>core.write_is_current(id),Core::Codex(core)=>core.write_is_current(id),Core::Antigravity(core)=>core.write_is_current(id) } }
+    fn volatile_write(&self,id:&str) -> bool { match &self.core { Core::Claude(_) | Core::Antigravity(_)=>false,Core::Codex(core)=>core.volatile_write(id) } }
+    fn forget_policy(&mut self,id:&RequestId) { match &mut self.core { Core::Claude(core)=>core.forget_policy(id),Core::Codex(core)=>core.forget_policy(id),Core::Antigravity(core)=>core.forget_policy(id) } }
     fn confirm_input(&mut self,id:&str) -> Vec<Effect> {
         match &mut self.core { Core::Claude(_)=>vec![Effect::Reply { operation_id:id.into(),disposition:Disposition::Accepted,payload:json!({"confirmed":true}) }],
-            Core::Codex(core)=>core.confirm_input(id) }
+            Core::Codex(core)=>core.confirm_input(id),Core::Antigravity(core)=>core.confirm_input(id) }
     }
     /// Entrada reservada que o drain pode reivindicar sozinha (só Codex com terminal).
     fn ready_async_answer_entry(&self) -> Option<String> {
-        match &self.core { Core::Codex(core)=>core.ready_async_answer_entry(),Core::Claude(_)=>None }
+        match &self.core { Core::Codex(core)=>core.ready_async_answer_entry(),Core::Claude(_) | Core::Antigravity(_)=>None }
     }
     fn settle_async_answer(&mut self,entry_id:&str,reserved:bool) -> Vec<Effect> {
-        match &mut self.core { Core::Codex(core)=>core.settle_async_answer(entry_id,reserved),Core::Claude(_)=>Vec::new() }
+        match &mut self.core { Core::Codex(core)=>core.settle_async_answer(entry_id,reserved),Core::Claude(_) | Core::Antigravity(_)=>Vec::new() }
     }
     fn uncertain_async_answer(&mut self,entry_id:&str) {
         if let Core::Codex(core) = &mut self.core { core.uncertain_async_answer(entry_id); }
@@ -387,6 +393,7 @@ impl RuntimeEngine {
                         }
                         core.restore_control(id.into(),&frame);
                     },
+                    Core::Antigravity(core)=>core.restore_rpc(id.into(),&phase.payload["frame"]),
                 }
             }
         }
@@ -975,8 +982,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             reconnect.cancel();
             (cano_lost,cano_check_at,stall_due,stall_shown) = (false,None,None,false);
             tracing::warn!(key=%target.key,session=%target.name,provider=%target.provider,"cano morreu com o socket fora; é queda");
-            // Codex: a queda de sempre, com o teto de 3 subidas (o cano que guardou o código ainda pode estar de pé).
-            if target.provider == "codex" {
+            // Codex e Antigravity: a queda de sempre, com o teto de 3 subidas (o cano que guardou o código ainda pode estar de pé).
+            if matches!(target.provider.as_str(),"codex" | "antigravity") {
                 if rc.is_some() { respawn.kill = true; } else { enter_error(&mut error,&target,failure("cano_closed")); }
                 effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":rc})),clock(start))?);
                 effects.extend(after_exit(&mut respawn,&mut engine,&target,clock(start).monotonic_s,closed.load(Ordering::Acquire)));
@@ -1731,7 +1738,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                 }
                 // Codex sem terminal: socket fora com o cano ainda vivo é religação, não queda. O nascimento lido
                 // agora prova, nas tentativas, que o pid segue sendo este processo.
-                let codex_cano_alive = target.provider == "codex" && adoption.is_none() && respawn.task.is_none()
+                let codex_cano_alive = matches!(target.provider.as_str(),"codex" | "antigravity") && adoption.is_none() && respawn.task.is_none()
                     && matches!(event,None | Some(IoEvent::End { code:None })) && engine.view()["alive"] != false && {
                     let (pid,key) = (target.binding.pid,target.key.clone());
                     let birth = tokio::task::spawn_blocking(move||(super::process::liveness(pid,&key) == super::process::Liveness::Ours)
@@ -1881,7 +1888,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         // Religação sozinha cujo arquivo da sessão sumiu (fechada pelo nome) ou é de outra chave:
                         // outra subida também não teria onde gravar o processo e o mataria de novo. Só com o
                         // arquivo relido: pedido da pessoa e arquivo ainda desta vida seguem o caminho de sempre.
-                        if target.provider == "codex" && failure.code == "session_patch_owner" && user.is_none() && !waited
+                        if matches!(target.provider.as_str(),"codex" | "antigravity") && failure.code == "session_patch_owner" && user.is_none() && !waited
                             && sidecar_left(engine.launch.as_ref(),&target).await {
                             tracing::warn!(key=%target.key,session=%target.name,"arquivo da sessão sumiu ou é de outra vida; o ator para sem subir o processo de novo");
                             effects.push_back(Effect::Diag { event:DiagEvent::CodexSidecarGone,code:"codex_sidecar_gone".into() });
@@ -2261,7 +2268,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                                     if write { write_state_marker(&target,&view,marker); }
                                     last_marker = marker.to_owned();
                                 }
-                                if target.provider == "codex" && state == "idle" && last_state != "idle" && confirming { confirm_again = true; }
+                                if matches!(target.provider.as_str(),"codex" | "antigravity") && state == "idle" && last_state != "idle" && confirming { confirm_again = true; }
                                 if state == "idle" && last_state != "idle" && !confirming {
                                     confirming = true;
                                     let job = confirm_inputs(queue.clone(),receipt.clone(),transcript_of(&target,&view),receipt_conversation(&target,&view),target.generation,clock(start),give_up_now(&target,&view));
@@ -2575,7 +2582,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                 if cano_lost && !stall_shown && stall_due.is_some_and(|due|sample.monotonic_s >= due) {
                     stall_shown = true;
                     tracing::warn!(key=%target.key,session=%target.name,"mensagem sem entrega com o cano vivo e o socket fora");
-                    let agent = if target.provider == "codex" { "Codex" } else { "Claude" };
+                    let agent = match target.provider.as_str() { "codex" => "Codex", "antigravity" => "Antigravity", _ => "Claude" };
                     effects.extend(engine.show_problem(DELIVERY_STALLED,Some(format!("mensagem esperando: o {agent} segue rodando, mas a conexão com ele ainda não voltou"))));
                 }
                 if respawn.task.is_none() && respawn.next_at.is_some_and(|at|sample.monotonic_s >= at) {
@@ -2877,7 +2884,7 @@ pub(super) async fn prove_inputs(queue:Arc<QueueActor>,receipt:Arc<std::sync::Mu
 /// recibo não o abre.
 fn transcript_of(target:&RuntimeTarget,view:&Value) -> std::path::PathBuf {
     match view["rollout_path"].as_str().filter(|path|!path.is_empty()) {
-        Some(path) if target.provider == "codex" => path.into(),
+        Some(path) if matches!(target.provider.as_str(),"codex" | "antigravity") => path.into(),
         _ => target.transcript.clone(),
     }
 }
@@ -2886,7 +2893,7 @@ fn transcript_of(target:&RuntimeTarget,view:&Value) -> std::path::PathBuf {
 /// Claude sem terminal (`/clear`, `system/init` com outro sid) trocam de conversa sob o mesmo ator: o recibo
 /// segue a conversa da vista, como os cursores novos.
 fn receipt_conversation(target:&RuntimeTarget,view:&Value) -> Option<String> {
-    matches!(target.provider.as_str(),"claude" | "codex").then(||view["conversation"].as_str().unwrap_or("").to_owned())
+    matches!(target.provider.as_str(),"claude" | "codex" | "antigravity").then(||view["conversation"].as_str().unwrap_or("").to_owned())
 }
 
 async fn capture_cursor(target:&RuntimeTarget,view:&Value) -> Result<Value,RuntimeError> {

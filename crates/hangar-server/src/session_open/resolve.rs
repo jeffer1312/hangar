@@ -811,8 +811,8 @@ fn validate_name(raw: &str, provider: AgentProvider, headless: bool, request: &S
         return Err(OpenError::new(409, "session_transfer_busy", "A sessão está trocando de agente; tente novamente quando terminar."));
     }
     if headless {
-        if !matches!(provider, AgentProvider::Claude | AgentProvider::Codex) {
-            return Err(conflict("sessao sem terminal so vale para provider claude ou codex"));
+        if !matches!(provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity) {
+            return Err(conflict("sessao sem terminal so vale para provider claude, codex ou antigravity"));
         }
         // O prompt inicial é entregue em todo provedor; só leitura continua exigindo terminal.
         if request.read_only {

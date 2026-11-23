@@ -58,8 +58,8 @@ pub enum Owner { Rust, Refused }
 /// terminal, teclas cruas e a aba Submit são recusadas pela própria rota (não há pane).
 pub fn decide(route: WriteRoute, provider: Provider, terminal: bool) -> Owner {
     if route == WriteRoute::StopTask { return Owner::Rust; }
-    // Pi, omp, Kimi e Antigravity só existem com terminal.
-    if !terminal && matches!(provider,Provider::Pi|Provider::Omp|Provider::Kimi|Provider::Antigravity) {return Owner::Refused;}
+    // Pi, omp e Kimi só existem com terminal.
+    if !terminal && matches!(provider,Provider::Pi|Provider::Omp|Provider::Kimi) {return Owner::Refused;}
     match route {
         WriteRoute::CodexControl | WriteRoute::CodexPermission if matches!(provider, Provider::Claude | Provider::Antigravity) => Owner::Refused,
         _ => Owner::Rust,
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn without_a_terminal_every_route_is_rust_too() {
-        for provider in [Provider::Claude, Provider::Codex] {
+        for provider in [Provider::Claude, Provider::Codex, Provider::Antigravity] {
             for route in ALL { assert_eq!(decide(route, provider, false), Owner::Rust, "{provider:?} {route:?}"); }
         }
     }
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn owned_modes_come_from_the_table() {
-        assert_eq!(owned_modes(), vec![(Provider::Claude, true), (Provider::Claude, false), (Provider::Codex, true), (Provider::Codex, false), (Provider::Pi,false), (Provider::Omp,false), (Provider::Kimi,false), (Provider::Antigravity, false)]);
+        assert_eq!(owned_modes(), vec![(Provider::Claude, true), (Provider::Claude, false), (Provider::Codex, true), (Provider::Codex, false), (Provider::Pi,false), (Provider::Omp,false), (Provider::Kimi,false), (Provider::Antigravity, true), (Provider::Antigravity, false)]);
     }
 
     #[test]

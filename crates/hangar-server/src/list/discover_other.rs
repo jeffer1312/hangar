@@ -101,6 +101,7 @@ pub fn discover_rows(panes: &[Pane], procs: &dyn ProcessView, children: &Childre
     }
     rows.extend(codex_rows(dirs, &births, procs, problems));
     rows.extend(headless_rows(dirs, procs, problems));
+    rows.extend(antigravity_rows(dirs, procs, problems));
     Discovered { rows, agent_pids, problems: std::mem::take(problems).into_vec() }
 }
 
@@ -625,6 +626,34 @@ fn headless_transcript(cwd: &str, sid: &str, config_dir: Option<&str>, dirs: &Di
         }
     });
     moved.unwrap_or_else(|| expected.to_string_lossy().into_owned())
+}
+
+/// Uma linha por sessão Antigravity sem terminal: a identidade vem do sidecar; o transcript só existe depois que
+/// o `agy acp` abriu a conversa (`conversation_id`).
+pub fn antigravity_rows(dirs: &Dirs, procs: &dyn ProcessView, problems: &mut Problems) -> Vec<SessionRow> {
+    let mut out = Vec::new();
+    let found = sidecars(&crate::runtime::antigravity_sidecar::dir(&dirs.home), "sidecar Antigravity sem terminal ilegível ou torto; sessão fora da lista", problems);
+    for (file, meta) in found.iter() {
+        if !meta.get("headless").is_some_and(truthy) { continue; }
+        let Some(name) = text(meta, "name") else {
+            problems.note("list_antigravity_sidecar_skipped", file, "sidecar Antigravity sem nome; sessão fora da lista");
+            continue;
+        };
+        let mut row = links::blank_row(&name);
+        row.lifecycle_id = links::session_life(text(meta, "key").as_deref(), None);
+        row.cwd = current_cwd(meta, procs);
+        row.jsonl = text(meta, "brain_dir").zip(text(meta, "conversation_id"))
+            .filter(|(_, id)| hangar_antigravity::paths::valid_conversation_id(id))
+            .map(|(dir, id)| Path::new(&dir).join(id).join(".system_generated").join("logs").join("transcript_full.jsonl").to_string_lossy().into_owned());
+        row.provider = "antigravity".to_owned();
+        row.headless = true;
+        let gemini = text(meta, "gemini_home").map(PathBuf::from).unwrap_or_else(|| dirs.home.join(".gemini"));
+        row.conta = Some(format!("antigravity:{}", links::resolve_lenient(&gemini).to_string_lossy()));
+        links::fill_location(&mut row, "antigravity", dirs, problems);
+        links::fill_links(&mut row, dirs, problems);
+        out.push(row);
+    }
+    out
 }
 
 /// Uma linha por sessão Claude sem terminal: a identidade vem do sidecar.

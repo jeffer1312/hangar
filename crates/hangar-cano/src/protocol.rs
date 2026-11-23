@@ -43,11 +43,19 @@ impl Default for CodexPrefix {
     }
 }
 
+/// Antigravity (`agy acp`): texto e pensamento do turno desde a última ferramenta.
+#[derive(Default, Serialize)]
+struct AcpPrefix { complete: bool, text: String, thinking: String }
+
 #[derive(Default, Serialize)]
 struct Inflight {
     claude: ClaudePrefix,
     codex: BTreeMap<String, CodexPrefix>,
+    acp: AcpPrefix,
 }
+
+/// Pedidos do cliente ACP cuja resposta muda o retrato: abrir a conversa e o prompt (o turno).
+const ACP_TRACKED: [&str; 4] = ["session/new", "session/resume", "session/load", "session/prompt"];
 
 #[derive(Default)]
 pub struct Tracker {
@@ -55,6 +63,8 @@ pub struct Tracker {
     pub turn_open: bool,
     // Ordem de inserção, como o dict do Python: o snapshot lista os pendentes nessa ordem.
     pending: Vec<(String, String)>,
+    /// ACP: id do pedido do cliente → método, até a resposta do agente chegar.
+    acp_calls: Vec<(String, String)>,
     pub last_result: Option<String>,
     pub rate_limit: Option<String>,
     inflight: Inflight,
@@ -92,7 +102,26 @@ impl Tracker {
             Some("rate_limit_event") => self.rate_limit = Some(line.to_owned()),
             // Guarda que falha cai aqui, como o `elif` do Python.
             _ if ev.contains_key("method") => self.observe_rpc(&ev, line),
+            None if ev.contains_key("id") => self.observe_acp_response(&ev, line),
             _ => {}
+        }
+    }
+
+    /// Resposta do `agy acp` a um pedido do cliente: a do `session/new`/`resume` é o `init` (a conversa
+    /// aberta neste processo), a do `session/prompt` fecha o turno e leva os pedidos dele.
+    fn observe_acp_response(&mut self, ev: &Map<String, Value>, line: &str) {
+        let key = py_str(ev.get("id"));
+        let Some(at) = self.acp_calls.iter().position(|(k, _)| *k == key) else { return };
+        let (_, method) = self.acp_calls.remove(at);
+        if method == "session/prompt" {
+            if self.acp_calls.iter().any(|(_, m)| m == "session/prompt") { return; }
+            self.result_revision = self.child_revision;
+            self.turn_open = false;
+            self.last_result = Some(line.to_owned());
+            self.pending.clear();
+            self.inflight.acp = AcpPrefix::default();
+        } else if ev.contains_key("result") {
+            self.init = Some(line.to_owned());
         }
     }
 
@@ -149,6 +178,10 @@ impl Tracker {
             _ => {}
         }
         let Some(params) = params(ev) else { return };
+        if str_field(ev, "method") == Some("session/update") {
+            self.observe_acp_update(params);
+            return;
+        }
         let Some(thread) = str_field(params, "threadId") else { return };
         if !matches!(str_field(ev, "method"), Some("turn/started" | "turn/completed" | "item/agentMessage/delta" | "item/started" | "item/completed")) { return; }
         let prefix = self.inflight.codex.entry(thread.to_owned()).or_default();
@@ -173,6 +206,25 @@ impl Tracker {
                 .and_then(|i| i.get("type")).and_then(Value::as_str) == Some("agentMessage") => {
                 prefix.text.clear(); prefix.complete = true;
             }
+            _ => {}
+        }
+    }
+
+    fn observe_acp_update(&mut self, params: &Map<String, Value>) {
+        let update = params.get("update").unwrap_or(&Value::Null);
+        let prefix = &mut self.inflight.acp;
+        let piece = update["content"]["text"].as_str().unwrap_or("");
+        match update["sessionUpdate"].as_str() {
+            Some(kind @ ("agent_message_chunk" | "agent_thought_chunk")) => {
+                if prefix.text.len() + prefix.thinking.len() + piece.len() > MAX_FRAME / 2 {
+                    *prefix = AcpPrefix::default();
+                    return;
+                }
+                prefix.complete = true;
+                if kind == "agent_message_chunk" { prefix.text.push_str(piece) } else { prefix.thinking.push_str(piece) }
+            }
+            // Texto depois de uma ferramenta é outra mensagem: a prévia recomeça.
+            Some("tool_call") => *prefix = AcpPrefix::default(),
             _ => {}
         }
     }
@@ -208,6 +260,12 @@ impl Tracker {
             Some(Value::String(t)) if t == "control_response" => {
                 let rid = ev.get("response").and_then(Value::as_object).and_then(|r| r.get("request_id"));
                 self.remove(&py_str(rid));
+            }
+            None | Some(Value::Null) if ev.get("method").and_then(Value::as_str).is_some_and(|m| ACP_TRACKED.contains(&m)) => {
+                let Some(id) = ev.get("id").filter(|v| !v.is_null()) else { return };
+                let method = str_field(&ev, "method").unwrap_or_default().to_owned();
+                if method == "session/prompt" { self.turn_open = true; }
+                self.acp_calls.push((py_str(Some(id)), method));
             }
             // Resposta JSON-RPC a um pedido do servidor.
             None | Some(Value::Null) if !ev.contains_key("method") => {
@@ -531,6 +589,57 @@ mod tests {
         let lone_then_pair = "\"a\\ud800\\ud83d\\ude00b\"";
         let fixed = "\"a\\ufffd\\ud83d\\ude00b\"";
         assert_eq!(scrub_lone_surrogates(lone_then_pair).as_deref(), Some(fixed));
+    }
+
+    /// Linhas reais do `agy acp` (`crates/hangar-antigravity/tests/fixtures/acp-permission.jsonl`), com os
+    /// pedidos do cliente entre elas.
+    #[test]
+    fn an_acp_turn_opens_on_the_prompt_keeps_the_permission_and_closes_on_the_answer() {
+        let mut t = Tracker::default();
+        t.observe_client(r#"{"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":"/w","mcpServers":[]}}"#);
+        let opened = r#"{"jsonrpc":"2.0","id":3,"result":{"sessionId":"9abf1fce-b58c-43c2-98be-8071a4843f8d"}}"#;
+        t.observe_child(opened);
+        assert_eq!(snap(&t)["init"], opened);
+        assert_eq!(snap(&t)["aberto"], false);
+        t.observe_client(r#"{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"9abf1fce-b58c-43c2-98be-8071a4843f8d","prompt":[]}}"#);
+        assert_eq!(snap(&t)["aberto"], true);
+        t.observe_child(r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Vou "}}}}"#);
+        t.observe_child(r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"apagar."}}}}"#);
+        assert_eq!(snap(&t)["inflight"]["acp"]["text"], "Vou apagar.");
+        t.observe_child(r#"{"jsonrpc":"2.0","id":"1","method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"t1"},"options":[]}}"#);
+        assert_eq!(pending_ids(&t), vec![Value::from("1")]);
+        t.observe_client(r#"{"jsonrpc":"2.0","id":"1","result":{"outcome":{"outcome":"selected","optionId":"deny"}}}"#);
+        assert!(pending_ids(&t).is_empty());
+        t.observe_child(r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"tool_call","toolCallId":"t2"}}}"#);
+        assert_eq!(snap(&t)["inflight"]["acp"]["text"], "");
+        let ended = r#"{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}"#;
+        t.observe_child(ended);
+        let s = snap(&t);
+        assert_eq!(s["aberto"], false);
+        assert_eq!(s["ultimo_result"], ended);
+        assert_eq!(s["init"], opened, "o fim do turno não troca a conversa aberta");
+    }
+
+    /// Orientação: um segundo prompt no meio do turno; o turno só fecha quando os dois responderem.
+    #[test]
+    fn a_second_acp_prompt_keeps_the_turn_open_until_both_answer() {
+        let mut t = Tracker::default();
+        t.observe_client(r#"{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{}}"#);
+        t.observe_client(r#"{"jsonrpc":"2.0","id":5,"method":"session/prompt","params":{}}"#);
+        t.observe_child(r#"{"jsonrpc":"2.0","id":4,"result":{"stopReason":"cancelled"}}"#);
+        assert_eq!(snap(&t)["aberto"], true);
+        t.observe_child(r#"{"jsonrpc":"2.0","id":5,"result":{"stopReason":"end_turn"}}"#);
+        assert_eq!(snap(&t)["aberto"], false);
+    }
+
+    /// Resposta que o cliente não pediu (ou com erro na abertura) não vira conversa aberta.
+    #[test]
+    fn an_acp_error_on_open_is_not_the_init() {
+        let mut t = Tracker::default();
+        t.observe_child(r#"{"jsonrpc":"2.0","id":9,"result":{"sessionId":"x"}}"#);
+        t.observe_client(r#"{"jsonrpc":"2.0","id":3,"method":"session/resume","params":{}}"#);
+        t.observe_child(r#"{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"not found"}}"#);
+        assert!(snap(&t)["init"].is_null());
     }
 
     #[test]

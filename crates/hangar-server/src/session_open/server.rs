@@ -349,7 +349,11 @@ impl OpenHost for ServerHost {
         let name = name.to_owned();
         // A falha fica no canal da sessão (`open_inner`); a fila espera a próxima subida.
         tokio::spawn(async move {
-            match runtime.open_claude_headless(&name, true).await {
+            let opened = match runtime.open_claude_headless(&name, true).await {
+                None => runtime.open_antigravity_headless(&name).await,
+                opened => opened,
+            };
+            match opened {
                 Some(Ok(())) => {}
                 Some(Err(error)) => tracing::warn!(session = %name, code = %error.code, "a sessão sem terminal criada não subiu"),
                 None => tracing::warn!(session = %name, "a sessão sem terminal criada sumiu antes de subir"),

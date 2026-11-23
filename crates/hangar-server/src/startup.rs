@@ -128,7 +128,7 @@ pub async fn prepare_sessions(env: crate::accounts::environment::AccountEnvironm
             let swept = tokio::task::spawn_blocking(move || {
                 let base = home.join(".hangar");
                 crate::runtime::process::sweep_orphans(&base.join("claude-headless"), &base.join("codex-sessions"),
-                    &home.to_string_lossy())
+                    &base.join("antigravity-sessions"), &home.to_string_lossy())
             }).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "varredura de canos órfãos falhou"); None });
             if let Some(count) = swept.filter(|count| *count > 0) { tracing::info!(count, "canos de sessão já encerrada finalizados"); }
         }

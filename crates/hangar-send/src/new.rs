@@ -247,8 +247,8 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             _ => return fail(err, "erro: --customizations precisa ser um objeto JSON", 2),
         }
     };
-    if options.headless == "true" && !options.provider.is_empty() && options.provider != "claude" && options.provider != "codex" {
-        return fail(err, &format!("erro: --headless só vale com provider claude ou codex (veio: {})", options.provider), 2);
+    if options.headless == "true" && !matches!(options.provider.as_str(), "" | "claude" | "codex" | "antigravity") {
+        return fail(err, &format!("erro: --headless só vale com provider claude, codex ou antigravity (veio: {})", options.provider), 2);
     }
     // Sem conta com leitura de cota, para aqui em vez de cair calado na padrão (talvez a esgotada).
     if options.account == "auto" {

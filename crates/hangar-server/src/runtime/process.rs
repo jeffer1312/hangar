@@ -599,13 +599,15 @@ fn windows_orphans(live: &HashSet<String>, owner: &str) -> usize {
 }
 
 /// Varredura da subida do Rust (regra 10): vivas são as chaves de `claude-headless/`, as do Codex sem
-/// terminal de `codex-sessions/` e as de `codex-sessions/prepared/` (transferência em curso). Pasta
+/// terminal de `codex-sessions/`, as de `codex-sessions/prepared/` (transferência em curso) e as do
+/// Antigravity sem terminal de `antigravity-sessions/`. Pasta
 /// ausente conta como vazia; pasta que não se lê cancela a varredura (`None`), porque a sessão viva
 /// dela pareceria órfã. Arquivo ilegível também cancela.
-pub fn sweep_orphans(claude_dir: &Path, codex_dir: &Path, owner: &str) -> Option<usize> {
+pub fn sweep_orphans(claude_dir: &Path, codex_dir: &Path, antigravity_dir: &Path, owner: &str) -> Option<usize> {
     let mut live = HashSet::new();
     let prepared = codex_dir.join("prepared");
-    for (dir, codex) in [(claude_dir, false), (codex_dir, true), (prepared.as_path(), false)] {
+    // `true`: a pasta também guarda sessão com terminal, cuja chave não protege cano nenhum.
+    for (dir, codex) in [(claude_dir, false), (codex_dir, true), (prepared.as_path(), false), (antigravity_dir, true)] {
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,

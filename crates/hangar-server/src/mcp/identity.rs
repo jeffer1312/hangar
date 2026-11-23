@@ -138,7 +138,8 @@ fn by_key(home: &Path, key: &str) -> Option<String> {
     let text = |m: &serde_json::Map<String, Value>, field: &str| m.get(field).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
     let claude = sidecars(&hangar.join("claude-headless"), "claude", &mut problems);
     let codex = sidecars(&hangar.join("codex-sessions"), "codex", &mut problems);
-    claude.iter().filter(|(_, m)| text(m, "session_id").is_some()).chain(codex.iter())
+    let agy = sidecars(&hangar.join("antigravity-sessions"), "antigravity", &mut problems);
+    claude.iter().filter(|(_, m)| text(m, "session_id").is_some()).chain(codex.iter()).chain(agy.iter())
         .find(|(_, m)| m.get("key").and_then(Value::as_str) == Some(key) && text(m, "name").is_some())
         .and_then(|(_, m)| text(m, "name"))
 }
@@ -150,7 +151,7 @@ fn record_exists(home: &Path, key: &str) -> bool {
 
 fn sidecar_exists(home: &Path, name: &str) -> bool {
     let file = format!("{}.json", crate::list::discover_other::sanitize_session_name(name));
-    ["claude-headless", "codex-sessions"].iter().any(|dir| home.join(".hangar").join(dir).join(&file).exists())
+    ["claude-headless", "codex-sessions", "antigravity-sessions"].iter().any(|dir| home.join(".hangar").join(dir).join(&file).exists())
 }
 
 #[cfg(test)]
