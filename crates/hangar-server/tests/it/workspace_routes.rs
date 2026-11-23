@@ -559,21 +559,35 @@ async fn folder_routes_without_sessions_skip_session_discovery() {
     assert_eq!(refusal(git, "workspace_context").await["detail"]["params"]["motivo"], "sessoes");
 }
 
-#[tokio::test]
-async fn unavailable_native_context_answers_503_with_reason() {
-    let dir = tempfile::tempdir().unwrap();
-    let missing = dir.path().join("missing-mux");
-    let f = workspace_fixture::fixture_with_mux(dir.path(), None, Some(&missing)).await;
-    let response = client()
-        .get(format!("http://{}/api/sessions/fixture/files/list", f.addr))
-        .bearer_auth(OWNER)
-        .send()
-        .await
-        .unwrap();
-    let body = refusal(response, "workspace_context").await;
-    assert_eq!(body["detail"]["params"]["motivo"], "sessoes");
-    let diag = f.diag("rust.workspace_failed").await;
-    assert_eq!((&diag["sessao"], &diag["codigo"]), (&json!("fixture"), &json!("workspace_context")));
+// Travou mais de 2 h num Windows do CI, sem causa achada. Runtime próprio porque o fim do `#[tokio::test]` espera
+// sem prazo uma tarefa bloqueante presa; aqui o corpo e o encerramento têm teto e a falha diz a etapa.
+#[test]
+fn unavailable_native_context_answers_503_with_reason() {
+    use std::time::Duration;
+    let stage = Arc::new(std::sync::Mutex::new("fixture"));
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let at = stage.clone();
+    let done = runtime.block_on(async move { tokio::time::timeout(Duration::from_secs(60), async move {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing-mux");
+        let f = workspace_fixture::fixture_with_mux(dir.path(), None, Some(&missing)).await;
+        *at.lock().unwrap() = "pedido";
+        let response = client()
+            .get(format!("http://{}/api/sessions/fixture/files/list", f.addr))
+            .bearer_auth(OWNER)
+            .send()
+            .await
+            .unwrap();
+        *at.lock().unwrap() = "resposta";
+        let body = refusal(response, "workspace_context").await;
+        assert_eq!(body["detail"]["params"]["motivo"], "sessoes");
+        *at.lock().unwrap() = "diário";
+        let diag = f.diag("rust.workspace_failed").await;
+        assert_eq!((&diag["sessao"], &diag["codigo"]), (&json!("fixture"), &json!("workspace_context")));
+        *at.lock().unwrap() = "encerramento";
+    }).await });
+    runtime.shutdown_timeout(Duration::from_secs(10));
+    assert!(done.is_ok(), "parou na etapa {}", stage.lock().unwrap());
 }
 
 #[cfg(unix)]

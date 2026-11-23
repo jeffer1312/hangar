@@ -103,6 +103,15 @@ mod unix {
 
     fn settle() { std::thread::sleep(Duration::from_millis(200)); }
 
+    fn until_logged(log: &Path, line: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !std::fs::read_to_string(log).is_ok_and(|text| text.contains(line)) {
+            assert!(Instant::now() < deadline, "o log do cano não registrou {line:?}");
+            // estavel: intervalo de consulta do log, com teto de 10 s.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     #[test]
     fn the_snapshot_has_the_fields_and_the_version() {
         let cano = start("claude");
@@ -193,9 +202,13 @@ mod unix {
         let mut cano = start("claude");
         let mut a = client(&cano.sock);
         a.read();
-        a.send(json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "sair"}]}}));
-        drop(a); // o backend caiu antes de ver a saída
-        std::thread::sleep(Duration::from_millis(500));
+        // O filho só sai depois de o cano ver o backend cair: saindo antes, o rc já iria ao `a`.
+        let gate = cano.dir.path().join("sair");
+        a.send(json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": format!("sair quando {}", gate.display())}]}}));
+        drop(a);
+        until_logged(&cano.log, "cliente saiu");
+        std::fs::write(&gate, "").unwrap();
+        until_logged(&cano.log, "claude saiu rc=3");
         assert!(cano.child.0.try_wait().unwrap().is_none(), "o cano espera alguém buscar o rc");
         let mut b = client(&cano.sock);
         let snap = b.read();
@@ -274,22 +287,28 @@ mod unix {
 }
 
 /// Sobe o cano em TCP numa porta livre e devolve o processo e o endereço. A porta é escolhida antes
-/// de o cano subir; outro teste em paralelo pode tomá-la, então só vale a que responde com snapshot.
+/// de o cano subir e outro teste em paralelo pode tomá-la: só vale a porta em que ESTE cano escutou.
+/// Responder na porta não prova isso, porque quem responde pode ser o cano do outro teste.
 fn start_tcp(dir: &Path) -> (Running, std::net::SocketAddr) {
-    for _ in 0..5 {
+    for attempt in 0..5 {
         let address = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
-        let child = Running(cano().arg("--escuta").arg(format!("tcp:{address}")).args(["--token", TOKEN, "--cwd"]).arg(dir)
-            .args(["--", fake(), "claude"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap());
-        if let Some(mut stream) = connect(address) {
-            let mut line = String::new();
-            let answered = stream.write_all(format!("peek {TOKEN}\n").as_bytes()).is_ok()
-                && BufReader::new(&mut stream).read_line(&mut line).is_ok();
-            if answered && serde_json::from_str::<Value>(&line).is_ok_and(|v| v["type"] == "cano_snapshot") {
+        let log = dir.join(format!("cano-{attempt}.log"));
+        let mut child = Running(cano().arg("--escuta").arg(format!("tcp:{address}")).args(["--token", TOKEN, "--log"]).arg(&log)
+            .arg("--cwd").arg(dir).args(["--", fake(), "claude"])
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap());
+        // O cano só registra o pid do filho depois de escutar; escuta recusada o faz sair.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if std::fs::read_to_string(&log).is_ok_and(|text| text.contains("claude pid=")) {
                 return (child, address);
             }
+            if child.0.try_wait().unwrap().is_some() { break; }
+            assert!(Instant::now() < deadline, "{}", std::fs::read_to_string(&log).unwrap_or_else(|_| "sem log".into()));
+            // estavel: intervalo de consulta da espera pelo log, com teto de 10 s; não é prazo de resultado.
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
-    panic!("o cano não respondeu em nenhuma porta");
+    panic!("o cano não escutou em nenhuma porta");
 }
 
 fn connect(address: std::net::SocketAddr) -> Option<std::net::TcpStream> {

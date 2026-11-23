@@ -1630,12 +1630,12 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
         let (finished_tx,finished_rx)=tokio::sync::oneshot::channel();
         let ready=Arc::new(Mutex::new(Some(ready_tx)));let finished=Arc::new(Mutex::new(Some(finished_tx)));
         let signal=root.join("new-session-ready");
+        // O spec é gravado antes de o terminal nascer: o fim da abertura é o `new-session-done` do tmux falso.
+        let done=root.join("new-session-done");
         let mut watcher=notify::recommended_watcher(move|event:notify::Result<notify::Event>| {
             if let Ok(event)=event {
                 if event.paths.contains(&signal) {if let Some(tx)=ready.lock().unwrap().take(){let _=tx.send(());}}
-                if event.paths.iter().any(|path|path.extension().is_some_and(|ext|ext=="json") && path.parent().is_some_and(|p|p.ends_with("session-specs"))) {
-                    if let Some(tx)=finished.lock().unwrap().take(){let _=tx.send(());}
-                }
+                if event.paths.contains(&done) {if let Some(tx)=finished.lock().unwrap().take(){let _=tx.send(());}}
             }
         }).unwrap();
         watcher.watch(root,notify::RecursiveMode::Recursive).unwrap();
@@ -1667,11 +1667,16 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
                 _=>closing.await.is_ok(),
             }
         };
+        let published=std::fs::read_dir(h.home.join(".hangar/session-specs")).is_ok_and(|entries|entries.filter_map(Result::ok).any(|entry| {
+            let path=entry.path();
+            path.extension().is_some_and(|ext|ext=="json")
+                && std::fs::read(&path).ok().and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok()).is_some_and(|spec|spec["name"]=="cancel-cont")
+        }));
         runtime.ingress().release("morta");
         runtime.shutdown().await.unwrap();
         assert!(reached,"a abertura deve alcançar o Mux antes do cancelamento");
         assert!(cancelled,"abortar a própria futura HTTP, não apenas desconectar um cliente");
-        assert!(completed && root.join("new-session-done").exists(),"a abertura destacada deve terminar e publicar o spec antes da limpeza");
+        assert!(completed && published,"a abertura destacada deve terminar e publicar o spec antes da limpeza");
         assert!(closed);
         assert!(!released_early,"cancelar o HTTP liberou a entrada antes do último efeito da abertura destacada");
     });
