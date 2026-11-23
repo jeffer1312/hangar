@@ -1317,11 +1317,15 @@ impl Hangar {
         {
             let (requests, received) = async_channel::unbounded::<crate::browser::server::Request>();
             match crate::browser::server::start(&runtime, requests) {
-                Ok(_) => cx.spawn_in(window, async move |this, cx| {
-                    while let Ok(request) = received.recv().await {
-                        if this.update_in(cx, |this, window, cx| this.dispatch_preview(request, window, cx)).is_err() { break; }
-                    }
-                }).detach(),
+                Ok(_) => {
+                    // Registro que sobra de app fechado parece app reiniciando, e o agente nunca vai ao de outra máquina.
+                    App::on_app_quit(cx, |_| { crate::browser::server::forget_own(); async {} }).detach();
+                    cx.spawn_in(window, async move |this, cx| {
+                        while let Ok(request) = received.recv().await {
+                            if this.update_in(cx, |this, window, cx| this.dispatch_preview(request, window, cx)).is_err() { break; }
+                        }
+                    }).detach()
+                }
                 Err(e) => eprintln!("[nav] servidor do hangar-preview nao subiu: {e}"),
             }
         }

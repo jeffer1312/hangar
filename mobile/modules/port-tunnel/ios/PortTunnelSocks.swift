@@ -278,7 +278,7 @@ private final class SocksConnection {
       queue.asyncAfter(deadline: .now() + heldWait) { [weak self] in
         guard let self, !self.done, self.upTick == tick else { return }
         let rest = drain(&self.up)
-        if !rest.isEmpty { task.send(.data(rest)) { _ in } }
+        if !rest.isEmpty { task.send(.data(rest)) { [weak self] error in if error != nil { self?.queue.async { self?.close() } } } }
       }
     }
     return out
@@ -293,7 +293,9 @@ private final class SocksConnection {
       queue.asyncAfter(deadline: .now() + heldWait) { [weak self] in
         guard let self, !self.done, self.downTick == tick else { return }
         let rest = drain(&self.down)
-        if !rest.isEmpty { self.connection.send(content: rest, completion: .idempotent) }
+        if !rest.isEmpty {
+          self.connection.send(content: rest, completion: .contentProcessed { [weak self] error in if error != nil { self?.close() } })
+        }
       }
     }
     return out
@@ -310,7 +312,7 @@ private final class SocksConnection {
         if isComplete {
           self.upTick += 1
           let rest = drain(&self.up)
-          if !rest.isEmpty { task.send(.data(rest)) { _ in } }
+          if !rest.isEmpty { task.send(.data(rest)) { [weak self] error in if error != nil { self?.queue.async { self?.close() } } } }
           task.send(.data(Data())) { _ in }
         } else {
           self.pumpUp(task)

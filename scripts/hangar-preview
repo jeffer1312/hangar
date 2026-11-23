@@ -295,16 +295,13 @@ function srv(sair = erro) {
   return dados;
 }
 
-// "Sem app" é só arquivo ausente ou pid morto há mais de `RESTART_MS`: corrompido, ilegível ou recente mandaria o
-// comando, calado, para outra máquina enquanto o app daqui volta.
+// "Sem app" é só arquivo ausente: os apps o apagam ao fechar. Pid morto com o arquivo presente é o app daqui
+// reiniciando ou caído, e a recusa local diz isso; corrompido ou ilegível mandaria o comando, calado, para outra máquina.
 function localApp() {
-  // Local, e não no topo: `remote` chama esta função antes das constantes daqui de baixo existirem.
-  // Quanto tempo um `_srv.json` de pid morto ainda é o app desta máquina reiniciando (atualização).
-  const RESTART_MS = 60_000;
   const arquivo = join(DIR, '_srv.json');
   try {
-    if (pidVivo(JSON.parse(readFileSync(arquivo, 'utf8')).pid)) return true;
-    return Date.now() - statSync(arquivo).mtimeMs < RESTART_MS;
+    JSON.parse(readFileSync(arquivo, 'utf8'));
+    return true;
   } catch (err) {
     if (err.code === 'ENOENT') return false;
     return erro(`não deu para ler ${arquivo} (${err.message}): feche e reabra o app desktop`);
@@ -377,8 +374,8 @@ async function chamar(chave, verbo, cmdArgs, aba = flags.aba, sair = erro) {
     });
     texto = await r.text();
   } catch (err) {
-    // Porta recusada com o app de fato fora (sem `_srv.json` ou pid morto há mais de `RESTART_MS`): o pedido não
-    // chegou a lugar nenhum e vai pelo servidor. Pid vivo ou recente é o app reiniciando: nunca vai para outra máquina.
+    // Porta recusada com o app de fato fora (sem `_srv.json`): o pedido não chegou a lugar nenhum e vai pelo
+    // servidor. Com o arquivo presente é o app daqui reiniciando: nunca vai para outra máquina.
     if (!externo && err.cause?.code === 'ECONNREFUSED' && !localApp()) return callServer(String(chave).split('::').pop(), verbo, cmdArgs, aba, sair);
     // App fechado ou reiniciado (a atualização reinicia) no meio do comando: frase, não a pilha do Node.
     if (externo) return sair(`o app desktop fechou ou reiniciou no meio do comando (${err.cause?.code || err.cause?.message || err.message}). Espere ele voltar e repita`);

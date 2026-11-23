@@ -2,7 +2,7 @@
 //! Endereço e token saem de `~/.hangar/nav/_srv.json`, que o app reescreve a cada subida: nada aqui
 //! é guardado entre chamadas.
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -58,8 +58,13 @@ pub async fn fill_secret(http: &reqwest::Client, home: &Path, name: &str, args: 
 /// Porta e token do app; `None` = sem arquivo ou incompleto. Pid morto no arquivo é recusa na hora: outra execução do
 /// app pode tê-lo publicado e morrido.
 fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
-    let Some(srv) = std::fs::read(nav_dir(home).join("_srv.json")).ok()
-        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()) else { return Ok(None) };
+    // Só a ausência é "sem app aqui": arquivo ilegível mandaria o verbo calado ao app de outra máquina.
+    let raw = match std::fs::read(nav_dir(home).join("_srv.json")) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(unreadable(&e.to_string())),
+    };
+    let srv = serde_json::from_slice::<Value>(&raw).map_err(|e| unreadable(&e.to_string()))?;
     if !crate::orchestration::runs::pid_alive(&srv["pid"]) {
         return Err(Unavailable(format!("o servidor do navegador registrado em ~/.hangar/nav/_srv.json (pid {}) não está mais rodando; \
             abra o app desktop do Hangar; se ele já está aberto, retoma o registro em poucos segundos: tente de novo e, se continuar, feche e abra o app",
@@ -69,24 +74,15 @@ fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
     Ok(port.zip(srv["token"].as_str().filter(|t| !t.is_empty()).map(str::to_owned)))
 }
 
+fn unreadable(why: &str) -> Unavailable {
+    Unavailable(format!("não deu para ler ~/.hangar/nav/_srv.json ({why}); feche e reabra o app desktop do Hangar"))
+}
+
 /// Há app desktop nesta máquina para o `/cmd` (`true`). Sem ele, os verbos vão pela rota `browser-cmd` ao app de quem
 /// usa a sessão em outra máquina. Registro com pid morto e recente é o app daqui reiniciando: a recusa, não outra máquina.
 pub fn local_app(home: &Path) -> Result<bool, Unavailable> {
-    match server(home) {
-        Ok(found) => Ok(found.is_some()),
-        Err(dead) => {
-            let modified = std::fs::metadata(nav_dir(home).join("_srv.json")).and_then(|m| m.modified()).ok();
-            if restarting(modified, SystemTime::now()) { Err(dead) } else { Ok(false) }
-        }
-    }
-}
-
-/// Até aqui um registro de pid morto ainda é do app que está subindo de novo.
-const RESTART_WINDOW: Duration = Duration::from_secs(60);
-
-fn restarting(modified: Option<SystemTime>, now: SystemTime) -> bool {
-    // Data no futuro (relógio ajustado) conta como recente.
-    modified.is_some_and(|m| now.duration_since(m).map_or(true, |age| age < RESTART_WINDOW))
+    // Os apps apagam o registro ao fechar: pid morto com o arquivo presente é reinício ou queda, e a recusa é daqui.
+    server(home).map(|found| found.is_some())
 }
 
 /// O corpo do `/cmd` para a rota `browser-cmd`, com o prazo que ela espera o app.
@@ -185,17 +181,19 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
 
 #[cfg(test)]
 mod tests {
-    use super::{Unavailable, host_answer, navigated, restarting};
+    use super::{Unavailable, host_answer, local_app, navigated};
     use serde_json::json;
-    use std::time::{Duration, SystemTime};
 
     #[test]
-    fn a_fresh_dead_registration_is_the_local_app_restarting() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        assert!(restarting(Some(now - Duration::from_secs(5)), now));
-        assert!(restarting(Some(now + Duration::from_secs(5)), now), "relógio para trás ainda é recente");
-        assert!(!restarting(Some(now - Duration::from_secs(60)), now), "velho: o verbo vai ao app de outra máquina");
-        assert!(!restarting(None, now), "sem arquivo: o verbo vai ao app de outra máquina");
+    fn only_a_missing_registration_sends_the_verb_to_another_machine() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(local_app(home.path()), Ok(false), "sem arquivo: o verbo vai ao app de outra máquina");
+        let nav = home.path().join(".hangar/nav");
+        std::fs::create_dir_all(&nav).unwrap();
+        std::fs::write(nav.join("_srv.json"), b"{not json").unwrap();
+        assert!(local_app(home.path()).unwrap_err().0.contains("não deu para ler"), "corrompido: recusa daqui");
+        std::fs::write(nav.join("_srv.json"), json!({"porta": 1, "token": "t", "pid": u32::MAX}).to_string()).unwrap();
+        assert!(local_app(home.path()).unwrap_err().0.contains("não está mais rodando"), "pid morto: o app daqui reiniciando");
     }
 
     #[test]

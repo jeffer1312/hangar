@@ -247,6 +247,16 @@ fn parse_body(bytes: &[u8]) -> Result<Body, String> {
     Ok(Body { key, verb, args, tab: v["aba"].as_i64(), cdp, alvo: v["alvo"].as_str().map(str::to_owned), secret })
 }
 
+/// Apaga o `_srv.json` ao fechar, só se ainda for deste processo.
+pub fn forget_own() {
+    let Some(path) = nav_dir().map(|d| d.join("_srv.json")) else { return };
+    let mine = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .is_some_and(|v| v["pid"].as_u64() == Some(u64::from(std::process::id())));
+    if mine && let Err(e) = std::fs::remove_file(&path) {
+        crate::log_line(&format!("nav: _srv.json não apagado ao fechar: {e}"));
+    }
+}
+
 pub fn start(runtime: &Runtime, requests: async_channel::Sender<Request>) -> std::io::Result<u16> {
     // A porta da execução anterior primeiro: o `/cdp/browser/<nome>` que alguém guardou continua valendo.
     let previous = nav_dir().and_then(|d| std::fs::read(d.join("_srv.json")).ok())
