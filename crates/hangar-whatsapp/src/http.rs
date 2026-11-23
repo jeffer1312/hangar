@@ -248,13 +248,14 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     if body["confirm"] != true {
         return refused(StatusCode::BAD_REQUEST, "whatsapp_confirm_required", "apagar exige {\"confirm\":true}");
     }
+    // Atualização em curso troca o processo no meio do pedido: apagar espera a vez, de pé ou parado.
+    let Ok(_guard) = wa.installer.inline() else { return busy() };
     // De pé é o serviço respondendo: só a falta de conexão leva ao ramo do disco, com as guardas dele.
     match wa.client.call(reqwest::Method::POST, "/v1/wipe", &[], Some(&json!({"confirm": true}))).await {
         Ok(reply) => return relay(reply),
         Err(CallError::Off(_)) => {}
         Err(error) => return call_error(&error),
     }
-    let Ok(_guard) = wa.installer.inline() else { return busy() };
     // Subindo, caindo ou esperando religar, o processo pode abrir os bancos sem ter escrito o `control.json`:
     // só o gerenciador confirmando a parada (unit parada, LaunchAgent descarregado, tarefa pronta) libera.
     if install::current(&wa.ctx.paths).is_some()

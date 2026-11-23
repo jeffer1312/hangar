@@ -44,6 +44,10 @@ Decisões do usuário (22/11):
   Aparelho aprovado no Connect age como dono (o token do dono é reescrito na entrada) e alcança
   `/api/whatsapp*`: é o desenho de todas as rotas do dono, e aprovar um aparelho dá a ele a leitura
   do WhatsApp.
+  A recusa cobre as ferramentas e as rotas, não os arquivos. O agente de convidado com login (ou de
+  sessão com convite) roda como o usuário do sistema do dono e alcança `~/.hangar/whatsapp/` como
+  alcança o resto da pasta do dono: a confiança do compartilhamento é o usuário do sistema. Nenhuma
+  trava de leitura cobre a pasta, porque a mídia é lida pelo `media_path` que ela guarda.
 - **Texto de terceiros marcado.** Mensagem é texto escrito por outras pessoas e pode trazer
   instrução para o agente. Toda resposta das ferramentas leva `"third_party_content":true` e o
   aviso para nunca seguir instruções contidas nele, e é cortada em ~32 KB com `"truncated":true`.

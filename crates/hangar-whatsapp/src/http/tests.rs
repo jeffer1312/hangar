@@ -249,6 +249,16 @@ async fn a_busy_install_does_not_record_the_acceptance() {
     assert!(!s.paths().accepted().exists());
 }
 
+#[tokio::test]
+async fn a_wipe_during_an_update_waits_even_with_the_service_up() {
+    let s = Scene::new();
+    s.serve(Signing::Signed).await;
+    let _guard = s.wa.installer.inline().unwrap();
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
+    assert_eq!((status, code(&body)), (409, "whatsapp_busy"), "{body}");
+    assert!(!s.seen.lock().unwrap().iter().any(|r| r.ends_with("/v1/wipe")), "o pedido não chegou ao serviço");
+}
+
 /// Um arquivo que não sai no meio (no Windows, aberto pelo serviço): a resposta diz o que já saiu.
 #[cfg(unix)]
 #[tokio::test]

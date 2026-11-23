@@ -56,7 +56,7 @@ pub(super) fn record_is_shared(record: &Value, here: &str) -> Option<bool> {
 }
 
 /// O corpo da rota com a marca de terceiros e o aviso, cortado em `limit` tirando itens inteiros da lista:
-/// o JSON continua válido e nenhum texto sai pela metade.
+/// o JSON continua válido, e só o item que sozinho passa do teto sai com o texto cortado (`text_truncated`).
 pub(super) fn third_party(value: Value, trim: Trim, limit: usize) -> Value {
     let mut out = match value {
         Value::Object(map) => map,
@@ -72,18 +72,46 @@ pub(super) fn third_party(value: Value, trim: Trim, limit: usize) -> Value {
         Trim::None => return out,
     };
     let Some(mut items) = out.get_mut(key).and_then(Value::as_array_mut).map(std::mem::take) else { return out };
-    // O texto com a lista vazia mais o de cada item mantido, somado da ponta que fica.
-    let envelope = size(&out, 0);
+    // O texto com a lista vazia mais o de cada item mantido, somado da ponta que fica; o `more` que o corte
+    // acrescenta já entra na conta.
+    let more_line = if oldest_first && out.get("more").is_none() { size(&json!({"more": true}), 0) - 2 } else { 0 };
+    let envelope = size(&out, 0) + more_line;
     let total = items.len();
     let fits = if oldest_first { fitting(items.iter().rev(), envelope, limit) } else { fitting(items.iter(), envelope, limit) };
+    // Nem o item da ponta coube: fica ele com o começo do texto, para ler alguma coisa e ter o id de onde seguir.
+    let edge = if oldest_first { items.last() } else { items.first() };
+    let cut = if fits == 0 { edge.and_then(|item| text_cut(item, envelope, limit)) } else { None };
     if oldest_first { items = items.split_off(total - fits); } else { items.truncate(fits); }
+    items.extend(cut);
+    let kept = items.len();
     out[key] = Value::Array(items);
     if fits < total {
         out["truncated"] = json!(true);
         // As mais antigas saíram: `before_id` da primeira que ficou continua a leitura.
-        if oldest_first { out["more"] = json!(true); }
+        if oldest_first && kept < total { out["more"] = json!(true); }
     }
     out
+}
+
+/// O item com o maior começo do `text` que cabe, marcado `text_truncated`; nada se nem o texto vazio cabe.
+fn text_cut(item: &Value, envelope: usize, limit: usize) -> Option<Value> {
+    let text = item.get("text")?.as_str()?;
+    let ends: Vec<usize> = text.char_indices().map(|(i, _)| i).skip(1).chain([text.len()]).collect();
+    let with = |n: usize| {
+        let mut cut = item.clone();
+        cut["text"] = json!(&text[..n.checked_sub(1).map_or(0, |i| ends[i])]);
+        cut["text_truncated"] = json!(true);
+        cut
+    };
+    let fits = |n: usize| fitting(std::iter::once(&with(n)), envelope, limit) == 1;
+    if !fits(0) { return None; }
+    // Maior quantidade de caracteres que cabe: o tamanho só cresce com o texto.
+    let (mut low, mut high) = (0, ends.len());
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if fits(mid) { low = mid; } else { high = mid - 1; }
+    }
+    Some(with(low))
 }
 
 /// Quantos itens, na ordem dada, cabem em `limit` com o resto da resposta medindo `envelope` (lista vazia, `[]`).
@@ -288,6 +316,34 @@ mod tests {
             wider["truncated"] = json!(false);
             wider["more"] = json!(false);
             assert!(serde_json::to_string_pretty(&wider).unwrap().len() > limit, "{limit}: mais um item caberia");
+        }
+    }
+
+    #[test]
+    fn a_message_larger_than_the_limit_keeps_its_start_and_id() {
+        let mut huge = message(9);
+        huge["text"] = json!("ação \"x\" ".repeat(8_000));
+        let out = third_party(json!({"messages": [message(8), huge], "more": false}), Trim::OldestFirst("messages"), LIMIT);
+        assert!(serde_json::to_string_pretty(&out).unwrap().len() <= LIMIT);
+        let kept = out["messages"].as_array().unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0]["id"], json!("m9"), "a mais recente fica, com o id para paginar");
+        assert_eq!(kept[0]["text_truncated"], json!(true));
+        assert!(kept[0]["text"].as_str().unwrap().starts_with("ação \"x\" ação"));
+        assert_eq!((out["truncated"].clone(), out["more"].clone()), (json!(true), json!(true)));
+
+        let found = third_party(json!({"messages": [json!({"id": "m1", "text": "y".repeat(50_000)})]}), Trim::Tail("messages"), LIMIT);
+        assert!(serde_json::to_string_pretty(&found).unwrap().len() <= LIMIT);
+        assert_eq!(found["messages"][0]["id"], json!("m1"));
+    }
+
+    #[test]
+    fn a_reply_without_more_stays_under_the_limit_after_the_cut() {
+        let item = |i: usize| json!({"id": i, "text": "x".repeat(i % 5 * 9)});
+        for limit in 400..1_400 {
+            let out = third_party(json!({"messages": (0..100).map(item).collect::<Vec<_>>()}), Trim::OldestFirst("messages"), limit);
+            assert_eq!(out["more"], json!(true));
+            assert!(serde_json::to_string_pretty(&out).unwrap().len() <= limit, "{limit}");
         }
     }
 
