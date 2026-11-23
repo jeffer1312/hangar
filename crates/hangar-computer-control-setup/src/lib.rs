@@ -134,13 +134,18 @@ impl Paths {
     /// antes) e não é o próprio principal (`CLAUDE_CONFIG_DIR` apontando para o HOME).
     pub fn config_files(&self) -> Vec<PathBuf> {
         let main = self.main_file();
-        let main_real = main.canonicalize().ok();
+        let main_real = identity(&main);
         let default_file = self.default_account.as_ref().filter(|dir| dir.is_dir()).map(|dir| dir.join(".claude.json"));
         let accounts: Vec<PathBuf> = self.accounts.iter().map(|dir| dir.join(".claude.json"))
-            .filter(|p| (p.is_file() || Some(p) == default_file.as_ref()) && (main_real.is_none() || p.canonicalize().ok() != main_real))
+            .filter(|p| (p.is_file() || Some(p) == default_file.as_ref()) && identity(p) != main_real)
             .collect();
         std::iter::once(main).chain(accounts).collect()
     }
+}
+
+/// Caminho físico de um `.claude.json`: o canônico ou, antes de o arquivo existir, a pasta canônica mais o nome.
+fn identity(file: &Path) -> Option<PathBuf> {
+    file.canonicalize().ok().or_else(|| Some(file.parent()?.canonicalize().ok()?.join(file.file_name()?)))
 }
 
 /// Há release do hcu para esta plataforma (Windows e Linux x86_64).

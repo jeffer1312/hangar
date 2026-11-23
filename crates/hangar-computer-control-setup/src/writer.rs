@@ -510,6 +510,17 @@ mod tests {
         assert!(!home.join("acc").join(".claude.json").exists(), "conta nunca aberta segue para o espelho");
     }
 
+    /// `CLAUDE_CONFIG_DIR` no próprio HOME com o principal ainda inexistente: um arquivo só, senão a segunda
+    /// trava do mesmo arquivo recusa o registro.
+    #[test]
+    fn the_default_account_in_the_home_is_the_main_file_even_before_it_exists() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        let mut paths = Paths::new(home.to_owned(), vec![home.to_owned()]);
+        paths.default_account = Some(home.to_owned());
+        assert_eq!(paths.config_files(), vec![paths.main_file()]);
+    }
+
     fn with_account(home: &Path) -> Paths {
         std::fs::create_dir_all(home.join("acc")).unwrap();
         Paths::new(home.to_owned(), vec![home.join("acc")])
