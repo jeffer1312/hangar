@@ -20,6 +20,9 @@ pub(super) struct Ports {
     pub link: Option<PortLink>,
     other: Option<(Entity<InputState>, Subscription)>,
     other_error: Option<String>,
+    /// A última porta digitada em "Outra porta…" (servidor, porta): vira linha mesmo sem a sessão listar (container,
+    /// servidor macOS), para abrir e pedir o link de fora.
+    typed: Option<(String, u16)>,
     /// "Parar servidor" em voo, um por vez: (servidor, porta).
     stopping: Option<(String, u16)>,
 }
@@ -104,11 +107,10 @@ impl Hangar {
         if self.is_active_key(server) { self.active_token.clone() } else { self.server_entry(server).map(|s| s.token.clone()).unwrap_or_default() }
     }
 
-    /// A sonda e a busca de porta livre rodam no runtime; enquanto isso a linha diz "abrindo…". `other`: a porta veio
-    /// de "Outra porta…", e o motivo da falha fica embaixo do campo, porque ela não vira linha sem encaminhamento.
-    fn forward_port(&mut self, port: u16, other: bool, cx: &mut Context<Self>) -> Option<Opening> {
+    /// A sonda e a busca de porta livre rodam no runtime; enquanto isso a linha diz "abrindo…".
+    fn forward_port(&mut self, port: u16, cx: &mut Context<Self>) -> Option<Opening> {
         let Some(api) = self.session_api() else {
-            if other { self.ports.other_error = Some(tr("ports_err_network")); } else { self.no_connection(port); }
+            self.no_connection(port);
             return None;
         };
         let key = (api.identity(), port);
@@ -122,10 +124,7 @@ impl Hangar {
             let result = result.wait().await;
             let _ = this.update(cx, |this, cx| {
                 // Parado antes de abrir (`None`) não é falha.
-                if let Some(Err(error)) = result {
-                    let text = open_text(error);
-                    if other { this.ports.other_error = Some(text); } else { this.ports.failed.insert(key, text); }
-                }
+                if let Some(Err(error)) = result { this.ports.failed.insert(key, open_text(error)); }
                 cx.notify();
             });
         }).detach();
@@ -138,7 +137,7 @@ impl Hangar {
         // lá, com a mesma porta e a mesma origem, sem encaminhar.
         if !self.session_is_remote() || cfg!(target_os = "linux") {
             self.open_port_page(format!("http://localhost:{port}"), window, cx);
-        } else if let Some(opening) = self.forward_port(port, false, cx) {
+        } else if let Some(opening) = self.forward_port(port, cx) {
             cx.spawn_in(window, async move |this, cx| {
                 let Some(Ok(local)) = opening.wait().await else { return };
                 let _ = this.update_in(cx, |this, window, cx| this.open_port_page(format!("http://localhost:{local}"), window, cx));
@@ -151,7 +150,7 @@ impl Hangar {
     fn open_port_outside(&mut self, port: u16, window: &mut Window, cx: &mut Context<Self>) {
         if !self.session_is_remote() {
             super::links::open_link(&format!("http://localhost:{port}"), true, window, cx);
-        } else if let Some(opening) = self.forward_port(port, false, cx) {
+        } else if let Some(opening) = self.forward_port(port, cx) {
             cx.spawn_in(window, async move |_, cx| {
                 let Some(Ok(local)) = opening.wait().await else { return };
                 let _ = cx.update(|window, cx| super::links::open_link(&format!("http://localhost:{local}"), true, window, cx));
@@ -190,9 +189,14 @@ impl Hangar {
         let Some((input, _)) = &self.ports.other else { return };
         let port = super::connect::parse_port(&input.read(cx).value());
         self.ports.other_error = None;
-        match port {
-            None => self.ports.other_error = Some(tr("connect_preview_port_invalid")),
-            Some(port) => { self.forward_port(port, true, cx); }
+        match (port, self.session_api()) {
+            (None, _) => self.ports.other_error = Some(tr("connect_preview_port_invalid")),
+            (Some(_), None) => self.ports.other_error = Some(tr("ports_err_network")),
+            // Daqui a porta já é deste computador: só vira linha. De outra máquina, também encaminha.
+            (Some(port), Some(api)) => {
+                self.ports.typed = Some((api.identity(), port));
+                if !api.is_loopback() { self.forward_port(port, cx); }
+            }
         }
         cx.notify();
     }
@@ -237,8 +241,9 @@ impl Hangar {
         let mut ports: Vec<(u16, String, bool)> = row.map(|r| r.ports.iter().map(|p| (p.port, p.process.clone(), p.shared)).collect()).unwrap_or_default();
         let forwards = self.ports.forwards.list(&server);
         let opening = self.ports.forwards.opening(&server);
-        // Porta digitada em "Outra porta…" não é da sessão: aparece enquanto estiver encaminhada ou abrindo.
-        for port in forwards.iter().map(|f| f.port).chain(opening.iter().copied()) {
+        // Porta digitada em "Outra porta…" não é da sessão: aparece a última digitada e as encaminhadas ou abrindo.
+        let typed = self.ports.typed.as_ref().filter(|(s, _)| *s == server).map(|(_, port)| *port);
+        for port in forwards.iter().map(|f| f.port).chain(opening.iter().copied()).chain(typed) {
             if !ports.iter().any(|(known, ..)| *known == port) { ports.push((port, String::new(), false)); }
         }
         ports.sort_by_key(|(port, ..)| *port);
@@ -274,7 +279,7 @@ impl Hangar {
                                     cx.notify();
                                 })),
                             None => buttons.forward.loading(is_opening).disabled(is_opening)
-                                .on_click(cx.listener(move |this, _, _, cx| { this.forward_port(port, false, cx); cx.notify(); })),
+                                .on_click(cx.listener(move |this, _, _, cx| { this.forward_port(port, cx); cx.notify(); })),
                         }))
                         .when_some(local, |el, local| el.child(buttons.copy
                             .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(format!("localhost:{local}"))))))
@@ -299,8 +304,8 @@ impl Hangar {
                     .into_any_element()
             })).into_any_element(),
         };
-        // Encaminhar um número digitado só faz sentido de outra máquina: aqui a porta já é deste computador.
-        let other = remote.then(|| {
+        // Porta que a sessão não listou (container, servidor macOS): a digitada vira linha, com Abrir e Link de fora.
+        let other = {
             let input = match &self.ports.other {
                 Some((input, _)) => input.clone(),
                 None => {
@@ -315,11 +320,12 @@ impl Hangar {
             div().flex().flex_col().gap(px(4.))
                 .child(div().flex().items_center().gap_1()
                     .child(div().flex_1().min_w_0().child(Input::new(&input).xsmall().aria_label(tr("ports_other"))))
-                    .child(Button::new("ports-other-forward").xsmall().outline().flex_shrink_0().label(tr("ports_forward"))
+                    .child(Button::new("ports-other-forward").xsmall().outline().flex_shrink_0()
+                        .label(if remote { tr("ports_forward") } else { tr("ports_other_add") })
                         .on_click(cx.listener(|this, _, _, cx| this.forward_other(cx)))))
                 .children(self.ports.other_error.clone().map(|text| port_note(text, theme::warning())))
-        });
-        Some(div().flex().flex_col().gap(px(10.)).child(title).child(body).children(other).into_any_element())
+        };
+        Some(div().flex().flex_col().gap(px(10.)).child(title).child(body).child(other).into_any_element())
     }
 }
 

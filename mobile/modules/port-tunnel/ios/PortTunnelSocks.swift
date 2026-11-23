@@ -82,24 +82,72 @@ private func parseConnect(_ data: [UInt8]) -> SocksRequest? {
   return .connect(port: UInt16(data[end - 2]) << 8 | UInt16(data[end - 1]), consumed: end)
 }
 
-/// Troca uma sequência por outra do mesmo tamanho dentro de cada pedaço: o tamanho da mensagem não muda.
-/// Um nome partido entre dois pedaços escapa; o cabeçalho `Host` chega sempre inteiro.
-private func swapped(_ data: Data, _ from: [UInt8], _ to: [UInt8]) -> Data {
-  var bytes = [UInt8](data)
-  var i = 0
-  while i + from.count <= bytes.count {
-    if bytes[i..<(i + from.count)].elementsEqual(from) {
-      bytes.replaceSubrange(i..<(i + from.count), with: to)
-      i += from.count
-    } else {
-      i += 1
-    }
+/// Troca `from` por `to` num fluxo em pedaços. O fim de um pedaço que ainda pode ser o começo de `from` espera o
+/// pedaço seguinte: um nome partido entre dois pedaços também troca.
+private struct Swapper {
+  let from: [UInt8]
+  let to: [UInt8]
+  private(set) var held: [UInt8] = []
+
+  init(_ from: [UInt8], _ to: [UInt8]) {
+    self.from = from
+    self.to = to
   }
-  return Data(bytes)
+
+  /// O que já pode sair; o resto fica em `held`.
+  mutating func feed(_ data: Data) -> Data {
+    let bytes = held + [UInt8](data)
+    var out: [UInt8] = []
+    out.reserveCapacity(bytes.count)
+    var i = 0
+    while i + from.count <= bytes.count {
+      if bytes[i..<(i + from.count)].elementsEqual(from) {
+        out.append(contentsOf: to)
+        i += from.count
+      } else {
+        out.append(bytes[i])
+        i += 1
+      }
+    }
+    // Só espera o que ainda pode virar `from`; o resto sai na hora.
+    var keep = i
+    while keep < bytes.count && !from.starts(with: bytes[keep...]) { keep += 1 }
+    out.append(contentsOf: bytes[i..<keep])
+    held = Array(bytes[keep...])
+    return Data(out)
+  }
+
+  /// Sem pedaço seguinte: o resto sai como está.
+  mutating func flush() -> Data {
+    defer { held = [] }
+    return Data(held)
+  }
+}
+
+private func feed(_ swappers: inout [Swapper], _ data: Data) -> Data {
+  var out = data
+  for i in swappers.indices { out = swappers[i].feed(out) }
+  return out
+}
+
+private func drain(_ swappers: inout [Swapper]) -> Data {
+  var out = Data()
+  for i in swappers.indices {
+    out = swappers[i].feed(out)
+    out.append(swappers[i].flush())
+  }
+  return out
 }
 
 private let standIn = Array(Loopback.standInHost.utf8)
 private let localhost = Array("localhost".utf8)
+/// Corpo comprimido esconde os nomes da troca: o cabeçalho vira um que o servidor não lê, e sem `Accept-Encoding` ele
+/// responde em `identity`. Mesmo tamanho, sem `\r\n` na frente: o fim de cada pedido não fica esperando o próximo pedaço.
+// ponytail: casa o nome como o WebKit escreve; outra caixa ("accept-encoding") passa sem troca.
+private let acceptEncoding = Array("Accept-Encoding:".utf8)
+private let ignoredHeader = Array("X-Hangar-Ignore:".utf8)
+/// Sem pedaço novo nesse prazo, o fim guardado sai como está.
+private let heldWait = DispatchTimeInterval.milliseconds(50)
 
 /// Todos os métodos rodam na fila do listener.
 private final class SocksConnection {
@@ -114,6 +162,12 @@ private final class SocksConnection {
   private var done = false
   /// HTTP puro troca o nome substituto por `localhost`; TLS (primeiro byte 0x16) passa intacto.
   private var plain: Bool?
+  /// Uma troca por sentido, cada uma com o fim guardado do último pedaço.
+  private var up = [Swapper(standIn, localhost), Swapper(acceptEncoding, ignoredHeader)]
+  private var down = [Swapper(localhost, standIn)]
+  /// Muda a cada pedaço: o envio do fim guardado só vale se nenhum pedaço chegou depois.
+  private var upTick = 0
+  private var downTick = 0
 
   init(connection: NWConnection, queue: DispatchQueue, access: TunnelAccess,
        outcome: @escaping (String?) -> Void, closed: @escaping (SocksConnection) -> Void) {
@@ -203,9 +257,9 @@ private final class SocksConnection {
         self.outcome(nil)
         self.connection.send(content: reply(0), completion: .idempotent)
         if !self.buffer.isEmpty {
-          let early = Data(self.buffer)
+          let early = self.toServer(Data(self.buffer), task)
           self.buffer = []
-          task.send(.data(self.toServer(early))) { _ in }
+          if !early.isEmpty { task.send(.data(early)) { _ in } }
         }
         self.pumpUp(task)
         self.pumpDown(task)
@@ -213,9 +267,36 @@ private final class SocksConnection {
     }
   }
 
-  private func toServer(_ data: Data) -> Data {
+  /// Pode voltar vazio (tudo guardado): binário vazio é "a página parou de mandar", então quem chama não o envia.
+  private func toServer(_ data: Data, _ task: URLSessionWebSocketTask) -> Data {
     if plain == nil { plain = data.first != 0x16 }
-    return plain == true ? swapped(data, standIn, localhost) : data
+    guard plain == true else { return data }
+    upTick += 1
+    let out = feed(&up, data)
+    if up.contains(where: { !$0.held.isEmpty }) {
+      let tick = upTick
+      queue.asyncAfter(deadline: .now() + heldWait) { [weak self] in
+        guard let self, !self.done, self.upTick == tick else { return }
+        let rest = drain(&self.up)
+        if !rest.isEmpty { task.send(.data(rest)) { _ in } }
+      }
+    }
+    return out
+  }
+
+  private func toPage(_ data: Data) -> Data {
+    guard plain == true else { return data }
+    downTick += 1
+    let out = feed(&down, data)
+    if down.contains(where: { !$0.held.isEmpty }) {
+      let tick = downTick
+      queue.asyncAfter(deadline: .now() + heldWait) { [weak self] in
+        guard let self, !self.done, self.downTick == tick else { return }
+        let rest = drain(&self.down)
+        if !rest.isEmpty { self.connection.send(content: rest, completion: .idempotent) }
+      }
+    }
+    return out
   }
 
   // Cada sentido só pede o próximo pedaço depois de escrever o anterior: o lado lento freia o outro.
@@ -226,10 +307,19 @@ private final class SocksConnection {
       let next = { [weak self] in
         guard let self, !self.done else { return }
         // Binário vazio = a página parou de mandar, mas espera a resposta.
-        if isComplete { task.send(.data(Data())) { _ in } } else { self.pumpUp(task) }
+        if isComplete {
+          self.upTick += 1
+          let rest = drain(&self.up)
+          if !rest.isEmpty { task.send(.data(rest)) { _ in } }
+          task.send(.data(Data())) { _ in }
+        } else {
+          self.pumpUp(task)
+        }
       }
       guard let data, !data.isEmpty else { return next() }
-      task.send(.data(toServer(data))) { [weak self] error in
+      let out = toServer(data, task)
+      guard !out.isEmpty else { return next() }
+      task.send(.data(out)) { [weak self] error in
         self?.queue.async {
           if error != nil { self?.close() } else { next() }
         }
@@ -241,10 +331,15 @@ private final class SocksConnection {
     task.receive { [weak self] result in
       self?.queue.async {
         guard let self, !self.done else { return }
-        // Fim do túnel: entrega o que a página ainda não leu e fecha.
-        guard case .success(let message) = result else { return self.finish(nil) }
+        // Fim do túnel: entrega o que a página ainda não leu, com o fim guardado, e fecha.
+        guard case .success(let message) = result else {
+          self.downTick += 1
+          let rest = drain(&self.down)
+          return self.finish(rest.isEmpty ? nil : rest)
+        }
         guard case .data(let data) = message, !data.isEmpty else { return self.pumpDown(task) }
-        let out = self.plain == true ? swapped(data, localhost, standIn) : data
+        let out = self.toPage(data)
+        guard !out.isEmpty else { return self.pumpDown(task) }
         self.connection.send(content: out, completion: .contentProcessed { [weak self] error in
           if error != nil { self?.close() } else { self?.pumpDown(task) }
         })

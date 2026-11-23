@@ -96,8 +96,10 @@ impl Opening {
 pub struct ForwardState { pub port: u16, pub local: u16, pub error: Option<ForwardError> }
 
 type Shared = Arc<Mutex<Option<ForwardError>>>;
+/// Rota e senha que as próximas conexões usam: a senha do servidor pode mudar com o encaminhamento de pé.
+type Conn = Arc<Mutex<(Api, String)>>;
 
-struct Forward { status: watch::Receiver<Status>, error: Shared, task: Option<JoinHandle<()>> }
+struct Forward { status: watch::Receiver<Status>, error: Shared, conn: Conn, task: Option<JoinHandle<()>> }
 
 impl Forward {
     fn local(&self) -> Option<u16> { match &*self.status.borrow() { Some(Ok(local)) => Some(*local), _ => None } }
@@ -116,20 +118,25 @@ const RELEASE: Duration = Duration::from_millis(200);
 
 impl PortForwards {
     /// Não bloqueia: a sonda e a busca de porta livre rodam em `runtime`. A mesma porta do mesmo servidor de novo
-    /// devolve a abertura que já existe. `token` é a senha do dono do servidor de `api`, como nos outros sockets.
+    /// devolve a abertura que já existe, com `api` e `token` valendo para as próximas conexões dela. `token` é a senha
+    /// do dono do servidor de `api`, como nos outros sockets.
     pub fn open(&mut self, runtime: &Handle, api: &Api, token: &str, port: u16) -> Opening {
         let key = (api.identity(), port);
         match self.forwards.get(&key) {
             // Escuta que morreu (runtime fechando, descritor) ou abertura que falhou: tenta de novo.
             Some(forward) if forward.task.as_ref().is_some_and(JoinHandle::is_finished) => { self.forwards.remove(&key); }
-            Some(forward) => return Opening(forward.status.clone()),
+            Some(forward) => {
+                *lock_conn(&forward.conn) = (api.clone(), token.to_owned());
+                return Opening(forward.status.clone());
+            }
             None => {}
         }
         let closing = self.closing.remove(&key);
         let (tx, status) = watch::channel(None);
         let error = Shared::default();
-        let task = runtime.spawn(start(closing, api.clone(), token.to_owned(), port, error.clone(), tx));
-        self.forwards.insert(key, Forward { status: status.clone(), error, task: Some(task) });
+        let conn: Conn = Arc::new(Mutex::new((api.clone(), token.to_owned())));
+        let task = runtime.spawn(start(closing, conn.clone(), port, error.clone(), tx));
+        self.forwards.insert(key, Forward { status: status.clone(), error, conn, task: Some(task) });
         Opening(status)
     }
 
@@ -162,11 +169,14 @@ impl PortForwards {
 
 fn lock(error: &Shared) -> std::sync::MutexGuard<'_, Option<ForwardError>> { error.lock().unwrap_or_else(|e| e.into_inner()) }
 
+fn lock_conn(conn: &Conn) -> std::sync::MutexGuard<'_, (Api, String)> { conn.lock().unwrap_or_else(|e| e.into_inner()) }
+
 /// Sonda, porta livre e escuta, nesta ordem; o resultado vai a quem espera a abertura antes da escuta começar.
-async fn start(closing: Option<JoinHandle<()>>, api: Api, token: String, port: u16, error: Shared, tx: watch::Sender<Status>) {
+async fn start(closing: Option<JoinHandle<()>>, conn: Conn, port: u16, error: Shared, tx: watch::Sender<Status>) {
     // Parar e Encaminhar de novo: o abort solta a porta só quando o runtime roda a tarefa; sem esperar,
     // a porta pulava para a seguinte sem motivo.
     if let Some(task) = closing { let _ = timeout(RELEASE, task).await; }
+    let (api, token) = lock_conn(&conn).clone();
     let opened = match probe(&api, &token, PROBE_WAIT).await {
         Ok(false) => tokio::task::spawn_blocking(move || bind_from(port)).await.map_err(io::Error::other).and_then(|bound| bound)
             .and_then(|listener| { let local = listener.local_addr()?.port(); Ok((TcpListener::from_std(listener)?, local)) })
@@ -177,7 +187,7 @@ async fn start(closing: Option<JoinHandle<()>>, api: Api, token: String, port: u
     match opened {
         Ok((listener, local)) => {
             tx.send_replace(Some(Ok(local)));
-            listen(listener, api, token, port, error).await;
+            listen(listener, conn, port, error).await;
         }
         Err(failure) => { tx.send_replace(Some(Err(failure))); }
     }
@@ -250,9 +260,9 @@ fn taken_here(port: u16) -> bool {
     })
 }
 
-async fn listen(listener: TcpListener, api: Api, token: String, port: u16, error: Shared) {
+async fn listen(listener: TcpListener, conn: Conn, port: u16, error: Shared) {
     let full = error.clone();
-    accept_capped(listener, |tcp| connection(tcp, api.clone(), token.clone(), port, error.clone()),
+    accept_capped(listener, |tcp| { let (api, token) = lock_conn(&conn).clone(); connection(tcp, api, token, port, error.clone()) },
         move || *lock(&full) = Some(ForwardError::TooMany)).await
 }
 
@@ -409,7 +419,7 @@ mod tests {
         let request = String::from_utf8(request).unwrap();
         let port = request.strip_prefix("GET /api/port-tunnel?port=").and_then(|rest| rest.split('&').next())
             .and_then(|port| port.parse().ok()).unwrap_or_else(|| panic!("{request}"));
-        assert!(request.lines().next().is_some_and(|line| line.ends_with("&token=t HTTP/1.1")), "{request}");
+        assert!(request.lines().next().is_some_and(|line| line.contains("&token=") && line.ends_with(" HTTP/1.1")), "{request}");
         (request, port)
     }
 
@@ -615,6 +625,26 @@ mod tests {
             // estavel: intervalo da consulta até a escuta fechar; o teto é o `timeout(WAIT)` em volta
             tokio::time::sleep(Duration::from_millis(10)).await;
         } }).await.expect("a escuta local fecha");
+    }
+
+    #[tokio::test]
+    async fn opening_again_with_a_new_token_reaches_the_next_connections() {
+        let port = free_port();
+        // Só a senha nova abre o túnel: a velha recebe o 401 do porteiro.
+        let addr = fake_server(port, |mut socket, request| async move {
+            if request.lines().next().is_some_and(|line| line.contains("&token=new ")) { echo(socket, request).await }
+            else { respond(&mut socket, &request, 401, None).await }
+        }).await;
+        let api = api(addr);
+        let mut forwards = PortForwards::default();
+        let opening = forwards.open(&Handle::current(), &api, "old", port);
+        let local = timeout(WAIT, opening.wait()).await.unwrap().unwrap().unwrap();
+        let mut stale = TcpStream::connect((Ipv4Addr::LOCALHOST, local)).await.unwrap();
+        assert_eq!(read_to_end(&mut stale).await, b"");
+        let opening = forwards.open(&Handle::current(), &api, "new", port);
+        assert_eq!(timeout(WAIT, opening.wait()).await.unwrap().unwrap().unwrap(), local, "a mesma escuta continua");
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, local)).await.unwrap();
+        echoes(&mut client).await;
     }
 
     #[tokio::test]

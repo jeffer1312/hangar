@@ -6579,6 +6579,7 @@
   "native_ports_link_connect_off": "O Connect da máquina da sessão está desligado. Ligue em Configurações > Connect.",
   "native_ports_not_page": "Essa porta não é uma página.",
   "native_ports_other": "Outra porta…",
+  "native_ports_other_add": "Adicionar",
   "native_ports_err_listen": "Não deu para escutar neste computador: {error}",
   "native_ports_err_blocked": "Pelo Connect o túnel precisa deste computador aprovado como aparelho.",
   "native_ports_err_nothing": "Nada respondeu nessa porta na máquina da sessão.",

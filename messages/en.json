@@ -6579,6 +6579,7 @@
   "native_ports_link_connect_off": "Connect is off on the session's machine. Turn it on in Settings > Connect.",
   "native_ports_not_page": "That port isn't a page.",
   "native_ports_other": "Another port…",
+  "native_ports_other_add": "Add",
   "native_ports_err_listen": "Couldn't listen on this computer: {error}",
   "native_ports_err_blocked": "Through Connect the tunnel needs this computer approved as a device.",
   "native_ports_err_nothing": "Nothing answered on that port on the session's machine.",
