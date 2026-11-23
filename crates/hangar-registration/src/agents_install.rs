@@ -21,7 +21,7 @@ pub fn run(invocation: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
     };
     // Pacote: o link aponta para o `current`, não para a versão (a poda a apaga).
     let current = hangar_core::paths::current(&invocation.home);
-    if current.exists() && same_file(&current, &root) {
+    if current.exists() && hangar_core::fs::same_file(&current, &root) {
         root = current;
     }
     let home = invocation.target_home();
@@ -37,13 +37,6 @@ pub fn run(invocation: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
         let _ = writeln!(err, "erro: algum agente das skills ficou sem instalar (veja acima)");
     }
     u8::from(!all_ok)
-}
-
-fn same_file(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
 }
 
 /// O `glob("skills/*/agents/*.md")` do Python, em ordem: oculto fica de fora.

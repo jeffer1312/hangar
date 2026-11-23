@@ -45,10 +45,9 @@ pub fn write_entry(
     let previous = crate::state::env_of(known.as_ref(), paths, enabled)?;
     let env = managed_env(paths, &entry.agent_config, previous, &jev()?);
     let wanted = json!({"command": entry.command, "args": [], "env": env});
-    let main = paths.main_file();
     let mut written = Written::default();
     for file in files {
-        let account = file.path != main;
+        let account = paths.is_mirrored_account(&file.path);
         // Conta nunca aberta (vazia ou `{}`) ganha a entrada pelo espelho na primeira reconciliação.
         if account && file.data.is_empty() {
             continue;
@@ -127,7 +126,7 @@ pub(crate) fn register_entry(
     let binary = paths.binary().to_string_lossy().into_owned();
     let package = |entry: &Map<String, Value>| entry.get("command").and_then(Value::as_str) == Some(binary.as_str());
     let main = paths.main_file();
-    let opened = |file: &crate::FileEntry| file.path == main || !file.data.is_empty();
+    let opened = |file: &crate::FileEntry| !paths.is_mirrored_account(&file.path) || !file.data.is_empty();
     if files.iter().filter(|file| opened(*file)).all(|file| file.entry.as_ref().is_some_and(|entry| package(entry))) {
         // Entrada ativa de antes da marca (ligada à mão ou por versão antiga): só a marca entra.
         mark(paths)?;
@@ -147,7 +146,7 @@ pub(crate) fn register_entry(
     };
     let mut written = Written::default();
     for file in files {
-        let account = file.path != main;
+        let account = paths.is_mirrored_account(&file.path);
         if !opened(&file) {
             continue;
         }
@@ -489,6 +488,37 @@ mod tests {
         std::fs::write(&target, b"third writer").unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"third writer");
         assert_eq!(std::fs::read(saved).unwrap(), br#"{"external":"preserved"}"#);
+    }
+
+    /// O arquivo que a conta padrão lê entra antes de o CLI criá-lo, senão nasceria sem a entrada; as outras
+    /// contas só com o arquivo.
+    #[test]
+    fn the_default_account_file_is_listed_before_the_cli_creates_it() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let mut paths = Paths::new(home.to_owned(), vec![home.join(".claude"), home.join("acc")]);
+        paths.default_account = Some(home.join(".claude"));
+        let files = paths.config_files();
+        assert!(files.contains(&home.join(".claude").join(".claude.json")), "{files:?}");
+        assert!(!files.contains(&home.join("acc").join(".claude.json")), "{files:?}");
+        std::fs::create_dir_all(home.join("acc")).unwrap();
+        std::fs::write(paths.main_file(), b"{}").unwrap();
+        write_entry(&paths, &entry(), || Ok(Map::new())).unwrap();
+        let default = std::fs::read_to_string(home.join(".claude").join(".claude.json")).expect("o arquivo da conta padrão nasce com a entrada");
+        assert!(default.contains(NAME), "{default}");
+        assert!(!home.join("acc").join(".claude.json").exists(), "conta nunca aberta segue para o espelho");
+    }
+
+    /// `CLAUDE_CONFIG_DIR` no próprio HOME com o principal ainda inexistente: um arquivo só, senão a segunda
+    /// trava do mesmo arquivo recusa o registro.
+    #[test]
+    fn the_default_account_in_the_home_is_the_main_file_even_before_it_exists() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        let mut paths = Paths::new(home.to_owned(), vec![home.to_owned()]);
+        paths.default_account = Some(home.to_owned());
+        assert_eq!(paths.config_files(), vec![paths.main_file()]);
     }
 
     fn with_account(home: &Path) -> Paths {

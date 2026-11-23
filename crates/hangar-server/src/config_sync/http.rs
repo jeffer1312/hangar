@@ -34,6 +34,7 @@ pub fn context(st: &AppState) -> Context {
     let mut context = Context::new(roots);
     context.worktree_home = st.origins_home.clone();
     context.preferences = env.claude_base.join("runtime-config.json");
+    context.claude_json = env.default_claude_json();
     context.engines = crate::engines::store::path(env);
     if cfg!(windows) {
         if let Some(appdata) = env.base.get("APPDATA").filter(|s| !s.is_empty()) {

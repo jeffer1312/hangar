@@ -151,16 +151,29 @@ pub(crate) fn paths(st: &AppState) -> Result<setup::Paths, setup::Error> {
 }
 
 /// `~/.claude.json` e o de cada conta do catálogo, menos a pasta padrão: a lista das rotas, do registro
-/// e do `sync_jev`.
+/// e do `sync_jev`. A pasta cujo `.claude.json` a conta padrão lê (`CLAUDE_CONFIG_DIR` no servidor) entra
+/// sempre, esteja ou não no catálogo.
 pub(crate) fn account_paths(accounts: &crate::accounts::AccountService) -> Result<setup::Paths, String> {
+    use crate::accounts::catalog::resolved;
     let home = &accounts.env.home;
-    let default = crate::accounts::catalog::resolved(&home.join(".claude"));
-    let homes = accounts.claude_accounts().map_err(|e| e.message)?
+    let default = resolved(&home.join(".claude"));
+    let mut homes: Vec<std::path::PathBuf> = accounts.claude_accounts().map_err(|e| e.message)?
         .into_iter()
         .map(|(_, account)| account.home)
-        .filter(|account| crate::accounts::catalog::resolved(account) != default)
+        .filter(|account| resolved(account) != default)
         .collect();
-    Ok(setup::Paths::new(home.clone(), homes))
+    let read_by_default = accounts.env.default_claude_json();
+    let mut default_account = None;
+    if let Some(dir) = read_by_default.parent().filter(|_| read_by_default != home.join(".claude.json")) {
+        let dir_real = resolved(dir);
+        match homes.iter().find(|account| resolved(account) == dir_real) {
+            Some(account) => default_account = Some(account.clone()),
+            None => { homes.push(dir.to_owned()); default_account = Some(dir.to_owned()); }
+        }
+    }
+    let mut paths = setup::Paths::new(home.clone(), homes);
+    paths.default_account = default_account;
+    Ok(paths)
 }
 
 fn facts(st: &AppState, config: &RuntimeConfig) -> setup::Facts {

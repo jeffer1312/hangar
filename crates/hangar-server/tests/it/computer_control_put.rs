@@ -130,6 +130,26 @@ fn off_state() -> Value {
     }))
 }
 
+/// Servidor com `CLAUDE_CONFIG_DIR=~/.claude`: as sessões da conta padrão leem `~/.claude/.claude.json`, que
+/// recebe a entrada junto com o principal; sem a variável elas leem o `~/.claude.json`, e o de dentro da
+/// pasta fica como estava.
+#[tokio::test]
+async fn turn_on_reaches_the_file_the_default_account_reads() {
+    for config_dir in [true, false] {
+        let s = Scene::with_config_dir(config_dir).await;
+        s.r2();
+        s.write(".claude/.claude.json", ACCOUNT_X);
+        let (status, body) = s.put(on()).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(s.json_at(".claude.json"), s.h(with_entry(MAIN, full_env())));
+        if config_dir {
+            assert_eq!(s.json_at(".claude/.claude.json"), s.h(with_entry(ACCOUNT_X, full_env())));
+        } else {
+            assert_eq!(s.read(".claude/.claude.json").as_deref(), Some(ACCOUNT_X));
+        }
+    }
+}
+
 /// ROT-07, ROT-12, ROT-17, ROT-19, ROT-68, ROT-74, ROT-76, JEV-03, JEV-04, JEV-07, D2.5 (r2-ligar-pacote):
 /// principal e conta x recebem a entrada com o binário do pacote; y (`{}`) e z (sem arquivo) ficam.
 #[tokio::test]

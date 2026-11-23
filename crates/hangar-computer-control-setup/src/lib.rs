@@ -38,11 +38,14 @@ pub struct Error {
     pub params: Value,
 }
 
-/// Caminhos de uma máquina. `accounts` são as pastas de conta Claude fora de `~/.claude`.
+/// Caminhos de uma máquina. `accounts` são as pastas de conta Claude fora de `~/.claude`, mais a pasta do
+/// `CLAUDE_CONFIG_DIR` cujo `.claude.json` a conta padrão lê (pode ser o próprio `~/.claude`).
 #[derive(Clone, Debug)]
 pub struct Paths {
     pub home: PathBuf,
     pub accounts: Vec<PathBuf>,
+    /// A pasta de `accounts` cujo `.claude.json` a conta padrão lê: entra mesmo antes de o CLI criá-lo.
+    pub default_account: Option<PathBuf>,
 }
 
 impl Error {
@@ -78,10 +81,15 @@ impl Error {
 
 impl Paths {
     pub fn new(home: PathBuf, accounts: Vec<PathBuf>) -> Self {
-        Self { home, accounts }
+        Self { home, accounts, default_account: None }
     }
     pub fn main_file(&self) -> PathBuf {
         self.home.join(".claude.json")
+    }
+    /// Arquivo de uma conta que ganha a entrada pelo espelho quando nunca foi aberta. O principal e o
+    /// da conta padrão, não: a sessão os lê como estão.
+    pub fn is_mirrored_account(&self, path: &Path) -> bool {
+        path != self.main_file() && self.default_account.as_ref().is_none_or(|dir| dir.join(".claude.json") != path)
     }
     /// Entrada guardada ao desligar: a marca de "desligado à mão".
     pub fn parked_file(&self) -> PathBuf {
@@ -122,11 +130,22 @@ impl Paths {
     pub fn ssh_config(&self) -> PathBuf {
         self.home.join(".ssh").join("config")
     }
-    /// O principal sempre; de cada conta, só o `.claude.json` que já existe.
+    /// O principal sempre; de cada conta, só o `.claude.json` que já existe (o da conta padrão, mesmo
+    /// antes) e não é o próprio principal (`CLAUDE_CONFIG_DIR` apontando para o HOME).
     pub fn config_files(&self) -> Vec<PathBuf> {
-        let accounts = self.accounts.iter().map(|dir| dir.join(".claude.json")).filter(|p| p.is_file());
-        std::iter::once(self.main_file()).chain(accounts).collect()
+        let main = self.main_file();
+        let main_real = identity(&main);
+        let default_file = self.default_account.as_ref().filter(|dir| dir.is_dir()).map(|dir| dir.join(".claude.json"));
+        let accounts: Vec<PathBuf> = self.accounts.iter().map(|dir| dir.join(".claude.json"))
+            .filter(|p| (p.is_file() || Some(p) == default_file.as_ref()) && identity(p) != main_real)
+            .collect();
+        std::iter::once(main).chain(accounts).collect()
     }
+}
+
+/// Caminho físico de um `.claude.json`: o canônico ou, antes de o arquivo existir, a pasta canônica mais o nome.
+fn identity(file: &Path) -> Option<PathBuf> {
+    file.canonicalize().ok().or_else(|| Some(file.parent()?.canonicalize().ok()?.join(file.file_name()?)))
 }
 
 /// Há release do hcu para esta plataforma (Windows e Linux x86_64).

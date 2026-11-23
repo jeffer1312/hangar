@@ -433,7 +433,7 @@ pub(super) async fn reconcile_account(env:&crate::accounts::environment::Account
     let Some(dir)=config_dir.filter(|dir|!dir.is_empty()) else {return Ok(Vec::new())};
     let Some(account)=crate::session_open::claude::hangar_account(std::path::Path::new(dir)) else {return Ok(Vec::new())};
     let diary=crate::diag::diary_dir_in(env);
-    let (_,result)=crate::session_open::open::reconcile_hangar_dir(env.home.clone(),dir,&account,cwd,crate::session_open::open::RECONCILE_LIMIT,None,
+    let (_,result)=crate::session_open::open::reconcile_hangar_dir(env.home.clone(),Some(env.default_claude_json()),dir,&account,cwd,crate::session_open::open::RECONCILE_LIMIT,None,
         |events|{crate::diag::record(diary,events,"conta");}).await;
     result.map_err(|error|refused(error.code.unwrap_or("erro_conta_reconciliacao_falhou"),&error.msg))
 }

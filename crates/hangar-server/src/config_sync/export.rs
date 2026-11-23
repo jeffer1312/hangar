@@ -48,6 +48,9 @@ pub struct Context {
     pub worktree_home: PathBuf,
     pub aliases: PathBuf,
     pub native: PathBuf,
+    /// O `.claude.json` que a conta padrão lê (`AccountEnvironment::default_claude_json`): de onde saem e
+    /// para onde vão os `mcpServers` compartilhados.
+    pub claude_json: PathBuf,
     pub progress: Option<tokio::sync::mpsc::UnboundedSender<Value>>,
 }
 impl Context {
@@ -57,6 +60,7 @@ impl Context {
             engines: Path::new(&roots.claude).join("engines.json"),
             preferences: Path::new(&roots.claude).join("runtime-config.json"),
             worktree_home: PathBuf::from(&roots.home),
+            claude_json: Path::new(&roots.home).join(".claude.json"),
             aliases: Path::new(&roots.claude).join(".hangar-apelidos.json"),
             native: Path::new(&roots.home).join(if cfg!(windows) {
                 "AppData/Roaming/hangar-native"
@@ -660,7 +664,7 @@ fn export_item(
             Ok(data)
         }
         "claude_mcp" => {
-            let raw = read_json(&Path::new(&roots.home).join(".claude.json"))?;
+            let raw = read_json(&ctx.claude_json)?;
             let mut all = pick(&raw["mcpServers"], None, "");
             all.as_object_mut()
                 .unwrap()

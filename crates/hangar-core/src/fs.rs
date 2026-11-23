@@ -10,6 +10,11 @@ pub struct QueueRefusal(pub &'static str);
 impl std::fmt::Display for QueueRefusal { fn fmt(&self, f:&mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.0) } }
 impl std::error::Error for QueueRefusal {}
 
+/// Os dois caminhos levam ao mesmo arquivo existente (links e grafias resolvidos).
+pub fn same_file(left: &Path, right: &Path) -> bool {
+    matches!((left.canonicalize(), right.canonicalize()), (Ok(left), Ok(right)) if left == right)
+}
+
 pub fn invalid(message: &'static str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, QueueRefusal(message)) }
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);

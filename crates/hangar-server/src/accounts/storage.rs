@@ -5,7 +5,7 @@ use std::{
 };
 
 pub const PENDING: &str = ".hangar-account-pending";
-pub const CLAUDE_MARKER: &str = ".hangar-conta";
+pub const CLAUDE_MARKER: &str = hangar_core::account_env::CLAUDE_ACCOUNT_MARKER;
 pub const CODEX_MARKER: &str = ".hangar-codex-conta";
 
 pub fn real_file(path: &Path) -> bool {
