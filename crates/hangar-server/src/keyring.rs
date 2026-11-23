@@ -40,7 +40,7 @@ pub enum DefaultOpen { Opened, Refused, NoAnswer }
 
 /// Tentativa sem senha: `Later` = sem tela, desbloqueio do dono em curso ou leitura que não veio.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Unattended { Asked(DefaultOpen), Later, Nothing }
+pub enum Unattended { Asked(DefaultOpen), Later, Unread, Nothing }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnlockError { Denied, Failed, NoDaemon, DefaultLocked }
@@ -63,8 +63,18 @@ impl UnlockError {
     }
 }
 
-/// Uma volta do desbloqueio com senha.
-enum Step { Done(KeyringState), LoginStuck, DefaultStuck }
+/// Uma volta do desbloqueio com senha. `Stuck` pede reinício; `DefaultClosed` não.
+enum Step { Done(KeyringState), LoginStuck, DefaultStuck, DefaultClosed }
+
+impl Step {
+    fn of(reading: Reading) -> Self {
+        match (reading.login, reading.default) {
+            (KeyringState::Locked, _) => Self::LoginStuck,
+            (_, KeyringState::Locked) => Self::DefaultClosed,
+            _ => Self::Done(reading.combined()),
+        }
+    }
+}
 
 /// O que a máquina oferece; o teste troca por um falso.
 pub trait Backend: Send + Sync {
@@ -87,16 +97,21 @@ pub struct Keyring {
     tx: tokio::sync::watch::Sender<KeyringState>,
     /// Um desbloqueio por vez: o automático desiste se o do dono estiver em curso.
     gate: std::sync::Mutex<()>,
-    /// Este daemon já ficou sem responder ao pedido do `default`: preso por um prompt que falhou.
-    stuck: std::sync::atomic::AtomicBool,
-    /// A tentativa sem senha já pediu o `default` a este daemon.
-    asked: std::sync::atomic::AtomicBool,
+    /// Um pedido do `default` por vez: o do dono espera o prompt automático em curso e usa o resultado.
+    asking: std::sync::Mutex<()>,
+    /// Vida do daemon: sobe a cada troca. As marcas abaixo guardam a vida em que valem.
+    life: std::sync::atomic::AtomicU64,
+    /// Vida em que o daemon ficou sem responder ao pedido do `default` (preso por um prompt que falhou).
+    stuck: std::sync::atomic::AtomicU64,
+    /// Vida em que a tentativa sem senha já pediu o `default`.
+    asked: std::sync::atomic::AtomicU64,
 }
 
 impl Keyring {
     pub fn system() -> Self {
         Self { backend: std::sync::RwLock::new(std::sync::Arc::new(System::default())), real: true.into(),
-            tx: tokio::sync::watch::channel(KeyringState::Absent).0, gate: Default::default(), stuck: false.into(), asked: false.into() }
+            tx: tokio::sync::watch::channel(KeyringState::Absent).0, gate: Default::default(), asking: Default::default(),
+            life: 1.into(), stuck: 0.into(), asked: 0.into() }
     }
 
     pub fn set_backend(&self, backend: std::sync::Arc<dyn Backend>) {
@@ -113,12 +128,13 @@ impl Keyring {
     fn backend(&self) -> std::sync::Arc<dyn Backend> { self.backend.read().unwrap_or_else(|e| e.into_inner()).clone() }
 
     /// Daemon novo no barramento: o que se sabia do anterior não vale.
-    pub fn daemon_changed(&self) {
-        self.stuck.store(false, std::sync::atomic::Ordering::Relaxed);
-        self.asked.store(false, std::sync::atomic::Ordering::Relaxed);
-    }
+    pub fn daemon_changed(&self) { self.life.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }
 
-    fn asked(&self) -> bool { self.asked.load(std::sync::atomic::Ordering::Relaxed) }
+    fn life(&self) -> u64 { self.life.load(std::sync::atomic::Ordering::SeqCst) }
+
+    fn marked(&self, mark: &std::sync::atomic::AtomicU64) -> bool { mark.load(std::sync::atomic::Ordering::SeqCst) == self.life() }
+
+    fn asked(&self) -> bool { self.marked(&self.asked) }
 
     /// Bloqueante.
     pub fn refresh(&self) -> KeyringState { self.read().map(Reading::combined).unwrap_or_else(|| self.current()) }
@@ -142,70 +158,89 @@ impl Keyring {
             let Ok(_gate) = self.gate.try_lock() else { return Unattended::Later };
             if self.asked() { return Unattended::Nothing; }
             if !backend.display() { return Unattended::Later; }
-            // Leitura que não veio não se repete aqui: o laço de espera viraria consulta periódica.
-            if !self.read().is_some_and(Reading::default_waits) { return Unattended::Nothing; }
-            self.asked.store(true, std::sync::atomic::Ordering::Relaxed);
+            match self.read() {
+                None => return Unattended::Unread,
+                Some(reading) if !reading.default_waits() => return Unattended::Nothing,
+                Some(_) => {}
+            }
+            self.asked.store(self.life(), std::sync::atomic::Ordering::SeqCst);
         }
-        // Fora da trava: o desbloqueio do dono não espera o prazo deste pedido.
-        let outcome = self.ask_default(&*backend);
+        // Fora da trava: o desbloqueio do dono não espera aqui, espera no pedido (`asking`).
+        let outcome = self.ask_default(backend.as_ref());
         self.read();
         Unattended::Asked(outcome)
     }
 
+    /// Daemon já visto sem resposta nesta vida: não pede de novo, a espera só gastaria o prazo.
     fn ask_default(&self, backend: &dyn Backend) -> DefaultOpen {
+        let _asking = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let life = self.life();
+        if self.marked(&self.stuck) { return DefaultOpen::NoAnswer; }
         let outcome = backend.open_default();
         match outcome {
             DefaultOpen::NoAnswer => {
-                self.stuck.store(true, std::sync::atomic::Ordering::Relaxed);
+                // Vida de antes do pedido: daemon trocado no meio não herda a marca.
+                self.stuck.store(life, std::sync::atomic::Ordering::SeqCst);
                 tracing::warn!(code = "keyring_default_no_answer", "o daemon não respondeu ao pedido do chaveiro padrão");
             }
             DefaultOpen::Refused => tracing::warn!(code = "keyring_default_refused", "o daemon recusou abrir o chaveiro padrão"),
-            DefaultOpen::Opened => tracing::info!(code = "keyring_default_opened", "chaveiro padrão aberto"),
+            DefaultOpen::Opened => tracing::info!(code = "keyring_default_opened", "o daemon abriu o chaveiro padrão"),
         }
         outcome
     }
 
     /// Bloqueante. Abre o `login` pela senha e depois o `default`. Senha aceita e `login` ainda
     /// trancado, ou `default` sem resposta, é o daemon preso por um prompt que falhou: reinicia e
-    /// dá mais uma volta. Leitura que não veio não conta como trancado: reiniciar à toa trancaria o
-    /// chaveiro que acabou de abrir.
+    /// dá mais uma volta, se couber no prazo. Leitura que não veio não conta como trancado: reiniciar
+    /// à toa trancaria o chaveiro que acabou de abrir.
     pub fn unlock(&self, password: &[u8]) -> Result<KeyringState, UnlockError> {
+        let deadline = std::time::Instant::now() + UNLOCK_BUDGET;
         let _gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
         let backend = self.backend();
-        // Daemon já visto sem resposta: esperar o prazo de novo só gastaria o tempo do cliente.
-        let mut step = self.unlock_once(&*backend, password, self.stuck.load(std::sync::atomic::Ordering::Relaxed))?;
-        if !matches!(step, Step::Done(_)) && self.restart(&*backend) {
-            step = self.unlock_once(&*backend, password, false)?;
+        let mut step = self.unlock_once(backend.as_ref(), password, deadline)?;
+        if matches!(step, Step::LoginStuck | Step::DefaultStuck) {
+            if std::time::Instant::now() + RESTART_LIMIT + ASK_LIMIT > deadline {
+                tracing::warn!(code = "keyring_unlock_out_of_time", "sem prazo para reiniciar o daemon do chaveiro");
+            } else if self.restart(backend.as_ref()) {
+                step = self.unlock_once(backend.as_ref(), password, deadline)?;
+            } else {
+                // O reinício pode ter trocado o daemon sem deixá-lo pronto: vale o que se lê agora.
+                step = Step::of(self.read().ok_or(UnlockError::Failed)?);
+            }
         }
         match step {
             Step::Done(state) => Ok(state),
             Step::LoginStuck => Err(UnlockError::Failed),
-            Step::DefaultStuck => Err(UnlockError::DefaultLocked),
+            Step::DefaultStuck | Step::DefaultClosed => Err(UnlockError::DefaultLocked),
         }
     }
 
-    fn unlock_once(&self, backend: &dyn Backend, password: &[u8], skip_ask: bool) -> Result<Step, UnlockError> {
+    fn unlock_once(&self, backend: &dyn Backend, password: &[u8], deadline: std::time::Instant) -> Result<Step, UnlockError> {
         backend.unlock(password)?;
         let reading = self.read().ok_or(UnlockError::Failed)?;
-        if reading.login == KeyringState::Locked { return Ok(Step::LoginStuck); }
-        if !reading.default_waits() { return Ok(Step::Done(reading.combined())); }
+        if !reading.default_waits() { return Ok(Step::of(reading)); }
         if !backend.display() {
             tracing::info!(code = "keyring_default_no_display", "sem tela para o prompter; o chaveiro padrão fica trancado");
-            return Err(UnlockError::DefaultLocked);
+            return Ok(Step::DefaultClosed);
         }
-        if skip_ask || self.ask_default(backend) == DefaultOpen::NoAnswer { return Ok(Step::DefaultStuck); }
-        match self.read().ok_or(UnlockError::Failed)?.combined() {
-            KeyringState::Locked => Err(UnlockError::DefaultLocked),
-            state => Ok(Step::Done(state)),
-        }
+        if std::time::Instant::now() + ASK_LIMIT > deadline { return Ok(Step::DefaultClosed); }
+        if self.ask_default(backend) == DefaultOpen::NoAnswer { return Ok(Step::DefaultStuck); }
+        Ok(Step::of(self.read().ok_or(UnlockError::Failed)?))
     }
 
+    /// A tentativa já conta como troca de daemon: o reinício que falha no meio também pode tê-lo trocado.
     fn restart(&self, backend: &dyn Backend) -> bool {
-        let ok = backend.restart();
-        if ok { self.daemon_changed(); }
-        ok
+        self.daemon_changed();
+        backend.restart()
     }
 }
+
+/// Resposta inteira do desbloqueio, abaixo dos 45 s que os clientes esperam.
+const UNLOCK_BUDGET: Duration = Duration::from_secs(38);
+/// Pedido inteiro do `default`: com a senha guardada no login o prompter responde em menos de um segundo.
+const ASK_LIMIT: Duration = Duration::from_secs(10);
+/// `systemctl restart` e a espera do socket de controle.
+const RESTART_LIMIT: Duration = Duration::from_secs(12);
 
 #[cfg(target_os = "linux")]
 const SECRETS: &str = "org.freedesktop.secrets";
@@ -214,15 +249,13 @@ const LOGIN: &str = "/org/freedesktop/secrets/collection/login";
 #[cfg(target_os = "linux")]
 const DEFAULT_ALIAS: &str = "/org/freedesktop/secrets/aliases/default";
 #[cfg(target_os = "linux")]
-const CALL_LIMIT: Duration = Duration::from_secs(5);
-/// Pedido inteiro do `default`: com a senha guardada no login o prompter responde em menos de um
-/// segundo. Dois pedidos e um reinício cabem nos 45 s que os clientes esperam.
+const PROPS: &str = "org.freedesktop.DBus.Properties";
 #[cfg(target_os = "linux")]
-const PROMPT_LIMIT: Duration = Duration::from_secs(10);
+const CALL_LIMIT: Duration = Duration::from_secs(5);
 
-/// O chaveiro de verdade, pelo `busctl`, pelo socket de controle e, para o `default`, por uma conexão
-/// que fica: prompt sem resposta continua vivo para quem estiver diante da tela, e o fim dele chega
-/// pela escuta (`CollectionChanged`).
+/// O chaveiro de verdade: o socket de controle para a senha e uma conexão ao barramento que fica.
+/// Ela distingue coleção ausente de leitura que falhou pelo nome do erro, e mantém vivo o prompt sem
+/// resposta para quem estiver diante da tela; o fim dele chega pela escuta (`CollectionChanged`).
 #[derive(Default)]
 struct System {
     #[cfg(target_os = "linux")]
@@ -230,9 +263,42 @@ struct System {
 }
 
 #[cfg(target_os = "linux")]
+impl System {
+    fn connection(&self, rt: &tokio::runtime::Handle) -> Option<zbus::Connection> {
+        let mut cached = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(conn) = cached.as_ref() { return Some(conn.clone()); }
+        match rt.block_on(tokio::time::timeout(CALL_LIMIT, zbus::Connection::session())) {
+            Ok(Ok(conn)) => Some(cached.insert(conn).clone()),
+            _ => {
+                tracing::warn!(code = "keyring_bus_failed", "sem conexão ao barramento para o chaveiro");
+                None
+            }
+        }
+    }
+
+    fn forget(&self) { *self.conn.lock().unwrap_or_else(|e| e.into_inner()) = None; }
+
+    /// Só fora do runtime assíncrono (`spawn_blocking`); sem runtime, nada.
+    fn runtime() -> Option<tokio::runtime::Handle> {
+        let rt = tokio::runtime::Handle::try_current().ok();
+        if rt.is_none() { tracing::warn!(code = "keyring_no_runtime", "chaveiro consultado fora do runtime"); }
+        rt
+    }
+}
+
+#[cfg(target_os = "linux")]
 impl Backend for System {
     fn state(&self) -> Option<Reading> {
-        Some(Reading { login: busctl_locked(LOGIN)?, default: busctl_locked(DEFAULT_ALIAS)? })
+        let rt = Self::runtime()?;
+        let conn = self.connection(&rt)?;
+        let reading = rt.block_on(async {
+            let bus = zbus::fdo::DBusProxy::new(&conn).await.ok()?;
+            let login = secret_proxy(&conn, LOGIN, PROPS).await.ok()?;
+            let default = secret_proxy(&conn, DEFAULT_ALIAS, PROPS).await.ok()?;
+            locked_state(&bus, &login, &default).await
+        });
+        if reading.is_none() { self.forget(); }
+        reading
     }
 
     fn unlock(&self, password: &[u8]) -> Result<(), UnlockError> {
@@ -267,46 +333,18 @@ impl Backend for System {
     fn display(&self) -> bool { crate::display_env::user_manager_has_display() }
 
     fn open_default(&self) -> DefaultOpen {
-        let Ok(rt) = tokio::runtime::Handle::try_current() else {
-            tracing::warn!(code = "keyring_default_no_runtime", "pedido do chaveiro padrão fora do runtime");
-            return DefaultOpen::Refused;
-        };
-        let cached = self.conn.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let conn = match cached {
-            Some(conn) => conn,
-            None => match rt.block_on(tokio::time::timeout(CALL_LIMIT, zbus::Connection::session())) {
-                Ok(Ok(conn)) => {
-                    *self.conn.lock().unwrap_or_else(|e| e.into_inner()) = Some(conn.clone());
-                    conn
-                }
-                _ => {
-                    tracing::warn!(code = "keyring_default_bus_failed", "sem conexão ao barramento para abrir o chaveiro padrão");
-                    return DefaultOpen::Refused;
-                }
-            },
-        };
+        let Some(rt) = Self::runtime() else { return DefaultOpen::Refused };
+        let Some(conn) = self.connection(&rt) else { return DefaultOpen::Refused };
         // Um prazo para o pedido inteiro: o daemon preso pode parar em qualquer passo.
-        match rt.block_on(async { tokio::time::timeout(PROMPT_LIMIT, prompt_default(&conn)).await.unwrap_or(Ok(DefaultOpen::NoAnswer)) }) {
+        match rt.block_on(async { tokio::time::timeout(ASK_LIMIT, prompt_default(&conn)).await.unwrap_or(Ok(DefaultOpen::NoAnswer)) }) {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::warn!(code = "keyring_default_bus_failed", %error, "pedido do chaveiro padrão falhou no barramento");
-                *self.conn.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                self.forget();
                 DefaultOpen::Refused
             }
         }
     }
-}
-
-/// Saída com erro: ninguém no barramento ou coleção que não existe.
-#[cfg(target_os = "linux")]
-fn busctl_locked(path: &str) -> Option<KeyringState> {
-    // `--auto-start=no`: perguntar não sobe o daemon; sem daemon não há o que destrancar.
-    let mut cmd = std::process::Command::new("busctl");
-    cmd.args(["--user", "--auto-start=no", "get-property", SECRETS, path, "org.freedesktop.Secret.Collection", "Locked"]);
-    // Prazo estourado ou busctl que não rodou: sem leitura.
-    let out = hangar_workspace::process::run_program(&mut cmd, CALL_LIMIT).ok()?;
-    if out.code != 0 { return Some(KeyringState::Absent); }
-    parse_locked(&out.stdout).map(KeyringState::from_locked)
 }
 
 #[cfg(target_os = "linux")]
@@ -324,11 +362,20 @@ fn refused(error: zbus::Error) -> zbus::Result<DefaultOpen> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn opened_any(result: &zbus::zvariant::Value<'_>) -> bool {
+    match result {
+        zbus::zvariant::Value::Value(inner) => opened_any(inner),
+        zbus::zvariant::Value::Array(paths) => !paths.is_empty(),
+        _ => false,
+    }
+}
+
 /// O caminho do Chrome: `Unlock` e, vindo prompt, `Prompt("")` até o `Completed`. `Err` = a conexão falhou.
 #[cfg(target_os = "linux")]
 async fn prompt_default(conn: &zbus::Connection) -> zbus::Result<DefaultOpen> {
     use futures_util::StreamExt;
-    use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
+    use zbus::zvariant::{ObjectPath, OwnedObjectPath};
     let no_start = || zbus::proxy::MethodFlags::NoAutoStart.into();
     let service = secret_proxy(conn, "/org/freedesktop/secrets", "org.freedesktop.Secret.Service").await?;
     let target = (vec![ObjectPath::try_from(DEFAULT_ALIAS)?],);
@@ -344,8 +391,10 @@ async fn prompt_default(conn: &zbus::Connection) -> zbus::Result<DefaultOpen> {
     let prompt = secret_proxy(conn, prompt.as_str(), "org.freedesktop.Secret.Prompt").await?;
     let mut completed = prompt.receive_signal("Completed").await?;
     if let Err(error) = prompt.call_with_flags::<_, _, ()>("Prompt", no_start(), &("",)).await { return refused(error); }
-    Ok(match completed.next().await {
-        Some(msg) if matches!(msg.body().deserialize::<(bool, OwnedValue)>(), Ok((false, _))) => DefaultOpen::Opened,
+    // `Completed(false, abertos)`: não dispensado; a lista vazia não abriu nada.
+    let Some(msg) = completed.next().await else { return Ok(DefaultOpen::Refused) };
+    Ok(match msg.body().deserialize::<(bool, zbus::zvariant::Value<'_>)>() {
+        Ok((false, result)) if opened_any(&result) => DefaultOpen::Opened,
         _ => DefaultOpen::Refused,
     })
 }
@@ -395,7 +444,6 @@ async fn watch(keyring: &std::sync::Arc<Keyring>) -> zbus::Result<()> {
     let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal)
         .interface("org.freedesktop.Secret.Service")?.build();
     let mut changes = zbus::MessageStream::for_match_rule(rule, &conn, None).await?;
-    const PROPS: &str = "org.freedesktop.DBus.Properties";
     let (login, default) = (secret_proxy(&conn, LOGIN, PROPS).await?, secret_proxy(&conn, DEFAULT_ALIAS, PROPS).await?);
     tracing::info!(code = "keyring_watch_ready", name = ?conn.unique_name(), "escuta do chaveiro ligada");
     // Releituras com atraso, contadas: leitura que falhou, ou daemon recém-subido que ainda não exportou a coleção.
@@ -442,9 +490,12 @@ async fn watch(keyring: &std::sync::Arc<Keyring>) -> zbus::Result<()> {
 /// Secret Service enquanto espera.
 #[cfg(target_os = "linux")]
 async fn open_default_when_ready(keyring: std::sync::Arc<Keyring>) {
+    let mut unread = 0;
     for _ in 0..120 {
         let k = keyring.clone();
         match tokio::task::spawn_blocking(move || k.open_default_unattended()).await {
+            // Três leituras que falham e para: daqui em diante só um sinal da escuta tenta de novo.
+            Ok(Unattended::Unread) if unread < 2 => { unread += 1; tokio::time::sleep(Duration::from_secs(5)).await }
             // estavel: código de produção, não teste; é o intervalo entre olhadas no ambiente do systemd à espera da tela.
             Ok(Unattended::Later) => tokio::time::sleep(Duration::from_secs(5)).await,
             Ok(_) => return,
@@ -572,14 +623,6 @@ pub fn control_unlock(socket: &Path, password: &[u8]) -> Result<(), UnlockError>
     }
 }
 
-pub fn parse_locked(busctl_output: &str) -> Option<bool> {
-    match busctl_output.trim() {
-        "b true" => Some(true),
-        "b false" => Some(false),
-        _ => None,
-    }
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -636,6 +679,8 @@ mod tests {
     #[ignore = "precisa de um gnome-keyring isolado; ver o roteiro do teste manual"]
     fn system_backend_against_an_isolated_daemon() {
         let pw = std::env::var("KR_PW").unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _inside = rt.enter();
         let k = Keyring::system();
         assert_eq!(k.refresh(), KeyringState::Locked);
         assert_eq!(k.unlock(b"errada"), Err(UnlockError::Denied));
@@ -643,7 +688,7 @@ mod tests {
         assert_eq!(k.current(), KeyringState::Unlocked);
     }
 
-    /// Leitura que não veio (busctl estourou o prazo sob carga) não é "sem chaveiro": o aviso fica.
+    /// Leitura que não veio (prazo estourado sob carga) não é "sem chaveiro": o aviso fica.
     #[test]
     fn an_unread_state_keeps_the_last_one() {
         struct Script(std::sync::Mutex<Vec<Option<KeyringState>>>);
@@ -689,13 +734,14 @@ mod tests {
 
     #[derive(Default)]
     struct Model { login_locked: bool, default_locked: bool, display: bool, stuck: bool, stuck_after_restart: bool,
-        login_sticks: bool, login_sticks_after_restart: bool,
+        login_sticks: bool, login_sticks_after_restart: bool, restart_fails: bool, restart_keeps_daemon: bool, unreadable: bool,
         reads: u32, unlocks: u32, restarts: u32, opens: u32 }
 
     impl Backend for Daemon {
         fn state(&self) -> Option<Reading> {
             let mut m = self.0.lock().unwrap();
             m.reads += 1;
+            if m.unreadable { return None; }
             Some(Reading { login: KeyringState::from_locked(m.login_locked), default: KeyringState::from_locked(m.default_locked) })
         }
         fn unlock(&self, password: &[u8]) -> Result<(), UnlockError> {
@@ -708,8 +754,10 @@ mod tests {
         fn restart(&self) -> bool {
             let mut m = self.0.lock().unwrap();
             m.restarts += 1;
-            (m.login_locked, m.default_locked, m.stuck, m.login_sticks) = (true, true, m.stuck_after_restart, m.login_sticks_after_restart);
-            true
+            if !m.restart_keeps_daemon {
+                (m.login_locked, m.default_locked, m.stuck, m.login_sticks) = (true, true, m.stuck_after_restart, m.login_sticks_after_restart);
+            }
+            !m.restart_fails
         }
         fn display(&self) -> bool { self.0.lock().unwrap().display }
         fn open_default(&self) -> DefaultOpen {
@@ -782,6 +830,64 @@ mod tests {
         daemon.0.lock().unwrap().stuck = false;
         k.daemon_changed();
         assert_eq!(k.open_default_unattended(), Unattended::Asked(DefaultOpen::Opened));
+    }
+
+    /// Leitura que falhou não encerra a tentativa: o laço tenta de novo, com limite.
+    #[test]
+    fn an_unread_state_before_the_unattended_request_comes_back() {
+        let (k, daemon) = with(Model { default_locked: true, display: true, unreadable: true, ..Default::default() });
+        assert_eq!(k.open_default_unattended(), Unattended::Unread);
+        daemon.0.lock().unwrap().unreadable = false;
+        assert_eq!(k.open_default_unattended(), Unattended::Asked(DefaultOpen::Opened));
+    }
+
+    /// Pedido sem senha esperando o prompt: o desbloqueio do dono espera esse pedido e usa o resultado,
+    /// sem abrir um segundo prompt atrás dele.
+    #[test]
+    fn the_password_unlock_waits_for_the_unattended_prompt() {
+        struct Held { inner: std::sync::Arc<Daemon>, entered: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+            release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>> }
+        impl Backend for Held {
+            fn state(&self) -> Option<Reading> { self.inner.state() }
+            fn unlock(&self, password: &[u8]) -> Result<(), UnlockError> { self.inner.unlock(password) }
+            fn restart(&self) -> bool { self.inner.restart() }
+            fn display(&self) -> bool { self.inner.display() }
+            fn open_default(&self) -> DefaultOpen {
+                if let Some(entered) = self.entered.lock().unwrap().take() {
+                    entered.send(()).unwrap();
+                    let release = self.release.lock().unwrap().take().unwrap();
+                    release.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+                }
+                self.inner.open_default()
+            }
+        }
+        let daemon = std::sync::Arc::new(Daemon(std::sync::Mutex::new(Model { default_locked: true, display: true, stuck: true, ..Default::default() })));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let k = std::sync::Arc::new(Keyring::system());
+        k.set_backend(std::sync::Arc::new(Held { inner: daemon.clone(), entered: Some(entered_tx).into(), release: Some(release_rx).into() }));
+        let auto = std::thread::spawn({ let k = k.clone(); move || k.open_default_unattended() });
+        entered_rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        let route = std::thread::spawn({ let k = k.clone(); move || k.unlock(b"certa") });
+        release_tx.send(()).unwrap();
+        assert_eq!(auto.join().unwrap(), Unattended::Asked(DefaultOpen::NoAnswer));
+        assert_eq!(route.join().unwrap(), Ok(KeyringState::Unlocked));
+        let m = daemon.0.lock().unwrap();
+        assert_eq!((m.opens, m.restarts), (2, 1), "um pedido preso, o reinício e um pedido no daemon novo");
+    }
+
+    /// Reinício recusado: o daemon antigo segue com o login aberto, e a resposta diz isso.
+    #[test]
+    fn a_refused_restart_reports_the_daemon_that_stayed() {
+        let (k, _) = with(Model { default_locked: true, display: true, stuck: true, restart_fails: true, restart_keeps_daemon: true, ..Default::default() });
+        assert_eq!(k.unlock(b"certa"), Err(UnlockError::DefaultLocked));
+    }
+
+    /// Daemon trocado sem ficar pronto: o login do daemon novo está trancado, e a resposta não diz que abriu.
+    #[test]
+    fn a_restart_that_replaced_the_daemon_but_failed_is_not_reported_as_open() {
+        let (k, _) = with(Model { default_locked: true, display: true, stuck: true, restart_fails: true, ..Default::default() });
+        assert_eq!(k.unlock(b"certa"), Err(UnlockError::Failed));
     }
 
     /// Desbloqueio do dono em curso: a tentativa automática volta depois, não desiste de vez.
@@ -857,10 +963,4 @@ mod tests {
         assert_eq!((m.login_locked, m.opens, m.restarts), (false, 0, 0));
     }
 
-    #[test]
-    fn locked_property_is_read_from_busctl_output() {
-        assert_eq!(parse_locked("b true\n"), Some(true));
-        assert_eq!(parse_locked("b false\n"), Some(false));
-        assert_eq!(parse_locked("Failed to get property"), None);
-    }
 }

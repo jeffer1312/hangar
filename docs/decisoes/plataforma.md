@@ -3839,9 +3839,14 @@ status antigo. Nada novo no Python para isso.
 ## Chaveiro trancado no boot: o Rust detecta e o dono destranca de outra máquina (26/10/2026)
 
 **Regra.** O `hangar-server` lê `Locked` da coleção `login` e do alias `default`
-(`/org/freedesktop/secrets/aliases/default`, o do Chrome e do Slack) só quando o daemon avisa
-(troca de dono do nome, `CollectionChanged`), nunca por consulta periódica, e publica o evento
-`keyring` (`{state}`) na lista do dono: qualquer das duas trancada é `locked`. O
+(`/org/freedesktop/secrets/aliases/default`, o do Chrome e do Slack), sempre por uma conexão ao
+barramento que fica aberta, e publica o evento
+`keyring` (`{state}`) na lista do dono: qualquer das duas trancada é `locked`. Não há consulta
+periódica: a escuta lê ao ligar, a cada sinal do daemon (troca de dono do nome, `CollectionChanged`)
+e, depois de troca de dono ou leitura que falhou, no máximo três releituras espaçadas de 2 s; fora
+dela, só o desbloqueio com senha e a tentativa automática abaixo leem, cada um poucas vezes. Erro de
+coleção ou serviço inexistente é `absent`; qualquer outra falha é leitura que não veio, e o último
+estado fica. O
 `POST /api/keyring/unlock` só aceita o token do dono, nunca é repassado ao Python e manda a senha
 pelo socket de controle do gnome-keyring (`$XDG_RUNTIME_DIR/keyring/control`, protocolo do
 `gkr-pam`). Senha aceita e `login` ainda trancado: reinicia `gnome-keyring-daemon.service` e
@@ -3852,17 +3857,26 @@ e só abre pelo fluxo do prompter (`Secret.Service.Unlock` e `Prompt`). Com o `l
 `default` trancado:
 - Sem senha, o servidor pede o `default` uma vez por vida do daemon, numa conexão própria que
   fica aberta (o prompt sem resposta continua vivo para quem estiver diante da tela). Antes de
-  pedir, espera a tela no ambiente do `systemd --user` (`WAYLAND_DISPLAY`/`DISPLAY`, que é o que o
-  prompter ativado pelo barramento herda), olhando a cada 5 s por até 10 min, sem ler o Secret
-  Service. Sem resposta em 10 s, o daemon fica marcado como preso e o aviso continua. Ele **não**
+  pedir, espera a tela no ambiente do `systemd --user`, que é o que o prompter ativado pelo
+  barramento herda (`display_env::has_display`: `WAYLAND_DISPLAY` ou `DISPLAY` local só valem com o
+  socket de pé; X de outra máquina vale), olhando a cada 5 s por até 10 min, sem ler o Secret
+  Service. Leitura que falha antes do pedido tenta de novo até três vezes. Sem resposta em 10 s, o
+  daemon fica marcado como preso naquela vida (a marca guarda a vida do daemon, e um daemon novo não
+  a herda) e o aviso continua. Ele **não**
   reinicia o daemon: isso trancaria o `login` que o PAM abriu, mataria o prompt de quem estiver
   digitando, e o dono teria de digitar a senha do mesmo jeito.
-- Com a senha (aviso do Hangar), abre o `login` e pede o `default`. Daemon já marcado como preso
-  ou sem resposta no prazo: reinicia, manda a senha ao `login` do daemon novo e pede o `default`
-  de novo. O reinício continua sendo um só por pedido. Sem tela, ou o `default` ainda trancado no
-  fim: 409 `keyring_default_locked` ("o login abriu, mas o chaveiro padrão continua trancado").
-- Default trancado à mão depois de aberto fica trancado: a tentativa automática não se repete na
-  mesma vida do daemon.
+- Com a senha (aviso do Hangar), abre o `login` e pede o `default`. Um pedido do `default` por
+  vez: com o automático esperando o prompt, o do dono espera o resultado dele em vez de abrir um
+  segundo prompt atrás. Daemon já marcado como preso ou sem resposta no prazo: reinicia, manda a
+  senha ao `login` do daemon novo e pede o `default` de novo. O reinício é um só por pedido, e a
+  resposta inteira tem 38 s (os clientes esperam 45): sem prazo para reiniciar e pedir de novo (12 s
+  + 10 s), ou para pedir o `default` (10 s), para ali. A resposta sai das duas coleções lidas no
+  fim: `login` trancado é 409 `keyring_unlock_failed`; só o `default` trancado (também sem tela) é
+  409 `keyring_default_locked` ("o login abriu, mas o chaveiro padrão continua trancado"). Reinício
+  que falha não decide a resposta: o daemon pode ter sido trocado, e vale o que se lê depois.
+- Daemon que já recebeu a tentativa automática: o `default` trancado à mão depois fica trancado,
+  porque ela não se repete na mesma vida do daemon. Num daemon em que o `default` já estava aberto,
+  trancá-lo à mão com o `login` aberto dispara a primeira (e única) tentativa.
 
 **Por quê (23/11).** Às 08:13:42 o backend, de pé antes do login gráfico, pediu o Secret Service e o
 daemon tentou o `gcr-prompter` sem display (`cannot open display`). Às 08:13:44 o PAM do sddm abriu o

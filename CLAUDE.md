@@ -709,9 +709,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   Código novo de diagnóstico entra em `DIAGNOSTIC` de `problem_gate.rs`. Critério e tabela em
   [plataforma.md](docs/decisoes/plataforma.md#aviso-na-tela-só-para-ação-que-falhou-ou-bloqueio-real-20102026).
 - **Chaveiro trancado é do Rust (`keyring.rs`): estado no evento `keyring` da lista do dono,
-  senha só pelo `POST /api/keyring/unlock`.** O estado junta o `login` e o alias `default` e só é
-  lido quando o daemon avisa; com o `login` aberto o servidor pede o `default` sozinho, e só o
-  desbloqueio com senha reinicia o daemon preso. Só o token do dono, nunca repassado ao Python; a
+  senha só pelo `POST /api/keyring/unlock`.** O estado junta o `login` e o alias `default`, sem
+  consulta periódica (a escuta lê nos sinais do daemon e em poucas releituras limitadas); com o
+  `login` aberto o servidor pede o `default` sozinho, e só o desbloqueio com senha reinicia o
+  daemon preso. Só o token do dono, nunca repassado ao Python; a
   senha vai pelo socket de controle do gnome-keyring, nunca por `gnome-keyring-daemon --unlock`
   (com daemon de pé ele sobe outro e não abre nada), linha de comando, log ou disco. Os três
   clientes mostram o aviso por servidor. Evidência em

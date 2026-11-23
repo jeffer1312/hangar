@@ -70,7 +70,28 @@ fn sources(current: &impl Fn(&str) -> Option<String>) -> (String, Option<PathBuf
 pub fn has_display(systemd: &str) -> bool {
     let value = |key: &str| systemd.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix('=')).filter(|v| !v.is_empty());
     let runtime = value("XDG_RUNTIME_DIR").map(Path::new);
-    value("WAYLAND_DISPLAY").is_some_and(|socket| runtime.is_none_or(|run| run.join(socket).exists())) || value("DISPLAY").is_some()
+    let wayland = value("WAYLAND_DISPLAY").and_then(|name| match Path::new(name) {
+        path if path.is_absolute() => Some(path.to_path_buf()),
+        _ => runtime.map(|run| run.join(name)),
+    });
+    wayland.is_some_and(|path| is_socket(&path)) || value("DISPLAY").is_some_and(x11_alive)
+}
+
+/// `:N` local tem o socket em `/tmp/.X11-unix/XN`; X de outra máquina não se confere daqui.
+fn x11_alive(display: &str) -> bool {
+    match display.split_once(':') {
+        Some(("" | "unix", rest)) => rest.split('.').next().and_then(|n| n.parse::<u32>().ok())
+            .is_some_and(|n| is_socket(Path::new(&format!("/tmp/.X11-unix/X{n}")))),
+        Some(_) => true,
+        None => false,
+    }
+}
+
+fn is_socket(path: &Path) -> bool {
+    #[cfg(unix)]
+    { use std::os::unix::fs::FileTypeExt; std::fs::metadata(path).is_ok_and(|m| m.file_type().is_socket()) }
+    #[cfg(not(unix))]
+    { let _ = path; false }
 }
 
 /// `has_display` com o gerenciador lido agora; fora do Linux, não.
@@ -195,14 +216,20 @@ mod tests {
         assert!(read_with_limit(std::process::Command::new("sh").args(["-c", "sleep 5"]), std::time::Duration::from_millis(200)).is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_user_manager_has_a_display_only_with_a_live_socket() {
         let run = tempfile::tempdir().unwrap();
-        std::fs::write(run.path().join("wayland-1"), "").unwrap();
+        let _socket = std::os::unix::net::UnixListener::bind(run.path().join("wayland-1")).unwrap();
+        std::fs::write(run.path().join("wayland-2"), "").unwrap();
         let dir = run.path().display();
         assert!(has_display(&format!("XDG_RUNTIME_DIR={dir}\nWAYLAND_DISPLAY=wayland-1\n")));
+        assert!(has_display(&format!("WAYLAND_DISPLAY={dir}/wayland-1\n")), "caminho absoluto vale sem a pasta de runtime");
         assert!(!has_display(&format!("XDG_RUNTIME_DIR={dir}\nWAYLAND_DISPLAY=wayland-0\n")), "socket de um Hyprland que já saiu");
-        assert!(has_display("DISPLAY=:1\n"));
+        assert!(!has_display(&format!("XDG_RUNTIME_DIR={dir}\nWAYLAND_DISPLAY=wayland-2\n")), "arquivo comum não é socket");
+        assert!(!has_display("WAYLAND_DISPLAY=wayland-1\n"), "nome relativo sem a pasta de runtime não se confere");
+        assert!(!has_display("DISPLAY=:987654\n"), "X local sem o socket em /tmp/.X11-unix");
+        assert!(has_display("DISPLAY=outra-maquina:0\n"), "X remoto não se confere daqui");
         assert!(!has_display("HOME=/home/x\nDISPLAY=\nXDISPLAY=:0\n"));
     }
 
