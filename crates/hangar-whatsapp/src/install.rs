@@ -391,6 +391,12 @@ mod tests {
         assert_eq!(paths.data, Path::new("/home/u/.hangar/whatsapp"));
         assert_eq!(paths.service, Path::new("/home/u/.hangar/whatsapp-service"));
         assert!(!paths.record().starts_with(&paths.data) && !paths.accepted().starts_with(&paths.data));
+    }
+
+    // A unit é do systemd: os caminhos esperados usam `/`, que no Windows o `Path::join` troca por `\`.
+    #[cfg(unix)]
+    #[test]
+    fn the_unit_points_the_program_at_the_data_folder() {
         let unit = service::systemd_unit(&Context::new(Path::new("/home/u")).service(Path::new("/home/u/.hangar/whatsapp-service/bin/0.1.0/hangar-whatsapp")));
         assert!(unit.contains("ExecStart=\"/home/u/.hangar/whatsapp-service/bin/0.1.0/hangar-whatsapp\" --data \"/home/u/.hangar/whatsapp\"\n"), "{unit}");
     }
