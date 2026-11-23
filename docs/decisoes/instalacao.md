@@ -1566,3 +1566,4 @@ está no CI) não exercitam a atualização nem a criação de sessão.
 - **Branch passada ao `server-jobs.yml` é `pr-<número>`, nunca a do PR.** Um PR da `beta` para a
   `main` passaria `beta`, que liga a publicação da `server-beta` e cai na concorrência dos runs de
   push dela.
+- Prova temporária: PR só de docs.
