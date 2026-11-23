@@ -73,7 +73,7 @@ mod tests {
         assert!(systemd_unit(&odd).contains("ExecStart=\"/home/a%%b/cli-proxy-api\" --config \"/home/a%%b/config.yaml\"\n"), "o `%` do caminho não vira especificador");
     }
 
-    /// Os arquivos de serviço que as instalações existentes já têm: o crate genérico não pode mudar um byte.
+    /// A unit e o plist que as instalações existentes já têm, byte a byte; o script da tarefa também para o laço do `.vbs`.
     #[test]
     fn service_files_stay_byte_for_byte_the_ones_already_installed() {
         assert_eq!(systemd_unit(&service()), "[Unit]\nDescription=CLIProxyAPI (instalado pelo Hangar)\nAfter=network.target\n\n\
@@ -89,6 +89,7 @@ mod tests {
         let script = windows_script(Path::new(r"C:\h\hangar-cliproxy.vbs"), Path::new(r"C:\h\.hangar\cliproxy"));
         assert_eq!(script, "$ErrorActionPreference = 'Stop'\n\
             Stop-ScheduledTask -TaskName 'hangar-cliproxy' -ErrorAction SilentlyContinue\n\
+            Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf('\\hangar-cliproxy.vbs\"', [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\n\
             Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith('C:\\h\\.hangar\\cliproxy\\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force\n\
             $a = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '\"C:\\h\\hangar-cliproxy.vbs\"'\n\
             $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME\n\
@@ -105,9 +106,11 @@ mod tests {
     }
 
     #[test]
-    fn windows_launcher_waits_hidden_and_quotes_paths() {
+    fn windows_launcher_relaunches_hidden_and_quotes_paths() {
         let s = Service { binary: r"C:\Users\O'Neil\.hangar\cliproxy\bin\8.0.79\cli-proxy-api.exe".into(), config: r"C:\Users\O'Neil\.cli-proxy-api\config.yaml".into() };
-        assert_eq!(windows_vbs(&s), "WScript.Quit CreateObject(\"WScript.Shell\").Run(\"\"\"C:\\Users\\O'Neil\\.hangar\\cliproxy\\bin\\8.0.79\\cli-proxy-api.exe\"\" --config \"\"C:\\Users\\O'Neil\\.cli-proxy-api\\config.yaml\"\"\", 0, True)\r\n");
+        assert_eq!(windows_vbs(&s), "Set shell = CreateObject(\"WScript.Shell\")\r\nDo\r\n\
+            code = shell.Run(\"\"\"C:\\Users\\O'Neil\\.hangar\\cliproxy\\bin\\8.0.79\\cli-proxy-api.exe\"\" --config \"\"C:\\Users\\O'Neil\\.cli-proxy-api\\config.yaml\"\"\", 0, True)\r\n\
+            WScript.Sleep 10000\r\nLoop\r\n", "sem código de parada, religa sempre");
         assert_eq!(&encode_vbs("W")[..4], &[0xFF, 0xFE, b'W', 0]);
         let script = windows_script(Path::new(r"C:\Users\O'Neil\AppData\Local\hangar\hangar-cliproxy.vbs"), Path::new(r"C:\Users\O'Neil\.hangar\cliproxy"));
         assert!(script.contains(r#"-Argument '"C:\Users\O''Neil\AppData\Local\hangar\hangar-cliproxy.vbs"'"#), "{script}");

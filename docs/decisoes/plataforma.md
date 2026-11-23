@@ -85,8 +85,8 @@ Decisões do usuário:
 
 - **Serviço próprio.** O binário vem da release de `router-for-me/CLIProxyAPI`, conferido pelo
   `checksums.txt`, em `~/.hangar/cliproxy/bin/<versão>/`, e roda como unit de usuário
-  `hangar-cliproxy.service`, tarefa `hangar-cliproxy` no Windows (`.vbs` sem janela, reinício em
-  falha) ou launchd `dev.hangar.cliproxy`. Proxy que já existe (pacote do AUR com
+  `hangar-cliproxy.service`, tarefa `hangar-cliproxy` no Windows (`.vbs` sem janela que religa o programa 10 s depois
+  de cada saída) ou launchd `dev.hangar.cliproxy`. Proxy que já existe (pacote do AUR com
   `cli-proxy-api.service`, binário no PATH) é `external`: nada é baixado nem registrado, o
   "Usar como está" só completa o config.
 - **Proxy de fora passa ao Hangar só a pedido (21/11).** Contas mostra a linha do CLIProxyAPI

@@ -17,9 +17,9 @@ pub struct ServiceId {
     pub task: &'static str,
     /// `Description=` da unit.
     pub description: &'static str,
-    /// Código de saída em que o programa avisa que religar não adianta. Só a unit do systemd filtra
-    /// (`RestartPreventExitStatus=`); o Agendador do Windows já não religa ação que sai com erro, e o
-    /// launchd não filtra por código e segue religando no ritmo dele.
+    /// Código de saída em que o programa avisa que religar não adianta. A unit do systemd
+    /// (`RestartPreventExitStatus=`) e o laço do `.vbs` do Windows param nele; o launchd não filtra por
+    /// código e segue religando no ritmo dele.
     pub no_restart_exit: Option<u8>,
 }
 
@@ -98,7 +98,9 @@ pub fn launchd_plist(s: &Service) -> String {
     )
 }
 
-/// O WSH abre o programa sem janela e espera por ele, para a tarefa religar quando o processo cai.
+/// O WSH abre o programa sem janela, espera por ele e o religa 10 s depois de cada saída, como o
+/// `Restart=always` da unit: o Agendador só religa a tarefa que falha ao iniciar, nunca o programa que cai.
+/// Com `no_restart_exit`, essa saída encerra o laço e vira o resultado da tarefa.
 pub fn windows_vbs(s: &Service) -> String {
     let mut line = format!("\"{}\"", s.executable.display());
     for arg in &s.args {
@@ -108,7 +110,11 @@ pub fn windows_vbs(s: &Service) -> String {
             Arg::Path(path) => format!("\"{}\"", path.display()),
         });
     }
-    format!("WScript.Quit CreateObject(\"WScript.Shell\").Run(\"{}\", 0, True)\r\n", line.replace('"', "\"\""))
+    let stop = s.id.no_restart_exit.map(|code| format!("If code = {code} Then WScript.Quit code\r\n")).unwrap_or_default();
+    format!(
+        "Set shell = CreateObject(\"WScript.Shell\")\r\nDo\r\ncode = shell.Run(\"{}\", 0, True)\r\n{stop}WScript.Sleep 10000\r\nLoop\r\n",
+        line.replace('"', "\"\"")
+    )
 }
 
 /// UTF-16LE com BOM, como o instalador grava os `.vbs` das tarefas do Hangar.
@@ -125,11 +131,16 @@ fn process_prefix(managed_dir: &Path) -> String {
     ps_quote(&format!("{}\\", managed_dir.display().to_string().trim_end_matches(['\\', '/'])))
 }
 
-/// As linhas que param a tarefa `task` (já entre aspas) e o programa que roda da pasta do Hangar.
-fn ps_stop(task: &str, managed_dir: &Path) -> String {
+/// As linhas que param a tarefa, o laço do `.vbs` e o programa que roda da pasta do Hangar, nesta ordem: o
+/// laço vivo religaria o programa morto. O `wscript.exe` é achado também pelo `.vbs` na linha de comando,
+/// porque o `Stop-ScheduledTask` falha calado.
+fn ps_stop(id: &ServiceId, managed_dir: &Path) -> String {
     format!(
         "Stop-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue\n\
+         Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandLine -and $_.CommandLine.IndexOf({vbs}, [StringComparison]::OrdinalIgnoreCase) -ge 0 }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}\n\
          Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.StartsWith({dir}, [StringComparison]::OrdinalIgnoreCase) }} | Stop-Process -Force\n",
+        task = ps_quote(id.task),
+        vbs = ps_quote(&format!("\\{}.vbs\"", id.task)),
         dir = process_prefix(managed_dir),
     )
 }
@@ -144,7 +155,7 @@ pub fn windows_script(id: &ServiceId, vbs: &Path, managed_dir: &Path, start: boo
          $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME\n\
          $s = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew\n\
          Register-ScheduledTask -TaskName {task} -Action $a -Trigger $t -Settings $s -Force | Out-Null\n",
-        stop = ps_stop(&task, managed_dir),
+        stop = ps_stop(id, managed_dir),
         arg = ps_quote(&format!("\"{}\"", vbs.display())),
     );
     if start {
@@ -164,7 +175,7 @@ pub fn windows_unregister_script(id: &ServiceId, managed_dir: &Path) -> String {
         "$ErrorActionPreference = 'Stop'\n\
          {stop}\
          if (Get-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue) {{ Unregister-ScheduledTask -TaskName {task} -Confirm:$false }}\n",
-        stop = ps_stop(&task, managed_dir),
+        stop = ps_stop(id, managed_dir),
     )
 }
 
@@ -411,7 +422,8 @@ fn launchd_state(list: &str) -> ProcessState {
     ProcessState { running: true, last_exit }
 }
 
-/// `State=` e `LastTaskResult=` da tarefa: o `.vbs` sai com o código do programa, que vira o resultado dela.
+/// `State=` e `LastTaskResult=` da tarefa: o laço do `.vbs` só sai sozinho com o `no_restart_exit` do programa,
+/// que vira o resultado dela; esperando religar, a tarefa segue `Running`.
 /// Sem o programa ou o `.vbs` no disco (`files_present` falso), o resultado é do Windows, não do programa: o 3
 /// também é `ERROR_PATH_NOT_FOUND`. `running` só é `false` com a tarefa pronta (`Ready`) ou desligada
 /// (`Disabled`): rodando, na fila ou em estado desconhecido, o programa pode estar abrindo os dados.
@@ -466,7 +478,9 @@ mod tests {
     #[test]
     fn the_windows_launcher_and_scripts_use_the_task_name() {
         let s = service(r"C:\Users\O'Neil\.hangar\whatsapp\bin\0.1.0\hangar-whatsapp.exe", r"C:\Users\O'Neil\.hangar\whatsapp");
-        assert_eq!(windows_vbs(&s), "WScript.Quit CreateObject(\"WScript.Shell\").Run(\"\"\"C:\\Users\\O'Neil\\.hangar\\whatsapp\\bin\\0.1.0\\hangar-whatsapp.exe\"\" --data \"\"C:\\Users\\O'Neil\\.hangar\\whatsapp\"\"\", 0, True)\r\n");
+        assert_eq!(windows_vbs(&s), "Set shell = CreateObject(\"WScript.Shell\")\r\nDo\r\n\
+            code = shell.Run(\"\"\"C:\\Users\\O'Neil\\.hangar\\whatsapp\\bin\\0.1.0\\hangar-whatsapp.exe\"\" --data \"\"C:\\Users\\O'Neil\\.hangar\\whatsapp\"\"\", 0, True)\r\n\
+            WScript.Sleep 10000\r\nLoop\r\n");
         let vbs = Path::new(r"C:\Users\O'Neil\AppData\Local\hangar\hangar-whatsapp.vbs");
         let dir = Path::new(r"C:\Users\O'Neil\.hangar\whatsapp");
         let installed = windows_script(&WHATSAPP, vbs, dir, false);
@@ -489,18 +503,37 @@ mod tests {
         assert!(windows_vbs_path(home, &WHATSAPP).ends_with("hangar/hangar-whatsapp.vbs"));
     }
 
+    /// Como a unit, o laço do `.vbs` religa 10 s depois de qualquer saída, menos a do código pedido.
     #[test]
-    fn a_code_that_must_not_restart_goes_into_the_unit_only_when_asked() {
+    fn a_code_that_must_not_restart_stops_the_unit_and_the_windows_loop_only_when_asked() {
         let id = ServiceId { no_restart_exit: Some(3), ..WHATSAPP };
         let s = |id| Service { id, executable: "/x/p".into(), args: Vec::new() };
         let unit = systemd_unit(&s(id));
         assert!(unit.contains("Restart=always\nRestartSec=10\nRestartPreventExitStatus=3\n\n[Install]\n"), "{unit}");
         assert!(!systemd_unit(&s(WHATSAPP)).contains("RestartPreventExitStatus"));
-        // O launchd não filtra por código e o Agendador já não religa saída com erro: nada muda neles.
+        assert_eq!(windows_vbs(&s(WHATSAPP)), "Set shell = CreateObject(\"WScript.Shell\")\r\nDo\r\n\
+            code = shell.Run(\"\"\"/x/p\"\"\", 0, True)\r\nWScript.Sleep 10000\r\nLoop\r\n");
+        assert_eq!(windows_vbs(&s(id)), "Set shell = CreateObject(\"WScript.Shell\")\r\nDo\r\n\
+            code = shell.Run(\"\"\"/x/p\"\"\", 0, True)\r\nIf code = 3 Then WScript.Quit code\r\nWScript.Sleep 10000\r\nLoop\r\n");
+        // O launchd não filtra por código: nada muda nele nem na tarefa.
         assert_eq!(launchd_plist(&s(id)), launchd_plist(&s(WHATSAPP)));
-        assert_eq!(windows_vbs(&s(id)), windows_vbs(&s(WHATSAPP)));
         let (vbs, dir) = (Path::new(r"C:\h\w.vbs"), Path::new(r"C:\h\w"));
         assert_eq!(windows_script(&id, vbs, dir, true), windows_script(&WHATSAPP, vbs, dir, true));
+    }
+
+    /// Parar mata o laço do `.vbs` antes do programa: vivo, ele religaria a versão antiga no meio da troca ou o
+    /// programa depois de removido, mesmo que o `Stop-ScheduledTask` não o tenha alcançado.
+    #[test]
+    fn stopping_kills_the_relaunch_loop_before_the_program() {
+        let dir = Path::new(r"C:\h\w");
+        let scripts = [windows_script(&WHATSAPP, Path::new(r"C:\h\hangar-whatsapp.vbs"), dir, true), windows_unregister_script(&WHATSAPP, dir)];
+        for script in scripts {
+            let task = script.find("Stop-ScheduledTask -TaskName 'hangar-whatsapp'").unwrap_or_else(|| panic!("{script}"));
+            let wsh = script.find("Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\"").unwrap_or_else(|| panic!("{script}"));
+            let program = script.find("$_.Path.StartsWith('C:\\h\\w\\'").unwrap_or_else(|| panic!("{script}"));
+            assert!(task < wsh && wsh < program, "{script}");
+            assert!(script.contains(r#"$_.CommandLine.IndexOf('\hangar-whatsapp.vbs"', [StringComparison]::OrdinalIgnoreCase) -ge 0"#), "{script}");
+        }
     }
 
     #[test]

@@ -90,6 +90,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   Python (a volta) também é religada. Só a escolha da primeira vida que falha sai com código 3.
   Lançador morto à força só volta no logon: o Agendador não religa tarefa que sai com erro.
   [Medição](#a-vigia-mora-no-lançador-17112026).
+- **Programa gerenciado pelo Hangar (WhatsApp, CLIProxy) religa pelo laço do `.vbs`, nunca pelo
+  Agendador.** O `.vbs` da tarefa (`hangar-managed-binary`) relança o programa 10 s depois de cada
+  saída, como o `Restart=always` da unit, e só sai com o `no_restart_exit` do serviço (o 3 do
+  WhatsApp), que vira o `LastTaskResult`. Parar, atualizar e remover param a tarefa, depois o
+  `wscript.exe` que roda esse `.vbs` e só então o programa: o laço vivo religaria a versão antiga ou
+  o programa removido. O `.vbs` novo só chega à máquina quando o programa é instalado, religado ou
+  atualizado. [Medição](#programa-gerenciado-religa-pelo-laço-do-vbs-23112026).
 - **O reinício do backend só vale com a porta aberta, e a porta do front pode ser do servidor.**
   `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes enquanto a tarefa parar sem abrir a
   porta, e falha com erro se nenhuma tentativa ficar de pé; `LastRunTime` não prova a subida. Tarefa
@@ -1282,3 +1289,18 @@ O arquivo das escolhas mora em `~/.hangar/claude-settings/<sha1 do JSON>.json`: 
 mesmas escolhas usam o mesmo, nada fica preso a uma sessão, e a abertura e a reabertura o regravam
 se faltar. A variável `HANGAR_CLAUDE_SETTINGS` continua com o JSON, e é dela que a reabertura relê as
 escolhas: pelo `-e`, fora do comando, o mesmo JSON chegou intacto ao processo do pane.
+
+## Programa gerenciado religa pelo laço do `.vbs` (23/11/2026)
+
+Medido na DELPHI-02 com o pacote 0.1.0.11503: depois de `Stop-Process -Force` no
+`hangar-whatsapp.exe`, o processo continuou morto 80 s depois. A tarefa `hangar-whatsapp` ficou
+`Ready` com `LastTaskResult=4294967295`: o `.vbs` esperava o programa e saía com o código dele, e o
+`RestartCount 999` / 1 min da tarefa não dispara, porque o Agendador só religa a tarefa que falha
+ao iniciar. Religar pela tela (`POST /api/whatsapp/install`) trouxe o serviço de volta.
+
+O `.vbs` passou a ser um laço `Do … Loop` com `WScript.Sleep 10000` entre as tentativas; com
+`no_restart_exit`, `If code = <n> Then WScript.Quit code`. Enquanto espera religar, a tarefa fica
+`Running`, e o Hangar conta o serviço como de pé (apagar os dados do WhatsApp recusa), como a unit
+em `auto-restart`. A parada mata também o `wscript.exe` cuja linha de comando tem
+`\<tarefa>.vbs"`, porque o `Stop-ScheduledTask` roda com `-ErrorAction SilentlyContinue` e uma falha
+dele deixaria o laço religar o programa antigo no meio da troca ou depois da remoção.
