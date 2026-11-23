@@ -331,6 +331,7 @@ async fn b28_sigterm_with_an_open_sse_stops_within_the_deadline() {
     let stream = loop {
         let response = client.get(format!("http://127.0.0.1:{port}/api/sessions/events")).bearer_auth("proof").send().await.unwrap();
         if response.status() == 200 { break response; }
+        assert_eq!(response.status(), 503, "só a preparação faz esperar");
         assert!(Instant::now() < deadline, "a lista não abriu: {}", response.status());
         // estavel: intervalo de consulta da espera pela lista, com teto de 30 s.
         tokio::time::sleep(Duration::from_millis(100)).await;
