@@ -114,8 +114,7 @@ it.each([
   store.rows = [{ ...session, provider: 'kimi', serverId: 'outro' }, { ...session, provider }];
   render();
   expect(avatar()).not.toBeNull();
-  if ('path' in mark) expect(avatar()?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
-  else expect(avatar()?.textContent).toBe(mark.letter);
+  expect(avatar()?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
   if ('color' in mark) expect(avatar()?.querySelector('svg')?.getAttribute('fill')).toBe(mark.color);
   expect(avatar()?.style.width).toBe('30px');
   expect(title()?.style.minHeight).toBe('44px');

@@ -217,8 +217,7 @@ describe('SessionRow', () => {
         const glyph = container.querySelector('[data-testid="session-avatar"]');
         expect(glyph).not.toBeNull();
         expect(name?.previousElementSibling).toBeNull();
-        if ('path' in mark) expect(glyph?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
-        else expect(glyph?.textContent).toBe(mark.letter);
+        expect(glyph?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
         expect(container.textContent).not.toContain(label);
         expect(container.textContent).toContain('repo · main');
         expect(container.querySelector('button[aria-label^="api,"]')?.getAttribute('aria-label')).toContain(label);
