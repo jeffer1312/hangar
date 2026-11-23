@@ -60,7 +60,7 @@ impl Binding {
     pub fn state_events(&self) -> Option<&'static [&'static str]> {
         match (self.provider, self.headless) {
             (Provider::Claude, _) => Some(&STATE_EVENTS),
-            (Provider::ClaudeHeadless | Provider::Pi | Provider::Omp | Provider::Kimi, _) | (Provider::Codex, true) => Some(&FEED_EVENTS),
+            (Provider::ClaudeHeadless | Provider::Pi | Provider::Omp | Provider::Kimi | Provider::Antigravity, _) | (Provider::Codex, true) => Some(&FEED_EVENTS),
             (Provider::Orq, _) => Some(&["state"]),
             _ => None,
         }
@@ -68,7 +68,7 @@ impl Binding {
 
     /// O estado desta ligação sai do feed do runtime (o ator escreve no canal em processo).
     pub fn runtime_feed(&self) -> bool {
-        matches!((self.provider, self.headless), (Provider::ClaudeHeadless | Provider::Pi | Provider::Omp | Provider::Kimi, _) | (Provider::Codex, true))
+        matches!((self.provider, self.headless), (Provider::ClaudeHeadless | Provider::Pi | Provider::Omp | Provider::Kimi | Provider::Antigravity, _) | (Provider::Codex, true))
     }
 
     pub fn has_transcript_path(&self) -> bool { !self.jsonl.as_os_str().is_empty() }
@@ -78,7 +78,7 @@ impl Binding {
         let provider = Provider::parse(&info.provider)?;
         let jsonl = match info.jsonl.clone() {
             Some(path) => path,
-            None if matches!(provider, Provider::Pi | Provider::Omp | Provider::Kimi) && info.session_key.is_empty() => PathBuf::new(),
+            None if matches!(provider, Provider::Pi | Provider::Omp | Provider::Kimi | Provider::Antigravity) && info.session_key.is_empty() => PathBuf::new(),
             None => return None,
         };
         Some(Binding {

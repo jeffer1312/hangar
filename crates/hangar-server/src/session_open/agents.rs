@@ -9,7 +9,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use super::terminal::PaneSpec;
-use super::{Account, AgentProvider, OpenError, SessionSpec};
+use super::{Account, AgentProvider, OpenError, PermissionMode, SessionSpec};
 
 /// A conversa do pane: nova (o id que o Hangar escolheu) ou a retomada de uma que já existe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,9 +103,23 @@ pub fn pane(spec: &SessionSpec, conversation: Conversation, ctx: &AgentContext) 
         // O Kimi não aceita id escolhido: o da conversa nova nasce no 1º prompt e chega pelo bilhete do hook.
         (AgentProvider::Kimi, Conversation::New(_)) => vec!["kimi".into()],
         (AgentProvider::Kimi, Conversation::Resume(_)) => vec!["kimi".into(), "--session".into(), id.into()],
+        // O `agy` também não aceita id escolhido: a conversa nova chega pelo bilhete do hook.
+        (AgentProvider::Antigravity, Conversation::New(_)) => vec!["agy".into()],
+        (AgentProvider::Antigravity, Conversation::Resume(_)) => vec!["agy".into(), "--conversation".into(), id.into()],
         (other, _) => return Err(OpenError::new(500, "erro_criacao_sessao", format!("{} não abre por este plano", other.name()))),
     };
     command.extend(choice(spec));
+    let agy_env = (spec.provider == AgentProvider::Antigravity)
+        .then(|| hangar_antigravity::env::process_env(&agy_account(&spec.account), ctx.server_env.keys().cloned()));
+    if let Some(agy) = &agy_env {
+        command.extend(agy_mode_args(spec.permission_mode));
+        // `env -u` tira do pane o que o servidor tmux herdou; o psmux não tem `env` (Windows fora, por ora).
+        if !ctx.windows {
+            let mut prefixed = agy.env_prefix();
+            prefixed.append(&mut command);
+            command = prefixed;
+        }
+    }
     if let Some(prefix) = ctx.read_only {
         command = super::terminal::sandboxed(prefix, &command, ctx.windows);
     }
@@ -113,7 +127,8 @@ pub fn pane(spec: &SessionSpec, conversation: Conversation, ctx: &AgentContext) 
     env.push(("HANGAR_CLAUDE_SETTINGS".into(), String::new()));
     // Por `-e`, como o resto da sessão: o pane recebe no Windows também, e o Pi aberto
     // pelo app ganha a reserva do bilhete que só o omp tinha.
-    if spec.provider != AgentProvider::Kimi { env.push(("CP_PI_SESSION".into(), id.into())); }
+    if !matches!(spec.provider, AgentProvider::Kimi | AgentProvider::Antigravity) { env.push(("CP_PI_SESSION".into(), id.into())); }
+    if let Some(agy) = agy_env { env.extend(agy.set); }
     if let Some(profile) = profile { env.push(("OMP_PROFILE".into(), profile.into())); }
     Ok(PaneSpec { name: spec.name.clone(), cwd: spec.cwd.clone(), provider: spec.provider, key: spec.key.clone(), env,
         config_dir: spec.account.config_dir().map(str::to_owned), command })
@@ -128,6 +143,35 @@ pub fn queue_initial_prompt(claude_base: &Path, name: &str, text: &str, now: f64
     std::fs::create_dir_all(path.parent().unwrap())?;
     crate::runtime::queue::atomic_write(&path, format!("{row}\n").as_bytes())?;
     Ok(path)
+}
+
+/// A conta do `agy` que a sessão usa.
+pub fn agy_account(account: &Account) -> hangar_antigravity::Account {
+    match account {
+        Account::Antigravity { gemini_home: Some(dir) } => hangar_antigravity::Account::extra(PathBuf::from(dir)),
+        _ => hangar_antigravity::Account::default(),
+    }
+}
+
+/// Modo de permissão do Hangar nas flags do `agy`; sem escolha (ou `manual`) ele abre no padrão dele.
+pub fn agy_mode_args(mode: Option<PermissionMode>) -> Vec<String> {
+    let flags: &[&str] = match mode {
+        Some(PermissionMode::AcceptEdits) => &["--mode", "accept-edits"],
+        Some(PermissionMode::Auto) => &["--mode", "auto"],
+        Some(PermissionMode::Plan) => &["--mode", "plan"],
+        Some(PermissionMode::BypassPermissions) => &["--dangerously-skip-permissions"],
+        _ => &[],
+    };
+    flags.iter().map(|f| (*f).to_owned()).collect()
+}
+
+/// Sem a pasta em `trustedWorkspaces` o `agy` nasce preso no "Do you trust the contents of this project?".
+/// Falha só vai ao log.
+pub fn agy_pretrust(home: &Path, account: &Account, cwd: &str) {
+    let path = agy_account(account).settings_path(home);
+    if let Err(error) = hangar_antigravity::settings::trust_workspace(&path, Path::new(cwd)) {
+        tracing::warn!(file = %path.display(), %error, "pré-confiar a pasta no Antigravity falhou; o diálogo aparece na sessão");
+    }
 }
 
 /// `KIMI_CODE_HOME` do servidor ou `~/.kimi-code`.

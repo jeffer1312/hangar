@@ -125,8 +125,8 @@ impl Resolver {
     pub fn fd_locked(&self) -> &BTreeSet<String> { &self.fd_locked }
 }
 
-const EXEC_PROVIDER: [(&str, &str); 7] = [("pi", "pi"), ("omp", "omp"), ("claude", "claude"), ("kimi", "kimi"),
-    ("kimi-code", "kimi"), ("codex", "codex"), ("hangar-codex-tui", "codex")];
+const EXEC_PROVIDER: [(&str, &str); 8] = [("pi", "pi"), ("omp", "omp"), ("claude", "claude"), ("kimi", "kimi"),
+    ("kimi-code", "kimi"), ("codex", "codex"), ("hangar-codex-tui", "codex"), ("agy", "antigravity")];
 const PKG_PROVIDER: [(&str, &str); 1] = [("pi-coding-agent", "pi")];
 
 static SID: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(

@@ -10,6 +10,7 @@ fn provider(value: &str) -> Option<hangar_transcript::Provider> {
         "pi" => Some(hangar_transcript::Provider::Pi),
         "omp" => Some(hangar_transcript::Provider::Omp),
         "kimi" => Some(hangar_transcript::Provider::Kimi),
+        "antigravity" => Some(hangar_transcript::Provider::Antigravity),
         _ => None,
     }
 }

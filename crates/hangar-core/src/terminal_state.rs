@@ -538,6 +538,51 @@ pub fn other_pane_preview(provider: &str, pane: &str) -> String {
     }, |line| other_stop(provider, line)).0
 }
 
+/// A tela do `agy` (Antigravity CLI). Pergunta: opções numeradas com cursor `>` acima do rodapé `↑/↓ Navigate`;
+/// trabalhando: rodapé `esc to cancel`, com o rótulo do spinner em braile; parado: o resto (`? for shortcuts`).
+pub fn agy_analyze(pane: &str) -> PaneAnalysis {
+    let lines = lines(pane);
+    let mut result = PaneAnalysis { preview: other_pane_preview("antigravity", pane), ..Default::default() };
+    if let Some(menu) = agy_menu(&lines) {
+        result.state = "awaiting_input".into();
+        result.question = menu.question;
+        result.options = Some(menu.options);
+        return result;
+    }
+    let footer = lines.iter().rev().map(|l| trim(l)).find(|l| !l.is_empty()).unwrap_or("");
+    if footer.starts_with("esc to cancel") {
+        result.state = "working".into();
+        result.label = lines.iter().rev().find(|l| kimi_spinner(l))
+            .map(|l| trim(&left(l).chars().skip(1).collect::<String>()).to_owned())
+            .filter(|l| !l.is_empty());
+        result.spinner = result.label.clone();
+    }
+    result
+}
+
+fn agy_option(line: &str) -> Option<String> {
+    static OPTION: LazyLock<Regex> = LazyLock::new(|| terminal_regex(r"^\s*>?\s*\d+\.\s+(.*\S)\s*$"));
+    OPTION.captures(line).map(|c| c[1].to_owned())
+}
+
+fn agy_menu(lines: &[&str]) -> Option<TerminalQuestion> {
+    let nav = lines.iter().rposition(|l| l.contains("↑/↓ Navigate"))?;
+    let mut end = nav;
+    while end > 0 && trim(lines[end - 1]).is_empty() { end -= 1; }
+    let mut start = end;
+    while start > 0 && agy_option(lines[start - 1]).is_some() { start -= 1; }
+    let options: Vec<String> = lines[start..end].iter().filter_map(|l| agy_option(l)).collect();
+    if options.len() < 2 { return None; }
+    let above = lines[..start].iter().rposition(|l| !trim(l).is_empty())?;
+    let mut question = trim(lines[above]).to_owned();
+    // "Requesting permission for:" e o comando, logo acima da pergunta.
+    if let Some(request) = lines[..above].iter().rposition(|l| trim(l) == "Requesting permission for:") {
+        let target: Vec<&str> = lines[request + 1..above].iter().map(|l| trim(l)).filter(|l| !l.is_empty()).collect();
+        if !target.is_empty() { question = format!("{question}\n{}", target.join("\n")); }
+    }
+    Some(TerminalQuestion { question: Some(question), options })
+}
+
 /// Texto visível do começo do quadro que só pode ser aceito quando a costura comprovar a continuação.
 pub fn kimi_continuation(pane: &str) -> String {
     let plain = kimi_plain(pane);

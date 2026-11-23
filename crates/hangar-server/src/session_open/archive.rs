@@ -140,6 +140,12 @@ fn pi_jsonl(root: &Path, sid: &str) -> Result<PathBuf, Miss> {
 }
 
 /// `_kimi_conversas`: a entrada mais recente do índice com o wire gravado (o wire e a pasta da sessão).
+/// O transcript de uma conversa do Antigravity na conta padrão.
+pub(crate) fn agy_jsonl(home: &Path, sid: &str) -> Result<PathBuf, Miss> {
+    let path = hangar_antigravity::Account::default().transcript_path(home, sid).ok_or(Miss::Invalid)?;
+    if path.is_file() { Ok(path) } else { Err(Miss::Absent) }
+}
+
 pub(crate) fn kimi_jsonl(kimi_home: &Path, sid: &str) -> Result<(PathBuf, Option<String>), Miss> {
     if !KIMI_ID.is_match(sid) { return Err(Miss::Invalid); }
     let index = std::fs::read(kimi_home.join("session_index.jsonl")).map_err(|_| Miss::Absent)?;
@@ -257,6 +263,7 @@ pub(crate) fn locate(w: &Where, project: &str, sid: &str, config_dir: Option<&st
         AgentProvider::Claude => (claude_jsonl(w, project, sid, config_dir)?, None),
         AgentProvider::Pi | AgentProvider::Omp => (pi_jsonl(&agent_root(w, provider), sid)?, None),
         AgentProvider::Kimi => (kimi_jsonl(&super::agents::kimi_home(w.home, w.env), sid)?.0, None),
+        AgentProvider::Antigravity => (agy_jsonl(w.home, sid)?, None),
         AgentProvider::Codex => {
             if !UUID.is_match(sid) { return Err(Miss::Invalid.into()); }
             let (transcript, _, home) = codex_found(w, sid, codex_account)?;
@@ -347,6 +354,11 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
         }
         AgentProvider::Kimi => {
             let (transcript, cwd) = kimi_jsonl(&super::agents::kimi_home(w.home, w.env), sid)?;
+            Found { transcript, cwd: cwd.unwrap_or_default(), owner: None, codex_account: None }
+        }
+        AgentProvider::Antigravity => {
+            let transcript = agy_jsonl(w.home, sid)?;
+            let cwd = hangar_antigravity::paths::workspace_of(&hangar_antigravity::Account::default(), w.home, sid);
             Found { transcript, cwd: cwd.unwrap_or_default(), owner: None, codex_account: None }
         }
         AgentProvider::Codex => {

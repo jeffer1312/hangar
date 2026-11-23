@@ -73,7 +73,7 @@ pub fn info_of(row: &SessionRow, claude: &Path) -> InternalInfo {
         jsonl: row.jsonl.as_ref().map(PathBuf::from),
         session_key: row.jsonl.as_deref().map(session_key).unwrap_or_default(),
         history: serde_json::json!({"queue": queue_path(claude, &row.name)}),
-        headless: row.provider == "codex" && row.headless,
+        headless: matches!(row.provider.as_str(), "codex" | "antigravity") && row.headless,
         lifecycle_id: row.lifecycle_id.clone(),
         cwd: row.cwd.as_deref().filter(|c| !c.is_empty()).map(PathBuf::from),
     }
@@ -84,6 +84,10 @@ pub fn info_of(row: &SessionRow, claude: &Path) -> InternalInfo {
 pub fn session_key(jsonl: &str) -> String {
     let p = Path::new(jsonl);
     let name = |p: Option<&Path>| p.and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // Antigravity: `brain/<id>/.system_generated/logs/transcript_full.jsonl`.
+    if let Some(id) = hangar_antigravity::paths::conversation_of_transcript(p) {
+        return id;
+    }
     if name(Some(p)) == "wire.jsonl" && name(p.parent().and_then(Path::parent)) == "agents" {
         return name(p.parent().and_then(Path::parent).and_then(Path::parent));
     }

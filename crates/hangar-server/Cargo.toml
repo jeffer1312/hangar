@@ -69,6 +69,7 @@ hangar-core.workspace = true
 hangar-session-open-fields.workspace = true
 hangar-codex-account-sync.workspace = true
 hangar-transcript.workspace = true
+hangar-antigravity.workspace = true
 hangar-omp-sync.workspace = true
 hangar-plugins.workspace = true
 hangar-connectors.workspace = true

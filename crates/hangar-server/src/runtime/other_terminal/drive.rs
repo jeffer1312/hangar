@@ -142,8 +142,16 @@ async fn write_io(
 ) -> Result<(), RuntimeError> {
     io.write(target, value, literal, guard).await
 }
-fn blocked(frame: &OtherFrame) -> bool {
-    let analysis = crate::terminal_state::analyze(&frame.text);
+/// A leitura da tela pelo agente: o `agy` tem rodapé e menu próprios; os outros usam o leitor comum.
+pub(crate) fn screen(provider: hangar_transcript::Provider, pane: &str) -> crate::terminal_state::PaneAnalysis {
+    if provider == hangar_transcript::Provider::Antigravity {
+        crate::terminal_state::agy_analyze(pane)
+    } else {
+        crate::terminal_state::analyze(pane)
+    }
+}
+fn blocked(target: &OtherTarget, frame: &OtherFrame) -> bool {
+    let analysis = screen(target.provider, &frame.text);
     analysis.overlay || analysis.state == "awaiting_input"
 }
 fn codex(target: &OtherTarget) -> bool {
@@ -339,7 +347,7 @@ async fn cleanup_own(
         let Ok(frame) = capture(target, io).await else {
             return Cleanup::Unproved;
         };
-        if blocked(&frame)
+        if blocked(target, &frame)
             || !pending(target, io)
                 .await
                 .is_ok_and(|pending| pending.is_none())
@@ -491,7 +499,7 @@ async fn prompt_inner(
     if let Some(refused) = codex_busy(target, &frame) {
         return refused;
     }
-    if blocked(&frame) {
+    if blocked(target, &frame) {
         return result(
             Disposition::Deferred,
             DeliveryStage::Ready,
@@ -516,7 +524,7 @@ async fn prompt_inner(
             styled: None,
             editor: None,
         });
-        if blocked(&frame) {
+        if blocked(target, &frame) {
             return result(
                 Disposition::Deferred,
                 DeliveryStage::Ready,
@@ -615,7 +623,7 @@ async fn prompt_inner(
     loop {
         match capture(target, io).await {
             Ok(current) => {
-                if blocked(&current) && !slash {
+                if blocked(target, &current) && !slash {
                     return result(
                         Disposition::Unknown,
                         DeliveryStage::InputProof,
@@ -1513,7 +1521,7 @@ async fn generic_select(
     };
     let mut frame = control.frame(true, false).await?;
     for attempt in 0..4 {
-        let analysis = crate::terminal_state::analyze(&frame.text);
+        let analysis = screen(control.target.provider, &frame.text);
         let observed = menu_interaction(analysis.question, analysis.options.unwrap_or_default());
         expected
             .check(

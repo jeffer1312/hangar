@@ -76,7 +76,7 @@ pub struct OtherPreview {
 
 impl OtherPreview {
     pub fn new(provider: &str) -> Option<Self> {
-        matches!(provider, "pi" | "omp" | "kimi").then(|| Self {
+        matches!(provider, "pi" | "omp" | "kimi" | "antigravity").then(|| Self {
             provider: provider.into(), generation: 0, accumulated: String::new(), discarded_text: None, slot: Slot::default(),
         })
     }

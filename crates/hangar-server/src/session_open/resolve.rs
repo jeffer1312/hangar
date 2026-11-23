@@ -394,6 +394,8 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         // O lançador do Codex sem modo abre em Full Access (`sem_terminal.MODO_PADRAO`).
         AgentProvider::Codex => Some(permission.as_deref().and_then(PermissionMode::codex).or(inherited_codex_mode)
             .unwrap_or(PermissionMode::FullAccess)),
+        // Sem escolha, o `agy` abre no modo padrão dele.
+        AgentProvider::Antigravity => permission.as_deref().and_then(PermissionMode::antigravity),
         _ => None,
     };
     let cwd = facts.existing_dir(&request.cwd).unwrap_or_else(|| request.cwd.clone());
@@ -411,6 +413,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         _ => (None, false),
     };
     let account = match (provider, engine) {
+        (AgentProvider::Antigravity, _) => Account::Antigravity { gemini_home: config_dir.clone() },
         (AgentProvider::Codex, _) => Account::Codex { account_id: codex_account.unwrap_or_else(|| "default".into()) },
         (_, Some(engine)) => Account::Engine {
             name: engine.into(), account: request.engine_account.clone(), binding: engine_binding, config_dir: config_dir.clone(), context_window,
@@ -681,7 +684,12 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         AgentProvider::Codex => Some(facts.codex_home(codex_account.unwrap_or("default"))?),
         _ => None,
     };
-    if let Some(dir) = config_dir && !facts.config_dirs()?.iter().any(|known| same_dir(known, dir)) {
+    // No Antigravity a pasta é a conta Google (`GEMINI_HOME`), não uma conta Claude.
+    if provider == AgentProvider::Antigravity {
+        if let Some(dir) = config_dir && !hangar_antigravity::paths::is_account_dir(std::path::Path::new(dir)) {
+            return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
+        }
+    } else if let Some(dir) = config_dir && !facts.config_dirs()?.iter().any(|known| same_dir(known, dir)) {
         return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
     }
     if let Some(engine) = &request.engine {
@@ -693,7 +701,7 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         }
     }
     // O Codex sem terminal aceita o modo dele (vira sandbox e aprovação).
-    if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) {
+    if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) && provider != AgentProvider::Antigravity {
         return Err(OpenError::new(409, "erro_permissao_so_claude", "modo de permissao so vale para claude"));
     }
     if request.code_mode == Some(true) && !claude {
@@ -759,14 +767,20 @@ fn validate_choice(provider: AgentProvider, model: Option<&str>, effort: Option<
                 "effort: use letras minúsculas (2 a 32) — os níveis do Codex variam por modelo e vêm do provedor")),
             AgentProvider::Claude => &EFFORT_CLAUDE,
             AgentProvider::Pi | AgentProvider::Omp => &EFFORT_PI,
-            AgentProvider::Kimi => return Err(OpenError::plain(400, format!("provider '{name}' não aceita escolha de esforço aqui"))),
+            // O esforço do Antigravity vem no id do modelo (`gemini-4-neon-high`).
+            AgentProvider::Kimi | AgentProvider::Antigravity => return Err(OpenError::plain(400, format!("provider '{name}' não aceita escolha de esforço aqui"))),
         };
         if !levels.is_empty() && !levels.contains(&effort) {
             return Err(OpenError::plain(400, format!("effort: use um de {}", levels.join(", "))));
         }
     }
-    if let Some(mode) = permission && PermissionMode::claude(mode).is_none() {
-        let names: Vec<_> = PermissionMode::CLAUDE.iter().map(|m| m.name()).collect();
+    let (known, modes): (fn(&str) -> Option<PermissionMode>, &[PermissionMode]) = if provider == AgentProvider::Antigravity {
+        (PermissionMode::antigravity, &PermissionMode::ANTIGRAVITY)
+    } else {
+        (PermissionMode::claude, &PermissionMode::CLAUDE)
+    };
+    if let Some(mode) = permission && known(mode).is_none() {
+        let names: Vec<_> = modes.iter().map(|m| m.name()).collect();
         return Err(OpenError::new(409, "erro_permissao_invalida", format!("permission_mode: use um de {}", names.join(", "))));
     }
     Ok(())

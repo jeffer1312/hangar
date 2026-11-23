@@ -258,6 +258,7 @@ fn transcript_provider(provider: AgentProvider) -> Provider {
         AgentProvider::Pi => Provider::Pi,
         AgentProvider::Omp => Provider::Omp,
         AgentProvider::Kimi => Provider::Kimi,
+        AgentProvider::Antigravity => Provider::Antigravity,
     }
 }
 

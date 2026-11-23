@@ -516,8 +516,8 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
     let locks = crate::accounts::AccountLocks::new(host.home().join(".hangar").join("account-locks"));
     let key = account_key(host, spec, codex_home)?;
     let hangar_account = config_dir.as_deref().filter(|dir| claude::hangar_account(Path::new(dir)).is_some());
-    // O Kimi não lê a conta Claude: nem trava nem reconciliação.
-    let reads_account = spec.provider != AgentProvider::Kimi;
+    // O Kimi e o Antigravity não leem a conta Claude: nem trava nem reconciliação.
+    let reads_account = !matches!(spec.provider, AgentProvider::Kimi | AgentProvider::Antigravity);
     let hangar_account = hangar_account.filter(|_| reads_account);
     // Sem login o Claude sobe e fica mudo: recusa antes de subir qualquer coisa.
     if spec.provider == AgentProvider::Claude && let Some(dir) = hangar_account
@@ -864,9 +864,9 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         // O transcript nasce no 1º turno, num layout próprio: nada a semear.
         (agents::pane(spec, conversation, &ctx)?, None, None)
     };
-    // O Kimi novo e o Codex só sabem a conversa depois da TUI (bilhete, sidecar).
+    // O Kimi e o Antigravity novos e o Codex só sabem a conversa depois da TUI (bilhete, sidecar).
     spec.conversation = match spec.provider {
-        AgentProvider::Kimi | AgentProvider::Codex => resume.map(str::to_owned),
+        AgentProvider::Kimi | AgentProvider::Antigravity | AgentProvider::Codex => resume.map(str::to_owned),
         _ => Some(sid.clone()),
     };
     diary.step("confiar_pasta");
@@ -877,6 +877,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
             agents::kimi_pretrust(&agents::kimi_home(host.home(), host.env()), &spec.cwd, now);
         }
+        AgentProvider::Antigravity => agents::agy_pretrust(host.home(), &spec.account, &spec.cwd),
         // A conta adicional confia pelo preparo que o lançador pede antes da TUI.
         AgentProvider::Codex if matches!(&spec.account, Account::Codex { account_id } if account_id == "default") => {
             super::codex::pretrust(Path::new(codex_home.unwrap_or_default()), &spec.cwd);

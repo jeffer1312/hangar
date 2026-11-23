@@ -139,7 +139,7 @@ fn parse_options(args: &[String], err: &mut dyn Write) -> Result<Options, u8> {
                     "--engine" => (&mut options.engine, "uso: --engine <motor>"),
                     "--profile" => (&mut options.profile, "uso: --profile <nome>"),
                     "--conta" => (&mut options.account, "uso: --conta <nome>"),
-                    "--provider" => (&mut options.provider, "uso: --provider <claude|codex|pi|omp|kimi>"),
+                    "--provider" => (&mut options.provider, "uso: --provider <claude|codex|pi|omp|kimi|antigravity>"),
                     "--model" => (&mut options.model, "uso: --model <id>"),
                     "--effort" => (&mut options.effort, "uso: --effort <nivel>"),
                     _ => (&mut options.permission, "uso: --permissao <acceptEdits|auto|bypassPermissions|manual|dontAsk|plan>"),
@@ -247,8 +247,8 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             _ => return fail(err, "erro: --customizations precisa ser um objeto JSON", 2),
         }
     };
-    if options.headless == "true" && !options.provider.is_empty() && options.provider != "claude" && options.provider != "codex" {
-        return fail(err, &format!("erro: --headless só vale com provider claude ou codex (veio: {})", options.provider), 2);
+    if options.headless == "true" && !options.provider.is_empty() && !matches!(options.provider.as_str(), "claude" | "codex" | "antigravity") {
+        return fail(err, &format!("erro: --headless só vale com provider claude, codex ou antigravity (veio: {})", options.provider), 2);
     }
     // Sem conta com leitura de cota, para aqui em vez de cair calado na padrão (talvez a esgotada).
     if options.account == "auto" {

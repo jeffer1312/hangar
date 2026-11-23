@@ -87,6 +87,7 @@ impl RuntimeRegistry {
             hangar_transcript::Provider::Pi
                 | hangar_transcript::Provider::Omp
                 | hangar_transcript::Provider::Kimi
+                | hangar_transcript::Provider::Antigravity
         ) || target.generation == 0
             || target.binding.generation != target.generation
             || target.binding.name != target.name

@@ -1,4 +1,4 @@
-//! Hooks autônomos: sinais do Kimi e guarda do multiplexador, sem servidor ou interpretador.
+//! Hooks autônomos: sinais do Kimi e do Antigravity e guarda do multiplexador, sem servidor ou interpretador.
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -46,7 +46,20 @@ pub fn run(mode: &str) -> ExitCode {
             if !value.is_object() {
                 return Err("payload_not_object");
             }
-            if mode == "kimi-state-hook" {
+            if mode == "agy-state-hook" {
+                let home = std::env::home_dir().ok_or("home_unavailable")?;
+                let base = std::env::var_os("CLAUDE_CONFIG_DIR")
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".claude"));
+                write_agy(
+                    &value,
+                    &base,
+                    std::env::var("TMUX_PANE").ok().as_deref(),
+                    std::env::var("PSMUX_SESSION").ok().as_deref(),
+                )?;
+                Ok(None)
+            } else if mode == "kimi-state-hook" {
                 let home = std::env::home_dir().ok_or("home_unavailable")?;
                 let base = std::env::var_os("CLAUDE_CONFIG_DIR")
                     .filter(|s| !s.is_empty())
@@ -105,16 +118,22 @@ pub fn run(mode: &str) -> ExitCode {
             let _ = writeln!(std::io::stderr().lock(), "{text}");
             ExitCode::from(2)
         }
-        Ok(None) => ExitCode::SUCCESS,
+        Ok(None) => {
+            // O agy espera um objeto JSON na saída; `{}` não decide nada.
+            if mode == "agy-state-hook" { let _ = writeln!(std::io::stdout().lock(), "{{}}"); }
+            ExitCode::SUCCESS
+        }
         Err(code) => {
             log_failure(
-                if mode == "kimi-state-hook" {
-                    "kimi_hook_error.log"
-                } else {
-                    "guard_tmux-falhas.log"
+                match mode {
+                    "kimi-state-hook" => "kimi_hook_error.log",
+                    "agy-state-hook" => "agy_hook_error.log",
+                    _ => "guard_tmux-falhas.log",
                 },
                 code,
             );
+            // Falha do Hangar nunca prende o agente.
+            if mode == "agy-state-hook" { let _ = writeln!(std::io::stdout().lock(), "{{}}"); }
             ExitCode::SUCCESS
         }
     }
@@ -174,6 +193,38 @@ fn write_kimi(
     }
     Ok(())
 }
+/// Hook do `agy` (`hooks.json`): estado por conversa e o bilhete que liga o pane à conversa. O `agy acp` sem
+/// terminal também roda os hooks e herda o `CP_SESSION_KEY` de quem o lançou: sem pane, nada é gravado.
+fn write_agy(value: &Value, base: &Path, pane: Option<&str>, psmux: Option<&str>) -> Result<(), &'static str> {
+    let key = pane_key(pane, psmux);
+    if key.is_empty() { return Ok(()); }
+    let conversation = value["conversationId"].as_str().ok_or("conversation_id_missing")?;
+    if !hangar_antigravity::paths::valid_conversation_id(conversation) { return Err("conversation_id_invalid"); }
+    let state = match value["hookEventName"].as_str().unwrap_or_default() {
+        "SessionStart" | "PreInvocation" => Some("working"),
+        // `fullyIdle` falso: o turno parou mas ainda há subagente ou tarefa em fundo trabalhando.
+        "Stop" => Some(if value["fullyIdle"] == true { "idle" } else { "working" }),
+        _ => None,
+    };
+    if let Some(state) = state {
+        marker(base, ".hangar-state", conversation, &json!({"state": state, "ts": timestamp()}))?;
+    }
+    marker(base, ".hangar-agy", &key, &json!({
+        "session_id": conversation,
+        "transcript_path": value.get("transcriptPath").unwrap_or(&Value::Null),
+        "cwd": value.get("cwd").unwrap_or(&Value::Null),
+        "ts": timestamp(),
+    }))
+}
+
+/// A chave do bilhete: o nome da sessão no psmux, senão o pane do tmux sem o `%`.
+fn pane_key(pane: Option<&str>, psmux: Option<&str>) -> String {
+    if let Some(name) = psmux.filter(|s| !s.is_empty()) {
+        return name.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '-' }).collect();
+    }
+    pane.unwrap_or_default().trim_start_matches('%').to_owned()
+}
+
 fn timestamp() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

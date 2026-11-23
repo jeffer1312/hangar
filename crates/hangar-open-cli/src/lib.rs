@@ -22,6 +22,7 @@ fn flags(provider: &str) -> Option<&'static [(&'static str, &'static str)]> {
         "pi" => &[("--model", "model"), ("--thinking", "effort")],
         "omp" => &[("--model", "model"), ("--thinking", "effort"), ("--profile", "omp_profile")],
         "kimi" => &[("--model", "model")],
+        "antigravity" => &[("--model", "model"), ("--mode", "permission_mode")],
         _ => return None,
     })
 }
@@ -45,7 +46,7 @@ const CLAUDE_SUBCOMMANDS: &[&str] = &[
 /// O pedido, ou o código de saída quando ele não sai (`RAW` com a frase já escrita).
 pub fn request(provider: &str, args: &[String], vars: &BTreeMap<String, String>, cwd: &Path, err: &mut dyn Write) -> Result<Map<String, Value>, u8> {
     let Some(table) = flags(provider) else {
-        let _ = writeln!(err, "hangar: provider desconhecido '{provider}': use claude, pi, omp ou kimi");
+        let _ = writeln!(err, "hangar: provider desconhecido '{provider}': use claude, pi, omp, kimi ou antigravity");
         return Err(1);
     };
     if provider == "claude" && args.first().is_some_and(|first| CLAUDE_SUBCOMMANDS.contains(&first.as_str())) {
@@ -82,7 +83,7 @@ pub fn request(provider: &str, args: &[String], vars: &BTreeMap<String, String>,
                 },
             };
             body.insert((*key).into(), value.into());
-        } else if provider == "claude" && arg == "--dangerously-skip-permissions" {
+        } else if matches!(provider, "claude" | "antigravity") && arg == "--dangerously-skip-permissions" {
             body.insert("permission_mode".into(), "bypassPermissions".into());
         } else if arg.starts_with('-') || body.contains_key("initial_prompt") {
             return Err(uncovered(arg.as_str(), err));
@@ -96,7 +97,7 @@ pub fn request(provider: &str, args: &[String], vars: &BTreeMap<String, String>,
 /// `args` = `[provider, args do CLI...]`. Aberta a sessão, escreve o nome dela em `out` e devolve 0.
 pub fn run(args: &[String], vars: &BTreeMap<String, String>, cwd: &Path, server: &Path, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let Some((provider, args)) = args.split_first() else {
-        let _ = writeln!(err, "hangar: uso: hangar-open <claude|pi|omp|kimi> [args do CLI]");
+        let _ = writeln!(err, "hangar: uso: hangar-open <claude|pi|omp|kimi|antigravity> [args do CLI]");
         return 1;
     };
     let body = match request(provider, args, vars, cwd, err) {

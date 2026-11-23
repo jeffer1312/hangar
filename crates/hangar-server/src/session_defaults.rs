@@ -19,7 +19,7 @@ pub struct Scope {
 
 impl Scope {
     fn key(&self) -> Option<String> {
-        if !["claude", "codex", "pi", "omp", "kimi"].contains(&self.provider.as_str())
+        if !["claude", "codex", "pi", "omp", "kimi", "antigravity"].contains(&self.provider.as_str())
             || (self.provider != "claude" && (!self.engine.is_empty() || !self.engine_account.is_empty()))
             || (self.engine.is_empty() && !self.engine_account.is_empty()) { return None; }
         Some(serde_json::to_string(&(&self.provider, &self.engine, &self.engine_account)).expect("strings"))
@@ -31,6 +31,7 @@ impl Scope {
             && (value.permission.is_empty() || match self.provider.as_str() {
                 "claude" => PermissionMode::claude(&value.permission).is_some(),
                 "codex" => PermissionMode::codex(&value.permission).is_some(),
+                "antigravity" => PermissionMode::antigravity(&value.permission).is_some(),
                 _ => false,
             })
     }

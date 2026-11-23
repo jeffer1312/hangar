@@ -66,6 +66,7 @@ pub fn conversation_of(provider: AgentProvider, jsonl: &str) -> Option<String> {
         AgentProvider::Claude => stem.to_owned(),
         AgentProvider::Pi | AgentProvider::Omp => stem.rsplit_once('_')?.1.to_owned(),
         AgentProvider::Kimi => path.parent()?.parent()?.parent()?.file_name()?.to_str()?.to_owned(),
+        AgentProvider::Antigravity => hangar_antigravity::paths::conversation_of_transcript(path)?,
         AgentProvider::Codex => return None,
     };
     (!id.is_empty()).then_some(id)

@@ -50,6 +50,8 @@ pub(super) fn pending(target: &OtherTarget) -> Result<Option<PendingInteraction>
         hangar_transcript::Provider::Pi => read_pending_pi_call(&target.transcript, "question"),
         hangar_transcript::Provider::Omp => read_pending_pi_call(&target.transcript, "ask"),
         hangar_transcript::Provider::Kimi => read_pending_kimi_call(&target.transcript),
+        // O `agy` não grava pergunta pendente no transcript: a pergunta é lida da tela (menu).
+        hangar_transcript::Provider::Antigravity => return Ok(None),
         _ => return Err(failed("other_terminal_provider")),
     };
     let call = match read {
@@ -132,7 +134,7 @@ pub(super) fn read(
     {
         pending = None;
     }
-    let mut analysis = crate::terminal_state::analyze(pane);
+    let mut analysis = super::drive::screen(target.provider, pane);
     if target.provider == hangar_transcript::Provider::Kimi
         && hook.as_deref() != Some("awaiting_input")
     {

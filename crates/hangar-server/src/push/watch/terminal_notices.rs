@@ -4,7 +4,7 @@ use hangar_api::session::SessionRow;
 use std::time::Duration;
 use crate::terminal_state::PaneAnalysis;
 
-pub(super) fn owns(provider:&str)->bool {matches!(provider,"pi"|"omp"|"kimi")}
+pub(super) fn owns(provider:&str)->bool {matches!(provider,"pi"|"omp"|"kimi"|"antigravity")}
 
 pub(super) trait Sources:Send+Sync {
     fn question(&self,row:&SessionRow)->Option<String>;
@@ -53,7 +53,7 @@ impl Sources for super::Watch {
             };
             let captured=capture_text(&self.st.list.env().capture_program,&row.name,target,self.st.accounts.env.clone(),crate::state::capture::TIMEOUT).await;
             if let Some(code)=captured.error {self.st.diag.report("rust.push_capture_failed",&row.name,&code,"captura do aviso sem resposta válida do multiplexador");}
-            Ok(crate::terminal_state::analyze(&captured.text))
+            Ok(if row.provider=="antigravity" {crate::terminal_state::agy_analyze(&captured.text)} else {crate::terminal_state::analyze(&captured.text)})
         })
     }
     fn sleep(&self,duration:Duration)->BoxFuture<'_,()> {Box::pin(tokio::time::sleep(duration))}
