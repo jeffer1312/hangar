@@ -249,15 +249,16 @@ async fn burst_of_writes_coalesces() {
             write_marker(dir.path(), i, state);
             tokio::time::sleep(Duration::from_millis(8)).await;
         }
-        // Um tique pode cair no meio da rajada e publicar parte dela, e o FSEvents do macOS entrega a
-        // rajada em lotes; o que o teste barra é uma publicação por arquivo, que seriam dez.
         let mut published = 0;
         let took = loop {
             let rows: Value = serde_json::from_str(&next_named(&mut es, "sessions").await.data).unwrap();
             published += 1;
             if rows.as_array().unwrap().iter().all(|r| r["state"] == state) { break t.elapsed() }
         };
-        assert!(published <= 3, "rajada saiu em {published} publicações");
+        // Sob carga a rajada se espalha por mais janelas de 150 ms: o teto conta as que cabem em `took`,
+        // a que já dormia e os tiques. Uma publicação por arquivo seriam dez.
+        let most = (took.as_millis() / 150) as usize + 1 + (took.as_millis() / 1500) as usize + 1;
+        assert!(published <= most, "rajada saiu em {published} publicações em {took:?} (teto {most})");
         assert!(took < Duration::from_millis(700), "rajada esperou o tique: {took:?}");
     }
 }
