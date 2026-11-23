@@ -27,7 +27,7 @@ struct Attempt {
     attempt_id: String,
     #[serde(rename = "estado")] state: String,
     link: Option<String>,
-    #[serde(rename = "saida")] tail: Option<String>,
+    #[serde(rename = "saida")] tail: Option<Vec<String>>,
 }
 
 /// O painel do Antigravity, no lugar da lista enquanto existe (como o do Codex).
@@ -321,7 +321,7 @@ impl Hangar {
                     }
                     "falhou" => {
                         (flow.failed, flow.attempt, flow.sending, flow.sent, flow.task) =
-                            (Some(attempt.tail.clone().unwrap_or_default()), None, false, false, None);
+                            (Some(attempt.tail.clone().unwrap_or_default().join("\n")), None, false, false, None);
                     }
                     _ => {
                         flow.attempt = Some(attempt);

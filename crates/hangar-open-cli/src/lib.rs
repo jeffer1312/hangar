@@ -32,6 +32,7 @@ fn env_keys(provider: &str) -> &'static [(&'static str, &'static str)] {
     match provider {
         "claude" => &[("CLAUDE_CONFIG_DIR", "config_dir"), ("CP_ENGINE", "engine")],
         "omp" => &[("OMP_PROFILE", "omp_profile")],
+        "antigravity" => &[("GEMINI_HOME", "config_dir")],
         _ => &[],
     }
 }

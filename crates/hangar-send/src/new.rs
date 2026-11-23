@@ -264,6 +264,13 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             None => return fail(err, &format!("erro: resposta da cota ilegível em {} — escolha uma conta: --conta <nome>", endpoint.base), 2),
         }
     }
+    // A conta do Antigravity é a pasta `~/.antigravity-<nome>`; o preparo é o do Claude.
+    if options.provider == "antigravity" && !options.account.is_empty() && options.config_dir.is_empty() {
+        options.config_dir = if options.account.contains('/') { options.account.clone() } else {
+            let home = cx.var("HOME").map_or_else(|| cx.inv.home.to_string_lossy().into_owned(), str::to_owned);
+            format!("{home}/.antigravity-{}", options.account)
+        };
+    }
     if !options.account.is_empty() && options.config_dir.is_empty() {
         let prepared = cx.host.account_prep(&options.account);
         let _ = err.write_all(&prepared.stderr);

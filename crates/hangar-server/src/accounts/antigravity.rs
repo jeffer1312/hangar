@@ -22,8 +22,20 @@ pub const DEFAULT_ID: &str = "default";
 const PROBE_LIMIT: Duration = Duration::from_secs(20);
 const SIGNED_TTL: Duration = Duration::from_secs(60);
 
-/// Uma tentativa de login por conta: (attempt_id, processo do agy --login).
-static ATTEMPTS: LazyLock<Mutex<HashMap<String, (String, login::Attempt)>>> = LazyLock::new(Default::default);
+/// Uma tentativa de login por conta: (attempt_id, início, processo do agy --login).
+static ATTEMPTS: LazyLock<Mutex<HashMap<String, (String, Instant, login::Attempt)>>> = LazyLock::new(Default::default);
+/// Tela fechada sem cancelar deixaria o `agy --login` esperando o código para sempre.
+const LOGIN_LIMIT: Duration = Duration::from_secs(10 * 60);
+
+fn attempts() -> std::sync::MutexGuard<'static, HashMap<String, (String, Instant, login::Attempt)>> {
+    let mut attempts = ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner());
+    attempts.retain(|_, (_, started, attempt)| {
+        let alive = started.elapsed() < LOGIN_LIMIT;
+        if !alive { attempt.cancel(); }
+        alive
+    });
+    attempts
+}
 /// O agy models leva ~1 s: a lista guarda a resposta por conta.
 static SIGNED: LazyLock<Mutex<HashMap<PathBuf, (Instant, Option<bool>)>>> = LazyLock::new(Default::default);
 
@@ -100,7 +112,9 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
 
 async fn list(state: &crate::routes::AppState, home: &Path) -> Response {
     let program = crate::cli_probe::resolve_program("agy", &state.accounts.env);
-    let accounts = paths::known_accounts(home);
+    // Como em `/api/credenciais`: máquina sem o agy usado não ganha a linha da conta padrão.
+    let accounts: Vec<Account> = paths::known_accounts(home).into_iter()
+        .filter(|account| !account.is_default() || account.data_dir(home).is_dir()).collect();
     let base_keys: Vec<String> = state.accounts.env.base.keys().cloned().collect();
     let checks = accounts.iter().map(|account| {
         let (account, home, program, keys) = (account.clone(), home.to_owned(), program.clone(), base_keys.clone());
@@ -168,7 +182,7 @@ fn create(home: &Path, body: &Value) -> Response {
 fn delete(id: &str, dir: Option<PathBuf>) -> Response {
     let Some(dir) = dir else { return fail(409, "erro_conta_padrao", "a conta padrão do agy não se apaga pelo Hangar") };
     if in_use(&Account::extra(dir.clone())) { return fail(409, "erro_conta_em_uso", "há uma sessão do agy aberta nesta conta"); }
-    ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+    if let Some((_, _, mut attempt)) = attempts().remove(id) { attempt.cancel(); }
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => Json(json!({"ok": true})).into_response(),
         Err(e) => fail(500, "erro_conta_nao_apagada", &e.to_string()),
@@ -181,15 +195,14 @@ fn start_login(id: &str, program: &Path, home: &Path, env: hangar_antigravity::e
         Err(e) => return fail(500, "erro_login_nao_iniciou", &e.to_string()),
     };
     let attempt_id = crate::mods::state::random_hex(16);
-    let mut attempts = ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner());
     // Login novo encerra o anterior da mesma conta.
-    if let Some((_, mut old)) = attempts.insert(id.to_owned(), (attempt_id.clone(), attempt)) { old.cancel(); }
+    if let Some((_, _, mut old)) = attempts().insert(id.to_owned(), (attempt_id.clone(), Instant::now(), attempt)) { old.cancel(); }
     Json(json!({"attempt_id": attempt_id, "estado": "iniciando"})).into_response()
 }
 
 fn login_status(id: &str, attempt_id: Option<&str>, home: &Path) -> Response {
-    let mut attempts = ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner());
-    let Some((current, attempt)) = attempts.get_mut(id).filter(|(current, _)| Some(current.as_str()) == attempt_id) else {
+    let mut attempts = attempts();
+    let Some((current, _, attempt)) = attempts.get_mut(id).filter(|(current, _, _)| Some(current.as_str()) == attempt_id) else {
         return fail(404, "erro_tentativa_inexistente", "tentativa de login não encontrada");
     };
     let current = current.clone();
@@ -213,8 +226,8 @@ fn login_status(id: &str, attempt_id: Option<&str>, home: &Path) -> Response {
 }
 
 fn submit_code(id: &str, body: &Value) -> Response {
-    let mut attempts = ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner());
-    let Some((_, attempt)) = attempts.get_mut(id).filter(|(current, _)| body["attempt_id"].as_str() == Some(current.as_str())) else {
+    let mut attempts = attempts();
+    let Some((_, _, attempt)) = attempts.get_mut(id).filter(|(current, _, _)| body["attempt_id"].as_str() == Some(current.as_str())) else {
         return fail(404, "erro_tentativa_inexistente", "tentativa de login não encontrada");
     };
     match attempt.submit(body["codigo"].as_str().unwrap_or_default()) {
@@ -227,9 +240,9 @@ fn submit_code(id: &str, body: &Value) -> Response {
 }
 
 fn cancel_login(id: &str, attempt_id: Option<&str>) -> Response {
-    let mut attempts = ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner());
-    if attempts.get(id).is_some_and(|(current, _)| Some(current.as_str()) == attempt_id)
-        && let Some((_, mut attempt)) = attempts.remove(id) {
+    let mut attempts = attempts();
+    if attempts.get(id).is_some_and(|(current, _, _)| Some(current.as_str()) == attempt_id)
+        && let Some((_, _, mut attempt)) = attempts.remove(id) {
         attempt.cancel();
     }
     Json(json!({"ok": true})).into_response()

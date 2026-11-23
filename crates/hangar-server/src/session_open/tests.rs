@@ -770,6 +770,18 @@ fn the_saved_default_beats_the_creator_and_fills_model_and_effort() {
     assert_eq!(spec.account, unsaved.account);
 }
 
+/// O `agy` com terminal não abre no modo que pergunta: o `manual` salvo some, o pedido explícito é recusado.
+#[test]
+fn antigravity_with_a_terminal_drops_a_saved_manual_and_refuses_an_explicit_one() {
+    let mut fixture = with_saved_default("antigravity", json!({"model": "", "effort": "", "permission": "manual"}));
+    fixture["scenario"]["steps"][0]["json"]["provider"] = json!("antigravity");
+    fixture["scenario"]["steps"][0]["json"]["headless"] = json!(false);
+    assert_eq!(resolve_fixture(&fixture).unwrap().spec.permission_mode, None);
+    fixture["scenario"]["steps"][0]["json"]["permission_mode"] = json!("manual");
+    let error = resolve_fixture(&fixture).unwrap_err();
+    assert_eq!((error.status, error.code), (409, Some("erro_permissao_manual_sem_terminal")));
+}
+
 /// `inherit: true` é a sessão pedindo para a filha nascer no modo dela.
 #[test]
 fn inherit_true_takes_the_creator_permission_over_the_saved_default() {

@@ -201,7 +201,8 @@ fn write_agy(value: &Value, base: &Path, pane: Option<&str>, psmux: Option<&str>
     let conversation = value["conversationId"].as_str().ok_or("conversation_id_missing")?;
     if !hangar_antigravity::paths::valid_conversation_id(conversation) { return Err("conversation_id_invalid"); }
     let state = match value["hookEventName"].as_str().unwrap_or_default() {
-        "SessionStart" | "PreInvocation" => Some("working"),
+        // O `SessionStart` também dispara ao retomar uma conversa parada: só o bilhete, o turno começa no `PreInvocation`.
+        "PreInvocation" => Some("working"),
         // `fullyIdle` falso: o turno parou mas ainda há subagente ou tarefa em fundo trabalhando.
         "Stop" => Some(if value["fullyIdle"] == true { "idle" } else { "working" }),
         _ => None,
