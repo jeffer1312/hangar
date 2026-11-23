@@ -15,7 +15,7 @@ import { Icon } from '../ui/Icon';
 import { haptic } from '../ui/haptics';
 import { toast } from '../ui/Toast';
 import { useServers } from '../stores/servers';
-import { PortTabs } from './PortsSheet';
+import { PortTabs } from './PortsPieces';
 import { useSessions } from '../stores/sessions';
 import * as m from '../paraglide/messages';
 

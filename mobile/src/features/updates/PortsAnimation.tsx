@@ -2,7 +2,7 @@ import { Text, View } from 'react-native';
 import Animated, { FadeIn, SlideInRight, useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 import type { PortEntry } from '@hangar/core';
-import { PortRow, PortsBody, PortsStatus, PortTabs } from '../../chat/PortsSheet';
+import { PortRow, PortsBody, PortsStatus, PortTabs } from '../../chat/PortsPieces';
 import { superficie } from '../../theme/superficie';
 import * as m from '../../paraglide/messages';
 import { useScriptStep } from './scriptStep';
