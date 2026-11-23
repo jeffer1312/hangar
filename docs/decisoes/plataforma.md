@@ -35,6 +35,8 @@ Decisões do usuário (22/11):
   par de fora não alcançam rota nenhuma. As ferramentas MCP chamam as rotas em processo pelo mesmo
   `owner_only` e, antes disso, recusam com `whatsapp_shared_session` quando a sessão que chama tem
   convite de convidado ativo ou membro de fora no grupo, porque o que ela lê chegaria a eles.
+  Grupo com sessão de outra máquina (`servidor::sessao`, mesmo do dono) também recusa: daqui não
+  se confere convite nem convidado de lá (decisão de 23/11/2026).
   A conferência falha fechada (configuração de convites que não carregou, `external_pairs.json`
   ilegível, sidecar ou `fed` tortos recusam; sem configuração de convites não há o que conferir) e
   é refeita depois da leitura, antes de devolver. Convite criado entre essa segunda conferência e a

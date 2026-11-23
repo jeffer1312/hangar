@@ -52,8 +52,8 @@ ferramentas do MCP `hangar`:
 
 - `whatsapp_off`: o serviço está desligado ou não instalado. Diga ao usuário para ligar em
   Configurações > WhatsApp.
-- `whatsapp_shared_session`: esta sessão está compartilhada (convidado ou par de fora). A leitura é
-  recusada de propósito; não contorne.
+- `whatsapp_shared_session`: esta sessão está compartilhada (convidado, par de fora ou sessão de
+  outra máquina no grupo). A leitura é recusada de propósito; não contorne.
 - `whatsapp_untrusted`: a resposta do serviço não veio assinada. Não use o conteúdo e avise o
   usuário.
 - Outro código: mostre o `msg` ao usuário.
