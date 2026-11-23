@@ -210,6 +210,8 @@ pub struct ContextCache {
     /// prazo: o informe só chega no fim do turno, e a sessão nova não pode cair nos 200k porque o
     /// servidor subiu ou a conta ficou parada. Troca de plano se corrige no informe seguinte.
     windows: std::collections::HashMap<String, u64>,
+    /// Aprendido que ainda não chegou ao disco. Só ele é gravado: o resto do mapa pode ser mais velho que o arquivo.
+    unsaved: std::collections::HashMap<String, u64>,
     windows_file: Option<PathBuf>,
 }
 
@@ -257,8 +259,9 @@ impl ContextCache {
         };
         if let (Some(k), Some(w)) = (&key, reported) && self.windows.get(k) != Some(&w) {
             self.windows.insert(k.clone(), w);
-            self.save_windows();
+            self.unsaved.insert(k.clone(), w);
         }
+        if !self.unsaved.is_empty() { self.save_windows(); }
         let learned = key.and_then(|k| self.windows.get(&k).copied());
         reading_with(inputs, scan, learned)
     }
@@ -273,15 +276,18 @@ impl ContextCache {
     }
 
     /// Relê antes de gravar: na atualização o servidor velho e o novo gravam o mesmo arquivo.
-    fn save_windows(&self) {
+    fn save_windows(&mut self) {
         let Some(path) = &self.windows_file else { return };
         let Some(mut merged) = read_windows(path) else { return };
-        merged.extend(self.windows.iter().map(|(k, w)| (k.clone(), *w)));
-        let bytes = serde_json::to_vec(&merged).unwrap_or_default();
-        let saved = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| hangar_core::fs::atomic_write(path, &bytes));
-        if let Err(e) = saved {
-            super::facts::note("rust.list_context_windows_unwritable", "", format!("list_context_windows_unwritable:{:?}", e.kind()),
-                "janela aprendida não gravada; depois de o servidor subir a sessão nova volta a mostrar 200k");
+        merged.extend(self.unsaved.iter().map(|(k, w)| (k.clone(), *w)));
+        let saved = serde_json::to_vec(&merged).map_err(std::io::Error::from).and_then(|bytes| {
+            path.parent().map_or(Ok(()), std::fs::create_dir_all)?;
+            hangar_core::fs::atomic_write(path, &bytes)
+        });
+        match saved {
+            Ok(()) => self.unsaved.clear(),
+            Err(e) => super::facts::note("rust.list_context_windows_unwritable", "", format!("list_context_windows_unwritable:{:?}", e.kind()),
+                "janela aprendida não gravada; depois de o servidor subir a sessão nova volta a mostrar 200k"),
         }
     }
 
@@ -483,6 +489,28 @@ mod tests {
         again.keep_windows_at(file);
         let (ctx, _) = again.reading(&inputs(&new, None), &scan_tail(&new), false);
         assert_eq!(ctx.map(|c| c.window), Some(WINDOW_DEFAULT), "o informe mais novo vence");
+    }
+
+    /// Arquivo ilegível na hora do informe: o aprendido vai ao disco quando ele volta, mesmo com o informe repetido.
+    #[test]
+    fn window_learned_while_the_file_was_unreadable_is_saved_later() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jsonl = tmp.path().join("a.jsonl");
+        std::fs::write(&jsonl, r#"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000}}}"#).unwrap();
+        let inputs = |declared| ReadingInputs { jsonl: &jsonl, account_dir: tmp.path(), chosen: None, opened: None, declared, engine: false };
+        let file = tmp.path().join("context-windows.json");
+        // Pasta no lugar do arquivo: ler falha, e não por falta dele.
+        std::fs::create_dir(&file).unwrap();
+        let mut cache = ContextCache::default();
+        cache.keep_windows_at(file.clone());
+        cache.reading(&inputs(Some(WINDOW_1M)), &scan_tail(&jsonl), true);
+        std::fs::remove_dir(&file).unwrap();
+        cache.keep_windows_at(file.clone());
+        cache.reading(&inputs(Some(WINDOW_1M)), &scan_tail(&jsonl), true);
+        let mut restarted = ContextCache::default();
+        restarted.keep_windows_at(file);
+        let (ctx, _) = restarted.reading(&inputs(None), &scan_tail(&jsonl), false);
+        assert_eq!(ctx.map(|c| c.window), Some(WINDOW_1M));
     }
 
     /// Na atualização o servidor velho e o novo gravam o mesmo arquivo: um não apaga o que o outro aprendeu.
