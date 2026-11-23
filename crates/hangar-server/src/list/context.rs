@@ -266,16 +266,18 @@ impl ContextCache {
     /// Arquivo da janela aprendida; lido na primeira vez, e o já aprendido nesta vida vence o lido.
     pub fn keep_windows_at(&mut self, path: PathBuf) {
         if self.windows_file.as_ref() == Some(&path) { return; }
-        if let Ok(raw) = std::fs::read(&path)
-            && let Ok(saved) = serde_json::from_slice::<std::collections::HashMap<String, u64>>(&raw) {
-            for (key, window) in saved { self.windows.entry(key).or_insert(window); }
-        }
+        // Sem marcar o arquivo: gravar agora apagaria o que ele guarda; o próximo tique relê.
+        let Some(saved) = read_windows(&path) else { return };
+        for (key, window) in saved { self.windows.entry(key).or_insert(window); }
         self.windows_file = Some(path);
     }
 
+    /// Relê antes de gravar: na atualização o servidor velho e o novo gravam o mesmo arquivo.
     fn save_windows(&self) {
         let Some(path) = &self.windows_file else { return };
-        let bytes = serde_json::to_vec(&self.windows).unwrap_or_default();
+        let Some(mut merged) = read_windows(path) else { return };
+        merged.extend(self.windows.iter().map(|(k, w)| (k.clone(), *w)));
+        let bytes = serde_json::to_vec(&merged).unwrap_or_default();
         let saved = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| hangar_core::fs::atomic_write(path, &bytes));
         if let Err(e) = saved {
             super::facts::note("rust.list_context_windows_unwritable", "", format!("list_context_windows_unwritable:{:?}", e.kind()),
@@ -412,6 +414,24 @@ fn truthy(v: &Value) -> bool {
     }
 }
 
+/// `None` só quando o arquivo existe e não deu para ler; ilegível conta como vazio, porque regravar não perde nada.
+fn read_windows(path: &std::path::Path) -> Option<std::collections::HashMap<String, u64>> {
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Default::default()),
+        Err(e) => {
+            super::facts::note("rust.list_context_windows_unreadable", "", format!("list_context_windows_unreadable:{:?}", e.kind()),
+                "janela aprendida não lida; a sessão nova mostra 200k até o fim do primeiro turno");
+            return None;
+        }
+    };
+    Some(serde_json::from_slice(&raw).unwrap_or_else(|_| {
+        super::facts::note("rust.list_context_windows_corrupt", "", "list_context_windows_corrupt".to_string(),
+            "arquivo da janela aprendida ilegível; o próximo informe o regrava");
+        Default::default()
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +483,31 @@ mod tests {
         again.keep_windows_at(file);
         let (ctx, _) = again.reading(&inputs(&new, None), &scan_tail(&new), false);
         assert_eq!(ctx.map(|c| c.window), Some(WINDOW_DEFAULT), "o informe mais novo vence");
+    }
+
+    /// Na atualização o servidor velho e o novo gravam o mesmo arquivo: um não apaga o que o outro aprendeu.
+    #[test]
+    fn two_servers_writing_the_window_file_keep_each_others_windows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let answer = |name: &str, model: &str| {
+            let path = tmp.path().join(name);
+            std::fs::write(&path, format!(r#"{{"type":"assistant","message":{{"model":"{model}","usage":{{"input_tokens":1000}}}}}}"#)).unwrap();
+            path
+        };
+        let (opus, sonnet) = (answer("opus.jsonl", "claude-opus-5-5"), answer("sonnet.jsonl", "claude-sonnet-5-5"));
+        let inputs = |jsonl, declared| ReadingInputs { jsonl, account_dir: tmp.path(), chosen: None, opened: None, declared, engine: false };
+        let file = tmp.path().join("hangar/context-windows.json");
+        let (mut old, mut new) = (ContextCache::default(), ContextCache::default());
+        old.keep_windows_at(file.clone());
+        new.keep_windows_at(file.clone());
+        old.reading(&inputs(&opus, Some(WINDOW_1M)), &scan_tail(&opus), true);
+        new.reading(&inputs(&sonnet, Some(WINDOW_1M)), &scan_tail(&sonnet), true);
+        let mut later = ContextCache::default();
+        later.keep_windows_at(file);
+        for jsonl in [&opus, &sonnet] {
+            let (ctx, _) = later.reading(&inputs(jsonl, None), &scan_tail(jsonl), false);
+            assert_eq!(ctx.map(|c| c.window), Some(WINDOW_1M), "{}", jsonl.display());
+        }
     }
 
     /// O limite que o usuário declara no ambiente (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`) é escolha dele para aquela
