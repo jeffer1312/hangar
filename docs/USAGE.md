@@ -17,7 +17,7 @@ como PWA e operar o chat. Site: [hangar.dev.br](https://hangar.dev.br). Pra arqu
 
 - `tmux`, Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+ (o instalador põe o que
   faltar).
-- Pelo menos um agente de código: Claude Code (o padrão), Codex, Pi, omp ou Kimi Code.
+- Pelo menos um agente de código: Claude Code (o padrão), Codex, Pi, omp, Kimi Code ou Antigravity CLI.
 - Celular na **mesma rede** do PC (Wi-Fi) **ou** ambos no **mesmo tailnet** (Tailscale).
 
 **Pelo app (Linux e Windows):** baixe o app de desktop na
@@ -651,6 +651,23 @@ e que a data do reset semanal mudará.
 No **Arquivo**, a retomada usa a conta registrada nos metadados da conversa e não troca de conta
 por cota ou por conveniência. Se a origem ficar ambígua, a retomada é recusada até haver uma única
 conta identificada. Esse fluxo não apaga, rotaciona nem migra credenciais ou conversas entre contas.
+
+### Antigravity (Google AI)
+
+O Hangar abre o Antigravity CLI (`agy`), o programa oficial do Google, igual ao Claude e ao Codex.
+Com o `agy` instalado (**Configurações → Agentes** mostra e instala), escolha **Antigravity** ao
+criar a sessão: ela roda no terminal (tmux), com o modelo escolhido na lista que o próprio `agy`
+devolve para a conta. O esforço já vem no nome do modelo. Os modos são **Aceitar edições**,
+**Automático** e **Plano**; o modo que pergunta antes de cada ferramenta ainda não existe no
+terminal do `agy`.
+
+Para usar mais de uma conta Google, abra **Contas e provedores → + Nova conta → Conta por
+assinatura → Conta do Google (Antigravity)**. A conta padrão é a que o `agy` já usa na máquina; a
+conta adicional ganha uma pasta própria. Abra o link, entre com a conta Google e cole o código (ou o
+endereço) que a página do Antigravity mostrar. Na primeira sessão de uma conta nova, o `agy` mostra
+os Termos do Google no terminal, e quem aceita é você.
+
+O Hangar não lê o login do Google, não consulta cota e não troca de conta sozinho.
 
 ### Continuar uma sessão Claude no Codex (em validação)
 

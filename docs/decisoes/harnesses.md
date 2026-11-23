@@ -1,9 +1,23 @@
-# Harnesses — Claude, Codex, Pi, omp, Kimi
+# Harnesses — Claude, Codex, Pi, omp, Kimi, Antigravity
 
 Decisões medidas, com data e número. As regras vigentes ficam na seção abaixo (o `CLAUDE.md`
 só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo assunto.
 
 ## Regras vigentes
+
+- **Antigravity (`agy`) roda o binário oficial do Google, sem ler o login nem chamar o Google.**
+  Com terminal, a TUI fica no tmux; o estado vem dos hooks `SessionStart`, `PreInvocation`,
+  `PostInvocation` e `Stop` (`provider_hooks` `agy-state-hook`), nunca de `PreToolUse` ou
+  `PostToolUse`, onde a resposta `{}` bloqueia a ferramenta. A conversa vem do
+  `transcript_full.jsonl` (`hangar-transcript/src/antigravity.rs`); a tela só diz permissão e
+  ocupado (`agy_analyze`). Conta adicional é uma pasta própria com `GEMINI_HOME`,
+  `SSH_CONNECTION` local e `AGY_ACP_FORCE_FILE_STORAGE=1` (`hangar-antigravity/src/env.rs`): sem o
+  `SSH_CONNECTION`, todas usam o login do chaveiro. Login por `agy acp --login`, com o link aberto e
+  o código colado pela pessoa. O Hangar nunca lê o token, nunca chama endpoint do Google, nunca troca
+  de conta sozinho e nunca aceita os Termos pela pessoa; a atualização automática do `agy` fica
+  desligada. "manual" só existe sem terminal: a TUI não abre no modo que pergunta, e o pedido com
+  terminal é 409 `erro_permissao_manual_sem_terminal`. Ver
+  [Antigravity com terminal](#antigravity-agy-com-terminal-23112026).
 
 - **Troca de agente pelo seletor de modelos espera o turno e segura a fila.** `POST /conta` com
   `when_idle` registra a troca (`RuntimeRegistry::hold_handoff`) e responde 202 na hora; a fila
@@ -1201,6 +1215,33 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   não viu o despacho procura no arquivo, para trás. Chamada feita dentro do script grava `content`
   vazio: o resultado sai do `toolUseResult`. Os aparelhos não sabem de Code Mode, só chamam o `REPL`
   de "Script". Ver [Code Mode](#code-mode-do-claude-code-script-entrega-e-página-20112026).
+
+## Antigravity (agy) com terminal (23/11/2026)
+
+Medido no `agy` 1.5.13 a 1.5.15, Linux, num servidor isolado (HOME, `TMUX_TMPDIR` e porta próprios).
+
+- **Transcript:** `<gemini>/antigravity-cli/brain/<conversa>/.system_generated/logs/transcript_full.jsonl`,
+  só acrescentado, um passo por linha: `USER_INPUT` (texto dentro de `<USER_REQUEST>`),
+  `PLANNER_RESPONSE` (`content` e `tool_calls`), `GENERIC` (saída de ferramenta, na ordem das
+  chamadas) e `SYSTEM_MESSAGE`; `status` `DONE` ou `ERROR`. A pasta da conversa vem de
+  `history.jsonl`.
+- **Hooks:** `<gemini>/config/hooks.json`, formato `{"<nome>": {"<Evento>": [{type, command, timeout}]}}`.
+  A entrada leva `conversationId`, `transcriptPath`, `cwd` e `fullyIdle`, e os hooks também
+  rodam sob `agy acp`. Um `PreToolUse` que devolve `{}` **bloqueia** a ferramenta: com um hook
+  lento em Node, as ferramentas pararam. Por isso o Hangar instala só os quatro eventos de estado.
+- **A conversa só nasce no primeiro prompt:** a mensagem inicial ficava presa na abertura; agora a
+  adoção (`gateway/other.rs`) entrega a fila. O Kimi tem o mesmo desenho e não foi testado.
+- **A caixa vazia mostra a dica do modo** (`Auto mode: … (shift+tab to cycle)`); lida como rascunho,
+  ela travava a entrega (`composer_busy`). `drive.rs` a reconhece (`AGY_MODE_HINT`).
+- **Modos da TUI:** `--mode accept-edits|auto|plan` e `--dangerously-skip-permissions`; sem flag, a
+  TUI abre em `auto`. Não há flag para o modo que pergunta, e por isso "manual" fica para o modo sem
+  terminal (decisão do dono).
+- **Várias contas:** só `GEMINI_HOME` não isola o login, que fica no chaveiro; com `SSH_CONNECTION`
+  local e `AGY_ACP_FORCE_FILE_STORAGE=1`, cada pasta tem o seu (provado com `agy models`).
+  Pasta nova abre os Termos do Google com opt-in de dados (`cache/onboarding.json`), e quem aceita
+  é a pessoa. `agy models` lista `id\tnome` sem gastar cota e serve de prova de login.
+- **Permissão com terminal:** a tela traz "Requesting permission for:" e as opções numeradas; o
+  `/select` com `interaction_id` respondeu "No, cancel" e recusou um `rm -rf`.
 
 ## Orientar pela fila da CLI (22/11/2026)
 
