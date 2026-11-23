@@ -1,5 +1,5 @@
 // crates/hangar-server/src/search/agents.rs
-//! Conversas de Codex, Pi, omp e Kimi no índice. A descoberta é a do Arquivo (`archive_list`) e as
+//! Conversas de Codex, Pi, omp, Kimi e Antigravity no índice. A descoberta é a do Arquivo (`archive_list`) e as
 //! linhas passam pelo parser do histórico dele, então o trecho abre no ponto. A conversa entra na
 //! pasta do Claude do cwd dela, como no Arquivo; sem cwd, fica fora (o Arquivo também não a lista).
 
@@ -58,6 +58,7 @@ pub(super) fn discover(env: &AccountEnvironment, known: crate::archive_list::Kno
         let account = match (c.provider, &c.codex) {
             ("codex", Some(owner)) => format!("codex:{}", crate::accounts::catalog::resolved(&owner.home).to_string_lossy()),
             ("kimi", _) => kimi.clone(),
+            ("antigravity", _) => antigravity_account(&c.path),
             _ => String::new(),
         };
         let transfer = transfers.remove(&c.path);
@@ -67,6 +68,12 @@ pub(super) fn discover(env: &AccountEnvironment, known: crate::archive_list::Kno
         });
     }
     (out, unread)
+}
+
+/// A conta Google dona do transcript, no id de `/api/credenciais` (`antigravity:<pasta>`): o transcript mora em
+/// `<pasta>/antigravity-cli/brain/<id>/.system_generated/logs/`.
+fn antigravity_account(path: &Path) -> String {
+    path.ancestors().nth(6).map_or_else(String::new, |dir| format!("antigravity:{}", crate::accounts::catalog::resolved(dir).to_string_lossy()))
 }
 
 /// O stat do transcript; erro que não é ausência vai a `unread`, e o índice mantém o que tem dele.
@@ -80,8 +87,8 @@ fn metadata(provider: &'static str, path: &Path, unread: &mut Vec<Unread>) -> Op
     }
 }
 
-/// As pastas a vigiar: a raiz do Pi, a do omp, a casa do Kimi e `sessions`/`archived_sessions` de
-/// cada conta Codex.
+/// As pastas a vigiar: a raiz do Pi, a do omp, a casa do Kimi, `sessions`/`archived_sessions` de
+/// cada conta Codex e o `brain` de cada conta do Antigravity.
 pub(super) fn roots(env: &AccountEnvironment) -> Vec<PathBuf> {
     use crate::session_open::{AgentProvider, archive};
     let w = archive::Where { home: &env.home, env: &env.base, server_projects: std::path::Path::new(""), config_dirs: &[], live: &[] };
@@ -91,6 +98,7 @@ pub(super) fn roots(env: &AccountEnvironment) -> Vec<PathBuf> {
     if let Ok(accounts) = service.snapshot(crate::accounts::Provider::Codex) {
         out.extend(accounts.iter().flat_map(|a| [a.home.join("sessions"), a.home.join("archived_sessions")]));
     }
+    out.extend(hangar_antigravity::paths::known_accounts(&env.home).iter().map(|a| a.brain_dir(&env.home)));
     out
 }
 
@@ -123,5 +131,12 @@ mod tests {
         assert!(metadata("pi", &dir.path().join("sumiu.jsonl"), &mut unread).is_none());
         assert_eq!(unread.len(), 1, "ausência não é falha");
         assert!(metadata("pi", &file, &mut unread).is_some());
+    }
+
+    #[test]
+    fn an_antigravity_transcript_belongs_to_the_account_folder_that_holds_it() {
+        let account = hangar_antigravity::Account::extra(PathBuf::from("/nao/existe/.antigravity-trabalho"));
+        let path = account.transcript_path(Path::new("/nao/existe"), "904fd70e-847b-49ed-9999-a13d7a4d9a98").unwrap();
+        assert_eq!(antigravity_account(&path), "antigravity:/nao/existe/.antigravity-trabalho");
     }
 }

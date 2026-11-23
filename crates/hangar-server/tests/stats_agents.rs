@@ -102,6 +102,33 @@ fn kimi_stats_preserve_delta_usage_request_time_tools_and_first_response() {
     assert_eq!(snapshot["ttft_ms"], 2000);
 }
 
+#[test]
+fn antigravity_stats_count_usage_per_response_and_pair_tool_output_by_order() {
+    let rows = [
+        json!({"step_index":0,"type":"USER_INPUT","status":"DONE","created_at":"2026-11-23T12:00:00Z",
+            "content":"<USER_REQUEST>\nlista\n</USER_REQUEST>"}),
+        json!({"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-23T12:00:03Z","model":"gemini-4-neon-high",
+            "input_tokens":100,"cache_read_tokens":300,"output_tokens":50,"tool_calls":[{"name":"run_command","args":{}}]}),
+        json!({"step_index":2,"type":"GENERIC","status":"DONE","created_at":"2026-11-23T12:00:07Z","content":"Command output:\nok"}),
+        json!({"step_index":3,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-23T12:00:09Z","model":"gemini-4-neon-high",
+            "input_tokens":10,"cache_read_tokens":0,"output_tokens":5,"content":"pronto"}),
+        // Versão antiga do agy: campos de uso nulos não viram passo.
+        json!({"step_index":4,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-23T12:00:10Z","model":null,
+            "input_tokens":null,"cache_read_tokens":null,"output_tokens":null,"content":"x"}),
+    ];
+    let snapshot = agent_snapshot(Provider::Antigravity, &rows);
+    assert_eq!(snapshot["turns"], 1);
+    assert_eq!(snapshot["steps"], 2);
+    assert_eq!(snapshot["in_tok"], 410);
+    assert_eq!(snapshot["out_tok"], 55);
+    assert_eq!(snapshot["cache_read_tok"], 300);
+    assert_eq!(snapshot["cache_pct"], 73);
+    assert_eq!(snapshot["ttft_ms"], 3000);
+    assert_eq!(snapshot["tool_ms"], 4000);
+    assert_eq!(snapshot["llm_ms"], 6000);
+    assert_eq!(snapshot["tok_s"], 9.2);
+}
+
 fn pi_message(role: &str, timestamp: i64, extra: serde_json::Value) -> serde_json::Value {
     let mut message = json!({"role":role,"timestamp":timestamp});
     message

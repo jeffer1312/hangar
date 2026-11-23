@@ -210,3 +210,63 @@ fn kimi_projects_skips_invalid_lines_and_later_entries_replace_projects() {
     assert!(simple::kimi_projects(&dir.path().join("missing")).is_empty());
     assert_eq!(simple::kimi_projects(&contract().join("costs/kimi/session_index.jsonl"))["session_k1"], "/repo/k");
 }
+
+fn agy_response(step: u64, at: &str, model: &str, input: i64, cache_read: i64, output: i64) -> Value {
+    json!({"step_index":step,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":at,"model":model,
+        "input_tokens":input,"cache_read_tokens":cache_read,"output_tokens":output})
+}
+
+#[test]
+fn antigravity_sums_each_response_by_day_and_base_model_and_skips_null_usage() {
+    let path = Path::new("/g/antigravity-cli/brain/904fd70e-847b-49ed-9999-a13d7a4d9a98/.system_generated/logs/transcript_full.jsonl");
+    let mut fold = simple::new_agy_fold(path);
+    feed(&mut fold, json!({"step_index":0,"type":"USER_INPUT","created_at":"2026-11-23T11:59:10Z","content":"<USER_REQUEST>\nPLANNER_RESPONSE\n</USER_REQUEST>"}));
+    feed(&mut fold, agy_response(1, "2026-11-23T11:59:12Z", "gemini-3.8-flash-low", 10130, 0, 4));
+    feed(&mut fold, agy_response(4, "2026-11-23T11:59:34Z", "gemini-4-neon-high", 9643, 0, 47));
+    let mut resumed: simple::AgyFold = serde_json::from_slice(&serde_json::to_vec(&fold).unwrap()).unwrap();
+    for target in [&mut fold, &mut resumed] {
+        feed(target, agy_response(9, "2026-11-23T12:02:40Z", "gemini-4-neon-high", 2357, 8285, 116));
+        // Versão antiga do agy: campos de uso nulos não viram linha nem somam.
+        feed(target, json!({"step_index":11,"type":"PLANNER_RESPONSE","created_at":"2026-11-23T12:03:00Z","model":null,
+            "input_tokens":null,"cache_read_tokens":null,"output_tokens":null}));
+    }
+    let out = fold.close();
+    assert_eq!(out.costs, fold.close().costs);
+    assert_eq!(out.costs, resumed.close().costs);
+    assert!(out.usage.is_empty() && out.areas.is_none());
+    let summary: Vec<_> = out.costs.iter().map(|r| (r.model.as_str(), r.input, r.cache_read, r.output, r.cache_write)).collect();
+    assert_eq!(summary, [("gemini-3.8-flash", 10130, 0, 4, 0), ("gemini-4-neon", 12000, 8285, 163, 0)]);
+    for row in &out.costs {
+        assert_eq!((row.source.as_str(), row.provider.as_str(), row.project.as_str()), ("antigravity", "google", "desconhecido"));
+        assert_eq!(row.session_id, "904fd70e-847b-49ed-9999-a13d7a4d9a98");
+        assert!(!row.subagente && row.account_id.is_none());
+    }
+    assert_eq!(out.costs[1].ts.iso(), "2026-11-23T08:59:34-03:00");
+    feed(&mut fold, agy_response(13, "2026-11-24T12:00:00Z", "gemini-4-neon-high", 1, 0, 1));
+    assert_eq!(fold.close().costs.len(), 3, "outro dia é outra linha");
+}
+
+#[test]
+fn antigravity_base_model_drops_only_the_effort_suffix() {
+    for (model, base) in [("gemini-4-neon-high", "gemini-4-neon"), ("gemini-3.8-flash-low", "gemini-3.8-flash"),
+        ("gemini-4-neon-xhigh", "gemini-4-neon"), ("gemini-4-neon-medium", "gemini-4-neon"), ("gemini-4-neon", "gemini-4-neon"),
+        ("-high", "-high"), ("", "")] {
+        assert_eq!(simple::agy_base_model(model), base, "{model}");
+    }
+}
+
+#[test]
+fn antigravity_model_without_a_rate_counts_tokens_and_has_no_cost() {
+    let dir = tempfile::tempdir().unwrap();
+    // Tarifa de teste, só para a conta: o preço real vem do models.dev.
+    std::fs::write(dir.path().join("models.dev.json"), json!({"modelos": {
+        "gemini-4-neon": {"provider": "google", "input": 2.0, "output": 12.0, "cache_read": 0.5}}}).to_string()).unwrap();
+    let pricing = costs::pricing::Pricing::load(dir.path());
+    let mut fold = simple::new_agy_fold(Path::new("/g/antigravity-cli/brain/904fd70e-847b-49ed-9999-a13d7a4d9a98/.system_generated/logs/transcript_full.jsonl"));
+    feed(&mut fold, agy_response(1, "2026-11-23T12:00:00Z", "gemini-4-neon-high", 1_000_000, 2_000_000, 1_000_000));
+    feed(&mut fold, agy_response(2, "2026-11-23T12:00:01Z", "gemini-9-desconhecido-high", 10, 0, 10));
+    let rows = fold.close().costs;
+    assert_eq!(costs::report_costs::row_cost(&rows[0], &pricing), Some([2.0, 12.0, 0.0, 1.0]));
+    assert_eq!(costs::report_costs::row_cost(&rows[1], &pricing), None, "sem tarifa é custo vazio, nunca zero");
+    assert_eq!((rows[1].input, rows[1].output), (10, 10));
+}

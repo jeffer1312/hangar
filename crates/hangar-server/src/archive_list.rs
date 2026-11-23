@@ -27,7 +27,7 @@ use crate::session_write::json_response;
 const FOLDER_CAP: usize = 100;
 const RECENT_CAP: i64 = 40;
 const BY_CWD_CAP: i64 = 12;
-const PROVIDERS: [&str; 4] = ["pi", "omp", "kimi", "codex"];
+const PROVIDERS: [&str; 5] = ["pi", "omp", "kimi", "codex", "antigravity"];
 // `_RESERVA_JANELA_S`: a reserva pré-aquecida vive no máximo 10 min.
 const RESERVE_WINDOW: f64 = 15.0 * 60.0;
 const TAIL_BYTES: u64 = 64 * 1024;
@@ -42,7 +42,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
 /// Um transcript Claude: `(mtime, arquivo, pasta, conta, rótulo)` do `_contas`/`_folder_files`.
 struct Claude { mtime: f64, md: std::fs::Metadata, path: PathBuf, project: String, config_dir: Option<String>, label: String, account: usize }
 
-/// Uma conversa de Pi, omp, Kimi ou Codex (`archive_providers.Conversa`), com a conta Codex dona.
+/// Uma conversa de Pi, omp, Kimi, Codex ou Antigravity (`archive_providers.Conversa`), com a conta Codex dona.
 pub(crate) struct Other {
     pub(crate) provider: &'static str, pub(crate) cwd: Option<String>, pub(crate) sid: String, pub(crate) path: PathBuf,
     pub(crate) mtime: f64, pub(crate) codex: Option<Account>,
@@ -354,7 +354,7 @@ impl Unread {
     }
 }
 
-/// As conversas de Pi, omp e Kimi (o índice da busca lê as mesmas) e o que não pôde ser lido.
+/// As conversas de Pi, omp, Kimi e Antigravity (o índice da busca lê as mesmas) e o que não pôde ser lido.
 pub(crate) fn agent_conversations(env: &crate::accounts::environment::AccountEnvironment, known: KnownCwd) -> (Vec<Other>, Vec<Unread>) {
     let w = Where { home: &env.home, env: &env.base, server_projects: Path::new(""), config_dirs: &[], live: &[] };
     let sessions = archive::agent_root(&w, AgentProvider::Omp);
@@ -376,7 +376,56 @@ fn agent_conversations_with(env: &crate::accounts::environment::AccountEnvironme
         Err(error) => unread.push(Unread::new("omp",None,error)),
     }
     out.extend(kimi_conversations(&crate::session_open::agents::kimi_home(&env.home, &env.base), &mut unread, replace_bytes));
+    // O leitor de cabeçalho das worktrees procura a linha `session`, que o transcript do agy não tem.
+    out.extend(antigravity_conversations(&env.home, known, &mut unread));
     (out, unread)
+}
+
+/// As conversas do Antigravity de cada conta Google (a padrão e as adicionais). O transcript não guarda a pasta: ela
+/// sai do `history.jsonl` da conta, lido só se algum transcript mudou; conversa que não aparece lá fica fora, como a
+/// sem cwd dos outros agentes.
+fn antigravity_conversations(home: &Path, known: KnownCwd, unread: &mut Vec<Unread>) -> Vec<Other> {
+    let mut out = Vec::new();
+    for account in hangar_antigravity::paths::known_accounts(home) {
+        let brain = account.brain_dir(home);
+        let dirs = match std::fs::read_dir(&brain) {
+            Ok(dirs) => dirs,
+            Err(e) => { Unread::io("antigravity", Some(&brain), &brain, &e, unread); continue }
+        };
+        let mut workspaces: Option<HashMap<String, String>> = None;
+        for dir in dirs.flatten() {
+            let Some(sid) = dir.file_name().to_str().filter(|id| hangar_antigravity::paths::valid_conversation_id(id)).map(str::to_owned) else { continue };
+            let Some(path) = account.transcript_path(home, &sid).filter(|p| p.is_file()) else { continue };
+            let cwd = match known(&path) {
+                Some(cwd) => cwd,
+                None => workspaces.get_or_insert_with(|| {
+                    let history = account.data_dir(home).join("history.jsonl");
+                    antigravity_workspaces(&history).unwrap_or_else(|e| {
+                        // Sem a pasta, a conversa sairia do índice: o que ele tem desta conta fica.
+                        unread.push(Unread::new("antigravity", Some(&brain), format!("{}: {e}", history.display())));
+                        HashMap::new()
+                    })
+                }).get(&sid).cloned(),
+            };
+            out.push(Other { provider: "antigravity", cwd, sid, mtime: mtime_of(&path), path, codex: None });
+        }
+    }
+    out
+}
+
+/// Conversa → pasta pelo `history.jsonl` do `agy` (`{"conversationId", "workspace", …}` por pedido digitado); a última
+/// linha de cada conversa vale. Arquivo ausente é conta sem conversa digitada, não erro.
+pub(crate) fn antigravity_workspaces(history: &Path) -> std::io::Result<HashMap<String, String>> {
+    let raw = match std::fs::read(history) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => return Err(e),
+    };
+    Ok(raw.split(|b| *b == b'\n').filter_map(|line| serde_json::from_slice::<Value>(line).ok()).filter_map(|v| {
+        let id = v["conversationId"].as_str().filter(|id| !id.is_empty())?.to_owned();
+        let workspace = v["workspace"].as_str().filter(|w| !w.is_empty())?.to_owned();
+        Some((id, workspace))
+    }).collect())
 }
 
 fn worktree_cwd(path: &Path) -> Option<String> {
