@@ -172,6 +172,21 @@ pub(crate) fn base_button(id: &'static str, base: String) -> Button {
     Button::new(id).outline().small().w_full().label(base).dropdown_caret(true)
 }
 
+/// O seletor de agente da criação, na tela e na novidade: controle segmentado na trilha das raízes do lado esquerdo, raio 11
+/// por fora e 8 nos segmentos a 3 de distância.
+pub(crate) fn provider_track() -> Stateful<Div> {
+    div().id("create-providers").role(Role::Group).aria_label(tr("create_provider_aria")).flex().gap(px(2.))
+        .p(px(3.)).rounded(px(11.)).bg(theme::inset())
+}
+
+/// Um segmento do seletor de agente: o logo e o nome, aceso no escolhido.
+pub(crate) fn provider_segment(provider: &str, on: bool, cx: &App) -> Button {
+    soft_choice(SharedString::from(format!("create-provider-{provider}")), on, theme::muted(), cx).flex_1().min_w_0().h(px(32.)).rounded(px(8.))
+        .accessibility_label(provider_name(provider))
+        .child(div().flex().items_center().gap(px(6.)).text_sm().when(on, |el| el.font_weight(FontWeight::MEDIUM))
+            .child(chrome::provider_glyph(provider, 16.)).child(provider_name(provider)))
+}
+
 /// Uma linha do menu do modo, na tela e na novidade: o nome e, embaixo, o que muda para quem usa.
 pub(crate) fn mode_row(id: &'static str, on: bool, headless: bool, codex: bool) -> Button {
     menu_row_with(id, on, tr(if headless { "create_mode_headless" } else { "create_mode_tmux" }), String::new(),
@@ -2248,16 +2263,10 @@ impl NewSession {
         let probe_error = self.providers.value.as_ref().and_then(|v| v.as_ref().err()).cloned();
         let missing = ready == Some(false);
         let busy = self.creating;
-        // Controle segmentado na trilha das raízes do lado esquerdo: raio 11 por fora, 8 nos segmentos a 3 de distância.
-        let providers = div().id("create-providers").role(Role::Group).aria_label(tr("create_provider_aria")).flex().gap(px(2.))
-            .p(px(3.)).rounded(px(11.)).bg(theme::inset())
+        let providers = provider_track()
             .children(PROVIDERS.iter().map(|&p| {
                 let available = self.providers.ok().and_then(|m| m.get(p)).is_none_or(|probe| probe.disponivel);
-                let on = self.provider == p;
-                soft_choice(SharedString::from(format!("create-provider-{p}")), on, theme::muted(), cx).flex_1().min_w_0().h(px(32.)).rounded(px(8.))
-                    .disabled(!available || busy).accessibility_label(provider_name(p))
-                    .child(div().flex().items_center().gap(px(6.)).text_sm().when(on, |el| el.font_weight(FontWeight::MEDIUM))
-                        .child(chrome::provider_glyph(p, 16.)).child(provider_name(p)))
+                provider_segment(p, self.provider == p, cx).disabled(!available || busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.choose_provider(p, window, cx)))
             }));
         let target = self.target().cloned();
