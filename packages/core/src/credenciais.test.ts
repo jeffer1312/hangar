@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { credentialAuth, credentialGroup, codexAccountMessage, contaCodexParaEntrar, codexCliAusente, defaultCodexAccount,
-  motivoLoginIndisponivel,
-  type Credencial, type CodexAccount } from './credenciais';
+  defaultAntigravityAccount, motivoLoginIndisponivel,
+  type AntigravityAccount, type Credencial, type CodexAccount } from './credenciais';
 import { configureApi } from './apiEnv';
 import { configureLocale } from './i18n';
 import { overwriteGetLocale } from './paraglide/runtime';
@@ -299,5 +299,24 @@ describe('contaCodexParaEntrar', () => {
     expect(defaultCodexAccount(accounts, 'gpt')?.id).toBe('gpt');
     expect(defaultCodexAccount([conta('default', true, 'disconnected')])?.id).toBe('default');
     expect(defaultCodexAccount([])).toBeUndefined();
+  });
+});
+
+describe('conta Google do Antigravity na criação', () => {
+  const conta = (id: string, logado: boolean | null): AntigravityAccount => ({ id, padrao: id === 'default', pasta: `/h/${id}`,
+    credencial: `antigravity:/h/${id}`, logado, termos_aceitos: true, em_uso: false });
+
+  it('prefere a padrão logada, depois outra logada, depois a padrão', () => {
+    expect(defaultAntigravityAccount([conta('trabalho', true), conta('default', true)])?.id).toBe('default');
+    expect(defaultAntigravityAccount([conta('default', false), conta('trabalho', true)])?.id).toBe('trabalho');
+    expect(defaultAntigravityAccount([conta('trabalho', null), conta('default', null)])?.id).toBe('default');
+    expect(defaultAntigravityAccount([conta('trabalho', false)])?.id).toBe('trabalho');
+    expect(defaultAntigravityAccount([])).toBeUndefined();
+  });
+
+  it('a linha da credencial é de assinatura, sem cota', () => {
+    const linha = { id: 'antigravity:/h/.gemini', tipo: 'antigravity', auth_method: 'oauth', nome: 'Google (padrão)',
+      nome_natural: 'Google (padrão)', ativa: false, usos: [], cota: null, login: { estado: 'ok', loggedIn: true } } as Credencial;
+    expect(credentialGroup(linha)).toBe('subscription');
   });
 });

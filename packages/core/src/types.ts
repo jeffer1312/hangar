@@ -26,9 +26,10 @@ export interface LoopState {
 // oh-my-pi, fork do pi — mesmo transcript, mas a pergunta ao usuario vem da tool `ask`. O front usa
 // isto pra esconder controles Claude-only (picker de /model, slash-commands) e pra rotular a
 // sessao (lib/format.providerName). "orq" é a linha do orquestrador sem LLM (skill orquestrar-auto): só leitura, sem pane.
+// "antigravity" é o Antigravity CLI do Google (`agy`), no tmux como o Pi e o Kimi.
 // Tipo nomeado porque a mesma uniao viaja pela cadeia de criacao (CreateSessionSheet -> handleCreate
 // das duas views -> api.createSession): quando o Pi entrou, as copias literais ficaram pra tras.
-export type Provider = 'claude' | 'codex' | 'pi' | 'kimi' | 'omp' | 'orq';
+export type Provider = 'claude' | 'codex' | 'pi' | 'kimi' | 'omp' | 'antigravity' | 'orq';
 
 export interface SessionInfo {
   interaction_id?: string | null;

@@ -2,7 +2,7 @@ import { apiEnv, type EventSourceLike } from './apiEnv';
 import type { Server } from './servers';
 import { isOwnMachine } from './machineImport';
 import { baseOf, decidirRota, rotaDecidida, UNCONFIRMED_BASE } from './rota';
-import type { CodexAccount, CodexIntegracaoEstado, CodexLoginAttempt, CodexResetOutcome, Credencial } from './credenciais';
+import type { AntigravityAccounts, CodexAccount, CodexIntegracaoEstado, CodexLoginAttempt, CodexResetOutcome, Credencial } from './credenciais';
 import * as m from './paraglide/messages';
 import { localeAtual } from './i18n';
 import { basename } from './format';
@@ -230,7 +230,7 @@ async function ensureOk(res: Response, server?: Server | null): Promise<void> {
 //    `/api/claude-configs/<nome>` é o rótulo da conta. O diário promete, no topo do lib/diag.ts,
 //    não guardar caminho de arquivo do projeto — e sem `archive` nesta lista ele guardava, em toda
 //    retomada de conversa arquivada (é POST, então entra mesmo dando certo).
-const SEGMENTOS_OPACOS = /\/(sessions|servers|agents|archive|claude-configs|projects|codex-contas|conta-estado)\/[^/]+/g;
+const SEGMENTOS_OPACOS = /\/(sessions|servers|agents|archive|claude-configs|projects|codex-contas|antigravity-contas|conta-estado)\/[^/]+/g;
 
 // Id de entrada da fila; `reorder` é rota fixa e fica.
 const ID_DA_FILA = /\/queue\/(?!reorder(?:\/|$))[^/]+/g;
@@ -1588,20 +1588,24 @@ export async function modelOptions(
   return apiFetch(modelOptionsPath(provider, engine, configDir, codexAccount, engineAccount));
 }
 
-function modelOptionsPath(provider: string, engine?: string | null, configDir?: string | null, codexAccount?: string | null,
+// `account`: a conta Codex, ou no Antigravity o id de `/api/antigravity-contas` (`default` ou o nome da pasta).
+function modelOptionsPath(provider: string, engine?: string | null, configDir?: string | null, account?: string | null,
   engineAccount?: string | null): string {
   const q = new URLSearchParams({ provider });
   if (engine) q.set('engine', engine);
   if (configDir) q.set('config_dir', configDir);
-  if (provider === 'codex' && codexAccount) q.set('codex_account', codexAccount);
+  if (provider === 'codex' && account) q.set('codex_account', account);
+  if (provider === 'antigravity' && account) q.set('conta', account);
   // O catálogo de um motor do CLIProxyAPI depende da conta ChatGPT escolhida.
   if (provider === 'claude' && engine && engineAccount) q.set('engine_account', engineAccount);
   return `/api/model-options?${q}`;
 }
 
 export function modelOptionsForServer(server: Server, provider: string, engine?: string | null,
-  configDir?: string | null, codexAccount?: string | null, signal?: AbortSignal, engineAccount?: string | null): ReturnType<typeof modelOptions> {
-  return apiFetchForServer(server, modelOptionsPath(provider, engine, configDir, codexAccount, engineAccount), { signal: comTeto(signal, 8000) });
+  configDir?: string | null, account?: string | null, signal?: AbortSignal, engineAccount?: string | null): ReturnType<typeof modelOptions> {
+  // O `agy models` da conta leva até 20 s no servidor antes de desistir.
+  const timeout = provider === 'antigravity' ? 30_000 : 8000;
+  return apiFetchForServer(server, modelOptionsPath(provider, engine, configDir, account, engineAccount), { signal: comTeto(signal, timeout) }, timeout);
 }
 
 export interface ClaudeProviderTarget {
@@ -1709,6 +1713,19 @@ export function consumeCodexRateLimitReset(
     method: 'POST',
     body: JSON.stringify({ credit_id: creditId, idempotency_key: idempotencyKey }),
   });
+}
+// Contas Google do Antigravity. A lista roda o `agy models` de cada conta no servidor (até 20 s cada, em paralelo).
+const ANTIGRAVITY_LIST_MS = 30_000;
+export function getAntigravityAccountsForServer(server: Server, signal?: AbortSignal): Promise<AntigravityAccounts> {
+  return apiFetchForServer(server, '/api/antigravity-contas', { signal: comTeto(signal, ANTIGRAVITY_LIST_MS) }, ANTIGRAVITY_LIST_MS);
+}
+/** Nome na regra do servidor: `[a-z0-9][a-z0-9_-]{0,31}`, sem `default`. */
+export function createAntigravityAccountForServer(server: Server, name: string): Promise<{ id: string; pasta: string }> {
+  return apiFetchForServer(server, '/api/antigravity-contas', { method: 'POST', body: JSON.stringify({ name }) });
+}
+/** Só conta adicional sem agy aberto nela; a padrão (~/.gemini) o servidor recusa. */
+export function deleteAntigravityAccountForServer(server: Server, id: string): Promise<{ ok: true }> {
+  return apiFetchForServer(server, `/api/antigravity-contas/${encodeURIComponent(id)}`, { method: 'DELETE' }, 30_000);
 }
 export function getRootsForServer(server: Server, signal?: AbortSignal): Promise<FsRoot[]> {
   return apiFetchForServer(server, '/api/fs/roots', { signal: comTeto(signal, 8000) });

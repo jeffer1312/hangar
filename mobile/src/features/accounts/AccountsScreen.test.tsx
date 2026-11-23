@@ -16,6 +16,8 @@ vi.mock('@hangar/core', async original => ({ ...await original<typeof import('@h
   deleteCodexAccountForServer: calls.deleteAccount, deleteEngineForServer: calls.deleteEngine, consumeCodexRateLimitResetForServer: calls.consume,
   startClaudeAccountLoginForServer: calls.claudeStart, getClaudeAccountLoginStepForServer: calls.claudeRead,
   cancelClaudeAccountLoginForServer: calls.claudeCancel, criarConta: calls.createClaude, sairConta: calls.logoutClaude,
+  // A lista das contas Google é outra leitura; sem o agy na máquina do teste ela vem vazia.
+  getAntigravityAccountsForServer: async () => ({ instalado: false, contas: [] }),
 }));
 // A casca da tela depende do fundo nativo e da navegação; as linhas, cabeçalho e ações são reais.
 vi.mock('../../ui/Screen', () => ({ Screen: ({ children }: { children: ReactNode }) => createElement('main', null, children) }));

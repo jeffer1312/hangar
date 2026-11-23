@@ -49,6 +49,8 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
   // omp é o fork do Pi: mesmo seletor, mesmos endpoints.
   const isPi = provider === 'pi' || provider === 'omp';
   const isKimi = provider === 'kimi';
+  // O modelo do Antigravity se escolhe na criação; a sessão aberta não tem como trocá-lo.
+  const isAntigravity = provider === 'antigravity';
 
   const [tempError, setTempError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -83,6 +85,12 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
     setError(null);
     setNotice(null);
     const current = chosen.model ?? statusFields?.model;
+    if (isAntigravity) {
+      setItems([]);
+      setNotice(m.mobile_antigravity_model_fixed());
+      setLoading(false);
+      return;
+    }
     try {
       if (isCodex) {
         const res = await getCodexModels(name, server);
@@ -114,11 +122,12 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
     } finally {
       setLoading(false);
     }
-  }, [name, server, isCodex, isPi, isKimi, chosen.model, statusFields?.model]);
+  }, [name, server, isCodex, isPi, isKimi, isAntigravity, chosen.model, statusFields?.model]);
 
   const select = useCallback(
     async (it: PillMenuItem) => {
       if (!server) { setNotice(m.chat_servidor_removido()); return; }
+      if (isAntigravity) { setNotice(m.mobile_antigravity_model_fixed()); return; }
       const id = it.id ?? it.label;
       const applyChoice = (next: Chosen) => {
         const key = it.id ?? it.hint ?? it.label;
@@ -174,10 +183,10 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
         }
       }
     },
-    [name, server, isCodex, isPi, isKimi, chosen, onChosen, statusFields?.model, statusFields?.effort, flash, close],
+    [name, server, isCodex, isPi, isKimi, isAntigravity, chosen, onChosen, statusFields?.model, statusFields?.effort, flash, close],
   );
 
   const refresh = useCallback(() => load(true), [load]);
   return { model, display, failed: tempError !== null, items: selectedItems, loading, error, notice, load, select,
-    refresh: !isCodex && !isPi && !isKimi ? refresh : undefined };
+    refresh: !isCodex && !isPi && !isKimi && !isAntigravity ? refresh : undefined };
 }

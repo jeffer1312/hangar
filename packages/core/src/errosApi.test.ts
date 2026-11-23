@@ -60,6 +60,15 @@ describe('transcrição de áudio já enviado', () => {
   });
 });
 
+describe('recusas das contas e da abertura do Antigravity', () => {
+  it.each(['erro_conta_antigravity_inexistente', 'erro_agy_ausente', 'erro_nome_conta_invalido', 'erro_conta_existe', 'erro_conta_padrao', 'erro_conta_em_uso', 'erro_tentativa_inexistente', 'erro_codigo_vazio', 'erro_codigo_invalido', 'erro_codigo_ja_enviado', 'erro_logout_recusado', 'erro_modelos_antigravity', 'erro_permissao_manual_sem_terminal'])(
+    '%s vira frase do app, não o texto do servidor', (code) => {
+      const texto = formataErro({ code, params: {}, msg: 'texto-do-servidor' });
+      expect(texto).not.toBe('texto-do-servidor');
+      expect(texto).not.toBe(code);
+    });
+});
+
 describe('recusas do par externo', () => {
   it.each(['erro_grupo_orq_par_externo', 'erro_par_repetido', 'erro_par_remetente_invalido'])(
     '%s vira frase do app, não o texto do servidor', (code) => {
