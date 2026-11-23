@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use zeroize::Zeroize;
 
 use super::apple::CodeReply;
-use super::job::{BAD_REQUEST, BUSY, Failure, FORBIDDEN, NOT_WAITING, SERVICE_MISSING, Start, UNKNOWN_JOB};
+use super::job::{BAD_REQUEST, BUSY, Failure, FORBIDDEN, NOT_WAITING, NOTHING_TO_CANCEL, SERVICE_MISSING, Start, UNKNOWN_JOB};
 use super::DeviceError;
 use crate::routes::AppState;
 
@@ -91,6 +91,17 @@ pub async fn trust(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     match st.device_install.link.request_trust(&udid).await {
         Ok(()) => reply(StatusCode::OK, json!({"ok": true})),
         Err(e) => device_failure(e),
+    }
+}
+
+/// Para o trabalho em andamento no aparelho; serve também quando a tela perdeu o `job`.
+pub async fn cancel(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if let Err(r) = guard(&st, peer, &req).await { return r; }
+    let Some(Udid { udid }) = body(req).await else { return bad_body() };
+    match st.device_install.cancel(&udid) {
+        Ok(()) => reply(StatusCode::OK, json!({"ok": true})),
+        Err(f) if f.code == NOTHING_TO_CANCEL || f.code == BUSY => failure(StatusCode::CONFLICT, f),
+        Err(f) => failure(StatusCode::INTERNAL_SERVER_ERROR, f),
     }
 }
 

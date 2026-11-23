@@ -103,9 +103,12 @@ pub(crate) use vault_requests::{approve_body, approve_title, request_button, req
 pub(crate) use create::{base_button, base_row, mode_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
-pub(crate) use connect::device_card;
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
 pub(crate) use status::parts as status_parts;
+pub(crate) use sign_in::{account_top as sign_in_account_top, default_picks as sign_in_default_picks, enter_button as sign_in_enter_button,
+    form_field as sign_in_form_field, form_heading as sign_in_form_heading, machine_subtitle as sign_in_machine_subtitle,
+    pick_checkbox as sign_in_pick_checkbox, pick_row as sign_in_pick_row, section_heading as sign_in_section_heading, sign_in_card,
+    sign_out_button as sign_in_sign_out_button, submit_button as sign_in_submit_button};
 pub(crate) use viewer::{STRIP_THUMB, play_badge, show_in_chat_button, strip_day, strip_frame, strip_row, strip_thumb, strip_window, viewer_counter,
     viewer_stage, viewer_title};
 pub(crate) use media_panel::{media_cell, media_cell_side, media_day_title, media_filter_chip, media_filter_row, media_grid_row, media_section_tabs};
@@ -138,6 +141,7 @@ mod sync;
 mod connect;
 mod devices;
 mod guests;
+mod sign_in;
 mod shared_config;
 mod tree;
 mod find;
@@ -505,8 +509,6 @@ enum Payload {
     PluginInput(String, crate::plugin_ui::Control, EntityId, Result<Value, Failure>),
     // Destrancar o chaveiro de uma máquina (chave `servers::norm`): a resposta é dela, não da conexão ativa.
     Keyring(String, Result<Value, Failure>),
-    // Aparelho pedindo entrada no Connect de uma máquina: a resposta é dela, não da conexão ativa.
-    ConnectNotice(connect::NoticeReply),
     // Lista de outra máquina: a geração dos SSE de lista, a chave do servidor e o que chegou.
     Remote(u64, String, servers::RemoteUpdate),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
@@ -1014,8 +1016,10 @@ pub struct Hangar {
     worktree_settings: worktree_settings::WorktreeSettings,
     auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
+    guests: guests::Guests,
+    /// A entrada pela conta do Connect no cartão de conexão: conta, convidado e a liberação deste computador.
+    sign_in: sign_in::SignIn,
     connect: connect::Connect,
-    connect_notices: connect::Notices,
     devices: devices::Devices,
     shared: shared_config::SharedConfig,
     machines: machines::Machines,
@@ -1367,7 +1371,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
-            server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), connect_notices: connect::Notices::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
+            server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), guests: guests::Guests::default(), sign_in: sign_in::SignIn::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), whatsapp: whatsapp::WhatsApp::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
@@ -1593,7 +1597,7 @@ impl Hangar {
     fn open_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.connection_dialog { self.connection_origin = window.focused(cx).map(|focus| focus.downgrade()); }
         self.connection_dialog = true;
-        self.address.update(cx, |input, cx| input.focus(window, cx));
+        if !self.sign_in_takes_focus(window, cx) { self.address.update(cx, |input, cx| input.focus(window, cx)); }
         cx.notify();
     }
 
@@ -2166,7 +2170,6 @@ impl Hangar {
                 return;
             }
             Payload::Keyring(key, result) => { self.receive_keyring(key, result, cx); return; }
-            Payload::ConnectNotice(reply) => { self.receive_connect_notice(reply, cx); return; }
             // Cada máquina responde por si: a troca do ativo não descarta a resposta.
             Payload::Presence(key, switched, result) => { self.receive_presence(key, switched, result, window, cx); return; }
             // Cada máquina tem a própria geração: a troca do ativo não derruba as listas das outras.
@@ -2580,7 +2583,7 @@ impl Hangar {
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::SaveProgress(..) | Payload::UploadProgress(..) | Payload::PageOpened(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
-                | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::ConnectNotice(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
+                | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
                 | Payload::Mermaid(..) | Payload::TourProgress(..) => unreachable!(),
         }
         // Lista que trocou ou tirou a sessão aberta refaz a conversa.
@@ -9217,6 +9220,11 @@ impl Render for Hangar {
         let dialog_width = (window.viewport_size().width - px(32.)).min(px(480.));
         let entry = self.render_entry(cx);
         let entry_shown = entry.is_some();
+        // Primeiro acesso: a conta do Connect no alto, e o cartão de sempre (endereço e token, o Hangar deste computador)
+        // recolhido em "Outras formas de entrar".
+        let sign_in = (self.connection_dialog && self.sign_in_shown()).then(|| self.render_first_sign_in(window, cx));
+        let sign_in_others = sign_in.as_ref().map(|_| self.render_sign_in_others(cx));
+        let classic = sign_in.is_none() || self.sign_in_others_open();
         // Só montado com a conexão aberta: a raiz redesenha a cada batida das animações.
         let dialog = self.connection_dialog.then(|| div().id("connection-card").w(dialog_width).max_h(window.viewport_size().height - dialog_top - px(16.))
             .p(px(20.)).bg(theme::popup_fill(theme::raised())).border_1().border_color(theme::glass_border()).rounded(px(16.))
@@ -9231,19 +9239,21 @@ impl Render for Hangar {
                     cx.notify();
                 }
             }))
-            .map(|el| match entry {
+            .children(sign_in)
+            .children(sign_in_others)
+            .when(classic, |el| el.map(|el| match entry {
                 Some(card) => el.child(card),
                 None => el.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(tr("connection")))
                     .child(div().text_sm().text_color(theme::muted()).child(tr("connection_hint")))
                     .child(div().text_sm().child(tr("server"))).child(Input::new(&self.address).aria_label(tr("server")))
                     .child(div().text_sm().child(tr("token"))).child(Input::new(&self.token).aria_label(tr("token"))),
-            })
-            .when(self.electron_offer, |el| el.child(div().flex().flex_col().gap_2().pt_3().border_t_1().border_color(theme::glass_border())
+            }))
+            .when(classic && self.electron_offer, |el| el.child(div().flex().flex_col().gap_2().pt_3().border_t_1().border_color(theme::glass_border())
                 .child(div().text_sm().text_color(theme::muted()).child(tr("electron_import_offer_hint")))
                 .child(Button::new("electron-import").outline().label(tr("electron_import_offer"))
                     .on_click(cx.listener(|this, _, window, cx| this.import_electron(false, window, cx))))))
-            .when_some(self.error.clone(), |el, error| el.child(div().text_sm().text_color(theme::warning()).child(error)))
-            .when(!entry_shown, |el| el.child(div().flex().justify_end().gap_2()
+            .when_some(self.error.clone().filter(|_| classic), |el, error| el.child(div().text_sm().text_color(theme::warning()).child(error)))
+            .when(classic && !entry_shown, |el| el.child(div().flex().justify_end().gap_2()
                 .when(self.api.is_some(), |el| el.child(Button::new("cancel").label(tr("cancel")).on_click(cx.listener(|this, _, window, cx| {
                     this.connection_dialog = false;
                     this.restore_cleanup_connection(window, cx);

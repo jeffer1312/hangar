@@ -4,45 +4,27 @@ use super::device::Remote;
 use super::server_config::chip;
 use super::settings::Page;
 use base64::{Engine as _, engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}};
-use ring::{aead, hkdf, pbkdf2, rand::{SecureRandom, SystemRandom}};
-use std::num::NonZeroU32;
+use hangar_connect_client::crypto;
 
-pub(super) const PBKDF2_ITERATIONS: u32 = 600_000;
+pub(super) const PBKDF2_ITERATIONS: u32 = crypto::ITERATIONS;
 
-/// Chaves da conta no hub, como o web: PBKDF2 da senha → HKDF em dois ramos, `cp-auth` (vai ao hub) e `cp-enc` (fica aqui).
-pub(super) struct Keys { pub(super) auth_hash: String, pub(super) enc: [u8; 32] }
-
-pub(super) fn derive_keys(password: &str, salt: &[u8], iterations: u32) -> Option<Keys> {
-    let mut master = [0u8; 32];
-    pbkdf2::derive(pbkdf2::PBKDF2_HMAC_SHA256, NonZeroU32::new(iterations)?, salt, password.as_bytes(), &mut master);
-    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, &[]).extract(&master);
-    let (mut auth, mut enc) = ([0u8; 32], [0u8; 32]);
-    prk.expand(&[b"cp-auth"], hkdf::HKDF_SHA256).and_then(|okm| okm.fill(&mut auth)).ok()?;
-    prk.expand(&[b"cp-enc"], hkdf::HKDF_SHA256).and_then(|okm| okm.fill(&mut enc)).ok()?;
-    Some(Keys { auth_hash: STANDARD.encode(auth), enc })
+/// Chaves da conta no hub, como o web: PBKDF2 da senha → HKDF em dois ramos, `cp-auth` (vai ao hub) e `cp-enc` (fica
+/// aqui). A cifra é a do cliente do Connect, a mesma do login do convidado.
+pub(super) fn derive_keys(password: &str, salt: &[u8], iterations: u32) -> Option<crypto::Keys> {
+    (iterations > 0).then(|| crypto::derive_keys(password, salt, iterations))
 }
 
-pub(super) fn random<const N: usize>() -> Option<[u8; N]> {
-    let mut bytes = [0u8; N];
-    SystemRandom::new().fill(&mut bytes).ok()?;
-    Some(bytes)
-}
+pub(super) fn random<const N: usize>() -> Option<[u8; N]> { crypto::random::<N>().ok() }
 
 /// `{iv, data}` em base64, com a tag do GCM no fim de `data`: o formato que o web cifra e decifra.
 pub(super) fn encrypt_json(key: &[u8; 32], value: &impl serde::Serialize) -> Option<Value> {
-    let iv = random::<12>()?;
-    let mut data = serde_json::to_vec(value).ok()?;
-    let key = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM, key).ok()?);
-    key.seal_in_place_append_tag(aead::Nonce::assume_unique_for_key(iv), aead::Aad::empty(), &mut data).ok()?;
-    Some(json!({"iv": STANDARD.encode(iv), "data": STANDARD.encode(data)}))
+    let blob = crypto::encrypt(key, &serde_json::to_vec(value).ok()?).ok()?;
+    serde_json::to_value(blob).ok()
 }
 
 pub(super) fn decrypt_json<T: serde::de::DeserializeOwned>(key: &[u8; 32], blob: &Value) -> Option<T> {
-    let iv: [u8; 12] = STANDARD.decode(blob.get("iv")?.as_str()?).ok()?.try_into().ok()?;
-    let mut data = STANDARD.decode(blob.get("data")?.as_str()?).ok()?;
-    let key = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM, key).ok()?);
-    let plain = key.open_in_place(aead::Nonce::assume_unique_for_key(iv), aead::Aad::empty(), &mut data).ok()?;
-    serde_json::from_slice(plain).ok()
+    let blob: crypto::Blob = serde_json::from_value(blob.clone()).ok()?;
+    serde_json::from_slice(&crypto::decrypt(key, &blob)?).ok()
 }
 
 fn registration_body(user: String, password: String, base: String, label: String, token: String) -> Result<Value, Failure> {
@@ -50,11 +32,11 @@ fn registration_body(user: String, password: String, base: String, label: String
     let (salt, id) = (random::<16>().ok_or_else(fail)?, random::<8>().ok_or_else(fail)?);
     let keys = derive_keys(&password, &salt, PBKDF2_ITERATIONS).ok_or_else(fail)?;
     let server = json!([{"id": format!("srv-{}", URL_SAFE_NO_PAD.encode(id)), "label": label, "baseUrl": base, "token": token}]);
-    let blob = encrypt_json(&keys.enc, &server).ok_or_else(fail)?;
+    let blob = encrypt_json(&keys.enc_key, &server).ok_or_else(fail)?;
     Ok(json!({"user": user, "salt": STANDARD.encode(salt), "auth_hash": keys.auth_hash, "enc_blob": blob}))
 }
 
-fn secure_setup(address: &str) -> bool {
+pub(super) fn secure_setup(address: &str) -> bool {
     url::Url::parse(address).ok().is_some_and(|url| url.scheme() == "https" || match url.host() {
         Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
@@ -96,11 +78,6 @@ pub(in crate::app) struct Sync {
     deactivated: bool,
     copied: bool,
     form: Option<SyncForm>,
-    pub(super) guests: super::guests::Guests,
-}
-
-impl Sync {
-    pub(super) fn owner(&self) -> Option<String> { self.setup.ok().and_then(|setup| setup.user.clone()) }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -128,8 +105,7 @@ impl Hangar {
         self.load_sync(cx);
     }
 
-    // A sessão do dono no hub (cookie e chave) também sai: só vive enquanto a página está aberta.
-    pub(super) fn sync_page_left(&mut self) { (self.sync.form, self.sync.guests) = (None, Default::default()); }
+    pub(super) fn sync_page_left(&mut self) { self.sync.form = None; }
 
     fn sync_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sync.form.is_some() || self.settings != Some(Page::Sync) { return; }
@@ -244,10 +220,6 @@ impl Hangar {
                 }
             }
         }
-        if self.sync.setup.ok().is_some_and(|setup| setup.enabled && setup.registered) {
-            let owner = self.sync.owner();
-            self.guests_login_form(owner.as_deref(), window, cx);
-        }
         cx.notify();
     }
 
@@ -298,7 +270,6 @@ impl Hangar {
                         .on_click(move |_, _, cx| cx.open_url(&address)))
                     .child(self.mark(div().rounded(px(8.)).child(Button::new("sync-disable").outline().small().label(tr("sync_config_desativar"))
                         .disabled(self.sync.saving).on_click(cx.listener(|this, _, window, cx| this.confirm_disable_sync(window, cx)))), "sync_config_desativar")))
-                .child(self.render_guests(cx))
         } else {
             if !setup.enabled {
                 page = page.child(self.mark(div().rounded(px(6.)).text_sm().text_color(theme::muted()).whitespace_normal()

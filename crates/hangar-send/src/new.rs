@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::http::Endpoint;
 use crate::{Ctx, identity, msys_drive_path, parse, text, truthy};
 
-const USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--resume <id da conversa>]";
+const USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--resume <id da conversa>]";
 /// Preparar conta e worktree passa dos 30 s; desistir antes dizia "inacessível" com a sessão nascendo.
 const CREATE_TIMEOUT: f64 = 120.0;
 
@@ -26,6 +26,8 @@ struct Options {
     headless: String,
     /// "true", "false" ou vazio (vale o padrão do servidor).
     jev: String,
+    /// "true", "false" ou vazio (vale o padrão do servidor).
+    code_mode: String,
     subagent: String,
     codex_account: String,
     service_tier: String,
@@ -116,6 +118,13 @@ fn parse_options(args: &[String], err: &mut dyn Write) -> Result<Options, u8> {
                 options.jev = if arg == "--jev" { "true".into() } else { "false".into() };
                 step = 1;
             }
+            "--code-mode" | "--sem-code-mode" => {
+                if !options.code_mode.is_empty() {
+                    return Err(twice("--code-mode/--sem-code-mode", err));
+                }
+                options.code_mode = if arg == "--code-mode" { "true".into() } else { "false".into() };
+                step = 1;
+            }
             "--headless" | "--terminal" => {
                 if !options.headless.is_empty() {
                     return Err(twice("--headless/--terminal", err));
@@ -187,17 +196,14 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
         };
         endpoint = Endpoint { base, token, connect: 8.0, total: cx.total(), peer: None };
     }
-    // Lida uma vez só, quando precisar: cada leitura custa até quatro chamadas ao tmux.
-    let mut me: Option<String> = None;
+    // Na abertura nova o provedor omitido é do servidor (o da criadora, o lembrado ou o padrão); só a retomada o pede.
     if options.provider.is_empty() {
         // --conta e --subagente sem --provider sempre foram Claude; o padrão lembrado não os reinterpreta.
         if !options.engine.is_empty() || !options.account.is_empty() || !options.subagent.is_empty() {
             options.provider = "claude".into();
         } else if !options.profile.is_empty() {
             options.provider = "omp".into();
-        } else if remote.is_empty() && options.resume.is_empty() && me.get_or_insert_with(|| identity::me(cx, false, err)).as_str() != "cli" {
-            // Chamado de uma sessão: o servidor usa o agente dela (a criadora).
-        } else {
+        } else if !options.resume.is_empty() {
             match default_provider(cx, &endpoint, err) {
                 Ok(provider) => options.provider = provider,
                 Err(code) => return code,
@@ -269,7 +275,7 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
     // A sessão que roda o comando é a criadora; noutra máquina ela não existe, e "cli" é não saber.
     let mut creator = String::new();
     if remote.is_empty() {
-        creator = me.take().unwrap_or_else(|| identity::me(cx, false, err));
+        creator = identity::me(cx, false, err);
         if creator == "cli" {
             creator.clear();
         }
@@ -302,6 +308,11 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
     };
     if !remote.is_empty() {
         name = format!("{remote}::{name}");
+    }
+    // O provedor que o servidor escolheu é o que a linha mostra; o herdado já sai no sufixo.
+    if options.provider.is_empty() && let Some(result) = result.as_ref()
+        && result.get("provider_source").and_then(Value::as_str) != Some("inherited") && truthy(result.get("provider")) {
+        options.provider = text(&result["provider"]);
     }
     // Ligação pedida e resultado ilegível: não dá para dizer que ela vale.
     let (mut link_failed, mut link_unread) = (String::new(), false);
@@ -382,6 +393,7 @@ fn resume(cx: &Ctx, endpoint: &Endpoint, remote: &str, name: &str, options: &Opt
         ("--profile", !options.profile.is_empty()),
         ("--read-only", options.read_only),
         ("--jev/--sem-jev", !options.jev.is_empty()),
+        ("--code-mode/--sem-code-mode", !options.code_mode.is_empty()),
         ("--subagente", !options.subagent.is_empty()),
         ("--service-tier", !options.service_tier.is_empty()),
         ("--inherit/--no-inherit", !options.inherit.is_empty()),
@@ -452,6 +464,9 @@ fn creation_body(name: &str, options: &Options, creator: &str, customizations: O
     // Ausente, e não `false`: o campo ausente é o que faz o servidor aplicar o padrão dele.
     if !options.jev.is_empty() {
         put("jev", (options.jev == "true").into());
+    }
+    if !options.code_mode.is_empty() {
+        put("code_mode", (options.code_mode == "true").into());
     }
     if !options.subagent.is_empty() {
         put("subagent_model", options.subagent.as_str().into());

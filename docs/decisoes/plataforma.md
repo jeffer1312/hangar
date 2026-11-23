@@ -4725,6 +4725,56 @@ Não testado: renovação, a CA de produção e um nome que dependa só do curin
 `*.hangar.dev.br`. Cargas e logs completos em
 `.superpowers/sdd/2026-11-06-hangar-connect-rust/prova-tunel.md` da árvore principal.
 
+## Entrar pelo Connect e convidados pelo Connect (22/11/2026)
+
+O primeiro acesso do Expo e do nativo pede conta ou usuário e senha, sem endereço. Endereço e token, QR,
+convite e demonstração ficam em "Outras formas de entrar". O pedido veio do dono: "no Connect eu não
+preciso informar a máquina" e "o convidado tem que entrar também".
+
+- **Um campo para os dois.** O cliente manda só o nome ao serviço (`POST /v1/lookup`), que responde
+  `account`, `guest` com os hosts de uma conta só, ou `none`. Conta: login da conta do Connect. Convidado:
+  login de sincronização (`/api/sync/prelogin|login|vault|logout`) no host da máquina que guarda a conta
+  dele, um host por vez. A senha do convidado nunca vai ao serviço. Se o serviço antigo responder 404 no
+  lookup, o cliente trata como conta.
+- **Nome de convidado** em minúsculo ASCII, com `.` ou `@`. Conta do Connect só aceita `[a-z0-9-]`, então os
+  dois nunca se confundem. O serviço guarda `sha256("hangar-guest:" + nome)` por máquina (`PUT /v1/guests`,
+  com a chave da máquina). Hash que já é de outra conta volta em `taken`, e a página mostra "nome em uso".
+  Risco aceito: uma conta pode registrar antes o nome previsível de um convidado de outra. O hash sem sal
+  não esconde nomes adivinháveis, e quem tem a chave de uma máquina testa candidatos pelo `taken`.
+- **Contas de convidado em arquivo próprio** (`~/.hangar/guest-accounts.json`, 0600, crate
+  `hangar-guest-accounts`), administradas pelo token do dono em `/api/guest-accounts`. O aparelho do
+  Connect conta como dono. A máquina guarda a chave do cofre do convidado e cifra sozinha a lista de
+  máquinas dele, então o dono não redigita senha. Contrapartida: a máquina lê o que ela já tinha (os tokens
+  de convidado). O arquivo nunca entra na configuração compartilhada. `sync-vault.json` e
+  `/api/sync/guests` continuam como estavam, para a web e para o nativo já instalado.
+- **Login do convidado sem a Sincronização ligada.** As rotas de login funcionam sempre que há conta no
+  arquivo novo. Todo caminho do login faz uma única derivação, para o tempo de resposta não revelar se o
+  nome existe. Pela porta do Connect todo pedido chega com o mesmo endereço, então o limite conta por
+  usuário, com teto geral, e a tentativa é contada antes da derivação. Só a senha recusada gasta a
+  tentativa: arquivo ilegível ou gravação que falha a devolvem. O teto geral atingido vai ao diário
+  (`sync.login_teto_connect`), uma vez por janela. Um nome vive num cofre só: conta de convidado nova não
+  toma o nome do dono nem de um convidado do cofre antigo, e `/api/sync/guests` não grava convidado com
+  nome de conta nova.
+- **Liberação de aparelho uma vez para a conta** (antes era máquina por máquina). Um aparelho já liberado
+  libera o novo com um toque, conferindo o código (`install_code`, o mesmo no celular, no Hangar e no
+  serviço). Leitura da conta recusada com o serviço no ar (máquina pendente, desconhecida ou revogada:
+  403 `device_revoked` ou 409 na lista pedida com a chave da máquina) suspende os
+  aparelhos que entraram pela conta e os aprovados por eles, até a próxima leitura boa: sem isso, um
+  aparelho revogado continuaria entrando.
+- **Conta antiga** (no cofre de sincronização, como a da convidada na VPS): "Trazer para o Connect" pede uma
+  vez a senha de sincronização do dono, recria a conta mantendo a senha da convidada e só então apaga a
+  antiga. Nome sem `.`/`@` ganha um nome novo, e o dono é avisado.
+- **`hangar-connect-client` não depende do `hangar-core`**, exceção à regra "módulo novo nasce como crate
+  próprio sobre o `hangar-core`". É crate folha compartilhado com o `desktop-native`, que entra pelo
+  Connect sem servidor local e não pode depender do core: as features de `serde_json` do servidor
+  (`arbitrary_precision`) mudariam os números do nativo, e as dependências do core mudariam o lockfile
+  dele. O servidor e o `hangar-connect` o usam por cima.
+- **Aparelhos desta máquina continuam com tela própria no nativo.** Os aprovados aqui sem vínculo de conta
+  e os pedidos pendentes de app antigo (`GET /api/connect/devices`, sem `account_device`) se aprovam,
+  recusam e perdem o acesso ali; os que vieram pela conta ficam em "Aparelhos da conta".
+
+Não testado de ponta a ponta antes do merge: o serviço publicado e o login real da convidada pelo celular.
+
 ## O Rust atende sozinho o que ainda repassava com trabalho real (10/11/2026)
 
 Primeira metade do fim da reserva do modo python. Com o Rust de pé, o dono não chega mais ao Python
@@ -5191,3 +5241,39 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   máquina como fora do ar, a queda de rede continua marcando (`countsOutage: 'network'`). Vale para o
   app e para a web, que compartilham o core. Sem teto: um link que trava num arquivo grande deixa o
   envio esperando até o prazo dele.
+
+## Padrão de abertura é do servidor (22/11/2026)
+
+- **Caso que motivou.** O PR #460 guardou o Code Mode no `appearance.json` do desktop e o punha no
+  corpo só na tela de criar (`create.rs`). Sessão aberta por `hangar-send --new`, MCP, Expo, tarefa
+  agendada, `orq` ou outro servidor nascia sem ele: `hook-resposta-pt`, aberta pela `review-pr-479`,
+  nasceu com `code_mode: false` e as duas opções ligadas no desktop.
+- **Regra.** O omitido é do `resolve_open()`. "Conversa nova" e "Code Mode" moram em
+  `~/.hangar/session-options.json` (`GET`/`PUT /api/session-options`, só do dono); o Code Mode vale
+  quando o pedido omite `code_mode`, o provedor é Claude e as duas estão ligadas. O desktop copia o
+  `appearance.json` antigo uma vez (`if_absent`), e só se a pessoa mexeu nele: a cópia intocada
+  (`false`, `false`) não é escolha, ou o primeiro computador a conectar decidiria por todos. O desenho
+  da conversa continua lendo a escolha local, que o servidor nunca muda; "Conversa nova" muda mesmo
+  com o servidor fora e chega a ele quando ele responde. `code_mode: true` explícito fora do Claude é
+  recusado (`erro_code_mode_so_claude`).
+- **Sem terminal, o Code Mode vai no `env` do `--settings`.** O Claude Code 2.1.330, com `-p` ou
+  pelo SDK, recusa a variável vinda do ambiente do processo (motivo `not_passed`) e só a aceita no
+  `env` do `--settings`. Medido no CLI com as opções do lançamento sem terminal: com a variável no
+  ambiente o modelo não recebe a REPL; no `--settings`, recebe `Poll` e `REPL`. Antes disso o Code
+  Mode nunca valeu em sessão sem terminal. Com terminal a variável no ambiente continua valendo. O
+  CLI ainda recusa fora da API da Anthropic (motor, CLIProxy) e em modelo anterior ao Opus 5.5 e
+  Sonnet 5.5.
+- **Arquivo próprio, não o `session-defaults.json`.** A versão anterior lê aquele arquivo com
+  `deny_unknown_fields` em cada escopo: uma chave nova faria a volta de uma atualização recusar toda
+  criação de sessão.
+- **Travas.** Tabela única no crate `hangar-session-open-fields` (campos, nome no MCP, flags do CLI,
+  quais têm padrão do servidor). O servidor confere que todo campo do `SessionOpenRequest` está nela
+  ou em `SERVER_ONLY` com o motivo, e que campo com padrão guarda o explícito (o `bool` puro do #460
+  perdia o `false`); o MCP e o `hangar-send` conferem que cada um chega ao corpo; o desktop confere
+  que o corpo não muda com nenhuma preferência guardada no computador. Contra o código do #460
+  falharam a do valor explícito, a do MCP, a do CLI e a do desktop; a da tabela pega o campo novo
+  que entrar no pedido sem entrar nela.
+- **Mesma regra nos outros clientes.** O desktop deixou de lembrar o último modelo, e o Expo o
+  provedor, modelo, esforço, modo e contas; tarefa agendada nova guarda só o que a pessoa escolheu.
+  O `hangar-send --new` não escolhe mais o provedor omitido. O `--jev` do `orq` fica: é escolha do
+  fluxo para os papéis dele.

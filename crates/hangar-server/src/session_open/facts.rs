@@ -381,6 +381,10 @@ impl OpenFacts for LocalFacts {
         crate::session_defaults::saved(&self.env().home, provider.name(), engine, engine_account).map_err(|error| error.to_string())
     }
 
+    fn session_options(&self) -> Result<Option<crate::session_defaults::SessionOptions>, String> {
+        crate::session_defaults::options(&self.env().home).map_err(|error| error.to_string())
+    }
+
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError> {
         Ok(self.codex_states()?.into_iter().filter(|(_, state)| state == "connected")
             .map(|(account, _)| CodexLogin { id: account.id, is_default: account.is_default }).collect())

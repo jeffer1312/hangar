@@ -751,6 +751,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `GET`/`HEAD` e, em https, só o `__Host-cp_token`: máquinas do Connect dividem o mesmo site.
   Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#hangar-connect-a-entrada-é-do-rust-e-cada-aparelho-tem-credencial-própria-07112026).
+- **Primeiro acesso é pelo Connect, para o dono e para o convidado, sem endereço.** O cliente manda só
+  o nome ao serviço (`/v1/lookup`); a senha do convidado vai só à máquina dele. Contas de convidado moram
+  em `~/.hangar/guest-accounts.json` (crate `hangar-guest-accounts`, rotas `/api/guest-accounts` do
+  dono), fora da configuração compartilhada; o login delas não depende da Sincronização e faz uma
+  derivação só em todo caminho. Nome de convidado tem `.` ou `@`. Aparelho é liberado uma vez para a
+  conta toda. `sync-vault.json` e `/api/sync/guests` ficam como estão. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#entrar-pelo-connect-e-convidados-pelo-connect-22112026).
 - **Prévia de porta pelo Connect: `127.0.0.1:8769` é um listener próprio (`hangar-connect/src/preview.rs`),
   fora de `hangar_auth`.** O link de uso único abre uma página com botão, e só o `POST` dela o gasta
   e vira cookie `__Host-` por 303, com sessão de 8 h. O projeto nunca vê credencial do Hangar e guarda
@@ -822,6 +829,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `hangar-server` desce antes para o `hangar-core`, ou vira trait no core que o servidor
   implementa. Nenhum crate depende do `hangar-server`. Motivo e plano da divisão em
   [plataforma.md](docs/decisoes/plataforma.md#módulo-novo-nasce-como-crate-próprio-06112026).
+  Exceção: `hangar-connect-client`, crate folha compartilhado com o `desktop-native`, que não pode
+  depender do `hangar-core` ([motivo](docs/decisoes/plataforma.md#entrar-pelo-connect-e-convidados-pelo-connect-22112026)).
 - **Motores, login de convidados e peers são do Rust.** Catálogo, CLIProxy, espelhos e instalação
   ficam em `engines/`, `harness_setup/` e `codex_setup/`; identidade, permissões, raízes e lista do
   convidado em `login_guests/`; configuração, descoberta e canal dos peers em `machine_peers/`.
@@ -969,6 +978,18 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. Não há lançador
   Python. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
+- **Padrão de abertura é do servidor; cliente só manda o que a pessoa escolheu naquela tela.**
+  Opção nova de abertura entra no `SessionOpenRequest` como `Option` (omitido = padrão do
+  servidor), com o padrão gravado no servidor (`session-defaults.json`, ou `session-options.json`
+  para as opções da tela Beta) e aplicado no `resolve_open()`; nunca numa preferência do cliente
+  (`appearance.json`, armazenamento do aparelho) posta no corpo. Todo campo do pedido está na
+  tabela do crate `hangar-session-open-fields` e é dito pelo `hangar-send --new` e pelo MCP
+  `new_session`. Travas: `every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server`
+  e `a_field_with_a_server_default_keeps_the_explicit_value` (`session_open/tests.rs`),
+  `new_session_says_every_open_field` (`mcp/tools.rs`), `new_says_every_open_field`
+  (`hangar-send/tests/open_fields.rs`) e `the_open_body_does_not_depend_on_what_this_computer_saved`
+  (`desktop-native/src/app/create/default_tests.rs`). Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#padrão-de-abertura-é-do-servidor-22112026).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
   do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
   fecha sem matar e reabre no nome novo na mesma geração; falha no meio desfaz e diz o que não voltou.

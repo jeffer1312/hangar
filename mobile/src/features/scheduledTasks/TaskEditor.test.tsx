@@ -41,6 +41,7 @@ beforeEach(() => {
     if (path === '/api/model-options') return json({ models: [{ id: 'model-default', name: 'modelo-catalogo' }], default: 'model-default' });
     if (path === '/api/session-defaults') return json({ defaults: null });
     if (path === '/api/codex-contas') return json([]);
+    if (path === '/api/claude-configs') return json([]);
     if (path === '/api/scheduled-tasks/t' && init?.method === 'PUT') { const input = JSON.parse(String(init.body)); writes.push(input); return write(input); }
     throw new Error(`Rota inesperada: ${String(url)}`);
   });
@@ -78,7 +79,7 @@ it('bloqueia cliques duplicados e mostra a revisão concorrente sem apagar o ras
   expect(writes[0]).toMatchObject({ name: 'nome-original', prompt: 'pedido-original', target: { session_key: 'vida-original' } });
 });
 
-it('resolve o provedor padrão da máquina e salva o agente que o formulário mostra', async () => {
+it('mostra o provedor padrão da máquina, mas sem escolha não o grava: o servidor decide a cada execução', async () => {
   await mount({ ...task, target: { kind: 'new', launch: { cwd: '/projeto' }, worktree: false } });
   expect(host.textContent).toContain('Codex');
   await act(async () => save().click());
@@ -87,15 +88,29 @@ it('resolve o provedor padrão da máquina e salva o agente que o formulário mo
   expect(urls).toContain('https://example.test/api/session-defaults?provider=codex');
   expect(urls).toContain('https://example.test/api/codex-contas');
   expect(writes).toHaveLength(1);
-  expect(writes[0]).toMatchObject({ target: { kind: 'new', launch: { cwd: '/projeto', provider: 'codex' }, worktree: false } });
+  expect(writes[0]).toMatchObject({ target: { kind: 'new', launch: { cwd: '/projeto' }, worktree: false } });
+  expect((writes[0].target as { launch: object }).launch).not.toHaveProperty('provider');
 });
 
-it('sem padrão marcado e com o Claude indisponível escolhe o primeiro agente disponível', async () => {
+it('sem padrão marcado e com o Claude indisponível mostra o primeiro agente disponível sem gravá-lo', async () => {
   providers = { claude: { disponivel: false }, pi: { disponivel: false }, codex: { disponivel: true }, kimi: { disponivel: true } };
   await mount({ ...task, target: { kind: 'new', launch: { cwd: '/projeto' }, worktree: false } });
   expect(host.textContent).toContain('Codex');
   await act(async () => save().click());
-  expect(writes[0]).toMatchObject({ target: { kind: 'new', launch: { cwd: '/projeto', provider: 'codex' } } });
+  expect(writes[0]).toMatchObject({ target: { kind: 'new', launch: { cwd: '/projeto' } } });
+  expect((writes[0].target as { launch: object }).launch).not.toHaveProperty('provider');
+});
+
+it('grava o provedor quando a pessoa o escolhe', async () => {
+  await mount({ ...task, target: { kind: 'new', launch: { cwd: '/projeto' }, worktree: false } });
+  const row = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label')?.startsWith(`${m.scheduled_agent()}:`))!;
+  await act(async () => row.click());
+  const claude = [...host.querySelectorAll<HTMLElement>('button, [role="button"], [role="menuitem"]')].find((b) => b.getAttribute('aria-label') === 'Claude' || b.textContent === 'Claude')!;
+  await act(async () => claude.click());
+  for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+  expect(host.textContent).toContain('Claude');
+  await act(async () => save().click());
+  expect(writes[0]).toMatchObject({ target: { kind: 'new', launch: { cwd: '/projeto', provider: 'claude' } } });
 });
 
 it('edita o nome de Once encerrado preservando o offset e os segundos originais', async () => {

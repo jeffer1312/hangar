@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 import { deriveKeys, toBase64 } from './syncCrypto';
-import { syncLogin } from './syncLogin';
+import { signInAtAddress } from './addressSignIn';
 import * as m from '../../paraglide/messages';
 
 const HUB = 'https://hub.test';
@@ -45,10 +45,10 @@ const paths = (hub: ReturnType<typeof stubHub>) => hub.mock.calls.map(([url]) =>
 
 afterEach(() => { vi.restoreAllMocks(); });
 
-describe('syncLogin', () => {
+describe('signInAtAddress', () => {
   test('traz as máquinas ligadas, leva o cookie à leitura do cofre e encerra a sessão', async () => {
     const hub = stubHub();
-    const servers = await syncLogin(`${HUB}/`, 'ana', PASSWORD);
+    const servers = await signInAtAddress(`${HUB}/`, 'ana', PASSWORD);
     expect(servers.map((s) => [s.label, s.baseUrl])).toEqual([['Hub', HUB], ['Casa', `${HUB}/casa`]]);
     expect(paths(hub)).toEqual(['/api/sync/prelogin', '/api/sync/login', '/api/sync/vault', '/api/sync/logout']);
     expect(hub.mock.calls.every(([, init]) => init?.credentials === 'include' && init.redirect === 'error')).toBe(true);
@@ -56,39 +56,44 @@ describe('syncLogin', () => {
 
   test('endereço de loopback no cofre vira o próprio hub', async () => {
     stubHub({ blob: () => loopback });
-    expect((await syncLogin(HUB, 'ana', PASSWORD)).map((s) => s.baseUrl)).toEqual([HUB]);
+    expect((await signInAtAddress(HUB, 'ana', PASSWORD)).map((s) => s.baseUrl)).toEqual([HUB]);
   });
 
   test('cofre vazio não é erro', async () => {
     stubHub({ blob: () => null });
-    expect(await syncLogin(HUB, 'ana', PASSWORD)).toEqual([]);
+    expect(await signInAtAddress(HUB, 'ana', PASSWORD)).toEqual([]);
   });
 
   test('cofre que não abre diz isso, não que algo foi ignorado', async () => {
     stubHub({ blob: () => ({ iv: vault.iv, data: 'AAAA' }) });
-    await expect(syncLogin(HUB, 'ana', PASSWORD)).rejects.toThrow(m.mobile_sync_login_vault());
+    await expect(signInAtAddress(HUB, 'ana', PASSWORD)).rejects.toThrow(m.mobile_sync_login_vault());
   });
 
   test('senha errada para no login, sem ler o cofre', async () => {
     const hub = stubHub();
-    await expect(syncLogin(HUB, 'ana', 'errada')).rejects.toThrow(m.sync_credenciais_invalidas());
+    await expect(signInAtAddress(HUB, 'ana', 'errada')).rejects.toThrow(m.sync_credenciais_invalidas());
     expect(paths(hub)).toEqual(['/api/sync/prelogin', '/api/sync/login']);
   });
 
   test('http não chega a chamar o hub', async () => {
     const hub = stubHub();
-    await expect(syncLogin('http://hub.test', 'ana', PASSWORD)).rejects.toThrow(m.mobile_sync_login_https());
+    await expect(signInAtAddress('http://hub.test', 'ana', PASSWORD)).rejects.toThrow(m.mobile_sync_login_https());
     expect(hub).not.toHaveBeenCalled();
   });
 
   test.each([1, 2_000_000_000])('recusa %d iterações sem mandar a senha derivada', async (iterations) => {
     const hub = stubHub({ iterations });
-    await expect(syncLogin(HUB, 'ana', PASSWORD)).rejects.toThrow(m.mobile_sync_login_unavailable());
+    await expect(signInAtAddress(HUB, 'ana', PASSWORD)).rejects.toThrow(m.mobile_sync_login_unavailable());
     expect(hub).toHaveBeenCalledTimes(1);
   });
 
   test('5xx de proxy não joga o HTML na tela', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('<html>bad gateway</html>', { status: 502 }));
-    await expect(syncLogin(HUB, 'ana', PASSWORD)).rejects.toThrow(`${m.falha_conexao()}: HTTP 502`);
+    await expect(signInAtAddress(HUB, 'ana', PASSWORD)).rejects.toThrow(`${m.falha_conexao()}: HTTP 502`);
+  });
+
+  test('máquina que não responde diz que foi a conexão, não a senha', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fixture-network'));
+    await expect(signInAtAddress(HUB, 'ana', PASSWORD)).rejects.toThrow(m.falha_conexao());
   });
 });

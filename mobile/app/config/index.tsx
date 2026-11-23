@@ -48,6 +48,8 @@ const SERVER: Page[] = [
   { route: STATUS, icon: 'ChartLine', title: m.status_title,
     rows: [m.status_days_title, m.status_machines_title, m.status_sessions_title, m.status_slow_title, m.status_host_title, m.status_outside_title] },
   { route: '/config/sync', icon: 'RefreshCw', title: m.native_settings_page_sync, rows: [] },
+  { route: '/config/convidados', icon: 'UserPlus', title: m.convidados_titulo,
+    rows: [m.convidados_adicionar, m.guests_legacy_title] },
   { route: '/config/shared-config', icon: 'Layers', title: m.shared_config_title, rows: [] },
   { route: '/config/contas', icon: 'User', title: m.native_settings_page_accounts,
     rows: [m.contas_atualizar, m.contas_secao_claude, m.contas_secao_modelos, m.contas_secao_outros] },

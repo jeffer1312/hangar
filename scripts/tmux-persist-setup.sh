@@ -25,6 +25,10 @@ PLUGIN_DIR="$HOME/.tmux/plugins"
 CONF="$HOME/.tmux.conf"
 # The Hangar sessions come back through the Hangar server; this hook keeps them out of the resurrect save.
 RESUME_SH="$(cd "$(dirname "$0")" && pwd)/tmux-claude-resume.sh"
+# A pasta de uma versão some quando ela é podada: o tmux.conf aponta para a versão em uso.
+case "$RESUME_SH" in
+  "$HOME"/.hangar/versions/*/scripts/tmux-claude-resume.sh) RESUME_SH="$HOME/.hangar/current/scripts/tmux-claude-resume.sh" ;;
+esac
 SD_DIR="$HOME/.config/systemd/user"
 SERVICE="tmux-resurrect-save.service"
 TIMER="tmux-resurrect-save.timer"

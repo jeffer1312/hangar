@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
-import { addMachine, changeAccountPassword, endAccountSessions, listMachines, signIn, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
+import { addMachine, approveAccountDevice, changeAccountPassword, deviceStatus, endAccountSessions, listAccountDevices, listMachines, lookupName,
+  registerDevice, revokeAccountDevice, signIn, signInAnywhere, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
+import { installCode } from './installCode';
 import { _resetRotasForTests } from './rota';
 import type { Server } from './servers';
+import type { SealedBlob, SyncCrypto } from './syncLogin';
 
 const SERVICE = 'https://connect.hangar.dev.br';
 const MACHINE_URL = 'https://pc1.acme.hangar.dev.br';
@@ -13,13 +16,13 @@ const owner: Server = { id: 's1', label: 'pc1', baseUrl: 'https://pc1.tail.ts.ne
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
-type Call = { url: URL; method: string; body: Record<string, unknown> | undefined; auth: string | null };
+type Call = { url: URL; method: string; body: Record<string, unknown> | undefined; auth: string | null; headers: Headers };
 function network(route: (url: URL) => Response) {
   const calls: Call[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined,
-      auth: new Headers(init?.headers).get('Authorization') });
+      auth: new Headers(init?.headers).get('Authorization'), headers: new Headers(init?.headers) });
     return route(url);
   }));
   return calls;
@@ -221,6 +224,80 @@ describe('addMachine', () => {
   });
 });
 
+describe('aparelho da conta', () => {
+  const released = { ...session, device: { id: 'ad1', secret: 'ad-secret' } };
+  const credential = (call: Call) => [call.auth, call.headers.get('X-Hangar-Device'), call.headers.get('X-Hangar-Device-Secret')];
+  const row = { device_id: 'ad2', name: 'Pixel', status: 'pending', created_at: 1_794_000_000.5, approved_at: null, revoked_at: null };
+
+  it('registra o aparelho com a sessão da conta', async () => {
+    const calls = network(() => json({ device_id: 'ad1', device_secret: 'ad-secret', status: 'pending' }, 201));
+    expect(await registerDevice(session, 'iPhone', 'install-1')).toEqual({ id: 'ad1', secret: 'ad-secret' });
+    expect(calls.map((call) => `${call.method} ${call.url.href} ${call.auth}`)).toEqual([`POST ${SERVICE}/v1/devices Bearer account-token`]);
+    expect(calls[0].body).toEqual({ name: 'iPhone', install_id: 'install-1' });
+    await registerDevice(session, 'iPhone');
+    expect(calls[1].body).toEqual({ name: 'iPhone' });
+  });
+
+  it.each([{ device_id: 'ad1', status: 'pending' }, { device_id: '', device_secret: 's', status: 'pending' }, null])(
+    'recusa registro fora do contrato: %j', async (body) => {
+      network(() => json(body, 201));
+      await expect(registerDevice(session, 'iPhone')).rejects.toMatchObject({ code: 'connect_response_invalid' });
+    });
+
+  it('consulta o próprio status com a credencial do aparelho', async () => {
+    const calls = network(() => json({ status: 'approved' }));
+    expect(await deviceStatus(released)).toBe('approved');
+    expect(calls[0].url.pathname).toBe('/v1/devices/ad1');
+    expect(credential(calls[0])).toEqual(['Bearer account-token', 'ad1', 'ad-secret']);
+    network(() => json({ status: 'denied' }));
+    await expect(deviceStatus(released)).rejects.toMatchObject({ code: 'connect_response_invalid' });
+  });
+
+  it('lista, libera e revoga aparelhos da conta com a credencial do aparelho', async () => {
+    const calls = network((url) => (url.pathname === '/v1/devices' ? json([row]) : url.pathname.endsWith('/approve')
+      ? json({ status: 'approved' }) : new Response(null, { status: 204 })));
+    expect(await listAccountDevices(released)).toEqual([row]);
+    await approveAccountDevice(released, 'ad2');
+    await revokeAccountDevice(released, 'ad 2');
+    expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual(['GET /v1/devices', 'POST /v1/devices/ad2/approve', 'DELETE /v1/devices/ad%202']);
+    expect(calls.map(credential)).toEqual(Array(3).fill(['Bearer account-token', 'ad1', 'ad-secret']));
+  });
+
+  it('o código de conferência do pendente vem pronto do serviço e é o mesmo que o celular calcula', async () => {
+    const code = installCode('install-1');
+    network(() => json([{ ...row, install_code: code }, { ...row, device_id: 'ad3', install_code: null }]));
+    const [withCode, without] = await listAccountDevices(released);
+    expect(withCode.install_code).toBe(code);
+    expect(without.install_code).toBeNull();
+  });
+
+  it.each([{ ...row, status: 'denied' }, { ...row, created_at: 'ontem' }, { ...row, name: 7 }, { ...row, approved_at: 'x' },
+    { ...row, install_code: 7 }])(
+    'recusa linha da lista fora do contrato: %j', async (item) => {
+      network(() => json([row, item]));
+      await expect(listAccountDevices(released)).rejects.toMatchObject({ code: 'connect_response_invalid' });
+    });
+
+  it.each([['device_pending', 'connect_device_pending'], ['device_revoked', 'connect_device_revoked'], ['device_required', 'connect_device_required'],
+    ['eco: senha', 'connect_request_failed'], [undefined, 'connect_request_failed']])('o motivo %s do 403 vira o código %s, sem o texto', async (reason, code) => {
+    network(() => json({ error: 'eco: senha', reason }, 403));
+    const error: unknown = await addMachine(released, machine, 'Pixel', () => {}).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code, status: 403 });
+    expect(String(error)).not.toContain('senha');
+  });
+
+  it('o pedido de bilhete leva a credencial do aparelho, e o bilhete pré-aprovado entra sem esperar', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const calls = enrollment([{ status: 'approved', token: 'device-token' }]);
+    const onPending = vi.fn();
+    const added = await addMachine(released, machine, 'Pixel', onPending);
+    expect(added.token).toBe('device-token');
+    expect(onPending).not.toHaveBeenCalled();
+    expect(credential(calls.find((call) => call.url.origin === SERVICE)!)).toEqual(['Bearer account-token', 'ad1', 'ad-secret']);
+    expect(calls.filter((call) => call.url.origin === MACHINE_URL).some((call) => call.headers.has('X-Hangar-Device-Secret'))).toBe(false);
+  });
+});
+
 describe('upgradeToDevice', () => {
   const machineWith = (connect: unknown) => network((url) => {
     if (url.pathname === '/api/alcance') return json({ enderecos: [], connect });
@@ -271,5 +348,187 @@ describe('upgradeToDevice', () => {
     const server = { ...owner, ...flags };
     expect(await upgradeToDevice(server)).toBe(server);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('lookupName', () => {
+  it.each([
+    [{ kind: 'account' }, { kind: 'account' }],
+    [{ kind: 'none' }, { kind: 'none' }],
+    [{ kind: 'guest', hosts: ['casa.ana.hangar.dev.br'] }, { kind: 'guest', hosts: ['casa.ana.hangar.dev.br'] }],
+  ])('responde %j', async (answer, expected) => {
+    network(() => json(answer));
+    expect(await lookupName('ana', SERVICE)).toEqual(expected);
+  });
+
+  it('manda só o nome, aparado e em minúsculas ASCII', async () => {
+    const calls = network(() => json({ kind: 'none' }));
+    await lookupName('  Lhais@Casa ', SERVICE);
+    expect(calls.map((call) => `${call.method} ${call.url.href}`)).toEqual([`POST ${SERVICE}/v1/lookup`]);
+    expect(calls[0].body).toEqual({ name: 'lhais@casa' });
+  });
+
+  it('serviço sem a rota (404) é login de conta', async () => {
+    network(() => json({}, 404));
+    expect(await lookupName('ana', SERVICE)).toEqual({ kind: 'account' });
+  });
+
+  it('429 tem código próprio', async () => {
+    network(() => json({}, 429));
+    await expect(lookupName('ana', SERVICE)).rejects.toMatchObject({ code: 'connect_too_many_attempts' });
+  });
+
+  it.each([
+    { kind: 'guest', hosts: [] },
+    { kind: 'guest', hosts: ['https://casa.ana.hangar.dev.br'] },
+    { kind: 'guest', hosts: ['casa.ana.hangar.dev.br/caminho'] },
+    { kind: 'guest' },
+    { kind: 'outro' },
+  ])('recusa resposta fora do contrato: %j', async (answer) => {
+    network(() => json(answer));
+    await expect(lookupName('ana', SERVICE)).rejects.toMatchObject({ code: 'connect_response_invalid' });
+  });
+
+  it('pedido sem resposta é rede', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network request failed'); }));
+    await expect(lookupName('ana', SERVICE)).rejects.toMatchObject({ code: 'network_failed' });
+  });
+});
+
+describe('signInAnywhere', () => {
+  const PASSWORD = 'senha-da-lhais';
+  const SALT = 'c2Fs';
+  const ITERATIONS = 600_000;
+  // Cifra falsa na fronteira: o par real (PBKDF2 + HKDF + AES-GCM) é de quem chama e tem teste próprio.
+  const syncCrypto: SyncCrypto = {
+    deriveKeys: async (password, salt, iterations) => ({ authHash: `${password}|${salt}|${iterations}`, encKey: new TextEncoder().encode(password) }),
+    decryptJson: <T,>(key: Uint8Array, blob: SealedBlob): T => {
+      if (new TextDecoder().decode(key) !== blob.iv) throw new Error('auth tag');
+      return JSON.parse(blob.data) as T;
+    },
+  };
+  const seal = (password: string, list: unknown): SealedBlob => ({ iv: password, data: JSON.stringify(list) });
+  const VAULT = [
+    { id: 'a', label: 'Casa', baseUrl: '', token: 'ta' },
+    { id: 'b', label: 'PC', baseUrl: 'https://pc.ana.hangar.dev.br', token: 'tb' },
+    { id: 'c', label: 'Desligada', baseUrl: 'endereço torto', token: 'tc', disabled: true },
+  ];
+  const deps = { crypto: syncCrypto, serviceUrl: SERVICE };
+
+  type Machine = { password?: string; down?: boolean; limited?: boolean; blob?: SealedBlob | null };
+  type GuestCall = Call & { init?: RequestInit };
+  function machines(hosts: Record<string, Machine>, lookup: unknown = { kind: 'guest', hosts: Object.keys(hosts) }) {
+    const calls: GuestCall[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+      const url = new URL(input);
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      calls.push({ url, method: init?.method ?? 'GET', body, auth: new Headers(init?.headers).get('Authorization'), headers: new Headers(init?.headers), init });
+      if (url.origin === SERVICE) return url.pathname === '/v1/lookup' ? json(lookup) : json({}, 401);
+      const host = hosts[url.hostname];
+      if (!host || host.down) throw new TypeError('Network request failed');
+      if (url.pathname === '/api/sync/prelogin') return json({ salt: SALT, iterations: ITERATIONS });
+      if (url.pathname === '/api/sync/login') {
+        if (host.limited) return json({}, 429);
+        return body?.auth_hash === `${host.password}|${SALT}|${ITERATIONS}` ? json({ ok: true }) : json({}, 401);
+      }
+      if (url.pathname === '/api/sync/logout') return json({ ok: true });
+      return json({ enc_blob: host.blob === undefined ? seal(host.password!, VAULT) : host.blob, rev: 1 });
+    }));
+    return calls;
+  }
+  const route = (call: GuestCall) => `${call.method} ${call.url.hostname}${call.url.pathname}`;
+
+  it('conta entra pelo login da conta', async () => {
+    const calls = network((url) => (url.pathname === '/v1/lookup' ? json({ kind: 'account' }) : json({ token: 'account-token' }, 201)));
+    expect(await signInAnywhere('ACME', 'senha', deps)).toEqual({ kind: 'account', account: session });
+    expect(calls.map((call) => call.url.pathname)).toEqual(['/v1/lookup', '/v1/sessions']);
+    expect(calls[1].body).toEqual({ name: 'acme', password: 'senha' });
+  });
+
+  it('senha da conta recusada vira "não confere"', async () => {
+    network((url) => (url.pathname === '/v1/lookup' ? json({ kind: 'account' }) : json({}, 401)));
+    await expect(signInAnywhere('acme', 'errada', deps)).rejects.toMatchObject({ code: 'credentials_mismatch' });
+  });
+
+  it('serviço antigo, sem lookup, segue para o login da conta', async () => {
+    const calls = network((url) => (url.pathname === '/v1/lookup' ? json({}, 404) : json({ token: 'account-token' })));
+    expect(await signInAnywhere('acme', 'senha', deps)).toMatchObject({ kind: 'account' });
+    expect(calls.map((call) => call.url.pathname)).toEqual(['/v1/lookup', '/v1/sessions']);
+  });
+
+  it('nome desconhecido não confere, e a senha não sai do aparelho', async () => {
+    const calls = machines({}, { kind: 'none' });
+    await expect(signInAnywhere('ninguem@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'credentials_mismatch' });
+    expect(calls.map(route)).toEqual(['POST connect.hangar.dev.br/v1/lookup']);
+    expect(JSON.stringify(calls.map((call) => call.body))).not.toContain(PASSWORD);
+  });
+
+  it('convidada entra pela máquina que guarda o cofre e traz as máquinas ligadas', async () => {
+    const calls = machines({ 'casa.ana.hangar.dev.br': { password: PASSWORD } });
+    const result = await signInAnywhere('Lhais@Casa', PASSWORD, deps);
+    expect(result).toMatchObject({ kind: 'guest', host: 'casa.ana.hangar.dev.br' });
+    const servers = result.kind === 'guest' ? result.servers : [];
+    // Endereço vazio no cofre foi gravado de dentro da própria máquina.
+    expect(servers.map((s) => [s.id, s.baseUrl, s.token])).toEqual([
+      ['a', 'https://casa.ana.hangar.dev.br', 'ta'], ['b', 'https://pc.ana.hangar.dev.br', 'tb']]);
+    expect(calls.map(route)).toEqual([
+      'POST connect.hangar.dev.br/v1/lookup', 'GET casa.ana.hangar.dev.br/api/sync/prelogin', 'POST casa.ana.hangar.dev.br/api/sync/login',
+      'GET casa.ana.hangar.dev.br/api/sync/vault', 'POST casa.ana.hangar.dev.br/api/sync/logout']);
+    expect(calls[1].url.searchParams.get('user')).toBe('lhais@casa');
+    expect(calls[2].body).toEqual({ user: 'lhais@casa', auth_hash: `${PASSWORD}|${SALT}|${ITERATIONS}` });
+    expect(calls.slice(1).every((call) => call.init?.credentials === 'include' && call.init.redirect === 'error')).toBe(true);
+    // Ao serviço só vai o nome.
+    expect(calls.filter((call) => call.url.origin === SERVICE).map((call) => call.body)).toEqual([{ name: 'lhais@casa' }]);
+  });
+
+  it('tenta uma máquina por vez e para na primeira que aceita', async () => {
+    const calls = machines({
+      'casa.ana.hangar.dev.br': { down: true },
+      'pc.ana.hangar.dev.br': { password: PASSWORD },
+      'velho.ana.hangar.dev.br': { password: PASSWORD },
+    });
+    expect(await signInAnywhere('lhais@casa', PASSWORD, deps)).toMatchObject({ kind: 'guest', host: 'pc.ana.hangar.dev.br' });
+    expect(calls.some((call) => call.url.hostname === 'velho.ana.hangar.dev.br')).toBe(false);
+  });
+
+  it('senha recusada numa máquina passa para a seguinte', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { password: 'outra' }, 'pc.ana.hangar.dev.br': { password: PASSWORD } });
+    expect(await signInAnywhere('lhais@casa', PASSWORD, deps)).toMatchObject({ kind: 'guest', host: 'pc.ana.hangar.dev.br' });
+  });
+
+  it('todas recusando a senha não confere', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { password: 'outra' }, 'pc.ana.hangar.dev.br': { password: 'outra' } });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'credentials_mismatch' });
+  });
+
+  it('máquina fora do ar é rede, não senha errada', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { password: 'outra' }, 'pc.ana.hangar.dev.br': { down: true } });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'network_failed' });
+  });
+
+  it('limite de tentativas tem código próprio', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { limited: true } });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'sync_too_many_attempts' });
+  });
+
+  it('cofre ilegível não vira lista vazia, e a sessão do cofre é encerrada', async () => {
+    const calls = machines({ 'casa.ana.hangar.dev.br': { password: PASSWORD, blob: seal('outra', VAULT) } });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'sync_vault_unreadable' });
+    expect(calls.map(route)).toContain('POST casa.ana.hangar.dev.br/api/sync/logout');
+  });
+
+  it.each([
+    ['casa.outro.com'],
+    ['hangar.dev.br'],
+    ['casa.hangar.dev.br.outro.com'],
+  ])('máquina fora de .hangar.dev.br é resposta inválida, e nada vai a ela: %s', async (host) => {
+    const calls = machines({ [host]: { password: PASSWORD } }, { kind: 'guest', hosts: ['casa.ana.hangar.dev.br', host] });
+    await expect(signInAnywhere('lhais@casa', PASSWORD, deps)).rejects.toMatchObject({ code: 'connect_response_invalid' });
+    expect(calls.map(route)).toEqual(['POST connect.hangar.dev.br/v1/lookup']);
+  });
+
+  it('cofre vazio entra sem máquinas', async () => {
+    machines({ 'casa.ana.hangar.dev.br': { password: PASSWORD, blob: null } });
+    expect(await signInAnywhere('lhais@casa', PASSWORD, deps)).toEqual({ kind: 'guest', host: 'casa.ana.hangar.dev.br', servers: [] });
   });
 });

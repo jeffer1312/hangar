@@ -1,6 +1,7 @@
 //! Login próprio, propriedade das sessões e cofre de sincronização, com um escritor por arquivo.
 mod http;
 mod diary;
+pub mod directory;
 pub mod store;
 mod sync;
 mod validation;

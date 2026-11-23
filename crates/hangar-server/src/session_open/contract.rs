@@ -158,6 +158,7 @@ impl OpenFacts for Facts {
     fn saved_defaults(&self, provider: AgentProvider, engine: &str, engine_account: &str) -> Result<Option<crate::session_defaults::Defaults>, String> {
         self.local.saved_defaults(provider, engine, engine_account)
     }
+    fn session_options(&self) -> Result<Option<crate::session_defaults::SessionOptions>, String> { self.local.session_options() }
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError> { self.local.codex_logins() }
     fn quotas(&self, network: bool) -> Vec<Value> {
         // O Python só lia o cache: a leitura de rede, que ele não fazia, devolve as mesmas linhas e não entra no registro.

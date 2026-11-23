@@ -60,6 +60,8 @@ pub trait OpenFacts {
     fn defaults(&self) -> ServerDefaults;
     /// Padrão de modelo, esforço e permissão marcado para provedor, motor e conta do motor.
     fn saved_defaults(&self, provider: AgentProvider, engine: &str, engine_account: &str) -> Result<Option<crate::session_defaults::Defaults>, String>;
+    /// Opções da tela Beta salvas no servidor (`session-options.json`); `None` = nunca gravadas.
+    fn session_options(&self) -> Result<Option<crate::session_defaults::SessionOptions>, String>;
     /// Contas Codex com login conectado.
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError>;
     /// Linhas de cota das contas Claude e Codex: do cache, ou depois de uma leitura curta da rede
@@ -221,6 +223,18 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
                 None
             }
         }
+    };
+    // Code Mode omitido: o da tela Beta, que só vale com a conversa nova ligada.
+    let code_mode = provider == AgentProvider::Claude && match request.code_mode {
+        Some(asked) => asked,
+        None if guest => false,
+        None => match facts.session_options() {
+            Ok(options) => options.is_some_and(|o| o.conversation_beta && o.code_mode),
+            Err(reason) => {
+                warnings.push(format!("não consegui ler as opções salvas da abertura ({reason}); o Code Mode não foi aplicado"));
+                false
+            }
+        },
     };
     let saved_permission = saved.as_ref().filter(|_| request.permission_mode.is_none())
         .map(|saved| saved.permission.clone()).filter(|mode| !mode.is_empty());
@@ -420,7 +434,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         account, account_source: source, model, effort: request.effort.clone(), service_tier,
         permission_mode, subagent_model: request.subagent_model.clone(), customizations: request.claude_customizations.clone(),
         jev: request.jev.unwrap_or_else(|| facts.defaults().jev),
-        code_mode: request.code_mode && provider == AgentProvider::Claude, read_only: request.read_only,
+        code_mode, read_only: request.read_only,
         worktree: request.branch.clone().map(|branch| WorktreeSpec { branch, new_branch: request.new_branch, base: request.base.clone(), path: None }),
         creator: request.creator.clone(), created_at: facts.now(), conversation: None,
         name_auto: Some(name_auto), rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
@@ -681,6 +695,9 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
     // O Codex sem terminal aceita o modo dele (vira sandbox e aprovação).
     if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) {
         return Err(OpenError::new(409, "erro_permissao_so_claude", "modo de permissao so vale para claude"));
+    }
+    if request.code_mode == Some(true) && !claude {
+        return Err(OpenError::new(400, "erro_code_mode_so_claude", "Code Mode so vale para provider claude"));
     }
     if truthy(&request.omp_profile) && provider != AgentProvider::Omp {
         return Err(OpenError::new(400, "erro_perfil_so_omp", "perfil so vale para provider omp"));

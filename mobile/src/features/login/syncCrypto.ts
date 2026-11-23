@@ -2,6 +2,7 @@ import { gcm } from '@noble/ciphers/aes.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';
+import type { SyncCrypto } from '@hangar/core';
 
 // Par do `deriveKeys` de frontend/src/lib/sync.ts: as duas contas têm de dar o mesmo resultado, ou o
 // login recusa a senha certa. O Hermes não tem `crypto.subtle`, e base64 e UTF-8 ficam aqui porque
@@ -54,3 +55,6 @@ export async function deriveKeys(password: string, salt: string, iterations: num
 export function decryptJson<T>(encKey: Uint8Array, blob: { iv: string; data: string }): T {
   return JSON.parse(fromUtf8(gcm(encKey, fromBase64(blob.iv)).decrypt(fromBase64(blob.data))));
 }
+
+/** O par que o login de sincronização do core recebe: a cifra fica aqui, fora do core. */
+export const syncCrypto: SyncCrypto = { deriveKeys, decryptJson };

@@ -137,7 +137,7 @@ const TARGET_CHARS: usize = 2000;
 #[derive(Deserialize)]
 struct NewSession {
     nome: String, cwd: Option<String>, provider: Option<String>, engine: Option<String>, model: Option<String>, effort: Option<String>,
-    permissao: Option<String>, headless: Option<bool>, #[serde(default)] read_only: bool, conta: Option<String>, jev: Option<bool>,
+    permissao: Option<String>, headless: Option<bool>, #[serde(default)] read_only: bool, conta: Option<String>, jev: Option<bool>, code_mode: Option<bool>,
     service_tier: Option<String>, branch: Option<String>, #[serde(default)] new_branch: bool, base: Option<String>,
     codex_account: Option<String>, subagent_model: Option<String>, initial_prompt: Option<String>, engine_account: Option<String>,
     omp_profile: Option<String>, claude_customizations: Option<Value>, inherit: Option<bool>, #[serde(default)] remember_provider: bool,
@@ -148,7 +148,7 @@ impl NewSession {
     /// O corpo da retomada; o que ela não aceita é recusado pelo nome.
     fn clone_for_resume(&self) -> Result<Value, String> {
         let unsupported = [("effort", self.effort.is_some()), ("permissao", self.permissao.is_some()), ("read_only", self.read_only),
-            ("jev", self.jev.is_some()), ("service_tier", self.service_tier.is_some()), ("branch", self.branch.as_deref().is_some_and(|b| !b.is_empty())),
+            ("jev", self.jev.is_some()), ("code_mode", self.code_mode.is_some()), ("service_tier", self.service_tier.is_some()), ("branch", self.branch.as_deref().is_some_and(|b| !b.is_empty())),
             ("new_branch", self.new_branch), ("subagent_model", self.subagent_model.is_some()), ("initial_prompt", self.initial_prompt.is_some()),
             ("omp_profile", self.omp_profile.is_some()), ("claude_customizations", self.claude_customizations.is_some()),
             ("inherit", self.inherit.is_some()), ("remember_provider", self.remember_provider), ("link", self.link)];
@@ -162,13 +162,13 @@ impl NewSession {
         Ok(body)
     }
 
-    /// O corpo do `POST /api/sessions` com o que veio explícito; `inherit`, `link` e `creator` são desta máquina e
-    /// quem chama acrescenta.
+    /// O corpo do `POST /api/sessions` com o que veio explícito; `creator` é desta máquina e quem chama acrescenta.
     fn create_body(self, cwd: String) -> Value {
         let mut body = json!({"name": self.nome, "cwd": cwd});
         let optional = [("provider", self.provider.map(Value::from)), ("engine", self.engine.map(Value::from)), ("model", self.model.map(Value::from)),
             ("effort", self.effort.map(Value::from)), ("permission_mode", self.permissao.map(Value::from)), ("headless", self.headless.map(Value::from)),
-            ("config_dir", self.conta.map(Value::from)), ("jev", self.jev.map(Value::from)), ("service_tier", self.service_tier.map(Value::from)),
+            ("config_dir", self.conta.map(Value::from)), ("jev", self.jev.map(Value::from)), ("code_mode", self.code_mode.map(Value::from)),
+            ("inherit", self.inherit.map(Value::from)), ("link", self.link.then_some(Value::Bool(true))), ("service_tier", self.service_tier.map(Value::from)),
             ("branch", self.branch.filter(|b| !b.is_empty()).map(Value::from)), ("base", self.base.filter(|b| !b.is_empty()).map(Value::from)),
             ("codex_account", self.codex_account.map(Value::from)), ("subagent_model", self.subagent_model.map(Value::from)),
             ("initial_prompt", self.initial_prompt.map(Value::from)), ("engine_account", self.engine_account.map(Value::from)),
@@ -657,14 +657,10 @@ impl Tools {
             return remote_session(&self.st.peers, &server, a).await;
         }
         if let Some(sid) = a.resume.as_deref().filter(|s| !s.is_empty()) { return self.resume_session(sid, a.clone_for_resume()).await; }
-        let (inherit, link) = (a.inherit, a.link);
         let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| self.home().display().to_string());
         let mut body = a.create_body(cwd);
-        for (key, value) in [("inherit", inherit.map(Value::from)), ("link", link.then_some(Value::Bool(true))),
-            // A voz não tem conta nem modo para herdar: o omitido fica com o padrão do servidor.
-            ("creator", (!voice).then_some(Value::from(me)))] {
-            if let Some(value) = value { body[key] = value; }
-        }
+        // A voz não tem conta nem modo para herdar: o omitido fica com o padrão do servidor.
+        if !voice { body["creator"] = Value::from(me); }
         let info = self.ok(Method::POST, "/api/sessions", Some(body)).await?;
         created(&info, None)
     }
@@ -1110,6 +1106,26 @@ impl Tools {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Trava da abertura única: todo campo da tabela de abertura existe no `new_session` (catálogo e
+    /// argumentos) e chega ao corpo do `POST /api/sessions` com a chave do pedido.
+    #[test]
+    fn new_session_says_every_open_field() {
+        let catalog: Value = serde_json::from_str(include_str!("catalog.json")).unwrap();
+        let tool = catalog.as_array().unwrap().iter().find(|t| t["name"] == "new_session").unwrap();
+        let properties = tool["inputSchema"]["properties"].as_object().unwrap();
+        for field in hangar_session_open_fields::FIELDS {
+            assert!(properties.contains_key(field.mcp), "o catálogo do new_session não tem `{}` ({})", field.mcp, field.body);
+            if matches!(field.body, "name" | "cwd") { continue; }
+            let parsed = [json!(true), json!("x")].into_iter().find_map(|sample| {
+                let raw = json!({"nome": "s", "cwd": "/p", field.mcp: sample}).as_object().unwrap().clone();
+                args::<NewSession>("new_session", raw).ok()
+            });
+            let a = parsed.unwrap_or_else(|| panic!("new_session não aceita `{}`", field.mcp));
+            let body = a.create_body("/p".into());
+            assert!(body.get(field.body).is_some_and(|v| !v.is_null()), "`{}` do new_session não chega ao corpo como `{}`: {body}", field.mcp, field.body);
+        }
+    }
 
     #[test]
     fn a_wrong_argument_lists_every_field_of_the_tool() {
