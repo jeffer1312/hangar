@@ -52,16 +52,16 @@ impl Error {
 }
 
 pub fn systemd_unit(s: &Service) -> String {
-    // `%` é especificador do systemd (`%b`, `%h`) e `$` é variável de ambiente, mesmo entre aspas: no
-    // caminho os dois valem literais.
-    let escape = |text: String| text.replace('%', "%%").replace('$', "$$");
-    let quote = |p: &Path| format!("\"{}\"", escape(p.display().to_string().replace('\\', "\\\\").replace('"', "\\\"")));
-    let mut exec = quote(&s.executable);
+    // `%` é especificador em toda a linha; `$` só é expandido nos argumentos, e no programa `$$` ficaria literal.
+    let specifiers = |text: String| text.replace('%', "%%");
+    let escape = |text: String| specifiers(text).replace('$', "$$");
+    let quoted = |p: &Path| p.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
+    let mut exec = format!("\"{}\"", specifiers(quoted(&s.executable)));
     for arg in &s.args {
         exec.push(' ');
         exec.push_str(&match arg {
             Arg::Plain(word) => escape(word.clone()),
-            Arg::Path(path) => quote(path),
+            Arg::Path(path) => format!("\"{}\"", escape(quoted(path))),
         });
     }
     let prevent = s.id.no_restart_exit.map(|code| format!("RestartPreventExitStatus={code}\n")).unwrap_or_default();
@@ -450,7 +450,7 @@ mod tests {
         let odd = systemd_unit(&service("/home/a%b/hangar-whatsapp", "/home/a\"b/dados"));
         assert!(odd.contains("ExecStart=\"/home/a%%b/hangar-whatsapp\" --data \"/home/a\\\"b/dados\"\n"), "{odd}");
         let dollar = systemd_unit(&service("/home/${HOME}/hangar-whatsapp", "/home/$USER/dados"));
-        assert!(dollar.contains("ExecStart=\"/home/$${HOME}/hangar-whatsapp\" --data \"/home/$$USER/dados\"\n"), "{dollar}");
+        assert!(dollar.contains("ExecStart=\"/home/${HOME}/hangar-whatsapp\" --data \"/home/$$USER/dados\"\n"), "{dollar}");
         let bare = systemd_unit(&Service { id: WHATSAPP, executable: "/x/p".into(), args: Vec::new() });
         assert!(bare.contains("ExecStart=\"/x/p\"\n"), "sem argumentos: {bare}");
     }
