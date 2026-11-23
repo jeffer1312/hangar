@@ -567,7 +567,9 @@ fn unavailable_native_context_answers_503_with_reason() {
     let stage = Arc::new(std::sync::Mutex::new("fixture"));
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
     let at = stage.clone();
-    let done = runtime.block_on(async move { tokio::time::timeout(Duration::from_secs(60), async move {
+    // O corpo roda numa tarefa: pânico vira `JoinError` sem pular o encerramento com prazo, e o prazo corre mesmo com
+    // uma thread presa.
+    let body = runtime.spawn(async move {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing-mux");
         let f = workspace_fixture::fixture_with_mux(dir.path(), None, Some(&missing)).await;
@@ -585,9 +587,14 @@ fn unavailable_native_context_answers_503_with_reason() {
         let diag = f.diag("rust.workspace_failed").await;
         assert_eq!((&diag["sessao"], &diag["codigo"]), (&json!("fixture"), &json!("workspace_context")));
         *at.lock().unwrap() = "encerramento";
-    }).await });
+    });
+    let done = runtime.block_on(async { tokio::time::timeout(Duration::from_secs(60), body).await });
     runtime.shutdown_timeout(Duration::from_secs(10));
-    assert!(done.is_ok(), "parou na etapa {}", stage.lock().unwrap());
+    match done {
+        Err(_) => panic!("parou na etapa {}", stage.lock().unwrap()),
+        Ok(Err(e)) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        Ok(joined) => joined.unwrap(),
+    }
 }
 
 #[cfg(unix)]

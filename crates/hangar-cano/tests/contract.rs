@@ -209,7 +209,7 @@ mod unix {
         until_logged(&cano.log, "cliente saiu");
         std::fs::write(&gate, "").unwrap();
         until_logged(&cano.log, "claude saiu rc=3");
-        assert!(cano.child.0.try_wait().unwrap().is_none(), "o cano espera alguém buscar o rc");
+        assert!(wait_exit(&mut cano.child.0, Duration::from_millis(300)).is_none(), "o cano espera alguém buscar o rc");
         let mut b = client(&cano.sock);
         let snap = b.read();
         assert_eq!(snap["saiu"], 3);
