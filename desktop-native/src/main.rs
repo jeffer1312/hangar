@@ -108,6 +108,9 @@ impl AssetSource for AppAssets {
             "providers/claude.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/claude.svg")))),
             "providers/codex.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/codex.svg")))),
             "providers/kimi.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/kimi.svg")))),
+            "providers/pi.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/pi.svg")))),
+            "providers/omp.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/omp.svg")))),
+            "providers/antigravity.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/antigravity.svg")))),
             _ => {}
         }
         if let Some(bytes) = fileicons::load(path).or_else(|| install_guide(path)) { return Ok(Some(Cow::Borrowed(bytes))); }

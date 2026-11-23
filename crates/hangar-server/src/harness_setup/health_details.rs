@@ -287,6 +287,17 @@ pub fn skills(env: &AccountEnvironment, repo: &Path, cli: &str) -> Result<Value,
         Ok(None) | Err(_) => return Ok(item("skills", None, "config_ilegivel", None, false, &[])),
         _ => {}
     }
+    Ok(item(
+        "skills",
+        Some(true),
+        "skills_ok",
+        None,
+        false,
+        &[("n", links.len().to_string()), ("origem", origin(env, repo, &links)?)],
+    ))
+}
+/// Quantos links vêm de cada fonte, no texto do card ("3 pessoais, 2 hangar").
+fn origin(env: &AccountEnvironment, repo: &Path, links: &[std::path::PathBuf]) -> Result<String, String> {
     let mut counts = [0usize; 4];
     let roots = [
         ("plugins", env.home.join(".claude/plugins")),
@@ -294,7 +305,7 @@ pub fn skills(env: &AccountEnvironment, repo: &Path, cli: &str) -> Result<Value,
         ("hangar", repo.join("skills")),
         ("agents", env.home.join(".agents/skills")),
     ];
-    for link in &links {
+    for link in links {
         let target = std::fs::read_link(link).map_err(|e| e.to_string())?;
         for (index, (_, root)) in roots.iter().enumerate() {
             if target.starts_with(root) && target != *root {
@@ -303,19 +314,106 @@ pub fn skills(env: &AccountEnvironment, repo: &Path, cli: &str) -> Result<Value,
             }
         }
     }
-    let origin = roots
+    Ok(roots
         .iter()
         .enumerate()
         .filter(|(i, _)| counts[*i] > 0)
         .map(|(i, (name, _))| format!("{} {name}", counts[i]))
         .collect::<Vec<_>>()
-        .join(", ");
-    Ok(item(
-        "skills",
-        Some(true),
-        "skills_ok",
-        None,
-        false,
-        &[("n", links.len().to_string()), ("origem", origin)],
-    ))
+        .join(", "))
+}
+/// Só os links nossos contam: o que a pessoa pôs na pasta do `agy` não é ponte nem conserto.
+pub fn agy_skills(env: &AccountEnvironment, repo: &Path) -> Value {
+    let bridge = super::skills::agy_bridge(&env.home);
+    let links = match super::skills::managed_links(&bridge, &super::skills::roots(env, repo)) {
+        Ok(links) => links,
+        Err(_) => return item("skills", None, "config_ilegivel", None, false, &[]),
+    };
+    if links.is_empty() {
+        return item("skills", Some(false), "agy_skills_desligadas", Some("skills-agy"), false, &[]);
+    }
+    let dead = links.iter().filter(|p| !p.exists()).count();
+    if dead > 0 {
+        return item(
+            "skills",
+            Some(false),
+            "links_pendurados",
+            Some("skills-agy"),
+            false,
+            &[("n", dead.to_string()), ("total", links.len().to_string())],
+        );
+    }
+    match origin(env, repo, &links) {
+        Ok(text) => item("skills", Some(true), "skills_ok", None, false, &[("n", links.len().to_string()), ("origem", text)]),
+        Err(_) => item("skills", None, "config_ilegivel", None, false, &[]),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::harness_setup::skills;
+
+    fn skill(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+    }
+
+    fn setup() -> (tempfile::TempDir, AccountEnvironment, std::path::PathBuf) {
+        let home = tempfile::tempdir().unwrap();
+        let env = AccountEnvironment::from_pairs([("HOME", home.path().to_string_lossy().to_string()), ("PATH", String::new())]);
+        let repo = home.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        skill(&home.path().join(".claude/skills/foo"));
+        skill(&home.path().join(".claude/skills/bar"));
+        (home, env, repo)
+    }
+
+    #[test]
+    fn the_agy_skills_are_off_until_the_repair_links_them() {
+        let (home, env, repo) = setup();
+        let value = agy_skills(&env, &repo);
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["codigo"], "agy_skills_desligadas");
+        assert_eq!(value["conserto"], "skills-agy");
+        // Uma skill da própria pessoa na pasta não liga a ponte.
+        let folder = home.path().join(".gemini/antigravity-cli/skills");
+        skill(&folder.join("bar"));
+        assert_eq!(agy_skills(&env, &repo)["codigo"], "agy_skills_desligadas");
+        skills::rebuild_agy(&env, &repo).unwrap();
+        let value = agy_skills(&env, &repo);
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["codigo"], "skills_ok");
+        assert_eq!(value["params"]["n"], "1");
+        assert_eq!(value["params"]["origem"], "1 pessoais");
+        assert!(folder.join("foo").is_symlink());
+        assert!(!folder.join("bar").is_symlink() && folder.join("bar/SKILL.md").is_file(), "a pessoal fica");
+    }
+
+    #[test]
+    fn a_dangling_agy_link_asks_for_the_repair() {
+        let (home, env, repo) = setup();
+        skills::rebuild_agy(&env, &repo).unwrap();
+        std::fs::remove_dir_all(home.path().join(".claude/skills/foo")).unwrap();
+        let value = agy_skills(&env, &repo);
+        assert_eq!(value["codigo"], "links_pendurados");
+        assert_eq!(value["params"]["n"], "1");
+        assert_eq!(value["params"]["total"], "2");
+        assert_eq!(value["conserto"], "skills-agy");
+    }
+
+    #[test]
+    fn the_startup_rebuild_never_creates_the_agy_folder() {
+        let (home, env, repo) = setup();
+        let report = skills::rebuild_report(&env, &repo, false);
+        assert!(report.stats.get("antigravity").is_none());
+        assert!(!home.path().join(".gemini/antigravity-cli/skills").exists());
+        assert!(!home.path().join(".gemini").exists());
+        // Com a pasta já criada, a mesma rodada a mantém em dia.
+        std::fs::create_dir_all(home.path().join(".gemini/antigravity-cli/skills")).unwrap();
+        let report = skills::rebuild_report(&env, &repo, false);
+        assert!(report.errors.is_empty());
+        assert_eq!(report.stats["antigravity"]["criados"], 2);
+        assert!(home.path().join(".gemini/antigravity-cli/skills/foo").is_symlink());
+    }
 }

@@ -119,6 +119,14 @@ fn managed(path: &Path, roots: &[PathBuf]) -> bool {
     });
     roots.iter().any(|root| link.starts_with(normalized(root)))
 }
+/// Os links da pasta que apontam para dentro das fontes; o resto é da pessoa.
+pub(crate) fn managed_links(bridge: &Path, roots: &[PathBuf]) -> std::io::Result<Vec<PathBuf>> {
+    Ok(children(bridge)?.into_iter().filter(|p| managed(p, roots)).collect())
+}
+/// Pasta de skills do CLI na conta padrão: o `agy` a lê sozinho, um nível, sem lista na config.
+pub fn agy_bridge(home: &Path) -> PathBuf {
+    hangar_antigravity::Account::default().data_dir(home).join("skills")
+}
 fn link(path: &Path, source: &Path, roots: &[PathBuf]) -> std::io::Result<()> {
     let directory = tempfile::Builder::new()
         .prefix(".hangar-skill-")
@@ -251,7 +259,30 @@ pub fn rebuild_report(env: &AccountEnvironment, repo: &Path, dry: bool) -> Rebui
         }
         tracing::info!(target,stats=%result[target],"Skills conferidas");
     }
+    // Só a pasta que já existe: ligar é o conserto, a subida nunca a cria.
+    let (target, bridge) = ("antigravity", agy_bridge(&env.home));
+    if bridge.is_dir() {
+        result[target] = rebuild_one(&bridge, &sources, &roots, dry).unwrap_or_else(|error| {
+            tracing::warn!(target,%error,"Falha ao atualizar skills");
+            errors.insert(target.into(),format!("{}: {error}",bridge.display()));
+            json!({"erro":1})
+        });
+        tracing::info!(target,stats=%result[target],"Skills conferidas");
+    }
     RebuildReport { stats: result, errors }
+}
+
+/// Cria a pasta do Antigravity e a preenche; sem fonte nenhuma não cria nada.
+pub fn rebuild_agy(env: &AccountEnvironment, repo: &Path) -> Result<Value, String> {
+    let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let sources = sources(env, repo).map_err(|error| format!("{}: {error}", env.home.display()))?;
+    if sources.is_empty() {
+        return Err("nenhuma fonte de skills encontrada".into());
+    }
+    let bridge = agy_bridge(&env.home);
+    fs::create_dir_all(&bridge).map_err(|error| format!("{}: {error}", bridge.display()))?;
+    rebuild_one(&bridge, &sources, &roots(env, repo), false)
+        .map_err(|error| format!("{}: {error}", bridge.display()))
 }
 
 pub fn bridge_configured(env: &AccountEnvironment, target: &str) -> Result<Option<bool>, String> {

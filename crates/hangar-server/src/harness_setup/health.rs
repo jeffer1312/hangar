@@ -214,10 +214,10 @@ fn config(env: &AccountEnvironment, cli: &str, json_name: &str) -> Result<ValueG
     }
 }
 pub fn mcp(env: &AccountEnvironment, cli: &str) -> Result<Value, String> {
-    let doc = if cli == "claude" {
-        read(&env.default_claude_json())
-    } else {
-        config(env, cli, "mcp.json")?
+    let doc = match cli {
+        "claude" => read(&env.default_claude_json()),
+        "agy" => read(&hangar_antigravity::Account::default().gemini_dir(&env.home).join("config/mcp_config.json")),
+        _ => config(env, cli, "mcp.json")?,
     };
     let field = match cli {
         "codex" => "mcp_servers",
@@ -258,10 +258,10 @@ pub fn default_model(env: &AccountEnvironment, cli: &str) -> Result<Value, Strin
             .unwrap_or_default();
         return Ok(model_item(model));
     }
-    let doc = if cli == "claude" {
-        read(&env.home.join(".claude/settings.json"))
-    } else {
-        config(env, cli, "settings.json")?
+    let doc = match cli {
+        "claude" => read(&env.home.join(".claude/settings.json")),
+        "agy" => read(&hangar_antigravity::Account::default().settings_path(&env.home)),
+        _ => config(env, cli, "settings.json")?,
     };
     let model = if matches!(cli, "pi" | "omp") {
         let mut parts = Vec::new();
@@ -628,5 +628,150 @@ pub fn claude_hooks(directory: &Path) -> Value {
             false,
             &[("n", "5".into())],
         )
+    }
+}
+
+/// A entrada do Hangar em toda conta onde o `agy` já rodou; sem ela o pane não acha a conversa.
+pub fn agy_hooks(home: &Path) -> Value {
+    use hangar_antigravity::hooks::{ENTRY, EVENTS};
+    let mut used = false;
+    let mut missing: Vec<&str> = Vec::new();
+    for account in hangar_antigravity::paths::known_accounts(home) {
+        if !account.data_dir(home).is_dir() {
+            continue;
+        }
+        used = true;
+        let doc = match std::fs::read_to_string(account.hooks_path(home)) {
+            Ok(text) if text.trim_start_matches('\u{feff}').trim().is_empty() => json!({}),
+            Ok(text) => match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
+                Ok(doc) if doc.is_object() => doc,
+                _ => return item("hooks", None, "config_ilegivel", None, false, &[]),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+            Err(_) => return item("hooks", None, "config_ilegivel", None, false, &[]),
+        };
+        for event in EVENTS {
+            let found = doc[ENTRY][event].as_array().into_iter().flatten().any(|handler| {
+                handler["command"].as_str().is_some_and(|c| c.contains(super::agy_hooks::MODE))
+            });
+            if !found && !missing.contains(&event) {
+                missing.push(event);
+            }
+        }
+    }
+    if !used {
+        return item("hooks", None, "agy_hooks_sem_uso", None, true, &[]);
+    }
+    if missing.is_empty() {
+        item("hooks", Some(true), "hooks_ok", None, false, &[("n", EVENTS.len().to_string())])
+    } else {
+        // A ordem é a de EVENTS, não a de leitura das contas.
+        missing.sort_by_key(|event| EVENTS.iter().position(|e| e == event));
+        item("hooks", Some(false), "faltam", Some("hooks-agy"), false, &[("lista", missing.join(", "))])
+    }
+}
+pub fn agy_version(text: &str) -> Value {
+    let (a, b, c) = hangar_antigravity::version::MIN;
+    let minimum = format!("{a}.{b}.{c}");
+    let Some((x, y, z)) = hangar_antigravity::version::parse(text) else {
+        return item("versao", None, "config_ilegivel", None, false, &[]);
+    };
+    let params = [("versao", format!("{x}.{y}.{z}")), ("minimo", minimum)];
+    if hangar_antigravity::version::supported(text) == Some(true) {
+        item("versao", Some(true), "agy_versao_ok", None, false, &params)
+    } else {
+        item("versao", Some(false), "agy_versao_antiga", None, false, &params)
+    }
+}
+pub fn agy_accounts(home: &Path) -> Value {
+    let accounts = hangar_antigravity::paths::known_accounts(home);
+    let names: Vec<String> = accounts
+        .iter()
+        .map(|account| match &account.gemini_home {
+            None => "padrão".to_owned(),
+            Some(dir) => {
+                let name = dir.file_name().unwrap_or_default().to_string_lossy();
+                name.strip_prefix(hangar_antigravity::paths::ACCOUNT_PREFIX).unwrap_or(&*name).to_owned()
+            }
+        })
+        .collect();
+    item("contas", Some(true), "agy_contas", None, true, &[("n", accounts.len().to_string()), ("lista", names.join(", "))])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hooks_file(home: &Path, doc: &Value) {
+        let path = home.join(".gemini/config/hooks.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(doc).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn agy_hooks_wait_for_the_first_use() {
+        let home = tempfile::tempdir().unwrap();
+        let value = agy_hooks(home.path());
+        assert_eq!(value["ok"], Value::Null);
+        assert_eq!(value["info"], true);
+        assert_eq!(value["codigo"], "agy_hooks_sem_uso");
+        assert_eq!(value["conserto"], Value::Null);
+    }
+
+    #[test]
+    fn agy_hooks_name_the_missing_events() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".gemini/antigravity-cli")).unwrap();
+        let value = agy_hooks(home.path());
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["codigo"], "faltam");
+        assert_eq!(value["params"]["lista"], "SessionStart, PreInvocation, PostInvocation, Stop");
+        assert_eq!(value["conserto"], "hooks-agy");
+        hooks_file(home.path(), &json!({"hangar":{"Stop":[{"type":"command","command":"/x/hangar-server agy-state-hook"}]},"lint":{}}));
+        let value = agy_hooks(home.path());
+        assert_eq!(value["codigo"], "faltam");
+        assert_eq!(value["params"]["lista"], "SessionStart, PreInvocation, PostInvocation");
+        assert_eq!(value["conserto"], "hooks-agy");
+    }
+
+    #[test]
+    fn agy_hooks_complete_and_unreadable() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".gemini/antigravity-cli")).unwrap();
+        let mut doc = json!({"lint":{}});
+        doc["hangar"] = hangar_antigravity::hooks::entry("/x/hangar-server agy-state-hook");
+        hooks_file(home.path(), &doc);
+        let value = agy_hooks(home.path());
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["codigo"], "hooks_ok");
+        assert_eq!(value["params"]["n"], "4");
+        assert_eq!(value["conserto"], Value::Null);
+        std::fs::write(home.path().join(".gemini/config/hooks.json"), "{ quebrado").unwrap();
+        let value = agy_hooks(home.path());
+        assert_eq!(value["ok"], Value::Null);
+        assert_eq!(value["codigo"], "config_ilegivel");
+    }
+
+    #[test]
+    fn agy_version_against_the_minimum() {
+        let value = agy_version("1.5.15");
+        assert_eq!((value["ok"].clone(), value["codigo"].clone()), (json!(true), json!("agy_versao_ok")));
+        assert_eq!(value["params"], json!({"versao":"1.5.15","minimo":"1.5.13"}));
+        let value = agy_version("1.5.12");
+        assert_eq!((value["ok"].clone(), value["codigo"].clone()), (json!(false), json!("agy_versao_antiga")));
+        assert_eq!(value["conserto"], Value::Null);
+        assert_eq!(agy_version("sem versão")["codigo"], "config_ilegivel");
+    }
+
+    #[test]
+    fn agy_accounts_list_the_default_and_the_extra_ones() {
+        let home = tempfile::tempdir().unwrap();
+        let extra = home.path().join(".antigravity-trabalho");
+        std::fs::create_dir_all(&extra).unwrap();
+        std::fs::write(extra.join(hangar_antigravity::paths::MARKER), "").unwrap();
+        let value = agy_accounts(home.path());
+        assert_eq!(value["codigo"], "agy_contas");
+        assert_eq!(value["info"], true);
+        assert_eq!(value["params"], json!({"n":"2","lista":"padrão, trabalho"}));
     }
 }
