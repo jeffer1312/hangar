@@ -149,8 +149,9 @@ export function AntigravityContaLogin({ server, accounts, accountId, onComplete,
         live.current = now;
         setBusy(null);
         setError(fail(e));
-        // A tentativa segue viva no servidor: volta a ler o estado dela.
-        void read(generation.current);
+        // A tentativa segue viva no servidor: volta a ler o estado dela no próximo ciclo, com o erro à vista até lá.
+        const g = generation.current;
+        timer.current = setTimeout(() => void read(g), POLL_MS);
         return;
       }
     }
