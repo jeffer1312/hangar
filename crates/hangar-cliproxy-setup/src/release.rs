@@ -50,9 +50,9 @@ mod tests {
     #[test]
     fn error_codes_stay_the_ones_the_screen_knows() {
         let codes = [Error::Network(String::new()), Error::UnsupportedPlatform, Error::NoChecksum, Error::Hash,
-            Error::BinaryMissing, Error::Write(String::new())].map(|e| code(&e));
+            Error::BinaryMissing, Error::BinaryTooLarge, Error::Write(String::new())].map(|e| code(&e));
         assert_eq!(codes, ["cliproxy_download_failed", "cliproxy_sem_asset", "cliproxy_sem_checksum", "cliproxy_hash",
-            "cliproxy_binary_missing", "cliproxy_write_failed"]);
+            "cliproxy_binary_missing", "cliproxy_binary_too_large", "cliproxy_write_failed"]);
         assert_eq!(CODES.service_failed, "cliproxy_servico_falhou");
     }
 }

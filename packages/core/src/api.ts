@@ -4989,7 +4989,8 @@ export type WhatsAppLinkState = 'unpaired' | 'pairing' | 'connected' | 'logged_o
 /** `error` aceito como texto ou `{code}`: o servidor já mandou dos dois jeitos. */
 export interface WhatsAppJob {
   kind: 'install' | 'update' | string;
-  step: string;
+  /** Ausente ou `null` conta como a primeira etapa. */
+  step?: string | null;
   done: boolean;
   error: string | { code: string } | null;
   outcome?: unknown;

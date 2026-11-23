@@ -18,7 +18,7 @@ const optCode = (v: unknown) => optText(v) || (isFields(v) && typeof v.code === 
 
 function isJob(v: unknown): boolean {
   if (v === undefined || v === null) return true;
-  return isFields(v) && typeof v.done === 'boolean' && typeof v.kind === 'string' && typeof v.step === 'string' && optCode(v.error);
+  return isFields(v) && typeof v.done === 'boolean' && typeof v.kind === 'string' && optText(v.step) && optCode(v.error);
 }
 
 function isStatus(v: unknown): boolean {
@@ -99,7 +99,7 @@ export function shouldPoll(state: WhatsAppState, awaitingPair: boolean, retrying
 }
 
 /** Índice da etapa em curso; etapa desconhecida conta como a primeira. */
-export function stepIndex(step: string | undefined): number {
+export function stepIndex(step: string | null | undefined): number {
   const at = STEPS.indexOf(step as typeof STEPS[number]);
   return at < 0 ? 0 : at;
 }

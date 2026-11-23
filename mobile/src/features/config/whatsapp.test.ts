@@ -119,6 +119,9 @@ describe('isWhatsAppState', () => {
     expect(isWhatsAppState({ ...connected, job })).toBe(true);
     expect(isWhatsAppState({ ...connected, job: { ...job, error: { code: 'whatsapp_hash' } } })).toBe(true);
     expect(isWhatsAppState({ ...connected, job: { ...job, done: 'no' } })).toBe(false);
+    expect(isWhatsAppState({ ...connected, job: { ...job, step: null } })).toBe(true);
+    expect(isWhatsAppState({ ...connected, job: { kind: 'install', done: false, error: null } })).toBe(true);
+    expect(isWhatsAppState({ ...connected, job: { ...job, step: 2 } })).toBe(false);
     expect(isWhatsAppState({ ...connected, qr_svg: 5 })).toBe(false);
   });
 });

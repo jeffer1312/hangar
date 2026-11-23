@@ -319,7 +319,7 @@ pub async fn process_running(home: &Path, id: &ServiceId) -> Result<bool, Error>
 ///
 /// # Errors
 ///
-/// O gerenciador não respondeu; serviço sem unit ou plist no disco não é erro, é parado.
+/// O gerenciador não respondeu; serviço sem unit, plist ou tarefa não é erro, é parado.
 pub async fn process_state(home: &Path, id: &ServiceId, executable: &Path) -> Result<ProcessState, Error> {
     query(home, id, Some(executable)).await
 }
@@ -329,15 +329,26 @@ async fn query(home: &Path, id: &ServiceId, executable: Option<&Path>) -> Result
         return launchd_query(home, id, "launchctl").await;
     }
     if cfg!(windows) {
-        let task = ps_quote(id.task);
-        let script = format!("$ErrorActionPreference = 'Stop'\n$t = Get-ScheduledTask -TaskName {task}\n\
-            \"State=$($t.State)\"\n\"LastTaskResult=$(($t | Get-ScheduledTaskInfo).LastTaskResult)\"\n");
-        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, utf16le(&script));
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, utf16le(&windows_query_script(id)));
         let out = stdout("Get-ScheduledTask", "powershell.exe", &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]).await?;
         let present = windows_vbs_path(home, id).is_file() && executable.is_some_and(Path::is_file);
         return Ok(task_state(&out, present));
     }
     systemd_query(home, id, "systemctl").await
+}
+
+/// `State=` e `LastTaskResult=` da tarefa. Tarefa que não existe (remoção pela metade, apagada à mão) sai
+/// `State=Absent`, como a unit ou o plist ausentes; qualquer outro erro do PowerShell continua erro.
+fn windows_query_script(id: &ServiceId) -> String {
+    let task = ps_quote(id.task);
+    format!(
+        "$ErrorActionPreference = 'Stop'\n\
+         try {{ $t = Get-ScheduledTask -TaskName {task} }} catch {{\n\
+         if ($_.CategoryInfo.Category -eq 'ObjectNotFound' -or $_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') {{ 'State=Absent'; exit 0 }}\n\
+         throw\n\
+         }}\n\
+         \"State=$($t.State)\"\n\"LastTaskResult=$(($t | Get-ScheduledTaskInfo).LastTaskResult)\"\n"
+    )
 }
 
 async fn systemd_query(home: &Path, id: &ServiceId, systemctl: &str) -> Result<ProcessState, Error> {
@@ -406,6 +417,9 @@ fn launchd_state(list: &str) -> ProcessState {
 /// (`Disabled`): rodando, na fila ou em estado desconhecido, o programa pode estar abrindo os dados.
 fn task_state(out: &str, files_present: bool) -> ProcessState {
     let state = key_value(out, "State");
+    if state == "Absent" {
+        return ProcessState::default();
+    }
     let ran = files_present && state != "Running";
     let last_exit = if ran { key_value(out, "LastTaskResult").parse().ok() } else { None };
     ProcessState { running: !matches!(state, "Ready" | "Disabled"), last_exit }
@@ -540,6 +554,15 @@ mod tests {
         assert!(running("Queued"), "na fila para subir");
         assert!(running("Unknown"));
         assert!(task_state("", true).running, "saída sem estado não confirma a parada");
+    }
+
+    /// Tarefa que não existe é parada, como a unit ou o plist ausentes; o resto do erro do PowerShell sobe.
+    #[test]
+    fn a_missing_task_counts_as_stopped() {
+        assert_eq!(task_state("State=Absent\r\n", true), ProcessState::default());
+        let script = windows_query_script(&WHATSAPP);
+        assert!(script.contains("try { $t = Get-ScheduledTask -TaskName 'hangar-whatsapp' } catch {"), "{script}");
+        assert!(script.contains("-eq 'ObjectNotFound'") && script.contains("{ 'State=Absent'; exit 0 }\nthrow\n"), "{script}");
     }
 
     /// O `systemctl` que não abre ou sai com erro é erro, nunca "parado"; sem a unit no disco não se pergunta.

@@ -25,6 +25,8 @@ pub enum Error {
     NoChecksum,
     Hash,
     BinaryMissing,
+    /// O programa descompactado passa do teto.
+    BinaryTooLarge,
     Write(String),
 }
 
@@ -74,6 +76,7 @@ impl Error {
             Self::NoChecksum => codes.no_checksum,
             Self::Hash => codes.hash,
             Self::BinaryMissing => codes.binary_missing,
+            Self::BinaryTooLarge => codes.binary_too_large,
             Self::Write(_) => codes.write_failed,
         }
     }
@@ -213,7 +216,7 @@ fn extract_within(data: &[u8], member: &str, limit: u64) -> Result<Vec<u8>, Erro
     let read = |reader: &mut dyn Read| {
         let mut content = Vec::new();
         reader.take(limit + 1).read_to_end(&mut content).map_err(|_| Error::BinaryMissing)?;
-        if content.len() as u64 > limit { Err(Error::BinaryMissing) } else { Ok(content) }
+        if content.len() as u64 > limit { Err(Error::BinaryTooLarge) } else { Ok(content) }
     };
     if data.starts_with(b"PK") {
         let mut archive = zip::ZipArchive::new(Cursor::new(data)).map_err(|_| Error::BinaryMissing)?;
@@ -329,6 +332,7 @@ mod tests {
         assert_eq!(Error::Network("x".into()).code(&codes), "whatsapp_download_failed");
         assert_eq!(Error::UnsupportedPlatform.code(&codes), "whatsapp_sem_asset");
         assert_eq!(Error::Hash.code(&codes), "whatsapp_hash");
+        assert_eq!(Error::BinaryTooLarge.code(&codes), "whatsapp_binary_too_large");
         assert_eq!(Error::Write("x".into()).code(&codes), "whatsapp_write_failed");
     }
 
@@ -368,7 +372,7 @@ mod tests {
     fn a_member_larger_than_the_limit_is_refused_in_both_formats() {
         for (data, member) in [(tar_gz("hangar-whatsapp", b"12345678"), "hangar-whatsapp"), (zipped("hangar-whatsapp.exe", b"12345678"), "hangar-whatsapp.exe")] {
             assert_eq!(extract_within(&data, member, 8), Ok(b"12345678".to_vec()), "no teto ainda serve");
-            assert_eq!(extract_within(&data, member, 7), Err(Error::BinaryMissing), "um byte acima não serve");
+            assert_eq!(extract_within(&data, member, 7), Err(Error::BinaryTooLarge), "um byte acima não serve");
         }
     }
 

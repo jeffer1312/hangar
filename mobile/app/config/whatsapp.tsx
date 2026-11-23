@@ -67,6 +67,7 @@ const JOB_ERR: Record<string, () => string> = {
   sem_checksum: m.native_whatsapp_job_err_sem_checksum,
   hash: m.native_whatsapp_job_err_hash,
   binary_missing: m.native_whatsapp_job_err_binary_missing,
+  binary_too_large: m.native_whatsapp_job_err_binary_too_large,
   write_failed: m.native_whatsapp_job_err_write_failed,
   servico_falhou: m.native_whatsapp_job_err_servico_falhou,
   no_release: m.native_whatsapp_job_err_no_release,

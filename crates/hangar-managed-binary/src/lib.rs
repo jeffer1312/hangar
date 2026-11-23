@@ -15,6 +15,8 @@ pub struct ErrorCodes {
     pub no_checksum: &'static str,
     pub hash: &'static str,
     pub binary_missing: &'static str,
+    /// O programa descompactado passa do teto.
+    pub binary_too_large: &'static str,
     pub write_failed: &'static str,
     pub service_failed: &'static str,
 }
@@ -30,6 +32,7 @@ macro_rules! error_codes {
             no_checksum: concat!($prefix, "_sem_checksum"),
             hash: concat!($prefix, "_hash"),
             binary_missing: concat!($prefix, "_binary_missing"),
+            binary_too_large: concat!($prefix, "_binary_too_large"),
             write_failed: concat!($prefix, "_write_failed"),
             service_failed: concat!($prefix, "_servico_falhou"),
         }
@@ -42,9 +45,10 @@ mod tests {
     fn codes_take_the_prefix() {
         let codes = crate::error_codes!("whatsapp");
         assert_eq!(
-            [codes.download_failed, codes.no_asset, codes.no_checksum, codes.hash, codes.binary_missing, codes.write_failed, codes.service_failed],
+            [codes.download_failed, codes.no_asset, codes.no_checksum, codes.hash, codes.binary_missing, codes.binary_too_large,
+                codes.write_failed, codes.service_failed],
             ["whatsapp_download_failed", "whatsapp_sem_asset", "whatsapp_sem_checksum", "whatsapp_hash",
-                "whatsapp_binary_missing", "whatsapp_write_failed", "whatsapp_servico_falhou"]
+                "whatsapp_binary_missing", "whatsapp_binary_too_large", "whatsapp_write_failed", "whatsapp_servico_falhou"]
         );
     }
 }
