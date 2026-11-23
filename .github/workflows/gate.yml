@@ -36,7 +36,8 @@ jobs:
         run: |
           set -euo pipefail
           # Sem base com que comparar (primeiro push da branch, histórico reescrito): tudo roda.
-          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+            || ! git merge-base "$BASE" "$HEAD_SHA" >/dev/null; then
             echo "sem base comparável; todas as partes rodam"
             python3 -I scripts/gate-areas.py --all | tee -a "$GITHUB_OUTPUT"
             exit 0
