@@ -41,8 +41,13 @@ pub async fn verb(http: &reqwest::Client, home: &Path, name: &str, verb: &str, a
 /// A URL da página do navegador da sessão. `erro:` do app (sessão sem navegador, página caída) também é `Unavailable`.
 pub async fn page_url(http: &reqwest::Client, home: &Path, name: &str) -> Result<String, Unavailable> {
     let text = verb(http, home, name, "url", &[], None, VERB_TIMEOUT).await?;
-    let Some(value) = text.strip_prefix("ok:").map(str::trim) else { return Err(Unavailable(text)) };
-    Ok(serde_json::from_str::<String>(value).unwrap_or_else(|_| value.to_owned()))
+    ok_value(&text).ok_or(Unavailable(text))
+}
+
+/// O texto depois de `ok:`, sem as aspas quando o app o manda como string JSON.
+pub fn ok_value(text: &str) -> Option<String> {
+    let value = text.strip_prefix("ok:")?.trim();
+    Some(serde_json::from_str::<String>(value).unwrap_or_else(|_| value.to_owned()))
 }
 
 /// `fill-secret [ref, campo]` com o valor no campo `valor` do corpo, nunca nos `args`.
@@ -62,6 +67,29 @@ fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
     }
     let port = srv["porta"].as_u64().or_else(|| srv["porta"].as_str().and_then(|p| p.parse().ok())).filter(|p| *p > 0);
     Ok(port.zip(srv["token"].as_str().filter(|t| !t.is_empty()).map(str::to_owned)))
+}
+
+/// Há app desktop nesta máquina para o `/cmd`. Sem ele, os verbos vão pela rota `browser-cmd` ao app de quem usa a
+/// sessão em outra máquina.
+pub fn local_app(home: &Path) -> bool { matches!(server(home), Ok(Some(_))) }
+
+/// O corpo do `/cmd` para a rota `browser-cmd`, com o prazo que ela espera o app.
+pub fn host_body(verb: &str, args: &[String], tab: Option<i64>, deadline: Duration) -> Value {
+    let mut body = json!({"verbo": verb, "args": args, "deadline_ms": deadline.as_millis() as u64});
+    if let Some(tab) = tab { body["aba"] = json!(tab); }
+    body
+}
+
+/// A resposta da `browser-cmd` como a rota interna a devolve: texto do app (`{"detail": texto}`) ou a recusa.
+pub fn host_answer(status: u16, body: &Value) -> Result<String, Unavailable> {
+    // ponytail: texto que por acaso é JSON volta reserializado; só muda espaçamento, nunca o conteúdo.
+    if (200..300).contains(&status) { return Ok(body["detail"].as_str().map_or_else(|| body.to_string(), str::to_owned)); }
+    let detail = &body["detail"];
+    Err(Unavailable(match (status, detail["code"].as_str()) {
+        (409, Some("browser_host_none")) => "nenhum app do Hangar com esta sessão aberta: abra a sessão no app desktop e repita".into(),
+        (403, Some("browser_host_not_allowed")) => "o app não autorizou este servidor a usar o navegador dele".into(),
+        _ => detail["msg"].as_str().or_else(|| detail.as_str()).map_or_else(|| format!("HTTP {status}"), str::to_owned),
+    }))
 }
 
 /// `verb` com o sidecar já lido.
@@ -140,7 +168,20 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
 
 #[cfg(test)]
 mod tests {
-    use super::navigated;
+    use super::{Unavailable, host_answer, navigated};
+    use serde_json::json;
+
+    #[test]
+    fn host_answer_reads_the_app_text_and_says_why_it_did_not_run() {
+        assert_eq!(host_answer(200, &json!({"detail": "ok: click @e1"})), Ok("ok: click @e1".into()));
+        assert_eq!(host_answer(200, &json!(42)), Ok("42".into()));
+        let none = json!({"detail": {"code": "browser_host_none", "msg": "x"}});
+        assert!(host_answer(409, &none).unwrap_err().0.starts_with("nenhum app do Hangar"));
+        let denied = json!({"detail": {"code": "browser_host_not_allowed", "msg": "x"}});
+        assert_eq!(host_answer(403, &denied), Err(Unavailable("o app não autorizou este servidor a usar o navegador dele".into())));
+        let gone = json!({"detail": {"code": "browser_host_gone", "msg": "o app caiu; o shot pode ter sido executado"}});
+        assert_eq!(host_answer(502, &gone).unwrap_err().0, "o app caiu; o shot pode ter sido executado");
+    }
 
     #[test]
     fn navigated_follows_the_python_rule() {

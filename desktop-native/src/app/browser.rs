@@ -535,6 +535,10 @@ impl BrowserPanel {
             #[cfg(not(target_os = "macos"))] agent_seq: 0, #[cfg(not(target_os = "macos"))] paused: None, #[cfg(not(target_os = "macos"))] session_working: false, #[cfg(target_os = "windows")] agent_finished_at: None, #[cfg(not(target_os = "macos"))] _activity: None, #[cfg(target_os = "windows")] idle: Cell::new(0), #[cfg(not(target_os = "macos"))] sidecar: Default::default(), #[cfg(target_os = "linux")] scale: Rc::default(), _drain: drain, _subscriptions: subscriptions }
     }
 
+    /// Motor vivo e controlador ligado: os verbos do `/cmd` já respondem.
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn verbs_ready(&self) -> bool { self.controller.is_some() && self.engine().is_some_and(|e| e.alive()) }
+
     /// A página na tela: o popup aberto, senão a da sessão.
     fn engine(&self) -> Option<&Rc<Engine>> {
         #[cfg(target_os = "linux")]
@@ -2109,7 +2113,7 @@ impl Hangar {
     }
 
     /// Painel aberto com a aba Navegador da sessão aberta à frente.
-    fn show_browser_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn show_browser_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.side_key() else { return };
         if !self.side.open { self.toggle_side(cx); }
         self.side.browser_open.insert(key);
@@ -2168,6 +2172,8 @@ impl Hangar {
 
     /// A cada quadro da janela, antes das áreas guardadas desenharem.
     pub(super) fn sync_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(not(target_os = "macos"))]
+        self.browser_host_focus(window, cx);
         let (visible, covered) = self.browser_visible(window, cx);
         // A tela remota é desenhada pela GPUI: camada por cima não a esconde, só sair de vista a desconecta.
         let remote = self.remote_browser_shown().map(|r| r.entity_id());
@@ -2208,7 +2214,7 @@ impl Hangar {
         Some(format!("{}::{}", super::servers::norm(&self.session_server()?), self.selected.as_ref()?.name))
     }
 
-    fn browser_for(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) -> Entity<BrowserPanel> {
+    pub(super) fn browser_for(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) -> Entity<BrowserPanel> {
         if let Some(browser) = self.side.browsers.get(&key) { return browser.clone(); }
         let browser = cx.new(|cx| BrowserPanel::new(key.clone(), window, cx));
         cx.subscribe(&browser, |this, _, event: &PanelEvent, cx| match event {
@@ -2303,8 +2309,7 @@ impl Hangar {
     /// Pedido do servidor local: vai ao navegador da sessão pedida, esteja ela na tela ou não.
     #[cfg(not(target_os = "macos"))]
     pub(super) fn dispatch_preview(&mut self, request: crate::browser::server::Request, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::browser::{control::Reply, server::Request};
-        fn answer(reply: futures::channel::oneshot::Sender<Reply>, text: String) { let _ = reply.send(Reply::Text(text)); }
+        use crate::browser::server::Request;
         let missing = |key: &str| format!("erro: a sessao {key} nao tem navegador aberto");
         let (key, verb, args, tab, secret, reply) = match request {
             Request::Command { key, verb, args, tab, secret, reply } => (key, verb, args, tab, secret, reply),
@@ -2337,6 +2342,18 @@ impl Hangar {
             #[cfg(target_os = "linux")]
             Request::Open { name, reply } => { let _ = reply.send(self.open_for_cdp(&name, window, cx)); return; }
         };
+        self.run_verb(key, verb, args, tab, secret, reply, cx);
+    }
+
+    /// Um verbo do `/cmd` no navegador da sessão `key`: o executor do servidor local e do canal anfitrião.
+    #[cfg(not(target_os = "macos"))]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>,
+        secret: Option<crate::browser::control::Secret>, reply: futures::channel::oneshot::Sender<crate::browser::control::Reply>,
+        cx: &mut Context<Self>) {
+        use crate::browser::control::Reply;
+        fn answer(reply: futures::channel::oneshot::Sender<Reply>, text: String) { let _ = reply.send(Reply::Text(text)); }
+        let missing = |key: &str| format!("erro: a sessao {key} nao tem navegador aberto");
         if tab.is_some() { return answer(reply, "erro: o app nativo ainda nao tem abas: e um navegador por sessao".into()); }
         if verb == "login" {
             let Some(browser) = self.side.browsers.get(&key).cloned() else { return answer(reply, missing(&key)) };

@@ -240,6 +240,17 @@ pub struct SessionRow {
     /// Troca de agente pedida e ainda não concluída; só existe no Rust.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<Handoff>,
+    /// Portas TCP em LISTEN dos processos da sessão, por porta; só a lista do dono as leva.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<PortEntry>,
+}
+
+/// Um servidor da sessão: a porta e quem escuta nela (`process` = nome curto do executável).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortEntry {
+    pub port: u16,
+    pub process: String,
+    pub pid: u32,
 }
 
 fn default_provider() -> String {

@@ -116,6 +116,8 @@ fn failure_text(error: &Failure) -> String {
         Some("connect_account_taken") => tr_shared("connect_error_name_taken", &[]),
         Some("connect_account_created_link_failed") => tr("connect_error_account_created"),
         Some("connect_preview_port_refused") => tr("connect_preview_port_refused"),
+        Some("connect_not_running") => tr("ports_link_connect_off"),
+        Some("port_not_http") => tr("ports_not_page"),
         Some("connect_account_machine_pending") => tr_shared("connect_device_waiting_release", &[]),
         Some("connect_account_machine_unknown" | "connect_account_machine_revoked") => tr("connect_account_machine_unknown"),
         Some("connect_account_device_unknown" | "connect_account_device_revoked") => tr("connect_account_device_gone"),
@@ -186,7 +188,7 @@ pub(super) fn connect_mark(id: &str, size: f32, pulse: bool, reduce: bool) -> An
         |el, t| el.opacity(0.55 + 0.45 * (0.5 + 0.5 * (t * std::f32::consts::TAU).cos()))).into_any_element()
 }
 
-fn parse_port(text: &str) -> Option<u16> {
+pub(super) fn parse_port(text: &str) -> Option<u16> {
     text.trim().parse::<u16>().ok().filter(|port| *port != 0)
 }
 
@@ -216,7 +218,7 @@ fn redraw_on_change(input: &Entity<InputState>, cx: &mut Context<Hangar>) -> Sub
     cx.subscribe(input, |_: &mut Hangar, _, event: &InputEvent, cx| if matches!(event, InputEvent::Change) { cx.notify(); })
 }
 
-struct LinkForm { account: Entity<InputState>, password: Entity<InputState>, machine: Entity<InputState>, preview_port: Entity<InputState>, _subscriptions: [Subscription; 4] }
+struct LinkForm { account: Entity<InputState>, password: Entity<InputState>, machine: Entity<InputState>, _subscriptions: [Subscription; 4] }
 
 /// Servidor guardado que é esta máquina do Connect: salvo pelo endereço dela ou com ela como terceiro caminho.
 fn saved_with_connect(servers: &[super::servers::ServerEntry], host: &str) -> bool {
@@ -241,10 +243,9 @@ impl LinkForm {
         let account = cx.new(|cx| InputState::new(window, cx));
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
         let machine = cx.new(|cx| InputState::new(window, cx).default_value(machine_name));
-        let preview_port = cx.new(|cx| InputState::new(window, cx));
         let _subscriptions = [submit_on_enter(&password, window, cx), submit_on_enter(&machine, window, cx),
             redraw_on_change(&account, cx), redraw_on_change(&machine, cx)];
-        Self { account, password, machine, preview_port, _subscriptions }
+        Self { account, password, machine, _subscriptions }
     }
 }
 
@@ -263,9 +264,8 @@ pub(in crate::app) struct Connect {
     local_answering: Option<String>,
     local_error: Option<String>,
     form: Option<LinkForm>,
-    preview_url: Option<String>,
-    /// A porta da prévia aberta no servidor: o link pode ter saído da tela, a prévia não.
-    preview_open: Option<u64>,
+    /// A porta da prévia aberta no servidor e até quando (segundos Unix): o link pode ter saído da tela, a prévia não.
+    preview_open: Option<(u64, Option<u64>)>,
     preview_busy: bool,
     preview_error: Option<String>,
     /// Sem ligação: `None` mostra a abertura; escolhido, o formulário de criar conta ou de entrar.
@@ -366,13 +366,27 @@ pub(super) enum ConnectReply {
     Answered(Result<Value, Failure>),
     LocalDevices(u64, Result<Value, Failure>),
     LocalAnswered(Result<Value, Failure>),
-    PreviewOpened(Result<Value, Failure>),
+    /// "Link de fora" de uma porta da aba Contexto: (servidor, porta).
+    PortLink(String, u16, Result<Value, Failure>),
     PreviewClosed(Result<Value, Failure>),
     PreviewState(Result<Value, Failure>),
 }
 
+/// A prévia do Connect para `port` da máquina de `api`; abrir outra fecha a anterior.
+pub(super) async fn request_preview(api: &Api, port: u16) -> Result<Value, Failure> {
+    // A primeira prévia reinicia o `frpc` e o Caddy e espera o site abrir de fora: prazo longo.
+    let body = json!({"port": port});
+    let result = api.server_send(reqwest::Method::POST, &["connect", "preview"], Some(body.clone()), 90).await;
+    // Quem pede pelo próprio Connect perde a conexão na troca dos filhos.
+    if result.as_ref().is_err_and(|error| error.status.is_none()) {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        return api.server_send(reqwest::Method::POST, &["connect", "preview"], Some(body), 90).await;
+    }
+    result
+}
+
 impl Hangar {
-    fn connect_send_later(&self) -> impl Fn(ConnectReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static {
+    pub(super) fn connect_send_later(&self) -> impl Fn(ConnectReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static {
         let (tx, connection) = (self.tx.clone(), self.connection);
         move |reply| {
             let tx = tx.clone();
@@ -530,31 +544,6 @@ impl Hangar {
         cx.notify();
     }
 
-    fn start_preview(&mut self, cx: &mut Context<Self>) {
-        if self.connect.preview_busy { return; }
-        let Some(form) = &self.connect.form else { return };
-        let Some(port) = parse_port(&form.preview_port.read(cx).value().to_string()) else {
-            self.connect.preview_error = Some(tr("connect_preview_port_invalid"));
-            cx.notify();
-            return;
-        };
-        let Some(api) = self.api.clone() else { return };
-        (self.connect.preview_busy, self.connect.preview_error) = (true, None);
-        let done = self.connect_send_later();
-        self.runtime.spawn(async move {
-            // A primeira prévia reinicia o `frpc` e o Caddy e espera o site abrir de fora: prazo longo.
-            let body = json!({"port": port});
-            let mut result = api.server_send(reqwest::Method::POST, &["connect", "preview"], Some(body.clone()), 90).await;
-            // Quem pede pelo próprio Connect perde a conexão na troca dos filhos.
-            if result.as_ref().is_err_and(|error| error.status.is_none()) {
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                result = api.server_send(reqwest::Method::POST, &["connect", "preview"], Some(body), 90).await;
-            }
-            done(ConnectReply::PreviewOpened(result)).await
-        });
-        cx.notify();
-    }
-
     fn stop_preview(&mut self, cx: &mut Context<Self>) {
         if self.connect.preview_busy { return; }
         let Some(api) = self.api.clone() else { return };
@@ -644,24 +633,21 @@ impl Hangar {
                 self.connect.local_error = result.err().map(|error| failure_text(&error));
                 self.load_local_devices(cx);
             }
-            ConnectReply::PreviewOpened(result) => {
-                self.connect.preview_busy = false;
-                match result.map_err(|error| failure_text(&error)).and_then(parse_preview) {
-                    Ok(url) => self.connect.preview_url = Some(url),
-                    Err(error) => self.connect.preview_error = Some(error),
-                }
+            ConnectReply::PortLink(server, port, result) => {
+                self.port_link_done(server, port, result.map_err(|error| failure_text(&error)).and_then(parse_preview));
                 self.load_connect_preview();
             }
             ConnectReply::PreviewClosed(result) => {
                 self.connect.preview_busy = false;
                 match result {
-                    Ok(_) => self.connect.preview_url = None,
+                    Ok(_) => if let Some(server) = self.api.as_ref().map(Api::identity) { self.port_link_closed(&server); },
                     Err(error) => self.connect.preview_error = Some(failure_text(&error)),
                 }
                 self.load_connect_preview();
             }
             // Acompanhamento: falha de leitura só deixa de mostrar a linha.
-            ConnectReply::PreviewState(result) => self.connect.preview_open = result.ok().as_ref().and_then(open_preview_port),
+            ConnectReply::PreviewState(result) => self.connect.preview_open = result.ok().as_ref()
+                .and_then(|value| Some((open_preview_port(value)?, value["preview"]["expires_at"].as_u64()))),
         }
         if self.connect.form.is_none() && self.settings == Some(Page::Connect) {
             let name = machine_label(&self.vault_machine_label(&self.active_key(), cx));
@@ -901,31 +887,39 @@ impl Hangar {
             .when(alone, |el| el.child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_machines_alone"))))
     }
 
+    /// O link nasce no "Link de fora" de cada porta, na aba Contexto; aqui ficam a prévia aberta e o fechar.
     /// Parar fica sempre à mão: se a leitura do estado falhar, a prévia aberta continua alcançável.
     fn render_connect_preview(&self, cx: &mut Context<Self>) -> Option<Div> {
-        let form = self.connect.form.as_ref()?;
+        self.connect.form.as_ref()?;
         let busy = self.connect.preview_busy;
-        let link = self.connect.preview_url.clone().map(|url| {
-            let copied = url.clone();
+        let open = self.connect.preview_open.map(|(port, expires)| {
+            let until = expires.and_then(|at| chrono::DateTime::from_timestamp(at as i64, 0))
+                .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string());
+            let text = match until {
+                Some(time) => tr("connect_preview_open_until").replace("{port}", &port.to_string()).replace("{time}", &time),
+                None => tr("connect_preview_open").replace("{port}", &port.to_string()),
+            };
+            div().id("connect-preview-open").text_sm().font_weight(FontWeight::MEDIUM).whitespace_normal().child(text)
+        });
+        // O link pedido pela aba Contexto, para esta máquina: o servidor só guarda o hash dele.
+        let server = self.api.as_ref().map(Api::identity);
+        let link = self.ports.link.as_ref().filter(|link| Some(&link.server) == server.as_ref() && open.is_some()).map(|link| {
+            let copied = link.url.clone();
             div().flex().items_center().gap_2()
-                .child(div().flex_1().min_w_0().font_family(theme::MONO).text_sm().truncate().child(url))
+                .child(div().flex_1().min_w_0().font_family(theme::MONO).text_sm().truncate().child(link.url.clone()))
                 .child(Button::new("connect-preview-copy").outline().small().flex_shrink_0().label(tr("connect_preview_copy"))
                     .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))))
         });
         Some(settings_box().p_4().gap_2()
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("connect_preview_title")))
             .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_preview_help")))
-            .children(self.connect.preview_open.map(|port| div().id("connect-preview-open").text_sm().font_weight(FontWeight::MEDIUM)
-                .whitespace_normal().child(tr("connect_preview_open").replace("{port}", &port.to_string()))))
-            .child(super::sync::sync_field(tr("connect_preview_port"), &form.preview_port, busy))
+            .children(open)
+            .children(link)
             .children(self.connect.preview_error.clone().map(|error| div().id("connect-preview-error").role(Role::Alert)
                 .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
             .child(div().flex().items_center().gap_2()
-                .child(Button::new("connect-preview-start").primary().small().label(tr("connect_preview_start")).loading(busy).disabled(busy)
-                    .on_click(cx.listener(|this, _, _, cx| this.start_preview(cx))))
-                .child(Button::new("connect-preview-stop").outline().small().label(tr("connect_preview_stop")).disabled(busy)
-                    .on_click(cx.listener(|this, _, _, cx| this.stop_preview(cx)))))
-            .children(link))
+                .child(Button::new("connect-preview-stop").outline().small().label(tr("connect_preview_stop")).loading(busy).disabled(busy)
+                    .on_click(cx.listener(|this, _, _, cx| this.stop_preview(cx))))))
     }
 
     pub(super) fn render_connect(&mut self, cx: &mut Context<Self>) -> AnyElement {

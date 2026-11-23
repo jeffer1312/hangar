@@ -3,6 +3,128 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## Portas da sessão, túnel e navegador emprestado (23/11/2026)
+
+O agente sobe um servidor na máquina da sessão (Next na 3000, Postgres na 5432), e o Hangar mostra a
+porta sozinho. No nativo, cada porta abre no navegador embutido ou é encaminhada até o computador de
+quem usa. No Expo, abre pela prévia. E o agente pode dirigir o navegador do app desktop de outra
+máquina. Referência do pedido: o T3 Code 0.1.11 ("Servers", "Tunnelled automatically", "Forward a
+port").
+
+- **Quais portas são da sessão.** O crate `hangar-session-ports` lê os sockets em LISTEN e procura o
+  dono só entre os pids candidatos, nunca em todos os processos da máquina. No Linux lê
+  `/proc/net/tcp{,6}` e os fds dos candidatos; no Windows usa `GetExtendedTcpTable` dentro do
+  processo. Vale só endereço de loopback ou "qualquer" (`0.0.0.0`, `::`), que é o que o túnel
+  alcança, e v4 e v6 da mesma porta viram uma entrada. Quem dá a porta à sessão é `list/ports.rs`,
+  nesta ordem:
+  - o escopo systemd próprio da sessão (`tmux-spawn-*.scope` do pane, `run-*.scope` do cano), que
+    pega o `nohup … &` adotado pelo init;
+  - um escopo visto em duas sessões não vale para nenhuma: é o do servidor tmux antigo ou do login;
+  - depois, os descendentes da raiz (pane ou cano);
+  - por fim, os terminais de atalho, que contam para a sessão dona.
+
+  Agente, cano e app-server do Codex ficam fora, porque as portas de loopback deles não são
+  servidores da pessoa. A leitura é reaproveitada pelos mesmos candidatos dentro do prazo do cache
+  de processos, para o tique e um `GET` simultâneo lerem uma vez só. Leitura que falha registra
+  `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`. Esse código
+  está em `DIAGNOSTIC` e nunca chega à tela. A linha do convidado (convite e login) sai sem `ports`:
+  o túnel não atende convidado.
+- **B2, macOS vazio.** No macOS a lista de portas volta vazia. Ler por `libproc` exige conferir o
+  layout das structs num Mac, e não havia um para a prova. `lsof`, `netstat` e
+  `Get-NetTCPConnection` ficaram de fora: abririam um processo a cada tique de 1,5 s. Nenhuma
+  dependência nova entrou para isso.
+- **B3, sessão sem terminal também tem escopo.** O cano nasce em `systemd-run --user --scope`
+  (`runtime/process.rs`), numa unidade `run-*.scope` só dele. O servidor que perdeu o pai aparece
+  também em sessão sem terminal. Sem `systemd-run` ou fora do Linux, sobra a descendência do
+  `cano.pid`, e o processo adotado pelo init some da lista.
+- **Túnel.** `GET /api/port-tunnel?port=N` com upgrade WebSocket. Cada WebSocket é uma conexão TCP
+  com `127.0.0.1:N` (ou `[::1]:N`) desta máquina, com bytes crus nos dois sentidos
+  (`hangar-port-tunnel`). Respostas antes do upgrade:
+
+  | Caso | Resposta |
+  |---|---|
+  | Nada escutando | 502 `port_tunnel_refused` |
+  | Porta do Hangar (`connect_previews.refused`) ou fora de 1..65535 | 422 `port_tunnel_port_refused` |
+  | Sem `?token=` nem Bearer | 403 `port_tunnel_token_required` |
+
+  Uma mensagem tem no máximo 1 MiB. Binário vazio do cliente quer dizer "terminei de mandar": o
+  servidor fecha a escrita no TCP e continua mandando a resposta, como o `nc`. O Close não serve
+  para isso, porque depois dele o servidor não pode mandar mais nada. O TCP fechando fecha o
+  WebSocket com 1000.
+- **Por que o cookie é recusado.** O túnel e o canal anfitrião aceitam só `?token=` ou Bearer, e o
+  cabeçalho `Cookie` é apagado antes do porteiro. Pelo Connect o cookie `__Host-cp_token` vale em
+  `GET`, e o aperto de mão do WebSocket é um `GET`. As máquinas do Connect são o mesmo site, então
+  uma página de projeto aberta na prévia de outra máquina mandaria o cookie junto e abriria um
+  túnel até o Postgres desta.
+- **Por que 75 s.** O servidor manda ping a cada 25 s, para o Caddy e os NATs do caminho não
+  derrubarem a conexão parada. Depois de 75 s (três pings) sem ouvir nada do cliente, nem pong, o
+  túnel cai. É o notebook que dormiu ou trocou de rede: ele some sem FIN e a conexão ficaria
+  pendurada.
+- **Onde a rota existe.** Em `public_routes`, servido na 8765 e na entrada do Connect (8768). A 8766
+  do convidado não tem a rota: o porteiro dela responde 403 antes de qualquer conexão com a porta. O
+  aparelho do Connect traz o `Watcher`, e aparelho revogado derruba o túnel aberto.
+- **Encaminhar no nativo.** `desktop-native/src/port_forward.rs` escuta só em `127.0.0.1` deste
+  computador, com o mesmo número quando está livre e o seguinte quando não está. A tela diz
+  "encaminhada como 3001". Porta em que algo já responde também conta como ocupada: no Windows, o
+  bind em `127.0.0.1` vence um servidor local em `0.0.0.0` na mesma porta e o tapa calado. Cada
+  conexão aceita abre o WebSocket pela rota que o app usa naquele instante (rede local, Tailscale
+  ou Connect), relida a cada conexão. Pelo Connect, o túnel exige o computador aprovado como
+  aparelho, e a senha do dono nunca vai na URL.
+- **Uma prévia do Connect por vez.** O "Link de fora" do nativo e a folha Portas do Expo usam a
+  mesma prévia do Connect (`/api/connect/preview`), e abrir outra fecha a anterior: as duas telas
+  dizem isso. Uma prévia por porta exigiria um host por porta, e cada host gasta um certificado do
+  limite semanal de `hangar.dev.br`. O Expo tenta o Connect primeiro e cai no Tailscale
+  (`/api/preview`, slot 10000) quando a máquina não tem Connect ou ele está fora. Ajustes > Connect
+  perdeu o campo de porta e ficou só com a prévia aberta e o botão de fechar.
+- **Porta que não é página.** As duas prévias (Connect e Tailscale) mandam um `HEAD /` antes de
+  abrir. Resposta que não começa por `HTTP/`, ou conexão fechada sem resposta, dá 422
+  `port_not_http` (`hangar_core::net::answers_not_http`), e o Expo mostra "use no computador".
+  Silêncio por 3 s não decide: o `next dev` compila a página no primeiro pedido. Não há sondagem a
+  cada tique, só no toque.
+- **B1, conexão longa pelo Connect de verdade: pendente.** O Caddyfile do Connect tem
+  `read_body 1h` (`hangar-connect/src/config.rs`), e os testes falam direto com a 8768, sem frps nem
+  Caddy. A prova manual, uma `psql` parada por 70 min pelo Connect real (VPS, frps, Caddy), ainda
+  não foi feita. Se cair, a correção é na configuração do Connect, nunca religar escondido.
+- **Navegador emprestado (canal anfitrião).** O app desktop abre `GET /api/browser-host`
+  (WebSocket) no servidor da sessão, pela rota que já usa, com a mesma regra de credencial do túnel.
+  Ele manda `{"type":"focus","session":…}` ao mostrar uma sessão. O CLI e o MCP sem app local
+  mandam o verbo por `POST /api/sessions/{name}/browser-cmd`, e o servidor o repassa ao app com o
+  foco mais recente naquela sessão (`hangar-browser-host`).
+
+  | Caso | Resposta |
+  |---|---|
+  | Nenhum app com foco na sessão | 409 `browser_host_none` |
+  | App recusou o servidor (o atual nunca manda) | 403 `browser_host_not_allowed` |
+  | Canal caiu com o pedido em curso | 502 `browser_host_gone`, "pode ter sido executado" |
+  | Prazo (`deadline_ms`, padrão 45 s, teto 10 min) | 504 `browser_host_timeout` |
+  | `objetivo` e `confere` | 422 `browser_host_verb_unsupported` |
+
+  O print chega como binário e é gravado pelo servidor na máquina da sessão
+  (`~/.hangar/nav/shots/<sessão>/`), para o caminho que o agente cita valer lá. O canal tem o mesmo
+  ping de 25 s e a mesma queda após 75 s de silêncio, e aparelho revogado o fecha com 4410.
+- **Lado do app e do CLI.** O nativo abre um canal anfitrião por servidor remoto do dono quando
+  mostra uma sessão dele, e religa com espera de 1 s até 30 s. Sem app local, o `hangar-preview`
+  manda o verbo por `browser-cmd`, com prazo de 20 s no `open`, 110 s no `login` (120 s pelas tools do MCP) e 45 s nos outros.
+  As tools MCP `browser_*` usam a mesma rota dentro do processo. `objetivo`, `confere` e
+  `vault_fill` não existem por anfitrião remoto.
+- **D1, decidida em 23/11: sem cartão nem pergunta.** O app serve sozinho as sessões das máquinas
+  do dono (entrada de servidor que não é convite nem par externo); convite e par externo nunca
+  ganham o canal. O túnel existe para o notebook alcançar o `localhost` da máquina da sessão, e
+  uma pergunta a cada máquina só atrapalhava isso. O navegador é o painel Navegador da sessão,
+  nunca o do sistema.
+- **O que o agente remoto alcança.** `localhost`, `127.x` e `::1` passam pelo túnel, pela porta
+  local do encaminhamento, e nas respostas ao agente a porta local volta a ser a remota. Faixas
+  privadas, `0.0.0.0`, broadcast, `100.64.0.0/10` (Tailscale) e esquema fora de `http`/`https` são
+  recusados; nome de DNS é resolvido e conferido antes de abrir. O navegador do notebook tem os
+  cookies do perfil e alcança a rede de lá.
+- **Limite aceito: a barreira é servir só as máquinas do dono.** A conferência vale só para a
+  navegação que o agente pede. Páginas abertas pelo agente de uma máquina do dono ainda alcançam a
+  rede do notebook por redirecionamento, `eval` e `fetch`, e um DNS que muda de resposta depois da
+  conferência (DNS rebinding) também passa.
+- **Aceito: caminho `.png` absoluto no `browser-cmd`.** O `shot` aceita um `.png` absoluto do CLI e
+  o servidor grava ali, em qualquer pasta que o usuário do sistema escreve. Só o dono, pelo token,
+  chega à rota, e o agente dele já escreve nessas pastas.
+
 ## WhatsApp só leitura (22/11/2026)
 
 A página "WhatsApp" das Configurações (nativo e Expo) liga um arquivador só de leitura do WhatsApp

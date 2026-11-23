@@ -785,10 +785,13 @@ impl ListBridge {
         // Classificação e decoração leem arquivo (marcador, transcript, plano) e esperam captura:
         // fora da thread do runtime, que atende todas as conexões.
         let (inp, published) = (inputs.clone(), self.published.clone());
+        let (round_panes, round_children) = (panes.clone(), children.clone());
         let (rows, effects, git_dirs, pre) = tokio::task::spawn_blocking(move || {
             let config_dirs = caches.config_dirs(&dirs);
             let alive = |pid: i64| pid_alive(&*env.procs, pid);
             let io = MuxCapture::new(env.capture_program.clone(), CAPTURE_TIMEOUT, inp.targets.clone());
+            // Antes do `pre`: a rodada parcial reclassifica a partir dele e não pode perder as portas.
+            super::ports::fill(&mut rows, &round_panes, &inp.agent_pids, &round_children, &dirs);
             let pre: Vec<SessionRow> = if keep { rows.iter().filter(|r| r.provider == "claude").cloned().collect() } else { Vec::new() };
             let (stall, wall) = (inp.facts.stall_seconds, io.wall());
             for row in rows.iter_mut().filter(|r| r.provider == "codex") {

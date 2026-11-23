@@ -721,9 +721,22 @@ impl Tools {
         self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
     }
 
+    /// Sem app desktop nesta máquina: o verbo vai pela `browser-cmd` ao app de quem usa a sessão.
+    async fn host_verb(&self, name: &str, verb: &str, args: &[String], tab: Option<i64>, deadline: Duration) -> Result<String, nav::Unavailable> {
+        let body = nav::host_body(verb, args, tab, deadline);
+        let (status, value) = self.route(Method::POST, &format!("/api/sessions/{}/browser-cmd", segment(name)), Some(body)).await;
+        nav::host_answer(status, &value)
+    }
+
     async fn browser_open(&self, headers: &HeaderMap, a: BrowserOpen) -> Outcome {
         let me = self.me(headers, &a.sessao).await?;
         let (since, home) = (now_ms(), self.home());
+        if !nav::local_app(&home) {
+            // O app de lá só responde com o navegador pronto: a resposta é a URL, como a do `url`.
+            let text = self.host_verb(&me, "open", std::slice::from_ref(&a.url), None, Duration::from_secs(20)).await.map_err(|e| e.0)?;
+            let Some(url) = nav::ok_value(&text) else { return Err(text) };
+            return Ok(dict(json!({"ok": true, "url": url})));
+        }
         let before = nav::url_before(&home, &me);
         self.ok(Method::POST, &format!("/api/sessions/{}/nav", segment(&me)), Some(json!({"url": a.url}))).await?;
         let ready = nav::wait_ready(&self.http, &home, &me, since, before.as_deref(), &a.url).await.map_err(|e| e.0)?;
@@ -860,7 +873,9 @@ impl Tools {
             args = vec![dir.join(format!("{}.png", now_ms())).to_string_lossy().into_owned()];
         }
         let timeout = if verb == "login" { LOGIN_TIMEOUT } else { nav::VERB_TIMEOUT };
-        let answer = nav::verb(&self.http, &home, name, verb, &args, tab, timeout).await.map_err(|e| e.0)?;
+        let answer = if nav::local_app(&home) { nav::verb(&self.http, &home, name, verb, &args, tab, timeout).await }
+            else { self.host_verb(name, verb, &args, tab, timeout).await };
+        let answer = answer.map_err(|e| e.0)?;
         if answer.starts_with("erro:") { Err(answer) } else { Ok(answer) }
     }
 

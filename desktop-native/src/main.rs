@@ -24,6 +24,7 @@ mod mend;
 mod motion;
 mod news;
 mod plugin_ui;
+mod port_forward;
 mod queue_panel;
 mod single_instance;
 mod term_view;

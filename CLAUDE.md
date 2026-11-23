@@ -769,6 +769,12 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   recusada, e `Sec-Fetch-Site` de fora também, salvo abrir o site numa aba. Script de service worker é
   recusado. A prévia pelo Tailscale é do crate `hangar-port-preview`, sem caminho Python. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#prévia-de-porta-pelo-connect-a-8769-é-um-listener-próprio-fora-de-hangar_auth-07112026).
+- **Portas da sessão saem na linha do dono, e túnel e navegador emprestado só abrem com token.**
+  `ports` vem de `list/ports.rs` (escopo systemd da sessão, depois descendência, depois atalhos; agente,
+  cano e app-server fora; convidado nunca recebe). `/api/port-tunnel` (só loopback, nunca porta do Hangar) e
+  `/api/browser-host` ficam em `public_routes`; o cookie é apagado antes do porteiro. O
+  navegador do app serve sozinho as máquinas do dono, sem pergunta; convite e par externo nunca. Uma prévia do Connect por vez.
+  [Motivo](docs/decisoes/plataforma.md#portas-da-sessão-túnel-e-navegador-emprestado-23112026).
 - **Cookie do OpenCode, webhook de deploy e prévia Tailscale são do Rust.** Os crates
   `hangar-opencode-cookie`, `hangar-deploy` e `hangar-port-preview` atendem os caminhos inteiros;
   o cookie invalida a cota em processo e a prévia só altera o slot 10000. Não há rotas ou pontes

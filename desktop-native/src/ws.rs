@@ -165,7 +165,7 @@ impl<E> Drop for Socket<E> { fn drop(&mut self) { self.task.abort(); } }
 fn dimensions(cols: u16, rows: u16) -> (u16, u16) { (cols.clamp(20, 500), rows.clamp(5, 200)) }
 
 /// Estende o caminho da base, como o terminal: servidor atrás de prefixo continua alcançável.
-fn text_url(api: &Api, path: &str, token: &str) -> url::Url {
+pub(crate) fn text_url(api: &Api, path: &str, token: &str) -> url::Url {
     let (path, query) = path.split_once('?').unwrap_or((path, ""));
     let mut url = api.route();
     url.path_segments_mut().expect("validated HTTP base").pop_if_empty()
@@ -211,7 +211,7 @@ fn check_handshake(status: StatusCode, headers: &header::HeaderMap, key: &str) -
     Ok(())
 }
 
-async fn handshake(url: url::Url, identity: Option<String>) -> Result<reqwest::Upgraded, Error> {
+pub(crate) async fn handshake(url: url::Url, identity: Option<String>) -> Result<reqwest::Upgraded, Error> {
     let mut nonce = [0; 16];
     SystemRandom::new().fill(&mut nonce).map_err(|_| Error::Network)?;
     let key = STANDARD.encode(nonce);
@@ -237,6 +237,13 @@ async fn handshake(url: url::Url, identity: Option<String>) -> Result<reqwest::U
 }
 
 fn encode(opcode: u8, bytes: &[u8], mask: [u8; 4]) -> Vec<u8> { frame_bytes(opcode, bytes, Some(mask)) }
+
+/// Quadro do lado cliente, com máscara nova a cada um.
+pub(crate) fn client_frame(opcode: u8, bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut mask = [0; 4];
+    SystemRandom::new().fill(&mut mask).map_err(|_| Error::Network)?;
+    Ok(encode(opcode, bytes, mask))
+}
 
 /// Cliente mascara o que escreve; servidor, nunca (RFC 6455, 5.1).
 fn frame_bytes(opcode: u8, bytes: &[u8], mask: Option<[u8; 4]>) -> Vec<u8> {
@@ -267,10 +274,9 @@ pub(crate) async fn write_server_frame(writer: &mut (impl AsyncWrite + Unpin), o
 }
 
 async fn write_frame(writer: &mut (impl AsyncWrite + Unpin), opcode: u8, bytes: &[u8]) -> Result<(), Error> {
-    let mut mask = [0; 4];
-    SystemRandom::new().fill(&mut mask).map_err(|_| Error::Network)?;
+    let frame = client_frame(opcode, bytes)?;
     timeout(IO_TIMEOUT, async {
-        writer.write_all(&encode(opcode, bytes, mask)).await?;
+        writer.write_all(&frame).await?;
         writer.flush().await
     }).await
         .map_err(|_| Error::Network)?.map_err(|_| Error::Network)
@@ -282,7 +288,7 @@ async fn read_frame(reader: &mut (impl AsyncRead + Unpin)) -> Result<Frame, Erro
 /// Leitura do lado servidor: o cliente é obrigado a mascarar.
 pub(crate) async fn read_client_frame(reader: &mut (impl AsyncRead + Unpin)) -> Result<Frame, Error> { read_frame_as(reader, true, MAX_MESSAGE).await }
 
-async fn read_frame_as(reader: &mut (impl AsyncRead + Unpin), masked: bool, max: usize) -> Result<Frame, Error> {
+pub(crate) async fn read_frame_as(reader: &mut (impl AsyncRead + Unpin), masked: bool, max: usize) -> Result<Frame, Error> {
     let mut head = [0; 2];
     reader.read_exact(&mut head).await.map_err(|_| Error::Network)?;
     let (opcode, fin, short) = (head[0] & 15, head[0] & 128 != 0, head[1] & 127);

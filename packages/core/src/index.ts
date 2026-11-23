@@ -7,6 +7,7 @@ export * from './servers';
 export * from './machineImport';
 export * from './rota';
 export * from './share';
+export * from './portPreview';
 export * from './accountLogin';
 export * from './connectAccount';
 export * from './syncLogin';

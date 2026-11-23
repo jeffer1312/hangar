@@ -201,6 +201,8 @@ pub struct SessionInfo {
     #[serde(default)] pub asleep: bool,
     /// Troca de agente pedida pelo seletor de modelos, esperando o turno acabar, em curso ou que falhou.
     #[serde(default)] pub handoff: Option<hangar_api::session::Handoff>,
+    /// Portas em LISTEN dos processos da sessão; só a lista do dono as traz.
+    #[serde(default)] pub ports: Vec<hangar_api::session::PortEntry>,
     /// Nome do convidado que criou a sessão; `None` = dono do servidor.
     pub owner: Option<String>,
     /// Só na linha `orq`: a sessão do árbitro atual, que o "Falar com o árbitro" abre.
