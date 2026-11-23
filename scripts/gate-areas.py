@@ -22,7 +22,7 @@ SERVER = ("crates/", "backend/tests/fixtures/", "plugins/hangar/hooks/", "script
 NATIVE = ("desktop-native/", "messages/", "VERSION", "crates/Cargo.toml", "packages/core/src/", "docs/manual/",
           "docs/novidades/", ".github/workflows/native.yml", ".github/workflows/native-check.yml")
 MOBILE = ("mobile/", "packages/core/", "messages/", "project.inlang/", "scripts/i18n-compile.mjs",
-          "package.json", "package-lock.json")
+          "scripts/verificar-app.mjs", ".node-version", "package.json", "package-lock.json")
 
 
 def workspace_root(manifest: Path) -> Path | None:

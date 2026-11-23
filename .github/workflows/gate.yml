@@ -41,7 +41,8 @@ jobs:
             python3 -I scripts/gate-areas.py --all | tee -a "$GITHUB_OUTPUT"
             exit 0
           fi
-          git diff --name-only "$BASE...$HEAD_SHA" > "$RUNNER_TEMP/mudados"
+          # Sem `--no-renames` a mudança de pasta só traz o destino, e a área de onde o arquivo saiu não roda.
+          git diff --no-renames --name-only "$BASE...$HEAD_SHA" > "$RUNNER_TEMP/mudados"
           echo "arquivos mudados: $(wc -l < "$RUNNER_TEMP/mudados")"
           python3 -I scripts/gate-areas.py < "$RUNNER_TEMP/mudados" | tee -a "$GITHUB_OUTPUT"
 

@@ -626,8 +626,10 @@ async fn simultaneous_start_leaves_one_of_each() {
     first.unwrap();
     second.unwrap();
     until("os dois não subiram", || supervisor.status().enabled).await;
-    // Logo depois do login o `frpc` falso ainda faz o `exec sleep`, e no meio dele o `cmdline` vem vazio.
-    until("o frpc não terminou o exec", || alive(pid_of(dir, "frpc"))).await;
+    // Logo depois do login o `frpc` falso ainda faz o `exec sleep`, e no meio dele o `cmdline` vem vazio:
+    // o shell vivo antes do `exec` não basta.
+    let slept = || hangar_server::runtime::process::argv(pid_of(dir, "frpc")).is_some_and(|argv| argv.first().is_some_and(|c| c == "sleep"));
+    until("o frpc não terminou o exec", slept).await;
     let text = std::fs::read_to_string(&births).unwrap();
     let living: Vec<u32> = text.lines().map(|line| line.parse().unwrap()).filter(|pid| alive(*pid)).collect();
     assert_eq!(living, vec![pid_of(dir, "frpc")], "{text}");
