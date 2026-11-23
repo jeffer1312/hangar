@@ -7,6 +7,7 @@ pub mod env;
 pub mod hooks;
 pub mod login;
 pub mod paths;
+pub mod probe;
 pub mod settings;
 pub mod version;
 

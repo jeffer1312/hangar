@@ -58,7 +58,7 @@ pub fn catalog_request(method: &Method, path: &str, raw: Option<&str>) -> bool {
         && path == "/api/model-options"
         && query(raw)
             .get("provider")
-            .is_some_and(|p| ["pi", "omp", "kimi"].contains(&p.as_str()))
+            .is_some_and(|p| ["pi", "omp", "kimi", "antigravity"].contains(&p.as_str()))
 }
 pub fn inbox_http_request(method: &Method, path: &str, headers: &HeaderMap) -> bool {
     path == "/api/pi/inbox"
@@ -177,6 +177,9 @@ async fn global_catalog(
             "conta ChatGPT exige Claude com motor CLIProxyAPI local",
         ));
     }
+    if provider == "antigravity" {
+        return antigravity_catalog(st, query.get("conta").map(String::as_str)).await;
+    }
     if provider == "kimi" {
         let home = st.origins_home.clone();
         let cat = tokio::task::spawn_blocking(move || pure::kimi_catalog(&home))
@@ -189,6 +192,24 @@ async fn global_catalog(
         );
     }
     Ok(json!({"kind":provider,"reduced":false,"models":catalogs.read(provider).await?}))
+}
+
+/// Os modelos que a conta Google pode usar, pelo `agy models` dela. `conta` é o id de
+/// `/api/antigravity-contas` (`default` ou o nome da pasta adicional).
+async fn antigravity_catalog(st: &Arc<AppState>, conta: Option<&str>) -> Result<Value, ModelError> {
+    let env = st.accounts.env.clone();
+    let id = conta.filter(|c| !c.is_empty()).unwrap_or(crate::accounts::antigravity::DEFAULT_ID).to_owned();
+    let account = crate::accounts::antigravity::account(&env.home, &id)
+        .ok_or_else(|| coded(404, "erro_conta_antigravity_inexistente", "conta do Antigravity não encontrada"))?;
+    let program = crate::cli_probe::resolve_program("agy", &env)
+        .ok_or_else(|| coded(409, "erro_agy_ausente", "o agy não está instalado nesta máquina"))?;
+    let process = hangar_antigravity::env::process_env(&account, env.base.keys().cloned());
+    let home = env.home.clone();
+    let models = tokio::task::spawn_blocking(move || hangar_antigravity::probe::models(&program, &home, &process, std::time::Duration::from_secs(20)))
+        .await.ok().and_then(Result::ok).flatten()
+        .ok_or_else(|| coded(502, "erro_modelos_antigravity", "o agy não listou os modelos desta conta (sem login?)"))?;
+    let models: Vec<Value> = models.into_iter().map(|(id, name)| json!({"id": id, "name": name})).collect();
+    Ok(json!({"kind": "antigravity", "reduced": false, "models": models}))
 }
 
 /// A borda do servidor já decidiu quem pode usar a rota; o WebSocket confere ainda self-connect/token.

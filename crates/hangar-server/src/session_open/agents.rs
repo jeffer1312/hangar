@@ -165,12 +165,19 @@ pub fn agy_mode_args(mode: Option<PermissionMode>) -> Vec<String> {
     flags.iter().map(|f| (*f).to_owned()).collect()
 }
 
-/// Sem a pasta em `trustedWorkspaces` o `agy` nasce preso no "Do you trust the contents of this project?".
-/// Falha só vai ao log.
+/// Sem a pasta em `trustedWorkspaces` o `agy` nasce preso no "Do you trust the contents of this project?", e sem
+/// o hook de estado no `hooks.json` da conta a lista não acha a conversa do pane. Falha só vai ao log.
 pub fn agy_pretrust(home: &Path, account: &Account, cwd: &str) {
-    let path = agy_account(account).settings_path(home);
+    let account = agy_account(account);
+    let path = account.settings_path(home);
     if let Err(error) = hangar_antigravity::settings::trust_workspace(&path, Path::new(cwd)) {
         tracing::warn!(file = %path.display(), %error, "pré-confiar a pasta no Antigravity falhou; o diálogo aparece na sessão");
+    }
+    let hooks = account.hooks_path(home);
+    let installed = crate::provider_hooks::command(home, crate::harness_setup::agy_hooks::MODE)
+        .and_then(|command| hangar_antigravity::hooks::install(&hooks, &command).map_err(|error| error.to_string()));
+    if let Err(error) = installed {
+        tracing::warn!(file = %hooks.display(), %error, "hook do Antigravity não gravado; a sessão abre sem ligar a conversa");
     }
 }
 
