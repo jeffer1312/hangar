@@ -175,7 +175,10 @@ impl Keyring {
     fn ask_default(&self, backend: &dyn Backend) -> DefaultOpen {
         let _asking = self.asking.lock().unwrap_or_else(|e| e.into_inner());
         let life = self.life();
-        if self.marked(&self.stuck) { return DefaultOpen::NoAnswer; }
+        if self.marked(&self.stuck) {
+            tracing::info!(code = "keyring_default_skipped_stuck", "daemon já visto preso; o pedido do chaveiro padrão não se repete");
+            return DefaultOpen::NoAnswer;
+        }
         let outcome = backend.open_default();
         match outcome {
             DefaultOpen::NoAnswer => {
@@ -223,7 +226,10 @@ impl Keyring {
             tracing::info!(code = "keyring_default_no_display", "sem tela para o prompter; o chaveiro padrão fica trancado");
             return Ok(Step::DefaultClosed);
         }
-        if std::time::Instant::now() + ASK_LIMIT > deadline { return Ok(Step::DefaultClosed); }
+        if std::time::Instant::now() + ASK_LIMIT > deadline {
+            tracing::warn!(code = "keyring_ask_out_of_time", "sem prazo para pedir o chaveiro padrão");
+            return Ok(Step::DefaultClosed);
+        }
         if self.ask_default(backend) == DefaultOpen::NoAnswer { return Ok(Step::DefaultStuck); }
         Ok(Step::of(self.read().ok_or(UnlockError::Failed)?))
     }
@@ -292,12 +298,22 @@ impl Backend for System {
         let rt = Self::runtime()?;
         let conn = self.connection(&rt)?;
         let reading = rt.block_on(async {
-            let bus = zbus::fdo::DBusProxy::new(&conn).await.ok()?;
-            let login = secret_proxy(&conn, LOGIN, PROPS).await.ok()?;
-            let default = secret_proxy(&conn, DEFAULT_ALIAS, PROPS).await.ok()?;
-            locked_state(&bus, &login, &default).await
+            let proxies = async {
+                Ok::<_, zbus::Error>((zbus::fdo::DBusProxy::new(&conn).await?, secret_proxy(&conn, LOGIN, PROPS).await?,
+                    secret_proxy(&conn, DEFAULT_ALIAS, PROPS).await?))
+            };
+            match proxies.await {
+                Ok((bus, login, default)) => locked_state(&bus, &login, &default).await,
+                Err(error) => {
+                    tracing::warn!(code = "keyring_read_failed", %error, "proxies do chaveiro não montaram");
+                    None
+                }
+            }
         });
-        if reading.is_none() { self.forget(); }
+        if reading.is_none() {
+            tracing::warn!(code = "keyring_read_failed", "leitura das coleções do chaveiro falhou; a conexão será refeita");
+            self.forget();
+        }
         reading
     }
 
@@ -496,6 +512,10 @@ async fn open_default_when_ready(keyring: std::sync::Arc<Keyring>) {
         match tokio::task::spawn_blocking(move || k.open_default_unattended()).await {
             // Três leituras que falham e para: daqui em diante só um sinal da escuta tenta de novo.
             Ok(Unattended::Unread) if unread < 2 => { unread += 1; tokio::time::sleep(Duration::from_secs(5)).await }
+            Ok(Unattended::Unread) => {
+                tracing::warn!(code = "keyring_default_unread_gave_up", "leitura do chaveiro falhou três vezes; só um sinal do daemon tenta de novo");
+                return;
+            }
             // estavel: código de produção, não teste; é o intervalo entre olhadas no ambiente do systemd à espera da tela.
             Ok(Unattended::Later) => tokio::time::sleep(Duration::from_secs(5)).await,
             Ok(_) => return,
