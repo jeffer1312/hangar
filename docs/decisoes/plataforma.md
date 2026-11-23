@@ -3838,12 +3838,39 @@ status antigo. Nada novo no Python para isso.
 
 ## Chaveiro trancado no boot: o Rust detecta e o dono destranca de outra máquina (26/10/2026)
 
-**Regra.** O `hangar-server` lê `Locked` da coleção `login` do Secret Service (`busctl --user
---auto-start=no`, a cada 15 s) e publica o evento `keyring` (`{state}`) na lista do dono. O
+**Regra.** O `hangar-server` lê `Locked` da coleção `login` e do alias `default`
+(`/org/freedesktop/secrets/aliases/default`, o do Chrome e do Slack) só quando o daemon avisa
+(troca de dono do nome, `CollectionChanged`), nunca por consulta periódica, e publica o evento
+`keyring` (`{state}`) na lista do dono: qualquer das duas trancada é `locked`. O
 `POST /api/keyring/unlock` só aceita o token do dono, nunca é repassado ao Python e manda a senha
 pelo socket de controle do gnome-keyring (`$XDG_RUNTIME_DIR/keyring/control`, protocolo do
-`gkr-pam`). Senha aceita e chaveiro ainda trancado: reinicia `gnome-keyring-daemon.service` e
+`gkr-pam`). Senha aceita e `login` ainda trancado: reinicia `gnome-keyring-daemon.service` e
 manda de novo, uma vez.
+
+**Default trancado com o login aberto (23/11/2026).** O `default` tem a senha guardada no `login`
+e só abre pelo fluxo do prompter (`Secret.Service.Unlock` e `Prompt`). Com o `login` aberto e o
+`default` trancado:
+- Sem senha, o servidor pede o `default` uma vez por vida do daemon, numa conexão própria que
+  fica aberta (o prompt sem resposta continua vivo para quem estiver diante da tela). Antes de
+  pedir, espera a tela no ambiente do `systemd --user` (`WAYLAND_DISPLAY`/`DISPLAY`, que é o que o
+  prompter ativado pelo barramento herda), olhando a cada 5 s por até 10 min, sem ler o Secret
+  Service. Sem resposta em 10 s, o daemon fica marcado como preso e o aviso continua. Ele **não**
+  reinicia o daemon: isso trancaria o `login` que o PAM abriu, mataria o prompt de quem estiver
+  digitando, e o dono teria de digitar a senha do mesmo jeito.
+- Com a senha (aviso do Hangar), abre o `login` e pede o `default`. Daemon já marcado como preso
+  ou sem resposta no prazo: reinicia, manda a senha ao `login` do daemon novo e pede o `default`
+  de novo. O reinício continua sendo um só por pedido. Sem tela, ou o `default` ainda trancado no
+  fim: 409 `keyring_default_locked` ("o login abriu, mas o chaveiro padrão continua trancado").
+- Default trancado à mão depois de aberto fica trancado: a tentativa automática não se repete na
+  mesma vida do daemon.
+
+**Por quê (23/11).** Às 08:13:42 o backend, de pé antes do login gráfico, pediu o Secret Service e o
+daemon tentou o `gcr-prompter` sem display (`cannot open display`). Às 08:13:44 o PAM do sddm abriu o
+`login`; o `Default_Keyring` ficou `Locked=true` e o Chrome e o Slack travaram. O servidor só lia o
+`login` e não publicou aviso. `Secret.Service.unlock_sync` no daemon preso estourou 40 s; depois de
+`systemctl --user restart gnome-keyring-daemon`, o desbloqueio das duas coleções funcionou.
+Conferido no daemon desta máquina, com as duas abertas: o `Get` de `Locked` e o `Unlock` pelo
+caminho do alias são aceitos (o `Unlock` volta com a coleção, sem prompt).
 
 **Por quê.** Com `Linger=yes` o Hangar sobe antes do login gráfico. No boot de 26/10 a checagem de
 worktree mesclada (`hangar-workspace/src/worktree_merge.rs`, `gh pr list`) pediu o token do `gh`,
@@ -3861,8 +3888,10 @@ usam o chaveiro (`~/.claude/.credentials.json`; o Codex está em `cli_auth_crede
   aberto: o desbloqueio automático roda dentro do fluxo do prompter. Com o login gráfico o prompter
   existe e ele abre sem perguntar; isso não foi medido com prompter de verdade.
 
-**Limite.** Se a fila de prompts do daemon travar o pedido do Chrome ao `Default_Keyring`, abrir o
-`login` não a solta; a reinicialização só acontece quando o próprio `login` não abre.
+**Limite.** O prompt do `default` com o daemon preso e o reinício seguido de abertura no daemon
+novo foram provados só pelo backend falso; o boot real ainda não foi repetido. Com o `login` aberto
+pelo PAM e o daemon preso, o Chrome e o Slack esperam até o dono digitar a senha no aviso. Sem login
+gráfico (`Linger`, sem tela) o `default` não abre pelo Hangar: o `login` abre e o aviso fica.
 
 ## Chave secreta do pane fora da linha de comando (26/10/2026)
 
