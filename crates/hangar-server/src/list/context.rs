@@ -297,19 +297,23 @@ impl ContextCache {
     /// Lê, junta e grava sob trava: na atualização o servidor velho e o novo gravam o mesmo arquivo.
     fn save_windows(&mut self) {
         let Some(path) = self.windows_file.clone() else { return };
-        let saved = (|| -> std::io::Result<bool> {
+        let saved = (|| -> std::io::Result<Option<std::collections::HashMap<String, Learned>>> {
             if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
             let _lock = hangar_core::fs::lock_file(&path.with_extension("json.lock"))?;
-            let Some(mut merged) = read_windows(&path) else { return Ok(false) };
+            let Some(mut merged) = read_windows(&path) else { return Ok(None) };
             for key in &self.unsaved {
                 if let Some(learned) = self.windows.get(key) { learn(&mut merged, key.clone(), *learned); }
             }
             hangar_core::fs::atomic_write(&path, &serde_json::to_vec(&merged)?)?;
-            Ok(true)
+            Ok(Some(merged))
         })();
         match saved {
-            Ok(true) => self.unsaved.clear(),
-            Ok(false) => {}
+            // O disco pode ter um informe mais novo, gravado pelo outro servidor.
+            Ok(Some(merged)) => {
+                for (key, learned) in merged { learn(&mut self.windows, key, learned); }
+                self.unsaved.clear();
+            }
+            Ok(None) => {}
             Err(e) => super::facts::note("rust.list_context_windows_unwritable", "", format!("list_context_windows_unwritable:{:?}", e.kind()),
                 "janela aprendida não gravada; depois de o servidor subir a sessão nova volta a mostrar 200k"),
         }
