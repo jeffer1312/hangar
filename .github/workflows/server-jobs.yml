@@ -35,6 +35,8 @@ jobs:
         include: ${{ fromJSON(inputs.sistemas) }}
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
+    # Teste travado não pode segurar o portão nem a publicação pelas 6 h do padrão do GitHub.
+    timeout-minutes: 90
     concurrency:
       group: server-testes-${{ inputs.branch }}-${{ matrix.platform }}
       cancel-in-progress: true
