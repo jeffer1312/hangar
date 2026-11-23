@@ -1,5 +1,5 @@
-//! Portas TCP em LISTEN dos processos candidatos: quem escuta e em qual porta. Dar a porta à
-//! sessão é de quem chama, que já sabe quais processos são dela.
+//! Portas TCP em LISTEN dos processos candidatos: quem escuta e em qual porta. De qual sessão é
+//! cada porta (`owners`) sai das raízes, árvores e chaves que quem chama já leu.
 #![deny(unsafe_code)]
 #![cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 
@@ -9,6 +9,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 #[cfg(target_os = "linux")]
 mod linux;
+pub mod owners;
 #[cfg(any(windows, test))]
 mod win_table;
 #[cfg(windows)]

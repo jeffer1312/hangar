@@ -36,7 +36,7 @@ async fn last_focus_on_the_session_wins() {
     let call = spawn(&registry, "s", json!({"verbo": "text", "args": [], "aba": 2}));
     let sent = request(&mut a_rx).await;
     assert_eq!(sent["aba"], 2);
-    a.text(&json!({"id": sent["id"], "ok": false, "erro": "pagina caiu"}).to_string());
+    a.text(&json!({"id": sent["id"], "ok": false, "error": "pagina caiu"}).to_string());
     assert_eq!(call.await.unwrap(), Ok(Reply::Text("erro: pagina caiu".into())));
 }
 
@@ -127,7 +127,7 @@ async fn without_focus_is_no_host_and_not_allowed_is_its_own_refusal() {
     host.text(r#"{"type":"focus","session":"s"}"#);
     let call = spawn(&registry, "s", json!({"verbo": "goto", "args": ["https://example.com"]}));
     let sent = request(&mut rx).await;
-    host.text(&json!({"id": sent["id"], "ok": false, "erro": "browser_host_not_allowed"}).to_string());
+    host.text(&json!({"id": sent["id"], "ok": false, "error": "browser_host_not_allowed"}).to_string());
     assert_eq!(call.await.unwrap(), Err(Refusal::NotAllowed));
     assert_eq!(Refusal::NotAllowed.status(), 403);
     // Recusado, o `goto` não vira o endereço do navegador.

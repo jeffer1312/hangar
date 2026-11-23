@@ -43,10 +43,17 @@ pub const PORT_NOT_HTTP: &str = "port_not_http";
 pub async fn connect_loopback(port: u16) -> std::io::Result<tokio::net::TcpStream> {
     use std::net::{Ipv4Addr, Ipv6Addr};
     use tokio::net::TcpStream;
-    match TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
-        Ok(tcp) => Ok(tcp),
-        Err(_) => TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await,
-    }
+    let v4 = match TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+        Ok(tcp) => return Ok(tcp),
+        Err(e) => e,
+    };
+    TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await.map_err(|v6| loopback_error(v4, v6))
+}
+
+/// Sem IPv6 na máquina o `[::1]` falha por outro motivo; aí a recusa do IPv4 é a que diz "nada escuta ali".
+fn loopback_error(v4: std::io::Error, v6: std::io::Error) -> std::io::Error {
+    use std::io::ErrorKind::ConnectionRefused;
+    if v4.kind() == ConnectionRefused && v6.kind() != ConnectionRefused { v4 } else { v6 }
 }
 
 /// A porta do loopback respondeu e a resposta não é HTTP. Sem isso, a prévia de um Postgres mostra o
@@ -67,4 +74,19 @@ pub struct AbortOnDrop(pub tokio::task::JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
     fn drop(&mut self) { self.0.abort(); }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn loopback_error_keeps_the_ipv4_refusal_when_ipv6_is_missing() {
+        let pick = |v4, v6| super::loopback_error(Error::from(v4), Error::from(v6)).kind();
+        for missing in [ErrorKind::AddrNotAvailable, ErrorKind::NetworkUnreachable, ErrorKind::Unsupported] {
+            assert_eq!(pick(ErrorKind::ConnectionRefused, missing), ErrorKind::ConnectionRefused);
+        }
+        assert_eq!(pick(ErrorKind::ConnectionRefused, ErrorKind::ConnectionRefused), ErrorKind::ConnectionRefused);
+        assert_eq!(pick(ErrorKind::TimedOut, ErrorKind::AddrNotAvailable), ErrorKind::AddrNotAvailable);
+    }
 }

@@ -36,7 +36,9 @@ async fn stop(st: &AppState, name: &str, port: &str) -> Response {
     };
     let done = tokio::task::spawn_blocking(move || -> Result<Option<(Stopped, Option<Scope>)>, Error> {
         // A lista guarda os sockets por até 3 s: quem segura a porta é relido agora.
-        let Some((pid, start)) = facts.listener(port).map_err(Error::Io)? else { return Ok(None) };
+        let Some(pid) = facts.listener(port).map_err(Error::Io)? else { return Ok(None) };
+        // O início confere, antes de sinalizar, que o pid ainda é o mesmo processo.
+        let Some(start) = hangar_port_stop::start_of(pid).map_err(Error::Io)? else { return Ok(None) };
         hangar_port_stop::stop(&mut Real, pid, start, std::process::id(), facts.guarded()).map(Some)
     }).await;
     let (outcome, scope) = match done {

@@ -2,7 +2,7 @@
 //! Endereço e token saem de `~/.hangar/nav/_srv.json`, que o app reescreve a cada subida: nada aqui
 //! é guardado entre chamadas.
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -69,9 +69,25 @@ fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
     Ok(port.zip(srv["token"].as_str().filter(|t| !t.is_empty()).map(str::to_owned)))
 }
 
-/// Há app desktop nesta máquina para o `/cmd`. Sem ele, os verbos vão pela rota `browser-cmd` ao app de quem usa a
-/// sessão em outra máquina.
-pub fn local_app(home: &Path) -> bool { matches!(server(home), Ok(Some(_))) }
+/// Há app desktop nesta máquina para o `/cmd` (`true`). Sem ele, os verbos vão pela rota `browser-cmd` ao app de quem
+/// usa a sessão em outra máquina. Registro com pid morto e recente é o app daqui reiniciando: a recusa, não outra máquina.
+pub fn local_app(home: &Path) -> Result<bool, Unavailable> {
+    match server(home) {
+        Ok(found) => Ok(found.is_some()),
+        Err(dead) => {
+            let modified = std::fs::metadata(nav_dir(home).join("_srv.json")).and_then(|m| m.modified()).ok();
+            if restarting(modified, SystemTime::now()) { Err(dead) } else { Ok(false) }
+        }
+    }
+}
+
+/// Até aqui um registro de pid morto ainda é do app que está subindo de novo.
+const RESTART_WINDOW: Duration = Duration::from_secs(60);
+
+fn restarting(modified: Option<SystemTime>, now: SystemTime) -> bool {
+    // Data no futuro (relógio ajustado) conta como recente.
+    modified.is_some_and(|m| now.duration_since(m).map_or(true, |age| age < RESTART_WINDOW))
+}
 
 /// O corpo do `/cmd` para a rota `browser-cmd`, com o prazo que ela espera o app.
 pub fn host_body(verb: &str, args: &[String], tab: Option<i64>, deadline: Duration) -> Value {
@@ -86,7 +102,8 @@ pub fn host_answer(status: u16, body: &Value) -> Result<String, Unavailable> {
     if (200..300).contains(&status) { return Ok(body["detail"].as_str().map_or_else(|| body.to_string(), str::to_owned)); }
     let detail = &body["detail"];
     Err(Unavailable(match (status, detail["code"].as_str()) {
-        (409, Some("browser_host_none")) => "nenhum app do Hangar com esta sessão aberta: abra a sessão no app desktop e repita".into(),
+        (409, Some("browser_host_none")) =>
+            "o app desktop não está aberto nesta máquina e nenhum app de outra máquina está com esta sessão aberta: abra a sessão no app desktop e repita".into(),
         (403, Some("browser_host_not_allowed")) => "o app desktop recusou usar o navegador dele".into(),
         _ => detail["msg"].as_str().or_else(|| detail.as_str()).map_or_else(|| format!("HTTP {status}"), str::to_owned),
     }))
@@ -168,15 +185,25 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
 
 #[cfg(test)]
 mod tests {
-    use super::{Unavailable, host_answer, navigated};
+    use super::{Unavailable, host_answer, navigated, restarting};
     use serde_json::json;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn a_fresh_dead_registration_is_the_local_app_restarting() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        assert!(restarting(Some(now - Duration::from_secs(5)), now));
+        assert!(restarting(Some(now + Duration::from_secs(5)), now), "relógio para trás ainda é recente");
+        assert!(!restarting(Some(now - Duration::from_secs(60)), now), "velho: o verbo vai ao app de outra máquina");
+        assert!(!restarting(None, now), "sem arquivo: o verbo vai ao app de outra máquina");
+    }
 
     #[test]
     fn host_answer_reads_the_app_text_and_says_why_it_did_not_run() {
         assert_eq!(host_answer(200, &json!({"detail": "ok: click @e1"})), Ok("ok: click @e1".into()));
         assert_eq!(host_answer(200, &json!(42)), Ok("42".into()));
         let none = json!({"detail": {"code": "browser_host_none", "msg": "x"}});
-        assert!(host_answer(409, &none).unwrap_err().0.starts_with("nenhum app do Hangar"));
+        assert!(host_answer(409, &none).unwrap_err().0.starts_with("o app desktop não está aberto nesta máquina e nenhum app de outra"));
         let denied = json!({"detail": {"code": "browser_host_not_allowed", "msg": "x"}});
         assert_eq!(host_answer(403, &denied), Err(Unavailable("o app desktop recusou usar o navegador dele".into())));
         let gone = json!({"detail": {"code": "browser_host_gone", "msg": "o app caiu; o shot pode ter sido executado"}});

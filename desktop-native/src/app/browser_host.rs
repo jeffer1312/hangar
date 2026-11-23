@@ -244,7 +244,7 @@ async fn pump(socket: reqwest::Upgraded, focus: Option<String>, server: &str, ou
     }
 }
 
-fn refusal(id: u64, erro: &str) -> Out { Out::Text(json!({"id": id, "ok": false, "erro": erro}).to_string()) }
+fn refusal(id: u64, error: &str) -> Out { Out::Text(json!({"id": id, "ok": false, "error": error}).to_string()) }
 
 fn reply_out(id: u64, reply: Reply, pairs: &[(u16, u16)]) -> Out {
     match reply {

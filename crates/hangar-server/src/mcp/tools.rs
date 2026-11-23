@@ -731,7 +731,7 @@ impl Tools {
     async fn browser_open(&self, headers: &HeaderMap, a: BrowserOpen) -> Outcome {
         let me = self.me(headers, &a.sessao).await?;
         let (since, home) = (now_ms(), self.home());
-        if !nav::local_app(&home) {
+        if !nav::local_app(&home).map_err(|e| e.0)? {
             // O app de lá só responde com o navegador pronto: a resposta é a URL, como a do `url`.
             let text = self.host_verb(&me, "open", std::slice::from_ref(&a.url), None, Duration::from_secs(20)).await.map_err(|e| e.0)?;
             let Some(url) = nav::ok_value(&text) else { return Err(text) };
@@ -873,7 +873,7 @@ impl Tools {
             args = vec![dir.join(format!("{}.png", now_ms())).to_string_lossy().into_owned()];
         }
         let timeout = if verb == "login" { LOGIN_TIMEOUT } else { nav::VERB_TIMEOUT };
-        let answer = if nav::local_app(&home) { nav::verb(&self.http, &home, name, verb, &args, tab, timeout).await }
+        let answer = if nav::local_app(&home).map_err(|e| e.0)? { nav::verb(&self.http, &home, name, verb, &args, tab, timeout).await }
             else { self.host_verb(name, verb, &args, tab, timeout).await };
         let answer = answer.map_err(|e| e.0)?;
         if answer.starts_with("erro:") { Err(answer) } else { Ok(answer) }

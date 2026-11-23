@@ -105,7 +105,7 @@ async fn browser_host_refusals_follow_the_contract() {
 
     let call = tokio::spawn(cmd(addr, "s", json!({"verbo": "goto", "args": ["https://example.com/"]})).send());
     let asked = next_request(&mut app).await;
-    send(&mut app, json!({"id": asked["id"], "ok": false, "erro": "browser_host_not_allowed"})).await;
+    send(&mut app, json!({"id": asked["id"], "ok": false, "error": "browser_host_not_allowed"})).await;
     let r = call.await.unwrap().unwrap();
     assert_eq!(r.status(), 403);
     assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "browser_host_not_allowed");

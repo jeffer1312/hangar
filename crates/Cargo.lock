@@ -2309,6 +2309,8 @@ version = "0.1.0"
 name = "hangar-session-ports"
 version = "0.1.0"
 dependencies = [
+ "hangar-api",
+ "serde_json",
  "tracing",
  "windows-sys 0.61.2",
 ]

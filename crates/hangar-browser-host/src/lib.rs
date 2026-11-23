@@ -75,7 +75,8 @@ impl Refusal {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BrowserState {
     pub url: String,
-    pub aba: Value,
+    /// A `aba` que o app informou.
+    pub tab: Value,
     pub ts: u64,
 }
 
@@ -115,7 +116,7 @@ impl Inner {
         {
             self.state.remove(&old);
         }
-        self.state.entry(session).or_insert(BrowserState { url: String::new(), aba: Value::Null, ts: 0 })
+        self.state.entry(session).or_insert(BrowserState { url: String::new(), tab: Value::Null, ts: 0 })
     }
 
     fn chosen(&self, session: &str) -> Option<u64> {
@@ -194,7 +195,7 @@ impl Registry {
         }
         inner.state.iter().map(|(session, st)| {
             let live = if inner.chosen(session).is_some() { "vivo".to_owned() } else { format!("MORTO (reabra com: hangar-preview open {})", st.url) };
-            let tab = st.aba.as_i64().map(|n| format!("  (aba {n})")).unwrap_or_default();
+            let tab = st.tab.as_i64().map(|n| format!("  (aba {n})")).unwrap_or_default();
             format!("{session}  {}  {live}{tab}", st.url)
         }).collect::<Vec<_>>().join("\n")
     }
@@ -211,14 +212,14 @@ impl Registry {
         inner.focus.entry(session).or_default().insert(host, order);
     }
 
-    fn set_state(&self, session: String, url: Option<String>, aba: Option<Value>) {
+    fn set_state(&self, session: String, url: Option<String>, tab: Option<Value>) {
         let mut inner = self.lock();
         let entry = inner.state_entry(session);
         if let Some(url) = url {
             entry.url = url;
         }
-        if let Some(aba) = aba {
-            entry.aba = aba;
+        if let Some(tab) = tab {
+            entry.tab = tab;
         }
         entry.ts = now_ms();
     }
@@ -291,13 +292,13 @@ impl Connection {
         let result = match msg.get("ok").and_then(Value::as_bool) {
             Some(true) => Ok(Reply::Text(msg.get("text").and_then(Value::as_str).unwrap_or_default().to_owned())),
             Some(false) => {
-                let erro = msg.get("erro").and_then(Value::as_str).unwrap_or_default();
-                if erro == NOT_ALLOWED {
+                let error = msg.get("error").and_then(Value::as_str).unwrap_or_default();
+                if error == NOT_ALLOWED {
                     Err(Refusal::NotAllowed)
-                } else if erro.starts_with("erro:") {
-                    Ok(Reply::Text(erro.to_owned()))
+                } else if error.starts_with("erro:") {
+                    Ok(Reply::Text(error.to_owned()))
                 } else {
-                    Ok(Reply::Text(format!("erro: {erro}")))
+                    Ok(Reply::Text(format!("erro: {error}")))
                 }
             }
             None => return,

@@ -15,6 +15,8 @@ mod connect_supervisor;
 mod connect_share;
 mod connect_preview;
 mod port_tunnel;
+// Usa o `list_support`, que só existe em Unix; parar servidor só existe no Linux.
+#[cfg(unix)]
 mod port_stop;
 mod connect_account_devices;
 mod cli_probe;
