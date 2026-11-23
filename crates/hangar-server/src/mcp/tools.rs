@@ -496,9 +496,10 @@ impl Tools {
         let (me, voice) = self.caller(headers).await?;
         if !voice { self.whatsapp_unshared(&me).await?; }
         let sends = method == Method::POST;
-        let value = self.answer(Some(&me), method, path, body, coded).await?;
+        // Depois do envio, quem chama precisa saber que o pedido de mídia pode ter saído, para não pedir de novo.
+        let value = self.answer(Some(&me), method, path, body, coded).await
+            .map_err(|e| if sends && whatsapp::reply_lost(&e) { format!("{e}; {}", whatsapp::MEDIA_MAYBE_SENT) } else { e })?;
         // Um convite ou par feito enquanto a rota respondia não recebe a leitura: confere de novo antes de devolver.
-        // O pedido de mídia já saiu nesse ponto; quem chama precisa saber para não pedir de novo.
         if !voice {
             self.whatsapp_unshared(&me).await.map_err(|e| if sends { format!("{e}; {}", whatsapp::MEDIA_MAYBE_SENT) } else { e })?;
         }
