@@ -495,9 +495,13 @@ impl Tools {
     async fn whatsapp(&self, headers: &HeaderMap, method: Method, path: &str, body: Option<Value>, trim: Trim) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
         if !voice { self.whatsapp_unshared(&me).await?; }
+        let sends = method == Method::POST;
         let value = self.answer(Some(&me), method, path, body, coded).await?;
         // Um convite ou par feito enquanto a rota respondia não recebe a leitura: confere de novo antes de devolver.
-        if !voice { self.whatsapp_unshared(&me).await?; }
+        // O pedido de mídia já saiu nesse ponto; quem chama precisa saber para não pedir de novo.
+        if !voice {
+            self.whatsapp_unshared(&me).await.map_err(|e| if sends { format!("{e}; {}", whatsapp::MEDIA_MAYBE_SENT) } else { e })?;
+        }
         Ok(dict(whatsapp::third_party(value, trim, whatsapp::LIMIT)))
     }
 
@@ -558,10 +562,10 @@ impl Tools {
         } else {
             self.st.peers.call_group(&fed.owner, reqwest::Method::GET, &path, None).await.map_err(|e| unshared_failed(&e.text(&fed.owner)))?
         };
-        match whatsapp::record_has_outside(&record) {
+        match whatsapp::record_is_shared(&record, &groups.server_id()) {
             Some(false) => Ok(()),
             Some(true) => Err(whatsapp::SHARED_REFUSAL.into()),
-            None => Err(unshared_failed(&format!("a dona '{}' não disse quem é de fora no grupo", fed.owner))),
+            None => Err(unshared_failed(&format!("a dona '{}' não disse quem está no grupo", fed.owner))),
         }
     }
 
