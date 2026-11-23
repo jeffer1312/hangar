@@ -1632,6 +1632,7 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
         let signal=root.join("new-session-ready");
         // O spec é gravado antes de o terminal nascer: o fim da abertura é o `new-session-done` do tmux falso.
         let done=root.join("new-session-done");
+        let done_on_disk=done.clone();
         let mut watcher=notify::recommended_watcher(move|event:notify::Result<notify::Event>| {
             if let Ok(event)=event {
                 if event.paths.contains(&signal) {if let Some(tx)=ready.lock().unwrap().take(){let _=tx.send(());}}
@@ -1657,15 +1658,25 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
         handler.abort();
         let cancelled=handler.await.is_err_and(|e|e.is_cancelled());
         let after=if before.is_pending(){Some(futures_util::poll!(closing.as_mut()))}else{None};
-        let released_early=before.is_ready() || after.as_ref().is_some_and(std::task::Poll::is_ready);
+        let early=match before {
+            std::task::Poll::Ready(result)=>Some(result.is_ok()),
+            std::task::Poll::Pending=>match after {Some(std::task::Poll::Ready(result))=>Some(result.is_ok()),_=>None},
+        };
         release.0.write_all(b"go\n").unwrap();
-        let completed=tokio::time::timeout(Duration::from_secs(25),finished_rx).await.is_ok_and(|r|r.is_ok());
-        let closed=match before {
-            std::task::Poll::Ready(result)=>result.is_ok(),
-            std::task::Poll::Pending=>match after {
-                Some(std::task::Poll::Ready(result))=>result.is_ok(),
-                _=>closing.await.is_ok(),
-            }
+        let mut finished_rx=finished_rx;
+        let wait=Duration::from_secs(25);
+        // Liberação e último efeito observados juntos. O aviso do vigia pode chegar depois da liberação legítima,
+        // então quem decide a ordem é o `new-session-done` já estar no disco quando a entrada abre.
+        let (completed,closed,released_early)=match early {
+            Some(ok)=>(tokio::time::timeout(wait,&mut finished_rx).await.is_ok_and(|r|r.is_ok()),ok,true),
+            None=>match tokio::time::timeout(wait,async {tokio::select! {
+                r=&mut finished_rx=>(true,r.is_ok(),false),
+                r=closing.as_mut()=>(false,r.is_ok(),!done_on_disk.exists()),
+            }}).await {
+                Ok((true,finished,_))=>(finished,closing.await.is_ok(),false),
+                Ok((false,closed,first))=>(tokio::time::timeout(wait,&mut finished_rx).await.is_ok_and(|r|r.is_ok()),closed,first),
+                Err(_)=>(false,false,false),
+            },
         };
         let published=std::fs::read_dir(h.home.join(".hangar/session-specs")).is_ok_and(|entries|entries.filter_map(Result::ok).any(|entry| {
             let path=entry.path();
