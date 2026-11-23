@@ -2,8 +2,9 @@
 //! Secret Service e o desbloqueio do `login` usa o socket de controle do daemon, o mesmo caminho do PAM.
 //! `gnome-keyring-daemon --unlock` não serve: com um daemon de pé ele sobe outro, órfão, e o chaveiro
 //! segue trancado. O `default` tem a senha guardada no `login` e só abre pelo fluxo do prompter.
+use std::time::Duration;
 #[cfg(unix)]
-use std::{io::{Read, Write}, os::unix::net::UnixStream, path::Path, time::Duration};
+use std::{io::{Read, Write}, os::unix::net::UnixStream, path::Path};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -36,7 +37,7 @@ impl Reading {
 
 /// Resposta do daemon ao pedido de abrir o `default`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DefaultOpen { Opened, Refused, NoAnswer }
+pub enum DefaultOpen { Opened, Refused, NoAnswer, Failed }
 
 /// Tentativa sem senha: `Later` = sem tela, desbloqueio do dono em curso ou leitura que não veio.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +70,8 @@ enum Step { Done(KeyringState), LoginStuck, DefaultStuck, DefaultClosed }
 impl Step {
     fn of(reading: Reading) -> Self {
         match (reading.login, reading.default) {
-            (KeyringState::Locked, _) => Self::LoginStuck,
+            // Sem a coleção `login`, a senha não abriu nada: nunca dizer que o login abriu.
+            (KeyringState::Locked, _) | (KeyringState::Absent, KeyringState::Locked) => Self::LoginStuck,
             (_, KeyringState::Locked) => Self::DefaultClosed,
             _ => Self::Done(reading.combined()),
         }
@@ -105,13 +107,15 @@ pub struct Keyring {
     stuck: std::sync::atomic::AtomicU64,
     /// Vida em que a tentativa sem senha já pediu o `default`.
     asked: std::sync::atomic::AtomicU64,
+    /// Prazo da resposta do desbloqueio com senha.
+    budget: Duration,
 }
 
 impl Keyring {
     pub fn system() -> Self {
         Self { backend: std::sync::RwLock::new(std::sync::Arc::new(System::default())), real: true.into(),
             tx: tokio::sync::watch::channel(KeyringState::Absent).0, gate: Default::default(), asking: Default::default(),
-            life: 1.into(), stuck: 0.into(), asked: 0.into() }
+            life: 1.into(), stuck: 0.into(), asked: 0.into(), budget: UNLOCK_BUDGET }
     }
 
     pub fn set_backend(&self, backend: std::sync::Arc<dyn Backend>) {
@@ -166,18 +170,27 @@ impl Keyring {
             self.asked.store(self.life(), std::sync::atomic::Ordering::SeqCst);
         }
         // Fora da trava: o desbloqueio do dono não espera aqui, espera no pedido (`asking`).
-        let outcome = self.ask_default(backend.as_ref());
+        let outcome = self.ask_default(backend.as_ref(), None).unwrap_or(DefaultOpen::Failed);
+        if outcome == DefaultOpen::Failed {
+            // Falha daqui (barramento, runtime), não resposta do daemon: a tentativa não foi gasta.
+            self.asked.store(0, std::sync::atomic::Ordering::SeqCst);
+            return Unattended::Unread;
+        }
         self.read();
         Unattended::Asked(outcome)
     }
 
     /// Daemon já visto sem resposta nesta vida: não pede de novo, a espera só gastaria o prazo.
-    fn ask_default(&self, backend: &dyn Backend) -> DefaultOpen {
-        let _asking = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+    /// `None` = com prazo, a vez de pedir não veio a tempo.
+    fn ask_default(&self, backend: &dyn Backend, deadline: Option<std::time::Instant>) -> Option<DefaultOpen> {
+        let _asking = match deadline {
+            Some(deadline) => lock_until(&self.asking, deadline.checked_sub(ASK_LIMIT)?)?,
+            None => self.asking.lock().unwrap_or_else(|e| e.into_inner()),
+        };
         let life = self.life();
         if self.marked(&self.stuck) {
             tracing::info!(code = "keyring_default_skipped_stuck", "daemon já visto preso; o pedido do chaveiro padrão não se repete");
-            return DefaultOpen::NoAnswer;
+            return Some(DefaultOpen::NoAnswer);
         }
         let outcome = backend.open_default();
         match outcome {
@@ -188,8 +201,9 @@ impl Keyring {
             }
             DefaultOpen::Refused => tracing::warn!(code = "keyring_default_refused", "o daemon recusou abrir o chaveiro padrão"),
             DefaultOpen::Opened => tracing::info!(code = "keyring_default_opened", "o daemon abriu o chaveiro padrão"),
+            DefaultOpen::Failed => tracing::warn!(code = "keyring_default_failed", "pedido do chaveiro padrão não saiu daqui"),
         }
-        outcome
+        Some(outcome)
     }
 
     /// Bloqueante. Abre o `login` pela senha e depois o `default`. Senha aceita e `login` ainda
@@ -197,8 +211,12 @@ impl Keyring {
     /// dá mais uma volta, se couber no prazo. Leitura que não veio não conta como trancado: reiniciar
     /// à toa trancaria o chaveiro que acabou de abrir.
     pub fn unlock(&self, password: &[u8]) -> Result<KeyringState, UnlockError> {
-        let deadline = std::time::Instant::now() + UNLOCK_BUDGET;
-        let _gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
+        let deadline = std::time::Instant::now() + self.budget;
+        // Sem a vez a tempo de ao menos um pedido do `default`, desiste antes de mandar a senha.
+        let Some(_gate) = deadline.checked_sub(ASK_LIMIT).and_then(|until| lock_until(&self.gate, until)) else {
+            tracing::warn!(code = "keyring_unlock_busy", "outro desbloqueio do chaveiro ocupou o prazo");
+            return Err(UnlockError::Failed);
+        };
         let backend = self.backend();
         let mut step = self.unlock_once(backend.as_ref(), password, deadline)?;
         if matches!(step, Step::LoginStuck | Step::DefaultStuck) {
@@ -207,8 +225,12 @@ impl Keyring {
             } else if self.restart(backend.as_ref()) {
                 step = self.unlock_once(backend.as_ref(), password, deadline)?;
             } else {
-                // O reinício pode ter trocado o daemon sem deixá-lo pronto: vale o que se lê agora.
-                step = Step::of(self.read().ok_or(UnlockError::Failed)?);
+                // O reinício pode ter trocado o daemon sem deixá-lo pronto: vale o que se lê agora, e
+                // barramento sem chaveiro é recuperação que falhou.
+                match self.read() {
+                    Some(reading) if reading.combined() != KeyringState::Absent => step = Step::of(reading),
+                    _ => return Err(UnlockError::Failed),
+                }
             }
         }
         match step {
@@ -226,12 +248,14 @@ impl Keyring {
             tracing::info!(code = "keyring_default_no_display", "sem tela para o prompter; o chaveiro padrão fica trancado");
             return Ok(Step::DefaultClosed);
         }
-        if std::time::Instant::now() + ASK_LIMIT > deadline {
-            tracing::warn!(code = "keyring_ask_out_of_time", "sem prazo para pedir o chaveiro padrão");
-            return Ok(Step::DefaultClosed);
+        match self.ask_default(backend, Some(deadline)) {
+            None => {
+                tracing::warn!(code = "keyring_ask_out_of_time", "sem prazo para pedir o chaveiro padrão");
+                Ok(Step::DefaultClosed)
+            }
+            Some(DefaultOpen::NoAnswer) => Ok(Step::DefaultStuck),
+            Some(_) => Ok(Step::of(self.read().ok_or(UnlockError::Failed)?)),
         }
-        if self.ask_default(backend) == DefaultOpen::NoAnswer { return Ok(Step::DefaultStuck); }
-        Ok(Step::of(self.read().ok_or(UnlockError::Failed)?))
     }
 
     /// A tentativa já conta como troca de daemon: o reinício que falha no meio também pode tê-lo trocado.
@@ -241,10 +265,25 @@ impl Keyring {
     }
 }
 
-/// Resposta inteira do desbloqueio, abaixo dos 45 s que os clientes esperam.
+/// Resposta inteira do desbloqueio, abaixo do prazo em que os clientes desistem dela.
 const UNLOCK_BUDGET: Duration = Duration::from_secs(38);
-/// Pedido inteiro do `default`: com a senha guardada no login o prompter responde em menos de um segundo.
+/// Pedido inteiro do `default`: com a senha guardada no login o prompter responde sem perguntar.
 const ASK_LIMIT: Duration = Duration::from_secs(10);
+/// Teto da rota: as esperas de E/S têm prazo próprio, e este garante a resposta mesmo se somarem.
+const REPLY_LIMIT: Duration = Duration::from_secs(42);
+
+/// Espera a trava até `until`; depois disso, `None`.
+fn lock_until(mutex: &std::sync::Mutex<()>, until: std::time::Instant) -> Option<std::sync::MutexGuard<'_, ()>> {
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if std::time::Instant::now() >= until => return None,
+            // estavel: código de produção; a trava do std não tem espera com prazo, então tenta de novo em intervalos curtos.
+            Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+}
 /// `systemctl restart` e a espera do socket de controle.
 const RESTART_LIMIT: Duration = Duration::from_secs(12);
 
@@ -306,14 +345,13 @@ impl Backend for System {
                 Ok((bus, login, default)) => locked_state(&bus, &login, &default).await,
                 Err(error) => {
                     tracing::warn!(code = "keyring_read_failed", %error, "proxies do chaveiro não montaram");
+                    self.forget();
                     None
                 }
             }
         });
-        if reading.is_none() {
-            tracing::warn!(code = "keyring_read_failed", "leitura das coleções do chaveiro falhou; a conexão será refeita");
-            self.forget();
-        }
+        // A conexão fica mesmo com leitura que estourou o prazo: largar um `Get` na fila do daemon o derruba.
+        if reading.is_none() { tracing::warn!(code = "keyring_read_failed", "leitura das coleções do chaveiro falhou"); }
         reading
     }
 
@@ -349,15 +387,15 @@ impl Backend for System {
     fn display(&self) -> bool { crate::display_env::user_manager_has_display() }
 
     fn open_default(&self) -> DefaultOpen {
-        let Some(rt) = Self::runtime() else { return DefaultOpen::Refused };
-        let Some(conn) = self.connection(&rt) else { return DefaultOpen::Refused };
+        let Some(rt) = Self::runtime() else { return DefaultOpen::Failed };
+        let Some(conn) = self.connection(&rt) else { return DefaultOpen::Failed };
         // Um prazo para o pedido inteiro: o daemon preso pode parar em qualquer passo.
         match rt.block_on(async { tokio::time::timeout(ASK_LIMIT, prompt_default(&conn)).await.unwrap_or(Ok(DefaultOpen::NoAnswer)) }) {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::warn!(code = "keyring_default_bus_failed", %error, "pedido do chaveiro padrão falhou no barramento");
                 self.forget();
-                DefaultOpen::Refused
+                DefaultOpen::Failed
             }
         }
     }
@@ -428,7 +466,7 @@ impl Backend for System {
     fn unlock(&self, _password: &[u8]) -> Result<(), UnlockError> { Err(UnlockError::NoDaemon) }
     fn restart(&self) -> bool { false }
     fn display(&self) -> bool { false }
-    fn open_default(&self) -> DefaultOpen { DefaultOpen::Refused }
+    fn open_default(&self) -> DefaultOpen { DefaultOpen::Failed }
 }
 
 /// Lê o estado ao ligar e depois só quando o daemon avisa: troca de dono do nome (queda, religada) ou
@@ -598,7 +636,11 @@ pub async fn unlock_route(
             break 'r detail(StatusCode::UNPROCESSABLE_ENTITY, "keyring_bad_request", "falta a senha", serde_json::Value::Null);
         };
         let keyring = st.list.keyring.clone();
-        match tokio::task::spawn_blocking(move || keyring.unlock(body.password.as_bytes())).await {
+        let Ok(joined) = tokio::time::timeout(REPLY_LIMIT, tokio::task::spawn_blocking(move || keyring.unlock(body.password.as_bytes()))).await else {
+            st.diag.report("rust.keyring_unlock_failed", "", "keyring_unlock_late", "desbloqueio do chaveiro passou do prazo");
+            break 'r detail(StatusCode::CONFLICT, UnlockError::Failed.code(), "o desbloqueio passou do prazo; o aviso some se o chaveiro abrir", serde_json::Value::Null);
+        };
+        match joined {
             Ok(Ok(state)) => crate::session_write::json_response(StatusCode::OK, serde_json::json!({"state": state})),
             Ok(Err(e)) => {
                 let status = match e { UnlockError::Denied => StatusCode::FORBIDDEN, UnlockError::NoDaemon => StatusCode::SERVICE_UNAVAILABLE,
@@ -755,6 +797,7 @@ mod tests {
     #[derive(Default)]
     struct Model { login_locked: bool, default_locked: bool, display: bool, stuck: bool, stuck_after_restart: bool,
         login_sticks: bool, login_sticks_after_restart: bool, restart_fails: bool, restart_keeps_daemon: bool, unreadable: bool,
+        login_absent: bool, gone: bool, restart_leaves_nothing: bool, open_fails_once: bool,
         reads: u32, unlocks: u32, restarts: u32, opens: u32 }
 
     impl Backend for Daemon {
@@ -762,6 +805,8 @@ mod tests {
             let mut m = self.0.lock().unwrap();
             m.reads += 1;
             if m.unreadable { return None; }
+            if m.gone { return Some(Reading::ABSENT); }
+            if m.login_absent { return Some(Reading { login: KeyringState::Absent, default: KeyringState::from_locked(m.default_locked) }); }
             Some(Reading { login: KeyringState::from_locked(m.login_locked), default: KeyringState::from_locked(m.default_locked) })
         }
         fn unlock(&self, password: &[u8]) -> Result<(), UnlockError> {
@@ -774,6 +819,7 @@ mod tests {
         fn restart(&self) -> bool {
             let mut m = self.0.lock().unwrap();
             m.restarts += 1;
+            m.gone = m.restart_leaves_nothing;
             if !m.restart_keeps_daemon {
                 (m.login_locked, m.default_locked, m.stuck, m.login_sticks) = (true, true, m.stuck_after_restart, m.login_sticks_after_restart);
             }
@@ -783,6 +829,7 @@ mod tests {
         fn open_default(&self) -> DefaultOpen {
             let mut m = self.0.lock().unwrap();
             m.opens += 1;
+            if std::mem::take(&mut m.open_fails_once) { return DefaultOpen::Failed; }
             if m.stuck { return DefaultOpen::NoAnswer; }
             if m.login_locked || !m.display { return DefaultOpen::Refused; }
             m.default_locked = false;
@@ -908,6 +955,45 @@ mod tests {
     fn a_restart_that_replaced_the_daemon_but_failed_is_not_reported_as_open() {
         let (k, _) = with(Model { default_locked: true, display: true, stuck: true, restart_fails: true, ..Default::default() });
         assert_eq!(k.unlock(b"certa"), Err(UnlockError::Failed));
+    }
+
+    /// Falha local (barramento lento, sem runtime) não gasta a única tentativa deste daemon.
+    #[test]
+    fn a_local_failure_does_not_use_up_the_unattended_request() {
+        let (k, daemon) = with(Model { default_locked: true, display: true, open_fails_once: true, ..Default::default() });
+        assert_eq!(k.open_default_unattended(), Unattended::Unread);
+        assert_eq!(k.open_default_unattended(), Unattended::Asked(DefaultOpen::Opened));
+        assert_eq!(daemon.0.lock().unwrap().opens, 2);
+    }
+
+    /// Reinício que falhou e deixou o barramento sem daemon: a recuperação falhou, não há "sem chaveiro".
+    #[test]
+    fn a_failed_restart_that_left_no_daemon_is_a_failure() {
+        let (k, _) = with(Model { default_locked: true, display: true, stuck: true, restart_fails: true, restart_leaves_nothing: true, ..Default::default() });
+        assert_eq!(k.unlock(b"certa"), Err(UnlockError::Failed));
+    }
+
+    /// Sem coleção `login`, a senha não abriu nada: a resposta não diz que o login abriu.
+    #[test]
+    fn an_absent_login_with_the_default_locked_is_not_reported_as_open() {
+        let (k, _) = with(Model { login_absent: true, default_locked: true, display: true, ..Default::default() });
+        assert_eq!(k.unlock(b"certa"), Err(UnlockError::Failed));
+    }
+
+    /// Desbloqueio que não pega a vez dentro do prazo desiste em vez de passar dos 45 s do cliente.
+    #[test]
+    fn a_password_unlock_that_cannot_start_in_time_gives_up() {
+        let (mut k, daemon) = with(Model { login_locked: true, default_locked: true, display: true, ..Default::default() });
+        k.budget = Duration::from_millis(300);
+        let k = std::sync::Arc::new(k);
+        let held = k.gate.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let route = std::thread::spawn({ let k = k.clone(); move || tx.send(k.unlock(b"certa")).unwrap() });
+        let answer = rx.recv_timeout(Duration::from_secs(30));
+        drop(held);
+        route.join().unwrap();
+        assert_eq!(answer, Ok(Err(UnlockError::Failed)));
+        assert_eq!(daemon.0.lock().unwrap().unlocks, 0, "a senha não foi mandada depois do prazo");
     }
 
     /// Desbloqueio do dono em curso: a tentativa automática volta depois, não desiste de vez.

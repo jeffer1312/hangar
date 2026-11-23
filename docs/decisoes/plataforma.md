@@ -3870,10 +3870,18 @@ e só abre pelo fluxo do prompter (`Secret.Service.Unlock` e `Prompt`). Com o `l
   segundo prompt atrás. Daemon já marcado como preso ou sem resposta no prazo: reinicia, manda a
   senha ao `login` do daemon novo e pede o `default` de novo. O reinício é um só por pedido, e a
   resposta inteira tem 38 s (os clientes esperam 45): sem prazo para reiniciar e pedir de novo (12 s
-  + 10 s), ou para pedir o `default` (10 s), para ali. A resposta sai das duas coleções lidas no
-  fim: `login` trancado é 409 `keyring_unlock_failed`; só o `default` trancado (também sem tela) é
+  + 10 s), ou para pedir o `default` (10 s), para ali; sem a vez de desbloquear (outro desbloqueio
+  em curso) a tempo de ao menos um pedido, desiste antes de mandar a senha. A rota ainda tem um teto
+  de 42 s sobre tudo isso (as esperas de E/S têm prazo próprio, mas podem somar): passou, responde 409
+  e o trabalho que segue publica o estado pelo evento. A resposta sai das duas coleções lidas no
+  fim: `login` trancado, ou ausente com o `default` trancado, é 409 `keyring_unlock_failed`; só o
+  `default` trancado com o `login` aberto (também sem tela) é
   409 `keyring_default_locked` ("o login abriu, mas o chaveiro padrão continua trancado"). Reinício
-  que falha não decide a resposta: o daemon pode ter sido trocado, e vale o que se lê depois.
+  que falha não decide a resposta: o daemon pode ter sido trocado, e vale o que se lê depois; sem
+  chaveiro no barramento, é falha.
+- Falha daqui (sem conexão ao barramento, sem runtime, erro de conexão) não é resposta do daemon:
+  não gasta a tentativa automática, que volta como leitura que falhou. Leitura que estoura o prazo
+  não larga a conexão: um `Get` deixado na fila de um cliente que saiu derruba o daemon.
 - Daemon que já recebeu a tentativa automática: o `default` trancado à mão depois fica trancado,
   porque ela não se repete na mesma vida do daemon. Num daemon em que o `default` já estava aberto,
   trancá-lo à mão com o `login` aberto dispara a primeira (e única) tentativa.
@@ -3902,7 +3910,11 @@ usam o chaveiro (`~/.claude/.credentials.json`; o Codex está em `cli_auth_crede
   aberto: o desbloqueio automático roda dentro do fluxo do prompter. Com o login gráfico o prompter
   existe e ele abre sem perguntar; isso não foi medido com prompter de verdade.
 
-**Limite.** O prompt do `default` com o daemon preso e o reinício seguido de abertura no daemon
+**Limite.** Um `default` com senha própria (não guardada no `login`) abre um diálogo na tela que
+fica sem resposta enquanto ninguém digita; o servidor o trata como daemon preso, e o desbloqueio com
+senha do dono reinicia o daemon e o diálogo volta no daemon novo. Numa máquina sem tela, um
+`default` próprio trancado mantém o aviso, porque ele reflete o estado real e nada no Hangar o abre.
+O prompt do `default` com o daemon preso e o reinício seguido de abertura no daemon
 novo foram provados só pelo backend falso; o boot real ainda não foi repetido. Com o `login` aberto
 pelo PAM e o daemon preso, o Chrome e o Slack esperam até o dono digitar a senha no aviso. Sem login
 gráfico (`Linger`, sem tela) o `default` não abre pelo Hangar: o `login` abre e o aviso fica.
