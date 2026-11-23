@@ -325,9 +325,17 @@ async fn b28_sigterm_with_an_open_sse_stops_within_the_deadline() {
     write_env(home.path(), &format!("CP_PORT={port}\nCP_AUTH_TOKEN=proof\n"));
     let mut server = start(home.path(), port);
     wait_running(home.path());
-    let stream = reqwest::Client::new().get(format!("http://127.0.0.1:{port}/api/sessions/events")).bearer_auth("proof")
-        .send().await.unwrap();
-    assert_eq!(stream.status(), 200);
+    // A vida se marca de pé antes de a preparação acabar, e até lá a lista responde 503: espera a lista abrir.
+    let client = reqwest::Client::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let stream = loop {
+        let response = client.get(format!("http://127.0.0.1:{port}/api/sessions/events")).bearer_auth("proof").send().await.unwrap();
+        if response.status() == 200 { break response; }
+        assert_eq!(response.status(), 503, "só a preparação faz esperar");
+        assert!(Instant::now() < deadline, "a lista não abriu: {}", response.status());
+        // estavel: intervalo de consulta da espera pela lista, com teto de 30 s.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
     assert!(stream.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"), "{:?}", stream.headers());
     terminate(&server);
     assert!(wait_exit(&mut server, Duration::from_secs(10)).success());

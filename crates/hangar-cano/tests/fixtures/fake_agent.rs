@@ -28,7 +28,18 @@ fn claude(event: &Value) {
             out(json!({"type": "control_response", "response": {"subtype": "success", "request_id": event["request_id"], "response": {}}}));
         }
         Some("user") => {
-            if event["message"]["content"][0]["text"] == "sair" {
+            let text = event["message"]["content"][0]["text"].as_str().unwrap_or_default();
+            if text == "sair" {
+                bye();
+                std::process::exit(3);
+            }
+            // `sair quando <arquivo>`: o teste decide o instante da saída (ex.: depois de o cliente cair).
+            if let Some(gate) = text.strip_prefix("sair quando ") {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                while !std::path::Path::new(gate).exists() && std::time::Instant::now() < deadline {
+                    // estavel: intervalo de consulta do arquivo que solta a saída, com teto de 30 s.
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
                 bye();
                 std::process::exit(3);
             }
