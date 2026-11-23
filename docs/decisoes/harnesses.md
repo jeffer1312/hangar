@@ -5343,6 +5343,14 @@ Claude informou (sidecar ou medida do plugin, nunca a deduzida; motor fora) por 
 nova do mesmo modelo a usa. Limite: logo depois de o servidor subir, antes de qualquer sessão desse modelo
 ter informado, a reserva de 200k volta; a reserva em Python segue a regra antiga.
 
+23/11/2026, DELPHI-02: o limite acima e o prazo de 6 h posto depois na revisão fizeram toda sessão nova
+mostrar `192k de 200k` e o aviso de compactar até o fim do primeiro turno, quando o painel pulava para 1M.
+Um `claude -p --model opus` confirmou que o `init` traz só `claude-opus-5-5`, sem janela; o
+`contextWindow: 1000000` vem apenas no `result`. A janela aprendida agora fica em
+`~/.hangar/context-windows.json`, sem prazo: sobrevive à subida do servidor e a conta parada não a perde.
+Troca de plano se corrige no informe seguinte de qualquer sessão da conta. Resta a reserva de 200k só
+para a primeira sessão de um modelo numa conta que nunca informou.
+
 ## Retomada sem o plugin do Hangar
 
 09/10/2026, Claude Code 2.1.295. Uma conversa retomada pela tela de criação subiu com

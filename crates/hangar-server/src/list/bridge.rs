@@ -1286,9 +1286,10 @@ fn decorate_context(cache: &mut ContextCache, row: &mut SessionRow, pid: Option<
         };
         let account_dir = context::config_dir_of(row.conta.as_deref()).unwrap_or_else(|| dirs.claude.clone());
         let scan = cache.scan(&row.name, &jsonl, &version);
+        cache.keep_windows_at(dirs.home.join(".hangar/context-windows.json"));
         let reading = cache.reading(&ReadingInputs { jsonl: Path::new(&jsonl), account_dir: &account_dir,
             chosen: chosen.as_deref(), opened: opened.as_deref(), declared, engine: row.engine.is_some() }, &scan,
-            row.headless, std::time::Instant::now());
+            row.headless);
         cache.store_with(&row.name, &jsonl, mono, reading, version, Some(scan))
     } else {
         cache.cached(&row.name, &jsonl)

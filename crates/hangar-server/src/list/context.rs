@@ -206,12 +206,12 @@ pub fn window(used: u64, account_dir: &Path, model: Option<&str>, window_tokens:
 #[derive(Default)]
 pub struct ContextCache {
     entries: Capped<String, Entry>,
-    /// Janela que o Claude informou por conta e modelo respondido (sem a data), e desde quando.
-    windows: std::collections::HashMap<String, (u64, std::time::Instant)>,
+    /// Janela que o Claude informou por conta e modelo respondido (sem a data). Fica em disco e sem
+    /// prazo: o informe só chega no fim do turno, e a sessão nova não pode cair nos 200k porque o
+    /// servidor subiu ou a conta ficou parada. Troca de plano se corrige no informe seguinte.
+    windows: std::collections::HashMap<String, u64>,
+    windows_file: Option<PathBuf>,
 }
-
-/// Validade do aprendido: troca de plano na conta não pode deixar a janela antiga para sempre.
-pub const LEARNED_FOR: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
 
 struct Entry {
     at: f64,
@@ -243,7 +243,7 @@ impl ContextCache {
     /// Como `claude_reading_from`, aprendendo e aplicando a janela informada por modelo respondido.
     /// `declared_reported`: o `declared` veio do Claude (sidecar da sessão sem terminal), não do limite que o
     /// usuário pôs no ambiente.
-    pub fn reading(&mut self, inputs: &ReadingInputs, scan: &Scan, declared_reported: bool, now: std::time::Instant) -> Reading {
+    pub fn reading(&mut self, inputs: &ReadingInputs, scan: &Scan, declared_reported: bool) -> Reading {
         // Por conta: o plano dela decide a janela do mesmo modelo.
         let key = match scan {
             Some(Some((_, Some(m)))) => Some(format!("{}\n{}", inputs.account_dir.display(), DATED.replace(m, "").to_lowercase())),
@@ -255,14 +255,32 @@ impl ContextCache {
         let reported = if inputs.engine || variant { None } else {
             inputs.declared.filter(|w| declared_reported && *w > 0).or_else(|| measured(inputs.jsonl).map(|c| c.window))
         };
-        let fresh = |at: &std::time::Instant| now.saturating_duration_since(*at) < LEARNED_FOR;
-        // O mesmo valor de novo (desta sessão ou de outra) não renova: a validade conta de quando ele apareceu.
-        if let (Some(k), Some(w)) = (&key, reported) {
-            let same = self.windows.get(k).is_some_and(|(old, at)| *old == w && fresh(at));
-            if !same { self.windows.insert(k.clone(), (w, now)); }
+        if let (Some(k), Some(w)) = (&key, reported) && self.windows.get(k) != Some(&w) {
+            self.windows.insert(k.clone(), w);
+            self.save_windows();
         }
-        let learned = key.and_then(|k| self.windows.get(&k)).filter(|(_, at)| fresh(at)).map(|(w, _)| *w);
+        let learned = key.and_then(|k| self.windows.get(&k).copied());
         reading_with(inputs, scan, learned)
+    }
+
+    /// Arquivo da janela aprendida; lido na primeira vez, e o já aprendido nesta vida vence o lido.
+    pub fn keep_windows_at(&mut self, path: PathBuf) {
+        if self.windows_file.as_ref() == Some(&path) { return; }
+        if let Ok(raw) = std::fs::read(&path)
+            && let Ok(saved) = serde_json::from_slice::<std::collections::HashMap<String, u64>>(&raw) {
+            for (key, window) in saved { self.windows.entry(key).or_insert(window); }
+        }
+        self.windows_file = Some(path);
+    }
+
+    fn save_windows(&self) {
+        let Some(path) = &self.windows_file else { return };
+        let bytes = serde_json::to_vec(&self.windows).unwrap_or_default();
+        let saved = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| hangar_core::fs::atomic_write(path, &bytes));
+        if let Err(e) = saved {
+            super::facts::note("rust.list_context_windows_unwritable", "", format!("list_context_windows_unwritable:{:?}", e.kind()),
+                "janela aprendida não gravada; depois de o servidor subir a sessão nova volta a mostrar 200k");
+        }
     }
 
     /// `now` é relógio monotônico em segundos.
@@ -425,19 +443,26 @@ mod tests {
         let (old, new, other) = (answer("old.jsonl", "claude-opus-5-5", 50_000), answer("new.jsonl", "claude-opus-5-5", 186_979),
             answer("other.jsonl", "claude-sonnet-5-5", 1_000));
         let inputs = |jsonl, declared| ReadingInputs { jsonl, account_dir: tmp.path(), chosen: None, opened: None, declared, engine: false };
+        let file = tmp.path().join("hangar/context-windows.json");
         let mut cache = ContextCache::default();
-        let now = std::time::Instant::now();
+        cache.keep_windows_at(file.clone());
         // Sessão sem terminal que já terminou um turno: o sidecar guarda a janela do `result`.
-        cache.reading(&inputs(&old, Some(WINDOW_1M)), &scan_tail(&old), true, now);
-        let (ctx, _) = cache.reading(&inputs(&new, None), &scan_tail(&new), false, now);
+        cache.reading(&inputs(&old, Some(WINDOW_1M)), &scan_tail(&old), true);
+        let (ctx, _) = cache.reading(&inputs(&new, None), &scan_tail(&new), false);
         assert_eq!(ctx.map(|c| (c.used, c.window)), Some((186_979, WINDOW_1M)), "a nova, no meio do primeiro turno");
-        let (ctx, _) = cache.reading(&inputs(&other, None), &scan_tail(&other), false, now);
+        let (ctx, _) = cache.reading(&inputs(&other, None), &scan_tail(&other), false);
         assert_eq!(ctx.map(|c| c.window), Some(WINDOW_DEFAULT), "outro modelo não herda");
-        // A mesma sessão relida não renova a informação: a validade conta de quando ela foi dada.
-        cache.reading(&inputs(&old, Some(WINDOW_1M)), &scan_tail(&old), true, now + LEARNED_FOR / 2);
-        let later = now + LEARNED_FOR + std::time::Duration::from_secs(1);
-        let (ctx, _) = cache.reading(&inputs(&new, None), &scan_tail(&new), false, later);
-        assert_eq!(ctx.map(|c| c.window), Some(WINDOW_DEFAULT), "aprendido vence: plano trocado não fica para sempre");
+        // Servidor que subiu de novo: a sessão nova já nasce na janela informada antes.
+        let mut restarted = ContextCache::default();
+        restarted.keep_windows_at(file.clone());
+        let (ctx, _) = restarted.reading(&inputs(&new, None), &scan_tail(&new), false);
+        assert_eq!(ctx.map(|c| c.window), Some(WINDOW_1M), "o aprendido sobrevive à subida do servidor");
+        // Plano trocado: o informe seguinte substitui, também no arquivo.
+        restarted.reading(&inputs(&old, Some(WINDOW_DEFAULT)), &scan_tail(&old), true);
+        let mut again = ContextCache::default();
+        again.keep_windows_at(file);
+        let (ctx, _) = again.reading(&inputs(&new, None), &scan_tail(&new), false);
+        assert_eq!(ctx.map(|c| c.window), Some(WINDOW_DEFAULT), "o informe mais novo vence");
     }
 
     /// O limite que o usuário declara no ambiente (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`) é escolha dele para aquela
@@ -454,10 +479,9 @@ mod tests {
         let (limited, fresh) = (answer("limited.jsonl", 50_000), answer("fresh.jsonl", 60_000));
         let inputs = |jsonl, declared| ReadingInputs { jsonl, account_dir: tmp.path(), chosen: None, opened: None, declared, engine: false };
         let mut cache = ContextCache::default();
-        let now = std::time::Instant::now();
-        let (ctx, _) = cache.reading(&inputs(&limited, Some(500_000)), &scan_tail(&limited), false, now);
+        let (ctx, _) = cache.reading(&inputs(&limited, Some(500_000)), &scan_tail(&limited), false);
         assert_eq!(ctx.map(|c| c.window), Some(500_000), "a própria sessão segue o que declarou");
-        let (ctx, _) = cache.reading(&inputs(&fresh, None), &scan_tail(&fresh), false, now);
+        let (ctx, _) = cache.reading(&inputs(&fresh, None), &scan_tail(&fresh), false);
         assert_eq!(ctx.map(|c| c.window), Some(WINDOW_DEFAULT), "a outra não herda o limite declarado");
     }
 
