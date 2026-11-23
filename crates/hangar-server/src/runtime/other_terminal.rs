@@ -6,6 +6,8 @@ mod dispatch;
 pub(in crate::runtime) use dispatch::send_opening;
 mod deferred_episode;
 pub mod drive;
+#[cfg(test)]
+mod drive_agy_tests;
 mod native;
 mod observe;
 pub(in crate::runtime) mod storage;
