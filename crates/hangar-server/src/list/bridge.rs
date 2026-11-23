@@ -449,6 +449,17 @@ impl ListBridge {
             .await.map_err(|e| joined(e, "pane do agente interrompido"))
     }
 
+    /// Os pids das sessões e os que a parada de servidor nunca sinaliza (`ports::of_session`), pela
+    /// descoberta compartilhada e pelas chaves da lista publicada; `None` = a sessão não está na lista.
+    pub(crate) async fn port_stop_pids(&self, name: &str) -> Result<Option<super::ports::StopFacts>, ListError> {
+        let (rows, agent_pids, panes, children) = self.discovery(None).await?;
+        if !rows.iter().any(|row| row.name == name) { return Ok(None); }
+        let keys = super::ports::session_keys(&self.snapshot().await?.rows);
+        let (dirs, name) = (self.dirs()?, name.to_owned());
+        tokio::task::spawn_blocking(move || Some(super::ports::of_session(&rows, &panes, &agent_pids, &children, &dirs, keys, &name)))
+            .await.map_err(|e| joined(e, "pids da sessão interrompidos"))
+    }
+
     /// Mudança de membro ou de modo: a próxima pergunta não serve a lista de antes.
     pub fn invalidate(&self) { self.epoch.fetch_add(1, Ordering::SeqCst); }
 
@@ -788,10 +799,13 @@ impl ListBridge {
         // Classificação e decoração leem arquivo (marcador, transcript, plano) e esperam captura:
         // fora da thread do runtime, que atende todas as conexões.
         let (inp, published) = (inputs.clone(), self.published.clone());
+        let (round_panes, round_children) = (panes.clone(), children.clone());
         let (rows, effects, git_dirs, pre) = tokio::task::spawn_blocking(move || {
             let config_dirs = caches.config_dirs(&dirs);
             let alive = |pid: i64| pid_alive(&*env.procs, pid);
             let io = MuxCapture::new(env.capture_program.clone(), CAPTURE_TIMEOUT, inp.targets.clone());
+            // Antes do `pre`: a rodada parcial reclassifica a partir dele e não pode perder as portas.
+            super::ports::fill(&mut rows, &round_panes, &inp.agent_pids, &round_children, &dirs);
             let pre: Vec<SessionRow> = if keep { rows.iter().filter(|r| r.provider == "claude").cloned().collect() } else { Vec::new() };
             let (stall, wall) = (inp.facts.stall_seconds, io.wall());
             for row in rows.iter_mut().filter(|r| r.provider == "codex") {
@@ -1293,9 +1307,10 @@ fn decorate_context(cache: &mut ContextCache, row: &mut SessionRow, pid: Option<
         };
         let account_dir = context::config_dir_of(row.conta.as_deref()).unwrap_or_else(|| dirs.claude.clone());
         let scan = cache.scan(&row.name, &jsonl, &version);
+        cache.keep_windows_at(dirs.home.join(".hangar/context-windows.json"));
         let reading = cache.reading(&ReadingInputs { jsonl: Path::new(&jsonl), account_dir: &account_dir,
             chosen: chosen.as_deref(), opened: opened.as_deref(), declared, engine: row.engine.is_some() }, &scan,
-            row.headless, std::time::Instant::now());
+            row.headless);
         cache.store_with(&row.name, &jsonl, mono, reading, version, Some(scan))
     } else {
         cache.cached(&row.name, &jsonl)

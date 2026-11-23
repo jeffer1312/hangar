@@ -248,8 +248,17 @@ function sidecarDa(nome) {
   erro(`"${nome}" existe em mais de um servidor — use a chave completa:\n` + achados.map((s) => `  ${s.chave}`).join('\n'));
 }
 
-// Com --cdp não há chave: a página é escolhida pelo endereço e pelo --alvo.
-const chaveAlvo = () => (externo ? null : sidecarDa(nomeSessao()).chave);
+// Sem app desktop nesta máquina, os verbos vão pelo servidor ao app de quem usa a sessão (canal anfitrião).
+// Lido uma vez: o app que abre no meio do comando não rouba um `batch` em curso.
+const remote = !externo && !localApp();
+
+// Com --cdp não há chave: a página é escolhida pelo endereço e pelo --alvo. Sem app local, o servidor acha o
+// navegador pelo nome da sessão.
+function chaveAlvo() {
+  if (externo) return null;
+  if (!remote) return sidecarDa(nomeSessao()).chave;
+  return nomeSessao() || erro('não deu para identificar esta sessão — use --sessao <nome>');
+}
 
 // --- CDP mínimo, só pro liveness check do `list` ---
 async function targets() {
@@ -286,11 +295,74 @@ function srv(sair = erro) {
   return dados;
 }
 
+// "Sem app" é só arquivo ausente: os apps o apagam ao fechar. Pid morto com o arquivo presente é o app daqui
+// reiniciando ou caído, e a recusa local diz isso; corrompido ou ilegível mandaria o comando, calado, para outra máquina.
+function localApp() {
+  const arquivo = join(DIR, '_srv.json');
+  try {
+    JSON.parse(readFileSync(arquivo, 'utf8'));
+    return true;
+  } catch (err) {
+    if (err.code === 'ENOENT') return false;
+    return erro(`não deu para ler ${arquivo} (${err.message}): feche e reabra o app desktop`);
+  }
+}
+
+const BACKEND = `http://127.0.0.1:${process.env.PORT || 8765}`;
+
+// Token do `~/.hangar/config/.env` ou, sem ele, do backend/.env ao lado do script, mesmo padrão do hangar-send.
+// Lido uma vez: um `batch` chama o servidor a cada linha.
+let ownerTokenCache;
+function ownerToken() {
+  if (ownerTokenCache) return ownerTokenCache;
+  const repo = join(dirname(realpathSync(process.argv[1])), '..');
+  const novo = join(homedir(), '.hangar', 'config', '.env');
+  let token = '';
+  try {
+    token = readFileSync(existsSync(novo) ? novo : join(repo, 'backend', '.env'), 'utf8').match(/^CP_AUTH_TOKEN=(.+)$/m)?.[1]?.trim() ?? '';
+  } catch { /* sem .env */ }
+  if (!token) erro('não achei CP_AUTH_TOKEN no ~/.hangar/config/.env nem no backend/.env do repo');
+  return (ownerTokenCache = token);
+}
+
+// O prazo que o servidor espera o app; o `open` espera o navegador ficar pronto, o `login` espera a pessoa.
+const deadlineFor = (verbo) => (verbo === 'login' ? 110_000 : verbo === 'open' ? PRONTO_MS : 45_000);
+
+// O verbo pelo servidor desta máquina (`browser-cmd`), que o repassa ao app desktop com a sessão aberta.
+// Uma linha no stderr por comando: quem lê sabe que o navegador não é o desta máquina.
+let warnedRemote = false;
+async function callServer(nome, verbo, cmdArgs, aba = flags.aba, sair = erro) {
+  if (!warnedRemote) {
+    warnedRemote = true;
+    process.stderr.write('sem app local nesta máquina; usando o navegador do app desktop de outra máquina\n');
+  }
+  const prazo = deadlineFor(verbo);
+  let r, texto;
+  try {
+    r = await fetch(`${BACKEND}/api/sessions/${encodeURIComponent(nome)}/browser-cmd`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken()}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verbo, args: cmdArgs, ...(aba != null ? { aba } : {}), deadline_ms: prazo }),
+      signal: AbortSignal.timeout(prazo + 15_000),
+    });
+    texto = await r.text();
+  } catch (err) {
+    return sair(`o servidor do Hangar desta máquina não respondeu (${err.cause?.code || err.cause?.message || err.message})`);
+  }
+  if (r.ok) return { texto, codigo: texto.startsWith('erro:') ? 1 : 0 };
+  let detalhe = {};
+  try { detalhe = JSON.parse(texto).detail ?? {}; } catch { /* corpo sem JSON */ }
+  if (r.status === 409 && detalhe.code === 'browser_host_none') return sair('nenhum app do Hangar com esta sessão aberta: abra a sessão no app desktop e repita');
+  if (r.status === 403 && detalhe.code === 'browser_host_not_allowed') return sair('o app desktop recusou usar o navegador dele');
+  return sair(detalhe.msg ? semToken(detalhe.msg) : `o servidor recusou: ${r.status} ${semToken(texto)}`);
+}
+
 // Para quem não pode encerrar o processo (as leituras depois do laço): a falha vira exceção.
 const lancar = (msg) => { throw new Error(msg); };
 
 // `aba` explícito (o batch manda por linha) vence o flag global.
 async function chamar(chave, verbo, cmdArgs, aba = flags.aba, sair = erro) {
+  if (remote) return callServer(chave, verbo, cmdArgs, aba, sair);
   const { porta, token } = srv(sair);
   let r, texto;
   try {
@@ -302,6 +374,9 @@ async function chamar(chave, verbo, cmdArgs, aba = flags.aba, sair = erro) {
     });
     texto = await r.text();
   } catch (err) {
+    // Porta recusada com o app de fato fora (sem `_srv.json`): o pedido não chegou a lugar nenhum e vai pelo
+    // servidor. Com o arquivo presente é o app daqui reiniciando: nunca vai para outra máquina.
+    if (!externo && err.cause?.code === 'ECONNREFUSED' && !localApp()) return callServer(String(chave).split('::').pop(), verbo, cmdArgs, aba, sair);
     // App fechado ou reiniciado (a atualização reinicia) no meio do comando: frase, não a pilha do Node.
     if (externo) return sair(`o app desktop fechou ou reiniciou no meio do comando (${err.cause?.code || err.cause?.message || err.message}). Espere ele voltar e repita`);
     const reabrir = urlAberta ? `hangar-preview open '${semToken(urlAberta)}'` : 'hangar-preview open <url>';
@@ -327,17 +402,20 @@ if (cmd === 'open') {
   if (!url) erro('open precisa de uma url: hangar-preview open localhost:3000');
   const nome = nomeSessao();
   if (!nome) erro('não deu para identificar esta sessão — use --sessao <nome>');
-  const repo = join(dirname(realpathSync(process.argv[1])), '..');
-  const novo = join(homedir(), '.hangar', 'config', '.env');
-  let token = '';
-  try {
-    token = readFileSync(existsSync(novo) ? novo : join(repo, 'backend', '.env'), 'utf8').match(/^CP_AUTH_TOKEN=(.+)$/m)?.[1]?.trim() ?? '';
-  } catch { /* sem .env */ }
-  if (!token) erro('não achei CP_AUTH_TOKEN no ~/.hangar/config/.env nem no backend/.env do repo');
+  if (remote) {
+    // O app de quem usa a sessão só responde com o navegador pronto: a espera é a resposta do servidor.
+    const { texto, codigo } = await callServer(nome, 'open', [url]);
+    if (codigo !== 0) erro(semToken(texto.replace(/^erro: /, '')));
+    let pronta = texto.replace(/^ok: /, '');
+    try { pronta = JSON.parse(pronta); } catch { /* já é texto cru */ }
+    console.log(`ok: navegador de "${nome}" pronto em ${semToken(pronta)} (no app desktop de quem usa a sessão, em outra máquina)`);
+    process.exit(0);
+  }
+  const token = ownerToken();
   const desde = Date.now();
   const doNome = (s) => s.chave === nome || s.chave.endsWith(`::${nome}`);
   const antes = lerSidecars().find(doNome)?.url ?? null;
-  const res = await fetch(`http://127.0.0.1:${process.env.PORT || 8765}/api/sessions/${encodeURIComponent(nome)}/nav`, {
+  const res = await fetch(`${BACKEND}/api/sessions/${encodeURIComponent(nome)}/nav`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ url }),
@@ -377,6 +455,16 @@ if (cmd === 'open') {
     await new Promise((r) => setTimeout(r, 150));
   }
   erro(`o navegador de "${nome}" nao ficou pronto em ${PRONTO_MS / 1000}s${ultimo ? ` (${semToken(ultimo)})` : ''}. O app desktop está aberto nesta máquina? Veja com: hangar-preview list`);
+}
+
+if (cmd === 'list' && remote) {
+  // Os navegadores emprestados pelo app de outra máquina: quem guarda o estado deles é o servidor.
+  console.log(semToken((await callServer(nomeSessao() || 'list', 'list', [])).texto));
+  process.exit(0);
+}
+
+if (remote && (cmd === 'objetivo' || cmd === 'confere')) {
+  erro(`${cmd} não funciona no navegador de outra máquina (browser_host_verb_unsupported): use os verbos um a um`);
 }
 
 if (cmd === 'list') {

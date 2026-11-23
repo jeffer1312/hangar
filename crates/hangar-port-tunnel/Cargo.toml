@@ -1,0 +1,15 @@
+[package]
+name = "hangar-port-tunnel"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "time", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio-tungstenite.workspace = true

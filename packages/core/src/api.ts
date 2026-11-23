@@ -4476,6 +4476,12 @@ export function stopTask(name: string, taskId: string, server?: Server | null): 
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/tasks/${encodeURIComponent(taskId)}/stop`, { method: 'POST' });
 }
 
+/** Para o servidor que escuta na porta da sessão; o servidor relê quem a segura. Recusas pelo `code`:
+ * `port_stop_not_found`, `port_stop_shared_group`, `port_stop_unsupported`. */
+export function stopPortServer(name: string, port: number, server?: Server | null): Promise<{ ok: boolean; result: 'gone' | 'terminated' | 'killed' }> {
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/ports/${port}/stop`, { method: 'POST' });
+}
+
 export function implementCodexPlan(name: string, server?: Server | null): Promise<void> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/plan/implement`, {
     method: 'POST',

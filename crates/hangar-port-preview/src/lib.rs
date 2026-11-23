@@ -13,6 +13,9 @@ use hangar_core::{
 const SLOT: u16 = 10000;
 
 pub async fn start(commands: &dyn Commands, port: u16) -> Response {
+    if hangar_core::net::answers_not_http(port).await {
+        return hangar_core::http::detail(StatusCode::UNPROCESSABLE_ENTITY, hangar_core::net::PORT_NOT_HTTP, "essa porta não responde como página", json!({}));
+    }
     let output = match call(commands, &["status", "--json"]).await {
         Ok(output) => output,
         Err(response) => return response,

@@ -129,6 +129,9 @@ pub struct Browser {
     crashed: RefCell<HashSet<String>>,
     /// Aperto de mão do processo que nasceu sem travar a interface; `None` quando já respondeu.
     ready: RefCell<Option<Ready>>,
+    /// Porta do SOCKS de um servidor remoto → contexto com esse proxy, um só para todas as sessões dele: os cookies de
+    /// `localhost` de lá não se misturam com os daqui. Vivem enquanto o processo vive.
+    proxied: RefCell<HashMap<u16, Shared<LocalBoxFuture<'static, Result<String, String>>>>>,
     _drain: RefCell<Option<Task<()>>>,
 }
 
@@ -231,7 +234,7 @@ impl Browser {
         let browser = Rc::new(Browser {
             wire, scale, handlers: RefCell::default(), watchers: RefCell::default(),
             initial: RefCell::default(), owned: RefCell::default(), crashed: RefCell::default(), ready: RefCell::new(None),
-            _drain: RefCell::new(None),
+            proxied: RefCell::default(), _drain: RefCell::new(None),
         });
         let weak = Rc::downgrade(&browser);
         *browser._drain.borrow_mut() = Some(executor.spawn(async move {
@@ -247,6 +250,22 @@ impl Browser {
     pub fn alive(&self) -> bool { self.wire.alive() }
 
     pub fn scale(&self) -> u32 { self.scale }
+
+    /// O contexto com o SOCKS em `port` e o `bypass` daquele listener (cada porta é de um modo só). Aberturas
+    /// simultâneas esperam a mesma criação; a que falhou sai do mapa para a próxima tentar de novo.
+    pub fn proxied_context(self: &Rc<Self>, port: u16, bypass: &'static str) -> impl Future<Output = Result<String, String>> + use<> {
+        let shared = self.proxied.borrow_mut().entry(port).or_insert_with(|| {
+            let call = self.call(None, "Target.createBrowserContext",
+                json!({"proxyServer": format!("socks5://127.0.0.1:{port}"), "proxyBypassList": bypass}));
+            let weak = Rc::downgrade(self);
+            async move {
+                let created = call.await.and_then(|r| r["browserContextId"].as_str().map(str::to_owned).ok_or_else(|| "createBrowserContext sem id".into()));
+                if created.is_err() && let Some(browser) = weak.upgrade() { browser.proxied.borrow_mut().remove(&port); }
+                created
+            }.boxed_local().shared()
+        }).clone();
+        shared
+    }
 
     /// Este Chromium não serve mais (morreu no meio de uma abertura, não consegue criar página): sai já de cena, para o
     /// próximo pedido subir outro no mesmo perfil sem dois processos nele.
@@ -547,7 +566,7 @@ impl Session {
         let browser = Rc::new(Browser {
             wire, scale: 1, handlers: RefCell::default(), watchers: RefCell::default(),
             initial: RefCell::default(), owned: RefCell::default(), crashed: RefCell::default(),
-            ready: RefCell::default(), _drain: RefCell::default(),
+            ready: RefCell::default(), proxied: RefCell::default(), _drain: RefCell::default(),
         });
         (Rc::new(Self { browser, id: id.into(), viewport: Viewport::default() }), reader)
     }

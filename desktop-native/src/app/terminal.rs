@@ -215,8 +215,8 @@ impl Panel {
 
 fn socket_error(error: ws::Error) -> String {
     match error {
-        ws::Error::Http(404) => tr("term_missing"),
-        ws::Error::Http(401 | 403) => tr("term_denied"),
+        ws::Error::Http(404, _) => tr("term_missing"),
+        ws::Error::Http(401 | 403, _) => tr("term_denied"),
         _ => tr("term_disconnected"),
     }
 }

@@ -82,6 +82,7 @@ pub fn list_sig<'a>(rows: impl IntoIterator<Item = &'a SessionRow>) -> String {
             if let (Value::Array(items), true) = (&mut sig, i.hidden_from_list) { items.push(json!({"hidden_from_list": true})); }
             if let (Value::Array(items), true) = (&mut sig, i.asleep) { items.push(json!({"asleep": true, "wake": i.wake_surface})); }
             if let (Value::Array(items), Some(handoff)) = (&mut sig, i.handoff.as_ref()) { items.push(json!({"handoff": handoff})); }
+            if let (Value::Array(items), false) = (&mut sig, i.ports.is_empty()) { items.push(json!({"ports": i.ports})); }
             sig
         })
         .collect();
@@ -206,6 +207,19 @@ mod tests {
         let row: SessionRow = serde_json::from_value(json!({"name": "s", "pair_peers": ["a", "é"], "pair_gid": "g",
             "pair_task": "T", "pair_external": {"alias": "x", "owner": "o", "session": "s"}})).unwrap();
         assert!(list_sig([&row]).ends_with(r#"["a", "é"], "g", "T", {"alias": "x", "owner": "o", "session": "s"}]]"#));
+    }
+
+    /// Servidor que sobe ou cai na sessão republica a linha; sem portas, a cauda do Python fica igual.
+    #[test]
+    fn only_the_ports_changing_changes_the_sig() {
+        let mut row: SessionRow = serde_json::from_value(json!({"name": "s", "pair_peers": ["a"], "pair_gid": "g", "pair_task": "T"})).unwrap();
+        let none = list_sig([&row]);
+        assert!(none.ends_with(r#"["a"], "g", "T", null]]"#));
+        row.ports = vec![hangar_api::session::PortEntry { port: 8123, process: "python3".into(), pid: 7, shared: false }];
+        let one = list_sig([&row]);
+        assert_ne!(none, one);
+        row.ports[0].port = 8124;
+        assert_ne!(one, list_sig([&row]));
     }
 
     /// O "Liberar" só muda o nível do par: a lista tem de sair de novo.

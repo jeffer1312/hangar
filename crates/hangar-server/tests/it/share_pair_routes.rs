@@ -927,7 +927,7 @@ async fn owner_exit_tells_the_other_side_and_cleans_without_python() {
     let e = env().await;
     let (id, _) = e.seed_pair("s0", "pc-ana", "Y", &e.other_base);
     e.group("s0", &["pc-ana::Y"]);
-    let (ex, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s0").await.unwrap();
+    let (ex, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s0", "test").await.unwrap();
     assert_eq!((ex, warnings), (vec!["pc-ana::Y".to_owned()], vec![]));
     let call = &e.other.calls()[0];
     assert_eq!((&call["method"], &call["path"], &call["query"], &call["auth"]),
@@ -941,7 +941,7 @@ async fn exit_with_ambiguous_alias_skips_the_notice_but_cleans() {
     let (id, _) = e.seed_pair("s0", "pc-ana", "Y", &e.other_base);
     e.group("s0", &["pc-ana::Y"]);
     std::fs::write(e.root.join("peers.json"), json!({"pc-ana": {"base_url": e.other_base, "token": "t"}}).to_string()).unwrap();
-    let (_, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s0").await.unwrap();
+    let (_, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s0", "test").await.unwrap();
     assert_eq!(warnings, vec![json!({"sessao": "pc-ana::Y", "erro": {"code": "erro_par_endereco_ambiguo",
         "params": {"peer": "pc-ana::Y"}, "msg": "'pc-ana' é ao mesmo tempo máquina tua e par externo"}})]);
     assert!(e.other.calls().is_empty(), "nem o par nem a máquina são chamados");
@@ -955,7 +955,7 @@ async fn exit_that_cannot_clean_warns_instead_of_hiding() {
         e.seed_pair("s0", "pc-ana", "Y", &e.other_base);
         e.group("s0", &["pc-ana::Y"]);
         e.break_file(&if broken == "pairs" { e.pairs_file() } else { e.root.join("shares.json") });
-        let (_, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s0").await.unwrap();
+        let (_, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s0", "test").await.unwrap();
         let got: Vec<(Value, Value, Value)> = warnings.iter().map(|w| (w["sessao"].clone(), w["erro"]["code"].clone(), w["erro"]["params"].clone())).collect();
         assert_eq!(got, vec![(json!("pc-ana::Y"), json!("erro_par_limpeza_falhou"), json!({"peer": "pc-ana::Y"}))], "{broken}");
     }
@@ -967,7 +967,7 @@ async fn exit_whose_notice_fails_warns_and_still_cleans() {
     let (id, _) = e.seed_pair("s0", "pc-ana", "Y", &e.other_base);
     e.group("s0", &["pc-ana::Y"]);
     e.other.reply("DELETE /api/pair", 500, json!({"detail": "fora"}));
-    let (_, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s0").await.unwrap();
+    let (_, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s0", "test").await.unwrap();
     assert_eq!(warnings[0]["erro"]["code"], "erro_peer_nao_avisado");
     assert!(warnings[0]["erro"]["msg"].as_str().unwrap().starts_with("resposta da outra máquina: "));
     assert!(e.share.pairs.all().is_empty() && e.revoked(&id));
@@ -975,7 +975,7 @@ async fn exit_whose_notice_fails_warns_and_still_cleans() {
     let (id2, _) = e.seed_pair("s1", "pc-bia", "W", &e.other_base);
     e.group("s1", &["pc-bia::W"]);
     e.other.reply("DELETE /api/pair", 410, json!({"detail": "x"}));
-    let (_, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s1").await.unwrap();
+    let (_, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s1", "test").await.unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(e.revoked(&id2));
 }
@@ -1130,7 +1130,7 @@ async fn other_member_leaving_a_mixed_group_never_calls_unpair_remote() {
     let (id, _) = e.seed_pair("s0", "pc-ana", "Y", &e.other_base);
     e.group("s0", &["s2", "pc-ana::Y"]);
     e.group("s2", &["s0", "pc-ana::Y"]);
-    let (ex, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s2").await.unwrap();
+    let (ex, warnings) = leave_and_notify(&e.app, e.app.groups.as_ref().unwrap(), "s2", "test").await.unwrap();
     assert_eq!((ex, warnings), (vec!["s0".to_owned(), "pc-ana::Y".to_owned()], vec![]));
     assert!(e.other.calls().is_empty());
     assert!(e.share.pairs.by_address("pc-ana::Y").is_some() && !e.revoked(&id));

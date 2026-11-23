@@ -131,6 +131,9 @@ mod keyboard;
 mod session_numbers;
 mod session_picker;
 mod side;
+mod ports_panel;
+#[cfg(not(target_os = "macos"))]
+mod browser_host;
 mod terminal;
 mod sidebar;
 mod machines_tray;
@@ -148,6 +151,7 @@ mod find;
 mod costs;
 mod mission;
 pub(crate) use mission::ticket_card_view;
+pub(crate) use ports_panel::{port_actions, port_buttons, port_note, port_row_view};
 pub(crate) use activity::{side_tab_button, side_tab_slot};
 pub(crate) use work_review::{choice_button as review_choice_button, decision_card as review_decision_card, decision_frame_width as review_frame_width,
     decision_nav as review_decision_nav, decision_nav_row as review_decision_nav_row, frames_row as review_frames_row, render_band as review_band,
@@ -968,6 +972,9 @@ pub struct Hangar {
     full_images: viewer::FullImages,
     stats: Option<Stats>,
     side: side::Side,
+    ports: ports_panel::Ports,
+    #[cfg(not(target_os = "macos"))]
+    browser_hosts: browser_host::Hosts,
     controls: controls::Controls,
     // Página de configurações aberta por cima da janela inteira; `None` é a janela da conversa.
     settings: Option<settings::Page>,
@@ -1319,11 +1326,15 @@ impl Hangar {
         {
             let (requests, received) = async_channel::unbounded::<crate::browser::server::Request>();
             match crate::browser::server::start(&runtime, requests) {
-                Ok(_) => cx.spawn_in(window, async move |this, cx| {
-                    while let Ok(request) = received.recv().await {
-                        if this.update_in(cx, |this, window, cx| this.dispatch_preview(request, window, cx)).is_err() { break; }
-                    }
-                }).detach(),
+                Ok(_) => {
+                    // Registro que sobra de app fechado parece app reiniciando, e o agente nunca vai ao de outra máquina.
+                    App::on_app_quit(cx, |_| { crate::browser::server::forget_own(); async {} }).detach();
+                    cx.spawn_in(window, async move |this, cx| {
+                        while let Ok(request) = received.recv().await {
+                            if this.update_in(cx, |this, window, cx| this.dispatch_preview(request, window, cx)).is_err() { break; }
+                        }
+                    }).detach()
+                }
                 Err(e) => eprintln!("[nav] servidor do hangar-preview nao subiu: {e}"),
             }
         }
@@ -1371,7 +1382,10 @@ impl Hangar {
             suggest_pick: 0, new_chat_commands_seen: None, slash_open: false, suggest_dismissed: None, command_panel: false, context_card: false, command_search, confirm: None, confirm_no_ask: false,
             mention: Default::default(),
             terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_presentations: HashMap::new(), linked_children_open: HashSet::new(), plugin_body_scrolls: HashMap::new(), plugin_question_focus: cx.focus_handle(), plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), media_fetches: Arc::new(tokio::sync::Semaphore::new(6)), display_scale: 1., media_reveal: HashMap::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
-            side: side::Side::default(), controls: controls::Controls::default(),
+            side: side::Side::default(), ports: Default::default(),
+            #[cfg(not(target_os = "macos"))]
+            browser_hosts: Default::default(),
+            controls: controls::Controls::default(),
             settings: None, settings_ui, tab_focus: HashMap::new(), tabs_scroll: ScrollHandle::new(), pending_tab_reveal: None, tab_group_open: None, tab_reveal_scheduled: false,
             tab_preview: None, tab_hover: None, tab_hover_epoch: 0, tab_hover_moved: Instant::now(), tab_preview_seq: 0, tab_preview_parked: None, in_tab_preview: false,
             tab_preview_wallpaper: None, tab_preview_wallpaper_loading: false,

@@ -627,6 +627,10 @@ async fn simultaneous_start_leaves_one_of_each() {
     first.unwrap();
     second.unwrap();
     until("os dois não subiram", || supervisor.status().enabled).await;
+    // Logo depois do login o `frpc` falso ainda faz o `exec sleep`, e no meio dele o `cmdline` vem vazio:
+    // o shell vivo antes do `exec` não basta.
+    let slept = || hangar_server::runtime::process::argv(pid_of(dir, "frpc")).is_some_and(|argv| argv.first().is_some_and(|c| c == "sleep"));
+    until("o frpc não terminou o exec", slept).await;
     let text = std::fs::read_to_string(&births).unwrap();
     let living: Vec<u32> = text.lines().map(|line| line.parse().unwrap()).filter(|pid| alive(*pid)).collect();
     assert_eq!(living, vec![pid_of(dir, "frpc")], "{text}");
@@ -969,9 +973,11 @@ async fn children_die_with_the_server() {
         .args(["--exact", "connect_supervisor::server_process_for_children_die", "--ignored", "--nocapture"])
         .env(SERVER_ENV, dir).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .spawn().unwrap();
-    until("os filhos não nasceram", || has_pid(dir, "frpc") && has_pid(dir, "caddy")).await;
+    // O pid sai quando o `spawn` volta, e o `exec` ainda pode estar no meio: até ele terminar o
+    // `cmdline` do filho vem vazio.
+    let up = |name| read_pid(dir, name).is_some_and(alive);
+    until("os filhos não nasceram", || up("frpc") && up("caddy")).await;
     let (frpc, caddy) = (pid_of(dir, "frpc"), pid_of(dir, "caddy"));
-    assert!(alive(frpc) && alive(caddy));
 
     server.kill().unwrap();
     server.wait().unwrap();

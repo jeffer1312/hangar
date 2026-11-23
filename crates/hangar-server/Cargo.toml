@@ -57,6 +57,7 @@ hangar-cliproxy-setup.workspace = true
 hangar-whatsapp.workspace = true
 hangar-projects.workspace = true
 hangar-auth = { path = "../hangar-auth" }
+hangar-browser-host = { path = "../hangar-browser-host" }
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
 # alloc (aqui, no serde e o signal do tokio): as features que o resto do workspace pede. Sem elas,
 # `cargo test -p hangar-server` e `cargo test --workspace` compilam o servidor com features diferentes
@@ -89,6 +90,9 @@ hangar-boot.workspace = true
 hangar-opencode-cookie.workspace = true
 hangar-deploy.workspace = true
 hangar-port-preview.workspace = true
+hangar-port-tunnel.workspace = true
+hangar-session-ports.workspace = true
+hangar-port-stop.workspace = true
 hangar-connect.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }

@@ -99,7 +99,7 @@ pub(super) async fn unpair_remote(State(st): State<Arc<AppState>>, ConnectInfo(p
             Err(super::federation::Refusal(status, detail)) => asked.reply(status, detail),
         };
     }
-    let ex = match asked.groups.leave(&name).await { Ok(ex) => ex, Err(error) => return asked.store_failed(&error) };
+    let ex = match asked.groups.leave(&name, "unpair_remote").await { Ok(ex) => ex, Err(error) => return asked.store_failed(&error) };
     drop(held);
     let mut warning = Value::Null;
     if !ex.is_empty() {

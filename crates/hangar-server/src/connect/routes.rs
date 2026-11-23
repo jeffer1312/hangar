@@ -251,6 +251,9 @@ async fn open_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
     if st.connect_previews.refused(body.port) {
         return preview_port_refused(&headers);
     }
+    if hangar_core::net::answers_not_http(body.port).await {
+        return error(&headers, StatusCode::UNPROCESSABLE_ENTITY, hangar_core::net::PORT_NOT_HTTP, "essa porta não responde como página");
+    }
     // Tarefa própria: quem vem pelo Connect perde a conexão na troca dos filhos, e o pedido cancelado os deixaria parados.
     let supervisor = st.connect_supervisor.clone();
     let (host, unconfirmed) = match tokio::spawn(async move { supervisor.publish_preview().await }).await {
