@@ -208,11 +208,26 @@ pub struct ContextCache {
     entries: Capped<String, Entry>,
     /// Janela que o Claude informou por conta e modelo respondido (sem a data). Fica em disco e sem
     /// prazo: o informe só chega no fim do turno, e a sessão nova não pode cair nos 200k porque o
-    /// servidor subiu ou a conta ficou parada. Troca de plano se corrige no informe seguinte.
-    windows: std::collections::HashMap<String, u64>,
-    /// Aprendido que ainda não chegou ao disco. Só ele é gravado: o resto do mapa pode ser mais velho que o arquivo.
-    unsaved: std::collections::HashMap<String, u64>,
+    /// servidor subiu ou a conta ficou parada. Vence o informe da conversa mexida por último, para a
+    /// sessão parada de antes de uma troca de plano não desfazer o que a nova ensinou.
+    windows: std::collections::HashMap<String, Learned>,
+    /// Aprendido que ainda não chegou ao disco.
+    unsaved: std::collections::HashSet<String>,
     windows_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+struct Learned {
+    window: u64,
+    /// Hora (ms) em que a conversa que informou foi mexida.
+    at: u64,
+}
+
+fn learn(map: &mut std::collections::HashMap<String, Learned>, key: String, new: Learned) -> bool {
+    match map.get(&key) {
+        Some(old) if old.at > new.at || *old == new => false,
+        _ => { map.insert(key, new); true }
+    }
 }
 
 struct Entry {
@@ -254,38 +269,47 @@ impl ContextCache {
         // Só janela que o Claude informou ensina; a deduzida aqui se perpetuaria. Motor declara a
         // janela dele, que não vale para o mesmo id na conta Anthropic; `[1m]` pedido é variante, não o padrão.
         let variant = [inputs.chosen, inputs.opened].into_iter().flatten().any(|m| m.to_lowercase().ends_with("[1m]"));
-        let reported = if inputs.engine || variant { None } else {
-            inputs.declared.filter(|w| declared_reported && *w > 0).or_else(|| measured(inputs.jsonl).map(|c| c.window))
+        // Limite posto no ambiente vale só para a sessão: nem a medida dela ensina.
+        let limited = inputs.declared.is_some() && !declared_reported;
+        let reported = if inputs.engine || variant || limited { None } else {
+            inputs.declared.filter(|w| *w > 0).or_else(|| measured(inputs.jsonl).map(|c| c.window))
         };
-        if let (Some(k), Some(w)) = (&key, reported) && self.windows.get(k) != Some(&w) {
-            self.windows.insert(k.clone(), w);
-            self.unsaved.insert(k.clone(), w);
+        if let (Some(k), Some(window)) = (&key, reported) {
+            let at = std::fs::metadata(inputs.jsonl).and_then(|m| m.modified()).ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
+            let changed = self.windows.get(k).map(|l| l.window) != Some(window);
+            if learn(&mut self.windows, k.clone(), Learned { window, at }) && changed { self.unsaved.insert(k.clone()); }
         }
         if !self.unsaved.is_empty() { self.save_windows(); }
-        let learned = key.and_then(|k| self.windows.get(&k).copied());
+        let learned = key.and_then(|k| self.windows.get(&k).map(|l| l.window));
         reading_with(inputs, scan, learned)
     }
 
-    /// Arquivo da janela aprendida; lido na primeira vez, e o já aprendido nesta vida vence o lido.
+    /// Arquivo da janela aprendida; lido na primeira vez, e o informe mais novo vence entre o lido e a memória.
     pub fn keep_windows_at(&mut self, path: PathBuf) {
         if self.windows_file.as_ref() == Some(&path) { return; }
         // Sem marcar o arquivo: gravar agora apagaria o que ele guarda; o próximo tique relê.
         let Some(saved) = read_windows(&path) else { return };
-        for (key, window) in saved { self.windows.entry(key).or_insert(window); }
+        for (key, learned) in saved { learn(&mut self.windows, key, learned); }
         self.windows_file = Some(path);
     }
 
-    /// Relê antes de gravar: na atualização o servidor velho e o novo gravam o mesmo arquivo.
+    /// Lê, junta e grava sob trava: na atualização o servidor velho e o novo gravam o mesmo arquivo.
     fn save_windows(&mut self) {
-        let Some(path) = &self.windows_file else { return };
-        let Some(mut merged) = read_windows(path) else { return };
-        merged.extend(self.unsaved.iter().map(|(k, w)| (k.clone(), *w)));
-        let saved = serde_json::to_vec(&merged).map_err(std::io::Error::from).and_then(|bytes| {
-            path.parent().map_or(Ok(()), std::fs::create_dir_all)?;
-            hangar_core::fs::atomic_write(path, &bytes)
-        });
+        let Some(path) = self.windows_file.clone() else { return };
+        let saved = (|| -> std::io::Result<bool> {
+            if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
+            let _lock = hangar_core::fs::lock_file(&path.with_extension("json.lock"))?;
+            let Some(mut merged) = read_windows(&path) else { return Ok(false) };
+            for key in &self.unsaved {
+                if let Some(learned) = self.windows.get(key) { learn(&mut merged, key.clone(), *learned); }
+            }
+            hangar_core::fs::atomic_write(&path, &serde_json::to_vec(&merged)?)?;
+            Ok(true)
+        })();
         match saved {
-            Ok(()) => self.unsaved.clear(),
+            Ok(true) => self.unsaved.clear(),
+            Ok(false) => {}
             Err(e) => super::facts::note("rust.list_context_windows_unwritable", "", format!("list_context_windows_unwritable:{:?}", e.kind()),
                 "janela aprendida não gravada; depois de o servidor subir a sessão nova volta a mostrar 200k"),
         }
@@ -421,7 +445,7 @@ fn truthy(v: &Value) -> bool {
 }
 
 /// `None` só quando o arquivo existe e não deu para ler; ilegível conta como vazio, porque regravar não perde nada.
-fn read_windows(path: &std::path::Path) -> Option<std::collections::HashMap<String, u64>> {
+fn read_windows(path: &std::path::Path) -> Option<std::collections::HashMap<String, Learned>> {
     let raw = match std::fs::read(path) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Default::default()),
@@ -556,6 +580,36 @@ mod tests {
         assert_eq!(ctx.map(|c| c.window), Some(500_000), "a própria sessão segue o que declarou");
         let (ctx, _) = cache.reading(&inputs(&fresh, None), &scan_tail(&fresh), false);
         assert_eq!(ctx.map(|c| c.window), Some(WINDOW_DEFAULT), "a outra não herda o limite declarado");
+        // A medida da sessão limitada também é o limite, não a janela do modelo.
+        std::fs::write(limited.with_extension("context.json"), r#"{"used": 50000, "window": 500000}"#).unwrap();
+        cache.reading(&inputs(&limited, Some(500_000)), &scan_tail(&limited), false);
+        let (ctx, _) = cache.reading(&inputs(&fresh, None), &scan_tail(&fresh), false);
+        assert_eq!(ctx.map(|c| c.window), Some(WINDOW_DEFAULT), "nem pela medida");
+    }
+
+    /// Sessão parada de antes de uma troca de plano segue informando a janela velha: não desfaz a da conversa nova.
+    #[test]
+    fn window_from_the_conversation_touched_last_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let answer = |name: &str, age_secs: u64| {
+            let path = tmp.path().join(name);
+            std::fs::write(&path, r#"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000}}}"#).unwrap();
+            let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
+            path
+        };
+        let (stale, fresh) = (answer("stale.jsonl", 3_600), answer("fresh.jsonl", 0));
+        let inputs = |jsonl, declared| ReadingInputs { jsonl, account_dir: tmp.path(), chosen: None, opened: None, declared, engine: false };
+        let file = tmp.path().join("context-windows.json");
+        let mut cache = ContextCache::default();
+        cache.keep_windows_at(file.clone());
+        cache.reading(&inputs(&fresh, Some(WINDOW_1M)), &scan_tail(&fresh), true);
+        let (ctx, _) = cache.reading(&inputs(&stale, Some(WINDOW_DEFAULT)), &scan_tail(&stale), true);
+        assert_eq!(ctx.map(|c| c.window), Some(WINDOW_DEFAULT), "a própria sessão segue o que informou");
+        let mut restarted = ContextCache::default();
+        restarted.keep_windows_at(file);
+        let (ctx, _) = restarted.reading(&inputs(&fresh, None), &scan_tail(&fresh), false);
+        assert_eq!(ctx.map(|c| c.window), Some(WINDOW_1M));
     }
 
     #[test]

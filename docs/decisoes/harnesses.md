@@ -20,6 +20,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `/history` do Codex transferido leva o divisor `kind: handoff` antes do primeiro turno novo. Ver
   [troca de agente com a sessão trabalhando](#troca-de-agente-com-a-sessão-trabalhando-20112026).
 
+- **A janela que o Claude informou fica em `~/.hangar/context-windows.json`, sem prazo, por conta e modelo.**
+  O CLI só diz a janela no `result` do fim do turno; até lá a sessão nova usa a aprendida. Vence o
+  informe da conversa mexida por último (sessão parada de antes da troca de plano não desfaz a
+  nova), a gravação relê e junta sob a trava `context-windows.json.lock` (servidor velho e novo na
+  atualização), e o limite posto no ambiente (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`) não ensina. Ver
+  [janela aprendida por modelo](#sessão-sem-terminal-no-primeiro-turno-janela-aprendida-por-modelo-14102026).
 - **Fechar o Claude com terminal termina com o processo morto.** Quem passa do prazo depois do
   `kill-session` aceito sai à força, conferido pela identidade, como na reabertura, e o fechamento
   segue normal. Tratar a demora como falha desviava para o fechamento pelo nome, que já não acha o
@@ -5349,7 +5355,12 @@ Um `claude -p --model opus` confirmou que o `init` traz só `claude-opus-5-5`, s
 `contextWindow: 1000000` vem apenas no `result`. A janela aprendida agora fica em
 `~/.hangar/context-windows.json`, sem prazo: sobrevive à subida do servidor e a conta parada não a perde.
 Troca de plano se corrige no informe seguinte de qualquer sessão da conta. Resta a reserva de 200k só
-para a primeira sessão de um modelo numa conta que nunca informou.
+para a primeira sessão de um modelo numa conta que nunca informou. A revisão do PR #494 achou três
+casos que o disco sem prazo deixaria para sempre: dois servidores gravando juntos (um apagava o do
+outro), sessão parada com a janela do plano antigo alternando com a nova a cada releitura, e a medida
+de sessão aberta com `CLAUDE_CODE_MAX_CONTEXT_TOKENS` virando a janela da conta. Ficaram de fora,
+aceitos: arquivo apagado à mão só volta no próximo informe diferente ou na subida, e gravação que
+falha tenta de novo a cada releitura (o diário tem teto, o I/O não).
 
 ## Retomada sem o plugin do Hangar
 
