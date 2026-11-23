@@ -12436,5 +12436,14 @@
   "mobile_antigravity_in_use": "em uso por uma sessão",
   "mobile_antigravity_delete_failed": "Não foi possível apagar a conta do Google",
   "mobile_accounts_antigravity_add": "+ Conta do Google",
-  "mobile_antigravity_no_quota": "Sem cota: o Hangar não lê o login do Google."
+  "mobile_antigravity_no_quota": "Sem cota: o Hangar não lê o login do Google.",
+  "erro_conta_antigravity_adicional": "O Antigravity com terminal só usa a conta padrão (a do ~/.gemini). Abra sem escolher outra conta.",
+  "erro_permissao_so_na_abertura": "Este modo só vale ao abrir a sessão; reabra nele para usar.",
+  "erro_permissao_ciclo_agy": "Não alcançou {alvo} no ciclo do shift+tab — ficou em {ficou}.",
+  "erro_caixa_com_rascunho": "Há texto na caixa de digitar. Envie ou apague antes de trocar.",
+  "erro_caixa_ilegivel": "Não consegui ler a caixa de digitar do Antigravity.",
+  "erro_rota_so_antigravity": "Esta rota só existe para sessões Antigravity com terminal.",
+  "erro_modelo_antigravity_invalido": "Esse modelo não está na lista do Antigravity desta conta.",
+  "erro_modelo_sem_confirmacao": "Digitei /model, mas o Antigravity não confirmou a troca. Veja o modelo no terminal.",
+  "native_create_agy_default_needs_login": "A conta do Google padrão está sem login. Entre nela em Configurações › Contas."
 }

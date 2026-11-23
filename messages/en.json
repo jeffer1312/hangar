@@ -12436,5 +12436,14 @@
   "mobile_antigravity_in_use": "in use by a session",
   "mobile_antigravity_delete_failed": "Couldn't delete the Google account",
   "mobile_accounts_antigravity_add": "+ Google account",
-  "mobile_antigravity_no_quota": "No quota: Hangar doesn't read the Google sign-in."
+  "mobile_antigravity_no_quota": "No quota: Hangar doesn't read the Google sign-in.",
+  "erro_conta_antigravity_adicional": "Antigravity with a terminal only uses the default account (~/.gemini). Open it without choosing another account.",
+  "erro_permissao_so_na_abertura": "This mode only applies when the session opens; reopen it in this mode to use it.",
+  "erro_permissao_ciclo_agy": "Did not reach {alvo} in the shift+tab cycle — stayed in {ficou}.",
+  "erro_caixa_com_rascunho": "There is text in the message box. Send or clear it before switching.",
+  "erro_caixa_ilegivel": "Could not read Antigravity's message box.",
+  "erro_rota_so_antigravity": "This route only exists for Antigravity sessions with a terminal.",
+  "erro_modelo_antigravity_invalido": "That model is not in Antigravity's list for this account.",
+  "erro_modelo_sem_confirmacao": "Typed /model, but Antigravity did not confirm the switch. Check the model in the terminal.",
+  "native_create_agy_default_needs_login": "The default Google account is not signed in. Sign in to it in Settings › Accounts."
 }

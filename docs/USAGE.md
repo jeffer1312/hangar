@@ -657,15 +657,20 @@ conta identificada. Esse fluxo não apaga, rotaciona nem migra credenciais ou co
 O Hangar abre o Antigravity CLI (`agy`), o programa oficial do Google, igual ao Claude e ao Codex.
 Com o `agy` instalado (**Configurações → Agentes** mostra e instala), escolha **Antigravity** ao
 criar a sessão: ela roda no terminal (tmux), com o modelo escolhido na lista que o próprio `agy`
-devolve para a conta. O esforço já vem no nome do modelo. Os modos são **Aceitar edições**,
-**Automático** e **Plano**; o modo que pergunta antes de cada ferramenta ainda não existe no
-terminal do `agy`.
+devolve para a conta. O esforço já vem no nome do modelo. A sessão abre em **Aceitar edições**,
+**Automático** ou **Plano**: o `agy` com terminal não abre no modo que pergunta antes de agir.
 
-Para usar mais de uma conta Google, abra **Contas e provedores → + Nova conta → Conta por
-assinatura → Conta do Google (Antigravity)**. A conta padrão é a que o `agy` já usa na máquina; a
-conta adicional ganha uma pasta própria. Abra o link, entre com a conta Google e cole o código (ou o
-endereço) que a página do Antigravity mostrar. Na primeira sessão de uma conta nova, o `agy` mostra
-os Termos do Google no terminal, e quem aceita é você.
+Com a sessão aberta, modelo e modo trocam pelas mesmas pílulas do Claude, na caixa de digitar:
+o modelo pela lista do `agy` (o Hangar digita `/model` no terminal), e o modo pelo ciclo do
+shift+tab do `agy` (Automático, Plano, Manual e Aceitar edições). Depois de aberta, o modo
+**Manual**, que pergunta antes de agir, também está no ciclo. A troca espera a sessão parada e a caixa
+de digitar vazia. A linha de contexto mostra os tokens da última resposta, sem porcentagem: o
+tamanho da janela do modelo não é conhecido.
+
+Por enquanto só a conta padrão do `agy` (a do `~/.gemini`) funciona: o `agy` com terminal ignora a
+pasta de outra conta. Para entrar, use **Contas e provedores** na conta do Google (Antigravity):
+abra o link, entre com a conta Google e cole o código (ou o endereço) que a página do Antigravity
+mostrar. Na primeira sessão, o `agy` mostra os Termos do Google no terminal, e quem aceita é você.
 
 O Hangar não lê o login do Google, não consulta cota e não troca de conta sozinho.
 

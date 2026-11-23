@@ -9,6 +9,10 @@ pub(in crate::app) use picker::HandoffAccount;
 
 const CLAUDE_EFFORTS: [&str; 6] = ["low", "medium", "high", "xhigh", "max", "ultracode"];
 const CLAUDE_MODES: [&str; 6] = ["plan", "auto", "manual", "acceptEdits", "bypassPermissions", "dontAsk"];
+// Os modos que o Shift+Tab do `agy` percorre, na ordem do painel do Claude; o `bypassPermissions` só existe na abertura.
+const ANTIGRAVITY_MODES: [&str; 4] = ["plan", "auto", "manual", "acceptEdits"];
+// O esforço do Antigravity vem no fim do id do modelo (`gemini-4-neon-low`).
+const ANTIGRAVITY_EFFORTS: [&str; 4] = ["low", "medium", "high", "xhigh"];
 // Acima disto a lista ganha busca e só as linhas visíveis são montadas (catálogo do Pi/OMP tem dezenas).
 const LONG_LIST: usize = 8;
 
@@ -268,6 +272,41 @@ fn claude_context_state(catalog: &Value) -> Option<(&str, bool)> {
     Some((claude_context_model(catalog, model)?, model.ends_with("[1m]")))
 }
 
+/// Os modelos do catálogo do Antigravity (`{"models":[{"id","name"}],"current"}`) como (id, nome, atual). A atual é a que a
+/// leitura confirmou; sem ela, a que a sessão publica.
+fn antigravity_models(catalog: &Value, live: &str) -> Vec<(String, String, bool)> {
+    let confirmed = text(catalog, "current");
+    let now = if confirmed.is_empty() { live.trim().to_owned() } else { confirmed };
+    catalog.get("models").and_then(Value::as_array).into_iter().flatten().filter_map(|m| {
+        let id = text(m, "id");
+        if id.is_empty() { return None; }
+        let name = Some(text(m, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| id.clone());
+        let on = id == now;
+        Some((id, name, on))
+    }).collect()
+}
+
+/// O nome do modelo do Antigravity na pílula: o do catálogo lido; sem ele, o id como o rodapé do `agy` escreve
+/// ("Gemini 4 Neon · low"). Texto que já é nome (com espaço) fica como está.
+fn antigravity_model_label(catalog: Option<&Value>, id: &str) -> String {
+    let id = id.trim();
+    let named = catalog.and_then(|c| c.get("models")?.as_array()?.iter().find(|m| text(m, "id") == id)).map(|m| text(m, "name"));
+    if let Some(name) = named.filter(|n| !n.is_empty()) { return name; }
+    if id.is_empty() || id.contains(char::is_whitespace) { return id.to_owned(); }
+    let (base, effort) = match id.rsplit_once('-') {
+        Some((base, effort)) if ANTIGRAVITY_EFFORTS.contains(&effort) => (base, Some(effort)),
+        _ => (id, None),
+    };
+    let words = base.split('-').filter(|w| !w.is_empty()).map(capitalized).collect::<Vec<_>>().join(" ");
+    match effort { Some(effort) => format!("{words} · {effort}"), None => words }
+}
+
+/// Os modos do painel do Antigravity: todos os do ciclo, salvo quando a leitura disse quais a sessão aceita.
+fn antigravity_modes(catalog: &Value) -> Vec<(&'static str, bool)> {
+    let cycle: Vec<&str> = catalog.get("modes").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+    ANTIGRAVITY_MODES.iter().map(|m| (*m, cycle.is_empty() || cycle.contains(m))).collect()
+}
+
 fn engine_model_choice(catalog: &Value, id: &str) -> String {
     if claude_context_state(catalog).is_some_and(|(_, on)| on) && claude_context_model(catalog, id).is_some() {
         context_model(id, true)
@@ -446,6 +485,8 @@ impl Hangar {
             }
             "codex" => vec![Ctl::Model, Ctl::Effort, Ctl::Mode, Ctl::Permission],
             "pi" | "omp" | "kimi" => vec![Ctl::Model, Ctl::Effort],
+            // O esforço do Antigravity mora no id do modelo: a pílula do modelo troca os dois.
+            "antigravity" => vec![Ctl::Model, Ctl::Mode],
             _ => Vec::new(),
         }
     }
@@ -503,6 +544,9 @@ impl Hangar {
             ("codex", Ctl::Permission) => None,
             ("pi" | "omp", _) => Some((vec!["pi", "models"], vec![])),
             ("kimi", _) => Some((vec!["kimi", "models"], vec![])),
+            ("antigravity", Ctl::Model) => Some((vec!["antigravity", "models"], vec![])),
+            // O ciclo do `agy` é fixo: a leitura não mexe no terminal, sem a sonda do Claude.
+            ("antigravity", Ctl::Mode) => Some((vec!["permission-modes"], vec![])),
             _ => return,
         };
         let loaded = read.is_none().then(|| Ok(Value::Null));
@@ -540,12 +584,14 @@ impl Hangar {
         });
     }
 
-    /// Alt+Shift+P e Shift+Tab no campo do Claude, como o web: o próximo modo do ciclo que a sessão aceita. Ciclo ainda
-    /// não lido é lido com a sonda, como a pílula, e o modo é aplicado quando a leitura chega.
+    /// Alt+Shift+P e Shift+Tab no campo do Claude e do Antigravity, como o web: o próximo modo do ciclo que a sessão aceita.
+    /// Ciclo ainda não lido é lido (no Claude, com a sonda, como a pílula), e o modo é aplicado quando a leitura chega.
     pub(super) fn cycle_permission(&mut self, cx: &mut Context<Self>) {
         if self.open_read_only() { return; }
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
-        if self.provider().0 != "claude" { return; }
+        let provider = self.provider().0;
+        if !matches!(provider, "claude" | "antigravity") { return; }
+        let query: Vec<(&'static str, &'static str)> = if provider == "claude" { vec![("sondar", "1")] } else { Vec::new() };
         if let Some((reading, steps)) = &mut self.controls.cycle_after_read && *reading == key {
             *steps += 1;
             return;
@@ -559,7 +605,7 @@ impl Hangar {
         self.controls.cycle_after_read = Some((key.clone(), 1));
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
-            let result = api.read(&key.name, &["permission-modes"], &[("sondar", "1")], 60).await;
+            let result = api.read(&key.name, &["permission-modes"], &query, 60).await;
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::Catalog(Ctl::Mode), result) }).await;
         });
         cx.notify();
@@ -735,6 +781,14 @@ impl Hangar {
                     .map(|m| list(m, "efforts").iter().filter_map(Value::as_str).map(|e| choice(e.into(), String::new(), vec!["kimi", "model"],
                         json!({"effort": e}), e.eq_ignore_ascii_case(current.trim()))).collect()).unwrap_or_default()
             }
+            ("antigravity", Ctl::Model) => {
+                let live = self.ctl_live(Ctl::Model).unwrap_or_default();
+                antigravity_models(catalog, &live).into_iter().map(|(id, name, on)| {
+                    keyed(choice(name, String::new(), vec!["antigravity", "model"], json!({"model": id}), on), &id)
+                }).collect()
+            }
+            ("antigravity", Ctl::Mode) => antigravity_modes(catalog).into_iter().map(|(m, enabled)| Choice { enabled,
+                ..choice(tr(&format!("mode_{m}")), String::new(), vec!["permission-mode"], json!({"mode": m}), current == m) }).collect(),
             _ => Vec::new(),
         }
     }
@@ -860,6 +914,10 @@ impl Hangar {
                             if claude_model_action {
                                 // O backend pode conservar Fast na troca de GPT; só a nova leitura diz o tier que ficou.
                                 if let Some(api) = self.session_api() { self.read_claude_model_catalog(api, key.clone(), 45, false); }
+                            } else if let Some(id) = value.get("current").and_then(Value::as_str)
+                                .filter(|_| current.as_ref().is_some_and(|s| s.provider == "antigravity")) {
+                                // O catálogo do Antigravity segue valendo: só a atual muda, e a pílula continua com o nome dele.
+                                if let Some(known) = self.controls.known.get_mut(&(key.clone(), Ctl::Model)) { known["current"] = json!(id); }
                             } else { self.controls.known.remove(&(key.clone(), Ctl::Model)); }
                         }
                         // No Codex, guardar Fast no rótulo deixaria um valor velho vencer o SSE.
@@ -933,7 +991,11 @@ impl Hangar {
         for ctl in self.ctl_list() {
             if paired && ctl == Ctl::Effort { continue; }
             let name = tr(&format!("ctl_{}", ctl.key()));
-            let value = self.ctl_label(ctl).map(|v| shown(ctl, v)).map(|v| if claude && ctl == Ctl::Model { spaced(&v) } else { v });
+            let value = self.ctl_label(ctl).map(|v| shown(ctl, v)).map(|v| match ctl {
+                Ctl::Model if claude => spaced(&v),
+                Ctl::Model if self.provider().0 == "antigravity" => self.antigravity_model_name(&v),
+                _ => v,
+            });
             if paired && ctl == Ctl::Model {
                 let effort = self.ctl_label(Ctl::Effort).map(|e| effort_label(&e));
                 let fast = speed_label(self.ctl_label(Ctl::Fast).as_deref());
@@ -983,6 +1045,11 @@ impl Hangar {
                 .on_click(listener)).into_any_element());
         }
         (pills, mode)
+    }
+
+    fn antigravity_model_name(&self, id: &str) -> String {
+        let catalog = self.selected_key().zip(self.selected.as_ref()).and_then(|(key, session)| self.controls.model_catalog(&key, session));
+        antigravity_model_label(catalog, id)
     }
 
     fn focus_ctl_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1468,12 +1535,51 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` da gpui colide com o atributo padrão.
-    use super::{Choice, Ctl, ModeTarget, claude_effort_current, claude_model_current, codex_fast_state, keep, mode_ahead, only_match, prethread_problem, reopen_warnings, spaced, step_free};
+    use super::{Choice, Ctl, ModeTarget, antigravity_model_label, antigravity_models, antigravity_modes, claude_effort_current, claude_model_current,
+        codex_fast_state, keep, mode_ahead, only_match, prethread_problem, reopen_warnings, spaced, step_free};
 
     /// As pílulas gravam a âncora por `format!("ctl-{}")`; o tour aponta pela constante.
     #[test]
     fn pill_anchors_match_the_tour_ids() {
         assert_eq!(format!("ctl-{}", Ctl::Mode.key()), crate::tour::anchors::CTL_MODE);
+    }
+
+    #[test]
+    fn antigravity_model_rows_mark_the_confirmed_model_and_fall_back_to_the_live_one() {
+        let catalog = serde_json::json!({"models": [{"id": "gemini-4-neon-low", "name": "Gemini 4 Neon (Low)"},
+            {"id": "gemini-4-neon-medium", "name": ""}, {"id": ""}], "current": "gemini-4-neon-medium"});
+        assert_eq!(antigravity_models(&catalog, "gemini-4-neon-low"), vec![
+            ("gemini-4-neon-low".to_owned(), "Gemini 4 Neon (Low)".to_owned(), false),
+            ("gemini-4-neon-medium".to_owned(), "gemini-4-neon-medium".to_owned(), true)]);
+        // Leitura sem a atual: vale o modelo que a sessão publica.
+        let unknown = serde_json::json!({"models": [{"id": "gemini-4-neon-low", "name": "Low"}], "current": null});
+        assert!(antigravity_models(&unknown, " gemini-4-neon-low ")[0].2);
+        assert!(antigravity_models(&serde_json::json!({}), "x").is_empty());
+    }
+
+    #[test]
+    fn antigravity_pill_names_the_model_like_the_catalog_or_the_agy_footer() {
+        let catalog = serde_json::json!({"models": [{"id": "gemini-4-neon-low", "name": "Gemini 4 Neon (Low)"}]});
+        assert_eq!(antigravity_model_label(Some(&catalog), "gemini-4-neon-low"), "Gemini 4 Neon (Low)");
+        // Sem catálogo (ou fora dele), o id como o rodapé do agy: "Gemini 4 Neon · medium".
+        assert_eq!(antigravity_model_label(None, "gemini-4-neon-medium"), "Gemini 4 Neon · medium");
+        assert_eq!(antigravity_model_label(Some(&catalog), "gemini-4-neon-xhigh"), "Gemini 4 Neon · xhigh");
+        assert_eq!(antigravity_model_label(None, "gemini-4-flash"), "Gemini 4 Flash");
+        // Rótulo que já é nome (a troca aplicada guarda o nome da linha) fica como veio.
+        assert_eq!(antigravity_model_label(None, "Gemini 4 Neon (Medium)"), "Gemini 4 Neon (Medium)");
+        assert_eq!(antigravity_model_label(None, ""), "");
+    }
+
+    #[test]
+    fn antigravity_modes_are_the_agy_cycle_with_claude_names() {
+        let all = antigravity_modes(&serde_json::json!({}));
+        assert_eq!(all, vec![("plan", true), ("auto", true), ("manual", true), ("acceptEdits", true)]);
+        assert!(all.iter().all(|(m, _)| *m != "bypassPermissions"), "o bypass só existe na abertura do agy");
+        // A leitura disse o ciclo: o que ficou fora aparece desligado.
+        let read = antigravity_modes(&serde_json::json!({"modes": ["auto", "plan"]}));
+        assert_eq!(read, vec![("plan", true), ("auto", true), ("manual", false), ("acceptEdits", false)]);
+        // Cada modo tem a frase de modo que o Claude já usa.
+        for (mode, _) in all { assert_ne!(crate::i18n::tr(&format!("mode_{mode}")), format!("mode_{mode}")); }
     }
 
     #[test]

@@ -1,0 +1,13 @@
+────────────────────────────────────────────────────────────
+> Apague com: rm -rf /tmp/agy-prova/apagar-me2
+
+● Ran (rm -rf /tmp/agy-prova/apagar-me2) (ctrl+o to expand)
+
+  O diretório foi apagado com sucesso:
+
+    rm -rf /tmp/agy-prova/apagar-me2
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Plan mode: the agent researches and writes a plan before changing files (shift+tab to cycle)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                         plan · Gemini 4 Neon · medium

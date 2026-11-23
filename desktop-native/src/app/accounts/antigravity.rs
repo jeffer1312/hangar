@@ -30,18 +30,17 @@ struct Attempt {
     #[serde(rename = "saida")] tail: Option<Vec<String>>,
 }
 
-/// O painel do Antigravity, no lugar da lista enquanto existe (como o do Codex).
+/// O painel do Antigravity, no lugar da lista enquanto existe (como o do Codex). Só a conta padrão entra: o `agy` com
+/// terminal ignora o `GEMINI_HOME` e grava o login de qualquer conta na pasta da padrão.
 pub(super) struct AgyFlow {
-    /// A conta escolhida (`default` ou o nome da adicional); `None` = ainda em "Qual conta".
+    /// A conta do login (`default`, ou a da linha que pediu); `None` = ainda em "Qual conta".
     account: Option<String>,
-    name: Entity<InputState>,
-    slug: String,
     code: Entity<InputState>,
     has_code: bool,
     attempt: Option<Attempt>,
     /// O link da tentativa, só https e sem usuário.
     url: Option<String>,
-    /// Criando a conta ou abrindo o login.
+    /// Abrindo o login.
     busy: bool,
     sending: bool,
     /// O código chegou ao agy: falta ele confirmar o login.
@@ -73,7 +72,6 @@ impl AgyFlow {
 
 pub(in crate::app) enum AgyReply {
     List(u64, Result<Value, Failure>),
-    Created(u64, String),
     /// Tentativa começada ou lida; `true` = acabou de começar, a leitura periódica começa daqui.
     Attempt(u64, Result<Value, Failure>, bool),
     /// A resposta do código, pela tentativa a que ele foi.
@@ -143,17 +141,7 @@ impl Hangar {
     /// Abre o painel. Com `account` (o Entrar da linha) o login começa já; sem, mostra "Qual conta".
     pub(super) fn start_agy(&mut self, account: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if self.accounts_busy() || self.api.is_none() { return; }
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder(tr("accounts_agy_name_placeholder")));
         let code = cx.new(|cx| InputState::new(window, cx).placeholder(tr("accounts_agy_code_placeholder")));
-        let named = cx.subscribe_in(&name, window, |this: &mut Hangar, input, event: &InputEvent, _, cx| match event {
-            InputEvent::Change => {
-                let slug = actions::account_slug(&input.read(cx).value());
-                if let Some(flow) = this.accounts.antigravity.as_mut() { flow.slug = slug; }
-                cx.notify();
-            }
-            InputEvent::PressEnter { .. } => this.agy_begin(None, cx),
-            _ => {}
-        });
         let coded = cx.subscribe_in(&code, window, |this: &mut Hangar, input, event: &InputEvent, _, cx| match event {
             InputEvent::Change => {
                 let filled = !input.read(cx).value().trim().is_empty();
@@ -164,11 +152,11 @@ impl Hangar {
             _ => {}
         });
         self.accounts.outcome = None;
-        self.accounts.antigravity = Some(AgyFlow { account: None, name, slug: String::new(), code, has_code: false, attempt: None, url: None,
+        self.accounts.antigravity = Some(AgyFlow { account: None, code, has_code: false, attempt: None, url: None,
             busy: false, sending: false, sent: false, cancelling: false, failed: None, read_failed: false, error: None, copied: false, turn: 0, task: None,
-            _subscriptions: vec![named, coded] });
+            _subscriptions: vec![coded] });
         match account {
-            Some(id) => self.agy_begin(Some(id), cx),
+            Some(id) => self.agy_begin(id, cx),
             // "Qual conta" mostra se a padrão já tem login.
             None if !self.accounts.agy.loading && self.accounts.agy.ok().is_none() => self.load_agy_accounts(cx),
             None => {}
@@ -176,29 +164,16 @@ impl Hangar {
         cx.notify();
     }
 
-    /// Entrar: cria a conta adicional com o nome (`existing` vazio) e pede o login ao agy.
-    fn agy_begin(&mut self, existing: Option<String>, cx: &mut Context<Self>) {
-        if self.accounts.antigravity.as_ref().is_none_or(|f| f.busy || f.sending || f.cancelling || f.open_attempt().is_some()
-            || (existing.is_none() && f.slug.is_empty())) { return; }
+    /// Entrar: pede ao agy o login da conta.
+    fn agy_begin(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.accounts.antigravity.as_ref().is_none_or(|f| f.busy || f.sending || f.cancelling || f.open_attempt().is_some()) { return; }
         let Some((turn, api)) = self.agy_turn() else { return };
         let done = self.agy_send();
         let Some(flow) = self.accounts.antigravity.as_mut() else { return };
         (flow.busy, flow.sending, flow.sent, flow.error, flow.failed, flow.read_failed, flow.attempt, flow.url, flow.copied) =
             (true, false, false, None, None, false, None, None, false);
-        if existing.is_some() { flow.account = existing.clone(); }
-        let slug = flow.slug.clone();
+        flow.account = Some(id.clone());
         flow.task = Some(self.runtime.spawn(async move {
-            let id = match existing {
-                Some(id) => id,
-                None => match api.server_send(reqwest::Method::POST, &["antigravity-contas"], Some(json!({"name": slug})), 30).await {
-                    Ok(created) => {
-                        let id = created.get("id").and_then(Value::as_str).unwrap_or(&slug).to_owned();
-                        done(AgyReply::Created(turn, id.clone())).await;
-                        id
-                    }
-                    Err(error) => return done(AgyReply::Attempt(turn, Err(error), false)).await,
-                },
-            };
             done(AgyReply::Attempt(turn, api.server_post(&["antigravity-contas", &id, "login"], 30).await, true)).await
         }));
         cx.notify();
@@ -287,7 +262,6 @@ impl Hangar {
                     parsed => { self.accounts.agy.finish(seq, parsed); }
                 }
             }
-            AgyReply::Created(turn, id) => if let Some(flow) = self.agy_flow(turn) { flow.account = Some(id); },
             AgyReply::Attempt(turn, result, started) => {
                 let Some(flow) = self.agy_flow(turn) else { return };
                 flow.busy = false;
@@ -380,7 +354,7 @@ impl Hangar {
                     .child(Button::new("accounts-agy-back").outline().small().label(tr("settings_back"))
                         .on_click(cx.listener(|this, _, window, cx| this.agy_close(window, cx))))
                     .when_some(account, |el, id| el.child(Button::new("accounts-agy-retry").primary().small().label(tr("accounts_retry"))
-                        .on_click(cx.listener(move |this, _, _, cx| this.agy_begin(Some(id.clone()), cx)))))));
+                        .on_click(cx.listener(move |this, _, _, cx| this.agy_begin(id.clone(), cx)))))));
         }
 
         // A tentativa aberta: o link do Google e o código que a página do Antigravity mostra.
@@ -428,7 +402,7 @@ impl Hangar {
                 .child(terms));
         }
 
-        // "Qual conta": a padrão, a que o agy já usa nesta máquina, ou uma adicional com nome.
+        // "Qual conta": só a padrão, a que o agy já usa nesta máquina.
         let list = self.accounts.agy.ok();
         let default = list.and_then(|l| l.accounts.iter().find(|a| a.default));
         let missing = list.is_some_and(|l| !l.installed);
@@ -439,24 +413,14 @@ impl Hangar {
         let default_row = choice(div().flex_1().min_w_0().flex().items_center().gap(px(8.)).child(dot(default_signed)).child(logo(22.))
                 .child(div().min_w_0().whitespace_normal().text_size(px(13.)).child(tr("accounts_agy_default_choice"))))
             .child(Button::new("accounts-agy-default").outline().small().label(tr("accounts_agy_sign_in")).disabled(f.busy || missing)
-                .on_click(cx.listener(|this, _, _, cx| this.agy_begin(Some("default".into()), cx))));
-        let new_row = choice(div().flex_1().min_w_0().flex().items_center().gap(px(8.)).child(logo(22.))
-            .child(div().min_w_0().text_size(px(13.)).child(tr("accounts_agy_new_choice"))));
-        let hint = if f.slug.is_empty() { tr("accounts_add_name_hint") } else { tr("accounts_agy_folder").replace("{slug}", &f.slug) };
-        let creating = f.busy && f.account.is_none();
+                .on_click(cx.listener(|this, _, _, cx| this.agy_begin("default".into(), cx))));
         Some(panel
             .child(div().flex().flex_col().gap(px(8.))
                 .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(tr("accounts_agy_which")))
-                .child(default_row)
-                .child(new_row)
-                .child(div().max_w(px(420.)).child(Input::new(&f.name).disabled(f.busy).aria_label(tr("accounts_agy_new_choice"))))
-                .child(div().text_size(px(12.)).text_color(theme::muted()).whitespace_normal().child(hint)))
+                .child(default_row))
             .when(missing, |el| el.child(line(tr("accounts_agy_missing"), theme::warning())))
             .children(f.error.clone().map(|e| line(e, theme::danger())))
-            .child(footer().child(cancel)
-                .child(Button::new("accounts-agy-create").primary().small()
-                    .label(tr(if creating { "accounts_agy_creating" } else if f.busy { "accounts_agy_starting" } else { "accounts_agy_sign_in" }))
-                    .disabled(f.busy || f.slug.is_empty() || missing).on_click(cx.listener(|this, _, _, cx| this.agy_begin(None, cx)))))
+            .child(footer().child(cancel))
             .child(terms))
     }
 }

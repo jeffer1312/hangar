@@ -6,7 +6,7 @@ import { AntigravityContaLogin } from './AntigravityContaLogin';
 import * as m from '../../paraglide/messages';
 
 const calls = vi.hoisted(() => ({
-  create: vi.fn(), start: vi.fn(), read: vi.fn(), submit: vi.fn(), cancel: vi.fn(),
+  start: vi.fn(), read: vi.fn(), submit: vi.fn(), cancel: vi.fn(),
   open: vi.fn(), copy: vi.fn(), paste: vi.fn(), foreground: undefined as undefined | ((state: string) => void),
 }));
 const server = { id: 'b', label: 'B', baseUrl: 'https://b.local', token: 'test' };
@@ -37,7 +37,6 @@ vi.mock('react-native', async original => {
 });
 vi.mock('@hangar/core', async original => ({
   ...await original<typeof import('@hangar/core')>(),
-  createAntigravityAccountForServer: calls.create,
   startAntigravityLoginForServer: calls.start,
   getAntigravityLoginForServer: calls.read,
   submitAntigravityLoginCodeForServer: calls.submit,
@@ -45,7 +44,7 @@ vi.mock('@hangar/core', async original => ({
 }));
 
 beforeEach(() => {
-  for (const call of [calls.create, calls.start, calls.read, calls.submit, calls.cancel, calls.open, calls.copy, calls.paste]) call.mockReset();
+  for (const call of [calls.start, calls.read, calls.submit, calls.cancel, calls.open, calls.copy, calls.paste]) call.mockReset();
   calls.foreground = undefined;
   calls.start.mockResolvedValue({ attempt_id: 'a1', estado: 'iniciando' });
   calls.read.mockResolvedValue(waiting);
@@ -116,17 +115,16 @@ describe('AntigravityContaLogin', () => {
     } finally { await act(async () => view.root.unmount()); }
   });
 
-  it('com a padrão já logada, sugere a adicional e cria a pasta antes do login', async () => {
-    calls.create.mockResolvedValue({ id: 'trabalho-x', pasta: '/h/.antigravity-trabalho-x' });
+  it('sem conta da linha, entra direto na padrão: não há escolha nem conta adicional', async () => {
     const view = mount();
     try {
       await view.render();
-      expect(calls.start).not.toHaveBeenCalled();
-      await type(view.container, m.novacred_nome_conta(), 'Trabalho X');
-      await press(view.container, m.contas_entrar());
       await flush();
-      expect(calls.create).toHaveBeenCalledWith(server, 'trabalho-x');
-      expect(calls.start).toHaveBeenCalledWith(server, 'trabalho-x');
+      expect(calls.start).toHaveBeenCalledExactlyOnceWith(server, 'default');
+      expect(view.container.textContent).toContain(m.mobile_antigravity_default_account());
+      expect(view.container.querySelector('[role="radiogroup"]')).toBeNull();
+      expect(view.container.querySelector(`textarea[aria-label="${m.novacred_nome_conta()}"]`)).toBeNull();
+      expect(view.container.textContent).toContain(link);
     } finally { await act(async () => view.root.unmount()); }
   });
 

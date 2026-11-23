@@ -21,6 +21,8 @@ pub(super) struct Observation {
     pub files: Vec<crate::state::preview::HookFile>,
     pub marker: Option<(String, f64)>,
     pub now: f64,
+    /// O rodapé do `agy`: modelo e esforço vão ao retrato, que a lista lê.
+    pub footer: Option<crate::terminal_state::AgyFooter>,
 }
 #[derive(Default)]
 pub(super) struct FileCache {
@@ -190,6 +192,10 @@ pub(super) fn read(
         limit_reset: analysis.limit_reset,
         ..Default::default()
     };
+    // O Antigravity diz o modo no rodapé; ele sai no mesmo campo do Claude para as telas usarem a mesma pílula.
+    let footer = (target.provider == hangar_transcript::Provider::Antigravity)
+        .then(|| crate::terminal_state::agy_footer(pane)).flatten();
+    state.claude_permission_mode = footer.as_ref().and_then(|footer| footer.mode).map(str::to_owned);
     if let Some(pending) = &pending {
         state.state = "awaiting_input".into();
         if let Some(approval) = &pending.approval {
@@ -230,6 +236,7 @@ pub(super) fn read(
         files,
         marker: marker.map(|marker| (marker.state, marker.ts)),
         now,
+        footer,
     })
 }
 

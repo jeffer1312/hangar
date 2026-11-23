@@ -1,22 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, ScrollView, Text, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as Linking from 'expo-linking';
 import * as Clipboard from 'expo-clipboard';
 import {
-  antigravityLoginLink, cancelAntigravityLoginForServer, createAntigravityAccountForServer, getAntigravityLoginForServer,
-  idContaCodex, startAntigravityLoginForServer, submitAntigravityLoginCodeForServer,
+  antigravityLoginLink, cancelAntigravityLoginForServer, getAntigravityLoginForServer,
+  startAntigravityLoginForServer, submitAntigravityLoginCodeForServer,
   type AntigravityAccount, type AntigravityLoginAttempt, type Server,
 } from '@hangar/core';
 import { Sheet } from '../../ui/Sheet';
-import { Icon } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { Pill } from './PageHeader';
 import { SectionCard } from './SectionCard';
 import { SettingsRow } from './SettingsRow';
 import { useSettingsColors } from './colors';
-import { antigravityAccountLabel, antigravityLoginText } from '../accounts/antigravity';
+import { antigravityAccountLabel } from '../accounts/antigravity';
 import * as m from '../../paraglide/messages';
 
 const POLL_MS = 1000;
@@ -27,8 +26,8 @@ type Live = { server: Server; id: string; attemptId: string };
 
 /**
  * Login da conta Google pelo próprio agy: o servidor mostra o link do Google e escreve no processo o
- * código que a pessoa colar. O Hangar nunca vê o token. Sem `accountId`, a pessoa escolhe a padrão ou
- * cria uma adicional.
+ * código que a pessoa colar. O Hangar nunca vê o token. Sem `accountId`, entra na padrão: com terminal o
+ * agy ignora a pasta de outra conta, então não há adicional.
  */
 export function AntigravityContaLogin({ server, accounts, accountId, onComplete, onClose }: {
   server: Server;
@@ -39,11 +38,7 @@ export function AntigravityContaLogin({ server, accounts, accountId, onComplete,
 }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
-  const defaultAccount = accounts.find((a) => a.padrao);
-  const [target, setTarget] = useState<'default' | 'new'>(defaultAccount?.logado === true ? 'new' : 'default');
-  const [name, setName] = useState('');
-  // A adicional criada nesta folha: repetir o login entra nela, sem criar outra.
-  const [created, setCreated] = useState<string | null>(null);
+  const accountToSign = accountId ?? 'default';
   const [attempt, setAttempt] = useState<AntigravityLoginAttempt | null>(null);
   const [code, setCode] = useState('');
   const [sent, setSent] = useState(false);
@@ -98,14 +93,7 @@ export function AntigravityContaLogin({ server, accounts, accountId, onComplete,
     live.current = null;
     setBusy('start'); setError(''); setAttempt(null); setCode(''); setSent(false); setCopied(false);
     try {
-      let id = accountId ?? created ?? (target === 'default' ? 'default' : '');
-      if (!id) {
-        const wanted = idContaCodex(name);
-        if (!wanted || wanted === 'default') { setError(m.erro_nome_conta_invalido()); return; }
-        id = (await createAntigravityAccountForServer(s, wanted)).id;
-        if (g !== generation.current) return;
-        setCreated(id);
-      }
+      const id = accountToSign;
       const next = await startAntigravityLoginForServer(s, id);
       if (g !== generation.current) {
         void cancelAntigravityLoginForServer(s, id, next.attempt_id).catch(() => {});
@@ -193,8 +181,7 @@ export function AntigravityContaLogin({ server, accounts, accountId, onComplete,
     const listener = AppState.addEventListener('change', (state) => {
       if (state === 'active' && live.current) void read(generation.current);
     });
-    // Entrar numa conta já conhecida (linha da lista) começa sem pergunta.
-    if (accountId) void start();
+    void start();
     return () => {
       listener.remove();
       ++generation.current;
@@ -210,28 +197,12 @@ export function AntigravityContaLogin({ server, accounts, accountId, onComplete,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uma vez por folha; o contas.tsx remonta por servidor
   }, []);
 
-  const choosing = !accountId && !created && !attempt;
   const done = attempt?.estado === 'concluido';
   const failed = attempt?.estado === 'falhou';
   const waiting = attempt?.estado === 'aguardando_codigo';
   const tail = attempt?.saida?.filter((line) => line.trim()).at(-1);
-  const wanted = idContaCodex(name);
-  const known = accountId ? accounts.find((a) => a.id === accountId) : undefined;
-  const title = known ? antigravityAccountLabel(known) : created ?? m.mobile_antigravity_login_title();
-  const option = (value: 'default' | 'new', label: string, description: string) => {
-    const on = target === value;
-    return (
-      <Pressable accessibilityRole="radio" accessibilityState={{ checked: on, disabled: !!busy }} accessibilityLabel={`${label}. ${description}`}
-        disabled={!!busy} onPress={() => { if (!on) { haptic.selection(); setTarget(value); } }}
-        style={({ pressed }) => [styles.option, { borderTopColor: c.border }, pressed && { opacity: 0.6 }]}>
-        <View style={styles.optionTexts}>
-          <Text style={[styles.optionTitle, { color: c.text }]}>{label}</Text>
-          <Text style={[styles.optionDesc, { color: c.muted }]}>{description}</Text>
-        </View>
-        <Icon name={on ? 'CircleCheck' : 'Circle'} size={20} color={on ? c.accent : c.faint} />
-      </Pressable>
-    );
-  };
+  const known = accounts.find((a) => a.id === accountToSign);
+  const title = known ? antigravityAccountLabel(known) : accountToSign === 'default' ? m.mobile_antigravity_default_account() : m.mobile_antigravity_login_title();
 
   return (
     <Sheet open sizes={['large']} scrollable dismissible={!busy} onDismiss={() => void cancel(true)}>
@@ -239,30 +210,6 @@ export function AntigravityContaLogin({ server, accounts, accountId, onComplete,
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.root}>
           <Text accessibilityRole="header" style={[styles.title, { color: c.text }]}>{title}</Text>
           <Text style={[styles.text, { color: c.muted }]}>{m.contas_login_servidor({ nome: server.label })}</Text>
-
-          {choosing ? (
-            <>
-              <SectionCard>
-                <View accessibilityRole="radiogroup">
-                  {option('default', defaultAccount ? antigravityAccountLabel(defaultAccount) : m.mobile_antigravity_default_account(),
-                    [m.mobile_antigravity_default_desc(), defaultAccount ? antigravityLoginText(defaultAccount.logado) : ''].filter(Boolean).join(' · '))}
-                  {option('new', m.mobile_antigravity_new_account(), m.mobile_antigravity_new_account_desc({ pasta: `~/.antigravity-${wanted || '…'}` }))}
-                </View>
-                {target === 'new' ? (
-                  <SettingsRow title={m.novacred_nome_conta()}>
-                    <TextInput accessibilityLabel={m.novacred_nome_conta()} placeholder={m.mobile_antigravity_name_placeholder()} value={name}
-                      onChangeText={setName} autoCapitalize="none" autoCorrect={false} editable={!busy} returnKeyType="go"
-                      onSubmitEditing={() => void start()} placeholderTextColor={c.faint}
-                      style={[styles.input, { color: c.text, borderColor: c.borderStrong, backgroundColor: c.inset }]} />
-                  </SettingsRow>
-                ) : null}
-              </SectionCard>
-              <View style={styles.actions}>
-                <Pill label={m.comum_cancelar()} disabled={!!busy} onPress={() => void cancel()} />
-                <Pill icon="LogIn" label={m.contas_entrar()} disabled={!!busy || (target === 'new' && !wanted)} onPress={() => void start()} />
-              </View>
-            </>
-          ) : null}
 
           {busy === 'start' || attempt?.estado === 'iniciando' ? (
             <View style={styles.line}>
@@ -313,13 +260,11 @@ export function AntigravityContaLogin({ server, accounts, accountId, onComplete,
           {!done ? <Text style={[styles.note, { color: theme.tokens.status.warning }]}>{m.mobile_antigravity_terms_hint()}</Text> : null}
           {error ? <Text accessibilityRole="alert" style={[styles.text, { color: theme.tokens.status.error }]}>{error}</Text> : null}
 
-          {!choosing ? (
-            <View style={styles.actions}>
-              {done ? <Pill label={m.contas_login_concluir()} onPress={onClose} />
-                : <Pill label={m.comum_cancelar()} disabled={busy === 'cancel'} onPress={() => void cancel()} />}
-              {failed || (error && !live.current && !done) ? <Pill label={m.novacred_codex_tentar()} disabled={!!busy} onPress={() => void start()} /> : null}
-            </View>
-          ) : null}
+          <View style={styles.actions}>
+            {done ? <Pill label={m.contas_login_concluir()} onPress={onClose} />
+              : <Pill label={m.comum_cancelar()} disabled={busy === 'cancel'} onPress={() => void cancel()} />}
+            {failed || (error && !live.current && !done) ? <Pill label={m.novacred_codex_tentar()} disabled={!!busy} onPress={() => void start()} /> : null}
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </Sheet>
@@ -334,11 +279,6 @@ const styles = StyleSheet.create((theme) => ({
   note: { fontSize: theme.base.text.xs, lineHeight: 18 },
   line: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.base.space[2] },
-  option: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], borderTopWidth: 1,
-    paddingVertical: theme.base.space[3], paddingHorizontal: theme.base.space[4] },
-  optionTexts: { flex: 1, minWidth: 0, gap: theme.base.space[0.5] },
-  optionTitle: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
-  optionDesc: { fontSize: theme.base.text.xs },
   input: { minHeight: 44, borderWidth: 1, borderRadius: theme.base.radius.md, paddingHorizontal: theme.base.space[3], fontSize: theme.base.text.sm },
   link: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.xs, borderWidth: 1, borderRadius: theme.base.radius.md,
     padding: theme.base.space[2] },

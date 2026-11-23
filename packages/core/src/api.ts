@@ -4566,6 +4566,24 @@ export function setKimiModel(
   });
 }
 
+// ── Modelo de uma sessão Antigravity ─────────────────────────────────────────────────────────
+// Lista do `agy models` da conta da sessão; o esforço vem no id (`gemini-4-neon-high`). A troca digita
+// `/model <id>` no terminal e devolve o modelo que ficou.
+
+export interface AntigravityModel { id: string; name: string }
+
+export function getAntigravityModels(name: string, server?: Server | null): Promise<{ models: AntigravityModel[]; current: string | null }> {
+  return _catalogo(`antigravity|${server?.id ?? ''}|${name}`, () => sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/antigravity/models`));
+}
+
+export function setAntigravityModel(name: string, model: string, server?: Server | null): Promise<{ ok: boolean; current: string }> {
+  _invalidarCatalogo(name);
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/antigravity/model`, {
+    method: 'POST',
+    body: JSON.stringify({ model }),
+  });
+}
+
 // ── Modo de permissão do Claude (Task 5) ────────────────────────────────────────
 // Leitura pelo rodapé (⏸/⏵⏵) e troca via BTab. 409 = sessão não é claude, terminal
 // aberto, menu aberto no pane, ou alvo fora do ciclo / teto de 6 teclas. Sessão trabalhando

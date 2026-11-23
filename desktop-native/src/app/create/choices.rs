@@ -420,7 +420,6 @@ impl NewSession {
         self.service_tier = None;
         self.build_model_picks(window, cx);
         if (self.provider == "codex" && self.codex_account.is_empty())
-            || (self.provider == "antigravity" && self.agy_account.is_empty())
             || (self.provider == "claude" && !self.engine.is_empty()
                 && !self.selected_engine().is_some_and(|m| engine_account_ready(m, &self.engine_account))) {
             self.models.finish(seq, Ok(Catalog { models: Vec::new(), reduced: false }));
@@ -433,8 +432,8 @@ impl NewSession {
         }
         if let Some(config) = self.config.clone() { query.push(("config_dir".into(), config)); }
         if self.provider == "codex" { query.push(("codex_account".into(), self.codex_account.clone())); }
-        // O catálogo do Antigravity é o que o agy lista para a conta escolhida.
-        if self.provider == "antigravity" { query.push(("conta".into(), self.agy_account.clone())); }
+        // O catálogo do Antigravity é o que o agy lista para a conta padrão, a única em que a sessão abre.
+        if self.provider == "antigravity" { query.push(("conta".into(), "default".into())); }
         let default_key = self.default_key();
         let scope = self.default_scope();
         self.request(cx, move |api, send| Box::pin(async move {

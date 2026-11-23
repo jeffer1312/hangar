@@ -620,7 +620,8 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
             "claude" if c.managed != Some(false) && logged == Some(true) && !c.expired() =>
                 Some(vec!["claude-configs".into(), c.natural.clone(), "logout".into()]),
             "codex" if logged == Some(true) => c.codex_account.clone().map(|id| vec!["codex-contas".into(), id, "logout".into()]),
-            "antigravity" => agy.as_ref().filter(|(_, signed)| *signed).map(|(id, _)| vec!["antigravity-contas".into(), id.clone(), "logout".into()]),
+            // Só a padrão: o `agy` com terminal ignora o `GEMINI_HOME`, e a saída de uma adicional tiraria o login da padrão.
+            "antigravity" => agy.as_ref().filter(|(id, signed)| *signed && id == "default").map(|(id, _)| vec!["antigravity-contas".into(), id.clone(), "logout".into()]),
             _ => None,
         },
         remove,
@@ -1492,11 +1493,11 @@ impl Hangar {
                 .when(inherit, |el| el.tooltip(tr("accounts_inherit")).accessibility_label(tr("accounts_inherit")))
                 .on_click(cx.listener(move |this, _, window, cx| this.start_codex(Some(account.clone()), inherit, window, cx)))
         });
-        // Antigravity, como no mock: Entrar sem login, Sair com login e Apagar na adicional sem login.
+        // Antigravity, como no mock: Entrar sem login e Sair com login só na padrão; Apagar na adicional sem login.
         let agy = row.agy.clone().filter(|_| changing.is_none()).map(|(account, signed)| {
             let (id, remove_id) = (row.id.clone(), row.id.clone());
             div().flex().items_center().gap(px(6.))
-                .when(!signed, |el| el.child(Button::new(SharedString::from(format!("accounts-agy-in-{}", row.id))).outline().small()
+                .when(!signed && account == "default", |el| el.child(Button::new(SharedString::from(format!("accounts-agy-in-{}", row.id))).outline().small()
                     .label(tr("accounts_agy_sign_in")).disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.start_agy(Some(account.clone()), window, cx)))))
                 .when(row.sign_out.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-out-{}", row.id))).outline().small()
@@ -1850,6 +1851,8 @@ mod tests {
         // Sem a lista do agy, o id da rota sai da pasta.
         let alone = build_row(&list[1], &HashMap::new(), false, 0.);
         assert_eq!(alone.agy, Some(("trabalho".to_owned(), true)));
+        // Logada ou não, a adicional não sai pelo Hangar: o agy com terminal só conhece a pasta da padrão.
+        assert!(alone.sign_out.is_none());
     }
 
     #[test]

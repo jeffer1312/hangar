@@ -1722,29 +1722,27 @@ describe('CreateSessionSheet Codex', () => {
     root.unmount();
   });
 
-  it('Antigravity abre com terminal na conta Google escolhida, com o modelo e sem esforço nem o modo que pergunta', async () => {
+  it('Antigravity abre com terminal só na conta Google padrão, com o modelo e sem esforço nem o modo que pergunta', async () => {
     calls.providers.mockResolvedValue({ antigravity: { disponivel: true, default: true } });
     calls.defaults.mockResolvedValue({ model: '', effort: '', permission: 'manual' });
+    // Uma adicional antiga na lista não vira escolha: com terminal o agy grava tudo na padrão.
     calls.agy.mockResolvedValue({ instalado: true, contas: [
-      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: true, termos_aceitos: true, em_uso: false },
+      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: true, termos_aceitos: false, em_uso: false },
       { id: 'trabalho', padrao: false, pasta: '/h/.antigravity-trabalho', credencial: 'antigravity:/h/.antigravity-trabalho',
-        logado: true, termos_aceitos: false, em_uso: false },
+        logado: true, termos_aceitos: true, em_uso: false },
     ] });
     calls.models.mockResolvedValue({ kind: 'antigravity', reduced: false, models: [{ id: 'gemini-4-neon-high', name: 'Gemini 4 Neon (High)' }] });
     const { container, root } = await renderSheet(false, false);
     try {
       for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
       expect(calls.models).toHaveBeenLastCalledWith(server, 'antigravity', null, null, 'default', expect.any(AbortSignal));
-      const trigger = [...container.querySelectorAll<HTMLButtonElement>('button')]
-        .find((b) => b.getAttribute('aria-label')?.startsWith('mobile_create_antigravity_account:'))!;
-      await act(async () => trigger.click());
-      await act(async () => button(container, 'trabalho')!.click());
-      await act(async () => Promise.resolve());
-      expect(calls.models).toHaveBeenLastCalledWith(server, 'antigravity', null, null, 'trabalho', expect.any(AbortSignal));
+      expect([...container.querySelectorAll<HTMLButtonElement>('button')]
+        .some((b) => b.getAttribute('aria-label')?.startsWith('mobile_create_antigravity_account'))).toBe(false);
+      expect(button(container, 'trabalho')).toBeFalsy();
       expect(container.textContent).toContain('mobile_antigravity_terms_hint');
       await send(container);
       const body = calls.create.mock.calls[0][1];
-      expect(body).toEqual(expect.objectContaining({ provider: 'antigravity', config_dir: '/h/.antigravity-trabalho', permission_mode: null }));
+      expect(body).toEqual(expect.objectContaining({ provider: 'antigravity', config_dir: null, permission_mode: null }));
       expect(body).not.toHaveProperty('headless');
       expect(body).not.toHaveProperty('effort');
       expect(body).not.toHaveProperty('codex_account');

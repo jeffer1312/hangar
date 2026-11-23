@@ -782,6 +782,18 @@ fn antigravity_with_a_terminal_drops_a_saved_manual_and_refuses_an_explicit_one(
     assert_eq!((error.status, error.code), (409, Some("erro_permissao_manual_sem_terminal")));
 }
 
+/// O `agy` com terminal ignora o `GEMINI_HOME`: conta adicional é recusada, a padrão (sem pasta) abre.
+#[test]
+fn antigravity_with_a_terminal_refuses_an_additional_account() {
+    let mut fixture = with_saved_default("antigravity", Value::Null);
+    fixture["scenario"]["steps"][0]["json"]["provider"] = json!("antigravity");
+    fixture["scenario"]["steps"][0]["json"]["headless"] = json!(false);
+    assert!(resolve_fixture(&fixture).is_ok(), "a conta padrão abre");
+    fixture["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.antigravity-trabalho");
+    let error = resolve_fixture(&fixture).unwrap_err();
+    assert_eq!((error.status, error.code), (409, Some("erro_conta_antigravity_adicional")));
+}
+
 /// `inherit: true` é a sessão pedindo para a filha nascer no modo dela.
 #[test]
 fn inherit_true_takes_the_creator_permission_over_the_saved_default() {

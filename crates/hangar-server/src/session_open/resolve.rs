@@ -696,6 +696,11 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
     };
     // No Antigravity a pasta é a conta Google (`GEMINI_HOME`), não uma conta Claude.
     if provider == AgentProvider::Antigravity {
+        // O `agy` com terminal ignora o `GEMINI_HOME` (o login da adicional cai na padrão): só a conta padrão.
+        if config_dir.is_some() && !headless {
+            return Err(OpenError::new(409, "erro_conta_antigravity_adicional",
+                "o Antigravity com terminal só usa a conta padrão (a do ~/.gemini); abra sem escolher conta"));
+        }
         if let Some(dir) = config_dir && !hangar_antigravity::paths::is_account_dir(std::path::Path::new(dir)) {
             return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
         }

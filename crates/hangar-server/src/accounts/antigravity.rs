@@ -95,6 +95,7 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     let env = hangar_antigravity::env::process_env(&account, state.accounts.env.base.keys().cloned());
     match (&parts[1..], method) {
         ([], Method::DELETE) => delete(&id, dir),
+        (["login"] | ["login", "codigo"], Method::POST) if dir.is_some() => only_default(),
         (["logout"], Method::POST) => {
             let Some(program) = program() else { return fail(409, "erro_agy_ausente", "o agy não está instalado nesta máquina") };
             logout(&program, &home, env, &account).await
@@ -166,7 +167,17 @@ fn forget_signed(account: &Account, home: &Path) {
     SIGNED.lock().unwrap_or_else(|e| e.into_inner()).remove(&account.gemini_dir(home));
 }
 
-fn create(home: &Path, body: &Value) -> Response {
+/// O `agy` com terminal ignora o `GEMINI_HOME`: o login de uma conta adicional gravava na padrão. A pasta e o
+/// login por conta ficam no `hangar-antigravity` para o modo sem terminal, ainda não medido.
+fn only_default() -> Response {
+    fail(409, ADDITIONAL, "o Antigravity só usa a conta padrão (a do ~/.gemini) por enquanto")
+}
+const ADDITIONAL: &str = "erro_conta_antigravity_adicional";
+
+fn create(_home: &Path, _body: &Value) -> Response { only_default() }
+
+#[cfg(test)]
+fn create_folder(home: &Path, body: &Value) -> Response {
     let Some(name) = body["name"].as_str().filter(|n| valid_name(n) && *n != DEFAULT_ID) else {
         return fail(422, "erro_nome_conta_invalido", "use letras minúsculas, números, - e _ (até 32)");
     };
@@ -298,12 +309,21 @@ mod tests {
         assert!(account_of(home.path(), DEFAULT_ID).is_some_and(|(a, dir)| a.is_default() && dir.is_none()));
         assert!(account_of(home.path(), "trabalho").is_none(), "sem a marca não é conta");
         assert!(account_of(home.path(), "../x").is_none());
-        let created = create(home.path(), &json!({"name": "trabalho"}));
+        let created = create_folder(home.path(), &json!({"name": "trabalho"}));
         assert_eq!(created.status(), StatusCode::OK);
         let (account, _) = account_of(home.path(), "trabalho").unwrap();
         assert_eq!(id_of(&account), "trabalho");
-        assert_eq!(create(home.path(), &json!({"name": "trabalho"})).status(), StatusCode::CONFLICT);
-        assert_eq!(create(home.path(), &json!({"name": "Ruim"})).status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(create_folder(home.path(), &json!({"name": "trabalho"})).status(), StatusCode::CONFLICT);
+        assert_eq!(create_folder(home.path(), &json!({"name": "Ruim"})).status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(delete(DEFAULT_ID, None).status(), StatusCode::CONFLICT);
+    }
+
+    /// Só a conta padrão com terminal: criar conta e entrar numa adicional são recusados.
+    #[test]
+    fn additional_accounts_are_refused() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(create(home.path(), &json!({"name": "trabalho"})).status(), StatusCode::CONFLICT);
+        assert!(!home.path().join(format!("{}trabalho", paths::ACCOUNT_PREFIX)).exists());
+        assert_eq!(only_default().status(), StatusCode::CONFLICT);
     }
 }

@@ -238,38 +238,19 @@ impl CodexAccount {
     }
 }
 
-/// Uma conta Google do Antigravity como `GET /api/antigravity-contas` manda.
+/// Uma conta Google do Antigravity como `GET /api/antigravity-contas` manda. A sessão com terminal abre só na padrão: o
+/// `agy` com terminal ignora o `GEMINI_HOME`, e a lista serve para saber se a padrão tem login.
 #[derive(Clone, Debug, Deserialize)]
 struct AgyAccount {
-    /// `default` ou o nome da pasta adicional: o `conta` do catálogo.
-    id: String,
     #[serde(rename = "padrao", default)] default: bool,
-    /// A pasta da conta: vai como `config_dir` na abertura, menos na padrão (o `~/.gemini`).
-    #[serde(rename = "pasta", default)] path: String,
-    #[serde(rename = "credencial", default)] credential: String,
     #[serde(rename = "logado")] signed_in: Option<bool>,
-    #[serde(rename = "termos_aceitos", default)] terms: bool,
-}
-
-impl AgyAccount {
-    fn label(&self) -> String { if self.default { tr("create_agy_default") } else { self.id.clone() } }
-    /// A dica da linha e a do campo: "logado · Termos pendentes".
-    fn hint(&self) -> String {
-        let login = match self.signed_in { Some(true) => tr("create_agy_signed_in"), Some(false) => tr("create_agy_signed_out"), None => tr("create_agy_unknown") };
-        std::iter::once(login).chain((!self.terms).then(|| tr("create_agy_terms"))).collect::<Vec<_>>().join(" · ")
-    }
 }
 
 #[derive(Deserialize)]
 struct AgyList { #[serde(rename = "contas", default)] accounts: Vec<AgyAccount> }
 
-/// A conta pedida (a pasta da tarefa agendada), senão a padrão com login, senão a primeira com login, senão a padrão.
-fn choose_agy_account(accounts: &[AgyAccount], requested: Option<&str>) -> Option<usize> {
-    requested.and_then(|path| accounts.iter().position(|a| a.path == path))
-        .or_else(|| accounts.iter().position(|a| a.default && a.signed_in != Some(false)))
-        .or_else(|| accounts.iter().position(|a| a.signed_in == Some(true)))
-        .or_else(|| accounts.iter().position(|a| a.default)).or((!accounts.is_empty()).then_some(0))
-}
+/// A conta padrão do agy, a única em que a sessão abre.
+fn default_agy_account(accounts: &[AgyAccount]) -> Option<&AgyAccount> { accounts.iter().find(|a| a.default) }
 
 fn choose_codex_account(accounts: &[CodexAccount], requested: Option<&str>) -> Option<usize> {
     match requested {
@@ -640,11 +621,6 @@ pub(in crate::app) struct NewSession {
     codex_account: String,
     codex_pick: Option<Picker>,
     agy: Remote<Vec<AgyAccount>>,
-    /// `default` ou o nome da conta adicional escolhida.
-    agy_account: String,
-    agy_pick: Option<Picker>,
-    /// A pasta da conta que a tarefa agendada usa: a lista que chegar escolhe essa.
-    agy_wanted: Option<String>,
     headless: bool,
     headless_owner: Option<bool>,
     headless_touched: bool,
@@ -807,7 +783,7 @@ impl NewSession {
             sessions: Remote::default(), same_folder: false, name, provider: "claude", provider_touched: false, providers: Remote::default(), configs: Remote::default(),
             config: None, config_pick: None, customizations: Default::default(), customizations_search,
             customizations_focus: cx.focus_handle().tab_stop(true), codex: Remote::default(), codex_account: String::new(), codex_pick: None,
-            agy: Remote::default(), agy_account: String::new(), agy_pick: None, agy_wanted: None, headless: true, headless_owner: None, headless_touched: false, headless_saving: false,
+            agy: Remote::default(), headless: true, headless_owner: None, headless_touched: false, headless_saving: false,
             difference: false, manual_open: false, manual, choosing: false, choose_error: None, create_seq: 0, creating: false, started: None,
             step: String::new(), error: None, clock: None, models: Remote::default(), model: String::new(), model_choice_touched: false, account_touched: false, account_suggested: false, effort: String::new(), service_tier: None,
             permission: String::new(), saved_default: None, defaults_ready: false, default_saving: false, default_save_seq: 0, permission_touched: false, subagent: String::new(), engine: String::new(), engine_account: String::new(), engine_account_pick: None, model_pick: None, effort_pick: None,
@@ -1105,7 +1081,6 @@ impl NewSession {
 
     fn load_agy(&mut self, cx: &mut Context<Self>) {
         let seq = self.agy.start();
-        (self.agy_account, self.agy_pick) = (String::new(), None);
         self.request(cx, move |api, send| Box::pin(async move { send(CreateReply::Antigravity(seq, api.server_read(&["antigravity-contas"], &[], 60).await)).await }));
     }
 
@@ -1114,7 +1089,6 @@ impl NewSession {
         let seq = self.agy.seq + 1;
         self.agy = Remote::default();
         self.agy.seq = seq;
-        (self.agy_account, self.agy_pick) = (String::new(), None);
     }
 
     fn select_root(&mut self, root: Root, window: &mut Window, cx: &mut Context<Self>) { self.open_root(root, true, window, cx); }
@@ -1279,15 +1253,10 @@ impl NewSession {
             && self.codex.ok().and_then(|list| list.iter().find(|a| a.id == self.codex_account)).is_some_and(|a| a.auth.status == "connected"))
     }
 
-    /// A pasta da conta adicional escolhida; a padrão não vai (o servidor abre no `~/.gemini`).
-    fn agy_path(&self) -> Option<String> {
-        self.agy.ok()?.iter().find(|a| a.id == self.agy_account && !a.default).map(|a| a.path.clone())
-    }
-
-    /// Antigravity: a conta escolhida existe e o agy não disse que ela está sem login.
+    /// Antigravity: a conta padrão existe e o agy não disse que ela está sem login.
     fn agy_ready(&self) -> bool {
         self.provider != "antigravity" || (!self.agy.loading
-            && self.agy.ok().and_then(|list| list.iter().find(|a| a.id == self.agy_account)).is_some_and(|a| a.signed_in != Some(false)))
+            && self.agy.ok().and_then(|list| default_agy_account(list)).is_some_and(|a| a.signed_in != Some(false)))
     }
 
     /// Pasta nova: o nome da branch nova digitado para a anterior não vale aqui.
@@ -1415,10 +1384,8 @@ impl NewSession {
                 if self.engine.is_empty() && !self.subagent.is_empty() { body["subagent_model"] = json!(self.subagent); }
             }
             "codex" => { body["codex_account"] = json!(self.codex_account); },
-            "antigravity" => {
-                if let Some(path) = self.agy_path() { body["config_dir"] = json!(path); }
-                if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
-            }
+            // Sem `config_dir`: a sessão abre na conta padrão do agy.
+            "antigravity" => { if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); } }
             "omp" => { let profile = self.omp.read(cx).value().trim().to_owned(); if !profile.is_empty() { body["omp_profile"] = json!(profile); } }
             _ => {}
         }
@@ -1451,6 +1418,10 @@ impl NewSession {
             let mut changed = self.scheduled_changed.clone();
             if self.omp.read(cx).value().to_string() != self.scheduled_original.as_ref().and_then(|value| value["omp_profile"].as_str()).unwrap_or_default() { changed.insert("omp_profile"); }
             if self.scheduled_original.as_ref().and_then(|value| value["cwd"].as_str()) != Some(cwd.as_str()) { changed.insert("cwd"); }
+            // A conta adicional do Antigravity que a tarefa guardava sai: a sessão com terminal abre só na padrão.
+            if self.provider == "antigravity" && self.scheduled_original.as_ref().is_some_and(|value| !value["config_dir"].is_null()) {
+                changed.insert("config_dir");
+            }
             // Plugins e skills mexidos nesta tela também são escolha: a tarefa nova os guarda.
             if self.scheduled_original.is_none() && self.customization_payload().is_some() { changed.insert("claude_customizations"); }
             let launch = scheduled_launch::merge(self.scheduled_original.as_ref(), self.open_body("", &cwd, "", cx), &changed);
@@ -1502,10 +1473,7 @@ impl NewSession {
                 "headless": has_surfaces(provider) && self.headless,
                 "resumo_por_modelo": self.baton_by_model});
             if provider == "codex" { body["codex_account"] = json!(self.codex_account); }
-            if provider == "antigravity" {
-                if let Some(path) = self.agy_path() { body["config_dir"] = json!(path); }
-                if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
-            }
+            if provider == "antigravity" && !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
             if claude && self.proxy_accounts().is_some() { body["engine_account"] = json!(self.engine_account); }
             if claude && let Some(binding) = self.proxy_binding() { body["engine_binding"] = json!(binding); }
             if self.headless_inherited() { body.as_object_mut().unwrap().remove("headless"); }
@@ -1742,18 +1710,6 @@ impl NewSession {
                 let list = result.map_err(|e| Hangar::fetch_failure(&e))
                     .and_then(|v| serde_json::from_value::<AgyList>(v).map(|l| l.accounts).map_err(|_| tr("invalid_response")));
                 if !self.agy.finish(seq, list) { return None; }
-                let list = self.agy.ok().cloned().unwrap_or_default();
-                let at = choose_agy_account(&list, self.agy_wanted.as_deref());
-                self.agy_account = at.map(|n| list[n].id.clone()).unwrap_or_default();
-                let choices = list.iter().map(|a| ModelChoice { id: a.id.clone(), label: a.label(), hint: a.hint() }).collect();
-                self.agy_pick = Some(picker(choices, at, false, |this, id, window, cx| {
-                    if this.creating || this.agy_account == id { return; }
-                    this.scheduled_touch(&["config_dir", "model", "permission_mode"]);
-                    this.agy_account = id;
-                    this.error = None;
-                    this.load_models(window, cx);
-                }, window, cx));
-                self.load_models(window, cx);
             }
             reply @ (CreateReply::Models(..) | CreateReply::Engines(..) | CreateReply::Config(..) | CreateReply::Quotas(..)
                 | CreateReply::Context(..) | CreateReply::Account(..) | CreateReply::Spread(..)) => self.receive_extra(reply, window, cx),
@@ -2272,20 +2228,18 @@ impl NewSession {
                 })))
     }
 
+    /// Sem seletor: a sessão abre na conta padrão, e aqui só aparece a leitura dela, a falha ou a falta de login.
     fn render_agy_account(&self, cx: &mut Context<Self>) -> Div {
-        let account = self.agy.ok().and_then(|list| list.iter().find(|a| a.id == self.agy_account)).cloned();
+        let signed_out = self.agy.ok().and_then(|list| default_agy_account(list)).is_some_and(|a| a.signed_in == Some(false));
         div().flex().flex_col().gap(px(6.))
-            .child(label(tr("create_agy_account")))
-            .map(|el| match (&self.agy_pick, self.agy.value.as_ref()) {
-                (_, _) if self.agy.loading => el.child(div().id("create-agy-loading").role(Role::Status).child(muted(tr("loading")))),
-                (_, Some(Err(error))) => el.child(alert("create-agy-error", error.clone()))
+            .map(|el| match self.agy.value.as_ref() {
+                _ if self.agy.loading => el.child(div().id("create-agy-loading").role(Role::Status).child(muted(tr("loading")))),
+                Some(Err(error)) => el.child(alert("create-agy-error", error.clone()))
                     .child(div().child(Button::new("create-agy-retry").outline().small().label(tr("create_try_again")).disabled(self.creating)
                         .on_click(cx.listener(|this, _, _, cx| { this.load_agy(cx); cx.notify(); })))),
-                (Some((pick, _)), _) => el.child(Select::new(pick).disabled(self.creating).accessibility_label(tr("create_agy_account"))),
                 _ => el,
             })
-            .when_some(account, |el, a| el.child(muted(a.hint()))
-                .when(a.signed_in == Some(false), |el| el.child(alert("create-agy-signed-out", tr("create_agy_needs_login")))))
+            .when(signed_out, |el| el.child(alert("create-agy-signed-out", tr("create_agy_default_needs_login"))))
     }
 
     fn render_form(&self, path: &str, cx: &mut Context<Self>) -> Div {
@@ -2604,11 +2558,7 @@ impl NewSession {
                 let label = list.iter().find(|a| a.id == self.codex_account).map(|a| a.name.clone()).unwrap_or_else(|| tr("create_default"));
                 (label, tr("create_codex_account"))
             }), self.codex.ok().and_then(|list| list.iter().find(|a| a.id == self.codex_account)).and_then(|a| a.credential_id.clone())),
-            "antigravity" => {
-                let chosen = self.agy.ok().and_then(|list| list.iter().find(|a| a.id == self.agy_account));
-                (self.agy.ok().filter(|list| !list.is_empty()).map(|_| (chosen.map(AgyAccount::label).unwrap_or_else(|| tr("create_default")),
-                    tr("create_agy_account"))), chosen.map(|a| a.credential.clone()).filter(|c| !c.is_empty()))
-            }
+            // O Antigravity abre só na conta padrão: não há conta a escolher.
             _ => (None, None),
         };
         let badge = credential.as_deref().and_then(|id| self.account_badge(id)).cloned();
@@ -2747,7 +2697,7 @@ impl NewSession {
             failed(&self.configs).filter(|_| claude).cloned(),
             failed(&self.codex).filter(|_| self.provider == "codex").cloned(),
             failed(&self.agy).filter(|_| self.provider == "antigravity").cloned(),
-            (self.provider == "antigravity" && !self.agy.loading && self.agy.ok().is_some() && !self.agy_ready()).then(|| tr("create_agy_needs_login")),
+            (self.provider == "antigravity" && !self.agy.loading && self.agy.ok().is_some() && !self.agy_ready()).then(|| tr("create_agy_default_needs_login")),
             failed(&self.models).map(|e| format!("{}: {e}", tr("create_models_failed"))),
             failed(&self.checkout).map(|e| tr("create_checkout_failed").replace("{reason}", e)),
             (!self.roots.loading && self.roots.ok().is_some_and(Vec::is_empty)).then(|| tr("new_chat_no_roots")),
@@ -2851,22 +2801,6 @@ impl NewSession {
                 }).collect();
                 div().when_some(self.proxy_note(), |el, note| el.child(alert("new-chat-proxy-error", note)))
                     .child(Self::menu_list("new-chat-engine-accounts", rows)).into_any_element()
-            }
-            Menu::Account if self.provider == "antigravity" => {
-                let rows = self.agy.ok().into_iter().flatten().filter(|a| wanted(&query, &a.label(), &a.hint())).map(|account| {
-                    let id = account.id.clone();
-                    let mark = account_mark((!account.credential.is_empty()).then(|| self.account_badge(&account.credential)).flatten(), "antigravity", 14.);
-                    menu_row_marked(SharedString::from(format!("new-chat-agy-{id}")), account.id == self.agy_account, Some(mark),
-                        account.label(), account.hint(), None)
-                        .disabled(self.creating)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.menu.set(None);
-                            if this.agy_account != id { this.agy_account = id.clone(); this.load_models(window, cx); }
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                }).collect();
-                Self::menu_list("new-chat-agy-list", rows)
             }
             Menu::Account if self.provider == "codex" => {
                 let rows = self.codex.ok().into_iter().flatten().filter(|a| wanted(&query, &a.name, &a.hint())).map(|account| {
@@ -3235,7 +3169,6 @@ impl Hangar {
                 view.config = launch["config_dir"].as_str().map(str::to_owned);
                 view.account_touched = view.config.is_some();
                 view.codex_account = launch["codex_account"].as_str().unwrap_or_default().to_owned();
-                if view.provider == "antigravity" { view.agy_wanted = launch["config_dir"].as_str().map(str::to_owned); }
                 view.engine = launch["engine"].as_str().unwrap_or_default().to_owned();
                 view.engine_account = launch["engine_account"].as_str().unwrap_or_default().to_owned();
                 if let Some(headless) = launch["headless"].as_bool() { view.headless = headless; view.headless_touched = true; }
@@ -3619,15 +3552,15 @@ mod tests {
     }
 
     #[test]
-    fn new_session_opens_antigravity_in_the_signed_in_google_account() {
+    fn new_session_opens_antigravity_only_in_the_default_google_account() {
         let accounts: Vec<super::AgyAccount> = serde_json::from_value(json!([
-            {"id":"default", "padrao":true, "pasta":"/h/.gemini", "logado":false, "termos_aceitos":true},
-            {"id":"trabalho", "padrao":false, "pasta":"/h/.antigravity-trabalho", "logado":true, "termos_aceitos":false}
+            {"id":"trabalho", "padrao":false, "pasta":"/h/.antigravity-trabalho", "logado":true, "termos_aceitos":false},
+            {"id":"default", "padrao":true, "pasta":"/h/.gemini", "logado":false, "termos_aceitos":true}
         ])).unwrap();
-        assert_eq!(super::choose_agy_account(&accounts, None), Some(1), "a padrão sem login cede para a que tem");
-        assert_eq!(super::choose_agy_account(&accounts, Some("/h/.gemini")), Some(0), "a tarefa agendada abre na conta dela");
-        assert_eq!(super::choose_agy_account(&accounts[..1], None), Some(0));
-        assert_eq!(super::choose_agy_account(&[], None), None);
+        // Só a padrão: a adicional logada não a substitui, porque o agy com terminal só conhece a pasta da padrão.
+        assert_eq!(super::default_agy_account(&accounts).map(|a| a.signed_in), Some(Some(false)));
+        assert!(super::default_agy_account(&accounts[..1]).is_none());
+        assert!(super::default_agy_account(&[]).is_none());
         assert!(super::AGY_TERMINAL_PERMISSIONS.iter().all(|mode| *mode != "manual"), "com terminal o agy não abre no que pergunta");
         assert!(!super::has_surfaces("antigravity") && super::has_surfaces("claude") && super::has_surfaces("codex"));
     }

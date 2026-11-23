@@ -9,14 +9,20 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   Com terminal, a TUI fica no tmux; o estado vem dos hooks `SessionStart`, `PreInvocation`,
   `PostInvocation` e `Stop` (`provider_hooks` `agy-state-hook`), nunca de `PreToolUse` ou
   `PostToolUse`, onde a resposta `{}` bloqueia a ferramenta. A conversa vem do
-  `transcript_full.jsonl` (`hangar-transcript/src/antigravity.rs`); a tela só diz permissão e
-  ocupado (`agy_analyze`). Conta adicional é uma pasta própria com `GEMINI_HOME`,
-  `SSH_CONNECTION` local e `AGY_ACP_FORCE_FILE_STORAGE=1` (`hangar-antigravity/src/env.rs`): sem o
-  `SSH_CONNECTION`, todas usam o login do chaveiro. Login por `agy acp --login`, com o link aberto e
-  o código colado pela pessoa. O Hangar nunca lê o token, nunca chama endpoint do Google, nunca troca
-  de conta sozinho e nunca aceita os Termos pela pessoa; a atualização automática do `agy` fica
-  desligada. "manual" só existe sem terminal: a TUI não abre no modo que pergunta, e o pedido com
-  terminal é 409 `erro_permissao_manual_sem_terminal`. Ver
+  `transcript_full.jsonl` (`hangar-transcript/src/antigravity.rs`); a tela diz permissão e ocupado
+  (`agy_analyze`), e o rodapé (`agy_footer`) diz modo e modelo. Com terminal só existe a conta
+  padrão: o `agy` ignora o `GEMINI_HOME`, e conta adicional é 409 `erro_conta_antigravity_adicional`
+  na abertura, no criar conta e no login. O código de conta por pasta (`hangar-antigravity`) fica para
+  o modo sem terminal, que precisa medir se o `agy acp` respeita a pasta. Login por `agy acp --login`,
+  com o link aberto e o código colado pela pessoa. O Hangar nunca lê o token, nunca chama endpoint
+  do Google, nunca troca de conta sozinho e nunca aceita os Termos pela pessoa; a atualização
+  automática do `agy` fica desligada. Abrir em "manual" com terminal é 409
+  `erro_permissao_manual_sem_terminal` (a TUI não tem flag para ele); depois de aberta, o modo troca
+  pelo shift+tab (`BTab`), lido e confirmado no rodapé, e sai no `claude_permission_mode` do `state`
+  pelas rotas de modo do Claude. O modelo troca por `/model <id>`, confirmado pelo rodapé ou pela
+  linha "Model set to" (`antigravity/models` e `antigravity/model` em `provider_models`). Troca de
+  modo ou modelo só com a sessão parada e a caixa vazia. O contexto da linha é `input_tokens +
+  cache_read_tokens` da última `PLANNER_RESPONSE`, com `window: 0` (janela desconhecida). Ver
   [Antigravity com terminal](#antigravity-agy-com-terminal-23112026).
 
 - **Troca de agente pelo seletor de modelos espera o turno e segura a fila.** `POST /conta` com
@@ -1234,12 +1240,31 @@ Medido no `agy` 1.5.13 a 1.5.15, Linux, num servidor isolado (HOME, `TMUX_TMPDIR
 - **A caixa vazia mostra a dica do modo** (`Auto mode: … (shift+tab to cycle)`); lida como rascunho,
   ela travava a entrega (`composer_busy`). `drive.rs` a reconhece (`AGY_MODE_HINT`).
 - **Modos da TUI:** `--mode accept-edits|auto|plan` e `--dangerously-skip-permissions`; sem flag, a
-  TUI abre em `auto`. Não há flag para o modo que pergunta, e por isso "manual" fica para o modo sem
-  terminal (decisão do dono).
-- **Várias contas:** só `GEMINI_HOME` não isola o login, que fica no chaveiro; com `SSH_CONNECTION`
-  local e `AGY_ACP_FORCE_FILE_STORAGE=1`, cada pasta tem o seu (provado com `agy models`).
-  Pasta nova abre os Termos do Google com opt-in de dados (`cache/onboarding.json`), e quem aceita
-  é a pessoa. `agy models` lista `id\tnome` sem gastar cota e serve de prova de login.
+  TUI abre em `auto`. Não há flag para o modo que pergunta, e por isso abrir em "manual" com
+  terminal é recusado (decisão do dono).
+- **Rodapé (1.5.15):** a última linha traz `[modo · ]Modelo · esforço` à direita, com `esc to cancel`
+  ou `? for shortcuts` à esquerda: `auto · Gemini 4 Neon · low`, `plan · Gemini 4 Neon · medium`,
+  `accept-edits · Gemini 4 Neon · medium`. O modo padrão, o que pergunta, não tem rótulo:
+  `Gemini 4 Neon · medium`. O rótulo do bypass não foi medido e fica sem modo.
+- **Ciclo do shift+tab:** `BTab` cicla auto → plan → padrão → accept-edits → auto; o bypass só
+  existe na abertura e não entra no ciclo. A caixa vazia mostra a dica do modo
+  (`Plan mode: … (shift+tab to cycle)`); o padrão não tem dica. O Hangar aperta uma tecla por vez
+  e só segue com o rodapé novo na tela (no máximo 4); sem rodapé novo em 2 s responde incerto.
+- **Modelo:** `/model <id>` + Enter troca na hora e escreve `⎿  Model set to Gemini 4 Neon (Medium)`; o
+  rodapé passa a `· medium`. O id é o nome em minúsculas com hífens mais o esforço
+  (`gemini-4-neon-medium`).
+- **Contexto:** cada `PLANNER_RESPONSE` do `transcript_full.jsonl` traz `"model":"gemini-4-neon-low"`,
+  `input_tokens`, `cache_read_tokens` e `output_tokens`; o `input_tokens` não inclui o cache. Contexto
+  usado = `input_tokens + cache_read_tokens` da última resposta. A janela não vem do `agy` e o cache
+  do models.dev guarda só tarifas: a linha leva os tokens sem porcentagem.
+- **Várias contas, medido no 1.5.15 com terminal:** o `agy` ignora o `GEMINI_HOME`. O log mostra
+  `CLI app data directory: $HOME/.gemini/antigravity-cli` com a variável apontando para outra pasta, e
+  o login da conta adicional foi gravado na pasta da padrão. Por isso este PR fica só com a conta
+  padrão. Antes, no ACP: só `GEMINI_HOME` não isola o login, que fica no chaveiro; com
+  `SSH_CONNECTION` local e `AGY_ACP_FORCE_FILE_STORAGE=1`, cada pasta teve o seu (`agy models`); falta
+  medir se a pasta vale para a sessão do `agy acp`. Pasta nova abre os Termos do Google com opt-in de
+  dados (`cache/onboarding.json`), e quem aceita é a pessoa. `agy models` lista `id\tnome` sem gastar
+  cota e serve de prova de login.
 - **Permissão com terminal:** a tela traz "Requesting permission for:" e as opções numeradas; o
   `/select` com `interaction_id` respondeu "No, cancel" e recusou um `rm -rf`.
 

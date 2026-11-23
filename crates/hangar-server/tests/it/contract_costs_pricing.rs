@@ -401,6 +401,15 @@ mod refresh {
     }
 
     #[test]
+    fn windows_keep_the_context_limit_of_known_providers() {
+        let raw = json!({
+            "google": {"models": {"gemini-4-neon": {"limit": {"context": 1048576, "output": 65536}}, "sem-limite": {}}},
+            "revenda": {"models": {"x": {"limit": {"context": 5}}}},
+        });
+        assert_eq!(Value::Object(hangar_server::costs::pricing_refresh::windows(&raw)), json!({"gemini-4-neon": 1048576}));
+    }
+
+    #[test]
     fn slim_follows_the_python_rules() {
         let raw = json!({
             "anthropic": {"models": {

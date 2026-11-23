@@ -9371,11 +9371,11 @@ impl Render for Hangar {
             .capture_action(cx.listener(|this, _: &gpui_kit::base::input::MovePageDown, window, cx| {
                 if this.chat_keys_apply(window, cx) && this.chat_page_key("pagedown", window, cx) { cx.stop_propagation(); }
             }))
-            // Shift+Tab no campo de mensagem é a tecla do terminal do Claude e do Codex; nos outros campos segue recuando.
+            // Shift+Tab no campo de mensagem é a tecla do terminal do Claude, do Antigravity e do Codex; nos outros campos segue recuando.
             .capture_action(cx.listener(|this, _: &gpui_kit::base::input::OutdentInline, window, cx| {
                 if this.connection_dialog || !this.composer.read(cx).focus_handle(cx).is_focused(window) { return; }
                 match this.provider().0 {
-                    "claude" => this.cycle_permission(cx),
+                    "claude" | "antigravity" => this.cycle_permission(cx),
                     "codex" => this.toggle_codex_mode(cx),
                     _ => return,
                 }

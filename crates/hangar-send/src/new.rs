@@ -210,6 +210,10 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             }
         }
     }
+    // O `agy` com terminal ignora o `GEMINI_HOME`: `--conta` não escolhe nada, e nunca prepara conta Claude no lugar.
+    if options.provider == "antigravity" && !options.account.is_empty() {
+        return fail(err, "erro: --conta não vale para o Antigravity: com terminal ele só usa a conta padrão (a do ~/.gemini)", 2);
+    }
     if options.provider == "codex" && !options.account.is_empty() {
         if options.account == "auto" {
             return fail(err, "erro: --conta auto só vale para Claude", 2);
@@ -263,13 +267,6 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             }
             None => return fail(err, &format!("erro: resposta da cota ilegível em {} — escolha uma conta: --conta <nome>", endpoint.base), 2),
         }
-    }
-    // A conta do Antigravity é a pasta `~/.antigravity-<nome>`; o preparo é o do Claude.
-    if options.provider == "antigravity" && !options.account.is_empty() && options.config_dir.is_empty() {
-        options.config_dir = if options.account.contains('/') { options.account.clone() } else {
-            let home = cx.var("HOME").map_or_else(|| cx.inv.home.to_string_lossy().into_owned(), str::to_owned);
-            format!("{home}/.antigravity-{}", options.account)
-        };
     }
     if !options.account.is_empty() && options.config_dir.is_empty() {
         let prepared = cx.host.account_prep(&options.account);

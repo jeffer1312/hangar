@@ -56,11 +56,6 @@ export interface AntigravityAccounts {
   instalado: boolean;
   contas: AntigravityAccount[];
 }
-/** Conta da criação sem escolha: a padrão logada, outra logada, a padrão, a primeira. */
-export function defaultAntigravityAccount(accounts: AntigravityAccount[]): AntigravityAccount | undefined {
-  return accounts.find((a) => a.padrao && a.logado === true) ?? accounts.find((a) => a.logado === true)
-    ?? accounts.find((a) => a.padrao) ?? accounts[0];
-}
 export interface AntigravityLoginAttempt {
   attempt_id: string;
   estado: 'iniciando' | 'aguardando_codigo' | 'concluido' | 'falhou';

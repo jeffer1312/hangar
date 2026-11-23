@@ -5,7 +5,7 @@ import { AccessibilityInfo, ActivityIndicator, AppState, BackHandler, Platform, 
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { resetCreatedChat } from '../../stores/chat';
-import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount, getAntigravityAccountsForServer, defaultAntigravityAccount,
+import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount, getAntigravityAccountsForServer,
   getEnginesForServer, getSessionDefaultsForServer, getConfigForServer, getMeForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
@@ -17,7 +17,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { useSessions } from '../../stores/sessions';
 import { MACHINE_ICON_NAME } from '../tags/tagVisuals';
 import { AccountGlyph } from '../sessions/SessionPlate';
-import { antigravityAccountLabel, antigravityLoginText } from '../accounts/antigravity';
 import type { AntigravityAccount, ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo, Server, WorktreeChoice, WorktreeRepo } from '@hangar/core';
 import { SessionSettingsControl } from '../../chat/SessionSettings';
 import { semEsforco } from '../pills/pills';
@@ -189,7 +188,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [codexProgress, setCodexProgress] = useState('');
   const codexGeneration = useRef(0);
   const codexController = useRef<AbortController | null>(null);
-  // Contas Google do Antigravity: `agyAccount` é o id da rota (`default` ou o nome da pasta).
+  // Conta Google do Antigravity: só a padrão, porque o agy com terminal ignora a pasta de outra conta.
+  // `agyAccount` fica vazio até a lista responder ou falhar, e segura a criação até lá.
   const [agyAccounts, setAgyAccounts] = useState<AntigravityAccount[]>([]);
   const [agyAccount, setAgyAccount] = useState('');
   const [agyInstalled, setAgyInstalled] = useState(true);
@@ -348,14 +348,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (!alive) return;
         setAgyInstalled(r.instalado);
         setAgyAccounts(r.contas);
-        setAgyAccount((current) => r.contas.some((account) => account.id === current) ? current
-          : defaultAntigravityAccount(r.contas)?.id ?? 'default');
+        setAgyAccount('default');
       })
       .catch((cause: unknown) => {
         if (!alive) return;
         setAgyError(loadErrorText(cause, m.mobile_antigravity_accounts_error()));
-        // Sem a lista, abre na conta que o agy usa sem escolha.
-        setAgyAccount((current) => current || 'default');
+        // Sem a lista, abre na padrão do mesmo jeito.
+        setAgyAccount('default');
         retry.failed(cause);
       })
       .finally(() => { if (alive) setAgyLoading(false); });
@@ -671,8 +670,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     // Permissão do Codex só vale sem terminal; o corpo só existe com o modo já conhecido.
     ? { provider: 'codex', model: modelo || null, effort: esforco || null, permission_mode: headless ? permissao || null : null, codex_account: codexAccount, ...headlessField }
     : provider === 'antigravity'
-    // A conta padrão (~/.gemini) vai sem pasta; o esforço vem no id do modelo.
-    ? { provider, config_dir: contaAgy && !contaAgy.padrao ? contaAgy.pasta : null, model: modelo || null,
+    // Só a conta padrão (~/.gemini), que vai sem pasta; o esforço vem no id do modelo.
+    ? { provider, config_dir: null, model: modelo || null,
       permission_mode: agyPermission || null, ...headlessField }
     : {
       provider,
@@ -747,11 +746,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setAccountChosen(true);
     setSwitchedFrom('');
     setSelectedConfig(v);
-  };
-  const chooseAgyAccount = (value: string) => {
-    providerTouched.current = true;
-    setProvidersError('');
-    setAgyAccount(value);
   };
   const chooseCodexAccount = (value: string) => {
     providerTouched.current = true;
@@ -868,24 +862,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return tag ? <AccountGlyph icon={tag.icon} color={tagHex(tag.color) ?? theme.tokens.text.secondary} provider={provider} size={14} /> : undefined;
   };
   const accountChoice = ((): Choice | null => {
-    if (provider === 'antigravity') {
-      const aria = m.mobile_create_antigravity_account();
-      if (agyLoading && !agyAccounts.length) return { icon: 'CircleUser', label: m.comum_carregando(), aria, disabled: true };
-      // Falha de carga já aparece nos avisos, e a criação segue na padrão.
-      if (!agyAccounts.length) return agyError ? null : { icon: 'CircleUser', label: m.native_new_chat_no_accounts(), aria, disabled: true };
-      return {
-        icon: 'CircleUser',
-        leading: contaAgy ? tagGlyph(contaAgy.credencial) : undefined,
-        label: contaAgy ? antigravityAccountLabel(contaAgy) : m.criar_padrao(),
-        aria,
-        menuTitle: aria,
-        actions: agyAccounts.map((account) => ({
-          id: account.id, title: antigravityAccountLabel(account), state: on(account.id === agyAccount), leading: tagGlyph(account.credencial),
-          subtitle: antigravityLoginText(account.logado),
-        })),
-        onAction: chooseAgyAccount,
-      };
-    }
     if (provider !== 'claude' && provider !== 'codex') return null;
     if (proxyEngine) {
       const label = boundAccount ? [boundAccount.email || boundAccount.label, boundAccount.plan].filter(Boolean).join(' · ') : m.cliproxy_no_bound_account();
@@ -1229,8 +1205,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     const modelActions = [{ id: '', title: m.criar_padrao(), state: on(!modelo) },
       ...modelos.filter((md) => md.id !== 'default').map((md) => ({ id: valorModelo(md), title: md.name ?? md.id, state: on(valorModelo(md) === modelo),
         subtitle: [md.provider, md.context ?? (md.context_length ? ctxWindow(md.context_length).toUpperCase() : '')].filter(Boolean).join(' · ') || undefined }))];
-    const accountLabel = provider === 'claude' ? m.comum_conta_claude()
-      : provider === 'antigravity' ? m.mobile_create_antigravity_account() : m.native_create_codex_account();
+    const accountLabel = provider === 'claude' ? m.comum_conta_claude() : m.native_create_codex_account();
     return (
       <View style={styles.form}>
         <View style={styles.navbar}>

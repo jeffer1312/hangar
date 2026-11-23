@@ -37,6 +37,25 @@ it('tira o nome do modelo da lista quando a statusline não o traz', () => {
   expect(parseStatusLine('🤖 Opus5.5·1M (high) │ 💬 1k/2k', session)?.model).toBe('Opus5.5·1M');
 });
 
+it('sessão Antigravity: nome e contexto saem da lista, sem a statusline do Hangar', () => {
+  const session = { name: 'agy', state: 'idle' as const, provider: 'antigravity' as const,
+    model: 'gemini-4-neon-low', context: { used: 9395, 'window': 1_000_000 } };
+  // A última linha do pane do agy não tem marcador do Hangar.
+  const f = parseStatusLine('auto · Gemini 4 Neon · low', session);
+  expect(f).toMatchObject({ model: 'Gemini 4 Neon (Low)', ctxUsed: 9395, ctxTotal: 1_000_000 });
+  expect(f?.ctxPct).toBeCloseTo(0.9395);
+  expect(parseStatusLine(null, session)?.model).toBe('Gemini 4 Neon (Low)');
+  expect(parseStatusLine(null, { ...session, model: 'gemini-3.1-pro' })?.model).toBe('Gemini 3.1 Pro');
+  // Janela desconhecida não vira contexto.
+  expect(parseStatusLine(null, { ...session, model: null, context: { used: 10, 'window': 0 } })).toBeNull();
+});
+
+it('o contexto da statusline vence o da lista', () => {
+  const session = { name: 'cl', state: 'idle' as const, provider: 'claude' as const, context: { used: 1, 'window': 10 } };
+  expect(parseStatusLine('🤖 Opus5 │ 💬 1k/2k 40k/200k', session)?.ctxPct).toBe(20);
+  expect(parseStatusLine('🤖 Opus5 │ 💬 1k/2k', session)?.ctxPct).toBe(10);
+});
+
 describe('parseStatusLine — uso de contexto', () => {
   it('deriva ctxPct do 2º par (usado/janela) quando há métrica de contexto', () => {
     const s = parseStatusLine('💬 20k/1k 40k/200k');

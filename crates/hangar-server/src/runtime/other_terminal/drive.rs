@@ -179,11 +179,19 @@ fn ready(target: &OtherTarget, frame: &OtherFrame) -> bool {
         .any(|line| line.chars().any(|c| "─━═╰│".contains(c)))
 }
 fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot> {
-    if codex(target) {
+    composer_for(target.provider, frame)
+}
+/// O rascunho na caixa do `agy` (vazio = caixa vazia ou só a dica do modo); `None` sem caixa legível.
+pub(crate) fn agy_draft(screen: &str) -> Option<String> {
+    let frame = OtherFrame { text: screen.to_owned(), typed: None, styled: None, editor: None };
+    composer_for(hangar_transcript::Provider::Antigravity, &frame).map(|composer| composer.content)
+}
+fn composer_for(provider: hangar_transcript::Provider, frame: &OtherFrame) -> Option<ComposerSnapshot> {
+    if provider == hangar_transcript::Provider::Codex {
         return codex_composer(frame);
     }
     if matches!(
-        target.provider,
+        provider,
         hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
     ) && let Some(editor) = &frame.editor
     {
@@ -249,12 +257,12 @@ fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot
         .collect::<Vec<_>>()
         .join("\n");
     if matches!(
-        target.provider,
+        provider,
         hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
     ) {
         content = PI_NOTICE.replace_all(&compact(&content), "").into_owned();
     }
-    if target.provider == hangar_transcript::Provider::Antigravity && AGY_MODE_HINT.is_match(content.trim()) {
+    if provider == hangar_transcript::Provider::Antigravity && AGY_MODE_HINT.is_match(content.trim()) {
         content.clear();
     }
     let placeholders = PLACEHOLDER
@@ -1587,6 +1595,66 @@ async fn generic_select(
     Ok(control.reply(RuntimeDisposition::Accepted, json!({"ok":true})))
 }
 
+/// O ciclo do shift+tab do `agy`, na ordem da tela; `manual` é o modo padrão dele, sem rótulo no rodapé. O
+/// `bypassPermissions` só existe na abertura (`--dangerously-skip-permissions`) e não entra no ciclo.
+const AGY_MODES: [&str; 4] = ["auto", "plan", "manual", "acceptEdits"];
+const AGY_MODE_WAIT: Duration = Duration::from_secs(2);
+const AGY_MODE_POLL: Duration = Duration::from_millis(150);
+
+/// Lê ou troca o modo do `agy` pelo rodapé; cada BTab só conta com o rodapé novo na tela.
+async fn agy_permission(context: &mut Control<'_>, payload: &Value, set: bool) -> Result<OtherControlOutcome, RuntimeError> {
+    let mode_of = |frame: &OtherFrame| crate::terminal_state::agy_footer(&frame.text).and_then(|footer| footer.mode);
+    let frame = context.frame(false, false).await?;
+    let Some(initial) = mode_of(&frame) else {
+        return Ok(context.reply(RuntimeDisposition::Rejected, json!({"ok":false,"current":null,"error_code":"erro_permissao_leitura"})));
+    };
+    if !set {
+        return Ok(context.reply(RuntimeDisposition::Accepted,
+            json!({"ok":true,"current":initial,"modes":AGY_MODES,"sondavel":false,"previous_non_plan":null,"uncertain":false})));
+    }
+    let requested = payload["mode"].as_str().unwrap_or_default();
+    let refuse = |context: &Control<'_>, code: &str| context.reply(RuntimeDisposition::Rejected,
+        json!({"ok":false,"mode":initial,"current":initial,"requested":requested,"error_code":code}));
+    if requested == "bypassPermissions" { return Ok(refuse(context, "erro_permissao_so_na_abertura")); }
+    if !AGY_MODES.contains(&requested) { return Ok(refuse(context, "erro_permissao_invalida")); }
+    if requested == initial {
+        return Ok(context.reply(RuntimeDisposition::Accepted,
+            json!({"ok":true,"mode":initial,"current":initial,"requested":requested,"changed":false,"previous_non_plan":null})));
+    }
+    // Como no Claude: a tecla seria resposta de um menu, e o rascunho é de quem está digitando.
+    let analysis = crate::terminal_state::agy_analyze(&frame.text);
+    if analysis.overlay || analysis.state == "awaiting_input" { return Ok(refuse(context, "permission_menu_open")); }
+    if analysis.state == "working" { return Ok(refuse(context, "erro_sessao_trabalhando")); }
+    match composer_for(hangar_transcript::Provider::Antigravity, &frame) {
+        Some(composer) if composer.content.trim().is_empty() => {}
+        Some(_) => return Ok(refuse(context, "erro_caixa_com_rascunho")),
+        None => return Ok(refuse(context, "erro_permissao_leitura")),
+    }
+    let mut current = initial;
+    for _ in 0..AGY_MODES.len() {
+        context.write("BTab", false, false).await?;
+        let until = Instant::now() + AGY_MODE_WAIT;
+        let next = loop {
+            tokio::time::sleep(AGY_MODE_POLL).await;
+            let frame = context.frame(false, false).await?;
+            if let Some(mode) = mode_of(&frame).filter(|mode| *mode != current) { break Some(mode); }
+            if Instant::now() >= until { break None; }
+        };
+        // Sem rodapé novo a tecla pode ter chegado ou não: outra tecla giraria às cegas.
+        let Some(next) = next else {
+            return Ok(context.reply(RuntimeDisposition::Unknown,
+                json!({"ok":false,"current":null,"requested":requested,"uncertain":true,"error_code":"permission_key_timeout"})));
+        };
+        current = next;
+        if current == requested {
+            return Ok(context.reply(RuntimeDisposition::Accepted,
+                json!({"ok":true,"mode":current,"current":current,"requested":requested,"changed":true,"previous_non_plan":null})));
+        }
+    }
+    Ok(context.reply(RuntimeDisposition::Rejected,
+        json!({"ok":false,"mode":current,"current":current,"requested":requested,"error_code":"erro_permissao_ciclo_agy"})))
+}
+
 pub async fn control(
     target: &OtherTarget,
     io: &dyn OtherIo,
@@ -1683,6 +1751,11 @@ pub async fn control(
                 }
                 Ok(context.reply(RuntimeDisposition::Accepted, json!({"ok":true})))
             }
+            "permission_modes" | "set_permission_mode"
+                if target.provider == hangar_transcript::Provider::Antigravity =>
+            {
+                agy_permission(&mut context, payload, kind == "set_permission_mode").await
+            }
             "steer" | "steer_queue" | "steer_entry" => {
                 let before = context.frame(true, false).await;
                 if before
@@ -1757,6 +1830,94 @@ mod codex_screens {
             include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_resume_list.txt")] {
             let still_typed = codex_composer(&frame(screen)).is_some_and(|now| compact(&now.content) == compact("/resume"));
             assert!(!still_typed);
+        }
+    }
+}
+
+/// O modo do `agy` pelo rodapé e pelo shift+tab, com as telas medidas (`hangar-core/tests/fixtures/agy`).
+#[cfg(test)]
+mod agy_modes {
+    use super::*;
+    use futures_util::future::BoxFuture;
+    use std::{collections::VecDeque, sync::Mutex};
+
+    fn screen(name: &str) -> String {
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hangar-core/tests/fixtures/agy").join(name)).unwrap()
+    }
+    /// Devolve as telas em ordem e repete a última; guarda as teclas.
+    struct Screens { frames: Mutex<VecDeque<String>>, keys: Mutex<Vec<String>> }
+    impl Screens {
+        fn new(names: &[&str]) -> Self {
+            Self { frames: Mutex::new(names.iter().map(|name| screen(name)).collect()), keys: Mutex::default() }
+        }
+        fn keys(&self) -> Vec<String> { self.keys.lock().unwrap().clone() }
+    }
+    impl OtherIo for Screens {
+        fn prove<'a>(&'a self, _: &'a OtherTarget) -> BoxFuture<'a, Result<bool, RuntimeError>> { Box::pin(async { Ok(true) }) }
+        fn capture<'a>(&'a self) -> BoxFuture<'a, Result<OtherFrame, RuntimeError>> {
+            Box::pin(async {
+                let mut frames = self.frames.lock().unwrap();
+                let text = if frames.len() > 1 { frames.pop_front().unwrap() } else { frames.front().cloned().unwrap_or_default() };
+                Ok(OtherFrame { text, typed: None, styled: None, editor: None })
+            })
+        }
+        fn write<'a>(&'a self, _: &'a OtherTarget, value: &'a str, _: bool, _: Option<&'a OtherWriteGuard>) -> BoxFuture<'a, Result<(), RuntimeError>> {
+            Box::pin(async move { self.keys.lock().unwrap().push(value.to_owned()); Ok(()) })
+        }
+        fn release<'a>(&'a self) -> BoxFuture<'a, ()> { Box::pin(async {}) }
+    }
+    fn target() -> OtherTarget {
+        let mut target = super::super::tests::target();
+        target.provider = hangar_transcript::Provider::Antigravity;
+        target
+    }
+    async fn run(io: &Screens, kind: &str, payload: Value) -> RuntimeReply {
+        let store = InteractionStore::default();
+        control(&target(), io, &store, "op", kind, &payload, None).await.unwrap().reply
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_modes_read_comes_from_the_footer_in_the_cycle_order() {
+        let io = Screens::new(&["footer_default.txt"]);
+        let reply = run(&io, "permission_modes", json!({"probe": false})).await;
+        assert_eq!(reply.disposition, RuntimeDisposition::Accepted);
+        assert_eq!(reply.payload["current"], "manual");
+        assert_eq!(reply.payload["modes"], json!(["auto", "plan", "manual", "acceptEdits"]));
+        assert!(io.keys().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_switch_presses_shift_tab_until_the_footer_shows_the_mode() {
+        let io = Screens::new(&["idle.txt", "footer_plan.txt", "footer_default.txt", "footer_accept_edits.txt"]);
+        let reply = run(&io, "set_permission_mode", json!({"mode": "acceptEdits"})).await;
+        assert_eq!(reply.disposition, RuntimeDisposition::Accepted, "{}", reply.payload);
+        assert_eq!(reply.payload["current"], "acceptEdits");
+        assert_eq!(io.keys(), ["BTab", "BTab", "BTab"]);
+    }
+
+    /// Sem rodapé novo depois da tecla, outra tecla giraria às cegas: a resposta é incerta.
+    #[tokio::test(start_paused = true)]
+    async fn a_key_without_a_new_footer_stops_uncertain() {
+        let io = Screens::new(&["idle.txt"]);
+        let reply = run(&io, "set_permission_mode", json!({"mode": "plan"})).await;
+        assert_eq!(reply.disposition, RuntimeDisposition::Unknown);
+        assert_eq!(reply.payload["error_code"], "permission_key_timeout");
+        assert_eq!(io.keys(), ["BTab"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn draft_turn_menu_and_bypass_are_refused_without_a_key() {
+        for (name, mode, code) in [
+            ("draft.txt", "plan", "erro_caixa_com_rascunho"),
+            ("working.txt", "plan", "erro_sessao_trabalhando"),
+            ("permission.txt", "plan", "permission_menu_open"),
+            ("idle.txt", "bypassPermissions", "erro_permissao_so_na_abertura"),
+            ("idle.txt", "dontAsk", "erro_permissao_invalida"),
+        ] {
+            let io = Screens::new(&[name]);
+            let reply = run(&io, "set_permission_mode", json!({"mode": mode})).await;
+            assert_eq!((reply.disposition, reply.payload["error_code"].as_str()), (RuntimeDisposition::Rejected, Some(code)), "{name}");
+            assert!(io.keys().is_empty(), "{name}");
         }
     }
 }

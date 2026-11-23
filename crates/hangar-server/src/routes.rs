@@ -1956,7 +1956,7 @@ mod tests {
     async fn migrated_provider_routes_authenticate_before_validation_and_never_fall_back() {
         let state = test_state().await;
         let peer = "127.0.0.1:5000".parse().unwrap();
-        for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/orq/papeis"] {
+        for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/antigravity/model", "/api/sessions/demo/orq/papeis"] {
             for (token, expected) in [("errado", StatusCode::UNAUTHORIZED), ("dono", StatusCode::UNPROCESSABLE_ENTITY)] {
                 let mut req = request(path, "198.51.100.50", false, token);
                 *req.method_mut() = Method::POST;

@@ -174,7 +174,7 @@ impl<T> Guarded<T> {
 
 /// O que a decoração das linhas Claude e de todas guarda entre rodadas.
 #[derive(Default)]
-struct Decor { context: ContextCache, replies: ReplyCache, limits: super::limit::LimitWatch, refusals: super::limit::LimitWatch }
+struct Decor { context: ContextCache, agy: super::agy_context::AgyContextCache, replies: ReplyCache, limits: super::limit::LimitWatch, refusals: super::limit::LimitWatch }
 
 /// Marcadores junto da classificação: duas produções seguidas não releem tudo do zero.
 #[derive(Default)]
@@ -711,10 +711,13 @@ impl ListBridge {
                 if snapshot["view"]["conversation"].as_str() != Some(conversation.as_str()) { return None; }
                 let mut state: list_facts::RowState = serde_json::from_value(snapshot["view"]["public_state"].clone()).ok()?;
                 state.last_activity = row.last_activity;
-                Some(state)
+                Some((state, super::agy_context::footer_model(&snapshot["view"]["footer_model"])))
             })();
             match read {
-                Some(state) => { states.insert(row.name.clone(), state); }
+                Some((state, footer)) => {
+                    if row.provider == "antigravity" { row.model = footer; }
+                    states.insert(row.name.clone(), state);
+                }
                 None => { row.problema = Some(list_facts::UNAVAILABLE.into()); fresh = false; }
             }
         }
@@ -1221,6 +1224,10 @@ fn decorate(env: &ListEnv, caches: &Caches, dirs: &Dirs, config_dirs: &[PathBuf]
         for row in rows.iter_mut().filter(|r| r.provider == "claude") {
             let pid = inp.agent_pids.get(&row.name).map(|p| i64::from(*p));
             decorate_context(&mut d.context, row, pid, &*env.procs, dirs, config_dirs, wall, mono);
+        }
+        let pricing = crate::costs::pricing::default_dir();
+        for row in rows.iter_mut().filter(|r| r.provider == "antigravity") {
+            d.agy.decorate(row, &pricing);
         }
         // O fim do transcript já gravado: o aviso de limite do Claude com terminal vai ao vigia daqui.
         // Antes das respostas: o vigia relê pelo mtime, e elas trocam `last_activity` pela hora da conversa.

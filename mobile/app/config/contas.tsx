@@ -11,7 +11,7 @@ import { SectionCard } from '../../src/features/config/SectionCard';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { CodexContaLogin } from '../../src/features/config/CodexContaLogin';
 import { AntigravityContaLogin } from '../../src/features/config/AntigravityContaLogin';
-import { antigravityAccountLabel, antigravityLoginText } from '../../src/features/accounts/antigravity';
+import { antigravityAccountLabel, antigravityLoginText, isAdditionalAntigravity } from '../../src/features/accounts/antigravity';
 import { ResetFeedback } from '../../src/features/accounts/CodexReset';
 import { EngineStatus, useEngines } from '../../src/features/accounts/Engines';
 import { ProxyCard, managedVersion, useProxyUpdate } from '../../src/features/accounts/ProxyUpdate';
@@ -287,7 +287,8 @@ function ServerAccounts({ server }: { server: Server | null }) {
     credentials.map(accountForCredential).filter((id): id is CodexAccount => id !== null).map((account) => account.id),
   );
   const built: IdentityRow[] = [
-    ...credentials.filter(credential => credential.tipo !== 'cliproxy').map((credential): IdentityRow => {
+    ...credentials.filter(credential => credential.tipo !== 'cliproxy'
+      && !(credential.tipo === 'antigravity' && isAdditionalAntigravity(credential.id, agy?.contas))).map((credential): IdentityRow => {
       const account = accountForCredential(credential);
       const google = agyFor(credential);
       // O nome natural da padrão vem do servidor em português; o apelido dado pela pessoa vence.
@@ -327,7 +328,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
         };
       }),
     ...(agy?.contas ?? [])
-      .filter((google) => !credentials.some((credential) => credential.id === google.credencial))
+      .filter((google) => google.padrao && !credentials.some((credential) => credential.id === google.credencial))
       .map((google): IdentityRow => {
         const title = antigravityAccountLabel(google);
         return {
@@ -389,7 +390,10 @@ function ServerAccounts({ server }: { server: Server | null }) {
   if (server) {
     actions.push({ label: m.contas_nova(), onPress: () => startLogin() });
     actions.push({ label: m.mobile_accounts_claude_add(), onPress: () => setNewClaude(true), disabled: loading });
-    if (agy?.instalado) actions.push({ label: m.mobile_accounts_antigravity_add(), onPress: () => setAgyLogin({}) });
+    // Só a padrão: o atalho existe enquanto ela não aparece na lista (o agy nunca entrou nesta máquina).
+    if (agy?.instalado && !agy.contas.some((account) => account.padrao)) {
+      actions.push({ label: m.mobile_accounts_antigravity_add(), onPress: () => setAgyLogin({}) });
+    }
   }
 
   return (

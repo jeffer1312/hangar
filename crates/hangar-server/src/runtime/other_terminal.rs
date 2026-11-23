@@ -935,6 +935,7 @@ impl Observer {
                         changed = true;
                     }
                     changed |= replace(&mut view["view"]["in_progress"], json!(progress));
+                    changed |= replace(&mut view["view"]["footer_model"], footer_model(observed.footer.as_ref()));
                     changed | replace(&mut view["view"]["working_revision"], json!(self.working_revision))
                 });
                 frames.send_replace(Some(Arc::new(frame)));
@@ -1000,6 +1001,11 @@ impl Observer {
         }
         Ok((observed, frame))
     }
+}
+
+/// Modelo e esforço do rodapé do `agy` no retrato: a lista não captura o pane.
+fn footer_model(footer: Option<&crate::terminal_state::AgyFooter>) -> Value {
+    footer.map_or(Value::Null, |footer| json!({"name":footer.model,"effort":footer.effort}))
 }
 
 fn inbox_line(target: &OtherTarget, inbox: &crate::provider_models::inbox::Store) -> Option<String> {
