@@ -99,6 +99,15 @@ export function Problem({ tone, icon, title, text, detail, action, onPress, prim
 }
 
 export function Off({ accepted, busy, onToggle, onInstall }: { accepted: boolean; busy: Act | null; onToggle: () => void; onInstall: () => void }) {
+  return <>
+    <Muted>{m.native_whatsapp_intro()}</Muted>
+    <AcceptRisks accepted={accepted} busy={busy} onToggle={onToggle} />
+    <Button label={m.native_whatsapp_install()} onPress={onInstall} disabled={!accepted || !!busy} loading={busy === 'install'} />
+  </>;
+}
+
+/** Os riscos e a caixa "Entendo os riscos": no desligado e no parado sem aceite gravado. */
+export function AcceptRisks({ accepted, busy, onToggle }: { accepted: boolean; busy: Act | null; onToggle: () => void }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
   const risks: Array<[IconName, string, string, boolean]> = [
@@ -108,7 +117,6 @@ export function Off({ accepted, busy, onToggle, onInstall }: { accepted: boolean
     ['KeyRound', m.native_whatsapp_risk_who_title(), m.native_whatsapp_risk_who(), false],
   ];
   return <>
-    <Muted>{m.native_whatsapp_intro()}</Muted>
     <BlockHead title={m.native_whatsapp_risk_title()} />
     <Card>
       {risks.map(([icon, lead, text, warn], i) => (
@@ -123,7 +131,6 @@ export function Off({ accepted, busy, onToggle, onInstall }: { accepted: boolean
       ))}
     </Card>
     <Check checked={accepted} label={m.native_whatsapp_accept()} onToggle={onToggle} disabled={!!busy} />
-    <Button label={m.native_whatsapp_install()} onPress={onInstall} disabled={!accepted || !!busy} loading={busy === 'install'} />
   </>;
 }
 

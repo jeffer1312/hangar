@@ -63,6 +63,16 @@ function alreadyLatest(state: WhatsAppState): boolean {
   return !!job?.done && job.kind === 'update' && job.outcome === 'already_latest';
 }
 
+/** Instalar ou religar vale com o aceite gravado no servidor ou marcado agora. */
+export function installAccepted(state: WhatsAppState, acceptedNow: boolean): boolean {
+  return acceptedNow || !!state.accepted_at;
+}
+
+/** Sem aceite gravado (a migração instala sem gravá-lo), o parado pede o aceite antes de religar. */
+export function asksAccept(state: WhatsAppState): boolean {
+  return !state.accepted_at;
+}
+
 /** O código de um erro, venha como texto ou como `{code}`. */
 export function codeOf(error: unknown): string | null {
   const code = typeof error === 'string' ? error

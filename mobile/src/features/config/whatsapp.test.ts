@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WhatsAppState } from '@hangar/core';
-import { codeOf, failedJob, isWhatsAppState, minutesLeft, phoneDigits, phrase, readErrorShows, shouldPoll, stepIndex, viewOf } from './whatsapp';
+import { asksAccept, codeOf, failedJob, installAccepted, isWhatsAppState, minutesLeft, phoneDigits, phrase, readErrorShows, shouldPoll, stepIndex, viewOf } from './whatsapp';
 
 const base = (service: WhatsAppState['service'], status: Partial<NonNullable<WhatsAppState['status']>> | null): WhatsAppState => ({
   installed: true, accepted_at: '2026-11-22T10:00:00Z', service, job: null, qr_svg: null,
@@ -96,6 +96,19 @@ describe('phrase', () => {
     expect(phrase(table, 'whatsapp_', unknown)).toBe('outro: whatsapp_');
     // Nome herdado de Object não é frase.
     expect(phrase(table, 'toString', unknown)).toBe('outro: toString');
+  });
+});
+
+describe('aceite no parado', () => {
+  it('sem aceite gravado pede o aceite e só religa marcado; com ele, nada muda', () => {
+    const unaccepted = { ...base('stopped', null), accepted_at: null };
+    expect(viewOf(unaccepted)).toBe('stopped');
+    expect(asksAccept(unaccepted)).toBe(true);
+    expect(installAccepted(unaccepted, false)).toBe(false);
+    expect(installAccepted(unaccepted, true)).toBe(true);
+    const accepted = base('stopped', null);
+    expect(asksAccept(accepted)).toBe(false);
+    expect(installAccepted(accepted, false)).toBe(true);
   });
 });
 

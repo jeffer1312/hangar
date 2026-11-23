@@ -139,6 +139,16 @@ fn already_latest(state: &WaState) -> bool {
     state.job.as_ref().is_some_and(|job| job.done && job.kind == "update" && job.outcome.as_ref().and_then(Value::as_str) == Some("already_latest"))
 }
 
+/// Instalar ou religar vale com o aceite gravado no servidor ou marcado agora.
+fn install_accepted(state: &WaState, accepted_now: bool) -> bool {
+    accepted_now || state.accepted_at.is_some()
+}
+
+/// Sem aceite gravado, a tela pede o aceite antes de religar.
+fn asks_accept(state: &WaState) -> bool {
+    state.accepted_at.is_none()
+}
+
 /// O job que terminou com erro: o tipo dele (`install`/`update`) e o código.
 fn failed_job(state: &WaState) -> Option<(String, String)> {
     let job = state.job.as_ref().filter(|job| job.done)?;
@@ -428,7 +438,7 @@ impl Hangar {
                 .replace("{reason}", &code_text("whatsapp_job_err_", &code));
             let busy = self.whatsapp.busy.is_some();
             // Reinstalar exige o aceite, o gravado no servidor ou o marcado agora.
-            let accepted = kind == "update" || self.whatsapp.accepted || state.accepted_at.is_some();
+            let accepted = kind == "update" || install_accepted(state, self.whatsapp.accepted);
             let retry = Button::new("whatsapp-retry-job").outline().small().label(tr("server_retry")).disabled(busy || !accepted)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if kind == "update" { this.whatsapp_act(Act::Update, None, cx); } else { this.whatsapp_install(cx); }
@@ -440,8 +450,7 @@ impl Hangar {
         page = match view {
             View::Off => page.children(self.render_whatsapp_off(cx)),
             View::Working => page.child(render_working(state)),
-            View::Stopped => page.child(self.render_whatsapp_problem("whatsapp-stopped", tr("whatsapp_stopped_title"), tr("whatsapp_stopped_body"),
-                Some(Act::Install), cx)),
+            View::Stopped => page.children(self.render_whatsapp_stopped(state, cx)),
             View::SchemaNewer => page.child(self.render_whatsapp_problem("whatsapp-schema-newer", tr("whatsapp_schema_newer_title"),
                 tr("whatsapp_schema_newer_body"), Some(Act::Update), cx)),
             // Botão secundário: só procura de novo, porque a versão posterior pode sair com o job ainda na memória.
@@ -468,13 +477,30 @@ impl Hangar {
             .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_intro_title")))
             .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("whatsapp_intro"))), "whatsapp_intro_title");
         let accepted = self.whatsapp.accepted;
-        let risk = risk_box(Checkbox::new("whatsapp-accept").checked(accepted).disabled(busy).label(tr("whatsapp_accept"))
-            .on_click(cx.listener(|this, checked: &bool, _, cx| { this.whatsapp.accepted = *checked; cx.notify(); })));
         let installing = self.whatsapp.busy == Some(Act::Install);
         let install = div().flex().child(Button::new("whatsapp-install").primary().small().label(tr("whatsapp_install"))
             .loading(installing).disabled(busy || !accepted)
             .on_click(cx.listener(|this, _, _, cx| this.whatsapp_install(cx))));
-        vec![intro, self.mark(div().child(risk), "whatsapp_risk_title"), install]
+        vec![intro, self.render_whatsapp_accept(cx), install]
+    }
+
+    /// A caixa "Entendo os riscos" com o texto dos riscos, a mesma do desligado.
+    fn render_whatsapp_accept(&self, cx: &mut Context<Self>) -> Div {
+        let risk = risk_box(Checkbox::new("whatsapp-accept").checked(self.whatsapp.accepted).disabled(self.whatsapp.busy.is_some())
+            .label(tr("whatsapp_accept"))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| { this.whatsapp.accepted = *checked; cx.notify(); })));
+        self.mark(div().child(risk), "whatsapp_risk_title")
+    }
+
+    /// Parado. Sem aceite gravado (a migração instala sem gravá-lo), religar pede o mesmo aceite do desligado.
+    fn render_whatsapp_stopped(&self, state: &WaState, cx: &mut Context<Self>) -> Vec<Div> {
+        let busy = self.whatsapp.busy.is_some();
+        let retry = Button::new("whatsapp-restart").outline().small().label(tr("server_retry"))
+            .loading(self.whatsapp.busy == Some(Act::Install)).disabled(busy || !install_accepted(state, self.whatsapp.accepted))
+            .on_click(cx.listener(|this, _, _, cx| this.whatsapp_install(cx)));
+        let problem = div().child(problem_box("whatsapp-stopped", tr("whatsapp_stopped_title"), tr("whatsapp_stopped_body"))
+            .child(div().pt_1().flex().child(retry)));
+        if asks_accept(state) { vec![problem, self.render_whatsapp_accept(cx)] } else { vec![problem] }
     }
 
     fn render_whatsapp_problem(&self, id: &'static str, title: String, body: String, act: Option<Act>, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -732,7 +758,8 @@ fn render_working(state: &WaState) -> Stateful<Div> {
 
 #[cfg(test)]
 mod tests {
-    use super::{act_timeout, code_of, code_text, failed_job, pair_not_started, parse_state, phone_digits, should_poll, step_states, view_of, Act, CliproxyItem, View, STEPS};
+    use super::{act_timeout, asks_accept, code_of, code_text, failed_job, install_accepted, pair_not_started, parse_state, phone_digits, should_poll,
+        step_states, view_of, Act, CliproxyItem, View, STEPS};
     use core::prelude::v1::test;
     use serde_json::json;
 
@@ -766,6 +793,20 @@ mod tests {
         assert_eq!(failed_job(&s), Some(("update".into(), "whatsapp_download_failed".into())));
         assert_eq!(view_of(&s), View::Connected);
         assert!(!should_poll(&s, false));
+    }
+
+    /// Parado sem aceite gravado (instalado pela migração): a tela pede o aceite e só religa com ele marcado.
+    #[test]
+    fn stopped_without_a_recorded_acceptance_asks_for_it() {
+        let mut raw = base("stopped", None);
+        raw["accepted_at"] = serde_json::Value::Null;
+        let unaccepted = state(raw);
+        assert_eq!(view_of(&unaccepted), View::Stopped);
+        assert!(asks_accept(&unaccepted));
+        assert!(!install_accepted(&unaccepted, false), "religar fica desabilitado");
+        assert!(install_accepted(&unaccepted, true), "marcado agora, religa");
+        let accepted = state(base("stopped", None));
+        assert!(!asks_accept(&accepted) && install_accepted(&accepted, false), "com aceite gravado nada muda");
     }
 
     #[test]

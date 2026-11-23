@@ -14,9 +14,10 @@ import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { Chip, Muted } from '../../src/features/config/ServerConfigParts';
 import { useSettingsColors } from '../../src/features/config/colors';
 import {
-  PAIR_GRACE_MS, POLL_MS, failedJob, isWhatsAppState, phoneDigits, phrase, readErrorShows, shouldPoll, viewOf, type WhatsAppView,
+  PAIR_GRACE_MS, POLL_MS, asksAccept, failedJob, installAccepted, isWhatsAppState, phoneDigits, phrase, readErrorShows, shouldPoll, viewOf,
+  type WhatsAppView,
 } from '../../src/features/config/whatsapp';
-import { Button, Check, Connected, Off, Pair, Problem, Working, styles, type Act } from '../../src/features/config/WhatsAppParts';
+import { AcceptRisks, Button, Check, Connected, Off, Pair, Problem, Working, styles, type Act } from '../../src/features/config/WhatsAppParts';
 import { useWhatsAppSeen } from '../../src/features/config/whatsappSeen';
 import { superficie } from '../../src/theme/superficie';
 import { Sheet } from '../../src/ui/Sheet';
@@ -224,9 +225,10 @@ export default function WhatsApp() {
   };
 
   const install = () => {
-    if (!accepted && !data?.accepted_at) return;
+    if (!data || !installAccepted(data, accepted)) return;
     act('install', installWhatsApp);
   };
+  const toggleAccepted = () => { haptic.selection(); setAccepted((a) => !a); };
   const requestCode = (digitsOverride?: string) => {
     const digits = digitsOverride ?? phoneDigits(phone);
     if (!digits) { setPhoneError(m.native_whatsapp_pair_phone_invalid()); haptic.error(); return; }
@@ -270,10 +272,14 @@ export default function WhatsApp() {
         action={m.native_server_retry()} busy={!!busy || (failed.kind !== 'update' && !accepted && !data.accepted_at)}
         loading={busy === (failed.kind === 'update' ? 'update' : 'install')}
         onPress={() => (failed.kind === 'update' ? act('update', updateWhatsApp) : install())} /> : null}
-      {view === 'off' ? <Off accepted={accepted} busy={busy} onToggle={() => { haptic.selection(); setAccepted((a) => !a); }} onInstall={install} />
+      {view === 'off' ? <Off accepted={accepted} busy={busy} onToggle={toggleAccepted} onInstall={install} />
         : view === 'working' ? <Working state={data} />
-        : view === 'stopped' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_stopped_title()} text={m.native_whatsapp_stopped_body()}
-          action={m.native_server_retry()} busy={!!busy} loading={busy === 'install'} onPress={install} />
+        // Sem aceite gravado (a migração instala sem gravá-lo), religar pede o mesmo aceite do desligado.
+        : view === 'stopped' ? <>
+          <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_stopped_title()} text={m.native_whatsapp_stopped_body()}
+            action={m.native_server_retry()} busy={!!busy || !installAccepted(data, accepted)} loading={busy === 'install'} onPress={install} />
+          {asksAccept(data) ? <AcceptRisks accepted={accepted} busy={busy} onToggle={toggleAccepted} /> : null}
+        </>
         : view === 'schema_newer' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_schema_newer_title()}
           text={m.native_whatsapp_schema_newer_body()}
           action={m.native_whatsapp_update()} primary busy={!!busy} loading={busy === 'update'} onPress={() => act('update', updateWhatsApp)} />
