@@ -42,8 +42,8 @@ pub fn windows_script(vbs: &Path, managed_dir: &Path) -> String {
 }
 
 /// Tira o serviço do Hangar e para o proxy dele: a volta da entrega que não respondeu.
-pub fn windows_unregister_script(managed_dir: &Path) -> String {
-    managed::windows_unregister_script(&ID, managed_dir)
+pub fn windows_unregister_script(vbs: &Path, managed_dir: &Path) -> String {
+    managed::windows_unregister_script(&ID, vbs, managed_dir)
 }
 
 /// Grava o serviço apontando para `s.binary` e o (re)inicia: serve para instalar e para atualizar.
@@ -89,7 +89,7 @@ mod tests {
         let script = windows_script(Path::new(r"C:\h\hangar-cliproxy.vbs"), Path::new(r"C:\h\.hangar\cliproxy"));
         assert_eq!(script, "$ErrorActionPreference = 'Stop'\n\
             Stop-ScheduledTask -TaskName 'hangar-cliproxy' -ErrorAction SilentlyContinue\n\
-            Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf('\\hangar-cliproxy.vbs\"', [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { $id = $_.ProcessId; try { Stop-Process -Id $id -Force -ErrorAction Stop } catch { if (Get-Process -Id $id -ErrorAction SilentlyContinue) { throw } } }\n\
+            Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf('\"C:\\h\\hangar-cliproxy.vbs\"', [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { $id = $_.ProcessId; try { Stop-Process -Id $id -Force -ErrorAction Stop } catch { if ((Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName -eq 'wscript') { throw } } }\n\
             Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith('C:\\h\\.hangar\\cliproxy\\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force\n\
             $a = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '\"C:\\h\\hangar-cliproxy.vbs\"'\n\
             $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME\n\
@@ -115,7 +115,7 @@ mod tests {
         let script = windows_script(Path::new(r"C:\Users\O'Neil\AppData\Local\hangar\hangar-cliproxy.vbs"), Path::new(r"C:\Users\O'Neil\.hangar\cliproxy"));
         assert!(script.contains(r#"-Argument '"C:\Users\O''Neil\AppData\Local\hangar\hangar-cliproxy.vbs"'"#), "{script}");
         assert!(script.contains("-RestartCount 999") && script.contains("StartsWith('C:\\Users\\O''Neil\\.hangar\\cliproxy\\'"), "{script}");
-        let undo = windows_unregister_script(Path::new(r"C:\Users\O'Neil\.hangar\cliproxy\"));
+        let undo = windows_unregister_script(Path::new(r"C:\Users\O'Neil\AppData\Local\hangar\hangar-cliproxy.vbs"), Path::new(r"C:\Users\O'Neil\.hangar\cliproxy\"));
         assert!(undo.contains("StartsWith('C:\\Users\\O''Neil\\.hangar\\cliproxy\\'"), "barra no fim só uma vez: {undo}");
         assert!(undo.contains("-ErrorAction SilentlyContinue) { Unregister-ScheduledTask"), "só a tarefa ausente é ignorada: {undo}");
     }

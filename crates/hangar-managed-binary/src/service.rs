@@ -132,18 +132,23 @@ fn process_prefix(managed_dir: &Path) -> String {
 }
 
 /// As linhas que param a tarefa, o laço do `.vbs` e o programa que roda da pasta do Hangar, nesta ordem: o
-/// laço vivo religaria o programa morto. O `wscript.exe` é achado também pelo `.vbs` na linha de comando,
-/// porque o `Stop-ScheduledTask` falha calado; consulta ou parada que falha é erro, nunca laço vivo sem aviso.
-/// Só o `wscript.exe` que já saiu (o `Stop-ScheduledTask` o alcançou) é ignorado.
-fn ps_stop(id: &ServiceId, managed_dir: &Path) -> String {
+/// laço vivo religaria o programa morto. O `wscript.exe` é achado também pelo `.vbs` desta conta na linha de
+/// comando (a consulta lista os processos de todos os usuários), porque o `Stop-ScheduledTask` falha calado;
+/// consulta ou parada que falha é erro, nunca laço vivo sem aviso. Só o `wscript.exe` que já saiu é ignorado.
+fn ps_stop(id: &ServiceId, vbs: &Path, managed_dir: &Path) -> String {
     format!(
         "Stop-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue\n\
-         Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" | Where-Object {{ $_.CommandLine -and $_.CommandLine.IndexOf({vbs}, [StringComparison]::OrdinalIgnoreCase) -ge 0 }} | ForEach-Object {{ $id = $_.ProcessId; try {{ Stop-Process -Id $id -Force -ErrorAction Stop }} catch {{ if (Get-Process -Id $id -ErrorAction SilentlyContinue) {{ throw }} }} }}\n\
+         Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" | Where-Object {{ $_.CommandLine -and $_.CommandLine.IndexOf({vbs}, [StringComparison]::OrdinalIgnoreCase) -ge 0 }} | ForEach-Object {{ $id = $_.ProcessId; try {{ Stop-Process -Id $id -Force -ErrorAction Stop }} catch {{ if ((Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName -eq 'wscript') {{ throw }} }} }}\n\
          Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.StartsWith({dir}, [StringComparison]::OrdinalIgnoreCase) }} | Stop-Process -Force\n",
         task = ps_quote(id.task),
-        vbs = ps_quote(&format!("\\{}.vbs\"", id.task)),
+        vbs = vbs_argument(vbs),
         dir = process_prefix(managed_dir),
     )
+}
+
+/// O `.vbs` entre aspas, como a tarefa o passa ao `wscript.exe`.
+fn vbs_argument(vbs: &Path) -> String {
+    ps_quote(&format!("\"{}\"", vbs.display()))
 }
 
 /// Para a tarefa e o programa da pasta do Hangar e regrava a tarefa apontando para o `.vbs`; com `start`, liga.
@@ -156,8 +161,8 @@ pub fn windows_script(id: &ServiceId, vbs: &Path, managed_dir: &Path, start: boo
          $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME\n\
          $s = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew\n\
          Register-ScheduledTask -TaskName {task} -Action $a -Trigger $t -Settings $s -Force | Out-Null\n",
-        stop = ps_stop(id, managed_dir),
-        arg = ps_quote(&format!("\"{}\"", vbs.display())),
+        stop = ps_stop(id, vbs, managed_dir),
+        arg = vbs_argument(vbs),
     );
     if start {
         script.push_str(&format!("Start-ScheduledTask -TaskName {task}\n"));
@@ -170,13 +175,13 @@ pub fn windows_start_script(id: &ServiceId) -> String {
 }
 
 /// Tira o serviço e para o programa da pasta do Hangar.
-pub fn windows_unregister_script(id: &ServiceId, managed_dir: &Path) -> String {
+pub fn windows_unregister_script(id: &ServiceId, vbs: &Path, managed_dir: &Path) -> String {
     let task = ps_quote(id.task);
     format!(
         "$ErrorActionPreference = 'Stop'\n\
          {stop}\
          if (Get-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue) {{ Unregister-ScheduledTask -TaskName {task} -Confirm:$false }}\n",
-        stop = ps_stop(id, managed_dir),
+        stop = ps_stop(id, vbs, managed_dir),
     )
 }
 
@@ -295,7 +300,7 @@ pub async fn unregister(home: &Path, managed_dir: &Path, id: &ServiceId) -> Resu
         return remove("plist", &plist);
     }
     if cfg!(windows) {
-        return powershell("Unregister-ScheduledTask", &windows_unregister_script(id, managed_dir)).await;
+        return powershell("Unregister-ScheduledTask", &windows_unregister_script(id, &windows_vbs_path(home, id), managed_dir)).await;
     }
     let unit = systemd_unit_path(home, id);
     if unit.is_file() {
@@ -491,7 +496,7 @@ mod tests {
         let started = windows_script(&WHATSAPP, vbs, dir, true);
         assert_eq!(started, format!("{installed}Start-ScheduledTask -TaskName 'hangar-whatsapp'\n"));
         assert_eq!(windows_start_script(&WHATSAPP), "$ErrorActionPreference = 'Stop'\nStart-ScheduledTask -TaskName 'hangar-whatsapp'\n");
-        let undo = windows_unregister_script(&WHATSAPP, dir);
+        let undo = windows_unregister_script(&WHATSAPP, vbs, dir);
         assert!(undo.contains("Unregister-ScheduledTask -TaskName 'hangar-whatsapp' -Confirm:$false"), "{undo}");
         assert!(undo.contains("StartsWith('C:\\Users\\O''Neil\\.hangar\\whatsapp\\'"), "{undo}");
     }
@@ -526,15 +531,16 @@ mod tests {
     /// programa depois de removido, mesmo que o `Stop-ScheduledTask` não o tenha alcançado.
     #[test]
     fn stopping_kills_the_relaunch_loop_before_the_program() {
-        let dir = Path::new(r"C:\h\w");
-        let scripts = [windows_script(&WHATSAPP, Path::new(r"C:\h\hangar-whatsapp.vbs"), dir, true), windows_unregister_script(&WHATSAPP, dir)];
+        let (vbs, dir) = (Path::new(r"C:\Users\a\AppData\Local\hangar\hangar-whatsapp.vbs"), Path::new(r"C:\h\w"));
+        let scripts = [windows_script(&WHATSAPP, vbs, dir, true), windows_unregister_script(&WHATSAPP, vbs, dir)];
         for script in scripts {
             let task = script.find("Stop-ScheduledTask -TaskName 'hangar-whatsapp'").unwrap_or_else(|| panic!("{script}"));
             let wsh = script.find("Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" | Where-Object").unwrap_or_else(|| panic!("consulta que não engole erro: {script}"));
             let program = script.find("$_.Path.StartsWith('C:\\h\\w\\'").unwrap_or_else(|| panic!("{script}"));
             assert!(task < wsh && wsh < program, "{script}");
-            assert!(script.contains(r#"$_.CommandLine.IndexOf('\hangar-whatsapp.vbs"', [StringComparison]::OrdinalIgnoreCase) -ge 0"#), "{script}");
-            assert!(script.contains("ForEach-Object { $id = $_.ProcessId; try { Stop-Process -Id $id -Force -ErrorAction Stop } catch { if (Get-Process -Id $id -ErrorAction SilentlyContinue) { throw } } }"), "só o laço que já saiu é ignorado: {script}");
+            assert!(script.contains(r#"$_.CommandLine.IndexOf('"C:\Users\a\AppData\Local\hangar\hangar-whatsapp.vbs"', [StringComparison]::OrdinalIgnoreCase) -ge 0"#),
+                "só o .vbs desta conta, nunca o de outro usuário: {script}");
+            assert!(script.contains("ForEach-Object { $id = $_.ProcessId; try { Stop-Process -Id $id -Force -ErrorAction Stop } catch { if ((Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName -eq 'wscript') { throw } } }"), "só o laço que já saiu é ignorado, nem um PID reaproveitado: {script}");
         }
     }
 

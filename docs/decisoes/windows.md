@@ -1301,6 +1301,6 @@ ao iniciar. Religar pela tela (`POST /api/whatsapp/install`) trouxe o serviço d
 O `.vbs` passou a ser um laço `Do … Loop` com `WScript.Sleep 10000` entre as tentativas; com
 `no_restart_exit`, `If code = <n> Then WScript.Quit code`. Enquanto espera religar, a tarefa fica
 `Running`, e o Hangar conta o serviço como de pé (apagar os dados do WhatsApp recusa), como a unit
-em `auto-restart`. A parada mata também o `wscript.exe` cuja linha de comando tem
-`\<tarefa>.vbs"`, porque o `Stop-ScheduledTask` roda com `-ErrorAction SilentlyContinue` e uma falha
+em `auto-restart`. A parada mata também o `wscript.exe` cuja linha de comando tem o caminho do
+`.vbs` desta conta (a consulta lista os processos de todos os usuários da máquina), porque o `Stop-ScheduledTask` roda com `-ErrorAction SilentlyContinue` e uma falha
 dele deixaria o laço religar o programa antigo no meio da troca ou depois da remoção.
