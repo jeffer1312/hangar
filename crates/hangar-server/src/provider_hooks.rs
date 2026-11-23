@@ -203,8 +203,9 @@ fn write_agy(value: &Value, base: &Path, pane: Option<&str>, psmux: Option<&str>
     let state = match value["hookEventName"].as_str().unwrap_or_default() {
         // O `SessionStart` também dispara ao retomar uma conversa parada: só o bilhete, o turno começa no `PreInvocation`.
         "PreInvocation" => Some("working"),
-        // `fullyIdle` falso: o turno parou mas ainda há subagente ou tarefa em fundo trabalhando.
-        "Stop" => Some(if value["fullyIdle"] == true { "idle" } else { "working" }),
+        // `fullyIdle` falso: o turno parou mas ainda há subagente ou tarefa em fundo trabalhando. Sem o campo,
+        // o `Stop` já diz que o turno acabou.
+        "Stop" => Some(if value["fullyIdle"] == false { "working" } else { "idle" }),
         _ => None,
     };
     if let Some(state) = state {

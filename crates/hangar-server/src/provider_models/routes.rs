@@ -215,9 +215,19 @@ async fn antigravity_catalog(st: &Arc<AppState>, conta: Option<&str>) -> Result<
         .ok_or_else(|| coded(409, "erro_agy_ausente", "o agy não está instalado nesta máquina"))?;
     let process = hangar_antigravity::env::process_env(&account, env.base.keys().cloned());
     let home = env.home.clone();
-    let models = tokio::task::spawn_blocking(move || hangar_antigravity::probe::models(&program, &home, &process, std::time::Duration::from_secs(20)))
-        .await.ok().and_then(Result::ok).flatten()
-        .ok_or_else(|| coded(502, "erro_modelos_antigravity", "o agy não listou os modelos desta conta (sem login?)"))?;
+    let listed = tokio::task::spawn_blocking(move || hangar_antigravity::probe::models(&program, &home, &process, std::time::Duration::from_secs(20))).await;
+    let models = match listed {
+        Ok(Ok(Some(models))) => models,
+        Ok(Ok(None)) => return Err(coded(502, "erro_modelos_antigravity", "o agy não listou os modelos desta conta: sem login ou sem resposta em 20 s")),
+        Ok(Err(error)) => {
+            tracing::warn!(code = "agy_models_failed", %error, "agy models não rodou");
+            return Err(coded(500, "erro_modelos_antigravity", &format!("o agy não rodou para listar os modelos: {error}")));
+        }
+        Err(error) => {
+            tracing::warn!(code = "agy_models_failed", %error, "agy models caiu");
+            return Err(coded(500, "erro_modelos_antigravity", "o agy caiu ao listar os modelos"));
+        }
+    };
     let models: Vec<Value> = models.into_iter().map(|(id, name)| json!({"id": id, "name": name})).collect();
     Ok(json!({"kind": "antigravity", "reduced": false, "models": models}))
 }
@@ -225,9 +235,13 @@ async fn antigravity_catalog(st: &Arc<AppState>, conta: Option<&str>) -> Result<
 /// Os modelos da conta e o atual, lido no rodapé da sessão. Rodapé ilegível ou modelo fora da lista: `current` nulo.
 async fn antigravity_models(st: &Arc<AppState>, row: SessionRow, pid: Option<u32>) -> Result<Value, ModelError> {
     let catalog = antigravity_catalog(st, None).await?;
+    // Sem tela legível o modelo atual fica nulo, e o motivo vai ao log: "nenhum" e "não li" não podem se confundir calados.
     let footer = match NativeIo::new(st.clone(), row, pid).await {
-        Ok(io) => io.capture().await.ok().and_then(|screen| crate::terminal_state::agy_footer(&screen)),
-        Err(_) => None,
+        Ok(io) => match io.capture().await {
+            Ok(screen) => crate::terminal_state::agy_footer(&screen),
+            Err(_) => { tracing::warn!(code = "agy_footer_unreadable", "captura do pane do agy falhou; modelo atual desconhecido"); None }
+        },
+        Err(_) => { tracing::warn!(code = "agy_footer_unreadable", "pane do agy indisponível; modelo atual desconhecido"); None }
     };
     let models = catalog["models"].clone();
     let current = footer.and_then(|footer| models.as_array()?.iter()

@@ -91,9 +91,13 @@ function ServerAccounts({ server }: { server: Server | null }) {
     antigravityRemove: (account) => handlersNow.current?.antigravityRemove(account),
   }), []);
 
+  const agyTarget = useRef('');
   const loadAgy = useCallback(async (target: Server | null) => {
     const generationNow = ++agyGeneration.current;
-    if (!target) { setAgy(null); setAgyError(''); return; }
+    if (!target) { setAgy(null); setAgyError(''); agyTarget.current = ''; return; }
+    // Outra máquina: a lista da anterior não pode ficar à mostra com ações apontando para ela.
+    const key = `${target.id}|${target.baseUrl}`;
+    if (agyTarget.current !== key) { setAgy(null); agyTarget.current = key; }
     try {
       const next = await getAntigravityAccountsForServer(target);
       if (!alive.current || generationNow !== agyGeneration.current) return;

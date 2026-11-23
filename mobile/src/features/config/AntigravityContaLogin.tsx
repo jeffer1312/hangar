@@ -149,6 +149,8 @@ export function AntigravityContaLogin({ server, accounts, accountId, onComplete,
         live.current = now;
         setBusy(null);
         setError(fail(e));
+        // A tentativa segue viva no servidor: volta a ler o estado dela.
+        void read(generation.current);
         return;
       }
     }

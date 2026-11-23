@@ -324,6 +324,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setSwitchedFrom('');
     setAgyAccounts([]);
     setAgyAccount('');
+    setAgyInstalled(true);
     setMotores({});
     setEngine('');
     setCotas([]);
@@ -343,6 +344,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     const retry = startAgyRetry();
     setAgyLoading(true);
     setAgyError('');
+    // "Ausente" só com a resposta desta máquina; leitura que falha não diz que o agy falta.
+    setAgyInstalled(true);
     void getAntigravityAccountsForServer(active, controller.signal)
       .then((r) => {
         if (!alive) return;
@@ -939,7 +942,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       ) : null}
       {picked && provider === 'antigravity' && !agyReady ? (
         !agyInstalled ? <Text style={styles.error} accessibilityRole="alert">{m.erro_agy_ausente()}</Text>
-          : <Text style={styles.hint}>{agyLoading ? m.comum_carregando() : m.mobile_antigravity_sign_in_first()}</Text>
+          : <Text style={styles.hint}>{agyLoading || !agyAccount ? m.comum_carregando() : m.mobile_antigravity_sign_in_first()}</Text>
       ) : null}
       {provider === 'antigravity' && agyError ? <View>
         <Text style={styles.error} accessibilityRole="alert">{agyError}</Text>

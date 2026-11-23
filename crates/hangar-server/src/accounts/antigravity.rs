@@ -126,8 +126,16 @@ async fn list(state: &crate::routes::AppState, home: &Path) -> Response {
         })
     });
     let mut rows = Vec::new();
-    for check in futures_util::future::join_all(checks).await {
-        let Ok((account, signed, in_use)) = check else { continue };
+    let results = futures_util::future::join_all(checks).await;
+    for (account, check) in accounts.iter().zip(results) {
+        // Conferência que caiu não tira a conta da lista: ela segue com o login desconhecido.
+        let (signed, in_use) = match check {
+            Ok((_, signed, in_use)) => (signed, in_use),
+            Err(error) => {
+                tracing::warn!(code = "agy_account_check_failed", %error, "conferência da conta do Antigravity caiu");
+                (None, false)
+            }
+        };
         rows.push(json!({
             "id": id_of(&account),
             "padrao": account.is_default(),
@@ -148,7 +156,14 @@ fn signed_in(program: &Path, home: &Path, account: &Account, keys: Vec<String>) 
         return value;
     }
     let env = hangar_antigravity::env::process_env(account, keys);
-    let value = probe::signed_in(program, home, &env, PROBE_LIMIT).ok().flatten();
+    let value = match probe::signed_in(program, home, &env, PROBE_LIMIT) {
+        Ok(value) => value,
+        // Erro de execução não entra no cache: a próxima leitura tenta de novo.
+        Err(error) => {
+            tracing::warn!(code = "agy_signed_probe_failed", %error, "agy models não rodou para conferir o login");
+            return None;
+        }
+    };
     SIGNED.lock().unwrap_or_else(|e| e.into_inner()).insert(dir, (Instant::now(), value));
     value
 }
@@ -225,9 +240,12 @@ fn login_status(id: &str, attempt_id: Option<&str>, home: &Path) -> Response {
             if let Some((account, _)) = account_of(home, id) {
                 forget_signed(&account, home);
                 // A conta nova ganha o hook de estado já no primeiro login.
-                if ok && let Ok(command) = crate::provider_hooks::command(home, "agy-state-hook")
-                    && let Err(e) = hangar_antigravity::hooks::install(&account.hooks_path(home), &command) {
-                    tracing::warn!(code = "agy_hooks_after_login_failed", error = %e, "hook do Antigravity não gravado depois do login");
+                if ok {
+                    let installed = crate::provider_hooks::command(home, "agy-state-hook")
+                        .and_then(|command| hangar_antigravity::hooks::install(&account.hooks_path(home), &command).map_err(|e| e.to_string()));
+                    if let Err(error) = installed {
+                        tracing::warn!(code = "agy_hooks_after_login_failed", %error, "hook do Antigravity não gravado depois do login");
+                    }
                 }
             }
             json!({"attempt_id": current, "estado": if ok { "concluido" } else { "falhou" }, "saida": tail})

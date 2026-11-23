@@ -61,6 +61,7 @@ pub fn sync_hooks(service: &AccountService, repo: &Path) -> Value {
         Err(error) => {
             tracing::warn!(%error, "Hooks Antigravity não atualizados");
             result["antigravity"] = serde_json::json!([]);
+            result["antigravity_erro"] = serde_json::json!(error.to_string());
         }
     }
     match codex_hooks::sync(&service.env.codex_default, &service.env.home, cfg!(windows)) {
