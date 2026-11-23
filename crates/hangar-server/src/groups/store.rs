@@ -54,9 +54,12 @@ impl PairDir {
     /// rotina de origem, que vai ao log.
     pub fn clear_sidecar(&self, name: &str, why: &str) -> Result<(), StoreError> {
         let path = self.sidecar_path(name);
-        // Lido antes de apagar: o gid só existe no arquivo.
-        let gid = std::fs::read(&path).ok().and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
-            .and_then(|v| v["gid"].as_str().map(str::to_owned)).unwrap_or_default();
+        // Lido antes de apagar, como o serviço o lê: sidecar antigo sem `gid` tem o calculado.
+        let gid = match read_sidecar(&path, name) {
+            Ok(Some(sidecar)) => sidecar.gid,
+            _ => std::fs::read(&path).ok().and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+                .and_then(|v| v["gid"].as_str().map(str::to_owned)).unwrap_or_default(),
+        };
         let mut tmp = path.clone().into_os_string();
         tmp.push(".tmp");
         match std::fs::remove_file(&path) {
@@ -399,5 +402,9 @@ mod tests {
         assert!(!tmp.path().join("s1.json").exists() && !tmp.path().join("groups/g1.json").exists());
         let absent = logged(|| dir.clear_sidecar("s1", "sweep_dead_member").unwrap());
         assert!(!absent.contains("groups_sidecar_removed"), "arquivo que já não existia não é exclusão: {absent}");
+        // Sidecar antigo sem `gid`: o grupo é o que o serviço calcula (sha1 de "s1\ns3", 8 primeiros).
+        std::fs::write(tmp.path().join("s1.json"), r#"{"peers":["s3"]}"#).unwrap();
+        let legacy = logged(|| dir.clear_sidecar("s1", "sweep_dead_member").unwrap());
+        assert!(legacy.contains("gid=\"79dbb188\""), "{legacy}");
     }
 }
