@@ -1744,11 +1744,14 @@ for line in sys.stdin:
         // A subida seguinte fica de pé: só a gravação no arquivo da sessão a recusa.
         std::fs::remove_file(dir.path().join("die")).unwrap();
         let gone = |fake:&crate::fake::Fake|fake.diag().iter().filter(|line|line["codigo"] == "codex_sidecar_gone").count();
-        // A queda já foi vista só no CI e sem causa achada: o estouro diz o que o ator fez no lugar.
+        // O estouro diz o que o ator fez no lugar da parada, e encerra os canos antes de cair.
         // estavel: os 20 ms são o intervalo de consulta da espera pelo diário, com teto de 20 s.
         if tokio::time::timeout(std::time::Duration::from_secs(20),async { while gone(&fake) != 1 { tokio::time::sleep(std::time::Duration::from_millis(20)).await; } }).await.is_err() {
             let codes: Vec<_> = fake.diag().iter().map(|line| line["codigo"].clone()).collect();
-            panic!("a parada vai ao diário; diário {codes:?}; subidas {:?}; canos {:?}",starts(dir.path()),recorded(dir.path()).iter().map(|c|c.pid).collect::<Vec<_>>());
+            let canos = recorded(dir.path());
+            let pids: Vec<_> = canos.iter().map(|c|c.pid).collect();
+            for cano in &canos { let _ = process::kill(cano,&key,dir.path()).await; }
+            panic!("a parada vai ao diário; diário {codes:?}; subidas {:?}; canos {pids:?}",starts(dir.path()));
         }
         tokio::time::sleep(base * 3).await;
         // A subida recusada pode morrer antes de o `codex` falso anotar a partida: no máximo uma depois da queda.

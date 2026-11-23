@@ -559,8 +559,8 @@ async fn folder_routes_without_sessions_skip_session_discovery() {
     assert_eq!(refusal(git, "workspace_context").await["detail"]["params"]["motivo"], "sessoes");
 }
 
-// Travou mais de 2 h num Windows do CI, sem causa achada. Runtime próprio porque o fim do `#[tokio::test]` espera
-// sem prazo uma tarefa bloqueante presa; aqui o corpo e o encerramento têm teto e a falha diz a etapa.
+// Runtime próprio porque o fim do `#[tokio::test]` espera sem prazo uma tarefa bloqueante presa; aqui o corpo e o
+// encerramento têm teto e a falha diz a etapa.
 #[test]
 fn unavailable_native_context_answers_503_with_reason() {
     use std::time::Duration;
@@ -589,12 +589,17 @@ fn unavailable_native_context_answers_503_with_reason() {
         *at.lock().unwrap() = "encerramento";
     });
     let done = runtime.block_on(async { tokio::time::timeout(Duration::from_secs(60), body).await });
-    runtime.shutdown_timeout(Duration::from_secs(10));
+    // O `shutdown_timeout` desiste calado: gastar o teto inteiro é a tarefa presa que o teste quer apontar.
+    let ceiling = Duration::from_secs(10);
+    let shutdown = std::time::Instant::now();
+    runtime.shutdown_timeout(ceiling);
+    let stuck = shutdown.elapsed() >= ceiling;
     match done {
         Err(_) => panic!("parou na etapa {}", stage.lock().unwrap()),
         Ok(Err(e)) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
         Ok(joined) => joined.unwrap(),
     }
+    assert!(!stuck, "parou na etapa encerramento: uma tarefa bloqueante não terminou");
 }
 
 #[cfg(unix)]

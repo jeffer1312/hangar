@@ -1670,9 +1670,11 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
         // depois de o tmux sair (anúncio, vínculo) não é observado aqui.
         let (completed,closed,released_early)=match early {
             Some(ok)=>(tokio::time::timeout(wait,&mut finished_rx).await.is_ok_and(|r|r.is_ok()),ok,true),
+            // `biased` com a entrada primeiro: os dois prontos juntos ainda passam pela conferência do disco.
             None=>match tokio::time::timeout(wait,async {tokio::select! {
-                r=&mut finished_rx=>(true,r.is_ok(),false),
+                biased;
                 r=closing.as_mut()=>(false,r.is_ok(),!done_on_disk.exists()),
+                r=&mut finished_rx=>(true,r.is_ok(),false),
             }}).await {
                 Ok((true,finished,_))=>(finished,closing.await.is_ok(),false),
                 Ok((false,closed,first))=>(tokio::time::timeout(wait,&mut finished_rx).await.is_ok_and(|r|r.is_ok()),closed,first),

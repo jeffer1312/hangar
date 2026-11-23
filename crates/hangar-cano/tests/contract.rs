@@ -308,7 +308,8 @@ fn start_tcp(dir: &Path) -> (Running, std::net::SocketAddr) {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    panic!("o cano não escutou em nenhuma porta");
+    let last = std::fs::read_to_string(dir.join("cano-4.log")).unwrap_or_else(|_| "sem log".into());
+    panic!("o cano não escutou em nenhuma porta; último log: {last}");
 }
 
 fn connect(address: std::net::SocketAddr) -> Option<std::net::TcpStream> {
