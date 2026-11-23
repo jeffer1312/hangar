@@ -133,11 +133,11 @@ fn process_prefix(managed_dir: &Path) -> String {
 
 /// As linhas que param a tarefa, o laço do `.vbs` e o programa que roda da pasta do Hangar, nesta ordem: o
 /// laço vivo religaria o programa morto. O `wscript.exe` é achado também pelo `.vbs` na linha de comando,
-/// porque o `Stop-ScheduledTask` falha calado.
+/// porque o `Stop-ScheduledTask` falha calado; essa consulta falhando é erro, nunca laço vivo sem aviso.
 fn ps_stop(id: &ServiceId, managed_dir: &Path) -> String {
     format!(
         "Stop-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue\n\
-         Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandLine -and $_.CommandLine.IndexOf({vbs}, [StringComparison]::OrdinalIgnoreCase) -ge 0 }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}\n\
+         Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" | Where-Object {{ $_.CommandLine -and $_.CommandLine.IndexOf({vbs}, [StringComparison]::OrdinalIgnoreCase) -ge 0 }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}\n\
          Get-Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path.StartsWith({dir}, [StringComparison]::OrdinalIgnoreCase) }} | Stop-Process -Force\n",
         task = ps_quote(id.task),
         vbs = ps_quote(&format!("\\{}.vbs\"", id.task)),
@@ -529,7 +529,7 @@ mod tests {
         let scripts = [windows_script(&WHATSAPP, Path::new(r"C:\h\hangar-whatsapp.vbs"), dir, true), windows_unregister_script(&WHATSAPP, dir)];
         for script in scripts {
             let task = script.find("Stop-ScheduledTask -TaskName 'hangar-whatsapp'").unwrap_or_else(|| panic!("{script}"));
-            let wsh = script.find("Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\"").unwrap_or_else(|| panic!("{script}"));
+            let wsh = script.find("Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" | Where-Object").unwrap_or_else(|| panic!("consulta que não engole erro: {script}"));
             let program = script.find("$_.Path.StartsWith('C:\\h\\w\\'").unwrap_or_else(|| panic!("{script}"));
             assert!(task < wsh && wsh < program, "{script}");
             assert!(script.contains(r#"$_.CommandLine.IndexOf('\hangar-whatsapp.vbs"', [StringComparison]::OrdinalIgnoreCase) -ge 0"#), "{script}");

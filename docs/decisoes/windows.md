@@ -94,7 +94,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   Agendador.** O `.vbs` da tarefa (`hangar-managed-binary`) relança o programa 10 s depois de cada
   saída, como o `Restart=always` da unit, e só sai com o `no_restart_exit` do serviço (o 3 do
   WhatsApp), que vira o `LastTaskResult`. Parar, atualizar e remover param a tarefa, depois o
-  `wscript.exe` que roda esse `.vbs` e só então o programa: o laço vivo religaria a versão antiga ou
+  `wscript.exe` que roda esse `.vbs` (consulta que falha é erro) e só então o programa: o laço vivo religaria a versão antiga ou
   o programa removido. O `.vbs` novo só chega à máquina quando o programa é instalado, religado ou
   atualizado. [Medição](#programa-gerenciado-religa-pelo-laço-do-vbs-23112026).
 - **O reinício do backend só vale com a porta aberta, e a porta do front pode ser do servidor.**

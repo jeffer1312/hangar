@@ -89,7 +89,7 @@ mod tests {
         let script = windows_script(Path::new(r"C:\h\hangar-cliproxy.vbs"), Path::new(r"C:\h\.hangar\cliproxy"));
         assert_eq!(script, "$ErrorActionPreference = 'Stop'\n\
             Stop-ScheduledTask -TaskName 'hangar-cliproxy' -ErrorAction SilentlyContinue\n\
-            Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf('\\hangar-cliproxy.vbs\"', [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\n\
+            Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf('\\hangar-cliproxy.vbs\"', [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\n\
             Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith('C:\\h\\.hangar\\cliproxy\\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force\n\
             $a = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '\"C:\\h\\hangar-cliproxy.vbs\"'\n\
             $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME\n\
