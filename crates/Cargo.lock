@@ -1622,6 +1622,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-browser-host"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hangar-cano"
 version = "0.1.0"
 dependencies = [
@@ -2072,6 +2080,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-port-stop"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "hangar-port-tunnel"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "hangar-core",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "hangar-projects"
 version = "0.1.0"
 dependencies = [
@@ -2173,6 +2199,7 @@ dependencies = [
  "hangar-api",
  "hangar-auth",
  "hangar-boot",
+ "hangar-browser-host",
  "hangar-cliproxy-setup",
  "hangar-codex",
  "hangar-codex-account-sync",
@@ -2199,6 +2226,8 @@ dependencies = [
  "hangar-package",
  "hangar-plugins",
  "hangar-port-preview",
+ "hangar-port-stop",
+ "hangar-port-tunnel",
  "hangar-projects",
  "hangar-psmux",
  "hangar-registration",
@@ -2206,6 +2235,7 @@ dependencies = [
  "hangar-scheduled-tasks",
  "hangar-send",
  "hangar-session-open-fields",
+ "hangar-session-ports",
  "hangar-session-tools",
  "hangar-shortcut-transfer",
  "hangar-sidecar-prune",
@@ -2274,6 +2304,16 @@ dependencies = [
 [[package]]
 name = "hangar-session-open-fields"
 version = "0.1.0"
+
+[[package]]
+name = "hangar-session-ports"
+version = "0.1.0"
+dependencies = [
+ "hangar-api",
+ "serde_json",
+ "tracing",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "hangar-session-tools"

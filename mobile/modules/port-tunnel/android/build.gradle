@@ -1,0 +1,21 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.porttunnel'
+version = '0.1.0'
+
+android {
+  namespace 'expo.modules.porttunnel'
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+
+dependencies {
+  // As mesmas versões que o react-native-webview e o React Native já trazem ao app.
+  implementation 'androidx.webkit:webkit:1.14.0'
+  implementation 'com.squareup.okhttp3:okhttp:4.9.2'
+}

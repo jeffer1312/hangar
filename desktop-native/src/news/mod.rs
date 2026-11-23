@@ -32,6 +32,7 @@ mod image_reveal;
 mod rename_suggestion;
 mod search_conversations;
 mod server_status;
+mod session_ports;
 mod sleep_hidden;
 mod speech_pause;
 mod speed_choice;
@@ -115,6 +116,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "galeria-da-conversa" => Some(conversation_gallery::render),
         "whatsapp-somente-leitura" => Some(whatsapp_readonly::render),
         "entrar-pelo-connect" => Some(connect_sign_in::render),
+        "portas-da-sessao" => Some(session_ports::render),
         _ => None,
     }
 }

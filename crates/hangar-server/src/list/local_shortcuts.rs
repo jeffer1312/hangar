@@ -204,6 +204,12 @@ pub(crate) async fn pending_question(program: &OsStr, target: &str, pane_pid: Op
 
 pub(crate) fn forget_target(target: &str) { last().remove(target); }
 
+/// (sessão dona, pid do pane) de cada terminal de atalho vivo, da última leitura: o servidor que o
+/// atalho sobe é da sessão dona.
+static OWNERS: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+
+pub(crate) fn owner_pids() -> Vec<(String, u32)> { OWNERS.lock().unwrap_or_else(|e| e.into_inner()).clone() }
+
 pub(crate) fn maintain(rows: &[Row]) {
     #[cfg(windows)]
     sweep_orphans(&rows.iter().map(|r| r.id.as_str()).collect());
@@ -260,6 +266,8 @@ pub async fn list_all(program: &OsString, children: &ChildrenMap, sessions: Opti
         None => Vec::new(),
     };
     maintain(&rows);
+    *OWNERS.lock().unwrap_or_else(|e| e.into_inner()) =
+        rows.iter().filter(|r| r.alive && !r.owner.is_empty()).filter_map(|r| Some((r.owner.clone(), r.pid?))).collect();
     rows.sort_by(|a, b| (a.created, a.seq, &a.tmux).cmp(&(b.created, b.seq, &b.tmux)));
     let mut list = Vec::with_capacity(rows.len());
     for r in &rows {

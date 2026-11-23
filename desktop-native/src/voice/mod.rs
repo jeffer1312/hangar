@@ -93,7 +93,7 @@ async fn read_peers(api: &Api) -> Vec<(String, String)> {
 }
 
 fn socket_code(error: &ws::Error) -> &'static str {
-    match error { ws::Error::Http(_) | ws::Error::Handshake => "refused", _ => "connection_lost" }
+    match error { ws::Error::Http(..) | ws::Error::Handshake => "refused", _ => "connection_lost" }
 }
 
 fn rtc_code(error: rtc::RtcError) -> &'static str {

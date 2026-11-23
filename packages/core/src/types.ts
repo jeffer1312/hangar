@@ -30,6 +30,15 @@ export interface LoopState {
 // das duas views -> api.createSession): quando o Pi entrou, as copias literais ficaram pra tras.
 export type Provider = 'claude' | 'codex' | 'pi' | 'kimi' | 'omp' | 'orq';
 
+/** Um servidor da sessão: a porta e quem escuta nela (`process` = nome curto do executável). */
+export interface PortEntry {
+  port: number;
+  process: string;
+  pid: number;
+  /** Outro processo, fora da sessão, também escuta nesta porta: `localhost:<port>` pode cair nele. */
+  shared?: boolean;
+}
+
 export interface SessionInfo {
   interaction_id?: string | null;
   /** Formulário da pergunta aberta (AskUserQuestion, também a segurada pelo plugin), com o ID dele:
@@ -72,6 +81,8 @@ export interface SessionInfo {
   asleep?: boolean;
   /** Troca de agente pedida e ainda não concluída; o servidor só manda enquanto existe. */
   handoff?: SessionHandoff | null;
+  /** Portas TCP em LISTEN dos processos da sessão, por porta; só na lista do dono, e ausente quando não há. */
+  ports?: PortEntry[];
   /** Onde a sessão adormecida reabre ao acordar. */
   wake_surface?: 'terminal' | 'headless';
   /** Servidores MCP criados por plugin (`$.tool.register`); a pele 'terminal' deixa as chamadas deles fora da dobra. */
