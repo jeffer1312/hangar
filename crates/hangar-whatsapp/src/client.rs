@@ -1,0 +1,183 @@
+//! Cliente da API C2 do binário, em `127.0.0.1:<port>` do `control.json`. Todo pedido sai assinado e
+//! toda resposta só vale com a assinatura do binário conferida.
+use std::path::PathBuf;
+use std::time::Duration;
+
+use serde_json::Value;
+
+use crate::control::{self, Control, ReadError, SIGNATURE_HEADER};
+
+const TIMEOUT: Duration = Duration::from_secs(15);
+/// Desvincular espera o WhatsApp responder ao logout (até 10 s no binário) e, no `wipe`, ainda para,
+/// apaga e reabre os bancos. Os clientes esperam mais que isto, senão a tela estoura antes.
+pub const UNLINK_TIMEOUT: Duration = Duration::from_secs(30);
+/// O resumo da página espera menos que o prazo dos clientes: binário travado aparece como sem resposta,
+/// não como servidor fora do ar.
+pub const OVERVIEW_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+/// O C2 corta em 200 mensagens por página; o teto só impede que uma resposta sem fim encha a memória.
+const MAX_REPLY: usize = 16 << 20;
+
+/// O que o binário respondeu, já com a assinatura conferida.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reply {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CallError {
+    /// Sem `control.json`, com o processo dele morto ou sem conexão na porta: o serviço está fora.
+    Off(String),
+    /// Resposta sem assinatura válida, ou chave ilegível para conferir.
+    Untrusted(String),
+    /// Conexão aberta que falhou no meio, prazo esgotado ou resposta grande demais.
+    Transport(String),
+}
+
+#[derive(Clone)]
+pub struct Client {
+    data: PathBuf,
+    /// Montado uma vez; a falha fica guardada e todo pedido a devolve, em vez de cair num cliente padrão que
+    /// seguiria redirecionamento e proxy, sem prazo.
+    http: Result<reqwest::Client, String>,
+}
+
+impl Client {
+    pub fn new(data: PathBuf) -> Self {
+        // Sem seguir redirecionamento: quem ocupar a porta velha não desvia o pedido assinado para outro lugar.
+        let http = hangar_core::net::http_client().timeout(TIMEOUT).no_proxy()
+            .redirect(reqwest::redirect::Policy::none()).build().map_err(|e| e.to_string());
+        if let Err(error) = &http {
+            tracing::error!(%error, "whatsapp: o cliente HTTP do serviço não montou; os pedidos ao serviço vão falhar");
+        }
+        Self { data, http }
+    }
+
+    /// O `control.json` com o processo dele vivo. Não prova que o serviço está de pé (o pid pode ter sido
+    /// reaproveitado depois de um reboot): a prova é um [`Client::status`] assinado.
+    pub fn claimed(&self) -> Option<Control> {
+        control::read_control(&self.data).ok().filter(control::alive)
+    }
+
+    /// `path` é o caminho do C2 (`/v1/chats`); `query` vai codificada como formulário.
+    ///
+    /// # Errors
+    ///
+    /// [`CallError::Off`] sem serviço; [`CallError::Untrusted`] quando a resposta não tem a assinatura
+    /// do binário; [`CallError::Transport`] para o resto.
+    pub async fn call(&self, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>) -> Result<Reply, CallError> {
+        self.send(method, path, query, body, deadline(path)).await
+    }
+
+    /// `GET /v1/status` com 200: a prova de que o serviço está de pé.
+    ///
+    /// # Errors
+    ///
+    /// Os de [`Client::call`], e [`CallError::Transport`] para outro status ou corpo que não é JSON.
+    pub async fn status(&self) -> Result<Value, CallError> {
+        self.status_within(TIMEOUT).await
+    }
+
+    /// [`Client::status`] com prazo próprio no lugar do `TIMEOUT` do cliente.
+    ///
+    /// # Errors
+    ///
+    /// Os de [`Client::status`]; prazo esgotado é [`CallError::Transport`].
+    pub async fn status_within(&self, timeout: Duration) -> Result<Value, CallError> {
+        let reply = self.send(reqwest::Method::GET, "/v1/status", &[], None, timeout).await?;
+        if reply.status != 200 {
+            return Err(CallError::Transport(format!("status respondeu {}", reply.status)));
+        }
+        serde_json::from_slice(&reply.body).map_err(|e| CallError::Transport(format!("status ilegível: {e}")))
+    }
+
+    fn control(&self) -> Result<Control, CallError> {
+        match control::read_control(&self.data) {
+            Ok(control) if control::alive(&control) => Ok(control),
+            Ok(control) => Err(CallError::Off(format!("o processo {} do control.json não existe", control.pid))),
+            Err(ReadError::Missing) => Err(CallError::Off("sem control.json".into())),
+            Err(ReadError::Invalid(detail)) => Err(CallError::Off(detail)),
+        }
+    }
+
+    async fn send(&self, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>, timeout: Duration) -> Result<Reply, CallError> {
+        let body = body.map(|b| b.to_string().into_bytes()).unwrap_or_default();
+        let first = self.control()?;
+        match self.attempt(&first, &method, path, query, &body, timeout).await {
+            Err(CallError::Off(detail)) => {
+                // O binário pode ter reiniciado noutra porta: relê o `control.json` uma vez.
+                let again = self.control()?;
+                if again == first {
+                    return Err(CallError::Off(detail));
+                }
+                self.attempt(&again, &method, path, query, &body, timeout).await
+            }
+            other => other,
+        }
+    }
+
+    /// Um pedido ao binário em `at`; sem conexão na porta é [`CallError::Off`].
+    async fn attempt(&self, at: &Control, method: &reqwest::Method, path: &str, query: &[(&str, &str)], body: &[u8], timeout: Duration) -> Result<Reply, CallError> {
+        let key = control::read_key(&self.data).map_err(|e| CallError::Untrusted(format!("control.key: {e:?}")))?;
+        let mut url = reqwest::Url::parse(&format!("http://127.0.0.1:{}{path}", at.port))
+            .map_err(|e| CallError::Transport(format!("endereço: {e}")))?;
+        if !query.is_empty() {
+            url.set_query(Some(&form_urlencoded::Serializer::new(String::new()).extend_pairs(query).finish()));
+        }
+        // Assina a forma que vai no fio: caminho e query do próprio `Url` que o reqwest envia.
+        let uri = match url.query() {
+            Some(q) => format!("{}?{q}", url.path()),
+            None => url.path().to_owned(),
+        };
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let http = self.http.as_ref().map_err(|e| CallError::Transport(format!("cliente HTTP não montou: {e}")))?;
+        let mut request = http.request(method.clone(), url)
+            .header(SIGNATURE_HEADER, control::sign_request(&key, method.as_str(), &uri, ts, body));
+        if !body.is_empty() {
+            request = request.header("content-type", "application/json").body(body.to_vec());
+        }
+        let mut response = request.timeout(timeout).send().await.map_err(|e| {
+            if e.is_connect() { CallError::Off(e.to_string()) } else { CallError::Transport(e.to_string()) }
+        })?;
+        let status = response.status().as_u16();
+        let signature = response.headers().get(SIGNATURE_HEADER).and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let mut data = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|e| CallError::Transport(e.to_string()))? {
+            if data.len() + chunk.len() > MAX_REPLY {
+                return Err(CallError::Transport("resposta grande demais".into()));
+            }
+            data.extend_from_slice(&chunk);
+        }
+        let Some(signature) = signature else {
+            return Err(CallError::Untrusted(format!("resposta {status} sem assinatura")));
+        };
+        if !control::verify_response(&key, &ts.to_string(), status, &data, &signature) {
+            return Err(CallError::Untrusted(format!("resposta {status} com assinatura que não confere")));
+        }
+        Ok(Reply { status, body: data })
+    }
+}
+
+/// O prazo de um caminho do C2: os que desvinculam o aparelho esperam o WhatsApp responder.
+fn deadline(path: &str) -> Duration {
+    match path {
+        "/v1/wipe" | "/v1/logout" => UNLINK_TIMEOUT,
+        _ => TIMEOUT,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// O `wipe` do binário pode gastar 10 s no logout e ainda parar, apagar e reabrir; o `uninstall` com
+    /// `logout` passa pelo mesmo `/v1/logout`.
+    #[test]
+    fn unlinking_waits_longer_than_the_other_calls() {
+        assert!(UNLINK_TIMEOUT >= Duration::from_secs(30));
+        assert_eq!(deadline("/v1/wipe"), UNLINK_TIMEOUT);
+        assert_eq!(deadline("/v1/logout"), UNLINK_TIMEOUT);
+        assert_eq!(deadline("/v1/chats"), TIMEOUT);
+        assert_eq!(deadline("/v1/pair"), TIMEOUT);
+    }
+}

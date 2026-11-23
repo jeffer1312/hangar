@@ -21,6 +21,7 @@ mod remote_browser;
 mod accounts;
 pub(crate) mod chrome;
 mod computer;
+mod whatsapp;
 mod controls;
 mod plan_review;
 mod create;
@@ -45,6 +46,8 @@ mod rename_suggest;
 mod tags;
 mod notice_line;
 mod viewer;
+mod gallery;
+mod media_panel;
 mod window_tray;
 mod presence;
 mod disk;
@@ -94,13 +97,21 @@ pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, e
 pub(crate) use rename_suggest::{Strip as RenameStrip, beta_rename_strip, rename_strip};
 pub(crate) use controls::{SPEED_TIERS, speed_label, speed_texts};
 pub(crate) use settings::segments_preview;
+pub(crate) use whatsapp::{ConnectedFacts as WhatsAppConnected, connected_summary as whatsapp_connected_summary, pair_card as whatsapp_pair_card,
+    qr_row as whatsapp_qr_row, risk_box as whatsapp_risk_box, usage_box as whatsapp_usage_box};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use create::{base_button, base_row, mode_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
-pub(crate) use connect::device_card;
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
 pub(crate) use status::parts as status_parts;
+pub(crate) use sign_in::{account_top as sign_in_account_top, default_picks as sign_in_default_picks, enter_button as sign_in_enter_button,
+    form_field as sign_in_form_field, form_heading as sign_in_form_heading, machine_subtitle as sign_in_machine_subtitle,
+    pick_checkbox as sign_in_pick_checkbox, pick_row as sign_in_pick_row, section_heading as sign_in_section_heading, sign_in_card,
+    sign_out_button as sign_in_sign_out_button, submit_button as sign_in_submit_button};
+pub(crate) use viewer::{STRIP_THUMB, play_badge, show_in_chat_button, strip_day, strip_frame, strip_row, strip_thumb, strip_window, viewer_counter,
+    viewer_stage, viewer_title};
+pub(crate) use media_panel::{media_cell, media_cell_side, media_day_title, media_filter_chip, media_filter_row, media_grid_row, media_section_tabs};
 pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news_kind_pill, news_markdown_block, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
@@ -109,7 +120,7 @@ pub(crate) use accounts::{CLIPROXY_INSTALL_ITEMS, CliproxyBrand, CliproxyItem, c
     cliproxy_update_done_banner, cliproxy_update_running_banner, CliproxyCardView, cliproxy_adopt_button, cliproxy_adopt_done_banner,
     cliproxy_adopt_running_banner, cliproxy_card_note, cliproxy_card_view, cliproxy_connect_button, login_heading, target_row};
 /// As peças do seletor de modelos e da troca de agente, para a animação da novidade.
-pub(crate) use controls::picker as model_picker;
+pub(crate) use controls::{picker as model_picker, providers as provider_picker};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
     search_scope_summary, search_status_line, search_who};
@@ -130,6 +141,7 @@ mod sync;
 mod connect;
 mod devices;
 mod guests;
+mod sign_in;
 mod shared_config;
 mod tree;
 mod find;
@@ -436,9 +448,13 @@ enum Payload {
     Recent(SessionKey, Result<Vec<UploadFile>, Failure>),
     // Miniatura já decodificada fora da thread da janela; `None` = bytes que não são imagem legível.
     // A miniatura e os quadros da revelação dela.
-    Media(SessionKey, Source, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
+    Media(SessionKey, Source, u32, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
     /// Resultado de Abrir/Salvar: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no servidor.
-    Saved(SessionKey, Source, bool, Result<(PathBuf, bool), (String, bool)>),
+    Saved(SessionKey, Source, SaveStart, bool, Result<(PathBuf, bool), (String, bool)>),
+    /// Quanto do Abrir/Salvar da geração `u64` já chegou e o tamanho, se o servidor disse.
+    SaveProgress(SessionKey, Source, u64, u64, Option<u64>),
+    /// Quanto do anexo `id` já saiu, do total.
+    UploadProgress(SessionKey, u64, u64, u64),
     /// "Abrir no navegador" do HTML citado: o endereço da página com o bilhete dela, ou a falha já em frase.
     PageOpened(SessionKey, Source, Result<String, String>),
     ConnectionNotSaved(String),
@@ -480,6 +496,7 @@ enum Payload {
     // Máquinas: identificador, alcance e reinício do servidor conectado.
     Machines(machines::MachinesReply),
     Computer(computer::ComputerReply),
+    WhatsApp(whatsapp::WhatsAppReply),
     // Diálogo Nova sessão: a resposta vai ao diálogo que a pediu, se ele ainda for o aberto.
     Create(EntityId, create::CreateReply),
     Transfer(EntityId, create::TransferReply),
@@ -492,8 +509,6 @@ enum Payload {
     PluginInput(String, crate::plugin_ui::Control, EntityId, Result<Value, Failure>),
     // Destrancar o chaveiro de uma máquina (chave `servers::norm`): a resposta é dela, não da conexão ativa.
     Keyring(String, Result<Value, Failure>),
-    // Aparelho pedindo entrada no Connect de uma máquina: a resposta é dela, não da conexão ativa.
-    ConnectNotice(connect::NoticeReply),
     // Lista de outra máquina: a geração dos SSE de lista, a chave do servidor e o que chegou.
     Remote(u64, String, servers::RemoteUpdate),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
@@ -543,7 +558,6 @@ enum Reply {
     OrqPanel(u64),
     /// A geração da leitura (`Side::files_gen`).
     GitFiles(u64),
-    Diff(String),
     /// Rótulo do atalho e se o pedido foi No Hangar.
     Shell(String, bool),
     /// Rótulo e id do terminal de atalho que o clique no bloco aceso fechou.
@@ -562,7 +576,13 @@ enum Reply {
 pub struct Picked { name: String, bytes: Vec<u8> }
 
 #[derive(Clone)]
-struct Attachment { id: u64, name: String, bytes: Arc<Vec<u8>>, image: Option<Arc<Image>>, state: AttachState, upload: Option<Background> }
+/// `sent`: quanto já saiu do envio em curso (enviado, total).
+struct Attachment { id: u64, name: String, bytes: Arc<Vec<u8>>, image: Option<Arc<Image>>, state: AttachState, upload: Option<Background>, sent: Option<(u64, u64)> }
+
+/// O progresso do envio do anexo `id` para a tela, sem esperar vaga na fila: o próximo aviso cobre o que se perder.
+fn upload_reporter(tx: async_channel::Sender<Envelope>, connection: u64, key: SessionKey, id: u64) -> impl FnMut(u64, u64) + Send + 'static {
+    move |sent, total| { let _ = tx.try_send(Envelope { connection, selection: None, payload: Payload::UploadProgress(key.clone(), id, sent, total) }); }
+}
 
 /// O upload que começou ao anexar: o envio espera este em vez de subir o mesmo arquivo de novo.
 #[derive(Clone)]
@@ -646,9 +666,24 @@ impl SystemNotifications {
 #[derive(Default)]
 struct CiteCheck { owner: Option<SessionKey>, scanned: HashSet<String>, checked: HashSet<String>, dead: HashSet<String> }
 
-/// Cartão de um arquivo citado depois de Abrir ou Baixar: baixando, baixado, vazio, inexistente ou a falha.
-#[derive(Clone)]
-enum FileCard { Busy, Saved, Empty, Missing, Failed(String), PageFailed(String) }
+/// Cartão de um arquivo citado depois de Abrir ou Baixar: preparando a página, baixando (quanto chegou e o tamanho, se
+/// o servidor disse), baixado (onde), vazio, inexistente ou a falha.
+#[derive(Clone, Debug, PartialEq)]
+enum FileCard { Busy, Downloading { done: u64, total: Option<u64> }, Saved(PathBuf), Empty, Missing, Failed(String), PageFailed(String) }
+
+impl FileCard {
+    const STARTED: FileCard = FileCard::Downloading { done: 0, total: None };
+    /// Os botões param enquanto há um pedido em voo.
+    fn busy(state: Option<&FileCard>) -> bool { matches!(state, Some(FileCard::Busy | FileCard::Downloading { .. })) }
+    /// O cartão que volta se o download que começa agora for cancelado: o que estava à mostra (baixado, falhou…) ou,
+    /// trocando um download por outro, o de antes do primeiro.
+    fn before_download(shown: Option<FileCard>, replaced: Option<FileCard>) -> Option<FileCard> {
+        match shown {
+            Some(state) if !FileCard::busy(Some(&state)) => Some(state),
+            _ => replaced,
+        }
+    }
+}
 
 /// Texto preparado de uma linha: a mensagem pronta para o `TextView`, as linhas do resultado de uma chamada ou o
 /// detalhe aberto (entrada/saída) de uma chamada.
@@ -749,6 +784,9 @@ pub struct Hangar {
     /// Quando a nota do Jev de cada conversa entrou: o prazo de uma nota não apaga a seguinte, de mesmo texto.
     jev_note_at: HashMap<SessionKey, Instant>,
     file_cards: HashMap<(SessionKey, Source), FileCard>,
+    /// O Abrir/Salvar em voo de cada cartão, com a geração dele, para o Cancelar; mensagem de outra geração é de tarefa
+    /// cancelada ou trocada. Junto da tarefa, o cartão que volta se ela for cancelada.
+    downloads: api::download::Running<(SessionKey, Source), (tokio::task::AbortHandle, Option<FileCard>)>,
     /// Painel "Na fila": edição em curso, recolhido e arrasto.
     queue: queue::QueueUi,
     /// A mensagem enviada em viagem até o lugar dela, e onde as pontas da viagem foram desenhadas.
@@ -909,6 +947,11 @@ pub struct Hangar {
     plugin_toasts_shown: std::collections::VecDeque<SharedString>,
     recent: Option<Recent>,
     media: MediaCache<(SessionKey, Source)>,
+    /// Miniaturas buscadas e decodificadas ao mesmo tempo: a grade da aba Mídia pede dezenas de uma vez, e a sessão
+    /// desta máquina leria todos os arquivos inteiros juntos.
+    media_fetches: Arc<tokio::sync::Semaphore>,
+    /// Escala da janela no último desenho: a miniatura de outra máquina é pedida no tamanho da caixa em pixels da tela.
+    display_scale: f32,
     // Miniatura que acabou de chegar: quando chegou e os quadros da revelação, até ela terminar.
     media_reveal: HashMap<(SessionKey, Source), (Instant, Option<Instant>, Vec<Arc<RenderImage>>)>,
     /// Páginas publicadas na conversa, pelo id da página.
@@ -973,8 +1016,10 @@ pub struct Hangar {
     worktree_settings: worktree_settings::WorktreeSettings,
     auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
+    guests: guests::Guests,
+    /// A entrada pela conta do Connect no cartão de conexão: conta, convidado e a liberação deste computador.
+    sign_in: sign_in::SignIn,
     connect: connect::Connect,
-    connect_notices: connect::Notices,
     devices: devices::Devices,
     shared: shared_config::SharedConfig,
     machines: machines::Machines,
@@ -992,6 +1037,7 @@ pub struct Hangar {
     presence: presence::Presence,
     system_notifications: SystemNotifications,
     computer: computer::Computer,
+    whatsapp: whatsapp::WhatsApp,
     new_session: Option<Entity<create::NewSession>>,
     sidebar: sidebar::Sidebar,
     machines_tray: machines_tray::Tray,
@@ -1058,6 +1104,7 @@ pub struct Hangar {
     dictation: dictation::Dictation,
     voice: voice_ui::VoiceUi,
     player: player::Player,
+    media_panel: media_panel::MediaPanel,
     connection_origin: Option<WeakFocusHandle>,
     /// Primeira abertura com o app Electron neste computador: a tela de conexão oferece trazer as configurações dele.
     electron_offer: bool,
@@ -1108,6 +1155,7 @@ impl Hangar {
         Self::watch_system(window, cx);
         Self::watch_dictation(window, cx);
         Self::watch_installed_update(window, cx);
+        std::thread::spawn(|| sweep_private_copies(&private_copies_dir(), std::time::SystemTime::now()));
         let (tray_tx, tray_rx) = async_channel::unbounded::<crate::tray::TrayEvent>();
         cx.spawn_in(window, async move |this, cx| {
             while let Ok(event) = tray_rx.recv().await {
@@ -1242,16 +1290,19 @@ impl Hangar {
         }
         // A lista que um app anterior guardou no "Atualizar?"; daqui em diante quem mostra é o `Updater`.
         cx.defer_in(window, |_, window, cx| crate::update::confirm::show_legacy_pending(window, cx));
-        // Só para ver e fotografar no build de debug: HANGAR_NATIVE_PREVIEW=update-confirm, whats-new ou o nome de uma
-        // animação das novidades. Espera a subida para abrir por cima do diálogo de primeira execução de um perfil vazio.
         #[cfg(debug_assertions)]
         if let Ok(name) = std::env::var("HANGAR_NATIVE_PREVIEW") {
-            cx.spawn_in(window, async move |_, cx| {
+            cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor().timer(Duration::from_secs(3)).await;
-                let _ = cx.update(|window, cx| match name.as_str() {
-                    "update-confirm" => crate::update::confirm::open_preview(false, window, cx),
-                    "whats-new" => crate::update::confirm::open_preview(true, window, cx),
-                    _ => crate::news::open_preview(name, window, cx),
+                let _ = this.update_in(cx, |this, window, cx| {
+                    // O cartão de conexão é pintado por cima dos diálogos, mesmo quando abre antes da prévia.
+                    this.connection_dialog = false;
+                    cx.notify();
+                    match name.as_str() {
+                        "update-confirm" => crate::update::confirm::open_preview(false, window, cx),
+                        "whats-new" => crate::update::confirm::open_preview(true, window, cx),
+                        _ => crate::news::open_preview(name, window, cx),
+                    }
                 });
             }).detach();
         }
@@ -1297,7 +1348,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None, list_down_since: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
+            flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), downloads: Default::default(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
             note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), work_reviews: HashMap::new(), work_review: Default::default(), notice_acted: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
@@ -1310,7 +1361,7 @@ impl Hangar {
             plugin_question_seen: None,
             suggest_pick: 0, new_chat_commands_seen: None, slash_open: false, suggest_dismissed: None, command_panel: false, context_card: false, command_search, confirm: None, confirm_no_ask: false,
             mention: Default::default(),
-            terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_presentations: HashMap::new(), linked_children_open: HashSet::new(), plugin_body_scrolls: HashMap::new(), plugin_question_focus: cx.focus_handle(), plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), media_reveal: HashMap::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
+            terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_presentations: HashMap::new(), linked_children_open: HashSet::new(), plugin_body_scrolls: HashMap::new(), plugin_question_focus: cx.focus_handle(), plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), media_fetches: Arc::new(tokio::sync::Semaphore::new(6)), display_scale: 1., media_reveal: HashMap::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
             side: side::Side::default(), controls: controls::Controls::default(),
             settings: None, settings_ui, tab_focus: HashMap::new(), tabs_scroll: ScrollHandle::new(), pending_tab_reveal: None, tab_group_open: None, tab_reveal_scheduled: false,
             tab_preview: None, tab_hover: None, tab_hover_epoch: 0, tab_hover_moved: Instant::now(), tab_preview_seq: 0, tab_preview_parked: None, in_tab_preview: false,
@@ -1320,8 +1371,8 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
-            server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), connect_notices: connect::Notices::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
-            costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
+            server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), guests: guests::Guests::default(), sign_in: sign_in::SignIn::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
+            costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), whatsapp: whatsapp::WhatsApp::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
             window_tray: window_tray::WindowTray::new(tray_tx), presence: Default::default(),
@@ -1334,6 +1385,7 @@ impl Hangar {
             dictation: Default::default(),
             voice: voice_ui::VoiceUi { a11y_dump: Self::watch_a11y_dump(window, cx), ..Default::default() },
             player: Default::default(),
+            media_panel: Default::default(),
             connection_origin: None,
             electron_offer: saved.is_none() && crate::electron::exists(),
             setup: None,
@@ -1545,7 +1597,7 @@ impl Hangar {
     fn open_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.connection_dialog { self.connection_origin = window.focused(cx).map(|focus| focus.downgrade()); }
         self.connection_dialog = true;
-        self.address.update(cx, |input, cx| input.focus(window, cx));
+        if !self.sign_in_takes_focus(window, cx) { self.address.update(cx, |input, cx| input.focus(window, cx)); }
         cx.notify();
     }
 
@@ -1677,6 +1729,7 @@ impl Hangar {
         self.files_connection_dropped(cx);
         self.selection += 1;
         self.revision += 1;
+        self.media_panel.release();
         for slot in [&mut self.list_task, &mut self.session_task, &mut self.history_task] { if let Some(t) = slot.take() { t.abort(); } }
         self.leave_accounts();
         (self.selected, self.open_api, self.pending_remote) = (None, None, None);
@@ -1721,6 +1774,7 @@ impl Hangar {
         self.machines = machines::Machines::default();
         self.system_notifications = SystemNotifications::default();
         self.computer = computer::Computer::default();
+        self.whatsapp = whatsapp::WhatsApp::default();
     }
 
     /// Sessão da lista do servidor ativo.
@@ -1770,6 +1824,7 @@ impl Hangar {
         self.scroll_target_tab(&target);
         self.selection += 1;
         self.revision += 1;
+        self.media_panel.release();
         if let Some(t) = self.session_task.take() { t.abort(); }
         if let Some(t) = self.history_task.take() { t.abort(); }
         self.chat = Chat::default();
@@ -1897,6 +1952,7 @@ impl Hangar {
         self.keep_draft(cx);
         self.keep_expanded();
         self.selection += 1;
+        self.media_panel.release();
         if let Some(task) = self.session_task.take() { task.abort(); }
         if let Some(task) = self.history_task.take() { task.abort(); }
         let remote = self.open_api.is_some();
@@ -1986,11 +2042,53 @@ impl Hangar {
                 cx.notify();
                 return;
             }
-            Payload::Saved(key, source, open, result) => {
+            Payload::UploadProgress(key, id, sent, total) => {
+                let key = self.delivery.current(key);
+                if let Some(attachment) = self.attachments.get_mut(&key).and_then(|list| list.iter_mut().find(|a| a.id == id))
+                    && attachment.state == AttachState::Uploading {
+                    attachment.sent = Some((sent, total));
+                    cx.notify();
+                }
+                return;
+            }
+            Payload::SaveProgress(key, source, generation, done, total) => {
+                let card = (key, source);
+                // Só a tarefa atual do cartão: a cancelada ou trocada não mexe no anel da nova.
+                if self.downloads.is_current(&card, generation) && let Some(state) = self.file_cards.get_mut(&card)
+                    && matches!(state, FileCard::Downloading { .. }) {
+                    *state = FileCard::Downloading { done, total };
+                    cx.notify();
+                }
+                return;
+            }
+            Payload::Saved(key, source, start, open, result) => {
+                // Reabrir o que já foi salvo mantém o cartão "baixado" (Abrir e Mostrar na pasta), abrindo ou não.
+                let kept = self.file_cards.get(&(key.clone(), source.clone())).filter(|card| matches!(card, FileCard::Saved(_))).cloned();
+                // Cancelado ou trocado enquanto o resultado vinha: nada abre nem aparece, e a tarefa nova do cartão
+                // continua. A cópia privada que este pedido criou sai com `copy`, se ninguém a abrir; o arquivo da
+                // sessão e o destino escolhido no Salvar ficam. Reabrir não é download: vale só enquanto o cartão
+                // segue "baixado" no mesmo arquivo que o pedido leu, e esse arquivo nunca sai.
+                let (current, copy) = match start {
+                    SaveStart::Reopen(saved) => (reopen_is_current(kept.as_ref(), &saved), None),
+                    SaveStart::Download(generation, copy) => (self.downloads.finish(&(key.clone(), source.clone()), generation), copy),
+                };
+                if !current { return; }
                 let (card, note) = match result {
                     Ok((_, true)) => (Some(FileCard::Empty), None),
-                    Ok((path, _)) if open => { cx.open_with_system(&path); (None, None) }
-                    Ok((path, _)) => (Some(FileCard::Saved), Some((tr("saved").replace("{path}", &path.display().to_string()), false))),
+                    Ok((path, _)) if open && composer::openable_path(&path) => {
+                        cx.open_with_system(&path);
+                        // Aberta, a cópia fica para o programa do sistema; a varredura das antigas a leva depois.
+                        if let Some(copy) = copy { copy.keep(); }
+                        (kept, None)
+                    }
+                    Ok((path, _)) if open => {
+                        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        (kept, Some((tr("open_refused").replace("{name}", &name), true)))
+                    }
+                    Ok((path, _)) => {
+                        let note = tr("saved").replace("{path}", &path.display().to_string());
+                        (Some(FileCard::Saved(path)), Some((note, false)))
+                    }
                     // O card já diz "não encontrado"; a frase do servidor vinha sem tradução.
                     Err((_, true)) => (Some(FileCard::Missing), None),
                     Err((error, false)) => (Some(FileCard::Failed(error.clone())), Some((error, true))),
@@ -2047,8 +2145,7 @@ impl Hangar {
                 // Leitura do catálogo do Codex já trocada não abre o diálogo de conexão: ela é descartada logo adiante.
                 let current = !matches!(reply, Reply::HandoffCatalog(read) if !self.handoff_read_current(&key, read));
                 let lost = current && self.selected_key().as_ref() == Some(&key) && result.as_ref().err().is_some_and(|e| self.chat_auth_lost(e));
-                if lost
-                    && !matches!(reply, Reply::Diff(_)) { self.open_connection(window, cx); }
+                if lost { self.open_connection(window, cx); }
                 let owner=key.clone();
                 self.with_bound_conversation(&owner,cx,move |this,cx|this.receive_reply(key,reply,result,window,cx));
                 cx.notify();
@@ -2073,7 +2170,6 @@ impl Hangar {
                 return;
             }
             Payload::Keyring(key, result) => { self.receive_keyring(key, result, cx); return; }
-            Payload::ConnectNotice(reply) => { self.receive_connect_notice(reply, cx); return; }
             // Cada máquina responde por si: a troca do ativo não descarta a resposta.
             Payload::Presence(key, switched, result) => { self.receive_presence(key, switched, result, window, cx); return; }
             // Cada máquina tem a própria geração: a troca do ativo não derruba as listas das outras.
@@ -2331,7 +2427,11 @@ impl Hangar {
                     Err(error) => {
                         // O histórico inteiro (busca) falhou: volta à janela normal, e a busca e o "Carregar anteriores"
                         // podem pedir de novo em vez de ficarem presos ao que já veio.
-                        if limit == 0 { (self.history_limit, self.has_older) = (HISTORY_PAGE, true); }
+                        if limit == 0 {
+                            (self.history_limit, self.has_older) = (HISTORY_PAGE, true);
+                            let owner = self.selected_key().map(|key| (key, self.revision));
+                            self.media_panel.full_history_failed(owner, Self::failure(&error));
+                        }
                         if error.status == Some(404) {
                             if let Some(api) = self.session_api() {
                                 let tx = self.tx.clone();
@@ -2371,7 +2471,7 @@ impl Hangar {
                     }).map_err(|error| Self::failure(&error)));
                 }
             }
-            Payload::Media(key, source, result) => {
+            Payload::Media(key, source, width, result) => {
                 // Revelação que ninguém desenhou até o fim (a conversa saiu da tela) é solta aqui. Sem desenho, espera o
                 // prazo de mensagem ao vivo: quem volta à conversa nesse tempo ainda vê a imagem abrir.
                 let now = Instant::now();
@@ -2394,7 +2494,11 @@ impl Hangar {
                 };
                 let started = std::time::Instant::now();
                 media::trace(format_args!("thumb installed {source:?}"));
-                for image in self.media.insert((key, source), state) { cx.drop_image(image, Some(window)); }
+                let slot = (key, source);
+                // A busca maior que falhou não apaga a miniatura que já estava na tela.
+                if matches!(state, MediaState::Image(_)) || !self.media.has_image(&slot) {
+                    for image in self.media.insert_sized(slot, state, width) { cx.drop_image(image, Some(window)); }
+                }
                 let rows = self.row_ids.len();
                 if rows > 0 { self.follow_content_changed(cx); self.list_state.remeasure_items(0..rows); }
                 media::trace(format_args!("thumb install took {:.2} ms, remeasured {rows} rows", started.elapsed().as_secs_f64() * 1000.));
@@ -2436,6 +2540,7 @@ impl Hangar {
             Payload::SharedConfig(reply) => { self.receive_shared_config(reply, cx); return; }
             Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
             Payload::Computer(reply) => { self.receive_computer(reply, window, cx); return; }
+            Payload::WhatsApp(reply) => { self.receive_whatsapp(reply, cx); return; }
             Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
             Payload::Transfer(dialog, reply) => { self.receive_agent_transfer(dialog, reply, window, cx); return; }
             Payload::PluginPressed(result) => { self.receive_plugin_press(result, window, cx); return; }
@@ -2476,9 +2581,9 @@ impl Hangar {
             Payload::Dossier(key, seq, result) => { self.receive_dossier(key, seq, result, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
-                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::PageOpened(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
+                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::SaveProgress(..) | Payload::UploadProgress(..) | Payload::PageOpened(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
-                | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::ConnectNotice(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
+                | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
                 | Payload::Mermaid(..) | Payload::TourProgress(..) => unreachable!(),
         }
         // Lista que trocou ou tirou a sessão aberta refaz a conversa.
@@ -2673,7 +2778,10 @@ impl Hangar {
         // Resposta perdida (conexão trocada no meio) não segura a tela além do prazo do próprio pedido.
         if let Some(t) = target.as_ref() && let Some((sent, answered)) = self.sidebar.moving.get(t).copied() {
             let back = list.iter().any(|s| s.name == t.name);
-            let settled = match answered { Some(at) => back || at.elapsed() > Duration::from_secs(15), None => sent.elapsed() > Duration::from_secs(130) };
+            let settled = match answered {
+                Some(at) => back || at.elapsed() > Duration::from_secs(15),
+                None => sent.elapsed() > Duration::from_secs(crate::api::REOPEN_SECONDS),
+            };
             if !settled { return; }
             self.sidebar.moving.remove(t);
         }
@@ -2938,6 +3046,7 @@ impl Hangar {
                     self.plugin_body_scrolls.remove(&key);
                 }
                 self.revision += 1;
+                self.media_panel.release();
                 self.terminal_suggestion.clear();
                 self.plugin_band = Value::Null;
                 self.plugin_panes.clear();
@@ -3426,7 +3535,8 @@ impl Hangar {
                     }
                 }
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key.clone(), id, None) }).await;
-                let result = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention).await;
+                let report = upload_reporter(tx.clone(), connection, key.clone(), id);
+                let result = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention, report).await;
                 let failed = result.is_err();
                 if tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key.clone(), id, Some(result)) }).await.is_err() { return; }
                 if failed { break; }
@@ -3438,6 +3548,8 @@ impl Hangar {
 
     fn receive_upload(&mut self, key: SessionKey, id: u64, result: Option<Result<Uploaded, Failure>>) {
         let Some(attachment) = self.attachments.get_mut(&key).and_then(|list| list.iter_mut().find(|a| a.id == id)) else { return; };
+        // Envio novo (ou tentativa de novo) começa do zero.
+        if result.is_none() { attachment.sent = None; }
         attachment.state = match result {
             None => AttachState::Uploading,
             Some(Ok(uploaded)) => AttachState::Uploaded(uploaded),
@@ -3463,7 +3575,14 @@ impl Hangar {
         };
         let caption = quotes::compose_refs(&refs, &draft);
         let message = composer::compose_prompt(&caption, &uploads, |speech| tr("attach_video_speech").replace("{texto}", speech));
-        if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) { self.delivery.mark_typed(&key, field); }
+        // A faixa do anexo some com o envio: o vídeo que foi sem quadros nem fala fica dito no aviso de baixo.
+        let gaps: Vec<String> = self.attachments.get(&key).map(|list| list.iter().filter(|a| batch.contains(&a.id))
+            .filter_map(|a| match &a.state { AttachState::Uploaded(up) => up.note.map(|gap| format!("{}: {}", a.name, gap.shown())), _ => None })
+            .collect()).unwrap_or_default();
+        if self.deliver(key.clone(), message, field.clone(), steer, known, group, cx) {
+            self.delivery.mark_typed(&key, field);
+            if !gaps.is_empty() { self.action_feedback.insert(key.clone(), (gaps.join(" "), true)); }
+        }
         else if !field.is_empty() { self.return_to_field(&key, vec![field], current, window, cx); }
     }
 
@@ -3475,7 +3594,7 @@ impl Hangar {
         let bytes = Arc::new(bytes);
         let upload = self.background_upload(key, self.attach_seq, &name, &bytes);
         let state = if upload.is_some() { AttachState::Uploading } else { AttachState::Waiting };
-        let attachment = Attachment { id: self.attach_seq, name, bytes, image, state, upload };
+        let attachment = Attachment { id: self.attach_seq, name, bytes, image, state, upload, sent: None };
         self.attachments.entry(key.clone()).or_default().push(attachment);
         Ok(())
     }
@@ -3489,7 +3608,8 @@ impl Hangar {
         let (done, result) = tokio::sync::watch::channel(None);
         let task = self.runtime.spawn(async move {
             let retention = match uploads { disk::Uploads::Local { .. } => disk::retention(&api).await, disk::Uploads::Remote => None };
-            let outcome = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention).await;
+            let report = upload_reporter(tx.clone(), connection, key.clone(), id);
+            let outcome = uploads.upload(&api, &key.name, &name, bytes.to_vec(), retention, report).await;
             // A tela recebe antes do envio que espera: quando ele fecha o lote, o estado já está no anexo.
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::UploadStep(key, id, Some(outcome.clone())) }).await;
             let _ = done.send(Some(outcome));
@@ -3655,13 +3775,22 @@ impl Hangar {
     fn ensure_media(&mut self, source: &Source, reveal: bool) {
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
         let slot = (key.clone(), source.clone());
-        if self.media.contains(&slot) { return; }
-        self.media.start(slot);
+        let width = media::thumb_width(media::THUMB_BOX_SIDE, self.display_scale);
+        // Roda a cada quadro: a pasta da sessão só é olhada quando há o que buscar.
+        let fresh = !self.media.contains(&slot);
+        if fresh { self.media.start_at(slot, width); } else if !self.media.grow(&slot, width) { return; }
+        let uploads = self.uploads_for(&key);
+        // Miniatura de outra máquina vem reduzida ao `w` pedido: numa tela mais densa ela é pedida de novo, maior. A
+        // daqui é o arquivo inteiro, reduzido na decodificação a um tamanho fixo.
+        if !fresh && !matches!(uploads, disk::Uploads::Remote) { return; }
+        let reveal = reveal && fresh;
         media::trace(format_args!("thumb start {source:?}"));
-        let (connection, tx, source, uploads) = (self.connection, self.tx.clone(), source.clone(), self.uploads_for(&key));
+        let (connection, tx, source, fetches) = (self.connection, self.tx.clone(), source.clone(), self.media_fetches.clone());
         self.runtime.spawn(async move {
+            // A vaga vale até decodificar: o que pesa é ler e decodificar, não só baixar.
+            let _slot = fetches.acquire_owned().await.ok();
             let started = std::time::Instant::now();
-            let result = match uploads.fetch(&api, &key.name, &source).await {
+            let result = match uploads.fetch_preview(&api, &key.name, &source, width).await {
                 Ok(bytes) => {
                     media::trace(format_args!("thumb fetched {source:?} {} B in {:.1} ms", bytes.len(), started.elapsed().as_secs_f64() * 1000.));
                     Ok(tokio::task::spawn_blocking(move || media::thumbnail(&bytes).map(|thumb| { let frames = if reveal { media::reveal(&thumb) } else { Vec::new() }; (thumb, frames) }))
@@ -3670,17 +3799,23 @@ impl Hangar {
                 Err(error) => Err(error),
             };
             media::trace(format_args!("thumb ready {source:?} in {:.1} ms", started.elapsed().as_secs_f64() * 1000.));
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Media(key, source, result) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Media(key, source, width, result) }).await;
         });
     }
 
-    /// "Abrir no navegador" aparece só no HTML citado de sessão desta máquina: o endereço da página é o 127.0.0.1 do
-    /// servidor dela, e só o navegador da sessão (Linux e Windows) o abre.
+    /// Miniatura que falhou: sai do cache e o próximo desenho busca de novo, pelo mesmo caminho da primeira vez.
+    fn retry_media(&mut self, key: SessionKey, source: Source, cx: &mut Context<Self>) {
+        if self.media.retry(&(key, source)) { cx.notify(); }
+    }
+
+    /// "Abrir no navegador" aparece no HTML citado de sessão com conexão aberta, desta máquina ou de outra: o servidor
+    /// devolve o endereço dele com o bilhete da página, refeito sobre a rota até ele. Só o navegador da sessão (Linux e
+    /// Windows) o abre, e só quando a rota chega à porta do dono: o Connect e a porta do convidado recusam o bilhete.
     fn page_openable(&self, key: Option<&SessionKey>, source: &Source, name: &str) -> bool {
         cfg!(any(target_os = "linux", target_os = "windows"))
             && matches!(source, Source::Cited(_))
             && matches!(composer::extension(name).as_str(), "html" | "htm")
-            && key.and_then(|key| self.api_for(&key.server)).is_some_and(|api| api.is_loopback())
+            && key.and_then(|key| self.api_for(&key.server)).is_some_and(|api| api::route::reaches_owner_port(&api.identity()))
     }
 
     /// O servidor guarda o HTML citado como página isolada da conversa (`file/page`, mesma autorização do `/file`) e
@@ -3688,13 +3823,22 @@ impl Hangar {
     // A sessão é a do cartão: na prévia de outra aba ela não é a selecionada.
     fn open_html_page(&mut self, key: SessionKey, source: Source, cx: &mut Context<Self>) {
         let Source::Cited(path) = &source else { return };
-        let Some(api) = self.api_for(&key.server) else { return };
-        if !api.is_loopback() { return; }
+        // A rota pode ter mudado para o Connect depois do desenho do botão.
+        let Some(api) = self.api_for(&key.server).filter(|api| api::route::reaches_owner_port(&api.identity())) else { return };
         let (connection, tx, path) = (self.connection, self.tx.clone(), path.clone());
         self.file_cards.insert((key.clone(), source.clone()), FileCard::Busy);
         self.runtime.spawn(async move {
             let result = match api.server_send(reqwest::Method::POST, &["sessions", &key.name, "file", "page"], Some(json!({"path": path})), 30).await {
-                Ok(body) => body["open_url"].as_str().map(str::to_owned).ok_or_else(|| tr("invalid_response")),
+                Ok(body) => match body["open_url"].as_str() {
+                    None => {
+                        crate::log_line("página: resposta de file/page sem open_url");
+                        Err(tr("invalid_response"))
+                    }
+                    Some(url) => api.page_url(url).ok_or_else(|| {
+                        crate::log_line(&format!("página: open_url recusado ({})", crate::api::page_url_problem(url)));
+                        tr("invalid_response")
+                    }),
+                },
                 Err(error) => Err(Self::fetch_failure(&error)),
             };
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::PageOpened(key, source, result) }).await;
@@ -3702,50 +3846,136 @@ impl Hangar {
         cx.notify();
     }
 
-    // Abrir grava uma cópia privada e entrega ao programa do sistema; salvar pergunta o destino. Nunca há token em URL.
+    // Abrir entrega ao programa do sistema o próprio arquivo, quando a sessão é desta máquina, ou uma cópia privada;
+    // salvar pergunta o destino. Nunca há token em URL.
     fn keep_file(&mut self, source: Source, name: String, open: bool, cx: &mut Context<Self>) {
-        let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
+        let Some(key) = self.selected_key() else { return; };
+        self.keep_file_for(key, source, name, open, cx);
+    }
+
+    /// O mesmo para a sessão `key`: o visor guarda a dele, que pode já não ser a aberta.
+    pub(super) fn keep_file_for(&mut self, key: SessionKey, source: Source, name: String, open: bool, cx: &mut Context<Self>) {
+        let selected = self.selected_key().as_ref() == Some(&key);
+        let api = if selected { self.session_api() } else { self.api_for(&key.server) };
+        let Some(api) = api else { return; };
         let safe = composer::safe_name(&name);
-        // Único ponto por onde os dois botões passam: só abre o que, com o nome gravado, é tipo passivo.
+        // Único ponto por onde os botões passam: não abre o que o sistema executaria.
         if open && !composer::openable(&safe) {
             self.action_feedback.insert(key, (tr("open_refused").replace("{name}", &safe), true));
             cx.notify();
             return;
         }
-        let (connection, tx, runtime, uploads) = (self.connection, self.tx.clone(), self.runtime.clone(), self.uploads_for(&key));
         let card = (key.clone(), source.clone());
-        let write = move |target: Option<PathBuf>| {
-            runtime.spawn(async move {
-                let result = async {
-                    let bytes = uploads.fetch(&api, &key.name, &source).await
-                        .map_err(|error| (format!("{safe}: {}", Self::fetch_failure(&error)), error.status == Some(404)))?;
-                    // Vazio não vira arquivo no disco: o card avisa e não há o que abrir.
-                    if bytes.is_empty() { return Ok((PathBuf::new(), true)); }
-                    let path = match target { Some(path) => path, None => private_copy(&safe).map_err(|_| (tr("save_failed"), false))? };
-                    // Até 100 MiB: a escrita não pode ocupar uma das duas threads do runtime.
-                    tokio::task::spawn_blocking(move || std::fs::write(&path, bytes).map(|()| (path, false))).await
-                        .ok().and_then(Result::ok).ok_or_else(|| (tr("save_failed"), false))
-                }.await;
-                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, source, open, result) }).await;
+        // Já baixado: Abrir é o arquivo salvo, sem baixar de novo. O destino real é resolvido fora da janela
+        // (volume de rede parado travaria a tela) e é ele que passa pela regra de abrir, em `Payload::Saved`.
+        if open && let Some(FileCard::Saved(saved)) = self.file_cards.get(&card) {
+            let (saved, tx, connection) = (saved.clone(), self.tx.clone(), self.connection);
+            self.runtime.spawn(async move {
+                let read = saved.clone();
+                let real = tokio::task::spawn_blocking(move || std::fs::canonicalize(&read).ok().filter(|real| real.is_file())
+                    .map(|real| real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(disk::plain_path(text)))))
+                    .await.ok().flatten();
+                let result = real.map(|real| (real, false)).ok_or_else(|| (String::new(), true));
+                let payload = Payload::Saved(key, source, SaveStart::Reopen(saved), true, result);
+                let _ = tx.send(Envelope { connection, selection: None, payload }).await;
             });
+            return;
+        }
+        let (connection, tx, runtime, uploads) = (self.connection, self.tx.clone(), self.runtime.clone(), self.uploads_for(&key));
+        let fail_key = key.clone();
+        let write = move |target: Option<PathBuf>, generation: u64| -> tokio::task::AbortHandle {
+            runtime.spawn(async move {
+                // A cópia privada criada aqui tem dono desde já: cancelado antes de `receive` a assumir (até com o
+                // envio do resultado esperando vaga na fila), o arquivo sai junto.
+                let mut copy = None;
+                let result = async {
+                    let target = match target {
+                        Some(path) => path,
+                        None => {
+                            let (local, wanted) = (uploads.clone(), source.clone());
+                            if let Ok(Some(real)) = tokio::task::spawn_blocking(move || local.local_path(&wanted)).await { return Ok((real, false)); }
+                            let name = safe.clone();
+                            match tokio::task::spawn_blocking(move || private_copy(&name)).await {
+                                Ok(Ok(path)) => { copy = Some(PrivateCopy(Some(path.clone()))); path }
+                                Ok(Err(error)) => return Err(Self::download_failure(&safe, api::download::DownloadError::Disk(error))),
+                                Err(error) => return Err(Self::download_failure(&safe, api::download::DownloadError::Task(error))),
+                            }
+                        }
+                    };
+                    let (progress, progress_key, progress_source) = (tx.clone(), key.clone(), source.clone());
+                    // Sem esperar vaga na fila: o aviso seguinte cobre o que se perder.
+                    let report = move |done, total| { let _ = progress.try_send(Envelope { connection, selection: None,
+                        payload: Payload::SaveProgress(progress_key.clone(), progress_source.clone(), generation, done, total) }); };
+                    match uploads.download(&api, &key.name, &source, target, report).await {
+                        Ok(Some(path)) => Ok((path, false)),
+                        // Vazio não vira arquivo no disco: o card avisa e não há o que abrir.
+                        Ok(None) => Ok((PathBuf::new(), true)),
+                        Err(error) => Err(Self::download_failure(&safe, error)),
+                    }
+                }.await;
+                let payload = Payload::Saved(key, source, SaveStart::Download(generation, copy), open, result);
+                let _ = tx.send(Envelope { connection, selection: None, payload }).await;
+            }).abort_handle()
         };
-        if open { self.file_cards.insert(card, FileCard::Busy); write(None); cx.notify(); return; }
+        if open { self.start_download(card, |generation| write(None, generation)); cx.notify(); return; }
         let prompt = cx.prompt_for_new_path(&downloads_folder(), Some(&composer::safe_name(&name)));
-        let fail_key = self.selected_key();
         cx.spawn(async move |this, cx| {
             match prompt.await {
                 Ok(Ok(Some(path))) => {
-                    let _ = this.update(cx, |this, cx| { this.file_cards.insert(card, FileCard::Busy); cx.notify(); });
-                    write(Some(path))
+                    let _ = this.update(cx, |this, cx| { this.start_download(card, |generation| write(Some(path), generation)); cx.notify(); });
                 }
                 Ok(Ok(None)) => {}
                 // O diálogo do sistema falhou: dizer, não parecer que Salvar não fez nada.
                 _ => { let _ = this.update(cx, |this, cx| {
-                    if let Some(key) = fail_key { this.action_feedback.insert(key, (tr("save_failed"), true)); }
+                    this.action_feedback.insert(fail_key, (tr("save_failed"), true));
                     cx.notify();
                 }); }
             }
         }).detach();
+    }
+
+    /// O texto do cartão e se o arquivo não existe (404, que o cartão já diz sem frase). A causa vai ao log; a do disco
+    /// também ao cartão. Cancelar não passa aqui: a tarefa abortada não chega a devolver resultado.
+    fn download_failure(shown: &str, error: api::download::DownloadError) -> (String, bool) {
+        match error {
+            api::download::DownloadError::Fetch(error) => {
+                let missing = error.status == Some(404);
+                if !missing { crate::log_line(&format!("arquivo: baixar {shown} falhou: {error:?}")); }
+                (format!("{shown}: {}", Self::fetch_failure(&error)), missing)
+            }
+            api::download::DownloadError::Disk(error) => {
+                crate::log_line(&format!("arquivo: gravar {shown} falhou: {error}"));
+                (format!("{shown}: {error}"), false)
+            }
+            api::download::DownloadError::Task(error) => {
+                crate::log_line(&format!("arquivo: a tarefa que gravava {shown} não terminou: {error}"));
+                (format!("{shown}: {}", tr("save_failed")), false)
+            }
+        }
+    }
+
+    /// O cartão passa a baixar numa geração nova, que `spawn` leva nas mensagens; um pedido anterior do mesmo cartão é
+    /// cancelado, para só um gravar. O cartão de antes (já baixado, por exemplo) fica guardado para o Cancelar.
+    fn start_download(&mut self, card: (SessionKey, Source), spawn: impl FnOnce(u64) -> tokio::task::AbortHandle) {
+        let generation = self.downloads.next_generation();
+        let shown = self.file_cards.insert(card.clone(), FileCard::STARTED);
+        let replaced = self.downloads.cancel(&card);
+        let before = FileCard::before_download(shown, replaced.as_ref().and_then(|(_, before)| before.clone()));
+        if let Some((old, _)) = replaced { old.abort(); }
+        self.downloads.insert(card, generation, (spawn(generation), before));
+    }
+
+    /// Cancelar do cartão: a tarefa para, o `.part` sai com ela e o cartão volta ao que era antes do download (já
+    /// baixado continua baixado; sem nada antes, volta a oferecer Abrir e Baixar).
+    fn cancel_download(&mut self, card: (SessionKey, Source), cx: &mut Context<Self>) {
+        let before = self.downloads.cancel(&card).and_then(|(task, before)| { task.abort(); before });
+        if matches!(self.file_cards.get(&card), Some(FileCard::Downloading { .. })) {
+            match before {
+                Some(state) => { self.file_cards.insert(card, state); }
+                None => { self.file_cards.remove(&card); }
+            }
+        }
+        cx.notify();
     }
 
     fn can_interrupt(&self) -> bool {
@@ -4487,6 +4717,11 @@ impl Hangar {
             }
             None => row,
         };
+        // "Mostrar na conversa" do visor: a linha acende e apaga.
+        let row = match self.media_flash_alpha(&id) {
+            Some(alpha) => { motion::request_frame(window, cx); div().rounded(px(10.)).bg(theme::accent().opacity(alpha)).child(row) }
+            None => row,
+        };
         row.id(SharedString::from(id)).into_any_element()
     }
 
@@ -4999,6 +5234,28 @@ impl Hangar {
         cx.notify();
     }
 
+    /// O campo livre com o nome da opção escolhida e o foco: o resto da resposta é o que a opção pediu para escrever.
+    /// O que já estava escrito fica depois do nome.
+    fn ask_write_from_option(&mut self, fingerprint: &str, index: usize, prefix: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ask_form.fingerprint != fingerprint { return; }
+        let Some(input) = self.ask_form.inputs.get(index).cloned() else { return };
+        let others: Vec<String> = self.chat.ask.as_ref().and_then(|ask| ask.payload.questions.get(index))
+            .map(|item| item.options.iter().filter(|o| interaction::asks_for_text(o)).map(interaction::text_prefix).collect())
+            .unwrap_or_default();
+        match &input {
+            AnyInputState::Input(state) => state.update(cx, |s, cx| {
+                if let Some(text) = interaction::text_from_option(&s.value(), &prefix, &others) { s.set_value(text, window, cx); }
+                s.focus(window, cx);
+            }),
+            AnyInputState::Textarea(state) => state.update(cx, |s, cx| {
+                if let Some(text) = interaction::text_from_option(&s.value(), &prefix, &others) { s.set_value(text, window, cx); }
+                s.focus(window, cx);
+            }),
+            _ => {}
+        }
+        self.set_pick(fingerprint, index, None, true, cx);
+    }
+
     /// Texto que entrou no campo sem digitação (ditado): conta como resposta escrita, como `edit_ask_input`.
     fn mark_ask_input_written(&mut self, field: &AnyInputState, cx: &mut Context<Self>) {
         let Some(index) = self.ask_form.inputs.iter().position(|input| input == field) else { return; };
@@ -5050,9 +5307,12 @@ impl Hangar {
             let mut options = div().flex().flex_col().gap_1();
             for (oi, option) in item.options.iter().enumerate() {
                 let (fp, current, entry) = (fingerprint.clone(), pick.clone(), item.clone());
-                let on_pick = cx.listener(move |this, _: &bool, _, cx| {
+                // Opção que pede o complemento escrito ("Canal (digite qual)"): o campo livre recebe o nome dela e o foco.
+                let write = (!item.multi_select && ask.allows_text(item) && interaction::asks_for_text(option)).then(|| interaction::text_prefix(option));
+                let on_pick = cx.listener(move |this, _: &bool, window, cx| {
                     let next = interaction::toggle(&entry, &current, oi);
                     this.set_pick(&fp, qi, Some(next), false, cx);
+                    if let Some(prefix) = write.clone() { this.ask_write_from_option(&fp, qi, prefix, window, cx); }
                 });
                 let id = SharedString::from(format!("ask-{qi}-{oi}"));
                 options = options.child(if item.multi_select {
@@ -5243,6 +5503,7 @@ impl Hangar {
                 }
                 let revealing = slot.as_ref().and_then(|slot| self.media_reveal.get(slot)).map(|(_, _, frames)| frames.clone());
                 let state = slot.as_ref().and_then(|slot| self.media.get(slot));
+                let failed = matches!(state, Some(MediaState::Failed(_)));
                 let thumb = match (state, revealing) {
                     (Some(MediaState::Image(picture)), Some(frames)) => {
                         let picture = picture.clone();
@@ -5253,18 +5514,22 @@ impl Hangar {
                         // O id guarda o quadro corrente: sem ele a GPUI não anima o GIF. Fora da tela não é desenhado e para.
                         .child(img(picture.clone()).max_w(px(320.)).max_h(px(240.)).object_fit(ObjectFit::Contain)
                             .id(SharedString::from(format!("thumb-image-{row}-{n}")))).into_any_element(),
-                    (Some(MediaState::Failed(reason)), _) => div().text_xs().text_color(theme::warning())
-                        .child(tr("media_failed").replace("{name}", &name).replace("{reason}", reason)).into_any_element(),
+                    // A falha não fica para sempre: o clique (ou Enter) busca de novo.
+                    (Some(MediaState::Failed(reason)), _) => div().flex().items_center().gap_2().text_xs().text_color(theme::warning())
+                        .child(tr("media_failed").replace("{name}", &name).replace("{reason}", reason))
+                        .child(div().flex_shrink_0().text_color(theme::accent()).child(activity::web("file_card_retry"))).into_any_element(),
                     _ => loading_thumb(&format!("{row}-{n}"), cx.reduce_motion()),
                 };
                 // Focável para o Esc do visor devolver o foco aqui; Enter abre como o clique.
-                let (open_key, sources, index) = (key.clone(), images.clone(), shown);
+                let (open_key, sources, index, retry_source) = (key.clone(), images.clone(), shown, source.clone());
                 shown += 1;
                 Some(div().id(SharedString::from(format!("thumb-{row}-{n}"))).focusable().tab_stop(true).cursor_pointer()
                     .self_start().rounded_md().border_1().border_color(transparent_black())
                     .focus_visible(|el| el.border_color(theme::accent_focus()))
+                    .when(failed, |el| el.role(Role::Button).aria_label(activity::web("file_card_retry")))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Some(key) = open_key.clone() { this.open_image(key, sources.clone(), index, window, cx); }
+                        let Some(key) = open_key.clone() else { return };
+                        if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_gallery(key, retry_source.clone(), sources.clone(), index, window, cx); }
                     }))
                     .child(thumb))
             } else { None };
@@ -5282,27 +5547,61 @@ impl Hangar {
             let (save_source, save_name) = (source.clone(), name.clone());
             let openable = composer::openable(&composer::safe_name(&name));
             if !image && player.is_none() {
-                let state = key.as_ref().and_then(|key| self.file_cards.get(&(key.clone(), source.clone()))).cloned();
-                let page = key.clone().filter(|key| self.page_openable(Some(key), &source, &name)).map(|page_key| {
-                    let page_source = source.clone();
-                    Box::new(cx.listener(move |this, _, _, cx| this.open_html_page(page_key.clone(), page_source.clone(), cx))) as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>
-                });
-                list = list.child(file_card(row, n, &name, state, openable, page,
-                    cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)),
-                    cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx))));
+                list = list.child(self.session_file_card(row, n, key.as_ref(), source, name, cx));
                 continue;
             }
+            let saved = key.as_ref().and_then(|key| match self.file_cards.get(&(key.clone(), source.clone())) {
+                Some(FileCard::Saved(path)) => Some(path.clone()), _ => None });
+            // Baixando: o progresso e o anel que cancela ficam no lugar de Abrir e Salvar, como no cartão de arquivo.
+            let progress = key.as_ref().and_then(|key| match self.file_cards.get(&(key.clone(), source.clone())) {
+                Some(FileCard::Downloading { done, total }) => Some((key.clone(), *done, *total)), _ => None })
+                .map(|(card_key, done, total)| {
+                    let card = (card_key, source.clone());
+                    (downloading_label(done, total), cancel_ring(&format!("{row}-{n}"), done, total, cx.reduce_motion(),
+                        cx.listener(move |this, _, _, cx| this.cancel_download(card.clone(), cx))))
+                });
             list = list.child(div().flex().flex_col().gap_1()
                 .when_some(preview, |el, preview| el.child(preview))
                 .when_some(player, |el, player| el.child(player))
                 .child(div().flex().items_center().gap_2().text_sm()
                     .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(name))
-                    .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall().label(tr("open"))
-                        .on_click(cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)))))
-                    .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).ghost().xsmall().label(tr("save"))
-                        .on_click(cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx))))));
+                    .map(|el| match progress {
+                        Some((label, ring)) => el.child(div().id(SharedString::from(format!("download-state-{row}-{n}"))).flex_shrink_0()
+                            .text_xs().text_color(theme::muted()).role(Role::Status).child(label)).child(ring),
+                        None => el
+                            .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall().label(tr("open"))
+                                .on_click(cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)))))
+                            .when_some(saved, |el, path| el.child(reveal_button(&format!("{row}-{n}"), path)))
+                            .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).ghost().xsmall().label(tr("save"))
+                                .on_click(cx.listener(move |this, _, _, cx| this.keep_file(save_source.clone(), save_name.clone(), false, cx)))),
+                    })));
         }
         list.into_any_element()
+    }
+
+    /// Cartão de arquivo sem prévia, com Abrir, Baixar (e, baixado, Mostrar na pasta) e o estado do último pedido. O
+    /// mesmo na conversa e no painel de arquivos: os dois leem o estado pela sessão e pela origem do arquivo.
+    pub(super) fn session_file_card(&self, row: &str, n: usize, key: Option<&SessionKey>, source: Source, name: String, cx: &mut Context<Self>) -> AnyElement {
+        let state = key.and_then(|key| self.file_cards.get(&(key.clone(), source.clone()))).cloned();
+        let openable = composer::openable(&composer::safe_name(&name));
+        let page = key.cloned().filter(|key| self.page_openable(Some(key), &source, &name)).map(|page_key| {
+            let page_source = source.clone();
+            Box::new(cx.listener(move |this, _, _, cx| this.open_html_page(page_key.clone(), page_source.clone(), cx))) as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>
+        });
+        // Vídeo toca no app, no visor da conversa aberto nele; Abrir segue entregando ao player do sistema.
+        let play = key.cloned().filter(|_| crate::audio::is_video(&name)).map(|play_key| {
+            let play_source = source.clone();
+            Box::new(cx.listener(move |this, _, window, cx| this.open_gallery(play_key.clone(), play_source.clone(), vec![play_source.clone()], 0, window, cx))) as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>
+        });
+        let (open_source, open_name) = (source.clone(), name.clone());
+        let save_name = name.clone();
+        let cancel_card = key.map(|key| (key.clone(), source.clone()));
+        let still = cx.reduce_motion();
+        file_card(row, n, &name, state, openable, page, play,
+            cx.listener(move |this, _, _, cx| this.keep_file(open_source.clone(), open_name.clone(), true, cx)),
+            cx.listener(move |this, _, _, cx| this.keep_file(source.clone(), save_name.clone(), false, cx)),
+            cx.listener(move |this, _, _, cx| if let Some(card) = cancel_card.clone() { this.cancel_download(card, cx); }),
+            still)
     }
 
     /// Miniaturas da bolha do usuário (`.thumb-row` do `UserBubble` web): 96 px, 80 quando há várias. Abrir e salvar
@@ -5316,21 +5615,26 @@ impl Hangar {
         for (n, source) in images.iter().enumerate() {
             self.ensure_media(source, false);
             let state = key.as_ref().and_then(|key| self.media.get(&(key.clone(), source.clone())));
+            let failed = matches!(state, Some(MediaState::Failed(_)));
             let inner = match state {
                 // O id guarda o quadro corrente: sem ele a GPUI não anima o GIF.
                 Some(MediaState::Image(picture)) => img(picture.clone()).size_full().object_fit(ObjectFit::Cover)
                     .id(SharedString::from(format!("thumb-image-{row}-{n}"))).into_any_element(),
-                Some(MediaState::Failed(reason)) => div().size_full().p_1().overflow_hidden().text_size(px(10.)).text_color(theme::warning())
-                    .child(reason.clone()).into_any_element(),
+                // O clique na falha busca de novo, em vez de abrir o visor sem imagem.
+                Some(MediaState::Failed(reason)) => div().size_full().p_1().overflow_hidden().flex().flex_col().gap_1().text_size(px(10.))
+                    .child(div().text_color(theme::warning()).child(reason.clone()))
+                    .child(div().text_color(theme::accent()).child(activity::web("file_card_retry"))).into_any_element(),
                 _ => div().into_any_element(),
             };
-            let (open_key, sources) = (key.clone(), images.clone());
+            let (open_key, sources, retry_source) = (key.clone(), images.clone(), source.clone());
+            let label = if failed { activity::web("file_card_retry") } else { label.clone() };
             tiles.push(div().id(SharedString::from(format!("thumb-{row}-{n}"))).focusable().tab_stop(true).cursor_pointer()
-                .role(Role::Button).aria_label(label.clone())
+                .role(Role::Button).aria_label(label)
                 .size(side).flex_shrink_0().rounded_md().overflow_hidden().bg(theme::raised()).border_1().border_color(theme::border())
                 .focus_visible(|el| el.border_color(theme::accent_focus()))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    if let Some(key) = open_key.clone() { this.open_image(key, sources.clone(), n, window, cx); }
+                    let Some(key) = open_key.clone() else { return };
+                    if failed { this.retry_media(key, retry_source.clone(), cx); } else { this.open_gallery(key, retry_source.clone(), sources.clone(), n, window, cx); }
                 }))
                 .child(inner));
         }
@@ -5374,10 +5678,17 @@ impl Hangar {
             let id = attachment.id;
             let (status, color) = match &attachment.state {
                 AttachState::Waiting => (if busy { tr("attach_waiting") } else { String::new() }, theme::muted()),
-                AttachState::Uploading => (tr("attach_uploading"), theme::accent()),
-                AttachState::Uploaded(_) => (tr("attach_uploaded"), theme::muted()),
+                AttachState::Uploading => (match attachment.sent.and_then(|(sent, total)| api::download::percent(sent, Some(total))) {
+                    Some(pct) => tr("attach_uploading_pct").replace("{pct}", &pct.to_string()),
+                    None => tr("attach_uploading"),
+                }, theme::accent()),
+                AttachState::Uploaded(up) => match up.note {
+                    Some(gap) => (gap.shown(), theme::warning()),
+                    None => (tr("attach_uploaded"), theme::muted()),
+                },
                 AttachState::Failed(reason) => (reason.clone(), theme::warning()),
             };
+            let gap = matches!(&attachment.state, AttachState::Uploaded(up) if up.note.is_some());
             // Miniatura de 56 como no web; o nome e o estado ficam na dica e na linha de baixo.
             let waiting = matches!(attachment.state, AttachState::Waiting) && busy;
             let failed = matches!(attachment.state, AttachState::Failed(_));
@@ -5403,7 +5714,7 @@ impl Hangar {
                     .icon(chrome::small_icon(IconName::Close, 12., theme::muted())).size(px(20.)).rounded_full().border_1().border_color(theme::border_strong())
                     .accessibility_label(tr("attach_remove").replace("{name}", &attachment.name)).tooltip(tr("attach_remove").replace("{name}", &attachment.name)).disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.remove_attachment(id, window, cx)))));
-            (tile, (!status.is_empty() && (failed || matches!(attachment.state, AttachState::Uploading))).then(|| (attachment.name.clone(), status, color)))
+            (tile, (!status.is_empty() && (failed || gap || matches!(attachment.state, AttachState::Uploading))).then(|| (attachment.name.clone(), status, color)))
         });
         let (tiles, notes): (Vec<_>, Vec<_>) = tiles.unzip();
         Some(div().flex().flex_col().gap_1()
@@ -6416,7 +6727,8 @@ fn attachment_refs(event: &ChatEvent) -> Vec<(Source, String, bool)> {
                 }).collect();
                 kept.reverse();
                 for (image, name) in kept {
-                    let image = image && composer::image_format(&name).is_some();
+                    // SVG sobe marcado como arquivo, mas tem prévia como as fotos.
+                    let image = (image && composer::image_format(&name).is_some()) || composer::extension(&name) == "svg";
                     refs.push((Source::Upload(name.clone()), name, image));
                 }
             }
@@ -6480,25 +6792,32 @@ pub(crate) fn loading_thumb(id: &str, still: bool) -> AnyElement {
 }
 
 /// Cartão de um arquivo que não tem prévia (pdf, planilha, zip, texto): ícone, nome, extensão ou o estado do último
-/// Abrir/Baixar, e os dois botões. Enquanto baixa, os botões param; na falha, Baixar vira Tentar de novo. `page`: o
-/// "Abrir no navegador" do HTML citado, que vai ao navegador da sessão, nunca ao do sistema.
+/// Abrir/Baixar, e os dois botões. Enquanto baixa, os botões dão lugar ao anel do progresso, que cancela no clique; na
+/// falha, Baixar vira Tentar de novo. `page`: o "Abrir no navegador" do HTML citado, que vai ao navegador da sessão,
+/// nunca ao do sistema. `play`: o "Tocar" do vídeo, no player do app. `still`: movimento reduzido, o anel sem tamanho
+/// conhecido não gira.
+#[allow(clippy::too_many_arguments)]
 fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable: bool,
-    page: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
-    open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, save: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
+    page: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>, play: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, save: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, still: bool) -> AnyElement {
     let web = activity::web;
-    let busy = matches!(state, Some(FileCard::Busy));
+    let busy = FileCard::busy(state.as_ref());
     let failed = matches!(state, Some(FileCard::Missing | FileCard::Failed(_)));
     let ext = composer::extension(&name).to_uppercase();
+    let progress = match &state { Some(FileCard::Downloading { done, total }) => Some((*done, *total)), _ => None };
     let (detail, color, role) = match &state {
         None => (ext, theme::faint(), None),
+        Some(FileCard::Downloading { done, total }) => (downloading_label(*done, *total), theme::muted(), Some(Role::Status)),
         Some(FileCard::Busy) => (web("file_card_downloading"), theme::muted(), Some(Role::Status)),
-        Some(FileCard::Saved) => (web("file_card_saved"), theme::success_text(), Some(Role::Status)),
+        Some(FileCard::Saved(_)) => (web("file_card_saved"), theme::success_text(), Some(Role::Status)),
         Some(FileCard::Empty) => (web("file_card_empty"), theme::warning_text(), Some(Role::Status)),
         Some(FileCard::Missing) => (web("file_card_missing"), theme::warning_text(), Some(Role::Alert)),
         Some(FileCard::Failed(error)) => (format!("{} · {error}", web("file_card_failed")), theme::warning_text(), Some(Role::Alert)),
         Some(FileCard::PageFailed(error)) => (format!("{} · {error}", tr("file_card_page_failed")), theme::warning_text(), Some(Role::Alert)),
     };
     let save_label = web(if failed { "file_card_retry" } else { "file_card_download" });
+    let saved = match &state { Some(FileCard::Saved(path)) => Some(path.clone()), _ => None };
     // Largura do pai, com teto: na bolha do usuário o nome trunca em vez de empurrar o botão para fora.
     div().id(SharedString::from(format!("file-card-{row}-{n}"))).w_full().max_w(px(420.)).flex().items_center().gap_3()
         .px_3().py_2().rounded_lg().border_1().border_color(theme::border())
@@ -6507,19 +6826,55 @@ fn file_card(row: &str, n: usize, name: &str, state: Option<FileCard>, openable:
             .child(div().truncate().text_sm().text_color(theme::text()).child(name.to_owned()))
             .child(div().id(SharedString::from(format!("file-card-state-{row}-{n}"))).truncate().text_xs().text_color(color)
                 .when_some(role, |el, role| el.role(role)).child(detail)))
-        .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall()
-            .label(web("file_card_open")).disabled(busy).on_click(open)))
-        .when_some(page, |el, page| el.child(Button::new(SharedString::from(format!("page-{row}-{n}"))).ghost().xsmall()
-            .label(tr("file_card_open_browser")).disabled(busy).on_click(page)))
-        .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).outline().xsmall().icon(IconName::Download)
-            .label(save_label).disabled(busy).on_click(save))
+        .when_some(progress, |el, (done, total)| el.child(cancel_ring(&format!("{row}-{n}"), done, total, still, cancel)))
+        .when(progress.is_none(), |el| el
+            .when_some(play, |el, play| el.child(Button::new(SharedString::from(format!("play-{row}-{n}"))).ghost().xsmall()
+                .icon(IconName::Play).label(tr("video_play")).disabled(busy).on_click(play)))
+            .when(openable, |el| el.child(Button::new(SharedString::from(format!("open-{row}-{n}"))).ghost().xsmall()
+                .label(web("file_card_open")).disabled(busy).on_click(open)))
+            .when_some(page, |el, page| el.child(Button::new(SharedString::from(format!("page-{row}-{n}"))).ghost().xsmall()
+                .label(tr("file_card_open_browser")).disabled(busy).on_click(page)))
+            .when_some(saved, |el, path| el.child(reveal_button(&format!("{row}-{n}"), path)))
+            .child(Button::new(SharedString::from(format!("save-{row}-{n}"))).outline().xsmall().icon(IconName::Download)
+                .label(save_label).disabled(busy).on_click(save)))
         .into_any_element()
+}
+
+/// "baixando 42% de 24,6 MB · toque para cancelar"; sem tamanho do servidor, só o que já chegou.
+fn downloading_label(done: u64, total: Option<u64>) -> String {
+    let english = crate::i18n::english();
+    match (api::download::percent(done, total), total) {
+        (Some(pct), Some(total)) => tr("file_card_downloading_pct").replace("{pct}", &pct.to_string())
+            .replace("{size}", &api::download::size_label(total, english)),
+        _ => tr("file_card_downloading_amount").replace("{done}", &api::download::size_label(done, english)),
+    }
+}
+
+/// O anel do progresso com o ✕ no meio: o clique cancela a transferência.
+fn cancel_ring(id: &str, done: u64, total: Option<u64>, still: bool, cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
+    let label = tr("file_card_cancel");
+    div().id(SharedString::from(format!("cancel-download-{id}"))).relative().flex_shrink_0().size(px(30.)).rounded_full()
+        .cursor_pointer().focusable().tab_stop(true).role(Role::Button).aria_label(label.clone())
+        .border_1().border_color(transparent_black()).focus_visible(|el| el.border_color(theme::accent_focus()))
+        .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx))
+        .on_click(cancel)
+        .child(chrome::progress_ring(SharedString::from(format!("download-ring-{id}")), api::download::share(done, total), 30., 3., still))
+        .child(div().absolute().top_0().left_0().size_full().flex().items_center().justify_center()
+            .child(chrome::small_icon(IconName::Close, 12., theme::text())))
+        .into_any_element()
+}
+
+/// "Mostrar na pasta" do arquivo baixado: o gerenciador de arquivos do sistema com ele marcado (a GPUI faz isso nos
+/// três sistemas).
+fn reveal_button(id: &str, path: PathBuf) -> Button {
+    Button::new(SharedString::from(format!("reveal-{id}"))).ghost().xsmall().icon(IconName::FolderOpen)
+        .label(tr("file_card_show_in_folder")).on_click(move |_, _, cx| cx.reveal_path(&path))
 }
 
 /// Caminho citado como anexo: o nome que aparece embaixo e se ele abre como imagem.
 fn cited_ref(path: String) -> (Source, String, bool) {
     let name = composer::basename(&path).to_owned();
-    let image = composer::image_format(&name).is_some();
+    let image = composer::previewable(&name);
     (Source::Cited(path), name, image)
 }
 
@@ -7275,13 +7630,93 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
+/// Onde ficam as cópias para abrir: a pasta de sessão do usuário no Linux, a temporária dele no Windows e no macOS.
+fn private_copies_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("hangar-native-files")
+}
+
 // Cópia para abrir fica numa pasta só do usuário, com nome único; o programa do sistema recebe o caminho.
+// Bloqueante: varre as cópias antigas antes de criar a nova.
 fn private_copy(name: &str) -> std::io::Result<PathBuf> {
-    let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("hangar-native-files");
+    let base = private_copies_dir();
     std::fs::create_dir_all(&base)?;
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?; }
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let now = std::time::SystemTime::now();
+    sweep_private_copies(&base, now);
+    let stamp = now.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     Ok(base.join(format!("{stamp}-{name}")))
+}
+
+/// Quem pediu o `Payload::Saved`.
+enum SaveStart {
+    /// O download da geração `u64`, com a cópia privada que ele criou para o Abrir, quando criou.
+    Download(u64, Option<PrivateCopy>),
+    /// Abrir de novo o arquivo de um cartão "baixado", sem baixar nada; o caminho é o que o cartão tinha no clique.
+    Reopen(PathBuf),
+}
+
+/// A cópia privada que um pedido criou: solta sem `keep`, sai do disco numa thread própria. Só a cópia nasce com dono;
+/// o arquivo da sessão e o destino do Salvar nunca passam por aqui.
+struct PrivateCopy(Option<PathBuf>);
+
+impl PrivateCopy {
+    fn keep(mut self) { self.0 = None; }
+}
+
+impl Drop for PrivateCopy {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() { std::thread::spawn(move || { let _ = std::fs::remove_file(path); }); }
+    }
+}
+
+/// O Reabrir só vale se o cartão continua "baixado" no arquivo que ele leu: um Salvar mais novo trocou o arquivo.
+fn reopen_is_current(card: Option<&FileCard>, started: &std::path::Path) -> bool {
+    matches!(card, Some(FileCard::Saved(saved)) if saved == started)
+}
+
+/// Cópia mais nova que isto nunca sai: o programa do sistema pode ainda estar abrindo o arquivo.
+const COPY_FRESH: Duration = Duration::from_secs(10 * 60);
+const COPY_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+const COPY_MAX_FILES: usize = 100;
+const COPY_MAX_BYTES: u64 = 1 << 30;
+
+/// As cópias a apagar: as de mais de um dia e, das restantes, as mais antigas além de 100 arquivos ou 1 GiB. As dos
+/// últimos 10 minutos ficam sempre. Data no futuro (relógio mudou) conta como recente.
+fn stale_copies(mut copies: Vec<(PathBuf, std::time::SystemTime, u64)>, now: std::time::SystemTime) -> Vec<PathBuf> {
+    let age = |at: std::time::SystemTime| now.duration_since(at).unwrap_or_default();
+    copies.sort_by(|a, b| b.1.cmp(&a.1));
+    let (mut kept, mut bytes, mut stale) = (0usize, 0u64, Vec::new());
+    for (path, at, size) in copies {
+        let age = age(at);
+        let fresh = age < COPY_FRESH;
+        if !fresh && (age > COPY_MAX_AGE || kept >= COPY_MAX_FILES || bytes.saturating_add(size) > COPY_MAX_BYTES) {
+            stale.push(path);
+            continue;
+        }
+        kept += 1;
+        bytes = bytes.saturating_add(size);
+    }
+    stale
+}
+
+/// Bloqueante. Só arquivos comuns da pasta das cópias; erro de um não para os outros.
+/// Falha vai ao diário numa linha por varredura, nunca à tela: as cópias são só cache.
+fn sweep_private_copies(base: &std::path::Path, now: std::time::SystemTime) {
+    let entries = match std::fs::read_dir(base) {
+        Ok(entries) => entries,
+        // Antes da primeira cópia a pasta não existe: nada a varrer.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => { crate::log_line(&format!("cópias privadas: a pasta não foi lida: {error}")); return; }
+    };
+    let copies = entries.flatten().filter_map(|entry| {
+        let meta = entry.metadata().ok().filter(std::fs::Metadata::is_file)?;
+        Some((entry.path(), meta.modified().ok()?, meta.len()))
+    }).collect();
+    let (mut failed, mut last) = (0usize, None);
+    for path in stale_copies(copies, now) {
+        if let Err(error) = std::fs::remove_file(path) { failed += 1; last = Some(error); }
+    }
+    if let Some(error) = last { crate::log_line(&format!("cópias privadas: {failed} não saíram; última: {error}")); }
 }
 
 // A conexão que funcionou volta na próxima abertura, como o login do app web; só o dono lê o arquivo.
@@ -7852,6 +8287,7 @@ impl Hangar {
                         .child(column_box(false).h_full().rounded(px(14.)).border_1().border_color(theme::border())
                             .bg(theme::sheet()).shadow(theme::sheet_shadow())));
                     self.paint_quote_flash(cx);
+                    self.paint_media_flash(cx);
                     let cite_offer = self.render_cite_offer(window, cx);
                     content = content.child(div().relative().flex_1().min_h_0().flex().flex_col()
                         // A seleção numa resposta oferece "Citar" ao soltar o mouse.
@@ -8614,6 +9050,7 @@ impl Render for Hangar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Vive até o fim do desenho: as âncoras da raiz deste quadro valem a partir dele (`popup::RootFrame`).
         let _anchors = popup::root_frame();
+        self.display_scale = window.scale_factor();
         self.leave_tab_preview_event();
         self.sync_a11y_retain(window, cx);
         // O assistente ocupa a janela: nada da conversa por baixo recebe tecla nem clique.
@@ -8707,10 +9144,9 @@ impl Render for Hangar {
                 .child(div().flex_1())
                 // Sem sessão, o estado da ligação só aparece quando ela não está normal: "Conectado" não diz nada.
                 .when(session_chip || header_state != "connected", |el| el.child(if session_chip && appearance::conversation_beta() {
-                        // Rodando, o tempo do turno vem junto; a raiz redesenha a cada batida da marca, e o minuto vira sozinho.
-                        let ago = (chip_state == "working").then(|| self.turn_start()).flatten()
-                            .map(|since| tr("beta_ago").replace("{time}", &chrome::format_ago(since.elapsed())));
-                        chrome::beta_state_chip(&chip_state, tr(&format!("beta_chip_{chip_state}")), ago)
+                        // Rodando, o tempo do turno vem junto; o próprio selo redesenha a raiz quando o texto vira.
+                        let since = (chip_state == "working").then(|| self.turn_start()).flatten();
+                        chrome::beta_state_chip(&chip_state, tr(&format!("beta_chip_{chip_state}")), since)
                     } else if session_chip { chrome::state_chip(&chip_state, tr(&format!("chip_{chip_state}")), true) }
                     else { div().flex_shrink_0().text_xs().text_color(theme::status(&header_state)).child(tr(&header_state)).into_any_element() }))
                 .when_some(self.render_activity_button(window, cx), |el, button| el.child(button))
@@ -8784,6 +9220,11 @@ impl Render for Hangar {
         let dialog_width = (window.viewport_size().width - px(32.)).min(px(480.));
         let entry = self.render_entry(cx);
         let entry_shown = entry.is_some();
+        // Primeiro acesso: a conta do Connect no alto, e o cartão de sempre (endereço e token, o Hangar deste computador)
+        // recolhido em "Outras formas de entrar".
+        let sign_in = (self.connection_dialog && self.sign_in_shown()).then(|| self.render_first_sign_in(window, cx));
+        let sign_in_others = sign_in.as_ref().map(|_| self.render_sign_in_others(cx));
+        let classic = sign_in.is_none() || self.sign_in_others_open();
         // Só montado com a conexão aberta: a raiz redesenha a cada batida das animações.
         let dialog = self.connection_dialog.then(|| div().id("connection-card").w(dialog_width).max_h(window.viewport_size().height - dialog_top - px(16.))
             .p(px(20.)).bg(theme::popup_fill(theme::raised())).border_1().border_color(theme::glass_border()).rounded(px(16.))
@@ -8798,19 +9239,21 @@ impl Render for Hangar {
                     cx.notify();
                 }
             }))
-            .map(|el| match entry {
+            .children(sign_in)
+            .children(sign_in_others)
+            .when(classic, |el| el.map(|el| match entry {
                 Some(card) => el.child(card),
                 None => el.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(tr("connection")))
                     .child(div().text_sm().text_color(theme::muted()).child(tr("connection_hint")))
                     .child(div().text_sm().child(tr("server"))).child(Input::new(&self.address).aria_label(tr("server")))
                     .child(div().text_sm().child(tr("token"))).child(Input::new(&self.token).aria_label(tr("token"))),
-            })
-            .when(self.electron_offer, |el| el.child(div().flex().flex_col().gap_2().pt_3().border_t_1().border_color(theme::glass_border())
+            }))
+            .when(classic && self.electron_offer, |el| el.child(div().flex().flex_col().gap_2().pt_3().border_t_1().border_color(theme::glass_border())
                 .child(div().text_sm().text_color(theme::muted()).child(tr("electron_import_offer_hint")))
                 .child(Button::new("electron-import").outline().label(tr("electron_import_offer"))
                     .on_click(cx.listener(|this, _, window, cx| this.import_electron(false, window, cx))))))
-            .when_some(self.error.clone(), |el, error| el.child(div().text_sm().text_color(theme::warning()).child(error)))
-            .when(!entry_shown, |el| el.child(div().flex().justify_end().gap_2()
+            .when_some(self.error.clone().filter(|_| classic), |el, error| el.child(div().text_sm().text_color(theme::warning()).child(error)))
+            .when(classic && !entry_shown, |el| el.child(div().flex().justify_end().gap_2()
                 .when(self.api.is_some(), |el| el.child(Button::new("cancel").label(tr("cancel")).on_click(cx.listener(|this, _, window, cx| {
                     this.connection_dialog = false;
                     this.restore_cleanup_connection(window, cx);
@@ -9075,6 +9518,73 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancelled_download_brings_back_the_card_it_replaced() {
+        use super::FileCard;
+        let saved = FileCard::Saved(std::path::PathBuf::from("/tmp/relatorio.pdf"));
+        // Baixar de novo o que já estava baixado: cancelar volta a "baixado", com o mesmo caminho.
+        assert_eq!(FileCard::before_download(Some(saved.clone()), None), Some(saved.clone()));
+        assert_eq!(FileCard::before_download(Some(FileCard::Failed("x".into())), None), Some(FileCard::Failed("x".into())));
+        // Nada antes: cancelar limpa o cartão.
+        assert_eq!(FileCard::before_download(None, None), None);
+        // Um download trocado por outro: o cartão à mostra é o anel do primeiro, e o que volta é o de antes dele.
+        assert_eq!(FileCard::before_download(Some(FileCard::STARTED), Some(saved.clone())), Some(saved.clone()));
+        assert_eq!(FileCard::before_download(Some(FileCard::Downloading { done: 5, total: Some(10) }), None), None);
+        // O caminho inteiro pelo registro de downloads: começar guarda, cancelar devolve.
+        let mut running: crate::api::download::Running<&str, (u8, Option<FileCard>)> = Default::default();
+        let generation = running.next_generation();
+        running.insert("card", generation, (1, FileCard::before_download(Some(saved.clone()), None)));
+        assert_eq!(running.cancel(&"card"), Some((1, Some(saved))));
+    }
+
+    #[test]
+    fn private_copies_leave_by_age_and_count_but_never_while_fresh() {
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+        let ago = |secs: u64| now - Duration::from_secs(secs);
+        let copy = |name: &str, secs: u64, size: u64| (std::path::PathBuf::from(name), ago(secs), size);
+        let stale = super::stale_copies(vec![copy("novo", 60, 10), copy("ontem", 25 * 3600, 10), copy("hora", 3600, 10)], now);
+        assert_eq!(stale, [std::path::PathBuf::from("ontem")], "mais de um dia sai");
+        // 120 cópias de uma hora: as 100 mais novas ficam.
+        let many: Vec<_> = (0..120).map(|n| copy(&format!("c{n}"), 3600 + n, 1)).collect();
+        let stale = super::stale_copies(many, now);
+        assert_eq!(stale.len(), 20);
+        assert!(stale.iter().all(|path| path.to_str().unwrap()[1..].parse::<u64>().unwrap() >= 100), "saem as mais antigas");
+        // Passou do teto de bytes: a mais antiga sai; a recém-entregue ao sistema fica mesmo sendo enorme.
+        let big = super::stale_copies(vec![copy("agora", 5, 2u64 << 30), copy("velha", 7200, 1u64 << 29), copy("antes", 3600, 1u64 << 29)], now);
+        assert_eq!(big, [std::path::PathBuf::from("antes"), std::path::PathBuf::from("velha")]);
+        let future = super::stale_copies(vec![(std::path::PathBuf::from("futuro"), now + Duration::from_secs(3600), 1)], now);
+        assert!(future.is_empty(), "relógio que voltou não apaga");
+    }
+
+    #[test]
+    fn reopen_counts_only_while_the_card_keeps_the_file_it_read() {
+        use super::FileCard;
+        let (a, b) = (std::path::PathBuf::from("/tmp/a.pdf"), std::path::PathBuf::from("/tmp/b.pdf"));
+        assert!(super::reopen_is_current(Some(&FileCard::Saved(a.clone())), &a));
+        // Um Salvar mais novo trocou o arquivo do cartão: a resposta do Reabrir de A não abre nem mexe no cartão de B.
+        assert!(!super::reopen_is_current(Some(&FileCard::Saved(b)), &a));
+        assert!(!super::reopen_is_current(Some(&FileCard::Downloading { done: 0, total: None }), &a));
+        assert!(!super::reopen_is_current(None, &a));
+    }
+
+    #[test]
+    fn a_private_copy_leaves_unless_kept() {
+        let dir = std::env::temp_dir().join(format!("hangar-private-copy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (dropped, kept) = (dir.join("dropped.pdf"), dir.join("kept.pdf"));
+        std::fs::write(&dropped, b"x").unwrap();
+        std::fs::write(&kept, b"x").unwrap();
+        drop(super::PrivateCopy(Some(dropped.clone())));
+        super::PrivateCopy(Some(kept.clone())).keep();
+        // A remoção roda numa thread própria.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while dropped.exists() && std::time::Instant::now() < deadline { std::thread::sleep(std::time::Duration::from_millis(10)); }
+        assert!(!dropped.exists());
+        assert!(kept.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn hook_notice_title_comes_from_text_and_keeps_the_cause_visible() {
         for (text, label, detail) in [

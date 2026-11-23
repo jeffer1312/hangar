@@ -1,13 +1,19 @@
 //! Instalar e atualizar o proxy, uma tarefa por vez, com o andamento consultável pela tela.
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use hangar_managed_binary::jobs::{self, Jobs};
+use hangar_managed_binary::release::tag_version;
+use serde_json::Value;
 
 use crate::config;
 use crate::detect::{self, Install, Paths};
 use crate::release::{self, Github, Platform, Release};
 use crate::service::{self, Service};
+
+pub use hangar_managed_binary::jobs::Busy;
+pub use hangar_managed_binary::release::newer;
 
 const DEFAULT_BASE: &str = "http://127.0.0.1:8317";
 const START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -68,22 +74,25 @@ pub struct Context {
     pub before_swap: Option<BeforeSwap>,
 }
 
-#[derive(Clone, Debug)]
-struct Job {
-    kind: &'static str,
-    step: Step,
-    result: Option<Result<Outcome, Failure>>,
-}
-
 /// Uma instalação ou atualização por vez; o andamento fica em memória para o `GET` da tela.
 #[derive(Default)]
 pub struct Installer {
-    job: Mutex<Option<Job>>,
-    latest: tokio::sync::Mutex<Option<(Instant, Result<Release, String>)>>,
+    jobs: Jobs<Step, Outcome, Failure>,
+    /// A release lida, a hora e o [`Installer::finished`] de quando foi lida.
+    latest: tokio::sync::Mutex<Option<(Instant, u64, Result<Release, String>)>>,
+    /// Conta as tarefas terminadas; sobe antes de o resultado delas aparecer, até no pânico, para quem vê
+    /// `done: true` nunca receber a release guardada antes da tarefa.
+    finished: Arc<AtomicU64>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Busy;
+/// Soltar conta uma tarefa terminada: vive dentro do trabalho, que a tarefa vigiada solta antes de gravar o resultado.
+struct Finished(Arc<AtomicU64>);
+
+impl Drop for Finished {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 /// O que a rota de gerenciamento respondeu: a versão vem no cabeçalho mesmo quando a senha é recusada.
 struct Probe {
@@ -91,8 +100,14 @@ struct Probe {
     rejected: bool,
 }
 
-impl Step {
-    pub fn name(self) -> &'static str {
+impl Failure {
+    fn new(code: &'static str, detail: impl Into<String>) -> Self {
+        Self { code, detail: detail.into() }
+    }
+}
+
+impl jobs::Step for Step {
+    fn name(self) -> &'static str {
         match self {
             Self::Download => "download",
             Self::Config => "config",
@@ -102,22 +117,43 @@ impl Step {
     }
 }
 
-impl Failure {
-    fn new(code: &'static str, detail: impl Into<String>) -> Self {
-        Self { code, detail: detail.into() }
+impl jobs::Outcome for Outcome {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Installed { .. } => "installed",
+            Self::Configured => "configured",
+            Self::Updated { .. } => "updated",
+            Self::Adopted { .. } => "adopted",
+        }
+    }
+}
+
+impl jobs::Failure for Failure {
+    fn code(&self) -> &str {
+        self.code
+    }
+
+    fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    fn crashed(kind: &'static str, error: &tokio::task::JoinError) -> Self {
+        // Sem resultado, toda tentativa seguinte veria "ocupado" até o servidor reiniciar.
+        tracing::error!(kind, %error, "cliproxy: a tarefa de instalação parou no meio");
+        Self::new("cliproxy_tarefa_caiu", format!("a tarefa parou no meio: {error}"))
     }
 }
 
 impl From<release::Error> for Failure {
     fn from(e: release::Error) -> Self {
         let detail = format!("{e:?}");
-        Self::new(e.code(), detail)
+        Self::new(release::code(&e), detail)
     }
 }
 
 impl From<service::Error> for Failure {
     fn from(e: service::Error) -> Self {
-        Self::new(e.code(), format!("{}: {}", e.step, e.detail))
+        Self::new(e.code(&release::CODES), format!("{}: {}", e.step, e.detail))
     }
 }
 
@@ -186,10 +222,6 @@ fn base_url_at(home: &std::path::Path) -> Result<String, Failure> {
         Err(config::ReadError::Io(e)) => Err(Failure::new("cliproxy_config_ilegivel", e.to_string())),
         Err(config::ReadError::InvalidYaml) => Err(Failure::new("cliproxy_config_yaml_invalido", "config.yaml com YAML inválido")),
     }
-}
-
-fn tag_version(tag: &str) -> Option<semver::Version> {
-    semver::Version::parse(tag.trim_start_matches('v')).ok()
 }
 
 async fn port_open(base: &str) -> bool {
@@ -556,11 +588,6 @@ fn rolled_back(failure: Failure, installed: &str, back: Result<(), Failure>) -> 
     }
 }
 
-pub fn newer(candidate: &str, installed: &str) -> bool {
-    let parse = |t: &str| semver::Version::parse(t.trim_start_matches('v')).ok();
-    matches!((parse(candidate), parse(installed)), (Some(c), Some(i)) if c > i)
-}
-
 pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
     let Install::Managed { tag: installed, binary: old } = current(&ctx.paths) else {
         return Err(Failure::new("erro_cliproxy_externo", "só o proxy instalado pelo Hangar é atualizado por aqui"));
@@ -699,69 +726,38 @@ pub async fn adopt(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Re
 }
 
 impl Installer {
-    pub fn start(self: &Arc<Self>, kind: &'static str, ctx: Context) -> Result<(), Busy> {
-        {
-            let mut job = self.job.lock().unwrap_or_else(|e| e.into_inner());
-            if job.as_ref().is_some_and(|j| j.result.is_none()) {
-                return Err(Busy);
+    pub fn start(&self, kind: &'static str, ctx: Context) -> Result<(), Busy> {
+        let first = if kind == "install" { Step::Config } else { Step::Download };
+        // A tarefa pode ter trocado a versão: a próxima leitura da release mais nova vai ao GitHub.
+        // A guarda nasce dentro do trabalho: um início recusado por ocupado solta o trabalho sem rodá-lo e não conta.
+        let finished = self.finished.clone();
+        self.jobs.start(kind, first, move |progress| async move {
+            let _finished = Finished(finished);
+            match kind {
+                "update" => update(&ctx, &*progress).await,
+                "adopt" => adopt(&ctx, &*progress).await,
+                _ => install(&ctx, &*progress).await,
             }
-            *job = Some(Job { kind, step: if kind == "install" { Step::Config } else { Step::Download }, result: None });
-        }
-        let this = self.clone();
-        tokio::spawn(async move {
-            let progress_owner = this.clone();
-            let work = tokio::spawn(async move {
-                let progress = move |step: Step| {
-                    if let Some(job) = progress_owner.job.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                        job.step = step;
-                    }
-                };
-                match kind {
-                    "update" => update(&ctx, &progress).await,
-                    "adopt" => adopt(&ctx, &progress).await,
-                    _ => install(&ctx, &progress).await,
-                }
-            });
-            // Tarefa que cai no meio também termina: sem resultado, toda tentativa seguinte veria "ocupado" até o servidor reiniciar.
-            let result = work.await.unwrap_or_else(|error| {
-                tracing::error!(kind, %error, "cliproxy: a tarefa de instalação parou no meio");
-                Err(Failure::new("cliproxy_tarefa_caiu", format!("a tarefa parou no meio: {error}")))
-            });
-            if let Some(job) = this.job.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                job.result = Some(result);
-            }
-            *this.latest.lock().await = None;
-        });
-        Ok(())
+        }).map(drop)
     }
 
+    /// `{kind,step,done,error,outcome}` ou `null`.
     pub fn job(&self) -> Value {
-        let job = self.job.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(job) = job.as_ref() else { return Value::Null };
-        let (done, error, outcome) = match &job.result {
-            None => (false, Value::Null, Value::Null),
-            Some(Ok(outcome)) => (true, Value::Null, json!(match outcome {
-                Outcome::Installed { .. } => "installed",
-                Outcome::Configured => "configured",
-                Outcome::Updated { .. } => "updated",
-                Outcome::Adopted { .. } => "adopted",
-            })),
-            Some(Err(f)) => (true, json!({ "code": f.code, "detail": f.detail }), Value::Null),
-        };
-        json!({ "kind": job.kind, "step": job.step.name(), "done": done, "error": error, "outcome": outcome })
+        self.jobs.job()
     }
 
     /// A release mais nova, relida no máximo uma vez por hora; falha fica guardada só 5 min, para a rede que voltou não esperar a hora.
     pub async fn latest(&self, github: &Github) -> Result<Release, String> {
         let mut cached = self.latest.lock().await;
-        let fresh = |(at, value): &(Instant, Result<Release, String>)| {
-            at.elapsed() < if value.is_ok() { LATEST_TTL } else { LATEST_FAILURE_TTL }
+        let finished = self.finished.load(Ordering::SeqCst);
+        let fresh = |(at, seen, value): &(Instant, u64, Result<Release, String>)| {
+            *seen == finished && at.elapsed() < if value.is_ok() { LATEST_TTL } else { LATEST_FAILURE_TTL }
         };
-        if let Some((_, value)) = cached.as_ref().filter(|entry| fresh(entry)) {
+        if let Some((_, _, value)) = cached.as_ref().filter(|entry| fresh(entry)) {
             return value.clone();
         }
-        let value = release::latest(github).await.map_err(|e| e.code().to_owned());
-        *cached = Some((Instant::now(), value.clone()));
+        let value = release::latest(github).await.map_err(|e| release::code(&e).to_owned());
+        *cached = Some((Instant::now(), finished, value.clone()));
         value
     }
 }
@@ -882,10 +878,21 @@ mod tests {
         // Reiniciar o serviço cortaria as sessões no proxy: com ele respondendo, o pedido não chega ao serviço.
         let home = tempfile::tempdir().unwrap();
         let (ctx, _listener) = managed_running(home.path());
-        let steps = Mutex::new(Vec::new());
+        let steps = std::sync::Mutex::new(Vec::new());
         let outcome = install(&ctx, &|step| steps.lock().unwrap().push(step)).await;
         assert_eq!(outcome, Ok(Outcome::Installed { tag: "v8.0.79".into() }));
         assert_eq!(*steps.lock().unwrap(), [Step::Config], "sem passo de serviço nem de subida");
+    }
+
+    /// Clique recusado por ocupado não roda tarefa nenhuma e não joga fora a release guardada.
+    #[tokio::test]
+    async fn a_busy_start_does_not_count_as_a_finished_task() {
+        let installer = Arc::new(Installer::default());
+        let home = tempfile::tempdir().unwrap();
+        let ctx = context(home.path());
+        let _held = installer.jobs.inline().unwrap();
+        assert_eq!(installer.start("install", ctx), Err(Busy));
+        assert_eq!(installer.finished.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -900,6 +907,7 @@ mod tests {
         // estavel: o Installer não expõe sinal de fim; confere o estado publicado com teto de 10 s, que só estoura se travar.
         while installer.job()["done"] != true && Instant::now() < deadline { tokio::time::sleep(Duration::from_millis(20)).await; }
         assert_eq!(installer.job()["error"]["code"], "cliproxy_tarefa_caiu");
+        assert_eq!(installer.finished.load(Ordering::SeqCst), 1, "com done visível, a release guardada antes já não vale, até no pânico");
         assert!(installer.start("install", ctx).is_ok(), "a próxima tentativa não fica presa em ocupado");
     }
 

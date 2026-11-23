@@ -845,6 +845,24 @@ async fn terminal_runtime_steer_entry_waits_for_the_late_send_now_hint() {
     h.stop().await.unwrap();
 }
 #[tokio::test]
+async fn terminal_runtime_steer_entry_presses_the_hint_even_when_the_cli_queue_already_has_it() {
+    // A CLI que ainda desenha a dica também grava o `enqueue`: o atalho corta o turno, a fila só espera a pausa.
+    let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
+    h.command(f.command("one","Um")).await.unwrap(); h.command(f.command("two","Dois")).await.unwrap();
+    let (io,transcript)=(f.io.clone(),f.target.transcript.clone());
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        use std::io::Write;
+        let mut file=std::fs::OpenOptions::new().append(true).open(&transcript).unwrap();
+        writeln!(file,"{}",json!({"type":"queue-operation","operation":"enqueue","sessionId":"sid","timestamp":chrono::Utc::now().to_rfc3339(),"content":"Dois"})).unwrap();
+        io.send_now_hint.store(true,std::sync::atomic::Ordering::Release);
+    });
+    let reply=h.control("steer-both".into(),"steer_entry".into(),json!({"entry_id":"two"})).await.unwrap();
+    assert_eq!(reply.payload["steered"],json!(true),"{}",reply.payload);
+    assert!(f.io.calls.lock().unwrap().iter().any(|c|c.args.last().is_some_and(|k|k=="C-s")),"com a dica na tela, o ctrl+x ctrl+s sai");
+    h.stop().await.unwrap();
+}
+#[tokio::test]
 async fn terminal_runtime_steer_entry_without_hint_says_so() {
     let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
     h.command(f.command("one","Um")).await.unwrap(); h.command(f.command("two","Dois")).await.unwrap();
@@ -893,6 +911,42 @@ async fn direct_delivery_does_not_warn_after_claude_records_the_prompt() {
     assert!(reply.payload["code"].is_null(), "{}", reply.payload);
     assert!(started.elapsed() < Duration::from_secs(5), "a espera seguiu até o prazo depois do recibo");
     assert!(!f.io.calls.lock().unwrap().iter().any(|call| call.args.last().is_some_and(|arg| arg == "C-s")));
+    h.stop().await.unwrap();
+}
+
+/// Claude Code sem a dica do ctrl+x ctrl+s: a mensagem guardada na fila da CLI (`queue-operation enqueue`) já
+/// está com ele e entra no turno na próxima pausa. Orientada, sem tecla nem aviso, antes do prazo.
+#[tokio::test(start_paused = true)]
+async fn direct_delivery_counts_the_cli_queue_as_steered_without_the_hint() {
+    let mut f = Fixture::new().await;
+    f.settle = Duration::from_millis(50);
+    f.idle.store(false, std::sync::atomic::Ordering::Release);
+    let h = f.start();
+    h.command(f.command("one", "Na fila da CLI")).await.unwrap();
+    let started = tokio::time::Instant::now();
+    let steering = h.control("steer-enqueued".into(), "steer_entry".into(), json!({"entry_id": "one"}));
+    let record = async {
+        f.wait_for("o terminal começou a procurar a indicação do atalho", || {
+            let calls = f.io.calls.lock().unwrap();
+            calls.iter().skip_while(|call| call.args.last().is_none_or(|arg| arg != "\r"))
+                .any(|call| call.args.first().is_some_and(|arg| arg == "capture-pane")
+                    && !call.args.iter().any(|arg| arg == "-e"))
+        }).await;
+        use std::io::Write;
+        let mut transcript = std::fs::OpenOptions::new().append(true).open(&f.target.transcript).unwrap();
+        writeln!(transcript, "{}", json!({
+            "type": "queue-operation", "operation": "enqueue", "sessionId": "sid",
+            "timestamp": "2026-11-22T15:04:40.137Z", "content": "Na fila da CLI"
+        })).unwrap();
+    };
+    let (reply, ()) = tokio::join!(steering, record);
+    let reply = reply.unwrap();
+    assert_eq!((reply.payload["steered"].clone(), reply.payload["drained"].clone()), (json!(true), json!(1)), "{}", reply.payload);
+    assert!(reply.payload["code"].is_null(), "{}", reply.payload);
+    assert!(started.elapsed() < Duration::from_secs(5), "a espera seguiu até o prazo com a mensagem já na fila da CLI");
+    assert!(!f.io.calls.lock().unwrap().iter().any(|call| call.args.last().is_some_and(|arg| arg == "C-s")));
+    // Sem a marca, a desistência por falta de prova daria como "não chegou" o que a CLI ainda tem na fila.
+    assert_eq!(f.state()["rows"][0]["steered"], true, "{}", f.state());
     h.stop().await.unwrap();
 }
 

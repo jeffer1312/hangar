@@ -47,6 +47,8 @@ struct FileTab {
     picture: Option<Picture>,
     reader: reader::ReaderSettings,
     pending_anchor: Option<String>,
+    /// O caminho pedido na primeira leitura: renomeada enquanto ela voava, a resposta ainda traz o nome antigo.
+    read_path: String,
 }
 
 impl FileTab {
@@ -71,8 +73,8 @@ pub(super) enum FileReply {
 }
 
 /// Da raiz, direto do disco (servidor nesta máquina); fora dela, pela rota de arquivo citado, que só serve o que a
-/// conversa mencionou.
-enum Picture { Disk(PathBuf), Loading, Ready(Arc<RenderImage>), Failed(String), Audio, Video }
+/// conversa mencionou. `Binary`: sem prévia (pdf, planilha, zip); fica o cartão de arquivo da conversa.
+enum Picture { Disk(PathBuf), Loading, Ready(Arc<RenderImage>), Failed(String), Audio, Video, Binary }
 
 struct Document {
     editor: Entity<EditorState>,
@@ -273,25 +275,43 @@ impl Hangar {
         self.files.serial += 1;
         let id = self.files.serial;
         let local = self.tree.local_root(&self.session_owner());
-        // A leitura de texto recusa binário: imagem vem do disco ou da rota de arquivo citado; áudio toca no player e
-        // vídeo abre no programa do sistema.
+        // A leitura de texto recusa binário: imagem vem do disco ou da rota de arquivo citado; áudio toca no player,
+        // vídeo abre no programa do sistema e documento binário fica no cartão de Abrir e Baixar. SVG é desenhado aqui,
+        // sem ler o que ele aponta no disco.
         let picture = if crate::audio::is_audio(&path) { Some(Picture::Audio) }
             else if crate::audio::is_video(&path) { Some(Picture::Video) }
+            else if is_binary_document(&path) { Some(Picture::Binary) }
+            else if composer::extension(&path) == "svg" { Some(Picture::Loading) }
             else { is_image(&path).then(|| local.as_ref().and_then(|root| super::tree::resolve(root, &path).ok())
                 .map_or(Picture::Loading, Picture::Disk)) };
         let fetch_picture = matches!(picture, Some(Picture::Loading));
         let is_picture = picture.is_some();
         let mut reader = reader::ReaderSettings::default();
         if file_language(&path) != "markdown" && table::delimiter(&path).is_none() { reader.set_mode(reader::ReaderMode::Source); }
-        self.files.tabs.push(FileTab { id, path: path.clone(), line, content: None, picture, reader, pending_anchor: None });
+        self.files.tabs.push(FileTab { id, path: path.clone(), line, content: None, picture, reader, pending_anchor: None, read_path: path.clone() });
         self.files.active = self.files.tabs.len() - 1;
         self.focus_file(window, cx);
         let (connection, selection, tx) = (self.connection, None, self.tx.clone());
         if fetch_picture {
             let (api, name, path, tx) = (api.clone(), key.name.clone(), path.clone(), tx.clone());
             self.runtime.spawn(async move {
-                let result = api.fetch(&name, &Source::Cited(path)).await.and_then(|bytes|
-                    crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None).ok_or_else(|| Failure::local(UNREADABLE_PICTURE)));
+                // Decodificar (SVG até 4096²) não pode ocupar uma das duas threads do runtime.
+                let kind = composer::extension(&path);
+                let result = match api.fetch(&name, &Source::Cited(path)).await {
+                    Ok(bytes) => match tokio::task::spawn_blocking(move || crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None)).await {
+                        Ok(Some(picture)) => Ok(picture),
+                        // A tela diz só que não deu para ler; o diário guarda qual dos dois casos foi.
+                        Ok(None) => {
+                            crate::log_line(&format!("arquivos: imagem .{kind} não decodificou"));
+                            Err(Failure::local(UNREADABLE_PICTURE))
+                        }
+                        Err(error) => {
+                            crate::log_line(&format!("arquivos: a tarefa que decodificava a imagem .{kind} não terminou: {error}"));
+                            Err(Failure::local(UNREADABLE_PICTURE))
+                        }
+                    },
+                    Err(error) => Err(error),
+                };
                 let _ = tx.send(Envelope { connection, selection, payload: Payload::FileView(FileReply::Picture(id, result)) }).await;
             });
         }
@@ -369,9 +389,17 @@ impl Hangar {
             }
         };
         let Some(ix) = self.files.tabs.iter().position(|tab| tab.id == id) else { return };
-        let path = &self.files.tabs[ix].path;
+        // Binário que a extensão não denunciou: o mesmo cartão de Abrir e Baixar, em vez de só dizer "arquivo binário".
+        if matches!(&result, Err(error) if error.status == Some(415)) {
+            self.files.tabs[ix].picture = Some(Picture::Binary);
+            cx.notify();
+            return;
+        }
+        let (path, read_path) = (&self.files.tabs[ix].path, &self.files.tabs[ix].read_path);
         let word_wrap = self.files.word_wrap;
         self.files.tabs[ix].content = Some(result.map(|mut content| {
+            // Renomeada durante a leitura: o documento segue o nome novo, para a gravação ir ao arquivo certo.
+            if content.path == *read_path { content.path.clone_from(path); }
             let large_size = Some(content.text.len()).filter(|len| *len > hangar_workspace::files::MAX_BYTES);
             let language = if large_size.is_some() { "text" } else { file_language(path) };
             let text = if large_size.is_some() { std::mem::take(&mut content.text) } else { content.text.clone() };
@@ -667,9 +695,28 @@ impl Hangar {
 
     fn open_file_video(&mut self, cx: &mut Context<Self>) {
         let path = self.files.tabs[self.files.active].path.clone();
-        if let Some(real) = self.file_on_disk(&path) { cx.open_with_system(&real); return; }
         let name = composer::basename(&path).to_owned();
         self.keep_file(Source::Cited(path), name, true, cx);
+    }
+
+    /// Arquivo ou pasta renomeado pela árvore: as abas abertas nele, ou dentro dele, seguem o nome novo, e o documento
+    /// também, que é o caminho da gravação.
+    pub(super) fn files_renamed(&mut self, old: &str, new: &str, windows: bool) {
+        // Abas guardadas de outra sessão ficam como estão: o mesmo caminho lá é outro arquivo.
+        if self.files.owner.is_none() || self.files.owner != self.session_owner() { return; }
+        for tab in &mut self.files.tabs {
+            // Citado de fora da pasta da sessão com o mesmo caminho relativo não é o item renomeado.
+            if matches!(&tab.content, Some(Ok(doc)) if doc.base.external) { continue; }
+            // A aba aberta por caminho absoluto (citada no chat) só é reconhecida pelo caminho interno do documento.
+            let base = match &tab.content { Some(Ok(doc)) => renamed_path(&doc.base.path, old, new, windows), _ => None };
+            let Some(path) = renamed_path(&tab.path, old, new, windows).or_else(|| base.clone()) else { continue };
+            tab.path = path;
+            if let Some(Ok(doc)) = &mut tab.content {
+                if let Some(base) = base { doc.base.path = base; }
+                // A verificação em voo leu o nome antigo e diria que o arquivo sumiu.
+                if doc.checking { (doc.read_seq, doc.checking) = (doc.read_seq.wrapping_add(1), false); }
+            }
+        }
     }
 
     fn file_reveal_system(&mut self, cx: &mut Context<Self>) {
@@ -799,11 +846,42 @@ impl Hangar {
                     .child(self.audio_controls(&format!("file:{id}"), move |this, cx| this.play_file_audio(id, path.clone(), cx), cx))
                     .into_any_element()
             }
-            (Some(Picture::Video), _) => div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
-                .child(div().text_sm().text_color(theme::muted()).child(tr("file_video_external")))
-                .child(Button::new("file-video-open").outline().small().label(tr("file_video_open"))
-                    .on_click(cx.listener(|this, _, _, cx| this.open_file_video(cx))))
-                .into_any_element(),
+            (Some(Picture::Video), _) => {
+                // Vídeo de outra máquina é baixado antes de abrir: o botão para e o estado do download aparece.
+                let card_key = self.selected_key().map(|key| (key, Source::Cited(tab.path.clone())));
+                let card = card_key.as_ref().and_then(|card| self.file_cards.get(card)).cloned();
+                let busy = FileCard::busy(card.as_ref());
+                // Baixando: o anel ao lado do botão mostra quanto chegou e cancela no clique.
+                let ring = match (&card, card_key) {
+                    (Some(FileCard::Downloading { done, total }), Some(card_key)) => Some(cancel_ring(&format!("file-video-{}", tab.id), *done, *total,
+                        cx.reduce_motion(), cx.listener(move |this, _, _, cx| this.cancel_download(card_key.clone(), cx)))),
+                    _ => None,
+                };
+                let note = match card {
+                    Some(FileCard::Downloading { done, total }) => Some((downloading_label(done, total), theme::muted())),
+                    Some(FileCard::Busy) => Some((activity::web("file_card_downloading"), theme::muted())),
+                    Some(FileCard::Missing) => Some((activity::web("file_card_missing"), theme::warning_text())),
+                    Some(FileCard::Empty) => Some((activity::web("file_card_empty"), theme::warning_text())),
+                    Some(FileCard::Failed(error)) => Some((format!("{} · {error}", activity::web("file_card_failed")), theme::warning_text())),
+                    _ => None,
+                };
+                div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
+                    .child(div().text_sm().text_color(theme::muted()).child(tr("file_video_external")))
+                    .child(div().flex().items_center().gap_2()
+                        .child(Button::new("file-video-open").outline().small().label(tr("file_video_open")).disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_file_video(cx))))
+                        .children(ring))
+                    .when_some(note, |el, (text, color)| el.child(div().id("file-video-state").role(Role::Status)
+                        .text_xs().text_color(color).child(text)))
+                    .into_any_element()
+            }
+            (Some(Picture::Binary), _) => {
+                let (key, name) = (self.selected_key(), composer::basename(&tab.path).to_owned());
+                div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
+                    .child(div().text_sm().text_color(theme::muted()).child(tr("file_no_preview")))
+                    .child(self.session_file_card(&format!("file-view-{}", tab.id), 0, key.as_ref(), Source::Cited(tab.path.clone()), name, cx))
+                    .into_any_element()
+            }
             (Some(Picture::Loading), _) | (None, None) => state(tr("file_loading"), theme::faint()),
             (Some(Picture::Failed(error)), _) | (None, Some(Err(error))) => state(error.clone(), theme::danger()),
             (None, Some(Ok(doc))) if tab.reader.mode.reading() && doc.table.is_some() =>
@@ -897,6 +975,23 @@ fn link_target(document: &str, url: &str) -> Option<String> {
     Some(parts.join(if windows { "\\" } else { "/" }))
 }
 
+/// Documentos, pacotes e formatos sem prévia aqui que a leitura de texto recusaria: vão direto ao cartão de arquivo.
+fn is_binary_document(path: &str) -> bool {
+    matches!(composer::extension(path).as_str(),
+        "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp" | "epub"
+        | "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "iso" | "dmg" | "jar" | "apk" | "exe" | "msi"
+        | "woff" | "woff2" | "ttf" | "otf" | "sqlite" | "db" | "psd" | "tif" | "tiff" | "ico" | "heic" | "avif")
+}
+
+/// O caminho depois de renomear `old` para `new`: o próprio item ou o que está dentro dele; `None` quando não é afetado.
+/// `windows`: os caminhos são de uma máquina Windows, onde `\` também separa as pastas.
+pub(super) fn renamed_path(path: &str, old: &str, new: &str, windows: bool) -> Option<String> {
+    if path == old { return Some(new.to_owned()); }
+    let rest = path.strip_prefix(old)?;
+    let sep = rest.chars().next().filter(|c| *c == '/' || windows && *c == '\\')?;
+    Some(format!("{new}{sep}{}", &rest[1..]))
+}
+
 fn is_image(path: &str) -> bool {
     let extension = std::path::Path::new(path).extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
@@ -904,6 +999,12 @@ fn is_image(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn binary_documents_go_to_the_file_card_without_a_text_read() {
+        for path in ["out/r.PDF", "/tmp/a.docx", "b.xlsx", "c.zip", "d.tar.gz", "e.7z", "f.avif"] { assert!(super::is_binary_document(path), "{path}"); }
+        for path in ["src/main.rs", "README.md", "dados.csv", "f.png", "g.svg", "h.mp4", "sem_extensao"] { assert!(!super::is_binary_document(path), "{path}"); }
+    }
+
     #[test]
     fn file_language_maps_compiled_grammars_and_plain_text() {
         for (path, expected) in [
@@ -968,6 +1069,24 @@ mod tests {
         for outside in ["https://x.dev/a.md", "#topo", "/etc/hosts", "mailto:a@b.c", "a%2"] { assert_eq!(target(outside), None, "{outside}"); }
         assert_eq!(super::link_target("/tmp/notes/a.md", "../b.md").as_deref(), Some("/tmp/b.md"));
         assert_eq!(super::link_target("/a.md", "../b.md"), None);
+    }
+
+    #[test]
+    fn rename_moves_the_item_and_what_is_inside_it_only() {
+        assert_eq!(super::renamed_path("src/a.rs", "src/a.rs", "src/b.rs", false).as_deref(), Some("src/b.rs"));
+        assert_eq!(super::renamed_path("src/x/y.rs", "src/x", "src/z", false).as_deref(), Some("src/z/y.rs"));
+        for untouched in ["src/a.rsx", "src/xy/y.rs", "other/src/a.rs", "src"] {
+            assert_eq!(super::renamed_path(untouched, "src/a.rs", "src/b.rs", false), None, "{untouched}");
+        }
+        assert_eq!(super::renamed_path("src/xy/y.rs", "src/x", "src/z", false), None);
+    }
+
+    /// Na árvore de uma máquina Windows o que está dentro da pasta vem com `\`; nas outras, `\` é parte do nome.
+    #[test]
+    fn rename_follows_windows_separators_only_on_windows_paths() {
+        assert_eq!(super::renamed_path("src\\x\\y.rs", "src\\x", "src\\z", true).as_deref(), Some("src\\z\\y.rs"));
+        assert_eq!(super::renamed_path("src\\x\\y.rs", "src\\x", "src\\z", false), None);
+        assert_eq!(super::renamed_path("src\\xy", "src\\x", "src\\z", true), None);
     }
 
     #[test]

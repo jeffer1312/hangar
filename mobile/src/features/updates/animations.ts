@@ -3,6 +3,7 @@ import { ReviewsAnimation } from './reviews-animation';
 import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { ClaudeNoticesAnimation } from './ClaudeNoticesAnimation';
+import { ClaudeProvidersAnimation } from './ClaudeProvidersAnimation';
 import { CliproxyWizardAnimation } from './CliproxyWizardAnimation';
 import { SpeedChoiceAnimation } from './SpeedChoiceAnimation';
 import { ProxyUpdateAnimation } from './ProxyUpdateAnimation';
@@ -12,6 +13,8 @@ import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
 import { DesktopToolLookAnimation } from './DesktopToolLookAnimation';
 import { ConnectAnimation } from './ConnectAnimation';
+import { ConnectSignInAnimation } from './ConnectSignInAnimation';
+import { ConversationGalleryAnimation } from './ConversationGalleryAnimation';
 import { DreamAnimation } from './DreamAnimation';
 import { FolderBranchAnimation } from './FolderBranchAnimation';
 import { HideFromListAnimation } from './HideFromListAnimation';
@@ -29,10 +32,12 @@ import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 import { SessionSettingsAnimation } from './SessionSettingsAnimation';
 import { StatusAnimation } from './StatusAnimation';
 import { WorkReviewAnimation } from './WorkReviewAnimation';
+import { WhatsAppReadonlyAnimation } from './WhatsAppReadonlyAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
   'ajustes-sessao-abas': SessionSettingsAnimation,
+  'provedores-do-claude': ClaudeProvidersAnimation,
   'revisoes-mobile': ReviewsAnimation,
   'scheduled-tasks': ScheduledTasksAnimation,
   'adormecer-ocultas': SleepHiddenAnimation,
@@ -49,7 +54,9 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'compactar-parada': CompactIdleAnimation,
   'estilo-claude-desktop': DesktopToolLookAnimation,
   'etiquetas-maquina-conta': TagsPlateAnimation,
+  'galeria-da-conversa': ConversationGalleryAnimation,
   'hangar-connect': ConnectAnimation,
+  'entrar-pelo-connect': ConnectSignInAnimation,
   'login-usuario-senha': LoginPasswordAnimation,
   'ocultar-da-lista': HideFromListAnimation,
   'plugins-do-claude': PluginsAnimation,
@@ -62,6 +69,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'sugestao-de-nome': RenameSuggestionAnimation,
   'tela-de-status': StatusAnimation,
   'worktree-atualizada': WorktreeFreshAnimation,
+  'whatsapp-somente-leitura': WhatsAppReadonlyAnimation,
 };
 
 export const animationFor = (name: string | null): ComponentType<{ width: number }> | null =>

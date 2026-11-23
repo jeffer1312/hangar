@@ -149,6 +149,7 @@ export const SF_SYMBOLS: Partial<Record<IconName, SFSymbol>> = {
   Upload: 'square.and.arrow.up',
   UploadIcon: 'square.and.arrow.up',
   User: 'person',
+  UserPlus: 'person.badge.plus',
   UserRound: 'person',
   Users: 'person.2',
   Volume2: 'speaker.wave.2',

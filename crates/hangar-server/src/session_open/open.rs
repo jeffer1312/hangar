@@ -55,6 +55,10 @@ pub trait OpenHost: Send + Sync {
     fn account_diary(&self, events: Vec<Value>);
     /// Quanto a abertura espera a reconciliação da conta; os testes encurtam.
     fn reconcile_limit(&self) -> Duration { RECONCILE_LIMIT }
+    /// O `.claude.json` cujos MCP a reconciliação espelha na conta: o que a conta padrão lê.
+    fn mcp_principal(&self) -> Option<PathBuf> {
+        Some(hangar_core::account_env::default_claude_json(self.home(), self.env().get("CLAUDE_CONFIG_DIR").map(String::as_str)))
+    }
     /// Id da conversa (`--session-id`) e chave da ponte do plugin, novos a cada vida.
     fn new_session_id(&self) -> String;
     fn new_bridge_key(&self) -> String;
@@ -537,7 +541,7 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        let (held, result) = reconcile_hangar_dir(host.home().to_owned(), dir, &account, &spec.cwd, host.reconcile_limit(), guard.take(),
+        let (held, result) = reconcile_hangar_dir(host.home().to_owned(), host.mcp_principal(), dir, &account, &spec.cwd, host.reconcile_limit(), guard.take(),
             |events| host.account_diary(events)).await;
         guard = held;
         avisos = result?;
@@ -547,7 +551,8 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
 
 /// A reconciliação da conta do Hangar `dir` (pasta já conferida) dentro do prazo, com a guarda `held` na
 /// mesma tarefa, devolvida quando ela termina. A abertura e a reabertura do Claude passam por aqui.
-pub(crate) async fn reconcile_hangar_dir(home: PathBuf, dir: &str, account: &str, cwd: &str, limit: Duration,
+/// `principal`: o `.claude.json` que a conta padrão lê, a fonte do espelho dos MCP (`None` não espelha).
+pub(crate) async fn reconcile_hangar_dir(home: PathBuf, principal: Option<PathBuf>, dir: &str, account: &str, cwd: &str, limit: Duration,
     held: Option<crate::accounts::AccountGuard>, diary: impl FnOnce(Vec<Value>))
     -> (Option<crate::accounts::AccountGuard>, Result<Vec<String>, OpenError>) {
     use crate::accounts::claude_config::{Outcome, Wait, late_outcome, reconcile_dir, refused};
@@ -556,7 +561,7 @@ pub(crate) async fn reconcile_hangar_dir(home: PathBuf, dir: &str, account: &str
     let wait = Wait::within(limit);
     // As travas esperam só até o prazo, e a guarda vai com a tarefa: a recusa no limite não deixa
     // reconciliação rodando sem ela (a exclusão da conta esperaria) nem segurando o runtime.
-    let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, &dir, Some(&project), wait)));
+    let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, principal.as_deref(), &dir, Some(&project), wait)));
     let (guard, outcome) = match tokio::time::timeout(limit, task).await {
         Ok(Ok((held, outcome))) => (held, outcome),
         Ok(Err(e)) => (None, Outcome::failed(refused(format!("a reconciliação parou no meio: {e}")))),
@@ -575,11 +580,9 @@ fn engine_route(host: &dyn OpenHost, spec: &SessionSpec) -> Result<Option<claude
                 hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1."));
         }
     }
-    match &spec.account {
-        Account::Engine { name, account: Some(account), .. } => Ok(Some(super::facts::fixed_account(
-            &crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(host.env().clone())), name, account)?)),
-        _ => Ok(None),
-    }
+    let Account::Engine { name, account, binding, .. } = &spec.account else { return Ok(None) };
+    let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(host.env().clone()));
+    super::facts::session_engine_route(&accounts, name, account.as_deref(), binding.as_deref())
 }
 
 /// O pane do Claude, o transcript da conversa nova e a rota da conta ChatGPT fixa do motor.
@@ -657,6 +660,7 @@ pub(crate) fn headless_sidecar(spec: &SessionSpec, sid: &str, previous_non_plan:
     });
     if let Some(tier) = spec.service_tier { meta["service_tier"] = json!(tier.name()); }
     if let Some(settings) = settings { meta["claude_settings"] = settings.clone(); }
+    if let Account::Engine { binding: Some(binding), .. } = &spec.account { meta["engine_binding"] = json!(binding); }
     if let Some(route) = route {
         meta["engine_account"] = json!(route.account);
         meta["engine_credential_id"] = json!(route.credential_id);
@@ -776,7 +780,11 @@ fn persist(host: &dyn OpenHost, spec: &SessionSpec, diary: &mut Diary, stage: &'
 }
 
 async fn announce(host: &dyn OpenHost, spec: &SessionSpec, diary: &mut Diary, born: &Born, stage: &str) -> Vec<String> {
-    let warnings = host.born(born).await;
+    let mut warnings = host.born(born).await;
+    if let Err(error) = super::record::confirm_binding(host.home(), spec) {
+        tracing::warn!(kind = ?error.kind(), "vínculo da conversa não gravado no Arquivo");
+        warnings.push("A sessão abriu, mas o vínculo da conversa não foi gravado no Arquivo.".into());
+    }
     diary.events.push(json!({"evento": "sessao.criada", "nivel": "ok", "sessao": spec.name, "provider": spec.provider.name(),
         "etapa": stage, "operacao": diary.op}));
     warnings

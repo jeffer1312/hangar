@@ -118,6 +118,13 @@ impl GroupService {
         blocking(move || reader(&dir)(&name)).await
     }
 
+    /// [`GroupService::link`] sem tratar sidecar ilegível ou `fed` torto como ausente: quem recusa na dúvida
+    /// recebe o erro ([`PairDir::sidecar_strict`]).
+    pub async fn link_strict(&self, name: &str) -> Result<Option<Sidecar>, GroupError> {
+        let (dir, name) = (self.dir.clone(), name.to_owned());
+        Ok(blocking(move || dir.sidecar_strict(&name)).await??)
+    }
+
     /// Todos os sidecars válidos (stem, sidecar), sem o lock: leitura de quem só consulta.
     pub async fn sidecars(&self) -> Result<Vec<(String, Sidecar)>, GroupError> {
         let dir = self.dir.clone();

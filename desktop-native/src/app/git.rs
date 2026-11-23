@@ -359,6 +359,8 @@ pub(super) struct GitPanel {
     review: Option<Entity<super::reviews::BranchReviews>>,
     /// Trocou a branch: o chip da faixa desta pasta é esquecido.
     forget_chip: Option<Rc<dyn Fn(&mut App)>>,
+    /// Arquivo clicado no painel Contexto: entra aberto e a lista rola até ele uma vez.
+    focus_path: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -380,7 +382,7 @@ impl GitPanel {
         Self {
             source, runtime, name, title, pane: Pane::default(), repo: Remote::default(), work: Review::new(), round: 0, chosen: HashSet::new(),
             seen: HashSet::new(), message, amend: false, busy: None, error: None, output: None, log: Remote::default(), log_limit: LOG_PAGE,
-            ahead_behind: (None, None), opened: None, picker: false, branch_query, branch_error: None, expand, others: None, review: None, forget_chip: None, _subscriptions: subscriptions,
+            ahead_behind: (None, None), opened: None, picker: false, branch_query, branch_error: None, expand, others: None, review: None, forget_chip: None, focus_path: None, _subscriptions: subscriptions,
         }
     }
 
@@ -422,7 +424,12 @@ impl GitPanel {
         self.round += 1;
         let round = self.round;
         // Arquivo chega dobrado; só fica aberto o que a pessoa abriu.
-        let open: HashSet<String> = self.work.files.iter().filter(|e| !e.folded).map(|e| e.path.clone()).collect();
+        let mut open: HashSet<String> = self.work.files.iter().filter(|e| !e.folded).map(|e| e.path.clone()).collect();
+        // O arquivo pedido é alvo até a lista rolar até ele; depois, a releitura (commit, descarte) respeita o que a
+        // pessoa dobrou e onde rolou. Fora da lista ele deixa de ser alvo.
+        let focus = self.focus_path.clone().filter(|focus| files.iter().any(|(path, _)| path == focus));
+        self.focus_path = focus.clone();
+        open.extend(focus.clone());
         // Arquivo que some e volta (commitado, trocado de branch) conta como novo e entra marcado.
         let current: HashSet<String> = files.iter().map(|(p, _)| p.clone()).collect();
         self.chosen.extend(current.difference(&self.seen).cloned().collect::<Vec<_>>());
@@ -435,6 +442,8 @@ impl GitPanel {
         }).collect();
         self.work.reset();
         for (index, path) in self.work.files.iter().map(|e| e.path.clone()).enumerate() {
+            // A rolagem até o arquivo pedido espera o diff dele: antes, a lista curta a cortaria no fim.
+            let focused = focus.as_deref() == Some(path.as_str());
             let source = self.source.clone();
             self.spawn(async move { source.call(Op::Diff(path)).await }, window, cx, move |this, result, _, _| {
                 if this.round != round { return; }
@@ -447,6 +456,10 @@ impl GitPanel {
                 }));
                 this.work.truncated |= cut;
                 this.work.refresh(index);
+                if focused && let Some(row) = this.work.rows.iter().position(|row| matches!(row, Row::Header(f) if *f == index)) {
+                    this.work.list.scroll_to(ListOffset { item_ix: row, offset_in_item: px(0.) });
+                    this.focus_path = None;
+                }
             });
         }
     }
@@ -1304,22 +1317,29 @@ impl Hangar {
     /// A faixa do compositor e o "Git" do menu abrem o diálogo grande, com diff e histórico inteiros; a aba Git do
     /// painel direito fica como a vista curta.
     pub(super) fn open_git_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_git_dialog(Pane::Changes, window, cx);
+        self.open_git_dialog(Pane::Changes, None, window, cx);
+    }
+
+    /// O arquivo alterado clicado no painel Contexto: a janela de Git abre nas alterações, com ele aberto e à vista.
+    pub(super) fn open_git_at(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_read_only() { return; }
+        self.open_git_dialog(Pane::Changes, Some(path), window, cx);
     }
 
     /// O chip da revisão na faixa abre o mesmo diálogo, na aba dela.
     pub(super) fn open_git_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_git_dialog(Pane::Review, window, cx);
+        self.open_git_dialog(Pane::Review, None, window, cx);
     }
 
     /// A aba Git do painel é a vista curta, sem histórico; o histórico só existe no diálogo grande.
     pub(super) fn open_git_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_git_dialog(Pane::History, window, cx);
+        self.open_git_dialog(Pane::History, None, window, cx);
     }
 
     /// Diff e histórico no tamanho do painel expandido; ao fechar, a aba relê o que o diálogo pode ter mudado.
-    fn open_git_dialog(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_git_dialog(&mut self, pane: Pane, focus: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(panel) = self.new_git_panel(None, window, cx) else { return };
+        if let Some(path) = focus { panel.update(cx, |panel, _| panel.focus_path = Some(path)); }
         if pane != Pane::Changes { panel.update(cx, |panel, cx| panel.set_pane(pane, window, cx)); }
         let side = self.side.git.as_ref().map(|(_, panel)| panel.downgrade());
         show_dialog(panel, move |window, cx| { if let Some(side) = side.as_ref() { let _ = side.update(cx, |panel, cx| panel.load(window, cx)); } },
@@ -1331,7 +1351,7 @@ impl Hangar {
         let owner = self.session_owner()?;
         if let Some((key, panel)) = &self.side.git && key == &owner { return Some(panel.clone()); }
         let weak = cx.entity().downgrade();
-        let expand: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, cx| { let _ = weak.update(cx, |this, cx| this.open_git_dialog(Pane::Changes, window, cx)); });
+        let expand: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, cx| { let _ = weak.update(cx, |this, cx| this.open_git_dialog(Pane::Changes, None, window, cx)); });
         let panel = self.new_git_panel(Some(expand), window, cx)?;
         self.side.git = Some((owner, panel.clone()));
         Some(panel)

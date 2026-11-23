@@ -120,9 +120,9 @@ export function fileUrl(name: string, path: string, download = false, server?: S
 
 // URL nativa (sem token na query) — para WebView/Image nativo que manda Authorization header.
 // PWA/browser continua no fileUrl com ?token porque <img> não manda header.
-export function fileUrlNative(name: string, path: string, server?: Server): string {
+export function fileUrlNative(name: string, path: string, server?: Server, width?: number): string {
   const base = server ? baseOf(server) : apiEnv().getBaseUrl();
-  return `${base}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`;
+  return `${base}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}${width ? `&w=${width}` : ''}`;
 }
 
 // Header Authorization para caminho nativo (mesmo token do fileUrl, mas só no header).
@@ -137,9 +137,9 @@ export function uploadUrl(name: string, filename: string, download = false, serv
   return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}${download ? '&download=1' : ''}${width ? `&w=${width}` : ''}`;
 }
 
-export function uploadUrlNative(name: string, filename: string, server?: Server): string {
+export function uploadUrlNative(name: string, filename: string, server?: Server, width?: number): string {
   const base = server ? baseOf(server) : apiEnv().getBaseUrl();
-  return `${base}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}`;
+  return `${base}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}${width ? `?w=${width}` : ''}`;
 }
 
 // Par nativo do transcriptImageUrl: o token vai no header (fileAuthHeader), nunca na URL.
@@ -1096,6 +1096,7 @@ export interface CreateSessionBody {
   jev?: boolean;
   // Conta ChatGPT do CLIProxyAPI local (só Claude com motor) e Fast (`priority`) ou Ultra Fast da sessão nova.
   engine_account?: string;
+  engine_binding?: string;
   service_tier?: ServiceTier;
   // Plugins e skills só desta sessão: a diferença do padrão do catálogo (só Claude, sessão nova).
   claude_customizations?: ClaudeCustomizationDelta;
@@ -1334,8 +1335,8 @@ export interface ClaudeDefaultsBody { model?: string | null; effort?: string | n
 export interface SessionDefaults { model: string; effort: string; permission: string }
 
 export async function getSessionDefaultsForServer(server: Server, provider: Provider, engine?: string | null,
-  signal?: AbortSignal): Promise<SessionDefaults | null> {
-  const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}) });
+  signal?: AbortSignal, engineAccount?: string | null): Promise<SessionDefaults | null> {
+  const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}), ...(engineAccount ? { engine_account: engineAccount } : {}) });
   const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server,
     `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) }).catch((e: { code?: string }) => {
     // Convidado não tem padrão salvo; a recusa não é falha de leitura, que travaria a criação.
@@ -1603,8 +1604,33 @@ export function modelOptionsForServer(server: Server, provider: string, engine?:
   return apiFetchForServer(server, modelOptionsPath(provider, engine, configDir, codexAccount, engineAccount), { signal: comTeto(signal, 8000) });
 }
 
-export function getCredentialsForServer(server: Server, force = false, signal?: AbortSignal): Promise<Credencial[]> {
-  return apiFetchForServer(server, `/api/credenciais${force ? '?forcar=true' : ''}`, { signal: comTeto(signal, 8000) });
+export interface ClaudeProviderTarget {
+  engine: string;
+  engine_account: string;
+  engine_binding: string;
+}
+
+export interface ClaudeProviderSource {
+  lifecycle_id: string;
+  jsonl: string;
+  headless: boolean;
+  engine: string | null;
+  engine_account: string | null;
+  engine_binding: string | null;
+}
+
+export async function claudeProviderModels(server: Server, target: ClaudeProviderTarget, signal?: AbortSignal): Promise<ModelOption[]> {
+  const q = new URLSearchParams({ provider: 'claude', ...target });
+  const response = await apiFetchForServer<ClaudeProviderTarget & { models: ModelOption[] }>(server, `/api/model-options?${q}`, { signal: comTeto(signal, 20_000) }, 20_000);
+  if (response.engine !== target.engine || response.engine_account !== target.engine_account || response.engine_binding !== target.engine_binding) {
+    throw new Error('claude_provider_changed');
+  }
+  return response.models;
+}
+
+export function getCredentialsForServer(server: Server, force = false, signal?: AbortSignal, proxyAccounts = false): Promise<Credencial[]> {
+  const query = new URLSearchParams({ ...(force ? { forcar: 'true' } : {}), ...(proxyAccounts ? { proxy_accounts: 'true' } : {}) }).toString();
+  return apiFetchForServer(server, `/api/credenciais${query ? `?${query}` : ''}`, { signal: comTeto(signal, 8000) });
 }
 export function listarCredenciais(server: Server | null, force = false): Promise<Credencial[]> {
   return server ? getCredentialsForServer(server, force) : apiFetch(`/api/credenciais${force ? '?forcar=true' : ''}`);
@@ -3056,8 +3082,11 @@ export interface Motor {
   // Só em motor do CLIProxyAPI local: as contas ChatGPT do proxy, ou o motivo de não as ter lido.
   cliproxy_accounts?: CliProxyAccount[];
   cliproxy_error?: string;
+  cliproxy_binding?: string;
+  cliproxy_bound_account?: CliProxyAccount;
+  cliproxy_binding_error?: string;
 }
-export interface CliProxyAccount { account: string; credential_id: string; email: string; label: string; prefix?: string | null }
+export interface CliProxyAccount { account: string; credential_id: string; email: string; label: string; prefix?: string | null; binding?: string; plan?: string | null }
 export interface ModeloProvedor {
   id: string;
   context_length: number | null;
@@ -3066,6 +3095,7 @@ export interface ModeloProvedor {
 
 export interface EnginesResponse {
   motores: Record<string, Motor>;
+  claude_provider_switch?: boolean;
   // true quando engines.json existe mas não pôde ser lido (hand-edit quebrado, etc): a tela
   // precisa distinguir isto de "nenhum motor configurado" — as duas batem em `motores: {}`.
   arquivo_corrompido: boolean;
@@ -3144,7 +3174,7 @@ export interface CliproxyDeteccao {
   install?: CliproxyInstall;
 }
 
-export interface CliproxyAccount { type: string; email: string }
+export interface CliproxyAccount { type: string; email: string; binding?: string | null; prefix?: string | null; plan?: string | null }
 
 export type CliproxyInstallStep = 'download' | 'config' | 'service' | 'start';
 
@@ -3194,7 +3224,7 @@ export function adoptCliproxyForServer(s: Server, confirm = false): Promise<{ jo
 }
 
 export type CliproxyLoginProvider = 'codex' | 'claude';
-export type CliproxyLoginState = { status: 'wait' | 'ok' | 'error'; error?: string };
+export type CliproxyLoginState = { status: 'wait' | 'ok' | 'error'; error?: string; account?: CliproxyAccount | null };
 
 export function installCliproxyForServer(s: Server): Promise<{ job: CliproxyJob | null }> {
   return apiFetchForServer(s, '/api/engines/cliproxy/install', { method: 'POST', body: '{}' });
@@ -3513,8 +3543,9 @@ export function writeCitedFile(name: string, path: string, text: string, digest:
   });
 }
 
-// Visão "citados": quais caminhos citados existem (relativo resolvido) e quais não.
-export function resolverCitados(name: string, caminhos: string[], server?: Server | null): Promise<{ ok: Record<string, { relativo: string | null; real: string }>; faltam: string[] }> {
+// Visão "citados": quais caminhos citados existem (relativo resolvido) e quais não. `size` (bytes) e
+// `mtime` (epoch s) só vêm de servidor que já os mede: quem lê trata os dois como opcionais.
+export function resolverCitados(name: string, caminhos: string[], server?: Server | null): Promise<{ ok: Record<string, { relativo: string | null; real: string; size?: number; mtime?: number }>; faltam: string[] }> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/files/resolver`, { method: 'POST', body: JSON.stringify({ caminhos }) });
 }
 
@@ -3911,21 +3942,24 @@ function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
       // "Esta rota só existe pra Claude" é resposta FINAL pra esta sessão, não falha transitória:
       // cacheia a recusa pelo mesmo TTL. Sem isto cada montagem do Composer numa sessão Pi/Kimi
       // repetia o GET e o 400 (medido: 516 numa semana).
-      if ((e as { code?: string })?.code === 'erro_rota_so_claude') {
+      if ((_catEpoca.get(sessao) ?? 0) === epoca && (e as { code?: string })?.code === 'erro_rota_so_claude') {
         _catCache.set(key, { at: Date.now(), data: e, recusa: true });
       }
       throw e;
     })
-    .finally(() => { _catEmVoo.delete(key); });
+    .finally(() => { if (_catEmVoo.get(key) === p) _catEmVoo.delete(key); });
   _catEmVoo.set(key, p);
   return p;
 }
 
 // Troca aplicada (modelo/effort/permissão): a LISTA não muda, mas o default/atual pode — 60s de
 // cache velho num rótulo errado é pior que um GET a mais na próxima abertura.
-function _invalidarCatalogo(name: string): void {
+function _invalidarCatalogo(name: string, dropPending = false): void {
   _catEpoca.set(name, (_catEpoca.get(name) ?? 0) + 1);
   for (const k of _catCache.keys()) if (k.endsWith(`|${name}`)) _catCache.delete(k);
+  if (dropPending) {
+    for (const k of _catEmVoo.keys()) if (k.endsWith(`|${name}`)) _catEmVoo.delete(k);
+  }
 }
 
 export function getModelOptions(name: string, server?: Server | null, options?: { fresh?: boolean; refresh?: boolean }): Promise<ModelOptionsResponse> {
@@ -3948,6 +3982,14 @@ export function setEngineModel(
       method: 'POST',
       body: JSON.stringify(body),
     }).then(withSessionWarnings);
+}
+
+export function switchClaudeProvider(server: Server, name: string, selection: ClaudeProviderTarget & { model: string; source: ClaudeProviderSource }): Promise<ClaudeProviderTarget & { ok: boolean; model: string; service_tier: 'default' }> {
+  _invalidarCatalogo(name);
+  return apiFetchForServer<ClaudeProviderTarget & { ok: boolean; model: string; service_tier: 'default' }>(server,
+    `/api/sessions/${encodeURIComponent(name)}/engine/provider`, {
+      method: 'POST', body: JSON.stringify(selection),
+    }, 720_000).then(withSessionWarnings).finally(() => _invalidarCatalogo(name, true));
 }
 
 // Fast da sessão viva (POST .../service-tier); `priority` liga, `default` volta ao padrão da conta.
@@ -4938,4 +4980,93 @@ export function requestMermaid(
   signal?: AbortSignal,
 ): Promise<Response> {
   return apiFetchRes('/api/mermaid', { method: 'POST', body: JSON.stringify(body), signal }, server ?? undefined, false, false);
+}
+
+// WhatsApp só leitura do servidor (rotas do dono `/api/whatsapp*`). Erro vem com código `whatsapp_*`.
+export type WhatsAppService = 'running' | 'stopped' | 'absent';
+export type WhatsAppLinkState = 'unpaired' | 'pairing' | 'connected' | 'logged_out' | 'outdated';
+
+/** `error` aceito como texto ou `{code}`: o servidor já mandou dos dois jeitos. */
+export interface WhatsAppJob {
+  kind: 'install' | 'update' | string;
+  /** Ausente ou `null` conta como a primeira etapa. */
+  step?: string | null;
+  done: boolean;
+  error: string | { code: string } | null;
+  outcome?: unknown;
+}
+
+export interface WhatsAppTotals {
+  messages: number; chats: number; groups: number; media_saved: number; media_phone_only: number; media_lost: number;
+}
+
+export interface WhatsAppStatus {
+  api?: number;
+  version?: string;
+  state: WhatsAppLinkState | string;
+  error: string | { code: string } | null;
+  /** Número mascarado. */
+  device: string | null;
+  /** Como o aparelho aparece na lista do celular; binário antigo não manda. */
+  device_name?: string | null;
+  qr?: string | null;
+  qr_expires_at?: string | null;
+  pair_code: string | null;
+  pair_code_expires_at?: string | null;
+  tz?: string;
+  totals?: Partial<WhatsAppTotals>;
+  since: string | null;
+  last_message_at: string | null;
+}
+
+export interface WhatsAppState {
+  installed: boolean;
+  accepted_at: string | null;
+  service: WhatsAppService;
+  job: WhatsAppJob | null;
+  status: WhatsAppStatus | null;
+  qr_svg: string | null;
+  /** De pé: por que o `status` não veio. Parado: `whatsapp_schema_newer` quando os dados são de um binário mais novo. */
+  status_error?: string | null;
+}
+
+export function getWhatsApp(s: Server): Promise<WhatsAppState> {
+  return apiFetchForServer(s, '/api/whatsapp', undefined, 15_000);
+}
+
+/** Desvincular (logout, apagar) dá 30 s ao binário no servidor: a tela espera mais que isso. */
+const WHATSAPP_UNLINK_MS = 45_000;
+/** Remover soma o logout a parar, desregistrar e apagar o serviço. */
+const WHATSAPP_UNINSTALL_MS = 90_000;
+
+function postWhatsApp<T>(s: Server, path: string, body?: unknown, timeoutMs = 30_000): Promise<T> {
+  return apiFetchForServer(s, `/api/whatsapp/${path}`,
+    { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, timeoutMs);
+}
+
+/** O servidor recusa sem o aceite (`whatsapp_accept_required`); outro job em curso é `whatsapp_busy`. */
+export function installWhatsApp(s: Server): Promise<{ job: WhatsAppJob }> {
+  return postWhatsApp(s, 'install', { accept: true });
+}
+
+export function updateWhatsApp(s: Server): Promise<{ job: WhatsAppJob }> {
+  return postWhatsApp(s, 'update');
+}
+
+/** Com `phone` (só algarismos, com o código do país) o celular recebe um código; sem ele, o servidor gera o QR. */
+export function pairWhatsApp(s: Server, phone?: string): Promise<unknown> {
+  return postWhatsApp(s, 'pair', phone ? { phone } : undefined);
+}
+
+export function logoutWhatsApp(s: Server): Promise<void> {
+  return postWhatsApp(s, 'logout', undefined, WHATSAPP_UNLINK_MS);
+}
+
+/** `logout: 'not_done'`: o serviço estava parado e o aparelho continua na lista do celular. */
+export function wipeWhatsApp(s: Server): Promise<{ logout: 'done' | 'not_done' | 'not_paired' }> {
+  return postWhatsApp(s, 'wipe', { confirm: true }, WHATSAPP_UNLINK_MS);
+}
+
+export function uninstallWhatsApp(s: Server, logout: boolean): Promise<unknown> {
+  return postWhatsApp(s, 'uninstall', { confirm: true, logout }, WHATSAPP_UNINSTALL_MS);
 }

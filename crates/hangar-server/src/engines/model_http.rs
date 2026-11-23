@@ -26,6 +26,10 @@ fn catalog_failure(code: &str) -> Response {
         "Não consegui consultar os modelos. Tente atualizar o catálogo novamente.", json!({"cause":code})).response()
 }
 
+pub(crate) fn provider_model_id(model: &str) -> bool {
+    !model.contains(['/', '[', ']']) && crate::session_open::resolve::valid_model(model)
+}
+
 pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) -> Option<Response> {
     if method!=Method::GET {return None;}
     let params:HashMap<String,String>=form_urlencoded::parse(query.unwrap_or("").as_bytes()).into_owned().collect();
@@ -33,7 +37,8 @@ pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) 
     if path=="/api/model-options" {
         let engine=params.get("engine").filter(|e|!e.is_empty());
         let account=params.get("engine_account").map(String::as_str);
-        if account.is_some() && (engine.is_none() || params.get("provider").is_some_and(|p|p!="claude")) {
+        let requested_binding = params.get("engine_binding").map(String::as_str);
+        if (account.is_some() || requested_binding.is_some()) && (engine.is_none() || params.get("provider").is_some_and(|p|p!="claude")) {
             return Some(crate::provider_models::ModelError::coded(400,"erro_cliproxy_conta","conta ChatGPT exige Claude com motor CLIProxyAPI local",json!({})).response());
         }
         if engine.is_none() {
@@ -60,12 +65,44 @@ pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) 
         }
         let engine=engine?;
         if params.get("provider").is_some_and(|p|p!="claude") {return None;}
-        return Some(match catalog::models(&st.accounts,engine,account,refresh).await {
+        let checked = || -> Result<Option<crate::session_open::claude::EngineRoute>, crate::session_open::OpenError> {
+            let Some(binding) = requested_binding else { return Ok(None) };
+            crate::session_open::facts::claude_provider_route(&st.accounts, engine, account.unwrap_or(""), binding).map(Some)
+        };
+        let route = match checked() {
+            Ok(route) => route,
+            Err(error) => return Some(json_response(StatusCode::CONFLICT, error.body())),
+        };
+        let account = match route.as_ref() {
+            Some(route) => Some(route.account.clone()),
+            None => match super::proxy::engine_account(&st.accounts, engine, account) {
+                Ok(account) => account,
+                Err(error) => return Some(crate::provider_models::ModelError::coded(400, "erro_cliproxy_conta", &error, json!({})).response()),
+            },
+        };
+        let account = account.as_deref();
+        return Some(match catalog::models(&st.accounts,engine,account,refresh || route.is_some()).await {
             Ok(models)=>{
-                let models=catalog::picker(&st.accounts,engine,account,models);
+                if let Some(expected) = &route {
+                    match checked() {
+                        Ok(Some(current)) if current.prefix == expected.prefix && current.base_url == expected.base_url => {},
+                        _ => return Some(json_response(StatusCode::CONFLICT, crate::session_open::OpenError::new(409, "erro_cliproxy_conta", "A conta vinculada mudou. Escolha novamente.").body())),
+                    }
+                }
+                let mut models=catalog::picker(&st.accounts,engine,account,models);
+                if route.is_some() { models.retain(|row| row["id"].as_str().is_some_and(provider_model_id)); }
                 let fast=models.iter().any(|m|m["supports_fast"]==true);
                 let ultrafast=models.iter().any(|m|m["supports_ultrafast"]==true);
-                json_response(StatusCode::OK,json!({"kind":"engine","reduced":false,"models":models,"supports_fast":fast,"supports_ultrafast":ultrafast}))
+                let engines = store::state(&st.accounts.env).0;
+                let default = engines.get(engine).and_then(|s| s["model"].as_str())
+                    .and_then(|m| m.rsplit('/').next()).filter(|m| models.iter().any(|row| row["id"] == *m));
+                let mut body = json!({"kind":"engine","reduced":false,"default":default,"models":models,"supports_fast":fast,"supports_ultrafast":ultrafast});
+                if let Some(route) = route {
+                    body["engine"] = json!(engine);
+                    body["engine_account"] = json!(route.account);
+                    body["engine_binding"] = json!(route.binding);
+                }
+                json_response(StatusCode::OK, body)
             },
             Err(error)=>error.response(),
         });
@@ -88,9 +125,16 @@ pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) 
             Err(code) => catalog_failure(code),
         });
     };
-    Some(match catalog::models(&st.accounts,engine,row.engine_account.as_deref(),refresh).await {
+    let route = if row.engine_binding.is_some() {
+        match crate::session_open::facts::session_engine_route(&st.accounts, engine, row.engine_account.as_deref(), row.engine_binding.as_deref()) {
+            Ok(route) => route,
+            Err(error) => return Some(json_response(StatusCode::CONFLICT, error.body())),
+        }
+    } else { None };
+    let account = route.as_ref().map(|r| r.account.as_str()).or(row.engine_account.as_deref());
+    Some(match catalog::models(&st.accounts,engine,account,refresh).await {
         Ok(models)=>{
-            let models=catalog::picker(&st.accounts,&engine,row.engine_account.as_deref(),models);
+            let models=catalog::picker(&st.accounts,engine,account,models);
             let fast=models.iter().any(|m|m["supports_fast"]==true);
             let ultrafast=models.iter().any(|m|m["supports_ultrafast"]==true);
             let mut result=json!({"kind":"engine","engine":engine,"models":models});

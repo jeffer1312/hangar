@@ -139,6 +139,12 @@ fn safe_ext(filename: &str) -> String {
     if ext.is_empty() { "bin".into() } else { ext }
 }
 
+/// `w` da miniatura pedida a outra máquina: só nas rotas que reduzem, e nunca para GIF.
+fn preview_width(source: &Source, width: u32) -> Option<u32> {
+    let name = match source { Source::Upload(name) | Source::Cited(name) | Source::Workspace(name) => name, _ => return None };
+    (composer::extension(name) != "gif").then_some(width)
+}
+
 /// `save_upload`: nome gerado aqui (segundos + 6 hex), só a extensão vem do arquivo; nunca sobrescreve.
 fn save(dir: &Path, filename: &str, bytes: &[u8]) -> Result<Uploaded, Failure> {
     if bytes.is_empty() { return Err(refusal(400, "arquivo vazio")); }
@@ -152,7 +158,7 @@ fn save(dir: &Path, filename: &str, bytes: &[u8]) -> Result<Uploaded, Failure> {
     use std::io::Write;
     std::fs::OpenOptions::new().write(true).create_new(true).open(&path).and_then(|mut file| file.write_all(bytes))
         .map_err(|error| refusal(500, error.to_string()))?;
-    Ok(Uploaded { path: path.to_string_lossy().into_owned(), frames: Vec::new(), transcript: Some(String::new()) })
+    Ok(Uploaded { path: path.to_string_lossy().into_owned(), frames: Vec::new(), transcript: Some(String::new()), note: None })
 }
 
 /// `prune_old`: apaga do projeto inteiro (todas as sessões) o que passou de `days` dias; erro de um arquivo não para a
@@ -215,8 +221,54 @@ impl Uploads {
         match read { Some(result) => result, None => api.fetch(name, source).await }
     }
 
+    /// Bytes de uma miniatura: daqui, o arquivo do disco, que a decodificação reduz; de outra máquina, a imagem já
+    /// reduzida pelo servidor (`width`), para não trazer o original pela rede só para mostrá-lo pequeno. GIF vem inteiro:
+    /// a redução do servidor guarda só o primeiro quadro, e a miniatura daqui anima.
+    pub(super) async fn fetch_preview(&self, api: &Api, name: &str, source: &Source, width: u32) -> Result<Vec<u8>, Failure> {
+        match self {
+            Uploads::Local { .. } => self.fetch(api, name, source).await,
+            Uploads::Remote => api.fetch_sized(name, source, preview_width(source, width)).await,
+        }
+    }
+
+    /// O arquivo desta máquina por trás do anexo, para abrir no lugar: só anexo do cofre e caminho citado da sessão local.
+    /// Toca no disco (pode ser pasta de rede): só fora da thread da interface.
+    pub(super) fn local_path(&self, source: &Source) -> Option<PathBuf> {
+        let Uploads::Local { dir, cwd, .. } = self else { return None };
+        let real = match source {
+            Source::Upload(file) => resolve(dir, file).ok()?,
+            Source::Cited(path) | Source::Workspace(path) => cited(cwd, path)?,
+            Source::Transcript(..) | Source::Remote(_) | Source::Memory(..) => return None,
+        };
+        Some(real.to_str().map_or_else(|| real.clone(), |text| PathBuf::from(plain_path(text))))
+    }
+
+    /// O arquivo gravado em `target` sem passar inteiro pela memória: deste disco, cópia em blocos; do backend, o
+    /// download direto ao disco. `None`: veio vazio e nada foi gravado.
+    pub(super) async fn download(&self, api: &Api, name: &str, source: &Source, target: PathBuf, report: impl FnMut(u64, Option<u64>) + Send)
+        -> Result<Option<PathBuf>, crate::api::download::DownloadError> {
+        enum Here { File(PathBuf), Bytes(Vec<u8>) }
+        let Uploads::Local { dir, cwd, jsonl } = self else { return api.download(name, source, target, report).await };
+        let (dir, cwd, jsonl, local) = (dir.clone(), cwd.clone(), jsonl.clone(), source.clone());
+        // `None`: não dá para ler daqui; o backend responde, com o erro dele se for o caso.
+        let here = blocking(move || Ok(match local {
+            Source::Upload(file) => Some(resolve(&dir, &file).map(Here::File)),
+            Source::Cited(path) => cited(&cwd, &path).map(|path| Ok(Here::File(path))),
+            Source::Transcript(id, index) => transcript_image(&jsonl, &id, index).map(|bytes| Ok(Here::Bytes(bytes))),
+            Source::Remote(_) | Source::Workspace(_) | Source::Memory(..) => None,
+        })).await?;
+        match here {
+            Some(Ok(Here::File(path))) => crate::api::download::copy_file(path, target, report).await,
+            Some(Ok(Here::Bytes(bytes))) => crate::api::download::write_bytes(target, &bytes, report).await,
+            Some(Err(error)) => Err(error.into()),
+            None => api.download(name, source, target, report).await,
+        }
+    }
+
     /// Vídeo sobe pelo backend, que extrai quadros e transcreve a fala; o resto grava aqui e varre os vencidos do projeto.
-    pub(super) async fn upload(&self, api: &Api, name: &str, filename: &str, bytes: Vec<u8>, retention: Option<i64>) -> Result<Uploaded, Failure> {
+    /// `report(enviado, total)`: o progresso do envio pelo backend; gravar aqui é imediato.
+    pub(super) async fn upload(&self, api: &Api, name: &str, filename: &str, bytes: Vec<u8>, retention: Option<i64>,
+        report: impl FnMut(u64, u64) + Send + 'static) -> Result<Uploaded, Failure> {
         match self {
             Uploads::Local { dir, .. } if !VIDEO_EXTS.contains(&safe_ext(filename).as_str()) => {
                 let (dir, filename) = (dir.clone(), filename.to_owned());
@@ -226,7 +278,7 @@ impl Uploads {
                     Ok(saved)
                 }).await
             }
-            _ => api.upload(name, filename, composer::mime_for(filename), bytes).await,
+            _ => api.upload_with_progress(name, filename, composer::mime_for(filename), bytes, report).await,
         }
     }
 }
@@ -413,6 +465,35 @@ mod tests {
         std::os::unix::fs::symlink(root.join("fora.txt"), dir.join("link.txt")).unwrap();
         assert!(resolve(&dir, "dentro.txt").is_ok());
         for name in ["../fora.txt", "link.txt", "a/b", ""] { assert!(resolve(&dir, name).is_err(), "{name}"); }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remote_thumbnails_ask_for_the_reduced_image_except_gif() {
+        use super::{Source, preview_width};
+        assert_eq!(preview_width(&Source::Upload("1-a.png".into()), 480), Some(480));
+        assert_eq!(preview_width(&Source::Cited("/tmp/b.JPG".into()), 480), Some(480));
+        assert_eq!(preview_width(&Source::Workspace("out/c.webp".into()), 300), Some(300));
+        assert_eq!(preview_width(&Source::Cited("/tmp/anima.GIF".into()), 480), None, "GIF anima: vem inteiro");
+        assert_eq!(preview_width(&Source::Transcript("id".into(), 0), 480), None, "rota sem redução");
+        assert_eq!(preview_width(&Source::Remote("https://h/x.png".into()), 480), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_path_opens_the_real_file_only_inside_the_session() {
+        let root = std::env::temp_dir().join(format!("hangar-local-path-{}", std::process::id()));
+        let (dir, cwd) = (root.join("cofre"), root.join("repo"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(cwd.join("out")).unwrap();
+        std::fs::write(dir.join("1-a.pdf"), b"x").unwrap();
+        std::fs::write(cwd.join("out/r.pdf"), b"x").unwrap();
+        let local = super::Uploads::Local { dir: dir.clone(), cwd: std::fs::canonicalize(&cwd).unwrap(), jsonl: PathBuf::new() };
+        assert_eq!(local.local_path(&super::Source::Upload("1-a.pdf".into())), Some(std::fs::canonicalize(dir.join("1-a.pdf")).unwrap()));
+        assert_eq!(local.local_path(&super::Source::Cited("out/r.pdf".into())), Some(std::fs::canonicalize(cwd.join("out/r.pdf")).unwrap()));
+        assert_eq!(local.local_path(&super::Source::Upload("../repo/out/r.pdf".into())), None);
+        assert_eq!(local.local_path(&super::Source::Cited("../cofre/1-a.pdf".into())), None);
+        assert_eq!(super::Uploads::Remote.local_path(&super::Source::Upload("1-a.pdf".into())), None, "de outra máquina sempre copia");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

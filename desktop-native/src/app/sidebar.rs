@@ -126,7 +126,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename, Hide, Show, Reopen, Dismiss }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, Provider { label: String, request: hangar_api::session::ClaudeProviderSwitch }, DismissRename, AnotherRename, Hide, Show, Reopen, Dismiss }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -1085,6 +1085,7 @@ impl Hangar {
                 Write::Reopen => api.act(name, &["reopen"], None, false, crate::api::REOPEN_SECONDS).await,
                 Write::Dismiss => api.act(name, &["dismiss"], None, false, 15).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
+                Write::Provider { request, .. } => api.act(name, &["engine", "provider"], Some(json!(request)), false, crate::api::REOPEN_SECONDS).await,
             };
             tell.send(SidebarReply::Wrote(target, what, result)).await;
         });
@@ -1218,6 +1219,19 @@ impl Hangar {
 
     pub(super) fn confirm_engine_account(&mut self, target: Target, account: String, label: String, warn: Option<f64>, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm_account_choice(target, String::new(), Some(account), label, warn, window, cx);
+    }
+
+    pub(super) fn switch_claude_provider(&mut self, target: Target, label: String, request: hangar_api::session::ClaudeProviderSwitch, cx: &mut Context<Self>) -> bool {
+        let source = &request.source;
+        if self.sidebar.moving.contains_key(&target) || self.selected_target().as_ref() != Some(&target)
+            || !self.target_session(&target).is_some_and(|s| s.provider == "claude" && !s.read_only() && s.state == "idle"
+                && s.lifecycle_id.as_deref() == Some(source.lifecycle_id.as_str()) && s.jsonl.as_deref() == Some(source.jsonl.as_str()) && s.headless == source.headless
+                && s.engine == source.engine && s.engine_account == source.engine_account && s.engine_binding == source.engine_binding) {
+            return false;
+        }
+        self.sidebar.moving.insert(target.clone(), (std::time::Instant::now(), None));
+        self.write(target, Write::Provider { label, request }, cx);
+        true
     }
 
     fn confirm_account_choice(&mut self, target: Target, path: String, engine_account: Option<String>, label: String,
@@ -1458,7 +1472,7 @@ impl Hangar {
                 // Com status, o motivo do servidor; sem resposta, "falha na conexão". Nunca o texto de entrega de conversa, que o
                 // `failure` dá a um 5xx de POST.
                 let failed = |key: &str, error: &Failure| tr(key).replace("{n}", &Self::fetch_failure(error));
-                if matches!(what, Write::Account { .. }) {
+                if matches!(what, Write::Account { .. } | Write::Provider { .. }) {
                     if self.selected_target().as_ref() == Some(&target) {
                         // A lista que chegou durante a troca ficou de lado: agora ela decide (transcript novo ou sumiço).
                         if let Some(entry) = self.sidebar.moving.get_mut(&target) { entry.1 = Some(std::time::Instant::now()); }
@@ -1485,7 +1499,7 @@ impl Hangar {
                     _ => false,
                 };
                 let warnings = match (&what, &result) {
-                    (Write::Mode(_) | Write::Reload | Write::Account { .. }, Ok(value)) => super::controls::reopen_warnings(value),
+                    (Write::Mode(_) | Write::Reload | Write::Account { .. } | Write::Provider { .. }, Ok(value)) => super::controls::reopen_warnings(value),
                     _ => None,
                 };
                 let note = match (&what, result) {
@@ -1544,7 +1558,8 @@ impl Hangar {
                         self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
                         Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label)))
                     }
-                    (Write::Account { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
+                    (Write::Account { .. } | Write::Provider { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
+                    (Write::Provider { label, .. }, Ok(_)) => Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label))),
                     (Write::AnotherRename, result) => {
                         self.rename_suggest.again.remove(&target);
                         result.err().map(|error| Notification::error(Self::fetch_failure(&error)))

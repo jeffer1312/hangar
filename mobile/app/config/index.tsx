@@ -11,6 +11,7 @@ import { Icon, type IconName } from '../../src/ui/Icon';
 import { ownServers, useServers } from '../../src/stores/servers';
 import { useSessions } from '../../src/stores/sessions';
 import { useDocsEntry } from '../../src/features/updates/docs';
+import { useWhatsAppSeen } from '../../src/features/config/whatsappSeen';
 import * as m from '../../src/paraglide/messages';
 
 type Page = { route: string; icon: IconName; title: () => string; rows: Array<() => string> };
@@ -18,6 +19,7 @@ type Page = { route: string; icon: IconName; title: () => string; rows: Array<()
 const UPDATES = '/config/atualizacoes';
 const MANUAL = '/config/manual';
 const STATUS = '/config/status';
+const WHATSAPP = '/config/whatsapp';
 
 // Ordem e ícones do Rust (settings.rs), sem as páginas só de desktop. `rows` são os
 // títulos de linha que a busca acha, que só abre a página.
@@ -46,12 +48,17 @@ const SERVER: Page[] = [
   { route: STATUS, icon: 'ChartLine', title: m.status_title,
     rows: [m.status_days_title, m.status_machines_title, m.status_sessions_title, m.status_slow_title, m.status_host_title, m.status_outside_title] },
   { route: '/config/sync', icon: 'RefreshCw', title: m.native_settings_page_sync, rows: [] },
+  { route: '/config/convidados', icon: 'UserPlus', title: m.convidados_titulo,
+    rows: [m.convidados_adicionar, m.guests_legacy_title] },
   { route: '/config/shared-config', icon: 'Layers', title: m.shared_config_title, rows: [] },
   { route: '/config/contas', icon: 'User', title: m.native_settings_page_accounts,
     rows: [m.contas_atualizar, m.contas_secao_claude, m.contas_secao_modelos, m.contas_secao_outros] },
   { route: '/config/plugins', icon: 'PackageOpen', title: m.plugins_title,
     rows: [m.plugins_tab_installed, m.plugins_tab_discover, m.plugins_tab_marketplaces, m.plugins_check] },
   { route: '/config/cofre', icon: 'KeyRound', title: m.vault_app_title, rows: [m.vault_app_where, m.vault_app_add] },
+  { route: WHATSAPP, icon: 'MessageCircle', title: m.native_settings_page_whatsapp,
+    rows: [m.native_whatsapp_intro_title, m.native_whatsapp_risk_title, m.native_whatsapp_pair_title, m.native_whatsapp_media_title,
+      m.native_whatsapp_usage_title, m.native_whatsapp_remove] },
   { route: '/config/orchestration', icon: 'Users', title: m.native_settings_page_orchestration, rows: [] },
   { route: '/config/orchestration-history', icon: 'History', title: m.orq_history_title, rows: [] },
   { route: '/config/harnesses', icon: 'Activity', title: m.native_settings_page_harnesses, rows: [] },
@@ -86,6 +93,7 @@ export default function ConfigIndex() {
   const open = (route: string) => router.push(route as never);
   const docs = useDocsEntry(useServers((s) => s.active()));
   const device = docs.visible ? DEVICE : DEVICE.filter((p) => p.route !== UPDATES && p.route !== MANUAL);
+  const whatsappSeen = useWhatsAppSeen((s) => s.seen);
   const newBadge = docs.count === 1 ? m.updates_history_new_one() : docs.count > 1 ? m.updates_history_new_count({ n: String(docs.count) }) : undefined;
   const searching = query.trim() !== '';
   const found = searching ? search(query, device) : [];
@@ -128,7 +136,8 @@ export default function ConfigIndex() {
             badge={p.route === UPDATES ? newBadge : undefined} onPress={() => open(p.route)} />)}
           <SettingsMenuGroup title={m.native_settings_group_server()} right={<ServerPicker />} />
           {SERVER.map((p) => <SettingsMenuItem key={p.route} icon={p.icon} label={p.title()}
-            dot={p.route === STATUS ? statusDot : undefined} onPress={() => open(p.route)} />)}
+            dot={p.route === STATUS ? statusDot : undefined}
+            badge={p.route === WHATSAPP && !whatsappSeen ? m.native_settings_nav_new() : undefined} onPress={() => open(p.route)} />)}
         </View>
       )}
     </Pagina>

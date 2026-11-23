@@ -257,3 +257,204 @@ async fn login_guests_cookie_survives_child_relaunch_and_follows_parent_context(
     assert_eq!(child(root.path(),None,"issue",None).await["status"],200);
     assert_eq!(child(root.path(),None,"read",None).await["status"],401,"sem contexto o segredo é por processo");
 }
+
+mod guest_accounts {
+    //! Contas de convidado que a máquina guarda (`~/.hangar/guest-accounts.json`): criadas pelo token do
+    //! dono, sem a Sincronização ligada, e abertas pelo login de sincronização que os clientes já têm.
+    use super::*;
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use hangar_server::login_guests::{Service, Settings};
+    use serde_json::json;
+
+    const CONNECT: &str = "192.0.2.1";
+
+    fn service(home: &std::path::Path, sync_enabled: bool, rate_max: u32) -> Arc<Service> {
+        Arc::new(Service::new(Settings { guests: home.join("guests.json"), vault: home.join("sync-vault.json"),
+            runtime_config: home.join("runtime-config.json"), sync_enabled, bootstrap: "bootstrap".into(),
+            secret: b"fixture".to_vec(), secure: false, rate_max: rate_max.into(), rate_window: 300.into() }))
+    }
+
+    async fn call(service: &Arc<Service>, owner: bool, ip: &str, method: &str, path: &str, body: Option<Value>, cookie: Option<&str>) -> (u16, Value, Option<String>) {
+        let mut request = axum::http::Request::builder().method(method).uri(path).header("content-type", "application/json");
+        if let Some(cookie) = cookie { request = request.header("cookie", cookie); }
+        let raw = body.map(|b| b.to_string()).unwrap_or_default();
+        let response = service.respond(owner, ip.into(), true, request.body(axum::body::Body::from(raw)).unwrap()).await;
+        let status = response.status().as_u16();
+        let cookie = response.headers().get("set-cookie").map(|v| String::from_utf8_lossy(v.as_bytes()).split(';').next().unwrap().to_owned());
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null), cookie)
+    }
+
+    fn account(user: &str, password: Option<&str>) -> Value {
+        let mut body = json!({"user": user, "sees_owner": false, "owner_sees": true,
+            "servers": [{"server_id": "srv-casa", "label": "Casa", "base_url": "https://casa.jeff.hangar.dev.br",
+                "guest_id": "g-1", "token": "token-da-convidada", "root": "/home/jeff/projetos"}]});
+        if let Some(password) = password { body["password"] = json!(password); }
+        body
+    }
+
+    /// O que o Expo faz em `syncLogin`: prelogin, chaves, login e leitura do cofre.
+    async fn sign_in(service: &Arc<Service>, ip: &str, user: &str, password: &str) -> (u16, Option<String>, [u8; 32]) {
+        let (status, prelogin, _) = call(service, false, ip, "GET", &format!("/api/sync/prelogin?user={user}"), None, None).await;
+        assert_eq!(status, 200, "{prelogin}");
+        assert_eq!(prelogin["iterations"], 600000);
+        let salt = STANDARD.decode(prelogin["salt"].as_str().unwrap()).unwrap();
+        let keys = hangar_guest_accounts::derive_keys(password, &salt, 600000);
+        let (status, _, cookie) = call(service, false, ip, "POST", "/api/sync/login", Some(json!({"user": user, "auth_hash": keys.auth_hash})), None).await;
+        (status, cookie, keys.enc_key)
+    }
+
+    #[tokio::test]
+    async fn owner_token_creates_a_guest_that_signs_in_without_sync() {
+        let home = crate::physical_tempdir();
+        let service = service(home.path(), false, 10);
+        let (status, created, _) = call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("Lhais87.Oliveira", Some("senha-dela"))), None).await;
+        assert_eq!(status, 200, "{created}");
+        assert_eq!(created["user"], "lhais87.oliveira", "nome guardado em minúsculas");
+        assert!(!home.path().join("sync-vault.json").exists(), "o cofre antigo não é tocado");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(home.path().join("guest-accounts.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        let (status, listed, _) = call(&service, true, "127.0.0.1", "GET", "/api/guest-accounts", None, None).await;
+        assert_eq!(status, 200);
+        assert_eq!(listed, json!([{"user": "lhais87.oliveira", "sees_owner": false, "owner_sees": true, "name_taken": false,
+            "servers": [{"server_id": "srv-casa", "label": "Casa", "base_url": "https://casa.jeff.hangar.dev.br", "guest_id": "g-1", "root": "/home/jeff/projetos"}]}]));
+        assert_eq!(call(&service, false, "127.0.0.1", "GET", "/api/guest-accounts", None, None).await.0, 401, "só o dono administra");
+
+        let (status, cookie, key) = sign_in(&service, CONNECT, "Lhais87.Oliveira", "senha-dela").await;
+        assert_eq!(status, 200);
+        let cookie = cookie.expect("login grava o cookie");
+        let headers = axum::http::HeaderMap::from_iter([(axum::http::header::COOKIE, cookie.parse().unwrap())]);
+        assert!(service.sync_session_valid(&headers), "o porteiro do Connect deixa o cofre passar sem a Sincronização");
+        let (status, vault, _) = call(&service, false, CONNECT, "GET", "/api/sync/vault", None, Some(&cookie)).await;
+        assert_eq!(status, 200, "{vault}");
+        let blob: hangar_guest_accounts::Blob = serde_json::from_value(vault["enc_blob"].clone()).unwrap();
+        let plain = hangar_guest_accounts::decrypt(&key, &blob).expect("a chave do cliente abre o cofre");
+        let list: Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(list, json!([{"id": "srv-casa", "label": "Casa", "baseUrl": "https://casa.jeff.hangar.dev.br", "token": "token-da-convidada"}]));
+        assert_eq!(call(&service, false, CONNECT, "POST", "/api/sync/logout", None, None).await.0, 200);
+
+        let (status, refused, _) = call(&service, false, CONNECT, "PUT", "/api/sync/vault", Some(json!({"enc_blob": blob, "base_rev": 1})), Some(&cookie)).await;
+        assert_eq!(status, 403);
+        assert_eq!(refused["detail"]["code"], "erro_cofre_do_servidor");
+    }
+
+    #[tokio::test]
+    async fn edit_keeps_token_and_base_url_and_new_server_needs_a_token() {
+        let home = crate::physical_tempdir();
+        let service = service(home.path(), false, 10);
+        assert_eq!(call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", Some("x"))), None).await.0, 200);
+        let mut edit = account("ana.silva", None);
+        edit["servers"][0].as_object_mut().unwrap().remove("token");
+        edit["servers"][0].as_object_mut().unwrap().remove("base_url");
+        edit["servers"][0]["root"] = json!("/home/jeff/outra");
+        let (status, saved, _) = call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(edit.clone()), None).await;
+        assert_eq!(status, 200, "{saved}");
+        assert_eq!(saved["servers"][0]["base_url"], "https://casa.jeff.hangar.dev.br");
+        let (_, cookie, key) = sign_in(&service, "10.0.0.5", "ana.silva", "x").await;
+        let (_, vault, _) = call(&service, false, "10.0.0.5", "GET", "/api/sync/vault", None, cookie.as_deref()).await;
+        let blob: hangar_guest_accounts::Blob = serde_json::from_value(vault["enc_blob"].clone()).unwrap();
+        let list: Value = serde_json::from_slice(&hangar_guest_accounts::decrypt(&key, &blob).unwrap()).unwrap();
+        assert_eq!(list[0]["token"], "token-da-convidada", "a senha e o token ficam");
+
+        edit["servers"][0]["server_id"] = json!("srv-novo");
+        let (status, refused, _) = call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(edit), None).await;
+        assert_eq!(status, 400);
+        assert_eq!(refused["detail"]["code"], "erro_convidado_invalido");
+    }
+
+    #[tokio::test]
+    async fn names_need_dot_or_at_and_creation_needs_a_password() {
+        let home = crate::physical_tempdir();
+        let service = service(home.path(), false, 10);
+        for bad in ["anasilva", "ana silva.x", "ana/x.y"] {
+            let (status, body, _) = call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account(bad, Some("x"))), None).await;
+            assert_eq!(status, 400, "{bad}: {body}");
+            assert_eq!(body["detail"]["code"], "erro_convidado_invalido");
+        }
+        let (status, body, _) = call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", None)), None).await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (400, Some("erro_senha_obrigatoria")));
+        assert!(!home.path().join("guest-accounts.json").exists(), "pedido recusado não grava nada");
+    }
+
+    #[tokio::test]
+    async fn removed_guest_no_longer_signs_in() {
+        let home = crate::physical_tempdir();
+        let service = service(home.path(), false, 10);
+        assert_eq!(call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", Some("x"))), None).await.0, 200);
+        assert_eq!(call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("bia@casa", Some("y"))), None).await.0, 200);
+        let (_, cookie, _) = sign_in(&service, "10.0.0.5", "ana.silva", "x").await;
+        assert_eq!(call(&service, false, "127.0.0.1", "POST", "/api/guest-accounts/ana.silva/delete", None, None).await.0, 401);
+        assert_eq!(call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts/ana.silva/delete", None, None).await.0, 200);
+        assert_eq!(call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts/ana.silva/delete", None, None).await.0, 404);
+        assert_eq!(call(&service, false, "10.0.0.5", "GET", "/api/sync/vault", None, cookie.as_deref()).await.0, 401, "o cookie dela cai junto");
+        let (status, ..) = sign_in(&service, "10.0.0.6", "ana.silva", "x").await;
+        assert_eq!(status, 401);
+        let (_, listed, _) = call(&service, true, "127.0.0.1", "GET", "/api/guest-accounts", None, None).await;
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unknown_name_gets_a_stable_fake_salt() {
+        let home = crate::physical_tempdir();
+        let first_life = service(home.path(), false, 10);
+        assert_eq!(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=ninguem.aqui", None, None).await.0, 404,
+            "sem conta de convidado e sem Sincronização a rota continua fechada");
+        assert_eq!(call(&first_life, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", Some("x"))), None).await.0, 200);
+        let salt = |body: Value| body["salt"].as_str().unwrap().to_owned();
+        let first = salt(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=ninguem.aqui", None, None).await.1);
+        let again = salt(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=Ninguem.Aqui", None, None).await.1);
+        let other = salt(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=outro.nome", None, None).await.1);
+        let real = salt(call(&first_life, false, CONNECT, "GET", "/api/sync/prelogin?user=ana.silva", None, None).await.1);
+        assert_eq!(first, again);
+        assert_ne!(first, other);
+        assert_ne!(first, real);
+        assert_eq!(STANDARD.decode(&first).unwrap().len(), 16, "mesma forma do sal de verdade");
+        let restarted = service(home.path(), false, 10);
+        assert_eq!(salt(call(&restarted, false, CONNECT, "GET", "/api/sync/prelogin?user=ninguem.aqui", None, None).await.1), first,
+            "o segredo do arquivo mantém o sal depois de reiniciar");
+    }
+
+    #[tokio::test]
+    async fn connect_attempts_count_per_user_and_direct_ones_per_address() {
+        let home = crate::physical_tempdir();
+        let service = service(home.path(), false, 2);
+        assert_eq!(call(&service, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", Some("x"))), None).await.0, 200);
+        let wrong = |user: &'static str, ip: &'static str| {
+            let service = service.clone();
+            async move { call(&service, false, ip, "POST", "/api/sync/login", Some(json!({"user": user, "auth_hash": "errado"})), None).await.0 }
+        };
+        assert_eq!(wrong("ana.silva", CONNECT).await, 401);
+        assert_eq!(wrong("Ana.Silva", CONNECT).await, 401);
+        assert_eq!(wrong("ana.silva", CONNECT).await, 429, "o nome em qualquer caixa conta junto");
+        assert_eq!(wrong("bia@casa", CONNECT).await, 401, "pela entrada do Connect outro nome não fica preso");
+        assert_eq!(wrong("ana.silva", "10.0.0.5").await, 401);
+        assert_eq!(wrong("ana.silva", "10.0.0.5").await, 401);
+        assert_eq!(wrong("bia@casa", "10.0.0.5").await, 429, "fora do Connect o endereço conta, como antes");
+    }
+
+    #[tokio::test]
+    async fn old_sync_routes_stay_as_they_were() {
+        let home = crate::physical_tempdir();
+        let disabled = service(home.path(), false, 10);
+        assert_eq!(call(&disabled, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("ana.silva", Some("x"))), None).await.0, 200);
+        for (method, path) in [("GET", "/api/sync/guests"), ("GET", "/api/sync/status"), ("POST", "/api/sync/register")] {
+            assert_eq!(call(&disabled, true, "127.0.0.1", method, path, Some(json!({})), None).await.0, 404, "{method} {path}: desligada segue fechada");
+        }
+
+        let enabled = service(home.path(), true, 10);
+        let (status, _, _) = call(&enabled, false, "127.0.0.1", "POST", "/api/sync/register",
+            Some(json!({"user": "jeff.f", "salt": "fixture", "auth_hash": "fixture", "bootstrap": "bootstrap"})), None).await;
+        assert_eq!(status, 200, "o cadastro do dono continua no cofre antigo");
+        let (status, _, cookie) = call(&enabled, false, "127.0.0.1", "POST", "/api/sync/login", Some(json!({"user": "jeff.f", "auth_hash": "fixture"})), None).await;
+        assert_eq!(status, 200);
+        let (status, guests, _) = call(&enabled, false, "127.0.0.1", "GET", "/api/sync/guests", None, cookie.as_deref()).await;
+        assert_eq!((status, guests), (200, json!([])), "a lista antiga não mostra as contas novas");
+        let (status, refused, _) = call(&enabled, true, "127.0.0.1", "POST", "/api/guest-accounts", Some(account("Jeff.F", Some("y"))), None).await;
+        assert_eq!((status, refused["detail"]["code"].as_str()), (409, Some("erro_usuario_em_uso")), "o nome do dono do cofre antigo fica com ele");
+    }
+}

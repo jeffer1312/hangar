@@ -61,11 +61,31 @@ pub fn transcript(env: &AccountEnvironment, spec: &SessionSpec, sid: &str) -> Pa
 pub(crate) fn transcript_in(base: &Path, cwd: &str, sid: &str) -> PathBuf {
     let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(cwd)).join(format!("{sid}.jsonl"));
     if expected.exists() { return expected; }
-    let moved = std::fs::read_dir(base).into_iter().flatten().flatten()
-        .map(|dir| dir.path().join(format!("{sid}.jsonl")))
-        .filter_map(|path| path.metadata().ok().filter(|meta| meta.is_file()).and_then(|meta| meta.modified().ok()).map(|at| (at, path)))
-        .max();
-    moved.map_or(expected, |(_, path)| path)
+    moved_transcript(base, &format!("{sid}.jsonl")).ok().flatten().unwrap_or(expected)
+}
+
+pub(crate) fn moved_transcript(base: &Path, file: &str) -> std::io::Result<Option<PathBuf>> {
+    let mut newest = None;
+    let mut incomplete = None;
+    for entry in std::fs::read_dir(base)? {
+        let candidate = (|| -> std::io::Result<_> {
+            let path = entry?.path().join(file);
+            let meta = path.metadata()?;
+            if meta.is_file() { Ok(Some((meta.modified()?, path))) } else { Ok(None) }
+        })();
+        match candidate {
+            Ok(found) => newest = newest.max(found),
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {},
+            Err(error) => { incomplete.get_or_insert(error); },
+        }
+    }
+    if let Some(error) = incomplete {
+        if newest.is_none() { return Err(error); }
+        if crate::warn_limit::allow(None, "claude_projects_partial") {
+            tracing::warn!(kind=?error.kind(), "a busca de histórico foi parcial; usando a cópia legível mais recente");
+        }
+    }
+    Ok(newest.map(|(_, path)| path))
 }
 
 /// `permissions.defaultMode` do `settings.json` da conta (a do servidor sem pasta própria), como a
@@ -113,7 +133,7 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
             tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
             None
         }
-        Some(tier) if ctx.fast => Some(tier),
+        Some(tier) if ctx.fast || (tier == crate::session_open::ServiceTier::Default && matches!(spec.account, Account::Engine { binding: Some(_), .. })) => Some(tier),
         _ => None,
     };
     let resume = transcript(ctx.env, spec, sid).exists();
@@ -137,15 +157,17 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     // O modo também no `--resume`: sem a flag a CLI volta ao `defaultMode` da conta.
     claude.extend(["--permission-mode".into(), mode.name().into()]);
     let settings = meta.get("claude_settings").filter(|s| s.as_object().is_some_and(|o| !o.is_empty()));
-    if let Some(settings) = settings { claude.extend(["--settings".into(), crate::session_open::claude::settings_json(settings)]); }
+    // Com `-p` o Code Mode só vale vindo do `env` do `--settings`: no ambiente do processo a CLI o recusa.
+    let mut flag = settings.map(crate::session_open::claude::settings_value);
+    if spec.code_mode {
+        let flag = flag.get_or_insert_with(|| Value::Object(Default::default()));
+        flag["env"] = serde_json::json!({ crate::session_open::claude::CODE_MODE_ENV: "1" });
+    }
+    if let Some(flag) = flag { claude.extend(["--settings".into(), flag.to_string()]); }
     let mut program = Vec::new();
     if let Some((name, context_window)) = engine {
         program.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
-        if let Some(route) = ctx.engine_route {
-            program.extend(["--account".into(), route.account.clone()]);
-            if let Some(home) = &route.home { program.extend(["--account-home".into(), home.clone()]); }
-            program.extend(["--account-base-url".into(), route.base_url.clone()]);
-        }
+        if let Some(route) = ctx.engine_route { route.append_args(&mut program); }
         if let Some(model) = spec.model.as_deref().filter(|m| !m.is_empty()) {
             program.extend(["--model".into(), model.into()]);
             if let Some(window) = context_window { program.extend(["--context".into(), window.to_string()]); }
@@ -180,7 +202,6 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
         env.insert("CLAUDE_CONFIG_DIR".into(), dir);
     }
     if let Some(model) = &spec.subagent_model { env.insert("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.clone()); }
-    if spec.code_mode { env.insert(crate::session_open::claude::CODE_MODE_ENV.into(), "1".into()); }
     env.extend(crate::session_open::claude::jev_pairs(spec.jev, ctx.runtime_config));
     if hooks { env.insert("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS".into(), "1".into()); }
     Ok(Launch { program, env })
@@ -243,14 +264,10 @@ pub fn plan_for(env: &AccountEnvironment, bridge: Option<&PluginBridge>, spec: &
                 facts: &dyn crate::session_open::OpenFacts) -> Result<Launch, RuntimeError> {
     let config = super::codex_launch::runtime_config(env);
     let roots = crate::session_open::claude::plugin_roots(&env.home);
-    let (engine, account) = match &spec.account {
-        Account::Engine { name, account, .. } => (Some(name.as_str()), account.as_deref()),
-        _ => (None, None),
-    };
-    let route = match (engine, account) {
-        (Some(engine), Some(account)) => Some(crate::session_open::facts::fixed_account(
-            &crate::accounts::AccountService::new(env.clone()), engine, account)
-            .map_err(|error| refused("launch_engine_account", &error.msg))?),
+    let route = match &spec.account {
+        Account::Engine { name, account, binding, .. } => crate::session_open::facts::session_engine_route(
+            &crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref())
+            .map_err(|error| refused("launch_engine_account", &error.msg))?,
         _ => None,
     };
     let tier = crate::session_open::claude::relaunch_tier(spec, facts);
@@ -401,6 +418,31 @@ mod tests {
         let launch = plan(&case.spec(), &case.meta(), &ctx).unwrap();
         for key in ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CP_ENGINE"] { assert!(!launch.env.contains_key(key), "{key}"); }
         assert_eq!(launch.env.get("WAYLAND_DISPLAY").map(String::as_str), Some("wayland-1"));
+    }
+
+    /// Com `-p` o Claude Code só liga o Code Mode pela variável dentro do `env` do `--settings`; no ambiente
+    /// do processo ela é recusada (`not_passed`). Os ajustes que a sessão já leva continuam no mesmo `--settings`.
+    #[test]
+    fn code_mode_goes_in_the_settings_env_of_the_headless_launch() {
+        let case = case("create_claude_headless_then_launch");
+        let roots: [String; 0] = [];
+        let env = AccountEnvironment::from_map(case.server_env());
+        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &roots, bridge: None, engine_route: None, fast: false, display: &[] };
+        let settings_of = |code_mode: bool, meta: &Value| {
+            let mut spec = case.spec();
+            spec.code_mode = code_mode;
+            let program = plan(&spec, meta, &ctx).unwrap().program;
+            program.iter().position(|a| a == "--settings").map(|at| serde_json::from_str::<Value>(&program[at + 1]).unwrap())
+        };
+        let mut bare = case.meta();
+        bare.as_object_mut().unwrap().remove("claude_settings");
+        assert_eq!(settings_of(true, &bare), Some(json!({"env": {"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1"}})));
+        assert_eq!(settings_of(false, &bare), None, "sem Code Mode, nada de --settings");
+        let mut with_settings = case.meta();
+        with_settings["claude_settings"] = json!({"enabledPlugins": {"x@local": false}});
+        assert_eq!(settings_of(true, &with_settings),
+            Some(json!({"enabledPlugins": {"x@local": false}, "env": {"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1"}})));
+        assert_eq!(settings_of(false, &with_settings), Some(json!({"enabledPlugins": {"x@local": false}})));
     }
 
     #[test]

@@ -806,8 +806,10 @@ async fn task3_f03_verified_raw_rows_authorize_old_and_active_files_without_a_vi
     let resolved = c.post(format!("http://{}/api/sessions/fixture/files/resolver", h.f.addr)).bearer_auth(OWNER)
         .json(&json!({"caminhos":["historical-report.md"]})).send().await.unwrap();
     assert_eq!(resolved.status(), 200);
+    let mtime = std::fs::metadata(h.old.join("historical-report.md")).unwrap().modified().unwrap()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     assert_eq!(resolved.json::<Value>().await.unwrap(), json!({"faltam":[],"ok":{"historical-report.md":{
-        "relativo":null,"real":h.old.join("historical-report.md")}}}));
+        "relativo":null,"real":h.old.join("historical-report.md"),"size":8,"mtime":mtime}}}));
     let save = c.post(h.url("file/text", "historical-report.md")).bearer_auth(OWNER)
         .json(&json!({"path":"historical-report.md","text":"alterado","digest":ORIGINAL_DIGEST})).send().await.unwrap();
     assert_eq!(save.status(), 200);

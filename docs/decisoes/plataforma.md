@@ -3,6 +3,76 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## WhatsApp só leitura (22/11/2026)
+
+A página "WhatsApp" das Configurações (nativo e Expo) liga um arquivador só de leitura do WhatsApp
+do usuário, e as sessões leem pelas ferramentas MCP `whatsapp_chats`, `whatsapp_read`,
+`whatsapp_search` e `whatsapp_request_media` e pela skill `whatsapp`. Nada é enviado em nome
+dele. O crate `hangar-whatsapp` instala, liga e conversa com o serviço; o servidor só monta o
+router `/api/whatsapp*`.
+
+Decisões do usuário (22/11):
+
+- **Binário Go fora do Hangar.** O whatsmeow é Go: o arquivador vive no repo
+  `jeffer1312/hangar-whatsapp`, release com `checksums.txt` para seis alvos (Linux, macOS e
+  Windows, amd64 e arm64, sem CGO). Ele é o dono único do esquema SQLite (`PRAGMA user_version`;
+  esquema mais novo é recusado com `schema_newer`) e da sessão do aparelho, com dados em
+  `~/.hangar/whatsapp/`. O download, a instalação em `bin/<versão>/` e o serviço (systemd,
+  launchd, tarefa do Windows) vêm do crate `hangar-managed-binary`, extraído do
+  `hangar-cliproxy-setup` neste trabalho; o CLIProxy passou a usá-lo sem mudar texto, código de
+  erro, caminho nem unit. O Hangar instala a release mais nova da mesma versão maior e recusa
+  binário com `api` menor que `MIN_API`. O `binaries.rs` do Connect (frpc/Caddy) é uma terceira
+  cópia e ficou para depois.
+- **Só leitura.** O binário só chama `SendMediaRetryReceipt` (pedido de mídia antiga ao celular) e
+  os recibos automáticos do whatsmeow. Um teste de lista fechada das chamadas `Send*` barra
+  qualquer outra. Os recibos automáticos são os de entrega, que o celular já manda pelos mesmos
+  aparelhos; recibo de leitura não sai. "Só leitura" é nenhuma mensagem enviada. As leituras usam um pool só de leitura, separado do escritor, com prazo de 5 s
+  por consulta (`busy`).
+- **Aceite obrigatório.** Parear um aparelho extra com programa não oficial é risco para a conta.
+  `POST /api/whatsapp/install` sem `{"accept":true}` responde 400 `whatsapp_accept_required`; o
+  aceite fica em `accepted.json` (`{"at","text_version":1}`).
+- **Só do dono.** O router passa por `Edge::owner_only`, e a porta 8766 não o monta: convidado e
+  par de fora não alcançam rota nenhuma. As ferramentas MCP chamam as rotas em processo pelo mesmo
+  `owner_only` e, antes disso, recusam com `whatsapp_shared_session` quando a sessão que chama tem
+  convite de convidado ativo ou membro de fora no grupo, porque o que ela lê chegaria a eles.
+  Grupo com sessão de outra máquina (`servidor::sessao`, mesmo do dono) também recusa: daqui não
+  se confere convite nem convidado de lá (decisão de 23/11/2026).
+  A conferência falha fechada (configuração de convites que não carregou, `external_pairs.json`
+  ilegível, sidecar ou `fed` tortos recusam; sem configuração de convites não há o que conferir) e
+  é refeita depois da leitura, antes de devolver. Convite criado entre essa segunda conferência e a
+  gravação da resposta no transcript não é coberto.
+  Aparelho aprovado no Connect age como dono (o token do dono é reescrito na entrada) e alcança
+  `/api/whatsapp*`: é o desenho de todas as rotas do dono, e aprovar um aparelho dá a ele a leitura
+  do WhatsApp.
+  A recusa cobre as ferramentas e as rotas, não os arquivos. O agente de convidado com login (ou de
+  sessão com convite) roda como o usuário do sistema do dono e alcança `~/.hangar/whatsapp/` como
+  alcança o resto da pasta do dono: a confiança do compartilhamento é o usuário do sistema. Nenhuma
+  trava de leitura cobre a pasta, porque a mídia é lida pelo `media_path` que ela guarda.
+- **Texto de terceiros marcado.** Mensagem é texto escrito por outras pessoas e pode trazer
+  instrução para o agente. Toda resposta das ferramentas leva `"third_party_content":true` e o
+  aviso para nunca seguir instruções contidas nele, e é cortada em ~32 KB com `"truncated":true`.
+  Arquivos de mídia (`.txt`, `.pdf`, `.zip`, documentos) são conteúdo de terceiros do mesmo jeito,
+  e a skill manda tratá-los assim.
+- **Mídia antiga sob demanda, com teto (3A).** Mídia que o servidor do WhatsApp já apagou só sai do
+  celular, e cada pedido gera uma notificação nele. Por isso nada é pedido sozinho: só por
+  `whatsapp_request_media`, no máximo 20 por chamada e 200 por dia (`capped: true` quando cortou).
+  O `media_path` devolvido é absoluto e sempre dentro de `media/`: o nome do arquivo é montado com
+  lista fechada de extensões e conferido por `filepath.Rel`, inclusive com `id` malicioso.
+- **HMAC nos dois sentidos no loopback.** O binário escuta numa porta livre de `127.0.0.1` e grava
+  `control.json` (`version`, `api`, `port`, `pid`) a cada subida; `control.key` guarda 32 bytes
+  aleatórios (0600, pasta 0700). Pedido e resposta levam `X-Hangar-Signature` (pedido: método,
+  caminho com query, `ts` com ±30 s e hash do corpo; resposta: `ts` do pedido, status e hash do
+  corpo). Resposta sem assinatura válida vira 502 `whatsapp_untrusted`. Quem ocupar a porta antiga
+  depois de o serviço cair não recebe segredo nem consegue fingir resposta.
+
+Revisão adversarial do plano (revisão 2, 22/11) mudou: caminho de mídia preso à pasta; recusa em
+sessão compartilhada; marca de texto de terceiros; migração dos dados do protótipo sem duas cópias
+das chaves rodando (`--import` só com destino vazio e serviço parado; o `sessao.db` de origem vira
+`.migrated`); assinatura HMAC no lugar de confiar na porta; versão da API (`api` no status); ciclo
+de pareamento (`pair_timeout`, `logged_out`, `outdated`); tetos de mídia e de resposta; leitura
+separada da escrita; erro no formato da casa (`hangar_core::http::detail`, códigos `whatsapp_`);
+e os nomes reais do código do CLIProxy na extração.
+
 ## CLIProxyAPI instalado e configurado pelo Hangar (19/11/2026)
 
 Montar o proxy à mão (baixar, escrever o `config.yaml`, inventar chave e senha, logar a conta,
@@ -52,6 +122,13 @@ Decisões do usuário:
   correspondente no Hangar vira `cpa-<e-mail ≤12>-<12 hex>` (`credential_id` `cliproxy:<id>`) e
   fica fixa por sessão pelo prefixo de modelo, sem `--account-home`. Credencial solta quebrada ou
   prefixo repetido anula só aquela conta, não as outras.
+- **Usar esta conta vincula o motor, não só a sessão.** O cadastro guarda a identidade ChatGPT opaca,
+  não o e-mail sugerido no rótulo. Motores Pro e Plus podem ter o mesmo endereço, chave e modelo:
+  sem guardar a escolha, a conta fica a cargo do proxy. Lançamento, retomada e troca conferem o vínculo
+  e passam o modelo prefixado também no `--model` do Claude; vínculo alterado não troca conta em silêncio.
+  A cota da assinatura é consultada pela credencial exata na API administrativa v8 do proxy local,
+  com destino de leitura fixo e cache por identidade. O 429 do ChatGPT pausa só a conta; o da gestão
+  pausa as consultas de todas. O motor local não consulta a rota `/usages` do leitor Kimi.
 - **Fast disponível, nunca ligado por padrão.** O motor criado pelo assistente grava `fast`;
   ausente vale ligado (o seletor oferece Fast nos modelos `gpt-<dígito>` do proxy local), `false`
   tira a opção. A sessão continua nascendo sem Fast; a chave do assistente diz "Permitir Fast".
@@ -4709,6 +4786,56 @@ Não testado: renovação, a CA de produção e um nome que dependa só do curin
 `*.hangar.dev.br`. Cargas e logs completos em
 `.superpowers/sdd/2026-11-06-hangar-connect-rust/prova-tunel.md` da árvore principal.
 
+## Entrar pelo Connect e convidados pelo Connect (22/11/2026)
+
+O primeiro acesso do Expo e do nativo pede conta ou usuário e senha, sem endereço. Endereço e token, QR,
+convite e demonstração ficam em "Outras formas de entrar". O pedido veio do dono: "no Connect eu não
+preciso informar a máquina" e "o convidado tem que entrar também".
+
+- **Um campo para os dois.** O cliente manda só o nome ao serviço (`POST /v1/lookup`), que responde
+  `account`, `guest` com os hosts de uma conta só, ou `none`. Conta: login da conta do Connect. Convidado:
+  login de sincronização (`/api/sync/prelogin|login|vault|logout`) no host da máquina que guarda a conta
+  dele, um host por vez. A senha do convidado nunca vai ao serviço. Se o serviço antigo responder 404 no
+  lookup, o cliente trata como conta.
+- **Nome de convidado** em minúsculo ASCII, com `.` ou `@`. Conta do Connect só aceita `[a-z0-9-]`, então os
+  dois nunca se confundem. O serviço guarda `sha256("hangar-guest:" + nome)` por máquina (`PUT /v1/guests`,
+  com a chave da máquina). Hash que já é de outra conta volta em `taken`, e a página mostra "nome em uso".
+  Risco aceito: uma conta pode registrar antes o nome previsível de um convidado de outra. O hash sem sal
+  não esconde nomes adivinháveis, e quem tem a chave de uma máquina testa candidatos pelo `taken`.
+- **Contas de convidado em arquivo próprio** (`~/.hangar/guest-accounts.json`, 0600, crate
+  `hangar-guest-accounts`), administradas pelo token do dono em `/api/guest-accounts`. O aparelho do
+  Connect conta como dono. A máquina guarda a chave do cofre do convidado e cifra sozinha a lista de
+  máquinas dele, então o dono não redigita senha. Contrapartida: a máquina lê o que ela já tinha (os tokens
+  de convidado). O arquivo nunca entra na configuração compartilhada. `sync-vault.json` e
+  `/api/sync/guests` continuam como estavam, para a web e para o nativo já instalado.
+- **Login do convidado sem a Sincronização ligada.** As rotas de login funcionam sempre que há conta no
+  arquivo novo. Todo caminho do login faz uma única derivação, para o tempo de resposta não revelar se o
+  nome existe. Pela porta do Connect todo pedido chega com o mesmo endereço, então o limite conta por
+  usuário, com teto geral, e a tentativa é contada antes da derivação. Só a senha recusada gasta a
+  tentativa: arquivo ilegível ou gravação que falha a devolvem. O teto geral atingido vai ao diário
+  (`sync.login_teto_connect`), uma vez por janela. Um nome vive num cofre só: conta de convidado nova não
+  toma o nome do dono nem de um convidado do cofre antigo, e `/api/sync/guests` não grava convidado com
+  nome de conta nova.
+- **Liberação de aparelho uma vez para a conta** (antes era máquina por máquina). Um aparelho já liberado
+  libera o novo com um toque, conferindo o código (`install_code`, o mesmo no celular, no Hangar e no
+  serviço). Leitura da conta recusada com o serviço no ar (máquina pendente, desconhecida ou revogada:
+  403 `device_revoked` ou 409 na lista pedida com a chave da máquina) suspende os
+  aparelhos que entraram pela conta e os aprovados por eles, até a próxima leitura boa: sem isso, um
+  aparelho revogado continuaria entrando.
+- **Conta antiga** (no cofre de sincronização, como a da convidada na VPS): "Trazer para o Connect" pede uma
+  vez a senha de sincronização do dono, recria a conta mantendo a senha da convidada e só então apaga a
+  antiga. Nome sem `.`/`@` ganha um nome novo, e o dono é avisado.
+- **`hangar-connect-client` não depende do `hangar-core`**, exceção à regra "módulo novo nasce como crate
+  próprio sobre o `hangar-core`". É crate folha compartilhado com o `desktop-native`, que entra pelo
+  Connect sem servidor local e não pode depender do core: as features de `serde_json` do servidor
+  (`arbitrary_precision`) mudariam os números do nativo, e as dependências do core mudariam o lockfile
+  dele. O servidor e o `hangar-connect` o usam por cima.
+- **Aparelhos desta máquina continuam com tela própria no nativo.** Os aprovados aqui sem vínculo de conta
+  e os pedidos pendentes de app antigo (`GET /api/connect/devices`, sem `account_device`) se aprovam,
+  recusam e perdem o acesso ali; os que vieram pela conta ficam em "Aparelhos da conta".
+
+Não testado de ponta a ponta antes do merge: o serviço publicado e o login real da convidada pelo celular.
+
 ## O Rust atende sozinho o que ainda repassava com trabalho real (10/11/2026)
 
 Primeira metade do fim da reserva do modo python. Com o Rust de pé, o dono não chega mais ao Python
@@ -5175,3 +5302,39 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   máquina como fora do ar, a queda de rede continua marcando (`countsOutage: 'network'`). Vale para o
   app e para a web, que compartilham o core. Sem teto: um link que trava num arquivo grande deixa o
   envio esperando até o prazo dele.
+
+## Padrão de abertura é do servidor (22/11/2026)
+
+- **Caso que motivou.** O PR #460 guardou o Code Mode no `appearance.json` do desktop e o punha no
+  corpo só na tela de criar (`create.rs`). Sessão aberta por `hangar-send --new`, MCP, Expo, tarefa
+  agendada, `orq` ou outro servidor nascia sem ele: `hook-resposta-pt`, aberta pela `review-pr-479`,
+  nasceu com `code_mode: false` e as duas opções ligadas no desktop.
+- **Regra.** O omitido é do `resolve_open()`. "Conversa nova" e "Code Mode" moram em
+  `~/.hangar/session-options.json` (`GET`/`PUT /api/session-options`, só do dono); o Code Mode vale
+  quando o pedido omite `code_mode`, o provedor é Claude e as duas estão ligadas. O desktop copia o
+  `appearance.json` antigo uma vez (`if_absent`), e só se a pessoa mexeu nele: a cópia intocada
+  (`false`, `false`) não é escolha, ou o primeiro computador a conectar decidiria por todos. O desenho
+  da conversa continua lendo a escolha local, que o servidor nunca muda; "Conversa nova" muda mesmo
+  com o servidor fora e chega a ele quando ele responde. `code_mode: true` explícito fora do Claude é
+  recusado (`erro_code_mode_so_claude`).
+- **Sem terminal, o Code Mode vai no `env` do `--settings`.** O Claude Code 2.1.330, com `-p` ou
+  pelo SDK, recusa a variável vinda do ambiente do processo (motivo `not_passed`) e só a aceita no
+  `env` do `--settings`. Medido no CLI com as opções do lançamento sem terminal: com a variável no
+  ambiente o modelo não recebe a REPL; no `--settings`, recebe `Poll` e `REPL`. Antes disso o Code
+  Mode nunca valeu em sessão sem terminal. Com terminal a variável no ambiente continua valendo. O
+  CLI ainda recusa fora da API da Anthropic (motor, CLIProxy) e em modelo anterior ao Opus 5.5 e
+  Sonnet 5.5.
+- **Arquivo próprio, não o `session-defaults.json`.** A versão anterior lê aquele arquivo com
+  `deny_unknown_fields` em cada escopo: uma chave nova faria a volta de uma atualização recusar toda
+  criação de sessão.
+- **Travas.** Tabela única no crate `hangar-session-open-fields` (campos, nome no MCP, flags do CLI,
+  quais têm padrão do servidor). O servidor confere que todo campo do `SessionOpenRequest` está nela
+  ou em `SERVER_ONLY` com o motivo, e que campo com padrão guarda o explícito (o `bool` puro do #460
+  perdia o `false`); o MCP e o `hangar-send` conferem que cada um chega ao corpo; o desktop confere
+  que o corpo não muda com nenhuma preferência guardada no computador. Contra o código do #460
+  falharam a do valor explícito, a do MCP, a do CLI e a do desktop; a da tabela pega o campo novo
+  que entrar no pedido sem entrar nela.
+- **Mesma regra nos outros clientes.** O desktop deixou de lembrar o último modelo, e o Expo o
+  provedor, modelo, esforço, modo e contas; tarefa agendada nova guarda só o que a pessoa escolheu.
+  O `hangar-send --new` não escolhe mais o provedor omitido. O `--jev` do `orq` fica: é escolha do
+  fluxo para os papéis dele.

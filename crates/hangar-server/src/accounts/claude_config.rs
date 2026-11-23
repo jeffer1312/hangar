@@ -1,5 +1,6 @@
 //! A conta Claude do Hangar (`~/.claude-<nome>`) alinhada ao `~/.claude`: atalho de cada arquivo
-//! compartilhado, cópia espelhada do `settings.json`, espelho dos `mcpServers` do `~/.claude.json`,
+//! compartilhado, cópia espelhada do `settings.json`, espelho dos `mcpServers` do `.claude.json` que a
+//! conta padrão lê (`principal`; sem ele, nada),
 //! atalho da memória de cada projeto, conferência dos plugins e a gaveta `.drift` para o que diverge.
 //! Relê o disco a cada chamada; as travas são por chamada. O comando `hangar-server conta` é a borda
 //! que os wrappers de shell (`hangar-conta`, `claude-conta`) chamam.
@@ -482,22 +483,24 @@ pub fn is_account(dir: &Path) -> bool {
 }
 
 /// `contas.reconciliar` sob a guarda que quem chama já segura: confere a conta e pega as travas.
-pub fn reconcile_account(home: &Path, name: &str, project: Option<&str>, wait: Wait) -> Outcome {
+/// `principal` é o `.claude.json` que a conta padrão lê (`AccountEnvironment::known_default_claude_json`):
+/// a fonte dos `mcpServers` que o espelho leva às contas; `None` (quem chama não sabe qual é) não espelha.
+pub fn reconcile_account(home: &Path, principal: Option<&Path>, name: &str, project: Option<&str>, wait: Wait) -> Outcome {
     match account_dir(home, name) {
-        Ok(dir) => reconcile_dir(home, &dir, project, wait),
+        Ok(dir) => reconcile_dir(home, principal, &dir, project, wait),
         Err(error) => Outcome::failed(error),
     }
 }
 
 /// A conta na pasta dada, que pode estar fora do HOME (as do `CP_CLAUDE_CONFIG_DIRS`).
-pub fn reconcile_dir(home: &Path, dir: &Path, project: Option<&str>, wait: Wait) -> Outcome {
+pub fn reconcile_dir(home: &Path, principal: Option<&Path>, dir: &Path, project: Option<&str>, wait: Wait) -> Outcome {
     if !is_account(dir) { return Outcome::failed(refused(format!("{} não é uma conta criada pelo hangar", dir.display()))); }
-    reconcile_locked(home, dir, project, CLAUDE_MARKER, wait)
+    reconcile_locked(home, principal, dir, project, CLAUDE_MARKER, wait)
 }
 
 /// Trava compartilhada (duas contas devolvendo o mesmo arquivo ao `~/.claude`) e depois a da conta
 /// (no seed, a da pendência), sempre nessa ordem; soltas ao sair, também em erro.
-pub fn reconcile_locked(home: &Path, dir: &Path, project: Option<&str>, lock_name: &str, wait: Wait) -> Outcome {
+pub fn reconcile_locked(home: &Path, principal: Option<&Path>, dir: &Path, project: Option<&str>, lock_name: &str, wait: Wait) -> Outcome {
     let take = |path: &Path, create: bool| -> std::result::Result<Held, Outcome> {
         let deadline = match wait { Wait::Each(each) => Instant::now() + each, Wait::Within { deadline, .. } => deadline };
         match lock(path, create, deadline) {
@@ -513,15 +516,15 @@ pub fn reconcile_locked(home: &Path, dir: &Path, project: Option<&str>, lock_nam
     let _shared = match take(&home.join(".hangar-contas.lock"), true) { Ok(held) => held, Err(outcome) => return outcome };
     let _own = match take(&dir.join(lock_name), false) { Ok(held) => held, Err(outcome) => return outcome };
     if let Wait::Within { limit, deadline } = wait && Instant::now() >= deadline { return late_outcome(limit); }
-    reconcile(home, dir, project)
+    reconcile(home, principal, dir, project)
 }
 
 /// O corpo, sem travas: quem chama já as segura.
-pub fn reconcile(home: &Path, dir: &Path, project: Option<&str>) -> Outcome {
+pub fn reconcile(home: &Path, principal: Option<&Path>, dir: &Path, project: Option<&str>) -> Outcome {
     let op = crate::mods::state::random_hex(8);
     let started = Instant::now();
     let mut diary = vec![event("conta.reconciliar.inicio", "ok", &op)];
-    let result = steps(home, dir, project, &op, &mut diary);
+    let result = steps(home, principal, dir, project, &op, &mut diary);
     let mut end = event("conta.reconciliar.fim", if result.is_ok() { "ok" } else { "erro" }, &op);
     end["codigo"] = json!(if result.is_ok() { "retornou" } else { "excecao" });
     end["ms"] = json!(started.elapsed().as_millis() as u64);
@@ -557,7 +560,7 @@ fn memory_drawer_name(project: &str) -> String {
     format!("memory-{}-{hash}", &project[..cut])
 }
 
-fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut Vec<Value>) -> Result<Vec<String>> {
+fn steps(home: &Path, principal: Option<&Path>, dir: &Path, project: Option<&str>, op: &str, diary: &mut Vec<Value>) -> Result<Vec<String>> {
     // O projeto entra em caminho: absoluto, `..` ou barra escapariam de `~/.claude/projects`.
     if let Some(project) = project
         && (project.is_empty() || !project.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')) {
@@ -610,7 +613,7 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
     warnings.extend(registry_warnings.into_iter().filter(|w| !(reported && w.starts_with(&unread))));
     warnings.extend(checked);
     log_stage(diary, "espelhar_config", false);
-    warnings.extend(mirror_claude_json(home, dir)?);
+    warnings.extend(mirror_claude_json(home, principal, dir)?);
     // Atalho para o que sumiu do compartilhado, e qualquer outro link morto no topo.
     for entry in fs::read_dir(dir).at(dir)? {
         let entry = entry.at(dir)?;
@@ -903,13 +906,18 @@ fn mcp_plan(principal: &Map<String, Value>, copy: &Map<String, Value>) -> Option
     (!py_eq_map(&merged, ours)).then_some((merged, undone))
 }
 
-/// Só os `mcpServers` do `~/.claude.json` chegam à conta: o resto do arquivo (oauthAccount, projetos)
-/// é estado do CLI dela.
-fn mirror_claude_json(home: &Path, dir: &Path) -> Result<Option<String>> {
-    let failed = |e: String| refused(format!("não consegui espelhar o ~/.claude.json pra conta: {e}"));
-    let not_object = || refused("~/.claude.json não é um objeto JSON — não dá pra espelhar pra conta");
+/// Só os `mcpServers` do `.claude.json` da conta padrão (`principal`) chegam à conta: o resto do arquivo
+/// (oauthAccount, projetos) é estado do CLI dela.
+fn mirror_claude_json(home: &Path, principal: Option<&Path>, dir: &Path) -> Result<Option<String>> {
+    let Some(principal) = principal else { return Ok(None) };
+    let label = principal_label(home, principal);
+    let failed = |e: String| refused(format!("não consegui espelhar o {label} pra conta: {e}"));
+    let not_object = || refused(format!("{label} não é um objeto JSON — não dá pra espelhar pra conta"));
     let destination = dir.join(".claude.json");
-    let Some(principal) = read_claude_json(&home.join(".claude.json")).map_err(failed)? else { return Ok(None) };
+    // A variável do servidor pode ser a pasta desta conta: o arquivo já é a fonte, e regravá-lo com uma
+    // leitura velha desfaria o que o CLI gravou no meio.
+    if hangar_core::fs::same_file(principal, &destination) { return Ok(None); }
+    let Some(principal) = read_claude_json(principal).map_err(failed)? else { return Ok(None) };
     let Some(copy) = read_claude_json(&destination).map_err(failed)? else { return Ok(None) };
     let (Value::Object(principal), Value::Object(copy)) = (principal, copy) else { return Err(not_object()) };
     if mcp_plan(&principal, &copy).is_none() { return Ok(None); }
@@ -1096,21 +1104,29 @@ fn shared_plugin_path(home: &Path, plugins: &Path, path: &Path) -> Option<PathBu
 /// O preparo da pasta pendente da criação: `~/.claude` garantido, o `.claude.json` do principal sem o
 /// `oauthAccount` (as permissões e os MCP ficam, o login não), `projects/` e a reconciliação sob a
 /// trava da pendência, o único arquivo que existe antes da publicação.
-pub fn seed(home: &Path, dir: &Path) -> Outcome {
-    match prepare_pending(home, dir) {
-        Ok(()) => reconcile_locked(home, dir, None, PENDING, Wait::Each(LOCK_WAIT)),
+pub fn seed(home: &Path, principal: Option<&Path>, dir: &Path) -> Outcome {
+    // Sem saber a conta padrão, a semente é o `~/.claude.json`; o espelho do servidor corrige depois.
+    let seed_from = principal.map_or_else(|| home.join(".claude.json"), Path::to_owned);
+    match prepare_pending(home, &seed_from, dir) {
+        Ok(()) => reconcile_locked(home, principal, dir, None, PENDING, Wait::Each(LOCK_WAIT)),
         Err(error) => Outcome::failed(error),
     }
 }
 
-fn prepare_pending(home: &Path, dir: &Path) -> Result<()> {
+/// Como o `.claude.json` da conta padrão aparece nas mensagens: `~/.claude.json` quando é ele.
+fn principal_label(home: &Path, principal: &Path) -> String {
+    if principal == home.join(".claude.json") { "~/.claude.json".into() } else { principal.display().to_string() }
+}
+
+fn prepare_pending(home: &Path, principal: &Path, dir: &Path) -> Result<()> {
+    let label = principal_label(home, principal);
     let shared = home.join(".claude");
     fs::create_dir_all(&shared).at(&shared)?;
-    let mut data = match read_claude_json(&home.join(".claude.json")) {
+    let mut data = match read_claude_json(principal) {
         Ok(None) => Map::new(),
         Ok(Some(Value::Object(data))) => data,
-        Ok(Some(_)) => return Err(refused("o ~/.claude.json não é um objeto JSON — não dá pra semear a conta")),
-        Err(e) => return Err(refused(format!("não consegui ler o ~/.claude.json pra semear a conta: {e}"))),
+        Ok(Some(_)) => return Err(refused(format!("o {label} não é um objeto JSON — não dá pra semear a conta"))),
+        Err(e) => return Err(refused(format!("não consegui ler o {label} pra semear a conta: {e}"))),
     };
     data.shift_remove("oauthAccount");
     let copy = dir.join(".claude.json");
@@ -1182,7 +1198,8 @@ fn prep(env: &AccountEnvironment, name: &str, project: Option<&str>, out: &mut d
         Err(error) => return refusal(err, &error),
     };
     let outcome = match guard(&env.home, &dir) {
-        Ok(_guard) => reconcile_account(&env.home, name, project, Wait::Each(LOCK_WAIT)),
+        // Sem espelho: o ambiente do shell pode não ser o do servidor, e as duas fontes se alternariam nas contas.
+        Ok(_guard) => reconcile_account(&env.home, None, name, project, Wait::Each(LOCK_WAIT)),
         Err(error) => return refusal(err, &error),
     };
     write_cli_diary(env, &outcome.diary);
@@ -1199,7 +1216,7 @@ fn prep(env: &AccountEnvironment, name: &str, project: Option<&str>, out: &mut d
 fn new(env: &AccountEnvironment, name: &str, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let mut seeded: Option<Outcome> = None;
     let created = AccountService::new(env.clone()).create(Provider::Claude, name, |path| {
-        let outcome = seed(&env.home, path);
+        let outcome = seed(&env.home, env.known_default_claude_json().as_deref(), path);
         let failed = outcome.result.as_ref().err()
             .map(|e| super::catalog::AccountError::new(500, "account_prepare_failed", e.to_string(), json!({})));
         seeded = Some(outcome);
@@ -1403,12 +1420,49 @@ mod tests {
         }
         let taken = || REPLACED_READS.with(|reads| std::mem::take(&mut *reads.borrow_mut()).into_iter().collect::<std::collections::BTreeSet<_>>());
         taken();
-        assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
+        assert!(reconcile(home, Some(home.join(".claude.json").as_path()), &home.join(".claude-conta2"), None).result.is_ok());
         assert_eq!(taken(), [home.join(".claude.json"), home.join(".claude-conta2/.claude.json")].into());
         let pending = home.join(".claude-nova");
         fs::create_dir(&pending).unwrap();
-        prepare_pending(home, &pending).unwrap();
+        prepare_pending(home, &home.join(".claude.json"), &pending).unwrap();
         assert_eq!(taken(), [home.join(".claude.json")].into(), "a semeadura lê o ~/.claude.json pela mesma");
+    }
+
+    /// O espelho leva às contas os MCP do `.claude.json` que a conta padrão lê: com `CLAUDE_CONFIG_DIR` no
+    /// servidor é o de dentro da pasta, não o `~/.claude.json`.
+    #[test]
+    fn the_mirror_reads_the_file_the_default_account_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        for (path, text) in [(".claude.json", r#"{"mcpServers": {"velho": {"command": "v"}}}"#),
+            (".claude/.claude.json", r#"{"mcpServers": {"atual": {"command": "a"}}}"#),
+            (".claude-conta2/.hangar-conta", ""), (".claude-conta2/.claude.json", "{}")] {
+            fs::create_dir_all(home.join(path).parent().unwrap()).unwrap();
+            fs::write(home.join(path), text).unwrap();
+        }
+        let copy = || -> Value { serde_json::from_str(&fs::read_to_string(home.join(".claude-conta2/.claude.json")).unwrap()).unwrap() };
+        assert!(reconcile(home, None, &home.join(".claude-conta2"), None).result.is_ok());
+        assert_eq!(copy(), json!({}), "sem saber a conta padrão, nada é espelhado");
+        assert!(reconcile(home, Some(home.join(".claude/.claude.json").as_path()), &home.join(".claude-conta2"), None).result.is_ok());
+        assert_eq!(copy()["mcpServers"], json!({"atual": {"command": "a"}}));
+    }
+
+    /// O `--prep` de terminal não espelha: o ambiente do shell pode não ser o do servidor, e as duas
+    /// fontes se alternariam nas contas.
+    #[test]
+    fn the_terminal_prep_does_not_mirror() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        for (path, text) in [(".claude.json", r#"{"mcpServers": {"velho": {"command": "v"}}}"#),
+            (".claude-conta2/.hangar-conta", ""), (".claude-conta2/.claude.json", "{}")] {
+            fs::create_dir_all(home.join(path).parent().unwrap()).unwrap();
+            fs::write(home.join(path), text).unwrap();
+        }
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let env = AccountEnvironment::from_pairs([("HOME", home.to_string_lossy().into_owned())]);
+        assert_eq!(prep(&env, "conta2", None, &mut Vec::new(), &mut Vec::new()), 0);
+        let copy: Value = serde_json::from_str(&fs::read_to_string(home.join(".claude-conta2/.claude.json")).unwrap()).unwrap();
+        assert_eq!(copy, json!({}));
     }
 
     /// A recém-movida fica mesmo mais velha que as irmãs; na entrada seguinte, a cópia com o mtime antigo
@@ -1454,7 +1508,7 @@ mod tests {
             {{"installPath": "{h}/.claude-conta2/plugins/cache/m/p/1"}},
             {{"installPath": "/outro/lugar/plugins/cache/m/p/1"}}]}}}}"#)).unwrap();
         fs::write(&known, format!(r#"{{"m": {{"installLocation": "{h}/.claude-apagada/plugins/marketplaces/m"}}}}"#)).unwrap();
-        assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
+        assert!(reconcile(home, Some(home.join(".claude.json").as_path()), &home.join(".claude-conta2"), None).result.is_ok());
         let read = |path: &Path| serde_json::from_str::<Value>(&fs::read_to_string(path).unwrap()).unwrap();
         let paths: Vec<_> = read(&installed)["plugins"]["p@m"].as_array().unwrap().iter().map(|e| e["installPath"].as_str().unwrap().to_owned()).collect();
         assert_eq!(paths, [format!("{h}/.claude/plugins/cache/m/p/1"), format!("{h}/.claude/plugins/cache/m/p/2"),
@@ -1463,7 +1517,7 @@ mod tests {
         assert_eq!(read(&known)["m"]["installLocation"], format!("{h}/.claude/plugins/marketplaces/m"));
         let untouched = r#"{"version":2,"plugins":{}}"#;
         fs::write(&installed, untouched).unwrap();
-        assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
+        assert!(reconcile(home, Some(home.join(".claude.json").as_path()), &home.join(".claude-conta2"), None).result.is_ok());
         assert_eq!(fs::read_to_string(&installed).unwrap(), untouched, "sem caminho de conta o arquivo não é regravado");
         fs::write(&known, "{").unwrap();
         let warnings = share_plugin_registry(home);

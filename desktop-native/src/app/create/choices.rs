@@ -182,18 +182,15 @@ fn creation_tier(tier: Option<&str>, available: bool, ultrafast: bool, fresh: bo
     tier.filter(|tier| available && fresh && (matches!(*tier, "default" | "priority") || (*tier == "ultrafast" && ultrafast)))
 }
 
-fn model_memory_key(server: &str, provider: &str, account: &str, engine: &str, engine_account: &str) -> String {
-    let who = if provider == "codex" { account } else if engine.is_empty() { "-" } else { engine };
-    let key = format!("cp_last_model:{server}:{provider}:{who}");
-    if provider == "claude" && !engine_account.is_empty() { format!("{key}:account:{engine_account}") } else { key }
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct Motor {
     label: Option<String>,
     #[serde(default)] model: String,
     cliproxy_accounts: Option<Vec<crate::api::dto::CliProxyAccount>>,
     cliproxy_error: Option<String>,
+    cliproxy_binding: Option<String>,
+    cliproxy_bound_account: Option<crate::api::dto::CliProxyAccount>,
+    cliproxy_binding_error: Option<String>,
 }
 
 fn eligible_engine_account(account: &crate::api::dto::CliProxyAccount) -> bool {
@@ -207,8 +204,11 @@ fn choose_engine_account<'a>(accounts: &'a [crate::api::dto::CliProxyAccount], s
 }
 
 fn engine_account_ready(motor: &Motor, account: &str) -> bool {
-    motor.cliproxy_error.is_none() && motor.cliproxy_accounts.as_ref().is_none_or(|list|
-        list.iter().any(|a| a.account == account && eligible_engine_account(a)))
+    motor.cliproxy_error.is_none() && if motor.cliproxy_binding.is_some() {
+        motor.cliproxy_bound_account.as_ref().is_some_and(|a| a.account == account && eligible_engine_account(a))
+    } else {
+        motor.cliproxy_accounts.as_ref().is_none_or(|list| list.iter().any(|a| a.account == account && eligible_engine_account(a)))
+    }
 }
 
 /// O Jev só existe com a chave guardada no servidor; o padrão é o `jev_padrao` lido de lá.
@@ -338,17 +338,16 @@ impl NewSession {
             .filter(move |c| c.active || quotas.is_none_or(|list| list.iter().any(|q| q.id.strip_prefix("claude:") == Some(c.path.as_str()))))
     }
 
-    /// A chave da memória do último modelo: servidor, provider e a conta do Codex ou o motor (`chaveMemoria` do web).
-    pub(super) fn memory_key(&self) -> String {
-        model_memory_key(&self.link.api.identity(), self.provider, &self.codex_account, &self.engine, &self.engine_account)
-    }
-
     fn selected_engine(&self) -> Option<&Motor> {
         (self.provider == "claude").then(|| self.engines.ok()?.iter().find(|(name, _)| *name == self.engine).map(|(_, motor)| motor)).flatten()
     }
 
     pub(super) fn proxy_accounts(&self) -> Option<&[crate::api::dto::CliProxyAccount]> {
         self.selected_engine()?.cliproxy_accounts.as_deref()
+    }
+
+    pub(super) fn proxy_binding(&self) -> Option<&str> {
+        self.selected_engine()?.cliproxy_binding.as_deref()
     }
 
     pub(super) fn proxy_account(&self) -> Option<&crate::api::dto::CliProxyAccount> {
@@ -371,7 +370,7 @@ impl NewSession {
         if self.engines.loading { return Some(tr("loading")); }
         if let Some(Err(error)) = &self.engines.value { return Some(error.clone()); }
         let Some(motor) = self.selected_engine() else { return Some(tr("create_engine_missing").replace("{name}", &self.engine)); };
-        if let Some(error) = &motor.cliproxy_error { return Some(tr("create_proxy_error").replace("{reason}", error)); }
+        if let Some(error) = motor.cliproxy_binding_error.as_ref().or(motor.cliproxy_error.as_ref()) { return Some(tr("create_proxy_error").replace("{reason}", error)); }
         let accounts = motor.cliproxy_accounts.as_ref()?;
         if accounts.is_empty() { return Some(tr("create_proxy_no_accounts")); }
         if self.proxy_account().is_none() { return Some(tr("create_proxy_choose_account")); }
@@ -388,6 +387,13 @@ impl NewSession {
             self.engine_account_pick = None;
             return;
         };
+        let bound = self.selected_engine().filter(|m| m.cliproxy_binding.is_some())
+            .map(|m| m.cliproxy_bound_account.as_ref().map(|a| a.account.clone()).unwrap_or_default());
+        if let Some(account) = bound {
+            self.engine_account = account;
+            self.engine_account_pick = None;
+            return;
+        }
         let selected = choose_engine_account(accounts, &self.engine_account).unwrap_or_default().to_owned();
         self.engine_account = selected;
         let choices: Vec<ModelChoice> = self.proxy_accounts().unwrap_or_default().iter().filter(|a| eligible_engine_account(a)).map(|a| ModelChoice {
@@ -426,18 +432,15 @@ impl NewSession {
         }
         if let Some(config) = self.config.clone() { query.push(("config_dir".into(), config)); }
         if self.provider == "codex" { query.push(("codex_account".into(), self.codex_account.clone())); }
-        let (key, default_key) = (self.memory_key(), self.default_key());
+        let default_key = self.default_key();
         let scope = self.default_scope();
         self.request(cx, move |api, send| Box::pin(async move {
-            // O padrão marcado do harness vence a última escolha lembrada.
-            let (remembered, legacy) = tokio::task::spawn_blocking(move || {
-                let saved = crate::appearance::harness_default(&default_key);
-                (crate::appearance::last_model(&key), saved)
-            }).await.unwrap_or_default();
+            let legacy = tokio::task::spawn_blocking(move || crate::appearance::harness_default(&default_key)).await.unwrap_or_default();
             let scope: Vec<_> = scope.iter().map(|(k, v)| (*k, v.as_str())).collect();
             let saved = api.read_session_default(&scope, legacy).await;
+            // Sem padrão marcado no servidor, o modelo fica no padrão dele: nada lembrado neste computador entra.
             let remembered = saved.as_ref().ok().and_then(|saved| saved.as_ref())
-                .map(|(m, e, _)| (m.clone(), e.clone())).unwrap_or(remembered);
+                .map(|(m, e, _)| (m.clone(), e.clone())).unwrap_or_default();
             let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
             send(CreateReply::Models(seq, api.server_read(&["model-options"], &query, 30).await, remembered, saved)).await
         }));
@@ -1187,10 +1190,14 @@ impl NewSession {
         let pick = self.engine_account_pick.as_ref().map(|(pick, _)| Select::new(pick).id("create-engine-account")
             .placeholder(tr("create_proxy_choose_account")).accessibility_label(tr("create_chatgpt_account"))
             .disabled(self.creating || self.engines.loading || invalid || self.proxy_accounts().is_none_or(|a| a.is_empty())));
-        let quota = self.proxy_account().and_then(|a| self.quota_of(&a.credential_id));
+        let quota = self.selected_engine().and_then(|m| m.cliproxy_binding.as_ref())
+            .and_then(|binding| self.quota_of(&format!("cliproxy-binding:{binding}")))
+            .or_else(|| self.proxy_account().and_then(|a| a.binding.as_ref()).and_then(|binding| self.quota_of(&format!("cliproxy-binding:{binding}"))));
         div().flex().flex_col().gap_2()
             .child(label(tr("create_chatgpt_account")))
             .children(pick)
+            .when_some(self.selected_engine().and_then(|m| m.cliproxy_bound_account.as_ref()), |el, a|
+                el.child(muted(if a.email.is_empty() { a.label.clone() } else { a.email.clone() })))
             .when_some(quota, |el, q| el.child(self.render_quota("create-engine-quota".into(), q)))
             .when(quota.is_none() && self.proxy_account().is_some(), |el| el.child(muted(tr(if self.quotas.loading { "loading" } else { "create_quota_none" }))))
             .when_some(self.quotas.value.as_ref().and_then(|q| q.as_ref().err()), |el, error| el.child(muted(tr("accounts_failed").replace("{reason}", error))))
@@ -1490,10 +1497,6 @@ mod tests {
         let ordinary: super::Motor = serde_json::from_value(serde_json::json!({"model":"k3"})).unwrap();
         assert!(ordinary.cliproxy_accounts.is_none());
         assert!(super::engine_account_ready(&ordinary, ""));
-        let key = super::model_memory_key("server", "claude", "", "proxy", "default");
-        assert_ne!(key, super::model_memory_key("server", "claude", "", "proxy", "other"));
-        assert_ne!(key, super::model_memory_key("another", "claude", "", "proxy", "default"));
-        assert_ne!(key, super::model_memory_key("server", "claude", "", "proxy", ""));
         let catalog: Vec<ModelOption> = serde_json::from_value(serde_json::json!([{"id":"gpt-base"}])).unwrap();
         assert!(super::selected_model_valid(&catalog, "claude", true, "gpt-base"));
         assert!(!super::selected_model_valid(&catalog, "claude", true, ""));
@@ -1512,10 +1515,6 @@ mod tests {
         assert_eq!(remembered("claude-model", "high"), (String::new(), String::new()));
         assert_eq!(remembered("", "high"), (String::new(), String::new()));
         assert_eq!(remembered("model-b", "medium"), ("model-b".into(), "medium".into()));
-        let key = super::model_memory_key("server-a", "codex", "account-a", "", "");
-        assert_ne!(key, super::model_memory_key("server-b", "codex", "account-a", "", ""));
-        assert_ne!(key, super::model_memory_key("server-a", "claude", "account-a", "", ""));
-        assert_ne!(key, super::model_memory_key("server-a", "codex", "account-b", "", ""));
         let mut remote = super::Remote::<super::Catalog>::default();
         let old = remote.start();
         let current = remote.start();

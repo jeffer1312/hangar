@@ -1,4 +1,6 @@
 <script lang="ts">
+  import type { TipoCredencial } from '@hangar/core';
+
   // Marca do provedor no avatar da lista de contas — os traçados OFICIAIS, não desenho meu.
   //
   // Vêm da coleção simple-icons (CC0-1.0, domínio público), baixados de
@@ -14,7 +16,7 @@
   // Provedor é deduzido da base_url, não de um campo novo no backend: a URL é o que o usuário
   // digitou, e um campo "tipo" precisaria ser mantido em sincronia à mão.
   interface Props {
-    tipo: 'claude' | 'chave' | 'codex';
+    tipo: TipoCredencial;
     baseUrl?: string | null;
     /** Fallback quando não se reconhece o provedor: as iniciais do nome exibido. */
     iniciais: string;

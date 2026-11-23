@@ -46,6 +46,14 @@ describe('fileUrls token handling', () => {
     expect(transcriptImageUrlNative('s', 'msg', 0)).toBe('https://backend.example/api/sessions/s/transcript-image/msg/0');
   });
 
+  it('miniatura nativa pede a largura ao servidor sem levar o token na URL', () => {
+    const server: Server = { id: 'a', label: 'A', baseUrl: 'https://a.test', token: 'token-a' };
+    expect(fileUrlNative('s', '/tmp/a.png', server, 288)).toBe('https://a.test/api/sessions/s/file?path=%2Ftmp%2Fa.png&w=288');
+    expect(uploadUrlNative('s', 'a.png', server, 288)).toBe('https://a.test/api/sessions/s/uploads/a.png?w=288');
+    expect(uploadUrlNative('s', 'a.png', server, 288)).not.toContain('token=');
+    expect(fileUrlNative('s', '/tmp/a.png', server)).not.toContain('w=');
+  });
+
   it('TTS fixa POST e áudio em A mesmo com outro servidor ativo durante a espera', async () => {
     const server: Server = { id: 'a', label: 'A', baseUrl: 'https://a.test', token: 'token-a' };
     let active = { baseUrl: 'https://b.test', token: 'token-b' };

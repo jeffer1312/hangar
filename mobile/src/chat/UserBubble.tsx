@@ -3,12 +3,14 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ImageThumb, type MediaItem } from './ImageThumb';
 import { FileCard } from './FileCard';
-import { hasContextRefs, parseImageMessage, parsePeerMessage, parseRealtimeDelegation, transcriptImageUrlNative, uploadUrlNative, fileAuthHeader, type QuoteRef } from '@hangar/core';
+import { fileKind, hasContextRefs, parseImageMessage, parsePeerMessage, parseRealtimeDelegation, transcriptImageUrlNative, uploadUrlNative, userMessageFiles, fileAuthHeader, type QuoteRef } from '@hangar/core';
 import { ContextRefView } from './ContextRefView';
 import * as m from '../paraglide/messages';
 import { BubbleActions } from './BubbleActions';
 import { superficie } from '../theme/superficie';
 import { useServers } from '../stores/servers';
+import { useRouteBase } from '../net/routeBase';
+import { thumbWidthFor } from './thumbs';
 
 // Bolha do usuário: pequena, à direita, no fundo superficie(0.8) — o mesmo degrau da bolha do nativo,
 // e por isso acompanha Transparência e Solidez. Se parseImageMessage(text) não nulo → legenda +
@@ -49,14 +51,24 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
   const doTerminal = imageCount > 0 && !!sessionName && !!eventId;
   const hasImages = (!!parsed && !!sessionName) || doTerminal;
   const caption = peer ? body : (parsed ? parsed.caption : doTerminal ? text : '');
-  // Como no web: com o caminho escrito pra TODAS as fotos, as últimas `imageCount` já vêm do
-  // transcript, e mostrar as duas fontes duplicava cada imagem.
-  const filenames = !parsed || !sessionName ? []
-    : doTerminal && parsed.marcadores === parsed.filenames.length
-      ? parsed.filenames.slice(0, Math.max(0, parsed.filenames.length - imageCount))
-      : parsed.filenames;
+  // A mesma separação que a galeria da conversa usa (core): a foto escrita e colada sai uma vez, e o
+  // vídeo anexado como `arquivo:` é mídia que toca no visor.
+  const attached = sessionName ? userMessageFiles(text, doTerminal ? imageCount : 0) : null;
+  const filenames = attached?.images ?? [];
+  // Recalcula as URLs quando a rota do servidor muda; o valor em si sai do `baseOf` dentro delas.
+  useRouteBase(server);
+  const videos = attached?.videos ?? [];
+  const otherFiles = parsed?.files.filter((f) => fileKind(f) !== 'video') ?? [];
   const galeria: MediaItem[] = hasImages && server ? [
-    ...filenames.map((fn): MediaItem => ({ uri: uploadUrlNative(sessionName!, fn, server), headers: fileAuthHeader(server), name: fn, kind: 'image' })),
+    ...videos.map((fn): MediaItem => ({ uri: uploadUrlNative(sessionName!, fn, server), headers: fileAuthHeader(server), name: fn, kind: 'video' })),
+    ...filenames.map((fn): MediaItem => {
+      const width = thumbWidthFor(fn);
+      return {
+        uri: uploadUrlNative(sessionName!, fn, server),
+        thumbUri: width ? uploadUrlNative(sessionName!, fn, server, width) : undefined,
+        headers: fileAuthHeader(server), name: fn, kind: 'image',
+      };
+    }),
     ...(doTerminal ? Array.from({ length: imageCount }, (_, i): MediaItem => ({
       uri: transcriptImageUrlNative(sessionName!, eventId!, i, server), headers: fileAuthHeader(server), name: m.anexos_imagem_enviada(), kind: 'image',
     })) : []),
@@ -113,9 +125,9 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
       <Text style={[styles.txt, { color: theme.tokens.status.error }]} accessibilityRole="alert">{m.chat_servidor_removido()}</Text>
     </>, caption || body);
     // Anexo que não é foto (`📎 arquivo:`): o card de download, embaixo das miniaturas.
-    const cards = parsed?.files.map((f) => (
+    const cards = otherFiles.map((f) => (
       <FileCard key={f} uri={uploadUrlNative(sessionName!, f, server)} headers={authHeaders} name={f} />
-    )) ?? [];
+    ));
     // galeria vazia = foto única absorvida como anexo real: mostra só a legenda, ou o texto original
     if (galeria.length === 0 && cards.length === 0) {
       const display = caption || body;
@@ -125,7 +137,9 @@ export const UserBubble = memo(function UserBubble({ text, sessionName, serverId
       <>
         {caption ? renderCaption(caption) : null}
         {galeria.length ? <View style={styles.thumbs}>
-          {galeria.map((g, i) => <ImageThumb key={g.uri} items={galeria} index={i} style={styles.thumb} />)}
+          {/* A URI muda com a rota (LAN ↔ Tailscale); como chave, remontaria a miniatura e fecharia o visor. */}
+          {galeria.map((_, i) => <ImageThumb key={i} items={galeria} index={i} style={styles.thumb}
+            galleryKey={eventId ? `${eventId}#${i}` : undefined} />)}
         </View> : null}
         {cards}
       </>,

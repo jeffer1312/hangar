@@ -27,8 +27,13 @@ import { installNotificationHandler, pushRegistrationKey, registerExpoPush, retr
 import { getLocale } from '../src/paraglide/runtime';
 import { autoReportUnanswered, putAutoReportEm, registrarDiag } from '@hangar/core';
 import { dropLegacyPendingNews, loadArrivedNews, whatsNewHref } from '../src/features/updates/pending';
+import { configureVideoCache } from '../src/features/attachments/videoCache';
 
 configureCore();
+// No carregamento do módulo, antes de qualquer tela: o expo-video recusa mudar o teto com algum player vivo.
+configureVideoCache().catch((e: unknown) => {
+  registrarDiag({ evento: 'video.cache_limit_failed', nivel: 'erro', codigo: 'video_cache_limit_failed', detalhe: e instanceof Error ? e.message : String(e) });
+});
 aplicarTemaSalvo();
 aplicarMaterial(useAparencia.getState(), {
   escalaTexto: isTabletLandscape(Dimensions.get('window')) ? 19 / 17 : 1,

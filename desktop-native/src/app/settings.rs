@@ -23,14 +23,14 @@ pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_ki
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
     General, Appearance, Sessions, Beta, Updates, Manual, Diary, About,
-    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    Servers, Sync, Guests, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, WhatsApp, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
     const DEVICE: [Page; 7] = [Page::General, Page::Appearance, Page::Sessions, Page::Beta, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 22] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 24] = [Page::Diary, Page::Servers, Page::Sync, Page::Guests, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::WhatsApp, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -45,7 +45,7 @@ impl Page {
     pub(super) fn key(self) -> &'static str {
         match self {
             Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Beta => "beta", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Guests => "guests", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::WhatsApp => "whatsapp", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -55,8 +55,8 @@ impl Page {
         match self {
             Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Beta => IconName::FlaskConical, Page::Diary => IconName::FileText,
             Page::Updates => IconName::Sparkles, Page::Manual => IconName::BookOpen,
-            Page::About => IconName::Info, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
-            Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
+            Page::About => IconName::Info, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Guests => IconName::UserPlus, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
+            Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::WhatsApp => IconName::MessageCircle, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
         }
@@ -70,6 +70,7 @@ impl Page {
             Page::Jev => tr_shared("jev_title", &[]),
             Page::SharedConfig => tr_shared("shared_config_title", &[]),
             Page::Status => tr("status_title"),
+            Page::Guests => tr_shared("convidados_titulo", &[]),
             _ => tr(&format!("settings_page_{}", self.key())),
         }
     }
@@ -105,6 +106,8 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("machines_search_tailscale", Some("machines_search_tailscale_help"))]),
     (Page::Sync, &[("sync_config_ativa", Some("sync_config_ganho")), ("sync_config_ativar", Some("sync_config_direta")),
         ("sync_config_desativar", Some("sync_config_desativar_aviso")), ("sync_config_copiar", None)]),
+    (Page::Guests, &[("convidados_adicionar", Some("guests_connect_description")), ("convidados_ve_minhas", None),
+        ("guests_legacy_title", Some("guests_legacy_bring"))]),
     (Page::Connect, &[("connect_devices_title", None), ("connect_machines_title", Some("connect_machines_help")),
         ("connect_preview_title", Some("connect_preview_help"))]),
     (Page::Appearance, &APPEARANCE_ROWS),
@@ -124,6 +127,9 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("plugins_tab_marketplaces", None), ("plugins_check", None), ("plugins_marketplace_auto_update", None)]),
     (Page::Vault, &[("vault_entries", Some("vault_entries_hint")), ("vault_add", Some("vault_token_hint")),
         ("vault_backup", Some("vault_backup_hint")), ("vault_recovery", None)]),
+    (Page::WhatsApp, &[("whatsapp_intro_title", Some("whatsapp_intro")), ("whatsapp_risk_title", Some("whatsapp_risk_unofficial")),
+        ("whatsapp_media_title", Some("whatsapp_media_desc")), ("whatsapp_usage_title", Some("whatsapp_usage_skill_hint")),
+        ("whatsapp_remove", Some("whatsapp_remove_body"))]),
     (Page::Orchestration, &[("orchestration_intro", None), ("orchestration_unrestricted", None)]),
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help")),
         ("keyboard_title", Some("keyboard_lead")), ("keyboard_hold_title", Some("keyboard_hold_help"))]),
@@ -382,6 +388,14 @@ pub(super) struct SettingsUi {
     blur_hint: bool,
     /// Code Mode já ligado no settings.json do servidor (`GET /api/claude/code-mode`), por conexão; `None` antes de perguntar.
     code_mode_settings: Option<(u64, bool)>,
+    /// Opções da tela Beta no servidor (`/api/session-options`), por conexão; `None` dentro = ainda lendo.
+    session_options: Option<(u64, Option<crate::api::SessionOptions>)>,
+    /// Leitura ou gravação das opções que falhou, mostrada na linha do Code Mode.
+    session_options_error: Option<String>,
+    /// A conexão com uma gravação das opções ainda sem resposta: as linhas da tela Beta esperam por ela.
+    session_options_saving: Option<u64>,
+    /// Conversa nova escolhida aqui que o servidor daquela conexão ainda não recebeu.
+    conversation_pending: Option<(u64, bool)>,
     _subscriptions: Vec<Subscription>,
     _disk_watch: Task<()>,
 }
@@ -509,7 +523,7 @@ impl SettingsUi {
         }));
         Self { sliders, fonts, type_picks, custom_sizes, custom_open: Vec::new(),
             accent_picker, tint_picker, search, found: Vec::new(), pick: 0, hit: None, scroll: ScrollHandle::new(),
-            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, _subscriptions: subscriptions,
+            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, session_options: None, session_options_error: None, session_options_saving: None, conversation_pending: None, _subscriptions: subscriptions,
             _disk_watch: watch_disk(window, cx) }
     }
 
@@ -566,9 +580,11 @@ impl Hangar {
             self.plugins_page = None;
             self.accounts_page_left();
             self.sync_page_left();
+            self.guests_page_left();
             self.connect_page_left();
             self.devices_page_left();
             self.status_left();
+            self.whatsapp_page_left();
             let ui = &mut self.settings_ui;
             (ui.live, ui.hit, ui.drag) = (false, None, None);
             self.root_focus.focus(window, cx);
@@ -872,6 +888,8 @@ impl Hangar {
                     .when(page_item == Page::Updates && !on && new_count > 0, |el| el.child(div().ml_auto()
                         .child(super::vault::chip(if new_count == 1 { tr("updates_new_one") } else { tr("updates_new_count").replace("{n}", &new_count.to_string()) },
                             theme::on_accent(), theme::accent()).rounded_full())))
+                    .when(page_item == Page::WhatsApp && !on && super::whatsapp::show_new_badge(), |el| el.child(div().ml_auto()
+                        .child(super::vault::chip(tr("settings_nav_new"), theme::on_accent(), theme::accent()).rounded_full())))
                     // Só o estado do servidor selecionado; de pé, sem ponto.
                     .when_some(status_dot.clone().filter(|_| page_item == Page::Status), |el, (color, _)| el.child(div().ml_auto()
                         .size(px(7.)).flex_shrink_0().rounded_full().bg(color))))
@@ -931,6 +949,7 @@ impl Hangar {
             Page::Status => self.render_status(window, cx),
             Page::Accounts => self.render_accounts(accounts_wide, window, cx),
             Page::Vault => self.render_vault(window, cx),
+            Page::WhatsApp => self.render_whatsapp(cx),
             Page::Plugins => self.render_plugins(window, cx),
             Page::Scheduled => self.render_scheduled(window, cx),
             Page::Memory => self.render_memory_dream(window, cx),
@@ -941,6 +960,7 @@ impl Hangar {
             Page::Voice | Page::Jev | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             Page::Servers => self.render_machines(window.viewport_size().width, cx),
             Page::Sync => self.render_sync(cx),
+            Page::Guests => self.render_guests_page(cx),
             Page::Connect => self.render_connect(cx),
             Page::SharedConfig => self.render_shared_config(cx),
             Page::Windows => self.render_computer(cx),
@@ -1263,6 +1283,16 @@ mod tests {
     fn general_search_finds_the_tray_option() {
         let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::General).expect("Geral na busca");
         assert!(rows.iter().any(|(row, _)| *row == "settings_tray"), "settings_tray fora da busca");
+    }
+
+    #[test]
+    fn guests_is_its_own_page_found_by_the_search() {
+        assert!(super::Page::sections().any(|page| page == super::Page::Guests), "Convidados fora da navegação");
+        let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Guests).expect("Convidados na busca");
+        assert!(rows.iter().any(|(row, _)| *row == "convidados_adicionar"));
+        // Saiu de dentro da Sincronização: a busca dela não aponta mais para os convidados.
+        let (_, sync) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Sync).expect("Sincronização na busca");
+        assert!(!sync.iter().any(|(row, _)| row.starts_with("convidados_")));
     }
 
     #[test]

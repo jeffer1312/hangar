@@ -8,13 +8,12 @@ export type PickedAttachment = DraftAttachment & { size?: number };
 
 const IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 
-const fromImageAsset = (asset: ImagePicker.ImagePickerAsset): PickedAttachment => ({
-  uri: asset.uri,
-  name: asset.fileName ?? 'imagem.jpg',
-  mime: asset.mimeType ?? 'image/jpeg',
-  kind: 'image',
-  size: asset.fileSize,
-});
+// Vídeo vai como arquivo: o upload do disco já pede `media=later`, e a mensagem leva os quadros e a fala.
+const fromImageAsset = (asset: ImagePicker.ImagePickerAsset): PickedAttachment => (asset.type === 'video'
+  ? { uri: asset.uri, name: asset.fileName ?? 'video.mp4', mime: asset.mimeType ?? 'video/mp4', kind: 'file', size: asset.fileSize }
+  : { uri: asset.uri, name: asset.fileName ?? 'imagem.jpg', mime: asset.mimeType ?? 'image/jpeg', kind: 'image', size: asset.fileSize });
+
+const MEDIA_TYPES: ImagePicker.MediaType[] = ['images', 'videos'];
 
 export const fromPastedFile = (file: PastedFile): PickedAttachment => {
   const mime = file.type || 'application/octet-stream';
@@ -30,7 +29,7 @@ const isDenied = (e: unknown) => {
 export async function pickImages(multiple = false): Promise<PickedAttachment[]> {
   try {
     const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: MEDIA_TYPES,
       quality: 0.8,
       allowsMultipleSelection: multiple,
     });
@@ -42,14 +41,20 @@ export async function pickImages(multiple = false): Promise<PickedAttachment[]> 
   }
 }
 
-// Foto na hora. A permissão é pedida antes: negada, o aviso diz onde liberar em vez de falhar calado.
+// O servidor recusa anexo acima de 100 MiB: gravação longa em qualidade alta passaria disso.
+const CAMERA_VIDEO_MAX_SECONDS = 300;
+
+// Foto ou vídeo na hora. A permissão é pedida antes: negada, o aviso diz onde liberar em vez de falhar calado.
 export async function pickCamera(): Promise<PickedAttachment | null> {
   try {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) throw new Error(m.composer_sem_acesso_camera());
     const res = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: MEDIA_TYPES,
       quality: 0.8,
+      videoMaxDuration: CAMERA_VIDEO_MAX_SECONDS,
+      // Só o iOS lê: o padrão (alta) passa de 100 MiB bem antes de 5 min.
+      videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
     });
     if (res.canceled || !res.assets?.[0]) return null;
     return fromImageAsset(res.assets[0]);

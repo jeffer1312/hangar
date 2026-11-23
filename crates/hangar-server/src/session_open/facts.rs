@@ -114,6 +114,27 @@ impl LocalFacts {
         }).collect())
     }
 
+    pub(crate) fn fixed_engine_selection(&self, engine: &str, account: &str, model: Option<&str>) -> Result<(String, Option<u64>), OpenError> {
+        if !self.engines().iter().any(|e| e == engine) { return Err(OpenError::new(400, "erro_motor_invalido", "motor inválido")); }
+        let route = fixed_account(&self.accounts, engine, account)?;
+        let engines = self.engines_file();
+        let cfg = &engines[engine];
+        let models = self.account_models(engine, &route.prefix)?;
+        let chosen = model.filter(|m| !m.is_empty()).or(cfg["model"].as_str()).unwrap_or("");
+        let base = base_model(chosen, &route.prefix)?;
+        let subagent = cfg["subagent_model"].as_str().filter(|m| !m.is_empty()).unwrap_or(chosen);
+        let subagent = base_model(subagent, &route.prefix)?;
+        let primary = models.iter().find(|m| m["id"].as_str() == Some(catalog_model(&base)))
+            .ok_or_else(|| cliproxy("CLIProxyAPI: modelo principal indisponível nesta conta"))?;
+        if !models.iter().any(|m| m["id"].as_str() == Some(catalog_model(&subagent))) {
+            return Err(cliproxy("CLIProxyAPI: modelo dos subagentes indisponível nesta conta"));
+        }
+        let window = if catalog_model(&base) != base { Some(1_000_000) } else {
+            [&primary["context_length"], &primary["context_window"]].into_iter().filter_map(whole).find(|n| *n != 0)
+        };
+        Ok((base, window))
+    }
+
     fn terminal_creator(&self, name: &str) -> Option<CreatorFacts> {
         let panes = self.panes();
         let pane = panes.iter().find(|p| p.session == name && !p.hidden)?;
@@ -171,15 +192,50 @@ pub fn fixed_account(accounts: &AccountService, engine: &str, account: &str) -> 
     let local = cliproxy_base(&env.home).filter(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == *local)
         .ok_or_else(|| cliproxy("a conta ChatGPT só pode ser fixada no CLIProxyAPI local"))?;
     if !crate::accounts::catalog::valid_name(account) { return Err(cliproxy("CLIProxyAPI: identificador de conta inválido")); }
-    if !proxy::is_proxy_only(account) {
-        // Erro da lista de contas Codex mantém o código dela, não vira erro do proxy.
-        accounts.visible_codex_accounts().map_err(|e| OpenError::new(e.status, e.code, e.message))?;
-    }
-    let entry = proxy::resolve(accounts, account, None).map_err(cliproxy)?;
+    let (binding, entry) = match proxy::engine_bound_entry(accounts, engine, Some(account)).map_err(cliproxy)? {
+        Some((binding, entry)) => (Some(binding), entry),
+        None => {
+            if !proxy::is_proxy_only(account) {
+                accounts.visible_codex_accounts().map_err(|e| OpenError::new(e.status, e.code, e.message))?;
+            }
+            (None, proxy::resolve(accounts, account, None).map_err(cliproxy)?)
+        }
+    };
     let credential_id = entry["credential_id"].as_str().unwrap_or_default().to_owned();
     let home = credential_id.strip_prefix("codex:").map(str::to_owned);
     let prefix = entry["prefix"].as_str().unwrap_or_default().to_owned();
-    Ok(super::claude::EngineRoute { account: account.to_owned(), credential_id, home, base_url: local, prefix })
+    Ok(super::claude::EngineRoute { account: account.to_owned(), credential_id, home, base_url: local, prefix, binding })
+}
+
+pub(crate) fn session_engine_route(accounts: &AccountService, engine: &str, account: Option<&str>, binding: Option<&str>) -> Result<Option<super::claude::EngineRoute>, OpenError> {
+    let mismatch = || cliproxy("O vínculo deste motor mudou. Confirme a conta da conversa antes de reabri-la.");
+    match account {
+        Some(account) => {
+            let canonical;
+            let account = if let Some(binding) = binding {
+                let Some((current, entry)) = crate::engines::proxy::engine_bound_entry(accounts, engine, None).map_err(cliproxy)? else { return Err(mismatch()) };
+                if current != binding { return Err(mismatch()); }
+                canonical = entry;
+                canonical["account"].as_str().ok_or_else(mismatch)?
+            } else { account };
+            let route = fixed_account(accounts, engine, account)?;
+            if route.binding.as_deref() != binding { return Err(mismatch()); }
+            Ok(Some(route))
+        }
+        None => {
+            if binding.is_some() || crate::engines::proxy::engine_binding(&accounts.env, engine).is_some() { return Err(mismatch()); }
+            Ok(None)
+        }
+    }
+}
+
+pub(crate) fn claude_provider_route(accounts: &AccountService, engine: &str, account: &str, binding: &str) -> Result<super::claude::EngineRoute, OpenError> {
+    let changed = || OpenError::new(409, "erro_cliproxy_conta", "A conta vinculada mudou ou está indisponível. Escolha novamente.");
+    if account.is_empty() || binding.is_empty() { return Err(changed()); }
+    let route = session_engine_route(accounts, engine, Some(account), Some(binding)).map_err(|_| changed())?
+        .ok_or_else(changed)?;
+    if route.account != account { return Err(changed()); }
+    Ok(route)
 }
 
 /// `cliproxy_accounts.prefix_model` sem o prefixo: o modelo como a conta o expõe.
@@ -325,6 +381,10 @@ impl OpenFacts for LocalFacts {
         crate::session_defaults::saved(&self.env().home, provider.name(), engine, engine_account).map_err(|error| error.to_string())
     }
 
+    fn session_options(&self) -> Result<Option<crate::session_defaults::SessionOptions>, String> {
+        crate::session_defaults::options(&self.env().home).map_err(|error| error.to_string())
+    }
+
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError> {
         Ok(self.codex_states()?.into_iter().filter(|(_, state)| state == "connected")
             .map(|(account, _)| CodexLogin { id: account.id, is_default: account.is_default }).collect())
@@ -379,6 +439,13 @@ impl OpenFacts for LocalFacts {
             .filter(|name| crate::accounts::catalog::valid_name(name)).collect()
     }
 
+    fn engine_account(&self, engine: &str, requested: Option<&str>) -> Result<(Option<String>, Option<String>), OpenError> {
+        match crate::engines::proxy::engine_bound_entry(&self.accounts, engine, requested).map_err(cliproxy)? {
+            Some((binding, entry)) => Ok((entry["account"].as_str().map(str::to_owned), Some(binding))),
+            None => Ok((requested.map(str::to_owned), None)),
+        }
+    }
+
     fn supports_fast(&self, engine: Option<&str>, model: Option<&str>) -> bool {
         let engines = self.engines_file();
         let Some(cfg) = engine.filter(|e| self.engines().iter().any(|n| n == e)).map(|e| &engines[e]) else { return false };
@@ -398,21 +465,7 @@ impl OpenFacts for LocalFacts {
     /// o prefixo dela) e o modelo principal e o dos subagentes disponíveis nele. Devolve o modelo sem o
     /// prefixo da conta.
     fn fixed_engine_model(&self, engine: &str, account: &str, model: Option<&str>) -> Result<String, OpenError> {
-        if !self.engines().iter().any(|e| e == engine) { return Err(OpenError::new(400, "erro_motor_invalido", "motor inválido")); }
-        let route = fixed_account(&self.accounts, engine, account)?;
-        let engines = self.engines_file();
-        let cfg = &engines[engine];
-        let models = self.account_models(engine, &route.prefix)?;
-        let selected = model.filter(|m| !m.is_empty()).or(cfg["model"].as_str()).unwrap_or("");
-        let base = base_model(selected, &route.prefix)?;
-        let subagent = cfg["subagent_model"].as_str().filter(|m| !m.is_empty()).unwrap_or(selected);
-        for (label, chosen) in [("principal", selected), ("dos subagentes", subagent)] {
-            let id = base_model(chosen, &route.prefix)?;
-            if !models.iter().any(|m| m["id"].as_str() == Some(catalog_model(&id))) {
-                return Err(cliproxy(format!("CLIProxyAPI: modelo {label} indisponível nesta conta")));
-            }
-        }
-        Ok(base)
+        self.fixed_engine_selection(engine, account, model).map(|(base, _)| base)
     }
 
     /// `create_session`: o id de catálogo do modelo (sem o `[1m]` do GPT) no `/v1/models` do motor (o

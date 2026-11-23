@@ -46,7 +46,9 @@ pub fn run(invocation: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
     // O Windows não executa o atalho sem extensão; o `.cmd` vem do instalador.
     let helper = home.join(".local").join("bin").join(if invocation.windows { "hangar-mcp-headers.cmd" } else { "hangar-mcp-headers" });
     let entry = json!({"type": "http", "url": url, "headersHelper": helper.to_string_lossy(), "timeout": TOOL_TIMEOUT_S * 1000});
-    let claude_ok = claude(&home, &entry, out, err);
+    // Com `--home` a casa não é a do processo: o `CLAUDE_CONFIG_DIR` dele apontaria para fora dela.
+    let config_dir = invocation.home_arg.is_none().then(|| invocation.vars.get("CLAUDE_CONFIG_DIR")).flatten();
+    let claude_ok = claude(&home, config_dir.map(String::as_str), &entry, out, err);
     let settings_ok = claude_permissions(&home.join(".claude").join("settings.json"), out, err);
     let codex_ok = codex(&home, &codex_block(&url, token), out, err);
     if !claude_ok {
@@ -58,8 +60,9 @@ pub fn run(invocation: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
     u8::from(!(claude_ok && settings_ok && codex_ok))
 }
 
-/// `~/.claude.json` e cada `~/.claude-*/.claude.json` que já existe; pasta `.lock` não é conta.
-fn claude_accounts(home: &Path) -> Vec<PathBuf> {
+/// `~/.claude.json`, o que a conta padrão lê com `CLAUDE_CONFIG_DIR` (criado se a pasta existe) e cada
+/// `~/.claude-*/.claude.json` que já existe; pasta `.lock` não é conta.
+fn claude_accounts(home: &Path, config_dir: Option<&str>) -> Vec<PathBuf> {
     let mut accounts: Vec<PathBuf> = std::fs::read_dir(home).into_iter().flatten().flatten()
         .filter(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -69,12 +72,17 @@ fn claude_accounts(home: &Path) -> Vec<PathBuf> {
         .filter(|file| file.is_file())
         .collect();
     accounts.sort();
-    std::iter::once(home.join(".claude.json")).chain(accounts).collect()
+    let main = home.join(".claude.json");
+    let default = hangar_core::account_env::default_claude_json(home, config_dir);
+    let same = |file: &Path| file == default || hangar_core::fs::same_file(file, &default);
+    // Como o principal, o da conta padrão nasce com a entrada se falta: o CLI o cria depois sem ela.
+    let listed = !default.parent().is_some_and(Path::is_dir) || same(&main) || accounts.iter().any(|account| same(account));
+    std::iter::once(main).chain((!listed).then_some(default)).chain(accounts).collect()
 }
 
-fn claude(home: &Path, entry: &Value, out: &mut dyn Write, err: &mut dyn Write) -> bool {
+fn claude(home: &Path, config_dir: Option<&str>, entry: &Value, out: &mut dyn Write, err: &mut dyn Write) -> bool {
     let mut all_ok = true;
-    for file in claude_accounts(home) {
+    for file in claude_accounts(home, config_dir) {
         if let Err(detail) = claude_account(&file, entry, out, err) {
             let _ = writeln!(err, "erro: {}: MCP hangar não registrado: {detail}", file.display());
             all_ok = false;

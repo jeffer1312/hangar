@@ -1,5 +1,6 @@
 """Confere o `save` do tmux-claude-resume.sh sem tocar em tmux nem em sessões reais: as sessões do
-Hangar (com `CP_SESSION_KEY`) saem da foto do resurrect; as outras ficam como estavam."""
+Hangar (com `CP_SESSION_KEY` e spec, ou internas com `@cp_hidden`) saem da foto do resurrect; as
+outras ficam como estavam."""
 import os
 from pathlib import Path
 import subprocess
@@ -20,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix="hangar-resume-test-") as directory:
     tmux.write_text(f"#!{sys.executable}\n" + f'''import sys
 args = sys.argv[1:]
 if args[0] == 'list-sessions':
-    print('hangar-a'); print('shell'); print('hangar b')
+    print('hangar-a'); print('shell'); print('hangar b'); print('shortcut-hangar-abc123\\t1')
 elif args[0] == 'show-environment':
     target = args[args.index('-t') + 1]
     if target == '=hangar-a':
@@ -44,6 +45,9 @@ elif args[0] == 'show-environment':
         "window\tshell\t1\t:fish\t1\t:*\tlayout\t:",
         "pane\thangar b\t1\t:\t1\t:*\t0\t:/w\t1\tpi\t:pi",
         "state\thangar-a\tshell",
+        # Terminal de atalho (`@cp_hidden`): sem spec, mas recriado cru viraria linha Claude sem Claude.
+        "pane\tshortcut-hangar-abc123\t0\t:\t1\t:*\t0\t:/w\t1\tfish\t:",
+        "window\tshortcut-hangar-abc123\t0\t:fish\t1\t:*\tlayout\t:",
     ]
     save.write_text("\n".join(lines) + "\n")
     (resurrect / "last").symlink_to(save.name)
@@ -52,7 +56,7 @@ elif args[0] == 'show-environment':
     kept = save.read_text().splitlines()
     assert kept == [lines[2], lines[3], lines[4], lines[5]], kept
     assert (resurrect / "last").is_symlink(), "o `last` continua apontando a foto"
-    assert "1 sessões do Hangar" in (root / ".hangar/logs/privado/claude-resume.log").read_text()
+    assert "2 sessões do Hangar" in (root / ".hangar/logs/privado/claude-resume.log").read_text()
 
     # Sem sessão do Hangar a foto fica intacta.
     save.write_text("\n".join(lines[2:4]) + "\n")

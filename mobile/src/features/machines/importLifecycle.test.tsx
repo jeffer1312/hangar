@@ -22,6 +22,8 @@ vi.mock('@react-native-menu/menu', () => ({ MenuView: ({ children }: { children:
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: '/tmp', document: '/tmp' } }));
 vi.mock('expo-clipboard', () => ({}));
 vi.mock('expo-intent-launcher', () => ({ startActivityAsync: vi.fn() }));
+// O índice do cache de anexos (mediaCache, pela galeria da conversa) cria um MMKV ao carregar.
+vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {}, remove: () => {} }) }));
 vi.mock('expo-audio', () => ({ AudioModule: {}, RecordingPresets: {} }));
 vi.mock('react-native-enriched-markdown', () => ({ EnrichedMarkdownText: () => null }));
 vi.mock('react-native-gifted-charts', async () => ({ BarChart: (await import('react-native')).View }));

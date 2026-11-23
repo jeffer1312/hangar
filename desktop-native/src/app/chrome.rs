@@ -812,11 +812,12 @@ pub fn state_chip(state: &str, label: String, large: bool) -> AnyElement {
 }
 
 /// Selo do estado no cabeçalho da conversa nova: pílula com borda na cor do estado, o arco do Hangar animado enquanto
-/// roda, o nome do estado em negrito e, rodando, há quanto tempo o turno começou.
-pub fn beta_state_chip(state: &str, label: String, ago: Option<String>) -> AnyElement {
+/// roda, o nome do estado em negrito e, rodando, há quanto tempo (`since`) o turno começou.
+pub fn beta_state_chip(state: &str, label: String, since: Option<Instant>) -> AnyElement {
     let (bg, fg) = theme::pill(state);
     let icon = match state {
-        "working" => Some(WorkingMark::new("header-state-mark", 16., theme::accent()).into_any_element()),
+        // Parado de propósito: a conversa já anima o trabalho em andamento; aqui basta o ponto e o tempo.
+        "working" => Some(div().size(px(8.)).rounded_full().bg(theme::accent()).into_any_element()),
         "awaiting_input" => Some(small_icon(IconName::MessageCircle, 14., fg).into_any_element()),
         "idle" => Some(small_icon(IconName::CircleCheck, 14., fg).into_any_element()),
         "dead" => Some(small_icon(IconName::CircleX, 14., fg).into_any_element()),
@@ -825,8 +826,48 @@ pub fn beta_state_chip(state: &str, label: String, ago: Option<String>) -> AnyEl
     div().id("header-state").flex_shrink_0().h(px(28.)).px(px(12.)).flex().items_center().gap(px(8.)).rounded_full()
         .bg(bg).border_1().border_color(fg.alpha(0.4)).text_color(fg).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).whitespace_nowrap()
         .children(icon).child(label)
-        .when_some(ago, |el, ago| el.child(div().font_weight(FontWeight::NORMAL).text_color(theme::muted()).child(ago)))
+        .when_some(since, |el, since| {
+            let shown = format_ago(since.elapsed());
+            el.child(div().font_weight(FontWeight::NORMAL).text_color(theme::muted())
+                    .child(crate::i18n::tr("beta_ago").replace("{time}", &shown)))
+                // Sem a marca animada no selo, nada garante outro desenho da raiz durante um turno longo e calado.
+                .child(div().absolute().size_0().child(AgoTick { key: "header-state-tick".into(), since, shown }))
+        })
         .into_any_element()
+}
+
+/// Redesenha a raiz quando o texto de `format_ago` desde `since` muda, sem pintar nada: o tempo fica em quem o
+/// desenha, com a medida e o estilo de lá.
+#[derive(IntoElement)]
+struct AgoTick { key: ElementId, since: Instant, shown: String }
+
+struct AgoTickView { since: Instant }
+
+impl Render for AgoTickView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
+}
+
+impl RenderOnce for AgoTick {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let (since, mut shown) = (self.since, self.shown);
+        let view = keyed_view(self.key, window, cx, |cx| {
+            cx.spawn(async move |view, cx| {
+                // A referência é o texto que este desenho pintou: lido de novo agora, ele podia já ter virado.
+                loop {
+                    // Confere a cada segundo: o começo do turno pode mudar, e só a troca do texto redesenha.
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    let Ok(text) = view.update(cx, |view: &mut AgoTickView, cx| {
+                        let text = format_ago(view.since.elapsed());
+                        (WINDOW_ACTIVE.get() && text != shown).then(|| { cx.notify(); text })
+                    }) else { break };
+                    if let Some(text) = text { shown = text; }
+                }
+            }).detach();
+            AgoTickView { since }
+        });
+        view.update(cx, |view, _| view.since = since);
+        view
+    }
 }
 
 pub fn meter(pct: f64) -> AnyElement {
@@ -843,21 +884,40 @@ pub fn ring(pct: Option<f64>) -> AnyElement { ring_sized(pct, 16., 14., 2.) }
 
 /// O mesmo anel em outra medida: `side` é a caixa, `diameter` o anel e `stroke` o traço.
 pub fn ring_sized(pct: Option<f64>, side: f32, diameter: f32, stroke: f32) -> AnyElement {
+    let arc = pct.map(|pct| (0., pct.clamp(0., 100.) as f32 / 100., meter_color(pct)));
+    ring_canvas(side, diameter, stroke, arc).into_any_element()
+}
+
+/// Anel de progresso de uma transferência, no acento: `share` de 0 a 1. Sem tamanho conhecido, um quarto de arco que
+/// gira; com movimento reduzido, parado.
+pub fn progress_ring(id: impl Into<ElementId>, share: Option<f32>, side: f32, stroke: f32, still: bool) -> AnyElement {
+    let diameter = side - stroke;
+    match share {
+        Some(share) => ring_canvas(side, diameter, stroke, Some((0., share.clamp(0., 1.), theme::accent()))).into_any_element(),
+        None if still => ring_canvas(side, diameter, stroke, Some((0., 0.25, theme::accent()))).into_any_element(),
+        None => div().size(px(side)).flex_shrink_0()
+            .with_animation(id, Animation::new(Duration::from_millis(1100)).repeat(),
+                move |el, t| el.child(ring_canvas(side, diameter, stroke, Some((t, 0.25, theme::accent())))))
+            .into_any_element(),
+    }
+}
+
+/// O trilho e o arco `(início em voltas, fração, cor)`.
+fn ring_canvas(side: f32, diameter: f32, stroke: f32, arc: Option<(f32, f32, Hsla)>) -> Div {
     let track = theme::text().opacity(0.16);
-    let arc = pct.map(|pct| (pct.clamp(0., 100.) as f32 / 100., meter_color(pct)));
     div().size(px(side)).flex_shrink_0().child(canvas(|_, _, _| (), move |bounds, _, window, _| {
         let ring = Bounds::centered_at(bounds.center(), size(px(diameter), px(diameter)));
         window.paint_quad(outline(ring, track, BorderStyle::Solid).border_widths(px(stroke)).corner_radii(px(diameter / 2.)));
-        let Some((share, color)) = arc.filter(|(share, _)| *share > 0.) else { return };
+        let Some((start, share, color)) = arc.filter(|(_, share, _)| *share > 0.) else { return };
         let (center, radius) = (bounds.center(), (diameter - stroke) / 2.);
         // Um ponto a cada meio pixel de arco, do topo em sentido horário.
         let steps = (std::f32::consts::TAU * radius * share / 0.5).ceil().max(1.) as usize;
         for step in 0..=steps {
-            let angle = std::f32::consts::TAU * share * step as f32 / steps as f32 - std::f32::consts::FRAC_PI_2;
+            let angle = std::f32::consts::TAU * (start + share * step as f32 / steps as f32) - std::f32::consts::FRAC_PI_2;
             let at = point(center.x + px(radius * angle.cos()), center.y + px(radius * angle.sin()));
             window.paint_quad(fill(Bounds::centered_at(at, size(px(stroke), px(stroke))), color).corner_radii(px(stroke / 2.)));
         }
-    }).size_full()).into_any_element()
+    }).size_full())
 }
 
 fn meter_color(pct: f64) -> Hsla {

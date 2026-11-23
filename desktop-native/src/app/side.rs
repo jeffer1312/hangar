@@ -17,7 +17,6 @@ const CHAT_MIN: f32 = 400.;
 // pixel a mais na conta derruba a última coluna para a linha de baixo.
 const PANEL_EDGE: f32 = 3.;
 const COST_EVERY: u64 = 30;
-const DIFF_MAX: usize = 20_000;
 /// Espera da conversa nova antes de reler a lista de arquivos depois de uma falha: longa o bastante para não martelar o servidor.
 const BETA_FILES_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -157,7 +156,6 @@ pub(super) struct Side {
     files_auto: bool,
     /// Conversa nova: subagentes dispensados no painel, pelo id da chamada.
     beta_dismissed: HashSet<String>,
-    diff: Option<(SessionKey, String, Option<Result<(String, bool), String>>)>,
     reloading: HashSet<SessionKey>,
     run_code_pending: HashSet<SessionKey>,
     /// Terminais de atalho com o fechamento pedido e sem resposta: o segundo clique não repete o pedido.
@@ -190,7 +188,7 @@ impl Default for Side {
     fn default() -> Self {
         let saved = appearance::get();
         Self { open: true, menu: false, width: saved.side_width, browser_width: saved.side_browser_width, drag: None, shortcuts: None, project: ProjectShortcuts::default(), cost: None, cost_task: None, cost_gen: 0, orq: Default::default(),
-            files: None, beta_files_sig: None, beta_files_failed: None, beta_files_last: None, files_gen: 0, files_auto: false, beta_dismissed: HashSet::new(), diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
+            files: None, beta_files_sig: None, beta_files_failed: None, beta_files_last: None, files_gen: 0, files_auto: false, beta_dismissed: HashSet::new(), reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
             #[cfg(target_os = "linux")] warm: None,
             shortcut_terms: HashMap::new(), shortcut_focus: HashMap::new(), shortcut_running: HashMap::new(), shortcut_recheck: HashMap::new() }
     }
@@ -218,7 +216,6 @@ impl Side {
         self.beta_files_sig = None;
         self.beta_files_failed = None;
         self.beta_files_last = None;
-        self.diff = None;
         self.git = None;
     }
 
@@ -410,13 +407,11 @@ impl Hangar {
 
     pub(super) fn load_files(&mut self, cx: &mut Context<Self>) { self.read_files(false, cx); }
 
-    /// Lê a lista de arquivos alterados; diz se a leitura começou. A pedida pela pessoa fecha o diff aberto; a
-    /// automática (conversa nova) só atualiza a lista.
+    /// Lê a lista de arquivos alterados; diz se a leitura começou. A automática (conversa nova) só atualiza a lista.
     fn read_files(&mut self, auto: bool, cx: &mut Context<Self>) -> bool {
         if self.open_read_only() { return false; }
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return false; };
         self.side.files = Some((key.clone(), None));
-        if !auto { self.side.diff = None; }
         self.side.files_auto = auto;
         // A pedida pela pessoa mostra o próprio resultado.
         if !auto { self.side.beta_files_failed = None; }
@@ -442,25 +437,6 @@ impl Hangar {
         self.runtime.spawn(async move {
             let result = api.read(&key.name, &["project-shortcuts"], &[], 15).await;
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::ProjectShortcuts(seq), result) }).await;
-        });
-    }
-
-    // POST só de leitura: o backend confere que o caminho está na lista de alterados.
-    fn open_diff(&mut self, path: String, cx: &mut Context<Self>) {
-        if self.open_read_only() { return; }
-        let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
-        if self.side.diff.as_ref().is_some_and(|(owner, current, _)| owner == &key && current == &path) { self.side.diff = None; cx.notify(); return; }
-        self.side.diff = Some((key.clone(), path.clone(), None));
-        self.fetch_diff(api, key, path);
-        cx.notify();
-    }
-
-    /// Pede o diff de `path`; a resposta só entra se ele ainda for o aberto.
-    fn fetch_diff(&self, api: Api, key: SessionKey, path: String) {
-        let (connection, tx) = (self.connection, self.tx.clone());
-        self.runtime.spawn(async move {
-            let result = api.act(&key.name, &["git", "diff"], Some(json!({"path": path})), false, 30).await;
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::Diff(path), result) }).await;
         });
     }
 
@@ -638,13 +614,7 @@ impl Hangar {
                 match slot.clone() {
                     Some(Ok(files)) => {
                         self.side.beta_files_failed = None;
-                        // O agente pode ter mexido de novo no arquivo do diff aberto: a leitura automática o relê também.
-                        let reread = self.side.files_auto.then(|| self.side.diff.as_ref()
-                            .filter(|(owner, path, _)| owner == &key && files.iter().any(|f| f.path == *path)).map(|(_, path, _)| path.clone())).flatten();
                         self.side.beta_files_last = Some((key.clone(), files));
-                        if let (Some(path), Some(api)) = (reread, self.session_api().filter(|_| self.selected_key().as_ref() == Some(&key))) {
-                            self.fetch_diff(api, key.clone(), path);
-                        }
                     }
                     Some(Err(reason)) if self.side.files_auto => {
                         // Uma linha por motivo: a nova tentativa a cada prazo não enche o log.
@@ -660,14 +630,6 @@ impl Hangar {
                     }
                     _ => {}
                 }
-            }
-            Reply::Diff(path) => {
-                let Some((owner, current, slot)) = self.side.diff.as_mut() else { return; };
-                if owner != &key || current != &path { return; }
-                *slot = Some(match result {
-                    Ok(value) => Ok((value.get("diff").and_then(Value::as_str).unwrap_or("").to_owned(), value.get("truncated").and_then(Value::as_bool).unwrap_or(false))),
-                    Err(error) => Err(Self::read_failure(&error)),
-                });
             }
             Reply::ShellStopped(label, id) => {
                 self.side.stop_pending.remove(&id);
@@ -897,7 +859,7 @@ impl Hangar {
         if repo.is_none() && session.git_dirty.is_none() && session.git_added.is_none() { return None; }
         if appearance::conversation_beta() { return Some(self.render_beta_project(&session, key, cx)); }
         // Desligada a conversa nova, a lista que ela leu sozinha não vira a lista aberta pelo botão.
-        if self.side.beta_files_sig.take().is_some() { self.side.files = None; self.side.diff = None; }
+        if self.side.beta_files_sig.take().is_some() { self.side.files = None; }
         let mut body = div().flex().flex_col().gap_2().child(chrome::section_label(tr("side_repository")));
         if let Some(repo) = repo {
             let branch = status.and_then(|s| s.branch.clone()).unwrap_or_default();
@@ -920,24 +882,23 @@ impl Hangar {
             .child(Button::new("side-files").xsmall().ghost().selected(open).label(tr(if open { "side_files_reload" } else { "side_files" }))
                 .on_click(cx.listener(|this, _, _, cx| this.load_files(cx))))
             .when(open, |el| el.child(Button::new("side-files-close").xsmall().ghost().label(tr("close"))
-                .on_click(cx.listener(|this, _, _, cx| { this.side.files = None; this.side.diff = None; cx.notify(); })))));
+                .on_click(cx.listener(|this, _, _, cx| { this.side.files = None; cx.notify(); })))));
         if open {
             let listing = match self.side.files.as_ref().and_then(|(_, slot)| slot.as_ref()) {
                 None => div().text_xs().text_color(theme::muted()).child(tr("side_files_loading")).into_any_element(),
                 Some(Err(reason)) => div().text_xs().text_color(theme::warning()).child(reason.clone()).into_any_element(),
                 Some(Ok(files)) if files.is_empty() => div().text_xs().text_color(theme::muted()).child(tr("side_files_empty")).into_any_element(),
                 Some(Ok(files)) => {
-                    let current = self.side.diff.as_ref().map(|(_, path, _)| path.clone());
                     div().id("side-files-list").max_h(px(220.)).overflow_y_scroll().flex().flex_col()
                         .children(files.iter().enumerate().map(|(n, file)| {
                             let (path, open) = (file.path.clone(), file.path.clone());
                             let counts = match (file.added, file.removed) { (Some(a), Some(r)) => format!("+{a} −{r}"), _ => file.code.clone() };
-                            // O clique na linha mostra o diff; o botão ao lado abre o arquivo no visor.
+                            // O clique na linha abre o diff na janela de Git; o botão ao lado abre o arquivo no visor.
                             div().w_full().flex_shrink_0().flex().items_center()
-                                .child(Button::new(SharedString::from(format!("side-file-{n}"))).ghost().xsmall().flex_1().min_w_0().selected(current.as_deref() == Some(file.path.as_str()))
+                                .child(Button::new(SharedString::from(format!("side-file-{n}"))).ghost().xsmall().flex_1().min_w_0()
                                     .child(div().flex_1().min_w_0().truncate().font_family(crate::theme::MONO).child(file.path.clone()))
                                     .child(div().flex_shrink_0().text_color(theme::muted()).child(counts))
-                                    .on_click(cx.listener(move |this, _, _, cx| this.open_diff(path.clone(), cx))))
+                                    .on_click(cx.listener(move |this, _, window, cx| this.open_git_at(path.clone(), window, cx))))
                                 .child(Button::new(SharedString::from(format!("side-file-open-{n}"))).ghost().xsmall().icon(IconName::FileText)
                                     .tooltip(tr("side_file_open")).accessibility_label(tr("side_file_open"))
                                     .on_click(cx.listener(move |this, _, window, cx| this.open_file(open.clone(), None, window, cx))))
@@ -946,34 +907,11 @@ impl Hangar {
             };
             body = body.child(listing);
         }
-        body = body.children(self.render_side_diff(&key, cx));
         Some(body.into_any_element())
     }
 
-    /// O diff do arquivo escolhido na lista do repositório, quando é desta sessão.
-    fn render_side_diff(&mut self, key: &SessionKey, cx: &mut Context<Self>) -> Option<Div> {
-        let (owner, path, slot) = self.side.diff.clone().filter(|(owner, ..)| owner == key)?;
-        let _ = owner;
-        let content = match slot {
-            None => div().text_xs().text_color(theme::muted()).child(tr("side_diff_loading")).into_any_element(),
-            Some(Err(reason)) => div().text_xs().text_color(theme::warning()).child(reason).into_any_element(),
-            Some(Ok((diff, truncated))) if diff.trim().is_empty() => div().text_xs().text_color(theme::muted())
-                .child(tr(if truncated { "side_diff_truncated" } else { "side_diff_empty" })).into_any_element(),
-            Some(Ok((diff, truncated))) => {
-                let (shown, clipped) = conversation::clip(&diff, DIFF_MAX);
-                let view = self.text_view(&format!("side-diff:{path}"), "__side__", conversation::fenced(shown), cx);
-                div().flex().flex_col().gap_1()
-                    .child(div().id("side-diff").max_h(px(360.)).overflow_y_scroll().text_xs().child(TextView::new(&view).selectable(true).scrollable(false)))
-                    .when(truncated || clipped, |el| el.child(div().text_xs().text_color(theme::muted()).child(tr("side_diff_truncated"))))
-                    .into_any_element()
-            }
-        };
-        Some(div().flex().flex_col().gap_1().p_2().rounded(px(12.)).bg(theme::inset()).border_1().border_color(theme::border())
-            .child(div().text_xs().font_family(crate::theme::MONO).truncate().child(path)).child(content))
-    }
-
     /// Conversa nova: "+46 −0 em 2 arquivos na working tree" e a lista dos arquivos, lida sozinha quando as contagens
-    /// mudam; o clique no arquivo mostra o diff embaixo, como a lista aberta pelo botão.
+    /// mudam; o clique no arquivo abre o diff dele na janela de Git.
     fn render_beta_project(&mut self, session: &SessionInfo, key: SessionKey, cx: &mut Context<Self>) -> AnyElement {
         // As contagens não dizem quais arquivos mudaram: a branch, os commits e o fim de cada turno também releem.
         let turn_end = (session.state != "working").then_some(session.last_activity).flatten();
@@ -1015,7 +953,6 @@ impl Hangar {
         let failure = failure.map(|reason| div().mt(px(8.)).flex().items_center().gap(px(8.)).text_size(px(12.5)).text_color(theme::warning())
             .child(div().flex_1().min_w_0().child(reason))
             .child(Button::new("side-files-retry").xsmall().outline().label(tr("beta_retry")).on_click(cx.listener(|this, _, _, cx| this.load_files(cx)))));
-        let current = self.side.diff.as_ref().map(|(_, path, _)| path.clone());
         let rows = files.into_iter().flatten().enumerate().map(|(n, file)| {
             let (icon, color) = match file.code.trim() {
                 "A" | "??" => (IconName::Plus, theme::success()),
@@ -1023,15 +960,14 @@ impl Hangar {
                 _ => (IconName::Pencil, theme::warning()),
             };
             let path = file.path.clone();
-            let selected = current.as_deref() == Some(file.path.as_str());
-            Button::new(SharedString::from(format!("side-file-{n}"))).ghost().w_full().h_auto().p_0().selected(selected)
+            Button::new(SharedString::from(format!("side-file-{n}"))).ghost().w_full().h_auto().p_0()
                 .child(div().w_full().flex().items_center().gap(px(8.)).ml(px(-8.)).px(px(8.)).py(px(6.)).rounded(px(8.))
                     .font_family(crate::theme::MONO).text_size(px(12.5))
                     .child(chrome::small_icon(icon, 14., color))
                     .child(div().flex_1().min_w_0().truncate().text_left().text_color(theme::text()).child(file.path.clone()))
                     .when_some(file.added.filter(|a| *a > 0), |el, a| el.child(div().flex_shrink_0().text_size(px(12.)).text_color(theme::success()).child(format!("+{a}"))))
                     .when_some(file.removed.filter(|r| *r > 0), |el, r| el.child(div().flex_shrink_0().text_size(px(12.)).text_color(theme::danger_text()).child(format!("−{r}")))))
-                .on_click(cx.listener(move |this, _, _, cx| this.open_diff(path.clone(), cx)))
+                .on_click(cx.listener(move |this, _, window, cx| this.open_git_at(path.clone(), window, cx)))
         }).collect::<Vec<_>>();
         div().flex().flex_col()
             .child(div().flex().items_center().justify_between().child(beta_title(tr("side_repository")).mb_0()).child(reload("side-files-reload")))
@@ -1039,7 +975,6 @@ impl Hangar {
             .children(loading)
             .children(failure)
             .when(!rows.is_empty(), |el| el.child(div().id("side-files-list").mt(px(8.)).max_h(px(260.)).overflow_y_scroll().flex().flex_col().gap(px(2.)).children(rows)))
-            .children(self.render_side_diff(&key, cx).map(|diff| diff.mt(px(8.))))
             .into_any_element()
     }
 
@@ -1433,6 +1368,7 @@ impl Hangar {
                     None if menu => self.render_side_menu(cx),
                     None => div().flex_1().min_h_0().children(self.subagent_tab_view()).into_any_element(),
                     Some(SideTab::Files) => div().flex_1().min_h_0().child(self.render_tree(cx)).into_any_element(),
+                    Some(SideTab::Media) => div().flex_1().min_h_0().child(self.render_media_panel(width, cx)).into_any_element(),
                     Some(SideTab::Activity) => div().flex_1().min_h_0().child(self.activity_view()).into_any_element(),
                     Some(SideTab::Git) => div().flex_1().min_h_0().children(self.side_git(window, cx)).into_any_element(),
                     // A revisão ganha a altura inteira do painel, com o recuo das seções do Contexto.

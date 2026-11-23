@@ -119,7 +119,9 @@ passos rodam em faixas paralelas e o pytest em vários processos: `git config ha
 (padrão 4; `1` = tudo em fila). O Node é o do `.node-version`, o mesmo do CI: com o `fnm` instalado, o
 script e o `ci-gates.sh` trocam sozinhos; sem ele, o aviso diz que front e mobile podem falhar por isso. O hook do
 `gh pr create` (`.claude/settings.json`) confere o PR inteiro desde a base; a trava `pre-push`, cada
-push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. O que ela cobre e o que só o CI cobre:
+push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. No GitHub
+o merge passa pelo check `merge-gate` (`.github/workflows/gate.yml`), que testa servidor, desktop e
+Expo pelo que o PR muda; regra em [instalacao.md](docs/decisoes/instalacao.md#portão-de-merge-22112026). O que ela cobre e o que só o CI cobre:
 [instalacao.md](docs/decisoes/instalacao.md#verificação-local-antes-do-push-06102026). `npm run build` só para servir o `dist` local. Ao reportar, diga o que foi conferido no uso real e que os testes automatizados não rodaram.
 
 Claude sessions with a terminal must run as `claude --session-id <uuid>` **inside tmux** —
@@ -754,6 +756,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `GET`/`HEAD` e, em https, só o `__Host-cp_token`: máquinas do Connect dividem o mesmo site.
   Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#hangar-connect-a-entrada-é-do-rust-e-cada-aparelho-tem-credencial-própria-07112026).
+- **Primeiro acesso é pelo Connect, para o dono e para o convidado, sem endereço.** O cliente manda só
+  o nome ao serviço (`/v1/lookup`); a senha do convidado vai só à máquina dele. Contas de convidado moram
+  em `~/.hangar/guest-accounts.json` (crate `hangar-guest-accounts`, rotas `/api/guest-accounts` do
+  dono), fora da configuração compartilhada; o login delas não depende da Sincronização e faz uma
+  derivação só em todo caminho. Nome de convidado tem `.` ou `@`. Aparelho é liberado uma vez para a
+  conta toda. `sync-vault.json` e `/api/sync/guests` ficam como estão. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#entrar-pelo-connect-e-convidados-pelo-connect-22112026).
 - **Prévia de porta pelo Connect: `127.0.0.1:8769` é um listener próprio (`hangar-connect/src/preview.rs`),
   fora de `hangar_auth`.** O link de uso único abre uma página com botão, e só o `POST` dela o gasta
   e vira cookie `__Host-` por 303, com sessão de 8 h. O projeto nunca vê credencial do Hangar e guarda
@@ -799,10 +808,19 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   config completado, com cópia, nunca reinstalado. Ele só passa ao Hangar a pedido da pessoa
   ("Deixar o Hangar cuidar"), com o mesmo config e as mesmas contas: o serviço de fora é desligado,
   nunca desinstalado, e volta se a versão do Hangar não responder. Atualiza só pelo botão,
-  confirmando com sessão viva no proxy. Conta logada só no proxy entra no seletor como `cliproxy:cpa-…`, fixa por sessão.
+  confirmando com sessão viva no proxy. Conta logada só no proxy entra no seletor como `cliproxy:cpa-…`.
+  **Usar esta conta** vincula o próprio motor à identidade ChatGPT escolhida; motor vinculado não aceita
+  outra conta nem cai no rodízio. A sessão grava o vínculo, e a cota vem da assinatura consultada pelo proxy,
+  sem exigir login Codex. Motor antigo sem vínculo só é vinculado pelo editor, nunca pelo nome.
   O motor do assistente grava `fast`; ausente vale disponível, e a sessão nasce sem Fast. Ultra Fast
   só com conta fixa Pro/Pro Max e a regra do cabeçalho `X-Hangar-Speed` no config (proxy v8+). Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#cliproxyapi-instalado-e-configurado-pelo-hangar-19112026).
+- **WhatsApp é só leitura, por um binário de fora (`jeffer1312/hangar-whatsapp`), só do dono.** Nada
+  é enviado: o binário só chama `SendMediaRetryReceipt` e recibos automáticos (teste de lista fechada).
+  Instalar exige aceite (`accepted.json`); o router usa `Edge::owner_only` e a 8766 não o monta; as
+  ferramentas recusam em sessão compartilhada e marcam texto de terceiros. Mídia antiga só a pedido,
+  com teto. Loopback com HMAC nos dois sentidos: resposta sem assinatura é 502 `whatsapp_untrusted`.
+  Evidência em [plataforma.md](docs/decisoes/plataforma.md#whatsapp-só-leitura-22112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,
@@ -816,6 +834,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `hangar-server` desce antes para o `hangar-core`, ou vira trait no core que o servidor
   implementa. Nenhum crate depende do `hangar-server`. Motivo e plano da divisão em
   [plataforma.md](docs/decisoes/plataforma.md#módulo-novo-nasce-como-crate-próprio-06112026).
+  Exceção: `hangar-connect-client`, crate folha compartilhado com o `desktop-native`, que não pode
+  depender do `hangar-core` ([motivo](docs/decisoes/plataforma.md#entrar-pelo-connect-e-convidados-pelo-connect-22112026)).
 - **Motores, login de convidados e peers são do Rust.** Catálogo, CLIProxy, espelhos e instalação
   ficam em `engines/`, `harness_setup/` e `codex_setup/`; identidade, permissões, raízes e lista do
   convidado em `login_guests/`; configuração, descoberta e canal dos peers em `machine_peers/`.
@@ -963,6 +983,18 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. Não há lançador
   Python. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
+- **Padrão de abertura é do servidor; cliente só manda o que a pessoa escolheu naquela tela.**
+  Opção nova de abertura entra no `SessionOpenRequest` como `Option` (omitido = padrão do
+  servidor), com o padrão gravado no servidor (`session-defaults.json`, ou `session-options.json`
+  para as opções da tela Beta) e aplicado no `resolve_open()`; nunca numa preferência do cliente
+  (`appearance.json`, armazenamento do aparelho) posta no corpo. Todo campo do pedido está na
+  tabela do crate `hangar-session-open-fields` e é dito pelo `hangar-send --new` e pelo MCP
+  `new_session`. Travas: `every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server`
+  e `a_field_with_a_server_default_keeps_the_explicit_value` (`session_open/tests.rs`),
+  `new_session_says_every_open_field` (`mcp/tools.rs`), `new_says_every_open_field`
+  (`hangar-send/tests/open_fields.rs`) e `the_open_body_does_not_depend_on_what_this_computer_saved`
+  (`desktop-native/src/app/create/default_tests.rs`). Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#padrão-de-abertura-é-do-servidor-22112026).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
   do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
   fecha sem matar e reabre no nome novo na mesma geração; falha no meio desfaz e diz o que não voltou.

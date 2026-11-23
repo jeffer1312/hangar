@@ -6,6 +6,7 @@ use crate::fake::{OWNER, client, config, spawn_fake, spawn_state_for};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -44,9 +45,11 @@ fn host_of(id: &str) -> String {
 }
 
 /// As máquinas da conta e o endereço local que faz as vezes de `https://<host>`.
+/// `preapproved`: o serviço novo, que diz no bilhete que a conta liberou a máquina que pede.
 #[derive(Default)]
 struct Account {
     urls: Mutex<HashMap<String, String>>,
+    preapproved: AtomicBool,
 }
 
 fn holds_the_key(headers: &HeaderMap) -> bool {
@@ -69,8 +72,13 @@ async fn devices(State(account): State<Arc<Account>>, Path(id): Path<String>, he
     let Some(url) = account.urls.lock().unwrap().get(&id).cloned() else { return (StatusCode::NOT_FOUND, String::new()) };
     let asked: Value = serde_json::from_slice(&body).unwrap();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let ticket = json!({"machine_id": id, "account": "acme", "device_name": asked["device_name"], "verifier": asked["verifier"],
-        "nonce": hash(asked["verifier"].to_string().as_bytes()), "expires_at": now + 60}).to_string();
+    let mut ticket = json!({"machine_id": id, "account": "acme", "device_name": asked["device_name"], "verifier": asked["verifier"],
+        "nonce": hash(asked["verifier"].to_string().as_bytes()), "expires_at": now + 60});
+    if account.preapproved.load(Ordering::Relaxed) {
+        ticket["preapproved"] = json!(true);
+        ticket["account_device"] = json!(format!("machine:{}", asked["device_name"].as_str().unwrap()));
+    }
+    let ticket = ticket.to_string();
     let signature = sign(&ticket);
     (StatusCode::OK, json!({"url": url, "ticket": ticket, "signature": signature}).to_string())
 }
@@ -125,6 +133,7 @@ async fn machine(id: &'static str, server_id: &str, service: SocketAddr) -> Mach
 
 struct World {
     service: SocketAddr,
+    account: Arc<Account>,
     a: Machine,
     b: Machine,
 }
@@ -140,7 +149,7 @@ async fn world_named(server_a: &str, server_b: &str) -> World {
     for m in [&a, &b] {
         account.urls.lock().unwrap().insert(m.id.to_owned(), format!("http://{}", m.connect));
     }
-    World { service, a, b }
+    World { service, account, a, b }
 }
 
 fn peers_path(m: &Machine) -> PathBuf {
@@ -213,6 +222,38 @@ async fn linked_pair() -> World {
     approve_card(&w.b).await;
     wait_stage(&w.a, w.b.id, "linked").await;
     w
+}
+
+/// Serviço novo: a conta liberou a máquina que pede, e B aprova o pedido sem cartão.
+#[tokio::test]
+async fn account_machines_link_without_a_card() {
+    let w = world().await;
+    w.account.preapproved.store(true, Ordering::Relaxed);
+    assert_eq!(start_link(&w.a, "pc-b").await.status(), 202);
+    assert_eq!(wait_stage(&w.a, "pc-b", "linked").await["peer"], "pc-b", "ninguém aprovou nada em B");
+    assert!(w.b.store.list().iter().all(|device| device.status == Status::Approved), "nenhum cartão esperando em B");
+    let token = peers_of(&w.a)["pc-b"]["token"].as_str().unwrap().to_owned();
+    assert!(w.b.store.verify(token.as_bytes()).is_some());
+    assert!(peers_of(&w.b)["pc-a"]["token"].is_string(), "a entrega de volta também saiu");
+}
+
+/// O resgate diz se o bilhete já veio liberado pela conta; o do serviço antigo continua esperando o cartão.
+#[tokio::test]
+async fn the_redeem_says_approved_only_for_a_preapproved_ticket() {
+    let w = world().await;
+    for (preapproved, expected) in [(false, "pending"), (true, "approved")] {
+        w.account.preapproved.store(preapproved, Ordering::Relaxed);
+        let secret = format!("segredo-{expected}");
+        let issued = client().post(format!("http://{}/v1/machines/pc-b/devices", w.service)).bearer_auth(MACHINE_KEY)
+            .body(json!({"device_name": "pc-a", "verifier": hash(secret.as_bytes())}).to_string()).send().await.unwrap();
+        let issued: Value = serde_json::from_str(&issued.text().await.unwrap()).unwrap();
+        let body = json!({"ticket": issued["ticket"], "signature": issued["signature"], "secret": secret}).to_string();
+        let redeemed = client().post(format!("http://{}/api/connect/redeem", w.b.connect)).header("content-type", "application/json")
+            .body(body).send().await.unwrap();
+        assert_eq!(redeemed.status(), 202);
+        let redeemed: Value = serde_json::from_str(&redeemed.text().await.unwrap()).unwrap();
+        assert_eq!(redeemed["status"], expected);
+    }
 }
 
 #[tokio::test]

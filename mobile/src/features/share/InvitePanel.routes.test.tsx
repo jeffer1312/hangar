@@ -60,6 +60,11 @@ async function mount(Component: typeof Invite) {
 async function click(el: HTMLElement, label: string) {
   await act(async () => { (el.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement | null)?.click(); });
 }
+// QR, endereço e convite moram em "Outras formas de entrar", recolhido ao abrir a tela.
+async function otherWay(el: HTMLElement, label: string) {
+  await click(el, m.login_other_ways());
+  await click(el, label);
+}
 const input = (el: HTMLElement, label = m.mobile_share_invite_link_label()) => el.querySelector(`[aria-label="${label}"]`) as HTMLInputElement | null;
 
 beforeEach(async () => {
@@ -94,7 +99,7 @@ describe('nome de máquina no login', () => {
       return new Response(JSON.stringify(url.endsWith('/app-list') ? { rev: 'r1', servers: [] } : []));
     });
     const el = await mount(Login);
-    await click(el, m.login_qr());
+    await otherWay(el, m.login_qr());
     await act(async () => { boundary.scan?.({ data: 'http://10.0.0.5:8765/?token=owner-token' }); });
 
     await click(el, m.login_conectar());
@@ -122,7 +127,7 @@ describe('nome de máquina no login', () => {
     await useServers.getState().load();
     boundary.fetch.mockImplementation(async (url: string) => new Response(JSON.stringify(url.endsWith('/app-list') ? { rev: 'r1', servers: [] } : [])));
     const el = await mount(Login);
-    await click(el, m.login_qr());
+    await otherWay(el, m.login_qr());
     await act(async () => { boundary.scan?.({ data: `${saved.baseUrl}/?token=new-token` }); });
 
     await click(el, m.login_conectar());
@@ -141,7 +146,7 @@ describe('nome de máquina no login', () => {
     boundary.sessions.mockImplementation(getSessions);
     boundary.fetch.mockRejectedValue(new TypeError('Network request failed'));
     const el = await mount(Login);
-    await click(el, m.login_qr());
+    await otherWay(el, m.login_qr());
     await act(async () => { boundary.scan?.({ data: `${saved.baseUrl}/?token=new-token` }); });
 
     await click(el, m.login_conectar());
@@ -188,14 +193,14 @@ describe('entrada de convite nas rotas', () => {
 
   it('login oferece colar convite com o mesmo formulário', async () => {
     const el = await mount(Login);
-    await click(el, m.mobile_share_invite_open());
+    await otherWay(el, m.mobile_share_invite_open());
     expect(input(el)?.value).toBe('');
     expect(el.textContent).toContain(m.mobile_share_invite_title());
   });
 
   it('QR de convite passa ao formulário sem resgate automático e abre chat ao confirmar', async () => {
     const el = await mount(Login);
-    await click(el, m.login_qr());
+    await otherWay(el, m.login_qr());
     expect(boundary.scan).not.toBeNull();
     await act(async () => { boundary.scan?.({ data: LINK }); });
     expect(input(el)?.value).toBe(LINK);
@@ -207,7 +212,7 @@ describe('entrada de convite nas rotas', () => {
 
   it('QR de máquina própria continua no pareamento original', async () => {
     const el = await mount(Login);
-    await click(el, m.login_qr());
+    await otherWay(el, m.login_qr());
     await act(async () => { boundary.scan?.({ data: 'http://10.0.0.5:8765/?token=owner-token' }); });
     expect(input(el, m.sessao_url_servidor())?.value).toBe('http://10.0.0.5:8765');
     expect(input(el, m.sessao_token())?.value).toBe('owner-token');

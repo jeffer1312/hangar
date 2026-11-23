@@ -58,7 +58,7 @@ struct InstallState {
 enum Start { Follow, Install, Adopt { confirm: bool } }
 
 #[derive(Clone, Deserialize)]
-struct Connected { #[serde(rename = "type")] kind: String, #[serde(default)] email: String }
+struct Connected { #[serde(rename = "type")] kind: String, #[serde(default)] email: String, binding: Option<String>, prefix: Option<String>, plan: Option<String> }
 
 #[derive(Clone, Deserialize)]
 struct ProxyModel { id: String, context_length: Option<u64> }
@@ -121,6 +121,8 @@ pub(super) struct CliproxyWizard {
     polling: bool,
     /// Contas do proxy antes do login: a que aparecer de novo é a que entrou.
     before: Vec<Connected>,
+    login_account: Option<Connected>,
+    selected_binding: Option<String>,
     other_open: bool,
     relay: Option<relay::Relay>,
     callback: Entity<InputState>,
@@ -321,7 +323,7 @@ impl Hangar {
         ];
         self.accounts.outcome = None;
         self.accounts.cliproxy = Some(CliproxyWizard { step: WizardStep::Install, turn: 0, task: None, status: None, reading: false,
-            installing: false, adopt: true, job: None, install_error: None, login: LoginPhase::Pick, login_error: None, polling: false, before: Vec::new(),
+            installing: false, adopt: true, job: None, install_error: None, login: LoginPhase::Pick, login_error: None, polling: false, before: Vec::new(), login_account: None, selected_binding: None,
             other_open: false, relay: None, callback, sending: false, callback_error: None, key: None, mgmt, key_saving: false, name: None, picker: None,
             models: None, models_error: None, model: String::new(), fast: true, name_error: None, saving: false, save_error: None, saved: None,
             _subscriptions: subscriptions });
@@ -480,10 +482,11 @@ impl Hangar {
     }
 
     /// Conta que já estava logada no proxy: segue para o nome sem abrir login.
-    fn wizard_use_existing(&mut self, brand: Brand, email: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn wizard_use_existing(&mut self, brand: Brand, account: Connected, window: &mut Window, cx: &mut Context<Self>) {
         let _ = self.wizard_turn();
         let Some(w) = self.accounts.cliproxy.as_mut() else { return };
-        (w.login, w.login_error, w.key) = (LoginPhase::Connected { brand, email }, None, None);
+        w.selected_binding = account.binding;
+        (w.login, w.login_error, w.key) = (LoginPhase::Connected { brand, email: account.email }, None, None);
         self.wizard_name_step(window, cx);
     }
 
@@ -520,8 +523,20 @@ impl Hangar {
         }
     }
 
-    fn wizard_models(&mut self, models: Vec<ProxyModel>, brand: Brand, window: &mut Window, cx: &mut Context<Self>) {
+    fn wizard_models(&mut self, mut models: Vec<ProxyModel>, brand: Brand, window: &mut Window, cx: &mut Context<Self>) {
         let Some(w) = self.accounts.cliproxy.as_mut() else { return };
+        if brand == Brand::ChatGpt && let Some(binding) = &w.selected_binding {
+            let prefix = w.status.as_ref().and_then(|s| s.as_ref().ok()).and_then(|s|
+                s.connected.iter().find(|a| a.binding.as_ref() == Some(binding))).and_then(|a| a.prefix.as_deref());
+            if let Some(prefix) = prefix {
+                let prefix = format!("{prefix}/");
+                models.retain_mut(|model| {
+                    let Some(id) = model.id.strip_prefix(&prefix) else { return false };
+                    model.id = id.to_owned();
+                    true
+                });
+            } else { models.clear(); }
+        }
         let current = Some(w.model.clone()).filter(|m| models.iter().any(|x| &x.id == m)).or_else(|| default_model(&models, brand));
         let choices: Vec<ModelChoice> = models.iter().map(|m| ModelChoice { id: m.id.clone(), label: m.id.clone(),
             hint: m.context_length.map(|n| format!("{}k", (n as f64 / 1000.).round())).unwrap_or_default() }).collect();
@@ -560,6 +575,14 @@ impl Hangar {
         }
         let mut body = json!({"label": label, "base_url": base_url, "model": w.model, "subagent_model": w.model,
             "use_cliproxy_key": true, "create_only": true, "experimental_betas": true, "fast": w.fast && allows_fast(&w.model)});
+        if matches!(&w.login, LoginPhase::Connected { brand: Brand::ChatGpt, .. }) {
+            let Some(binding) = &w.selected_binding else {
+                w.save_error = Some(tr_shared("cliproxy_choose_connected_account", &[]));
+                cx.notify();
+                return;
+            };
+            body["cliproxy_binding"] = json!(binding);
+        }
         if let Some(limit) = w.models.as_ref().and_then(|m| m.iter().find(|m| m.id == w.model)).and_then(|m| m.context_length) {
             body["context_window"] = json!(safe_context(limit));
         }
@@ -597,7 +620,19 @@ impl Hangar {
                         let LoginPhase::Resolving(brand) = w.login else { return };
                         let email = parsed.as_ref().ok().map(|s| new_email(&w.before, &s.connected, brand.provider())).unwrap_or_default();
                         if parsed.is_ok() { w.status = Some(parsed); }
-                        w.login = LoginPhase::Connected { brand, email };
+                        w.selected_binding = None;
+                        let identified = w.login_account.take().filter(|a| a.kind == brand.provider() && a.binding.is_some());
+                        if brand == Brand::ChatGpt {
+                            if let Some(account) = identified {
+                                w.selected_binding = account.binding;
+                                w.login = LoginPhase::Connected { brand, email: account.email };
+                            } else {
+                                w.login = LoginPhase::Pick;
+                                w.login_error = Some(tr_shared("cliproxy_choose_connected_account", &[]));
+                            }
+                        } else {
+                            w.login = LoginPhase::Connected { brand, email };
+                        }
                     }
                     Purpose::Models => {
                         let LoginPhase::Connected { brand, .. } = w.login else { return };
@@ -690,6 +725,7 @@ impl Hangar {
                 match result {
                     Ok(value) => match value.get("status").and_then(Value::as_str) {
                         Some("ok") => {
+                            w.login_account = serde_json::from_value(value["account"].clone()).ok();
                             (w.polling, w.login, w.login_error, w.relay) = (false, LoginPhase::Resolving(brand), None, None);
                             self.wizard_read(Purpose::AfterLogin, cx);
                         }
@@ -900,16 +936,18 @@ impl Hangar {
                             .child(Button::new("cliproxy-wizard-key-reset").ghost().small().icon(IconName::RefreshCw).label(tr("cliproxy_wizard_key_reset"))
                                 .disabled(w.key_saving).on_click(cx.listener(|this, _, _, cx| this.wizard_reset_key(cx))))));
                 }
-                let existing: Vec<(Brand, String)> = w.status.as_ref().and_then(|s| s.as_ref().ok())
-                    .map(|s| s.connected.iter().filter_map(|a| Some((Brand::of(&a.kind)?, a.email.clone()))).collect()).unwrap_or_default();
-                let rows = existing.into_iter().enumerate().map(|(index, (brand, email))| {
-                    let shown = if email.is_empty() { brand.name().to_owned() } else { email.clone() };
+                let existing: Vec<(Brand, Connected)> = w.status.as_ref().and_then(|s| s.as_ref().ok())
+                    .map(|s| s.connected.iter().filter_map(|a| Some((Brand::of(&a.kind)?, a.clone()))).collect()).unwrap_or_default();
+                let rows = existing.into_iter().enumerate().map(|(index, (brand, account))| {
+                    let label = if account.email.is_empty() { brand.name() } else { &account.email };
+                    let shown = [account.plan.as_deref(), account.prefix.as_deref(), Some(label)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                    let unavailable = busy || (brand == Brand::ChatGpt && account.binding.is_none());
                     div().flex().items_center().gap(px(10.)).px(px(12.)).py(px(8.)).rounded(px(12.)).border_1().border_color(theme::border())
                         .child(brand_logo(brand, 26.))
                         .child(div().flex_1().min_w_0().truncate().child(shown))
                         .child(Button::new(SharedString::from(format!("cliproxy-wizard-use-{index}"))).outline().small()
-                            .label(tr("cliproxy_wizard_use_account")).disabled(busy)
-                            .on_click(cx.listener(move |this, _, window, cx| this.wizard_use_existing(brand, email.clone(), window, cx))))
+                            .label(tr("cliproxy_wizard_use_account")).disabled(unavailable)
+                            .on_click(cx.listener(move |this, _, window, cx| this.wizard_use_existing(brand, account.clone(), window, cx))))
                 }).collect::<Vec<_>>();
                 let has_existing = !rows.is_empty();
                 col.children(w.login_error.clone().map(|error| banner(theme::danger(), IconName::CircleAlert, error)))
@@ -1047,7 +1085,7 @@ impl Hangar {
 mod tests {
     use super::{Brand, Connected, ProxyModel, allows_fast, default_model, default_name, new_email, safe_context};
 
-    fn account(kind: &str, email: &str) -> Connected { Connected { kind: kind.into(), email: email.into() } }
+    fn account(kind: &str, email: &str) -> Connected { Connected { kind: kind.into(), email: email.into(), binding: None, prefix: None, plan: None } }
     fn model(id: &str) -> ProxyModel { ProxyModel { id: id.into(), context_length: None } }
 
     #[test]

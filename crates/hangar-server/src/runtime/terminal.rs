@@ -1152,6 +1152,8 @@ impl Executor {
                 }
             }
         }
+        let by_plugin=!keyboard_ask && expected.as_ref().is_some_and(|expected|expected.target.request_key.starts_with("plugin:") && expected.semantic["source"]!="terminal");
+        if matches!(kind,"answer_questions"|"answer_chat") && !by_plugin {one_line_answers(&mut payload["answers"]);}
         // A trava segura só o texto, que cairia na conversa nova; Parar, teclas e respostas seguem com ela.
         if kind=="input" && self.cleared(&state) && !self.expire_clear().await {return Err(error("runtime_clear_barrier"));}
         let text=payload["text"].as_str().unwrap_or("");
@@ -1624,13 +1626,16 @@ impl Executor {
             // A dica só aparece depois dos hooks de envio da conta: espera como o Orientar, enquanto o turno é o mesmo.
             let deadline=tokio::time::Instant::now()+STEER_HINT_WAIT;
             let mut steered=driver.steer().await;
+            let mut queued=false;
             while steered.disposition==input::Disposition::Deferred && tokio::time::Instant::now()<deadline {
                 tokio::time::sleep(self.options.limits.settle).await;
                 // A dica que aparecer num turno novo não é desta mensagem: nenhuma tecla.
                 if !self.expected_work(payload) {return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_work_changed","cleanup":"not_needed"})));}
                 steered=driver.steer().await;
+                // Guardada na fila da CLI, sem dica para promover: o próprio turno a puxa.
+                if steered.disposition==input::Disposition::Deferred && self.entry_enqueued(&entry).await {queued=true; break;}
             }
-            return Ok(match steered.disposition {
+            return Ok(match if queued {input::Disposition::Accepted} else {steered.disposition} {
                 // Marcada antes da resposta: outro clique nela não aperta o ctrl+x ctrl+s de novo.
                 input::Disposition::Accepted=>{
                     self.action(Action::SetDelivered {entry_id:entry.clone(),value:true,steered:true}).await?;
@@ -1687,6 +1692,14 @@ impl Executor {
                 return Ok(reply(id, Disposition::Accepted, json!({"steered": false, "drained": 1})));
             }
             steered=driver.steer().await;
+            // A dica tem a vez: com ela o atalho corta o turno. Sem ela, a CLI que guardou a mensagem na fila dela
+            // a puxa na próxima pausa do turno.
+            if steered.disposition==input::Disposition::Deferred && self.entry_enqueued(&entry).await {
+                // Sem a marca, a desistência por falta de prova daria como "não chegou" o que a CLI ainda tem na fila.
+                self.action(Action::SetDelivered {entry_id:entry.clone(),value:true,steered:true}).await?;
+                self.publish().await?;
+                return Ok(reply(id,Disposition::Accepted,json!({"steered":true,"drained":1})));
+            }
         }
         // O ctrl+x ctrl+s pode ter ido sem se comprovar: nem "orientou" nem "a dica não veio", e quem clicou confere.
         if steered.disposition==input::Disposition::Unknown {
@@ -1700,6 +1713,23 @@ impl Executor {
             return Ok(reply(id,Disposition::Accepted,json!({"steered":false,"drained":1,"code":"queue_steer_hint_missing"})));
         }
         Ok(reply(id,Disposition::Accepted,json!({"steered":accepted,"drained":1})))
+    }
+
+    /// A CLI já guardou a entrada na fila dela (`queue-operation enqueue` depois do despacho): o turno em curso a
+    /// puxa sozinho. É a prova no Claude Code que não desenha mais a dica do ctrl+x ctrl+s.
+    async fn entry_enqueued(&mut self, entry: &str) -> bool {
+        let Ok(state) = self.queue.snapshot().await else { return false };
+        let Some(row) = state.rows.iter().find(|row| row["id"] == entry) else { return false };
+        // O `enqueue` não é gasto por quem prova: outra entregue sem confirmação com o mesmo texto o usaria também.
+        let text = row["text"].as_str().unwrap_or("");
+        if state.rows.iter().any(|other| other["id"] != entry && other["delivered"] == true && other["confirmed"] != true
+            && other["desistiu"] != true && self.receipt.matching_text(other, text).is_some()) { return false; }
+        // Só a tentativa que saiu, como na confirmação: o cursor de uma adiada provaria a fila de outra entrada igual.
+        let cursors: Vec<DispatchCursor> = state.operations.values()
+            .filter(|op| op.entry_id.as_deref() == Some(entry) && matches!(op.status, Status::Accepted | Status::Unknown | Status::Dispatching))
+            .filter_map(|op| serde_json::from_value(op.dispatch_cursor.clone()).ok()).collect();
+        if cursors.is_empty() || self.receipt.scan(&self.target.transcript).is_err() { return false; }
+        cursors.iter().any(|cursor| self.receipt.enqueued_after(&self.target.transcript, cursor, row).unwrap_or(false))
     }
 
     async fn entry_confirmed(&mut self, entry: &str) -> bool {
@@ -2015,6 +2045,13 @@ impl Executor {
     }
 }
 fn is_clear(text:&str)->bool {text.split_whitespace().next()==Some("/clear")}
+/// Digitada no pane, a quebra de linha da resposta livre seria um Enter no meio dela: as linhas viram uma.
+fn one_line_answers(answers:&mut Value) {
+    for answer in answers.as_array_mut().into_iter().flatten() {
+        let flat=answer["value"].as_str().filter(|_|answer["kind"]=="text").map(crate::session_write::answer::one_line);
+        if let Some(flat)=flat {answer["value"]=json!(flat);}
+    }
+}
 fn validate(kind:&str,payload:&Value)->Result<(),RuntimeError> {
     let fields:&[&str]=match kind {
         "input"=>&["text","pre_transcript","conversation"],"steer"=>&[],"key"|"navigation_key"|"interactive_key"=>&["key"],"terminal_input"=>&["text"],
@@ -2029,7 +2066,8 @@ fn validate(kind:&str,payload:&Value)->Result<(),RuntimeError> {
         "select"=>payload["option"].as_u64().is_some_and(|v|v>0 && v<=100) && payload.get("require_cursor").is_none_or(Value::is_boolean) && payload.get("text").is_none_or(|t|t.as_str().is_some_and(|t|valid_text(t) && !t.contains('\n'))) && payload.get("request_id").is_none_or(Value::is_string),
         "answer_questions"|"answer_chat"=>serde_json::from_value::<Vec<QuestionAnswer>>(payload["answers"].clone()).is_ok_and(|answers|!answers.is_empty() && answers.iter().all(|a|match a.kind {
             AnswerKind::Option=>!a.indices.is_empty() && a.indices.iter().all(|i|*i<100) && (a.multi||a.indices.len()==1) && !a.labels.is_empty(),
-            AnswerKind::Text=>a.type_index.is_some_and(|i|i<100) && a.value.as_ref().is_some_and(|v|valid_text(v)&&!v.contains('\n')),
+            // Parágrafos valem para o plugin; o caminho das teclas os junta numa linha antes de digitar.
+            AnswerKind::Text=>a.type_index.is_some_and(|i|i<100) && a.value.as_ref().is_some_and(|v|valid_text(v)),
             AnswerKind::Chat=>a.chat_index.is_some_and(|i|i<100),
         })) && payload.get("request_id").is_none_or(Value::is_string),
         "interrupt"=>payload.get("clear").is_none_or(Value::is_boolean),"steer_queue"=>payload.get("entry_id").is_none_or(Value::is_string),_=>true,
@@ -2058,6 +2096,18 @@ mod tests {
         assert_eq!(super::plugin_edge(Some(false), Some(&seen(500)), long), (Some(false), None), "uma linha por queda");
         assert_eq!(super::plugin_edge(Some(false), Some(&open), long), (Some(true), Some(true)), "voltou");
         assert_eq!(super::plugin_edge(Some(true), None, long), (Some(true), None), "vínculo ilegível não decide nada");
+    }
+    /// Resposta livre em parágrafos passa pela validação; para as teclas ela vira uma linha, outro controle segue recusado.
+    #[test]
+    fn answer_paragraphs_pass_validation_and_become_one_line_for_the_keys() {
+        use serde_json::json;
+        let payload=|value:&str| json!({"answers":[{"kind":"text","value":value,"type_index":0}],"interaction_id":"i"});
+        assert!(super::validate("answer_questions",&payload("primeiro\nsegundo")).is_ok());
+        assert!(super::validate("answer_chat",&payload("primeiro\nsegundo")).is_ok());
+        assert!(super::validate("answer_questions",&payload("a\u{7}b")).is_err());
+        let mut typed=payload("primeiro\n\n  segundo");
+        super::one_line_answers(&mut typed["answers"]);
+        assert_eq!(typed["answers"][0]["value"],"primeiro segundo");
     }
     /// argv ilegível (processo que sumiu, `/proc` negado) é erro com código, não "sem bypass".
     #[test]

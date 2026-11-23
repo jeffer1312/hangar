@@ -28,8 +28,13 @@ vi.mock('expo-blur', async () => ({ BlurTargetView: (await import('react-native'
 vi.mock('expo-linear-gradient', async () => ({ LinearGradient: (await import('react-native')).View }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: '/tmp' } }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => {
-  const store = new Map<string, string>();
-  return { getString: (k: string) => store.get(k), set: (k: string, v: string) => { store.set(k, v); }, remove: (k: string) => { store.delete(k); } };
+  const store = new Map<string, string | boolean>();
+  return {
+    getString: (k: string) => store.get(k) as string | undefined,
+    getBoolean: (k: string) => store.get(k) as boolean | undefined,
+    set: (k: string, v: string | boolean) => { store.set(k, v); },
+    remove: (k: string) => { store.delete(k); },
+  };
 } }));
 vi.mock('sonner-native', () => ({ toast: { error: vi.fn(), success: vi.fn() }, Toaster: () => null }));
 vi.mock('../../stores/aparencia', async () => {

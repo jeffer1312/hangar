@@ -176,6 +176,43 @@ pub fn answer(ask: &Ask, item: &AskItem, pick: &Pick) -> Option<Value> {
     Some(answer)
 }
 
+/// Parêntese do rótulo que pede para escrever: "Canal (digite qual)", "Email (enter address)".
+/// Em inglês com espaço depois do verbo: "(enterprise)" e "(write-only)" são parte do nome.
+const WRITE_ASKS: [&str; 10] = ["(digite", "(informe", "(descreva", "(escreva", "(diga",
+    "(enter ", "(specify", "(describe ", "(write ", "(tell "];
+
+/// A opção que pede o complemento no campo livre, como o agente costuma escrever: "Canal (digite qual)",
+/// "Outro monitor — você diz qual no campo de texto", "informe a chave em Other".
+pub fn asks_for_text(option: &AskOption) -> bool {
+    let label = option.label.to_lowercase();
+    let both = format!("{} {}", option.label, option.description);
+    let lower = both.to_lowercase();
+    // O campo "Other" só conta com maiúscula: "in other regions" é descrição comum, não pedido de escrita.
+    WRITE_ASKS.iter().any(|k| label.contains(k))
+        || ["em Other", "no Other", "in Other"].iter().any(|k| both.contains(k))
+        || ["campo outro", "campo de texto", "campo livre", "digite no campo", "escreva no campo", "informe no campo",
+            "the text field", "the free text field", "the free-text field"].iter().any(|k| lower.contains(k))
+}
+
+/// O começo da resposta escrita a partir da opção: o nome dela e dois-pontos. O parêntese do fim só sai quando é o
+/// pedido de escrita; "Servidor (produção)" fica inteiro.
+pub fn text_prefix(option: &AskOption) -> String {
+    let label = option.label.trim();
+    let base = match label.rfind(" (") {
+        Some(at) if label.ends_with(')') && WRITE_ASKS.iter().any(|k| label[at + 1..].to_lowercase().starts_with(k)) => &label[..at],
+        _ => label,
+    };
+    format!("{}: ", base.trim())
+}
+
+/// O campo livre ao escolher a opção que pede texto: o prefixo dela na frente do que já foi escrito, trocando o de
+/// outra opção (`others`) sem apagar o resto. `None` quando o campo já começa por ela.
+pub fn text_from_option(current: &str, prefix: &str, others: &[String]) -> Option<String> {
+    if current.starts_with(prefix) { return None; }
+    let rest = others.iter().find_map(|other| current.strip_prefix(other.as_str())).unwrap_or(current);
+    Some(format!("{prefix}{}", rest.trim_start()))
+}
+
 /// Seletor com as linhas "Type something." e "Chat about this": o do AskUserQuestion, mas também menus do próprio
 /// Claude Code (mods). Quem decide se o card nativo responde é `Chat::ask_pane`.
 pub fn ask_picker(options: &[String]) -> bool {
@@ -344,6 +381,34 @@ pub fn question_links(question: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_option_that_asks_for_text_leads_to_the_free_field_with_its_name() {
+        let opt = |label: &str, description: &str| crate::api::dto::AskOption { label: label.into(), description: description.into(), preview: None };
+        assert!(super::asks_for_text(&opt("Canal (digite qual)", "Poste num canal; informe o nome em Other.")));
+        assert!(super::asks_for_text(&opt("Outro monitor", "Você diz qual no campo de texto.")));
+        assert!(super::asks_for_text(&opt("Já tenho a PM", "Informe a chave em Other.")));
+        assert!(!super::asks_for_text(&opt("Inline nesta sessão (Recomendado)", "Executo tudo aqui, em sequência.")));
+        assert_eq!(super::text_prefix(&opt("Canal (digite qual)", "")), "Canal: ");
+        let others = ["Canal: ".to_owned(), "Outro: ".to_owned()];
+        assert_eq!(super::text_from_option("", "Canal: ", &others).as_deref(), Some("Canal: "));
+        // O que a pessoa já escreveu fica, depois do prefixo.
+        assert_eq!(super::text_from_option("slack", "Canal: ", &others).as_deref(), Some("Canal: slack"));
+        assert_eq!(super::text_from_option("Outro: x", "Canal: ", &others).as_deref(), Some("Canal: x"));
+        assert_eq!(super::text_from_option("Canal: slack", "Canal: ", &others), None);
+        assert_eq!(super::text_prefix(&opt("Já tenho a PM", "")), "Já tenho a PM: ");
+        assert!(super::asks_for_text(&opt("Email (enter address)", "")));
+        assert_eq!(super::text_prefix(&opt("Email (enter address)", "")), "Email: ");
+        assert!(!super::asks_for_text(&opt("Plano (enterprise)", "")));
+        assert!(super::asks_for_text(&opt("Other server", "Type it in Other.")));
+        // Descrição comum não troca a opção pelo campo livre.
+        assert!(!super::asks_for_text(&opt("US", "Available in other regions")));
+        assert!(!super::asks_for_text(&opt("Sem filtro", "Não há outro modo; disponível em outros países.")));
+        assert!(!super::asks_for_text(&opt("Single", "No other option fits.")));
+        // Parêntese que é parte do nome fica.
+        assert!(super::asks_for_text(&opt("Servidor (produção)", "Informe a chave em Other")));
+        assert_eq!(super::text_prefix(&opt("Servidor (produção)", "Informe a chave em Other")), "Servidor (produção): ");
+    }
+
     use super::*;
     #[test]
     fn question_links_keeps_only_http_urls_without_trailing_punctuation() {

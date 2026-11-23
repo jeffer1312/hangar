@@ -132,8 +132,11 @@ pub struct AppState {
     /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
     pub voice: Arc<crate::voice::hub::VoiceHub>,
     pub speech: Arc<crate::speech::Service>,
-    /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (sem convites nem par).
+    /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (sem convites nem par) ou com
+    /// [`AppState::share_unavailable`].
     pub share: Option<Arc<crate::share::ShareState>>,
+    /// A configuração de convites existe mas não se carregou: `share` é `None` sem provar que não há convite nem par.
+    pub share_unavailable: bool,
     /// A porta do convidado já está escutando; a saúde anuncia.
     pub guest_bound: std::sync::atomic::AtomicBool,
     /// Instalar o SideStore no iPhone/iPad do cabo; o teste troca aparelho e Apple por falsos.
@@ -157,6 +160,8 @@ pub struct AppState {
     /// Avisos do Mission Control à sessão, pelo handler da rota de entrada; o estado entra quando o roteador nasce.
     pub mission_notify: Arc<crate::mission_notify::SessionNotify>,
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
+    /// WhatsApp só leitura (`hangar-whatsapp`); nasce com o roteador, pela pasta pessoal das contas.
+    pub whatsapp: std::sync::OnceLock<Arc<hangar_whatsapp::WhatsApp>>,
     /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
     pub status: Arc<crate::status::Status>,
     /// Revisão do trabalho (`work_review/v1`) das sessões ligadas a um ticket.
@@ -267,9 +272,14 @@ impl AppState {
         let connect_devices = Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None));
         let connect_supervisor = Arc::new(crate::connect::supervisor::Supervisor::new(hangar_dir.join("connect"),
             crate::runtime::local_policy::log_base().unwrap_or_else(|| hangar_dir.join("logs")), connect_devices.clone(), cfg.listen.port()));
-        let share = match crate::config::GuestEnv::from_env() {
-            Ok(guest) => crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone(), Some(connect_supervisor.clone())),
-            Err(e) => { tracing::error!("{e}"); None }
+        let (share, share_unavailable) = match crate::config::GuestEnv::from_env() {
+            Ok(guest) => {
+                let configured = guest.shares_file.is_some();
+                let share = crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone(), Some(connect_supervisor.clone()));
+                let unavailable = configured && share.is_none();
+                (share, unavailable)
+            }
+            Err(e) => { tracing::error!("{e}"); (None, true) }
         };
         if let Some(share) = &share { list.set_shares(share.clone()); }
         let device_install = {
@@ -321,6 +331,7 @@ impl AppState {
             mission,
             mission_notify,
             ticket_actions: Default::default(),
+            whatsapp: Default::default(),
             status: Arc::default(),
             work_review,
             hangar_dir, device_install,
@@ -338,7 +349,7 @@ impl AppState {
             btw_programs: Default::default(),
             voice: Arc::new(crate::voice::hub::VoiceHub::new()),
             speech: Arc::default(),
-            share, guest_bound: Default::default() }
+            share, share_unavailable, guest_bound: Default::default() }
     }
 
     pub(crate) fn skill_origins(&self, repo: &std::path::Path) -> crate::costs::origins::Origins {
@@ -947,6 +958,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/me", axum::routing::any(crate::login_guests::route))
         .route("/api/guests", axum::routing::any(crate::login_guests::route))
         .route("/api/guests/{*rest}", axum::routing::any(crate::login_guests::route))
+        .route("/api/guest-accounts", axum::routing::any(crate::login_guests::route))
+        .route("/api/guest-accounts/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/sync/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/hangar-terminals/{ident}/term", get(crate::term::hangar_ws).fallback(pass_registered))
         .route("/__hangar_server/health", get(health))
@@ -991,6 +1004,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Broadcast do dono para as sessões escolhidas.
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_registered))
         .route("/api/sessions/{name}/engine/model", axum::routing::post(crate::session_write::engine::model).fallback(pass_registered))
+        .route("/api/sessions/{name}/engine/provider", axum::routing::post(crate::session_write::engine::provider).fallback(pass_registered))
         .route("/api/costs", get(crate::costs_routes::costs).fallback(pass_registered))
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_registered))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_registered))
@@ -1008,6 +1022,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_registered))
         .route("/api/claude/code-mode", get(crate::claude_defaults::code_mode).fallback(pass_registered))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
+        .route("/api/session-options", axum::routing::get(crate::session_defaults::handle_options).put(crate::session_defaults::handle_options))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .merge(crate::scheduled_tasks::router())
         .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))
@@ -1078,6 +1093,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
             state.ticket_actions.get_or_init(|| hangar_ticket_actions::Engine::new(hangar_ticket_actions::Ledger::new(state.hangar_dir.join("ticket-actions")),
                 state.mission.clone(),state.connectors.clone(),state.mission_notify.clone())).clone()))
         .merge(hangar_work_review::http::router(state.edge(), state.work_review.clone()))
+        // WhatsApp só leitura: só o dono, nunca na porta do convidado (o Python não tem as rotas).
+        .merge(hangar_whatsapp::router(state.edge(),
+            state.whatsapp.get_or_init(|| hangar_whatsapp::WhatsApp::new(&state.accounts.env.home)).clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_registered))
         .route("/api/claude/commands", get(crate::commands::new_chat_route).fallback(pass_registered))
         // Senha do chaveiro: só o dono; o preflight do CORS cai no caminho sem rota.
@@ -1104,6 +1122,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/device-install/start", axum::routing::post(crate::device_install::routes::start))
         .route("/api/device-install/code", axum::routing::post(crate::device_install::routes::code))
         .route("/api/device-install/certs", axum::routing::post(crate::device_install::routes::certs))
+        .route("/api/device-install/cancel", axum::routing::post(crate::device_install::routes::cancel))
         // Tela web ligada ou não: só o dono, nunca repassado.
         .route("/api/web-ui", get(crate::ui::setting).put(crate::ui::setting))
         // Consentimento do relatório automático da atualização: só o dono, nunca repassado.

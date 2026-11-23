@@ -2,13 +2,14 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-pub(super) const FIELDS: [&str; 17] = [
+pub(super) const FIELDS: [&str; 18] = [
     "cwd",
     "provider",
     "config_dir",
     "codex_account",
     "engine",
     "engine_account",
+    "engine_binding",
     "model",
     "effort",
     "service_tier",
@@ -26,6 +27,16 @@ pub(super) const FIELDS: [&str; 17] = [
 /// abertura nunca o leva, então marcá-lo apagaria a restrição da tarefa.
 pub(super) fn provider_fields() -> Vec<&'static str> {
     FIELDS.into_iter().filter(|field| *field != "read_only").collect()
+}
+
+/// Trocar de provedor na tarefa nova é escolher só o provedor: a conta e o modelo que a tela preenche continuam do
+/// servidor. Editando, a troca apaga as opções do provedor anterior.
+pub(super) fn switch_provider(changed: &mut HashSet<&'static str>, editing: bool) {
+    if editing { changed.extend(provider_fields()); return; }
+    // A escolha feita no provedor anterior não vale no novo; pasta, Jev e modos valem em todos. O Fast segue na tela
+    // depois da troca, e a abertura o deixa vazio onde ele não vale.
+    changed.retain(|key| matches!(*key, "cwd" | "jev" | "headless" | "read_only" | "service_tier"));
+    changed.insert("provider");
 }
 
 pub(super) fn merge(
@@ -48,7 +59,13 @@ pub(super) fn merge(
             }
             Value::Object(result)
         }
-        None => current,
+        // Tarefa nova: só a pasta e o que a pessoa escolheu; opção de um provedor leva o provedor junto.
+        None => {
+            // Sem terminal só vale no Claude e no Codex: conta como opção do provedor.
+            let provider_bound = changed.iter().any(|key| !matches!(*key, "cwd" | "provider" | "jev" | "read_only"));
+            let keep = |key: &str| key == "cwd" || changed.contains(key) || (key == "provider" && provider_bound);
+            Value::Object(current.as_object().into_iter().flatten().filter(|(key, _)| keep(key)).map(|(k, v)| (k.clone(), v.clone())).collect())
+        }
     };
     if let Some(body) = result.as_object_mut() {
         body.retain(|key, value| FIELDS.contains(&key.as_str()) && !value.is_null());
@@ -58,7 +75,7 @@ pub(super) fn merge(
 
 #[cfg(test)]
 mod tests {
-    use super::{merge, provider_fields};
+    use super::{merge, provider_fields, switch_provider};
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -109,8 +126,31 @@ mod tests {
         let current = json!({"cwd":"/workspace/app", "provider":"claude", "model":null, "name":"internal", "remember_provider":true,
             "creator":"internal", "initial_prompt":"internal", "prewarm":"internal", "link":true, "branch":"internal", "new_branch":true, "base":"main"});
         assert_eq!(
-            merge(None, current, &HashSet::new()),
+            merge(None, current, &HashSet::from(["provider"])),
             json!({"cwd":"/workspace/app", "provider":"claude"})
         );
+    }
+
+    /// Tarefa nova guarda só o que a pessoa escolheu: o padrão que a tela mostrou é decidido pelo servidor a cada rodada.
+    #[test]
+    fn a_new_template_does_not_freeze_what_the_screen_showed() {
+        let current = json!({"cwd":"/workspace/app", "provider":"codex", "model":"gpt", "effort":"high", "headless":true, "jev":false});
+        assert_eq!(merge(None, current.clone(), &HashSet::new()), json!({"cwd":"/workspace/app"}));
+        // Modelo só existe no provedor mostrado: escolher um fixa o provedor junto.
+        assert_eq!(merge(None, current.clone(), &HashSet::from(["model"])), json!({"cwd":"/workspace/app", "provider":"codex", "model":"gpt"}));
+        // Sem terminal só vale no Claude e no Codex: escolher o modo fixa o provedor mostrado.
+        assert_eq!(merge(None, current, &HashSet::from(["headless"])), json!({"cwd":"/workspace/app", "provider":"codex", "headless":true}));
+    }
+
+    /// Na tarefa nova, o que a tela preencheu no provedor novo e o que a pessoa escolheu no anterior não viram escolha.
+    #[test]
+    fn switching_provider_on_a_new_template_keeps_only_the_provider() {
+        let current = json!({"cwd":"/workspace/app", "provider":"codex", "codex_account":"default-account", "model":"gpt", "jev":true, "service_tier":"priority"});
+        let mut changed: HashSet<&'static str> = HashSet::from(["model", "effort", "jev", "service_tier"]);
+        switch_provider(&mut changed, false);
+        assert_eq!(merge(None, current, &changed), json!({"cwd":"/workspace/app", "provider":"codex", "jev":true, "service_tier":"priority"}));
+        let mut editing = HashSet::new();
+        switch_provider(&mut editing, true);
+        assert_eq!(editing, provider_fields().into_iter().collect());
     }
 }

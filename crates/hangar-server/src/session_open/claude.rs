@@ -16,7 +16,16 @@ pub const CODE_MODE_ENV: &str = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
 
 /// A rota da conta ChatGPT fixa do motor no `hangar-engine` (`cliproxy.engine_env`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: Option<String>, pub base_url: String, pub prefix: String }
+pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: Option<String>, pub base_url: String, pub prefix: String, pub binding: Option<String> }
+
+impl EngineRoute {
+    pub fn append_args(&self, command: &mut Vec<String>) {
+        command.extend(["--account".into(), self.account.clone()]);
+        if let Some(home) = &self.home { command.extend(["--account-home".into(), home.clone()]); }
+        command.extend(["--account-base-url".into(), self.base_url.clone()]);
+        if let Some(binding) = &self.binding { command.extend(["--account-binding".into(), binding.clone()]); }
+    }
+}
 
 /// Endereço e segredo da ponte do plugin do Hangar.
 #[derive(Clone, Debug)]
@@ -107,7 +116,9 @@ pub fn jev_pairs(on: bool, runtime: &Value) -> Vec<(String, String)> {
 }
 
 /// `apply_settings` numa linha de comando sem `--settings`: as escolhas da conversa em JSON compacto.
-pub(crate) fn settings_json(settings: &Value) -> String {
+pub(crate) fn settings_json(settings: &Value) -> String { settings_value(settings).to_string() }
+
+pub(crate) fn settings_value(settings: &Value) -> Value {
     let mut merged = Map::new();
     for key in ["enabledPlugins", "skillOverrides", "disableAllHooks"] {
         if let Some(value) = settings.get(key) { merged.insert(key.into(), value.clone()); }
@@ -117,7 +128,7 @@ pub(crate) fn settings_json(settings: &Value) -> String {
         for rule in deny.as_array().into_iter().flatten() { if !seen.contains(rule) { seen.push(rule.clone()); } }
         merged.insert("permissions".into(), json!({"deny": seen}));
     }
-    Value::Object(merged).to_string()
+    Value::Object(merged)
 }
 
 /// No Windows o comando do `new-session` perde as aspas do JSON e o Claude recusa abrir: as escolhas
@@ -143,10 +154,16 @@ pub(crate) fn settings_file(home: &Path, settings: &Value) -> std::io::Result<St
 /// sem suporte na normal, em vez de a sessão não voltar.
 pub fn relaunch_tier(spec: &SessionSpec, facts: &dyn super::OpenFacts) -> Option<super::ServiceTier> {
     let tier = spec.service_tier?;
-    let (engine, account) = match &spec.account {
-        Account::Engine { name, account, .. } => (Some(name.as_str()), account.as_deref()),
-        _ => (None, None),
+    if tier == super::ServiceTier::Default && matches!(spec.account, Account::Engine { binding: Some(_), .. }) { return Some(tier); }
+    let (engine, account, binding) = match &spec.account {
+        Account::Engine { name, account, binding, .. } => (Some(name.as_str()), account.as_deref(), binding.as_deref()),
+        _ => (None, None, None),
     };
+    let resolved;
+    let account = if let (Some(engine), Some(binding)) = (engine, binding) {
+        resolved = facts.engine_account(engine, None).ok().filter(|(_, current)| current.as_deref() == Some(binding)).and_then(|(account, _)| account);
+        resolved.as_deref()
+    } else { account };
     let model = spec.model.as_deref();
     if !facts.supports_fast(engine, model) {
         if tier.is_fast() {
@@ -185,17 +202,13 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     // O ambiente do motor entra dentro do pane (`hangar-engine --exec`): a chave nunca passa por `-e`.
     if let Account::Engine { name, context_window, .. } = &spec.account {
         command.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
-        if let Some(route) = ctx.engine_route {
-            command.extend(["--account".into(), route.account.clone()]);
-            if let Some(home) = &route.home { command.extend(["--account-home".into(), home.clone()]); }
-            command.extend(["--account-base-url".into(), route.base_url.clone()]);
-        }
+        if let Some(route) = ctx.engine_route { route.append_args(&mut command); }
         if let Some(model) = &spec.model {
             command.extend(["--model".into(), model.clone()]);
             if let Some(window) = context_window { command.extend(["--context".into(), window.to_string()]); }
         }
-        // Normal é a falta do campo: só Fast e Ultra Fast (já conferidos na abertura) vão ao provedor.
-        if let Some(tier) = spec.service_tier.filter(|tier| tier.is_fast()) {
+        // Normal explícito também limpa o Fast que veio das configurações do Claude.
+        if let Some(tier) = spec.service_tier {
             command.extend(["--service-tier".into(), tier.name().into()]);
         }
         command.push("--".into());

@@ -2,12 +2,13 @@
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { configureApi, type Server, type UploadFile } from '@hangar/core';
+import { configureApi, type ChatEvent, type Server, type UploadFile } from '@hangar/core';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const h = vi.hoisted(() => ({ list: vi.fn(), dictate: vi.fn(), back: vi.fn(), push: vi.fn(), toast: vi.fn(),
-  audio: vi.fn(), card: vi.fn(), doc: vi.fn() }));
+const h = vi.hoisted(() => ({ list: vi.fn(), resolve: vi.fn(), dictate: vi.fn(), back: vi.fn(), push: vi.fn(), toast: vi.fn(),
+  audio: vi.fn(), doc: vi.fn(), lightbox: vi.fn(), download: vi.fn(), deliverLocal: vi.fn(), kept: vi.fn(),
+  events: [] as ChatEvent[] }));
 const servers = vi.hoisted(() => ({ ready: true, activeId: 's2', servers: [
   { id: 's1', label: 'A', baseUrl: 'https://a.test', token: 'token-a' },
   { id: 's2', label: 'B', baseUrl: 'https://b.test', token: 'token-b' },
@@ -19,9 +20,13 @@ vi.mock('expo-router', () => ({
 vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
   listUploads: h.list,
+  resolverCitados: h.resolve,
 }));
 vi.mock('../../stores/servers', () => ({
   useServers: Object.assign((select: (s: typeof servers) => unknown) => select(servers), { getState: () => servers }),
+}));
+vi.mock('../../stores/chat', () => ({
+  chatStore: () => ({ use: (select: (s: { events: ChatEvent[] }) => unknown) => select({ events: h.events }) }),
 }));
 vi.mock('../../stores/sessions', () => {
   const state = { rows: [{ serverId: 's1', name: 'sess', jsonl: '/t/a.jsonl' }], byServerRecord: {} };
@@ -36,17 +41,21 @@ vi.mock('../ditado/dictationRun', () => ({
     constructor(message: string, readonly lost: boolean, readonly storageIssue: string) { super(message); }
   },
 }));
-vi.mock('../../chat/AudioChip', () => ({ AudioChip: (props: { name: string; uri: string; headers?: Record<string, string> }) => {
+vi.mock('../../chat/AudioChip', () => ({ AudioChip: (props: { name: string; uri: string; headers?: Record<string, string>; meta?: string }) => {
   h.audio(props);
-  return createElement('span', null, `audio:${props.name}`);
+  return createElement('span', null, `audio:${props.name}|${props.meta ?? ''}`);
 } }));
-vi.mock('./AttachmentCard', () => ({
-  AttachmentCard: (props: { file: UploadFile; serverId: string; onPress: () => void }) => {
-    h.card(props);
-    return createElement('button', { 'aria-label': props.file.filename, onClick: props.onPress }, props.file.filename);
-  },
+type LightboxMockProps = { visible: boolean; uri: string; headers?: Record<string, string>; filename: string; kind?: string;
+  counter?: string; onStep?: (dir: 1 | -1) => void; details?: string; onShowInChat?: () => void };
+vi.mock('./Lightbox', () => ({ Lightbox: (props: LightboxMockProps) => {
+  h.lightbox(props);
+  return props.visible ? createElement('div', { 'data-lightbox': props.kind ?? 'image' }, `${props.counter ?? ''}|${props.filename}`) : null;
+} }));
+vi.mock('./mediaCache', () => ({
+  downloadKept: h.download, deliverLocalFile: h.deliverLocal, keptCopy: h.kept,
+  isAbort: (e: unknown) => e instanceof Error && e.name === 'AbortError',
+  isMissing: (e: unknown) => /(status:?|HTTP) 404\b/.test(e instanceof Error ? e.message : String(e)),
 }));
-vi.mock('./Lightbox', () => ({ Lightbox: () => null }));
 vi.mock('./DocumentViewer', () => ({
   DocumentViewer: ({ doc }: { doc: { kind: string; name: string; uri: string; headers?: Record<string, string> } | null }) => {
     h.doc(doc);
@@ -54,38 +63,58 @@ vi.mock('./DocumentViewer', () => ({
   },
 }));
 vi.mock('../../ui/Toast', () => ({ toast: { erro: h.toast, ok: () => {} } }));
+vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../theme/superficie', () => ({ superficie: () => '#eee' }));
+// Cada chave devolve o próprio nome, com os parâmetros depois de ":".
 vi.mock('../../paraglide/messages', () => Object.fromEntries(
-  ('comum_carregando anexos_erro_listar anexos_nenhum lista_tentar_novamente ctx_anexos composer_transcrever_de_novo '
-    + 'arq_sessao_encerrada sessao_expirada anexos_fechar_visualizacao arquivo_carregar_erro chat_servidor_removido composer_falha_transcricao')
-    .split(' ').map((k) => [k, () => k]),
+  ('comum_carregando anexos_erro_listar anexos_nenhum lista_tentar_novamente composer_transcrever_de_novo '
+    + 'sessao_expirada chat_servidor_removido composer_falha_transcricao file_card_empty file_card_no_app file_card_missing '
+    + 'file_card_failed file_card_open file_card_download file_card_downloading anexos_ver anexos_tocar anexos_visualizar '
+    + 'anexos_imagem_enviada anexos_sem_expiracao anexos_vencido anexos_expira_h anexos_expira_d media_title media_tab_media '
+    + 'media_tab_files media_tab_audio media_filter_all media_filter_agent media_filter_user media_origin_agent media_origin_user '
+    + 'media_empty media_day_today media_day_yesterday media_day_undated media_when_today media_when_yesterday media_when_date '
+    + 'media_folder_uploads file_card_cancel media_again file_card_progress file_card_progress_unknown media_downloaded '
+    + 'media_download_failed media_changed_during_download gallery_counter gallery_jump_not_found')
+    .split(' ').map((k) => [k, (p?: Record<string, unknown>) => (p ? `${k}:${Object.values(p).join(',')}` : k)]),
 ));
 
 import AttachmentsScreen from '../../../app/s/[server]/[name]/attachments';
+import { useChatJump } from '../../stores/chatJump';
+import { keptIsCurrent, type KeptVersion } from './attachmentUrls';
 
-const file = (filename: string): UploadFile => ({ filename, size: 10, mtime: 0, expires_in_days: null });
+const file = (filename: string, mtime = 0): UploadFile => ({ filename, size: 10, mtime, expires_in_days: null });
 async function render() {
   const container = document.createElement('div');
   const root = createRoot(container);
   await act(async () => root.render(createElement(AttachmentsScreen)));
   return { container, root };
 }
-const byLabel = (c: HTMLElement, label: string) => [...c.querySelectorAll('button')]
-  .find((el) => el.textContent === label || el.getAttribute('aria-label') === label) as HTMLButtonElement | undefined;
+const find = (c: HTMLElement, label: string) => [...c.querySelectorAll<HTMLElement>('[aria-label], button, [role="tab"], [role="button"]')]
+  .find((el) => el.getAttribute('aria-label') === label || el.textContent === label);
+const click = async (c: HTMLElement, label: string) => {
+  const el = find(c, label);
+  if (!el) throw new Error(`missing: ${label}`);
+  await act(async () => el.click());
+};
+const lastLightbox = () => h.lightbox.mock.lastCall![0] as LightboxMockProps;
 
-describe('galeria de anexos', () => {
+describe('media and files', () => {
   beforeEach(() => {
-    vi.clearAllMocks(); h.list.mockReset(); h.dictate.mockReset();
+    vi.clearAllMocks(); h.list.mockReset(); h.dictate.mockReset(); h.download.mockReset(); h.deliverLocal.mockReset();
+    h.kept.mockReturnValue(null);
+    h.resolve.mockResolvedValue({ ok: {}, faltam: [] });
+    h.events = [];
     servers.ready = true;
     servers.servers = [
       { id: 's1', label: 'A', baseUrl: 'https://a.test', token: 'token-a' },
       { id: 's2', label: 'B', baseUrl: 'https://b.test', token: 'token-b' },
     ];
+    useChatJump.setState({ request: null });
     configureApi({ getBaseUrl: () => 'https://b.test', getToken: () => 'token-b', onUnauthorized: () => {},
       origin: null, createEventSource: () => { throw new Error('unexpected SSE'); } });
   });
 
-  it('carregando, vazio, erro com tentar de novo e lista', async () => {
+  it('loading, empty, error with retry and list', async () => {
     let finish!: (v: { files: UploadFile[] }) => void;
     h.list.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const first = await render();
@@ -97,23 +126,38 @@ describe('galeria de anexos', () => {
     h.list.mockRejectedValueOnce(new Error('caiu')).mockResolvedValueOnce({ files: [file('foto.png')] });
     const second = await render();
     expect(second.container.textContent).toContain('anexos_erro_listar caiu');
-    await act(async () => byLabel(second.container, 'lista_tentar_novamente')!.click());
-    expect(byLabel(second.container, 'foto.png')).toBeDefined();
+    await click(second.container, 'lista_tentar_novamente');
+    expect(find(second.container, 'anexos_ver:foto.png')).toBeDefined();
+    expect(second.container.textContent).toContain('media_title');
     act(() => second.root.unmount());
   });
 
-  it('áudio toca na lista e "Transcrever de novo" manda à conversa e volta', async () => {
+  it('a failed uploads listing stays above what the conversation cited, with retry', async () => {
+    h.list.mockRejectedValueOnce(new Error('caiu')).mockResolvedValueOnce({ files: [file('foto.png')] });
+    h.events = [{ kind: 'assistant_msg', id: 'a1', text: 'pronto: /tmp/out/r.pdf', ts: 10 }];
+    const { container, root } = await render();
+    expect(container.textContent).toContain('anexos_erro_listar caiu');
+    await click(container, 'media_tab_files:1');
+    expect(container.textContent).toContain('r.pdf');
+    await click(container, 'lista_tentar_novamente');
+    expect(container.textContent).not.toContain('anexos_erro_listar');
+    expect(container.textContent).toContain('r.pdf');
+    act(() => root.unmount());
+  });
+
+  it('audio plays in the list and "transcribe again" sends to the chat and goes back', async () => {
     h.list.mockResolvedValueOnce({ files: [file('ditado-1.m4a'), file('clip.mp4')] });
     h.dictate.mockReturnValueOnce(Promise.resolve());
     const { container, root } = await render();
+    await click(container, 'media_tab_audio:1');
     expect(container.textContent).toContain('audio:ditado-1.m4a');
-    await act(async () => byLabel(container, 'composer_transcrever_de_novo: ditado-1.m4a')!.click());
+    await click(container, 'composer_transcrever_de_novo: ditado-1.m4a');
     expect(h.dictate).toHaveBeenCalledExactlyOnceWith(servers.servers[0], 's1', 'sess', '/t/a.jsonl', 'ditado-1.m4a', 'prosa');
     expect(h.back).toHaveBeenCalledTimes(1);
     act(() => root.unmount());
   });
 
-  it('falha que não ficou guardada na conversa vira toast; a guardada não', async () => {
+  it('a failure not kept in the chat becomes a toast; a kept one does not', async () => {
     const { DictationError } = await import('../ditado/dictationRun');
     h.list.mockResolvedValue({ files: [file('ditado-1.m4a')] });
     h.dictate
@@ -121,31 +165,258 @@ describe('galeria de anexos', () => {
       .mockRejectedValueOnce(new DictationError('502: fora', true, ''))
       .mockRejectedValueOnce(new DictationError('502: fora', false, 'disco cheio'));
     const { container, root } = await render();
-    const botao = () => byLabel(container, 'composer_transcrever_de_novo: ditado-1.m4a')!;
-    await act(async () => botao().click());
+    await click(container, 'media_tab_audio:1');
+    const botao = () => click(container, 'composer_transcrever_de_novo: ditado-1.m4a');
+    await botao();
     expect(h.toast).not.toHaveBeenCalled();
-    await act(async () => botao().click());
+    await botao();
     expect(h.toast).toHaveBeenLastCalledWith('502: fora');
-    await act(async () => botao().click());
+    await botao();
     expect(h.toast).toHaveBeenLastCalledWith('502: fora (disco cheio)');
     act(() => root.unmount());
   });
 
-  it('vídeo abre no visualizador de documento', async () => {
+  it('audio cited by the agent plays but has no "transcribe again"', async () => {
+    h.list.mockResolvedValueOnce({ files: [] });
+    h.events = [{ kind: 'assistant_msg', id: 'a1', text: 'narration at /tmp/n.mp3', ts: 10 }];
+    const { container, root } = await render();
+    await click(container, 'media_tab_audio:1');
+    expect(container.textContent).toContain('audio:n.mp3');
+    expect(find(container, 'composer_transcrever_de_novo: n.mp3')).toBeUndefined();
+    act(() => root.unmount());
+  });
+
+  it('video plays in the media viewer, not in the document viewer', async () => {
     h.list.mockResolvedValueOnce({ files: [file('clip.mp4')] });
     const { container, root } = await render();
-    await act(async () => byLabel(container, 'clip.mp4')!.click());
-    expect(container.querySelector('[data-doc="video"]')?.textContent).toBe('clip.mp4');
+    await click(container, 'anexos_tocar:clip.mp4');
+    expect(container.querySelector('[data-lightbox="video"]')?.textContent).toBe('|clip.mp4');
+    expect(container.querySelector('[data-doc]')).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it('photos and videos form one gallery, newest first, like the grid', async () => {
+    h.list.mockResolvedValueOnce({ files: [file('a.png', 3), file('relatorio.pdf', 4), file('clip.mp4', 2), file('b.jpg', 1)] });
+    const { container, root } = await render();
+    await click(container, 'anexos_tocar:clip.mp4');
+    expect(container.querySelector('[data-lightbox]')?.textContent).toBe('gallery_counter:2,3|clip.mp4');
+    await act(async () => lastLightbox().onStep!(1));
+    expect(container.querySelector('[data-lightbox="image"]')?.textContent).toBe('gallery_counter:3,3|b.jpg');
+    expect(lastLightbox()).toMatchObject({ uri: 'https://a.test/api/sessions/sess/uploads/b.jpg', headers: { Authorization: 'Bearer token-a' } });
+    await act(async () => lastLightbox().onStep!(1));
+    expect(container.querySelector('[data-lightbox]')?.textContent).toBe('gallery_counter:3,3|b.jpg');
+    await act(async () => lastLightbox().onStep!(-1));
+    await act(async () => lastLightbox().onStep!(-1));
+    expect(container.querySelector('[data-lightbox]')?.textContent).toBe('gallery_counter:1,3|a.png');
+    // Upload fora do histórico carregado não tem mensagem para onde ir.
+    expect(lastLightbox().onShowInChat).toBeUndefined();
+    act(() => root.unmount());
+  });
+
+  it('cited media and files come from the conversation, with origin, filter and "in chat"', async () => {
+    h.list.mockResolvedValueOnce({ files: [] });
+    h.resolve.mockResolvedValue({ ok: { '/tmp/out/r.pdf': { relativo: null, real: '/tmp/out/r.pdf', size: 2048 } }, faltam: [] });
+    h.events = [
+      { kind: 'user_msg', id: 'u1', text: 'ok', ts: 5 },
+      { kind: 'assistant_msg', id: 'a1', text: 'shot at /tmp/shot.png and the report /tmp/out/r.pdf', ts: 10 },
+    ];
+    const { container, root } = await render();
+    expect(h.resolve).toHaveBeenCalledWith('sess', ['/tmp/shot.png', '/tmp/out/r.pdf'], servers.servers[0]);
+    expect(container.textContent).toContain('media_origin_agent');
+    await click(container, 'media_filter_user');
+    expect(container.textContent).toContain('media_empty');
+    await click(container, 'media_filter_all');
+    await click(container, 'anexos_ver:shot.png');
+    expect(lastLightbox()).toMatchObject({ uri: 'https://a.test/api/sessions/sess/file?path=%2Ftmp%2Fshot.png', visible: true });
+    await act(async () => lastLightbox().onShowInChat!());
+    expect(useChatJump.getState().request).toMatchObject({ route: 's1::sess', eventId: 'a1' });
+    expect(h.back).toHaveBeenCalledTimes(1);
+    await click(container, 'media_tab_files:1');
+    expect(container.textContent).toContain('r.pdf');
+    expect(container.textContent).toContain('2 KB · /tmp/out · media_origin_agent');
+    act(() => root.unmount());
+  });
+
+  it.each(['notas.docx', 'tabela.xlsx', 'pacote.zip', 'dados.csv', 'leia.txt'])('%s downloads, then goes to the system', async (filename) => {
+    h.list.mockResolvedValueOnce({ files: [file(filename)] });
+    const done = { uri: 'file:///cache/x', size: 10 };
+    // A cópia só existe depois do download; a tela a confere antes de abrir.
+    let downloaded = false;
+    h.download.mockImplementationOnce(async () => { downloaded = true; return done; });
+    h.kept.mockImplementation(() => (downloaded ? done : null));
+    h.deliverLocal.mockResolvedValueOnce('opened');
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    await click(container, `file_card_download: ${filename}`);
+    // A chave é só o caminho; data e tamanho vão como a versão gravada com a cópia.
+    expect(h.download).toHaveBeenCalledExactlyOnceWith(`s1::sess::upload:${filename}`,
+      `https://a.test/api/sessions/sess/uploads/${filename}`, { Authorization: 'Bearer token-a' }, filename,
+      expect.any(Function), expect.objectContaining({ signal: expect.any(AbortSignal), onProgress: expect.any(Function) }));
+    expect(h.download.mock.lastCall![4]()).toEqual({ size: 10, mtime: 0 });
+    expect(h.deliverLocal).toHaveBeenCalledExactlyOnceWith(done, filename);
+    expect(container.querySelector('[data-doc]')).toBeNull();
+    expect(h.toast).not.toHaveBeenCalled();
+    // Baixado: o próximo toque abre a cópia, sem baixar de novo.
+    await click(container, `file_card_open: ${filename}`);
+    expect(h.download).toHaveBeenCalledTimes(1);
+    expect(h.deliverLocal).toHaveBeenCalledTimes(2);
+    act(() => root.unmount());
+  });
+
+  it('an already downloaded file opens without the network', async () => {
+    h.list.mockResolvedValueOnce({ files: [file('pacote.zip')] });
+    const kept = { uri: 'file:///cache/kept', size: 5 };
+    h.kept.mockReturnValue(kept);
+    h.deliverLocal.mockResolvedValueOnce('opened');
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    await click(container, 'file_card_open: pacote.zip');
+    expect(h.download).not.toHaveBeenCalled();
+    expect(h.deliverLocal).toHaveBeenCalledWith(kept, 'pacote.zip');
+    expect(h.kept).toHaveBeenCalledWith('s1::sess::upload:pacote.zip', 'pacote.zip', { size: 10, mtime: 0 });
+    act(() => root.unmount());
+  });
+
+  it('a file regenerated on the server does not open the old copy', async () => {
+    h.list.mockResolvedValueOnce({ files: [{ ...file('pacote.zip', 7), size: 99 }] });
+    // Cópia gravada da versão de data 0 e 10 bytes.
+    const stored: KeptVersion = { size: 10, mtime: 0 };
+    h.kept.mockImplementation((_key: string, _name: string, now: KeptVersion) =>
+      (keptIsCurrent(stored, 10, now) ? { uri: 'file:///cache/old', size: 10 } : null));
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    expect(h.kept).toHaveBeenCalledWith('s1::sess::upload:pacote.zip', 'pacote.zip', { size: 99, mtime: 7 });
+    expect(find(container, 'file_card_download: pacote.zip')).toBeDefined();
+    act(() => root.unmount());
+  });
+
+  it('sizes arriving after the download started keep the copy: no second download', async () => {
+    h.list.mockResolvedValueOnce({ files: [] });
+    let measure!: (v: unknown) => void;
+    h.resolve.mockImplementation(() => new Promise((resolve) => { measure = resolve; }));
+    h.events = [{ kind: 'assistant_msg', id: 'a1', text: 'pacote em /tmp/out/p.zip', ts: 10 }];
+    // O que o `mediaCache` real faz: grava a versão ao terminar e confere na leitura.
+    let stored: KeptVersion | null = null;
+    const copy = { uri: 'file:///cache/p', size: 10 };
+    h.kept.mockImplementation((_key: string, _name: string, now: KeptVersion) => (stored && keptIsCurrent(stored, 10, now) ? copy : null));
+    let finish!: () => void;
+    h.download.mockImplementationOnce((_k: string, _u: string, _h: unknown, _n: string, version: () => KeptVersion) =>
+      new Promise((resolve) => { finish = () => { stored = version(); resolve(copy); }; }));
+    h.deliverLocal.mockResolvedValue('opened');
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    await click(container, 'file_card_download: p.zip');
+    expect(h.download.mock.lastCall![0]).toBe('s1::sess::cited:/tmp/out/p.zip');
+    const measured = { ok: { '/tmp/out/p.zip': { relativo: null, real: '/tmp/out/p.zip', size: 10, mtime: 5 } }, faltam: [] };
+    await act(async () => measure(measured));
+    await act(async () => finish());
+    expect(stored).toEqual({ size: 10, mtime: 5 });
+    expect(find(container, 'file_card_open: p.zip')).toBeDefined();
+    act(() => root.unmount());
+
+    // Voltando à tela, já com a medida: a mesma chave acha a cópia.
+    h.list.mockResolvedValueOnce({ files: [] });
+    h.resolve.mockResolvedValue(measured);
+    const again = await render();
+    await click(again.container, 'media_tab_files:1');
+    await click(again.container, 'file_card_open: p.zip');
+    expect(h.download).toHaveBeenCalledTimes(1);
+    expect(h.deliverLocal).toHaveBeenLastCalledWith(copy, 'p.zip');
+    act(() => again.root.unmount());
+  });
+
+  it('a file that does not open says why, and a failed download offers "again"', async () => {
+    h.list.mockResolvedValue({ files: [file('pacote.rar')] });
+    const copy = { uri: 'file:///x', size: 3 };
+    let downloaded = false;
+    h.download.mockImplementationOnce(async () => { downloaded = true; return copy; }).mockRejectedValueOnce(new Error('server returned HTTP 404'));
+    h.kept.mockImplementation(() => (downloaded ? copy : null));
+    h.deliverLocal.mockResolvedValueOnce('no-app');
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    await click(container, 'file_card_download: pacote.rar');
+    expect(h.toast).toHaveBeenLastCalledWith('pacote.rar: file_card_no_app');
+    act(() => root.unmount());
+
+    h.kept.mockReturnValue(null);
+    const again = await render();
+    await click(again.container, 'media_tab_files:1');
+    await click(again.container, 'file_card_download: pacote.rar');
+    expect(again.container.textContent).toContain('media_download_failed:file_card_missing');
+    expect(find(again.container, 'media_again: pacote.rar')).toBeDefined();
+    act(() => again.root.unmount());
+  });
+
+  it('a download that no longer matches the server is not opened and offers "again"', async () => {
+    h.list.mockResolvedValueOnce({ files: [file('pacote.zip')] });
+    h.download.mockResolvedValueOnce({ uri: 'file:///cache/x', size: 10 });
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    await click(container, 'file_card_download: pacote.zip');
+    expect(h.kept).toHaveBeenLastCalledWith('s1::sess::upload:pacote.zip', 'pacote.zip', { size: 10, mtime: 0 });
+    expect(h.deliverLocal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('media_download_failed:media_changed_during_download');
+    expect(find(container, 'media_again: pacote.zip')).toBeDefined();
+    act(() => root.unmount());
+  });
+
+  it('servidor sem token avisa sessão expirada e não abre nada', async () => {
+    servers.servers = [{ ...servers.servers[0], token: '' }, servers.servers[1]];
+    h.list.mockResolvedValueOnce({ files: [file('pacote.zip'), file('relatorio.pdf'), file('clip.mp4')] });
+    const { container, root } = await render();
+    await click(container, 'anexos_tocar:clip.mp4');
+    expect(h.toast).toHaveBeenLastCalledWith('sessao_expirada');
+    await click(container, 'media_tab_files:2');
+    for (const label of ['file_card_download: pacote.zip', 'anexos_visualizar:relatorio.pdf']) {
+      h.toast.mockClear();
+      await click(container, label);
+      expect(h.toast).toHaveBeenLastCalledWith('sessao_expirada');
+    }
+    expect(h.download).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-doc]')).toBeNull();
+    expect(container.querySelector('[data-lightbox]')).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it('dois toques seguidos baixam o documento uma vez só', async () => {
+    h.list.mockResolvedValueOnce({ files: [file('pacote.zip')] });
+    let finish!: (v: { uri: string; size: number }) => void;
+    h.download.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    h.deliverLocal.mockResolvedValueOnce('opened');
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    const button = find(container, 'file_card_download: pacote.zip')!;
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    expect(h.download).toHaveBeenCalledTimes(1);
+    // A cópia é conferida antes de abrir: depois do download ela existe.
+    const copy = { uri: 'file:///cache/x', size: 10 };
+    h.kept.mockReturnValue(copy);
+    await act(async () => finish(copy));
+    expect(h.deliverLocal).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+  });
+
+  it('erro com status 404 tipado diz que o arquivo sumiu', async () => {
+    h.list.mockResolvedValueOnce({ files: [file('pacote.rar')] });
+    h.download.mockRejectedValueOnce(Object.assign(new Error('falhou'), { status: 404 }));
+    const { container, root } = await render();
+    await click(container, 'media_tab_files:1');
+    await click(container, 'file_card_download: pacote.rar');
+    expect(container.textContent).toContain('media_download_failed:file_card_missing');
     act(() => root.unmount());
   });
 
   it.each([
     ['relatório final.pdf', 'pdf', 'relat%C3%B3rio%20final.pdf'],
     ['página final.html', 'html', 'p%C3%A1gina%20final.html'],
-  ])('%s abre o upload no visor, no servidor da conversa', async (filename, kind, encoded) => {
+  ])('%s opens the upload in the viewer, on the chat server', async (filename, kind, encoded) => {
     h.list.mockResolvedValueOnce({ files: [file(filename)] });
     const { container, root } = await render();
-    await act(async () => byLabel(container, filename)!.click());
+    await click(container, 'media_tab_files:1');
+    await click(container, `anexos_visualizar:${filename}`);
     expect(h.doc).toHaveBeenLastCalledWith({
       uri: `https://a.test/api/sessions/sess/uploads/${encoded}`,
       headers: { Authorization: 'Bearer token-a' }, name: filename, kind,
@@ -155,43 +426,44 @@ describe('galeria de anexos', () => {
     act(() => root.unmount());
   });
 
-  it('lista e mídia da rota ficam em A com B ativo', async () => {
+  it('list and media of the route stay on A with B active', async () => {
     h.list.mockResolvedValueOnce({ files: [file('ditado.m4a'), file('clip.mp4')] });
     const { container, root } = await render();
     expect(h.list).toHaveBeenCalledExactlyOnceWith('sess', servers.servers[0]);
     expect(servers.activeId).toBe('s2');
+    await click(container, 'anexos_tocar:clip.mp4');
+    expect(lastLightbox()).toMatchObject({
+      uri: 'https://a.test/api/sessions/sess/uploads/clip.mp4', headers: { Authorization: 'Bearer token-a' }, kind: 'video',
+    });
+    await click(container, 'media_tab_audio:1');
     expect(h.audio).toHaveBeenCalledWith(expect.objectContaining({
       uri: 'https://a.test/api/sessions/sess/uploads/ditado.m4a', headers: { Authorization: 'Bearer token-a' },
-    }));
-    expect(h.card).toHaveBeenCalledWith(expect.objectContaining({ serverId: 's1' }));
-    await act(async () => byLabel(container, 'clip.mp4')!.click());
-    expect(h.doc).toHaveBeenLastCalledWith(expect.objectContaining({
-      uri: 'https://a.test/api/sessions/sess/uploads/clip.mp4', headers: { Authorization: 'Bearer token-a' },
     }));
     servers.servers = servers.servers.filter((s) => s.id !== 's1');
     await act(async () => root.render(createElement(AttachmentsScreen)));
     expect(container.textContent).toContain('chat_servidor_removido');
     expect(container.querySelector('[data-doc]')).toBeNull();
+    expect(container.querySelector('[data-lightbox]')).toBeNull();
     expect(h.list).toHaveBeenCalledTimes(1);
     act(() => root.unmount());
   });
 
-  it('sem servidor da rota não lista nem monta mídia do ativo', async () => {
+  it('without the route server it neither lists nor mounts media of the active one', async () => {
     servers.servers = servers.servers.filter((s) => s.id !== 's1');
     const { container, root } = await render();
     expect(container.textContent).toContain('chat_servidor_removido');
     expect(h.list).not.toHaveBeenCalled();
     expect(h.audio).not.toHaveBeenCalled();
-    expect(h.card).not.toHaveBeenCalled();
     expect(h.doc).not.toHaveBeenCalled();
     act(() => root.unmount());
   });
 
-  it('ditado da conversa ainda não usado: a recusa aparece e a galeria fica', async () => {
+  it('dictation still unused in the chat: the refusal shows and the screen stays', async () => {
     h.list.mockResolvedValueOnce({ files: [file('ditado-1.m4a')] });
     h.dictate.mockImplementationOnce(() => { throw new Error('composer_aguarde_transcricao'); });
     const { container, root } = await render();
-    await act(async () => byLabel(container, 'composer_transcrever_de_novo: ditado-1.m4a')!.click());
+    await click(container, 'media_tab_audio:1');
+    await click(container, 'composer_transcrever_de_novo: ditado-1.m4a');
     expect(h.toast).toHaveBeenCalledWith('composer_aguarde_transcricao');
     expect(h.back).not.toHaveBeenCalled();
     act(() => root.unmount());

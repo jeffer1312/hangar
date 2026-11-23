@@ -7,18 +7,14 @@ publish = false
 # Mesmas features do hangar-core e do hangar-connect: sem elas, compilar este crate sozinho guarda
 # outra cópia de cada dependência no target.
 [dependencies]
-base64.workspace = true
-flate2 = { workspace = true }
 hangar-core.workspace = true
+hangar-managed-binary.workspace = true
 reqwest = { workspace = true, features = ["rustls", "multipart", "json"] }
-ring.workspace = true
 semver.workspace = true
 serde-saphyr.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
-tar = { version = "=0.4.46", default-features = false }
 tokio = { workspace = true, features = ["rt", "macros", "process", "sync", "time"] }
 tracing = { workspace = true }
-zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile.workspace = true

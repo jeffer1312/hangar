@@ -63,7 +63,7 @@ impl Hangar {
 
     fn entry_other(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.entry = None;
-        self.address.update(cx, |input, cx| input.focus(window, cx));
+        if !self.sign_in_takes_focus(window, cx) { self.address.update(cx, |input, cx| input.focus(window, cx)); }
         cx.notify();
     }
 

@@ -105,6 +105,16 @@ impl AccountEnvironment {
             .filter(|(name,_)|name!="HANGAR_AUTH_CONTEXT").collect()
     }
 
+    /// `default_claude_json` pelo ambiente capturado.
+    pub fn default_claude_json(&self) -> PathBuf {
+        default_claude_json(&self.home, self.base.get("CLAUDE_CONFIG_DIR").map(String::as_str))
+    }
+
+    /// `known_default_claude_json` pelo ambiente capturado: só para o comando de terminal.
+    pub fn known_default_claude_json(&self) -> Option<PathBuf> {
+        known_default_claude_json(&self.home, self.base.get("CLAUDE_CONFIG_DIR").map(String::as_str))
+    }
+
     /// Raízes do omp resolvidas só pelo home e pelo ambiente capturados, sem criar nada.
     pub fn omp_directories(&self) -> Result<OmpDirectories, &'static str> {
         omp_directories(&self.home, &self.base)
@@ -152,6 +162,28 @@ impl AccountEnvironment {
     }
 }
 
+/// Marcador de pasta de conta Claude criada pelo Hangar (`~/.claude-<nome>`).
+pub const CLAUDE_ACCOUNT_MARKER: &str = ".hangar-conta";
+
+/// O `.claude.json` que a conta padrão do Claude lê. Com `CLAUDE_CONFIG_DIR` no ambiente, o Hangar a
+/// exporta às sessões da conta padrão (`config_dir_to_export`) e o CLI lê o arquivo de dentro da pasta,
+/// mesmo quando ela é o `~/.claude` e mesmo antes de ele existir (o CLI o cria vazio); sem a variável,
+/// o do HOME. `None`: a variável é a pasta de uma conta do Hangar, o que o shell de uma sessão dela
+/// exporta, e quem chama não tem como saber qual é a conta padrão.
+pub fn known_default_claude_json(home: &Path, config_dir: Option<&str>) -> Option<PathBuf> {
+    let Some(dir) = config_dir.filter(|dir| !dir.is_empty()).map(|dir| expand(dir, home)) else { return Some(home.join(".claude.json")) };
+    // Marcador que é link ou pasta não faz conta, como no catálogo (`storage::real_file`).
+    let marked = std::fs::symlink_metadata(dir.join(CLAUDE_ACCOUNT_MARKER)).is_ok_and(|m| m.is_file());
+    (!marked).then(|| dir.join(".claude.json"))
+}
+
+/// O `.claude.json` que as sessões da conta padrão abertas por este processo leem: a variável vai a elas
+/// mesmo quando é a pasta de uma conta do Hangar (`config_dir_to_export`). É o critério do servidor; o
+/// comando de terminal usa `known_default_claude_json`.
+pub fn default_claude_json(home: &Path, config_dir: Option<&str>) -> PathBuf {
+    config_dir.filter(|dir| !dir.is_empty()).map_or_else(|| home.join(".claude.json"), |dir| expand(dir, home).join(".claude.json"))
+}
+
 pub fn expand(value: &str, home: &Path) -> PathBuf {
     if value == "~" {
         home.into()
@@ -171,6 +203,34 @@ mod tests {
 
     fn environment(pairs: &[(&str, &str)]) -> AccountEnvironment {
         AccountEnvironment::from_pairs(pairs.iter().map(|&(k, v)| (k, v)))
+    }
+
+    /// Com `CLAUDE_CONFIG_DIR`, mesmo apontando para o `~/.claude`, a conta padrão lê o arquivo de dentro
+    /// da pasta, mesmo antes de ele existir; vazia vale o do HOME. Pasta de conta do Hangar: o servidor a
+    /// segue; o comando de terminal (`known_`) não sabe qual é a padrão.
+    #[test]
+    fn default_claude_json_follows_the_config_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path();
+        let h = home.to_string_lossy().into_owned();
+        let read = |config_dir: Option<&str>| {
+            let mut pairs = vec![("HOME", h.as_str())];
+            pairs.extend(config_dir.map(|dir| ("CLAUDE_CONFIG_DIR", dir)));
+            environment(&pairs).default_claude_json()
+        };
+        let main = home.join(".claude.json");
+        for dir in [".claude", "outra", ".claude-conta"] {
+            std::fs::create_dir_all(home.join(dir)).unwrap();
+        }
+        assert_eq!(read(None), main);
+        assert_eq!(read(Some("")), main);
+        assert_eq!(read(Some(&format!("{h}/.claude"))), home.join(".claude/.claude.json"), "antes de o CLI criar o arquivo");
+        assert_eq!(read(Some("~/outra")), home.join("outra/.claude.json"));
+        std::fs::write(home.join(".claude-conta").join(CLAUDE_ACCOUNT_MARKER), "").unwrap();
+        assert_eq!(read(Some(&format!("{h}/.claude-conta"))), home.join(".claude-conta/.claude.json"),
+            "o servidor exporta a variável dele à conta padrão mesmo sendo pasta de conta (`config_dir_to_export`)");
+        let known = environment(&[("HOME", h.as_str()), ("CLAUDE_CONFIG_DIR", &format!("{h}/.claude-conta"))]).known_default_claude_json();
+        assert_eq!(known, None, "de dentro de outra conta não dá para saber a padrão");
     }
 
     /// A conta adicional não leva identidade nenhuma da principal. O lançador Python deixava passar

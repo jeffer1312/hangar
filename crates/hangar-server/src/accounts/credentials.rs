@@ -257,6 +257,14 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
                 let base = data.get("base_url").filter(|base| base.is_string()).cloned().unwrap_or(Value::Null);
                 let accepts = base.as_str().is_some_and(|b| b.contains("opencode.ai"));
                 let mut item = line(id, "chave", "api_key", natural, aliases, &quota);
+                let local_proxy = crate::engines::proxy::is_local(&service.env, base.as_str().unwrap_or("")).unwrap_or(false);
+                if local_proxy || data.get("cliproxy_binding").is_some() {
+                    item["cliproxy"] = json!(true);
+                    item["cota"] = Value::Null;
+                    if local_proxy && let Some(binding) = data.get("cliproxy_binding").and_then(Value::as_str) {
+                        item["cota"] = quota.get(&crate::engines::proxy::quota_id(binding)).map_or(Value::Null, summary);
+                    }
+                }
                 item["base_url"] = base;
                 item["chave_mascarada"] = data.get("api_key").and_then(Value::as_str).filter(|k| !k.is_empty()).map_or(Value::Null, |k| json!(mask(k)));
                 item["usos"] = json!(["claude_code"]);
@@ -309,6 +317,28 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     }
     // Kimi entra depois da cota lida, como sempre entrou.
     let kimi = config.kimi_text.as_deref();
+    if query.get("proxy_accounts").is_some_and(|value| value == "true")
+        && crate::engines::proxy::local(&service.env).ok().flatten().is_some()
+        && let Ok(accounts) = crate::engines::proxy::list_quota_accounts(&service) {
+        for account in accounts {
+            let (Some(binding), Some(id)) = (account["binding"].as_str(), account["credential_id"].as_str()) else { continue };
+            let quota_id = crate::engines::proxy::quota_id(binding);
+            let usage = quota.get(&quota_id).map_or(Value::Null, summary);
+            let mut bound = line(&quota_id, "cliproxy", "oauth", &account["label"], aliases, &quota);
+            bound["login"] = json!({"estado":"ok","loggedIn":true,"email":account["email"],"plano":account["plan"]});
+            bound["gerenciada"] = json!(false);
+            out.push(bound);
+            if id.starts_with("codex:") {
+                if let Some(item) = out.iter_mut().find(|row| row["id"] == id) { item["cliproxy_quota"] = usage; }
+            } else if id.starts_with("cliproxy:") {
+                let mut row = line(id, "cliproxy", "oauth", &account["label"], aliases, &quota);
+                row["login"] = json!({"estado":"ok","loggedIn":true,"email":account["email"],"plano":account["plan"]});
+                row["cota"] = usage;
+                row["gerenciada"] = json!(false);
+                out.push(row);
+            }
+        }
+    }
     for Listed { id, .. } in listed.iter().filter(|l| matches!(l.origin, Origin::Kimi) && quota.contains_key(&l.id)) {
         let suffix = id.split_once(':').map_or("", |(_, tail)| tail);
         // O nome é o da linha da cota, como no Python: a fonte só sabe o rótulo cru.

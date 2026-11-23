@@ -10,6 +10,27 @@ pub fn runtime_key(lifecycle: Option<&str>) -> Option<&str> {
 }
 use serde_json::{Map, Value};
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeProviderSwitch {
+    pub source: ClaudeProviderSource,
+    pub engine: String,
+    pub engine_account: String,
+    pub engine_binding: String,
+    pub model: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeProviderSource {
+    pub lifecycle_id: String,
+    pub jsonl: String,
+    pub headless: bool,
+    pub engine: Option<String>,
+    pub engine_account: Option<String>,
+    pub engine_binding: Option<String>,
+}
+
 /// Contexto da sessão Claude lido do transcript, em tokens.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextUse {
@@ -72,6 +93,8 @@ pub struct SessionRow {
     pub engine: Option<String>,
     #[serde(default)]
     pub engine_account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_binding: Option<String>,
     #[serde(default)]
     pub codex_home: Option<String>,
     /// Nível de serviço do Codex (`default`/`priority`): do sidecar, e o snapshot ao vivo vence.

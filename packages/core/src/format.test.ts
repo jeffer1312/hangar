@@ -1041,6 +1041,20 @@ describe('parseImageMessage', () => {
   it('sem marcador não é mensagem de imagem', () => {
     expect(parseImageMessage('só texto')).toBeNull();
   });
+  it('vídeo com fala e sem quadros: a fala não gruda no nome do vídeo', () => {
+    const out = parseImageMessage('veja — 📎 arquivo: /up/1-v.mp4 fala do vídeo: "abre a pasta src/app e roda"')!;
+    expect(out.caption).toBe('veja');
+    expect(out.files).toEqual(['1-v.mp4']);
+    expect(out.filenames).toEqual([]);
+    const en = parseImageMessage('look — 📎 file: C:\\p\\.hangar-uploads\\1-v.mp4 video speech: "hi there"')!;
+    expect(en.files).toEqual(['1-v.mp4']);
+  });
+  it('vídeo com quadros e fala: a fala sai do último quadro', () => {
+    const out = parseImageMessage('veja — 📎 arquivo: /up/1-v.mp4 📎 imagem: /up/f1.jpg 📎 imagem: /up/f2.jpg fala do vídeo: "a/b c"')!;
+    expect(out.files).toEqual(['1-v.mp4']);
+    expect(out.filenames).toEqual(['f1.jpg', 'f2.jpg']);
+    expect(out.marcadores).toBe(2);
+  });
   it('imagem e arquivo juntos: o arquivo sai à parte, não vira miniatura', () => {
     const out = parseImageMessage('veja — 📎 imagem: /up/1-a.png 📎 arquivo: /up/2-b.txt')!;
     expect(out.caption).toBe('veja');

@@ -39,6 +39,7 @@ export const Animated = {
 export const Linking = { openURL: (_url: string) => Promise.resolve() };
 export const InteractionManager = { runAfterInteractions: (task: () => void) => { const t = setTimeout(task, 0); return { cancel: () => clearTimeout(t) }; } };
 export const Platform = { OS: 'android', select: (x: any) => x.android ?? x.default };
+export const PixelRatio = { get: () => 3 };
 export const BackHandler = { addEventListener: () => ({ remove() {} }), exitApp() {} };
 export const TextInput = (props: any) => React.createElement('textarea', domProps(props));
 export const TurboModuleRegistry = { get: () => null };

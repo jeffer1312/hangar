@@ -4,6 +4,7 @@ use super::*;
 use gpui_kit::component::switch::Switch;
 
 pub(crate) mod picker;
+pub(crate) mod providers;
 pub(in crate::app) use picker::HandoffAccount;
 
 const CLAUDE_EFFORTS: [&str; 6] = ["low", "medium", "high", "xhigh", "max", "ultracode"];
@@ -89,6 +90,7 @@ pub(super) struct Controls {
     // que recebe a conversa na troca.
     picker_tab: Option<String>,
     picker_more: bool,
+    providers: providers::ProviderPicker,
     favorites: Option<Vec<String>>,
     handoff: Option<picker::HandoffCatalog>,
     // O atalho de permissão pediu o ciclo que ainda não conhecia: a leitura que chegar anda tantos modos quantas
@@ -1006,6 +1008,7 @@ impl Hangar {
         let open = self.controls.open.as_ref()?;
         // No seletor de modelos o catálogo do agente que falhou ou não chegou não tira as linhas do Codex da troca.
         if open.ctl == Ctl::Model {
+            if self.controls.picker_tab.as_deref() == Some(providers::TAB) { return None; }
             let none = Value::Null;
             let catalog = match &open.catalog { Some(Ok(catalog)) => catalog, _ => &none };
             return Some((Ctl::Model, self.picker_rows(catalog, cx), false));

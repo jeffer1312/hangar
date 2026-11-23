@@ -16,13 +16,7 @@ pub const MAX_ENTRIES: usize = 1000;
 pub const MAX_HITS: usize = 200;
 
 pub fn resolve(cwd: &Path, path: &str) -> Result<PathBuf> {
-    if path.starts_with('-') || path.contains('\0') || Path::new(path).is_absolute() {
-        return Err(file_error(
-            400,
-            "erro_arq_caminho_invalido",
-            "caminho inválido",
-        ));
-    }
+    path_syntax(path)?;
     let root = real(cwd);
     let target = real(&cwd.join(path));
     if !target.starts_with(&root) {
@@ -573,6 +567,18 @@ pub fn resolver(cwd: &Path, paths: &[String], suffix: bool) -> Result<Value> {
     }
     Ok(json!({"ok":ok,"faltam":missing}))
 }
+/// Tamanho (bytes) e data (segundos Unix) de um achado do `resolver`: o cliente mostra o tamanho antes de baixar.
+/// Fica fora do `resolver` para a operação manter o corpo do contrato; pasta e arquivo que sumiu ficam sem os campos.
+pub fn with_stat(mut entry: Value) -> Value {
+    let meta = entry["real"].as_str().and_then(|path| std::fs::metadata(path).ok()).filter(|meta| meta.is_file());
+    if let Some(meta) = meta {
+        entry["size"] = json!(meta.len());
+        if let Some(at) = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {
+            entry["mtime"] = json!(at.as_secs());
+        }
+    }
+    entry
+}
 pub fn roots(roots: &[String]) -> Result<Value> {
     Ok(json!(roots.iter().map(|r|{let p=real(Path::new(r));json!({"name":p.file_name().map(|s|s.to_string_lossy().into_owned()).filter(|s|!s.is_empty()).unwrap_or_else(||p.to_string_lossy().into_owned()),"path":p.to_string_lossy()})}).collect::<Vec<_>>()))
 }
@@ -635,6 +641,278 @@ pub fn scan(root: &str, path: Option<&str>, roots: &[String]) -> Result<Value> {
     });
     Ok(json!({"entries":list,"error":null}))
 }
+/// Caminho que o cliente manda, antes de juntar à pasta da sessão.
+fn path_syntax(path: &str) -> Result<()> {
+    if path.starts_with('-') || path.contains('\0') || Path::new(path).is_absolute() {
+        return Err(file_error(400, "erro_arq_caminho_invalido", "caminho inválido"));
+    }
+    Ok(())
+}
+
+/// Nome de um item criado ou renomeado: uma parte só do caminho, nunca `.git`. No Windows `C:nome` também tem
+/// prefixo de unidade, e o `join` trocaria a pasta da sessão pela pasta corrente dessa unidade. Começar por `-` é
+/// recusado como em `path_syntax`: o item na raiz não poderia mais ser aberto, renomeado nem apagado.
+fn entry_name(name: &str) -> Result<&str> {
+    let name = name.trim();
+    let mut parts = Path::new(name).components();
+    let single = matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(part)), None) if part == name);
+    if !single || name.starts_with('-') || is_git_name(std::ffi::OsStr::new(name)) || name.contains(['/', '\\', '\0'])
+        || windows_reserved(name)
+    {
+        return Err(file_error(400, "erro_arq_nome_invalido", "nome inválido"));
+    }
+    Ok(name)
+}
+
+/// No Windows `:` abre um fluxo alternativo (`.git:x` grava no próprio `.git`) e `NUL`, `CON` e afins são
+/// dispositivos, com ou sem extensão.
+fn windows_reserved(name: &str) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ').to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+    name.contains(':') || device
+}
+
+/// `.git` como o disco o entende: Windows e macOS não distinguem caixa, e o Windows tira ponto e espaço do fim do nome.
+fn is_git_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|name| name.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".git"))
+}
+
+/// O item em si, não o destino de um atalho: renomear ou apagar um link mexe no link, mesmo que ele aponte para
+/// fora. A pasta de cima é a que passa pelas guardas da leitura; a raiz da sessão nunca é alvo.
+fn own_entry(cwd: &Path, path: &str) -> Result<PathBuf> {
+    path_syntax(path)?;
+    // `.git::$INDEX_ALLOCATION` abre o próprio `.git`, e `NUL` um dispositivo.
+    if cfg!(windows) && Path::new(path).components().any(|c| c.as_os_str().to_str().is_none_or(windows_reserved)) {
+        return Err(file_error(400, "erro_arq_caminho_invalido", "caminho inválido"));
+    }
+    let joined = cwd.join(path);
+    let name = joined.file_name().filter(|n| *n != "." && *n != "..")
+        .ok_or_else(|| file_error(400, "erro_arq_caminho_invalido", "caminho inválido"))?;
+    let root = real(cwd);
+    let link = joined.symlink_metadata().is_ok_and(|meta| meta.file_type().is_symlink());
+    if !link && real(&joined) == root {
+        return Err(file_error(400, "erro_arq_raiz_da_sessao", "a pasta da sessão não muda por aqui"));
+    }
+    let parent = real(joined.parent().unwrap_or(cwd));
+    if !parent.starts_with(&root) {
+        return Err(file_error(400, "erro_arq_fora_da_raiz", "caminho sai da raiz da sessão"));
+    }
+    let entry = parent.join(name);
+    if entry == root {
+        return Err(file_error(400, "erro_arq_raiz_da_sessao", "a pasta da sessão não muda por aqui"));
+    }
+    // O último nome não passa pelo `real`: `.GIT`, `.git.` ou o nome curto `GIT~1` chegariam ao `.git` de verdade.
+    let git_area = || file_error(403, "erro_arq_area_do_git", "área interna do git");
+    if entry.strip_prefix(&root).is_ok_and(|rest| rest.components().any(|c| is_git_name(c.as_os_str()))) {
+        return Err(git_area());
+    }
+    if entry.symlink_metadata().is_err() {
+        return Err(file_error(404, "erro_arq_inexistente", "caminho não existe"));
+    }
+    // A pasta de cima já veio com nomes longos; falta o do item. Sem conseguir lê-lo, recusa.
+    if cfg!(windows) {
+        let long = long_name(&entry).map_err(|e| {
+            tracing::warn!(tipo = ?e.kind(), os = ?e.raw_os_error(), "nome longo do item ilegível");
+            io_error(e, "erro_arq_escrita_falhou")
+        })?;
+        if long.file_name().is_none_or(is_git_name) {
+            return Err(git_area());
+        }
+    }
+    Ok(entry)
+}
+
+/// O nome que o disco guarda para o caminho, sem seguir o link do fim.
+#[cfg(windows)]
+fn long_name(path: &Path) -> std::io::Result<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let mut buffer = vec![0u16; 1024];
+    loop {
+        // SAFETY: `wide` termina em NUL e o tamanho passado é o de `buffer`.
+        let n = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetLongPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32)
+        } as usize;
+        if n == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if n < buffer.len() {
+            return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer[..n])));
+        }
+        buffer.resize(n, 0);
+    }
+}
+
+#[cfg(not(windows))]
+fn long_name(path: &Path) -> std::io::Result<PathBuf> {
+    Ok(path.to_path_buf())
+}
+
+fn exists_error(e: std::io::Error) -> WorkspaceError {
+    if e.kind() == std::io::ErrorKind::AlreadyExists {
+        file_error(409, "erro_arq_ja_existe", "já existe um item com esse nome")
+    } else {
+        io_error(e, "erro_arq_escrita_falhou")
+    }
+}
+
+/// Novo nome na mesma pasta. Nome que já existe recusa; só a troca de maiúsculas do próprio item passa.
+pub fn rename(cwd: &Path, path: &str, name: &str) -> Result<Value> {
+    let source = own_entry(cwd, path)?;
+    let name = entry_name(name)?;
+    let target = source.with_file_name(name);
+    if target == source {
+        return Ok(json!({"path": requested(path, name)}));
+    }
+    // Ocupado é outra entrada da pasta com esse nome em qualquer caixa, comparada sem seguir link: só sobra o
+    // próprio item, na troca de maiúsculas de um sistema que não as distingue.
+    let own_case = target.symlink_metadata().is_ok();
+    if own_case {
+        let lower = name.to_lowercase();
+        let own = source.file_name();
+        let parent = source.parent().unwrap_or(cwd);
+        // A listagem incompleta não prova que só sobrou o próprio item.
+        let entries = std::fs::read_dir(parent).and_then(|dir| dir.collect::<std::io::Result<Vec<_>>>())
+            .map_err(|e| io_error(e, "erro_arq_escrita_falhou"))?;
+        let other = entries.iter()
+            .any(|e| Some(e.file_name().as_os_str()) != own && e.file_name().to_string_lossy().to_lowercase() == lower);
+        if other || own.is_none_or(|own| own.to_string_lossy().to_lowercase() != lower) {
+            return Err(file_error(409, "erro_arq_ja_existe", "já existe um item com esse nome"));
+        }
+    }
+    // O item que surgir no destino depois da conferência não é substituído.
+    let moved = if own_case { std::fs::rename(&source, &target) } else { rename_no_replace(&source, &target) };
+    moved.map_err(exists_error)?;
+    Ok(json!({"path": requested(path, name)}))
+}
+
+/// O caminho como a árvore o mostra, com o atalho da pasta de cima, e não o resolvido.
+fn requested(path: &str, name: &str) -> String {
+    let path = path.trim_end_matches(tree_seps());
+    tree_path(match path.rfind(tree_seps()) {
+        Some(at) => format!("{}{name}", &path[..=at]),
+        None => name.to_owned(),
+    })
+}
+
+fn tree_seps() -> &'static [char] {
+    if cfg!(windows) { &['/', '\\'] } else { &['/'] }
+}
+
+/// No Windows a listagem da árvore separa as pastas com `\`, e a resposta casa com ela.
+fn tree_path(path: String) -> String {
+    if cfg!(windows) { path.replace('/', "\\") } else { path }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &Path| {
+        std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+    };
+    let (c_from, c_to) = (c(from)?, c(to)?);
+    // SAFETY: os dois caminhos são C strings válidas durante a chamada.
+    let done = unsafe {
+        libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD, c_from.as_ptr(), libc::AT_FDCWD, c_to.as_ptr(), libc::RENAME_NOREPLACE)
+    };
+    if done == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    // Sistema de arquivos sem a troca exclusiva.
+    if matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)) {
+        tracing::warn!(os = ?error.raw_os_error(), "renameat2 sem RENAME_NOREPLACE: troca conferida antes, sem garantia contra corrida");
+        return rename_checked(from, to);
+    }
+    Err(error)
+}
+
+#[cfg(target_os = "macos")]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &Path| {
+        std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+    };
+    let (c_from, c_to) = (c(from)?, c(to)?);
+    // SAFETY: os dois caminhos são C strings válidas durante a chamada.
+    if unsafe { libc::renamex_np(c_from.as_ptr(), c_to.as_ptr(), libc::RENAME_EXCL) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(windows)]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide = |p: &Path| p.as_os_str().encode_wide().chain([0]).collect::<Vec<u16>>();
+    let (from, to) = (wide(from), wide(to));
+    // SAFETY: os dois caminhos terminam em NUL; sem `MOVEFILE_REPLACE_EXISTING` o destino ocupado recusa.
+    if unsafe { windows_sys::Win32::Storage::FileSystem::MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    rename_checked(from, to)
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn rename_checked(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.symlink_metadata().is_ok() {
+        return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+    }
+    std::fs::rename(from, to)
+}
+
+/// O tipo do erro da lixeira, sem o caminho que a mensagem dele carrega.
+fn trash_kind(error: &trash::Error) -> String {
+    let kind: String = format!("{error:?}").chars().take_while(char::is_ascii_alphanumeric).collect();
+    match error {
+        trash::Error::Os { code, .. } => format!("{kind} os={code}"),
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        trash::Error::FileSystem { source, .. } => format!("{kind} {:?} os={:?}", source.kind(), source.raw_os_error()),
+        _ => kind,
+    }
+}
+
+/// Manda para a lixeira do sistema da máquina da sessão; nunca apaga de vez.
+pub fn trash(cwd: &Path, path: &str) -> Result<Value> {
+    let entry = own_entry(cwd, path)?;
+    trash::delete(&entry).map_err(|e| {
+        tracing::warn!(erro = %trash_kind(&e), "lixeira recusou o item");
+        file_error(409, "erro_arq_lixeira_falhou", "não deu para mandar para a lixeira")
+    })?;
+    Ok(json!({"path": path.trim_end_matches(tree_seps())}))
+}
+
+/// Arquivo vazio ou pasta dentro de `path` (vazio é a raiz da sessão).
+pub fn create(cwd: &Path, path: Option<&str>, name: &str, dir: bool) -> Result<Value> {
+    let folder = resolve(cwd, path.unwrap_or(""))?;
+    if !folder.is_dir() {
+        return Err(file_error(400, "erro_arq_nao_e_pasta", "não é uma pasta"));
+    }
+    let name = entry_name(name)?;
+    let target = folder.join(name);
+    if dir {
+        std::fs::create_dir(&target).map_err(exists_error)?;
+    } else {
+        std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(exists_error)?;
+    }
+    let path = match path.map(|p| p.trim_end_matches(tree_seps())).filter(|p| !p.is_empty()) {
+        Some(folder) => tree_path(format!("{folder}/{name}")),
+        None => name.to_owned(),
+    };
+    Ok(json!({"path": path, "dir": dir}))
+}
+
 pub fn mkdir(root: &str, path: Option<&str>, name: &str, roots: &[String]) -> Result<Value> {
     let parent = folder(root, path, roots)?;
     let name = name.trim();
@@ -666,10 +944,150 @@ pub fn mkdir(root: &str, path: Option<&str>, name: &str, roots: &[String]) -> Re
 #[cfg(test)]
 mod tests {
     #[test]
+    fn create_rename_and_guards_stay_inside_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        std::fs::create_dir(cwd.join(".git")).unwrap();
+        assert_eq!(super::create(cwd, None, "docs", true).unwrap()["path"], "docs");
+        assert_eq!(super::create(cwd, Some("docs"), "a.md", false).unwrap()["path"], super::tree_path("docs/a.md".into()));
+        assert_eq!(super::create(cwd, Some("docs"), "a.md", false).unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
+        assert_eq!(super::rename(cwd, "docs/a.md", "b.md").unwrap()["path"], super::tree_path("docs/b.md".into()));
+        assert!(cwd.join("docs/b.md").is_file() && !cwd.join("docs/a.md").exists());
+        super::create(cwd, Some("docs"), "c.md", false).unwrap();
+        assert_eq!(super::rename(cwd, "docs/c.md", "b.md").unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
+        for bad in ["", "..", ".git", "x/y"] {
+            assert_eq!(super::rename(cwd, "docs/b.md", bad).unwrap_err().code.as_deref(), Some("erro_arq_nome_invalido"), "{bad}");
+        }
+        assert_eq!(super::rename(cwd, ".git", "x").unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
+        // Em disco que não distingue caixa, `.GIT` é o mesmo `.git`; em qualquer sistema a guarda recusa antes.
+        assert_eq!(super::trash(cwd, ".GIT").unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
+        assert_eq!(super::rename(cwd, ".git.", "x").unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
+        assert_eq!(super::rename(cwd, "../fora", "x").unwrap_err().status, 400);
+        assert_eq!(super::trash(cwd, "").unwrap_err().code.as_deref(), Some("erro_arq_raiz_da_sessao"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_moves_the_link_not_what_it_points_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        std::fs::write(cwd.join("alvo.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(cwd.join("alvo.txt"), cwd.join("atalho.txt")).unwrap();
+        assert_eq!(super::rename(cwd, "atalho.txt", "outro.txt").unwrap()["path"], "outro.txt");
+        assert!(cwd.join("alvo.txt").is_file());
+        assert!(cwd.join("outro.txt").symlink_metadata().unwrap().file_type().is_symlink());
+        // Link para fora da sessão: renomear mexe só no link, sem passar pela guarda do destino.
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("segredo.txt"), "s").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("segredo.txt"), cwd.join("externo")).unwrap();
+        assert_eq!(super::rename(cwd, "externo", "externo2").unwrap()["path"], "externo2");
+        assert!(outside.path().join("segredo.txt").is_file());
+        // Link `a -> A` não é o próprio `A` em outra caixa: a troca apagaria o arquivo. Só existe onde a caixa
+        // distingue nomes (no APFS padrão `a` já é o `A`).
+        std::fs::write(cwd.join("A"), "conteúdo").unwrap();
+        if cwd.join("a").symlink_metadata().is_err() {
+            std::os::unix::fs::symlink(cwd.join("A"), cwd.join("a")).unwrap();
+            assert_eq!(super::rename(cwd, "a", "A").unwrap_err().code.as_deref(), Some("erro_arq_ja_existe"));
+            assert_eq!(std::fs::read_to_string(cwd.join("A")).unwrap(), "conteúdo");
+        }
+        // Pasta que é atalho: a resposta traz o caminho que a árvore mostra, não o resolvido.
+        std::fs::create_dir_all(cwd.join("vendor/lib/sub")).unwrap();
+        std::os::unix::fs::symlink(cwd.join("vendor/lib"), cwd.join("lib")).unwrap();
+        assert_eq!(super::rename(cwd, "lib/sub", "sub2").unwrap()["path"], "lib/sub2");
+        assert_eq!(super::create(cwd, Some("lib/"), "novo.md", false).unwrap()["path"], "lib/novo.md");
+        assert_eq!(super::trash(cwd, "lib/novo.md").unwrap()["path"], "lib/novo.md");
+    }
+
+    /// Destino que surge depois da conferência do nome livre não é substituído.
+    #[test]
+    fn rename_never_replaces_an_existing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("a.md"), dir.path().join("b.md"));
+        std::fs::write(&from, "a").unwrap();
+        std::fs::write(&to, "escrito pelo agente").unwrap();
+        assert_eq!(super::rename_no_replace(&from, &to).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "escrito pelo agente");
+        assert!(from.is_file());
+        std::fs::remove_file(&to).unwrap();
+        super::rename_no_replace(&from, &to).unwrap();
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "a");
+    }
+
+    /// O nome curto 8.3 do `.git` é o próprio `.git`.
+    #[cfg(windows)]
+    #[test]
+    fn the_short_name_of_git_is_the_git_area() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = crate::real(dir.path());
+        std::fs::create_dir(cwd.join(".git")).unwrap();
+        let wide: Vec<u16> = cwd.join(".git").as_os_str().encode_wide().chain([0]).collect();
+        let mut buffer = vec![0u16; 1024];
+        let n = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32)
+        } as usize;
+        assert!(n > 0 && n < buffer.len(), "GetShortPathNameW falhou");
+        let short = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..n]));
+        let short = short.file_name().unwrap().to_string_lossy().into_owned();
+        assert_ne!(short, ".git", "o volume da pasta temporária não gera nomes 8.3: o teste não prova nada aqui");
+        assert_eq!(super::trash(&cwd, &short).unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
+        assert_eq!(super::rename(&cwd, &short, "x").unwrap_err().code.as_deref(), Some("erro_arq_area_do_git"));
+        assert_eq!(super::trash(&cwd, ".git::$INDEX_ALLOCATION").unwrap_err().code.as_deref(), Some("erro_arq_caminho_invalido"));
+        assert!(cwd.join(".git").is_dir());
+    }
+
+    /// A resposta casa com a listagem da árvore: `\` no Windows, `/` nos outros, onde `\` é parte do nome.
+    #[test]
+    fn answered_path_uses_the_listing_separator() {
+        assert_eq!(super::requested("docs/a.md", "b.md"), if cfg!(windows) { "docs\\b.md" } else { "docs/b.md" });
+        assert_eq!(super::requested("a.md", "b.md"), "b.md");
+        assert_eq!(super::requested("docs\\a.md", "b.md"), if cfg!(windows) { "docs\\b.md" } else { "b.md" });
+    }
+
+    /// Fluxo alternativo e nome de dispositivo só são recusados onde o Windows os interpreta.
+    #[test]
+    fn windows_device_and_stream_names_are_refused_there() {
+        for bad in ["nul", "CON.txt", "com1", "Lpt9.log", ".git:x", "a:b"] {
+            assert_eq!(super::entry_name(bad).is_err(), cfg!(windows), "{bad}");
+        }
+        for ok in ["console.txt", "com10", "nulo.md", "lpt"] {
+            assert!(super::entry_name(ok).is_ok(), "{ok}");
+        }
+    }
+
+    /// Nome com prefixo de unidade sairia da pasta no Windows; nos outros sistemas é um nome comum.
+    #[test]
+    fn entry_name_is_one_plain_component() {
+        assert_eq!(super::entry_name(" arquivo.txt ").unwrap(), "arquivo.txt");
+        for bad in ["", ".", "..", ".git", ".GIT", ".git.", ".Git ", "x/y", "x\\y", "-nota"] {
+            assert!(super::entry_name(bad).is_err(), "{bad}");
+        }
+        assert_eq!(super::entry_name("C:escape.txt").is_err(), cfg!(windows));
+    }
+
+    #[test]
     fn file_gone_during_save_is_a_conflict_like_python() {
         let gone = super::vanished(std::io::Error::from(std::io::ErrorKind::NotFound));
         assert_eq!((gone.status, gone.code.as_deref()), (409, Some("erro_arq_sumiu")));
         let denied = super::vanished(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
         assert_eq!(denied.status, 403);
+    }
+
+    #[test]
+    fn resolved_file_carries_size_and_mtime_and_folders_do_not() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/a.pdf"), b"12345").unwrap();
+        let found = super::resolver(dir.path(), &["sub/a.pdf".into(), "sub".into()], false).unwrap();
+        let file = super::with_stat(found["ok"]["sub/a.pdf"].clone());
+        assert_eq!(file["size"], 5);
+        let mtime = std::fs::metadata(dir.path().join("sub/a.pdf")).unwrap().modified().unwrap()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(file["mtime"], mtime);
+        assert_eq!(file["relativo"], "sub/a.pdf", "os campos de antes ficam");
+        let folder = super::with_stat(found["ok"]["sub"].clone());
+        assert!(folder.get("size").is_none() && folder.get("mtime").is_none());
+        let gone = super::with_stat(serde_json::json!({"relativo": null, "real": dir.path().join("sumiu.txt")}));
+        assert!(gone.get("size").is_none());
     }
 }

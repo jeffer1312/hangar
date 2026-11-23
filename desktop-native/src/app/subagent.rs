@@ -445,11 +445,7 @@ impl SubConversation {
             let mut block = vec![term::fold_header(SharedString::from(format!("sub-{key}")), title, open, live.is_some(), failed,
                 cx.listener(move |this, _, _, cx| this.toggle(toggle.clone(), cx)))];
             if !open {
-                if let Some(tool) = live {
-                    let call = &self.events[tool.call];
-                    let shell = call.tool_name.as_deref().is_some_and(|name| term::is_any(name, term::SHELL_TOOLS));
-                    block.push(term::fold_sub(if shell { format!("$ {}", tool.summary) } else { tool.summary.clone() }, theme::muted()));
-                }
+                // Sem a linha do comando em voo, como na conversa: ela fazia o texto pular.
                 for tool in folded.iter().filter(|t| t.tone == Tone::Warning) { block.push(term::fold_sub(tool.status.clone(), theme::danger())); }
             }
             rows.push(div().flex().flex_col().children(block).into_any_element());

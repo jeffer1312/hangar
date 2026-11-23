@@ -59,7 +59,9 @@ export function TaskEditor({ server, timezone, task, onSave, onClose, onReload, 
   const [probe, setProbe] = useState<Record<string, { disponivel: boolean; motivo: string | null }>>({});
   const [defaultModel, setDefaultModel] = useState('');
   const [retry, setRetry] = useState(0);
-  const provider = launch.provider ?? 'claude';
+  // O padrão da máquina só é mostrado: gravá-lo congelaria o de hoje, e o servidor decide a cada execução.
+  const [serverProvider, setServerProvider] = useState<Provider | null>(null);
+  const provider = launch.provider ?? serverProvider ?? 'claude';
   const change = <T,>(set: (value: T) => void) => (value: T) => { set(value); setDirty(true); setError(''); };
   const patchLaunch = (patch: Partial<TaskLaunch>) => { setLaunch((old) => ({ ...old, ...patch })); setDirty(true); setError(''); };
   const discard = (done: () => void) => Alert.alert(m.scheduled_discard_title(), m.scheduled_discard_body(), [
@@ -79,10 +81,9 @@ export function TaskEditor({ server, timezone, task, onSave, onClose, onReload, 
         const providers = await getProvidersForServer(server);
         if (!alive) return;
         setProbe(providers);
-        if (!launch.provider) {
-          const preferred = SESSION_PROVIDERS.find((p) => providers[p]?.default && providers[p]?.disponivel)
-            ?? SESSION_PROVIDERS.find((p) => providers[p]?.disponivel) ?? 'claude';
-          setLaunch((old) => ({ ...old, provider: preferred }));
+        if (!launch.provider && !serverProvider) {
+          setServerProvider(SESSION_PROVIDERS.find((p) => providers[p]?.default && providers[p]?.disponivel)
+            ?? SESSION_PROVIDERS.find((p) => providers[p]?.disponivel) ?? 'claude');
           return;
         }
         const [defaults, modelList, accountList] = await Promise.all([
@@ -97,10 +98,11 @@ export function TaskEditor({ server, timezone, task, onSave, onClose, onReload, 
     };
     void load().catch((e) => { if (alive) setCatalogError(scheduledError(e)); }).finally(() => { if (alive) setCatalogLoading(false); });
     return () => { alive = false; };
-  }, [server, target.kind, provider, launch.provider, launch.engine, launch.config_dir, launch.codex_account, retry]);
+  }, [server, target.kind, provider, launch.provider, serverProvider, launch.engine, launch.config_dir, launch.codex_account, retry]);
 
+  const providerKnown = !!launch.provider || !!serverProvider;
   const save = async () => {
-    if (lock.current || catalogLoading || catalogError || (target.kind === 'new' && !launch.provider)) return;
+    if (lock.current || catalogLoading || catalogError || (target.kind === 'new' && !providerKnown)) return;
     const schedule = kind === 'weekly' ? { kind, time, weekdays: days } as const
       : kind === 'interval' ? { kind, minutes: Number(interval) * (unit === 'hours' ? 60 : 1) } as const
       : { kind: 'once' as const, at: task?.schedule.kind === 'once' && date === once.date && time === once.time
@@ -119,6 +121,8 @@ export function TaskEditor({ server, timezone, task, onSave, onClose, onReload, 
     lock.current = true; setBusy(true);
     void onReload().catch((e) => setError(scheduledError(e))).finally(() => { lock.current = false; setBusy(false); });
   });
+  // Conta e modelo só existem no provedor mostrado: escolher um fixa esse provedor.
+  const pinProvider = (value: string): Partial<TaskLaunch> => value && !launch.provider ? { provider } : {};
   const accountValue = provider === 'claude' ? launch.config_dir ?? '' : launch.codex_account ?? '';
   const modelValue = (model: ModelOption) => model.provider ? `${model.provider}/${model.id}` : model.id;
   const choices = taskWeekdays();
@@ -161,15 +165,15 @@ export function TaskEditor({ server, timezone, task, onSave, onClose, onReload, 
       <MachineGroup>
         <SettingRow icon="Folder" label={m.scheduled_folder()} value={launch.cwd || m.scheduled_choose_folder()} disabled={busy} onPress={() => setFolderOpen(!folderOpen)} />
         {folderOpen ? <CwdPicker server={server} selected={launch.cwd} autoSelect={false} compact onPick={(cwd) => patchLaunch({ cwd })} onDone={() => setFolderOpen(false)} /> : null}
-        <SettingRow icon="Activity" label={m.scheduled_agent()} value={launch.provider ? providerName(provider) : m.scheduled_loading()} disabled={busy || catalogLoading}
+        <SettingRow icon="Activity" label={m.scheduled_agent()} value={providerKnown ? providerName(provider) : m.scheduled_loading()} disabled={busy || catalogLoading}
           actions={SESSION_PROVIDERS.map((p) => ({ id: p, title: providerName(p), attributes: { disabled: probe[p]?.disponivel === false } }))}
           onAction={(p) => { setLaunch({ cwd: launch.cwd, provider: p as Provider }); setDirty(true); }} />
         {provider === 'claude' || provider === 'codex' ? <SettingRow icon="User" label={m.scheduled_account()} value={accounts.find((a) => a.id === accountValue)?.label ?? (accountValue || m.scheduled_account_default())}
           disabled={busy || catalogLoading || !!catalogError} actions={[{ id: '', title: m.scheduled_account_default() }, ...accounts.map((a) => ({ id: a.id, title: a.label, attributes: { disabled: a.disabled } }))]}
-          onAction={(value) => patchLaunch(provider === 'claude' ? { config_dir: value || null, model: null } : { codex_account: value || null, model: null })} /> : null}
+          onAction={(value) => patchLaunch({ ...pinProvider(value), ...(provider === 'claude' ? { config_dir: value || null, model: null } : { codex_account: value || null, model: null }) })} /> : null}
         <SettingRow icon="Cpu" label={m.scheduled_model()} value={models.find((model) => modelValue(model) === launch.model)?.name ?? launch.model ?? (defaultModel ? `${m.scheduled_model_default()} · ${defaultModel}` : m.scheduled_model_default())}
           disabled={busy || catalogLoading || !!catalogError} actions={[{ id: '', title: m.scheduled_model_default() }, ...models.filter((md) => md.id !== 'default').map((model) => ({ id: modelValue(model), title: model.name ?? model.id }))]}
-          onAction={(model) => patchLaunch({ model: model || null })} />
+          onAction={(model) => patchLaunch({ ...pinProvider(model), model: model || null })} />
         <MachineRow title={m.scheduled_worktree()} checked={worktree} disabled={busy} onPress={() => change(setWorktree)(!worktree)} description={m.scheduled_worktree_hint()} />
         {worktree ? <MachineField label={m.scheduled_base()} value={base} onChangeText={change(setBase)} editable={!busy} /> : null}
       </MachineGroup>
@@ -180,7 +184,7 @@ export function TaskEditor({ server, timezone, task, onSave, onClose, onReload, 
     {error ? <Notice text={error} error /> : null}
     {conflict ? <MachineGroup><MachineRow title={m.scheduled_reload_draft()} disabled={busy} onPress={reload} /></MachineGroup> : null}
     <MachineGroup>
-      <MachineRow title={busy ? m.scheduled_saving() : task ? m.scheduled_save() : m.scheduled_create()} action disabled={busy || catalogLoading || !!catalogError || conflict || (target.kind === 'new' && !launch.provider)} onPress={() => void save()} />
+      <MachineRow title={busy ? m.scheduled_saving() : task ? m.scheduled_save() : m.scheduled_create()} action disabled={busy || catalogLoading || !!catalogError || conflict || (target.kind === 'new' && !providerKnown)} onPress={() => void save()} />
       <MachineRow title={m.scheduled_cancel()} disabled={busy} onPress={close} />
     </MachineGroup>
   </Pagina></KeyboardAvoidingView>;

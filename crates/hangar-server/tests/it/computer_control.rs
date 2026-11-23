@@ -57,20 +57,29 @@ struct Scene {
 
 impl Scene {
     async fn new() -> Self {
+        Self::with_config_dir(false).await
+    }
+
+    /// `config_dir`: o servidor sobe com `CLAUDE_CONFIG_DIR=~/.claude`, como quem a exporta no shell.
+    async fn with_config_dir(config_dir: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join("home");
         let bin = root.path().join("bin");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
         let mut state = AppState::new(config(""));
-        state.accounts = AccountService::new(AccountEnvironment::from_map(BTreeMap::from([
+        let mut env = BTreeMap::from([
             ("HOME".into(), home.to_string_lossy().into_owned()),
             ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
             ("PATH".into(), bin.to_string_lossy().into_owned()),
             // A autoridade do servidor está no ambiente dele; o ssh filho não pode herdá-la.
             ("CP_AUTH_TOKEN".into(), "nao-pode-vazar".into()),
             ("HANGAR_INTERNAL_SECRET".into(), "nao-pode-vazar".into()),
-        ])));
+        ]);
+        if config_dir {
+            env.insert("CLAUDE_CONFIG_DIR".into(), home.join(".claude").to_string_lossy().into_owned());
+        }
+        state.accounts = AccountService::new(AccountEnvironment::from_map(env));
         let app = router(Arc::new(state));
         Self { root, home, bin, app }
     }

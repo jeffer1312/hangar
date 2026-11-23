@@ -7,11 +7,20 @@ use super::*;
 fn account_in_use<'a>(list: &'a [Credential], session: Option<&SessionInfo>) -> Option<&'a Credential> {
     let provider = session.map(|s| s.provider.as_str()).filter(|p| !p.is_empty()).unwrap_or("claude");
     let account = session.and_then(|s| s.conta.as_deref());
+    if let Some(binding) = session.and_then(|s| s.engine_binding.as_deref()) {
+        let id = format!("cliproxy-binding:{binding}");
+        return list.iter().find(|c| c.id == id);
+    }
     if session.is_some_and(SessionInfo::uses_engine_account) {
-        return list.iter().find(|c| c.kind == "codex" && c.id.starts_with("codex:") && account == Some(c.id.as_str()));
+        return list.iter().find(|c| matches!(c.kind.as_str(), "codex" | "cliproxy") && account == Some(c.id.as_str()));
     }
     if provider == "claude" && session.is_some_and(|s| s.engine.as_deref().is_some_and(|e| !e.is_empty())) { return None; }
     list.iter().find(|c| c.kind == provider && account.map_or(c.active, |id| id == c.id))
+}
+
+fn proxy_windows(credential: &Credential) -> Option<&[QuotaWindow]> {
+    let quota = if credential.kind == "cliproxy" { credential.quota.as_ref() } else { credential.cliproxy_quota.as_ref() }?;
+    (quota.state == "lida" && !quota.windows.is_empty()).then_some(quota.windows.as_slice())
 }
 
 impl Hangar {
@@ -90,9 +99,14 @@ impl Hangar {
         let login = c.login.as_ref().filter(|l| l.logged_in == Some(true));
         let title = c.alias.clone().filter(|a| !a.is_empty()).or_else(|| login.and_then(|l| l.email.clone())).unwrap_or_else(|| c.name.clone());
         let model = self.status().and_then(|s| s.model).map(|m| m.to_lowercase());
-        let window = match build_row(c, &HashMap::new(), false, now()).quota {
-            QuotaView::Bars { bars, .. } => fullest(&bars, model.as_deref()).map(|b| (b.label.clone(), b.pct)),
-            _ => None,
+        let window = if self.has_proxy_session() {
+            proxy_windows(c).and_then(|windows| windows.iter().filter(|w| !w.por_modelo).max_by(|a, b| a.pct.total_cmp(&b.pct)))
+                .map(|w| (w.label.clone(), w.pct))
+        } else {
+            match build_row(c, &HashMap::new(), false, now()).quota {
+                QuotaView::Bars { bars, .. } => fullest(&bars, model.as_deref()).map(|b| (b.label.clone(), b.pct)),
+                _ => None,
+            }
         };
         Some((c.kind.clone(), title, window))
     }
@@ -105,14 +119,14 @@ impl Hangar {
     pub(in crate::app) fn focused_proxy_pct(&self) -> Option<f64> {
         let session = self.selected.as_ref().filter(|s| s.uses_engine_account())?;
         let c = account_in_use(self.session_accounts().ok()?, Some(session))?;
-        let windows = c.read_windows()?;
+        let windows = proxy_windows(c)?;
         windows.iter().find(|w| w.label == "5h").or_else(|| windows.iter().find(|w| w.label == "7d")).map(|w| w.pct)
     }
 
     pub(in crate::app) fn focused_proxy_quota(&self) -> String {
         let Some(c) = self.selected.as_ref().filter(|s| s.uses_engine_account())
             .and_then(|s| account_in_use(self.session_accounts().ok()?, Some(s))) else { return String::new() };
-        c.read_windows().into_iter().flatten().filter(|w| matches!(w.label.as_str(), "5h" | "7d"))
+        proxy_windows(c).into_iter().flatten().filter(|w| matches!(w.label.as_str(), "5h" | "7d"))
             .map(|w| format!("{} {}%", w.label, w.pct.round())).collect::<Vec<_>>().join(" · ")
     }
 
@@ -135,23 +149,34 @@ impl Hangar {
             .map(|((life, jsonl), target)| (target, life.to_owned(), jsonl.to_owned()));
         let body = match (&list.value, list.ok()) {
             (_, Some(list)) => {
-                let mut mine: Vec<&Credential> = list.iter().filter(|c| c.kind == "claude" || (c.kind == "codex" && (!proxy || in_use(c)
-                    || self.session_engine().and_then(|e| e.cliproxy_accounts.as_ref()).is_some_and(|accounts| accounts.iter().any(|a| a.credential_id == c.id))))).collect();
+                let mut mine: Vec<&Credential> = list.iter().filter(|c| c.kind == "claude" || (c.kind == "codex" && !proxy)
+                    || (proxy && matches!(c.kind.as_str(), "codex" | "cliproxy") && (in_use(c)
+                        || self.session_engine().and_then(|e| e.cliproxy_accounts.as_ref()).is_some_and(|accounts| accounts.iter().any(|a| a.credential_id == c.id))))).collect();
+                if session.is_some_and(|s| s.engine_binding.is_some()) {
+                    mine.retain(|c| session.and_then(|s| s.conta.as_deref()) != Some(c.id.as_str()));
+                }
                 mine.sort_by_key(|c| !in_use(c));
                 if mine.is_empty() { note(tr("usage_card_empty"), theme::muted()) } else {
                     let (engines, now) = (HashMap::new(), now());
                     let rows = mine.into_iter().map(|c| {
+                        let proxy_credential;
+                        let c = if proxy && c.kind == "codex" {
+                            proxy_credential = Credential { quota: c.cliproxy_quota.clone(), ..c.clone() };
+                            &proxy_credential
+                        } else { c };
                         let quota = build_row(c, &engines, false, now).quota;
                         // A janela mais cheia, como a lista do backend: a partir de 95% pede confirmação, a partir de 99% não aceita.
                         let pct = match &quota { QuotaView::Bars { bars, .. } => bars.iter().map(|b| b.pct).fold(None, |m: Option<f64>, p| Some(m.map_or(p, |m| m.max(p)))), _ => None };
                         let target = c.id.strip_prefix("claude:").map(str::to_owned)
                             .filter(|_| movable && idle && c.kind == "claude" && !in_use(c) && pct.is_none_or(|p| p < 99.));
-                        let row = account_row(c, in_use(c), proxy && c.kind == "codex", quota, fill);
-                        if proxy && c.kind == "codex" && movable && !in_use(c) {
-                            let account = self.session_engine().filter(|e| e.cliproxy_error.is_none())
-                                .and_then(|e| e.cliproxy_accounts.as_ref()).and_then(|accounts| accounts.iter().find(|a|
-                                    a.credential_id == c.id && c.codex_account.as_deref() == Some(a.account.as_str()))).map(|a| a.account.clone());
-                            let available = idle && account.is_some() && c.logged_in() == Some(true) && pct.is_none_or(|p| p < 99.);
+                        let chatgpt = proxy && matches!(c.kind.as_str(), "codex" | "cliproxy");
+                        let row = account_row(c, in_use(c), chatgpt, quota, fill);
+                        if chatgpt && movable && !in_use(c) {
+                            let account = self.session_engine().filter(|e| e.cliproxy_error.is_none()).and_then(|e|
+                                e.cliproxy_accounts.as_ref()?.iter().find(|a| a.credential_id == c.id
+                                    && (e.cliproxy_binding.is_none() || e.cliproxy_bound_account.as_ref().is_some_and(|bound| bound.account == a.account))))
+                                .map(|a| a.account.clone());
+                            let available = idle && account.is_some() && pct.is_none_or(|p| p < 99.);
                             let label = c.alias.clone().filter(|a| !a.is_empty()).unwrap_or_else(|| c.name.clone());
                             let aria = tr("sidebar_proxy_title").replace("{n}", &label);
                             let warn = pct.filter(|p| *p >= 95.);

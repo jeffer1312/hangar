@@ -336,3 +336,29 @@ it('Claude Desktop: chamada solta sendo escrita diz escrevendo, não em execuç�
     act(() => root.unmount());
   }
 });
+
+
+it('grupo fechado não ganha linha da chamada em voo, na Árvore, nos Chips e no Terminal', () => {
+  // Script do Code Mode: o REPL e as chamadas de dentro dele chegam e terminam em sequência.
+  const repl: ChatEvent = { id: 'repl', kind: 'tool_use', tool_use_id: 'repl', tool_name: 'REPL', tool_input: { code: 'await $`ls`', description: 'lista' } };
+  const inner: ChatEvent = { id: 'inner', kind: 'tool_use', tool_use_id: 'inner', tool_name: 'Bash', tool_input: { command: 'cargo-em-voo' } };
+  const done: ChatEvent = { id: 'r-repl', kind: 'tool_result', tool_use_id: 'repl', result: 'ok' };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  try {
+    for (const look of ['tree', 'chips', 'terminal'] as const) {
+      // Seis chamadas: até cinco os Chips nascem abertos.
+      const inners = [1, 2, 3, 4, 5].map((n) => ({ ...inner, id: `inner${n}`, tool_use_id: `inner${n}` }));
+      const props = { parts: [repl, ...inners], onAbrir: () => {}, look };
+      act(() => root.render(createElement(ToolGroup, { ...props, resultOf: (t) => (t.id === 'repl' ? done : null) })));
+      expect(container.textContent).not.toContain('cargo-em-voo');
+      const inFlight = container.textContent;
+      act(() => root.render(createElement(ToolGroup, { ...props, resultOf: (t) => ({ ...done, id: `r-${t.id}`, tool_use_id: t.tool_use_id }) })));
+      expect(container.textContent).not.toContain('cargo-em-voo');
+      expect(container.textContent?.length).toBeGreaterThan(0);
+      expect(inFlight?.length).toBeGreaterThan(0);
+    }
+  } finally {
+    act(() => root.unmount());
+  }
+});

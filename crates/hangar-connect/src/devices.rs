@@ -21,18 +21,7 @@ pub const MAX_TICKET_AHEAD: u64 = 5 * 60;
 pub type DeviceId = String;
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
-/// Código de conferência do celular: o mesmo que o celular calcula (`installCode` em `packages/core`, mesmos casos de
-/// teste). Sai do SHA-256 do `install_id`, não de um pedaço dele, e a lista manda só ele, nunca o id.
-/// shortcut: são 30 bits; quem tem a senha da conta e viu o código no celular ainda acha outro id com o mesmo código
-/// por força bruta (~2^30 hashes). Por isso o cartão mostra também o nome e há quanto tempo o pedido chegou.
-pub fn install_code(install_id: &str) -> String {
-    // Sem 0/O e 1/I: a pessoa compara de olho, numa tela e na outra.
-    const ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-    let digest = ring::digest::digest(&ring::digest::SHA256, install_id.as_bytes());
-    let head = u32::from_be_bytes(digest.as_ref()[..4].try_into().expect("o SHA-256 tem 32 bytes")) >> 2;
-    let code: String = (0..6).map(|i| ALPHABET[((head >> (25 - 5 * i)) & 31) as usize] as char).collect();
-    format!("{}-{}", &code[..3], &code[3..])
-}
+pub use hangar_connect_client::install_code;
 
 /// Chave que junta os pedidos do mesmo celular no cartão de quem aprova, sem expor o id. Prefixo próprio: não coincide
 /// com o hash de onde sai o código.
@@ -88,6 +77,9 @@ struct Device {
     /// Mesmo valor nos pedidos de um celular a várias máquinas: só agrupa o cartão, não dá acesso.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     install_id: Option<String>,
+    /// Aparelho da conta que o serviço liberou: revogá-lo lá tira este daqui.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account_device: Option<String>,
 }
 
 /// Entregas sem confirmação que seguem valendo; a mais velha sai, senão um par fora do ar acumularia tokens.
@@ -123,6 +115,11 @@ struct Ticket {
     verifier: String,
     nonce: String,
     expires_at: u64,
+    /// Ausentes no serviço antigo: o aparelho espera o cartão desta máquina.
+    #[serde(default)]
+    preapproved: bool,
+    #[serde(default)]
+    account_device: Option<String>,
 }
 
 #[derive(Debug)]
@@ -163,6 +160,9 @@ pub struct Row {
     pub install_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_group: Option<String>,
+    /// O aparelho da conta por onde ele entrou: a tela desta máquina mostra só os que não têm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_device: Option<String>,
 }
 
 pub struct Store {
@@ -172,6 +172,10 @@ pub struct Store {
     state: Mutex<State>,
     /// `devices.json` ficou no lugar sem ser lido: gravar por cima perderia os aparelhos que ele guarda.
     fault: Option<String>,
+    /// A conta recusou a leitura a esta máquina: revogação lá não chegaria aqui. `Some` são os aparelhos da conta e o
+    /// que eles aprovaram aqui, refeito a cada mudança no registro. Só memória: a próxima leitura boa desfaz.
+    /// Sempre travado depois de `state`.
+    suspended: Mutex<Option<HashSet<DeviceId>>>,
 }
 
 impl Store {
@@ -179,7 +183,7 @@ impl Store {
         let clock = system_clock();
         let path = dir.join("devices.json");
         let (state, fault) = load(&path, clock());
-        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault }
+        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault, suspended: Mutex::new(None) }
     }
 
     /// Vai para `status().error`. shortcut: lido só na subida, a recusa fica até reiniciar o servidor; reler a cada pedido custaria disco no porteiro.
@@ -201,6 +205,10 @@ impl Store {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    fn lock_suspended(&self) -> MutexGuard<'_, Option<HashSet<DeviceId>>> {
+        self.suspended.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Grava antes de valer: nonce gasto ou token entregue nunca ficam só na memória.
     fn update<T>(&self, change: impl FnOnce(&mut State, u64) -> Result<T, Refusal>) -> Result<T, Refusal> {
         let now = (self.clock)();
@@ -214,17 +222,21 @@ impl Store {
             }
             write(&self.path, &next)?;
             *state = next;
+            if let Some(suspended) = self.lock_suspended().as_mut() {
+                *suspended = account_cascade(&state);
+            }
         }
         Ok(value)
     }
 
     /// `signature` confere os bytes de `ticket` como vieram: o bilhete nunca é serializado de novo.
     pub fn redeem(&self, ticket: &str, signature: &str, secret: &str) -> Result<DeviceId, Refusal> {
-        self.redeem_from(ticket, signature, secret, None)
+        self.redeem_from(ticket, signature, secret, None).map(|(id, _)| id)
     }
 
-    /// `install_id` vem do celular e só agrupa os pedidos dele no cartão de aprovação.
-    pub fn redeem_from(&self, ticket: &str, signature: &str, secret: &str, install_id: Option<&str>) -> Result<DeviceId, Refusal> {
+    /// `install_id` vem do celular e só agrupa os pedidos dele no cartão de aprovação. Bilhete que a conta liberou
+    /// nasce [`Status::Approved`]; os outros, [`Status::Pending`].
+    pub fn redeem_from(&self, ticket: &str, signature: &str, secret: &str, install_id: Option<&str>) -> Result<(DeviceId, Status), Refusal> {
         if install_id.is_some_and(|id| id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')) {
             return Err(Refusal::InstallId);
         }
@@ -244,21 +256,25 @@ impl Store {
             if !same(&verifier, &ticket.verifier) {
                 return Err(Refusal::Ticket);
             }
-            // Nova tentativa do mesmo celular troca o pedido anterior: um cartão só, e tentar de novo não gasta o limite.
             let name = display_name(&ticket.device_name);
-            if let Some(install) = install_id {
+            let account_device = ticket.account_device.clone().filter(|d| ticket.preapproved && !d.is_empty());
+            // Nova tentativa do mesmo celular troca o pedido anterior: um cartão só, e tentar de novo não gasta o limite.
+            // Só pedido troca pedido: o `install_id` vem do celular, e um liberado apagaria o cartão de outro.
+            if let Some(install) = install_id.filter(|_| account_device.is_none()) {
                 state.devices.retain(|d| !(d.status == Status::Pending && d.install_id.as_deref() == Some(install) && d.name == name));
             }
-            if state.devices.iter().filter(|d| d.status == Status::Pending).count() >= MAX_PENDING {
+            if account_device.is_none() &&state.devices.iter().filter(|d| d.status == Status::Pending).count() >= MAX_PENDING {
                 return Err(Refusal::TooManyPending);
             }
             // Só aqui: quem tem o bilhete sem o segredo, ou bateu no limite, não queima o nonce.
             state.nonces.insert(ticket.nonce.clone(), ticket.expires_at);
             let id = credentials::id();
-            state.devices.push(Device { id: id.clone(), name, status: Status::Pending,
+            // Liberado na conta nasce aprovado sem `approved_by`: a cascata local não alcança o que a conta decidiu.
+            let status = if account_device.is_some() { Status::Approved } else { Status::Pending };
+            state.devices.push(Device { id: id.clone(), name, status,
                 created_at: now, denied_at: None, verifier: Some(verifier), token_hash: None, next_token_hash: None, unconfirmed_token_hashes: Vec::new(), last_seen: None,
-                approved_by: None, approved_at: None, install_id: install_id.map(str::to_owned) });
-            Ok(id)
+                approved_by: None, approved_at: account_device.is_some().then_some(now), install_id: install_id.map(str::to_owned), account_device });
+            Ok((id, status))
         })
     }
 
@@ -319,13 +335,44 @@ impl Store {
                 return Err(Refusal::NotYours);
             }
             let revoked = cascade(state, id);
-            state.devices.retain_mut(|device| {
-                if !revoked.contains(&device.id) { return true; }
-                if device.token_hash.is_some() { return false; }
-                deny(device, now);
-                true
-            });
+            withdraw(state, now, |device| revoked.contains(&device.id));
             Ok(())
+        })
+    }
+
+    /// Aparelhos da conta revogados no serviço saem daqui também, com o que eles aprovaram nesta máquina.
+    pub fn revoke_account_devices(&self, account_devices: &[String]) -> Result<(), Refusal> {
+        self.update(|state, now| {
+            let revoked: HashSet<DeviceId> = state.devices.iter()
+                .filter(|d| d.account_device.as_ref().is_some_and(|a| account_devices.contains(a)))
+                .flat_map(|d| cascade(state, &d.id))
+                .collect();
+            withdraw(state, now, |device| revoked.contains(&device.id));
+            Ok(())
+        })
+    }
+
+    /// Liga ou desliga a recusa no porteiro dos aparelhos ligados à conta, sem apagar nenhum; devolve o valor anterior.
+    pub fn suspend_account_devices(&self, suspended: bool) -> bool {
+        if !suspended {
+            return self.lock_suspended().take().is_some();
+        }
+        let state = self.lock();
+        // A revogação na conta leva junto o que o aparelho aprovou aqui: a suspensão também.
+        self.lock_suspended().replace(account_cascade(&state)).is_some()
+    }
+
+    /// Aparelho aprovado aqui passa a ser `account_device` na conta; a ligação nunca troca de dono.
+    pub fn bind_account_device(&self, id: &str, account_device: &str) -> Result<(), Refusal> {
+        if account_device.is_empty() {
+            return Err(Refusal::Unknown);
+        }
+        self.update(|state, _| {
+            let device = state.devices.iter_mut().find(|d| d.id == id && d.status == Status::Approved).ok_or(Refusal::Unknown)?;
+            match &device.account_device {
+                Some(bound) if bound != account_device => Err(Refusal::NotYours),
+                _ => { device.account_device = Some(account_device.to_owned()); Ok(()) }
+            }
         })
     }
 
@@ -335,7 +382,7 @@ impl Store {
             let (id, token) = (credentials::id(), credentials::token());
             state.devices.push(Device { id: id.clone(), name: display_name(name), status: Status::Approved, created_at: now,
                 denied_at: None, verifier: None, token_hash: Some(credentials::hash(token.as_bytes())), next_token_hash: None, unconfirmed_token_hashes: Vec::new(), last_seen: None,
-                approved_by: None, approved_at: Some(now), install_id: None });
+                approved_by: None, approved_at: Some(now), install_id: None, account_device: None });
             Ok((id, token))
         })
     }
@@ -374,7 +421,8 @@ impl Store {
         state.devices.iter().map(|d| {
             let install = d.install_id.as_deref().filter(|_| d.status == Status::Pending);
             Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, created_at: d.created_at,
-                install_code: install.map(install_code), install_group: install.map(install_group) }
+                install_code: install.map(install_code), install_group: install.map(install_group),
+                account_device: d.account_device.clone() }
         }).collect()
     }
 
@@ -383,7 +431,10 @@ impl Store {
         let presented = credentials::hash(token);
         let now = (self.clock)();
         let mut state = self.lock();
-        let index = state.devices.iter().position(|d| d.status == Status::Approved && d.accepts(&presented))?;
+        let suspended = self.lock_suspended();
+        let index = state.devices.iter()
+            .position(|d| d.status == Status::Approved && !suspended.as_ref().is_some_and(|s| s.contains(&d.id)) && d.accepts(&presented))?;
+        drop(suspended);
         // Usar o token novo prova a entrega, mesmo com a resposta dela perdida no caminho. Vai ao disco: depois
         // de reiniciar, o antigo voltaria a valer e a prova sairia com ele.
         if state.devices[index].next_token_hash.as_deref().is_some_and(|next| same(next, &presented)) {
@@ -408,6 +459,11 @@ impl Store {
     }
 }
 
+/// Os aparelhos ligados à conta e o que eles aprovaram aqui.
+fn account_cascade(state: &State) -> HashSet<DeviceId> {
+    state.devices.iter().filter(|d| d.account_device.is_some()).flat_map(|d| cascade(state, &d.id)).collect()
+}
+
 /// O aparelho e tudo que nasceu da aprovação dele, direta ou por outro.
 fn cascade(state: &State, id: &str) -> HashSet<DeviceId> {
     let mut found = HashSet::from([id.to_owned()]);
@@ -420,6 +476,16 @@ fn cascade(state: &State, id: &str) -> HashSet<DeviceId> {
         }
         if found.len() == before { return found; }
     }
+}
+
+/// Quem já recebeu token perde o aparelho; quem ainda espera lê `denied` em vez de um erro.
+fn withdraw(state: &mut State, now: u64, revoked: impl Fn(&Device) -> bool) {
+    state.devices.retain_mut(|device| {
+        if !revoked(device) { return true; }
+        if device.token_hash.is_some() { return false; }
+        deny(device, now);
+        true
+    });
 }
 
 fn same(a: &str, b: &str) -> bool {
@@ -480,5 +546,177 @@ fn load(path: &Path, now: u64) -> (State, Option<String>) {
             });
             (State::default(), fault)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ring::signature::KeyPair;
+    use serde_json::{Value, json};
+
+    const NOW: u64 = 1_000_000;
+
+    struct Dir(PathBuf);
+
+    impl Drop for Dir {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+
+    fn dir() -> Dir {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Dir(std::env::temp_dir().join(format!("hangar-connect-devices-{}-{n}", std::process::id())))
+    }
+
+    fn key() -> ring::signature::Ed25519KeyPair {
+        ring::signature::Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).unwrap()
+    }
+
+    fn store(dir: &Dir) -> Store {
+        let identity = ServiceIdentity { public_key: key().public_key().as_ref().try_into().unwrap(), machine_id: "pc1".into(), account: "acme".into() };
+        Store::new(dir.0.clone(), Some(identity)).with_clock(Arc::new(|| NOW))
+    }
+
+    /// Bilhete do serviço; `extra` traz os campos da confiança na conta, ausentes no serviço antigo.
+    fn ticket(nonce: &str, secret: &str, extra: Value) -> (String, String) {
+        let mut body = json!({"machine_id": "pc1", "account": "acme", "device_name": "celular",
+            "verifier": credentials::hash(secret.as_bytes()), "nonce": nonce, "expires_at": NOW + 60});
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let text = body.to_string();
+        let signature = base64::engine::general_purpose::STANDARD.encode(key().sign(text.as_bytes()));
+        (text, signature)
+    }
+
+    fn redeem(store: &Store, nonce: &str, secret: &str, extra: Value) -> Result<DeviceId, Refusal> {
+        let (text, signature) = ticket(nonce, secret, extra);
+        store.redeem_from(&text, &signature, secret, None).map(|(id, _)| id)
+    }
+
+    #[test]
+    fn a_ticket_the_account_released_is_approved_on_the_first_poll() {
+        let dir = dir();
+        let store = store(&dir);
+        let id = redeem(&store, "n1", "s1", json!({"preapproved": true, "account_device": "D"})).unwrap();
+        let Poll::Approved(Some(token)) = store.status(&id, "s1").unwrap() else { panic!("não saiu aprovado com token") };
+        assert_eq!(store.status(&id, "s1").unwrap(), Poll::Approved(None), "o token sai uma vez");
+        assert_eq!(store.verify(token.as_bytes()), Some(id));
+        assert!(matches!(redeem(&store, "n1", "s1", json!({"preapproved": true, "account_device": "D"})), Err(Refusal::Ticket)), "nonce gasto");
+    }
+
+    #[test]
+    fn pending_cards_do_not_block_a_device_the_account_released() {
+        let dir = dir();
+        let store = store(&dir);
+        for n in 0..MAX_PENDING {
+            redeem(&store, &format!("p{n}"), "s", json!({})).unwrap();
+        }
+        assert!(matches!(redeem(&store, "p-extra", "s", json!({})), Err(Refusal::TooManyPending)));
+        let id = redeem(&store, "n1", "s1", json!({"preapproved": true, "account_device": "D"})).unwrap();
+        assert!(matches!(store.status(&id, "s1").unwrap(), Poll::Approved(Some(_))));
+    }
+
+    #[test]
+    fn a_ticket_without_the_account_fields_waits_for_the_card() {
+        let dir = dir();
+        let store = store(&dir);
+        let old = redeem(&store, "n1", "s1", json!({})).unwrap();
+        assert_eq!(store.status(&old, "s1").unwrap(), Poll::Pending);
+        let no_device = redeem(&store, "n2", "s2", json!({"preapproved": true})).unwrap();
+        assert_eq!(store.status(&no_device, "s2").unwrap(), Poll::Pending, "pré-aprovado sem aparelho da conta não aprova");
+        let not_released = redeem(&store, "n3", "s3", json!({"preapproved": false, "account_device": "D"})).unwrap();
+        assert_eq!(store.status(&not_released, "s3").unwrap(), Poll::Pending);
+    }
+
+    #[test]
+    fn revoking_an_account_device_takes_its_local_devices_off() {
+        let dir = dir();
+        let store = store(&dir);
+        let mut tokens = Vec::new();
+        for (nonce, secret, account_device) in [("n1", "s1", "D"), ("n2", "s2", "D"), ("n3", "s3", "E")] {
+            let id = redeem(&store, nonce, secret, json!({"preapproved": true, "account_device": account_device})).unwrap();
+            let Poll::Approved(Some(token)) = store.status(&id, secret).unwrap() else { panic!("{nonce} sem token") };
+            tokens.push((id, token));
+        }
+        store.revoke_account_devices(&["D".to_owned()]).unwrap();
+        assert_eq!(store.verify(tokens[0].1.as_bytes()), None);
+        assert_eq!(store.verify(tokens[1].1.as_bytes()), None);
+        assert_eq!(store.verify(tokens[2].1.as_bytes()), Some(tokens[2].0.clone()), "outro aparelho da conta fica");
+        let reloaded = super::tests::store(&dir);
+        assert_eq!(reloaded.list().iter().map(|r| r.device_id.clone()).collect::<Vec<_>>(), vec![tokens[2].0.clone()], "a revogação foi ao disco");
+    }
+
+    #[test]
+    fn the_list_says_which_devices_came_through_the_account() {
+        let dir = dir();
+        let store = store(&dir);
+        let released = redeem(&store, "n1", "s1", json!({"preapproved": true, "account_device": "D"})).unwrap();
+        let local = redeem(&store, "n2", "s2", json!({})).unwrap();
+        let rows: Vec<Value> = store.list().iter().map(|row| serde_json::to_value(row).unwrap()).collect();
+        let row = |id: &DeviceId| rows.iter().find(|row| row["device_id"] == json!(id)).unwrap().clone();
+        assert_eq!(row(&released)["account_device"], "D");
+        assert!(row(&local).get("account_device").is_none(), "sem vínculo, o campo não vai: {}", row(&local));
+    }
+
+    #[test]
+    fn revoking_an_account_device_takes_what_it_approved_here() {
+        let dir = dir();
+        let store = store(&dir);
+        let released = redeem(&store, "n1", "s1", json!({"preapproved": true, "account_device": "D"})).unwrap();
+        let child = redeem(&store, "n2", "s2", json!({})).unwrap();
+        store.approve(&child, Some(&released)).unwrap();
+        let Poll::Approved(Some(token)) = store.status(&child, "s2").unwrap() else { panic!("filho sem token") };
+        store.revoke_account_devices(&["D".to_owned()]).unwrap();
+        assert_eq!(store.verify(token.as_bytes()), None, "o que D aprovou nesta máquina sai junto");
+    }
+
+    #[test]
+    fn a_released_ticket_does_not_replace_a_pending_request() {
+        let dir = dir();
+        let store = store(&dir);
+        let (text, signature) = ticket("n1", "s1", json!({}));
+        let (pending, status) = store.redeem_from(&text, &signature, "s1", Some("install-1")).unwrap();
+        assert_eq!(status, Status::Pending);
+        let (text, signature) = ticket("n2", "s2", json!({"preapproved": true, "account_device": "D"}));
+        assert_eq!(store.redeem_from(&text, &signature, "s2", Some("install-1")).unwrap().1, Status::Approved, "liberado na conta já nasce aprovado");
+        assert_eq!(store.status(&pending, "s1").unwrap(), Poll::Pending, "o pedido pendente continua");
+    }
+
+    #[test]
+    fn the_suspension_covers_account_devices_that_arrive_while_it_is_on() {
+        let dir = dir();
+        let store = store(&dir);
+        let local = redeem(&store, "n0", "s0", json!({})).unwrap();
+        store.approve(&local, None).unwrap();
+        let Poll::Approved(Some(local_token)) = store.status(&local, "s0").unwrap() else { panic!("local sem token") };
+        assert!(!store.suspend_account_devices(true));
+        let released = redeem(&store, "n1", "s1", json!({"preapproved": true, "account_device": "D"})).unwrap();
+        let Poll::Approved(Some(token)) = store.status(&released, "s1").unwrap() else { panic!("D sem token") };
+        assert_eq!(store.verify(token.as_bytes()), None, "aparelho da conta resgatado com a suspensão ligada fica de fora");
+        let child = redeem(&store, "n2", "s2", json!({})).unwrap();
+        store.approve(&child, Some(&released)).unwrap();
+        let Poll::Approved(Some(child_token)) = store.status(&child, "s2").unwrap() else { panic!("filho sem token") };
+        assert_eq!(store.verify(child_token.as_bytes()), None, "o que ele aprovou aqui também");
+        assert_eq!(store.verify(local_token.as_bytes()), Some(local), "aprovado nesta máquina não depende da conta");
+        assert!(store.suspend_account_devices(false));
+        assert_eq!(store.verify(token.as_bytes()), Some(released));
+    }
+
+    #[test]
+    fn a_device_bound_to_the_account_falls_with_it() {
+        let dir = dir();
+        let store = store(&dir);
+        let id = redeem(&store, "n1", "s1", json!({})).unwrap();
+        assert!(matches!(store.bind_account_device(&id, "D"), Err(Refusal::Unknown)), "pendente não se liga");
+        store.approve(&id, None).unwrap();
+        let Poll::Approved(Some(token)) = store.status(&id, "s1").unwrap() else { panic!("sem token") };
+        assert!(matches!(store.bind_account_device("outro", "D"), Err(Refusal::Unknown)));
+        assert!(matches!(store.bind_account_device(&id, ""), Err(Refusal::Unknown)));
+        store.bind_account_device(&id, "D").unwrap();
+        store.bind_account_device(&id, "D").unwrap();
+        assert!(matches!(store.bind_account_device(&id, "E"), Err(Refusal::NotYours)));
+        let reloaded = super::tests::store(&dir);
+        reloaded.revoke_account_devices(&["D".to_owned()]).unwrap();
+        assert_eq!(reloaded.verify(token.as_bytes()), None, "a ligação foi ao disco e cai com a conta");
     }
 }

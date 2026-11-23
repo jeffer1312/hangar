@@ -8,6 +8,8 @@ publish = false
 # diferentes cada compilação guarda a sua cópia da dependência no target.
 [dependencies]
 hangar-core.workspace = true
+# Login da conta e registro da máquina no serviço, o mesmo cliente do app nativo.
+hangar-connect-client.workspace = true
 axum = { workspace = true }
 base64 = "=0.23.1"
 flate2 = { workspace = true }
@@ -28,6 +30,10 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-
 tracing = { workspace = true }
 # Pacotes do frp e do Caddy no Windows (`binaries.rs`); versão e features do isideload.
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+
+# Relógio parado no teste do laço que relê a conta (`supervisor.rs`).
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

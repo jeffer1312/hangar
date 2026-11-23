@@ -61,6 +61,8 @@ pub const DOWNLOAD_MISMATCH: &str = "device_install_download_mismatch";
 pub const SIGN_FAILED: &str = "device_install_sign_failed";
 pub const NOT_INSTALLED: &str = "device_install_not_installed";
 pub const BUSY: &str = "device_install_busy";
+pub const CANCELLED: &str = "device_install_cancelled";
+pub const NOTHING_TO_CANCEL: &str = "device_install_nothing_to_cancel";
 pub const FORBIDDEN: &str = "device_install_forbidden";
 pub const UNKNOWN_JOB: &str = "device_install_unknown_job";
 pub const NOT_WAITING: &str = "device_install_not_waiting";
@@ -128,17 +130,33 @@ struct Job {
     /// Quem espera a escolha dos certificados: só em `awaiting_cert_choice`.
     cert_choice: Mutex<Option<oneshot::Sender<Option<Vec<String>>>>>,
     timed_out: std::sync::atomic::AtomicBool,
+    cancelled: std::sync::atomic::AtomicBool,
+    task: Mutex<Option<tokio::task::AbortHandle>>,
 }
 
 impl Job {
     fn set(&self, stage: Stage, error: Option<Failure>) {
         let mut p = lock(&self.progress);
+        // Cancelado já é `failed`: uma etapa que a tarefa ainda grave antes do abort não o desfaz.
+        if self.cancelled.load(std::sync::atomic::Ordering::Relaxed) && stage != Stage::Failed {
+            return;
+        }
         p.stage = stage;
         p.error = error;
         p.certs = None;
     }
     fn running(&self) -> bool {
         !matches!(lock(&self.progress).stage, Stage::Done | Stage::Failed)
+    }
+    /// Entra numa etapa que o cancelamento não pode cortar (assinar, instalar) só se ninguém
+    /// cancelou: o abort pedido antes ainda deixaria a tarefa chegar aqui antes do próximo `await`.
+    fn enter(&self, stage: Stage) -> Result<(), Failure> {
+        let mut p = lock(&self.progress);
+        if self.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(Failure::new(CANCELLED));
+        }
+        (p.stage, p.error, p.certs) = (stage, None, None);
+        Ok(())
     }
 }
 
@@ -198,6 +216,8 @@ impl DeviceInstall {
             code: Mutex::default(),
             cert_choice: Mutex::default(),
             timed_out: Default::default(),
+            cancelled: Default::default(),
+            task: Mutex::default(),
         });
         {
             let mut jobs = lock(&self.jobs);
@@ -212,9 +232,15 @@ impl DeviceInstall {
         tokio::spawn(async move {
             // Tarefa interna: um pânico (isideload) vira `failed` em vez de deixar o aparelho ocupado.
             let inner = job.clone();
-            let outcome = tokio::spawn(async move { svc.run(&inner, start).await })
-                .await
-                .unwrap_or_else(|e| Err(Failure::with(DEVICE_ERROR, panic_message(e))));
+            let handle = tokio::spawn(async move { svc.run(&inner, start).await });
+            *lock(&job.task) = Some(handle.abort_handle());
+            // Cancelado antes de a tarefa ficar guardada: `cancel` não tinha o que abortar.
+            if job.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                handle.abort();
+            }
+            let outcome = handle.await.unwrap_or_else(|e| {
+                if e.is_cancelled() { Err(Failure::new(CANCELLED)) } else { Err(Failure::with(DEVICE_ERROR, panic_message(e))) }
+            });
             match outcome {
                 Ok(()) => job.set(Stage::Done, None),
                 Err(f) => {
@@ -231,6 +257,28 @@ impl DeviceInstall {
 
     pub fn progress(&self, id: &str) -> Option<Progress> {
         lock(&self.jobs).get(id).map(|j| lock(&j.progress).clone())
+    }
+
+    /// Para o trabalho do aparelho antes da assinatura. Depois, parar poderia gastar um certificado
+    /// da conta sem guardar a chave ou deixar o SideStore sem pareamento: `device_install_busy`.
+    pub fn cancel(&self, udid: &str) -> Result<(), Failure> {
+        let job = lock(&self.jobs).values().find(|j| j.udid == udid && j.running()).cloned().ok_or_else(|| Failure::new(NOTHING_TO_CANCEL))?;
+        {
+            // Mesma trava do `enter`: ou o cancelamento vem antes e a etapa não começa, ou ela já
+            // começou e o pedido é recusado.
+            let mut progress = lock(&job.progress);
+            // A escolha de certificado acontece dentro da assinatura e tem a desistência própria (`choose_certs(None)`).
+            if matches!(progress.stage, Stage::Signing | Stage::AwaitingCertChoice | Stage::Installing | Stage::Pairing | Stage::Verifying) {
+                return Err(Failure::new(BUSY));
+            }
+            job.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            // Já `failed`: um novo `/start` no aparelho não espera o abort chegar.
+            (progress.stage, progress.error, progress.certs) = (Stage::Failed, Some(Failure::new(CANCELLED)), None);
+        }
+        if let Some(task) = lock(&job.task).as_ref() {
+            task.abort();
+        }
+        Ok(())
     }
 
     /// Entrega o código (ou o pedido de reenvio) ao login que está esperando.
@@ -290,10 +338,10 @@ impl DeviceInstall {
         // da trava; duas instalações ao mesmo tempo podem se atropelar ali. Trava por conta se importar.
         {
             let _one = SIGNING.lock().await;
-            job.set(Stage::Signing, None);
+            job.enter(Stage::Signing)?;
             let signed = session.sign(SignRequest { ipa: &ipa, udid: &udid, device_name: &device.name, pairing: &pairing }).await?;
             drop(session);
-            job.set(Stage::Installing, None);
+            job.enter(Stage::Installing)?;
             self.link.install_sidestore(&udid, &signed.app).await?;
         }
 

@@ -6,7 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { resetCreatedChat } from '../../stores/chat';
 import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount,
-  getEnginesForServer, getSessionDefaultsForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
+  getEnginesForServer, getSessionDefaultsForServer, getConfigForServer, getMeForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory } from '@hangar/core';
@@ -34,7 +34,7 @@ import { NewConversation, type HomePresentation } from './NewConversation';
 import { SPEED_TIERS, speedHint, speedLabel, type Tier } from '../pills/serviceTierControl';
 import { QuietPill } from './QuietPill';
 import { SettingRow } from './SettingRow';
-import { readChoices, readMachine, rememberChoices, rememberMachine, type NewChatChoices } from './choicesPrefs';
+import { readMachine, rememberMachine } from './choicesPrefs';
 import { superficie } from '../../theme/superficie';
 import { AnchoredPanel } from '../../ui/AnchoredPanel';
 import * as m from '../../paraglide/messages';
@@ -115,17 +115,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   useEffect(() => {
     if (home?.mode !== 'sessions') setInitialized(true);
   }, [home?.mode]);
-  // O form remonta por máquina: estas são as escolhas guardadas para ela.
-  const [remembered] = useState(() => readChoices(active.id));
-  // O que a pessoa quer de modelo e nível; reaplicado sempre que a lista do provider recarrega.
-  const desired = useRef<Required<Pick<NewChatChoices, 'model' | 'effort'>>>(initialEngine ? { model: '', effort: '' } : {
-    model: remembered.model ?? '', effort: remembered.effort ?? '',
-  });
+  // Modelo e nível escolhidos nesta abertura ou o padrão do servidor; reaplicado quando a lista do provider recarrega.
+  const desired = useRef({ model: '', effort: '' });
   // Aplicado uma vez, quando a lista de motores chega; depois a escolha é da pessoa.
   const seededEngine = useRef(initialEngine ?? '');
   // Aberto pelo assistente com um motor: criar (e reservar) antes de ele chegar abriria na conta Claude direta.
   const [seedPending, setSeedPending] = useState(!!initialEngine);
-  const remember = (patch: NewChatChoices) => rememberChoices(active.id, patch);
 
   const [picked, setPicked] = useState<string | null>(null);
   // Worktree escolhida no menu de branch: o repositório dela vem junto, antes de a lista geral carregar.
@@ -158,10 +153,18 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [projectWarning, setProjectWarning] = useState('');
   const pickGeneration = useRef(0);
 
-  const [provider, setProvider] = useState<Provider>(() => initialEngine ? 'claude'
-    : remembered.provider && SESSION_PROVIDERS.includes(remembered.provider) ? remembered.provider : 'claude');
-  // Padrão sem terminal; só Claude e Codex rodam assim.
-  const [headless, setHeadless] = useState(remembered.headless ?? true);
+  // O inicial vem da sonda de providers, que segue o último provedor que o servidor guardou.
+  const [provider, setProvider] = useState<Provider>('claude');
+  // Sem terminal é o `headless_default` do servidor; só vai no pedido o que a pessoa escolher aqui.
+  const [headlessPick, setHeadlessPick] = useState<boolean | null>(null);
+  // Convidado não lê a configuração do dono: como no desktop, o servidor decide e a tela mostra sem terminal.
+  const [modeRead, setModeRead] = useState<{ state: 'loading' | 'guest' } | { state: 'value'; value: boolean } | { state: 'error'; error: string }>({ state: 'loading' });
+  const [modeTry, setModeTry] = useState(0);
+  const startModeRetry = useCanceledLoadRetry(useCallback(() => setModeTry((n) => n + 1), []));
+  const serverHeadless = modeRead.state === 'value' ? modeRead.value : null;
+  // Sem escolha nem leitura, não há modo a mostrar nem pedido a montar.
+  const modeUnknown = headlessPick === null && (modeRead.state === 'loading' || modeRead.state === 'error');
+  const headless = headlessPick ?? serverHeadless ?? true;
   const [providerProbe, setProviderProbe] = useState<ProviderProbe | null>(null);
   const [providersError, setProvidersError] = useState('');
   const providerTouched = useRef(false);
@@ -198,13 +201,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const cotaSelecionada = selectedConfig ? cotaDaConta(cotas, selectedConfig) : undefined;
   // Só a escolha à mão no menu de conta desliga a troca automática por cota esgotada.
   const accountTouched = useRef(false);
-  // D-003: só vai no pedido a conta que a pessoa escolheu (agora ou lembrada de antes). A ativa sem
-  // escolha não vai, e o servidor troca a que estiver a 95% ou mais. A lembrada que a tela trocou por
-  // cota esgotada vai como a que a tela mostra: a regra é a mesma do servidor.
+  // D-003: só vai no pedido a conta que a pessoa escolheu nesta tela. A ativa sem escolha não vai, e o
+  // servidor troca a que estiver a 95% ou mais. A que a tela trocou por cota esgotada vai como a que a
+  // tela mostra: a regra é a mesma do servidor.
   const [accountChosen, setAccountChosen] = useState(false);
   // Conta que a troca automática deixou para trás; a pílula avisa até a próxima escolha.
   const [switchedFrom, setSwitchedFrom] = useState('');
-  const [motores, setMotores] = useState<Record<string, { label?: string; model?: string }>>({});
+  const [motores, setMotores] = useState<Awaited<ReturnType<typeof getEnginesForServer>>['motores']>({});
   const [engine, setEngine] = useState('');
   const [modelos, setModelos] = useState<ModelOption[]>([]);
   const [modelo, setModelo] = useState('');
@@ -214,8 +217,15 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [loadedDefaultsKey, setLoadedDefaultsKey] = useState<string | null>(null);
   const [defaultsError, setDefaultsError] = useState('');
   const [defaultsTry, setDefaultsTry] = useState(0);
-  const defaultsKey = `${provider}:${provider === 'claude' ? engine : ''}`;
+  const engineConfig = provider === 'claude' ? motores[engine] : undefined;
+  const proxyEngine = !!(engineConfig?.cliproxy_accounts || engineConfig?.cliproxy_binding);
+  const boundAccount = engineConfig?.cliproxy_bound_account;
+  const engineAccount = boundAccount?.account;
+  const bindingBlocked = !!engineConfig?.cliproxy_binding && !engineAccount;
+  const proxyQuota = engineConfig?.cliproxy_binding ? cotas.find(c => c.id === `cliproxy-binding:${engineConfig.cliproxy_binding}`) : undefined;
+  const defaultsKey = `${provider}:${provider === 'claude' ? engine : ''}:${engineAccount ?? ''}:${engineConfig?.cliproxy_binding ?? ''}`;
   const defaultsReady = loadedDefaultsKey === defaultsKey;
+  const previousDefaults = useRef<{ key: string; engine: string | null } | null>(null);
   const choiceTouched = useRef(false);
   const permissionTouched = useRef(false);
   const [listaReduzida, setListaReduzida] = useState(false);
@@ -233,11 +243,11 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const fastVisible = provider === 'codex' || (provider === 'claude' && !!engine && catalogFast);
   const fastAvailable = !modelsLoading && (provider === 'codex'
     ? codexFastModel?.id !== 'default' && codexFastModel?.service_tiers?.some((tier) => tier.id === 'priority' && tier.hidden !== true) === true
-    : fastVisible && selectedModel?.supports_fast === true);
+    : fastVisible && (selectedModel ?? displayModel)?.supports_fast === true);
   // Ultra Fast: tier do modelo no Codex (contas Pro); no motor, a conta fixa escolhida precisa ser Pro.
   const ultrafastAvailable = fastAvailable && (provider === 'codex'
     ? codexFastModel?.service_tiers?.some((tier) => tier.id === 'ultrafast' && tier.hidden !== true) === true
-    : selectedModel?.supports_ultrafast === true);
+    : (selectedModel ?? displayModel)?.supports_ultrafast === true);
   useEffect(() => { if (!fastAvailable) setServiceTier(undefined); }, [fastAvailable]);
   useEffect(() => { if (!ultrafastAvailable) setServiceTier((cur) => cur === 'ultrafast' ? undefined : cur); }, [ultrafastAvailable]);
   const speed = fastAvailable && serviceTier ? serviceTier : 'default';
@@ -279,7 +289,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (generation !== codexGeneration.current || controller.signal.aborted) return;
         setCodexAccounts(accounts);
         setCodexAccount((current) => accounts.some((account) => account.id === current) ? current
-          : defaultCodexAccount(accounts, remembered.codexAccount)?.id ?? '');
+          : defaultCodexAccount(accounts)?.id ?? '');
       })
       .catch((cause: unknown) => {
         if (generation !== codexGeneration.current || controller.signal.aborted) return;
@@ -317,10 +327,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       .then((cs) => {
         if (!alive) return;
         setConfigs(cs);
-        const kept = cs.find((c) => c.path === remembered.configDir)?.path;
-        const sel = kept ?? cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
+        const sel = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
         // Retomar a carga não desfaz a conta que a pessoa já escolheu.
-        if (!accountTouched.current) setAccountChosen(!!kept);
         setSelectedConfig((current) => cs.some((c) => c.path === current) ? current : sel);
       })
       .catch((cause: unknown) => {
@@ -374,6 +382,30 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return () => { alive = false; };
   }, [enabled, active]);
 
+  // O modo que o servidor vai usar: a tela o mostra e espera por ele, e o pedido não o leva.
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const retry = startModeRetry();
+    setModeRead({ state: 'loading' });
+    // Servidor sem `/api/me` (404) é de antes dos convidados: só o dono chega a ele.
+    void getMeForServer(active).catch((cause: { status?: number }) => {
+      if (cause?.status === 404) return { role: 'owner' as const };
+      throw cause;
+    })
+      .then(async (me) => {
+        if (me.role === 'guest') { if (alive) setModeRead({ state: 'guest' }); return; }
+        const value = (await getConfigForServer(active)).campos?.headless_default?.valor;
+        if (alive) setModeRead({ state: 'value', value: typeof value === 'boolean' ? value : true });
+      })
+      .catch((cause: unknown) => {
+        if (!alive) return;
+        setModeRead({ state: 'error', error: loadErrorText(cause, m.criar_sessao_erro()) });
+        retry.failed(cause);
+      });
+    return () => { alive = false; retry.cancel(); };
+  }, [enabled, active, modeTry, startModeRetry]);
+
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
@@ -408,12 +440,19 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     if (!enabled) return;
     const controller = new AbortController();
     let alive = true;
+    const previous = previousDefaults.current;
+    previousDefaults.current = { key: defaultsKey, engine: catalogEngine };
+    if (previous && previous.key !== defaultsKey && (previous.engine || catalogEngine)) {
+      desired.current = { model: '', effort: '' };
+      choiceTouched.current = false;
+    }
     setDefaultsError('');
     setLoadedDefaultsKey(null);
     setPermissao('');
     permissionTouched.current = false;
-    void getSessionDefaultsForServer(active, provider, catalogEngine, controller.signal)
-      .then((value) => {
+    const query = [active, provider, catalogEngine, controller.signal] as const;
+    const request = engineAccount ? getSessionDefaultsForServer(...query, engineAccount) : getSessionDefaultsForServer(...query);
+    void request.then((value) => {
         if (!alive) return;
         if (value && !choiceTouched.current) desired.current = { model: value.model, effort: value.effort };
         if (!permissionTouched.current) setPermissao(value?.permission ?? '');
@@ -423,7 +462,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (alive) setDefaultsError(loadErrorText(cause, m.criar_sessao_erro()));
       });
     return () => { alive = false; controller.abort(); };
-  }, [enabled, active, provider, catalogEngine, defaultsKey, defaultsTry]);
+  }, [enabled, active, provider, catalogEngine, engineAccount, defaultsKey, defaultsTry]);
 
   // modelos quando o destino efetivo do catálogo muda
   useEffect(() => {
@@ -435,7 +474,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setServiceTier(undefined);
     setEsforco('');
     setSubagente('');
-  }, [provider, catalogEngine, catalogConfig, catalogAccount, active]);
+  }, [provider, catalogEngine, catalogConfig, catalogAccount, engineAccount, active]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -467,7 +506,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         : provider === 'claude' && semEsforco(model) ? [] : EFFORT_LEVELS[provider] ?? [];
       if (effort && levels.includes(effort)) setEsforco(effort);
     };
-    const request = modelOptionsForServer(active, provider, catalogEngine, catalogConfig, catalogAccount, controller.signal);
+    const query = [active, provider, catalogEngine, catalogConfig, catalogAccount, controller.signal] as const;
+    const request = engineAccount ? modelOptionsForServer(...query, engineAccount) : modelOptionsForServer(...query);
     void request
       .then((r) => {
         if (!alive) return;
@@ -490,7 +530,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       retry.cancel();
       controller.abort();
     };
-  }, [enabled, defaultsReady, provider, catalogEngine, catalogConfig, catalogAccount, active, active?.id, active?.baseUrl, active?.token, modelsTry, startModelsRetry]);
+  }, [enabled, defaultsReady, provider, catalogEngine, catalogConfig, catalogAccount, engineAccount, active, active?.id, active?.baseUrl, active?.token, modelsTry, startModelsRetry]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -578,20 +618,23 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
 
   // Nome em branco: o store gera projeto + sufixo da tentativa.
   const canHeadless = hasExecutionMode(provider);
+  const headlessField = canHeadless && headlessPick !== null ? { headless: headlessPick } : {};
   const settings: Omit<NewConversationInput['body'], 'cwd'> = provider === 'codex'
-    ? { provider: 'codex', model: modelo || null, effort: esforco || null, permission_mode: headless ? permissao || null : null, codex_account: codexAccount, headless }
+    // Permissão do Codex só vale sem terminal; o corpo só existe com o modo já conhecido.
+    ? { provider: 'codex', model: modelo || null, effort: esforco || null, permission_mode: headless ? permissao || null : null, codex_account: codexAccount, ...headlessField }
     : {
       provider,
       // A conta trocada pela cota também vai: é a que a tela mostra.
       config_dir: provider === 'claude' && (accountChosen || !!switchedFrom) ? selectedConfig : null,
       engine: provider === 'claude' ? engine || null : null,
+      ...(engineAccount ? { engine_account: engineAccount, engine_binding: engineConfig?.cliproxy_binding } : {}),
       model: (provider === 'claude' || provider === 'pi' || provider === 'kimi' || provider === 'omp') ? modelo || null : null,
       effort: (provider === 'claude' || provider === 'pi' || provider === 'omp') ? esforco || null : null,
       permission_mode: provider === 'claude' ? permissao || null : null,
       subagent_model: provider === 'claude' && !engine ? subagente || null : null,
-      ...(canHeadless ? { headless } : {}),
+      ...headlessField,
     };
-  const body = picked && defaultsReady && !seedPending && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
+  const body = picked && defaultsReady && !(canHeadless && modeUnknown) && !bindingBlocked && !seedPending && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
 
   // Reserva pré-aquecida enquanto a tela está aberta, na frente e compondo; o form remonta por
   // máquina, então desmontar também cobre a troca de servidor.
@@ -603,13 +646,15 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return () => sub.remove();
   }, []);
   useEffect(() => () => reserve.current?.release(), []);
-  const reserveBody = foreground && home?.mode !== 'sessions' ? body : null;
+  // A reserva só sobe sem terminal; sem escolha, ela leva o modo lido do servidor, o mesmo que a criação vai resolver.
+  const reserveBody = foreground && home?.mode !== 'sessions' && body
+    ? (headlessPick === null && canHeadless && serverHeadless !== null ? { ...body, headless: serverHeadless } : body) : null;
   const reserveKey = reserveBody ? JSON.stringify(reserveBody) : '';
   useEffect(() => { reserve.current?.update(active, reserveBody); }, [active, reserveKey]);
   const takePrewarm = useCallback(() => reserve.current?.take() ?? null, []);
   const resumePrewarm = useCallback(() => reserve.current?.resume(), []);
 
-  // Toda escolha feita aqui volta na próxima abertura desta máquina.
+  // Nada daqui é guardado no aparelho: o padrão da próxima abertura é o do servidor.
   const chooseProvider = (p: Provider) => {
     providerTouched.current = true;
     seededEngine.current = '';
@@ -619,7 +664,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     choiceTouched.current = false;
     desired.current = { model: '', effort: '' };
     setProvider(p);
-    remember({ provider: p, model: '', effort: '' });
   };
   const chooseModel = (v: string) => {
     choiceTouched.current = true;
@@ -631,7 +675,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     desired.current = { model: v, effort };
     setModelo(v);
     setEsforco(effort);
-    remember({ model: v, effort });
   };
   const chooseEffort = (v: string) => {
     choiceTouched.current = true;
@@ -639,12 +682,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setProvidersError('');
     desired.current = { ...desired.current, effort: v };
     setEsforco(v);
-    remember({ effort: v });
   };
-  const chooseHeadless = (v: boolean) => {
-    setHeadless(v);
-    remember({ headless: v });
-  };
+  const chooseHeadless = (v: boolean) => setHeadlessPick(v);
   const choosePermission = (value: string) => {
     permissionTouched.current = true;
     setPermissao(value);
@@ -656,7 +695,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setAccountChosen(true);
     setSwitchedFrom('');
     setSelectedConfig(v);
-    remember({ configDir: v });
   };
   const chooseCodexAccount = (value: string) => {
     providerTouched.current = true;
@@ -668,7 +706,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setError('');
     setCodexProgress('');
     setCodexAccount(value);
-    remember({ codexAccount: value });
   };
 
   const handleResume = async (id = retomavel) => {
@@ -749,17 +786,17 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // A mesma escolha vira pílula na conversa nova e linha no formulário completo.
   const terminalChoice: Choice = {
     icon: 'SquareTerminal',
-    label: canHeadless && headless ? m.criar_modo_exec_headless() : m.criar_modo_exec_tmux(),
+    label: canHeadless && modeUnknown ? m.comum_carregando() : canHeadless && headless ? m.criar_modo_exec_headless() : m.criar_modo_exec_tmux(),
     aria: m.criar_modo_exec(),
     menuTitle: canHeadless ? m.criar_modo_exec() : terminalOnly,
     actions: [
       {
-        id: 'headless', title: m.criar_modo_exec_headless(), state: on(canHeadless && headless), attributes: { disabled: !canHeadless },
+        id: 'headless', title: m.criar_modo_exec_headless(), state: on(canHeadless && !modeUnknown && headless), attributes: { disabled: !canHeadless },
         subtitle: !canHeadless ? terminalOnly
           : provider === 'codex' ? m.criar_modo_exec_headless_resumo_codex() : m.criar_modo_exec_headless_resumo(),
       },
       {
-        id: 'tmux', title: m.criar_modo_exec_tmux(), state: on(!canHeadless || !headless),
+        id: 'tmux', title: m.criar_modo_exec_tmux(), state: on(!canHeadless || (!modeUnknown && !headless)),
         subtitle: provider === 'codex' ? m.criar_modo_exec_tmux_resumo_codex() : m.criar_modo_exec_tmux_resumo(),
       },
     ],
@@ -775,6 +812,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   };
   const accountChoice = ((): Choice | null => {
     if (provider !== 'claude' && provider !== 'codex') return null;
+    if (proxyEngine) {
+      const label = boundAccount ? [boundAccount.email || boundAccount.label, boundAccount.plan].filter(Boolean).join(' · ') : m.cliproxy_no_bound_account();
+      return { icon: 'CircleUser', label, aria: m.cliproxy_bound_account(), disabled: true };
+    }
     const aria = provider === 'claude' ? m.comum_conta_claude() : m.native_create_codex_account();
     if (provider === 'claude' ? configsLoading : codexLoading) {
       return { icon: 'CircleUser', label: m.comum_carregando(), aria, disabled: true };
@@ -822,7 +863,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // Leitura nova falhou e ficaram os números da anterior: sem o motivo, eles pareceriam atuais.
   const cotaAntiga = motivoCotaAntiga(cotaSelecionada);
   // Conta com a janela em 100% não responde: o aviso diz isso em cor de alerta, além dos números.
-  const quotaNotice = provider === 'claude' && cotaSelecionada ? (
+  const quotaNotice = proxyEngine ? (boundAccount ? <Text style={styles.hint}>
+    {[resumoCota(proxyQuota) || m.conta_cota_sem_leitura(), motivoCotaAntiga(proxyQuota)].filter(Boolean).join(' · ')}
+  </Text> : null)
+    : provider === 'claude' && cotaSelecionada ? (
     <Text style={[styles.hint, janelaCheia ? styles.hintAlerta : null]} accessibilityRole={janelaCheia ? 'alert' : undefined}>
       {janelaCheia ? `${m.cota_conta_no_limite({ janela: janelaCheia })} ` : ''}
       {resumoCota(cotaSelecionada) ||
@@ -845,6 +889,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       {projectWarning ? <Text style={styles.error} accessibilityRole="alert">{projectWarning}</Text> : null}
       {error ? <Text style={styles.error} accessibilityRole="alert">{error}</Text> : null}
       {catalogError ? <Text style={styles.error} accessibilityRole="alert">{catalogError}</Text> : null}
+      {canHeadless && modeUnknown && modeRead.state === 'error' ? <View>
+        <Text style={styles.error} accessibilityRole="alert">{modeRead.error}</Text>
+        <Pressable accessibilityRole="button" onPress={() => setModeTry((n) => n + 1)}>
+          <Text style={styles.hint}>{m.native_retry()}</Text>
+        </Pressable>
+      </View> : null}
       {defaultsError ? <View>
         <Text style={styles.error} accessibilityRole="alert">{m.native_create_default_failed({ erro: defaultsError })}</Text>
         <Pressable accessibilityRole="button" onPress={() => setDefaultsTry((n) => n + 1)}>
@@ -853,7 +903,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       </View> : null}
       {providersError ? <Text style={styles.error} accessibilityRole="alert">{providersError}</Text> : null}
       {!retomavel && listaReduzida ? <Text style={styles.hint}>{m.criar_lista_reduzida()}</Text> : null}
-      {!retomavel && erroModelos ? <Text style={styles.hint} accessibilityRole="alert">{m.criar_abre_padrao({ erro: erroModelos } as any)}</Text> : null}
+      {bindingBlocked ? <Text style={styles.error} accessibilityRole="alert">
+        {engineConfig?.cliproxy_binding_error || engineConfig?.cliproxy_error || m.cliproxy_choose_connected_account()}
+      </Text> : null}
+      {!retomavel && !bindingBlocked && erroModelos ? <Text style={styles.hint} accessibilityRole="alert">
+        {boundAccount ? erroModelos : m.criar_abre_padrao({ erro: erroModelos } as any)}
+      </Text> : null}
       {contextBusy ? <Text style={styles.hint} accessibilityLiveRegion="polite">{m.comum_carregando()}</Text> : null}
       {!contextOpen && context.error ? <Text style={styles.error} accessibilityRole="alert">{context.error}</Text> : null}
       {retomavel ? <Text style={styles.hint}>{m.nova_conversa_retomada_selecionada()}</Text> : null}
@@ -1270,7 +1325,7 @@ const styles = StyleSheet.create((theme) => ({
   folderScreen: { flex: 1, paddingHorizontal: theme.base.space[3], paddingBottom: theme.base.space[3] },
   formScroll: { gap: theme.base.space[3], paddingHorizontal: theme.base.space[3], paddingBottom: theme.base.space[8] },
   group: { backgroundColor: superficie(theme), borderRadius: theme.base.radius.lg, overflow: 'hidden' },
-  sep: { height: StyleSheet.hairlineWidth, marginLeft: 42, backgroundColor: theme.tokens.border.default },
+  sep: { height: StyleSheet.hairlineWidth, marginLeft: theme.base.space[10] + theme.base.space[0.5], backgroundColor: theme.tokens.border.default },
   pickerWrap: { minHeight: 380, flex: 1 },
   more: { minHeight: 36, paddingHorizontal: theme.base.space[2], justifyContent: 'center' },
   extras: { gap: theme.base.space[3], padding: theme.base.space[2] },

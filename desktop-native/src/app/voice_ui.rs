@@ -931,7 +931,7 @@ impl Hangar {
     pub(super) fn run_hangar_action(&mut self, id: &str, arg: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> Result<String, String> {
         use crate::appearance::SideTab;
         if self.connection_dialog { return Err("A janela de conexão está aberta; feche-a antes.".into()); }
-        let side_tab = |tab| match tab { SideTab::Files => "Arquivos", SideTab::Activity => "Atividade", SideTab::Git => "Git", SideTab::Review => "Revisão", _ => "Contexto" };
+        let side_tab = |tab| match tab { SideTab::Files => "Arquivos", SideTab::Media => "Mídia", SideTab::Activity => "Atividade", SideTab::Git => "Git", SideTab::Review => "Revisão", _ => "Contexto" };
         match id {
             "topbar-settings" => {
                 let page = match arg.filter(|a| !a.trim().is_empty()) {

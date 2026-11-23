@@ -20,13 +20,20 @@ fn visible(st: &crate::accounts::AccountService) -> Value {
         match result {
             Ok(true) => {
                 item["cliproxy_accounts"] = json!([]);
-                match accounts.get_or_insert_with(|| proxy::list_accounts(st)) {
-                    Ok(accounts) if accounts.is_empty() => {
-                        item["cliproxy_error"] = json!(
-                            "nenhuma conta ChatGPT conectada no proxy"
-                        )
+                if let Some(binding) = item["cliproxy_binding"].as_str() {
+                    match proxy::resolve_binding(st, binding) {
+                        Ok(mut account) => {
+                            account["binding"] = json!(binding);
+                            item["cliproxy_bound_account"] = account;
+                        }
+                        Err(error) => item["cliproxy_binding_error"] = json!(error),
                     }
-                    Ok(accounts) => item["cliproxy_accounts"] = json!(accounts),
+                }
+                match accounts.get_or_insert_with(|| proxy::list_accounts(st)) {
+                    Ok(accounts) if !accounts.is_empty() => item["cliproxy_accounts"] = json!(accounts),
+                    _ if item["cliproxy_bound_account"].is_object() =>
+                        item["cliproxy_accounts"] = json!([item["cliproxy_bound_account"].clone()]),
+                    Ok(_) => item["cliproxy_error"] = json!("nenhuma conta ChatGPT conectada no proxy"),
                     Err(e) => item["cliproxy_error"] = json!(e),
                 }
             }
@@ -305,10 +312,22 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
     } else {
         Value::Null
     };
+    let bound_models = if method == Method::PUT && let Some(name) = path.strip_prefix("/api/engines/")
+        && (raw_body["cliproxy_binding"].is_string() || (raw_body.get("cliproxy_binding").is_none() && proxy::engine_binding(&env, name).is_some())) {
+        let local = match proxy::local(&env) {
+            Ok(Some(local)) => local,
+            Ok(None) => return coded(400, "erro_cliproxy_ausente", "CLIProxyAPI local não configurado"),
+            Err(error) => return coded(400, "erro_cliproxy_config", &error),
+        };
+        match probe::fetch(&local.base_url, &local.api_key).await {
+            Ok(models) => Some(models),
+            Err(_) => return coded(502, "erro_modelos_indisponiveis", "Não consegui conferir os modelos da conta ChatGPT no proxy."),
+        }
+    } else { None };
     let accounts = st.accounts.clone();
     let result = tokio::task::spawn_blocking(move || {
         if path == "/api/engines" && method == Method::GET {
-            return (200, json!({"motores":visible(&accounts),"arquivo_corrompido":store::state(&env).1,"arquivo_caminho":store::path(&env)}));
+            return (200, json!({"motores":visible(&accounts),"claude_provider_switch":true,"arquivo_corrompido":store::state(&env).1,"arquivo_caminho":store::path(&env)}));
         }
         let name = path.strip_prefix("/api/engines/").unwrap_or("");
         if method == Method::PUT && !name.is_empty() {
@@ -326,13 +345,13 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
                 body.insert("api_key".into(),json!(local.api_key));
             }
             if body.remove("create_only") == Some(Value::Bool(true)) {
-                return match store::create(&env, name, body) {
+                return match store::create(&accounts, name, body, bound_models.as_deref()) {
                     Ok(true) => (200, json!({"motores":visible(&accounts)})),
                     Ok(false) => (409, json!({"detail":{"code":"erro_motor_ja_existe","msg":"já existe um motor com esse nome","params":{"name":name}}})),
                     Err(e) => (400, json!({"detail":e})),
                 };
             }
-            return match store::put(&env, name, body) {
+            return match store::put(&accounts, name, body, bound_models.as_deref()) {
                 Ok(()) => (200, json!({"motores":visible(&accounts)})),
                 Err(e) => (400, json!({"detail":e})),
             };
@@ -381,6 +400,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/model-options", "GET"),
     ("/api/sessions/{name}/model/options", "GET"),
     ("/api/sessions/{name}/engine/model", "POST"),
+    ("/api/sessions/{name}/engine/provider", "POST"),
 ];
 
 async fn syntax_before_auth(request: Request, path: &str) -> Result<Request, Response> {
@@ -388,7 +408,7 @@ async fn syntax_before_auth(request: Request, path: &str) -> Result<Request, Res
         Method::POST => {
             path == "/api/engines/modelos"
                 || path == "/api/credenciais/sincronizar"
-                || (path.starts_with("/api/sessions/") && path.ends_with("/engine/model"))
+                || (path.starts_with("/api/sessions/") && (path.ends_with("/engine/model") || path.ends_with("/engine/provider")))
         }
         Method::PUT => matches!(
             path,
@@ -428,7 +448,8 @@ pub async fn cors_layer(
         || path.trim_end_matches('/') == "/api/model-options"
         || (path.starts_with("/api/sessions/")
             && (path.trim_end_matches('/').ends_with("/model/options")
-                || path.trim_end_matches('/').ends_with("/engine/model")));
+                || path.trim_end_matches('/').ends_with("/engine/model")
+                || path.trim_end_matches('/').ends_with("/engine/provider")));
     if !owned {
         return next.run(request).await;
     }

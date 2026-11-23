@@ -1,18 +1,20 @@
 pub mod dto;
 pub mod device_install;
+pub mod download;
 mod local;
 mod recent;
 pub use recent::RecentFailure;
 pub mod route;
 pub mod sse;
 mod session_defaults;
+pub use session_defaults::SessionOptions;
 mod tour_progress;
 
 use std::time::Duration;
 use reqwest::{Client, Method, Response, StatusCode, header};
 use serde_json::{Value, json};
 use url::Url;
-use dto::{ChatEvent, CommandInfo, Delivery, PairResult, SessionInfo, UploadFile, Uploaded};
+use dto::{ChatEvent, CommandInfo, Delivery, MediaGap, PairResult, SessionInfo, UploadFile, Uploaded};
 
 /// Só para medir a abertura de uma sessão: `HANGAR_NATIVE_OPEN_TRACE=1` escreve no stderr cada etapa, em ms desde o
 /// clique (`open_trace_start`). Sem a variável, nada é formatado nem escrito.
@@ -40,6 +42,8 @@ fn open_trace_clock() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
 
 pub const MAX_BYTES: u64 = 100 * 1024 * 1024;
 const UPLOAD_SECONDS: u64 = 180;
+/// Espera pelos cabeçalhos de um anexo baixado, antes do prazo de silêncio do corpo: o servidor pode demorar a começar.
+const HEADERS_SECONDS: u64 = UPLOAD_SECONDS;
 /// Reabrir a sessão: o servidor espera até 5 min o Claude novo e, se falhar, mais 5 min a volta.
 pub const REOPEN_SECONDS: u64 = 720;
 
@@ -241,6 +245,51 @@ fn session_life_key(code: &str) -> Option<(&str, Option<&'static str>)> {
     }
 }
 
+/// Caminho e bilhete de `open_url` (só página de sessão) sobre `route`, com o prefixo de caminho dela.
+fn rebase_page_url(route: &Url, open_url: &str) -> Option<Url> {
+    let page = Url::parse(open_url).ok()?;
+    if !matches!(page.scheme(), "http" | "https") || !page.path().starts_with("/api/sessions/") || !page.path().contains("/pages/") { return None; }
+    let mut url = route.clone();
+    url.set_path(&format!("{}{}", route.path().trim_end_matches('/'), page.path()));
+    url.set_query(page.query());
+    url.set_fragment(None);
+    Some(url)
+}
+
+/// Por que `rebase_page_url` recusou o `open_url`, para o diário: só o caso, nunca o endereço (ele leva o bilhete).
+pub fn page_url_problem(open_url: &str) -> &'static str {
+    match Url::parse(open_url) {
+        Err(_) => "unparseable",
+        Ok(page) if !matches!(page.scheme(), "http" | "https") => "scheme",
+        Ok(_) => "path",
+    }
+}
+
+/// O que fazer com uma resposta de `upload-media`.
+#[derive(Debug, PartialEq)]
+enum MediaWait { Done(Vec<String>, String), Pending, GiveUp(MediaGap), Retry }
+
+/// `status`: `None` sem resposta (rede, prazo). 4xx é definitivo (sem registro, sem acesso), menos 408 e 429; o resto,
+/// e corpo que não se lê, tenta de novo enquanto houver prazo. `done` vazio também é desistência: nada chega ao agente.
+fn media_wait(status: Option<u16>, body: Option<&Value>) -> MediaWait {
+    match status {
+        Some(404) => MediaWait::GiveUp(MediaGap::Unknown),
+        Some(code) if (400..500).contains(&code) && code != 408 && code != 429 => MediaWait::GiveUp(MediaGap::Refused(code)),
+        Some(code) if (200..300).contains(&code) => match body.and_then(|b| Some((b, b.get("status")?.as_str()?))) {
+            Some((body, "done")) => {
+                let frames: Vec<String> = body.get("frames").and_then(Value::as_array)
+                    .map(|list| list.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
+                let transcript = body.get("transcript").and_then(Value::as_str).unwrap_or_default().to_owned();
+                if frames.is_empty() && transcript.trim().is_empty() { return MediaWait::GiveUp(MediaGap::Empty); }
+                MediaWait::Done(frames, transcript)
+            }
+            Some((_, "pending")) => MediaWait::Pending,
+            _ => MediaWait::Retry,
+        },
+        _ => MediaWait::Retry,
+    }
+}
+
 fn failure_detail(body: Option<Value>, status: u16) -> String {
     body.and_then(|value| value.get("detail").and_then(|detail| match detail {
         Value::String(message) => Some(message.clone()),
@@ -267,7 +316,7 @@ fn failure_detail(body: Option<Value>, status: u16) -> String {
             // de uma recusa e o rótulo do botão vêm nos parâmetros.
             if let Some(code) = fields.get("code").and_then(Value::as_str)
                 .filter(|code| code.starts_with("erro_par_") || code.starts_with("erro_mod_") || code.starts_with("session_open_")
-                    || matches!(*code, "erro_resume_so_claude" | "erro_session_id_invalido" | "erro_conta_sem_login" | "erro_sem_conta_destino"
+                    || matches!(*code, "erro_resume_so_claude" | "erro_resume_sem_claude" | "erro_session_id_invalido" | "erro_conta_sem_login" | "erro_sem_conta_destino"
                         | "erro_liberar_sessao" | "erro_liberar_conta")) {
                 let params = fields.get("params").and_then(Value::as_object).map(|p| p.iter()
                     .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect()).unwrap_or_default();
@@ -482,13 +531,74 @@ impl Api {
     }
 
     // Corpo cru, sem multipart. Queda depois de mandar é incerteza: o arquivo pode ter sido salvo.
+    // Vídeo vai com `media=later`: o servidor responde assim que grava, e quadros e fala chegam por `upload-media`.
+    // Sem isso, um vídeo longo passava do prazo do envio ainda no ffmpeg e o anexo parecia perdido.
     pub async fn upload(&self, name: &str, filename: &str, mime: &str, bytes: Vec<u8>) -> Result<Uploaded, Failure> {
-        let r = self.client.post(self.endpoint(Some(name), Some("upload")))
+        self.upload_with_progress(name, filename, mime, bytes, |_, _| {}).await
+    }
+
+    /// O mesmo envio com o progresso: `report(enviado, total)` a cada pedaço que sai, no máximo 10 vezes por segundo.
+    pub async fn upload_with_progress(&self, name: &str, filename: &str, mime: &str, bytes: Vec<u8>,
+        report: impl FnMut(u64, u64) + Send + 'static) -> Result<Uploaded, Failure> {
+        #[derive(serde::Deserialize)]
+        struct Reply { #[serde(flatten)] uploaded: Uploaded, #[serde(default)] media_id: Option<String> }
+        let mut url = self.endpoint(Some(name), Some("upload"));
+        if crate::audio::is_video(filename) { url.query_pairs_mut().append_pair("media", "later"); }
+        let total = bytes.len() as u64;
+        let r = self.client.post(url)
             .header(header::CONTENT_TYPE, mime)
             .header("X-Filename", crate::composer::encode_component(if filename.is_empty() { "arquivo" } else { filename }))
-            .body(bytes).timeout(Duration::from_secs(UPLOAD_SECONDS))
+            // Corpo em pedaços para contar o que sai; o tamanho declarado mantém o envio sem `chunked`, como antes.
+            .header(header::CONTENT_LENGTH, total)
+            .body(reqwest::Body::wrap_stream(download::counted_chunks(bytes, report))).timeout(Duration::from_secs(UPLOAD_SECONDS))
             .send().await.map_err(|_| Failure::transport(true))?;
-        self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+        let reply: Reply = self.checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))?;
+        let mut uploaded = reply.uploaded;
+        if let Some(id) = reply.media_id.filter(|id| !id.is_empty()) {
+            match self.upload_media(name, &id).await {
+                Ok((frames, transcript)) => {
+                    uploaded.frames = frames;
+                    uploaded.transcript = Some(transcript);
+                }
+                Err(gap) => {
+                    crate::log_line(&format!("upload: vídeo de {name} segue sem quadros nem fala ({})", gap.code()));
+                    uploaded.note = Some(gap);
+                }
+            }
+        }
+        Ok(uploaded)
+    }
+
+    /// Quadros e fala de um vídeo subido com `media=later`. `Err`: não vêm, e por quê; quem chama segue só com o
+    /// vídeo, como quando a transcrição falha, e mostra o motivo. O prazo conta só o tempo sem resposta: `pending` o
+    /// renova, porque a fila de vídeos do servidor é uma por vez.
+    async fn upload_media(&self, name: &str, id: &str) -> Result<(Vec<String>, String), MediaGap> {
+        // O servidor segura cada pedido até ~45 s esperando a mídia: o pedido tem de durar mais que isso.
+        self.upload_media_within(name, id, Duration::from_secs(180), Duration::from_secs(50)).await
+    }
+
+    /// O prazo geral só é conferido entre pedidos: cortar um pedido pelo que sobra dele desistiria de uma resposta
+    /// que o servidor ainda ia dar dentro da espera dele.
+    async fn upload_media_within(&self, name: &str, id: &str, unanswered: Duration, request: Duration) -> Result<(Vec<String>, String), MediaGap> {
+        let mut deadline = std::time::Instant::now() + unanswered;
+        loop {
+            if std::time::Instant::now() >= deadline { return Err(MediaGap::Timeout); }
+            let mut url = self.endpoint(Some(name), Some("upload-media"));
+            url.query_pairs_mut().append_pair("id", id);
+            let (status, body) = match self.client.get(url).timeout(request).send().await {
+                Ok(r) => { let status = r.status().as_u16(); (Some(status), r.json::<Value>().await.ok()) }
+                Err(_) => (None, None),
+            };
+            match media_wait(status, body.as_ref()) {
+                MediaWait::Done(frames, transcript) => return Ok((frames, transcript)),
+                MediaWait::Pending => { deadline = std::time::Instant::now() + unanswered; }
+                MediaWait::GiveUp(gap) => return Err(gap),
+                MediaWait::Retry => {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    tokio::time::sleep(left.min(Duration::from_secs(2))).await;
+                }
+            }
+        }
     }
 
     /// Áudio do ditado nos anexos (`?audio_only=1`): o backend não trata como vídeo (quadros e transcrição de fala).
@@ -595,41 +705,104 @@ impl Api {
     }
 
     // Bytes de um anexo: do cofre, de caminho citado ou de imagem do transcript, autenticados; remoto, sem token.
-    pub async fn fetch(&self, name: &str, source: &Source) -> Result<Vec<u8>, Failure> {
+    pub async fn fetch(&self, name: &str, source: &Source) -> Result<Vec<u8>, Failure> { self.fetch_sized(name, source, None).await }
+
+    /// `width`: a miniatura que o servidor reduz (`?w=`, lado menor), só nas rotas de anexo e de arquivo; o servidor
+    /// manda o original quando não é imagem que ele reduz ou quando ela já é menor. Vai para a memória, por isso o teto
+    /// de `MAX_BYTES`; o arquivo para guardar vai por `download`, direto ao disco.
+    pub async fn fetch_sized(&self, name: &str, source: &Source, width: Option<u32>) -> Result<Vec<u8>, Failure> {
+        if let Source::Memory(_, bytes) = source { return Ok(bytes.0.to_vec()); }
+        // Prazo total além do de silêncio: quem pede para a memória segura uma vaga da prévia, e resposta que pinga um
+        // bloco antes de cada silêncio a seguraria para sempre.
+        tokio::time::timeout(Duration::from_secs(UPLOAD_SECONDS), async {
+            let r = self.open_source(name, source, width).await?;
+            if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
+            // Resposta sem tamanho declarado para no teto enquanto chega.
+            let mut body = Vec::new();
+            let mut chunks = std::pin::pin!(r.bytes_stream());
+            while let Some(chunk) = download::next_chunk(&mut chunks, download::IDLE).await? {
+                body.extend_from_slice(&chunk);
+                if body.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
+            }
+            Ok(body)
+        }).await.map_err(|_| Failure::transport(false))?
+    }
+
+    /// Baixa o arquivo direto em `target`, passando por `<target>.part`, sem teto de tamanho e sem prazo total: só o de
+    /// silêncio (`download::IDLE`). `report(feito, total)` recebe o progresso no máximo 10 vezes por segundo; o total é o
+    /// `Content-Length`, quando veio. `None`: veio vazio e nada foi gravado. Abortar a tarefa apaga o `.part`.
+    pub async fn download(&self, name: &str, source: &Source, target: std::path::PathBuf, report: impl FnMut(u64, Option<u64>))
+        -> Result<Option<std::path::PathBuf>, download::DownloadError> {
+        if let Source::Memory(_, bytes) = source { return download::write_bytes(target, &bytes.0, report).await; }
+        let r = self.open_source(name, source, None).await?;
+        let total = r.content_length();
+        let mut reporter = download::Reporter::new(report);
+        let mut chunks = std::pin::pin!(r.bytes_stream());
+        // O `.part` só nasce com o primeiro pedaço: resposta vazia não deixa arquivo.
+        let mut writer: Option<download::PartWriter> = None;
+        while let Some(chunk) = download::next_chunk(&mut chunks, download::IDLE).await? {
+            if chunk.is_empty() { continue; }
+            if writer.is_none() { writer = Some(download::PartWriter::create(target.clone()).await?); }
+            let part = writer.as_mut().expect("created above");
+            part.write(&chunk).await?;
+            reporter.step(part.written(), total);
+        }
+        match writer { Some(part) => part.finish().await.map(Some), None => Ok(None) }
+    }
+
+    /// A resposta já conferida de um anexo. Até os cabeçalhos o prazo é o longo (`HEADERS_SECONDS`); o de silêncio
+    /// (`download::IDLE`) vale só entre os pedaços do corpo.
+    async fn open_source(&self, name: &str, source: &Source, width: Option<u32>) -> Result<Response, Failure> {
         let mut url = self.endpoint(Some(name), None);
         let mut remote = false;
+        let width = width.map(|w| w.to_string());
         match source {
-            Source::Upload(file) => { url.path_segments_mut().expect("validated HTTP base").extend(["uploads", file]); }
+            Source::Upload(file) => {
+                url.path_segments_mut().expect("validated HTTP base").extend(["uploads", file]);
+                if let Some(w) = &width { url.query_pairs_mut().append_pair("w", w); }
+            }
             Source::Cited(path) | Source::Workspace(path) => {
                 url.path_segments_mut().expect("validated HTTP base").push("file");
                 url.query_pairs_mut().append_pair("path", path);
                 if matches!(source, Source::Workspace(_)) { url.query_pairs_mut().append_pair("root", "1"); }
+                if let Some(w) = &width { url.query_pairs_mut().append_pair("w", w); }
             }
             Source::Transcript(id, index) => { url.path_segments_mut().expect("validated HTTP base").extend(["transcript-image", id, &index.to_string()]); }
             Source::Remote(address) => {
                 url = Url::parse(address).ok().filter(|url| matches!(url.scheme(), "http" | "https")).ok_or_else(|| Failure::local("invalid_url"))?;
                 remote = true;
             }
-            Source::Memory(_, bytes) => return Ok(bytes.0.to_vec()),
+            // Quem chama já respondeu com os bytes que tem.
+            Source::Memory(..) => return Err(Failure::local("invalid_url")),
         }
         let request = if remote { self.plain.get(url) } else { self.client.get(url) };
-        let r = request.timeout(Duration::from_secs(UPLOAD_SECONDS)).send().await.map_err(|_| Failure::transport(false))?;
-        // Erro de terceiro não tem o corpo lido: nem memória, nem texto escolhido por ele na tela.
-        if matches!(source, Source::Remote(_)) && !r.status().is_success() {
-            let status = r.status().as_u16();
-            return Err(Failure { status: Some(status), detail: failure_detail(None, status), retry_after: None, uncertain: false, code: None });
+        download::within(Duration::from_secs(HEADERS_SECONDS), async {
+            let r = request.send().await.map_err(|_| Failure::transport(false))?;
+            // Erro de terceiro não tem o corpo lido: nem memória, nem texto escolhido por ele na tela.
+            if remote && !r.status().is_success() {
+                let status = r.status().as_u16();
+                return Err(Failure { status: Some(status), detail: failure_detail(None, status), retry_after: None, uncertain: false, code: None });
+            }
+            self.checked(r, false).await
+        }).await?
+    }
+
+    /// Endereço e credencial para um player que busca sozinho, por faixas (Range): a mesma rota do `fetch`, pela rede
+    /// local quando ela venceu, e o token separado para ir no cabeçalho, nunca na URL. `None`: anexo sem rota de
+    /// arquivo, ou endereço do Connect sem credencial de aparelho, onde a senha do dono nunca vai.
+    pub fn media_url(&self, name: &str, source: &Source) -> Option<(String, String)> {
+        let mut url = self.endpoint(Some(name), None);
+        match source {
+            Source::Upload(file) => { url.path_segments_mut().ok()?.extend(["uploads", file]); }
+            Source::Cited(path) | Source::Workspace(path) => {
+                url.path_segments_mut().ok()?.push("file");
+                url.query_pairs_mut().append_pair("path", path);
+                if matches!(source, Source::Workspace(_)) { url.query_pairs_mut().append_pair("root", "1"); }
+            }
+            Source::Transcript(..) | Source::Remote(_) | Source::Memory(..) => return None,
         }
-        let r = self.checked(r, false).await?;
-        if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
-        // Resposta sem tamanho declarado para no teto enquanto chega.
-        let mut body = Vec::new();
-        let mut chunks = std::pin::pin!(r.bytes_stream());
-        use futures::StreamExt;
-        while let Some(chunk) = chunks.next().await {
-            body.extend_from_slice(&chunk.map_err(|_| Failure::transport(false))?);
-            if body.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
-        }
-        Ok(body)
+        let token = self.socket_token(&url, &self.token)?;
+        Some((url.to_string(), token))
     }
 
     /// Página publicada: sem `extra` é a casca isolada (com `raw=1`, o HTML cru); `["shot"]` é a imagem. O 404 diz
@@ -641,6 +814,10 @@ impl Api {
         let r = self.client.get(url).timeout(Duration::from_secs(30)).send().await.map_err(|_| Failure::transport(false))?;
         Ok(self.checked(r, false).await?.bytes().await.map_err(|_| Failure::transport(false))?.to_vec())
     }
+
+    /// Endereço de `file/page` para o navegador: o servidor o monta com o endereço em que ele escuta (127.0.0.1 ou o IP
+    /// da rede dele), que daqui pode não alcançar. Caminho e bilhete vão sobre a rota até ele; o token do dono nunca.
+    pub fn page_url(&self, open_url: &str) -> Option<String> { rebase_page_url(&self.route(), open_url).map(|url| url.to_string()) }
 
     /// Diagrama desenhado pelo servidor (`POST /api/mermaid`). Só 503, rede e prazo podem passar numa nova tentativa.
     pub async fn mermaid(&self, source: &str, dark: bool, width: u32) -> MermaidReply {
@@ -1183,10 +1360,11 @@ async fn failed_response(response: Response, post: bool, method: &str, identity:
     let status = response.status().as_u16();
     let url = response.url().clone();
     let retry_after = response.headers().get(header::RETRY_AFTER).and_then(|s| s.to_str().ok()).and_then(|s| s.parse().ok());
+    // Antes do corpo: quem espera com prazo pode cancelar a leitura, e a recusa tem que valer mesmo assim.
+    if status == 401 && let Some(identity) = identity { route::refused_at(identity, &url); }
     let body = response.json::<Value>().await.ok();
     let code = envelope_code(body.as_ref());
     recent::record(method, &url, status, code.as_deref());
-    if status == 401 && let Some(identity) = identity { route::refused_at(identity, &url); }
     let detail = failure_detail(body.clone(), status);
     (body, Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
 }
@@ -1226,6 +1404,80 @@ mod tests {
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
+
+    #[test]
+    fn media_url_keeps_the_token_out_of_the_url() {
+        // Endereço só deste teste: a tabela de rotas é global e outros testes a mudam.
+        let api = Api::new("http://stream-test.invalid:8765", "fixture-owner").unwrap();
+        let (url, token) = api.media_url("s 1", &Source::Upload("a b.mp4".into())).unwrap();
+        assert_eq!(url, "http://stream-test.invalid:8765/api/sessions/s%201/uploads/a%20b.mp4");
+        assert_eq!(token, "fixture-owner");
+        let (url, _) = api.media_url("s", &Source::Cited("/tmp/v.mov".into())).unwrap();
+        assert_eq!(url, "http://stream-test.invalid:8765/api/sessions/s/file?path=%2Ftmp%2Fv.mov");
+        assert!(!url.contains("fixture-owner"));
+        assert!(api.media_url("s", &Source::Transcript("x".into(), 0)).is_none());
+    }
+
+    #[test]
+    fn page_url_keeps_path_and_ticket_over_the_route_to_the_server() {
+        let open = "http://127.0.0.1:8765/api/sessions/minha%20sessao/pages/p1?page_ticket=abc";
+        let lan = Url::parse("http://192.168.0.7:8765/").unwrap();
+        assert_eq!(rebase_page_url(&lan, open).unwrap().as_str(), "http://192.168.0.7:8765/api/sessions/minha%20sessao/pages/p1?page_ticket=abc");
+        let prefixed = Url::parse("https://casa.tail.ts.net/hangar/").unwrap();
+        assert_eq!(rebase_page_url(&prefixed, open).unwrap().as_str(), "https://casa.tail.ts.net/hangar/api/sessions/minha%20sessao/pages/p1?page_ticket=abc");
+        let here = Url::parse("http://127.0.0.1:8765").unwrap();
+        assert_eq!(rebase_page_url(&here, open).unwrap().as_str(), open, "desta máquina fica igual");
+        assert!(rebase_page_url(&lan, "http://127.0.0.1:8765/api/costs?x=1").is_none(), "só página de sessão");
+        assert!(rebase_page_url(&lan, "file:///api/sessions/a/pages/b").is_none());
+        assert!(rebase_page_url(&lan, "nao e url").is_none());
+        assert_eq!(page_url_problem("http://127.0.0.1:8765/api/costs?x=1"), "path");
+        assert_eq!(page_url_problem("file:///api/sessions/a/pages/b"), "scheme");
+        assert_eq!(page_url_problem("nao e url"), "unparseable");
+    }
+
+    #[test]
+    fn media_wait_follows_the_core_contract() {
+        let done = json!({"status": "done", "frames": ["/u/f1.jpg", 3, "/u/f2.jpg"], "transcript": "oi"});
+        assert_eq!(media_wait(Some(200), Some(&done)), MediaWait::Done(vec!["/u/f1.jpg".into(), "/u/f2.jpg".into()], "oi".into()));
+        assert_eq!(media_wait(Some(200), Some(&json!({"status": "done", "frames": ["/u/f1.jpg"]}))), MediaWait::Done(vec!["/u/f1.jpg".into()], String::new()));
+        assert_eq!(media_wait(Some(200), Some(&json!({"status": "done", "transcript": "oi"}))), MediaWait::Done(vec![], "oi".into()));
+        assert_eq!(media_wait(Some(200), Some(&json!({"status": "done"}))), MediaWait::GiveUp(MediaGap::Empty), "nada extraído é desistência");
+        assert_eq!(media_wait(Some(200), Some(&json!({"status": "done", "frames": [], "transcript": "  "}))), MediaWait::GiveUp(MediaGap::Empty));
+        assert_eq!(media_wait(Some(200), Some(&json!({"status": "pending"}))), MediaWait::Pending);
+        assert_eq!(media_wait(Some(404), Some(&json!({"detail": {"code": "upload_media_unknown"}}))), MediaWait::GiveUp(MediaGap::Unknown), "sem registro: segue só com o vídeo");
+        assert_eq!(media_wait(Some(403), None), MediaWait::GiveUp(MediaGap::Refused(403)));
+        for retry in [Some(408), Some(429), Some(500), Some(503), None] { assert_eq!(media_wait(retry, None), MediaWait::Retry, "{retry:?}"); }
+        assert_eq!(media_wait(Some(200), None), MediaWait::Retry, "corpo ilegível");
+        assert_eq!(media_wait(Some(200), Some(&json!({"status": "outro"}))), MediaWait::Retry);
+    }
+
+    #[tokio::test]
+    async fn media_request_outlives_the_overall_deadline_once_it_started() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                request.push_str(&line);
+                if line == "\r\n" { break; }
+            }
+            assert!(request.starts_with("GET /api/sessions/fixture/upload-media?id=m1 "), "{request}");
+            // Responde depois do prazo geral, como o servidor que segura o pedido esperando a mídia.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let body = r#"{"status":"done","frames":["/u/f1.jpg"],"transcript":"oi"}"#;
+            let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            stream.write_all(reply.as_bytes()).await.unwrap();
+        });
+        let api = super::Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
+        let got = api.upload_media_within("fixture", "m1", Duration::from_millis(100), Duration::from_secs(5)).await;
+        assert_eq!(got, Ok((vec!["/u/f1.jpg".to_owned()], "oi".to_owned())));
+        server.await.unwrap();
+    }
 
     #[test]
     fn only_the_old_server_refusal_of_delivery_falls_back_to_the_queue() {
@@ -1460,6 +1712,8 @@ mod tests {
     fn resume_refusals_use_the_web_sentence() {
         let text = failure_detail(Some(json!({"detail": {"code": "erro_resume_so_claude", "params": {"provider": "pi"}, "msg": "x"}})), 409);
         assert!(text != "x" && text.contains("pi") && text.contains("Claude"), "{text}");
+        let text = failure_detail(Some(json!({"detail": {"code": "erro_resume_sem_claude", "params": {}, "msg": "x"}})), 409);
+        assert!(text != "x" && !text.contains("erro_resume_sem_claude"), "{text}");
         let text = failure_detail(Some(json!({"detail": {"code": "erro_session_id_invalido", "params": {}, "msg": "session_id invalido"}})), 422);
         assert!(text != "session_id invalido" && !text.contains("erro_session_id_invalido"), "{text}");
     }
@@ -1585,6 +1839,51 @@ mod tests {
             assert_eq!(api.fetch("fixture", &source).await.unwrap(), b"PNG\0");
         }
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn download_lands_on_disk_through_the_part_and_a_cut_body_leaves_nothing() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for whole in [true, false] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                    request.push_str(&line);
+                    if line == "\r\n" { break; }
+                }
+                // O token vai só no cabeçalho, nunca na URL.
+                assert!(request.lines().any(|line| line.eq_ignore_ascii_case("authorization: Bearer fixture-owner")));
+                assert!(!request.lines().next().unwrap().contains("fixture-owner"));
+                let reply: &[u8] = if whole { b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world" }
+                    else { b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhell" };
+                stream.write_all(reply).await.unwrap();
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("hangar-api-download-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let api = super::Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
+        let source = super::Source::Upload("relatorio.pdf".into());
+        let mut seen = Vec::new();
+        let target = dir.join("relatorio.pdf");
+        let saved = api.download("fixture", &source, target.clone(), |done, total| seen.push((done, total))).await.unwrap();
+        assert_eq!(saved.as_deref(), Some(target.as_path()));
+        assert_eq!(std::fs::read(&target).unwrap(), b"hello world");
+        // Nenhum `.part` sobra, nem do inteiro nem do cortado.
+        let left = || std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(left(), ["relatorio.pdf"]);
+        assert_eq!(seen.last(), Some(&(11, Some(11))));
+        let cut = dir.join("cortado.pdf");
+        assert!(api.download("fixture", &source, cut.clone(), |_, _| {}).await.is_err());
+        assert_eq!(left(), ["relatorio.pdf"]);
+        server.await.unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

@@ -11,13 +11,7 @@ use std::{
 };
 
 pub(super) fn mcp_config_path(env: &AccountEnvironment) -> PathBuf {
-    // Exportar até a pasta padrão muda o arquivo que o Claude lê.
-    let root = if env.base.get("CLAUDE_CONFIG_DIR").is_some_and(|value| !value.is_empty()) {
-        &env.claude_base
-    } else {
-        &env.home
-    };
-    root.join(".claude.json")
+    env.default_claude_json()
 }
 
 fn markdown(path: &Path) -> bool {

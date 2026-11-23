@@ -13,7 +13,8 @@ import { useSessions } from '../../stores/sessions';
 const routing = vi.hoisted(() => ({ push: vi.fn() }));
 const nativeSheet = vi.hoisted(() => ({ finishDismiss: null as (() => void) | null }));
 vi.mock('expo-router', () => ({ useRouter: () => routing }));
-const api = vi.hoisted(() => ({ credentials: vi.fn(), codex: vi.fn(), models: vi.fn(), tier: vi.fn(), permissions: vi.fn(), modelWrite: vi.fn(), modeWrite: vi.fn() }));
+const api = vi.hoisted(() => ({ credentials: vi.fn(), codex: vi.fn(), models: vi.fn(), tier: vi.fn(), permissions: vi.fn(), modelWrite: vi.fn(), modeWrite: vi.fn(),
+  engines: vi.fn(), providerModels: vi.fn(), providerWrite: vi.fn() }));
 const state = vi.hoisted(() => ({
   servers: [] as Server[], activeId: 'b',
   rows: [] as (SessionInfo & { serverId: string })[],
@@ -23,6 +24,7 @@ vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
   getCodexModels: api.codex, getModelOptions: api.models, setServiceTier: api.tier, getPermissionModes: api.permissions,
   getCredentialsForServer: api.credentials,
+  getEnginesForServer: api.engines, claudeProviderModels: api.providerModels, switchClaudeProvider: api.providerWrite,
   setModelEffort: api.modelWrite, setEngineModel: api.modelWrite, setCodexModel: api.modelWrite,
   setPermissionMode: api.modeWrite, setCodexMode: api.modeWrite,
 }));
@@ -70,7 +72,8 @@ vi.mock('../../paraglide/messages', async original => ({
     + 'native_ctl_speed native_ctl_speed_normal native_ctl_speed_ultrafast native_ctl_speed_normal_hint native_ctl_speed_fast_hint '
     + 'native_ctl_speed_ultrafast_hint native_ctl_speed_ultrafast_unavailable '
     + 'native_invalid_response servidor_nao_existe chat_servidor_removido cota_conta_ativa accounts_switch_title conta_padrao '
-    + 'native_ctl_all_models native_ctl_featured_models comum_voltar codex_ui_concluir native_usage_card_session live_voice_action_usage_label codex_limites_titulo'
+    + 'native_ctl_all_models native_ctl_featured_models comum_voltar codex_ui_concluir native_usage_card_session live_voice_action_usage_label codex_limites_titulo '
+    + 'native_claude_provider_picker native_claude_provider_back native_claude_provider_apply native_claude_provider_confirm comum_cancelar'
   ).split(' ').map((key) => [key, () => key])),
   native_ctl_failed: ({ reason }: { reason: string }) => `native_ctl_failed ${reason}`,
 }));
@@ -166,6 +169,64 @@ it('layout A abre todos os modelos e o raciocínio e volta ao resumo após aplic
   await act(async () => action('reasoning_level_low').click());
   expect(api.modelWrite).toHaveBeenCalledExactlyOnceWith('sess', 'gpt-current', 'low', state.servers[0]);
   expect(container.querySelectorAll('[role="radio"]')).toHaveLength(3);
+});
+
+it.each([
+  ['a mesma conversa', 'same'],
+  ['outra conversa no mesmo nome', 'replaced'],
+  ['uma escolha mais nova no mesmo histórico', 'newer'],
+])('reconcilia a confirmação com %s', async (_case, outcome) => {
+  const replaced = outcome === 'replaced';
+  const source = { lifecycle_id: 'k:claude', jsonl: '/example/conversation.jsonl', headless: false, engine: null, engine_account: null, engine_binding: null };
+  state.rows[0] = { ...state.rows[0], provider: 'claude', ...source };
+  api.engines.mockResolvedValue({ claude_provider_switch: true, motores: {
+    pro: { label: 'Pro', cliproxy_binding: 'bound-pro', cliproxy_bound_account: { account: 'pro-account', label: 'ChatGPT Pro' } },
+    plus: { label: 'Plus', cliproxy_binding: 'bound-plus', cliproxy_bound_account: { account: 'plus-account', label: 'ChatGPT Plus' } },
+  } });
+  const first = deferred<{ id: string }[]>();
+  api.providerModels.mockImplementation((_server, target) => target.engine === 'pro' ? first.promise : Promise.resolve([{ id: 'gpt-plus' }]));
+  const written = deferred<{ ok: boolean; engine: string; engine_account: string; engine_binding: string; model: string; service_tier: string }>();
+  api.providerWrite.mockReturnValue(written.promise);
+  const { container, refresh } = await mount('claude', 'a', { which: 'model', n: 1 });
+  const action = (label: string) => container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`);
+  const click = async (label: string) => { await act(async () => action(label)!.click()); };
+  await click('native_claude_provider_picker');
+  await click('Pro');
+  await click('Plus');
+  await act(async () => first.resolve([{ id: 'gpt-pro' }]));
+  expect(action('gpt-pro')).toBeNull();
+  expect(action('native_claude_provider_apply')?.disabled).toBe(true);
+  await click('gpt-plus');
+  await click('native_claude_provider_apply');
+  await click('native_claude_provider_back');
+  expect(action('gpt-plus')?.getAttribute('aria-checked')).toBe('true');
+  await click('native_claude_provider_apply');
+  await click('comum_cancelar');
+  expect(api.providerWrite).not.toHaveBeenCalled();
+  await click('native_claude_provider_picker');
+  await click('Plus');
+  await click('gpt-plus');
+  await click('native_claude_provider_apply');
+  await click('native_claude_provider_confirm');
+  const destination = { engine: 'plus', engine_account: 'plus-account', engine_binding: 'bound-plus', model: 'gpt-plus' };
+  if (!replaced) state.statusLine = '🤖 claude-before';
+  expect(api.providerWrite).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'sess', { ...destination, source });
+  state.rows[0] = replaced
+    ? { ...state.rows[0], jsonl: '/example/another.jsonl', model: 'claude-other' }
+    : { ...state.rows[0], ...destination, model: outcome === 'newer' ? 'gpt-next' : destination.model };
+  await refresh();
+  await act(async () => written.resolve({ ok: true, ...destination, service_tier: 'default' }));
+  if (replaced) {
+    expect(action('native_claude_provider_confirm')?.disabled).toBe(true);
+    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain('claude-other');
+  } else {
+    expect(action('native_claude_provider_confirm')).toBeNull();
+    const acknowledgedModel = outcome === 'newer' ? 'gpt-next' : 'gpt-plus';
+    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain(acknowledgedModel);
+    state.rows[0] = { ...state.rows[0], model: 'gpt-next' };
+    await refresh();
+    expect(action('composer_session_settings')?.getAttribute('aria-valuetext')).toContain('gpt-next');
+  }
 });
 
 it('layout A mantém Codex aberto e relê os níveis depois de trocar modelo', async () => {
@@ -330,6 +391,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   nativeSheet.finishDismiss = null;
   api.credentials.mockResolvedValue([]);
+  api.engines.mockResolvedValue({ motores: {} });
   state.servers = [
     { id: 'a', label: 'A', baseUrl: 'https://a.test', token: 'a' },
     { id: 'b', label: 'B', baseUrl: 'https://b.test', token: 'b' },

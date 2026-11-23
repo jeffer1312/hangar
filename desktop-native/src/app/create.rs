@@ -1149,7 +1149,10 @@ impl NewSession {
 
     /// Trocar de provider preserva o modo escolhido e relê as opções e permissões dele.
     fn choose_provider(&mut self, provider: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        if provider != self.provider { self.scheduled_touch(&scheduled_launch::provider_fields()); }
+        if provider != self.provider && self.scheduled {
+            scheduled_launch::switch_provider(&mut self.scheduled_changed, self.scheduled_original.is_some());
+            self.scheduled_touch(&["provider"]);
+        }
         self.set_provider(provider, window, cx);
     }
 
@@ -1331,12 +1334,10 @@ impl NewSession {
                 body["config_dir"] = self.requested_config();
                 body["engine"] = text(&self.engine);
                 if self.proxy_accounts().is_some() { body["engine_account"] = json!(self.engine_account); }
+                if let Some(binding) = self.proxy_binding() { body["engine_binding"] = json!(binding); }
                 if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
                 // O motor exporta o próprio modelo de subagente: com ele, o campo nem aparece.
                 if self.engine.is_empty() && !self.subagent.is_empty() { body["subagent_model"] = json!(self.subagent); }
-                // Code Mode experimental do Claude Code: escolha da conversa nova (beta), só nas sessões que nascem daqui.
-                let look = crate::appearance::get();
-                if look.conversation_beta && look.claude_code_mode { body["code_mode"] = json!(true); }
             }
             "codex" => { body["codex_account"] = json!(self.codex_account); },
             "omp" => { let profile = self.omp.read(cx).value().trim().to_owned(); if !profile.is_empty() { body["omp_profile"] = json!(profile); } }
@@ -1371,6 +1372,8 @@ impl NewSession {
             let mut changed = self.scheduled_changed.clone();
             if self.omp.read(cx).value().to_string() != self.scheduled_original.as_ref().and_then(|value| value["omp_profile"].as_str()).unwrap_or_default() { changed.insert("omp_profile"); }
             if self.scheduled_original.as_ref().and_then(|value| value["cwd"].as_str()) != Some(cwd.as_str()) { changed.insert("cwd"); }
+            // Plugins e skills mexidos nesta tela também são escolha: a tarefa nova os guarda.
+            if self.scheduled_original.is_none() && self.customization_payload().is_some() { changed.insert("claude_customizations"); }
             let launch = scheduled_launch::merge(self.scheduled_original.as_ref(), self.open_body("", &cwd, "", cx), &changed);
             if matches!(self.purpose,SessionDialogPurpose::Tickets) {
                 self.creating=true;
@@ -1412,7 +1415,6 @@ impl NewSession {
         if baton.is_some() {
             let claude = provider == "claude";
             let omp = self.omp.read(cx).value().trim().to_owned();
-            let code_mode = body.get("code_mode").cloned();
             body = json!({"name": name, "cwd": cwd, "provider": provider, "model": text(&self.model), "effort": text(&self.effort),
                 "config_dir": if claude { self.requested_config() } else { Value::Null },
                 "engine": if claude { text(&self.engine) } else { Value::Null },
@@ -1422,9 +1424,9 @@ impl NewSession {
                 "resumo_por_modelo": self.baton_by_model});
             if provider == "codex" { body["codex_account"] = json!(self.codex_account); }
             if claude && self.proxy_accounts().is_some() { body["engine_account"] = json!(self.engine_account); }
+            if claude && let Some(binding) = self.proxy_binding() { body["engine_binding"] = json!(binding); }
             if self.headless_inherited() { body.as_object_mut().unwrap().remove("headless"); }
             if let Some(customizations) = self.customization_payload() { body["claude_customizations"] = json!(customizations); }
-            if let Some(on) = code_mode { body["code_mode"] = on; }
         }
         // Sonda falhada deixa o Claude por omissão, e isso não é escolha a lembrar.
         if self.provider_touched || self.providers.ok().is_some() {
@@ -1434,9 +1436,6 @@ impl NewSession {
         if let Some((id, _)) = reserve.as_ref().filter(|_| named.is_some()) { body["prewarm"] = json!(id); }
         // A renovação para antes do POST: atrasada, ela subiria outra reserva depois da adoção.
         self.prewarm.stop();
-        // A memória vai antes do POST: a escolha não se perde se a criação falhar.
-        let (key, model, effort) = (self.memory_key(), self.model.clone(), self.effort.clone());
-        self.link.runtime.spawn_blocking(move || crate::appearance::remember_model(&key, &model, &effort));
         self.create_seq += 1;
         let seq = self.create_seq;
         (self.creating, self.error, self.step, self.started) = (true, None, String::new(), Some(Instant::now()));
@@ -1484,19 +1483,28 @@ impl NewSession {
                 }
             };
             match (first, opened) {
-                (Some((selection, text, files)), Ok(opened)) => {
+                (Some((selection, text, files)), Ok(mut opened)) => {
                     // Os anexos sobem pela rota do servidor, na sessão que acabou de nascer; um que falhe segura a mensagem.
                     let mut uploads = Vec::new();
                     let mut failed = None;
+                    let mut gaps = Vec::new();
                     for (file, bytes, image) in files {
                         match api.upload(&opened.session.name, &file, composer::mime_for(&file), bytes.to_vec()).await {
-                            Ok(up) => uploads.push((image, up)),
+                            Ok(up) => {
+                                if let Some(gap) = up.note { gaps.push(format!("{file}: {}", gap.shown())); }
+                                uploads.push((image, up));
+                            }
                             // O aviso diz qual arquivo segurou a mensagem; ela não saiu, então a falha é certa.
                             Err(error) => { failed = Some(Failure::local(format!("{file}: {}", Hangar::failure(&error)))); break; }
                         }
                     }
                     let message = composer::compose_prompt(&text, &uploads, |speech| tr("attach_video_speech").replace("{texto}", speech));
                     let result = match failed { Some(error) => Err(error), None => api.send(&opened.session.name, &message).await };
+                    // Como no campo da conversa: o vídeo que foi sem quadros nem fala fica dito, senão o agente o recebe calado.
+                    if result.is_ok() && !gaps.is_empty() {
+                        let gaps = gaps.join(" ");
+                        opened.warning = Some(match opened.warning.take() { Some(warning) => format!("{warning} {gaps}"), None => gaps });
+                    }
                     send(CreateReply::CreatedWithInput(seq, selection, text, message, result, Ok(opened))).await;
                 }
                 (_, opened) => send(CreateReply::Created(seq, opened)).await,

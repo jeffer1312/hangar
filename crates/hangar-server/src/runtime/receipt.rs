@@ -51,6 +51,8 @@ pub struct ReceiptIndex {
     identity: Option<String>,
     tail: Vec<u8>,
     occurrences: Vec<Occurrence>,
+    /// Claude: entradas que a CLI guardou na fila dela (`queue-operation enqueue`), com o início da linha.
+    enqueued: Vec<Occurrence>,
     scan_offset: u64,
     /// Conversa do `session_meta` do rollout: o Codex não grava a conversa em cada linha.
     meta_conversation: Option<String>,
@@ -101,7 +103,7 @@ fn identity(file: &File) -> io::Result<String> {
 
 impl ReceiptIndex {
     pub fn new(provider: &str, conversation: &str) -> Self {
-        Self { provider:provider.into(),conversation:conversation.into(),identity:None,tail:Vec::new(),occurrences:Vec::new(),scan_offset:0,meta_conversation:None,turn_end:None,other_rows:None }
+        Self { provider:provider.into(),conversation:conversation.into(),identity:None,tail:Vec::new(),occurrences:Vec::new(),enqueued:Vec::new(),scan_offset:0,meta_conversation:None,turn_end:None,other_rows:None }
     }
 
     pub(super) fn set_other_rows(&mut self, state: std::sync::Arc<super::queue::State>) {
@@ -110,7 +112,7 @@ impl ReceiptIndex {
         }
     }
 
-    fn matching_text(&self, row: &Value, text: &str) -> Option<String> {
+    pub(crate) fn matching_text(&self, row: &Value, text: &str) -> Option<String> {
         if let Some(state) = &self.other_rows {
             return other_matching_text(row, text, &state.rows);
         }
@@ -157,7 +159,7 @@ impl ReceiptIndex {
         let mut file = match opened {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                self.tail.clear(); self.identity = None; self.occurrences.clear(); self.scan_offset = 0; self.meta_conversation = None; self.turn_end = None;
+                self.tail.clear(); self.identity = None; self.occurrences.clear(); self.enqueued.clear(); self.scan_offset = 0; self.meta_conversation = None; self.turn_end = None;
                 return Ok(&self.occurrences);
             }
             Err(error) => return Err(error),
@@ -165,7 +167,7 @@ impl ReceiptIndex {
         let id = identity(&file)?;
         let unchanged = self.identity.as_deref() == Some(id.as_str())
             && bytes_before(&mut file,self.scan_offset)?.is_some_and(|tail|tail == self.tail);
-        if !unchanged { self.occurrences.clear(); self.scan_offset = 0; self.meta_conversation = None; self.turn_end = None; }
+        if !unchanged { self.occurrences.clear(); self.enqueued.clear(); self.scan_offset = 0; self.meta_conversation = None; self.turn_end = None; }
         file.seek(SeekFrom::Start(self.scan_offset))?;
         let mut reader = io::BufReader::with_capacity(1 << 16,&mut file);
         let provider = crate::transcript::Provider::parse(&self.provider).unwrap_or(crate::transcript::Provider::Claude);
@@ -205,6 +207,16 @@ impl ReceiptIndex {
                     // `remove` (absorbed_mid_turn): a CLI tirou a mensagem da fila interna porque o turno a consumiu.
                     Some("queue-operation") if obj["operation"] == "dequeue" || obj["operation"] == "remove" => (obj["content"].as_str().unwrap_or("").to_owned(),"dequeue"),
                     Some("attachment") if obj["attachment"]["type"] == "queued_command" => (content_text(&obj["attachment"]["prompt"]),"steer"),
+                    // Guardada na fila da CLI ainda não é entrega: só diz que o turno em curso vai puxá-la.
+                    Some("queue-operation") if obj["operation"] == "enqueue" => {
+                        if let Some(text) = obj["content"].as_str() {
+                            self.enqueued.push(Occurrence { id:String::new(),conversation:self.conversation.clone(),file_identity:id.clone(),
+                                offset:start,end_offset:offset,text:text.to_owned(),kind:"enqueue".into(),
+                                timestamp:obj["timestamp"].as_str().and_then(crate::transcript::ts_of_iso),
+                                recorded_conversation:obj["sessionId"].as_str().map(str::to_owned),identity_unprovable:false });
+                        }
+                        continue;
+                    }
                     _ => continue,
                 }
             };
@@ -266,6 +278,28 @@ impl ReceiptIndex {
 
     /// A âncora do cursor é relida do arquivo: confere que os bytes antes do despacho não mudaram.
     pub fn match_after(&self, path: &Path, cursor: &DispatchCursor, row: &Value, used: &BTreeMap<String,Value>) -> io::Result<Option<ReceiptProof>> {
+        let Some(observed) = self.cursor_anchor(path, cursor)? else { return Ok(None) };
+        for occurrence in &self.occurrences {
+            if used.contains_key(&occurrence.id) || occurrence.offset < cursor.offset { continue; }
+            if !cursor_accepts(cursor,occurrence) { continue; }
+            if let Some(normalized_text) = self.matching_text(row, &occurrence.text) {
+                return Ok(Some(ReceiptProof { cursor:cursor.clone(),occurrence:occurrence.clone(),normalized_text,observed_anchor:observed }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// A CLI guardou a entrada na fila dela depois do despacho: o turno em curso a puxa sozinho na próxima pausa
+    /// entre ferramentas (`absorbed_mid_turn`), sem tecla. O Claude Code que não desenha a dica
+    /// "ctrl+x ctrl+s to send now" deixa este registro como a prova de que ele está com ela.
+    pub fn enqueued_after(&self, path: &Path, cursor: &DispatchCursor, row: &Value) -> io::Result<bool> {
+        if self.cursor_anchor(path, cursor)?.is_none() { return Ok(false); }
+        Ok(self.enqueued.iter().any(|o| o.offset >= cursor.offset && cursor_accepts(cursor,o) && self.matching_text(row, &o.text).is_some()))
+    }
+
+    /// O cursor vale para o arquivo lido: mesma conversa, mesmo arquivo e os bytes antes do despacho intactos.
+    /// Devolve a âncora relida.
+    fn cursor_anchor(&self, path: &Path, cursor: &DispatchCursor) -> io::Result<Option<String>> {
         // Cursor sem arquivo: o despacho veio antes de o transcript existir (primeira mensagem da
         // sessão), então tudo no arquivo da mesma conversa é posterior a ele.
         let born_after = cursor.file_identity.is_none() && cursor.offset == 0;
@@ -279,15 +313,7 @@ impl ReceiptIndex {
         if current != self.identity || !born_after && current != cursor.file_identity || cursor.offset > self.scan_offset { return Ok(None); }
         let Some(before) = bytes_before(&mut file,cursor.offset)? else { return Ok(None) };
         let observed = anchor(&before);
-        if observed != cursor.anchor { return Ok(None); }
-        for occurrence in &self.occurrences {
-            if used.contains_key(&occurrence.id) || occurrence.offset < cursor.offset { continue; }
-            if !cursor_accepts(cursor,occurrence) { continue; }
-            if let Some(normalized_text) = self.matching_text(row, &occurrence.text) {
-                return Ok(Some(ReceiptProof { cursor:cursor.clone(),occurrence:occurrence.clone(),normalized_text,observed_anchor:observed }));
-            }
-        }
-        Ok(None)
+        Ok((observed == cursor.anchor).then_some(observed))
     }
 
     /// Entrada entregue antes de o Rust assumir a sessão não tem cursor: prova pela primeira

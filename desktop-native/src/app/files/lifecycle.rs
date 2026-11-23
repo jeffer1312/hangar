@@ -249,6 +249,8 @@ impl Hangar {
                         state.set_cursor_position(Position::new(row, cursor.character), window, cx);
                     }
                 });
+                // Releitura do mesmo documento: o caminho dele só muda pelo renomear, que pode ter vindo durante a leitura.
+                content.path = std::mem::take(&mut doc.base.path);
                 doc.base = content;
                 (doc.dirty, doc.disk_changed, doc.close_after_save) = (false, false, false);
                 (doc.error, doc.saved) = (None, None);
