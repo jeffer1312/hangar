@@ -107,11 +107,15 @@ impl Hangar {
     /// A sonda e a busca de porta livre rodam no runtime; enquanto isso a linha diz "abrindo…". `other`: a porta veio
     /// de "Outra porta…", e o motivo da falha fica embaixo do campo, porque ela não vira linha sem encaminhamento.
     fn forward_port(&mut self, port: u16, other: bool, cx: &mut Context<Self>) -> Option<Opening> {
-        let api = self.session_api()?;
+        let Some(api) = self.session_api() else {
+            if other { self.ports.other_error = Some(tr("ports_err_network")); } else { self.no_connection(port); }
+            return None;
+        };
         let key = (api.identity(), port);
         // O token vai na URL do túnel: é o da máquina da sessão.
         let token = self.server_token(&self.open_server());
         self.ports.failed.remove(&key);
+        self.ports.failed.remove(&(String::new(), port));
         let opening = self.ports.forwards.open(self.runtime.handle(), &api, &token, port);
         let result = opening.clone();
         cx.spawn(async move |this, cx| {
@@ -249,7 +253,8 @@ impl Hangar {
                 let forward = forwards.iter().find(|f| f.port == port);
                 let is_opening = opening.contains(&port);
                 let local =forward.map(|f| f.local).or((!remote).then_some(port));
-                let failure = self.ports.failed.get(&(server.clone(), port)).cloned()
+                let failure = self.ports.failed.get(&(server.clone(), port))
+                    .or_else(|| self.ports.failed.get(&(String::new(), port))).cloned()
                     .or_else(|| forward.and_then(|f| f.error).map(forward_text));
                 let link = self.ports.link.as_ref().filter(|l| l.server == server && l.port == port).map(|l| l.url.clone());
                 let busy = self.ports.link_busy.as_ref().is_some_and(|(s, p)| *s == server && *p == port);
@@ -340,12 +345,20 @@ impl Hangar {
             move |_, cx| { let _ = this.update(cx, |this, cx| this.stop_server(port, cx)); true });
     }
 
+    /// Sem conexão não há identidade do servidor: a nota fica na porta com servidor vazio e sai na próxima ação nela.
+    fn no_connection(&mut self, port: u16) { self.ports.failed.insert((String::new(), port), tr("ports_err_network")); }
+
     /// O servidor relê quem segura a porta; a linha some na próxima lista.
     fn stop_server(&mut self, port: u16, cx: &mut Context<Self>) {
         if self.ports.stopping.is_some() { return; }
-        let (Some(api), Some(name)) = (self.session_api(), self.selected.as_ref().map(|s| s.name.clone())) else { return };
+        let (Some(api), Some(name)) = (self.session_api(), self.selected.as_ref().map(|s| s.name.clone())) else {
+            self.no_connection(port);
+            cx.notify();
+            return;
+        };
         let server = api.identity();
         self.ports.failed.remove(&(server.clone(), port));
+        self.ports.failed.remove(&(String::new(), port));
         self.ports.stopping = Some((server.clone(), port));
         let task = self.runtime.spawn(async move { api.act(&name, &["ports", &port.to_string(), "stop"], None, false, 20).await });
         cx.spawn(async move |this, cx| {

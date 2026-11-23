@@ -67,8 +67,13 @@ fn walk(mut pids: Vec<u32>, inodes: &HashSet<u64>, fd_budget: usize, mut fds: im
 }
 
 pub(crate) fn process_info(pid: u32) -> ProcessInfo {
-    let environ = fs::read(format!("/proc/{pid}/environ")).unwrap_or_default();
-    let cmdline = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+    // Processo de outro usuário ou que acabou de sair não se lê: fica sem chave e sem cmdline.
+    let read = |what: &str| fs::read(format!("/proc/{pid}/{what}")).unwrap_or_else(|e| {
+        tracing::debug!(pid, what, kind = ?e.kind(), "session ports: process info unreadable");
+        Vec::new()
+    });
+    let environ = read("environ");
+    let cmdline = read("cmdline");
     ProcessInfo {
         session_key: environ_var(&environ, b"CP_SESSION_KEY"),
         devtools: is_devtools(cmdline.split(|b| *b == 0).map(String::from_utf8_lossy)),

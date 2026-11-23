@@ -49,6 +49,8 @@ impl ForwardError {
             Some("port_tunnel_refused") => Self::NothingListening,
             Some("port_tunnel_port_refused") => Self::PortRefused,
             Some("port_tunnel_token_required") => Self::TokenRequired,
+            // A máquina do servidor não conseguiu discar a porta por outro motivo que não "nada escutando".
+            Some("port_tunnel_unavailable") => Self::Network,
             // O 401 vem do porteiro, antes do túnel: senha recusada, não servidor fora.
             None if status != 401 => Self::Unreachable,
             _ => Self::Refused(status),
@@ -529,6 +531,7 @@ mod tests {
             (502, Some("port_tunnel_refused"), NothingListening),
             (422, Some("port_tunnel_port_refused"), PortRefused),
             (403, Some("port_tunnel_token_required"), TokenRequired),
+            (503, Some("port_tunnel_unavailable"), Network),
             (502, None, Unreachable),
             (404, None, Unreachable),
             (401, None, Refused(401)),
@@ -585,6 +588,9 @@ mod tests {
         assert_eq!(probe(&api(answered), "t", WAIT).await, Ok(false));
         let down = raw_server(|mut s, r, _| async move { respond(&mut s, &r, 502, None).await }).await;
         assert_eq!(probe(&api(down), "t", WAIT).await, Err(Some(ForwardError::Unreachable)));
+        // Falha de lá que não é "nada escutando" não prova outra máquina.
+        let unavailable = raw_server(|mut s, r, _| async move { respond(&mut s, &r, 503, Some("port_tunnel_unavailable")).await }).await;
+        assert_eq!(probe(&api(unavailable), "t", WAIT).await, Err(Some(ForwardError::Network)));
         let silent = raw_server(|mut s, r, _| async move { respond(&mut s, &r, 101, None).await; std::future::pending::<()>().await }).await;
         // estavel: prazo curto da sonda; o esperado é justamente ele vencer sem resposta
         assert_eq!(probe(&api(silent), "t", Duration::from_millis(100)).await, Err(None));

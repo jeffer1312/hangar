@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pageFromParams, pageScreenHref } from './pageRoute';
+import { pageFromParams, pageScreenHref, portFromParam } from './pageRoute';
 
 const page = { id: 'p1', title: 'Gráfico & vendas', height: null, heights: {}, ownTheme: false };
 
@@ -20,5 +20,11 @@ describe('rota da página em tela cheia', () => {
     expect(pageFromParams({ id: 'p1', title: 'Gráfico & vendas' })).toEqual(page);
     expect(pageFromParams({ id: ['p1'], title: [''], own: '1' })).toEqual({ ...page, title: 'p1', ownTheme: true });
     expect(pageFromParams({ title: 'x' })).toBeNull();
+  });
+
+  it('porta da rota só de 1 a 65535, inteira', () => {
+    expect(portFromParam('3000')).toBe(3000);
+    expect(portFromParam(['65535'])).toBe(65535);
+    for (const bad of ['', '0', '65536', '-1', '80.5', 'abc', undefined]) expect(portFromParam(bad)).toBeNull();
   });
 });

@@ -42,10 +42,25 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     let Some(port) = port else {
         return refusal(&parts.headers, StatusCode::UNPROCESSABLE_ENTITY, "port_tunnel_port_refused", "porta fora da faixa ou do Hangar");
     };
-    let Ok(tcp) = hangar_port_tunnel::connect(port).await else {
-        return refusal(&parts.headers, StatusCode::BAD_GATEWAY, "port_tunnel_refused", "nada escutando nessa porta");
+    let tcp = match hangar_port_tunnel::connect(port).await {
+        Ok(tcp) => tcp,
+        Err(e) => {
+            let (status, code, msg) = connect_failure(&e);
+            if status != StatusCode::BAD_GATEWAY {
+                tracing::warn!(code, kind = ?e.kind(), "port tunnel connect failed");
+            }
+            return refusal(&parts.headers, status, code, &msg);
+        }
     };
     ws.max_message_size(hangar_port_tunnel::MAX_MESSAGE).on_upgrade(move |socket| hangar_port_tunnel::relay(socket, tcp, async move { Watcher::ended(watcher.as_ref()).await }))
+}
+
+/// Só conexão recusada é "nada escutando"; outra falha é da máquina, não da porta.
+pub fn connect_failure(e: &std::io::Error) -> (StatusCode, &'static str, String) {
+    if e.kind() == std::io::ErrorKind::ConnectionRefused {
+        return (StatusCode::BAD_GATEWAY, "port_tunnel_refused", "nada escutando nessa porta".into());
+    }
+    (StatusCode::SERVICE_UNAVAILABLE, "port_tunnel_unavailable", format!("não foi possível abrir a porta: {:?}", e.kind()))
 }
 
 fn refusal(headers: &HeaderMap, status: StatusCode, code: &str, msg: &str) -> Response {
@@ -59,8 +74,12 @@ fn refusal(headers: &HeaderMap, status: StatusCode, code: &str, msg: &str) -> Re
 async fn tagged(response: Response) -> Response {
     let (mut parts, body) = response.into_parts();
     // ponytail: recusa é JSON curto; o teto só barra corpo que não é recusa.
-    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
-        return Response::from_parts(parts, Body::empty());
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::warn!(status = %parts.status, error = %e, "port tunnel refusal body unreadable");
+            return Response::from_parts(parts, Body::empty());
+        }
     };
     let detail = serde_json::from_slice::<serde_json::Value>(&bytes).ok().map(|value| value["detail"].clone());
     let code = detail.as_ref().and_then(|d| d["code"].as_str().or(d["error_code"].as_str()));

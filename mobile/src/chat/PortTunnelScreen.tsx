@@ -1,6 +1,6 @@
 // Portas da sessão numa WebView do app cujo `localhost` é o da máquina da sessão (`/api/port-tunnel`).
 // Várias portas ficam abertas ao mesmo tempo, cada uma na sua aba; trocar de aba não recarrega.
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Stack, useRouter } from 'expo-router';
@@ -36,6 +36,8 @@ function failureText(port: number, f: PortTunnelFailure): string {
     case 'erro_nao_autorizado': case 'erro_fora_do_convite':
       return m.mobile_ports_tunnel_err_token();
     case 'listen': case 'proxy_override': return m.mobile_ports_tunnel_err_device();
+    // A máquina da sessão não conseguiu discar a porta por outro motivo que não "nada escutando".
+    case 'port_tunnel_unavailable':
     default: return m.mobile_ports_tunnel_err_network({ detail: f.description || f.code });
   }
 }
@@ -43,20 +45,30 @@ function failureText(port: number, f: PortTunnelFailure): string {
 type PageState = { title: string; loading: boolean; failure: string | null; reloads: number };
 const fresh: PageState = { title: '', loading: true, failure: null, reloads: 0 };
 
-export function PortTunnelScreen({ serverId, name, port }: { serverId: string; name: string; port: number }) {
+/** `port` nulo é número inválido na rota: a tela mostra indisponível. */
+export function PortTunnelScreen({ serverId, name, port }: { serverId: string; name: string; port: number | null }) {
   const { theme } = useUnistyles();
   const router = useRouter();
   const header = useGlassHeader();
   const headerHeight = useHeaderHeight();
   const server = useServers((s) => s.servers.find((x) => x.id === serverId));
   const listed = useSessions(useShallow((s) => s.rows.find((r) => r.serverId === serverId && r.name === name)?.ports?.map((p) => p.port) ?? []));
-  const [opened, setOpened] = useState<number[]>([port]);
-  const [active, setActive] = useState(port);
+  // Só abre porta que a sessão listou: o número da rota vem de link e poderia ser qualquer porta da máquina.
+  const [opened, setOpened] = useState<number[]>(() => (port !== null && listed.includes(port) ? [port] : []));
+  useEffect(() => {
+    if (port !== null && listed.includes(port)) setOpened((o) => (o.includes(port) ? o : [...o, port]));
+  }, [listed, port]);
+  const [active, setActive] = useState(port ?? 0);
+  const available = opened.includes(active);
   const [pages, setPages] = useState<Record<number, PageState>>({});
   const [outsideBusy, setOutsideBusy] = useState(false);
   const page = (p: number) => pages[p] ?? fresh;
-  const patch = useCallback((p: number, change: Partial<PageState>) =>
-    setPages((all) => ({ ...all, [p]: { ...(all[p] ?? fresh), ...change } })), []);
+  // Mesmo estado quando nada mudou: a WebView repete eventos de navegação iguais.
+  const patch = useCallback((p: number, change: Partial<PageState>) => setPages((all) => {
+    const cur = all[p] ?? fresh;
+    if ((Object.keys(change) as (keyof PageState)[]).every((k) => cur[k] === change[k])) return all;
+    return { ...all, [p]: { ...cur, ...change } };
+  }), []);
 
   // Porta que saiu da lista mas está aberta continua na faixa.
   const tabs = useMemo(() => [...new Set([...opened, ...listed])].sort((a, b) => a - b), [opened, listed]);
@@ -73,7 +85,7 @@ export function PortTunnelScreen({ serverId, name, port }: { serverId: string; n
 
   // "Link de fora": a prévia do Connect (ou Tailscale) de hoje, no navegador do sistema.
   const outside = useCallback(async () => {
-    if (!server || outsideBusy) return;
+    if (!server || outsideBusy || !available) return;
     setOutsideBusy(true);
     try {
       const { url } = await openPortPreview(server, active);
@@ -83,7 +95,7 @@ export function PortTunnelScreen({ serverId, name, port }: { serverId: string; n
     } finally {
       setOutsideBusy(false);
     }
-  }, [server, active, outsideBusy]);
+  }, [server, active, outsideBusy, available]);
 
   const back = useCallback(() => router.replace(`/s/${encodeURIComponent(serverId)}/${encodeURIComponent(name)}` as never), [router, serverId, name]);
   const canGoBack = router.canGoBack();
@@ -91,7 +103,7 @@ export function PortTunnelScreen({ serverId, name, port }: { serverId: string; n
   const current = page(active);
   const headerOptions = useMemo(() => ({
     ...header,
-    title: current.title || `localhost:${active}`,
+    title: current.title || (available ? `localhost:${active}` : ''),
     headerLeft: canGoBack ? undefined : () => <HeaderBack onPress={back} />,
     headerRight: () => (
       <View style={styles.actions}>
@@ -104,10 +116,10 @@ export function PortTunnelScreen({ serverId, name, port }: { serverId: string; n
         </Pressable>
       </View>
     ),
-  }), [header, current.title, current.loading, current.failure, active, canGoBack, back, reload, outside, outsideBusy, c]);
+  }), [header, current.title, current.loading, current.failure, active, available, canGoBack, back, reload, outside, outsideBusy, c]);
 
   let body: React.ReactNode;
-  if (!server || !PortTunnelView) {
+  if (!server || !PortTunnelView || !available) {
     body = <View style={styles.center}><Text style={styles.note} accessibilityRole="alert">{m.mobile_ports_tunnel_unavailable()}</Text></View>;
   } else {
     const TunnelView = PortTunnelView;

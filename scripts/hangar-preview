@@ -295,8 +295,15 @@ function srv(sair = erro) {
   return dados;
 }
 
+// Só arquivo ausente é "sem app": corrompido ou ilegível mandaria o comando, calado, para outra máquina.
 function appLocal() {
-  try { return pidVivo(JSON.parse(readFileSync(join(DIR, '_srv.json'), 'utf8')).pid); } catch { return false; }
+  const arquivo = join(DIR, '_srv.json');
+  try {
+    return pidVivo(JSON.parse(readFileSync(arquivo, 'utf8')).pid);
+  } catch (err) {
+    if (err.code === 'ENOENT') return false;
+    return erro(`não deu para ler ${arquivo} (${err.message}): feche e reabra o app desktop`);
+  }
 }
 
 const BACKEND = `http://127.0.0.1:${process.env.PORT || 8765}`;
@@ -320,7 +327,13 @@ function tokenDono() {
 const prazoDe = (verbo) => (verbo === 'login' ? 110_000 : verbo === 'open' ? PRONTO_MS : 45_000);
 
 // O verbo pelo servidor desta máquina (`browser-cmd`), que o repassa ao app desktop com a sessão aberta.
+// Uma linha no stderr por comando: quem lê sabe que o navegador não é o desta máquina.
+let avisouRemoto = false;
 async function chamarServidor(nome, verbo, cmdArgs, aba = flags.aba, sair = erro) {
+  if (!avisouRemoto) {
+    avisouRemoto = true;
+    process.stderr.write('sem app local nesta máquina; usando o navegador do app desktop de outra máquina\n');
+  }
   const prazo = prazoDe(verbo);
   let r, texto;
   try {

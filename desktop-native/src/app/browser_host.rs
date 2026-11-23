@@ -386,7 +386,12 @@ impl Hangar {
             #[cfg(not(target_os = "linux"))]
             if let Some((host, port)) = lookup {
                 let resolved = runtime.spawn(async move { tokio::net::lookup_host((host.as_str(), port)).await.map(|a| a.collect::<Vec<_>>()) }).await;
-                if let Ok(Ok(addrs)) = resolved && addrs.iter().any(|a| private_ip(a.ip())) {
+                // Endereço que não se conferiu não abre: poderia ser a rede deste computador.
+                let Ok(Ok(addrs)) = resolved else {
+                    let _ = out.send(refusal(id, "não foi possível verificar o endereço")).await;
+                    return;
+                };
+                if addrs.iter().any(|a| private_ip(a.ip())) {
                     let _ = out.send(refusal(id, LOCAL_REFUSED)).await;
                     return;
                 }

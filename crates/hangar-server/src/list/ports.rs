@@ -132,7 +132,10 @@ pub(crate) fn resolve(cache: &mut Outsiders, scan: &Scan, alive: &dyn Fn(u32) ->
         for inode in wanted {
             let next = match (found.get(&inode), cache.inodes.get(&inode)) {
                 (Some(pid), _) => Holder::Pid(*pid),
-                (None, Some(Holder::Missing(n))) => Holder::Missing(n + 1),
+                (None, Some(Holder::Missing(n))) => {
+                    if n + 1 == ATTEMPTS { tracing::debug!(inode, "session ports: socket owner not found, giving up"); }
+                    Holder::Missing(n + 1)
+                }
                 (None, _) => Holder::Missing(1),
             };
             cache.inodes.insert(inode, next);

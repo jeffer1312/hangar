@@ -147,6 +147,20 @@ async fn nothing_listening_is_refused_with_502() {
     assert_eq!(code_of(response).await, "port_tunnel_refused");
 }
 
+/// Falha que não é "conexão recusada" é da máquina: 503, nunca "nada escutando".
+#[test]
+fn connect_failure_separates_refused_from_other_io_errors() {
+    use hangar_server::port_tunnel::connect_failure;
+    use std::io::{Error, ErrorKind};
+    let refused = connect_failure(&Error::from(ErrorKind::ConnectionRefused));
+    assert_eq!((refused.0.as_u16(), refused.1), (502, "port_tunnel_refused"));
+    for kind in [ErrorKind::PermissionDenied, ErrorKind::TimedOut, ErrorKind::AddrNotAvailable] {
+        let (status, code, msg) = connect_failure(&Error::from(kind));
+        assert_eq!((status.as_u16(), code), (503, "port_tunnel_unavailable"));
+        assert!(msg.contains(&format!("{kind:?}")), "{msg}");
+    }
+}
+
 /// A página de outro site do Connect manda o cookie sozinho; só ele não abre o túnel.
 #[tokio::test]
 async fn login_cookie_alone_is_refused_with_403() {
