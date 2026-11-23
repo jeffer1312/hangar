@@ -241,8 +241,12 @@ fn message_keeps_bracket_mid_line() {
 #[test]
 fn corrupt_file_set_aside_before_starting_empty() {
     let tmp = tempfile::tempdir().unwrap();
+    assert!(!store(tmp.path()).unreadable(), "arquivo ausente é ninguém pareado");
+    std::fs::write(tmp.path().join("external_pairs.json"), "[]").unwrap();
+    assert!(!store(tmp.path()).unreadable());
     std::fs::write(tmp.path().join("external_pairs.json"), "{nao e json").unwrap();
     let s = store(tmp.path());
+    assert!(s.unreadable(), "a lista vazia de um arquivo torto não prova que não há par");
     s.add(rec("s1", "pc-ana", "Y")).unwrap();
     let bad: Vec<String> = std::fs::read_dir(tmp.path()).unwrap().map(|e| e.unwrap().path())
         .filter(|p| p.file_name().unwrap().to_str().unwrap().starts_with("external_pairs.json.bad-"))

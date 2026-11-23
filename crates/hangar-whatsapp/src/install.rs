@@ -74,6 +74,9 @@ pub enum Outcome {
 /// Uma instalação, atualização ou remoção por vez; o andamento fica em memória para o `GET` da tela.
 pub type Installer = Jobs<Step, Outcome, Failure>;
 
+/// A vez guardada para uma instalação ou atualização que ainda vai começar ([`begin`]).
+pub type Reservation = jobs::Reservation<Step, Outcome, Failure>;
+
 impl Paths {
     pub fn new(home: &Path) -> Self {
         let hangar = home.join(".hangar");
@@ -163,13 +166,18 @@ impl From<service::Error> for Failure {
 ///
 /// [`Busy`] com outra tarefa ou operação em curso.
 pub fn spawn(installer: &Installer, kind: &'static str, ctx: Context) -> Result<(), Busy> {
-    let started = installer.start(kind, Step::Download, move |progress| async move {
+    installer.reserve(kind, Step::Download).map(|reservation| begin(reservation, ctx))
+}
+
+/// Começa em segundo plano a tarefa da vez guardada (`install` ou `update`).
+pub fn begin(reservation: Reservation, ctx: Context) {
+    let kind = reservation.kind();
+    drop(reservation.start(move |progress| async move {
         match kind {
             "update" => update(&ctx, &*progress).await,
             _ => install(&ctx, &*progress).await,
         }
-    });
-    started.map(drop)
+    }));
 }
 
 /// A instalação que o registro aponta, com o programa no disco.
@@ -280,11 +288,18 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
     let client = Client::new(ctx.paths.data.clone());
     let before = client.claimed().map(|c| c.pid);
     progress(Step::Service);
-    service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&binary)).await?;
+    // No Windows o registro para o processo antigo antes de poder falhar ao ligar o novo.
+    let registered = service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&binary)).await.map_err(Failure::from);
     progress(Step::Start);
     // O registro só passa para a versão nova depois de ela responder: senão a próxima tentativa diria
-    // "atualizado" sem nada rodando.
-    if let Err(failure) = wait_up(&client, &version, before).await {
+    // "atualizado" sem nada rodando. Sem o registro gravado, o serviço também volta: ele e o registro
+    // apontam sempre para a mesma versão.
+    let up = match registered {
+        Ok(()) => wait_up(&client, &version, before).await,
+        Err(failure) => Err(failure),
+    };
+    let new = Installed { tag: latest.tag, binary };
+    if let Err(failure) = up.and_then(|()| write_record(&ctx.paths, &new)) {
         let back = service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&old.binary)).await;
         return Err(match back {
             Ok(()) => failure,
@@ -292,8 +307,6 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
                 format!("{}; e o serviço não voltou para {}: {}: {}", failure.detail, old.tag, e.step, e.detail)),
         });
     }
-    let new = Installed { tag: latest.tag, binary };
-    write_record(&ctx.paths, &new)?;
     if let Some(dir) = old.binary.parent().filter(|d| Some(*d) != new.binary.parent())
         && let Err(error) = std::fs::remove_dir_all(dir) {
         tracing::warn!(dir = %dir.display(), %error, "whatsapp: atualizado, mas a pasta da versão anterior ficou");
@@ -328,9 +341,9 @@ async fn wait_up(client: &Client, version: &str, before: Option<u32>) -> Result<
         match client.claimed() {
             Some(control) if Some(control.pid) == before => last = "ainda o processo anterior".into(),
             Some(_) => match client.status().await {
-                Ok(status) => match status["version"].as_str() {
-                    Some(running) if running != version => last = format!("respondeu a versão {running}"),
-                    _ => return Ok(()),
+                Ok(status) => match same_version(&status, version) {
+                    Ok(()) => return Ok(()),
+                    Err(why) => last = why,
                 },
                 Err(CallError::Off(detail) | CallError::Untrusted(detail) | CallError::Transport(detail)) => last = detail,
             },
@@ -339,6 +352,15 @@ async fn wait_up(client: &Client, version: &str, before: Option<u32>) -> Result<
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     Err(Failure::new("whatsapp_not_started", format!("o serviço não respondeu em {}s ({last})", START_TIMEOUT.as_secs())))
+}
+
+/// O `status` assinado só prova a subida com a `version` esperada; sem o campo, não prova.
+fn same_version(status: &Value, version: &str) -> Result<(), String> {
+    match status["version"].as_str() {
+        Some(running) if running == version => Ok(()),
+        Some(running) => Err(format!("respondeu a versão {running}")),
+        None => Err("respondeu sem a versão".into()),
+    }
 }
 
 fn not_installed() -> Failure {
@@ -404,20 +426,28 @@ mod tests {
         assert_eq!(accepted_at(&paths).as_deref(), saved["at"].as_str());
     }
 
+    #[test]
+    fn only_the_expected_version_proves_the_service_is_up() {
+        assert_eq!(same_version(&json!({"version": "0.1.1", "state": "connected"}), "0.1.1"), Ok(()));
+        assert_eq!(same_version(&json!({"version": "0.1.0"}), "0.1.1"), Err("respondeu a versão 0.1.0".into()));
+        assert_eq!(same_version(&json!({"state": "connected"}), "0.1.1"), Err("respondeu sem a versão".into()));
+        assert_eq!(same_version(&json!({"version": 1}), "0.1.1"), Err("respondeu sem a versão".into()), "versão que não é texto");
+    }
+
     #[tokio::test]
     async fn the_job_json_uses_the_whatsapp_names() {
         let installer = Installer::default();
         installer.start("install", Step::Download, |progress| async move {
             progress(Step::Service);
             Err(Failure::new("whatsapp_hash", "x"))
-        }).unwrap().await.unwrap();
+        }).unwrap().await;
         assert_eq!(installer.job(), json!({"kind": "install", "step": "service", "done": true,
             "error": {"code": "whatsapp_hash", "detail": "x"}, "outcome": null}));
         installer.forget();
-        installer.start("update", Step::Download, |_| async { Ok(Outcome::Updated) }).unwrap().await.unwrap();
+        installer.start("update", Step::Download, |_| async { Ok(Outcome::Updated) }).unwrap().await;
         assert_eq!(installer.job()["outcome"], "updated");
         installer.forget();
-        installer.start("update", Step::Download, |_| async { Ok(Outcome::AlreadyLatest) }).unwrap().await.unwrap();
+        installer.start("update", Step::Download, |_| async { Ok(Outcome::AlreadyLatest) }).unwrap().await;
         assert_eq!(installer.job()["outcome"], "already_latest");
     }
 

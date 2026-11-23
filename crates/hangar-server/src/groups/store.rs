@@ -38,6 +38,23 @@ impl PairDir {
         read_sidecar(&self.sidecar_path(name), name)
     }
 
+    /// [`PairDir::sidecar`] para quem precisa saber se o grupo é entre máquinas: arquivo que não é objeto
+    /// ou `fed` torto é erro, nunca "sem grupo" nem "grupo de uma máquina".
+    pub fn sidecar_strict(&self, name: &str) -> Result<Option<Sidecar>, StoreError> {
+        let raw = match std::fs::read(self.sidecar_path(name)) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let torto = |what: &str| StoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_owned()));
+        let Value::Object(data) = serde_json::from_slice(&raw)? else { return Err(torto("sidecar não é um objeto")) };
+        let sidecar = Sidecar::parse(name, &data);
+        if sidecar.as_ref().is_some_and(|s| s.fed.is_none()) && data.get("fed").is_some_and(|f| !f.is_null()) {
+            return Err(torto("fed torto no sidecar"));
+        }
+        Ok(sidecar)
+    }
+
     /// Última escrita do sidecar: a janela de lançamento do grupo `orq` conta daqui.
     pub fn sidecar_modified(&self, name: &str) -> std::io::Result<std::time::SystemTime> {
         std::fs::metadata(self.sidecar_path(name))?.modified()

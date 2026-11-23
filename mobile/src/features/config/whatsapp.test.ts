@@ -106,6 +106,21 @@ describe('isWhatsAppState', () => {
     expect(isWhatsAppState({ service: 'running' })).toBe(false);
     expect(isWhatsAppState(null)).toBe(false);
   });
+
+  it('confere o job e o status que a página desenha, aceitando os nulos', () => {
+    const connected = base('running', { state: 'connected', device: '+55 64 ****-1234', device_name: null, totals: { messages: 3 } });
+    expect(isWhatsAppState(connected)).toBe(true);
+    expect(isWhatsAppState({ ...connected, status: { ...connected.status, device: 123 } })).toBe(false);
+    expect(isWhatsAppState({ ...connected, status: { ...connected.status, state: undefined } })).toBe(false);
+    expect(isWhatsAppState({ ...connected, status: { ...connected.status, totals: { messages: '3' } } })).toBe(false);
+    expect(isWhatsAppState({ ...connected, status: { ...connected.status, error: { code: 7 } } })).toBe(false);
+    expect(isWhatsAppState({ ...connected, status: 'connected' })).toBe(false);
+    const job = { kind: 'install', step: 'service', done: false, error: null };
+    expect(isWhatsAppState({ ...connected, job })).toBe(true);
+    expect(isWhatsAppState({ ...connected, job: { ...job, error: { code: 'whatsapp_hash' } } })).toBe(true);
+    expect(isWhatsAppState({ ...connected, job: { ...job, done: 'no' } })).toBe(false);
+    expect(isWhatsAppState({ ...connected, qr_svg: 5 })).toBe(false);
+  });
 });
 
 describe('codeOf', () => {

@@ -132,8 +132,11 @@ pub struct AppState {
     /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
     pub voice: Arc<crate::voice::hub::VoiceHub>,
     pub speech: Arc<crate::speech::Service>,
-    /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (sem convites nem par).
+    /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (sem convites nem par) ou com
+    /// [`AppState::share_unavailable`].
     pub share: Option<Arc<crate::share::ShareState>>,
+    /// A configuração de convites existe mas não se carregou: `share` é `None` sem provar que não há convite nem par.
+    pub share_unavailable: bool,
     /// A porta do convidado já está escutando; a saúde anuncia.
     pub guest_bound: std::sync::atomic::AtomicBool,
     /// Instalar o SideStore no iPhone/iPad do cabo; o teste troca aparelho e Apple por falsos.
@@ -269,9 +272,14 @@ impl AppState {
         let connect_devices = Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None));
         let connect_supervisor = Arc::new(crate::connect::supervisor::Supervisor::new(hangar_dir.join("connect"),
             crate::runtime::local_policy::log_base().unwrap_or_else(|| hangar_dir.join("logs")), connect_devices.clone(), cfg.listen.port()));
-        let share = match crate::config::GuestEnv::from_env() {
-            Ok(guest) => crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone(), Some(connect_supervisor.clone())),
-            Err(e) => { tracing::error!("{e}"); None }
+        let (share, share_unavailable) = match crate::config::GuestEnv::from_env() {
+            Ok(guest) => {
+                let configured = guest.shares_file.is_some();
+                let share = crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone(), Some(connect_supervisor.clone()));
+                let unavailable = configured && share.is_none();
+                (share, unavailable)
+            }
+            Err(e) => { tracing::error!("{e}"); (None, true) }
         };
         if let Some(share) = &share { list.set_shares(share.clone()); }
         let device_install = {
@@ -341,7 +349,7 @@ impl AppState {
             btw_programs: Default::default(),
             voice: Arc::new(crate::voice::hub::VoiceHub::new()),
             speech: Arc::default(),
-            share, guest_bound: Default::default() }
+            share, share_unavailable, guest_bound: Default::default() }
     }
 
     pub(crate) fn skill_origins(&self, repo: &std::path::Path) -> crate::costs::origins::Origins {

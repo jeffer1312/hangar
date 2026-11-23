@@ -37,14 +37,21 @@ impl ExternalPair {
     pub fn address(&self) -> String { format!("{}::{}", self.alias, self.peer_session) }
 }
 
-pub struct PairStore { path: PathBuf, state: Mutex<Vec<ExternalPair>> }
+/// `unreadable`: o arquivo não se leu na abertura e foi posto de lado; a lista vazia não prova que não há par.
+pub struct PairStore { path: PathBuf, state: Mutex<Vec<ExternalPair>>, unreadable: bool }
 
 impl PairStore {
     pub fn open(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let state = Mutex::new(load(&path));
-        Self { path, state }
+        let (pairs, unreadable) = match load(&path) {
+            Some(pairs) => (pairs, false),
+            None => (Vec::new(), true),
+        };
+        Self { path, state: Mutex::new(pairs), unreadable }
     }
+
+    /// O arquivo de pares não se leu nesta vida do servidor: quem precisa saber se há par de fora não sabe.
+    pub fn unreadable(&self) -> bool { self.unreadable }
 
     fn lock(&self) -> MutexGuard<'_, Vec<ExternalPair>> { self.state.lock().unwrap_or_else(|e| e.into_inner()) }
 
@@ -118,13 +125,13 @@ impl PairStore {
     }
 }
 
-/// Arquivo torto vai para o lado: a próxima gravação apagaria tokens que ainda dá para recuperar.
-fn load(path: &Path) -> Vec<ExternalPair> {
+/// Arquivo torto vai para o lado: a próxima gravação apagaria tokens que ainda dá para recuperar. `None` = ilegível.
+fn load(path: &Path) -> Option<Vec<ExternalPair>> {
     let error = match std::fs::read(path) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Some(Vec::new()),
         Err(e) => e.to_string(),
         Ok(raw) => match serde_json::from_slice(&raw) {
-            Ok(state) => return state,
+            Ok(state) => return Some(state),
             Err(e) => e.to_string(),
         },
     };
@@ -135,7 +142,7 @@ fn load(path: &Path) -> Vec<ExternalPair> {
     if let Err(e) = std::fs::rename(path, &bad) {
         tracing::warn!(code = "external_pairs_quarantine_failed", error = %e, "par externo: não consegui pôr o arquivo ilegível de lado");
     }
-    Vec::new()
+    None
 }
 
 pub fn slug(owner: &str) -> String {

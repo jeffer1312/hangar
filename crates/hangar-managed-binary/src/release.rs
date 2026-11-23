@@ -7,6 +7,8 @@ use std::time::Duration;
 use crate::ErrorCodes;
 
 const MAX_DOWNLOAD: usize = 200 << 20;
+/// Teto do programa descompactado, bem acima dos maiores publicados (dezenas de MiB): o pacote pode expandir muito mais que o download.
+const MAX_PROGRAM: u64 = 512 << 20;
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const LATEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -203,19 +205,26 @@ pub fn checksum_for(checksums: &str, asset: &str) -> Option<String> {
 }
 
 fn extract(data: &[u8], member: &str) -> Result<Vec<u8>, Error> {
-    let mut content = Vec::new();
+    extract_within(data, member, MAX_PROGRAM)
+}
+
+/// O membro `member` do pacote, lido até `limit` bytes: passou disso, o pacote não serve, antes de ir ao disco.
+fn extract_within(data: &[u8], member: &str, limit: u64) -> Result<Vec<u8>, Error> {
+    let read = |reader: &mut dyn Read| {
+        let mut content = Vec::new();
+        reader.take(limit + 1).read_to_end(&mut content).map_err(|_| Error::BinaryMissing)?;
+        if content.len() as u64 > limit { Err(Error::BinaryMissing) } else { Ok(content) }
+    };
     if data.starts_with(b"PK") {
         let mut archive = zip::ZipArchive::new(Cursor::new(data)).map_err(|_| Error::BinaryMissing)?;
         let mut file = archive.by_name(member).map_err(|_| Error::BinaryMissing)?;
-        file.read_to_end(&mut content).map_err(|_| Error::BinaryMissing)?;
-        return Ok(content);
+        return read(&mut file);
     }
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(data));
     for entry in archive.entries().map_err(|_| Error::BinaryMissing)? {
         let mut entry = entry.map_err(|_| Error::BinaryMissing)?;
         if entry.path().map_err(|_| Error::BinaryMissing)?.to_str() == Some(member) {
-            entry.read_to_end(&mut content).map_err(|_| Error::BinaryMissing)?;
-            return Ok(content);
+            return read(&mut entry);
         }
     }
     Err(Error::BinaryMissing)
@@ -353,6 +362,14 @@ mod tests {
         let empty = tar_gz("hangar-whatsapp", b"");
         assert_eq!(install(&empty, &sha256_hex(&empty), "hangar-whatsapp", &dir.path().join("z")), Err(Error::BinaryMissing));
         assert!(!dir.path().join("z").exists(), "programa vazio não é publicado");
+    }
+
+    #[test]
+    fn a_member_larger_than_the_limit_is_refused_in_both_formats() {
+        for (data, member) in [(tar_gz("hangar-whatsapp", b"12345678"), "hangar-whatsapp"), (zipped("hangar-whatsapp.exe", b"12345678"), "hangar-whatsapp.exe")] {
+            assert_eq!(extract_within(&data, member, 8), Ok(b"12345678".to_vec()), "no teto ainda serve");
+            assert_eq!(extract_within(&data, member, 7), Err(Error::BinaryMissing), "um byte acima não serve");
+        }
     }
 
     #[test]

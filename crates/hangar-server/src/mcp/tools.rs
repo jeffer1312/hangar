@@ -496,25 +496,33 @@ impl Tools {
         let (me, voice) = self.caller(headers).await?;
         if !voice { self.whatsapp_unshared(&me).await?; }
         let value = self.answer(Some(&me), method, path, body, coded).await?;
+        // Um convite ou par feito enquanto a rota respondia não recebe a leitura: confere de novo antes de devolver.
+        if !voice { self.whatsapp_unshared(&me).await?; }
         Ok(dict(whatsapp::third_party(value, trim, whatsapp::LIMIT)))
     }
 
-    /// Falha fechada: grupo, convites, convidados ou registro da dona que não se lê também recusa. As leituras independentes
-    /// correm juntas; a recusa segue a ordem das conferências.
+    /// Falha fechada: grupo (ou o `fed` dele), convites, pares externos, convidados ou registro da dona que não se lê
+    /// também recusa. As leituras independentes correm juntas; a recusa segue a ordem das conferências.
     async fn whatsapp_unshared(&self, me: &str) -> Result<(), String> {
         let link = async {
             match &self.st.groups {
-                Some(groups) => groups.link(me).await.map_err(|_| unshared_failed("grupo da sessão ilegível")),
+                Some(groups) => groups.link_strict(me).await.map_err(|_| unshared_failed("grupo da sessão ilegível")),
                 None => Ok(None),
             }
         };
         // A vida pela mesma fonte que o porteiro do convidado usa: sessão de outra vida com o mesmo nome não é dele.
         let (link, life) = tokio::join!(link, crate::login_guests::gate::session_life(&self.st, me));
         let link = link?;
-        // Sem a loja de convites (configuração de convidados ilegível na subida) não há como saber: recusa.
-        let Some(share) = &self.st.share else { return Err(unshared_failed("estado de compartilhamento indisponível")) };
-        if whatsapp::shared_here(&share.store, &share.pairs, me, link.as_ref()) {
-            return Err(whatsapp::SHARED_REFUSAL.into());
+        match &self.st.share {
+            // Configuração de convidados que não se carregou não prova que não há convite nem par: recusa.
+            None if self.st.share_unavailable => return Err(unshared_failed("estado de compartilhamento indisponível")),
+            // Sem configuração de convites não há convite nem par a conferir.
+            None => {}
+            Some(share) if share.pairs.unreadable() => return Err(unshared_failed("arquivo de pares externos ilegível")),
+            Some(share) if whatsapp::shared_here(&share.store, &share.pairs, me, link.as_ref()) => {
+                return Err(whatsapp::SHARED_REFUSAL.into());
+            }
+            Some(_) => {}
         }
         let (guests, record) = tokio::join!(self.guest_unseen(me, life), self.owner_record_unshared(link));
         guests.and(record)

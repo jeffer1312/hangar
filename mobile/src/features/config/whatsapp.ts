@@ -10,11 +10,32 @@ export const STEPS = ['download', 'service', 'start'] as const;
 export const PAIR_GRACE_MS = 10_000;
 export const POLL_MS = 1_000;
 
-/** Resposta fora do formato vira erro de leitura, não uma tela inventada. */
+type Fields = Record<string, unknown>;
+const isFields = (v: unknown): v is Fields => !!v && typeof v === 'object' && !Array.isArray(v);
+/** Ausente ou `null` também vale: os campos opcionais que a tela lê. */
+const optText = (v: unknown) => v === undefined || v === null || typeof v === 'string';
+const optCode = (v: unknown) => optText(v) || (isFields(v) && typeof v.code === 'string');
+
+function isJob(v: unknown): boolean {
+  if (v === undefined || v === null) return true;
+  return isFields(v) && typeof v.done === 'boolean' && typeof v.kind === 'string' && typeof v.step === 'string' && optCode(v.error);
+}
+
+function isStatus(v: unknown): boolean {
+  if (v === undefined || v === null) return true;
+  if (!isFields(v) || typeof v.state !== 'string' || !optCode(v.error)) return false;
+  const texts = ['device', 'device_name', 'pair_code', 'pair_code_expires_at', 'qr_expires_at', 'since', 'last_message_at'];
+  if (!texts.every((key) => optText(v[key]))) return false;
+  const totals = v.totals;
+  return totals === undefined || totals === null
+    || (isFields(totals) && Object.values(totals).every((n) => n === undefined || n === null || typeof n === 'number'));
+}
+
+/** Resposta fora do formato vira erro de leitura, não uma tela inventada nem exceção no desenho. */
 export function isWhatsAppState(v: unknown): v is WhatsAppState {
-  if (!v || typeof v !== 'object') return false;
-  const s = v as Partial<WhatsAppState>;
-  return typeof s.installed === 'boolean' && (s.service === 'running' || s.service === 'stopped' || s.service === 'absent');
+  if (!isFields(v)) return false;
+  return typeof v.installed === 'boolean' && (v.service === 'running' || v.service === 'stopped' || v.service === 'absent')
+    && optText(v.accepted_at) && optText(v.qr_svg) && optText(v.status_error) && isJob(v.job) && isStatus(v.status);
 }
 
 export function viewOf(state: WhatsAppState): WhatsAppView {

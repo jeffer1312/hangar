@@ -52,8 +52,9 @@ impl Error {
 }
 
 pub fn systemd_unit(s: &Service) -> String {
-    // `%` é especificador do systemd (`%b`, `%h`): no caminho ele vale literal.
-    let escape = |text: String| text.replace('%', "%%");
+    // `%` é especificador do systemd (`%b`, `%h`) e `$` é variável de ambiente, mesmo entre aspas: no
+    // caminho os dois valem literais.
+    let escape = |text: String| text.replace('%', "%%").replace('$', "$$");
     let quote = |p: &Path| format!("\"{}\"", escape(p.display().to_string().replace('\\', "\\\\").replace('"', "\\\"")));
     let mut exec = quote(&s.executable);
     for arg in &s.args {
@@ -295,8 +296,9 @@ pub async fn unregister(home: &Path, managed_dir: &Path, id: &ServiceId) -> Resu
 /// O que o gerenciador diz do processo do serviço.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProcessState {
-    /// Algum processo existe, ou vai existir logo (o `Restart=always` esperando o `RestartSec`). Sem como
-    /// perguntar (Windows) ou sem a unit, `false`.
+    /// Algum processo existe, ou pode existir logo: a unit esperando o `RestartSec`, o LaunchAgent carregado
+    /// (o `KeepAlive` religa) ou a tarefa em qualquer estado que não seja pronta ou desligada. Sem a unit
+    /// ou o plist, `false`.
     pub running: bool,
     /// Sem processo de pé, o código com que o último saiu sozinho (morte por sinal não conta). `None` sem
     /// como saber.
@@ -309,10 +311,6 @@ pub struct ProcessState {
 ///
 /// O gerenciador não respondeu (comando que não abre ou sai com erro): quem guarda um apagamento recusa.
 pub async fn process_running(home: &Path, id: &ServiceId) -> Result<bool, Error> {
-    // No Windows a resposta é sempre `false`: sem abrir o PowerShell à toa.
-    if cfg!(windows) {
-        return Ok(false);
-    }
     Ok(query(home, id, None).await?.running)
 }
 
@@ -389,7 +387,8 @@ fn systemd_state(show: &str) -> ProcessState {
 }
 
 /// O dicionário do `launchctl list <label>`: `"PID" = n;` com o processo de pé e `"LastExitStatus" = n;` com o
-/// status de espera cru, o código nos bits altos e o sinal nos baixos.
+/// status de espera cru, o código nos bits altos e o sinal nos baixos. Só um serviço carregado responde, e o
+/// `KeepAlive` do plist o religa: sem PID ele continua contando como de pé.
 fn launchd_state(list: &str) -> ProcessState {
     let field = |key: &str| list.lines().find_map(|line| {
         line.trim().strip_prefix(&format!("\"{key}\" = "))?.trim_end_matches(';').trim().parse::<i64>().ok()
@@ -398,17 +397,18 @@ fn launchd_state(list: &str) -> ProcessState {
         return ProcessState { running: true, last_exit: None };
     }
     let last_exit = field("LastExitStatus").filter(|raw| *raw >= 0 && raw & 0xff == 0).and_then(|raw| i32::try_from(raw >> 8).ok());
-    ProcessState { running: false, last_exit }
+    ProcessState { running: true, last_exit }
 }
 
 /// `State=` e `LastTaskResult=` da tarefa: o `.vbs` sai com o código do programa, que vira o resultado dela.
 /// Sem o programa ou o `.vbs` no disco (`files_present` falso), o resultado é do Windows, não do programa: o 3
-/// também é `ERROR_PATH_NOT_FOUND`. `running` continua `false`: a tarefa de pé não prova que o programa já abriu
-/// os dados.
+/// também é `ERROR_PATH_NOT_FOUND`. `running` só é `false` com a tarefa pronta (`Ready`) ou desligada
+/// (`Disabled`): rodando, na fila ou em estado desconhecido, o programa pode estar abrindo os dados.
 fn task_state(out: &str, files_present: bool) -> ProcessState {
-    let ran = files_present && key_value(out, "State") != "Running";
+    let state = key_value(out, "State");
+    let ran = files_present && state != "Running";
     let last_exit = if ran { key_value(out, "LastTaskResult").parse().ok() } else { None };
-    ProcessState { running: false, last_exit }
+    ProcessState { running: !matches!(state, "Ready" | "Disabled"), last_exit }
 }
 
 #[cfg(test)]
@@ -435,6 +435,8 @@ mod tests {
             Restart=always\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n");
         let odd = systemd_unit(&service("/home/a%b/hangar-whatsapp", "/home/a\"b/dados"));
         assert!(odd.contains("ExecStart=\"/home/a%%b/hangar-whatsapp\" --data \"/home/a\\\"b/dados\"\n"), "{odd}");
+        let dollar = systemd_unit(&service("/home/${HOME}/hangar-whatsapp", "/home/$USER/dados"));
+        assert!(dollar.contains("ExecStart=\"/home/$${HOME}/hangar-whatsapp\" --data \"/home/$$USER/dados\"\n"), "{dollar}");
         let bare = systemd_unit(&Service { id: WHATSAPP, executable: "/x/p".into(), args: Vec::new() });
         assert!(bare.contains("ExecStart=\"/x/p\"\n"), "sem argumentos: {bare}");
     }
@@ -516,7 +518,7 @@ mod tests {
     #[test]
     fn launchd_and_the_task_report_the_last_exit_code_too() {
         let gone = "{\n\t\"Label\" = \"dev.hangar.whatsapp\";\n\t\"LastExitStatus\" = 768;\n};\n";
-        assert_eq!(launchd_state(gone), ProcessState { running: false, last_exit: Some(3) });
+        assert_eq!(launchd_state(gone), ProcessState { running: true, last_exit: Some(3) }, "carregado sem PID: o KeepAlive religa");
         let up = "{\n\t\"PID\" = 4321;\n\t\"LastExitStatus\" = 768;\n};\n";
         assert_eq!(launchd_state(up), ProcessState { running: true, last_exit: None });
         assert_eq!(launchd_state("{\n\t\"LastExitStatus\" = 9;\n};\n").last_exit, None, "sinal");
@@ -526,6 +528,18 @@ mod tests {
         assert_eq!(task_state("State=Running\r\nLastTaskResult=267009\r\n", true).last_exit, None);
         assert_eq!(task_state("State=Ready\r\nLastTaskResult=4294967295\r\n", true).last_exit, None, "Stop-Process -Force");
         assert_eq!(task_state("", true).last_exit, None);
+    }
+
+    /// Só a tarefa pronta ou desligada conta como parada: apagar com o programa abrindo os bancos não vale.
+    #[test]
+    fn only_a_ready_or_disabled_task_counts_as_stopped() {
+        let running = |state: &str| task_state(&format!("State={state}\r\nLastTaskResult=0\r\n"), true).running;
+        assert!(!running("Ready"));
+        assert!(!running("Disabled"));
+        assert!(running("Running"));
+        assert!(running("Queued"), "na fila para subir");
+        assert!(running("Unknown"));
+        assert!(task_state("", true).running, "saída sem estado não confirma a parada");
     }
 
     /// O `systemctl` que não abre ou sai com erro é erro, nunca "parado"; sem a unit no disco não se pergunta.

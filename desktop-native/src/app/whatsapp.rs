@@ -107,25 +107,31 @@ fn code_of(error: &Value) -> Option<String> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum View { Off, Working, Stopped, SchemaNewer, SchemaNewerLatest, Unreachable, Unpaired, Pairing, Connected, Outdated, Unknown }
 
+/// Em ordem: job em curso, desinstalado, serviço de pé (pelo `status`), dados mais novos e parado.
 fn view_of(state: &WaState) -> View {
-    if state.job.as_ref().is_some_and(|job| !job.done) { return View::Working; }
-    if !state.installed { return View::Off; }
-    if state.service != Service::Running {
+    let working = state.job.as_ref().is_some_and(|job| !job.done);
+    let schema_newer = state.status_error.as_deref() == Some("whatsapp_schema_newer");
+    match (working, state.installed, state.service, state.status.as_ref()) {
+        (true, ..) => View::Working,
+        (_, false, ..) => View::Off,
+        (_, _, Service::Running, None) => View::Unreachable,
+        (_, _, Service::Running, Some(status)) => match status.state.as_str() {
+            "connected" => View::Connected,
+            "outdated" => View::Outdated,
+            "pairing" => View::Pairing,
+            "unpaired" | "logged_out" => View::Unpaired,
+            _ => View::Unknown,
+        },
         // Religar não adianta: só um binário mais novo abre esses dados. Atualizar que não achou outro também não.
-        return match state.status_error.as_deref() {
-            Some("whatsapp_schema_newer") if already_latest(state) => View::SchemaNewerLatest,
-            Some("whatsapp_schema_newer") => View::SchemaNewer,
-            _ => View::Stopped,
-        };
+        _ if schema_newer && already_latest(state) => View::SchemaNewerLatest,
+        _ if schema_newer => View::SchemaNewer,
+        _ => View::Stopped,
     }
-    let Some(status) = &state.status else { return View::Unreachable };
-    match status.state.as_str() {
-        "connected" => View::Connected,
-        "outdated" => View::Outdated,
-        "pairing" => View::Pairing,
-        "unpaired" | "logged_out" => View::Unpaired,
-        _ => View::Unknown,
-    }
+}
+
+/// O pedido de QR não começou: a releitura diz desvinculado sem pedido em voo nem a espera logo depois dele.
+fn pair_not_started(view: View, pairing_in_flight: bool, awaiting: bool) -> bool {
+    view == View::Unpaired && !pairing_in_flight && !awaiting
 }
 
 /// A última atualização terminou sem achar release mais nova que a instalada.
@@ -229,17 +235,19 @@ impl Hangar {
         if !page_seen().swap(true, std::sync::atomic::Ordering::Relaxed) { self.runtime.spawn_blocking(crate::appearance::mark_whatsapp_page_seen); }
         let w = &mut self.whatsapp;
         w.reset_pairing();
-        if w.busy.is_none() { (w.error, w.unlink_on_phone) = (None, false); }
+        // O aviso de tirar o aparelho no celular fica até outra ação: a pessoa pode não ter lido ainda.
+        if w.busy.is_none() { w.error = None; }
         self.whatsapp_read(false, cx);
     }
 
-    /// Fora da página: a releitura para e o QR sai da memória.
+    /// Fora da página: a releitura para e o QR sai da memória, o desenho e o SVG do último estado.
     pub(super) fn whatsapp_page_left(&mut self) {
         let w = &mut self.whatsapp;
         if let Some(task) = w.poll.take() { task.abort(); }
         w.state.seq += 1;
         w.state.loading = false;
         (w.qr, w.qr_wanted) = (None, false);
+        if let Some(Ok(state)) = w.state.value.as_mut() { state.qr_svg = None; }
     }
 
     fn whatsapp_read(&mut self, delay: bool, cx: &mut Context<Self>) {
@@ -285,8 +293,11 @@ impl Hangar {
                         (Some(svg), _) => Some((svg.clone(), Arc::new(Image::from_bytes(ImageFormat::Svg, svg.as_bytes().to_vec())))),
                         (None, _) => None,
                     };
+                    let awaiting = w.awaiting_pair.is_some_and(|until| Instant::now() < until);
                     match view_of(state) {
                         View::Connected => w.reset_pairing(),
+                        // O pedido falhou ou a espera passou sem pareamento: o botão de pedir o QR volta.
+                        view if pair_not_started(view, w.busy == Some(Act::Pair), awaiting) => (w.qr_wanted, w.awaiting_pair) = (false, None),
                         View::Unpaired => {}
                         _ => w.awaiting_pair = None,
                     }
@@ -308,8 +319,9 @@ impl Hangar {
                     Err(error) if matches!(act, Act::Install | Act::Update) && error.code.as_deref() == Some("whatsapp_busy") => {}
                     Err(error) => w.error = Some(failure_text(&error)),
                 }
-                // A ação pode ter chegado antes da queda; a releitura mostra o estado real.
-                self.whatsapp_read(false, cx);
+                // A ação pode ter chegado antes da queda; a releitura mostra o estado real. Fora da página não relê:
+                // a reabertura já consulta o servidor, e o QR não volta à memória com a página fechada.
+                if self.settings == Some(Page::WhatsApp) { self.whatsapp_read(false, cx); }
             }
         }
         cx.notify();
@@ -720,7 +732,7 @@ fn render_working(state: &WaState) -> Stateful<Div> {
 
 #[cfg(test)]
 mod tests {
-    use super::{act_timeout, code_of, code_text, failed_job, parse_state, phone_digits, should_poll, step_states, view_of, Act, CliproxyItem, View, STEPS};
+    use super::{act_timeout, code_of, code_text, failed_job, pair_not_started, parse_state, phone_digits, should_poll, step_states, view_of, Act, CliproxyItem, View, STEPS};
     use core::prelude::v1::test;
     use serde_json::json;
 
@@ -815,6 +827,15 @@ mod tests {
         assert!(should_poll(&pairing, false));
         assert!(!should_poll(&unpaired, false));
         assert!(should_poll(&unpaired, true));
+    }
+
+    /// Desvinculado depois do pedido que falhou, ou da espera que passou, devolve o botão de pedir o QR.
+    #[test]
+    fn the_qr_request_comes_back_when_pairing_did_not_start() {
+        assert!(pair_not_started(View::Unpaired, false, false));
+        assert!(!pair_not_started(View::Unpaired, true, false), "pedido ainda em voo");
+        assert!(!pair_not_started(View::Unpaired, false, true), "logo depois do pedido o estado ainda vem desvinculado");
+        assert!(!pair_not_started(View::Pairing, false, false));
     }
 
     #[test]

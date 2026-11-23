@@ -1,5 +1,6 @@
 //! Instalar e atualizar o proxy, uma tarefa por vez, com o andamento consultável pela tela.
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use hangar_managed_binary::jobs::{self, Jobs};
@@ -77,7 +78,20 @@ pub struct Context {
 #[derive(Default)]
 pub struct Installer {
     jobs: Jobs<Step, Outcome, Failure>,
-    latest: tokio::sync::Mutex<Option<(Instant, Result<Release, String>)>>,
+    /// A release lida, a hora e o [`Installer::finished`] de quando foi lida.
+    latest: tokio::sync::Mutex<Option<(Instant, u64, Result<Release, String>)>>,
+    /// Conta as tarefas terminadas; sobe antes de o resultado delas aparecer, até no pânico, para quem vê
+    /// `done: true` nunca receber a release guardada antes da tarefa.
+    finished: Arc<AtomicU64>,
+}
+
+/// Soltar conta uma tarefa terminada: vive dentro do trabalho, que a tarefa vigiada solta antes de gravar o resultado.
+struct Finished(Arc<AtomicU64>);
+
+impl Drop for Finished {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 /// O que a rota de gerenciamento respondeu: a versão vem no cabeçalho mesmo quando a senha é recusada.
@@ -712,22 +726,18 @@ pub async fn adopt(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Re
 }
 
 impl Installer {
-    pub fn start(self: &Arc<Self>, kind: &'static str, ctx: Context) -> Result<(), Busy> {
+    pub fn start(&self, kind: &'static str, ctx: Context) -> Result<(), Busy> {
         let first = if kind == "install" { Step::Config } else { Step::Download };
-        let done = self.jobs.start(kind, first, move |progress| async move {
+        // A tarefa pode ter trocado a versão: a próxima leitura da release mais nova vai ao GitHub.
+        let finished = Finished(self.finished.clone());
+        self.jobs.start(kind, first, move |progress| async move {
+            let _finished = finished;
             match kind {
                 "update" => update(&ctx, &*progress).await,
                 "adopt" => adopt(&ctx, &*progress).await,
                 _ => install(&ctx, &*progress).await,
             }
-        })?;
-        // A tarefa pode ter trocado a versão: a próxima leitura da release mais nova vai ao GitHub.
-        let this = self.clone();
-        tokio::spawn(async move {
-            let _ = done.await;
-            *this.latest.lock().await = None;
-        });
-        Ok(())
+        }).map(drop)
     }
 
     /// `{kind,step,done,error,outcome}` ou `null`.
@@ -738,14 +748,15 @@ impl Installer {
     /// A release mais nova, relida no máximo uma vez por hora; falha fica guardada só 5 min, para a rede que voltou não esperar a hora.
     pub async fn latest(&self, github: &Github) -> Result<Release, String> {
         let mut cached = self.latest.lock().await;
-        let fresh = |(at, value): &(Instant, Result<Release, String>)| {
-            at.elapsed() < if value.is_ok() { LATEST_TTL } else { LATEST_FAILURE_TTL }
+        let finished = self.finished.load(Ordering::SeqCst);
+        let fresh = |(at, seen, value): &(Instant, u64, Result<Release, String>)| {
+            *seen == finished && at.elapsed() < if value.is_ok() { LATEST_TTL } else { LATEST_FAILURE_TTL }
         };
-        if let Some((_, value)) = cached.as_ref().filter(|entry| fresh(entry)) {
+        if let Some((_, _, value)) = cached.as_ref().filter(|entry| fresh(entry)) {
             return value.clone();
         }
         let value = release::latest(github).await.map_err(|e| release::code(&e).to_owned());
-        *cached = Some((Instant::now(), value.clone()));
+        *cached = Some((Instant::now(), finished, value.clone()));
         value
     }
 }
@@ -884,6 +895,7 @@ mod tests {
         // estavel: o Installer não expõe sinal de fim; confere o estado publicado com teto de 10 s, que só estoura se travar.
         while installer.job()["done"] != true && Instant::now() < deadline { tokio::time::sleep(Duration::from_millis(20)).await; }
         assert_eq!(installer.job()["error"]["code"], "cliproxy_tarefa_caiu");
+        assert_eq!(installer.finished.load(Ordering::SeqCst), 1, "com done visível, a release guardada antes já não vale, até no pânico");
         assert!(installer.start("install", ctx).is_ok(), "a próxima tentativa não fica presa em ocupado");
     }
 

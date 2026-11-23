@@ -35,6 +35,10 @@ Decisões do usuário (22/11):
   par de fora não alcançam rota nenhuma. As ferramentas MCP chamam as rotas em processo pelo mesmo
   `owner_only` e, antes disso, recusam com `whatsapp_shared_session` quando a sessão que chama tem
   convite de convidado ativo ou membro de fora no grupo, porque o que ela lê chegaria a eles.
+  A conferência falha fechada (configuração de convites que não carregou, `external_pairs.json`
+  ilegível, sidecar ou `fed` tortos recusam; sem configuração de convites não há o que conferir) e
+  é refeita depois da leitura, antes de devolver. Convite criado entre essa segunda conferência e a
+  gravação da resposta no transcript não é coberto.
   Aparelho aprovado no Connect age como dono (o token do dono é reescrito na entrada) e alcança
   `/api/whatsapp*`: é o desenho de todas as rotas do dono, e aprovar um aparelho dá a ele a leitura
   do WhatsApp.

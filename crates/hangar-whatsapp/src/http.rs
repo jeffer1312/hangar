@@ -209,15 +209,14 @@ fn start_install(wa: &WhatsApp, body: &Value) -> Response {
     if body["accept"] != true {
         return refused(StatusCode::BAD_REQUEST, "whatsapp_accept_required", "ligar o WhatsApp exige aceitar o aviso de risco");
     }
-    // Recusa de ocupado antes de gravar: um 409 não registra aceite.
-    if wa.installer.busy() {
-        return busy();
-    }
+    // A vez é guardada antes de gravar: um 409 não registra aceite, e o aceite gravado sempre começa a tarefa.
+    let Ok(reservation) = wa.installer.reserve("install", install::Step::Download) else { return busy() };
     if let Err(failure) = install::accept(&wa.ctx.paths) {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: aceite não gravado");
         return refused(StatusCode::INTERNAL_SERVER_ERROR, failure.code, "não consegui gravar o aceite");
     }
-    started(wa, install::spawn(&wa.installer, "install", wa.ctx.clone()))
+    install::begin(reservation, wa.ctx.clone());
+    started(wa, Ok(()))
 }
 
 fn start_update(wa: &WhatsApp) -> Response {
@@ -256,8 +255,8 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
         Err(error) => return call_error(&error),
     }
     let Ok(_guard) = wa.installer.inline() else { return busy() };
-    // Subindo, caindo ou esperando religar, o processo pode abrir os bancos sem ter escrito o `control.json`.
-    // No Windows não há como perguntar, mas lá o arquivo aberto não se apaga e a resposta diz o que já saiu.
+    // Subindo, caindo ou esperando religar, o processo pode abrir os bancos sem ter escrito o `control.json`:
+    // só o gerenciador confirmando a parada (unit parada, LaunchAgent descarregado, tarefa pronta) libera.
     if install::current(&wa.ctx.paths).is_some()
         && let Err(response) = wipe_guard(hangar_managed_binary::service::process_running(&wa.ctx.paths.home, &install::SERVICE).await) {
         return response;

@@ -41,6 +41,22 @@ async fn scene_named(groups: bool, peers: Option<hangar_server::groups::peers::P
 
 /// `share`: a loja de convites e de pares externos em `shares.json` e `.hangar-pair` da cena.
 async fn scene_shared(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>, owned: bool, server: &str, share: bool) -> Scene {
+    scene_share(groups, peers, owned, server, if share { Share::Store } else { Share::Absent }).await
+}
+
+/// Como a cena carrega os convites e os pares externos.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Share {
+    /// Sem configuração de convites: não há convite nem par.
+    Absent,
+    /// Configuração de convites que não se carregou.
+    Unavailable,
+    Store,
+    /// A loja aberta sobre um `external_pairs.json` torto.
+    StoreWithBadPairs,
+}
+
+async fn scene_share(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>, owned: bool, server: &str, share: Share) -> Scene {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     list_support::sessions(root, 2);
@@ -79,9 +95,16 @@ async fn scene_shared(groups: bool, peers: Option<hangar_server::groups::peers::
     state.login_guests = Arc::new(hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings {
         guests: root.join("guests.json"), vault: root.join("vault.json"), runtime_config: root.join("runtime-config.json"),
         sync_enabled: false, bootstrap: String::new(), secret: vec![1], secure: false, rate_max: 10.into(), rate_window: 300.into() }));
-    if share {
+    if share == Share::StoreWithBadPairs {
+        std::fs::create_dir_all(home.join(".claude/.hangar-pair")).unwrap();
+        std::fs::write(home.join(".claude/.hangar-pair/external_pairs.json"), "{torto").unwrap();
+    }
+    state.share_unavailable = share == Share::Unavailable;
+    if matches!(share, Share::Store | Share::StoreWithBadPairs) {
         state.share = Some(crate::share_pair_routes::share_state(&root.join("shares.json"), &home.join(".claude/.hangar-pair"),
             Arc::new(Mutex::new(1_000.0))));
+    } else {
+        state.share = None;
     }
     if let Some(peers) = peers { state.peers = Arc::new(peers); }
     if groups {
@@ -858,17 +881,55 @@ async fn whatsapp_tools_return_the_route_error_with_its_code() {
     }
 }
 
-/// Sem a loja de convites (configuração de convidados ilegível na subida), ninguém sabe se a sessão é
-/// compartilhada: recusa antes da rota, em vez de deixar passar.
+/// Sem configuração de convites não há convite nem par: a leitura chega à rota (aqui, `whatsapp_off`).
 #[tokio::test(flavor = "multi_thread")]
-async fn without_the_share_store_whatsapp_is_refused() {
-    let s = scene().await;
+async fn without_share_configuration_whatsapp_reaches_the_route() {
+    let s = scene_share(false, None, false, "", Share::Absent).await;
+    assert!(s.state.share.is_none());
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_off:"), "{result}");
+}
+
+/// Configuração de convites que não se carregou na subida: ninguém sabe se a sessão é compartilhada, e a
+/// leitura é recusada antes da rota, em vez de deixar passar.
+#[tokio::test(flavor = "multi_thread")]
+async fn with_the_share_configuration_unloaded_whatsapp_is_refused() {
+    let s = scene_share(false, None, false, "", Share::Unavailable).await;
     assert!(s.state.share.is_none());
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
     let result = mcp.call("whatsapp_chats", json!({})).await;
     let text = first_text(&result);
     assert!(failed(&result) && text.starts_with("whatsapp_shared_check_failed:")
         && text.contains("estado de compartilhamento indisponível"), "{result}");
+}
+
+/// `external_pairs.json` torto na subida vira lista vazia: a lista não prova que não há par de fora, e a
+/// leitura é recusada.
+#[tokio::test(flavor = "multi_thread")]
+async fn with_unreadable_external_pairs_whatsapp_is_refused() {
+    let s = scene_share(false, None, false, "", Share::StoreWithBadPairs).await;
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    let text = first_text(&result);
+    assert!(failed(&result) && text.starts_with("whatsapp_shared_check_failed:") && text.contains("pares externos ilegível"), "{result}");
+}
+
+/// Sidecar com `fed` torto não vale como grupo de uma máquina: o registro da dona não seria lido, e a leitura
+/// é recusada. Sem `fed`, o grupo de uma máquina segue até a rota.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_with_an_unreadable_fed_does_not_read_whatsapp() {
+    let s = scene_shared(true, None, false, "", true).await;
+    let sidecar = s.home.join(".claude/.hangar-pair/sem-term.json");
+    write_json(&sidecar, json!({"peers": ["s1"], "task": "", "gid": "g1", "harness": {}, "fed": {"owner": 7}}));
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-key", "k123")]).await;
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    let text = first_text(&result);
+    assert!(failed(&result) && text.starts_with("whatsapp_shared_check_failed:") && text.contains("grupo da sessão ilegível"), "{result}");
+
+    write_json(&sidecar, json!({"peers": ["s1"], "task": "", "gid": "g1", "harness": {}}));
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_off:"), "grupo de uma máquina: {result}");
 }
 
 /// Convite de convidado vivo na sessão, ou par de fora no grupo dela: recusa antes da rota. A sessão sem

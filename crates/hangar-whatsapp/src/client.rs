@@ -73,7 +73,7 @@ impl Client {
         self.status_within(TIMEOUT).await
     }
 
-    /// [`Client::status`] com prazo próprio no lugar do [`TIMEOUT`] do cliente.
+    /// [`Client::status`] com prazo próprio no lugar do `TIMEOUT` do cliente.
     ///
     /// # Errors
     ///
