@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
 use unicode_normalization::UnicodeNormalization;
 
@@ -38,7 +39,8 @@ impl ExternalPair {
 }
 
 /// `unreadable`: o arquivo não se leu na abertura e foi posto de lado; a lista vazia não prova que não há par.
-pub struct PairStore { path: PathBuf, state: Mutex<Vec<ExternalPair>>, unreadable: bool }
+/// Vale até a primeira gravação bem-sucedida, quando o disco volta a ser o que a memória diz.
+pub struct PairStore { path: PathBuf, state: Mutex<Vec<ExternalPair>>, unreadable: AtomicBool }
 
 impl PairStore {
     pub fn open(path: impl Into<PathBuf>) -> Self {
@@ -47,18 +49,20 @@ impl PairStore {
             Some(pairs) => (pairs, false),
             None => (Vec::new(), true),
         };
-        Self { path, state: Mutex::new(pairs), unreadable }
+        Self { path, state: Mutex::new(pairs), unreadable: AtomicBool::new(unreadable) }
     }
 
-    /// O arquivo de pares não se leu nesta vida do servidor: quem precisa saber se há par de fora não sabe.
-    pub fn unreadable(&self) -> bool { self.unreadable }
+    /// O arquivo de pares não se leu e nada foi gravado desde então: quem precisa saber se há par de fora não sabe.
+    pub fn unreadable(&self) -> bool { self.unreadable.load(Ordering::SeqCst) }
 
     fn lock(&self) -> MutexGuard<'_, Vec<ExternalPair>> { self.state.lock().unwrap_or_else(|e| e.into_inner()) }
 
     fn save(&self, state: &[ExternalPair]) -> io::Result<()> {
         if let Some(parent) = self.path.parent() { std::fs::create_dir_all(parent)?; }
         let bytes = serde_json::to_vec_pretty(state).map_err(io::Error::other)?;
-        crate::runtime::queue::atomic_write(&self.path, &bytes)
+        crate::runtime::queue::atomic_write(&self.path, &bytes)?;
+        self.unreadable.store(false, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Gravação que falha desfaz o registro: senão a memória diria pareado e o disco não.

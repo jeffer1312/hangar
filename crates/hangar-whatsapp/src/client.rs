@@ -37,14 +37,19 @@ pub enum CallError {
 #[derive(Clone)]
 pub struct Client {
     data: PathBuf,
-    http: reqwest::Client,
+    /// Montado uma vez; a falha fica guardada e todo pedido a devolve, em vez de cair num cliente padrão que
+    /// seguiria redirecionamento e proxy, sem prazo.
+    http: Result<reqwest::Client, String>,
 }
 
 impl Client {
     pub fn new(data: PathBuf) -> Self {
         // Sem seguir redirecionamento: quem ocupar a porta velha não desvia o pedido assinado para outro lugar.
         let http = hangar_core::net::http_client().timeout(TIMEOUT).no_proxy()
-            .redirect(reqwest::redirect::Policy::none()).build().unwrap_or_default();
+            .redirect(reqwest::redirect::Policy::none()).build().map_err(|e| e.to_string());
+        if let Err(error) = &http {
+            tracing::error!(%error, "whatsapp: o cliente HTTP do serviço não montou; os pedidos ao serviço vão falhar");
+        }
         Self { data, http }
     }
 
@@ -125,7 +130,8 @@ impl Client {
             None => url.path().to_owned(),
         };
         let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-        let mut request = self.http.request(method.clone(), url)
+        let http = self.http.as_ref().map_err(|e| CallError::Transport(format!("cliente HTTP não montou: {e}")))?;
+        let mut request = http.request(method.clone(), url)
             .header(SIGNATURE_HEADER, control::sign_request(&key, method.as_str(), &uri, ts, body));
         if !body.is_empty() {
             request = request.header("content-type", "application/json").body(body.to_vec());

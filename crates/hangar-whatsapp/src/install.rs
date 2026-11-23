@@ -227,11 +227,12 @@ pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> 
     Ok(Outcome::Installed)
 }
 
-/// Baixa (se preciso), confere a API e registra o serviço sem subir o programa. A migração usa este passo
-/// antes de importar os dados; depois chama [`start`].
+/// Baixa (se preciso), confere a API e registra o serviço sem subir o programa. É a etapa da migração de
+/// dados, feita à mão pelo operador: instala sem subir, importa os dados e então sobe por [`start`].
+/// Nenhuma rota do Hangar chama esta etapa.
 ///
 /// No Windows, registrar a tarefa interrompe o programa que já roda da pasta do serviço, e nada sobe de
-/// novo: quem chama sobe o serviço depois, por [`start`].
+/// novo: o serviço só sobe depois, por [`start`].
 ///
 /// # Errors
 ///
@@ -259,7 +260,8 @@ async fn prepare(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> Resu
     Ok((installed, checked))
 }
 
-/// Sobe o serviço já instalado e espera ele responder.
+/// Sobe o serviço já instalado e espera ele responder: o fim da migração de dados feita à mão pelo
+/// operador, depois de [`install_stopped`] e da importação. Nenhuma rota do Hangar chama esta etapa.
 ///
 /// # Errors
 ///

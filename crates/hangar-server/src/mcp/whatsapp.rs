@@ -22,10 +22,17 @@ pub(super) enum Trim {
     None,
 }
 
-/// Convite ou par vivo na própria sessão, ou endereço de par externo entre os membros do grupo dela.
-/// Registro de convite de outra vida com o mesmo nome também conta: na dúvida, não lê.
+/// A própria sessão e os membros do grupo dela nesta máquina; `srv::nome` é de outra máquina ou de fora.
+pub(super) fn local_members<'a>(me: &'a str, link: Option<&'a Sidecar>) -> Vec<&'a str> {
+    let peers = link.into_iter().flat_map(|l| l.peers.iter().map(String::as_str)).filter(|p| !p.contains("::"));
+    std::iter::once(me).chain(peers).collect()
+}
+
+/// Convite ou par vivo na própria sessão ou num membro do grupo nesta máquina (o grupo repassa o que ela lê),
+/// ou endereço de par externo entre os membros. Registro de convite de outra vida com o mesmo nome também
+/// conta: na dúvida, não lê.
 pub(super) fn shared_here(store: &ShareStore, pairs: &PairStore, me: &str, link: Option<&Sidecar>) -> bool {
-    if store.session_has_active(me) || !pairs.by_local(me).is_empty() { return true; }
+    if local_members(me, link).iter().any(|m| store.session_has_active(m) || !pairs.by_local(m).is_empty()) { return true; }
     let Some(link) = link else { return false };
     let outside = pairs.addresses();
     link.peers.iter().any(|p| outside.contains(p))
@@ -128,6 +135,8 @@ mod tests {
         store.create("s1", None, Kind::Share, false).unwrap();
         assert!(shared_here(&store, &pairs, "s1", None), "convite de convidado vivo");
         assert!(!shared_here(&store, &pairs, "s0", None), "o convite é da outra sessão");
+        assert!(shared_here(&store, &pairs, "s0", Some(&group(&["s1"]))), "par do grupo nesta máquina com convite");
+        assert!(!shared_here(&store, &pairs, "s0", Some(&group(&["lab::s1"]))), "o mesmo nome noutra máquina não é este s1");
 
         pairs.add(external("s2")).unwrap();
         assert!(shared_here(&store, &pairs, "s2", None), "par externo feito nesta sessão");

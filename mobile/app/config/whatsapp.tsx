@@ -273,7 +273,7 @@ export default function WhatsApp() {
       {view === 'off' ? <Off accepted={accepted} busy={busy} onToggle={() => { haptic.selection(); setAccepted((a) => !a); }} onInstall={install} />
         : view === 'working' ? <Working state={data} />
         : view === 'stopped' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_stopped_title()} text={m.native_whatsapp_stopped_body()}
-          action={m.native_server_retry()} busy={!!busy} loading={busy === 'install'} onPress={() => act('install', installWhatsApp)} />
+          action={m.native_server_retry()} busy={!!busy} loading={busy === 'install'} onPress={install} />
         : view === 'schema_newer' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_schema_newer_title()}
           text={m.native_whatsapp_schema_newer_body()}
           action={m.native_whatsapp_update()} primary busy={!!busy} loading={busy === 'update'} onPress={() => act('update', updateWhatsApp)} />

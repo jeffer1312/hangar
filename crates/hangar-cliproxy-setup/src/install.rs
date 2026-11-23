@@ -729,9 +729,10 @@ impl Installer {
     pub fn start(&self, kind: &'static str, ctx: Context) -> Result<(), Busy> {
         let first = if kind == "install" { Step::Config } else { Step::Download };
         // A tarefa pode ter trocado a versão: a próxima leitura da release mais nova vai ao GitHub.
-        let finished = Finished(self.finished.clone());
+        // A guarda nasce dentro do trabalho: um início recusado por ocupado solta o trabalho sem rodá-lo e não conta.
+        let finished = self.finished.clone();
         self.jobs.start(kind, first, move |progress| async move {
-            let _finished = finished;
+            let _finished = Finished(finished);
             match kind {
                 "update" => update(&ctx, &*progress).await,
                 "adopt" => adopt(&ctx, &*progress).await,
@@ -881,6 +882,17 @@ mod tests {
         let outcome = install(&ctx, &|step| steps.lock().unwrap().push(step)).await;
         assert_eq!(outcome, Ok(Outcome::Installed { tag: "v8.0.79".into() }));
         assert_eq!(*steps.lock().unwrap(), [Step::Config], "sem passo de serviço nem de subida");
+    }
+
+    /// Clique recusado por ocupado não roda tarefa nenhuma e não joga fora a release guardada.
+    #[tokio::test]
+    async fn a_busy_start_does_not_count_as_a_finished_task() {
+        let installer = Arc::new(Installer::default());
+        let home = tempfile::tempdir().unwrap();
+        let ctx = context(home.path());
+        let _held = installer.jobs.inline().unwrap();
+        assert_eq!(installer.start("install", ctx), Err(Busy));
+        assert_eq!(installer.finished.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

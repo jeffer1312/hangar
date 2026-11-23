@@ -5039,9 +5039,9 @@ const WHATSAPP_UNLINK_MS = 45_000;
 /** Remover soma o logout a parar, desregistrar e apagar o serviço. */
 const WHATSAPP_UNINSTALL_MS = 90_000;
 
-function postWhatsApp<T>(s: Server, path: string, body?: unknown, prazoMs = 30_000): Promise<T> {
+function postWhatsApp<T>(s: Server, path: string, body?: unknown, timeoutMs = 30_000): Promise<T> {
   return apiFetchForServer(s, `/api/whatsapp/${path}`,
-    { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, prazoMs);
+    { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, timeoutMs);
 }
 
 /** O servidor recusa sem o aceite (`whatsapp_accept_required`); outro job em curso é `whatsapp_busy`. */

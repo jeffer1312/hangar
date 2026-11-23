@@ -956,6 +956,29 @@ async fn a_shared_session_does_not_read_whatsapp() {
     assert!(failed(&result) && first_text(&result).starts_with("whatsapp_off:"), "sem convidado nem par, a rota responde: {result}");
 }
 
+/// O par do grupo nesta máquina recebe o que a sessão lê: convite nele, ou convidado com login que o vê,
+/// recusa a leitura de quem está pareada com ele.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_paired_with_a_shared_one_does_not_read_whatsapp() {
+    let s = scene_shared(true, None, false, "", true).await;
+    write_json(&s.home.join(".claude/.hangar-pair/s0.json"), json!({"peers": ["s1"], "task": "", "gid": "g1", "harness": {}}));
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_off:"), "par sem convite nem convidado: {result}");
+
+    let share = s.state.share.clone().unwrap();
+    let (invite, _) = share.store.create("s1", None, hangar_server::share::store::Kind::Share, false).unwrap();
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_shared_session:"), "convite no par: {result}");
+    share.store.revoke(&invite.id).unwrap();
+
+    let guests = s.state.login_guests.store.clone();
+    guests.create("Ana", &s.home.to_string_lossy(), false, true, "ana".into(), "token-ana".into()).unwrap();
+    guests.claim("s1", "ana", None).unwrap();
+    let result = mcp.call("whatsapp_chats", json!({})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_shared_session:"), "convidado com login vê o par: {result}");
+}
+
 /// Convidado com login que vê as sessões do dono recusa; o que só tem a raiz cobrindo a pasta da sessão, sem
 /// vê-las, não alcança a conversa e deixa passar até a rota.
 #[tokio::test(flavor = "multi_thread")]

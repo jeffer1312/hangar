@@ -513,6 +513,10 @@ impl Tools {
         // A vida pela mesma fonte que o porteiro do convidado usa: sessão de outra vida com o mesmo nome não é dele.
         let (link, life) = tokio::join!(link, crate::login_guests::gate::session_life(&self.st, me));
         let link = link?;
+        // Os membros do grupo nesta máquina passam pelas mesmas conferências: o grupo repassa o que a sessão lê.
+        let others: Vec<String> = whatsapp::local_members(me, link.as_ref()).into_iter().skip(1).map(str::to_owned).collect();
+        let other_lives = futures_util::future::join_all(others.iter().map(|m| crate::login_guests::gate::session_life(&self.st, m))).await;
+        let members: Vec<(String, Option<String>)> = std::iter::once((me.to_owned(), life)).chain(others.into_iter().zip(other_lives)).collect();
         match &self.st.share {
             // Configuração de convidados que não se carregou não prova que não há convite nem par: recusa.
             None if self.st.share_unavailable => return Err(unshared_failed("estado de compartilhamento indisponível")),
@@ -524,14 +528,19 @@ impl Tools {
             }
             Some(_) => {}
         }
-        let (guests, record) = tokio::join!(self.guest_unseen(me, life), self.owner_record_unshared(link));
+        let (guests, record) = tokio::join!(self.guest_unseen(members), self.owner_record_unshared(link));
         guests.and(record)
     }
 
-    /// Nenhum convidado com login vê a sessão.
-    async fn guest_unseen(&self, me: &str, life: Option<String>) -> Result<(), String> {
-        let (guests, name) = (self.st.login_guests.store.clone(), me.to_owned());
-        let seen = tokio::task::spawn_blocking(move || guests.seen_by_any_guest(&name, life.as_deref())).await
+    /// Nenhum convidado com login vê a sessão nem um membro do grupo dela nesta máquina (nome e vida de cada um).
+    async fn guest_unseen(&self, members: Vec<(String, Option<String>)>) -> Result<(), String> {
+        let guests = self.st.login_guests.store.clone();
+        let seen = tokio::task::spawn_blocking(move || -> crate::login_guests::store::Result<bool> {
+            for (name, life) in &members {
+                if guests.seen_by_any_guest(name, life.as_deref())? { return Ok(true); }
+            }
+            Ok(false)
+        }).await
             .map_err(|_| unshared_failed("leitura dos convidados interrompida"))?
             .map_err(|_| unshared_failed("arquivo de convidados ilegível"))?;
         if seen { Err(whatsapp::SHARED_REFUSAL.into()) } else { Ok(()) }

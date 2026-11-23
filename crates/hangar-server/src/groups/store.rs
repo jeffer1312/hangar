@@ -46,11 +46,11 @@ impl PairDir {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        let torto = |what: &str| StoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_owned()));
-        let Value::Object(data) = serde_json::from_slice(&raw)? else { return Err(torto("sidecar não é um objeto")) };
+        let malformed = |what: &str| StoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_owned()));
+        let Value::Object(data) = serde_json::from_slice(&raw)? else { return Err(malformed("sidecar não é um objeto")) };
         let sidecar = Sidecar::parse(name, &data);
         if sidecar.as_ref().is_some_and(|s| s.fed.is_none()) && data.get("fed").is_some_and(|f| !f.is_null()) {
-            return Err(torto("fed torto no sidecar"));
+            return Err(malformed("fed torto no sidecar"));
         }
         Ok(sidecar)
     }
