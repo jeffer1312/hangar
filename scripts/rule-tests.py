@@ -74,6 +74,8 @@ def vitest(folder: str, files: dict[str, list[str]]) -> list[str]:
         status = {a["title"]: a["status"] for suite in results for a in suite["assertionResults"]}
         passed = [t for t, s in status.items() if s == "passed"]
         problems += [f"{file}: {t}: {status.get(t, 'não rodou')}" for t in titles if t not in passed]
+        if not titles:
+            problems += [f"{file}: {t}: {s}" for t, s in status.items() if s != "passed"]
         if not passed:
             problems.append(f"{file}: nenhum teste passou")
         elif code:

@@ -70,7 +70,10 @@ jobs:
       - run: python3 -I scripts/test_check_rules.py
       - name: Regras do diff
         if: always() && steps.base.outputs.sha != ''
-        run: python3 -I scripts/check-rules.py "${{ steps.base.outputs.sha }}" HEAD
+        env:
+          # O commit do PR, não o merge: com a base atrasada, o merge traria commits alheios (e a marca deles).
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 -I scripts/check-rules.py "${{ steps.base.outputs.sha }}" "$HEAD_SHA"
       # Mudança em instalador/script sem passo declarado em docs/atualizacoes/. O pre-commit faz o mesmo por commit,
       # mas é pulável e some no clone; aqui é o intervalo inteiro do push.
       - name: Passo de atualização
