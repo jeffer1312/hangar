@@ -232,7 +232,8 @@ pub fn launched_agent(procs:&dyn ProcessView,root:i64,_conversation:&str)->Resul
     let depth=found.iter().map(|(depth,_,_)|*depth).min().ok_or_else(||failure("relaunch_agent_identity"))?;
     let owners:Vec<_>=found.iter().filter(|(at,_,_)|*at==depth).collect();
     if owners.len()!=1 {return Err(failure("relaunch_agent_identity"));}
-    Ok((owners[0].1,owners[0].2))
+    let leaf=crate::list::discover::reexec_leaf(procs,owners[0].1,&children);
+    Ok(found.iter().find(|(_,pid,_)|*pid==leaf).map_or((owners[0].1,owners[0].2),|(_,pid,birth)|(*pid,*birth)))
 }
 pub async fn permission_mode(io:&dyn TerminalIo,binding:&TerminalBinding)->Result<String,RuntimeError> {
     pane(io,binding).await?;

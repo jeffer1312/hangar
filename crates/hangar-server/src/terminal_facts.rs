@@ -206,14 +206,17 @@ impl LocalTerminalFacts {
         }).await.map_err(|_| ServiceError("terminal_files_unavailable"))??;
         let plugin = self.plugin_facts(target)?;
         let current = plugin_current(&plugin, target.metadata.cut(target.created));
+        let open_question = question || plugin["questions"].as_array().is_some_and(|questions| !questions.is_empty());
         if let Some(state) = native.as_ref().and_then(|record| native_state(record["status"].as_str()?)) { idle = state == "idle"; }
         else if current && let Some(state) = plugin["plugin_state"]["state"].as_str().filter(|_| plugin_alive(&plugin) || plugin["plugin_state"]["age_ms"].as_u64().is_some_and(|age| age <= 90_000)) { idle = state == "idle"; }
         else {
             let (metadata, conversation, created) = (target.metadata.clone(), binding.conversation.clone(), target.created);
-            if let Some(state) = tokio::task::spawn_blocking(move || hook_state(&metadata, &conversation, created)).await.map_err(|_| ServiceError("terminal_hook_unavailable"))?? { idle = state == "idle"; }
+            // O `Notification` também sai com o Claude parado esperando a pessoa: caixa livre e sem pergunta é parado.
+            if let Some(state) = tokio::task::spawn_blocking(move || hook_state(&metadata, &conversation, created)).await.map_err(|_| ServiceError("terminal_hook_unavailable"))?? {
+                idle = state == "idle" || state == "awaiting_input" && ready && !open_question;
+            }
         }
         let live = current && plugin["waiter_open"] == true;
-        let open_question = question || plugin["questions"].as_array().is_some_and(|questions| !questions.is_empty());
         // Em qualquer SO, como o `_native_socket` do Python: quem não fala o socket (o escritor fora do Unix)
         // responde `NotWritten` e a entrega segue pelo teclado.
         let native = if let Some((sender, _)) = input::message_prefix(text)
@@ -544,6 +547,8 @@ mod tests {
         std::fs::write(&native,json!({"pid":target.metadata.agent_pid,"sessionId":"sid"}).to_string()).unwrap();
         assert!(!local.read(&target,&target.binding,"").await.unwrap().idle);target.metadata.legacy_import_after=Some(now+1.0);
         std::fs::write(dir.path().join(".hangar-state/sid.json"),json!({"state":"idle","ts":now+2.0}).to_string()).unwrap();assert!(local.read(&target,&target.binding,"").await.unwrap().idle);
+        std::fs::write(dir.path().join(".hangar-state/sid.json"),json!({"state":"awaiting_input","ts":now+2.0}).to_string()).unwrap();
+        assert!(local.read(&target,&target.binding,"").await.unwrap().idle,"aviso de espera com a caixa livre e sem pergunta é parado");
         drop(poll);plugin.forget("key").unwrap();assert!(local.read(&target,&target.binding,"").await.is_err());
     }
     #[cfg(target_os="linux")]

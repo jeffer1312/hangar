@@ -793,7 +793,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   entrada na fila do Hangar (`terminal_turn_hold`, `delivered:false`) em vez de digitá-la. A fila
   drena com o Claude parado, composer legível e sem pergunta, um lote por vez, no tique do ator; a
   entrega que encontrou o Claude parado faz a próxima esperar até 3 s (`turn_start_wait`) pelo
-  turno que ela abriu. Para despachar, a indicação de que a CLI só espera subagentes em segundo
+  turno que ela abriu. O agente da sessão, dono do registro nativo, é o Claude relançado como filho
+  único com os mesmos argumentos, quando há um; no marcador de hook, `awaiting_input` com a caixa
+  livre e sem pergunta conta como parado. Para despachar, a indicação de que a CLI só espera subagentes em segundo
   plano também libera o prompt legível e sem pergunta: a linha "Waiting for N background agents"
   ou, sem ela e sem linha viva acima da caixa, o painel de agentes (`◯ <subagente>`) abaixo dela. Recado com socket nativo (`[de: …]`,
   `[grupo: …]`, `[painel: …]`) e comando de barra não são segurados, e o recado passa no meio do turno
@@ -1258,6 +1260,17 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   não viu o despacho procura no arquivo, para trás. Chamada feita dentro do script grava `content`
   vazio: o resultado sai do `toolUseResult`. Os aparelhos não sabem de Code Mode, só chamam o `REPL`
   de "Script". Ver [Code Mode](#code-mode-do-claude-code-script-entrega-e-página-20112026).
+
+## Claude relançado como filho do próprio processo (24/11/2026)
+
+Com o Claude Code 2.1.331, a sessão `whatsapp-envio-com-aprovacao` ficou com dois processos no pane:
+o `claude` aberto pelo Hangar e, 25 s depois, um filho `versions/2.1.331` com os mesmos argumentos.
+O registro nativo era só do filho (`sessions/<filho>.json`, `idle`); o pai tinha apenas o `.key`.
+O Hangar lia o registro do pai, o log repetia "registro nativo ilegível", e a entrega caía no plugin
+(velho) e no marcador de hook, que dizia `awaiting_input` (o `Notification` de um minuto depois do
+turno). Como só `idle` contava como parado, a mensagem "a" ficou em `terminal_turn_hold` de
+17:52 UTC em diante com o Claude parado. A sessão `caso-leonardo`, na mesma versão, não se relançou;
+a causa do relançamento não foi achada.
 
 ## Antigravity (agy) com terminal (23/11/2026)
 

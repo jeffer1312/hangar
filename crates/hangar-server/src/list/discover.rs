@@ -576,12 +576,31 @@ fn agent_pane<'p>(panes: &[&'p Pane], procs: &dyn ProcessView, children: &Childr
 
 /// Qual agente roda no pane e o pid dele (`agente_do_pane`); sem agente, "claude" e nenhum pid.
 /// O argv íntegro, não o cmdline separado por espaço: no Windows o caminho do node tem espaço.
-fn agent_of_pane(tree: Option<&Tree>) -> (&'static str, Option<i64>) {
+fn agent_of_pane(tree: Option<&Tree>, procs: &dyn ProcessView, children: &ChildrenMap) -> (&'static str, Option<i64>) {
     tree.into_iter()
         .flat_map(|t| t.pids.iter().zip(&t.argvs))
         .filter(|(_, argv)| !is_aux(argv))
-        .find_map(|(p, argv)| provider_from_argv(argv).map(|prov| (prov, Some(*p))))
+        .find_map(|(p, argv)| provider_from_argv(argv)
+            .map(|prov| (prov, Some(if prov == "claude" { reexec_leaf(procs, *p, children) } else { *p }))))
         .unwrap_or(("claude", None))
+}
+
+/// O Claude nativo pode se relançar como filho único com os mesmos argumentos: o registro nativo
+/// (`sessions/<pid>.json`) e a conversa passam a ser do filho, e o pai só espera.
+pub(crate) fn reexec_leaf(procs: &dyn ProcessView, mut pid: i64, children: &ChildrenMap) -> i64 {
+    let mut seen = HashSet::new();
+    while seen.insert(pid) {
+        let argv = procs.argv(pid);
+        let Some((_, args)) = argv.split_first() else { break };
+        let same: Vec<i64> = children.get(&pid).into_iter().flatten().copied()
+            .filter(|child| procs.argv(*child).split_first().is_some_and(|(_, rest)| rest == args))
+            .collect();
+        match same.as_slice() {
+            [child] => pid = *child,
+            _ => break,
+        }
+    }
+    pid
 }
 
 /// Uma linha por sessão do multiplexador, na ordem do `list-panes`, sem as escondidas e sem as que
@@ -610,7 +629,7 @@ pub fn discover_panes(panes: &[Pane], procs: &dyn ProcessView, children: &Childr
         // pid 0 tem a máquina inteira embaixo no mapa.
         let pid = p.pid.filter(|pid| *pid != 0).map(i64::from);
         let tree = pid.map(|pid| Tree::new(procs, pid, children));
-        let (mut provider, agent_pid) = agent_of_pane(tree.as_ref());
+        let (mut provider, agent_pid) = agent_of_pane(tree.as_ref(), procs, children);
         if agent_pid.is_none() && tree.as_ref().is_some_and(|t| t.unreadable.is_some()) {
             // Pi, omp ou Kimi com o argv ilegível sairia `claude` sem ninguém saber.
             resolver.problems.note("list_argv_unreadable", &p.session, "argv do processo do pane ilegível; agente não reconhecido");
@@ -681,6 +700,28 @@ mod tests {
         fn env_var(&self, _: i64, _: &str) -> io::Result<Option<OsString>> { Ok(None) }
         fn start_time(&self, _: i64) -> Option<f64> { None }
         fn fds(&self, _: i64) -> Vec<PathBuf> { Vec::new() }
+    }
+
+    struct Argvs(HashMap<i64, Vec<String>>);
+    impl ProcessView for Argvs {
+        fn children(&self, _: Duration) -> io::Result<Arc<ChildrenMap>> { Ok(Arc::default()) }
+        fn argv(&self, pid: i64) -> Vec<String> { self.0.get(&pid).cloned().unwrap_or_default() }
+        fn cwd(&self, _: i64) -> Option<PathBuf> { None }
+        fn env_var(&self, _: i64, _: &str) -> io::Result<Option<OsString>> { Ok(None) }
+        fn start_time(&self, _: i64) -> Option<f64> { None }
+        fn fds(&self, _: i64) -> Vec<PathBuf> { Vec::new() }
+    }
+
+    #[test]
+    fn claude_relaunched_as_its_own_child_is_the_child() {
+        let args = |exe: &str| [exe, "--session-id", "S", "prompt"].map(String::from).to_vec();
+        let children = ChildrenMap::from([(10, vec![11]), (11, vec![12])]);
+        let procs = Argvs(HashMap::from([(10, args("claude")), (11, args("/h/.local/share/claude/versions/2.1.331")),
+            (12, vec!["hangar-computer".into()])]));
+        assert_eq!(agent_of_pane(Some(&Tree::new(&procs, 10, &children)), &procs, &children), ("claude", Some(11)));
+        // Filho com outros argumentos é processo do Claude, não o próprio Claude relançado.
+        let other = Argvs(HashMap::from([(10, args("claude")), (11, vec!["/h/versions/2.1.331".into(), "-p".into(), "x".into()])]));
+        assert_eq!(agent_of_pane(Some(&Tree::new(&other, 10, &children)), &other, &children), ("claude", Some(10)));
     }
 
     fn pane(name: &str, cwd: &str) -> Pane {
