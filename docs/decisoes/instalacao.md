@@ -1541,6 +1541,9 @@ está no CI) não exercitam a atualização nem a criação de sessão.
 
 ## Portão de merge (22/11/2026)
 
+- **Medido no PR #500 (24/11/2026).** Com todas as partes acionadas, 6 min 51 s: servidor 6 min 24 s,
+  desktop 2 min 35 s, Expo 1 min 11 s, regras do diff 32 s. No PR #501, temporário, tirar o
+  `code_mode` do `new_session` deixou o `merge-gate` vermelho em `new_session_says_every_open_field`.
 - **Caso.** O PR #460 guardou o Code Mode no `appearance.json` do desktop, contra a regra da abertura
   única, que estava escrita no `CLAUDE.md`. O dono pediu uma trava que bloqueasse isso, porque regra
   escrita não obriga. As travas viraram testes (PR #482), mas a regra da main não exigia check
@@ -1552,7 +1555,7 @@ está no CI) não exercitam a atualização nem a criação de sessão.
   Windows passou de 54 min, contra 24 e 25 min nesses dois runs.
 - **Desenho atual.** O PR roda só as regras. As do diff saem em segundos; as travas do servidor e do
   desktop compilam só o alvo de teste delas e filtram por nome. As suítes ficaram no push da main e do
-  canal, onde o teste vermelho segura a publicação. O preço é teste quebrado que não seja de regra
+  canal, onde o teste vermelho segura a publicação daquele sistema. O preço é teste quebrado que não seja de regra
   aparecer depois do merge: na rodada anterior do #499 o portão antigo pegou dois.
 - **Nome que não rodou é falha.** O filtro do cargo e o do vitest passam verdes com zero testes:
   renomear a trava a tiraria do portão sem aviso.

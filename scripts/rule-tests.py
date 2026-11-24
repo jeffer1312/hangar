@@ -71,7 +71,11 @@ def vitest(folder: str, files: dict[str, list[str]]) -> list[str]:
             print("+", " ".join(command), flush=True)
             code = subprocess.run(command, cwd=ROOT / folder).returncode
             results = json.loads(out.read_text(encoding="utf-8"))["testResults"] if out.is_file() else []
-        status = {a["title"]: a["status"] for suite in results for a in suite["assertionResults"]}
+        # Título repetido em outro describe: o pior resultado vale.
+        status: dict[str, str] = {}
+        for result in (a for suite in results for a in suite["assertionResults"]):
+            if status.get(result["title"], "passed") == "passed":
+                status[result["title"]] = result["status"]
         passed = [t for t, s in status.items() if s == "passed"]
         problems += [f"{file}: {t}: {status.get(t, 'não rodou')}" for t in titles if t not in passed]
         if not titles:
