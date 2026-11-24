@@ -22,6 +22,7 @@ vi.mock('@hangar/core', async original => ({ ...await original<typeof import('@h
 // A casca da tela depende do fundo nativo e da navegação; as linhas, cabeçalho e ações são reais.
 vi.mock('../../ui/Screen', () => ({ Screen: ({ children }: { children: ReactNode }) => createElement('main', null, children) }));
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 0 }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {}, deleteItemAsync: async () => {} }));
 vi.mock('expo-linking', () => ({ openURL: vi.fn() }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
