@@ -3,6 +3,221 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## Portas da sessão, túnel e navegador emprestado (23/11/2026)
+
+O agente sobe um servidor na máquina da sessão (Next na 3000, Postgres na 5432), e o Hangar mostra a
+porta sozinho. No nativo, cada porta abre no navegador embutido ou no do computador, é encaminhada
+até o computador de quem usa, ou tem o servidor parado. No Expo, abre numa WebView do app com túnel.
+E o agente pode dirigir o navegador do app desktop de outra máquina.
+
+**De onde vieram as ideias.** O pedido partiu do vídeo do T3 Code 0.1.11. Na segunda rodada o código
+dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparação peça por peça está em
+`docs/superpowers/specs/2026-11-23-t3code-comparacao.md`.
+- Ideia do T3, adaptada: dono da porta pela variável herdada, DevTools fora, sonda de mesma máquina,
+  `::1`/`::` livres antes de usar o número, teto de 64 conexões, uid no Linux, SOCKS por servidor
+  num contexto de navegador próprio, `0.0.0.0` como `localhost`, parar o grupo do servidor e a
+  WebView com túnel no celular.
+- Só do Hangar: escopo systemd e busca só entre os pids da sessão, porta dividida mantida com aviso
+  (o T3 a apaga), código da recusa em cabeçalho com os status mantidos, lista de portas no celular,
+  prévia pelo Connect, túnel pela rota que o app já usa (rede local, Tailscale, Connect) com ping e
+  meia-saída, e o navegador do app emprestado ao agente de outra máquina, com a rede de quem usa
+  fechada para ele. O T3 dirige o navegador só da própria máquina e roda um Chromium sem janela no
+  servidor remoto; aqui o uso é sempre com o app aberto.
+
+- **Quais portas são da sessão.** O crate `hangar-session-ports` lê os sockets em LISTEN e procura o
+  dono só entre os pids candidatos, nunca em todos os processos da máquina. No Linux lê
+  `/proc/net/tcp{,6}` e os fds dos candidatos; no Windows usa `GetExtendedTcpTable` dentro do
+  processo. Vale só endereço de loopback ou "qualquer" (`0.0.0.0`, `::`), que é o que o túnel
+  alcança, e v4 e v6 da mesma porta viram uma entrada. Quem dá a porta à sessão é `list/ports.rs`,
+  nesta ordem:
+  - o escopo systemd próprio da sessão (`tmux-spawn-*.scope` do pane, `run-*.scope` do cano), que
+    pega o `nohup … &` adotado pelo init;
+  - um escopo visto em duas sessões não vale para nenhuma: é o do servidor tmux antigo ou do login;
+  - depois, os descendentes da raiz (pane ou cano);
+  - depois, os terminais de atalho, que contam para a sessão dona;
+  - por fim, quem escuta fora de toda árvore e escopo (`setsid`, outro pai) entra na sessão cuja
+    `CP_SESSION_KEY` herdou, lida em `/proc/<pid>/environ` só desses pids.
+
+  Agente, cano e app-server do Codex ficam fora, porque as portas de loopback deles não são
+  servidores da pessoa. Processo com `--remote-debugging-port` também: é o Chrome de DevTools que o
+  agente sobe, não um site. Porta em que outro processo, fora da sessão, também escuta (v4 de um, v6
+  de outro) sai com `shared: true`, e a tela avisa "Outra coisa também escuta nessa porta": o
+  `localhost:N` pode cair no outro. O T3 apaga essa linha; aqui ela fica, porque é da sessão. A leitura é reaproveitada pelos mesmos candidatos dentro do prazo do cache
+  de processos, para o tique e um `GET` simultâneo lerem uma vez só. Leitura que falha registra
+  `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`. Esse código
+  está em `DIAGNOSTIC` e nunca chega à tela. A linha do convidado (convite e login) sai sem `ports`:
+  o túnel não atende convidado.
+- **B2, macOS vazio.** No macOS a lista de portas volta vazia. Ler por `libproc` exige conferir o
+  layout das structs num Mac, e não havia um para a prova. `lsof`, `netstat` e
+  `Get-NetTCPConnection` ficaram de fora: abririam um processo a cada tique de 1,5 s. Nenhuma
+  dependência nova entrou para isso.
+- **B3, sessão sem terminal também tem escopo.** O cano nasce em `systemd-run --user --scope`
+  (`runtime/process.rs`), numa unidade `run-*.scope` só dele. O servidor que perdeu o pai aparece
+  também em sessão sem terminal. Sem `systemd-run` ou fora do Linux, sobra a descendência do
+  `cano.pid`, e o processo adotado pelo init some da lista.
+- **Túnel.** `GET /api/port-tunnel?port=N` com upgrade WebSocket. Cada WebSocket é uma conexão TCP
+  com `127.0.0.1:N` (ou `[::1]:N`) desta máquina, com bytes crus nos dois sentidos
+  (`hangar-port-tunnel`). Respostas antes do upgrade:
+
+  | Caso | Resposta |
+  |---|---|
+  | Nada escutando | 502 `port_tunnel_refused` |
+  | Porta do Hangar (`connect_previews.refused`) ou fora de 1..65535 | 422 `port_tunnel_port_refused` |
+  | Sem `?token=` nem Bearer | 403 `port_tunnel_token_required` |
+
+  Toda recusa leva o código também no cabeçalho `x-hangar-tunnel`, e os clientes classificam por ele,
+  nunca pelo status: o Caddy do Connect devolve 502 com a 8768 fora, igual ao "nada escutando".
+  Recusa sem o cabeçalho é servidor fora, Caddy ou Hangar antigo. Uma mensagem tem no máximo 1 MiB. Binário vazio do cliente quer dizer "terminei de mandar": o
+  servidor fecha a escrita no TCP e continua mandando a resposta, como o `nc`. O Close não serve
+  para isso, porque depois dele o servidor não pode mandar mais nada. O TCP fechando fecha o
+  WebSocket com 1000.
+- **Por que o cookie é recusado.** O túnel e o canal anfitrião aceitam só `?token=` ou Bearer, e o
+  cabeçalho `Cookie` é apagado antes do porteiro. Pelo Connect o cookie `__Host-cp_token` vale em
+  `GET`, e o aperto de mão do WebSocket é um `GET`. As máquinas do Connect são o mesmo site, então
+  uma página de projeto aberta na prévia de outra máquina mandaria o cookie junto e abriria um
+  túnel até o Postgres desta.
+- **Por que 75 s.** O servidor manda ping a cada 25 s, para o Caddy e os NATs do caminho não
+  derrubarem a conexão parada. Depois de 75 s (três pings) sem ouvir nada do cliente, nem pong, o
+  túnel cai. É o notebook que dormiu ou trocou de rede: ele some sem FIN e a conexão ficaria
+  pendurada.
+- **Onde a rota existe.** Em `public_routes`, servido na 8765 e na entrada do Connect (8768). A 8766
+  do convidado não tem a rota: o porteiro dela responde 403 antes de qualquer conexão com a porta. O
+  aparelho do Connect traz o `Watcher`, e aparelho revogado derruba o túnel aberto.
+- **Encaminhar no nativo.** `desktop-native/src/port_forward.rs` escuta só em `127.0.0.1` deste
+  computador, com o mesmo número quando está livre e o seguinte quando não está (até +100). A tela
+  diz "encaminhada como 3001". Ocupada é a porta em que algo já responde em `127.0.0.1` (no
+  Windows, o bind ali vence um servidor local em `0.0.0.0` e o tapa calado) ou que está em uso em
+  `::1` ou `::`: um servidor local só no IPv6 responderia ao `localhost` do navegador no lugar.
+  - **Sonda de mesma máquina, antes de escutar.** 16 bytes aleatórios vão pelo túnel até uma escuta
+    deste computador. Chegaram: "o servidor é este computador", e nada é encaminhado, porque o túnel
+    de lá discaria o próprio encaminhamento, em laço (`is_loopback` não pega servidor salvo pelo
+    IP do Tailscale da própria máquina). O túnel diz que nada escuta, ou outro serviço responde: é
+    outra máquina. O resto, em 3 s, é desconhecido e também não encaminha. Sonda e busca de porta
+    rodam fora da thread da tela; a linha diz "Abrindo…".
+  - **Teto e dono.** Até 64 conexões vivas por encaminhamento; a de cima fecha na hora, e a tela diz.
+    No Linux, conexão de outro usuário do computador (dono pela tabela `/proc/net/tcp`) fecha: a
+    escuta não tem senha, e o Hangar se instala em máquina de outras pessoas.
+  - Cada conexão aceita abre o WebSocket pela rota que o app usa naquele instante (rede local,
+    Tailscale ou Connect). Pelo Connect, o túnel exige o computador aprovado como aparelho, e a senha
+    do dono nunca vai na URL.
+- **Página de outra máquina no Linux: SOCKS por servidor, sem trocar a porta.** Um SOCKS5 em
+  `127.0.0.1:0` por servidor remoto do dono, vivo enquanto o app vive (`desktop-native/src/socks.rs`),
+  e um contexto do Chromium do painel com esse proxy, por `Target.createBrowserContext` com
+  `proxyServer` e `proxyBypassList` `*,<-loopback>`: só o loopback vai ao SOCKS, e cada CONNECT vira um
+  túnel até a mesma porta lá. Loopback nunca conecta direto aqui. A página fica em
+  `http://localhost:3000`, com a origem, o OAuth, o HMR e os cookies de lá, separados por servidor e
+  fora do perfil da pessoa. A troca de porta mudava a origem e misturava os cookies de `localhost`
+  de todas as máquinas. `0.0.0.0` e `[::]`, que o Vite imprime, viram `localhost` antes do pedido.
+  O mesmo uid da escuta vale aqui.
+  - Medido no Chromium que o app usa: o contexto nasce com os dois parâmetros e manda `localhost` ao
+    SOCKS, com `*,<-loopback>` e com `<-loopback>`. O `<-loopback>` tira o desvio implícito do
+    loopback, e a última regra que casa vence.
+  - Limite aceito: o contexto do CDP é de memória, e o login no site do projeto some ao fechar o
+    app. Um Chromium por servidor com pasta própria fica para quando isso incomodar.
+  - Windows e macOS seguem com o encaminhamento e a troca de porta. O WebView2 só muda depois da
+    prova na VM de `--proxy-server` socks5 com `<-loopback>` por pasta de dados.
+- **Abrir no navegador do computador.** Encaminha, se a sessão é de outra máquina, e abre
+  `http://localhost:<porta local>` no navegador do sistema, que não tem o SOCKS. "Parar
+  encaminhamento" para o encaminhamento; "Parar servidor" é outra ação.
+- **Parar servidor.** `POST /api/sessions/{name}/ports/{port}/stop` (`hangar-port-stop`), só em
+  `public_routes`, com confirmação nos dois apps. A ideia é do T3, a regra de proteção é nossa.
+  - Quem segura a porta é relido na hora pela regra da lista e conferido pelo início do processo
+    (`starttime` do `/proc/<pid>/stat`): pid reusado não recebe sinal. A tabela vem de `/proc/*/stat`,
+    sem `ps`.
+  - O alvo é o grupo de processos do servidor. Quando o grupo tem processo protegido (o
+    `npm run dev &` de um shell sem controle de job), o alvo é só a árvore que nasce no processo que
+    escuta.
+  - Protegidos nunca recebem sinal: agente, cano e app-server do Codex, a raiz da sessão e o pai de
+    cada um (servidor tmux, cano), o `hangar-server` com os ancestrais e os filhos diretos dele, e os
+    pids 0 e 1. Se o próprio processo que escuta (ou um descendente) é protegido: 409
+    `port_stop_shared_group`.
+  - SIGTERM, consulta a cada 250 ms por 3 s, SIGKILL só a quem ainda é o processo original. Zumbi
+    conta como saído.
+  - Pid já de outro processo ou porta que não é mais da sessão: 404 `port_stop_not_found`. Fora do
+    Linux: 501 `port_stop_unsupported`. Depois da parada a leitura guardada dos sockets é descartada
+    e a lista sai de novo.
+- **Celular: a página abre dentro do app.** Módulo nativo `mobile/modules/port-tunnel`: uma WebView
+  cujo `localhost` é o da máquina da sessão, com um SOCKS no aparelho que abre `/api/port-tunnel` por
+  `baseOf(server)` e o token do aparelho. Várias portas ficam abertas ao mesmo tempo, uma aba cada,
+  sem host nem certificado do Connect por porta. O SOCKS não tem senha, então só aceita as portas
+  da sessão. Só servidor do dono; convite cai na prévia.
+  - iOS: `WKWebsiteDataStore.nonPersistent()` por servidor com `ProxyConfiguration` socksv5. O iOS
+    nunca manda loopback ao proxy, então a página roda no nome substituto `hglo.test`, de 9 letras
+    como `localhost`, e a barra mostra `localhost`. O app aceita iOS 16.4 e o proxy só existe no 17:
+    conferido em tempo de execução.
+  - Android: `ProxyController.setProxyOverride` com bypass `*` e `removeImplicitRules()`, posto ao
+    montar e tirado ao desmontar, porque vale para todas as WebViews do app; perfil por servidor com
+    `MULTI_PROFILE`. Medido: o System WebView 133 do emulador `hangar` tem `PROXY_OVERRIDE` e
+    `MULTI_PROFILE`.
+  - Sem suporte (iOS abaixo de 17, WebView sem `PROXY_OVERRIDE`, binário antigo), o toque abre a
+    prévia do Connect, ou a do Tailscale, no navegador do sistema; a mesma prévia é o "Link de fora".
+  - Binário novo: `runtimeVersion` `native-7`, fora do OTA.
+- **Uma prévia do Connect por vez.** O "Link de fora" do nativo e a folha Portas do Expo usam a
+  mesma prévia do Connect (`/api/connect/preview`), e abrir outra fecha a anterior: as duas telas
+  dizem isso. Uma prévia por porta exigiria um host por porta, e cada host gasta um certificado do
+  limite semanal de `hangar.dev.br`; por isso a página no celular vai pela WebView com túnel, e a
+  prévia fica para mandar a outra pessoa e como reserva. O Expo tenta o Connect primeiro e cai no Tailscale
+  (`/api/preview`, slot 10000) quando a máquina não tem Connect ou ele está fora. Ajustes > Connect
+  perdeu o campo de porta e ficou só com a prévia aberta e o botão de fechar.
+- **Porta que não é página.** As duas prévias (Connect e Tailscale) mandam um `HEAD /` antes de
+  abrir. Resposta que não começa por `HTTP/`, ou conexão fechada sem resposta, dá 422
+  `port_not_http` (`hangar_core::net::answers_not_http`), e o Expo mostra "use no computador".
+  Silêncio por 3 s não decide: o `next dev` compila a página no primeiro pedido. Não há sondagem a
+  cada tique, só no toque.
+- **B1, conexão longa pelo Connect de verdade: pendente.** O Caddyfile do Connect tem
+  `read_body 1h` (`hangar-connect/src/config.rs`), e os testes falam direto com a 8768, sem frps nem
+  Caddy. A prova manual, uma `psql` parada por 70 min pelo Connect real (VPS, frps, Caddy), ainda
+  não foi feita. Se cair, a correção é na configuração do Connect, nunca religar escondido.
+- **Navegador emprestado (canal anfitrião).** O app desktop abre `GET /api/browser-host`
+  (WebSocket) no servidor da sessão, pela rota que já usa, com a mesma regra de credencial do túnel.
+  Ele manda `{"type":"focus","session":…}` ao mostrar uma sessão. O CLI e o MCP sem app local
+  mandam o verbo por `POST /api/sessions/{name}/browser-cmd`, e o servidor o repassa ao app com o
+  foco mais recente naquela sessão (`hangar-browser-host`).
+
+  | Caso | Resposta |
+  |---|---|
+  | Nenhum app com foco na sessão | 409 `browser_host_none` |
+  | App recusou o servidor (o atual nunca manda) | 403 `browser_host_not_allowed` |
+  | Canal caiu com o pedido em curso | 502 `browser_host_gone`, "pode ter sido executado" |
+  | Prazo (`deadline_ms`, padrão 45 s, teto 10 min) | 504 `browser_host_timeout` |
+  | `objetivo` e `confere` | 422 `browser_host_verb_unsupported` |
+
+  O print chega como binário e é gravado pelo servidor na máquina da sessão
+  (`~/.hangar/nav/shots/<sessão>/`), para o caminho que o agente cita valer lá. O canal tem o mesmo
+  ping de 25 s e a mesma queda após 75 s de silêncio, e aparelho revogado o fecha com 4410.
+- **Lado do app e do CLI.** O nativo abre um canal anfitrião por servidor remoto do dono quando
+  mostra uma sessão dele, e religa com espera de 1 s até 30 s. Sem app local, o `hangar-preview`
+  manda o verbo por `browser-cmd`, com prazo de 20 s no `open`, 110 s no `login` (120 s pelas tools do MCP) e 45 s nos outros.
+  As tools MCP `browser_*` usam a mesma rota dentro do processo. `objetivo`, `confere` e
+  `vault_fill` não existem por anfitrião remoto.
+- **D1, decidida em 23/11: sem cartão nem pergunta.** O app serve sozinho as sessões das máquinas
+  do dono (entrada de servidor que não é convite nem par externo); convite e par externo nunca
+  ganham o canal. O túnel existe para o notebook alcançar o `localhost` da máquina da sessão, e
+  uma pergunta a cada máquina só atrapalhava isso. O navegador é o painel Navegador da sessão,
+  nunca o do sistema.
+- **O agente remoto no Linux: contexto próprio, rede de quem usa fechada em todo pedido.** Os verbos
+  do canal rodam num contexto do Chromium com o SOCKS do servidor em modo agente (`proxyBypassList`
+  `<-loopback>`, nada direto): todo pedido passa pelo SOCKS, inclusive redirect, `fetch` do `eval` e
+  subrecurso. Loopback vai ao túnel, e o agente vê exatamente a URL que pediu, sem troca de porta.
+  O resto é resolvido no próprio SOCKS e só conecta aos endereços já conferidos, o que fecha o DNS
+  que muda de resposta depois (rebinding). Recusado:
+  - endereço dentro da rede de qualquer interface deste computador, v4 e v6 (`getifaddrs`, com a
+    máscara);
+  - nome que resolve para loopback, faixas privadas, de enlace, CGNAT (Tailscale), `0.0.0.0/8`, `198.18.0.0/15`,
+    multicast, broadcast, ULA, site-local, 6to4, Teredo, e o IPv4 dentro de IPv6 mapeado ou NAT64;
+  - nome `.local`, DNS que não responde em 30 s e lista de interfaces ilegível;
+  - esquema fora de `http`/`https` no `open`/`goto`.
+
+  Pessoa e agente nunca dividem a página: o agente não lê nem dirige a que a pessoa abriu, e abrir a
+  dele troca o motor. O `login` (a pessoa aprova no app) traz os cookies daquele site para o
+  contexto do agente. Limite conhecido: WebRTC e outros UDP não passam por SOCKS e podem sair pela
+  rede do notebook. Windows e macOS seguem com a conferência antiga: só o URL do `open`/`goto` e um
+  DNS antes, e o que ela não pega (redirect, `fetch`, rebinding) continua aceito ali, com a barreira
+  de servir só as máquinas do dono.
+- **Aceito: caminho `.png` absoluto no `browser-cmd`.** O `shot` aceita um `.png` absoluto do CLI e
+  o servidor grava ali, em qualquer pasta que o usuário do sistema escreve. Só o dono, pelo token,
+  chega à rota, e o agente dele já escreve nessas pastas.
+
 ## WhatsApp só leitura (22/11/2026)
 
 A página "WhatsApp" das Configurações (nativo e Expo) liga um arquivador só de leitura do WhatsApp
@@ -85,8 +300,8 @@ Decisões do usuário:
 
 - **Serviço próprio.** O binário vem da release de `router-for-me/CLIProxyAPI`, conferido pelo
   `checksums.txt`, em `~/.hangar/cliproxy/bin/<versão>/`, e roda como unit de usuário
-  `hangar-cliproxy.service`, tarefa `hangar-cliproxy` no Windows (`.vbs` sem janela, reinício em
-  falha) ou launchd `dev.hangar.cliproxy`. Proxy que já existe (pacote do AUR com
+  `hangar-cliproxy.service`, tarefa `hangar-cliproxy` no Windows (`.vbs` sem janela que religa o programa 10 s depois
+  de cada saída) ou launchd `dev.hangar.cliproxy`. Proxy que já existe (pacote do AUR com
   `cli-proxy-api.service`, binário no PATH) é `external`: nada é baixado nem registrado, o
   "Usar como está" só completa o config.
 - **Proxy de fora passa ao Hangar só a pedido (21/11).** Contas mostra a linha do CLIProxyAPI
@@ -3915,12 +4130,61 @@ status antigo. Nada novo no Python para isso.
 
 ## Chaveiro trancado no boot: o Rust detecta e o dono destranca de outra máquina (26/10/2026)
 
-**Regra.** O `hangar-server` lê `Locked` da coleção `login` do Secret Service (`busctl --user
---auto-start=no`, a cada 15 s) e publica o evento `keyring` (`{state}`) na lista do dono. O
+**Regra.** O `hangar-server` lê `Locked` da coleção `login` e do alias `default`
+(`/org/freedesktop/secrets/aliases/default`, o do Chrome e do Slack), sempre por uma conexão ao
+barramento que fica aberta, e publica o evento
+`keyring` (`{state}`) na lista do dono: qualquer das duas trancada é `locked`. Não há consulta
+periódica: a escuta lê ao ligar, a cada sinal do daemon (troca de dono do nome, `CollectionChanged`)
+e, depois de troca de dono ou leitura que falhou, no máximo três releituras espaçadas de 2 s; fora
+dela, só o desbloqueio com senha e a tentativa automática abaixo leem, cada um poucas vezes. Erro de
+coleção ou serviço inexistente é `absent`; qualquer outra falha é leitura que não veio, e o último
+estado fica. O
 `POST /api/keyring/unlock` só aceita o token do dono, nunca é repassado ao Python e manda a senha
 pelo socket de controle do gnome-keyring (`$XDG_RUNTIME_DIR/keyring/control`, protocolo do
-`gkr-pam`). Senha aceita e chaveiro ainda trancado: reinicia `gnome-keyring-daemon.service` e
+`gkr-pam`). Senha aceita e `login` ainda trancado: reinicia `gnome-keyring-daemon.service` e
 manda de novo, uma vez.
+
+**Default trancado com o login aberto (23/11/2026).** O `default` tem a senha guardada no `login`
+e só abre pelo fluxo do prompter (`Secret.Service.Unlock` e `Prompt`). Com o `login` aberto e o
+`default` trancado:
+- Sem senha, o servidor pede o `default` uma vez por vida do daemon, numa conexão própria que
+  fica aberta (o prompt sem resposta continua vivo para quem estiver diante da tela). Antes de
+  pedir, espera a tela no ambiente do `systemd --user`, que é o que o prompter ativado pelo
+  barramento herda (`display_env::has_display`: `WAYLAND_DISPLAY` ou `DISPLAY` local só valem com o
+  socket de pé; X de outra máquina vale), olhando a cada 5 s por até 10 min, sem ler o Secret
+  Service. Leitura que falha antes do pedido tenta de novo até três vezes. Sem resposta em 10 s, o
+  daemon fica marcado como preso naquela vida (a marca guarda a vida do daemon, e um daemon novo não
+  a herda) e o aviso continua. Ele **não**
+  reinicia o daemon: isso trancaria o `login` que o PAM abriu, mataria o prompt de quem estiver
+  digitando, e o dono teria de digitar a senha do mesmo jeito.
+- Com a senha (aviso do Hangar), abre o `login` e pede o `default`. Um pedido do `default` por
+  vez: com o automático esperando o prompt, o do dono espera o resultado dele em vez de abrir um
+  segundo prompt atrás. Daemon já marcado como preso ou sem resposta no prazo: reinicia, manda a
+  senha ao `login` do daemon novo e pede o `default` de novo. O reinício é um só por pedido, e a
+  resposta inteira tem 38 s (os clientes esperam 45): sem prazo para reiniciar e pedir de novo (12 s
+  + 10 s), ou para pedir o `default` (10 s), para ali; sem a vez de desbloquear (outro desbloqueio
+  em curso) a tempo de ao menos um pedido, desiste antes de mandar a senha. A rota ainda tem um teto
+  de 42 s sobre tudo isso (as esperas de E/S têm prazo próprio, mas podem somar): passou, responde 409
+  e o trabalho que segue publica o estado pelo evento. A resposta sai das duas coleções lidas no
+  fim: `login` trancado, ou ausente com o `default` trancado, é 409 `keyring_unlock_failed`; só o
+  `default` trancado com o `login` aberto (também sem tela) é
+  409 `keyring_default_locked` ("o login abriu, mas o chaveiro padrão continua trancado"). Reinício
+  que falha não decide a resposta: o daemon pode ter sido trocado, e vale o que se lê depois; sem
+  chaveiro no barramento, é falha.
+- Falha daqui (sem conexão ao barramento, sem runtime, erro de conexão) não é resposta do daemon:
+  não gasta a tentativa automática, que volta como leitura que falhou. Leitura que estoura o prazo
+  não larga a conexão: um `Get` deixado na fila de um cliente que saiu derruba o daemon.
+- Daemon que já recebeu a tentativa automática: o `default` trancado à mão depois fica trancado,
+  porque ela não se repete na mesma vida do daemon. Num daemon em que o `default` já estava aberto,
+  trancá-lo à mão com o `login` aberto dispara a primeira (e única) tentativa.
+
+**Por quê (23/11).** Às 08:13:42 o backend, de pé antes do login gráfico, pediu o Secret Service e o
+daemon tentou o `gcr-prompter` sem display (`cannot open display`). Às 08:13:44 o PAM do sddm abriu o
+`login`; o `Default_Keyring` ficou `Locked=true` e o Chrome e o Slack travaram. O servidor só lia o
+`login` e não publicou aviso. `Secret.Service.unlock_sync` no daemon preso estourou 40 s; depois de
+`systemctl --user restart gnome-keyring-daemon`, o desbloqueio das duas coleções funcionou.
+Conferido no daemon desta máquina, com as duas abertas: o `Get` de `Locked` e o `Unlock` pelo
+caminho do alias são aceitos (o `Unlock` volta com a coleção, sem prompt).
 
 **Por quê.** Com `Linger=yes` o Hangar sobe antes do login gráfico. No boot de 26/10 a checagem de
 worktree mesclada (`hangar-workspace/src/worktree_merge.rs`, `gh pr list`) pediu o token do `gh`,
@@ -3938,8 +4202,14 @@ usam o chaveiro (`~/.claude/.credentials.json`; o Codex está em `cli_auth_crede
   aberto: o desbloqueio automático roda dentro do fluxo do prompter. Com o login gráfico o prompter
   existe e ele abre sem perguntar; isso não foi medido com prompter de verdade.
 
-**Limite.** Se a fila de prompts do daemon travar o pedido do Chrome ao `Default_Keyring`, abrir o
-`login` não a solta; a reinicialização só acontece quando o próprio `login` não abre.
+**Limite.** Um `default` com senha própria (não guardada no `login`) abre um diálogo na tela que
+fica sem resposta enquanto ninguém digita; o servidor o trata como daemon preso, e o desbloqueio com
+senha do dono reinicia o daemon e o diálogo volta no daemon novo. Numa máquina sem tela, um
+`default` próprio trancado mantém o aviso, porque ele reflete o estado real e nada no Hangar o abre.
+O prompt do `default` com o daemon preso e o reinício seguido de abertura no daemon
+novo foram provados só pelo backend falso; o boot real ainda não foi repetido. Com o `login` aberto
+pelo PAM e o daemon preso, o Chrome e o Slack esperam até o dono digitar a senha no aviso. Sem login
+gráfico (`Linger`, sem tela) o `default` não abre pelo Hangar: o `login` abre e o aviso fica.
 
 ## Chave secreta do pane fora da linha de comando (26/10/2026)
 

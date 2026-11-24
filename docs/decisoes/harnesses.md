@@ -1,9 +1,29 @@
-# Harnesses — Claude, Codex, Pi, omp, Kimi
+# Harnesses — Claude, Codex, Pi, omp, Kimi, Antigravity
 
 Decisões medidas, com data e número. As regras vigentes ficam na seção abaixo (o `CLAUDE.md`
 só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo assunto.
 
 ## Regras vigentes
+
+- **Antigravity (`agy`) roda o binário oficial do Google, sem ler o login nem chamar o Google.**
+  Com terminal, a TUI fica no tmux; o estado vem dos hooks `SessionStart`, `PreInvocation`,
+  `PostInvocation` e `Stop` (`provider_hooks` `agy-state-hook`), nunca de `PreToolUse` ou
+  `PostToolUse`, onde a resposta `{}` bloqueia a ferramenta. A conversa vem do
+  `transcript_full.jsonl` (`hangar-transcript/src/antigravity.rs`); a tela diz permissão e ocupado
+  (`agy_analyze`), e o rodapé (`agy_footer`) diz modo e modelo. Com terminal só existe a conta
+  padrão: o `agy` ignora o `GEMINI_HOME`, e conta adicional é 409 `erro_conta_antigravity_adicional`
+  na abertura, no criar conta e no login. O código de conta por pasta (`hangar-antigravity`) fica para
+  o modo sem terminal, que precisa medir se o `agy acp` respeita a pasta. Login por `agy acp --login`,
+  com o link aberto e o código colado pela pessoa. O Hangar nunca lê o token, nunca chama endpoint
+  do Google, nunca troca de conta sozinho e nunca aceita os Termos pela pessoa; a atualização
+  automática do `agy` fica desligada. Abrir em "manual" com terminal é 409
+  `erro_permissao_manual_sem_terminal` (a TUI não tem flag para ele); depois de aberta, o modo troca
+  pelo shift+tab (`BTab`), lido e confirmado no rodapé, e sai no `claude_permission_mode` do `state`
+  pelas rotas de modo do Claude. O modelo troca por `/model <id>`, confirmado pelo rodapé ou pela
+  linha "Model set to" (`antigravity/models` e `antigravity/model` em `provider_models`). Troca de
+  modo ou modelo só com a sessão parada e a caixa vazia. O contexto da linha é `input_tokens +
+  cache_read_tokens` da última `PLANNER_RESPONSE`, com `window: 0` (janela desconhecida). Ver
+  [Antigravity com terminal](#antigravity-agy-com-terminal-23112026).
 
 - **Troca de agente pelo seletor de modelos espera o turno e segura a fila.** `POST /conta` com
   `when_idle` registra a troca (`RuntimeRegistry::hold_handoff`) e responde 202 na hora; a fila
@@ -20,6 +40,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `/history` do Codex transferido leva o divisor `kind: handoff` antes do primeiro turno novo. Ver
   [troca de agente com a sessão trabalhando](#troca-de-agente-com-a-sessão-trabalhando-20112026).
 
+- **A janela que o Claude informou fica em `~/.hangar/context-windows.json`, sem prazo, por conta e modelo.**
+  O CLI só diz a janela no `result` do fim do turno; até lá a sessão nova usa a aprendida. Vence o
+  informe da conversa mexida por último (sessão parada de antes da troca de plano não desfaz a
+  nova), a gravação relê e junta sob a trava `context-windows.json.lock` (servidor velho e novo na
+  atualização), e o limite posto no ambiente (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`) não ensina. Ver
+  [janela aprendida por modelo](#sessão-sem-terminal-no-primeiro-turno-janela-aprendida-por-modelo-14102026).
 - **Fechar o Claude com terminal termina com o processo morto.** Quem passa do prazo depois do
   `kill-session` aceito sai à força, conferido pela identidade, como na reabertura, e o fechamento
   segue normal. Tratar a demora como falha desviava para o fechamento pelo nome, que já não acha o
@@ -1201,6 +1227,56 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   não viu o despacho procura no arquivo, para trás. Chamada feita dentro do script grava `content`
   vazio: o resultado sai do `toolUseResult`. Os aparelhos não sabem de Code Mode, só chamam o `REPL`
   de "Script". Ver [Code Mode](#code-mode-do-claude-code-script-entrega-e-página-20112026).
+
+## Antigravity (agy) com terminal (23/11/2026)
+
+Medido no `agy` 1.5.13 a 1.5.15, Linux, num servidor isolado (HOME, `TMUX_TMPDIR` e porta próprios).
+
+- **Transcript:** `<gemini>/antigravity-cli/brain/<conversa>/.system_generated/logs/transcript_full.jsonl`,
+  só acrescentado, um passo por linha: `USER_INPUT` (texto dentro de `<USER_REQUEST>`),
+  `PLANNER_RESPONSE` (`content` e `tool_calls`), `GENERIC` (saída de ferramenta, na ordem das
+  chamadas) e `SYSTEM_MESSAGE`; `status` `DONE` ou `ERROR`. A pasta da conversa vem de
+  `history.jsonl`.
+- **Hooks:** `<gemini>/config/hooks.json`, formato `{"<nome>": {"<Evento>": [{type, command, timeout}]}}`.
+  A entrada leva `conversationId`, `transcriptPath`, `cwd` e `fullyIdle`, e os hooks também
+  rodam sob `agy acp`. Um `PreToolUse` que devolve `{}` **bloqueia** a ferramenta: com um hook
+  lento em Node, as ferramentas pararam. Por isso o Hangar instala só os quatro eventos de estado.
+- **A conversa só nasce no primeiro prompt:** a mensagem inicial ficava presa na abertura; agora a
+  adoção (`gateway/other.rs`) entrega a fila. O Kimi tem o mesmo desenho e não foi testado.
+- **A caixa vazia mostra a dica do modo** (`Auto mode: … (shift+tab to cycle)`); lida como rascunho,
+  ela travava a entrega (`composer_busy`). `drive.rs` a reconhece (`AGY_MODE_HINT`).
+- **Modos da TUI:** `--mode accept-edits|auto|plan` e `--dangerously-skip-permissions`; sem flag, a
+  TUI abre em `auto`. Não há flag para o modo que pergunta, e por isso abrir em "manual" com
+  terminal é recusado (decisão do dono).
+- **Rodapé (1.5.15):** a última linha traz `[modo · ]Modelo · esforço` à direita, com `esc to cancel`
+  ou `? for shortcuts` à esquerda: `auto · Gemini 4 Neon · low`, `plan · Gemini 4 Neon · medium`,
+  `accept-edits · Gemini 4 Neon · medium`. O modo padrão, o que pergunta, não tem rótulo:
+  `Gemini 4 Neon · medium`. O rótulo do bypass não foi medido e fica sem modo.
+- **Ciclo do shift+tab:** `BTab` cicla auto → plan → padrão → accept-edits → auto; o bypass só
+  existe na abertura e não entra no ciclo. A caixa vazia mostra a dica do modo
+  (`Plan mode: … (shift+tab to cycle)`); o padrão não tem dica. O Hangar aperta uma tecla por vez
+  e só segue com o rodapé novo na tela (no máximo 4); sem rodapé novo em 2 s responde incerto.
+- **Modelo:** `/model <id>` + Enter troca na hora e escreve `⎿  Model set to Gemini 4 Neon (Medium)`; o
+  rodapé passa a `· medium`. O id é o nome em minúsculas com hífens mais o esforço
+  (`gemini-4-neon-medium`).
+- **Contexto:** cada `PLANNER_RESPONSE` do `transcript_full.jsonl` traz `"model":"gemini-4-neon-low"`,
+  `input_tokens`, `cache_read_tokens` e `output_tokens`; o `input_tokens` não inclui o cache. Contexto
+  usado = `input_tokens + cache_read_tokens` da última resposta. A janela não vem do `agy` e o cache
+  do models.dev guarda só tarifas: a linha leva os tokens sem porcentagem.
+- **Várias contas, medido no 1.5.15 com terminal:** o `agy` ignora o `GEMINI_HOME`. O log mostra
+  `CLI app data directory: $HOME/.gemini/antigravity-cli` com a variável apontando para outra pasta, e
+  o login da conta adicional foi gravado na pasta da padrão. Por isso este PR fica só com a conta
+  padrão. Antes, no ACP: só `GEMINI_HOME` não isola o login, que fica no chaveiro; com
+  `SSH_CONNECTION` local e `AGY_ACP_FORCE_FILE_STORAGE=1`, cada pasta teve o seu (`agy models`). No
+  `agy acp` 1.5.15 com as três variáveis e uma pasta vazia, o login também é da pasta (`authenticate`
+  recusa e `session/new` responde "Authentication required"), mas o log `acp-server-*.log` foi gravado
+  em `~/.gemini/antigravity-cli/log` e a pasta ficou vazia: os dados do `agy` não seguem a variável, e o
+  sem terminal também fica só com a conta padrão. Onde a conversa cai com login numa adicional ainda
+  não foi visto (pede o login da pessoa). Pasta nova abre os Termos do Google com opt-in de
+  dados (`cache/onboarding.json`), e quem aceita é a pessoa. `agy models` lista `id\tnome` sem gastar
+  cota e serve de prova de login.
+- **Permissão com terminal:** a tela traz "Requesting permission for:" e as opções numeradas; o
+  `/select` com `interaction_id` respondeu "No, cancel" e recusou um `rm -rf`.
 
 ## Orientar pela fila da CLI (22/11/2026)
 
@@ -5342,6 +5418,19 @@ caía na reserva de 200k, porque o alias `opus` não leva `[1m]`. Agora o `Conte
 Claude informou (sidecar ou medida do plugin, nunca a deduzida; motor fora) por modelo respondido, e a sessão
 nova do mesmo modelo a usa. Limite: logo depois de o servidor subir, antes de qualquer sessão desse modelo
 ter informado, a reserva de 200k volta; a reserva em Python segue a regra antiga.
+
+23/11/2026, DELPHI-02: o limite acima e o prazo de 6 h posto depois na revisão fizeram toda sessão nova
+mostrar `192k de 200k` e o aviso de compactar até o fim do primeiro turno, quando o painel pulava para 1M.
+Um `claude -p --model opus` confirmou que o `init` traz só `claude-opus-5-5`, sem janela; o
+`contextWindow: 1000000` vem apenas no `result`. A janela aprendida agora fica em
+`~/.hangar/context-windows.json`, sem prazo: sobrevive à subida do servidor e a conta parada não a perde.
+Troca de plano se corrige no informe seguinte de qualquer sessão da conta. Resta a reserva de 200k só
+para a primeira sessão de um modelo numa conta que nunca informou. A revisão do PR #494 achou três
+casos que o disco sem prazo deixaria para sempre: dois servidores gravando juntos (um apagava o do
+outro), sessão parada com a janela do plano antigo alternando com a nova a cada releitura, e a medida
+de sessão aberta com `CLAUDE_CODE_MAX_CONTEXT_TOKENS` virando a janela da conta. Ficaram de fora,
+aceitos: arquivo apagado à mão só volta no próximo informe diferente ou na subida, e gravação que
+falha tenta de novo a cada releitura (o diário tem teto, o I/O não).
 
 ## Retomada sem o plugin do Hangar
 

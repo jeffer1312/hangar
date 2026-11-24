@@ -1863,8 +1863,8 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
     // "Com resumo" abre o criar, travado na máquina dela; "A mesma conversa" leva esta conversa para a conta escolhida.
     let (baton_weak, baton_target, baton_cwd) = (hangar.clone(), target.clone(), session.cwd.clone());
     let (same_weak, same_target, idle) = (hangar.clone(), target.clone(), session.state == "idle");
-    // Só Claude e Codex trocam de modo, e só parados (o backend responde 409 fora disso); o rótulo é o destino.
-    let mode = matches!(session.provider.as_str(), "claude" | "codex").then(|| {
+    // Só quem tem as duas superfícies troca de modo, e só parado (o backend responde 409 fora disso); o rótulo é o destino.
+    let mode = super::create::has_surfaces(&session.provider).then(|| {
         let label = web(if session.headless { "modo_abrir_no_terminal" } else { "modo_continuar_sem_terminal" });
         let idle = session.state == "idle";
         let label = if idle { label } else { format!("{label} · {}", web("modo_so_ociosa")) };

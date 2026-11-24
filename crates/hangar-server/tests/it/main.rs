@@ -14,6 +14,10 @@ mod connect_peers;
 mod connect_supervisor;
 mod connect_share;
 mod connect_preview;
+mod port_tunnel;
+// Usa o `list_support`, que só existe em Unix; parar servidor só existe no Linux.
+#[cfg(unix)]
+mod port_stop;
 mod connect_account_devices;
 mod cli_probe;
 mod provider_discovery;
@@ -69,6 +73,7 @@ mod dictation_public_cases;
 mod dictation_timing;
 mod session_open_cases;
 mod baton;
+mod browser_host;
 mod claude_models;
 mod dictation_harness;
 mod dictation_process;

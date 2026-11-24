@@ -7,16 +7,18 @@ import * as m from '../../paraglide/messages';
 // Ordem do segmentado, do mais cauteloso ao mais solto.
 const CLAUDE_MODES = ['manual', 'auto', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk'];
 const CODEX_MODES = ['default', 'plan'];
+// O ciclo do shift+tab do agy, com os nomes do Claude; `bypassPermissions` só existe na abertura.
+const ANTIGRAVITY_MODES = ['manual', 'auto', 'acceptEdits', 'plan'];
 
 interface Args {
   serverId: string;
   name: string;
   // null: provider sem modo de permissão (Pi, Kimi, omp, motores) — nada é lido.
-  provider: 'claude' | 'codex' | null;
+  provider: 'claude' | 'codex' | 'antigravity' | null;
 }
 
 // Modo da sessão: no Claude é o modo de permissão (ciclo lido da própria sessão), no Codex é
-// Normal/Planejar. O valor segue o SSE.
+// Normal/Planejar. O Antigravity usa o campo e as rotas do Claude, com ciclo fixo. O valor segue o SSE.
 export function usePermissionControl({ serverId, name, provider }: Args) {
   const chat = chatStore(serverId, name);
   // Servidor da rota, não o ativo: o ativo pode ser outra máquina sem esta sessão. Sem ele (lista
@@ -24,6 +26,8 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
   const server = useServers((s) => s.servers.find((x) => x.id === serverId) ?? null);
   const isCodex = provider === 'codex';
   const isClaude = provider === 'claude';
+  const isAntigravity = provider === 'antigravity';
+  const claudeRoutes = isClaude || isAntigravity;
   const sseClaude = chat.use((s) => s.stateEvent?.claude_permission_mode ?? null);
   const sseCodex = chat.use((s) => s.stateEvent?.codex_mode ?? null);
   const sessionState = chat.use((s) => s.stateEvent?.state ?? null);
@@ -40,10 +44,10 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
   const refused = useRef(false);
 
   useEffect(() => {
-    if (!isClaude || !sseClaude) return;
+    if (!claudeRoutes || !sseClaude) return;
     seq.current++;
     setCurrent(sseClaude);
-  }, [isClaude, sseClaude]);
+  }, [claudeRoutes, sseClaude]);
 
   useEffect(() => {
     if (isCodex && sseCodex) setCurrent(sseCodex);
@@ -51,7 +55,7 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
 
   // Claude: lê o modo atual sem teclas a cada mudança de estado; o ciclo só quando pedido.
   useEffect(() => {
-    if (!isClaude || refused.current || !server) return;
+    if (!claudeRoutes || refused.current || !server) return;
     const my = ++seq.current;
     getPermissionModes(name, false, server)
       .then((res) => {
@@ -63,7 +67,7 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
       .catch((e: unknown) => {
         if ((e as { code?: string })?.code === 'erro_permissao_so_claude') refused.current = true;
       });
-  }, [isClaude, name, server, sessionState]);
+  }, [claudeRoutes, name, server, sessionState]);
 
   useEffect(() => {
     if (!isCodex || !server) return;
@@ -135,13 +139,14 @@ export function usePermissionControl({ serverId, name, provider }: Args) {
   // Só o que o ciclo da sessão alcança; modo novo do CLI entra cru no fim. Sem ciclo lido ainda,
   // o atual fica à vista sozinho.
   const options = isCodex ? CODEX_MODES
+    : isAntigravity ? CLAUDE_MODES.filter((mo) => ANTIGRAVITY_MODES.includes(mo) || mo === current)
     : modes.length
       ? [...CLAUDE_MODES.filter((mo) => modes.includes(mo) || mo === current), ...modes.filter((mo) => !CLAUDE_MODES.includes(mo))]
       : current ? [current] : [];
   const cycleUnknown = isClaude && modes.length === 0;
 
   return {
-    enabled: isClaude || isCodex,
+    enabled: isClaude || isCodex || isAntigravity,
     current,
     options,
     // Ciclo ainda não lido: o botão "Ler do terminal" aparece; sem sonda possível, o aviso de dontAsk.

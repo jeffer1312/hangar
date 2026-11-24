@@ -17,7 +17,7 @@ pub struct Service {
 }
 impl Service {
     pub async fn diagnose(&self) -> Result<Value, String> {
-        let names = ["claude", "codex", "pi", "omp", "kimi", "tmux"];
+        let names = ["claude", "codex", "pi", "omp", "kimi", "agy", "tmux"];
         let versions = futures_util::future::join_all(
             names
                 .iter()
@@ -107,7 +107,26 @@ impl Service {
             }
             cards.push(json!({"id":cli,"nome":name,"instalado":versions[index+1].is_some()||dir.is_dir(),"versao":versions[index+1],"itens":items}));
         }
+        cards.push(self.antigravity(&versions[5])?);
         Ok(Value::Array(cards))
+    }
+    /// O card é `antigravity` (o id da instalação), o programa é `agy`.
+    fn antigravity(&self, version: &Option<String>) -> Result<Value, String> {
+        let env = &self.accounts.env;
+        let installed = version.is_some() || hangar_antigravity::Account::default().data_dir(&env.home).is_dir();
+        let mut items = vec![];
+        if installed {
+            items.extend([
+                health::wrapper(env, "agy", cfg!(windows)),
+                health::agy_hooks(&env.home),
+                health::agy_version(version.as_deref().unwrap_or("")),
+                health::agy_accounts(&env.home),
+                details::agy_skills(env, &self.repo),
+                health::mcp(env, "agy")?,
+                health::default_model(env, "agy")?,
+            ]);
+        }
+        Ok(json!({"id":"antigravity","nome":"Antigravity","instalado":installed,"versao":version,"itens":items}))
     }
     async fn tmux_command(&self, args: &[&str]) -> Option<String> {
         let mut argv = vec!["tmux".to_owned()];

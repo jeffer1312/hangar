@@ -1041,7 +1041,7 @@ impl Hangar {
         // Os internos seguem as regras do "+" e do menu da sessão: some o bloco que não vale para esta sessão.
         let session = self.selected.as_ref();
         let (terminal, browser) = (self.side_menu_terminal(), self.side_menu_browser());
-        let mode = session.is_some_and(|s| matches!(s.provider.as_str(), "claude" | "codex"));
+        let mode = session.is_some_and(|s| super::create::has_surfaces(&s.provider));
         let external = self.external_terminal_available();
         list.retain(|(_, s, _)| match s { Shortcut::Terminal => terminal, Shortcut::Browser => browser, Shortcut::Mode => mode,
             Shortcut::External => external, _ => true });
@@ -1340,6 +1340,7 @@ impl Hangar {
             content = content.child(section(self.render_context(status.as_ref(), width, cx)))
                 .when(!notices.is_empty(), |el| el.child(div().px_4().py_3().border_b_1().border_color(theme::border()).flex().flex_col().gap_2().children(notices)));
             if !read_only && let Some(project) = self.render_project(status.as_ref(), cx) { content = content.child(section(project)); }
+            if !read_only && let Some(ports) = self.render_ports(beta, window, cx) { content = content.child(section(ports)); }
             if !read_only && let Some(actions) = self.render_shortcuts(readable, width, cx) {
                 content = content.child(div().map(|el| if beta { el.px(px(BETA_SIDE_PAD)).py(px(18.)) } else { el.px(px(SIDE_PAD)).py(px(14.)) }).child(actions));
             }
@@ -1412,7 +1413,7 @@ fn beta_tile_width(inner: f32, count: usize) -> f32 {
 }
 
 /// Título de seção da conversa nova: 12 px, negrito, em maiúsculas e apagado.
-fn beta_title(text: String) -> Div {
+pub(super) fn beta_title(text: String) -> Div {
     div().mb(px(12.)).text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::faint()).child(text.to_uppercase())
 }
 const SHORTCUT_GAP: f32 = 6.;

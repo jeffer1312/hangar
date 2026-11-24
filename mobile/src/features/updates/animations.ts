@@ -8,6 +8,7 @@ import { CliproxyWizardAnimation } from './CliproxyWizardAnimation';
 import { SpeedChoiceAnimation } from './SpeedChoiceAnimation';
 import { ProxyUpdateAnimation } from './ProxyUpdateAnimation';
 import { AdoptProxyAnimation } from './AdoptProxyAnimation';
+import { AntigravityAnimation } from './AntigravityAnimation';
 import { NoticeActionsAnimation } from './NoticeActionsAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
@@ -33,10 +34,12 @@ import { SessionSettingsAnimation } from './SessionSettingsAnimation';
 import { StatusAnimation } from './StatusAnimation';
 import { WorkReviewAnimation } from './WorkReviewAnimation';
 import { WhatsAppReadonlyAnimation } from './WhatsAppReadonlyAnimation';
+import { PortsAnimation } from './PortsAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
   'ajustes-sessao-abas': SessionSettingsAnimation,
+  antigravity: AntigravityAnimation,
   'provedores-do-claude': ClaudeProvidersAnimation,
   'revisoes-mobile': ReviewsAnimation,
   'scheduled-tasks': ScheduledTasksAnimation,
@@ -70,6 +73,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'tela-de-status': StatusAnimation,
   'worktree-atualizada': WorktreeFreshAnimation,
   'whatsapp-somente-leitura': WhatsAppReadonlyAnimation,
+  'portas-da-sessao': PortsAnimation,
 };
 
 export const animationFor = (name: string | null): ComponentType<{ width: number }> | null =>

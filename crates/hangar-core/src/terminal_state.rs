@@ -583,6 +583,67 @@ fn agy_menu(lines: &[&str]) -> Option<TerminalQuestion> {
     Some(TerminalQuestion { question: Some(question), options })
 }
 
+/// O rodapé do `agy`, à direita da última linha: `[modo · ]Modelo · esforço` (`auto · Gemini 4 Neon · low`).
+/// O modo padrão, o que pergunta antes de agir, não tem rótulo.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgyFooter {
+    /// Nos nomes do Claude: `manual` (o padrão do `agy`), `acceptEdits`, `auto` ou `plan`. `None`: rótulo
+    /// que o Hangar não conhece, que nunca vira um modo chutado.
+    pub mode: Option<&'static str>,
+    /// O nome que a tela mostra (`Gemini 4 Neon`).
+    pub model: String,
+    pub effort: Option<String>,
+}
+
+impl AgyFooter {
+    /// O id do modelo como o `agy` o escreve (`gemini-4-neon-low`), comparável por `agy_model_key`.
+    pub fn model_id(&self) -> String {
+        let base = agy_model_key(&self.model);
+        match &self.effort {
+            Some(effort) => format!("{base}-{effort}"),
+            None => base,
+        }
+    }
+    /// O id (do catálogo ou do transcript) é o modelo deste rodapé?
+    pub fn is_model(&self, id: &str) -> bool { agy_model_key(id) == self.model_id() }
+}
+
+/// Nome ou id de modelo do `agy` comparáveis: minúsculas, com espaço, ponto e `_` virando hífen.
+pub fn agy_model_key(text: &str) -> String {
+    trim(text).chars().flat_map(|c| if c.is_whitespace() || c == '.' || c == '_' { vec!['-'] } else { c.to_lowercase().collect() }).collect()
+}
+
+/// O rodapé do `agy` na última linha com texto; à esquerda pode vir `esc to cancel` ou `? for shortcuts`.
+pub fn agy_footer(pane: &str) -> Option<AgyFooter> {
+    static GAP: LazyLock<Regex> = LazyLock::new(|| terminal_regex(r"\s{2,}"));
+    let lines = lines(pane);
+    let last = lines.iter().rev().map(|l| trim(l)).find(|l| !l.is_empty())?;
+    let segment = GAP.split(last).last()?;
+    let parts: Vec<&str> = segment.split(" \u{b7} ").map(trim).collect();
+    let named = |part: &str| part.chars().next().is_some_and(|c| c.is_uppercase() || c.is_ascii_digit());
+    let label = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+    let at = parts.iter().position(|part| named(part))?;
+    let (before, after) = (&parts[..at], &parts[at + 1..]);
+    // Sem `·` não é o rodapé: qualquer linha com maiúscula passaria por nome de modelo.
+    if parts.len() < 2 || before.len() > 1 || after.len() > 1 || !before.iter().chain(after).all(|part| label(part)) {
+        return None;
+    }
+    let mode = match before.first().copied() {
+        None => Some("manual"),
+        Some("auto") => Some("auto"),
+        Some("plan") => Some("plan"),
+        Some("accept-edits") => Some("acceptEdits"),
+        Some(_) => None,
+    };
+    Some(AgyFooter { mode, model: parts[at].to_owned(), effort: after.first().map(|effort| (*effort).to_owned()) })
+}
+
+/// As confirmações do `/model` na tela (`⎿  Model set to Gemini 4 Neon (Medium)`), da mais antiga à mais nova.
+pub fn agy_model_set(pane: &str) -> Vec<String> {
+    static SET: LazyLock<Regex> = LazyLock::new(|| terminal_regex(r"Model set to (\S.*\S)\s*$"));
+    lines(pane).iter().filter_map(|line| SET.captures(line).map(|c| c[1].to_owned())).collect()
+}
+
 /// Texto visível do começo do quadro que só pode ser aceito quando a costura comprovar a continuação.
 pub fn kimi_continuation(pane: &str) -> String {
     let plain = kimi_plain(pane);

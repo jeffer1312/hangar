@@ -320,7 +320,9 @@ async fn forwarding_never_holds_the_ingress_pass() {
         let (got, text) = post_to(server, name, "input", body).await;
         let reply: Value = serde_json::from_str(&text).unwrap();
         assert_eq!((got, reply["detail"]["code"].as_str()), (status, Some(code)), "{name}");
-        assert!(registry.ingress().close(name, Duration::from_millis(300)).await.is_ok(), "{name}: passe solto");
+        // O 503 pede uma reabertura, que entra pela mesma porta com passe próprio enquanto dura: o fechamento
+        // espera esse passe sair. Passe que a rota esquecesse aberto nunca sai e estoura o teto.
+        assert!(registry.ingress().close(name, Duration::from_secs(10)).await.is_ok(), "{name}: passe solto");
         registry.ingress().open(name);
     }
 }
@@ -380,5 +382,5 @@ fn table_hands_nothing_to_python_and_the_announced_ownership_stays() {
         }
     }
     assert_eq!(owned_modes(), vec![(Provider::Claude, true), (Provider::Claude, false), (Provider::Codex, true), (Provider::Codex, false),
-        (Provider::Pi, false), (Provider::Omp, false), (Provider::Kimi, false)]);
+        (Provider::Pi, false), (Provider::Omp, false), (Provider::Kimi, false), (Provider::Antigravity, false)]);
 }

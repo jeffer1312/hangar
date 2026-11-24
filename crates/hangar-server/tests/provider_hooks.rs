@@ -1129,8 +1129,11 @@ fn agy_payload(event: &str, extra: Value) -> Vec<u8> {
 #[test]
 fn provider_hooks_agy_state_and_ticket_answer_an_empty_object() {
     let root = tempfile::tempdir().unwrap();
+    let started = run(root.path(), "agy-state-hook", &agy_payload("SessionStart", json!({})), &[("TMUX_PANE", "%7")]);
+    assert!(started.status.success());
+    assert!(!root.path().join(format!("config/.hangar-state/{AGY_CONV}.json")).exists(), "SessionStart não marca trabalhando");
+    assert!(root.path().join("config/.hangar-agy/7.json").is_file(), "SessionStart grava o bilhete");
     for (event, extra, expected) in [
-        ("SessionStart", json!({}), Some("working")),
         ("PreInvocation", json!({}), Some("working")),
         ("Stop", json!({"fullyIdle": false}), Some("working")),
         ("Stop", json!({"fullyIdle": true}), Some("idle")),

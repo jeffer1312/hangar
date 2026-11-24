@@ -210,6 +210,10 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             }
         }
     }
+    // O `agy` com terminal ignora o `GEMINI_HOME`: `--conta` não escolhe nada, e nunca prepara conta Claude no lugar.
+    if options.provider == "antigravity" && !options.account.is_empty() {
+        return fail(err, "erro: --conta não vale para o Antigravity: ele só usa a conta padrão (a do ~/.gemini)", 2);
+    }
     if options.provider == "codex" && !options.account.is_empty() {
         if options.account == "auto" {
             return fail(err, "erro: --conta auto só vale para Claude", 2);

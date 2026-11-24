@@ -21,7 +21,7 @@ pub fn ready_collector(base: &Path) -> Arc<Collector> {
         codex: vec![CodexScope { home: base.join("codex"), account: format!("codex:{}", base.join("codex").display()), label: "Codex · default".into() }],
         pi: vec![PiScope { root: base.join("pi"), source: "pi".into() }],
         kimi: Some(KimiScope { root: base.join("kimi/sessions"), index: base.join("kimi/session_index.jsonl") }),
-        repo: base.to_owned(),
+        repo: base.to_owned(), antigravity: vec![],
     };
     let collector = Arc::new(Collector::new(base.join("../idx"), base.join("pricing"), base.join("../sem-mapa.json"), Arc::new(Source(scopes))));
     collector.prepare(false).unwrap();

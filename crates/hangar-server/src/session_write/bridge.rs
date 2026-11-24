@@ -93,7 +93,7 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         cleanup.push(cleanup_failed(&st, &name, "close_chain_failed", "o vínculo then da sessão encerrada não saiu"));
     }
     record_closed_name(&st, &name, closed["transcript"].as_str()).await;
-    let leave = match st.groups.clone() { Some(groups) => leave_warnings(&st, &groups, &name).await, None => Vec::new() };
+    let leave = match st.groups.clone() { Some(groups) => leave_warnings(&st, &groups, &name, "session_closed").await, None => Vec::new() };
     cleanup.extend(after_close(&st, &name).await);
     let mut response = super::json_response(StatusCode::OK, json!({"ok": true, "warning": null}));
     crate::routes::cors(req.headers(), response.headers_mut());
@@ -134,8 +134,8 @@ async fn listed_transcript(st: &AppState, name: &str) -> Option<std::path::PathB
 }
 
 /// Sai do grupo; os avisos que não saíram e a falha da própria saída viram `{sessao, erro}`.
-async fn leave_warnings(st: &AppState, groups: &crate::groups::service::GroupService, name: &str) -> Vec<Value> {
-    match crate::groups::exit::leave_and_notify(st, groups, name).await {
+async fn leave_warnings(st: &AppState, groups: &crate::groups::service::GroupService, name: &str, why: &'static str) -> Vec<Value> {
+    match crate::groups::exit::leave_and_notify(st, groups, name, why).await {
         Ok((_, warnings)) => warnings,
         Err(error) => {
             tracing::warn!(session = %name, error = %error, "saída do grupo falhou ao encerrar a sessão");
@@ -320,7 +320,7 @@ pub fn other_cleanup(state:std::sync::Weak<AppState>)->crate::runtime::other_ter
         let Some(st)=state.upgrade()else{return Ok(vec![]);};let Some(runtime)=st.state.runtime.get().cloned()else{return Ok(vec![json!({"code":"other_cleanup_unavailable"})]);};
         let life=closed.life;let mut warnings=Vec::new();let name=life.name().to_owned();
         if !runtime.other_cleanup_allowed(&life).await? {return Ok(vec![json!({"code":"other_cleanup_replaced"})]);}
-        if let Some(groups)=st.groups.clone(){warnings.extend(leave_warnings(&st,&groups,&name).await);}
+        if let Some(groups)=st.groups.clone(){warnings.extend(leave_warnings(&st,&groups,&name,"other_session_closed").await);}
         if runtime.other_cleanup_allowed(&life).await? && let Some(share)=st.share.clone() {
             match share.store.revoke_session(&name,None) {Ok(0)=>{},Ok(_)=>crate::share::owner_routes::sync_tunnel(&share).await,Err(_)=>warnings.push(json!({"code":"other_share_cleanup_failed"}))}
         }

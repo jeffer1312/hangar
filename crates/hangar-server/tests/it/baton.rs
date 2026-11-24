@@ -1630,12 +1630,13 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
         let (finished_tx,finished_rx)=tokio::sync::oneshot::channel();
         let ready=Arc::new(Mutex::new(Some(ready_tx)));let finished=Arc::new(Mutex::new(Some(finished_tx)));
         let signal=root.join("new-session-ready");
+        // O spec é gravado antes de o terminal nascer: o fim da abertura é o `new-session-done` do tmux falso.
+        let done=root.join("new-session-done");
+        let done_on_disk=done.clone();
         let mut watcher=notify::recommended_watcher(move|event:notify::Result<notify::Event>| {
             if let Ok(event)=event {
                 if event.paths.contains(&signal) {if let Some(tx)=ready.lock().unwrap().take(){let _=tx.send(());}}
-                if event.paths.iter().any(|path|path.extension().is_some_and(|ext|ext=="json") && path.parent().is_some_and(|p|p.ends_with("session-specs"))) {
-                    if let Some(tx)=finished.lock().unwrap().take(){let _=tx.send(());}
-                }
+                if event.paths.contains(&done) {if let Some(tx)=finished.lock().unwrap().take(){let _=tx.send(());}}
             }
         }).unwrap();
         watcher.watch(root,notify::RecursiveMode::Recursive).unwrap();
@@ -1657,21 +1658,39 @@ fn b01_cancel_opening_keeps_ingress_until_the_detached_last_effect() {
         handler.abort();
         let cancelled=handler.await.is_err_and(|e|e.is_cancelled());
         let after=if before.is_pending(){Some(futures_util::poll!(closing.as_mut()))}else{None};
-        let released_early=before.is_ready() || after.as_ref().is_some_and(std::task::Poll::is_ready);
-        release.0.write_all(b"go\n").unwrap();
-        let completed=tokio::time::timeout(Duration::from_secs(25),finished_rx).await.is_ok_and(|r|r.is_ok());
-        let closed=match before {
-            std::task::Poll::Ready(result)=>result.is_ok(),
-            std::task::Poll::Pending=>match after {
-                Some(std::task::Poll::Ready(result))=>result.is_ok(),
-                _=>closing.await.is_ok(),
-            }
+        let early=match before {
+            std::task::Poll::Ready(result)=>Some(result.is_ok()),
+            std::task::Poll::Pending=>match after {Some(std::task::Poll::Ready(result))=>Some(result.is_ok()),_=>None},
         };
+        release.0.write_all(b"go\n").unwrap();
+        let mut finished_rx=finished_rx;
+        let wait=Duration::from_secs(25);
+        // Liberação e último efeito do Mux observados juntos. O aviso do vigia pode chegar depois da liberação legítima,
+        // então quem decide a ordem é o `new-session-done` já estar no disco quando a entrada abre. O que a abertura faz
+        // depois de o tmux sair (anúncio, vínculo) não é observado aqui.
+        let (completed,closed,released_early)=match early {
+            Some(ok)=>(tokio::time::timeout(wait,&mut finished_rx).await.is_ok_and(|r|r.is_ok()),ok,true),
+            // `biased` com a entrada primeiro: os dois prontos juntos ainda passam pela conferência do disco.
+            None=>match tokio::time::timeout(wait,async {tokio::select! {
+                biased;
+                r=closing.as_mut()=>(false,r.is_ok(),!done_on_disk.exists()),
+                r=&mut finished_rx=>(true,r.is_ok(),false),
+            }}).await {
+                Ok((true,finished,_))=>(finished,closing.await.is_ok(),false),
+                Ok((false,closed,first))=>(tokio::time::timeout(wait,&mut finished_rx).await.is_ok_and(|r|r.is_ok()),closed,first),
+                Err(_)=>(false,false,false),
+            },
+        };
+        let published=std::fs::read_dir(h.home.join(".hangar/session-specs")).is_ok_and(|entries|entries.filter_map(Result::ok).any(|entry| {
+            let path=entry.path();
+            path.extension().is_some_and(|ext|ext=="json")
+                && std::fs::read(&path).ok().and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok()).is_some_and(|spec|spec["name"]=="cancel-cont")
+        }));
         runtime.ingress().release("morta");
         runtime.shutdown().await.unwrap();
         assert!(reached,"a abertura deve alcançar o Mux antes do cancelamento");
         assert!(cancelled,"abortar a própria futura HTTP, não apenas desconectar um cliente");
-        assert!(completed && root.join("new-session-done").exists(),"a abertura destacada deve terminar e publicar o spec antes da limpeza");
+        assert!(completed && published,"a abertura destacada deve terminar e publicar o spec antes da limpeza");
         assert!(closed);
         assert!(!released_early,"cancelar o HTTP liberou a entrada antes do último efeito da abertura destacada");
     });

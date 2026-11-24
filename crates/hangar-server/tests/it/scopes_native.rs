@@ -357,3 +357,24 @@ proptest::proptest! {
         }
     }
 }
+
+#[test]
+fn scopes_native_lists_every_antigravity_account_with_a_brain_folder() {
+    let f = Fixture::new();
+    // A padrão só entra quando o agy já gravou conversa; a adicional precisa da marca do Hangar.
+    fs::create_dir_all(f.home.join(".gemini/antigravity-cli/brain")).unwrap();
+    f.write(".antigravity-trabalho/.hangar-antigravity-conta", r#"{"version":1,"id":"trabalho"}"#);
+    fs::create_dir_all(f.home.join(".antigravity-trabalho/antigravity-cli/brain")).unwrap();
+    f.write(".antigravity-vazia/.hangar-antigravity-conta", r#"{"version":1,"id":"vazia"}"#);
+    let got = f.source("").fetch();
+    assert!(got.is_ok(), "{got:?}");
+    let got: Vec<_> = got.unwrap().antigravity.into_iter().map(|s| (s.root, s.history, s.account, s.label)).collect();
+    let default = f.home.join(".gemini");
+    let extra = f.home.join(".antigravity-trabalho");
+    assert_eq!(got, vec![
+        (default.join("antigravity-cli/brain"), default.join("antigravity-cli/history.jsonl"),
+            format!("antigravity:{}", resolved(&default).display()), "Antigravity · Google (padrão)".to_owned()),
+        (extra.join("antigravity-cli/brain"), extra.join("antigravity-cli/history.jsonl"),
+            format!("antigravity:{}", resolved(&extra).display()), "Antigravity · trabalho".to_owned()),
+    ]);
+}

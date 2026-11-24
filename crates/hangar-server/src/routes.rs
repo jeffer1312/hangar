@@ -58,6 +58,8 @@ pub struct AppState {
     pub cfg: Config,
     pub auth: Auth,
     pub remote_browser: Arc<crate::remote_browser::layout::Layouts>,
+    /// Apps de outra máquina que emprestam o navegador às sessões daqui (`/api/browser-host`).
+    pub browser_host: Arc<hangar_browser_host::Registry>,
     pub http: HttpClient,
     pub side: SideCtx,
     pub terminal: crate::terminal_control::TerminalPool,
@@ -304,6 +306,7 @@ impl AppState {
             login_browser: Arc::default(),
             interactions, plugin,
             remote_browser: Arc::default(),
+            browser_host: Arc::default(),
             transcription: Arc::default(),
             config_sync_context: None,
             omp_sync: Arc::default(),
@@ -917,7 +920,7 @@ async fn error_code(response: Response) -> (Response, Option<String>) {
 const NAMED_SEGMENTS: &[(&[&str], usize, usize)] = &[
     (&["api", "sessions"], 0, 1), (&["api", "archive"], 0, 2), (&["api", "credenciais"], 1, 1),
     (&["api", "engines"], 0, 1), (&["api", "plugins", "marketplaces"], 0, 1), (&["api", "plugins"], 0, 1),
-    (&["api", "codex-contas"], 0, 1), (&["api", "claude-configs"], 0, 1), (&["api", "guests"], 0, 1),
+    (&["api", "codex-contas"], 0, 1), (&["api", "antigravity-contas"], 0, 1), (&["api", "claude-configs"], 0, 1), (&["api", "guests"], 0, 1),
     (&["api", "external-pairs"], 0, 1), (&["api", "peers"], 0, 1), (&["api", "groups"], 0, 1),
     (&["api", "connect", "devices"], 0, 1), (&["api", "connect", "peers"], 0, 1), (&["api", "hangar-terminals"], 0, 1),
     (&["api", "scheduled-tasks"], 0, 1), (&["api", "dream", "runs"], 0, 1), (&["api", "mission", "actions"], 0, 1),
@@ -962,6 +965,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/guest-accounts/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/sync/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/hangar-terminals/{ident}/term", get(crate::term::hangar_ws).fallback(pass_registered))
+        .route("/api/port-tunnel", get(crate::port_tunnel::route).fallback(pass_any))
+        // Parar o servidor de uma porta da sessão: só o dono, nunca na 8766.
+        .route("/api/sessions/{name}/ports/{port}/stop", axum::routing::post(crate::port_stop::route).fallback(pass_any))
         .route("/__hangar_server/health", get(health))
         .route("/api/client-api", get(client_api).fallback(pass_any))
         // As rotas privadas não existem nesta porta.
@@ -982,6 +988,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Reserva pré-aquecida do Claude sem terminal: só o dono; outro método leva a recusa do caminho sem rota.
         .route("/api/sessions/prewarm", axum::routing::put(crate::prewarm::http::put).fallback(pass_any))
         .route("/api/sessions/prewarm/{id}", axum::routing::delete(crate::prewarm::http::delete).fallback(pass_any))
+        // Navegador emprestado por app de outra máquina: só o dono pelo token, nunca na 8766.
+        .route("/api/browser-host", get(crate::browser_host::host_ws).fallback(pass_any))
+        .route("/api/sessions/{name}/browser-cmd", axum::routing::post(crate::browser_host::browser_cmd).fallback(pass_any))
         // Pedido de navegador do agente: só o dono.
         .route("/api/sessions/{name}/nav", axum::routing::post(crate::nav_requests::open).delete(crate::nav_requests::confirm).fallback(pass_registered))
         // Loop e `then`: a guarda delimita a sessão e a política permite cada operação.
@@ -1956,7 +1965,7 @@ mod tests {
     async fn migrated_provider_routes_authenticate_before_validation_and_never_fall_back() {
         let state = test_state().await;
         let peer = "127.0.0.1:5000".parse().unwrap();
-        for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/orq/papeis"] {
+        for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/antigravity/model", "/api/sessions/demo/orq/papeis"] {
             for (token, expected) in [("errado", StatusCode::UNAUTHORIZED), ("dono", StatusCode::UNPROCESSABLE_ENTITY)] {
                 let mut req = request(path, "198.51.100.50", false, token);
                 *req.method_mut() = Method::POST;

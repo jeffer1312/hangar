@@ -3,7 +3,7 @@
 #![cfg(unix)]
 use crate::fake::{OWNER, client, next_named};
 use crate::list_support::{open, server};
-use hangar_server::keyring::{Backend, KeyringState, UnlockError};
+use hangar_server::keyring::{Backend, DefaultOpen, KeyringState, Reading, UnlockError};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
@@ -16,11 +16,14 @@ struct FakeKeyring {
     /// O daemon aceita a senha mas segue trancado até reiniciar (prompt que travou o daemon).
     stuck: Mutex<bool>,
     restarts: Mutex<u32>,
+    /// Um `default` próprio, trancado, numa máquina sem tela: o prompter não tem onde abrir.
+    default_apart: Mutex<bool>,
 }
 
 impl Backend for FakeKeyring {
-    fn state(&self) -> Option<KeyringState> {
-        Some(if *self.locked.lock().unwrap() { KeyringState::Locked } else { KeyringState::Unlocked })
+    fn state(&self) -> Option<Reading> {
+        let login = if *self.locked.lock().unwrap() { KeyringState::Locked } else { KeyringState::Unlocked };
+        Some(Reading { login, default: if *self.default_apart.lock().unwrap() { KeyringState::Locked } else { login } })
     }
     fn unlock(&self, password: &[u8]) -> Result<(), UnlockError> {
         self.received.lock().unwrap().push(password.to_vec());
@@ -33,6 +36,8 @@ impl Backend for FakeKeyring {
         *self.stuck.lock().unwrap() = false;
         true
     }
+    fn display(&self) -> bool { false }
+    fn open_default(&self) -> DefaultOpen { DefaultOpen::Refused }
 }
 
 fn locked() -> Arc<FakeKeyring> {
@@ -102,4 +107,20 @@ async fn only_the_owner_and_never_forwarded() {
     assert_eq!((status, b["detail"]["code"].clone()), (422, json!("keyring_bad_request")));
     assert_eq!(post(srv.addr, Some(OWNER), &[], json!({"password": ""})).await.0, 422);
     assert!(keyring.received.lock().unwrap().is_empty());
+}
+
+/// Login aberto e `default` trancado sem tela: o aviso fica, e a resposta diz que só o login abriu.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_default_that_stays_locked_is_a_conflict_with_its_own_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = server(dir.path(), 1).await;
+    let keyring = locked();
+    *keyring.default_apart.lock().unwrap() = true;
+    srv.list.keyring.set_backend(keyring.clone());
+    srv.list.keyring.refresh();
+    let (status, body) = post(srv.addr, Some(OWNER), &[], json!({"password": PASSWORD})).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (409, json!("keyring_default_locked")));
+    assert!(!*keyring.locked.lock().unwrap(), "o login abriu");
+    assert_eq!(srv.list.keyring.current(), KeyringState::Locked);
+    assert_eq!(*keyring.restarts.lock().unwrap(), 0);
 }

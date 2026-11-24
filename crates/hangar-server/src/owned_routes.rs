@@ -60,7 +60,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::GET {
         if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/sessions/creation-progress" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/status" | "/api/status/events" | "/api/presence" | "/api/update/notes" | "/api/update/arrived" | "/api/news" | "/api/manual"
             | "/api/voice" | "/api/voice/settings" | "/api/voice/memory" | "/api/jev/aux/cliproxy" | "/api/jev/delivery" | "/api/client-api"
-            | "/api/search" | "/api/search/context") {
+            | "/api/search" | "/api/search/context" | "/api/port-tunnel" | "/api/browser-host") {
             return true;
         }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
@@ -94,7 +94,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     }
     // Escritas Claude: o Rust decide por pedido; o que não é dele ele repassa.
     let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
-    if *method == Method::POST && matches!(tail, Some("input" | "steer" | "interrupt" | "select" | "select/submit" | "answer" | "keys" | "term-input")) {
+    if *method == Method::POST && matches!(tail, Some("input" | "steer" | "interrupt" | "select" | "select/submit" | "answer" | "keys" | "term-input" | "browser-cmd")) {
         return true;
     }
     // Texto a um subagente em segundo plano: o plugin do Claude entrega pelo `/pull`.
@@ -105,6 +105,11 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // Parar uma tarefa: o Rust responde por todo provedor, sem rota no Python.
     if *method == Method::POST && tail.and_then(|t| t.strip_prefix("tasks/")).and_then(|t| t.strip_suffix("/stop"))
         .is_some_and(|id| !id.is_empty() && !id.contains('/')) {
+        return true;
+    }
+    // Parar o servidor de uma porta da sessão (`port_stop`): só o dono, sem rota no Python.
+    if *method == Method::POST && tail.and_then(|t| t.strip_prefix("ports/")).and_then(|t| t.strip_suffix("/stop"))
+        .is_some_and(|port| !port.is_empty() && !port.contains('/')) {
         return true;
     }
     // Rotas só do Codex, modos de permissão do Claude e as reaberturas (troca de modo, recarregar, conta,

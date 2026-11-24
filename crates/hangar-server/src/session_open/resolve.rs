@@ -242,6 +242,9 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     let saved_first = request.inherit != Some(true);
     // O Codex com terminal recusa modo pedido; o salvo segue como o herdado.
     let saved_codex_mode = saved_permission.as_deref().filter(|_| provider == AgentProvider::Codex).and_then(PermissionMode::codex);
+    // Só o pedido explícito recusa: o `manual` salvo como padrão é descartado com terminal.
+    let asked_manual = provider == AgentProvider::Antigravity
+        && request.permission_mode.as_deref().and_then(PermissionMode::antigravity) == Some(PermissionMode::Manual);
     let filled;
     let request = match &saved {
         Some(saved) => {
@@ -375,6 +378,11 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     let headless = headless.unwrap_or_else(|| {
         !request.read_only && matches!(provider, AgentProvider::Claude | AgentProvider::Codex) && facts.defaults().headless
     });
+    // Pedido explícito de `manual` no Antigravity com terminal: ele abriria em `auto`, que roda comando sem perguntar.
+    if asked_manual && !headless {
+        return Err(OpenError::new(409, "erro_permissao_manual_sem_terminal",
+            "o Antigravity com terminal não abre no modo que pergunta antes de agir; use sem terminal ou outro modo"));
+    }
     let model = validate(request, caller, provider, headless, config_dir.as_deref(), codex_account.as_deref(), permission.as_deref(), facts)?;
     let raw = match &request.name {
         Some(raw) => raw.clone(),
@@ -688,6 +696,11 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
     };
     // No Antigravity a pasta é a conta Google (`GEMINI_HOME`), não uma conta Claude.
     if provider == AgentProvider::Antigravity {
+        // O `agy` grava os dados em `~/.gemini` mesmo com o `GEMINI_HOME` de outra pasta (com e sem terminal): só a conta padrão.
+        if config_dir.is_some() {
+            return Err(OpenError::new(409, "erro_conta_antigravity_adicional",
+                "o Antigravity só usa a conta padrão (a do ~/.gemini); abra sem escolher conta"));
+        }
         if let Some(dir) = config_dir && !hangar_antigravity::paths::is_account_dir(std::path::Path::new(dir)) {
             return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
         }
@@ -703,13 +716,6 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         }
     }
     // O Codex sem terminal aceita o modo dele (vira sandbox e aprovação).
-    // Pedido explícito de `manual` no Antigravity com terminal: ele abriria em `auto`, que roda comando sem perguntar.
-    if provider == AgentProvider::Antigravity && !headless
-        && request.permission_mode.as_deref().and_then(PermissionMode::antigravity) == Some(PermissionMode::Manual)
-    {
-        return Err(OpenError::new(409, "erro_permissao_manual_sem_terminal",
-            "o Antigravity com terminal não abre no modo que pergunta antes de agir; use sem terminal ou outro modo"));
-    }
     if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) && provider != AgentProvider::Antigravity {
         return Err(OpenError::new(409, "erro_permissao_so_claude", "modo de permissao so vale para claude"));
     }

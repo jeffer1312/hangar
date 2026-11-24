@@ -741,6 +741,8 @@ fn guest_rows<'a>(rows: impl IntoIterator<Item = &'a SessionRow>, guest: &Guest)
         (r.rename_suggestion, r.rename_weak) = (None, false);
         // Ocultar é organização da lista do dono.
         r.hidden_from_list = false;
+        // As portas são da máquina do dono: o túnel não atende convidado.
+        r.ports = Vec::new();
         r.guest_kind = guest.kind_of(&r.name).map(|k| match k { Kind::Share => "share", Kind::Pair => "pair" }.to_owned());
         r
     }).collect()
@@ -1024,6 +1026,18 @@ mod tests {
     }
 
     #[test]
+    fn a_guest_row_never_carries_the_ports() {
+        let share: crate::share::store::Share = serde_json::from_value(json!({"id": "1", "session": "s", "life": null,
+            "created_at": 0.0, "code_expires_at": 0.0, "code_hash": "h"})).unwrap();
+        let guest = Guest { token_hash: "t".into(), records: vec![share], invite: true };
+        let row: SessionRow = serde_json::from_value(json!({"name": "s", "ports": [{"port": 8123, "process": "python3", "pid": 7}]})).unwrap();
+        assert_eq!(row.ports.len(), 1);
+        let rows = guest_rows([&row], &guest);
+        assert_eq!(rows.len(), 1);
+        assert!(serde_json::to_value(&rows[0]).unwrap().get("ports").is_none());
+    }
+
+    #[test]
     fn nav_map_is_pruned_with_the_request() {
         let mut sent = Sent::default();
         let marker = crate::nav_requests::Marker { url: "u".into(), ts: 1.0 };
@@ -1080,7 +1094,7 @@ mod tests {
 }
 
 async fn login_rows(service:Arc<crate::login_guests::Service>,produced:Produced,guest:crate::login_guests::store::Guest)->Result<Vec<SessionRow>,()> {
-    tokio::task::spawn_blocking(move||produced.rows.iter().filter(|row|service.store.visible(Some(&guest),&row.name,row.lifecycle_id.as_deref())).cloned().collect()).await.map_err(|_|())
+    tokio::task::spawn_blocking(move||produced.rows.iter().filter(|row|service.store.visible(Some(&guest),&row.name,row.lifecycle_id.as_deref())).map(|row|SessionRow{ports:Vec::new(),..row.clone()}).collect()).await.map_err(|_|())
 }
 
 async fn login_loop(mut sub:Subscription,service:Arc<crate::login_guests::Service>,token:String,out:mpsc::Sender<Bytes>) {

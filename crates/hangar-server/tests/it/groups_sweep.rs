@@ -42,7 +42,7 @@ impl SweepEnv for Env {
     }
     fn leave<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Vec<String>, GroupError>> {
         self.left.lock().unwrap().push(name.to_owned());
-        Box::pin(async move { self.groups.leave(name).await })
+        Box::pin(async move { self.groups.leave(name, "test").await })
     }
     fn report(&self, event: &'static str, code: &str) { self.reports.lock().unwrap().push((event, code.to_owned())); }
 }
@@ -269,11 +269,28 @@ async fn dead_session_with_sanitized_name_ends_its_external_pair_by_the_raw_name
     state.groups = Some(groups.clone());
     let share = crate::share_pair_routes::share_state(&tmp.path().join("shares.json"), &root, Arc::new(Mutex::new(1_000.0)));
     state.share = Some(share.clone());
-    let (ex, warnings) = leave_and_notify(&state, &groups, "nome-com-espa-o").await.unwrap();
+    let (ex, warnings) = leave_and_notify(&state, &groups, "nome-com-espa-o", "test").await.unwrap();
     assert_eq!(ex, ["pc-ana::Y"]);
     assert_eq!(*asked.lock().unwrap(), ["DELETE /api/pair"]);
     assert!(share.pairs.all().is_empty());
     // Tratado como máquina própria, o aviso falharia (nenhuma máquina cadastrada).
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(!root.join("nome-com-espa-o.json").exists());
+}
+
+/// Servidor montado sem a subida principal (`serve_until` dos testes) enxerga a `HOME` real: a
+/// varredura nele daria como mortas as sessões do servidor de verdade. Só o principal varre.
+#[tokio::test]
+async fn only_the_main_server_sweeps() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut state = hangar_server::routes::AppState::new(fake::config(""));
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(tmp.path().join("pair"), tmp.path().join("arquivo")),
+        Arc::new(Phase(Mutex::default())), String::new())));
+    assert!(hangar_server::groups::sweep::spawn(Arc::new(state)).is_none(), "servidor de teste não varre");
+    let mut state = hangar_server::routes::AppState::new(fake::config(""));
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(tmp.path().join("pair"), tmp.path().join("arquivo")),
+        Arc::new(Phase(Mutex::default())), "casa".into())));
+    state.startup = hangar_server::startup::Readiness::pending();
+    let main = hangar_server::groups::sweep::spawn(Arc::new(state)).expect("o principal varre");
+    main.abort();
 }

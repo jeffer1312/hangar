@@ -1,8 +1,8 @@
 //! Faixa de estatísticas da conversa aberta (evento `stats`), porte das contas de Claude, Codex, Pi, omp e Kimi de
-//! backend/app/stats.py. Lê o mesmo arquivo do transcript, incrementalmente: guarda o ponto de leitura
-//! e a cada coleta dobra só as linhas novas. Os tempos e velocidades são aproximados por construção (o
-//! cliente prefixa "~"); a medida exata do stream entra por cima (`RateStore`). O esperado vem de rodar o
-//! Python (`backend/tests/fixtures/contract/gen_stats.py`).
+//! backend/app/stats.py, mais a do Antigravity (que o Python não tinha). Lê o mesmo arquivo do transcript,
+//! incrementalmente: guarda o ponto de leitura e a cada coleta dobra só as linhas novas. Os tempos e velocidades são
+//! aproximados por construção (o cliente prefixa "~"); a medida exata do stream entra por cima (`RateStore`). O
+//! esperado vem de rodar o Python (`backend/tests/fixtures/contract/gen_stats.py`).
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -35,6 +35,7 @@ enum Kind {
     Codex,
     Pi,
     Kimi,
+    Antigravity,
 }
 
 /// Resposta mais nova do Claude: tokens, início, fim (relógio de parede) e o id da mensagem.
@@ -132,6 +133,7 @@ impl Fold {
             Kind::Codex => self.feed_codex(obj),
             Kind::Pi => self.feed_pi(obj),
             Kind::Kimi => self.feed_kimi(obj),
+            Kind::Antigravity => self.feed_agy(obj),
         }
     }
 
@@ -400,6 +402,41 @@ impl Fold {
         }
     }
 
+    /// Uma linha do `transcript_full.jsonl`: o uso vem por resposta e a saída de ferramenta (`GENERIC`) não traz o id
+    /// da chamada, então pareia com a chamada mais antiga em aberto, como o leitor da conversa.
+    fn feed_agy(&mut self, obj: &Map<String, Value>) {
+        let ts = iso_ts(obj.get("created_at"));
+        match obj.get("type").and_then(Value::as_str) {
+            Some("USER_INPUT") => {
+                self.tools.clear();
+                self.human_turn(ts);
+                self.gap(ts);
+            }
+            Some("PLANNER_RESPONSE") => {
+                self.tools.clear();
+                // Versões antigas do agy gravam os campos de uso nulos: sem número não há passo contado.
+                if ["input_tokens", "output_tokens"].iter().any(|key| obj.get(*key).is_some_and(Value::is_number)) {
+                    self.exact.add(obj, ["input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens"]);
+                    self.agent_usage(int(obj.get("input_tokens")), int(obj.get("cache_read_tokens")), 0, int(obj.get("output_tokens")));
+                }
+                self.llm(ts);
+                self.ttft(ts);
+                let step = obj.get("step_index").and_then(Value::as_u64).unwrap_or_default();
+                for n in 0..obj.get("tool_calls").and_then(Value::as_array).map_or(0, Vec::len) {
+                    self.tool_start(Some(format!("agy:{step}:{n}").as_str()), ts);
+                }
+            }
+            Some("GENERIC") => {
+                if let Some((_, t0)) = self.tools.shift_remove_index(0)
+                    && let Some(ts) = ts.filter(|ts| (0.0..=GAP_MAX_S).contains(&(ts - t0))) {
+                    self.tool_ms += (ts - t0) * 1000.0;
+                }
+                self.gap(ts);
+            }
+            _ => {}
+        }
+    }
+
     fn codex_usage(&mut self, info: &Map<String, Value>) {
         let Some(total) = info.get("total_token_usage").and_then(Value::as_object) else { return };
         self.exact.codex(total);
@@ -579,6 +616,7 @@ impl Accumulator {
             Provider::Codex => Kind::Codex,
             Provider::Pi | Provider::Omp => Kind::Pi,
             Provider::Kimi => Kind::Kimi,
+            Provider::Antigravity => Kind::Antigravity,
             _ => Kind::Claude,
         };
         Accumulator { path, kind, fold: Fold::new(kind), offset: 0, identity: None, modified: None, rest: Vec::new(), invalid_lines: 0 }

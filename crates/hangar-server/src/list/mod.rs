@@ -1,5 +1,6 @@
 //! Descoberta da lista de sessões: leitores do sistema (processos, panes) que o resto da lista
 //! consome sem saber de que plataforma veio cada dado.
+pub mod agy_context;
 pub mod bridge;
 pub mod capped;
 pub mod classify;
@@ -18,6 +19,7 @@ pub mod local_transfers;
 pub mod mux;
 pub mod plan;
 pub mod plugin_tools;
+pub mod ports;
 pub mod procs;
 pub mod reply;
 pub mod sig;

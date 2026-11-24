@@ -37,6 +37,7 @@ vi.mock('./PluginsAnimation', () => ({ PluginsAnimation: () => null }));
 vi.mock('./UpdatesManualAnimation', () => ({ UpdatesManualAnimation: () => null }));
 vi.mock('./DreamAnimation', () => ({ DreamAnimation: () => null }));
 vi.mock('./WorkReviewAnimation', () => ({ WorkReviewAnimation: () => null }));
+vi.mock('./AntigravityAnimation', () => ({ AntigravityAnimation: () => null }));
 vi.mock('expo-router', () => ({ useIsFocused: () => true, useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('./DesktopToolLookAnimation', () => ({ DesktopToolLookAnimation: () => null }));
 vi.mock('./ClaudeNoticesAnimation', () => ({ ClaudeNoticesAnimation: () => null }));

@@ -84,7 +84,8 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
   }, [statusModel, session?.model]);
   const isCodex = provider === 'codex';
   const isClaude = !provider || provider === 'claude';
-  const permission = usePermissionControl({ serverId, name, provider: isCodex ? 'codex' : isClaude ? 'claude' : null });
+  const permission = usePermissionControl({ serverId, name,
+    provider: isCodex ? 'codex' : isClaude ? 'claude' : provider === 'antigravity' ? 'antigravity' : null });
   const approval = useCodexApproval({ serverId, name, headless, enabled: isCodex });
   const choose = useCallback((next: Chosen) => { setChosen(next); setTab('model'); setDetail(null); }, []);
   const model = useModelControl({ serverId, name, provider, chosen, onChosen: choose, close });

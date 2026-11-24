@@ -258,7 +258,7 @@ impl Render for RemoteBrowser {
 fn failure_text(error: ws::Error) -> String {
     match error {
         // O servidor recusa com 403 tanto a sessão sem navegador aberto quanto o token que não vale.
-        ws::Error::Http(401 | 403 | 404) => tr("browser_remote_no_browser"),
+        ws::Error::Http(401 | 403 | 404, _) =>tr("browser_remote_no_browser"),
         _ => tr_shared("nav_remoto_caiu", &[]),
     }
 }

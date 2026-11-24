@@ -169,12 +169,21 @@ describe('ações do rodapé', () => {
     ['claude', null, 'plan', 'Modo'], ['claude', 'acceptEdits', 'plan', 'Aceitar edições'],
     ['codex', 'bypassPermissions', null, 'Modo'], ['codex', 'bypassPermissions', 'plan', 'Planejar'],
     ['codex', 'plan', 'default', 'Normal'],
+    ['antigravity', 'auto', null, 'Automático'], ['antigravity', null, null, 'Modo'],
   ] as const)('provider %s usa só seu estado de modo (%s, %s)', async (provider, claude, codex, label) => {
     state.sessions.rows[0].provider = provider;
     state.chat.stateEvent = { session: 'sess', state: 'idle', claude_permission_mode: claude,
       codex_mode: codex as StateEvent['codex_mode'] };
     const { container } = await render({ onOpenSettings: vi.fn() });
     expect(item(container, 'mode')?.textContent).toBe(label);
+  });
+
+  it('Antigravity sem statusline do Hangar mostra o contexto da lista', async () => {
+    state.chat.statusLine = 'auto · Gemini 4 Neon · low';
+    state.sessions.rows[0] = { ...state.sessions.rows[0], provider: 'antigravity', model: 'gemini-4-neon-low',
+      context: { used: 250_000, 'window': 1_000_000 } };
+    const { container } = await render({ onOpenSettings: vi.fn() });
+    expect(item(container, 'ctx')?.textContent).toBe('25%');
   });
 
   it('outro provider não ganha modo de Claude, e conta ausente não cria item', async () => {

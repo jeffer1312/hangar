@@ -7,7 +7,9 @@ const calls = vi.hoisted(() => ({
   list: vi.fn(),
   credentials: vi.fn(),
   engines: vi.fn(),
+  agy: vi.fn(),
   login: null as { server: unknown; accountId?: string } | null,
+  agyLogin: null as { server: unknown; accountId?: string } | null,
 }));
 
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
@@ -21,6 +23,7 @@ vi.mock('@hangar/core', async (original) => ({
   getCodexAccountsForServer: calls.list,
   getCredentialsForServer: calls.credentials,
   getEnginesForServer: calls.engines,
+  getAntigravityAccountsForServer: calls.agy,
 }));
 const stored = vi.hoisted(() => new Map<string, string>());
 vi.mock('../../stores/prefs', () => ({ prefs: {
@@ -37,6 +40,12 @@ vi.mock('./CodexContaLogin', () => ({
   CodexContaLogin: (props: { server: unknown; accountId?: string; onComplete: () => void }) => {
     calls.login = { server: props.server, accountId: props.accountId };
     return createElement('div', { 'data-testid': 'codex-login' }, props.accountId ?? 'new');
+  },
+}));
+vi.mock('./AntigravityContaLogin', () => ({
+  AntigravityContaLogin: (props: { server: unknown; accountId?: string }) => {
+    calls.agyLogin = { server: props.server, accountId: props.accountId };
+    return createElement('div', { 'data-testid': 'agy-login' }, props.accountId ?? 'new');
   },
 }));
 vi.mock('./Pagina', () => ({ Pagina: ({ children }: { children: ReactNode }) => createElement('main', null, children) }));
@@ -97,7 +106,10 @@ describe('contas Codex', () => {
     calls.credentials.mockReset();
     calls.engines.mockReset();
     calls.engines.mockResolvedValue({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' });
+    calls.agy.mockReset();
+    calls.agy.mockResolvedValue({ instalado: false, contas: [] });
     calls.login = null;
+    calls.agyLogin = null;
     calls.list.mockResolvedValue([
       { id: 'default', credential_id: 'codex:/default', name: 'Padrão', home: '/default', is_default: true, auth: { method: 'oauth', status: 'connected', email: 'a@example.com', plan: 'Plus' }, sync: { status: 'ready', trust_pending: false, issues: [] } },
       { id: 'work', credential_id: 'codex:/work', name: 'Trabalho', home: '/work', is_default: false, auth: { method: 'oauth', status: 'disconnected', email: null, plan: null }, sync: { status: 'ready', trust_pending: false, issues: [] } },
@@ -213,5 +225,71 @@ describe('contas Codex', () => {
     await act(async () => Promise.resolve());
     expect([...again.querySelectorAll('span')].map((s) => s.textContent).filter((t) => t === 'Alfa' || t === 'Bravo')).toEqual(['Bravo', 'Alfa']);
     root2.unmount();
+  });
+  it('lista só a conta Google padrão pelo estado do agy e entra nela; a adicional fica fora', async () => {
+    calls.list.mockResolvedValue([]);
+    calls.credentials.mockResolvedValue([
+      { id: 'antigravity:/h/.gemini', tipo: 'antigravity', auth_method: 'oauth', nome: 'Google (padrão)', nome_natural: 'Google (padrão)',
+        ativa: false, usos: [], login: { estado: 'ok', loggedIn: false } },
+      { id: 'antigravity:/h/.antigravity-trabalho', tipo: 'antigravity', auth_method: 'oauth', nome: 'trabalho', nome_natural: 'trabalho',
+        ativa: false, usos: [], login: { estado: 'ok', loggedIn: true } },
+    ]);
+    calls.agy.mockResolvedValue({ instalado: true, contas: [
+      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: false, termos_aceitos: false, em_uso: false },
+      { id: 'trabalho', padrao: false, pasta: '/h/.antigravity-trabalho', credencial: 'antigravity:/h/.antigravity-trabalho',
+        logado: true, termos_aceitos: true, em_uso: false },
+    ] });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(Contas)));
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+
+    expect(calls.agy).toHaveBeenCalledWith(server);
+    expect(container.textContent).toContain(m.mobile_antigravity_default_account());
+    expect(container.textContent).not.toContain('trabalho');
+    expect(container.textContent).toContain(m.mobile_antigravity_terms_pending());
+    expect(container.textContent).toContain(m.mobile_antigravity_no_quota());
+    const buttons = () => [...container.querySelectorAll('button')];
+    expect(buttons().filter((b) => b.textContent === 'Entrar')).toHaveLength(1);
+    expect(buttons().some((b) => b.textContent === m.lista_remover())).toBe(false);
+    // Com a padrão na lista, entrar é pela linha dela: não há atalho de conta nova.
+    expect(buttons().some((b) => b.textContent === m.mobile_accounts_antigravity_add())).toBe(false);
+    await act(async () => buttons().find((b) => b.textContent === 'Entrar')!.click());
+    expect(calls.agyLogin).toEqual({ server, accountId: 'default' });
+    root.unmount();
+  });
+
+  it('com o agy instalado e a padrão ainda sem pasta, o atalho abre o login da padrão', async () => {
+    calls.list.mockResolvedValue([]);
+    calls.credentials.mockResolvedValue([]);
+    calls.agy.mockResolvedValue({ instalado: true, contas: [] });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(Contas)));
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+
+    await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent === m.mobile_accounts_antigravity_add())!.click());
+    expect(calls.agyLogin).toEqual({ server, accountId: undefined });
+    root.unmount();
+  });
+
+  it('sem o agy instalado não oferece entrar nem conta nova', async () => {
+    calls.list.mockResolvedValue([]);
+    calls.credentials.mockResolvedValue([]);
+    calls.agy.mockResolvedValue({ instalado: false, contas: [
+      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: null, termos_aceitos: true, em_uso: false },
+    ] });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(Contas)));
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+
+    expect(container.textContent).toContain(m.erro_agy_ausente());
+    expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Entrar')).toBe(false);
+    expect([...container.querySelectorAll('button')].some((b) => b.textContent === m.mobile_accounts_antigravity_add())).toBe(false);
+    root.unmount();
   });
 });

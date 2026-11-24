@@ -11,6 +11,12 @@ export function pageScreenHref(serverId: string, sessionName: string, page: Html
 // Parâmetro de rota do expo-router: repetido vira lista, e vale o primeiro.
 export const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? '';
 
+// Porta da rota do túnel: o número vem de link, então só inteiro de 1 a 65535.
+export function portFromParam(v: string | string[] | undefined): number | null {
+  const n = Number(one(v));
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : null;
+}
+
 export function pageFromParams(p: { id?: string | string[]; title?: string | string[]; own?: string | string[] }): HtmlPageRef | null {
   const id = one(p.id);
   if (!id) return null;

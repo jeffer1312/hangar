@@ -381,7 +381,7 @@ fn machine_cards(machines: &[Machine], now: DateTime<Utc>) -> Machines {
 fn provider_name(key: &str) -> (String, usize) {
     match key {
         "claude" => ("Claude".into(), 1), "codex" => ("Codex".into(), 2), "pi" => ("Pi".into(), 3), "kimi" => ("Kimi".into(), 4),
-        "omp" => ("oh-my-pi".into(), 5), other => (other.to_owned(), 5),
+        "omp" => ("oh-my-pi".into(), 5), "antigravity" => ("Antigravity".into(), 5), other => (other.to_owned(), 5),
     }
 }
 

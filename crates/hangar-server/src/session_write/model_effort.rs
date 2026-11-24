@@ -78,18 +78,6 @@ pub(super) async fn serve(st: &Arc<AppState>, runtime: Arc<RuntimeRegistry>, nam
         other => other,
     };
     let Ok(found) = found else { return Some(answer(headers, StatusCode::CONFLICT, busy_body())) };
-    // Antigravity sem terminal: o ator troca pelo `session/set_model` do ACP (modelo e esforço viram um id só).
-    if let Some((held, target)) = found.as_ref().filter(|(_, target)| target.provider == "antigravity" && !target.terminal) {
-        let Some(body) = parse(bytes) else { return Some(invalid_body(headers)) };
-        if body.model.is_none() && body.effort.is_none() { return Some(answer(headers, StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": "informe model ou effort"}))); }
-        if let Some(text) = headless_invalid(body.model.as_deref(), None) { let (status, value) = plain(StatusCode::UNPROCESSABLE_ENTITY, text); return Some(answer(headers, status, value)); }
-        let EntryHandle::Headless(handle) = &target.handle else { return Some(answer(headers, StatusCode::CONFLICT, busy_body())) };
-        let command = RuntimeCommand { operation_id: crate::mods::state::random_hex(16), kind: OperationKind::SetModel, payload: json!({"model": body.model, "effort": body.effort}) };
-        let sent = tokio::time::timeout(HEADLESS_WAIT, handle.command(command)).await;
-        let _ = held;
-        let (status, value) = headless_answer(sent);
-        return Some(answer(headers, status, value));
-    }
     let (held, target) = found.filter(|(_, target)| target.provider == "claude")?;
     let Some(body) = parse(bytes) else { return Some(invalid_body(headers)) };
     let id = crate::mods::state::random_hex(16);

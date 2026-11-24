@@ -432,6 +432,8 @@ impl NewSession {
         }
         if let Some(config) = self.config.clone() { query.push(("config_dir".into(), config)); }
         if self.provider == "codex" { query.push(("codex_account".into(), self.codex_account.clone())); }
+        // O catálogo do Antigravity é o que o agy lista para a conta padrão, a única em que a sessão abre.
+        if self.provider == "antigravity" { query.push(("conta".into(), "default".into())); }
         let default_key = self.default_key();
         let scope = self.default_scope();
         self.request(cx, move |api, send| Box::pin(async move {
@@ -701,10 +703,16 @@ impl NewSession {
                 }))))
     }
 
-    /// A permissão existe para o Claude e para o Codex sem terminal, cada um com a própria lista.
+    /// A permissão existe para o Claude, para o Codex sem terminal e para o Antigravity, cada um com a própria lista.
     pub(super) fn permissions(&self) -> Option<&'static [&'static str]> {
         if self.is_transfer() { return None; }
-        match (self.provider, self.headless && !self.headless_inherited()) { ("claude", _) => Some(&PERMISSIONS), ("codex", true) => Some(&CODEX_PERMISSIONS), _ => None }
+        match (self.provider, self.headless && !self.headless_inherited()) {
+            ("claude", _) => Some(&PERMISSIONS),
+            ("codex", true) => Some(&CODEX_PERMISSIONS),
+            // Só com terminal por enquanto: sem o `manual`, que o `agy` com terminal não tem.
+            ("antigravity", _) => Some(&AGY_TERMINAL_PERMISSIONS),
+            _ => None,
+        }
     }
 
     fn pick_at(choices: &[ModelChoice], value: &str) -> Option<usize> { choices.iter().position(|c| c.id == value).or(Some(0)) }

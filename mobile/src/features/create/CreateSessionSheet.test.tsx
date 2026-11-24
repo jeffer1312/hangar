@@ -35,6 +35,7 @@ const calls = vi.hoisted(() => ({
   worktrees: vi.fn(),
   branches: vi.fn(),
   commands: vi.fn(),
+  agy: vi.fn(),
 }));
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
 
@@ -170,6 +171,7 @@ vi.mock('@hangar/core', async (original) => ({
   modelOptions: vi.fn().mockResolvedValue({ models: [], reduced: false }),
   getSessions: vi.fn().mockResolvedValue([]),
   getCodexAccountsForServer: calls.accounts,
+  getAntigravityAccountsForServer: calls.agy,
   modelOptionsForServer: calls.models,
   prepareCodexAccountForServer: calls.prepare,
   getCodexPreparationForServer: calls.preparation,
@@ -280,7 +282,9 @@ vi.mock('../../paraglide/messages', () => ({
     'native_mode_plan native_mode_manual native_mode_auto native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk chat_mode_plan config_motores_modelo_padrao ' +
     'codex_contexto_titulo codex_contexto_padrao codex_contexto_salvando comum_falha_aplicar config_server_tentar_de_novo home_new_conversation ' +
     'tags_apply_all tags_apply_ok tags_apply_offline tags_apply_old tags_apply_absent tags_apply_failed tags_apply_retry tags_saving ' +
-    'criar_criar criar_agente comum_voltar comum_cancelar criar_escolher_pasta native_create_worktrees native_create_worktrees_merged native_create_worktree_session'
+    'criar_criar criar_agente comum_voltar comum_cancelar criar_escolher_pasta native_create_worktrees native_create_worktrees_merged native_create_worktree_session ' +
+    'mobile_create_antigravity_account mobile_antigravity_default_account mobile_antigravity_signed_in mobile_antigravity_login_unknown ' +
+    'mobile_antigravity_accounts_error mobile_antigravity_sign_in_first mobile_antigravity_signed_out mobile_antigravity_terms_hint erro_agy_ausente'
   ).split(' ').map((k) => [k, () => k])),
 }));
 
@@ -354,6 +358,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.configs.mockReset().mockResolvedValue([]);
     calls.engines.mockReset().mockResolvedValue({ motores: {} });
     calls.accounts.mockReset().mockResolvedValue([connected]);
+    calls.agy.mockReset().mockResolvedValue({ instalado: true, contas: [] });
     calls.mutate.mockReset();
     calls.providers.mockReset().mockResolvedValue({});
     calls.defaults.mockReset().mockResolvedValue(null);
@@ -1715,6 +1720,59 @@ describe('CreateSessionSheet Codex', () => {
       provider: 'codex', codex_account: 'work', remember_provider: true,
     }));
     root.unmount();
+  });
+
+  it('Antigravity abre com terminal só na conta Google padrão, com o modelo e sem esforço nem o modo que pergunta', async () => {
+    calls.providers.mockResolvedValue({ antigravity: { disponivel: true, default: true } });
+    calls.defaults.mockResolvedValue({ model: '', effort: '', permission: 'manual' });
+    // Uma adicional antiga na lista não vira escolha: com terminal o agy grava tudo na padrão.
+    calls.agy.mockResolvedValue({ instalado: true, contas: [
+      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: true, termos_aceitos: false, em_uso: false },
+      { id: 'trabalho', padrao: false, pasta: '/h/.antigravity-trabalho', credencial: 'antigravity:/h/.antigravity-trabalho',
+        logado: true, termos_aceitos: true, em_uso: false },
+    ] });
+    calls.models.mockResolvedValue({ kind: 'antigravity', reduced: false, models: [{ id: 'gemini-4-neon-high', name: 'Gemini 4 Neon (High)' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+      expect(calls.models).toHaveBeenLastCalledWith(server, 'antigravity', null, null, 'default', expect.any(AbortSignal));
+      expect([...container.querySelectorAll<HTMLButtonElement>('button')]
+        .some((b) => b.getAttribute('aria-label')?.startsWith('mobile_create_antigravity_account'))).toBe(false);
+      expect(button(container, 'trabalho')).toBeFalsy();
+      expect(container.textContent).toContain('mobile_antigravity_terms_hint');
+      await send(container);
+      const body = calls.create.mock.calls[0][1];
+      expect(body).toEqual(expect.objectContaining({ provider: 'antigravity', config_dir: null, permission_mode: null }));
+      expect(body).not.toHaveProperty('headless');
+      expect(body).not.toHaveProperty('effort');
+      expect(body).not.toHaveProperty('codex_account');
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('Antigravity: a conta padrão vai sem pasta, e a conta fora do Google não cria', async () => {
+    calls.providers.mockResolvedValue({ antigravity: { disponivel: true, default: true } });
+    calls.agy.mockResolvedValue({ instalado: true, contas: [
+      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: false, termos_aceitos: true, em_uso: false },
+    ] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      expect(container.textContent).toContain('mobile_antigravity_sign_in_first');
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('Antigravity sem a lista de contas abre na padrão e diz por quê', async () => {
+    calls.providers.mockResolvedValue({ antigravity: { disponivel: true, default: true } });
+    calls.agy.mockRejectedValue(new Error('agy-list-failed'));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+      expect(container.textContent).toContain('agy-list-failed');
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ provider: 'antigravity', config_dir: null }));
+    } finally { act(() => root.unmount()); }
   });
 
   it('confirmação manual de Claude não é trocada pela resposta tardia', async () => {

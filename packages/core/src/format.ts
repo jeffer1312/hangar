@@ -47,7 +47,7 @@ export function formatElapsed(seconds: number | null | undefined): string {
 // (`provider === 'codex' ? 'Codex' : 'Claude'`) e, quando o Pi entrou como terceiro provider, toda
 // sessão Pi aparecia rotulada como "Claude". Um lugar só -> um provider novo não volta a mentir.
 // Ausente/desconhecido -> "Claude", que é o default do backend (SessionInfo.provider).
-const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi', kimi: 'Kimi', omp: 'OMP', orq: 'Orq' };
+const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi', kimi: 'Kimi', omp: 'OMP', antigravity: 'Antigravity', orq: 'Orq' };
 
 export function providerName(p: SessionInfo['provider'] | null | undefined): string {
   return PROVIDER_NAMES[p ?? 'claude'] ?? 'Claude';
@@ -77,6 +77,7 @@ export function untrackedReason(p: SessionInfo['provider'] | null | undefined): 
   if (p === 'pi') return m.formato_sem_transcript_pi();
   if (p === 'omp') return m.formato_sem_transcript_omp();
   if (p === 'kimi') return m.formato_sem_transcript_kimi();
+  if (p === 'antigravity') return m.formato_sem_transcript_antigravity();
   if (p === 'codex') return m.formato_sem_transcript_codex();
   return m.formato_sem_transcript_claude();
 }

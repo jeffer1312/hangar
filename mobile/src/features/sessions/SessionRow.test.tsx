@@ -206,8 +206,8 @@ describe('SessionRow', () => {
     { provider: 'claude', label: 'Claude', path: 'm4.7144' },
     { provider: 'codex', label: 'Codex', path: 'M22.2819' },
     { provider: 'kimi', label: 'Kimi', path: 'M21.765' },
-    { provider: 'pi', label: 'Pi', letter: 'π' },
-    { provider: 'omp', label: 'OMP', letter: 'Ω' },
+    { provider: 'pi', label: 'Pi', path: 'M1.167' },
+    { provider: 'omp', label: 'OMP', path: 'M1.286' },
     { provider: undefined, label: 'Claude', path: 'M 4.00' },
   ] as const)('marca de $label só no avatar, inclusive na linha compacta', async ({ provider, label, ...mark }) => {
     for (const compact of [false, true]) {
@@ -217,8 +217,7 @@ describe('SessionRow', () => {
         const glyph = container.querySelector('[data-testid="session-avatar"]');
         expect(glyph).not.toBeNull();
         expect(name?.previousElementSibling).toBeNull();
-        if ('path' in mark) expect(glyph?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
-        else expect(glyph?.textContent).toBe(mark.letter);
+        expect(glyph?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
         expect(container.textContent).not.toContain(label);
         expect(container.textContent).toContain('repo · main');
         expect(container.querySelector('button[aria-label^="api,"]')?.getAttribute('aria-label')).toContain(label);

@@ -43,7 +43,7 @@ pub async fn response(st:&AppState,method:&Method,path:&str,query:Option<&str>) 
         }
         if engine.is_none() {
             let provider = params.get("provider").map(String::as_str).unwrap_or("claude");
-            if matches!(provider, "pi" | "omp" | "kimi") { return None; }
+            if matches!(provider, "pi" | "omp" | "kimi" | "antigravity") { return None; }
             let home = if provider == "codex" {
                 let id = params.get("codex_account").filter(|s| !s.is_empty()).map(String::as_str).unwrap_or("default");
                 match st.accounts.resolve(crate::accounts::Provider::Codex, id) {

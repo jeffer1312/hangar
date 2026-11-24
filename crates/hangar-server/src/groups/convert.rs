@@ -236,7 +236,7 @@ fn write_owner(dir: &PairDir, me: &str, name: &str, peer: &str, record: GroupRec
     dir.write_record(&record)?;
     let converted = Sidecar { task: Some(record.task.clone()), gid: record.gid.clone(), fed: Some(Fed { owner: me.into(), local: true, version: record.version }), ..s };
     if let Err(error) = dir.write_sidecar(name, &converted) {
-        if let Err(undo) = dir.remove_record(&record.gid) {
+        if let Err(undo) = dir.remove_record(&record.gid, "convert_undo") {
             tracing::error!(code = "groups_record_restore_failed", gid = %record.gid, error = %undo, "groups: o registro da conversão não foi desfeito");
         }
         return Err(error);

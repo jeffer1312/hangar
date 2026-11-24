@@ -72,11 +72,11 @@ pub fn run(args: &[String]) -> ExitCode {
 
 fn install(args: &[String]) -> ExitCode {
     let [cli] = args else {
-        eprintln!("uso: hangar-server harness-setup install codex|pi|omp|kimi");
+        eprintln!("uso: hangar-server harness-setup install claude|codex|pi|omp|kimi|antigravity");
         return ExitCode::from(64);
     };
     if !super::commands::NAMES.contains(&cli.as_str()) {
-        eprintln!("uso: hangar-server harness-setup install codex|pi|omp|kimi");
+        eprintln!("uso: hangar-server harness-setup install claude|codex|pi|omp|kimi|antigravity");
         return ExitCode::from(64);
     }
     let Some(argv) = super::commands::command(cli, cfg!(windows)) else {

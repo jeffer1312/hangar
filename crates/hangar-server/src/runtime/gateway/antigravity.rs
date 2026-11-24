@@ -33,6 +33,14 @@ impl RuntimeRegistry {
         })
     }
 
+    /// O sidecar do Antigravity sem terminal, para quem só lê (as pílulas) sem subir o `agy acp`.
+    pub async fn antigravity_headless_meta(&self,name:&str) -> Option<Value> {
+        let (dir,_) = self.antigravity_dirs();
+        let path = super::super::codex_sidecar::path(&dir,name);
+        tokio::task::spawn_blocking(move||super::super::codex_sidecar::load(&path)).await.ok().flatten()
+            .filter(|meta|meta.get("headless") == Some(&Value::Bool(true))).map(Value::Object)
+    }
+
     /// Sobe (ou adota, com o cano gravado vivo) o Antigravity sem terminal do sidecar. `None`: não há sidecar
     /// sem terminal do Antigravity com esse nome.
     pub async fn open_antigravity_headless(&self,name:&str) -> Option<Result<(),RuntimeError>> {
@@ -124,6 +132,8 @@ impl RuntimeRegistry {
             let snapshot = handle.snapshot().await?;
             let state = &snapshot["view"]["public_state"];
             if state["state"] != "idle" || !state["question"].is_null() { return Err(refuse("Espere a sessão ficar ociosa antes de continuar sem terminal.")); }
+            // O shift+tab troca o modo só na tela: o rodapé vale mais que o spec da abertura.
+            let shown = state["claude_permission_mode"].as_str().and_then(crate::session_open::PermissionMode::antigravity);
             let conversation = hangar_antigravity::paths::conversation_of_transcript(&target.transcript)
                 .ok_or_else(||refuse("Envie a primeira mensagem antes de continuar sem terminal."))?;
             if waiting(&handle.queue(format!("agy-switch:{}",crate::mods::state::random_hex(8)),Action::Load).await?) {
@@ -140,9 +150,9 @@ impl RuntimeRegistry {
             let created = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
             let meta = json!({"name":name,"provider":"antigravity","headless":true,"key":target.key,"cwd":target.cwd,"gemini_home":gemini_home,
                 "brain_dir":account.brain_dir(&env.home),"conversation_id":conversation,"model":spec.model,
-                "permission_mode":spec.permission_mode.unwrap_or(crate::session_open::PermissionMode::Manual).name(),"created":created});
+                "permission_mode":shown.or(spec.permission_mode).unwrap_or(crate::session_open::PermissionMode::Manual).name(),"created":created});
             let mut next = spec.with(&crate::session_open::SessionChange { reason:crate::session_open::ChangeReason::ModeSwitch,
-                surface:Some(crate::session_open::Surface::Headless),account:None,permission_mode:None,model:None,effort:None,service_tier:None });
+                surface:Some(crate::session_open::Surface::Headless),account:None,permission_mode:shown,model:None,effort:None,service_tier:None });
             next.conversation = Some(conversation);
             let (dir,home,owned) = (super::super::antigravity_sidecar::dir(&env.home),env.home.clone(),name.to_owned());
             tokio::task::spawn_blocking(move||-> std::io::Result<()> {

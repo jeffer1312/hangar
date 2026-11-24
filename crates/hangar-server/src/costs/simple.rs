@@ -1,4 +1,4 @@
-//! Leitores retomáveis de custo do Pi, omp e Kimi.
+//! Leitores retomáveis de custo do Pi, omp, Kimi e Antigravity.
 
 use crate::costs::index::Fold;
 use crate::costs::pricing::canonizar_provedor;
@@ -12,6 +12,9 @@ use std::path::Path;
 
 pub const PI_VERSION: &str = "pi:1";
 pub const KIMI_VERSION: &str = "kimi:1";
+pub const AGY_VERSION: &str = "antigravity:1";
+/// Sufixos de esforço que o `agy` põe no id do modelo (`gemini-4-neon-high`); a tarifa é a do modelo base.
+const AGY_EFFORTS: [&str; 4] = ["-low", "-medium", "-high", "-xhigh"];
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Tokens {
@@ -158,6 +161,53 @@ pub fn kimi_projects(index_file: &Path) -> HashMap<String, String> {
         projects.insert(id.to_owned(), record.get("workDir").and_then(Value::as_str).unwrap_or("").to_owned());
     }
     projects
+}
+
+/// O `transcript_full.jsonl` de uma conversa do `agy`: cada resposta (`PLANNER_RESPONSE`) traz o modelo e os tokens
+/// dela, com o cache fora do `input_tokens`. Uma linha por dia e modelo; o projeto vem do `history.jsonl` na leitura.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AgyFold {
+    session_id: String,
+    rows: Vec<UsageRow>,
+}
+
+impl Fold for AgyFold {
+    fn line(&mut self, raw: &[u8]) {
+        if !raw.windows(b"PLANNER_RESPONSE".len()).any(|part| part == b"PLANNER_RESPONSE") { return; }
+        let Some(record) = parse_obj(raw) else { return };
+        if record.get("type").and_then(Value::as_str) != Some("PLANNER_RESPONSE") { return; }
+        // Versões antigas gravam os campos nulos: sem tokens não há o que contar.
+        if !["input_tokens", "cache_read_tokens", "output_tokens"].iter().any(|key| record.get(*key).is_some_and(Value::is_number)) { return; }
+        let Some(ts) = record.get("created_at").and_then(Value::as_str).and_then(LocalTs::from_iso) else { return };
+        let model = agy_base_model(record.get("model").and_then(Value::as_str).unwrap_or(""));
+        let model = if model.is_empty() { "?".to_owned() } else { model };
+        let (input, output, cache_read) = (py_int(record.get("input_tokens")), py_int(record.get("output_tokens")), py_int(record.get("cache_read_tokens")));
+        let day = ts.day();
+        if let Some(row) = self.rows.iter_mut().find(|row| row.model == model && row.ts.day() == day) {
+            row.input += input;
+            row.output += output;
+            row.cache_read += cache_read;
+            return;
+        }
+        let tokens = Tokens { input, output, cache_read, cache_write: 0 };
+        self.rows.push(row(ts, "antigravity", "google", &model, "desconhecido", &self.session_id, &tokens, false));
+    }
+
+    fn close(&mut self) -> FoldOutput {
+        FoldOutput { costs: self.rows.clone(), usage: Vec::new(), areas: None }
+    }
+}
+
+/// O id da conversa é a pasta em `brain/<id>/.system_generated/logs/`.
+pub fn new_agy_fold(path: &Path) -> AgyFold {
+    let session_id = hangar_antigravity::paths::conversation_of_transcript(path).unwrap_or_default();
+    AgyFold { session_id, rows: Vec::new() }
+}
+
+/// `gemini-4-neon-high` → `gemini-4-neon`: o esforço não muda o preço por token, e o models.dev só lista o base.
+pub fn agy_base_model(model: &str) -> String {
+    let model = crate::transcript::py::strip(model);
+    AGY_EFFORTS.iter().find_map(|suffix| model.strip_suffix(*suffix)).filter(|base| !base.is_empty()).unwrap_or(model).to_owned()
 }
 
 fn nonempty<'a>(value: &'a str, fallback: &'a str) -> &'a str {

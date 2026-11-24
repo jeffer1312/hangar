@@ -509,3 +509,47 @@ async fn inbox_access_warns_once_per_cause_and_host_and_success_rearms_the_warni
     let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert_eq!(log.matches("origem recusada").count(), 1, "{log}");
 }
+
+/// Telas do `agy` medidas (`hangar-core/tests/fixtures/agy`).
+fn agy_screen(name: &str) -> String {
+    std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hangar-core/tests/fixtures/agy").join(name)).unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn agy_model_switch_types_the_command_and_confirms_by_the_footer() {
+    let io = FakeIo::frames(&json!([agy_screen("idle.txt"), agy_screen("model_set.txt")]));
+    let got = driver::agy_switch(&io, "gemini-4-neon-medium", Timing::default()).await.unwrap();
+    assert_eq!(got, json!({"ok": true, "current": "gemini-4-neon-medium"}));
+    assert_eq!(json!(*io.keys.lock().unwrap()), json!([{"key":"/model gemini-4-neon-medium","literal":true},{"key":"Enter","literal":false}]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn agy_model_switch_to_the_current_model_types_nothing() {
+    let io = FakeIo::frames(&json!([agy_screen("footer_plan.txt")]));
+    assert!(driver::agy_switch(&io, "gemini-4-neon-medium", Timing::default()).await.is_ok());
+    assert!(io.keys.lock().unwrap().is_empty());
+}
+
+/// Rascunho, sessão trabalhando e pedido de permissão aberto: nada é digitado.
+#[tokio::test(start_paused = true)]
+async fn agy_model_switch_refuses_a_draft_a_turn_and_a_menu() {
+    for (screen, code) in [("draft.txt", "erro_caixa_com_rascunho"), ("working.txt", "erro_sessao_trabalhando"), ("permission.txt", "erro_menu_aberto")] {
+        let io = FakeIo::frames(&json!([agy_screen(screen)]));
+        let error = driver::agy_switch(&io, "gemini-4-neon-medium", Timing::default()).await.unwrap_err();
+        assert_eq!((error.status, error.detail["code"].as_str()), (409, Some(code)), "{screen}");
+        assert!(io.keys.lock().unwrap().is_empty(), "{screen}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn agy_model_switch_without_confirmation_is_an_error() {
+    let io = FakeIo::frames(&json!([agy_screen("idle.txt")]));
+    let error = driver::agy_switch(&io, "gemini-4-neon-medium", Timing::default()).await.unwrap_err();
+    assert_eq!((error.status, error.detail["code"].as_str()), (409, Some("erro_modelo_sem_confirmacao")));
+}
+
+#[test]
+fn the_antigravity_body_takes_only_the_model() {
+    assert_eq!(routes::parse_body(br#"{"model":"gemini-4-neon-high"}"#, "antigravity").unwrap()["model"], "gemini-4-neon-high");
+    assert_eq!(routes::parse_body(br#"{"model":"x","effort":"high"}"#, "antigravity").unwrap_err().status, 422);
+}

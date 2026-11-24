@@ -156,6 +156,8 @@ impl Engine {
         let asked = self.server_requests.first();
         state.state = if !self.alive { "dead" } else if asked.is_some() { "awaiting_input" } else if self.in_progress { "working" } else { "idle" }.into();
         state.label = self.booting.as_ref().map(|_|"Abrindo a conversa…".into());
+        // A pílula de modo lê o campo do Claude, como no Antigravity com terminal.
+        state.claude_permission_mode = Some(self.permission_mode.name().into());
         state.question = None; state.options = None;
         if let Some((_,request)) = asked {
             let params = &request["params"];

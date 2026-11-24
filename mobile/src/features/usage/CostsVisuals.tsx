@@ -18,7 +18,7 @@ const AnimatedLine = Animated.createAnimatedComponent(Line);
 // Marca do agente quando existe logo; o resto fica com o terminal.
 export function sourceBrand(key: string): string | null {
   const brand = key.startsWith('anthropic:') ? 'claude' : key.startsWith('codex:') ? 'codex' : key;
-  return ['claude', 'codex', 'kimi'].includes(brand) ? brand : null;
+  return ['claude', 'codex', 'kimi', 'antigravity'].includes(brand) ? brand : null;
 }
 
 export function SourceMark({ source, size = 15, color }: { source: string; size?: number; color: string }) {

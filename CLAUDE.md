@@ -1,6 +1,6 @@
 # Hangar
 
-Drive live Claude Code, Codex, Pi, omp, and Kimi sessions from your phone over LAN/VPN. Terminal
+Drive live Claude Code, Codex, Pi, omp, Kimi, and Antigravity sessions from your phone over LAN/VPN. Terminal
 sessions run in `tmux`; Claude and Codex can instead run as Hangar-managed headless processes.
 Single-user, LAN/VPN-only by design. Server: Rust `hangar-server` (`crates/`); `backend/` keeps only the
 Python tools that are not the server yet (Codex launcher, orq scripts, push keys). Frontend: Svelte 5 PWA (`frontend/`).
@@ -119,7 +119,9 @@ passos rodam em faixas paralelas e o pytest em vários processos: `git config ha
 (padrão 4; `1` = tudo em fila). O Node é o do `.node-version`, o mesmo do CI: com o `fnm` instalado, o
 script e o `ci-gates.sh` trocam sozinhos; sem ele, o aviso diz que front e mobile podem falhar por isso. O hook do
 `gh pr create` (`.claude/settings.json`) confere o PR inteiro desde a base; a trava `pre-push`, cada
-push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. O que ela cobre e o que só o CI cobre:
+push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. No GitHub
+o merge passa pelo check `merge-gate` (`.github/workflows/gate.yml`), que testa servidor, desktop e
+Expo pelo que o PR muda; regra em [instalacao.md](docs/decisoes/instalacao.md#portão-de-merge-22112026). O que ela cobre e o que só o CI cobre:
 [instalacao.md](docs/decisoes/instalacao.md#verificação-local-antes-do-push-06102026). `npm run build` só para servir o `dist` local. Ao reportar, diga o que foi conferido no uso real e que os testes automatizados não rodaram.
 
 Claude sessions with a terminal must run as `claude --session-id <uuid>` **inside tmux** —
@@ -389,10 +391,10 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   binário novo (iOS: `ios-dev.yml` Release + SideStore; Android: `eas build --profile preview`).
   Nunca publicar OTA de um push que falhou. Passo a passo em `mobile/README.md`.
 
-### Harnesses — Claude, Codex, Pi, omp, Kimi → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
+### Harnesses — Claude, Codex, Pi, omp, Kimi, Antigravity → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
 
 **Antes de mexer em** `backend/app/adapters/codex/`, `codex_*.py`, `crates/hangar-server/src/harness_setup/`,
-`crates/hangar-server/src/runtime/` (atores Claude/Codex,
+`crates/hangar-antigravity/`, `crates/hangar-server/src/runtime/` (atores Claude/Codex,
 lançamento, relançamento e religação ao mesmo cano em `cano_reconnect.rs`), statusline/prévia, hooks de estado, ou em sessão sem terminal:
 **leia a seção "Regras vigentes" de `docs/decisoes/harnesses.md`**. Cada regra ali já custou um
 bug calado.
@@ -709,7 +711,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   Código novo de diagnóstico entra em `DIAGNOSTIC` de `problem_gate.rs`. Critério e tabela em
   [plataforma.md](docs/decisoes/plataforma.md#aviso-na-tela-só-para-ação-que-falhou-ou-bloqueio-real-20102026).
 - **Chaveiro trancado é do Rust (`keyring.rs`): estado no evento `keyring` da lista do dono,
-  senha só pelo `POST /api/keyring/unlock`.** Só o token do dono, nunca repassado ao Python; a
+  senha só pelo `POST /api/keyring/unlock`.** O estado junta o `login` e o alias `default`, sem
+  consulta periódica (a escuta lê nos sinais do daemon e em poucas releituras limitadas); com o
+  `login` aberto o servidor pede o `default` sozinho, e só o desbloqueio com senha reinicia o
+  daemon preso. Só o token do dono, nunca repassado ao Python; a
   senha vai pelo socket de controle do gnome-keyring, nunca por `gnome-keyring-daemon --unlock`
   (com daemon de pé ele sobe outro e não abre nada), linha de comando, log ou disco. Os três
   clientes mostram o aviso por servidor. Evidência em
@@ -769,6 +774,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   recusada, e `Sec-Fetch-Site` de fora também, salvo abrir o site numa aba. Script de service worker é
   recusado. A prévia pelo Tailscale é do crate `hangar-port-preview`, sem caminho Python. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#prévia-de-porta-pelo-connect-a-8769-é-um-listener-próprio-fora-de-hangar_auth-07112026).
+- **Portas da sessão saem na linha do dono; túnel, navegador emprestado e parar servidor só com token.**
+  `ports` vem de `list/ports.rs` (escopo, descendência, atalhos, `CP_SESSION_KEY` herdada; agente, cano, app-server e DevTools fora; convidado nunca).
+  `/api/port-tunnel` (só loopback, nunca porta do Hangar, código no `x-hangar-tunnel`), `/api/browser-host` e `ports/{port}/stop`
+  (nunca processo protegido, pid conferido pelo início) ficam em `public_routes`, sem cookie. Encaminhar escuta só em `127.0.0.1` e nunca
+  na própria máquina (sonda). No Linux a página remota e o agente usam o SOCKS do servidor (agente: tudo por ele, rede daqui recusada);
+  celular abre na WebView com túnel. O navegador do app serve só as máquinas do dono, sem pergunta.
+  [Motivo](docs/decisoes/plataforma.md#portas-da-sessão-túnel-e-navegador-emprestado-23112026).
 - **Cookie do OpenCode, webhook de deploy e prévia Tailscale são do Rust.** Os crates
   `hangar-opencode-cookie`, `hangar-deploy` e `hangar-port-preview` atendem os caminhos inteiros;
   o cookie invalida a cota em processo e a prévia só altera o slot 10000. Não há rotas ou pontes
