@@ -343,7 +343,8 @@ export function NewConversation({
   };
 
   const openSheet = (kind: 'folder' | 'resume', opener: View | null) => {
-    sheetOpener.current = opener;
+    // O título com a pasta some com o teclado aberto pela busca; a linha das pílulas fica sempre montada.
+    sheetOpener.current = kind === 'folder' ? folderAnchor.current : opener;
     setSheet(kind);
   };
   const closeSheet = useCallback(() => setSheet(null), []);

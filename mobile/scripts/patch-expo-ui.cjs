@@ -13,7 +13,8 @@ function patchExpoUi(mobileDir) {
   let pkg;
   try { pkg = require.resolve('@expo/ui/package.json', { paths: [mobileDir] }); } catch { return 'absent'; }
   const file = path.join(path.dirname(pkg), 'android/src/main/java/expo/modules/ui/ExpoUIModule.kt');
-  if (!existsSync(file)) return 'absent';
+  // Pacote instalado sem o arquivo: o caminho mudou, e seguir calado geraria o binário sem a proteção.
+  if (!existsSync(file)) throw new Error(`patch-expo-ui: ${file} não existe mais; revise o ajuste.`);
   const source = readFileSync(file, 'utf8');
   if (source.includes(MARK)) return 'already';
   if (!source.includes(CALL)) {

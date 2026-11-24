@@ -321,8 +321,8 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
         void finishRecording(recording, 'teto');
       }, ceilingMs);
 
-      // Fora da tela o VAD continua: a fala que termina encerra como 'escondeu', que guarda o áudio
-      // sem envio automático. Calado desde que saiu, só o teto encerra, para olhar outro app no meio.
+      // O silêncio só encerra com o mãos-livres ligado; fora da tela, a fala que termina encerra como
+      // 'escondeu', que guarda o áudio sem envio. Sem mãos-livres, só o toque ou o teto encerram.
       intervaloRef.current = setInterval(() => {
         const hidden = appStateRef.current !== 'active';
         const st = recorder.getStatus();
