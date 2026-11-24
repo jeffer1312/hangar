@@ -2852,7 +2852,8 @@ impl NewSession {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.menu.set(None);
                                 (this.model_choice_touched, this.account_touched) = (true, true);
-                                if this.config.as_ref() != Some(&path) { this.config = Some(path.clone()); this.load_models(window, cx); }
+                                // A mesma conta mantém o "abrir nela mesmo assim"; outra passa pela regra dos 95%.
+                                if this.config.as_ref() != Some(&path) { this.pick_account(path.clone(), window, cx); }
                                 cx.notify();
                             }))
                             .into_any_element()
