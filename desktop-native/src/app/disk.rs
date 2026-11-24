@@ -23,10 +23,15 @@ fn slug(text: &str) -> Option<String> {
     Some(slug.chars().take(64).collect())
 }
 
-/// `session_key` de `backend/app/models.py`: id durável do transcript (Kimi: pasta da sessão; Codex: uuid do rollout).
+/// `locate::session_key` do servidor: id durável do transcript (Kimi: pasta da sessão; Codex: uuid do rollout; Antigravity:
+/// a conversa em `brain/<id>/.system_generated/logs/`).
 fn session_id(jsonl: &str) -> Option<String> {
     let path = Path::new(jsonl);
     let name = |p: Option<&Path>| p.and_then(Path::file_name).and_then(|n| n.to_str()).map(str::to_owned);
+    // Mesma regra de `hangar_antigravity::paths::conversation_of_transcript`: todo transcript do agy tem o mesmo nome.
+    if let Some(id) = name(path.parent().and_then(Path::parent).and_then(Path::parent)).filter(|id| agy_conversation(id)) {
+        return Some(id);
+    }
     if path.file_name().is_some_and(|n| n == "wire.jsonl") {
         let agents = path.parent().and_then(Path::parent);
         if name(agents).as_deref() == Some("agents") { return name(agents.and_then(Path::parent)); }
@@ -38,6 +43,12 @@ fn session_id(jsonl: &str) -> Option<String> {
         if uuid(id) { return Some(id.to_owned()); }
     }
     Some(stem.to_owned())
+}
+
+/// UUID em minúsculas, o id de conversa do `agy` (`valid_conversation_id`).
+fn agy_conversation(id: &str) -> bool {
+    let parts: Vec<&str> = id.split('-').collect();
+    parts.len() == 5 && parts.iter().zip([8, 4, 4, 4, 12]).all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
 }
 
 /// `_projeto`: nome da pasta do projeto + 6 hex do sha256 do caminho real (caminho fora de UTF-8 vai ao backend).
@@ -451,6 +462,8 @@ mod tests {
         assert_eq!(session_id("/s/wd/sid-1/agents/main/wire.jsonl").as_deref(), Some("sid-1"));
         assert_eq!(session_id("/c/rollout-2026-09-27T10-00-00-0199a1b2-c3d4-e5f6-a7b8-c9d0e1f2a3b4.jsonl").as_deref(),
             Some("0199a1b2-c3d4-e5f6-a7b8-c9d0e1f2a3b4"));
+        let agy = "/h/.gemini/antigravity-cli/brain/904fd70e-847b-49ed-9999-a13d7a4d9a98/.system_generated/logs/transcript_full.jsonl";
+        assert_eq!(session_id(agy).as_deref(), Some("904fd70e-847b-49ed-9999-a13d7a4d9a98"));
         assert_eq!((safe_ext("foto.PNG").as_str(), safe_ext("x").as_str(), safe_ext("a.tar gz").as_str()), ("png", "bin", "tar20gz"));
     }
 

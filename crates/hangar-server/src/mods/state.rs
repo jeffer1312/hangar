@@ -261,8 +261,19 @@ struct Inner {
 
 #[derive(Default)]
 struct Loose {
+    /// A chave do token do processo que publicou (`chave.hmac`); `None` no token só do nome.
+    owner: Option<String>,
     ui: Option<Arc<str>>,
     toasts: Vec<(Instant, Value)>,
+}
+
+/// A entrada solta do processo `owner`: outro processo com o mesmo nome não herda faixa nem avisos, como no `attach`.
+fn loose_of<'a>(loose: &'a mut HashMap<String, Loose>, name: &str, owner: Option<&str>) -> &'a mut Loose {
+    let entry = loose.entry(name.to_owned()).or_default();
+    if entry.owner.as_deref() != owner {
+        *entry = Loose { owner: owner.map(str::to_owned), ..Loose::default() };
+    }
+    entry
 }
 
 /// O aviso com o número `seq`, guardado em `toasts` com o vencimento, até `TOASTS_KEPT` vivos.
@@ -511,8 +522,8 @@ impl Mods {
         self.deliver(name, "plugin_toast", &toast.to_string());
     }
 
-    /// Aviso de mod da sessão sem entrada aqui (`Loose`).
-    pub fn loose_toast(&self, name: &str, plugin: &str, text: &str, timeout_ms: u64) {
+    /// Aviso de mod da sessão sem entrada aqui (`Loose`). `owner`: a chave do token do processo.
+    pub fn loose_toast(&self, name: &str, owner: Option<&str>, plugin: &str, text: &str, timeout_ms: u64) {
         if text.trim().is_empty() {
             return;
         }
@@ -522,22 +533,26 @@ impl Mods {
             if inner.sessions.contains_key(name) { return; }
             inner.toast_seq += 1;
             let seq = inner.toast_seq;
-            push_toast(&mut inner.loose.entry(name.to_owned()).or_default().toasts, self.now(), seq, plugin, text, timeout_ms)
+            let now = self.now();
+            push_toast(&mut loose_of(&mut inner.loose, name, owner).toasts, now, seq, plugin, text, timeout_ms)
         };
         self.deliver(name, "plugin_toast", &toast.to_string());
     }
 
     /// Faixa e painéis da sessão sem entrada aqui, no formato que o Python publicava (`{above, panes}`,
-    /// sem a largura nem o estado estruturado dos painéis). Reenvio igual não vira evento.
-    pub fn loose_ui(&self, name: &str, above: Value, panes: Vec<TerminalPane>) {
-        let panes: Vec<TerminalPane> = panes.into_iter().map(|pane| TerminalPane { data: None, ..pane }).collect();
+    /// sem a largura nem o estado estruturado dos painéis). Reenvio igual não vira evento. `owner`: a chave do
+    /// token do processo.
+    pub fn loose_ui(&self, name: &str, owner: Option<&str>, above: Value, panes: Vec<TerminalPane>) {
+        // Painel sem árvore é o estado do `/btw` de um `claude -p`, que só se junta à vista da superfície: solto, não
+        // há vista, e o app esperaria um desenho que não vem.
+        let panes: Vec<TerminalPane> = panes.into_iter().filter(|pane| !pane.tree.is_null()).map(|pane| TerminalPane { data: None, ..pane }).collect();
         let raw: Arc<str> = json!({"above": above, "panes": panes}).to_string().into();
         let lock = self.publishing(name);
         let _publishing = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         {
             let mut inner = self.inner.lock().unwrap();
             if inner.sessions.contains_key(name) { return; }
-            let loose = inner.loose.entry(name.to_owned()).or_default();
+            let loose = loose_of(&mut inner.loose, name, owner);
             if loose.ui.as_ref() == Some(&raw) { return; }
             loose.ui = Some(raw.clone());
         }
@@ -662,6 +677,14 @@ impl Mods {
             frames.push(("plugin_toast", toast.to_string()));
         }
         frames
+    }
+
+    /// O nome passou a outra sessão (outra vida ou um agente sem o plugin do Claude): a faixa e os avisos
+    /// soltos eram da anterior e não voltam a nenhum hub.
+    pub fn release_loose(&self, name: &str) {
+        // Sem a trava de publicação: o hub chama com a ligação presa, e a entrega dos mods pega as duas na ordem
+        // inversa. Uma publicação que cruze cai no portão do hub.
+        self.inner.lock().unwrap().loose.remove(name);
     }
 
     pub fn life(&self, name: &str) -> Option<u64> {
@@ -928,7 +951,7 @@ impl Mods {
 
     fn deliver(&self, name: &str, event: &str, data: &str) {
         if let Some(hubs) = self.hubs.get().and_then(WeakHubs::upgrade) {
-            hubs.deliver(name, event, data);
+            hubs.deliver_mods(name, event, data);
         }
     }
 }
@@ -980,5 +1003,28 @@ mod tests {
         drop(delivering);
         assert!(other.join().unwrap());
         assert_eq!(mods.replay("s").len(), 1);
+    }
+
+    /// Sessão sem entrada aqui: outro processo com o mesmo nome não herda a faixa nem os avisos do anterior, e o
+    /// nome que passa a outra sessão leva a entrada solta embora.
+    #[test]
+    fn a_loose_band_belongs_to_the_process_and_leaves_with_the_name() {
+        let mods = Mods::default();
+        let pane = |tree: Value| TerminalPane { id: "hangar-btw".into(), title: String::new(), placement: "inline".into(), columns: None, tree, data: None };
+        mods.loose_ui("s", Some("velha"), Value::Null, vec![pane(json!({"type": "Box"}))]);
+        mods.loose_toast("s", Some("velha"), "m", "aviso da velha", 60_000);
+        assert_eq!(mods.replay("s").len(), 2);
+        mods.loose_toast("s", Some("nova"), "m", "aviso da nova", 60_000);
+        let frames = mods.replay("s");
+        assert!(frames.iter().all(|(event, _)| *event != "plugin_ui"), "a faixa da velha não passa à nova: {frames:?}");
+        assert_eq!(frames.iter().filter(|(event, data)| *event == "plugin_toast" && data.contains("da nova")).count(), 1);
+        assert!(!frames.iter().any(|(_, data)| data.contains("da velha")), "aviso de outro processo: {frames:?}");
+        mods.release_loose("s");
+        assert!(mods.replay("s").is_empty());
+        assert!(!mods.band_present("s"), "sem a entrada, o plugin da sessão nova reenvia a faixa");
+        // O estado do `/btw` de um `claude -p` que o Rust não atende chega sem árvore: não vira painel solto.
+        mods.loose_ui("s", None, Value::Null, vec![pane(Value::Null)]);
+        let ui = mods.replay("s").into_iter().find(|(event, _)| *event == "plugin_ui").unwrap().1;
+        assert_eq!(serde_json::from_str::<Value>(&ui).unwrap(), json!({"above": null, "panes": []}));
     }
 }

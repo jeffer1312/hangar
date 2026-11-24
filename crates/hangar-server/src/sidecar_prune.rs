@@ -215,7 +215,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         let rows = [row("minha/sessao", Some("/claude/projects/x/aaa.jsonl")),
-            row("kimi", Some("/kimi/sessions/wd/vivo-kimi/agents/main/wire.jsonl")), row("sem-transcript", None)];
+            row("kimi", Some("/kimi/sessions/wd/vivo-kimi/agents/main/wire.jsonl")), row("sem-transcript", None),
+            row("agy", Some("/g/antigravity-cli/brain/0123abcd-0000-4000-8000-0123456789ab/.system_generated/logs/transcript_full.jsonl"))];
         let panes = [pane("%42"), pane("")];
         let key = "0123456789abcdef0123456789abcdef";
         let specs = home.join(".hangar").join("session-specs");
@@ -231,8 +232,8 @@ mod tests {
         // Só a fotografia do restore conta; o spec, mesmo com conversa, fica de fora.
         let (live, degraded) = live(&rows, &panes, false, recorded(home));
         assert_eq!(degraded, None);
-        assert_eq!(live.stems, set(&["aaa", "vivo-kimi", "conversa-do-restore"]));
-        assert_eq!(live.names, set(&["minha-sessao", "kimi", "sem-transcript", "restaurar"]));
+        assert_eq!(live.stems, set(&["aaa", "vivo-kimi", "0123abcd-0000-4000-8000-0123456789ab", "conversa-do-restore"]));
+        assert_eq!(live.names, set(&["minha-sessao", "kimi", "sem-transcript", "agy", "restaurar"]));
         assert_eq!(live.panes, set(&["42"]));
         assert_eq!(live.keys, set(&["fedcba9876543210fedcba9876543210"]));
     }

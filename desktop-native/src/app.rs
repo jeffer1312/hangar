@@ -1862,7 +1862,7 @@ impl Hangar {
         // O app responde: o formulário que a lista trouxe já abre o passo a passo (`/answer`), antes do stream.
         if let Some(ask) = list_form(&session) { self.chat.update_ask(Some(ask)); }
         self.error = None;
-        let opens_chat = session.readable() || session.waiting_for_kimi_input();
+        let opens_chat = session.readable() || session.waiting_for_first_input();
         self.loading = opens_chat;
         self.history_started = false;
         self.history_installed = false;
@@ -2811,8 +2811,8 @@ impl Hangar {
         if let Some(old) = self.selected.clone() {
             match list.iter().find(|s| s.name == old.name).cloned() {
                 Some(new) if new.jsonl != old.jsonl || new.tracked != old.tracked
-                    || new.waiting_for_kimi_input() != old.waiting_for_kimi_input()
-                    || new.waiting_for_kimi_input() && new.lifecycle_id != old.lifecycle_id => {
+                    || new.waiting_for_first_input() != old.waiting_for_first_input()
+                    || new.waiting_for_first_input() && new.lifecycle_id != old.lifecycle_id => {
                     let moved = self.follow_transcript(&old, &new, cx);
                     self.open_session(self.open_api.clone(), new, window, cx);
                     if let Some(from) = moved { self.drafts.remove(&from); }
@@ -5957,7 +5957,7 @@ impl Hangar {
         // Desenhado na prévia da aba, o campo é o dela: ações e colar chegam antes dos ouvintes de tecla da prévia, que
         // trocam a conversa, e trocam aqui mesmo para não agirem na sessão principal.
         let preview = self.in_tab_preview;
-        let editable = readable || self.selected.as_ref().is_some_and(SessionInfo::waiting_for_kimi_input) || new_chat || reopen;
+        let editable = readable || self.selected.as_ref().is_some_and(SessionInfo::waiting_for_first_input) || new_chat || reopen;
         let textarea = Textarea::new(&self.composer).accessibility_id("composer-input").appearance(false).disabled(!editable || creating || resuming).on_paste(move |item, window, cx| {
             paste_target.update(cx, |this, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.paste(item, cx) }).unwrap_or(false)
         });
@@ -8282,12 +8282,14 @@ impl Hangar {
                         .on_click(cx.listener(move |this, _, _, cx| this.reopen_target(target.clone(), cx)))));
             } else if let Some(card) = prethread {
                 content = content.child(card);
-            } else if selected.waiting_for_kimi_input() {
+            } else if selected.waiting_for_first_input() {
                 let sent = self.selected_key().is_some_and(|key| {
                     matches!(self.delivery.outcome(&key), Some(SendOutcome::Delivered | SendOutcome::Queued))
                 });
-                let hint = if sent { "chat_mensagem_enviada_kimi" } else { "chat_envie_primeira_kimi" };
-                content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr_shared(hint, &[])));
+                let hint = if sent { tr_shared("chat_mensagem_enviada_kimi", &[]) }
+                    else if selected.provider == "antigravity" { tr("chat_send_first_antigravity") }
+                    else { tr_shared("chat_envie_primeira_kimi", &[]) };
+                content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(hint));
             } else if !selected.readable() {
                 content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr(if selected.tracked == Some(false) { "untracked" } else { "starting" })));
             } else {

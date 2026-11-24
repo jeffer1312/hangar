@@ -238,6 +238,41 @@ fn h056_real_pi_corpus_keeps_full_tools_and_cleans_ansi() {
     assert!(events.iter().all(|e| !e.text.as_deref().unwrap_or("").contains('\x1b') && !e.result.as_deref().unwrap_or("").contains('\x1b')));
 }
 
+#[test]
+fn agy_corpus_speaks_the_claude_tools_and_pairs_every_output_in_order() {
+    let mut parser = LineParser::new(Provider::parse("antigravity").expect("Antigravity suportado"));
+    let input = include_bytes!("fixtures/agy_session.jsonl");
+    let mut events = Vec::new();
+    let mut offset = 0;
+    for line in input.split(|b| *b == b'\n') {
+        events.extend(parser.feed(line, offset));
+        offset += line.len() as u64 + 1;
+    }
+    let uses = events.iter().filter(|e| e.kind.as_str() == "tool_use").collect::<Vec<_>>();
+    assert_eq!(uses.iter().map(|e| e.tool_name.as_deref().unwrap()).collect::<Vec<_>>(),
+        ["TodoWrite", "Read", "Bash", "Edit", "MultiEdit", "Write", "MultiEdit", "Write", "Read", "Agent", "Bash", "update_focus", "WebFetch"]);
+    let input_of = |n: usize| Value::Object(uses[n].tool_input.clone().unwrap());
+    assert_eq!(input_of(0)["todos"], json!([{"content":"Ler o README","status":"in_progress"},
+        {"content":"Trocar o título","status":"pending"},{"content":"Rodar os testes","status":"pending"}]));
+    assert_eq!(input_of(1), json!({"file_path":"/work/demo/README.md","offset":1,"limit":20}));
+    assert_eq!(input_of(2), json!({"command":"ls -la","description":"Listar a pasta"}));
+    assert_eq!(input_of(3), json!({"file_path":"/work/demo/README.md","old_string":"# Demo","new_string":"# Demo novo"}));
+    assert_eq!(input_of(4)["edits"], json!([{"old_string":"antigo()","new_string":"novo()","replace_all":true},{"old_string":"// remover\n","new_string":""}]));
+    assert_eq!(input_of(5), json!({"file_path":"/work/demo/NOTAS.md","content":"# Notas\n- título trocado\n"}));
+    assert_eq!(input_of(6)["edits"][0]["new_string"], "- título trocado\n- testes rodados");
+    assert_eq!(input_of(8), json!({"file_path":"/work/demo/src/main.rs","offset":5,"limit":10}));
+    assert_eq!(input_of(9)["description"], "Revisor de código");
+    assert_eq!(input_of(11), json!({"focus":"Conferindo a documentação"}));
+    assert_eq!(input_of(12), json!({"url":"https://example.com/docs"}));
+    let results = events.iter().filter(|e| e.kind.as_str() == "tool_result").collect::<Vec<_>>();
+    assert_eq!(results.iter().map(|e| e.tool_use_id.clone()).collect::<Vec<_>>(),
+        uses.iter().map(|e| e.tool_use_id.clone()).collect::<Vec<_>>());
+    assert_eq!(results.iter().filter(|e| e.is_error == Some(true)).map(|e| e.id.as_str()).collect::<Vec<_>>(), ["res:agy:8", "res:agy:16"]);
+    assert_eq!(events.iter().filter(|e| e.kind.as_str() == "user_msg").map(|e| e.text.as_deref().unwrap()).collect::<Vec<_>>(),
+        ["Troque o título do README e rode os testes"]);
+    assert_eq!(events.last().and_then(|e| e.text.as_deref()), Some("Título trocado; um teste falhou."));
+}
+
 fn external_json() -> impl Strategy<Value = Value> {
     let scalar = prop_oneof![Just(Value::Null), any::<bool>().prop_map(Value::Bool), any::<i64>().prop_map(|n| json!(n)), ".{0,80}".prop_map(Value::String)];
     scalar.prop_recursive(5, 128, 8, |inner| prop_oneof![

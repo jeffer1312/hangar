@@ -127,9 +127,14 @@ falha:
 
 ### O que o Windows ainda não tem
 
-- Wrappers do `pi`, do `omp` e do `kimi`, e a extensão `hangar-state.ts` do Pi. Sessão Pi, omp
-  ou Kimi aberta por você no terminal não aparece; criada pelo app, funciona. (`claude`,
-  `claude-conta` e `codex` têm wrapper no perfil do PowerShell.)
+- O `install.ps1` não liga as extensões do Pi e do omp (`hangar-state.ts` e as outras de
+  `scripts/pi`): no painel Harnesses do app, o item Extensões do Pi ou do omp tem o botão
+  Consertar, que cria os links (o Windows só cria link com o Modo Desenvolvedor ligado ou como
+  administrador).
+- Os wrappers do `claude`, `claude-conta`, `codex`, `pi`, `omp`, `kimi` e `agy` vivem no perfil
+  do PowerShell (5.1 e 7). Aberto em outro shell (Git Bash, `cmd`), o CLI não vira sessão do
+  Hangar; criado pelo app, funciona. Sem o `hangar-server`, a sessão abre no psmux com o nome da
+  pasta, e ali um prompt inicial com aspas duplas chega sem elas (limite do psmux).
 - Motor de modelo (Contas e provedores → Modelo e opções / `CP_ENGINE`) funciona: o
   `hangar-engine` roda o comando por subprocess no Windows (o `exec` com env crasha lá).
 - Resurrect/continuum (sessões sobreviverem a reboot): são plugins de tmux em bash, e o

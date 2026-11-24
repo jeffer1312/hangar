@@ -31,6 +31,8 @@ const draftSchema = z.preprocess(legacyAttachment, z.object({
   text: z.string(),
   revision: z.number().int().nonnegative(),
   transcript: z.string().min(1).nullable(),
+  // Vida da sessão que escreveu (`lifecycle_id`): o nome reaproveitado por outra sessão, mesmo sem transcript, não herda.
+  life: z.string().min(1).optional(),
   dictationId: z.string().min(1).optional(),
   recordings: z.array(z.object({ id: z.string().min(1), serverPath: z.string().min(1) })).optional(),
   attachments: z.array(attachmentSchema),
@@ -301,19 +303,27 @@ function insertDictation(serverId: string, name: string, latest: ConversationDra
   return { draft: next, dictation: null };
 }
 
-export function resolveDraftTranscript(serverId: string, name: string, transcript: string | null): {
+// A geração (`:g:N`) sobe quando o agente religa na mesma sessão; o rascunho é da chave, como os arquivos dela.
+const lifeOwner = (life: string) => /^(k:[0-9a-f]{32}):g:[1-9]\d*$/i.exec(life)?.[1] ?? life;
+
+/** O rascunho é de outra sessão que teve este nome: outra vida conhecida, ou outro transcript. */
+export function draftOfAnotherSession(draft: ConversationDraft, transcript: string | null, life: string | null): boolean {
+  if (life !== null && draft.life && lifeOwner(draft.life) !== lifeOwner(life)) return true;
+  return transcript !== null && draft.transcript !== null && draft.transcript !== transcript;
+}
+
+export function resolveDraftTranscript(serverId: string, name: string, transcript: string | null, life: string | null = null): {
   draft: ConversationDraft | null;
   recoverable: ConversationDraft | null;
 } {
   const draft = readDraft(serverId, name);
-  if (!draft || transcript === null || draft.transcript === transcript) {
-    return { draft, recoverable: null };
-  }
-  if (draft.transcript === null) {
-    const associated = { ...draft, transcript };
-    writeDraft(serverId, name, associated);
-    return { draft: associated, recoverable: null };
-  }
+  if (!draft) return { draft: null, recoverable: null };
   // O consumidor conserva recoverable antes de gravar texto da sessão recriada.
-  return { draft: null, recoverable: draft };
+  if (draftOfAnotherSession(draft, transcript, life)) return { draft: null, recoverable: draft };
+  const addTranscript = draft.transcript === null && transcript !== null;
+  const addLife = !draft.life && life !== null;
+  if (!addTranscript && !addLife) return { draft, recoverable: null };
+  const associated = { ...draft, ...(addTranscript ? { transcript } : {}), ...(addLife ? { life } : {}) };
+  writeDraft(serverId, name, associated);
+  return { draft: associated, recoverable: null };
 }

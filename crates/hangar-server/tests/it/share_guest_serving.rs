@@ -458,7 +458,7 @@ async fn guest_events_drop_plugin_toast_and_nav() {
     hubs.deliver("s", "state", "\"m0\"");
     until_state(&mut owner, "\"m0\"").await;
     until_state(&mut guest, "\"m0\"").await;
-    mods.unwrap().loose_toast("s", "m", "segredo", 60000);
+    mods.unwrap().loose_toast("s", None, "m", "segredo", 60000);
     hubs.deliver("s", "nav", &json!({"url": "http://127.0.0.1:5173/?token=dono"}).to_string());
     hubs.deliver("s", "state", "\"m1\"");
     let seen = until_state(&mut owner, "\"m1\"").await;

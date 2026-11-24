@@ -135,6 +135,25 @@ describe('drafts', () => {
       .toEqual({ draft: value, recoverable: null });
   });
 
+  it('outra vida com o mesmo nome e sem transcript (Antigravity) não herda o rascunho da sessão Claude anterior', () => {
+    const claude = draft({ text: 'digitado no Claude', life: 'k:claude-velha' });
+    writeDraft('linux', 'sessao', claude);
+    expect(resolveDraftTranscript('linux', 'sessao', null, 'k:antigravity-nova:g:1'))
+      .toEqual({ draft: null, recoverable: claude });
+    expect(readDraft('linux', 'sessao')).toEqual(claude);
+  });
+
+  it('a vida chega depois: associa sem trocar o rascunho, e a geração nova da mesma chave continua dele', () => {
+    const owner = `k:${'a'.repeat(32)}`;
+    const value = draft({ transcript: null });
+    writeDraft('linux', 'sessao', value);
+    const associated = { ...value, life: `${owner}:g:1` };
+    expect(resolveDraftTranscript('linux', 'sessao', null, `${owner}:g:1`)).toEqual({ draft: associated, recoverable: null });
+    expect(readDraft('linux', 'sessao')).toEqual(associated);
+    expect(resolveDraftTranscript('linux', 'sessao', null, `${owner}:g:2`)).toEqual({ draft: associated, recoverable: null });
+    expect(resolveDraftTranscript('linux', 'sessao', null, `k:${'b'.repeat(32)}:g:1`)).toEqual({ draft: null, recoverable: associated });
+  });
+
   it('rascunho recuperável tem chave própria por servidor e sessão, sem tocar a principal', () => {
     const current = draft({ text: 'Sessão nova', transcript: '/sessions/recreated.jsonl' });
     const old = draft({ text: 'Sessão morta' });

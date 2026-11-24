@@ -124,16 +124,18 @@ fn r6_05_a_ticket_goes_only_when_no_live_pane_name_or_session_key_owns_it() {
     let key = "0123456789abcdef0123456789abcdef";
     let by_pane = write(&base, ".hangar-pi", "42.json", days(60.0));
     let by_key = write(&base, ".hangar-pi", &format!("{key}.json"), days(60.0));
-    // psmux: o bilhete do Pi e o do Kimi são pelo nome sanitizado da sessão (`minha sessão` → `minha-sess-o`).
+    // psmux: os bilhetes do Pi, do Kimi e do Antigravity são pelo nome sanitizado da sessão (`minha sessão` → `minha-sess-o`).
     let by_name = write(&base, ".hangar-pi", "minha-sess-o.json", days(60.0));
     let kimi_by_name = write(&base, ".hangar-kimi", "minha-sess-o.json", days(60.0));
+    let agy_by_pane = write(&base, ".hangar-agy", "42.json", days(60.0));
     let dead_pi = write(&base, ".hangar-pi", "999.json", days(8.0));
     let dead_kimi = write(&base, ".hangar-kimi", "888.json", days(8.0));
+    let dead_agy = write(&base, ".hangar-agy", "777.json", days(8.0));
     let live = Live { stems: set(&["aaa"]), names: set(&["minha-sess-o"]), panes: set(&["42"]), keys: set(&[key]) };
     let report = prune(&bases(&base), &live, now());
-    assert_eq!(report.removed, removed(&[(".hangar-kimi", 1), (".hangar-pi", 1)]));
-    assert!(by_pane.exists() && by_key.exists() && by_name.exists() && kimi_by_name.exists());
-    assert!(!dead_pi.exists() && !dead_kimi.exists());
+    assert_eq!(report.removed, removed(&[(".hangar-agy", 1), (".hangar-kimi", 1), (".hangar-pi", 1)]));
+    assert!(by_pane.exists() && by_key.exists() && by_name.exists() && kimi_by_name.exists() && agy_by_pane.exists());
+    assert!(!dead_pi.exists() && !dead_kimi.exists() && !dead_agy.exists());
 }
 
 #[test]

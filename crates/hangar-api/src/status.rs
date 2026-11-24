@@ -157,10 +157,10 @@ pub struct AppReport {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionsBlock {
     pub open: u32,
-    /// Chave = provider (`claude`, `codex`, `pi`, `omp`, `kimi`).
+    /// Chave = provider (`claude`, `codex`, `pi`, `omp`, `kimi`, `antigravity`).
     #[serde(default)]
     pub by_provider: Vec<Usage>,
-    /// Chave = grupo de processo (`claude`, `codex_app_server`, `pi_omp_kimi`, `cano`, `tmux`).
+    /// Chave = grupo de processo (`claude`, `codex_app_server`, `pi_omp_kimi` com o `agy`, `cano`, `tmux`).
     #[serde(default)]
     pub by_process: Vec<Usage>,
     #[serde(default)]

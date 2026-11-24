@@ -1134,6 +1134,20 @@ foreach ($a in $script:agentesNovos) {
     Mark-Item $a 'falhou' $nome
     Add-AppPending $nome 'agente-nao-instalou'
 }
+# Sem as extensoes o Pi e o omp sobem sem estado nem previa no app, sem erro nenhum. Mesmo passo do
+# install-claude-wrapper.sh; os links vao pelo current, porque o caminho real da versao e podado.
+# Saida 2 com argumentos validos e binario anterior ao subcomando.
+$raizExtensoes = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { Join-Path $HOME '.hangar\current' } else { $raiz }
+foreach ($a in @('pi', 'omp')) {
+    if (-not (Tem $a)) { continue }
+    $nome = $nomesAgentes[$a]
+    $argsExtensoes = @('harness-setup', 'extensions', $a, '--repo', $raizExtensoes)
+    $rcExtensoes = Srv @argsExtensoes
+    if ($rcExtensoes -eq 0) { Ok "extensoes do $nome ligadas" }
+    elseif ($rcExtensoes -eq 4) { Falta "extensoes do $nome nao ligadas: symlink sem admin nao funciona - ligue o Modo Desenvolvedor (Configuracoes > Sistema > Para desenvolvedores) e rode o instalador de novo" }
+    elseif ($rcExtensoes -eq 2) { Falta "extensoes do ${nome}: o hangar-server desta maquina e anterior a este codigo (nao tem 'harness-setup extensions') - rode scripts\install-server-binaries.ps1 e .\install.ps1 -Update de novo" }
+    else { Falta "extensoes do $nome nao ligadas (exit $rcExtensoes) - sem elas o app nao mostra o estado do $nome; o painel Harnesses do app tem o conserto" }
+}
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve. Depois dos
 # binarios: no checkout novo o hangar-server so existe a partir daqui.
 # @(...) por fora: `$x = if (...) { @('um') }` desembrulha a lista de um item em texto, e o

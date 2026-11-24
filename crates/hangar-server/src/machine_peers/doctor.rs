@@ -123,11 +123,12 @@ pub fn diagnose(service: &Service, f: &Value, platform: &str) -> Vec<Line> {
                 "codex" => "Codex",
                 "pi" => "Pi",
                 "kimi" => "Kimi Code",
+                "agy" => "Antigravity",
                 _ => s,
             })
             .collect::<Vec<_>>();
         if others.is_empty() {
-            add("erro","nenhum agente de código no PATH (Claude Code, Codex, Pi, omp ou Kimi Code)".into(),"curl -fsSL https://claude.ai/install.sh | bash  (Windows: irm https://claude.ai/install.ps1 | iex)".into())
+            add("erro","nenhum agente de código no PATH (Claude Code, Codex, Pi, omp, Kimi Code ou Antigravity)".into(),"curl -fsSL https://claude.ai/install.sh | bash  (Windows: irm https://claude.ai/install.ps1 | iex)".into())
         } else {
             add(
                 "ok",
@@ -312,7 +313,7 @@ pub async fn collect(service: &Service) -> Value {
     let has_ts = find_binary("tailscale").is_some();
     let logged_in = claude_login().await;
     let reach = network::reach(service).await;
-    let mut facts = json!({"port_open":port_open,"latency":latency,"restarts":restarts(service).await,"mux":find_binary("tmux").is_some(),"claude":find_binary("claude").is_some(),"others":(["codex","pi","omp","kimi"].into_iter().filter(|n|find_binary(n).is_some()).collect::<Vec<_>>()),"logged_in":logged_in,"tailscale":if has_ts{"instalado"}else{"ausente"},"tailscale_login":if ts["Self"]["DNSName"].as_str().is_some_and(|s|!s.is_empty()){"logado"}else{"deslogado"},"lan":reach["enderecos"].as_array().into_iter().flatten().any(|v|v["tipo"]=="rede_local"&&v["estado"]=="ok")});
+    let mut facts = json!({"port_open":port_open,"latency":latency,"restarts":restarts(service).await,"mux":find_binary("tmux").is_some(),"claude":find_binary("claude").is_some(),"others":(["codex","pi","omp","kimi","agy"].into_iter().filter(|n|find_binary(n).is_some()).collect::<Vec<_>>()),"logged_in":logged_in,"tailscale":if has_ts{"instalado"}else{"ausente"},"tailscale_login":if ts["Self"]["DNSName"].as_str().is_some_and(|s|!s.is_empty()){"logado"}else{"deslogado"},"lan":reach["enderecos"].as_array().into_iter().flatten().any(|v|v["tipo"]=="rede_local"&&v["estado"]=="ok")});
     if cfg!(windows) {
         let script = format!(
             "$p=Get-NetTCPConnection -State Listen -LocalPort {} -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if($p){{(Get-Process -Id $p).PriorityClass.ToString()}}",

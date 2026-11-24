@@ -221,8 +221,9 @@ export function PluginUi({ serverId, name, readOnly = false }: { serverId: strin
           </Pressable> : null}
         </View>
         <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={[styles.verticalScroll, { maxHeight: availableHeight * 0.3 }]} contentContainerStyle={styles.paneBody}>
+          {/* Sem desenho o corpo fica vazio, como no nativo: o painel só de estado (o `/btw` sem terminal) nunca traz árvore. */}
           {!pane.tree || typeof pane.tree === 'object' && pane.tree.type === 'engine'
-            ? <View style={styles.loading}><ActivityIndicator size="small" /><Text style={styles.muted}>{m.plugin_painel_carregando()}</Text></View>
+            ? null
             : tree(pane.tree, pane.id, pane.columns)}
         </ScrollView>
       </View> : null}
@@ -247,7 +248,6 @@ const styles = StyleSheet.create(theme => ({
   verticalScroll: { flexGrow: 0, flexShrink: 1 },
   paneBody: { padding: theme.base.space[2] },
   band: { padding: theme.base.space[2] },
-  loading: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
   error: { color: theme.tokens.status.error, fontSize: theme.base.text.xs, padding: theme.base.space[2] },
   text: { color: theme.tokens.text.primary, fontSize: theme.base.text.sm, lineHeight: theme.base.text.sm * 1.4, includeFontPadding: false, flexShrink: 0 },
   truncated: { flexShrink: 1, minWidth: 0 },

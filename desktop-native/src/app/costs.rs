@@ -2151,7 +2151,7 @@ impl Hangar {
         let equivalent = if d.filtering && (!d.has_combos || d.unknown || d.empty_cut) { "—".into() } else { tok(d.equivalent) };
         let mut notes = vec![web("custos_metodo_codex"), web("custos_metodo_standard"),
             format!("{}: {}. {}", web("custos_equivalente_cobrado"), equivalent, web("custos_equivalente_metodo")),
-            format!("{} {}.", web("custos_fontes"), ["claude", "codex", "pi", "omp", "kimi"].map(source_name).join(" · ")),
+            format!("{} {}.", web("custos_fontes"), ["claude", "codex", "pi", "omp", "kimi", "antigravity"].map(source_name).join(" · ")),
             format!("{}{}", web("custos_tarifas"), web("custos_tarifas_models"))];
         if let Some(rate) = rate.filter(|_| appearance::get().currency == Currency::Brl) {
             notes.push(format!("{} {}", web("custos_cotacao"), web_with("custos_usd_brl", &[("taxa", dec(rate, 2))])));

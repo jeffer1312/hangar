@@ -84,6 +84,11 @@ async fn origin(st: &Arc<AppState>, name: &str, q: &Value) -> Result<Origin, Ope
                 let located = if provider==AgentProvider::Kimi {
                     super::archive::kimi_jsonl(&super::agents::kimi_home(&env.home,&env.base),sid)
                         .map(|(path,cwd)|(path,None,cwd)).map_err(OpenError::from)
+                } else if provider==AgentProvider::Antigravity {
+                    // A pasta da conversa mora no `history.jsonl` da conta, não no transcript.
+                    super::archive::agy_found(&env.home,sid)
+                        .map(|(path,account)|{let cwd=hangar_antigravity::paths::workspace_of(&account,&env.home,sid);(path,None,cwd)})
+                        .map_err(OpenError::from)
                 } else {
                     super::archive::locate(&w,project,sid,config,provider,q["origem_codex_account"].as_str())
                         .map(|(path,home)|(path,home,None))
@@ -91,7 +96,7 @@ async fn origin(st: &Arc<AppState>, name: &str, q: &Value) -> Result<Origin, Ope
                 let (path,codex_home,indexed_cwd)=located
                     .map_err(|e| if e.code == Some("erro_path_invalido") {OpenError::new(404,"erro_transcript_nao_encontrado","transcript not found")} else {e})?;
                 // O cwd é metadado do alvo; uma história inválida não pode apagá-lo.
-                let cwd=if provider==AgentProvider::Kimi {indexed_cwd} else {
+                let cwd=if matches!(provider,AgentProvider::Kimi|AgentProvider::Antigravity) {indexed_cwd} else {
                     super::archive::header(&path,if provider==AgentProvider::Claude {60} else {5},|value|match provider {
                         AgentProvider::Claude=>value["cwd"].as_str().map(str::to_owned),
                         AgentProvider::Codex if value["type"]=="session_meta"=>value["payload"]["cwd"].as_str().map(str::to_owned),

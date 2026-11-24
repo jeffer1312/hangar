@@ -276,6 +276,7 @@ mod refresh {
         if let Some(stale) = seed {
             let path = dir.path().join("models.dev.json");
             std::fs::write(&path, SEEDED).unwrap();
+            std::fs::write(dir.path().join(hangar_server::costs::pricing_refresh::WINDOWS), "{}").unwrap();
             if stale {
                 std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_modified(UNIX_EPOCH + Duration::from_secs(JAN_1_2026)).unwrap();
             }
@@ -306,6 +307,17 @@ mod refresh {
         let r = run(Mode::Strict, Some(false), 1).await;
         assert!(r.requests().is_empty());
         assert_eq!(r.text().as_deref(), Some(SEEDED));
+    }
+
+    #[tokio::test]
+    async fn fresh_cache_without_the_windows_file_downloads_it_again() {
+        let fake = fake(Mode::Body(std::str::from_utf8(&recorte()).unwrap().to_owned().leak())).await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("models.dev.json"), SEEDED).unwrap();
+        PricingRefresh::new(dir.path().to_owned(), fake.url.clone()).run().await;
+        assert_eq!(fake.seen.lock().unwrap().clone(), [(ua(), None)], "sem o If-Modified-Since: um 304 não traria as janelas");
+        let windows = std::fs::read_to_string(dir.path().join(hangar_server::costs::pricing_refresh::WINDOWS)).unwrap();
+        assert!(windows.starts_with('{') && windows.len() > 2, "{windows}");
     }
 
     #[tokio::test]

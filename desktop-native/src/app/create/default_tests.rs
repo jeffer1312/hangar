@@ -104,7 +104,7 @@ fn flipped(value: serde_json::Value) -> serde_json::Value {
 fn the_open_body_does_not_depend_on_what_this_computer_saved(cx: &mut TestAppContext) {
     let (view, cx) = dialog(cx);
     cx.update(|_, cx| view.update(cx, |dialog, cx| {
-        for provider in ["claude", "codex", "pi", "omp", "kimi"] {
+        for provider in ["claude", "codex", "pi", "omp", "kimi", "antigravity"] {
             dialog.provider = provider;
             let plain = crate::appearance::with_test_appearance(crate::appearance::Appearance::default(), || dialog.open_body("s", "/p", "", cx));
             let all_on = serde_json::from_value(flipped(serde_json::to_value(crate::appearance::Appearance::default()).unwrap())).unwrap();

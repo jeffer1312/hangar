@@ -64,7 +64,15 @@ pub fn command(cli: &str, windows: bool) -> Option<Vec<String>> {
             "-c",
             "curl -fsSL https://omp.sh/install | sh",
         ],
-        "kimi" if !windows => vec![
+        "kimi" if windows => vec![
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "irm https://code.kimi.com/kimi-code/install.ps1 | iex",
+        ],
+        "kimi" => vec![
             "bash",
             "-o",
             "pipefail",
@@ -129,5 +137,12 @@ mod tests {
         assert_eq!(args("claude", true), ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://claude.ai/install.ps1 | iex"]);
         assert_eq!(display(&args("claude", false)), "curl -fsSL https://claude.ai/install.sh | bash");
         assert_eq!(manual()["claude"], "https://code.claude.com/docs/en/setup");
+    }
+
+    #[test]
+    fn kimi_installs_by_the_official_script_on_both_systems() {
+        assert_eq!(args("kimi", false), ["bash", "-o", "pipefail", "-c", "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash"]);
+        assert_eq!(args("kimi", true), ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://code.kimi.com/kimi-code/install.ps1 | iex"]);
+        assert_eq!(public(true)["kimi"], "irm https://code.kimi.com/kimi-code/install.ps1 | iex");
     }
 }

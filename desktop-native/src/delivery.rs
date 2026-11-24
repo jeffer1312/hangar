@@ -16,10 +16,10 @@ impl SessionKey {
 
     pub fn for_open_chat(server: &str, session: &SessionInfo) -> Option<Self> {
         Self::new(server, session).or_else(|| {
-            if !session.waiting_for_kimi_input() { return None; }
+            if !session.waiting_for_first_input() { return None; }
             // Cada vida guarda o próprio rascunho até o vínculo com o histórico.
             let life = session.lifecycle_id.as_deref()?;
-            Some(Self { server: server.into(), name: session.name.clone(), jsonl: format!("kimi-opening:{life}") })
+            Some(Self { server: server.into(), name: session.name.clone(), jsonl: format!("opening:{life}") })
         })
     }
 }
@@ -228,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_can_start_with_a_first_message_before_the_transcript_exists() {
+    fn kimi_and_antigravity_can_start_with_a_first_message_before_the_transcript_exists() {
         let mut session = SessionInfo {
             name: "kimi".into(), provider: "kimi".into(), state: "idle".into(), tracked: Some(false),
             lifecycle_id: Some("k:first".into()), ..Default::default()
@@ -255,6 +255,9 @@ mod tests {
         session.lifecycle_id = Some("k:first".into());
         session.guest_kind = Some("pair".into());
         assert!(!session.takes_messages());
+        let agy = SessionInfo { name: "agy".into(), provider: "antigravity".into(), guest_kind: None, ..session.clone() };
+        assert!(agy.takes_messages(), "o agy também só cria a conversa no primeiro envio");
+        assert!(!SessionInfo { provider: "pi".into(), ..agy }.takes_messages());
     }
 
     #[test]

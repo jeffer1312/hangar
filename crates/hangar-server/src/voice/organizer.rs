@@ -135,7 +135,7 @@ repetir um pedido que você respondeu sem agir é sinal de que nada aconteceu: f
 O Hangar se controla pelas suas ferramentas, primeiro e na hora: aja quando a intenção e o alvo estão claros e pergunte só se
 houver mais de um alvo possível.
 - Sessões: list_sessions (nome, máquina, estado, pasta), switch_session(name), open_session(folder; e, se ele disser, name,
-  provider claude/codex/pi/omp/kimi, model, effort, account, engine, permission, headless, server, request), close_session e
+  provider claude/codex/pi/omp/kimi/antigravity, model, effort, account, engine, permission, headless, server, request), close_session e
   interrupt_session (os dois pedem o sim falado), pair_sessions e unpair_session (agrupam e desagrupam), follow_session.
 - Sessão fechada ('fechei sem querer a X, reabre', 'volta aquela conversa', 'reabre a última que eu fechei'):
   reopen_conversation com o nome falado, ou com o id que recent_conversations mostrou; ela volta com o nome antigo e abre na
@@ -265,9 +265,10 @@ pub fn tools() -> Value {
             pasta, disse 'qualquer lugar' ou o assunto não é de um projeto), abre na pasta pessoal. Pasta ambígua volta com as opções. \
             Com request, o trabalho ditado para ela é enviado assim que ela abre. O resto só quando o usuário disser: model, effort, \
             account (caminho do config dir para claude/pi/omp, id da conta para codex), engine (motor do Claude), permission (modo do \
-            Claude; sem ele, o da conta) e headless (sem terminal, claude ou codex).",
+            Claude; sem ele, o da conta) e headless (sem terminal, claude ou codex). antigravity é o agy do Google: só com terminal e na \
+            conta Google padrão.",
             json!({"folder": {"type": "string"}, "name": {"type": "string"},
-                "provider": {"type": "string", "enum": ["claude", "codex", "pi", "omp", "kimi"]},
+                "provider": {"type": "string", "enum": ["claude", "codex", "pi", "omp", "kimi", "antigravity"]},
                 "server": {"type": "string"}, "request": {"type": "string"}, "model": {"type": "string"}, "effort": {"type": "string"},
                 "account": {"type": "string"}, "engine": {"type": "string"},
                 "permission": {"type": "string", "enum": ["bypassPermissions", "acceptEdits", "auto", "manual", "dontAsk", "plan"]},
@@ -696,6 +697,7 @@ pub fn parse_tool(params: &Value) -> ToolCall {
         "open_session" => {
             let provider = match arg("provider").as_deref() {
                 None | Some("claude") => "claude", Some("codex") => "codex", Some("pi") => "pi", Some("omp") => "omp", Some("kimi") => "kimi",
+                Some("antigravity") => "antigravity",
                 Some(_) => return unknown(),
             };
             // Quem não sabe ou não liga para a pasta ("abre em qualquer lugar") não pode travar a abertura.
@@ -2221,6 +2223,7 @@ mod tests {
         assert!(matches!(call("open_session", json!({"folder": "/p/x", "name": "x2", "provider": "codex", "server": "casa"})),
             ToolCall::OpenSession(r) if r.provider == "codex" && r.name.as_deref() == Some("x2") && r.server.as_deref() == Some("casa")));
         assert!(matches!(call("open_session", json!({"folder": "x", "provider": "pi"})), ToolCall::OpenSession(r) if r.provider == "pi"));
+        assert!(matches!(call("open_session", json!({"folder": "x", "provider": "antigravity"})), ToolCall::OpenSession(r) if r.provider == "antigravity"));
         assert!(matches!(call("open_session", json!({"folder": "x", "provider": "gemini"})), ToolCall::Unknown(_)));
         assert!(matches!(call("open_session", json!({})), ToolCall::OpenSession(r) if r.folder == "~"), "sem pasta abre na pessoal");
         assert!(matches!(call("open_session", json!({"folder": " "})), ToolCall::OpenSession(r) if r.folder == "~"));

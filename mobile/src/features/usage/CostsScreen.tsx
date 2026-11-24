@@ -380,7 +380,7 @@ export function CostsScreen() {
       {renderSessions()}{renderModels()}{renderComparison()}
       <Action label={m.custos_como_calculamos()} selected={methodOpen} icon={methodOpen ? 'ChevronDown' : 'ChevronRight'} onPress={() => setMethodOpen(!methodOpen)} />
       {methodOpen && <Card><Copy>{m.custos_aviso_estimativa()}</Copy><Copy>{m.custos_preco_tabela()}</Copy><Copy>{m.custos_metodo_standard()}</Copy><Copy>{m.custos_metodo_codex()}</Copy><Copy>{`${m.custos_equivalente_cobrado()}: ${equivalent === null || unknownCost(total) ? '—' : number(equivalent)}`}</Copy><Copy>{m.custos_equivalente_metodo()}</Copy>
-        <Copy>{`${m.custos_fontes()} ${m.custos_claude_code()} · Codex · Pi · omp · Kimi`}</Copy><Copy>{m.custos_tarifas()}{m.custos_tarifas_models()}</Copy>
+        <Copy>{`${m.custos_fontes()} ${m.custos_claude_code()} · Codex · Pi · omp · Kimi · Antigravity`}</Copy><Copy>{m.custos_tarifas()}{m.custos_tarifas_models()}</Copy>
         <Copy>{`${m.custos_cotacao()}: ${validRate ? m.custos_usd_brl({ taxa: number(report.usd_brl!, 4) }) : m.custos_cotacao_indisponivel()}`}</Copy>
         <Copy>{m.custos_custo_tabela()}{m.custos_nao_fatura()}{m.custos_assinatura()}</Copy>
         {report.sem_tarifa.some(isFree) && <Copy>{`${m.custos_modelos_gratis()}: ${report.sem_tarifa.filter(isFree).join(', ')} · ${m.custos_modelo_gratis_nenhum_dolar()}`}</Copy>}
