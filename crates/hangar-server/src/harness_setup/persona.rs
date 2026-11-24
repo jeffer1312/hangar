@@ -34,6 +34,30 @@ fn link(path: &Path, target: &Path, directory: bool) -> std::io::Result<bool> {
     }
     Ok(true)
 }
+/// O `agy` trunca cada arquivo de regras em 24.000 bytes.
+const AGY_RULES_LIMIT: u64 = 24_000;
+
+/// Só o `~/.gemini/config/AGENTS.md` -> `~/.claude/CLAUDE.md`, na subida do servidor e a cada abertura do `agy`:
+/// sem o `harness-setup` manual o `agy` ficava sem as regras globais. Arquivo de verdade da pessoa fica; tudo
+/// só vai ao log.
+pub fn sync_agy(home: &Path) {
+    let agy = hangar_antigravity::Account::default();
+    let source = home.join(".claude/CLAUDE.md");
+    if !agy.data_dir(home).is_dir() || !source.is_file() {
+        return;
+    }
+    let dir = agy.gemini_dir(home).join("config");
+    match fs::create_dir_all(&dir).and_then(|()| link(&dir.join("AGENTS.md"), &source, false)) {
+        Ok(true) => {}
+        Ok(false) => tracing::info!(file = %dir.join("AGENTS.md").display(), "AGENTS.md do agy é um arquivo da pessoa; não ligado ao CLAUDE.md"),
+        Err(error) => tracing::warn!(code = "agy_persona_failed", %error, "AGENTS.md do agy não ligado ao CLAUDE.md"),
+    }
+    if fs::metadata(&source).is_ok_and(|meta| meta.len() > AGY_RULES_LIMIT) {
+        tracing::warn!(code = "agy_persona_truncated", bytes = fs::metadata(&source).map_or(0, |m| m.len()),
+            "o CLAUDE.md passa de 24.000 bytes; o agy lê só o começo dele");
+    }
+}
+
 pub fn sync(home: &Path) -> Result<Vec<String>, String> {
     let installed: Value = serde_json::from_slice(
         &fs::read(home.join(".claude/plugins/installed_plugins.json"))
@@ -114,6 +138,23 @@ mod tests {
         assert_eq!(fs::read_link(&rules).unwrap(), home.path().join(".claude/CLAUDE.md"));
         assert_eq!(sync(home.path()).unwrap(), ["ponte: agy"], "segunda vez não muda nada");
         assert_eq!(fs::read_link(&rules).unwrap(), home.path().join(".claude/CLAUDE.md"));
+    }
+
+    #[test]
+    fn the_startup_link_needs_no_plugin_list_and_keeps_a_file_of_the_person() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join(".claude")).unwrap();
+        fs::write(home.path().join(".claude/CLAUDE.md"), "# regras\n").unwrap();
+        let rules = home.path().join(".gemini/config/AGENTS.md");
+        sync_agy(home.path());
+        assert!(!home.path().join(".gemini").exists(), "sem uso do agy nada nasce");
+        fs::create_dir_all(home.path().join(".gemini/antigravity-cli")).unwrap();
+        sync_agy(home.path());
+        assert_eq!(fs::read_link(&rules).unwrap(), home.path().join(".claude/CLAUDE.md"));
+        fs::remove_file(&rules).unwrap();
+        fs::write(&rules, "minhas regras").unwrap();
+        sync_agy(home.path());
+        assert_eq!(fs::read_to_string(&rules).unwrap(), "minhas regras");
     }
 
     #[test]

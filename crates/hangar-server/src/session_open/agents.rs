@@ -72,12 +72,13 @@ fn omp_transcript(sessions: &Path, cwd: &str, id: &str) -> Option<PathBuf> {
     })
 }
 
-/// `model_args.args_de` de Pi, omp e Kimi: `--model`, e `--thinking` no Pi e no omp (o Kimi não tem
-/// flag de esforço; a resolução já o recusou).
+/// `model_args.args_de` de Pi, omp, Kimi e Antigravity: `--model`, e o esforço em `--thinking` no Pi e no omp
+/// e em `--effort` no `agy` (o Kimi não tem flag de esforço; a resolução já o recusou).
 fn choice(spec: &SessionSpec) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(model) = spec.model.as_deref().filter(|m| !m.is_empty()) { out.extend(["--model".into(), model.into()]); }
-    if let Some(effort) = spec.effort.as_deref().filter(|e| !e.is_empty()) { out.extend(["--thinking".into(), effort.into()]); }
+    let flag = if spec.provider == AgentProvider::Antigravity { "--effort" } else { "--thinking" };
+    if let Some(effort) = spec.effort.as_deref().filter(|e| !e.is_empty()) { out.extend([flag.into(), effort.into()]); }
     out
 }
 
@@ -166,19 +167,22 @@ pub fn agy_mode_args(mode: Option<PermissionMode>) -> Vec<String> {
 }
 
 /// Sem a pasta em `trustedWorkspaces` o `agy` nasce preso no "Do you trust the contents of this project?", e sem
-/// o hook de estado no `hooks.json` da conta a lista não acha a conversa do pane. Falha só vai ao log.
+/// o hook de estado no `hooks.json` da conta a lista não acha a conversa do pane. As liberações do recado e
+/// as regras globais (`AGENTS.md`) vão junto. Falha só vai ao log.
 pub fn agy_pretrust(home: &Path, account: &Account, cwd: &str) {
     let account = agy_account(account);
     let path = account.settings_path(home);
     if let Err(error) = hangar_antigravity::settings::trust_workspace(&path, Path::new(cwd)) {
         tracing::warn!(file = %path.display(), %error, "pré-confiar a pasta no Antigravity falhou; o diálogo aparece na sessão");
     }
+    if let Err(error) = hangar_antigravity::settings::allow(&path, &hangar_antigravity::settings::HANGAR_RULES) {
+        tracing::warn!(file = %path.display(), %error, "liberação do recado no Antigravity não gravada; o agy pede aprovação");
+    }
     let hooks = account.hooks_path(home);
-    let installed = crate::provider_hooks::command(home, crate::harness_setup::agy_hooks::MODE)
-        .and_then(|command| hangar_antigravity::hooks::install(&hooks, &command).map_err(|error| error.to_string()));
-    if let Err(error) = installed {
+    if let Err(error) = crate::harness_setup::agy_hooks::install(home, &hooks) {
         tracing::warn!(file = %hooks.display(), %error, "hook do Antigravity não gravado; a sessão abre sem ligar a conversa");
     }
+    crate::harness_setup::persona::sync_agy(home);
 }
 
 /// `KIMI_CODE_HOME` do servidor ou `~/.kimi-code`.

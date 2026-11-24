@@ -739,7 +739,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".gemini/antigravity-cli")).unwrap();
         let mut doc = json!({"lint":{}});
-        doc["hangar"] = hangar_antigravity::hooks::entry("/x/hangar-server agy-state-hook");
+        doc["hangar"] = hangar_antigravity::hooks::entry("/x/hangar-server agy-state-hook", "/x/hangar-server agy-guard-tmux");
         hooks_file(home.path(), &doc);
         let value = agy_hooks(home.path());
         assert_eq!(value["ok"], true);

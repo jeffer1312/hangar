@@ -782,8 +782,9 @@ fn validate_choice(provider: AgentProvider, model: Option<&str>, effort: Option<
                 "effort: use letras minúsculas (2 a 32) — os níveis do Codex variam por modelo e vêm do provedor")),
             AgentProvider::Claude => &EFFORT_CLAUDE,
             AgentProvider::Pi | AgentProvider::Omp => &EFFORT_PI,
-            // O esforço do Antigravity vem no id do modelo (`gemini-4-neon-high`).
-            AgentProvider::Kimi | AgentProvider::Antigravity => return Err(OpenError::plain(400, format!("provider '{name}' não aceita escolha de esforço aqui"))),
+            // `agy --effort` aceita os mesmos níveis do Claude.
+            AgentProvider::Antigravity => &EFFORT_CLAUDE,
+            AgentProvider::Kimi => return Err(OpenError::plain(400, format!("provider '{name}' não aceita escolha de esforço aqui"))),
         };
         if !levels.is_empty() && !levels.contains(&effort) {
             return Err(OpenError::plain(400, format!("effort: use um de {}", levels.join(", "))));
