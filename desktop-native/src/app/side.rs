@@ -177,6 +177,8 @@ pub(super) struct Side {
     pub(super) remote_browsers: HashMap<String, Entity<super::remote_browser::RemoteBrowser>>,
     /// Sessões (chave de `browser_key`) com a aba Navegador na fileira. Fechar só esconde a página.
     pub(super) browser_open: HashSet<String>,
+    /// Sessões com a aba Portas na fileira, aberta pelo "+" e fechada no × dela.
+    pub(super) ports_open: HashSet<String>,
     /// Aba escolhida por sessão (chave de `browser_key`); sessão sem escolha usa a última preferência gravada.
     pub(super) tabs: HashMap<String, SideTab>,
     /// Chromium subindo desde o clique em Navegador, para a página não esperar o processo depois do endereço digitado.
@@ -188,7 +190,7 @@ impl Default for Side {
     fn default() -> Self {
         let saved = appearance::get();
         Self { open: true, menu: false, width: saved.side_width, browser_width: saved.side_browser_width, drag: None, shortcuts: None, project: ProjectShortcuts::default(), cost: None, cost_task: None, cost_gen: 0, orq: Default::default(),
-            files: None, beta_files_sig: None, beta_files_failed: None, beta_files_last: None, files_gen: 0, files_auto: false, beta_dismissed: HashSet::new(), reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
+            files: None, beta_files_sig: None, beta_files_failed: None, beta_files_last: None, files_gen: 0, files_auto: false, beta_dismissed: HashSet::new(), reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), ports_open: HashSet::new(), tabs: HashMap::new(),
             #[cfg(target_os = "linux")] warm: None,
             shortcut_terms: HashMap::new(), shortcut_focus: HashMap::new(), shortcut_running: HashMap::new(), shortcut_recheck: HashMap::new() }
     }
@@ -1229,9 +1231,9 @@ impl Hangar {
     }
 
     /// Menu da superfície vazia do Zeron: uma linha por ferramenta, no meio do painel.
-    fn render_side_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_side_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let (browser, terminal, git) = (self.side_menu_browser(), self.side_menu_terminal(), self.side_menu_git());
-        let ports = self.side_menu_ports().then(|| self.render_other_port(window, cx));
+        let ports = self.side_menu_ports().then(|| self.ports_menu_label());
         let row = |id: &'static str, icon: IconName, label: String, cx: &mut Context<Self>| Button::new(id)
             .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
             .w_full().h(px(44.)).px(px(14.)).rounded(px(10.)).border_1().border_color(theme::border()).accessibility_label(label.clone())
@@ -1255,7 +1257,8 @@ impl Hangar {
                         .on_click(cx.listener(|this, _, window, cx| this.choose_side_tab(SideTab::Git, window, cx))))
                     .child(row("side-menu-history", IconName::GitBranch, tr("git_history"), cx)
                         .on_click(cx.listener(|this, _, window, cx| this.open_git_history(window, cx)))))
-                .children(ports.map(|el| el.pt(px(8.)))))
+                .when_some(ports, |el, label| el.child(row("side-menu-ports", IconName::Plug, label, cx)
+                    .on_click(cx.listener(|this, _, _, cx| this.open_ports(cx))))))
             .into_any_element()
     }
 
@@ -1345,7 +1348,6 @@ impl Hangar {
             content = content.child(section(self.render_context(status.as_ref(), width, cx)))
                 .when(!notices.is_empty(), |el| el.child(div().px_4().py_3().border_b_1().border_color(theme::border()).flex().flex_col().gap_2().children(notices)));
             if !read_only && let Some(project) = self.render_project(status.as_ref(), cx) { content = content.child(section(project)); }
-            if !read_only && let Some(ports) = self.render_ports(beta, cx) { content = content.child(section(ports)); }
             if !read_only && let Some(actions) = self.render_shortcuts(readable, width, cx) {
                 content = content.child(div().map(|el| if beta { el.px(px(BETA_SIDE_PAD)).py(px(18.)) } else { el.px(px(SIDE_PAD)).py(px(14.)) }).child(actions));
             }
@@ -1371,7 +1373,7 @@ impl Hangar {
                 .child(header)
                 .children(self.render_subagent_tabs(cx))
                 .child(div().flex_1().min_h_0().flex().flex_col().opacity(tab_in).child(match tab {
-                    None if menu => self.render_side_menu(window, cx),
+                    None if menu => self.render_side_menu(cx),
                     None => div().flex_1().min_h_0().children(self.subagent_tab_view()).into_any_element(),
                     Some(SideTab::Files) => div().flex_1().min_h_0().child(self.render_tree(cx)).into_any_element(),
                     Some(SideTab::Media) => div().flex_1().min_h_0().child(self.render_media_panel(width, cx)).into_any_element(),
@@ -1380,6 +1382,8 @@ impl Hangar {
                     // A revisão ganha a altura inteira do painel, com o recuo das seções do Contexto.
                     Some(SideTab::Review) => div().id("side-review-scroll").track_scroll(&self.work_review.scroll).flex_1().min_h_0().overflow_y_scroll()
                         .child(div().px_4().py(px(14.)).children(review_body)).into_any_element(),
+                    Some(SideTab::Ports) => div().id("side-ports-scroll").flex_1().min_h_0().overflow_y_scroll()
+                        .child(div().px_4().py(px(14.)).child(self.render_ports_tab(window, cx))).into_any_element(),
                     Some(SideTab::Browser) => match self.remote_browser_shown() {
                         Some(remote) => div().flex_1().min_h_0().child(remote).into_any_element(),
                         None => div().flex_1().min_h_0().children(self.browser_key().and_then(|k| self.side.browsers.get(&k).cloned())).into_any_element(),

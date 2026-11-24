@@ -1452,6 +1452,7 @@ impl Hangar {
             // Lembrada de outra execução ou fechada no ×, a aba só volta depois que o navegador for aberto de novo.
             SideTab::Browser if key.is_some_and(|k| self.side.browser_open.contains(&k)) => SideTab::Browser,
             SideTab::Review if self.work_review_tab_shown() => SideTab::Review,
+            SideTab::Ports if self.ports_tab_open() => SideTab::Ports,
             _ => SideTab::Context,
         }
     }
@@ -1863,6 +1864,12 @@ impl Hangar {
             .when(self.has_activity(), |el| el.child(tab("side-tab-activity", self.background_label(), SideTab::Activity, None, cx)))
             .when(git, |el| el.child(tab("side-tab-git", web("git_coluna_abrir"), SideTab::Git, None, cx)))
             .when_some(browser, |el, close| el.child(tab("side-tab-browser", tr("browser"), SideTab::Browser, Some(close.into_any_element()), cx)))
+            .when(self.ports_tab_open(), |el| {
+                let close = Button::new("side-tab-ports-close").ghost().xsmall().icon(TAB_CROSS)
+                    .tooltip(tr("ports_close")).accessibility_label(tr("ports_close"))
+                    .on_click(cx.listener(|this, _, window, cx| { cx.stop_propagation(); this.close_ports(window, cx); }));
+                el.child(tab("side-tab-ports", tr("ports_title"), SideTab::Ports, Some(close.into_any_element()), cx))
+            })
             .into_any_element()
     }
 
