@@ -534,6 +534,8 @@ export interface AskQuestionPayload {
   interaction_id?: string | null;
   is_async?: boolean;
   questions: AskQuestionItem[];
+  /** Outras chamadas do mesmo turno esperando depois desta (o Claude Code as abre juntas). */
+  more_after?: number;
   provider?: 'codex';
   request_id?: string | number;
 }

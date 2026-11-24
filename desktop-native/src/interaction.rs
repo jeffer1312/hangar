@@ -130,7 +130,7 @@ pub fn ask_from_events(events: &[ChatEvent], provider: &str) -> Option<Ask> {
     let questions: Vec<AskItem> = questions.into_iter().filter(|q| !q.question.is_empty() && !q.options.is_empty()).collect();
     if questions.is_empty() { return None; }
     let id = event.tool_use_id.clone()?;
-    Some(Ask { fingerprint: format!("tool:{id}:{}", serde_json::to_string(input).unwrap_or_default()), payload: AskPayload { provider: None, request_id: None, interaction_id: None, is_async: false, questions }, tool_use_id: Some(id) })
+    Some(Ask { fingerprint: format!("tool:{id}:{}", serde_json::to_string(input).unwrap_or_default()), payload: AskPayload { provider: None, request_id: None, interaction_id: None, is_async: false, questions, more_after: 0 }, tool_use_id: Some(id) })
 }
 
 pub fn toggle(item: &AskItem, pick: &Pick, index: usize) -> Pick {
@@ -541,7 +541,7 @@ mod tests {
             options: labels.iter().map(|l| AskOption { label: (*l).into(), ..Default::default() }).collect() }
     }
     fn ask(provider: Option<&str>, request_id: Option<Value>, questions: Vec<AskItem>) -> Ask {
-        let payload = AskPayload { provider: provider.map(str::to_owned), request_id, interaction_id: None, is_async: false, questions };
+        let payload = AskPayload { provider: provider.map(str::to_owned), request_id, interaction_id: None, is_async: false, questions, more_after: 0 };
         Ask { fingerprint: "f".into(), payload, tool_use_id: None }
     }
 

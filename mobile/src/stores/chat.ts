@@ -842,7 +842,11 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         const current = useChatStore.getState().askPayload;
         if (current && payload.interaction_id === current.interaction_id
             && payload.request_id === current.request_id
-            && (payload.interaction_id != null || (payload.provider === 'codex' && current.provider === 'codex'))) return;
+            && (payload.interaction_id != null || (payload.provider === 'codex' && current.provider === 'codex'))) {
+          // Só a contagem das que esperam mudou: atualiza sem reabrir a folha fechada.
+          if (payload.more_after !== current.more_after) useChatStore.setState({ askPayload: payload });
+          return;
+        }
         useChatStore.setState({ askPayload: payload, askOpen: true, askPiId: null });
       } catch {
         quadroFalhou('ask_question');

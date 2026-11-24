@@ -678,6 +678,8 @@ pub struct AskPayload {
     #[serde(default)] pub interaction_id: Option<String>,
     #[serde(default)] pub is_async: bool,
     #[serde(default)] pub questions: Vec<AskItem>,
+    /// Outras chamadas do mesmo turno esperando depois desta (o Claude Code as abre juntas).
+    #[serde(default)] pub more_after: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
