@@ -1,5 +1,4 @@
-# O `check` do app desktop (build e testes em debug, Linux), num workflow só: o native.yml o roda no push da main e
-# do canal, e o gate.yml em todo pull request que mexe no desktop ou num crate de que ele dependa.
+# O `check` do app desktop (build e testes em debug, Linux), que o native.yml roda no push da main e do canal.
 name: Native (check)
 
 on:

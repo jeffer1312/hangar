@@ -210,17 +210,18 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   de `git config hangar.verificarWindows`, com mutex. O registro é pelo tree sha; a trava só o lê.
   Escape nos dois: `HANGAR_SEM_VERIFICACAO=1`. Na VM roda só o que o CI roda no Windows (Rust e os 6
   `test_runtime_*`), nunca o pytest inteiro. O passo `mobile` só entra quando muda `mobile/`; mudança no
-  core ou nas mensagens passa pelo `front` aqui e pelo app inteiro no portão do PR (`gate.yml`) (à mão:
+  core ou nas mensagens passa pelo `front` aqui e pelo app inteiro no push da main (`gate.yml`) (à mão:
   `--tudo --passos mobile`). Evidência em
   [Verificação local antes do push](#verificação-local-antes-do-push-06102026).
-- **O merge na main passa pelo check `merge-gate` (`gate.yml`), que roda em todo pull request.** Ele
-  decide pelo diff (`scripts/gate-areas.py`) o que roda: testes do servidor (`server-jobs.yml`),
-  do desktop (`native-check.yml`, com os crates de que ele depende tirados dos `Cargo.toml`) e
-  do app Expo (typecheck e testes inteiros). Parte acionada tem de terminar verde e parte não
-  acionada tem de ter sido pulada; mexer no próprio portão aciona tudo. O `server.yml` e o
-  `native.yml` rodam no push só da main e do canal, que é onde publicam: branch sem PR se testa
-  pelo `workflow_dispatch`. Workflow novo que testa algo exigido entra no portão, nunca como
-  check à parte. Evidência em [Portão de merge](#portão-de-merge-22112026).
+- **O check `merge-gate` (`gate.yml`) roda em todo pull request e só barra regra descumprida.** As
+  regras que saem do diff estão em `scripts/check-*` (linha nova em `backend/app`, crate dependendo do
+  `hangar-server`, passo de atualização, `CLIENT_API`); as que são teste, na lista por nome de
+  `scripts/rule-tests.py`, que falha se um deles não rodar. Regra nova que a máquina confere entra num
+  dos dois, nunca como check à parte. O `scripts/gate-areas.py` decide quais travas o diff aciona;
+  mexer no próprio portão aciona todas. As suítes do servidor, do desktop e do Expo rodam no push da
+  main e do canal, nunca no PR. Linha nova em `backend/app` com autorização do dono leva
+  `HANGAR_PYTHON_AUTORIZADO: <motivo>` na mensagem de um commit. Evidência em
+  [Portão de merge](#portão-de-merge-22112026).
 - **No Linux a verificação prepara uma vez e roda os passos em duas faixas (cargo e o resto); o
   registro é por passo.** Faixa que abre com a memória disponível abaixo de
   `HANGAR_VERIFICAR_MEM_GB` (padrão 6) espera a anterior terminar, com os mesmos passos. Quando o
@@ -660,7 +661,7 @@ Creating a session wraps `tmux` in
 
 ## O botão Atualizar não roda o instalador; o instalador só roda por passo declarado
 
-(`atualizar._preparar`, `scripts/check-passo-de-atualizacao.sh`, job `passos` do CI, 14/09/2026.)
+(`atualizar._preparar`, `scripts/check-passo-de-atualizacao.sh`, job `passos` do CI, 14/09/2026, hoje o `regras` do `gate.yml`.)
 O motor chamava `install.ps1 -Update` / `install.sh --update` em toda atualização — 8 etapas, 24
 ramos `if ($Update)` só no `.ps1`, cada um uma chance de falhar sem ninguém ter pedido nada dele.
 Foi assim que usuários Windows receberam "NAO terminou: tarefas agendadas, backend no ar" num
@@ -1540,29 +1541,24 @@ está no CI) não exercitam a atualização nem a criação de sessão.
 
 ## Portão de merge (22/11/2026)
 
-- **Caso.** A regra da main exigia PR, mas nenhum check. Não dava para exigir os que existiam: o
-  `server.yml` e o `native.yml` disparavam só em push, com filtro de pastas, e um PR que não
-  tocasse nelas esperaria para sempre um check que nunca chega; os testes do Expo não rodavam em
-  workflow nenhum (só no `verificar-local`). A trava da abertura única
-  (`every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server`) podia ficar
-  vermelha e o merge passar.
-- **Desenho.** Um check de nome fixo, `merge-gate`, num workflow que roda em todo pull request
-  (`gate.yml`). As partes pesadas são chamadas como workflows reutilizáveis (`server-jobs.yml`,
-  `native-check.yml`) ou ficam no próprio portão (Expo), e só rodam quando o diff toca a área
-  delas; o `merge-gate` confere o resultado de cada uma contra o que foi acionado, então falha,
-  cancelamento ou pulo indevido o deixam vermelho, e PR só de docs passa sem rodar o pesado.
-- **Sem testar duas vezes.** O push de PR disparava o `server.yml` e o `native.yml` e agora
-  dispararia o portão também. Os dois passaram a rodar no push só da main e do canal, onde
-  publicam e onde o `package.yml` e os `*-macos.yml` os esperam; no push da main o portão roda só
-  o Expo. Branch sem PR perdeu o teste automático no push: roda pelo `workflow_dispatch`.
+- **Caso.** O PR #460 guardou o Code Mode no `appearance.json` do desktop, contra a regra da abertura
+  única, que estava escrita no `CLAUDE.md`. O dono pediu uma trava que bloqueasse isso, porque regra
+  escrita não obriga. As travas viraram testes (PR #482), mas a regra da main não exigia check
+  nenhum: teste vermelho não impedia o merge.
+- **Primeiro portão (PR #488), refeito em 24/11/2026.** Rodava no PR as suítes inteiras do servidor
+  (Linux e Windows), do desktop e do Expo para proteger poucas travas. Nos runs verdes em que tudo
+  rodou (PRs #497 e #498) levou 37 e 38 min, com o Linux em 22 e 24 min e o Windows em 37: o Windows
+  é experimental, não barrava, e mesmo assim o portão o esperava. No PR #499 o passo de testes do
+  Windows passou de 54 min, contra 24 e 25 min nesses dois runs.
+- **Desenho atual.** O PR roda só as regras. As do diff saem em segundos; as travas do servidor e do
+  desktop compilam só o alvo de teste delas e filtram por nome. As suítes ficaram no push da main e do
+  canal, onde o teste vermelho segura a publicação. O preço é teste quebrado que não seja de regra
+  aparecer depois do merge: na rodada anterior do #499 o portão antigo pegou dois.
+- **Nome que não rodou é falha.** O filtro do cargo e o do vitest passam verdes com zero testes:
+  renomear a trava a tiraria do portão sem aviso.
+- **Nunca o workflow do servidor no PR.** O portão antigo chamava o `server-jobs.yml`, que pede
+  permissão de escrita por causa da publicação. O atual não o chama e tem só leitura.
 - **Áreas do desktop pela cadeia de dependências.** O filtro do `native.yml` listava
   `hangar-api` e `hangar-workspace`, mas o desktop também depende de `hangar-local-server` e
   `hangar-video`: mudança neles não rodava o `Native`. O `gate-areas.py` segue os `path` dos
   `Cargo.toml` (inclusive os `workspace = true`), e o filtro do `native.yml` ganhou os dois.
-- **Área é também o que o teste lê.** Os testes do servidor leem `scripts/`, `docs/atualizacoes/`,
-  fixtures de `packages/core/src/` e `messages/`; os do desktop, `docs/novidades/`, `docs/manual/`
-  e as mesmas fixtures. Essas pastas acionam a parte delas no portão. O filtro do `server.yml` não
-  as ganhou: o `package.yml` usa aquele filtro para decidir se reaproveita os binários da release.
-- **Branch passada ao `server-jobs.yml` é `pr-<número>`, nunca a do PR.** Um PR da `beta` para a
-  `main` passaria `beta`, que liga a publicação da `server-beta` e cai na concorrência dos runs de
-  push dela.

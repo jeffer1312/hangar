@@ -1,9 +1,8 @@
-# Portão de merge: um check só, `merge-gate`, que a regra da main exige. Roda em todo pull request e decide pelo que
-# o PR muda (scripts/gate-areas.py) quais testes rodam: os do servidor (server-jobs.yml), os do app desktop
-# (native-check.yml) e os do app Expo. Parte acionada precisa terminar verde; parte não acionada precisa ter sido
-# pulada. Falha, cancelamento ou pulo de uma parte acionada deixa o portão vermelho.
-# No push da main e do canal, servidor e desktop já são testados pelo server.yml e pelo native.yml (que só publicam
-# com eles verdes); aqui roda só o Expo, que nenhum outro workflow testa.
+# Portão de merge: um check só, `merge-gate`. Barra o pull request que descumpre uma regra do CLAUDE.md que a máquina
+# consegue conferir, e nada além disso: as suítes do servidor, do desktop e do Expo rodam no push da main e do canal
+# (server.yml, native.yml e o mobile-suite daqui), onde já seguram a publicação.
+# As regras que saem do diff estão em scripts/check-*; as que são teste, em scripts/rule-tests.py. Parte que o PR não
+# toca (scripts/gate-areas.py) é pulada; parte acionada precisa terminar verde.
 name: Portão
 
 on:
@@ -15,6 +14,9 @@ on:
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('gate-pr-{0}', github.event.pull_request.number) || format('gate-run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
   areas:
@@ -47,45 +49,134 @@ jobs:
           echo "arquivos mudados: $(wc -l < "$RUNNER_TEMP/mudados")"
           python3 -I scripts/gate-areas.py < "$RUNNER_TEMP/mudados" | tee -a "$GITHUB_OUTPUT"
 
-  # Os mesmos sistemas do server.yml; o Windows segue experimental e não segura o portão.
+  # As regras que se conferem pelo diff, sem compilar, e a trava de texto da interface.
+  regras:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: base
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # Sem base com que comparar (primeiro push da branch, histórico reescrito) não há diff a conferir.
+          if [ -n "$BASE" ] && git cat-file -e "$BASE^{commit}" 2>/dev/null && git merge-base "$BASE" HEAD >/dev/null; then
+            echo "sha=$BASE" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::sem base comparável; as regras do diff não foram conferidas"
+          fi
+      - run: python3 -I scripts/test_check_rules.py
+      - name: Regras do diff
+        if: always() && steps.base.outputs.sha != ''
+        run: python3 -I scripts/check-rules.py "${{ steps.base.outputs.sha }}" HEAD
+      # Mudança em instalador/script sem passo declarado em docs/atualizacoes/. O pre-commit faz o mesmo por commit,
+      # mas é pulável e some no clone; aqui é o intervalo inteiro do push.
+      - name: Passo de atualização
+        if: always() && steps.base.outputs.sha != ''
+        run: bash scripts/check-passo-de-atualizacao.sh "${{ steps.base.outputs.sha }}..HEAD"
+      # Mudança na API que o app nativo consome sem subir o CLIENT_API (no PR, contra a base).
+      - name: CLIENT_API
+        if: always() && steps.base.outputs.sha != ''
+        run: bash scripts/check-client-api.sh "${{ steps.base.outputs.sha }}..HEAD"
+      # Mudança visível no app sem novidade em docs/novidades/: só avisa, nunca falha.
+      - name: novidade
+        if: always() && steps.base.outputs.sha != ''
+        continue-on-error: true
+        run: bash scripts/check-novidade.sh "${{ steps.base.outputs.sha }}..HEAD" || true
+      - uses: actions/setup-node@v4
+        if: always()
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --workspace=@hangar/core --workspace=frontend
+        if: always()
+      - name: Texto da interface
+        if: always()
+        run: python3 -I scripts/rule-tests.py frontend
+
   server:
     needs: areas
     if: needs.areas.outputs.server == 'true' && github.event_name == 'pull_request'
-    uses: ./.github/workflows/server-jobs.yml
-    # O server-jobs.yml declara a publicação (pulada fora da main e do canal), e o GitHub recusa chamar um workflow
-    # cujo job peça mais do que quem chama concede.
-    permissions:
-      contents: write
-      actions: write
-    with:
-      # Nunca o nome da branch: um PR da beta para a main passaria `beta` e ligaria a publicação do server-jobs.yml
-      # (e a concorrência dos runs de push dela).
-      branch: pr-${{ github.event.pull_request.number }}
-      sistemas: >-
-        [
-          {"os": "ubuntu-latest", "platform": "linux-x86_64", "exe": "", "target": "x86_64-unknown-linux-gnu",
-           "zigbuild": true, "dir": "target/x86_64-unknown-linux-gnu", "experimental": false},
-          {"os": "windows-latest", "platform": "windows-x86_64", "exe": ".exe", "target": "", "zigbuild": false,
-           "dir": "target", "experimental": true}
-        ]
-      cache_release: >-
-        [
-          {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu", "zigbuild": true},
-          {"os": "windows-latest", "target": "", "zigbuild": false}
-        ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+      # Só lê o cache dos testes, que o server-jobs.yml grava na main: mesmos caminhos e mesma chave de lá.
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target/debug
+          key: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
+      - run: python3 -I scripts/rule-tests.py server
 
   native:
     needs: areas
     if: needs.areas.outputs.native == 'true' && github.event_name == 'pull_request'
-    uses: ./.github/workflows/native-check.yml
-    permissions:
-      contents: read
-      actions: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+    defaults:
+      run:
+        working-directory: desktop-native
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      # Mesma lista do build do native-build.yml.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev \
+            libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libzstd-dev rpm
+      # Só lê o cache que o native-check.yml grava na main: mesmos caminhos e mesma chave de lá.
+      - uses: actions/cache/restore@v4
+        id: cache-check
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop-native/target
+          key: native-check-${{ runner.os }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-${{ hashFiles('desktop-native/vendor/**') }}
+          restore-keys: native-check-${{ runner.os }}-
+      # Mesmo motivo do passo de igual nome no native-build.yml: sem isto o GPUI vendorizado recompilava a cada push.
+      - name: Reaproveitar o vendor do cache
+        if: steps.cache-check.outputs.cache-hit == 'true'
+        run: git ls-files -z vendor | xargs -0 touch -t 200001010000
+      - run: python3 -I ../scripts/rule-tests.py native
 
-  # Os mesmos passos do `mobile` do scripts/verificar-local: typecheck e testes do app inteiro.
   mobile:
     needs: areas
-    if: needs.areas.outputs.mobile == 'true'
+    if: needs.areas.outputs.mobile == 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+      # O app lê o @hangar/core pelos caminhos do workspace; as dependências dele vêm do lockfile próprio.
+      - run: npm ci --workspace=@hangar/core --workspace=frontend
+      - run: npm ci --prefix mobile
+      # As mensagens compiladas não vêm no repositório: sem elas o typecheck do app não acha as chaves.
+      - run: npm run i18n:compile -w @hangar/core
+      - run: npm run i18n:compile --prefix mobile
+      - run: python3 -I scripts/rule-tests.py mobile
+
+  # A suíte do app inteiro, que nenhum outro workflow roda: só no push, o PR não espera por ela.
+  mobile-suite:
+    needs: areas
+    if: needs.areas.outputs.mobile == 'true' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -108,7 +199,7 @@ jobs:
       - run: npm run test:app
 
   merge-gate:
-    needs: [areas, server, native, mobile]
+    needs: [areas, regras, server, native, mobile, mobile-suite]
     if: always()
     runs-on: ubuntu-latest
     permissions: {}
@@ -116,18 +207,21 @@ jobs:
       - env:
           EVENT: ${{ github.event_name }}
           AREAS: ${{ needs.areas.result }}
+          REGRAS: ${{ needs.regras.result }}
           SERVER_ON: ${{ needs.areas.outputs.server }}
           NATIVE_ON: ${{ needs.areas.outputs.native }}
           MOBILE_ON: ${{ needs.areas.outputs.mobile }}
           SERVER: ${{ needs.server.result }}
           NATIVE: ${{ needs.native.result }}
           MOBILE: ${{ needs.mobile.result }}
+          SUITE: ${{ needs.mobile-suite.result }}
         run: |
           set -u
           falhou=0
           if [ "$AREAS" != success ]; then echo "::error::não consegui decidir as partes do portão ($AREAS)"; exit 1; fi
-          # No push, servidor e desktop são do server.yml e do native.yml: aqui ficam pulados.
-          if [ "$EVENT" != pull_request ]; then SERVER_ON=false; NATIVE_ON=false; fi
+          SUITE_ON=$MOBILE_ON
+          # No push, as travas rodam dentro das suítes; no PR, a suíte do Expo fica de fora.
+          if [ "$EVENT" = pull_request ]; then SUITE_ON=false; else SERVER_ON=false; NATIVE_ON=false; MOBILE_ON=false; fi
           confere() {
             local parte=$1 acionada=$2 resultado=$3 esperado=skipped
             [ "$acionada" = true ] && esperado=success
@@ -138,7 +232,9 @@ jobs:
               falhou=1
             fi
           }
+          confere regras true "$REGRAS"
           confere servidor "$SERVER_ON" "$SERVER"
           confere desktop "$NATIVE_ON" "$NATIVE"
           confere expo "$MOBILE_ON" "$MOBILE"
+          confere suite-expo "$SUITE_ON" "$SUITE"
           exit $falhou
