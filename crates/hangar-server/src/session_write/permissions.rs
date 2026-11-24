@@ -125,9 +125,6 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
                 };
                 let wanted=mode.as_deref()==Some("bypassPermissions");
                 if set && wanted!=bypass {
-                    // A tela é conferida antes de fechar: menu, turno ou rascunho na caixa ficam como estão.
-                    let ready=handle.control(id.clone(),"set_permission_mode".into(),json!({"mode":mode,"reopen":true})).await?;
-                    if ready.disposition!=Disposition::Accepted || ready.payload["requires_reopen"]!=true {return Ok(result(ready));}
                     drop(held);
                     return agy_terminal_reopen(&life_st,&runtime,&name,mode.as_deref().unwrap_or_default()).await;
                 }

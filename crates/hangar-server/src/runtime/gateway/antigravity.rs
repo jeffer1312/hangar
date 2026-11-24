@@ -143,13 +143,15 @@ fn waiting(rows:&Value) -> bool { rows.as_array().is_some_and(|rows|rows.iter().
 impl RuntimeRegistry {
     /// O Antigravity com terminal pronto para sair do pane: ocioso, sem pergunta, com conversa e fila vazia. `None`:
     /// não é Antigravity com terminal aberto aqui.
-    pub async fn antigravity_terminal_left(&self,name:&str,headless:bool) -> Option<Result<TerminalLeft,RuntimeError>> {
+    /// `reopen`: o modo em que o pane vai abrir de novo; a tela do `agy` é conferida (menu, turno, rascunho) antes de
+    /// alguém fechá-lo. Sem ele, a saída é para o sem terminal.
+    pub async fn antigravity_terminal_left(&self,name:&str,reopen:Option<crate::session_open::PermissionMode>) -> Option<Result<TerminalLeft,RuntimeError>> {
         let (handle,target) = self.entries.lock().await.values().find_map(|entry|match &entry.handle {
             EntryHandle::OtherTerminal { target,handle } if entry.name == name && target.provider == hangar_transcript::Provider::Antigravity =>
                 Some((handle.clone(),(**target).clone())),
             _ => None,
         })?;
-        let (idle,first) = if headless {
+        let (idle,first) = if reopen.is_none() {
             ("Espere a sessão ficar ociosa antes de continuar sem terminal.","Envie a primeira mensagem antes de continuar sem terminal.")
         } else {
             ("Espere a sessão ficar ociosa antes de trocar o modo de permissão.","Envie a primeira mensagem antes de trocar o modo de permissão.")
@@ -158,6 +160,14 @@ impl RuntimeRegistry {
             let snapshot = handle.snapshot().await?;
             let state = &snapshot["view"]["public_state"];
             if state["state"] != "idle" || !state["question"].is_null() { return Err(refuse(idle)); }
+            if let Some(mode) = reopen {
+                let id = format!("agy-reopen:{}",crate::mods::state::random_hex(8));
+                let ready = handle.control(id,"set_permission_mode".into(),json!({"mode":mode.name(),"reopen":true})).await?;
+                if ready.disposition != Disposition::Accepted || ready.payload["requires_reopen"] != true {
+                    let code = ready.payload["error_code"].as_str().unwrap_or("erro_permissao_leitura");
+                    return Err(RuntimeError::new(code,"a tela do Antigravity não permite fechar o terminal agora"));
+                }
+            }
             let shown = state["claude_permission_mode"].as_str().and_then(crate::session_open::PermissionMode::antigravity);
             let conversation = hangar_antigravity::paths::conversation_of_transcript(&target.transcript).ok_or_else(||refuse(first))?;
             if waiting(&handle.queue(format!("agy-switch:{}",crate::mods::state::random_hex(8)),Action::Load).await?) {
@@ -191,7 +201,7 @@ impl RuntimeRegistry {
     /// conversa, o spec troca de superfície e o ator ACP abre pelo `session/resume`. `None`: não é Antigravity
     /// com terminal aberto aqui.
     pub async fn antigravity_to_headless(&self,name:&str) -> Option<Result<Value,RuntimeError>> {
-        let left = self.antigravity_terminal_left(name,true).await?;
+        let left = self.antigravity_terminal_left(name,None).await?;
         Some(async {
             let TerminalLeft { target,conversation,mode,spec } = left?;
             let env = self.policy.codex_environment();

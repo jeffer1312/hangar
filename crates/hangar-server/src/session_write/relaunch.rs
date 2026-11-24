@@ -256,7 +256,11 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
             runtime.finish_leave_headless(name, &left.key).await;
             Some(Ok(json!({"ok": true, "terminal": true})))
         }
-        Err(error) if error.code == crate::session_open::open::UNCERTAIN => Some(Err(error)),
+        Err(error) if error.code == crate::session_open::open::UNCERTAIN => {
+            // O registro já diz terminal: o sidecar sem terminal sai, senão a subida abriria outro `agy` na conversa.
+            runtime.finish_leave_headless(name, &left.key).await;
+            Some(Err(error))
+        }
         Err(error) => {
             // O terminal não nasceu: a sessão volta sem terminal, na mesma conversa.
             if let Some(Err(reopen)) = runtime.open_antigravity_headless(name).await {
@@ -292,7 +296,7 @@ async fn write_record(home: &std::path::Path, spec: crate::session_open::Session
 pub(crate) async fn antigravity_terminal_reopen(st: &Arc<AppState>, runtime: &Arc<crate::runtime::gateway::RuntimeRegistry>, name: &str,
     mode: crate::session_open::PermissionMode) -> Result<Value, RuntimeError> {
     let _closed = crate::runtime::lifecycle::ClosedIngress::acquire_exclusive(runtime.ingress(), name).await?;
-    let left = runtime.antigravity_terminal_left(name, false).await
+    let left = runtime.antigravity_terminal_left(name, Some(mode)).await
         .ok_or_else(|| RuntimeError::new("erro_permissao_reabrir", "o terminal do Antigravity não está aberto aqui"))??;
     let home = st.accounts.env.home.clone();
     let key = left.target.key.clone();
