@@ -6,6 +6,7 @@ use crate::orchestration::truthy;
 
 static LOCK: Mutex<()> = Mutex::new(());
 static TABLE: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"^\s*\[\[?([^\]]+)\]\]?\s*$").unwrap());
+static ENGINE_BLOCK: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"(?m)^# >>> hangar: provedor (\S+) \(app/agentes_sync\)").unwrap());
 
 pub use crate::harness_setup::files::{directory, write_preserving};
 
@@ -106,20 +107,9 @@ fn apply_one(env: &AccountEnvironment,target: &str,name: &str,url: &str,key: &st
         write_json(&path,&data)?; return Ok(path.to_string_lossy().into_owned());
     }
     let (begin,end) = markers(name); let path = dir.join("config.toml");
-    if target == "codex" {
-        let var = format!("HANGAR_{}_API_KEY",name.to_uppercase().replace('-',"_"));
-        let block = format!("{begin}\n[model_providers.{}]\nname = {}\nbase_url = {}\nenv_key = {}\nwire_api = \"responses\"\n{end}\n",quoted(name),quoted(name),quoted(&base(url)),quoted(&var));
-        return toml_block(&path,name,Some(&block),BTreeMap::from([("model_providers".into(),vec![name.into()])])).map(|s|format!("{s} (exporte {var})"));
-    }
-    let mut block = format!("{begin}\n[providers.{}]\ntype = \"kimi\"\napi_key = {}\nbase_url = {}\n\n",quoted(name),quoted(key),quoted(&base(url))); let mut model_keys = Vec::new();
-    for m in models.iter().filter(|m|m.is_object() && truthy(&m["id"])) {
-        let id = m["id"].as_str().map(str::to_owned).unwrap_or_else(||m["id"].to_string()); let mk = format!("{name}/{id}"); model_keys.push(mk.clone());
-        block += &format!("[models.{}]\nprovider = {}\nmodel = {}\n",quoted(&mk),quoted(name),quoted(&id));
-        if m["context_length"].as_number().is_some_and(|n|!n.is_f64()) { block += &format!("max_context_size = {}\n",m["context_length"]); }
-        block += &format!("display_name = {}\n\n",quoted(&id));
-    }
-    block += &format!("{end}\n");
-    toml_block(&path,name,Some(&block),BTreeMap::from([("providers".into(),vec![name.into()]),("models".into(),model_keys)]))
+    let var = format!("HANGAR_{}_API_KEY",name.to_uppercase().replace('-',"_"));
+    let block = format!("{begin}\n[model_providers.{}]\nname = {}\nbase_url = {}\nenv_key = {}\nwire_api = \"responses\"\n{end}\n",quoted(name),quoted(name),quoted(&base(url)),quoted(&var));
+    toml_block(&path,name,Some(&block),BTreeMap::from([("model_providers".into(),vec![name.into()])])).map(|s|format!("{s} (exporte {var})"))
 }
 
 fn remove_one(env: &AccountEnvironment,target: &str,name: &str) -> Result<String,String> {
@@ -133,15 +123,83 @@ fn remove_one(env: &AccountEnvironment,target: &str,name: &str) -> Result<String
     toml_block(&dir.join("config.toml"),name,None,tables)
 }
 
+/// Destinos que recebem o motor: o Kimi fica só com os provedores dele (harnesses.md).
+pub const SYNC_TARGETS: [&str; 2] = ["pi","codex"];
+
 pub fn sync(env: &AccountEnvironment,name: &str,url: &str,key: &str,models: &[Value],targets: &[String]) -> Value {
-    run(targets,|target|apply_one(env,target,name,url,key,models))
+    run(targets,&SYNC_TARGETS,|target|apply_one(env,target,name,url,key,models))
 }
-pub fn remove(env: &AccountEnvironment,name: &str,targets: &[String]) -> Value { run(targets,|target|remove_one(env,target,name)) }
-fn run(targets: &[String], mut operation: impl FnMut(&str)->Result<String,String>) -> Value {
+pub fn remove(env: &AccountEnvironment,name: &str,targets: &[String]) -> Value { run(targets,&["pi","kimi","codex"],|target|remove_one(env,target,name)) }
+
+/// Tira do `config.toml` do Kimi todo bloco de motor gravado por versão antiga; devolve os nomes tirados.
+pub fn purge_kimi(env: &AccountEnvironment) -> Result<Vec<String>,String> {
+    let _lock = LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let path = directory(env,"kimi").join("config.toml");
+    let names: Vec<String> = ENGINE_BLOCK.captures_iter(&text(&path)?).map(|c|c[1].to_owned()).collect();
+    names.into_iter().map(|name|remove_one(env,"kimi",&name).map(|_|name)).collect()
+}
+fn run(targets: &[String], allowed: &[&str], mut operation: impl FnMut(&str)->Result<String,String>) -> Value {
     let _lock = LOCK.lock().unwrap_or_else(|e|e.into_inner()); let mut result = json!({});
     for target in targets {
-        let answer = if ["pi","kimi","codex"].contains(&target.as_str()) { operation(target) } else { Err("alvo-desconhecido".into()) };
+        let answer = if allowed.contains(&target.as_str()) { operation(target) } else { Err("alvo-desconhecido".into()) };
         result[target] = match answer { Ok(reason) => json!({"ok":true,"motivo":reason}),Err(reason) => json!({"ok":false,"motivo":reason}) };
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_at(home: &Path) -> AccountEnvironment {
+        let home = home.to_string_lossy().into_owned();
+        AccountEnvironment::from_pairs([("HOME", home.clone()), ("USERPROFILE", home)])
+    }
+
+    fn engine_block(name: &str) -> String {
+        let (begin,end) = markers(name);
+        format!("{begin}\n[providers.\"{name}\"]\ntype = \"kimi\"\napi_key = \"k\"\nbase_url = \"http://127.0.0.1:8317/v1\"\n\n[models.\"{name}/gpt-x\"]\nprovider = \"{name}\"\nmodel = \"gpt-x\"\ndisplay_name = \"gpt-x\"\n\n{end}\n")
+    }
+
+    const OWN: &str = "default_model = \"kimi-code/k3\"\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\n\n";
+    const HOOKS: &str = "\n# hangar: integração da sessão.\n[[hooks]]\nevent = \"Stop\"\ncommand = \"x\"\ntimeout = 5\n";
+
+    /// O Kimi recusa gravar a própria configuração com modelo de motor sem `max_context_size`: o
+    /// Hangar não leva motor nenhum para lá.
+    #[test]
+    fn engine_sync_never_writes_into_the_kimi_config() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, OWN).unwrap();
+        let result = sync(&env_at(home.path()), "astra", "http://127.0.0.1:8317/v1", "k", &[json!({"id": "gpt-x"})], &["kimi".into()]);
+        assert_eq!(result["kimi"]["ok"], false);
+        assert_eq!(fs::read_to_string(&config).unwrap(), OWN);
+    }
+
+    /// Os blocos que versões antigas gravaram saem; o que é do Kimi e os hooks ficam byte a byte.
+    #[test]
+    fn purge_removes_every_engine_block_and_keeps_the_rest() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, format!("{OWN}{}{}{HOOKS}", engine_block("astra"), engine_block("sol"))).unwrap();
+        let mut removed = purge_kimi(&env_at(home.path())).unwrap();
+        removed.sort();
+        assert_eq!(removed, ["astra", "sol"]);
+        assert_eq!(fs::read_to_string(&config).unwrap(), format!("{OWN}{HOOKS}"));
+    }
+
+    /// Sem Kimi instalado, ou sem bloco do Hangar, não há o que tirar nem arquivo a criar.
+    #[test]
+    fn purge_without_kimi_or_without_blocks_touches_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(purge_kimi(&env_at(home.path())).unwrap().is_empty());
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, OWN).unwrap();
+        assert!(purge_kimi(&env_at(home.path())).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(&config).unwrap(), OWN);
+        assert!(!home.path().join(".kimi-code/config.toml.bak-hangar").exists());
+    }
 }

@@ -41,6 +41,12 @@ pub fn sync_startup(service: &AccountService) {
     if let Err(error) = kimi_hooks::repair(&service.env) {
         tracing::warn!(code = "harness_startup_kimi_hooks_failed", %error, "hooks do Kimi não conferidos na subida");
     }
+    // Versões antigas levavam os motores ao Kimi; o login dele recusa a configuração com eles.
+    match crate::engines::mirrors::purge_kimi(&service.env) {
+        Ok(names) if !names.is_empty() => tracing::info!(?names, "motores tirados do config do Kimi"),
+        Ok(_) => {}
+        Err(error) => tracing::warn!(code = "harness_startup_kimi_engines_failed", %error, "motores antigos do Kimi não conferidos na subida"),
+    }
     // O hook do Antigravity é o que liga o pane à conversa: sem ele a sessão com terminal não acha o transcript.
     if let Err(error) = agy_hooks::sync(&service.env.home) {
         tracing::warn!(code = "harness_startup_agy_hooks_failed", %error, "hooks do Antigravity não conferidos na subida");

@@ -145,11 +145,11 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-            .filter(|v| ["pi", "kimi", "codex"].contains(v))
+            .filter(|v| mirrors::SYNC_TARGETS.contains(v))
             .map(str::to_owned)
             .collect();
         if targets.is_empty() {
-            targets = ["pi", "kimi", "codex"].map(str::to_owned).to_vec();
+            targets = mirrors::SYNC_TARGETS.map(str::to_owned).to_vec();
         }
         let (id, name, base, key) = (
             id.to_owned(),

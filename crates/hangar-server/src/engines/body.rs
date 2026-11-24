@@ -186,7 +186,7 @@ pub fn typed(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
                 result.insert(
                     field.name.into(),
                     if field.list {
-                        json!(["pi", "kimi", "codex"])
+                        json!(crate::engines::mirrors::SYNC_TARGETS)
                     } else if field.nullable {
                         Value::Null
                     } else {
