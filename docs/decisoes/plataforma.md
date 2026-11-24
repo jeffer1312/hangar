@@ -223,7 +223,7 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
 A página "WhatsApp" das Configurações (nativo e Expo) liga um arquivador só de leitura do WhatsApp
 do usuário, e as sessões leem pelas ferramentas MCP `whatsapp_chats`, `whatsapp_read`,
 `whatsapp_search` e `whatsapp_request_media` e pela skill `whatsapp`. Nada é enviado em nome
-dele. O crate `hangar-whatsapp` instala, liga e conversa com o serviço; o servidor só monta o
+dele (substituído em 24/11 pelo [envio por rascunho aprovado](#whatsapp-envio-por-rascunho-aprovado-24112026)). O crate `hangar-whatsapp` instala, liga e conversa com o serviço; o servidor só monta o
 router `/api/whatsapp*`.
 
 Decisões do usuário (22/11):
@@ -238,7 +238,8 @@ Decisões do usuário (22/11):
   erro, caminho nem unit. O Hangar instala a release mais nova da mesma versão maior e recusa
   binário com `api` menor que `MIN_API`. O `binaries.rs` do Connect (frpc/Caddy) é uma terceira
   cópia e ficou para depois.
-- **Só leitura.** O binário só chama `SendMediaRetryReceipt` (pedido de mídia antiga ao celular) e
+- **Só leitura** (substituído pelo [envio por rascunho aprovado](#whatsapp-envio-por-rascunho-aprovado-24112026):
+  a lista fechada passou a permitir o envio só no arquivo de saída). O binário só chama `SendMediaRetryReceipt` (pedido de mídia antiga ao celular) e
   os recibos automáticos do whatsmeow. Um teste de lista fechada das chamadas `Send*` barra
   qualquer outra. Os recibos automáticos são os de entrega, que o celular já manda pelos mesmos
   aparelhos; recibo de leitura não sai. "Só leitura" é nenhuma mensagem enviada. As leituras usam um pool só de leitura, separado do escritor, com prazo de 5 s
@@ -287,6 +288,80 @@ das chaves rodando (`--import` só com destino vazio e serviço parado; o `sessa
 de pareamento (`pair_timeout`, `logged_out`, `outdated`); tetos de mídia e de resposta; leitura
 separada da escrita; erro no formato da casa (`hangar_core::http::detail`, códigos `whatsapp_`);
 e os nomes reais do código do CLIProxy na extração.
+
+## WhatsApp: envio por rascunho aprovado (24/11/2026)
+
+Uma sessão do Hangar passa a mandar texto e arquivo pelo WhatsApp do dono, para uma conversa ou um
+grupo, sem controlar a tela do PC nem o celular. O modelo só cria rascunho, pela ferramenta MCP
+`whatsapp_draft`; a mensagem sai quando o dono toca em "Enviar" no cartão do desktop nativo ou do
+Expo. Volume baixo, sempre manual. O caso que motivou: um zip com texto para um grupo.
+
+Requisitos (pedido do usuário em 24/11/2026, salvo a fonte indicada):
+
+- **R1. O modelo nunca envia sozinho.** Só cria rascunho (conversa, texto, anexo).
+- **R2. O rascunho aparece no app com o texto exato** e só sai pelo "Enviar" de lá.
+- **R3. Aprovação no desktop e no celular.** Limite aceito, o mesmo do
+  [cofre](#cofre-de-senhas-uma-máquina-dona-chave-no-chaveiro-uso-aprovado-por-senha-30102026):
+  segura o uso normal e o modelo enganado por texto de terceiros, não um agente decidido a burlar. O
+  agente roda com o mesmo usuário do sistema e lê o token de dono no `.env` e o `control.key` do
+  binário; com eles chama as rotas de aprovação ou o serviço direto. O token é exigido também no
+  `127.0.0.1` (`hangar-core/src/auth.rs`: o loopback só fica fora do bloqueio por tentativas).
+- **R4. Sem flood.** Teto por minuto e por dia, rascunho que expira, registro do que saiu.
+- **R5. Baixo risco de ban.** Volume baixo, nada a contato novo, sem reenvio depois de trava. Pesquisa
+  de 24/11: o risco dominante em 2026 é a primeira mensagem a quem nunca falou com a conta (erro 463,
+  https://github.com/tulir/whatsmeow/issues/1197), e insistir depois do 463 vira ban
+  (https://github.com/WhiskeySockets/Baileys/issues/2707).
+- **R6. Camada barata a mais no Claude Code.** O hook `guard-tmux` (`provider_hooks.rs`, como o caso
+  `vault-files`) nega leitura de `~/.hangar/whatsapp/control.key` e do `.env` do Hangar e o comando
+  com `/api/whatsapp/outbox/` e `/send` ou `/decline`. O desenho aceito cobre o Claude Code.
+- **R7. Lido e "online" continuam fora.** `MarkRead`, `SendPresence` e `SubscribePresence` seguem
+  proibidos pela lista fechada do binário. A única presença que sai é `SendChatPresence` ("digitando"
+  e "pausado") na própria conversa, logo antes do envio aprovado.
+- **R8. O cartão não engana.** Lição do ataque da Invariant
+  (https://invariantlabs.ai/blog/whatsapp-mcp-exploited): texto inteiro com rolagem e caracteres
+  invisíveis à mostra, destino pelo número ou JID com a origem do nome (agenda, escolhido pela
+  pessoa, grupo), as 3 últimas mensagens da conversa, a mensagem citada, anexo com nome, tamanho e
+  caminho real (destacado quando fora da pasta da sessão), sessão que pediu e tempo restante.
+
+Decisões:
+
+- **O binário é o último ponto antes do WhatsApp.** Tetos, expiração, contato novo, filtro de anexo e
+  registro moram no `hangar-whatsapp` (api 2, tabela `outbox` no `messages.db`), e valem também
+  para quem chamar o serviço direto com o `control.key`. Contrato C5 em `docs/api.md` do binário.
+- **Tetos.** Envio: 3 por minuto e 20 por dia, contados numa transação só com a troca de `pending`
+  para `sending` (dois "Enviar" ao mesmo tempo não passam do teto nem enviam duas vezes; o segundo
+  recebe `answered`). Criação: 3 rascunhos abertos por origem e 10 no total (`too_many_drafts`).
+  Rascunho expira 10 min depois de criado. Rascunho igual a um pendente (origem, conversa, texto e
+  anexo) devolve o mesmo, sem criar outro.
+- **Contato novo é recusado.** Conversa sem nenhuma mensagem recebida dá `new_contact`; conversa fora
+  do arquivo, `unknown_chat`; lista de transmissão e canal, `unsupported_chat`. Grupo é aceito.
+- **Trava 463/475 sem reenvio.** Qualquer falha deixa `failed`, sem nova tentativa; 463 e 475 ficam
+  com `reachout_locked`. O evento `NotifyAccountReachoutTimelock` grava até quando a conta está
+  travada e recusa todo envio até lá. Envio interrompido por queda do binário vira `failed`
+  (`interrupted`) na subida, nunca reenviado.
+- **Anexo.** Caminho absoluto, até 100 MB, aberto sem seguir link e copiado para a pasta do rascunho
+  com sha256. Recusado (`file_refused`): a pasta de dados do binário, `~/.hangar`, `~/.ssh`,
+  `~/.gnupg`, `~/.config`, `~/.claude*`, qualquer pasta oculta no caminho, `.env*`, `*.key`, `*.pem`.
+
+Do lado do Hangar (C6):
+
+- **Tool `whatsapp_draft(chat, text, file?, reply_to?)`.** Recusa em sessão compartilhada
+  (`whatsapp_shared_session`, a mesma conferência das leituras) e em sessão sem o prazo de 660 s,
+  como `erro_cofre_sessao_sem_prazo`; binário com `api` menor que 2 dá `whatsapp_send_unsupported`.
+  A origem é `servidor::sessao` e a pasta da sessão que chama. Ela espera o rascunho chegar ao fim,
+  com relógio próprio de 600 s, e devolve `sent`, `declined`, `expired` ou `failed`; erro depois da
+  criação leva o `id` e manda não criar outro rascunho. Cancelada, recusa o rascunho no binário.
+- **Rotas do dono** `POST/GET /api/whatsapp/outbox`, `POST /api/whatsapp/outbox/{id}/send` e
+  `POST /api/whatsapp/outbox/{id}/decline`, repassadas ao binário com o prefixo `whatsapp_` nos
+  códigos, pelo mesmo `owner_only` das leituras.
+- **Evento `whatsapp_outbox`** na lista do dono, como o do cofre, com os rascunhos pendentes; fica em
+  `side.rs::owner_only` e não chega a convidado. Relido a cada criação ou resposta e a cada 30 s.
+- **Na subida do Hangar, todo rascunho pendente é recusado**: nenhuma tool espera por ele depois do
+  reinício.
+- **Push sem conteúdo.** "Rascunho de WhatsApp aguardando aprovação", sem nome, número nem texto,
+  porque passa pelo Expo e pelo Web Push; mesmo caminho do pedido do cofre.
+
+Fora: PWA Svelte, áudio, imagem com miniatura, prévia de link, lista de transmissão e canal.
 
 ## CLIProxyAPI instalado e configurado pelo Hangar (19/11/2026)
 
