@@ -279,18 +279,6 @@
      "default": null,
      "title": "Jev"
     },
-    "code_mode": {
-     "anyOf": [
-      {
-       "type": "boolean"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Code Mode"
-    },
     "service_tier": {
      "anyOf": [
       {
