@@ -145,8 +145,9 @@ describe('WorkReviewSection', () => {
     expect(container.textContent).toContain('Título da impressão');
     expect(button(m.work_review_pending_one())).toBeTruthy();
     await click('Manter');
+    // Só a decisão que mudou: o servidor junta com o que já guardou.
     expect(api.save).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'srv' }), 'pm',
-      { review_id: 'r-7', choices: { 47: { choice: 'igualar', reason: '' }, 86: { choice: 'manter', reason: 'kit' } } });
+      { review_id: 'r-7', choices: { 86: { choice: 'manter', reason: 'kit' } } });
     let answer!: () => void;
     api.save.mockReturnValueOnce(new Promise<void>((resolve) => { answer = resolve; }));
     await type(container.querySelector('textarea')!, 'regra');
@@ -157,7 +158,7 @@ describe('WorkReviewSection', () => {
     await flush();
     expect(api.save).toHaveBeenCalledTimes(3);
     expect(api.save).toHaveBeenLastCalledWith(expect.anything(), 'pm',
-      { review_id: 'r-7', choices: { 47: { choice: 'igualar', reason: '' }, 86: { choice: 'manter', reason: 'regra do kit' } } });
+      { review_id: 'r-7', choices: { 86: { choice: 'manter', reason: 'regra do kit' } } });
   });
 
   it('voltar antes de a gravação terminar mantém a escolha; falha de rede tenta de novo', async () => {
@@ -178,6 +179,41 @@ describe('WorkReviewSection', () => {
     await flush();
     expect(api.save).toHaveBeenCalledTimes(2);
     expect(api.save).toHaveBeenLastCalledWith(expect.anything(), 'pm', { review_id: 'r-7', choices: { 47: { choice: 'igualar', reason: '' } } });
+  });
+
+  it('leitura começada antes da gravação confirmar é refeita, e a escolha não some', async () => {
+    api.fetch.mockResolvedValue(linked(waiting()));
+    let saved!: () => void;
+    api.save.mockReturnValueOnce(new Promise<void>((resolve) => { saved = resolve; }));
+    await render();
+    await click('Igualar ao mock');
+    await act(async () => root.render(createElement(WorkReviewSection, { serverId: 'srv', name: 'outra' })));
+    await flush();
+    let stale!: (v: unknown) => void;
+    api.fetch.mockReturnValueOnce(new Promise((resolve) => { stale = resolve; }));
+    api.fetch.mockResolvedValue({ ...linked(waiting()), draft: { 47: { choice: 'igualar', reason: '' } } });
+    await act(async () => root.render(createElement(WorkReviewSection, { serverId: 'srv', name: 'pm' })));
+    await flush();
+    const reads = api.fetch.mock.calls.length;
+    await act(async () => saved());
+    await flush();
+    await act(async () => stale(linked(waiting())));
+    await flush();
+    expect(api.fetch.mock.calls.length).toBe(reads + 1);
+    expect(button(m.work_review_pending_one())).toBeTruthy();
+  });
+
+  it('gravação recusada guarda a escolha para a próxima', async () => {
+    api.fetch.mockResolvedValue(linked(waiting()));
+    api.save.mockRejectedValueOnce(Object.assign(new Error('400: x'), { status: 400 }));
+    await render();
+    await click('Igualar ao mock');
+    await flush();
+    await act(async () => { vi.advanceTimersByTime(250); });
+    await click('Igualar ao mock');
+    await flush();
+    expect(api.save).toHaveBeenLastCalledWith(expect.anything(), 'pm',
+      { review_id: 'r-7', choices: { 47: { choice: 'igualar', reason: '' }, 86: { choice: 'igualar', reason: '' } } });
   });
 
   it('com a revisão trocada o envio diz que mudou e relê', async () => {

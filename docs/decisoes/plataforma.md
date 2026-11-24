@@ -5486,10 +5486,12 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   gravado em `~/.hangar/work-review-drafts/<sha1 do conector e do ticket>.json` (não é cache); o `GET` da
   sessão devolve `draft` só da rodada lida e só com decisão e escolha que ela ainda mostra. O servidor junta por decisão com o que já guardou da mesma
   rodada (outro aparelho aberto não apaga as escolhas deste), e resumo de outra rodada é relido antes
-  de recusar; rodada diferente da lida de novo é 409 `stale_review`. O cliente faz uma gravação por vez por sessão e manda só a
-  última; rede fora ou 5xx tenta de novo a cada 5 s por 1 min. A escolha feita aqui vence a ainda em
-  gravação, que vence a guardada (a leitura que volta antes da gravação não a apaga), e o painel abre na
-  primeira que falta. O conector não
+  de recusar; rodada diferente da lida de novo é 409 `stale_review`. O cliente faz uma gravação por vez por sessão, só com as decisões mudadas que o
+  servidor ainda não confirmou (o servidor junta numa trava só, e a rodada é conferida de novo dentro
+  dela); rede fora ou 5xx tenta de novo a cada 5 s por 1 min, e o que não foi confirmado nunca é
+  descartado, vai junto na próxima escolha. A escolha feita aqui vence a ainda não confirmada, que vence
+  a guardada; leitura começada antes de uma gravação confirmar é refeita, e o painel abre na primeira
+  que falta. O conector não
   vê o rascunho: o `decide` continua com o lote inteiro.
 - **Falha em segundo plano vai ao diário.** Releitura que falha mantém o resumo anterior e registra
   `rust.work_review` com o código, uma vez por minuto por sessão e código; a tela não vê. Falha da

@@ -167,6 +167,8 @@ pub struct Engine {
     diag: Arc<dyn Diag>,
     assets: AssetCache,
     drafts: Drafts,
+    /// Ler, juntar e gravar o rascunho é uma operação só: duas gravações juntas não se apagam.
+    draft_lock: tokio::sync::Mutex<()>,
     state: Mutex<State>,
     queues: Mutex<HashMap<String, Arc<Semaphore>>>,
     changed: Notify,
@@ -176,7 +178,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(host: Arc<Host>, mission: Arc<Store>, sessions: Arc<dyn Sessions>, diag: Arc<dyn Diag>, cache_dir: PathBuf, drafts_dir: PathBuf) -> Arc<Self> {
-        Arc::new(Self { host, mission, sessions, diag, assets: AssetCache::new(&cache_dir, assets::LIMIT), drafts: Drafts::new(drafts_dir),
+        Arc::new(Self { host, mission, sessions, diag, assets: AssetCache::new(&cache_dir, assets::LIMIT), drafts: Drafts::new(drafts_dir), draft_lock: tokio::sync::Mutex::new(()),
             state: Mutex::default(), queues: Mutex::default(), changed: Notify::new(), version: AtomicU64::new(0) })
     }
 
@@ -262,7 +264,14 @@ impl Engine {
         if current.as_deref() != Some(draft.review_id.as_str()) {
             return Err(CallError::connector(ErrorCode::StaleReview, "a revisão mudou; releia antes de marcar").into());
         }
-        // Junta por decisão: outro aparelho que não viu as escolhas deste não as apaga.
+        let _turn = self.draft_lock.lock().await;
+        // A rodada pode ter mudado enquanto esperava a vez: gravação de rodada velha não passa por cima da nova.
+        let now = self.lock().slots.get(&session.name).filter(|slot| slot.life == session.lifecycle_id)
+            .and_then(|slot| slot.summary.as_ref().map(|summary| summary.review_id.clone()));
+        if now.is_some_and(|id| id != draft.review_id) {
+            return Err(CallError::connector(ErrorCode::StaleReview, "a revisão mudou; releia antes de marcar").into());
+        }
+        // Junta por decisão: o cliente manda só as que mudou, e as dos outros aparelhos ficam.
         let mut draft = draft;
         match self.drafts.read(&target.connector, &target.ticket_id).await {
             Ok(Some(saved)) if saved.review_id == draft.review_id => {

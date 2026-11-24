@@ -98,6 +98,11 @@ pub(super) fn draft_payload(review_id: &str, choices: &Choices) -> Value {
     json!({"review_id": review_id, "choices": choices})
 }
 
+/// Tira do que falta gravar o que o servidor confirmou, se não mudou de novo enquanto a gravação ia.
+pub(super) fn confirm(unsaved: &mut Choices, sent: &Choices) {
+    unsaved.retain(|id, picked| sent.get(id) != Some(picked));
+}
+
 /// A releitura só vale quando a rodada, o estado ou a hora mudaram; o selo sozinho não pede outra leitura.
 pub(super) fn moved(before: Option<&WorkReviewSummary>, now: Option<&WorkReviewSummary>) -> bool {
     match (before, now) {
@@ -318,6 +323,14 @@ mod tests {
         let c = Choices::from([("47".to_owned(), pick("manter", "regra")), ("86".to_owned(), pick("igualar", ""))]);
         assert_eq!(draft_payload("r1", &c), json!({"review_id": "r1", "choices": {
             "47": {"choice": "manter", "reason": "regra"}, "86": {"choice": "igualar", "reason": ""}}}));
+    }
+
+    #[test]
+    fn confirm_keeps_what_changed_while_saving() {
+        let sent = Choices::from([("47".to_owned(), pick("manter", "a")), ("86".to_owned(), pick("igualar", ""))]);
+        let mut unsaved = Choices::from([("47".to_owned(), pick("manter", "ab")), ("86".to_owned(), pick("igualar", "")), ("9".to_owned(), pick("igualar", ""))]);
+        confirm(&mut unsaved, &sent);
+        assert_eq!(unsaved, Choices::from([("47".to_owned(), pick("manter", "ab")), ("9".to_owned(), pick("igualar", ""))]));
     }
 
     #[test]

@@ -33,10 +33,12 @@ struct FailedAsset { read: u64, stale: bool }
 
 pub(super) struct Loaded { pub(super) via_branch: bool, pub(super) review: Arc<WorkReview>, draft: HashMap<String, WorkReviewDraftPick> }
 
-/// Gravação das escolhas de uma sessão: uma em voo; a que chega no meio espera, e só a última vai. `latest` é o que
-/// ainda não chegou ao servidor: a leitura que volta antes dele o põe por cima do guardado.
+/// Gravação das escolhas de uma sessão, uma em voo. `unsaved` junta as decisões mudadas que o servidor ainda não
+/// confirmou: cada PUT leva só elas (o servidor junta por decisão, e as de outro aparelho ficam), a leitura as põe
+/// por cima do guardado, e só sai o que o servidor confirmou. `epoch` sobe a cada confirmação: leitura começada
+/// antes dela trouxe o guardado velho e é refeita.
 #[derive(Default)]
-struct DraftSave { running: bool, next: Option<serde_json::Value>, latest: Option<(String, Choices)>, tries: u32 }
+struct DraftSave { running: bool, unsaved: Option<(String, Choices)>, tries: u32, epoch: u64 }
 
 /// ponytail: rede fora ou servidor em erro tenta de novo a cada 5 s por 1 min; depois só a próxima escolha leva tudo.
 const DRAFT_RETRIES: u32 = 12;
@@ -256,16 +258,22 @@ impl Hangar {
         let Some(api) = self.api_for(&key.server) else { return };
         let seq = self.work_review.read.start();
         self.work_review.reading = reading;
+        let epoch = self.work_review.saving.get(&key).map_or(0, |slot| slot.epoch);
         let name = key.name.clone();
         let request = async move {
             let value = api.read(&name, &["work-review"], &[], 30).await?;
             serde_json::from_value::<WorkReviewResponse>(value).map_err(|_| Failure::local("invalid_response"))
         };
-        run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| this.receive_work_review(key, seq, result, window, cx));
+        run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| this.receive_work_review(key, seq, epoch, result, window, cx));
     }
 
-    fn receive_work_review(&mut self, key: SessionKey, seq: u64, result: Result<WorkReviewResponse, Failure>, window: &mut Window, cx: &mut Context<Self>) {
+    fn receive_work_review(&mut self, key: SessionKey, seq: u64, epoch: u64, result: Result<WorkReviewResponse, Failure>, window: &mut Window, cx: &mut Context<Self>) {
         if self.work_review.owner.as_ref() != Some(&key) || self.work_review.read.seq != seq { return; }
+        // Uma gravação confirmou no meio da leitura: o guardado que veio é anterior a ela.
+        if self.work_review.saving.get(&key).map_or(0, |slot| slot.epoch) != epoch {
+            self.load_work_review(self.work_review.reading, window, cx);
+            return;
+        }
         let loaded = match result {
             Ok(response) => present(response),
             // Servidor sem a rota (anterior a ela) ou sem acesso a ela: a seção não aparece.
@@ -290,7 +298,7 @@ impl Hangar {
         let mut unboxed = Vec::new();
         if let Some(loaded) = &loaded {
             // Rodada que abre agora vem com o que ficou guardado, na primeira que falta.
-            let queued = panel.saving.get(&key).and_then(|slot| slot.latest.as_ref()).filter(|(id, _)| *id == loaded.review.id);
+            let queued = panel.saving.get(&key).and_then(|slot| slot.unsaved.as_ref()).filter(|(id, _)| *id == loaded.review.id);
             let mut local = queued.map(|(_, choices)| choices.clone()).unwrap_or_default();
             local.extend(panel.choices.drain());
             panel.choices = model::carry(&model::with_saved(&local, &loaded.draft), &loaded.review);
@@ -371,7 +379,7 @@ impl Hangar {
         if !option.requires_reason {
             panel.choices.insert(decision.clone(), Picked { choice, reason: String::new() });
             panel.reasons.remove(&decision);
-            self.save_review_draft(window, cx);
+            self.save_review_draft(&decision, window, cx);
             let panel = &mut self.work_review;
             let (seq, from) = (panel.advance_seq, panel.index);
             if from + 1 < total {
@@ -390,7 +398,7 @@ impl Hangar {
         let kept = panel.choices.get(&decision).filter(|p| p.choice == choice).map(|p| p.reason.clone());
         let reason = kept.unwrap_or_else(|| model::initial_reason(&option));
         panel.choices.insert(decision.clone(), Picked { choice, reason: reason.clone() });
-        self.save_review_draft(window, cx);
+        self.save_review_draft(&decision, window, cx);
         self.review_reason_input(decision, reason, true, window, cx);
         cx.notify();
     }
@@ -409,47 +417,59 @@ impl Hangar {
                 input.update(cx, |input, cx| input.set_value(capped, window, cx));
             }
             if let Some(picked) = this.work_review.choices.get_mut(&id) { picked.reason = value; }
-            this.save_review_draft(window, cx);
+            this.save_review_draft(&id, window, cx);
             cx.notify();
         });
         self.work_review.reasons.insert(decision, Reason { input, _changed: changed });
     }
 
     /// Guarda no servidor o que a pessoa marcou: sair, trocar de aba ou fechar o app não perde a escolha.
-    fn save_review_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn save_review_draft(&mut self, decision: &str, window: &mut Window, cx: &mut Context<Self>) {
         let panel = &self.work_review;
         let (Some(key), Some(review)) = (panel.owner.clone(), panel.review()) else { return };
-        let body = model::draft_payload(&review.id, &panel.choices);
-        let latest = (review.id.clone(), panel.choices.clone());
+        let Some(picked) = panel.choices.get(decision).cloned() else { return };
+        let review_id = review.id.clone();
         let slot = self.work_review.saving.entry(key.clone()).or_default();
-        slot.next = Some(body);
-        slot.latest = Some(latest);
+        match &mut slot.unsaved {
+            Some((id, choices)) if *id == review_id => { choices.insert(decision.to_owned(), picked); }
+            unsaved => *unsaved = Some((review_id, Choices::from([(decision.to_owned(), picked)]))),
+        }
         if slot.running { return; }
         slot.running = true;
         self.send_review_draft(key, window, cx);
     }
 
     fn send_review_draft(&mut self, key: SessionKey, window: &mut Window, cx: &mut Context<Self>) {
-        let body = self.work_review.saving.get_mut(&key).and_then(|slot| slot.next.take());
-        let (Some(body), Some(api)) = (body, self.api_for(&key.server)) else { self.work_review.saving.remove(&key); return };
-        let (name, sent) = (key.name.clone(), body.clone());
+        let api = self.api_for(&key.server);
+        let Some(slot) = self.work_review.saving.get_mut(&key) else { return };
+        let (Some((review_id, sent)), Some(api)) = (slot.unsaved.clone(), api) else { slot.running = false; return };
+        let (name, body) = (key.name.clone(), model::draft_payload(&review_id, &sent));
         let request = async move { api.request(&name, reqwest::Method::PUT, &["work-review", "draft"], None, Some(body), 15).await };
         run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| {
             let Some(slot) = this.work_review.saving.get_mut(&key) else { return };
             match result {
-                Ok(_) => slot.tries = 0,
+                Ok(_) => {
+                    slot.tries = 0;
+                    slot.epoch += 1;
+                    if let Some((id, choices)) = &mut slot.unsaved && *id == review_id {
+                        model::confirm(choices, &sent);
+                        if choices.is_empty() { slot.unsaved = None; }
+                    }
+                }
                 Err(error) => {
                     crate::log_line(&format!("work_review.draft_failed status={:?} code={}", error.status, error.code.as_deref().unwrap_or("-")));
-                    // Recusa (4xx) não melhora repetindo; rede e erro do servidor esperam e tentam de novo.
+                    // Recusa (4xx) não melhora repetindo; rede e erro do servidor esperam e tentam de novo. Esgotou: o
+                    // que falta fica guardado aqui, e a próxima escolha o leva junto.
                     if error.status.is_none_or(|status| status >= 500) && slot.tries < DRAFT_RETRIES {
                         slot.tries += 1;
-                        slot.next.get_or_insert(sent);
                         cx.spawn_in(window, async move |this, cx| {
                             cx.background_executor().timer(DRAFT_RETRY).await;
                             let _ = this.update_in(cx, |this: &mut Hangar, window, cx| this.send_review_draft(key, window, cx));
                         }).detach();
-                        return;
+                    } else {
+                        (slot.running, slot.tries) = (false, 0);
                     }
+                    return;
                 }
             }
             this.send_review_draft(key, window, cx);
