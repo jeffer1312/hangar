@@ -38,6 +38,8 @@ export type AccountRowHandlers = {
   antigravitySignIn: (accountId: string) => void;
   antigravitySignOut: (account: AntigravityAccount) => void;
   antigravityRemove: (account: AntigravityAccount) => void;
+  /** Abre uma sessão do agy na conta padrão: os Termos chegam ao chat e quem escolhe é a pessoa. */
+  antigravityTerms: (account: AntigravityAccount) => void;
 };
 
 const MOVE = LinearTransition.duration(420);
@@ -131,8 +133,12 @@ export const AccountRow = memo(function AccountRow({ row, term, enterIndex, serv
             {/* Com um agy aberto nela, o servidor recusa apagar a pasta. */}
             {!row.antigravity.padrao ? <Pill icon="Trash2" label={m.lista_remover()} onPress={() => handlers.antigravityRemove(row.antigravity!)}
               disabled={busy || row.antigravity.em_uso} /> : null}
+            {row.antigravity.padrao && !row.antigravity.termos_aceitos
+              ? <Pill icon="FileText" label={m.mobile_antigravity_accept_terms()} onPress={() => handlers.antigravityTerms(row.antigravity!)} disabled={busy} /> : null}
           </View>
         ) : null}
+        {row.antigravity?.padrao && !row.antigravity.termos_aceitos
+          ? <Text style={[styles.desc, { color: c.muted }]}>{m.mobile_antigravity_accept_terms_hint()}</Text> : null}
         {account && (row.canSignIn || !account.is_default) ? (
           <View style={styles.actions}>
             {row.canSignIn ? <Pill icon="LogIn" label={m.contas_entrar()} onPress={() => handlers.signIn(account.id)} disabled={busy} /> : null}

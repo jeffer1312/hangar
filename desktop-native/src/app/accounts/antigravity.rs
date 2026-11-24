@@ -139,6 +139,28 @@ impl Hangar {
     }
 
     /// Abre o painel. Com `account` (o Entrar da linha) o login começa já; sem, mostra "Qual conta".
+    /// Aceitar os Termos: abre uma sessão do agy com terminal na casa da máquina. A tela dos Termos chega ao chat
+    /// como cartão, com as opções do agy, e só a escolha da pessoa vira tecla.
+    pub(super) fn start_agy_terms(&mut self, home: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let body = json!({"name": "agy-termos", "cwd": home, "provider": "antigravity", "headless": false});
+        let task = self.runtime.spawn(async move { api.server_send(reqwest::Method::POST, &["sessions"], Some(body), 120).await });
+        cx.spawn_in(window, async move |this, cx| {
+            let joined = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let error = match joined {
+                    Ok(Ok(value)) => match serde_json::from_value::<SessionInfo>(value) {
+                        Ok(session) => { this.select(session, window, cx); return }
+                        Err(_) => tr("invalid_response"),
+                    },
+                    Ok(Err(failure)) => Hangar::failure(&failure),
+                    Err(_) => tr("delivery_uncertain"),
+                };
+                window.push_notification(Notification::error(error), cx);
+            });
+        }).detach();
+    }
+
     pub(super) fn start_agy(&mut self, account: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if self.accounts_busy() || self.api.is_none() { return; }
         let code = cx.new(|cx| InputState::new(window, cx).placeholder(tr("accounts_agy_code_placeholder")));

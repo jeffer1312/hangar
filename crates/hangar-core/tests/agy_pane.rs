@@ -1,5 +1,5 @@
 //! A tela do `agy` capturada de verdade (agy 1.5.15, 23/11/2026).
-use hangar_core::terminal_state::agy_analyze;
+use hangar_core::terminal_state::{AGY_TERMS_OPTIONS, AgyTerms, AgyTermsFocus, agy_analyze, agy_onboarding_list, agy_terms};
 
 fn fixture(name: &str) -> String {
     std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/agy").join(name)).unwrap()
@@ -89,4 +89,35 @@ fn the_mode_hint_and_footers_keep_the_idle_state() {
     for name in ["footer_plan.txt", "footer_accept_edits.txt", "footer_default.txt", "model_set.txt"] {
         assert_eq!(agy_analyze(&fixture(name)).state, "idle", "{name}");
     }
+}
+
+/// A tela dos Termos do Google no primeiro uso da conta (agy 1.5.16, HOME vazio, 24/11/2026; nada foi aceito).
+#[test]
+fn the_terms_screen_is_a_question_and_the_hangar_reads_the_checkbox_and_the_focus() {
+    let analysis = agy_analyze(&fixture("terms.txt"));
+    assert_eq!(analysis.state, "awaiting_input");
+    let question = analysis.question.unwrap();
+    assert!(question.starts_with("Terms of Service & Data Use\nAI coding agents are known"), "{question}");
+    assert!(question.contains("[x] Yes, I agree to help improve Antigravity CLI"), "{question}");
+    assert!(question.contains("https://antigravity.google/terms"), "{question}");
+    assert_eq!(analysis.options.unwrap(), AGY_TERMS_OPTIONS);
+    assert_eq!(agy_terms(&fixture("terms.txt")), Some(AgyTerms { checked: true, focus: AgyTermsFocus::Checkbox }));
+    // O foco no Done foi medido na mesma tela (setas, sem Enter).
+    assert_eq!(agy_terms(&fixture("terms-done.txt")), Some(AgyTerms { checked: true, focus: AgyTermsFocus::Done }));
+    assert_eq!(agy_terms(&fixture("idle.txt")), None);
+    assert_eq!(agy_terms(&fixture("permission.txt")), None);
+}
+
+/// Antes dos Termos, o primeiro uso pede o esquema de cores: as opções vêm da coluna da esquerda, sem a amostra.
+#[test]
+fn the_color_scheme_screen_of_the_first_use_is_a_question_too() {
+    let (title, options, cursor) = agy_onboarding_list(&fixture("onboarding-colors.txt")).unwrap();
+    assert_eq!(title, "Choose your color scheme:");
+    assert_eq!(options.first().map(String::as_str), Some("terminal"));
+    assert_eq!(options.last().map(String::as_str), Some("tokyo night"));
+    assert_eq!(options.len(), 8);
+    assert_eq!(cursor, 0);
+    let analysis = agy_analyze(&fixture("onboarding-colors.txt"));
+    assert_eq!((analysis.state.as_str(), analysis.options.map(|o| o.len())), ("awaiting_input", Some(8)));
+    assert_eq!(agy_onboarding_list(&fixture("terms.txt")), None);
 }
