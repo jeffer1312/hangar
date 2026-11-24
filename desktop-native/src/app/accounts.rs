@@ -1317,7 +1317,7 @@ impl Hangar {
                     .child(chrome::small_icon(icon, 18., theme::faint())))
                 .child(div().max_w(px(460.)).text_center().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(text)));
         }
-        let labels = window_labels(&shown);
+        let labels = fit_columns(window_labels(&shown));
         let keys: Vec<String> = shown.iter().map(|r| r.id.clone()).collect();
         {
             let mut book = accounts.flip.borrow_mut();
@@ -1405,9 +1405,17 @@ impl Hangar {
                 Some(at) => format!("{} · {}", offer.count, tr("accounts_list_reset_next").replace("{n}", at)),
                 None => offer.count.clone(),
             })));
+        // Janela sem coluna na tabela (não coube): o % dela numa linha só.
+        let overflow = match &row.quota {
+            QuotaView::Bars { bars, .. } if wide || compact => bars.iter().filter(|b| !labels.contains(&b.label))
+                .map(|b| format!("{} {}%", window_label(&b.label), b.pct.round())).collect::<Vec<_>>().join(" · "),
+            _ => String::new(),
+        };
         let identity = div().flex_1().min_w_0().flex().flex_col().gap(px(3.)).child(name_line)
             .when(renaming.is_none(), |el| el.children(row.email.clone().map(|email| div().min_w_0().truncate()
                 .text_size(px(if compact { 12. } else { 12.5 })).text_color(theme::muted()).child(email))))
+            .when(renaming.is_none() && !overflow.is_empty(), |el| el.child(div().min_w_0().truncate().text_size(px(12.))
+                .text_color(theme::muted()).child(overflow)))
             .when(renaming.is_none() && !compact, |el| el.when(!row.subtitle.0.is_empty(),|el| el.child(subtitle))
                 .children(reset_line)
                 .children(row.login_note.clone().map(|text| div().min_w_0().text_size(px(12.5)).text_color(theme::warning())
@@ -1608,14 +1616,29 @@ fn legend() -> Div {
 
 /// Uma coluna por janela que alguma linha mostrada tem, 5h e semana primeiro: a mesma em toda linha.
 fn window_labels(rows: &[&Row]) -> Vec<String> {
-    let mut labels: Vec<String> = Vec::new();
+    let mut labels: Vec<(String, usize)> = Vec::new();
     for row in rows {
         if let QuotaView::Bars { bars, .. } = &row.quota {
-            for bar in bars { if !labels.contains(&bar.label) { labels.push(bar.label.clone()); } }
+            for bar in bars {
+                match labels.iter_mut().find(|(label, _)| *label == bar.label) {
+                    Some((_, count)) => *count += 1,
+                    None => labels.push((bar.label.clone(), 1)),
+                }
+            }
         }
     }
-    labels.sort_by_key(|l| window_order(l));
-    labels
+    // A janela de mais contas vem antes: é ela que fica com a coluna quando não cabem todas.
+    labels.sort_by_key(|(label, count)| (window_order(label), std::cmp::Reverse(*count)));
+    labels.into_iter().map(|(label, _)| label).collect()
+}
+
+/// Colunas que cabem ao lado do nome da conta: 5 horas e semana (com o reset) sempre, janela de um modelo até o teto.
+/// A que sobra vai numa linha embaixo do nome, senão o nome fica espremido até sair uma letra por linha.
+const MAX_COLUMNS: usize = 4;
+
+fn fit_columns(labels: Vec<String>) -> Vec<String> {
+    let mut used = usize::from(labels.iter().any(|label| label == "7d"));
+    labels.into_iter().filter(|_| { used += 1; used <= MAX_COLUMNS }).collect()
 }
 
 fn sort_label(key: &str) -> String {
@@ -1674,6 +1697,12 @@ mod tests {
     use std::collections::HashMap;
 
     fn credential(value: Value) -> Credential { serde_json::from_value(value).expect("synthetic credential") }
+
+    #[test]
+    fn model_windows_beyond_the_ceiling_leave_the_table() {
+        let labels = ["5h", "7d", "Fable", "Claude/GPT 7d", "Claude/GPT 5h"].map(String::from).to_vec();
+        assert_eq!(super::fit_columns(labels), ["5h", "7d", "Fable"].map(String::from).to_vec());
+    }
 
     #[test]
     fn only_the_model_served_by_the_proxy_shows_its_version() {
