@@ -1476,6 +1476,16 @@ impl Hangar {
         for tab in &self.act.tabs { tab.view.update(cx, |view, cx| { view.set_native_states(states, cx); view.set_data(activity, processes, cx); view.set_plugin_servers(&servers, cx); }); }
     }
 
+    /// Mostra a aba só nesta sessão, por cima do menu e da aba de subagente, sem gravar como preferência.
+    pub(super) fn show_side_tab_here(&mut self, key: String, tab: SideTab, cx: &mut Context<Self>) {
+        self.side.menu = false;
+        self.act.active_tab = None;
+        self.act.pending_tab = None;
+        self.act.tab_error = None;
+        self.side.tabs.insert(key, tab);
+        self.sync_activity(cx);
+    }
+
     /// Clique numa aba do painel: fecha a aba de subagente aberta e grava a escolha como as outras preferências de tela.
     pub(super) fn choose_side_tab(&mut self, tab: SideTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected.is_none() { return };

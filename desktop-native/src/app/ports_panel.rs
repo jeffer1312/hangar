@@ -22,6 +22,7 @@ pub(super) struct Ports {
     other_error: Option<String>,
     /// A última porta digitada em "Outra porta…" (servidor, porta): vira linha mesmo sem a sessão listar (container,
     /// servidor macOS), para abrir e pedir o link de fora.
+    /// Chave `servidor::sessão`: a porta digitada numa sessão não aparece nas outras da mesma máquina.
     typed: Option<(String, u16)>,
     /// "Parar servidor" em voo, um por vez: (servidor, porta).
     stopping: Option<(String, u16)>,
@@ -194,11 +195,13 @@ impl Hangar {
             (Some(_), None) => self.ports.other_error = Some(tr("ports_err_network")),
             // Daqui a porta já é deste computador: só vira linha. De outra máquina, também encaminha.
             (Some(port), Some(api)) => {
-                self.ports.typed = Some((api.identity(), port));
+                let Some(key) = self.side_key() else { return };
+                self.ports.typed = Some((key.clone(), port));
                 if !api.is_loopback() { self.forward_port(port, cx); }
-                // A linha nasce na seção Portas do Contexto: o menu sai da frente para ela aparecer.
-                self.side.menu = false;
-                if let Some(key) = self.side_key() { self.side.tabs.insert(key, crate::appearance::SideTab::Context); }
+                // A linha nasce na seção Portas do Contexto: menu e aba de subagente saem da frente para ela aparecer.
+                self.show_side_tab_here(key, crate::appearance::SideTab::Context, cx);
+                // Campo novo, vazio: o número não fica esperando um Enter que o mande de novo, noutra sessão.
+                self.ports.other = None;
             }
         }
         cx.notify();
@@ -245,7 +248,8 @@ impl Hangar {
         let forwards = self.ports.forwards.list(&server);
         let opening = self.ports.forwards.opening(&server);
         // Porta digitada em "Outra porta…" não é da sessão: aparece a última digitada e as encaminhadas ou abrindo.
-        let typed = self.ports.typed.as_ref().filter(|(s, _)| *s == server).map(|(_, port)| *port);
+        let session_key = self.side_key();
+        let typed = self.ports.typed.as_ref().filter(|(key, _)| Some(key) == session_key.as_ref()).map(|(_, port)| *port);
         for port in forwards.iter().map(|f| f.port).chain(opening.iter().copied()).chain(typed) {
             if !ports.iter().any(|(known, ..)| *known == port) { ports.push((port, String::new(), false)); }
         }
@@ -309,9 +313,9 @@ impl Hangar {
 
     pub(super) fn clear_other_port_error(&mut self) { self.ports.other_error = None; }
 
-    /// Linha do "+" do painel: só na sessão do dono que ele pode mexer, como a seção Portas.
+    /// Linha do "+" do painel: só na sessão do dono que ele pode mexer, como a seção Portas (a orq não tem a seção).
     pub(super) fn side_menu_ports(&self) -> bool {
-        self.selected.as_ref().is_some_and(|s| s.readable() && !s.read_only())
+        self.selected.as_ref().is_some_and(|s| s.readable() && !s.read_only() && !s.orq())
             && self.session_api().is_some_and(|api| owner_server(&self.servers, &servers::norm(&api.identity())))
     }
 
