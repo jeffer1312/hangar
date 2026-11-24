@@ -58,26 +58,22 @@ def authorized(base: str, head: str, mark: str) -> bool:
     return re.search(pattern, git("log", "--no-merges", "--format=%B", f"{base}..{head}"), re.M) is not None
 
 
-def diff_lines(base: str, head: str, *paths: str, renames: bool = True) -> list[tuple[int, str, str, str]]:
-    """(arquivo no diff, nome no head, "+" ou "-", texto) de cada linha que o diff muda."""
-    found, entry, name, header = [], -1, "", False
+def added_lines(base: str, head: str, *paths: str, renames: bool = True) -> list[tuple[str, str]]:
+    """(nome no head, texto) de cada linha que o diff acrescenta."""
+    found, name, header = [], "", False
     for line in git("-c", "core.quotePath=false", "diff", "--find-renames" if renames else "--no-renames", "--no-ext-diff",
                     "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "-U0", f"{base}...{head}", "--", *paths).splitlines():
         if line.startswith("diff --git "):
-            entry, name, header = entry + 1, "", True
+            name, header = "", True
         elif line.startswith("@@"):
             header = False
         elif header:
             # Só no cabeçalho: uma linha de conteúdo "++ x" vira "+++ x" no diff.
             if line.startswith("+++ b/"):
                 name = line[6:].rstrip("\t")
-        elif line[:1] in "+-":
-            found.append((entry, name, line[0], line[1:]))
+        elif line.startswith("+"):
+            found.append((name, line[1:]))
     return found
-
-
-def added_lines(base: str, head: str, *paths: str, renames: bool = True) -> list[tuple[str, str]]:
-    return [(name, text) for _, name, sign, text in diff_lines(base, head, *paths, renames=renames) if sign == "+"]
 
 
 def git(*args: str) -> str:
@@ -97,21 +93,55 @@ def new_python(base: str, head: str) -> list[str]:
             if line.strip() and not line.lstrip().startswith("#")]
 
 
+def matches(text: str, rule: LineRule) -> list[tuple[str, str]]:
+    """(identidade, trecho) de cada caso: as linhas inteiras que o casamento ocupa, sem espaço e com uma aspa só."""
+    found = []
+    for match in rule.pattern.finditer(text):
+        start, end = text.rfind("\n", 0, match.start()) + 1, text.find("\n", match.end())
+        lines = text[start:end if end >= 0 else len(text)]
+        if not COMMENT.match(lines):
+            found.append((re.sub(r"\s+", "", re.sub(r"[\"`]", "'", lines)), " ".join(lines.split())))
+    return found
+
+
 def new_lines(base: str, head: str, rule: LineRule) -> list[str]:
-    """Linha antiga só reformatada sai como "-" e "+": conta o arquivo que ganhou mais casos do que perdeu."""
-    lines = [(entry, name, sign, text) for entry, name, sign, text in diff_lines(base, head, *rule.paths)
-             if rule.pattern.search(text) and not COMMENT.match(text)]
-    balance: dict[int, int] = {}
-    for entry, _, sign, _ in lines:
-        balance[entry] = balance.get(entry, 0) + (1 if sign == "+" else -1)
-    found = [f"{name}: {text.strip()[:120]}" for entry, name, sign, text in lines
-             if sign == "+" and balance[entry] > 0 and not TESTS.search(name) and not rule.allowed.search(name)]
+    """O arquivo inteiro, antes e depois: só é velho o mesmo trecho que já existia, mesmo reformatado ou movido
+    entre arquivos do PR. Casa também a chamada que ocupa várias linhas."""
+    start = git("merge-base", base, head).strip()
+    old: dict[str, int] = {}
+    fresh: list[tuple[str, str, str]] = []
+    for status, before, after in changed(base, head, *rule.paths):
+        for key, _ in matches(show(start, before), rule):
+            old[key] = old.get(key, 0) + 1
+        if status != "D" and not TESTS.search(after) and not rule.allowed.search(after):
+            fresh += [(after, key, line) for key, line in matches(show(head, after), rule)]
+    found = []
+    for name, key, line in fresh:
+        if old.get(key, 0) > 0:
+            old[key] -= 1
+        else:
+            found.append(f"{name}: {line[:120]}")
     return [] if not found or authorized(base, head, rule.mark) else found
+
+
+def changed(base: str, head: str, *paths: str) -> list[tuple[str, str, str]]:
+    """(estado, caminho antes, caminho depois) de cada arquivo do diff, com renomeação."""
+    items = git("diff", "--find-renames", "--name-status", "-z", f"{base}...{head}", "--", *paths).split("\0")
+    found, i = [], 0
+    while i < len(items) and items[i]:
+        status = items[i][0]
+        if status in "RC":
+            found.append((status, items[i + 1], items[i + 2]))
+            i += 3
+        else:
+            found.append((status, items[i + 1], items[i + 1]))
+            i += 2
+    return found
 
 
 def show(rev: str, path: str) -> str:
     done = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    return done.stdout if done.returncode == 0 else ""
+    return done.stdout if done.returncode == 0 and "\0" not in done.stdout else ""
 
 
 def changed_files(base: str, head: str, status: str, *paths: str) -> list[str]:
@@ -128,13 +158,9 @@ def new_web_screens(base: str, head: str) -> list[str]:
 def raw_keyboard(base: str, head: str) -> list[str]:
     """O import pode ocupar várias linhas: vale o arquivo inteiro, e só o que passou a importar conta."""
     start = git("merge-base", base, head).strip()
-    found = []
-    for line in git("-c", "core.quotePath=false", "diff", "--find-renames", "--name-status", "--diff-filter=AMR",
-                    f"{base}...{head}", "--", "mobile/*.ts", "mobile/*.tsx").splitlines():
-        status, *names = line.split("\t")
-        old, new = names[0], names[-1]
-        if not TESTS.search(new) and KEYBOARD.search(show(head, new)) and not KEYBOARD.search(show(start, old)):
-            found.append(new)
+    found = [after for status, before, after in changed(base, head, "mobile/*.ts", "mobile/*.tsx")
+             if status != "D" and not TESTS.search(after) and KEYBOARD.search(show(head, after))
+             and not KEYBOARD.search(show(start, before))]
     return [] if not found or authorized(base, head, "TECLADO") else found
 
 

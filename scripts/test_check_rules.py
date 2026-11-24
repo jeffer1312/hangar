@@ -237,6 +237,22 @@ class CheckRules(unittest.TestCase):
     def test_an_id_that_only_contains_new_session_passes(self):
         self.passes("crates/hangar-core/src/a.rs", 'let id = "launcher__new-session-sync";\nlet t = "new-session-x";\n')
 
+    def test_a_raw_base_url_call_over_many_lines_is_refused(self):
+        self.refused("packages/core/src/c.ts", "const u = new URL(\n  path,\n  server.baseUrl,\n);\n".replace(",\n);", "\n);"), "ENDERECO")
+
+    def test_removing_one_vibration_does_not_pay_for_another(self):
+        self.rebase_on("mobile/src/a.tsx", "import * as Haptics from 'expo-haptics';\n")
+        self.put("mobile/src/a.tsx", "Vibration.vibrate();\n")
+        self.commit("swap")
+        self.assertEqual(self.check()[0], 1)
+
+    def test_an_old_call_moved_to_another_file_of_the_pr_is_not_new(self):
+        self.rebase_on("mobile/src/a.tsx", "import * as Haptics from 'expo-haptics';\n")
+        self.git("mv", "mobile/src/a.tsx", "mobile/src/b.tsx")
+        self.put("mobile/src/b.tsx", "// outro arquivo\n" * 30 + "import * as Haptics from 'expo-haptics';\n")
+        self.commit("move")
+        self.assertEqual(self.check()[0], 0)
+
     def test_an_unreadable_base_is_an_error_and_not_a_pass(self):
         self.base = "0" * 40
         self.assertEqual(self.check()[0], 2)

@@ -17,10 +17,12 @@ reviews:
       - name: "Paridade nativo e Expo"
         mode: "warning"
         instructions: |
-          Olhe desktop-native/src e mobile/. Falha se o PR acrescenta melhoria visual ou recurso visível só em um dos
-          dois e a descrição do PR não diz por que o outro ficou de fora ou que ficou pendente. Passa se mexe nos
-          dois, se a descrição diz o motivo ou a pendência, se o recurso só faz sentido em um (bandeja, janela, gesto
-          de celular, permissão do sistema), ou se é correção interna sem efeito visível.
+          Olhe desktop-native/src e mobile/. Falha se o PR acrescenta uma melhoria visual ou um recurso visível
+          num dos dois e a MESMA melhoria não entra no outro, sem a descrição do PR dizer por que ficou de fora ou
+          que ficou pendente. Mudança sem relação no outro cliente não conta como levar a melhoria. Passa se a
+          mesma melhoria está nos dois, se a descrição diz o motivo ou a pendência, se o recurso só faz sentido em
+          um (bandeja, janela, gesto de celular, permissão do sistema), ou se é correção interna sem efeito
+          visível.
       - name: "Listas de sessões em conjunto"
         mode: "warning"
         instructions: |
