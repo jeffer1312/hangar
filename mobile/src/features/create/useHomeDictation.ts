@@ -4,6 +4,7 @@ import type { MotivoFim, Server } from '@hangar/core';
 import { useDitado, type RecordingStop } from '../ditado/useDitado';
 import { failureCode, recordTiming, stageClock } from '../ditado/clientTiming';
 import { dictationStyleStore } from '../ditado/ditadoEstiloStore';
+import { useHandsFree } from '../../stores/handsFree';
 import * as m from '../../paraglide/messages';
 
 // Ditado antes de a sessão existir: o servidor só transcreve e limpa (rota sem sessão), e o texto
@@ -59,8 +60,10 @@ export function useHomeDictation(server: Server, onText: (text: string) => void)
 
   // Cancelar para o microfone e joga o áudio fora, sem transcrever nem guardar para "de novo".
   const discard = useRef(false);
+  const handsFree = useHandsFree((s) => s.on);
   const { gravando, rms, iniciar, parar } = useDitado({
     server,
+    handsFree,
     onFim: (file, motivo, _uri, stop) => {
       if (discard.current) { discard.current = false; return; }
       void transcribe(file, { ...stop, motivo });

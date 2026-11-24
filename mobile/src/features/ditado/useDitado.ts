@@ -66,6 +66,8 @@ interface Opts {
   server?: Server | null;
   /** Transcreve em pedaços enquanto a pessoa fala; quem liga organiza o texto no fim (`runDictation`). */
   pieces?: boolean;
+  /** Mãos-livres: o silêncio depois da fala encerra a gravação. Desligado, só o botão ou o teto encerram. */
+  handsFree?: boolean;
 }
 
 interface Recording {
@@ -100,7 +102,7 @@ function reportRecordingError(recording: Recording, error: unknown) {
   }
 }
 
-export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = false }: Opts) {
+export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = false, handsFree = false }: Opts) {
   const [gravando, setGravando] = useState(false);
   const rms = useSharedValue(0);
 
@@ -336,8 +338,7 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
           // para exibição, amplia como no front (*5) para a barra não ficar invisível
           rmsVal = Math.min(1, raw * 5);
           // VAD usa o raw (0..1), não o ampliado
-          const r = passoVad(vadRef.current, raw, Date.now());
-          if (r === 'encerra') {
+          if (handsFree && passoVad(vadRef.current, raw, Date.now()) === 'encerra') {
             void finishRecording(recording, hidden ? 'escondeu' : 'silencio');
             return;
           }
@@ -362,7 +363,7 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
         }
       }
     }
-  }, [onFim, onErroParada, server, piecesWanted, finishRecording, releaseRecording, rms]);
+  }, [onFim, onErroParada, server, piecesWanted, handsFree, finishRecording, releaseRecording, rms]);
 
   useEffect(() => {
     mountedRef.current = true;

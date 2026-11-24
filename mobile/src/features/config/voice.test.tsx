@@ -10,6 +10,10 @@ import { getLocale, overwriteGetLocale } from '../../paraglide/runtime';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const calls = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn() }));
+const saved = vi.hoisted(() => new Map<string, unknown>());
+vi.mock('../../stores/prefs', () => ({
+  prefs: { getBoolean: (key: string) => saved.get(key) as boolean | undefined, set: (key: string, value: unknown) => { saved.set(key, value); } },
+}));
 const server = { id: 'voice-server', label: 'voice-fixture', baseUrl: 'https://voice.test', token: 'fixture' };
 
 vi.mock('../../stores/servers', () => ({
@@ -78,6 +82,18 @@ const edit = (label: string, value: string) => act(async () => {
   el.dispatchEvent(new Event('input', { bubbles: true }));
 });
 const render = () => act(async () => root.render(createElement(Voice)));
+
+describe('envio automático do ditado na tela de Voz', () => {
+  it('nasce desligado e o toque liga no aparelho, sem passar pelo rascunho da máquina', async () => {
+    await render();
+    const toggle = () => container.querySelector(`[role="switch"][aria-label="${m.native_voice_hands_free()}"]`)!;
+    expect(toggle().getAttribute('aria-checked')).toBe('false');
+    await act(async () => (toggle() as HTMLElement).click());
+    expect(toggle().getAttribute('aria-checked')).toBe('true');
+    expect(saved.get('ditado.maosLivres')).toBe(true);
+    expect(calls.patch).not.toHaveBeenCalled();
+  });
+});
 
 describe('organização do ditado na tela de Voz', () => {
   it('organização ocupa a largura sem recuo e preserva rótulos, seleção e rascunho', async () => {
