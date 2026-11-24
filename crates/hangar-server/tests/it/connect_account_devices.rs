@@ -338,6 +338,9 @@ async fn an_unreachable_service_keeps_the_devices_and_says_so_once() {
     let closed = free_port();
     let m = machine(closed, true).await;
     let d = released(&m.store, "n1", "D");
+    // Outro teste pode registrar o mesmo aviso no meio do registro deste assinante, e o tracing guarda o aviso
+    // como desligado: refeito aqui, ele volta a valer para este assinante.
+    tracing::callsite::rebuild_interest_cache();
     m.supervisor.sync_account_devices(&m.linked).await;
     m.supervisor.sync_account_devices(&m.linked).await;
     assert_eq!(gate(&m, &d).await, 200, "falha do serviço não tira ninguém");
@@ -512,6 +515,9 @@ async fn a_machine_still_pending_in_the_account_says_so_and_removes_no_one() {
     account.machine_pending.store(true, std::sync::atomic::Ordering::Relaxed);
     let m = machine(service, true).await;
     let d = released(&m.store, "n1", "D");
+    // Outro teste pode registrar o mesmo aviso no meio do registro deste assinante, e o tracing guarda o aviso
+    // como desligado: refeito aqui, ele volta a valer para este assinante.
+    tracing::callsite::rebuild_interest_cache();
     m.supervisor.sync_account_devices(&m.linked).await;
     m.supervisor.sync_account_devices(&m.linked).await;
     assert_eq!(gate(&m, &d).await, 401, "a conta não respondeu a lista: o aparelho da conta fica suspenso");
