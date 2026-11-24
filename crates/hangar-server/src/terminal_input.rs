@@ -54,14 +54,19 @@ impl InputFacts {
     pub(crate) fn foreground_idle(&self) -> bool {
         self.idle || self.ready && !self.open_question && self.screen.as_deref().is_some_and(|screen| {
             let state = crate::terminal_state::analyze(screen);
-            state.label.as_deref()
+            let waiting = state.label.as_deref()
                 .and_then(|label| label.strip_prefix("Waiting for "))
                 .and_then(|label| label.split_once(" background "))
                 .is_some_and(|(count, suffix)| {
                     count.parse::<u32>().is_ok_and(|count| count > 0)
                         // O rótulo pode trazer reticências e tempo depois do texto.
                         && (suffix.starts_with("agent to finish") || suffix.starts_with("agents to finish"))
-                })
+                });
+            // A CLI nem sempre escreve a linha de espera: sem linha viva acima da caixa, o painel de
+            // agentes abaixo dela é o que prova que o busy vem só do subagente.
+            // O resumo do turno que acabou ("✻ Worked for 2m") também vem como `spinner`; só o quadro com "…" é vivo.
+            waiting || !state.spinner.as_deref().is_some_and(|s| s.contains('…'))
+                && crate::terminal_state::background_agents_listed(screen)
         })
     }
 }
