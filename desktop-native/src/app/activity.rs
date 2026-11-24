@@ -1496,6 +1496,8 @@ impl Hangar {
     pub(super) fn toggle_side_menu(&mut self, cx: &mut Context<Self>) {
         self.side.menu = !self.side_menu_shown();
         if self.side.menu { self.act.active_tab = None; }
+        // O "porta inválida" é da tentativa anterior: não volta ao reabrir o menu.
+        self.clear_other_port_error();
         self.sync_activity(cx);
         cx.notify();
     }

@@ -253,9 +253,9 @@ impl Hangar {
         // Sem porta não há seção: a lista chegando ou vazia só ocupava espaço. "Outra porta…" mora no "+" do painel.
         if ports.is_empty() && (row.is_some() || list_error.is_none()) { return None; }
         let title = if beta { super::side::beta_title(tr("ports_title")).mb_0() } else { chrome::section_label(tr("ports_title")) };
-        let body = match (row, list_error) {
-            (None, Some(error)) => port_note(tr("ports_error").replace("{error}", &error), theme::warning()).into_any_element(),
-            _ => div().flex().flex_col().gap(px(10.)).children(ports.into_iter().map(|(port, process, shared)| {
+        // A lista com erro não esconde a porta digitada: o aviso vai acima das linhas.
+        let error = list_error.filter(|_| row.is_none()).map(|error| port_note(tr("ports_error").replace("{error}", &error), theme::warning()));
+        let body = div().flex().flex_col().gap(px(10.)).children(error).children(ports.into_iter().map(|(port, process, shared)| {
                 let forward = forwards.iter().find(|f| f.port == port);
                 let is_opening = opening.contains(&port);
                 let local =forward.map(|f| f.local).or((!remote).then_some(port));
@@ -303,10 +303,11 @@ impl Hangar {
                             open.on_click(move |_, _, cx| cx.open_url(&opened))))
                     })
                     .into_any_element()
-            })).into_any_element(),
-        };
+            }));
         Some(div().flex().flex_col().gap(px(10.)).child(title).child(body).into_any_element())
     }
+
+    pub(super) fn clear_other_port_error(&mut self) { self.ports.other_error = None; }
 
     /// Linha do "+" do painel: só na sessão do dono que ele pode mexer, como a seção Portas.
     pub(super) fn side_menu_ports(&self) -> bool {
