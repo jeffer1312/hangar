@@ -30,6 +30,14 @@ pub fn run(args: &[String]) -> ExitCode {
 }
 
 fn context(pair_dir: &Path) -> Option<String> {
+    let text = protocol_text(pair_dir, "claude")?;
+    // ASCII como o `json.dumps` do Python: o cmd do Windows não troca de página de código no meio.
+    Some(pyjson::dumps(&json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}), false))
+}
+
+/// O protocolo do grupo desta sessão em texto, para o hook de abertura de um agente; `harness` é o agente que
+/// o recebe (diz se ele tem o MCP). `None` fora de grupo ou em falha, já relatada.
+pub fn protocol_text(pair_dir: &Path, harness: &str) -> Option<String> {
     let me = session_name()?;
     let path = pair_dir.join(format!("{}.json", file_stem(&me)));
     let raw = match std::fs::read_to_string(&path) {
@@ -40,12 +48,10 @@ fn context(pair_dir: &Path) -> Option<String> {
     let Some(Value::Object(sidecar)) = pyjson::loads_lossless(&raw) else {
         return failed("pair_context_sidecar_unreadable", format!("{}: não é um objeto JSON", path.display()));
     };
-    let text = protocol(pair_dir, &me, &sidecar)?;
-    // ASCII como o `json.dumps` do Python: o cmd do Windows não troca de página de código no meio.
-    Some(pyjson::dumps(&json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}), false))
+    protocol(pair_dir, &me, &sidecar, harness)
 }
 
-fn protocol(pair_dir: &Path, me: &str, d: &Map<String, Value>) -> Option<String> {
+fn protocol(pair_dir: &Path, me: &str, d: &Map<String, Value>, harness: &str) -> Option<String> {
     let task = d.get("task").and_then(Value::as_str).unwrap_or_default().to_owned();
     // O árbitro do orquestrar-auto nasce sozinho no grupo: vale sem peers.
     if d.get("orq") == Some(&Value::Bool(true)) {
@@ -82,8 +88,7 @@ fn protocol(pair_dir: &Path, me: &str, d: &Map<String, Value>) -> Option<String>
         None if others.iter().any(|p| p.contains("::")) => ContractLine::default(),
         None => ContractLine { path, remote_owner: None },
     };
-    // O hook só existe no Claude Code: o harness de quem recebe é fixo.
-    let harness = [(me.to_owned(), "claude".to_owned())].into();
+    let harness = [(me.to_owned(), harness.to_owned())].into();
     Some(text::render(Kind::Group, &TextArgs { me: me.to_owned(), others, task, harness, contract, outside, across, ..Default::default() }))
 }
 

@@ -19,6 +19,10 @@ fn command(program: &Path, cwd: &Path, env: &ProcessEnv) -> Command {
     cmd
 }
 
+pub(crate) fn run_args(program: &Path, cwd: &Path, env: &ProcessEnv, args: &[&str], limit: Duration) -> std::io::Result<Option<(bool, String)>> {
+    run(program, cwd, env, args, limit)
+}
+
 /// Roda o agy com os argumentos e devolve (saiu com sucesso, stdout+stderr); None se passou do prazo.
 fn run(program: &Path, cwd: &Path, env: &ProcessEnv, args: &[&str], limit: Duration) -> std::io::Result<Option<(bool, String)>> {
     let mut child = command(program, cwd, env).args(args).spawn()?;
@@ -32,12 +36,17 @@ fn run(program: &Path, cwd: &Path, env: &ProcessEnv, args: &[&str], limit: Durat
         }
         let _ = tx.send(text);
     });
+    // Um prazo só para ler e sair: um filho que fecha a saída e não termina não segura quem chamou.
+    let deadline = std::time::Instant::now() + limit;
     let text = match rx.recv_timeout(limit) {
         Ok(text) => text,
         Err(_) => { let _ = child.kill(); let _ = child.wait(); return Ok(None) }
     };
-    let status = child.wait()?;
-    Ok(Some((status.success(), text)))
+    loop {
+        if let Some(status) = child.try_wait()? { return Ok(Some((status.success(), text))); }
+        if std::time::Instant::now() >= deadline { let _ = child.kill(); let _ = child.wait(); return Ok(None); }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Some(true) com login, Some(false) sem; None quando o agy não respondeu no prazo ou falhou de outro jeito.

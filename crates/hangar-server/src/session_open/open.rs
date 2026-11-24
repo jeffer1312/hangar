@@ -831,7 +831,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
                        -> Result<(Option<String>, Vec<String>, Option<claude::EngineRoute>), OpenError> {
     diary.step("validar");
     let claude = spec.provider == AgentProvider::Claude;
-    if matches!(spec.provider, AgentProvider::Pi | AgentProvider::Kimi) { sync_skills(host).await; }
+    if matches!(spec.provider, AgentProvider::Pi | AgentProvider::Kimi | AgentProvider::Antigravity) { sync_skills(host).await; }
     // A resolução conferiu o nome antes de conta e worktree: outro pane pode ter nascido desde então.
     name_still_free(host, spec, diary).await?;
     let mut warnings = if restore { Vec::new() } else { host.leave_old_group(&spec.name).await? };
