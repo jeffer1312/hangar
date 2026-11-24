@@ -1,33 +1,50 @@
 //! Animações das novidades da atualização: cada uma é desenhada com as mesmas partes do app que ela mostra.
 
 mod account_tags;
+mod agent_fix;
+mod antigravity;
 mod auto_report;
 mod claude_notices;
+mod cliproxy_wizard;
+mod notice_actions;
 mod codex_activity;
+mod code_comments;
 mod compact_idle;
 mod composer_history;
 mod connect_approval;
+mod connect_sign_in;
+mod conversation_gallery;
 mod desktop_tool_look;
 mod dictation_pill;
 mod login_browser;
 mod memory_dream;
+mod model_handoff;
+mod claude_providers;
 mod new_chat_mode;
+mod new_conversation;
 mod no_project;
 mod password_vault;
 mod plugins;
+mod proxy_update;
+mod adopt_cliproxy;
 mod scheduled_tasks;
 mod hide_from_list;
 mod image_reveal;
 mod rename_suggestion;
 mod search_conversations;
+mod server_status;
+mod session_ports;
 mod sleep_hidden;
 mod speech_pause;
+mod speed_choice;
 mod session_vault;
 mod tour;
 mod updates_manual;
 mod worktree_fresh;
 mod reviews;
 mod tickets;
+mod work_review;
+mod whatsapp_readonly;
 
 use std::{cell::Cell, time::{Duration, Instant}};
 use gpui_kit::*;
@@ -85,6 +102,23 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "estilo-claude-desktop" => Some(desktop_tool_look::render),
         "sonho-da-memoria" => Some(memory_dream::render),
         "avisos-do-claude" => Some(claude_notices::render),
+        "acoes-dos-avisos" => Some(notice_actions::render),
+        "tela-de-status" => Some(server_status::render),
+        "consertar-com-agente" => Some(agent_fix::render),
+        "revisao-do-trabalho" => Some(work_review::render),
+        "comentar-linhas" => Some(code_comments::render),
+        "seletor-de-modelos" => Some(model_handoff::render),
+        "provedores-do-claude" => Some(claude_providers::render),
+        "cliproxy-assistente" => Some(cliproxy_wizard::render),
+        "velocidade-ultra-fast" => Some(speed_choice::render),
+        "atualizar-cliproxy" => Some(proxy_update::render),
+        "entregar-cliproxy" => Some(adopt_cliproxy::render),
+        "conversa-nova" => Some(new_conversation::render),
+        "galeria-da-conversa" => Some(conversation_gallery::render),
+        "whatsapp-somente-leitura" => Some(whatsapp_readonly::render),
+        "entrar-pelo-connect" => Some(connect_sign_in::render),
+        "portas-da-sessao" => Some(session_ports::render),
+        "antigravity" => Some(antigravity::render),
         _ => None,
     }
 }

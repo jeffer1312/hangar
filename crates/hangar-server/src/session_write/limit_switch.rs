@@ -279,6 +279,8 @@ pub trait Host: Send + Sync {
     fn send_continue<'a>(&'a self,name:&'a str) -> BoxFuture<'a,Result<bool,String>>;
     /// Fecha com Esc o menu do Claude Code ao bater o limite, se ele está na tela. `Ok(true)`: fechou.
     fn dismiss_limit_menu<'a>(&'a self,name:&'a str) -> BoxFuture<'a,Result<bool,String>>;
+    /// Uma troca de agente pedida pelo seletor espera esta sessão: ela leva a conversa ao Codex.
+    fn handoff_held(&self,name:&str) -> bool;
 }
 
 /// O menu "What do you want to do?" do Claude Code ao bater o limite, no rodapé do pane.
@@ -310,9 +312,19 @@ impl Switcher {
     fn first_retry(&self,name:&str,account:&str,now:f64) -> bool {
         let account = crate::list::discover::real(account);
         let Ok(mut retried) = self.retried.lock() else { return false };
-        if retried.get(name).is_some_and(|(last,at)|*last == account && now - *at < LOGIN_RETRY_WINDOW_S) { return false; }
+        if Self::retried_within(&retried,name,&account,now) { return false; }
         retried.insert(name.to_owned(),(account,now));
         true
+    }
+
+    /// Como `first_retry`, sem gastar a tentativa.
+    fn retry_open(&self,name:&str,account:&str,now:f64) -> bool {
+        let account = crate::list::discover::real(account);
+        self.retried.lock().is_ok_and(|retried|!Self::retried_within(&retried,name,&account,now))
+    }
+
+    fn retried_within(retried:&BTreeMap<String,(String,f64)>,name:&str,account:&str,now:f64) -> bool {
+        retried.get(name).is_some_and(|(last,at)|last == account && now - *at < LOGIN_RETRY_WINDOW_S)
     }
 
     async fn switch(&self,host:&dyn Host,hit:&LimitHit) -> Outcome {
@@ -328,6 +340,9 @@ impl Switcher {
         // Aviso de uma vida que já trocou de conta (o `/conta` passou na frente): a conta de agora não bateu nada.
         if crate::list::discover::real(&host.account_dir(hit.account.as_deref())) != crate::list::discover::real(&current) { return Outcome::Stayed("limit_switch_stale"); }
         self.spent.mark_limit(&current,hit.limit.resets_at.filter(|reset|*reset > now).unwrap_or(now + UNKNOWN_RESET_S),now,&hit.limit.window);
+        // A conta fica gasta para as outras sessões, mas reabrir no Claude agora levaria a fila que a troca de agente
+        // segurou para o Codex.
+        if host.handoff_held(&hit.name) { return Outcome::Stayed("limit_switch_handoff"); }
         self.move_away(host,&hit.name,&spec,&current).await
     }
 
@@ -392,6 +407,14 @@ impl Switcher {
         let now = host.now();
         let current = host.account_dir(spec.account.config_dir());
         if crate::list::discover::real(&host.account_dir(hit.account.as_deref())) != crate::list::discover::real(&current) { return Some(Outcome::Stayed("limit_switch_stale")); }
+        // Reabrir no Claude levaria a fila que a troca de agente segurou para o Codex. A conta fica gasta para as outras
+        // sessões, salvo token velho na memória com login bom no disco, que a reabertura resolveria.
+        if host.handoff_held(&hit.name) {
+            let recoverable = matches!(hit.code.as_str(),"authentication_failed" | "api_401") && host.logged_in(&current)
+                && self.retry_open(&hit.name,&current,now);
+            if !recoverable { self.mark_refused(hit,&current,now); }
+            return Some(Outcome::Stayed("limit_switch_handoff"));
+        }
         if host.logged_in(&current) && self.first_retry(&hit.name,&current,now) {
             match Self::reopen_when_free(host,&hit.name,&current,||host.reload(&hit.name)).await {
                 Ok(())=>return None,
@@ -399,13 +422,17 @@ impl Switcher {
                 Err(outcome)=>return Some(outcome),
             }
         }
+        self.mark_refused(hit,&current,now);
+        Some(self.move_away(host,&hit.name,&spec,&current).await)
+    }
+
+    fn mark_refused(&self,hit:&AuthHit,current:&str,now:f64) {
         // Conta suspensa ou fora da organização não volta com login refeito nem com token renovado.
         if matches!(hit.code.as_str(),"authentication_failed" | "api_401") {
-            self.spent.mark_login(&current,now + LOGIN_SPENT_S,now);
+            self.spent.mark_login(current,now + LOGIN_SPENT_S,now);
         } else {
-            self.spent.mark(&current,now + LOGIN_SPENT_S,now);
+            self.spent.mark(current,now + LOGIN_SPENT_S,now);
         }
-        Some(self.move_away(host,&hit.name,&spec,&current).await)
     }
 
     /// O recado para continuar; `Some` com o código quando ele não saiu.
@@ -471,7 +498,7 @@ impl Switcher {
         // arredondado); a troca que falhou, sem folga ou ocupada tenta de novo no próximo turno parado, e o aviso
         // velho relido é barrado pela conta gasta e pelo `limit_switch_stale`.
         // A conta trocada pela pessoa no meio da espera também esquece: o limite dela é outro.
-        if !matches!(outcome,Outcome::Stayed(code) if !matches!(code,"limit_switch_no_room" | "limit_switch_stale"))
+        if !matches!(outcome,Outcome::Stayed(code) if !matches!(code,"limit_switch_no_room" | "limit_switch_stale" | "limit_switch_handoff"))
             && let Ok(mut handled) = self.handled.lock() {
             handled.remove(&hit.name);
         }
@@ -574,6 +601,7 @@ impl Host for Native {
         })
     }
     fn logged_in(&self,path:&str) -> bool { crate::accounts::claude_refresh::has_login(std::path::Path::new(path)) }
+    fn handoff_held(&self,name:&str) -> bool { self.runtime.handoff_held(name) }
     fn release<'a>(&'a self,name:&'a str) -> BoxFuture<'a,()> { self.runtime.release_limit(name); Box::pin(async {}) }
     fn pause(&self) -> BoxFuture<'_,()> { Box::pin(tokio::time::sleep(std::time::Duration::from_secs(3))) }
     fn show_problem<'a>(&'a self,name:&'a str,problem:LimitProblem) -> BoxFuture<'a,()> {
@@ -656,8 +684,8 @@ mod tests {
     fn spec(account:Account) -> SessionSpec {
         SessionSpec { version:SPEC_VERSION,key:"k".into(),name:"s".into(),cwd:"/w".into(),provider:AgentProvider::Claude,
             surface:Surface::Headless,account,account_source:AccountSource::Default,model:None,effort:None,service_tier:None,
-            permission_mode:None,subagent_model:None,customizations:None,jev:false,read_only:false,worktree:None,creator:None,
-            created_at:1.0,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false }
+            permission_mode:None,subagent_model:None,customizations:None,jev:false,code_mode:false,read_only:false,worktree:None,creator:None,
+            created_at:1.0,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false }
     }
     fn catalog(paths:&[&str]) -> Value { Value::Array(paths.iter().map(|p|json!({"path":p,"label":p.trim_start_matches('/')})).collect()) }
     fn quota(path:&str,pct:f64) -> Value { json!({"provedor":"claude","id":format!("claude:{path}"),"label":path.trim_start_matches('/'),"estado":"lida","janelas":[{"pct":pct},{"pct":pct/2.0}]}) }
@@ -924,13 +952,15 @@ mod tests {
         screen:Mutex<String>,
         /// Contas cujo login foi apagado.
         no_login:Mutex<Vec<String>>,
+        /// Uma troca de agente espera a sessão.
+        handoff:std::sync::atomic::AtomicBool,
     }
 
     impl Fake {
         fn new(dir:&str,quotas:Vec<Value>) -> Self {
             Fake { spec:Mutex::new(spec(claude(dir))),catalog:catalog(&["/a","/b","/c"]),quotas:Mutex::new(Ok(quotas)),
                 reopens:Mutex::new(Vec::new()),log:Mutex::new(Vec::new()),diary:Mutex::new(Vec::new()),problems:Mutex::new(Vec::new()),gone:Default::default(),
-                on_pause:Mutex::new(None),undelivered:Default::default(),continue_fails:Default::default(),screen:Mutex::new(String::new()),no_login:Mutex::new(Vec::new()) }
+                on_pause:Mutex::new(None),undelivered:Default::default(),continue_fails:Default::default(),screen:Mutex::new(String::new()),no_login:Mutex::new(Vec::new()),handoff:Default::default() }
         }
         fn log(&self) -> Vec<String> { self.log.lock().unwrap().clone() }
         fn diary(&self) -> Vec<String> { self.diary.lock().unwrap().clone() }
@@ -960,6 +990,7 @@ mod tests {
             })
         }
         fn logged_in(&self,path:&str) -> bool { !self.no_login.lock().unwrap().iter().any(|dead|dead == path) }
+        fn handoff_held(&self,_:&str) -> bool { self.handoff.load(std::sync::atomic::Ordering::Relaxed) }
         fn release<'a>(&'a self,_:&'a str) -> BoxFuture<'a,()> { Box::pin(async move { self.log.lock().unwrap().push("release".into()); }) }
         fn pause(&self) -> BoxFuture<'_,()> {
             Box::pin(async move {
@@ -1061,6 +1092,40 @@ mod tests {
         Switcher::default().handle(&fake,hit("/a",2000.0)).await;
         assert_eq!(fake.log(),vec!["reopen /c","release","continue"],"reabre, solta a fila e só então manda o recado");
         assert_eq!(fake.diary(),vec!["switched","limit_switch_continue_delivered"]);
+    }
+
+    /// A troca de agente à espera leva a conversa ao Codex: nem o limite nem o login recusado reabrem o Claude.
+    #[tokio::test]
+    async fn a_held_handoff_keeps_the_session_out_of_any_reopen() {
+        let fake = Fake::new("/a",vec![quota("/a",100.0),quota("/b",60.0),quota("/c",20.0)]);
+        fake.handoff.store(true,std::sync::atomic::Ordering::Relaxed);
+        let switcher = Switcher::default();
+        switcher.handle(&fake,hit("/a",2000.0)).await;
+        assert!(switcher.spent.is_spent("/a",1500.0),"a conta que bateu o limite fica gasta para as outras sessões");
+        switcher.handle_auth(&fake,refused("/a")).await;
+        assert_eq!(fake.log(),vec!["release","release"]);
+        assert_eq!(fake.diary(),vec!["limit_switch_handoff","limit_switch_handoff"]);
+        fake.handoff.store(false,std::sync::atomic::Ordering::Relaxed);
+        switcher.handle(&fake,hit("/a",2000.0)).await;
+        assert_eq!(fake.log()[2..],["reopen /c","release","continue"],"o mesmo aviso vale de novo depois da troca desfeita");
+    }
+
+    /// Login recusado com a troca de agente à espera: a sessão não reabre, e a conta fica gasta para as outras salvo
+    /// token velho com login bom no disco e a recarga da janela ainda por usar.
+    #[tokio::test]
+    async fn a_refused_login_during_a_held_handoff_still_marks_the_account_spent() {
+        let cases = [("authentication_failed",false,false,true),("authentication_failed",true,false,false),("authentication_failed",true,true,true),("oauth_org_not_allowed",true,false,true)];
+        for (code,disk_login,retry_used,spent) in cases {
+            let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",60.0)]);
+            fake.handoff.store(true,std::sync::atomic::Ordering::Relaxed);
+            if !disk_login { fake.no_login.lock().unwrap().push("/a".to_owned()); }
+            let switcher = Switcher::default();
+            if retry_used { assert!(switcher.first_retry("s","/a",fake.now())); }
+            switcher.handle_auth(&fake,AuthHit { code:code.into(),..refused("/a") }).await;
+            assert_eq!(switcher.spent.is_spent("/a",1500.0),spent,"{code} login no disco={disk_login} recarga usada={retry_used}");
+            assert_eq!(fake.log(),vec!["release"],"{code}: nada reabre");
+            assert_eq!(fake.diary(),vec!["limit_switch_handoff"],"{code}");
+        }
     }
 
     /// "Recebeu o recado" só com a entrega confirmada; sem ela, o diário diz que está na fila da vida nova.
@@ -1279,7 +1344,7 @@ mod tests {
     fn engine_and_other_providers_stay() {
         let spent = Spent::default();
         let (cat,quotas) = (catalog(&["/a","/b"]),[quota("/a",10.0),quota("/b",10.0)]);
-        let engine = Account::Engine { name:"kimi".into(),account:None,config_dir:None,context_window:None,context_window_unknown:false };
+        let engine = Account::Engine { name:"kimi".into(),account:None,binding:None,config_dir:None,context_window:None,context_window_unknown:false };
         assert_eq!(decide(&spec(engine),"/a",&cat,&quotas,&spent,1000.0),Decision::Stay("limit_switch_engine"));
         let mut codex = spec(claude("/a"));
         codex.provider = AgentProvider::Codex;

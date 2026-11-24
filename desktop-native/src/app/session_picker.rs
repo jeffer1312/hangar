@@ -17,7 +17,7 @@ impl Hangar {
         window.is_window_active() && !self.connection_dialog && !window.has_active_dialog(cx)
             && (self.settings.is_none() || self.settings_live()) && self.costs.view.is_none()
             && self.worktrees.view.is_none() && self.reviews.view.is_none() && !self.search.open && self.sidebar.editing.is_none()
-            && !self.keyboard.is_editing()
+            && !self.keyboard.is_editing() && !self.controls.model_picker_open()
     }
 
     /// Desiste da seleção até os modificadores mudarem: segurar de novo não reabre os números.

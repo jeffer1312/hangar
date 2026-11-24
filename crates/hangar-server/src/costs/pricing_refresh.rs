@@ -13,6 +13,8 @@ pub const PROVIDERS: [&str; 8] = ["anthropic", "openai", "moonshotai", "zhipuai"
 const TTL: Duration = Duration::from_secs(24 * 3600);
 const TIMEOUT: Duration = Duration::from_secs(30);
 const CACHE: &str = "models.dev.json";
+/// As janelas de contexto, ao lado do cache: o arquivo das tarifas fica igual ao de sempre.
+pub const WINDOWS: &str = "models.dev-janelas.json";
 /// O models.dev responde 403 a quem não diz quem é.
 const USER_AGENT: &str = "hangar/pricing";
 /// O catálogo inteiro tem uns 3 MB; acima disto a resposta não é ele.
@@ -45,6 +47,21 @@ pub fn slim(raw: &Value) -> Result<Map<String, Value>, String> {
         }
     }
     Ok(out)
+}
+
+/// Janela de contexto por modelo (`limit.context`), dos mesmos provedores das tarifas. O Antigravity não
+/// informa a janela, e o contexto da sessão dele sai daqui.
+pub fn windows(raw: &Value) -> Map<String, Value> {
+    let mut out = Map::new();
+    for provider in PROVIDERS {
+        let Some(models) = raw.get(provider).and_then(|entry| entry.get("models")).and_then(Value::as_object) else { continue };
+        for (model, data) in models {
+            if let Some(window) = data.get("limit").and_then(|limit| limit.get("context")).and_then(Value::as_u64).filter(|n| *n > 0) {
+                out.entry(model.clone()).or_insert(json!(window));
+            }
+        }
+    }
+    out
 }
 
 /// A veracidade do Python (`not x`).
@@ -143,8 +160,12 @@ impl PricingRefresh {
         }
         let count = models.len();
         let text = hangar_core::pycompat::pyjson::dumps_unicode(&json!({"modelos": models}), false);
+        let (windows_file, windows_text) = (target.with_file_name(WINDOWS), json!(windows(&raw)).to_string());
         if let Err(error) = blocking(move || write_atomic(&target, text.as_bytes())).await {
             return tracing::warn!("tarifas: não deu para gravar o cache: {error}");
+        }
+        if let Err(error) = blocking(move || write_atomic(&windows_file, windows_text.as_bytes())).await {
+            tracing::warn!("tarifas: não deu para gravar as janelas dos modelos: {error}");
         }
         tracing::info!("tarifas: {count} modelos atualizados do models.dev");
     }
@@ -275,11 +296,11 @@ pub fn versioned_text(value: &Value) -> String {
     hangar_core::pycompat::pyjson::dumps_indent(&sorted(value), 1, false) + "\n"
 }
 
-/// Baixa o catálogo e regrava o snapshot (`backend/app/pricing_data.json`) e o recorte dos testes a
-/// partir da raiz do repositório, que tem de ter as duas pastas (nada é criado). Catálogo sem modelo
-/// conhecido é recusado (D13). Os dois arquivos só trocam depois de os dois estarem prontos.
+/// Baixa o catálogo e regrava o snapshot (`crates/hangar-server/data/pricing_data.json`) e o recorte
+/// dos testes a partir da raiz do repositório, que tem de ter as duas pastas (nada é criado). Catálogo
+/// sem modelo conhecido é recusado (D13). Os dois arquivos só trocam depois de os dois estarem prontos.
 pub async fn write_snapshot(root: &Path, url: &str) -> Result<Vec<String>, String> {
-    let snapshot = root.join("backend/app/pricing_data.json");
+    let snapshot = root.join(super::pricing::SNAPSHOT_PATH);
     let fixture = root.join("crates/hangar-server/tests/it/fixtures/pricing/models_dev_recorte.json");
     for path in [&snapshot, &fixture] {
         let parent = path.parent().unwrap_or(root).to_owned();

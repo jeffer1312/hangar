@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-ticket-actions"]
+members =["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-notice-ignores", "hangar-notice-actions", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-computer-control-setup", "hangar-shortcut-transfer", "hangar-sidecar-prune", "hangar-usage-diary", "hangar-boot", "hangar-dream", "hangar-connectors", "hangar-mission", "hangar-ticket-actions", "hangar-work-review", "hangar-agent-hooks", "hangar-send", "hangar-registration", "hangar-open-cli", "hangar-install-setup", "hangar-status", "hangar-local-server", "hangar-cliproxy-setup", "hangar-managed-binary", "hangar-video", "hangar-whatsapp", "hangar-guest-accounts", "hangar-connect-client", "hangar-session-open-fields", "hangar-port-tunnel","hangar-session-ports", "hangar-port-stop", "hangar-browser-host", "hangar-antigravity"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,10 +18,27 @@ hangar-computer-control-setup = { path = "hangar-computer-control-setup" }
 hangar-connectors = { path = "hangar-connectors" }
 hangar-mission = { path = "hangar-mission" }
 hangar-ticket-actions = { path = "hangar-ticket-actions" }
+hangar-work-review = { path = "hangar-work-review" }
+hangar-agent-hooks = { path = "hangar-agent-hooks" }
 hangar-codex-account-sync = { path = "hangar-codex-account-sync" }
 hangar-conversation-transfer = { path = "hangar-conversation-transfer" }
 hangar-codex-transfer = { path = "hangar-codex-transfer" }
 hangar-session-tools = { path = "hangar-session-tools" }
+hangar-send = { path = "hangar-send" }
+hangar-registration = { path = "hangar-registration" }
+hangar-open-cli = { path = "hangar-open-cli" }
+hangar-install-setup = { path = "hangar-install-setup" }
+hangar-cliproxy-setup = { path = "hangar-cliproxy-setup" }
+hangar-managed-binary = { path = "hangar-managed-binary" }
+hangar-whatsapp = { path = "hangar-whatsapp" }
+hangar-status = { path = "hangar-status" }
+hangar-local-server = { path = "hangar-local-server" }
+hangar-video = { path = "hangar-video" }
+hangar-guest-accounts = { path = "hangar-guest-accounts" }
+hangar-connect-client = { path = "hangar-connect-client" }
+hangar-antigravity = { path = "hangar-antigravity" }
+# A mesma do lockfile do app nativo (vem pelo wgpu): a libmpv é carregada na hora, sem ligar ao binário.
+libloading = "=0.8.9"
 # Mesmas versões do desktop-native/Cargo.toml: o hangar-api entra nos dois builds.
 serde = { version = "=1.0.229", features = ["derive"] }
 # preserve_order: o tool_input reescrito sai com as chaves na ordem do dict do Python.
@@ -58,8 +75,10 @@ rayon = "=1.12.0"
 hangar-codex = { path = "hangar-codex" }
 hangar-psmux = { path = "hangar-psmux" }
 hangar-core = { path = "hangar-core" }
+hangar-session-open-fields = { path = "hangar-session-open-fields" }
 hangar-auth = { path = "hangar-auth" }
 hangar-transcript = { path = "hangar-transcript" }
+hangar-notice-actions = { path = "hangar-notice-actions" }
 hangar-omp-sync = { path = "hangar-omp-sync" }
 hangar-connect = { path = "hangar-connect" }
 hangar-plugins = { path = "hangar-plugins" }
@@ -73,6 +92,9 @@ hangar-boot = { path = "hangar-boot" }
 hangar-opencode-cookie = { path = "hangar-opencode-cookie" }
 hangar-deploy = { path = "hangar-deploy" }
 hangar-port-preview = { path = "hangar-port-preview" }
+hangar-port-tunnel = { path = "hangar-port-tunnel" }
+hangar-session-ports = { path = "hangar-session-ports" }
+hangar-port-stop = { path = "hangar-port-stop" }
 mime_guess = "=2.0.5"
 # A mesma versão que o lockfile já tinha por dependência de build.
 semver = "=1.0.28"

@@ -49,7 +49,7 @@ async fn update_state_restart_never_announces_success_after_write_refusal() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     struct Restart { path: std::path::PathBuf, calls: AtomicUsize }
     impl update::Restarter for Restart {
-        async fn restart(&self) -> Result<(), String> {
+        async fn restart(&self, _why: update::stop_intent::RestartIntent) -> Result<(), String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             std::fs::write(&self.path, br#"{"extra":"\ud800"}"#).unwrap();
             Ok(())

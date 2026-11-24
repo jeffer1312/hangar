@@ -230,8 +230,7 @@ pub(super) struct Device {
     /// Marca do estado lido antes do clique: "pronto" com a mesma marca é o desfecho de uma atualização anterior.
     baseline_ts: Option<String>,
     diary_scroll: ScrollHandle,
-    pub(super) migration: Remote<Option<super::migration::MigrationView>>,
-    pub(super) migration_poll: Option<Task<()>>,
+    pub(super) status: super::status::StatusPage,
 }
 
 impl Drop for Device {
@@ -274,7 +273,8 @@ pub(super) enum DeviceReply {
     Channel(u64, bool, Result<Value, Failure>),
     Started(u64, Launch),
     Tick(u64, Result<Value, Failure>),
-    Migration(u64, Result<Value, Failure>),
+    /// Um evento da conexão da página Status, pela geração dela.
+    Status(u64, super::status::Feed),
     Report(Vec<Missed>, Base, Option<String>),
 }
 
@@ -351,8 +351,6 @@ impl Hangar {
         self.device = Device::new(window, cx);
         self.sync_channel_update_guard(cx);
         self.load_rate(cx);
-        // A troca levou a leitura periódica junto; com a página aberta, ela recomeça no servidor novo.
-        if self.settings == Some(Page::Migration) { self.migration_opened(cx); }
     }
 
     /// Página aberta: pede o que ela mostra do servidor.
@@ -360,8 +358,11 @@ impl Hangar {
         // Outra página: a tentativa de login perde a tela (a navegação e a busca passam por aqui).
         if page != Page::Accounts { self.accounts_page_left(); }
         if page != Page::Sync { self.sync_page_left(); }
+        if page != Page::Guests { self.guests_page_left(); }
         if page != Page::Connect { self.connect_page_left(); }
         if page != Page::Devices { self.devices_page_left(); }
+        if page != Page::Status { self.status_left(); }
+        if page != Page::WhatsApp { self.whatsapp_page_left(); }
         match page {
             Page::General if !self.device.rate.loading && self.device.rate_value().is_none() => self.load_rate(cx),
             Page::Diary => {
@@ -388,10 +389,12 @@ impl Hangar {
             Page::Servers => { self.machines_opened(cx); self.server_config_opened(page, cx); }
             Page::Windows => self.computer_opened(cx),
             Page::Sync => self.sync_opened(cx),
+            Page::Guests => self.guests_opened(cx),
             Page::Connect => self.connect_opened(cx),
             Page::Devices => self.devices_opened(cx),
             Page::SharedConfig => self.shared_config_opened(cx),
-            Page::Migration => self.migration_opened(cx),
+            Page::Status => self.status_opened(cx),
+            Page::WhatsApp => self.whatsapp_opened(cx),
             _ => {}
         }
     }
@@ -696,9 +699,7 @@ impl Hangar {
             DeviceReply::Report(results, base, token) => {
                 self.device.report = Some(report_done(results, base, token));
             }
-            DeviceReply::Migration(seq, result) => {
-                self.device.migration.finish(seq, result.map(|v| super::migration::parse(&v)).map_err(|e| Self::failure(&e)));
-            }
+            DeviceReply::Status(generation, feed) => { self.receive_status(generation, feed, cx); return; }
             DeviceReply::Rate(seq, result) => {
                 let parsed = result.map_err(|e| Self::failure(&e))
                     .map(|v| v.get("usd_brl").and_then(Value::as_f64).filter(|r| r.is_finite() && *r > 0.));
@@ -1199,9 +1200,6 @@ impl Hangar {
             .child(self.heading("settings_about_server_group"))
             .child(settings_box().child(server_row).child(update_row).children(progress))
             .children(self.render_dev_mode(cx).map(|row| row.mt(px(12.))))
-            .when(!self.active_invite() && self.api.is_some(), |el| el.child(div().mt(px(12.)).child(Button::new("migration-open").outline().small()
-                .icon(IconName::Activity).label(tr_shared("migration_open", &[]))
-                .on_click(cx.listener(|this, _, window, cx| this.open_settings(Page::Migration, window, cx))))))
             .when(!self.active_invite() && !self.device.channel.unsupported, |el| el.child(self.heading("settings_channel_title")).child(self.render_channel(cx)))
             .into_any_element()
     }

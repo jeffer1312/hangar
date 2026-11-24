@@ -199,16 +199,23 @@ pub fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEv
         Err(e) => return Err(e),
     };
     let mut pi = super::PiStream::default();
+    let mut agy = super::AgyStream::default();
+    let mut repl = super::code_mode::ReplLinks::default();
     for raw in BufReader::new(file).split(b'\n') {
         let raw = raw?;
         let line = String::from_utf8_lossy(&raw);
         let Some(value) = pyjson::loads_lossless(line.trim_end_matches('\r')) else { continue };
         let Value::Object(obj) = &value else { continue };
         let events = match provider {
-            Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
+            Provider::Claude | Provider::ClaudeHeadless => {
+                let mut events = claude::parse_obj(obj, peer::name_of_pid);
+                repl.apply(&mut events, None, 0);
+                events
+            }
             Provider::Codex => codex::parse_rollout_obj(&value),
             Provider::Pi | Provider::Omp => pi.feed(&value),
             Provider::Kimi => super::parse_kimi_object(&value),
+            Provider::Antigravity => agy.feed(&value),
             Provider::Orq => return Ok(()),
         };
         for event in events {
@@ -318,6 +325,10 @@ fn ts_of_obj(obj: &Map<String, Value>) -> f64 {
     if let Some(t) = obj.get("timestamp").and_then(Value::as_str) {
         return py::iso_timestamp(&t.replace('Z', "+00:00")).unwrap_or(0.0);
     }
+    // Antigravity: `created_at` em ISO.
+    if let Some(t) = obj.get("created_at").and_then(Value::as_str) {
+        return py::iso_timestamp(&t.replace('Z', "+00:00")).unwrap_or(0.0);
+    }
     if let Some(n) = obj.get("message").and_then(Value::as_object).and_then(|m| m.get("timestamp")).and_then(Value::as_f64) {
         return n / 1000.0;
     }
@@ -364,13 +375,19 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
     }
     let mut held_ids = HashSet::new();
     let mut pi = super::PiStream::default();
+    let mut agy = super::AgyStream::default();
+    let mut repl = super::code_mode::ReplLinks::default();
     let mut raw = Vec::new();
     let mut i = 0u64;
+    let mut next_at = offset;
     loop {
         raw.clear();
-        if rd.read_until(b'\n', &mut raw)? == 0 {
+        let line_at = next_at;
+        let read = rd.read_until(b'\n', &mut raw)?;
+        if read == 0 {
             break;
         }
+        next_at += read as u64;
         let idx = i;
         i += 1;
         // O Python lê em modo texto: "\r\n" chega como "\n".
@@ -401,13 +418,20 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
                     }
                 }
                 let mut evs = match req.provider {
-                    Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
+                    Provider::Claude | Provider::ClaudeHeadless => {
+                        let mut evs = claude::parse_obj(obj, peer::name_of_pid);
+                        repl.apply(&mut evs, Some(&req.jsonl), line_at);
+                        evs
+                    }
                     Provider::Codex => codex::parse_rollout_obj(&value),
                     Provider::Pi | Provider::Omp => pi.feed(&value),
                     Provider::Kimi => super::parse_kimi_object(&value),
+                    Provider::Antigravity => agy.feed(&value),
                     Provider::Orq => super::parse_orq(&value, req.jsonl.parent()),
                 };
                 if let Some(fold) = notices.as_mut() { fold.feed(obj, &mut evs); }
+                // Início da linha, como no leitor ao vivo: o divisor da troca de agente se posiciona por ele.
+                for ev in &mut evs { ev.offset.get_or_insert(line_at); }
                 let ts = if req.provider == Provider::Orq {
                     obj.get("ts").and_then(Value::as_str).and_then(py::iso_timestamp).unwrap_or(0.0)
                 } else { ts_of_obj(obj) };

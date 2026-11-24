@@ -83,5 +83,5 @@ const styles = StyleSheet.create((theme) => ({
   first: { borderTopLeftRadius: theme.base.radius.lg, borderTopRightRadius: theme.base.radius.lg },
   last: { borderBottomLeftRadius: theme.base.radius.lg, borderBottomRightRadius: theme.base.radius.lg },
   // O separador começa na coluna do texto, como nas listas do iOS.
-  divider: { height: StyleSheet.hairlineWidth, marginLeft: 46 },
+  divider: { height: StyleSheet.hairlineWidth, marginLeft: theme.base.space[10] + theme.base.space[1.5] },
 }));

@@ -12,7 +12,7 @@ use super::protocol::RuntimeError;
 use super::terminal::TerminalTarget;
 use crate::list::procs::{ProcessView,SystemProcs};
 use crate::session_open::claude::ClaudeContext;
-use crate::session_open::terminal::{PaneSpec,TerminalEnv};
+use crate::session_open::terminal::{Mux, MuxOutput, PaneSpec, TerminalEnv};
 use crate::session_open::{Account,ChangeReason,PermissionMode,SessionChange,SessionSpec,Surface};
 use serde_json::{Value,json};
 use std::path::PathBuf;
@@ -56,6 +56,22 @@ enum Life {
 /// A sessão Claude como está: o spec dela (gravado ⊕ observado), a conversa, a chave, a geração da fila
 /// e a base fora do plano.
 struct Current { spec:SessionSpec, sid:String, generation:u64, life:Life, previous_non_plan:Option<String>, settings:Option<Value> }
+
+pub(crate) struct EngineReopenSource { spec: SessionSpec, sid: String, generation: u64 }
+
+impl EngineReopenSource {
+    fn matches(&self, current: &Current) -> bool {
+        self.sid == current.sid && self.generation == current.generation && same_engine_spec(&self.spec, &current.spec)
+    }
+}
+
+fn same_engine_spec(a: &SessionSpec, b: &SessionSpec) -> bool {
+    a.key == b.key && a.account == b.account && a.model == b.model && a.service_tier == b.service_tier && a.surface == b.surface
+}
+
+fn engine_source_changed() -> RuntimeError {
+    refused("session_source_changed", "A conversa mudou enquanto o catálogo era conferido. Abra o seletor novamente.")
+}
 
 /// Sessão ocupada (subindo, esperando resposta, trabalhando, fila pendente) diante do `claude_current`.
 #[derive(Clone,Copy,PartialEq,Eq)]
@@ -118,6 +134,19 @@ fn tree(root:i64) -> Result<Vec<(i64,f64)>,RuntimeError> {
     let procs=SystemProcs::default();
     let children=procs.children(Duration::ZERO).map_err(|_|refused("lifecycle_process_read","os processos da máquina não puderam ser lidos"))?;
     Ok(crate::list::discover::descendants(root,&children).into_iter().filter_map(|pid|procs.start_time(pid).map(|birth|(pid,birth))).collect())
+}
+
+fn cleanup_uncertain(detail: &str) -> RuntimeError {
+    refused(NEW_ALIVE, &format!("{detail}; nada foi reaberto por cima do Claude sem confirmar a saída"))
+}
+
+fn failed_terminal_pid(output: &MuxOutput) -> Result<Option<i64>, RuntimeError> {
+    match output.code {
+        Some(0) => output.stdout.trim().parse::<i64>().ok().filter(|pid| *pid > 0).map(Some)
+            .ok_or_else(|| cleanup_uncertain("o multiplexador não informou o processo do terminal")),
+        Some(1) if crate::list::mux::is_absence(&output.stderr) => Ok(None),
+        _ => Err(cleanup_uncertain("o multiplexador não confirmou se o terminal saiu")),
+    }
 }
 
 async fn wait_gone(lives:Vec<(i64,f64)>,limit:Duration) -> Result<(),RuntimeError> {
@@ -238,16 +267,20 @@ static ANTHROPIC:std::sync::LazyLock<regex::Regex>=std::sync::LazyLock::new(||re
 /// `para_headless` do Python): o motor que sumiu, o modelo malformado ou de outro provedor, o Fast sem
 /// suporte e o corpo do motor ilegível. Bloqueante. Devolve os avisos para a pessoa (o motor que sumiu).
 fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut SessionSpec,settings:Option<&Value>,
-             runtime:tokio::runtime::Handle) -> Result<Vec<String>,RuntimeError> {
+             runtime:tokio::runtime::Handle,automatic:bool) -> Result<Vec<String>,RuntimeError> {
     use crate::session_open::OpenFacts;
     let facts=crate::session_open::facts::LocalFacts::new(env.clone(),runtime);
     let mut warnings=Vec::new();
-    if let Account::Engine { name,account,config_dir,.. }=&next.account {
+    if let Account::Engine { name,account,binding,config_dir,.. }=&mut next.account {
         // Ilegível não diz que o motor sumiu: tirar a sessão dele seria trocar a conta calado.
         let engines=crate::session_open::facts::engine_names(env)
             .map_err(|_|refused("reopen_engines_unreadable","o catálogo de motores (engines.json) não pôde ser lido; nada foi reaberto"))?;
-        if !engines.contains(name) {
-            if account.is_some() {return Err(refused("reopen_engine_missing","motor da conta ChatGPT fixa indisponível; nada foi reaberto"));}
+        if engines.contains(name) {
+            let route = crate::session_open::facts::session_engine_route(&crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref())
+                .map_err(|error| refused("launch_engine_account", &error.msg))?;
+            if let Some(route) = route { *account = Some(route.account); }
+        } else {
+            if account.is_some() || binding.is_some() {return Err(refused("reopen_engine_missing","motor da conta ChatGPT fixa indisponível; nada foi reaberto"));}
             // A escolha lida é do motor: numa conta Anthropic ela criaria uma sessão inviável.
             tracing::warn!(session=%next.name,engine=%name,"motor sumiu do catálogo; a sessão volta na conta Anthropic");
             warnings.push(format!("O motor {name} saiu do catálogo: a sessão voltou na conta Anthropic, sem o modelo, o esforço e o Fast dele."));
@@ -263,14 +296,46 @@ fn preflight(env:&crate::accounts::environment::AccountEnvironment,next:&mut Ses
         tracing::warn!(session=%next.name,"modelo que não é da Anthropic; a sessão volta no padrão da conta");
         next.model=None;
     }
+    // Acordar, restaurar e a troca de conta do limite não são pedido da pessoa: a velocidade que perdeu o suporte
+    // cai (Ultra Fast em Fast, Fast na normal) em vez de a sessão não voltar.
+    if automatic {next.service_tier=crate::session_open::claude::relaunch_tier(next,&facts);}
     if let Some(tier)=next.service_tier && !facts.supports_fast(engine.as_deref(),next.model.as_deref()) {
-        if tier==crate::session_open::ServiceTier::Priority {
+        if tier.is_fast() {
             return Err(refused("launch_service_tier","service_tier exige Claude com motor GPT no CLIProxyAPI local"));
         }
-        next.service_tier=None;
+        if !matches!(next.account, Account::Engine { binding: Some(_), .. }) { next.service_tier=None; }
+    }
+    // Mesma regra da criação e do lançamento sem terminal, antes de parar a sessão atual: com terminal o painel
+    // abre sem passar pelo `plan_for`.
+    if next.service_tier==Some(crate::session_open::ServiceTier::Ultrafast) {
+        let account=match &next.account {Account::Engine { account,.. }=>account.clone(),_=>None};
+        if !facts.supports_ultrafast(engine.as_deref(),next.model.as_deref(),account.as_deref()) {
+            return Err(refused("launch_service_tier",crate::engines::catalog::ULTRAFAST_REFUSED));
+        }
     }
     if next.service_tier.is_some() {engine_body(env,next.account.config_dir(),std::path::Path::new(&next.cwd),settings)?;}
     Ok(warnings)
+}
+
+fn validate_provider_destination(env: &crate::accounts::environment::AccountEnvironment, next: &mut SessionSpec, handle: &tokio::runtime::Handle) -> Result<crate::session_open::claude::EngineRoute, RuntimeError> {
+    use crate::session_open::facts::{LocalFacts, claude_provider_route};
+    let fail = |e: crate::session_open::OpenError| refused(e.code.unwrap_or("erro_troca_conta"), &e.msg);
+    let Account::Engine { name, account: Some(account), binding: Some(binding), context_window, .. } = &mut next.account else {
+        return Err(refused("erro_cliproxy_conta", "Destino sem conta ChatGPT vinculada"));
+    };
+    let model = next.model.as_deref().filter(|model| !model.is_empty())
+        .ok_or_else(|| refused("erro_modelo_fora_catalogo", "Escolha um modelo da conta de destino."))?;
+    let facts = LocalFacts::new(env.clone(), handle.clone());
+    let service = crate::accounts::AccountService::new(env.clone());
+    let route = claude_provider_route(&service, name, account, binding).map_err(fail)?;
+    let (base, window) = facts.fixed_engine_selection(name, account, Some(model)).map_err(fail)?;
+    *context_window = window;
+    let current = claude_provider_route(&service, name, account, binding).map_err(fail)?;
+    if route.prefix != current.prefix || route.base_url != current.base_url {
+        return Err(refused("erro_cliproxy_conta", "O destino mudou enquanto o catálogo era conferido. Escolha novamente."));
+    }
+    next.model = Some(base);
+    Ok(route)
 }
 
 /// O pré-voo do `engines.service_tier_settings`: o `CLAUDE_CODE_EXTRA_BODY` que o lançador do motor vai
@@ -344,7 +409,7 @@ fn spec_of(procs:&dyn ProcessView,pid:i64,key:&str,name:&str,cwd:String,created:
         .or_else(||argv.iter().find_map(|a|a.strip_prefix(&format!("{name}=")).map(str::to_owned)));
     let config_dir=env("CLAUDE_CONFIG_DIR");
     let account=match env("CP_ENGINE") {
-        Some(engine)=>Account::Engine { name:engine,account:env("CP_ENGINE_ACCOUNT"),config_dir,
+        Some(engine)=>Account::Engine { name:engine,account:env("CP_ENGINE_ACCOUNT"),binding:env("CP_ENGINE_BINDING"),config_dir,
             context_window:env("CLAUDE_CODE_MAX_CONTEXT_TOKENS").and_then(|v|v.parse().ok()),context_window_unknown:false },
         None=>config_dir.map_or(Account::Default,|config_dir|Account::Claude { config_dir }),
     };
@@ -356,8 +421,9 @@ fn spec_of(procs:&dyn ProcessView,pid:i64,key:&str,name:&str,cwd:String,created:
         model:flag("--model"),effort:flag("--effort"),service_tier:tier,
         permission_mode:flag("--permission-mode").as_deref().and_then(PermissionMode::claude),
         subagent_model:if engine {None} else {env("CLAUDE_CODE_SUBAGENT_MODEL")},customizations:None,
-        jev:env("HANGAR_JEV").as_deref()==Some("on"),read_only:env("HANGAR_ORQ_READ_ONLY").as_deref()==Some("1"),
-        worktree:None,creator:None,created_at:created,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false };
+        jev:env("HANGAR_JEV").as_deref()==Some("on"),code_mode:env(crate::session_open::claude::CODE_MODE_ENV).is_some_and(|v|crate::config_sync::runtime::env_value_on(&Value::from(v))),
+        read_only:env("HANGAR_ORQ_READ_ONLY").as_deref()==Some("1"),
+        worktree:None,creator:None,created_at:created,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false };
     Ok((spec,settings))
 }
 
@@ -367,25 +433,51 @@ pub(super) async fn reconcile_account(env:&crate::accounts::environment::Account
     let Some(dir)=config_dir.filter(|dir|!dir.is_empty()) else {return Ok(Vec::new())};
     let Some(account)=crate::session_open::claude::hangar_account(std::path::Path::new(dir)) else {return Ok(Vec::new())};
     let diary=crate::diag::diary_dir_in(env);
-    let (_,result)=crate::session_open::open::reconcile_hangar_dir(env.home.clone(),dir,&account,cwd,crate::session_open::open::RECONCILE_LIMIT,None,
+    let (_,result)=crate::session_open::open::reconcile_hangar_dir(env.home.clone(),Some(env.default_claude_json()),dir,&account,cwd,crate::session_open::open::RECONCILE_LIMIT,None,
         |events|{crate::diag::record(diary,events,"conta");}).await;
     result.map_err(|error|refused(error.code.unwrap_or("erro_conta_reconciliacao_falhou"),&error.msg))
 }
 
-/// A marca da troca de conta em curso; sai quando a reabertura termina, de qualquer jeito.
-struct SwitchMark(PathBuf);
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ProviderSwitchRecord { generation: u64, source: SessionSpec, spec: SessionSpec }
+
+struct SwitchMark { path: PathBuf, keep: bool }
 impl SwitchMark {
+    fn clear(mut self) -> std::io::Result<()> {
+        self.keep = true;
+        match std::fs::remove_file(&self.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
+
     fn write(home:&std::path::Path,next:&SessionSpec) -> Result<Option<Self>,RuntimeError> {
         // Sessão adotada do terminal não tem registro: a subida não teria o que acertar.
         if crate::session_open::record::path(home,&next.key).is_err() {return Ok(None);}
         let unmarked=|_|refused("reopen_switch_mark","a troca não pôde ser marcada; nada foi reaberto");
         crate::session_open::record::write_switching(home,next).map_err(unmarked)?;
-        crate::session_open::record::switching_path(home,&next.key).map(|path|Some(SwitchMark(path))).map_err(unmarked)
+        crate::session_open::record::switching_path(home,&next.key).map(|path|Some(SwitchMark { path, keep: false })).map_err(unmarked)
+    }
+
+    fn provider(home: &std::path::Path, current: &Current, next: &SessionSpec) -> std::io::Result<Self> {
+        let path = crate::session_open::record::path(home, &next.key)?.with_extension("provider-switch");
+        std::fs::create_dir_all(crate::session_open::record::dir(home))?;
+        let mut source = current.spec.clone();
+        source.conversation = Some(current.sid.clone());
+        let record = ProviderSwitchRecord { generation: current.generation + 1, source, spec: next.clone() };
+        super::queue::atomic_write(&path, &serde_json::to_vec(&record)?)?;
+        Ok(Self { path, keep: true })
+    }
+
+    fn restore_origin(&self) -> std::io::Result<()> {
+        let mut record: ProviderSwitchRecord = serde_json::from_slice(&super::queue::read_replaced(&self.path)?)?;
+        record.spec = record.source.clone();
+        super::queue::atomic_write(&self.path, &serde_json::to_vec(&record)?)
     }
 }
 impl Drop for SwitchMark {
     fn drop(&mut self) {
-        if let Err(error)=std::fs::remove_file(&self.0) && error.kind()!=std::io::ErrorKind::NotFound {
+        if !self.keep && let Err(error)=std::fs::remove_file(&self.path) && error.kind()!=std::io::ErrorKind::NotFound {
             tracing::warn!(kind=?error.kind(),"marca da troca de conta ficou; a subida a resolve");
         }
     }
@@ -397,34 +489,104 @@ impl Drop for SwitchMark {
 pub fn settle_switches(env:&crate::accounts::environment::AccountEnvironment) {
     let dir=crate::session_open::record::dir(&env.home);
     let Ok(entries)=std::fs::read_dir(&dir) else {return};
-    for path in entries.flatten().map(|e|e.path()).filter(|p|p.extension().is_some_and(|x|x=="switching")) {
-        let to=std::fs::read(&path).ok().and_then(|raw|serde_json::from_slice::<SessionSpec>(&raw).ok());
-        match to {
-            Some(to) if to.conversation.as_deref().is_some_and(|sid|super::claude_launch::transcript(env,&to,sid).is_file())=>{
-                tracing::warn!(session=%to.name,"troca de conta interrompida; a sessão fica na conta em que a conversa está");
-                if let Err(error)=crate::session_open::record::write(&env.home,&to) {tracing::warn!(kind=?error.kind(),"registro da troca interrompida não gravado");}
-                settle_sidecar(env,&to);
+    for path in entries.flatten().map(|e|e.path()).filter(|p|p.extension().is_some_and(|x|x=="switching" || x=="provider-switch")) {
+        let provider = path.extension().is_some_and(|x|x=="provider-switch");
+        let read = super::queue::read_replaced(&path).and_then(|raw| {
+            if provider {
+                provider_switch_recovery(env, serde_json::from_slice(&raw)?)
+            } else {
+                let spec: SessionSpec = serde_json::from_slice(&raw)?;
+                let moved = spec.conversation.as_deref().is_some_and(|sid| super::claude_launch::transcript(env, &spec, sid).is_file());
+                Ok(moved.then_some((spec, true)))
+            }
+        });
+        match read {
+            Ok(Some((to, committed)))=>{
+                let terminal_switch = provider && to.surface == Surface::Terminal;
+                let result = if committed {
+                    let sidecar = if terminal_switch { Ok(()) } else { settle_sidecar(env, &to, provider) };
+                    sidecar.and_then(|_| crate::session_open::record::write(&env.home,&to))
+                        .and_then(|_| crate::session_open::record::confirm_binding(&env.home,&to))
+                } else { Ok(()) };
+                if let Err(error) = result {
+                    tracing::warn!(session=%to.name,kind=?error.kind(),"troca interrompida não gravada; marca conservada");
+                    continue;
+                }
+                if terminal_switch {
+                    // Com o mesmo multiplexador, a restauração comum não reabre o terminal que saiu na troca.
+                    let recorded = crate::session_open::fallen::remember_provider_switch(&env.home, &to.name, crate::session_open::fallen::Fallen {
+                        key: to.key.clone(), provider: to.provider, conversation: to.conversation,
+                        permission_mode: to.permission_mode.map(|mode| mode.name().to_owned()), cwd: Some(to.cwd),
+                        died_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
+                        cause: "provider_switch_interrupted".into(),
+                    });
+                    if !recorded { continue; }
+                }
             },
-            Some(_)=>{},
-            None=>tracing::warn!(path=%path.display(),"marca de troca de conta ilegível; descartada"),
+            Ok(_)=>{},
+            Err(error)=>{
+                tracing::warn!(path=%path.display(),kind=?error.kind(),"marca de troca de conta ilegível; marca conservada");
+                continue;
+            },
         }
-        let _=std::fs::remove_file(&path);
+        if let Err(error) = std::fs::remove_file(&path) && error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(kind=?error.kind(), "marca da troca recuperada não pôde ser removida");
+        }
+    }
+}
+
+fn provider_switch_recovery(env: &crate::accounts::environment::AccountEnvironment, record: ProviderSwitchRecord) -> std::io::Result<Option<(SessionSpec, bool)>> {
+    crate::session_open::record::path(&env.home, &record.spec.key)?;
+    let (state, _) = super::codex_terminal::queue_files(&env.claude_base.join(".hangar-queue"), &record.spec.key);
+    let state = super::queue::read_replaced(&state)?;
+    let (state, _) = super::queue::State::load(&state)?;
+    if state.owner_key != record.spec.key || state.name != record.spec.name || state.runtime_state["terminal_lifecycle"]["closed"] == true {
+        return Ok(None);
+    }
+    if state.generation == record.generation {
+        Ok(Some((record.spec, true)))
+    } else if state.generation.checked_add(1) == Some(record.generation) && record.source.surface == Surface::Terminal {
+        Ok(Some((record.source, false)))
+    } else {
+        Ok(None)
     }
 }
 
 /// O sidecar sem terminal da sessão passa a dizer a conta de destino (é dele que a subida lê a conta).
-fn settle_sidecar(env:&crate::accounts::environment::AccountEnvironment,to:&SessionSpec) {
+fn settle_sidecar(env:&crate::accounts::environment::AccountEnvironment,to:&SessionSpec,provider:bool) -> std::io::Result<()> {
     let dir=env.home.join(".hangar").join("claude-headless");
-    let Ok(Some(mut meta))=super::codex_sidecar::read(&super::codex_sidecar::path(&dir,&to.name)) else {return};
-    if meta.get("key").and_then(Value::as_str)!=Some(to.key.as_str()) {return;}
-    let fresh=crate::session_open::open::headless_sidecar(to,to.conversation.as_deref().unwrap_or_default(),None,None,None);
-    for field in ["config_dir","engine","model","effort","context_window","service_tier"] {
+    let Some(mut meta)=super::codex_sidecar::read(&super::codex_sidecar::path(&dir,&to.name))? else {return Ok(())};
+    if meta.get("key").and_then(Value::as_str)!=Some(to.key.as_str()) {return Ok(());}
+    if provider && meta.get("session_id").and_then(Value::as_str)!=to.conversation.as_deref() {
+        return Err(std::io::Error::other("a conversa da troca interrompida mudou"));
+    }
+    let route = match &to.account {
+        Account::Engine { name, account, binding, .. } => crate::session_open::facts::session_engine_route(
+            &crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref()).ok().flatten(),
+        _ => None,
+    };
+    let mut fresh=crate::session_open::open::headless_sidecar(to,to.conversation.as_deref().unwrap_or_default(),None,None,route.as_ref());
+    if let Account::Engine { account:Some(account), .. } = &to.account && route.is_none() {
+        fresh["engine_account"] = json!(account);
+    }
+    if provider {
+        let matches_binding = ["engine", "engine_binding"].iter().all(|field| meta.get(*field).unwrap_or(&Value::Null) == &fresh[*field]);
+        if let Some(cano) = meta.get("cano").filter(|value| !value.is_null()) {
+            let gone = cano["pid"].as_i64().zip(cano["process_birth"].as_f64()).is_some_and(|(pid, birth)| {
+                super::lifecycle::process_absent(&SystemProcs::default(), pid, birth).unwrap_or(false)
+            });
+            if gone {
+                meta.remove("cano");
+            } else if !matches_binding {
+                return Err(std::io::Error::other("o processo da conta anterior não pôde ser descartado"));
+            }
+        }
+        if !matches_binding { meta.remove("problema"); }
+    }
+    for field in ["config_dir","engine","engine_binding","engine_account","engine_credential_id","engine_account_base_url","model","effort","subagent_model","context_window","service_tier"] {
         match fresh.get(field).filter(|v|!v.is_null()) {Some(value)=>{meta.insert(field.into(),value.clone());},None=>{meta.remove(field);}}
     }
-    if !matches!(to.account,Account::Engine{..}) {
-        for field in ["engine_account","engine_credential_id","engine_account_base_url"] {meta.remove(field);}
-    }
-    if let Err(error)=super::codex_sidecar::put(&dir,&to.name,&meta) {tracing::warn!(kind=?error.kind(),"sidecar da troca interrompida não gravado");}
+    super::codex_sidecar::put(&dir,&to.name,&meta)
 }
 
 impl RuntimeRegistry {
@@ -462,7 +624,10 @@ impl RuntimeRegistry {
         let spec=&current.spec;
         // A pasta do processo vivo, não a do spec: é nela que a CLI gravou a conversa.
         let mut meta=json!({"session_id":current.sid,"cwd":spec.cwd,"config_dir":target.metadata.config_dir,"model":spec.model});
-        if let Account::Engine { name,context_window,.. }=&spec.account { meta["engine"]=json!(name); meta["context_window"]=json!(context_window); }
+        if let Account::Engine { name,account,binding,context_window,.. }=&spec.account {
+            meta["engine"]=json!(name); meta["context_window"]=json!(context_window);
+            meta["engine_account"]=json!(account); meta["engine_binding"]=json!(binding);
+        }
         Ok(meta)
     }
 
@@ -563,7 +728,7 @@ impl RuntimeRegistry {
         let Ok(_ingress)=super::lifecycle::ClosedIngress::acquire_within(self.ingress(),name,Duration::from_secs(1)).await else {return Ok(false)};
         let home=self.codex_environment().home;
         // A porta fechada não exclui a troca de agente nem o acordar: os dois são conferidos aqui.
-        if super::codex_relaunch::transfer_open(&home,name,None,None) || self.waking_key(name).is_some() || self.claude_sidecar(name).await?.is_some() {
+        if self.handoff_held(name) || super::codex_relaunch::transfer_open(&home,name,None,None) || self.waking_key(name).is_some() || self.claude_sidecar(name).await?.is_some() {
             return Ok(false);
         }
         // Pergunta, fila, entrega incerta, turno e painel: a guarda da reabertura.
@@ -641,12 +806,36 @@ impl RuntimeRegistry {
     }
 
     async fn reopen_by_spec(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>) -> Result<Reopened,ReopenFailure> {
+        self.reopen_checked(name, change, between, resume, None, None).await
+    }
+
+    pub(crate) async fn reopen_claude_provider(&self, name: &str, source: &hangar_api::session::ClaudeProviderSource, change: SessionChange) -> Option<Result<Reopened, ReopenFailure>> {
+        if let Err(error) = self.claude_spec(name).await? { return Some(Err(ReopenFailure::refused(error))); }
+        Some(self.reopen_checked(name, change, None, None, Some(source), None).await)
+    }
+
+    pub(crate) async fn claude_engine_source(&self, name: &str, expected: &SessionSpec) -> Result<EngineReopenSource, ReopenFailure> {
+        let current = self.claude_current(name, BusyCheck::Skip, false).await.map_err(ReopenFailure::refused)?;
+        if !same_engine_spec(expected, &current.spec) { return Err(ReopenFailure::refused(engine_source_changed())); }
+        Ok(EngineReopenSource { spec: current.spec, sid: current.sid, generation: current.generation })
+    }
+
+    pub(crate) async fn reopen_claude_engine(&self, name: &str, source: &EngineReopenSource, change: SessionChange) -> Result<Reopened, ReopenFailure> {
+        self.reopen_checked(name, change, None, None, None, Some(source)).await
+    }
+
+    async fn reopen_checked(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>,provider_source:Option<&hangar_api::session::ClaudeProviderSource>,engine_source:Option<&EngineReopenSource>) -> Result<Reopened,ReopenFailure> {
         let transfer=|| {
-            let open=super::codex_relaunch::transfer_open(&self.codex_environment().home,name,None,None);
+            // A troca de agente à espera também conta: a vida nova do Claude levaria a fila que ela segurou para o Codex.
+            let open=self.handoff_held(name) || super::codex_relaunch::transfer_open(&self.codex_environment().home,name,None,None);
             if open {Err(ReopenFailure::refused(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente")))} else {Ok(())}
         };
         transfer()?;
-        let _ingress=super::lifecycle::ClosedIngress::acquire_unless_transfer(self.ingress(),name).await.map_err(ReopenFailure::refused)?;
+        let _ingress = if provider_source.is_some() {
+            super::lifecycle::ClosedIngress::acquire_provider_switch(self.ingress(), name).await
+        } else {
+            super::lifecycle::ClosedIngress::acquire_unless_transfer(self.ingress(), name).await
+        }.map_err(ReopenFailure::refused)?;
         // A transferência que começou enquanto esta esperava a porta.
         transfer()?;
         // Conferido de novo sob a porta: outra troca pode ter terminado enquanto esta esperava.
@@ -676,45 +865,99 @@ impl RuntimeRegistry {
             _=>BusyCheck::Refuse,
         };
         let mut current=self.claude_current(name,check,resume.is_some()).await.map_err(ReopenFailure::refused)?;
+        if let Some(source) = provider_source {
+            self.check_provider_source(&current, source, meta.as_ref()).map_err(ReopenFailure::refused)?;
+        }
+        if engine_source.is_some_and(|source| !source.matches(&current)) {
+            return Err(ReopenFailure::refused(engine_source_changed()));
+        }
         // A vida nova só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ela.
         if let Some(meta)=meta.as_ref().filter(|meta|asleep_of(meta).is_some()) && let Some(key)=meta["key"].as_str() {
-            self.restamp_asleep(key,meta["asleep"]["since"].as_f64().unwrap_or(0.0)).await.map_err(ReopenFailure::refused)?;
+            self.restamp_asleep(key,meta["asleep"]["since"].as_f64().unwrap_or(0.0),false).await.map_err(ReopenFailure::refused)?;
         }
-        // Outra conversa leva as escolhas de plugins e skills guardadas dela, não as do processo de agora.
+        let mut archived_binding = None;
+        // Outra conversa leva as escolhas e a identidade registradas para ela.
         if let Some(sid)=resume.filter(|sid|*sid!=current.sid) {
             let (home,sid)=(self.codex_environment().home,sid.to_owned());
-            current.settings=tokio::task::spawn_blocking(move||crate::claude_customizations::stored(&home,&sid)).await
-                .map_err(|_|ReopenFailure::refused(refused("claude_customizations_read_failed","as escolhas da conversa não puderam ser lidas")))?
-                .map_err(|(code,detail)|ReopenFailure::refused(refused(code,detail)))?;
+            let (settings, archived)=tokio::task::spawn_blocking(move||(
+                crate::claude_customizations::stored(&home,&sid),
+                crate::session_open::record::archived_claude(&home,&sid),
+            )).await.map_err(|_|ReopenFailure::refused(refused("claude_customizations_read_failed","as escolhas da conversa não puderam ser lidas")))?;
+            current.settings=settings.map_err(|(code,detail)|ReopenFailure::refused(refused(code,detail)))?;
+            if let Some(SessionSpec { account: Account::Engine { binding, .. }, .. }) = archived { archived_binding = binding; }
         }
         let sid=resume.unwrap_or(&current.sid).to_owned();
         let mut next=current.spec.with(&change);
         next.conversation=Some(sid.clone());
+        if provider_source.is_some() {
+            let Account::Engine { config_dir, .. } = &mut next.account else {
+                return Err(ReopenFailure::refused(refused("erro_cliproxy_conta", "Destino sem conta ChatGPT vinculada")));
+            };
+            *config_dir = current.spec.account.config_dir().map(str::to_owned);
+            next.subagent_model = None;
+            next.effort = None;
+        }
         if let Some(between)=between {between.adjust(&mut next);}
-        let mut warnings;
+        if let Some(expected) = archived_binding.as_deref()
+            && !matches!(&next.account, Account::Engine { binding: Some(binding), .. } if binding == expected) {
+            return Err(ReopenFailure::refused(refused("reopen_engine_account_mismatch", "A conversa de destino está vinculada a outra conta ChatGPT. Retome pelo Arquivo.")));
+        }
+        let (mut warnings, provider_route);
+        let automatic=matches!(change.reason,ChangeReason::RebootRestore|ChangeReason::ParkWake|ChangeReason::LimitSwitch|ChangeReason::Sleep);
+        let previous = (sid != current.sid).then(|| {
+            let mut record = current.spec.clone();
+            record.conversation = Some(current.sid.clone());
+            record
+        });
         {let (env,mut spec,settings,handle)=(self.codex_environment(),next,current.settings.clone(),tokio::runtime::Handle::current());
-            (next,warnings)=tokio::task::spawn_blocking(move||preflight(&env,&mut spec,settings.as_ref(),handle).map(|w|(spec,w))).await
-                .map_err(|_|ReopenFailure::refused(refused("reopen_preflight","a subida nova não pôde ser conferida")))?.map_err(ReopenFailure::refused)?;}
+            let provider_switch = provider_source.is_some();
+            (next,warnings,provider_route)=tokio::task::spawn_blocking(move|| {
+                let provider_route = provider_switch.then(|| validate_provider_destination(&env, &mut spec, &handle)).transpose()?;
+                let warnings = preflight(&env,&mut spec,settings.as_ref(),handle,automatic)?;
+                if let Some(previous) = &previous {
+                    crate::session_open::record::confirm_binding(&env.home, previous)
+                        .map_err(|_| refused("reopen_engine_binding_write", "Não consegui guardar a conta da conversa atual no Arquivo; nada foi reaberto."))?;
+                }
+                Ok((spec,warnings,provider_route))
+            }).await.map_err(|_|ReopenFailure::refused(refused("reopen_preflight","a subida nova não pôde ser conferida")))?.map_err(ReopenFailure::refused)?;}
         // O único aviso do pré-voo é o motor que sumiu.
         if !warnings.is_empty() {self.diag.report("runtime.reopen_engine_gone",name,"reopen_engine_gone","o motor saiu do catálogo e a sessão volta na conta Anthropic");}
         warnings.extend(reconcile_account(&self.codex_environment(),next.account.config_dir(),&next.cwd).await.map_err(ReopenFailure::refused)?);
         if let Some(between)=between {between.check(&current.spec,&next,&current.sid).await.map_err(ReopenFailure::refused)?;}
-        let start=self.prepare_start(name,&next,&current,&sid).await.map_err(ReopenFailure::refused)?;
-        // A conversa que muda de conta fica marcada até a vida nova estar gravada: o Rust que cair no meio
-        // sobe pela conta em que ela estiver (`settle_switches`).
-        let _switching=match between {
-            Some(_)=>SwitchMark::write(&self.codex_environment().home,&next).map_err(ReopenFailure::refused)?,
-            None=>None,
-        };
+        let start=self.prepare_start(name,&next,&current,&sid,provider_route.as_ref()).await.map_err(ReopenFailure::refused)?;
+        if let Some(source) = provider_source {
+            let last = self.claude_current(name, BusyCheck::Refuse, false).await.map_err(ReopenFailure::refused)?;
+            if self.panel_open(name) { return Err(ReopenFailure::refused(busy("terminal_panel_active"))); }
+            self.check_provider_source(&last, source, meta.as_ref()).map_err(ReopenFailure::refused)?;
+            if last.generation != current.generation || last.sid != current.sid || last.spec.account != current.spec.account {
+                return Err(ReopenFailure::refused(refused("session_source_changed", "A conversa mudou enquanto o destino era conferido.")));
+            }
+        }
+        if let Some(source) = engine_source {
+            let last = self.claude_current(name, BusyCheck::Refuse, false).await.map_err(ReopenFailure::refused)?;
+            if !source.matches(&last) { return Err(ReopenFailure::refused(engine_source_changed())); }
+        }
+        // Quando o transcript é movido, a recuperação pode seguir a pasta que o recebeu.
+        let _switching = if between.is_some() {
+            SwitchMark::write(&self.codex_environment().home, &next).map_err(ReopenFailure::refused)?
+        } else { None };
+        let mut provider_mark = if provider_source.is_some() {
+            // A geração avançada prova a saída da origem; sem ela a marca só permite recuperar a origem.
+            Some(SwitchMark::provider(&self.codex_environment().home, &current, &next).map_err(|error|
+                ReopenFailure::refused(refused("reopen_switch_mark", &format!("a troca não pôde ser registrada ({error})"))))?)
+        } else { None };
         match self.stop_claude(name,&current,next.surface).await {
             Ok(())=>{},
-            Err(Stop::Before(error))=>return Err(ReopenFailure::refused(error)),
-            // O processo antigo que não saiu não é reaberto por cima: seriam dois Claude na mesma conversa.
+            Err(Stop::Before(error))=>{
+                if let Some(mark) = provider_mark.as_mut() { mark.keep = false; }
+                return Err(ReopenFailure::refused(error));
+            },
             Err(Stop::Alive(error))=>{
+                if let Some(mark) = provider_mark.as_mut() { mark.keep = false; }
                 super::actor::mark_live_error(&self.live_channel(name),&error.code,&error.message);
                 return Err(ReopenFailure { error,stopped:true,landed:None });
             },
-            Err(Stop::After(error))=>return Err(self.restore_claude(name,&current,error).await),
+            Err(Stop::After(error))=>return Err(self.restore_before_provider_switch(name, &current, provider_mark, error).await),
         }
         // Sem terminal, o processo antigo saiu sem gravar o que recebeu: a vida nova responde.
         if resume.is_none() && matches!(current.life,Life::Headless{..}) {
@@ -728,11 +971,21 @@ impl RuntimeRegistry {
         }
         match self.start_claude(name,&next,start,&sid).await {
             Ok(())=>{
+                let mut record_failed = false;
                 if crate::session_open::record::path(&self.codex_environment().home,&next.key).is_ok() && let Err(error)=crate::session_open::record::write(&self.codex_environment().home,&next) {
+                    record_failed = true;
                     // A sessão nova está de pé, mas o restore e a próxima troca leriam o registro velho.
                     tracing::warn!(session=%name,kind=?error.kind(),"spec da reabertura não gravado");
                     self.diag.report("runtime.reopen_spec_unwritten",name,"reopen_spec_unwritten","a sessão reabriu e o registro dela não foi gravado");
                     warnings.push("A sessão reabriu, mas o registro dela não foi gravado: o restore e a próxima reabertura podem voltar como antes.".into());
+                }
+                if let Err(error) = crate::session_open::record::confirm_binding(&self.codex_environment().home, &next) {
+                    record_failed = true;
+                    tracing::warn!(session=%name,kind=?error.kind(),"vínculo da conversa reaberta não gravado no Arquivo");
+                    warnings.push("A sessão reabriu, mas o vínculo da conversa não foi gravado no Arquivo.".into());
+                }
+                if provider_source.is_some() && (record_failed || provider_mark.take().is_some_and(|mark| mark.clear().is_err())) {
+                    return Err(ReopenFailure { error: refused("reopen_engine_binding_write", "O Claude já reabriu no destino, mas não consegui finalizar o registro da troca. Confira a conta da conversa antes de tentar novamente."), stopped: true, landed: Some(next.surface) });
                 }
                 Ok(Reopened { spec:Some(next),changed:true,warnings })
             },
@@ -748,9 +1001,38 @@ impl RuntimeRegistry {
                     super::actor::mark_live_error(&self.live_channel(name),&error.code,&error.message);
                     return Err(ReopenFailure { error,stopped:true,landed:None });
                 }
-                Err(self.restore_claude(name,&current,error).await)
+                Err(self.restore_before_provider_switch(name, &current, provider_mark, error).await)
             },
         }
+    }
+
+    fn check_provider_source(&self, current: &Current, source: &hangar_api::session::ClaudeProviderSource, meta: Option<&Value>) -> Result<(), RuntimeError> {
+        let changed = || refused("session_source_changed", "A conversa ou a conta de origem mudou. Abra o seletor novamente.");
+        if current.spec.read_only || meta.and_then(asleep_of).is_some() || crate::session_open::record::path(&self.codex_environment().home, &current.spec.key).is_err() {
+            return Err(refused("erro_troca_conta", "Só é possível trocar o provedor de uma conversa Claude aberta e editável."));
+        }
+        let (engine, account, binding) = match &current.spec.account {
+            Account::Engine { name, account, binding, .. } => (Some(name.as_str()), account.as_deref(), binding.as_deref()),
+            Account::Claude { .. } | Account::Default => (None, None, None),
+            _ => return Err(changed()),
+        };
+        if source.headless != matches!(&current.life, Life::Headless { .. }) || engine != source.engine.as_deref()
+            || account != source.engine_account.as_deref() || binding != source.engine_binding.as_deref() {
+            return Err(changed());
+        }
+        let (transcript, terminal_life) = match &current.life {
+            Life::Terminal { target } => (PathBuf::from(&target.transcript), Some(format!("t:{}", target.binding.created))),
+            Life::Headless { .. } => (super::claude_launch::transcript(&self.codex_environment(), &current.spec, &current.sid), None),
+            Life::Bare { .. } => return Err(changed()),
+        };
+        if source.lifecycle_id != format!("k:{}", current.spec.key) && terminal_life.as_deref() != Some(source.lifecycle_id.as_str()) {
+            return Err(changed());
+        }
+        let expected = std::path::Path::new(&source.jsonl);
+        if !expected.is_absolute() || crate::list::links::resolve_lenient(expected) != crate::list::links::resolve_lenient(&transcript) {
+            return Err(changed());
+        }
+        Ok(())
     }
 
     /// A sessão, o spec dela e se ela está parada. Ocupada recusa com o motivo, antes de qualquer efeito.
@@ -782,8 +1064,8 @@ impl RuntimeRegistry {
                     if let Some(effort)=view["effort"].as_str().filter(|e|EFFORTS.contains(e)) {spec.effort=Some(effort.into());}
                 }
             }
-            // Na troca por limite a fila foi segurada para ir com a conversa à conta nova.
-            if checks_busy && !self.limit_held(name) && self.queue_pending(&spec.key).await {return Err(busy("erro_fila_pendente"));}
+            // Na troca por limite ou de agente a fila foi segurada para ir com a conversa ao destino novo.
+            if checks_busy && !self.queue_held(name) && self.queue_pending(&spec.key).await {return Err(busy("erro_fila_pendente"));}
             if spec.permission_mode.is_none() {
                 spec.permission_mode=Some(super::claude_launch::account_mode(&env,spec.account.config_dir())?);
             }
@@ -820,7 +1102,7 @@ impl RuntimeRegistry {
             return Err(refused("permission_mode_unknown","o modo de permissão da sessão não é conhecido; nada foi reaberto"));
         }
         // Parada, sem pergunta, sem fila e sem entrega incerta: os motivos do `_motivo_ocupada`.
-        if checks {handle.control(format!("guard:reopen:{}",crate::mods::state::random_hex(8)),"lifecycle_guard".into(),json!({"queued_ok":self.limit_held(name)})).await?;}
+        if checks {handle.control(format!("guard:reopen:{}",crate::mods::state::random_hex(8)),"lifecycle_guard".into(),json!({"queued_ok":self.queue_held(name)})).await?;}
         Ok(Current { sid:target.binding.conversation.clone(),generation:target.generation,previous_non_plan:observed.map(|v|v.previous_non_plan),
             settings,spec,life:Life::Terminal { target } })
     }
@@ -850,7 +1132,7 @@ impl RuntimeRegistry {
     }
 
     /// O comando da vida nova, com tudo que pode recusar antes de encerrar a antiga.
-    async fn prepare_start(&self,name:&str,next:&SessionSpec,current:&Current,sid:&str) -> Result<Start,RuntimeError> {
+    async fn prepare_start(&self,name:&str,next:&SessionSpec,current:&Current,sid:&str,expected_provider:Option<&crate::session_open::claude::EngineRoute>) -> Result<Start,RuntimeError> {
         let env=self.codex_environment();
         let mode=next.permission_mode.ok_or_else(||refused("permission_mode_unknown","o modo de permissão da sessão não é conhecido; nada foi reaberto"))?;
         if mode==PermissionMode::BypassPermissions {
@@ -869,10 +1151,13 @@ impl RuntimeRegistry {
             }
         } else {None};
         let route=match &next.account {
-            Account::Engine { name:engine,account:Some(account),.. }=>Some(crate::session_open::facts::fixed_account(
-                &crate::accounts::AccountService::new(env.clone()),engine,account).map_err(|e|refused("launch_engine_account",&e.msg))?),
+            Account::Engine { name:engine,account,binding,.. }=>crate::session_open::facts::session_engine_route(
+                &crate::accounts::AccountService::new(env.clone()),engine,account.as_deref(),binding.as_deref()).map_err(|e|refused("launch_engine_account",&e.msg))?,
             _=>None,
         };
+        if expected_provider.is_some() && route.as_ref() != expected_provider {
+            return Err(refused("erro_cliproxy_conta", "O provedor mudou depois da conferência do catálogo. Escolha novamente."));
+        }
         if matches!(next.account,Account::Engine{..}) {
             if super::process::resolve_program("hangar-engine",&env.base).is_none() {
                 return Err(refused("launch_engine_missing","hangar-engine não está no PATH deste servidor; sem ele a sessão com motor morre ao nascer"));
@@ -917,8 +1202,13 @@ impl RuntimeRegistry {
                 let key=crate::mods::state::random_hex(16);
                 // A troca de conta só leva a conversa depois de encerrar: a de agora diz se ela já existe.
                 let resume=super::claude_launch::transcript(&env,next,sid).exists() || super::claude_launch::transcript(&env,&current.spec,sid).exists();
+                let settings_file=match current.settings.as_ref().filter(|s|terminal.windows && s.as_object().is_some_and(|o|!o.is_empty())) {
+                    Some(settings)=>Some(crate::session_open::claude::settings_file(&env.home,settings)
+                        .map_err(|e|refused("reopen_settings_file",&format!("as escolhas da conversa não foram gravadas ({e}); nada foi reaberto")))?),
+                    None=>None,
+                };
                 let ctx=ClaudeContext { plugin_roots:&roots,bridge:bridge.as_ref(),bridge_key:&key,runtime_config:&runtime,server_env:&env.base,
-                    settings:current.settings.as_ref(),read_only:read_only.as_deref(),windows:terminal.windows,initial_prompt:None,engine_route:route.as_ref(),
+                    settings:current.settings.as_ref(),settings_file:settings_file.as_deref(),read_only:read_only.as_deref(),windows:terminal.windows,initial_prompt:None,engine_route:route.as_ref(),
                     resume,allow_bypass:previous_non_plan==Some(PermissionMode::BypassPermissions) };
                 Ok(Start::Terminal(Box::new(crate::session_open::claude::pane(next,sid,&ctx)),terminal))
             },
@@ -1035,6 +1325,19 @@ impl RuntimeRegistry {
         }
     }
 
+    async fn restore_before_provider_switch(&self, name: &str, current: &Current, mark: Option<SwitchMark>, error: RuntimeError) -> ReopenFailure {
+        if let Some(mark) = mark.as_ref() && let Err(undo) = mark.restore_origin() {
+            let message = format!("{}; o registro da troca não pôde ser desfeito ({undo}); a origem não foi reaberta", error.message);
+            super::actor::mark_live_error(&self.live_channel(name), &error.code, &message);
+            return ReopenFailure { error: refused(&error.code, &message), stopped: true, landed: None };
+        }
+        let restored = self.restore_claude(name, current, error).await;
+        if restored.landed.is_some() && let Some(mark) = mark && let Err(error) = mark.clear() {
+            tracing::warn!(session=%name,kind=?error.kind(),"marca da troca restaurada não pôde ser removida");
+        }
+        restored
+    }
+
     /// Falhou depois de encerrar: a sessão volta pelo spec de antes; sem terminal, se nem o terminal de antes
     /// voltar. O erro diz onde ela ficou.
     async fn restore_claude(&self,name:&str,current:&Current,error:RuntimeError) -> ReopenFailure {
@@ -1069,7 +1372,7 @@ impl RuntimeRegistry {
                 tracing::warn!(session=%name,code=%error.code,"sidecar da tentativa que falhou ficou");
                 continue;
             }
-            let back=match self.prepare_start(name,&spec,current,&current.sid).await {
+            let back=match self.prepare_start(name,&spec,current,&current.sid,None).await {
                 Ok(start)=>self.start_claude(name,&spec,start,&current.sid).await,
                 Err(error)=>Err(error),
             };
@@ -1077,6 +1380,11 @@ impl RuntimeRegistry {
                 Ok(())=>{
                     let place=if spec.surface==current.spec.surface {"a sessão voltou como estava"} else {"a sessão seguiu sem terminal"};
                     return ReopenFailure { error:RuntimeError::new(&error.code,&format!("{}; {place}",error.message)),stopped:true,landed:Some(spec.surface) };
+                },
+                Err(restore) if restore.code == NEW_ALIVE => {
+                    let message = format!("{}; {}", error.message, restore.message);
+                    super::actor::mark_live_error(&self.live_channel(name), &restore.code, &message);
+                    return ReopenFailure { error: refused(&restore.code, &message), stopped:true, landed:None };
                 },
                 Err(restore)=>tracing::warn!(session=%name,code=%restore.code,"a sessão não voltou pelo spec de antes"),
             }
@@ -1099,19 +1407,25 @@ impl RuntimeRegistry {
         if let Some((target,_))=self.claude_terminal_entry(name).await {let _=self.close_claude_entry(&target.key,target.generation).await;}
         let watcher=self.watcher_ref().ok_or_else(||refused(NEW_ALIVE,"sem a vigia do terminal para fechar a tentativa"))?;
         let session=crate::session_open::terminal::target(cfg!(windows),name);
-        let lives=match watcher.mux_text(&["display-message","-p","-t",&session,"#{pane_pid}"]).await.and_then(|pid|pid.trim().parse::<i64>().ok()) {
-            Some(pid)=>tree(pid)?,
-            None=>Vec::new(),
-        };
-        let _=watcher.mux_text(&["kill-session","-t",&session]).await;
-        wait_gone(lives,EXIT_WAIT).await.map_err(|_|refused(NEW_ALIVE,"o Claude novo não saiu; a sessão não volta por cima dele para não haver dois na mesma conversa"))
+        let mux = watcher.spawn_mux();
+        let program = watcher.mux_program();
+        let pane = mux.run(vec![program.clone(), "display-message".into(), "-p".into(), "-t".into(), session.clone(), "#{pane_pid}".into()]).await;
+        let Some(pid) = failed_terminal_pid(&pane)? else { return Ok(()); };
+        let lives = tree(pid).map_err(|error| cleanup_uncertain(&error.message))?;
+        let killed = mux.run(vec![program, "kill-session".into(), "-t".into(), session]).await;
+        if killed.code != Some(0) && !(killed.code == Some(1) && crate::list::mux::is_absence(&killed.stderr)) {
+            return Err(cleanup_uncertain("o multiplexador não confirmou o fechamento do terminal"));
+        }
+        wait_gone(lives,EXIT_WAIT).await.map_err(|error| cleanup_uncertain(&error.message))
     }
 
     async fn drop_failed_headless(&self,name:&str,key:&str) -> Result<(),RuntimeError> {
         if let Some((generation,_))=self.claude_headless_view(name).await {let _=self.close_claude_entry(key,generation).await;}
-        let Ok(Some(meta))=self.claude_sidecar(name).await else {return Ok(())};
-        let Some(cano)=meta.get("cano").filter(|c|c.is_object()).and_then(|c|serde_json::from_value::<super::process::Cano>(c.clone()).ok()) else {return Ok(())};
-        let lives=tree(i64::from(cano.pid))?;
+        let meta = self.claude_sidecar(name).await.map_err(|error| cleanup_uncertain(&error.message))?;
+        let Some(cano) = meta.as_ref().and_then(|meta| meta.get("cano")).filter(|cano| !cano.is_null()) else { return Ok(()); };
+        let cano = serde_json::from_value::<super::process::Cano>(cano.clone())
+            .map_err(|_| cleanup_uncertain("o processo do Claude sem terminal não pôde ser identificado"))?;
+        let lives = tree(i64::from(cano.pid)).map_err(|error| cleanup_uncertain(&error.message))?;
         if let Err(error)=super::process::kill(&cano,key,&self.claude_sidecars()).await {
             tracing::warn!(session=%name,code=error.code(),"cano da reabertura que falhou não foi encerrado");
         }
@@ -1194,6 +1508,18 @@ impl RuntimeRegistry {
 mod tests {
     use super::*;
 
+    #[test]
+    fn failed_terminal_cleanup_requires_proof_of_absence() {
+        let absent = MuxOutput { code: Some(1), stderr: "no server running on /tmp/tmux-test/default".into(), ..Default::default() };
+        assert!(failed_terminal_pid(&absent).unwrap().is_none());
+        let pane = MuxOutput { code: Some(0), stdout: "1234\n".into(), ..Default::default() };
+        assert_eq!(failed_terminal_pid(&pane).unwrap(), Some(1234));
+        for output in [MuxOutput::default(), MuxOutput { code: Some(1), stderr: "unknown command".into(), ..Default::default() },
+            MuxOutput { code: Some(0), ..Default::default() }] {
+            assert_eq!(failed_terminal_pid(&output).unwrap_err().code, NEW_ALIVE);
+        }
+    }
+
     /// Sessão adotada do terminal (`terminal_<hex>`) não tem registro: a troca de conta segue sem marca;
     /// a do lançador fica marcada até a vida nova ser gravada.
     #[test]
@@ -1202,8 +1528,8 @@ mod tests {
         let spec = |key:&str| SessionSpec { version:crate::session_open::SPEC_VERSION,key:key.into(),name:"s".into(),cwd:"/w".into(),
             provider:crate::session_open::AgentProvider::Claude,surface:Surface::Terminal,account:Account::Default,
             account_source:crate::session_open::AccountSource::Explicit,model:None,effort:None,service_tier:None,permission_mode:None,
-            subagent_model:None,customizations:None,jev:false,read_only:false,worktree:None,creator:None,created_at:0.0,conversation:None,
-            name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false };
+            subagent_model:None,customizations:None,jev:false,code_mode:false,read_only:false,worktree:None,creator:None,created_at:0.0,conversation:None,
+            name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false,hooks_off:false };
         let adopted = format!("terminal_{}", "e6".repeat(32));
         assert!(SwitchMark::write(home.path(),&spec(&adopted)).unwrap().is_none());
         let key = "0123456789abcdef0123456789abcdef";

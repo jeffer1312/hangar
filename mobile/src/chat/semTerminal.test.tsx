@@ -70,7 +70,8 @@ vi.mock('./queueDelivery', async (original) => ({
   readQueueJev: vi.fn(async () => false),
 }));
 const realFirstInput = vi.hoisted(() => ({ enabled: false, send: vi.fn(), steer: vi.fn(), history: vi.fn(), transcribe: vi.fn(), relimpar: vi.fn(),
-  upload: vi.fn(async () => ({ path: '/up/sess/ditado-1.m4a' })) }));
+  upload: vi.fn(async (): Promise<{ path: string; media?: 'pending'; media_id?: string }> => ({ path: '/up/sess/ditado-1.m4a' })),
+  media: vi.fn(async (): Promise<{ frames: string[]; transcript: string } | null> => null) }));
 const voiceInput = vi.hoisted(() => ({ recording: false, simulateRecorder: false, delayStop: false, stop: vi.fn(),
   startPending: null as Promise<void> | null, startError: null as Error | null, stopWithoutResult: false,
   stopPending: null as Promise<void> | null, finishStop: null as null | (() => void), finished: null as Promise<void> | null,
@@ -108,6 +109,7 @@ vi.mock('@hangar/core', async (original) => ({
   uploadFileForServer: realFirstInput.upload,
   // Anexo: sobe direto do arquivo no disco.
   uploadFromDiskForServer: realFirstInput.upload,
+  waitUploadMediaForServer: realFirstInput.media,
   relimparDitado: realFirstInput.relimpar,
 }));
 vi.mock('../stores/servers', () => {
@@ -176,7 +178,7 @@ vi.mock('./ContextRing', () => ({ ContextRing: () => null }));
 vi.mock('../paraglide/messages', async (importOriginal) => ({
   ...await importOriginal<typeof import('../paraglide/messages')>(),
   ...Object.fromEntries(
-  ('arq_aba askq_sua_resposta bastao_dossie_sub bastao_dossie_titulo chat_ir_inicio chat_voltar_sessoes codex_limites_titulo compartilhar_menu ctx_anexos ctx_atividade ctx_grupo ctx_limites ctx_repositorio ctx_terminal modo_so_ociosa more_fotos_videos_arquivos more_tarefas_agentes mods_celular_mostrar mods_celular_mostrar_um mods_celular_mostrar_paineis mods_celular_ocultar mods_celular_sub plugin_band_label navbar_mais_acoes par_titulo recarregar_sessao recarregar_sessao_detalhe sessao_trocar_de switcher_buscar_conversas term_titulo '
+  ('arq_aba askq_sua_resposta bastao_dossie_sub bastao_dossie_titulo chat_ir_inicio chat_voltar_sessoes codex_limites_titulo compartilhar_menu media_title ctx_atividade ctx_grupo ctx_limites ctx_repositorio ctx_terminal modo_so_ociosa more_fotos_videos_arquivos more_tarefas_agentes mods_celular_mostrar mods_celular_mostrar_um mods_celular_mostrar_paineis mods_celular_ocultar mods_celular_sub plugin_band_label navbar_mais_acoes par_titulo recarregar_sessao recarregar_sessao_detalhe sessao_trocar_de switcher_buscar_conversas term_titulo '
     + 'askq_enviando board_arquivo board_imagem board_remover_anexo codex_orientar composer_anexar_arquivo composer_desfazer_limpeza composer_ditado_limpo composer_enviando_cancelar composer_enviar_mensagem composer_fila_acao composer_fila_aria composer_fila_contagem composer_gravando_audio composer_gravar_audio composer_mandando_grupo composer_mandar_grupo composer_mandar_tambem composer_mensagem composer_parar composer_parar_gravacao composer_pro_grupo composer_pros_dois composer_sessao_trabalhando composer_transcrevendo_audio composer_transcrever_de_novo')
     .concat(' sessao_git chat_acao_git_detalhe cota_conta_ativa accounts_switch_title native_ctl_model_title native_new_chat_reasoning native_mode_bypassPermissions chat_mode_label native_usage_card_session live_voice_action_usage_label native_ctl_all_models native_ctl_featured_models')
     .concat(' live_voice_open composer_mic_style_hint composer_dictation_style composer_session_settings composer_session_settings_hint composer_steer_current_text ditado_estilo_titulo uso_aria codex_orientar_ajuda composer_fila_titulo composer_submission_recover_first queue_steer_uncertain')
@@ -224,6 +226,7 @@ beforeEach(() => {
   storage.memory.clear(); storage.failSet = false; storage.failRemove = false; sessionsState.rows = []; realFirstInput.enabled = false; voiceInput.simulateRecorder = false;
   voiceInput.startPending = null; voiceInput.startError = null; voiceInput.stopWithoutResult = false;
   realFirstInput.upload.mockReset().mockResolvedValue({ path: '/up/sess/ditado-1.m4a' });
+  realFirstInput.media.mockReset().mockResolvedValue(null);
   _limparEsfriamentoParaTestes();
   _resetRotasForTests();
 });
@@ -358,6 +361,8 @@ vi.mock('../features/attachments/DocumentViewer', () => ({ DocumentViewer: () =>
 vi.mock('../features/attachments/mediaCache', () => ({ canShareFile: false, shareFile: async () => {} }));
 vi.mock('../ui/Toast', () => ({ toast: { ok: () => {}, erro: () => {} } }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
+// O envio pelo disco é do `uploadFromDiskForServer` simulado acima; o tamanho lido do disco não existe no node.
+vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: () => async () => new Response('{}'), diskFileSize: async () => undefined }));
 const previewTexts = vi.hoisted(() => [] as string[]);
 vi.mock('./PreviewBubble', () => ({ PreviewBubble: ({ text }: { text: string }) => { previewTexts.push(text); return null; } }));
 vi.mock('./ThinkingBlock', () => ({ ThinkingBlock: () => null }));
@@ -685,6 +690,60 @@ describe('ações e atualização da conversa na rota', () => {
     } finally { act(() => root.unmount()); }
   });
 
+  it('troca de agente na lista relê a sessão; a linha sumir da lista não relê', async () => {
+    const row: (typeof sessionsState.rows)[number] = { serverId: 's1', name: 'sess', provider: 'claude' };
+    sessionsState.rows = [row];
+    const { root } = await render(createElement(ChatScreen));
+    try {
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [{ ...row, provider: 'codex' }];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(2);
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('linha que volta depois de uma leitura sem a sessão relê, com o mesmo agente', async () => {
+    const row: (typeof sessionsState.rows)[number] = { serverId: 's1', name: 'sess', provider: 'claude' };
+    sessionsState.rows = [row];
+    vi.mocked(fetchSessionsForServer).mockResolvedValueOnce([]);
+    const { root } = await render(createElement(ChatScreen));
+    try {
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [row];
+      await act(async () => root.render(createElement(ChatScreen)));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(2);
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('linha fora da lista por 2 s confirma com uma leitura; a que volta antes não relê', async () => {
+    vi.useFakeTimers();
+    const row: (typeof sessionsState.rows)[number] = { serverId: 's1', name: 'sess', provider: 'claude' };
+    sessionsState.rows = [row];
+    const { root } = await render(createElement(ChatScreen));
+    try {
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [];
+      await act(async () => root.render(createElement(ChatScreen)));
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+      sessionsState.rows = [row];
+      await act(async () => root.render(createElement(ChatScreen)));
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(1);
+      sessionsState.rows = [];
+      await act(async () => root.render(createElement(ChatScreen)));
+      await act(async () => vi.advanceTimersByTimeAsync(2000));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(2);
+      await act(async () => vi.advanceTimersByTimeAsync(5000));
+      expect(fetchSessionsForServer).toHaveBeenCalledTimes(2);
+    } finally { act(() => root.unmount()); }
+  });
+
   it('a conversa mantém a lista de sessões viva enquanto está aberta, com a gaveta fechada', async () => {
     const { root } = await render(createElement(ChatScreen));
     expect(sessionsState.holders).toBe(1);
@@ -926,7 +985,7 @@ describe('terminal escondido', () => {
     expect(container.querySelector('[aria-label="term_titulo"]')).toBeNull();
     expect(container.querySelector('[aria-label="par_titulo"]')).toBeNull();
     expect(container.querySelector('[aria-label="askq_sua_resposta"]')).toBeNull();
-    expect(container.querySelector('[aria-label="ctx_anexos"]')).toBeNull();
+    expect(container.querySelector('[aria-label="media_title"]')).toBeNull();
     expect(container.querySelector('[aria-label="arq_aba"]')).not.toBeNull();
     act(() => root.unmount());
   });
@@ -935,7 +994,7 @@ describe('terminal escondido', () => {
     const { container, root } = await render(createElement(MoreSheet, { ...sheet, temPergunta: true }));
     expect(container.querySelector('[aria-label="term_titulo"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="askq_sua_resposta"]')).not.toBeNull();
-    expect(container.querySelector('[aria-label="ctx_anexos"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="media_title"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="par_titulo"]')).not.toBeNull();
     act(() => root.unmount());
   });
@@ -944,7 +1003,7 @@ describe('terminal escondido', () => {
     const { container, root } = await render(createElement(MoreSheet, { ...sheet, semTerminal: true }));
     expect(container.querySelector('[aria-label="askq_sua_resposta"]')).toBeNull();
     expect(container.querySelector('[aria-label="term_titulo"]')).toBeNull();
-    expect(container.querySelector('[aria-label="ctx_anexos"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="media_title"]')).not.toBeNull();
     act(() => root.unmount());
   });
 });
@@ -1423,7 +1482,7 @@ describe('rascunho guardado no Composer', () => {
     await act(async () => button(container, 'composer_enviar_mensagem')!.click());
     // Os três subiram ao colar, direto do disco; o Enviar não sobe nada de novo.
     expect(realFirstInput.upload).toHaveBeenCalledTimes(3);
-    expect(realFirstInput.upload).toHaveBeenCalledWith(expect.anything(), 'sess', { name: 'c.txt', type: 'text/plain' }, expect.any(Function));
+    expect(realFirstInput.upload).toHaveBeenCalledWith(expect.anything(), 'sess', { name: 'c.txt', type: 'text/plain', size: 10 }, expect.any(Function));
     expect(composerChat.send).toHaveBeenCalledExactlyOnceWith(
       'legenda — 📎 board_imagem: /up/a.png 📎 board_arquivo: /up/c.txt', expect.any(Number));
     expect(removers()).toHaveLength(0);
@@ -1432,6 +1491,52 @@ describe('rascunho guardado no Composer', () => {
     await act(async () => finishB({ path: '/up/b.txt' }));
     expect(removers()).toHaveLength(0);
     expect(uris()).toEqual([]);
+    act(() => root.unmount());
+  });
+
+  it('vídeo colado vai com os quadros e a fala, e o caminho fica no rascunho antes de a mídia ficar pronta', async () => {
+    composerChat.send.mockClear();
+    realFirstInput.upload.mockReset().mockResolvedValue({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+    let ready!: (v: { frames: string[]; transcript: string }) => void;
+    realFirstInput.media.mockReset().mockImplementation(() => new Promise((resolve) => { ready = resolve; }));
+    const { container, root } = await render(createElement(Composer, props));
+    await act(async () => pasteInput.onPaste!([{ uri: 'file:///v.mp4', fileName: 'v.mp4', type: 'video/mp4', fileSize: 2048 }], null));
+    const stored = () => (JSON.parse(storage.memory.get('draft.v1:s1::sess')!) as { attachments: Record<string, unknown>[] }).attachments;
+    expect(stored()).toMatchObject([{ uploadedPath: '/up/v.mp4', uploadedMediaId: 'm1' }]);
+    expect(realFirstInput.media).toHaveBeenCalledWith(expect.anything(), 'sess', 'm1', expect.any(AbortSignal));
+    await act(async () => { void button(container, 'composer_enviar_mensagem')!.click(); });
+    expect(composerChat.send).not.toHaveBeenCalled();
+    await act(async () => ready({ frames: ['/up/q1.jpg', '/up/q2.jpg'], transcript: 'oi\ntudo   bem' }));
+    expect(composerChat.send).toHaveBeenCalledOnce();
+    const sent = composerChat.send.mock.calls[0][0] as string;
+    expect(sent.startsWith('📎 board_arquivo: /up/v.mp4 📎 board_imagem: /up/q1.jpg 📎 board_imagem: /up/q2.jpg ')).toBe(true);
+    expect(sent).toContain('oi tudo bem');
+    expect(sent).not.toContain('\n');
+    expect(realFirstInput.upload).toHaveBeenCalledOnce();
+    act(() => root.unmount());
+  });
+
+  it('vídeo cuja mídia não vem vai só com o caminho', async () => {
+    composerChat.send.mockClear();
+    realFirstInput.upload.mockReset().mockResolvedValue({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+    const { container, root } = await render(createElement(Composer, props));
+    await act(async () => pasteInput.onPaste!([{ uri: 'file:///v.mp4', fileName: 'v.mp4', type: 'video/mp4', fileSize: 2048 }], null));
+    await act(async () => button(container, 'composer_enviar_mensagem')!.click());
+    expect(composerChat.send).toHaveBeenCalledExactlyOnceWith('📎 board_arquivo: /up/v.mp4', expect.any(Number));
+    act(() => root.unmount());
+  });
+
+  it('vídeo gravado com a mídia pendente, ao reabrir, espera a mídia sem subir de novo', async () => {
+    composerChat.send.mockClear();
+    realFirstInput.media.mockReset().mockResolvedValue({ frames: ['/up/q1.jpg'], transcript: '' });
+    storage.memory.set('draft.v1:s1::sess', JSON.stringify({ version: 1, text: '', revision: 1, transcript: null, submission: null, attachments: [
+      { uri: 'file:///v.mp4', name: 'v.mp4', mime: 'video/mp4', kind: 'file', uploadedPath: '/up/v.mp4', uploadedMediaId: 'm1',
+        uploadedFor: { serverId: 's1', name: 'sess', transcript: null } },
+    ] }));
+    const { container, root } = await render(createElement(Composer, props));
+    await act(async () => button(container, 'composer_enviar_mensagem')!.click());
+    expect(realFirstInput.upload).not.toHaveBeenCalled();
+    expect(composerChat.send).toHaveBeenCalledExactlyOnceWith('📎 board_arquivo: /up/v.mp4 📎 board_imagem: /up/q1.jpg', expect.any(Number));
     act(() => root.unmount());
   });
 

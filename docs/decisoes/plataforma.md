@@ -3,6 +3,399 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## Portas da sessão, túnel e navegador emprestado (23/11/2026)
+
+O agente sobe um servidor na máquina da sessão (Next na 3000, Postgres na 5432), e o Hangar mostra a
+porta sozinho. No nativo, cada porta abre no navegador embutido ou no do computador, é encaminhada
+até o computador de quem usa, ou tem o servidor parado. No Expo, abre numa WebView do app com túnel.
+E o agente pode dirigir o navegador do app desktop de outra máquina.
+
+**De onde vieram as ideias.** O pedido partiu do vídeo do T3 Code 0.1.11. Na segunda rodada o código
+dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparação peça por peça está em
+`docs/superpowers/specs/2026-11-23-t3code-comparacao.md`.
+- Ideia do T3, adaptada: dono da porta pela variável herdada, DevTools fora, sonda de mesma máquina,
+  `::1`/`::` livres antes de usar o número, teto de 64 conexões, uid no Linux, SOCKS por servidor
+  num contexto de navegador próprio, `0.0.0.0` como `localhost`, parar o grupo do servidor e a
+  WebView com túnel no celular.
+- Só do Hangar: escopo systemd e busca só entre os pids da sessão, porta dividida mantida com aviso
+  (o T3 a apaga), código da recusa em cabeçalho com os status mantidos, lista de portas no celular,
+  prévia pelo Connect, túnel pela rota que o app já usa (rede local, Tailscale, Connect) com ping e
+  meia-saída, e o navegador do app emprestado ao agente de outra máquina, com a rede de quem usa
+  fechada para ele. O T3 dirige o navegador só da própria máquina e roda um Chromium sem janela no
+  servidor remoto; aqui o uso é sempre com o app aberto.
+
+- **Quais portas são da sessão.** O crate `hangar-session-ports` lê os sockets em LISTEN e procura o
+  dono só entre os pids candidatos, nunca em todos os processos da máquina. No Linux lê
+  `/proc/net/tcp{,6}` e os fds dos candidatos; no Windows usa `GetExtendedTcpTable` dentro do
+  processo. Vale só endereço de loopback ou "qualquer" (`0.0.0.0`, `::`), que é o que o túnel
+  alcança, e v4 e v6 da mesma porta viram uma entrada. Quem dá a porta à sessão é `list/ports.rs`,
+  nesta ordem:
+  - o escopo systemd próprio da sessão (`tmux-spawn-*.scope` do pane, `run-*.scope` do cano), que
+    pega o `nohup … &` adotado pelo init;
+  - um escopo visto em duas sessões não vale para nenhuma: é o do servidor tmux antigo ou do login;
+  - depois, os descendentes da raiz (pane ou cano);
+  - depois, os terminais de atalho, que contam para a sessão dona;
+  - por fim, quem escuta fora de toda árvore e escopo (`setsid`, outro pai) entra na sessão cuja
+    `CP_SESSION_KEY` herdou, lida em `/proc/<pid>/environ` só desses pids.
+
+  Agente, cano e app-server do Codex ficam fora, porque as portas de loopback deles não são
+  servidores da pessoa. Processo com `--remote-debugging-port` também: é o Chrome de DevTools que o
+  agente sobe, não um site. Porta em que outro processo, fora da sessão, também escuta (v4 de um, v6
+  de outro) sai com `shared: true`, e a tela avisa "Outra coisa também escuta nessa porta": o
+  `localhost:N` pode cair no outro. O T3 apaga essa linha; aqui ela fica, porque é da sessão. A leitura é reaproveitada pelos mesmos candidatos dentro do prazo do cache
+  de processos, para o tique e um `GET` simultâneo lerem uma vez só. Leitura que falha registra
+  `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`. Esse código
+  está em `DIAGNOSTIC` e nunca chega à tela. A linha do convidado (convite e login) sai sem `ports`:
+  o túnel não atende convidado.
+- **B2, macOS vazio.** No macOS a lista de portas volta vazia. Ler por `libproc` exige conferir o
+  layout das structs num Mac, e não havia um para a prova. `lsof`, `netstat` e
+  `Get-NetTCPConnection` ficaram de fora: abririam um processo a cada tique de 1,5 s. Nenhuma
+  dependência nova entrou para isso.
+- **B3, sessão sem terminal também tem escopo.** O cano nasce em `systemd-run --user --scope`
+  (`runtime/process.rs`), numa unidade `run-*.scope` só dele. O servidor que perdeu o pai aparece
+  também em sessão sem terminal. Sem `systemd-run` ou fora do Linux, sobra a descendência do
+  `cano.pid`, e o processo adotado pelo init some da lista.
+- **Túnel.** `GET /api/port-tunnel?port=N` com upgrade WebSocket. Cada WebSocket é uma conexão TCP
+  com `127.0.0.1:N` (ou `[::1]:N`) desta máquina, com bytes crus nos dois sentidos
+  (`hangar-port-tunnel`). Respostas antes do upgrade:
+
+  | Caso | Resposta |
+  |---|---|
+  | Nada escutando | 502 `port_tunnel_refused` |
+  | Porta do Hangar (`connect_previews.refused`) ou fora de 1..65535 | 422 `port_tunnel_port_refused` |
+  | Sem `?token=` nem Bearer | 403 `port_tunnel_token_required` |
+
+  Toda recusa leva o código também no cabeçalho `x-hangar-tunnel`, e os clientes classificam por ele,
+  nunca pelo status: o Caddy do Connect devolve 502 com a 8768 fora, igual ao "nada escutando".
+  Recusa sem o cabeçalho é servidor fora, Caddy ou Hangar antigo. Uma mensagem tem no máximo 1 MiB. Binário vazio do cliente quer dizer "terminei de mandar": o
+  servidor fecha a escrita no TCP e continua mandando a resposta, como o `nc`. O Close não serve
+  para isso, porque depois dele o servidor não pode mandar mais nada. O TCP fechando fecha o
+  WebSocket com 1000.
+- **Por que o cookie é recusado.** O túnel e o canal anfitrião aceitam só `?token=` ou Bearer, e o
+  cabeçalho `Cookie` é apagado antes do porteiro. Pelo Connect o cookie `__Host-cp_token` vale em
+  `GET`, e o aperto de mão do WebSocket é um `GET`. As máquinas do Connect são o mesmo site, então
+  uma página de projeto aberta na prévia de outra máquina mandaria o cookie junto e abriria um
+  túnel até o Postgres desta.
+- **Por que 75 s.** O servidor manda ping a cada 25 s, para o Caddy e os NATs do caminho não
+  derrubarem a conexão parada. Depois de 75 s (três pings) sem ouvir nada do cliente, nem pong, o
+  túnel cai. É o notebook que dormiu ou trocou de rede: ele some sem FIN e a conexão ficaria
+  pendurada.
+- **Onde a rota existe.** Em `public_routes`, servido na 8765 e na entrada do Connect (8768). A 8766
+  do convidado não tem a rota: o porteiro dela responde 403 antes de qualquer conexão com a porta. O
+  aparelho do Connect traz o `Watcher`, e aparelho revogado derruba o túnel aberto.
+- **Encaminhar no nativo.** `desktop-native/src/port_forward.rs` escuta só em `127.0.0.1` deste
+  computador, com o mesmo número quando está livre e o seguinte quando não está (até +100). A tela
+  diz "encaminhada como 3001". Ocupada é a porta em que algo já responde em `127.0.0.1` (no
+  Windows, o bind ali vence um servidor local em `0.0.0.0` e o tapa calado) ou que está em uso em
+  `::1` ou `::`: um servidor local só no IPv6 responderia ao `localhost` do navegador no lugar.
+  - **Sonda de mesma máquina, antes de escutar.** 16 bytes aleatórios vão pelo túnel até uma escuta
+    deste computador. Chegaram: "o servidor é este computador", e nada é encaminhado, porque o túnel
+    de lá discaria o próprio encaminhamento, em laço (`is_loopback` não pega servidor salvo pelo
+    IP do Tailscale da própria máquina). O túnel diz que nada escuta, ou outro serviço responde: é
+    outra máquina. O resto, em 3 s, é desconhecido e também não encaminha. Sonda e busca de porta
+    rodam fora da thread da tela; a linha diz "Abrindo…".
+  - **Teto e dono.** Até 64 conexões vivas por encaminhamento; a de cima fecha na hora, e a tela diz.
+    No Linux, conexão de outro usuário do computador (dono pela tabela `/proc/net/tcp`) fecha: a
+    escuta não tem senha, e o Hangar se instala em máquina de outras pessoas.
+  - Cada conexão aceita abre o WebSocket pela rota que o app usa naquele instante (rede local,
+    Tailscale ou Connect). Pelo Connect, o túnel exige o computador aprovado como aparelho, e a senha
+    do dono nunca vai na URL.
+- **Página de outra máquina no Linux: SOCKS por servidor, sem trocar a porta.** Um SOCKS5 em
+  `127.0.0.1:0` por servidor remoto do dono, vivo enquanto o app vive (`desktop-native/src/socks.rs`),
+  e um contexto do Chromium do painel com esse proxy, por `Target.createBrowserContext` com
+  `proxyServer` e `proxyBypassList` `*,<-loopback>`: só o loopback vai ao SOCKS, e cada CONNECT vira um
+  túnel até a mesma porta lá. Loopback nunca conecta direto aqui. A página fica em
+  `http://localhost:3000`, com a origem, o OAuth, o HMR e os cookies de lá, separados por servidor e
+  fora do perfil da pessoa. A troca de porta mudava a origem e misturava os cookies de `localhost`
+  de todas as máquinas. `0.0.0.0` e `[::]`, que o Vite imprime, viram `localhost` antes do pedido.
+  O mesmo uid da escuta vale aqui.
+  - Medido no Chromium que o app usa: o contexto nasce com os dois parâmetros e manda `localhost` ao
+    SOCKS, com `*,<-loopback>` e com `<-loopback>`. O `<-loopback>` tira o desvio implícito do
+    loopback, e a última regra que casa vence.
+  - Limite aceito: o contexto do CDP é de memória, e o login no site do projeto some ao fechar o
+    app. Um Chromium por servidor com pasta própria fica para quando isso incomodar.
+  - Windows e macOS seguem com o encaminhamento e a troca de porta. O WebView2 só muda depois da
+    prova na VM de `--proxy-server` socks5 com `<-loopback>` por pasta de dados.
+- **Abrir no navegador do computador.** Encaminha, se a sessão é de outra máquina, e abre
+  `http://localhost:<porta local>` no navegador do sistema, que não tem o SOCKS. "Parar
+  encaminhamento" para o encaminhamento; "Parar servidor" é outra ação.
+- **Parar servidor.** `POST /api/sessions/{name}/ports/{port}/stop` (`hangar-port-stop`), só em
+  `public_routes`, com confirmação nos dois apps. A ideia é do T3, a regra de proteção é nossa.
+  - Quem segura a porta é relido na hora pela regra da lista e conferido pelo início do processo
+    (`starttime` do `/proc/<pid>/stat`): pid reusado não recebe sinal. A tabela vem de `/proc/*/stat`,
+    sem `ps`.
+  - O alvo é o grupo de processos do servidor. Quando o grupo tem processo protegido (o
+    `npm run dev &` de um shell sem controle de job), o alvo é só a árvore que nasce no processo que
+    escuta.
+  - Protegidos nunca recebem sinal: agente, cano e app-server do Codex, a raiz da sessão e o pai de
+    cada um (servidor tmux, cano), o `hangar-server` com os ancestrais e os filhos diretos dele, e os
+    pids 0 e 1. Se o próprio processo que escuta (ou um descendente) é protegido: 409
+    `port_stop_shared_group`.
+  - SIGTERM, consulta a cada 250 ms por 3 s, SIGKILL só a quem ainda é o processo original. Zumbi
+    conta como saído.
+  - Pid já de outro processo ou porta que não é mais da sessão: 404 `port_stop_not_found`. Fora do
+    Linux: 501 `port_stop_unsupported`. Depois da parada a leitura guardada dos sockets é descartada
+    e a lista sai de novo.
+- **Celular: a página abre dentro do app.** Módulo nativo `mobile/modules/port-tunnel`: uma WebView
+  cujo `localhost` é o da máquina da sessão, com um SOCKS no aparelho que abre `/api/port-tunnel` por
+  `baseOf(server)` e o token do aparelho. Várias portas ficam abertas ao mesmo tempo, uma aba cada,
+  sem host nem certificado do Connect por porta. O SOCKS não tem senha, então só aceita as portas
+  da sessão. Só servidor do dono; convite cai na prévia.
+  - iOS: `WKWebsiteDataStore.nonPersistent()` por servidor com `ProxyConfiguration` socksv5. O iOS
+    nunca manda loopback ao proxy, então a página roda no nome substituto `hglo.test`, de 9 letras
+    como `localhost`, e a barra mostra `localhost`. O app aceita iOS 16.4 e o proxy só existe no 17:
+    conferido em tempo de execução.
+  - Android: `ProxyController.setProxyOverride` com bypass `*` e `removeImplicitRules()`, posto ao
+    montar e tirado ao desmontar, porque vale para todas as WebViews do app; perfil por servidor com
+    `MULTI_PROFILE`. Medido: o System WebView 133 do emulador `hangar` tem `PROXY_OVERRIDE` e
+    `MULTI_PROFILE`.
+  - Sem suporte (iOS abaixo de 17, WebView sem `PROXY_OVERRIDE`, binário antigo), o toque abre a
+    prévia do Connect, ou a do Tailscale, no navegador do sistema; a mesma prévia é o "Link de fora".
+  - Binário novo: `runtimeVersion` `native-7`, fora do OTA.
+- **Uma prévia do Connect por vez.** O "Link de fora" do nativo e a folha Portas do Expo usam a
+  mesma prévia do Connect (`/api/connect/preview`), e abrir outra fecha a anterior: as duas telas
+  dizem isso. Uma prévia por porta exigiria um host por porta, e cada host gasta um certificado do
+  limite semanal de `hangar.dev.br`; por isso a página no celular vai pela WebView com túnel, e a
+  prévia fica para mandar a outra pessoa e como reserva. O Expo tenta o Connect primeiro e cai no Tailscale
+  (`/api/preview`, slot 10000) quando a máquina não tem Connect ou ele está fora. Ajustes > Connect
+  perdeu o campo de porta e ficou só com a prévia aberta e o botão de fechar.
+- **Porta que não é página.** As duas prévias (Connect e Tailscale) mandam um `HEAD /` antes de
+  abrir. Resposta que não começa por `HTTP/`, ou conexão fechada sem resposta, dá 422
+  `port_not_http` (`hangar_core::net::answers_not_http`), e o Expo mostra "use no computador".
+  Silêncio por 3 s não decide: o `next dev` compila a página no primeiro pedido. Não há sondagem a
+  cada tique, só no toque.
+- **B1, conexão longa pelo Connect de verdade: pendente.** O Caddyfile do Connect tem
+  `read_body 1h` (`hangar-connect/src/config.rs`), e os testes falam direto com a 8768, sem frps nem
+  Caddy. A prova manual, uma `psql` parada por 70 min pelo Connect real (VPS, frps, Caddy), ainda
+  não foi feita. Se cair, a correção é na configuração do Connect, nunca religar escondido.
+- **Navegador emprestado (canal anfitrião).** O app desktop abre `GET /api/browser-host`
+  (WebSocket) no servidor da sessão, pela rota que já usa, com a mesma regra de credencial do túnel.
+  Ele manda `{"type":"focus","session":…}` ao mostrar uma sessão. O CLI e o MCP sem app local
+  mandam o verbo por `POST /api/sessions/{name}/browser-cmd`, e o servidor o repassa ao app com o
+  foco mais recente naquela sessão (`hangar-browser-host`).
+
+  | Caso | Resposta |
+  |---|---|
+  | Nenhum app com foco na sessão | 409 `browser_host_none` |
+  | App recusou o servidor (o atual nunca manda) | 403 `browser_host_not_allowed` |
+  | Canal caiu com o pedido em curso | 502 `browser_host_gone`, "pode ter sido executado" |
+  | Prazo (`deadline_ms`, padrão 45 s, teto 10 min) | 504 `browser_host_timeout` |
+  | `objetivo` e `confere` | 422 `browser_host_verb_unsupported` |
+
+  O print chega como binário e é gravado pelo servidor na máquina da sessão
+  (`~/.hangar/nav/shots/<sessão>/`), para o caminho que o agente cita valer lá. O canal tem o mesmo
+  ping de 25 s e a mesma queda após 75 s de silêncio, e aparelho revogado o fecha com 4410.
+- **Lado do app e do CLI.** O nativo abre um canal anfitrião por servidor remoto do dono quando
+  mostra uma sessão dele, e religa com espera de 1 s até 30 s. Sem app local, o `hangar-preview`
+  manda o verbo por `browser-cmd`, com prazo de 20 s no `open`, 110 s no `login` (120 s pelas tools do MCP) e 45 s nos outros.
+  As tools MCP `browser_*` usam a mesma rota dentro do processo. `objetivo`, `confere` e
+  `vault_fill` não existem por anfitrião remoto.
+- **D1, decidida em 23/11: sem cartão nem pergunta.** O app serve sozinho as sessões das máquinas
+  do dono (entrada de servidor que não é convite nem par externo); convite e par externo nunca
+  ganham o canal. O túnel existe para o notebook alcançar o `localhost` da máquina da sessão, e
+  uma pergunta a cada máquina só atrapalhava isso. O navegador é o painel Navegador da sessão,
+  nunca o do sistema.
+- **O agente remoto no Linux: contexto próprio, rede de quem usa fechada em todo pedido.** Os verbos
+  do canal rodam num contexto do Chromium com o SOCKS do servidor em modo agente (`proxyBypassList`
+  `<-loopback>`, nada direto): todo pedido passa pelo SOCKS, inclusive redirect, `fetch` do `eval` e
+  subrecurso. Loopback vai ao túnel, e o agente vê exatamente a URL que pediu, sem troca de porta.
+  O resto é resolvido no próprio SOCKS e só conecta aos endereços já conferidos, o que fecha o DNS
+  que muda de resposta depois (rebinding). Recusado:
+  - endereço dentro da rede de qualquer interface deste computador, v4 e v6 (`getifaddrs`, com a
+    máscara);
+  - nome que resolve para loopback, faixas privadas, de enlace, CGNAT (Tailscale), `0.0.0.0/8`, `198.18.0.0/15`,
+    multicast, broadcast, ULA, site-local, 6to4, Teredo, e o IPv4 dentro de IPv6 mapeado ou NAT64;
+  - nome `.local`, DNS que não responde em 30 s e lista de interfaces ilegível;
+  - esquema fora de `http`/`https` no `open`/`goto`.
+
+  Pessoa e agente nunca dividem a página: o agente não lê nem dirige a que a pessoa abriu, e abrir a
+  dele troca o motor. O `login` (a pessoa aprova no app) traz os cookies daquele site para o
+  contexto do agente. Limite conhecido: WebRTC e outros UDP não passam por SOCKS e podem sair pela
+  rede do notebook. Windows e macOS seguem com a conferência antiga: só o URL do `open`/`goto` e um
+  DNS antes, e o que ela não pega (redirect, `fetch`, rebinding) continua aceito ali, com a barreira
+  de servir só as máquinas do dono.
+- **Aceito: caminho `.png` absoluto no `browser-cmd`.** O `shot` aceita um `.png` absoluto do CLI e
+  o servidor grava ali, em qualquer pasta que o usuário do sistema escreve. Só o dono, pelo token,
+  chega à rota, e o agente dele já escreve nessas pastas.
+
+## WhatsApp só leitura (22/11/2026)
+
+A página "WhatsApp" das Configurações (nativo e Expo) liga um arquivador só de leitura do WhatsApp
+do usuário, e as sessões leem pelas ferramentas MCP `whatsapp_chats`, `whatsapp_read`,
+`whatsapp_search` e `whatsapp_request_media` e pela skill `whatsapp`. Nada é enviado em nome
+dele. O crate `hangar-whatsapp` instala, liga e conversa com o serviço; o servidor só monta o
+router `/api/whatsapp*`.
+
+Decisões do usuário (22/11):
+
+- **Binário Go fora do Hangar.** O whatsmeow é Go: o arquivador vive no repo
+  `jeffer1312/hangar-whatsapp`, release com `checksums.txt` para seis alvos (Linux, macOS e
+  Windows, amd64 e arm64, sem CGO). Ele é o dono único do esquema SQLite (`PRAGMA user_version`;
+  esquema mais novo é recusado com `schema_newer`) e da sessão do aparelho, com dados em
+  `~/.hangar/whatsapp/`. O download, a instalação em `bin/<versão>/` e o serviço (systemd,
+  launchd, tarefa do Windows) vêm do crate `hangar-managed-binary`, extraído do
+  `hangar-cliproxy-setup` neste trabalho; o CLIProxy passou a usá-lo sem mudar texto, código de
+  erro, caminho nem unit. O Hangar instala a release mais nova da mesma versão maior e recusa
+  binário com `api` menor que `MIN_API`. O `binaries.rs` do Connect (frpc/Caddy) é uma terceira
+  cópia e ficou para depois.
+- **Só leitura.** O binário só chama `SendMediaRetryReceipt` (pedido de mídia antiga ao celular) e
+  os recibos automáticos do whatsmeow. Um teste de lista fechada das chamadas `Send*` barra
+  qualquer outra. Os recibos automáticos são os de entrega, que o celular já manda pelos mesmos
+  aparelhos; recibo de leitura não sai. "Só leitura" é nenhuma mensagem enviada. As leituras usam um pool só de leitura, separado do escritor, com prazo de 5 s
+  por consulta (`busy`).
+- **Aceite obrigatório.** Parear um aparelho extra com programa não oficial é risco para a conta.
+  `POST /api/whatsapp/install` sem `{"accept":true}` responde 400 `whatsapp_accept_required`; o
+  aceite fica em `accepted.json` (`{"at","text_version":1}`).
+- **Só do dono.** O router passa por `Edge::owner_only`, e a porta 8766 não o monta: convidado e
+  par de fora não alcançam rota nenhuma. As ferramentas MCP chamam as rotas em processo pelo mesmo
+  `owner_only` e, antes disso, recusam com `whatsapp_shared_session` quando a sessão que chama tem
+  convite de convidado ativo ou membro de fora no grupo, porque o que ela lê chegaria a eles.
+  Grupo com sessão de outra máquina (`servidor::sessao`, mesmo do dono) também recusa: daqui não
+  se confere convite nem convidado de lá (decisão de 23/11/2026).
+  A conferência falha fechada (configuração de convites que não carregou, `external_pairs.json`
+  ilegível, sidecar ou `fed` tortos recusam; sem configuração de convites não há o que conferir) e
+  é refeita depois da leitura, antes de devolver. Convite criado entre essa segunda conferência e a
+  gravação da resposta no transcript não é coberto.
+  Aparelho aprovado no Connect age como dono (o token do dono é reescrito na entrada) e alcança
+  `/api/whatsapp*`: é o desenho de todas as rotas do dono, e aprovar um aparelho dá a ele a leitura
+  do WhatsApp.
+  A recusa cobre as ferramentas e as rotas, não os arquivos. O agente de convidado com login (ou de
+  sessão com convite) roda como o usuário do sistema do dono e alcança `~/.hangar/whatsapp/` como
+  alcança o resto da pasta do dono: a confiança do compartilhamento é o usuário do sistema. Nenhuma
+  trava de leitura cobre a pasta, porque a mídia é lida pelo `media_path` que ela guarda.
+- **Texto de terceiros marcado.** Mensagem é texto escrito por outras pessoas e pode trazer
+  instrução para o agente. Toda resposta das ferramentas leva `"third_party_content":true` e o
+  aviso para nunca seguir instruções contidas nele, e é cortada em ~32 KB com `"truncated":true`.
+  Arquivos de mídia (`.txt`, `.pdf`, `.zip`, documentos) são conteúdo de terceiros do mesmo jeito,
+  e a skill manda tratá-los assim.
+- **Mídia antiga sob demanda, com teto (3A).** Mídia que o servidor do WhatsApp já apagou só sai do
+  celular, e cada pedido gera uma notificação nele. Por isso nada é pedido sozinho: só por
+  `whatsapp_request_media`, no máximo 20 por chamada e 200 por dia (`capped: true` quando cortou).
+  O `media_path` devolvido é absoluto e sempre dentro de `media/`: o nome do arquivo é montado com
+  lista fechada de extensões e conferido por `filepath.Rel`, inclusive com `id` malicioso.
+- **HMAC nos dois sentidos no loopback.** O binário escuta numa porta livre de `127.0.0.1` e grava
+  `control.json` (`version`, `api`, `port`, `pid`) a cada subida; `control.key` guarda 32 bytes
+  aleatórios (0600, pasta 0700). Pedido e resposta levam `X-Hangar-Signature` (pedido: método,
+  caminho com query, `ts` com ±30 s e hash do corpo; resposta: `ts` do pedido, status e hash do
+  corpo). Resposta sem assinatura válida vira 502 `whatsapp_untrusted`. Quem ocupar a porta antiga
+  depois de o serviço cair não recebe segredo nem consegue fingir resposta.
+
+Revisão adversarial do plano (revisão 2, 22/11) mudou: caminho de mídia preso à pasta; recusa em
+sessão compartilhada; marca de texto de terceiros; migração dos dados do protótipo sem duas cópias
+das chaves rodando (`--import` só com destino vazio e serviço parado; o `sessao.db` de origem vira
+`.migrated`); assinatura HMAC no lugar de confiar na porta; versão da API (`api` no status); ciclo
+de pareamento (`pair_timeout`, `logged_out`, `outdated`); tetos de mídia e de resposta; leitura
+separada da escrita; erro no formato da casa (`hangar_core::http::detail`, códigos `whatsapp_`);
+e os nomes reais do código do CLIProxy na extração.
+
+## CLIProxyAPI instalado e configurado pelo Hangar (19/11/2026)
+
+Montar o proxy à mão (baixar, escrever o `config.yaml`, inventar chave e senha, logar a conta,
+copiar a chave para o motor) levava uma tarde com quem não conhecia o CLIProxyAPI. Agora o
+assistente das Configurações (nativo e Expo) faz tudo em três passos: Instalar, Conectar conta,
+Nome e modelo. O trabalho mora no crate `hangar-cliproxy-setup` (`config`, `release`, `detect`,
+`service`, `install`, `login`); o servidor só liga as rotas em `engines/cliproxy_setup.rs`.
+
+Decisões do usuário:
+
+- **Serviço próprio.** O binário vem da release de `router-for-me/CLIProxyAPI`, conferido pelo
+  `checksums.txt`, em `~/.hangar/cliproxy/bin/<versão>/`, e roda como unit de usuário
+  `hangar-cliproxy.service`, tarefa `hangar-cliproxy` no Windows (`.vbs` sem janela que religa o programa 10 s depois
+  de cada saída) ou launchd `dev.hangar.cliproxy`. Proxy que já existe (pacote do AUR com
+  `cli-proxy-api.service`, binário no PATH) é `external`: nada é baixado nem registrado, o
+  "Usar como está" só completa o config.
+- **Proxy de fora passa ao Hangar só a pedido (21/11).** Contas mostra a linha do CLIProxyAPI
+  (versão, "Do sistema" ou "Do Hangar", porta, contas e sessões) e, no de fora, "Deixar o Hangar
+  cuidar"; o passo Instalar do assistente traz a mesma escolha, marcada, ao lado de "Usar como
+  está". A entrega (`POST adopt`, tarefa `adopt`) usa o mesmo config e a mesma pasta de contas,
+  nunca copia nem reescreve conta e nunca desinstala o pacote: baixa a release, desliga o serviço
+  de fora (`systemctl --user disable --now`, ou `stop` se não estava habilitado; LaunchAgent por
+  `launchctl unload -w`), liga o `hangar-cliproxy` e só grava o `install.json` com a versão nova
+  respondendo. Não respondeu: tira o serviço do Hangar, religa o de fora como estava e espera a
+  porta; voltou dá `cliproxy_nao_subiu`, não voltou dá `cliproxy_entrega_sem_volta`. Sessões no
+  proxy pedem a mesma confirmação da atualização. Recusada antes de mexer em algo, com o motivo na
+  tela: serviço que lê outro config (`cliproxy_entrega_outro_config`), unit de sistema em
+  `/etc` ou `/usr/lib/systemd/system` (`…_unit_de_sistema`, desligar pede root), `auth-dir`
+  relativo com o serviço de fora rodando noutra pasta (`…_pasta_das_contas`: o do Hangar roda na
+  pessoal e não acharia as contas) e proxy respondendo sem serviço conhecido que o ligue
+  (`…_sem_servico`: binário no PATH rodado à mão, tarefa do Windows que não é do Hangar). Parado
+  e sem serviço, a entrega só liga o do Hangar. No macOS vale o LaunchAgent que roda
+  `cli-proxy-api` (o `brew services`), lido pelo `--config` dos `ProgramArguments`; o binário do
+  brew fora do PATH do servidor ainda é visto como ausente.
+- **Config existente: completar só o que falta.** Faltando `access.api-keys` (ou `api-keys` na
+  raiz, no formato antigo) ou a senha de gerenciamento, o Hangar acrescenta por edição de linha,
+  preservando comentários, confere relendo o YAML e guarda cópia
+  `config.yaml.hangar-bak-<unix>` (0600, três últimas). Formato v8 ou antigo é mantido; `api-keys`
+  da raiz que já seja grupo de provedor nunca é sobrescrito. Sem config, nasce um v8 em
+  `127.0.0.1:8317`. A senha de gerenciamento é gravada no Hangar antes do config, para nunca
+  ficar um proxy com senha que ninguém sabe.
+- **Atualizar só pelo botão.** O `GET /api/engines/cliproxy` traz `install.update_available`
+  (release mais nova por semver, cache de 1 h). Com sessão viva em motor do proxy, o `POST
+  update` responde 409 `erro_cliproxy_sessoes_ativas` com a contagem e só segue com
+  `confirm: true`.
+- **Conta só do proxy entra no seletor.** Conta ChatGPT logada pelo proxy sem conta Codex
+  correspondente no Hangar vira `cpa-<e-mail ≤12>-<12 hex>` (`credential_id` `cliproxy:<id>`) e
+  fica fixa por sessão pelo prefixo de modelo, sem `--account-home`. Credencial solta quebrada ou
+  prefixo repetido anula só aquela conta, não as outras.
+- **Usar esta conta vincula o motor, não só a sessão.** O cadastro guarda a identidade ChatGPT opaca,
+  não o e-mail sugerido no rótulo. Motores Pro e Plus podem ter o mesmo endereço, chave e modelo:
+  sem guardar a escolha, a conta fica a cargo do proxy. Lançamento, retomada e troca conferem o vínculo
+  e passam o modelo prefixado também no `--model` do Claude; vínculo alterado não troca conta em silêncio.
+  A cota da assinatura é consultada pela credencial exata na API administrativa v8 do proxy local,
+  com destino de leitura fixo e cache por identidade. O 429 do ChatGPT pausa só a conta; o da gestão
+  pausa as consultas de todas. O motor local não consulta a rota `/usages` do leitor Kimi.
+- **Fast disponível, nunca ligado por padrão.** O motor criado pelo assistente grava `fast`;
+  ausente vale ligado (o seletor oferece Fast nos modelos `gpt-<dígito>` do proxy local), `false`
+  tira a opção. A sessão continua nascendo sem Fast; a chave do assistente diz "Permitir Fast".
+- **Ultra Fast pelo cabeçalho e por uma regra no config do proxy (20/11).** O tradutor Claude →
+  Codex do proxy (`normalizeCodexServiceTier`, v8.0.79) só aceita `fast`/`priority` e descarta o
+  resto calado. A sessão em Ultra Fast manda `priority` no corpo e `X-Hangar-Speed: ultrafast`
+  (`ANTHROPIC_CUSTOM_HEADERS`, somado aos cabeçalhos da pessoa); a regra `payload.override` (v8 em
+  `requests.payload`, legado na raiz) troca por `ultrafast` só nesses pedidos. A regra entra só no
+  config sem `payload` e com proxy v8+ (`headers:` nas regras chegou no v8.0.0; versão do externo
+  pelo `X-Cpa-Version`): num proxy mais velho valeria para todo pedido. Oferecido e aceito só com
+  conta fixa `plan_type` `pro`/`promax` e a regra presente, na criação, na reabertura e na troca.
+  Codex direto: quando o catálogo da conta lista `ultrafast` no modelo. Medido na DELPHI-02, mesma
+  resposta de ~460 tokens: normal 37–40 tok/s, Fast 57–62 (1,6×), Ultra Fast 110–120 (3×); o
+  registro do proxy mostrou `service_tier: ultrafast` saindo para a OpenAI.
+- **Motor do assistente grava `context_window`.** Sem ele o Claude Code assume 1M, e os GPT 6
+  aceitam 872 mil: a conversa passaria do limite antes de compactar (o incidente de 06/11). O
+  `GET /api/engines/cliproxy` preenche `context_length` dos modelos pelo `max_context_window` do
+  catálogo do Codex da máquina (sem catálogo, 872000 nos `gpt-6*`), e o assistente grava 95%.
+- **Pasta das contas explícita no config gerado** (`oauth.auth-dir`): o `~` padrão é o da pasta
+  pessoal do processo do proxy, e o Hangar lê as contas da pasta dele.
+- **Senha de gerenciamento poupada (20/11).** No v8.0.79 (`AuthenticateManagementKey`) pedido sem
+  senha ou com a errada conta como falha, e cinco seguidas bloqueiam o IP por 30 min, 127.0.0.1 e
+  login incluídos; a versão (`X-Cpa-Version`) só sai nessa rota. Por isso a versão só é perguntada
+  com a senha guardada, a senha recusada não é repetida por pedido de fundo até ser aceita, e a
+  troca de senha confere no máximo duas vezes, com 1,5 s de espera: o proxy relê o config em
+  ~150 ms (`configReloadDebounce`). Na atualização a regra do Ultra Fast entra só depois de a
+  versão nova responder, para a antiga, se voltar, não aplicar o tier em todo pedido.
+
+Login da conta: `POST /api/engines/cliproxy/login` pede ao proxy a página (`is_webui=true` sobe o
+receptor de volta nas portas 1455 do ChatGPT ou 54545 do Claude; porta ocupada →
+`cliproxy_login_porta_ocupada`, um login por vez na máquina). O cliente lê o andamento a cada 2 s;
+do celular ou de outro computador, o endereço `http://localhost:…` em que o navegador parou é
+colado e vai por `POST login/{state}/callback`, que só aceita loopback com `state=`. A conta já
+logada no proxy aparece como "Usar esta conta" e pula o login.
+
+O app nativo dispensa o colar quando o proxy está noutra máquina (pedido do usuário, 20/11):
+enquanto o login espera, ele escuta em `127.0.0.1` a porta e o caminho do `redirect_uri` do próprio
+link, então vale para qualquer provedor do proxy, e entrega pela mesma rota de callback só o `GET`
+com o `state` desse login. Porta ocupada (o proxy está na própria máquina e recebe a volta ele
+mesmo) não abre escuta. A escuta fecha quando o login entrega, ao voltar, ao abrir outro login, ao
+fechar o assistente ou em 15 min. O Expo continua com o colar: o navegador do celular não alcança o app.
+
+Proxy montado antes do Hangar guarda a senha de gerenciamento só como hash (o próprio proxy a
+troca na subida), e o Hangar não a recupera. Na caixa que pede a senha há "Usar uma senha nova"
+(decisão do usuário, 19/11): `POST management-key/reset` grava outra no lugar que o proxy lê (v8
+`management`, legado `remote-management`), com cópia, e espera o proxy aceitá-la antes de responder.
+A página web de gerenciamento passa a usar a senha nova.
+
+Causa do Fast ausente na DELPHI-02: o motor apontava para `127.0.0.1:8317`, mas sem
+`config.yaml` nem binário conhecido o `proxy::is_local` dava falso. Com a instalação pelo Hangar o
+config existe e o Fast aparece.
+
 ## Computer Use e transferência de atalhos são do Rust (13/11/2026)
 
 `/api/computer-control*` (leitura, `PUT`, alvos, testar SSH, preparar Windows) mora no crate
@@ -69,7 +462,8 @@ Claude completo; `hangar-codex-transfer` importa pelo app-server sem iniciar inf
 servidor integra esses crates ao ciclo de vida já existente e conduz a recuperação.
 
 Permanecem os registros de `conversation-transfers`, os códigos de erro, os modos de permissão,
-a restrição ao Codex 0.159.3 e a conferência de capacidade, configuração e conteúdo persistido.
+e a conferência de capacidade, configuração e conteúdo persistido. A restrição ao Codex 0.159.3
+saiu depois: ver [transferência sem versão fixa](harnesses.md#transferência-sem-versão-fixa-do-codex-19112026).
 O digest do snapshot e a fronteira do rollout continuam protegendo o histórico e as imagens.
 Falha após parar a origem exige restaurá-la; registro incompleto não autoriza publicar o destino.
 
@@ -1371,6 +1765,11 @@ de integração também conferiu os imports Python após as exclusões.
 
 ## Configuração compartilhada: leva o conteúdo, o destino resolve caminho e programa
 
+**Preferências de worktrees (17/11/2026):** a cópia de preferências inclui a configuração de
+criação e limpeza, com caminho portável, validação e backup no destino. A seleção parcial
+respeita a entrada `worktrees`; pacote sem essa entrada conserva a configuração local. Antes,
+uma cópia bem-sucedida das preferências podia deixar a limpeza desligada na outra máquina.
+
 (30/10/2026.) A migração dos motores inclui os leitores e escritores do pacote de configuração.
 As rotas `/api/config-sync/*` executam no Rust, assim como exportação, tradução, aplicação e
 pós-aplicar. A tradução usa o serviço `speech` já incorporado à branch principal, incluindo suas
@@ -2560,6 +2959,13 @@ locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambie
 
 ### Diretórios ignorados e submódulos na confirmação
 
+**Caches Rust grandes (17/11/2026):** a impressão dos arquivos não percorre `target` ignorado
+pelo Git, assim como já não percorria dependências instaladas. Uma pasta `target` com identidade
+Git própria ou sem regra de exclusão continua lida. A confirmação dos arquivos perdidos e as
+guardas de sessão, branch e alterações locais continuam valendo. Uma worktree com mais de
+100 mil artefatos atingia o limite da leitura e recusava até a remoção manual com confirmação;
+a regressão cria esse cache e chama a remoção pública, com Git e disco descartáveis.
+
 **Regra:** a lista do que será perdido inclui os diretórios ignorados inteiros e cada
 submódulo inicializado (`<caminho>/`); a confirmação existente autoriza o descarte deles.
 
@@ -3724,12 +4130,61 @@ status antigo. Nada novo no Python para isso.
 
 ## Chaveiro trancado no boot: o Rust detecta e o dono destranca de outra máquina (26/10/2026)
 
-**Regra.** O `hangar-server` lê `Locked` da coleção `login` do Secret Service (`busctl --user
---auto-start=no`, a cada 15 s) e publica o evento `keyring` (`{state}`) na lista do dono. O
+**Regra.** O `hangar-server` lê `Locked` da coleção `login` e do alias `default`
+(`/org/freedesktop/secrets/aliases/default`, o do Chrome e do Slack), sempre por uma conexão ao
+barramento que fica aberta, e publica o evento
+`keyring` (`{state}`) na lista do dono: qualquer das duas trancada é `locked`. Não há consulta
+periódica: a escuta lê ao ligar, a cada sinal do daemon (troca de dono do nome, `CollectionChanged`)
+e, depois de troca de dono ou leitura que falhou, no máximo três releituras espaçadas de 2 s; fora
+dela, só o desbloqueio com senha e a tentativa automática abaixo leem, cada um poucas vezes. Erro de
+coleção ou serviço inexistente é `absent`; qualquer outra falha é leitura que não veio, e o último
+estado fica. O
 `POST /api/keyring/unlock` só aceita o token do dono, nunca é repassado ao Python e manda a senha
 pelo socket de controle do gnome-keyring (`$XDG_RUNTIME_DIR/keyring/control`, protocolo do
-`gkr-pam`). Senha aceita e chaveiro ainda trancado: reinicia `gnome-keyring-daemon.service` e
+`gkr-pam`). Senha aceita e `login` ainda trancado: reinicia `gnome-keyring-daemon.service` e
 manda de novo, uma vez.
+
+**Default trancado com o login aberto (23/11/2026).** O `default` tem a senha guardada no `login`
+e só abre pelo fluxo do prompter (`Secret.Service.Unlock` e `Prompt`). Com o `login` aberto e o
+`default` trancado:
+- Sem senha, o servidor pede o `default` uma vez por vida do daemon, numa conexão própria que
+  fica aberta (o prompt sem resposta continua vivo para quem estiver diante da tela). Antes de
+  pedir, espera a tela no ambiente do `systemd --user`, que é o que o prompter ativado pelo
+  barramento herda (`display_env::has_display`: `WAYLAND_DISPLAY` ou `DISPLAY` local só valem com o
+  socket de pé; X de outra máquina vale), olhando a cada 5 s por até 10 min, sem ler o Secret
+  Service. Leitura que falha antes do pedido tenta de novo até três vezes. Sem resposta em 10 s, o
+  daemon fica marcado como preso naquela vida (a marca guarda a vida do daemon, e um daemon novo não
+  a herda) e o aviso continua. Ele **não**
+  reinicia o daemon: isso trancaria o `login` que o PAM abriu, mataria o prompt de quem estiver
+  digitando, e o dono teria de digitar a senha do mesmo jeito.
+- Com a senha (aviso do Hangar), abre o `login` e pede o `default`. Um pedido do `default` por
+  vez: com o automático esperando o prompt, o do dono espera o resultado dele em vez de abrir um
+  segundo prompt atrás. Daemon já marcado como preso ou sem resposta no prazo: reinicia, manda a
+  senha ao `login` do daemon novo e pede o `default` de novo. O reinício é um só por pedido, e a
+  resposta inteira tem 38 s (os clientes esperam 45): sem prazo para reiniciar e pedir de novo (12 s
+  + 10 s), ou para pedir o `default` (10 s), para ali; sem a vez de desbloquear (outro desbloqueio
+  em curso) a tempo de ao menos um pedido, desiste antes de mandar a senha. A rota ainda tem um teto
+  de 42 s sobre tudo isso (as esperas de E/S têm prazo próprio, mas podem somar): passou, responde 409
+  e o trabalho que segue publica o estado pelo evento. A resposta sai das duas coleções lidas no
+  fim: `login` trancado, ou ausente com o `default` trancado, é 409 `keyring_unlock_failed`; só o
+  `default` trancado com o `login` aberto (também sem tela) é
+  409 `keyring_default_locked` ("o login abriu, mas o chaveiro padrão continua trancado"). Reinício
+  que falha não decide a resposta: o daemon pode ter sido trocado, e vale o que se lê depois; sem
+  chaveiro no barramento, é falha.
+- Falha daqui (sem conexão ao barramento, sem runtime, erro de conexão) não é resposta do daemon:
+  não gasta a tentativa automática, que volta como leitura que falhou. Leitura que estoura o prazo
+  não larga a conexão: um `Get` deixado na fila de um cliente que saiu derruba o daemon.
+- Daemon que já recebeu a tentativa automática: o `default` trancado à mão depois fica trancado,
+  porque ela não se repete na mesma vida do daemon. Num daemon em que o `default` já estava aberto,
+  trancá-lo à mão com o `login` aberto dispara a primeira (e única) tentativa.
+
+**Por quê (23/11).** Às 08:13:42 o backend, de pé antes do login gráfico, pediu o Secret Service e o
+daemon tentou o `gcr-prompter` sem display (`cannot open display`). Às 08:13:44 o PAM do sddm abriu o
+`login`; o `Default_Keyring` ficou `Locked=true` e o Chrome e o Slack travaram. O servidor só lia o
+`login` e não publicou aviso. `Secret.Service.unlock_sync` no daemon preso estourou 40 s; depois de
+`systemctl --user restart gnome-keyring-daemon`, o desbloqueio das duas coleções funcionou.
+Conferido no daemon desta máquina, com as duas abertas: o `Get` de `Locked` e o `Unlock` pelo
+caminho do alias são aceitos (o `Unlock` volta com a coleção, sem prompt).
 
 **Por quê.** Com `Linger=yes` o Hangar sobe antes do login gráfico. No boot de 26/10 a checagem de
 worktree mesclada (`hangar-workspace/src/worktree_merge.rs`, `gh pr list`) pediu o token do `gh`,
@@ -3747,8 +4202,14 @@ usam o chaveiro (`~/.claude/.credentials.json`; o Codex está em `cli_auth_crede
   aberto: o desbloqueio automático roda dentro do fluxo do prompter. Com o login gráfico o prompter
   existe e ele abre sem perguntar; isso não foi medido com prompter de verdade.
 
-**Limite.** Se a fila de prompts do daemon travar o pedido do Chrome ao `Default_Keyring`, abrir o
-`login` não a solta; a reinicialização só acontece quando o próprio `login` não abre.
+**Limite.** Um `default` com senha própria (não guardada no `login`) abre um diálogo na tela que
+fica sem resposta enquanto ninguém digita; o servidor o trata como daemon preso, e o desbloqueio com
+senha do dono reinicia o daemon e o diálogo volta no daemon novo. Numa máquina sem tela, um
+`default` próprio trancado mantém o aviso, porque ele reflete o estado real e nada no Hangar o abre.
+O prompt do `default` com o daemon preso e o reinício seguido de abertura no daemon
+novo foram provados só pelo backend falso; o boot real ainda não foi repetido. Com o `login` aberto
+pelo PAM e o daemon preso, o Chrome e o Slack esperam até o dono digitar a senha no aviso. Sem login
+gráfico (`Linger`, sem tela) o `default` não abre pelo Hangar: o `login` abre e o aviso fica.
 
 ## Chave secreta do pane fora da linha de comando (26/10/2026)
 
@@ -4540,6 +5001,56 @@ Não testado: renovação, a CA de produção e um nome que dependa só do curin
 `*.hangar.dev.br`. Cargas e logs completos em
 `.superpowers/sdd/2026-11-06-hangar-connect-rust/prova-tunel.md` da árvore principal.
 
+## Entrar pelo Connect e convidados pelo Connect (22/11/2026)
+
+O primeiro acesso do Expo e do nativo pede conta ou usuário e senha, sem endereço. Endereço e token, QR,
+convite e demonstração ficam em "Outras formas de entrar". O pedido veio do dono: "no Connect eu não
+preciso informar a máquina" e "o convidado tem que entrar também".
+
+- **Um campo para os dois.** O cliente manda só o nome ao serviço (`POST /v1/lookup`), que responde
+  `account`, `guest` com os hosts de uma conta só, ou `none`. Conta: login da conta do Connect. Convidado:
+  login de sincronização (`/api/sync/prelogin|login|vault|logout`) no host da máquina que guarda a conta
+  dele, um host por vez. A senha do convidado nunca vai ao serviço. Se o serviço antigo responder 404 no
+  lookup, o cliente trata como conta.
+- **Nome de convidado** em minúsculo ASCII, com `.` ou `@`. Conta do Connect só aceita `[a-z0-9-]`, então os
+  dois nunca se confundem. O serviço guarda `sha256("hangar-guest:" + nome)` por máquina (`PUT /v1/guests`,
+  com a chave da máquina). Hash que já é de outra conta volta em `taken`, e a página mostra "nome em uso".
+  Risco aceito: uma conta pode registrar antes o nome previsível de um convidado de outra. O hash sem sal
+  não esconde nomes adivinháveis, e quem tem a chave de uma máquina testa candidatos pelo `taken`.
+- **Contas de convidado em arquivo próprio** (`~/.hangar/guest-accounts.json`, 0600, crate
+  `hangar-guest-accounts`), administradas pelo token do dono em `/api/guest-accounts`. O aparelho do
+  Connect conta como dono. A máquina guarda a chave do cofre do convidado e cifra sozinha a lista de
+  máquinas dele, então o dono não redigita senha. Contrapartida: a máquina lê o que ela já tinha (os tokens
+  de convidado). O arquivo nunca entra na configuração compartilhada. `sync-vault.json` e
+  `/api/sync/guests` continuam como estavam, para a web e para o nativo já instalado.
+- **Login do convidado sem a Sincronização ligada.** As rotas de login funcionam sempre que há conta no
+  arquivo novo. Todo caminho do login faz uma única derivação, para o tempo de resposta não revelar se o
+  nome existe. Pela porta do Connect todo pedido chega com o mesmo endereço, então o limite conta por
+  usuário, com teto geral, e a tentativa é contada antes da derivação. Só a senha recusada gasta a
+  tentativa: arquivo ilegível ou gravação que falha a devolvem. O teto geral atingido vai ao diário
+  (`sync.login_teto_connect`), uma vez por janela. Um nome vive num cofre só: conta de convidado nova não
+  toma o nome do dono nem de um convidado do cofre antigo, e `/api/sync/guests` não grava convidado com
+  nome de conta nova.
+- **Liberação de aparelho uma vez para a conta** (antes era máquina por máquina). Um aparelho já liberado
+  libera o novo com um toque, conferindo o código (`install_code`, o mesmo no celular, no Hangar e no
+  serviço). Leitura da conta recusada com o serviço no ar (máquina pendente, desconhecida ou revogada:
+  403 `device_revoked` ou 409 na lista pedida com a chave da máquina) suspende os
+  aparelhos que entraram pela conta e os aprovados por eles, até a próxima leitura boa: sem isso, um
+  aparelho revogado continuaria entrando.
+- **Conta antiga** (no cofre de sincronização, como a da convidada na VPS): "Trazer para o Connect" pede uma
+  vez a senha de sincronização do dono, recria a conta mantendo a senha da convidada e só então apaga a
+  antiga. Nome sem `.`/`@` ganha um nome novo, e o dono é avisado.
+- **`hangar-connect-client` não depende do `hangar-core`**, exceção à regra "módulo novo nasce como crate
+  próprio sobre o `hangar-core`". É crate folha compartilhado com o `desktop-native`, que entra pelo
+  Connect sem servidor local e não pode depender do core: as features de `serde_json` do servidor
+  (`arbitrary_precision`) mudariam os números do nativo, e as dependências do core mudariam o lockfile
+  dele. O servidor e o `hangar-connect` o usam por cima.
+- **Aparelhos desta máquina continuam com tela própria no nativo.** Os aprovados aqui sem vínculo de conta
+  e os pedidos pendentes de app antigo (`GET /api/connect/devices`, sem `account_device`) se aprovam,
+  recusam e perdem o acesso ali; os que vieram pela conta ficam em "Aparelhos da conta".
+
+Não testado de ponta a ponta antes do merge: o serviço publicado e o login real da convidada pelo celular.
+
 ## O Rust atende sozinho o que ainda repassava com trabalho real (10/11/2026)
 
 Primeira metade do fim da reserva do modo python. Com o Rust de pé, o dono não chega mais ao Python
@@ -4883,3 +5394,177 @@ Issue #408. O painel que usa os conectores.
   painel, e nada sobe ao Help.
 - **Sessão achada pela chave.** Como o plugin, a sessão da PM é a da branch `PM-XXXXX` ou a de nome que
   começa pela chave; ligar no painel grava o vínculo e libera a tool. Uma sessão, um ticket.
+
+## Tela de Status (17/11/2026)
+
+Substitui a tela de migração. Mock aprovado pelo Jefferson em 17/11/2026, depois de recusar a versão
+em linhas de texto ("só texto jogado na cara do usuário"): resumo de saúde com pontos de atenção,
+curvas, linha do tempo, cartões de máquina, barra dividida, colunas por hora e medidores.
+
+- **Retrato único (`hangar_api::status::StatusSnapshot`, `CLIENT_API` 19).** `GET /api/status` e o
+  SSE `/api/status/events` (evento `status`), só do dono. Bloco ausente = sem fonte; o cliente
+  esconde ou mostra "—", nunca zero. A lista de atenção é montada no servidor
+  (`hangar-status/attention.rs`); o texto sai no cliente por `status_attention_<code>`.
+- **Produtor só com assinante**, no molde do `ListHub`: servidor e máquina a cada 5 s, processos e
+  sessões a cada 15 s, peers a cada 30 s. O amostrador do processo roda sempre (60 pontos, um por
+  minuto) para a média da última hora existir. As rotas da tela não entram na linha `api.servidor`
+  do diário: a espera dela não pode aparecer como lentidão nos números que ela mesma mostra.
+- **Motivo da parada gravado na parada, nunca cruzando horário.** Antes de todo
+  `restarter.restart()` o executor grava `~/.hangar/stop-intent.json` (tipo, causa, pid do servidor
+  substituído); vale só para esse pid e por 10 min, e reinício recusado com o servidor ainda de pé
+  a apaga. A subida seguinte grava `hangar_server.saida` (`crash` / `update` / `requested`). A
+  causa da queda no Linux vem do journal ("Failed with result"), porque o `Result` da unit já foi
+  zerado quando o serviço sobe de novo. Sem marca válida, o `estado.json` do executor no passo
+  `reiniciar` para a versão que sobe, começado há menos de 10 min, explica a saída como `update`,
+  uma vez por passo e só para a vida que já estava de pé quando ele começou: a primeira atualização
+  para esta versão é feita pelo executor antigo, que não grava a marca, e no Windows ele encerra o
+  servidor à força (saída não limpa). Saída explicada não grava `hangar_server.caiu`. O "Reiniciar"
+  zera `versao_de`/`versao_para` no estado. Medido na DELPHI-02 em 19/11/2026: sem isso, cada
+  atualização a partir da 0.1.0.10969 virava uma queda na tela.
+- **Servidor parado não tem API.** O nativo lê e age pelo crate folha `hangar-local-server`
+  (sem `hangar-core`): estado do serviço, motivo, versões e as ações subir, liberar a porta (mesmo
+  usuário e mesmo nascimento conferidos na hora) e apontar o `current` para a versão anterior (com a
+  `UpdateLock`, serviço parado, conferência da versão que responde). As primitivas de link e a
+  `UpdateLock` saíram de `update/mod.rs` para esse crate; o servidor e o `hangar-core` importam de
+  lá. Nenhuma ação ganha rota HTTP. É exceção à regra do crate novo sobre o `hangar-core`: o app nativo é
+  outro workspace (`desktop-native/Cargo.toml`) e só puxa crates folha (`hangar-api`, `hangar-workspace`);
+  depender do core levaria o axum e a pilha HTTP do servidor para o binário do app. Por isso o crate
+  fica abaixo do core, só com std, serde, chrono e sysinfo, e nunca depende do `hangar-core` nem do
+  `hangar-server`. "Reinstalar o serviço" abre o assistente de instalação, porque o
+  `install-package` recusa máquina já instalada.
+- **O ponto na linha "Status" segue só o servidor** (vermelho parado, âmbar subindo, nada de pé):
+  disco quase cheio ou máquina com versão antiga não são ação que falhou, e ficam dentro da tela.
+- **Fora:** "Python vivo" (o Python não sobe mais), `lan` dos peers (o servidor só chama o
+  `base_url`), limpar restos pela tela (só conta).
+
+## Revisão do trabalho (`work_review/v1`): capacidade do conector, releitura no fim do turno (18/11/2026)
+
+A sessão ligada a um ticket mostra numa aba própria do painel, "Revisão", a revisão que o
+conector oferece (comparação com o mock, no primeiro conector que a usa) e devolve as decisões ao agente
+pelo conector. Contrato em [`docs/connectors/work-review-v1.md`](../connectors/work-review-v1.md);
+motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_review_watch.rs`.
+
+- **Aba própria, não seção do Contexto.** No teste de uso real, a revisão dentro do Contexto ficava
+  espremida entre o medidor e as Ações, com os quadros do mock pequenos. A aba só existe quando a
+  sessão tem revisão, leva o número do que falta, e o chip do card abre a sessão já nela.
+- **Capacidade, não fornecedor.** `work_review/v1` exige `work_tracking/v1`. O Hangar não conhece
+  mock nem fornecedor: título, etapas, escolhas e motivos vêm do conector; o texto genérico (enviar,
+  anterior e próxima, "falta N") é do Hangar.
+- **O Hangar relê; o conector não avisa.** O host lê só a resposta do pedido que fez, um por vez, e a
+  vida morre após 60 s sem pedido: uma notificação `work_review.changed` quebraria a vida. A revisão é
+  relida (a) ao abrir a aba Revisão, (b) no fim de cada turno, pelas linhas da lista, mesmo sem painel
+  aberto (é o que alimenta o chip), (c) depois do envio das decisões e (d) a cada chamada da tool
+  `mission` nesta máquina, inclusive a sem argumentos, que a skill usa para a barra andar no meio de
+  um turno longo. A releitura pela tool roda em tarefa própria: a tool tem corte de ~60 s.
+- **Fim do turno pelas linhas da lista.** Passagem de `working` para outro estado, `last_reply_at`
+  novo fora de `working`, branch trocada ou primeira vista (esta só relê quem ainda não tem resumo).
+  Lista em erro não conta nada. O vigia só assina a lista (assinatura interna, que não conta como app
+  aberto) enquanto houver conector ligado com a capacidade, conferido a cada 60 s; sem ele, o produtor
+  da lista para quando nenhum app está aberto.
+- **Fila por conector.** A releitura em segundo plano tem no máximo uma chamada em voo por conector;
+  o pedido da pessoa (painel, imagem, envio) não entra na fila e espera no máximo a chamada em voo.
+  Por sessão, uma leitura por vez, com uma releitura marcada para o fim. O envio sobe a geração da
+  sessão: leitura começada antes dele não grava.
+- **Ticket da sessão.** Primeiro o vínculo do Tickets, pela mesma regra da tool `mission`
+  (`hangar_mission::link::resolve`: sessão ou grupo, com a chave da vida conferida). Sem vínculo, cada
+  conector com a capacidade recebe `work_tracking.get(<branch da sessão>)`, aceito só com `key` igual
+  à branch ("achado pela branch"); o resultado, inclusive o negativo, fica guardado por conector e
+  branch até a branch mudar, e erro não vira negativo. Resumo e cache são por nome e vida: sessão
+  recriada com o mesmo nome não herda a revisão.
+- **Fora do escopo: ticket de outra máquina.** O vínculo remoto que a tool `mission` resolve pelos
+  peers não é seguido; a seção não aparece nessa sessão.
+- **Imagens em cache no disco.** `<cache>/hangar/work-review/<conector>/<ticket>/<rodada>/<asset>`,
+  imutáveis dentro do `review_id`; a pasta do ticket sai quando a rodada muda, e o total tem teto de
+  256 MiB (saem os tickets mais antigos). A rota responde `Cache-Control: private, max-age=86400, immutable`.
+- **Só o dono.** As rotas `/api/sessions/{nome}/work-review*` usam `owner_only`; o evento
+  `work_reviews` sai só pelo laço da lista do dono, nunca pelo do convidado (teste em `list/hub.rs`).
+  Corpo: `{"reviews": {"<sessão>": {"review_id", "state", "badge": {"text","tone"}|null, "updated_at"}}}`,
+  só com as sessões atuais que têm revisão, publicado quando muda o resumo ou as linhas.
+- **Escolha marcada vai ao servidor na hora (23/11/2026).** Antes as escolhas viviam só na memória do
+  cliente até o "Enviar": trocar de sessão ou fechar o app perdeu 50 decisões de uma comparação com o mock. Cada escolha
+  e cada motivo vão por `PUT /api/sessions/{nome}/work-review/draft` (`{"review_id", "choices"}`),
+  gravado em `~/.hangar/work-review-drafts/<sha1 do conector e do ticket>.json` (não é cache); o `GET` da
+  sessão devolve `draft` só da rodada lida e só com decisão e escolha que ela ainda mostra. O servidor junta por decisão com o que já guardou da mesma
+  rodada (outro aparelho aberto não apaga as escolhas deste), resumo de outra rodada é relido antes
+  de recusar, e rascunho de outra rodada já gravado no ticket (outra sessão nele) só é trocado se a
+  revisão relida agora for a do pedido; rodada diferente da lida de novo é 409 `stale_review`. O cliente faz uma gravação por vez por sessão, só com as decisões mudadas que o
+  servidor ainda não confirmou (o servidor junta numa trava só, e a rodada é conferida de novo dentro
+  dela); rede fora ou 5xx tenta de novo a cada 5 s por 1 min, e o que não foi confirmado nunca é
+  descartado, vai junto na próxima escolha. O que este aparelho ainda não confirmou vence o guardado, e o
+  já confirmado vem do servidor (outro aparelho pode tê-lo mudado); o envio final manda o que a tela
+  mostra; leitura começada antes de uma gravação confirmar é refeita, e o painel abre na primeira
+  que falta. O conector não
+  vê o rascunho: o `decide` continua com o lote inteiro.
+- **Falha em segundo plano vai ao diário.** Releitura que falha mantém o resumo anterior e registra
+  `rust.work_review` com o código, uma vez por minuto por sessão e código; a tela não vê. Falha da
+  leitura que a pessoa pediu (abrir o painel, enviar) aparece na seção.
+
+## Vídeo do celular: upload responde ao gravar, quadros e fala por pedido que espera (17/11/2026)
+
+- **Motivo.** O envio nativo do Expo (`File.upload`) desiste com 60 s sem resposta (Android OkHttp
+  `readTimeout(60)`, iOS sessão padrão). O `/upload` de vídeo só respondia depois de `media::extract`
+  (ffprobe 30 s, até 6 quadros de 25 s, áudio 90 s) e da transcrição (até 120 s). Vídeo com fala longa
+  aparecia como falha no celular, embora o arquivo já estivesse no servidor; e o app jogava fora quadros
+  e fala, que o desktop põe na mensagem.
+- **Contrato.** `POST …/upload?media=later` com vídeo responde na hora com `"media":"pending"` e um
+  `media_id` aleatório; o processamento roda numa tarefa e o resultado fica num registro em memória
+  (`uploads::media::MediaJobs`). `GET …/upload-media?id=<media_id>` segura o pedido até ficar
+  pronto ou 45 s (`status: pending`), e devolve `{"status":"done","frames","transcript"}`. Id
+  desconhecido, expirado (10 min depois de pronto), de tarefa que caiu ou perdido por
+  reinício é 404 `upload_media_unknown`: o app segue só com o vídeo, como o desktop quando a
+  transcrição falha. Sem `media=later` nada muda: desktop e web continuam recebendo quadros e fala na
+  resposta.
+- **Chave pelo id, não pela sessão.** `/clear`, troca de nome e a conversa nova (que sobe antes do
+  primeiro envio) mudam a sessão entre o upload e a espera.
+- **Uma tarefa de mídia por vez, no caminho `media=later`.** Cada uma roda ffmpeg e ocupa uma vaga de
+  transcrição até o fim; o cliente não segura mais a resposta, então várias em paralelo tirariam as
+  vagas do ditado (`transcription_busy`). O caminho sem o parâmetro (desktop e web) continua como era.
+  A tarefa não é cancelada quando o anexo é removido.
+- **Pedido que espera, não evento no chat.** Sem formato novo de evento nos três clientes; o app repete
+  o pedido quando o servidor devolve `pending`. O teto do core (3 min) conta só o tempo SEM resposta:
+  cada `pending` o renova, porque a fila de vídeos é finita e contá-la deixava o segundo vídeo longo
+  sem quadros nem fala (revisão local do PR #443).
+- **A espera acha a mídia só pelo id**, sem procurar a sessão do nome na URL: a sessão renomeada no meio
+  dava 404. O id aleatório vale como chave de acesso.
+- **No módulo `uploads/`, não crate próprio.** É o mesmo recurso do upload: usa o `UploadStore`, o
+  `extract` e a transcrição do servidor; separar exigiria descer os três para o `hangar-core`.
+- **Prazo do upload pelo tamanho.** `max(180 s, tamanho / 50 kB/s)`; o prazo estourado não marca a
+  máquina como fora do ar, a queda de rede continua marcando (`countsOutage: 'network'`). Vale para o
+  app e para a web, que compartilham o core. Sem teto: um link que trava num arquivo grande deixa o
+  envio esperando até o prazo dele.
+
+## Padrão de abertura é do servidor (22/11/2026)
+
+- **Caso que motivou.** O PR #460 guardou o Code Mode no `appearance.json` do desktop e o punha no
+  corpo só na tela de criar (`create.rs`). Sessão aberta por `hangar-send --new`, MCP, Expo, tarefa
+  agendada, `orq` ou outro servidor nascia sem ele: `hook-resposta-pt`, aberta pela `review-pr-479`,
+  nasceu com `code_mode: false` e as duas opções ligadas no desktop.
+- **Regra.** O omitido é do `resolve_open()`. "Conversa nova" e "Code Mode" moram em
+  `~/.hangar/session-options.json` (`GET`/`PUT /api/session-options`, só do dono); o Code Mode vale
+  quando o pedido omite `code_mode`, o provedor é Claude e as duas estão ligadas. O desktop copia o
+  `appearance.json` antigo uma vez (`if_absent`), e só se a pessoa mexeu nele: a cópia intocada
+  (`false`, `false`) não é escolha, ou o primeiro computador a conectar decidiria por todos. O desenho
+  da conversa continua lendo a escolha local, que o servidor nunca muda; "Conversa nova" muda mesmo
+  com o servidor fora e chega a ele quando ele responde. `code_mode: true` explícito fora do Claude é
+  recusado (`erro_code_mode_so_claude`).
+- **Sem terminal, o Code Mode vai no `env` do `--settings`.** O Claude Code 2.1.330, com `-p` ou
+  pelo SDK, recusa a variável vinda do ambiente do processo (motivo `not_passed`) e só a aceita no
+  `env` do `--settings`. Medido no CLI com as opções do lançamento sem terminal: com a variável no
+  ambiente o modelo não recebe a REPL; no `--settings`, recebe `Poll` e `REPL`. Antes disso o Code
+  Mode nunca valeu em sessão sem terminal. Com terminal a variável no ambiente continua valendo. O
+  CLI ainda recusa fora da API da Anthropic (motor, CLIProxy) e em modelo anterior ao Opus 5.5 e
+  Sonnet 5.5.
+- **Arquivo próprio, não o `session-defaults.json`.** A versão anterior lê aquele arquivo com
+  `deny_unknown_fields` em cada escopo: uma chave nova faria a volta de uma atualização recusar toda
+  criação de sessão.
+- **Travas.** Tabela única no crate `hangar-session-open-fields` (campos, nome no MCP, flags do CLI,
+  quais têm padrão do servidor). O servidor confere que todo campo do `SessionOpenRequest` está nela
+  ou em `SERVER_ONLY` com o motivo, e que campo com padrão guarda o explícito (o `bool` puro do #460
+  perdia o `false`); o MCP e o `hangar-send` conferem que cada um chega ao corpo; o desktop confere
+  que o corpo não muda com nenhuma preferência guardada no computador. Contra o código do #460
+  falharam a do valor explícito, a do MCP, a do CLI e a do desktop; a da tabela pega o campo novo
+  que entrar no pedido sem entrar nela.
+- **Mesma regra nos outros clientes.** O desktop deixou de lembrar o último modelo, e o Expo o
+  provedor, modelo, esforço, modo e contas; tarefa agendada nova guarda só o que a pessoa escolheu.
+  O `hangar-send --new` não escolhe mais o provedor omitido. O `--jev` do `orq` fica: é escolha do
+  fluxo para os papéis dele.

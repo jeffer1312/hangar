@@ -1,0 +1,187 @@
+{
+ "case": "nav/headless-key-without-match",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "nav_hook.py",
+ "contract_refs": [
+  "R1-S10",
+  "H-35"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/nav_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg",
+   "CP_SESSION_KEY": "nao-existe"
+  },
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/claude-headless": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/nav": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/claude-headless/c-certo.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 44,
+    "sha256": "d3fddc9f947b8636501370ef6f9c23f6bea182859db566385ccf7e31da331cb9",
+    "content": {
+     "text": "{\"key\": \"chave-123\", \"name\": \"minha-sessao\"}"
+    }
+   },
+   "home/.hangar/claude-headless/b-outro.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 40,
+    "sha256": "f1a291d21f358d80a24027fc87024c6dbe982dedb7e1c27c4e1b7228aaf09ae8",
+    "content": {
+     "text": "{\"key\": \"outra\", \"name\": \"outra-sessao\"}"
+    }
+   },
+   "home/.hangar/claude-headless/a-torto.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 6,
+    "sha256": "c9a4811b458c1d1f06def760c52b55a904d2ba74215ad1019bc6ff0830726e64",
+    "content": {
+     "text": "{torto"
+    }
+   },
+   "home/.hangar/nav/_ignorado.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 49,
+    "sha256": "e8c0a358f122e983ef68f8b1b8b472aa9ff22b4b39656702583df1e054ef2802",
+    "content": {
+     "text": "{\"chave\": \"minha-sessao\", \"url\": \"http://errado\"}"
+    }
+   },
+   "home/.hangar/nav/sessao-x.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 63,
+    "sha256": "a646ee16f3258d082356d3d7da971dafb2d8c700de13a729a1ca8860f0afef98",
+    "content": {
+     "text": "{\"chave\": \"minha-sessao\", \"url\": \"http://localhost:5173/login\"}"
+    }
+   },
+   "home/.hangar/nav/_srv.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 30,
+    "sha256": "fed0cb97f55bce152906c07950b4e2129f952b754b126e234e7607466ecead6f",
+    "content": {
+     "text": "{\"pid\": 3239413, \"port\": 9222}"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"session_id\": \"11111111-2222-4333-8444-555555555555\", \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"hook_event_name\": \"UserPromptSubmit\", \"prompt\": \"oi\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 35,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "home/.hangar": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/claude-headless": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/nav": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/claude-headless/c-certo.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 44,
+   "sha256": "d3fddc9f947b8636501370ef6f9c23f6bea182859db566385ccf7e31da331cb9",
+   "content": {
+    "text": "{\"key\": \"chave-123\", \"name\": \"minha-sessao\"}"
+   }
+  },
+  "home/.hangar/claude-headless/b-outro.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 40,
+   "sha256": "f1a291d21f358d80a24027fc87024c6dbe982dedb7e1c27c4e1b7228aaf09ae8",
+   "content": {
+    "text": "{\"key\": \"outra\", \"name\": \"outra-sessao\"}"
+   }
+  },
+  "home/.hangar/claude-headless/a-torto.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 6,
+   "sha256": "c9a4811b458c1d1f06def760c52b55a904d2ba74215ad1019bc6ff0830726e64",
+   "content": {
+    "text": "{torto"
+   }
+  },
+  "home/.hangar/nav/_ignorado.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 49,
+   "sha256": "e8c0a358f122e983ef68f8b1b8b472aa9ff22b4b39656702583df1e054ef2802",
+   "content": {
+    "text": "{\"chave\": \"minha-sessao\", \"url\": \"http://errado\"}"
+   }
+  },
+  "home/.hangar/nav/sessao-x.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 63,
+   "sha256": "a646ee16f3258d082356d3d7da971dafb2d8c700de13a729a1ca8860f0afef98",
+   "content": {
+    "text": "{\"chave\": \"minha-sessao\", \"url\": \"http://localhost:5173/login\"}"
+   }
+  },
+  "home/.hangar/nav/_srv.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 30,
+   "sha256": "fed0cb97f55bce152906c07950b4e2129f952b754b126e234e7607466ecead6f",
+   "content": {
+    "text": "{\"pid\": 3239413, \"port\": 9222}"
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910460.277066,
+  "t_end": 1794910460.314563
+ }
+}

@@ -27,6 +27,11 @@ pub(crate) fn path(home: &Path, key: &str) -> io::Result<PathBuf> {
 
 pub fn write(home: &Path, spec: &SessionSpec) -> io::Result<()> { write_at(home, &path(home, &spec.key)?, spec) }
 
+pub(crate) fn confirm_binding(home: &Path, spec: &SessionSpec) -> io::Result<()> {
+    if let Some(conversation) = &spec.conversation { save_binding_history(home, spec, conversation)?; }
+    Ok(())
+}
+
 fn write_at(home: &Path, path: &Path, spec: &SessionSpec) -> io::Result<()> {
     std::fs::create_dir_all(dir(home))?;
     crate::runtime::queue::atomic_write(path, &serde_json::to_vec_pretty(spec)?)
@@ -58,6 +63,43 @@ pub fn launch_mode(home: &Path, conversation: &str) -> Option<String> {
         let mode = (spec["conversation"] == conversation).then(|| text(&spec, "permission_mode")).flatten().filter(|mode| mode != "plan")?;
         Some((spec["created_at"].as_f64().unwrap_or(0.0), mode))
     }).max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, mode)| mode)
+}
+
+fn binding_history_path(home: &Path, conversation: &str) -> Option<PathBuf> {
+    super::archive::UUID.is_match(conversation).then(|| dir(home).join("conversations").join(format!("{conversation}.json")))
+}
+
+pub(crate) fn remember_claude_binding(home: &Path, key: &str, conversation: &str) -> io::Result<()> {
+    let Some(spec) = (match read(home, key) {
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => None,
+        other => other?,
+    }) else { return Ok(()) };
+    if let Some(previous) = &spec.conversation { save_binding_history(home, &spec, previous)?; }
+    save_binding_history(home, &spec, conversation)
+}
+
+fn save_binding_history(home: &Path, spec: &SessionSpec, conversation: &str) -> io::Result<()> {
+    if spec.provider != AgentProvider::Claude { return Ok(()); }
+    let bound = matches!(spec.account, Account::Engine { binding: Some(_), .. });
+    let Some(path) = binding_history_path(home, conversation) else {
+        if bound { return Err(io::Error::new(io::ErrorKind::InvalidInput, "identificador de conversa inválido")); }
+        return Ok(());
+    };
+    if !bound && !path.exists() { return Ok(()); }
+    let mut snapshot = spec.clone();
+    snapshot.conversation = Some(conversation.to_owned());
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    write_at(home, &path, &snapshot)
+}
+
+pub(crate) fn archived_claude(home: &Path, conversation: &str) -> Option<SessionSpec> {
+    let active_record = std::fs::read_dir(dir(home)).ok().into_iter().flatten().flatten().filter_map(|entry| {
+        let path = entry.path();
+        if path.extension()?.to_str()? != "json" { return None; }
+        let spec = read(home, path.file_stem()?.to_str()?).ok().flatten()?;
+        (spec.provider == AgentProvider::Claude && spec.conversation.as_deref() == Some(conversation)).then_some(spec)
+    }).max_by(|a, b| a.created_at.total_cmp(&b.created_at));
+    active_record.or_else(|| serde_json::from_slice(&std::fs::read(binding_history_path(home, conversation)?).ok()?).ok())
 }
 
 /// `Ok(None)` só quando não existe; arquivo ilegível ou de outra versão é erro, nunca um spec inventado.
@@ -121,7 +163,7 @@ pub fn claude_from_meta(meta: &Value, name: &str, created_at: f64) -> io::Result
     let key = text(meta, "key").ok_or_else(|| missing("key"))?;
     let config_dir = text(meta, "config_dir");
     let account = match text(meta, "engine") {
-        Some(name) => Account::Engine { name, account: text(meta, "engine_account"), config_dir,
+        Some(name) => Account::Engine { name, account: text(meta, "engine_account"), binding: text(meta, "engine_binding"), config_dir,
             context_window: meta["context_window"].as_u64(), context_window_unknown: false },
         None => config_dir.map_or(Account::Default, |config_dir| Account::Claude { config_dir }),
     };
@@ -133,9 +175,12 @@ pub fn claude_from_meta(meta: &Value, name: &str, created_at: f64) -> io::Result
         permission_mode: text(meta, "permission_mode").as_deref().and_then(PermissionMode::claude),
         // A seleção de plugins e skills mora no registro de customizações do Rust, pelo id da conversa.
         subagent_model: text(meta, "subagent_model"), customizations: None, jev: meta["jev"] == true,
+        code_mode: meta["code_mode"] == true,
         read_only: meta["read_only"] == true, worktree: None, creator: None, created_at,
         conversation: text(meta, "session_id"),
         name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
+        // O sidecar guarda o settings da conversa: a sessão sem hooks continua sem hooks reconstruída por ele.
+        hooks_off: meta["claude_settings"]["disableAllHooks"] == true,
     })
 }
 
@@ -169,14 +214,47 @@ pub fn from_sidecars(home: &Path, name: &str) -> io::Result<Option<SessionSpec>>
         account_source: AccountSource::Explicit, model: text(&meta, "model"), effort: text(&meta, "effort"), service_tier: tier(&meta),
         // Modo gravado fora da lista fica ausente: quem reabre recusa em vez de abrir em Full Access.
         permission_mode: text(&meta, "permission_mode").as_deref().and_then(PermissionMode::codex),
-        subagent_model: None, customizations: None, jev: meta["jev"] == true, read_only: meta["read_only"] == true,
+        subagent_model: None, customizations: None, jev: meta["jev"] == true, code_mode: false, read_only: meta["read_only"] == true,
         worktree: None, creator: None, created_at: created(&codex_path), conversation: text(&meta, "thread_id"),
-        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
+        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
     }))
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clearing_a_conversation_keeps_the_engine_binding_in_both_archive_entries() {
+        use super::*;
+        let home = tempfile::tempdir().unwrap();
+        let prior = "00000000-0000-4000-8000-000000000001";
+        let next = "00000000-0000-4000-8000-000000000002";
+        let mut spec = claude_from_meta(&serde_json::json!({"key":"a".repeat(32),"cwd":"/work","session_id":prior,
+            "engine":"gpt-pro","engine_account":"default","engine_binding":"pro-identity"}), "chat", 10.0).unwrap();
+        write(home.path(), &spec).unwrap();
+        remember_claude_binding(home.path(), &spec.key, next).unwrap();
+        assert_eq!(archived_claude(home.path(), next).unwrap().account, spec.account);
+        assert_eq!(archived_claude(home.path(), prior).unwrap().account, spec.account);
+        spec.conversation = Some(next.into());
+        spec.account = Account::Default;
+        write(home.path(), &spec).unwrap();
+        assert_eq!(archived_claude(home.path(), next).unwrap().account, Account::Default);
+        assert!(matches!(archived_claude(home.path(), prior).unwrap().account, Account::Engine { binding: Some(_), .. }));
+    }
+
+    #[test]
+    fn unconfirmed_launch_does_not_leave_a_binding_in_the_archive() {
+        use super::*;
+        let home = tempfile::tempdir().unwrap();
+        let sid = "00000000-0000-4000-8000-000000000003";
+        let spec = claude_from_meta(&serde_json::json!({"key":"b".repeat(32),"cwd":"/work","session_id":sid,
+            "engine":"gpt-pro","engine_account":"default","engine_binding":"pro-identity"}), "chat", 10.0).unwrap();
+        write(home.path(), &spec).unwrap();
+        remove(home.path(), &spec.key).unwrap();
+        assert!(archived_claude(home.path(), sid).is_none());
+        confirm_binding(home.path(), &spec).unwrap();
+        assert_eq!(archived_claude(home.path(), sid).unwrap().account, spec.account);
+    }
+
     /// SO4: o Arquivo reabre a mesma conversa com chave nova e o spec antigo fica: vale o mais recente.
     #[test]
     fn the_launch_mode_is_the_one_of_the_latest_spec_of_the_conversation() {

@@ -45,8 +45,12 @@ pub struct Context {
     pub roots: Roots,
     pub engines: PathBuf,
     pub preferences: PathBuf,
+    pub worktree_home: PathBuf,
     pub aliases: PathBuf,
     pub native: PathBuf,
+    /// O `.claude.json` que a conta padrão lê (`AccountEnvironment::default_claude_json`): de onde saem e
+    /// para onde vão os `mcpServers` compartilhados.
+    pub claude_json: PathBuf,
     pub progress: Option<tokio::sync::mpsc::UnboundedSender<Value>>,
 }
 impl Context {
@@ -55,6 +59,8 @@ impl Context {
             progress: None,
             engines: Path::new(&roots.claude).join("engines.json"),
             preferences: Path::new(&roots.claude).join("runtime-config.json"),
+            worktree_home: PathBuf::from(&roots.home),
+            claude_json: Path::new(&roots.home).join(".claude.json"),
             aliases: Path::new(&roots.claude).join(".hangar-apelidos.json"),
             native: Path::new(&roots.home).join(if cfg!(windows) {
                 "AppData/Roaming/hangar-native"
@@ -62,6 +68,12 @@ impl Context {
                 ".config/hangar-native"
             }),
             roots,
+        }
+    }
+    pub(super) fn worktree_roots(&self) -> Roots {
+        Roots {
+            home: self.worktree_home.to_string_lossy().into_owned(),
+            ..self.roots.clone()
         }
     }
     pub fn emit(&self, event: Value) {
@@ -135,17 +147,24 @@ pub fn own_skills(roots: &Roots) -> BTreeSet<String> {
         .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .collect()
 }
-pub fn own_hooks(roots: &Roots) -> BTreeSet<String> {
-    let mut names: BTreeSet<String> = names(&Path::new(&roots.hangar).join("backend/hooks"))
-        .iter()
-        .filter(|p| p.extension().is_some_and(|e| e == "py"))
-        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .collect();
-    names.insert("pair-context".into());
-    names
+/// Os hooks do Hangar (ficam no destino, não viajam): os subcomandos de hoje e os scripts Python que
+/// máquinas ainda não atualizadas gravam. Lista fixa: a pasta `backend/hooks` sai do pacote.
+pub const OWN_HOOKS: &[&str] = &[
+    "state-hook", "preview-hook", "nav-hook", "askq-capture", "pair-context", "guard-tmux", "kimi-state-hook",
+    "state_hook.py", "preview_hook.py", "nav_hook.py", "askq_capture.py", "subagent_hook.py", "guard_tmux.py",
+    "kimi_state_hook.py",
+];
+
+pub fn own_hooks(_roots: &Roots) -> BTreeSet<String> {
+    OWN_HOOKS.iter().map(|name| (*name).to_owned()).collect()
 }
+/// Subcomando só conta atrás de um programa do Hangar, como na instalação: hook pessoal com o mesmo
+/// argumento viaja.
 pub fn is_own_hook(command: &str, own: &BTreeSet<String>) -> bool {
     own.iter().any(|name| {
+        if !name.ends_with(".py") {
+            return crate::harness_setup::hooks::runs_subcommand(&Value::from(command), name, cfg!(windows));
+        }
         let pattern = format!(r#"(?:^|[\s/\\"']){}(?:$|[\s"'])"#, regex::escape(name));
         regex::Regex::new(&pattern).unwrap().is_match(command)
     })
@@ -630,10 +649,22 @@ fn export_item(
                 });
             }
             let values = canon(&pick(&values, keep, ""), roots);
-            Ok(json!({key:values,"hashes":bundle::hashes(&values,"")}))
+            let mut data = json!({key:values,"hashes":bundle::hashes(&values,"")});
+            if item == "hangar_prefs" && selected("worktrees") {
+                // Sem arquivo vale o padrão, que também precisa poder ser enviado.
+                let path = ctx.worktree_home.join(".hangar/worktree-settings.json");
+                let settings = hangar_workspace::worktree_settings::WorktreeSettings::load_at(&path)
+                    .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                let settings = serde_json::to_value(settings)
+                    .map_err(|e| Error::new("config_sync_invalid_json", e.to_string(), json!({})))?;
+                let settings = canon(&settings, &ctx.worktree_roots());
+                data["hashes"]["worktrees"] = json!(bundle::hash(&settings));
+                data["worktrees"] = settings;
+            }
+            Ok(data)
         }
         "claude_mcp" => {
-            let raw = read_json(&Path::new(&roots.home).join(".claude.json"))?;
+            let raw = read_json(&ctx.claude_json)?;
             let mut all = pick(&raw["mcpServers"], None, "");
             all.as_object_mut()
                 .unwrap()
@@ -1006,6 +1037,12 @@ fn appearance(
 #[cfg(test)]
 mod review_tests {
     use super::*;
+    #[test]
+    fn guest_accounts_file_never_travels() {
+        // Tem os tokens de convidado de cada máquina e a chave do cofre de cada convidado.
+        assert!(never_ref("⟦HOME⟧/.hangar/guest-accounts.json"));
+        assert!(never_ref("⟦HOME⟧/x/../.hangar/guest-accounts.json"));
+    }
     #[test]
     fn listing_failure_is_not_an_empty_directory() {
         let home = tempfile::tempdir().unwrap();

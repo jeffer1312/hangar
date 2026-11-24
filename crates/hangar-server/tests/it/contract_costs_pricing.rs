@@ -204,6 +204,7 @@ fn pricing_reload_invalidates_both_memos_and_keeps_alias_order() {
 // ── R1.6: download das tarifas (contract/r1-pricing) ─────────────────────────────────────────────
 
 mod refresh {
+    use hangar_server::costs::pricing::SNAPSHOT_PATH;
     use hangar_server::costs::pricing_refresh::{PROVIDERS, PricingRefresh, excerpt, slim, versioned_text, write_snapshot};
     use serde_json::{Value, json};
     use std::path::{Path, PathBuf};
@@ -400,6 +401,15 @@ mod refresh {
     }
 
     #[test]
+    fn windows_keep_the_context_limit_of_known_providers() {
+        let raw = json!({
+            "google": {"models": {"gemini-4-neon": {"limit": {"context": 1048576, "output": 65536}}, "sem-limite": {}}},
+            "revenda": {"models": {"x": {"limit": {"context": 5}}}},
+        });
+        assert_eq!(Value::Object(hangar_server::costs::pricing_refresh::windows(&raw)), json!({"gemini-4-neon": 1048576}));
+    }
+
+    #[test]
     fn slim_follows_the_python_rules() {
         let raw = json!({
             "anthropic": {"models": {
@@ -446,7 +456,7 @@ mod refresh {
         let root = repo_root();
         let lines = write_snapshot(root.path(), &fake.url).await.unwrap();
         assert_eq!(fake.seen.lock().unwrap().clone(), [(Some("hangar/fetch_model_prices".to_owned()), None)]);
-        let snapshot = std::fs::read_to_string(root.path().join("backend/app/pricing_data.json")).unwrap();
+        let snapshot = std::fs::read_to_string(root.path().join(SNAPSHOT_PATH)).unwrap();
         // O checkout do Windows traz a fixture com CRLF; o snapshot sai sempre com LF.
         let python = std::fs::read_to_string(fixtures().join("pricing_data_snapshot.json")).unwrap().replace("\r\n", "\n");
         let generated = |text: &str| text.lines().nth(1).unwrap().to_owned();
@@ -456,7 +466,9 @@ mod refresh {
         // O checkout do Windows traz a fixture com CRLF; o recorte sai sempre com LF.
         let expected = String::from_utf8(recorte()).unwrap().replace("\r\n", "\n");
         assert_eq!(String::from_utf8(written).unwrap(), expected, "o recorte do recorte sai byte a byte igual");
-        assert_eq!(lines[0], format!("80 entradas -> {}", root.path().join("backend/app/pricing_data.json").display()));
+        assert_eq!(lines[0], format!("80 entradas -> {}", root.path().join(SNAPSHOT_PATH).display()));
+        assert_eq!(SNAPSHOT_PATH, "crates/hangar-server/data/pricing_data.json", "o snapshot mora no crate, fora do backend/");
+        assert!(!root.path().join("backend").exists(), "nada é gravado na backend/");
         // A versão do Python vira o mesmo texto pelo leitor do snapshot.
         assert_eq!(versioned_text(&serde_json::from_str(&python).unwrap()), python);
     }
@@ -468,7 +480,7 @@ mod refresh {
             let fake = fake(mode).await;
             let root = repo_root();
             assert!(write_snapshot(root.path(), &fake.url).await.is_err());
-            assert_eq!(files_under(root.path()), ["backend/app", "crates/hangar-server/tests/it/fixtures/pricing"].map(String::from));
+            assert_eq!(files_under(root.path()), ["crates/hangar-server/data", "crates/hangar-server/tests/it/fixtures/pricing"].map(String::from));
         }
     }
 
@@ -478,7 +490,7 @@ mod refresh {
         let fake = fake(Mode::Strict).await;
         let root = tempfile::tempdir().unwrap();
         let error = write_snapshot(root.path(), &fake.url).await.unwrap_err();
-        assert!(error.contains("backend/app"), "{error}");
+        assert!(error.contains("hangar-server/data"), "{error}");
         assert!(std::fs::read_dir(root.path()).unwrap().next().is_none(), "nenhuma pasta criada");
         assert!(fake.seen.lock().unwrap().is_empty(), "nada baixado");
     }
@@ -513,7 +525,7 @@ mod refresh {
     /// Raiz com as duas pastas que o snapshot regrava, vazias.
     fn repo_root() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
-        for dir in ["backend/app", "crates/hangar-server/tests/it/fixtures/pricing"] { std::fs::create_dir_all(root.path().join(dir)).unwrap(); }
+        for dir in ["crates/hangar-server/data", "crates/hangar-server/tests/it/fixtures/pricing"] { std::fs::create_dir_all(root.path().join(dir)).unwrap(); }
         root
     }
 

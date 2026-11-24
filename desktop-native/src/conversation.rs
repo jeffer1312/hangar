@@ -383,6 +383,8 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     let mut agent_ids: HashMap<&str, &str> = HashMap::new();
     let mut agent_descs: HashMap<&str, String> = HashMap::new();
     let mut agents = Vec::new();
+    // Início do último script do Code Mode: as chamadas de dentro dele só são gravadas quando ele termina.
+    let mut script_start: Option<f64> = None;
     let mut shells: Vec<ShellRun> = Vec::new();
     // Tarefas pelo número sequencial do TaskCreate; o `bool` marca a apagada. A lista do último TodoWrite vence.
     let mut created: Vec<(ActivityTask, bool)> = Vec::new();
@@ -528,11 +530,16 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                 }
                 let Some(id) = tool_key(event) else { continue };
                 match event.tool_name.as_deref() {
+                    Some("REPL") => { script_start = event.ts; }
                     name if is_agent_call(name) => {
                         agent_calls.insert(id);
                         if is_codex_agent_spawn(name) { codex_calls.insert(id); }
                         if let Some(raw) = text("description") { agent_descs.insert(id, raw); }
-                        agents.push(agent_run(event, i, id));
+                        let mut run = agent_run(event, i, id);
+                        // Lançado de dentro de um script: a linha tem a hora do fim do script, e o começo de verdade é
+                        // o do script.
+                        if id.starts_with("repl_") && script_start.is_some() { run.started_at = script_start; }
+                        agents.push(run);
                     }
                     Some("Bash") if input.and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) => {
                         shell_pending.insert(id);
@@ -649,7 +656,7 @@ pub fn family(name: Option<&str>) -> Family {
         "Grep" | "Glob" | "WebSearch" | "WebFetch" | "ToolSearch" => Family::Search,
         "Edit" | "MultiEdit" | "NotebookEdit" => Family::Edit,
         "Write" => Family::Create,
-        "Bash" | "PowerShell" | "exec" | "exec_command" => Family::Run,
+        "Bash" | "PowerShell" | "exec" | "exec_command" | "REPL" => Family::Run,
         _ => Family::Other,
     }
 }
@@ -701,6 +708,11 @@ pub fn summarize_input(name: Option<&str>, input: Option<&Map<String, Value>>) -
     let found = match name.unwrap_or("") {
         "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => first(&["file_path", "path", "notebook_path"]),
         "Bash" | "BashOutput" | "PowerShell" => first(&["command"]),
+        // Script do Code Mode: a descrição; sem ela, a primeira linha do código.
+        "REPL" => match text("description") {
+            d if d.is_empty() => text("code").lines().next().unwrap_or_default().to_owned(),
+            d => d,
+        },
         "exec" | "exec_command" | "write_stdin" => first(&["command", "cmd", "code"]),
         "Grep" | "Glob" => {
             let pattern = text("pattern");
@@ -739,14 +751,17 @@ pub fn thought_summary(text: &str) -> String {
 }
 
 /// Code fence that survives backtick runs inside the content.
-pub fn fenced(source: &str) -> String {
+pub fn fenced(source: &str) -> String { fenced_as(source, "text") }
+
+/// Como `fenced`, com a linguagem do bloco (quem chama garante que ela não tem espaço nem crase).
+pub fn fenced_as(source: &str, lang: &str) -> String {
     let mut longest = 0;
     let mut run = 0;
     for ch in source.chars() {
         if ch == '`' { run += 1; longest = longest.max(run); } else { run = 0; }
     }
     let fence = "`".repeat(longest.max(2) + 1);
-    format!("{fence}text\n{source}\n{fence}")
+    format!("{fence}{lang}\n{source}\n{fence}")
 }
 
 /// Bounded view of a long text; the full text stays in the event and in the copy action.
@@ -759,6 +774,17 @@ pub fn clip(source: &str, max: usize) -> (&str, bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_agent_launched_inside_a_script_counts_from_the_script_start() {
+        let call = |id: &str, name: &str, ts: f64| ChatEvent { kind: "tool_use".into(), id: format!("e-{id}"), tool_use_id: Some(id.into()),
+            tool_name: Some(name.into()), tool_input: json!({"description": "busca"}).as_object().cloned(), ts: Some(ts), ..Default::default() };
+        let events = vec![call("toolu_script", "REPL", 100.0), call("repl_agent", "Agent", 160.0),
+            ChatEvent { kind: "tool_result".into(), id: "r1".into(), tool_use_id: Some("repl_agent".into()), result: Some("feito".into()),
+                ts: Some(160.0), ..Default::default() }];
+        let agent = fold_activity(&events).agents.into_iter().find(|a| a.id == "repl_agent").unwrap();
+        assert_eq!((agent.started_at, agent.finished_at), (Some(100.0), Some(160.0)));
+    }
+
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;

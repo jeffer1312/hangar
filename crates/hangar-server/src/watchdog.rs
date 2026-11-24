@@ -1,8 +1,10 @@
 //! Vigia do servidor para o systemd: com `WatchdogSec`, quem parar de avisar é religado.
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-const TIMEOUT: Duration = Duration::from_secs(5);
+pub const TIMEOUT: Duration = Duration::from_secs(5);
 
 type ProbeFuture = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 pub type Probe = Box<dyn Fn() -> ProbeFuture + Send + Sync>;
@@ -16,6 +18,10 @@ pub const GRACE: Duration = Duration::from_secs(180);
 /// Rodadas falhas seguidas antes de reter o aviso: uma rodada lenta sob carga (build saturando a
 /// máquina, pool bloqueante ocupado) não vira um laço de reinício.
 pub const FAILURES: u32 = 4;
+/// Intervalo das rodadas do lançador do Windows: o mesmo das do `WatchdogSec` da unit.
+pub const LAUNCHER_EVERY: Duration = Duration::from_secs(30);
+
+const HEALTH_REQUEST: &[u8] = b"GET /__hangar_server/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 
 /// Quando reter o aviso ao systemd. O antigo vigia do Python também esperava 15 min entre dois
 /// religamentos; aqui quem espaça é a espera crescente da unit (`RestartSteps`).
@@ -69,8 +75,11 @@ impl Verdict {
 pub async fn notify_alive(notifier: hangar_boot::notify::Notifier, every: Duration, probes: Vec<(&'static str, Probe)>, policy: Policy) {
     let limit = TIMEOUT.min(every);
     let mut rounds = Rounds::new(policy, std::time::Instant::now());
+    let diary_pending = Arc::new(AtomicBool::new(false));
     loop {
-        let late = if rounds.in_grace(std::time::Instant::now()) { None } else { Some(late_probe(&probes, limit).await) };
+        let round = std::time::Instant::now();
+        let late = if rounds.in_grace(round) { None } else { Some(late_probe(&probes, limit).await) };
+        let ms = u64::try_from(round.elapsed().as_millis()).unwrap_or(u64::MAX);
         let verdict = rounds.round(std::time::Instant::now(), late.map(|late| late.is_none()));
         let probe = late.flatten();
         match verdict {
@@ -83,8 +92,38 @@ pub async fn notify_alive(notifier: hangar_boot::notify::Notifier, every: Durati
         if verdict.sends() && let Err(error) = notifier.send("WATCHDOG=1") {
             tracing::warn!(code = "systemd_watchdog_send_failed", kind = ?error.kind(), "aviso de vida ao systemd não saiu");
         }
+        // Depois do aviso, e numa thread própria: disco lento não atrasa o aviso nem a rodada, e o pool
+        // bloqueante pode ser justamente a prova que travou.
+        // Uma gravação por vez: com o diário travado, cada rodada atrasada deixaria mais uma thread presa.
+        if let Some(line) = diary_line(verdict, probe, ms) {
+            if diary_pending.swap(true, Ordering::AcqRel) {
+                tracing::warn!(code = "systemd_watchdog_diary_busy", "gravação anterior do watchdog ainda presa; esta rodada não vai ao diário");
+            } else {
+                let pending = diary_pending.clone();
+                let spawned = std::thread::Builder::new().name("watchdog-diary".into()).spawn(move || {
+                    crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[line], "watchdog");
+                    pending.store(false, Ordering::Release);
+                });
+                if let Err(error) = spawned {
+                    diary_pending.store(false, Ordering::Release);
+                    tracing::warn!(code = "systemd_watchdog_diary_failed", kind = ?error.kind(), "rodada atrasada do watchdog não foi ao diário");
+                }
+            }
+        }
         tokio::time::sleep(every).await;
     }
+}
+
+/// A rodada atrasada ou retida no diário, para a tela de status contar. `ms`: quanto a rodada levou.
+pub fn diary_line(verdict: Verdict, probe: Option<&str>, ms: u64) -> Option<serde_json::Value> {
+    let kind = match verdict {
+        Verdict::Tolerated(_) => "atrasado",
+        Verdict::Withheld(_) => "retido",
+        Verdict::Grace | Verdict::Passed => return None,
+    };
+    let mut line = serde_json::json!({"evento": "systemd_watchdog", "nivel": "aviso", "tipo": kind, "ms": ms});
+    if let Some(probe) = probe { line["prova"] = serde_json::json!(probe); }
+    Some(line)
 }
 
 /// A primeira prova que não respondeu `true` dentro de `limit`.
@@ -137,11 +176,53 @@ pub fn probe_address(listen: SocketAddr) -> SocketAddr {
     }
 }
 
+/// O lançador do Windows faz pelo servidor que abriu o que o `WatchdogSec` do systemd faz no Linux:
+/// confere a saúde a cada `LAUNCHER_EVERY`, com a carência e a tolerância de `Policy::SERVER`.
+#[derive(Debug)]
+pub struct LauncherWatch { rounds: Option<Rounds>, next: std::time::Instant }
+
+impl LauncherWatch {
+    pub fn new(now: std::time::Instant) -> Self { Self { rounds: None, next: now + LAUNCHER_EVERY } }
+
+    /// O veredito da rodada, quando chegou a hora dela. `health` é o endereço que o servidor gravou ao
+    /// ficar pronto: antes dele nada é julgado, e a carência conta do primeiro pronto visto.
+    pub fn tick(&mut self, now: std::time::Instant, health: impl FnOnce() -> Option<SocketAddr>,
+                answers: impl FnOnce(SocketAddr) -> bool) -> Option<Verdict> {
+        if now < self.next { return None; }
+        self.next = now + LAUNCHER_EVERY;
+        let address = health()?;
+        let rounds = self.rounds.get_or_insert_with(|| Rounds::new(Policy::SERVER, now));
+        let passed = (!rounds.in_grace(now)).then(|| answers(address));
+        Some(rounds.round(now, passed))
+    }
+}
+
+/// `health_answers` sem runtime, para o lançador. `limit` vale para a troca inteira, não para cada
+/// leitura: resposta em pedaços que passa do prazo é falha.
+pub fn health_answers_blocking(addr: SocketAddr, limit: Duration) -> bool {
+    use std::io::{Read, Write};
+    let deadline = std::time::Instant::now() + limit;
+    let left = || deadline.checked_duration_since(std::time::Instant::now()).filter(|left| !left.is_zero());
+    let Some(Ok(mut stream)) = left().map(|left| std::net::TcpStream::connect_timeout(&addr, left)) else { return false };
+    if stream.set_write_timeout(left()).is_err() || left().is_none() || stream.write_all(HEALTH_REQUEST).is_err() { return false; }
+    let mut head = [0u8; 12];
+    let mut filled = 0;
+    while filled < head.len() {
+        let Some(left) = left() else { return false };
+        if stream.set_read_timeout(Some(left)).is_err() { return false; }
+        match stream.read(&mut head[filled..]) {
+            Ok(0) | Err(_) => return false,
+            Ok(n) => filled += n,
+        }
+    }
+    head.starts_with(b"HTTP/1.1 200")
+}
+
 async fn health_answers(addr: SocketAddr, limit: Duration) -> bool {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let exchange = async {
         let mut stream = tokio::net::TcpStream::connect(addr).await.ok()?;
-        stream.write_all(b"GET /__hangar_server/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.ok()?;
+        stream.write_all(HEALTH_REQUEST).await.ok()?;
         let mut head = [0u8; 12];
         stream.read_exact(&mut head).await.ok()?;
         Some(head.starts_with(b"HTTP/1.1 200"))
@@ -158,6 +239,16 @@ mod tests {
         assert_eq!(probe_address("0.0.0.0:8765".parse().unwrap()), "127.0.0.1:8765".parse().unwrap());
         assert_eq!(probe_address("[::]:8765".parse().unwrap()), "[::1]:8765".parse().unwrap());
         assert_eq!(probe_address("192.168.0.10:8765".parse().unwrap()), "192.168.0.10:8765".parse().unwrap());
+    }
+
+    #[test]
+    fn exit_watchdog_round_goes_to_the_diary_only_when_late() {
+        assert_eq!(diary_line(Verdict::Tolerated(1), Some("health"), 5003),
+            Some(serde_json::json!({"evento": "systemd_watchdog", "nivel": "aviso", "tipo": "atrasado", "ms": 5003, "prova": "health"})));
+        assert_eq!(diary_line(Verdict::Withheld(4), None, 12),
+            Some(serde_json::json!({"evento": "systemd_watchdog", "nivel": "aviso", "tipo": "retido", "ms": 12})));
+        assert_eq!(diary_line(Verdict::Passed, None, 3), None);
+        assert_eq!(diary_line(Verdict::Grace, Some("health"), 3), None);
     }
 
     fn fixed(answer: Option<bool>) -> Probe {
@@ -247,5 +338,58 @@ mod tests {
         server.await.unwrap();
         // Ninguém escutando: não há aviso.
         assert!(!health_answers(addr, Duration::from_secs(5)).await);
+    }
+
+    #[test]
+    fn the_launcher_probe_needs_a_200_in_time() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (gave_up, released) = std::sync::mpsc::channel::<()>();
+        let (stuck, accepted) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            for answer in [Some(&b"HTTP/1.1 200 OK\r\n\r\n"[..]), Some(&b"HTTP/1.1 503 Service Unavailable\r\n\r\n"[..]), None] {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut request = [0u8; 256];
+                let _ = socket.read(&mut request);
+                // Sem resposta: o servidor aceita e trava, como o processo preso, até o cliente desistir.
+                match answer {
+                    Some(answer) => socket.write_all(answer).unwrap(),
+                    None => { stuck.send(()).unwrap(); released.recv().unwrap() }
+                }
+            }
+        });
+        assert!(health_answers_blocking(addr, Duration::from_secs(5)));
+        assert!(!health_answers_blocking(addr, Duration::from_secs(5)));
+        assert!(!health_answers_blocking(addr, Duration::from_millis(100)), "aceitou e não respondeu no prazo");
+        accepted.recv_timeout(Duration::from_secs(10)).expect("o servidor aceitou a terceira conexão: a falha foi o prazo de resposta");
+        gave_up.send(()).unwrap();
+        server.join().unwrap();
+        assert!(!health_answers_blocking(addr, Duration::from_secs(5)), "ninguém escutando");
+    }
+
+    /// O lançador do Windows com a carência e a tolerância do vigia do servidor: nada é julgado antes
+    /// do pronto, a carência conta do primeiro pronto visto, e só a quarta rodada sem resposta encerra.
+    #[test]
+    fn the_launcher_stops_the_server_only_after_the_grace_and_four_unanswered_rounds() {
+        let start = std::time::Instant::now();
+        let at = |secs: u64| start + Duration::from_secs(secs);
+        let address: SocketAddr = "127.0.0.1:8765".parse().unwrap();
+        let count = std::cell::Cell::new(0);
+        let probed = &count;
+        let answer = |reply: bool| move |_| { probed.set(probed.get() + 1); reply };
+        let mut watch = LauncherWatch::new(start);
+        assert_eq!(watch.tick(at(10), || Some(address), answer(false)), None, "fora da hora da rodada");
+        assert_eq!(watch.tick(at(30), || None, answer(false)), None, "ainda não pronto");
+        assert_eq!(watch.tick(at(60), || Some(address), answer(false)), Some(Verdict::Grace), "pronto visto: começa a carência");
+        assert_eq!(watch.tick(at(210), || Some(address), answer(false)), Some(Verdict::Grace));
+        assert_eq!(probed.get(), 0, "na carência nada é conferido");
+        let mut verdicts = Vec::new();
+        for n in 0..7 {
+            verdicts.push(watch.tick(at(240 + 30 * n), || Some(address), answer(n == 2)));
+        }
+        assert_eq!(verdicts, [Some(Verdict::Tolerated(1)), Some(Verdict::Tolerated(2)), Some(Verdict::Passed), Some(Verdict::Tolerated(1)),
+            Some(Verdict::Tolerated(2)), Some(Verdict::Tolerated(3)), Some(Verdict::Withheld(4))]);
+        assert_eq!(probed.get(), 7);
     }
 }

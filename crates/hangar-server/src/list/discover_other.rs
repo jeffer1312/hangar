@@ -111,6 +111,7 @@ pub fn ticket_transcript(provider: &str, pane_id: &str, pane_pid: Option<i64>, c
     match provider {
         "pi" | "omp" => pi_transcript(pane_id, pane_pid, cwd, provider, procs, dirs, problems),
         "kimi" => kimi_transcript(pane_id, pane_pid, cwd, procs, dirs, problems),
+        "antigravity" => agy_transcript(pane_id, pane_pid, procs, dirs, problems),
         _ => None,
     }
 }
@@ -260,17 +261,16 @@ fn newest(dir: &Path, matches: &dyn Fn(&str) -> bool) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Achado de uma varredura de pastas por (raiz, nome): o positivo vale enquanto o arquivo existe
-/// (o nome não muda de lugar); o negativo, `MISS_TTL`, para o arquivo que ainda vai nascer.
+/// Achado de uma varredura de pastas por (raiz, nome); o Claude revalida um achado que pode ganhar outra cópia.
 type Found = LazyLock<std::sync::Mutex<Capped<(PathBuf, String), (std::time::Instant, Option<String>)>>>;
 const MISS_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn found_or_scan(cache: &Found, key: (PathBuf, String), scan: impl FnOnce() -> Option<String>) -> Option<String> {
+fn found_or_scan(cache: &Found, key: (PathBuf, String), hit_ttl: Option<std::time::Duration>, scan: impl FnOnce() -> Option<String>) -> Option<String> {
     let lock = || cache.lock().unwrap_or_else(|e| e.into_inner());
     // O `stat` fora da trava: ela é de todas as sessões da rodada.
     let cached = lock().get(&key).cloned();
     match cached {
-        Some((_, Some(path))) if Path::new(&path).exists() => return Some(path),
+        Some((at, Some(path))) if hit_ttl.is_none_or(|ttl| at.elapsed() < ttl) && Path::new(&path).exists() => return Some(path),
         Some((at, None)) if at.elapsed() < MISS_TTL => return None,
         _ => {}
     }
@@ -287,7 +287,7 @@ static HEADLESS_FOUND: Found = LazyLock::new(|| std::sync::Mutex::new(Capped::ne
 // ponytail: o positivo segura o primeiro achado; um arquivo mais novo de mesmo nome em outra
 // pasta só é visto quando o guardado some.
 fn find_in_root_cached(root: &Path, key: String, matches: impl Fn(&str) -> bool) -> Option<String> {
-    found_or_scan(&OMP_FOUND, (root.to_path_buf(), key), || find_in_root(root, matches))
+    found_or_scan(&OMP_FOUND, (root.to_path_buf(), key), None, || find_in_root(root, matches))
 }
 
 /// `localizar_na_raiz`: o arquivo mais novo que casa em qualquer pasta de cwd da raiz.
@@ -335,6 +335,25 @@ fn kimi_transcript(pane_id: &str, pid: Option<i64>, cwd: &str, procs: &dyn Proce
     }
     let wd = data.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()).unwrap_or(cwd);
     kimi_transcript_of_id(wd, sid, dirs, problems)
+}
+
+/// O transcript do `agy` pelo bilhete do hook (`.hangar-agy/<pane>.json`). O caminho é recalculado pela conta do
+/// processo (`GEMINI_HOME`), nunca tirado do bilhete: o id passa pela conferência de UUID antes de virar caminho.
+fn agy_transcript(pane_id: &str, pid: Option<i64>, procs: &dyn ProcessView, dirs: &Dirs, problems: &mut Problems) -> Option<String> {
+    let base = pid.and_then(|p| config_dir_of(procs, p)).unwrap_or_else(|| dirs.default_claude());
+    let ticket = base.join(".hangar-agy").join(format!("{}.json", ticket_key(pane_id, pid, procs)));
+    let data = ticket_object(&ticket, problems)?;
+    let sid = data.get("session_id").and_then(Value::as_str).filter(|s| hangar_antigravity::paths::valid_conversation_id(s))?;
+    let born = pid.and_then(|p| procs.start_time(p));
+    match (born, number(data.get("ts"))) {
+        (None, _) => { warn_limited(pane_id, "list_agy_ticket_refused", "nascimento"); return None }
+        (_, None) => { warn_limited(pane_id, "list_agy_ticket_refused", "ts"); return None }
+        (Some(born), Some(ts)) if ts < born - TICKET_SLACK => return None,
+        _ => {}
+    }
+    let account = pid.and_then(|p| env(procs, p, "GEMINI_HOME"))
+        .map_or_else(hangar_antigravity::Account::default, |home| hangar_antigravity::Account::extra(PathBuf::from(home)));
+    account.transcript_path(&dirs.home, sid).map(|p| p.to_string_lossy().into_owned())
 }
 
 fn kimi_wire(session_dir: &Path) -> String {
@@ -594,19 +613,16 @@ fn headless_transcript(cwd: &str, sid: &str, config_dir: Option<&str>, dirs: &Di
     if expected.exists() {
         return expected.to_string_lossy().into_owned();
     }
-    let moved = found_or_scan(&HEADLESS_FOUND, (base.clone(), file.clone()), || {
-        let entries = match std::fs::read_dir(&base) {
-            Ok(entries) => entries,
+    let moved = found_or_scan(&HEADLESS_FOUND, (base.clone(), file.clone()), Some(MISS_TTL), || {
+        match crate::runtime::claude_launch::moved_transcript(&base, &file) {
+            Ok(found) => found.map(|path| path.to_string_lossy().into_owned()),
             Err(error) => {
                 if error.kind() != std::io::ErrorKind::NotFound {
                     problems.note("list_projects_unreadable", &base.to_string_lossy(), "pasta projects ilegível; transcript da sessão sem terminal pelo caminho esperado");
                 }
-                return None;
+                None
             }
-        };
-        let mut moved: Vec<PathBuf> = entries.flatten().map(|d| d.path().join(&file)).filter(|p| p.exists()).collect();
-        moved.sort();
-        moved.into_iter().next().map(|p| p.to_string_lossy().into_owned())
+        }
     });
     moved.unwrap_or_else(|| expected.to_string_lossy().into_owned())
 }
@@ -641,6 +657,7 @@ pub fn headless_rows(dirs: &Dirs, procs: &dyn ProcessView, problems: &mut Proble
         };
         row.engine = engine;
         row.engine_account = account;
+        row.engine_binding = text(&meta, "engine_binding");
         links::fill_location(&mut row, "claude", dirs, problems);
         links::fill_links(&mut row, dirs, problems);
         let jsonl = row.jsonl.clone();
@@ -679,6 +696,44 @@ mod tests {
         }
         fn start_time(&self, _: i64) -> Option<f64> { self.reads.fetch_add(1, Ordering::Relaxed); Some(1.0) }
         fn fds(&self, _: i64) -> Vec<PathBuf> { Vec::new() }
+    }
+
+    #[test]
+    fn expired_transcript_hit_can_find_a_newer_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let file = "session.jsonl";
+        let at = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        for (dir, time) in [(&a, at), (&b, at + Duration::from_secs(5))] {
+            std::fs::create_dir(dir).unwrap();
+            std::fs::File::create(dir.join(file)).unwrap().set_modified(time).unwrap();
+        }
+        let cache: Found = LazyLock::new(|| std::sync::Mutex::new(Capped::new(4)));
+        let key = (root.path().to_owned(), file.to_owned());
+        let old = a.join(file).to_string_lossy().into_owned();
+        assert_eq!(found_or_scan(&cache, key.clone(), None, || Some(old.clone())), Some(old));
+        let result = found_or_scan(&cache, key, Some(Duration::ZERO), || {
+            crate::runtime::claude_launch::moved_transcript(root.path(), file).unwrap().map(|path| path.to_string_lossy().into_owned())
+        });
+        assert_eq!(result, Some(b.join(file).to_string_lossy().into_owned()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn incomplete_history_scan_keeps_a_readable_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let file = "session.jsonl";
+        let unreadable = root.path().join("unreadable");
+        std::fs::create_dir(&unreadable).unwrap();
+        std::os::unix::fs::symlink(file, unreadable.join(file)).unwrap();
+        assert!(crate::runtime::claude_launch::moved_transcript(root.path(), file).is_err());
+
+        let readable = root.path().join("readable");
+        std::fs::create_dir(&readable).unwrap();
+        let history = readable.join(file);
+        std::fs::write(&history, "{}\n").unwrap();
+        assert_eq!(crate::runtime::claude_launch::moved_transcript(root.path(), file).unwrap(), Some(history));
     }
 
     #[test]

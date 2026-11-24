@@ -38,6 +38,23 @@ impl PairDir {
         read_sidecar(&self.sidecar_path(name), name)
     }
 
+    /// [`PairDir::sidecar`] para quem precisa saber se o grupo é entre máquinas: arquivo que não é objeto
+    /// ou `fed` torto é erro, nunca "sem grupo" nem "grupo de uma máquina".
+    pub fn sidecar_strict(&self, name: &str) -> Result<Option<Sidecar>, StoreError> {
+        let raw = match std::fs::read(self.sidecar_path(name)) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let malformed = |what: &str| StoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_owned()));
+        let Value::Object(data) = serde_json::from_slice(&raw)? else { return Err(malformed("sidecar não é um objeto")) };
+        let sidecar = Sidecar::parse(name, &data);
+        if sidecar.as_ref().is_some_and(|s| s.fed.is_none()) && data.get("fed").is_some_and(|f| !f.is_null()) {
+            return Err(malformed("fed torto no sidecar"));
+        }
+        Ok(sidecar)
+    }
+
     /// Última escrita do sidecar: a janela de lançamento do grupo `orq` conta daqui.
     pub fn sidecar_modified(&self, name: &str) -> std::io::Result<std::time::SystemTime> {
         std::fs::metadata(self.sidecar_path(name))?.modified()
@@ -50,18 +67,29 @@ impl PairDir {
         Ok(())
     }
 
-    /// `.json` e o `.json.tmp` que uma escrita interrompida deixa; ausente não é erro.
-    pub fn clear_sidecar(&self, name: &str) -> Result<(), StoreError> {
+    /// `.json` e o `.json.tmp` que uma escrita interrompida deixa; ausente não é erro. `why` é a
+    /// rotina de origem, que vai ao log.
+    pub fn clear_sidecar(&self, name: &str, why: &str) -> Result<(), StoreError> {
         let path = self.sidecar_path(name);
+        // Lido antes de apagar, como o serviço o lê: sidecar antigo sem `gid` tem o calculado.
+        let gid = match read_sidecar(&path, name) {
+            Ok(Some(sidecar)) => sidecar.gid,
+            _ => std::fs::read(&path).ok().and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+                .and_then(|v| v["gid"].as_str().map(str::to_owned)).unwrap_or_default(),
+        };
         let mut tmp = path.clone().into_os_string();
         tmp.push(".tmp");
-        for file in [path, PathBuf::from(tmp)] {
-            match std::fs::remove_file(file) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-                _ => {}
-            }
+        match std::fs::remove_file(&path) {
+            // Registrado já aqui: o `.tmp` que falhar depois não pode deixar a exclusão sem rastro.
+            Ok(()) => tracing::info!(code = "groups_sidecar_removed", session = name, gid, reason = why, pid = std::process::id(),
+                dir = %self.root.display(), "groups: arquivo de grupo da sessão apagado"),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            Err(_) => {}
         }
-        Ok(())
+        match std::fs::remove_file(PathBuf::from(tmp)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
     }
 
     /// (stem, sidecar) dos `*.json` da raiz, exceto `external_pairs.json`, por ordem de stem. O
@@ -172,15 +200,20 @@ impl PairDir {
     }
 
     /// Guarda a versão do registro antes de apagá-lo: o gid pode voltar a ser entre máquinas.
-    pub fn remove_record(&self, gid: &str) -> Result<(), StoreError> {
-        match self.record(gid) {
-            Ok(Some(record)) => self.raise_issued(gid, record.version)?,
-            Ok(None) => {}
-            Err(error) => tracing::warn!(code = "groups_record_unreadable", %gid, %error, "groups: registro torto apagado sem guardar a versão"),
-        }
+    pub fn remove_record(&self, gid: &str, why: &str) -> Result<(), StoreError> {
+        let version = match self.record(gid) {
+            Ok(Some(record)) => { self.raise_issued(gid, record.version)?; record.version }
+            Ok(None) => 0,
+            Err(error) => { tracing::warn!(code = "groups_record_unreadable", %gid, %error, "groups: registro torto apagado sem guardar a versão"); 0 }
+        };
         match std::fs::remove_file(self.record_path(gid)) {
+            Ok(()) => {
+                tracing::info!(code = "groups_record_removed", gid, version, reason = why, pid = std::process::id(),
+                    dir = %self.root.display(), "groups: registro do grupo apagado");
+                Ok(())
+            }
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-            _ => Ok(()),
+            Err(_) => Ok(()),
         }
     }
 
@@ -338,5 +371,57 @@ fn replace_with(target: &Path, bytes: &[u8], durable: bool) -> std::io::Result<(
                 return Err(e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> { self.0.lock().unwrap().extend_from_slice(data); Ok(data.len()) }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+
+    fn logged(work: impl FnOnce()) -> String {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let capture = Capture(output.clone());
+        let subscriber = tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || capture.clone()).finish();
+        // Com um capturador só no processo, o ponto de log que outro teste registra em paralelo
+        // guarda o interesse da thread dele (nenhum) e fica desligado aqui. Com dois vivos, o
+        // interesse passa a contar todos, este incluído.
+        let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+        tracing::subscriber::with_default(subscriber, work);
+        String::from_utf8(output.lock().unwrap().clone()).unwrap()
+    }
+
+    #[test]
+    fn every_removal_logs_session_gid_reason_and_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = PairDir::new(tmp.path().to_path_buf(), tmp.path().join("archive"));
+        std::fs::create_dir_all(tmp.path().join("groups")).unwrap();
+        std::fs::write(tmp.path().join("s1.json"), r#"{"peers":["s2"],"gid":"g1"}"#).unwrap();
+        std::fs::write(tmp.path().join("groups/g1.json"),
+            r#"{"protocol":1,"gid":"g1","owner":"casa","version":3,"task":"","members":[],"outside":[]}"#).unwrap();
+        let text = logged(|| {
+            dir.clear_sidecar("s1", "sweep_dead_member").unwrap();
+            dir.remove_record("g1", "undo_owner").unwrap();
+        });
+        let pid = format!("pid={}", std::process::id());
+        let sidecar = text.lines().find(|l| l.contains("code=\"groups_sidecar_removed\"")).unwrap_or_else(|| panic!("{text}"));
+        for want in ["session=\"s1\"", "gid=\"g1\"", "reason=\"sweep_dead_member\"", &pid] { assert!(sidecar.contains(want), "{want}: {sidecar}"); }
+        assert!(sidecar.contains(" INFO "), "nível que entra no log de produção: {sidecar}");
+        let record = text.lines().find(|l| l.contains("code=\"groups_record_removed\"")).unwrap_or_else(|| panic!("{text}"));
+        for want in ["gid=\"g1\"", "version=3", "reason=\"undo_owner\"", &pid] { assert!(record.contains(want), "{want}: {record}"); }
+        assert!(!tmp.path().join("s1.json").exists() && !tmp.path().join("groups/g1.json").exists());
+        let absent = logged(|| dir.clear_sidecar("s1", "sweep_dead_member").unwrap());
+        assert!(!absent.contains("groups_sidecar_removed"), "arquivo que já não existia não é exclusão: {absent}");
+        // Sidecar antigo sem `gid`: o grupo é o que o serviço calcula (sha1 de "s1\ns3", 8 primeiros).
+        std::fs::write(tmp.path().join("s1.json"), r#"{"peers":["s3"]}"#).unwrap();
+        let legacy = logged(|| dir.clear_sidecar("s1", "sweep_dead_member").unwrap());
+        assert!(legacy.contains("gid=\"79dbb188\""), "{legacy}");
     }
 }

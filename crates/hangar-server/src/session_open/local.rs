@@ -105,6 +105,8 @@ impl OpenHost for LocalHost {
         self.diary_writes.lock().unwrap_or_else(PoisonError::into_inner).push(write);
     }
     fn reconcile_limit(&self) -> Duration { self.reconcile_limit }
+    /// Sem espelho: o ambiente do shell pode não ser o do servidor, e as duas fontes se alternariam nas contas.
+    fn mcp_principal(&self) -> Option<std::path::PathBuf> { None }
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }
     fn new_bridge_key(&self) -> String { crate::mods::state::random_hex(16) }
     // O comando local só abre sessão com terminal.

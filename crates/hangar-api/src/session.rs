@@ -10,11 +10,51 @@ pub fn runtime_key(lifecycle: Option<&str>) -> Option<&str> {
 }
 use serde_json::{Map, Value};
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeProviderSwitch {
+    pub source: ClaudeProviderSource,
+    pub engine: String,
+    pub engine_account: String,
+    pub engine_binding: String,
+    pub model: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeProviderSource {
+    pub lifecycle_id: String,
+    pub jsonl: String,
+    pub headless: bool,
+    pub engine: Option<String>,
+    pub engine_account: Option<String>,
+    pub engine_binding: Option<String>,
+}
+
 /// Contexto da sessão Claude lido do transcript, em tokens.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextUse {
     pub used: u64,
     pub window: u64,
+}
+
+/// Troca de agente pedida pelo seletor de modelos (`POST /conta` com `when_idle`): espera a sessão
+/// ficar livre (`waiting`), troca (`running`) ou falhou (`failed`, com o código). Só existe no Rust.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HandoffState { #[default] Waiting, Running, Failed }
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Handoff {
+    pub state: HandoffState,
+    pub provider: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    pub account: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 /// Par de fora do grupo da sessão. `level` é o acesso DESTA sessão sob ele (`full`/`view`);
@@ -53,6 +93,8 @@ pub struct SessionRow {
     pub engine: Option<String>,
     #[serde(default)]
     pub engine_account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_binding: Option<String>,
     #[serde(default)]
     pub codex_home: Option<String>,
     /// Nível de serviço do Codex (`default`/`priority`): do sidecar, e o snapshot ao vivo vence.
@@ -195,6 +237,23 @@ pub struct SessionRow {
     /// Onde a sessão adormecida reabre ao acordar (`terminal` ou `headless`), quando a marca diz.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wake_surface: Option<String>,
+    /// Troca de agente pedida e ainda não concluída; só existe no Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<Handoff>,
+    /// Portas TCP em LISTEN dos processos da sessão, por porta; só a lista do dono as leva.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<PortEntry>,
+}
+
+/// Um servidor da sessão: a porta e quem escuta nela (`process` = nome curto do executável).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortEntry {
+    pub port: u16,
+    pub process: String,
+    pub pid: u32,
+    /// Outro processo, fora da sessão, também escuta nesta porta: `localhost:<port>` pode cair nele.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
 }
 
 fn default_provider() -> String {

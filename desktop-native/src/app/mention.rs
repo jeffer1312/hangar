@@ -89,7 +89,7 @@ impl Hangar {
     fn pick_mention(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         if !self.mention_is_open(cx) { return; }
         let range = self.mention.range.clone().unwrap();
-        self.replace_composer(range, format!("@{path}"), window, cx);
+        self.replace_composer(range, at_mention(&path), window, cx);
         self.mention.snapshot = Some(self.mention_snapshot(cx));
         self.mention.close();
         self.redraw(panes::Area::Bottom, cx);
@@ -118,5 +118,19 @@ impl Hangar {
             }
         }
         Some(panel.into_any_element())
+    }
+}
+
+/// O `@` como o autocompletar do Claude Code grava: caminho com espaço entre aspas, senão o leitor o corta no espaço.
+pub(super) fn at_mention(path: &str) -> String {
+    if path.contains(' ') { format!("@\"{path}\"") } else { format!("@{path}") }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn path_with_a_space_goes_quoted() {
+        assert_eq!(super::at_mention("src/main.rs"), "@src/main.rs");
+        assert_eq!(super::at_mention("docs/Área de trabalho/a.md"), "@\"docs/Área de trabalho/a.md\"");
     }
 }

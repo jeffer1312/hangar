@@ -70,7 +70,8 @@ impl Life {
 
     async fn initialize(&mut self) -> Result<(), ConnectorError> {
         let mut params = protocol::initialize_params();
-        if self.manifest.capabilities.contains_key(crate::work_actions::CAPABILITY) {
+        // Só work_tracking mantém a forma básica: conector antigo pode recusar campo desconhecido.
+        if self.manifest.capabilities.keys().any(|name| name != crate::work_tracking::CAPABILITY) {
             params["capabilities"] = json!(self.manifest.capabilities);
         }
         let value = self.request(protocol::INITIALIZE, params).await??;

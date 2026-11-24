@@ -11,9 +11,21 @@ use serde_json::{Map, Value, json};
 use super::terminal::{PaneSpec, TerminalEnv};
 use super::{Account, SessionSpec};
 
+/// Variável do Code Mode experimental do Claude Code: valor `1` liga.
+pub const CODE_MODE_ENV: &str = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
+
 /// A rota da conta ChatGPT fixa do motor no `hangar-engine` (`cliproxy.engine_env`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: String, pub base_url: String, pub prefix: String }
+pub struct EngineRoute { pub account: String, pub credential_id: String, pub home: Option<String>, pub base_url: String, pub prefix: String, pub binding: Option<String> }
+
+impl EngineRoute {
+    pub fn append_args(&self, command: &mut Vec<String>) {
+        command.extend(["--account".into(), self.account.clone()]);
+        if let Some(home) = &self.home { command.extend(["--account-home".into(), home.clone()]); }
+        command.extend(["--account-base-url".into(), self.base_url.clone()]);
+        if let Some(binding) = &self.binding { command.extend(["--account-binding".into(), binding.clone()]); }
+    }
+}
 
 /// Endereço e segredo da ponte do plugin do Hangar.
 #[derive(Clone, Debug)]
@@ -32,6 +44,8 @@ pub struct ClaudeContext<'a> {
     pub server_env: &'a BTreeMap<String, String>,
     /// As escolhas de plugins e skills da conversa, já preparadas.
     pub settings: Option<&'a Value>,
+    /// No Windows, o arquivo com essas escolhas (`settings_file`), que o `--settings` recebe no lugar do JSON.
+    pub settings_file: Option<&'a str>,
     /// O envelope `bwrap … --` do só leitura.
     pub read_only: Option<&'a [String]>,
     pub windows: bool,
@@ -102,9 +116,11 @@ pub fn jev_pairs(on: bool, runtime: &Value) -> Vec<(String, String)> {
 }
 
 /// `apply_settings` numa linha de comando sem `--settings`: as escolhas da conversa em JSON compacto.
-pub(crate) fn settings_json(settings: &Value) -> String {
+pub(crate) fn settings_json(settings: &Value) -> String { settings_value(settings).to_string() }
+
+pub(crate) fn settings_value(settings: &Value) -> Value {
     let mut merged = Map::new();
-    for key in ["enabledPlugins", "skillOverrides"] {
+    for key in ["enabledPlugins", "skillOverrides", "disableAllHooks"] {
         if let Some(value) = settings.get(key) { merged.insert(key.into(), value.clone()); }
     }
     if let Some(deny) = settings.get("permissions").map(|p| p["deny"].clone()) {
@@ -112,7 +128,55 @@ pub(crate) fn settings_json(settings: &Value) -> String {
         for rule in deny.as_array().into_iter().flatten() { if !seen.contains(rule) { seen.push(rule.clone()); } }
         merged.insert("permissions".into(), json!({"deny": seen}));
     }
-    Value::Object(merged).to_string()
+    Value::Object(merged)
+}
+
+/// No Windows o comando do `new-session` perde as aspas do JSON e o Claude recusa abrir: as escolhas
+/// vão num arquivo. O nome é o hash do conteúdo, então conversas com as mesmas escolhas dividem o arquivo.
+pub(crate) fn settings_file(home: &Path, settings: &Value) -> std::io::Result<String> {
+    let json = settings_json(settings);
+    let dir = home.join(".hangar").join("claude-settings");
+    let path = dir.join(format!("{}.json", sha1_smol::Sha1::from(&json).digest()));
+    if !path.exists() {
+        std::fs::create_dir_all(&dir)?;
+        // Outra abertura com as mesmas escolhas pode ter gravado antes e o Claude dela segurar o arquivo:
+        // no Windows o rename por cima falha, e o conteúdo já é o certo.
+        if let Err(error) = hangar_core::fs::atomic_write(&path, json.as_bytes())
+            && !std::fs::read(&path).is_ok_and(|bytes| bytes == json.as_bytes()) {
+            return Err(error);
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// A velocidade com que uma sessão que já existe volta agora. A criação e a troca recusam velocidade sem
+/// suporte; acordar, restaurar ou reabrir sozinho não: Ultra Fast que perdeu o suporte volta em Fast, e Fast
+/// sem suporte na normal, em vez de a sessão não voltar.
+pub fn relaunch_tier(spec: &SessionSpec, facts: &dyn super::OpenFacts) -> Option<super::ServiceTier> {
+    let tier = spec.service_tier?;
+    if tier == super::ServiceTier::Default && matches!(spec.account, Account::Engine { binding: Some(_), .. }) { return Some(tier); }
+    let (engine, account, binding) = match &spec.account {
+        Account::Engine { name, account, binding, .. } => (Some(name.as_str()), account.as_deref(), binding.as_deref()),
+        _ => (None, None, None),
+    };
+    let resolved;
+    let account = if let (Some(engine), Some(binding)) = (engine, binding) {
+        resolved = facts.engine_account(engine, None).ok().filter(|(_, current)| current.as_deref() == Some(binding)).and_then(|(account, _)| account);
+        resolved.as_deref()
+    } else { account };
+    let model = spec.model.as_deref();
+    if !facts.supports_fast(engine, model) {
+        if tier.is_fast() {
+            tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
+        }
+        return None;
+    }
+    if tier == super::ServiceTier::Ultrafast && !facts.supports_ultrafast(engine, model, account) {
+        tracing::warn!(session = %spec.name, engine = engine.unwrap_or(""), account = account.unwrap_or(""), model = model.unwrap_or(""),
+            "Ultra Fast indisponível agora; a sessão volta em Fast");
+        return Some(super::ServiceTier::Priority);
+    }
+    Some(tier)
 }
 
 /// O pane do Claude: argv do agente (com o motor e o só leitura em volta) e o `-e` da sessão.
@@ -124,11 +188,13 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     if let Some(effort) = &spec.effort { claude.extend(["--effort".into(), effort.clone()]); }
     if let Some(mode) = spec.permission_mode { claude.extend(["--permission-mode".into(), mode.name().into()]); }
     if let Some(settings) = ctx.settings.filter(|s| s.as_object().is_some_and(|o| !o.is_empty())) {
-        claude.extend(["--settings".into(), settings_json(settings)]);
+        let value = if ctx.windows { ctx.settings_file.map(str::to_owned) } else { Some(settings_json(settings)) };
+        if let Some(value) = value { claude.extend(["--settings".into(), value]); }
     }
     // O prompt inicial é o posicional do `claude`, depois das opções; começando com `-`, o `--`
-    // impede que vire flag.
-    if let Some(prompt) = ctx.initial_prompt.filter(|p| !p.is_empty()) {
+    // impede que vire flag. No Windows ele vai pela fila da chave (`terminal_life`): o psmux roda o
+    // comando pelo PowerShell, que corta o argumento na primeira aspa dupla.
+    if let Some(prompt) = ctx.initial_prompt.filter(|p| !p.is_empty() && !ctx.windows) {
         if prompt.starts_with('-') { claude.push("--".into()); }
         claude.push(prompt.into());
     }
@@ -136,15 +202,15 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     // O ambiente do motor entra dentro do pane (`hangar-engine --exec`): a chave nunca passa por `-e`.
     if let Account::Engine { name, context_window, .. } = &spec.account {
         command.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
-        if let Some(route) = ctx.engine_route {
-            command.extend(["--account".into(), route.account.clone(), "--account-home".into(), route.home.clone(),
-                "--account-base-url".into(), route.base_url.clone()]);
-        }
+        if let Some(route) = ctx.engine_route { route.append_args(&mut command); }
         if let Some(model) = &spec.model {
             command.extend(["--model".into(), model.clone()]);
             if let Some(window) = context_window { command.extend(["--context".into(), window.to_string()]); }
         }
-        if let Some(tier) = spec.service_tier { command.extend(["--service-tier".into(), tier.name().into()]); }
+        // Normal explícito também limpa o Fast que veio das configurações do Claude.
+        if let Some(tier) = spec.service_tier {
+            command.extend(["--service-tier".into(), tier.name().into()]);
+        }
         command.push("--".into());
     }
     command.extend(claude);
@@ -163,6 +229,7 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
         env.push(("HANGAR_PLUGIN_TOKEN".into(), crate::mods::bridge::mint_keyed(&bridge.secret, &spec.name, ctx.bridge_key)));
     }
     if let Some(model) = &spec.subagent_model { env.push(("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.clone())); }
+    if spec.code_mode { env.push((CODE_MODE_ENV.into(), "1".into())); }
     PaneSpec { name: spec.name.clone(), cwd: spec.cwd.clone(), provider: spec.provider, key: spec.key.clone(), env,
         config_dir: spec.account.config_dir().map(str::to_owned), command }
 }

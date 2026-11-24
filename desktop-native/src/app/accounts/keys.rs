@@ -33,7 +33,7 @@ impl Provider {
 }
 
 /// Selo do provedor: a cor da marca quando o app a conhece, e duas letras.
-fn provider_badge(url: &str, name: &str, size: f32) -> Div {
+pub(super) fn provider_badge(url: &str, name: &str, size: f32) -> Div {
     let provider = if url.contains("kimi") { "kimi" } else { "" };
     let (color, _) = theme::provider(provider);
     let letters: String = name.chars().filter(|c| c.is_alphanumeric()).take(2).collect::<String>().to_uppercase();
@@ -65,7 +65,7 @@ fn coded(text: &str) -> StyledText {
 }
 
 /// Nome digitado → id no `engines.json` (minúsculas, números, `-`, `_`), como o `idDe` do web.
-fn engine_id(text: &str) -> String {
+pub(super) fn engine_id(text: &str) -> String {
     let id = actions::account_slug(text);
     if id.is_empty() { "chave".into() } else { id }
 }
@@ -173,6 +173,9 @@ pub(super) struct EngineForm {
     /// Endereço gravado e se há chave gravada: com os dois, testar usa a chave do disco.
     saved_url: String,
     key_set: bool,
+    proxy_accounts: Option<Vec<crate::api::dto::CliProxyAccount>>,
+    binding: Option<String>,
+    binding_changed: bool,
     vision: Option<bool>,
     /// Modelos que o provedor listou; `None` = ainda não testou.
     models: Option<Vec<ProviderModel>>,
@@ -260,19 +263,19 @@ fn input(window: &mut Window, cx: &mut Context<Hangar>, value: String, placehold
     cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value))
 }
 
-fn field(label: String, control: impl IntoElement) -> Div {
+pub(super) fn field(label: String, control: impl IntoElement) -> Div {
     div().flex().flex_col().gap(px(6.)).child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(label)).child(control)
 }
 
-fn help(text: impl IntoElement) -> Div { div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text) }
+pub(super) fn help(text: impl IntoElement) -> Div { div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text) }
 
 /// Linha de aviso ou de erro: a cor mora num filho, a caixa pinta o texto de cinza por cima.
-fn tone(text: String, color: Hsla) -> Div { div().text_size(px(12.5)).whitespace_normal().child(div().text_color(color).child(text)) }
+pub(super) fn tone(text: String, color: Hsla) -> Div { div().text_size(px(12.5)).whitespace_normal().child(div().text_color(color).child(text)) }
 
 impl Hangar {
     /// Nomes já no disco; `None` quando a lista não chegou ou o arquivo está ilegível: aí não dá para saber se um
     /// nome novo pisaria em outro modelo.
-    fn engine_names(&self) -> Option<HashSet<String>> {
+    pub(super) fn engine_names(&self) -> Option<HashSet<String>> {
         self.accounts.engines.ok().filter(|e| e.broken_file.is_none()).map(|e| e.map.keys().cloned().collect())
     }
 
@@ -350,6 +353,7 @@ impl Hangar {
         }
         let mut form = EngineForm { kind, saved: saved.clone(), title, lead, badge_url: engine.base_url.clone(), label, name, url, key, model, subagent,
             window: context, compact, output, flags, gateway: None, betas_touched: false, saved_url: engine.base_url, key_set, vision: engine.vision, models: None, picks: None,
+            proxy_accounts: engine.cliproxy_accounts, binding: engine.cliproxy_binding, binding_changed: false,
             testing: None, auto_test: false, tested: None, saving: None, error: None, syncing: None, synced: None, why: None,
             detecting: None, detected: None, keyless: false, unnamed: 0, naming_error: None, mgmt, naming: None,
             derived: Derived::default(),
@@ -474,6 +478,7 @@ impl Hangar {
             "label": match form.kind { FormKind::Edit => form.label.clone(), _ if name.is_empty() => form.title.clone(), _ => name },
             "base_url": url, "model": model,
         });
+        if form.binding_changed { body["cliproxy_binding"] = json!(form.binding); }
         if form.keyless { body["use_cliproxy_key"] = json!(true); } else if !key.is_empty() { body["api_key"] = json!(key); }
         if form.kind != FormKind::Key {
             let blank = |n: Option<Option<u64>>| n.flatten().map_or(json!(""), |n| json!(n));
@@ -749,6 +754,36 @@ impl Hangar {
             url = url.child(tone(text.clone(), color));
         }
         body = body.child(url);
+        if let Some(accounts) = &f.proxy_accounts {
+            let mut choices = div().flex().flex_wrap().gap(px(6.));
+            for (account, binding) in accounts.iter().filter_map(|a| Some((a, a.binding.as_ref().filter(|_| a.prefix.is_some())?))) {
+                let label = if account.email.is_empty() { account.label.as_str() } else { account.email.as_str() };
+                let label = [account.plan.as_deref(), account.prefix.as_deref(), Some(label)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                let selected = f.binding.as_deref() == Some(binding.as_str());
+                let binding = binding.clone();
+                choices = choices.child(Button::new(SharedString::from(format!("engine-binding-{binding}"))).outline().small()
+                    .label(label.clone()).disabled(busy || selected).on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(form) = this.accounts.form.as_mut().filter(|f| !f.busy()) {
+                            form.binding = Some(binding.clone());
+                            form.binding_changed = true;
+                            cx.notify();
+                        }
+                    })));
+            }
+            if f.binding.is_some() {
+                choices = choices.child(Button::new("engine-unbind").ghost().small().label(tr_shared("cliproxy_unbind_account", &[]))
+                    .disabled(busy).on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(form) = this.accounts.form.as_mut().filter(|f| !f.busy()) {
+                            form.binding = None;
+                            form.binding_changed = true;
+                            cx.notify();
+                        }
+                    })));
+            } else {
+                choices = choices.child(help(tr_shared("cliproxy_no_bound_account", &[])));
+            }
+            body = body.child(field(tr_shared("cliproxy_bound_account", &[]), choices));
+        }
 
         if f.keyless && (f.unnamed > 0 || f.naming_error.is_some()) {
             let label = tr_shared("cliproxy_senha_placeholder", &[]);

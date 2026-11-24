@@ -24,7 +24,8 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let Some(repo) = repo.filter(|p| p.join("backend").is_dir()) else {
+    // A versão do pacote se reconhece pelo manifesto, mesmo sem `backend/`.
+    let Some(repo) = repo.filter(|p| hangar_core::paths::is_install_root(p) || p.join("backend").is_dir()) else {
         eprintln!("raiz da instalação do Hangar não encontrada");
         return ExitCode::FAILURE;
     };
@@ -71,11 +72,11 @@ pub fn run(args: &[String]) -> ExitCode {
 
 fn install(args: &[String]) -> ExitCode {
     let [cli] = args else {
-        eprintln!("uso: hangar-server harness-setup install codex|pi|omp|kimi");
+        eprintln!("uso: hangar-server harness-setup install claude|codex|pi|omp|kimi|antigravity");
         return ExitCode::from(64);
     };
     if !super::commands::NAMES.contains(&cli.as_str()) {
-        eprintln!("uso: hangar-server harness-setup install codex|pi|omp|kimi");
+        eprintln!("uso: hangar-server harness-setup install claude|codex|pi|omp|kimi|antigravity");
         return ExitCode::from(64);
     }
     let Some(argv) = super::commands::command(cli, cfg!(windows)) else {

@@ -94,10 +94,10 @@ fn write_replaces_the_whole_file_and_clear_removes_it() {
     assert_eq!(dir.sidecar("nome com espaço").unwrap().unwrap().task.as_deref(), Some("dois"));
     // Resto de uma escrita interrompida some junto com o sidecar, como no PairLink.clear.
     std::fs::write(tmp.path().join("nome-com-espa-o.json.tmp"), "{").unwrap();
-    dir.clear_sidecar("nome com espaço").unwrap();
+    dir.clear_sidecar("nome com espaço", "test").unwrap();
     assert!(dir.sidecar("nome com espaço").unwrap().is_none());
     assert!(!tmp.path().join("nome-com-espa-o.json.tmp").exists());
-    dir.clear_sidecar("nome com espaço").unwrap();
+    dir.clear_sidecar("nome com espaço", "test").unwrap();
 }
 
 #[test]
@@ -284,8 +284,8 @@ fn group_record_round_trip_lives_under_groups() {
     std::fs::write(tmp.path().join("groups/torto.json"), "{").unwrap();
     let gids: Vec<String> = dir.records().unwrap().into_iter().map(|r| r.gid).collect();
     assert_eq!(gids, ["ab12cd34", "ff00ff00"]);
-    dir.remove_record("ab12cd34").unwrap();
-    dir.remove_record("ab12cd34").unwrap();
+    dir.remove_record("ab12cd34", "test").unwrap();
+    dir.remove_record("ab12cd34", "test").unwrap();
     assert_eq!(dir.record("ab12cd34").unwrap(), None);
     // Registro sem `outside` (protocolo 1 antes do campo) ainda lê.
     std::fs::write(tmp.path().join("groups/old.json"),

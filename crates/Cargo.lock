@@ -1574,6 +1574,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-agent-hooks"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "hangar-core",
+ "proptest",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "sha1_smol",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "hangar-antigravity"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-api"
 version = "0.1.0"
 dependencies = [
@@ -1604,6 +1631,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-browser-host"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hangar-cano"
 version = "0.1.0"
 dependencies = [
@@ -1613,6 +1648,21 @@ dependencies = [
  "serde_json",
  "tokio",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "hangar-cliproxy-setup"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "hangar-managed-binary",
+ "reqwest",
+ "semver",
+ "serde-saphyr",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1683,6 +1733,7 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures-util",
+ "hangar-connect-client",
  "hangar-core",
  "hyper",
  "hyper-util",
@@ -1701,10 +1752,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-connect-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "hangar-connectors"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "chrono",
  "form_urlencoded",
  "futures-util",
@@ -1747,12 +1813,14 @@ dependencies = [
  "form_urlencoded",
  "futures-util",
  "hangar-auth",
+ "hangar-local-server",
  "http-body-util",
  "hyper-util",
  "libc",
  "md-5",
  "num-bigint 0.5.1",
  "percent-encoding",
+ "qrcode",
  "regex",
  "reqwest",
  "ring",
@@ -1778,6 +1846,7 @@ dependencies = [
  "ring",
  "serde_json",
  "subtle",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -1830,6 +1899,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-guest-accounts"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-connect-client",
+ "hangar-core",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "hangar-http-file"
 version = "0.1.0"
 dependencies = [
@@ -1848,6 +1931,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-install-setup"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-core",
+ "libc",
+ "ring",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "hangar-local-server"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "hangar-managed-binary"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "flate2",
+ "hangar-core",
+ "reqwest",
+ "ring",
+ "semver",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "tokio",
+ "zip",
+]
+
+[[package]]
 name = "hangar-mission"
 version = "0.1.0"
 dependencies = [
@@ -1863,6 +1987,16 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+]
+
+[[package]]
+name = "hangar-notice-actions"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "hangar-plugins",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1895,6 +2029,16 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "hangar-open-cli"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "proptest",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1945,6 +2089,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-port-stop"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "hangar-port-tunnel"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "hangar-core",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "hangar-projects"
 version = "0.1.0"
 dependencies = [
@@ -1964,6 +2126,19 @@ name = "hangar-psmux"
 version = "0.1.0"
 dependencies = [
  "tempfile",
+]
+
+[[package]]
+name = "hangar-registration"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-core",
+ "libc",
+ "proptest",
+ "serde_json",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -1988,12 +2163,30 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "hangar-core",
+ "hangar-session-open-fields",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "hangar-send"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "futures-util",
+ "hangar-core",
+ "hangar-session-open-fields",
+ "percent-encoding",
+ "proptest",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2011,9 +2204,13 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures-util",
+ "hangar-agent-hooks",
+ "hangar-antigravity",
  "hangar-api",
  "hangar-auth",
  "hangar-boot",
+ "hangar-browser-host",
+ "hangar-cliproxy-setup",
  "hangar-codex",
  "hangar-codex-account-sync",
  "hangar-codex-transfer",
@@ -2026,25 +2223,39 @@ dependencies = [
  "hangar-desktop-theme",
  "hangar-docs",
  "hangar-dream",
+ "hangar-guest-accounts",
  "hangar-http-file",
+ "hangar-install-setup",
+ "hangar-local-server",
  "hangar-mission",
+ "hangar-notice-actions",
  "hangar-notice-ignores",
  "hangar-omp-sync",
+ "hangar-open-cli",
  "hangar-opencode-cookie",
  "hangar-package",
  "hangar-plugins",
  "hangar-port-preview",
+ "hangar-port-stop",
+ "hangar-port-tunnel",
  "hangar-projects",
  "hangar-psmux",
+ "hangar-registration",
  "hangar-reviews",
  "hangar-scheduled-tasks",
+ "hangar-send",
+ "hangar-session-open-fields",
+ "hangar-session-ports",
  "hangar-session-tools",
  "hangar-shortcut-transfer",
  "hangar-sidecar-prune",
+ "hangar-status",
  "hangar-ticket-actions",
  "hangar-transcript",
  "hangar-update-news",
  "hangar-usage-diary",
+ "hangar-whatsapp",
+ "hangar-work-review",
  "hangar-workflows",
  "hangar-workspace",
  "http-body-util",
@@ -2101,6 +2312,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-session-open-fields"
+version = "0.1.0"
+
+[[package]]
+name = "hangar-session-ports"
+version = "0.1.0"
+dependencies = [
+ "hangar-api",
+ "serde_json",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "hangar-session-tools"
 version = "0.1.0"
 dependencies = [
@@ -2142,6 +2367,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-status"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hangar-api",
+ "hangar-core",
+ "hangar-usage-diary",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-ticket-actions"
 version = "0.1.0"
 dependencies = [
@@ -2164,6 +2403,7 @@ version = "0.1.0"
 dependencies = [
  "hangar-api",
  "hangar-core",
+ "hangar-notice-actions",
  "memchr",
  "proptest",
  "regex",
@@ -2199,6 +2439,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-video"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libloading",
+]
+
+[[package]]
+name = "hangar-whatsapp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "form_urlencoded",
+ "hangar-core",
+ "hangar-managed-binary",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "hangar-work-review"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "form_urlencoded",
+ "hangar-connectors",
+ "hangar-core",
+ "hangar-mission",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-workflows"
 version = "0.1.0"
 dependencies = [
@@ -2224,6 +2512,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+ "trash",
  "windows-sys 0.61.2",
 ]
 
@@ -2780,6 +3069,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jiff"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5d126d72eb017f10b302e73bdeca446bea405ee449af4d9e7866d6b082d83e"
+dependencies = [
+ "jiff-core",
+ "jiff-static",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "jiff-core"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6b46a105a9874634dd96231021526bf24ca04955a5998c59a9c7666e634b7b8"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "jiff-static"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0127e9bde3c6130d6169e7d8d68676e4be69c4bf7573c308b6f960a5089c428"
+dependencies = [
+ "jiff-core",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "jktcp"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2907,6 +3232,16 @@ name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link 0.2.1",
+]
 
 [[package]]
 name = "libm"
@@ -3231,12 +3566,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08849bbd4767dfae9457696856ae1c84fe4e0281bbe4a7abff2d0e06fb7981f8"
+dependencies = [
+ "objc2-encode",
+]
+
+[[package]]
 name = "objc2-core-foundation"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags 2.13.2",
+]
+
+[[package]]
+name = "objc2-encode"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef25abbcd74fb2609453eb695bd2f860d389e457f67dc17cafc8b8cbc89d0c33"
+
+[[package]]
+name = "objc2-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
 ]
 
 [[package]]
@@ -3613,6 +3973,21 @@ dependencies = [
  "cpubits",
  "cpufeatures 0.3.1",
  "universal-hash 0.6.1",
+]
+
+[[package]]
+name = "portable-atomic"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
+
+[[package]]
+name = "portable-atomic-util"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10ab3eb7f3becc3a1cbc4f2c6f20267996cfc1a6467a873763411b136a122715"
+dependencies = [
+ "portable-atomic",
 ]
 
 [[package]]
@@ -5256,6 +5631,25 @@ dependencies = [
  "sharded-slab",
  "thread_local",
  "tracing-core",
+]
+
+[[package]]
+name = "trash"
+version = "5.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7363f9516b65bd2e855f4e6c3338b1a98efc2773c25349c958908897e1170ded"
+dependencies = [
+ "jiff",
+ "libc",
+ "log",
+ "objc2",
+ "objc2-foundation",
+ "once_cell",
+ "percent-encoding",
+ "scopeguard",
+ "urlencoding",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]

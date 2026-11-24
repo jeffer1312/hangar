@@ -26,7 +26,7 @@ export function SessionAvatar({ session, size = 36, ctxPct: given }: { session: 
   const ready = state === 'idle';
   const warning = waiting || (ready && limited);
   const glyph = provider === 'claude' && engine && /gpt|openai|codex/i.test(engine) ? 'codex' : provider;
-  const known = glyph && ['claude', 'codex', 'kimi', 'pi', 'omp'].includes(glyph);
+  const known = glyph && ['claude', 'codex', 'kimi', 'pi', 'omp', 'antigravity'].includes(glyph);
   const accent = theme.tokens.accent.base;
   const reduced = useReducedMotion();
   const paused = useContext(WorkingMarkPaused);

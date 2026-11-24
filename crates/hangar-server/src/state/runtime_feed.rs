@@ -216,7 +216,7 @@ impl RuntimeFeed {
         let Some(hub) = self.hub.upgrade() else { return false };
         let Some(source) = hub.source_binding() else { return false };
         let generation = source.0;
-        let other = matches!(source.1.provider, crate::transcript::Provider::Pi | crate::transcript::Provider::Omp | crate::transcript::Provider::Kimi);
+        let other = matches!(source.1.provider, crate::transcript::Provider::Pi | crate::transcript::Provider::Omp | crate::transcript::Provider::Kimi | crate::transcript::Provider::Antigravity);
         if self.source_binding.is_none() && self.facts.is_none() { self.source_binding = Some(source.clone()); }
         if self.source_binding.as_ref() != Some(&source) {
             self.plugin_reading = None;

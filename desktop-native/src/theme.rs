@@ -398,6 +398,7 @@ pub fn warning() -> Hsla { rgb(if colors().dark { 0xff9f0a } else { 0xb25e00 }).
 pub fn danger() -> Hsla { rgb(if colors().dark { 0xff453a } else { 0xd12c21 }).into() }
 /// Texto sobre fundo tingido da mesma cor (marca, linha de estado, nome em destaque): clareado no escuro, o `--success-text` do web.
 pub fn success_text() -> Hsla { if colors().dark { rgb(mix(0x34c759, 0xffffff, 0.45)).into() } else { success() } }
+pub fn danger_text() -> Hsla { if colors().dark { rgb(mix(0xff453a, 0xffffff, 0.4)).into() } else { danger() } }
 pub fn warning_text() -> Hsla { if colors().dark { rgb(mix(0xff9f0a, 0xffffff, 0.4)).into() } else { warning() } }
 /// Texto (e ponto de seleção) sobre um botão de cor cheia e escura, como o Enviar âmbar e o Salvar índigo.
 pub fn on_press() -> Hsla { hsla(0., 0., 1., 1.) }
@@ -420,6 +421,9 @@ pub fn selected_row() -> Hsla { if see_through() { accent_dim() } else { rgb(col
 pub fn status(state: &str) -> Hsla {
     match state { "working" => accent(), "awaiting_input" => warning(), "idle" => success(), "dead" => danger(), _ => muted() }
 }
+/// Ciano de "esperando você" da conversa nova: longe do lilás de execução sem depender do texto.
+pub fn waiting() -> Hsla { rgb(if is_dark() { 0x45c8dc } else { 0x0b7285 }).into() }
+
 /// Pílula de estado (`--pill-*`): fundo e texto.
 pub fn pill(state: &str) -> (Hsla, Hsla) {
     match state {
@@ -440,6 +444,7 @@ pub fn provider(name: &str) -> (Hsla, &'static str) {
         "kimi" => (rgb(if colors().dark { 0xc7bdf5 } else { 0x7061c2 }).into(), "K"),
         "pi" => (rgb(0x8b5cf6).into(), "π"),
         "omp" => (rgb(0xf59e0b).into(), "Ω"),
+        "antigravity" => (rgb(0x6ea8ff).into(), "A"),
         // Sem marca de modelo: o orquestrador é código.
         "orq" => (muted(), "◇"),
         _ => (muted(), "?"),
@@ -594,6 +599,7 @@ pub fn sync_kit(window: Option<&mut Window>, cx: &mut App) {
         appearance::CodeFont::Named(name) => name.0.into(),
     };
     theme.mono_font_size = px(appearance.code_size as f32 / 2.);
+    theme.highlight_theme = crate::code_theme::highlight_theme(dark);
     Theme::sync_base(cx);
 }
 

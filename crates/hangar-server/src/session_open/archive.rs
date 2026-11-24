@@ -139,6 +139,15 @@ fn pi_jsonl(root: &Path, sid: &str) -> Result<PathBuf, Miss> {
         .max_by_key(|f| mtime(f)).ok_or(Miss::Absent)
 }
 
+/// O transcript de uma conversa do Antigravity e a conta Google que o guarda, procurado em todas as contas: o id é
+/// UUID e não se repete entre elas; se repetir, vale o mais novo.
+pub(crate) fn agy_found(home: &Path, sid: &str) -> Result<(PathBuf, hangar_antigravity::Account), Miss> {
+    if !hangar_antigravity::paths::valid_conversation_id(sid) { return Err(Miss::Invalid); }
+    hangar_antigravity::paths::known_accounts(home).into_iter()
+        .filter_map(|account| account.transcript_path(home, sid).filter(|p| p.is_file()).map(|p| (p, account)))
+        .max_by_key(|(p, _)| mtime(p)).ok_or(Miss::Absent)
+}
+
 /// `_kimi_conversas`: a entrada mais recente do índice com o wire gravado (o wire e a pasta da sessão).
 pub(crate) fn kimi_jsonl(kimi_home: &Path, sid: &str) -> Result<(PathBuf, Option<String>), Miss> {
     if !KIMI_ID.is_match(sid) { return Err(Miss::Invalid); }
@@ -257,6 +266,7 @@ pub(crate) fn locate(w: &Where, project: &str, sid: &str, config_dir: Option<&st
         AgentProvider::Claude => (claude_jsonl(w, project, sid, config_dir)?, None),
         AgentProvider::Pi | AgentProvider::Omp => (pi_jsonl(&agent_root(w, provider), sid)?, None),
         AgentProvider::Kimi => (kimi_jsonl(&super::agents::kimi_home(w.home, w.env), sid)?.0, None),
+        AgentProvider::Antigravity => (agy_found(w.home, sid)?.0, None),
         AgentProvider::Codex => {
             if !UUID.is_match(sid) { return Err(Miss::Invalid.into()); }
             let (transcript, _, home) = codex_found(w, sid, codex_account)?;
@@ -299,7 +309,8 @@ fn remember_folder(file: &Path, sid: &str, cwd: &str) {
     }
 }
 
-/// A conversa achada: o transcript, a pasta dela e, no Claude, a conta dona; no Codex, a conta.
+/// A conversa achada: o transcript, a pasta dela e, no Claude, a conta dona (no Antigravity, a pasta da conta Google
+/// adicional); no Codex, a conta.
 pub struct Found { pub transcript: PathBuf, pub cwd: String, pub owner: Option<String>, pub codex_account: Option<String> }
 
 /// O pedido de abertura da retomada e o que a rota faz em volta dele.
@@ -349,6 +360,13 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
             let (transcript, cwd) = kimi_jsonl(&super::agents::kimi_home(w.home, w.env), sid)?;
             Found { transcript, cwd: cwd.unwrap_or_default(), owner: None, codex_account: None }
         }
+        AgentProvider::Antigravity => {
+            // A conversa só existe na pasta da conta que a criou: a retomada abre nessa conta.
+            let (transcript, account) = agy_found(w.home, sid)?;
+            let cwd = hangar_antigravity::paths::workspace_of(&account, w.home, sid);
+            let owner = account.gemini_home.map(|dir| dir.to_string_lossy().into_owned());
+            Found { transcript, cwd: cwd.unwrap_or_default(), owner, codex_account: None }
+        }
         AgentProvider::Codex => {
             let (transcript, owner, home) = codex_found(w, sid, body.codex_account.as_deref())?;
             if from_transfer(w.home, &home, sid) {
@@ -386,10 +404,21 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
         name = format!("{base}-{i}");
     }
     let config_dir = body.config_dir.clone().or_else(|| found.owner.clone());
-    let request = SessionOpenRequest { name: Some(name), cwd: found.cwd.clone(), config_dir, provider: Some(provider.name().into()),
+    let mut request = SessionOpenRequest { name: Some(name), cwd: found.cwd.clone(), config_dir, provider: Some(provider.name().into()),
         codex_account: found.codex_account.clone(), account_bound: provider == AgentProvider::Codex,
         engine: body.engine, engine_account: body.engine_account, model: body.model,
-        headless: body.headless, ..Default::default() };
+        headless: body.headless, resume_existing: true, ..Default::default() };
+    if provider == AgentProvider::Claude
+        && let Some(previous) = super::record::archived_claude(w.home, sid)
+        && let super::Account::Engine { name, account: Some(account), binding: Some(binding), .. } = previous.account {
+        if request.engine.as_deref().is_some_and(|value| value != name) {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "A conversa arquivada usa outra conta ChatGPT. Retome com o motor original."));
+        }
+        request.engine = Some(name);
+        request.engine_account = request.engine_account.filter(|requested| requested != &account);
+        request.resume_engine_binding = Some(binding);
+        request.model = request.model.or(previous.model);
+    }
     Ok(Plan { request, found, provider, project: project.to_owned(), relocated, remember })
 }
 
@@ -525,6 +554,26 @@ mod tests {
         assert!(projects.join("nova/s1/subagents").is_dir(), "a sessão só lê a irmã do destino");
         assert!(projects.join("nova/s1/tool-results/so-antigo.txt").is_file());
         assert_eq!(std::fs::read_to_string(projects.join("nova/s1/tool-results/igual.txt")).unwrap(), "novo");
+    }
+
+    #[test]
+    fn an_antigravity_conversation_is_found_in_the_account_that_holds_it() {
+        let home = tempfile::tempdir().unwrap();
+        let extra = home.path().join(".antigravity-trabalho");
+        std::fs::create_dir_all(&extra).unwrap();
+        std::fs::write(extra.join(hangar_antigravity::paths::MARKER), "{}").unwrap();
+        let (own, other) = ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222");
+        for (account, sid) in [(hangar_antigravity::Account::default(), own), (hangar_antigravity::Account::extra(extra.clone()), other)] {
+            let path = account.transcript_path(home.path(), sid).unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "{}\n").unwrap();
+        }
+        let (path, account) = super::agy_found(home.path(), other).unwrap();
+        assert_eq!(account.gemini_home.as_deref(), Some(extra.as_path()));
+        assert!(path.starts_with(&extra));
+        assert!(super::agy_found(home.path(), own).unwrap().1.is_default());
+        assert!(matches!(super::agy_found(home.path(), "33333333-3333-3333-3333-333333333333"), Err(super::Miss::Absent)));
+        assert!(matches!(super::agy_found(home.path(), "../../etc"), Err(super::Miss::Invalid)));
     }
 
     #[test]

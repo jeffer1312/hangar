@@ -451,7 +451,10 @@ async fn run(
         let args = if method == Method::POST {
             json!({"alvo":path,"path":payload["path"],"texto":payload["text"],"digest_lido":payload["digest"]})
         } else {
-            json!({"alvo":path,"path":params.get("path")})
+            let Some(large) = bool_param(params.get("large"), false) else {
+                return Err(hangar_workspace::error(422, "operação de workspace inválida"));
+            };
+            json!({"alvo":path,"path":params.get("path"),"large":large})
         };
         let Some(next) = operation(
             if method == Method::POST {
@@ -587,6 +590,7 @@ fn map_operation(
         }
         "files/read" => {
             a.insert("path".into(), json!(q.get("path")?));
+            a.insert("large".into(), json!(bool_param(q.get("large"), false)?));
             "read_file"
         }
         "files/write" => {
@@ -605,6 +609,9 @@ fn map_operation(
             "search"
         }
         "files/resolver" => "resolver",
+        "files/rename" => "rename_path",
+        "files/trash" => "trash_path",
+        "files/create" => "create_path",
         "file" | "file/text" | "file/page" => {
             if tail == "file" {
                 bool_param(q.get("download"), false)?;
@@ -793,7 +800,7 @@ fn resolve_many(
     let mut outside = 0;
     for (path, (bases, hit)) in paths.iter().zip(local) {
         if let Some(target) = hit {
-            found.insert(path.clone(), target);
+            found.insert(path.clone(), hangar_workspace::files::with_stat(target));
         } else if !found.contains_key(path) && cited.get(path).is_some() && outside < 30 {
             outside += 1;
             if let Some(at) = pending.iter().position(|p| p == path)
@@ -802,7 +809,7 @@ fn resolve_many(
             {
                 found.insert(
                     path.clone(),
-                    json!({"relativo":null,"real":p.to_string_lossy()}),
+                    hangar_workspace::files::with_stat(json!({"relativo":null,"real":p.to_string_lossy()})),
                 );
             }
         }

@@ -232,3 +232,22 @@ async fn real_tailscale_does_not_inherit_private_env() {
     assert!(output.status.success(), "filho falhou: {}", String::from_utf8_lossy(&output.stdout));
     crate::assert_ran_one(&output.stdout);
 }
+
+/// Responde sempre o mesmo `funnel status`.
+struct Canned { success: bool, stdout: &'static str }
+
+impl Tailscale for Canned {
+    fn run<'a>(&'a self, _args: &'a [&'a str]) -> BoxFuture<'a, Result<Output, String>> {
+        Box::pin(async move { Ok(Output { success: self.success, stdout: self.stdout.into(), stderr: String::new() }) })
+    }
+}
+
+#[tokio::test]
+async fn funnel_on_separates_a_failed_read_from_funnel_off() {
+    let on = r#"{"AllowFunnel": {"nb.tail1.ts.net:8443": true}}"#;
+    assert_eq!(tunnel::funnel_on(&Canned { success: true, stdout: on }).await, Ok(true));
+    assert_eq!(tunnel::funnel_on(&Canned { success: true, stdout: "{}" }).await, Ok(false));
+    assert_eq!(tunnel::funnel_on(&Canned { success: true, stdout: "" }).await, Ok(false), "nada servido");
+    assert!(tunnel::funnel_on(&Canned { success: false, stdout: "" }).await.is_err(), "comando falhou");
+    assert!(tunnel::funnel_on(&Canned { success: true, stdout: "not json" }).await.is_err(), "JSON inválido");
+}

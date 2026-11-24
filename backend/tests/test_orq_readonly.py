@@ -1,6 +1,5 @@
 """Proteção real do código, preservando relatórios e o lançador no pane."""
 import asyncio
-import json
 import os
 from pathlib import Path
 import shlex
@@ -11,7 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from app import providers_bridge
+import providers_bridge
 
 
 def _prepare(cwd, *, home=None, env=None):
@@ -133,39 +132,3 @@ def test_tilde_runtime_inside_code_is_refused_before_the_probe(tmp_path, hangar_
     with pytest.raises(ValueError, match="runtime"):
         _prepare(source, home=tmp_path, env=env)
     assert not marker.exists()
-
-
-@pytest.mark.skipif(sys.platform != "linux" or not shutil.which("bash"),
-                    reason="stub de curl usa executável POSIX")
-@pytest.mark.parametrize("status", [200, 422])
-def test_cli_sends_read_only_and_does_not_claim_success_on_old_backend(tmp_path, status, hangar_server_bin):
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    backend = tmp_path / "backend"
-    backend.mkdir()
-    (backend / ".env").write_text("CP_AUTH_TOKEN=test-only\n")
-    cli = scripts / "hangar-send"
-    shutil.copyfile(Path(__file__).resolve().parents[2] / "scripts" / "hangar-send", cli)
-    shutil.copy(Path(__file__).resolve().parents[2] / "scripts" / "hangar-server-command", scripts / "hangar-server-command")
-    capture = tmp_path / "payload.json"
-    curl = scripts / "curl"
-    curl.write_text(f"#!{sys.executable}\n" + """import json,os,pathlib,sys
-args=sys.argv[1:]
-if '-d' in args:
-    pathlib.Path(os.environ['TEST_PAYLOAD']).write_text(args[args.index('-d')+1])
-    print('{}')
-    print(os.environ['TEST_STATUS'])
-else:
-    print('{"claude": {"disponivel": true, "default": true}}')
-    print('200')
-""")
-    curl.chmod(0o700)
-    result = subprocess.run(["bash", str(cli), "--new", "review", str(tmp_path), "--read-only"],
-                            env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path),
-                                 "CP_RUST_SERVER_BIN": str(hangar_server_bin),
-                                 "PATH": str(scripts) + os.pathsep + os.environ["PATH"],
-                                 "TEST_PAYLOAD": str(capture), "TEST_STATUS": str(status)},
-                            capture_output=True, text=True, timeout=10)
-    assert json.loads(capture.read_text())["read_only"] is True
-    assert (result.returncode == 0) is (status == 200)
-    assert ("sessão criada" in result.stdout) is (status == 200)

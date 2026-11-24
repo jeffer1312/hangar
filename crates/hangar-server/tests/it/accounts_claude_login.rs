@@ -42,7 +42,7 @@ fn claude_login_routes_are_owned() {
         (Method::POST, "/api/claude-configs/work/logout"),
     ] {
         assert!(
-            hangar_server::migration_status::rust_route(&method, path),
+            hangar_server::owned_routes::rust_route(&method, path),
             "login Claude ainda passa pelo Python: {path}"
         );
     }

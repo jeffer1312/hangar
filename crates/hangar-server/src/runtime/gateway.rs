@@ -131,6 +131,9 @@ pub struct RuntimeRegistry {
     auth_refusals:std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<AuthHit>>,
     /// Sessões Claude paradas no limite à espera da troca: a fila não entrega nada até ela terminar.
     limit_holds:std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// Troca de agente pedida com a sessão trabalhando: a fila para até a troca terminar, e o que estiver
+    /// nela vai ao agente novo. O valor é o que a lista mostra.
+    handoffs:std::sync::Mutex<BTreeMap<String,PendingHandoff>>,
     /// Acordar em curso por nome, com a chave da fila: um por sessão, e o texto que chega no meio vai a ela.
     waking:std::sync::Mutex<BTreeMap<String,String>>,
     /// Sessões que receberam texto enquanto outra tinha a vaga: ao soltar, a vaga acorda de novo.
@@ -155,6 +158,11 @@ impl Drop for WakingSlot<'_> {
 /// A escrita achou a sessão adormecida, acordando ou sendo reaberta: o texto vai à fila, o resto espera.
 pub const ASLEEP_WAKING:&str = "session_asleep_waking";
 pub(crate) fn asleep_waking() -> RuntimeError { RuntimeError::new(ASLEEP_WAKING,"a sessão adormecida está sendo reaberta; tente de novo em instantes") }
+
+use hangar_api::session::HandoffState;
+
+/// Troca de agente registrada: a geração separa um pedido do que o substituiu.
+pub struct PendingHandoff { generation:u64, view:hangar_api::session::Handoff, cancelled:bool }
 
 /// Sessão adormecida: o agente, a chave da fila e onde ela acorda.
 #[derive(Clone,Debug,PartialEq)]
@@ -330,6 +338,7 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
 /// sessão já aberta, recusando os hooks dele até a reaprovação; conferidos antes, ele não acha nada
 /// novo. Falha não impede a abertura: o Codex confere depois e o ator reaprova o que mudar.
 async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<String,String>) {
+    if !crate::codex_tui::marketplaces_due(env) { return; }
     let Some(codex) = program.first().and_then(|name|process::resolve_program(name,env.iter())) else { return };
     let mut command = tokio::process::Command::new(codex);
     command.args(["plugin","marketplace","upgrade","--json"]).env_clear().envs(env)
@@ -337,17 +346,18 @@ async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     match tokio::time::timeout(MARKETPLACES_TIMEOUT,command.output()).await {
-        Ok(Ok(out)) if out.status.success() => {}
+        // Código 0 com marketplace que falhou não conta como conferida: a próxima subida tenta de novo.
+        Ok(Ok(out)) if out.status.success() && crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr)).is_empty() =>
+            crate::codex_tui::marketplaces_done(env),
         Ok(Ok(out)) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let detail = stderr.lines().find(|line|line.starts_with("Failed to upgrade marketplace")).unwrap_or("");
-            tracing::warn!(code=?out.status.code(),detail=%detail.chars().take(200).collect::<String>(),"codex: conferência dos marketplaces falhou");
+            let failed = crate::codex_tui::marketplaces_failed_lines(&String::from_utf8_lossy(&out.stderr));
+            tracing::warn!(code=?out.status.code(),detail=%failed.first().map_or("",String::as_str),"codex: conferência dos marketplaces falhou");
         }
         Ok(Err(err)) => tracing::warn!(kind=?err.kind(),"codex: conferência dos marketplaces não rodou"),
         Err(_) => tracing::warn!("codex: conferência dos marketplaces passou do prazo"),
     }
 }
-/// Toda abertura espera a conferência: sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
+/// Sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
 const MARKETPLACES_TIMEOUT:Duration = Duration::from_secs(20);
 
 /// Marca da configuração que o `claude -p` leu ao nascer: o botão Recarregar e a adoção da reserva
@@ -435,7 +445,7 @@ impl RuntimeRegistry {
         Self { startup: Default::default(), other:std::sync::OnceLock::new(), diag:crate::diag::DiagClient::new(),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
             policy:PolicyClient::new().with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
-            watcher:std::sync::OnceLock::new(),watcher_pending:tokio::sync::watch::channel(false).0,codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
+            watcher:std::sync::OnceLock::new(),watcher_pending:tokio::sync::watch::channel(false).0,codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),handoffs:Default::default(),waking:Default::default(),rewake:Default::default() }
     }
     /// Prova de vida para o watchdog do systemd: o mapa das entradas não está preso por ninguém.
     pub async fn responsive(&self) {
@@ -472,15 +482,85 @@ impl RuntimeRegistry {
         true
     }
     pub fn limit_held(&self,name:&str) -> bool { self.limit_holds.lock().unwrap_or_else(|e|e.into_inner()).contains(name) }
+    /// A fila parada para ir com a conversa a outro destino: troca de conta no limite ou troca de agente.
+    pub fn queue_held(&self,name:&str) -> bool { self.limit_held(name) || self.handoff_held(name) }
+    /// A fila segurada por uma troca de agente que ainda vale (nem cancelada nem falha).
+    pub fn handoff_held(&self,name:&str) -> bool { self.handoffs.lock().unwrap_or_else(|e|e.into_inner()).get(name).is_some_and(|p|!p.cancelled) }
+    /// Registra a troca de agente à espera; devolve a geração dela. Pedido novo no mesmo nome substitui o que
+    /// ainda espera; a troca que já transfere segue, e o pedido novo recebe `None`.
+    pub fn hold_handoff(&self,name:&str,view:hangar_api::session::Handoff) -> Option<u64> {
+        static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
+        let generation = self.ingress.unless_provider_switch(name, || {
+            let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
+            if all.get(name).is_some_and(|p|p.view.state==HandoffState::Running) { return None; }
+            let generation=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+            all.insert(name.to_owned(),PendingHandoff { generation,view,cancelled:false });
+            Some(generation)
+        })?;
+        // ponytail: a troca vive só na memória; servidor reiniciado no meio a perde, e o diário e o log mostram o
+        // início sem o "encerrada". Gravar em disco se isso acontecer de fato.
+        tracing::info!(session=%name,generation,"troca de agente à espera do turno");
+        self.diag.report("runtime.handoff_waiting",name,"handoff_waiting","troca de agente à espera do turno; vive só na memória do servidor");
+        Some(generation)
+    }
+    /// O estado da troca, se ainda é a da geração `generation`.
+    pub fn handoff_mark(&self,name:&str,generation:u64,state:HandoffState,code:Option<&str>) -> bool {
+        let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
+        let Some(pending)=all.get_mut(name).filter(|p|p.generation==generation) else { return false };
+        // Cancelada não volta a andar: o DELETE já respondeu que a troca não acontece.
+        if pending.cancelled && state!=HandoffState::Failed { return false; }
+        pending.view.state=state;
+        pending.view.code=code.map(str::to_owned);
+        // Falha devolve a fila na hora; a linha ainda mostra o motivo.
+        if state==HandoffState::Failed { pending.cancelled=true; }
+        true
+    }
+    /// Cancelada ou substituída, a espera desta geração para.
+    pub fn handoff_live(&self,name:&str,generation:u64) -> bool {
+        self.handoffs.lock().unwrap_or_else(|e|e.into_inner()).get(name).is_some_and(|p|p.generation==generation && !p.cancelled)
+    }
+    /// Pede o cancelamento; só a troca que ainda espera aceita. `false`: nada a cancelar ou já trocando.
+    pub fn cancel_handoff(&self,name:&str) -> bool {
+        let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
+        let Some(pending)=all.get_mut(name).filter(|p|p.view.state==HandoffState::Waiting) else { return false };
+        pending.cancelled=true;
+        true
+    }
+    /// Fim da troca desta geração: a entrada sai e, com `drain`, a fila volta a entregar a quem ficou com a sessão.
+    pub fn release_handoff(&self,name:&str,generation:u64,drain:bool) {
+        {
+            let mut all=self.handoffs.lock().unwrap_or_else(|e|e.into_inner());
+            if all.get(name).is_none_or(|p|p.generation!=generation) { return; }
+            all.remove(name);
+        }
+        tracing::info!(session=%name,generation,"troca de agente encerrada");
+        if drain { self.drain_later(name,"fila solta depois da troca de agente não drenou agora"); }
+    }
+    /// A troca falhou: a linha mostra o motivo até sair, e a fila já volta a entregar ao Claude.
+    pub fn fail_handoff(&self,name:&str,generation:u64,code:&str) {
+        if self.handoff_mark(name,generation,HandoffState::Failed,Some(code)) { self.drain_later(name,"fila solta depois da troca falha não drenou agora"); }
+    }
+    /// As trocas que a lista mostra, por nome; quase sempre vazio.
+    pub fn handoff_views(&self) -> BTreeMap<String,hangar_api::session::Handoff> {
+        self.handoffs.lock().unwrap_or_else(|e|e.into_inner()).iter().map(|(name,p)|(name.clone(),p.view.clone())).collect()
+    }
+    /// A drenagem corre à parte: ela só responde quando a entrega termina, e quem solta a fila não espera o turno.
+    fn drain_later(&self,name:&str,why:&'static str) {
+        let Some(registry) = self.self_ref.get().and_then(std::sync::Weak::upgrade) else { return };
+        let name = name.to_owned();
+        tokio::spawn(async move {
+            if let Err(error) = registry.drain(&name).await { tracing::warn!(session=%name,code=%error.code,"{why}"); }
+        });
+    }
+    /// A troca que a lista mostra, por nome.
+    pub fn handoff_view(&self,name:&str) -> Option<hangar_api::session::Handoff> {
+        self.handoffs.lock().unwrap_or_else(|e|e.into_inner()).get(name).map(|p|p.view.clone())
+    }
     /// Fim da troca (feita ou não): a fila volta a entregar, a começar pelo recado de continuar.
     /// A drenagem corre à parte: ela só responde quando a entrega termina, e a troca não espera o turno.
     pub fn release_limit(&self,name:&str) {
         if !self.limit_holds.lock().unwrap_or_else(|e|e.into_inner()).remove(name) { return; }
-        let Some(registry) = self.self_ref.get().and_then(std::sync::Weak::upgrade) else { return };
-        let name = name.to_owned();
-        tokio::spawn(async move {
-            if let Err(error) = registry.drain(&name).await { tracing::warn!(session=%name,code=%error.code,"fila solta depois do limite não drenou agora"); }
-        });
+        self.drain_later(name,"fila solta depois do limite não drenou agora");
     }
     pub fn request_reopen(&self,name:&str) {
         let Some(registry) = self.self_ref.get().and_then(std::sync::Weak::upgrade) else { return };
@@ -592,6 +672,15 @@ impl RuntimeRegistry {
             })
         }).await.ok().flatten()
     }
+    /// Chave da fila do Claude sem terminal pelo sidecar dele: a estacionada não tem ator, e quem só deixa
+    /// nota nela escreve na fila sem reabrir o processo.
+    pub async fn claude_headless_key(&self,name:&str) -> Option<String> {
+        let (dir,name)=(self.policy.codex_environment().home.join(".hangar").join("claude-headless"),name.to_owned());
+        tokio::task::spawn_blocking(move||{
+            let meta=super::codex_sidecar::read(&super::codex_sidecar::path(&dir,&name)).ok()??;
+            meta.get("key").and_then(Value::as_str).filter(|key|!key.is_empty()).map(str::to_owned)
+        }).await.ok().flatten()
+    }
     /// Acordar em curso na sessão: a chave da fila dela.
     pub fn waking_key(&self,name:&str) -> Option<String> { self.waking.lock().unwrap_or_else(|e|e.into_inner()).get(name).cloned() }
     fn claim_waking(&self,name:&str,key:&str) -> bool {
@@ -677,8 +766,9 @@ impl RuntimeRegistry {
     }
     /// Antes da vida nova da adormecida: o texto guardado desde `since` que ainda espera volta à fila com a
     /// hora de agora, na mesma ordem. A vida nova só entrega o que tem até 15 min antes do nascimento dela, e
-    /// um acordar que falhou deixaria o texto antigo de fora para sempre.
-    pub(super) async fn restamp_asleep(&self,key:&str,since:f64) -> Result<usize,RuntimeError> {
+    /// um acordar que falhou deixaria o texto antigo de fora para sempre. `carried`: a fila vai a uma vida que
+    /// nasce depois (a troca de agente), e as linhas ganham a folga de quem chegou antes do terminal novo.
+    pub(super) async fn restamp_asleep(&self,key:&str,since:f64,carried:bool) -> Result<usize,RuntimeError> {
         let queue_dir = self.claude_dirs().1;
         let key = key.to_owned();
         tokio::task::spawn_blocking(move || -> Result<usize,RuntimeError> {
@@ -690,25 +780,7 @@ impl RuntimeRegistry {
             let rows:Vec<Value> = store.state().rows.iter()
                 .filter(|row|super::queue::row_waits(row) && row["ts"].as_f64().is_some_and(|ts|ts >= since)).cloned().collect();
             let clock = || ClockSample { monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64()) };
-            let mut restamped = 0;
-            for row in rows {
-                let (old,text) = (row["id"].as_str().unwrap_or("").to_owned(),row["text"].as_str().unwrap_or("").to_owned());
-                if old.is_empty() || text.is_empty() { continue; }
-                // A nova entra antes de a antiga sair: falha no meio deixa o texto em dobro, nunca sem ele.
-                let id = crate::mods::state::random_hex(16);
-                let pre_transcript = row["pre_transcript"]==true;
-                let action = if row["conversation"]==true { Action::AppendConversation { text,pre_transcript,entry_id:Some(id.clone()) } }
-                    else { Action::Append { text,delivered:false,ts:None,pre_transcript,entry_id:Some(id.clone()) } };
-                store.exec(generation,&format!("restamp:{id}"),clock(),action).map_err(|_|failure("queue_io"))?;
-                let cancelled = store.exec(generation,&format!("restamp-cancel:{id}"),clock(),Action::Cancel { entry_id:old }).map_err(|_|failure("queue_io"))?;
-                // A antiga em voo fica onde está: a cópia sai, para não entregar duas vezes.
-                if cancelled != json!("cancelled") {
-                    store.exec(generation,&format!("restamp-undo:{id}"),clock(),Action::Cancel { entry_id:id }).map_err(|_|failure("queue_io"))?;
-                    continue;
-                }
-                restamped += 1;
-            }
-            Ok(restamped)
+            restamp_rows(&mut store,rows,carried,&mut |store:&mut Store,call:&str,action:Action|store.exec(generation,call,clock(),action))
         }).await.map_err(|_|failure("queue_job"))?
     }
     /// Painel de terminal aberto na sessão (rodapé ou celular).
@@ -1989,7 +2061,8 @@ impl RuntimeRegistry {
                     }
                 }
                 let queue = QueueActor::start(store,lease);
-                let connection = match super::websocket::WebSocketConnection::connect(&target.endpoint).await {
+                let token = { let meta = target.metadata.clone(); tokio::task::spawn_blocking(move||super::codex_sidecar::ws_token(&meta)).await.ok().flatten() };
+                let connection = match super::websocket::WebSocketConnection::connect_with(&target.endpoint,token.as_deref()).await {
                     Ok(connection)=>connection,
                     Err(error)=>{
                         if let Err(stop) = queue.shutdown().await {
@@ -2005,7 +2078,7 @@ impl RuntimeRegistry {
                 if let Some(store) = &self.interactions { engine = engine.with_interactions(target.key.clone(),store.clone())?; }
                 engine = engine.with_live(self.live_sender(&target.name)).with_lifecycle(self.self_ref.get().cloned());
                 let cell = AdoptionCell::new(&target.endpoint,target.app_pid).with_lifecycle(self.codex_wake.clone(),target.sidecar_life());
-                let adoption = Adoption { endpoint:target.endpoint.clone(),app_pid:target.app_pid,cell:cell.clone() };
+                let adoption = Adoption { endpoint:target.endpoint.clone(),token,app_pid:target.app_pid,cell:cell.clone() };
                 let handle = RuntimeActor::spawn_adopted(runtime,queue,connection,engine,adoption);
                 self.entries.lock().await.insert(target.key.clone(),Entry { generation:target.generation,
                     handle:EntryHandle::CodexTerminal { target:Box::new(target.clone()),handle:handle.clone(),cell },
@@ -2409,7 +2482,13 @@ impl RuntimeRegistry {
         let mut captured=target.clone();
         if let Some(meta)=state.runtime_state.get("metadata").filter(|meta|meta["key"]==target.key && meta["cano"]["pid"]==target.binding.pid) {captured.metadata=meta.clone();}
         let lease=queue.lease();let values=patch.clone();let original=captured.clone();let dir=self.policy.claude_sidecar_dir()?;
-        let saved=tokio::task::spawn_blocking(move || {let _lease=lease;super::lifecycle::patch_sidecar_in(&dir,&original,&values)}).await.map_err(|_|failure("lifecycle_worker"))??;
+        let home=self.codex_environment().home;
+        let saved=tokio::task::spawn_blocking(move || {
+            let _lease=lease;
+            crate::session_open::record::remember_claude_binding(&home,&original.key,values["session_id"].as_str().unwrap_or_default())
+                .map_err(|_| failure("lifecycle_engine_binding_write"))?;
+            super::lifecycle::patch_sidecar_in(&dir,&original,&values)
+        }).await.map_err(|_|failure("lifecycle_worker"))??;
         if saved["updated"]!=true {return Err(failure("lifecycle_sidecar_stale"));}
         let mut next=target.clone();next.generation=target.generation.checked_add(1).ok_or_else(||failure("runtime_generation"))?;
         next.metadata=saved["metadata"].clone();next.metadata["lifecycle_pending"]=json!(false);
@@ -2505,6 +2584,9 @@ impl RuntimeRegistry {
         }
         let pane=super::lifecycle::pane(&crate::terminal_input::ProcessIo::default(),&target.binding).await?;
         if pane.dead {return Err(failure("lifecycle_native_dead"));}
+        let (home, owner, new_sid)=(self.codex_environment().home,key.to_owned(),sid.clone());
+        tokio::task::spawn_blocking(move || crate::session_open::record::remember_claude_binding(&home,&owner,&new_sid))
+            .await.map_err(|_|failure("lifecycle_worker"))?.map_err(|_|failure("lifecycle_engine_binding_write"))?;
         let retained=self.entries.lock().await.get(key).and_then(|entry|entry.relaunch.clone());
         self.close_locked(key,generation,false).await?;
         let lease=wait_lease(&target.lease_path).await?;
@@ -3424,10 +3506,72 @@ async fn events(State(state):State<Gateway>) -> Response {
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))).into_response()
 }
 
+/// Cada texto que ainda espera troca de linha pela cópia com a hora de agora.
+fn restamp_rows(store:&mut Store,rows:Vec<Value>,carried:bool,exec:&mut dyn FnMut(&mut Store,&str,Action)->std::io::Result<Value>) -> Result<usize,RuntimeError> {
+    let mut restamped = 0;
+    for row in rows {
+        let (old,text) = (row["id"].as_str().unwrap_or("").to_owned(),row["text"].as_str().unwrap_or("").to_owned());
+        if old.is_empty() || text.is_empty() { continue; }
+        // A antiga em voo fica onde está; falha de disco deixa a antiga ou a cópia, nunca as duas.
+        let id = crate::mods::state::random_hex(16);
+        let outcome = exec(store,&format!("restamp:{id}"),Action::Restamp { entry_id:old,new_id:id.clone(),pre_transcript:carried })
+            .map_err(|_|failure("queue_io"))?;
+        if outcome == json!("restamped") { restamped += 1; }
+    }
+    Ok(restamped)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::runtime::queue::acquire_lease;
+    use hangar_api::session::HandoffState;
+
+    fn handoff_view() -> hangar_api::session::Handoff {
+        hangar_api::session::Handoff { state: HandoffState::Waiting, provider: "codex".into(), model: Some("gpt-6.2-sol".into()),
+            effort: Some("low".into()), account: "codex:a".into(), code: None }
+    }
+
+    #[test]
+    fn a_handoff_holds_the_queue_until_its_own_generation_ends() {
+        let registry = RuntimeRegistry::new("instance".into());
+        let first = registry.hold_handoff("s", handoff_view()).unwrap();
+        assert!(registry.queue_held("s") && !registry.queue_held("t"));
+        let second = registry.hold_handoff("s", handoff_view()).unwrap();
+        assert!(!registry.handoff_live("s", first) && registry.handoff_live("s", second), "o pedido novo substitui o anterior");
+        registry.release_handoff("s", first, true);
+        assert!(registry.queue_held("s"), "a espera substituída não solta a fila da nova");
+        registry.release_handoff("s", second, true);
+        assert!(!registry.queue_held("s") && registry.handoff_view("s").is_none());
+    }
+
+    #[test]
+    fn a_new_request_never_replaces_a_handoff_already_transferring() {
+        let registry = RuntimeRegistry::new("instance".into());
+        let first = registry.hold_handoff("s", handoff_view()).unwrap();
+        assert!(registry.handoff_mark("s", first, HandoffState::Running, None));
+        assert_eq!(registry.hold_handoff("s", handoff_view()), None);
+        assert!(registry.handoff_live("s", first), "a troca em curso segue com a mesma geração");
+    }
+
+    #[test]
+    fn only_a_waiting_handoff_cancels_and_a_failed_one_shows_its_code_without_holding_the_queue() {
+        let registry = RuntimeRegistry::new("instance".into());
+        assert!(!registry.cancel_handoff("s"), "nada a cancelar");
+        let generation = registry.hold_handoff("s", handoff_view()).unwrap();
+        assert!(registry.handoff_mark("s", generation, HandoffState::Running, None));
+        assert!(!registry.cancel_handoff("s"), "a troca em curso segue até o fim");
+        assert!(registry.handoff_mark("s", generation, HandoffState::Waiting, None));
+        assert!(registry.cancel_handoff("s"));
+        assert!(!registry.handoff_live("s", generation) && !registry.queue_held("s"));
+        assert!(!registry.handoff_mark("s", generation, HandoffState::Running, None), "cancelada não volta a trocar");
+        let generation = registry.hold_handoff("s", handoff_view()).unwrap();
+        registry.fail_handoff("s", generation, "session_transfer_login_required");
+        let shown = registry.handoff_view("s").unwrap();
+        assert_eq!((shown.state, shown.code.as_deref()), (HandoffState::Failed, Some("session_transfer_login_required")));
+        assert!(!registry.queue_held("s"), "a falha devolve a fila ao Claude");
+        assert!(!registry.handoff_mark("s", generation + 1, HandoffState::Running, None), "outra geração não mexe na linha");
+    }
 
     #[tokio::test]
     async fn a_subagent_message_checks_ingress_before_choosing_an_actor() {
@@ -3914,6 +4058,54 @@ pub(crate) mod tests {
         registry.entries.lock().await.insert("B".into(),Entry {generation:7,handle:EntryHandle::Terminal {target:target.clone(),handle:handle.clone()},lease_path:target.lease_path.clone(),name:"same".into(),mods_life:0,provider:"claude".into(),account_key:None,relaunch:None,settings_owner:None,
             mode_source:crate::terminal_facts::ModeSource {binding:crate::terminal_facts::LocalTerminalFacts::binding(&target),transcript:target.transcript.clone(),confirmed:None},live:registry.live_sender("same"),runtime_target:None,cano_birth:None,auto_respawn:None,respawn_inflight:false});
         (target,handle)
+    }
+
+    /// Disco falhando na primeira ou na segunda linha, a escrita que falha gravada ou não e as seguintes todas
+    /// falhando: a troca devolve erro e o que fica no disco para a drenagem tem cada texto uma vez só.
+    #[test]
+    fn a_failing_disk_during_restamp_leaves_the_text_exactly_once() {
+        // (escritas que passam, a primeira que falha grava antes de falhar)
+        for (passing,first_failure_writes) in [(0,false),(0,true),(1,false),(1,true)] {
+            let dir=tempfile::tempdir().unwrap();
+            let rows=vec![json!({"id":"old-a","text":"a","ts":1000.0,"delivered":false,"confirmed":false}),
+                json!({"id":"old-b","text":"b","ts":1001.0,"delivered":false,"confirmed":false})];
+            let state_path=dir.path().join("K.json");
+            let mut store=Store::open(&state_path,dir.path(),QueueState::new("K",1,"s",rows.clone())).unwrap();
+            let (generation,clock)=(store.state().generation,ClockSample {monotonic_s:0.0,epoch_s:2000.0});
+            let mut calls=0;
+            let mut exec=|store:&mut Store,call:&str,action:Action| {
+                calls+=1;
+                if calls<=passing { return store.exec(generation,call,clock,action); }
+                if calls==passing+1 && first_failure_writes { store.exec(generation,call,clock,action)?; }
+                Err(std::io::Error::other("fixture"))
+            };
+            let case=format!("passam {passing}, a primeira falha grava: {first_failure_writes}");
+            assert!(restamp_rows(&mut store,rows,false,&mut exec).is_err(),"{case}");
+            let disk=Store::open(&state_path,dir.path(),QueueState::new("K",1,"s",Vec::new())).unwrap();
+            let mut waiting:Vec<_>=disk.state().rows.iter().filter(|r|super::super::queue::row_waits(r)).map(|r|r["text"].as_str().unwrap_or_default().to_owned()).collect();
+            waiting.sort();
+            assert_eq!(waiting,["a","b"],"{case}");
+        }
+    }
+
+    /// Troca de agente segurando a fila e nada esperando no Hangar: o Orientar não aperta tecla, porque a fila do
+    /// Claude Code pode ter uma "Na conversa" já entregue.
+    #[tokio::test]
+    async fn steer_with_no_waiting_entry_is_refused_while_a_handoff_holds_the_queue() {
+        let dir=tempfile::tempdir().unwrap();
+        let registry=Arc::new(RuntimeRegistry::new("instance".into()));
+        let target=super::super::terminal::TerminalTarget {key:"S".into(),generation:7,name:"held".into(),
+            binding:crate::terminal_input::TerminalBinding {name:"held".into(),pane:"%78".into(),conversation:"sid".into(),generation:7,created:1,mux_argv:vec!["fixture-mux".into()],windows:false,clipboard_lock_path:None},
+            metadata:crate::terminal_facts::TerminalMetadata {config_dir:dir.path().into(),agent_pid:78,agent_birth:1000.0,legacy_import_after:None,fingerprint:"fixture-s".into(),origin:"uds:fixture".into()},
+            state_path:dir.path().join("S.json"),lease_path:dir.path().join("S.lock"),projection_dir:dir.path().into(),transcript:dir.path().join("sid.jsonl"),created:1.0,plugin_key:None};
+        let lease=acquire_lease(&target.lease_path).unwrap();
+        let store=Store::open(&target.state_path,&target.projection_dir,QueueState::new("S",7,"held",vec![])).unwrap();
+        let options=super::super::terminal::TerminalOptions {io:Arc::new(NoExternalIo),tick:Duration::from_secs(3600),lifecycle:Some(Arc::downgrade(&registry)),..Default::default()};
+        let handle=super::super::terminal::TerminalActor::spawn(target,QueueActor::start(store,lease),registry.policy.clone(),options,registry.events.clone(),Arc::new(AtomicU64::new(0)));
+        registry.hold_handoff("held",handoff_view()).unwrap();
+        let answer=handle.control("steer-held".into(),"steer_first".into(),json!({})).await.unwrap();
+        assert_eq!((answer.disposition,answer.payload["code"].as_str()),(Disposition::Rejected,Some("session_transfer_busy")));
+        handle.stop().await.unwrap();
     }
 
     /// Parity M7: o Claude Code que não grava `sessions/<pid>.json` (ou o arquivo lido no meio da escrita)

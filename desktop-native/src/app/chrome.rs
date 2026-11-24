@@ -277,18 +277,36 @@ impl RenderOnce for WorkingMark {
 /// Segundos desde `since` ("6s", "1m 5s", "1h 2m"), numa view própria com chave que se redesenha só na virada de cada
 /// segundo, como a `WorkingMark`: a área em volta não acorda.
 #[derive(IntoElement)]
-pub struct Elapsed { key: ElementId, since: Instant, suffix: Option<SharedString> }
+pub struct Elapsed { key: ElementId, since: Instant, suffix: Option<SharedString>, look: ElapsedLook }
 
-impl Elapsed {
-    pub fn new(key: impl Into<ElementId>, since: Instant) -> Self { Self { key: key.into(), since, suffix: None } }
-    /// Texto depois dos segundos, separado por " · ".
-    pub fn suffix(mut self, suffix: Option<SharedString>) -> Self { self.suffix = suffix; self }
+/// Como o tempo aparece: os segundos curtos da linha de trabalho ou o "há 5 min" da conversa nova, com a medida dele.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ElapsedLook {
+    Plain,
+    /// "há 12 s" no tamanho e na cor dados; com `dot`, começa por " · ".
+    Ago { size: f32, color: Hsla, dot: bool },
 }
 
-struct ElapsedView { since: Instant, suffix: Option<SharedString> }
+impl Elapsed {
+    pub fn new(key: impl Into<ElementId>, since: Instant) -> Self { Self { key: key.into(), since, suffix: None, look: ElapsedLook::Plain } }
+    /// Texto depois dos segundos, separado por " · ".
+    pub fn suffix(mut self, suffix: Option<SharedString>) -> Self { self.suffix = suffix; self }
+    pub fn look(mut self, look: ElapsedLook) -> Self { self.look = look; self }
+}
+
+struct ElapsedView { since: Instant, suffix: Option<SharedString>, look: ElapsedLook }
 
 impl Render for ElapsedView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if let ElapsedLook::Ago { size, color, dot } = self.look {
+            // O tempo inteiro e, depois dele, o resto da linha (os tokens), que é o que corta quando falta lugar: o texto
+            // cresce de "12 s" a "1 h 5 min" sem invadir o vizinho.
+            let text = crate::i18n::tr("beta_ago").replace("{time}", &format_ago(self.since.elapsed()));
+            return div().size_full().min_w_0().flex().items_center().gap(px(10.)).whitespace_nowrap()
+                .child(div().flex_none().text_size(px(size)).text_color(color).font_weight(FontWeight::MEDIUM)
+                    .child(if dot { format!("· {text}") } else { text }))
+                .when_some(self.suffix.clone(), |el, suffix| el.child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::faint()).child(suffix)));
+        }
         let elapsed = format_elapsed(self.since.elapsed());
         div().size_full().min_w_0().flex().items_center().pt(px(1.)).text_size(px(11.)).text_color(theme::faint())
             .child(div().min_w_0().truncate().child(match &self.suffix { Some(suffix) => format!("{elapsed} · {suffix}"), None => elapsed }))
@@ -297,7 +315,7 @@ impl Render for ElapsedView {
 
 impl RenderOnce for Elapsed {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let (since, suffix) = (self.since, self.suffix);
+        let (since, suffix, look) = (self.since, self.suffix, self.look);
         let view = keyed_view(self.key, window, cx, |cx| {
             cx.spawn(async move |view, cx| loop {
                 let Ok(since) = view.read_with(cx, |view: &ElapsedView, _| view.since) else { break };
@@ -310,11 +328,11 @@ impl RenderOnce for Elapsed {
                 // Sem foco o segundo não vira: ninguém olha, e cada virada redesenha a raiz.
                 if view.update(cx, |_, cx| if WINDOW_ACTIVE.get() { cx.notify() }).is_err() { break; }
             }).detach();
-            ElapsedView { since, suffix: suffix.clone() }
+            ElapsedView { since, suffix: suffix.clone(), look }
         });
         // O começo vem de um horário de parede convertido a cada desenho e varia em microssegundos: só um salto conta.
         view.update(cx, |view, cx| {
-            if view.suffix != suffix { view.suffix = suffix; cx.notify(); }
+            if view.suffix != suffix || view.look != look { (view.suffix, view.look) = (suffix, look); cx.notify(); }
             if since.saturating_duration_since(view.since).max(view.since.saturating_duration_since(since)) > Duration::from_millis(500) {
                 view.since = since;
                 cx.notify();
@@ -453,6 +471,17 @@ pub fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
+/// Tempo da conversa nova ("12 s", "5 min", "1 h 5 min"): o minuto basta depois do primeiro.
+pub fn format_ago(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    match secs {
+        0..60 => format!("{secs} s"),
+        60..3600 => format!("{} min", secs / 60),
+        _ if secs % 3600 / 60 == 0 => format!("{} h", secs / 3600),
+        _ => format!("{} h {} min", secs / 3600, secs % 3600 / 60),
+    }
+}
+
 /// Botão só com ícone (`.btn.icon` do mock): 28×28, raio 6, ícone 16.
 pub fn icon_button(id: impl Into<ElementId>, icon: IconName, tip: String, cx: &App) -> Button {
     Button::new(id).custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
@@ -470,9 +499,9 @@ pub fn pill_button(id: impl Into<ElementId>, cx: &App) -> Button {
 }
 
 /// Tecla de atalho mostrada ao lado de uma ação.
-pub fn kbd(keys: &'static str) -> Div {
+pub fn kbd(keys: impl Into<SharedString>) -> Div {
     div().flex_shrink_0().px(px(4.)).rounded(px(4.)).border_1().border_color(theme::border_strong())
-        .font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(keys)
+        .font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(keys.into())
 }
 
 /// Selo quadrado do provider na cor da marca, com os mesmos traçados do `ProviderGlyph` do web;
@@ -487,9 +516,13 @@ pub fn provider_glyph(provider: &str, size: f32) -> Div {
     }
 }
 
-/// Logo vetorial do provider (Claude, Codex/OpenAI, Kimi); `None` para quem não tem marca.
+/// Logo vetorial do provider; `None` para quem não tem marca.
 pub fn provider_logo(provider: &str, size: f32, color: Hsla) -> Option<Svg> {
-    let path = match provider { "claude" => "providers/claude.svg", "codex" => "providers/codex.svg", "kimi" => "providers/kimi.svg", _ => return None };
+    let path = match provider {
+        "claude" => "providers/claude.svg", "codex" => "providers/codex.svg", "kimi" => "providers/kimi.svg",
+        "pi" => "providers/pi.svg", "omp" => "providers/omp.svg", "antigravity" => "providers/antigravity.svg",
+        _ => return None,
+    };
     Some(svg().path(path).size(px(size)).flex_shrink_0().text_color(color))
 }
 
@@ -532,12 +565,10 @@ pub fn session_avatar(look: &AvatarLook, side: f32, motion: Option<(f32, f32)>) 
         else if working && motion.is_none() { accent } else { theme::muted().opacity(0.4) };
     let logo = side * 20. / 36.;
     let glyph = look.glyph.as_ref();
-    let (color, mark) = theme::provider(glyph);
-    // Pi e omp não têm logo vetorial: a letra deles, como no `provider_glyph`; sem agente, a marca do Hangar.
+    let (color, _) = theme::provider(glyph);
+    // Sem agente conhecido, a marca do Hangar.
     let inner = match provider_logo(glyph, logo, if glyph == "codex" { theme::text() } else { color }) {
         Some(svg) => svg.into_any_element(),
-        None if matches!(glyph, "pi" | "omp") => div().text_size(px(logo)).line_height(px(logo)).font_weight(FontWeight::BOLD)
-            .text_color(color).child(mark).into_any_element(),
         None => hangar_mark(logo, theme::muted()).into_any_element(),
     };
     let badge = (side * 14. / 36.).max(8.);
@@ -782,6 +813,65 @@ pub fn state_chip(state: &str, label: String, large: bool) -> AnyElement {
         .child(label).into_any_element()
 }
 
+/// Selo do estado no cabeçalho da conversa nova: pílula com borda na cor do estado, o arco do Hangar animado enquanto
+/// roda, o nome do estado em negrito e, rodando, há quanto tempo (`since`) o turno começou.
+pub fn beta_state_chip(state: &str, label: String, since: Option<Instant>) -> AnyElement {
+    let (bg, fg) = theme::pill(state);
+    let icon = match state {
+        // Parado de propósito: a conversa já anima o trabalho em andamento; aqui basta o ponto e o tempo.
+        "working" => Some(div().size(px(8.)).rounded_full().bg(theme::accent()).into_any_element()),
+        "awaiting_input" => Some(small_icon(IconName::MessageCircle, 14., fg).into_any_element()),
+        "idle" => Some(small_icon(IconName::CircleCheck, 14., fg).into_any_element()),
+        "dead" => Some(small_icon(IconName::CircleX, 14., fg).into_any_element()),
+        _ => None,
+    };
+    div().id("header-state").flex_shrink_0().h(px(28.)).px(px(12.)).flex().items_center().gap(px(8.)).rounded_full()
+        .bg(bg).border_1().border_color(fg.alpha(0.4)).text_color(fg).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).whitespace_nowrap()
+        .children(icon).child(label)
+        .when_some(since, |el, since| {
+            let shown = format_ago(since.elapsed());
+            el.child(div().font_weight(FontWeight::NORMAL).text_color(theme::muted())
+                    .child(crate::i18n::tr("beta_ago").replace("{time}", &shown)))
+                // Sem a marca animada no selo, nada garante outro desenho da raiz durante um turno longo e calado.
+                .child(div().absolute().size_0().child(AgoTick { key: "header-state-tick".into(), since, shown }))
+        })
+        .into_any_element()
+}
+
+/// Redesenha a raiz quando o texto de `format_ago` desde `since` muda, sem pintar nada: o tempo fica em quem o
+/// desenha, com a medida e o estilo de lá.
+#[derive(IntoElement)]
+struct AgoTick { key: ElementId, since: Instant, shown: String }
+
+struct AgoTickView { since: Instant }
+
+impl Render for AgoTickView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
+}
+
+impl RenderOnce for AgoTick {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let (since, mut shown) = (self.since, self.shown);
+        let view = keyed_view(self.key, window, cx, |cx| {
+            cx.spawn(async move |view, cx| {
+                // A referência é o texto que este desenho pintou: lido de novo agora, ele podia já ter virado.
+                loop {
+                    // Confere a cada segundo: o começo do turno pode mudar, e só a troca do texto redesenha.
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    let Ok(text) = view.update(cx, |view: &mut AgoTickView, cx| {
+                        let text = format_ago(view.since.elapsed());
+                        (WINDOW_ACTIVE.get() && text != shown).then(|| { cx.notify(); text })
+                    }) else { break };
+                    if let Some(text) = text { shown = text; }
+                }
+            }).detach();
+            AgoTickView { since }
+        });
+        view.update(cx, |view, _| view.since = since);
+        view
+    }
+}
+
 pub fn meter(pct: f64) -> AnyElement {
     let color = meter_color(pct);
     div().h(px(4.)).w_full().rounded_full().bg(theme::raised())
@@ -796,21 +886,40 @@ pub fn ring(pct: Option<f64>) -> AnyElement { ring_sized(pct, 16., 14., 2.) }
 
 /// O mesmo anel em outra medida: `side` é a caixa, `diameter` o anel e `stroke` o traço.
 pub fn ring_sized(pct: Option<f64>, side: f32, diameter: f32, stroke: f32) -> AnyElement {
+    let arc = pct.map(|pct| (0., pct.clamp(0., 100.) as f32 / 100., meter_color(pct)));
+    ring_canvas(side, diameter, stroke, arc).into_any_element()
+}
+
+/// Anel de progresso de uma transferência, no acento: `share` de 0 a 1. Sem tamanho conhecido, um quarto de arco que
+/// gira; com movimento reduzido, parado.
+pub fn progress_ring(id: impl Into<ElementId>, share: Option<f32>, side: f32, stroke: f32, still: bool) -> AnyElement {
+    let diameter = side - stroke;
+    match share {
+        Some(share) => ring_canvas(side, diameter, stroke, Some((0., share.clamp(0., 1.), theme::accent()))).into_any_element(),
+        None if still => ring_canvas(side, diameter, stroke, Some((0., 0.25, theme::accent()))).into_any_element(),
+        None => div().size(px(side)).flex_shrink_0()
+            .with_animation(id, Animation::new(Duration::from_millis(1100)).repeat(),
+                move |el, t| el.child(ring_canvas(side, diameter, stroke, Some((t, 0.25, theme::accent())))))
+            .into_any_element(),
+    }
+}
+
+/// O trilho e o arco `(início em voltas, fração, cor)`.
+fn ring_canvas(side: f32, diameter: f32, stroke: f32, arc: Option<(f32, f32, Hsla)>) -> Div {
     let track = theme::text().opacity(0.16);
-    let arc = pct.map(|pct| (pct.clamp(0., 100.) as f32 / 100., meter_color(pct)));
     div().size(px(side)).flex_shrink_0().child(canvas(|_, _, _| (), move |bounds, _, window, _| {
         let ring = Bounds::centered_at(bounds.center(), size(px(diameter), px(diameter)));
         window.paint_quad(outline(ring, track, BorderStyle::Solid).border_widths(px(stroke)).corner_radii(px(diameter / 2.)));
-        let Some((share, color)) = arc.filter(|(share, _)| *share > 0.) else { return };
+        let Some((start, share, color)) = arc.filter(|(_, share, _)| *share > 0.) else { return };
         let (center, radius) = (bounds.center(), (diameter - stroke) / 2.);
         // Um ponto a cada meio pixel de arco, do topo em sentido horário.
         let steps = (std::f32::consts::TAU * radius * share / 0.5).ceil().max(1.) as usize;
         for step in 0..=steps {
-            let angle = std::f32::consts::TAU * share * step as f32 / steps as f32 - std::f32::consts::FRAC_PI_2;
+            let angle = std::f32::consts::TAU * (start + share * step as f32 / steps as f32) - std::f32::consts::FRAC_PI_2;
             let at = point(center.x + px(radius * angle.cos()), center.y + px(radius * angle.sin()));
             window.paint_quad(fill(Bounds::centered_at(at, size(px(stroke), px(stroke))), color).corner_radii(px(stroke / 2.)));
         }
-    }).size_full()).into_any_element()
+    }).size_full())
 }
 
 fn meter_color(pct: f64) -> Hsla {

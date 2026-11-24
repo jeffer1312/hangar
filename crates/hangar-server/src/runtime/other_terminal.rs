@@ -6,6 +6,8 @@ mod dispatch;
 pub(in crate::runtime) use dispatch::send_opening;
 mod deferred_episode;
 pub mod drive;
+#[cfg(test)]
+mod drive_agy_tests;
 mod native;
 mod observe;
 pub(in crate::runtime) mod storage;
@@ -905,8 +907,14 @@ impl Observer {
                 let prior = live.borrow().clone();
                 let mut next = super::protocol::LiveState {
                     binding: Some(self.binding.clone()),
-                    public_state: serde_json::to_value(&observed.state)
-                        .map_err(|_| failed("other_terminal_state_invalid"))?,
+                    public_state: {
+                        let mut value = serde_json::to_value(&observed.state)
+                            .map_err(|_| failed("other_terminal_state_invalid"))?;
+                        // A lista lê o estado pelo retrato do registro, que só leva o `public_state`.
+                        let footer = footer_model(observed.footer.as_ref());
+                        if !footer.is_null() { value["footer_model"] = footer; }
+                        value
+                    },
                     error: None,
                     ..prior.as_deref().cloned().unwrap_or_default()
                 };
@@ -1000,6 +1008,11 @@ impl Observer {
         }
         Ok((observed, frame))
     }
+}
+
+/// Modelo e esforço do rodapé do `agy` no retrato: a lista não captura o pane.
+fn footer_model(footer: Option<&crate::terminal_state::AgyFooter>) -> Value {
+    footer.map_or(Value::Null, |footer| json!({"name":footer.model,"effort":footer.effort}))
 }
 
 fn inbox_line(target: &OtherTarget, inbox: &crate::provider_models::inbox::Store) -> Option<String> {

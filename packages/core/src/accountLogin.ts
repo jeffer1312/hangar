@@ -1,4 +1,5 @@
-import { comTeto, errorDetail, probeServerResponse } from './api';
+import { apiFetchForServer, comTeto, errorDetail, probeServerResponse } from './api';
+import type { AntigravityLoginAttempt } from './credenciais';
 import type { Server } from './servers';
 
 export interface ClaudeLoginStep {
@@ -50,4 +51,44 @@ export function submitClaudeAccountLoginCodeForServer(server: Server, label: str
 
 export function cancelClaudeAccountLoginForServer(server: Server, label: string): Promise<ClaudeLoginResult> {
   return requestLogin(server, label, '/cancelar', { method: 'POST', signal: AbortSignal.timeout(15_000) });
+}
+
+// Login da conta Google do Antigravity: o servidor roda o `agy` de login, mostra o link do Google e
+// escreve no processo o código que a pessoa colar. Uma tentativa por conta, pelo `attempt_id`.
+function antigravityLoginPath(id: string, suffix = ''): string {
+  return `/api/antigravity-contas/${encodeURIComponent(id)}/login${suffix}`;
+}
+
+export function startAntigravityLoginForServer(server: Server, id: string): Promise<AntigravityLoginAttempt> {
+  return apiFetchForServer(server, antigravityLoginPath(id), { method: 'POST' }, 30_000);
+}
+
+export function getAntigravityLoginForServer(server: Server, id: string, attemptId: string, signal?: AbortSignal): Promise<AntigravityLoginAttempt> {
+  return apiFetchForServer(server, `${antigravityLoginPath(id)}?attempt_id=${encodeURIComponent(attemptId)}`, { signal: comTeto(signal, 10_000) }, 10_000);
+}
+
+/** `codigo` é o código que a página do Antigravity mostra, ou o endereço dela inteiro: o servidor confere os dois. */
+export function submitAntigravityLoginCodeForServer(server: Server, id: string, attemptId: string, codigo: string): Promise<{ ok: true }> {
+  return apiFetchForServer(server, antigravityLoginPath(id, '/codigo'), {
+    method: 'POST', body: JSON.stringify({ attempt_id: attemptId, codigo }),
+  }, 30_000);
+}
+
+export function cancelAntigravityLoginForServer(server: Server, id: string, attemptId: string): Promise<{ ok: true }> {
+  return apiFetchForServer(server, `${antigravityLoginPath(id)}?attempt_id=${encodeURIComponent(attemptId)}`, { method: 'DELETE' }, 15_000);
+}
+
+/** Sai da conta pelo próprio agy; a pasta e as conversas ficam. */
+export function signOutAntigravityAccountForServer(server: Server, id: string): Promise<{ ok: true }> {
+  return apiFetchForServer(server, `/api/antigravity-contas/${encodeURIComponent(id)}/logout`, { method: 'POST' }, 30_000);
+}
+
+/** O link que a tela abre ou copia: só https do login do Google, sem usuário ou senha embutidos. */
+export function antigravityLoginLink(link: string | null | undefined): string | null {
+  try {
+    const url = new URL(link ?? '');
+    return url.protocol === 'https:' && url.hostname === 'accounts.google.com' && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
 }

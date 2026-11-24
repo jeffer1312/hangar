@@ -1,6 +1,6 @@
 # Hangar
 
-Drive live Claude Code, Codex, Pi, omp, and Kimi sessions from your phone over LAN/VPN. Terminal
+Drive live Claude Code, Codex, Pi, omp, Kimi, and Antigravity sessions from your phone over LAN/VPN. Terminal
 sessions run in `tmux`; Claude and Codex can instead run as Hangar-managed headless processes.
 Single-user, LAN/VPN-only by design. Server: Rust `hangar-server` (`crates/`); `backend/` keeps only the
 Python tools that are not the server yet (Codex launcher, orq scripts, push keys). Frontend: Svelte 5 PWA (`frontend/`).
@@ -119,7 +119,9 @@ passos rodam em faixas paralelas e o pytest em vários processos: `git config ha
 (padrão 4; `1` = tudo em fila). O Node é o do `.node-version`, o mesmo do CI: com o `fnm` instalado, o
 script e o `ci-gates.sh` trocam sozinhos; sem ele, o aviso diz que front e mobile podem falhar por isso. O hook do
 `gh pr create` (`.claude/settings.json`) confere o PR inteiro desde a base; a trava `pre-push`, cada
-push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. O que ela cobre e o que só o CI cobre:
+push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. No GitHub
+o merge passa pelo check `merge-gate` (`.github/workflows/gate.yml`), que testa servidor, desktop e
+Expo pelo que o PR muda; regra em [instalacao.md](docs/decisoes/instalacao.md#portão-de-merge-22112026). O que ela cobre e o que só o CI cobre:
 [instalacao.md](docs/decisoes/instalacao.md#verificação-local-antes-do-push-06102026). `npm run build` só para servir o `dist` local. Ao reportar, diga o que foi conferido no uso real e que os testes automatizados não rodaram.
 
 Claude sessions with a terminal must run as `claude --session-id <uuid>` **inside tmux** —
@@ -389,10 +391,10 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   binário novo (iOS: `ios-dev.yml` Release + SideStore; Android: `eas build --profile preview`).
   Nunca publicar OTA de um push que falhou. Passo a passo em `mobile/README.md`.
 
-### Harnesses — Claude, Codex, Pi, omp, Kimi → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
+### Harnesses — Claude, Codex, Pi, omp, Kimi, Antigravity → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
 
 **Antes de mexer em** `backend/app/adapters/codex/`, `codex_*.py`, `crates/hangar-server/src/harness_setup/`,
-`crates/hangar-server/src/runtime/` (atores Claude/Codex,
+`crates/hangar-antigravity/`, `crates/hangar-server/src/runtime/` (atores Claude/Codex,
 lançamento, relançamento e religação ao mesmo cano em `cano_reconnect.rs`), statusline/prévia, hooks de estado, ou em sessão sem terminal:
 **leia a seção "Regras vigentes" de `docs/decisoes/harnesses.md`**. Cada regra ali já custou um
 bug calado.
@@ -412,7 +414,7 @@ vigentes" de `docs/decisoes/windows.md`**.
 `atualizacoes.py`, `docs/atualizacoes/`, `VERSION`, `frontend/dist` servido pelo backend, na
 criação de sessão sob escopo do systemd ou no pacote por versão (`crates/hangar-package`,
 `crates/hangar-server/src/update/`, `scripts/montar-pacote.py`, `scripts/migrar-pacote.*`,
-`scripts/hangar-python`, `~/.hangar/config`), no lançador e na subida (`crates/hangar-boot`,
+`scripts/hangar-server-lookup`, `~/.hangar/config`), no lançador e na subida (`crates/hangar-boot`,
 `crates/hangar-server/src/install_root.rs`, `scripts/windows-tasks.ps1`): **leia "Regras vigentes"
 de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória antes do merge.
 
@@ -577,6 +579,11 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
 - **Mermaid é desenhado pelo `hangar-server` (`POST /api/mermaid`), em PNG, num Chromium sem rede**,
   com a biblioteca embutida no binário; os clientes só exibem a imagem. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#mermaid-desenhado-no-servidor-15102026).
+- **Vídeo subido com `media=later` responde ao gravar; quadros e fala saem por `upload-media?id=`, que espera.**
+  A espera acha a mídia só pelo `media_id` (nunca pela sessão), uma tarefa de mídia por vez, registro só
+  em memória; 404 faz o cliente seguir só com o vídeo; o teto do cliente conta só o tempo sem resposta.
+  Sem o parâmetro a resposta é a de sempre. Motivo em
+  [plataforma.md](docs/decisoes/plataforma.md#vídeo-do-celular-upload-responde-ao-gravar-quadros-e-fala-por-pedido-que-espera-17112026).
 - **Plugins do Claude são do Rust (`hangar-plugins`), pela CLI oficial na pasta principal.** Vale
   para todas as contas da máquina: ligar e remover gravam no `~/.claude/settings.json` (remover
   grava `false`, porque o espelho não apaga nas contas), e toda subida de processo Claude em conta
@@ -598,6 +605,12 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   nunca repassadas; credencial do fornecedor é do conector, nunca do manifesto. Guia em
   [`docs/connectors/`](docs/connectors/README.md); evidência em
   [plataforma.md](docs/decisoes/plataforma.md#conectores-de-trabalho-host-rust-e-processo-externo-por-capacidade-12112026).
+- **Revisão do trabalho (`work_review/v1`) é capacidade do conector, e o Hangar relê; o conector não avisa.**
+  Mora numa aba própria do painel (Revisão), que só existe com revisão. Releitura ao abrir a aba, no fim do turno pelas linhas da lista (vigia só assinado com conector
+  da capacidade ligado), depois do envio e a cada tool `mission` desta máquina; uma chamada em voo por
+  conector. Ticket pelo vínculo (`link::resolve`), senão pela branch. Rotas e evento `work_reviews` só
+  do dono; falha em segundo plano vai ao diário. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#revisão-do-trabalho-work_reviewv1-capacidade-do-conector-releitura-no-fim-do-turno-18112026).
 - **Mission Control (`hangar-mission`) guarda etapa, vínculo, portão e evidências; o ticket é do
   conector, e nada volta ao sistema de origem.** A sessão ligada informa etapa e anexa evidências pela
   tool `mission` (rota `/api/mission/report`); etapa com portão só é passada com a aprovação do dono,
@@ -698,7 +711,10 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   Código novo de diagnóstico entra em `DIAGNOSTIC` de `problem_gate.rs`. Critério e tabela em
   [plataforma.md](docs/decisoes/plataforma.md#aviso-na-tela-só-para-ação-que-falhou-ou-bloqueio-real-20102026).
 - **Chaveiro trancado é do Rust (`keyring.rs`): estado no evento `keyring` da lista do dono,
-  senha só pelo `POST /api/keyring/unlock`.** Só o token do dono, nunca repassado ao Python; a
+  senha só pelo `POST /api/keyring/unlock`.** O estado junta o `login` e o alias `default`, sem
+  consulta periódica (a escuta lê nos sinais do daemon e em poucas releituras limitadas); com o
+  `login` aberto o servidor pede o `default` sozinho, e só o desbloqueio com senha reinicia o
+  daemon preso. Só o token do dono, nunca repassado ao Python; a
   senha vai pelo socket de controle do gnome-keyring, nunca por `gnome-keyring-daemon --unlock`
   (com daemon de pé ele sobe outro e não abre nada), linha de comando, log ou disco. Os três
   clientes mostram o aviso por servidor. Evidência em
@@ -740,6 +756,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `GET`/`HEAD` e, em https, só o `__Host-cp_token`: máquinas do Connect dividem o mesmo site.
   Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#hangar-connect-a-entrada-é-do-rust-e-cada-aparelho-tem-credencial-própria-07112026).
+- **Primeiro acesso é pelo Connect, para o dono e para o convidado, sem endereço.** O cliente manda só
+  o nome ao serviço (`/v1/lookup`); a senha do convidado vai só à máquina dele. Contas de convidado moram
+  em `~/.hangar/guest-accounts.json` (crate `hangar-guest-accounts`, rotas `/api/guest-accounts` do
+  dono), fora da configuração compartilhada; o login delas não depende da Sincronização e faz uma
+  derivação só em todo caminho. Nome de convidado tem `.` ou `@`. Aparelho é liberado uma vez para a
+  conta toda. `sync-vault.json` e `/api/sync/guests` ficam como estão. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#entrar-pelo-connect-e-convidados-pelo-connect-22112026).
 - **Prévia de porta pelo Connect: `127.0.0.1:8769` é um listener próprio (`hangar-connect/src/preview.rs`),
   fora de `hangar_auth`.** O link de uso único abre uma página com botão, e só o `POST` dela o gasta
   e vira cookie `__Host-` por 303, com sessão de 8 h. O projeto nunca vê credencial do Hangar e guarda
@@ -751,6 +774,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   recusada, e `Sec-Fetch-Site` de fora também, salvo abrir o site numa aba. Script de service worker é
   recusado. A prévia pelo Tailscale é do crate `hangar-port-preview`, sem caminho Python. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#prévia-de-porta-pelo-connect-a-8769-é-um-listener-próprio-fora-de-hangar_auth-07112026).
+- **Portas da sessão saem na linha do dono; túnel, navegador emprestado e parar servidor só com token.**
+  `ports` vem de `list/ports.rs` (escopo, descendência, atalhos, `CP_SESSION_KEY` herdada; agente, cano, app-server e DevTools fora; convidado nunca).
+  `/api/port-tunnel` (só loopback, nunca porta do Hangar, código no `x-hangar-tunnel`), `/api/browser-host` e `ports/{port}/stop`
+  (nunca processo protegido, pid conferido pelo início) ficam em `public_routes`, sem cookie. Encaminhar escuta só em `127.0.0.1` e nunca
+  na própria máquina (sonda). No Linux a página remota e o agente usam o SOCKS do servidor (agente: tudo por ele, rede daqui recusada);
+  celular abre na WebView com túnel. O navegador do app serve só as máquinas do dono, sem pergunta.
+  [Motivo](docs/decisoes/plataforma.md#portas-da-sessão-túnel-e-navegador-emprestado-23112026).
 - **Cookie do OpenCode, webhook de deploy e prévia Tailscale são do Rust.** Os crates
   `hangar-opencode-cookie`, `hangar-deploy` e `hangar-port-preview` atendem os caminhos inteiros;
   o cookie invalida a cota em processo e a prévia só altera o slot 10000. Não há rotas ou pontes
@@ -765,6 +795,13 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   O registro de cada chamada guarda os passos do modelo, nunca o que as ferramentas devolvem; o
   Parar mata as chamadas, mas nunca interrompe a gravação da memória.
   [Medição](docs/decisoes/plataforma.md#sonho-da-memória-13112026).
+- **Tela de Status: um retrato do Rust, produtor só com tela aberta, motivo da parada gravado na
+  parada.** `GET /api/status` e o SSE `/api/status/events` (só do dono) entregam o
+  `StatusSnapshot` de `hangar-api`; bloco sem fonte vem ausente. O reinício recebe a intenção
+  (`Restarter::restart(RestartIntent)`, `restart_service` do motor git), e quem de fato derruba o
+  servidor grava a marca antes (`update/stop_intent.rs`). Com o servidor parado, o nativo age pelo crate folha `hangar-local-server`, que guarda as
+  primitivas do `current` e a `UpdateLock`; nenhuma dessas ações ganha rota. O ponto na linha
+  "Status" segue só o servidor. [Decisão](docs/decisoes/plataforma.md#tela-de-status-17112026).
 - **Computer Use e transferência de atalhos são do Rust.** `/api/computer-control*` mora no crate
   `hangar-computer-control-setup` e `/api/shortcuts/*` no `hangar-shortcut-transfer`, sem reserva
   Python. O hcu se instala sozinho da release e se atualiza só por tag
@@ -773,6 +810,24 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   contas; desligado à mão (tela ou fora do Hangar) fica desligado. A entrada do MCP tem um escritor
   só, no crate. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#computer-use-e-transferência-de-atalhos-são-do-rust-13112026).
+- **CLIProxyAPI é instalado e configurado pelo Hangar (`hangar-cliproxy-setup`), sem a pessoa
+  digitar chave.** Serviço próprio (`hangar-cliproxy`); proxy que já existe é `external` e só tem o
+  config completado, com cópia, nunca reinstalado. Ele só passa ao Hangar a pedido da pessoa
+  ("Deixar o Hangar cuidar"), com o mesmo config e as mesmas contas: o serviço de fora é desligado,
+  nunca desinstalado, e volta se a versão do Hangar não responder. Atualiza só pelo botão,
+  confirmando com sessão viva no proxy. Conta logada só no proxy entra no seletor como `cliproxy:cpa-…`.
+  **Usar esta conta** vincula o próprio motor à identidade ChatGPT escolhida; motor vinculado não aceita
+  outra conta nem cai no rodízio. A sessão grava o vínculo, e a cota vem da assinatura consultada pelo proxy,
+  sem exigir login Codex. Motor antigo sem vínculo só é vinculado pelo editor, nunca pelo nome.
+  O motor do assistente grava `fast`; ausente vale disponível, e a sessão nasce sem Fast. Ultra Fast
+  só com conta fixa Pro/Pro Max e a regra do cabeçalho `X-Hangar-Speed` no config (proxy v8+). Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#cliproxyapi-instalado-e-configurado-pelo-hangar-19112026).
+- **WhatsApp é só leitura, por um binário de fora (`jeffer1312/hangar-whatsapp`), só do dono.** Nada
+  é enviado: o binário só chama `SendMediaRetryReceipt` e recibos automáticos (teste de lista fechada).
+  Instalar exige aceite (`accepted.json`); o router usa `Edge::owner_only` e a 8766 não o monta; as
+  ferramentas recusam em sessão compartilhada e marcam texto de terceiros. Mídia antiga só a pedido,
+  com teto. Loopback com HMAC nos dois sentidos: resposta sem assinatura é 502 `whatsapp_untrusted`.
+  Evidência em [plataforma.md](docs/decisoes/plataforma.md#whatsapp-só-leitura-22112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,
@@ -786,6 +841,8 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   `hangar-server` desce antes para o `hangar-core`, ou vira trait no core que o servidor
   implementa. Nenhum crate depende do `hangar-server`. Motivo e plano da divisão em
   [plataforma.md](docs/decisoes/plataforma.md#módulo-novo-nasce-como-crate-próprio-06112026).
+  Exceção: `hangar-connect-client`, crate folha compartilhado com o `desktop-native`, que não pode
+  depender do `hangar-core` ([motivo](docs/decisoes/plataforma.md#entrar-pelo-connect-e-convidados-pelo-connect-22112026)).
 - **Motores, login de convidados e peers são do Rust.** Catálogo, CLIProxy, espelhos e instalação
   ficam em `engines/`, `harness_setup/` e `codex_setup/`; identidade, permissões, raízes e lista do
   convidado em `login_guests/`; configuração, descoberta e canal dos peers em `machine_peers/`.
@@ -861,8 +918,9 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   - Partida: o `hangar-server` sobe sozinho (`crates/hangar-boot`), sem processo Python. Travada,
     limite e queda são avisados pelo Rust (`push/watch.rs`); a retomada dos loops ativos na subida
     também é só do Rust (`loops/watch.rs`). O systemd religa e vigia pelo `WatchdogSec`.
-  - O que sobra no `backend/app/`: só o que o `hangar-codex-tui`, os scripts do orq, o
-    `vapid_setup` e os instaladores importam; nenhum deles é o servidor.
+  - O que sobra no `backend/app/`: o `atomico` que o `preview_hook.py` antigo importa (o pacote
+    ainda leva `python/` e `backend/` por uma versão) e o que os testes da orquestração importam.
+    Instaladores, passos de atualização e lançadores não chamam Python.
 - **Qual conversa é a da sessão é o Rust que decide** (`locate.rs`, a descoberta da lista), e a
   troca de transcript só vale lida duas vezes seguidas; provider, modo do Codex ou outra vida da
   sessão trocam na hora. Com o chat ao vivo aberto, o `/history` segue o transcript que o hub
@@ -932,6 +990,18 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. Não há lançador
   Python. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
+- **Padrão de abertura é do servidor; cliente só manda o que a pessoa escolheu naquela tela.**
+  Opção nova de abertura entra no `SessionOpenRequest` como `Option` (omitido = padrão do
+  servidor), com o padrão gravado no servidor (`session-defaults.json`, ou `session-options.json`
+  para as opções da tela Beta) e aplicado no `resolve_open()`; nunca numa preferência do cliente
+  (`appearance.json`, armazenamento do aparelho) posta no corpo. Todo campo do pedido está na
+  tabela do crate `hangar-session-open-fields` e é dito pelo `hangar-send --new` e pelo MCP
+  `new_session`. Travas: `every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server`
+  e `a_field_with_a_server_default_keeps_the_explicit_value` (`session_open/tests.rs`),
+  `new_session_says_every_open_field` (`mcp/tools.rs`), `new_says_every_open_field`
+  (`hangar-send/tests/open_fields.rs`) e `the_open_body_does_not_depend_on_what_this_computer_saved`
+  (`desktop-native/src/app/create/default_tests.rs`). Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#padrão-de-abertura-é-do-servidor-22112026).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
   do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
   fecha sem matar e reabre no nome novo na mesma geração; falha no meio desfaz e diz o que não voltou.

@@ -30,14 +30,19 @@ impl Apply {
         let backups = Path::new(&context.roots.home)
             .join(".hangar/config-sync/backups")
             .join(stamp);
+        let mut env: BTreeMap<String, String> = [
+            ("HOME".into(), context.roots.home.clone()),
+            ("USERPROFILE".into(), context.roots.home.clone()),
+        ]
+        .into();
+        // A pasta do `.claude.json` que a conta padrão lê: a semeadura e o Jev do Computer Use seguem a do servidor.
+        if context.claude_json != Path::new(&context.roots.home).join(".claude.json")
+            && let Some(dir) = context.claude_json.parent()
+        {
+            env.insert("CLAUDE_CONFIG_DIR".into(), dir.to_string_lossy().into_owned());
+        }
         let accounts = crate::accounts::AccountService::new(
-            crate::accounts::environment::AccountEnvironment::from_map(
-                [
-                    ("HOME".into(), context.roots.home.clone()),
-                    ("USERPROFILE".into(), context.roots.home.clone()),
-                ]
-                .into(),
-            ),
+            crate::accounts::environment::AccountEnvironment::from_map(env),
         );
         let runtime_config = super::runtime::RuntimeConfig::new(accounts.env.clone());
         Self {
@@ -385,9 +390,10 @@ impl Apply {
                         self.fix_commands(item, server, name);
                     }
                 }
+                let claude_json = self.context.claude_json.clone();
                 self.merge_at(
                     item,
-                    &Path::new(&roots.home).join(".claude.json"),
+                    &claude_json,
                     Some("mcpServers"),
                     incoming,
                     "",
@@ -486,9 +492,10 @@ impl Apply {
                 return Ok(());
             }
             let home = self.accounts.env.home.clone();
+            let principal = Some(self.accounts.env.default_claude_json());
             self.accounts
                 .create(Provider::Claude, name, |path| {
-                    let result = claude_config::seed(&home, path);
+                    let result = claude_config::seed(&home, principal.as_deref(), path);
                     claude_config::write_cli_diary(&self.accounts.env, &result.diary);
                     result.result.map(|_| ()).map_err(|error| {
                         catalog::AccountError::new(
@@ -610,6 +617,37 @@ impl Apply {
                     ));
                 }
             }
+        }
+        if let Some(settings) = self.bundle.items[item].get("worktrees") {
+            use hangar_workspace::worktree_settings::{self, WorktreeSettings};
+            let roots = self.context.worktree_roots();
+            let home = self.context.worktree_home.clone();
+            // Como as outras preferências: recusada aqui não desfaz as que já foram gravadas.
+            let parsed = serde_json::from_value::<WorktreeSettings>(export::uncanon(settings, &roots))
+                .map_err(|e| e.to_string())
+                .and_then(|s| s.location_path(&home).map(|_| s).map_err(|e| e.to_string()));
+            let settings = match parsed {
+                Ok(settings) => settings,
+                Err(error) => {
+                    self.warn(item, "config_sync_pref_rejected",
+                        json!({"key":"worktrees","error":error.chars().take(200).collect::<String>()}));
+                    return Ok(());
+                }
+            };
+            let path = home.join(".hangar/worktree-settings.json");
+            let changed = worktree_settings::locked(&path, || {
+                let current = WorktreeSettings::load_at(&path)?;
+                if current == settings { return Ok(false); }
+                if path.exists() {
+                    let backup = files::backup_target(&path, &roots, &self.backups)
+                        .map_err(|e| hangar_workspace::error(503, e.to_string()))?;
+                    std::fs::copy(&path, backup)
+                        .map_err(|e| hangar_workspace::error(503, e.to_string()))?;
+                }
+                worktree_settings::write_json(&path, &settings)?;
+                Ok(true)
+            }).map_err(|e| Error::new("config_sync_runtime_failed", e.to_string(), json!({})))?;
+            if changed { self.changed(item, "worktrees"); }
         }
         Ok(())
     }

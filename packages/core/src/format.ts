@@ -47,7 +47,7 @@ export function formatElapsed(seconds: number | null | undefined): string {
 // (`provider === 'codex' ? 'Codex' : 'Claude'`) e, quando o Pi entrou como terceiro provider, toda
 // sessão Pi aparecia rotulada como "Claude". Um lugar só -> um provider novo não volta a mentir.
 // Ausente/desconhecido -> "Claude", que é o default do backend (SessionInfo.provider).
-const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi', kimi: 'Kimi', omp: 'OMP', orq: 'Orq' };
+const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi', kimi: 'Kimi', omp: 'OMP', antigravity: 'Antigravity', orq: 'Orq' };
 
 export function providerName(p: SessionInfo['provider'] | null | undefined): string {
   return PROVIDER_NAMES[p ?? 'claude'] ?? 'Claude';
@@ -77,6 +77,7 @@ export function untrackedReason(p: SessionInfo['provider'] | null | undefined): 
   if (p === 'pi') return m.formato_sem_transcript_pi();
   if (p === 'omp') return m.formato_sem_transcript_omp();
   if (p === 'kimi') return m.formato_sem_transcript_kimi();
+  if (p === 'antigravity') return m.formato_sem_transcript_antigravity();
   if (p === 'codex') return m.formato_sem_transcript_codex();
   return m.formato_sem_transcript_claude();
 }
@@ -541,8 +542,11 @@ export function parseImageMessage(text: string): { caption: string; filenames: s
   // quebrada, com a legenda do lado. Medido em 21/08/2026, mandando um print do celular pra uma
   // sessão no Windows. Dividir por `\` também é seguro no Linux: o nome é GERADO pelo servidor
   // (`<epoch>-<hex>.<ext>`, uploads.py:30) e nunca contém separador.
+  // A fala do vídeo (`composer_fala_video`) vem depois do último caminho dele e pode ter `/`: sai antes
+  // do basename. O nome gerado pelo servidor não tem espaço, então o que sobra depois dele também sai.
   for (let i = 1; i < parts.length; i += 2) {
-    const name = parts[i + 1].trim().split(/[\\/]/).filter(Boolean).pop();
+    const value = parts[i + 1].replace(/\s*(?:fala do vídeo|video speech):\s*"[\s\S]*$/, '').trim();
+    const name = value.split(/[\\/]/).filter(Boolean).pop()?.split(/\s/)[0];
     if (name) (isImageMark(parts[i]) ? filenames : files).push(name);
   }
   // `filenames` VAZIO nao e "nao e mensagem de imagem": e o caso mais comum do celular — UMA foto,
@@ -752,6 +756,8 @@ export function summarizeToolInput(
   }
   if (name === 'Write' || name === 'Edit') return summarizeText(one('file_path') || one('path'), TOOL_MAX);
   if (name === 'Bash' || name === 'PowerShell') return summarizeText(one('command'), TOOL_MAX);
+  // Script do Code Mode: a descrição que o modelo escreveu; sem ela, a primeira linha do código.
+  if (name === 'REPL') return summarizeText(one('description') || one('code').split('\n')[0], TOOL_MAX);
   // O Bash do Codex. O comando não vem pronto: o backend o extrai do código JavaScript da chamada
   // e só o entrega quando conseguiu — sem extração sobra o código, que é o que foi executado de
   // verdade. Nunca uma linha vazia. Os três nomes porque o Codex embrulha tudo num `exec` e o
@@ -881,7 +887,7 @@ export function familiaTool(nome: string | null | undefined): FamiliaTool {
     case 'Grep': case 'Glob': case 'WebSearch': case 'WebFetch': return 'buscou';
     case 'Edit': case 'MultiEdit': case 'NotebookEdit': return 'editou';
     case 'Write': return 'criou';
-    case 'Bash': case 'PowerShell': case 'exec': case 'exec_command': return 'rodou';
+    case 'Bash': case 'PowerShell': case 'exec': case 'exec_command': case 'REPL': return 'rodou';
     default: return 'outra';
   }
 }
@@ -935,6 +941,7 @@ export function terminalFileTool(nome: string | null | undefined): boolean {
 /** Nome da chamada na pele 'terminal', como o Claude Code: "Update" na edição e "servidor - ferramenta (MCP)". */
 export function terminalToolName(nome: string | null | undefined): string {
   if (TERM_UPDATE.has((nome ?? '').toLowerCase())) return 'Update';
+  if ((nome ?? '').toLowerCase() === 'repl') return m.term_script();
   const mcp = partesMcp(nome);
   return mcp ? `${mcp[0]} - ${mcp[1]} (MCP)` : nomeFerramenta(nome);
 }
@@ -992,7 +999,7 @@ export function toolGroupTitulo(tools: { tool_name?: string | null; tool_input?:
 }
 
 /** O que uma chamada conta na linha dobrada da pele 'terminal'. */
-export type TerminalFoldKind = 'search' | 'read' | 'list' | 'mcp' | 'shell';
+export type TerminalFoldKind = 'script' | 'search' | 'read' | 'list' | 'mcp' | 'shell';
 
 // Os conjuntos do Claude Code: comando de shell cujas partes só usam estes conta como busca, leitura
 // ou listagem; os neutros não decidem nada.
@@ -1059,6 +1066,8 @@ export function terminalFoldKind(
   pluginServers: readonly string[] = [],
 ): TerminalFoldKind | null {
   switch (name?.toLowerCase()) {
+    // Script do Code Mode do Claude Code: as chamadas de dentro dele vêm logo depois e somam na mesma linha.
+    case 'repl': return 'script';
     case 'read': case 'notebookread': return 'read';
     case 'grep': case 'glob': case 'find': case 'websearch': case 'webfetch': return 'search';
     case 'ls': return 'list';
@@ -1080,6 +1089,7 @@ export function terminalFoldKind(
 
 // Frase de cada tipo: concluída e em andamento, no singular e no plural.
 const DOBRA_FRASES: Record<TerminalFoldKind, [(p: { nome: string }) => string, (p: { n: number; nome: string }) => string, (p: { nome: string }) => string, (p: { n: number; nome: string }) => string]> = {
+  script: [m.term_dobra_scripts_1, m.term_dobra_scripts, m.term_dobra_scripts_rodando_1, m.term_dobra_scripts_rodando],
   search: [m.term_dobra_buscou_1, m.term_dobra_buscou, m.term_dobra_buscando_1, m.term_dobra_buscando],
   read: [m.term_dobra_leu_1, m.term_dobra_leu, m.term_dobra_lendo_1, m.term_dobra_lendo],
   list: [m.term_dobra_listou_1, m.term_dobra_listou, m.term_dobra_listando_1, m.term_dobra_listando],
@@ -1093,7 +1103,7 @@ export function terminalFoldTitle(
   tools: { tool_name?: string | null; tool_input?: Record<string, unknown> | null }[],
   running: boolean,
 ): string {
-  const n: Record<TerminalFoldKind, number> = { search: 0, read: 0, list: 0, mcp: 0, shell: 0 };
+  const n: Record<TerminalFoldKind, number> = { script: 0, search: 0, read: 0, list: 0, mcp: 0, shell: 0 };
   const arquivos = new Set<string>();
   const servidores = new Set<string>();
   let leiturasSemCaminho = 0;

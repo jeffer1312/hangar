@@ -3,9 +3,12 @@
 //! deduplicam por id, e um id diferente na troca vira mensagem repetida na tela.
 
 mod claude;
+mod code_mode;
 mod codex;
 mod agents;
+mod antigravity;
 pub use agents::{parse_pi_object, parse_kimi_object, PiStream};
+pub use antigravity::AgyStream;
 pub mod history;
 mod peer;
 pub mod interactions;
@@ -23,6 +26,7 @@ use serde_json::Value;
 pub use history::{history_etag, merged_history, merged_history_with_notices, HistoryRequest, InternalInfo, TAIL_WINDOW};
 pub use py::ts_of_iso;
 pub use claude::{hook_failure_reason, is_cli_note, is_command_meta, strip_meta_blocks, RewriteFilter};
+pub use code_mode::ReplLinks;
 pub use history::turn_seed_start;
 pub use codex::is_context_wrapper;
 
@@ -42,6 +46,7 @@ pub enum Provider {
     Pi,
     Omp,
     Kimi,
+    Antigravity,
     Orq,
 }
 
@@ -54,6 +59,7 @@ impl Provider {
             "pi" => Some(Self::Pi),
             "omp" => Some(Self::Omp),
             "kimi" => Some(Self::Kimi),
+            "antigravity" => Some(Self::Antigravity),
             "orq" => Some(Self::Orq),
             _ => None,
         }
@@ -67,6 +73,7 @@ impl Provider {
             Self::Pi => "pi",
             Self::Omp => "omp",
             Self::Kimi => "kimi",
+            Self::Antigravity => "antigravity",
             Self::Orq => "orq",
         }
     }
@@ -105,6 +112,8 @@ pub struct LineParser {
     path: Option<std::path::PathBuf>,
     notices: Option<claude::NoticeFold>,
     pi: PiStream,
+    agy: AgyStream,
+    repl: code_mode::ReplLinks,
 }
 
 impl LineParser {
@@ -113,7 +122,7 @@ impl LineParser {
     pub fn has_pending(&self) -> bool { self.pi.has_pending() }
     pub fn pending_offset(&self) -> Option<u64> { self.pi.pending_offset() }
     pub fn new(provider: Provider) -> Self {
-        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, path: None, notices: None, pi: PiStream::default() }
+        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, path: None, notices: None, pi: PiStream::default(), agy: AgyStream::default(), repl: code_mode::ReplLinks::default() }
     }
 
     /// Com as notas dos avisos da CLI (hook que falha, nova tentativa, recusa). Só o chat as pede: quem procura
@@ -147,12 +156,17 @@ impl LineParser {
         let text = String::from_utf8_lossy(line);
         if let Some(Value::Object(obj)) = pyjson::loads_lossless(py::strip(&text)) {
             // O fold também precisa do começo do turno que já passou: senão a 2ª falha viraria a "primeira".
-            if self.rewrite.keep(&obj) && let Some(fold) = self.notices.as_mut() { fold.feed(&obj, &mut Vec::new()); }
+            if !self.rewrite.keep(&obj) { return; }
+            if let Some(fold) = self.notices.as_mut() { fold.feed(&obj, &mut Vec::new()); }
+            // O script despachado antes de o leitor começar: o resultado dele ainda vai chegar.
+            if text.contains("(dispatched #") {
+                self.repl.apply(&mut claude::parse_obj(&obj, self.peer_resolver), None, offset);
+            }
         }
     }
 
     fn at_line(&mut self, offset: u64) {
-        if offset == 0 { self.pi = PiStream::default(); }
+        if offset == 0 { self.pi = PiStream::default(); self.agy = AgyStream::default(); }
         let Some(fold) = self.notices.as_mut() else { return };
         if offset == 0 {
             fold.file_start();
@@ -172,10 +186,12 @@ impl LineParser {
             (Provider::Codex, _) => codex::parse_rollout_obj(&value),
             (Provider::Pi | Provider::Omp, _) => self.pi.feed_with_offset(&value, Some(offset)),
             (Provider::Kimi, _) => parse_kimi_object(&value),
+            (Provider::Antigravity, _) => self.agy.feed(&value),
             (Provider::Orq, _) => parse_orq(&value, self.run_dir.as_deref()),
             (Provider::Claude | Provider::ClaudeHeadless, Value::Object(obj)) if self.rewrite.keep(obj) => {
                 let mut evs = claude::parse_obj(obj, self.peer_resolver);
                 if let Some(fold) = self.notices.as_mut() { fold.feed(obj, &mut evs); }
+                self.repl.apply(&mut evs, self.path.as_deref(), offset);
                 evs
             }
             _ => Vec::new(),

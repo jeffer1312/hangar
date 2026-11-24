@@ -1,0 +1,21 @@
+[package]
+name = "hangar-send"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas o target guarda outra cópia de cada dependência.
+[dependencies]
+hangar-core.workspace = true
+futures-util.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
+reqwest = { workspace = true, features = ["rustls", "multipart"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+
+[dev-dependencies]
+base64.workspace = true
+hangar-session-open-fields.workspace = true
+proptest.workspace = true
+tempfile.workspace = true

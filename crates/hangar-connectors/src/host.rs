@@ -7,6 +7,7 @@ use crate::protocol::{ConnectorError, ErrorCode};
 use crate::registry::{Entry, Registry};
 use crate::work_tracking::{self, GetParams, ListParams, ListResult, TicketDetail};
 use crate::work_actions::{self, Catalog, ResolvedAction};
+use crate::work_review::{self, Asset, AssetParams, DecideParams, Review};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -142,6 +143,20 @@ impl Host {
             Catalog::from_connector(value)?.actions.into_iter()
                 .map(|action| action.resolve(ticket)).collect()
         }).await
+    }
+
+    /// Revisão do ticket; `None` quando o conector não tem revisão para ele.
+    pub async fn get_review(self: &Arc<Self>, id: &str, params: GetParams) -> Result<Option<Review>, CallError> {
+        self.call(id, work_review::CAPABILITY, work_review::GET, json!(params), Review::from_connector).await
+    }
+
+    pub async fn review_asset(self: &Arc<Self>, id: &str, params: AssetParams) -> Result<Asset, CallError> {
+        self.call(id, work_review::CAPABILITY, work_review::ASSET, json!(params), Asset::from_connector).await
+    }
+
+    /// Repasse direto, sem conferir o estado: o `decide` repetido é idempotente no conector.
+    pub async fn decide_review(self: &Arc<Self>, id: &str, params: DecideParams) -> Result<(), CallError> {
+        self.call(id, work_review::CAPABILITY, work_review::DECIDE, json!(params), work_review::decided).await
     }
 
     async fn call<T>(self: &Arc<Self>, id: &str, capability: &str, method: &str, params: Value,

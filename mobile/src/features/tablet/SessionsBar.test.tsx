@@ -10,11 +10,12 @@ const state = vi.hoisted(() => ({
   rows: [] as AggSession[], byServer: [] as ServerBucket[], loading: false, keyboardVisible: false,
   retain: vi.fn(), release: vi.fn(), collapsed: false, toggleCollapsed: vi.fn(),
   tabsDetail: 'compact', tabsWorkingFirst: false, tabsRecentFirst: false,
+  servers: [] as { id: string; invite?: boolean }[],
 }));
 vi.mock('../../stores/sessions', () => ({ useSessions: Object.assign(
   (selector: (s: typeof state) => unknown) => selector(state), { getState: () => state },
 ) }));
-vi.mock('../../stores/servers', () => ({ useServers: (selector: (s: { servers: [] }) => unknown) => selector({ servers: [] }) }));
+vi.mock('../../stores/servers', () => ({ useServers: (selector: (s: { servers: typeof state.servers }) => unknown) => selector({ servers: state.servers }) }));
 vi.mock('../../stores/tabletPrefs', () => ({ useTabletPrefs: (selector: (s: typeof state) => unknown) => selector(state) }));
 vi.mock('../pair/identities', () => ({ useIdentities: () => ({ identities: new Map() }) }));
 vi.mock('../vault/VaultRequests', () => ({ VaultRequestsButton: () => null }));
@@ -49,6 +50,7 @@ vi.mock('react-native', async (original) => {
 
 import { SessionsBar } from './SessionsBar';
 import { SessionChip } from './SessionChip';
+import { clearWorkReviewSummaries, setWorkReviewSummaries } from '../workReview/summaries';
 import { useUnistyles } from 'react-native-unistyles';
 import * as m from '../../paraglide/messages';
 
@@ -60,7 +62,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.rows = [session]; state.byServer = []; state.loading = false; state.keyboardVisible = false; state.collapsed = false;
   state.tabsDetail = 'compact';
-  state.tabsWorkingFirst = false; state.tabsRecentFirst = false;
+  state.tabsWorkingFirst = false; state.tabsRecentFirst = false; state.servers = [];
+  clearWorkReviewSummaries();
   state.retain.mockReturnValue(state.release);
   container = document.createElement('div'); root = createRoot(container);
 });
@@ -329,4 +332,22 @@ it('toque longo revela nome completo, máquina e estado; selecionar uma filha re
   expect(alert).toHaveBeenCalledWith(state.rows[1].name, expect.stringContaining('Notebook'));
   expect(onPick).not.toHaveBeenCalled();
   alert.mockRestore();
+});
+
+it('o chip da revisão na aba pede a revisão da sessão; convite e sessão de fora não abrem', () => {
+  setWorkReviewSummaries('nb', { api: { review_id: 'r-1', state: 'waiting', badge: { text: 'mock: 2 para você', tone: 'warning' }, updated_at: 'x' } });
+  const onWorkReview = vi.fn();
+  const renderBar = () => act(() => root.render(createElement(SessionsBar, {
+    placement: 'top', selected: { serverId: 'nb', name: 'outra' }, onPick: vi.fn(), onNew: vi.fn(), onWorkReview })));
+  state.servers = [{ id: 'nb', invite: true }];
+  renderBar();
+  expect(container.querySelector('[data-testid="review-chip"]')).toBeNull();
+  expect(container.textContent).toContain('mock: 2 para você');
+  state.servers = [{ id: 'nb' }];
+  renderBar();
+  act(() => container.querySelector<HTMLButtonElement>('[data-testid="review-chip"]')!.click());
+  expect(onWorkReview).toHaveBeenCalledWith(session);
+  state.rows = [{ ...session, outside: { alias: 'ana', owner: 'ana', localServerId: 'nb', localSession: 'x' } }];
+  renderBar();
+  expect(container.querySelector('[data-testid="review-chip"]')).toBeNull();
 });

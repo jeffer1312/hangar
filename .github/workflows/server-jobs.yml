@@ -35,6 +35,8 @@ jobs:
         include: ${{ fromJSON(inputs.sistemas) }}
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
+    # Teste travado não pode segurar o portão nem a publicação pelas 6 h do padrão do GitHub.
+    timeout-minutes: 90
     concurrency:
       group: server-testes-${{ inputs.branch }}-${{ matrix.platform }}
       cancel-in-progress: true
@@ -57,11 +59,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.14"
-      - working-directory: backend
-        run: uv sync --locked
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -96,7 +93,10 @@ jobs:
       - run: cargo test --locked --workspace --lib --no-run
       # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
       # --no-fail-fast: sem ele o cargo para no primeiro executável que falha e esconde os outros.
+      # Prazo no passo, não só no job: estouro de passo é falha, e o `continue-on-error` do sistema experimental vale
+      # para ela; job estourado sai cancelado e seguraria o portão.
       - run: cargo test --locked --workspace --no-fail-fast
+        timeout-minutes: 60
       # A poda tira o que é do workspace (recompila a cada push) e fica só o que o cache poupa.
       - if: &grava-dev inputs.branch == 'main' && steps.cache-dev.outputs.cache-hit != 'true'
         run: ../scripts/podar-target --cache target
@@ -105,10 +105,6 @@ jobs:
         with:
           path: *cache-dev
           key: ${{ steps.cache-dev.outputs.cache-primary-key }}
-      # A suíte das regressões da entrega terminal não depende do binário de release.
-      - name: Contenção e regressões da entrega terminal
-        working-directory: backend
-        run: uv run pytest tests/test_sidecar_coordination.py -q
       # Só chega aqui com todos os passos acima verdes: é a marca que o `publish` deste sistema exige.
       - if: inputs.branch == 'main' || inputs.branch == 'beta'
         run: echo ok > "$RUNNER_TEMP/testes-ok"
@@ -198,20 +194,15 @@ jobs:
             echo "$bin exige $top"
             test "$(printf '%s\n' "$top" GLIBC_2.28 | sort -V | tail -1)" = GLIBC_2.28
           done
-      # A suíte de contrato do cano contra o binário que vai ser publicado. Só no Linux: é o único
-      # lugar em que ela roda contra o hangar-cano (o ci.yml não compila Rust). Setup igual ao do ci.yml.
-      - if: matrix.platform == 'linux-x86_64'
-        uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.14"
+      # O contrato do cano contra o binário que vai ser publicado (no job de testes ele roda contra o
+      # build de teste). Só no Linux.
       - name: Contrato do cano contra o hangar-cano
         if: matrix.platform == 'linux-x86_64'
-        working-directory: backend
         run: |
-          uv sync
-          # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro.
-          test -x "$GITHUB_WORKSPACE/crates/${{ matrix.dir }}/${{ env.PERFIL }}/hangar-cano"
-          CP_RUST_CANO_BIN=$GITHUB_WORKSPACE/crates/${{ matrix.dir }}/${{ env.PERFIL }}/hangar-cano uv run pytest tests/test_claude_headless_cano.py
+          bin="$GITHUB_WORKSPACE/crates/${{ matrix.dir }}/${{ env.PERFIL }}/hangar-cano"
+          # Sem o binário o teste usaria o do build de teste e sairia verde: aqui a falta é erro.
+          test -x "$bin"
+          HANGAR_CANO_BIN="$bin" cargo test --locked -p hangar-cano --test contract
       - name: Empacotar
         run: |
           mkdir -p out

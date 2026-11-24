@@ -73,8 +73,22 @@ impl Hangar {
         let session = self.target_session(&target)?;
         let suggestion = session.rename_suggestion.clone().filter(|s| *s != session.name && !session.read_only())?;
         let state = Strip { weak: session.rename_weak, renaming: self.is_renaming(&target), again: self.rename_suggest.again.contains(&target) };
-        let (dismiss, again, apply) = (target.clone(), target.clone(), target);
+        let (dismiss, again, apply) = (target.clone(), target.clone(), target.clone());
         let name = suggestion.clone();
+        // Conversa nova: o nome é um botão que abre o renomear com ele, para mudar antes de aceitar.
+        if crate::appearance::conversation_beta() {
+            let edit_name = suggestion.clone();
+            return Some(beta_rename_strip(&suggestion, state,
+                // Renomeando, o nome não abre outra edição: o segundo pedido sairia com o nome antigo.
+                |button| button.on_click(cx.listener(move |this, _, window, cx| if !this.is_renaming(&target) {
+                    this.start_session_rename_with(target.clone(), Some(edit_name.clone()), window, cx);
+                })),
+                |button| button.on_click(cx.listener(move |this, _, _, cx| this.another_rename_suggestion(again.clone(), cx))),
+                |button| button.on_click(cx.listener(move |this, _, _, cx| this.dismiss_rename_suggestion(dismiss.clone(), cx))),
+                |button| popup::anchor(div(), crate::tour::anchors::RENAME_APPLY)
+                    .child(button.on_click(cx.listener(move |this, _, _, cx| this.rename_session_to(apply.clone(), name.clone(), cx)))), cx)
+                .into_any_element());
+        }
         Some(rename_strip(&suggestion, state,
             |button| button.on_click(cx.listener(move |this, _, _, cx| this.dismiss_rename_suggestion(dismiss.clone(), cx))),
             |button| button.on_click(cx.listener(move |this, _, _, cx| this.another_rename_suggestion(again.clone(), cx))),
@@ -95,14 +109,46 @@ pub(crate) fn rename_strip<E: IntoElement>(suggestion: &str, state: Strip, dismi
     again: impl FnOnce(Button) -> Button, apply: impl FnOnce(Button) -> E) -> Stateful<Div> {
     let title = tr_shared("rename_suggest_title", &[("name", suggestion)]);
     let busy = state.renaming || state.again;
+    let actions = [
+        again(Button::new("rename-suggest-again").small().ghost().label(tr_shared("rename_suggest_again", &[]))
+            .loading(state.again).disabled(busy)).into_any_element(),
+        dismiss(Button::new("rename-suggest-dismiss").small().ghost().label(tr_shared("rename_suggest_dismiss", &[])).disabled(busy)).into_any_element(),
+        apply(Button::new("rename-suggest-apply").small().primary().label(tr_shared("rename_suggest_apply", &[]))
+            .loading(state.renaming).disabled(busy)).into_any_element(),
+    ];
     div().id("rename-suggest").py_2().flex().items_center().gap_2().border_t_1().border_color(theme::border())
         .role(Role::Group).aria_label(title.clone())
         .child(div().flex_1().min_w_0().flex().flex_col().child(div().text_sm().truncate().child(title))
             .when(state.weak, |el| el.child(div().text_xs().text_color(theme::muted()).truncate().child(tr_shared("rename_suggest_weak", &[])))))
+        .children(actions)
+}
+
+/// A sugestão de nome da conversa nova: uma linha só, discreta como a faixa clássica, com o nome num botão que abre o
+/// renomear (`edit`) para mudar antes de aceitar; "Outra" (`again`) pede outro nome na hora.
+pub(crate) fn beta_rename_strip<E: IntoElement>(suggestion: &str, state: Strip, edit: impl FnOnce(Button) -> Button,
+    again: impl FnOnce(Button) -> Button, dismiss: impl FnOnce(Button) -> Button, apply: impl FnOnce(Button) -> E, cx: &App) -> Stateful<Div> {
+    let title = tr_shared("rename_suggest_title", &[("name", suggestion)]);
+    let busy = state.renaming || state.again;
+    // Um botão do kit: entra no Tab e responde a Enter e Espaço como ao clique; o contorno pontilhado mora no filho.
+    let name = edit(Button::new("rename-suggest-edit")
+        .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+        .h_auto().p_0().min_w_0().flex_shrink(1.).rounded(px(5.)).disabled(busy)
+        .tooltip(tr("beta_rename_click")).accessibility_label(format!("{}: {suggestion}", tr("beta_rename_edit")))
+        .child(div().min_w_0().flex().items_center().gap(px(4.)).px(px(4.)).rounded(px(5.)).border_1().border_dashed()
+            .border_color(theme::border_strong()).text_color(theme::text())
+            // O nome encolhe e corta com reticências: inteiro, ele cobriria os botões em conversa estreita.
+            .child(div().min_w_0().truncate().font_family(theme::MONO).text_size(px(12.5)).child(suggestion.to_string()))
+            .child(chrome::small_icon(IconName::Pencil, 12., theme::faint()))));
+    div().id("rename-suggest").py(px(6.)).flex().items_center().gap_2().border_t_1().border_color(theme::border())
+        .role(Role::Group).aria_label(title)
+        .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.)).text_sm().text_color(theme::muted())
+            .child(div().flex_none().child(tr("rename_beta_label")))
+            .child(name)
+            .when(state.weak, |el| el.child(div().min_w_0().truncate().text_xs().text_color(theme::faint()).child(tr("rename_beta_weak")))))
         .child(again(Button::new("rename-suggest-again").small().ghost().label(tr_shared("rename_suggest_again", &[]))
             .loading(state.again).disabled(busy)))
         .child(dismiss(Button::new("rename-suggest-dismiss").small().ghost().label(tr_shared("rename_suggest_dismiss", &[])).disabled(busy)))
-        .child(apply(Button::new("rename-suggest-apply").small().primary().label(tr_shared("rename_suggest_apply", &[]))
+        .child(apply(Button::new("rename-suggest-apply").small().ghost().label(tr_shared("rename_suggest_apply", &[]))
             .loading(state.renaming).disabled(busy)))
 }
 

@@ -121,16 +121,6 @@ class OrqStorageCliTests(unittest.TestCase):
         except ProcessLookupError:
             pass
 
-    def test_update_step_schedules_cleanup_without_requiring_the_new_binary(self):
-        update = REPO / "docs/atualizacoes/2026-10-21-orq-durable-cleanup.md"
-        command = next(line.removeprefix("comando: ") for line in update.read_text(encoding="utf-8").splitlines()
-                       if line.startswith("comando: "))
-        result = subprocess.run(command, shell=True, cwd=REPO,
-                                env={**self.env, "CP_RUST_SERVER_BIN": str(self.root / "unavailable-server")},
-                                capture_output=True, text=True, encoding="utf-8", timeout=30)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.home / ".hangar/orq-prune-request-v1").is_file())
-
 
 if __name__ == "__main__":
     unittest.main()

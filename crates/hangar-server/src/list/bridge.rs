@@ -174,7 +174,7 @@ impl<T> Guarded<T> {
 
 /// O que a decoração das linhas Claude e de todas guarda entre rodadas.
 #[derive(Default)]
-struct Decor { context: ContextCache, replies: ReplyCache, limits: super::limit::LimitWatch, refusals: super::limit::LimitWatch }
+struct Decor { context: ContextCache, agy: super::agy_context::AgyContextCache, replies: ReplyCache, limits: super::limit::LimitWatch, refusals: super::limit::LimitWatch }
 
 /// Marcadores junto da classificação: duas produções seguidas não releem tudo do zero.
 #[derive(Default)]
@@ -283,6 +283,8 @@ pub struct ListBridge {
     pub tags: crate::tags::Feed,
     /// Avisos da CLI ignorados nesta máquina: a lista do dono publica o evento `notice_ignores`.
     pub notice_ignores: crate::notice_ignores::Feed,
+    /// Revisão do trabalho das sessões: a lista do dono publica o evento `work_reviews` e consome o `changed`.
+    pub work_review: std::sync::OnceLock<Arc<hangar_work_review::Engine>>,
 }
 
 /// Tarefa bloqueante que entrou em pânico: o hook já registrou onde; aqui fica qual operação.
@@ -300,7 +302,7 @@ impl ListBridge {
         let (caches, demoted) = (Arc::<Caches>::default(), Arc::<crate::state::demote::Demoted>::default());
         caches.classify.with(|c| c.hooks.set_demoted(demoted.clone()));
         let nav = Arc::new(crate::nav_requests::NavStore::load(env.dirs.as_ref().map(|d| d.home.as_path())));
-        Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), tags: Default::default(), notice_ignores: Default::default(), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
+        Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), tags: Default::default(), notice_ignores: Default::default(), work_review: std::sync::OnceLock::new(), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
             shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(),
             discovery: tokio::sync::Mutex::new(None),
             snapshot: tokio::sync::Mutex::new(None), last_good: Mutex::default(), git_running: Arc::default(),
@@ -447,6 +449,17 @@ impl ListBridge {
             .await.map_err(|e| joined(e, "pane do agente interrompido"))
     }
 
+    /// Os pids das sessões e os que a parada de servidor nunca sinaliza (`ports::of_session`), pela
+    /// descoberta compartilhada e pelas chaves da lista publicada; `None` = a sessão não está na lista.
+    pub(crate) async fn port_stop_pids(&self, name: &str) -> Result<Option<super::ports::StopFacts>, ListError> {
+        let (rows, agent_pids, panes, children) = self.discovery(None).await?;
+        if !rows.iter().any(|row| row.name == name) { return Ok(None); }
+        let keys = super::ports::session_keys(&self.snapshot().await?.rows);
+        let (dirs, name) = (self.dirs()?, name.to_owned());
+        tokio::task::spawn_blocking(move || Some(super::ports::of_session(&rows, &panes, &agent_pids, &children, &dirs, keys, &name)))
+            .await.map_err(|e| joined(e, "pids da sessão interrompidos"))
+    }
+
     /// Mudança de membro ou de modo: a próxima pergunta não serve a lista de antes.
     pub fn invalidate(&self) { self.epoch.fetch_add(1, Ordering::SeqCst); }
 
@@ -495,6 +508,12 @@ impl ListBridge {
     pub async fn discovered_session(&self, name: &str) -> Result<Option<(SessionRow, Option<u32>)>, ListError> {
         let (rows, pids, _, _) = self.discovery(None).await?;
         Ok(rows.iter().find(|row| row.name == name).cloned().map(|row| (row, pids.get(name).copied())))
+    }
+
+    /// O pid do agente de cada sessão descoberta, por nome, numa leitura só da descoberta.
+    pub async fn discovered_agent_pids(&self) -> Result<HashMap<String, u32>, ListError> {
+        let (rows, pids, _, _) = self.discovery(None).await?;
+        Ok(rows.iter().filter_map(|row| pids.get(&row.name).map(|pid| (row.name.clone(), *pid))).collect())
     }
 
     /// Como `discovered_session`, por uma rodada feita agora, sem descartar o retrato da lista.
@@ -703,10 +722,13 @@ impl ListBridge {
                 if snapshot["view"]["conversation"].as_str() != Some(conversation.as_str()) { return None; }
                 let mut state: list_facts::RowState = serde_json::from_value(snapshot["view"]["public_state"].clone()).ok()?;
                 state.last_activity = row.last_activity;
-                Some(state)
+                Some((state, super::agy_context::footer_model(&snapshot["view"]["public_state"]["footer_model"])))
             })();
             match read {
-                Some(state) => { states.insert(row.name.clone(), state); }
+                Some((state, footer)) => {
+                    if row.provider == "antigravity" { row.model = footer; }
+                    states.insert(row.name.clone(), state);
+                }
                 None => { row.problema = Some(list_facts::UNAVAILABLE.into()); fresh = false; }
             }
         }
@@ -744,6 +766,10 @@ impl ListBridge {
         }
         let mut targets = pane_targets(&panes, &agent_pids, &children);
         if let Some(registry) = self.plugin_runtime.get() {
+            let handoffs = registry.handoff_views();
+            if !handoffs.is_empty() {
+                for row in rows.iter_mut().chain(aside.iter_mut()) { row.handoff = handoffs.get(&row.name).cloned(); }
+            }
             for row in rows.iter_mut().filter(|row| row.provider == "claude") {
                 if let Some(Ok(reading)) = plugins.get(&row.name) {
                     row.lifecycle_id = super::links::session_life(Some(&reading.binding.key), None);
@@ -773,10 +799,13 @@ impl ListBridge {
         // Classificação e decoração leem arquivo (marcador, transcript, plano) e esperam captura:
         // fora da thread do runtime, que atende todas as conexões.
         let (inp, published) = (inputs.clone(), self.published.clone());
+        let (round_panes, round_children) = (panes.clone(), children.clone());
         let (rows, effects, git_dirs, pre) = tokio::task::spawn_blocking(move || {
             let config_dirs = caches.config_dirs(&dirs);
             let alive = |pid: i64| pid_alive(&*env.procs, pid);
             let io = MuxCapture::new(env.capture_program.clone(), CAPTURE_TIMEOUT, inp.targets.clone());
+            // Antes do `pre`: a rodada parcial reclassifica a partir dele e não pode perder as portas.
+            super::ports::fill(&mut rows, &round_panes, &inp.agent_pids, &round_children, &dirs);
             let pre: Vec<SessionRow> = if keep { rows.iter().filter(|r| r.provider == "claude").cloned().collect() } else { Vec::new() };
             let (stall, wall) = (inp.facts.stall_seconds, io.wall());
             for row in rows.iter_mut().filter(|r| r.provider == "codex") {
@@ -1210,6 +1239,10 @@ fn decorate(env: &ListEnv, caches: &Caches, dirs: &Dirs, config_dirs: &[PathBuf]
             let pid = inp.agent_pids.get(&row.name).map(|p| i64::from(*p));
             decorate_context(&mut d.context, row, pid, &*env.procs, dirs, config_dirs, wall, mono);
         }
+        let pricing = crate::costs::pricing::default_dir();
+        for row in rows.iter_mut().filter(|r| r.provider == "antigravity") {
+            d.agy.decorate(row, &pricing);
+        }
         // O fim do transcript já gravado: o aviso de limite do Claude com terminal vai ao vigia daqui.
         // Antes das respostas: o vigia relê pelo mtime, e elas trocam `last_activity` pela hora da conversa.
         for row in rows.iter() {
@@ -1274,9 +1307,10 @@ fn decorate_context(cache: &mut ContextCache, row: &mut SessionRow, pid: Option<
         };
         let account_dir = context::config_dir_of(row.conta.as_deref()).unwrap_or_else(|| dirs.claude.clone());
         let scan = cache.scan(&row.name, &jsonl, &version);
+        cache.keep_windows_at(dirs.home.join(".hangar/context-windows.json"));
         let reading = cache.reading(&ReadingInputs { jsonl: Path::new(&jsonl), account_dir: &account_dir,
             chosen: chosen.as_deref(), opened: opened.as_deref(), declared, engine: row.engine.is_some() }, &scan,
-            row.headless, std::time::Instant::now());
+            row.headless);
         cache.store_with(&row.name, &jsonl, mono, reading, version, Some(scan))
     } else {
         cache.cached(&row.name, &jsonl)

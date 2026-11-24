@@ -17,6 +17,8 @@ const UNIT: &str = "[Unit]\nDescription=hangar backend\n\n[Service]\nWorkingDire
 #[derive(Default)]
 struct FakeService {
     calls: Mutex<Vec<&'static str>>,
+    /// A intenção de cada parada, na ordem.
+    intents: Mutex<Vec<RestartIntent>>,
     /// O serviço do front, à parte das paradas e subidas do backend: `false` desligou, `true` religou.
     fronts: Mutex<Vec<bool>>,
     starts: Arc<AtomicUsize>,
@@ -29,7 +31,8 @@ struct FakeService {
 }
 
 impl Service for FakeService {
-    fn stop(&self) -> Result<(), String> {
+    fn stop(&self, why: RestartIntent) -> Result<(), String> {
+        self.intents.lock().unwrap().push(why);
         let mut calls = self.calls.lock().unwrap();
         calls.push("stop");
         if self.fail_restop && calls.iter().filter(|c| **c == "stop").count() == 2 { return Err("systemctl stop saiu com 1".into()); }
@@ -159,6 +162,13 @@ impl Box_ {
 
 fn health(service: &FakeService, proves: bool) -> FakeHealth { FakeHealth { starts: service.starts.clone(), proves } }
 
+/// A causa de cada parada; toda parada da migração é uma atualização.
+fn stop_causes(service: &FakeService) -> Vec<&'static str> {
+    let intents = service.intents.lock().unwrap();
+    assert!(intents.iter().all(|i| i.kind == hangar_api::status::ExitKind::Update && i.from.is_none() && i.to.is_none()), "{intents:?}");
+    intents.iter().map(|i| i.cause).collect()
+}
+
 /// Toda a árvore: caminho → alvo do link ou conteúdo.
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
     let mut out = BTreeMap::new();
@@ -203,6 +213,7 @@ async fn migrate_clean_checkout_becomes_package() {
     assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
     assert_eq!(*fetcher.channels.lock().unwrap(), ["latest"]);
     assert_eq!(*service.calls.lock().unwrap(), ["stop", "start"]);
+    assert_eq!(stop_causes(&service), ["migrate"]);
     assert_eq!(*service.fronts.lock().unwrap(), [false], "a porta do front passa ao servidor");
 
     // Dados do usuário no lugar novo, com um link no antigo.
@@ -226,6 +237,7 @@ async fn migrate_clean_checkout_becomes_package() {
     assert_eq!(std::fs::read_link(b.home.join(".local/bin/hangar-send")).unwrap(), b.current().join("scripts/hangar-send"));
     assert_eq!(std::fs::read_link(b.home.join(".local/bin/alheio")).unwrap(), Path::new("/usr/bin/true"));
     assert_eq!(std::fs::read_to_string(b.home.join(".hangar/backend-dir")).unwrap(), format!("{}\n", b.current().join("backend").display()));
+    assert_eq!(std::fs::read_to_string(b.home.join(".hangar/install-root-dir")).unwrap(), format!("{}\n", b.current().display()));
     assert_eq!(std::fs::read_to_string(b.home.join(".hangar/plugin-dir")).unwrap(), format!("{}\n", b.current().join("plugins/hangar").display()));
 
     let marker = b.marker().expect("marca");
@@ -344,6 +356,7 @@ async fn migrate_server_that_does_not_come_back_undoes_everything() {
     let error = migrate(&b.machine(&service, &fetcher), &health(&service, false), false).await.unwrap_err();
     assert!(error.contains("não voltou"), "{error}");
     assert_eq!(*service.calls.lock().unwrap(), ["stop", "start", "stop", "start"]);
+    assert_eq!(stop_causes(&service), ["migrate", "rollback"], "a segunda parada é a da volta");
     assert_eq!(*service.fronts.lock().unwrap(), [false, true], "o front volta junto");
     assert_eq!(b.unit(), unit);
     assert!(std::fs::symlink_metadata(b.current()).is_err());
@@ -367,6 +380,7 @@ async fn migrate_undo_points_everything_back_to_the_checkout() {
     let service = FakeService::default();
     undo(&b.machine(&service, &fetcher), &health(&service, true)).await.unwrap();
     assert_eq!(*service.calls.lock().unwrap(), ["stop", "start"]);
+    assert_eq!(stop_causes(&service), ["migrate"]);
     assert_eq!(*service.fronts.lock().unwrap(), [true], "o --undo religa o front");
     assert_eq!(b.unit(), unit);
     assert!(std::fs::symlink_metadata(b.current()).is_err());
@@ -376,6 +390,7 @@ async fn migrate_undo_points_everything_back_to_the_checkout() {
     assert!(b.checkout.join("backend/launchers").is_dir() && !b.checkout.join("backend/launchers").is_symlink());
     assert_eq!(std::fs::read_link(b.home.join(".local/bin/hangar-send")).unwrap(), b.checkout.join("scripts/hangar-send"));
     assert_eq!(std::fs::read_to_string(b.home.join(".hangar/backend-dir")).unwrap(), format!("{}\n", b.checkout.join("backend").display()));
+    assert!(!b.home.join(".hangar/install-root-dir").exists(), "o ponteiro novo que a migração criou sai na volta");
     let kimi_after = std::fs::read_to_string(b.home.join(".kimi-code/config.toml")).unwrap();
     assert!(!kimi_after.contains(&b.current().display().to_string()), "{kimi_after}");
     assert!(kimi_after.contains(&format!("{}/backend/hooks/kimi_state_hook.py", b.checkout.display())), "{kimi_after}");
@@ -383,6 +398,35 @@ async fn migrate_undo_points_everything_back_to_the_checkout() {
     assert_eq!(kimi_after.matches("[[hooks]]").count(), kimi.matches("[[hooks]]").count());
     assert!(!b.home.join(".hangar/bin/hangar-launcher").exists());
     assert!(b.marker().is_none());
+}
+
+/// O `--undo` apaga o lançador que a migração criou; os hooks que o
+/// servidor do pacote gravou chamando ele (Kimi e Codex) saem junto, e os de antes voltam.
+#[tokio::test]
+async fn migrate_undo_takes_out_the_hooks_that_call_the_removed_launcher() {
+    let b = Box_::new();
+    let (service, fetcher) = (FakeService::default(), FakeFetcher::default());
+    migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
+    let launcher = b.home.join(".hangar/bin/hangar-launcher");
+    assert!(launcher.exists());
+    let kimi = b.home.join(".kimi-code/config.toml");
+    let kimi_hook = format!("\n# hangar: integração da sessão.\n[[hooks]]\nevent = \"TurnStarted\"\ncommand = \"\\\"{}\\\" kimi-state-hook\"\ntimeout = 5\n", launcher.display());
+    std::fs::write(&kimi, std::fs::read_to_string(&kimi).unwrap() + &kimi_hook).unwrap();
+    let codex = b.home.join(".codex/hooks.json");
+    let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&codex).unwrap()).unwrap();
+    doc["hooks"]["UserPromptSubmit"] = serde_json::json!([{"hooks": [{"type": "command", "command": format!("\"{}\" nav-hook || exit 0", launcher.display())}]}]);
+    std::fs::write(&codex, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
+
+    let service = FakeService::default();
+    undo(&b.machine(&service, &fetcher), &health(&service, true)).await.unwrap();
+    assert!(!launcher.exists(), "o lançador era da migração");
+    let kimi_after = std::fs::read_to_string(&kimi).unwrap();
+    assert!(!kimi_after.contains("hangar-launcher"), "{kimi_after}");
+    assert!(kimi_after.contains("alheio.sh") && kimi_after.contains("kimi_state_hook.py"), "{kimi_after}");
+    assert!(toml::from_str::<toml::Table>(&kimi_after).is_ok());
+    let codex_after = std::fs::read_to_string(&codex).unwrap();
+    assert!(!codex_after.contains("hangar-launcher"), "{codex_after}");
+    assert!(codex_after.contains("alheio.sh") && codex_after.contains("state_hook.py"), "{codex_after}");
 }
 
 #[tokio::test]
@@ -509,6 +553,7 @@ async fn migrate_after_a_killed_run_undoes_it_and_migrates_again() {
     let outcome = migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
     assert_eq!(outcome, Outcome::Migrated(Mode::Package));
     assert_eq!(*service.calls.lock().unwrap(), ["stop", "start", "stop", "start"], "desfaz a anterior e migra de novo");
+    assert_eq!(stop_causes(&service), ["migrate", "migrate"]);
     assert!(!b.home.join(".hangar/migration.partial.json").exists());
     assert_eq!(b.marker().unwrap()["mode"], "package");
     assert_eq!(std::fs::read_to_string(b.home.join(".hangar/config/.env")).unwrap(), "CP_AUTH_TOKEN=segredo\nCP_SERVER_ID=caixa\n");
@@ -709,4 +754,39 @@ fn a_launcher_that_fails_to_enter_puts_the_old_one_back() {
     std::fs::rename(target.with_extension("old"), &target).unwrap();
     replace_aside(&tmp, &target, &mut |from, to| std::fs::rename(from, to)).unwrap();
     assert_eq!(std::fs::read(&target).unwrap(), b"novo");
+}
+
+/// Responde com `code` a todo comando e anota o que rodou.
+struct Answers { code: i32, ran: Mutex<Vec<String>> }
+
+impl StepRunner for Answers {
+    fn run(&self, command: &str, _cwd: &Path) -> crate::update::StepRun {
+        self.ran.lock().unwrap().push(command.to_owned());
+        crate::update::StepRun { code: Some(self.code), output: "Access denied".into() }
+    }
+}
+
+/// O serviço real grava a marca da migração antes de parar o backend, no systemd e no Windows; a
+/// parada recusada com o servidor ainda de pé a apaga.
+#[test]
+fn migrate_system_service_marks_the_stop_intent_before_stopping() {
+    let file = |home: &Path| home.join(".hangar").join(crate::update::stop_intent::FILE);
+    let machine = |windows: bool, code: i32| {
+        let dir = tempfile::tempdir().unwrap();
+        crate::update::stop_intent::mark_this_process_running(&dir.path().join(".hangar"), "agora");
+        let runner = Arc::new(Answers { code, ran: Mutex::default() });
+        let service = SystemService { runner: runner.clone(), windows, checkout: dir.path().join("checkout"), port: 8765, home: dir.path().to_path_buf() };
+        (dir, runner, service)
+    };
+    for windows in [false, true] {
+        let (dir, runner, service) = machine(windows, 0);
+        service.stop(intent("migrate")).unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&std::fs::read(file(dir.path())).unwrap()).unwrap();
+        assert_eq!((written["tipo"].as_str(), written["causa"].as_str(), written["pid"].as_u64()), (Some("update"), Some("migrate"), Some(u64::from(std::process::id()))), "windows={windows}");
+        let ran = runner.ran.lock().unwrap();
+        assert!(ran.len() == 1 && ran[0].contains(if windows { "-NoStart" } else { "systemctl --user stop" }), "{ran:?}");
+    }
+    let (dir, _runner, service) = machine(false, 1);
+    assert!(service.stop(intent("rollback")).unwrap_err().contains("Access denied"));
+    assert!(!file(dir.path()).exists(), "parada recusada com o servidor ainda de pé");
 }

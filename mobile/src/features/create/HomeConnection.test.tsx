@@ -151,6 +151,7 @@ beforeEach(() => {
       '/api/external-pairs': [], '/api/config': {}, '/api/voice/settings': { codex: false },
       '/api/model-options': { models: [], reduced: false }, '/api/fs/roots': [], '/api/worktrees': { repos: [] },
       '/api/session-defaults': { configured: false, defaults: null },
+      '/api/me': { role: 'owner', name: null },
     };
     if (!(path in payloads)) { unexpected.push(path); throw new Error(`unexpected_http:${path}`); }
     return new Response(JSON.stringify(payloads[path]));

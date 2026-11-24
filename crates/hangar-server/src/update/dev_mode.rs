@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use hangar_api::status::ExitKind;
 use hangar_package::{Manifest, Version};
 
 use super::http::{mode, Mode};
 use super::restart::{SystemRestarter, Topology};
+use super::stop_intent::RestartIntent;
 use super::{HealthProbe, Layout, Reading, Restarter, Settings, StateFile, StepRun, StepRunner, UpdateError};
 
 /// Teto do download do Rust do checkout, o mesmo dos comandos da migração.
@@ -31,7 +33,7 @@ async fn fetch_rust_with_binary(runner:Arc<dyn StepRunner+Send+Sync>,checkout:&P
     let failed=tokio::task::spawn_blocking(move||{
         let command=if cfg!(windows){format!("\"{}\" rust-release \"{}\"",binary.display(),checkout.display())}
         else{format!("'{}' rust-release '{}'",binary.display().to_string().replace('\'',"'\\''"),checkout.display().to_string().replace('\'',"'\\''"))};
-        let StepRun{code,output}=runner.run(&command,&checkout.join("backend"));
+        let StepRun{code,output}=runner.run(&command,&checkout);
         (code!=Some(0)).then(||format!("o hangar-server rust-release saiu com {code:?}: {}",output.trim()))
     }).await.unwrap_or_else(|error|Some(error.to_string()))?;
     let warning=format!("o Rust do modo desenvolvedor não foi atualizado ({failed}); o servidor pode subir com o binário antigo de ~/.hangar/bin");
@@ -173,7 +175,8 @@ pub async fn switch<R: Restarter, H: HealthProbe>(home: &Path, state_dir: &Path,
         .map_err(|e| Failure::new("erro_dev_mode_falhou", e.to_string()))?;
     if restarter.manual() { return Ok(Outcome::SwitchedManual(target)); }
     on_step("reiniciar");
-    let proved = match restarter.restart().await {
+    let restarted = restarter.restart(RestartIntent::new(ExitKind::Requested, "dev_mode")).await;
+    let proved = match restarted {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),
         Ok(()) => match &manifest {
             Some(manifest) => super::wait_rust(health, manifest, before, settings).await,
@@ -199,7 +202,7 @@ async fn roll_back<R: Restarter, H: HealthProbe>(layout: &Layout, previous: Opti
     if let Err(e) = super::blocking(move || super::swap(&layout, &previous)).await {
         return failed(format!("{why}; e o current não voltou para onde estava: {e}"));
     }
-    if let Err(e) = restarter.restart().await {
+    if let Err(e) = restarter.restart(RestartIntent::new(ExitKind::Requested, "dev_mode")).await {
         return failed(format!("{why}; o current voltou para onde estava, mas o reinício falhou: {e}"));
     }
     if let Err(e) = super::wait_previous(health, expected.as_ref(), failed_pid, settings).await {
@@ -265,7 +268,7 @@ mod tests {
 
     struct FakeRestart(Arc<AtomicUsize>);
     impl Restarter for FakeRestart {
-        async fn restart(&self) -> Result<(), String> { self.0.fetch_add(1, Ordering::SeqCst); Ok(()) }
+        async fn restart(&self, _why: RestartIntent) -> Result<(), String> { self.0.fetch_add(1, Ordering::SeqCst); Ok(()) }
     }
 
     /// Pid 10 antes de reiniciar; depois, 10 + reinícios (ou 10 sempre, com `proves` falso). `commit`
@@ -361,7 +364,7 @@ mod tests {
         // A troca resolve o checkout antes do download; TEMP pode ter nome curto ou prefixo verbatim.
         let checkout = real(&m.checkout);
         assert!(command.contains("rust-release") && command.contains(&checkout.display().to_string()), "{command}");
-        assert_eq!(cwd, &real(&m.checkout).join("backend"));
+        assert_eq!(cwd, &real(&m.checkout));
         assert_eq!(current, &package, "roda antes da troca e do reinício");
         let failed = warnings.lock().unwrap().clone();
         assert!(failed.len() == 1 && failed[0].contains("sem rede"), "{failed:?}");
@@ -370,7 +373,7 @@ mod tests {
     /// O executor nativo aceita o checkout com espaço e aspa sem depender de Python.
     #[cfg(unix)]
     #[tokio::test]
-    async fn dev_mode_fetch_rust_runs_the_native_executor_from_backend() {
+    async fn dev_mode_fetch_rust_runs_the_native_executor_from_the_checkout_root() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let checkout = dir.path().join("che ck'out");
@@ -379,11 +382,11 @@ mod tests {
         std::fs::write(&binary, "#!/bin/sh\necho \"$PWD $*\" > \"$0.ran\"\n").unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let runner = Arc::new(super::super::ShellRunner { timeout: Duration::from_secs(20) });
-        std::fs::create_dir_all(checkout.join("backend")).unwrap();
+        // Sem `backend/`: o executor roda na raiz do checkout.
         assert_eq!(fetch_rust_with_binary(runner, &checkout, &binary).await, None);
         let ran = std::fs::read_to_string(binary.with_extension("ran")).unwrap();
         // Canônico: no macOS o temporário fica sob /var, link para /private/var, e o $PWD vem resolvido.
-        assert_eq!(ran.trim(), format!("{} rust-release {}", checkout.join("backend").canonicalize().unwrap().display(), checkout.display()));
+        assert_eq!(ran.trim(), format!("{} rust-release {}", checkout.canonicalize().unwrap().display(), checkout.display()));
     }
 
     #[tokio::test]
@@ -482,7 +485,7 @@ mod tests {
     /// O reinício de número `fails` (1 = o da troca) falha.
     struct FailingRestart { count: Arc<AtomicUsize>, fails: usize }
     impl Restarter for FailingRestart {
-        async fn restart(&self) -> Result<(), String> {
+        async fn restart(&self, _why: RestartIntent) -> Result<(), String> {
             let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
             if n == self.fails { Err("systemctl saiu com 1".into()) } else { Ok(()) }
         }
@@ -535,7 +538,7 @@ mod tests {
 
     struct Manual;
     impl Restarter for Manual {
-        async fn restart(&self) -> Result<(), String> { Err("na mão não reinicia".into()) }
+        async fn restart(&self, _why: RestartIntent) -> Result<(), String> { Err("na mão não reinicia".into()) }
         fn manual(&self) -> bool { true }
     }
 

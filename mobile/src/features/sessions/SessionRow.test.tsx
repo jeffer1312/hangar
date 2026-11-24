@@ -71,6 +71,7 @@ vi.mock('../../paraglide/messages', async (importOriginal) => ({
 import { useUnistyles } from 'react-native-unistyles';
 import { SessionRow } from './SessionRow';
 import { HANGAR_MARK_ARCS } from '../../ui/HangarMark';
+import { clearWorkReviewSummaries, setWorkReviewSummaries } from '../workReview/summaries';
 
 // O tema de teste não traz as pílulas de estado, que pintam a marca da linha.
 useUnistyles().theme.tokens.pill = {
@@ -205,8 +206,8 @@ describe('SessionRow', () => {
     { provider: 'claude', label: 'Claude', path: 'm4.7144' },
     { provider: 'codex', label: 'Codex', path: 'M22.2819' },
     { provider: 'kimi', label: 'Kimi', path: 'M21.765' },
-    { provider: 'pi', label: 'Pi', letter: 'π' },
-    { provider: 'omp', label: 'OMP', letter: 'Ω' },
+    { provider: 'pi', label: 'Pi', path: 'M1.167' },
+    { provider: 'omp', label: 'OMP', path: 'M1.286' },
     { provider: undefined, label: 'Claude', path: 'M 4.00' },
   ] as const)('marca de $label só no avatar, inclusive na linha compacta', async ({ provider, label, ...mark }) => {
     for (const compact of [false, true]) {
@@ -216,8 +217,7 @@ describe('SessionRow', () => {
         const glyph = container.querySelector('[data-testid="session-avatar"]');
         expect(glyph).not.toBeNull();
         expect(name?.previousElementSibling).toBeNull();
-        if ('path' in mark) expect(glyph?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
-        else expect(glyph?.textContent).toBe(mark.letter);
+        expect(glyph?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
         expect(container.textContent).not.toContain(label);
         expect(container.textContent).toContain('repo · main');
         expect(container.querySelector('button[aria-label^="api,"]')?.getAttribute('aria-label')).toContain(label);
@@ -604,6 +604,27 @@ describe('SessionRow', () => {
     await act(async () => { (container.querySelector('[aria-label="liberar Ana"]') as HTMLElement).click(); });
     expect(onPair).toHaveBeenCalledWith(expect.objectContaining({ name: 'api' }), { kind: 'release', pair });
     act(() => root.unmount());
+  });
+
+  it('a revisão do trabalho vira chip que abre a folha; a sessão de fora não mostra', async () => {
+    setWorkReviewSummaries('s1', {
+      api: { review_id: 'r-7', state: 'waiting', badge: { text: 'mock: 2 para você', tone: 'warning' }, updated_at: 'x' },
+    });
+    try {
+      const onWorkReview = vi.fn();
+      const { container, root } = await render({ ...base, name: 'api', provider: 'claude' }, { onWorkReview });
+      const chip = container.querySelector('[aria-label="mock: 2 para você"]') as HTMLElement;
+      expect(chip).not.toBeNull();
+      await act(async () => { chip.click(); });
+      expect(onWorkReview).toHaveBeenCalledWith(expect.objectContaining({ name: 'api' }));
+      act(() => root.unmount());
+
+      const outside = await render({ ...base, name: 'api', provider: 'claude', outside: { owner: 'Ana', alias: 'casa', localServerId: 's1', localSession: 'web' } }, { onWorkReview });
+      expect(outside.container.textContent).not.toContain('mock: 2 para você');
+      act(() => outside.root.unmount());
+    } finally {
+      clearWorkReviewSummaries();
+    }
   });
 
   it('worktree apagada aparece como texto', async () => {

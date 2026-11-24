@@ -355,6 +355,17 @@ impl Store {
             _ => Some(g),
         }
     }
+    /// Algum convidado vê a sessão pela regra do `visible`: ela é de um convidado (na mesma vida), ou algum vê
+    /// as do dono. Uma leitura, sem gravar a vida como o `owner` grava; arquivo ilegível é erro, nunca "ninguém".
+    pub fn seen_by_any_guest(&self, name: &str, life: Option<&str>) -> Result<bool> {
+        let doc = self.load()?;
+        let guests: Vec<Guest> = doc["guests"].as_array().into_iter().flatten().filter_map(guest).collect();
+        let owned = doc["sessions"].get(name).is_some_and(|entry| {
+            let other_life = matches!((entry["life"].as_str(), life), (Some(a), Some(b)) if a != b);
+            !other_life && guests.iter().any(|g| entry["guest"] == g.id.as_str())
+        });
+        Ok(owned || guests.iter().any(|g| g.sees_owner))
+    }
     pub fn visible(&self, viewer: Option<&Guest>, name: &str, life: Option<&str>) -> bool {
         match (viewer, self.owner(name, life, true)) {
             (None, None) => true,

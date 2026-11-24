@@ -48,13 +48,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   registro é do que JÁ RODOU aqui — não do intervalo de commits.
 - **A volta da atualização devolve o binário do Rust junto com o código.** Antes de gravar o
   binário novo, a atualização guarda o anterior em `~/.hangar/bin/<nome>.prev`; a volta o
-  devolve antes de reiniciar. Sem isso, código antigo com binário novo é contrato diferente e o
-  Python atende sozinho. A cópia de outra rodada é descartada antes de instalar e ao terminar bem.
+  devolve antes de reiniciar. Sem isso, código antigo com binário novo é contrato diferente. A cópia de outra rodada é descartada antes de instalar e ao terminar bem.
 - **Falha depois do código novo volta tudo, mesmo antes do reinício.** Passo ou instalação que
   falha com o checkout já trocado passa pela mesma volta do reinício (código, binário, tela e
   reinício): o próximo reinício, de qualquer origem, subiria versões que não se entendem.
 - **Dentro do Atualizar, só ele baixa o binário do Rust.** Ele marca o ambiente
-  (`HANGAR_UPDATE_OWNS_RUST=1`) e o `python -m app.rust_release` dos instaladores chamados pelos
+  (`HANGAR_UPDATE_OWNS_RUST=1`) e o `install-server-binaries` dos instaladores chamados pelos
   passos não baixa; senão vinha o binário do topo da release, sem a cópia que a volta devolve.
   Passo que falha mostra as linhas `##HANGAR-FALHA##` do instalador, não as últimas linhas.
 - **O Atualizar segue a main, ou a branch de `CP_UPDATE_BRANCH`.** Só ela e a branch em que a
@@ -152,6 +151,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   O `install-native` roda na etapa `nativo`, como o `install-chromium`: script estreito, só com a
   marca, na main e com a API que cabe; falha é aviso. Roda depois da prova de vida, inclusive na
   atualização automática e na topologia manual; não desfaz a atualização do servidor.
+- **A libmpv do player de vídeo do nativo é extra: nunca para instalação nem atualização.**
+  `scripts/install-libmpv.sh` (Linux pelo pacote da distro, só `libmpv.so.2`; macOS pelo Homebrew) e
+  `scripts/install-libmpv.ps1` (Windows: build fixo do shinchiro, sha256 do pacote e da dll, `libmpv-2.dll`
+  ao lado do `Hangar.exe`) saem sempre 0 e gravam `~/.hangar/native/libmpv-ok`. Sem terminal, o Linux só
+  tenta `sudo -n`; o `install.sh` pede a senha pelo `app_sudo`, e o `--update` não instala. A troca do app
+  só renomeia o exe, então a dll fica; trocar o build é trocar URL, os dois sha256 e o
+  `resources/THIRD_PARTY_NOTICES.md` juntos.
 - **No Windows, `npm ci` na raiz só com o front parado**, e pasta que o atualizador cria dentro de
   `frontend/` entra no `.gitignore` — sobra não ignorada vira "mudança local" e desliga o dist do CI.
 - **Passo com comando diferente por sistema usa `comando_posix` e `comando_windows`.** `comando`
@@ -203,10 +209,18 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   única (`flock`) e prioridade baixa, com HOME vazio e o `omp` fixo do CI; Windows por SSH na VM
   de `git config hangar.verificarWindows`, com mutex. O registro é pelo tree sha; a trava só o lê.
   Escape nos dois: `HANGAR_SEM_VERIFICACAO=1`. Na VM roda só o que o CI roda no Windows (Rust e os 6
-  `test_runtime_*`), nunca o pytest inteiro. O passo `mobile` só entra quando muda `mobile/`: o CI
-  não testa o app, e mudança no core ou nas mensagens já passa pelo `front` (à mão:
+  `test_runtime_*`), nunca o pytest inteiro. O passo `mobile` só entra quando muda `mobile/`; mudança no
+  core ou nas mensagens passa pelo `front` aqui e pelo app inteiro no portão do PR (`gate.yml`) (à mão:
   `--tudo --passos mobile`). Evidência em
   [Verificação local antes do push](#verificação-local-antes-do-push-06102026).
+- **O merge na main passa pelo check `merge-gate` (`gate.yml`), que roda em todo pull request.** Ele
+  decide pelo diff (`scripts/gate-areas.py`) o que roda: testes do servidor (`server-jobs.yml`),
+  do desktop (`native-check.yml`, com os crates de que ele depende tirados dos `Cargo.toml`) e
+  do app Expo (typecheck e testes inteiros). Parte acionada tem de terminar verde e parte não
+  acionada tem de ter sido pulada; mexer no próprio portão aciona tudo. O `server.yml` e o
+  `native.yml` rodam no push só da main e do canal, que é onde publicam: branch sem PR se testa
+  pelo `workflow_dispatch`. Workflow novo que testa algo exigido entra no portão, nunca como
+  check à parte. Evidência em [Portão de merge](#portão-de-merge-22112026).
 - **No Linux a verificação prepara uma vez e roda os passos em duas faixas (cargo e o resto); o
   registro é por passo.** Faixa que abre com a memória disponível abaixo de
   `HANGAR_VERIFICAR_MEM_GB` (padrão 6) espera a anterior terminar, com os mesmos passos. Quando o
@@ -309,9 +323,29 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   religa até 999 vezes; o `rust_bins` e todo
   `sys.executable` gravado usam o caminho real. Hooks, atalhos, `plugin-dir`, skills e `⟦HANGAR⟧`
   gravam `~/.hangar/current` sem resolver o link, e toleram a pasta ausente por um instante.
-- **Script do Hangar roda o Python pelo atalho `hangar-python`**: o embutido do pacote, senão o venv
-  do backend, senão o `python3` da máquina. O pacote não leva Node nem pip; Node é dependência da
-  máquina, garantida por passo de máquina.
+- **Hooks e atalhos chamam a cópia dos hooks, que a volta de versão não troca.** No pacote, o
+  servidor copia a si mesmo para `~/.hangar/bin/hangar-hooks` (`.exe` no Windows) ao gravar os
+  hooks, e é ela que os hooks dos agentes e os atalhos `.cmd` do Windows chamam. A versão anterior
+  troca o `hangar-launcher` pelo binário dela, mas não conhece a cópia. A cópia nunca desce de
+  versão (`hangar-hooks.version` ao lado). [Motivo](#a-cópia-dos-hooks-sobrevive-à-volta-de-versão-18112026).
+- **Instaladores sem Python nem `uv`.** `install.sh` e `install.ps1` não instalam nem exigem
+  Python, `uv` ou `uv sync`, e não criam atalho de Python (`hangar-python`, `python3`,
+  `hangar-python.cmd`); os antigos ficam (a versão anterior, na volta, usa) e saem com a `python/`
+  do pacote, no PR seguinte. Chaves do
+  push (`vapid-setup`, depois dos binários Rust), token sem `openssl` (`install-token`, senão o
+  `/dev/urandom`; nenhum gerador = a instalação para), nome do Tailscale (`tailscale-dns-name`) e a
+  fumaça 8/8 (o `hangar-server` executa) são do `hangar-server`, achado por
+  `scripts/hangar-server-command`. Instalação do zero pelo checkout marca os passos com
+  `install-package --mark-steps --root <checkout>`; `--update` não marca. O pacote não leva Node
+  nem pip; Node é dependência da máquina, garantida por passo de máquina. No `--update` do
+  checkout, subcomando que o `hangar-server` achado não conhece (binário anterior ao código) vira
+  aviso com o motivo; no pacote e na instalação nova é erro. Sem `python3` 3.10 ou mais novo e com
+  a skill `orquestrar`, os instaladores avisam que a orquestração não roda até o PR dela.
+- **`backend/` continua no pacote por uma versão, e duas coisas ainda dependem dela.** O lançador
+  põe o servidor na `backend/` da versão quando ela existe (a versão anterior, na volta, só acha o
+  `backend/.env` da máquina não migrada pelo cwd), senão na raiz; e a tarefa do Windows nasce com
+  `Dir = "$raiz\backend"` (`install.ps1`). O PR que tirar `backend/` do pacote troca a pasta de
+  trabalho da tarefa para a raiz junto.
 - **O pacote só sai de commit com o `ci.yml` (job `backend`) e os testes do `server.yml` daquele
   sistema verdes.** O `package.yml` publica em `package-latest` (main) ou `package-<branch>`, com o
   índice `package-<canal>.json` por último; sistema não pronto fica com a entrada anterior.
@@ -368,8 +402,7 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `server-<canal>` não tem o `install-package`, e o binário recusa subcomando desconhecido (código 2)
   em vez de subir como servidor. O bootstrap também recusa checkout do Hangar na pasta padrão e, com o pacote no lugar,
   qualquer entrada pelo git (o caminho é o `dev-mode on`). O `install.sh` com `manifest.json` e sem
-  `.git` pula git, `uv`, venv, build da tela e binários Rust, grava o `.env` em `~/.hangar/config`,
-  põe um `python3` que é o `hangar-python` à frente do PATH dos sub-scripts, confere a tela da
+  `.git` pula git, build da tela e binários Rust, grava o `.env` em `~/.hangar/config`, confere a tela da
   `dist_key` em `~/.hangar/ui` (ausente com a tela web ligada é pendência) e, só ao chegar ao fim,
   registra os passos como aplicados (`install-package --mark-steps`, malformado vira aviso). Marca
   só com `HANGAR_FRESH_PACKAGE=1`, que o bootstrap põe quando o `install-package` acabou de criar a
@@ -381,9 +414,7 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `-Destino` do app são o git. O sha256 do `hangar-server.exe` vem do `server-latest.json` e é
   conferido por `Get-FileHash`; https nunca segue redirecionamento para http. O `install-package`
   recusa (4) também com a tarefa já gravada (`%LOCALAPPDATA%\hangar\hangar-backend.vbs`). O
-  `install.ps1` do pacote pula Python, `uv`, `uv sync`, build da tela, `rust_release` e o hook de
-  `git pull`; roda o backend pelo `python\python.exe` do pacote e os lançadores pelo Python do
-  `current`; marca os passos com `install-package --mark-steps` depois da fumaça, com a mesma
+  `install.ps1` do pacote pula build da tela, `rust_release` e o hook de `git pull`; marca os passos com `install-package --mark-steps` depois da fumaça, com a mesma
   condição do `HANGAR_FRESH_PACKAGE`. O download do `bootstrap.ps1` tem teto total (o
   `--max-time` do curl), não só por leitura. A barra de status do
   Claude grava o caminho pelo `current` (`configure-statusline.cjs`), nos dois sistemas.
@@ -405,6 +436,18 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `"mode": "package"`, também rodando de um checkout. No Linux e no macOS o servidor abre o Codex
   pelo `current/scripts/hangar-codex-tui`, e não pelo nome no PATH. Ver
   [a entrada](#links-que-voltaram-ao-checkout-depois-da-migração-31102026).
+
+## A cópia dos hooks sobrevive à volta de versão (18/11/2026)
+
+Na DELPHI-02, depois de atualizar para a versão sem Python e voltar para a publicada (0.1.0.10869), a
+versão antiga trocou o `~/.hangar/bin/hangar-launcher.exe` pelo binário dela. Os hooks gravados pelo
+lançador (`state-hook`, `nav-hook`) passaram a sair 2 ("subcomando desconhecido"), e o do
+`UserPromptSubmit` pedia ao modelo que avisasse a pessoa a cada mensagem. Os atalhos
+`hangar-send.cmd`, `hangar-conta.cmd` e `hangar-mcp-headers.cmd` chamavam o
+`current\scripts\hangar-server-lookup.cmd`, que a versão antiga não tem, e o `hangar-codex-tui.cmd`
+chamava um `codex-tui` que o binário antigo não conhece. Atualizar de novo consertava tudo. A cópia
+`hangar-hooks` tem nome que versão anterior não conhece, então fica; e só versão igual ou mais nova a
+troca, para a volta entre duas versões que já a têm não perder subcomandos.
 
 ## Links que voltaram ao checkout depois da migração (31/10/2026)
 
@@ -1494,3 +1537,32 @@ atualização real, todas as máquinas Windows falharam (relatórios `7io3oihu`,
 Os quatro apareceriam na primeira tentativa de atualizar uma máquina de teste e criar uma sessão. Os
 testes automáticos do Windows (`verificar-local` roda só o runtime; o `test-windows-tasks.ps1` não
 está no CI) não exercitam a atualização nem a criação de sessão.
+
+## Portão de merge (22/11/2026)
+
+- **Caso.** A regra da main exigia PR, mas nenhum check. Não dava para exigir os que existiam: o
+  `server.yml` e o `native.yml` disparavam só em push, com filtro de pastas, e um PR que não
+  tocasse nelas esperaria para sempre um check que nunca chega; os testes do Expo não rodavam em
+  workflow nenhum (só no `verificar-local`). A trava da abertura única
+  (`every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server`) podia ficar
+  vermelha e o merge passar.
+- **Desenho.** Um check de nome fixo, `merge-gate`, num workflow que roda em todo pull request
+  (`gate.yml`). As partes pesadas são chamadas como workflows reutilizáveis (`server-jobs.yml`,
+  `native-check.yml`) ou ficam no próprio portão (Expo), e só rodam quando o diff toca a área
+  delas; o `merge-gate` confere o resultado de cada uma contra o que foi acionado, então falha,
+  cancelamento ou pulo indevido o deixam vermelho, e PR só de docs passa sem rodar o pesado.
+- **Sem testar duas vezes.** O push de PR disparava o `server.yml` e o `native.yml` e agora
+  dispararia o portão também. Os dois passaram a rodar no push só da main e do canal, onde
+  publicam e onde o `package.yml` e os `*-macos.yml` os esperam; no push da main o portão roda só
+  o Expo. Branch sem PR perdeu o teste automático no push: roda pelo `workflow_dispatch`.
+- **Áreas do desktop pela cadeia de dependências.** O filtro do `native.yml` listava
+  `hangar-api` e `hangar-workspace`, mas o desktop também depende de `hangar-local-server` e
+  `hangar-video`: mudança neles não rodava o `Native`. O `gate-areas.py` segue os `path` dos
+  `Cargo.toml` (inclusive os `workspace = true`), e o filtro do `native.yml` ganhou os dois.
+- **Área é também o que o teste lê.** Os testes do servidor leem `scripts/`, `docs/atualizacoes/`,
+  fixtures de `packages/core/src/` e `messages/`; os do desktop, `docs/novidades/`, `docs/manual/`
+  e as mesmas fixtures. Essas pastas acionam a parte delas no portão. O filtro do `server.yml` não
+  as ganhou: o `package.yml` usa aquele filtro para decidir se reaproveita os binários da release.
+- **Branch passada ao `server-jobs.yml` é `pr-<número>`, nunca a do PR.** Um PR da `beta` para a
+  `main` passaria `beta`, que liga a publicação da `server-beta` e cai na concorrência dos runs de
+  push dela.

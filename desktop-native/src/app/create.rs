@@ -56,16 +56,21 @@ impl NewSession {
     }
 }
 
-/// Os providers do web, na ordem dele.
-const PROVIDERS: [&str; 5] = ["claude", "codex", "pi", "kimi", "omp"];
+/// Os providers do web, na ordem dele, e o Antigravity no fim.
+const PROVIDERS: [&str; 6] = ["claude", "codex", "pi", "kimi", "omp", "antigravity"];
+/// Os modos do `agy` com terminal: o `--mode` dele não abre no que pergunta antes de agir (`manual`).
+pub(super) const AGY_TERMINAL_PERMISSIONS: [&str; 4] = ["acceptEdits", "auto", "plan", "bypassPermissions"];
 /// O web pergunta o passo da criação a cada 800 ms.
 const STEP_POLL: Duration = Duration::from_millis(800);
 /// Topo do diálogo: mais alto que o padrão do kit (um décimo da janela), para as duas colunas caberem.
 const DIALOG_TOP: f32 = 40.;
 
 fn provider_name(p: &str) -> &'static str {
-    match p { "codex" => "Codex", "pi" => "Pi", "kimi" => "Kimi", "omp" => "OMP", _ => "Claude" }
+    match p { "codex" => "Codex", "pi" => "Pi", "kimi" => "Kimi", "omp" => "OMP", "antigravity" => "Antigravity", _ => "Claude" }
 }
+
+/// O agente que escolhe entre com e sem terminal. O Antigravity abre só com terminal por enquanto.
+pub(crate) fn has_surfaces(provider: &str) -> bool { matches!(provider, "claude" | "codex") }
 
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct Root { pub(super) name: String, pub(super) path: String }
@@ -167,6 +172,21 @@ pub(crate) fn base_button(id: &'static str, base: String) -> Button {
     Button::new(id).outline().small().w_full().label(base).dropdown_caret(true)
 }
 
+/// O seletor de agente da criação, na tela e na novidade: controle segmentado na trilha das raízes do lado esquerdo, raio 11
+/// por fora e 8 nos segmentos a 3 de distância.
+pub(crate) fn provider_track() -> Stateful<Div> {
+    div().id("create-providers").role(Role::Group).aria_label(tr("create_provider_aria")).flex().gap(px(2.))
+        .p(px(3.)).rounded(px(11.)).bg(theme::inset())
+}
+
+/// Um segmento do seletor de agente: o logo e o nome, aceso no escolhido.
+pub(crate) fn provider_segment(provider: &str, on: bool, cx: &App) -> Button {
+    soft_choice(SharedString::from(format!("create-provider-{provider}")), on, theme::muted(), cx).flex_1().min_w_0().h(px(32.)).rounded(px(8.))
+        .accessibility_label(provider_name(provider))
+        .child(div().flex().items_center().gap(px(6.)).text_sm().when(on, |el| el.font_weight(FontWeight::MEDIUM))
+            .child(chrome::provider_glyph(provider, 16.)).child(provider_name(provider)))
+}
+
 /// Uma linha do menu do modo, na tela e na novidade: o nome e, embaixo, o que muda para quem usa.
 pub(crate) fn mode_row(id: &'static str, on: bool, headless: bool, codex: bool) -> Button {
     menu_row_with(id, on, tr(if headless { "create_mode_headless" } else { "create_mode_tmux" }), String::new(),
@@ -232,6 +252,20 @@ impl CodexAccount {
         parts.join(" · ")
     }
 }
+
+/// Uma conta Google do Antigravity como `GET /api/antigravity-contas` manda. A sessão com terminal abre só na padrão: o
+/// `agy` com terminal ignora o `GEMINI_HOME`, e a lista serve para saber se a padrão tem login.
+#[derive(Clone, Debug, Deserialize)]
+struct AgyAccount {
+    #[serde(rename = "padrao", default)] default: bool,
+    #[serde(rename = "logado")] signed_in: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct AgyList { #[serde(rename = "contas", default)] accounts: Vec<AgyAccount> }
+
+/// A conta padrão do agy, a única em que a sessão abre.
+fn default_agy_account(accounts: &[AgyAccount]) -> Option<&AgyAccount> { accounts.iter().find(|a| a.default) }
 
 fn choose_codex_account(accounts: &[CodexAccount], requested: Option<&str>) -> Option<usize> {
     match requested {
@@ -358,6 +392,7 @@ pub(super) enum CreateReply {
     ConfigSuggestion(u64, u64, Result<Value, Failure>),
     Customizations(u64, customizations::CustomizationContext, Result<Value, Failure>),
     Codex(u64, Result<Value, Failure>),
+    Antigravity(u64, Result<Value, Failure>),
     /// Passo da criação em voo; `None` é consulta que falhou, e o passo anterior fica.
     Step(u64, Option<String>),
     Created(u64, Result<Opened, String>),
@@ -600,6 +635,7 @@ pub(in crate::app) struct NewSession {
     codex: Remote<Vec<CodexAccount>>,
     codex_account: String,
     codex_pick: Option<Picker>,
+    agy: Remote<Vec<AgyAccount>>,
     headless: bool,
     headless_owner: Option<bool>,
     headless_touched: bool,
@@ -761,7 +797,8 @@ impl NewSession {
             git: Default::default(), git_name,
             sessions: Remote::default(), same_folder: false, name, provider: "claude", provider_touched: false, providers: Remote::default(), configs: Remote::default(),
             config: None, config_pick: None, customizations: Default::default(), customizations_search,
-            customizations_focus: cx.focus_handle().tab_stop(true), codex: Remote::default(), codex_account: String::new(), codex_pick: None, headless: true, headless_owner: None, headless_touched: false, headless_saving: false,
+            customizations_focus: cx.focus_handle().tab_stop(true), codex: Remote::default(), codex_account: String::new(), codex_pick: None,
+            agy: Remote::default(), headless: true, headless_owner: None, headless_touched: false, headless_saving: false,
             difference: false, manual_open: false, manual, choosing: false, choose_error: None, create_seq: 0, creating: false, started: None,
             step: String::new(), error: None, clock: None, models: Remote::default(), model: String::new(), model_choice_touched: false, account_touched: false, account_suggested: false, effort: String::new(), service_tier: None,
             permission: String::new(), saved_default: None, defaults_ready: false, default_saving: false, default_save_seq: 0, permission_touched: false, subagent: String::new(), engine: String::new(), engine_account: String::new(), engine_account_pick: None, model_pick: None, effort_pick: None,
@@ -946,6 +983,8 @@ impl NewSession {
         self.providers.reset();
         self.provider_touched = false;
         self.configs.reset();
+        // As contas Google são da máquina: a escolha da anterior não vale aqui.
+        self.drop_agy();
         self.engines.reset();
         self.engine.clear();
         self.model.clear();
@@ -1005,6 +1044,7 @@ impl NewSession {
         self.load_providers(cx);
         self.load_configs(cx);
         if self.provider == "codex" { self.load_codex(cx); self.load_context(cx); }
+        if self.provider == "antigravity" { self.load_agy(cx); }
         self.load_extras(cx);
     }
 
@@ -1052,6 +1092,18 @@ impl NewSession {
         if !self.is_transfer() && !self.scheduled { self.codex_account.clear(); }
         self.codex_pick = None;
         self.request(cx, move |api, send| Box::pin(async move { send(CreateReply::Codex(seq, api.server_read(&["codex-contas"], &[], 30).await)).await }));
+    }
+
+    fn load_agy(&mut self, cx: &mut Context<Self>) {
+        let seq = self.agy.start();
+        self.request(cx, move |api, send| Box::pin(async move { send(CreateReply::Antigravity(seq, api.server_read(&["antigravity-contas"], &[], 60).await)).await }));
+    }
+
+    /// Saiu do Antigravity: a lista em voo cai, senão ela relê o catálogo do provider novo.
+    fn drop_agy(&mut self) {
+        let seq = self.agy.seq + 1;
+        self.agy = Remote::default();
+        self.agy.seq = seq;
     }
 
     fn select_root(&mut self, root: Root, window: &mut Window, cx: &mut Context<Self>) { self.open_root(root, true, window, cx); }
@@ -1149,7 +1201,10 @@ impl NewSession {
 
     /// Trocar de provider preserva o modo escolhido e relê as opções e permissões dele.
     fn choose_provider(&mut self, provider: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        if provider != self.provider { self.scheduled_touch(&scheduled_launch::provider_fields()); }
+        if provider != self.provider && self.scheduled {
+            scheduled_launch::switch_provider(&mut self.scheduled_changed, self.scheduled_original.is_some());
+            self.scheduled_touch(&["provider"]);
+        }
         self.set_provider(provider, window, cx);
     }
 
@@ -1164,6 +1219,7 @@ impl NewSession {
         self.permission.clear();
         self.permission_touched = false;
         if provider == "codex" { self.load_codex(cx); self.load_context(cx); } else { self.drop_context(); self.drop_codex(); }
+        if provider == "antigravity" { self.load_agy(cx); } else { self.drop_agy(); }
         self.build_engine_account_pick(window, cx);
         self.load_models(window, cx);
         // A tela sem sessão não retoma conversa antiga: o arquivo da pasta não serve a ela.
@@ -1210,6 +1266,12 @@ impl NewSession {
     fn codex_ready(&self) -> bool {
         self.provider != "codex" || (!self.codex.loading
             && self.codex.ok().and_then(|list| list.iter().find(|a| a.id == self.codex_account)).is_some_and(|a| a.auth.status == "connected"))
+    }
+
+    /// Antigravity: a conta padrão existe e o agy não disse que ela está sem login.
+    fn agy_ready(&self) -> bool {
+        self.provider != "antigravity" || (!self.agy.loading
+            && self.agy.ok().and_then(|list| default_agy_account(list)).is_some_and(|a| a.signed_in != Some(false)))
     }
 
     /// Pasta nova: o nome da branch nova digitado para a anterior não vale aqui.
@@ -1304,7 +1366,7 @@ impl NewSession {
 
     pub(super) fn can_create(&self, cx: &App) -> bool {
         !self.is_transfer() && self.defaults_ready && !self.default_saving && !self.customizations.is_open() && !self.creating && !self.headless_saving && !self.jev.loading && self.picked.is_some() && !self.sessions.loading && (self.scheduled || self.compact || !self.name.read(cx).value().trim().is_empty())
-            && self.provider_ready() == Some(true) && self.codex_ready() && self.engine_ready() && !(self.provider == "codex" && self.context_busy)
+            && self.provider_ready() == Some(true) && self.codex_ready() && self.agy_ready() && self.engine_ready() && !(self.provider == "codex" && self.context_busy)
             && !self.checkout.loading && (self.scheduled || !self.typed_branch_taken(cx))
             && (!self.compact || ((self.provider != "claude" || (!self.configs.loading && self.configs.ok().is_some_and(|list| !list.is_empty())))
                 && !self.models.loading && self.models.ok().is_some()))
@@ -1331,17 +1393,20 @@ impl NewSession {
                 body["config_dir"] = self.requested_config();
                 body["engine"] = text(&self.engine);
                 if self.proxy_accounts().is_some() { body["engine_account"] = json!(self.engine_account); }
+                if let Some(binding) = self.proxy_binding() { body["engine_binding"] = json!(binding); }
                 if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
                 // O motor exporta o próprio modelo de subagente: com ele, o campo nem aparece.
                 if self.engine.is_empty() && !self.subagent.is_empty() { body["subagent_model"] = json!(self.subagent); }
             }
             "codex" => { body["codex_account"] = json!(self.codex_account); },
+            // Sem `config_dir`: a sessão abre na conta padrão do agy.
+            "antigravity" => { if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); } }
             "omp" => { let profile = self.omp.read(cx).value().trim().to_owned(); if !profile.is_empty() { body["omp_profile"] = json!(profile); } }
             _ => {}
         }
         // Escolha incompatível não bloqueia a criação nem vai para outro harness.
         if let Some(tier) = self.service_tier_for_creation() { body["service_tier"] = json!(tier); }
-        if matches!(provider, "claude" | "codex") && !self.headless_inherited() {
+        if has_surfaces(provider) && !self.headless_inherited() {
             body["headless"] = json!(self.headless);
             if provider == "codex" && self.headless && !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
         }
@@ -1368,6 +1433,12 @@ impl NewSession {
             let mut changed = self.scheduled_changed.clone();
             if self.omp.read(cx).value().to_string() != self.scheduled_original.as_ref().and_then(|value| value["omp_profile"].as_str()).unwrap_or_default() { changed.insert("omp_profile"); }
             if self.scheduled_original.as_ref().and_then(|value| value["cwd"].as_str()) != Some(cwd.as_str()) { changed.insert("cwd"); }
+            // A conta adicional do Antigravity que a tarefa guardava sai: a sessão com terminal abre só na padrão.
+            if self.provider == "antigravity" && self.scheduled_original.as_ref().is_some_and(|value| !value["config_dir"].is_null()) {
+                changed.insert("config_dir");
+            }
+            // Plugins e skills mexidos nesta tela também são escolha: a tarefa nova os guarda.
+            if self.scheduled_original.is_none() && self.customization_payload().is_some() { changed.insert("claude_customizations"); }
             let launch = scheduled_launch::merge(self.scheduled_original.as_ref(), self.open_body("", &cwd, "", cx), &changed);
             if matches!(self.purpose,SessionDialogPurpose::Tickets) {
                 self.creating=true;
@@ -1414,10 +1485,12 @@ impl NewSession {
                 "engine": if claude { text(&self.engine) } else { Value::Null },
                 "permission_mode": if claude { text(&self.permission) } else { Value::Null },
                 "omp_profile": if provider == "omp" { text(&omp) } else { Value::Null },
-                "headless": matches!(provider, "claude" | "codex") && self.headless,
+                "headless": has_surfaces(provider) && self.headless,
                 "resumo_por_modelo": self.baton_by_model});
             if provider == "codex" { body["codex_account"] = json!(self.codex_account); }
+            if provider == "antigravity" && !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
             if claude && self.proxy_accounts().is_some() { body["engine_account"] = json!(self.engine_account); }
+            if claude && let Some(binding) = self.proxy_binding() { body["engine_binding"] = json!(binding); }
             if self.headless_inherited() { body.as_object_mut().unwrap().remove("headless"); }
             if let Some(customizations) = self.customization_payload() { body["claude_customizations"] = json!(customizations); }
         }
@@ -1429,9 +1502,6 @@ impl NewSession {
         if let Some((id, _)) = reserve.as_ref().filter(|_| named.is_some()) { body["prewarm"] = json!(id); }
         // A renovação para antes do POST: atrasada, ela subiria outra reserva depois da adoção.
         self.prewarm.stop();
-        // A memória vai antes do POST: a escolha não se perde se a criação falhar.
-        let (key, model, effort) = (self.memory_key(), self.model.clone(), self.effort.clone());
-        self.link.runtime.spawn_blocking(move || crate::appearance::remember_model(&key, &model, &effort));
         self.create_seq += 1;
         let seq = self.create_seq;
         (self.creating, self.error, self.step, self.started) = (true, None, String::new(), Some(Instant::now()));
@@ -1479,19 +1549,28 @@ impl NewSession {
                 }
             };
             match (first, opened) {
-                (Some((selection, text, files)), Ok(opened)) => {
+                (Some((selection, text, files)), Ok(mut opened)) => {
                     // Os anexos sobem pela rota do servidor, na sessão que acabou de nascer; um que falhe segura a mensagem.
                     let mut uploads = Vec::new();
                     let mut failed = None;
+                    let mut gaps = Vec::new();
                     for (file, bytes, image) in files {
                         match api.upload(&opened.session.name, &file, composer::mime_for(&file), bytes.to_vec()).await {
-                            Ok(up) => uploads.push((image, up)),
+                            Ok(up) => {
+                                if let Some(gap) = up.note { gaps.push(format!("{file}: {}", gap.shown())); }
+                                uploads.push((image, up));
+                            }
                             // O aviso diz qual arquivo segurou a mensagem; ela não saiu, então a falha é certa.
                             Err(error) => { failed = Some(Failure::local(format!("{file}: {}", Hangar::failure(&error)))); break; }
                         }
                     }
                     let message = composer::compose_prompt(&text, &uploads, |speech| tr("attach_video_speech").replace("{texto}", speech));
                     let result = match failed { Some(error) => Err(error), None => api.send(&opened.session.name, &message).await };
+                    // Como no campo da conversa: o vídeo que foi sem quadros nem fala fica dito, senão o agente o recebe calado.
+                    if result.is_ok() && !gaps.is_empty() {
+                        let gaps = gaps.join(" ");
+                        opened.warning = Some(match opened.warning.take() { Some(warning) => format!("{warning} {gaps}"), None => gaps });
+                    }
                     send(CreateReply::CreatedWithInput(seq, selection, text, message, result, Ok(opened))).await;
                 }
                 (_, opened) => send(CreateReply::Created(seq, opened)).await,
@@ -1641,6 +1720,11 @@ impl NewSession {
                 }, window, cx));
                 self.load_models(window, cx);
                 if !self.is_transfer() { self.load_archive(window, cx); }
+            }
+            CreateReply::Antigravity(seq, result) => {
+                let list = result.map_err(|e| Hangar::fetch_failure(&e))
+                    .and_then(|v| serde_json::from_value::<AgyList>(v).map(|l| l.accounts).map_err(|_| tr("invalid_response")));
+                if !self.agy.finish(seq, list) { return None; }
             }
             reply @ (CreateReply::Models(..) | CreateReply::Engines(..) | CreateReply::Config(..) | CreateReply::Quotas(..)
                 | CreateReply::Context(..) | CreateReply::Account(..) | CreateReply::Spread(..)) => self.receive_extra(reply, window, cx),
@@ -2159,29 +2243,38 @@ impl NewSession {
                 })))
     }
 
+    /// Sem seletor: a sessão abre na conta padrão, e aqui só aparece a leitura dela, a falha ou a falta de login.
+    fn render_agy_account(&self, cx: &mut Context<Self>) -> Div {
+        let signed_out = self.agy.ok().and_then(|list| default_agy_account(list)).is_some_and(|a| a.signed_in == Some(false));
+        div().flex().flex_col().gap(px(6.))
+            .map(|el| match self.agy.value.as_ref() {
+                _ if self.agy.loading => el.child(div().id("create-agy-loading").role(Role::Status).child(muted(tr("loading")))),
+                Some(Err(error)) => el.child(alert("create-agy-error", error.clone()))
+                    .child(div().child(Button::new("create-agy-retry").outline().small().label(tr("create_try_again")).disabled(self.creating)
+                        .on_click(cx.listener(|this, _, _, cx| { this.load_agy(cx); cx.notify(); })))),
+                _ => el,
+            })
+            .when(signed_out, |el| el.child(alert("create-agy-signed-out", tr("create_agy_default_needs_login"))))
+    }
+
     fn render_form(&self, path: &str, cx: &mut Context<Self>) -> Div {
         let checking = self.sessions.loading;
         let ready = self.provider_ready();
         let probe_error = self.providers.value.as_ref().and_then(|v| v.as_ref().err()).cloned();
         let missing = ready == Some(false);
         let busy = self.creating;
-        // Controle segmentado na trilha das raízes do lado esquerdo: raio 11 por fora, 8 nos segmentos a 3 de distância.
-        let providers = div().id("create-providers").role(Role::Group).aria_label(tr("create_provider_aria")).flex().gap(px(2.))
-            .p(px(3.)).rounded(px(11.)).bg(theme::inset())
+        let providers = provider_track()
             .children(PROVIDERS.iter().map(|&p| {
                 let available = self.providers.ok().and_then(|m| m.get(p)).is_none_or(|probe| probe.disponivel);
-                let on = self.provider == p;
-                soft_choice(SharedString::from(format!("create-provider-{p}")), on, theme::muted(), cx).flex_1().min_w_0().h(px(32.)).rounded(px(8.))
-                    .disabled(!available || busy).accessibility_label(provider_name(p))
-                    .child(div().flex().items_center().gap(px(6.)).text_sm().when(on, |el| el.font_weight(FontWeight::MEDIUM))
-                        .child(chrome::provider_glyph(p, 16.)).child(provider_name(p)))
+                provider_segment(p, self.provider == p, cx).disabled(!available || busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.choose_provider(p, window, cx)))
             }));
         let target = self.target().cloned();
         let fresh = target.is_none();
         let claude = (self.provider == "claude").then(|| self.render_claude_account(cx));
         let codex = (self.provider == "codex").then(|| self.render_codex_account(cx));
-        let modes = (!self.scheduled && fresh && matches!(self.provider, "claude" | "codex")).then(|| {
+        let agy = (self.provider == "antigravity").then(|| self.render_agy_account(cx));
+        let modes = (!self.scheduled && fresh && has_surfaces(self.provider)).then(|| {
             let codex = self.provider == "codex";
             let inherited = self.headless_inherited();
             let mode = |id: &'static str, on: bool, title: String, beta: bool, summary: String, headless: bool| {
@@ -2226,6 +2319,7 @@ impl NewSession {
                 .when(missing, |el| el.child(alert("create-provider-missing", tr("create_provider_missing").replace("{p}", self.provider))))
                 .into_any_element()),
             codex.map(IntoElement::into_any_element),
+            agy.map(IntoElement::into_any_element),
             self.render_engine().map(IntoElement::into_any_element),
             claude.map(IntoElement::into_any_element),
         ];
@@ -2473,6 +2567,7 @@ impl NewSession {
                 let label = list.iter().find(|a| a.id == self.codex_account).map(|a| a.name.clone()).unwrap_or_else(|| tr("create_default"));
                 (label, tr("create_codex_account"))
             }), self.codex.ok().and_then(|list| list.iter().find(|a| a.id == self.codex_account)).and_then(|a| a.credential_id.clone())),
+            // O Antigravity abre só na conta padrão: não há conta a escolher.
             _ => (None, None),
         };
         let badge = credential.as_deref().and_then(|id| self.account_badge(id)).cloned();
@@ -2486,14 +2581,14 @@ impl NewSession {
             .children(account.map(|(label, aria)| {
                 let label = badge.as_ref().map(|b| b.name.trim()).filter(|n| !n.is_empty()).map_or(label, str::to_owned);
                 mark_pill(Menu::Account, open == Some(Menu::Account), account_mark(badge.as_ref(), self.provider, 14.), label, aria, None,
-                    self.configs.loading || self.codex.loading, cx)
+                    self.configs.loading || self.codex.loading || self.agy.loading, cx)
             }))
             .children(self.render_mode_pill(open == Some(Menu::Mode), cx))
     }
 
     /// Com ou sem terminal, só para esta conversa; antes da escolha mostra o padrão do servidor.
     fn render_mode_pill(&self, open: bool, cx: &mut Context<Self>) -> Option<Div> {
-        if self.scheduled || self.target().is_some() || !matches!(self.provider, "claude" | "codex") { return None; }
+        if self.scheduled || self.target().is_some() || !has_surfaces(self.provider) { return None; }
         // Sem ser dono, o padrão do servidor não é lido: a pílula não afirma um modo que ele pode não ter.
         let inherited = self.headless_inherited();
         let text = tr(if inherited { "session_mode_server_default" } else if self.headless { "create_mode_headless" } else { "create_mode_tmux" });
@@ -2610,6 +2705,8 @@ impl NewSession {
             failed(&self.providers).cloned(),
             failed(&self.configs).filter(|_| claude).cloned(),
             failed(&self.codex).filter(|_| self.provider == "codex").cloned(),
+            failed(&self.agy).filter(|_| self.provider == "antigravity").cloned(),
+            (self.provider == "antigravity" && !self.agy.loading && self.agy.ok().is_some() && !self.agy_ready()).then(|| tr("create_agy_default_needs_login")),
             failed(&self.models).map(|e| format!("{}: {e}", tr("create_models_failed"))),
             failed(&self.checkout).map(|e| tr("create_checkout_failed").replace("{reason}", e)),
             (!self.roots.loading && self.roots.ok().is_some_and(Vec::is_empty)).then(|| tr("new_chat_no_roots")),
@@ -3231,7 +3328,8 @@ impl Hangar {
     /// Com a criação em voo não há onde pôr: o que já foi anexado segue com ela.
     pub(super) fn composer_key(&self) -> Option<SessionKey> {
         // A conversa fechada aberta não anexa: os anexos sobem para uma sessão, e ela só existe depois do Enviar.
-        self.selected_key().or_else(|| (self.new_chat_screen() && self.opening.is_none() && self.reopen.is_none()).then(new_chat_key))
+        self.selected.as_ref().filter(|session| session.readable()).and_then(|_| self.selected_key())
+            .or_else(|| (self.new_chat_screen() && self.opening.is_none() && self.reopen.is_none()).then(new_chat_key))
     }
 
     /// A máquina escolhida nos chips da tela sem sessão, que é onde a conversa vai nascer.
@@ -3305,6 +3403,18 @@ impl Hangar {
             }).detach();
         }
         self.new_chat.clone().unwrap()
+    }
+
+    /// O diálogo de nova sessão já no Claude com o motor `engine`, como o `open_launch_picker` preenche: os campos entram
+    /// antes de os motores chegarem, e a chegada deles monta o seletor nessa escolha.
+    pub(super) fn open_new_session_with_engine(&mut self, engine: String, window: &mut Window, cx: &mut Context<Self>) {
+        let before = self.new_session.as_ref().map(|d| d.entity_id());
+        self.open_new_session(None, window, cx);
+        let Some(dialog) = self.new_session.clone().filter(|d| Some(d.entity_id()) != before) else { return };
+        dialog.update(cx, |d, cx| {
+            (d.provider, d.provider_touched, d.engine) = ("claude", true, engine);
+            cx.notify();
+        });
     }
 
     /// Com `baton`, o mesmo diálogo cria a sessão que continua aquela (o "Continuar em outra conta" do menu da sessão).
@@ -3395,7 +3505,7 @@ impl Hangar {
             window.close_dialog(cx);
             None
         };
-        let readable = session.readable();
+        let takes_messages = session.takes_messages();
         let key = SessionKey::new(&server, &session);
         if current { self.select_on(&target, session, window, cx); }
         // Os anexos ficam na tela de nova conversa; o texto volta ao campo.
@@ -3414,7 +3524,7 @@ impl Hangar {
             None => if let Some(home) = home.filter(|_| current && !cx.reduce_motion()) { self.start_landing(home, window); },
         }
         // O fechar devolveu o foco ao botão que abriu; a sessão nova é onde se escreve em seguida, como no clique na aba.
-        if current && readable { self.composer.update(cx, |input, cx| input.focus(window, cx)); }
+        if current && takes_messages { self.composer.update(cx, |input, cx| input.focus(window, cx)); }
         for note in notes { window.push_notification(Notification::info(note), cx); }
         // Fica até ser fechado, como o `alert` do web: quem pediu o resumo do modelo tem de saber que recebeu o do Hangar.
         if let Some(warning) = warning { window.push_notification(Notification::warning(warning).autohide(false), cx); }
@@ -3448,6 +3558,20 @@ mod tests {
         let checkout = super::checkout_of(Ok(json!({"current": null, "branches": ["dev", "main"],
             "remotes": ["r"], "dirty": false}))).unwrap().unwrap();
         assert_eq!(super::default_base(&checkout).as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn new_session_opens_antigravity_only_in_the_default_google_account() {
+        let accounts: Vec<super::AgyAccount> = serde_json::from_value(json!([
+            {"id":"trabalho", "padrao":false, "pasta":"/h/.antigravity-trabalho", "logado":true, "termos_aceitos":false},
+            {"id":"default", "padrao":true, "pasta":"/h/.gemini", "logado":false, "termos_aceitos":true}
+        ])).unwrap();
+        // Só a padrão: a adicional logada não a substitui, porque o agy com terminal só conhece a pasta da padrão.
+        assert_eq!(super::default_agy_account(&accounts).map(|a| a.signed_in), Some(Some(false)));
+        assert!(super::default_agy_account(&accounts[..1]).is_none());
+        assert!(super::default_agy_account(&[]).is_none());
+        assert!(super::AGY_TERMINAL_PERMISSIONS.iter().all(|mode| *mode != "manual"), "com terminal o agy não abre no que pergunta");
+        assert!(!super::has_surfaces("antigravity") && super::has_surfaces("claude") && super::has_surfaces("codex"));
     }
 
     #[test]

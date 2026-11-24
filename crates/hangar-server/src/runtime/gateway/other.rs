@@ -87,6 +87,7 @@ impl RuntimeRegistry {
             hangar_transcript::Provider::Pi
                 | hangar_transcript::Provider::Omp
                 | hangar_transcript::Provider::Kimi
+                | hangar_transcript::Provider::Antigravity
         ) || target.generation == 0
             || target.binding.generation != target.generation
             || target.binding.name != target.name
@@ -331,6 +332,23 @@ impl RuntimeRegistry {
                     && opening.binding.name == name
                     && opening.spec.surface == crate::session_open::Surface::Terminal =>
             {
+                // O `agy` só cria a conversa no primeiro prompt: sem entregar o prompt inicial que a abertura
+                // pôs na fila, a sessão nunca sai daqui. A entrega é a mesma da rota de entrada, com a fila e a
+                // prova de sempre; enquanto o pane não está pronto, ela adia e a próxima volta tenta de novo.
+                if opening.spec.provider == crate::session_open::AgentProvider::Antigravity
+                    && crate::push::watch::undelivered(&opening.dirs.claude, name)
+                {
+                    match super::super::other_terminal::storage::open((&opening).into()).await {
+                        Ok((store, lease)) => {
+                            let queue = QueueActor::start(store, lease);
+                            if let Err(error) = super::super::other_terminal::send_opening(&opening, &queue, &config.options).await {
+                                tracing::debug!(session = %name, code = %error.code, "prompt inicial ainda não entregue");
+                            }
+                            let _ = queue.shutdown().await;
+                        }
+                        Err(error) => tracing::debug!(session = %name, code = %error.code, "fila da abertura ocupada"),
+                    }
+                }
                 config.opening.lock().await.insert(name.into(), opening);
                 config.wake.notify_one();
                 Err(failure("other_terminal_starting"))

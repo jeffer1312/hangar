@@ -451,11 +451,11 @@ fn validation_error(kind: &str, field: Option<&str>, input: &Value) -> Value {
 
 fn payload(value: &Value) -> Result<Value,Response> {
     let Some(input)=value.as_object() else {return Err(crate::http_cors::json_guarded(StatusCode::UNPROCESSABLE_ENTITY,json!({"detail":[validation_error(if value.is_null(){"missing"}else{"model_attributes_type"},None,value)]})));};
-    let fields=["name","cwd","config_dir","provider","remember_provider","engine","engine_account","model","effort","permission_mode","omp_profile","codex_account","headless","resumo_por_modelo","project","session_id","origem_config_dir","origem_codex_account","origem_provider"];
+    let fields=["name","cwd","config_dir","provider","remember_provider","engine","engine_account","engine_binding","model","effort","permission_mode","omp_profile","codex_account","headless","resumo_por_modelo","code_mode","project","session_id","origem_config_dir","origem_codex_account","origem_provider"];
     let mut out=serde_json::Map::new();let mut errors=Vec::new();
     for name in fields {
         let Some(v)=input.get(name) else {if name=="name" {errors.push(validation_error("missing",Some(name),value));}continue;};
-        let converted=if matches!(name,"remember_provider"|"headless"|"resumo_por_modelo") {
+        let converted=if matches!(name,"remember_provider"|"headless"|"resumo_por_modelo"|"code_mode") {
             if name=="headless" && v.is_null() {Some(Value::Null)}
             else if name=="remember_provider" && !v.is_boolean() {None}
             else {crate::value_coercion::boolean(v).map(|v|json!(v))}
@@ -464,7 +464,7 @@ fn payload(value: &Value) -> Result<Value,Response> {
             if name=="name" && converted.as_str()==Some("") {errors.push(validation_error("string_too_short",Some(name),v));}
             out.insert(name.into(),converted);
         } else {
-            let kind=if matches!(name,"remember_provider"|"headless"|"resumo_por_modelo") {
+            let kind=if matches!(name,"remember_provider"|"headless"|"resumo_por_modelo"|"code_mode") {
                 if name!="remember_provider" && (v.is_string()||v.is_number()) {"bool_parsing"}else{"bool_type"}
             } else {"string_type"};
             errors.push(validation_error(kind,Some(name),v));
@@ -568,7 +568,7 @@ pub(crate) async fn prepare(st:&Arc<AppState>,name:&str,asked:&Value)->Result<Pr
         .map_err(|e|{let reason=e.to_string();tracing::warn!(code="baton_write_failed",kind=?e.kind(),"não deu para gravar o dossiê");super::server::reply(&OpenError::new(500,"erro_bastao_gravar",format!("não consegui gravar o dossiê: {reason}")).with_params(json!({"motivo":reason})))})?;
     let kick=kickoff(&origin,&dossier);
     let mut creation=serde_json::Map::new();
-    for key in ["config_dir","provider","remember_provider","engine","engine_account","model","effort","permission_mode","omp_profile"] {if let Some(v)=body.get(key).filter(|v|!v.is_null()){creation.insert(key.into(),v.clone());}}
+    for key in ["config_dir","provider","remember_provider","engine","engine_account","engine_binding","model","effort","permission_mode","omp_profile","code_mode"] {if let Some(v)=body.get(key).filter(|v|!v.is_null()){creation.insert(key.into(),v.clone());}}
     creation.insert("name".into(),json!(successor));creation.insert("cwd".into(),json!(cwd));
     if let Some(account)=successor_account{creation.insert("codex_account".into(),json!(account));}
     creation.insert("headless".into(),json!(body["headless"].as_bool().unwrap_or(false)));creation.insert("initial_prompt".into(),json!(kick));

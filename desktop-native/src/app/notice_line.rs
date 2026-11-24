@@ -2,6 +2,7 @@
 //! mandou ignorar em cada máquina (`/api/notice-ignores`, evento `notice_ignores` da lista).
 use super::*;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 /// O que a pessoa fez num aviso desta conversa: ele segue na tela (com Desfazer ou o erro) até ela ser recarregada.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9,6 +10,30 @@ pub(super) enum Acted {
     /// Ignorado aqui, com a chave: voltar a mostrar essa chave desfaz todas as linhas dela.
     Ignored(String),
     Failed(String),
+    Reinstalling,
+    Reinstalled,
+    ReinstallFailed(String),
+    Reloading,
+    /// Buscando a prévia ou abrindo a sessão de conserto.
+    FixStarting,
+    /// Aberta, com o estado de antes: até a nota "consertando" chegar a linha não volta ao botão.
+    FixOpened(Option<FixState>),
+    FixFailed(String),
+}
+
+/// O botão que o servidor deu ao aviso.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum NoticeAction {
+    Reinstall(String),
+    Fix,
+}
+
+/// Como está o conserto de um aviso, pela nota mais nova da conversa.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum FixState {
+    Running { child: String },
+    Done,
+    Failed,
 }
 
 /// Evento que o servidor marcou como aviso: o mapa presente, mesmo vazio.
@@ -16,6 +41,34 @@ pub(super) fn is_notice_line(event: &ChatEvent) -> bool { event.notice_meta.is_s
 
 fn meta<'a>(event: &'a ChatEvent, field: &str) -> Option<&'a str> {
     event.notice_meta.as_ref()?.get(field)?.as_str()
+}
+
+pub(super) fn notice_action(event: &ChatEvent) -> Option<NoticeAction> {
+    match meta(event, "action")? {
+        "reinstall_plugin" => meta(event, "plugin").map(|plugin| NoticeAction::Reinstall(plugin.to_owned())),
+        "fix_hook" => Some(NoticeAction::Fix),
+        _ => None,
+    }
+}
+
+/// Nota de conserto: a de andamento muda a linha do aviso e não tem linha própria; a do resultado tem.
+pub(super) fn fix_of(event: &ChatEvent) -> Option<&str> { meta(event, "fix_of") }
+
+pub(super) fn is_fix_running_note(event: &ChatEvent) -> bool { fix_of(event).is_some() && meta(event, "state") == Some("running") }
+
+fn attempt(event: &ChatEvent) -> f64 {
+    event.notice_meta.as_ref().and_then(|meta| meta.get("attempt")).and_then(Value::as_f64).unwrap_or(0.)
+}
+
+/// A tentativa vigente é a de maior `attempt`; entre as notas dela, o resultado vence o andamento.
+pub(super) fn fix_state(events: &[ChatEvent], notice_id: &str) -> Option<FixState> {
+    let notes: Vec<&ChatEvent> = events.iter().filter(|event| fix_of(event) == Some(notice_id)).collect();
+    let latest = notes.iter().map(|event| attempt(event)).fold(f64::NEG_INFINITY, f64::max);
+    let current: Vec<&&ChatEvent> = notes.iter().filter(|event| attempt(event) == latest).collect();
+    let state = |wanted: &str| current.iter().find(|event| meta(event, "state") == Some(wanted));
+    if state("done").is_some() { return Some(FixState::Done); }
+    if state("failed").is_some() { return Some(FixState::Failed); }
+    state("running").map(|event| FixState::Running { child: meta(event, "child").unwrap_or_default().to_owned() })
 }
 
 /// A chave de ignorar; aviso de bloqueio real não tem.
@@ -58,6 +111,7 @@ pub(super) fn notice_key_label(key: &str) -> String {
     if let Some(hook) = key.strip_prefix("hook:") { return tr_shared("notice_key_hook", &[("name", hook)]); }
     if let Some(name) = key.strip_prefix("note:notification:") { return tr_shared("notice_key_notification", &[("name", name)]); }
     if key.starts_with("note:startup:") { return tr_shared("notice_key_startup", &[]); }
+    if let Some(plugin) = key.strip_prefix("note:plugin:") { return tr_shared("notice_key_plugin", &[("name", plugin)]); }
     if key == "note:retry" { return tr_shared("notice_key_retry", &[]); }
     key.to_owned()
 }
@@ -80,6 +134,7 @@ impl Hangar {
 
     /// Aviso ignorado nesta máquina some da conversa, menos o que a pessoa acabou de ignorar aqui (fica com Desfazer).
     pub(super) fn notice_row_hidden(&self, event: &ChatEvent) -> bool {
+        if is_fix_running_note(event) { return true; }
         is_notice_line(event) && !self.notice_acted.contains_key(&event.id)
             && self.ignored_here().is_some_and(|ignored| notice_hidden(event, ignored))
     }
@@ -94,9 +149,89 @@ impl Hangar {
         self.redraw_notice_lines(cx);
     }
 
-    /// Ações locais de Ignorar valem até recarregar a conversa; o erro da lista das Configurações fica.
+    /// Ações locais valem até recarregar a conversa; o erro da lista das Configurações fica.
     pub(super) fn forget_notice_actions(&mut self) {
-        self.notice_acted.retain(|_, acted| !matches!(acted, Acted::Ignored(_)));
+        self.notice_acted.retain(|_, acted| matches!(acted, Acted::Failed(_)));
+    }
+
+    /// Reinstala pela rota de plugins da máquina da conversa; a linha mostra o andamento.
+    fn reinstall_plugin(&mut self, event_id: String, plugin: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(api) = self.session_api() else { return };
+        self.notice_acted.insert(event_id.clone(), Acted::Reinstalling);
+        self.redraw_notice_lines(cx);
+        run(&self.runtime, async move { api.server_send(reqwest::Method::POST, &["plugins", &plugin, "install"], None, 240).await }, window, cx,
+            move |this, result, _, cx| {
+                let acted = match result {
+                    Ok(body) if body.pointer("/result/outcome").and_then(Value::as_str) != Some("failed") => Acted::Reinstalled,
+                    Ok(body) => Acted::ReinstallFailed(body.pointer("/result/message").and_then(Value::as_str).unwrap_or_default().to_owned()),
+                    Err(error) => Acted::ReinstallFailed(Hangar::fetch_failure(&error)),
+                };
+                this.notice_acted.insert(event_id, acted);
+                this.redraw_notice_lines(cx);
+            });
+    }
+
+    fn reload_after_reinstall(&mut self, event_id: String, cx: &mut Context<Self>) {
+        self.notice_acted.insert(event_id, Acted::Reloading);
+        self.reload(cx);
+        self.redraw_notice_lines(cx);
+    }
+
+    /// "Consertar…": busca a prévia (o que a filha vai receber) e abre a janela de confirmação.
+    /// O aviso como o servidor precisa: o hook, o erro e se ele bloqueia (sem chave de ignorar).
+    fn fix_request(&self, event_id: &str) -> Option<Value> {
+        let event = self.chat.events.iter().find(|event| event.id == event_id)?;
+        Some(json!({"notice_id": event_id, "subject": meta(event, "subject")?, "detail": event.hook_error.as_deref().unwrap_or_default(),
+            "blocking": notice_key(event).is_none()}))
+    }
+
+    fn fix_preview(&mut self, event_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(api), Some(name), Some(body)) = (self.session_api(), self.selected.as_ref().map(|s| s.name.clone()), self.fix_request(&event_id)) else { return };
+        self.notice_acted.insert(event_id.clone(), Acted::FixStarting);
+        self.redraw_notice_lines(cx);
+        run(&self.runtime, async move { api.server_send(reqwest::Method::POST, &["sessions", &name, "notice", "fix", "preview"], Some(body), 30).await },
+            window, cx, move |this, result, window, cx| {
+                match result {
+                    Ok(preview) => { this.notice_acted.remove(&event_id); this.open_fix_dialog(event_id, preview, window, cx); }
+                    Err(error) => { this.notice_acted.insert(event_id, Acted::FixFailed(Hangar::fetch_failure(&error))); }
+                }
+                this.redraw_notice_lines(cx);
+            });
+    }
+
+    fn open_fix_dialog(&mut self, event_id: String, preview: Value, window: &mut Window, cx: &mut Context<Self>) {
+        let subject = preview["subject"].as_str().unwrap_or_default().to_owned();
+        let detail = preview["detail"].as_str().unwrap_or_default().to_owned();
+        let files: Vec<String> = preview["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+        let footer = tr_shared(if preview["no_hooks"].as_bool() == Some(true) { "notice_fix_footer_no_hooks" } else { "notice_fix_footer" }, &[]);
+        let body = move |_: &mut Window, _: &mut App| fix_dialog_body(&detail, &files, &footer).into_any_element();
+        let this = cx.entity().downgrade();
+        chrome::confirm_dialog(window, cx, px(560.), px(420.), Some(tr_shared("notice_fix_title", &[("name", &subject)])), Rc::new(body),
+            Rc::new(|| true), tr_shared("notice_fix_open", &[]), None, |d| d,
+            move |window, cx| { let _ = this.update(cx, |this, cx| this.start_fix(event_id.clone(), window, cx)); true });
+    }
+
+    fn start_fix(&mut self, event_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(api), Some(name), Some(body)) = (self.session_api(), self.selected.as_ref().map(|s| s.name.clone()), self.fix_request(&event_id)) else { return };
+        self.notice_acted.insert(event_id.clone(), Acted::FixStarting);
+        self.redraw_notice_lines(cx);
+        run(&self.runtime, async move { api.server_send(reqwest::Method::POST, &["sessions", &name, "notice", "fix"], Some(body), 120).await },
+            window, cx, move |this, result, _, cx| {
+                // O andamento chega pela nota do servidor; aqui só o erro fica.
+                match result {
+                    Ok(_) => {
+                        let before = fix_state(&this.chat.events, &event_id);
+                        this.notice_acted.insert(event_id, Acted::FixOpened(before));
+                    }
+                    Err(error) => { this.notice_acted.insert(event_id, Acted::FixFailed(Hangar::fetch_failure(&error))); }
+                }
+                this.redraw_notice_lines(cx);
+            });
+    }
+
+    fn open_fix_child(&mut self, child: String, window: &mut Window, cx: &mut Context<Self>) {
+        let target = super::sidebar::Target::new(&self.open_server(), &child);
+        let _ = self.select_target(&target, window, cx);
     }
 
     fn redraw_notice_lines(&mut self, cx: &mut Context<Self>) {
@@ -163,9 +298,61 @@ impl Hangar {
             .into_any_element())
     }
 
+    /// O resultado do conserto que voltou da sessão filha: uma linha com o link para ela.
+    fn render_fix_result(&self, event: &ChatEvent, cx: &mut Context<Self>) -> AnyElement {
+        let done = meta(event, "state") == Some("done");
+        let child = meta(event, "child").unwrap_or_default().to_owned();
+        let open = fix_open_button(&event.id)
+            .on_click(cx.listener(move |this, _, window, cx| this.open_fix_child(child.clone(), window, cx)));
+        notice_rule_line(fix_result_row(done, plain(event).trim().to_owned(), open)).into_any_element()
+    }
+
+    /// O que vai entre o título e a seta: o andamento (reinstalando, consertando…) ou o botão da ação.
+    /// `fix`: o estado do conserto deste aviso, lido uma vez por linha.
+    fn notice_action_part(&self, event: &ChatEvent, fix: Option<FixState>, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let id = event.id.clone();
+        let spin = |label: String| notice_spin(&id, small(label, theme::muted())).into_any_element();
+        let button = |label: String| notice_action_button(&id, label);
+        match (notice_action(event)?, self.notice_acted.get(&id)) {
+            (NoticeAction::Reinstall(plugin), acted) => Some(match acted {
+                Some(Acted::Reinstalling) => spin(tr_shared("notice_reinstalling", &[("name", &plugin)])),
+                Some(Acted::Reloading) => spin(tr_shared("notice_reloading", &[])),
+                Some(Acted::Reinstalled) => notice_reinstalled(&plugin, true)
+                    .child(button(tr_shared("notice_reload", &[])).on_click(cx.listener({ let id = id.clone(); move |this, _, _, cx| this.reload_after_reinstall(id.clone(), cx) })))
+                    .into_any_element(),
+                failed => div().flex().items_center().gap(px(7.))
+                    .when_some(match failed { Some(Acted::ReinstallFailed(why)) => Some(why.clone()), _ => None },
+                        |el, why| el.child(small(tr_shared("notice_reinstall_failed", &[("why", &why)]), theme::warning())))
+                    .child(button(tr_shared(if matches!(failed, Some(Acted::ReinstallFailed(_))) { "notice_retry" } else { "notice_reinstall" }, &[]))
+                        .on_click(cx.listener({ let id = id.clone(); move |this, _, window, cx| this.reinstall_plugin(id.clone(), plugin.clone(), window, cx) })))
+                    .into_any_element(),
+            }),
+            (NoticeAction::Fix, acted) => {
+                // A nota "consertando" pode chegar antes da resposta do pedido: andamento e resultado vencem o giro.
+                let opened = matches!(acted, Some(Acted::FixOpened(before)) if *before == fix)
+                    && !matches!(fix, Some(FixState::Running { .. } | FixState::Done));
+                if opened || matches!(acted, Some(Acted::FixStarting)) { return Some(spin(tr_shared("notice_fix", &[]))); }
+                match fix {
+                    Some(FixState::Running { child }) => Some(notice_spin(&id, notice_fixing(&id, &child).cursor_pointer()
+                            .on_click(cx.listener(move |this, _, window, cx| this.open_fix_child(child.clone(), window, cx))))
+                        .into_any_element()),
+                    Some(FixState::Done) => Some(notice_fixed().into_any_element()),
+                    state => Some(div().flex().items_center().gap(px(7.))
+                        .when(state == Some(FixState::Failed), |el| el.child(small(format!("· {}", tr_shared("notice_fix_failed", &[])), theme::warning())))
+                        .when_some(match acted { Some(Acted::FixFailed(why)) => Some(why.clone()), _ => None },
+                            |el, why| el.child(small(tr_shared("notice_fix_start_failed", &[("why", &why)]), theme::warning())))
+                        .child(button(tr_shared("notice_fix", &[]))
+                            .on_click(cx.listener(move |this, _, window, cx| this.fix_preview(id.clone(), window, cx))))
+                        .into_any_element()),
+                }
+            }
+        }
+    }
+
     pub(super) fn render_notice_line(&self, event_index: usize, row: &str, cx: &mut Context<Self>) -> AnyElement {
         let Some(event) = self.chat.events.get(event_index) else { return div().into_any_element(); };
         if is_api_error(event) { return api_error_box(plain(event).trim().to_owned()).into_any_element(); }
+        if fix_of(event).is_some() { return self.render_fix_result(event, cx); }
         let (id, key) = (event.id.clone(), notice_key(event).map(str::to_owned));
         // Acabou de ignorar: a linha fica, com o caminho de volta, até a conversa ser recarregada.
         if matches!(self.notice_acted.get(&id), Some(Acted::Ignored(_))) {
@@ -181,8 +368,19 @@ impl Hangar {
         let expandable = detail.is_some() || key.is_some();
         let open = expandable && self.expanded.contains(row);
         let toggle_key = row.to_owned();
-        let head = notice_head(SharedString::from(format!("notice-{id}")), title, count, expandable.then_some(open))
-            .when(expandable, |el| el.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx))));
+        let fix = (notice_action(event) == Some(NoticeAction::Fix)).then(|| fix_state(&self.chat.events, &id)).flatten();
+        let fixed = fix == Some(FixState::Done);
+        let action = self.notice_action_part(event, fix, cx);
+        // Com ação, a seta sai do título: o botão fica entre os dois e o clique nele não abre o detalhe.
+        let head = notice_head_marked(SharedString::from(format!("notice-{id}")), title, count, expandable.then_some(open).filter(|_| action.is_none()), fixed)
+            .when(expandable, |el| el.cursor_pointer().on_click(cx.listener({ let key = toggle_key.clone(); move |this, _, _, cx| this.toggle(key.clone(), cx) })));
+        let head = match action {
+            None => head.into_any_element(),
+            Some(action) => div().flex().items_center().gap(px(7.)).min_w_0().child(head).child(action)
+                .when(expandable, |el| el.child(notice_chevron(&id, open).cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)))))
+                .into_any_element(),
+        };
         let body = open.then(|| {
             let ignore = key.map(|key| {
                 let event_id = id.clone();
@@ -205,8 +403,63 @@ pub(crate) fn notice_rule_line(content: impl IntoElement) -> Div {
 
 /// Ícone, título e total; `open` é `None` quando não há o que abrir.
 pub(crate) fn notice_head(id: SharedString, title: String, count: Option<String>, open: Option<bool>) -> Stateful<Div> {
+    notice_head_marked(id, title, count, open, false)
+}
+
+/// Peças da ação na linha, sem estado: a conversa e a animação da novidade usam as mesmas.
+pub(crate) fn notice_action_button(id: &str, label: String) -> Button {
+    Button::new(SharedString::from(format!("notice-act-{id}"))).outline().xsmall().label(label)
+}
+
+/// Andamento: o indicador girando e o texto.
+pub(crate) fn notice_spin(id: &str, label: impl IntoElement) -> Div {
+    div().flex().items_center().gap(px(6.))
+        .child(chrome::Spinner::new(SharedString::from(format!("notice-spin-{id}")), IconName::LoaderCircle, px(13.), theme::accent()))
+        .child(label)
+}
+
+/// "consertando em <sessão>", no tom de link.
+pub(crate) fn notice_fixing(id: &str, child: &str) -> Stateful<Div> {
+    div().id(SharedString::from(format!("notice-child-{id}"))).text_size(px(12.5)).text_color(theme::accent())
+        .child(tr_shared("notice_fixing", &[("name", child)]))
+}
+
+pub(crate) fn notice_fixed() -> Div { small(format!("· {}", tr_shared("notice_fixed", &[])), theme::faint()) }
+
+/// "Plugin x reinstalado"; `hint` acrescenta que a conversa só usa depois de recarregar. O Recarregar entra depois.
+pub(crate) fn notice_reinstalled(plugin: &str, hint: bool) -> Div {
+    let text = tr_shared("notice_reinstalled", &[("name", plugin)]);
+    let text = if hint { format!("{text} · {}", tr_shared("notice_reinstalled_hint", &[])) } else { text };
+    div().flex().items_center().gap(px(7.))
+        .child(chrome::small_icon(IconName::Check, 14., theme::success()))
+        .child(small(text, theme::muted()))
+}
+
+pub(crate) fn notice_chevron(id: &str, open: bool) -> Stateful<Div> {
+    div().id(SharedString::from(format!("notice-chevron-{id}")))
+        .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
+}
+
+pub(crate) fn fix_open_button(id: &str) -> Button {
+    Button::new(SharedString::from(format!("notice-fix-open-{id}"))).ghost().xsmall().label(tr_shared("notice_fix_open", &[]))
+}
+
+/// ✓ do resolvido ou o triângulo âmbar do aviso.
+fn mark_icon(done: bool) -> impl IntoElement {
+    if done { chrome::small_icon(IconName::Check, 14., theme::success()) } else { chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()) }
+}
+
+/// A linha do resultado do conserto: feito (✓) ou falha (âmbar), o texto e o Abrir.
+pub(crate) fn fix_result_row(done: bool, text: String, open: Button) -> Div {
+    div().flex().items_center().gap(px(7.)).min_w_0().child(mark_icon(done))
+        .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(text))
+        .child(open)
+}
+
+/// `done`: o problema foi consertado, o ícone vira o de feito.
+pub(crate) fn notice_head_marked(id: SharedString, title: String, count: Option<String>, open: Option<bool>, done: bool) -> Stateful<Div> {
     div().id(id).flex().items_center().gap(px(7.)).min_w_0()
-        .child(chrome::small_icon(IconName::TriangleAlert, 14., theme::warning()))
+        .child(mark_icon(done))
         .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(theme::muted()).child(title))
         .when_some(count, |el, count| el.child(small(format!("· {count}"), theme::faint())))
         .when_some(open, |el, open| el.child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint())))
@@ -226,6 +479,19 @@ pub(crate) fn undo_button(id: SharedString) -> Button { Button::new(id).ghost().
 /// "Aviso ignorado nesta máquina"; o Desfazer entra depois.
 pub(crate) fn ignored_text() -> Div {
     div().flex().items_center().gap(px(6.)).child(small(tr_shared("notice_ignored_line", &[]), theme::faint()))
+}
+
+/// O corpo da janela do "Consertar…": o que a sessão filha vai receber.
+pub(crate) fn fix_dialog_body(detail: &str, files: &[String], footer: &str) -> Div {
+    let label = |key: &str| div().pt(px(10.)).pb(px(4.)).text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::faint()).child(tr_shared(key, &[]));
+    let mono = |text: String| div().px(px(9.)).py(px(7.)).rounded(px(6.)).bg(theme::inset()).font_family(theme::MONO).text_size(px(12.))
+        .text_color(theme::muted()).whitespace_normal().child(text);
+    let files = if files.is_empty() { tr_shared("notice_fix_no_files", &[]) } else { files.join("\n") };
+    div().flex().flex_col()
+        .child(div().text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal().child(tr_shared("notice_fix_intro", &[])))
+        .child(label("notice_fix_error_label")).child(mono(detail.to_owned()))
+        .child(label("notice_fix_files_label")).child(mono(files))
+        .child(div().pt(px(12.)).text_xs().text_color(theme::faint()).child(footer.to_owned()))
 }
 
 /// Erro da API que parou o turno: caixa âmbar, sem Ignorar.
@@ -310,6 +576,40 @@ mod tests {
         assert_eq!(notice_key_label("note:notification:update"), tr_shared("notice_key_notification", &[("name", "update")]));
         assert_eq!(notice_key_label("note:de-uma-versao-futura"), "note:de-uma-versao-futura");
         assert_ne!(notice_key_label("hook:Stop"), "notice_key_hook", "a chave de texto existe nas mensagens");
+    }
+
+    #[test]
+    fn notice_action_comes_from_the_meta() {
+        let reinstall = hook("x", json!({"key":"hook:S","subject":"S","action":"reinstall_plugin","plugin":"pl@mk"}));
+        assert_eq!(notice_action(&reinstall), Some(NoticeAction::Reinstall("pl@mk".into())));
+        assert_eq!(notice_action(&hook("x", json!({"subject":"S","action":"fix_hook"}))), Some(NoticeAction::Fix));
+        assert_eq!(notice_action(&hook("x", json!({"subject":"S","action":"reinstall_plugin"}))), None, "sem o plugin não há o que reinstalar");
+        assert_eq!(notice_action(&notice("⚙️ x", json!({}))), None);
+        assert_eq!(notice_key_label("note:plugin:pl@mk"), tr_shared("notice_key_plugin", &[("name", "pl@mk")]));
+    }
+
+    fn fix_note(id: &str, attempt: u64, state: &str) -> ChatEvent {
+        ChatEvent { id: id.into(), ..notice("x", json!({"fix_of":"hookfail:a","attempt":attempt,"state":state,"child":"conserto-s"})) }
+    }
+
+    #[test]
+    fn fix_state_follows_the_latest_attempt() {
+        assert_eq!(fix_state(&[], "hookfail:a"), None);
+        let running = fix_note("local-fix:hookfail:a:1", 1, "running");
+        assert_eq!(fix_state(std::slice::from_ref(&running), "hookfail:a"), Some(FixState::Running { child: "conserto-s".into() }));
+        let done = fix_note("local-fixdone:hookfail:a:1", 1, "done");
+        assert_eq!(fix_state(&[running.clone(), done.clone()], "hookfail:a"), Some(FixState::Done));
+        let again = fix_note("local-fix:hookfail:a:2", 2, "running");
+        assert_eq!(fix_state(&[running, done, again], "hookfail:a"), Some(FixState::Running { child: "conserto-s".into() }), "nova tentativa depois do resultado");
+        assert_eq!(fix_state(&[fix_note("f", 1, "failed")], "hookfail:a"), Some(FixState::Failed));
+        assert_eq!(fix_state(&[fix_note("f", 1, "done")], "hookfail:b"), None, "nota de outro aviso");
+    }
+
+    #[test]
+    fn running_fix_note_has_no_row_and_the_result_has() {
+        assert!(is_fix_running_note(&fix_note("f", 1, "running")));
+        assert!(!is_fix_running_note(&fix_note("f", 1, "done")));
+        assert!(fix_of(&fix_note("f", 1, "done")).is_some());
     }
 
     #[test]

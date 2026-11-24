@@ -95,13 +95,16 @@ pub(super) struct ModelOption {
     #[serde(default)] efforts: Vec<String>,
     #[serde(default)] service_tiers: Vec<Value>,
     #[serde(default, rename = "supports_fast")] fast: bool,
+    /// Motor no proxy: o servidor já conferiu a conta fixa (Pro ou Pro Max) e a regra do proxy.
+    #[serde(default, rename = "supports_ultrafast")] ultrafast: bool,
 }
 
 impl ModelOption {
-    fn supports_fast(&self) -> bool {
-        self.service_tiers.iter().any(|tier| tier.get("id").and_then(Value::as_str) == Some("priority")
+    fn offers(&self, id: &str) -> bool {
+        self.service_tiers.iter().any(|tier| tier.get("id").and_then(Value::as_str) == Some(id)
             && tier.get("hidden").and_then(Value::as_bool) != Some(true))
     }
+    fn supports_fast(&self) -> bool { self.offers("priority") }
     /// `provider/id` quando há provider: o catálogo do Pi repete ids entre providers (`valorModelo` do web).
     fn value(&self) -> String { self.provider.as_ref().map(|p| format!("{p}/{}", self.id)).unwrap_or_else(|| self.id.clone()) }
     fn label(&self) -> String { self.name.clone().unwrap_or_else(|| self.id.clone()) }
@@ -155,6 +158,14 @@ fn fast_model_available(catalog: &[ModelOption], provider: &str, local_proxy: bo
     })
 }
 
+fn ultrafast_model_available(catalog: &[ModelOption], provider: &str, local_proxy: bool, model: &str) -> bool {
+    matched_model(catalog, provider, local_proxy, model).is_some_and(|m| match provider {
+        "codex" => m.offers("ultrafast"),
+        "claude" => local_proxy && m.fast && m.ultrafast,
+        _ => false,
+    })
+}
+
 fn reloaded_choice(catalog: &[ModelOption], provider: &str, local_proxy: bool,
     current: (String, String), remembered: (String, String)) -> (String, String) {
     let context = (provider == "claude" && local_proxy && !current.0.is_empty()).then_some(current.0.ends_with("[1m]"));
@@ -167,14 +178,8 @@ fn reloaded_choice(catalog: &[ModelOption], provider: &str, local_proxy: bool,
     (model, effort)
 }
 
-fn creation_tier(tier: Option<&str>, available: bool, fresh: bool) -> Option<&str> {
-    tier.filter(|tier| available && fresh && matches!(*tier, "default" | "priority"))
-}
-
-fn model_memory_key(server: &str, provider: &str, account: &str, engine: &str, engine_account: &str) -> String {
-    let who = if provider == "codex" { account } else if engine.is_empty() { "-" } else { engine };
-    let key = format!("cp_last_model:{server}:{provider}:{who}");
-    if provider == "claude" && !engine_account.is_empty() { format!("{key}:account:{engine_account}") } else { key }
+fn creation_tier(tier: Option<&str>, available: bool, ultrafast: bool, fresh: bool) -> Option<&str> {
+    tier.filter(|tier| available && fresh && (matches!(*tier, "default" | "priority") || (*tier == "ultrafast" && ultrafast)))
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -183,10 +188,14 @@ pub(super) struct Motor {
     #[serde(default)] model: String,
     cliproxy_accounts: Option<Vec<crate::api::dto::CliProxyAccount>>,
     cliproxy_error: Option<String>,
+    cliproxy_binding: Option<String>,
+    cliproxy_bound_account: Option<crate::api::dto::CliProxyAccount>,
+    cliproxy_binding_error: Option<String>,
 }
 
 fn eligible_engine_account(account: &crate::api::dto::CliProxyAccount) -> bool {
-    !account.account.is_empty() && account.credential_id.strip_prefix("codex:").is_some_and(|id| !id.is_empty())
+    !account.account.is_empty() && ["codex:", "cliproxy:"].iter()
+        .any(|kind| account.credential_id.strip_prefix(kind).is_some_and(|id| !id.is_empty()))
 }
 
 fn choose_engine_account<'a>(accounts: &'a [crate::api::dto::CliProxyAccount], selected: &str) -> Option<&'a str> {
@@ -195,8 +204,11 @@ fn choose_engine_account<'a>(accounts: &'a [crate::api::dto::CliProxyAccount], s
 }
 
 fn engine_account_ready(motor: &Motor, account: &str) -> bool {
-    motor.cliproxy_error.is_none() && motor.cliproxy_accounts.as_ref().is_none_or(|list|
-        list.iter().any(|a| a.account == account && eligible_engine_account(a)))
+    motor.cliproxy_error.is_none() && if motor.cliproxy_binding.is_some() {
+        motor.cliproxy_bound_account.as_ref().is_some_and(|a| a.account == account && eligible_engine_account(a))
+    } else {
+        motor.cliproxy_accounts.as_ref().is_none_or(|list| list.iter().any(|a| a.account == account && eligible_engine_account(a)))
+    }
 }
 
 /// O Jev só existe com a chave guardada no servidor; o padrão é o `jev_padrao` lido de lá.
@@ -326,17 +338,16 @@ impl NewSession {
             .filter(move |c| c.active || quotas.is_none_or(|list| list.iter().any(|q| q.id.strip_prefix("claude:") == Some(c.path.as_str()))))
     }
 
-    /// A chave da memória do último modelo: servidor, provider e a conta do Codex ou o motor (`chaveMemoria` do web).
-    pub(super) fn memory_key(&self) -> String {
-        model_memory_key(&self.link.api.identity(), self.provider, &self.codex_account, &self.engine, &self.engine_account)
-    }
-
     fn selected_engine(&self) -> Option<&Motor> {
         (self.provider == "claude").then(|| self.engines.ok()?.iter().find(|(name, _)| *name == self.engine).map(|(_, motor)| motor)).flatten()
     }
 
     pub(super) fn proxy_accounts(&self) -> Option<&[crate::api::dto::CliProxyAccount]> {
         self.selected_engine()?.cliproxy_accounts.as_deref()
+    }
+
+    pub(super) fn proxy_binding(&self) -> Option<&str> {
+        self.selected_engine()?.cliproxy_binding.as_deref()
     }
 
     pub(super) fn proxy_account(&self) -> Option<&crate::api::dto::CliProxyAccount> {
@@ -359,7 +370,7 @@ impl NewSession {
         if self.engines.loading { return Some(tr("loading")); }
         if let Some(Err(error)) = &self.engines.value { return Some(error.clone()); }
         let Some(motor) = self.selected_engine() else { return Some(tr("create_engine_missing").replace("{name}", &self.engine)); };
-        if let Some(error) = &motor.cliproxy_error { return Some(tr("create_proxy_error").replace("{reason}", error)); }
+        if let Some(error) = motor.cliproxy_binding_error.as_ref().or(motor.cliproxy_error.as_ref()) { return Some(tr("create_proxy_error").replace("{reason}", error)); }
         let accounts = motor.cliproxy_accounts.as_ref()?;
         if accounts.is_empty() { return Some(tr("create_proxy_no_accounts")); }
         if self.proxy_account().is_none() { return Some(tr("create_proxy_choose_account")); }
@@ -376,6 +387,13 @@ impl NewSession {
             self.engine_account_pick = None;
             return;
         };
+        let bound = self.selected_engine().filter(|m| m.cliproxy_binding.is_some())
+            .map(|m| m.cliproxy_bound_account.as_ref().map(|a| a.account.clone()).unwrap_or_default());
+        if let Some(account) = bound {
+            self.engine_account = account;
+            self.engine_account_pick = None;
+            return;
+        }
         let selected = choose_engine_account(accounts, &self.engine_account).unwrap_or_default().to_owned();
         self.engine_account = selected;
         let choices: Vec<ModelChoice> = self.proxy_accounts().unwrap_or_default().iter().filter(|a| eligible_engine_account(a)).map(|a| ModelChoice {
@@ -414,18 +432,17 @@ impl NewSession {
         }
         if let Some(config) = self.config.clone() { query.push(("config_dir".into(), config)); }
         if self.provider == "codex" { query.push(("codex_account".into(), self.codex_account.clone())); }
-        let (key, default_key) = (self.memory_key(), self.default_key());
+        // O catálogo do Antigravity é o que o agy lista para a conta padrão, a única em que a sessão abre.
+        if self.provider == "antigravity" { query.push(("conta".into(), "default".into())); }
+        let default_key = self.default_key();
         let scope = self.default_scope();
         self.request(cx, move |api, send| Box::pin(async move {
-            // O padrão marcado do harness vence a última escolha lembrada.
-            let (remembered, legacy) = tokio::task::spawn_blocking(move || {
-                let saved = crate::appearance::harness_default(&default_key);
-                (crate::appearance::last_model(&key), saved)
-            }).await.unwrap_or_default();
+            let legacy = tokio::task::spawn_blocking(move || crate::appearance::harness_default(&default_key)).await.unwrap_or_default();
             let scope: Vec<_> = scope.iter().map(|(k, v)| (*k, v.as_str())).collect();
             let saved = api.read_session_default(&scope, legacy).await;
+            // Sem padrão marcado no servidor, o modelo fica no padrão dele: nada lembrado neste computador entra.
             let remembered = saved.as_ref().ok().and_then(|saved| saved.as_ref())
-                .map(|(m, e, _)| (m.clone(), e.clone())).unwrap_or(remembered);
+                .map(|(m, e, _)| (m.clone(), e.clone())).unwrap_or_default();
             let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
             send(CreateReply::Models(seq, api.server_read(&["model-options"], &query, 30).await, remembered, saved)).await
         }));
@@ -635,30 +652,37 @@ impl NewSession {
         fast_model_available(self.catalog(), self.provider, self.proxy_accounts().is_some(), &self.model)
     }
 
+    fn ultrafast_available(&self) -> bool {
+        ultrafast_model_available(self.catalog(), self.provider, self.proxy_accounts().is_some(), &self.model)
+    }
+
     pub(super) fn service_tier_for_creation(&self) -> Option<&str> {
-        creation_tier(self.service_tier.as_deref(), self.fast_available(),
+        creation_tier(self.service_tier.as_deref(), self.fast_available(), self.ultrafast_available(),
             !self.is_transfer() && self.baton.is_none() && !self.want_resume)
     }
 
     pub(super) fn render_fast_choice(&self, cx: &mut Context<Self>) -> Option<Div> {
         if !(self.provider == "codex" || (self.provider == "claude" && self.proxy_accounts().is_some()))
             || self.is_transfer() || self.baton.is_some() || self.want_resume { return None; }
-        let available = self.fast_available();
-        let on = self.service_tier_for_creation() == Some("priority");
-        let hint = if !available { "ctl_fast_unavailable" }
-            else if self.service_tier.is_none() { "create_fast_default_hint" } else { "ctl_fast_hint" };
-        Some(div().flex().items_center().gap_2().px_2().py_1()
-            .child(div().flex_1().min_w_0().flex().flex_col().gap_1()
-                .child(div().text_sm().child(tr("ctl_fast")))
-                .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr(hint))))
-            .child(Switch::new("new-chat-fast").small().checked(on).accessibility_label(tr("ctl_fast"))
-                .disabled(self.creating || !available)
-                .on_change(cx.listener(|this, on: &bool, _, cx| {
-                    if !this.fast_available() { return; }
+        let (available, ultrafast) = (self.fast_available(), self.ultrafast_available());
+        let selected = controls::SPEED_TIERS.iter().position(|t| Some(*t) == self.service_tier_for_creation()).unwrap_or(0);
+        let (labels, hints) = controls::speed_texts();
+        let hint = if !available { tr("ctl_fast_unavailable") }
+            else if self.service_tier.is_none() { tr("create_fast_default_hint") }
+            else if ultrafast { hints[selected].clone() }
+            else { format!("{} {}", hints[selected], tr("ctl_speed_ultrafast_unavailable")) };
+        let enabled = [available && !self.creating, available && !self.creating, ultrafast && !self.creating];
+        let off_note = tr(if available { "ctl_speed_ultrafast_unavailable" } else { "ctl_fast_unavailable" });
+        Some(div().flex().flex_col().gap_1().px_2().py_1()
+            .child(div().text_sm().child(tr("ctl_speed")))
+            .child(super::super::settings::segments_where("new-chat-speed", &labels, &hints, selected, &enabled,
+                self.creating && available, off_note, |this: &mut Self, n, _, cx| {
+                    if !this.fast_available() || (n == 2 && !this.ultrafast_available()) { return; }
                     this.scheduled_touch(&["service_tier"]);
-                    this.service_tier = Some(if *on { "priority" } else { "default" }.into());
+                    this.service_tier = Some(controls::SPEED_TIERS[n].into());
                     cx.notify();
-                }))))
+                }, cx))
+            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(hint)))
     }
 
     pub(super) fn render_engine_context(&self, cx: &mut Context<Self>) -> Option<Div> {
@@ -679,10 +703,16 @@ impl NewSession {
                 }))))
     }
 
-    /// A permissão existe para o Claude e para o Codex sem terminal, cada um com a própria lista.
+    /// A permissão existe para o Claude, para o Codex sem terminal e para o Antigravity, cada um com a própria lista.
     pub(super) fn permissions(&self) -> Option<&'static [&'static str]> {
         if self.is_transfer() { return None; }
-        match (self.provider, self.headless && !self.headless_inherited()) { ("claude", _) => Some(&PERMISSIONS), ("codex", true) => Some(&CODEX_PERMISSIONS), _ => None }
+        match (self.provider, self.headless && !self.headless_inherited()) {
+            ("claude", _) => Some(&PERMISSIONS),
+            ("codex", true) => Some(&CODEX_PERMISSIONS),
+            // Só com terminal por enquanto: sem o `manual`, que o `agy` com terminal não tem.
+            ("antigravity", _) => Some(&AGY_TERMINAL_PERMISSIONS),
+            _ => None,
+        }
     }
 
     fn pick_at(choices: &[ModelChoice], value: &str) -> Option<usize> { choices.iter().position(|c| c.id == value).or(Some(0)) }
@@ -744,8 +774,8 @@ impl NewSession {
             .child(chrome::provider_glyph(self.provider, 16.))
             .child(div().max_w(px(160.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(model))
             .when(!self.effort.is_empty(), |el| el.child(div().text_xs().text_color(theme::muted()).child(self.effort.clone())))
-            .when(self.service_tier_for_creation() == Some("priority"), |el|
-                el.child(div().id("new-chat-fast-active").text_xs().text_color(theme::muted()).child(tr("ctl_fast"))))
+            .when_some(controls::speed_label(self.service_tier_for_creation()), |el, speed|
+                el.child(div().id("new-chat-fast-active").text_xs().text_color(theme::muted()).child(speed)))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Model, window, cx))))
     }
 
@@ -1168,10 +1198,14 @@ impl NewSession {
         let pick = self.engine_account_pick.as_ref().map(|(pick, _)| Select::new(pick).id("create-engine-account")
             .placeholder(tr("create_proxy_choose_account")).accessibility_label(tr("create_chatgpt_account"))
             .disabled(self.creating || self.engines.loading || invalid || self.proxy_accounts().is_none_or(|a| a.is_empty())));
-        let quota = self.proxy_account().and_then(|a| self.quota_of(&a.credential_id));
+        let quota = self.selected_engine().and_then(|m| m.cliproxy_binding.as_ref())
+            .and_then(|binding| self.quota_of(&format!("cliproxy-binding:{binding}")))
+            .or_else(|| self.proxy_account().and_then(|a| a.binding.as_ref()).and_then(|binding| self.quota_of(&format!("cliproxy-binding:{binding}"))));
         div().flex().flex_col().gap_2()
             .child(label(tr("create_chatgpt_account")))
             .children(pick)
+            .when_some(self.selected_engine().and_then(|m| m.cliproxy_bound_account.as_ref()), |el, a|
+                el.child(muted(if a.email.is_empty() { a.label.clone() } else { a.email.clone() })))
             .when_some(quota, |el, q| el.child(self.render_quota("create-engine-quota".into(), q)))
             .when(quota.is_none() && self.proxy_account().is_some(), |el| el.child(muted(tr(if self.quotas.loading { "loading" } else { "create_quota_none" }))))
             .when_some(self.quotas.value.as_ref().and_then(|q| q.as_ref().err()), |el, error| el.child(muted(tr("accounts_failed").replace("{reason}", error))))
@@ -1360,12 +1394,28 @@ mod tests {
         assert!(available("codex", false, "codex"));
         for provider in ["pi", "omp", "kimi"] { assert!(!available(provider, true, "gpt")); }
         for tier in ["priority", "default"] {
-            assert_eq!(super::creation_tier(Some(tier), true, true), Some(tier));
-            assert_eq!(super::creation_tier(Some(tier), false, true), None);
-            assert_eq!(super::creation_tier(Some(tier), true, false), None);
+            assert_eq!(super::creation_tier(Some(tier), true, false, true), Some(tier));
+            assert_eq!(super::creation_tier(Some(tier), false, false, true), None);
+            assert_eq!(super::creation_tier(Some(tier), true, false, false), None);
         }
-        assert_eq!(super::creation_tier(None, true, true), None);
-        assert_eq!(super::creation_tier(Some("fast"), true, true), None);
+        assert_eq!(super::creation_tier(None, true, true, true), None);
+        assert_eq!(super::creation_tier(Some("fast"), true, true, true), None);
+        assert_eq!(super::creation_tier(Some("ultrafast"), true, true, true), Some("ultrafast"));
+        assert_eq!(super::creation_tier(Some("ultrafast"), true, false, true), None, "conta sem Ultra Fast não leva o pedido");
+    }
+
+    #[test]
+    fn ultrafast_creation_needs_the_account_or_the_codex_tier() {
+        let models: Vec<ModelOption> = serde_json::from_value(serde_json::json!([
+            {"id":"gpt-pro", "supports_fast":true, "supports_ultrafast":true}, {"id":"gpt-plus", "supports_fast":true},
+            {"id":"codex-pro", "service_tiers":[{"id":"priority"}, {"id":"ultrafast"}]}, {"id":"codex-plus", "service_tiers":[{"id":"priority"}]}
+        ])).unwrap();
+        let ultra = |provider, local, model| super::ultrafast_model_available(&models, provider, local, model);
+        assert!(ultra("claude", true, "gpt-pro"));
+        assert!(!ultra("claude", false, "gpt-pro"));
+        assert!(!ultra("claude", true, "gpt-plus"));
+        assert!(ultra("codex", false, "codex-pro"));
+        assert!(!ultra("codex", false, "codex-plus"));
     }
 
     #[test]
@@ -1411,7 +1461,7 @@ mod tests {
         assert_eq!(reload("claude", true, "", "gpt-two[1m]"), ("gpt-two[1m]".into(), "medium".into()));
         assert_eq!(reload("claude", false, "gpt-one[1m]", "gpt-two"), ("gpt-two".into(), "medium".into()));
         assert_eq!(reload("codex", true, "gpt-one[1m]", "gpt-two"), ("gpt-two".into(), String::new()));
-        assert_eq!(super::creation_tier(Some("priority"), super::fast_model_available(&models, "claude", true, "gpt-one[1m]"), true), Some("priority"));
+        assert_eq!(super::creation_tier(Some("priority"), super::fast_model_available(&models, "claude", true, "gpt-one[1m]"), false, true), Some("priority"));
     }
 
     #[test]
@@ -1422,8 +1472,12 @@ mod tests {
             {"account":"empty-id", "credential_id":"codex:", "email":"", "label":"empty-id"},
             {"account":"wrong", "credential_id":"claude:x", "email":"", "label":"wrong"},
             {"account":"first", "credential_id":"codex:first", "email":"", "label":"first"},
-            {"account":"second", "credential_id":"codex:second", "email":"", "label":"second"}
+            {"account":"second", "credential_id":"codex:second", "email":"", "label":"second"},
+            {"account":"cpa-0123456789ab", "credential_id":"cliproxy:cpa-0123456789ab", "email":"", "label":"solo"},
+            {"account":"cpa-empty", "credential_id":"cliproxy:", "email":"", "label":"cpa-empty"}
         ])).unwrap();
+        assert_eq!(super::choose_engine_account(&accounts, "cpa-0123456789ab"), Some("cpa-0123456789ab"), "conta só do proxy");
+        assert_eq!(super::choose_engine_account(&accounts, "cpa-empty"), Some("first"));
         assert_eq!(super::choose_engine_account(&accounts, ""), Some("first"));
         assert_eq!(super::choose_engine_account(&accounts, "broken"), Some("first"));
         assert_eq!(super::choose_engine_account(&accounts, "removed"), Some("first"));
@@ -1451,10 +1505,6 @@ mod tests {
         let ordinary: super::Motor = serde_json::from_value(serde_json::json!({"model":"k3"})).unwrap();
         assert!(ordinary.cliproxy_accounts.is_none());
         assert!(super::engine_account_ready(&ordinary, ""));
-        let key = super::model_memory_key("server", "claude", "", "proxy", "default");
-        assert_ne!(key, super::model_memory_key("server", "claude", "", "proxy", "other"));
-        assert_ne!(key, super::model_memory_key("another", "claude", "", "proxy", "default"));
-        assert_ne!(key, super::model_memory_key("server", "claude", "", "proxy", ""));
         let catalog: Vec<ModelOption> = serde_json::from_value(serde_json::json!([{"id":"gpt-base"}])).unwrap();
         assert!(super::selected_model_valid(&catalog, "claude", true, "gpt-base"));
         assert!(!super::selected_model_valid(&catalog, "claude", true, ""));
@@ -1473,10 +1523,6 @@ mod tests {
         assert_eq!(remembered("claude-model", "high"), (String::new(), String::new()));
         assert_eq!(remembered("", "high"), (String::new(), String::new()));
         assert_eq!(remembered("model-b", "medium"), ("model-b".into(), "medium".into()));
-        let key = super::model_memory_key("server-a", "codex", "account-a", "", "");
-        assert_ne!(key, super::model_memory_key("server-b", "codex", "account-a", "", ""));
-        assert_ne!(key, super::model_memory_key("server-a", "claude", "account-a", "", ""));
-        assert_ne!(key, super::model_memory_key("server-a", "codex", "account-b", "", ""));
         let mut remote = super::Remote::<super::Catalog>::default();
         let old = remote.start();
         let current = remote.start();

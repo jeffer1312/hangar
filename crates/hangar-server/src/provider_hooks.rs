@@ -1,4 +1,4 @@
-//! Hooks autônomos: sinais do Kimi e guarda do multiplexador, sem servidor ou interpretador.
+//! Hooks autônomos: sinais do Kimi e do Antigravity e guarda do multiplexador, sem servidor ou interpretador.
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -7,9 +7,8 @@ use std::{
     process::ExitCode,
 };
 
-pub fn command(mode: &str) -> Result<String, String> {
-    let (executable, _) = crate::codex_setup::hook_command::allow_wrapper()?;
-    Ok(format!("\"{executable}\" {mode}"))
+pub fn command(home: &Path, mode: &str) -> Result<String, String> {
+    crate::codex_setup::hook_command::hook_command(home, mode)
 }
 
 fn log_failure(file: &str, code: &str) {
@@ -47,7 +46,20 @@ pub fn run(mode: &str) -> ExitCode {
             if !value.is_object() {
                 return Err("payload_not_object");
             }
-            if mode == "kimi-state-hook" {
+            if mode == "agy-state-hook" {
+                let home = std::env::home_dir().ok_or("home_unavailable")?;
+                let base = std::env::var_os("CLAUDE_CONFIG_DIR")
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".claude"));
+                write_agy(
+                    &value,
+                    &base,
+                    std::env::var("TMUX_PANE").ok().as_deref(),
+                    std::env::var("PSMUX_SESSION").ok().as_deref(),
+                )?;
+                Ok(None)
+            } else if mode == "kimi-state-hook" {
                 let home = std::env::home_dir().ok_or("home_unavailable")?;
                 let base = std::env::var_os("CLAUDE_CONFIG_DIR")
                     .filter(|s| !s.is_empty())
@@ -84,7 +96,14 @@ pub fn run(mode: &str) -> ExitCode {
                 if reads_vault(command, 0, tool == "PowerShell") {
                     return Ok(Some(VAULT_DENIED.to_owned()));
                 }
-                Ok(dangerous(command, 0).map(|reason| format!(
+                // Caminho do Windows sem aspas (PowerShell, ou o Bash do Codex no Windows): a barra
+                // invertida é separador, não escape. Conferido também assim, só para barrar mais; só
+                // nas palavras com cara de caminho, para não mexer no escape de um padrão do `pkill -f`.
+                let reason = dangerous(command, 0).or_else(|| {
+                    let slashed = windows_paths_slashed(command);
+                    (slashed != command).then(|| dangerous(&slashed, 0)).flatten()
+                });
+                Ok(reason.map(|reason| format!(
                     "BLOQUEADO: {reason}.\nPrecisa de tmux limpo para uma sonda? Suba um SERVIDOR SEPARADO com socket próprio:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default, onde vivem as sessões de trabalho (TMUX_TMPDIR não isola: dentro do tmux quem manda é $TMUX).\nPara matar UMA sessão: `tmux kill-session -t '=nome:'`."
                 )))
             }
@@ -99,16 +118,22 @@ pub fn run(mode: &str) -> ExitCode {
             let _ = writeln!(std::io::stderr().lock(), "{text}");
             ExitCode::from(2)
         }
-        Ok(None) => ExitCode::SUCCESS,
+        Ok(None) => {
+            // O agy espera um objeto JSON na saída; `{}` não decide nada.
+            if mode == "agy-state-hook" { let _ = writeln!(std::io::stdout().lock(), "{{}}"); }
+            ExitCode::SUCCESS
+        }
         Err(code) => {
             log_failure(
-                if mode == "kimi-state-hook" {
-                    "kimi_hook_error.log"
-                } else {
-                    "guard_tmux-falhas.log"
+                match mode {
+                    "kimi-state-hook" => "kimi_hook_error.log",
+                    "agy-state-hook" => "agy_hook_error.log",
+                    _ => "guard_tmux-falhas.log",
                 },
                 code,
             );
+            // Falha do Hangar nunca prende o agente.
+            if mode == "agy-state-hook" { let _ = writeln!(std::io::stdout().lock(), "{{}}"); }
             ExitCode::SUCCESS
         }
     }
@@ -168,6 +193,40 @@ fn write_kimi(
     }
     Ok(())
 }
+/// Hook do `agy` (`hooks.json`): estado por conversa e o bilhete que liga o pane à conversa. O `agy acp` sem
+/// terminal também roda os hooks e herda o `CP_SESSION_KEY` de quem o lançou: sem pane, nada é gravado.
+fn write_agy(value: &Value, base: &Path, pane: Option<&str>, psmux: Option<&str>) -> Result<(), &'static str> {
+    let key = pane_key(pane, psmux);
+    if key.is_empty() { return Ok(()); }
+    let conversation = value["conversationId"].as_str().ok_or("conversation_id_missing")?;
+    if !hangar_antigravity::paths::valid_conversation_id(conversation) { return Err("conversation_id_invalid"); }
+    let state = match value["hookEventName"].as_str().unwrap_or_default() {
+        // O `SessionStart` também dispara ao retomar uma conversa parada: só o bilhete, o turno começa no `PreInvocation`.
+        "PreInvocation" => Some("working"),
+        // `fullyIdle` falso: o turno parou mas ainda há subagente ou tarefa em fundo trabalhando. Sem o campo,
+        // o `Stop` já diz que o turno acabou.
+        "Stop" => Some(if value["fullyIdle"] == false { "working" } else { "idle" }),
+        _ => None,
+    };
+    if let Some(state) = state {
+        marker(base, ".hangar-state", conversation, &json!({"state": state, "ts": timestamp()}))?;
+    }
+    marker(base, ".hangar-agy", &key, &json!({
+        "session_id": conversation,
+        "transcript_path": value.get("transcriptPath").unwrap_or(&Value::Null),
+        "cwd": value.get("cwd").unwrap_or(&Value::Null),
+        "ts": timestamp(),
+    }))
+}
+
+/// A chave do bilhete: o nome da sessão no psmux, senão o pane do tmux sem o `%`.
+fn pane_key(pane: Option<&str>, psmux: Option<&str>) -> String {
+    if let Some(name) = psmux.filter(|s| !s.is_empty()) {
+        return name.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '-' }).collect();
+    }
+    pane.unwrap_or_default().trim_start_matches('%').to_owned()
+}
+
 fn timestamp() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -278,6 +337,30 @@ fn tokens(segment: &str) -> Vec<String> {
     }
     out
 }
+/// Troca `\` por `/` só nas palavras que começam como caminho do Windows (`C:\`, `\\`, `.\`, `..\`).
+fn windows_paths_slashed(command: &str) -> String {
+    let mut out = String::with_capacity(command.len());
+    let mut in_path = false;
+    let mut word_start = true;
+    for (index, ch) in command.char_indices() {
+        if ch.is_whitespace() {
+            in_path = false;
+            word_start = true;
+            out.push(ch);
+            continue;
+        }
+        if word_start {
+            let rest = command[index..].trim_start_matches(['"', '\'', '&', '(']).as_bytes();
+            in_path = matches!(rest, [drive, b':', b'\\', ..] if drive.is_ascii_alphabetic())
+                || rest.starts_with(b"\\\\")
+                || rest.starts_with(b".\\")
+                || rest.starts_with(b"..\\");
+            word_start = false;
+        }
+        out.push(if in_path && ch == '\\' { '/' } else { ch });
+    }
+    out
+}
 fn head(tokens: &[String]) -> (&str, &[String]) {
     const ENVELOPES: &[&str] = &[
         "sudo",
@@ -300,10 +383,13 @@ fn head(tokens: &[String]) -> (&str, &[String]) {
     ];
     for (i, token) in tokens.iter().enumerate() {
         let token_name = token.trim_matches(['\'', '"']);
-        let name = if cfg!(windows) {
-            token_name.rsplit(['/', '\\']).next().unwrap_or_default()
-        } else {
-            token_name.rsplit('/').next().unwrap_or_default()
+        // A barra invertida que sobra depois das aspas é de caminho do Windows, e o `.exe` não muda o
+        // programa: `"C:\tools\tmux.exe" kill-server` é o tmux.
+        let name = token_name.rsplit(['/', '\\']).next().unwrap_or_default();
+        let cut = name.len().saturating_sub(4);
+        let name = match name.get(cut..) {
+            Some(tail) if tail.eq_ignore_ascii_case(".exe") => &name[..cut],
+            _ => name,
         };
         let duration = {
             static DURATION: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();

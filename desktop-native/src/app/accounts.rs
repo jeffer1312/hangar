@@ -2,20 +2,38 @@
 //! com a cota de cada uma, e os modelos do Claude Code (`GET /api/engines`). O que a tela mostra é
 //! montado na chegada da resposta e a cada meio minuto (o "há X" e os prazos envelhecem); o desenho só lê.
 //! Renomear escreve daqui; entrar, sair, remover e adicionar conta Claude moram em `actions`; o formulário do modelo, a
-//! chave de outro agente e o cookie do OpenCode, em `keys`; entrar no Codex, importar ou herdar e usar a redefinição, em `codex`.
+//! chave de outro agente e o cookie do OpenCode, em `keys`; entrar no Codex, importar ou herdar e usar a redefinição, em `codex`;
+//! instalar o CLIProxyAPI, conectar a conta e criar o modelo dele, em `cliproxy`; as contas Google do Antigravity, em
+//! `antigravity`.
 mod actions;
+mod antigravity;
+mod cliproxy;
 mod codex;
 mod keys;
+mod proxy_update;
 mod usage;
 
 use super::*;
 use super::device::Remote;
 use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
+use antigravity::{AgyFlow, AgyReply};
+use cliproxy::{CliproxyReply, CliproxyWizard};
 use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
 use keys::{CookieForm, EngineForm, KeysReply};
 pub(super) use keys::ModelChoice;
 pub(crate) use actions::{login_heading, target_row};
+pub(crate) use cliproxy::{Brand as CliproxyBrand, INSTALL_ITEMS as CLIPROXY_INSTALL_ITEMS, ItemState as CliproxyItem,
+    account_row as cliproxy_account_row, default_name as cliproxy_default_name, fast_field as cliproxy_fast_field,
+    install_item as cliproxy_install_item, name_preview as cliproxy_name_preview, wizard_steps as cliproxy_steps};
 pub(crate) use codex::idempotency_key;
+// As linhas de etapa da instalação também servem à página do WhatsApp.
+pub(super) use cliproxy::step_item;
+pub(super) use proxy_update::step_states;
+pub(crate) use proxy_update::{update_available_banner as cliproxy_update_available_banner, update_button as cliproxy_update_button,
+    update_done_banner as cliproxy_update_done_banner, update_running_banner as cliproxy_update_running_banner,
+    CardView as CliproxyCardView, adopt_button as cliproxy_adopt_button, adopt_done_banner as cliproxy_adopt_done_banner,
+    adopt_running_banner as cliproxy_adopt_running_banner, card_note as cliproxy_card_note, connect_button as cliproxy_connect_button,
+    proxy_card_view as cliproxy_card_view};
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use gpui_kit::component::menu::DropdownMenu;
@@ -27,7 +45,7 @@ const STALE_AFTER: f64 = 600.;
 const RENEW_DAYS: i64 = 3;
 
 #[derive(Clone, Deserialize)]
-struct Credential {
+pub(super) struct Credential {
     id: String,
     #[serde(rename = "tipo")] kind: String,
     auth_method: Option<String>,
@@ -42,14 +60,20 @@ struct Credential {
     #[serde(rename = "chave_mascarada")] masked_key: Option<String>,
     #[serde(rename = "usos", default)] uses: Vec<String>,
     #[serde(rename = "cota")] quota: Option<Quota>,
+    cliproxy_quota: Option<Quota>,
     #[serde(rename = "aceita_cookie", default)] accepts_cookie: bool,
     #[serde(rename = "cookie_definido", default)] cookie_set: bool,
     #[serde(rename = "gerenciada")] managed: Option<bool>,
+    /// Pasta da conta (Claude, Codex, Antigravity).
+    #[serde(default)] path: Option<String>,
+    /// Login e Termos da conta Antigravity, da lista dele (`/api/antigravity-contas`).
+    #[serde(skip)] agy: Option<antigravity::AgyAccount>,
 }
 
 #[derive(Clone, Deserialize)]
 struct Login {
-    #[serde(rename = "estado")] state: String,
+    /// A linha do Antigravity manda só `loggedIn`.
+    #[serde(rename = "estado", default)] state: String,
     #[serde(rename = "loggedIn")] logged_in: Option<bool>,
     email: Option<String>,
     #[serde(rename = "plano")] plan: Option<String>,
@@ -105,9 +129,21 @@ struct Engine {
     #[serde(default)] api_key_definida: bool,
     cliproxy_accounts: Option<Vec<crate::api::dto::CliProxyAccount>>,
     cliproxy_error: Option<String>,
+    cliproxy_binding: Option<String>,
+    cliproxy_bound_account: Option<crate::api::dto::CliProxyAccount>,
+    cliproxy_binding_error: Option<String>,
 }
 
-pub(super) struct Engines { map: HashMap<String, Engine>, broken_file: Option<String> }
+pub(super) struct Engines { map: HashMap<String, Engine>, broken_file: Option<String>, provider_switch: bool }
+
+#[derive(Clone, Eq, PartialEq)]
+pub(super) struct ProviderChoice {
+    pub engine: String,
+    pub label: String,
+    pub detail: String,
+    pub account: Option<String>,
+    pub binding: String,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Group { Subscriptions, Models, Others }
@@ -129,7 +165,7 @@ impl Filter {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Tone { Muted, Warn, Danger }
+enum Tone { Muted, Good, Warn, Danger }
 
 struct Bar { label: String, reset: String, reset_days: String, pct: f64, reset_at: Option<f64>, per_model: bool }
 
@@ -164,6 +200,8 @@ struct Row {
     quota: QuotaView,
     /// Conta Codex: o id dela e se a ação da linha é herdar da padrão (senão, entrar).
     codex: Option<(String, bool)>,
+    /// Conta Antigravity: o id da rota dela e se o agy disse que tem login.
+    agy: Option<(String, bool)>,
     reset: Option<ResetOffer>,
     /// Editar o modelo: `Some(false)` quando os detalhes dele não chegaram (a leitura dos modelos falhou).
     edit: Option<bool>,
@@ -188,6 +226,8 @@ pub(super) struct Accounts {
     /// Contas da máquina da sessão aberta quando ela é de outro servidor, e de qual servidor vieram.
     session_list: Remote<Vec<Credential>>,
     session_server: Option<String>,
+    /// Falha da última releitura dessa lista, com a anterior ainda valendo; some com a próxima leitura boa.
+    session_notice: Option<String>,
     session_engines: Remote<Engines>,
     engine_server: Option<String>,
     engines: Remote<Engines>,
@@ -215,6 +255,14 @@ pub(super) struct Accounts {
     /// Número de cada pedido do formulário, do cookie e do painel do Codex: resposta de outro pedido não mexe no atual.
     keys_seq: u64,
     codex: Option<CodexFlow>,
+    /// Painel de entrar numa conta Google do Antigravity, no lugar da lista.
+    antigravity: Option<AgyFlow>,
+    /// Login e Termos das contas Antigravity, lidos só com a página aberta.
+    agy: Remote<antigravity::AgyList>,
+    /// Assistente do CLIProxyAPI aberto no lugar da lista.
+    cliproxy: Option<CliproxyWizard>,
+    /// Versão nova do proxy instalado pelo Hangar e a atualização dele.
+    proxy: proxy_update::ProxyUpdate,
     reset: Option<ResetTry>,
     /// Leitura da lista pedida depois de uma redefinição (número dela, se a redefinição valeu): a falha dela entra no aviso.
     reset_refresh: Option<(u64, bool)>,
@@ -244,6 +292,9 @@ pub(super) enum AccountsReply {
     Action(ActionReply),
     Keys(KeysReply),
     Codex(CodexReply),
+    Antigravity(AgyReply),
+    Cliproxy(CliproxyReply),
+    ProxyUpdate(proxy_update::UpdateReply),
 }
 
 fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.) }
@@ -356,7 +407,7 @@ fn quota_not_updated(q: &Quota) -> Option<String> {
     let status = reason.strip_prefix("http-").filter(|s| s.len() == 3 && s.bytes().all(|b| b.is_ascii_digit()));
     let cause = match (reason, status) {
         ("sem-resposta", _) => tr_shared("cota_causa_sem_resposta", &[]),
-        ("http-429", _) => tr_shared("cota_causa_limite", &[]),
+        ("http-429" | "cliproxy-gerenciamento-http-429", _) => tr_shared("cota_causa_limite", &[]),
         ("http-401" | "http-403", _) => tr_shared("cota_causa_recusou", &[]),
         // 2xx chega quando o corpo não serve (vazio, JSON que não é objeto): é formato, não erro da fonte.
         (_, Some(status)) if !status.starts_with('2') => tr_shared("cota_causa_http", &[("status", status)]),
@@ -394,6 +445,7 @@ fn model_names<'a>(list: &'a [Credential], engines: &'a HashMap<String, Engine>)
 
 /// Em que grupo a credencial entra; `None` é a cópia que o app gravou no Kimi de um modelo já listado.
 fn group_of(c: &Credential, models: &HashSet<&str>) -> Option<Group> {
+    if c.kind == "cliproxy" { return None; }
     if c.id.strip_prefix("kimi:").is_some_and(|name| models.contains(name)) { return None; }
     // Conta Codex do app é assinatura mesmo com o login ilegível (prazo, CLI fora do ar): só a chave de API sai.
     let codex_subscription = c.kind == "codex" && (c.auth() == "none" || (c.codex_account.is_some() && c.auth() != "api_key"));
@@ -403,6 +455,11 @@ fn group_of(c: &Credential, models: &HashSet<&str>) -> Option<Group> {
 }
 
 fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: bool, now: f64) -> Row {
+    build_row_with(c, engines, has_kimi_copy, None, now)
+}
+
+/// `proxy_version`: a do CLIProxyAPI que o Hangar instalou, mostrada na linha do modelo que ele serve.
+fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: bool, proxy_version: Option<&str>, now: f64) -> Row {
     let engine = c.engine_name().and_then(|name| engines.get(name));
     let logged = c.logged_in();
     let muted = |text: String| (text, Tone::Muted);
@@ -410,6 +467,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     let mut login_note = None;
     let mut chips = Vec::new();
     let mut codex = None;
+    let mut agy = None;
     let mut edit = None;
     let mut sign_in = None;
     let email = c.login.as_ref().filter(|_| logged == Some(true) && matches!(c.kind.as_str(), "claude" | "codex"))
@@ -418,6 +476,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     let glyph = match c.kind.as_str() {
         "claude" => ("claude", "C".into()),
         "codex" => ("codex", "X".into()),
+        "antigravity" => ("antigravity", "A".into()),
         _ if c.base_url.as_deref().is_some_and(|u| u.contains("kimi")) || c.id.starts_with("kimi:") => ("kimi", initial),
         _ => ("", initial),
     };
@@ -458,10 +517,34 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
                 _ => None,
             });
         }
+        "antigravity" => {
+            // A saída confirmada aqui (estado "ok") vale até a lista do agy ser relida; depois, a resposta do agy.
+            let signed = c.login.as_ref().filter(|l| l.state == "ok").and_then(|l| l.logged_in)
+                .or_else(|| c.agy.as_ref().and_then(|a| a.signed_in))
+                .or_else(|| c.login.as_ref().and_then(|l| l.logged_in));
+            subtitle.push(muted("Antigravity".to_owned()));
+            match signed {
+                Some(true) => subtitle.push((tr("accounts_agy_signed_in"), Tone::Good)),
+                Some(false) => subtitle.push(muted(tr("accounts_agy_signed_out"))),
+                None => {}
+            }
+            if c.agy.as_ref().is_some_and(|a| !a.terms) { subtitle.push((tr("accounts_agy_terms_pending"), Tone::Warn)); }
+            let id = c.agy.as_ref().map_or_else(|| antigravity::route_id(c.path.as_deref()), |a| a.id.clone());
+            agy = Some((id, signed == Some(true)));
+        }
         _ => match engine {
             // Como no mock: só o que foge do padrão vira ficha; o endereço e o resto ficam no Editar.
             Some(engine) => {
                 subtitle.push(muted(tr("accounts_list_runs_in_claude_code")));
+                if let Some(version) = proxy_version.filter(|_| engine.cliproxy_accounts.is_some()) {
+                    subtitle.push(muted(tr("accounts_proxy_version").replace("{version}", version)));
+                }
+                if let Some(account) = &engine.cliproxy_bound_account {
+                    subtitle.push(muted(if account.email.is_empty() { account.label.clone() } else { account.email.clone() }));
+                    subtitle.extend(account.plan.clone().map(muted));
+                } else if engine.cliproxy_binding.is_some() || engine.cliproxy_accounts.is_some() {
+                    subtitle.push(muted(engine.cliproxy_binding_error.clone().unwrap_or_else(|| crate::i18n::tr_shared("cliproxy_no_bound_account", &[]))));
+                }
                 if has_kimi_copy { subtitle.push(muted(tr("accounts_kimi_copy"))); }
                 if !engine.model.is_empty() { chips.push(engine.model.clone()); }
                 chips.extend(engine.context_window.map(|n| format!("{}k", (n as f64 / 1000.).round())));
@@ -491,7 +574,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     }
     let subtitle = (line, marks);
 
-    let quota = match (c.read_windows(), c.quota.as_ref()) {
+    let quota = if c.kind == "antigravity" { QuotaView::Note(tr("accounts_agy_no_quota")) } else { match (c.read_windows(), c.quota.as_ref()) {
         (Some(windows), Some(q)) => {
             let mut bars: Vec<Bar> = windows.iter().map(|w| Bar {
                 label: w.label.clone(), reset: reset_text(w.reset_at, now), reset_days: reset_days_text(w.reset_at, now),
@@ -508,15 +591,19 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
             _ => "accounts_quota_sign_in",
         })),
         _ => QuotaView::Note(tr("accounts_quota_none")),
-    };
+    } };
     let codex_extra = c.kind == "codex" && c.codex_account.is_some() && !c.active;
-    let can_remove = codex_extra || engine.is_some() || (c.kind != "codex" && c.managed != Some(false));
+    // A conta padrão do agy (o `~/.gemini`) não se apaga pelo Hangar.
+    let agy_extra = agy.as_ref().is_some_and(|(id, _)| id != "default");
+    let can_remove = codex_extra || agy_extra || engine.is_some() || (!matches!(c.kind.as_str(), "codex" | "antigravity") && c.managed != Some(false));
     // Cada tipo tem a rota de sempre, com o nome no disco (como no web).
     let remove = can_remove.then(|| match (c.id.strip_prefix("kimi:"), c.kind.as_str()) {
         (Some(name), _) => (vec!["credenciais".into(), "kimi".into(), name.into()], 30, "accounts_remove_desc_key"),
         (_, "chave") => (vec!["engines".into(), c.engine_name().unwrap_or(&c.natural).into()], 30,
             if engine.is_some() { "accounts_remove_desc_model" } else { "accounts_remove_desc_key" }),
         (_, "codex") => (vec!["codex-contas".into(), c.codex_account.clone().unwrap_or_default()], 120, "accounts_remove_desc_codex"),
+        (_, "antigravity") => (vec!["antigravity-contas".into(), agy.as_ref().map(|(id, _)| id.clone()).unwrap_or_default()], 30,
+            "accounts_remove_desc_antigravity"),
         _ => (vec!["claude-configs".into(), c.claude_folder().unwrap_or(&c.natural).into()], 60, "accounts_remove_desc_claude"),
     });
     let plan = c.login.as_ref().filter(|_| logged == Some(true)).and_then(|l| l.plan.as_deref()).filter(|p| !p.is_empty())
@@ -528,11 +615,13 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     };
     Row {
         id: c.id.clone(), name: c.name.clone(), label: c.natural.clone(), natural: c.natural.clone(), alias: c.alias.clone().unwrap_or_default(),
-        active: c.active, filter: Filter::of(&c.kind), email, glyph, subtitle, login_note, chips, plan, login_days: if c.kind == "claude" { c.login_days(now) } else { None }, resets, quota, codex, reset: codex::reset_offer(c, now), edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
+        active: c.active, filter: Filter::of(&c.kind), email, glyph, subtitle, login_note, chips, plan, login_days: if c.kind == "claude" { c.login_days(now) } else { None }, resets, quota, codex, agy: agy.clone(), reset: codex::reset_offer(c, now), edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
         sign_out: match c.kind.as_str() {
             "claude" if c.managed != Some(false) && logged == Some(true) && !c.expired() =>
                 Some(vec!["claude-configs".into(), c.natural.clone(), "logout".into()]),
             "codex" if logged == Some(true) => c.codex_account.clone().map(|id| vec!["codex-contas".into(), id, "logout".into()]),
+            // Só a padrão: o `agy` com terminal ignora o `GEMINI_HOME`, e a saída de uma adicional tiraria o login da padrão.
+            "antigravity" => agy.as_ref().filter(|(id, signed)| *signed && id == "default").map(|(id, _)| vec!["antigravity-contas".into(), id.clone(), "logout".into()]),
             _ => None,
         },
         remove,
@@ -540,12 +629,12 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
 }
 
 /// Assinaturas, modelos do Claude Code e outros agentes, nessa ordem; a cópia do Kimi que o sync grava fica de fora.
-fn build_sections(list: &[Credential], engines: &HashMap<String, Engine>, now: f64) -> Vec<Section> {
+fn build_sections(list: &[Credential], engines: &HashMap<String, Engine>, proxy_version: Option<&str>, now: f64) -> Vec<Section> {
     let models = model_names(list, engines);
     [Group::Subscriptions, Group::Models, Group::Others].into_iter().map(|group| {
         let rows: Vec<Row> = list.iter().filter(|c| group_of(c, &models) == Some(group)).map(|c| {
             let copy = c.engine_name().is_some_and(|name| list.iter().any(|x| x.id == format!("kimi:{name}")));
-            build_row(c, engines, copy, now)
+            build_row_with(c, engines, copy, proxy_version, now)
         }).collect();
         Section { rows }
     }).collect()
@@ -594,18 +683,21 @@ fn parse_engines(value: &Value) -> Result<Engines, String> {
     let map = value.get("motores").cloned().map(serde_json::from_value::<HashMap<String, Engine>>).transpose()
         .map_err(|_| tr("invalid_response"))?.unwrap_or_default();
     let broken = value.get("arquivo_corrompido").and_then(Value::as_bool) == Some(true);
-    Ok(Engines { map, broken_file: broken.then(|| value.get("arquivo_caminho").and_then(Value::as_str).unwrap_or("engines.json").to_owned()) })
+    Ok(Engines { map, broken_file: broken.then(|| value.get("arquivo_caminho").and_then(Value::as_str).unwrap_or("engines.json").to_owned()),
+        provider_switch: value["claude_provider_switch"] == true })
 }
 
 fn proxy_account_targets(session: &SessionInfo, list: &[Credential], engine: &Engine) -> Vec<super::sidebar::AccountTarget> {
     if engine.cliproxy_error.is_some() { return Vec::new(); }
     engine.cliproxy_accounts.as_deref().unwrap_or_default().iter().filter_map(|a| {
-        let c = list.iter().find(|c| c.kind == "codex" && c.id == a.credential_id && c.id.starts_with("codex:")
-            && c.codex_account.as_deref() == Some(a.account.as_str()) && c.logged_in() == Some(true))?;
-        if session.engine_account.as_deref() == Some(a.account.as_str()) && session.conta.as_deref() == Some(c.id.as_str()) { return None; }
-        let pct = c.read_windows().and_then(|windows| windows.iter().filter(|w| matches!(w.label.as_str(), "5h" | "7d")
+        if engine.cliproxy_binding.is_some() && !engine.cliproxy_bound_account.as_ref().is_some_and(|bound| bound.account == a.account) { return None; }
+        if !["codex:", "cliproxy:"].iter().any(|prefix| a.credential_id.strip_prefix(*prefix).is_some_and(|id| !id.is_empty())) { return None; }
+        if session.engine_account.as_deref() == Some(a.account.as_str()) && session.engine_binding == engine.cliproxy_binding { return None; }
+        let credential = list.iter().find(|c| c.id == a.credential_id);
+        let quota = credential.and_then(|c| if c.kind == "codex" { c.cliproxy_quota.as_ref() } else { c.quota.as_ref() });
+        let pct = quota.filter(|q| q.state == "lida").and_then(|q| q.windows.iter().filter(|w| !w.por_modelo
             && w.reset_at.is_none_or(|at| at > now())).map(|w| w.pct).reduce(f64::max));
-        let label = c.alias.clone().filter(|a| !a.is_empty()).unwrap_or_else(||
+        let label = credential.and_then(|c| c.alias.clone()).filter(|a| !a.is_empty()).unwrap_or_else(||
             if a.label.is_empty() { a.email.clone() } else { a.label.clone() });
         Some(super::sidebar::AccountTarget { path: String::new(), label, pct, low: pct.is_some_and(|p| p >= 95.),
             full: pct.is_some_and(|p| p >= 99.), engine_account: Some(a.account.clone()), login: None })
@@ -680,7 +772,9 @@ impl Hangar {
     pub(super) fn accounts_opened(&mut self, cx: &mut Context<Self>) {
         self.accounts.outcome = None;
         if !self.accounts.list.loading { self.load_accounts(false, cx); }
+        if !self.accounts.agy.loading { self.load_agy_accounts(cx); }
         if !self.accounts.engines.loading { self.load_engines(cx); }
+        self.load_proxy_install(cx);
         if self.accounts.clock { return; }
         self.accounts.clock = true;
         // A troca de servidor zera as contas e liga outro relógio: o desta conexão para ali.
@@ -714,6 +808,7 @@ impl Hangar {
             let query: &[(&str, &str)] = if force { &[("forcar", "true")] } else { &[] };
             done(AccountsReply::List(seq, api.server_read(&["credenciais"], query, 30).await)).await
         });
+        if self.settings == Some(Page::Accounts) && !self.accounts.agy.loading { self.load_agy_accounts(cx); }
         cx.notify();
     }
 
@@ -732,17 +827,46 @@ impl Hangar {
             // `reset`, não `default`: o número do pedido segue subindo, e a resposta de uma ida anterior a esta máquina
             // não passa pela nova.
             self.accounts.session_list.reset();
+            self.accounts.session_notice = None;
             self.accounts.session_server = Some(server.clone());
         } else if self.accounts.session_list.loading { return; }
         let seq = self.accounts.session_list.start();
         let done = self.accounts_send_later();
-        self.runtime.spawn(async move { done(AccountsReply::SessionList(seq, server, api.server_read(&["credenciais"], &[], 30).await)).await });
+        self.runtime.spawn(async move { done(AccountsReply::SessionList(seq, server, api.server_read(&["credenciais"], &[("proxy_accounts", "true")], 30).await)).await });
         cx.notify();
     }
 
     /// A lista que o cartão de contas e a pílula do topo leem: a da máquina da sessão aberta.
     pub(super) fn session_accounts(&self) -> &Remote<Vec<Credential>> {
         if self.open_api.is_some() { &self.accounts.session_list } else { &self.accounts.list }
+    }
+
+    /// Por que a última releitura dessa lista falhou, com a anterior ainda na tela.
+    pub(super) fn session_accounts_notice(&self) -> Option<&str> {
+        if self.open_api.is_some() { self.accounts.session_notice.as_deref() } else { self.accounts.notice.as_deref() }
+    }
+
+    /// Relê as contas da máquina da sessão, salvo com uma leitura a caminho: a lista que já chegou fica à vista
+    /// até a nova, e a leitura que falhou não fica presa.
+    pub(super) fn ensure_session_accounts(&mut self, cx: &mut Context<Self>) {
+        if !self.session_accounts().loading { self.load_session_accounts(cx); }
+    }
+
+    /// Contas Codex conectadas da máquina da sessão, a de mais folga primeiro e sem as cheias: quem recebe a conversa na
+    /// troca de agente do seletor de modelos. `None` enquanto a lista não chegou; a leitura que falhou é lista vazia.
+    pub(super) fn handoff_accounts(&self) -> Option<Vec<controls::HandoffAccount>> {
+        let list = match self.session_accounts().value.as_ref()? { Ok(list) => list.as_slice(), Err(_) => &[][..] };
+        let mut out: Vec<(f64, controls::HandoffAccount)> = list.iter()
+            .filter(|c| c.kind == "codex" && c.id.starts_with("codex:") && c.logged_in() == Some(true))
+            .filter_map(|c| {
+                let account = c.codex_account.clone().filter(|a| !a.is_empty())?;
+                // A janela mais cheia da conta, como a lista do backend; sem leitura conta como livre.
+                let pct = c.quota.as_ref().map_or(0., |q| q.windows.iter().filter(|w| !w.por_modelo).map(|w| w.pct).fold(0., f64::max));
+                let label = c.alias.clone().filter(|a| !a.is_empty()).unwrap_or_else(|| c.name.clone());
+                (pct < 99.).then(|| (pct, controls::HandoffAccount { credential: c.id.clone(), account, label }))
+            }).collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Some(out.into_iter().map(|(_, account)| account).collect())
     }
 
     /// Contas Claude e se há uma Codex, na lista do anel: o que o anel oferece para levar a conversa. `None` enquanto a lista
@@ -752,7 +876,7 @@ impl Hangar {
         Some((list.iter().filter(|c| c.kind == "claude").count(), list.iter().any(|c| c.kind == "codex")))
     }
 
-    fn load_session_engines(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn load_session_engines(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.open_api.clone().or_else(|| self.api.clone()) else { return; };
         let server = self.open_server();
         if self.accounts.engine_server.as_deref() != Some(server.as_str()) {
@@ -763,6 +887,36 @@ impl Hangar {
         let done = self.accounts_send_later();
         self.runtime.spawn(async move { done(AccountsReply::SessionEngines(seq, server, api.server_read(&["engines"], &[], 15).await)).await; });
         cx.notify();
+    }
+
+    pub(super) fn provider_choices_failed(&self) -> bool {
+        self.accounts.engine_server.as_deref() == Some(self.open_server().as_str())
+            && !self.accounts.session_engines.loading
+            && self.accounts.session_engines.value.as_ref().is_some_and(|result| match result {
+                Ok(engines) => engines.provider_switch && engines.broken_file.is_some(),
+                Err(_) => true,
+            })
+    }
+
+    pub(super) fn provider_choices_loading(&self) -> bool {
+        self.accounts.engine_server.as_deref() == Some(self.open_server().as_str()) && self.accounts.session_engines.loading
+    }
+
+    pub(super) fn provider_choices(&self) -> Option<Vec<ProviderChoice>> {
+        if self.accounts.engine_server.as_deref() != Some(self.open_server().as_str()) { return None; }
+        let engines = self.accounts.session_engines.ok()?;
+        if !engines.provider_switch || engines.broken_file.is_some() { return None; }
+        let mut choices = engines.map.iter().filter_map(|(name, engine)| {
+            let binding = engine.cliproxy_binding.as_ref()?.clone();
+            let bound = engine.cliproxy_bound_account.as_ref().filter(|_| engine.cliproxy_error.is_none() && engine.cliproxy_binding_error.is_none());
+            let label = engine.label.as_ref().filter(|name| !name.is_empty()).unwrap_or(name).clone();
+            let detail = bound.map(|target| {
+                if target.label.is_empty() { target.email.clone() } else { target.label.clone() }
+            }).filter(|label| !label.is_empty()).unwrap_or_else(|| tr("claude_provider_unavailable"));
+            Some(ProviderChoice { engine: name.clone(), label, detail, account: bound.map(|a| a.account.clone()), binding })
+        }).collect::<Vec<_>>();
+        choices.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.engine.cmp(&b.engine)));
+        Some(choices)
     }
 
     fn session_engine(&self) -> Option<&Engine> {
@@ -788,6 +942,7 @@ impl Hangar {
             self.accounts.engines_notice = None;
             self.load_engines(cx);
         }
+        self.load_proxy_install(cx);
     }
 
     /// Remonta as linhas: na chegada de uma resposta, na troca de idioma e a cada meio minuto.
@@ -800,7 +955,9 @@ impl Hangar {
             _ => Vec::new(),
         }).collect() };
         let before = bars(&accounts.sections);
-        accounts.sections = accounts.list.ok().map(|list| build_sections(list, engines, now())).unwrap_or_default();
+        let proxy_version = accounts.proxy.install.as_ref().and_then(|i| i.managed_version());
+        let agy = accounts.agy.ok().map(|l| l.accounts.as_slice()).unwrap_or_default();
+        accounts.sections = accounts.list.ok().map(|list| build_sections(&antigravity::merge(list, agy), engines, proxy_version, now())).unwrap_or_default();
         let at = Instant::now();
         accounts.bar_moves.retain(|_, (_, start)| *start + motion::FADE_IN.total() > at);
         for (key, pct) in bars(&accounts.sections) {
@@ -873,8 +1030,19 @@ impl Hangar {
             }
             AccountsReply::SessionList(seq, server, result) => {
                 if accounts.session_server.as_deref() == Some(server.as_str()) {
-                    accounts.session_list.finish(seq, result.map_err(|e| Self::failure(&e))
-                        .and_then(|v| serde_json::from_value::<Vec<Credential>>(v).map_err(|_| tr("invalid_response"))));
+                    match result.map_err(|e| Self::failure(&e))
+                        .and_then(|v| serde_json::from_value::<Vec<Credential>>(v).map_err(|_| tr("invalid_response"))) {
+                        // Como a da máquina ativa: a lista anterior fica (as contas Codex seguem no seletor) e a falha aparece nele.
+                        Err(error) if accounts.session_list.ok().is_some() => if seq == accounts.session_list.seq {
+                            accounts.session_list.loading = false;
+                            accounts.session_notice = Some(error);
+                        },
+                        // Primeira leitura que falha, sem lista anterior: o motivo fica no aviso, que o seletor mostra.
+                        parsed => {
+                            let error = parsed.as_ref().err().cloned();
+                            if accounts.session_list.finish(seq, parsed) { accounts.session_notice = error; }
+                        }
+                    }
                 }
             }
             AccountsReply::SessionEngines(seq, server, result) => {
@@ -906,6 +1074,9 @@ impl Hangar {
             AccountsReply::Action(reply) => self.receive_action(reply, window, cx),
             AccountsReply::Keys(reply) => self.receive_keys(reply, window, cx),
             AccountsReply::Codex(reply) => self.receive_codex(reply, window, cx),
+            AccountsReply::Antigravity(reply) => self.receive_agy(reply, window, cx),
+            AccountsReply::Cliproxy(reply) => self.receive_cliproxy(reply, window, cx),
+            AccountsReply::ProxyUpdate(reply) => self.receive_proxy_update(reply, window, cx),
         }
         self.rebuild_accounts();
         cx.notify();
@@ -941,6 +1112,8 @@ impl Hangar {
         }
         if let Some(panel) = self.render_engine_form(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_codex(cx) { return page.child(top(None)).child(panel).into_any_element(); }
+        if let Some(panel) = self.render_agy(cx) { return page.child(top(None)).child(panel).into_any_element(); }
+        if let Some(panel) = self.render_cliproxy_wizard(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {
             (None, _) => return page.child(top(None)).child(settings_box().mt(px(20.))
                 .child(div().px_4().py(px(18.)).flex().items_center().gap(px(10.)).text_size(px(13.)).text_color(theme::muted())
@@ -963,6 +1136,7 @@ impl Hangar {
             let (color, icon) = if *error { (theme::danger(), IconName::CircleAlert) } else { (theme::success(), IconName::CircleCheck) };
             page = page.child(banner(color, icon, text.clone()).mt(px(16.)));
         }
+        if let Some(proxy) = self.proxy_card(cx) { page = page.child(proxy.mt(px(16.))); }
         // Arquivo dos modelos ilegível não é "nenhum modelo": pode estar escondendo modelos de verdade.
         let engines_problem = match &accounts.engines.value {
             Some(Ok(Engines { broken_file: Some(path), .. })) => Some(tr("accounts_engines_broken").replace("{path}", path)),
@@ -1198,7 +1372,8 @@ impl Hangar {
         let (text, marks) = &row.subtitle;
         let subtitle = div().min_w_0().text_size(px(13.)).text_color(theme::muted()).truncate()
             .child(StyledText::new(text.clone()).with_highlights(marks.iter().map(|(range, tone)| (range.clone(),
-                HighlightStyle { color: Some(if *tone == Tone::Danger { theme::danger() } else { theme::warning() }), ..Default::default() }))));
+                HighlightStyle { color: Some(match tone { Tone::Danger => theme::danger(), Tone::Good => theme::success(), _ => theme::warning() }),
+                    ..Default::default() }))));
         // Sem espaço, a última ficha encolhe com reticências em vez de sair cortada na borda.
         let chips = div().flex().min_w_0().overflow_hidden().gap(px(5.)).children(row.chips.iter().enumerate().map(|(n, chip)| div()
             .map(|el| if n + 1 == row.chips.len() { el.min_w_0().truncate() } else { el.flex_shrink_0() }).px(px(5.)).rounded(px(4.)).border_1()
@@ -1318,10 +1493,25 @@ impl Hangar {
                 .when(inherit, |el| el.tooltip(tr("accounts_inherit")).accessibility_label(tr("accounts_inherit")))
                 .on_click(cx.listener(move |this, _, window, cx| this.start_codex(Some(account.clone()), inherit, window, cx)))
         });
+        // Antigravity, como no mock: Entrar sem login e Sair com login só na padrão; Apagar na adicional sem login.
+        let agy = row.agy.clone().filter(|_| changing.is_none()).map(|(account, signed)| {
+            let (id, remove_id) = (row.id.clone(), row.id.clone());
+            div().flex().items_center().gap(px(6.))
+                .when(!signed && account == "default", |el| el.child(Button::new(SharedString::from(format!("accounts-agy-in-{}", row.id))).outline().small()
+                    .label(tr("accounts_agy_sign_in")).disabled(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.start_agy(Some(account.clone()), window, cx)))))
+                .when(row.sign_out.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-out-{}", row.id))).outline().small()
+                    .label(tr("accounts_agy_sign_out")).disabled(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(id.clone(), ChangeKind::SignOut, window, cx)))))
+                .when(!signed && row.remove.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-remove-{}", row.id)))
+                    .outline().small().label(tr("accounts_agy_remove")).disabled(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(remove_id.clone(), ChangeKind::Remove, window, cx)))))
+        });
         let actions = div().w(px(ACTIONS)).flex_shrink_0().flex().items_center().justify_end().gap(px(6.))
             .children(changing.map(|text| div().text_size(px(12.5)).text_color(theme::muted()).child(text)))
             .children(sign_in)
             .children(codex)
+            .children(agy)
             .children(edit)
             .children(cookie)
             .child(menu);
@@ -1375,10 +1565,15 @@ fn columns_width(labels: &[String]) -> f32 {
 
 /// Aviso numa faixa tingida pela cor do tipo (falha, feito).
 fn banner(color: Hsla, icon: IconName, text: String) -> Div {
+    banner_with(color, chrome::small_icon(icon, 15., color).into_any_element(), text.into_any_element())
+}
+
+/// A mesma faixa com ícone e corpo montados por quem chama (girando, texto com negrito, etapas).
+fn banner_with(color: Hsla, icon: AnyElement, body: AnyElement) -> Div {
     div().w_full().px(px(12.)).py(px(10.)).flex().items_center().gap(px(10.)).rounded(px(10.)).border_1()
         .border_color(color.alpha(0.3)).bg(color.alpha(0.08)).text_size(px(13.))
-        .child(chrome::small_icon(icon, 15., color))
-        .child(div().flex_1().min_w_0().whitespace_normal().child(text))
+        .child(icon)
+        .child(div().flex_1().min_w_0().whitespace_normal().child(body))
 }
 
 /// O que cada cor da barra quer dizer.
@@ -1460,6 +1655,19 @@ mod tests {
     fn credential(value: Value) -> Credential { serde_json::from_value(value).expect("synthetic credential") }
 
     #[test]
+    fn only_the_model_served_by_the_proxy_shows_its_version() {
+        let served: Engine = serde_json::from_value(json!({"base_url": "http://127.0.0.1:8317", "model": "gpt-6.1-sol", "cliproxy_accounts": []})).unwrap();
+        let other: Engine = serde_json::from_value(json!({"base_url": "https://api.example", "model": "m"})).unwrap();
+        let engines = HashMap::from([("gpt".to_owned(), served), ("outro".to_owned(), other)]);
+        let row = |id: &str, version| super::build_row_with(&credential(json!({"id": format!("chave:{id}"), "tipo": "chave", "nome": id})),
+            &engines, false, version, 0.);
+        let shown = tr("accounts_proxy_version").replace("{version}", "v8.0.79");
+        assert!(row("gpt", Some("v8.0.79")).subtitle.0.contains(&shown));
+        assert!(!row("outro", Some("v8.0.79")).subtitle.0.contains(&shown));
+        assert!(!row("gpt", None).subtitle.0.contains(&shown), "proxy de fora não mostra versão");
+    }
+
+    #[test]
     fn proxy_targets_use_exact_credential_ids_and_never_unlisted_accounts() {
         let session = crate::api::dto::SessionInfo { provider: "claude".into(), engine: Some("proxy".into()),
             engine_account: Some("default".into()), conta: Some("codex:/first".into()), ..Default::default() };
@@ -1479,6 +1687,19 @@ mod tests {
         assert_eq!(targets[0].label, "Second");
         let invalid = Engine { cliproxy_error: Some("invalid discovery".into()), ..engine };
         assert!(super::proxy_account_targets(&session, &list, &invalid).is_empty());
+    }
+
+    #[test]
+    fn proxy_only_accounts_are_targets_without_quota() {
+        let session = crate::api::dto::SessionInfo { provider: "claude".into(), engine: Some("proxy".into()),
+            engine_account: Some("cpa-000000000001".into()), conta: Some("cliproxy:cpa-000000000001".into()), ..Default::default() };
+        let engine: Engine = serde_json::from_value(json!({"cliproxy_accounts":[
+            {"account":"cpa-000000000001", "credential_id":"cliproxy:cpa-000000000001", "email":"a@example.com", "label":"a@example.com"},
+            {"account":"cpa-000000000002", "credential_id":"cliproxy:cpa-000000000002", "email":"b@example.com", "label":""}
+        ]})).unwrap();
+        let targets = super::proxy_account_targets(&session, &[], &engine);
+        assert_eq!(targets.len(), 1, "a conta em uso não é destino");
+        assert_eq!((targets[0].engine_account.as_deref(), targets[0].label.as_str(), targets[0].pct), (Some("cpa-000000000002"), "b@example.com", None));
     }
 
     #[test]
@@ -1513,7 +1734,7 @@ mod tests {
         let codex = credential(json!({"id": "codex:/c", "tipo": "codex", "nome": "c", "codex_account": "c", "auth_method": "oauth",
             "cota": {"estado": "lida", "janelas": [{"rotulo": "7d", "pct": 60}], "reset_credits": {"available_count": 2}}}));
         let list = [claude("a", 100., 7200., 14., false), claude("b", 100., 600., 20., true), claude("c", 40., 600., 14., false), codex];
-        let summary = build_summary(&build_sections(&list, &HashMap::new(), now));
+        let summary = build_summary(&build_sections(&list, &HashMap::new(), None, now));
         assert_eq!(summary.week_full.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["b", "a"]);
         assert_eq!(summary.login, Some((14, vec!["a".to_owned(), "c".to_owned()])));
         assert_eq!(summary.in_use, [("claude", "b".to_owned())]);
@@ -1602,6 +1823,36 @@ mod tests {
         assert_eq!(row.sign_in, Some(tr("accounts_sign_in")));
         assert!(matches!(row.quota, QuotaView::Note(ref t) if *t == tr("accounts_quota_live_session")));
         assert!(row.sign_out.is_none());
+    }
+
+    #[test]
+    fn antigravity_rows_take_sign_in_and_terms_from_the_agy_list_and_have_no_quota() {
+        let line = |path: &str, logged: Value| json!({"id": format!("antigravity:{path}"), "tipo": "antigravity", "nome": "n",
+            "auth_method": "oauth", "path": path, "login": {"loggedIn": logged}, "gerenciada": true});
+        let list = vec![credential(line("/h/.gemini", Value::Null)), credential(line("/h/.antigravity-trabalho", json!(true)))];
+        let agy: Vec<super::antigravity::AgyAccount> = serde_json::from_value(json!([
+            {"id": "default", "padrao": true, "credencial": "antigravity:/h/.gemini", "logado": true, "termos_aceitos": true},
+            {"id": "trabalho", "padrao": false, "credencial": "antigravity:/h/.antigravity-trabalho", "logado": false, "termos_aceitos": false}]))
+            .unwrap();
+        let merged = super::antigravity::merge(&list, &agy);
+        assert!(group_of(&merged[0], &Default::default()) == Some(Group::Subscriptions), "a assinatura Google entra no grupo Assinaturas");
+        let default = build_row(&merged[0], &HashMap::new(), false, 0.);
+        assert_eq!(default.agy, Some(("default".to_owned(), true)));
+        assert_eq!(default.sign_out, Some(vec!["antigravity-contas".to_owned(), "default".to_owned(), "logout".to_owned()]));
+        assert!(default.remove.is_none(), "a conta padrão do agy não se apaga pelo Hangar");
+        assert!(matches!(&default.quota, QuotaView::Note(text) if *text == tr("accounts_agy_no_quota")));
+        assert!(default.subtitle.1.iter().any(|(_, tone)| *tone == Tone::Good));
+        // A lista do agy vence o login guardado na lista de contas.
+        let extra = build_row(&merged[1], &HashMap::new(), false, 0.);
+        assert_eq!(extra.agy, Some(("trabalho".to_owned(), false)));
+        assert!(extra.sign_out.is_none());
+        assert_eq!(extra.remove.as_ref().map(|r| r.0.clone()), Some(vec!["antigravity-contas".to_owned(), "trabalho".to_owned()]));
+        assert!(extra.subtitle.0.contains(&tr("accounts_agy_terms_pending")));
+        // Sem a lista do agy, o id da rota sai da pasta.
+        let alone = build_row(&list[1], &HashMap::new(), false, 0.);
+        assert_eq!(alone.agy, Some(("trabalho".to_owned(), true)));
+        // Logada ou não, a adicional não sai pelo Hangar: o agy com terminal só conhece a pasta da padrão.
+        assert!(alone.sign_out.is_none());
     }
 
     #[test]

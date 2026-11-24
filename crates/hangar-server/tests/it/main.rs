@@ -14,6 +14,11 @@ mod connect_peers;
 mod connect_supervisor;
 mod connect_share;
 mod connect_preview;
+mod port_tunnel;
+// Usa o `list_support`, que só existe em Unix; parar servidor só existe no Linux.
+#[cfg(unix)]
+mod port_stop;
+mod connect_account_devices;
 mod cli_probe;
 mod provider_discovery;
 mod json_body;
@@ -60,12 +65,15 @@ mod install_root;
 mod web_ui;
 mod update_routes;
 mod update_install;
+mod update_steps_without_python;
+mod codex_hook_wrappers;
 mod dictation_routes;
 mod dictation_public;
 mod dictation_public_cases;
 mod dictation_timing;
 mod session_open_cases;
 mod baton;
+mod browser_host;
 mod claude_models;
 mod dictation_harness;
 mod dictation_process;
@@ -341,6 +349,7 @@ mod codex_setup;
 
 mod harness_setup;
 mod harness_startup;
+mod agent_hooks_install;
 mod dotenv_config;
 mod value_coercion;
 mod codec_values;
@@ -381,6 +390,14 @@ mod codex_service;
 
 
 mod codex_batch;
+
+// O lançador do Codex com terminal e o `hangar-codex` do shell, com o `codex` e o tmux falsos.
+#[cfg(unix)]
+mod codex_tui;
+#[cfg(windows)]
+mod codex_tui_windows;
+#[cfg(unix)]
+mod hangar_codex_shell;
 
 
 mod codex_skills;

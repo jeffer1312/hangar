@@ -213,6 +213,22 @@ pub fn for_row(
         context.env.insert("ANTHROPIC_API_KEY".into(), key.into());
         context.env.insert("ANTHROPIC_BASE_URL".into(), url.into());
         let mut data = data.clone();
+        if let Some(account) = row.engine_account.as_deref()
+            && row.conta.as_deref().is_some_and(|c| c.starts_with("cliproxy:"))
+        {
+            // Conta que só existe no proxy: credencial e prefixo vêm do próprio proxy, sem raiz Codex.
+            let entry = crate::engines::proxy::resolve(&state.accounts, account, None).map_err(|error| {
+                tracing::warn!(session = name, account, error = %error,"conta do proxy da organização do ditado não resolvida");
+                "dictation_organization_failed"
+            })?;
+            let prefix = entry["prefix"].as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
+                tracing::warn!(session = name, account, "conta do proxy sem prefixo para a organização do ditado");
+                "dictation_organization_failed"
+            })?;
+            data["dictation_prefix"] = json!(prefix);
+            context.engine = Some(data);
+            return Ok(context);
+        }
         if row.engine_account.is_some() {
             let home = row
                 .conta
@@ -225,7 +241,10 @@ pub fn for_row(
                 .as_str()
                 .ok_or("dictation_organization_failed")?;
             let mut matches = Vec::new();
-            for file in std::fs::read_dir(state.accounts.env.home.join(".cli-proxy-api"))
+            let user_home = &state.accounts.env.home;
+            let proxy_dir = hangar_cliproxy_setup::config::accounts_dir(user_home,
+                hangar_cliproxy_setup::config::read(user_home).ok().flatten().as_ref());
+            for file in std::fs::read_dir(proxy_dir)
                 .map_err(|_| "dictation_organization_failed")?
             {
                 let file = file.map_err(|_| "dictation_organization_failed")?;

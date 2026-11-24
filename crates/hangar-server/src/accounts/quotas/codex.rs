@@ -51,6 +51,16 @@ pub fn parse(body: &Value) -> Value {
     result
 }
 
+pub(super) fn http_limits(usage: &Value) -> Value {
+    let mut limits = json!({"rateLimits":{}});
+    for (source, target) in [("primary_window", "primary"), ("secondary_window", "secondary")] {
+        let row = &usage["rate_limit"][source];
+        limits["rateLimits"][target] = json!({"usedPercent":row["used_percent"],
+            "resetsAt":row["reset_at"],"windowDurationMins":row["limit_window_seconds"].as_f64().map(|n|(n/60.0).floor())});
+    }
+    limits
+}
+
 async fn http(client: &reqwest::Client, account: &Account, now: f64) -> Option<Value> {
     let raw: Value =
         serde_json::from_slice(&std::fs::read(account.home.join("auth.json")).ok()?).ok()?;
@@ -80,15 +90,7 @@ async fn http(client: &reqwest::Client, account: &Account, now: f64) -> Option<V
         return None;
     }
     let usage: Value = serde_json::from_slice(&response.bytes().await.ok()?).ok()?;
-    let mut limits = json!({"rateLimits":{}});
-    for (source, target) in [
-        ("primary_window", "primary"),
-        ("secondary_window", "secondary"),
-    ] {
-        let row = &usage["rate_limit"][source];
-        limits["rateLimits"][target] = json!({"usedPercent":row["used_percent"],
-            "resetsAt":row["reset_at"],"windowDurationMins":row["limit_window_seconds"].as_f64().map(|n|(n/60.0).floor())});
-    }
+    let mut limits = http_limits(&usage);
     if parse(&limits)["estado"] != "lida" {
         return None;
     }
@@ -119,6 +121,68 @@ async fn http(client: &reqwest::Client, account: &Account, now: f64) -> Option<V
         }
     }
     Some(parse(&limits))
+}
+
+pub(super) async fn read_via_proxy(env: &crate::accounts::environment::AccountEnvironment, binding: &str) -> Value {
+    match proxy_usage(env, binding).await {
+        Ok(usage) => parse(&http_limits(&usage)),
+        Err(reason) => reading("indisponivel", vec![], Some(&reason)),
+    }
+}
+
+async fn proxy_usage(env: &crate::accounts::environment::AccountEnvironment, binding: &str) -> Result<Value, String> {
+    use crate::engines::proxy;
+    use hangar_cliproxy_setup::login;
+    let local = proxy::local(env).map_err(|_| "cliproxy-config-invalido")?.ok_or("cliproxy-ausente")?;
+    let base = reqwest::Url::parse(&local.base_url).map_err(|_| "cliproxy-config-invalido")?;
+    if !matches!(base.host_str(), Some("127.0.0.1" | "[::1]" | "localhost")) || !base.username().is_empty() || base.password().is_some() {
+        return Err("cliproxy-gerenciamento-endereco".into());
+    }
+    let key = proxy::management_key(env).ok_or("cliproxy-sem-gerenciamento")?;
+    if login::rejected(&key) { return Err("cliproxy-gerenciamento-recusado".into()); }
+    let (name, account_id) = proxy::quota_identity(env, binding).map_err(|_| "cliproxy-credencial-indisponivel")?;
+    let port = base.port_or_known_default().ok_or("cliproxy-config-invalido")?;
+    let loopback = [std::net::SocketAddr::from(([127, 0, 0, 1], port)), std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port))];
+    let client = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs("localhost", &loopback).timeout(Duration::from_secs(5)).build().map_err(|_| "sem-resposta")?;
+    let mut credentials = base;
+    credentials.set_path("/v8/management/credentials");
+    credentials.query_pairs_mut().append_pair("name", &name);
+    let response = client.get(credentials).bearer_auth(&key).send().await.map_err(|_| "sem-resposta")?;
+    let url = format!("{}/v8/management", local.base_url);
+    let files = management_response(response, &key).await?;
+    let index = proxy_auth_index(&files, &name, &account_id)?;
+    let response = client.post(format!("{url}/requests/api-call")).bearer_auth(&key).json(&json!({
+        "auth_index":index,"method":"GET","url":"https://chatgpt.com/backend-api/wham/usage",
+        "header":{"Authorization":"Bearer $TOKEN$","ChatGPT-Account-Id":account_id,"User-Agent":"codex-cli"}
+    })).send().await.map_err(|_| "sem-resposta")?;
+    proxy_usage_body(&management_response(response, &key).await?)
+}
+
+fn proxy_auth_index<'a>(files: &'a Value, name: &str, account_id: &str) -> Result<&'a str, String> {
+    let mut matches = files["files"].as_array().into_iter().flatten().filter(|row|
+        row["name"] == name && row["type"] == "codex" && row["disabled"] == false
+            && row["id_token"]["chatgpt_account_id"] == account_id);
+    let index = matches.next().and_then(|r| r["auth_index"].as_str()).filter(|i| !i.is_empty()).ok_or("cliproxy-credencial-indisponivel")?;
+    if matches.next().is_some() { return Err("cliproxy-credencial-ambigua".into()); }
+    Ok(index)
+}
+
+fn proxy_usage_body(payload: &Value) -> Result<Value, String> {
+    match payload["status_code"].as_u64() {
+        Some(200) => serde_json::from_str(payload["body"].as_str().ok_or("formato-desconhecido")?).map_err(|_| "formato-desconhecido".into()),
+        Some(status) => Err(format!("http-{status}")),
+        None => Err("formato-desconhecido".into()),
+    }
+}
+
+async fn management_response(response: reqwest::Response, key: &str) -> Result<Value, String> {
+    match response.status().as_u16() {
+        200 => { hangar_cliproxy_setup::login::note_accepted(key); response.json().await.map_err(|_| "formato-desconhecido".into()) }
+        401 => { hangar_cliproxy_setup::login::note_rejected(key); Err("cliproxy-gerenciamento-recusado".into()) }
+        429 => Err("cliproxy-gerenciamento-http-429".into()),
+        status => Err(format!("cliproxy-gerenciamento-http-{status}")),
+    }
 }
 
 pub async fn read(
@@ -170,6 +234,21 @@ pub async fn read(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quota_requires_the_expected_account_and_reads_the_upstream_status() {
+        let row = |name: &str, id: &str, index: &str| json!({"name":name,"type":"codex","disabled":false,"auth_index":index,
+            "id_token":{"chatgpt_account_id":id}});
+        let files = json!({"files":[row("pro.json", "acct-plus", "wrong"), row("pro.json", "acct-pro", "pro")]});
+        assert_eq!(proxy_auth_index(&files, "pro.json", "acct-pro").unwrap(), "pro");
+        assert!(proxy_auth_index(&files, "plus.json", "acct-plus").is_err());
+        let ambiguous = json!({"files":[row("pro.json", "acct-pro", "a"), row("pro.json", "acct-pro", "b")]});
+        assert!(proxy_auth_index(&ambiguous, "pro.json", "acct-pro").is_err());
+        assert_eq!(proxy_usage_body(&json!({"status_code":429,"body":"{}"})).unwrap_err(), "http-429");
+        let upstream = json!({"rate_limit":{"secondary_window":{"used_percent":74,"reset_at":2026,"limit_window_seconds":604800}}});
+        let usage = proxy_usage_body(&json!({"status_code":200,"body":upstream.to_string()})).unwrap();
+        assert_eq!(parse(&http_limits(&usage))["janelas"], json!([{"rotulo":"7d","pct":74.0,"reset_ts":2026.0,"por_modelo":false}]));
+    }
+
     #[test]
     fn rate_limits_and_reset_credits_match_public_shape() {
         let result = parse(

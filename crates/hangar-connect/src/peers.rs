@@ -1,7 +1,8 @@
 //! Máquinas da mesma conta: descoberta pelo serviço e ligação com credencial por direção.
 //!
-//! A pede um aparelho em B, o dono aprova o cartão em B, e A entrega a B um aparelho que ela mesma
-//! emitiu. Aqui nada conhece o `peers.json`: quem liga passa `save`, e o `hangar-server` grava.
+//! A pede um aparelho em B, que nasce aprovado quando a conta liberou A (bilhete pré-aprovado) ou espera
+//! o dono aprovar o cartão em B (serviço antigo), e A entrega a B um aparelho que ela mesma emitiu. Aqui
+//! nada conhece o `peers.json`: quem liga passa `save`, e o `hangar-server` grava.
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -204,8 +205,9 @@ impl Links {
 #[derive(Deserialize)]
 struct Issued { url: String, ticket: String, signature: String }
 
+/// `status` ausente: máquina antiga, que sempre espera o cartão.
 #[derive(Deserialize)]
-struct Redeemed { device_id: String }
+struct Redeemed { device_id: String, #[serde(default)] status: String }
 
 #[derive(Deserialize)]
 struct Polled { status: String, token: Option<String> }
@@ -274,7 +276,9 @@ impl PeerLinker {
         let ticket = json!({"ticket": issued.ticket, "signature": issued.signature, "secret": secret});
         let redeemed: Redeemed = fetch(post(&http, format!("{reach}/api/connect/redeem"), &ticket)).await
             .map_err(|failure| failure.error(MACHINE))?;
-        self.links.waiting(id);
+        if redeemed.status != "approved" {
+            self.links.waiting(id);
+        }
         let token = approved_token(&http, &reach, &redeemed.device_id, &secret).await?;
         let (entry, back) = match self.keep(&http, &reach, id, machine, &token).await {
             Ok(kept) => kept,

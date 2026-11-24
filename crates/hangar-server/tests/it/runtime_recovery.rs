@@ -92,7 +92,7 @@ mod adopted_socket {
         let server = fake_app_server(true).await;
         let mut child = app_server_process(&server.endpoint);
         let cell = AdoptionCell::new(&server.endpoint,child.id());
-        let adoption = Adoption { endpoint:server.endpoint.clone(),app_pid:child.id(),cell:cell.clone() };
+        let adoption = Adoption { endpoint:server.endpoint.clone(),token:None,app_pid:child.id(),cell:cell.clone() };
         // Endereço trocado no registro durante a espera.
         let moved = Adoption { endpoint:"ws://127.0.0.1:1".into(),..adoption.clone() };
         assert!(matches!(reconnect(&moved).await,Attempt::Gone(error) if error.code == "codex_adoption_changed"));

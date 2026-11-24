@@ -31,7 +31,6 @@ impl TransferError {
             "session_transfer_context_budget_exceeded" => "O histórico completo excede a capacidade disponível do modelo escolhido. Escolha outro modelo.",
             "session_transfer_model_capacity_unknown" => "Não foi possível confirmar a capacidade de contexto do modelo escolhido.",
             "session_transfer_model_media_unsupported" => "O modelo escolhido não aceita as imagens presentes na conversa.",
-            "session_transfer_codex_version_unsupported" => "A versão instalada do Codex não oferece suporte a esta transferência.",
             "session_transfer_login_required" => "Entre na conta Codex escolhida antes de transferir a conversa.",
             "session_transfer_unknown_account" => "A conta Codex escolhida não está cadastrada neste servidor.",
             "session_transfer_account_full" => "A conta Codex escolhida está sem cota disponível.",

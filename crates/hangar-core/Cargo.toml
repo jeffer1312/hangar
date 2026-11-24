@@ -14,11 +14,15 @@ flate2 = { workspace = true }
 form_urlencoded = { workspace = true }
 futures-util = { workspace = true }
 hangar-auth.workspace = true
+# Crate folha (std, serde, chrono, sysinfo): o caminho dos logs e o `without_verbatim` moram nele
+# porque o app nativo os usa sem o core.
+hangar-local-server.workspace = true
 http-body-util = { workspace = true }
 hyper-util = { workspace = true }
 md-5.workspace = true
 num-bigint.workspace = true
 percent-encoding = { workspace = true }
+qrcode = { version = "=0.14.1", default-features = false }
 regex.workspace = true
 ring.workspace = true
 reqwest = { workspace = true, features = ["rustls", "multipart"] }

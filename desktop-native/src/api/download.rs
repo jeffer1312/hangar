@@ -1,0 +1,699 @@
+//! Transferência longa de arquivo: escrita num `.part` próprio ao lado do destino com troca de nome no fim, prazo por
+//! silêncio em vez de prazo total e aviso de progresso com teto de frequência.
+use std::{collections::HashMap, future::Future, hash::Hash, io::Write, path::{Path, PathBuf},
+    sync::{Arc, OnceLock, atomic::{AtomicU8, AtomicU64, Ordering}}, time::{Duration, Instant}};
+use futures::{Stream, StreamExt};
+use super::Failure;
+
+/// Sem nenhum byte por este tempo, a transferência é dada por parada. Arquivo grande numa rede lenta continua enquanto
+/// chegar alguma coisa; o prazo total cortava esse caso no meio.
+pub const IDLE: Duration = Duration::from_secs(30);
+/// Teto do aviso de progresso à tela: 10 por segundo.
+pub const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+/// Escrita no disco em blocos deste tamanho, fora das threads do runtime.
+const FLUSH_AT: usize = 1 << 20;
+
+/// Teto do nome de arquivo nos sistemas de arquivo comuns, em bytes. No Windows o teto é de unidades UTF-16, que nunca
+/// passam do número de bytes UTF-8.
+const NAME_MAX: usize = 255;
+
+/// `<começo do destino>.hangar-<tag>.part`. O `tag` diferente por download impede que dois para o mesmo destino gravem
+/// no mesmo arquivo, e que um novo esbarre no `.part` do cancelado que o Windows ainda não terminou de apagar. O começo
+/// do nome é cortado para o `.part` caber no teto mesmo quando o destino já está perto dele.
+pub fn part_path(target: &Path, tag: &str) -> PathBuf {
+    let suffix = format!(".hangar-{tag}.part");
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut keep = NAME_MAX.saturating_sub(suffix.len()).min(name.len());
+    while !name.is_char_boundary(keep) { keep -= 1; }
+    target.with_file_name(format!("{}{suffix}", &name[..keep]))
+}
+
+/// Processo e contador: nunca se repete neste processo, e outro processo tem outro pid.
+fn next_tag() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Os downloads em curso por cartão, cada um com a sua geração. Aviso de progresso ou resultado de uma geração que não é
+/// a atual do cartão (cancelada, ou trocada por um pedido novo) é de tarefa velha e não mexe no cartão.
+pub struct Running<K, T> { next: u64, by_card: HashMap<K, (u64, T)> }
+
+impl<K, T> Default for Running<K, T> {
+    fn default() -> Self { Self { next: 0, by_card: HashMap::new() } }
+}
+
+impl<K: Eq + Hash, T> Running<K, T> {
+    /// Uma geração nova para a tarefa que vai nascer; ela leva o número nas mensagens.
+    pub fn next_generation(&mut self) -> u64 { self.next += 1; self.next }
+    /// A tarefa passa a ser a do cartão; devolve a anterior, para ser cancelada.
+    pub fn insert(&mut self, card: K, generation: u64, task: T) -> Option<T> {
+        self.by_card.insert(card, (generation, task)).map(|(_, task)| task)
+    }
+    pub fn is_current(&self, card: &K, generation: u64) -> bool {
+        self.by_card.get(card).is_some_and(|(current, _)| *current == generation)
+    }
+    /// O resultado chegou: sai do mapa só se for da geração atual. `false`: resultado de tarefa velha.
+    pub fn finish(&mut self, card: &K, generation: u64) -> bool {
+        if !self.is_current(card, generation) { return false; }
+        self.by_card.remove(card);
+        true
+    }
+    /// Cancelar: a tarefa atual do cartão, para o `abort`.
+    pub fn cancel(&mut self, card: &K) -> Option<T> { self.by_card.remove(card).map(|(_, task)| task) }
+}
+
+/// Porcentagem inteira, de 0 a 100; sem tamanho conhecido (ou zero) não há porcentagem.
+pub fn percent(done: u64, total: Option<u64>) -> Option<u8> {
+    let total = total.filter(|&total| total > 0)?;
+    Some((u128::from(done.min(total)) * 100 / u128::from(total)) as u8)
+}
+
+/// Fração para o anel, de 0 a 1.
+pub fn share(done: u64, total: Option<u64>) -> Option<f32> {
+    let total = total.filter(|&total| total > 0)?;
+    Some((done.min(total) as f64 / total as f64) as f32)
+}
+
+/// Tamanho com uma casa e a vírgula do português (`24,6 MB`); unidades de 1024, como o resto do app.
+pub fn size_label(bytes: u64, english: bool) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1024 { return format!("{bytes} B"); }
+    let (mut value, mut unit) = (bytes as f64 / 1024., 0);
+    while value >= 1024. && unit + 1 < UNITS.len() { value /= 1024.; unit += 1; }
+    let text = format!("{value:.1}");
+    format!("{} {}", if english { text } else { text.replace('.', ",") }, UNITS[unit])
+}
+
+/// Deixa passar um aviso a cada `every`; o primeiro passa sempre.
+pub struct Throttle { every: Duration, last: Option<Instant> }
+
+impl Throttle {
+    pub fn new(every: Duration) -> Self { Self { every, last: None } }
+    pub fn ready(&mut self, now: Instant) -> bool {
+        if self.last.is_some_and(|last| now.saturating_duration_since(last) < self.every) { return false; }
+        self.last = Some(now);
+        true
+    }
+}
+
+/// Quem avisa o progresso, já com o teto de frequência.
+pub struct Reporter<F> { report: F, throttle: Throttle }
+
+impl<F: FnMut(u64, Option<u64>)> Reporter<F> {
+    pub fn new(report: F) -> Self { Self { report, throttle: Throttle::new(PROGRESS_EVERY) } }
+    /// Um aviso no meio da transferência: sempre pelo teto de frequência. O fim não é deduzido de `done >= total`:
+    /// arquivo local que cresce durante a cópia passaria do total e soltaria um aviso por bloco.
+    pub fn step(&mut self, done: u64, total: Option<u64>) {
+        if self.throttle.ready(Instant::now()) { (self.report)(done, total); }
+    }
+    /// O último aviso, dito por quem sabe que acabou: passa sempre, e a tela não fica parada em 97%.
+    pub fn last(&mut self, done: u64, total: Option<u64>) { (self.report)(done, total); }
+}
+
+const UPLOAD_CHUNK: usize = 64 * 1024;
+
+/// O corpo do envio em pedaços, contando o que o cliente já tirou para mandar.
+pub fn counted_chunks(bytes: Vec<u8>, mut report: impl FnMut(u64, u64) + Send + 'static)
+    -> impl Stream<Item = Result<Vec<u8>, std::io::Error>> + Send + 'static {
+    let total = bytes.len() as u64;
+    let mut reporter = Reporter::new(move |done, _| report(done, total));
+    let mut sent = 0u64;
+    futures::stream::iter((0..bytes.len()).step_by(UPLOAD_CHUNK)).map(move |start| {
+        let chunk = bytes[start..(start + UPLOAD_CHUNK).min(bytes.len())].to_vec();
+        sent += chunk.len() as u64;
+        if start + UPLOAD_CHUNK >= bytes.len() { reporter.last(sent, Some(total)); } else { reporter.step(sent, Some(total)); }
+        Ok(chunk)
+    })
+}
+
+/// Um passo da transferência com o prazo de silêncio: estourou, é `download_stalled`.
+pub async fn within<T>(idle: Duration, step: impl Future<Output = T>) -> Result<T, Failure> {
+    tokio::time::timeout(idle, step).await.map_err(|_| Failure::local("download_stalled"))
+}
+
+/// O próximo pedaço da resposta, com o prazo de silêncio. `None`: acabou.
+pub async fn next_chunk<S, B, E>(chunks: &mut S, idle: Duration) -> Result<Option<B>, Failure>
+where S: Stream<Item = Result<B, E>> + Unpin {
+    match within(idle, chunks.next()).await? {
+        None => Ok(None),
+        Some(Ok(chunk)) => Ok(Some(chunk)),
+        Some(Err(_)) => Err(Failure::transport(false)),
+    }
+}
+
+/// Por que o arquivo não chegou ao disco. A causa do disco segue até o cartão e o log: `save_failed` sozinho não
+/// dizia se era permissão, disco cheio ou nome recusado.
+#[derive(Debug)]
+pub enum DownloadError {
+    /// A resposta: servidor, rede ou prazo de silêncio.
+    Fetch(Failure),
+    /// Criar, gravar, sincronizar ou trocar o nome do `.part`.
+    Disk(std::io::Error),
+    /// A tarefa de bloqueio que gravava não terminou (pânico, runtime fechando).
+    Task(tokio::task::JoinError),
+}
+
+impl From<Failure> for DownloadError {
+    fn from(failure: Failure) -> Self { Self::Fetch(failure) }
+}
+
+/// Bloqueante fora das threads do runtime, com a causa do disco ou da tarefa.
+async fn on_disk<T: Send + 'static>(job: impl FnOnce() -> std::io::Result<T> + Send + 'static) -> Result<T, DownloadError> {
+    tokio::task::spawn_blocking(job).await.map_err(DownloadError::Task)?.map_err(DownloadError::Disk)
+}
+
+/// O `.part` aberto: solto sem `kept`, fecha e apaga. Nasce dentro da tarefa de bloqueio que o cria, para que um
+/// cancelamento enquanto ela volta (o resultado descartado com ela) não deixe o arquivo sem dono.
+struct Part {
+    // Antes do caminho: no `drop` o arquivo fecha primeiro, e só então o `.part` sai.
+    file: Option<std::fs::File>,
+    path: PathBuf,
+    kept: bool,
+}
+
+impl Drop for Part {
+    fn drop(&mut self) {
+        if self.kept { return; }
+        drop(self.file.take());
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Arquivo sendo gravado num `.part` próprio ao lado do destino. Só `finish` o põe no nome final; solto antes disso (falha, cancelamento
+/// pelo `abort` da tarefa), apaga o `.part`, para não sobrar arquivo pela metade com cara de completo.
+pub struct PartWriter {
+    part: Part,
+    buffer: Vec<u8>,
+    target: PathBuf,
+    written: u64,
+}
+
+impl PartWriter {
+    pub async fn create(target: PathBuf) -> Result<Self, DownloadError> {
+        Self::create_named(target, std::iter::repeat_with(next_tag)).await
+    }
+
+    /// `create` com os nomes de `.part` a tentar, em ordem: o teste da colisão escolhe quais.
+    async fn create_named(target: PathBuf, tags: impl Iterator<Item = String> + Send + 'static) -> Result<Self, DownloadError> {
+        let at = target.clone();
+        // `create_new`: nunca abre um `.part` que já existe. Sobra de um processo antigo com o mesmo pid (ou, no
+        // Windows, um ainda em exclusão) só faz tentar o próximo nome.
+        let part = on_disk(move || {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            // Nunca mais aberto que o destino que ele vai substituir; destino novo fica no padrão de `fs::write`
+            // (0o666 menos o umask).
+            #[cfg(unix)] {
+                use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+                options.mode(std::fs::metadata(&at).map_or(0o666, |meta| meta.permissions().mode() & 0o777));
+            }
+            let mut last = std::io::Error::other("no attempt");
+            for tag in tags.take(8) {
+                let path = part_path(&at, &tag);
+                match options.open(&path) {
+                    Ok(file) => return Ok(Part { file: Some(file), path, kept: false }),
+                    Err(error) if matches!(error.kind(), std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied) => last = error,
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(last)
+        }).await?;
+        Ok(Self { part, buffer: Vec::with_capacity(FLUSH_AT), target, written: 0 })
+    }
+
+    /// O `.part` em que este download grava.
+    pub fn part(&self) -> &Path { &self.part.path }
+
+    pub fn written(&self) -> u64 { self.written }
+
+    pub async fn write(&mut self, chunk: &[u8]) -> Result<(), DownloadError> {
+        self.buffer.extend_from_slice(chunk);
+        self.written += chunk.len() as u64;
+        if self.buffer.len() >= FLUSH_AT { self.flush().await?; }
+        Ok(())
+    }
+
+    async fn flush(&mut self) -> Result<(), DownloadError> {
+        if self.buffer.is_empty() { return Ok(()); }
+        // Sem arquivo: a tarefa de uma escrita anterior não terminou e levou o arquivo junto.
+        let mut file = self.part.file.take().ok_or_else(|| DownloadError::Disk(std::io::Error::other("part file lost by an earlier write")))?;
+        let mut buffer = std::mem::take(&mut self.buffer);
+        let (file, buffer, result) = tokio::task::spawn_blocking(move || {
+            let result = file.write_all(&buffer);
+            buffer.clear();
+            (file, buffer, result)
+        }).await.map_err(DownloadError::Task)?;
+        self.part.file = Some(file);
+        self.buffer = buffer;
+        result.map_err(DownloadError::Disk)
+    }
+
+    /// Grava o resto, sincroniza e troca o nome: o destino só aparece inteiro. Cancelado no meio da troca de nome, o
+    /// `.part` sai, e o destino também quando a troca já tinha acontecido, ele não existia antes e ainda é este arquivo.
+    pub async fn finish(mut self) -> Result<PathBuf, DownloadError> {
+        self.flush().await?;
+        let file = self.part.file.take();
+        let (part, target) = (self.part.path.clone(), self.target.clone());
+        // Daqui em diante quem apaga o `.part` é a tarefa de bloqueio: o `drop` no meio da troca o apagaria enquanto
+        // ela o renomeia.
+        self.part.kept = true;
+        let handoff = Arc::new(Handoff { state: AtomicU8::new(PENDING), published: OnceLock::new() });
+        let mut guard = FinishGuard { handoff: handoff.clone(), target: target.clone(), armed: true };
+        let result = on_disk(move || {
+            let synced = file.map_or(Ok(()), |file| file.sync_all());
+            if handoff.state.compare_exchange(PENDING, RENAMING, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                let _ = std::fs::remove_file(&part);
+                return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+            }
+            let fresh = std::fs::symlink_metadata(&target).is_err();
+            let renamed = synced.and_then(|()| identity(&part)).and_then(|ours| std::fs::rename(&part, &target).map(|()| ours));
+            let ours = match renamed {
+                Ok(ours) => ours,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&part);
+                    handoff.state.store(OVER, Ordering::SeqCst);
+                    return Err(error);
+                }
+            };
+            if fresh { let _ = handoff.published.set(ours); }
+            if handoff.state.compare_exchange(RENAMING, RENAMED, Ordering::SeqCst, Ordering::SeqCst).is_ok() { return Ok(()); }
+            // Cancelado durante a troca de nome: quem limpa é esta tarefa, já fora das threads do runtime.
+            if fresh { remove_if_ours(&target, ours); }
+            Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+        }).await;
+        guard.armed = false;
+        result.map(|()| self.target.clone())
+    }
+}
+
+/// A troca de nome, dividida entre `finish` e a tarefa de bloqueio que a faz, sem trava: o `drop` do cancelamento roda
+/// numa thread do runtime e não pode esperar pelo disco.
+struct Handoff {
+    state: AtomicU8,
+    /// O arquivo publicado num destino que não existia, para o cancelamento tardio apagar só ele.
+    published: OnceLock<Identity>,
+}
+
+const PENDING: u8 = 0;
+const CANCELLED: u8 = 1;
+const RENAMING: u8 = 2;
+const RENAMING_CANCELLED: u8 = 3;
+const RENAMED: u8 = 4;
+const OVER: u8 = 5;
+
+/// Qual arquivo um caminho aponta: a troca de nome o mantém; outro download que publique no mesmo nome o muda.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Identity { device: u64, index: u64 }
+
+#[cfg(unix)]
+fn identity(path: &Path) -> std::io::Result<Identity> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path)?;
+    Ok(Identity { device: meta.dev(), index: meta.ino() })
+}
+
+// O `MetadataExt::file_index` do Windows ainda não é estável, e a data de criação não serve: o NTFS a passa ao arquivo
+// que ocupa um nome recém-liberado.
+#[cfg(windows)]
+fn identity(path: &Path) -> std::io::Result<Identity> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle}};
+    let file = std::fs::File::open(path)?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: o handle é do `file`, vivo até o fim da chamada, e `info` é um destino válido do tipo esperado.
+    unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }.map_err(std::io::Error::other)?;
+    Ok(Identity { device: u64::from(info.dwVolumeSerialNumber), index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow) })
+}
+
+/// Apaga `target` só se ele ainda for o arquivo `ours`. `true`: apagou.
+fn remove_if_ours(target: &Path, ours: Identity) -> bool {
+    identity(target).is_ok_and(|now| now == ours) && std::fs::remove_file(target).is_ok()
+}
+
+/// Solto antes de `finish` voltar (tarefa abortada durante a troca de nome): marca o cancelamento e deixa a decisão e
+/// o disco com a tarefa de bloqueio, que apaga o `.part` em vez de renomear. Se ela já renomeou para um destino que não
+/// existia, como a cópia privada do Abrir, o destino sai, numa thread própria, se ainda for o arquivo dela. Destino que
+/// já existia fica: a troca o substituiu, e apagar perderia os dois.
+struct FinishGuard { handoff: Arc<Handoff>, target: PathBuf, armed: bool }
+
+impl Drop for FinishGuard {
+    fn drop(&mut self) {
+        if !self.armed { return; }
+        let state = &self.handoff.state;
+        let mark = |from, to| state.compare_exchange(from, to, Ordering::SeqCst, Ordering::SeqCst).is_ok();
+        if mark(PENDING, CANCELLED) || mark(RENAMING, RENAMING_CANCELLED) { return; }
+        if state.load(Ordering::SeqCst) == RENAMED && let Some(&ours) = self.handoff.published.get() {
+            let target = self.target.clone();
+            std::thread::spawn(move || remove_if_ours(&target, ours));
+        }
+    }
+}
+
+/// Grava bytes já em memória pelo mesmo caminho do `.part`, em blocos e com progresso. Vazio não vira arquivo: devolve
+/// `None`.
+pub async fn write_bytes(target: PathBuf, bytes: &[u8], report: impl FnMut(u64, Option<u64>)) -> Result<Option<PathBuf>, DownloadError> {
+    if bytes.is_empty() { return Ok(None); }
+    let (mut writer, mut reporter, total) = (PartWriter::create(target).await?, Reporter::new(report), Some(bytes.len() as u64));
+    for chunk in bytes.chunks(FLUSH_AT) {
+        writer.write(chunk).await?;
+        reporter.step(writer.written(), total);
+    }
+    writer.finish().await.map(Some)
+}
+
+/// Cópia de um arquivo deste disco, em blocos, com progresso e cancelável entre um bloco e outro. Vazio: `None`.
+pub async fn copy_file(from: PathBuf, target: PathBuf, report: impl FnMut(u64, Option<u64>)) -> Result<Option<PathBuf>, DownloadError> {
+    use std::io::Read;
+    // Erro de leitura daqui também é do disco: a causa do sistema segue até o cartão e o log.
+    let (mut file, total) = on_disk(move || {
+        let file = std::fs::File::open(from)?;
+        let total = file.metadata()?.len();
+        Ok((file, total))
+    }).await?;
+    if total == 0 { return Ok(None); }
+    let (mut writer, mut reporter) = (PartWriter::create(target).await?, Reporter::new(report));
+    let mut chunk = vec![0; FLUSH_AT];
+    loop {
+        let (back, read, result) = tokio::task::spawn_blocking(move || {
+            let result = file.read(&mut chunk);
+            (file, chunk, result)
+        }).await.map_err(DownloadError::Task)?;
+        file = back;
+        let read_bytes = result.map_err(DownloadError::Disk)?;
+        if read_bytes == 0 { break; }
+        writer.write(&read[..read_bytes]).await?;
+        chunk = read;
+        reporter.step(writer.written(), Some(total));
+    }
+    if writer.written() == 0 { return Ok(None); }
+    writer.finish().await.map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hangar-download-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn progress_math_clamps_and_needs_a_size() {
+        assert_eq!(percent(0, Some(200)), Some(0));
+        assert_eq!(percent(84, Some(200)), Some(42));
+        assert_eq!(percent(200, Some(200)), Some(100));
+        // Chegou mais do que o declarado: não passa de 100.
+        assert_eq!(percent(300, Some(200)), Some(100));
+        assert_eq!(percent(10, None), None);
+        assert_eq!(percent(10, Some(0)), None);
+        assert_eq!(share(50, Some(200)), Some(0.25));
+        assert_eq!(share(50, None), None);
+    }
+
+    #[test]
+    fn size_label_follows_the_language() {
+        assert_eq!(size_label(512, false), "512 B");
+        assert_eq!(size_label(25_794_970, false), "24,6 MB");
+        assert_eq!(size_label(25_794_970, true), "24.6 MB");
+        assert_eq!(size_label(3 << 30, true), "3.0 GB");
+    }
+
+    #[test]
+    fn throttle_lets_through_at_most_one_per_interval() {
+        let start = Instant::now();
+        let mut throttle = Throttle::new(PROGRESS_EVERY);
+        assert!(throttle.ready(start));
+        assert!(!throttle.ready(start + Duration::from_millis(50)));
+        assert!(!throttle.ready(start + Duration::from_millis(99)));
+        assert!(throttle.ready(start + Duration::from_millis(100)));
+        assert!(!throttle.ready(start + Duration::from_millis(150)));
+        // Um segundo de avisos a cada milissegundo: no máximo 10 passam.
+        let mut throttle = Throttle::new(PROGRESS_EVERY);
+        let passed = (0..1000).filter(|ms| throttle.ready(start + Duration::from_millis(*ms))).count();
+        assert_eq!(passed, 10);
+    }
+
+    #[test]
+    fn upload_body_is_the_whole_file_and_ends_at_full_progress() {
+        let bytes: Vec<u8> = (0..UPLOAD_CHUNK * 3 + 7).map(|n| n as u8).collect();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let chunks: Vec<Vec<u8>> = futures::executor::block_on(counted_chunks(bytes.clone(), move |sent, total| log.lock().unwrap().push((sent, total)))
+            .map(Result::unwrap).collect());
+        assert_eq!(chunks.len(), 4);
+        assert_eq!(chunks.concat(), bytes);
+        let seen = seen.lock().unwrap();
+        // O primeiro passa, o fim também, e os do meio esperam o intervalo.
+        assert_eq!(seen.first(), Some(&(UPLOAD_CHUNK as u64, bytes.len() as u64)));
+        assert_eq!(seen.last(), Some(&(bytes.len() as u64, bytes.len() as u64)));
+        assert!(seen.len() <= 4);
+    }
+
+    /// Os arquivos que sobraram na pasta, em ordem.
+    fn left(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn part_path_sits_next_to_the_target_with_its_own_tag() {
+        assert_eq!(part_path(Path::new("/tmp/x/relatorio.pdf"), "7-3"), PathBuf::from("/tmp/x/relatorio.pdf.hangar-7-3.part"));
+        let (a, b) = (next_tag(), next_tag());
+        assert_ne!(a, b);
+        assert!(a.starts_with(&format!("{}-", std::process::id())));
+    }
+
+    #[test]
+    fn part_name_fits_the_limit_when_the_target_is_near_it() {
+        // 254 bytes, um a menos que o teto; e um com letras de dois bytes, em que o corte (235 bytes) cairia no meio de
+        // uma letra.
+        for name in [format!("{}.pdf", "a".repeat(250)), "é".repeat(127)] {
+            assert_eq!(name.len(), 254);
+            let part = part_path(&Path::new("/tmp/x").join(&name), "12345-7");
+            let file_name = part.file_name().unwrap().to_str().unwrap();
+            assert!(file_name.len() <= NAME_MAX, "{}", file_name.len());
+            assert!(file_name.ends_with(".hangar-12345-7.part"));
+            assert!(name.starts_with(file_name.trim_end_matches(".hangar-12345-7.part")));
+            assert_eq!(part.parent(), Some(Path::new("/tmp/x")));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_target_name_of_254_bytes_downloads() {
+        let dir = scratch("long");
+        let target = dir.join(format!("{}.bin", "b".repeat(250)));
+        let mut writer = PartWriter::create(target.clone()).await.unwrap();
+        writer.write(b"long").await.unwrap();
+        assert_eq!(writer.finish().await.unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), b"long");
+        assert_eq!(left(&dir).len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_the_current_generation_of_a_card_counts() {
+        let mut running: Running<&str, &str> = Running::default();
+        let first = running.next_generation();
+        assert_eq!(running.insert("card", first, "old"), None);
+        // Clicou de novo: a tarefa velha volta para ser cancelada, e a geração dela deixa de valer.
+        let second = running.next_generation();
+        assert_ne!(first, second);
+        assert_eq!(running.insert("card", second, "new"), Some("old"));
+        assert!(!running.is_current(&"card", first));
+        // O resultado da velha, já na fila, não tira a nova do mapa.
+        assert!(!running.finish(&"card", first));
+        assert!(running.is_current(&"card", second));
+        assert!(running.finish(&"card", second));
+        assert!(!running.is_current(&"card", second));
+        // Cancelado: o resultado que chega depois é de tarefa velha.
+        let third = running.next_generation();
+        running.insert("card", third, "third");
+        assert_eq!(running.cancel(&"card"), Some("third"));
+        assert!(!running.finish(&"card", third));
+        assert_eq!(running.cancel(&"card"), None);
+    }
+
+    #[tokio::test]
+    async fn two_downloads_to_the_same_target_write_apart() {
+        let dir = scratch("twice");
+        let target = dir.join("d.bin");
+        let mut first = PartWriter::create(target.clone()).await.unwrap();
+        let mut second = PartWriter::create(target.clone()).await.unwrap();
+        assert_ne!(first.part(), second.part());
+        first.write(b"first").await.unwrap();
+        second.write(b"second").await.unwrap();
+        drop(first);
+        assert_eq!(second.finish().await.unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), b"second");
+        assert_eq!(left(&dir), ["d.bin"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_existing_part_is_skipped_not_reused() {
+        let dir = scratch("leftover");
+        let target = dir.join("h.bin");
+        // O primeiro nome tentado já existe: o `create` passa ao segundo sem abrir o primeiro.
+        let taken = part_path(&target, "1-0");
+        std::fs::write(&taken, b"stale").unwrap();
+        let writer = PartWriter::create_named(target.clone(), ["1-0".to_owned(), "1-1".to_owned()].into_iter()).await.unwrap();
+        assert_eq!(writer.part(), part_path(&target, "1-1"));
+        assert_eq!(std::fs::read(&taken).unwrap(), b"stale");
+        drop(writer);
+        assert_eq!(left(&dir), [taken.file_name().unwrap().to_string_lossy().into_owned()]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn late_cleanup_spares_a_file_another_download_put_there() {
+        let dir = scratch("ours");
+        let target = dir.join("k.bin");
+        write_bytes(target.clone(), b"first", |_, _| {}).await.unwrap();
+        let first = identity(&target).unwrap();
+        // Outro download publica no mesmo nome: o cancelamento tardio do primeiro não apaga o arquivo dele.
+        write_bytes(target.clone(), b"second", |_, _| {}).await.unwrap();
+        assert!(!remove_if_ours(&target, first));
+        assert_eq!(std::fs::read(&target).unwrap(), b"second");
+        let second = identity(&target).unwrap();
+        assert!(remove_if_ours(&target, second));
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn replacing_a_private_target_keeps_it_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("mode");
+        let target = dir.join("m.bin");
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_bytes(target.clone(), b"new", |_, _| {}).await.unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn bytes_in_memory_report_progress_while_written() {
+        let dir = scratch("memory");
+        let bytes = vec![5u8; FLUSH_AT * 2 + 3];
+        let mut seen = Vec::new();
+        let target = write_bytes(dir.join("n.bin"), &bytes, |done, total| seen.push((done, total))).await.unwrap().unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), bytes);
+        // O primeiro bloco avisa já: a tela não fica em 0 B até a gravação acabar.
+        assert_eq!(seen.first(), Some(&(FLUSH_AT as u64, Some(bytes.len() as u64))));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn silence_past_the_idle_limit_is_a_stall() {
+        let mut never = futures::stream::pending::<Result<Vec<u8>, std::io::Error>>();
+        let error = next_chunk(&mut never, Duration::from_millis(20)).await.unwrap_err();
+        assert_eq!(error.detail, "download_stalled");
+        let mut one = futures::stream::iter([Ok::<_, std::io::Error>(vec![1u8])]);
+        assert_eq!(next_chunk(&mut one, Duration::from_millis(20)).await.unwrap(), Some(vec![1]));
+        assert_eq!(next_chunk(&mut one, Duration::from_millis(20)).await.unwrap(), None);
+        let mut broken = futures::stream::iter([Err::<Vec<u8>, _>(std::io::Error::other("cut"))]);
+        assert_eq!(next_chunk(&mut broken, Duration::from_millis(20)).await.unwrap_err().detail, "network_error");
+    }
+
+    #[tokio::test]
+    async fn finished_download_replaces_the_part_with_the_target() {
+        let dir = scratch("finish");
+        let target = dir.join("a.bin");
+        let mut writer = PartWriter::create(target.clone()).await.unwrap();
+        writer.write(b"hello ").await.unwrap();
+        let part = writer.part().to_path_buf();
+        assert!(part.is_file());
+        assert!(!target.exists());
+        writer.write(b"world").await.unwrap();
+        assert_eq!(writer.finish().await.unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), b"hello world");
+        assert!(!part.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn dropped_download_leaves_neither_part_nor_target() {
+        let dir = scratch("drop");
+        let target = dir.join("b.bin");
+        let mut writer = PartWriter::create(target.clone()).await.unwrap();
+        writer.write(&vec![7; FLUSH_AT + 10]).await.unwrap();
+        assert!(writer.part().is_file());
+        drop(writer);
+        assert!(left(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn aborted_task_removes_the_part() {
+        let dir = scratch("abort");
+        let target = dir.join("c.bin");
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let path = target.clone();
+        let task = tokio::spawn(async move {
+            let mut writer = PartWriter::create(path).await.unwrap();
+            writer.write(b"partial").await.unwrap();
+            let _ = started.send(());
+            futures::future::pending::<()>().await;
+            drop(writer);
+        });
+        ready.await.unwrap();
+        task.abort();
+        let _ = task.await;
+        assert!(left(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn disk_failures_keep_the_system_error() {
+        let dir = scratch("disk");
+        // Pasta que não existe: o `.part` não nasce, e o erro é o do sistema, não um `save_failed` genérico.
+        match write_bytes(dir.join("missing").join("i.bin"), b"data", |_, _| {}).await {
+            Err(DownloadError::Disk(error)) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+                assert!(error.raw_os_error().is_some(), "{error}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // Destino ocupado por uma pasta com conteúdo: a troca de nome falha, com a causa, e o `.part` sai.
+        let target = dir.join("j.bin");
+        std::fs::create_dir_all(target.join("inside")).unwrap();
+        match write_bytes(target.clone(), b"data", |_, _| {}).await {
+            Err(DownloadError::Disk(error)) => assert!(error.raw_os_error().is_some(), "{error}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(left(&dir), ["j.bin"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn empty_sources_do_not_become_files() {
+        let dir = scratch("empty");
+        assert_eq!(write_bytes(dir.join("e.bin"), b"", |_, _| {}).await.unwrap(), None);
+        let source = dir.join("source.bin");
+        std::fs::write(&source, b"").unwrap();
+        assert_eq!(copy_file(source, dir.join("f.bin"), |_, _| {}).await.unwrap(), None);
+        assert!(!dir.join("e.bin").exists() && !dir.join("f.bin").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn local_copy_reports_progress_and_lands_whole() {
+        let dir = scratch("copy");
+        let source = dir.join("source.bin");
+        std::fs::write(&source, vec![3u8; FLUSH_AT * 2 + 5]).unwrap();
+        let mut seen = Vec::new();
+        let target = copy_file(source, dir.join("g.bin"), |done, total| seen.push((done, total))).await.unwrap().unwrap();
+        assert_eq!(std::fs::metadata(&target).unwrap().len(), (FLUSH_AT * 2 + 5) as u64);
+        assert_eq!(left(&dir), ["g.bin", "source.bin"]);
+        // O primeiro aviso passa sempre; os outros esperam o intervalo.
+        assert!(!seen.is_empty() && seen.iter().all(|(_, total)| *total == Some((FLUSH_AT * 2 + 5) as u64)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

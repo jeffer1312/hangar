@@ -8,7 +8,7 @@ use std::{
 use serde_json::Value;
 
 use super::collect::{
-    ClaudeScope, CodexScope, CollectError, KimiScope, PiScope, ScopeSource, Scopes,
+    AntigravityScope, ClaudeScope, CodexScope, CollectError, KimiScope, PiScope, ScopeSource, Scopes,
 };
 use crate::accounts::{
     Provider,
@@ -150,12 +150,28 @@ impl ScopeSource for NativeScopes {
             root: kimi_root,
             index: self.dirs.kimi_home.join("session_index.jsonl"),
         });
+        // As contas Google, como em `/api/credenciais`: o mesmo id identifica a conta nos custos.
+        let home = &self.accounts.env.home;
+        let antigravity = hangar_antigravity::paths::known_accounts(home)
+            .into_iter()
+            .filter(|account| account.brain_dir(home).is_dir())
+            .map(|account| AntigravityScope {
+                root: account.brain_dir(home),
+                history: account.data_dir(home).join("history.jsonl"),
+                account: format!(
+                    "antigravity:{}",
+                    resolved(&account.gemini_dir(home)).to_string_lossy()
+                ),
+                label: format!("Antigravity · {}", crate::accounts::antigravity::label(&account)),
+            })
+            .collect();
         Ok(Scopes {
             claude,
             codex,
             pi,
             kimi,
             repo: self.repo.clone(),
+            antigravity,
         })
     }
 }

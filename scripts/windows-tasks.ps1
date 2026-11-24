@@ -1,4 +1,4 @@
-# Funcoes compartilhadas pelo instalador e pela vigia, sem iniciar processos ao carregar.
+# Funcoes compartilhadas pelo instalador e pelo atualizador, sem iniciar processos ao carregar.
 function Get-HangarProcessTable {
     $job = Start-Job {
         Get-CimInstance Win32_Process -ErrorAction Stop |
@@ -82,23 +82,6 @@ function Get-HangarBackendTaskProblem([string]$vbs) {
     if ([IO.File]::ReadAllText($vbs, [Text.Encoding]::Unicode) -notmatch '(?:^|\s)launch\s+backend\b') {
         return "$vbs nao abre o lancador pelo launch backend"
     }
-}
-
-function Test-HangarHttp([int]$port) {
-    $response = $null
-    try {
-        $request = [Net.HttpWebRequest]::Create("http://127.0.0.1:$port/")
-        $request.Proxy = $null
-        $request.Timeout = 3000
-        $request.ReadWriteTimeout = 3000
-        $request.AllowAutoRedirect = $false
-        $response = $request.GetResponse()
-        return ([int]$response.StatusCode -lt 500)
-    } catch [Net.WebException] {
-        $response = $_.Exception.Response
-        # Ate um 404 prova resposta HTTP quando o dist ainda nao esta instalado.
-        return ($null -ne $response -and [int]$response.StatusCode -lt 500)
-    } finally { if ($response) { $response.Close() } }
 }
 
 function Get-HangarPortOwner($rows, $listener) {
@@ -268,7 +251,7 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
             $quem = Format-HangarPortOwner $rows $held[0]
             throw "Porta $port ainda ocupada por $quem; nova instancia nao sera iniciada"
         }
-        # O front fica no inicio direto: quem o recupera e a vigia.
+        # O front fica no inicio direto, sem a espera da porta.
         if (-not $NoStart) {
             if ($name -eq 'hangar-backend') { Start-HangarTask $name $port } else { Start-ScheduledTask -TaskName $name -ErrorAction Stop }
         }
@@ -301,8 +284,8 @@ function Stop-HangarFrontend([string]$raiz) {
     }
 }
 
-# Reinicio das tarefas pelo atualizador, sem o instalador. Mesmo mutex do install.ps1 e da vigia:
-# os tres controlam a parada das mesmas tarefas e nao podem se sobrepor.
+# Reinicio das tarefas pelo atualizador, sem o instalador. Mesmo mutex do install.ps1: os dois
+# controlam a parada das mesmas tarefas e nao podem se sobrepor.
 function Restart-HangarTasks([string]$raiz, [int]$portaBack, [int]$portaFront) {
     $mutex = New-Object Threading.Mutex($false, 'Local\HangarInstall')
     $locked = $false
@@ -313,38 +296,8 @@ function Restart-HangarTasks([string]$raiz, [int]$portaBack, [int]$portaFront) {
         if ($portaFront -gt 0 -and (Get-ScheduledTask -TaskName 'hangar-frontend' -ErrorAction SilentlyContinue)) {
             # Com o backend novo de pe, erro aqui faria o atualizador desfazer uma versao boa.
             try { Restart-HangarTask 'hangar-frontend' $portaFront (Join-Path $raiz 'frontend') }
-            catch { Write-Warning "hangar-frontend nao reiniciou, a vigia recupera: $_" }
+            catch { Write-Warning "hangar-frontend nao reiniciou: $_" }
         }
-    } finally {
-        if ($locked) { $mutex.ReleaseMutex() }
-        $mutex.Dispose()
-    }
-}
-
-function Repair-HangarTask([string]$name, [int]$port, [string]$directory) {
-    $mutex = New-Object Threading.Mutex($false, 'Local\HangarInstall')
-    $locked = $false
-    try {
-    try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
-    if (-not $locked) { return }
-    if (Test-HangarHttp $port) { return }
-    Start-Sleep -Seconds 2
-    if (Test-HangarHttp $port) { return }
-    $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
-    if (-not $task.Settings.Enabled) { return }
-    $info = Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop
-    if ($info.LastRunTime -gt (Get-Date).AddMinutes(-10)) { return }
-    $rows = Get-HangarProcessTable
-    # Instalacao e atualizacao controlam a propria parada, inclusive quando a API nao responde.
-    if ($rows | Where-Object {
-        ($_.Name -match '^python.*\.exe$' -and $_.CommandLine -match '(?:^|\s)-m\s+app\.atualizar(?:\s|$)') -or
-        ($_.Name -eq 'hangar-server.exe' -and $_.CommandLine -match '(?:^|\s)(?:update|checkout-update|migrate-package|dev-mode)(?:\s|$)') -or
-        ($_.Name -match '^(powershell|pwsh)\.exe$' -and $_.CommandLine -match '(?:^|[\s\\/])install\.ps1(?:["\s]|$)')
-    }) { return }
-    $candidates = @(Get-HangarTaskProcesses $rows $name $directory)
-    if ($candidates | Where-Object { $_.CreationDate -gt (Get-Date).AddMinutes(-10) }) { return }
-    Write-Output "$(Get-Date -Format s) vigia: $name sem resposta HTTP; recuperando a instancia identificada"
-    Restart-HangarTask $name $port $directory
     } finally {
         if ($locked) { $mutex.ReleaseMutex() }
         $mutex.Dispose()

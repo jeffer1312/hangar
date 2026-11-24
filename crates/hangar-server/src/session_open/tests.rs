@@ -112,15 +112,41 @@ fn reopen_keeps_what_the_change_does_not_name() {
         version: SPEC_VERSION, key: "k".into(), name: "s".into(), cwd: "/x".into(), provider: AgentProvider::Claude,
         surface: Surface::Terminal, account: Account::Default, account_source: AccountSource::Default,
         model: Some("opus".into()), effort: Some("high".into()), service_tier: None,
-        permission_mode: Some(PermissionMode::Manual), subagent_model: None, customizations: None, jev: true,
+        permission_mode: Some(PermissionMode::Manual), subagent_model: None, customizations: None, jev: true, code_mode: false,
         read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
-        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
+        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false, hooks_off: false,
     };
     let change = SessionChange { reason: ChangeReason::Bypass, surface: None, account: None,
         permission_mode: Some(PermissionMode::BypassPermissions), model: None, effort: None, service_tier: None };
     let next = spec.with(&change);
     assert_eq!(next.permission_mode, Some(PermissionMode::BypassPermissions));
     assert_eq!((next.model.as_deref(), next.effort.as_deref(), next.jev), (Some("opus"), Some("high"), true));
+
+    // Sessão sem hooks: o registro antigo lê "com hooks", e a reabertura mantém o que o spec gravou.
+    let mut recorded = serde_json::to_value(&spec).unwrap();
+    assert!(recorded.get("hooks_off").is_none(), "com hooks o campo nem vai ao disco");
+    let old: SessionSpec = serde_json::from_value(recorded.clone()).unwrap();
+    assert!(!old.hooks_off);
+    recorded["hooks_off"] = serde_json::json!(true);
+    let off: SessionSpec = serde_json::from_value(recorded).unwrap();
+    assert!(off.with(&change).hooks_off);
+}
+
+#[test]
+fn hooks_off_is_only_for_the_server() {
+    let refused = serde_json::from_value::<SessionOpenRequest>(serde_json::json!({"cwd": "/x", "disable_hooks": true}));
+    assert!(refused.is_err(), "cliente HTTP não desliga os hooks (nem a trava do cofre)");
+    let chosen = Some(serde_json::json!({"enabledPlugins": {"p@m": true}}));
+    assert_eq!(open::with_hooks_off(chosen.clone(), false), chosen);
+    assert_eq!(open::with_hooks_off(chosen, true), Some(serde_json::json!({"enabledPlugins": {"p@m": true}, "disableAllHooks": true})));
+    assert_eq!(open::with_hooks_off(None, true), Some(serde_json::json!({"disableAllHooks": true})));
+}
+
+#[test]
+fn hooks_off_reaches_the_claude_command_line() {
+    let settings = open::with_hooks_off(Some(serde_json::json!({"enabledPlugins": {"p@m": true}})), true).unwrap();
+    let passed: serde_json::Value = serde_json::from_str(&super::claude::settings_json(&settings)).unwrap();
+    assert_eq!(passed["disableAllHooks"], serde_json::json!(true), "o `--settings` do processo leva o desligar dos hooks");
 }
 
 // ── resolve_open ─────────────────────────────────────────────────────────────────────────────
@@ -229,6 +255,11 @@ impl resolve::OpenFacts for FixtureFacts {
         Ok(file.get(&key).cloned().and_then(|value| serde_json::from_value(value).ok()))
     }
 
+    fn session_options(&self) -> Result<Option<crate::session_defaults::SessionOptions>, String> {
+        let Some(file) = self.file(&format!("{HOME}/.hangar/session-options.json")) else { return Ok(None) };
+        serde_json::from_value(file.clone()).map(Some).map_err(|error| error.to_string())
+    }
+
     // Sem serviço de contas Codex no harness: nenhuma conta conectada.
     fn codex_logins(&self) -> Result<Vec<resolve::CodexLogin>, OpenError> { Ok(self.connected.clone()) }
 
@@ -265,7 +296,10 @@ impl resolve::OpenFacts for FixtureFacts {
         self.file(&format!("{HOME}/.claude/engines.json")).and_then(Value::as_object).map(|e| e.keys().cloned().collect()).unwrap_or_default()
     }
 
+    fn engine_account(&self, _engine: &str, requested: Option<&str>) -> Result<(Option<String>, Option<String>), OpenError> { Ok((requested.map(str::to_owned), None)) }
+
     fn supports_fast(&self, _engine: Option<&str>, _model: Option<&str>) -> bool { false }
+    fn supports_ultrafast(&self, _engine: Option<&str>, _model: Option<&str>, _account: Option<&str>) -> bool { false }
 
     // Nenhum cenário fixa conta ChatGPT; o gerador do proptest pode pedir.
     fn fixed_engine_model(&self, _engine: &str, _account: &str, _model: Option<&str>) -> Result<String, OpenError> {
@@ -555,7 +589,7 @@ fn materialize(fixture: &Value, root: &std::path::Path) {
     }
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    for program in ["claude", "codex", "pi", "omp", "kimi", "hangar-codex-tui", "hangar-engine", "bwrap"] {
+    for program in ["claude", "codex", "pi", "omp", "kimi", "hangar-server", "hangar-engine", "bwrap"] {
         crate::write_test_executable(&bin.join(program), b"#!/bin/sh\nexit 1\n");
     }
     // O catálogo do Codex que o harness deu à ponte vira o `model/list` de um app-server falso; sem
@@ -736,6 +770,30 @@ fn the_saved_default_beats_the_creator_and_fills_model_and_effort() {
     assert_eq!(spec.account, unsaved.account);
 }
 
+/// O `agy` com terminal não abre no modo que pergunta: o `manual` salvo some, o pedido explícito é recusado.
+#[test]
+fn antigravity_with_a_terminal_drops_a_saved_manual_and_refuses_an_explicit_one() {
+    let mut fixture = with_saved_default("antigravity", json!({"model": "", "effort": "", "permission": "manual"}));
+    fixture["scenario"]["steps"][0]["json"]["provider"] = json!("antigravity");
+    fixture["scenario"]["steps"][0]["json"]["headless"] = json!(false);
+    assert_eq!(resolve_fixture(&fixture).unwrap().spec.permission_mode, None);
+    fixture["scenario"]["steps"][0]["json"]["permission_mode"] = json!("manual");
+    let error = resolve_fixture(&fixture).unwrap_err();
+    assert_eq!((error.status, error.code), (409, Some("erro_permissao_manual_sem_terminal")));
+}
+
+/// O `agy` com terminal ignora o `GEMINI_HOME`: conta adicional é recusada, a padrão (sem pasta) abre.
+#[test]
+fn antigravity_with_a_terminal_refuses_an_additional_account() {
+    let mut fixture = with_saved_default("antigravity", Value::Null);
+    fixture["scenario"]["steps"][0]["json"]["provider"] = json!("antigravity");
+    fixture["scenario"]["steps"][0]["json"]["headless"] = json!(false);
+    assert!(resolve_fixture(&fixture).is_ok(), "a conta padrão abre");
+    fixture["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.antigravity-trabalho");
+    let error = resolve_fixture(&fixture).unwrap_err();
+    assert_eq!((error.status, error.code), (409, Some("erro_conta_antigravity_adicional")));
+}
+
 /// `inherit: true` é a sessão pedindo para a filha nascer no modo dela.
 #[test]
 fn inherit_true_takes_the_creator_permission_over_the_saved_default() {
@@ -890,7 +948,8 @@ fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
         ("access:\n  api-keys:\n    - k\n", true),
         ("access:\n  api-keys:\n    - k\napi-keys:\n  codex: []\n", true),
         ("api-keys:\n  - k\n", true),
-        ("access:\n  api-keys: []\napi-keys:\n  - k\n", true),
+        // O campo v8 presente vence o legado mesmo vazio (regra do proxy): sem chave de cliente, sem Fast.
+        ("access:\n  api-keys: []\napi-keys:\n  - k\n", false),
         ("access:\n  api-keys:\n    - ' '\n", false),
     ] {
         std::fs::write(home.join(".cli-proxy-api/config.yaml"), config).unwrap();
@@ -902,6 +961,53 @@ fn fast_recognizes_cliproxy_client_keys_in_both_config_formats() {
             assert_eq!(resolved.err().map(|e| (e.status, e.code)), Some((400, Some("erro_criacao_sessao"))), "{config}");
         }
     }
+    // Fast aceito, Ultra Fast não: sem conta fixa Pro e sem a regra no config, o pedido iria a qualquer conta.
+    std::fs::write(home.join(".cli-proxy-api/config.yaml"), "access:\n  api-keys:\n    - k\n").unwrap();
+    let ultra = SessionOpenRequest::parse(json!({"name": "s2", "cwd": home.join("work"), "provider": "claude", "headless": false,
+        "engine": "gpt", "model": "gpt-6.1-sol", "service_tier": "ultrafast"}).to_string().as_bytes()).unwrap();
+    assert_eq!(resolve::resolve_open(&ultra, &OWNER, &facts).err().map(|e| (e.status, e.code)), Some((400, Some("erro_criacao_sessao"))));
+    // `fast: false` no motor tira o Fast também na criação, como no seletor.
+    std::fs::write(home.join(".claude/engines.json"),
+        json!({"gpt": {"base_url": "http://127.0.0.1:8317/v1", "api_key": "k", "model": "gpt-6.1-sol", "fast": false}}).to_string()).unwrap();
+    assert_eq!(resolve::resolve_open(&request, &OWNER, &facts).err().map(|e| (e.status, e.code)), Some((400, Some("erro_criacao_sessao"))));
+    // Velocidade normal não depende do Fast: o motor sem Fast continua abrindo nela.
+    let normal = SessionOpenRequest::parse(json!({"name": "s3", "cwd": home.join("work"), "provider": "claude", "headless": false,
+        "engine": "gpt", "model": "gpt-6.1-sol", "service_tier": "default"}).to_string().as_bytes()).unwrap();
+    let spec = resolve::resolve_open(&normal, &OWNER, &facts).unwrap().spec;
+    assert_eq!(spec.service_tier, None, "Normal num motor sem Fast não vira `service_tier` no provedor");
+}
+
+/// Sessão que já existe e perdeu o suporte volta mais devagar em vez de não voltar: Ultra Fast em Fast, Fast na normal.
+#[test]
+fn a_saved_speed_without_support_falls_back_on_relaunch() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    for dir in ["work", ".claude", ".cli-proxy-api"] { std::fs::create_dir_all(home.join(dir)).unwrap(); }
+    std::fs::write(home.join(".cli-proxy-api/config.yaml"), "access:\n  api-keys:\n    - k\n").unwrap();
+    let engines = |fast: bool| std::fs::write(home.join(".claude/engines.json"),
+        json!({"gpt": {"base_url": "http://127.0.0.1:8317/v1", "api_key": "k", "model": "gpt-6.1-sol", "fast": fast}}).to_string()).unwrap();
+    engines(true);
+    let request = SessionOpenRequest::parse(json!({"name": "s1", "cwd": home.join("work"), "provider": "claude", "headless": false,
+        "engine": "gpt", "model": "gpt-6.1-sol", "service_tier": "priority"}).to_string().as_bytes()).unwrap();
+    let facts = local_facts(&home, &runtime);
+    let mut spec = resolve::resolve_open(&request, &OWNER, &facts).unwrap().spec;
+    assert_eq!(claude::relaunch_tier(&spec, &facts), Some(ServiceTier::Priority));
+    spec.service_tier = Some(ServiceTier::Ultrafast);
+    assert_eq!(claude::relaunch_tier(&spec, &facts), Some(ServiceTier::Priority), "sem conta Pro fixa o Ultra Fast cai em Fast");
+    engines(false);
+    assert_eq!(claude::relaunch_tier(&spec, &facts), None, "motor sem Fast: a sessão volta na velocidade normal");
+
+    // A velocidade que caiu fica gravada no registro da mesma vida da sessão.
+    let sidecars = home.join("sidecars");
+    std::fs::create_dir_all(&sidecars).unwrap();
+    std::fs::write(crate::runtime::codex_sidecar::path(&sidecars, "s1"),
+        json!({"name": "s1", "key": spec.key, "service_tier": "ultrafast"}).to_string()).unwrap();
+    crate::runtime::claude_launch::persist_relaunch_tier(&mut spec, &facts, &sidecars, "s1");
+    assert_eq!(spec.service_tier, None);
+    let stored: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+        crate::runtime::codex_sidecar::path(&sidecars, "s1")).unwrap()).unwrap();
+    assert!(stored["service_tier"].is_null());
 }
 
 /// `model: ""` com Fast cai no modelo do motor como o `or` do Python: o Fast passa, e quem recusa é
@@ -1061,7 +1167,7 @@ fn an_unknown_engine_window_is_read_again_on_reopen() {
     for (window, expected) in [(Err(()), (None, true)), (Ok(Some(262144)), (Some(262144), false)), (Ok(None), (None, false))] {
         let facts = FixtureFacts { window, ..FixtureFacts::of(&fixture) };
         let mut spec = SessionSpec { model: Some("k3".into()), account: Account::Engine { name: "e".into(), account: None,
-            config_dir: None, context_window: None, context_window_unknown: true }, ..fixture_spec("create_claude_terminal_default") };
+            config_dir: None, context_window: None, binding: None, context_window_unknown: true }, ..fixture_spec("create_claude_terminal_default") };
         spec.refresh_engine_window(&facts);
         let Account::Engine { context_window, context_window_unknown, .. } = spec.account else { unreachable!() };
         assert_eq!((context_window, context_window_unknown), expected);
@@ -1077,7 +1183,7 @@ fn a_headless_launch_reads_the_unknown_engine_window_and_records_it() {
     let key = "d".repeat(32);
     std::fs::write(dir.path().join("s1.json"), json!({"name": "s1", "key": key, "context_window": null}).to_string()).unwrap();
     let mut spec = SessionSpec { key: key.clone(), name: "s1".into(), model: Some("k3".into()), account: Account::Engine { name: "e".into(),
-        account: None, config_dir: None, context_window: None, context_window_unknown: true }, ..fixture_spec("create_claude_terminal_default") };
+        account: None, config_dir: None, context_window: None, binding: None, context_window_unknown: true }, ..fixture_spec("create_claude_terminal_default") };
     let facts = FixtureFacts { window: Ok(Some(262144)), ..FixtureFacts::of(&fixture) };
     crate::runtime::claude_launch::refresh_window(&mut spec, &facts, dir.path(), "s1");
     assert!(matches!(spec.account, Account::Engine { context_window: Some(262144), context_window_unknown: false, .. }));
@@ -1238,7 +1344,7 @@ fn the_claude_pane_is_the_expected_one() {
         let bridge = claude::PluginBridge { port: 8765, secret: "segredo".into() };
         let ctx = claude::ClaudeContext { plugin_roots: &roots, bridge: Some(&bridge), bridge_key: &"a".repeat(32),
             runtime_config: &runtime, server_env: &Default::default(), settings: Some(&settings).filter(|s| !s.is_null()),
-            read_only: read_only.as_deref(), windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
+            settings_file: None, read_only: read_only.as_deref(), windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
         let ours = terminal::new_session_argv(&terminal::tests::machine_at("<ROOT>/home/.claude"), &claude::pane(&spec, "<uuid:1>", &ctx));
         // O comando de dentro do `sh -c` do só leitura também é comparado por palavra. Diferença aceita: o
         // Rust abre com `exec` (no dash o shell ficava de pai do agente).
@@ -1502,10 +1608,48 @@ fn the_initial_prompt_is_the_first_message_of_the_claude_terminal() {
     for (prompt, tail) in [("olá", vec!["--permission-mode", "bypassPermissions", "olá"]),
                            ("-v e depois", vec!["--permission-mode", "bypassPermissions", "--", "-v e depois"])] {
         let ctx = claude::ClaudeContext { plugin_roots: &roots, bridge: None, bridge_key: "k", runtime_config: &Value::Null,
-            server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: Some(prompt), engine_route: None, resume: false, allow_bypass: false };
+            server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: false, initial_prompt: Some(prompt), engine_route: None, resume: false, allow_bypass: false };
         let command = claude::pane(&resolved.spec, "sid", &ctx).command;
         assert_eq!(command[command.len() - tail.len()..], tail.iter().map(|s| s.to_string()).collect::<Vec<_>>()[..]);
     }
+}
+
+/// No Windows o prompt inicial fica fora do comando do pane (vai pela fila da chave): o psmux roda o
+/// comando pelo PowerShell, que cortava o argumento na primeira aspa dupla.
+#[test]
+fn on_windows_the_claude_initial_prompt_stays_out_of_the_pane_command() {
+    let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_terminal_initial_prompt_ignored").unwrap();
+    let spec = resolve_fixture(&fixture).unwrap().spec;
+    let prompt = r#"a folha "Mais ações" em C:\x\\y, do 'Expo' (`mobile/`)"#;
+    let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
+        server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: true, initial_prompt: Some(prompt), engine_route: None, resume: false, allow_bypass: false };
+    let command = claude::pane(&spec, "sid", &ctx).command;
+    assert!(!command.iter().any(|arg| arg.contains("Mais")), "o prompt foi para o comando do pane: {command:?}");
+    assert_eq!(command[command.len() - 2..], ["--permission-mode".to_owned(), "bypassPermissions".to_owned()]);
+}
+
+/// No Windows as escolhas da conversa vão ao `--settings` por arquivo: o comando do psmux perde as
+/// aspas do JSON e o Claude recusa abrir ("Invalid JSON provided to --settings").
+#[test]
+fn on_windows_the_claude_settings_reach_the_pane_command_as_a_file() {
+    let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_terminal_initial_prompt_ignored").unwrap();
+    let spec = resolve_fixture(&fixture).unwrap().spec;
+    let settings = json!({"enabledPlugins": {"x@y": true}, "permissions": {"deny": ["Bash(rm:*)"]}});
+    let home = tempfile::tempdir().unwrap();
+    let file = claude::settings_file(home.path(), &settings).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&std::fs::read_to_string(&file).unwrap()).unwrap(), settings);
+    assert_eq!(claude::settings_file(home.path(), &settings).unwrap(), file, "as mesmas escolhas, o mesmo arquivo");
+    let server_env = std::collections::BTreeMap::new();
+    let command_of = |windows: bool, settings_file: Option<&str>| claude::pane(&spec, "sid", &claude::ClaudeContext { plugin_roots: &[],
+        bridge: None, bridge_key: "k", runtime_config: &Value::Null, server_env: &server_env, settings: Some(&settings), settings_file,
+        read_only: None, windows, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false }).command;
+    let command = command_of(true, Some(&file));
+    assert!(!command.iter().any(|arg| arg.contains('"')), "JSON cru no comando do pane: {command:?}");
+    let at = command.iter().position(|arg| arg == "--settings").expect("--settings");
+    assert_eq!(command[at + 1], file);
+    let linux = command_of(false, None);
+    let at = linux.iter().position(|arg| arg == "--settings").expect("--settings");
+    assert_eq!(serde_json::from_str::<Value>(&linux[at + 1]).unwrap(), settings);
 }
 
 /// Pasta pedida com `~` é normalizada na entrada; o pane, a pré-confiança e o transcript usam o
@@ -1523,7 +1667,7 @@ fn a_tilde_folder_is_absolute_everywhere_in_the_launch() {
     let absolute = home.join("work/proj").to_string_lossy().into_owned();
     assert_eq!(spec.cwd, absolute);
     let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
-        server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
+        server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
     let argv = terminal::new_session_argv(&terminal::tests::machine_at(&home.join(".claude").to_string_lossy()), &claude::pane(&spec, "sid", &ctx));
     assert_eq!(argv[argv.iter().position(|a| a == "-c").unwrap() + 1], absolute);
     let transcript = claude::transcript(&spec, "sid", &home.join(".claude/projects"));
@@ -1531,6 +1675,105 @@ fn a_tilde_folder_is_absolute_everywhere_in_the_launch() {
     claude::pretrust(&home.join(".claude.json"), &spec.cwd, false).unwrap();
     let trusted: Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).unwrap()).unwrap();
     assert_eq!(trusted["projects"][&absolute]["hasTrustDialogAccepted"], true);
+}
+
+/// O Code Mode pedido na abertura chega ao pane do Claude como `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`;
+/// sem o pedido, ou em outro harness, a variável não aparece.
+#[test]
+fn code_mode_reaches_the_claude_pane_only_when_asked() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir_all(home.join("work/proj")).unwrap();
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    let launch = |extra: Value| {
+        let mut body = json!({"name": "s1", "cwd": "~/work/proj", "provider": "claude", "headless": false, "permission_mode": "manual"});
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+        let spec = resolve::resolve_open(&request, &OWNER, &local_facts(&home, &runtime)).unwrap().spec;
+        let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
+            server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
+        let argv = terminal::new_session_argv(&terminal::tests::machine_at(&home.join(".claude").to_string_lossy()), &claude::pane(&spec, "sid", &ctx));
+        (spec.code_mode, argv.iter().any(|a| *a == format!("{}=1", claude::CODE_MODE_ENV)))
+    };
+    assert_eq!(launch(json!({"code_mode": true})), (true, true));
+    assert_eq!(launch(json!({})), (false, false));
+}
+
+/// O Code Mode marcado na tela Beta é padrão do servidor: toda abertura do Claude que não diz nada nasce
+/// com ele, venha de onde vier, e só com a conversa nova ligada também. Pedido explícito vence.
+#[test]
+fn code_mode_default_of_the_server_fills_an_omitted_request() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir_all(home.join("work/proj")).unwrap();
+    std::fs::create_dir_all(home.join(".hangar")).unwrap();
+    let open = |options: Value, extra: Value| {
+        std::fs::write(home.join(".hangar/session-options.json"), options.to_string()).unwrap();
+        let mut body = json!({"name": "s1", "cwd": "~/work/proj", "provider": "claude", "headless": false, "permission_mode": "manual"});
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+        resolve::resolve_open(&request, &OWNER, &local_facts(&home, &runtime)).unwrap().spec.code_mode
+    };
+    let both = json!({"conversation_beta": true, "code_mode": true});
+    assert!(open(both.clone(), json!({})), "omitido: vale o padrão do servidor");
+    assert!(!open(both.clone(), json!({"code_mode": false})), "pedido explícito vence o padrão");
+    assert!(!open(json!({"conversation_beta": false, "code_mode": true}), json!({})), "sem a conversa nova, o Code Mode não vale");
+    assert!(open(json!({"conversation_beta": false, "code_mode": false}), json!({"code_mode": true})), "pedido explícito liga sem padrão");
+}
+
+/// Code Mode pedido fora do Claude é recusado: sumir calado faria quem pediu achar que ele está ligado.
+#[test]
+fn an_explicit_code_mode_outside_claude_is_refused() {
+    let runtime = test_runtime();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir_all(home.join("work/proj")).unwrap();
+    let body = json!({"name": "s1", "cwd": "~/work/proj", "provider": "pi", "headless": false, "code_mode": true});
+    let request = SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap();
+    let error = resolve::resolve_open(&request, &OWNER, &local_facts(&home, &runtime)).err().expect("Code Mode fora do Claude");
+    assert_eq!((error.status, error.code), (400, Some("erro_code_mode_so_claude")));
+}
+
+/// Os campos do pedido no fio, na ordem do struct, tirados da recusa do serde ao campo desconhecido.
+fn wire_fields() -> Vec<String> {
+    let error = SessionOpenRequest::parse(br#"{"cwd": "/x", "campo_que_nao_existe": 1}"#).unwrap_err();
+    let text = format!("{error:?}");
+    let list = text.split("expected one of ").nth(1).expect("o serde lista os campos esperados");
+    list.split(", ").map_while(|item| item.strip_prefix('`').and_then(|rest| rest.split('`').next())).map(str::to_owned).collect()
+}
+
+/// Trava da abertura única: todo campo do pedido de abertura está na tabela de
+/// `hangar_session_open_fields` (que o `--new` e o `new_session` conferem nos testes deles) ou é
+/// só do servidor com o motivo dito. Campo novo no `SessionOpenRequest` sem entrar lá falha aqui.
+#[test]
+fn every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server() {
+    use hangar_session_open_fields::{FIELDS, SERVER_ONLY};
+    let wire = wire_fields();
+    assert!(wire.len() > 20, "a lista do serde mudou de formato: {wire:?}");
+    let known: Vec<&str> = FIELDS.iter().map(|f| f.body).chain(SERVER_ONLY.iter().map(|(name, _)| *name)).collect();
+    let missing: Vec<&String> = wire.iter().filter(|name| !known.contains(&name.as_str())).collect();
+    assert!(missing.is_empty(), "campos do pedido fora da tabela hangar_session_open_fields: {missing:?}");
+    let stale: Vec<&&str> = known.iter().filter(|name| !wire.iter().any(|w| w == *name)).collect();
+    assert!(stale.is_empty(), "campos da tabela que o pedido não tem mais: {stale:?}");
+}
+
+/// Trava do padrão do servidor: campo cujo omitido o servidor decide guarda o valor explícito, até o
+/// `false`. Um `bool` puro não separa "a pessoa desligou" de "ninguém disse", e o padrão do servidor
+/// nunca chega a quem não preencheu.
+#[test]
+fn a_field_with_a_server_default_keeps_the_explicit_value() {
+    for field in hangar_session_open_fields::FIELDS.iter().filter(|f| f.server_default) {
+        let parsed = [json!(false), json!("priority"), json!("x")].into_iter().find_map(|sample| {
+            let body = json!({"cwd": "/x", field.body: sample.clone()});
+            SessionOpenRequest::parse(body.to_string().as_bytes()).ok().map(|request| (sample, request))
+        });
+        let (sample, request) = parsed.unwrap_or_else(|| panic!("{}: nenhum valor de exemplo serve", field.body));
+        assert_eq!(serde_json::to_value(&request).unwrap()[field.body], sample, "{}: o valor explícito se perdeu", field.body);
+        let omitted = SessionOpenRequest::parse(br#"{"cwd": "/x"}"#).unwrap();
+        assert!(serde_json::to_value(&omitted).unwrap().get(field.body).is_none(), "{}: o omitido virou valor", field.body);
+    }
 }
 
 /// Conta ChatGPT fixa do motor (`_fixed_engine_account`, `cliproxy.engine_env`): a credencial do
@@ -1553,6 +1796,10 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     std::fs::write(home.join(".cli-proxy-api/codex-work.json"), json!({"type": "codex", "account_id": "acc1", "prefix": "work"}).to_string()).unwrap();
     std::fs::write(home.join(".codex-work/.hangar-codex-conta"), json!({"version": 1, "id": "work"}).to_string()).unwrap();
     std::fs::write(home.join(".codex-work/auth.json"), json!({"tokens": {"account_id": "acc1"}}).to_string()).unwrap();
+    // Credencial solta duplicada: fica de fora sem derrubar a conta boa.
+    for file in ["codex-copia-1.json", "codex-copia-2.json"] {
+        std::fs::write(home.join(".cli-proxy-api").join(file), json!({"type": "codex", "account_id": "acc9", "email": "x@y.z", "prefix": "dup"}).to_string()).unwrap();
+    }
     std::fs::write(home.join(".claude/engines.json"),
         json!({"gpt": {"base_url": format!("http://127.0.0.1:{port}/v1"), "api_key": "k", "model": "gpt-5.5"}}).to_string()).unwrap();
     let open = |account: &str| {
@@ -1563,23 +1810,78 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     let spec = open("work").unwrap().spec;
     assert_eq!(spec.model.as_deref(), Some("gpt-5.5"), "sem o prefixo da conta");
     assert_eq!(spec.account, Account::Engine { name: "gpt".into(), account: Some("work".into()), config_dir: None,
-        context_window: Some(400000), context_window_unknown: false });
+        context_window: Some(400000), binding: None, context_window_unknown: false });
     let refused = open("outra").unwrap_err();
     assert_eq!((refused.status, refused.code), (400, Some("erro_cliproxy_conta")), "{}", refused.msg);
     let route = facts::fixed_account(&crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
         [("HOME".to_owned(), home.to_string_lossy().into_owned())].into())), "gpt", "work").unwrap();
     let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
-        server_env: &Default::default(), settings: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
+        server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: false, initial_prompt: None, engine_route: None, resume: false, allow_bypass: false };
     let command = claude::pane(&spec, "sid", &claude::ClaudeContext { engine_route: Some(&route), ..ctx }).command;
     let home_text = home.join(".codex-work").to_string_lossy().into_owned();
+    // No Windows o `canonicalize` do teste dá `\\?\C:\…`; a conta vai ao `hangar-engine` no caminho comum.
+    let home_text = home_text.strip_prefix(r"\\?\").unwrap_or(&home_text).to_owned();
     assert_eq!(command[..12], ["hangar-engine", "--exec", "gpt", "--account", "work", "--account-home", &home_text,
         "--account-base-url", &format!("http://127.0.0.1:{port}"), "--model", "gpt-5.5", "--context"]);
+    assert!(!command.contains(&"--service-tier".to_owned()));
+    let normal = SessionSpec { service_tier: Some(ServiceTier::Default), ..spec.clone() };
+    assert!(claude::pane(&normal, "sid", &ctx).command.windows(2).any(|w| w == ["--service-tier", "default"]));
+    let fast = SessionSpec { service_tier: Some(ServiceTier::Priority), ..spec.clone() };
+    assert!(claude::pane(&fast, "sid", &ctx).command.windows(2).any(|w| w == ["--service-tier", "priority"]));
     assert_eq!(route.credential_id, format!("codex:{}", crate::accounts::catalog::resolved(&home.join(".codex-work")).to_string_lossy()));
     // A `conta` da linha do motor é este id: o evento `tags` tem de nomear a mesma conta.
     let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
         [("HOME".to_owned(), home.to_string_lossy().into_owned())].into()));
     let tags = crate::tags::event(&accounts, "").unwrap();
     assert!(tags["accounts"].get(&route.credential_id).is_some(), "{} fora de {}", route.credential_id, tags["accounts"]);
+}
+
+/// Conta ChatGPT conectada só no proxy: abre sem raiz Codex e continua a mesma depois que a conta
+/// Codex dela é cadastrada no Hangar.
+#[test]
+fn a_proxy_only_chatgpt_account_resolves_without_a_codex_home() {
+    let runtime = test_runtime();
+    let catalog = json!({"data": [{"id": "solo/gpt-5.5", "context_length": 400000}]});
+    let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = axum::Router::new().route("/v1/models", axum::routing::get(move || async move {
+        ([(axum::http::header::CONTENT_TYPE, "application/json")], catalog.to_string())
+    }));
+    runtime.spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    for dir in ["work", ".claude", ".cli-proxy-api", ".codex"] { std::fs::create_dir_all(home.join(dir)).unwrap(); }
+    std::fs::write(home.join(".cli-proxy-api/config.yaml"), format!("config-version: 8\nserver:\n  port: {port}\naccess:\n  api-keys:\n    - k\n")).unwrap();
+    std::fs::write(home.join(".cli-proxy-api/codex-a@b.c-plus.json"),
+        json!({"type": "codex", "account_id": "acc2", "email": "a@b.c", "prefix": "solo"}).to_string()).unwrap();
+    std::fs::write(home.join(".claude/engines.json"),
+        json!({"gpt": {"base_url": format!("http://127.0.0.1:{port}/v1"), "api_key": "k", "model": "gpt-5.5"}}).to_string()).unwrap();
+    let accounts = || crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), home.to_string_lossy().into_owned())].into()));
+    let id = "cpa-a-cceab3d142e2";
+    let listed = crate::engines::proxy::list_accounts(&accounts()).unwrap();
+    assert_eq!(listed[0]["credential_id"], format!("cliproxy:{id}"));
+    assert_eq!(listed[0]["prefix"], "solo");
+    let open = || {
+        let body = json!({"name": "s1", "cwd": home.join("work"), "provider": "claude", "headless": false, "engine": "gpt",
+            "engine_account": id, "model": "solo/gpt-5.5", "permission_mode": "manual"});
+        resolve::resolve_open(&SessionOpenRequest::parse(body.to_string().as_bytes()).unwrap(), &OWNER, &local_facts(&home, &runtime))
+    };
+    assert_eq!(open().unwrap().spec.model.as_deref(), Some("gpt-5.5"));
+    let route = facts::fixed_account(&accounts(), "gpt", id).unwrap();
+    assert_eq!((route.home.as_deref(), route.credential_id.as_str(), route.prefix.as_str()), (None, format!("cliproxy:{id}").as_str(), "solo"));
+    let ctx = claude::ClaudeContext { plugin_roots: &[], bridge: None, bridge_key: "k", runtime_config: &Value::Null,
+        server_env: &Default::default(), settings: None, settings_file: None, read_only: None, windows: false, initial_prompt: None, engine_route: Some(&route), resume: false, allow_bypass: false };
+    let command = claude::pane(&open().unwrap().spec, "sid", &ctx).command;
+    assert_eq!(command[..8], ["hangar-engine", "--exec", "gpt", "--account", id, "--account-base-url", &format!("http://127.0.0.1:{port}"), "--model"]);
+    // Cadastrar depois a conta Codex da mesma credencial não tira a sessão da conta que ela já usa.
+    std::fs::create_dir_all(home.join(".codex-a")).unwrap();
+    std::fs::write(home.join(".codex-a/.hangar-codex-conta"), json!({"version": 1, "id": "a"}).to_string()).unwrap();
+    std::fs::write(home.join(".codex-a/auth.json"), json!({"tokens": {"account_id": "acc2"}}).to_string()).unwrap();
+    assert_eq!(facts::fixed_account(&accounts(), "gpt", id).unwrap().prefix, "solo");
+    let env = crate::engines::environment::derive(&accounts(), "gpt", crate::engines::environment::Selection {
+        account: Some(id), account_base: Some(&format!("http://127.0.0.1:{port}")), ..Default::default() }).unwrap();
+    assert_eq!((env["CP_ENGINE_ACCOUNT"].as_str(), env["ANTHROPIC_MODEL"].as_str()), (id, "solo/gpt-5.5"));
 }
 
 /// A abertura inteira: nasceu, a ordem do diário é a esperada e o spec fica gravado; o pane recusado
@@ -1651,7 +1953,7 @@ fn the_codex_open_follows_the_cases() {
         let launcher = launcher.rsplit_once("hangar-codex-tui").unwrap().1;
         let command = argv.last().unwrap();
         // O config.toml da fixture não fixa a janela: o pane pede o 1M padrão do Hangar.
-        let wanted = format!("hangar-codex-tui{launcher} --approval-policy never --sandbox danger-full-access{} \
+        let wanted = format!("hangar-server codex-tui{launcher} --approval-policy never --sandbox danger-full-access{} \
             --config model_context_window=1000000 --config model_auto_compact_token_limit=900000",
             prompt.map(|p| format!(" --prompt {p}")).unwrap_or_default());
         assert!(command.ends_with(&wanted), "{name}: {command}\nesperado no fim: {wanted}");

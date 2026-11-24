@@ -1,0 +1,21 @@
+[package]
+name = "hangar-connect-client"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Sem hangar-core: o app nativo entra pelo Connect sem servidor local e depende deste crate. `serde_json`
+# sem as features do servidor, como o hangar-api: o `arbitrary_precision` mudaria os números do nativo.
+# reqwest só com as features que o nativo já liga: outra mudaria o lockfile dele.
+[dependencies]
+base64 = "=0.23.1"
+reqwest = { workspace = true, features = ["rustls"] }
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+tracing.workspace = true
+url = "=2.5.8"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "time", "macros", "net", "io-util"] }

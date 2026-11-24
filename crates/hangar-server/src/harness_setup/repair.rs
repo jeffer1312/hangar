@@ -214,6 +214,28 @@ impl Service {
                 }
                 .into())
             }
+            "hooks-agy" => {
+                let changed = super::agy_hooks::sync(&env.home).map_err(failed)?;
+                if health::agy_hooks(&env.home)["ok"] != true {
+                    return Err(invalid(
+                        "hooks do Antigravity não ficaram instalados — ver o log do backend",
+                    ));
+                }
+                Ok(if changed.is_empty() {
+                    "já estava"
+                } else {
+                    "hooks.json gravado"
+                }
+                .into())
+            }
+            "skills-agy" => {
+                let stats = super::skills::rebuild_agy(env, &self.repo).map_err(invalid)?;
+                Ok(format!(
+                    "antigravity: {} criados, {} removidos",
+                    stats["criados"].as_u64().unwrap_or(0),
+                    stats["removidos"].as_u64().unwrap_or(0)
+                ))
+            }
             "contas" => {
                 let mut warnings = vec![];
                 for account in self
@@ -223,6 +245,7 @@ impl Service {
                 {
                     let result = claude_config::reconcile_account(
                         &env.home,
+                        Some(env.default_claude_json().as_path()),
                         &account.id,
                         None,
                         claude_config::Wait::within(Duration::from_secs(30)),

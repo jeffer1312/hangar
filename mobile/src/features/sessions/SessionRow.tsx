@@ -16,6 +16,8 @@ import { useWorktreeStatus } from '../worktrees/worktreeStatus';
 import { groupBadge } from '../pair/groupPairs';
 import { GroupGlyph } from '../pair/GroupGlyph';
 import { problemLabel } from '../../chat/SessionProblem';
+import { useWorkReviewSummary } from '../workReview/summaries';
+import { WorkReviewChip } from '../workReview/WorkReviewChip';
 import * as m from '../../paraglide/messages';
 
 // LOOP_TONE_COLOR do core é CSS var (`var(--accent)`) — não serve em RN; o tom vira `Chip tone`.
@@ -58,6 +60,8 @@ interface Props {
   // recebem a sessão: a lista passa a mesma função a todas as linhas, e o memo segura o render
   onPress: (s: AggSession) => void;
   onGit?: (s: AggSession) => void;
+  // Abre a revisão do trabalho (folha no celular); sem ela o chip é só texto.
+  onWorkReview?: (s: AggSession) => void;
   onExcluir?: (s: AggSession) => void;
   onRenomear?: (s: AggSession) => void;
   onResume?: (s: AggSession) => void;
@@ -85,12 +89,15 @@ const isDisabled = (a: { id: string; attributes?: { disabled?: boolean; destruct
 const vibrarAoAbrir =
   Platform.OS === 'android' ? () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {}) : undefined;
 
-export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, compact = false, selected, onPress, onGit, onExcluir, onRenomear, onResume, onReopen, onDismiss, onWorktree, onPair, onHidden, hiddenBadge, crossBadgeText, crossBadgeMachines }: Props) {
+export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, compact = false, selected, onPress, onGit, onWorkReview, onExcluir, onRenomear, onResume, onReopen, onDismiss, onWorktree, onPair, onHidden, hiddenBadge, crossBadgeText, crossBadgeMachines }: Props) {
   const { theme } = useUnistyles();
   // O orquestrador não se renomeia nem se fecha: o backend recusa, então a linha nem oferece.
   const orq = isOrq(s);
   const fora = s.outside ?? null;
   const pares = useMemo(() => (fora ? [] : pairExternals(s)), [s, fora]);
+  const reviewSummary = useWorkReviewSummary(s.serverId, s.name);
+  const reviewBadge = fora ? null : reviewSummary?.badge ?? null;
+  const canReview = !!reviewBadge && !!onWorkReview;
   const parAtivo = !!onPair && !orq && !fora;
   const wtPath = s.worktree_path ?? (s.worktree ? s.cwd ?? null : null);
   const wtNome = worktreeLabel(s);
@@ -140,6 +147,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
     else if (nome === 'pair-invite') onPair?.(s, { kind: 'invite' });
     else if (nome === 'pair-accept') onPair?.(s, { kind: 'accept' });
     else if (nome === 'group') onPair?.(s, { kind: 'group' });
+    else if (nome === 'work-review' && canReview) onWorkReview?.(s);
     else if (nome === 'reopen') onReopen?.(s);
     else if (nome === 'dismiss') onDismiss?.(s);
     else if (nome.startsWith('undo:')) {
@@ -161,8 +169,9 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
       ...(fallen && onDismiss ? [{ name: 'dismiss', label: m.session_dismiss() }] : []),
       ...acoesMenu.filter((a) => !isDisabled(a)).map((a) => ({ name: a.id, label: a.title })),
       ...(groupTitle ? [{ name: 'group', label: groupTitle }] : []),
+      ...(canReview && reviewBadge ? [{ name: 'work-review', label: reviewBadge.text }] : []),
     ],
-    [fallen, onReopen, onDismiss, acoesMenu, groupTitle],
+    [fallen, onReopen, onDismiss, acoesMenu, groupTitle, canReview, reviewBadge],
   );
   const pendentes = pares.filter((p) => p.pending);
   const untracked = s.tracked === false;
@@ -243,7 +252,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
       // estado e a pergunta sumiriam do leitor de tela.
       // Máquina e projeto entram mesmo quando a tela os esconde (lista agrupada, pasta = nome):
       // é o que distingue duas conversas de mesmo nome no leitor de tela.
-      accessibilityLabel={`${s.name}${hiddenBadge && s.hidden_from_list ? `, ${m.session_hidden_badge()}` : ''}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}${s.headless === true ? `, ${m.criar_modo_exec_headless()}` : ''}${fora ? `, ${m.pair_from_owner({ dono: fora.owner })}${s.guest_kind === 'share' ? '' : `, ${m.pair_level_view()}`}` : ''}, ${rotuloEstado(s.state)}${s.limited ? `, ${s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${sub ? `, ${sub}` : ''}${badgeText ? `, ${badgeText}` : ''}${providerLabel ? `, ${providerLabel}` : ''}${account ? `, ${m.sessao_conta({ n: account.name })}` : ''}${ctxPct !== null ? `, ${m.tags_context_ring({ pct: Math.round(ctxPct) })}` : ''}, ${s.serverLabel}${s.cwd ? `, ${cwd.base}` : ''}${s.branch ? `, ${s.branch}` : ''}${gitAhead || gitBehind ? `, ${m.git_sync_titulo({ ahead: gitAhead, behind: gitBehind })}` : ''}${selected ? `, ${m.switcher_atual()}` : ''}`}
+      accessibilityLabel={`${s.name}${hiddenBadge && s.hidden_from_list ? `, ${m.session_hidden_badge()}` : ''}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}${s.headless === true ? `, ${m.criar_modo_exec_headless()}` : ''}${fora ? `, ${m.pair_from_owner({ dono: fora.owner })}${s.guest_kind === 'share' ? '' : `, ${m.pair_level_view()}`}` : ''}, ${rotuloEstado(s.state)}${s.limited ? `, ${s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${sub ? `, ${sub}` : ''}${badgeText ? `, ${badgeText}` : ''}${reviewBadge ? `, ${reviewBadge.text}` : ''}${providerLabel ? `, ${providerLabel}` : ''}${account ? `, ${m.sessao_conta({ n: account.name })}` : ''}${ctxPct !== null ? `, ${m.tags_context_ring({ pct: Math.round(ctxPct) })}` : ''}, ${s.serverLabel}${s.cwd ? `, ${cwd.base}` : ''}${s.branch ? `, ${s.branch}` : ''}${gitAhead || gitBehind ? `, ${m.git_sync_titulo({ ahead: gitAhead, behind: gitBehind })}` : ''}${selected ? `, ${m.switcher_atual()}` : ''}`}
       accessibilityActions={acoesA11y}
       onAccessibilityAction={({ nativeEvent }) => {
         acao(nativeEvent.actionName);
@@ -263,6 +272,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
           {s.asleep ? <Chip icon="Moon">{m.session_asleep_badge()}</Chip> : null}
           {untracked ? <Chip tone="warning">{m.sessao_sem_id()}</Chip> : null}
           {fora ? <Chip tone="accent" icon={s.guest_kind === 'share' ? 'Link' : 'Eye'}>{m.pair_from_owner({ dono: fora.owner })}</Chip> : null}
+          {reviewBadge ? <WorkReviewChip badge={reviewBadge} onPress={canReview ? () => onWorkReview?.(s) : undefined} /> : null}
           <Text style={[styles.tempo, { color: muted }]} numberOfLines={1}>{relativeTime(s.last_activity)}</Text>
         </View>
         {sub ? (

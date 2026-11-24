@@ -1,4 +1,5 @@
 //! Proteção de existência e fatos estritos de uso das contas.
+pub mod antigravity;
 pub mod bridge;
 pub mod aliases;
 pub mod catalog;

@@ -11,7 +11,7 @@ import { QueuedBubble } from './QueuedBubble';
 import { AssistantBubble } from './AssistantBubble';
 import { OrqTimelineEntry } from './OrqTimelineEntry';
 import { ClaudeNotice } from './ClaudeNotice';
-import { isNoticeLine } from '../features/notices/notices';
+import { fixTracker, isFixRunningNote, isNoticeLine } from '../features/notices/notices';
 import { PreviewBubble } from './PreviewBubble';
 import { ToolGroup } from './tools/ToolGroup';
 import { ToolCard } from './tools/ToolCard';
@@ -22,10 +22,14 @@ import { conversationInset } from './conversationColumn';
 import { ToolDetailSheet, type ToolDetailHandle } from './tools/ToolDetailSheet';
 import type { ConversationRow } from './tools/fold';
 import { HtmlPageCard } from './tools/HtmlPageCard';
-import { locateInMarkdown, type QuoteRef } from '@hangar/core';
+import { locateInMarkdown, modelDisplay, type QuoteRef } from '@hangar/core';
+import { ProviderGlyph } from '../ui/ProviderGlyph';
 import { useCiteDialog } from '../stores/citeDialog';
 import { contextRefsKey } from '../stores/contextRefs';
 import { flashQuoteSource } from '../stores/quoteFlash';
+import { chatJumpRoute, consumeChatJump, JUMP_TTL_MS, useChatJump } from '../stores/chatJump';
+import { ConversationGallery, type ConversationGalleryHandle } from './ConversationGallery';
+import { GalleryContext } from './galleryContext';
 import { echoInQueuePanel, hexParaRgb, planDisplayText, type AgentRun, type ChatEvent, type QueuePanel, type SessionInfo, type StateEvent } from '@hangar/core';
 import { useAparencia } from '../stores/aparencia';
 import { TaskList } from './TaskList';
@@ -127,6 +131,9 @@ export function MessageList({
     const held = pending.flatMap((p) => (p.entry ? [{ id: p.entry.slice('queued-'.length), text: p.text, ts: null }] : []));
     return held.length ? { entries: [...(queuePanel?.entries ?? []), ...held], actions: queuePanel?.actions ?? false } : queuePanel;
   }, [pending, queuePanel]);
+  // O mapa só troca quando um conserto muda: evento comum não redesenha as outras linhas.
+  const fixTrack = useRef(fixTracker());
+  const fixes = useMemo(() => fixTrack.current(events, eventsRevision), [events, eventsRevision]);
   const projection = projectConversation(previous.current, {
     events, eventsRevision, pref, merge: look === 'tree', everyRun, tasksEnabled: tarefasLigadas,
     pagesEnabled: !!sessionName, running: new Set(agentesRodando.map((a) => a.id)), queuePanel: hiddenQueue,
@@ -176,6 +183,20 @@ export function MessageList({
     toolGroupPausedRef.current = false;
     setToolGroupPaused(false);
   }, []);
+  // Com o dedo na lista ou o impulso andando, nada a leva ao fim: a posição lida chega com atraso
+  // e, logo depois de abrir a conversa, ainda diz "no fim".
+  const dragging = useRef(false);
+  const skippedWhileDragging = useRef(false);
+  const coasting = useRef(false);
+  const releaseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(releaseTimer.current), []);
+  // Rolagem do próprio app interrompe o impulso sem aviso de fim: o gesto acaba ali.
+  const stopGesture = useCallback(() => {
+    clearTimeout(releaseTimer.current);
+    dragging.current = false;
+    coasting.current = false;
+    skippedWhileDragging.current = false;
+  }, []);
   const dataRef = useRef(data);
   useEffect(() => { dataRef.current = data; }, [data]);
   // Medidas lidas na hora do toque, por referência: como dependência, cada mudança de altura do
@@ -190,6 +211,7 @@ export function MessageList({
     if (i < 0 || row?.type !== 'event' || !lista.current) return;
     const source = row.ev.text ?? '';
     flashQuoteSource(ref.source);
+    stopGesture();
     // Começo da resposta no topo (viewPosition 0): com 0.3, resposta mais alta que a tela ficava
     // com o começo, e o trecho, acima da vista.
     void lista.current.scrollToIndex({ index: i, animated: false, viewPosition: 0, viewOffset: quoteGap }).then(() => {
@@ -212,7 +234,24 @@ export function MessageList({
         if (offset > st.scroll + 1) void list.scrollToOffset({ offset, animated: layoutRef.current.animated });
       }, 80);
     });
-  }, []);
+  }, [stopGesture]);
+  // "Na conversa" da galeria: o começo da mensagem no topo, acesa como a origem de uma citação.
+  const goToEvent = useCallback((eventId: string) => {
+    const i = dataRef.current.findIndex((r) => r.type === 'event' && r.ev.id === eventId);
+    if (i < 0 || !lista.current) return false;
+    flashQuoteSource(eventId);
+    stopGesture();
+    void lista.current.scrollToIndex({ index: i, animated: layoutRef.current.animated, viewPosition: 0, viewOffset: layoutRef.current.quoteGap });
+    return true;
+  }, [stopGesture]);
+  const gallery = useRef<ConversationGalleryHandle>(null);
+  const openGallery = useCallback((key: string) => gallery.current?.open(key) ?? false, []);
+  const jumpRoute = sessionName && serverId ? chatJumpRoute(serverId, sessionName) : null;
+  const jump = useChatJump((s) => (jumpRoute && s.request?.route === jumpRoute ? s.request : null));
+  useEffect(() => {
+    // Outra lista da mesma sessão (a de um subagente) não acha a mensagem e deixa o pedido para esta.
+    if (jump && Date.now() - jump.at < JUMP_TTL_MS && goToEvent(jump.eventId)) consumeChatJump(jump.n);
+  }, [jump, goToEvent]);
   const working = stateEvent?.state === 'working';
   const desde = !working ? null : projection.lastSent === null ? turnSeen
     : turnSeen === null ? projection.lastSent : Math.max(projection.lastSent, turnSeen);
@@ -238,7 +277,11 @@ export function MessageList({
           }
           return <UserBubble text={ev.text ?? ''} sessionName={sessionName} serverId={serverId} ts={ev.ts} eventId={ev.id} imageCount={ev.image_count ?? 0} onQuoteClick={goToQuote} />;
         }
-        if (isNoticeLine(ev) && (ev.kind === 'assistant_msg' || ev.kind === 'notice')) return <ClaudeNotice event={ev} serverId={serverId} />;
+        if (isNoticeLine(ev) && (ev.kind === 'assistant_msg' || ev.kind === 'notice')) {
+          if (isFixRunningNote(ev)) return null;
+          return <ClaudeNotice event={ev} serverId={serverId} sessionName={sessionName} fix={fixes.get(ev.id)} />;
+        }
+        if (ev.kind === 'handoff') return <HandoffLine event={ev} />;
         if (ev.kind === 'assistant_msg') {
           return <AssistantBubble text={ev.text ?? ''} sessionName={sessionName} serverId={serverId} ts={ev.ts} eventId={ev.id} canQuote={canQuote} />;
         }
@@ -262,7 +305,7 @@ export function MessageList({
         return nunca;
       }
     }
-  }, [abrirDetalhe, sessionName, serverId, look, working, session?.provider, session?.headless, session?.plugin_tool_servers, stateEvent?.problema, goToQuote, canQuote, preserveExpansion, pauseForToolGroup]);
+  }, [abrirDetalhe, sessionName, serverId, look, working, session?.provider, session?.headless, session?.plugin_tool_servers, stateEvent?.problema, goToQuote, canQuote, preserveExpansion, pauseForToolGroup, fixes]);
   const renderItem = useCallback(({ item }: { item: MessageRow }) => {
     const row = renderRow(item);
     const arrived = arrivals.current.at.get(item.id);
@@ -302,6 +345,45 @@ export function MessageList({
     if (reading.current.atEnd && toolGroupPausedRef.current) resumeFollowing();
     setLongeDoFim(falta > viewport);
   }, [resumeFollowing]);
+  const settle = useCallback(() => {
+    clearTimeout(releaseTimer.current);
+    dragging.current = false;
+    coasting.current = false;
+    const skipped = skippedWhileDragging.current;
+    skippedWhileDragging.current = false;
+    // Parou no fim depois de chegar linha durante o gesto: faz a ida ao fim que ficou para trás.
+    if (skipped && reading.current.atEnd && !toolGroupPausedRef.current) void lista.current?.scrollToEnd({ animated: false });
+  }, []);
+  // Impulso sem notícia por 500 ms acabou, mesmo que o aviso de fim não chegue.
+  const armCoastingStall = useCallback(() => {
+    clearTimeout(releaseTimer.current);
+    releaseTimer.current = setTimeout(settle, 500);
+  }, [settle]);
+  const onListScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (coasting.current) armCoastingStall();
+    onScroll(e);
+  }, [onScroll, armCoastingStall]);
+  const onScrollBeginDrag = useCallback(() => {
+    clearTimeout(releaseTimer.current);
+    coasting.current = false;
+    dragging.current = true;
+    reading.current.atEnd = false;
+  }, []);
+  // O impulso, quando há, começa logo depois de soltar; só sem ele o gesto termina aqui.
+  const onScrollEndDrag = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    onScroll(e);
+    clearTimeout(releaseTimer.current);
+    releaseTimer.current = setTimeout(settle, 100);
+  }, [onScroll, settle]);
+  const onMomentumScrollBegin = useCallback(() => {
+    dragging.current = true;
+    coasting.current = true;
+    armCoastingStall();
+  }, [armCoastingStall]);
+  const onMomentumScrollEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    onScroll(e);
+    settle();
+  }, [onScroll, settle]);
   const onContentSizeChange = useCallback((_width: number, height: number) => {
     if (!toolGroupPausedRef.current || !Number.isFinite(height) || !(height > 0)) return;
     toolGroupMeasurement.current.height = height;
@@ -321,8 +403,10 @@ export function MessageList({
   const rowCount = data.length;
   const hasPreview = !!visiblePreview;
   useEffect(() => {
+    if (dragging.current) { skippedWhileDragging.current = true; return; }
     if (!reading.current.atEnd || toolGroupPausedRef.current) return;
     const keepAtEnd = () => {
+      if (dragging.current) { skippedWhileDragging.current = true; return; }
       if (reading.current.atEnd && !toolGroupPausedRef.current) void lista.current?.scrollToEnd({ animated: false });
     };
     const frame = requestAnimationFrame(keepAtEnd);
@@ -353,16 +437,18 @@ export function MessageList({
     });
   }, [serverId, sessionName]);
   const irProFim = useCallback(() => {
+    stopGesture();
     if (toolGroupPausedRef.current) resumeFollowing();
     setLongeDoFim(false);
     void lista.current?.scrollToEnd({ animated: look !== 'terminal' });
-  }, [resumeFollowing, look]);
+  }, [stopGesture, resumeFollowing, look]);
 
   // Largura da coluna (Aparência › Texto da conversa): abaixo de 100% a conversa estreita no meio.
   const recuo = conversationInset(boxWidth ?? width, theme.conversa.coluna, theme.base.space[4], maxReading);
   const elevado = hexParaRgb(theme.tokens.bg.elevated);
 
   return (
+    <GalleryContext.Provider value={jumpRoute ? openGallery : null}>
     <View style={styles.area} onLayout={(e) => setBoxWidth(e.nativeEvent.layout.width)}>
     {/* Leitura Folha: a folha atrás da conversa; a Solidez da folha diz quanto ela tapa o fundo. */}
     {folha !== null && elevado ? (
@@ -373,7 +459,11 @@ export function MessageList({
     ) : null}
     <LegendList
       ref={lista}
-      onScroll={onScroll}
+      onScroll={onListScroll}
+      onScrollBeginDrag={onScrollBeginDrag}
+      onScrollEndDrag={onScrollEndDrag}
+      onMomentumScrollBegin={onMomentumScrollBegin}
+      onMomentumScrollEnd={onMomentumScrollEnd}
       onContentSizeChange={preserveExpansion ? onContentSizeChange : undefined}
       scrollEventThrottle={100}
       nestedScrollEnabled={nestedScrollEnabled}
@@ -444,7 +534,11 @@ export function MessageList({
       </Pressable>
     ) : null}
     <ToolDetailSheet ref={detail} resultOf={resultDe} sessionName={sessionName} serverId={serverId} />
+    {sessionName && serverId ? (
+      <ConversationGallery ref={gallery} events={events} serverId={serverId} sessionName={sessionName} onShowInChat={goToEvent} />
+    ) : null}
     </View>
+    </GalleryContext.Provider>
   );
 }
 
@@ -458,6 +552,32 @@ function PendingEcho({ echo, route, sessionName, serverId, onQuoteClick }: {
       style={[styles.pending, (echo.solid || echo.conversation) && styles.pendingSolid]}>
       <UserBubble text={echo.text} sessionName={sessionName} serverId={serverId} onQuoteClick={onQuoteClick} bubbleRef={bubble} />
     </FlightDestination>
+  );
+}
+
+/** Divisor da troca de agente: a conversa seguiu noutro modelo a partir daqui. */
+function HandoffLine({ event }: { event: ChatEvent }) {
+  const { theme } = useUnistyles();
+  const h = event.handoff ?? {};
+  const from = modelDisplay(h.from_provider, h.from_model);
+  const to = modelDisplay(h.to_provider, h.to_model);
+  return (
+    // Título e rota em linhas separadas: nome longo de modelo ou texto ampliado não passa da largura da conversa.
+    <View style={styles.handoff} accessible accessibilityLabel={`${m.handoff_divider()}: ${from} → ${to}`}>
+      <View style={styles.handoffRow}>
+        <View style={styles.handoffRule} />
+        <Icon name="RefreshCw" size={13} color={theme.tokens.text.muted} />
+        <Text style={styles.handoffTitle} numberOfLines={1}>{m.handoff_divider()}</Text>
+        <View style={styles.handoffRule} />
+      </View>
+      <View style={[styles.handoffRow, styles.handoffRoute]}>
+        <ProviderGlyph provider={h.from_provider ?? ''} size={14} />
+        <Text style={styles.handoffModel} numberOfLines={1}>{from}</Text>
+        <Icon name="ArrowRight" size={12} color={theme.tokens.text.muted} />
+        <ProviderGlyph provider={h.to_provider ?? ''} size={14} />
+        <Text style={styles.handoffModel} numberOfLines={1}>{to}</Text>
+      </View>
+    </View>
   );
 }
 
@@ -491,6 +611,34 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.tokens.text.muted,
     textAlign: 'center',
     paddingVertical: theme.base.space[1],
+  },
+  handoff: {
+    gap: theme.base.space[1],
+    paddingVertical: theme.base.space[2],
+  },
+  handoffRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[1],
+  },
+  handoffRoute: {
+    justifyContent: 'center',
+  },
+  handoffRule: {
+    flex: 1,
+    height: 1,
+    backgroundColor: theme.tokens.border.default,
+  },
+  handoffTitle: {
+    flexShrink: 1,
+    fontSize: theme.base.text.xs,
+    fontWeight: theme.base.weight.semibold,
+    color: theme.tokens.text.muted,
+  },
+  handoffModel: {
+    flexShrink: 1,
+    fontSize: theme.base.text.xs,
+    color: theme.tokens.text.muted,
   },
   turnNote: {
     fontSize: theme.base.text.xs,

@@ -4,9 +4,11 @@
 
 use axum::http::StatusCode;
 
+pub mod account_devices;
 pub mod binaries;
 pub mod config;
 pub mod devices;
+pub mod guests;
 pub mod peers;
 pub mod preview;
 pub mod state;

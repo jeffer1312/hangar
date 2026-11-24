@@ -33,6 +33,8 @@ fn route(path: &str) -> Option<(String, &'static str, bool)> {
         "pi/model" => ("pi", true),
         "kimi/models" => ("kimi", false),
         "kimi/model" => ("kimi", true),
+        "antigravity/models" => ("antigravity", false),
+        "antigravity/model" => ("antigravity", true),
         _ => return None,
     };
     let name = percent_encoding::percent_decode_str(name)
@@ -58,7 +60,7 @@ pub fn catalog_request(method: &Method, path: &str, raw: Option<&str>) -> bool {
         && path == "/api/model-options"
         && query(raw)
             .get("provider")
-            .is_some_and(|p| ["pi", "omp", "kimi"].contains(&p.as_str()))
+            .is_some_and(|p| ["pi", "omp", "kimi", "antigravity"].contains(&p.as_str()))
 }
 pub fn inbox_http_request(method: &Method, path: &str, headers: &HeaderMap) -> bool {
     path == "/api/pi/inbox"
@@ -130,6 +132,14 @@ fn validate_kind(row: &SessionRow, provider: &str) -> Result<(), ModelError> {
                 "esta rota so existe pra sessoes Pi",
             ));
         }
+    } else if provider == "antigravity" {
+        if row.provider != "antigravity" || row.headless {
+            return Err(coded(
+                400,
+                "erro_rota_so_antigravity",
+                "esta rota só existe pra sessões Antigravity com terminal",
+            ));
+        }
     } else if row.provider != "kimi" {
         return Err(coded(
             400,
@@ -177,6 +187,9 @@ async fn global_catalog(
             "conta ChatGPT exige Claude com motor CLIProxyAPI local",
         ));
     }
+    if provider == "antigravity" {
+        return antigravity_catalog(st, query.get("conta").map(String::as_str)).await;
+    }
     if provider == "kimi" {
         let home = st.origins_home.clone();
         let cat = tokio::task::spawn_blocking(move || pure::kimi_catalog(&home))
@@ -189,6 +202,51 @@ async fn global_catalog(
         );
     }
     Ok(json!({"kind":provider,"reduced":false,"models":catalogs.read(provider).await?}))
+}
+
+/// Os modelos que a conta Google pode usar, pelo `agy models` dela. `conta` é o id de
+/// `/api/antigravity-contas` (`default` ou o nome da pasta adicional).
+async fn antigravity_catalog(st: &Arc<AppState>, conta: Option<&str>) -> Result<Value, ModelError> {
+    let env = st.accounts.env.clone();
+    let id = conta.filter(|c| !c.is_empty()).unwrap_or(crate::accounts::antigravity::DEFAULT_ID).to_owned();
+    let account = crate::accounts::antigravity::account(&env.home, &id)
+        .ok_or_else(|| coded(404, "erro_conta_antigravity_inexistente", "conta do Antigravity não encontrada"))?;
+    let program = crate::cli_probe::resolve_program("agy", &env)
+        .ok_or_else(|| coded(409, "erro_agy_ausente", "o agy não está instalado nesta máquina"))?;
+    let process = hangar_antigravity::env::process_env(&account, env.base.keys().cloned());
+    let home = env.home.clone();
+    let listed = tokio::task::spawn_blocking(move || hangar_antigravity::probe::models(&program, &home, &process, std::time::Duration::from_secs(20))).await;
+    let models = match listed {
+        Ok(Ok(Some(models))) => models,
+        Ok(Ok(None)) => return Err(coded(502, "erro_modelos_antigravity", "o agy não listou os modelos desta conta: sem login ou sem resposta em 20 s")),
+        Ok(Err(error)) => {
+            tracing::warn!(code = "agy_models_failed", %error, "agy models não rodou");
+            return Err(coded(500, "erro_modelos_antigravity", &format!("o agy não rodou para listar os modelos: {error}")));
+        }
+        Err(error) => {
+            tracing::warn!(code = "agy_models_failed", %error, "agy models caiu");
+            return Err(coded(500, "erro_modelos_antigravity", "o agy caiu ao listar os modelos"));
+        }
+    };
+    let models: Vec<Value> = models.into_iter().map(|(id, name)| json!({"id": id, "name": name})).collect();
+    Ok(json!({"kind": "antigravity", "reduced": false, "models": models}))
+}
+
+/// Os modelos da conta e o atual, lido no rodapé da sessão. Rodapé ilegível ou modelo fora da lista: `current` nulo.
+async fn antigravity_models(st: &Arc<AppState>, row: SessionRow, pid: Option<u32>) -> Result<Value, ModelError> {
+    let catalog = antigravity_catalog(st, None).await?;
+    // Sem tela legível o modelo atual fica nulo, e o motivo vai ao log: "nenhum" e "não li" não podem se confundir calados.
+    let footer = match NativeIo::new(st.clone(), row, pid).await {
+        Ok(io) => match io.capture().await {
+            Ok(screen) => crate::terminal_state::agy_footer(&screen),
+            Err(_) => { tracing::warn!(code = "agy_footer_unreadable", "captura do pane do agy falhou; modelo atual desconhecido"); None }
+        },
+        Err(_) => { tracing::warn!(code = "agy_footer_unreadable", "pane do agy indisponível; modelo atual desconhecido"); None }
+    };
+    let models = catalog["models"].clone();
+    let current = footer.and_then(|footer| models.as_array()?.iter()
+        .find_map(|model| model["id"].as_str().filter(|id| footer.is_model(id)).map(str::to_owned)));
+    Ok(json!({"models": models, "current": current}))
 }
 
 /// A borda do servidor já decidiu quem pode usar a rota; o WebSocket confere ainda self-connect/token.
@@ -245,6 +303,9 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
         if provider == "pi" {
             return Ok(pure::pi_response(&session_catalog(st, &row, pid).await?.0));
         }
+        if provider == "antigravity" {
+            return antigravity_models(st, row, pid).await;
+        }
         let home = st.origins_home.clone();
         return tokio::task::spawn_blocking(move || pure::kimi_catalog(&home))
             .await
@@ -287,8 +348,16 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
   let _guard=guard;st.list.invalidate();let(current,pid)=discovered(&st,&name).await?;
   if !same_life(&row,&current){return Err(coded(409,"erro_interacao_desatualizada","a sessão mudou enquanto esperava o teclado"));}
   if current.transfer_id.is_some(){return Err(coded(409,"erro_transferencia_em_andamento","a sessão está sendo transferida"));}
-  if provider=="kimi"&&st.term.is_active(&name){return Err(coded(409,"erro_terminal_aberto","Terminal aberto nesta sessao. Feche o painel pra responder por aqui."));}
+  if matches!(provider,"kimi"|"antigravity")&&st.term.is_active(&name){return Err(coded(409,"erro_terminal_aberto","Terminal aberto nesta sessao. Feche o painel pra responder por aqui."));}
   let io=NativeIo::new(st.clone(),current.clone(),pid).await?;let timing=Timing::default();
+  if provider=="antigravity"{
+   let id=body["model"].as_str().filter(|v|!v.is_empty()).ok_or_else(||coded(422,"erro_model_effort_faltando","informe model"))?;
+   let catalog=antigravity_catalog(&st,None).await?;
+   if !catalog["models"].as_array().is_some_and(|models|models.iter().any(|m|m["id"]==id)){
+    return Err(ModelError::coded(422,"erro_modelo_antigravity_invalido","modelo fora da lista do agy desta conta",json!({"model":id})));
+   }
+   return driver::agy_switch(&io,id,timing).await;
+  }
   if provider=="pi"{
    let (catalog,_)=session_catalog(&st,&current,pid).await?;let mut commands=vec![];
    let model=body["model"].as_str().filter(|v|!v.is_empty());let selected=body["provider"].as_str().filter(|v|!v.is_empty());let effort=body["effort"].as_str().filter(|v|!v.is_empty());
@@ -370,10 +439,11 @@ pub fn parse_body(bytes: &[u8], provider: &str) -> Result<Value, ModelError> {
             detail: json!([{"type":"model_attributes_type","loc":["body"],"msg":"Input should be a valid dictionary or object to extract fields from","input":value}]),
         });
     };
-    let allowed = if provider == "pi" {
-        vec!["provider", "model", "effort"]
-    } else {
-        vec!["model", "effort"]
+    let allowed = match provider {
+        "pi" => vec!["provider", "model", "effort"],
+        // O esforço do Antigravity vem no id do modelo (`gemini-4-neon-high`).
+        "antigravity" => vec!["model"],
+        _ => vec!["model", "effort"],
     };
     let mut errors = vec![];
     let mut normalized = serde_json::Map::new();

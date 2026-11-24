@@ -74,6 +74,8 @@ enum Step {
     Fs(Build),
     /// Roda o comando com a guarda da conta presa em exclusivo por outro processo.
     Busy(Vec<String>),
+    /// O `--prep` pelo caminho do servidor, o único que espelha os MCP do `~/.claude.json`.
+    Server(Vec<String>),
 }
 
 #[derive(Default)]
@@ -92,6 +94,7 @@ struct Scenario { build: Build, steps: Vec<Step>, env: Vec<(&'static str, &'stat
 
 fn cli(args: &[&str]) -> Step { Step::Cli(args.iter().map(|a| (*a).to_owned()).collect()) }
 fn cli_s(args: Vec<String>) -> Step { Step::Cli(args) }
+fn server(args: &[&str]) -> Step { Step::Server(args.iter().map(|a| (*a).to_owned()).collect()) }
 fn fs(f: impl Fn(&Path) + 'static) -> Step { Step::Fs(Box::new(f)) }
 fn sc(build: impl Fn(&Path) + 'static, steps: Vec<Step>) -> Scenario {
     Scenario { build: Box::new(build), steps, env: vec![], rules: Rules::default() }
@@ -193,7 +196,7 @@ fn scenario(name: &str) -> Scenario {
         "prep_mcp_mirror" => sc(casa, vec![cli(&NEW), fs(|h| {
             put(&h.join(".claude.json"), r#"{"oauthAccount": {"emailAddress": "um@exemplo.com"}, "mcpServers": {"tavily": {"url": "nova"}, "context7": {}}}"#);
             put(&h.join(".claude-conta2/.claude.json"), r#"{"mcpServers": {"tavily": {}, "so-da-conta": {}}, "projects": {"/tmp/x": {"allowedTools": ["Bash", "Edit"]}}}"#);
-        }), cli(&PREP), cli(&PREP)]),
+        }), server(&PREP), server(&PREP)]),
         "prep_mirror_warns_changed_key" => sc(casa, vec![cli(&NEW), fs(|h| {
             put(&h.join(".claude/settings.json"), r#"{"theme":"dark","outputStyle":"Concise"}"#);
             put(&h.join(".claude-conta2/settings.json"), r#"{"theme":"light"}"#);
@@ -395,32 +398,32 @@ fn scenario(name: &str) -> Scenario {
             put(&h.join(".claude/settings.json"), r#"{"x": "\ud800"}"#);
             put(&h.join(".claude-conta2/settings.json"), r#"{"x": "\ud800", "y": 1}"#); }, vec![cli(&PREP)]),
 
-        // ── ~/.claude.json ──
+        // ── ~/.claude.json: o espelho é do servidor, o `--prep` de terminal não espelha ──
         "mcp_copy_missing" => sc(|h| { casa(h); conta(h, "conta2"); rm(&h.join(".claude-conta2/.claude.json")); },
-            vec![cli(&PREP), fs(|h| { rm(&h.join(".claude.json")); put(&h.join(".claude-conta2/.claude.json"), "{\"mcpServers\": {}}"); }), cli(&PREP)]),
-        "mcp_principal_invalid" => d2(sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude.json"), "{bad"); }, vec![cli(&PREP)]),
+            vec![server(&PREP), fs(|h| { rm(&h.join(".claude.json")); put(&h.join(".claude-conta2/.claude.json"), "{\"mcpServers\": {}}"); }), server(&PREP)]),
+        "mcp_principal_invalid" => d2(sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude.json"), "{bad"); }, vec![server(&PREP)]),
             0, 0, "hangar-conta: não consegui espelhar o ~/.claude.json pra conta: ", ""),
-        "mcp_not_object" => sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude.json"), "[1]"); }, vec![cli(&PREP)]),
+        "mcp_not_object" => sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude.json"), "[1]"); }, vec![server(&PREP)]),
         "mcp_principal_empty_or_not_dict" => sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude.json"), r#"{"mcpServers": {}}"#); },
-            vec![cli(&PREP), fs(|h| put(&h.join(".claude.json"), r#"{"mcpServers": ["x"]}"#)), cli(&PREP),
-                fs(|h| put(&h.join(".claude.json"), r#"{"outra": 1}"#)), cli(&PREP)]),
+            vec![server(&PREP), fs(|h| put(&h.join(".claude.json"), r#"{"mcpServers": ["x"]}"#)), server(&PREP),
+                fs(|h| put(&h.join(".claude.json"), r#"{"outra": 1}"#)), server(&PREP)]),
         "mcp_copy_not_dict" => sc(|h| { casa(h); conta(h, "conta2");
-            put(&h.join(".claude-conta2/.claude.json"), r#"{"mcpServers": null, "projects": {}}"#); }, vec![cli(&PREP)]),
+            put(&h.join(".claude-conta2/.claude.json"), r#"{"mcpServers": null, "projects": {}}"#); }, vec![server(&PREP)]),
         "mcp_format" => sc(|h| {
             casa(h);
             conta(h, "conta2");
             put(&h.join(".claude.json"), r#"{"mcpServers": {"novo": {"url": "x"}, "tavily": {}}}"#);
             put(&h.join(".claude-conta2/.claude.json"), "{\"nome\": \"ação ✓ 😀\", \"num\": 1e16, \"meio\": 0.5, \"vazio\": {}, \
                 \"lista\": [], \"mcpServers\": {\"tavily\": {\"velho\": true}}, \"z\": {\"a\": [1, {\"b\": null}]}}");
-        }, vec![cli(&PREP)]),
+        }, vec![server(&PREP)]),
         "mcp_loose_equality" => sc(|h| { casa(h); conta(h, "conta2");
             put(&h.join(".claude.json"), r#"{"mcpServers": {"x": {"n": 1, "b": true}}}"#);
-            put(&h.join(".claude-conta2/.claude.json"), r#"{"mcpServers": {"x": {"b": 1, "n": 1.0}}}"#); }, vec![cli(&PREP)]),
+            put(&h.join(".claude-conta2/.claude.json"), r#"{"mcpServers": {"x": {"b": 1, "n": 1.0}}}"#); }, vec![server(&PREP)]),
         "mcp_lone_surrogate" => sc(|h| { casa(h); conta(h, "conta2");
             put(&h.join(".claude.json"), r#"{"mcpServers": {"novo": {}}}"#);
-            put(&h.join(".claude-conta2/.claude.json"), r#"{"projects": {"/p": {"t": "\udc80"}}, "mcpServers": {}}"#); }, vec![cli(&PREP)]),
+            put(&h.join(".claude-conta2/.claude.json"), r#"{"projects": {"/p": {"t": "\udc80"}}, "mcpServers": {}}"#); }, vec![server(&PREP)]),
         "mcp_bom" => d2(sc(|h| { casa(h); conta(h, "conta2");
-            put(&h.join(".claude-conta2/.claude.json"), "\u{feff}{\"mcpServers\": {}}"); }, vec![cli(&PREP)]),
+            put(&h.join(".claude-conta2/.claude.json"), "\u{feff}{\"mcpServers\": {}}"); }, vec![server(&PREP)]),
             0, 0, "hangar-conta: não consegui espelhar o ~/.claude.json pra conta: ", ""),
 
         // ── plugins ──
@@ -616,13 +619,13 @@ fn scenario(name: &str) -> Scenario {
             conta(h, "conta2");
             put(&h.join(".claude.json"), r#"{"mcpServers": {"zeta": {"url": "z"}, "alpha": {"url": "a"}, "novo": {}}}"#);
             put(&h.join(".claude-conta2/.claude.json"), r#"{"mcpServers": {"zeta": {"url": "velho"}, "alpha": {"url": "velho"}}, "projects": {}}"#);
-        }, vec![cli(&PREP)]),
+        }, vec![server(&PREP)]),
         // C140: a cópia sem a chave `mcpServers` a ganha no fim.
         "mcp_copy_without_key" => sc(|h| {
             casa(h);
             conta(h, "conta2");
             put(&h.join(".claude-conta2/.claude.json"), r#"{"projects": {"/tmp/x": {}}, "numStartups": 2}"#);
-        }, vec![cli(&PREP)]),
+        }, vec![server(&PREP)]),
         // Q08: escapes de controle nos valores, byte a byte.
         "settings_control_escapes" => sc(|h| {
             casa(h);
@@ -630,7 +633,7 @@ fn scenario(name: &str) -> Scenario {
             put(&h.join(".claude/settings.json"), "{\"ctl\": \"a\\bb\\fc\\rd\\ne\\u0000f\\u0001g\\u001bh\\u0085i\\u00a0j\\u2028k\\u2029l\", \"theme\": \"dark\"}");
             put(&h.join(".claude-conta2/settings.json"), r#"{"theme": "light"}"#);
         }, vec![cli(&PREP)]),
-        // C59: avisos de todo tipo num `--prep` só.
+        // C59: avisos de todo tipo num `--prep` só; o MCP novo no `~/.claude.json` não avisa, que o terminal não espelha.
         "prep_every_warning_kind" => sc(|h| {
             casa(h);
             conta(h, "conta2");
@@ -740,6 +743,12 @@ fn run_checked(name: &str, seen: &mut dyn FnMut(usize, &Value)) -> Run {
     for step in &scenario.steps {
         let (args, held) = match step {
             Step::Fs(f) => { f(&home); continue; }
+            Step::Server(args) => {
+                accounts.insert(args[1].clone());
+                steps.push(server_prep(&home, args));
+                seen(steps.len() - 1, steps.last().unwrap());
+                continue;
+            }
             Step::Cli(args) => (args, None),
             Step::Busy(args) => (args, Some(busy(&home, &args[1]))),
         };
@@ -755,6 +764,25 @@ fn run_checked(name: &str, seen: &mut dyn FnMut(usize, &Value)) -> Run {
     let (diary, raw_diary) = diary(&home, &accounts);
     unlock(&home);
     Run { steps, tree, diary, raw_diary, initial }
+}
+
+/// `--prep <conta> [<projeto>]` como o servidor reconcilia: no próprio processo, com o `~/.claude.json` como
+/// fonte do espelho, e a saída e o diário no formato do comando.
+fn server_prep(home: &Path, args: &[String]) -> Value {
+    umask_022();
+    let [flag, name, project @ ..] = args else { panic!("passo do servidor sem conta: {args:?}") };
+    assert_eq!(flag, "--prep");
+    let outcome = claude_config::reconcile_account(home, Some(home.join(".claude.json").as_path()), name,
+        project.first().map(String::as_str), EACH);
+    claude_config::write_cli_diary(&env_of(home), &outcome.diary);
+    let (exit, stdout, stderr): (i32, String, Vec<String>) = match outcome.result {
+        Ok(warnings) => (0, format!("{}\n", home.join(format!(".claude-{name}")).display()),
+            warnings.iter().map(|w| format!("hangar-conta: {w}")).collect()),
+        Err(error) => (if matches!(error, ConfigError::Refused(_)) { 1 } else { 126 }, String::new(),
+            vec![format!("hangar-conta: {}", error.cause())]),
+    };
+    json!({"args": args.iter().map(|a| norm(a, home)).collect::<Vec<_>>(), "exit": exit, "stdout": norm(&stdout, home),
+        "stderr": stderr.iter().map(|l| norm(l, home)).collect::<Vec<_>>()})
 }
 
 /// O estado de cada caminho do HOME, menos `~/.hangar` (diário e guardas): tipo, alvo do link, bytes e
@@ -1170,7 +1198,7 @@ fn b1_runtime_links_into_the_shared_folder_are_undone() {
     let account = home.join(".claude-conta2");
     ln(&account.join(".claude.json.lock"), home.join(".claude/.claude.json.lock"));
     ln(&account.join("mcp-needs-auth-cache.json"), home.join(".claude/mcp-needs-auth-cache.json"));
-    assert_eq!(claude_config::reconcile(&home, &account, None).result.unwrap(), Vec::<String>::new());
+    assert_eq!(claude_config::reconcile(&home, Some(home.join(".claude.json").as_path()), &account, None).result.unwrap(), Vec::<String>::new());
     for name in [".claude.json.lock", "mcp-needs-auth-cache.json"] {
         assert!(std::fs::symlink_metadata(account.join(name)).is_err(), "{name} seguiu ligado ao ~/.claude");
     }
@@ -1202,7 +1230,7 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
     let holder = std::fs::OpenOptions::new().read(true).append(true).create(true).open(home.join(".hangar-contas.lock")).unwrap();
     holder.lock().unwrap();
     std::thread::scope(|s| {
-        let waiting = s.spawn(|| claude_config::reconcile_account(&home, "conta_b", None, EACH).result);
+        let waiting = s.spawn(|| claude_config::reconcile_account(&home, Some(home.join(".claude.json").as_path()), "conta_b", None, EACH).result);
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert_eq!(std::fs::read_to_string(home.join(".claude/CLAUDE.md")).unwrap(), "# regras", "a conta_b subiu o arquivo sem a trava");
         assert!(!std::fs::symlink_metadata(home.join(".claude-conta_b/CLAUDE.md")).unwrap().file_type().is_symlink());
@@ -1217,7 +1245,7 @@ fn two_accounts_reconciling_together_keep_one_whole_version() {
     let warnings: Vec<Vec<String>> = std::thread::scope(|s| {
         let runs: Vec<_> = versions.iter().map(|(name, _)| s.spawn(|| {
             barrier.wait();
-            claude_config::reconcile_account(&home, name, None, EACH).result.unwrap()
+            claude_config::reconcile_account(&home, Some(home.join(".claude.json").as_path()), name, None, EACH).result.unwrap()
         })).collect();
         runs.into_iter().map(|r| r.join().unwrap()).collect()
     });
@@ -1276,7 +1304,7 @@ fn the_same_account_reconciling_twice_at_once_never_fails() {
         let results: Vec<_> = std::thread::scope(|s| {
             let runs: Vec<_> = (0..2).map(|_| s.spawn(|| {
                 barrier.wait();
-                claude_config::reconcile_account(&home, "conta2", Some("-p"), EACH).result
+                claude_config::reconcile_account(&home, Some(home.join(".claude.json").as_path()), "conta2", Some("-p"), EACH).result
             })).collect();
             runs.into_iter().map(|r| r.join().unwrap()).collect()
         });
@@ -1297,7 +1325,7 @@ fn a_held_configuration_lock_refuses_at_the_deadline() {
         let holder = std::fs::OpenOptions::new().read(true).write(true).create(create).truncate(false).open(&path).unwrap();
         holder.lock().unwrap();
         let started = std::time::Instant::now();
-        let outcome = claude_config::reconcile_locked(&home, &account, None, ".hangar-conta",
+        let outcome = claude_config::reconcile_locked(&home, Some(home.join(".claude.json").as_path()), &account, None, ".hangar-conta",
             claude_config::Wait::Each(std::time::Duration::from_millis(300)));
         let waited = started.elapsed();
         match outcome.result {
@@ -1397,8 +1425,8 @@ fn the_accounts_lock_is_taken_before_the_account_lock() {
     assert!(status.success());
 }
 
-/// C86/C131/C180/H13: o espelho troca o `settings.json` e o `.claude.json` da conta por um arquivo novo
-/// (outro inode), nunca regrava no lugar: o CLI vivo que lê no meio veria o arquivo pela metade.
+/// C86/C131/C180/H13: o espelho do servidor troca o `settings.json` e o `.claude.json` da conta por um arquivo
+/// novo (outro inode), nunca regrava no lugar: o CLI vivo que lê no meio veria o arquivo pela metade.
 #[test]
 fn the_mirror_replaces_the_account_copies_instead_of_writing_in_place() {
     use std::os::unix::fs::MetadataExt;
@@ -1410,8 +1438,8 @@ fn the_mirror_replaces_the_account_copies_instead_of_writing_in_place() {
     put(&home.join(".claude.json"), r#"{"mcpServers": {"tavily": {}, "novo": {}}}"#);
     let files = ["settings.json", ".claude.json"].map(|f| home.join(".claude-conta2").join(f));
     let before: Vec<u64> = files.iter().map(|f| std::fs::metadata(f).unwrap().ino()).collect();
-    let out = command(&home, &PREP.map(str::to_owned), &[]).output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let outcome = claude_config::reconcile_account(&home, Some(home.join(".claude.json").as_path()), "conta2", None, EACH);
+    assert!(outcome.result.is_ok(), "{:?}", outcome.result);
     assert!(std::fs::read_to_string(&files[0]).unwrap().contains("\"dark\"") && std::fs::read_to_string(&files[1]).unwrap().contains("novo"),
         "o espelho regravou as duas cópias");
     for (file, ino) in files.iter().zip(before) {
@@ -1500,7 +1528,7 @@ fn the_mcp_mirror_without_the_config_lock_writes_and_warns() {
     let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let capture = Capture(output.clone());
     let subscriber = tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move || capture.clone()).finish();
-    let outcome = tracing::subscriber::with_default(subscriber, || claude_config::reconcile_account(&home, "conta2", None, EACH));
+    let outcome = tracing::subscriber::with_default(subscriber, || claude_config::reconcile_account(&home, Some(home.join(".claude.json").as_path()), "conta2", None, EACH));
     assert!(outcome.result.is_ok(), "{:?}", outcome.result);
     let copy: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(copy["mcpServers"], json!({"tavily": {}}), "o espelho grava sem a trava");
@@ -1538,18 +1566,22 @@ fn a_non_utf8_path_variable_refuses_the_command() {
     assert!(out.stdout.is_empty());
 }
 
-/// D22: o aviso interno do comando chega ao stderr dele, sem mudar a saída nem o código.
+/// O `--prep` de terminal não espelha os MCP: com MCP novo e mudado no `~/.claude.json` e a trava do Claude Code
+/// largada na conta, a cópia da conta fica intocada (mesmos bytes e inode) e nada é avisado.
 #[test]
-fn the_account_command_prints_internal_warnings_to_stderr() {
+fn the_prep_command_leaves_the_account_mcp_copy_alone() {
+    use std::os::unix::fs::MetadataExt;
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();
     stale_config_lock(&home);
+    put(&home.join(".claude.json"), r#"{"mcpServers": {"tavily": {"url": "nova"}, "novo": {}}}"#);
+    let file = home.join(".claude-conta2/.claude.json");
+    let before = (std::fs::read(&file).unwrap(), std::fs::metadata(&file).unwrap().ino());
     let output = command(&home, &PREP.map(str::to_owned), &[]).output().unwrap();
     let (stdout, stderr) = (String::from_utf8(output.stdout).unwrap(), String::from_utf8(output.stderr).unwrap());
     assert_eq!((output.status.code(), stdout.trim()), (Some(0), home.join(".claude-conta2").to_str().unwrap()), "{stderr}");
-    let file = home.join(".claude-conta2/.claude.json");
-    assert!(stderr.lines().any(|l| l.contains("WARN") && l.contains(&file.display().to_string()) && l.contains("trava largada")),
-        "o aviso interno não chegou ao stderr: {stderr}");
+    assert_eq!(stderr, "", "o --prep avisou sobre o espelho");
+    assert_eq!((std::fs::read(&file).unwrap(), std::fs::metadata(&file).unwrap().ino()), before, "o --prep mexeu na cópia da conta");
 }
 
 /// Travas livres mas o prazo da abertura já passado: nada da reconciliação roda, e a recusa é a do limite.
@@ -1562,7 +1594,7 @@ fn locks_taken_after_the_opening_deadline_reconcile_nothing() {
     let account = home.join(".claude-conta2");
     let limit = std::time::Duration::from_millis(300);
     let wait = claude_config::Wait::Within { limit, deadline: std::time::Instant::now() };
-    let outcome = claude_config::reconcile_locked(&home, &account, None, ".hangar-conta", wait);
+    let outcome = claude_config::reconcile_locked(&home, Some(home.join(".claude.json").as_path()), &account, None, ".hangar-conta", wait);
     match outcome.result {
         Err(ConfigError::Refused(detail)) => assert_eq!(detail, "a reconciliação da conta passou do limite de 0.3 s"),
         other => panic!("esperava a recusa do limite: {other:?}"),
@@ -1634,8 +1666,8 @@ proptest::proptest! {
             let _ = std::fs::remove_file(path);
             if let Some(bytes) = bytes { put(path, bytes); }
         }
-        let _ = claude_config::reconcile(&home, &account, Some("-p"));
-        let _ = claude_config::reconcile(&home, &account, None);
+        let _ = claude_config::reconcile(&home, Some(home.join(".claude.json").as_path()), &account, Some("-p"));
+        let _ = claude_config::reconcile(&home, Some(home.join(".claude.json").as_path()), &account, None);
     }
 
     /// Qualquer argumento sai com um dos códigos do contrato.
@@ -1804,7 +1836,7 @@ fn the_seed_prepares_the_pending_folder_and_leaves_publication_to_the_creation()
     casa(&home);
     let account = home.join(".claude-fresh");
     put(&account.join(".hangar-account-pending"), "");
-    assert!(claude_config::seed(&home, &account).result.is_ok());
+    assert!(claude_config::seed(&home, Some(home.join(".claude.json").as_path()), &account).result.is_ok());
     let meta = |p: &str| std::fs::symlink_metadata(account.join(p));
     assert!(meta("settings.json").unwrap().is_file());
     assert!(meta(".credentials.json").is_err());

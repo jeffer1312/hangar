@@ -309,3 +309,42 @@ pub async fn kimi_switch(
         }
     }
 }
+
+/// `/model <id>` no `agy`, só com a sessão parada e a caixa vazia (como o Claude na troca de modo). Confirma pelo
+/// rodapé com o modelo pedido ou por uma linha nova "Model set to".
+pub async fn agy_switch(io: &dyn Io, id: &str, timing: Timing) -> Result<Value, ModelError> {
+    use crate::terminal_state::{agy_analyze, agy_footer, agy_model_set};
+    let refused = |code: &str, message: &str| ModelError::coded(409, code, message, json!({}));
+    let first = io.capture().await?;
+    let analysis = agy_analyze(&first);
+    if analysis.overlay || analysis.state == "awaiting_input" {
+        return Err(refused("erro_menu_aberto", "há um menu aberto no terminal da sessão; feche-o e tente de novo"));
+    }
+    if analysis.state == "working" {
+        return Err(refused("erro_sessao_trabalhando", "a sessão está trabalhando — espere ela terminar"));
+    }
+    match crate::runtime::other_terminal::drive::agy_draft(&first) {
+        Some(draft) if draft.trim().is_empty() => {}
+        Some(_) => return Err(refused("erro_caixa_com_rascunho", "há texto na caixa de digitar; envie ou apague antes de trocar")),
+        None => return Err(refused("erro_caixa_ilegivel", "não consegui ler a caixa de digitar do Antigravity")),
+    }
+    let done = || Ok(json!({"ok": true, "current": id}));
+    if agy_footer(&first).is_some_and(|footer| footer.is_model(id)) {
+        return done();
+    }
+    let before = agy_model_set(&first).len();
+    io.key(&format!("/model {id}"), true).await?;
+    io.wait(timing.slash).await;
+    io.key("Enter", false).await?;
+    let until = Instant::now() + timing.result;
+    loop {
+        io.wait(timing.settle).await;
+        let pane = io.capture().await?;
+        if agy_footer(&pane).is_some_and(|footer| footer.is_model(id)) || agy_model_set(&pane).len() > before {
+            return done();
+        }
+        if Instant::now() >= until {
+            return Err(refused("erro_modelo_sem_confirmacao", "digitei /model, mas o Antigravity não confirmou a troca; veja o modelo no terminal"));
+        }
+    }
+}

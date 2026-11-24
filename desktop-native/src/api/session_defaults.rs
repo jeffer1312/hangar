@@ -15,12 +15,39 @@ fn parse(value: serde_json::Value) -> Result<Selection, Failure> {
     serde_json::from_value(value).map_err(|_| Failure::local("invalid_response"))
 }
 
+/// As opções da tela Beta que valem para toda abertura no servidor (`/api/session-options`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptions { pub conversation_beta: bool, pub code_mode: bool }
+
+#[derive(Deserialize)]
+struct OptionsSelection { configured: bool, options: SessionOptions }
+
 impl Api {
     pub async fn import_session_defaults(&self) -> Result<(), Failure> {
         let server = self.identity();
         let entries = tokio::task::spawn_blocking(move || crate::appearance::legacy_harness_defaults(&server)).await
             .map_err(|_| Failure::local("invalid_response"))?;
-        self.import_session_default_entries(entries).await
+        // A escolha da tela Beta guardada neste computador vai ao servidor uma vez, sem pisar na de lá. A cópia que
+        // ninguém mexeu não é escolha: gravá-la faria o primeiro computador a conectar decidir por todos.
+        let look = crate::appearance::get();
+        let local = SessionOptions { conversation_beta: look.conversation_beta, code_mode: look.claude_code_mode };
+        let options = if local == SessionOptions::default() { Ok(()) } else { self.save_session_options(local, true).await.map(drop) };
+        let defaults = self.import_session_default_entries(entries).await;
+        options.and(defaults)
+    }
+
+    /// Sem nada gravado no servidor, a cópia deste computador vai para lá, sem pisar numa gravação que chegue antes.
+    pub async fn read_session_options(&self, local: SessionOptions) -> Result<SessionOptions, Failure> {
+        let selection: OptionsSelection = serde_json::from_value(self.server_read(&["session-options"], &[], 10).await?)
+            .map_err(|_| Failure::local("invalid_response"))?;
+        if !selection.configured && local != SessionOptions::default() { return self.save_session_options(local, true).await; }
+        Ok(selection.options)
+    }
+
+    pub async fn save_session_options(&self, options: SessionOptions, if_absent: bool) -> Result<SessionOptions, Failure> {
+        let selection: OptionsSelection = serde_json::from_value(self.server_send_query(reqwest::Method::PUT, &["session-options"], &[],
+            Some(json!({"options": options, "if_absent": if_absent})), 10).await?).map_err(|_| Failure::local("invalid_response"))?;
+        Ok(selection.options)
     }
 
     async fn import_session_default_entries(&self, entries: Vec<(String, Choice)>) -> Result<(), Failure> {
@@ -148,5 +175,47 @@ mod tests {
             assert_eq!(uri.query_pairs().collect::<std::collections::BTreeMap<_, _>>(),
                 [("provider".into(), "claude".into()), ("engine".into(), "proxy".into()), ("engine_account".into(), "one".into())].into());
         }
+    }
+
+    /// Servidor que nunca gravou as opções não responde "desligado" por cima da escolha deste computador.
+    #[tokio::test]
+    async fn reading_unset_options_imports_this_computer_copy() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for reply in [
+                json!({"configured":false, "options":{"conversation_beta":false, "code_mode":false}}),
+                json!({"configured":false, "options":{"conversation_beta":false, "code_mode":false}}),
+                json!({"configured":true, "options":{"conversation_beta":true, "code_mode":true}}),
+            ] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                    head.push_str(&line);
+                    if line == "\r\n" { break; }
+                }
+                let length = head.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:")
+                    .map(|n| n.trim().parse::<usize>().unwrap())).unwrap_or(0);
+                let mut body = vec![0; length];
+                stream.read_exact(&mut body).await.unwrap();
+                requests.push((head.lines().next().unwrap().to_owned(), (!body.is_empty())
+                    .then(|| serde_json::from_slice::<serde_json::Value>(&body).unwrap())));
+                let reply = reply.to_string();
+                stream.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        let api = Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
+        // Cópia que ninguém mexeu não é escolha: não marca o servidor como configurado.
+        assert_eq!(api.read_session_options(SessionOptions::default()).await.unwrap(), SessionOptions::default());
+        let local = SessionOptions { conversation_beta: true, code_mode: true };
+        assert_eq!(api.read_session_options(local).await.unwrap(), local);
+        let requests = server.await.unwrap();
+        assert_eq!(requests.iter().map(|(head, _)| head.split_whitespace().next().unwrap()).collect::<Vec<_>>(), ["GET", "GET", "PUT"]);
+        assert_eq!(requests[2].1, Some(json!({"options":{"conversation_beta":true, "code_mode":true}, "if_absent":true})));
     }
 }

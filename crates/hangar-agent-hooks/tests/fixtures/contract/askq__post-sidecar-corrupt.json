@@ -1,0 +1,79 @@
+{
+ "case": "askq/post-sidecar-corrupt",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "askq_capture.py",
+ "contract_refs": [
+  "R1-S17"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/askq_capture.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {
+   "cfg/.hangar-askq": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "cfg/.hangar-askq/11111111-2222-4333-8444-555555555555.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 6,
+    "sha256": "c9a4811b458c1d1f06def760c52b55a904d2ba74215ad1019bc6ff0830726e64",
+    "content": {
+     "text": "{torto"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"session_id\": \"11111111-2222-4333-8444-555555555555\", \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"hook_event_name\": \"PostToolUse\", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"Qual opção?\", \"header\": \"Opção\", \"options\": [{\"label\": \"A\", \"description\": \"ação\"}, {\"label\": \"B\", \"description\": \"não\"}], \"multiSelect\": false}]}, \"tool_use_id\": \"toolu_A\", \"tool_response\": {\"answers\": {\"Qual opção?\": \"A\"}}}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 23,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "cfg/.hangar-askq": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "cfg/.hangar-askq/11111111-2222-4333-8444-555555555555.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 6,
+   "sha256": "c9a4811b458c1d1f06def760c52b55a904d2ba74215ad1019bc6ff0830726e64",
+   "content": {
+    "text": "{torto"
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910462.3678071,
+  "t_end": 1794910462.3920364
+ }
+}

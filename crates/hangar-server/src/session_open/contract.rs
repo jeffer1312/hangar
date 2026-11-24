@@ -158,6 +158,7 @@ impl OpenFacts for Facts {
     fn saved_defaults(&self, provider: AgentProvider, engine: &str, engine_account: &str) -> Result<Option<crate::session_defaults::Defaults>, String> {
         self.local.saved_defaults(provider, engine, engine_account)
     }
+    fn session_options(&self) -> Result<Option<crate::session_defaults::SessionOptions>, String> { self.local.session_options() }
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError> { self.local.codex_logins() }
     fn quotas(&self, network: bool) -> Vec<Value> {
         // O Python só lia o cache: a leitura de rede, que ele não fazia, devolve as mesmas linhas e não entra no registro.
@@ -172,7 +173,11 @@ impl OpenFacts for Facts {
     fn existing_dir(&self, cwd: &str) -> Option<String> { self.local.existing_dir(cwd) }
     fn config_dirs(&self) -> Result<Vec<String>, OpenError> { self.local.config_dirs() }
     fn engines(&self) -> Vec<String> { self.local.engines() }
+    fn engine_account(&self, engine: &str, requested: Option<&str>) -> Result<(Option<String>, Option<String>), OpenError> { self.local.engine_account(engine, requested) }
     fn supports_fast(&self, engine: Option<&str>, model: Option<&str>) -> bool { self.local.supports_fast(engine, model) }
+    fn supports_ultrafast(&self, engine: Option<&str>, model: Option<&str>, account: Option<&str>) -> bool {
+        self.local.supports_ultrafast(engine, model, account)
+    }
     fn fixed_engine_model(&self, engine: &str, account: &str, model: Option<&str>) -> Result<String, OpenError> {
         self.local.fixed_engine_model(engine, account, model)
     }

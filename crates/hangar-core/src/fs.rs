@@ -10,6 +10,11 @@ pub struct QueueRefusal(pub &'static str);
 impl std::fmt::Display for QueueRefusal { fn fmt(&self, f:&mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.0) } }
 impl std::error::Error for QueueRefusal {}
 
+/// Os dois caminhos levam ao mesmo arquivo existente (links e grafias resolvidos).
+pub fn same_file(left: &Path, right: &Path) -> bool {
+    matches!((left.canonicalize(), right.canonicalize()), (Ok(left), Ok(right)) if left == right)
+}
+
 pub fn invalid(message: &'static str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, QueueRefusal(message)) }
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -122,16 +127,9 @@ pub async fn lock_exclusive(path: &Path) -> io::Result<File> {
 }
 
 /// O `canonicalize` do Windows devolve `\\?\C:\...`; o Python escreve `C:\...`, e a conta da sessão
-/// (`claude:<pasta>`) precisa bater letra a letra com o id da credencial que ele monta.
-pub fn without_verbatim(path: std::path::PathBuf) -> std::path::PathBuf {
-    if !cfg!(windows) { return path; }
-    path.to_str().and_then(verbatim_stripped).map_or(path, std::path::PathBuf::from)
-}
-
-fn verbatim_stripped(text: &str) -> Option<String> {
-    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") { return Some(format!(r"\\{rest}")); }
-    text.strip_prefix(r"\\?\").filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map(str::to_owned)
-}
+/// (`claude:<pasta>`) precisa bater letra a letra com o id da credencial que ele monta. Mora no
+/// crate do servidor parado, que o app nativo usa sem o core.
+pub use hangar_local_server::link::without_verbatim;
 
 /// Os bits de permissão (`& 0o777`). Fora do Unix não há modo: `Unsupported`, e quem chama decide o padrão.
 pub fn file_mode(path: &Path) -> io::Result<u32> {
@@ -167,20 +165,6 @@ pub fn os_error_parts(error: &io::Error) -> (String, Option<i32>) {
     match error.raw_os_error() {
         Some(number) => (text.strip_suffix(&format!(" (os error {number})")).map_or_else(|| text.clone(), str::to_owned), Some(number)),
         None => (text, None),
-    }
-}
-
-#[cfg(test)]
-mod verbatim_tests {
-    use super::verbatim_stripped;
-
-    #[test]
-    fn verbatim_prefix_is_written_like_python() {
-        assert_eq!(verbatim_stripped(r"\\?\C:\Users\u\.claude-x").as_deref(), Some(r"C:\Users\u\.claude-x"));
-        assert_eq!(verbatim_stripped(r"\\?\UNC\srv\share\d").as_deref(), Some(r"\\srv\share\d"));
-        // Volume sem letra não tem forma curta: fica como veio.
-        assert_eq!(verbatim_stripped(r"\\?\Volume{abc}\d"), None);
-        assert_eq!(verbatim_stripped(r"C:\Users\u"), None);
     }
 }
 

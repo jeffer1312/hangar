@@ -245,10 +245,14 @@ pub enum Operation {
     ReadFile {
         cwd: String,
         path: String,
+        #[serde(default)]
+        large: bool,
     },
     ReadAt {
         alvo: String,
         path: String,
+        #[serde(default)]
+        large: bool,
     },
     WriteFile {
         cwd: String,
@@ -287,6 +291,23 @@ pub enum Operation {
         path: Option<String>,
         name: String,
         roots: Vec<String>,
+    },
+    RenamePath {
+        cwd: String,
+        path: String,
+        name: String,
+    },
+    TrashPath {
+        cwd: String,
+        path: String,
+    },
+    CreatePath {
+        cwd: String,
+        #[serde(default)]
+        path: Option<String>,
+        name: String,
+        #[serde(default)]
+        dir: bool,
     },
     ListRoots {
         roots: Vec<String>,
@@ -365,6 +386,9 @@ impl Operation {
                 | Self::WriteFile { .. }
                 | Self::WriteAt { .. }
                 | Self::MakeDir { .. }
+                | Self::RenamePath { .. }
+                | Self::TrashPath { .. }
+                | Self::CreatePath { .. }
         ) || matches!(self, Self::GitAction{action,..} if !matches!(action.as_str(), "status"|"log"))
     }
 }
@@ -521,8 +545,8 @@ pub fn execute(op: Operation) -> Result<Value> {
             path,
             so_modificados,
         } => files::list(Path::new(&cwd), path.as_deref(), so_modificados),
-        ReadFile { cwd, path } => files::read(&files::resolve(Path::new(&cwd), &path)?, &path),
-        ReadAt { alvo, path } => files::read(Path::new(&alvo), &path),
+        ReadFile { cwd, path, large } => files::read(&files::resolve(Path::new(&cwd), &path)?, &path, large),
+        ReadAt { alvo, path, large } => files::read(Path::new(&alvo), &path, large),
         WriteFile {
             cwd,
             path,
@@ -553,6 +577,9 @@ pub fn execute(op: Operation) -> Result<Value> {
             name,
             roots,
         } => files::mkdir(&root, path.as_deref(), &name, &roots),
+        RenamePath { cwd, path, name } => files::rename(Path::new(&cwd), &path, &name),
+        TrashPath { cwd, path } => files::trash(Path::new(&cwd), &path),
+        CreatePath { cwd, path, name, dir } => files::create(Path::new(&cwd), path.as_deref(), &name, dir),
         ListRoots { roots } => files::roots(&roots),
         CitationCwds {
             jsonl,

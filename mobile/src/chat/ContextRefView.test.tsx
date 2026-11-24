@@ -7,7 +7,7 @@ import { composeWithContextRefs, type ContextRef } from '@hangar/core';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('../paraglide/messages', () => Object.fromEntries(
-  'cite_quoted cite_go_to_source cite_element cite_element_html'.split(' ').map((k) => [k, () => k]),
+  'cite_quoted cite_go_to_source cite_element cite_element_html cite_code'.split(' ').map((k) => [k, () => k]),
 ));
 vi.mock('../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('./AssistantBubble', () => ({ mkMarkdownStyle: () => ({ paragraph: {} }), mkMutedMarkdownStyle: () => ({ paragraph: {} }) }));
@@ -20,6 +20,10 @@ const { ContextRefView } = await import('./ContextRefView');
 const quote: ContextRef = { kind: 'quote', source: 'ev-1', before: '', after: '', text: 'guardado por **sessão**', comment: 'explica' };
 const element: ContextRef = {
   kind: 'element', url: 'about:blank', title: '', role: '', name: '', tag: 'div', selector: '', html: '<div></div>', comment: '',
+};
+
+const code: ContextRef = {
+  kind: 'code', path: 'src/a.rs', start: 7, end: 7, lang: 'rs', text: 'let x = 1;', comment: 'por quê?',
 };
 
 function render(props: Record<string, unknown>) {
@@ -40,6 +44,17 @@ describe('ContextRefView (app)', () => {
     expect(container.textContent).not.toContain('<hangar-');
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="cite_go_to_source"]')!.click());
     expect(onQuoteClick).toHaveBeenCalledWith(expect.objectContaining({ source: 'ev-1' }));
+    act(() => root.unmount());
+  });
+
+  it('linhas de arquivo mostram o nome e a linha, o código e o comentário', () => {
+    const { container, root } = render({ text: composeWithContextRefs([code], '') });
+    expect(container.textContent).toContain('cite_code');
+    expect(container.textContent).toContain('a.rs L7');
+    expect(container.textContent).toContain('src/a.rs');
+    expect(container.textContent).toContain('let x = 1;');
+    expect(container.textContent).toContain('por quê?');
+    expect(container.textContent).not.toContain('<hangar-');
     act(() => root.unmount());
   });
 

@@ -969,6 +969,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
         queue.exec(target.generation,&format!("prepare:{id}"),clock(start),Action::Prepare { id:id.clone(),payload:json!({"kind":"bootstrap"}),entry_id:None }).await.map_err(io_failure)?;
         effects.extend(engine.initialize(id)?);
     }
+    let mut sidecar_gone = false;
     loop {
         if let Some(rc) = cano_gone.take() {
             reconnect.cancel();
@@ -1036,6 +1037,21 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             let pending = roots.get_mut(&id).unwrap();
             pending.preparing = false;
             if pending.cancelled || pending.timed_out { continue; }
+            // Vale também para o Codex recém-adotado pela troca, até ela concluir.
+            let queue_held = engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&target.name));
+            // Orientar e "Enviar agora" entrariam no turno do agente: com a fila retida, recusam antes de reivindicar.
+            // A guarda da rota não basta, a retenção pode nascer entre ela e aqui.
+            if queue_held && matches!(pending.command.kind,OperationKind::SteerQueue | OperationKind::Steer) {
+                effects.push_back(Effect::Reply { operation_id:id,disposition:Disposition::Rejected,
+                    payload:json!({"error":"a sessão está trocando de agente","code":"session_transfer_busy"}) });
+                continue;
+            }
+            // A troca de conta ou de agente segurou a fila (talvez depois de o lote sair dela): a mensagem espera
+            // nela e vai ao destino novo, inclusive a "Na conversa".
+            if queue_held && pending.command.kind == OperationKind::Input && !rowless(&target.provider,&pending.command) {
+                effects.push_back(Effect::Reply { operation_id:id,disposition:Disposition::Deferred,payload:json!({"code":"queue_held"}) });
+                continue;
+            }
             if matches!(pending.command.kind,OperationKind::SteerQueue | OperationKind::Steer)
                 && pending.command.payload.get("expected_turn").is_some_and(|expected|turn_marker(&engine.view()).as_ref()!=Some(expected)) {
                 effects.push_back(Effect::Reply { operation_id:id,disposition:Disposition::Rejected,payload:json!({"code":"queue_steer_work_changed"}) });
@@ -1433,6 +1449,17 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                 }
             }
         }
+        // Os efeitos da parada (diário, estado sem turno) já saíram: o ator termina como fechado.
+        if sidecar_gone {
+            // A vista da parada ia por um `Job::View`, que o fim do ator corta: os dois canais recebem o estado final aqui.
+            let view = engine.view();
+            if view != durable_view {
+                live.update(|state|state.public_state = view["public_state"].clone());
+                publish(&events,&target,&mut revision,"view",view.clone());
+                publish(&events,&target,&mut revision,"state",view["public_state"].clone());
+            }
+            break;
+        }
         while let Some((attempt,result))=next_current_write(&mut prepared_writes,&mut next_write,&mut attempts,target.generation) {
             let wire=attempt.phase_id.clone();
             let ended = roots.iter().any(|(id,root)|(attempt.logical_id == *id || attempt.logical_id.starts_with(&format!("{id}:")))
@@ -1463,8 +1490,10 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             }
         }
         // Resposta reservada apta sai antes da mensagem comum: ela responde a uma pergunta já feita.
-        let limit_held = || engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.limit_held(&target.name));
-        let deliverable = if target.provider=="claude" {claude_delivery_allowed(&target,engine.deliverable(),error.is_some()) && !limit_held()} else {engine.deliverable()};
+        let limit_held = || engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&target.name));
+        // O Codex que a troca de agente acabou de adotar também espera: a fila só sai depois de a transferência
+        // concluir, senão uma falha no fim restauraria o Claude com um turno já rodado no Codex.
+        let deliverable = (if target.provider=="claude" {claude_delivery_allowed(&target,engine.deliverable(),error.is_some())} else {engine.deliverable()}) && !limit_held();
         let reserved = if target.metadata["lifecycle_pending"]==true { None } else { engine.ready_async_answer_entry() };
         if drain_requested && !drain_active && turn_hold.is_none() && !closed.load(Ordering::Acquire) && (deliverable || reserved.is_some())
             && !roots.values().any(|root|(root.preparing || root.defer_for_batch && root.result.is_none() && root.error.is_none()) && matches!(root.command.kind,OperationKind::Input | OperationKind::Steer)) {
@@ -1847,7 +1876,21 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         tracing::warn!(key=%target.key,session=%target.name,code=%failure.code,reason=%failure.message,attempt=respawn.failures,"processo da sessão não subiu de novo");
                         let user = respawn.user.take();
                         if let Some((operation_id,_)) = &user { fail_root(&mut roots,operation_id,failure.clone()); }
+                        let waited = !respawn.waiting.is_empty();
                         for (operation_id,_) in std::mem::take(&mut respawn.waiting) { fail_root(&mut roots,&operation_id,failure.clone()); }
+                        // Religação sozinha cujo arquivo da sessão sumiu (fechada pelo nome) ou é de outra chave:
+                        // outra subida também não teria onde gravar o processo e o mataria de novo. Só com o
+                        // arquivo relido: pedido da pessoa e arquivo ainda desta vida seguem o caminho de sempre.
+                        if target.provider == "codex" && failure.code == "session_patch_owner" && user.is_none() && !waited
+                            && sidecar_left(engine.launch.as_ref(),&target).await {
+                            tracing::warn!(key=%target.key,session=%target.name,"arquivo da sessão sumiu ou é de outra vida; o ator para sem subir o processo de novo");
+                            effects.push_back(Effect::Diag { event:DiagEvent::CodexSidecarGone,code:"codex_sidecar_gone".into() });
+                            effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null})),clock(start))?);
+                            closed.store(true,Ordering::Release);
+                            reconnect.cancel();
+                            sidecar_gone = true;
+                            continue;
+                        }
                         let gone = std::mem::take(&mut respawn.swallowed);
                         if gone {
                             effects.extend(engine.apply(EngineInput::Line(json!({"type":"cano_saiu","rc":null})),clock(start))?);
@@ -2010,6 +2053,13 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         match result {
                             Ok(payload) => {
                                 for (key,value) in payload.as_object().cloned().unwrap_or_default() { pending.command.payload[key] = value; }
+                                // O recado nativo não passa pela guarda dos prontos: com a fila retida ele volta a ela sem tocar o socket.
+                                if target.provider == "claude" && pending.command.payload["native_candidate"] == true
+                                    && engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.queue_held(&target.name)) {
+                                    pending.preparing = false;
+                                    effects.push_back(Effect::Reply { operation_id:id,disposition:Disposition::Deferred,payload:json!({"code":"queue_held"}) });
+                                    continue;
+                                }
                                 if target.provider == "claude" && pending.command.payload["native_candidate"] == true {
                                     // O recado nativo sai pelo socket, fora de `attempts`: a partir daqui ele pode ter
                                     // sido escrito, e nem o prazo nem uma falha podem devolvê-lo à fila.
@@ -2592,6 +2642,18 @@ fn after_exit(respawn:&mut Respawn,engine:&mut RuntimeEngine,target:&RuntimeTarg
         return engine.set_problem("codex_headless_nao_subiu",Some(detail));
     }
     Vec::new()
+}
+
+/// O arquivo da sessão relido: ausente ou de outra chave. Ilegível não conta, para não soltar a sessão por
+/// uma leitura no meio da troca.
+async fn sidecar_left(launch:Option<&LaunchConfig>,target:&RuntimeTarget) -> bool {
+    let Some(path) = launch.map(|launch|super::codex_sidecar::path(&launch.sidecar_dir,&target.name)) else { return false };
+    let key = target.key.clone();
+    tokio::task::spawn_blocking(move||match super::codex_sidecar::read(&path) {
+        Ok(None) => true,
+        Ok(Some(meta)) => meta.get("key").and_then(Value::as_str) != Some(key.as_str()),
+        Err(_) => false,
+    }).await.unwrap_or(false)
 }
 
 fn cano_of(binding:&CanoBinding) -> super::process::Cano {

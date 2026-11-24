@@ -1,0 +1,144 @@
+# Portão de merge: um check só, `merge-gate`, que a regra da main exige. Roda em todo pull request e decide pelo que
+# o PR muda (scripts/gate-areas.py) quais testes rodam: os do servidor (server-jobs.yml), os do app desktop
+# (native-check.yml) e os do app Expo. Parte acionada precisa terminar verde; parte não acionada precisa ter sido
+# pulada. Falha, cancelamento ou pulo de uma parte acionada deixa o portão vermelho.
+# No push da main e do canal, servidor e desktop já são testados pelo server.yml e pelo native.yml (que só publicam
+# com eles verdes); aqui roda só o Expo, que nenhum outro workflow testa.
+name: Portão
+
+on:
+  pull_request:
+  push:
+    branches: [main, beta]
+
+# Push novo no PR substitui o run anterior; na main e no canal cada push tem o próprio.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('gate-pr-{0}', github.event.pull_request.number) || format('gate-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  areas:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      server: ${{ steps.areas.outputs.server }}
+      native: ${{ steps.areas.outputs.native }}
+      mobile: ${{ steps.areas.outputs.mobile }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: areas
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # Sem base com que comparar (primeiro push da branch, histórico reescrito): tudo roda.
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+            || ! git merge-base "$BASE" "$HEAD_SHA" >/dev/null; then
+            echo "sem base comparável; todas as partes rodam"
+            python3 -I scripts/gate-areas.py --all | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Sem `--no-renames` a mudança de pasta só traz o destino, e a área de onde o arquivo saiu não roda.
+          git diff --no-renames --name-only "$BASE...$HEAD_SHA" > "$RUNNER_TEMP/mudados"
+          echo "arquivos mudados: $(wc -l < "$RUNNER_TEMP/mudados")"
+          python3 -I scripts/gate-areas.py < "$RUNNER_TEMP/mudados" | tee -a "$GITHUB_OUTPUT"
+
+  # Os mesmos sistemas do server.yml; o Windows segue experimental e não segura o portão.
+  server:
+    needs: areas
+    if: needs.areas.outputs.server == 'true' && github.event_name == 'pull_request'
+    uses: ./.github/workflows/server-jobs.yml
+    # O server-jobs.yml declara a publicação (pulada fora da main e do canal), e o GitHub recusa chamar um workflow
+    # cujo job peça mais do que quem chama concede.
+    permissions:
+      contents: write
+      actions: write
+    with:
+      # Nunca o nome da branch: um PR da beta para a main passaria `beta` e ligaria a publicação do server-jobs.yml
+      # (e a concorrência dos runs de push dela).
+      branch: pr-${{ github.event.pull_request.number }}
+      sistemas: >-
+        [
+          {"os": "ubuntu-latest", "platform": "linux-x86_64", "exe": "", "target": "x86_64-unknown-linux-gnu",
+           "zigbuild": true, "dir": "target/x86_64-unknown-linux-gnu", "experimental": false},
+          {"os": "windows-latest", "platform": "windows-x86_64", "exe": ".exe", "target": "", "zigbuild": false,
+           "dir": "target", "experimental": true}
+        ]
+      cache_release: >-
+        [
+          {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu", "zigbuild": true},
+          {"os": "windows-latest", "target": "", "zigbuild": false}
+        ]
+
+  native:
+    needs: areas
+    if: needs.areas.outputs.native == 'true' && github.event_name == 'pull_request'
+    uses: ./.github/workflows/native-check.yml
+    permissions:
+      contents: read
+      actions: write
+
+  # Os mesmos passos do `mobile` do scripts/verificar-local: typecheck e testes do app inteiro.
+  mobile:
+    needs: areas
+    if: needs.areas.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+      # O app lê o @hangar/core pelos caminhos do workspace; as dependências dele vêm do lockfile próprio.
+      - run: npm ci --workspace=@hangar/core --workspace=frontend
+      - run: npm ci --prefix mobile
+      # As mensagens compiladas não vêm no repositório: sem elas o typecheck do app não acha as chaves.
+      - run: npm run i18n:compile -w @hangar/core
+      - run: npm run i18n:compile --prefix mobile
+      - run: npm run check:app
+      - run: npm run test:app
+
+  merge-gate:
+    needs: [areas, server, native, mobile]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - env:
+          EVENT: ${{ github.event_name }}
+          AREAS: ${{ needs.areas.result }}
+          SERVER_ON: ${{ needs.areas.outputs.server }}
+          NATIVE_ON: ${{ needs.areas.outputs.native }}
+          MOBILE_ON: ${{ needs.areas.outputs.mobile }}
+          SERVER: ${{ needs.server.result }}
+          NATIVE: ${{ needs.native.result }}
+          MOBILE: ${{ needs.mobile.result }}
+        run: |
+          set -u
+          falhou=0
+          if [ "$AREAS" != success ]; then echo "::error::não consegui decidir as partes do portão ($AREAS)"; exit 1; fi
+          # No push, servidor e desktop são do server.yml e do native.yml: aqui ficam pulados.
+          if [ "$EVENT" != pull_request ]; then SERVER_ON=false; NATIVE_ON=false; fi
+          confere() {
+            local parte=$1 acionada=$2 resultado=$3 esperado=skipped
+            [ "$acionada" = true ] && esperado=success
+            if [ "$resultado" = "$esperado" ]; then
+              echo "$parte: $resultado"
+            else
+              echo "::error::$parte: esperado $esperado, terminou $resultado"
+              falhou=1
+            fi
+          }
+          confere servidor "$SERVER_ON" "$SERVER"
+          confere desktop "$NATIVE_ON" "$NATIVE"
+          confere expo "$MOBILE_ON" "$MOBILE"
+          exit $falhou

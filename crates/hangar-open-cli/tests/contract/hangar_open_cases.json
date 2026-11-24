@@ -1,0 +1,1007 @@
+{
+ "source": "contract/clis/hangar-open__*.json (2ad8e335e)",
+ "cases": [
+  {
+   "case": "claude-config-dir-empty",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área",
+    "CLAUDE_CONFIG_DIR": "",
+    "CP_ENGINE": ""
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": "x"
+  },
+  {
+   "case": "claude-config-engine-flags",
+   "args": [
+    "claude",
+    "--model",
+    "opus",
+    "--effort",
+    "high",
+    "--permission-mode",
+    "plan"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área",
+    "CLAUDE_CONFIG_DIR": "$T/conta b",
+    "CP_ENGINE": "probe"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "config_dir": "$T/conta b",
+    "engine": "probe",
+    "model": "opus",
+    "effort": "high",
+    "permission_mode": "plan"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "claude-eq-bypass-prompt",
+   "args": [
+    "claude",
+    "--model=sonnet",
+    "--dangerously-skip-permissions",
+    "oi \"mundo\""
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "model": "sonnet",
+    "permission_mode": "bypassPermissions",
+    "initial_prompt": "oi \"mundo\""
+   },
+   "attach": "x"
+  },
+  {
+   "case": "claude-no-flags",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": "x"
+  },
+  {
+   "case": "claude-subcommand-mcp-list",
+   "args": [
+    "claude",
+    "mcp",
+    "list"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 100,
+   "stderr": "",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "claude-subcommand-not-first",
+   "args": [
+    "claude",
+    "--model",
+    "x",
+    "update"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "model": "x",
+    "initial_prompt": "update"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "claude-subcommand-update",
+   "args": [
+    "claude",
+    "update"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 100,
+   "stderr": "",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "claude-unknown-flag",
+   "args": [
+    "claude",
+    "--flag-que-o-pedido-nao-conhece"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 100,
+   "stderr": "hangar: o argumento '--flag-que-o-pedido-nao-conhece' não cabe no pedido do Hangar; abrindo o claude sem o Hangar\n",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "cwd-no-pwd-getcwd",
+   "args": [
+    "claude"
+   ],
+   "env": {},
+   "cwd": "$T/work/pasta física",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta física",
+    "headless": false
+   },
+   "attach": "x"
+  },
+  {
+   "case": "cwd-pwd-empty",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": ""
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": "x"
+  },
+  {
+   "case": "cwd-symlink-logical",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/link"
+   },
+   "cwd": "$T/work/link",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/link",
+    "headless": false
+   },
+   "attach": "x"
+  },
+  {
+   "case": "dash-after-prompt",
+   "args": [
+    "claude",
+    "oi",
+    "-x"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 100,
+   "stderr": "hangar: o argumento '-x' não cabe no pedido do Hangar; abrindo o claude sem o Hangar\n",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "flag-eq-empty-value",
+   "args": [
+    "claude",
+    "--model="
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "model": ""
+   },
+   "attach": "x"
+  },
+  {
+   "case": "flag-repeated-last-wins",
+   "args": [
+    "claude",
+    "--model",
+    "a",
+    "--model",
+    "b"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "model": "b"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "flag-value-looks-like-flag",
+   "args": [
+    "claude",
+    "--model",
+    "--effort"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "model": "--effort"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "flag-without-value-at-end",
+   "args": [
+    "claude",
+    "--model"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 100,
+   "stderr": "hangar: o argumento '--model' não cabe no pedido do Hangar; abrindo o claude sem o Hangar\n",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "kimi-model",
+   "args": [
+    "kimi",
+    "--model",
+    "k2"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "kimi",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "model": "k2"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "kimi-thinking-not-in-table",
+   "args": [
+    "kimi",
+    "--thinking",
+    "high"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 100,
+   "stderr": "hangar: o argumento '--thinking' não cabe no pedido do Hangar; abrindo o kimi sem o Hangar\n",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "omp-env-profile",
+   "args": [
+    "omp"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área",
+    "OMP_PROFILE": "casa"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "omp",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "omp_profile": "casa"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "omp-flag-beats-env-profile",
+   "args": [
+    "omp",
+    "--profile",
+    "work"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área",
+    "OMP_PROFILE": "casa"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "omp",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "omp_profile": "work"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "omp-profile-eq",
+   "args": [
+    "omp",
+    "--profile=work"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "omp",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "omp_profile": "work"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "omp-profile-model",
+   "args": [
+    "omp",
+    "--profile",
+    "work",
+    "--model",
+    "m1"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "omp",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "omp_profile": "work",
+    "model": "m1"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "pi-auth-becomes-prompt",
+   "args": [
+    "pi",
+    "auth"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "pi",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "initial_prompt": "auth"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "pi-ignores-claude-env",
+   "args": [
+    "pi"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área",
+    "CLAUDE_CONFIG_DIR": "/x",
+    "CP_ENGINE": "e",
+    "OMP_PROFILE": "p"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "pi",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": "x"
+  },
+  {
+   "case": "pi-model-thinking",
+   "args": [
+    "pi",
+    "--model",
+    "m1",
+    "--thinking",
+    "high"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "pi",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "model": "m1",
+    "effort": "high"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "prompt-unicode-crlf",
+   "args": [
+    "claude",
+    "olá ✓ 🚀 é\r\nlinha 2"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false,
+    "initial_prompt": "olá ✓ 🚀 é\r\nlinha 2"
+   },
+   "attach": "x"
+  },
+  {
+   "case": "provider-missing",
+   "args": [],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 1,
+   "stderr": "Traceback (most recent call last):\n  File \"$T/inst/scripts/hangar-open\", line 111, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"$T/inst/scripts/hangar-open\", line 83, in main\n    provider, args = sys.argv[1], sys.argv[2:]\n                     ~~~~~~~~^^^\nIndexError: list index out of range\n",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "provider-unknown",
+   "args": [
+    "codex"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 1,
+   "stderr": "Traceback (most recent call last):\n  File \"$T/inst/scripts/hangar-open\", line 111, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"$T/inst/scripts/hangar-open\", line 84, in main\n    body = request(provider, args)\n  File \"$T/inst/scripts/hangar-open\", line 46, in request\n    flags = FLAGS[provider]\n            ~~~~~^^^^^^^^^^\nKeyError: 'codex'\n",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "second-positional",
+   "args": [
+    "claude",
+    "um",
+    "dois"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 100,
+   "stderr": "hangar: o argumento 'dois' não cabe no pedido do Hangar; abrindo o claude sem o Hangar\n",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "server-0-list-json",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "[1]\n"
+   },
+   "code": 1,
+   "stderr": "hangar: resposta do hangar-server sem o nome da sessão: [1]\n",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-0-name-number",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": 5}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": "5"
+  },
+  {
+   "case": "server-0-name-unicode-space",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"pasta \\u00c1rea\"}\n"
+   },
+   "code": 0,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": "pasta Área"
+  },
+  {
+   "case": "server-0-no-name",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"key\": \"k\"}\n"
+   },
+   "code": 1,
+   "stderr": "hangar: resposta do hangar-server sem o nome da sessão: {\"key\": \"k\"}\n",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-0-not-json",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "aberto\n"
+   },
+   "code": 1,
+   "stderr": "hangar: resposta do hangar-server sem o nome da sessão: aberto\n",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-0-stdout-with-log-line",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "log\n{\"name\": \"x\"}\n"
+   },
+   "code": 1,
+   "stderr": "hangar: resposta do hangar-server sem o nome da sessão: log\n{\"name\": \"x\"}\n",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-exit-1-empty",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 1,
+    "stderr": "erro do servidor\n"
+   },
+   "code": 1,
+   "stderr": "erro do servidor\n",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-exit-100-becomes-1",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 100,
+    "stdout": "cem\n"
+   },
+   "code": 1,
+   "stderr": "cem\n",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-exit-2",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 2,
+    "stdout": "ignorado\n",
+    "stderr": "do servidor\n"
+   },
+   "code": 100,
+   "stderr": "do servidor\nhangar: o hangar-server não abriu a sessão (saída 2); abrindo o claude sem o Hangar\n",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-exit-3-spec",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 3,
+    "stdout": "{\"spec\": {\"name\": \"x\"}}\n"
+   },
+   "code": 3,
+   "stderr": "{\"spec\": {\"name\": \"x\"}}\n",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-exit-4",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 4,
+    "stdout": "ignorado\n",
+    "stderr": "do servidor\n"
+   },
+   "code": 100,
+   "stderr": "do servidor\nhangar: o hangar-server não abriu a sessão (saída 4); abrindo o claude sem o Hangar\n",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-exit-5",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 5
+   },
+   "code": 5,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "server-killed-signal",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "signal": 9
+   },
+   "code": 1,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": null
+  },
+  {
+   "case": "single-dash",
+   "args": [
+    "claude",
+    "-"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 100,
+   "stderr": "hangar: o argumento '-' não cabe no pedido do Hangar; abrindo o claude sem o Hangar\n",
+   "request": null,
+   "attach": null
+  },
+  {
+   "case": "tmux-attach-fails",
+   "args": [
+    "claude"
+   ],
+   "env": {
+    "PWD": "$T/work/pasta Área"
+   },
+   "cwd": "$T/work/pasta Área",
+   "server": {
+    "rc": 0,
+    "stdout": "{\"name\": \"x\"}\n"
+   },
+   "code": 1,
+   "stderr": "",
+   "request": {
+    "provider": "claude",
+    "cwd": "$T/work/pasta Área",
+    "headless": false
+   },
+   "attach": "x"
+  }
+ ]
+}

@@ -19,8 +19,9 @@ use super::{Account, AgentProvider, OpenCaller, OpenError, PermissionMode, Resol
 #[derive(Clone, Debug)]
 /// `codex_terminal`: a pasta da conta do terminal Codex que nasceu (o nascimento conta como uso dela).
 /// `restored`: a mesma sessão voltando depois do reboot; o par e o grupo do nome são dela.
+/// `first_message`: o prompt inicial do Claude com terminal espera na fila da chave (Windows).
 pub struct Born { pub name: String, pub provider: AgentProvider, pub jsonl: Option<String>, pub remember_provider: bool, pub codex_terminal: Option<String>,
-    pub restored: bool }
+    pub restored: bool, pub first_message: bool }
 
 pub trait OpenHost: Send + Sync {
     /// A pasta pessoal do dono (registros, `~/.claude.json`, `~/.hangar`).
@@ -54,6 +55,10 @@ pub trait OpenHost: Send + Sync {
     fn account_diary(&self, events: Vec<Value>);
     /// Quanto a abertura espera a reconciliação da conta; os testes encurtam.
     fn reconcile_limit(&self) -> Duration { RECONCILE_LIMIT }
+    /// O `.claude.json` cujos MCP a reconciliação espelha na conta: o que a conta padrão lê.
+    fn mcp_principal(&self) -> Option<PathBuf> {
+        Some(hangar_core::account_env::default_claude_json(self.home(), self.env().get("CLAUDE_CONFIG_DIR").map(String::as_str)))
+    }
     /// Id da conversa (`--session-id`) e chave da ponte do plugin, novos a cada vida.
     fn new_session_id(&self) -> String;
     fn new_bridge_key(&self) -> String;
@@ -511,8 +516,8 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
     let locks = crate::accounts::AccountLocks::new(host.home().join(".hangar").join("account-locks"));
     let key = account_key(host, spec, codex_home)?;
     let hangar_account = config_dir.as_deref().filter(|dir| claude::hangar_account(Path::new(dir)).is_some());
-    // O Kimi não lê a conta Claude: nem trava nem reconciliação.
-    let reads_account = spec.provider != AgentProvider::Kimi;
+    // O Kimi e o Antigravity não leem a conta Claude: nem trava nem reconciliação.
+    let reads_account = !matches!(spec.provider, AgentProvider::Kimi | AgentProvider::Antigravity);
     let hangar_account = hangar_account.filter(|_| reads_account);
     // Sem login o Claude sobe e fica mudo: recusa antes de subir qualquer coisa.
     if spec.provider == AgentProvider::Claude && let Some(dir) = hangar_account
@@ -536,7 +541,7 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        let (held, result) = reconcile_hangar_dir(host.home().to_owned(), dir, &account, &spec.cwd, host.reconcile_limit(), guard.take(),
+        let (held, result) = reconcile_hangar_dir(host.home().to_owned(), host.mcp_principal(), dir, &account, &spec.cwd, host.reconcile_limit(), guard.take(),
             |events| host.account_diary(events)).await;
         guard = held;
         avisos = result?;
@@ -546,7 +551,8 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
 
 /// A reconciliação da conta do Hangar `dir` (pasta já conferida) dentro do prazo, com a guarda `held` na
 /// mesma tarefa, devolvida quando ela termina. A abertura e a reabertura do Claude passam por aqui.
-pub(crate) async fn reconcile_hangar_dir(home: PathBuf, dir: &str, account: &str, cwd: &str, limit: Duration,
+/// `principal`: o `.claude.json` que a conta padrão lê, a fonte do espelho dos MCP (`None` não espelha).
+pub(crate) async fn reconcile_hangar_dir(home: PathBuf, principal: Option<PathBuf>, dir: &str, account: &str, cwd: &str, limit: Duration,
     held: Option<crate::accounts::AccountGuard>, diary: impl FnOnce(Vec<Value>))
     -> (Option<crate::accounts::AccountGuard>, Result<Vec<String>, OpenError>) {
     use crate::accounts::claude_config::{Outcome, Wait, late_outcome, reconcile_dir, refused};
@@ -555,7 +561,7 @@ pub(crate) async fn reconcile_hangar_dir(home: PathBuf, dir: &str, account: &str
     let wait = Wait::within(limit);
     // As travas esperam só até o prazo, e a guarda vai com a tarefa: a recusa no limite não deixa
     // reconciliação rodando sem ela (a exclusão da conta esperaria) nem segurando o runtime.
-    let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, &dir, Some(&project), wait)));
+    let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, principal.as_deref(), &dir, Some(&project), wait)));
     let (guard, outcome) = match tokio::time::timeout(limit, task).await {
         Ok(Ok((held, outcome))) => (held, outcome),
         Ok(Err(e)) => (None, Outcome::failed(refused(format!("a reconciliação parou no meio: {e}")))),
@@ -574,16 +580,27 @@ fn engine_route(host: &dyn OpenHost, spec: &SessionSpec) -> Result<Option<claude
                 hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1."));
         }
     }
-    match &spec.account {
-        Account::Engine { name, account: Some(account), .. } => Ok(Some(super::facts::fixed_account(
-            &crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(host.env().clone())), name, account)?)),
-        _ => Ok(None),
-    }
+    let Account::Engine { name, account, binding, .. } = &spec.account else { return Ok(None) };
+    let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(host.env().clone()));
+    super::facts::session_engine_route(&accounts, name, account.as_deref(), binding.as_deref())
 }
 
 /// O pane do Claude, o transcript da conversa nova e a rota da conta ChatGPT fixa do motor.
 /// As escolhas de plugins e skills da conversa: as pedidas e, na retomada, as que ela já tinha guardado.
 pub(crate) async fn conversation_settings(host: &dyn OpenHost, spec: &SessionSpec, sid: &str, resume: bool) -> Result<Option<Value>, OpenError> {
+    let settings = chosen_settings(host, spec, sid, resume).await?;
+    Ok(with_hooks_off(settings, spec.hooks_off))
+}
+
+/// Por cima do que a conversa escolheu: o ajuste vale em toda subida, também na retomada.
+pub(crate) fn with_hooks_off(settings: Option<Value>, hooks_off: bool) -> Option<Value> {
+    if !hooks_off { return settings; }
+    let mut settings = settings.filter(Value::is_object).unwrap_or_else(|| json!({}));
+    settings["disableAllHooks"] = json!(true);
+    Some(settings)
+}
+
+async fn chosen_settings(host: &dyn OpenHost, spec: &SessionSpec, sid: &str, resume: bool) -> Result<Option<Value>, OpenError> {
     if spec.customizations.is_none() && !resume { return Ok(None); }
     let effective_dir = spec.account.config_dir().map(str::to_owned).or_else(|| host.env().get("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()).cloned())
         .unwrap_or_else(|| host.home().join(".claude").to_string_lossy().into_owned());
@@ -599,8 +616,14 @@ async fn claude_plan(host: &dyn OpenHost, spec: &SessionSpec, sid: &str, read_on
     let roots = claude::plugin_roots(host.home());
     let bridge = host.bridge();
     let key = host.new_bridge_key();
+    let windows = host.terminal().windows;
+    let settings_file = match settings.as_ref().filter(|s| windows && s.as_object().is_some_and(|o| !o.is_empty())) {
+        Some(settings) => Some(claude::settings_file(host.home(), settings)
+            .map_err(|e| OpenError::new(500, "erro_criacao_sessao", format!("as escolhas da conversa não foram gravadas: {e}")))?),
+        None => None,
+    };
     let ctx = claude::ClaudeContext { plugin_roots: &roots, bridge: bridge.as_ref(), bridge_key: &key, runtime_config: runtime,
-        server_env: host.env(), settings: settings.as_ref(), read_only, windows: host.terminal().windows, initial_prompt, engine_route: route.as_ref(),
+        server_env: host.env(), settings: settings.as_ref(), settings_file: settings_file.as_deref(), read_only, windows, initial_prompt, engine_route: route.as_ref(),
         resume, allow_bypass: false };
     let pane = claude::pane(spec, sid, &ctx);
     let jsonl = claude::transcript(spec, sid, &host.server_projects()).to_string_lossy().into_owned();
@@ -633,10 +656,11 @@ pub(crate) fn headless_sidecar(spec: &SessionSpec, sid: &str, previous_non_plan:
         "name": spec.name, "provider": "claude", "headless": true, "key": spec.key, "cwd": spec.cwd, "session_id": sid,
         "config_dir": spec.account.config_dir(), "engine": engine, "model": spec.model, "effort": spec.effort,
         "context_window": context_window, "permission_mode": spec.permission_mode.map(PermissionMode::name),
-        "previous_non_plan": previous_non_plan.map(PermissionMode::name), "subagent_model": spec.subagent_model, "jev": spec.jev,
+        "previous_non_plan": previous_non_plan.map(PermissionMode::name), "subagent_model": spec.subagent_model, "code_mode": spec.code_mode, "jev": spec.jev,
     });
     if let Some(tier) = spec.service_tier { meta["service_tier"] = json!(tier.name()); }
     if let Some(settings) = settings { meta["claude_settings"] = settings.clone(); }
+    if let Account::Engine { binding: Some(binding), .. } = &spec.account { meta["engine_binding"] = json!(binding); }
     if let Some(route) = route {
         meta["engine_account"] = json!(route.account);
         meta["engine_credential_id"] = json!(route.credential_id);
@@ -724,7 +748,7 @@ async fn headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, previous_non
     persist(host, spec, diary, "sidecar_gravado", &sidecars.join("claude-headless"), &meta)?;
     if let Some(adopting) = adopting.as_deref_mut() { adopting.adopted().await; }
     let jsonl = claude::transcript(spec, &sid, &host.server_projects()).to_string_lossy().into_owned();
-    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: Some(jsonl.clone()), remember_provider, codex_terminal: None, restored: false };
+    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: Some(jsonl.clone()), remember_provider, codex_terminal: None, restored: false, first_message: false };
     let mut warnings = left;
     warnings.extend(announce(host, spec, diary, &born, "sidecar_gravado").await);
     Ok((Some(jsonl), warnings, route))
@@ -756,7 +780,11 @@ fn persist(host: &dyn OpenHost, spec: &SessionSpec, diary: &mut Diary, stage: &'
 }
 
 async fn announce(host: &dyn OpenHost, spec: &SessionSpec, diary: &mut Diary, born: &Born, stage: &str) -> Vec<String> {
-    let warnings = host.born(born).await;
+    let mut warnings = host.born(born).await;
+    if let Err(error) = super::record::confirm_binding(host.home(), spec) {
+        tracing::warn!(kind = ?error.kind(), "vínculo da conversa não gravado no Arquivo");
+        warnings.push("A sessão abriu, mas o vínculo da conversa não foi gravado no Arquivo.".into());
+    }
     diary.events.push(json!({"evento": "sessao.criada", "nivel": "ok", "sessao": spec.name, "provider": spec.provider.name(),
         "etapa": stage, "operacao": diary.op}));
     warnings
@@ -789,7 +817,7 @@ async fn codex_headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, codex_
     // A thread que já existe: a subida a retoma (`thread/resume`) em vez de abrir outra.
     if let Some(thread) = resume { meta.insert("thread_id".into(), json!(thread)); }
     persist(host, spec, diary, "confiar_pasta", &crate::runtime::codex_sidecar::dir(host.home()), &meta)?;
-    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: None, remember_provider, codex_terminal: None, restored: false };
+    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: None, remember_provider, codex_terminal: None, restored: false, first_message: false };
     warnings.extend(announce(host, spec, diary, &born, "sidecar_gravado").await);
     if initial_prompt.is_some_and(|p| !p.is_empty()) { progress_step(&spec.name, "recado", json!({})); }
     warnings.extend(host.warm_codex(&spec.name, initial_prompt).await);
@@ -809,6 +837,14 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
     let mut warnings = if restore { Vec::new() } else { host.leave_old_group(&spec.name).await? };
     diary.step("preparar_comando");
     let sid = resume.map_or_else(|| host.new_session_id(), str::to_owned);
+    if claude && restore && spec.service_tier.is_some() {
+        // A restauração não passa pela resolução: a velocidade salva que perdeu o suporte cai aqui.
+        let (env, saved, handle) = (host.env().clone(), spec.clone(), tokio::runtime::Handle::current());
+        spec.service_tier = tokio::task::spawn_blocking(move || {
+            let facts = super::facts::LocalFacts::new(crate::accounts::environment::AccountEnvironment::from_map(env), handle);
+            claude::relaunch_tier(&saved, &facts)
+        }).await.map_err(|_| creation("a velocidade da sessão não pôde ser conferida"))?;
+    }
     let (pane, jsonl, route) = if claude {
         let (pane, jsonl, route) = claude_plan(host, spec, &sid, read_only, initial_prompt, runtime, resume.is_some()).await?;
         (pane, Some(jsonl), route)
@@ -828,9 +864,9 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         // O transcript nasce no 1º turno, num layout próprio: nada a semear.
         (agents::pane(spec, conversation, &ctx)?, None, None)
     };
-    // O Kimi novo e o Codex só sabem a conversa depois da TUI (bilhete, sidecar).
+    // O Kimi e o Antigravity novos e o Codex só sabem a conversa depois da TUI (bilhete, sidecar).
     spec.conversation = match spec.provider {
-        AgentProvider::Kimi | AgentProvider::Codex => resume.map(str::to_owned),
+        AgentProvider::Kimi | AgentProvider::Antigravity | AgentProvider::Codex => resume.map(str::to_owned),
         _ => Some(sid.clone()),
     };
     diary.step("confiar_pasta");
@@ -841,6 +877,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
             agents::kimi_pretrust(&agents::kimi_home(host.home(), host.env()), &spec.cwd, now);
         }
+        AgentProvider::Antigravity => agents::agy_pretrust(host.home(), &spec.account, &spec.cwd),
         // A conta adicional confia pelo preparo que o lançador pede antes da TUI.
         AgentProvider::Codex if matches!(&spec.account, Account::Codex { account_id } if account_id == "default") => {
             super::codex::pretrust(Path::new(codex_home.unwrap_or_default()), &spec.cwd);
@@ -869,6 +906,17 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
             }
         }
     };
+    // No Windows o do Claude vai na fila da chave, que a adoção abre (`claude::pane` não o põe no comando).
+    let queue_dir = host.server_projects().parent().map(|base| base.join(".hangar-queue")).unwrap_or_default();
+    let first_message = initial_prompt.filter(|p| claude && host.terminal().windows && !p.is_empty());
+    if let Some(text) = first_message {
+        progress_step(&spec.name, "recado", json!({}));
+        if let Err(error) = crate::runtime::claude_terminal::queue_first_message(&queue_dir, &spec.key, &spec.name, text) {
+            diary.refused("erro", "prompt_inicial_nao_gravado", Some("criar_terminal"), Some(error.code.as_str()));
+            forget_record(host, &spec.key);
+            return Err(OpenError::new(500, "erro_criacao_sessao", format!("o prompt inicial não entrou na fila: {}", error.message)));
+        }
+    }
     if let Err(error) = terminal::spawn(host.mux(), host.terminal(), &pane).await {
         // O stderr é saída crua: fica no log privado, num campo que o relatório não leva.
         tracing::warn!(code = error.code, stderr = %error.stderr, "terminal da sessão não criado");
@@ -886,13 +934,17 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         if let Some(path) = &queued && let Err(error) = std::fs::remove_file(path) {
             tracing::warn!(kind = ?error.kind(), "prompt inicial da abertura que não nasceu ficou na fila");
         }
+        if first_message.is_some() && let Err(error) = crate::runtime::claude_terminal::forget_first_message(&queue_dir, &spec.key) {
+            tracing::warn!(kind = ?error.kind(), "prompt inicial da abertura que não nasceu ficou na fila");
+        }
         return Err(creation(match error.code {
             "terminal_morreu_ao_nascer" => format!("o terminal fechou logo depois de abrir: {}", error.stderr),
             _ => "falha ao criar sessao no tmux".to_owned(),
         }));
     }
     diary.step("limpar_estado_anterior");
-    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: jsonl.clone(), remember_provider, codex_terminal: codex_home.map(str::to_owned), restored: restore };
+    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: jsonl.clone(), remember_provider, codex_terminal: codex_home.map(str::to_owned), restored: restore,
+        first_message: first_message.is_some() };
     warnings.extend(announce(host, spec, diary, &born, "terminal_criado").await);
     Ok((jsonl, warnings, route))
 }

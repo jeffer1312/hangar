@@ -17,7 +17,7 @@ como PWA e operar o chat. Site: [hangar.dev.br](https://hangar.dev.br). Pra arqu
 
 - `tmux`, Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+ (o instalador põe o que
   faltar).
-- Pelo menos um agente de código: Claude Code (o padrão), Codex, Pi, omp ou Kimi Code.
+- Pelo menos um agente de código: Claude Code (o padrão), Codex, Pi, omp, Kimi Code ou Antigravity CLI.
 - Celular na **mesma rede** do PC (Wi-Fi) **ou** ambos no **mesmo tailnet** (Tailscale).
 
 **Pelo app (Linux e Windows):** baixe o app de desktop na
@@ -97,10 +97,11 @@ No Windows, pode usar PowerShell comum ou **Executar como administrador**. A ins
 configura backend e atualização para usar administrador. A comum pede UAC só para o que
 precisar (firewall, Modo Desenvolvedor). Uma instalação elevada também exige PowerShell elevado
 para atualizar manualmente; o botão Atualizar já herda a permissão do backend.
-O backend continua no Agendador, sem serviço do Windows: a tarefa acompanha o Python e tenta
-reiniciar até três vezes, com intervalo de um minuto, quando ele encerra com erro. A vigia
-verifica a resposta HTTP a cada cinco minutos e recupera travamentos, respeitando a instalação
-e a atualização. Fechar o app não encerra o backend; ainda é necessário estar logado.
+O backend continua no Agendador, sem serviço do Windows: a tarefa abre o lançador do Hangar, que
+reabre o servidor quando ele cai e o reinicia quando ele para de responder por cerca de dois
+minutos. Essa conferência começa 3 minutos depois de o servidor ficar pronto (um travamento nesses
+3 minutos é percebido logo depois deles); o servidor que trava antes de ficar pronto, e a versão
+anterior que ainda sobe pelo Python, só são reabertos quando caem. Fechar o app não encerra o backend; ainda é necessário estar logado.
 Quer escolher cada extra? No checkout: `./install.sh --avancado` / `.\install.ps1 -Avancado`
 (o `bootstrap.ps1` não repassa argumentos; o `bootstrap.sh` aceita `bash -s -- --avancado`).
 Agentes de código: o instalador usa os que já estão no computador e só instala o Claude Code
@@ -650,6 +651,28 @@ e que a data do reset semanal mudará.
 No **Arquivo**, a retomada usa a conta registrada nos metadados da conversa e não troca de conta
 por cota ou por conveniência. Se a origem ficar ambígua, a retomada é recusada até haver uma única
 conta identificada. Esse fluxo não apaga, rotaciona nem migra credenciais ou conversas entre contas.
+
+### Antigravity (Google AI)
+
+O Hangar abre o Antigravity CLI (`agy`), o programa oficial do Google, igual ao Claude e ao Codex.
+Com o `agy` instalado (**Configurações → Agentes** mostra e instala), escolha **Antigravity** ao
+criar a sessão: ela roda no terminal (tmux), com o modelo escolhido na lista que o próprio `agy`
+devolve para a conta. O esforço já vem no nome do modelo. A sessão abre em **Aceitar edições**,
+**Automático** ou **Plano**: o `agy` com terminal não abre no modo que pergunta antes de agir.
+
+Com a sessão aberta, modelo e modo trocam pelas mesmas pílulas do Claude, na caixa de digitar:
+o modelo pela lista do `agy` (o Hangar digita `/model` no terminal), e o modo pelo ciclo do
+shift+tab do `agy` (Automático, Plano, Manual e Aceitar edições). Depois de aberta, o modo
+**Manual**, que pergunta antes de agir, também está no ciclo. A troca espera a sessão parada e a caixa
+de digitar vazia. A linha de contexto mostra os tokens da última resposta, sem porcentagem: o
+tamanho da janela do modelo não é conhecido.
+
+Por enquanto só a conta padrão do `agy` (a do `~/.gemini`) funciona: o `agy` com terminal ignora a
+pasta de outra conta. Para entrar, use **Contas e provedores** na conta do Google (Antigravity):
+abra o link, entre com a conta Google e cole o código (ou o endereço) que a página do Antigravity
+mostrar. Na primeira sessão, o `agy` mostra os Termos do Google no terminal, e quem aceita é você.
+
+O Hangar não lê o login do Google, não consulta cota e não troca de conta sozinho.
 
 ### Continuar uma sessão Claude no Codex (em validação)
 

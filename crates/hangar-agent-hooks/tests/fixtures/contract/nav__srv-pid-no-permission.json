@@ -1,0 +1,88 @@
+{
+ "case": "nav/srv-pid-no-permission",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "nav_hook.py",
+ "contract_refs": [
+  "R1-S16",
+  "H-33"
+ ],
+ "description": "pid 1: kill(pid,0) -> PermissionError counts as alive",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/nav_hook.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CLAUDE_CONFIG_DIR": "$T/cfg"
+  },
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/nav": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/nav/_srv.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 24,
+    "sha256": "7118d733964eecd3ebd152555d229eca8b20c81007a0c1c267b03b7d40862080",
+    "content": {
+     "text": "{\"pid\": 1, \"port\": 9222}"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "{\"session_id\": \"11111111-2222-4333-8444-555555555555\", \"transcript_path\": \"/home/u/.claude/projects/p/11111111-2222-4333-8444-555555555555.jsonl\", \"cwd\": \"/home/u/proj\", \"permission_mode\": \"default\", \"hook_event_name\": \"UserPromptSubmit\", \"prompt\": \"testa a página de login no navegador e tira um print\"}"
+   },
+   "code": 0,
+   "stdout": {
+    "text": "{\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"additionalContext\": \"[hangar] Pra ver, testar ou tirar print de uma p\\u00e1gina, use o navegador embutido do Hangar: tools `browser_open`/`browser`/`browser_batch` do MCP hangar (sem elas: `hangar-preview open <url>` no shell; skill hangar-preview). N\\u00e3o use agent-browser nem ver-front.\"}}\n"
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 30,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "home/.hangar": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/nav": {
+   "type": "dir",
+   "mode": "0o755"
+  },
+  "home/.hangar/nav/_srv.json": {
+   "type": "file",
+   "mode": "0o644",
+   "size": 24,
+   "sha256": "7118d733964eecd3ebd152555d229eca8b20c81007a0c1c267b03b7d40862080",
+   "content": {
+    "text": "{\"pid\": 1, \"port\": 9222}"
+   }
+  }
+ },
+ "window": {
+  "t_start": 1794910460.173684,
+  "t_end": 1794910460.2050366
+ }
+}

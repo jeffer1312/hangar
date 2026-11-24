@@ -26,7 +26,9 @@ export function useEffortControl({ serverId, name, provider, model, chosen, onCh
   const isCodex = provider === 'codex';
   const isPi = provider === 'pi' || provider === 'omp';
   const isKimi = provider === 'kimi';
-  const isClaude = !isCodex && !isPi && !isKimi;
+  // O esforço do Antigravity vem no id do modelo (`gemini-4-neon-high`): não há escolha separada.
+  const isAntigravity = provider === 'antigravity';
+  const isClaude = !isCodex && !isPi && !isKimi && !isAntigravity;
 
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -41,7 +43,7 @@ export function useEffortControl({ serverId, name, provider, model, chosen, onCh
   const labels = pillLabels(statusFields, chosen);
   const currentModel = labels.model ?? model;
   // Haiku não usa esforço (o picker responde "Effort not supported"): seção ausente, não inútil.
-  const hidden = isClaude && semEsforco(currentModel);
+  const hidden = isAntigravity || (isClaude && semEsforco(currentModel));
 
   const load = useCallback(async () => {
     const read = ++readSequence.current;

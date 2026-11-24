@@ -617,3 +617,61 @@ async fn transferred_rollout_without_a_readable_record_is_not_indexed_raw_and_ke
     assert_eq!(found("novo").len(), 1, "o que o índice tinha fica");
     assert!(found("depois").is_empty());
 }
+
+const AGY: &str = "904fd70e-847b-49ed-9999-a13d7a4d9a98";
+
+/// Uma conversa do agy numa conta Google adicional, com a pasta no `history.jsonl` dela; devolve a pasta da conta.
+fn agy_extra_conversation(home: &Path) -> PathBuf {
+    let extra = home.join(".antigravity-trabalho");
+    std::fs::create_dir_all(&extra).unwrap();
+    std::fs::write(extra.join(".hangar-antigravity-conta"), r#"{"version":1,"id":"trabalho"}"#).unwrap();
+    let data = extra.join("antigravity-cli");
+    let transcript = data.join("brain").join(AGY).join(".system_generated/logs/transcript_full.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    let rows = [
+        json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-11-23T11:59:12Z",
+            "content":"<USER_REQUEST>\nResponda só: ok prova 1\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nhora\n</ADDITIONAL_METADATA>"}),
+        json!({"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-23T11:59:14Z",
+            "model":"gemini-4-neon-high","input_tokens":10,"cache_read_tokens":0,"output_tokens":4,"content":"feito: ok prova 1",
+            "tool_calls":[{"name":"run_command","args":{"CommandLine":"\"ls\""}}]}),
+        json!({"step_index":2,"source":"SYSTEM","type":"GENERIC","status":"DONE","created_at":"2026-11-23T11:59:15Z","content":"Command output:\nok"}),
+    ];
+    std::fs::write(&transcript, rows.iter().map(line).collect::<String>()).unwrap();
+    std::fs::write(data.join("history.jsonl"), line(&json!({"display":"x","workspace":"/tmp/agy-prova","conversationId":AGY}))).unwrap();
+    extra
+}
+
+/// A conversa de uma conta Google adicional abre no Arquivo, entra no índice com a conta dela e o trecho achado abre
+/// no contexto pelo mesmo id.
+#[tokio::test]
+async fn antigravity_conversation_of_an_extra_account_opens_is_indexed_and_its_hit_opens_in_context() {
+    let h = Harness::new().await;
+    let extra = agy_extra_conversation(&h.home);
+    let (status, body) = h.get(&history("-tmp-agy-prova", AGY, "?provider=antigravity")).await;
+    assert_eq!(status, 200, "{body}");
+    let events = body.as_array().unwrap();
+    let ids: Vec<&str> = events.iter().map(|e| e["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["agy:0", "agy:1", "agy:1:0", "res:agy:2"]);
+    assert_eq!(events[0]["text"], "Responda só: ok prova 1");
+    assert_eq!(events[3]["tool_use_id"], "agy:1:0");
+    let (status, _) = h.get(&history("-tmp-agy-prova", "11111111-1111-1111-1111-111111111111", "?provider=antigravity")).await;
+    assert_eq!(status, 404);
+    let env = [("HOME", h.home.to_string_lossy().into_owned()), ("USERPROFILE", h.home.to_string_lossy().into_owned()),
+        ("CLAUDE_CONFIG_DIR", h.home.join(".claude-a").to_string_lossy().into_owned())];
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map(env.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
+    let index = hangar_server::search::Index::new(&h.home.join("idx-agy"), Arc::new(|| Ok(Vec::new())),
+        Arc::new(|_, _| {}), Default::default()).with_agents(env);
+    index.update().unwrap();
+    let rows: Vec<_> = index.search(&["prova".to_owned()], 50).unwrap().unwrap().into_iter().filter(|r| r.provider == "antigravity").collect();
+    let mut found: Vec<&str> = rows.iter().map(|r| r.event_id.as_str()).collect();
+    found.sort();
+    assert_eq!(found, ["agy:0", "agy:1"]);
+    for row in &rows {
+        assert_eq!((row.project.as_str(), row.session_id.as_str(), row.cwd.as_deref()), ("-tmp-agy-prova", AGY, Some("/tmp/agy-prova")));
+        assert_eq!(row.account, format!("antigravity:{}", hangar_server::accounts::catalog::resolved(&extra).to_string_lossy()));
+        assert_eq!(row.config_dir, None, "a conta Google não é conta Claude: o histórico recusaria o config_dir");
+    }
+    let (status, body) = h.get(&format!("/api/search/context?project=-tmp-agy-prova&session_id={AGY}&event_id=agy%3A0&around=1&provider=antigravity")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body.as_array().unwrap().iter().map(|e| e["id"].clone()).collect::<Vec<_>>(), [json!("agy:0"), json!("agy:1")]);
+}

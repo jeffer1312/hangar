@@ -315,9 +315,12 @@ fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
 }
 
 /// A caixa de mensagem logo abaixo: a régua e, em seguida, a linha do `❯` (ou do `!` no modo de comando).
-/// Régua solta numa resposta não conta.
+/// Régua solta numa resposta não conta. A faixa dos mods, quando começa por um título de painel, fica entre as duas.
 fn composer_below(lines: &[&str]) -> bool {
-    let mut rest = lines.iter().filter(|l| !trim(l).is_empty());
+    let mut rest = lines.iter().filter(|l| !trim(l).is_empty()).peekable();
+    if rest.peek().is_some_and(|l| mods_band_title(l)) {
+        while rest.peek().is_some_and(|l| !P.rule.is_match(l)) { rest.next(); }
+    }
     rest.next().is_some_and(|l| P.rule.is_match(l)) && rest.next().is_some_and(|l| trim(l).starts_with(['❯', '!']))
 }
 
@@ -331,13 +334,22 @@ fn live_spinner(lines: &[&str]) -> Option<String> {
     let ascii = |s: &str| s.strip_prefix("* ").and_then(|rest| rest.split_once(' '))
         .is_some_and(|(verb, more)| verb.ends_with('…') && more.starts_with('('));
     let composer = (0..lines.len()).rev().find(|&i| composer_below(&lines[i..]));
-    let newest_reply = composer.and_then(|top| lines[..top].iter().rposition(|l| trim(l).starts_with('●')));
+    let newest_reply = composer.and_then(|top| lines[..top].iter().rposition(|l| trim(l).starts_with('●') && !mods_band_title(l)));
     lines.iter().enumerate().rev().map(|(i, l)| (i, trim(l))).find(|(i, s)| {
         let mut chars = s.chars();
         newest_reply.is_none_or(|reply| *i > reply)
             && (chars.next().is_some_and(|c| SPINNERS.contains(c)) && chars.next() == Some(' ')
                 || ascii(s) && composer_below(&lines[i + 1..]))
     }).map(|(_, s)| String::from(s.split("   ").next().unwrap_or(s)))
+}
+
+/// Título de painel da faixa dos mods ("● ▾ PM-20124 coleta…   [-]"): o ponto é o estado do painel, não uma resposta
+/// do Claude. Tomado por resposta, ele escondia a linha viva acima da faixa, e "Waiting for 1 background agent" sumia.
+/// O controle de minimizar no fim separa o título de uma resposta que comece com a mesma seta.
+fn mods_band_title(line: &str) -> bool {
+    let line = trim(line);
+    line.strip_prefix('●').map(left).is_some_and(|rest| rest.starts_with(['▾', '▸']))
+        && (line.ends_with("[-]") || line.ends_with("[+]"))
 }
 
 fn status_line(lines: &[&str]) -> Option<String> {
@@ -524,6 +536,112 @@ pub fn other_pane_preview(provider: &str, pane: &str) -> String {
         if provider == "kimi" { OTHER_PREVIEW.used.is_match(body) || kimi_in_todo(lines, at) }
         else { pi_tool(lines, at, body) }
     }, |line| other_stop(provider, line)).0
+}
+
+/// A tela do `agy` (Antigravity CLI). Pergunta: opções numeradas com cursor `>` acima do rodapé `↑/↓ Navigate`;
+/// trabalhando: rodapé `esc to cancel`, com o rótulo do spinner em braile; parado: o resto (`? for shortcuts`).
+pub fn agy_analyze(pane: &str) -> PaneAnalysis {
+    let lines = lines(pane);
+    let mut result = PaneAnalysis { preview: other_pane_preview("antigravity", pane), ..Default::default() };
+    if let Some(menu) = agy_menu(&lines) {
+        result.state = "awaiting_input".into();
+        result.question = menu.question;
+        result.options = Some(menu.options);
+        return result;
+    }
+    let footer = lines.iter().rev().map(|l| trim(l)).find(|l| !l.is_empty()).unwrap_or("");
+    if footer.starts_with("esc to cancel") {
+        result.state = "working".into();
+        result.label = lines.iter().rev().find(|l| kimi_spinner(l))
+            .map(|l| trim(&left(l).chars().skip(1).collect::<String>()).to_owned())
+            .filter(|l| !l.is_empty());
+        result.spinner = result.label.clone();
+    }
+    result
+}
+
+fn agy_option(line: &str) -> Option<String> {
+    static OPTION: LazyLock<Regex> = LazyLock::new(|| terminal_regex(r"^\s*>?\s*\d+\.\s+(.*\S)\s*$"));
+    OPTION.captures(line).map(|c| c[1].to_owned())
+}
+
+fn agy_menu(lines: &[&str]) -> Option<TerminalQuestion> {
+    let nav = lines.iter().rposition(|l| l.contains("↑/↓ Navigate"))?;
+    let mut end = nav;
+    while end > 0 && trim(lines[end - 1]).is_empty() { end -= 1; }
+    let mut start = end;
+    while start > 0 && agy_option(lines[start - 1]).is_some() { start -= 1; }
+    let options: Vec<String> = lines[start..end].iter().filter_map(|l| agy_option(l)).collect();
+    if options.len() < 2 { return None; }
+    let above = lines[..start].iter().rposition(|l| !trim(l).is_empty())?;
+    let mut question = trim(lines[above]).to_owned();
+    // "Requesting permission for:" e o comando, logo acima da pergunta.
+    if let Some(request) = lines[..above].iter().rposition(|l| trim(l) == "Requesting permission for:") {
+        let target: Vec<&str> = lines[request + 1..above].iter().map(|l| trim(l)).filter(|l| !l.is_empty()).collect();
+        if !target.is_empty() { question = format!("{question}\n{}", target.join("\n")); }
+    }
+    Some(TerminalQuestion { question: Some(question), options })
+}
+
+/// O rodapé do `agy`, à direita da última linha: `[modo · ]Modelo · esforço` (`auto · Gemini 4 Neon · low`).
+/// O modo padrão, o que pergunta antes de agir, não tem rótulo.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgyFooter {
+    /// Nos nomes do Claude: `manual` (o padrão do `agy`), `acceptEdits`, `auto` ou `plan`. `None`: rótulo
+    /// que o Hangar não conhece, que nunca vira um modo chutado.
+    pub mode: Option<&'static str>,
+    /// O nome que a tela mostra (`Gemini 4 Neon`).
+    pub model: String,
+    pub effort: Option<String>,
+}
+
+impl AgyFooter {
+    /// O id do modelo como o `agy` o escreve (`gemini-4-neon-low`), comparável por `agy_model_key`.
+    pub fn model_id(&self) -> String {
+        let base = agy_model_key(&self.model);
+        match &self.effort {
+            Some(effort) => format!("{base}-{effort}"),
+            None => base,
+        }
+    }
+    /// O id (do catálogo ou do transcript) é o modelo deste rodapé?
+    pub fn is_model(&self, id: &str) -> bool { agy_model_key(id) == self.model_id() }
+}
+
+/// Nome ou id de modelo do `agy` comparáveis: minúsculas, com espaço, ponto e `_` virando hífen.
+pub fn agy_model_key(text: &str) -> String {
+    trim(text).chars().flat_map(|c| if c.is_whitespace() || c == '.' || c == '_' { vec!['-'] } else { c.to_lowercase().collect() }).collect()
+}
+
+/// O rodapé do `agy` na última linha com texto; à esquerda pode vir `esc to cancel` ou `? for shortcuts`.
+pub fn agy_footer(pane: &str) -> Option<AgyFooter> {
+    static GAP: LazyLock<Regex> = LazyLock::new(|| terminal_regex(r"\s{2,}"));
+    let lines = lines(pane);
+    let last = lines.iter().rev().map(|l| trim(l)).find(|l| !l.is_empty())?;
+    let segment = GAP.split(last).last()?;
+    let parts: Vec<&str> = segment.split(" \u{b7} ").map(trim).collect();
+    let named = |part: &str| part.chars().next().is_some_and(|c| c.is_uppercase() || c.is_ascii_digit());
+    let label = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+    let at = parts.iter().position(|part| named(part))?;
+    let (before, after) = (&parts[..at], &parts[at + 1..]);
+    // Sem `·` não é o rodapé: qualquer linha com maiúscula passaria por nome de modelo.
+    if parts.len() < 2 || before.len() > 1 || after.len() > 1 || !before.iter().chain(after).all(|part| label(part)) {
+        return None;
+    }
+    let mode = match before.first().copied() {
+        None => Some("manual"),
+        Some("auto") => Some("auto"),
+        Some("plan") => Some("plan"),
+        Some("accept-edits") => Some("acceptEdits"),
+        Some(_) => None,
+    };
+    Some(AgyFooter { mode, model: parts[at].to_owned(), effort: after.first().map(|effort| (*effort).to_owned()) })
+}
+
+/// As confirmações do `/model` na tela (`⎿  Model set to Gemini 4 Neon (Medium)`), da mais antiga à mais nova.
+pub fn agy_model_set(pane: &str) -> Vec<String> {
+    static SET: LazyLock<Regex> = LazyLock::new(|| terminal_regex(r"Model set to (\S.*\S)\s*$"));
+    lines(pane).iter().filter_map(|line| SET.captures(line).map(|c| c[1].to_owned())).collect()
 }
 
 /// Texto visível do começo do quadro que só pode ser aceito quando a costura comprovar a continuação.
@@ -788,6 +906,16 @@ mod tests {
         assert_eq!(super::analyze(&pane).spinner, None);
         let pane = format!("{DONE}\n\n● resposta nova\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n{band}\n\n{RULE}\n❯ \n{RULE}\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Kerfuffling… (2m 26s · ↓ 4.9k tokens)"));
+        // Painel de mod aberto com o ponto de estado ("● ▾ …") entre a linha viva e a caixa: não é resposta nova.
+        let band = "● ▾ PM-20124 coleta: troca de sessão no 403 (Execução manual)        8/9 passos · 2h 30m [-]\n  ━━━━━━━━ ━━━━━━━━  89%\n▸ ms_def · develop · Jenkins sem build";
+        let pane = format!("● resposta\n\n✻ Waiting for 1 background agent to finish\n{band}\n{RULE}\n❯ \n{RULE}\n  ⏵⏵ bypass permissions on · 2 background tasks · ↓ to manage\n  ● main\n  ◯ pmedico:kubectl  Aguardando conclusão   40s · ↓ 79.2k tokens\n");
+        assert_eq!(super::analyze(&pane).label.as_deref(), Some("Waiting for 1 background agent to finish"));
+        // O quadro do `*` acima do painel com título também é a linha viva.
+        let pane = format!("{DONE}\n\n● resposta nova\n\n* Kerfuffling… (2m 26s)\n{band}\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).label.as_deref(), Some("Kerfuffling… (2m 26s)"));
+        // Resposta que começa com a mesma seta segue sendo resposta: o resumo do turno anterior acima dela não volta.
+        let pane = format!("● anterior\n\n{DONE}\n\n❯ pergunta\n\n● ▸ primeiro item da lista\n\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).spinner, None);
         // Caixa no modo de comando.
         let pane = format!("{DONE}\n\n● resposta\n\n* Precipitating… (2m 12s)\n\n{RULE}\n! ls\n{RULE}\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Precipitating… (2m 12s)"));

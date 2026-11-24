@@ -5,19 +5,19 @@ import { AccessibilityInfo, ActivityIndicator, AppState, BackHandler, Platform, 
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { resetCreatedChat } from '../../stores/chat';
-import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount,
-  getEnginesForServer, getSessionDefaultsForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
+import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount, getAntigravityAccountsForServer,
+  getEnginesForServer, getSessionDefaultsForServer, getConfigForServer, getMeForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
-  SESSION_PROVIDERS, hasExecutionMode, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
+  CREATE_SESSION_PROVIDERS, canChooseSurface, permissionModes, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
 import type { AccountBadge } from '@hangar/core';
 import { useShallow } from 'zustand/react/shallow';
 import { useSessions } from '../../stores/sessions';
 import { MACHINE_ICON_NAME } from '../tags/tagVisuals';
 import { AccountGlyph } from '../sessions/SessionPlate';
-import type { ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo, Server, WorktreeChoice, WorktreeRepo } from '@hangar/core';
+import type { AntigravityAccount, ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo, Server, WorktreeChoice, WorktreeRepo } from '@hangar/core';
 import { SessionSettingsControl } from '../../chat/SessionSettings';
 import { semEsforco } from '../pills/pills';
 import { SettingsList } from '../../ui/SettingsList';
@@ -31,9 +31,10 @@ import { ProviderPicker } from './ProviderPicker';
 import { BranchPicker, samePath } from './BranchPicker';
 import { CodexContextControl, useCodexContextControl } from './CodexContextControl';
 import { NewConversation, type HomePresentation } from './NewConversation';
+import { SPEED_TIERS, speedHint, speedLabel, type Tier } from '../pills/serviceTierControl';
 import { QuietPill } from './QuietPill';
 import { SettingRow } from './SettingRow';
-import { readChoices, readMachine, rememberChoices, rememberMachine, type NewChatChoices } from './choicesPrefs';
+import { readMachine, rememberMachine } from './choicesPrefs';
 import { superficie } from '../../theme/superficie';
 import { AnchoredPanel } from '../../ui/AnchoredPanel';
 import * as m from '../../paraglide/messages';
@@ -74,15 +75,18 @@ function PanelSelect({
 }
 
 // `layout: 'form'`: o formulário completo em linhas (Nova sessão do menu); o padrão é a conversa nova da inicial.
-export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'conversation' }: {
+export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'conversation', initial }: {
   onClose?: () => void; keyboardOffset?: number; home?: HomePresentation; layout?: 'conversation' | 'form';
+  /** Quem abre já sabendo onde e com qual motor do Claude (o assistente do CLIProxyAPI); não vira escolha lembrada. */
+  initial?: { server?: string; engine?: string };
 }) {
   const servers = useServers((s) => s.servers);
   const activeId = useServers((s) => s.activeId);
   // A máquina escolhida na pílula vale só para onde a conversa nasce; o servidor ativo é das Configurações.
   const [machine, setMachine] = useState(() => {
     const remembered = readMachine();
-    return servers.find((s) => s.id === remembered)?.id ?? servers.find((s) => s.id === activeId)?.id ?? servers[0]?.id ?? null;
+    return servers.find((s) => s.id === initial?.server)?.id ?? servers.find((s) => s.id === remembered)?.id
+      ?? servers.find((s) => s.id === activeId)?.id ?? servers[0]?.id ?? null;
   });
   const target = servers.find((s) => s.id === machine) ?? servers.find((s) => s.id === activeId) ?? servers[0];
   // Fixa também o destino que apareceu após a carga das máquinas ou a remoção da escolhida.
@@ -91,14 +95,16 @@ export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'co
     rememberMachine(id);
     setMachine(id);
   }, []);
-  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} />
+  // O motor é de uma máquina: trocar a pílula de máquina descarta o pedido.
+  const initialEngine = initial?.engine && (!initial.server || initial.server === target?.id) ? initial.engine : undefined;
+  return target ? <CreateSessionForm key={`${target.id}:${target.baseUrl}`} active={target} machines={servers} onPickMachine={pickMachine} onClose={onClose} keyboardOffset={keyboardOffset} home={home} layout={layout} initialEngine={initialEngine} />
     : home?.mode === 'sessions' ? <View style={{ flex: 1 }}>{home.sessions}</View>
       : <Text accessibilityRole="alert">{m.servidor_nao_existe()}</Text>;
 }
 
-function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardOffset, home, layout }: {
+function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardOffset, home, layout, initialEngine }: {
   active: Server; machines: Server[]; onPickMachine: (id: string) => void; onClose?: () => void; keyboardOffset?: number; home?: HomePresentation;
-  layout: 'conversation' | 'form';
+  layout: 'conversation' | 'form'; initialEngine?: string;
 }) {
   const router = useRouter();
   const { theme } = useUnistyles();
@@ -109,13 +115,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   useEffect(() => {
     if (home?.mode !== 'sessions') setInitialized(true);
   }, [home?.mode]);
-  // O form remonta por máquina: estas são as escolhas guardadas para ela.
-  const [remembered] = useState(() => readChoices(active.id));
-  // O que a pessoa quer de modelo e nível; reaplicado sempre que a lista do provider recarrega.
-  const desired = useRef<Required<Pick<NewChatChoices, 'model' | 'effort'>>>({
-    model: remembered.model ?? '', effort: remembered.effort ?? '',
-  });
-  const remember = (patch: NewChatChoices) => rememberChoices(active.id, patch);
+  // Modelo e nível escolhidos nesta abertura ou o padrão do servidor; reaplicado quando a lista do provider recarrega.
+  const desired = useRef({ model: '', effort: '' });
+  // Aplicado uma vez, quando a lista de motores chega; depois a escolha é da pessoa.
+  const seededEngine = useRef(initialEngine ?? '');
+  // Aberto pelo assistente com um motor: criar (e reservar) antes de ele chegar abriria na conta Claude direta.
+  const [seedPending, setSeedPending] = useState(!!initialEngine);
 
   const [picked, setPicked] = useState<string | null>(null);
   // Worktree escolhida no menu de branch: o repositório dela vem junto, antes de a lista geral carregar.
@@ -145,13 +150,23 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const startProvidersRetry = useCanceledLoadRetry(useCallback(() => setProvidersTry((n) => n + 1), []));
   const startModelsRetry = useCanceledLoadRetry(useCallback(() => setModelsTry((n) => n + 1), []));
   const startCodexRetry = useCanceledLoadRetry(useCallback(() => setCodexTry((n) => n + 1), []));
+  const [agyTry, setAgyTry] = useState(0);
+  const startAgyRetry = useCanceledLoadRetry(useCallback(() => setAgyTry((n) => n + 1), []));
   const [projectWarning, setProjectWarning] = useState('');
   const pickGeneration = useRef(0);
 
-  const [provider, setProvider] = useState<Provider>(() =>
-    remembered.provider && SESSION_PROVIDERS.includes(remembered.provider) ? remembered.provider : 'claude');
-  // Padrão sem terminal; só Claude e Codex rodam assim.
-  const [headless, setHeadless] = useState(remembered.headless ?? true);
+  // O inicial vem da sonda de providers, que segue o último provedor que o servidor guardou.
+  const [provider, setProvider] = useState<Provider>('claude');
+  // Sem terminal é o `headless_default` do servidor; só vai no pedido o que a pessoa escolher aqui.
+  const [headlessPick, setHeadlessPick] = useState<boolean | null>(null);
+  // Convidado não lê a configuração do dono: como no desktop, o servidor decide e a tela mostra sem terminal.
+  const [modeRead, setModeRead] = useState<{ state: 'loading' | 'guest' } | { state: 'value'; value: boolean } | { state: 'error'; error: string }>({ state: 'loading' });
+  const [modeTry, setModeTry] = useState(0);
+  const startModeRetry = useCanceledLoadRetry(useCallback(() => setModeTry((n) => n + 1), []));
+  const serverHeadless = modeRead.state === 'value' ? modeRead.value : null;
+  // Sem escolha nem leitura, não há modo a mostrar nem pedido a montar.
+  const modeUnknown = headlessPick === null && (modeRead.state === 'loading' || modeRead.state === 'error');
+  const headless = headlessPick ?? serverHeadless ?? true;
   const [providerProbe, setProviderProbe] = useState<ProviderProbe | null>(null);
   const [providersError, setProvidersError] = useState('');
   const providerTouched = useRef(false);
@@ -164,7 +179,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const contextBusy = context.busy;
   const [catalogFast, setCatalogFast] = useState(false);
   const [catalogDefault, setCatalogDefault] = useState('');
-  const [serviceTier, setServiceTier] = useState<'priority' | undefined>();
+  const [serviceTier, setServiceTier] = useState<'priority' | 'ultrafast' | undefined>();
 
   const [codexAccounts, setCodexAccounts] = useState<CodexAccount[]>([]);
   const [codexAccount, setCodexAccount] = useState('');
@@ -173,6 +188,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [codexProgress, setCodexProgress] = useState('');
   const codexGeneration = useRef(0);
   const codexController = useRef<AbortController | null>(null);
+  // Conta Google do Antigravity: só a padrão, porque o agy com terminal ignora a pasta de outra conta.
+  // `agyAccount` fica vazio até a lista responder ou falhar, e segura a criação até lá.
+  const [agyAccounts, setAgyAccounts] = useState<AntigravityAccount[]>([]);
+  const [agyAccount, setAgyAccount] = useState('');
+  const [agyInstalled, setAgyInstalled] = useState(true);
+  const [agyLoading, setAgyLoading] = useState(false);
+  const [agyError, setAgyError] = useState('');
   const mounted = useRef(true);
   const [retomaveis, setRetomaveis] = useState<ArchiveEntry[]>([]);
   const [retomavel, setRetomavel] = useState('');
@@ -188,13 +210,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const cotaSelecionada = selectedConfig ? cotaDaConta(cotas, selectedConfig) : undefined;
   // Só a escolha à mão no menu de conta desliga a troca automática por cota esgotada.
   const accountTouched = useRef(false);
-  // D-003: só vai no pedido a conta que a pessoa escolheu (agora ou lembrada de antes). A ativa sem
-  // escolha não vai, e o servidor troca a que estiver a 95% ou mais. A lembrada que a tela trocou por
-  // cota esgotada vai como a que a tela mostra: a regra é a mesma do servidor.
+  // D-003: só vai no pedido a conta que a pessoa escolheu nesta tela. A ativa sem escolha não vai, e o
+  // servidor troca a que estiver a 95% ou mais. A que a tela trocou por cota esgotada vai como a que a
+  // tela mostra: a regra é a mesma do servidor.
   const [accountChosen, setAccountChosen] = useState(false);
   // Conta que a troca automática deixou para trás; a pílula avisa até a próxima escolha.
   const [switchedFrom, setSwitchedFrom] = useState('');
-  const [motores, setMotores] = useState<Record<string, { label?: string; model?: string }>>({});
+  const [motores, setMotores] = useState<Awaited<ReturnType<typeof getEnginesForServer>>['motores']>({});
   const [engine, setEngine] = useState('');
   const [modelos, setModelos] = useState<ModelOption[]>([]);
   const [modelo, setModelo] = useState('');
@@ -204,8 +226,15 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [loadedDefaultsKey, setLoadedDefaultsKey] = useState<string | null>(null);
   const [defaultsError, setDefaultsError] = useState('');
   const [defaultsTry, setDefaultsTry] = useState(0);
-  const defaultsKey = `${provider}:${provider === 'claude' ? engine : ''}`;
+  const engineConfig = provider === 'claude' ? motores[engine] : undefined;
+  const proxyEngine = !!(engineConfig?.cliproxy_accounts || engineConfig?.cliproxy_binding);
+  const boundAccount = engineConfig?.cliproxy_bound_account;
+  const engineAccount = boundAccount?.account;
+  const bindingBlocked = !!engineConfig?.cliproxy_binding && !engineAccount;
+  const proxyQuota = engineConfig?.cliproxy_binding ? cotas.find(c => c.id === `cliproxy-binding:${engineConfig.cliproxy_binding}`) : undefined;
+  const defaultsKey = `${provider}:${provider === 'claude' ? engine : ''}:${engineAccount ?? ''}:${engineConfig?.cliproxy_binding ?? ''}`;
   const defaultsReady = loadedDefaultsKey === defaultsKey;
+  const previousDefaults = useRef<{ key: string; engine: string | null } | null>(null);
   const choiceTouched = useRef(false);
   const permissionTouched = useRef(false);
   const [listaReduzida, setListaReduzida] = useState(false);
@@ -213,6 +242,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
 
   const contaCodex = codexAccounts.find((account) => account.id === codexAccount);
   const codexReady = provider !== 'codex' || (!!active && !!contaCodex && contaCodex.auth.status === 'connected' && !codexLoading);
+  const contaAgy = agyAccounts.find((account) => account.id === agyAccount);
+  // Lista que falhou abre na padrão; a conta que o agy diz estar fora não abre.
+  const agyReady = provider !== 'antigravity' || (!agyLoading && !!agyAccount && agyInstalled && contaAgy?.logado !== false);
   const esforcosDoModelo = (value: string) => effortLevels('codex', modelos, value);
   const niveisEsforco = provider === 'codex' ? esforcosDoModelo(modelo)
     : provider === 'claude' && semEsforco(modelo) ? [] : (EFFORT_LEVELS[provider] ?? []);
@@ -223,8 +255,14 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const fastVisible = provider === 'codex' || (provider === 'claude' && !!engine && catalogFast);
   const fastAvailable = !modelsLoading && (provider === 'codex'
     ? codexFastModel?.id !== 'default' && codexFastModel?.service_tiers?.some((tier) => tier.id === 'priority' && tier.hidden !== true) === true
-    : fastVisible && selectedModel?.supports_fast === true);
+    : fastVisible && (selectedModel ?? displayModel)?.supports_fast === true);
+  // Ultra Fast: tier do modelo no Codex (contas Pro); no motor, a conta fixa escolhida precisa ser Pro.
+  const ultrafastAvailable = fastAvailable && (provider === 'codex'
+    ? codexFastModel?.service_tiers?.some((tier) => tier.id === 'ultrafast' && tier.hidden !== true) === true
+    : (selectedModel ?? displayModel)?.supports_ultrafast === true);
   useEffect(() => { if (!fastAvailable) setServiceTier(undefined); }, [fastAvailable]);
+  useEffect(() => { if (!ultrafastAvailable) setServiceTier((cur) => cur === 'ultrafast' ? undefined : cur); }, [ultrafastAvailable]);
+  const speed = fastAvailable && serviceTier ? serviceTier : 'default';
 
   useEffect(() => {
     mounted.current = true;
@@ -263,7 +301,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (generation !== codexGeneration.current || controller.signal.aborted) return;
         setCodexAccounts(accounts);
         setCodexAccount((current) => accounts.some((account) => account.id === current) ? current
-          : defaultCodexAccount(accounts, remembered.codexAccount)?.id ?? '');
+          : defaultCodexAccount(accounts)?.id ?? '');
       })
       .catch((cause: unknown) => {
         if (generation !== codexGeneration.current || controller.signal.aborted) return;
@@ -284,11 +322,47 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setAccountChosen(false);
     providerTouched.current = false;
     setSwitchedFrom('');
+    setAgyAccounts([]);
+    setAgyAccount('');
+    setAgyInstalled(true);
     setMotores({});
     setEngine('');
     setCotas([]);
     setProviderProbe(null);
-  }, [active]);
+    // Pela identidade da máquina: renovar o token (novo objeto, mesmo destino) não desfaz o motor escolhido.
+  }, [active?.id, active?.baseUrl]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    if (provider !== 'antigravity') {
+      setAgyLoading(false);
+      setAgyError('');
+      return;
+    }
+    let alive = true;
+    const controller = new AbortController();
+    const retry = startAgyRetry();
+    setAgyLoading(true);
+    setAgyError('');
+    // "Ausente" só com a resposta desta máquina; leitura que falha não diz que o agy falta.
+    setAgyInstalled(true);
+    void getAntigravityAccountsForServer(active, controller.signal)
+      .then((r) => {
+        if (!alive) return;
+        setAgyInstalled(r.instalado);
+        setAgyAccounts(r.contas);
+        setAgyAccount('default');
+      })
+      .catch((cause: unknown) => {
+        if (!alive) return;
+        setAgyError(loadErrorText(cause, m.mobile_antigravity_accounts_error()));
+        // Sem a lista, abre na padrão do mesmo jeito.
+        setAgyAccount('default');
+        retry.failed(cause);
+      })
+      .finally(() => { if (alive) setAgyLoading(false); });
+    return () => { alive = false; retry.cancel(); controller.abort(); };
+  }, [enabled, provider, active, active?.id, active?.baseUrl, active?.token, agyTry, startAgyRetry]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -300,10 +374,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       .then((cs) => {
         if (!alive) return;
         setConfigs(cs);
-        const kept = cs.find((c) => c.path === remembered.configDir)?.path;
-        const sel = kept ?? cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
+        const sel = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
         // Retomar a carga não desfaz a conta que a pessoa já escolheu.
-        if (!accountTouched.current) setAccountChosen(!!kept);
         setSelectedConfig((current) => cs.some((c) => c.path === current) ? current : sel);
       })
       .catch((cause: unknown) => {
@@ -327,8 +399,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       .then((probe) => {
         if (!alive) return;
         setProviderProbe(probe);
-        const preferred = SESSION_PROVIDERS.find((p) => probe[p]?.default && probe[p]?.disponivel);
-        if (!providerTouched.current && preferred && preferred !== provider && (providersTry === 0 || !probe[provider]?.disponivel)) {
+        const preferred = CREATE_SESSION_PROVIDERS.find((p) => probe[p]?.default && probe[p]?.disponivel);
+        if (!providerTouched.current && !initialEngine && preferred && preferred !== provider && (providersTry === 0 || !probe[provider]?.disponivel)) {
           desired.current = { model: '', effort: '' };
           setProvider(preferred);
         }
@@ -357,6 +429,30 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return () => { alive = false; };
   }, [enabled, active]);
 
+  // O modo que o servidor vai usar: a tela o mostra e espera por ele, e o pedido não o leva.
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const retry = startModeRetry();
+    setModeRead({ state: 'loading' });
+    // Servidor sem `/api/me` (404) é de antes dos convidados: só o dono chega a ele.
+    void getMeForServer(active).catch((cause: { status?: number }) => {
+      if (cause?.status === 404) return { role: 'owner' as const };
+      throw cause;
+    })
+      .then(async (me) => {
+        if (me.role === 'guest') { if (alive) setModeRead({ state: 'guest' }); return; }
+        const value = (await getConfigForServer(active)).campos?.headless_default?.valor;
+        if (alive) setModeRead({ state: 'value', value: typeof value === 'boolean' ? value : true });
+      })
+      .catch((cause: unknown) => {
+        if (!alive) return;
+        setModeRead({ state: 'error', error: loadErrorText(cause, m.criar_sessao_erro()) });
+        retry.failed(cause);
+      });
+    return () => { alive = false; retry.cancel(); };
+  }, [enabled, active, modeTry, startModeRetry]);
+
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
@@ -366,6 +462,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       .then((r) => {
         if (alive) {
           setMotores(r.motores);
+          // Motor pedido que sumiu segura a criação até a pessoa escolher outro provedor ou motor; a semente fica
+          // para a próxima leitura (outra máquina, nova tentativa) não liberar a criação sem motor.
+          const seed = seededEngine.current;
+          if (seed && r.motores[seed]) { seededEngine.current = ''; setEngine(seed); setSeedPending(false); }
+          else if (seed) setEnginesError(m.mobile_create_engine_missing());
+          else setSeedPending(false);
           if (r.arquivo_corrompido) setEnginesError(m.criar_motores_erro());
         }
       })
@@ -378,19 +480,26 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   }, [enabled, active, enginesTry, startEnginesRetry]);
 
   const catalogEngine = provider === 'claude' ? engine || null : null;
-  const catalogConfig = provider === 'codex' ? null : selectedConfig;
-  const catalogAccount = provider === 'codex' ? codexAccount : null;
+  const catalogConfig = provider === 'codex' || provider === 'antigravity' ? null : selectedConfig;
+  const catalogAccount = provider === 'codex' ? codexAccount : provider === 'antigravity' ? agyAccount : null;
 
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
     let alive = true;
+    const previous = previousDefaults.current;
+    previousDefaults.current = { key: defaultsKey, engine: catalogEngine };
+    if (previous && previous.key !== defaultsKey && (previous.engine || catalogEngine)) {
+      desired.current = { model: '', effort: '' };
+      choiceTouched.current = false;
+    }
     setDefaultsError('');
     setLoadedDefaultsKey(null);
     setPermissao('');
     permissionTouched.current = false;
-    void getSessionDefaultsForServer(active, provider, catalogEngine, controller.signal)
-      .then((value) => {
+    const query = [active, provider, catalogEngine, controller.signal] as const;
+    const request = engineAccount ? getSessionDefaultsForServer(...query, engineAccount) : getSessionDefaultsForServer(...query);
+    void request.then((value) => {
         if (!alive) return;
         if (value && !choiceTouched.current) desired.current = { model: value.model, effort: value.effort };
         if (!permissionTouched.current) setPermissao(value?.permission ?? '');
@@ -400,7 +509,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (alive) setDefaultsError(loadErrorText(cause, m.criar_sessao_erro()));
       });
     return () => { alive = false; controller.abort(); };
-  }, [enabled, active, provider, catalogEngine, defaultsKey, defaultsTry]);
+  }, [enabled, active, provider, catalogEngine, engineAccount, defaultsKey, defaultsTry]);
 
   // modelos quando o destino efetivo do catálogo muda
   useEffect(() => {
@@ -412,19 +521,19 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setServiceTier(undefined);
     setEsforco('');
     setSubagente('');
-  }, [provider, catalogEngine, catalogConfig, catalogAccount, active]);
+  }, [provider, catalogEngine, catalogConfig, catalogAccount, engineAccount, active]);
 
   useEffect(() => {
     if (!enabled) return;
     setModelsLoading(false);
     if (!defaultsReady) return;
-    if (provider !== 'claude' && provider !== 'codex' && provider !== 'pi' && provider !== 'kimi' && provider !== 'omp') {
+    if (provider !== 'claude' && provider !== 'codex' && provider !== 'pi' && provider !== 'kimi' && provider !== 'omp' && provider !== 'antigravity') {
       setModelos([]);
       setListaReduzida(false);
       setErroModelos('');
       return;
     }
-    if (provider === 'codex' && (!active || !catalogAccount)) {
+    if ((provider === 'codex' || provider === 'antigravity') && (!active || !catalogAccount)) {
       setModelos([]);
       setListaReduzida(false);
       setErroModelos('');
@@ -444,7 +553,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         : provider === 'claude' && semEsforco(model) ? [] : EFFORT_LEVELS[provider] ?? [];
       if (effort && levels.includes(effort)) setEsforco(effort);
     };
-    const request = modelOptionsForServer(active, provider, catalogEngine, catalogConfig, catalogAccount, controller.signal);
+    const query = [active, provider, catalogEngine, catalogConfig, catalogAccount, controller.signal] as const;
+    const request = engineAccount ? modelOptionsForServer(...query, engineAccount) : modelOptionsForServer(...query);
     void request
       .then((r) => {
         if (!alive) return;
@@ -467,7 +577,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       retry.cancel();
       controller.abort();
     };
-  }, [enabled, defaultsReady, provider, catalogEngine, catalogConfig, catalogAccount, active, active?.id, active?.baseUrl, active?.token, modelsTry, startModelsRetry]);
+  }, [enabled, defaultsReady, provider, catalogEngine, catalogConfig, catalogAccount, engineAccount, active, active?.id, active?.baseUrl, active?.token, modelsTry, startModelsRetry]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -554,21 +664,31 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   }, [folderOpen]);
 
   // Nome em branco: o store gera projeto + sufixo da tentativa.
-  const canHeadless = hasExecutionMode(provider);
+  const canHeadless = canChooseSurface(provider);
+  const headlessField = canHeadless && headlessPick !== null ? { headless: headlessPick } : {};
+  // Um `manual` salvo como padrão não vale com terminal: a linha mostra o padrão e o pedido não o leva.
+  const agyModes = permissionModes('antigravity', canHeadless && headless);
+  const agyPermission = agyModes.includes(permissao) ? permissao : '';
   const settings: Omit<NewConversationInput['body'], 'cwd'> = provider === 'codex'
-    ? { provider: 'codex', model: modelo || null, effort: esforco || null, permission_mode: headless ? permissao || null : null, codex_account: codexAccount, headless }
+    // Permissão do Codex só vale sem terminal; o corpo só existe com o modo já conhecido.
+    ? { provider: 'codex', model: modelo || null, effort: esforco || null, permission_mode: headless ? permissao || null : null, codex_account: codexAccount, ...headlessField }
+    : provider === 'antigravity'
+    // Só a conta padrão (~/.gemini), que vai sem pasta; o esforço vem no id do modelo.
+    ? { provider, config_dir: null, model: modelo || null,
+      permission_mode: agyPermission || null, ...headlessField }
     : {
       provider,
       // A conta trocada pela cota também vai: é a que a tela mostra.
       config_dir: provider === 'claude' && (accountChosen || !!switchedFrom) ? selectedConfig : null,
       engine: provider === 'claude' ? engine || null : null,
+      ...(engineAccount ? { engine_account: engineAccount, engine_binding: engineConfig?.cliproxy_binding } : {}),
       model: (provider === 'claude' || provider === 'pi' || provider === 'kimi' || provider === 'omp') ? modelo || null : null,
       effort: (provider === 'claude' || provider === 'pi' || provider === 'omp') ? esforco || null : null,
       permission_mode: provider === 'claude' ? permissao || null : null,
       subagent_model: provider === 'claude' && !engine ? subagente || null : null,
-      ...(canHeadless ? { headless } : {}),
+      ...headlessField,
     };
-  const body = picked && defaultsReady && !modelsLoading && codexReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
+  const body = picked && defaultsReady && !(canHeadless && modeUnknown) && !bindingBlocked && !seedPending && !modelsLoading && codexReady && agyReady && !providersLoading && (!providersError || providerTouched.current) ? { ...settings, ...(fastAvailable && serviceTier ? { service_tier: serviceTier } : {}), cwd: picked, remember_provider: true, ...(name.trim() ? { name: name.trim() } : {}), ...(worktree ?? {}) } : null;
 
   // Reserva pré-aquecida enquanto a tela está aberta, na frente e compondo; o form remonta por
   // máquina, então desmontar também cobre a troca de servidor.
@@ -580,21 +700,24 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return () => sub.remove();
   }, []);
   useEffect(() => () => reserve.current?.release(), []);
-  const reserveBody = foreground && home?.mode !== 'sessions' ? body : null;
+  // A reserva só sobe sem terminal; sem escolha, ela leva o modo lido do servidor, o mesmo que a criação vai resolver.
+  const reserveBody = foreground && home?.mode !== 'sessions' && body
+    ? (headlessPick === null && canHeadless && serverHeadless !== null ? { ...body, headless: serverHeadless } : body) : null;
   const reserveKey = reserveBody ? JSON.stringify(reserveBody) : '';
   useEffect(() => { reserve.current?.update(active, reserveBody); }, [active, reserveKey]);
   const takePrewarm = useCallback(() => reserve.current?.take() ?? null, []);
   const resumePrewarm = useCallback(() => reserve.current?.resume(), []);
 
-  // Toda escolha feita aqui volta na próxima abertura desta máquina.
+  // Nada daqui é guardado no aparelho: o padrão da próxima abertura é o do servidor.
   const chooseProvider = (p: Provider) => {
     providerTouched.current = true;
+    seededEngine.current = '';
+    setSeedPending(false);
     setProvidersError('');
     if (p === provider) return;
     choiceTouched.current = false;
     desired.current = { model: '', effort: '' };
     setProvider(p);
-    remember({ provider: p, model: '', effort: '' });
   };
   const chooseModel = (v: string) => {
     choiceTouched.current = true;
@@ -606,7 +729,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     desired.current = { model: v, effort };
     setModelo(v);
     setEsforco(effort);
-    remember({ model: v, effort });
   };
   const chooseEffort = (v: string) => {
     choiceTouched.current = true;
@@ -614,12 +736,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setProvidersError('');
     desired.current = { ...desired.current, effort: v };
     setEsforco(v);
-    remember({ effort: v });
   };
-  const chooseHeadless = (v: boolean) => {
-    setHeadless(v);
-    remember({ headless: v });
-  };
+  const chooseHeadless = (v: boolean) => setHeadlessPick(v);
   const choosePermission = (value: string) => {
     permissionTouched.current = true;
     setPermissao(value);
@@ -631,7 +749,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setAccountChosen(true);
     setSwitchedFrom('');
     setSelectedConfig(v);
-    remember({ configDir: v });
   };
   const chooseCodexAccount = (value: string) => {
     providerTouched.current = true;
@@ -643,7 +760,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setError('');
     setCodexProgress('');
     setCodexAccount(value);
-    remember({ codexAccount: value });
   };
 
   const handleResume = async (id = retomavel) => {
@@ -724,17 +840,17 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // A mesma escolha vira pílula na conversa nova e linha no formulário completo.
   const terminalChoice: Choice = {
     icon: 'SquareTerminal',
-    label: canHeadless && headless ? m.criar_modo_exec_headless() : m.criar_modo_exec_tmux(),
+    label: canHeadless && modeUnknown ? m.comum_carregando() : canHeadless && headless ? m.criar_modo_exec_headless() : m.criar_modo_exec_tmux(),
     aria: m.criar_modo_exec(),
     menuTitle: canHeadless ? m.criar_modo_exec() : terminalOnly,
     actions: [
       {
-        id: 'headless', title: m.criar_modo_exec_headless(), state: on(canHeadless && headless), attributes: { disabled: !canHeadless },
+        id: 'headless', title: m.criar_modo_exec_headless(), state: on(canHeadless && !modeUnknown && headless), attributes: { disabled: !canHeadless },
         subtitle: !canHeadless ? terminalOnly
           : provider === 'codex' ? m.criar_modo_exec_headless_resumo_codex() : m.criar_modo_exec_headless_resumo(),
       },
       {
-        id: 'tmux', title: m.criar_modo_exec_tmux(), state: on(!canHeadless || !headless),
+        id: 'tmux', title: m.criar_modo_exec_tmux(), state: on(!canHeadless || (!modeUnknown && !headless)),
         subtitle: provider === 'codex' ? m.criar_modo_exec_tmux_resumo_codex() : m.criar_modo_exec_tmux_resumo(),
       },
     ],
@@ -750,6 +866,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   };
   const accountChoice = ((): Choice | null => {
     if (provider !== 'claude' && provider !== 'codex') return null;
+    if (proxyEngine) {
+      const label = boundAccount ? [boundAccount.email || boundAccount.label, boundAccount.plan].filter(Boolean).join(' · ') : m.cliproxy_no_bound_account();
+      return { icon: 'CircleUser', label, aria: m.cliproxy_bound_account(), disabled: true };
+    }
     const aria = provider === 'claude' ? m.comum_conta_claude() : m.native_create_codex_account();
     if (provider === 'claude' ? configsLoading : codexLoading) {
       return { icon: 'CircleUser', label: m.comum_carregando(), aria, disabled: true };
@@ -797,7 +917,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // Leitura nova falhou e ficaram os números da anterior: sem o motivo, eles pareceriam atuais.
   const cotaAntiga = motivoCotaAntiga(cotaSelecionada);
   // Conta com a janela em 100% não responde: o aviso diz isso em cor de alerta, além dos números.
-  const quotaNotice = provider === 'claude' && cotaSelecionada ? (
+  const quotaNotice = proxyEngine ? (boundAccount ? <Text style={styles.hint}>
+    {[resumoCota(proxyQuota) || m.conta_cota_sem_leitura(), motivoCotaAntiga(proxyQuota)].filter(Boolean).join(' · ')}
+  </Text> : null)
+    : provider === 'claude' && cotaSelecionada ? (
     <Text style={[styles.hint, janelaCheia ? styles.hintAlerta : null]} accessibilityRole={janelaCheia ? 'alert' : undefined}>
       {janelaCheia ? `${m.cota_conta_no_limite({ janela: janelaCheia })} ` : ''}
       {resumoCota(cotaSelecionada) ||
@@ -817,9 +940,27 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         codexError ? <Text style={styles.error} accessibilityRole="alert">{codexError}</Text>
           : <Text style={styles.hint}>{codexLoading ? m.comum_carregando() : m.contas_nao_conectada()}</Text>
       ) : null}
+      {picked && provider === 'antigravity' && !agyReady ? (
+        !agyInstalled ? <Text style={styles.error} accessibilityRole="alert">{m.erro_agy_ausente()}</Text>
+          : <Text style={styles.hint}>{agyLoading || !agyAccount ? m.comum_carregando() : m.mobile_antigravity_sign_in_first()}</Text>
+      ) : null}
+      {provider === 'antigravity' && agyError ? <View>
+        <Text style={styles.error} accessibilityRole="alert">{agyError}</Text>
+        <Pressable accessibilityRole="button" onPress={() => setAgyTry((n) => n + 1)}>
+          <Text style={styles.hint}>{m.native_retry()}</Text>
+        </Pressable>
+      </View> : null}
+      {provider === 'antigravity' && contaAgy && contaAgy.logado !== false && !contaAgy.termos_aceitos
+        ? <Text style={styles.hint}>{m.mobile_antigravity_terms_hint()}</Text> : null}
       {projectWarning ? <Text style={styles.error} accessibilityRole="alert">{projectWarning}</Text> : null}
       {error ? <Text style={styles.error} accessibilityRole="alert">{error}</Text> : null}
       {catalogError ? <Text style={styles.error} accessibilityRole="alert">{catalogError}</Text> : null}
+      {canHeadless && modeUnknown && modeRead.state === 'error' ? <View>
+        <Text style={styles.error} accessibilityRole="alert">{modeRead.error}</Text>
+        <Pressable accessibilityRole="button" onPress={() => setModeTry((n) => n + 1)}>
+          <Text style={styles.hint}>{m.native_retry()}</Text>
+        </Pressable>
+      </View> : null}
       {defaultsError ? <View>
         <Text style={styles.error} accessibilityRole="alert">{m.native_create_default_failed({ erro: defaultsError })}</Text>
         <Pressable accessibilityRole="button" onPress={() => setDefaultsTry((n) => n + 1)}>
@@ -828,7 +969,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       </View> : null}
       {providersError ? <Text style={styles.error} accessibilityRole="alert">{providersError}</Text> : null}
       {!retomavel && listaReduzida ? <Text style={styles.hint}>{m.criar_lista_reduzida()}</Text> : null}
-      {!retomavel && erroModelos ? <Text style={styles.hint} accessibilityRole="alert">{m.criar_abre_padrao({ erro: erroModelos } as any)}</Text> : null}
+      {bindingBlocked ? <Text style={styles.error} accessibilityRole="alert">
+        {engineConfig?.cliproxy_binding_error || engineConfig?.cliproxy_error || m.cliproxy_choose_connected_account()}
+      </Text> : null}
+      {!retomavel && !bindingBlocked && erroModelos ? <Text style={styles.hint} accessibilityRole="alert">
+        {boundAccount ? erroModelos : m.criar_abre_padrao({ erro: erroModelos } as any)}
+      </Text> : null}
       {contextBusy ? <Text style={styles.hint} accessibilityLiveRegion="polite">{m.comum_carregando()}</Text> : null}
       {!contextOpen && context.error ? <Text style={styles.error} accessibilityRole="alert">{context.error}</Text> : null}
       {retomavel ? <Text style={styles.hint}>{m.nova_conversa_retomada_selecionada()}</Text> : null}
@@ -859,11 +1005,11 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       <PanelSelect
         value={engine}
         options={[{ value: '', label: m.criar_claude_sua_conta() }, ...Object.entries(motores).map(([k, v]) => ({ value: k, label: (v as any).label ?? k, hint: (v as any).model }))]}
-        onChange={(v) => { choiceTouched.current = false; setEngine(v); }}
+        onChange={(v) => { choiceTouched.current = false; seededEngine.current = ''; setSeedPending(false); setEngine(v); }}
       />
     </View>
   ) : null;
-  const permissionField = provider === 'claude' && (
+  const permissionField = provider === 'claude' ? (
     <View style={styles.field}>
       <Text style={styles.label}>{m.criar_permissao()}</Text>
       <PanelSelect
@@ -872,7 +1018,16 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         onChange={choosePermission}
       />
     </View>
-  );
+  ) : provider === 'antigravity' ? (
+    <View style={styles.field}>
+      <Text style={styles.label}>{m.criar_permissao()}</Text>
+      <PanelSelect
+        value={agyPermission}
+        options={[{ value: '', label: m.criar_padrao() }, ...agyModes.map((n) => ({ value: n, label: n }))]}
+        onChange={choosePermission}
+      />
+    </View>
+  ) : null;
   const subagentField = provider === 'claude' && !engine && modelos.length > 0 && (
     <View style={styles.field}>
       <Text style={styles.label}>{m.criar_subagente()}</Text>
@@ -926,10 +1081,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     </>
   );
 
-  const toggleFast = async () => {
-    if (!fastAvailable) return;
-    if (provider === 'codex' && !modelo && codexFastModel) chooseModel(valorModelo(codexFastModel));
-    setServiceTier((cur) => cur === 'priority' ? undefined : 'priority');
+  const chooseSpeed = async (tier: Tier) => {
+    if (!fastAvailable || (tier === 'ultrafast' && !ultrafastAvailable)) return;
+    if (tier !== 'default' && provider === 'codex' && !modelo && codexFastModel) chooseModel(valorModelo(codexFastModel));
+    setServiceTier(tier === 'default' ? undefined : tier);
   };
 
   // Mesmo seletor de branch/worktree nas duas apresentações: linha no formulário, pílula acima da caixa na conversa nova.
@@ -1042,7 +1197,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   };
 
   if (layout === 'form') {
-    const providerActions = SESSION_PROVIDERS.map((p) => {
+    const providerActions = CREATE_SESSION_PROVIDERS.map((p) => {
       const probe = providerProbe?.[p];
       const off = !!probe && !probe.disponivel;
       return { id: p, title: providerName(p), state: on(p === provider), attributes: { disabled: off },
@@ -1101,6 +1256,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
               {provider === 'claude' ? <SettingRow icon="ShieldCheck" label={m.criar_permissao()} value={permissao || m.criar_padrao()}
                 actions={[{ id: '', title: m.criar_permissao_padrao(), state: on(!permissao) }, ...CLAUDE_PERMISSION_MODES.map((n) => ({ id: n, title: n, state: on(n === permissao) }))]}
                 onAction={choosePermission} /> : null}
+              {provider === 'antigravity' ? <SettingRow icon="ShieldCheck" label={m.criar_permissao()} value={agyPermission || m.criar_padrao()}
+                actions={[{ id: '', title: m.criar_padrao(), state: on(!agyPermission) }, ...agyModes.map((n) => ({ id: n, title: n, state: on(n === agyPermission) }))]}
+                onAction={choosePermission} /> : null}
               <SettingRow icon="SquareTerminal" label={m.criar_modo_exec()} value={terminalChoice.label} actions={terminalChoice.actions}
                 menuTitle={terminalChoice.menuTitle} onAction={terminalChoice.onAction} />
             </RowGroup>
@@ -1117,9 +1275,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
                 {subagentField}
                 {fastVisible && !retomavel ? (
                   <View style={styles.group}>
-                    <SettingRow icon="Zap" label={m.native_ctl_fast()} disabled={!fastAvailable}
-                      value={fastAvailable && serviceTier === 'priority' ? m.native_ctl_fast_on() : m.native_ctl_fast_off()}
-                      onPress={() => void toggleFast()} />
+                    <SettingRow icon="Zap" label={m.native_ctl_speed()} disabled={!fastAvailable} value={speedLabel(speed)}
+                      menuTitle={m.native_ctl_speed()}
+                      actions={SPEED_TIERS.map((tier) => ({ id: tier, title: speedLabel(tier), state: on(speed === tier),
+                        subtitle: tier === 'ultrafast' && !ultrafastAvailable ? m.native_ctl_speed_ultrafast_unavailable() : speedHint(tier),
+                        attributes: { disabled: tier === 'ultrafast' && !ultrafastAvailable } }))}
+                      onAction={(id) => void chooseSpeed(id as Tier)} />
                   </View>
                 ) : null}
                 {resumeField}
@@ -1190,7 +1351,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       )}
       providerChip={(
         <SessionSettingsControl glyph={retomavel ? undefined : <ProviderGlyph provider={provider} size={16} inline />} open={settingsOpen} onOpen={() => setSettingsOpen(true)} onClose={() => setSettingsOpen(false)}
-          header={<ProviderPicker value={provider} onChange={chooseProvider} disabledMap={providerProbe ?? undefined} />}
+          header={<ProviderPicker value={provider} onChange={chooseProvider} disabledMap={providerProbe ?? undefined} providers={CREATE_SESSION_PROVIDERS} />}
           model={{ display: chipLabel, loading: modelsLoading, notice: erroModelos,
             items: retomavel ? [] : [{ id: '', label: m.criar_padrao(), selected: !modelo },
               ...modelos.filter((md) => md.id !== 'default').map((md) => ({ id: valorModelo(md), label: md.name ?? md.id,
@@ -1199,8 +1360,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
           effort={{ value: esforco, hidden: !!retomavel || !niveisEsforco.length,
             items: [{ id: '', label: m.criar_padrao(), selected: !esforco }, ...niveisEsforco.map((lv) => ({ label: lv, selected: lv === esforco }))],
             select: async (value) => chooseEffort(value) }}
-          fast={{ hidden: !!retomavel || !fastVisible, on: fastAvailable && serviceTier === 'priority', available: fastAvailable,
-            toggle: toggleFast }}>
+          fast={{ hidden: !!retomavel || !fastVisible, tier: speed, available: fastAvailable, ultrafast: ultrafastAvailable,
+            choose: chooseSpeed }}>
           <Pressable accessibilityRole="button" accessibilityState={{ expanded: extrasOpen }}
             onPress={() => setExtrasOpen((value) => !value)} style={styles.more}>
             <Text style={styles.hint}>{m.criar_mais_opcoes()}</Text>
@@ -1242,7 +1403,7 @@ const styles = StyleSheet.create((theme) => ({
   folderScreen: { flex: 1, paddingHorizontal: theme.base.space[3], paddingBottom: theme.base.space[3] },
   formScroll: { gap: theme.base.space[3], paddingHorizontal: theme.base.space[3], paddingBottom: theme.base.space[8] },
   group: { backgroundColor: superficie(theme), borderRadius: theme.base.radius.lg, overflow: 'hidden' },
-  sep: { height: StyleSheet.hairlineWidth, marginLeft: 42, backgroundColor: theme.tokens.border.default },
+  sep: { height: StyleSheet.hairlineWidth, marginLeft: theme.base.space[10] + theme.base.space[0.5], backgroundColor: theme.tokens.border.default },
   pickerWrap: { minHeight: 380, flex: 1 },
   more: { minHeight: 36, paddingHorizontal: theme.base.space[2], justifyContent: 'center' },
   extras: { gap: theme.base.space[3], padding: theme.base.space[2] },

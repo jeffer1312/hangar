@@ -1,0 +1,8 @@
+[package]
+name = "hangar-port-stop"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

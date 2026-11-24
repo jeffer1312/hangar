@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, forwardRef, useImperativeHandle, useState, type ReactNode } from 'react';
+import { act, createElement, forwardRef, useImperativeHandle, useState, type ComponentProps, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { MoreSheet } from './MoreSheet';
@@ -45,14 +45,15 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function render(serverId: string, orq = false, name = 'conversation', provider?: string | null) {
+async function render(serverId: string, orq = false, name = 'conversation', provider?: string | null,
+                      extra: Partial<ComponentProps<typeof MoreSheet>> = {}) {
   const container = document.createElement('div');
   const root = createRoot(container);
   roots.push(root);
   const onClose = vi.fn();
   function Host() {
     const [open, setOpen] = useState(true);
-    return createElement(MoreSheet, { open, onClose: () => { onClose(); setOpen(false); }, serverId, name, orq, provider });
+    return createElement(MoreSheet, { open, onClose: () => { onClose(); setOpen(false); }, serverId, name, orq, provider, ...extra });
   }
   await act(async () => { root.render(createElement(Host)); });
   const finishDismiss = boundary.finishDismiss!;
@@ -218,6 +219,54 @@ test('orquestração abre seu painel no lugar de Atividade e sessão comum mant�
   expect(normal.onClose).toHaveBeenCalledExactlyOnceWith();
   await normal.finishDismiss();
   expect(boundary.push).toHaveBeenCalledExactlyOnceWith('/s/own/conversation/activity');
+});
+
+test.each([
+  { semTerminal: true, label: () => m.modo_abrir_no_terminal(), sub: () => m.modo_abrir_no_terminal_detalhe() },
+  { semTerminal: false, label: () => m.modo_continuar_sem_terminal(), sub: () => m.modo_continuar_sem_terminal_detalhe() },
+])('troca de modo: semTerminal=$semTerminal mostra o destino e age só depois do fechamento', async ({ semTerminal, label, sub }) => {
+  const onPress = vi.fn();
+  const { container, onClose, finishDismiss } = await render(own.id, false, 'conversation', 'claude',
+    { semTerminal, trocarModo: { bloqueado: false, onPress } });
+  const item = container.querySelector<HTMLButtonElement>(`[aria-label="${label()}"]`);
+  expect(item).not.toBeNull();
+  expect(item!.textContent).toContain(sub());
+  await act(async () => { item!.click(); });
+  expect(onClose).toHaveBeenCalledExactlyOnceWith();
+  expect(onPress).not.toHaveBeenCalled();
+  await finishDismiss();
+  expect(onPress).toHaveBeenCalledExactlyOnceWith();
+  expect(boundary.push).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+test('troca de modo: sessão ocupada mostra o motivo e não age', async () => {
+  const onPress = vi.fn();
+  const { container, onClose } = await render(own.id, false, 'conversation', 'codex',
+    { semTerminal: true, trocarModo: { bloqueado: true, onPress } });
+  const item = container.querySelector<HTMLButtonElement>(`[aria-label="${m.modo_abrir_no_terminal()}"]`);
+  expect(item!.textContent).toContain(m.modo_so_ociosa());
+  await act(async () => { item!.click(); });
+  expect(onClose).not.toHaveBeenCalled();
+  expect(onPress).not.toHaveBeenCalled();
+});
+
+test('troca de modo: em andamento diz que está trocando, não que a sessão está ocupada', async () => {
+  const { container } = await render(own.id, false, 'conversation', 'claude',
+    { semTerminal: true, trocarModo: { bloqueado: true, trocando: true, onPress: vi.fn() } });
+  const item = container.querySelector<HTMLButtonElement>(`[aria-label="${m.modo_abrir_no_terminal()}"]`);
+  expect(item!.textContent).toContain(m.modo_trocando());
+  expect(item!.textContent).not.toContain(m.modo_so_ociosa());
+});
+
+test('troca de modo: sem a ação, em orquestração ou em servidor de convite não aparece', async () => {
+  const onPress = vi.fn();
+  const sem = await render(own.id, false, 'conversation', 'claude', { semTerminal: true });
+  const orq = await render(own.id, true, 'orq-run', 'claude', { semTerminal: true, trocarModo: { bloqueado: false, onPress } });
+  const convidado = await render(guest.id, false, 'conversation', 'claude', { semTerminal: true, trocarModo: { bloqueado: false, onPress } });
+  for (const { container } of [sem, orq, convidado]) {
+    expect(container.querySelector(`[aria-label="${m.modo_abrir_no_terminal()}"]`)).toBeNull();
+  }
 });
 
 test('servidor inexistente não oferece compartilhar', async () => {

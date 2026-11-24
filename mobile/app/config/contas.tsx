@@ -3,14 +3,18 @@ import { Alert, ScrollView, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { ACCOUNT_FILTERS, accountInFilter, accountMatches, codexCliAusente, credentialAuth, credentialGroup, deleteCodexAccountForServer,
   getCodexAccountsForServer, getCredentialsForServer, accountDeletedNotice, motivoLoginIndisponivel, parseAccountSort, sortAccounts,
-  type AccountFilter, type AccountSort, type CodexAccount, type Credencial, type Server } from '@hangar/core';
+  getAntigravityAccountsForServer, deleteAntigravityAccountForServer, signOutAntigravityAccountForServer, providerName,
+  type AccountFilter, type AccountSort, type AntigravityAccount, type AntigravityAccounts, type CodexAccount, type Credencial, type Server } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader, Pill, type PageAction } from '../../src/features/config/PageHeader';
 import { SectionCard } from '../../src/features/config/SectionCard';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { CodexContaLogin } from '../../src/features/config/CodexContaLogin';
+import { AntigravityContaLogin } from '../../src/features/config/AntigravityContaLogin';
+import { antigravityAccountLabel, antigravityLoginText, isAdditionalAntigravity } from '../../src/features/accounts/antigravity';
 import { ResetFeedback } from '../../src/features/accounts/CodexReset';
 import { EngineStatus, useEngines } from '../../src/features/accounts/Engines';
+import { ProxyCard, managedVersion, useProxyUpdate } from '../../src/features/accounts/ProxyUpdate';
 import { ClaudeAccountCreate } from '../../src/features/accounts/ClaudeAccountCreate';
 import { AccountRow, type AccountRowData, type AccountRowHandlers } from '../../src/features/accounts/AccountRow';
 import { AccountSearch, FilterChips, SortControl, type SortOption } from '../../src/features/accounts/AccountsToolbar';
@@ -22,6 +26,7 @@ type CredentialGroup = ReturnType<typeof credentialGroup>;
 type Subject = Pick<Credencial, 'tipo' | 'nome' | 'nome_natural' | 'login' | 'cota' | 'ativa'>;
 type IdentityRow = AccountRowData & { group: CredentialGroup; subject: Subject };
 const EngineEditor = lazy(() => import('../../src/features/accounts/EngineEditor').then(module => ({ default: module.EngineEditor })));
+const CliproxyWizard = lazy(() => import('../../src/features/accounts/CliproxyWizard').then(module => ({ default: module.CliproxyWizard })));
 const capitalize = (plan: string | null | undefined) => plan ? `${plan.charAt(0).toUpperCase()}${plan.slice(1)}` : '';
 const SORT_KEY = 'accounts_sort';
 // A ordem dos grupos de antes vira a ordem recebida da lista única.
@@ -34,6 +39,7 @@ const readSort = (): AccountSort => {
 const providerOf = (credential: Credencial | null, account: CodexAccount | null): AccountRowData['provider'] => {
   if (credential?.tipo === 'claude') return 'claude';
   if (credential?.tipo === 'codex' || account) return 'codex';
+  if (credential?.tipo === 'antigravity') return 'antigravity';
   if (credential && (credential.id.startsWith('kimi:') || credential.base_url?.includes('kimi'))) return 'kimi';
   return '';
 };
@@ -51,6 +57,12 @@ function ServerAccounts({ server }: { server: Server | null }) {
   const [loginAccount, setLoginAccount] = useState<string | null>(null);
   const [newLogin, setNewLogin] = useState(false);
   const [newClaude, setNewClaude] = useState(false);
+  const [cliproxyWizard, setCliproxyWizard] = useState(false);
+  // Contas Google do Antigravity: lista própria, mais lenta (o servidor roda o `agy models` de cada uma).
+  const [agy, setAgy] = useState<AntigravityAccounts | null>(null);
+  const [agyError, setAgyError] = useState('');
+  const [agyLogin, setAgyLogin] = useState<{ accountId?: string } | null>(null);
+  const agyGeneration = useRef(0);
   const [deleting, setDeleting] = useState<ReadonlySet<string>>(new Set());
   // Trava síncrona: dois alertas abertos antes do primeiro sim ainda veem o `deleting` antigo.
   const deletingNow = useRef(new Set<string>());
@@ -74,7 +86,30 @@ function ServerAccounts({ server }: { server: Server | null }) {
     editEngine: (name) => handlersNow.current?.editEngine(name),
     removeEngine: (name) => handlersNow.current?.removeEngine(name),
     refreshClaude: () => handlersNow.current?.refreshClaude() ?? Promise.resolve(),
+    antigravitySignIn: (id) => handlersNow.current?.antigravitySignIn(id),
+    antigravitySignOut: (account) => handlersNow.current?.antigravitySignOut(account),
+    antigravityRemove: (account) => handlersNow.current?.antigravityRemove(account),
   }), []);
+
+  const agyTarget = useRef('');
+  const loadAgy = useCallback(async (target: Server | null) => {
+    const generationNow = ++agyGeneration.current;
+    if (!target) { setAgy(null); setAgyError(''); agyTarget.current = ''; return; }
+    // Outra máquina: a lista da anterior não pode ficar à mostra com ações apontando para ela.
+    const key = `${target.id}|${target.baseUrl}`;
+    if (agyTarget.current !== key) { setAgy(null); agyTarget.current = key; }
+    try {
+      const next = await getAntigravityAccountsForServer(target);
+      if (!alive.current || generationNow !== agyGeneration.current) return;
+      setAgy(next);
+      setAgyError('');
+    } catch (cause: unknown) {
+      if (!alive.current || generationNow !== agyGeneration.current) return;
+      // Servidor sem a rota é de antes do Antigravity: a lista segue sem ele.
+      if ((cause as { status?: number } | null)?.status === 404) { setAgy(null); setAgyError(''); return; }
+      setAgyError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
 
   const load = useCallback(async (target: typeof server, force = false, propagate = false) => {
     if (!alive.current) return;
@@ -83,6 +118,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
     const nextController = new AbortController();
     controller.current = nextController;
     setError('');
+    void loadAgy(target);
     if (!target) {
       setLoading(false);
       return;
@@ -104,9 +140,14 @@ function ServerAccounts({ server }: { server: Server | null }) {
     } finally {
       if (generationNow === generation.current && !nextController.signal.aborted) setLoading(false);
     }
-  }, []);
+  }, [loadAgy]);
 
   const engines = useEngines(server, () => load(server));
+  const proxy = useProxyUpdate(server);
+  const proxyVersion = managedVersion(proxy.install);
+  // A versão do proxy do Hangar vai na linha do modelo que ele serve.
+  const proxyNote = (engine: string | undefined) =>
+    proxyVersion && engine && engines.data?.motores[engine]?.cliproxy_accounts ? m.mobile_accounts_proxy_version({ version: proxyVersion }) : '';
   const refreshQuota = useCallback(() => load(server, true), [load, server]);
   const refreshClaude = useCallback(() => load(server, true, true), [load, server]);
   useEffect(() => {
@@ -114,6 +155,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
     setLoginAccount(null);
     setNewLogin(false);
     setNewClaude(false);
+    setAgyLogin(null);
     void load(server);
     return () => {
       alive.current = false;
@@ -193,6 +235,53 @@ function ServerAccounts({ server }: { server: Server | null }) {
       { text: m.contas_apagar_juntando(), isPreferred: true, onPress: () => remove(true) },
     ]);
   };
+  const agyFor = (credential: Credencial) => credential.tipo === 'antigravity'
+    ? agy?.contas.find((account) => account.credencial === credential.id) : undefined;
+  // Sem cota nem e-mail: o Hangar não lê o login do Google, só pergunta ao agy se a conta entrou.
+  const agyStatus = (account: AntigravityAccount | undefined, loggedIn?: boolean | null) => {
+    const parts = [providerName('antigravity'), antigravityLoginText(account ? account.logado : loggedIn)];
+    if (account && !account.termos_aceitos) parts.push(m.mobile_antigravity_terms_pending());
+    if (account?.em_uso) parts.push(m.mobile_antigravity_in_use());
+    if (agy && !agy.instalado) parts.push(m.erro_agy_ausente());
+    return { email: '', plan: '', description: parts.join(' · ') };
+  };
+  const agyCanSignIn = (account: AntigravityAccount | undefined) => !!account && !!agy?.instalado && account.logado !== true;
+  const agyBusyKey = (account: AntigravityAccount) => `agy:${account.id}`;
+  const agyAction = (account: AntigravityAccount, run: () => Promise<unknown>, failure: string) => {
+    if (!server || deletingNow.current.has(agyBusyKey(account))) return;
+    const s = server, key = agyBusyKey(account);
+    deletingNow.current.add(key);
+    setDeleting((prev) => new Set(prev).add(key));
+    run()
+      .then(() => { if (alive.current) void load(s); })
+      .catch((cause: unknown) => { if (alive.current) setError(`${failure}${cause instanceof Error ? `: ${cause.message}` : ''}`); })
+      .finally(() => {
+        deletingNow.current.delete(key);
+        if (!alive.current) return;
+        setDeleting((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      });
+  };
+  const signOutAgy = (account: AntigravityAccount) => {
+    if (!server) return;
+    const s = server, nome = antigravityAccountLabel(account);
+    Alert.alert(m.contas_sair_pergunta({ nome }), undefined, [
+      { text: m.comum_cancelar(), style: 'cancel' },
+      { text: m.contas_sair(), style: 'destructive', onPress: () => agyAction(account, () => signOutAntigravityAccountForServer(s, account.id), m.contas_sair_erro()) },
+    ]);
+  };
+  // Só adicional: a pasta inteira sai, com as conversas do agy nela.
+  const removeAgy = (account: AntigravityAccount) => {
+    if (!server || account.padrao) return;
+    const s = server, nome = antigravityAccountLabel(account);
+    Alert.alert(m.contas_apagar_pergunta({ nome }), m.contas_apagar_conversas_aviso(), [
+      { text: m.comum_cancelar(), style: 'cancel' },
+      { text: m.contas_apagar_com_conversas(), style: 'destructive', onPress: () => agyAction(account, () => deleteAntigravityAccountForServer(s, account.id), m.mobile_antigravity_delete_failed()) },
+    ]);
+  };
   const startLogin = (accountId?: string) => {
     if (!server) return;
     setNewLogin(accountId === undefined);
@@ -202,20 +291,32 @@ function ServerAccounts({ server }: { server: Server | null }) {
     credentials.map(accountForCredential).filter((id): id is CodexAccount => id !== null).map((account) => account.id),
   );
   const built: IdentityRow[] = [
-    ...credentials.map((credential): IdentityRow => {
+    ...credentials.filter(credential => credential.tipo !== 'cliproxy'
+      && !(credential.tipo === 'antigravity' && isAdditionalAntigravity(credential.id, agy?.contas))).map((credential): IdentityRow => {
       const account = accountForCredential(credential);
-      const title = account?.name ?? credential.nome ?? credential.nome_natural;
+      const google = agyFor(credential);
+      // O nome natural da padrão vem do servidor em português; o apelido dado pela pessoa vence.
+      const title = account?.name ?? (google && !credential.apelido ? antigravityAccountLabel(google) : credential.nome ?? credential.nome_natural);
       const group = credentialGroup(credential);
-      const status = account ? accountStatus(account, credential) : credentialStatus(credential, title);
+      const status = account ? accountStatus(account, credential)
+        : credential.tipo === 'antigravity' ? agyStatus(google, credential.login?.loggedIn) : credentialStatus(credential, title);
+      const engineName = credential.tipo === 'chave' && credential.id.startsWith('chave:') ? credential.id.slice(6) : undefined;
+      const motor = engineName ? engines.data?.motores[engineName] : undefined;
+      const bound = motor?.cliproxy_bound_account;
+      const binding = bound ? [bound.email || bound.label, bound.plan].filter(Boolean).join(' · ')
+        : motor?.cliproxy_binding || motor?.cliproxy_accounts ? motor.cliproxy_binding_error || m.cliproxy_no_bound_account() : '';
       return {
         key: `credential:${credential.id}`, group, title, ...status,
-        description: group === 'claude_engine' ? [m.accounts_list_runs_in_claude_code(), status.description].filter(Boolean).join(' · ') : status.description,
+        description: group === 'claude_engine'
+          ? [m.accounts_list_runs_in_claude_code(), proxyNote(engineName), binding || status.description].filter(Boolean).join(' · ')
+          : status.description,
         provider: providerOf(credential, account),
         active: credential.ativa,
         account,
         credential,
-        engineName: credential.tipo === 'chave' && credential.id.startsWith('chave:') ? credential.id.slice(6) : undefined,
-        canSignIn: !!account && canSignIn(account),
+        engineName,
+        antigravity: google ?? null,
+        canSignIn: google ? agyCanSignIn(google) : !!account && canSignIn(account),
         subject: { ...credential, nome: title, login: status.email ? { ...credential.login, estado: credential.login?.estado ?? 'ok', email: status.email } : credential.login },
       };
     }),
@@ -230,10 +331,20 @@ function ServerAccounts({ server }: { server: Server | null }) {
             login: status.email ? { estado: 'ok', email: status.email } : null },
         };
       }),
+    ...(agy?.contas ?? [])
+      .filter((google) => google.padrao && !credentials.some((credential) => credential.id === google.credencial))
+      .map((google): IdentityRow => {
+        const title = antigravityAccountLabel(google);
+        return {
+          key: `antigravity:${google.id}`, group: 'subscription', title, ...agyStatus(google),
+          provider: 'antigravity', active: false, account: null, credential: null, antigravity: google, canSignIn: agyCanSignIn(google),
+          subject: { tipo: 'antigravity', nome: title, nome_natural: title, ativa: false, cota: null, login: null },
+        };
+      }),
     ...(engines.ready ? Object.entries(engines.data!.motores)
       .filter(([name]) => !credentials.some(c => c.id === `chave:${name}`))
       .map(([name, engine]): IdentityRow => ({ key: `engine:${name}`, group: 'claude_engine', title: engine.label || name,
-        email: '', plan: '', description: [m.accounts_list_runs_in_claude_code(), engine.model, engine.base_url].filter(Boolean).join(' · '),
+        email: '', plan: '', description: [m.accounts_list_runs_in_claude_code(), proxyNote(name), engine.model, engine.base_url].filter(Boolean).join(' · '),
         provider: '', active: false, account: null, credential: null, engineName: name, canSignIn: false,
         subject: { tipo: 'chave', nome: engine.label || name, nome_natural: name, ativa: false, cota: null, login: null } })) : []),
   ];
@@ -270,16 +381,23 @@ function ServerAccounts({ server }: { server: Server | null }) {
     editEngine: (name) => engines.setEditing(name),
     removeEngine: (name) => engines.remove(name),
     refreshClaude: () => refreshClaude(),
+    antigravitySignIn: (id) => setAgyLogin({ accountId: id }),
+    antigravitySignOut: (account) => signOutAgy(account),
+    antigravityRemove: (account) => removeAgy(account),
   };
   // Entrada escalonada só na primeira lista pintada; quem aparece depois (filtro, busca) só surge.
   const firstPaint = !painted.current && visible.length > 0;
   useEffect(() => { if (visible.length) painted.current = true; });
-  const actions: PageAction[] = [{ icon: 'RefreshCw', label: m.contas_atualizar(), onPress: () => { load(server); void engines.reload(); } }];
+  const actions: PageAction[] = [{ icon: 'RefreshCw', label: m.contas_atualizar(), onPress: () => { load(server); void engines.reload(); void proxy.reload(); } }];
   if (server && engines.ready) actions.push({ label: m.mobile_accounts_engine_new(), onPress: () => engines.setEditing('') });
   // O rótulo já traz o "+"; ícone repetiria o sinal.
   if (server) {
     actions.push({ label: m.contas_nova(), onPress: () => startLogin() });
     actions.push({ label: m.mobile_accounts_claude_add(), onPress: () => setNewClaude(true), disabled: loading });
+    // Só a padrão: o atalho existe enquanto ela não aparece na lista (o agy nunca entrou nesta máquina).
+    if (agy?.instalado && !agy.contas.some((account) => account.padrao)) {
+      actions.push({ label: m.mobile_accounts_antigravity_add(), onPress: () => setAgyLogin({}) });
+    }
   }
 
   return (
@@ -290,8 +408,10 @@ function ServerAccounts({ server }: { server: Server | null }) {
       ) : (
         <InfoNotice text={m.maquinas_vazio()} />
       )}
+      {server ? <ProxyCard state={proxy} onConnect={() => setCliproxyWizard(true)} /> : null}
       {loading ? <Text style={styles.muted}>{m.comum_carregando()}</Text> : null}
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+      {agyError ? <Text accessibilityRole="alert" style={styles.error}>{m.mobile_antigravity_accounts_error()} {agyError}</Text> : null}
       {server ? <EngineStatus state={engines} /> : null}
       {server ? <ResetFeedback server={server} credentialIds={credentials.map(c => c.id)} onDefinitive={refreshQuota} /> : null}
 
@@ -308,7 +428,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
         <SectionCard>
           {visible.map((row, index) => (
             <AccountRow key={row.key} row={row} term={term} enterIndex={firstPaint ? index : null} server={server}
-              busy={!!row.account && deleting.has(row.account.id)}
+              busy={(!!row.account && deleting.has(row.account.id)) || (!!row.antigravity && deleting.has(agyBusyKey(row.antigravity)))}
               engineReady={!!row.engineName && engines.ready && !!engines.data?.motores[row.engineName]}
               engineBusy={!!row.engineName && engines.deleting.has(row.engineName)} handlers={handlers} />
           ))}
@@ -317,11 +437,24 @@ function ServerAccounts({ server }: { server: Server | null }) {
           ) : null}
         </SectionCard>
       ) : null}
+      {visible.some((row) => row.provider === 'antigravity') ? <Text style={styles.muted}>{m.mobile_antigravity_no_quota()}</Text> : null}
+      {server && agyLogin ? (
+        <AntigravityContaLogin key={JSON.stringify([server.id, server.baseUrl, server.token, agyLogin.accountId ?? ''])} server={server}
+          accounts={agy?.contas ?? []} accountId={agyLogin.accountId}
+          onComplete={() => { void load(server); }} onClose={() => setAgyLogin(null)} />
+      ) : null}
       {server && engines.editing !== null && engines.data ? (
         <Suspense fallback={<Text style={styles.muted}>{m.comum_carregando()}</Text>}>
           <EngineEditor key={engines.editing} server={server} name={engines.editing || undefined}
             engine={engines.editing ? engines.data.motores[engines.editing] : undefined} names={Object.keys(engines.data.motores)}
-            onSaved={engines.saved} onClose={() => engines.setEditing(null)} />
+            onSaved={engines.saved} onClose={() => engines.setEditing(null)}
+            onCliproxy={() => { engines.setEditing(null); setCliproxyWizard(true); }} />
+        </Suspense>
+      ) : null}
+      {server && cliproxyWizard ? (
+        <Suspense fallback={<Text style={styles.muted}>{m.comum_carregando()}</Text>}>
+          <CliproxyWizard server={server} names={Object.keys(engines.data?.motores ?? {})}
+            onSaved={engines.saved} onClose={() => { setCliproxyWizard(false); void proxy.reload(); }} />
         </Suspense>
       ) : null}
 

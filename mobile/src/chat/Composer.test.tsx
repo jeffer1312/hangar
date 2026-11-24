@@ -32,7 +32,7 @@ vi.mock('react-native', async (original) => {
   } } };
 });
 vi.mock('expo-router', () => ({ useNavigation: () => h.navigation, useRouter: () => ({ push: vi.fn() }) }));
-vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: () => h.diskUpload }));
+vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: () => h.diskUpload, diskFileSize: async () => undefined }));
 vi.mock('../stores/chat', async (original) => ({
   ...await original<typeof import('../stores/chat')>(), chatStore: () => h.chat, filaCount: () => 0,
 }));

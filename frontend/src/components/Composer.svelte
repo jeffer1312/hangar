@@ -2368,7 +2368,7 @@ import { cachePrazo } from '../lib/cachePrazo';
           {@const label = contextRefLabel(ref)}
           <li class="cref-item" in:scale={{ duration: 180, start: 0.9, easing: cubicOut }}>
             <div class="cref-row">
-              <span class="cref-ico" aria-hidden="true">{ref.kind === 'quote' ? '❝' : '⌖'}</span>
+              <span class="cref-ico" aria-hidden="true">{ref.kind === 'quote' ? '❝' : ref.kind === 'code' ? '‹›' : '⌖'}</span>
               <span class="cref-label" title={label}>{label}</span>
               <button type="button" class="cref-btn" aria-label={m.cite_edit_comment()} title={m.cite_edit_comment()}
                       aria-expanded={editingRef === idx}

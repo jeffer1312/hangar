@@ -128,15 +128,16 @@ async fn b01_b05_b13_b29_serves_from_the_env_file_without_python_and_ignores_std
     assert_eq!(first["instance"].as_str().unwrap().len(), 32);
     // B-05: o token vem do `.env`; B-01: a porta também.
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{port}/api/migration/status");
-    assert_eq!(client.get(&url).bearer_auth("errado").send().await.unwrap().status(), 401);
+    // Rota só do dono, sem repasse: o token certo abre, o errado é recusado.
+    let url = format!("http://127.0.0.1:{port}/api/auto-report");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let response = client.get(&url).bearer_auth("proof").send().await.unwrap();
         if response.status() == 200 { break; }
-        assert!(Instant::now() < deadline, "status do dono não respondeu: {}", response.status());
+        assert!(Instant::now() < deadline, "rota do dono não respondeu: {}", response.status());
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert_eq!(client.get(&url).bearer_auth("errado").send().await.unwrap().status(), 403);
     // B-29: sem o Python o stdin é /dev/null (systemd) e o servidor segue de pé.
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(server.0.try_wait().unwrap().is_none() && health(port));
@@ -165,8 +166,8 @@ fn b25_b26_sigterm_stops_in_order_and_the_next_boot_counts_nothing() {
     assert_eq!(life(home.path())["unclean_exits"], 0);
 }
 
-#[tokio::test]
-async fn b24_a_killed_life_is_counted_on_the_next_boot() {
+#[test]
+fn b24_a_killed_life_is_counted_on_the_next_boot() {
     let home = tempfile::tempdir().unwrap();
     let port = free_port();
     write_env(home.path(), &format!("CP_PORT={port}\nCP_AUTH_TOKEN=proof\n"));
@@ -181,15 +182,8 @@ async fn b24_a_killed_life_is_counted_on_the_next_boot() {
     assert_eq!(fall.len(), 1, "{lines:?}");
     assert_eq!(fall[0]["saidas_nao_limpas"], 1);
     assert!(fall[0]["saida"].is_string());
-    let client = reqwest::Client::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let status: Value = loop {
-        let response = client.get(format!("http://127.0.0.1:{port}/api/migration/status")).bearer_auth("proof").send().await.unwrap();
-        if response.status() == 200 { break response.json().await.unwrap(); }
-        assert!(Instant::now() < deadline, "status do dono não respondeu");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    assert_eq!(status["rust"]["unclean_exits"], 1);
+    wait_running(home.path());
+    assert_eq!(hangar_boot::life::unclean_exits(&home.path().join(".hangar")).unwrap(), 1);
 }
 
 /// O systemd religa quem sai com a porta tomada: cada tentativa diz por quê no diário e nenhuma conta queda.
@@ -331,9 +325,17 @@ async fn b28_sigterm_with_an_open_sse_stops_within_the_deadline() {
     write_env(home.path(), &format!("CP_PORT={port}\nCP_AUTH_TOKEN=proof\n"));
     let mut server = start(home.path(), port);
     wait_running(home.path());
-    let stream = reqwest::Client::new().get(format!("http://127.0.0.1:{port}/api/sessions/events")).bearer_auth("proof")
-        .send().await.unwrap();
-    assert_eq!(stream.status(), 200);
+    // A vida se marca de pé antes de a preparação acabar, e até lá a lista responde 503: espera a lista abrir.
+    let client = reqwest::Client::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let stream = loop {
+        let response = client.get(format!("http://127.0.0.1:{port}/api/sessions/events")).bearer_auth("proof").send().await.unwrap();
+        if response.status() == 200 { break response; }
+        assert_eq!(response.status(), 503, "só a preparação faz esperar");
+        assert!(Instant::now() < deadline, "a lista não abriu: {}", response.status());
+        // estavel: intervalo de consulta da espera pela lista, com teto de 30 s.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
     assert!(stream.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"), "{:?}", stream.headers());
     terminate(&server);
     assert!(wait_exit(&mut server, Duration::from_secs(10)).success());

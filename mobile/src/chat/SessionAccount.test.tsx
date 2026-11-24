@@ -87,7 +87,8 @@ const engineSource: AccountSession = { ...source, engine: 'local-gpt', conta: 'c
 const credentials = engineAccounts.slice(0, 6).map((a, i) => ({
   id: a.credential_id, tipo: 'codex', nome: a.account, nome_natural: a.account, ativa: false, usos: ['codex'],
   login: { estado: i === 5 ? 'indisponivel' : 'ok', loggedIn: i === 4 ? false : true },
-  cota: { estado: i === 1 ? 'indisponivel' : 'lida', janelas: [{ rotulo: '5h', pct: i === 2 ? 99 : i === 3 ? 95 : 17 }] },
+  cota: { estado: 'lida', janelas: [{ rotulo: '5h', pct: 42 }] },
+  ...(i < 4 ? { cliproxy_quota: { estado: i === 1 ? 'indisponivel' : 'lida', janelas: [{ rotulo: '5h', pct: i === 2 ? 99 : i === 3 ? 95 : 17 }] } } : {}),
 }));
 const claudeCredential = (path: string, name: string) => ({ id: `claude:${path}`, tipo: 'claude', nome: name, nome_natural: name,
   path, ativa: false, usos: ['claude_code'], login: { estado: 'ok', loggedIn: true } });
@@ -135,7 +136,7 @@ beforeEach(() => {
   network = vi.fn((url: string, init?: RequestInit) => {
     if (url === `https://replacement.test/api/sessions/${source.name}/conta`) return init?.method === 'POST' ? postReply() : listReply();
     if (url === `${own.baseUrl}/api/engines`) return engineReply();
-    if (url === `${own.baseUrl}/api/credenciais`) return credentialsReply();
+    if ([`${own.baseUrl}/api/credenciais`, `${own.baseUrl}/api/credenciais?proxy_accounts=true`].includes(url)) return credentialsReply();
     if (url.startsWith(`${own.baseUrl}/api/sessions/`) && url.endsWith('/conta')) return init?.method === 'POST' ? postReply() : listReply();
     if (url === `${own.baseUrl}/api/sessions`) return sessionReply();
     throw new Error(`unexpected-network: ${url}`);
@@ -611,6 +612,18 @@ describe('F3 motor GPT', () => {
     expect(boundary.alert).toHaveBeenCalledTimes(1);
     expect(boundary.alert.mock.calls[0][1]).toContain(m.conta_confirmar_acabando({ conta: 'ChatGPT low', pct: 95 }));
     expect(posts()).toHaveLength(0);
+  });
+
+  it('conta conectada só no proxy é destino sem cota e sem aviso de login', async () => {
+    engineReply = async () => json({ motores: { 'local-gpt': { cliproxy_accounts: [...engineAccounts,
+      { account: 'cpa-0123456789ab', credential_id: 'cliproxy:cpa-0123456789ab', email: 'solo@test', label: 'ChatGPT solo' }] } }, arquivo_corrompido: false });
+    postReply = async () => json({ ok: true });
+    const { container } = await mount();
+    const choice = button(container, 'ChatGPT solo')!;
+    expect(choice.disabled).toBe(false);
+    await click(container, 'ChatGPT solo');
+    await act(async () => confirm()());
+    expect(JSON.parse(posts()[0][1].body)).toEqual({ engine_account: 'cpa-0123456789ab' });
   });
 
   it('exclui a conta por engine_account mesmo antes de conta resolvida chegar', async () => {

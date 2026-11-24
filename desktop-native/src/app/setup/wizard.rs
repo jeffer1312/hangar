@@ -17,6 +17,7 @@ use super::system;
 use super::tail::Tail;
 use crate::single_instance::AskpassRequest;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const POLL_EVERY: Duration = Duration::from_millis(400);
 /// Voltas sem saída nova antes de perguntar se o processo ainda vive (~5 s).
@@ -144,6 +145,10 @@ pub(crate) struct AgentRun {
     pub(super) timed_out: bool,
     /// "Parar" sem identidade do processo: ele segue rodando, e a tela diz isso.
     pub(super) not_stopped: bool,
+    /// O app de fato sinalizou o agente (Parar ou o teto): a saída com erro que vem depois não é falha dele. Marcada
+    /// pela tarefa da parada antes do sinal, não no clique: o agente que já tinha saído sozinho com erro não é
+    /// absolvido por um Parar que não o alcançou.
+    stopped: Arc<AtomicBool>,
     /// Desfazendo: a resposta da tarefa que desfaz, para quem fechar no meio mandar o relatório com o diff.
     restore_done: Option<tokio::sync::oneshot::Receiver<repo::Restored>>,
 }
@@ -151,7 +156,7 @@ pub(crate) struct AgentRun {
 impl AgentRun {
     fn new(agent: Agent, number: u64) -> Self {
         Self { agent, phase: AgentPhase::Starting, transcript: agent::Transcript::default(), number, pid: None, started: String::new(),
-            snapshot: None, restored: None, timed_out: false, not_stopped: false, restore_done: None }
+            snapshot: None, restored: None, timed_out: false, not_stopped: false, stopped: Arc::default(), restore_done: None }
     }
 
     /// Subindo, trabalhando ou desfazendo: a pasta é dele, nada mais roda nela.
@@ -174,7 +179,7 @@ fn start_agent(agent: Agent, report: &str, dest: &Path, options: &Options, state
     let mut snapshot = repo::snapshot(dest)?;
     repo::save_at(state_dir, &snapshot).map_err(|e| e.to_string())?;
     let (pid, output) = match agent::spawn(launch) {
-        Ok(spawned) => spawned,
+        Ok((owner, output)) => (owner.pid(), output),
         Err(why) => { repo::clear_at(state_dir); return Err(why); }
     };
     // Gone = já saiu (o `Exit` chega pela saída); Unknown depois das tentativas fica sem identidade e nunca é parado.
@@ -193,25 +198,37 @@ fn start_agent(agent: Agent, report: &str, dest: &Path, options: &Options, state
 static RESTORING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Desfaz e só então esquece a anotação: se o app cair no meio, a próxima abertura desfaz. A segunda que chegar espera a
-/// primeira e, com a pasta já devolvida, não acha nada para desfazer.
-fn finish_restore(snapshot: repo::Snapshot) -> repo::Restored {
+/// primeira e, com a pasta já devolvida, não acha nada para desfazer. `keep`: o agente pode seguir vivo e gravando, e a
+/// anotação fica para a próxima abertura parar e desfazer de novo.
+fn finish_restore(snapshot: repo::Snapshot, keep: bool) -> repo::Restored {
     let _one = RESTORING.lock().unwrap_or_else(|e| e.into_inner());
     let restored = repo::restore(&snapshot);
-    if restored.errors.is_empty() && let Some(dir) = run::state_dir() { repo::clear_at(&dir); }
+    if restored.errors.is_empty() && !keep && let Some(dir) = run::state_dir() { repo::clear_at(&dir); }
     if !restored.errors.is_empty() { crate::log_line(&format!("assistente: pasta não voltou ao original: {:?}", restored.errors)); }
     restored
 }
 
-/// Espera o processo sumir (ou o pid passar a ser de outro); `false` se ainda vive no prazo.
-fn wait_gone(pid: u32, started: &str, limit: Duration) -> bool {
+/// Como o agente saiu da espera.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Left {
+    /// O número sumiu: o grupo dele ainda é dele.
+    Exited,
+    /// O número já é de outro processo: o grupo com esse número também pode ser de outro.
+    Replaced,
+    /// Ainda vive no prazo.
+    Alive,
+}
+
+/// Espera o processo sumir (ou o pid passar a ser de outro).
+fn wait_gone(pid: u32, started: &str, limit: Duration) -> Left {
     let deadline = Instant::now() + limit;
     loop {
         match run::read_identity(pid) {
-            run::Identity::Gone => return true,
-            run::Identity::Known(id) if id != started => return true,
+            run::Identity::Gone => return Left::Exited,
+            run::Identity::Known(id) if id != started => return Left::Replaced,
             _ => {}
         }
-        if Instant::now() >= deadline { return false; }
+        if Instant::now() >= deadline { return Left::Alive; }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -237,9 +254,12 @@ fn stop_plan(recorded: &str, now: &run::Identity) -> StopPlan {
 }
 
 /// Pára o agente e espera ele sair — uma última escrita depois de desfazer passaria —; ainda vivo em 10 s, mata sem
-/// escolha. Só sinaliza com a identidade conferida agora; `false` = não deu para conferir (quem chama avisa e desfaz
-/// mesmo assim). Bloqueia: só fora da janela.
-fn stop_agent_process(pid: u32, started: &str) -> bool {
+/// escolha. Só sinaliza com a identidade conferida agora; `false` = não deu para conferir ou ele sobreviveu à força (quem
+/// chama avisa e desfaz mesmo assim). Bloqueia: só fora da janela.
+pub(crate) fn stop_agent_process(pid: u32, started: &str) -> bool { stop_agent_marking(pid, started, None) }
+
+/// `stop_agent_process`, marcando `signalled` logo antes do primeiro sinal.
+fn stop_agent_marking(pid: u32, started: &str, signalled: Option<&AtomicBool>) -> bool {
     match stop_plan(started, &run::read_identity(pid)) {
         StopPlan::Gone => {
             crate::log_line(&format!("assistente: agente {pid} já não existe ou o número é de outro processo; nenhum sinal enviado"));
@@ -251,18 +271,23 @@ fn stop_agent_process(pid: u32, started: &str) -> bool {
         }
         StopPlan::Signal => {}
     }
+    if let Some(signalled) = signalled { signalled.store(true, Ordering::SeqCst); }
     run::stop(pid, started);
-    if !wait_gone(pid, started, Duration::from_secs(10)) {
-        run::kill(pid, started);
-        if !wait_gone(pid, started, Duration::from_secs(3)) { crate::log_line(&format!("assistente: agente {pid} não saiu nem morto")); }
+    let left = match wait_gone(pid, started, Duration::from_secs(10)) {
+        Left::Alive => { run::kill(pid, started); wait_gone(pid, started, Duration::from_secs(3)) }
+        left => left,
+    };
+    match left {
+        Left::Alive => { crate::log_line(&format!("assistente: agente {pid} não saiu nem morto")); sweep_group(pid); false }
+        Left::Exited => { sweep_group(pid); true }
+        // Número reaproveitado: um grupo com ele já não é o do agente (o do agente sumiu antes de o número voltar).
+        Left::Replaced => true,
     }
-    sweep_group(pid);
-    true
 }
 
 /// O líder conferido saiu, mas um comando dele pode seguir no grupo e escrever na pasta depois de desfeita. Enquanto o
 /// grupo tem membros, o número dele não volta a ser usado: ainda é o grupo do agente. Só para líder conferido.
-fn sweep_group(pid: u32) {
+pub(crate) fn sweep_group(pid: u32) {
     let deadline = Instant::now() + Duration::from_secs(3);
     while run::group_alive(pid) && Instant::now() < deadline {
         run::kill_group(pid);
@@ -271,17 +296,20 @@ fn sweep_group(pid: u32) {
     if run::group_alive(pid) { crate::log_line(&format!("assistente: grupo do agente {pid} ainda vivo")); }
 }
 
-/// Pára (se ainda roda) e desfaz. O `bool` diz que o agente não pôde ser parado: a pasta é desfeita mesmo assim.
+/// Pára (se ainda roda) e desfaz. O `bool` diz que o agente não pôde ser parado: a pasta é desfeita mesmo assim, e a
+/// anotação fica para a próxima abertura parar e desfazer de novo.
 fn stop_and_restore(pid: Option<u32>, started: &str, snapshot: Option<repo::Snapshot>) -> (Option<repo::Restored>, bool) {
     let not_stopped = pid.is_some_and(|pid| !stop_agent_process(pid, started));
-    (snapshot.map(finish_restore), not_stopped)
+    (snapshot.map(|snapshot| finish_restore(snapshot, not_stopped)), not_stopped)
 }
 
-/// O agente subiu mas ninguém o acompanha mais (assistente fechado enquanto subia).
+/// O agente subiu mas ninguém o acompanha mais (assistente fechado enquanto subia). Sem tela que mostre a falha da
+/// parada, ela fica no log.
 fn abandon_started(started: Started) {
     let Started { snapshot, pid, started, output } = started;
     drop(output);
-    stop_and_restore(Some(pid), &started, Some(snapshot));
+    let (_, not_stopped) = stop_and_restore(Some(pid), &started, Some(snapshot));
+    if not_stopped { crate::log_line(&format!("assistente: setup_agent_abandoned_not_stopped: agente {pid} sobreviveu à parada")); }
 }
 
 /// O que a abertura fez com um conserto interrompido; mostrado até a pessoa fechar o aviso.
@@ -346,9 +374,12 @@ fn recover_agent_edits(mode: Recover) -> Option<Recovery> {
 /// A seção do conserto no relatório: comandos, explicação, o diff do que foi desfeito e as notas.
 fn agent_section(run: &AgentRun, restored: &repo::Restored, recheck: report::Recheck) -> report::AgentSection {
     let name = run.agent.name();
+    let mut notes = report::restore_notes(restored.head_moved.as_ref(), &restored.errors, run.timed_out);
+    // Quem lê o relatório precisa saber que o agente pode ter gravado na pasta depois de desfeita.
+    if run.not_stopped { notes.push(tr("setup_agent_not_stopped")); }
     report::AgentSection { agent: name.to_owned(), commands: run.transcript.commands.clone(),
         explanation: run.transcript.explanation.clone().unwrap_or_else(|| tr("setup_agent_no_explanation").replace("{agente}", name)),
-        diff: restored.diff.clone(), notes: report::restore_notes(restored.head_moved.as_ref(), &restored.errors, run.timed_out), recheck }
+        diff: restored.diff.clone(), notes, recheck }
 }
 
 /// O assistente rodando suspende a procura e a troca do app (`update.rs`).
@@ -1075,17 +1106,13 @@ impl SetupWizard {
                 }
             };
             while let Ok(item) = output.recv().await {
-                let exited = matches!(item, agent::Output::Exit);
+                let exited = matches!(item, agent::Output::Exit(_));
                 if this.update(cx, |w, cx| w.agent_output(item, cx)).is_err() { return; }
                 if exited { break; }
             }
-            let Ok(Some((snapshot, done))) = this.update(cx, |w, cx| w.take_snapshot(cx)) else { return };
-            let restored = cx.background_executor().spawn(async move {
-                // Saiu sozinho: um filho dele ainda vivo no grupo escreveria na pasta depois de desfeita. Só com a
-                // identidade conferida na largada o grupo é sabidamente dele.
-                if let Some(pid) = snapshot.agent_pid.filter(|_| !snapshot.agent_started.is_empty()) { sweep_group(pid); }
-                finish_restore(snapshot)
-            }).await;
+            let Ok(Some((snapshot, keep, done))) = this.update(cx, |w, cx| w.take_snapshot(cx)) else { return };
+            // O grupo dele já saiu com ele (`agent::spawn`): nenhum filho escreve na pasta depois de desfeita.
+            let restored = cx.background_executor().spawn(async move { finish_restore(snapshot, keep) }).await;
             // Fechado enquanto desfazia: quem fechou espera esta resposta para mandar o relatório com o diff.
             let _ = done.send(restored.clone());
             let _ = window.update(cx, |_, window, cx| this.update(cx, |w, cx| w.recheck_after_agent(restored, window, cx)));
@@ -1124,20 +1151,28 @@ impl SetupWizard {
         let Some(run) = self.agent.as_mut() else { return };
         match item {
             agent::Output::Line(line) => { let agent = run.agent; run.transcript.feed(agent, &line); }
-            agent::Output::Exit => { run.pid = None; run.phase = AgentPhase::Restoring; }
+            // Quem nasceu do agente ainda vive: a pasta é desfeita, mas a anotação fica para a próxima abertura
+            // desfazer de novo, e o relatório diz que ele não parou.
+            agent::Output::Held => { run.not_stopped = true; }
+            agent::Output::Exit(ended) => {
+                run.transcript.exited(&ended, run.stopped.load(Ordering::SeqCst));
+                run.pid = None;
+                run.phase = AgentPhase::Restoring;
+            }
         }
         cx.notify();
     }
 
     /// `None` quando o `close` já levou a execução. O canal leva o resultado a quem fechar no meio.
-    fn take_snapshot(&mut self, cx: &mut Context<Self>) -> Option<(repo::Snapshot, tokio::sync::oneshot::Sender<repo::Restored>)> {
+    /// O `bool` é o `keep` da restauração: a parada que falhou deixa a anotação, como no fechar.
+    fn take_snapshot(&mut self, cx: &mut Context<Self>) -> Option<(repo::Snapshot, bool, tokio::sync::oneshot::Sender<repo::Restored>)> {
         let run = self.agent.as_mut()?;
         run.phase = AgentPhase::Restoring;
         cx.notify();
         let snapshot = run.snapshot.take()?;
         let (done, wait) = tokio::sync::oneshot::channel();
         run.restore_done = Some(wait);
-        Some((snapshot, done))
+        Some((snapshot, run.not_stopped, done))
     }
 
     /// Reconfere rodando o script inteiro, como o "Tentar de novo": passou vai a "Tudo pronto", falhou volta ao painel.
@@ -1159,8 +1194,20 @@ impl SetupWizard {
             crate::log_line(&format!("assistente: agente {pid} sem identidade gravada; não foi parado"));
             return cx.notify();
         }
-        let started = run.started.clone();
-        cx.background_executor().spawn(async move { stop_agent_process(pid, &started) }).detach();
+        let (started, number, signalled) = (run.started.clone(), run.number, run.stopped.clone());
+        let stop = cx.background_executor().spawn(async move { stop_agent_marking(pid, &started, Some(&signalled)) });
+        // Sobreviveu: a tela diz que não parou, e a saída com erro dele volta a contar como falha. Só vale para esta
+        // execução ainda rodando: depois do `Exit` (ou em outra execução) a resposta não muda nada.
+        cx.spawn(async move |this, cx| {
+            if stop.await { return; }
+            let _ = this.update(cx, |w, cx| {
+                if let Some(run) = w.agent.as_mut().filter(|run| run.number == number && run.phase == AgentPhase::Running) {
+                    run.stopped.store(false, Ordering::SeqCst);
+                    run.not_stopped = true;
+                }
+                cx.notify();
+            });
+        }).detach();
         cx.notify();
     }
 
@@ -1222,7 +1269,12 @@ impl SetupWizard {
             let payload = tokio::task::spawn_blocking(move || {
                 let restored = match restoring {
                     Some(restored) => restored,
-                    None => stop_and_restore(run.pid, &run.started.clone(), run.snapshot.take()).0.unwrap_or_default(),
+                    None => {
+                        let started = run.started.clone();
+                        run.not_stopped |= run.pid.is_some_and(|pid| !stop_agent_process(pid, &started));
+                        let keep = run.not_stopped;
+                        run.snapshot.take().map(|snapshot| finish_restore(snapshot, keep)).unwrap_or_default()
+                    }
                 };
                 let (base, about) = (base?, about?);
                 secrets.extend(local::read_install(&dest).token);

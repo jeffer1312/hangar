@@ -8,7 +8,9 @@ use std::time::SystemTime;
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-const SNAPSHOT: &str = include_str!("../../../../backend/app/pricing_data.json");
+const SNAPSHOT: &str = include_str!("../../data/pricing_data.json");
+/// Onde o snapshot embutido mora, relativo à raiz do repositório (`pricing-snapshot` o regrava).
+pub const SNAPSHOT_PATH: &str = "crates/hangar-server/data/pricing_data.json";
 const PREFIXES: [&str; 13] = [
     "anthropic/", "openai/", "moonshot/", "moonshotai/", "deepseek/", "cline-pass/",
     "clinepass/", "openrouter/", "zhipuai/", "google/", "cx/", "apikey/", "kimi-code/",
@@ -218,6 +220,27 @@ pub fn canonizar_provedor(provider: &str) -> String {
         "kimi-coding" | "moonshot" => "moonshotai",
         _ => provider,
     }.to_owned()
+}
+
+/// Janela de contexto do modelo pelo arquivo de janelas do models.dev, gravado junto das tarifas. O esforço que o
+/// Antigravity põe no id (`-low`…) não muda a janela. `None`: sem cache ou modelo fora dele.
+pub fn context_window(dir: &Path, model: &str) -> Option<u64> {
+    type Windows = (PathBuf, Option<SystemTime>, HashMap<String, u64>);
+    static MEMO: Mutex<Option<Windows>> = Mutex::new(None);
+    let key = |id: &str| id.rsplit('/').next().unwrap_or(id).to_lowercase().replace('.', "-");
+    let file = dir.join(super::pricing_refresh::WINDOWS);
+    let mtime = std::fs::metadata(&file).ok().and_then(|meta| meta.modified().ok());
+    let mut memo = MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    if !memo.as_ref().is_some_and(|(path, seen, _)| *path == file && *seen == mtime) {
+        let windows = read_object(&file).map(|models| models.iter()
+            .filter_map(|(id, window)| Some((key(id), window.as_u64().filter(|n| *n > 0)?))).collect())
+            .unwrap_or_default();
+        *memo = Some((file, mtime, windows));
+    }
+    let windows = &memo.as_ref()?.2;
+    let model = key(model);
+    let base = ["-low", "-medium", "-high", "-xhigh"].iter().find_map(|suffix| model.strip_suffix(suffix)).unwrap_or(&model);
+    windows.get(&model).or_else(|| windows.get(base)).copied()
 }
 
 pub fn default_dir() -> PathBuf {

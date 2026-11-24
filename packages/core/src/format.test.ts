@@ -13,6 +13,7 @@ import {
 } from './format';
 import type { ChatEvent, State } from './types';
 import { overwriteGetLocale } from './paraglide/runtime';
+import * as m from './paraglide/messages';
 import { intlLocale } from './i18n';
 import contextRefsFixtures from './contextRefs.fixtures.json';
 
@@ -1040,6 +1041,20 @@ describe('parseImageMessage', () => {
   it('sem marcador não é mensagem de imagem', () => {
     expect(parseImageMessage('só texto')).toBeNull();
   });
+  it('vídeo com fala e sem quadros: a fala não gruda no nome do vídeo', () => {
+    const out = parseImageMessage('veja — 📎 arquivo: /up/1-v.mp4 fala do vídeo: "abre a pasta src/app e roda"')!;
+    expect(out.caption).toBe('veja');
+    expect(out.files).toEqual(['1-v.mp4']);
+    expect(out.filenames).toEqual([]);
+    const en = parseImageMessage('look — 📎 file: C:\\p\\.hangar-uploads\\1-v.mp4 video speech: "hi there"')!;
+    expect(en.files).toEqual(['1-v.mp4']);
+  });
+  it('vídeo com quadros e fala: a fala sai do último quadro', () => {
+    const out = parseImageMessage('veja — 📎 arquivo: /up/1-v.mp4 📎 imagem: /up/f1.jpg 📎 imagem: /up/f2.jpg fala do vídeo: "a/b c"')!;
+    expect(out.files).toEqual(['1-v.mp4']);
+    expect(out.filenames).toEqual(['f1.jpg', 'f2.jpg']);
+    expect(out.marcadores).toBe(2);
+  });
   it('imagem e arquivo juntos: o arquivo sai à parte, não vira miniatura', () => {
     const out = parseImageMessage('veja — 📎 imagem: /up/1-a.png 📎 arquivo: /up/2-b.txt')!;
     expect(out.caption).toBe('veja');
@@ -1372,5 +1387,22 @@ describe('terminalFoldTitle', () => {
 
   it('rodando vai para o gerúndio com reticências', () => {
     expect(terminalFoldTitle([tool('Bash', { command: 'make' }), tool('Bash', { command: 'make' })], true)).toBe('Rodando 2 comandos de shell…');
+  });
+});
+
+
+describe('Code Mode do Claude Code: o REPL é um script', () => {
+  const script = { code: 'await $`ls`\nconst x = 1', description: 'Conferir a flag' };
+  it('mostra o nome Script e a descrição; sem descrição, a primeira linha do código', () => {
+    expect(terminalToolName('REPL')).toBe(m.term_script());
+    expect(summarizeToolInput('REPL', script)).toBe('Conferir a flag');
+    expect(summarizeToolInput('REPL', { code: script.code })).toBe('await $`ls`');
+  });
+  it('soma na dobra antes das chamadas de dentro dele e conta como "rodou" nas outras peles', () => {
+    expect(terminalFoldKind('REPL', script)).toBe('script');
+    expect(familiaTool('REPL')).toBe('rodou');
+    const tools = [{ tool_name: 'REPL', tool_input: script }, { tool_name: 'Grep', tool_input: { pattern: 'x' } }, { tool_name: 'REPL', tool_input: script }];
+    const esperado = [m.term_dobra_scripts({ n: 2 }), m.term_dobra_buscou_1({ nome: '' })].join(', ');
+    expect(terminalFoldTitle(tools, false)).toBe(esperado.charAt(0).toUpperCase() + esperado.slice(1));
   });
 });

@@ -58,6 +58,8 @@ pub struct AppState {
     pub cfg: Config,
     pub auth: Auth,
     pub remote_browser: Arc<crate::remote_browser::layout::Layouts>,
+    /// Apps de outra máquina que emprestam o navegador às sessões daqui (`/api/browser-host`).
+    pub browser_host: Arc<hangar_browser_host::Registry>,
     pub http: HttpClient,
     pub side: SideCtx,
     pub terminal: crate::terminal_control::TerminalPool,
@@ -93,6 +95,8 @@ pub struct AppState {
     pub hangar_dir: std::path::PathBuf,
     /// Relógio e sufixo dos nomes do cofre de anexos; o teste de contrato fixa os da referência.
     pub upload_naming: crate::uploads::store::Naming,
+    /// Quadros e fala dos vídeos subidos com `media=later`.
+    pub upload_media: crate::uploads::media::MediaJobs,
     pub origins: std::sync::Mutex<indexmap::IndexMap<std::path::PathBuf, crate::costs::origins::Origins>>,
     pub list: Arc<crate::list::bridge::ListBridge>,
     /// Produtor único da lista do dono; liga com a primeira lista aberta.
@@ -130,8 +134,11 @@ pub struct AppState {
     /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
     pub voice: Arc<crate::voice::hub::VoiceHub>,
     pub speech: Arc<crate::speech::Service>,
-    /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (sem convites nem par).
+    /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (sem convites nem par) ou com
+    /// [`AppState::share_unavailable`].
     pub share: Option<Arc<crate::share::ShareState>>,
+    /// A configuração de convites existe mas não se carregou: `share` é `None` sem provar que não há convite nem par.
+    pub share_unavailable: bool,
     /// A porta do convidado já está escutando; a saúde anuncia.
     pub guest_bound: std::sync::atomic::AtomicBool,
     /// Instalar o SideStore no iPhone/iPad do cabo; o teste troca aparelho e Apple por falsos.
@@ -155,6 +162,12 @@ pub struct AppState {
     /// Avisos do Mission Control à sessão, pelo handler da rota de entrada; o estado entra quando o roteador nasce.
     pub mission_notify: Arc<crate::mission_notify::SessionNotify>,
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
+    /// WhatsApp só leitura (`hangar-whatsapp`); nasce com o roteador, pela pasta pessoal das contas.
+    pub whatsapp: std::sync::OnceLock<Arc<hangar_whatsapp::WhatsApp>>,
+    /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
+    pub status: Arc<crate::status::Status>,
+    /// Revisão do trabalho (`work_review/v1`) das sessões ligadas a um ticket.
+    pub work_review: Arc<hangar_work_review::Engine>,
 }
 
 impl AppState {
@@ -261,9 +274,14 @@ impl AppState {
         let connect_devices = Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None));
         let connect_supervisor = Arc::new(crate::connect::supervisor::Supervisor::new(hangar_dir.join("connect"),
             crate::runtime::local_policy::log_base().unwrap_or_else(|| hangar_dir.join("logs")), connect_devices.clone(), cfg.listen.port()));
-        let share = match crate::config::GuestEnv::from_env() {
-            Ok(guest) => crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone(), Some(connect_supervisor.clone())),
-            Err(e) => { tracing::error!("{e}"); None }
+        let (share, share_unavailable) = match crate::config::GuestEnv::from_env() {
+            Ok(guest) => {
+                let configured = guest.shares_file.is_some();
+                let share = crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone(), Some(connect_supervisor.clone()));
+                let unavailable = configured && share.is_none();
+                (share, unavailable)
+            }
+            Err(e) => { tracing::error!("{e}"); (None, true) }
         };
         if let Some(share) = &share { list.set_shares(share.clone()); }
         let device_install = {
@@ -273,6 +291,8 @@ impl AppState {
                 .with_config(Arc::new(move || crate::runtime::codex_launch::runtime_config(&env))))
         };
         let mission=Arc::new(hangar_mission::Store::new(hangar_dir.join("mission")));
+        let work_review = crate::work_review_watch::engine(connectors.clone(), mission.clone(), mission_notify.clone(), diag.clone(), hangar_dir.join("work-review-drafts"));
+        let _ = list.work_review.set(work_review.clone());
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
             Arc::new(crate::groups::orq::OrqVault::new()
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
@@ -286,6 +306,7 @@ impl AppState {
             login_browser: Arc::default(),
             interactions, plugin,
             remote_browser: Arc::default(),
+            browser_host: Arc::default(),
             transcription: Arc::default(),
             config_sync_context: None,
             omp_sync: Arc::default(),
@@ -313,8 +334,12 @@ impl AppState {
             mission,
             mission_notify,
             ticket_actions: Default::default(),
+            whatsapp: Default::default(),
+            status: Arc::default(),
+            work_review,
             hangar_dir, device_install,
             upload_naming: Default::default(),
+            upload_media: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
             list, state,
             term: Arc::default(),
@@ -327,7 +352,7 @@ impl AppState {
             btw_programs: Default::default(),
             voice: Arc::new(crate::voice::hub::VoiceHub::new()),
             speech: Arc::default(),
-            share, guest_bound: Default::default() }
+            share, share_unavailable, guest_bound: Default::default() }
     }
 
     pub(crate) fn skill_origins(&self, repo: &std::path::Path) -> crate::costs::origins::Origins {
@@ -417,6 +442,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     }
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
+    // A curva da última hora da tela Status existe com ou sem tela aberta.
+    let _status_sampler = crate::AbortOnDrop(crate::status::spawn_sampler(&state));
     let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
     let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
     let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
@@ -432,6 +459,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _dream_clock = crate::AbortOnDrop(crate::dream::spawn(state.clone()));
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
+    let _notice_fixes = crate::AbortOnDrop(crate::notice_actions::spawn(state.clone()));
+    let _work_review_watch = crate::AbortOnDrop(crate::work_review_watch::spawn(state.clone()));
     let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
     // O aviso no celular é decidido aqui, com ou sem lista aberta.
@@ -731,8 +760,10 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/resume", axum::routing::post(crate::session_write::resume::route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/modo-execucao", axum::routing::post(crate::session_write::relaunch::mode).fallback(fallback.clone()))
         .route("/api/sessions/{name}/recarregar", axum::routing::post(crate::session_write::relaunch::reload).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/notice/fix/preview", axum::routing::post(crate::notice_actions::preview))
+        .route("/api/sessions/{name}/notice/fix", axum::routing::post(crate::notice_actions::start))
         .route("/api/sessions/{name}/conta", get(crate::session_write::account::targets_route).fallback(fallback.clone()))
-        .route("/api/sessions/{name}/conta", axum::routing::post(crate::session_write::account::switch_route))
+        .route("/api/sessions/{name}/conta", axum::routing::post(crate::session_write::account::switch_route).delete(crate::session_write::handoff::cancel_route))
         .route("/api/sessions/{name}/btw", axum::routing::post(crate::session_write::btw::ask).get(crate::session_write::btw::list).fallback(fallback.clone()))
         // Painel da fila. `reorder` é caminho fixo: o DELETE e o PATCH dele valem como os de um id de mesmo nome.
         .route("/api/sessions/{name}/queue/reorder", axum::routing::post(crate::session_write::control::queue_reorder)
@@ -835,8 +866,8 @@ async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &s
     let logs_itself = (*method == Method::POST && path == "/api/sessions")
         || (*method == Method::POST && path.starts_with("/api/archive/") && path.ends_with("/resume"))
         || path.strip_prefix("/api/sessions/").and_then(|rest| rest.split_once('/')).is_some_and(|(_, tail)| tail.starts_with("plugin/"));
-    if !(status.is_server_error() || elapsed >= Duration::from_secs(1)) || path.starts_with("/api/diag")
-        || logs_itself {
+    let slow = elapsed >= Duration::from_secs(1) && !waits_on_purpose(method, path);
+    if !(status.is_server_error() || slow) || reads_the_diary(path) || logs_itself {
         return response;
     }
     let (response, cause) = error_code(response).await;
@@ -848,6 +879,18 @@ async fn access_line(st: &AppState, method: &Method, path: &str, correlation: &s
     if let Some(cause) = cause { line["causa"] = serde_json::json!(cause); }
     st.diag.record_line(line);
     response
+}
+
+/// Rotas que leem o diário de uso fora da linha `api.servidor`: a tela Status soma a lentidão e os
+/// 5xx dessa linha, e a própria espera dela (peers, retrato que não ficou pronto) não pode se medir.
+fn reads_the_diary(path: &str) -> bool {
+    path.starts_with("/api/diag") || matches!(path, "/api/status" | "/api/status/events")
+}
+
+/// Esperas longas de propósito (long-poll do plugin, chamada de tool MCP pelo `/mcp/` que os
+/// clientes usam): demorar não é lentidão, só o 5xx delas vai ao diário.
+fn waits_on_purpose(method: &Method, path: &str) -> bool {
+    hangar_status::diary::waits_on_purpose(method.as_str(), path)
 }
 
 /// `detail.code` ou `code` do corpo de erro JSON pequeno; o corpo segue igual e nunca vai ao diário.
@@ -877,7 +920,7 @@ async fn error_code(response: Response) -> (Response, Option<String>) {
 const NAMED_SEGMENTS: &[(&[&str], usize, usize)] = &[
     (&["api", "sessions"], 0, 1), (&["api", "archive"], 0, 2), (&["api", "credenciais"], 1, 1),
     (&["api", "engines"], 0, 1), (&["api", "plugins", "marketplaces"], 0, 1), (&["api", "plugins"], 0, 1),
-    (&["api", "codex-contas"], 0, 1), (&["api", "claude-configs"], 0, 1), (&["api", "guests"], 0, 1),
+    (&["api", "codex-contas"], 0, 1), (&["api", "antigravity-contas"], 0, 1), (&["api", "claude-configs"], 0, 1), (&["api", "guests"], 0, 1),
     (&["api", "external-pairs"], 0, 1), (&["api", "peers"], 0, 1), (&["api", "groups"], 0, 1),
     (&["api", "connect", "devices"], 0, 1), (&["api", "connect", "peers"], 0, 1), (&["api", "hangar-terminals"], 0, 1),
     (&["api", "scheduled-tasks"], 0, 1), (&["api", "dream", "runs"], 0, 1), (&["api", "mission", "actions"], 0, 1),
@@ -918,8 +961,13 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/me", axum::routing::any(crate::login_guests::route))
         .route("/api/guests", axum::routing::any(crate::login_guests::route))
         .route("/api/guests/{*rest}", axum::routing::any(crate::login_guests::route))
+        .route("/api/guest-accounts", axum::routing::any(crate::login_guests::route))
+        .route("/api/guest-accounts/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/sync/{*rest}", axum::routing::any(crate::login_guests::route))
         .route("/api/hangar-terminals/{ident}/term", get(crate::term::hangar_ws).fallback(pass_registered))
+        .route("/api/port-tunnel", get(crate::port_tunnel::route).fallback(pass_any))
+        // Parar o servidor de uma porta da sessão: só o dono, nunca na 8766.
+        .route("/api/sessions/{name}/ports/{port}/stop", axum::routing::post(crate::port_stop::route).fallback(pass_any))
         .route("/__hangar_server/health", get(health))
         .route("/api/client-api", get(client_api).fallback(pass_any))
         // As rotas privadas não existem nesta porta.
@@ -940,6 +988,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Reserva pré-aquecida do Claude sem terminal: só o dono; outro método leva a recusa do caminho sem rota.
         .route("/api/sessions/prewarm", axum::routing::put(crate::prewarm::http::put).fallback(pass_any))
         .route("/api/sessions/prewarm/{id}", axum::routing::delete(crate::prewarm::http::delete).fallback(pass_any))
+        // Navegador emprestado por app de outra máquina: só o dono pelo token, nunca na 8766.
+        .route("/api/browser-host", get(crate::browser_host::host_ws).fallback(pass_any))
+        .route("/api/sessions/{name}/browser-cmd", axum::routing::post(crate::browser_host::browser_cmd).fallback(pass_any))
         // Pedido de navegador do agente: só o dono.
         .route("/api/sessions/{name}/nav", axum::routing::post(crate::nav_requests::open).delete(crate::nav_requests::confirm).fallback(pass_registered))
         // Loop e `then`: a guarda delimita a sessão e a política permite cada operação.
@@ -962,13 +1013,13 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Broadcast do dono para as sessões escolhidas.
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_registered))
         .route("/api/sessions/{name}/engine/model", axum::routing::post(crate::session_write::engine::model).fallback(pass_registered))
+        .route("/api/sessions/{name}/engine/provider", axum::routing::post(crate::session_write::engine::provider).fallback(pass_registered))
         .route("/api/costs", get(crate::costs_routes::costs).fallback(pass_registered))
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_registered))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_registered))
         .route("/api/search", get(crate::search::http::route).fallback(pass_registered))
         .route("/api/ask-history", axum::routing::post(crate::search::ask::route).fallback(pass_registered))
         .route("/api/search/context", get(crate::search_context::route).fallback(pass_registered))
-        .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_registered))
         // Novidades e avisos da próxima atualização: só o dono, nunca repassado (o Python não tem a rota).
         .route("/api/update/notes", get(crate::update_notes::route))
         // O que as atualizações já trouxeram e cada aparelho ainda não viu: só o dono, nunca repassado.
@@ -978,7 +1029,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/news", get(crate::docs_routes::news))
         .route("/api/manual", get(crate::docs_routes::manual))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_registered))
+        .route("/api/claude/code-mode", get(crate::claude_defaults::code_mode).fallback(pass_registered))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
+        .route("/api/session-options", axum::routing::get(crate::session_defaults::handle_options).put(crate::session_defaults::handle_options))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .merge(crate::scheduled_tasks::router())
         .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))
@@ -1007,6 +1060,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/session-auto-hide", axum::routing::get(crate::session_visibility::auto::route).put(crate::session_visibility::auto::route))
         .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/notice-ignores", axum::routing::get(crate::notice_ignores::handle).put(crate::notice_ignores::handle))
+        // Tela Status: só o dono, nunca repassada (o Python não tem a rota).
+        .route("/api/status", get(crate::status::snapshot))
+        .route("/api/status/events", get(crate::status::events))
         .route("/api/config-sync/manifest", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/bundle", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/apply", axum::routing::any(crate::config_sync::apply_http::handle))
@@ -1022,6 +1078,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
         .route("/api/presence", axum::routing::post(crate::presence::route))
         .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_registered))
+        .route("/api/presence/app", axum::routing::post(crate::presence::route).fallback(pass_registered))
         .route("/api/jev/aux/cliproxy", get(crate::jev_aux::cliproxy).fallback(pass_any))
         .route("/api/jev/aux/models", axum::routing::post(crate::jev_aux::models).fallback(pass_any))
         .route("/api/voice", get(crate::voice::routes::ws).options(crate::voice::routes::preflight))
@@ -1044,6 +1101,10 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .merge(hangar_ticket_actions::http::router(state.edge(),
             state.ticket_actions.get_or_init(|| hangar_ticket_actions::Engine::new(hangar_ticket_actions::Ledger::new(state.hangar_dir.join("ticket-actions")),
                 state.mission.clone(),state.connectors.clone(),state.mission_notify.clone())).clone()))
+        .merge(hangar_work_review::http::router(state.edge(), state.work_review.clone()))
+        // WhatsApp só leitura: só o dono, nunca na porta do convidado (o Python não tem as rotas).
+        .merge(hangar_whatsapp::router(state.edge(),
+            state.whatsapp.get_or_init(|| hangar_whatsapp::WhatsApp::new(&state.accounts.env.home)).clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_registered))
         .route("/api/claude/commands", get(crate::commands::new_chat_route).fallback(pass_registered))
         // Senha do chaveiro: só o dono; o preflight do CORS cai no caminho sem rota.
@@ -1070,6 +1131,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/device-install/start", axum::routing::post(crate::device_install::routes::start))
         .route("/api/device-install/code", axum::routing::post(crate::device_install::routes::code))
         .route("/api/device-install/certs", axum::routing::post(crate::device_install::routes::certs))
+        .route("/api/device-install/cancel", axum::routing::post(crate::device_install::routes::cancel))
         // Tela web ligada ou não: só o dono, nunca repassado.
         .route("/api/web-ui", get(crate::ui::setting).put(crate::ui::setting))
         // Consentimento do relatório automático da atualização: só o dono, nunca repassado.
@@ -1085,7 +1147,6 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/update-channel", axum::routing::any(crate::update::git_engine::http::channel))
         // A tela web é servida aqui; o que não é dela leva o 404 ou a recusa do caminho sem rota.
         .fallback(crate::ui::fallback)
-        .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .with_state(state.clone())
         .merge(owner_share_router(&state, pair))
         .layer(axum::middleware::from_fn(request_auth))
@@ -1111,7 +1172,6 @@ fn plugin_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 fn plugin_router(state: Arc<AppState>) -> Router {
     // A ponte local não expõe o restante da API nem dá acesso às rotas privadas.
     plugin_routes(&state).fallback(|| async { StatusCode::NOT_FOUND })
-        .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .layer(axum::middleware::from_fn(request_auth))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::startup::guard))
         .with_state(state)
@@ -1644,7 +1704,7 @@ pub(crate) async fn history(
     let Some(info) = info else { return missing(req.headers()) };
     // Antes de qualquer repasse: sessão em erro ainda sem transcript também é reaberta.
     st.request_reopen(&name);
-    if matches!(info.provider.as_str(), "pi" | "omp" | "kimi") && info.jsonl.is_none() {
+    if matches!(info.provider.as_str(), "pi" | "omp" | "kimi" | "antigravity") && info.jsonl.is_none() {
         let mut response = crate::session_write::json_response(StatusCode::OK, serde_json::json!([]));
         cors(req.headers(), response.headers_mut());
         return response;
@@ -1662,6 +1722,9 @@ pub(crate) async fn history(
     tracing::debug!(session = %name, req = %diag_req(&req), "history");
     let inm = req.headers().get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).map(str::to_owned);
     let log_name = name.clone();
+    // Conversa que veio de outro agente: o divisor marca onde o Codex assumiu.
+    let handoff_home = (hreq.provider == crate::transcript::Provider::Codex)
+        .then(|| st.state.runtime.get().map(|runtime| runtime.codex_environment().home)).flatten();
     let done = tokio::task::spawn_blocking(move || -> std::io::Result<(Option<String>, Option<Vec<u8>>)> {
         let etag = history_etag(&hreq);
         if etag.is_some() && etag == inm {
@@ -1669,7 +1732,12 @@ pub(crate) async fn history(
         }
         let before = SKIPPED_LINES.load(Ordering::Relaxed);
         // Já vem com o corte `evs[-limit:]` da rota (Task 9).
-        let evs = merged_history_with_notices(&hreq)?;
+        let mut evs = merged_history_with_notices(&hreq)?;
+        let mut etag = etag;
+        // O ETag não cobre o registro da troca: lido antes de a troca concluir, a resposta não vira cache.
+        if let Some(home) = &handoff_home && !crate::speech::history::transfer_history::insert_handoff_divider(home, &log_name, &hreq.jsonl, &mut evs) {
+            etag = None;
+        }
         tail::log_skipped(&log_name, before);
         Ok((etag, Some(serde_json::to_vec(&evs)?)))
     })
@@ -1849,6 +1917,24 @@ mod tests {
         assert_eq!(socket2::SockRef::from(&listener).reuse_address().unwrap(), cfg!(unix));
     }
 
+    /// A tela Status não se mede: o `GET` frio esperando os peers e o 503 dela não entram na lentidão
+    /// nem nos 5xx que ela mesma mostra.
+    #[test]
+    fn status_routes_stay_out_of_the_access_line() {
+        assert!(reads_the_diary("/api/status") && reads_the_diary("/api/status/events"));
+        assert!(reads_the_diary("/api/diag") && reads_the_diary("/api/diag/arquivo"));
+        assert!(!reads_the_diary("/api/statusx") && !reads_the_diary("/api/sessions"), "só as rotas da tela");
+    }
+
+    /// Long-poll do plugin e tool MCP demoram de propósito: a linha só sai com 5xx.
+    #[test]
+    fn long_waits_are_not_slow_requests() {
+        assert!(waits_on_purpose(&Method::POST, "/api/plugin/pull") && waits_on_purpose(&Method::POST, "/mcp/"));
+        assert!(!waits_on_purpose(&Method::GET, "/api/plugin/pull") && !waits_on_purpose(&Method::POST, "/api/plugin/pullx"));
+        assert!(!waits_on_purpose(&Method::POST, "/api/sessions"));
+        assert_eq!(masked_route("/mcp/"), "/mcp/", "a rota do diário é a mesma que o filtro casa");
+    }
+
     /// A linha `api.servidor` nunca leva nome ou id escolhido por alguém (I-14).
     #[test]
     fn masked_route_hides_every_user_chosen_segment() {
@@ -1879,7 +1965,7 @@ mod tests {
     async fn migrated_provider_routes_authenticate_before_validation_and_never_fall_back() {
         let state = test_state().await;
         let peer = "127.0.0.1:5000".parse().unwrap();
-        for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/orq/papeis"] {
+        for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/antigravity/model", "/api/sessions/demo/orq/papeis"] {
             for (token, expected) in [("errado", StatusCode::UNAUTHORIZED), ("dono", StatusCode::UNPROCESSABLE_ENTITY)] {
                 let mut req = request(path, "198.51.100.50", false, token);
                 *req.method_mut() = Method::POST;

@@ -60,6 +60,8 @@ pub trait OpenFacts {
     fn defaults(&self) -> ServerDefaults;
     /// Padrão de modelo, esforço e permissão marcado para provedor, motor e conta do motor.
     fn saved_defaults(&self, provider: AgentProvider, engine: &str, engine_account: &str) -> Result<Option<crate::session_defaults::Defaults>, String>;
+    /// Opções da tela Beta salvas no servidor (`session-options.json`); `None` = nunca gravadas.
+    fn session_options(&self) -> Result<Option<crate::session_defaults::SessionOptions>, String>;
     /// Contas Codex com login conectado.
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError>;
     /// Linhas de cota das contas Claude e Codex: do cache, ou depois de uma leitura curta da rede
@@ -75,7 +77,10 @@ pub trait OpenFacts {
     fn config_dirs(&self) -> Result<Vec<String>, OpenError>;
     /// Nomes válidos do `engines.json`.
     fn engines(&self) -> Vec<String>;
+    fn engine_account(&self, engine: &str, requested: Option<&str>) -> Result<(Option<String>, Option<String>), OpenError>;
     fn supports_fast(&self, engine: Option<&str>, model: Option<&str>) -> bool;
+    /// Ultra Fast: Fast no modelo, conta fixa Pro ou Pro Max e a regra do Ultra Fast no config do proxy.
+    fn supports_ultrafast(&self, engine: Option<&str>, model: Option<&str>, account: Option<&str>) -> bool;
     /// Conta ChatGPT fixa do motor: confere conta e modelos e devolve o modelo sem o prefixo da conta.
     fn fixed_engine_model(&self, engine: &str, account: &str, model: Option<&str>) -> Result<String, OpenError>;
     /// Janela do modelo no catálogo do motor (`None` = o catálogo não traz o modelo ou o número).
@@ -188,6 +193,26 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
             }
         },
     };
+    if request.engine_binding.is_some() && (guest || provider != AgentProvider::Claude || request.engine.as_deref().is_none_or(str::is_empty)) {
+        return Err(OpenError::new(400, "erro_cliproxy_conta", "O vínculo ChatGPT só vale para Claude com motor do proxy local."));
+    }
+    let bound_request;
+    let mut engine_binding = None;
+    let request = if !guest && provider == AgentProvider::Claude && let Some(engine) = request.engine.as_deref().filter(|e| !e.is_empty()) {
+        let (account, binding) = facts.engine_account(engine, request.engine_account.as_deref())?;
+        engine_binding = binding;
+        if request.engine_binding.as_ref().is_some_and(|expected| engine_binding.as_ref() != Some(expected)) {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "A conta vinculada ao motor mudou. Reabra a tela de nova sessão."));
+        }
+        if request.resume_engine_binding.as_ref().is_some_and(|expected| engine_binding.as_ref() != Some(expected)) {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "O vínculo do motor mudou desde o fechamento da conversa."));
+        }
+        if request.resume_existing && request.resume_engine_binding.is_none() && request.engine_account.is_none() && account.is_some() {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "Selecione a conta vinculada ao motor antes de retomar a conversa."));
+        }
+        bound_request = SessionOpenRequest { engine_account: account, ..request.clone() };
+        &bound_request
+    } else { request };
     // O padrão salvo pelo dono preenche o que o pedido não disse e vence a criadora; a permissão
     // dela só vale quando o pedido traz `inherit: true`.
     let saved = if guest { None } else {
@@ -199,12 +224,27 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
             }
         }
     };
+    // Code Mode omitido: o da tela Beta, que só vale com a conversa nova ligada.
+    let code_mode = provider == AgentProvider::Claude && match request.code_mode {
+        Some(asked) => asked,
+        None if guest => false,
+        None => match facts.session_options() {
+            Ok(options) => options.is_some_and(|o| o.conversation_beta && o.code_mode),
+            Err(reason) => {
+                warnings.push(format!("não consegui ler as opções salvas da abertura ({reason}); o Code Mode não foi aplicado"));
+                false
+            }
+        },
+    };
     let saved_permission = saved.as_ref().filter(|_| request.permission_mode.is_none())
         .map(|saved| saved.permission.clone()).filter(|mode| !mode.is_empty());
     // Com `inherit: true` o modo da criadora vem primeiro e o salvo só cobre a falta dele.
     let saved_first = request.inherit != Some(true);
     // O Codex com terminal recusa modo pedido; o salvo segue como o herdado.
     let saved_codex_mode = saved_permission.as_deref().filter(|_| provider == AgentProvider::Codex).and_then(PermissionMode::codex);
+    // Só o pedido explícito recusa: o `manual` salvo como padrão é descartado com terminal.
+    let asked_manual = provider == AgentProvider::Antigravity
+        && request.permission_mode.as_deref().and_then(PermissionMode::antigravity) == Some(PermissionMode::Manual);
     let filled;
     let request = match &saved {
         Some(saved) => {
@@ -338,6 +378,11 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     let headless = headless.unwrap_or_else(|| {
         !request.read_only && matches!(provider, AgentProvider::Claude | AgentProvider::Codex) && facts.defaults().headless
     });
+    // Pedido explícito de `manual` no Antigravity com terminal: ele abriria em `auto`, que roda comando sem perguntar.
+    if asked_manual && !headless {
+        return Err(OpenError::new(409, "erro_permissao_manual_sem_terminal",
+            "o Antigravity com terminal não abre no modo que pergunta antes de agir; use sem terminal ou outro modo"));
+    }
     let model = validate(request, caller, provider, headless, config_dir.as_deref(), codex_account.as_deref(), permission.as_deref(), facts)?;
     let raw = match &request.name {
         Some(raw) => raw.clone(),
@@ -357,6 +402,10 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         // O lançador do Codex sem modo abre em Full Access (`sem_terminal.MODO_PADRAO`).
         AgentProvider::Codex => Some(permission.as_deref().and_then(PermissionMode::codex).or(inherited_codex_mode)
             .unwrap_or(PermissionMode::FullAccess)),
+        // Sem escolha, o `agy` abre no modo padrão dele. Com terminal não há como abrir no modo que pergunta
+        // (`--mode` só aceita accept-edits, auto e plan): um `manual` salvo como padrão não vale ali.
+        AgentProvider::Antigravity => permission.as_deref().and_then(PermissionMode::antigravity)
+            .filter(|mode| headless || *mode != PermissionMode::Manual),
         _ => None,
     };
     let cwd = facts.existing_dir(&request.cwd).unwrap_or_else(|| request.cwd.clone());
@@ -374,9 +423,10 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         _ => (None, false),
     };
     let account = match (provider, engine) {
+        (AgentProvider::Antigravity, _) => Account::Antigravity { gemini_home: config_dir.clone() },
         (AgentProvider::Codex, _) => Account::Codex { account_id: codex_account.unwrap_or_else(|| "default".into()) },
         (_, Some(engine)) => Account::Engine {
-            name: engine.into(), account: request.engine_account.clone(), config_dir: config_dir.clone(), context_window,
+            name: engine.into(), account: request.engine_account.clone(), binding: engine_binding, config_dir: config_dir.clone(), context_window,
             context_window_unknown,
         },
         (AgentProvider::Omp, _) if truthy(&request.omp_profile) => Account::Omp {
@@ -384,15 +434,24 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         },
         (_, None) => config_dir.clone().map_or(Account::Default, |config_dir| Account::Claude { config_dir }),
     };
+    // Velocidade só onde existe: Normal num motor sem Fast não vira `--service-tier default` no corpo do provedor.
+    let service_tier = match provider {
+        AgentProvider::Codex => request.service_tier,
+        AgentProvider::Claude => request.service_tier
+            .filter(|tier| tier.is_fast() || facts.supports_fast(request.engine.as_deref(), request.model.as_deref())),
+        _ => None,
+    };
     let spec = SessionSpec {
         version: SPEC_VERSION, key: facts.new_key(), name, cwd, provider,
         surface: if headless { Surface::Headless } else { Surface::Terminal },
-        account, account_source: source, model, effort: request.effort.clone(), service_tier: request.service_tier,
+        account, account_source: source, model, effort: request.effort.clone(), service_tier,
         permission_mode, subagent_model: request.subagent_model.clone(), customizations: request.claude_customizations.clone(),
-        jev: request.jev.unwrap_or_else(|| facts.defaults().jev), read_only: request.read_only,
+        jev: request.jev.unwrap_or_else(|| facts.defaults().jev),
+        code_mode, read_only: request.read_only,
         worktree: request.branch.clone().map(|branch| WorktreeSpec { branch, new_branch: request.new_branch, base: request.base.clone(), path: None }),
         creator: request.creator.clone(), created_at: facts.now(), conversation: None,
         name_auto: Some(name_auto), rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
+        hooks_off: request.disable_hooks,
     };
     // Nascer já no plano sem terminal deixaria a sessão sem modo de base. O ilegível vale bypass, como o
     // `modo_da_conta` do Python: o modo pedido já está escolhido, só a volta do plano depende dele.
@@ -603,10 +662,15 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
             return Err(OpenError::new(403, "claude_customizations_owner_only", "a seleção de plugins pertence ao dono"));
         }
     }
-    if request.service_tier.is_some() && provider != AgentProvider::Codex
+    if request.service_tier.is_some_and(ServiceTier::is_fast) && provider != AgentProvider::Codex
         && !(claude && facts.supports_fast(request.engine.as_deref(), request.model.as_deref()))
     {
         return Err(OpenError::new(400, "erro_criacao_sessao", "Fast exige Codex ou Claude com GPT no CLIProxyAPI local"));
+    }
+    if request.service_tier == Some(ServiceTier::Ultrafast) && claude
+        && !facts.supports_ultrafast(request.engine.as_deref(), request.model.as_deref(), request.engine_account.as_deref())
+    {
+        return Err(OpenError::new(400, "erro_criacao_sessao", crate::engines::catalog::ULTRAFAST_REFUSED));
     }
     // Antes de qualquer outra coisa da pasta: o convidado nem fica sabendo se ela existe fora da dele.
     if let OpenCaller::Guest { root } = caller && !facts.real_path(&request.cwd).starts_with(root) {
@@ -630,7 +694,17 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         AgentProvider::Codex => Some(facts.codex_home(codex_account.unwrap_or("default"))?),
         _ => None,
     };
-    if let Some(dir) = config_dir && !facts.config_dirs()?.iter().any(|known| same_dir(known, dir)) {
+    // No Antigravity a pasta é a conta Google (`GEMINI_HOME`), não uma conta Claude.
+    if provider == AgentProvider::Antigravity {
+        // O `agy` com terminal ignora o `GEMINI_HOME` (o login da adicional cai na padrão): só a conta padrão.
+        if config_dir.is_some() && !headless {
+            return Err(OpenError::new(409, "erro_conta_antigravity_adicional",
+                "o Antigravity com terminal só usa a conta padrão (a do ~/.gemini); abra sem escolher conta"));
+        }
+        if let Some(dir) = config_dir && !hangar_antigravity::paths::is_account_dir(std::path::Path::new(dir)) {
+            return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
+        }
+    } else if let Some(dir) = config_dir && !facts.config_dirs()?.iter().any(|known| same_dir(known, dir)) {
         return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
     }
     if let Some(engine) = &request.engine {
@@ -642,8 +716,11 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
         }
     }
     // O Codex sem terminal aceita o modo dele (vira sandbox e aprovação).
-    if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) {
+    if permission.is_some() && !claude && !(provider == AgentProvider::Codex && headless) && provider != AgentProvider::Antigravity {
         return Err(OpenError::new(409, "erro_permissao_so_claude", "modo de permissao so vale para claude"));
+    }
+    if request.code_mode == Some(true) && !claude {
+        return Err(OpenError::new(400, "erro_code_mode_so_claude", "Code Mode so vale para provider claude"));
     }
     if truthy(&request.omp_profile) && provider != AgentProvider::Omp {
         return Err(OpenError::new(400, "erro_perfil_so_omp", "perfil so vale para provider omp"));
@@ -676,7 +753,7 @@ fn codex_refusal(result: Result<(), CodexCatalogError>, tier: Option<ServiceTier
     match result {
         Ok(()) => None,
         Err(CodexCatalogError::Invalid(e)) => Some(OpenError::new(422, "erro_codex_escolha_invalida", e.clone()).with_params(json!({"erro": e}))),
-        Err(CodexCatalogError::Unavailable(e)) if tier == Some(ServiceTier::Priority) =>
+        Err(CodexCatalogError::Unavailable(e)) if tier.is_some_and(ServiceTier::is_fast) =>
             Some(OpenError::new(502, "erro_codex_catalogo_invalido", format!("Fast não pôde ser conferido: {e}")).with_params(json!({"erro": e}))),
         // Catálogo fora do ar não impede abrir: a escolha segue e o CLI decide.
         Err(CodexCatalogError::Unavailable(e)) => { tracing::warn!("codex: catalogo indisponivel, escolha nao conferida: {e}"); None }
@@ -705,14 +782,20 @@ fn validate_choice(provider: AgentProvider, model: Option<&str>, effort: Option<
                 "effort: use letras minúsculas (2 a 32) — os níveis do Codex variam por modelo e vêm do provedor")),
             AgentProvider::Claude => &EFFORT_CLAUDE,
             AgentProvider::Pi | AgentProvider::Omp => &EFFORT_PI,
-            AgentProvider::Kimi => return Err(OpenError::plain(400, format!("provider '{name}' não aceita escolha de esforço aqui"))),
+            // O esforço do Antigravity vem no id do modelo (`gemini-4-neon-high`).
+            AgentProvider::Kimi | AgentProvider::Antigravity => return Err(OpenError::plain(400, format!("provider '{name}' não aceita escolha de esforço aqui"))),
         };
         if !levels.is_empty() && !levels.contains(&effort) {
             return Err(OpenError::plain(400, format!("effort: use um de {}", levels.join(", "))));
         }
     }
-    if let Some(mode) = permission && PermissionMode::claude(mode).is_none() {
-        let names: Vec<_> = PermissionMode::CLAUDE.iter().map(|m| m.name()).collect();
+    let (known, modes): (fn(&str) -> Option<PermissionMode>, &[PermissionMode]) = if provider == AgentProvider::Antigravity {
+        (PermissionMode::antigravity, &PermissionMode::ANTIGRAVITY)
+    } else {
+        (PermissionMode::claude, &PermissionMode::CLAUDE)
+    };
+    if let Some(mode) = permission && known(mode).is_none() {
+        let names: Vec<_> = modes.iter().map(|m| m.name()).collect();
         return Err(OpenError::new(409, "erro_permissao_invalida", format!("permission_mode: use um de {}", names.join(", "))));
     }
     Ok(())

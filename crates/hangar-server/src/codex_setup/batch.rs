@@ -7,7 +7,7 @@ pub trait Actions {
     fn repair(&mut self,account:&Account)->impl Future<Output=Result<(),String>>+Send;
     fn sessions(&mut self)->Result<Vec<Value>,String>;
     fn alive(&self,pid:&Value)->Result<bool,String>;
-    fn reload(&mut self,endpoint:&str,cwd:&str,account:&Account)->impl Future<Output=Result<bool,String>>+Send;
+    fn reload(&mut self,endpoint:&str,token:Option<&str>,cwd:&str,account:&Account)->impl Future<Output=Result<bool,String>>+Send;
 }
 pub async fn run(home:&Path,accounts:&[Account],actions:&mut impl Actions)->Result<(),String>{
     let accounts:Vec<_>=accounts.iter().filter(|account|account.home.is_dir()).collect();
@@ -22,7 +22,8 @@ pub async fn run(home:&Path,accounts:&[Account],actions:&mut impl Actions)->Resu
         let Some(account)=account else{continue;};
         loopback(endpoint)?;
         let default=home.to_string_lossy();let cwd=session.get("cwd").and_then(Value::as_str).filter(|value|!value.is_empty()).unwrap_or(&default);
-        if !actions.reload(endpoint,cwd,account).await?{return Err("O Codex não confirmou a recarga dos hooks reparados".into());}
+        let token=crate::runtime::codex_sidecar::ws_token(&session);
+        if !actions.reload(endpoint,token.as_deref(),cwd,account).await?{return Err("O Codex não confirmou a recarga dos hooks reparados".into());}
     }
     let proof=home.join(".hangar/codex-prepare-once-v1.json");
     let previous=files::read(&proof).map_err(|e|e.to_string())?;

@@ -106,16 +106,15 @@ it.each([
   { provider: 'claude', path: 'm4.7144', color: '#d97757' },
   { provider: 'codex', path: 'M22.2819', color: '#000' },
   { provider: 'kimi', path: 'M21.765' },
-  { provider: 'pi', letter: 'π' },
-  { provider: 'omp', letter: 'Ω' },
+  { provider: 'pi', path: 'M1.167' },
+  { provider: 'omp', path: 'M1.286' },
   { provider: undefined, path: 'M 4.00' },
   { provider: 'orq', path: 'M 4.00' },
 ] as const)('avatar do provider $provider pertence à sessão da rota', ({ provider, ...mark }) => {
   store.rows = [{ ...session, provider: 'kimi', serverId: 'outro' }, { ...session, provider }];
   render();
   expect(avatar()).not.toBeNull();
-  if ('path' in mark) expect(avatar()?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
-  else expect(avatar()?.textContent).toBe(mark.letter);
+  expect(avatar()?.querySelector('path')?.getAttribute('d')).toMatch(new RegExp(`^${mark.path}`));
   if ('color' in mark) expect(avatar()?.querySelector('svg')?.getAttribute('fill')).toBe(mark.color);
   expect(avatar()?.style.width).toBe('30px');
   expect(title()?.style.minHeight).toBe('44px');

@@ -1,7 +1,7 @@
-//! Plano de lançamento do Codex a partir do spec: o comando do `hangar-codex-tui` (o mesmo na
-//! criação e no relançamento), o `-e` da sessão, o sidecar sem terminal e a pasta pré-confiada no
-//! `config.toml` da conta. Port do ramo Codex de `registry.create`, `_create_codex_headless`,
-//! `lancador.comando_do_lancador` e `sessions.pretrust_cwd`.
+//! Plano de lançamento do Codex a partir do spec: o comando do lançador `hangar-server codex-tui` (o
+//! mesmo na criação e no relançamento), o `-e` da sessão, o sidecar sem terminal e a pasta
+//! pré-confiada no `config.toml` da conta. Port do ramo Codex de `registry.create`,
+//! `_create_codex_headless`, `lancador.comando_do_lancador` e `sessions.pretrust_cwd`.
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -10,8 +10,13 @@ use serde_json::{Map, Value, json};
 use super::terminal::PaneSpec;
 use super::{AgentProvider, OpenError, PermissionMode, ServiceTier, SessionSpec};
 
-/// `lancador.EXECUTAVEL`: o mesmo nome no PATH (no Windows, o `.cmd` do `install.ps1`).
+/// O nome do lançador antigo no PATH: panes abertos pela versão anterior ainda o rodam, e no Windows é
+/// o `.cmd` do `install.ps1`, que passa a chamar o subcomando.
 pub const LAUNCHER: &str = "hangar-codex-tui";
+/// O lançador: subcomando do `hangar-server`.
+pub const SUBCOMMAND: &str = "codex-tui";
+/// O binário pelo PATH, quando a instalação não dá um caminho (servidor dos testes).
+pub const SERVER: &str = "hangar-server";
 
 /// O que o lançador recebe, venha do spec (criação) ou do sidecar (relançar a conversa aberta).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -29,26 +34,35 @@ pub struct Launch {
     pub tool_output_token_limit: Option<u64>,
     pub prompt: Option<String>,
     pub imported_resume: bool,
-    /// Caminho do lançador da instalação (`launcher_program`); `None` = o nome no PATH.
-    pub launcher: Option<String>,
+    /// O comando do lançador antes dos argumentos (`launcher_program`); `None` = `hangar-server codex-tui` pelo PATH.
+    pub launcher: Option<Vec<String>>,
 }
 
-/// O lançador da instalação que roda este servidor. O do PATH pode ser de outra versão (link que
-/// ficou no checkout) e recusar os argumentos de agora, e o pane morre ao nascer. No Windows o
-/// PATH tem o `.cmd` que o `install.ps1` escreve. Fora do `current`, o nome no PATH.
-pub fn launcher_program(home: &Path, windows: bool) -> Option<String> {
-    launcher_from(home, windows, std::env::current_exe().ok().as_deref())
+/// O lançador da instalação que roda este servidor: o `hangar-server` do `current` quando é dele que
+/// este binário roda (o caminho pelo link sobrevive à troca de versão), senão este binário. Um
+/// `hangar-server` do PATH pode ser de outra versão e recusar os argumentos de agora. No Windows o
+/// pane roda o `.cmd` do PATH, que o `install.ps1` aponta para o subcomando.
+pub fn launcher_program(home: &Path, windows: bool) -> Option<Vec<String>> {
+    if windows {
+        return Some(vec![LAUNCHER.into()]);
+    }
+    let exe = std::env::current_exe().ok();
+    launcher_from(home, exe.as_deref(), hangar_core::process::cargo_test_binary())
 }
 
-fn launcher_from(home: &Path, windows: bool, exe: Option<&Path>) -> Option<String> {
-    let path = crate::install_root::current(home).join("scripts").join(LAUNCHER);
-    if windows || !path.is_file() {
+fn launcher_from(home: &Path, exe: Option<&Path>, test_binary: bool) -> Option<Vec<String>> {
+    // O binário dos testes não é o servidor: atende o `hangar-server` do PATH, o falso que o teste pôs.
+    if test_binary {
         return None;
     }
-    // Só o `current` de onde este binário roda: servidor de um checkout com um `current` de outra
-    // versão passaria os argumentos de agora a um lançador que não os conhece.
-    let root = crate::install_root::current(home).canonicalize().ok()?;
-    exe?.canonicalize().ok()?.starts_with(root).then(|| path.to_string_lossy().into_owned())
+    let exe = exe?;
+    let packaged = crate::install_root::current(home).join("bin").join(SERVER);
+    let root = crate::install_root::current(home).canonicalize().ok();
+    let program = match (root, exe.canonicalize().ok()) {
+        (Some(root), Some(real)) if real.starts_with(&root) && packaged.is_file() => packaged,
+        _ => exe.to_path_buf(),
+    };
+    Some(vec![program.to_string_lossy().into_owned(), SUBCOMMAND.into()])
 }
 
 /// Pasta absoluta da conta Codex pelo id (`resolve_account`), a mesma que a resolução conferiu.
@@ -66,10 +80,10 @@ pub fn policy(mode: &str) -> Result<(&'static str, &'static str), OpenError> {
 }
 
 /// `comando_do_lancador`, na ordem dele, com a política sempre explícita (matriz, item 17).
-pub fn launcher_argv(launch: &Launch) -> Result<Vec<String>, OpenError> {
+pub fn launcher_argv(launch: &Launch, windows: bool) -> Result<Vec<String>, OpenError> {
     let (approval, sandbox) = policy(&launch.mode)?;
-    let program = launch.launcher.clone().unwrap_or_else(|| LAUNCHER.into());
-    let mut argv: Vec<String> = vec![program, "--cwd".into(), launch.cwd.clone()];
+    let mut argv: Vec<String> = launch.launcher.clone().unwrap_or_else(|| vec![SERVER.into(), SUBCOMMAND.into()]);
+    argv.extend(["--cwd".into(), launch.cwd.clone()]);
     let mut flag = |name: &str, value: Option<&String>| if let Some(value) = value.filter(|v| !v.is_empty()) {
         argv.extend([name.to_owned(), value.clone()]);
     };
@@ -84,9 +98,21 @@ pub fn launcher_argv(launch: &Launch) -> Result<Vec<String>, OpenError> {
         argv.extend(["--tool-output-token-limit".into(), limit.to_string()]);
     }
     if let Some(prompt) = launch.prompt.as_ref().filter(|p| !p.is_empty()) {
-        argv.extend(["--prompt".into(), prompt.clone()]);
+        argv.extend(prompt_args(prompt, windows));
     }
     Ok(argv)
+}
+
+/// Quebra de linha no argumento é cortada pelo `cmd` do `hangar-codex-tui.cmd` no Windows: a mensagem
+/// com várias linhas vai em base64, alfabeto que nenhum shell corta nem toma por opção. No Windows vai
+/// sempre assim: o psmux roda o comando pelo PowerShell, que corta o argumento na primeira aspa dupla.
+pub fn prompt_args(prompt: &str, windows: bool) -> [String; 2] {
+    if windows || prompt.contains(['\r', '\n']) {
+        use base64::Engine;
+        ["--prompt-b64".into(), base64::engine::general_purpose::STANDARD_NO_PAD.encode(prompt)]
+    } else {
+        ["--prompt".into(), prompt.to_owned()]
+    }
 }
 
 /// O lançador da criação: a conta resolvida e a escolha do spec; o modo do spec vale.
@@ -104,7 +130,7 @@ pub fn creation(spec: &SessionSpec, codex_home: &str, prompt: Option<&str>) -> L
 /// O pane do Codex: o lançador (no envelope do só leitura, se houver) e o `-e` da sessão.
 pub fn pane(name: &str, key: &str, launch: &Launch, jev: bool, runtime_config: &Value, read_only: Option<&[String]>, windows: bool, server_env: &BTreeMap<String,String>)
     -> Result<PaneSpec, OpenError> {
-    let mut command = launcher_argv(launch)?;
+    let mut command = launcher_argv(launch, windows)?;
     let context = crate::runtime::codex_launch::context_overrides(Path::new(&launch.codex_home), runtime_config);
     command.extend(context.into_iter().flat_map(|value| ["--config".to_owned(), value]));
     // Sem sincronização a TUI pula o preparo; o limite temporário continua sendo da abertura.
@@ -124,11 +150,12 @@ pub fn pane(name: &str, key: &str, launch: &Launch, jev: bool, runtime_config: &
 
 /// `_exigir_lancador_codex`: sem o lançador ou o `codex` no PATH o pane morre ao nascer e o
 /// `new-session` devolve sucesso. Recusa antes de criar nada.
-pub fn require_launcher(server_env: &BTreeMap<String, String>, launcher: Option<&str>) -> Result<(), OpenError> {
+pub fn require_launcher(server_env: &BTreeMap<String, String>, launcher: Option<&[String]>) -> Result<(), OpenError> {
     let missing = |program: &str| crate::runtime::process::resolve_program(program, server_env).is_none();
-    if missing(launcher.unwrap_or(LAUNCHER)) {
-        return Err(OpenError::new(409, "erro_criacao_sessao", format!("{LAUNCHER} nao esta no PATH deste servidor — sem ele a sessao \
-            Codex nasce e morre na hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1.")));
+    let program = launcher.and_then(<[String]>::first).map_or(SERVER, String::as_str);
+    if missing(program) {
+        return Err(OpenError::new(409, "erro_criacao_sessao", format!("{program} nao esta no PATH deste servidor — sem o lancador a \
+            sessao Codex nasce e morre na hora, sem erro. Instale o Hangar: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1.")));
     }
     if missing("codex") {
         return Err(OpenError::new(409, "erro_criacao_sessao", "codex nao esta no PATH deste servidor — o lancador sobe o app-server com \
@@ -213,47 +240,77 @@ mod tests {
     /// A ordem e os nomes do `comando_do_lancador`; a política vai sempre explícita.
     #[test]
     fn the_launcher_command_follows_the_python_order_with_an_explicit_policy() {
-        assert_eq!(launcher_argv(&launch()).unwrap(), ["hangar-codex-tui", "--cwd", "/w", "--codex-home", "/h/.codex", "--codex-account", "default",
+        assert_eq!(launcher_argv(&launch(), false).unwrap(), ["hangar-server", "codex-tui", "--cwd", "/w", "--codex-home", "/h/.codex", "--codex-account", "default",
             "--approval-policy", "never", "--sandbox", "danger-full-access"]);
         let full = Launch { service_tier: Some("priority".into()), resume: Some("t-1".into()), model: Some("gpt-5.5".into()), effort: Some("high".into()),
             mode: "Ask for approval".into(), tool_output_token_limit: Some(9000), prompt: Some("começa".into()), account: "b".into(), ..launch() };
-        assert_eq!(launcher_argv(&full).unwrap(), ["hangar-codex-tui", "--cwd", "/w", "--service-tier", "priority", "--codex-home", "/h/.codex",
+        assert_eq!(launcher_argv(&full, false).unwrap(), ["hangar-server", "codex-tui", "--cwd", "/w", "--service-tier", "priority", "--codex-home", "/h/.codex",
             "--codex-account", "b", "--resume", "t-1", "--model", "gpt-5.5", "--effort", "high", "--approval-policy", "on-request",
             "--sandbox", "read-only", "--tool-output-token-limit", "9000", "--prompt", "começa"]);
         assert_eq!(policy("Approve for me").unwrap(), ("on-request", "workspace-write"));
     }
 
-    /// O lançador do `current` vence o do PATH, que pode ser de outra versão; no Windows e sem o
-    /// arquivo no `current`, o nome no PATH.
+    /// A primeira mensagem com quebra de linha sai do comando do pane sem quebra; o lançador a lê inteira.
     #[test]
-    fn the_launcher_comes_from_the_install_root_when_it_has_one() {
+    fn a_multi_line_prompt_leaves_the_pane_command_without_a_line_break() {
+        let text = "Primeira linha: responda apenas MULTI-OK.\r\nSegunda linha: confirme.\núltima";
+        let argv = launcher_argv(&Launch { prompt: Some(text.into()), ..launch() }, false).unwrap();
+        assert!(argv.iter().all(|arg| !arg.contains(['\r', '\n'])), "{argv:?}");
+        let at = argv.iter().position(|arg| arg == "--prompt-b64").expect("--prompt-b64");
+        assert!(!argv[at + 1].starts_with('-') && !argv[at + 1].contains(['=', ' ', '"', '\'']), "{}", argv[at + 1]);
+        let raw: Vec<String> = argv[2..].to_vec();
+        let Ok(crate::codex_tui::args::Parsed::Run(args)) = crate::codex_tui::args::parse(&raw, Some("cx")) else { panic!("{raw:?}") };
+        assert_eq!(args.prompt.as_deref(), Some(text));
+        assert_eq!(prompt_args("uma linha só", false), ["--prompt".to_owned(), "uma linha só".to_owned()]);
+    }
+
+    /// No Windows a primeira mensagem vai sempre em base64: o psmux roda o comando pelo PowerShell, que
+    /// corta o argumento na primeira aspa dupla. No Linux a de uma linha segue crua.
+    #[test]
+    fn on_windows_the_prompt_never_reaches_the_pane_command_raw() {
+        let line = r#"a folha "Mais ações" em C:\x\\y, do 'Expo' (`mobile/`)"#;
+        let pane_of = |text: &str, windows: bool| pane("cx", "k", &Launch { prompt: Some(text.into()), ..launch() }, false, &Value::Null, None,
+            windows, &BTreeMap::new()).unwrap().command;
+        for text in [line.to_owned(), format!("{line}\nsegunda linha")] {
+            let command = pane_of(&text, true);
+            assert!(!command.iter().any(|arg| arg.contains("Mais") || arg == "--prompt"), "o prompt foi cru para o comando do pane: {command:?}");
+            let at = command.iter().position(|arg| arg == "--prompt-b64").expect("--prompt-b64");
+            let raw: Vec<String> = command[2..].to_vec();
+            let Ok(crate::codex_tui::args::Parsed::Run(args)) = crate::codex_tui::args::parse(&raw, Some("cx")) else { panic!("{raw:?}") };
+            assert_eq!(args.prompt.as_deref(), Some(text.as_str()), "{}", command[at + 1]);
+        }
+        assert!(pane_of(line, false).windows(2).any(|pair| pair[0] == "--prompt" && pair[1] == line));
+    }
+
+    /// O `hangar-server` do `current` quando este binário é dele; de um checkout, ele mesmo; nos
+    /// testes, o do PATH; no Windows, o `.cmd` antigo que o instalador aponta para o subcomando.
+    #[test]
+    fn the_launcher_is_the_server_of_the_install_root_when_it_runs_from_there() {
         let home = tempfile::tempdir().unwrap();
         let current = home.path().join(".hangar").join("current");
         let exe = current.join("bin").join("hangar-server");
-        assert_eq!(launcher_from(home.path(), false, Some(&exe)), None);
-        let scripts = current.join("scripts");
-        std::fs::create_dir_all(&scripts).unwrap();
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, "").unwrap();
-        std::fs::write(scripts.join(LAUNCHER), "#!/bin/sh\n").unwrap();
-        let own = scripts.join(LAUNCHER).to_string_lossy().into_owned();
-        assert_eq!(launcher_from(home.path(), false, Some(&exe)), Some(own.clone()));
-        assert_eq!(launcher_from(home.path(), true, Some(&exe)), None);
-        // Servidor de um checkout com um `current` de outra versão: o do `current` recusaria os argumentos.
+        let own = exe.to_string_lossy().into_owned();
+        assert_eq!(launcher_from(home.path(), Some(&exe), false), Some(vec![own.clone(), "codex-tui".into()]));
+        assert_eq!(launcher_from(home.path(), Some(&exe), true), None, "o binário de teste não é o servidor");
+        // Servidor de um checkout com um `current` de outra versão: roda o próprio binário.
         let checkout = home.path().join("checkout").join("hangar-server");
         std::fs::create_dir_all(checkout.parent().unwrap()).unwrap();
         std::fs::write(&checkout, "").unwrap();
-        assert_eq!(launcher_from(home.path(), false, Some(&checkout)), None);
-        assert_eq!(launcher_from(home.path(), false, None), None);
-        let argv = launcher_argv(&Launch { launcher: Some(own.clone()), ..launch() }).unwrap();
-        assert_eq!(argv[..3], [own, "--cwd".into(), "/w".into()]);
+        assert_eq!(launcher_from(home.path(), Some(&checkout), false),
+            Some(vec![checkout.to_string_lossy().into_owned(), "codex-tui".into()]));
+        assert_eq!(launcher_from(home.path(), None, false), None);
+        assert_eq!(launcher_program(home.path(), true), Some(vec!["hangar-codex-tui".to_owned()]));
+        let argv = launcher_argv(&Launch { launcher: Some(vec![own.clone(), "codex-tui".into()]), ..launch() }, false).unwrap();
+        assert_eq!(argv[..4], [own, "codex-tui".into(), "--cwd".into(), "/w".into()]);
     }
 
     /// Modo fora da lista nunca vira Full Access.
     #[test]
     fn an_unknown_mode_refuses_instead_of_full_access() {
         for mode in ["Read Only", "", "yolo"] {
-            assert_eq!(launcher_argv(&Launch { mode: mode.into(), ..launch() }).unwrap_err().code, Some("erro_permissao_invalida"), "{mode:?}");
+            assert_eq!(launcher_argv(&Launch { mode: mode.into(), ..launch() }, false).unwrap_err().code, Some("erro_permissao_invalida"), "{mode:?}");
         }
     }
 
@@ -261,7 +318,7 @@ mod tests {
     fn the_pane_carries_jev_and_the_read_only_envelope() {
         let pane = pane("cx", "k", &launch(), false, &json!({}), Some(&["bwrap".into(), "--".into()]), false, &BTreeMap::new()).unwrap();
         assert_eq!(pane.command[..4], ["bwrap", "--", "/bin/sh", "-c"].map(str::to_owned));
-        assert!(pane.command[4].starts_with("exec hangar-codex-tui --cwd /w"), "{:?}", pane.command);
+        assert!(pane.command[4].starts_with("exec hangar-server codex-tui --cwd /w"), "{:?}", pane.command);
         assert_eq!(pane.env, [("HANGAR_JEV".to_owned(), "off".to_owned()), ("HANGAR_CLAUDE_SETTINGS".to_owned(), String::new())]);
         assert_eq!((pane.provider, pane.key.as_str(), pane.config_dir), (AgentProvider::Codex, "k", None));
     }

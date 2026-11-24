@@ -10,6 +10,7 @@ use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPic
     IndexPath, select::{Select, SelectEvent, SelectState}, searchable_list::{SearchableListItem, SearchableVec}};
 
 mod appearance_page;
+mod beta_page;
 pub(crate) mod memory_dream;
 mod guide;
 mod manual_page;
@@ -21,15 +22,15 @@ pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_ki
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
-    General, Appearance, Sessions, Updates, Manual, Diary, About, Migration,
-    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Plugins, Scheduled, Memory, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    General, Appearance, Sessions, Beta, Updates, Manual, Diary, About,
+    Servers, Sync, Guests, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, WhatsApp, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
-    const DEVICE: [Page; 6] = [Page::General, Page::Appearance, Page::Sessions, Page::Updates, Page::Manual, Page::About];
+    const DEVICE: [Page; 7] = [Page::General, Page::Appearance, Page::Sessions, Page::Beta, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 21] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 24] = [Page::Diary, Page::Servers, Page::Sync, Page::Guests, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::WhatsApp, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -43,8 +44,8 @@ impl Page {
 
     pub(super) fn key(self) -> &'static str {
         match self {
-            Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Orchestration => "orchestration",
+            Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Beta => "beta", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Guests => "guests", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::WhatsApp => "whatsapp", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -52,23 +53,26 @@ impl Page {
 
     fn icon(self) -> IconName {
         match self {
-            Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Diary => IconName::FileText,
+            Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Beta => IconName::FlaskConical, Page::Diary => IconName::FileText,
             Page::Updates => IconName::Sparkles, Page::Manual => IconName::BookOpen,
-            Page::About => IconName::Info, Page::Migration => IconName::Activity, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
-            Page::Accounts => IconName::User, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
+            Page::About => IconName::Info, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Guests => IconName::UserPlus, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
+            Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::WhatsApp => IconName::MessageCircle, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
         }
     }
 
     pub(super) fn title(self) -> String {
-        // O nome é o do web: uma frase, um dicionário.
-        if self == Page::Scheduled { return tr_shared("scheduled_title", &[]); }
-        if self == Page::Memory { return tr_shared("dream_title", &[]); }
-        if self == Page::Jev { return tr_shared("jev_title", &[]); }
-        if self == Page::SharedConfig { return tr_shared("shared_config_title", &[]); }
-        if self == Page::Migration { return tr_shared("migration_title", &[]); }
-        tr(&format!("settings_page_{}", self.key()))
+        match self {
+            // O nome é o do web: uma frase, um dicionário.
+            Page::Scheduled => tr_shared("scheduled_title", &[]),
+            Page::Memory => tr_shared("dream_title", &[]),
+            Page::Jev => tr_shared("jev_title", &[]),
+            Page::SharedConfig => tr_shared("shared_config_title", &[]),
+            Page::Status => tr("status_title"),
+            Page::Guests => tr_shared("convidados_titulo", &[]),
+            _ => tr(&format!("settings_page_{}", self.key())),
+        }
     }
 }
 
@@ -102,6 +106,8 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("machines_search_tailscale", Some("machines_search_tailscale_help"))]),
     (Page::Sync, &[("sync_config_ativa", Some("sync_config_ganho")), ("sync_config_ativar", Some("sync_config_direta")),
         ("sync_config_desativar", Some("sync_config_desativar_aviso")), ("sync_config_copiar", None)]),
+    (Page::Guests, &[("convidados_adicionar", Some("guests_connect_description")), ("convidados_ve_minhas", None),
+        ("guests_legacy_title", Some("guests_legacy_bring"))]),
     (Page::Connect, &[("connect_devices_title", None), ("connect_machines_title", Some("connect_machines_help")),
         ("connect_preview_title", Some("connect_preview_help"))]),
     (Page::Appearance, &APPEARANCE_ROWS),
@@ -109,6 +115,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("settings_delivery_mode", Some("settings_delivery_mode_search")),
         ("settings_tray", Some("settings_tray_desc")), ("settings_chrome_autofill", Some("settings_chrome_autofill_desc")),
         ("settings_full_chrome", Some("settings_full_chrome_desc"))]),
+    (Page::Beta, &[("settings_conversation_beta", Some("settings_conversation_beta_hint")), ("settings_code_mode", Some("settings_code_mode_hint"))]),
     (Page::Sessions, &[("settings_auto_hide_label", None), ("settings_sleep_title", Some("settings_sleep_hint"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
         ("settings_diary_recent", None)]),
@@ -120,10 +127,17 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("plugins_tab_marketplaces", None), ("plugins_check", None), ("plugins_marketplace_auto_update", None)]),
     (Page::Vault, &[("vault_entries", Some("vault_entries_hint")), ("vault_add", Some("vault_token_hint")),
         ("vault_backup", Some("vault_backup_hint")), ("vault_recovery", None)]),
+    (Page::WhatsApp, &[("whatsapp_intro_title", Some("whatsapp_intro")), ("whatsapp_risk_title", Some("whatsapp_risk_unofficial")),
+        ("whatsapp_media_title", Some("whatsapp_media_desc")), ("whatsapp_usage_title", Some("whatsapp_usage_skill_hint")),
+        ("whatsapp_remove", Some("whatsapp_remove_body"))]),
     (Page::Orchestration, &[("orchestration_intro", None), ("orchestration_unrestricted", None)]),
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help")),
         ("keyboard_title", Some("keyboard_lead")), ("keyboard_hold_title", Some("keyboard_hold_help"))]),
-    (Page::Harnesses, &[("harness_legend", None)]),
+    (Page::Harnesses, &[("agents_subtitle", None)]),
+    // Cada bloco da Status: a busca rola até ele, pela mesma marca do pulo da lista de atenção.
+    (Page::Status, &[("status_memory", None), ("status_cpu", None), ("status_days_title", Some("status_legend_crash")),
+        ("status_machines_title", Some("status_machines_hint")), ("status_sessions_title", None), ("status_slow_title", Some("status_slow_legend")),
+        ("status_host_title", Some("status_disk_usage")), ("status_outside_title", Some("status_keyring"))]),
     (Page::Voice, &[("voice_transcribe", Some("voice_transcribe_help")), ("voice_groq", Some("voice_groq_help")),
         ("voice_transcription_endpoint", Some("voice_transcription_endpoint_help")), ("voice_transcription_model", Some("voice_transcription_model_help")),
         ("voice_hands_free", Some("voice_hands_free_help")), ("voice_style", Some("voice_style_help")), ("voice_vocabulary", Some("voice_vocabulary_help")),
@@ -372,6 +386,16 @@ pub(super) struct SettingsUi {
     drag: Option<(Point<Pixels>, [f32; 2])>,
     /// Onde ligar o desfoque, aberto pelo botão da linha (o tooltip não chega pelo teclado).
     blur_hint: bool,
+    /// Code Mode já ligado no settings.json do servidor (`GET /api/claude/code-mode`), por conexão; `None` antes de perguntar.
+    code_mode_settings: Option<(u64, bool)>,
+    /// Opções da tela Beta no servidor (`/api/session-options`), por conexão; `None` dentro = ainda lendo.
+    session_options: Option<(u64, Option<crate::api::SessionOptions>)>,
+    /// Leitura ou gravação das opções que falhou, mostrada na linha do Code Mode.
+    session_options_error: Option<String>,
+    /// A conexão com uma gravação das opções ainda sem resposta: as linhas da tela Beta esperam por ela.
+    session_options_saving: Option<u64>,
+    /// Conversa nova escolhida aqui que o servidor daquela conexão ainda não recebeu.
+    conversation_pending: Option<(u64, bool)>,
     _subscriptions: Vec<Subscription>,
     _disk_watch: Task<()>,
 }
@@ -499,7 +523,7 @@ impl SettingsUi {
         }));
         Self { sliders, fonts, type_picks, custom_sizes, custom_open: Vec::new(),
             accent_picker, tint_picker, search, found: Vec::new(), pick: 0, hit: None, scroll: ScrollHandle::new(),
-            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, _subscriptions: subscriptions,
+            reveal: Rc::new(Cell::new(false)), jump: None, preview: None, live: false, drag: None, blur_hint: false, code_mode_settings: None, session_options: None, session_options_error: None, session_options_saving: None, conversation_pending: None, _subscriptions: subscriptions,
             _disk_watch: watch_disk(window, cx) }
     }
 
@@ -556,8 +580,11 @@ impl Hangar {
             self.plugins_page = None;
             self.accounts_page_left();
             self.sync_page_left();
+            self.guests_page_left();
             self.connect_page_left();
             self.devices_page_left();
+            self.status_left();
+            self.whatsapp_page_left();
             let ui = &mut self.settings_ui;
             (ui.live, ui.hit, ui.drag) = (false, None, None);
             self.root_focus.focus(window, cx);
@@ -647,8 +674,8 @@ impl Hangar {
         appearance::set(next);
         theme::sync_kit(None, cx);
         // Quem muda as linhas ou o desenho delas refaz a conversa: a lista guarda a altura de cada linha.
-        if (before.tool_look, before.task_list, before.thinking_tools, before.thinking_collapsed, before.table_chart, before.code_font, before.code_size)
-            != (next.tool_look, next.task_list, next.thinking_tools, next.thinking_collapsed, next.table_chart, next.code_font, next.code_size) {
+        if (before.tool_look, before.task_list, before.thinking_tools, before.thinking_collapsed, before.table_chart, before.code_font, before.code_size, before.conversation_beta)
+            != (next.tool_look, next.task_list, next.thinking_tools, next.thinking_collapsed, next.table_chart, next.code_font, next.code_size, next.conversation_beta) {
             self.chat.invalidate();
             self.sync_rows(cx);
             self.list_state.remeasure();
@@ -843,6 +870,7 @@ impl Hangar {
         // Na caixa solta o destaque suave some sobre o vidro; o item da página aberta leva mais cor.
         let selected = if floating { theme::accent().alpha(0.26) } else { theme::selected_row() };
         let new_count = self.guide.new_count();
+        let status_dot = self.status_nav_dot();
         let nav_item = |page_item: Page, current: Page, cx: &mut Context<Self>| {
             let on = page_item == current;
             Button::new(SharedString::from(format!("settings-nav-{}", page_item.key())))
@@ -859,7 +887,13 @@ impl Hangar {
                     // Não vistas desde a última visita; some com a página aberta, que as marca vistas.
                     .when(page_item == Page::Updates && !on && new_count > 0, |el| el.child(div().ml_auto()
                         .child(super::vault::chip(if new_count == 1 { tr("updates_new_one") } else { tr("updates_new_count").replace("{n}", &new_count.to_string()) },
-                            theme::on_accent(), theme::accent()).rounded_full()))))
+                            theme::on_accent(), theme::accent()).rounded_full())))
+                    .when(page_item == Page::WhatsApp && !on && super::whatsapp::show_new_badge(), |el| el.child(div().ml_auto()
+                        .child(super::vault::chip(tr("settings_nav_new"), theme::on_accent(), theme::accent()).rounded_full())))
+                    // Só o estado do servidor selecionado; de pé, sem ponto.
+                    .when_some(status_dot.clone().filter(|_| page_item == Page::Status), |el, (color, _)| el.child(div().ml_auto()
+                        .size(px(7.)).flex_shrink_0().rounded_full().bg(color))))
+                .when_some(status_dot.clone().filter(|_| page_item == Page::Status), |el, (_, text)| el.tooltip(text))
                 .on_click(cx.listener(move |this, _, window, cx| this.open_settings(page_item, window, cx)))
                 .map(|button| div().when(page_item == Page::Scheduled, |el| popup::anchor(el, crate::tour::anchors::SCHEDULED_TASKS)).child(button))
         };
@@ -901,17 +935,21 @@ impl Hangar {
         let servers_wide = page == Page::Servers;
         // O artigo do Manual leva o "Nesta página" ao lado do texto.
         let article_wide = page == Page::Manual && self.article_wide(window);
+        // Status é um painel de gráficos e Agentes uma tabela com painel ao lado: ocupam a largura toda ao lado da navegação.
+        let status_wide = matches!(page, Page::Status | Page::Harnesses);
         let body = match page {
             Page::Updates => self.render_updates(window, cx),
             Page::Manual => self.render_manual(window, cx),
             Page::Appearance => self.render_appearance(wide, cx),
             Page::General => self.render_general(cx),
             Page::Sessions => self.render_sessions_settings(window, cx),
+            Page::Beta => self.render_beta(cx),
             Page::Diary => self.render_diary(cx),
             Page::About => self.render_about(cx),
-            Page::Migration => self.render_migration(cx),
+            Page::Status => self.render_status(window, cx),
             Page::Accounts => self.render_accounts(accounts_wide, window, cx),
             Page::Vault => self.render_vault(window, cx),
+            Page::WhatsApp => self.render_whatsapp(cx),
             Page::Plugins => self.render_plugins(window, cx),
             Page::Scheduled => self.render_scheduled(window, cx),
             Page::Memory => self.render_memory_dream(window, cx),
@@ -922,6 +960,7 @@ impl Hangar {
             Page::Voice | Page::Jev | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             Page::Servers => self.render_machines(window.viewport_size().width, cx),
             Page::Sync => self.render_sync(cx),
+            Page::Guests => self.render_guests_page(cx),
             Page::Connect => self.render_connect(cx),
             Page::SharedConfig => self.render_shared_config(cx),
             Page::Windows => self.render_computer(cx),
@@ -929,8 +968,10 @@ impl Hangar {
         };
         let scroll = div().id("settings-content").role(Role::TabPanel).aria_label(page.title())
             .accessibility_id(format!("settings-page-{}", page.key())).flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
-            .child(div().w_full().flex().justify_center().child(motion::fade_quick(div().w(px(if accounts_wide || servers_wide { 1040. }
-                else if article_wide { 960. } else { 720. })).max_w_full().px_4().pt(px(44.)).pb(px(40.)), body_in).child(body)));
+            .child(div().w_full().flex().justify_center().child(motion::fade_quick(div()
+                .when(status_wide, |el| el.w_full().px(px(20.)))
+                .when(!status_wide, |el| el.w(px(if accounts_wide || servers_wide { 1040. } else if article_wide { 960. } else { 720. })).px_4())
+                .max_w_full().pt(px(44.)).pb(px(40.)), body_in).child(body)));
         let strip = match page { Page::Appearance => Some(self.section_tabs(cx)), Page::Manual => self.manual_tabs(cx), _ => None };
         let tabs = strip.map(|strip| div().w_full().flex_shrink_0().flex().justify_center().px_4().pt(px(14.)).pb(px(6.))
             .child(div().w(px(720.)).max_w_full().when(page == Page::Manual, |el| el.flex().justify_center()).child(strip)));
@@ -1162,33 +1203,64 @@ pub(super) fn segments_with_hints(id: &'static str, labels: &[String], hints: &[
 
 /// `enabled`: quais opções valem, uma a uma, quando a desligada não é a do fim (o Jev entre Direto e Na conversa).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn segments_where(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
-    off_note: String, pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>)
+pub(super) fn segments_where<T: 'static>(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
+    off_note: String, pick: impl Fn(&mut T, usize, &mut Window, &mut Context<T>) + Clone + 'static, cx: &mut Context<T>)
+    -> AnyElement {
+    segments_with(id, labels, hints, selected, enabled, locked, off_note, pick, false, cx)
+}
+
+/// O mesmo seletor na largura do pai, com as opções do mesmo tamanho.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn segments_fill<T: 'static>(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
+    off_note: String, pick: impl Fn(&mut T, usize, &mut Window, &mut Context<T>) + Clone + 'static, cx: &mut Context<T>)
+    -> AnyElement {
+    segments_with(id, labels, hints, selected, enabled, locked, off_note, pick, true, cx)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn segments_with<T: 'static>(id: &'static str, labels: &[String], hints: &[String], selected: usize, enabled: &[bool], locked: bool,
+    off_note: String, pick: impl Fn(&mut T, usize, &mut Window, &mut Context<T>) + Clone + 'static, fill: bool, cx: &mut Context<T>)
     -> AnyElement {
     let count = labels.len();
     let any = enabled.iter().any(|on| *on);
-    div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden()
-        .when(locked, |el| el.opacity(0.6))
+    segments_row(fill).when(locked, |el| el.opacity(0.6))
         .children(labels.iter().enumerate().map(|(n, label)| {
             // Opção que ainda não chegou não mostra escolha nenhuma: o padrão do web pareceria o estado do app.
             let on = n == selected && (any || locked);
-            let enabled = enabled.get(n).copied().unwrap_or(false);
+            let enabled = !locked && enabled.get(n).copied().unwrap_or(false);
             let pick = pick.clone();
-            Button::new(SharedString::from(format!("{id}-{n}")))
-                .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
-                    .foreground(if on { theme::accent_text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
-                // `small` dá ao rótulo o tamanho dos outros controles; o kit ignora `text_size` no rótulo.
-                .small().h(px(28.)).px(px(11.)).rounded(px(0.))
-                // Cor e fundo no próprio botão: vencem o estilo de desligado do kit, que apagava o texto a 50%.
-                .text_color(if on { theme::accent_text() } else if enabled { theme::muted() } else { theme::faint() })
-                .when(on, |el| el.bg(theme::accent_dim()))
-                .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
-                .disabled(!enabled).label(label.clone())
-                .when(!enabled && any, |el| el.tooltip(off_note.clone()))
+            segment_button(id, n, count, label, on, enabled, fill, cx)
+                .when(!enabled && any && !locked, |el| el.tooltip(off_note.clone()))
                 .when_some(hints.get(n).filter(|_| enabled), |el, hint| el.tooltip(hint.clone()).accessibility_label(hint.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| if enabled && !on { pick(this, n, window, cx) }))
         }))
         .into_any_element()
+}
+
+/// O seletor só para mostrar (as novidades): mesmas peças, sem clique.
+pub(crate) fn segments_preview(id: &'static str, labels: &[String], selected: usize, cx: &App) -> AnyElement {
+    let count = labels.len();
+    segments_row(true)
+        .children(labels.iter().enumerate().map(|(n, label)| segment_button(id, n, count, label, n == selected, true, true, cx).tab_stop(false)))
+        .into_any_element()
+}
+
+fn segments_row(fill: bool) -> Div {
+    div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden().when(fill, |el| el.w_full())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn segment_button(id: &str, n: usize, count: usize, label: &str, on: bool, enabled: bool, fill: bool, cx: &App) -> Button {
+    Button::new(SharedString::from(format!("{id}-{n}")))
+        .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
+            .foreground(if on { theme::accent_text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
+        // `small` dá ao rótulo o tamanho dos outros controles; o kit ignora `text_size` no rótulo.
+        .small().h(px(28.)).px(px(11.)).rounded(px(0.)).when(fill, |el| el.flex_1())
+        // Cor e fundo no próprio botão: vencem o estilo de desligado do kit, que apagava o texto a 50%.
+        .text_color(if on { theme::accent_text() } else if enabled { theme::muted() } else { theme::faint() })
+        .when(on, |el| el.bg(theme::accent_dim()))
+        .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
+        .disabled(!enabled).label(label.to_owned())
 }
 
 #[cfg(test)]
@@ -1211,6 +1283,16 @@ mod tests {
     fn general_search_finds_the_tray_option() {
         let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::General).expect("Geral na busca");
         assert!(rows.iter().any(|(row, _)| *row == "settings_tray"), "settings_tray fora da busca");
+    }
+
+    #[test]
+    fn guests_is_its_own_page_found_by_the_search() {
+        assert!(super::Page::sections().any(|page| page == super::Page::Guests), "Convidados fora da navegação");
+        let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Guests).expect("Convidados na busca");
+        assert!(rows.iter().any(|(row, _)| *row == "convidados_adicionar"));
+        // Saiu de dentro da Sincronização: a busca dela não aponta mais para os convidados.
+        let (_, sync) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Sync).expect("Sincronização na busca");
+        assert!(!sync.iter().any(|(row, _)| row.starts_with("convidados_")));
     }
 
     #[test]

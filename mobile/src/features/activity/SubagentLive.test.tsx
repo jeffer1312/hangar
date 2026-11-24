@@ -35,8 +35,12 @@ vi.mock('../../stores/servers', () => ({ useServers: (select: (s: typeof servers
 vi.mock('../../stores/aparencia', () => ({ useAparencia: (select: (s: unknown) => unknown) => select({ pensamentoTools: 'busca', ferramentas: 'tree', tarefas: false }) }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {}, remove: () => {} }) }));
 vi.mock('../../stores/chat', () => ({ chatStore: {} }));
-vi.mock('expo-router', () => ({ useFocusEffect: () => {} }));
+vi.mock('expo-router', () => ({ useFocusEffect: () => {}, useRouter: () => ({ push: vi.fn() }) }));
+// O aviso do Claude abre a folha do conserto, que importa a folha nativa.
+vi.mock('../../ui/Sheet', () => ({ Sheet: () => null }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
+// A lista leva a galeria e o salto da conversa, que avisam por toast; o sonner-native puxaria o react-native de verdade.
+vi.mock('../../ui/Toast', () => ({ toast: { ok: () => {}, erro: () => {} } }));
 // Ramos fora deste fluxo não montam; a lista, bolha e miniatura usadas abaixo são reais.
 vi.mock('../../chat/AssistantBubble', () => ({ AssistantBubble: () => null, mkMarkdownStyle: () => ({}), mkMutedMarkdownStyle: () => ({}) }));
 vi.mock('../../chat/BubbleActions', () => ({ BubbleActions: () => null }));

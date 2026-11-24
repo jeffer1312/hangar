@@ -8,6 +8,8 @@ use gpui_kit::component::{progress::Progress, switch::Switch};
 use serde::Deserialize;
 use serde_json::Map;
 
+mod table;
+
 /// Opções do Claude no `/api/config`, na ordem do card: (chave, rótulo, ajuda), textos do web.
 const CLAUDE_OPTIONS: [(&str, &str, &str); 2] = [
     ("claude_statusline_update", "harness_claude_statusline_atualizar", "harness_claude_statusline_ajuda"),
@@ -200,6 +202,10 @@ pub(in crate::app) struct Harnesses {
     codex_options_seq: u64,
     codex_options_toggling: bool,
     codex_options_error: Option<String>,
+    /// O agente cujo painel está aberto ao lado da tabela.
+    selected: Option<String>,
+    /// Consertos que o "Copiar para todos" ainda vai rodar, um por vez.
+    bulk: std::collections::VecDeque<(String, String, String)>,
 }
 
 pub(super) enum HarnessReply {
@@ -240,8 +246,8 @@ fn explained(item: &Item, cli: &str) -> bool {
     match item.id.as_str() {
         "credenciais" => ["codex", "pi", "omp", "kimi"].contains(&cli) && item.conserto.as_deref().is_some_and(|c| c.starts_with("sync:")),
         "extensoes" => ["pi", "omp"].contains(&cli),
-        "skills" => ["pi", "kimi"].contains(&cli),
-        "hooks" => ["claude", "kimi"].contains(&cli),
+        "skills" => ["pi", "kimi", "antigravity"].contains(&cli),
+        "hooks" => ["claude", "kimi", "antigravity"].contains(&cli),
         "contas" => cli == "claude",
         _ => false,
     }
@@ -598,7 +604,9 @@ impl Hangar {
                         Err(error)
                     }
                 };
+                let ok = outcome.is_ok();
                 if let Some(repair) = &mut self.harness.repair { repair.outcome = Some(outcome); }
+                self.continue_bulk(ok, cx);
             }
             HarnessReply::Install(seq, cli, result) => {
                 let h = &mut self.harness;
@@ -955,7 +963,7 @@ impl Hangar {
                 }))));
         let mut page = div().flex().flex_col().gap_4().child(title)
             .child(self.mark(div().rounded(px(6.)).text_sm().text_color(theme::muted()).whitespace_normal()
-                .child(tr("harness_legend")), "harness_legend"));
+                .child(tr("agents_subtitle")), "agents_subtitle"));
         if self.api.is_none() {
             return page.child(div().text_sm().text_color(theme::muted()).child(tr("settings_offline"))).into_any_element();
         }
@@ -978,36 +986,9 @@ impl Hangar {
         if list.is_empty() {
             return page.child(div().text_sm().text_color(theme::muted()).child(tr("harness_empty"))).into_any_element();
         }
-        let cards: Vec<Div> = list.iter().map(|h| {
-            let bad = h.instalado && h.itens.iter().any(|i| i.ok == Some(false));
-            let dot = if !h.instalado { theme::faint() } else if bad { theme::danger() } else { theme::success() };
-            let glyph = if h.id == "tmux" {
-                div().size(px(22.)).flex_shrink_0().rounded(px(4.)).bg(theme::raised()).flex().items_center().justify_center()
-                    .text_size(px(12.)).font_weight(FontWeight::BOLD).text_color(theme::muted()).child("⌗")
-            } else { chrome::provider_glyph(&h.id, 22.) };
-            let version = if h.instalado { h.versao.clone().filter(|v| !v.is_empty()).unwrap_or_else(|| tr("harness_installed")) }
-                else { tr("harness_not_installed") };
-            // Desfecho de um item que sumiu depois do conserto (deixou de se aplicar): fica no card.
-            let orphan = self.harness.repair.as_ref().filter(|r| r.cli == h.id && r.outcome.is_some() && !h.itens.iter().any(|i| i.id == r.item));
-            settings_box().p_3().gap_1().when(!h.instalado, |el| el.opacity(0.7))
-                .child(div().flex().items_center().gap_2().pb(px(4.))
-                    .child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(dot))
-                    .child(glyph)
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(h.nome.clone()))
-                    .child(div().min_w_0().truncate().text_sm().text_color(theme::muted()).font_family(theme::MONO).child(version)))
-                .children(h.itens.iter().map(|item| self.render_harness_item(&h.id, item, cx)))
-                .children(orphan.map(|r| repair_line(r, &item_label(&r.item))))
-                .when(h.id == "claude", |el| el.child(self.claude_options(cx)))
-                .when(h.id == "codex", |el| el.child(self.codex_integration(cx)))
-                .when(h.id == "codex" && h.instalado, |el| el.child(self.codex_options(cx)))
-                .children((!h.instalado).then(|| self.install_offer(h, cx)).flatten())
-                .children(self.harness.install_error.as_ref().filter(|(owner, _)| owner.as_deref() == Some(h.id.as_str()))
-                    .map(|(_, error)| install_alert(error)))
-                .children(self.install_progress(&h.id))
-        }).collect();
         let loose = self.harness.install_error.as_ref()
             .filter(|(owner, _)| !owner.as_ref().is_some_and(|o| list.iter().any(|h| h.id == *o))).map(|(_, error)| install_alert(error));
-        page.child(div().flex().flex_col().gap_3().children(cards)).children(loose).into_any_element()
+        page.child(self.render_agents(list, cx)).children(loose).into_any_element()
     }
 
     /// CLI ausente: botão quando o servidor tem comando conferido para este sistema, senão o endereço do fornecedor.

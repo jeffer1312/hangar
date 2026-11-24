@@ -1,8 +1,9 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { Sheet } from '../ui/Sheet';
+import { PortsSheet } from './PortsSheet';
 import { Icon, type IconName } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 import { superficie } from '../theme/superficie';
@@ -18,6 +19,8 @@ interface Props {
   name: string;
   /** Recicla o processo da sessão Claude sem terminal (relê MCP/hooks/settings). Ausente = não se aplica. */
   recarregar?: { bloqueado: boolean; onPress: () => void };
+  /** Terminal ⇄ sem terminal na mesma conversa (Claude e Codex); o rótulo é o destino, tirado de `semTerminal`. */
+  trocarModo?: { bloqueado: boolean; trocando?: boolean; onPress: () => void };
   /** Linha do orquestrador: sem pane nem entrada, então Terminal, resposta e anexos não têm o que abrir;
    *  o grupo é montado pelo orq, então parear à mão também sai. */
   orq?: boolean;
@@ -37,10 +40,12 @@ type Item = {
   disabled?: boolean;
 };
 
-export function MoreSheet({ open, onClose, serverId, name, recarregar, orq, provider, semTerminal, temPergunta }: Props) {
+export function MoreSheet({ open, onClose, serverId, name, recarregar, trocarModo, orq, provider, semTerminal, temPergunta }: Props) {
   const { theme } = useUnistyles();
   const router = useRouter();
   const afterDismiss = useRef<(() => void) | null>(null);
+  // `null` até o primeiro toque: a folha das portas só monta quando é aberta.
+  const [portsOpen, setPortsOpen] = useState<boolean | null>(null);
   const canShare = useServers(s => s.servers.some(server => server.id === serverId && !server.invite && !server.removed));
   const chat = chatStore(serverId, name);
   const surface = chat.use(s => s.pluginUi);
@@ -73,7 +78,20 @@ export function MoreSheet({ open, onClose, serverId, name, recarregar, orq, prov
     { icon: 'Folder', label: m.arq_aba(), sub: m.ctx_repositorio(), route: 'files' },
     ...(canShare ? [{ icon: 'GitBranch' as IconName, label: m.sessao_git(), sub: m.chat_acao_git_detalhe(), route: 'git' }] : []),
     ...(orq || semTerminal ? [] : [{ icon: 'Terminal' as IconName, label: m.term_titulo(), sub: m.ctx_terminal(), route: 'terminal' }]),
-    ...(orq ? [] : [{ icon: 'Paperclip' as IconName, label: m.ctx_anexos(), sub: m.more_fotos_videos_arquivos(), route: 'attachments' }]),
+    // As portas só vêm na lista do dono.
+    ...(!orq && canShare ? [{ icon: 'Network' as IconName, label: m.mobile_ports_menu(), sub: m.mobile_ports_menu_sub(), route: 'ports',
+      onPress: () => setPortsOpen(true) }] : []),
+    // A rota é só do dono: convidado não troca o modo (como no nativo).
+    ...(!orq && canShare && trocarModo ? [{
+      icon: (semTerminal ? 'Terminal' : 'Cloud') as IconName,
+      label: semTerminal ? m.modo_abrir_no_terminal() : m.modo_continuar_sem_terminal(),
+      sub: trocarModo.trocando ? m.modo_trocando() : trocarModo.bloqueado ? m.modo_so_ociosa()
+        : semTerminal ? m.modo_abrir_no_terminal_detalhe() : m.modo_continuar_sem_terminal_detalhe(),
+      route: 'modo',
+      onPress: trocarModo.onPress,
+      disabled: trocarModo.bloqueado,
+    }] : []),
+    ...(orq ? [] : [{ icon: 'Paperclip' as IconName, label: m.media_title(), sub: m.more_fotos_videos_arquivos(), route: 'attachments' }]),
     ...(provider === 'codex' ? [{ icon: 'Gauge' as IconName, label: m.codex_limites_titulo(), sub: m.ctx_limites(), route: 'codex-limits' }] : []),
     ...(!orq && canShare && provider === 'claude' ? [{ icon: 'RefreshCw' as IconName, label: m.bastao_menu(), sub: m.conta_mesma_conversa_sub(), route: 'account' }] : []),
     { icon: 'Flag', label: m.bastao_dossie_titulo(), sub: m.bastao_dossie_sub(), route: 'bastao' },
@@ -89,6 +107,10 @@ export function MoreSheet({ open, onClose, serverId, name, recarregar, orq, prov
   };
 
   return (
+    <>
+    {portsOpen !== null ? (
+      <PortsSheet open={portsOpen} onClose={() => setPortsOpen(false)} serverId={serverId} name={name} />
+    ) : null}
     <Sheet open={open} sizes={['auto']} onDismiss={() => {
       const action = afterDismiss.current;
       afterDismiss.current = null;
@@ -119,6 +141,7 @@ export function MoreSheet({ open, onClose, serverId, name, recarregar, orq, prov
         ))}
       </View>
     </Sheet>
+    </>
   );
 }
 

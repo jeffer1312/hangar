@@ -28,6 +28,7 @@ pub(crate) fn journal_scope(path: &str) -> String {
     let mut parts = path.trim_start_matches("/api/").split('/');
     let kind = match parts.next() {
         Some("codex-contas") => "codex",
+        Some("antigravity-contas") => "antigravity",
         Some("cotas") => "cotas",
         _ => "claude",
     };
@@ -40,6 +41,7 @@ pub(crate) fn journal_scope(path: &str) -> String {
     }
 }
 pub fn matches(method: &Method, path: &str) -> bool {
+    if super::antigravity::matches(method, path) { return true; }
     if *method == Method::POST && path.strip_prefix("/api/codex-contas/")
         .and_then(|tail|tail.strip_suffix("/rate-limit-reset")).is_some_and(|id|!id.is_empty() && !id.contains('/')) {return true;}
     if *method == Method::GET && matches!(path, "/api/cotas" | "/api/cotas/sugestao" | "/api/credenciais") { return true; }
@@ -79,6 +81,9 @@ pub(super) fn error(error: AccountError) -> Response {
 pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    if super::antigravity::matches(&method, &path) {
+        return super::antigravity::public(state, request).await;
+    }
     let service = state.accounts.clone();
     // DELETE de um segmento é sempre exclusão: a conta pode se chamar login, prepare...
     let deletion = method == Method::DELETE

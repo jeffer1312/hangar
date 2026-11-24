@@ -125,8 +125,8 @@ impl Resolver {
     pub fn fd_locked(&self) -> &BTreeSet<String> { &self.fd_locked }
 }
 
-const EXEC_PROVIDER: [(&str, &str); 7] = [("pi", "pi"), ("omp", "omp"), ("claude", "claude"), ("kimi", "kimi"),
-    ("kimi-code", "kimi"), ("codex", "codex"), ("hangar-codex-tui", "codex")];
+const EXEC_PROVIDER: [(&str, &str); 8] = [("pi", "pi"), ("omp", "omp"), ("claude", "claude"), ("kimi", "kimi"),
+    ("kimi-code", "kimi"), ("codex", "codex"), ("hangar-codex-tui", "codex"), ("agy", "antigravity")];
 const PKG_PROVIDER: [(&str, &str); 1] = [("pi-coding-agent", "pi")];
 
 static SID: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(
@@ -151,7 +151,11 @@ pub fn provider_from_argv(argv: &[String]) -> Option<&'static str> {
     if let Some(p) = exec_provider(base) {
         return Some(p);
     }
-    // A integração roda no lançador antes de existir qualquer processo `codex`.
+    // A integração roda no lançador antes de existir qualquer processo `codex`: o subcomando do
+    // servidor e, nos panes da versão anterior, o script Python.
+    if base == "hangar-server" && argv.get(1).is_some_and(|a| a == "codex-tui") {
+        return Some("codex");
+    }
     if PYTHON.is_match(base) && argv.get(1).is_some_and(|a| a.replace('\\', "/").rsplit('/').next() == Some("hangar-codex-tui")) {
         return Some("codex");
     }
@@ -909,7 +913,11 @@ mod tests {
     fn provider_from_argv_cases() {
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(provider_from_argv(&v(&["/usr/bin/claude", "--session-id", "x"])), Some("claude"));
-        assert_eq!(provider_from_argv(&v(&["python3.14", "/x/hangar-codex-tui"])), Some("codex"));
+        assert_eq!(provider_from_argv(&v(&["python3.14", "/x/hangar-codex-tui"])), Some("codex"), "pane da versão anterior");
+        assert_eq!(provider_from_argv(&v(&["hangar-codex-tui", "--cwd", "/w"])), Some("codex"));
+        assert_eq!(provider_from_argv(&v(&["/h/.hangar/current/bin/hangar-server", "codex-tui", "--cwd", "/w"])), Some("codex"));
+        assert_eq!(provider_from_argv(&v(&["hangar-server", "open", "{}"])), None, "outro subcomando não é a abertura do Codex");
+        assert_eq!(provider_from_argv(&v(&["hangar-server"])), None);
         assert_eq!(provider_from_argv(&v(&["node", "/n/node_modules/@e/pi-coding-agent/dist/cli.js"])), Some("pi"));
         assert_eq!(provider_from_argv(&v(&["node", "mcp.js"])), None);
         assert_eq!(provider_from_argv(&[]), None);

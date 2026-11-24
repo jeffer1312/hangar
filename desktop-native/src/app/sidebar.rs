@@ -63,16 +63,30 @@ impl Target {
     pub(super) fn id(&self) -> String { format!("{}::{}", self.server, self.name) }
 }
 
-/// O servidor confere as guardas novamente; a tela só oferece uma origem identificável e parada.
-pub(super) fn transfer_source(session: &SessionInfo) -> Option<(&str, &str)> {
+/// Sessão Claude numa conta Anthropic, legível e sem troca em curso: o que a transferência e a troca de agente
+/// exigem da origem, e a identidade dela (vida e transcript) que vai no pedido.
+fn transfer_identity<'a>(session: &'a SessionInfo, phases_ok: &[&str]) -> Option<(&'a str, &'a str)> {
     if session.provider != "claude" || session.engine.as_deref().is_some_and(|e| !e.is_empty()) || session.uses_engine_account()
-        || session.read_only() || session.tracked == Some(false) || !matches!(session.state.as_str(), "idle" | "dead")
+        || session.read_only() || session.tracked == Some(false)
         || !session.conta.as_deref().is_some_and(|c| c.starts_with("claude:"))
-        || session.pending_questions != 0 || session.question.is_some() || session.options.as_ref().is_some_and(|o| !o.is_empty())
-        || session.transfer_phase.as_deref().is_some_and(|p| !matches!(p, "rejected" | "rolled_back")) { return None; }
+        || session.transfer_phase.as_deref().is_some_and(|p| !phases_ok.contains(&p)) { return None; }
     let life = session.lifecycle_id.as_deref().filter(|s| s.len() > 2 && (s.starts_with("k:") || s.starts_with("t:")))?;
     let jsonl = session.jsonl.as_deref().filter(|s| !s.is_empty())?;
     Some((life, jsonl))
+}
+
+/// Origem da troca de agente pelo seletor de modelos: a mesma da transferência, sem exigir a sessão parada. Com ela
+/// trabalhando ou esperando resposta, o servidor segura a fila e troca quando o turno acaba.
+pub(super) fn handoff_source(session: &SessionInfo) -> Option<(&str, &str)> {
+    if session.state == "dead" || session.handoff.as_ref().is_some_and(|h| h.state == hangar_api::session::HandoffState::Running) { return None; }
+    transfer_identity(session, &["rejected", "rolled_back", "complete"])
+}
+
+/// O servidor confere as guardas novamente; a tela só oferece uma origem identificável e parada.
+pub(super) fn transfer_source(session: &SessionInfo) -> Option<(&str, &str)> {
+    if !matches!(session.state.as_str(), "idle" | "dead") || session.pending_questions != 0 || session.question.is_some()
+        || session.options.as_ref().is_some_and(|o| !o.is_empty()) { return None; }
+    transfer_identity(session, &["rejected", "rolled_back"])
 }
 
 /// Estado de silenciar da sessão do menu aberto, lido de `GET /api/push/settings`.
@@ -112,7 +126,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename, Hide, Show, Reopen, Dismiss }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, Provider { label: String, request: hangar_api::session::ClaudeProviderSwitch }, DismissRename, AnotherRename, Hide, Show, Reopen, Dismiss }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -690,9 +704,11 @@ impl Hangar {
 
     pub(super) fn step_session(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
         if self.session_keys_blocked(window, cx) { return; }
-        let order = self.visible_order(cx);
+        let tabs = appearance::get().navigation.tabs();
+        let order = if tabs { self.tab_stops() } else { self.visible_order(cx) };
         if order.is_empty() { return; }
-        let current = self.selected_target().and_then(|t| order.iter().position(|o| *o == t));
+        let current = self.selected_target().map(|t| if tabs { self.tab_stop_of(&t) } else { t })
+            .and_then(|t| order.iter().position(|o| *o == t));
         let Some(next) = wrap_step(current, order.len(), step) else { return };
         self.select_target(&order[next], window, cx);
     }
@@ -881,10 +897,15 @@ impl Hangar {
     }
 
     pub(super) fn start_session_rename(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_session_rename_with(target, None, window, cx);
+    }
+
+    /// Renomear começando de `value` (a sugestão de nome que a pessoa quer mudar), sempre no diálogo.
+    pub(super) fn start_session_rename_with(&mut self, target: Target, value: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.target_session(&target).is_some_and(|s| !s.orq()) { return; }
         // No trilho a linha não tem onde mostrar o campo: vai ao diálogo, como o web com a barra recolhida.
-        let inline = appearance::get().navigation == appearance::Navigation::Sidebar && !self.rail();
-        let name = target.name.clone();
+        let inline = value.is_none() && appearance::get().navigation == appearance::Navigation::Sidebar && !self.rail();
+        let name = value.unwrap_or_else(|| target.name.clone());
         let input = cx.new(|cx| InputState::new(window, cx).default_value(name.clone()));
         let old = target.clone();
         let events = cx.subscribe_in(&input, window, move |this, _, event: &InputEvent, window, cx| match event {
@@ -909,6 +930,8 @@ impl Hangar {
             window.open_dialog(cx, move |dialog, window, cx| {
                 let value = input.read(cx).value().trim().to_owned();
                 let (busy, error) = { let s = status.borrow(); (s.sent.is_some(), s.error.clone()) };
+                // Outra troca de nome da mesma sessão em voo (a da sugestão, por exemplo) também segura o Renomear.
+                let busy = busy || weak.upgrade().is_some_and(|this| this.read(cx).sidebar.renaming.contains(&owner));
                 let (commit, cancel, close, owner) = (weak.clone(), weak.clone(), weak.clone(), owner.clone());
                 // Vazio ou igual ao atual não renomeia, e gravando não manda de novo: o botão fica desligado, como o do web.
                 let rename = Button::new("rename-ok").primary().label(tr("sidebar_rename")).disabled(busy || value.is_empty() || value == owner.name)
@@ -946,6 +969,19 @@ impl Hangar {
 
     fn commit_session_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = self.sidebar.editing.as_ref() else { return };
+        // A mesma regra do `rename_session_to`: com uma troca de nome em voo, outra sairia com o nome antigo. O diálogo fica
+        // aberto com o botão desligado; o campo da linha fecha sem enviar e avisa, para o nome digitado não sumir calado.
+        if self.sidebar.renaming.contains(&edit.target) {
+            if edit.inline {
+                let typed = edit.input.read(cx).value().trim().to_owned();
+                let unchanged = typed.is_empty() || typed == edit.target.name;
+                self.sidebar.editing = None;
+                self.root_focus.focus(window, cx);
+                cx.notify();
+                if !unchanged { window.push_notification(Notification::warning(tr("sidebar_rename_failed").replace("{n}", &tr("sidebar_rename_busy"))), cx); }
+            }
+            return;
+        }
         let new = edit.input.read(cx).value().trim().to_owned();
         let unchanged = new.is_empty() || new == edit.target.name;
         let old = edit.target.clone();
@@ -1049,6 +1085,7 @@ impl Hangar {
                 Write::Reopen => api.act(name, &["reopen"], None, false, crate::api::REOPEN_SECONDS).await,
                 Write::Dismiss => api.act(name, &["dismiss"], None, false, 15).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
+                Write::Provider { request, .. } => api.act(name, &["engine", "provider"], Some(json!(request)), false, crate::api::REOPEN_SECONDS).await,
             };
             tell.send(SidebarReply::Wrote(target, what, result)).await;
         });
@@ -1182,6 +1219,19 @@ impl Hangar {
 
     pub(super) fn confirm_engine_account(&mut self, target: Target, account: String, label: String, warn: Option<f64>, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm_account_choice(target, String::new(), Some(account), label, warn, window, cx);
+    }
+
+    pub(super) fn switch_claude_provider(&mut self, target: Target, label: String, request: hangar_api::session::ClaudeProviderSwitch, cx: &mut Context<Self>) -> bool {
+        let source = &request.source;
+        if self.sidebar.moving.contains_key(&target) || self.selected_target().as_ref() != Some(&target)
+            || !self.target_session(&target).is_some_and(|s| s.provider == "claude" && !s.read_only() && s.state == "idle"
+                && s.lifecycle_id.as_deref() == Some(source.lifecycle_id.as_str()) && s.jsonl.as_deref() == Some(source.jsonl.as_str()) && s.headless == source.headless
+                && s.engine == source.engine && s.engine_account == source.engine_account && s.engine_binding == source.engine_binding) {
+            return false;
+        }
+        self.sidebar.moving.insert(target.clone(), (std::time::Instant::now(), None));
+        self.write(target, Write::Provider { label, request }, cx);
+        true
     }
 
     fn confirm_account_choice(&mut self, target: Target, path: String, engine_account: Option<String>, label: String,
@@ -1422,7 +1472,7 @@ impl Hangar {
                 // Com status, o motivo do servidor; sem resposta, "falha na conexão". Nunca o texto de entrega de conversa, que o
                 // `failure` dá a um 5xx de POST.
                 let failed = |key: &str, error: &Failure| tr(key).replace("{n}", &Self::fetch_failure(error));
-                if matches!(what, Write::Account { .. }) {
+                if matches!(what, Write::Account { .. } | Write::Provider { .. }) {
                     if self.selected_target().as_ref() == Some(&target) {
                         // A lista que chegou durante a troca ficou de lado: agora ela decide (transcript novo ou sumiço).
                         if let Some(entry) = self.sidebar.moving.get_mut(&target) { entry.1 = Some(std::time::Instant::now()); }
@@ -1449,7 +1499,7 @@ impl Hangar {
                     _ => false,
                 };
                 let warnings = match (&what, &result) {
-                    (Write::Mode(_) | Write::Reload | Write::Account { .. }, Ok(value)) => super::controls::reopen_warnings(value),
+                    (Write::Mode(_) | Write::Reload | Write::Account { .. } | Write::Provider { .. }, Ok(value)) => super::controls::reopen_warnings(value),
                     _ => None,
                 };
                 let note = match (&what, result) {
@@ -1470,6 +1520,10 @@ impl Hangar {
                                 Some(focus) => focus.focus(window, cx),
                                 None => { self.root_focus.focus(window, cx); self.sidebar.focus_tab = Some(new.clone()); }
                             }
+                        } else if let Some(inline) = self.sidebar.editing.as_ref().filter(|e| e.target == target).map(|e| e.inline) {
+                            // Outra troca (a da sugestão) mudou o nome com a edição aberta: ela renomearia um nome que não existe mais.
+                            self.sidebar.editing = None;
+                            if inline { self.root_focus.focus(window, cx); } else { window.close_dialog(cx); }
                         }
                         let lost = self.sidebar.lost.as_ref() == Some(&target);
                         if lost { self.sidebar.lost = None; }
@@ -1504,7 +1558,8 @@ impl Hangar {
                         self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
                         Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label)))
                     }
-                    (Write::Account { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
+                    (Write::Account { .. } | Write::Provider { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
+                    (Write::Provider { label, .. }, Ok(_)) => Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label))),
                     (Write::AnotherRename, result) => {
                         self.rename_suggest.again.remove(&target);
                         result.err().map(|error| Notification::error(Self::fetch_failure(&error)))
@@ -1808,8 +1863,8 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
     // "Com resumo" abre o criar, travado na máquina dela; "A mesma conversa" leva esta conversa para a conta escolhida.
     let (baton_weak, baton_target, baton_cwd) = (hangar.clone(), target.clone(), session.cwd.clone());
     let (same_weak, same_target, idle) = (hangar.clone(), target.clone(), session.state == "idle");
-    // Só Claude e Codex trocam de modo, e só parados (o backend responde 409 fora disso); o rótulo é o destino.
-    let mode = matches!(session.provider.as_str(), "claude" | "codex").then(|| {
+    // Só quem tem as duas superfícies troca de modo, e só parado (o backend responde 409 fora disso); o rótulo é o destino.
+    let mode = super::create::has_surfaces(&session.provider).then(|| {
         let label = web(if session.headless { "modo_abrir_no_terminal" } else { "modo_continuar_sem_terminal" });
         let idle = session.state == "idle";
         let label = if idle { label } else { format!("{label} · {}", web("modo_so_ociosa")) };
@@ -2202,6 +2257,7 @@ impl Hangar {
         // O trilho não tem largura para o selo: a marca vai na dica e no que o leitor de tela diz.
         if session.asleep { tip.push_str(&format!(" · {}", tr_shared("session_asleep_badge", &[]))); }
         if session.orq() { tip.push_str(&format!(" · {}", tr_shared("orq_row_badge", &[]))); }
+        if let Some((text, _)) = self.work_review_badge(&target.server, &session.name) { tip.push_str(&format!(" · {text}")); }
         let status = self.nav_avatar(format!("rail-mark-{row_key}"), session_look(&session), 24.);
         let tip_text = tip.clone();
         let el = div().id(SharedString::from(format!("rail-{row_key}"))).relative().flex_shrink_0().w_full().min_h(px(44.)).pt(px(3.))

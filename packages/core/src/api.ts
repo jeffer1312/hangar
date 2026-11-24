@@ -2,7 +2,7 @@ import { apiEnv, type EventSourceLike } from './apiEnv';
 import type { Server } from './servers';
 import { isOwnMachine } from './machineImport';
 import { baseOf, decidirRota, rotaDecidida, UNCONFIRMED_BASE } from './rota';
-import type { CodexAccount, CodexIntegracaoEstado, CodexLoginAttempt, CodexResetOutcome, Credencial } from './credenciais';
+import type { AntigravityAccounts, CodexAccount, CodexIntegracaoEstado, CodexLoginAttempt, CodexResetOutcome, Credencial } from './credenciais';
 import * as m from './paraglide/messages';
 import { localeAtual } from './i18n';
 import { basename } from './format';
@@ -29,7 +29,6 @@ import type {
   UpdateNews,
   NewsHistory,
   Manual,
-  MigrationStatus,
   SessionInfo,
   Provider,
   ChatEvent,
@@ -121,9 +120,9 @@ export function fileUrl(name: string, path: string, download = false, server?: S
 
 // URL nativa (sem token na query) — para WebView/Image nativo que manda Authorization header.
 // PWA/browser continua no fileUrl com ?token porque <img> não manda header.
-export function fileUrlNative(name: string, path: string, server?: Server): string {
+export function fileUrlNative(name: string, path: string, server?: Server, width?: number): string {
   const base = server ? baseOf(server) : apiEnv().getBaseUrl();
-  return `${base}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`;
+  return `${base}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}${width ? `&w=${width}` : ''}`;
 }
 
 // Header Authorization para caminho nativo (mesmo token do fileUrl, mas só no header).
@@ -138,9 +137,9 @@ export function uploadUrl(name: string, filename: string, download = false, serv
   return `${server ? baseOf(server) : apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}${download ? '&download=1' : ''}${width ? `&w=${width}` : ''}`;
 }
 
-export function uploadUrlNative(name: string, filename: string, server?: Server): string {
+export function uploadUrlNative(name: string, filename: string, server?: Server, width?: number): string {
   const base = server ? baseOf(server) : apiEnv().getBaseUrl();
-  return `${base}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}`;
+  return `${base}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}${width ? `?w=${width}` : ''}`;
 }
 
 // Par nativo do transcriptImageUrl: o token vai no header (fileAuthHeader), nunca na URL.
@@ -231,7 +230,7 @@ async function ensureOk(res: Response, server?: Server | null): Promise<void> {
 //    `/api/claude-configs/<nome>` é o rótulo da conta. O diário promete, no topo do lib/diag.ts,
 //    não guardar caminho de arquivo do projeto — e sem `archive` nesta lista ele guardava, em toda
 //    retomada de conversa arquivada (é POST, então entra mesmo dando certo).
-const SEGMENTOS_OPACOS = /\/(sessions|servers|agents|archive|claude-configs|projects|codex-contas|conta-estado)\/[^/]+/g;
+const SEGMENTOS_OPACOS = /\/(sessions|servers|agents|archive|claude-configs|projects|codex-contas|antigravity-contas|conta-estado)\/[^/]+/g;
 
 // Id de entrada da fila; `reorder` é rota fixa e fica.
 const ID_DA_FILA = /\/queue\/(?!reorder(?:\/|$))[^/]+/g;
@@ -271,13 +270,14 @@ async function sessionFetch<T>(server: Server | null | undefined, path: string, 
 // quem precisa do STATUS ou de um header — hoje o histórico condicional (304 + ETag), que não tem
 // corpo pra desserializar e cujo status não é erro. O diário e o rastreio de "sem rede/voltou"
 // ficam aqui: um fetch escrito à mão sairia do registro sem ninguém notar.
-function ensureConfirmedRoute(base: string): void {
+export function ensureConfirmedRoute(base: string): void {
   if (base === UNCONFIRMED_BASE) {
     throw Object.assign(new Error(m.mobile_machines_identity_unconfirmed()), { status: 409, code: 'server_identity_unconfirmed' });
   }
 }
 
-async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false, countsOutage = true, fetcher: typeof fetch = fetch): Promise<Response> {
+// `countsOutage: 'network'`: só a falha de rede esfria; o prazo estourado é o link lento de quem envia.
+async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false, countsOutage: boolean | 'network' = true, fetcher: typeof fetch = fetch): Promise<Response> {
   // Durante a espera, só uma verificação explícita pode antecipar a nova tentativa. O ativo e a
   // máquina de um chat aberto não esperam: o prazo pode ter sido gravado antes de o chat abrir.
   // Vem antes da rota: decidir a rota já sonda todos os endereços da máquina.
@@ -351,7 +351,7 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
       if (poll) _semRede.add(`${destino}|${rota}`);
       if (typeof e === 'object' && e !== null) _semResposta.add(e);
       // Só falha de REDE esfria (o `isAbortError` acima já tirou o cancelamento de quem chamou).
-      if (server && countsOutage) registrarFalha(server.id);
+      if (server && countsOutage && !(countsOutage === 'network' && timedOut)) registrarFalha(server.id);
     }
     throw e;
   }
@@ -627,6 +627,15 @@ export async function confirmarNavForServer(s: Server, name: string): Promise<vo
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
+// Cancela a troca de agente que espera o turno acabar; 409 quando ela já começou ou não existe mais.
+export async function cancelHandoffForServer(s: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/conta`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(8000),
+  }, s);
+  if (!res.ok) throw new Error(await errorDetail(res));
+}
+
 // Custo de UM servidor (baseUrl+token explicitos), sem mexer no ativo. Igual fetchSessionsForServer:
 // a visao agregada chama todos em paralelo; um servidor lento/offline falha rapido (timeout 4s) e e
 // pulado, sem segurar os demais.
@@ -797,41 +806,93 @@ export async function uploadFileForServer(
   // Ditado: mesmo motivo do `audioOnly` do `uploadFile`.
   opts?: { audioOnly?: boolean },
 ): Promise<{ path: string }> {
-  return postUpload(s, name, file, opts?.audioOnly === true, file);
+  return postUpload(s, name, file, opts?.audioOnly ? '?audio_only=1' : '', file);
 }
 
+export type DiskUpload = { path: string; media?: 'pending'; media_id?: string };
+
 // Arquivo que já está no disco do aparelho: `send` o sobe direto de lá. No celular o fetch leria o
-// arquivo inteiro para a memória do JS, e um arquivo grande derruba o app.
+// arquivo inteiro para a memória do JS, e um arquivo grande derruba o app. Vídeo volta com
+// `media_id`: o envio nativo desiste com 60 s sem resposta, e quadros mais fala passam disso.
 export function uploadFromDiskForServer(
   s: Server,
   name: string,
-  file: { name: string; type: string },
+  file: { name: string; type: string; size?: number },
   send: typeof fetch,
-): Promise<{ path: string }> {
-  return postUpload(s, name, file, false, undefined, send);
+): Promise<DiskUpload> {
+  return postUpload(s, name, file, '?media=later', undefined, send);
+}
+
+// Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em "enviando…"
+// pra sempre; teto fixo cortava arquivo grande legítimo. O piso de velocidade é o de um link móvel ruim.
+export function uploadTimeoutMs(size: number | undefined): number {
+  return Math.max(180_000, Math.ceil((size ?? 0) / 50_000) * 1000);
 }
 
 async function postUpload(
   s: Server,
   name: string,
-  file: { name: string; type: string },
-  audioOnly: boolean,
+  file: { name: string; type: string; size?: number },
+  query: string,
   body: RequestInit['body'],
   send?: typeof fetch,
-): Promise<{ path: string }> {
-  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${audioOnly ? '?audio_only=1' : ''}`, {
+): Promise<DiskUpload> {
+  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload${query}`, {
     method: 'POST',
     headers: {
       'Content-Type': file.type || 'application/octet-stream',
       'X-Filename': encodeURIComponent(file.name || 'arquivo'),
     },
     body,
-    // Sem teto, uma foto grande num link ruim (tablet em relay) deixava o composer preso em
-    // "enviando…" pra sempre. 3min cobre upload legítimo lento; estourou -> erro visível + retry.
-    signal: AbortSignal.timeout(180_000),
-  }, s, false, true, send);
+    signal: AbortSignal.timeout(uploadTimeoutMs(file.size)),
+  }, s, false, 'network', send);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
-  return res.json() as Promise<{ path: string }>;
+  return res.json() as Promise<DiskUpload>;
+}
+
+// Teto do tempo SEM resposta do servidor. `pending` renova: a fila de vídeos no servidor é finita, e
+// contá-la deixava o segundo vídeo longo sem quadros nem fala.
+const MEDIA_UNANSWERED_MS = 3 * 60_000;
+
+/** Quadros e fala de um vídeo subido com `media_id`. `null` quando não vêm (falha, servidor
+ *  reiniciado, servidor sem responder): quem chama segue só com o vídeo, como o desktop quando a
+ *  transcrição falha. `signal` abortado (anexo removido, tela fechada) rejeita com o motivo dele. */
+export async function waitUploadMediaForServer(
+  s: Server,
+  name: string,
+  mediaId: string,
+  signal?: AbortSignal,
+): Promise<{ frames: string[]; transcript: string } | null> {
+  let deadline = Date.now() + MEDIA_UNANSWERED_MS;
+  // Sinal sem motivo (polyfill antigo) ainda tem que chegar como AbortError a quem decide pelo nome.
+  const cancelled = () => signal?.reason ?? new DOMException(undefined, 'AbortError');
+  // Cada pedido fica no servidor até a mídia ficar pronta ou ~45 s; só a falha espera do lado de cá.
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw cancelled();
+    // O teto vale para o pedido e para a pausa, não só para o começo de cada volta.
+    const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/upload-media?id=${encodeURIComponent(mediaId)}`, {
+      signal: comTeto(signal, Math.max(1, Math.min(60_000, deadline - Date.now()))),
+    }, s, false, false).catch(() => null);
+    // 4xx (sem registro, sem acesso, convite encerrado) não muda tentando de novo; rede caída, 5xx,
+    // 408 e 429 passam (app em segundo plano, troca de rede) enquanto o servidor guarda o resultado.
+    if (res && res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) return null;
+    const body = res?.ok ? await res.json().catch(() => null) as { status?: string; frames?: string[]; transcript?: string } | null : null;
+    if (signal?.aborted) throw cancelled();
+    if (body?.status === 'done') return { frames: body.frames ?? [], transcript: body.transcript ?? '' };
+    if (body?.status === 'pending') {
+      deadline = Date.now() + MEDIA_UNANSWERED_MS;
+      continue;
+    }
+    const left = deadline - Date.now();
+    if (left > 0) {
+      await new Promise<void>((resolve) => {
+        const stop = () => { clearTimeout(timer); resolve(); };
+        const timer = setTimeout(() => { signal?.removeEventListener('abort', stop); resolve(); }, Math.min(2000, left));
+        signal?.addEventListener('abort', stop, { once: true });
+      });
+    }
+  }
+  return null;
 }
 
 // Opções do ditado que viajam na query do /transcribe. `estilo` é o que a PILL mostrava na hora de
@@ -1033,9 +1094,10 @@ export interface CreateSessionBody {
   // Jev no `hangar-preview objetivo`: ligado, a sessão nasce com a chave no ambiente. Escolha da
   // abertura — é assim que se roda a mesma tarefa com e sem, sem apagar a configuração.
   jev?: boolean;
-  // Conta ChatGPT do CLIProxyAPI local (só Claude com motor) e Fast (`priority`) da sessão nova.
+  // Conta ChatGPT do CLIProxyAPI local (só Claude com motor) e Fast (`priority`) ou Ultra Fast da sessão nova.
   engine_account?: string;
-  service_tier?: 'default' | 'priority';
+  engine_binding?: string;
+  service_tier?: ServiceTier;
   // Plugins e skills só desta sessão: a diferença do padrão do catálogo (só Claude, sessão nova).
   claude_customizations?: ClaudeCustomizationDelta;
   // Branch já existente (local ou remota) em que a sessão nasce; vazio = a atual da pasta.
@@ -1273,8 +1335,8 @@ export interface ClaudeDefaultsBody { model?: string | null; effort?: string | n
 export interface SessionDefaults { model: string; effort: string; permission: string }
 
 export async function getSessionDefaultsForServer(server: Server, provider: Provider, engine?: string | null,
-  signal?: AbortSignal): Promise<SessionDefaults | null> {
-  const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}) });
+  signal?: AbortSignal, engineAccount?: string | null): Promise<SessionDefaults | null> {
+  const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}), ...(engineAccount ? { engine_account: engineAccount } : {}) });
   const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server,
     `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) }).catch((e: { code?: string }) => {
     // Convidado não tem padrão salvo; a recusa não é falha de leitura, que travaria a criação.
@@ -1465,9 +1527,13 @@ export interface ModelOption {
   efforts?: string[];
   default_effort?: string | null;
   // Fast: no Codex vem como tier `priority`; no motor GPT do CLIProxyAPI local, como `supports_fast`.
+  // Ultra Fast: tier `ultrafast` no Codex (contas Pro); `supports_ultrafast` no motor com conta fixa Pro.
   service_tiers?: { id: string; hidden?: boolean }[];
   supports_fast?: boolean;
+  supports_ultrafast?: boolean;
 }
+
+export type ServiceTier = 'default' | 'priority' | 'ultrafast';
 
 // Orquestração: política de contas da máquina e papéis do grupo (tipos em ./orquestracao.ts).
 export async function getOrqPolitica(server?: Server | null): Promise<import('./orquestracao').OrqPolitica> {
@@ -1518,28 +1584,57 @@ export async function removerPapel(
 export async function modelOptions(
   provider: string, engine?: string | null, configDir?: string | null,
   codexAccount?: string | null, engineAccount?: string | null,
-): Promise<{ kind: string; reduced: boolean; models: ModelOption[]; supports_fast?: boolean; default?: string | null }> {
+): Promise<{ kind: string; reduced: boolean; models: ModelOption[]; supports_fast?: boolean; supports_ultrafast?: boolean; default?: string | null }> {
   return apiFetch(modelOptionsPath(provider, engine, configDir, codexAccount, engineAccount));
 }
 
-function modelOptionsPath(provider: string, engine?: string | null, configDir?: string | null, codexAccount?: string | null,
+// `account`: a conta Codex, ou no Antigravity o id de `/api/antigravity-contas` (`default` ou o nome da pasta).
+function modelOptionsPath(provider: string, engine?: string | null, configDir?: string | null, account?: string | null,
   engineAccount?: string | null): string {
   const q = new URLSearchParams({ provider });
   if (engine) q.set('engine', engine);
   if (configDir) q.set('config_dir', configDir);
-  if (provider === 'codex' && codexAccount) q.set('codex_account', codexAccount);
+  if (provider === 'codex' && account) q.set('codex_account', account);
+  if (provider === 'antigravity' && account) q.set('conta', account);
   // O catálogo de um motor do CLIProxyAPI depende da conta ChatGPT escolhida.
   if (provider === 'claude' && engine && engineAccount) q.set('engine_account', engineAccount);
   return `/api/model-options?${q}`;
 }
 
 export function modelOptionsForServer(server: Server, provider: string, engine?: string | null,
-  configDir?: string | null, codexAccount?: string | null, signal?: AbortSignal, engineAccount?: string | null): ReturnType<typeof modelOptions> {
-  return apiFetchForServer(server, modelOptionsPath(provider, engine, configDir, codexAccount, engineAccount), { signal: comTeto(signal, 8000) });
+  configDir?: string | null, account?: string | null, signal?: AbortSignal, engineAccount?: string | null): ReturnType<typeof modelOptions> {
+  // O `agy models` da conta leva até 20 s no servidor antes de desistir.
+  const timeout = provider === 'antigravity' ? 30_000 : 8000;
+  return apiFetchForServer(server, modelOptionsPath(provider, engine, configDir, account, engineAccount), { signal: comTeto(signal, timeout) }, timeout);
 }
 
-export function getCredentialsForServer(server: Server, force = false, signal?: AbortSignal): Promise<Credencial[]> {
-  return apiFetchForServer(server, `/api/credenciais${force ? '?forcar=true' : ''}`, { signal: comTeto(signal, 8000) });
+export interface ClaudeProviderTarget {
+  engine: string;
+  engine_account: string;
+  engine_binding: string;
+}
+
+export interface ClaudeProviderSource {
+  lifecycle_id: string;
+  jsonl: string;
+  headless: boolean;
+  engine: string | null;
+  engine_account: string | null;
+  engine_binding: string | null;
+}
+
+export async function claudeProviderModels(server: Server, target: ClaudeProviderTarget, signal?: AbortSignal): Promise<ModelOption[]> {
+  const q = new URLSearchParams({ provider: 'claude', ...target });
+  const response = await apiFetchForServer<ClaudeProviderTarget & { models: ModelOption[] }>(server, `/api/model-options?${q}`, { signal: comTeto(signal, 20_000) }, 20_000);
+  if (response.engine !== target.engine || response.engine_account !== target.engine_account || response.engine_binding !== target.engine_binding) {
+    throw new Error('claude_provider_changed');
+  }
+  return response.models;
+}
+
+export function getCredentialsForServer(server: Server, force = false, signal?: AbortSignal, proxyAccounts = false): Promise<Credencial[]> {
+  const query = new URLSearchParams({ ...(force ? { forcar: 'true' } : {}), ...(proxyAccounts ? { proxy_accounts: 'true' } : {}) }).toString();
+  return apiFetchForServer(server, `/api/credenciais${query ? `?${query}` : ''}`, { signal: comTeto(signal, 8000) });
 }
 export function listarCredenciais(server: Server | null, force = false): Promise<Credencial[]> {
   return server ? getCredentialsForServer(server, force) : apiFetch(`/api/credenciais${force ? '?forcar=true' : ''}`);
@@ -1618,6 +1713,19 @@ export function consumeCodexRateLimitReset(
     method: 'POST',
     body: JSON.stringify({ credit_id: creditId, idempotency_key: idempotencyKey }),
   });
+}
+// Contas Google do Antigravity. A lista roda o `agy models` de cada conta no servidor (até 20 s cada, em paralelo).
+const ANTIGRAVITY_LIST_MS = 30_000;
+export function getAntigravityAccountsForServer(server: Server, signal?: AbortSignal): Promise<AntigravityAccounts> {
+  return apiFetchForServer(server, '/api/antigravity-contas', { signal: comTeto(signal, ANTIGRAVITY_LIST_MS) }, ANTIGRAVITY_LIST_MS);
+}
+/** Nome na regra do servidor: `[a-z0-9][a-z0-9_-]{0,31}`, sem `default`. */
+export function createAntigravityAccountForServer(server: Server, name: string): Promise<{ id: string; pasta: string }> {
+  return apiFetchForServer(server, '/api/antigravity-contas', { method: 'POST', body: JSON.stringify({ name }) });
+}
+/** Só conta adicional sem agy aberto nela; a padrão (~/.gemini) o servidor recusa. */
+export function deleteAntigravityAccountForServer(server: Server, id: string): Promise<{ ok: true }> {
+  return apiFetchForServer(server, `/api/antigravity-contas/${encodeURIComponent(id)}`, { method: 'DELETE' }, 30_000);
 }
 export function getRootsForServer(server: Server, signal?: AbortSignal): Promise<FsRoot[]> {
   return apiFetchForServer(server, '/api/fs/roots', { signal: comTeto(signal, 8000) });
@@ -2712,12 +2820,6 @@ export function getAtualizacao(procurar = false, fetcher?: typeof fetch): Promis
                   { signal: AbortSignal.timeout(procurar ? 120000 : 20000) }, fetcher);
 }
 
-/** Tela temporária "Migração para Rust": quem atende cada área, versões e consumo. */
-export function getMigrationStatus(s: Server | null = null): Promise<MigrationStatus> {
-  return s ? apiFetchForServer(s, '/api/migration/status', {}, 10000)
-           : apiFetch('/api/migration/status', { signal: AbortSignal.timeout(10000) });
-}
-
 function confirmUpdateStarted(value: unknown): { ok: boolean; pid: number; request_id?: string } {
   const response = value as { ok?: unknown; pid?: unknown; request_id?: unknown } | null;
   if (response?.ok !== true || typeof response.pid !== 'number' || !Number.isSafeInteger(response.pid) || response.pid <= 0) {
@@ -2833,8 +2935,8 @@ export async function putAutoReportEm(s: Server, value: boolean, fetcher?: typeo
   return res?.auto_report === true;
 }
 
-export function getIdentificadorEm(s: Server, fetcher?: typeof fetch): Promise<{ identificador: string; lan_url?: string }> {
-  return apiFetchForServer(s, '/api/peers/identificador', undefined, 8000, true, fetcher);
+export function getIdentificadorEm(s: Server, fetcher?: typeof fetch, timeoutMs = 8000): Promise<{ identificador: string; lan_url?: string }> {
+  return apiFetchForServer(s, '/api/peers/identificador', undefined, timeoutMs, true, fetcher);
 }
 
 /** O mesmo reinício, no servidor que a tela está editando (que pode não ser o ativo). */
@@ -2997,8 +3099,11 @@ export interface Motor {
   // Só em motor do CLIProxyAPI local: as contas ChatGPT do proxy, ou o motivo de não as ter lido.
   cliproxy_accounts?: CliProxyAccount[];
   cliproxy_error?: string;
+  cliproxy_binding?: string;
+  cliproxy_bound_account?: CliProxyAccount;
+  cliproxy_binding_error?: string;
 }
-export interface CliProxyAccount { account: string; credential_id: string; email: string; label: string; prefix?: string | null }
+export interface CliProxyAccount { account: string; credential_id: string; email: string; label: string; prefix?: string | null; binding?: string; plan?: string | null }
 export interface ModeloProvedor {
   id: string;
   context_length: number | null;
@@ -3007,6 +3112,7 @@ export interface ModeloProvedor {
 
 export interface EnginesResponse {
   motores: Record<string, Motor>;
+  claude_provider_switch?: boolean;
   // true quando engines.json existe mas não pôde ser lido (hand-edit quebrado, etc): a tela
   // precisa distinguir isto de "nenhum motor configurado" — as duas batem em `motores: {}`.
   arquivo_corrompido: boolean;
@@ -3080,6 +3186,79 @@ export interface CliproxyDeteccao {
   unnamed_accounts?: number | null;
   management_key_set?: boolean;
   naming_error?: string | null;
+  // Contas já logadas no proxy; `type` é o do registro dele (`codex`, `claude`…).
+  connected?: CliproxyAccount[];
+  install?: CliproxyInstall;
+}
+
+export interface CliproxyAccount { type: string; email: string; binding?: string | null; prefix?: string | null; plan?: string | null }
+
+export type CliproxyInstallStep = 'download' | 'config' | 'service' | 'start';
+
+export interface CliproxyJob {
+  // `adopt` = proxy de fora passando para o serviço do Hangar.
+  kind: 'install' | 'update' | 'adopt';
+  step: CliproxyInstallStep;
+  done: boolean;
+  error: { code: string; detail: string } | null;
+  outcome: 'installed' | 'configured' | 'updated' | 'adopted' | null;
+}
+
+// Se o proxy de fora pode passar para o Hangar; recusado, o código diz o motivo.
+export type CliproxyHandover = { ok: true } | { ok: false; code: string; detail: string };
+
+// `external` = proxy que o Hangar não instalou; `managed` = instalado por ele.
+export interface CliproxyInstall {
+  state: 'absent' | 'external' | 'managed';
+  // No `external`, a versão que o proxy anuncia (só com a senha de gerenciamento guardada).
+  version: string | null;
+  latest: string | null;
+  update_available: boolean;
+  running: boolean;
+  base_url?: string | null;
+  // Contas logadas no proxy.
+  accounts?: number | null;
+  // Sessões que a atualização ou a entrega cortariam.
+  sessions?: number | null;
+  // Só no `external`, fora de tarefa em curso.
+  handover?: CliproxyHandover | null;
+  job: CliproxyJob | null;
+}
+
+/** Só o estado da instalação, sem sondar modelos nem contas do proxy. */
+export function getCliproxyInstallForServer(s: Server, signal?: AbortSignal): Promise<CliproxyInstall> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/install', signal ? { signal } : undefined);
+}
+
+/** Sem `confirm`, sessões no proxy recusam com 409 `erro_cliproxy_sessoes_ativas` (`params.sessions`). */
+export function updateCliproxyForServer(s: Server, confirm = false): Promise<{ job: CliproxyJob | null }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/update', { method: 'POST', body: JSON.stringify({ confirm }) });
+}
+
+/** Passa o proxy de fora para o Hangar; a mesma confirmação da atualização quando há sessões nele. */
+export function adoptCliproxyForServer(s: Server, confirm = false): Promise<{ job: CliproxyJob | null }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/adopt', { method: 'POST', body: JSON.stringify({ confirm }) });
+}
+
+export type CliproxyLoginProvider = 'codex' | 'claude';
+export type CliproxyLoginState = { status: 'wait' | 'ok' | 'error'; error?: string; account?: CliproxyAccount | null };
+
+export function installCliproxyForServer(s: Server): Promise<{ job: CliproxyJob | null }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/install', { method: 'POST', body: '{}' });
+}
+
+export function startCliproxyLoginForServer(s: Server, provider: CliproxyLoginProvider): Promise<{ url: string; state: string }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/login', { method: 'POST', body: JSON.stringify({ provider }) });
+}
+
+export function getCliproxyLoginForServer(s: Server, state: string, signal?: AbortSignal): Promise<CliproxyLoginState> {
+  return apiFetchForServer(s, `/api/engines/cliproxy/login/${encodeURIComponent(state)}`, signal ? { signal } : undefined);
+}
+
+export function sendCliproxyLoginCallbackForServer(s: Server, state: string, redirect_url: string): Promise<{ status: 'sent' }> {
+  return apiFetchForServer(s, `/api/engines/cliproxy/login/${encodeURIComponent(state)}/callback`, {
+    method: 'POST', body: JSON.stringify({ redirect_url }),
+  });
 }
 
 export type CliproxyNomeacao = Required<Pick<CliproxyDeteccao, 'unnamed_accounts' | 'management_key_set' | 'naming_error'>>;
@@ -3090,6 +3269,11 @@ export function putCliproxyManagementKey(management_key: string): Promise<Clipro
 
 export function putCliproxyManagementKeyForServer(s: Server, management_key: string): Promise<CliproxyNomeacao> {
   return apiFetchForServer(s, '/api/engines/cliproxy/management-key', { method: 'PUT', body: JSON.stringify({ management_key }) });
+}
+
+/** O proxy guarda só o hash da senha de gerenciamento: o servidor troca por uma nova e a guarda. */
+export function resetCliproxyManagementKeyForServer(s: Server): Promise<{ status: 'reset'; applied?: boolean }> {
+  return apiFetchForServer(s, '/api/engines/cliproxy/management-key/reset', { method: 'POST' });
 }
 
 export function engineCliproxy(): Promise<CliproxyDeteccao> {
@@ -3134,9 +3318,7 @@ export function uploadFile(
     xhr.setRequestHeader('X-Hangar-Req', req);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name || 'arquivo'));
-    // Mesmo teto do uploadFileForServer: sem ele, uma foto grande num link ruim deixava o composer
-    // presto em "enviando…" pra sempre.
-    xhr.timeout = 180_000;
+    xhr.timeout = uploadTimeoutMs(file.size);
     xhr.upload.onprogress = (e) => {
       // `lengthComputable` é falso em algumas pontes (proxy que recodifica): aí não há fração pra
       // mostrar, e quem chama decide o que fazer com a ausência.
@@ -3378,8 +3560,9 @@ export function writeCitedFile(name: string, path: string, text: string, digest:
   });
 }
 
-// Visão "citados": quais caminhos citados existem (relativo resolvido) e quais não.
-export function resolverCitados(name: string, caminhos: string[], server?: Server | null): Promise<{ ok: Record<string, { relativo: string | null; real: string }>; faltam: string[] }> {
+// Visão "citados": quais caminhos citados existem (relativo resolvido) e quais não. `size` (bytes) e
+// `mtime` (epoch s) só vêm de servidor que já os mede: quem lê trata os dois como opcionais.
+export function resolverCitados(name: string, caminhos: string[], server?: Server | null): Promise<{ ok: Record<string, { relativo: string | null; real: string; size?: number; mtime?: number }>; faltam: string[] }> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/files/resolver`, { method: 'POST', body: JSON.stringify({ caminhos }) });
 }
 
@@ -3721,12 +3904,14 @@ export interface ModelOption {
   context_length?: number | null;  // so no motor
   vision?: boolean | null;         // so no motor
   supports_fast?: boolean;
+  supports_ultrafast?: boolean;
 }
 
 export interface ModelOptionsResponse {
   kind: 'claude' | 'engine';
   engine: string | null;
   supports_fast?: boolean;
+  supports_ultrafast?: boolean;
   effort?: string | null;
   models: ModelOption[];
   // O que vale na sessão agora: o sufixo `[1m]` do model diz se a janela de 1M está ligada.
@@ -3774,21 +3959,24 @@ function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
       // "Esta rota só existe pra Claude" é resposta FINAL pra esta sessão, não falha transitória:
       // cacheia a recusa pelo mesmo TTL. Sem isto cada montagem do Composer numa sessão Pi/Kimi
       // repetia o GET e o 400 (medido: 516 numa semana).
-      if ((e as { code?: string })?.code === 'erro_rota_so_claude') {
+      if ((_catEpoca.get(sessao) ?? 0) === epoca && (e as { code?: string })?.code === 'erro_rota_so_claude') {
         _catCache.set(key, { at: Date.now(), data: e, recusa: true });
       }
       throw e;
     })
-    .finally(() => { _catEmVoo.delete(key); });
+    .finally(() => { if (_catEmVoo.get(key) === p) _catEmVoo.delete(key); });
   _catEmVoo.set(key, p);
   return p;
 }
 
 // Troca aplicada (modelo/effort/permissão): a LISTA não muda, mas o default/atual pode — 60s de
 // cache velho num rótulo errado é pior que um GET a mais na próxima abertura.
-function _invalidarCatalogo(name: string): void {
+function _invalidarCatalogo(name: string, dropPending = false): void {
   _catEpoca.set(name, (_catEpoca.get(name) ?? 0) + 1);
   for (const k of _catCache.keys()) if (k.endsWith(`|${name}`)) _catCache.delete(k);
+  if (dropPending) {
+    for (const k of _catEmVoo.keys()) if (k.endsWith(`|${name}`)) _catEmVoo.delete(k);
+  }
 }
 
 export function getModelOptions(name: string, server?: Server | null, options?: { fresh?: boolean; refresh?: boolean }): Promise<ModelOptionsResponse> {
@@ -3813,8 +4001,16 @@ export function setEngineModel(
     }).then(withSessionWarnings);
 }
 
+export function switchClaudeProvider(server: Server, name: string, selection: ClaudeProviderTarget & { model: string; source: ClaudeProviderSource }): Promise<ClaudeProviderTarget & { ok: boolean; model: string; service_tier: 'default' }> {
+  _invalidarCatalogo(name);
+  return apiFetchForServer<ClaudeProviderTarget & { ok: boolean; model: string; service_tier: 'default' }>(server,
+    `/api/sessions/${encodeURIComponent(name)}/engine/provider`, {
+      method: 'POST', body: JSON.stringify(selection),
+    }, 720_000).then(withSessionWarnings).finally(() => _invalidarCatalogo(name, true));
+}
+
 // Fast da sessão viva (POST .../service-tier); `priority` liga, `default` volta ao padrão da conta.
-export function setServiceTier(name: string, tier: 'default' | 'priority', server?: Server | null): Promise<{ ok: boolean; service_tier: string }> {
+export function setServiceTier(name: string, tier: ServiceTier, server?: Server | null): Promise<{ ok: boolean; service_tier: string }> {
   _invalidarCatalogo(name);
   return sessionFetch<{ ok: boolean; service_tier: string }>(server, `/api/sessions/${encodeURIComponent(name)}/service-tier`, {
     method: 'POST',
@@ -4280,6 +4476,12 @@ export function stopTask(name: string, taskId: string, server?: Server | null): 
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/tasks/${encodeURIComponent(taskId)}/stop`, { method: 'POST' });
 }
 
+/** Para o servidor que escuta na porta da sessão; o servidor relê quem a segura. Recusas pelo `code`:
+ * `port_stop_not_found`, `port_stop_shared_group`, `port_stop_unsupported`. */
+export function stopPortServer(name: string, port: number, server?: Server | null): Promise<{ ok: boolean; result: 'gone' | 'terminated' | 'killed' }> {
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/ports/${port}/stop`, { method: 'POST' });
+}
+
 export function implementCodexPlan(name: string, server?: Server | null): Promise<void> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/plan/implement`, {
     method: 'POST',
@@ -4367,6 +4569,24 @@ export function setKimiModel(
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/kimi/model`, {
     method: 'POST',
     body: JSON.stringify(body),
+  });
+}
+
+// ── Modelo de uma sessão Antigravity ─────────────────────────────────────────────────────────
+// Lista do `agy models` da conta da sessão; o esforço vem no id (`gemini-4-neon-high`). A troca digita
+// `/model <id>` no terminal e devolve o modelo que ficou.
+
+export interface AntigravityModel { id: string; name: string }
+
+export function getAntigravityModels(name: string, server?: Server | null): Promise<{ models: AntigravityModel[]; current: string | null }> {
+  return _catalogo(`antigravity|${server?.id ?? ''}|${name}`, () => sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/antigravity/models`));
+}
+
+export function setAntigravityModel(name: string, model: string, server?: Server | null): Promise<{ ok: boolean; current: string }> {
+  _invalidarCatalogo(name);
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/antigravity/model`, {
+    method: 'POST',
+    body: JSON.stringify({ model }),
   });
 }
 
@@ -4801,4 +5021,93 @@ export function requestMermaid(
   signal?: AbortSignal,
 ): Promise<Response> {
   return apiFetchRes('/api/mermaid', { method: 'POST', body: JSON.stringify(body), signal }, server ?? undefined, false, false);
+}
+
+// WhatsApp só leitura do servidor (rotas do dono `/api/whatsapp*`). Erro vem com código `whatsapp_*`.
+export type WhatsAppService = 'running' | 'stopped' | 'absent';
+export type WhatsAppLinkState = 'unpaired' | 'pairing' | 'connected' | 'logged_out' | 'outdated';
+
+/** `error` aceito como texto ou `{code}`: o servidor já mandou dos dois jeitos. */
+export interface WhatsAppJob {
+  kind: 'install' | 'update' | string;
+  /** Ausente ou `null` conta como a primeira etapa. */
+  step?: string | null;
+  done: boolean;
+  error: string | { code: string } | null;
+  outcome?: unknown;
+}
+
+export interface WhatsAppTotals {
+  messages: number; chats: number; groups: number; media_saved: number; media_phone_only: number; media_lost: number;
+}
+
+export interface WhatsAppStatus {
+  api?: number;
+  version?: string;
+  state: WhatsAppLinkState | string;
+  error: string | { code: string } | null;
+  /** Número mascarado. */
+  device: string | null;
+  /** Como o aparelho aparece na lista do celular; binário antigo não manda. */
+  device_name?: string | null;
+  qr?: string | null;
+  qr_expires_at?: string | null;
+  pair_code: string | null;
+  pair_code_expires_at?: string | null;
+  tz?: string;
+  totals?: Partial<WhatsAppTotals>;
+  since: string | null;
+  last_message_at: string | null;
+}
+
+export interface WhatsAppState {
+  installed: boolean;
+  accepted_at: string | null;
+  service: WhatsAppService;
+  job: WhatsAppJob | null;
+  status: WhatsAppStatus | null;
+  qr_svg: string | null;
+  /** De pé: por que o `status` não veio. Parado: `whatsapp_schema_newer` quando os dados são de um binário mais novo. */
+  status_error?: string | null;
+}
+
+export function getWhatsApp(s: Server): Promise<WhatsAppState> {
+  return apiFetchForServer(s, '/api/whatsapp', undefined, 15_000);
+}
+
+/** Desvincular (logout, apagar) dá 30 s ao binário no servidor: a tela espera mais que isso. */
+const WHATSAPP_UNLINK_MS = 45_000;
+/** Remover soma o logout a parar, desregistrar e apagar o serviço. */
+const WHATSAPP_UNINSTALL_MS = 90_000;
+
+function postWhatsApp<T>(s: Server, path: string, body?: unknown, timeoutMs = 30_000): Promise<T> {
+  return apiFetchForServer(s, `/api/whatsapp/${path}`,
+    { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, timeoutMs);
+}
+
+/** O servidor recusa sem o aceite (`whatsapp_accept_required`); outro job em curso é `whatsapp_busy`. */
+export function installWhatsApp(s: Server): Promise<{ job: WhatsAppJob }> {
+  return postWhatsApp(s, 'install', { accept: true });
+}
+
+export function updateWhatsApp(s: Server): Promise<{ job: WhatsAppJob }> {
+  return postWhatsApp(s, 'update');
+}
+
+/** Com `phone` (só algarismos, com o código do país) o celular recebe um código; sem ele, o servidor gera o QR. */
+export function pairWhatsApp(s: Server, phone?: string): Promise<unknown> {
+  return postWhatsApp(s, 'pair', phone ? { phone } : undefined);
+}
+
+export function logoutWhatsApp(s: Server): Promise<void> {
+  return postWhatsApp(s, 'logout', undefined, WHATSAPP_UNLINK_MS);
+}
+
+/** `logout: 'not_done'`: o serviço estava parado e o aparelho continua na lista do celular. */
+export function wipeWhatsApp(s: Server): Promise<{ logout: 'done' | 'not_done' | 'not_paired' }> {
+  return postWhatsApp(s, 'wipe', { confirm: true }, WHATSAPP_UNLINK_MS);
+}
+
+export function uninstallWhatsApp(s: Server, logout: boolean): Promise<unknown> {
+  return postWhatsApp(s, 'uninstall', { confirm: true, logout }, WHATSAPP_UNINSTALL_MS);
 }

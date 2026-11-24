@@ -11,8 +11,9 @@ function overwriteGetLocale(fn: () => 'en' | 'pt') {
 }
 import { configureApi } from './apiEnv';
 // `getHistoryDesde` veio da main junto com o histórico condicional (304 + ETag).
-import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, transcribeUploaded, transcribeUploadedForServer, uploadFile, uploadFileForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
+import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, transcribeUploaded, transcribeUploadedForServer, uploadFile, uploadFileForServer, uploadFromDiskForServer, uploadTimeoutMs, waitUploadMediaForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
 import { createSessionForServer, getSessionDefaultsForServer, getFolderGitForServer, folderGitActionForServer, defaultBase, freshBase, baseChoices, commitsLeftOut, resumeArchivedConversation } from './api';
+import { logoutWhatsApp, uninstallWhatsApp, updateWhatsApp, wipeWhatsApp } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
 import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer, getNewChatCommandsForServer } from './api';
 import { fetchSessionsForServer, getSessions, openSessionsStream, probeServerResponse } from './api';
@@ -1011,6 +1012,98 @@ describe('transcribeFile', () => {
     ]);
   });
 
+  it('prazo do upload cresce com o tamanho, a partir de 180 s', () => {
+    expect(uploadTimeoutMs(undefined)).toBe(180_000);
+    expect(uploadTimeoutMs(1_000_000)).toBe(180_000);
+    expect(uploadTimeoutMs(100_000_000)).toBe(2_000_000);
+  });
+
+  it('upload do disco pede a mídia para depois e devolve o id dela', async () => {
+    const send = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(
+      { path: '/up/v.mp4', frames: [], transcript: '', media: 'pending', media_id: 'm1' }), { status: 200 }));
+    const saved = await uploadFromDiskForServer(server, 'sessao', { name: 'v.mp4', type: 'video/mp4', size: 10 }, send);
+    expect(send.mock.calls[0][0]).toBe('https://a.test/api/sessions/sessao/upload?media=later');
+    expect(saved).toMatchObject({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+  });
+
+  it('espera da mídia repete enquanto pendente e devolve quadros e fala', async () => {
+    const replies = [{ status: 'pending' }, { status: 'done', frames: ['/up/q1.jpg'], transcript: 'ola' }];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify(replies.shift()), { status: 200 }));
+    expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toEqual({ frames: ['/up/q1.jpg'], transcript: 'ola' });
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      'https://a.test/api/sessions/sessao/upload-media?id=m1',
+      'https://a.test/api/sessions/sessao/upload-media?id=m1',
+    ]);
+  });
+
+  it('espera da mídia tenta de novo depois de queda de rede e de erro do servidor', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      let calls = 0;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) throw new TypeError('Network request failed');
+        if (calls === 2) return new Response(JSON.stringify({ detail: { code: 'upload_facts_unavailable' } }), { status: 503 });
+        return new Response(JSON.stringify({ status: 'done', frames: [], transcript: 'ola' }), { status: 200 });
+      });
+      const waiting = waitUploadMediaForServer(server, 'sessao', 'm1');
+      await vi.runAllTimersAsync();
+      expect(await waiting).toEqual({ frames: [], transcript: 'ola' });
+      expect(calls).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('espera da mídia cancelada para o pedido em andamento e rejeita com o motivo', async () => {
+    const abort = new AbortController();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+    }));
+    const waiting = waitUploadMediaForServer(server, 'sessao', 'm1', abort.signal);
+    const reason = new DOMException('removido', 'AbortError');
+    abort.abort(reason);
+    await expect(waiting).rejects.toBe(reason);
+  });
+
+  it('espera da mídia para na hora em convite encerrado (410) e outros 4xx definitivos', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ detail: 'encerrado' }), { status: 410 }));
+    expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('espera da mídia devolve null para mídia desconhecida e para servidor sem responder além do teto', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ detail: { code: 'upload_media_unknown' } }), { status: 404 }));
+    expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        vi.setSystemTime(Date.now() + 4 * 60_000);
+        throw new TypeError('Network request failed');
+      });
+      expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('espera da mídia não desiste enquanto o servidor responde que ainda processa (fila de vídeos)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const replies = [{ status: 'pending' }, { status: 'pending' }, { status: 'done', frames: [], transcript: 'ola' }];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        vi.setSystemTime(Date.now() + 2 * 60_000);
+        return new Response(JSON.stringify(replies.shift()), { status: 200 });
+      });
+      expect(await waitUploadMediaForServer(server, 'sessao', 'm1')).toEqual({ frames: [], transcript: 'ola' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('falha de ?arquivo= leva o status', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(JSON.stringify({ detail: 'provedor fora' }), { status: 502 }));
@@ -1402,6 +1495,25 @@ describe('prazos e raiz explícita (sessão e git de pasta)', () => {
     expect(new URL(urls[0]).searchParams.get('root')).toBe('/home/a');
     expect(timeout).toHaveBeenCalledWith(30_000);
     expect(timeout).toHaveBeenCalledWith(150_000);
+  });
+});
+
+describe('prazos do WhatsApp', () => {
+  it('desvincular espera mais que os 30 s que o servidor dá ao binário', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'));
+    for (const unlink of [() => logoutWhatsApp(server), () => wipeWhatsApp(server)]) {
+      timeout.mockClear();
+      await unlink();
+      expect(timeout).toHaveBeenCalledExactlyOnceWith(45_000);
+    }
+    // Remover soma o logout a parar, desregistrar e apagar o serviço.
+    timeout.mockClear();
+    await uninstallWhatsApp(server, true);
+    expect(timeout).toHaveBeenCalledExactlyOnceWith(90_000);
+    timeout.mockClear();
+    await updateWhatsApp(server);
+    expect(timeout).toHaveBeenCalledExactlyOnceWith(30_000);
   });
 });
 

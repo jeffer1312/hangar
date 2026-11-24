@@ -11,6 +11,7 @@ const { memory, calls, failWrites } = vi.hoisted(() => ({
     send: vi.fn(),
     history: vi.fn(),
     upload: vi.fn(),
+    media: vi.fn(),
   },
 }));
 
@@ -40,8 +41,9 @@ vi.mock('@hangar/core', async (original) => ({
   sendInputForServer: calls.send,
   getHistory: calls.history,
   uploadFromDiskForServer: calls.upload,
+  waitUploadMediaForServer: calls.media,
 }));
-vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: (uri: string) => ({ fromDisk: uri }) }));
+vi.mock('../net/uploadFromDisk', () => ({ sendFromDisk: (uri: string) => ({ fromDisk: uri }), diskFileSize: async () => 4096 }));
 
 import { useServers } from './servers';
 import { readDraft, writeDraft } from './drafts';
@@ -405,8 +407,46 @@ describe('primeiro input', () => {
     const created = attempt()!;
     await sendFirstInput('server-a', created.id);
     expect(calls.upload).toHaveBeenCalledExactlyOnceWith(serverA, created.sessionName,
-      { name: 'pacote.zip', type: 'application/zip' }, { fromDisk: 'file:///docs/draft-attachments/1-1.zip' });
+      { name: 'pacote.zip', type: 'application/zip', size: 4096 }, { fromDisk: 'file:///docs/draft-attachments/1-1.zip' });
     expect(calls.send).toHaveBeenCalledExactlyOnceWith(serverA, created.sessionName, expect.stringContaining('/up/pacote.zip'));
+    expect(calls.media).not.toHaveBeenCalled();
+  });
+
+  it('vídeo escolhido antes da sessão espera a mídia e a primeira mensagem leva os quadros e a fala', async () => {
+    calls.upload.mockResolvedValue({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+    calls.media.mockResolvedValue({ frames: ['/up/q1.jpg'], transcript: 'oi\nvoce' });
+    const attachment = { uri: 'file:///docs/draft-attachments/1-1.mp4', name: 'v.mp4', mime: 'video/mp4', kind: 'file' as const };
+    await beginAttempt('server-a', { ...input, attachment });
+    const created = attempt()!;
+    await sendFirstInput('server-a', created.id);
+    expect(calls.media).toHaveBeenCalledExactlyOnceWith(serverA, created.sessionName, 'm1', undefined);
+    const sent = calls.send.mock.calls[0][2] as string;
+    expect(sent).toContain('/up/v.mp4 📎 ');
+    expect(sent).toContain('/up/q1.jpg');
+    expect(sent).toContain('oi voce');
+  });
+
+  it('vídeo removido do rascunho durante a espera da mídia não volta para ele', async () => {
+    calls.upload.mockResolvedValue({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+    const attachment = { uri: 'file:///docs/draft-attachments/1-1.mp4', name: 'v.mp4', mime: 'video/mp4', kind: 'file' as const };
+    await beginAttempt('server-a', { ...input, text: '', attachment });
+    const created = attempt()!;
+    calls.media.mockImplementation(async () => {
+      memory.delete(`draft.v1:server-a::${created.sessionName}`);
+      return { frames: ['/up/q1.jpg'], transcript: '' };
+    });
+    await sendFirstInput('server-a', created.id);
+    expect(readDraft('server-a', created.sessionName!)?.attachments ?? []).toEqual([]);
+  });
+
+  it('vídeo cuja mídia não vem manda só o caminho', async () => {
+    calls.upload.mockResolvedValue({ path: '/up/v.mp4', media: 'pending', media_id: 'm1' });
+    calls.media.mockResolvedValue(null);
+    const attachment = { uri: 'file:///docs/draft-attachments/1-1.mp4', name: 'v.mp4', mime: 'video/mp4', kind: 'file' as const };
+    await beginAttempt('server-a', { ...input, attachment });
+    const created = attempt()!;
+    await sendFirstInput('server-a', created.id);
+    expect(calls.send.mock.calls[0][2]).toMatch(/\/up\/v\.mp4$/);
   });
 
   it('persiste sessão antes do input; dois toques usam snapshot único e só ACK permite finalizar', async () => {

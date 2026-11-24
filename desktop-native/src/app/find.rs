@@ -81,7 +81,7 @@ pub(super) fn occurrences(text: &str, needle: &str) -> Vec<std::ops::Range<usize
 }
 
 /// A linha que mostra o evento `ix`: a mensagem, a ferramenta, o grupo ou o raciocínio que o contém.
-fn covers(item: &Item, ix: usize) -> bool {
+pub(super) fn covers(item: &Item, ix: usize) -> bool {
     match item {
         Item::Event(i) | Item::Orphan(i) => *i == ix,
         Item::Tool(tool) => tool.call == ix || tool.result == Some(ix),

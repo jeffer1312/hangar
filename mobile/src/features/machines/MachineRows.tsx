@@ -7,7 +7,7 @@ import { SectionCard } from '../config/SectionCard';
 import { useSettingsColors } from '../config/colors';
 import * as m from '../../paraglide/messages';
 
-export type MachineView = 'edit' | 'connection' | 'discover' | 'remote' | 'advanced' | 'identity' | 'terminal' | 'diagnostics' | 'peers' | 'maintenance' | 'tag';
+export type MachineView = 'edit' | 'connection' | 'discover' | 'remote' | 'advanced' | 'identity' | 'terminal' | 'diagnostics' | 'peers' | 'maintenance' | 'tag' | 'devices';
 
 export const MachineGroup = ({ children }: { children: ReactNode }) => <SectionCard>{children}</SectionCard>;
 

@@ -80,6 +80,10 @@ fn load(home: &Path) -> BTreeMap<String, Fallen> {
 
 /// Aplica `change` sob a trava; `true` dele grava o arquivo, ainda sob a trava.
 fn with<T>(home: &Path, change: impl FnOnce(&mut BTreeMap<String, Fallen>) -> (T, bool)) -> T {
+    with_persisted(home, change).0
+}
+
+fn with_persisted<T>(home: &Path, change: impl FnOnce(&mut BTreeMap<String, Fallen>) -> (T, bool)) -> (T, bool) {
     let mut guard = MAP.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if guard.as_ref().is_some_and(|(from, _)| from != home) { *guard = None; }
     let (_, map) = guard.get_or_insert_with(|| (home.to_owned(), load(home)));
@@ -90,9 +94,10 @@ fn with<T>(home: &Path, change: impl FnOnce(&mut BTreeMap<String, Fallen>) -> (T
             .and_then(|()| crate::runtime::queue::atomic_write(&path(home), &serde_json::to_vec_pretty(&stored)?));
         if let Err(error) = written {
             tracing::warn!(code = "fallen_unwritten", kind = ?error.kind(), "registro das sessões caídas não gravado; vale até o restart");
+            return (out, false);
         }
     }
-    out
+    (out, true)
 }
 
 pub fn get(home: &Path, name: &str) -> Option<Fallen> { with(home, |map| (map.get(name).cloned(), false)) }
@@ -110,6 +115,13 @@ pub fn insert_unless_forgotten(home: &Path, name: &str, since: std::time::Instan
         let changed = map.insert(name.to_owned(), fallen.clone()).as_ref() != Some(&fallen);
         (true, changed)
     })
+}
+
+pub(crate) fn remember_provider_switch(home: &Path, name: &str, fallen: Fallen) -> bool {
+    with_persisted(home, |map| {
+        map.insert(name.to_owned(), fallen);
+        ((), true)
+    }).1
 }
 
 pub fn remove(home: &Path, name: &str) -> Option<Fallen> {

@@ -1,0 +1,61 @@
+{
+ "case": "guard/log-dir-not-writable",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R1",
+ "hook": "guard_tmux.py",
+ "contract_refs": [
+  "R1-S14",
+  "H-53"
+ ],
+ "description": "",
+ "harness": {
+  "how": "$PY -B -s $REF/backend/hooks/guard_tmux.py, one process per step, stdin = step"
+ },
+ "input": {
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin"
+  },
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o500"
+   }
+  }
+ },
+ "steps": [
+  {
+   "stdin": {
+    "text": "lixo"
+   },
+   "code": 0,
+   "stdout": {
+    "text": ""
+   },
+   "stderr": {
+    "text": ""
+   },
+   "duration_ms": 23,
+   "files": {
+    "created": {},
+    "changed": {},
+    "removed": []
+   }
+  }
+ ],
+ "files_final": {
+  "home/.hangar": {
+   "type": "dir",
+   "mode": "0o755"
+  }
+ },
+ "window": {
+  "t_start": 1794910462.953301,
+  "t_end": 1794910462.9775991
+ }
+}

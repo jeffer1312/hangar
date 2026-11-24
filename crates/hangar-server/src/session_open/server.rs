@@ -130,7 +130,7 @@ impl ServerHost {
     pub async fn new(st: Arc<AppState>) -> Self {
         // `TerminalEnv::local` pode esperar o `systemctl --user` (até 3 s): fora das threads do runtime.
         let (env, terminal) = tokio::task::spawn_blocking(|| {
-            let dotenv = crate::user_data::env_file(std::env::current_dir().ok().as_deref())
+            let dotenv = crate::user_data::env_file(super::cli::server_backend().as_deref())
                 .inspect_err(|e| tracing::warn!(code = "user_data_env_unreadable", "abertura: .env dos dados do usuário ilegível, segue sem ele: {e}"))
                 .ok().flatten().unwrap_or_default();
             let env = AccountEnvironment::from_map(server_env(std::env::vars().collect(), &dotenv));
@@ -234,8 +234,8 @@ impl OpenHost for ServerHost {
     fn mux(&self) -> &dyn Mux { &self.mux }
     fn bridge(&self) -> Option<PluginBridge> { Some(PluginBridge { port: self.st.cfg.listen.port(), secret: self.st.cfg.auth_token.clone() }) }
     fn server_projects(&self) -> PathBuf { self.env.claude_base.join("projects") }
-    /// O servidor roda na `backend/` (é de lá que ele lê o `.env`).
-    fn backend_dir(&self) -> Option<PathBuf> { std::env::current_dir().ok() }
+    /// A `backend/` da cópia onde o servidor roda (a raiz da versão; lançamento antigo, a própria).
+    fn backend_dir(&self) -> Option<PathBuf> { super::cli::server_backend() }
 
     fn run(&self, argv: Vec<String>, timeout: Duration) -> BoxFuture<'_, MuxOutput> {
         Box::pin(run_program(&self.env.base, argv, timeout))
@@ -251,7 +251,7 @@ impl OpenHost for ServerHost {
     fn leave_old_group<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Vec<String>, OpenError>> {
         Box::pin(async move {
             let Some(groups) = &self.st.groups else { return Ok(Vec::new()) };
-            match crate::groups::exit::leave_and_notify(&self.st, groups, name).await {
+            match crate::groups::exit::leave_and_notify(&self.st, groups, name, "open_reused_name").await {
                 Ok((_, failures)) => Ok(exit_warnings(&failures)),
                 Err(_) if groups.has_sidecar(name) => Err(OpenError::new(409, "erro_grupo_limpeza_falhou",
                     format!("o grupo da sessão antiga '{name}' não foi desfeito; tente de novo"))),
@@ -287,6 +287,16 @@ impl OpenHost for ServerHost {
             if let Some(jsonl) = &born.jsonl { self.st.list.seed(&born.name, jsonl); }
             self.st.list.invalidate();
             if let Some(home) = &born.codex_terminal { self.publish_codex_birth(&born.name, home).await; }
+            if born.first_message {
+                match self.st.state.runtime.get().cloned() {
+                    Some(runtime) => {
+                        let name = born.name.clone();
+                        tokio::spawn(async move { crate::runtime::claude_terminal::deliver_first_message(&runtime, &name).await });
+                    }
+                    None => self.st.diag.report("runtime.first_message_failed", &born.name, "runtime_unavailable",
+                        "servidor sem runtime: o prompt inicial do Claude com terminal ficou na fila"),
+                }
+            }
             if !born.remember_provider { return Vec::new(); }
             let (base, provider) = (self.env.claude_base.clone(), born.provider.name());
             match tokio::task::spawn_blocking(move || remember_provider(&base, provider)).await {
@@ -351,6 +361,11 @@ impl OpenHost for ServerHost {
 }
 
 pub enum Decision { Opened(super::open::Opened), Refused(OpenError), NotOurs }
+
+/// Abertura pedida pelo próprio servidor, como dono (a sessão de conserto de um aviso).
+pub(crate) async fn open_owned(st: &Arc<AppState>, request: SessionOpenRequest) -> Decision {
+    decide_detached(st, request, OpenCaller::Owner, None, None).await
+}
 
 /// `decide` numa tarefa própria: cliente que desconecta no meio não interrompe a criação (a worktree
 /// criada sem o pane ficaria para trás) nem o registro do convidado (`claim`), como o
@@ -586,15 +601,22 @@ async fn prepare_baton_engine(st:&AppState,asked:&mut Value)->Result<(),OpenErro
         else{crate::session_open::resolve::choose_provider(&crate::engines::providers::read(&st.accounts).await?.selection).name().to_owned()};
         asked["provider"]=json!(provider);
     }
-    let Some(account)=asked["engine_account"].as_str()else{return Ok(());};
+    let account=asked["engine_account"].as_str().map(str::to_owned);
+    let expected=asked["engine_binding"].as_str().map(str::to_owned);
+    if account.is_none() && expected.is_none() { return Ok(()); }
     let engine=asked["engine"].as_str().unwrap_or("");
     if asked["provider"]!="claude"||engine.is_empty(){return Err(OpenError::new(400,"erro_cliproxy_conta","conta ChatGPT exige Claude com motor CLIProxyAPI local"));}
-    let (engine,account,model)=(engine.to_owned(),account.to_owned(),asked["model"].as_str().map(str::to_owned));
+    let (engine,model)=(engine.to_owned(),asked["model"].as_str().map(str::to_owned));
     let accounts=st.accounts.clone();let runtime=tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move||{
         use super::OpenFacts;
         let facts=super::facts::LocalFacts::shared(accounts.env.clone(),&accounts,runtime);
-        facts.fixed_engine_model(&engine,&account,model.as_deref()).map(|_|())
+        let (account, binding) = facts.engine_account(&engine, account.as_deref())?;
+        if expected.is_some() && binding != expected {
+            return Err(OpenError::new(409, "erro_cliproxy_conta", "A conta vinculada ao motor mudou. Reabra a tela de nova sessão."));
+        }
+        if let Some(account) = account { facts.fixed_engine_model(&engine, &account, model.as_deref())?; }
+        Ok(())
     }).await.map_err(|_|OpenError::new(500,"erro_cliproxy_conta","a validação da conta do motor foi interrompida"))?
 }
 

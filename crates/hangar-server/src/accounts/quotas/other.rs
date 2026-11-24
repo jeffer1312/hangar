@@ -249,6 +249,7 @@ pub fn load(env: &AccountEnvironment) -> Config {
         let reader = if base.contains("commandcode.ai") { Reader::CommandCode { key } } else { Reader::Kimi { key, base } };
         sources.push(Source { id: format!("kimi:{name}"), label: json!(name), provider: reader.kind(), reader });
     }
+    let local_proxy = crate::engines::proxy::local(env).ok().flatten();
     for (name, data) in &engines {
         if !engine_name_ok(name) {
             continue;
@@ -272,6 +273,7 @@ pub fn load(env: &AccountEnvironment) -> Config {
         }
         let text = |field: &str| data.get(field).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
         let (Some(key), Some(base)) = (text("api_key"), text("base_url")) else { continue };
+        if crate::engines::proxy::serves(local_proxy.as_ref(), &base) || text("cliproxy_binding").is_some() { continue; }
         let id = format!("chave:{name}");
         let saved = |entry: &Value| {
             let text = |field: &str| entry[field].as_str().unwrap_or_default().to_owned();

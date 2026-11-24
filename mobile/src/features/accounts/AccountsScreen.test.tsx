@@ -16,6 +16,8 @@ vi.mock('@hangar/core', async original => ({ ...await original<typeof import('@h
   deleteCodexAccountForServer: calls.deleteAccount, deleteEngineForServer: calls.deleteEngine, consumeCodexRateLimitResetForServer: calls.consume,
   startClaudeAccountLoginForServer: calls.claudeStart, getClaudeAccountLoginStepForServer: calls.claudeRead,
   cancelClaudeAccountLoginForServer: calls.claudeCancel, criarConta: calls.createClaude, sairConta: calls.logoutClaude,
+  // A lista das contas Google é outra leitura; sem o agy na máquina do teste ela vem vazia.
+  getAntigravityAccountsForServer: async () => ({ instalado: false, contas: [] }),
 }));
 // A casca da tela depende do fundo nativo e da navegação; as linhas, cabeçalho e ações são reais.
 vi.mock('../../ui/Screen', () => ({ Screen: ({ children }: { children: ReactNode }) => createElement('main', null, children) }));
@@ -23,6 +25,8 @@ vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 0 }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {}, deleteItemAsync: async () => {} }));
 vi.mock('expo-linking', () => ({ openURL: vi.fn() }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
+// O login do Google usa o teclado nativo, que não carrega no teste.
+vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: ReactNode }) => children }));
 // A folha da etiqueta puxa o teclado e a área segura nativos, que não carregam no teste.
 vi.mock('../machines/parts', () => ({ MachineSheet: () => null, Notice: () => null }));
 vi.mock('../../stores/prefs', () => ({ prefs: { getString: () => undefined, set: () => {}, remove: () => {} } }));

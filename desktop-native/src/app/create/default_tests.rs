@@ -89,6 +89,31 @@ fn changing_server_invalidates_the_old_save_reply(cx: &mut TestAppContext) {
     }));
 }
 
+/// Liga e desliga tudo o que a aparência guarda: cada `bool` vira o contrário.
+fn flipped(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Bool(on) => serde_json::Value::Bool(!on),
+        serde_json::Value::Object(map) => serde_json::Value::Object(map.into_iter().map(|(k, v)| (k, flipped(v))).collect()),
+        other => other,
+    }
+}
+
+/// Trava da abertura única: o corpo da criação sai só do que está nesta tela. Nenhuma preferência
+/// guardada neste computador (o `appearance.json`) entra nele; o padrão de abertura é do servidor.
+#[::gpui::test]
+fn the_open_body_does_not_depend_on_what_this_computer_saved(cx: &mut TestAppContext) {
+    let (view, cx) = dialog(cx);
+    cx.update(|_, cx| view.update(cx, |dialog, cx| {
+        for provider in ["claude", "codex", "pi", "omp", "kimi"] {
+            dialog.provider = provider;
+            let plain = crate::appearance::with_test_appearance(crate::appearance::Appearance::default(), || dialog.open_body("s", "/p", "", cx));
+            let all_on = serde_json::from_value(flipped(serde_json::to_value(crate::appearance::Appearance::default()).unwrap())).unwrap();
+            let changed = crate::appearance::with_test_appearance(all_on, || dialog.open_body("s", "/p", "", cx));
+            assert_eq!(plain, changed, "{provider}: o corpo mudou com a aparência guardada");
+        }
+    }));
+}
+
 #[::gpui::test]
 fn home_mode_pill_applies_to_this_conversation_only(cx: &mut TestAppContext) {
     let (view, cx) = dialog(cx);

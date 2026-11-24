@@ -33,8 +33,9 @@ pub(crate) enum RemoteUpdate { Sessions(Result<Vec<SessionInfo>, Failure>), Stre
 /// A lista de uma máquina que não é a ativa. Fora do ar, fica a última lista boa, como no web.
 /// `api` é a conexão guardada da máquina: as ações das linhas dela não montam um cliente HTTP a cada gesto.
 /// `live_terms`: os terminais de atalho vivos dela (evento `shortcut_terminals`); some quando o stream cai.
+/// `unreachable`: a última falha foi sem resposta nenhuma (rede ou prazo); erro HTTP, como login recusado, não conta.
 #[derive(Default)]
-pub(crate) struct RemoteList { pub sessions: Vec<SessionInfo>, pub loaded: bool, pub online: bool, pub error: Option<String>, pub api: Option<Api>, pub(super) live_terms: Vec<super::terminal::LiveTerm> }
+pub(crate) struct RemoteList { pub sessions: Vec<SessionInfo>, pub loaded: bool, pub online: bool, pub error: Option<String>, pub api: Option<Api>, pub(super) live_terms: Vec<super::terminal::LiveTerm>, pub(super) unreachable: bool }
 
 /// Mesma máquina escrita de dois jeitos (barra final, maiúsculas) é o mesmo servidor.
 pub(crate) fn norm(address: &str) -> String { address.trim().trim_end_matches('/').to_ascii_lowercase() }
@@ -138,7 +139,7 @@ impl Hangar {
             RemoteUpdate::Sessions(Ok(sessions)) => {
                 changed = !same(list, &sessions);
                 gone = left_list(&list.sessions, &sessions);
-                list.sessions = sessions; list.loaded = true; list.error = None;
+                list.sessions = sessions; list.loaded = true; list.error = None; list.unreachable = false;
             }
             RemoteUpdate::Sessions(Err(error)) if ended(&error) => {
                 self.invite_ended.insert(key.clone());
@@ -146,12 +147,16 @@ impl Hangar {
                 gone = std::mem::take(&mut list.sessions).into_iter().map(|s| s.name).collect();
                 list.error = Some(tr_shared("convite_encerrado", &[]));
             }
-            RemoteUpdate::Sessions(Err(error)) => list.error = Some(Self::failure(&error)),
+            RemoteUpdate::Sessions(Err(error)) => { list.unreachable = error.status.is_none(); list.error = Some(Self::failure(&error)) }
             // Voltou: o erro da queda sai do cabeçalho.
-            RemoteUpdate::Stream(Update::Online) => { changed = !list.online || list.error.is_some(); list.online = true; list.error = None; }
+            RemoteUpdate::Stream(Update::Online) => {
+                changed = !list.online || list.error.is_some();
+                list.online = true; list.error = None; list.unreachable = false;
+            }
             RemoteUpdate::Stream(Update::Offline(error)) => {
                 let before = (list.online, list.sessions.len(), list.error.take());
                 list.online = false;
+                list.unreachable = error.status.is_none() && !ended(&error);
                 list.live_terms.clear();
                 list.error = Some(if ended(&error) {
                     self.invite_ended.insert(key.clone());
@@ -187,6 +192,13 @@ impl Hangar {
                         // Não mexe na barra de sessões: só a conversa aberta nessa máquina muda.
                         changed = false;
                         if stored == Some(true) { self.notice_ignores_changed(&key, cx); }
+                        stored.is_some()
+                    }
+                    // O chip das linhas dessa máquina e a seção da sessão aberta nela.
+                    "work_reviews" => {
+                        let stored = super::work_review::store(&mut self.work_reviews, &key, &frame.data);
+                        changed = stored == Some(true);
+                        if changed { self.work_reviews_changed(&key, cx); }
                         stored.is_some()
                     }
                     // `nav` é aberto por quem chama, que tem a janela: a lista não muda.
@@ -324,6 +336,17 @@ impl Hangar {
             updater.set_servers(local, active, cx);
             if changed { updater.refresh_machine_updates(cx); }
         });
+        self.sync_updater_offline(cx);
+    }
+
+    /// As outras máquinas que não respondem nada: o "Atualizar todas" as deixa de fora sem esperar o prazo de cada uma.
+    /// A ativa e erro HTTP (login recusado) passam pela identificação, que mostra a causa.
+    pub(super) fn sync_updater_offline(&self, cx: &mut Context<Self>) {
+        let offline = self.servers.iter()
+            .filter(|s| self.remote.get(&norm(&s.address)).is_some_and(|list| !list.online && list.unreachable))
+            .map(|s| s.id.clone()).collect();
+        let Some(updater) = cx.try_global::<crate::update::Handle>().map(|handle| handle.0.clone()) else { return };
+        updater.update(cx, |updater, _| updater.set_update_all_offline(offline));
     }
 
     /// Só as máquinas do app Electron; a aparência é o Importar das configurações que traz.

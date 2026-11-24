@@ -51,7 +51,7 @@ fn scopes(base: &Path) -> Scopes {
         codex: vec![CodexScope { home: base.join("codex"), account: format!("codex:{}", base.join("codex").display()), label: "Codex · default".into() }],
         pi: vec![PiScope { root: base.join("pi"), source: "pi".into() }],
         kimi: Some(KimiScope { root: base.join("kimi/sessions"), index: base.join("kimi/session_index.jsonl") }),
-        repo: base.to_path_buf(),
+        repo: base.to_path_buf(), antigravity: vec![],
     }
 }
 fn collector(base: &Path, source: Arc<dyn ScopeSource>) -> Arc<Collector> {
@@ -138,7 +138,7 @@ fn usage_direct_append_preserves_scope_order_accounts_and_every_row_field() {
         std::fs::write(scope.home.join("sessions/rollout-fixture.jsonl"), "{}\n").unwrap();
     }
     let source = Fixed::new(Ok(Scopes { claude: claude.clone(), codex: codex.clone(),
-        pi: vec![], kimi: None, repo: base.clone() }));
+        pi: vec![], kimi: None, repo: base.clone(), antigravity: vec![] }));
     let c = collector(&base, source);
     c.prepare(false).unwrap();
     wait_ready(&c);
@@ -638,4 +638,34 @@ fn same_session_id_in_claude_and_pi_keeps_both_sources() {
         (parent_id.to_str().unwrap(), (30, 10, 50, 15)),
         (child_id.to_str().unwrap(), (50, 12, 100, 0)),
     ]));
+}
+
+#[test]
+fn antigravity_rows_take_the_project_from_the_history_and_the_account_as_provider() {
+    let d = tempfile::tempdir().unwrap();
+    let base = d.path().join("base");
+    let data = base.join(".gemini/antigravity-cli");
+    let sid = "904fd70e-847b-49ed-9999-a13d7a4d9a98";
+    let line = |model: &str, at: &str, input: i64| format!("{}\n", serde_json::json!({"step_index":1,"type":"PLANNER_RESPONSE",
+        "status":"DONE","created_at":at,"model":model,"input_tokens":input,"cache_read_tokens":0,"output_tokens":3}));
+    let transcript = data.join("brain").join(sid).join(".system_generated/logs/transcript_full.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, line("gemini-4-neon-high", "2026-11-23T12:00:00Z", 10)).unwrap();
+    // Arquivo com o mesmo nome fora do lugar da conversa é do agy, não uma conversa.
+    std::fs::create_dir_all(data.join("brain/outro")).unwrap();
+    std::fs::write(data.join("brain/outro/transcript_full.jsonl"), line("gemini-4-neon-high", "2026-11-23T12:00:00Z", 999)).unwrap();
+    let history = data.join("history.jsonl");
+    std::fs::write(&history, format!("{}\n", serde_json::json!({"conversationId": sid, "workspace": "/tmp/agy-prova"}))).unwrap();
+    let scope = AntigravityScope { root: data.join("brain"), history, account: "antigravity:/g".into(), label: "Antigravity · Google (padrão)".into() };
+    let source = Fixed::new(Ok(Scopes { claude: vec![], codex: vec![], pi: vec![], kimi: None, repo: base.clone(), antigravity: vec![scope] }));
+    let c = collector(&base, source);
+    c.prepare(false).unwrap();
+    wait_ready(&c);
+    let rows = c.read_costs(None).unwrap();
+    assert_eq!(rows.len(), 1, "só a conversa entra: {rows:?}");
+    let row = &rows[0];
+    assert_eq!((row.source.as_str(), row.provider.as_str(), row.model.as_str()), ("antigravity", "antigravity:/g", "gemini-4-neon"));
+    assert_eq!((row.project.as_str(), row.session_id.as_str(), row.account_id.as_deref()), ("/tmp/agy-prova", sid, Some("antigravity:/g")));
+    assert_eq!((row.input, row.output), (10, 3));
+    assert_eq!(c.label("antigravity:/g").as_deref(), Some("Antigravity · Google (padrão)"));
 }

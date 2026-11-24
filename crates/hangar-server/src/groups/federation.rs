@@ -127,7 +127,7 @@ pub(super) fn store_refusal(error: impl std::fmt::Display) -> Refusal {
 
 pub(super) fn missing(gid: &str) -> Refusal { no(StatusCode::NOT_FOUND, "erro_grupo_inexistente", "grupo inexistente nesta máquina", json!({"gid": gid})) }
 
-fn need_server_id(me: &str) -> Result<(), Refusal> {
+pub(super) fn need_server_id(me: &str) -> Result<(), Refusal> {
     if me.is_empty() { Err(no(StatusCode::BAD_REQUEST, "erro_pareamento_server_id_ausente", NO_SERVER_ID, json!({}))) } else { Ok(()) }
 }
 
@@ -596,8 +596,8 @@ fn apply_owner(dir: &PairDir, outbox: &Outbox, me: &str, plan: &OwnerPlan) -> Re
     let written = (|| -> Result<(), super::store::StoreError> {
         dir.write_record(&plan.record)?;
         // O contrato do absorvido só se junta depois da confirmação: desfazer não separa texto.
-        for loser in &plan.losers { dir.remove_record(&loser.gid)?; }
-        super::service::apply(dir, &[], &plan.writes)
+        for loser in &plan.losers { dir.remove_record(&loser.gid, "merge_absorbed")?; }
+        super::service::apply(dir, &[], &plan.writes, "owner_join")
     })();
     let queued = written.map_err(store_refusal).and_then(|()| outbox.enqueue(items).map_err(|e| {
         if e.to_string() == QUEUE_FULL {
@@ -607,7 +607,7 @@ fn apply_owner(dir: &PairDir, outbox: &Outbox, me: &str, plan: &OwnerPlan) -> Re
     if let Err(refused) = queued {
         restore_logged(dir, &plan.before);
         for (gid, record) in &plan.before_records {
-            if let Err(error) = match record { Some(r) => dir.write_record(r), None => dir.remove_record(gid) } {
+            if let Err(error) = match record { Some(r) => dir.write_record(r), None => dir.remove_record(gid, "restore") } {
                 tracing::error!(code = "groups_record_restore_failed", gid = %gid, %error, "groups: o registro do grupo não voltou ao de antes");
             }
         }
@@ -698,7 +698,7 @@ pub async fn owner_join(st: &Arc<AppState>, groups: &Arc<GroupService>, mut ask:
     if let Ok(Ok(Some(now))) = blocking(move || d.record(&g)).await { record.version = record.version.max(now.version); }
     if !unconfirmed.is_empty() {
         // Todos de uma vez; o aviso de saída a quem ficou sozinho sai depois da resposta.
-        if let Some((r, dropped)) = super::fed_exit::remove_and_dissolve(st, groups, &gid, &unconfirmed).await? {
+        if let Some((r, dropped)) = super::fed_exit::remove_and_dissolve(st, groups, &gid, &unconfirmed, "join_unconfirmed").await? {
             record = r;
             let st = st.clone();
             tokio::spawn(async move { super::fed_exit::tell_dropped(&st, &dropped).await });
@@ -741,13 +741,13 @@ async fn undo_owner(groups: &GroupService, fed: &Federation, plan: &OwnerPlan) -
                     items.extend(fan_out(servers, gid, bump, &me, Fan::Push));
                 }
                 None => {
-                    dir.remove_record(gid).map_err(store_refusal)?;
+                    dir.remove_record(gid, "undo_owner").map_err(store_refusal)?;
                     if *gid == record.gid { items.extend(fan_out(remote_servers(&record, &me), gid, bump, &me, Fan::Dissolved)); }
                 }
             }
         }
         if !before_records.iter().any(|(g, _)| *g == record.gid) {
-            dir.remove_record(&record.gid).map_err(store_refusal)?;
+            dir.remove_record(&record.gid, "undo_owner").map_err(store_refusal)?;
             items.extend(fan_out(remote_servers(&record, &me), &record.gid, bump, &me, Fan::Dissolved));
         }
         outbox.enqueue(items).map_err(store_refusal)
@@ -761,7 +761,7 @@ async fn undo_owner(groups: &GroupService, fed: &Federation, plan: &OwnerPlan) -
 /// um, que pode ter aplicado o join atrasado). Devolve o registro novo e quem daqui ficou sem
 /// ninguém (sidecar apagado) e se mudou algo; sem registro, `None`. Quem já não está no registro
 /// (saída repetida) não muda nada: volta o registro como está, com `false`.
-pub async fn remove_members(st: &AppState, groups: &GroupService, gid: &str, whos: &[Member]) -> Result<Option<(GroupRecord, Vec<String>, bool)>, Refusal> {
+pub async fn remove_members(st: &AppState, groups: &GroupService, gid: &str, whos: &[Member], why: &'static str) -> Result<Option<(GroupRecord, Vec<String>, bool)>, Refusal> {
     let me = groups.server_id().to_owned();
     let fed = of(st, groups).await?;
     let (dir, outbox, gid) = (groups.dir(), fed.outbox.clone(), gid.to_owned());
@@ -781,7 +781,7 @@ pub async fn remove_members(st: &AppState, groups: &GroupService, gid: &str, who
                 s.peers.retain(|p| !gone.contains(p));
                 // Sem peers o sidecar já não vale como grupo: a dissolução não o veria para apagar e avisar.
                 if s.peers.is_empty() && !s.orq {
-                    dir.clear_sidecar(&m.name).map_err(store_refusal)?;
+                    dir.clear_sidecar(&m.name, why).map_err(store_refusal)?;
                     alone.push(m.name.clone());
                     continue;
                 }
@@ -791,7 +791,7 @@ pub async fn remove_members(st: &AppState, groups: &GroupService, gid: &str, who
         }
         let mut servers = remote_servers(&record, &me);
         for who in &whos {
-            if who.server == me { dir.clear_sidecar(&who.name).map_err(store_refusal)?; } else { servers.insert(who.server.clone()); }
+            if who.server == me { dir.clear_sidecar(&who.name, why).map_err(store_refusal)?; } else { servers.insert(who.server.clone()); }
         }
         outbox.enqueue(fan_out(servers, &gid, record.version, &me, Fan::Push)).map_err(store_refusal)?;
         Ok(Some((record, alone, true)))
@@ -1042,7 +1042,8 @@ fn apply_push(dir: &PairDir, me: &str, gid: &str, body: &PushBody, renamed: &Has
     let before: Snapshot = clears.iter().chain(writes.iter().map(|(n, _)| n)).map(|n| (n.clone(), loaded(&all, n).cloned())).collect();
     applied.insert(seen_key, body.version);
     // A versão só vale gravada junto dos sidecars: sem ela, a dona reenvia e a mesma versão aplica de novo.
-    let written = super::service::apply(dir, &clears, &writes).map_err(store_refusal).and_then(|()| write_applied(dir, &applied).map_err(store_refusal));
+    let why = if body.dissolved { "owner_push_dissolved" } else { "owner_push" };
+    let written = super::service::apply(dir, &clears, &writes, why).map_err(store_refusal).and_then(|()| write_applied(dir, &applied).map_err(store_refusal));
     if let Err(refused) = written {
         restore_logged(dir, &before);
         return Err(refused);

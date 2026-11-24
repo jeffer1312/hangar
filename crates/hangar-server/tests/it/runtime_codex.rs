@@ -739,7 +739,7 @@ fn service_tier_needs_ack_notification_and_authoritative_snapshot_in_either_orde
         };
         assert!(!tier_accepted(&effects));
         let read = frames(&effects)[0].clone();
-        assert_eq!(read["method"],"thread/resume"); assert_eq!(read["params"],json!({"threadId":"thread-1"}));
+        assert_eq!(read["method"],"thread/resume"); assert_eq!(read["params"],json!({"threadId":"thread-1","excludeTurns":true}));
         let confirmed = line(&mut engine,json!({"id":read["id"],"result":{"thread":{"id":"thread-1"},"serviceTier":tier}}),10.6);
         assert!(tier_accepted(&confirmed));
         assert_eq!(engine.view()["codex_service_tier"],tier);
@@ -904,10 +904,10 @@ fn turn_cut_by_a_dead_app_server_is_reported_after_reconnect() {
     let resume = frames(&line(&mut engine,json!({"id":init["id"],"result":{}}),10.1))[1].clone();
     assert_eq!(resume["method"],"thread/resume");
     let effects = line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"}}}}),10.2);
-    let read = frames(&effects).into_iter().find(|f|f["method"] == "thread/read").unwrap();
-    assert_eq!(read["params"]["includeTurns"],true);
-    line(&mut engine,json!({"id":read["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"},
-        "turns":[{"id":"turn-1","status":"interrupted"}]}}}),10.3);
+    assert!(frames(&effects).iter().all(|f|f["method"] != "thread/read"),"o corte não lê a conversa inteira");
+    let read = frames(&effects).into_iter().find(|f|f["method"] == "thread/turns/list").unwrap();
+    assert_eq!(read["params"],json!({"threadId":"thread-1","limit":1,"sortDirection":"desc","itemsView":"notLoaded"}));
+    line(&mut engine,json!({"id":read["id"],"result":{"data":[{"id":"turn-1","status":"interrupted"}],"nextCursor":"c"}}),10.3);
     assert_eq!(engine.view()["problema"],"codex_turno_cortado");
 }
 
@@ -917,10 +917,81 @@ fn finished_turn_after_reconnect_is_not_reported_as_cut() {
     let init = frames(&engine.bootstrap(true,"boot".into()).unwrap())[0].clone();
     let resume = frames(&line(&mut engine,json!({"id":init["id"],"result":{}}),10.1))[1].clone();
     let effects = line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"}}}}),10.2);
-    let read = frames(&effects).into_iter().find(|f|f["method"] == "thread/read").unwrap();
-    line(&mut engine,json!({"id":read["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"},
-        "turns":[{"id":"turn-1","status":"completed"}]}}}),10.3);
+    let read = frames(&effects).into_iter().find(|f|f["method"] == "thread/turns/list").unwrap();
+    line(&mut engine,json!({"id":read["id"],"result":{"data":[{"id":"turn-1","status":"completed"}]}}),10.3);
     assert!(engine.view()["problema"].is_null());
+}
+
+fn async_question(item:&str,title:&str) -> Value {
+    json!({"id":item,"type":"agentMessage","delivery":"async","questions":[{"title":title,"options":["A"]}]})
+}
+
+fn async_pending(engine:&Engine) -> Vec<String> {
+    engine.control_view()["async_questions"].as_array().unwrap().iter().map(|pair|pair[0].as_str().unwrap().to_owned()).collect()
+}
+
+#[test]
+fn seeded_resume_reads_only_the_recent_page_in_order_and_keeps_older_questions() {
+    let old = json!({"provider":"codex","request_id":"async:thread-1:old:0","is_async":true,"questions":[{"id":"answer","header":"1",
+        "question":"Pergunta antiga","multiSelect":false,"isOther":true,"isSecret":false,"options":[]}]});
+    let (mut engine,resume) = live_attach(json!({"name":"s","thread_id":"thread-1","headless":true,"cwd":"/p",
+        "async_seeded":true,"async_questions":[["async:thread-1:old:0",old]],"async_seen":["old"]}));
+    assert_eq!(resume["params"],json!({"threadId":"thread-1","excludeTurns":true,
+        "initialTurnsPage":{"limit":20,"itemsView":"full","sortDirection":"desc"}}));
+    // Mais recente primeiro: a resposta à pergunta 1 está na rodada depois da que a fez.
+    let spawn = json!({"id":"spawn-item","type":"collabAgentToolCall","tool":"spawnAgent","status":"completed",
+        "senderThreadId":"thread-1","receiverThreadIds":["child"],"agentsStates":{"child":{"status":"running"}}});
+    let answer = json!({"id":"answer-1","type":"userMessage","content":[{"type":"text","text":"> Pergunta 1\n\nA"}]});
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","status":{"type":"active"}},"initialTurnsPage":{"data":[
+        {"id":"turn-2","status":"inProgress","items":[answer,async_question("q2","Pergunta 2"),spawn]},
+        {"id":"turn-1","status":"completed","items":[async_question("q1","Pergunta 1")]}],"nextCursor":"c"}}}),12.0);
+    assert_eq!(async_pending(&engine),vec!["async:thread-1:old:0","async:thread-1:q2:0"],"a mais antiga que a página continua; a respondida sai");
+    let view = engine.control_view();
+    assert_eq!((view["turn_id"].as_str(),view["in_progress"].as_bool()),(Some("turn-2"),Some(true)),"turno em curso tirado da página");
+    assert!(engine.view()["codex_subagents"].to_string().contains("child"),"filha da página: {}",engine.view()["codex_subagents"]);
+}
+
+#[test]
+fn resume_answer_without_a_page_leaves_questions_and_children_as_they_were() {
+    let item = async_question("live","Ao vivo");
+    let (mut engine,resume) = live_attach(json!({"name":"s","thread_id":"thread-1","headless":true,"cwd":"/p",
+        "async_seeded":true,"async_questions":[],"async_during_load":[item]}));
+    line(&mut engine,json!({"method":"thread/started","params":{"thread":{"id":"child","parentThreadId":"thread-1","status":{"type":"active"}}}}),11.5);
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"}}}}),12.0);
+    assert_eq!(engine.control_view()["async_during_load"],json!([item]),"sem página nada se hidrata");
+    assert!(engine.control_view()["subagents"].get("child").is_some());
+}
+
+#[test]
+fn terminal_subscription_also_asks_for_the_page() {
+    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":false,"cwd":"/work",
+        "permission_mode":"Ask for approval","async_seeded":true,"async_questions":[]}),1,clock(10.0));
+    let resume = resume_of(&connect(&mut engine));
+    assert_eq!(resume["params"],json!({"threadId":"thread-1","cwd":"/work","excludeTurns":true,
+        "initialTurnsPage":{"limit":20,"itemsView":"full","sortDirection":"desc"}}));
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r/one.jsonl","status":{"type":"idle"}},
+        "initialTurnsPage":{"data":[{"id":"turn-1","status":"completed","items":[async_question("q1","Pergunta 1")]}]}}}),12.0);
+    assert_eq!(engine.control_view()["subscribed"],true);
+    assert_eq!(async_pending(&engine),vec!["async:thread-1:q1:0"]);
+}
+
+#[test]
+fn resume_without_seeded_questions_reads_the_whole_history_once() {
+    // Vista gravada antes desta versão: tem o estado das perguntas, mas não diz que saiu de uma leitura inteira.
+    let (mut engine,resume) = live_attach(json!({"name":"s","thread_id":"thread-1","headless":true,"cwd":"/p","async_questions":[],"async_seen":[]}));
+    assert_eq!(resume["params"],json!({"threadId":"thread-1"}));
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"},
+        "turns":[{"id":"turn-1","status":"completed","items":[async_question("q1","Pergunta 1")]}]}}}),12.0);
+    assert_eq!(async_pending(&engine),vec!["async:thread-1:q1:0"]);
+    assert_eq!(engine.control_view()["async_seeded"],true);
+    // A vida seguinte parte da vista desta e já pede só a página.
+    let view = engine.control_view();
+    let mut meta = json!({"name":"s","thread_id":"thread-1","headless":true,"cwd":"/p"});
+    for (key,value) in view.as_object().unwrap().iter().filter(|(key,_)|key.starts_with("async_")) { meta[key] = value.clone(); }
+    let (mut engine,resume) = live_attach(meta);
+    assert_eq!(resume["params"]["excludeTurns"],true);
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"}},"initialTurnsPage":{"data":[]}}}),12.0);
+    assert_eq!(async_pending(&engine),vec!["async:thread-1:q1:0"],"a pergunta de fora da página segue pendente");
 }
 
 fn diags(effects:&[Effect]) -> Vec<(DiagEvent,String)> {
@@ -1020,10 +1091,10 @@ fn undecodable_cut_check_read_is_reported_once() {
     let init = frames(&engine.bootstrap(true,"boot".into()).unwrap())[0].clone();
     let resume = frames(&line(&mut engine,json!({"id":init["id"],"result":{}}),10.1))[1].clone();
     let effects = line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"}}}}),10.2);
-    let read = frames(&effects).into_iter().find(|f|f["method"] == "thread/read").unwrap();
-    let effects = line(&mut engine,json!({"id":read["id"],"result":{"thread":"x"}}),10.3);
+    let read = frames(&effects).into_iter().find(|f|f["method"] == "thread/turns/list").unwrap();
+    let effects = line(&mut engine,json!({"id":read["id"],"result":{"data":"x"}}),10.3);
     assert_eq!(effects.iter().filter(|e|matches!(e,Effect::Policy { kind,.. } if kind == "unknown_private")).count(),1);
-    assert_eq!(diags(&effects),vec![(DiagEvent::CodexDecode,"thread_read".into())]);
+    assert_eq!(diags(&effects),vec![(DiagEvent::CodexDecode,"thread_turns_list".into())]);
     assert!(engine.view()["problema"].is_null());
 }
 
@@ -1500,7 +1571,7 @@ fn stop_whose_turn_read_fails_still_answers() {
     // Sem turno conhecido o Stop lê a conversa antes; a leitura recusada responde a operação de cima.
     let mut engine = engine();
     let read = frames(&engine.command(command(OperationKind::Interrupt,json!({})),clock(11.0)).unwrap())[0].clone();
-    assert_eq!(read["method"],"thread/read");
+    assert_eq!(read["method"],"thread/turns/list");
     let effects = line(&mut engine,json!({"id":read["id"],"error":{"code":-32603,"message":"boom"}}),11.1);
     assert!(effects.iter().any(|e|matches!(e,Effect::Reply { operation_id,disposition:Disposition::Rejected,.. } if operation_id == "op-1")));
 }
@@ -2161,8 +2232,8 @@ fn conversation_terminal_fast_uses_the_same_confirmation_and_keeps_the_subscript
     assert_eq!(update["params"],json!({"threadId":"thread-1","serviceTier":"default"}));
     line(&mut engine,json!({"id":update["id"],"result":{}}),13.1);
     let verify = frames(&tier_notification(&mut engine,"thread-1",json!("default"),13.2))[0].clone();
-    // A conferência é um `thread/resume` só com a thread: não reenvia aprovação nem sandbox.
-    assert_eq!(verify["method"],"thread/resume"); assert_eq!(verify["params"],json!({"threadId":"thread-1"}));
+    // A conferência é um `thread/resume` só com a thread, sem rodadas: não reenvia aprovação nem sandbox.
+    assert_eq!(verify["method"],"thread/resume"); assert_eq!(verify["params"],json!({"threadId":"thread-1","excludeTurns":true}));
     assert!(tier_accepted(&line(&mut engine,json!({"id":verify["id"],"result":{"thread":{"id":"thread-1"},"serviceTier":"default"}}),13.3)));
     assert_eq!(engine.control_view()["subscribed"],true);
     assert_eq!(engine.view()["codex_service_tier"],"default");
@@ -2298,15 +2369,14 @@ fn failed_skill_catalog_puts_the_input_back() {
 
 #[test]
 fn steer_without_a_known_turn_reads_it_first() {
-    // Adotada no meio do turno, o `resume` não traz o id: o Python o lia por `thread/read` com turnos.
+    // Adotada no meio do turno, o `resume` não traz o id: ele sai da rodada mais recente, sem a conversa inteira.
     let mut engine = subscribed_terminal();
     line(&mut engine,json!({"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active"}}}),13.0);
     let effects = engine.command(RuntimeCommand { operation_id:"steer".into(),kind:OperationKind::Steer,payload:json!({"text":"mais curto","turn_id":null}) },clock(13.5)).unwrap();
     let read = frames(&effects)[0].clone();
-    assert_eq!(read["method"],"thread/read");
-    assert_eq!(read["params"]["includeTurns"],true);
-    let effects = line(&mut engine,json!({"id":read["id"],"result":{"thread":{"id":"thread-1","status":{"type":"active"},
-        "turns":[{"id":"turn-0","status":"completed","items":[]},{"id":"turn-9","status":"inProgress","items":[]}]}}}),14.0);
+    assert_eq!(read["method"],"thread/turns/list");
+    assert_eq!(read["params"],json!({"threadId":"thread-1","limit":1,"sortDirection":"desc","itemsView":"notLoaded"}));
+    let effects = line(&mut engine,json!({"id":read["id"],"result":{"data":[{"id":"turn-9","status":"inProgress","items":[]}]}}),14.0);
     let steer = frames(&effects)[0].clone();
     assert_eq!(steer["method"],"turn/steer");
     assert_eq!(steer["params"]["expectedTurnId"],"turn-9");
@@ -2316,9 +2386,49 @@ fn steer_without_a_known_turn_reads_it_first() {
     let mut engine = subscribed_terminal();
     line(&mut engine,json!({"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active"}}}),13.0);
     let read = frames(&engine.command(RuntimeCommand { operation_id:"steer".into(),kind:OperationKind::Steer,payload:json!({"text":"x"}) },clock(13.5)).unwrap())[0].clone();
-    let effects = line(&mut engine,json!({"id":read["id"],"result":{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}}),14.0);
+    let effects = line(&mut engine,json!({"id":read["id"],"result":{"data":[{"id":"turn-8","status":"completed","items":[]}]}}),14.0);
     assert!(frames(&effects).is_empty());
     assert_eq!(reply_of(&effects,"steer").map(|(d,_)|d),Some(Disposition::Rejected));
+}
+
+#[test]
+fn stop_that_finds_the_latest_turn_finished_clears_the_stale_working_state() {
+    // O fim da rodada se perdeu: Parar lê a mais recente, acabada, e a sessão deixa de parecer trabalhando.
+    let mut engine = subscribed_terminal();
+    line(&mut engine,json!({"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active"}}}),13.0);
+    assert_eq!(engine.control_view()["in_progress"],true);
+    let read = frames(&engine.command(RuntimeCommand { operation_id:"stop".into(),kind:OperationKind::Interrupt,payload:json!({}) },clock(13.5)).unwrap())[0].clone();
+    assert_eq!(read["method"],"thread/turns/list");
+    line(&mut engine,json!({"id":read["id"],"result":{"data":[{"id":"turn-8","status":"completed","items":[]}]}}),14.0);
+    assert_eq!(engine.control_view()["in_progress"],false);
+}
+
+#[test]
+fn full_history_resume_keeps_the_running_turn_id() {
+    // Vida sem perguntas semeadas retoma com o histórico inteiro: a rodada em andamento vem nele.
+    let mut engine = terminal();
+    let resume = resume_of(&connect(&mut engine));
+    assert!(resume["params"].get("excludeTurns").is_none(),"{resume}");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r/one.jsonl","status":{"type":"active","activeFlags":[]},
+        "turns":[{"id":"turn-6","status":"completed","items":[]},{"id":"turn-7","status":"inProgress","items":[]}]}}}),12.0);
+    let effects = engine.command(RuntimeCommand { operation_id:"steer".into(),kind:OperationKind::Steer,payload:json!({"text":"mais curto","turn_id":null}) },clock(13.0)).unwrap();
+    let steer = frames(&effects)[0].clone();
+    assert_eq!(steer["method"],"turn/steer");
+    assert_eq!(steer["params"]["expectedTurnId"],"turn-7");
+}
+
+#[test]
+fn unreadable_latest_turn_refuses_steer_and_stop_instead_of_seeing_no_turn() {
+    let mut engine = subscribed_terminal();
+    line(&mut engine,json!({"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active"}}}),13.0);
+    let read = frames(&engine.command(RuntimeCommand { operation_id:"steer".into(),kind:OperationKind::Steer,payload:json!({"text":"x"}) },clock(13.5)).unwrap())[0].clone();
+    let effects = line(&mut engine,json!({"id":read["id"],"result":{"data":"x"}}),14.0);
+    assert!(frames(&effects).is_empty());
+    assert_eq!(reply_of(&effects,"steer").map(|(d,_)|d),Some(Disposition::Rejected));
+    let read = frames(&engine.command(RuntimeCommand { operation_id:"stop".into(),kind:OperationKind::Interrupt,payload:json!({}) },clock(14.5)).unwrap())[0].clone();
+    let effects = line(&mut engine,json!({"id":read["id"],"result":{"data":"x"}}),15.0);
+    assert_eq!(reply_of(&effects,"stop").map(|(d,_)|d),Some(Disposition::Rejected),"não vira \"nada a parar\"");
+    assert_eq!(engine.control_view()["in_progress"],true);
 }
 
 #[test]
@@ -2448,8 +2558,8 @@ fn a_lost_turn_end_is_found_by_reading_the_thread_after_a_silent_minute() {
 
 #[test]
 fn sandbox_change_needs_a_turn_state_the_codex_confirmed() {
-    // Como o Python: depois de religar, sem a conversa dizer ativa ou ociosa, trocar o sandbox (que reinicia
-    // o processo) poderia matar um turno vivo; recusa e mantém a permissão.
+    // Depois de religar, sem a conversa dizer ativa ou ociosa, a troca do sandbox não vale para um turno vivo
+    // que ninguém viu; recusa e mantém a permissão.
     for (status,allowed) in [("notLoaded",false),("idle",true)] {
         let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
         let resume = find_method(&sent,"thread/resume");
@@ -2457,10 +2567,154 @@ fn sandbox_change_needs_a_turn_state_the_codex_confirmed() {
         assert_eq!(engine.control_view()["ready"],true,"{status}");
         let changed = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0));
         match changed {
-            Ok(effects) => { assert!(allowed,"{status}"); assert!(effects.iter().any(|e|matches!(e,Effect::Respawn { .. }))); }
+            Ok(effects) => { assert!(allowed,"{status}"); assert_eq!(frames(&effects)[0]["method"],"thread/settings/update"); }
             Err(error) => { assert!(!allowed,"{status}: {}",error.message); assert!(error.message.contains("confirmar o estado do turno")); }
         }
     }
+}
+
+/// Medido no Codex 0.170.0: o `sandboxPolicy` do `thread/settings/update` vale para os turnos seguintes,
+/// sem subir o processo de novo. O modo novo só aparece e só é gravado com a confirmação.
+#[test]
+fn headless_sandbox_switch_happens_in_the_conversation_and_counts_only_when_confirmed() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    assert!(!effects.iter().any(|e|matches!(e,Effect::Respawn { .. })),"não sobe processo");
+    assert!(reply_of(&effects,"op-1").is_none(),"responde só com a confirmação do Codex");
+    let update = frames(&effects)[0].clone();
+    assert_eq!(update["method"],"thread/settings/update");
+    assert_eq!(update["params"],json!({"threadId":"thread-1","approvalPolicy":"on-request","sandboxPolicy":{"type":"readOnly"}}));
+    // Recusa do Codex: o modo antigo fica e nada é gravado.
+    let refused = line(&mut engine,json!({"id":update["id"],"error":{"code":-32600,"message":"sandbox recusado"}}),13.5);
+    assert_eq!(reply_of(&refused,"op-1"),Some((Disposition::Rejected,json!({"error":"sandbox recusado"}))));
+    assert!(!refused.iter().any(|e|matches!(e,Effect::Policy { kind,.. } if kind == "session.patch_meta")));
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
+    // Confirmada: vale, vai ao arquivo da sessão e a próxima troca compara com ela.
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(14.0)).unwrap();
+    let update = frames(&effects)[0].clone();
+    let done = line(&mut engine,json!({"id":update["id"],"result":{}}),14.5);
+    assert_eq!(reply_of(&done,"op-1"),Some((Disposition::Accepted,json!({"current":"Ask for approval"}))));
+    let patch = done.iter().find_map(|e|match e { Effect::Policy { kind,payload,.. } if kind == "session.patch_meta" => Some(payload.clone()),_=>None });
+    assert_eq!(patch,Some(json!({"permission_mode":"Ask for approval"})));
+    assert_eq!(engine.control_view()["permission_mode"],"Ask for approval");
+    let back = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Full Access"})),clock(15.0)).unwrap();
+    assert_eq!(frames(&back)[0]["params"]["sandboxPolicy"],json!({"type":"dangerFullAccess"}));
+    assert_eq!(frames(&back)[0]["params"]["approvalPolicy"],"never");
+}
+
+/// Turno que saísse com a troca pendente levaria a aprovação de um modo e o sandbox de outro.
+#[test]
+fn no_turn_starts_while_a_sandbox_switch_waits_for_codex() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    assert_eq!(engine.control_view()["deliverable"],true);
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    assert_eq!(engine.control_view()["deliverable"],false,"a fila espera a confirmação");
+    let done = line(&mut engine,json!({"id":frames(&effects)[0]["id"],"result":{}}),13.5);
+    assert!(done.iter().any(|e|matches!(e,Effect::WakeQueue)));
+    assert_eq!(engine.control_view()["deliverable"],true);
+}
+
+/// A resposta de uma troca anterior desfaria a escolha mais nova: uma troca por vez.
+#[test]
+fn a_second_permission_choice_waits_for_the_pending_switch() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Ask for approval"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let first = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Full Access"})),clock(13.0)).unwrap();
+    let back = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.2)).unwrap_err();
+    assert_eq!(back.code,"erro_permissao_ocupada","a volta ao modo gravado não é aceita por cima da troca pendente");
+    line(&mut engine,json!({"id":frames(&first)[0]["id"],"result":{}}),13.5);
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
+    let back = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(14.0)).unwrap();
+    assert_eq!(frames(&back)[0]["params"]["sandboxPolicy"],json!({"type":"readOnly"}));
+}
+
+/// Turno pedido e ainda sem resposta começaria no sandbox antigo e ficaria nele: a troca espera.
+#[test]
+fn a_sandbox_switch_is_refused_while_a_turn_start_waits_for_codex() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let started = engine.command(RuntimeCommand { operation_id:"msg".into(),kind:OperationKind::Input,payload:json!({"text":"primeira"}) },clock(12.5)).unwrap();
+    assert!(frames(&started).iter().any(|f|f["method"] == "turn/start"));
+    assert_eq!(engine.control_view()["in_progress"],false,"o Codex ainda não respondeu ao turn/start");
+    let refused = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap_err();
+    assert_eq!(refused.code,"erro_permissao_ocupada");
+}
+
+/// Troca sem resposta no prazo conta como não feita: nenhum turno sai até o modo gravado ser reaplicado, e a
+/// confirmação tardia não o troca de novo.
+#[test]
+fn a_sandbox_switch_without_answer_keeps_turns_held_until_the_recorded_mode_is_reapplied() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    let switch = frames(&effects)[0].clone();
+    let expired = engine.apply(EngineInput::Tick,clock(50.0)).unwrap();
+    assert_eq!(reply_of(&expired,"op-1").map(|(d,_)|d),Some(Disposition::Unknown));
+    assert_eq!(engine.control_view()["deliverable"],false,"a troca incerta segura os turnos");
+    let tick = engine.apply(EngineInput::Tick,clock(51.0)).unwrap();
+    let resync = frames(&tick).into_iter().find(|f|f["method"] == "thread/settings/update").expect("reaplica o modo gravado");
+    assert_eq!(resync["params"]["sandboxPolicy"],json!({"type":"dangerFullAccess"}));
+    // A confirmação tardia da troca não muda o modo: ele está sendo reaplicado.
+    line(&mut engine,json!({"id":switch["id"],"result":{}}),52.0);
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
+    assert_eq!(engine.control_view()["deliverable"],false);
+    line(&mut engine,json!({"id":resync["id"],"result":{}}),52.5);
+    assert_eq!(engine.control_view()["deliverable"],true);
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
+}
+
+/// Reaplicação recusada não libera os turnos: tenta de novo com espera e, na terceira falha, sobe o processo com o modo gravado.
+#[test]
+fn a_failed_reapplication_keeps_turns_held_and_ends_in_a_restart() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    engine.apply(EngineInput::Tick,clock(50.0)).unwrap();
+    let mut now = 50.0;
+    for attempt in 1..=3 {
+        now += 10.0;
+        let tick = engine.apply(EngineInput::Tick,clock(now)).unwrap();
+        let resync = frames(&tick).into_iter().find(|f|f["method"] == "thread/settings/update").unwrap_or_else(||panic!("tentativa {attempt}"));
+        let refused = line(&mut engine,json!({"id":resync["id"],"error":{"code":-32600,"message":"recusado"}}),now + 0.5);
+        assert!(!refused.iter().any(|e|matches!(e,Effect::WakeQueue)),"tentativa {attempt}: a fila não é liberada");
+        assert_eq!(engine.control_view()["deliverable"],false);
+        let restart = refused.iter().any(|e|matches!(e,Effect::Respawn { reason,.. } if reason == "restart"));
+        assert_eq!(restart,attempt == 3,"tentativa {attempt}");
+    }
+}
+
+/// A troca que caiu sem confirmação pode ter valido no Codex: na volta, o modo gravado é reaplicado antes de qualquer turno.
+#[test]
+fn a_sandbox_switch_lost_with_the_connection_is_reapplied_from_the_recorded_mode() {
+    let (mut engine,sent) = bootstrapped(json!({"name":"session","thread_id":"thread-1","headless":true,"cwd":"/w","permission_mode":"Full Access"}));
+    let resume = find_method(&sent,"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),12.0);
+    let effects = engine.command(command(OperationKind::SetPermissionMode,json!({"mode":"Ask for approval"})),clock(13.0)).unwrap();
+    let handed:std::collections::BTreeSet<String> = ["op-1".to_owned()].into();
+    let lost = engine.transport_lost("a conexão caiu",&handed);
+    assert_eq!(reply_of(&lost,"op-1").map(|(d,_)|d),Some(Disposition::Unknown),"a troca fica incerta");
+    assert!(frames(&effects).len() == 1);
+    let again = engine.bootstrap(true,"op-r".into()).unwrap();
+    let init = line(&mut engine,json!({"id":frames(&again)[0]["id"],"result":{"userAgent":format!("hangar/{} (x)",hangar_codex::version::CHECKED)}}),19.0);
+    let resume = find_method(&frames(&init),"thread/resume");
+    line(&mut engine,json!({"id":resume["id"],"result":{"thread":{"id":"thread-1","path":"/r.jsonl","status":{"type":"idle"},"turns":[]}}}),20.0);
+    assert_eq!(engine.control_view()["deliverable"],false,"nenhum turno antes de reaplicar");
+    assert!(engine.next_deadline().is_some_and(|due|due <= 20.0),"sessão parada agenda o Tick da reaplicação");
+    let tick = engine.apply(EngineInput::Tick,clock(21.0)).unwrap();
+    let resync = frames(&tick).into_iter().find(|f|f["method"] == "thread/settings/update").expect("reaplica o modo gravado");
+    assert_eq!(resync["params"],json!({"threadId":"thread-1","approvalPolicy":"never","sandboxPolicy":{"type":"dangerFullAccess"}}));
+    let done = line(&mut engine,json!({"id":resync["id"],"result":{}}),21.5);
+    assert!(done.iter().any(|e|matches!(e,Effect::WakeQueue)));
+    assert_eq!(engine.control_view()["deliverable"],true);
+    assert_eq!(engine.control_view()["permission_mode"],"Full Access");
 }
 
 #[test]
@@ -2590,9 +2844,9 @@ fn stop_before_the_turn_start_reply_finds_the_turn_and_ends_it() {
     let start = frames(&engine.command(command(OperationKind::Input,json!({"text":"1"})),clock(11.0)).unwrap())[0].clone();
     // Sem o id do turno ainda: o Parar lê a thread para achá-lo.
     let read = frames(&engine.command(RuntimeCommand { operation_id:"stop".into(),kind:OperationKind::Interrupt,payload:json!({}) },clock(11.1)).unwrap())[0].clone();
-    assert_eq!(read["method"],"thread/read");
-    let found = line(&mut engine,json!({"id":read["id"],"result":{"thread":{"id":"thread-1","status":{"type":"active","activeFlags":[]},
-        "turns":[{"id":"turn-1","status":"inProgress","items":[]}]}}}),11.2);
+    assert_eq!(read["method"],"thread/turns/list");
+    assert_eq!(read["params"]["limit"],1);
+    let found = line(&mut engine,json!({"id":read["id"],"result":{"data":[{"id":"turn-1","status":"inProgress","items":[]}]}}),11.2);
     let stop = frames(&found).into_iter().find(|frame|frame["method"] == "turn/interrupt").expect("o Parar vai ao turno achado");
     assert_eq!(stop["params"]["turnId"],"turn-1");
     line(&mut engine,json!({"id":start["id"],"result":{"turn":{"id":"turn-1","status":"inProgress"}}}),11.3);
@@ -2677,6 +2931,24 @@ fn early_trust_without_answer_stays_silent() {
         "cwd":"/home/u","codex_home":"/home/u/.codex"}),1,clock(10.0));
     assert_eq!(frames(&engine.plugins_changed())[0]["method"],"hooks/list");
     assert!(hook_notices(&engine.apply(EngineInput::Tick,clock(60.0)).unwrap()).is_empty());
+}
+
+#[test]
+fn early_trust_without_answer_is_not_repeated_on_every_plugin_change() {
+    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true,"initialized":true,"ready":true,
+        "cwd":"/home/u","codex_home":"/home/u/.codex"}),1,clock(10.0));
+    assert_eq!(frames(&engine.plugins_changed())[0]["method"],"hooks/list");
+    engine.apply(EngineInput::Tick,clock(60.0)).unwrap();
+    assert!(frames(&engine.plugins_changed()).is_empty(),"o Codex não respondeu à anterior: outra pergunta igual só acumula");
+    // A recusa de um hook continua pedindo a reaprovação.
+    let refused = json!({"method":"hook/completed","params":{"threadId":"thread-1","run":{"eventName":"postToolUse","status":"failed",
+        "sourcePath":"/home/u/.codex/plugins/cache/m/p/local/hooks/hooks.json",
+        "entries":[{"kind":"error","text":"plugin contents changed; hook approval required"}]}}});
+    let reactive = frames(&line(&mut engine,refused,61.0));
+    assert_eq!(reactive[0]["method"],"hooks/list");
+    // Respondeu: a próxima mudança de plugin volta a reaprovar antes da recusa.
+    line(&mut engine,json!({"id":reactive[0]["id"],"result":{"data":[{"cwd":"/home/u","hooks":[]}]}}),61.1);
+    assert_eq!(frames(&engine.plugins_changed())[0]["method"],"hooks/list");
 }
 
 #[test]

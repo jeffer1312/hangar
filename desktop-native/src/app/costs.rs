@@ -128,7 +128,7 @@ pub(super) fn chart(slot: usize) -> Hsla {
 
 fn source_name(key: &str) -> String {
     match key { "claude" => web("custos_claude_code"), "codex" => "Codex".into(), "pi" => "Pi".into(), "omp" => "oh-my-pi".into(),
-        "kimi" => "Kimi".into(), other => other.to_owned() }
+        "kimi" => "Kimi".into(), "antigravity" => "Antigravity".into(), other => other.to_owned() }
 }
 
 /// Cor por fonte, não por posição: um dia em que o Codex passasse o Claude não troca as duas cores.

@@ -249,6 +249,20 @@ type Publish = Rc<dyn Fn(&dyn Fn(&mut model::PageState))>;
 
 type Popups = Rc<RefCell<Vec<String>>>;
 
+/// Onde o alvo nasce.
+enum Context {
+    /// O padrão do Chromium: o perfil do painel, com os cookies e o login da pessoa.
+    Profile,
+    /// Próprio da página da conversa, fechado junto com ela.
+    Own(String),
+    /// O de um servidor remoto, com o SOCKS dele (`socks.rs`): dividido entre as sessões dele, nunca fechado aqui.
+    Proxied(String),
+}
+
+impl Context {
+    fn id(&self) -> Option<&str> { match self { Context::Profile => None, Context::Own(id) | Context::Proxied(id) => Some(id) } }
+}
+
 pub struct Engine {
     session: Rc<Session>,
     /// Edita o estado da barra e o manda ao painel se mudou.
@@ -275,8 +289,7 @@ pub struct Engine {
     zoom: Cell<f32>,
     /// Popups anunciados por esta página e ainda vivos: fecham junto com ela, mesmo se ninguém os adotou.
     announced: Popups,
-    /// Contexto próprio da página da conversa, fechado junto com ela.
-    context: Option<String>,
+    context: Context,
 }
 
 impl Engine {
@@ -299,15 +312,30 @@ impl Engine {
 
 impl Starter {
     /// O navegador do painel: sobe o Chromium (se ainda não há um) e abre o alvo desta sessão sem travar a interface.
-    pub fn start(self, events: async_channel::Sender<Event>) -> impl Future<Output = Result<Engine, String>> + use<> {
-        async move { self.fresh(Kind::Panel, async |browser| self.open(browser, None, None, events.clone(), true).await).await }
+    #[cfg(test)]
+    pub fn start(self, events: async_channel::Sender<Event>) -> impl Future<Output = Result<Engine, String>> + use<> { self.start_in(None, events) }
+
+    /// Com `proxy` (a porta do SOCKS de um servidor remoto e o bypass dela), o alvo nasce no contexto desse servidor:
+    /// `localhost` é o de lá, pelo túnel; o resto vai direto (pessoa) ou também ao SOCKS (agente).
+    pub fn start_in(self, proxy: Option<(u16, &'static str)>, events: async_channel::Sender<Event>)
+        -> impl Future<Output = Result<Engine, String>> + use<> {
+        async move {
+            self.fresh(Kind::Panel, async |browser| {
+                let context = match proxy {
+                    None => Context::Profile,
+                    Some((port, bypass)) => Context::Proxied(answer(&self.background, "Target.createBrowserContext",
+                        browser.proxied_context(port, bypass)).await?),
+                };
+                self.open(browser, context, None, events.clone(), true).await
+            }).await
+        }
     }
 
     /// Site de verdade na conversa: o mesmo perfil do painel (cookies e login), navegação livre dentro do site e popup
     /// no próprio alvo, como o painel. Nasce sem travar a interface.
     pub fn start_url(self, url: String, events: async_channel::Sender<Event>) -> impl Future<Output = Result<Engine, String>> + use<> {
         async move {
-            let engine = self.fresh(Kind::Panel, async |browser| self.open(browser, None, None, events.clone(), false).await).await?;
+            let engine = self.fresh(Kind::Panel, async |browser| self.open(browser, Context::Profile, None, events.clone(), false).await).await?;
             engine.load(&url);
             Ok(engine)
         }
@@ -321,7 +349,7 @@ impl Starter {
             self.fresh(Kind::Pages, async |browser| {
                 let created = self.browser_call(browser, "Target.createBrowserContext", json!({"disposeOnDetach": true})).await?;
                 let context = created["browserContextId"].as_str().ok_or("createBrowserContext sem id")?.to_owned();
-                let opened = self.open(browser, Some(context.clone()), Some((html.clone(), width, background)), events.clone(), false).await;
+                let opened = self.open(browser, Context::Own(context.clone()), Some((html.clone(), width, background)), events.clone(), false).await;
                 // Falhou no meio: fechar o contexto fecha junto o alvo que já tenha nascido nele.
                 if opened.is_err() { drop(browser.call(None, "Target.disposeBrowserContext", json!({"browserContextId": context}))); }
                 opened
@@ -359,10 +387,10 @@ impl Starter {
 
     /// Alvo do painel (`panel`: JPEG na escala da tela) ou da conversa (PNG no dobro). Falhou depois de nascer: o alvo
     /// fecha aqui, que ninguém mais o conhece.
-    async fn open(&self, browser: &Rc<Browser>, context: Option<String>, document: Option<Document>, events: async_channel::Sender<Event>,
+    async fn open(&self, browser: &Rc<Browser>, context: Context, document: Option<Document>, events: async_channel::Sender<Event>,
         panel: bool) -> Result<Engine, String> {
         let mut create = json!({"url": "about:blank", "newWindow": true});
-        if let Some(context) = &context { create["browserContextId"] = context.as_str().into(); }
+        if let Some(id) = context.id() { create["browserContextId"] = id.into(); }
         let created = self.browser_call(browser, "Target.createTarget", create).await?;
         let target = created["targetId"].as_str().ok_or("createTarget sem targetId")?.to_owned();
         browser.own(&target, true);
@@ -378,9 +406,10 @@ impl Starter {
     /// `popups`: popup de verdade que a página abrir vira `Event::Popup`, em vez de abrir nela mesma.
     #[allow(clippy::too_many_arguments)]
     async fn open_target(
-        &self, browser: &Rc<Browser>, target: &str, context: Option<String>, document: Option<Document>, events: async_channel::Sender<Event>,
+        &self, browser: &Rc<Browser>, target: &str, context: Context, document: Option<Document>, events: async_channel::Sender<Event>,
         panel: bool, popups: bool,
     ) -> Result<Engine, String> {
+        let proxied = matches!(context, Context::Proxied(_));
         let session = Rc::new(answer(&self.background, "Target.attachToTarget", Session::attach_async(browser, target)).await?);
         // Caiu antes de haver ouvinte (renderer que nem subiu): sem isto o `Page.enable` espera o prazo inteiro.
         if browser.crashed(target) { return Err(format!("{BORN_DEAD}: a pagina caiu ao nascer")); }
@@ -392,13 +421,13 @@ impl Starter {
         browser.sink(session.id(), Box::new(move |params| sink.frame(params)));
         let dead = Rc::new(Cell::new(false));
         let announced = Popups::default();
-        let publish = listen(&session, target, &state, &events, &self.executor, &dead, document.is_some(), popups.then_some(&announced));
+        let publish = listen(&session, target, &state, &events, &self.executor, &dead, document.is_some(), popups.then_some(&announced), proxied);
         let host = events.clone();
         let _ = session.on("Runtime.bindingCalled", move |params| {
             if params["name"] == "hangarHost" { let _ = host.try_send(Event::Host(params["payload"].as_str().unwrap_or("").to_owned())); }
         });
         // Falhou aqui: quem fecha o alvo é o `open`, o único que chama.
-        match self.setup_target(browser, &session, target, &document).await {
+        match self.setup_target(browser, &session, target, &document, proxied).await {
             // Página em branco que cai antes de nascer não é a página: é o Chromium que não consegue mais criá-las.
             Err(e) if dead.get() => { surface.close(); Err(format!("{BORN_DEAD}: a pagina caiu ao nascer ({e})")) }
             _ if dead.get() => { surface.close(); Err(format!("{BORN_DEAD}: a pagina caiu ao nascer")) }
@@ -412,7 +441,8 @@ impl Starter {
     }
 
     /// Janela, domínios e documento do alvo; devolve a janela e o desconto da barra.
-    async fn setup_target(&self, browser: &Rc<Browser>, session: &Session, target: &str, document: &Option<Document>) -> Result<(i64, f32), String> {
+    async fn setup_target(&self, browser: &Rc<Browser>, session: &Session, target: &str, document: &Option<Document>, proxied: bool)
+        -> Result<(i64, f32), String> {
         let window = self.browser_call(browser, "Browser.getWindowForTarget", json!({"targetId": target})).await?["windowId"]
             .as_i64().ok_or("getWindowForTarget sem windowId")?;
         self.page_call(session, "Page.enable", json!({})).await?;
@@ -427,7 +457,10 @@ impl Starter {
         // Várias páginas abertas não disputam o foco: `focus`/`release_focus` contam com isto.
         self.page_call(session, "Emulation.setFocusEmulationEnabled", json!({"enabled": true})).await?;
         // Mesma regra de endereço do painel: só web (http/https sem usuário e senha); o resto não carrega.
-        self.page_call(session, "Fetch.enable", json!({"patterns": [{"resourceType": "Document", "requestStage": "Request"}]})).await?;
+        let mut patterns = vec![json!({"resourceType": "Document", "requestStage": "Request"})];
+        // Com SOCKS, `0.0.0.0` e `[::]` iriam direto a este computador: todo pedido a eles para e vira `localhost`.
+        if proxied { patterns.extend(["*://0.0.0.0*", "*://[::]*"].map(|p| json!({"urlPattern": p, "requestStage": "Request"}))); }
+        self.page_call(session, "Fetch.enable", json!({"patterns": patterns})).await?;
         let (width, height) = document.as_ref().map_or((1280, 800), |(_, width, _)| (width.round() as i64, 600));
         self.browser_call(browser, "Browser.setWindowBounds", json!({"windowId": window, "bounds": {"width": width, "height": height}})).await?;
         let measured = self.page_call(session, "Runtime.evaluate", json!({"expression": "outerHeight-innerHeight", "returnByValue": true})).await?;
@@ -453,7 +486,7 @@ fn is_popup_window(features: &Value) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn listen(
     session: &Rc<Session>, target: &str, state: &Rc<RefCell<model::PageState>>, events: &async_channel::Sender<Event>, executor: &ForegroundExecutor,
-    dead: &Rc<Cell<bool>>, block_documents: bool, popups: Option<&Popups>,
+    dead: &Rc<Cell<bool>>, block_documents: bool, popups: Option<&Popups>, proxied: bool,
 ) -> Publish {
     let publish: Publish = {
         let (state, events) = (state.clone(), events.clone());
@@ -508,7 +541,11 @@ fn listen(
         if block_documents && params["frameId"] == m.as_str() {
             return drop(session.call("Fetch.failRequest", json!({"requestId": id, "errorReason": "Aborted"})));
         }
-        if model::allowed_request(&url) { return drop(session.call("Fetch.continueRequest", json!({"requestId": id}))); }
+        if model::allowed_request(&url) {
+            let mut go = json!({"requestId": id});
+            if proxied && let Some(local) = crate::socks::localhost_url(&url) { go["url"] = local.into(); }
+            return drop(session.call("Fetch.continueRequest", go));
+        }
         drop(session.call("Fetch.failRequest", json!({"requestId": id, "errorReason": "BlockedByClient"})));
         // Bloqueio é aviso, não tela de falha: tentar de novo bloquearia de novo.
         if params["frameId"] == m.as_str() {
@@ -625,8 +662,10 @@ impl Engine {
     pub fn adopt(&self, target: String, events: async_channel::Sender<Event>) -> impl Future<Output = Result<Engine, String>> + use<> {
         let starter = Starter { executor: self.executor.clone(), background: self.background.clone() };
         let browser = self.session.browser().clone();
+        // O popup nasce no contexto de quem o abriu: o do servidor remoto continua com a troca do `0.0.0.0`.
+        let context = match &self.context { Context::Proxied(id) => Context::Proxied(id.clone()), _ => Context::Profile };
         async move {
-            let opened = starter.open_target(&browser, &target, None, None, events, true, false).await;
+            let opened = starter.open_target(&browser, &target, context, None, events, true, false).await;
             let info = browser.call(None, "Target.getTargetInfo", json!({"targetId": target})).await;
             match (opened, info) {
                 // O popup navegou antes de haver sessão nele: o endereço e o título vêm do alvo.
@@ -673,6 +712,9 @@ impl Engine {
     pub fn evaluate(&self, expression: &str) { self.send("Runtime.evaluate", json!({"expression": expression})); }
 
     pub fn load(&self, url: &str) {
+        // `0.0.0.0` vira `localhost` antes de navegar: a página fica com a origem e os cookies de `localhost`.
+        let local = matches!(self.context, Context::Proxied(_)).then(|| crate::socks::localhost_url(url)).flatten();
+        let url = local.as_deref().unwrap_or(url);
         let (call, publish, target) = (self.session.call("Page.navigate", json!({"url": url})), self.publish.clone(), url.to_owned());
         self.executor.spawn(async move {
             // Falha de rede: o Chromium mostra a página de erro dele, e a barra o motivo.
@@ -886,7 +928,7 @@ impl Drop for Engine {
         self.surface.close();
         for popup in self.announced.take() { drop(self.session.browser().call(None, "Target.closeTarget", json!({"targetId": popup}))); }
         drop(self.session.browser().call(None, "Target.closeTarget", json!({"targetId": self.target})));
-        if let Some(context) = &self.context {
+        if let Context::Own(context) = &self.context {
             drop(self.session.browser().call(None, "Target.disposeBrowserContext", json!({"browserContextId": context})));
         }
     }

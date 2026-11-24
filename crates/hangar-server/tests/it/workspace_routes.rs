@@ -559,21 +559,47 @@ async fn folder_routes_without_sessions_skip_session_discovery() {
     assert_eq!(refusal(git, "workspace_context").await["detail"]["params"]["motivo"], "sessoes");
 }
 
-#[tokio::test]
-async fn unavailable_native_context_answers_503_with_reason() {
-    let dir = tempfile::tempdir().unwrap();
-    let missing = dir.path().join("missing-mux");
-    let f = workspace_fixture::fixture_with_mux(dir.path(), None, Some(&missing)).await;
-    let response = client()
-        .get(format!("http://{}/api/sessions/fixture/files/list", f.addr))
-        .bearer_auth(OWNER)
-        .send()
-        .await
-        .unwrap();
-    let body = refusal(response, "workspace_context").await;
-    assert_eq!(body["detail"]["params"]["motivo"], "sessoes");
-    let diag = f.diag("rust.workspace_failed").await;
-    assert_eq!((&diag["sessao"], &diag["codigo"]), (&json!("fixture"), &json!("workspace_context")));
+// Runtime próprio porque o fim do `#[tokio::test]` espera sem prazo uma tarefa bloqueante presa; aqui o corpo e o
+// encerramento têm teto e a falha diz a etapa.
+#[test]
+fn unavailable_native_context_answers_503_with_reason() {
+    use std::time::Duration;
+    let stage = Arc::new(std::sync::Mutex::new("fixture"));
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let at = stage.clone();
+    // O corpo roda numa tarefa: pânico vira `JoinError` sem pular o encerramento com prazo, e o prazo corre mesmo com
+    // uma thread presa.
+    let body = runtime.spawn(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing-mux");
+        let f = workspace_fixture::fixture_with_mux(dir.path(), None, Some(&missing)).await;
+        *at.lock().unwrap() = "pedido";
+        let response = client()
+            .get(format!("http://{}/api/sessions/fixture/files/list", f.addr))
+            .bearer_auth(OWNER)
+            .send()
+            .await
+            .unwrap();
+        *at.lock().unwrap() = "resposta";
+        let body = refusal(response, "workspace_context").await;
+        assert_eq!(body["detail"]["params"]["motivo"], "sessoes");
+        *at.lock().unwrap() = "diário";
+        let diag = f.diag("rust.workspace_failed").await;
+        assert_eq!((&diag["sessao"], &diag["codigo"]), (&json!("fixture"), &json!("workspace_context")));
+        *at.lock().unwrap() = "encerramento";
+    });
+    let done = runtime.block_on(async { tokio::time::timeout(Duration::from_secs(60), body).await });
+    // O `shutdown_timeout` desiste calado: gastar o teto inteiro é a tarefa presa que o teste quer apontar.
+    let ceiling = Duration::from_secs(10);
+    let shutdown = std::time::Instant::now();
+    runtime.shutdown_timeout(ceiling);
+    let stuck = shutdown.elapsed() >= ceiling;
+    match done {
+        Err(_) => panic!("parou na etapa {}", stage.lock().unwrap()),
+        Ok(Err(e)) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        Ok(joined) => joined.unwrap(),
+    }
+    assert!(!stuck, "parou na etapa encerramento: uma tarefa bloqueante não terminou");
 }
 
 #[cfg(unix)]
@@ -806,8 +832,10 @@ async fn task3_f03_verified_raw_rows_authorize_old_and_active_files_without_a_vi
     let resolved = c.post(format!("http://{}/api/sessions/fixture/files/resolver", h.f.addr)).bearer_auth(OWNER)
         .json(&json!({"caminhos":["historical-report.md"]})).send().await.unwrap();
     assert_eq!(resolved.status(), 200);
+    let mtime = std::fs::metadata(h.old.join("historical-report.md")).unwrap().modified().unwrap()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     assert_eq!(resolved.json::<Value>().await.unwrap(), json!({"faltam":[],"ok":{"historical-report.md":{
-        "relativo":null,"real":h.old.join("historical-report.md")}}}));
+        "relativo":null,"real":h.old.join("historical-report.md"),"size":8,"mtime":mtime}}}));
     let save = c.post(h.url("file/text", "historical-report.md")).bearer_auth(OWNER)
         .json(&json!({"path":"historical-report.md","text":"alterado","digest":ORIGINAL_DIGEST})).send().await.unwrap();
     assert_eq!(save.status(), 200);

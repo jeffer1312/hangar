@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, createElement, forwardRef, StrictMode, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot as createReactRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -12,7 +12,7 @@ const calls = vi.hoisted(() => ({
   activeId: 'server-b', startPending: null as Promise<void> | null,
   target: null as null | { id: string; label: string; baseUrl: string; token: string },
   accounts: vi.fn(),
-  providers: vi.fn(), defaults: vi.fn(),
+  providers: vi.fn(), defaults: vi.fn(), config: vi.fn(), me: vi.fn(),
   mutate: vi.fn(),
   contextFetch: vi.fn(),
   models: vi.fn(),
@@ -35,6 +35,7 @@ const calls = vi.hoisted(() => ({
   worktrees: vi.fn(),
   branches: vi.fn(),
   commands: vi.fn(),
+  agy: vi.fn(),
 }));
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
 
@@ -162,12 +163,15 @@ vi.mock('@hangar/core', async (original) => ({
   // Sonda de providers da folha nova: sem ela o teste fazia fetch de verdade para b.local.
   getProvidersForServer: calls.providers,
   getSessionDefaultsForServer: calls.defaults,
+  getConfigForServer: calls.config,
+  getMeForServer: calls.me,
   setServiceTier: calls.mutate, setModelEffort: calls.mutate, setCodexModel: calls.mutate,
   setEngineModel: calls.mutate, setPiModel: calls.mutate, setKimiModel: calls.mutate,
   setPermissionMode: calls.mutate,
   modelOptions: vi.fn().mockResolvedValue({ models: [], reduced: false }),
   getSessions: vi.fn().mockResolvedValue([]),
   getCodexAccountsForServer: calls.accounts,
+  getAntigravityAccountsForServer: calls.agy,
   modelOptionsForServer: calls.models,
   prepareCodexAccountForServer: calls.prepare,
   getCodexPreparationForServer: calls.preparation,
@@ -271,11 +275,16 @@ vi.mock('../../paraglide/messages', () => ({
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
     'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable ' +
+    'native_ctl_speed native_ctl_speed_normal native_ctl_speed_ultrafast native_ctl_speed_normal_hint native_ctl_speed_fast_hint ' +
+    'native_ctl_speed_ultrafast_hint native_ctl_speed_ultrafast_unavailable cliproxy_bound_account cliproxy_no_bound_account ' +
+    'cliproxy_choose_connected_account conta_cota_sem_leitura ' +
     'reasoning_level_low reasoning_level_medium reasoning_level_high reasoning_level_xhigh reasoning_level_max reasoning_level_ultra ' +
     'native_mode_plan native_mode_manual native_mode_auto native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk chat_mode_plan config_motores_modelo_padrao ' +
     'codex_contexto_titulo codex_contexto_padrao codex_contexto_salvando comum_falha_aplicar config_server_tentar_de_novo home_new_conversation ' +
     'tags_apply_all tags_apply_ok tags_apply_offline tags_apply_old tags_apply_absent tags_apply_failed tags_apply_retry tags_saving ' +
-    'criar_criar criar_agente comum_voltar comum_cancelar criar_escolher_pasta native_create_worktrees native_create_worktrees_merged native_create_worktree_session'
+    'criar_criar criar_agente comum_voltar comum_cancelar criar_escolher_pasta native_create_worktrees native_create_worktrees_merged native_create_worktree_session ' +
+    'mobile_create_antigravity_account mobile_antigravity_default_account mobile_antigravity_signed_in mobile_antigravity_login_unknown ' +
+    'mobile_antigravity_accounts_error mobile_antigravity_sign_in_first mobile_antigravity_signed_out mobile_antigravity_terms_hint erro_agy_ausente'
   ).split(' ').map((k) => [k, () => k])),
 }));
 
@@ -304,8 +313,27 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+// Teste que falha antes do próprio unmount deixaria a tela viva durante os seguintes.
+const mountedRoots = new Set<Root>();
+function createRoot(container: Element): Root {
+  const root = createReactRoot(container);
+  const unmount = root.unmount.bind(root);
+  root.unmount = () => { mountedRoots.delete(root); unmount(); };
+  mountedRoots.add(root);
+  return root;
+}
+
 describe('CreateSessionSheet Codex', () => {
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  afterEach(async () => {
+    const failures: unknown[] = [];
+    for (const root of [...mountedRoots]) {
+      try { await act(async () => root.unmount()); } catch (error) { failures.push(error); }
+    }
+    mountedRoots.clear();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    if (failures.length) throw new AggregateError(failures, 'unmount_failed');
+  });
   beforeEach(() => {
     calls.contextFetch.mockReset().mockImplementation(async () => new Response(JSON.stringify({ contexto_estendido: true })));
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => calls.contextFetch(input, init));
@@ -330,9 +358,12 @@ describe('CreateSessionSheet Codex', () => {
     calls.configs.mockReset().mockResolvedValue([]);
     calls.engines.mockReset().mockResolvedValue({ motores: {} });
     calls.accounts.mockReset().mockResolvedValue([connected]);
+    calls.agy.mockReset().mockResolvedValue({ instalado: true, contas: [] });
     calls.mutate.mockReset();
     calls.providers.mockReset().mockResolvedValue({});
     calls.defaults.mockReset().mockResolvedValue(null);
+    calls.config.mockReset().mockResolvedValue({ campos: { headless_default: { valor: true, definido: true, origem: 'app' } }, somente_leitura: {} });
+    calls.me.mockReset().mockResolvedValue({ role: 'owner', name: null });
     calls.models.mockReset().mockResolvedValue({ models: [], reduced: false });
     calls.prepare.mockReset().mockResolvedValue({ status: 'ready', trust_pending: false, issues: [] });
     calls.preparation.mockReset();
@@ -359,6 +390,8 @@ describe('CreateSessionSheet Codex', () => {
     const buttons = [...container.querySelectorAll('button')];
     return buttons.find((b) => b.getAttribute('aria-label') === text) ?? buttons.find((b) => b.textContent === text);
   };
+  // Escolha de velocidade do painel: Normal, Fast e Ultra Fast.
+  const speedRadio = (container: HTMLElement, label: string) => container.querySelector<HTMLButtonElement>(`[role="radio"][aria-label="${label}"]`);
 
   function type(container: HTMLElement, text: string) {
     const input = container.querySelector('textarea[aria-label="nova_conversa_placeholder"]') as HTMLTextAreaElement;
@@ -424,6 +457,66 @@ describe('CreateSessionSheet Codex', () => {
     return { container, root };
   }
 
+  it('aberta pelo assistente com um motor, só cria depois de o motor chegar', async () => {
+    let deliver: (value: { motores: Record<string, { label: string; model: string }> }) => void = () => {};
+    calls.engines.mockReturnValue(new Promise((resolve) => { deliver = resolve; }));
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(CreateSessionSheet, { initial: { engine: 'proxy' } })));
+    await act(async () => Promise.resolve());
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      await act(async () => deliver({ motores: { proxy: { label: 'Proxy', model: 'sol' } } }));
+      await send(container);
+      expect(calls.create.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ engine: 'proxy' }));
+    } finally {
+      root.unmount();
+    }
+  });
+
+  it('motor pedido ausente na primeira leitura segue segurando a criação quando a máquina é renovada', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    calls.engines.mockResolvedValueOnce({ motores: {} }).mockResolvedValue({ motores: { proxy: { label: 'Proxy', model: 'sol' } } });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const sheet = () => createElement(CreateSessionSheet, { initial: { server: 'server-c', engine: 'proxy' } });
+    await act(async () => root.render(sheet()));
+    await act(async () => Promise.resolve());
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      // Mesma máquina com o token renovado: o formulário não remonta, só relê os motores.
+      calls.target = { ...calls.target, token: 'token-c2' };
+      await act(async () => root.render(sheet()));
+      await act(async () => Promise.resolve());
+      expect(calls.engines).toHaveBeenCalledTimes(2);
+      await send(container);
+      expect(calls.create.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ engine: 'proxy' }));
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it('motor pedido já resolvido continua escolhido quando a máquina é renovada', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    calls.engines.mockResolvedValue({ motores: { proxy: { label: 'Proxy', model: 'sol' } } });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const sheet = () => createElement(CreateSessionSheet, { initial: { server: 'server-c', engine: 'proxy' } });
+    await act(async () => root.render(sheet()));
+    await act(async () => Promise.resolve());
+    try {
+      calls.target = { ...calls.target, token: 'token-c2' };
+      await act(async () => root.render(sheet()));
+      await act(async () => Promise.resolve());
+      await send(container);
+      expect(calls.create.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ engine: 'proxy' }));
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it('o `/` sem sessão sugere a lista da conta e pasta escolhidas, e a escolha só entra no campo', async () => {
     calls.commands.mockResolvedValue([
       { name: 'global-skill', display: '/global-skill', description: null, argumentHint: null, source: 'skill', destructive: false },
@@ -487,6 +580,94 @@ describe('CreateSessionSheet Codex', () => {
       await act(async () => button(container, 'manual')!.click());
       await send(container);
       expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ model: 'opus', effort: 'high', permission_mode: 'manual' }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('memória do aparelho não põe provedor, modelo e esforço no pedido', async () => {
+    localStorage.setItem('create.choices.v1:server-b', '{"provider":"codex","model":"sol","effort":"high","codexAccount":"work"}');
+    calls.providers.mockResolvedValue({ claude: { disponivel: true }, codex: { disponivel: true } });
+    calls.models.mockImplementation(async (_server, provider) => provider === 'codex'
+      ? { kind: 'codex', reduced: false, models: [{ id: 'sol', name: 'Sol', efforts: ['low', 'high'] }] }
+      : { kind: 'claude', reduced: false, models: [{ id: 'sol', name: 'Sol' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ provider: 'claude', model: null, effort: null }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('modelo e esforço lembrados no aparelho não vão no pedido sem padrão do servidor', async () => {
+    localStorage.setItem('create.choices.v1:server-b', JSON.stringify({ provider: 'claude', model: 'sonnet', effort: 'low' }));
+    calls.models.mockResolvedValue({ kind: 'claude', reduced: false, models: [{ id: 'sonnet', name: 'Sonnet' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ model: null, effort: null }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('modo de execução vem do servidor e só vai no pedido quando a pessoa escolhe', async () => {
+    localStorage.setItem('create.choices.v1:server-b', JSON.stringify({ headless: true }));
+    calls.config.mockResolvedValue({ campos: { headless_default: { valor: false, definido: true, origem: 'app' } }, somente_leitura: {} });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create.mock.calls.at(-1)?.[1]).not.toHaveProperty('headless');
+      expect(button(container, 'criar_modo_exec: criar_modo_exec_tmux')).toBeTruthy();
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('sem o modo do servidor lido, não cria nem mostra um modo; escolher o modo destrava', async () => {
+    calls.config.mockReturnValue(new Promise(() => {}));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      expect(button(container, 'criar_modo_exec: criar_modo_exec_headless')).toBeUndefined();
+      await act(async () => button(container, 'criar_modo_exec: comum_carregando')!.click());
+      await act(async () => button(container, 'criar_modo_exec_tmux')!.click());
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ headless: false }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('falha ao ler o modo do servidor aparece na tela e segura a criação até escolher o modo', async () => {
+    calls.config.mockRejectedValue(new Error('config-failed'));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(container.textContent).toContain('config-failed');
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      await act(async () => button(container, 'criar_modo_exec: comum_carregando')!.click());
+      await act(async () => button(container, 'criar_modo_exec_headless')!.click());
+      expect(container.textContent).not.toContain('config-failed');
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ headless: true }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('leitura do modo cancelada pelo sistema é refeita ao voltar ao app', async () => {
+    calls.config.mockRejectedValueOnce(nativeCanceled());
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      await appState('background');
+      await appState('active');
+      await send(container);
+      expect(calls.config).toHaveBeenCalledTimes(2);
+      expect(calls.create.mock.calls.at(-1)?.[1]).not.toHaveProperty('headless');
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('convidado não lê a configuração do dono e cria sem modo: o servidor decide', async () => {
+    calls.me.mockResolvedValue({ role: 'guest', name: 'g' });
+    calls.config.mockRejectedValue(Object.assign(new Error('403'), { status: 403 }));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(calls.config).not.toHaveBeenCalled();
+      await send(container);
+      expect(calls.create.mock.calls.at(-1)?.[1]).not.toHaveProperty('headless');
     } finally { act(() => root.unmount()); }
   });
 
@@ -690,14 +871,16 @@ describe('CreateSessionSheet Codex', () => {
     } finally { await act(async () => root.unmount()); }
   });
 
-  it('retomada de providers preserva provider lembrado ainda disponível, modelo e esforço', async () => {
-    localStorage.setItem('create.choices.v1:server-b', '{"provider":"codex","model":"sol","effort":"high","codexAccount":"work"}');
+  it('retomada de providers preserva provider, modelo e esforço escolhidos', async () => {
     calls.providers.mockRejectedValueOnce(nativeCanceled()).mockResolvedValue({
       claude: { disponivel: true, default: true }, codex: { disponivel: true, default: false },
     });
     calls.models.mockResolvedValue({ kind: 'codex', reduced: false, models: [{ id: 'sol', name: 'Sol', efforts: ['low', 'high'] }] });
-    const { container, root } = await renderSheet(false, false);
+    const { container, root } = await renderSheet(false, true);
     try {
+      await openSettings(container);
+      await act(async () => button(container, 'Sol')!.click());
+      await act(async () => button(container, 'reasoning_level_high')!.click());
       expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toContain('Sol, high');
       await appState('background');
       await appState('active');
@@ -846,14 +1029,24 @@ describe('CreateSessionSheet Codex', () => {
     expect(calls.configs).toHaveBeenCalledTimes(1);
   });
 
-  it('cleanup de modelos por troca de conta não recupera a carga antiga', async () => {
-    localStorage.setItem('create.choices.v1:server-b', '{"provider":"codex","codexAccount":"work"}');
+  it('conta Codex lembrada no aparelho não substitui a padrão do servidor', async () => {
+    localStorage.setItem('create.choices.v1:server-b', '{"codexAccount":"work"}');
     calls.accounts.mockResolvedValue([defaultAccount, connected]);
+    const { container, root } = await renderSheet(false, true);
+    try {
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ provider: 'codex', codex_account: 'default' }));
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('cleanup de modelos por troca de conta não recupera a carga antiga', async () => {
+    calls.accounts.mockResolvedValue([connected, defaultAccount]);
     const pending = deferred<never>();
     calls.models.mockImplementation((_server, provider, _engine, _config, account) => provider === 'codex' && account === 'work'
       ? pending.promise : Promise.resolve({ models: [], reduced: false }));
-    const { container, root } = await renderSheet(false, false);
+    const { container, root } = await renderSheet(false, true);
     try {
+      await pickAccount(container, 'Trabalho');
       const oldRequest = calls.models.mock.calls.find((call) => call[4] === 'work')!;
       await pickAccount(container, 'Padrão');
       expect((oldRequest[5] as AbortSignal).aborted).toBe(true);
@@ -1092,7 +1285,7 @@ describe('CreateSessionSheet Codex', () => {
     ] });
     const { container, root } = await renderSheet(false, false);
     await openSettings(container);
-    const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!;
+    const fast = speedRadio(container, 'native_ctl_fast')!;
     expect(fast.disabled).toBe(!available);
     await act(async () => fast.click());
     expect(calls.create).not.toHaveBeenCalled();
@@ -1117,11 +1310,11 @@ describe('CreateSessionSheet Codex', () => {
     await openSettings(container);
     await act(async () => button(container, 'Sol')!.click());
     await act(async () => button(container, 'reasoning_level_high')!.click());
-    await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!.click());
+    await act(async () => speedRadio(container, 'native_ctl_fast')!.click());
     const codexReads = calls.models.mock.calls.filter((call) => call[1] === 'codex').length;
     await act(async () => configs.resolve([{ path: '/late-claude', label: 'Conta tardia', active: true }]));
     expect(calls.models.mock.calls.filter((call) => call[1] === 'codex')).toHaveLength(codexReads);
-    expect(container.querySelector('[role="switch"][aria-label="native_ctl_fast"]')!.getAttribute('aria-checked')).toBe('true');
+    expect(speedRadio(container, 'native_ctl_fast')!.getAttribute('aria-checked')).toBe('true');
     expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toContain('Sol, high');
     await send(container);
     expect(calls.create).toHaveBeenCalledExactlyOnceWith(server, expect.objectContaining({
@@ -1188,7 +1381,7 @@ describe('CreateSessionSheet Codex', () => {
     ] });
     const { container, root } = await renderSheet(false, false);
     await openSettings(container);
-    await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!.click());
+    await act(async () => speedRadio(container, 'native_ctl_fast')!.click());
     await act(async () => button(container, 'criar_padrao')!.click());
     await send(container);
     expect(calls.create.mock.calls[0][1].model).toBeNull();
@@ -1196,7 +1389,7 @@ describe('CreateSessionSheet Codex', () => {
     root.unmount();
   });
 
-  it.each([false, true])('desligar Fast omite service_tier sem desfazer o modelo escolhido (mesmo lote: %s)', async (batched) => {
+  it('voltar a Normal omite service_tier sem desfazer o modelo escolhido', async () => {
     calls.providers.mockResolvedValue({ codex: { disponivel: true, default: true } });
     calls.models.mockResolvedValue({ kind: 'codex', reduced: false, models: [
       { id: 'sol', name: 'Sol', efforts: ['high'], service_tiers: [{ id: 'priority' }] },
@@ -1204,13 +1397,11 @@ describe('CreateSessionSheet Codex', () => {
     const { container, root } = await renderSheet(false, false);
     await openSettings(container);
     await act(async () => button(container, 'Sol')!.click());
-    const fast = () => container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!;
-    if (batched) await act(async () => { fast().click(); fast().click(); });
-    else {
-      await act(async () => fast().click());
-      expect(fast().getAttribute('aria-checked')).toBe('true');
-      await act(async () => fast().click());
-    }
+    const fast = () => speedRadio(container, 'native_ctl_fast')!;
+    const normal = () => speedRadio(container, 'native_ctl_speed_normal')!;
+    await act(async () => fast().click());
+    expect(fast().getAttribute('aria-checked')).toBe('true');
+    await act(async () => normal().click());
     expect(fast().getAttribute('aria-checked')).toBe('false');
     await send(container);
     expect(calls.create.mock.calls[0][1].model).toBe('sol');
@@ -1231,7 +1422,7 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => button(container, 'Codex')!.click());
     await act(async () => button(container, 'Sol')!.click());
     await act(async () => button(container, 'reasoning_level_high')!.click());
-    const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]');
+    const fast = speedRadio(container, 'native_ctl_fast');
     expect(fast).not.toBeNull();
     await act(async () => fast!.click());
     expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toBe('Sol · 272K, high, native_ctl_fast');
@@ -1261,7 +1452,7 @@ describe('CreateSessionSheet Codex', () => {
     expect(button(container, 'composer_session_settings')).toBeTruthy();
     await act(async () => button(container, 'composer_session_settings')!.click());
     await act(async () => button(container, 'Sol')!.click());
-    const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]');
+    const fast = speedRadio(container, 'native_ctl_fast');
     expect(fast).not.toBeNull();
     expect(fast!.disabled).toBe(!available);
     await act(async () => fast!.click());
@@ -1374,8 +1565,8 @@ describe('CreateSessionSheet Codex', () => {
     root.unmount();
   });
 
-  it('descarta esforço guardado incompatível com Haiku', async () => {
-    localStorage.setItem('create.choices.v1:server-b', JSON.stringify({ provider: 'claude', model: 'haiku', effort: 'high' }));
+  it('descarta esforço padrão incompatível com Haiku', async () => {
+    calls.defaults.mockResolvedValue({ model: 'haiku', effort: 'high', permission: '' });
     calls.models.mockResolvedValue({ kind: 'claude', reduced: false, models: [{ id: 'haiku', name: 'Haiku' }] });
     const { container, root } = await renderSheet(false, false);
     await send(container);
@@ -1414,7 +1605,7 @@ describe('CreateSessionSheet Codex', () => {
     await closePanel(container, 'composer_session_settings');
     await openSettings(container);
     await act(async () => button(container, 'Sol')!.click());
-    const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]');
+    const fast = speedRadio(container, 'native_ctl_fast');
     expect(!!fast).toBe(visible);
     if (fast) { expect(fast.disabled).toBe(!available); await act(async () => fast.click()); }
     expect(calls.mutate).not.toHaveBeenCalled();
@@ -1422,6 +1613,56 @@ describe('CreateSessionSheet Codex', () => {
     const payload = calls.create.mock.calls[0][1];
     expect(payload.engine).toBe('local');
     if (available) expect(payload.service_tier).toBe('priority');
+    else expect(payload).not.toHaveProperty('service_tier');
+    root.unmount();
+  });
+
+  it.each([
+    { tiers: [{ id: 'priority' }, { id: 'ultrafast' }], available: true },
+    { tiers: [{ id: 'priority' }, { id: 'ultrafast', hidden: true }], available: false },
+    { tiers: [{ id: 'priority' }], available: false },
+  ])('Ultra Fast na criação segue o tier do modelo Codex: $tiers', async ({ tiers, available }) => {
+    calls.providers.mockResolvedValue({ codex: { disponivel: true, default: true } });
+    calls.models.mockResolvedValue({ kind: 'codex', reduced: false, models: [{ id: 'sol', name: 'Sol', efforts: ['high'], service_tiers: tiers }] });
+    const { container, root } = await renderSheet(false, false);
+    await openSettings(container);
+    await act(async () => button(container, 'Sol')!.click());
+    const ultra = speedRadio(container, 'native_ctl_speed_ultrafast')!;
+    expect(ultra.disabled).toBe(!available);
+    expect(container.textContent?.includes('native_ctl_speed_ultrafast_unavailable')).toBe(!available);
+    await act(async () => ultra.click());
+    expect(calls.mutate).not.toHaveBeenCalled();
+    await send(container);
+    const payload = calls.create.mock.calls[0][1];
+    if (available) expect(payload).toMatchObject({ model: 'sol', service_tier: 'ultrafast' });
+    else expect(payload).not.toHaveProperty('service_tier');
+    root.unmount();
+  });
+
+  it.each([true, false])('Ultra Fast Claude consulta e usa a conta vinculada ao motor (%s)', async (ultrafast) => {
+    const account = ultrafast ? 'pro' : 'plus';
+    const bound = { account, plan: account, email: `${account}@example.test`, label: account, credential_id: `codex:/test/${account}` };
+    calls.engines.mockResolvedValue({ motores: { local: { label: 'Motor local', model: 'sol',
+      cliproxy_binding: 'linked-account', cliproxy_bound_account: bound, cliproxy_accounts: [bound],
+    } } });
+    calls.models.mockResolvedValue({ kind: 'engine', reduced: false, supports_fast: true, supports_ultrafast: ultrafast,
+      models: [{ id: 'sol', name: 'Sol', supports_fast: true, supports_ultrafast: ultrafast }] });
+    const { container, root } = await renderSheet(false, false);
+    await openOptions(container);
+    await act(async () => button(container, 'criar_claude_sua_conta')!.click());
+    await act(async () => button(container, 'Motor local')!.click());
+    await closePanel(container, 'composer_session_settings');
+    await openSettings(container);
+    await act(async () => button(container, 'Sol')!.click());
+    const ultra = speedRadio(container, 'native_ctl_speed_ultrafast')!;
+    expect(ultra.disabled).toBe(!ultrafast);
+    await act(async () => ultra.click());
+    await send(container);
+    expect(calls.models.mock.calls.at(-1)?.at(-1)).toBe(account);
+    const payload = calls.create.mock.calls[0][1];
+    expect(payload.engine_account).toBe(account);
+    expect(payload.engine_binding).toBe('linked-account');
+    if (ultrafast) expect(payload.service_tier).toBe('ultrafast');
     else expect(payload).not.toHaveProperty('service_tier');
     root.unmount();
   });
@@ -1435,9 +1676,9 @@ describe('CreateSessionSheet Codex', () => {
     const { container, root } = await renderSheet(false, false);
     await openSettings(container);
     await act(async () => button(container, 'Sol')!.click());
-    const fast = () => container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]')!;
+    const fast = () => speedRadio(container, 'native_ctl_fast')!;
     await act(async () => fast().click());
-    if (tier === 'default') await act(async () => fast().click());
+    if (tier === 'default') await act(async () => speedRadio(container, 'native_ctl_speed_normal')!.click());
     await act(async () => button(container, 'Mini')!.click());
     expect(fast().disabled).toBe(true);
     expect(fast().getAttribute('aria-checked')).toBe('false');
@@ -1479,6 +1720,59 @@ describe('CreateSessionSheet Codex', () => {
       provider: 'codex', codex_account: 'work', remember_provider: true,
     }));
     root.unmount();
+  });
+
+  it('Antigravity abre com terminal só na conta Google padrão, com o modelo e sem esforço nem o modo que pergunta', async () => {
+    calls.providers.mockResolvedValue({ antigravity: { disponivel: true, default: true } });
+    calls.defaults.mockResolvedValue({ model: '', effort: '', permission: 'manual' });
+    // Uma adicional antiga na lista não vira escolha: com terminal o agy grava tudo na padrão.
+    calls.agy.mockResolvedValue({ instalado: true, contas: [
+      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: true, termos_aceitos: false, em_uso: false },
+      { id: 'trabalho', padrao: false, pasta: '/h/.antigravity-trabalho', credencial: 'antigravity:/h/.antigravity-trabalho',
+        logado: true, termos_aceitos: true, em_uso: false },
+    ] });
+    calls.models.mockResolvedValue({ kind: 'antigravity', reduced: false, models: [{ id: 'gemini-4-neon-high', name: 'Gemini 4 Neon (High)' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+      expect(calls.models).toHaveBeenLastCalledWith(server, 'antigravity', null, null, 'default', expect.any(AbortSignal));
+      expect([...container.querySelectorAll<HTMLButtonElement>('button')]
+        .some((b) => b.getAttribute('aria-label')?.startsWith('mobile_create_antigravity_account'))).toBe(false);
+      expect(button(container, 'trabalho')).toBeFalsy();
+      expect(container.textContent).toContain('mobile_antigravity_terms_hint');
+      await send(container);
+      const body = calls.create.mock.calls[0][1];
+      expect(body).toEqual(expect.objectContaining({ provider: 'antigravity', config_dir: null, permission_mode: null }));
+      expect(body).not.toHaveProperty('headless');
+      expect(body).not.toHaveProperty('effort');
+      expect(body).not.toHaveProperty('codex_account');
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('Antigravity: a conta padrão vai sem pasta, e a conta fora do Google não cria', async () => {
+    calls.providers.mockResolvedValue({ antigravity: { disponivel: true, default: true } });
+    calls.agy.mockResolvedValue({ instalado: true, contas: [
+      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: false, termos_aceitos: true, em_uso: false },
+    ] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+      expect(container.textContent).toContain('mobile_antigravity_sign_in_first');
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('Antigravity sem a lista de contas abre na padrão e diz por quê', async () => {
+    calls.providers.mockResolvedValue({ antigravity: { disponivel: true, default: true } });
+    calls.agy.mockRejectedValue(new Error('agy-list-failed'));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+      expect(container.textContent).toContain('agy-list-failed');
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ provider: 'antigravity', config_dir: null }));
+    } finally { act(() => root.unmount()); }
   });
 
   it('confirmação manual de Claude não é trocada pela resposta tardia', async () => {
@@ -1710,7 +2004,7 @@ describe('CreateSessionSheet Codex', () => {
   it.each([
     ['sem escolha, a conta ativa não vai (D-003: o servidor decide)', null, null, null],
     ['a conta ativa escolhida à mão vai', null, 'Conta A', '/a'],
-    ['a conta lembrada de uma escolha anterior vai', '/b', null, '/b'],
+    ['a conta lembrada no aparelho não vai: a seleção abre na ativa do servidor', '/b', null, null],
   ])('%s', async (_case, remembered, pick, expected) => {
     calls.configs.mockResolvedValue([{ path: '/a', label: 'Conta A', active: true }, { path: '/b', label: 'Conta B', active: false }]);
     if (remembered) localStorage.setItem(`create.choices.v1:${server.id}`, JSON.stringify({ configDir: remembered }));

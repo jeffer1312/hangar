@@ -2,7 +2,7 @@
 id: 2026-10-24-atalho-hangar-python
 titulo: Os scripts do Hangar passam a usar o Python do próprio Hangar pelo atalho hangar-python
 comando_posix: ./scripts/install-hangar-send.sh
-prova: ~/.local/bin/hangar-python
+prova: ~/.local/bin/hangar-send
 destrutivo: false
 ---
 

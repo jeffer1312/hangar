@@ -7,7 +7,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const h = vi.hoisted(() => ({
-  placement: 'bottom' as SessionsBarPlacement, panelOpen: true, collapsed: false, toggleCollapsed: vi.fn(),
+  placement: 'bottom' as SessionsBarPlacement, panelOpen: true, collapsed: false, toggleCollapsed: vi.fn(), togglePanel: vi.fn(),
   size: { width: 1180, height: 820, scale: 1, fontScale: 1 },
   pathname: '/s/srv/a', params: { server: 'srv', name: 'a' }, barMounts: 0, panelMounts: 0,
   dimensionsListener: vi.fn(), removeDimensionsListener: vi.fn(),
@@ -83,13 +83,15 @@ vi.mock('../../ui/Screen', () => ({ Screen: ({ children }: { children: ReactNode
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/HangarMark', () => ({ HangarMark: () => null }));
 vi.mock('../voice/LiveVoiceChatButton', () => ({ LiveVoiceChatButton: () => null }));
-vi.mock('./SessionsBar', () => ({ SessionsBar: ({ onPick, onNew, selected }: {
-  onPick: (s: unknown) => void; onNew: () => void; selected?: { name: string };
+vi.mock('./SessionsBar', () => ({ SessionsBar: ({ onPick, onNew, onWorkReview, selected }: {
+  onPick: (s: unknown) => void; onNew: () => void; onWorkReview?: (s: { serverId: string; name: string }) => void; selected?: { name: string };
 }) => {
   const instance = useRef<number | null>(null);
   if (instance.current === null) instance.current = ++h.barMounts;
   return createElement('nav', { 'data-instance': instance.current, 'data-selected': selected?.name },
     createElement('button', { onClick: () => onPick({ serverId: 'srv', name: 'b' }) }, 'pick-b'),
+    createElement('button', { onClick: () => onWorkReview?.({ serverId: 'srv', name: 'b' }) }, 'review-b'),
+    createElement('button', { onClick: () => onWorkReview?.({ serverId: 'srv', name: 'a' }) }, 'review-a'),
     createElement('button', { onClick: onNew }, 'new-session'));
 } }));
 vi.mock('./ContextPanel', () => ({ ContextPanel: ({ name, focused, onPick }: { name: string; focused: boolean; onPick: (s: unknown) => void }) => {
@@ -99,6 +101,7 @@ vi.mock('./ContextPanel', () => ({ ContextPanel: ({ name, focused, onPick }: { n
     createElement('button', { onClick: () => onPick({ serverId: 'other-machine', name: 'pair name' }) }, 'pick-group-member'));
 } }));
 import { TabletShell } from './TabletShell';
+import { usePanelTabRequest } from './panelTab';
 import Index from '../../../app/index';
 import ChatScreen from '../../../app/s/[server]/[name]/index';
 import Layout from '../../../app/_layout';
@@ -196,6 +199,22 @@ it('nova conversa no Início não monta o painel', () => {
   act(() => root.render(createElement(TabletShell, { children: createElement('main', null, 'new-conversation') })));
   expect(host.querySelector('aside')).toBeNull();
 });
+it('o chip da revisão abre a sessão com o painel aberto na aba Revisão', () => {
+  usePanelTabRequest.setState({ request: null });
+  h.panelOpen = false;
+  render(); click('review-b');
+  expect(usePanelTabRequest.getState().request).toEqual({ key: 'srv::b', tab: 'review' });
+  expect(h.togglePanel).toHaveBeenCalledOnce();
+  expect(h.router.replace).toHaveBeenCalledWith('/s/srv/b');
+  // Na conversa da própria sessão só troca a aba, sem navegar.
+  h.panelOpen = true;
+  render(); click('review-a');
+  expect(usePanelTabRequest.getState().request).toEqual({ key: 'srv::a', tab: 'review' });
+  expect(h.togglePanel).toHaveBeenCalledOnce();
+  expect(h.router.replace).toHaveBeenCalledOnce();
+  usePanelTabRequest.setState({ request: null });
+});
+
 it('troca a sessão sem empilhar e abre criação, busca, configuração e Início', () => {
   render(); click('pick-b'); expect(h.router.replace).toHaveBeenCalledWith('/s/srv/b');
   click('new-session'); expect(h.router.push).toHaveBeenCalledWith('/create');

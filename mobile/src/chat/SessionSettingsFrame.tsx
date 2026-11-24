@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { Icon } from '../ui/Icon';
+import { Icon, type IconName } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 
 export type SessionSettingsTab = 'model' | 'session' | 'usage';
@@ -55,12 +55,13 @@ export function SessionSettingsContent({ title, children }: { title?: string; ch
   </ScrollView>;
 }
 
-export function SessionSettingsLink({ label, value, disabled, onPress }: {
-  label: string; value?: string; disabled?: boolean; onPress: () => void;
+export function SessionSettingsLink({ label, value, disabled, icon, onPress }: {
+  label: string; value?: string; disabled?: boolean; icon?: IconName; onPress: () => void;
 }) {
   return <Pressable onPress={onPress} disabled={disabled} accessibilityRole="button" accessibilityLabel={label}
     accessibilityValue={value ? { text: value } : undefined} accessibilityState={{ disabled: !!disabled }}
     style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+    {icon ? <Icon name={icon} size={18} /> : null}
     <Text style={[styles.rowLabel, !value && styles.secondary]}>{label}</Text>
     {value ? <Text style={styles.value}>{value}</Text> : null}
     <Icon name="ChevronRight" size={16} />

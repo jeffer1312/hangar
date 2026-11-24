@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { configureApi, configureDiag } from '@hangar/core';
+import { configureApi } from '@hangar/core';
 import { discover, readDevices, readIdentifier, readPeers, reason, registerBoth } from './api';
 import * as m from '../../paraglide/messages';
 
@@ -30,20 +30,12 @@ describe('respostas públicas de máquinas', () => {
     expect((await discover(server, new AbortController().signal))[0].connect_error).toBe('fixture-cause');
   });
 
-  it('ignora código e chave de grupo que não são texto: o pedido fica sozinho, sem juntar', async () => {
-    const events: { codigo?: string }[] = [];
-    configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
-    fetchMock.mockResolvedValue(new Response(JSON.stringify([
-      { device_id: 'a', name: 'iPhone', status: 'pending', install_group: 42, install_code: ['ABC-DEF'] },
-      { device_id: 'b', name: 'Pixel', status: 'pending', install_group: 'g1', install_code: 'XYZ-234' },
-      // Texto fora do formato: com quebra de linha a chave do cartão colidiria com a de outro pedido.
-      { device_id: 'c', name: 'Moto', status: 'pending', install_group: 'g1\nPixel', install_code: 'XYZ-234' },
-    ]), { status: 200 }));
-    const rows = await readDevices(server, new AbortController().signal);
-    expect(rows[0]).toEqual({ device_id: 'a', name: 'iPhone', status: 'pending' });
-    expect(rows[1]).toMatchObject({ install_group: 'g1', install_code: 'XYZ-234' });
-    expect(rows[2]).toEqual({ device_id: 'c', name: 'Moto', status: 'pending' });
-    expect(events.map((event) => event.codigo)).toEqual(['connect_device_install_invalid', 'connect_device_install_invalid']);
+  it('aparelhos da máquina: aceita `account_device` ausente ou texto e recusa a forma errada', async () => {
+    const row = { device_id: 'a', name: 'iPhone', status: 'approved', created_at: 1, last_seen: null };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([row, { ...row, device_id: 'b', account_device: 'ad1' }]), { status: 200 }));
+    expect((await readDevices(server, new AbortController().signal)).map((d) => d.account_device)).toEqual([undefined, 'ad1']);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([{ ...row, account_device: 7 }]), { status: 200 }));
+    await expect(readDevices(server, new AbortController().signal)).rejects.toThrow(m.mobile_machines_invalid_response());
   });
 
   it('traduz a recusa pública de endereço duplicado do aparelho', () => {

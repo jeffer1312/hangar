@@ -228,7 +228,7 @@ fn unread() -> RuntimeError { refuse("Não consegui ler os processos da sessão;
 /// Sidecar com os campos de processo zerados no modo pedido.
 fn cleared(mut meta:Meta,headless:bool) -> Meta {
     meta.insert("headless".into(),json!(headless));
-    for field in ["cano","endpoint","app_pid","tui_pid","launcher_pid"] { meta.insert(field.into(),Value::Null); }
+    for field in ["cano","endpoint","app_pid","tui_pid","launcher_pid",codex_sidecar::WS_TOKEN_FILE] { meta.insert(field.into(),Value::Null); }
     meta
 }
 
@@ -325,7 +325,11 @@ impl Watcher {
                 ensure_absent(lives,&[i64::from(cano.pid)]).await.map_err(|_|job())?;
             }
         } else {self.drop_terminal(registry,name,&MuxProcess::new(&self.cfg.mux_program,TIMEOUT)).await?;}
-        codex_sidecar::locked(&codex_sidecar::dir(&self.cfg.home),name,|path|match std::fs::remove_file(path) {Err(e) if e.kind()!=std::io::ErrorKind::NotFound=>Err(e),_=>Ok(())}).map_err(|_|job())
+        let dir=codex_sidecar::dir(&self.cfg.home);
+        codex_sidecar::locked(&dir,name,|path|{
+            let token=codex_sidecar::load(path).and_then(|meta|meta.get(codex_sidecar::WS_TOKEN_FILE).and_then(Value::as_str).map(str::to_owned));
+            match std::fs::remove_file(path) {Err(e) if e.kind()!=std::io::ErrorKind::NotFound=>Err(e),_=>{codex_sidecar::remove_ws_token(&dir,token.as_deref());Ok(())}}
+        }).map_err(|_|job())
     }
 
     async fn load(&self,name:&str) -> Option<Meta> {
@@ -589,7 +593,7 @@ impl Watcher {
         }
         // O terminal novo só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ele.
         let since = meta.get("asleep").and_then(|mark|mark["since"].as_f64()).unwrap_or(0.0);
-        registry.restamp_asleep(&key,since).await?;
+        registry.restamp_asleep(&key,since,false).await?;
         let Err(error) = self.open_terminal(registry,name,&key,&wanted,mode.as_deref(),&pane).await else { return Ok(true) };
         if !kill_phase(&error) && let Err(put) = self.sidecar_put(name,&meta).await {
             tracing::warn!(session=%name,code=%put.code,"o Codex que não acordou ficou sem o arquivo adormecido");
@@ -760,8 +764,9 @@ impl Watcher {
         let refused = |error:crate::session_open::OpenError|refuse(&error.msg);
         // `_exigir_lancador_codex`: o pane morreria na hora com o `new-session` devolvendo sucesso.
         let launcher = codex::launcher_program(&base.home,cfg!(windows));
-        if super::process::resolve_program(launcher.as_deref().unwrap_or(codex::LAUNCHER),&base.base).is_none() {
-            return Err(RuntimeError::new("codex_launcher_missing","hangar-codex-tui não está no PATH deste servidor; instale o lançador"));
+        let program = launcher.as_deref().and_then(<[String]>::first).map_or(codex::SERVER,String::as_str);
+        if super::process::resolve_program(program,&base.base).is_none() {
+            return Err(RuntimeError::new("codex_launcher_missing",&format!("{program} não está no PATH deste servidor; instale o lançador")));
         }
         if super::process::resolve_program("codex",&base.base).is_none() {
             return Err(RuntimeError::new("codex_cli_missing","codex não está no PATH deste servidor"));

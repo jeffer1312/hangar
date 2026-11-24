@@ -93,7 +93,7 @@ const ERROR_CODES: &[&str] = &[
     "device_install_login_refused", "device_install_apple_busy", "device_install_anisette_unreachable", "device_install_download_failed",
     "device_install_download_mismatch", "device_install_sign_failed", "device_install_not_installed", "device_error",
     "device_install_forbidden", "device_install_busy", "device_install_unknown_job", "device_install_not_waiting", "connection_failed",
-    "server_outdated", "unauthorized", "device_install_bad_request",
+    "server_outdated", "unauthorized", "device_install_bad_request", "device_install_cancelled", "device_install_nothing_to_cancel",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +126,11 @@ impl Stage {
     }
 
     fn running(self) -> bool { !matches!(self, Stage::Done | Stage::Failed) }
+
+    /// O servidor só cancela antes de assinar: depois, a conta ou o SideStore ficariam pela metade.
+    pub(super) fn cancellable(self) -> bool {
+        self.running() && !matches!(self, Stage::Signing | Stage::AwaitingCertChoice | Stage::Installing | Stage::Pairing | Stage::Verifying)
+    }
 }
 
 /// Em que ponto do iOS a tela está.
@@ -186,10 +191,11 @@ enum Platform { #[default] Ios, Android }
 /// Consultas seguidas (uma por segundo) que podem cair antes de dar o trabalho por perdido.
 const PROGRESS_TOLERATED_FAILURES: u32 = 5;
 
-struct Job { id: String, progress: Option<Progress>, lost: Option<DeviceError>, failures: u32 }
+/// `udid`: o aparelho do trabalho; o Cancelar vai para ele, não para o escolhido na lista.
+struct Job { id: String, udid: String, progress: Option<Progress>, lost: Option<DeviceError>, failures: u32 }
 
 impl Job {
-    fn new(id: String) -> Self { Job { id, progress: None, lost: None, failures: 0 } }
+    fn new(id: String, udid: String) -> Self { Job { id, udid, progress: None, lost: None, failures: 0 } }
     /// Só queda de rede (ou resposta ilegível) se repete; recusa do servidor não muda tentando de novo.
     fn record(&mut self, result: Result<Progress, DeviceError>) {
         match result {
@@ -222,6 +228,9 @@ pub(in crate::app) struct Devices {
     code_error: Option<String>,
     certs_sending: bool,
     certs_error: Option<String>,
+    cancelling: bool,
+    /// O aparelho em que o `/start` achou uma instalação rodando (outra tela ou tela reaberta).
+    busy: Option<String>,
     qr: Vec<(String, Arc<Image>)>,
     /// O print aberto em tamanho maior; um clique no print abre e fecha.
     enlarged: Option<&'static str>,
@@ -230,10 +239,12 @@ pub(in crate::app) struct Devices {
 pub(super) enum DevicesReply {
     Scanned(u64, Result<Scan, DeviceError>),
     Trusted(String, Result<(), DeviceError>),
-    Started(Result<String, DeviceError>),
+    /// O aparelho pedido e o `job` (ou a recusa).
+    Started(String, Result<String, DeviceError>),
     Progress(String, Result<Progress, DeviceError>),
     Code(Result<(), DeviceError>),
     Certs(Result<(), DeviceError>),
+    Cancelled(Result<(), DeviceError>),
 }
 
 impl Hangar {
@@ -284,7 +295,7 @@ impl Hangar {
         password.update(cx, |input, cx| input.set_value("", window, cx));
         (d.starting, d.form_error) = (true, None);
         let done = self.devices_send_later();
-        self.runtime.spawn(async move { done(DevicesReply::Started(api.device_start(&udid, &email, secret).await)).await });
+        self.runtime.spawn(async move { let result = api.device_start(&udid, &email, secret).await; done(DevicesReply::Started(udid, result)).await });
         cx.notify();
     }
 
@@ -334,6 +345,19 @@ impl Hangar {
             });
     }
 
+    /// Pelo aparelho, não pelo `job`: serve também ao trabalho que esta tela não começou.
+    fn cancel_device_install(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.devices_api() else { return };
+        let d = &self.devices;
+        let running = d.job.as_ref().filter(|j| j.stage().running()).map(|j| j.udid.clone());
+        let Some(udid) = running.or_else(|| d.busy.clone()) else { return };
+        if self.devices.cancelling { return; }
+        (self.devices.cancelling, self.devices.form_error) = (true, None);
+        let done = self.devices_send_later();
+        self.runtime.spawn(async move { done(DevicesReply::Cancelled(api.device_cancel(&udid).await)).await });
+        cx.notify();
+    }
+
     fn restart_device_install(&mut self, cx: &mut Context<Self>) {
         let d = &mut self.devices;
         (d.job, d.code_error, d.form_error, d.certs_error) = (None, None, None, None);
@@ -360,10 +384,22 @@ impl Hangar {
                 }
                 self.scan_devices(cx);
             }
-            DevicesReply::Started(result) => {
+            DevicesReply::Started(udid, result) => {
                 d.starting = false;
                 match result {
-                    Ok(id) => { d.job = Some(Job::new(id)); self.poll_progress(); }
+                    Ok(id) => { (d.job, d.busy) = (Some(Job::new(id, udid)), None); self.poll_progress(); }
+                    Err(error) => { d.busy = (error.code == "device_install_busy").then_some(udid); d.form_error = Some(error_message(&error)); }
+                }
+            }
+            DevicesReply::Cancelled(result) => {
+                d.cancelling = false;
+                match result {
+                    // O trabalho desta tela chega a `failed` pela consulta; o de fora só libera o botão.
+                    Ok(()) => { d.busy = None; d.form_error = None; }
+                    // Terminou sozinho antes do pedido: nada mais segura o aparelho.
+                    Err(error) if error.code == "device_install_nothing_to_cancel" => { d.busy = None; d.form_error = None; }
+                    // Já assinando ou instalando: o servidor não para mais; diz por que continuou.
+                    Err(error) if error.code == "device_install_busy" => d.form_error = Some(tr("devices_cancel_too_late")),
                     Err(error) => d.form_error = Some(error_message(&error)),
                 }
             }
@@ -520,9 +556,10 @@ impl Hangar {
             .child(field(tr("devices_password"), password))
             .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr("devices_password_note")))
             .when_some(d.form_error.clone(), |el, error| el.child(div().id("devices-form-error").role(Role::Alert).text_size(px(13.)).text_color(theme::danger()).whitespace_normal().child(error)))
-            .child(div().flex().child(Button::new("devices-install").primary().small().label(tr("devices_install"))
-                .loading(d.starting).disabled(d.starting)
-                .on_click(cx.listener(|this, _, window, cx| this.start_device_install(window, cx)))))
+            .child(div().flex().gap(px(8.)).child(Button::new("devices-install").primary().small().label(tr("devices_install"))
+                .loading(d.starting).disabled(d.starting || d.cancelling)
+                .on_click(cx.listener(|this, _, window, cx| this.start_device_install(window, cx))))
+                .when(d.busy.is_some(), |el| el.child(cancel_button(d.cancelling, cx))))
     }
 
     fn render_job(&mut self, phase: Phase, cx: &mut Context<Self>) -> Div {
@@ -572,6 +609,13 @@ impl Hangar {
                     .child(Button::new("devices-certs-cancel").ghost().small().label(tr("devices_certs_cancel")).disabled(d.certs_sending)
                         .on_click(cx.listener(|this, _, _, cx| this.send_device_certs(false, cx))))));
         }
+        if stage.cancellable() {
+            body = body.child(div().px_4().pb(px(16.)).flex().child(cancel_button(d.cancelling, cx)));
+        }
+        // A recusa do cancelamento chega com o trabalho já fora das etapas canceláveis: fica fora do `if`.
+        if stage.running() && let Some(error) = d.form_error.clone() {
+            body = body.child(div().id("devices-cancel-error").role(Role::Alert).child(note(error, theme::danger())));
+        }
         match phase {
             Phase::Done => body.child(note(tr("devices_done"), theme::success_text())),
             Phase::Failed => {
@@ -583,6 +627,12 @@ impl Hangar {
             _ => body,
         }
     }
+}
+
+fn cancel_button(cancelling: bool, cx: &mut Context<Hangar>) -> Button {
+    Button::new("devices-cancel").outline().small().icon(IconName::Close).label(tr("devices_cancel"))
+        .loading(cancelling).disabled(cancelling)
+        .on_click(cx.listener(|this, _, _, cx| this.cancel_device_install(cx)))
 }
 
 fn note(text: String, color: Hsla) -> Div {
@@ -640,11 +690,11 @@ mod tests {
     fn devices_progress_retries_only_network_drops_and_only_for_a_while() {
         let err = |code: &str| Err(DeviceError { code: code.into(), detail: None });
         for code in ["device_install_unknown_job", "device_install_forbidden", "server_outdated", "unauthorized"] {
-            let mut job = Job::new("j".into());
+            let mut job = Job::new("j".into(), "u".into());
             job.record(err(code));
             assert_eq!(job.stage(), Stage::Failed, "{code}");
         }
-        let mut job = Job::new("j".into());
+        let mut job = Job::new("j".into(), "u".into());
         for _ in 0..PROGRESS_TOLERATED_FAILURES - 1 { job.record(err("connection_failed")); }
         assert!(job.lost.is_none());
         job.record(Ok(Progress { stage: "downloading".into(), error: None, source_url: String::new(), certs: None }));
@@ -697,6 +747,13 @@ mod tests {
     }
 
     #[test]
+    fn devices_cancel_only_before_the_install() {
+        let cancellable: Vec<Stage> = ["login", "awaiting_code", "checking_limit", "downloading", "signing", "awaiting_cert_choice",
+            "installing", "pairing", "verifying", "done", "failed"].iter().filter_map(|s| Stage::parse(s)).filter(|s| s.cancellable()).collect();
+        assert_eq!(cancellable, [Stage::Login, Stage::AwaitingCode, Stage::CheckingLimit, Stage::Downloading]);
+    }
+
+    #[test]
     fn devices_cert_choice_reads_the_listed_certificates() {
         let p: Progress = serde_json::from_value(serde_json::json!({"stage": "awaiting_cert_choice", "error": null, "source_url": "u",
             "certs": [{"name": "iPhone Developer", "machine_name": "SideStore", "serial": "AAA111"}]})).unwrap();
@@ -727,6 +784,8 @@ mod tests {
         keys.extend(ERROR_CODES.iter().map(|c| format!("devices_err_{c}")));
         keys.extend(WARNINGS.iter().chain(&HEADINGS).map(|k| (*k).to_owned()));
         keys.push("settings_page_devices".into());
+        keys.push("devices_cancel".into());
+        keys.push("devices_cancel_too_late".into());
         let missing: Vec<&String> = keys.iter().filter(|k| dicts.iter().any(|d| !d.contains_key(&format!("native_{k}")))).collect();
         assert!(missing.is_empty(), "sem native_* em pt.json/en.json: {missing:?}");
     }

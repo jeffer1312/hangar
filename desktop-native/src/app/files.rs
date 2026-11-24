@@ -7,6 +7,9 @@ mod navigation;
 mod reader;
 mod reader_images;
 mod lifecycle;
+mod comments;
+pub(crate) use comments::comment_card;
+mod table;
 pub(crate) mod grammars;
 
 actions!(file_view, [CloseFile, NextFile, PreviousFile, SaveFile, FindFile, GoToFileLine]);
@@ -14,6 +17,8 @@ actions!(file_view, [CloseFile, NextFile, PreviousFile, SaveFile, FindFile, GoTo
 /// Lado maior da imagem decodificada: cabe numa tela grande sem guardar o original inteiro na memória.
 const PICTURE_SIDE: u32 = 4096;
 const UNREADABLE_PICTURE: &str = "file_image_unreadable";
+/// Prazo da leitura que pode trazer até 256 MB de outra máquina: os 30 s de costume não bastam num link lento.
+const LARGE_READ_SECONDS: u64 = 300;
 
 pub(super) struct Files {
     owner: Option<SessionOwner>,
@@ -28,6 +33,8 @@ pub(super) struct Files {
     return_focus: Option<FocusHandle>,
     _focus_lost: Subscription,
     preview_find: navigation::PreviewFind,
+    /// Quebra de linha do código, ligada como antes; arquivo grande abre sempre sem ela.
+    word_wrap: bool,
     _refresh_task: Task<()>,
 }
 
@@ -40,6 +47,8 @@ struct FileTab {
     picture: Option<Picture>,
     reader: reader::ReaderSettings,
     pending_anchor: Option<String>,
+    /// O caminho pedido na primeira leitura: renomeada enquanto ela voava, a resposta ainda traz o nome antigo.
+    read_path: String,
 }
 
 impl FileTab {
@@ -48,7 +57,9 @@ impl FileTab {
 }
 
 #[derive(serde::Deserialize)]
-pub(super) struct Content { path: String, text: String, truncated: bool, digest: Option<String>, #[serde(skip)] external: bool }
+pub(super) struct Content { path: String, text: String, truncated: bool, digest: Option<String>, #[serde(skip)] external: bool,
+    /// CSV e TSV montados na leitura, fora da thread da janela.
+    #[serde(skip)] table: Option<Arc<table::TableData>> }
 impl Content {
     fn editable(&self) -> bool { !self.truncated && self.digest.as_ref().is_some_and(|digest| !digest.is_empty()) }
 }
@@ -62,8 +73,8 @@ pub(super) enum FileReply {
 }
 
 /// Da raiz, direto do disco (servidor nesta máquina); fora dela, pela rota de arquivo citado, que só serve o que a
-/// conversa mencionou.
-enum Picture { Disk(PathBuf), Loading, Ready(Arc<RenderImage>), Failed(String), Audio, Video }
+/// conversa mencionou. `Binary`: sem prévia (pdf, planilha, zip); fica o cartão de arquivo da conversa.
+enum Picture { Disk(PathBuf), Loading, Ready(Arc<RenderImage>), Failed(String), Audio, Video, Binary }
 
 struct Document {
     editor: Entity<EditorState>,
@@ -84,11 +95,21 @@ struct Document {
     reloading: bool,
     disk_changed: bool,
     close_after_save: bool,
+    /// Tamanho do arquivo acima do teto de edição: só leitura, sem cores e sem quebra de linha, e o texto mora só no
+    /// editor (`base.text` fica vazio) para não guardar duas cópias.
+    large_size: Option<usize>,
+    comment: comments::LineComments,
+    /// CSV e TSV: a tabela da leitura; o código fica no editor.
+    table: Option<Arc<table::TableData>>,
+    /// O texto mudou no editor depois de a tabela ser montada: ela é refeita ao voltar para a tabela.
+    table_stale: bool,
 }
 
 impl Document {
-    fn editable(&self) -> bool { self.base.editable() }
+    /// Arquivo grande nunca é editável: o texto mora só no editor e não haveria com o que comparar.
+    fn editable(&self) -> bool { self.base.editable() && !self.large() }
     fn dirty(&self) -> bool { self.dirty }
+    fn large(&self) -> bool { self.large_size.is_some() }
 }
 
 fn file_failure(error: &Failure) -> String {
@@ -151,7 +172,7 @@ impl Files {
         let focus = cx.focus_handle();
         let lost = cx.on_focus_lost(window, |this, window, cx| this.files_focus_lost(window, cx));
         Self { owner: None, hidden: false, tabs: Vec::new(), active: 0, serial: 0, expanded: false,
-            viewport_width: std::rc::Rc::new(std::cell::Cell::new(1000.)), focus, return_focus: None, _focus_lost: lost, preview_find: navigation::PreviewFind::new(window, cx),
+            viewport_width: std::rc::Rc::new(std::cell::Cell::new(1000.)), focus, return_focus: None, _focus_lost: lost, preview_find: navigation::PreviewFind::new(window, cx), word_wrap: true,
             _refresh_task: lifecycle::watch_files(window, cx) }
     }
 }
@@ -159,8 +180,8 @@ impl Files {
 async fn read_file(api: Api, name: String, mut path: String, candidates: Vec<String>, local: Option<PathBuf>, here: bool) -> Result<Content, Failure> {
     // Servidor nesta máquina (a árvore já provou): caminho da raiz sai do disco, com as mesmas travas.
     if let Some(root) = local.filter(|root| !path.starts_with('/') && !std::path::Path::new(&path).is_absolute() && root.join(&path).exists()) {
-        return tokio::task::spawn_blocking(move || super::tree::read_local(&root, &path).map(|read|
-            Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: false }))
+        return tokio::task::spawn_blocking(move || super::tree::read_local(&root, &path, true).map(|read|
+            with_table(Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: false, table: None })))
             .await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
     }
     // Citado fora da raiz, com o servidor nesta máquina: também do disco, o próprio caminho ou o primeiro candidato que existe.
@@ -178,8 +199,8 @@ async fn read_file(api: Api, name: String, mut path: String, candidates: Vec<Str
             else { return Err(Failure::local("file_missing")) };
         return tokio::task::spawn_blocking(move || {
             let folder = std::fs::canonicalize(&folder).map_err(|_| Failure::local("file_missing"))?;
-            super::tree::read_local(&folder, &file_name).map(|read|
-                Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: true })
+            super::tree::read_local(&folder, &file_name, true).map(|read|
+                with_table(Content { path, text: read.text, truncated: read.truncated, digest: read.digest, external: true, table: None }))
         }).await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
     }
     let mut resolved = api.act(&name, &["files", "resolver"], Some(json!({"caminhos": [&path]})), false, 30).await?;
@@ -193,10 +214,17 @@ async fn read_file(api: Api, name: String, mut path: String, candidates: Vec<Str
         Some(Value::Null) => (["file", "text"], path.as_str()),
         _ => return Err(Failure::local("invalid_response")),
     };
-    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", requested)], 30).await?)
+    let mut content: Content = serde_json::from_value(api.read(&name, &route, &[("path", requested), ("large", "1")], LARGE_READ_SECONDS).await?)
         .map_err(|_| Failure::local("invalid_response"))?;
     content.external = route[0] == "file";
-    Ok(content)
+    Ok(with_table(content))
+}
+
+/// CSV e TSV viram tabela aqui, na tarefa da leitura; acima do teto o arquivo abre só como texto.
+fn with_table(mut content: Content) -> Content {
+    content.table = table::delimiter(&content.path).filter(|_| content.text.len() <= table::TABLE_MAX_BYTES)
+        .map(|delim| Arc::new(table::parse(&content.text, delim)));
+    content
 }
 
 impl Hangar {
@@ -247,25 +275,43 @@ impl Hangar {
         self.files.serial += 1;
         let id = self.files.serial;
         let local = self.tree.local_root(&self.session_owner());
-        // A leitura de texto recusa binário: imagem vem do disco ou da rota de arquivo citado; áudio toca no player e
-        // vídeo abre no programa do sistema.
+        // A leitura de texto recusa binário: imagem vem do disco ou da rota de arquivo citado; áudio toca no player,
+        // vídeo abre no programa do sistema e documento binário fica no cartão de Abrir e Baixar. SVG é desenhado aqui,
+        // sem ler o que ele aponta no disco.
         let picture = if crate::audio::is_audio(&path) { Some(Picture::Audio) }
             else if crate::audio::is_video(&path) { Some(Picture::Video) }
+            else if is_binary_document(&path) { Some(Picture::Binary) }
+            else if composer::extension(&path) == "svg" { Some(Picture::Loading) }
             else { is_image(&path).then(|| local.as_ref().and_then(|root| super::tree::resolve(root, &path).ok())
                 .map_or(Picture::Loading, Picture::Disk)) };
         let fetch_picture = matches!(picture, Some(Picture::Loading));
         let is_picture = picture.is_some();
         let mut reader = reader::ReaderSettings::default();
-        if file_language(&path) != "markdown" { reader.set_mode(reader::ReaderMode::Source); }
-        self.files.tabs.push(FileTab { id, path: path.clone(), line, content: None, picture, reader, pending_anchor: None });
+        if file_language(&path) != "markdown" && table::delimiter(&path).is_none() { reader.set_mode(reader::ReaderMode::Source); }
+        self.files.tabs.push(FileTab { id, path: path.clone(), line, content: None, picture, reader, pending_anchor: None, read_path: path.clone() });
         self.files.active = self.files.tabs.len() - 1;
         self.focus_file(window, cx);
         let (connection, selection, tx) = (self.connection, None, self.tx.clone());
         if fetch_picture {
             let (api, name, path, tx) = (api.clone(), key.name.clone(), path.clone(), tx.clone());
             self.runtime.spawn(async move {
-                let result = api.fetch(&name, &Source::Cited(path)).await.and_then(|bytes|
-                    crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None).ok_or_else(|| Failure::local(UNREADABLE_PICTURE)));
+                // Decodificar (SVG até 4096²) não pode ocupar uma das duas threads do runtime.
+                let kind = composer::extension(&path);
+                let result = match api.fetch(&name, &Source::Cited(path)).await {
+                    Ok(bytes) => match tokio::task::spawn_blocking(move || crate::media::decode(&bytes, PICTURE_SIDE, PICTURE_SIDE, None)).await {
+                        Ok(Some(picture)) => Ok(picture),
+                        // A tela diz só que não deu para ler; o diário guarda qual dos dois casos foi.
+                        Ok(None) => {
+                            crate::log_line(&format!("arquivos: imagem .{kind} não decodificou"));
+                            Err(Failure::local(UNREADABLE_PICTURE))
+                        }
+                        Err(error) => {
+                            crate::log_line(&format!("arquivos: a tarefa que decodificava a imagem .{kind} não terminou: {error}"));
+                            Err(Failure::local(UNREADABLE_PICTURE))
+                        }
+                    },
+                    Err(error) => Err(error),
+                };
                 let _ = tx.send(Envelope { connection, selection, payload: Payload::FileView(FileReply::Picture(id, result)) }).await;
             });
         }
@@ -343,15 +389,32 @@ impl Hangar {
             }
         };
         let Some(ix) = self.files.tabs.iter().position(|tab| tab.id == id) else { return };
-        let path = &self.files.tabs[ix].path;
-        self.files.tabs[ix].content = Some(result.map(|content| {
-            let editor = cx.new(|cx| EditorState::new(window, cx).language(file_language(path)).default_value(content.text.clone()).soft_wrap(true));
+        // Binário que a extensão não denunciou: o mesmo cartão de Abrir e Baixar, em vez de só dizer "arquivo binário".
+        if matches!(&result, Err(error) if error.status == Some(415)) {
+            self.files.tabs[ix].picture = Some(Picture::Binary);
+            cx.notify();
+            return;
+        }
+        let (path, read_path) = (&self.files.tabs[ix].path, &self.files.tabs[ix].read_path);
+        let word_wrap = self.files.word_wrap;
+        self.files.tabs[ix].content = Some(result.map(|mut content| {
+            // Renomeada durante a leitura: o documento segue o nome novo, para a gravação ir ao arquivo certo.
+            if content.path == *read_path { content.path.clone_from(path); }
+            let large_size = Some(content.text.len()).filter(|len| *len > hangar_workspace::files::MAX_BYTES);
+            let language = if large_size.is_some() { "text" } else { file_language(path) };
+            let text = if large_size.is_some() { std::mem::take(&mut content.text) } else { content.text.clone() };
+            let editor = cx.new(|cx| EditorState::new(window, cx).language(language).default_value(text).soft_wrap(word_wrap && large_size.is_none()));
+            let comment = comments::LineComments::new(&editor, cx);
+            let table = content.table.take();
             let changed = cx.subscribe_in(&editor, window, move |this: &mut Self, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     if let Some(tab) = this.files.tabs.iter_mut().find(|tab| tab.id == id) {
                         if let Some(Ok(doc)) = &mut tab.content {
-                            doc.dirty = doc.editor.read(cx).value().as_ref() != doc.base.text;
+                            // Arquivo grande é só leitura e não guarda o texto em `base`: nunca fica "não salvo".
+                            doc.dirty = !doc.large() && doc.editor.read(cx).value().as_ref() != doc.base.text;
                             doc.saved = None;
+                            // Edição deixa a tabela para ser refeita ao voltar; Descartar marca à parte e Recarregar traz a nova.
+                            if doc.table.is_some() && !doc.large() { doc.table_stale = true; }
                             if let Some(view) = &doc.markdown {
                                 let text = doc.editor.read(cx).value().to_string();
                                 view.update(cx, |view, cx| view.set_text(&text, cx));
@@ -367,7 +430,7 @@ impl Hangar {
                     if doc.cursor != position { doc.cursor = position; cx.notify(); }
                 }
             });
-            let markdown = (file_language(path) == "markdown").then(|| cx.new(|cx| TextViewState::markdown(&content.text, cx).scrollable(true)));
+            let markdown = (large_size.is_none() && file_language(path) == "markdown").then(|| cx.new(|cx| TextViewState::markdown(&content.text, cx).scrollable(true)));
             let markdown_changed = markdown.as_ref().map(|view| {
                 let weak = cx.entity().downgrade();
                 view.read(cx).list_state().set_scroll_handler(move |_, _, cx| { let _ = weak.update(cx, |_, cx| cx.notify()); });
@@ -378,7 +441,7 @@ impl Hangar {
             });
             let doc = Document { editor, base: content, saving: false, dirty: false, saved: None, error: None, markdown, _changed: changed,
                 reader_images: Default::default(), _cursor: cursor, _markdown_changed: markdown_changed, cursor: Position::new(0, 0), poll_error: None,
-                read_seq: 0, checking: false, reloading: false, disk_changed: false, close_after_save: false };
+                read_seq: 0, checking: false, reloading: false, disk_changed: false, close_after_save: false, large_size, comment, table, table_stale: false };
             doc.editor.update(cx, |state, cx| state.set_readonly(!doc.editable(), cx));
             doc
         }).map_err(|error| match error.status {
@@ -387,6 +450,9 @@ impl Hangar {
             None if error.detail == "file_missing" => activity::web("erro_arq_inexistente"),
             _ => file_failure(&error),
         }));
+        // Arquivo grande abre no código (a leitura de Markdown não é montada para ele); CSV grande até o teto da tabela
+        // abre nela, que é a vista leve.
+        if matches!(&self.files.tabs[ix].content, Some(Ok(doc)) if doc.large() && doc.table.is_none()) { self.files.tabs[ix].reader.set_mode(reader::ReaderMode::Source); }
         // A leitura não toma o foco de outra aba, diálogo ou campo aberto enquanto esperava.
         if ix == self.files.active && self.files.focus.contains_focused(window, cx) { self.focus_file(window, cx); }
         cx.notify();
@@ -456,6 +522,8 @@ impl Hangar {
         if doc.saving || doc.reloading { return; }
         doc.editor.update(cx, |state, cx| state.set_value(doc.base.text.clone(), window, cx));
         if let Some(markdown) = &doc.markdown { markdown.update(cx, |state, cx| state.set_text(&doc.base.text, cx)); }
+        // `set_value` não avisa a mudança: a tabela montada com a edição descartada fica para ser refeita.
+        doc.table_stale = doc.table.is_some();
         doc.dirty = false;
         (doc.error, doc.saved) = (None, None);
         cx.notify();
@@ -556,6 +624,7 @@ impl Hangar {
     pub(super) fn files_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.files_visible() { return false; }
         if self.files.preview_find.open { self.close_preview_find(window, cx); return true; }
+        if self.cancel_line_comment(window, cx) { return true; }
         if let Some(Ok(doc)) = &self.files.tabs[self.files.active].content {
             if doc.editor.read(cx).search_session().open {
                 doc.editor.update(cx, |state, cx| { state.close_search(cx); state.focus(window, cx); });
@@ -566,6 +635,18 @@ impl Hangar {
         self.restore_file_focus(window, cx);
         cx.notify();
         true
+    }
+
+    /// Liga ou desliga a quebra de linha do código em todas as abas, menos as de arquivo grande.
+    fn toggle_word_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.files.word_wrap = !self.files.word_wrap;
+        let wrap = self.files.word_wrap;
+        for tab in &self.files.tabs {
+            if let Some(Ok(doc)) = &tab.content {
+                if !doc.large() { doc.editor.update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx)); }
+            }
+        }
+        cx.notify();
     }
 
     pub(super) fn files_expanded(&self) -> bool { self.files.expanded && self.files_visible() }
@@ -614,9 +695,28 @@ impl Hangar {
 
     fn open_file_video(&mut self, cx: &mut Context<Self>) {
         let path = self.files.tabs[self.files.active].path.clone();
-        if let Some(real) = self.file_on_disk(&path) { cx.open_with_system(&real); return; }
         let name = composer::basename(&path).to_owned();
         self.keep_file(Source::Cited(path), name, true, cx);
+    }
+
+    /// Arquivo ou pasta renomeado pela árvore: as abas abertas nele, ou dentro dele, seguem o nome novo, e o documento
+    /// também, que é o caminho da gravação.
+    pub(super) fn files_renamed(&mut self, old: &str, new: &str, windows: bool) {
+        // Abas guardadas de outra sessão ficam como estão: o mesmo caminho lá é outro arquivo.
+        if self.files.owner.is_none() || self.files.owner != self.session_owner() { return; }
+        for tab in &mut self.files.tabs {
+            // Citado de fora da pasta da sessão com o mesmo caminho relativo não é o item renomeado.
+            if matches!(&tab.content, Some(Ok(doc)) if doc.base.external) { continue; }
+            // A aba aberta por caminho absoluto (citada no chat) só é reconhecida pelo caminho interno do documento.
+            let base = match &tab.content { Some(Ok(doc)) => renamed_path(&doc.base.path, old, new, windows), _ => None };
+            let Some(path) = renamed_path(&tab.path, old, new, windows).or_else(|| base.clone()) else { continue };
+            tab.path = path;
+            if let Some(Ok(doc)) = &mut tab.content {
+                if let Some(base) = base { doc.base.path = base; }
+                // A verificação em voo leu o nome antigo e diria que o arquivo sumiu.
+                if doc.checking { (doc.read_seq, doc.checking) = (doc.read_seq.wrapping_add(1), false); }
+            }
+        }
     }
 
     fn file_reveal_system(&mut self, cx: &mut Context<Self>) {
@@ -696,6 +796,10 @@ impl Hangar {
                         .label(tr("file_position").replace("{line}", &(position.line + 1).to_string()).replace("{column}", &(position.character + 1).to_string()))
                         .tooltip(tr("file_goto_shortcut")).on_click(cx.listener(|this, _, window, cx| this.open_file_line(window, cx))))
                 })
+                .when(tab.reader.mode.source(), |el| el.child(Button::new("file-wrap").ghost().xsmall().label(tr("file_wrap"))
+                    .selected(self.files.word_wrap && !doc.large()).disabled(doc.large())
+                    .tooltip(tr(if doc.large() { "file_wrap_large" } else if self.files.word_wrap { "file_wrap_off" } else { "file_wrap_on" }))
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_word_wrap(window, cx)))))
                 .child(chrome::icon_button("file-reload", IconName::RefreshCw, tr("file_reload"), cx).disabled(doc.saving || doc.reloading)
                     .on_click(cx.listener(|this, _, window, cx| this.reload_file(window, cx))))
                 .when(doc.saved.is_some(), |el| el.child(div().px_1().text_xs().text_color(theme::success()).child(tr("file_saved"))))
@@ -705,7 +809,23 @@ impl Hangar {
                     .child(Button::new("file-save").primary().xsmall().label(tr(if doc.saving { "file_saving" } else { "file_save" }))
                         .tooltip(tr("file_save_shortcut")).disabled(doc.saving || doc.reloading)
                         .on_click(cx.listener(|this, _, _, cx| this.save_file(cx)))))
-                .when(doc.markdown.is_some(), |el| el.child(self.reader_toolbar(tab, cx))))
+                .when(doc.markdown.is_some(), |el| el.child(self.reader_toolbar(tab, cx)))
+                .when(doc.table.is_some(), |el| el.child(Button::new("file-table-toggle").ghost().xsmall()
+                    .label(tr(if tab.reader.mode.reading() { "file_show_code" } else { "file_show_table" }))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let tab = &mut this.files.tabs[this.files.active];
+                        let reading = tab.reader.mode.reading();
+                        // Voltando para a tabela depois de editar: ela é montada de novo com o texto atual. Acima do teto da
+                        // abertura a tabela sai e a aba fica no código; Recarregar a traz de volta.
+                        if let (false, Some(Ok(doc))) = (reading, tab.content.as_mut()) && doc.table_stale {
+                            let text = doc.editor.read(cx).text();
+                            doc.table = table::delimiter(&tab.path).filter(|_| text.len() <= table::TABLE_MAX_BYTES)
+                                .map(|delim| Arc::new(table::parse(&text.to_string(), delim)));
+                            doc.table_stale = false;
+                            if doc.table.is_none() { cx.notify(); return; }
+                        }
+                        this.set_reader_mode(if reading { reader::ReaderMode::Source } else { reader::ReaderMode::Reading }, window, cx);
+                    })))))
             .when(tab.zoomable(), |el| el
                 .child(chrome::icon_button("file-zoom", IconName::Plus, tr("file_zoom"), cx)
                     .on_click(cx.listener(|this, _, window, cx| this.zoom_picture(window, cx)))))
@@ -726,16 +846,49 @@ impl Hangar {
                     .child(self.audio_controls(&format!("file:{id}"), move |this, cx| this.play_file_audio(id, path.clone(), cx), cx))
                     .into_any_element()
             }
-            (Some(Picture::Video), _) => div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
-                .child(div().text_sm().text_color(theme::muted()).child(tr("file_video_external")))
-                .child(Button::new("file-video-open").outline().small().label(tr("file_video_open"))
-                    .on_click(cx.listener(|this, _, _, cx| this.open_file_video(cx))))
-                .into_any_element(),
+            (Some(Picture::Video), _) => {
+                // Vídeo de outra máquina é baixado antes de abrir: o botão para e o estado do download aparece.
+                let card_key = self.selected_key().map(|key| (key, Source::Cited(tab.path.clone())));
+                let card = card_key.as_ref().and_then(|card| self.file_cards.get(card)).cloned();
+                let busy = FileCard::busy(card.as_ref());
+                // Baixando: o anel ao lado do botão mostra quanto chegou e cancela no clique.
+                let ring = match (&card, card_key) {
+                    (Some(FileCard::Downloading { done, total }), Some(card_key)) => Some(cancel_ring(&format!("file-video-{}", tab.id), *done, *total,
+                        cx.reduce_motion(), cx.listener(move |this, _, _, cx| this.cancel_download(card_key.clone(), cx)))),
+                    _ => None,
+                };
+                let note = match card {
+                    Some(FileCard::Downloading { done, total }) => Some((downloading_label(done, total), theme::muted())),
+                    Some(FileCard::Busy) => Some((activity::web("file_card_downloading"), theme::muted())),
+                    Some(FileCard::Missing) => Some((activity::web("file_card_missing"), theme::warning_text())),
+                    Some(FileCard::Empty) => Some((activity::web("file_card_empty"), theme::warning_text())),
+                    Some(FileCard::Failed(error)) => Some((format!("{} · {error}", activity::web("file_card_failed")), theme::warning_text())),
+                    _ => None,
+                };
+                div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
+                    .child(div().text_sm().text_color(theme::muted()).child(tr("file_video_external")))
+                    .child(div().flex().items_center().gap_2()
+                        .child(Button::new("file-video-open").outline().small().label(tr("file_video_open")).disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_file_video(cx))))
+                        .children(ring))
+                    .when_some(note, |el, (text, color)| el.child(div().id("file-video-state").role(Role::Status)
+                        .text_xs().text_color(color).child(text)))
+                    .into_any_element()
+            }
+            (Some(Picture::Binary), _) => {
+                let (key, name) = (self.selected_key(), composer::basename(&tab.path).to_owned());
+                div().size_full().flex().flex_col().items_center().justify_center().gap_3().p_4()
+                    .child(div().text_sm().text_color(theme::muted()).child(tr("file_no_preview")))
+                    .child(self.session_file_card(&format!("file-view-{}", tab.id), 0, key.as_ref(), Source::Cited(tab.path.clone()), name, cx))
+                    .into_any_element()
+            }
             (Some(Picture::Loading), _) | (None, None) => state(tr("file_loading"), theme::faint()),
             (Some(Picture::Failed(error)), _) | (None, Some(Err(error))) => state(error.clone(), theme::danger()),
+            (None, Some(Ok(doc))) if tab.reader.mode.reading() && doc.table.is_some() =>
+                self.render_table(doc.table.clone().expect("tabela conferida no padrão"), cx),
             (None, Some(Ok(doc))) if tab.reader.mode.reading() && doc.markdown.is_some() =>
                 self.render_reader(tab, doc, self.files.viewport_width.get(), cx),
-            (None, Some(Ok(doc))) => Self::reader_source(tab, doc).into_any_element(),
+            (None, Some(Ok(doc))) => self.reader_source(tab, doc, cx).into_any_element(),
         };
         let viewport_width = self.files.viewport_width.clone();
         let owner = cx.entity().downgrade();
@@ -760,6 +913,10 @@ impl Hangar {
             .child(measure)
             .child(strip)
             .child(toolbar)
+            .children(doc.and_then(|doc| doc.large_size).map(|size| div().id("file-large").role(Role::Status)
+                .flex_shrink_0().px_3().py(px(6.)).border_b_1().border_color(theme::warning().opacity(0.2)).bg(theme::warning().opacity(0.08))
+                .text_size(px(11.)).text_color(theme::warning_text())
+                .child(tr("file_large").replace("{size}", &super::human_size(size as u64)))))
             .children(doc.filter(|doc| doc.disk_changed).map(|_| div().id("file-disk-changed").role(Role::Alert)
                 .flex_shrink_0().px_3().py_2().text_sm().text_color(theme::warning()).child(tr("file_disk_changed"))))
             .children(doc.and_then(|doc| doc.poll_error.as_ref()).map(|error| div().id("file-poll-error").role(Role::Alert)
@@ -818,6 +975,23 @@ fn link_target(document: &str, url: &str) -> Option<String> {
     Some(parts.join(if windows { "\\" } else { "/" }))
 }
 
+/// Documentos, pacotes e formatos sem prévia aqui que a leitura de texto recusaria: vão direto ao cartão de arquivo.
+fn is_binary_document(path: &str) -> bool {
+    matches!(composer::extension(path).as_str(),
+        "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp" | "epub"
+        | "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "iso" | "dmg" | "jar" | "apk" | "exe" | "msi"
+        | "woff" | "woff2" | "ttf" | "otf" | "sqlite" | "db" | "psd" | "tif" | "tiff" | "ico" | "heic" | "avif")
+}
+
+/// O caminho depois de renomear `old` para `new`: o próprio item ou o que está dentro dele; `None` quando não é afetado.
+/// `windows`: os caminhos são de uma máquina Windows, onde `\` também separa as pastas.
+pub(super) fn renamed_path(path: &str, old: &str, new: &str, windows: bool) -> Option<String> {
+    if path == old { return Some(new.to_owned()); }
+    let rest = path.strip_prefix(old)?;
+    let sep = rest.chars().next().filter(|c| *c == '/' || windows && *c == '\\')?;
+    Some(format!("{new}{sep}{}", &rest[1..]))
+}
+
 fn is_image(path: &str) -> bool {
     let extension = std::path::Path::new(path).extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
@@ -825,6 +999,12 @@ fn is_image(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn binary_documents_go_to_the_file_card_without_a_text_read() {
+        for path in ["out/r.PDF", "/tmp/a.docx", "b.xlsx", "c.zip", "d.tar.gz", "e.7z", "f.avif"] { assert!(super::is_binary_document(path), "{path}"); }
+        for path in ["src/main.rs", "README.md", "dados.csv", "f.png", "g.svg", "h.mp4", "sem_extensao"] { assert!(!super::is_binary_document(path), "{path}"); }
+    }
+
     #[test]
     fn file_language_maps_compiled_grammars_and_plain_text() {
         for (path, expected) in [
@@ -889,6 +1069,24 @@ mod tests {
         for outside in ["https://x.dev/a.md", "#topo", "/etc/hosts", "mailto:a@b.c", "a%2"] { assert_eq!(target(outside), None, "{outside}"); }
         assert_eq!(super::link_target("/tmp/notes/a.md", "../b.md").as_deref(), Some("/tmp/b.md"));
         assert_eq!(super::link_target("/a.md", "../b.md"), None);
+    }
+
+    #[test]
+    fn rename_moves_the_item_and_what_is_inside_it_only() {
+        assert_eq!(super::renamed_path("src/a.rs", "src/a.rs", "src/b.rs", false).as_deref(), Some("src/b.rs"));
+        assert_eq!(super::renamed_path("src/x/y.rs", "src/x", "src/z", false).as_deref(), Some("src/z/y.rs"));
+        for untouched in ["src/a.rsx", "src/xy/y.rs", "other/src/a.rs", "src"] {
+            assert_eq!(super::renamed_path(untouched, "src/a.rs", "src/b.rs", false), None, "{untouched}");
+        }
+        assert_eq!(super::renamed_path("src/xy/y.rs", "src/x", "src/z", false), None);
+    }
+
+    /// Na árvore de uma máquina Windows o que está dentro da pasta vem com `\`; nas outras, `\` é parte do nome.
+    #[test]
+    fn rename_follows_windows_separators_only_on_windows_paths() {
+        assert_eq!(super::renamed_path("src\\x\\y.rs", "src\\x", "src\\z", true).as_deref(), Some("src\\z\\y.rs"));
+        assert_eq!(super::renamed_path("src\\x\\y.rs", "src\\x", "src\\z", false), None);
+        assert_eq!(super::renamed_path("src\\xy", "src\\x", "src\\z", true), None);
     }
 
     #[test]

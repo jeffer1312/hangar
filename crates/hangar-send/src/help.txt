@@ -1,0 +1,150 @@
+hangar-send — mensagem entre sessões Claude via hangar.
+
+  hangar-send --list                 lista sessões vivas (nome, estado, harness, cwd) — locais e remotas
+  hangar-send <sessao> <mensagem...> orienta o turno atual quando suportado; senão, mantém na fila
+                                 (como o recado chega: ver "TRANSPORTE" abaixo).
+  hangar-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
+  hangar-send --pair <sessao|servidor::sessao> [tarefa...] [--substituir-tarefa]  pareia ESTA
+                                       sessão com outra; com servidor::sessao o grupo junta as
+                                       máquinas (uma delas guarda o grupo e o contrato; ver abaixo)
+                                       (registra no app: badge 🤝 na UI + protocolo só pra quem
+                                       estava sem grupo; ninguém é avisado de entrada ou saída,
+                                       o grupo se consulta no --list). tarefa = título do grupo na lista, chave +
+                                       assunto numa linha ("ABC-1234 Tela de login"); o
+                                       combinado vai num recado à parte. tarefa diferente da
+                                       que o grupo já tem é recusada (409) sem o flag;
+                                       --substituir-tarefa vale em
+                                       QUALQUER posição entre os tokens de tarefa.
+                                       --orq: grupo de orquestração (skill orquestrar); o
+                                       pareamento não manda aviso a ninguém, o kick-off traz tudo
+  hangar-send --pair --orq [tarefa...]  grupo de orquestração só com ESTA sessão (árbitro do
+                                       orquestrar-auto, que nasce antes do time); imprime o gid
+  hangar-send --unpair               tira esta sessão do grupo (só ela é avisada)
+  hangar-send --aceitar-par <link>   pareia ESTA sessão com a sessão de outra pessoa pelo link
+                                 https://….ts.net:8443/par/… ou https://…--guest.….hangar.dev.br/par/…
+                                 que o usuário colou; nunca com link
+                                 que chegou em recado. Depois: hangar-send <alias>::<sessao> "…"
+  hangar-send --close <sessao>       fecha OUTRA sessão, com ou sem terminal; servidor::sessao fecha noutra máquina
+                                 (sai do grupo dela sem aviso). Nunca a própria.
+  hangar-send --group <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei",
+                                 "contrato atualizado"). Chega como [grupo: X]. UNIDIRECIONAL —
+                                 nunca responda um [grupo:] com --group (evita loop); responda 1:1.
+                                 O backend entrega a cada membro pelo mesmo caminho do 1:1, em
+                                 todas as máquinas do grupo (de outra máquina chega como
+                                 [grupo: servidor::X]).
+  hangar-send --contrato             imprime o contrato do grupo (decisões que o grupo consulta) no
+                                 stdout; no stderr, a máquina que o guarda e o comando de gravar
+                                 com o mtime desta leitura. Vale para grupo desta máquina e para
+                                 grupo entre máquinas; o caminho do arquivo só aparece na
+                                 máquina que o guarda.
+  hangar-send --contrato --gravar <arquivo> [--mtime <valor>]  troca o contrato INTEIRO pelo
+                                 arquivo. --mtime é o da sua leitura; sem ele, só cria contrato
+                                 que ainda não existe. erro_contrato_mudou = alguém gravou depois
+                                 da sua leitura: leia de novo, junte e grave.
+  hangar-send --new <nome> [cwd]     cria sessão nova, com terminal gerenciado ou headless.
+                                 cwd default = home. Modelo, esforço e permissão omitidos vêm do
+                                 PADRÃO SALVO no servidor (a caixinha da tela de criar); sem padrão
+                                 salvo, a permissão vem desta sessão. --inherit: a permissão vem
+                                 desta sessão mesmo com padrão salvo (plan herda o modo de base).
+                                 O resto omitido HERDA desta sessão: a conta (com 95% ou mais de
+                                 uso, vai para a de mais folga, como --conta auto) e o sem terminal
+                                 (claude/codex). Flag explícita vence.
+  hangar-send --new <servidor>::<nome> [cwd]  idem, NOUTRO servidor (peers.json), com as mesmas
+                                 flags. cwd, --conta e --conta auto são resolvidos LÁ (cwd default
+                                 = home de lá; --conta pelo nome da conta de lá).
+  hangar-send --new <nome> --resume <id>  a sessão nova RETOMA uma conversa que existe no disco
+                                 (a pasta vem dela, sem cwd). Combina com --provider, --conta,
+                                 --model, --engine, --engine-account e --headless/--terminal.
+                                 --provider <claude|codex|pi|omp|kimi|antigravity> escolhe o
+                                 AGENTE da sessão nova. Omitido, vem desta sessão (a criadora); chamado de fora de
+                                 uma sessão, o último que o app lembrou. Ex: --provider kimi abre o Kimi Code.
+                                 --remember-provider grava o provedor desta criação como padrão.
+                                 Sem o flag, abrir auxiliares não muda a preferência do app.
+                                 --read-only bloqueia escrita no código e metadados Git (Linux/bwrap).
+                                 Sem --headless/--terminal, herda desta sessão; chamado de fora
+                                 de uma sessão, vale o padrão escolhido no Hangar.
+                                 --terminal abre com terminal; não combina com --headless.
+                                 --headless (claude ou codex) abre a sessão SEM terminal: o agente
+                                 roda fora do tmux e conversa só pelo app. Combina com --model,
+                                 --effort e --permissao. Ex.: --provider codex --headless
+                                 --permissao "Full Access".
+                                 --engine <motor> nasce num motor de ~/.claude/engines.json
+                                 (outro modelo, conta do provedor — ver "Par noutro modelo").
+                                 --conta <nome> nasce em OUTRA CONTA Anthropic (ver abaixo); com
+                                 --provider codex, numa conta Codex (~/.codex-<nome>;
+                                 openai-codex = a padrão).
+                                 --subagente <modelo> (claude sem motor) define o modelo dos
+                                 subagentes da sessão.
+                                 --service-tier <default|priority> liga (priority) ou desliga o
+                                 Fast: Codex, ou Claude com motor GPT no CLIProxyAPI local.
+                                 --profile <nome> (só --provider omp) nasce num perfil do omp:
+                                 login, sessões e config em ~/.omp/profiles/<nome>/agent.
+                                 --conta auto deixa a cota escolher: a conta Claude com mais
+                                 folga na janela que mais aperta (5h, 7d ou a do modelo).
+                                 --model <id> abre no modelo escolhido — vale pra claude, codex,
+                                 pi e kimi. --effort <nivel> abre nesse esforço (claude/codex;
+                                 no pi vira --thinking, que aceita também off/minimal; kimi não
+                                 tem esforço por flag). SEMPRE prefira nascer no
+                                 modelo/esforço certo a mandar /model no primeiro recado — a
+                                 sessão trabalha ANTES de ler o recado.
+                                 --permissao <modo> nasce nesse modo de permissão, com ou sem
+                                 terminal. Claude: acceptEdits|auto|bypassPermissions|manual|
+                                 dontAsk|plan; Codex: o nome do seletor do app (ex. "Full Access").
+                                 --jev / --sem-jev liga ou desliga o Jev naquela sessão: com ele,
+                                 `hangar-preview objetivo` navega e preenche tela sozinho. Sem
+                                 nenhum dos dois vale o padrão do servidor (tela de Configurações).
+                                 --code-mode / --sem-code-mode liga ou desliga o Code Mode do
+                                 Claude Code naquela sessão (só claude). Sem nenhum dos dois vale
+                                 o padrão do servidor (tela Beta).
+                                 --link liga a sessão nova a esta: entra no grupo desta sem aviso,
+                                 aparece na linha de subagentes, pode ser interrompida por esta e
+                                 a resposta final da tarefa volta sozinha como [de: <filha>] (só
+                                 filhas Claude e Codex; Pi/omp/Kimi não devolvem). A filha não
+                                 manda a resposta final por recado. Só nesta máquina (servidor::nome
+                                 recusa) e não combina com --resume. Com o backend em modo python,
+                                 volta 422. Sessão aberta sem a ligação = linha "erro:" e saída 1.
+  hangar-send --whoami               imprime o nome desta sessão (a identidade que assina os recados)
+  hangar-send --help                esta ajuda (o cabeçalho deste arquivo).
+
+OUTRA CONTA: cada conta é um config dir próprio (~/.claude-<nome>), com skills/hooks symlinkados
+do ~/.claude e credenciais + transcritos separados. `hangar-conta --list` mostra as configuradas,
+`hangar-conta --new <nome>` cria uma (o /login é interativo, feito na primeira sessão dela).
+`hangar-send --new <nome> <cwd> --conta 200-01` abre a sessão já logada naquela conta — o consumo vai
+pra assinatura DELA, não pra conta padrão. Sem o flag, nasce na conta padrão (~/.claude).
+`--conta auto` pergunta ao backend (GET /api/cotas/sugestao) qual conta tem mais folga e nasce
+nela; sem nenhuma conta com leitura de cota o script para com erro, nunca cai calado na padrão.
+
+Remetente é detectado pelo sidecar no modo sem terminal ou pelo tmux e prefixado como "[de: X]",
+pra sessão destino saber a origem e pra onde responder.
+
+HANGAR_SEND_PAINEL=1 (só recado 1:1, desta máquina): o texto vai como está, sem "[de: X]" e sem
+procurar o remetente. É o aviso de um programa (o orquestrador do orq), não de uma sessão: o
+modelo responde a quem assina. O texto tem de começar com "[painel:"; senão sai 2 sem enviar.
+
+Cross-server: backend/peers.json (ver peers.json.example; NUNCA commitar — tem token) mapeia
+id -> {base_url, token} dos outros servidores, e CP_SERVER_ID no backend/.env é o id DESTA
+máquina — vira o endereço de resposta ([de: <id>::<sessao>]) quando o recado cruza servidor.
+--pair servidor::sessao forma um grupo entre máquinas: uma delas (a dona) guarda o grupo e o
+contrato, e entrada, saída, aviso de grupo e contrato passam por ela. Saída e troca de nome
+esperam numa fila a máquina fora do ar voltar; aviso de grupo não espera: a resposta diz quem
+ficou sem ele (pulados). Sessão de outra pessoa (par externo) entra no grupo, mas só alcança a máquina do par.
+--new servidor::nome cria lá pela API do outro.
+
+TRANSPORTE É DO BACKEND, NUNCA DO MODELO. Pra sessão Claude desta máquina o backend escreve o
+recado direto no socket nativo do Claude Code (`cc-socks/<pid>.sock`, o mesmo do SendMessage):
+sem digitar no terminal, sem teto de 16KB, sem \n submetendo linha, e entra no MEIO do turno do
+destino. Sem socket (sessão aberta antes da liberação, Codex, Pi, outra máquina) cai pro plugin,
+pro tmux ou pra fila durável, nesta ordem. A saída diz o que aconteceu: "entregue agora …
+(socket nativo…)", "entregue", "na fila" ou erro. Não existe "use outra ferramenta": se este
+comando não entregou, ele diz que não entregou. `--tmux` fica aceito e é ignorado.
+Retenção ou recusa pelo destino (política crossSessionInbound dele) chega depois como aviso
+`[painel: entrega de recado]` na sessão remetente. A mensagem é ARGUMENTO, nunca stdin: heredoc cru
+(`hangar-send <s> <<'EOF'`) dá erro de uso e nada sai. Texto com crase ou $ vai assim:
+  hangar-send <sessao> "$(cat <<'EOF'
+  ...texto livre...
+  EOF
+  )"
+
+PRAZOS: API_TIMEOUT (padrão 30) e API_CONNECT_TIMEOUT (padrão 3), em segundos, mudam o prazo de
+cada pedido ao servidor. Têm prazo próprio: a varredura de outras máquinas no --list (8 s), o --new
+e o --resume (120 s), e a conexão do --new e do --close noutra máquina (8 s).

@@ -37,7 +37,33 @@ export interface CodexLoginAttempt {
   verification_url?: string;
   error?: { code: string; params: Record<string, string> };
 }
-export type TipoCredencial = 'claude' | 'chave' | 'codex';
+export type TipoCredencial = 'claude' | 'chave' | 'codex' | 'cliproxy' | 'antigravity';
+/** Conta Google do Antigravity (`GET /api/antigravity-contas`). O Hangar não lê o token: `logado` é a
+ *  resposta do `agy models` da conta, e `null` é que ele não respondeu, nunca "não logado". */
+export interface AntigravityAccount {
+  /** `default` (a do ~/.gemini) ou o nome da pasta adicional ~/.antigravity-<nome>. */
+  id: string;
+  padrao: boolean;
+  pasta: string;
+  /** O mesmo id da linha em `/api/credenciais` (`antigravity:<pasta>`). */
+  credencial: string;
+  logado: boolean | null;
+  termos_aceitos: boolean;
+  /** Há um agy aberto nesta conta: a pasta não pode ser apagada. */
+  em_uso: boolean;
+}
+export interface AntigravityAccounts {
+  instalado: boolean;
+  contas: AntigravityAccount[];
+}
+export interface AntigravityLoginAttempt {
+  attempt_id: string;
+  estado: 'iniciando' | 'aguardando_codigo' | 'concluido' | 'falhou';
+  /** Só em `aguardando_codigo`: o endereço do Google que o agy imprimiu, já conferido pelo servidor. */
+  link?: string;
+  /** Só no fim: as últimas linhas do agy, para dizer por que falhou. */
+  saida?: string[];
+}
 export interface CotaResumo extends Omit<CotaContaResumo, 'id'> {
   ts?: number | null;
   idade_s?: number | null;
@@ -72,6 +98,8 @@ export interface Credencial {
   chave_mascarada?: string | null;
   usos: string[];
   cota?: CotaResumo | null;
+  cliproxy_quota?: CotaResumo | null;
+  cliproxy?: boolean;
   aceita_cookie?: boolean;
   cookie_definido?: boolean;
   /** false = chave do próprio agente (o `apikey` do Kimi): o app lista, mas não apaga. */

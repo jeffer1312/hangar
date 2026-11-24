@@ -26,9 +26,19 @@ export interface LoopState {
 // oh-my-pi, fork do pi — mesmo transcript, mas a pergunta ao usuario vem da tool `ask`. O front usa
 // isto pra esconder controles Claude-only (picker de /model, slash-commands) e pra rotular a
 // sessao (lib/format.providerName). "orq" é a linha do orquestrador sem LLM (skill orquestrar-auto): só leitura, sem pane.
+// "antigravity" é o Antigravity CLI do Google (`agy`), no tmux como o Pi e o Kimi.
 // Tipo nomeado porque a mesma uniao viaja pela cadeia de criacao (CreateSessionSheet -> handleCreate
 // das duas views -> api.createSession): quando o Pi entrou, as copias literais ficaram pra tras.
-export type Provider = 'claude' | 'codex' | 'pi' | 'kimi' | 'omp' | 'orq';
+export type Provider = 'claude' | 'codex' | 'pi' | 'kimi' | 'omp' | 'antigravity' | 'orq';
+
+/** Um servidor da sessão: a porta e quem escuta nela (`process` = nome curto do executável). */
+export interface PortEntry {
+  port: number;
+  process: string;
+  pid: number;
+  /** Outro processo, fora da sessão, também escuta nesta porta: `localhost:<port>` pode cair nele. */
+  shared?: boolean;
+}
 
 export interface SessionInfo {
   interaction_id?: string | null;
@@ -70,6 +80,10 @@ export interface SessionInfo {
   hidden_from_list?: boolean;
   /** Sem processo vivo; acorda na próxima mensagem. O servidor só manda quando é `true`. */
   asleep?: boolean;
+  /** Troca de agente pedida e ainda não concluída; o servidor só manda enquanto existe. */
+  handoff?: SessionHandoff | null;
+  /** Portas TCP em LISTEN dos processos da sessão, por porta; só na lista do dono, e ausente quando não há. */
+  ports?: PortEntry[];
   /** Onde a sessão adormecida reabre ao acordar. */
   wake_surface?: 'terminal' | 'headless';
   /** Servidores MCP criados por plugin (`$.tool.register`); a pele 'terminal' deixa as chamadas deles fora da dobra. */
@@ -119,9 +133,9 @@ export interface SessionInfo {
   // Statusline crua da sessão (cache ~20s no backend) — o card do board/canvas parseia com
   // parseStatusLine (modelo/contexto no composer; ⚡5h/📅7d na RateStrip). Chat usa a versão ao vivo.
   status_line?: string | null;
-  // Contexto lido do transcript pela lista do Rust (só Claude); vence a statusline no anel.
+  // Contexto lido do transcript pela lista do Rust (Claude e Antigravity); vence a statusline no anel.
   context?: { used: number; 'window': number } | null;
-  // Id do modelo em uso na sessão Claude (`claude-opus-5-5[1m]`), resolvido pelo backend: dá nome à
+  // Id do modelo em uso na sessão Claude (`claude-opus-5-5[1m]`) ou Antigravity (`gemini-4-neon-low`): dá nome à
   // pílula quando a statusline não é a do Hangar ou ainda não chegou.
   model?: string | null;
   // Feature loop runner (Task 9+): estado de um loop autônomo por sessão
@@ -141,6 +155,8 @@ export interface SessionInfo {
   plan_hidden?: boolean | null;
   // Motor de modelo desta sessão (nome no engines.json). null/undefined = conta Anthropic.
   engine?: string | null;
+  engine_account?: string | null;
+  engine_binding?: string | null;
   codex_service_tier?: string | null;
   // Conta da sessão como ID do /api/cotas ("claude:<dir>", "chave:<motor>") — a pílula de cota do
   // topo mostra o uso da conta da sessão ATIVA. null = não dá pra saber (kimi/pi sem motor).
@@ -222,7 +238,8 @@ export interface ChatEvent {
   // (settings.json["showThinkingSummaries"]); no Pi e no Kimi o texto é o raciocínio cru.
   // `notice` = aviso de sistema (turno interrompido e afins): o `text` traz um CÓDIGO
   // (`interrupted`, `turn_aborted`), e a frase é da interface — o servidor não manda texto de tela.
-  kind: 'user_msg' | 'assistant_msg' | 'tool_use' | 'tool_result' | 'thinking' | 'notice';
+  // `handoff` = divisor da troca de agente: a conversa seguiu noutro modelo a partir daqui (campos em `handoff`).
+  kind: 'user_msg' | 'assistant_msg' | 'tool_use' | 'tool_result' | 'thinking' | 'notice' | 'handoff';
   id: string;
   /** Só na sessão do orquestrador sem LLM: a linha do tempo enriquecida (recado, avanço, descarte). */
   orq?: OrqEntry | null;
@@ -246,9 +263,37 @@ export interface ChatEvent {
                                  // dada como perdida — a TUI engoliu as teclas ou o hook barrou o prompt
   hook_error?: string | null;    // só em bolha "held:": o que o hook escreveu ao barrar o prompt
   /** Só em aviso da CLI do Claude: presente (mesmo vazio) faz do evento um aviso; sem `key` não pode ser ignorado. */
-  notice_meta?: { key?: string; subject?: string; count?: number; level?: 'error' } | null;
+  notice_meta?: {
+    key?: string; subject?: string; count?: number; level?: 'error';
+    /** O botão do aviso: reinstalar o plugin `plugin` ou consertar o hook. */
+    action?: string; plugin?: string;
+    /** Nota de conserto de hook: de qual aviso, de qual tentativa, em que estado e em qual sessão. */
+    fix_of?: string; attempt?: number; state?: string; child?: string;
+  } | null;
   /** Só em notice `skill_loaded`: a skill que o harness injetou como fala do usuário. */
   skill?: { name: string; path?: string | null; body: string } | null;
+  /** Só no divisor da troca de agente: de qual agente e modelo para qual. */
+  handoff?: HandoffDivider | null;
+}
+
+/** Os dois lados do divisor da troca de agente. */
+export interface HandoffDivider {
+  from_provider?: string | null;
+  from_model?: string | null;
+  to_provider?: string | null;
+  to_model?: string | null;
+  to_effort?: string | null;
+}
+
+/** Troca de agente pedida pelo seletor de modelos: esperando o turno acabar, em curso ou que falhou. */
+export interface SessionHandoff {
+  state: 'waiting' | 'running' | 'failed';
+  provider: string;
+  model?: string | null;
+  effort?: string | null;
+  account: string;
+  /** Código do motivo, só em `failed`. */
+  code?: string | null;
 }
 
 export interface CodexCommand {
@@ -1127,52 +1172,6 @@ export interface Atualizacao {
   passos: AtualizacaoPasso[];
   pre_voo: AtualizacaoPreVoo;
   estado: AtualizacaoEstado;
-}
-
-/** Tela temporária "Migração para Rust" (sai na parte 7): `GET /api/migration/status`. */
-export interface MigrationProcess {
-  pid: number;
-  rss_bytes: number;
-  /** Fora do Linux, 0. A tela mostra RSS + swap: com zram o kernel troca um pelo outro. */
-  swap_bytes: number;
-  cpu_seconds: number;
-  /** Média entre esta leitura e a anterior; `null` na primeira. */
-  cpu_percent: number | null;
-}
-
-export interface MigrationPython {
-  mode: 'pending' | 'rust' | 'python';
-  /** Por que o Python atende sozinho (código do Supervisor); `null` com o Rust na porta. */
-  reason: string | null;
-  protocol: number;
-  port: number | null;
-  version: string;
-  branch: string | null;
-  update_branch: string | null;
-  binary: { path: string; mtime: number | null } | null;
-  processes: {
-    python: MigrationProcess | null;
-    rust: MigrationProcess | null;
-    cano: { count: number; rss_bytes: number; swap_bytes: number; cpu_percent: number | null };
-  };
-}
-
-export interface MigrationArea {
-  key: string;
-  routes: { method: string; path: string; rust: boolean }[];
-  /** Pedidos na janela: respondidos pelo Rust × repassados ao Python. */
-  rust: number;
-  python: number;
-}
-
-export interface MigrationStatus {
-  served_by: 'rust' | 'python';
-  python: MigrationPython | null;
-  python_error?: string | null;
-  rust: { version: string; commit: string | null; protocol: number; pid: number } | null;
-  window_minutes?: number;
-  areas: MigrationArea[] | null;
-  private: { key: string; rust: number }[] | null;
 }
 
 /** `GET /api/update/notes`: o que a próxima atualização traz, lido antes de atualizar. */

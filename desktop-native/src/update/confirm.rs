@@ -57,11 +57,10 @@ impl Notes {
 
     pub(crate) fn labeled(self, label: String) -> Self { Self { label: Some(label), ..self } }
 
-    /// Máquina do lote sem os avisos lidos: fica de fora, com a linha de falha.
-    pub(crate) fn unread(server: String, label: String) -> Self { Self { server, failed: true, ..Self::default() }.labeled(label) }
-
     /// A leitura falhou numa máquina do lote: ela fica de fora, com o motivo no modal.
     pub(crate) fn excluded(&self) -> bool { self.failed && self.label.is_some() }
+
+    pub(crate) fn warned(&self) -> bool { !self.warnings.is_empty() }
 
     fn asks_mode(&self) -> bool { self.warnings.iter().any(|w| w.choice.as_deref() == Some("mode")) }
 
@@ -86,25 +85,29 @@ fn parse_notes(read: Result<Value, Failure>) -> Result<Option<Wire>, ()> {
     }
 }
 
-/// Os avisos de uma máquina do lote, com o nome dela; a versão e as novidades do modal são as do servidor desta máquina.
-pub(crate) async fn load_warnings(api: Result<Api, Failure>, server: String, label: String) -> Notes {
+/// Os avisos de uma máquina do lote, com o nome dela, e o estado lido na busca do alvo; a versão e as novidades do modal
+/// são as do servidor desta máquina. O estado lido é o que a rodada usa para decidir: a busca não se repete depois.
+pub(crate) async fn load_warnings(api: Result<Api, Failure>, server: String, label: String) -> (Result<Value, Failure>, Notes) {
     let mut notes = Notes { server, ..Notes::default() }.labeled(label);
-    let read = match api {
+    let (snapshot, read) = match api {
         Ok(api) => {
             // Busca o alvo antes, como na desta máquina: sem isso os avisos podem ser os da versão anterior. Falhou, segue
             // com o alvo que ela tem; a releitura antes de iniciar (`unseen_warnings`) barra o que mudou.
-            if let Err(error) = api.server_read(&["atualizacao"], &[("procurar", "1")], 120).await {
+            let snapshot = api.server_read(&["atualizacao"], &[("procurar", "1")], 120).await;
+            if let Err(error) = &snapshot {
                 eprintln!("update warnings: {} target search failed: {}", notes.server, tr(&error.detail));
+                // Sem resposta nenhuma a máquina caiu: ler os avisos só esperaria outro prazo inteiro.
+                if error.status.is_none() { notes.failed = true; return (snapshot, notes); }
             }
-            api.server_read(&["update", "notes"], &[], 20).await
+            (snapshot, api.server_read(&["update", "notes"], &[], 20).await)
         }
-        Err(error) => Err(error),
+        Err(error) => (Err(error.clone()), Err(error)),
     };
     match parse_notes(read) {
         Ok(wire) => if let Some(wire) = wire { notes.warnings = wire.warnings; notes.incomplete = wire.incomplete; },
         Err(()) => notes.failed = true,
     }
-    notes
+    (snapshot, notes)
 }
 
 /// O passo depois do aceite. `reply`: a resposta do `POST /api/update/accept` (nenhuma = nada a aceitar).
@@ -210,9 +213,41 @@ pub(crate) fn open(window: &mut Window, cx: &mut App, title: String, description
     let body = move |window: &mut Window, cx: &mut App| {
         let primary = &shown[0];
         let max = window.viewport_size().height * 0.8 - px(110.);
-        let failed = shown.iter().filter(|n| n.excluded()).filter_map(|n| n.label.as_deref()).map(|label| div().text_size(px(12.5))
-            .text_color(theme::danger()).whitespace_normal().child(tr("update_all_warnings_failed").replace("{server}", label)));
-        let groups = shown.iter().enumerate().filter(|(_, n)| !n.warnings.is_empty()).map(|(g, n)| div().flex().flex_col().gap(px(7.))
+        div().id("update-confirm-body").max_h(max).overflow_y_scroll().flex().flex_col().gap(px(12.))
+            .child(div().flex().flex_col().gap(px(3.))
+                .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(title.clone()))
+                .when_some(primary.version.clone(), |el, version| el.child(div().font_family(theme::MONO).text_size(px(11.5))
+                    .text_color(theme::faint()).child(version))))
+            .child(div().text_size(px(12.5)).line_height(px(18.)).text_color(theme::muted()).whitespace_normal().child(description.clone()))
+            .when(primary.failed && primary.label.is_none(), |el| el.child(div().text_size(px(12.5)).text_color(theme::danger())
+                .whitespace_normal().child(tr_shared("update_notes_failed", &[]))))
+            .children(notes_body(&shown, &choices, &understood, &fixes_open, all.as_ref(), started, window, cx))
+            .into_any_element()
+    };
+    // Largo o bastante para o aviso e a escolha não virarem uma coluna estreita; nunca além da janela.
+    let (width, height) = if tall { (px(620.).min(window.viewport_size().width * 0.92), window.viewport_size().height * 0.8) } else { (px(360.), px(150.)) };
+    chrome::confirm_dialog(window, cx, width, height, None, Rc::new(body), enabled, tr("update_confirm_ok"), None,
+        |dialog| dialog.p(px(18.)).rounded(px(14.)), move |window, cx| {
+            act(acceptances(&notes, &developer), window, cx);
+            true
+        });
+}
+
+/// O aceite de cada máquina, na ordem de `notes`.
+pub(crate) fn acceptances(notes: &[Notes], developer: &[Rc<Cell<bool>>]) -> Vec<Acceptance> {
+    notes.iter().zip(developer).map(|(n, d)| n.acceptance(d.get())).collect()
+}
+
+/// O que o "Atualizar?" mostra além do título: as máquinas sem avisos lidos, os avisos com o "Entendi", as novidades da
+/// primeira e a caixa de todas as máquinas. O modal de uma máquina e o do lote mostram os mesmos blocos.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn notes_body(shown: &[Notes], choices: &[Rc<Cell<bool>>], understood: &Rc<Cell<bool>>, fixes_open: &Rc<Cell<bool>>,
+    all: Option<&(String, Rc<Cell<bool>>)>, started: Instant, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
+    let mut out = Vec::new();
+    out.extend(shown.iter().filter(|n| n.excluded()).filter_map(|n| n.label.as_deref()).map(|label| div().text_size(px(12.5))
+        .text_color(theme::danger()).whitespace_normal().child(tr("update_all_warnings_failed").replace("{server}", label)).into_any_element()));
+    if shown.iter().any(Notes::warned) {
+        let groups = shown.iter().enumerate().filter(|(_, n)| n.warned()).map(|(g, n)| div().flex().flex_col().gap(px(7.))
             .when_some(n.label.as_deref(), |el, label| el.child(div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text()).whitespace_normal().child(tr("update_all_warnings_from").replace("{server}", label))))
             .children(n.warnings.iter().map(|w| div().flex().flex_col().gap(px(7.))
@@ -223,38 +258,26 @@ pub(crate) fn open(window: &mut Window, cx: &mut App, title: String, description
                     .text_color(theme::body_text()).child(TextView::markdown(SharedString::from(format!("update-warning-{g}-{}-{i}", w.id)),
                         paragraph.to_owned()).selectable(true).scrollable(false))))
                 .when(w.choice.as_deref() == Some("mode"), |el| el.child(mode_choice(g, choices[g].clone()))))));
-        div().id("update-confirm-body").max_h(max).overflow_y_scroll().flex().flex_col().gap(px(12.))
-            .child(div().flex().flex_col().gap(px(3.))
-                .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(title.clone()))
-                .when_some(primary.version.clone(), |el, version| el.child(div().font_family(theme::MONO).text_size(px(11.5))
-                    .text_color(theme::faint()).child(version))))
-            .child(div().text_size(px(12.5)).line_height(px(18.)).text_color(theme::muted()).whitespace_normal().child(description.clone()))
-            .when(primary.failed && primary.label.is_none(), |el| el.child(div().text_size(px(12.5)).text_color(theme::danger())
-                .whitespace_normal().child(tr_shared("update_notes_failed", &[]))))
-            .children(failed)
-            .when(warned, |el| el.child(div().flex().flex_col().gap(px(7.)).px(px(12.)).py(px(11.)).rounded(px(10.))
-                .border_1().border_color(palette::amber().alpha(0.28)).bg(palette::amber().alpha(0.08))
-                .children(groups)
-                // Em caixa própria e no tamanho normal: pequena, dentro do bloco âmbar, ela não parecia uma caixa de marcar.
-                .child(div().mt(px(4.)).px(px(12.)).py(px(10.)).rounded(px(8.)).border_1().border_color(palette::amber().alpha(0.6))
-                    .bg(theme::inset()).text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD)
-                    .child(gpui_kit::component::checkbox::Checkbox::new("update-understood").label(tr_shared("update_notes_understood", &[]))
-                        .checked(understood.get()).on_click({
-                            let value = understood.clone();
-                            move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }
-                        })))))
-            .child(sections(tr_shared("update_notes_news", &[]), &primary.news, None, &fixes_open, None, started, window, cx))
-            .when_some(all.clone(), |el, (label, value)| el.child(div().px(px(10.)).py(px(9.)).rounded(px(9.)).border_1()
-                .border_color(palette::edge()).bg(palette::fill(0.04)).text_size(px(13.)).child(check("confirm-check", label, value))))
-            .into_any_element()
-    };
-    // Largo o bastante para o aviso e a escolha não virarem uma coluna estreita; nunca além da janela.
-    let (width, height) = if tall { (px(620.).min(window.viewport_size().width * 0.92), window.viewport_size().height * 0.8) } else { (px(360.), px(150.)) };
-    chrome::confirm_dialog(window, cx, width, height, None, Rc::new(body), enabled, tr("update_confirm_ok"), None,
-        |dialog| dialog.p(px(18.)).rounded(px(14.)), move |window, cx| {
-            act(notes.iter().zip(developer.iter()).map(|(n, d)| n.acceptance(d.get())).collect(), window, cx);
-            true
-        });
+        out.push(div().flex().flex_col().gap(px(7.)).px(px(12.)).py(px(11.)).rounded(px(10.))
+            .border_1().border_color(palette::amber().alpha(0.28)).bg(palette::amber().alpha(0.08))
+            .children(groups)
+            // Em caixa própria e no tamanho normal: pequena, dentro do bloco âmbar, ela não parecia uma caixa de marcar.
+            .child(div().mt(px(4.)).px(px(12.)).py(px(10.)).rounded(px(8.)).border_1().border_color(palette::amber().alpha(0.6))
+                .bg(theme::inset()).text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD)
+                .child(gpui_kit::component::checkbox::Checkbox::new("update-understood").label(tr_shared("update_notes_understood", &[]))
+                    .checked(understood.get()).on_click({
+                        let value = understood.clone();
+                        move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }
+                    }))).into_any_element());
+    }
+    if let Some(primary) = shown.first() {
+        out.push(sections(tr_shared("update_notes_news", &[]), &primary.news, None, fixes_open, None, started, window, cx).into_any_element());
+    }
+    if let Some((label, value)) = all {
+        out.push(div().px(px(10.)).py(px(9.)).rounded(px(9.)).border_1().border_color(palette::edge()).bg(palette::fill(0.04))
+            .text_size(px(13.)).child(check("confirm-check", label.clone(), value.clone())).into_any_element());
+    }
+    out
 }
 
 /// Como a máquina vai rodar o Hangar, embaixo do aviso da migração.

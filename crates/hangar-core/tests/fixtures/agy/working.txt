@@ -1,0 +1,10 @@
+────────────────────────────────────────────────────────────
+> Rode com a ferramenta de terminal: sleep 4; rm -f /tmp/agy-prova/nao-existe.txt
+
+○ Running (sleep 4; rm -f /tmp/agy-prova/nao-existe.txt) (ctrl+o to expand)
+⣷  Running command...
+└ Tip: You can switch conversations with /resume.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+esc to cancel                                                                                                                      auto · Gemini 3.8 Flash · low

@@ -1,0 +1,12 @@
+[package]
+name = "hangar-browser-host"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt", "test-util"] }

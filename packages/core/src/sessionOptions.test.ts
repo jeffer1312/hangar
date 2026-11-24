@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { contextModel, effortLevels, engineModelChoice, hasContext, permissionModes } from './sessionOptions';
+import { canChooseSurface, contextModel, CREATE_SESSION_PROVIDERS, effortLevels, engineModelChoice, hasContext, hasExecutionMode,
+  permissionModes, SESSION_PROVIDERS } from './sessionOptions';
 
 describe('opções de abertura', () => {
   it('esforço: lista fixa por provider, a do Codex vem do modelo, o Kimi não tem', () => {
@@ -15,6 +16,23 @@ describe('opções de abertura', () => {
     expect(permissionModes('codex', false)).toEqual([]);
     expect(permissionModes('codex', true)).toContain('Full Access');
     expect(permissionModes('pi', true)).toEqual([]);
+  });
+
+  it('Antigravity: com terminal não oferece o modo que pergunta, sem terminal oferece', () => {
+    expect(permissionModes('antigravity', false)).toEqual(['plan', 'acceptEdits', 'auto', 'bypassPermissions']);
+    expect(permissionModes('antigravity', true)).toContain('manual');
+    expect(effortLevels('antigravity', [{ id: 'gemini-4-neon-high' }], 'gemini-4-neon-high')).toEqual([]);
+  });
+
+  it('Antigravity só entra na criação do Expo, e só com terminal', () => {
+    expect(CREATE_SESSION_PROVIDERS).toContain('antigravity');
+    expect(SESSION_PROVIDERS).not.toContain('antigravity');
+    for (const p of SESSION_PROVIDERS) expect(CREATE_SESSION_PROVIDERS).toContain(p);
+    expect(canChooseSurface('antigravity')).toBe(false);
+    expect(hasExecutionMode('antigravity')).toBe(false);
+    expect(canChooseSurface('claude') && canChooseSurface('codex')).toBe(true);
+    expect(hasExecutionMode('claude') && hasExecutionMode('codex')).toBe(true);
+    expect(canChooseSurface('pi')).toBe(false);
   });
 });
 

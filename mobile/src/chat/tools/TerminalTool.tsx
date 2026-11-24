@@ -135,6 +135,6 @@ const styles = StyleSheet.create((theme) => ({
   name: { fontWeight: theme.base.weight.bold },
   muted: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.xs, color: theme.tokens.text.muted },
   outcome: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.base.space[2], paddingLeft: theme.base.space[3] },
-  body: { paddingLeft: 38, paddingTop: theme.base.space[1] },
+  body: { paddingLeft: theme.base.space[8] + theme.base.space[1.5], paddingTop: theme.base.space[1] },
   control: { minHeight: 44, justifyContent: 'center' },
 }));

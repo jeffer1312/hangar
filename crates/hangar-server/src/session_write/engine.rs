@@ -44,38 +44,41 @@ async fn facts<T:Send+'static>(env:crate::accounts::environment::AccountEnvironm
 /// (quem chama segue o caminho de sempre).
 pub(crate) async fn switch(st:&Arc<AppState>,runtime:&Arc<RuntimeRegistry>,name:&str,spec:SessionSpec,wanted:EngineChange) -> (StatusCode,Value) {
     let env=runtime.codex_environment();
-    let Account::Engine { name:engine,account:current,config_dir,context_window,.. }=spec.account.clone() else {
+    let Account::Engine { name:engine,account:current,binding:current_binding,config_dir,context_window,.. }=spec.account.clone() else {
         return (StatusCode::BAD_REQUEST,detail_body("erro_cliproxy_conta","esta sessão não usa o CLIProxyAPI local",json!({})));
     };
-    let account=wanted.account.clone().or(current.clone());
-    let Some(account)=account else {
-        return (StatusCode::BAD_REQUEST,detail_body("erro_cliproxy_conta","esta sessão não usa uma conta ChatGPT fixa",json!({})));
+    let source = match runtime.claude_engine_source(name, &spec).await {
+        Ok(source) => source,
+        Err(failure) => return super::account::account_refusal(&failure, "não troquei"),
     };
-    if (wanted.model.is_some() || wanted.effort.is_some()) && current.as_deref()!=Some(account.as_str()) {
-        return (StatusCode::CONFLICT,detail_body("erro_cliproxy_conta","a conta da sessão mudou; atualize a lista de modelos",json!({})));
-    }
     let parked=spec.parked();
-    let same=current.as_deref()==Some(account.as_str()) && wanted.model.is_none() && wanted.effort.is_none() && wanted.tier.is_none();
-    if same && !parked {return (StatusCode::OK,json!({"ok":true,"engine_account":account}));}
-    // O modelo com o prefixo da conta, conferido no catálogo de agora: o cache não sustenta a recusa aqui.
+    let explicit = wanted.account.is_some();
+    let requested = wanted.account.clone().or_else(|| current.clone().filter(|_| current_binding.is_none()));
     let model=wanted.model.clone().or(spec.model.clone());
-    let checked={let (engine,account,model)=(engine.clone(),account.clone(),model.clone());
-        facts(env.clone(),move|facts|{
+    let checked={let (engine, saved_binding)=(engine.clone(), current_binding.clone());
+        facts(env,move|facts|{
+            let (account, binding) = facts.engine_account(&engine, requested.as_deref())?;
+            if !explicit && binding != saved_binding {
+                return Err(crate::session_open::OpenError::new(409, "erro_cliproxy_conta", "O vínculo deste motor mudou. Confirme a conta da conversa."));
+            }
+            let account = account.ok_or_else(|| crate::session_open::OpenError::new(400, "erro_cliproxy_conta", "Esta sessão não usa uma conta ChatGPT fixa."))?;
             let base=facts.fixed_engine_model(&engine,&account,model.as_deref())?;
             let window=match &model {Some(model)=>facts.engine_window(&engine,model,Some(&account))?,None=>None};
-            Ok::<_,crate::session_open::OpenError>((base,window))
+            Ok::<_,crate::session_open::OpenError>((account,binding,base,window))
         }).await};
-    let (base,window)=match checked {
+    let (account,binding,base,window)=match checked {
         Some(Ok(found))=>found,
         Some(Err(error))=>return (StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_REQUEST),error.body()),
         None=>return (StatusCode::SERVICE_UNAVAILABLE,detail_body("erro_cliproxy_conta","o catálogo do motor não respondeu",json!({}))),
     };
+    let same=current.as_deref()==Some(account.as_str()) && binding == current_binding && wanted.model.is_none() && wanted.effort.is_none() && wanted.tier.is_none();
+    if same && !parked {return (StatusCode::OK,json!({"ok":true,"engine_account":account}));}
     let window=if wanted.model.is_some() {window} else {context_window};
     let change=SessionChange { reason:ChangeReason::AccountSwitch,surface:parked.then_some(crate::session_open::Surface::Terminal),
-        account:Some(Account::Engine { name:engine,account:Some(account.clone()),config_dir,context_window:window,context_window_unknown:false }),
+        account:Some(Account::Engine { name:engine,account:Some(account.clone()),binding,config_dir,context_window:window,context_window_unknown:false }),
         permission_mode:None,model:Some(base),effort:wanted.effort.clone(),service_tier:wanted.tier };
     let (runtime,owned)=(runtime.clone(),name.to_owned());
-    match super::relaunch::reopen_detached(st,name,async move {runtime.reopen_claude_session(&owned,change,None).await}).await {
+    match super::relaunch::reopen_detached(st,name,async move { Some(runtime.reopen_claude_engine(&owned,&source,change).await) }).await {
         Some(Ok(reopened))=>(StatusCode::OK,reopened.answer(match wanted.tier {
             Some(tier)=>json!({"ok":true,"service_tier":tier.name()}),
             None if wanted.model.is_some()=>json!({"ok":true,"model":wanted.model}),
@@ -129,6 +132,48 @@ fn text(body:&Value,field:&str) -> Result<Option<String>,()> {
     match &body[field] {Value::Null=>Ok(None),Value::String(s) if !s.trim().is_empty()=>Ok(Some(s.trim().to_owned())),Value::String(_)=>Ok(None),_=>Err(())}
 }
 
+pub async fn provider(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if let Err(response) = crate::routes::owner_gate(&st, peer, &req).await { return response; }
+    let Some(name) = session_name(req.uri().path()) else { return super::invalid_body(req.headers()) };
+    let Some(runtime) = st.state.runtime.get().cloned() else { return super::no_runtime(req.headers()) };
+    let (parts, body) = req.into_parts();
+    let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return too_large(&parts.headers) };
+    let Ok(wanted) = serde_json::from_slice::<hangar_api::session::ClaudeProviderSwitch>(&bytes) else {
+        return super::invalid_body(&parts.headers);
+    };
+    if wanted.engine.is_empty() || wanted.engine_account.is_empty() || wanted.engine_binding.is_empty()
+        || !crate::engines::model_http::provider_model_id(&wanted.model) {
+        return super::invalid_body(&parts.headers);
+    }
+    if st.term.is_active(&name) {
+        return reply(Some(&parts.headers), StatusCode::CONFLICT, detail_body("erro_terminal_aberto", "Feche o painel do terminal antes de trocar o provedor.", json!({})));
+    }
+    let change = SessionChange {
+        reason: ChangeReason::AccountSwitch, surface: None, permission_mode: None, effort: None,
+        account: Some(Account::Engine { name:wanted.engine, account:Some(wanted.engine_account), binding:Some(wanted.engine_binding), config_dir:None, context_window:None, context_window_unknown:false }),
+        model: Some(wanted.model), service_tier: Some(ServiceTier::Default),
+    };
+    let owned = name.clone();
+    let result = super::relaunch::reopen_detached(&st, &name, async move {
+        runtime.reopen_claude_provider(&owned, &wanted.source, change).await
+    }).await;
+    let (status, value) = match result {
+        Some(Ok(reopened)) => {
+            let mut value = json!({"ok":true,"service_tier":"default"});
+            if let Some(spec) = &reopened.spec && let Account::Engine { name, account, binding, .. } = &spec.account {
+                value["engine"] = json!(name);
+                value["engine_account"] = json!(account);
+                value["engine_binding"] = json!(binding);
+                value["model"] = json!(spec.model);
+            }
+            (StatusCode::OK, reopened.answer(value))
+        }
+        Some(Err(failure)) => super::account::account_refusal(&failure, "não troquei o provedor"),
+        None => (StatusCode::CONFLICT, detail_body("erro_troca_conta", "A conversa Claude não está aberta neste servidor.", json!({}))),
+    };
+    reply(Some(&parts.headers), status, value)
+}
+
 /// `POST /engine/model` da conta fixa: o modelo do catálogo da conta, com a janela dele.
 pub async fn model(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<SocketAddr>,req:Request) -> Response {
     let (runtime,name,spec,body,headers)=match claude_engine(&st,peer,req).await {Ok(found)=>found,Err(response)=>return response};
@@ -137,7 +182,7 @@ pub async fn model(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo<
     }
     let (Ok(Some(model)),Ok(effort))=(text(&body,"model"),text(&body,"effort")) else {return super::invalid_body(&headers)};
     // Fast ligado não vai para um modelo que não o aceita.
-    if spec.service_tier==Some(ServiceTier::Priority) {
+    if spec.service_tier.is_some_and(ServiceTier::is_fast) {
         let engine=match &spec.account {Account::Engine { name,.. }=>name.clone(),_=>String::new()};
         let fast={let model=model.clone();facts(runtime.codex_environment(),move|facts|facts.supports_fast(Some(&engine),Some(&model))).await};
         if fast!=Some(true) {
@@ -208,8 +253,29 @@ pub async fn service_tier(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     let engine=match &spec.account {Account::Engine { name,.. }=>Some(name.clone()),_=>None};
     let in_use=runtime.claude_model_in_use(&name).await.or(spec.model.clone());
     let fast={let (engine,model)=(engine.clone(),in_use);facts(runtime.codex_environment(),move|facts|facts.supports_fast(engine.as_deref(),model.as_deref())).await};
-    if fast!=Some(true) {
+    // Voltar ao Normal vale mesmo com o Fast tirado do motor (`fast: false`): senão a sessão ficava presa nele.
+    if (tier.is_fast() || engine.is_none()) && fast!=Some(true) {
         return reply(Some(&parts.headers),StatusCode::BAD_REQUEST,detail_body("erro_fast_indisponivel","Fast exige GPT no CLIProxyAPI local",json!({})));
+    }
+    if tier==ServiceTier::Ultrafast {
+        let (account,binding)=match &spec.account {Account::Engine { account,binding,.. }=>(account.clone(),binding.clone()),_=>(None,None)};
+        let model=runtime.claude_model_in_use(&name).await.or(spec.model.clone());
+        let accounts=st.accounts.clone();
+        let ultrafast=match tokio::task::spawn_blocking(move|| {
+            let engine = engine.as_deref().unwrap_or("");
+            let route = crate::session_open::facts::session_engine_route(&accounts, engine, account.as_deref(), binding.as_deref())?;
+            Ok::<_, crate::session_open::OpenError>(crate::engines::catalog::supports_ultrafast(&accounts, engine, model.as_deref(), route.as_ref().map(|r| r.account.as_str())))
+        }).await {
+            Ok(Ok(ultrafast))=>ultrafast,
+            Ok(Err(error))=>return reply(Some(&parts.headers), StatusCode::CONFLICT, error.body()),
+            Err(error)=>{
+                tracing::error!(%error,session=%name,"Ultra Fast: a conferência da conta caiu");
+                return reply(Some(&parts.headers),StatusCode::INTERNAL_SERVER_ERROR,detail_body("erro_ultrafast_conferencia","não consegui conferir o plano da conta",json!({})));
+            }
+        };
+        if !ultrafast {
+            return reply(Some(&parts.headers),StatusCode::BAD_REQUEST,detail_body("erro_ultrafast_indisponivel",crate::engines::catalog::ULTRAFAST_REFUSED,json!({})));
+        }
     }
     if st.term.is_active(&name) {
         return reply(Some(&parts.headers),StatusCode::CONFLICT,detail_body("erro_terminal_aberto","Terminal aberto nesta sessao. Feche o painel pra responder por aqui.",json!({})));
@@ -257,7 +323,7 @@ async fn unfixed_model(st:&Arc<AppState>,runtime:Arc<RuntimeRegistry>,name:&str,
         let quoted=crate::model_picker::py_repr(engine);
         return reply(Some(headers),StatusCode::UNPROCESSABLE_ENTITY,detail_body("erro_modelo_fora_catalogo",&format!("modelo fora do catalogo do motor {quoted}: {model}"),json!({"motor":engine,"modelo":model})));
     }
-    if spec.service_tier==Some(ServiceTier::Priority) && !crate::engines::catalog::supports_fast(&st.accounts,engine,Some(model)) {
+    if spec.service_tier.is_some_and(ServiceTier::is_fast) && !crate::engines::catalog::supports_fast(&st.accounts,engine,Some(model)) {
         return reply(Some(headers),StatusCode::CONFLICT,detail_body("erro_fast_indisponivel","Desligue Fast antes de escolher um modelo que não o suporta",json!({})));
     }
     let id=crate::mods::state::random_hex(16);

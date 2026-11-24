@@ -12,7 +12,7 @@ use super::{Summary, VaultError, config::{self, Placement},
     remote::{Remote, RemoteError, UseStart, WaitStatus}, requests::{self, RequestError}, wire::{AskReq, UseReq, WAIT_HOLD}};
 use crate::{groups::peers::PeerClient, routes::AppState};
 
-/// Claude e Codex cortam a tool em 60 s sem o prazo do servidor `hangar`, que o `scripts/registrar-mcp.py`
+/// Claude e Codex cortam a tool em 60 s sem o prazo do servidor `hangar`, que o `hangar-server mcp-register`
 /// grava na configuração da conta (`timeout` no `.claude.json`, `tool_timeout_sec` no `config.toml`).
 const CLAUDE_TIMEOUT_MIN_MS: f64 = 600_000.0;
 const CODEX_TOOL_TIMEOUT_MIN: i64 = 600;
@@ -31,7 +31,7 @@ pub const MASK: &str = "••••";
 pub const DENIED: &str = "erro_cofre_negado: o dono negou o uso desta senha";
 pub const NO_ANSWER: &str = "erro_cofre_sem_resposta: o dono não respondeu dentro de 10 minutos";
 pub const NO_DEADLINE: &str = "erro_cofre_sessao_sem_prazo: a conta desta sessão não tem o prazo longo do MCP hangar e a chamada \
-cairia antes da resposta do dono; atualize o Hangar (ou rode scripts/registrar-mcp.py), reabra a sessão e tente de novo";
+cairia antes da resposta do dono; atualize o Hangar (ou rode hangar-server mcp-register), reabra a sessão e tente de novo";
 /// Onde mora o cofre visto desta máquina.
 #[derive(Clone)]
 pub enum Owner { Local(Arc<AppState>), Remote { peers: Arc<PeerClient>, id: String } }

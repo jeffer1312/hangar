@@ -301,3 +301,11 @@ describe('contaCodexParaEntrar', () => {
     expect(defaultCodexAccount([])).toBeUndefined();
   });
 });
+
+describe('conta Google do Antigravity', () => {
+  it('a linha da credencial é de assinatura, sem cota', () => {
+    const linha = { id: 'antigravity:/h/.gemini', tipo: 'antigravity', auth_method: 'oauth', nome: 'Google (padrão)',
+      nome_natural: 'Google (padrão)', ativa: false, usos: [], cota: null, login: { estado: 'ok', loggedIn: true } } as Credencial;
+    expect(credentialGroup(linha)).toBe('subscription');
+  });
+});

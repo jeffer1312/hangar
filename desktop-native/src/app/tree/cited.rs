@@ -5,23 +5,68 @@ use super::*;
 
 /// Teto de caminhos conferidos: os mais recentes primeiro.
 const MAX: usize = 300;
+/// Linhas da seção fechada em "mais N" e o teto dela aberta (a busca também mostra até o teto).
+const SHORT: usize = 5;
+const LONG: usize = 40;
 
 #[derive(Clone)]
 struct Cited { raw: String, real: String, relative: Option<String> }
 
+/// O filtro por tipo da seção: um por vez, somado à busca.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(in crate::app) enum CitedKind { #[default] All, Images, Html, Markdown, Other }
+
+impl CitedKind {
+    const CHIPS: [CitedKind; 5] = [CitedKind::All, CitedKind::Images, CitedKind::Html, CitedKind::Markdown, CitedKind::Other];
+
+    fn of(path: &str) -> Self {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        match name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).as_deref() {
+            Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "svg" | "bmp" | "ico") => Self::Images,
+            Some("html" | "htm") => Self::Html,
+            Some("md" | "mdx" | "markdown") => Self::Markdown,
+            _ => Self::Other,
+        }
+    }
+
+    fn matches(self, item: &Cited) -> bool { self == Self::All || Self::of(&item.real) == self }
+
+    fn label(self) -> String {
+        tr(match self {
+            Self::All => "tree_cited_all", Self::Images => "tree_cited_images", Self::Html => "tree_cited_html",
+            Self::Markdown => "tree_cited_markdown", Self::Other => "tree_cited_other",
+        })
+    }
+}
+
 #[derive(Default)]
 pub(in crate::app) struct CitedView {
-    pub(in crate::app) on: bool,
     list: Option<Result<Vec<Cited>, String>>,
     /// Geração da árvore e quantos eventos a conversa tinha na última leitura: só relê quando um dos dois muda.
     read_for: Option<(u64, usize)>,
-    /// Índices da lista que passam na busca, refeitos a cada desenho.
-    shown: Vec<usize>,
+    /// A leitura em voo, uma por vez: num turno longo cada evento novo dispararia outra e descartaria a anterior.
+    in_flight: Option<u64>,
+    seq: u64,
 }
 
 impl CitedView {
-    /// Outra sessão: a lista da anterior some; a vista escolhida fica.
-    pub(in crate::app) fn reset(&mut self) { (self.list, self.read_for) = (None, None); }
+    /// Outra sessão: a lista da anterior some, e a resposta que ainda vier dela cai.
+    pub(in crate::app) fn reset(&mut self) { (self.list, self.read_for, self.in_flight) = (None, None, None); }
+
+    /// Começa a leitura de `stamp` quando ele mudou e nenhuma está em voo; devolve o número dela.
+    fn begin(&mut self, stamp: (u64, usize)) -> Option<u64> {
+        if self.in_flight.is_some() || self.read_for == Some(stamp) { return None; }
+        self.seq += 1;
+        (self.read_for, self.in_flight) = (Some(stamp), Some(self.seq));
+        Some(self.seq)
+    }
+
+    /// A resposta vale mesmo com a conversa tendo andado: a próxima renderização relê se o carimbo mudou.
+    fn finish(&mut self, seq: u64, list: Result<Vec<Cited>, String>) -> bool {
+        if self.in_flight != Some(seq) { return false; }
+        (self.in_flight, self.list) = (None, Some(list));
+        true
+    }
 }
 
 /// No disco: absoluto (ou `~/`) como está, relativo pela pasta da sessão e depois pelas pastas dos `cd` da conversa;
@@ -76,15 +121,14 @@ impl Hangar {
 
     fn cited_sync(&mut self, cx: &mut Context<Self>) {
         let stamp = (self.tree.generation, self.chat.events.len());
-        if !self.tree.cited.on || self.tree.cited.read_for == Some(stamp) { return; }
         // Espera a árvore saber se a pasta é desta máquina; antes disso não dá para escolher entre disco e backend.
         let Some(source) = self.tree.source.as_ref() else { return };
         let local = source.root().map(Path::to_path_buf);
         let (Some(api), Some(session)) = (self.session_api(), self.selected.as_ref()) else { return };
-        self.tree.cited.read_for = Some(stamp);
-        let (paths, dirs) = self.cited_paths();
-        if paths.is_empty() { self.tree.cited.list = Some(Ok(Vec::new())); return; }
         let name = session.name.clone();
+        let Some(seq) = self.tree.cited.begin(stamp) else { return };
+        let (paths, dirs) = self.cited_paths();
+        if paths.is_empty() { self.tree.cited.finish(seq, Ok(Vec::new())); return; }
         let job = self.runtime.spawn(async move {
             if let Some(root) = local {
                 return tokio::task::spawn_blocking(move || resolve_local(&root, paths, dirs)).await.map_err(|_| Failure::local("invalid_response"));
@@ -106,57 +150,109 @@ impl Hangar {
             // Tarefa que morreu vira erro na vista, não "carregando" para sempre.
             let result = job.await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
             let _ = this.update(cx, |this, cx| {
-                if this.tree.cited.read_for != Some(stamp) { return; }
-                this.tree.cited.list = Some(result.map_err(|error| Self::fetch_failure(&error)));
-                this.redraw(Area::Side, cx);
+                if this.tree.cited.finish(seq, result.map_err(|error| Self::fetch_failure(&error))) { this.redraw(Area::Side, cx); }
             });
         }).detach();
     }
 
-    pub(super) fn cited_count(&self) -> Option<usize> { self.tree.cited.list.as_ref()?.as_ref().ok().map(Vec::len) }
-
-    pub(super) fn cited_toggle(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.tree.cited.on = on;
-        self.redraw(Area::Side, cx);
-    }
-
-    fn cited_row(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let at = *self.tree.cited.shown.get(ix)?;
-        let item = self.tree.cited.list.as_ref()?.as_ref().ok()?.get(at)?.clone();
-        let shown = item.relative.clone().unwrap_or_else(|| abbreviate(&item.real));
-        let (folder, name) = shown.rsplit_once('/').map_or((String::new(), shown.clone()), |(f, n)| (f.to_owned(), n.to_owned()));
-        let open = item.relative.clone().unwrap_or(item.raw.clone());
-        Some(div().h(px(ROW_H)).w_full().px_1().child(div().id(SharedString::from(format!("tree-cited-{}", item.real)))
-            .role(Role::ListBoxOption).aria_label(shown.clone())
-            .size_full().px_2().flex().items_center().gap(px(8.)).rounded(px(6.)).cursor_pointer()
+    /// Os citados como seção no topo da aba, recolhível: as primeiras e "mais N". Com a busca, os que casam. Lista vazia
+    /// ou ainda lendo não ocupa lugar; falha aparece no lugar das linhas.
+    pub(super) fn render_cited_section(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.cited_sync(cx);
+        let query = self.tree.query.to_lowercase();
+        let (all, failed) = match &self.tree.cited.list {
+            None => return None,
+            Some(Err(reason)) => (Vec::new(), Some(reason.clone())),
+            Some(Ok(list)) => (list.clone(), None),
+        };
+        let found: Vec<Cited> = all.iter().filter(|c| query.is_empty() || c.relative.as_deref().unwrap_or(&c.real).to_lowercase().contains(&query))
+            .cloned().collect();
+        if found.is_empty() && failed.is_none() { return None; }
+        let kind = self.tree.cited_kind;
+        let rows: Vec<Cited> = found.into_iter().filter(|c| kind.matches(c)).collect();
+        // As contagens dos chips são da lista inteira: não mudam com a busca, e os chips não pulam.
+        let counts = CitedKind::CHIPS.map(|k| all.iter().filter(|c| k.matches(c)).count());
+        let kinds = counts[1..].iter().filter(|n| **n > 0).count();
+        let open = self.tree.cited_open;
+        let (limit, toggle) = limit_and_toggle(rows.len(), self.tree.cited_more, !query.is_empty());
+        let header = div().id("tree-cited-header").h(px(28.)).px(px(14.)).flex().items_center().gap(px(6.)).cursor_pointer()
+            .role(Role::Button).aria_expanded(open).aria_label(tr("tree_cited_section"))
             .hover(|el| el.bg(theme::hover()))
-            .on_click(cx.listener(move |this, _, window, cx| this.open_file(open.clone(), None, window, cx)))
-            .child(crate::fileicons::tree_icon(&name, false, false))
-            .child(div().flex_none().max_w(relative(0.6)).truncate().text_size(px(12.)).text_color(theme::text()).child(name))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(theme::faint()).child(folder)))
+            .on_click(cx.listener(|this, _, _, cx| { this.tree.cited_open = !this.tree.cited_open; this.redraw(Area::Side, cx); }))
+            .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 11., theme::faint()))
+            .child(div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(tr("tree_cited_section").to_uppercase()))
+            .child(div().text_size(px(11.5)).text_color(theme::faint()).child(if kind == CitedKind::All { rows.len().to_string() } else {
+                tr("tree_cited_of").replace("{n}", &rows.len().to_string()).replace("{total}", &all.len().to_string())
+            }));
+        // Com um tipo só não há o que filtrar; filtro já escolhido fica à vista para poder voltar.
+        let chips = (open && (kinds >= 2 || kind != CitedKind::All)).then(|| div().flex().flex_wrap().gap(px(4.)).pl(px(31.)).pr(px(14.)).pt(px(2.)).pb(px(6.))
+            .children(CitedKind::CHIPS.into_iter().zip(counts).map(|(chip, n)| {
+                let (on, off) = (chip == kind, n == 0 && chip != kind);
+                div().id(SharedString::from(format!("tree-cited-kind-{}", chip as u8))).role(Role::Button).aria_selected(on).aria_label(chip.label())
+                    .flex().items_center().gap(px(4.)).px(px(8.)).py(px(2.)).rounded_full().border_1()
+                    .border_color(if on { gpui::transparent_black() } else { theme::border() })
+                    .text_size(px(11.5)).text_color(if on { theme::text() } else { theme::muted() })
+                    .when(on, |el| el.bg(theme::accent_dim()))
+                    .when(off, |el| el.opacity(0.38))
+                    .when(!off, |el| el.cursor_pointer().hover(|el| el.bg(theme::hover()))
+                        .on_click(cx.listener(move |this, _, _, cx| { this.tree.cited_kind = chip; this.redraw(Area::Side, cx); })))
+                    .child(chip.label())
+                    .child(div().text_size(px(10.5)).text_color(if on { theme::accent() } else { theme::faint() }).child(n.to_string()))
+            })));
+        let none = (open && rows.is_empty() && failed.is_none())
+            .then(|| div().pl(px(36.)).pr_4().py_1().text_xs().text_color(theme::muted()).child(activity::web("arq_sem_nome")));
+        let more = toggle.filter(|_| open).map(|toggle| {
+            let label = match toggle { Toggle::More(n) => tr("tree_more").replace("{n}", &n.to_string()), Toggle::Less => tr("tree_less") };
+            div().id("tree-cited-more").h(px(24.)).pl(px(36.)).flex().items_center().text_size(px(12.)).text_color(theme::faint())
+                .cursor_pointer().hover(|el| el.text_color(theme::text()))
+                .on_click(cx.listener(|this, _, _, cx| { this.tree.cited_more = !this.tree.cited_more; this.redraw(Area::Side, cx); }))
+                .child(label)
+        });
+        Some(div().flex_shrink_0().flex().flex_col().pb_1().border_b_1().border_color(theme::border())
+            .child(header)
+            .children(chips)
+            .when(open, |el| el
+                .children(none)
+                .when_some(failed, |el, reason| el.child(div().px_4().py_1().text_xs().text_color(theme::warning()).whitespace_normal().child(reason)))
+                .children(rows.into_iter().take(limit).map(|item| self.cited_row(item, cx)))
+                .children(more))
             .into_any_element())
     }
 
-    pub(super) fn render_cited(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        self.cited_sync(cx);
-        let note = |text: String, color: Hsla| div().px_4().py_2().text_xs().text_color(color).whitespace_normal().child(text).into_any_element();
-        let query = self.tree.query.to_lowercase();
-        let shown: Vec<usize> = match &self.tree.cited.list {
-            Some(Ok(list)) => list.iter().enumerate()
-                .filter(|(_, c)| query.is_empty() || c.relative.as_deref().unwrap_or(&c.real).to_lowercase().contains(&query))
-                .map(|(ix, _)| ix).collect(),
-            _ => Vec::new(),
-        };
-        self.tree.cited.shown = shown;
-        match &self.tree.cited.list {
-            None => note(activity::web("arq_carregando"), theme::muted()),
-            Some(Err(reason)) => note(reason.clone(), theme::warning()),
-            Some(Ok(list)) if list.is_empty() => note(activity::web("arq_citados_vazio"), theme::muted()),
-            Some(Ok(_)) if self.tree.cited.shown.is_empty() => note(activity::web("arq_sem_nome"), theme::muted()),
-            Some(Ok(_)) => uniform_list("tree-cited", self.tree.cited.shown.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                range.filter_map(|ix| this.cited_row(ix, cx)).collect::<Vec<_>>()
-            })).flex_1().into_any_element(),
-        }
+    fn cited_row(&self, item: Cited, cx: &mut Context<Self>) -> AnyElement {
+        let shown = item.relative.clone().unwrap_or_else(|| abbreviate(&item.real));
+        let (folder, name) = shown.rsplit_once('/').map_or((String::new(), shown.clone()), |(f, n)| (f.to_owned(), n.to_owned()));
+        // Com outra pasta escolhida no painel, o relativo é dessa pasta, não da sessão: abre pelo caminho inteiro e fica
+        // sem as escritas, como a linha da árvore.
+        let custom = self.tree.custom_root(&self.tree.owner).is_some();
+        let open = item.relative.clone().map_or_else(|| item.raw.clone(), |rel| self.tree.file_path(rel));
+        let local = self.tree.source.as_ref().is_some_and(FileSource::is_local);
+        let target = ops::ItemTarget { session: item.relative.clone().filter(|_| !custom), open: open.clone(), disk: local.then(|| PathBuf::from(&item.real)),
+            full: item.real.clone(), dir: false };
+        div().h(px(ROW_H)).w_full().px_1().child(div().id(SharedString::from(format!("tree-cited-{}", item.real)))
+            .role(Role::ListBoxOption).aria_label(shown.clone())
+            .size_full().pl(px(30.)).pr_2().flex().items_center().gap(px(8.)).rounded(px(6.)).cursor_pointer()
+            .hover(|el| el.bg(theme::hover()))
+            .on_click(cx.listener(move |this, _, window, cx| this.open_file(open.clone(), None, window, cx)))
+            .context_menu(item_menu(cx.entity().downgrade(), target))
+            .child(crate::fileicons::tree_icon(&name, false, false))
+            .child(div().flex_none().max_w(relative(0.6)).truncate().text_size(px(13.)).text_color(theme::text()).child(name))
+            .child(div().flex_1().min_w_0().truncate().text_right().text_size(px(11.)).text_color(theme::faint()).child(folder)))
+            .into_any_element()
+    }
+}
+
+/// O botão embaixo da lista.
+#[derive(Debug, PartialEq)]
+enum Toggle { More(usize), Less }
+
+/// Quantas linhas mostrar e o botão: "mais N" só nas primeiras e sem busca, porque aberta a lista já está no teto;
+/// aberta, "menos" recolhe. A busca mostra até o teto e não tem botão.
+fn limit_and_toggle(rows: usize, more: bool, searching: bool) -> (usize, Option<Toggle>) {
+    match (searching, more) {
+        (true, _) => (LONG, None),
+        (false, true) => (LONG, (rows > SHORT).then_some(Toggle::Less)),
+        (false, false) => (SHORT, (rows > SHORT).then(|| Toggle::More(rows.min(LONG) - SHORT))),
     }
 }
 
@@ -165,5 +261,40 @@ fn abbreviate(path: &str) -> String {
     match home_dir().map(|h| h.to_string_lossy().into_owned()) {
         Some(home) if path.starts_with(&format!("{home}/")) => format!("~{}", &path[home.len()..]),
         _ => path.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CitedView, LONG, SHORT, Toggle, limit_and_toggle};
+
+    #[test]
+    fn one_read_in_flight_and_its_answer_counts_even_after_new_events() {
+        let mut view = CitedView::default();
+        let first = view.begin((1, 10)).unwrap();
+        // Eventos chegando com a leitura em voo não disparam outra.
+        assert_eq!(view.begin((1, 11)), None);
+        assert_eq!(view.begin((1, 12)), None);
+        assert!(view.finish(first, Ok(Vec::new())));
+        assert!(view.list.is_some());
+        // A conversa andou: a próxima leitura sai; a mesma contagem não relê.
+        let second = view.begin((1, 12)).unwrap();
+        assert!(view.finish(second, Ok(Vec::new())));
+        assert_eq!(view.begin((1, 12)), None);
+        // Resposta de antes da troca de sessão cai.
+        let stale = view.begin((1, 13)).unwrap();
+        view.reset();
+        assert!(!view.finish(stale, Ok(Vec::new())));
+        assert!(view.list.is_none());
+    }
+
+    #[test]
+    fn the_open_list_offers_less_and_the_search_offers_nothing() {
+        assert_eq!(limit_and_toggle(60, false, false), (SHORT, Some(Toggle::More(LONG - SHORT))));
+        assert_eq!(limit_and_toggle(12, false, false), (SHORT, Some(Toggle::More(12 - SHORT))));
+        assert_eq!(limit_and_toggle(60, true, false), (LONG, Some(Toggle::Less)));
+        assert_eq!(limit_and_toggle(SHORT, false, false), (SHORT, None));
+        assert_eq!(limit_and_toggle(60, false, true), (LONG, None));
+        assert_eq!(limit_and_toggle(60, true, true), (LONG, None));
     }
 }

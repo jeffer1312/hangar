@@ -1,27 +1,43 @@
 // Conta do Connect e entrada de aparelho. O `secret` vai direto à máquina e ao serviço só o hash
-// dele: isso protege de um serviço honesto que vaze. Contra um desonesto, a barreira é a aprovação
-// do dono na máquina.
+// dele: isso protege de um serviço honesto que vaze. Um serviço desonesto pode pré-aprovar bilhetes:
+// limite aceito em docs/decisoes/plataforma.md ("Confiança na conta").
 import { probeServerResponse } from './api';
 import { apiEnv } from './apiEnv';
 import { registrar as registrarDiag } from './diag';
 import { SERVIDOR_CANDIDATO } from './esfriamento';
+import { normalizeGuestUser } from './guests';
 import { sha256Hex } from './hmac';
 import { isLocalMachineUrl, isOwnMachine, normalizeMachineUrl, readMachineIdentity } from './machineImport';
 import { baseOf, readConnectUrl } from './rota';
 import type { Server } from './servers';
+import { syncSignIn, type SyncCrypto } from './syncLogin';
+
+export const CONNECT_SERVICE_URL = 'https://connect.hangar.dev.br';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const APPROVAL_POLL_MS = 3000;
 // O pedido pendente expira neste prazo na máquina (`PENDING_TTL`).
 const APPROVAL_WINDOW_MS = 10 * 60_000;
 
-export interface AccountSession { serviceUrl: string; token: string }
+/** Credencial deste aparelho na conta (`POST /v1/devices`); vai ao serviço, nunca à máquina. */
+export interface AccountDeviceKey { id: string; secret: string }
+export interface AccountSession { serviceUrl: string; token: string; device?: AccountDeviceKey }
 export interface ConnectMachine { machine_id: string; name: string; host: string; online: boolean }
+export type AccountDeviceStatus = 'pending' | 'approved' | 'revoked';
+/** Linha de `GET /v1/devices`; tempos em segundos. `install_code`: o mesmo código que o celular mostra (`installCode`),
+ *  pronto do serviço, que nunca manda o `install_id`; ausente em serviço antigo ou aparelho sem identificador. */
+export interface AccountDevice {
+  device_id: string; name: string; status: AccountDeviceStatus; created_at: number; approved_at: number | null; revoked_at: number | null;
+  install_code?: string | null;
+}
 
 const fail = (code: string, status?: number) => Object.assign(new Error(code), { code, status });
 const record = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown> : {});
 const filled = (value: unknown): value is string => typeof value === 'string' && !!value;
+const STATUSES: readonly unknown[] = ['pending', 'approved', 'revoked'];
+// Motivos do 403 do serviço que a tela explica; qualquer outro vira o genérico.
+const REASONS: readonly unknown[] = ['device_required', 'device_pending', 'device_revoked'];
 
 async function request(base: string, path: string, init: RequestInit): Promise<unknown> {
   // A senha da conta passa por aqui: http só em loopback, que é o caso dos testes.
@@ -31,13 +47,59 @@ async function request(base: string, path: string, init: RequestInit): Promise<u
     headers: { 'Content-Type': 'application/json', ...init.headers },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), redirect: 'error', credentials: 'omit',
   });
-  // Não incorpora o corpo do erro: ele pode ecoar o que recebeu.
-  if (!response.ok) throw fail('connect_request_failed', response.status);
+  if (!response.ok) {
+    // Do corpo do erro só sai o motivo conhecido, nunca o texto: ele pode ecoar o que recebeu.
+    const reason = await response.json().then((body: unknown) => record(body).reason, () => undefined);
+    throw fail(REASONS.includes(reason) ? `connect_${String(reason)}` : 'connect_request_failed', response.status);
+  }
   return response.status === 204 ? null : await response.json() as unknown;
 }
 
 const post = (base: string, path: string, body: unknown, headers?: Record<string, string>) =>
   request(base, path, { method: 'POST', body: JSON.stringify(body), headers });
+
+const auth = ({ token, device }: AccountSession): Record<string, string> => ({
+  Authorization: `Bearer ${token}`, ...(device ? { 'X-Hangar-Device': device.id, 'X-Hangar-Device-Secret': device.secret } : {}),
+});
+
+/** Registra este aparelho na conta: nasce pendente e espera a liberação de um aparelho ou PC já liberado. */
+export async function registerDevice(session: AccountSession, name: string, installId?: string): Promise<AccountDeviceKey> {
+  const { device_id: id, device_secret: secret } = record(await post(session.serviceUrl, '/v1/devices',
+    { name, ...(installId ? { install_id: installId } : {}) }, auth(session)));
+  if (!filled(id) || !filled(secret)) throw fail('connect_response_invalid');
+  return { id, secret };
+}
+
+/** Status deste aparelho na conta. 404 = pedido vencido ou desconhecido: registrar de novo. */
+export async function deviceStatus(session: AccountSession & { device: AccountDeviceKey }): Promise<AccountDeviceStatus> {
+  const { status } = record(await request(session.serviceUrl, `/v1/devices/${encodeURIComponent(session.device.id)}`, { headers: auth(session) }));
+  if (!STATUSES.includes(status)) throw fail('connect_response_invalid');
+  return status as AccountDeviceStatus;
+}
+
+const when = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
+
+/** Aparelhos da conta; só responde a aparelho liberado. */
+export async function listAccountDevices(session: AccountSession): Promise<AccountDevice[]> {
+  const rows = await request(session.serviceUrl, '/v1/devices', { headers: auth(session) });
+  const valid = (item: unknown): item is AccountDevice => {
+    const row = record(item);
+    return filled(row.device_id) && typeof row.name === 'string' && STATUSES.includes(row.status) && when(row.created_at)
+      && (row.approved_at === null || when(row.approved_at)) && (row.revoked_at === null || when(row.revoked_at))
+      && (row.install_code === undefined || row.install_code === null || typeof row.install_code === 'string');
+  };
+  if (!Array.isArray(rows) || !rows.every(valid)) throw fail('connect_response_invalid');
+  return rows;
+}
+
+export async function approveAccountDevice(session: AccountSession, id: string): Promise<void> {
+  await post(session.serviceUrl, `/v1/devices/${encodeURIComponent(id)}/approve`, {}, auth(session));
+}
+
+/** Recusa o pendente ou tira o acesso do liberado, em todas as máquinas da conta. */
+export async function revokeAccountDevice(session: AccountSession, id: string): Promise<void> {
+  await request(session.serviceUrl, `/v1/devices/${encodeURIComponent(id)}`, { method: 'DELETE', headers: auth(session) });
+}
 
 async function accountSession(serviceUrl: string, path: string, name: string, password: string): Promise<AccountSession> {
   const { token } = record(await post(serviceUrl, path, { name, password }));
@@ -51,6 +113,78 @@ export function signUp(serviceUrl: string, name: string, password: string): Prom
 
 export function signIn(serviceUrl: string, name: string, password: string): Promise<AccountSession> {
   return accountSession(serviceUrl, '/v1/sessions', name, password);
+}
+
+export type NameLookup = { kind: 'account' } | { kind: 'guest'; hosts: string[] } | { kind: 'none' };
+export type SignInResult = { kind: 'account'; account: AccountSession } | { kind: 'guest'; host: string; servers: Server[] };
+export interface SignInDeps { crypto: SyncCrypto; serviceUrl?: string }
+
+const CONNECT_HOST_SUFFIX = '.hangar.dev.br';
+const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+
+// Pedido que nem chegou a ter resposta é rede, e a tela não pode tratá-lo como senha errada.
+async function overNetwork<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (typeof (error as { code?: unknown }).code === 'string') throw error;
+    throw fail('network_failed');
+  }
+}
+
+/** Pergunta ao serviço só o nome: diz se é conta, convidado (com as máquinas que guardam o cofre dele) ou nada. */
+export async function lookupName(name: string, serviceUrl = CONNECT_SERVICE_URL): Promise<NameLookup> {
+  let answer: Record<string, unknown>;
+  try {
+    answer = record(await overNetwork(() => post(serviceUrl, '/v1/lookup', { name: normalizeGuestUser(name) })));
+  } catch (error) {
+    // Serviço anterior ao diretório de convidados: só conhece conta.
+    if ((error as { status?: number }).status === 404) return { kind: 'account' };
+    if ((error as { status?: number }).status === 429) throw fail('connect_too_many_attempts', 429);
+    throw error;
+  }
+  const { kind, hosts } = answer;
+  if (kind === 'account' || kind === 'none') return { kind };
+  if (kind !== 'guest' || !Array.isArray(hosts) || !hosts.length
+    || !hosts.every((host) => typeof host === 'string' && HOSTNAME.test(host))) throw fail('connect_response_invalid');
+  return { kind: 'guest', hosts };
+}
+
+/**
+ * Entrada pelo campo único "conta ou usuário". A senha da convidada nunca vai ao serviço: ele só recebe o nome, e o
+ * login dela roda numa máquina de cada vez, parando na primeira que aceita.
+ * Erros com `code`: `credentials_mismatch` (nome desconhecido ou senha recusada em todas), `network_failed`,
+ * `connect_too_many_attempts`/`sync_too_many_attempts` e os demais de `signIn`/`syncSignIn`.
+ */
+export async function signInAnywhere(name: string, password: string, deps: SignInDeps): Promise<SignInResult> {
+  const serviceUrl = deps.serviceUrl ?? CONNECT_SERVICE_URL;
+  const user = normalizeGuestUser(name);
+  const found = await lookupName(user, serviceUrl);
+  if (found.kind === 'none') throw fail('credentials_mismatch');
+  if (found.kind === 'account') {
+    try {
+      return { kind: 'account', account: await overNetwork(() => signIn(serviceUrl, user, password)) };
+    } catch (error) {
+      if ((error as { status?: number }).status === 401) throw fail('credentials_mismatch', 401);
+      throw error;
+    }
+  }
+  // A senha derivada da convidada vai a cada máquina: o serviço não pode apontar uma de fora do Connect.
+  if (!found.hosts.every((host) => host.endsWith(CONNECT_HOST_SUFFIX))) throw fail('connect_response_invalid');
+  const failures: Error[] = [];
+  for (const host of found.hosts) {
+    try {
+      return { kind: 'guest', host, servers: await syncSignIn(`https://${host}`, user, password, deps.crypto) };
+    } catch (error) {
+      failures.push(error as Error);
+    }
+  }
+  const codes = failures.map((error) => (error as { code?: unknown }).code);
+  // Máquina fora do ar pode ser justamente a que aceitaria a senha: só "não confere" quando todas recusaram.
+  const other = failures.find((_, i) => codes[i] !== 'credentials_mismatch' && codes[i] !== 'sync_too_many_attempts');
+  if (other) throw other;
+  if (codes.includes('sync_too_many_attempts')) throw fail('sync_too_many_attempts', 429);
+  throw fail('credentials_mismatch', 401);
 }
 
 export async function listMachines(session: AccountSession): Promise<ConnectMachine[]> {
@@ -91,10 +225,12 @@ function machineUrl(raw: unknown, host: string): string {
   return url;
 }
 
-async function waitForApproval(base: string, deviceId: string, secret: string): Promise<string> {
+async function waitForApproval(base: string, deviceId: string, secret: string, onPending: () => void): Promise<string> {
   const deadline = Date.now() + APPROVAL_WINDOW_MS;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, APPROVAL_POLL_MS));
+  // A primeira consulta sai na hora: bilhete pré-aprovado pela conta já entrega o token, sem espera nem aviso.
+  for (let polls = 0; Date.now() < deadline; polls++) {
+    if (polls === 1) onPending();
+    if (polls > 0) await new Promise((resolve) => setTimeout(resolve, APPROVAL_POLL_MS));
     let answer: Record<string, unknown>;
     try {
       answer = record(await post(base, '/api/connect/redeem/status', { device_id: deviceId, secret }));
@@ -115,20 +251,20 @@ async function waitForApproval(base: string, deviceId: string, secret: string): 
   throw fail('connect_approval_expired');
 }
 
-/** Pede a entrada do aparelho e espera a aprovação na máquina. `onPending` avisa uma vez que ela foi pedida. */
+/** Pede a entrada do aparelho na máquina. Liberado na conta, o bilhete já sai aprovado; senão (máquina antiga) espera
+ *  a aprovação nela, e `onPending` avisa uma vez que ela foi pedida. */
 export async function addMachine(session: AccountSession, machine: ConnectMachine, deviceName: string, onPending: () => void,
   installId?: string): Promise<Server> {
   const secret = newSecret();
   const verifier = sha256Hex(new TextEncoder().encode(secret));
   const ticket = record(await post(session.serviceUrl, `/v1/machines/${encodeURIComponent(machine.machine_id)}/devices`,
-    { device_name: deviceName, verifier }, { Authorization: `Bearer ${session.token}` }));
+    { device_name: deviceName, verifier }, auth(session)));
   const url = machineUrl(ticket.url, machine.host);
   const base = baseOf({ id: SERVIDOR_CANDIDATO, label: machine.name, baseUrl: url, token: '' });
   const { device_id: deviceId } = record(await post(base, '/api/connect/redeem',
     { ticket: ticket.ticket, signature: ticket.signature, secret, device_name: deviceName, ...(installId ? { install_id: installId } : {}) }));
   if (!filled(deviceId)) throw fail('connect_response_invalid');
-  onPending();
-  const token = await waitForApproval(base, deviceId, secret);
+  const token = await waitForApproval(base, deviceId, secret, onPending);
   const server: Server = { id: machine.machine_id, label: machine.name, baseUrl: url, token, credential: 'device', deviceId };
   try {
     const lan = await readMachineIdentity({ ...server, id: SERVIDOR_CANDIDATO }, { redirect: 'error' });

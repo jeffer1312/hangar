@@ -1,36 +1,30 @@
-#!/usr/bin/env -S sh -c 'exec "$(command -v hangar-python || command -v python3)" "$0" "$@"'
-"""CLI de contas Claude, para o wrapper de shell chamar. A regra mora no `hangar-server conta`;
-este script só acha o binário desta cópia e repassa os argumentos, a saída e o código.
-
-  hangar-conta --list                    -> um nome de conta por linha
-  hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;
-                                            com o projeto (a pasta já saneada), liga a memória dele
-  hangar-conta --new <nome>              -> cria a conta e imprime o caminho
-"""
-import subprocess
-import sys
-from pathlib import Path
-
-# app.rust_bins é stdlib pura: importável com o python3 do sistema, sem o backend instalado.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
-
-from app import rust_bins  # noqa: E402
-
-
-def main(argv: list[str]) -> int:
-    exe = rust_bins.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
-    if exe is None:
-        print("hangar-conta: hangar-server não encontrado; instale o Hangar ou aponte CP_RUST_SERVER_BIN para o binário",
-              file=sys.stderr)
-        return 126
-    # Filho e não exec: no Windows o exec troca o processo e o .cmd perde o código de saída.
-    return subprocess.run([str(exe), "conta", *argv[1:]]).returncode
-
-
-if __name__ == "__main__":
-    try:
-        sys.exit(main(sys.argv))
-    except OSError as e:
-        # Mesma borda do hangar-engine: traceback aqui vazaria pro usuario errado (o wrapper de shell).
-        print(f"hangar-conta: falha ao executar: {e}", file=sys.stderr)
-        sys.exit(126)
+#!/bin/sh
+# CLI de contas Claude, para o wrapper de shell chamar. A regra mora no `hangar-server conta`;
+# este atalho só acha o binário desta cópia e repassa os argumentos, a saída e o código.
+#
+#   hangar-conta --list                    -> um nome de conta por linha
+#   hangar-conta --prep <nome> [<projeto>] -> refaz os atalhos e imprime o caminho do config dir;
+#                                             com o projeto (a pasta já saneada), liga a memória dele
+#   hangar-conta --new <nome>              -> cria a conta e imprime o caminho
+set -u
+self=$0
+while [ -L "$self" ]; do
+    dir=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+    link=$(readlink -- "$self")
+    case $link in /*) self=$link ;; *) self=$dir/$link ;; esac
+done
+root=$(CDPATH= cd -P -- "$(dirname -- "$self")/.." && pwd -P)
+. "$root/scripts/hangar-server-lookup"
+if ! hangar_server_find "$root"; then
+    echo 'hangar-conta: hangar-server não encontrado; instale o Hangar ou aponte CP_RUST_SERVER_BIN para o binário' >&2
+    exit 126
+fi
+"$HANGAR_SERVER_BIN" conta "$@"
+rc=$?
+# O `hangar-server conta` sai 0, 1, 2 ou 126; acima de 128 foi sinal, e o wrapper não pode ler isso
+# como um código dele.
+if [ "$rc" -gt 128 ]; then
+    echo "hangar-conta: o hangar-server parou pelo sinal $((rc - 128)) sem responder" >&2
+    exit 1
+fi
+exit "$rc"

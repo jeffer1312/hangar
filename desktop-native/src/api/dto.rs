@@ -131,6 +131,7 @@ pub struct SessionInfo {
     #[serde(default)] pub avisos: Vec<String>,
     pub engine: Option<String>,
     pub engine_account: Option<String>,
+    pub engine_binding: Option<String>,
     #[serde(default)] pub headless: bool,
     #[serde(default)] pub state: String,
     pub tracked: Option<bool>,
@@ -198,6 +199,10 @@ pub struct SessionInfo {
     #[serde(default)] pub hidden_from_list: bool,
     /// Oculta e parada, com o processo fechado pelo servidor; a próxima mensagem a reabre na mesma conversa.
     #[serde(default)] pub asleep: bool,
+    /// Troca de agente pedida pelo seletor de modelos, esperando o turno acabar, em curso ou que falhou.
+    #[serde(default)] pub handoff: Option<hangar_api::session::Handoff>,
+    /// Portas em LISTEN dos processos da sessão; só a lista do dono as traz.
+    #[serde(default)] pub ports: Vec<hangar_api::session::PortEntry>,
     /// Nome do convidado que criou a sessão; `None` = dono do servidor.
     pub owner: Option<String>,
     /// Só na linha `orq`: a sessão do árbitro atual, que o "Falar com o árbitro" abre.
@@ -245,6 +250,8 @@ pub struct CliProxyAccount {
     pub email: String,
     pub label: String,
     pub prefix: Option<String>,
+    pub binding: Option<String>,
+    pub plan: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -257,6 +264,12 @@ impl SessionInfo {
         self.provider == "claude" && self.engine_account.as_deref().is_some_and(|a| !a.is_empty())
     }
     pub fn readable(&self) -> bool { self.tracked != Some(false) && self.jsonl.is_some() }
+    /// O Kimi cria o histórico no primeiro envio. A vida gerenciada já identifica o destino.
+    pub fn waiting_for_kimi_input(&self) -> bool {
+        self.provider == "kimi" && self.tracked == Some(false) && self.jsonl.is_none()
+            && !self.headless && self.state != "dead" && self.guest_kind.is_none()
+            && hangar_api::session::runtime_key(self.lifecycle_id.as_deref()).is_some_and(|key| !key.is_empty())
+    }
     pub fn display_state(&self) -> &str {
         if self.provider == "codex" && !self.readable() && !matches!(self.state.as_str(), "awaiting_input" | "dead") { "loading" }
         else { &self.state }
@@ -265,7 +278,9 @@ impl SessionInfo {
     /// O orquestrador sem LLM: tem linha do tempo, mas não recebe mensagem, nome novo, fechar nem interromper.
     pub fn orq(&self) -> bool { self.provider == "orq" }
     /// Tem compositor: a linha `orq` lê a linha do tempo, mas ninguém escreve nela.
-    pub fn takes_messages(&self) -> bool { self.readable() && !self.orq() && !self.read_only() }
+    pub fn takes_messages(&self) -> bool {
+        (self.readable() || self.waiting_for_kimi_input()) && !self.orq() && !self.read_only()
+    }
     /// A sessão da outra pessoa num par externo: acompanha, sem escrever nem mexer nela.
     pub fn read_only(&self) -> bool { self.guest_kind.as_deref() == Some("pair") }
     /// Pares de fora do grupo; servidor sem `pair_externals` manda só o primeiro, sem nível nem endereço (ver e recado).
@@ -690,6 +705,44 @@ pub struct Uploaded {
     pub path: String,
     #[serde(default)] pub frames: Vec<String>,
     pub transcript: Option<String>,
+    /// Vídeo que seguiu sem quadros nem fala, e por quê: o envio continua, mas a pessoa precisa saber.
+    #[serde(skip)] pub note: Option<MediaGap>,
+}
+
+/// Por que a espera de `upload-media` desistiu.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MediaGap {
+    /// 404: o servidor não tem mais registro do vídeo (reiniciou no meio).
+    Unknown,
+    /// Outro 4xx definitivo.
+    Refused(u16),
+    /// Três minutos sem resposta.
+    Timeout,
+    /// `done` sem quadros nem fala.
+    Empty,
+}
+
+impl MediaGap {
+    /// Código para o diário: sem texto de tela.
+    pub fn code(self) -> String {
+        match self {
+            MediaGap::Unknown => "unknown".into(),
+            MediaGap::Refused(status) => format!("refused_{status}"),
+            MediaGap::Timeout => "timeout".into(),
+            MediaGap::Empty => "empty".into(),
+        }
+    }
+
+    /// "vídeo enviado sem quadros/fala: <motivo>".
+    pub fn shown(self) -> String {
+        let reason = match self {
+            MediaGap::Unknown => crate::i18n::tr("attach_video_gap_unknown"),
+            MediaGap::Refused(status) => crate::i18n::tr("attach_video_gap_refused").replace("{status}", &status.to_string()),
+            MediaGap::Timeout => crate::i18n::tr("attach_video_gap_timeout"),
+            MediaGap::Empty => crate::i18n::tr("attach_video_gap_empty"),
+        };
+        crate::i18n::tr("attach_video_gap").replace("{reason}", &reason)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -704,6 +757,115 @@ pub struct Steered {
     #[serde(default)] pub promoted: bool,
     #[serde(default)] pub confirmed: u32,
     #[serde(default)] pub queued_ids: Vec<String>,
+}
+
+// Revisão do trabalho (`work_review/v1`) como a rota da sessão manda: texto e rótulo são do conector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkReviewState { Running, Waiting, Applying, Done }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkReviewTone { Warning, Success, Info }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewBadge { pub text: String, pub tone: WorkReviewTone }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewSteps { pub labels: Vec<String>, pub current: u32 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewHeadline { pub value: String, pub text: String, #[serde(default)] pub detail: Option<String> }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewProgress { pub label: String, pub done: u64, pub total: u64 }
+
+/// `box` em px do asset: x, y, largura, altura.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewSide {
+    pub label: String,
+    #[serde(default)] pub value: Option<String>,
+    pub asset: String,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default, rename = "box")] pub frame: Option<[u32; 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewChoice {
+    pub id: String,
+    pub label: String,
+    #[serde(default)] pub hint: Option<String>,
+    #[serde(default)] pub requires_reason: bool,
+    #[serde(default)] pub default_reason: Option<String>,
+    #[serde(default)] pub reason_prompt: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewDecision {
+    pub id: String,
+    #[serde(default)] pub tag: Option<String>,
+    pub title: String,
+    #[serde(default)] pub reason: Option<String>,
+    #[serde(default)] pub reason_label: Option<String>,
+    #[serde(default)] pub left: Option<WorkReviewSide>,
+    #[serde(default)] pub right: Option<WorkReviewSide>,
+    pub choices: Vec<WorkReviewChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewResolvedItem { pub title: String, #[serde(default)] pub before: Option<String>, #[serde(default)] pub after: Option<String> }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewResolved { pub label: String, #[serde(default)] pub count: Option<u64>, pub items: Vec<WorkReviewResolvedItem> }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewKeptItem { pub title: String, pub reason: String }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewKept { pub label: String, #[serde(default)] pub count: Option<u64>, pub items: Vec<WorkReviewKeptItem> }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewLink { pub label: String, pub url: String, #[serde(default)] pub local: bool }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReview {
+    pub id: String,
+    pub title: String,
+    #[serde(default)] pub subject: Option<String>,
+    pub updated_at: String,
+    pub state: WorkReviewState,
+    #[serde(default)] pub steps: Option<WorkReviewSteps>,
+    #[serde(default)] pub headline: Option<WorkReviewHeadline>,
+    #[serde(default)] pub progress: Option<WorkReviewProgress>,
+    #[serde(default)] pub badge: Option<WorkReviewBadge>,
+    #[serde(default)] pub decisions: Vec<WorkReviewDecision>,
+    #[serde(default)] pub resolved: Option<WorkReviewResolved>,
+    #[serde(default)] pub kept: Option<WorkReviewKept>,
+    #[serde(default)] pub links: Vec<WorkReviewLink>,
+}
+
+/// `GET /api/sessions/{nome}/work-review`; `linked: false` chega como `None` em `via`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewResponse {
+    pub linked: bool,
+    #[serde(default)] pub via: Option<String>,
+    #[serde(default)] pub supported: bool,
+    #[serde(default)] pub review: Option<WorkReview>,
+    /// O que a pessoa marcou nesta rodada e ainda não enviou, guardado no servidor.
+    #[serde(default)] pub draft: HashMap<String, WorkReviewDraftPick>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewDraftPick { pub choice: String, #[serde(default)] pub reason: String }
+
+/// Uma linha do evento `work_reviews` da lista do dono.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewSummary {
+    pub review_id: String,
+    pub state: WorkReviewState,
+    #[serde(default)] pub badge: Option<WorkReviewBadge>,
+    pub updated_at: String,
 }
 
 #[cfg(test)]
@@ -871,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn only_readable_non_orq_rows_take_the_composer_focus() {
+    fn orq_and_unreadable_claude_rows_do_not_take_the_composer_focus() {
         let orq = SessionInfo { provider: "orq".into(), jsonl: Some("/r/t.jsonl".into()), ..Default::default() };
         assert!(orq.readable() && !orq.takes_messages(), "o compositor da linha `orq` não é desenhado");
         let chat = SessionInfo { provider: "claude".into(), ..orq.clone() };

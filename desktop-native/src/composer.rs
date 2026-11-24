@@ -83,6 +83,9 @@ pub fn image_format(name: &str) -> Option<ImageFormat> {
     })
 }
 
+/// Tem prévia como imagem: os formatos de `image_format` e o SVG, desenhado aqui sem rede nem arquivo do disco.
+pub fn previewable(name: &str) -> bool { image_format(name).is_some() || extension(name) == "svg" }
+
 pub fn mime_for(name: &str) -> &'static str {
     if let Some(format) = image_format(name) { return format.mime_type(); }
     match extension(name).as_str() {
@@ -96,10 +99,24 @@ pub fn mime_for(name: &str) -> &'static str {
 
 pub fn is_audio(name: &str) -> bool { mime_for(name).starts_with("audio/") }
 
-/// Abrir com o programa do sistema só para tipos passivos; o resto (html, svg, script, atalho) só salva.
+/// Abrir com o programa do sistema só vale para tipo passivo conhecido: imagem, vídeo, áudio, pdf, texto e dados,
+/// documento de escritório sem macro, pacote compactado e psd. O resto só salva: o arquivo pode vir de outra máquina, e
+/// a lista do que o sistema executaria (ou abre num programa que roda script) nunca fica completa.
 pub fn openable(name: &str) -> bool {
-    image_format(name).is_some() || matches!(extension(name).as_str(),
-        "pdf" | "txt" | "log" | "md" | "json" | "csv" | "mp4" | "m4v" | "mov" | "webm" | "mkv" | "mp3" | "wav" | "ogg" | "m4a" | "flac" | "aac")
+    matches!(extension(name).as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "heic" | "avif" | "ico"
+        | "mp4" | "mov" | "webm" | "mkv" | "m4v" | "avi"
+        | "mp3" | "wav" | "m4a" | "ogg" | "flac" | "aac" | "opus"
+        | "pdf"
+        | "txt" | "log" | "md" | "csv" | "tsv" | "json" | "yaml" | "yml" | "toml"
+        | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" | "rtf" | "epub"
+        | "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar"
+        | "psd")
+}
+
+/// O nome conferido tem de ser o do arquivo que o sistema vai receber: um symlink `a.pdf` pode apontar para `x.bat`.
+pub fn openable_path(path: &std::path::Path) -> bool {
+    path.file_name().is_some_and(|name| openable(&name.to_string_lossy()))
 }
 
 /// Nome de arquivo seguro para gravar no disco local: só o último componente, sem controle nem ponto inicial.
@@ -773,8 +790,8 @@ mod tests {
 
     #[test]
     fn prompt_uses_backend_paths_frames_and_speech_like_web() {
-        let image = Uploaded { path: "/srv/up/1-a.png".into(), frames: vec![], transcript: None };
-        let video = Uploaded { path: "/srv/up/2-b.mp4".into(), frames: vec!["/srv/up/2-b-1.jpg".into()], transcript: Some("oi".into()) };
+        let image = Uploaded { path: "/srv/up/1-a.png".into(), frames: vec![], transcript: None, note: None };
+        let video = Uploaded { path: "/srv/up/2-b.mp4".into(), frames: vec!["/srv/up/2-b-1.jpg".into()], transcript: Some("oi".into()), note: None };
         let speech = |t: &str| format!("fala do vídeo: \"{t}\"");
         assert_eq!(compose_prompt(" olha ", &[(true, image.clone()), (false, video)], speech),
             "olha — 📎 imagem: /srv/up/1-a.png 📎 arquivo: /srv/up/2-b.mp4 📎 imagem: /srv/up/2-b-1.jpg fala do vídeo: \"oi\"");
@@ -793,6 +810,11 @@ mod tests {
         let en = parse_marked("look — 📎 image: /a/1.png 📎 file: /a/2.txt").unwrap();
         assert_eq!((en.caption.as_str(), en.files.clone(), en.image_marks), ("look", vec![(true, "1.png".into()), (false, "2.txt".into())], 1));
         assert_eq!(caption("look — 📎 file: /a/2.txt"), "look");
+        // A fala do vídeo vem colada ao último caminho e pode ter `/`: o nome é só o caminho, como no core.
+        let video = parse_marked("veja — 📎 arquivo: /u/1-v.mp4 fala do vídeo: \"abre src/app\"").unwrap();
+        assert_eq!(video.files, vec![(false, "1-v.mp4".into())]);
+        let frames = parse_marked("veja — 📎 arquivo: /u/1-v.mp4 📎 imagem: /u/f1.jpg fala do vídeo: \"a/b c\"").unwrap();
+        assert_eq!(frames.files, vec![(false, "1-v.mp4".into()), (true, "f1.jpg".into())]);
     }
 
     #[test]
@@ -833,7 +855,7 @@ mod tests {
             let source = format!("[Documento](<{absolute}>) `{relative}` {home}");
             assert_eq!(cited_paths(&source), [absolute, relative, home]);
             assert_eq!(citation_markdown(&source), source);
-            assert_eq!(openable(&format!("report.{ext}")), ext == "pdf");
+            assert!(openable(&format!("report.{ext}")), "{ext} abre no programa do sistema");
             let ignored = format!("https://h/report.{ext} [remoto](https://h/report.{ext}) report.{ext}");
             assert!(cited_paths(&ignored).is_empty());
         }
@@ -947,6 +969,22 @@ mod tests {
         assert_eq!(safe_name("../../.bashrc"), "bashrc");
         assert_eq!(safe_name("C:\\x\\a<b>.txt"), "ab.txt");
         assert!(openable("r.pdf") && !openable("p.html") && !openable("i.svg") && !openable("run.desktop"));
+        for passive in ["a.png", "b.JPG", "c.jpeg", "d.gif", "e.webp", "f.bmp", "g.tiff", "h.tif", "i.heic", "j.avif", "k.ico",
+            "l.MP4", "m.mov", "n.webm", "o.mkv", "p.m4v", "q.avi", "r.mp3", "s.wav", "t.m4a", "u.ogg", "v.flac", "w.aac", "x.opus",
+            "y.pdf", "z.txt", "a.log", "b.md", "c.csv", "d.tsv", "e.json", "f.yaml", "g.yml", "h.toml",
+            "i.doc", "j.docx", "k.xls", "l.xlsx", "m.ppt", "n.pptx", "o.odt", "p.ods", "q.odp", "r.rtf", "s.epub",
+            "t.zip", "u.tar", "v.tar.gz", "w.tgz", "x.bz2", "y.xz", "z.7z", "a.rar", "b.psd"] {
+            assert!(openable(passive), "{passive} abre");
+        }
+        for active in ["a.sh", "b.EXE", "c.bat", "d.ps1", "e.lnk", "f.jar", "g.app", "h.py", "i.js", "j.htm", "k.html", "l.svg", "m.xml",
+            "n.xlsm", "o.xlsb", "p.xll", "q.scf", "r.sct", "s.vhdx", "t.iso", "u.img", "v.one", "w.diagcab", "x.search-ms", "y.fileloc",
+            "z.inetloc", "a.docm", "b.AppImage", "c.msi", "d.desktop", "semextensao", "ponto."] {
+            assert!(!openable(active), "{active} só salva");
+        }
+        // Vale o nome do arquivo que o sistema recebe, já resolvido: `a.pdf` que aponta para `run.bat` não abre.
+        assert!(openable_path(std::path::Path::new("/tmp/x/a.pdf")));
+        assert!(!openable_path(std::path::Path::new("/tmp/x/run.bat")) && !openable_path(std::path::Path::new("/")));
+        assert!(openable_path(std::path::Path::new("/tmp/x/b.xlsx")) && !openable_path(std::path::Path::new("/tmp/x/b.xlsb")));
         // O corte nunca troca a extensão: o nome gravado é o mesmo tipo que o botão decidiu abrir.
         let tricky = safe_name(&format!("{}.html.pdf", "a".repeat(115)));
         assert!(tricky.ends_with(".pdf") && tricky.chars().count() == 120);

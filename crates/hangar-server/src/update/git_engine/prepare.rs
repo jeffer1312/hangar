@@ -217,19 +217,6 @@ impl Service {
         source: &(dyn Source + Sync),
         platform: Option<&str>,
     ) -> Result<(), String> {
-        let uv = self.binary("uv")
-            .ok_or("uv nao encontrado: nao da pra sincronizar as dependencias do backend")?;
-        let output = self.run(
-            &[uv.display().to_string(), "sync".into()],
-            &self.root.join("backend"),
-            600,
-        )?;
-        if output.code != 0 {
-            return Err(format!(
-                "as dependencias do backend nao sincronizaram: {}",
-                tail(&output, 6)
-            ));
-        }
         let hash = fs::read(self.root.join("package-lock.json"))
             .ok()
             .map(|b| releases::digest(&b))

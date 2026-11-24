@@ -1,0 +1,153 @@
+{
+ "case": "launcher/codex-absent",
+ "source_commit": "2ad8e335e8d9118e74bc5b33f2efb4ac3bbd8eba",
+ "python": "3.14.9 websockets 16.0",
+ "capture_cmdline": "/usr/bin/python3 capture.py -j 8",
+ "route": "R2",
+ "script": "scripts/hangar-codex-tui",
+ "contract_refs": [
+  "R2-S06",
+  "C-31",
+  "C-37"
+ ],
+ "description": "",
+ "harness": {
+  "how": "direct: $PY -B -s $REF/scripts/hangar-codex-tui",
+  "codex_layout": "absent",
+  "codex_path": null,
+  "codex_fake_config": {
+   "app_server": {
+    "threads": [
+     {
+      "id": "thread-1",
+      "path": "$T/home/.codex/sessions/2026/11/17/rollout-2026-11-17T10-00-00-thread-1.jsonl",
+      "cwd": "$T/work",
+      "source": "cli",
+      "threadSource": "user"
+     }
+    ]
+   }
+  },
+  "npm_stub_config": null,
+  "lock_busy": false,
+  "signal": null,
+  "no_tty": "stdin=/dev/null, stdout/stderr pipes (no script -q)"
+ },
+ "input": {
+  "argv": [
+   "$PY",
+   "-B",
+   "-s",
+   "$REF/scripts/hangar-codex-tui",
+   "--cwd",
+   "$T/work",
+   "--codex-home",
+   "$T/home/.codex",
+   "--codex-account",
+   "default",
+   "--approval-policy",
+   "never",
+   "--sandbox",
+   "danger-full-access"
+  ],
+  "env": {
+   "HOME": "$T/home",
+   "USERPROFILE": "$T/home",
+   "LOCALAPPDATA": "$T/local",
+   "TMUX_TMPDIR": "$T/tmux",
+   "PATH": "$T/stubs:/usr/bin:/bin",
+   "CP_SESSION_NAME": "codex-proj",
+   "CP_SESSION_KEY": "key-0001",
+   "CP_PROVIDER": "codex",
+   "HANGAR_CLAUDE_SETTINGS": "",
+   "TMUX": "/tmp/tmux-1000/default,1234,5",
+   "TMUX_PANE": "%7",
+   "CP_CODEX_SYNC_ENABLED": "0"
+  },
+  "cwd": "$T/work",
+  "files_before": {
+   "home/.hangar": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.codex": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/config": {
+    "type": "dir",
+    "mode": "0o755"
+   },
+   "home/.hangar/codex-atualizacao.json": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 33,
+    "sha256": "8bc83fdcd908ddc80e12b70b2c59da7ab28814773b97b5fa967ec2964e95906d",
+    "content": {
+     "text": "{\"proxima_em\": 1794913465.680912}"
+    }
+   },
+   "home/.hangar/config/.env": {
+    "type": "file",
+    "mode": "0o644",
+    "size": 56,
+    "sha256": "a775032e6a9c1494c318ebaf2e2f254fbcea336971870d5cbe7e52766942f280",
+    "content": {
+     "text": "# servidor\nCP_AUTH_TOKEN=fake-owner-token\nCP_PORT=51339\n"
+    }
+   }
+  }
+ },
+ "output": {
+  "code": 1,
+  "stdout": {
+   "text": ""
+  },
+  "stderr": {
+   "text": "hangar-codex-tui: nao achei o executavel `codex` no PATH deste processo. Instale o Codex CLI (npm install -g @openai/codex) e reabra a sessao.\n"
+  },
+  "duration_ms": 112,
+  "files": {
+   "created": {
+    "home/.hangar/logs": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/logs/privado": {
+     "type": "dir",
+     "mode": "0o700"
+    },
+    "home/.hangar/logs/diario": {
+     "type": "dir",
+     "mode": "0o755"
+    },
+    "home/.hangar/logs/privado/codex-app-server-dae16489dfddfd3a.log": {
+     "type": "file",
+     "mode": "0o600",
+     "size": 0,
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "content": {
+      "text": ""
+     }
+    },
+    "home/.hangar/logs/diario/uso-2026-11-17.jsonl": {
+     "type": "file",
+     "mode": "0o644",
+     "size": 320,
+     "sha256": "50cb1d98a893f10a10831cddf311ab8e3fea97afb7172878ed5247ca01a4b35a",
+     "content": {
+      "text": "{\"ts\": \"2026-11-17T07:14:25.773-03:00\", \"evento\": \"codex.app_server.falhou\", \"nivel\": \"erro\", \"sessao\": \"codex-proj\", \"provider\": \"codex\", \"codigo\": \"criar_processo\", \"inicio_backend\": \"2026-11-17T07:14:25.773-03:00\", \"pid_backend\": 3240618, \"erro_tipo\": \"SystemExit\", \"etapa\": \"abrir_app_server\", \"origem\": \"servidor\"}\n"
+     }
+    }
+   },
+   "changed": {},
+   "removed": []
+  }
+ },
+ "spawns": [],
+ "processes_alive_after_exit": {},
+ "window": {
+  "t_start": 1794910465.6815228,
+  "t_end": 1794910465.7941039
+ }
+}

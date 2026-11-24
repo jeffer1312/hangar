@@ -2,7 +2,7 @@
 id: 2026-10-31-links-do-pacote
 titulo: Atalhos, skills e bloco do shell voltam a apontar para a versão instalada
 comando_posix: ./scripts/install-claude-wrapper.sh
-prova: ~/.local/bin/hangar-codex-tui ~/.local/bin/hangar-send
+prova: ~/.local/bin/hangar-codex ~/.local/bin/hangar-send
 tipo: maquina
 destrutivo: false
 ---

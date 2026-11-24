@@ -67,12 +67,30 @@ async fn dead_member_leaves_through_the_queue() {
     let gid = pair(&n.casa, "s0", &["lab::s1", "vm::s2"]).await;
     sidecar_becomes(&n.vm, "s2", has_peers(&["casa::s0", "lab::s1"])).await;
     let groups = n.lab.state.groups.clone().unwrap();
-    let (ex, warnings) = hangar_server::groups::exit::leave_and_notify(&n.lab.state, &groups, "s1").await.unwrap();
+    let (ex, warnings) = hangar_server::groups::exit::leave_and_notify(&n.lab.state, &groups, "s1", "test").await.unwrap();
     assert_eq!(warnings, Vec::<Value>::new());
     assert_eq!(sorted(&json!(ex), |p| p.as_str().unwrap().to_owned()), ["casa::s0", "vm::s2"]);
     record_becomes(&n.casa, &gid, has_members(&["casa::s0", "vm::s2"])).await;
     sidecar_becomes(&n.vm, "s2", has_peers(&["casa::s0"])).await;
     assert_eq!(peers_of(&sidecar(&n.casa, "s0").unwrap()), ["vm::s2"], "os outros continuam no grupo");
+}
+
+/// Processo sem `CP_SERVER_ID` sobre a pasta da dona (servidor de teste com a `HOME` real) não é
+/// participante de grupo nenhum: a saída é recusada, e sidecars, registro e fila da dona ficam.
+#[tokio::test(flavor = "multi_thread")]
+async fn leave_without_server_id_keeps_the_owner_group() {
+    let n = net().await;
+    let gid = pair(&n.casa, "s0", &["s1", "lab::s2"]).await;
+    sidecar_becomes(&n.lab, "s2", |s| s.is_some()).await;
+    let before = (sidecar(&n.casa, "s0"), sidecar(&n.casa, "s1"), record(&n.casa, &gid));
+    let groups = n.casa.state.groups.clone().unwrap();
+    groups.set_server_id(String::new());
+    let left = hangar_server::groups::exit::leave_and_notify(&n.casa.state, &groups, "s0", "test").await;
+    groups.set_server_id("casa".into());
+    assert!(left.is_err(), "sem id a saída não vale: {:?}", left.map(|(ex, _)| ex));
+    assert_eq!((sidecar(&n.casa, "s0"), sidecar(&n.casa, "s1"), record(&n.casa, &gid)), before);
+    let fed = federation::existing(&n.casa.pair).unwrap();
+    assert!(!fed.outbox().pending().iter().any(|i| matches!(i, OutboxItem::Leave { .. })), "{:?}", fed.outbox().pending());
 }
 
 #[tokio::test(flavor = "multi_thread")]

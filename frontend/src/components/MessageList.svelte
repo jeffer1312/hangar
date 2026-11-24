@@ -17,6 +17,7 @@
   import ToolGroup from './ToolGroup.svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
   import SkillNotice from './SkillNotice.svelte';
+  import HandoffLine from './HandoffLine.svelte';
   import PensamentoVivo from './PensamentoVivo.svelte';
   import TaskRows from './TaskRows.svelte';
   import { foldTasks } from '@hangar/core';
@@ -726,6 +727,8 @@
         {#if plan?.eventId === ev.id}
           <SessionPlanPreview {...planoProps()} />
         {/if}
+        {:else if ev.kind === 'handoff'}
+          <HandoffLine handoff={ev.handoff} />
         {:else if ev.kind === 'notice'}
           <!-- Código conhecido vira frase do idioma da tela; desconhecido mostra o que veio, pra um
                aviso novo do harness não sumir calado. -->

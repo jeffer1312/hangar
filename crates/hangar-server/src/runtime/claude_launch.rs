@@ -61,11 +61,31 @@ pub fn transcript(env: &AccountEnvironment, spec: &SessionSpec, sid: &str) -> Pa
 pub(crate) fn transcript_in(base: &Path, cwd: &str, sid: &str) -> PathBuf {
     let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(cwd)).join(format!("{sid}.jsonl"));
     if expected.exists() { return expected; }
-    let moved = std::fs::read_dir(base).into_iter().flatten().flatten()
-        .map(|dir| dir.path().join(format!("{sid}.jsonl")))
-        .filter_map(|path| path.metadata().ok().filter(|meta| meta.is_file()).and_then(|meta| meta.modified().ok()).map(|at| (at, path)))
-        .max();
-    moved.map_or(expected, |(_, path)| path)
+    moved_transcript(base, &format!("{sid}.jsonl")).ok().flatten().unwrap_or(expected)
+}
+
+pub(crate) fn moved_transcript(base: &Path, file: &str) -> std::io::Result<Option<PathBuf>> {
+    let mut newest = None;
+    let mut incomplete = None;
+    for entry in std::fs::read_dir(base)? {
+        let candidate = (|| -> std::io::Result<_> {
+            let path = entry?.path().join(file);
+            let meta = path.metadata()?;
+            if meta.is_file() { Ok(Some((meta.modified()?, path))) } else { Ok(None) }
+        })();
+        match candidate {
+            Ok(found) => newest = newest.max(found),
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {},
+            Err(error) => { incomplete.get_or_insert(error); },
+        }
+    }
+    if let Some(error) = incomplete {
+        if newest.is_none() { return Err(error); }
+        if crate::warn_limit::allow(None, "claude_projects_partial") {
+            tracing::warn!(kind=?error.kind(), "a busca de histórico foi parcial; usando a cópia legível mais recente");
+        }
+    }
+    Ok(newest.map(|(_, path)| path))
 }
 
 /// `permissions.defaultMode` do `settings.json` da conta (a do servidor sem pasta própria), como a
@@ -106,10 +126,14 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
         None => return Err(refused("launch_permission_mode", "modo de permissão da sessão desconhecido; a sessão não foi aberta")),
     };
     let engine = match &spec.account { Account::Engine { name, context_window, .. } => Some((name, context_window)), _ => None };
+    // A criação e a troca de velocidade já recusam Fast sem suporte. Aqui é acordar, restaurar ou reabrir uma sessão
+    // que já existe: se o Fast saiu do motor depois, ela volta na velocidade normal em vez de não voltar.
     let tier = match spec.service_tier {
-        Some(crate::session_open::ServiceTier::Priority) if !ctx.fast =>
-            return Err(refused("launch_service_tier", "service_tier exige Claude com motor GPT no CLIProxyAPI local")),
-        Some(tier) if ctx.fast => Some(tier),
+        Some(tier) if tier.is_fast() && !ctx.fast => {
+            tracing::warn!(session = %spec.name, tier = tier.name(), "Fast indisponível agora; a sessão volta na velocidade normal");
+            None
+        }
+        Some(tier) if ctx.fast || (tier == crate::session_open::ServiceTier::Default && matches!(spec.account, Account::Engine { binding: Some(_), .. })) => Some(tier),
         _ => None,
     };
     let resume = transcript(ctx.env, spec, sid).exists();
@@ -133,14 +157,17 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     // O modo também no `--resume`: sem a flag a CLI volta ao `defaultMode` da conta.
     claude.extend(["--permission-mode".into(), mode.name().into()]);
     let settings = meta.get("claude_settings").filter(|s| s.as_object().is_some_and(|o| !o.is_empty()));
-    if let Some(settings) = settings { claude.extend(["--settings".into(), crate::session_open::claude::settings_json(settings)]); }
+    // Com `-p` o Code Mode só vale vindo do `env` do `--settings`: no ambiente do processo a CLI o recusa.
+    let mut flag = settings.map(crate::session_open::claude::settings_value);
+    if spec.code_mode {
+        let flag = flag.get_or_insert_with(|| Value::Object(Default::default()));
+        flag["env"] = serde_json::json!({ crate::session_open::claude::CODE_MODE_ENV: "1" });
+    }
+    if let Some(flag) = flag { claude.extend(["--settings".into(), flag.to_string()]); }
     let mut program = Vec::new();
     if let Some((name, context_window)) = engine {
         program.extend(["hangar-engine".into(), "--exec".into(), name.clone()]);
-        if let Some(route) = ctx.engine_route {
-            program.extend(["--account".into(), route.account.clone(), "--account-home".into(), route.home.clone(),
-                "--account-base-url".into(), route.base_url.clone()]);
-        }
+        if let Some(route) = ctx.engine_route { route.append_args(&mut program); }
         if let Some(model) = spec.model.as_deref().filter(|m| !m.is_empty()) {
             program.extend(["--model".into(), model.into()]);
             if let Some(window) = context_window { program.extend(["--context".into(), window.to_string()]); }
@@ -211,8 +238,24 @@ pub fn prepare(env: &AccountEnvironment, bridge: Option<&PluginBridge>, meta: &V
     let mut spec = crate::session_open::record::claude_live(&env.home, meta, name)
         .map_err(|error| refused("launch_meta", &format!("registro da sessão ilegível: {error}")))?;
     let facts = crate::session_open::facts::LocalFacts::new(env.clone(), runtime);
-    refresh_window(&mut spec, &facts, &env.home.join(".hangar").join("claude-headless"), name);
+    let sidecar_dir = env.home.join(".hangar").join("claude-headless");
+    refresh_window(&mut spec, &facts, &sidecar_dir, name);
+    persist_relaunch_tier(&mut spec, &facts, &sidecar_dir, name);
     plan_for(env, bridge, &spec, meta, &facts)
+}
+
+/// A velocidade que caiu na volta fica gravada: a tela e a próxima subida leem a de verdade, não a antiga.
+pub(crate) fn persist_relaunch_tier(spec: &mut SessionSpec, facts: &dyn crate::session_open::OpenFacts, sidecar_dir: &Path, name: &str) {
+    let tier = crate::session_open::claude::relaunch_tier(spec, facts);
+    if tier == spec.service_tier { return; }
+    spec.service_tier = tier;
+    let value = tier.map_or(Value::Null, |tier| Value::from(tier.name()));
+    let patch = [("service_tier".to_owned(), value)].into_iter().collect();
+    match super::codex_sidecar::update_if(sidecar_dir, name, &[("key", Value::from(spec.key.clone()))], &patch) {
+        Ok(Some(_)) => {}
+        Ok(None) => tracing::warn!(session = %name, "sidecar mudou de vida; a velocidade efetiva não foi gravada"),
+        Err(error) => tracing::warn!(session = %name, kind = ?error.kind(), "a velocidade efetiva não foi gravada no sidecar"),
+    }
 }
 
 /// O comando de agora para um spec já decidido, sem sessão registrada: a subida da sessão (`prepare`) e
@@ -221,17 +264,21 @@ pub fn plan_for(env: &AccountEnvironment, bridge: Option<&PluginBridge>, spec: &
                 facts: &dyn crate::session_open::OpenFacts) -> Result<Launch, RuntimeError> {
     let config = super::codex_launch::runtime_config(env);
     let roots = crate::session_open::claude::plugin_roots(&env.home);
-    let (engine, account) = match &spec.account {
-        Account::Engine { name, account, .. } => (Some(name.as_str()), account.as_deref()),
-        _ => (None, None),
-    };
-    let route = match (engine, account) {
-        (Some(engine), Some(account)) => Some(crate::session_open::facts::fixed_account(
-            &crate::accounts::AccountService::new(env.clone()), engine, account)
-            .map_err(|error| refused("launch_engine_account", &error.msg))?),
+    let route = match &spec.account {
+        Account::Engine { name, account, binding, .. } => crate::session_open::facts::session_engine_route(
+            &crate::accounts::AccountService::new(env.clone()), name, account.as_deref(), binding.as_deref())
+            .map_err(|error| refused("launch_engine_account", &error.msg))?,
         _ => None,
     };
-    let fast = spec.service_tier.is_some() && facts.supports_fast(engine, spec.model.as_deref());
+    let tier = crate::session_open::claude::relaunch_tier(spec, facts);
+    let fast = tier.is_some();
+    let degraded;
+    let spec = if tier != spec.service_tier {
+        let mut copy = spec.clone();
+        copy.service_tier = tier;
+        degraded = copy;
+        &degraded
+    } else { spec };
     let display = crate::display_env::for_launch(|name| env.base.get(name).filter(|v| !v.is_empty()).cloned());
     plan(spec, meta, &Context { env, runtime_config: &config, plugin_roots: &roots, bridge, engine_route: route.as_ref(), fast, display: &display })
 }
@@ -373,6 +420,31 @@ mod tests {
         assert_eq!(launch.env.get("WAYLAND_DISPLAY").map(String::as_str), Some("wayland-1"));
     }
 
+    /// Com `-p` o Claude Code só liga o Code Mode pela variável dentro do `env` do `--settings`; no ambiente
+    /// do processo ela é recusada (`not_passed`). Os ajustes que a sessão já leva continuam no mesmo `--settings`.
+    #[test]
+    fn code_mode_goes_in_the_settings_env_of_the_headless_launch() {
+        let case = case("create_claude_headless_then_launch");
+        let roots: [String; 0] = [];
+        let env = AccountEnvironment::from_map(case.server_env());
+        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &roots, bridge: None, engine_route: None, fast: false, display: &[] };
+        let settings_of = |code_mode: bool, meta: &Value| {
+            let mut spec = case.spec();
+            spec.code_mode = code_mode;
+            let program = plan(&spec, meta, &ctx).unwrap().program;
+            program.iter().position(|a| a == "--settings").map(|at| serde_json::from_str::<Value>(&program[at + 1]).unwrap())
+        };
+        let mut bare = case.meta();
+        bare.as_object_mut().unwrap().remove("claude_settings");
+        assert_eq!(settings_of(true, &bare), Some(json!({"env": {"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1"}})));
+        assert_eq!(settings_of(false, &bare), None, "sem Code Mode, nada de --settings");
+        let mut with_settings = case.meta();
+        with_settings["claude_settings"] = json!({"enabledPlugins": {"x@local": false}});
+        assert_eq!(settings_of(true, &with_settings),
+            Some(json!({"enabledPlugins": {"x@local": false}, "env": {"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1"}})));
+        assert_eq!(settings_of(false, &with_settings), Some(json!({"enabledPlugins": {"x@local": false}})));
+    }
+
     #[test]
     fn existing_transcript_resumes_and_keeps_the_mode() {
         let case = case("create_claude_headless_then_launch");
@@ -462,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_mode_read_only_and_priority_without_fast_are_refused() {
+    fn unknown_mode_and_read_only_are_refused_and_fast_without_support_falls_back() {
         let case = case("create_claude_headless_then_launch");
         let env = AccountEnvironment::from_map(case.server_env());
         let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false, display: &[] };
@@ -473,8 +545,9 @@ mod tests {
         spec.read_only = true;
         assert_eq!(plan(&spec, &case.meta(), &ctx).unwrap_err().code, "headless_read_only");
         let mut spec = case.spec();
+        // Sessão que já existe e perdeu o Fast volta na velocidade normal, sem `--service-tier`.
         spec.service_tier = Some(crate::session_open::ServiceTier::Priority);
-        assert_eq!(plan(&spec, &case.meta(), &ctx).unwrap_err().code, "launch_service_tier");
+        assert!(!plan(&spec, &case.meta(), &ctx).unwrap().program.contains(&"--service-tier".to_owned()), "Fast sem suporte cai no normal");
         spec.service_tier = Some(crate::session_open::ServiceTier::Default);
         assert!(!plan(&spec, &case.meta(), &ctx).unwrap().program.contains(&"--service-tier".to_owned()), "default sem Fast é ignorado");
     }

@@ -76,6 +76,13 @@ Sem vínculo, o painel acha a sessão viva cuja branch é a chave do ticket ou c
 detectada grava o vínculo e passa a valer a tool. Uma sessão fica ligada a um ticket só. A associação
 manual avisa a sessão pelo painel Tickets e explica a tool `mission`.
 
+Quando o conector do ticket oferece `work_review/v1`, o painel da sessão ganha a aba Revisão,
+com a revisão do trabalho (decisões, corrigidas e mantidas) e o card, um chip com o estado. Ela é relida ao
+abrir o painel, no fim de cada turno, depois do envio das decisões e a cada chamada da tool `mission`.
+Sessão sem vínculo também encontra o ticket pela branch: cada conector com a capacidade recebe a
+branch, e só vale o ticket cuja chave é igual a ela. Contrato em
+[`docs/connectors/work-review-v1.md`](../connectors/work-review-v1.md).
+
 ## Portão e evidências
 
 A sessão ligada informa a etapa e anexa evidências pela tool `mission` do MCP `hangar`:

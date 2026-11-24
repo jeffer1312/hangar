@@ -7,6 +7,7 @@ mod audio;
 mod browser;
 mod cards;
 mod chat;
+mod code_theme;
 mod composer;
 mod context_refs;
 mod source_map;
@@ -23,6 +24,9 @@ mod mend;
 mod motion;
 mod news;
 mod plugin_ui;
+mod port_forward;
+#[cfg(target_os = "linux")]
+mod socks;
 mod queue_panel;
 mod single_instance;
 mod term_view;
@@ -34,6 +38,7 @@ mod tour;
 mod tray;
 mod ui_map;
 mod update;
+mod video;
 mod voice;
 #[cfg(test)]
 #[path = "../vendor/gpui-pre-0.3.12/src/elements/list_tail.rs"]
@@ -49,12 +54,12 @@ use std::{borrow::Cow, sync::Arc};
 gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, GitPullRequest, ShieldCheck, Video, RotateCcwClock, Paperclip, Plug, SquareSlash,
     Activity, Contrast, Droplet, Image, Keyboard, Layers, Lightbulb, List, Mic, Monitor, RefreshCw, Server, SlidersHorizontal, Type, Users,
     SquarePen, FilePlus, Wrench, Circle, CircleDashed, ChartColumn, Table, ListChecks, Download, Clock, Languages, Banknote,
-    Zap, Rocket, MessageCircle, Key, Pencil, GripVertical, AudioLines, Volume2, Hash, LogOut, Smartphone, FolderTree, ChevronsDownUp, FileCode,
+    Zap, Rocket, MessageCircle, Key, Pencil, GripVertical, AudioLines, Volume2, VolumeX, Hash, LogOut, Smartphone, FolderTree, ChevronsDownUp, FileCode,
     RotateCcw, CornerDownRight, MessageSquare, Square, Sparkles, CircleAlert, CircleCheck, TriangleAlert, Link, Wifi,
     CircleStop, Upload, Workflow, CloudDownload, ArrowDownToLine, ArrowUpFromLine, GitFork, Trash, MessageCircleQuestionMark, Brain,
     ListOrdered, CornerUpRight, TextQuote, MousePointerClick, Code, Hourglass,
     CreditCard, House, Laptop, Briefcase, Cloud, KeyRound, Wallet, UserRound, CircleUser, Contact, BadgeCheck, AtSign, Ticket, IdCard,
-    Recycle, ChartLine, PiggyBank, Gauge, Database, Coins, Boxes, TrendingUp, TrendingDown, Package]);
+    Recycle, ChartLine, PiggyBank, Gauge, Database, Coins, Boxes, TrendingUp, TrendingDown, Package, Puzzle, FlaskConical, UserPlus]);
 
 pub const HANGAR_MARK: &str = "brand/hangar-mark.svg";
 /// Os três arcos da marca da página (`assets/brand/mark.svg`), um arquivo cada: a abertura do Connect acende um depois do outro.
@@ -106,6 +111,9 @@ impl AssetSource for AppAssets {
             "providers/claude.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/claude.svg")))),
             "providers/codex.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/codex.svg")))),
             "providers/kimi.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/kimi.svg")))),
+            "providers/pi.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/pi.svg")))),
+            "providers/omp.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/omp.svg")))),
+            "providers/antigravity.svg" => return Ok(Some(Cow::Borrowed(include_bytes!("../assets/providers/antigravity.svg")))),
             _ => {}
         }
         if let Some(bytes) = fileicons::load(path).or_else(|| install_guide(path)) { return Ok(Some(Cow::Borrowed(bytes))); }

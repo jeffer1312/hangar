@@ -25,6 +25,8 @@ import { superficie } from '../theme/superficie';
 import { Icon, type IconName } from '../ui/Icon';
 import { useAparencia } from '../stores/aparencia';
 import { useServers } from '../stores/servers';
+import { useRouteBase } from '../net/routeBase';
+import { thumbWidthFor } from './thumbs';
 
 // Tema completo do unistyles (tokens + base) — UnistylesTheme não é exportado na raiz.
 type TemaApp = UnistylesThemes[keyof UnistylesThemes];
@@ -139,15 +141,25 @@ export const AssistantBubble = memo(function AssistantBubble({
   const md = useMemo(() => mkMarkdownStyle(theme), [theme]);
   // Anexos: mídia/pdf/html citados por caminho (precisam da sessão) + mídia remota por URL, que o
   // web desenha igual. Imagem e vídeo da mensagem formam UMA galeria no visor.
+  const routeBase = useRouteBase(server);
   const atts = useMemo(() => {
     const local = sessionName && server
-      ? paths.map((r) => ({ ...r, uri: fileUrlNative(sessionName, r.path, server), headers: fileAuthHeader(server) as Record<string, string> | undefined }))
+      ? paths.map((r) => {
+        const width = r.kind === 'image' ? thumbWidthFor(r.path) : undefined;
+        return {
+          ...r,
+          uri: fileUrlNative(sessionName, r.path, server),
+          thumbUri: width ? fileUrlNative(sessionName, r.path, server, width) : undefined,
+          headers: fileAuthHeader(server) as Record<string, string> | undefined,
+        };
+      })
       : [];
-    const remota = parseMediaUrls(text).map((r) => ({ ...r, uri: r.url!, headers: undefined }));
+    const remota = parseMediaUrls(text).map((r) => ({ ...r, uri: r.url!, thumbUri: undefined, headers: undefined }));
     return [...local, ...remota];
-  }, [text, sessionName, server, paths]);
+    // `routeBase`: a URL leva o endereço da rota, que muda sem trocar o objeto do servidor.
+  }, [text, sessionName, server, paths, routeBase]);
   const galeria = useMemo<MediaItem[]>(
-    () => atts.flatMap((a) => (a.kind === 'image' || a.kind === 'video' ? [{ uri: a.uri, headers: a.headers, name: a.name, kind: a.kind }] : [])),
+    () => atts.flatMap((a) => (a.kind === 'image' || a.kind === 'video' ? [{ uri: a.uri, thumbUri: a.thumbUri, headers: a.headers, name: a.name, kind: a.kind }] : [])),
     [atts],
   );
   const [doc, setDoc] = useState<DocumentItem | null>(null);
@@ -257,10 +269,12 @@ export const AssistantBubble = memo(function AssistantBubble({
       {sessionName && paths.length > 0 && !server ? <Text style={{ color: theme.tokens.status.error }} accessibilityRole="alert">{m.chat_servidor_removido()}</Text> : null}
       {atts.length > 0 ? (
         <View style={styles.atts}>
-          {atts.map((r) => {
+          {atts.map((r, pos) => {
             if (r.kind === 'image' || r.kind === 'video') {
               const i = galeria.findIndex((g) => g.uri === r.uri);
-              return <ImageThumb key={r.path} items={galeria} index={i} style={styles.thumb} revealTs={ts ?? null} />;
+              // Mesma ordem do `messageAttachments` do core (citados, depois remotos): a chave casa com a galeria da conversa.
+              const galleryKey = eventId && drawsLocal ? `${eventId}#${pos}` : undefined;
+              return <ImageThumb key={r.path} items={galeria} index={i} style={styles.thumb} revealTs={ts ?? null} galleryKey={galleryKey} />;
             }
             if (r.kind === 'audio') return <AudioChip key={r.path} uri={r.uri} headers={r.headers} name={r.name} />;
             const kind = r.kind;

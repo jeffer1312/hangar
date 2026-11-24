@@ -1,5 +1,6 @@
 //! "No PC" / "Fora": com o modo "pc" e esta janela à vista (sinal de vida a cada 30 s), o servidor retém o push do celular.
 //! O modo é de cada máquina do dono; o botão da barra troca em todas, e o sinal traz de volta o que o celular mudou.
+//! No mesmo compasso sai o relatório do app (versão, memória, CPU) para a tela Status, também com a janela na bandeja.
 use super::*;
 
 /// O servidor dá o app por vivo por 75 s: um sinal a cada 30 s aguenta uma perda.
@@ -13,6 +14,34 @@ pub(super) struct Presence {
     unsupported: HashSet<String>,
     /// As conexões do último sinal: no encerramento a tela pode já ter sumido, e o aviso de saída ainda sai.
     leaving: Arc<std::sync::Mutex<Vec<Api>>>,
+    /// O mesmo `System` em toda leitura: a CPU do processo sai da diferença entre duas.
+    system: Arc<std::sync::Mutex<Option<sysinfo::System>>>,
+}
+
+/// Memória (bytes) e CPU (100 = um núcleo) deste processo; leitura bloqueante, fora da thread da tela.
+fn own_usage(system: &std::sync::Mutex<Option<sysinfo::System>>) -> Option<(u64, f64)> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    let pid = sysinfo::get_current_pid().ok()?;
+    let mut guard = system.lock().ok()?;
+    let system = guard.get_or_insert_with(System::new);
+    system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing().with_memory().with_cpu());
+    system.process(pid).map(|p| (p.memory(), f64::from(p.cpu_usage())))
+}
+
+/// O relatório para a tela Status de cada máquina do dono. `machine_id` é o identificador do servidor desta máquina, lido
+/// a cada vez do servidor local (ele pode ser renomeado); sem servidor local ou sem identificador, o campo não vai.
+async fn send_report(system: Arc<std::sync::Mutex<Option<sysinfo::System>>>, device: String, owned: Vec<Api>) {
+    let Ok(Some((rss, cpu))) = tokio::task::spawn_blocking(move || own_usage(&system)).await else { return };
+    let Some(host) = sysinfo::System::host_name().filter(|h| !h.trim().is_empty()) else { return };
+    let mut body = serde_json::json!({"device": device, "app_version": env!("HANGAR_NATIVE_VERSION"), "platform": std::env::consts::OS,
+        "host": host, "rss_bytes": rss, "cpu_pct": cpu});
+    if let Some(local) = owned.iter().find(|api| api.is_loopback())
+        && let Ok(value) = local.server_read(&["peers", "identificador"], &[], 5).await
+        && let Some(id) = value.get("identificador").and_then(Value::as_str).filter(|id| !id.is_empty()) {
+        body["machine_id"] = Value::from(id);
+    }
+    // Servidor anterior ao recurso responde 404: o próximo relatório tenta de novo, sem aviso.
+    futures::future::join_all(owned.iter().map(|api| api.server_send(reqwest::Method::POST, &["presence", "app"], Some(body.clone()), 10))).await;
 }
 
 async fn leave_all(apis: Vec<Api>) {
@@ -24,8 +53,11 @@ impl Hangar {
     pub(super) fn start_presence(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(BEAT_EVERY).await;
-            if this.update(cx, |this, _| this.presence_beat()).is_err() { break; }
+            if this.update(cx, |this, _| { this.presence_beat(); this.app_report(); }).is_err() { break; }
         }).detach();
+        // Primeira leitura já agora: o relatório de daqui a 30 s sai com a CPU medida, não zero.
+        let system = self.presence.system.clone();
+        drop(self.runtime.spawn_blocking(move || own_usage(&system)));
         let (runtime, leaving) = (self.runtime.clone(), self.presence.leaving.clone());
         // Registrado no app, não na tela: fechar sem bandeja solta a tela antes do encerramento.
         App::on_app_quit(cx, move |_| {
@@ -57,6 +89,14 @@ impl Hangar {
         let owned = self.owned_presence();
         if let Ok(mut list) = self.presence.leaving.lock() { *list = owned.iter().map(|(_, api)| api.clone()).collect(); }
         for (key, api) in owned { self.send_presence(key, api, &["presence", "heartbeat"], serde_json::json!({}), false); }
+    }
+
+    /// Relatório do app para a tela Status: sai com a janela à vista ou na bandeja, ao contrário do sinal de vida.
+    pub(super) fn app_report(&self) {
+        let Some(device) = crate::update::confirm::device_id() else { return };
+        let owned = self.owned_presence().into_iter().map(|(_, api)| api).collect::<Vec<_>>();
+        if owned.is_empty() { return; }
+        drop(self.runtime.spawn(send_report(self.presence.system.clone(), device, owned)));
     }
 
     /// A janela saiu de vista: o celular volta a receber na hora, sem esperar o prazo do servidor.
@@ -108,9 +148,14 @@ impl Hangar {
         };
         let pc = mode == "pc";
         let (label, tip) = if pc { (tr("presence_pc"), tr("presence_tip_pc")) } else { (tr("presence_away"), tr("presence_tip_away")) };
+        // Conversa nova: o chip diz que é sobre avisos, e não sobre a máquina da sessão.
+        let label = if crate::appearance::conversation_beta() {
+            tr(if pc { "beta_presence_pc" } else { "beta_presence_away" })
+        } else { label };
         Some(Button::new("topbar-presence").ghost().small().h(px(26.)).px(px(8.)).rounded_full()
             .child(div().flex().items_center().gap(px(6.)).text_size(px(12.5))
-                .child(chrome::small_icon(if pc { IconName::Monitor } else { IconName::Smartphone }, 14., theme::muted()))
+                // Conversa nova: o sino diz que o chip é sobre avisos, nos dois modos.
+                .child(chrome::small_icon(if crate::appearance::conversation_beta() { IconName::Bell } else if pc { IconName::Monitor } else { IconName::Smartphone }, 14., theme::muted()))
                 .child(div().text_color(theme::muted()).child(label.clone())))
             .accessibility_label(format!("{label}. {tip}")).tooltip(tip)
             .on_click(cx.listener(|this, _, _, _| this.toggle_presence())))

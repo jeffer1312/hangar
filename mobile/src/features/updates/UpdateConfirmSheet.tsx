@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet } from 'react-native-unistyles';
@@ -8,8 +8,9 @@ import { useSettingsColors } from '../config/colors';
 import { Icon } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { Notice } from '../machines/parts';
+import { UpdateRow, UpdateSummary, checkText, checkTone } from '../machines/UpdateAllRows';
 import { NewsSections, PrimaryButton, SheetHeader, styles, useNewsTones, useSmallMarkdown } from './WhatsNewSheet';
-import { type ConfirmRequest, type UpdateAcceptances } from './pending';
+import { type ConfirmRequest, type MachineChecks, type UpdateAcceptances } from './pending';
 import * as m from '../../paraglide/messages';
 
 // `title` só no "Atualizar todas": os avisos vêm agrupados por máquina.
@@ -22,8 +23,8 @@ const loadFailed = (request: ConfirmRequest): Loaded =>
   ({ notes: null, version: '', failed: true, groups: [], unreachable: [], runnable: request.machines ? 0 : 1 });
 
 async function load(request: ConfirmRequest): Promise<Loaded> {
-  const version = await loadVersion(request.server);
   if (!request.machines) {
+    const version = await loadVersion(request.server);
     try {
       const raw = await getUpdateNotesEm(request.server);
       const notes = raw ? forClient(raw, 'mobile') : null;
@@ -33,10 +34,15 @@ async function load(request: ConfirmRequest): Promise<Loaded> {
       return { ...loadFailed(request), ...version };
     }
   }
-  const { run, failed } = await request.machines;
+  // No "Atualizar todas" a busca já foi feita no preparo: a versão vem dele, sem outro procurar=1 na ativa.
+  let prepared: Awaited<NonNullable<ConfirmRequest['machines']>>;
+  try { prepared = await request.machines; } catch { return loadFailed(request); }
+  const { run, failed } = prepared;
   // A versão nova é a mesma em todas: as novidades vêm da ativa, ou de outra que respondeu.
   const source = run.find((entry) => entry.server.id === request.server.id && entry.notes) ?? run.find((entry) => entry.notes);
-  return { ...version, notes: source?.notes ? forClient(source.notes, 'mobile') : null, failed: false, unreachable: failed, runnable: run.length,
+  const version = run.find((entry) => entry.server.id === request.server.id && entry.version)?.version
+    ?? run.find((entry) => entry.version)?.version ?? '';
+  return { version, notes: source?.notes ? forClient(source.notes, 'mobile') : null, failed: false, unreachable: failed, runnable: run.length,
     groups: run.filter((entry) => entry.notes?.warnings.length).map((entry) => ({
       server: entry.server, title: m.update_all_warnings_from({ server: entry.server.label }), warnings: entry.notes!.warnings,
       incomplete: entry.notes!.incomplete === true })) };
@@ -95,12 +101,14 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
       ? m.update_confirm_all_title({ n: String(request.count) })
       : m.mobile_machines_confirm_operation({ action: m.mobile_machines_update(), name: request.server.label })} />
     <Text style={[styles.body, { color: c.muted }]}>{all ? m.update_confirm_all_body() : m.mobile_machines_confirm_operation_body()}</Text>
-    {!loaded ? <View style={[styles.actions, { alignItems: 'center' }]}>
+    {request.checks ? <MachineCheckList checks={request.checks} loaded={loaded} /> : null}
+    {!loaded && !request.checks ? <View style={[styles.actions, { alignItems: 'center' }]}>
       <ActivityIndicator color={c.muted} />
       <Text style={[styles.body, { color: c.muted }]}>{m.update_notes_loading()}</Text>
     </View> : null}
     {loaded?.failed ? <Notice error text={m.update_notes_failed()} /> : null}
-    {loaded?.unreachable.map((server) => <Notice key={server.id} error text={m.update_all_warnings_failed({ server: server.label })} />)}
+    {/* Com as linhas, a máquina sem avisos lidos já aparece nelas. */}
+    {request.checks ? null : loaded?.unreachable.map((server) => <Notice key={server.id} error text={m.update_all_warnings_failed({ server: server.label })} />)}
     {groups.length ? <Warnings groups={groups} understood={understood} modes={modes}
       onMode={(id, mode) => setModes((v) => ({ ...v, [id]: mode }))}
       onToggle={() => { haptic.selection(); setUnderstood((v) => !v); }} /> : null}
@@ -113,6 +121,28 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
       <PrimaryButton label={m.update_confirm_action()} disabled={blocked} onPress={confirm} />
     </View>
   </ScrollView>;
+}
+
+/** Uma linha por máquina, preenchida enquanto cada uma responde; a fora do ar já aparece de fora. */
+function MachineCheckList({ checks, loaded }: { checks: MachineChecks; loaded: Loaded | null }) {
+  const stored = useSyncExternalStore(checks.subscribe, checks.get);
+  // A leitura caiu: a linha que ainda procurava não vai mais responder.
+  const rows = loaded?.failed ? stored.map((row) => row.check.status === 'consultando'
+    ? { ...row, check: { status: 'falhou' as const, error: m.update_notes_failed() } } : row) : stored;
+  const online = rows.filter((row) => row.check.status !== 'fora_do_ar');
+  const answered = online.filter((row) => row.check.status !== 'consultando').length;
+  const finished = !!loaded && answered === online.length;
+  // "Pronto" só com versão nova a puxar; em dia só quando todas as do ar estão em dia (uma falha não some no resumo);
+  // o resto é que nenhuma pode atualizar. A linha "disponível" só sai depois dos avisos lidos: ela está entre as que rodam.
+  const summary = !finished
+    ? online.length === 1 ? m.update_all_summary_checking_one() : m.update_all_summary_checking({ n: String(online.length) })
+    : loaded.runnable > 0 && rows.some((row) => row.check.status === 'disponivel') ? m.update_all_summary_ready()
+    : online.length > 0 && online.every((row) => row.check.status === 'em_dia') ? m.update_all_up_to_date()
+    : m.update_all_summary_none();
+  return <View>
+    <UpdateSummary text={summary} progress={online.length ? answered / online.length : 1} />
+    {rows.map(({ server, check }) => <UpdateRow key={server.id} label={server.label} text={checkText(check)} tone={checkTone(check)} />)}
+  </View>;
 }
 
 /** Bloco âmbar: o "Entendi" mora dentro dele e libera o Atualizar. */

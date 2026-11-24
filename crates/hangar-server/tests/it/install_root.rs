@@ -11,7 +11,7 @@ fn launch(home: &Path, args: &[&str]) -> std::process::Output {
 fn launch_outside_checkout(home: &Path, args: &[&str]) -> std::process::Output {
     let copy = home.join("launcher-copy").join(Path::new(env!("CARGO_BIN_EXE_hangar-server")).file_name().unwrap());
     std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
-    std::fs::copy(env!("CARGO_BIN_EXE_hangar-server"), &copy).unwrap();
+    crate::copy_executable(Path::new(env!("CARGO_BIN_EXE_hangar-server")), &copy);
     launch_program(&copy, home, args).output().unwrap()
 }
 
@@ -39,13 +39,35 @@ fn diary(home: &Path) -> Vec<serde_json::Value> {
         .filter_map(|line| serde_json::from_str(line).ok()).collect::<Vec<_>>()).collect()
 }
 
-/// Versão do pacote que sobe direto (`boot: direct`) e sem o `bin/hangar-server`.
+/// Versão do pacote que sobe direto (`boot: direct`), sem `backend/` e sem o `bin/hangar-server`.
 fn direct_version(home: &Path) -> std::path::PathBuf {
     let real = home.join(".hangar").join("versions").join("v1");
-    std::fs::create_dir_all(real.join("backend")).unwrap();
+    std::fs::create_dir_all(&real).unwrap();
     std::fs::write(real.join("manifest.json"), r#"{"version":"v1","boot":"direct"}"#).unwrap();
     link_current(&real, home);
     real
+}
+
+/// A versão que sobe direto roda na `backend/` dela enquanto a tiver (a anterior, na volta, só
+/// acha o `backend/.env` da máquina não migrada pelo cwd) e, sem ela, na raiz.
+#[cfg(unix)]
+#[test]
+fn a_direct_version_runs_its_server_in_its_backend_or_else_in_the_version_root() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let real = direct_version(home);
+    let server = home.join("server-falso");
+    std::fs::write(&server, "#!/bin/sh\npwd -P > \"$HOME/cwd\"\n").unwrap();
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let cwd = || {
+        let out = launch_command(home, &["backend"]).env("CP_RUST_SERVER_BIN", &server).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        std::fs::read_to_string(home.join("cwd")).unwrap().trim().to_owned()
+    };
+    assert_eq!(cwd(), real.canonicalize().unwrap().display().to_string(), "sem backend/: a raiz");
+    std::fs::create_dir_all(real.join("backend")).unwrap();
+    assert_eq!(cwd(), real.join("backend").canonicalize().unwrap().display().to_string(), "com backend/: ela");
 }
 
 /// As linhas do lançador no log da tarefa, sem o prefixo.
@@ -62,7 +84,7 @@ fn link_current(real: &Path, home: &Path) {
 fn link_dir(link: &Path, target: &Path) {
     #[cfg(unix)]
     std::os::unix::fs::symlink(target, link).unwrap();
-    // O cmd não entende as aspas que o `arg` do Rust gera: a linha vai crua, como no `update::make_link`.
+    // O cmd não entende as aspas que o `arg` do Rust gera: a linha vai crua, como no `hangar_local_server::link::make_link`.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

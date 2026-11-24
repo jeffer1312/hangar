@@ -37,7 +37,7 @@ const PREVIEW_PAGE: usize = 40;
 /// Abaixo desta largura, lista e conversa não cabem lado a lado: a conversa abre no lugar da lista.
 const NARROW: f32 = 860.;
 const PALETTE_MAX: (f32, f32) = (1180., 880.);
-const AGENTS: [&str; 5] = ["claude", "codex", "pi", "kimi", "omp"];
+const AGENTS: [&str; 6] = ["claude", "codex", "pi", "kimi", "omp", "antigravity"];
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -764,7 +764,9 @@ impl Hangar {
         self.search.resuming = Some(hit.conversation());
         self.search.resume_error = None;
         let (gone_hit, gone_api, turn) = (hit.clone(), api.clone(), self.search.resume_turn);
-        let body = cwd.map_or_else(|| json!({}), |cwd| json!({"cwd": cwd}));
+        let mut body = json!({"provider": hit.agent()});
+        if let Some(cwd) = cwd { body["cwd"] = json!(cwd); }
+        if let Some(account) = hit.codex_account.as_deref().filter(|a| !a.is_empty()) { body["codex_account"] = json!(account); }
         let task = self.runtime.spawn(async move {
             api.server_send(reqwest::Method::POST, &["archive", &hit.project, &hit.session_id, "resume"], Some(body), 120).await
         });
@@ -1232,7 +1234,8 @@ impl Hangar {
                             .when(s.hidden_from_list, |el| el.child(div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset())
                                 .text_size(px(10.5)).text_color(theme::muted()).child(tr("sidebar_hidden_badge"))))
                             .when(s.asleep, |el| el.child(div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset())
-                                .text_size(px(10.5)).text_color(theme::muted()).child(tr_shared("session_asleep_badge", &[])))))
+                                .text_size(px(10.5)).text_color(theme::muted()).child(tr_shared("session_asleep_badge", &[]))))
+                            .children(self.work_review_chip(&target.server, &target.name)))
                         .children(place.map(|c| div().truncate().text_size(px(11.5)).text_color(theme::faint()).child(c))))
                     .children(s.last_activity.map(|t| div().flex_shrink_0().text_size(px(12.)).text_color(theme::faint()).child(ago(t))))
                     .into_any_element()

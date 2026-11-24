@@ -125,14 +125,7 @@ async fn current_snapshot(state: &Http) -> Result<crate::model::Snapshot, Error>
 async fn session_item(state: &Http, session: String, key: Option<String>, group: Option<String>) -> Result<serde_json::Value,Error> {
     let snapshot=current_snapshot(state).await?;
     let weak=snapshot.items.iter().any(|item|item.sessions.contains(&session) && !item.session_keys.contains_key(&session));
-    let matches=snapshot.items.into_iter().filter(|item| {
-        let member=item.sessions.contains(&session) || group.as_ref().is_some_and(|group|item.group_ids.contains(group));
-        let confirmed=item.session_keys.get(&session).map_or_else(||key.is_none() || group.as_ref().is_some_and(|group|item.group_ids.contains(group)),|expected|key.as_ref()==Some(expected));
-        member && confirmed
-    }).collect::<Vec<_>>();
-    let active=matches.iter().filter(|item|item.delivered_at.is_none()).collect::<Vec<_>>();
-    if active.len()>1 {return Err(Error::new(Kind::Gate,"ticket_group_conflict","o grupo está associado a tickets diferentes; remova a associação incorreta no board"));}
-    let mut item=active.first().map(|item|(*item).clone()).or_else(||matches.last().cloned())
+    let mut item=crate::link::resolve(&snapshot,&session,key.as_deref(),group.as_deref())?
         .ok_or_else(||if weak && key.is_some() {Error::new(Kind::Gate,"ticket_session_identity_required","confirme a associação da sessão na tela do ticket")} else {Error::new(Kind::NotFound,"mission_session_not_linked","esta sessão não está ligada a um ticket")})?;
     if let Some(key)=key && !item.session_keys.contains_key(&session) {
         let (connector,ticket)=(item.connector.clone(),item.ticket_id.clone());
@@ -273,7 +266,8 @@ async fn body<T: serde::de::DeserializeOwned>(request: Request) -> Result<T, Res
         .map_err(|error| detail(StatusCode::BAD_REQUEST, "invalid_params", &format!("corpo inválido: {error}"), json!({})))
 }
 
-fn failure(error: &Error) -> Response {
+/// Erro da loja dos Tickets como resposta HTTP; a rota da revisão usa o mesmo mapa.
+pub fn failure(error: &Error) -> Response {
     let status = match error.kind {
         Kind::Invalid => StatusCode::BAD_REQUEST,
         Kind::NotFound => StatusCode::NOT_FOUND,
