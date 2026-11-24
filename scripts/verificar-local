@@ -383,7 +383,9 @@ passo_rust_rapido() {
     local pacotes=() p args=()
     [[ -n "$(mudados '^crates/')" ]] || { echo "nenhum crate mudou"; return 0; }
     # Os crates mudados e os que dependem deles, a mesma conta do portão do PR.
-    mapfile -t pacotes < <(python3 -I scripts/gate-areas.py --rust-packages <<< "$(mudados '^(crates|backend/tests/fixtures)/')") || return 1
+    local lista
+    lista="$(python3 -I scripts/gate-areas.py --rust-packages <<< "$ARQUIVOS")" || return 1
+    mapfile -t pacotes < <(grep . <<< "$lista")
     wait_for_memory "$MEM_CHECK_GB" || return 1
     # Tipos, testes e exemplos do workspace inteiro: crate de base muda quem depende dele. O
     # hangar-server é conferido duas vezes (normal e de teste), cada rustc com alguns GB: primeiro as

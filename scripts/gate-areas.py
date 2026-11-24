@@ -17,13 +17,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # Mudou o próprio portão: tudo roda, senão um portão quebrado passaria sem ser exercitado.
-GATE = ("scripts/gate-areas.py", "scripts/rule-tests.py", ".github/workflows/gate.yml")
+GATE = ("scripts/gate-areas.py", "scripts/rule-tests.py", "scripts/rust-pr-tests.py", ".github/workflows/gate.yml")
 
 # O que pode derrubar as travas do scripts/rule-tests.py; o resto é das suítes do push.
-SERVER = ("crates/", "backend/tests/fixtures/")
 CRATES = ROOT / "crates"
-# Fora do crates/ e lido pelos testes de Rust (amostras de contrato): qualquer mudança vale para todos.
-RUST_READS = ("backend/tests/fixtures/",)
+# Fora do crates/ e lido pelo código ou pelos testes de Rust (include_str!, CARGO_MANIFEST_DIR/../..):
+# mudança aqui vale para os crates cujo código cita o caminho, e para todos quando nenhum o cita.
+RUST_READS = ("backend/tests/fixtures/", "resources/", "messages/", "packages/core/src/installCode.fixtures.json",
+              "docs/atualizacoes/", "scripts/shell/", "scripts/omp/", "scripts/hangar-codex", "scripts/tests/",
+              "examples/connectors/")
+SERVER = ("crates/",) + RUST_READS
 NATIVE = ("desktop-native/", "crates/Cargo.toml")
 MOBILE = ("mobile/", "packages/core/", "messages/", "project.inlang/", "scripts/i18n-compile.mjs",
           "scripts/verificar-app.mjs", ".node-version", "package.json", "package-lock.json")
@@ -86,13 +89,24 @@ def rust_members() -> dict[Path, str]:
     return found
 
 
+def readers(members: dict[Path, str], prefix: str) -> set[Path]:
+    """Os crates cujo código Rust cita o caminho subindo da pasta do crate (`../../messages`)."""
+    needle = "../" + prefix.rstrip("/")
+    return {m for m in members if any(needle in f.read_text(errors="replace") for f in m.rglob("*.rs"))}
+
+
 def rust_packages(files: list[str] | None) -> list[str]:
     """Os crates mudados e os que dependem deles, direta ou indiretamente (dependência de teste inclusa).
     Arquivo do crates/ fora de qualquer crate (Cargo.toml, Cargo.lock, toolchain) e `None` valem todos."""
     members = rust_members()
-    if files is None or touches(files, RUST_READS):
+    if files is None:
         return sorted(members.values())
     changed: set[Path] = set()
+    for prefix in (p for p in RUST_READS if touches(files, (p,))):
+        found = readers(members, prefix)
+        if not found:
+            return sorted(members.values())
+        changed |= found
     for name in (f for f in files if f.startswith("crates/")):
         path = (ROOT / name).resolve()
         owner = next((m for m in members if m == path.parent or m in path.parents), None)
@@ -134,7 +148,7 @@ def main() -> None:
         )
     for name, on in areas.items():
         print(f"{name}={'true' if on else 'false'}")
-    packages = rust_packages(files) if areas["server"] else []
+    packages = rust_packages(None if files is None or touches(files, GATE) else files) if areas["server"] else []
     print(f"rust_packages={' '.join(packages)}")
     print(f"rust_server={'true' if 'hangar-server' in packages else 'false'}")
 

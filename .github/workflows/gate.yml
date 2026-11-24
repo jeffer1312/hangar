@@ -244,7 +244,8 @@ jobs:
       - run: python3 -I scripts/rule-tests.py mobile
       - run: npm run check:app
         if: ${{ !cancelled() }}
-      # Os testes ligados aos arquivos do app que o PR muda; dependência ou configuração mudada, todos.
+      # Os testes ligados aos arquivos do app que o PR muda. Dependência, configuração, core ou mensagens
+      # mudados valem para o app inteiro: não há "relacionado" a eles.
       - name: Testes do que mudou no app
         if: ${{ !cancelled() }}
         env:
@@ -252,11 +253,19 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          mapfile -t mudados < <(git diff --no-renames --name-only --diff-filter=d "$BASE...$HEAD_SHA" -- mobile/)
-          if printf '%s\n' "${mudados[@]}" | grep -qE '^mobile/(package(-lock)?\.json|tsconfig[^/]*\.json|vitest[^/]*\.ts|babel\.config\.js|metro\.config\.js|app\.json|eas\.json|plugins/)'; then
+          tudo=0 app=()
+          while IFS= read -r f; do
+            case "$f" in
+              mobile/package.json|mobile/package-lock.json|mobile/tsconfig*.json|mobile/vitest*.ts|mobile/babel.config.js|\
+              mobile/metro.config.js|mobile/app.json|mobile/eas.json|mobile/plugins/*|packages/core/*|messages/*|\
+              project.inlang/*|package.json|package-lock.json|.node-version|scripts/i18n-compile.mjs|scripts/verificar-app.mjs) tudo=1 ;;
+              mobile/*) [ -f "$f" ] && app+=("$GITHUB_WORKSPACE/$f") ;;
+            esac
+          done < <(git diff --no-renames --name-only "$BASE...$HEAD_SHA")
+          if (( tudo )); then
             npm run test:app
-          elif (( ${#mudados[@]} )); then
-            cd mobile && npx vitest related --run --passWithNoTests "${mudados[@]/#/$GITHUB_WORKSPACE/}"
+          elif (( ${#app[@]} )); then
+            cd mobile && npx vitest related --run --passWithNoTests "${app[@]}"
           else
             echo "nenhum arquivo do app mudou"
           fi
