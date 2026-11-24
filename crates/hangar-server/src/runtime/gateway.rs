@@ -1924,7 +1924,9 @@ impl RuntimeRegistry {
         let mut metadata = target.metadata.clone();
         if let Some(fields) = store.state().runtime_state["view"].as_object() {
             if fields.get("conversation").is_some_and(|conversation|conversation == &metadata[conversation_field(&target.provider)]) {
-                for (key,value) in fields { if key != "public_state" { metadata[key] = value.clone(); } }
+                // O modo do Antigravity é o do sidecar: a volta do terminal grava lá o do rodapé, e a vista salva é da vida anterior.
+                let sidecar_owns = |key:&str|target.provider == "antigravity" && matches!(key,"permission_mode"|"mode");
+                for (key,value) in fields { if key != "public_state" && !sidecar_owns(key) { metadata[key] = value.clone(); } }
             }
         }
         let queue = QueueActor::start(store,lease);
