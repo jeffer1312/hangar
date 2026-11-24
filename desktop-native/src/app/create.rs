@@ -1219,7 +1219,7 @@ impl NewSession {
         if self.is_transfer() || self.creating { return; }
         self.provider_touched = true;
         if provider == self.provider { return; }
-        (self.provider, self.error) = (provider, None);
+        (self.provider, self.error, self.access_open) = (provider, None, false);
         self.model.clear();
         self.effort.clear();
         // Vazio = "Padrão": o campo não vai e o servidor usa o modo da conta (Claude) ou Full Access (Codex).
