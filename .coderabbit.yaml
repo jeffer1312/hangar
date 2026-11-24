@@ -3,6 +3,78 @@ reviews:
   profile: chill
   auto_review:
     auto_pause_after_reviewed_commits: 0
+  # Regras do CLAUDE.md que pedem julgamento: só avisam. As que a máquina confere estão em scripts/check-rules.py.
+  # Aqui e não em .coderabbit/pre-merge-checks/: de lá sai um check do GitHub, e o inconclusivo segura o merge.
+  pre_merge_checks:
+    custom_checks:
+      - name: "Recurso novo na web"
+        mode: "warning"
+        instructions: |
+          Olhe só frontend/. Falha se o PR acrescenta um recurso que a pessoa passa a ver ou usar na web (tela,
+          painel, botão, opção, atalho ou aba nova). Passa se só conserta o que já existia, adapta a web a uma mudança
+          do servidor, remove código, ou não toca em frontend/. Passa também se um commit do PR tem
+          HANGAR_WEB_AUTORIZADO: com motivo. Cite o arquivo e o recurso.
+      - name: "Paridade nativo e Expo"
+        mode: "warning"
+        instructions: |
+          Olhe desktop-native/src e mobile/. Falha se o PR acrescenta melhoria visual ou recurso visível só em um dos
+          dois e a descrição do PR não diz por que o outro ficou de fora ou que ficou pendente. Passa se mexe nos
+          dois, se a descrição diz o motivo ou a pendência, se o recurso só faz sentido em um (bandeja, janela, gesto
+          de celular, permissão do sistema), ou se é correção interna sem efeito visível.
+      - name: "Listas de sessões em conjunto"
+        mode: "warning"
+        instructions: |
+          Listas de sessões do nativo (desktop-native/src): barra lateral cheia e trilho, abas em cima ou embaixo,
+          bandeja Máquinas e convidados, seletor de sessões e busca. Do Expo (mobile/): lista, barra do tablet e
+          seletor. Falha se o PR muda o que uma delas mostra ou faz e as outras ficam sem a mudança e sem motivo dito
+          na descrição do PR. Passa se não toca nelas ou se todas foram tratadas.
+      - name: "Quatro estados em tela nova"
+        mode: "warning"
+        instructions: |
+          Olhe telas e listas NOVAS em desktop-native/src e mobile/ que buscam dados. Falha se uma delas não trata
+          carregando, vazio, erro e sucesso, ou se a falha da leitura aparece como lista vazia. Passa se o PR não cria
+          tela ou lista que busca dados. Cite o arquivo e o estado que falta.
+      - name: "Comentário curto e sobre o porquê"
+        mode: "warning"
+        instructions: |
+          Olhe só comentários acrescentados em código (não Markdown). Falha se um comentário novo traz data, medição,
+          versão de CLI ou número de PR ou incidente, se só repete o que o nome já diz, ou se é maior que o código que
+          explica. Passa nos demais casos e em texto de licença ou de código gerado. Cite arquivo e linha.
+      - name: "Identificador novo em inglês"
+        mode: "warning"
+        instructions: |
+          Olhe só identificadores criados no PR: função, variável, tipo, campo, chave de evento, rota, nome de tool
+          MCP e nome de arquivo de código. Falha se algum criado agora está em português. Passa para nome que já
+          existia, campo ou código de erro de um contrato já em português (por exemplo erro_*), valor de dado, título
+          de teste e texto de tela. Cite arquivo e nome.
+      - name: "Aviso na tela só para falha ou bloqueio"
+        mode: "warning"
+        instructions: |
+          Olhe crates/, desktop-native/src e mobile/. Falha se o PR passa a mostrar faixa, anel, linha, toast ou
+          cartão por falha de acompanhamento, dado velho, reconexão ou condição que some sozinha. Isso vai ao diário e
+          ao log, e código novo de diagnóstico entra em DIAGNOSTIC de problem_gate.rs. Passa para ação da pessoa que
+          falhou e para bloqueio real.
+      - name: "Conversa e segredo fora dos logs"
+        mode: "warning"
+        instructions: |
+          Falha se o PR grava em log, diário de uso, evento de diagnóstico, mensagem de erro exportada ou linha de
+          comando: texto de conversa, prompt, transcrição, saída bruta de ferramenta, token, senha, cookie, chave de
+          API ou endereço com credencial. Passa se grava só código, etapa, contagem, tempo ou nome de campo. Cite
+          arquivo e linha, sem repetir o valor.
+      - name: "Migração leva o caminho inteiro"
+        mode: "warning"
+        instructions: |
+          Vale só se o PR leva para o Rust algo que o backend/app (Python) fazia. Falha se sobra no Python rota,
+          ponte, poller, leitor ou chamador da mesma responsabilidade, se o Rust passa a perguntar ao Python o que ele
+          mesmo já é dono, ou se fica uma reserva Python. Passa se não há migração. Liste o que sobrou, com arquivo e
+          linha.
+      - name: "Preferência de abertura no cliente"
+        mode: "warning"
+        instructions: |
+          Padrão de abertura de sessão (agente, conta, modelo, esforço, velocidade, permissão, subagente, Code Mode,
+          Jev, com ou sem terminal) é do servidor. Falha se desktop-native/, mobile/, frontend/ ou a CLI passa a
+          guardar um desses padrões no aparelho ou a preencher o pedido de abertura com valor que a pessoa não
+          escolheu naquela tela. Passa se o valor vem do servidor ou da escolha feita ali.
   path_filters:
     - "!**/package-lock.json"
     - "!**/Cargo.lock"
