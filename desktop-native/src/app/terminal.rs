@@ -216,12 +216,13 @@ impl Panel {
     }
 }
 
-/// Manda o que espera, na ordem. Fila cheia guarda o resto para a próxima vez; outra falha volta como erro.
+/// Manda o que espera, na ordem. Fila cheia guarda o resto para a próxima vez; outra falha volta como erro, e
+/// também a espera acima do teto: servidor que não lê mais tem de aparecer como desconectado.
 fn send_in_order(unsent: &mut std::collections::VecDeque<Vec<u8>>, mut send: impl FnMut(&[u8]) -> Result<(), ws::Error>) -> Result<(), ws::Error> {
     while let Some(bytes) = unsent.front() {
         match send(bytes) {
             Ok(()) => { unsent.pop_front(); }
-            Err(ws::Error::QueueFull) => return Ok(()),
+            Err(ws::Error::QueueFull) if unsent.len() <= MAX_UNSENT => return Ok(()),
             Err(error) => return Err(error),
         }
     }
@@ -230,6 +231,7 @@ fn send_in_order(unsent: &mut std::collections::VecDeque<Vec<u8>>, mut send: imp
 
 /// Com teclas esperando a fila do socket, a próxima tentativa sai sozinha neste intervalo.
 const SEND_RETRY: std::time::Duration = std::time::Duration::from_millis(30);
+const MAX_UNSENT: usize = 1024;
 
 fn socket_error(error: ws::Error) -> String {
     match error {
@@ -1055,6 +1057,8 @@ mod tests {
         assert_eq!(sent.into_inner(), frames(&[b"a", b"b", b"c"]).into_iter().collect::<Vec<_>>());
         let mut unsent = frames(&[b"d"]);
         assert!(matches!(super::send_in_order(&mut unsent, |_| Err(Error::Closed)), Err(Error::Closed)));
+        let mut unsent: std::collections::VecDeque<Vec<u8>> = (0..=super::MAX_UNSENT).map(|_| b"x".to_vec()).collect();
+        assert!(matches!(super::send_in_order(&mut unsent, |_| Err(Error::QueueFull)), Err(Error::QueueFull)), "servidor que não lê mais vira erro");
     }
 
     #[test]
