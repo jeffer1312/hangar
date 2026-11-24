@@ -155,14 +155,19 @@ async fn state_updates_and_confirmed_open_feed_list() {
 }
 
 #[tokio::test]
-async fn host_answers_whether_another_machine_has_the_session_open() {
+async fn host_answers_when_another_machine_last_showed_the_session() {
     let registry = Arc::new(Registry::default());
     assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Err(Refusal::NoHost));
+    let before = now_ms();
     let (mut host, mut rx) = registry.attach();
     host.text(r#"{"type":"focus","session":"s"}"#);
-    assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Ok(Reply::Text("ok: host".into())));
+    let seen = registry.last_seen("s").expect("foco registrado");
+    assert!(seen >= before);
+    assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Ok(Reply::Text(format!("ok: host {seen}"))));
     // A pergunta não chega ao app.
     assert!(rx.try_recv().is_err());
+    // O app desligou: a hora fica, e o verbo seguinte recusa em vez de ir a outro navegador.
     drop(host);
-    assert!(!registry.has_host("s"));
+    assert_eq!(registry.last_seen("s"), Some(seen));
+    assert_eq!(registry.command("s", body(json!({"verbo": "url"}))).await, Err(Refusal::NoHost));
 }

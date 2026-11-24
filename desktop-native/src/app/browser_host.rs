@@ -47,6 +47,8 @@ pub(super) struct Hosts {
     links: HashMap<String, Link>,
     /// Pedidos dos canais para a janela; a ponta de leitura é drenada por uma tarefa da janela.
     incoming: Option<async_channel::Sender<(String, Value)>>,
+    /// Sessão desta máquina à vista numa janela ativa, já gravada em `_focus.json`.
+    local_focus: Option<String>,
 }
 
 /// O que o quadro faz com o canal que já existe; `[identidade, rota, token]` de antes e de agora.
@@ -259,11 +261,23 @@ impl Hangar {
     /// A cada quadro: sessão de outra máquina na tela dá foco no canal dela, que nasce na primeira vez.
     pub(super) fn browser_host_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.browser_host_prune();
+        // O navegador do agente vai ao app que mostrou a sessão por último: aqui, a hora da sessão desta máquina.
+        let active = window.is_window_active();
+        let local = self.session_api().filter(|api| api.is_loopback() && active).and(self.selected.as_ref().map(|s| s.name.clone()));
+        if local != self.browser_hosts.local_focus {
+            if let Some(name) = &local { crate::browser::server::record_focus(name); }
+            self.browser_hosts.local_focus = local;
+        }
         let Some(api) = self.session_api().filter(|api| !api.is_loopback()) else { return };
         let (Some(server), Some(name)) = (self.session_server().map(|s| servers::norm(&s)), self.selected.as_ref().map(|s| s.name.clone()))
             else { return };
         // Convite e par externo não são do dono: o canal é só do dono do servidor.
         if !owner_server(&self.servers, &server) { return; }
+        // Janela em segundo plano não conta como olhar a sessão: o foco volta ao servidor quando ela se ativa de novo.
+        if !active {
+            if let Some(link) = self.browser_hosts.links.get(&server) { lock(&link.conn).focus = None; }
+            return;
+        }
         let (identity, route, token) = (api.identity(), api.route().to_string(), self.server_token(&server));
         if let Some(link) = self.browser_hosts.links.get(&server) {
             let change = {
@@ -362,6 +376,8 @@ impl Hangar {
             Target::Tunnel { url, port } => {
                 let Some(api) = self.machine_api(&server) else { let _ = out.try_send(refusal(id, "sem conexão com a máquina da sessão")); return };
                 let token = self.server_token(&server);
+                // O túnel do agente aparece em Portas da sessão dele, com Parar.
+                self.note_forward_origin(api.identity(), port, key.clone());
                 let opening = self.ports.forwards.open(self.runtime.handle(), &api, &token, port);
                 (String::new(), url.to_string(), None, Some((opening, url, port)))
             }

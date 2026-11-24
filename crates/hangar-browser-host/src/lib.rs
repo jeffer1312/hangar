@@ -93,6 +93,9 @@ struct Inner {
     hosts: HashMap<u64, Host>,
     /// Sessão → anfitrião → ordem do último foco dele nela.
     focus: HashMap<String, HashMap<u64, u64>>,
+    /// Sessão → hora (ms) do último foco vindo de outra máquina. Fica depois que o app desliga: o navegador da
+    /// sessão continua sendo o de lá até um app mostrar a sessão de novo, e o verbo recusa em vez de cair noutro.
+    seen: HashMap<String, u64>,
     state: BTreeMap<String, BrowserState>,
 }
 
@@ -160,7 +163,7 @@ impl Registry {
         }
         // Só a pergunta do CLI: o navegador vai para o app de outra máquina antes do app desta.
         if verb == "host" {
-            return if self.has_host(session) { Ok(Reply::Text("ok: host".into())) } else { Err(Refusal::NoHost) };
+            return self.last_seen(session).map(|ms| Reply::Text(format!("ok: host {ms}"))).ok_or(Refusal::NoHost);
         }
         let deadline = deadline_of(&body);
         let url = matches!(verb.as_str(), "open" | "goto")
@@ -191,8 +194,9 @@ impl Registry {
         }
     }
 
-    /// Um app de outra máquina ligado está com esta sessão aberta: ele, e não o app desta máquina, recebe o navegador.
-    pub fn has_host(&self, session: &str) -> bool { self.lock().chosen(session).is_some() }
+    /// Quando (ms) um app de outra máquina mostrou esta sessão por último; quem a mostrou depois, ele ou o app desta
+    /// máquina, recebe o navegador.
+    pub fn last_seen(&self, session: &str) -> Option<u64> { self.lock().seen.get(session).copied() }
 
     /// O `list` do CLI: as sessões com navegador conhecido; vivo = algum anfitrião ligado com foco nela.
     pub fn list(&self) -> String {
@@ -216,6 +220,12 @@ impl Registry {
         {
             inner.focus.remove(&old);
         }
+        if !inner.seen.contains_key(&session) && inner.seen.len() >= MAX_SESSIONS
+            && let Some(old) = inner.seen.iter().min_by_key(|(_, ms)| **ms).map(|(k, _)| k.clone())
+        {
+            inner.seen.remove(&old);
+        }
+        inner.seen.insert(session.clone(), now_ms());
         inner.focus.entry(session).or_default().insert(host, order);
     }
 

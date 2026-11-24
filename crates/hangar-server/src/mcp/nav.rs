@@ -11,6 +11,8 @@ use zeroize::Zeroizing;
 pub const VERB_TIMEOUT: Duration = Duration::from_secs(45);
 pub const PAUSED: &str = "o usuario pausou o navegador; espere ele clicar em Retomar no painel e tente de novo";
 const NOT_OPEN: &str = "o app desktop não está aberto nesta máquina";
+const NO_HOST: &str = "nenhum app desktop ligado está com esta sessão aberta (o navegador dela fica no app que a mostrou por último): \
+    abra a sessão no app desktop que você está usando e repita";
 
 /// O app não atende: a frase volta como erro da tool.
 #[derive(Debug, PartialEq, Eq)]
@@ -85,6 +87,12 @@ pub fn local_app(home: &Path) -> Result<bool, Unavailable> {
     server(home).map(|found| found.is_some())
 }
 
+/// Quando (ms) o app desktop desta máquina mostrou a sessão por último (`_focus.json`, gravado por ele).
+pub fn local_focus(home: &Path, name: &str) -> Option<u64> {
+    let raw = std::fs::read(nav_dir(home).join("_focus.json")).ok()?;
+    serde_json::from_slice::<Value>(&raw).ok()?[name].as_u64()
+}
+
 /// O corpo do `/cmd` para a rota `browser-cmd`, com o prazo que ela espera o app.
 pub fn host_body(verb: &str, args: &[String], tab: Option<i64>, deadline: Duration) -> Value {
     let mut body = json!({"verbo": verb, "args": args, "deadline_ms": deadline.as_millis() as u64});
@@ -98,8 +106,7 @@ pub fn host_answer(status: u16, body: &Value) -> Result<String, Unavailable> {
     if (200..300).contains(&status) { return Ok(body["detail"].as_str().map_or_else(|| body.to_string(), str::to_owned)); }
     let detail = &body["detail"];
     Err(Unavailable(match (status, detail["code"].as_str()) {
-        (409, Some("browser_host_none")) =>
-            "o app desktop não está aberto nesta máquina e nenhum app de outra máquina está com esta sessão aberta: abra a sessão no app desktop e repita".into(),
+        (409, Some("browser_host_none")) => NO_HOST.into(),
         (403, Some("browser_host_not_allowed")) => "o app desktop recusou usar o navegador dele".into(),
         _ => detail["msg"].as_str().or_else(|| detail.as_str()).map_or_else(|| format!("HTTP {status}"), str::to_owned),
     }))

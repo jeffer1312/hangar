@@ -110,6 +110,11 @@ impl Hangar {
         if self.is_active_key(server) { self.active_token.clone() } else { self.server_entry(server).map(|s| s.token.clone()).unwrap_or_default() }
     }
 
+    /// A sessão (`servidor::sessão`) em cuja seção Portas o encaminhamento aparece.
+    pub(super) fn note_forward_origin(&mut self, server: String, port: u16, session: String) {
+        self.ports.origin.insert((server, port), session);
+    }
+
     /// A sonda e a busca de porta livre rodam no runtime; enquanto isso a linha diz "abrindo…".
     fn forward_port(&mut self, port: u16, cx: &mut Context<Self>) -> Option<Opening> {
         let Some(api) = self.session_api() else {
@@ -121,7 +126,7 @@ impl Hangar {
         let token = self.server_token(&self.open_server());
         self.ports.failed.remove(&key);
         self.ports.failed.remove(&(String::new(), port));
-        if let Some(session) = self.side_key() { self.ports.origin.insert(key.clone(), session); }
+        if let Some(session) = self.side_key() { self.note_forward_origin(key.0.clone(), port, session); }
         let opening = self.ports.forwards.open(self.runtime.handle(), &api, &token, port);
         let result = opening.clone();
         cx.spawn(async move |this, cx| {
@@ -286,6 +291,7 @@ impl Hangar {
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.ports.forwards.close(&server_close, port);
                                     this.ports.failed.remove(&(server_close.clone(), port));
+                                    this.ports.origin.remove(&(server_close.clone(), port));
                                     cx.notify();
                                 })),
                             None => buttons.forward.loading(is_opening).disabled(is_opening)

@@ -721,10 +721,14 @@ impl Tools {
         self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
     }
 
-    /// O navegador vai ao app de outra máquina que está com a sessão aberta (é onde a pessoa olha) ou, sem ele, ao
-    /// app desta; sem nenhum dos dois, a `browser-cmd` dá a recusa.
+    /// O navegador fica no app que mostrou a sessão por último: o de outra máquina quando ele a mostrou depois do app
+    /// desta (ou este não existe). Se o de lá desligou, a `browser-cmd` recusa em vez de cair num navegador daqui.
     fn remote_browser(&self, name: &str, home: &std::path::Path) -> Result<bool, String> {
-        Ok(self.st.browser_host.has_host(name) || !nav::local_app(home).map_err(|e| e.0)?)
+        if let Some(remote) = self.st.browser_host.last_seen(name)
+            && nav::local_focus(home, name).is_none_or(|local| remote > local) {
+            return Ok(true);
+        }
+        Ok(!nav::local_app(home).map_err(|e| e.0)?)
     }
 
     /// O verbo vai pela `browser-cmd` ao app de quem usa a sessão em outra máquina.

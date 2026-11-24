@@ -248,32 +248,41 @@ function sidecarDa(nome) {
   erro(`"${nome}" existe em mais de um servidor — use a chave completa:\n` + achados.map((s) => `  ${s.chave}`).join('\n'));
 }
 
-// Os verbos vão pelo servidor ao app de outra máquina que está com a sessão aberta (é onde a pessoa olha) e, sem ele,
-// ao app desta máquina. `list` e `folha` não perguntam: leem o que está aqui.
-// Lido uma vez: o app que abre no meio do comando não rouba um `batch` em curso.
-async function hostElsewhere() {
-  const nome = nomeSessao();
-  if (!nome) return false;
-  // A pergunta que não tem resposta fica com o app daqui, dito no stderr: a pessoa olhando o outro app saberia por quê.
-  const semResposta = (motivo) => {
-    process.stderr.write(`aviso: não deu para saber se o app de outra máquina está com a sessão (${motivo}); usando o navegador desta máquina\n`);
-    return false;
+// O navegador da sessão fica no app que a mostrou por último: o de outra máquina (hora no servidor, verbo `host`)
+// quando a mostrou depois do app desta (hora em `_focus.json`), ou quando este não existe. `list` e `folha` leem o
+// que está aqui e não perguntam. Lido uma vez: o app que abre no meio do comando não rouba um `batch` em curso.
+async function lastSeenElsewhere() {
+  const name = nomeSessao();
+  const token = name && ownerToken(() => '');
+  // Sem nome ou sem token não há como perguntar: fica o app daqui, que não precisa deles.
+  if (!token) return null;
+  const unanswered = (reason) => {
+    process.stderr.write(`aviso: não deu para saber se o app de outra máquina mostrou a sessão (${reason}); usando o navegador desta máquina\n`);
+    return null;
   };
-  const token = ownerToken(() => '');
-  if (!token) return semResposta('sem CP_AUTH_TOKEN');
   try {
-    const r = await fetch(`${BACKEND}/api/sessions/${encodeURIComponent(nome)}/browser-cmd`, {
+    const r = await fetch(`${BACKEND}/api/sessions/${encodeURIComponent(name)}/browser-cmd`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ verbo: 'host', args: [], deadline_ms: 3000 }),
-      signal: AbortSignal.timeout(5000),
+      body: JSON.stringify({ verbo: 'host', args: [], deadline_ms: 1500 }),
+      signal: AbortSignal.timeout(2000),
     });
-    // Servidor antigo repassa `host` ao app de lá, que responde `erro:` em 200: a resposta já prova que ele existe.
-    if (r.ok) return true;
-    if (r.status === 409) return false;
-    return semResposta(`servidor respondeu ${r.status}`);
+    if (r.status === 409) return null;
+    if (!r.ok) return unanswered(`servidor respondeu ${r.status}`);
+    // Servidor sem o verbo o repassa ao app de lá e volta `erro:`: sem hora, fica o app daqui.
+    const ms = Number((await r.text()).match(/^ok: host (\d+)/)?.[1]);
+    return Number.isFinite(ms) ? ms : null;
   } catch (err) {
-    return semResposta(err.cause?.code || err.name || err.message);
+    return unanswered(err.cause?.code || err.name || err.message);
+  }
+}
+
+function localFocus() {
+  try {
+    const ms = JSON.parse(readFileSync(join(DIR, '_focus.json'), 'utf8'))[nomeSessao()];
+    return typeof ms === 'number' ? ms : null;
+  } catch {
+    return null;
   }
 }
 
@@ -354,8 +363,9 @@ function ownerToken(sair = erro) {
 const deadlineFor = (verbo) => (verbo === 'login' ? 110_000 : verbo === 'open' ? PRONTO_MS : 45_000);
 
 // `objetivo`/`confere` com a sessão aberta noutro app caem na recusa de "outra máquina" abaixo, nunca num navegador velho daqui.
-const usaNavegador = VERBOS_SERVIDOR.has(cmd) || ['open', 'tab', 'batch', 'objetivo', 'confere'].includes(cmd);
-const remote = !externo && (!localApp() || (usaNavegador && await hostElsewhere()));
+const usesBrowser = VERBOS_SERVIDOR.has(cmd) || ['open', 'tab', 'batch', 'objetivo', 'confere'].includes(cmd);
+const seenElsewhere = !externo && usesBrowser ? await lastSeenElsewhere() : null;
+const remote = !externo && (!localApp() || (seenElsewhere !== null && seenElsewhere > (localFocus() ?? 0)));
 
 // O verbo pelo servidor desta máquina (`browser-cmd`), que o repassa ao app desktop com a sessão aberta.
 // Uma linha no stderr por comando: quem lê sabe que o navegador não é o desta máquina.
@@ -381,7 +391,7 @@ async function callServer(nome, verbo, cmdArgs, aba = flags.aba, sair = erro) {
   if (r.ok) return { texto, codigo: texto.startsWith('erro:') ? 1 : 0 };
   let detalhe = {};
   try { detalhe = JSON.parse(texto).detail ?? {}; } catch { /* corpo sem JSON */ }
-  if (r.status === 409 && detalhe.code === 'browser_host_none') return sair('nenhum app do Hangar com esta sessão aberta: abra a sessão no app desktop e repita');
+  if (r.status === 409 && detalhe.code === 'browser_host_none') return sair('nenhum app desktop ligado está com esta sessão aberta (o navegador dela fica no app que a mostrou por último): abra a sessão no app desktop que você está usando e repita');
   if (r.status === 403 && detalhe.code === 'browser_host_not_allowed') return sair('o app desktop recusou usar o navegador dele');
   return sair(detalhe.msg ? semToken(detalhe.msg) : `o servidor recusou: ${r.status} ${semToken(texto)}`);
 }
