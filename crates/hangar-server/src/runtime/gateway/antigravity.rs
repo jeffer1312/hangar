@@ -94,7 +94,10 @@ impl RuntimeRegistry {
                 self.diag.report("runtime.registration_failed","*","antigravity_sidecar_dir","a pasta das sessões do Antigravity sem terminal não foi lida");
                 return;
             }
-            Err(_) => return,
+            Err(_) => {
+                self.diag.report("runtime.registration_failed","*","antigravity_sidecar_job","a leitura das sessões do Antigravity sem terminal não terminou na subida");
+                return;
+            }
         };
         let opens = listed.into_iter().map(|(name,_)| {
             let registry = self.clone();
@@ -201,7 +204,11 @@ impl RuntimeRegistry {
             if let Some(cano) = meta.get("cano").cloned().filter(|c|!c.is_null()).and_then(|c|serde_json::from_value::<process::Cano>(c).ok()) {
                 process::kill(&cano,&key,&dir).await.map_err(|error|RuntimeError::new(error.code(),"o processo do Antigravity sem terminal não saiu"))?;
                 let (d,n,k,pid) = (dir.clone(),name.to_owned(),key.clone(),cano.pid);
-                let _ = tokio::task::spawn_blocking(move||super::super::antigravity_sidecar::clear_cano(&d,&n,&k,&json!({"pid":pid}))).await;
+                let cleared = tokio::task::spawn_blocking(move||super::super::antigravity_sidecar::clear_cano(&d,&n,&k,&json!({"pid":pid}))).await;
+                if !matches!(cleared,Ok(Ok(_))) {
+                    tracing::warn!(session=%name,"o cano morto ficou no arquivo da sessão do Antigravity sem terminal");
+                    self.diag.report("runtime.registration_failed",name,"antigravity_cano_not_cleared","o processo saiu, mas o cano dele ficou gravado no arquivo da sessão");
+                }
             }
             Ok(HeadlessLeft { key,conversation })
         }.await)

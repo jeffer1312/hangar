@@ -198,7 +198,11 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
     if !headless_open && !terminal_open {
         let home = st.accounts.env.home.clone();
         let sidecar = crate::runtime::codex_sidecar::path(&crate::runtime::antigravity_sidecar::dir(&home), name);
-        if !tokio::task::spawn_blocking(move || sidecar.exists()).await.unwrap_or(false) {
+        let exists = match tokio::task::spawn_blocking(move || sidecar.try_exists()).await {
+            Ok(Ok(exists)) => exists,
+            _ => return Some(Err(RuntimeError::new("antigravity_sidecar_unreadable", "o arquivo da sessão do Antigravity sem terminal não foi lido"))),
+        };
+        if !exists {
             // Pane sem ator ainda (abrindo, ou na tela de primeiro uso do agy): a recusa diz isso, não "só Claude".
             let listed = st.list.discovered_session(name).await.ok().flatten().is_some_and(|(row, _)| row.provider == "antigravity");
             if listed {
@@ -241,11 +245,16 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
                 .map_err(|error| RuntimeError::new(error.code.unwrap_or("erro_troca_modo"), &error.msg)),
             Err(code) => Err(RuntimeError::new(&code, "o terminal do Antigravity não abriu pelo registro")),
         };
-        if result.is_err() {
+        if let Err(error) = result {
             let (h, previous) = (home.clone(), spec.clone());
-            let _ = tokio::task::spawn_blocking(move || crate::session_open::record::write(&h, &previous)).await;
+            let undone = tokio::task::spawn_blocking(move || crate::session_open::record::write(&h, &previous)).await;
+            if !matches!(undone, Ok(Ok(()))) {
+                tracing::warn!(session = %name, "o registro da sessão não voltou ao sem terminal depois da troca falha");
+                return Err(RuntimeError::new(&error.code, &format!("{}; o registro da sessão não voltou ao sem terminal", error.message)));
+            }
+            return Err(error);
         }
-        result.map(|_| ())
+        Ok(())
     }.await;
     match opened {
         Ok(()) => {

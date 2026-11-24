@@ -459,7 +459,9 @@ impl Engine {
             EngineInput::WriteAck { operation_id,outcome } => self.write_ack(&operation_id,outcome,&mut effects),
             EngineInput::PolicyResult { request_id,payload } => {
                 if let Some(kind) = self.policies.remove(&request_id) && kind == "session.patch_meta" && payload["updated"] != true {
-                    tracing::warn!(session=%self.state.session,code=%payload["error"]["code"].as_str().unwrap_or("stale"),"antigravity: o arquivo da sessão não aceitou a gravação");
+                    let code = payload["error"]["code"].as_str().unwrap_or("stale").to_owned();
+                    tracing::warn!(session=%self.state.session,code=%code,"antigravity: o arquivo da sessão não aceitou a gravação");
+                    effects.push(Effect::Diag { event:DiagEvent::AntigravitySidecarPatch,code });
                 }
             }
             EngineInput::Tick => self.tick(&mut effects),
@@ -740,7 +742,9 @@ impl Engine {
 
     /// Socket novo ao MESMO cano: a sessão ACP vive entre o cano e o agy e continua aberta.
     pub fn reattach(&mut self,snapshot:CanoSnapshot) -> Result<Vec<Effect>,RuntimeError> {
-        let presented:Vec<Value> = snapshot.pendentes.iter().filter_map(|raw|serde_json::from_str(raw).ok()).collect();
+        // Pendente ilegível não pode virar "já respondido": o cartão sumiria com o agente esperando.
+        let presented:Vec<Value> = snapshot.pendentes.iter().map(|raw|serde_json::from_str(raw)).collect::<Result<_,_>>()
+            .map_err(|_|error("cano_snapshot_invalid","pedido pendente ilegível no cano"))?;
         let resolved:Vec<RequestId> = self.server_requests.iter().filter(|(_,request)|!presented.contains(request)).map(|(id,_)|id.clone()).collect();
         for id in &resolved { self.request_epochs.remove(id); }
         self.server_requests.retain(|(id,_)|!resolved.contains(id));

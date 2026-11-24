@@ -781,7 +781,10 @@ impl RuntimeRegistry {
             Ok::<_, RuntimeError>(())
         }.await;
         if let Err(error) = stopped {
-            let _ = self.open_other_terminal_locked(target.clone()).await;
+            if let Err(reopen) = self.open_other_terminal_locked(target.clone()).await {
+                tracing::warn!(session = %name, code = %reopen.code, "o terminal não voltou depois da troca que não fechou");
+                self.diag.report("runtime.registration_failed", name, &reopen.code, "o ator do terminal não voltou depois de um fechamento para troca que falhou");
+            }
             return Err(error);
         }
         if let Some(config) = self.other.get() { config.opening.lock().await.remove(life.name()); }

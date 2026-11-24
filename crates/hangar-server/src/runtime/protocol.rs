@@ -168,7 +168,7 @@ impl UsageLimit {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DiagEvent { CodexDecode, CodexBootstrap, CodexConnectionClosed, CodexSidecarGone, ClaudeSidecarAbsent, CanoProtocolInvalid, CanoReconnectStopped, CanoOutputLost }
+pub enum DiagEvent { CodexDecode, CodexBootstrap, CodexConnectionClosed, CodexSidecarGone, ClaudeSidecarAbsent, CanoProtocolInvalid, CanoReconnectStopped, CanoOutputLost, AntigravitySidecarPatch }
 
 impl DiagEvent {
     pub fn event(self) -> &'static str {
@@ -178,6 +178,7 @@ impl DiagEvent {
             Self::ClaudeSidecarAbsent => "rust.claude_sidecar_absent",
             Self::CanoProtocolInvalid => "rust.cano_protocol_invalid", Self::CanoReconnectStopped => "rust.cano_reconnect_stopped",
             Self::CanoOutputLost => "rust.cano_output_lost",
+            Self::AntigravitySidecarPatch => "rust.antigravity_sidecar_patch",
         }
     }
     pub fn reason(self) -> &'static str {
@@ -190,6 +191,7 @@ impl DiagEvent {
             Self::CanoProtocolInvalid => "o cano mandou um envelope que o servidor não conhece; o ator religou ao mesmo processo",
             Self::CanoReconnectStopped => "a religação ao cano parou: falta o que prova que o processo é o desta vida",
             Self::CanoOutputLost => "o cano parou de repassar a saída do Claude; o fim dos turnos desta vida vem do transcript",
+            Self::AntigravitySidecarPatch => "o arquivo da sessão do Antigravity sem terminal não aceitou a gravação (conversa, modelo ou modo); a próxima vida pode voltar com o valor antigo",
         }
     }
 }
