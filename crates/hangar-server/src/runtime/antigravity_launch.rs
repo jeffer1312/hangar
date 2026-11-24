@@ -35,6 +35,12 @@ pub fn acp_mode(mode:crate::session_open::PermissionMode) -> Option<&'static str
     match mode { M::Manual => Some("default"), M::AcceptEdits => Some("accept-edits"), M::Auto => Some("auto"), M::Plan => Some("plan"), _ => None }
 }
 
+/// O inverso de `acp_mode`: o modo que o agy anunciou, no nome do Hangar.
+pub fn from_acp_mode(mode:&str) -> Option<crate::session_open::PermissionMode> {
+    use crate::session_open::PermissionMode as M;
+    match mode { "default" => Some(M::Manual), "accept-edits" => Some(M::AcceptEdits), "auto" => Some(M::Auto), "plan" => Some(M::Plan), _ => None }
+}
+
 pub fn argv(meta:&Value) -> Result<Vec<String>,RuntimeError> {
     let mut argv = vec!["agy".to_owned(),"acp".to_owned()];
     if stored_mode(meta)? == crate::session_open::PermissionMode::BypassPermissions { argv.push("--dangerously-skip-permissions".into()); }

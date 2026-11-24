@@ -70,6 +70,23 @@ impl RuntimeRegistry {
         Some(self.open_with_launch(target,dir).await.map(|_|()))
     }
 
+    /// Espera o `agy acp` recém-aberto terminar a abertura da conversa, para a pílula não receber "ainda não abriu".
+    pub async fn antigravity_wait_ready(&self,name:&str) -> Result<(),RuntimeError> {
+        let Some((_,_,handle)) = self.antigravity_headless(name).await else { return Err(failure("antigravity_headless_missing")) };
+        Self::antigravity_ready(&handle).await
+    }
+
+    pub async fn antigravity_ready(handle:&RuntimeHandle) -> Result<(),RuntimeError> {
+        let end = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let view = handle.view().await?;
+            if view["ready"] == true { return Ok(()); }
+            if view["alive"] == false { return Err(RuntimeError::new("antigravity_not_ready","o Antigravity sem terminal caiu ao abrir a conversa")); }
+            if tokio::time::Instant::now() >= end { return Err(RuntimeError::new("antigravity_not_ready","a conversa do Antigravity não abriu a tempo")); }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
     /// Na subida: abre cada Antigravity sem terminal com cano vivo da chave (adota) ou com mensagem esperando.
     pub async fn register_antigravity_headless(self:Arc<Self>) {
         self.startup.wait().await;
@@ -113,7 +130,7 @@ impl RuntimeRegistry {
 }
 
 /// O que a saída do sem terminal deixa para a abertura do terminal (e para desfazer, se ela falhar).
-pub struct HeadlessLeft { pub key:String, pub conversation:String }
+pub struct HeadlessLeft { pub key:String, pub conversation:String, pub permission_mode:crate::session_open::PermissionMode, pub model:Option<String> }
 
 fn refuse(message:&str) -> RuntimeError { RuntimeError::new("erro_troca_modo",message) }
 
@@ -149,7 +166,6 @@ impl RuntimeRegistry {
                 .ok_or_else(||refuse("A sessão não tem registro de abertura; a sessão foi mantida."))?;
             let gemini_home = match &spec.account { crate::session_open::Account::Antigravity { gemini_home } => gemini_home.clone(), _ => None };
             let account = gemini_home.as_ref().map_or_else(hangar_antigravity::Account::default,|dir|hangar_antigravity::Account::extra(dir.into()));
-            self.stop_other_for_switch(name).await?;
             let created = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
             let meta = json!({"name":name,"provider":"antigravity","headless":true,"key":target.key,"cwd":target.cwd,"gemini_home":gemini_home,
                 "brain_dir":account.brain_dir(&env.home),"conversation_id":conversation,"model":spec.model,
@@ -158,11 +174,27 @@ impl RuntimeRegistry {
                 surface:Some(crate::session_open::Surface::Headless),account:None,permission_mode:shown,model:None,effort:None,service_tier:None });
             next.conversation = Some(conversation);
             let (dir,home,owned) = (super::super::antigravity_sidecar::dir(&env.home),env.home.clone(),name.to_owned());
+            // Grava antes de matar o pane: falhar aqui deixa o terminal como estava.
+            let (d,h,o,previous) = (dir.clone(),home.clone(),owned.clone(),spec.clone());
             tokio::task::spawn_blocking(move||-> std::io::Result<()> {
-                super::super::codex_sidecar::put(&dir,&owned,meta.as_object().unwrap_or(&Default::default()))?;
-                crate::session_open::record::write(&home,&next)
+                super::super::codex_sidecar::put(&d,&o,meta.as_object().unwrap_or(&Default::default()))?;
+                if let Err(error) = crate::session_open::record::write(&h,&next) {
+                    let _ = std::fs::remove_file(super::super::codex_sidecar::path(&d,&o));
+                    return Err(error);
+                }
+                Ok(())
             }).await.map_err(|_|failure("sidecar_job"))?
                 .map_err(|error|RuntimeError::new("antigravity_switch_io",&format!("o arquivo da sessão sem terminal não foi gravado: {:?}",error.kind())))?;
+            if let Err(error) = self.stop_other_for_switch(name).await {
+                let undone = tokio::task::spawn_blocking(move||-> std::io::Result<()> {
+                    std::fs::remove_file(super::super::codex_sidecar::path(&dir,&owned))?;
+                    crate::session_open::record::write(&home,&previous)
+                }).await;
+                if !matches!(undone,Ok(Ok(()))) {
+                    self.diag.report("runtime.registration_failed",name,"antigravity_switch_undo_failed","o terminal ficou, mas o arquivo sem terminal ou o registro não voltaram");
+                }
+                return Err(error);
+            }
             self.open_antigravity_headless(name).await.unwrap_or_else(||Err(failure("antigravity_sidecar_missing")))?;
             Ok(json!({"ok":true,"terminal":false}))
         }.await)
@@ -183,7 +215,8 @@ impl RuntimeRegistry {
             let conversation = text("conversation_id").filter(|id|hangar_antigravity::paths::valid_conversation_id(id))
                 .ok_or_else(||refuse("Envie a primeira mensagem antes de abrir esta conversa no terminal."))?;
             // O `agy` com terminal não abre no modo que pergunta antes de agir.
-            if super::super::antigravity_launch::stored_mode(&Value::Object(meta.clone()))? == crate::session_open::PermissionMode::Manual {
+            let permission_mode = super::super::antigravity_launch::stored_mode(&Value::Object(meta.clone()))?;
+            if permission_mode == crate::session_open::PermissionMode::Manual {
                 return Err(RuntimeError::new("erro_permissao_manual_sem_terminal",
                     "o Antigravity com terminal não abre no modo que pergunta antes de agir; troque o modo de permissão antes"));
             }
@@ -210,7 +243,7 @@ impl RuntimeRegistry {
                     self.diag.report("runtime.registration_failed",name,"antigravity_cano_not_cleared","o processo saiu, mas o cano dele ficou gravado no arquivo da sessão");
                 }
             }
-            Ok(HeadlessLeft { key,conversation })
+            Ok(HeadlessLeft { key,conversation,permission_mode,model:text("model") })
         }.await)
     }
 
@@ -224,7 +257,10 @@ impl RuntimeRegistry {
                 _ => Ok(()),
             }
         })).await;
-        if !matches!(removed,Ok(Ok(()))) { tracing::warn!(session=%name,code="antigravity_switch_sidecar_left","o arquivo sem terminal ficou depois de abrir o terminal"); }
+        if !matches!(removed,Ok(Ok(()))) {
+            tracing::warn!(session=%name,code="antigravity_switch_sidecar_left","o arquivo sem terminal ficou depois de abrir o terminal");
+            self.diag.report("runtime.registration_failed",name,"antigravity_switch_sidecar_left","o terminal abriu, mas o arquivo da sessão sem terminal ficou");
+        }
     }
 }
 

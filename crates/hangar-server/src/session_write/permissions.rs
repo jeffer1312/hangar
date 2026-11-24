@@ -117,6 +117,7 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
             EntryHandle::Terminal {handle,..}=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),if let Some(mode)=&mode {json!({"mode":mode})} else {json!({"probe":probe})}).await?,
             EntryHandle::OtherTerminal {handle,..} if target.provider=="antigravity"=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),json!({"mode":mode})).await?,
             EntryHandle::Headless(handle) if set=> {
+                if target.provider=="antigravity" {crate::runtime::gateway::RuntimeRegistry::antigravity_ready(handle).await?;}
                 let mut reply=handle.command(RuntimeCommand {operation_id:id.clone(),kind:OperationKind::SetPermissionMode,payload:json!({"mode":mode})}).await?;
                 if reply.disposition==Disposition::Accepted && reply.payload["reopened"]!=true {
                     let view=handle.view().await?;

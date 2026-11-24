@@ -264,6 +264,7 @@ async fn headless_agy(st: &Arc<AppState>, name: &str, model: Option<&str>) -> Re
     let mut found = crate::session_write::enter_then_find(&runtime, name, st.write_gate_wait).await.map_err(|_| closed())?;
     if found.is_none() {
         if let Some(Err(error)) = runtime.open_antigravity_headless(name).await { return Err(coded(409, &error.code, &error.message)); }
+        runtime.antigravity_wait_ready(name).await.map_err(|error| coded(409, &error.code, &error.message))?;
         found = crate::session_write::enter_then_find(&runtime, name, st.write_gate_wait).await.map_err(|_| closed())?;
     }
     let Some((pass, target)) = found.filter(|(_, target)| target.provider == "antigravity" && !target.terminal) else {
@@ -288,6 +289,9 @@ async fn headless_agy(st: &Arc<AppState>, name: &str, model: Option<&str>) -> Re
     }
     Ok(match model {
         Some(id) => json!({"ok": true, "current": id}),
+        // A retomada pode vir sem a lista: a pílula cai no catálogo da conta, como com a sessão parada.
+        None if reply.payload["models"].as_array().is_none_or(|models| models.is_empty()) =>
+            json!({"models": antigravity_catalog(st, None).await?["models"], "current": reply.payload["current"]}),
         None => json!({"models": reply.payload["models"], "current": reply.payload["current"]}),
     })
 }

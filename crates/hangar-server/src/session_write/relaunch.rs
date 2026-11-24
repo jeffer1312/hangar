@@ -211,6 +211,8 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
             }
             return None;
         }
+        // Sem terminal estacionada: já está onde pediram.
+        if !terminal { return Some(Ok(json!({"ok": true, "terminal": false}))); }
     }
     if terminal_open && terminal || headless_open && !terminal { return Some(Ok(json!({"ok": true, "terminal": terminal}))); }
     let _closed = match crate::runtime::lifecycle::ClosedIngress::acquire_exclusive(runtime.ingress(), name).await {
@@ -230,7 +232,7 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
             .map_err(|error| RuntimeError::new("erro_troca_modo", &format!("o registro da sessão não foi lido: {:?}", error.kind())))?
             .ok_or_else(|| RuntimeError::new("erro_troca_modo", "A sessão não tem registro de abertura; a sessão foi mantida."))?;
         let mut next = spec.with(&SessionChange { reason: ChangeReason::ModeSwitch, surface: Some(Surface::Terminal), account: None,
-            permission_mode: None, model: None, effort: None, service_tier: None });
+            permission_mode: Some(left.permission_mode), model: left.model.clone(), effort: None, service_tier: None });
         next.conversation = Some(left.conversation.clone());
         let (h, written) = (home.clone(), next.clone());
         tokio::task::spawn_blocking(move || crate::session_open::record::write(&h, &written)).await

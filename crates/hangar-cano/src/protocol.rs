@@ -45,7 +45,7 @@ impl Default for CodexPrefix {
 
 /// Antigravity (`agy acp`): texto e pensamento do turno desde a última ferramenta.
 #[derive(Default, Serialize)]
-struct AcpPrefix { complete: bool, text: String, thinking: String }
+struct AcpPrefix { complete: bool, text: String, thinking: String, #[serde(skip)] overflowed: bool }
 
 #[derive(Default, Serialize)]
 struct Inflight {
@@ -217,9 +217,11 @@ impl Tracker {
         match update["sessionUpdate"].as_str() {
             Some(kind @ ("agent_message_chunk" | "agent_thought_chunk")) => {
                 if prefix.text.len() + prefix.thinking.len() + piece.len() > MAX_FRAME / 2 {
-                    *prefix = AcpPrefix::default();
+                    *prefix = AcpPrefix { overflowed:true,..AcpPrefix::default() };
                     return;
                 }
+                // Depois do estouro só o fim chegaria: a prévia fica incompleta até a próxima mensagem.
+                if prefix.overflowed { return; }
                 prefix.complete = true;
                 if kind == "agent_message_chunk" { prefix.text.push_str(piece) } else { prefix.thinking.push_str(piece) }
             }

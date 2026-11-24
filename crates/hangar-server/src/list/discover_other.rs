@@ -101,7 +101,9 @@ pub fn discover_rows(panes: &[Pane], procs: &dyn ProcessView, children: &Childre
     }
     rows.extend(codex_rows(dirs, &births, procs, problems));
     rows.extend(headless_rows(dirs, procs, problems));
-    rows.extend(antigravity_rows(dirs, procs, problems));
+    // Na troca para o terminal o sidecar sem terminal ainda existe por um instante: o pane vale.
+    let panes: std::collections::HashSet<String> = rows.iter().map(|row| row.name.clone()).collect();
+    rows.extend(antigravity_rows(dirs, procs, problems).into_iter().filter(|row| !panes.contains(&row.name)));
     Discovered { rows, agent_pids, problems: std::mem::take(problems).into_vec() }
 }
 

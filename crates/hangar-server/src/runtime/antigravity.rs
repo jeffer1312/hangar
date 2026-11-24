@@ -121,7 +121,8 @@ impl Engine {
     }
 
     pub fn park_idle(&self,now:f64) -> Option<f64> {
-        let open = !self.alive || self.in_progress || self.booting.is_some() || !self.server_requests.is_empty() || !self.rpc.is_empty();
+        let open = !self.alive || self.in_progress || self.booting.is_some() || !self.server_requests.is_empty()
+            || self.rpc.values().any(|rpc|!rpc.timed_out);
         (!open).then(||now - self.last_event)
     }
 
@@ -522,7 +523,16 @@ impl Engine {
                     acp::Event::ToolUpdated { status,.. } => if matches!(status.as_deref(),Some("completed" | "failed")) && self.tool.take().is_some() {
                         self.publish("tool",String::new(),effects);
                     },
-                    acp::Event::ModeChanged(mode) => { self.mode = Some(mode); effects.push(Effect::StateChanged); }
+                    acp::Event::ModeChanged(mode) => {
+                        // O agy sai do plano sozinho: a pílula e o sidecar seguem o modo dele (o bypass é flag e fica).
+                        if let Some(wanted) = super::antigravity_launch::from_acp_mode(&mode)
+                            && wanted != self.permission_mode && self.permission_mode != PermissionMode::BypassPermissions {
+                            self.permission_mode = wanted;
+                            self.policy("session.patch_meta",json!({"permission_mode":wanted.name()}),effects);
+                        }
+                        self.mode = Some(mode);
+                        effects.push(Effect::StateChanged);
+                    }
                     acp::Event::ModelChanged(model) => { self.model = Some(model); effects.push(Effect::StateChanged); }
                     acp::Event::ContextUsage { used,size } => self.token_usage = json!({"used":used,"size":size}),
                     _ => {}

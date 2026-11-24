@@ -293,7 +293,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
                     codex_account = Some(info.codex_account.clone().unwrap_or_else(|| "default".into()));
                     source = AccountSource::Inherited;
                 }
-                if headless.is_none() && matches!(provider, AgentProvider::Claude | AgentProvider::Codex) && !request.read_only {
+                if headless.is_none() && matches!(provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity) && !request.read_only {
                     headless = Some(info.headless);
                 }
                 // O 1º recado de uma criadora em bypass para uma irmã em Manual fica retido no receptor.
@@ -376,7 +376,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     }
 
     let headless = headless.unwrap_or_else(|| {
-        !request.read_only && matches!(provider, AgentProvider::Claude | AgentProvider::Codex) && facts.defaults().headless
+        !request.read_only && matches!(provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity) && facts.defaults().headless
     });
     // Pedido explícito de `manual` no Antigravity com terminal: ele abriria em `auto`, que roda comando sem perguntar.
     if asked_manual && !headless {
