@@ -20,6 +20,7 @@ import { aplicarMaterial } from '../src/theme/aplicarMaterial';
 import { Toaster, toast } from '../src/ui/Toast';
 import { LiveVoiceRoot } from '../src/features/voice/LiveVoiceRoot';
 import { VaultRequestSheet } from '../src/features/vault/VaultRequests';
+import { OutboxRequestSheet } from '../src/features/whatsapp/OutboxRequests';
 import { applyOrientationLock } from '../src/features/tablet/orientationLock';
 import { setFatalErrorRoute, takeFatalErrorNotice } from '../src/net/fatalErrors';
 import * as m from '../src/paraglide/messages';
@@ -236,6 +237,7 @@ export default function Layout() {
         </TabletShell>
         <LiveVoiceRoot />
         <VaultRequestSheet />
+        <OutboxRequestSheet />
         <Toaster position="top-center" />
       </GestureHandlerRootView>
     </KeyboardProvider>

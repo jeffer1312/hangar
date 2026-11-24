@@ -11,7 +11,7 @@ import { openVaultRequest, useVaultTarget } from './target';
 import { vaultErrorText } from './errors';
 import { useSessions } from '../../stores/sessions';
 import { useIdentities } from '../pair/identities';
-import { Icon } from '../../ui/Icon';
+import { Icon, type IconName } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import { superficie } from '../../theme/superficie';
@@ -23,15 +23,17 @@ const pending = (requests: VaultRequest[]) => requests.filter((r) => !answered.h
 // Estado de teste montado sem o campo `vault` não derruba a lista.
 const NONE: Record<string, VaultEvent> = {};
 
-export function RequestNotice({ title, onPress }: { title: string; onPress: () => void }) {
+/** Aviso de pedido esperando resposta; o rascunho de WhatsApp usa o mesmo, com o próprio ícone. */
+export function RequestNotice({ title, onPress, icon = 'KeyRound', hint }: { title: string; onPress: () => void; icon?: IconName; hint?: string }) {
   const { theme } = useUnistyles();
-  return <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityHint={m.vault_app_requests_open()}
+  const help = hint ?? m.vault_app_requests_open();
+  return <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityHint={help}
     onPress={() => { haptic.selection(); onPress(); }}
     style={({ pressed }) => [styles.notice, { backgroundColor: superficie(theme, 0.6) }, pressed && { opacity: 0.7 }]}>
-    <Icon name="KeyRound" size={18} color={theme.tokens.status.warning} />
+    <Icon name={icon} size={18} color={theme.tokens.status.warning} />
     <View style={styles.noticeText}>
       <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{title}</Text>
-      <Text style={[styles.hint, { color: theme.tokens.text.muted }]}>{m.vault_app_requests_open()}</Text>
+      <Text style={[styles.hint, { color: theme.tokens.text.muted }]}>{help}</Text>
     </View>
     <Icon name="ChevronRight" size={17} color={theme.tokens.text.muted} />
   </Pressable>;

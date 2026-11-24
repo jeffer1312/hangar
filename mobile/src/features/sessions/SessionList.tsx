@@ -44,6 +44,7 @@ import { useIdentities } from '../pair/identities';
 import { ConversationList } from './ConversationList';
 import { KeyringNotice } from './KeyringNotice';
 import { VaultRequests } from '../vault/VaultRequests';
+import { OutboxRequests } from '../whatsapp/OutboxRequests';
 import { useNoticeClock } from './useNoticeClock';
 import { RenameSheet } from './RenameSheet';
 import { WorktreeSheet } from '../worktrees/WorktreeSheet';
@@ -610,6 +611,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
         {machineStatus}
         {keyringNotices}
         <VaultRequests byServer={byServer} />
+        <OutboxRequests byServer={byServer} />
         <View style={styles.corpo}>{corpo}</View>
         {home ? null : rodape}
       </View>

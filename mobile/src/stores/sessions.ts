@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { openSessionsStream, deviceIdentityReady, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverConnectRoute, discoverRemoteRoute, upgradeToDevice, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, parseWorkReviewsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
-import type { SessionInfo, Server, AggSession, ExternalPair, TagsEvent, VaultEvent, VaultRequest } from '@hangar/core';
+import { openSessionsStream, deviceIdentityReady, aggregateSessions, parseWhatsAppOutboxEvent, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverConnectRoute, discoverRemoteRoute, upgradeToDevice, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, parseWorkReviewsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
+import type { SessionInfo, Server, AggSession, ExternalPair, TagsEvent, VaultEvent, VaultRequest, WhatsAppOutboxEvent } from '@hangar/core';
 import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, isServerParked, parkServer, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
@@ -26,6 +26,8 @@ export interface SessionsState {
   byServerRecord: Record<string, AggSession[]>;
   /** Último evento `vault` de cada servidor; vale só enquanto o balde dele está sem erro. */
   vault: Record<string, VaultEvent>;
+  /** Último evento `whatsapp_outbox` de cada servidor (rascunhos pendentes); como o cofre, vale só com o balde sem erro. */
+  whatsappOutbox: Record<string, WhatsAppOutboxEvent>;
   /** Etiquetas de máquina e contas de cada servidor (evento `tags`); o valor de cada servidor só muda quando a etiqueta dele muda. */
   tags: Record<string, TagsEvent>;
   /** Chaves de aviso da CLI do Claude ignoradas em cada servidor (evento `notice_ignores`). */
@@ -49,6 +51,7 @@ const slots = new Map<string, Slot>();
 const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined, offlineSince: startOutage(id) });
 const streams = new Map<string, ReturnType<typeof openSessionsStream>>();
 const vaultRaw = new Map<string, string>();
+const whatsappOutboxRaw = new Map<string, string>();
 const workReviewsRaw = new Map<string, string>();
 const VAULT_STATES = new Set(['open', 'locked', 'absent', 'offline', 'key_lost']);
 
@@ -583,6 +586,17 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       vaultRaw.set(s.id, data);
       set({ vault: { ...get().vault, [s.id]: event } });
     });
+    // Rascunhos de WhatsApp pendentes: na conexão e a cada troca. Repetido ou torto mantém o último.
+    es.addEventListener('whatsapp_outbox', (e) => {
+      if (!active()) return;
+      answered();
+      const data: string = e.data;
+      if (whatsappOutboxRaw.get(s.id) === data) return;
+      const event = parseWhatsAppOutboxEvent(data);
+      if (!event) return;
+      whatsappOutboxRaw.set(s.id, data);
+      set({ whatsappOutbox: { ...get().whatsappOutbox, [s.id]: event } });
+    });
     // Etiquetas da máquina e das contas: chegam na conexão e a cada troca. Repetido ou torto mantém as últimas.
     es.addEventListener('tags', (e) => {
       if (!active()) return;
@@ -677,7 +691,9 @@ function refresh(get: () => SessionsState, set: (p: Partial<SessionsState>) => v
       // Mesmo id com outro token ou endereço: o pedido antigo não é desta conexão.
       vaultRaw.delete(s.id);
       const { [s.id]: _dropped, ...vault } = get().vault;
-      set({ vault });
+      whatsappOutboxRaw.delete(s.id);
+      const { [s.id]: _droppedDrafts, ...whatsappOutbox } = get().whatsappOutbox;
+      set({ vault, whatsappOutbox });
     } else if (serversCache.find((next) => next.id === s.id)?.inviteEnded) {
       disconnect(s.id);
       slots.delete(s.id);
@@ -734,9 +750,10 @@ function stop(set: (p: Partial<SessionsState>) => void) {
   pause();
   slots.clear();
   vaultRaw.clear();
+  whatsappOutboxRaw.clear();
   workReviewsRaw.clear();
   clearWorkReviewSummaries();
-  set({ vault: {} });
+  set({ vault: {}, whatsappOutbox: {} });
   for (const [id, status] of refused) slots.set(id, { sessions: null, error: refusedError(status) });
   // hidden mantém? Não — limpa ao parar para próximo retain começar limpo
   hidden = new Map<string, string | null>();
@@ -748,6 +765,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   byServer: [],
   byServerRecord: {},
   vault: {},
+  whatsappOutbox: {},
   tags: {},
   noticeIgnores: {},
   loading: false,
@@ -833,6 +851,7 @@ export function _resetSessionsForTests() {
   streams.clear();
   slots.clear();
   vaultRaw.clear();
+  whatsappOutboxRaw.clear();
   workReviewsRaw.clear();
   clearWorkReviewSummaries();
   hidden = new Map<string, string | null>();
@@ -853,5 +872,5 @@ export function _resetSessionsForTests() {
   _limparEsfriamentoParaTestes();
   definirArmazem(null);
   configureCooldown();
-  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, tags: {}, noticeIgnores: {}, loading: false, servers: [] });
+  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, whatsappOutbox: {}, tags: {}, noticeIgnores: {}, loading: false, servers: [] });
 }

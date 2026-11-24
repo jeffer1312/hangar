@@ -288,17 +288,19 @@ impl Hangar {
         keys.into_iter().flat_map(|key| self.vault[key].update(cx, |requests, cx| requests.render_where(keep, cx))).collect()
     }
 
-    /// Pedido da sessão aberta: dentro da conversa dela, acima da caixa de mensagem.
+    /// Pedido da sessão aberta (do cofre ou rascunho de WhatsApp): dentro da conversa dela, acima da caixa de mensagem.
     pub(super) fn render_vault_session(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let here = self.vault_origin_here()?;
-        let cards = self.vault_cards(&|origin: &str| origin == here, cx);
+        let mut cards = self.vault_cards(&|origin: &str| origin == here, cx);
+        cards.extend(self.whatsapp_cards(&|origin: &str| origin == here, cx));
         (!cards.is_empty()).then(|| div().flex_shrink_0().w_full().max_w(px(760.)).mx_auto().flex().flex_col().children(cards).into_any_element())
     }
 
-    /// Pedido de outra sessão: flutua sobre a conversa, igual em toda forma de navegação.
+    /// Pedido de outra sessão (do cofre ou rascunho de WhatsApp): flutua sobre a conversa, igual em toda forma de navegação.
     pub(super) fn render_vault_float(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let here = self.vault_origin_here();
-        let cards = self.vault_cards(&|origin: &str| here.as_deref() != Some(origin), cx);
+        let mut cards = self.vault_cards(&|origin: &str| here.as_deref() != Some(origin), cx);
+        cards.extend(self.whatsapp_cards(&|origin: &str| here.as_deref() != Some(origin), cx));
         if cards.is_empty() { return None; }
         let cards = div().id("vault-float").max_h(px(520.)).overflow_y_scroll().py_1().flex().flex_col().children(cards);
         Some(div().absolute().top(px(52.)).right(px(16.)).occlude().child(chrome::popover(cards.into_any_element(), true)).into_any_element())
