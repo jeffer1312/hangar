@@ -319,7 +319,7 @@ pub(crate) fn absorb_line(st: &mut FileState, raw: &[u8], prefixes: &[String]) -
     absorb_events(st, parse_claude_object(obj), cwd, raw.len(), kept, prefixes)
 }
 
-/// Uma linha completa de Codex, Pi, omp ou Kimi, pelo parser do histórico do Arquivo (os ids são os
+/// Uma linha completa de Codex, Pi, omp, Kimi ou Antigravity, pelo parser do histórico do Arquivo (os ids são os
 /// dele). O cwd já vem da descoberta.
 pub(crate) fn absorb_agent_line(st: &mut FileState, raw: &[u8], provider: AgentProvider, prefixes: &[String]) -> Vec<Message> {
     st.offset += raw.len() as i64;

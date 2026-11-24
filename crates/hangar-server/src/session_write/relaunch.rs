@@ -1,7 +1,7 @@
 //! `POST /modo-execucao` e `/recarregar`: a troca de modo e o reinício rodam no Rust do começo ao fim, o
 //! Codex pela `runtime::codex_relaunch` e o Claude pela reabertura do spec (`runtime::claude_reopen`), com o
 //! corpo e os códigos da rota Python (`api.py`). Sessão que não é de nenhum dos dois (Pi,
-//! omp, Kimi) recebe aqui a recusa que a rota Python dava. A recuperação da transferência é do Rust.
+//! omp, Kimi, Antigravity) recebe aqui a recusa que a rota Python dava. A recuperação da transferência é do Rust.
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;

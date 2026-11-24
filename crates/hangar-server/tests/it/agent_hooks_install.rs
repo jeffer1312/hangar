@@ -249,6 +249,7 @@ fn h64_export_own_hooks_is_a_fixed_list_with_the_subcommands() {
         format!("\"{PROGRAM}\" askq-capture || exit 0"),
         format!("\"{PROGRAM}\" preview-hook || exit 0"),
         format!("\"{PROGRAM}\" pair-context \"/h/.claude/.hangar-pair\" || exit 0"),
+        format!("\"{PROGRAM}\" agy-state-hook"),
         "\"/v/python3\" \"/v/backend/hooks/state_hook.py\" || exit 0".to_owned(),
         "\"/v/python3\" \"/h/.claude/hooks/guard_tmux.py\"".to_owned(),
     ] {

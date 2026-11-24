@@ -52,7 +52,7 @@ fn parse(bytes: &[u8]) -> Option<Body> {
 }
 
 /// A sessão que `serve` não atende. Corpo fora de forma é 422 antes de tudo, como a validação do pydantic
-/// antes do handler Python; `claude`: Claude sem ator aqui, 503; o resto (Pi, omp, Kimi, Codex, nenhuma)
+/// antes do handler Python; `claude`: Claude sem ator aqui, 503; o resto (Pi, omp, Kimi, Antigravity, Codex, nenhuma)
 /// recusa com código, porque o seletor do `/model` é só do Claude (D6).
 pub(super) fn refuse(headers: &HeaderMap, bytes: &[u8], claude: bool) -> Response {
     if parse(bytes).is_none() { return invalid_body(headers); }
@@ -64,7 +64,7 @@ pub(super) fn refuse(headers: &HeaderMap, bytes: &[u8], claude: bool) -> Respons
         "trocar modelo e esforço por aqui só vale para sessão Claude", json!({})))
 }
 
-/// `None`: a sessão não é um Claude do Rust (Pi, omp, Kimi, Codex sem ator, nenhuma); quem chamou recusa.
+/// `None`: a sessão não é um Claude do Rust (Pi, omp, Kimi, Antigravity, Codex sem ator, nenhuma); quem chamou recusa.
 pub(super) async fn serve(st: &Arc<AppState>, runtime: Arc<RuntimeRegistry>, name: String, headers: &HeaderMap, bytes: &[u8]) -> Option<Response> {
     // Claude com terminal ainda sem ator aqui: o Rust o adota agora.
     let found = match enter_then_find(&runtime, &name, st.write_gate_wait).await {

@@ -97,7 +97,7 @@ fn notice_as_json(name: &str, notice: &Notice) -> Value {
 
 #[test]
 fn awaiting_and_finished_for_native_providers_but_stall_for_every_row() {
-    for provider in ["claude", "codex", "kimi", "pi", "omp"] { assert!(turn_notices(provider), "{provider}"); }
+    for provider in ["claude", "codex", "kimi", "pi", "omp", "antigravity"] { assert!(turn_notices(provider), "{provider}"); }
     assert!(!turn_notices("orq"));
     // A varredura não olha o provedor: Kimi travada ainda sai daqui.
     let mut m = Memory::default();

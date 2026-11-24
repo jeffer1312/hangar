@@ -274,7 +274,7 @@ fn parse_body(bytes: &Bytes) -> Option<(String, bool)> {
 
 /// Na conversa onde a mensagem entra no turno sem cortá-lo: Claude e Codex sem terminal, Codex com terminal
 /// (`turn/steer`) e Claude com terminal, onde o ator digita com o turno em curso e o Claude Code a lê na pausa
-/// seguinte. Pi, omp e Kimi seguem o caminho da fila.
+/// seguinte. Pi, omp, Kimi e Antigravity seguem o caminho da fila.
 fn gentle(target: &WriteTarget) -> bool {
     use crate::runtime::gateway::EntryHandle;
     gentle_surface(matches!(target.handle, EntryHandle::Headless(_) | EntryHandle::CodexTerminal { .. } | EntryHandle::Terminal { .. }),
@@ -381,7 +381,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     } else { (steer, None, None) };
     let conversation = conversation_route(wants_conversation, &ctx.target, &text);
     let mut result = send_with_receipt(&ctx.st, &ctx.name, &ctx.target, &text, steer, conversation, expected_turn, false).await;
-    // `false`: o pedido foi para a fila comum (Claude com terminal, Pi, omp, Kimi, comando de barra).
+    // `false`: o pedido foi para a fila comum (Claude com terminal, Pi, omp, Kimi, Antigravity, comando de barra).
     if wants_conversation && result.0.is_success() { result.1["conversation"] = json!(conversation); }
     if let Some(note) = note {
         let outcome = if steer && result.1["delivered"] != true { "refused" }
@@ -828,9 +828,9 @@ mod broadcast_tests {
         // Sem terminal (Claude e Codex) e Codex com terminal: entrega sem corte.
         assert!(gentle_surface(true, "claude"));
         assert!(gentle_surface(true, "codex"));
-        // Claude com terminal, Pi, omp e Kimi: o pedido vira a fila comum.
+        // Claude com terminal, Pi, omp, Kimi e Antigravity: o pedido vira a fila comum.
         assert!(!gentle_surface(false, "claude"));
-        for other in ["pi", "omp", "kimi"] { assert!(!gentle_surface(false, other), "{other}"); }
+        for other in ["pi", "omp", "kimi", "antigravity"] { assert!(!gentle_surface(false, other), "{other}"); }
     }
 
     #[test]

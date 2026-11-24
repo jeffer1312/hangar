@@ -319,13 +319,13 @@ fn without_claude_spec(provider: Result<Option<&str>, &'static str>) -> Option<(
 mod tests {
     use super::*;
 
-    /// Sem spec Claude, a sessão que não existe é 404 e a de outro provedor (Pi, omp, Kimi,
+    /// Sem spec Claude, a sessão que não existe é 404 e a de outro provedor (Pi, omp, Kimi, Antigravity,
     /// Codex com `config_dir`) é 409, como o Python; lista fora do ar é 503 com o código dela.
     #[test]
     fn without_a_claude_spec_the_refusal_is_the_python_one() {
         let code = |r: Option<(StatusCode, Value)>| r.map(|(s, b)| (s, b["detail"]["code"].clone()));
         assert_eq!(code(without_claude_spec(Ok(None))), Some((StatusCode::NOT_FOUND, json!("erro_sessao_inexistente"))));
-        for provider in ["pi", "omp", "kimi", "codex"] {
+        for provider in ["pi", "omp", "kimi", "antigravity", "codex"] {
             assert_eq!(code(without_claude_spec(Ok(Some(provider)))), Some((StatusCode::CONFLICT, json!("erro_conta_so_claude"))), "{provider}");
         }
         assert_eq!(code(without_claude_spec(Err("erro_lista_indisponivel"))), Some((StatusCode::SERVICE_UNAVAILABLE, json!("erro_lista_indisponivel"))));

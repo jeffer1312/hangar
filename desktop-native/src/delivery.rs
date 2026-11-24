@@ -16,11 +16,20 @@ impl SessionKey {
 
     pub fn for_open_chat(server: &str, session: &SessionInfo) -> Option<Self> {
         Self::new(server, session).or_else(|| {
-            if !session.waiting_for_kimi_input() { return None; }
+            if !session.waiting_for_first_input() { return None; }
             // Cada vida guarda o próprio rascunho até o vínculo com o histórico.
-            let life = session.lifecycle_id.as_deref()?;
-            Some(Self { server: server.into(), name: session.name.clone(), jsonl: format!("kimi-opening:{life}") })
+            Self::opening(server, session)
         })
+    }
+
+    /// A chave de antes do histórico desta vida e a do histórico, quando ele já existe; outra vida não casa.
+    pub fn opening_to_transcript(server: &str, session: &SessionInfo) -> Option<(Self, Self)> {
+        Some((Self::opening(server, session)?, Self::new(server, session)?))
+    }
+
+    fn opening(server: &str, session: &SessionInfo) -> Option<Self> {
+        let life = session.lifecycle_id.as_deref()?;
+        Some(Self { server: server.into(), name: session.name.clone(), jsonl: format!("opening:{life}") })
     }
 }
 
@@ -228,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_can_start_with_a_first_message_before_the_transcript_exists() {
+    fn kimi_and_antigravity_can_start_with_a_first_message_before_the_transcript_exists() {
         let mut session = SessionInfo {
             name: "kimi".into(), provider: "kimi".into(), state: "idle".into(), tracked: Some(false),
             lifecycle_id: Some("k:first".into()), ..Default::default()
@@ -241,6 +250,10 @@ mod tests {
         let linked = SessionInfo { tracked: Some(true), jsonl: Some("/wire.jsonl".into()), ..session.clone() };
         let linked_key = SessionKey::for_open_chat("http://fixture/", &linked).unwrap();
         assert_eq!(linked_key.jsonl, "/wire.jsonl");
+        assert_eq!(SessionKey::opening_to_transcript("http://fixture/", &linked), Some((before.clone(), linked_key.clone())));
+        assert_eq!(SessionKey::opening_to_transcript("http://fixture/", &session), None, "sem histórico não há para onde ir");
+        let other_life = SessionInfo { lifecycle_id: Some("k:second".into()), ..linked.clone() };
+        assert_ne!(SessionKey::opening_to_transcript("http://fixture/", &other_life).unwrap().0, before, "outra vida não leva o rascunho desta");
         let mut delivery = DeliveryTracker::default();
         assert!(delivery.begin(before.clone(), "primeira mensagem".into(), HashSet::new()));
         delivery.rekey(&before, &linked_key);
@@ -255,6 +268,9 @@ mod tests {
         session.lifecycle_id = Some("k:first".into());
         session.guest_kind = Some("pair".into());
         assert!(!session.takes_messages());
+        let agy = SessionInfo { name: "agy".into(), provider: "antigravity".into(), guest_kind: None, ..session.clone() };
+        assert!(agy.takes_messages(), "o agy também só cria a conversa no primeiro envio");
+        assert!(!SessionInfo { provider: "pi".into(), ..agy }.takes_messages());
     }
 
     #[test]

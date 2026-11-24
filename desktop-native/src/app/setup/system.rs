@@ -3,7 +3,16 @@
 use std::{path::{Path, PathBuf}, process::Command};
 
 /// Agentes que o instalador conhece (`TODOS_AGENTES` do `install.sh`, `$todosAgentes` do `install.ps1`): id e nome.
-pub(crate) const AGENTS: [(&str, &str); 5] = [("claude", "Claude Code"), ("codex", "Codex"), ("pi", "Pi"), ("omp", "omp"), ("kimi", "Kimi Code")];
+pub(crate) const AGENTS: [(&str, &str); 6] = [("claude", "Claude Code"), ("codex", "Codex"), ("pi", "Pi"), ("omp", "omp"), ("kimi", "Kimi Code"),
+    ("antigravity", "Antigravity")];
+
+/// O comando de cada id: o Antigravity se chama pelo produto e o binário é `agy` (`programa_agente` dos instaladores).
+pub(crate) fn agent_program(id: &str) -> &str {
+    match id {
+        "antigravity" => "agy",
+        other => other,
+    }
+}
 
 /// Sem isto o Windows abre um console preto por comando.
 pub(crate) fn hidden(command: &mut Command) -> &mut Command {
@@ -61,7 +70,7 @@ pub(crate) fn find_program(name: &str, path: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn installed_agents(path: &str) -> Vec<&'static str> {
-    AGENTS.iter().filter(|(id, _)| find_program(id, path).is_some()).map(|(id, _)| *id).collect()
+    AGENTS.iter().filter(|(id, _)| find_program(agent_program(id), path).is_some()).map(|(id, _)| *id).collect()
 }
 
 /// O 5.1 de todo Windows, pelo caminho fixo: o PATH do app pode não alcançá-lo.
@@ -102,10 +111,12 @@ mod tests {
         let name = |n: &str| if cfg!(windows) { format!("{n}.cmd") } else { n.to_owned() };
         std::fs::write(dir.join(name("codex")), "").unwrap();
         std::fs::write(dir.join(name("kimi")), "").unwrap();
+        std::fs::write(dir.join(name("agy")), "").unwrap();
         let path = dir.to_string_lossy().into_owned();
         assert_eq!(find_program("codex", &path), Some(dir.join(name("codex"))));
         assert_eq!(find_program("claude", &path), None);
-        assert_eq!(installed_agents(&path), vec!["codex", "kimi"]);
+        // O `agy` no PATH conta como o id que o instalador aceita.
+        assert_eq!(installed_agents(&path), vec!["codex", "kimi", "antigravity"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

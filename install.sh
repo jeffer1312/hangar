@@ -5,7 +5,7 @@
 #   ./install.sh --yes        # aceita tudo (não pergunta nada)
 #   ./install.sh --check      # só diz o que falta e sai, sem instalar nada
 #   ./install.sh --avancado   # pergunta cada extra (o padrão instala o recomendado sem perguntar)
-#   ./install.sh --agentes=codex,pi   # agentes de código a instalar (claude, codex, pi, omp, kimi)
+#   ./install.sh --agentes=codex,pi   # agentes de código a instalar (claude, codex, pi, omp, kimi, antigravity)
 #   ./install.sh --update        # re-aplica só o que um `git pull` não atualiza sozinho
 #   ./install.sh --no-frontend   # só o backend (o PWA já roda noutro lugar)
 #   ./install.sh --no-wrapper --no-services --no-hangar-send   # pula partes
@@ -60,9 +60,13 @@ for arg in "$@"; do
 done
 
 # O Hangar pilota agentes de código e precisa de pelo menos um; o Claude Code é o padrão, não o único.
-TODOS_AGENTES="claude codex pi omp kimi"
+TODOS_AGENTES="claude codex pi omp kimi antigravity"
 nome_agente() {
-  case $1 in claude) echo "Claude Code" ;; codex) echo "Codex" ;; pi) echo "Pi" ;; omp) echo "omp" ;; kimi) echo "Kimi Code" ;; esac
+  case $1 in claude) echo "Claude Code" ;; codex) echo "Codex" ;; pi) echo "Pi" ;; omp) echo "omp" ;; kimi) echo "Kimi Code" ;; antigravity) echo "Antigravity" ;; esac
+}
+# O id do Antigravity é o do produto e o comando é `agy`, como no harness_setup::commands::program.
+programa_agente() {
+  case $1 in antigravity) echo agy ;; *) echo "$1" ;; esac
 }
 agentes_validos() { # agentes_validos <lista separada por vírgula>: 0 = todos conhecidos e não vazia
   local a lista=${1//,/ }
@@ -606,7 +610,7 @@ fi
 precisa_root "tmux"        tmux   tmux 'sem ele não existe sessão' || true
 CLAUDE_INSTALL='curl -fsSL https://claude.ai/install.sh | bash'
 ACHADOS=''
-for a in $TODOS_AGENTES; do command -v "$a" >/dev/null && ACHADOS="$ACHADOS $a"; done
+for a in $TODOS_AGENTES; do command -v "$(programa_agente "$a")" >/dev/null && ACHADOS="$ACHADOS $a"; done
 # Só o --avancado pergunta: o guiado tem duas perguntas e decide o resto pelo que já está no disco.
 if [ -z "$AGENTES" ] && [ "$AVANCADO" = 1 ] && [ "$TEM_TTY" = 1 ] && [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
   PADRAO_AGENTES=$(echo ${ACHADOS:-claude} | tr ' ' ',')
@@ -626,7 +630,7 @@ if [ -n "$AGENTES" ]; then
   for a in ${AGENTES//,/ }; do
     if [ "$a" = claude ]; then
       precisa_home "Claude Code" claude "$CLAUDE_INSTALL" 'agente escolhido' || true
-    elif command -v "$a" >/dev/null; then
+    elif command -v "$(programa_agente "$a")" >/dev/null; then
       ok "$(nome_agente "$a")"; mark_item "$a" ok "$(nome_agente "$a")"
     elif [ "$CHECK" = 1 ] || [ "$UPDATE" = 1 ]; then
       falta "$(nome_agente "$a") — agente escolhido"; mark_item "$a" fila "$(nome_agente "$a")"; PENDENTE+=("$(nome_agente "$a")")
@@ -759,9 +763,9 @@ for a in $AGENTES_NOVOS; do
   mark_item "$a" fazendo "$(nome_agente "$a")"
   if gira "instalando $(nome_agente "$a")" ./scripts/hangar-server-command harness-setup install "$a"; then
     export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
-    if command -v "$a" >/dev/null; then ok "$(nome_agente "$a") instalado"; mark_item "$a" ok "$(nome_agente "$a")"
+    if command -v "$(programa_agente "$a")" >/dev/null; then ok "$(nome_agente "$a") instalado"; mark_item "$a" ok "$(nome_agente "$a")"
     else
-      anota_problema "$(nome_agente "$a") instalou, mas o comando $a não aparece no PATH — abra outro terminal e rode ./install.sh de novo" agente-nao-instalou
+      anota_problema "$(nome_agente "$a") instalou, mas o comando $(programa_agente "$a") não aparece no PATH — abra outro terminal e rode ./install.sh de novo" agente-nao-instalou
       mark_item "$a" falhou "$(nome_agente "$a")"
     fi
   else
@@ -771,7 +775,7 @@ for a in $AGENTES_NOVOS; do
 done
 # Prova do mínimo: sem nenhum agente o app abre, mas não tem o que pilotar.
 TEM_AGENTE=0
-for a in $TODOS_AGENTES; do command -v "$a" >/dev/null && TEM_AGENTE=1; done
+for a in $TODOS_AGENTES; do command -v "$(programa_agente "$a")" >/dev/null && TEM_AGENTE=1; done
 [ "$TEM_AGENTE" = 1 ] || fail_with sem-agente "nenhum agente de código instalado — o Hangar precisa de pelo menos um (./install.sh --agentes=claude)"
 
 # ── 3/8 Token de acesso ──────────────────────────────────────────────────────
@@ -1345,7 +1349,7 @@ cat <<EOF
   O QUE FAZER AGORA
 EOF
 PRIMEIRO_AGENTE=''
-for a in $TODOS_AGENTES; do command -v "$a" >/dev/null && { PRIMEIRO_AGENTE=$a; break; }; done
+for a in $TODOS_AGENTES; do p=$(programa_agente "$a"); command -v "$p" >/dev/null && { PRIMEIRO_AGENTE=$p; break; }; done
 echo "   1. No PC: abra um terminal, digite  ${PRIMEIRO_AGENTE:-claude}  e faça o login (só na primeira vez)."
 if [ "$QR_MOSTRADO" = 1 ]; then
   echo "   2. No celular: leia o QR acima (ou abra $URL_FIM e digite o token)."

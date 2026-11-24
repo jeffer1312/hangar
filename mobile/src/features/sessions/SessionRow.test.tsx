@@ -449,6 +449,7 @@ describe('SessionRow', () => {
   it.each([
     ['codex', false],
     ['kimi', false],
+    ['antigravity', false],
     ['pi', true],
     ['claude', true],
   ])('sem vínculo: %s abre a conversa? bloqueada=%s', async (provider, bloqueada) => {
@@ -456,6 +457,15 @@ describe('SessionRow', () => {
     const linha = container.querySelector<HTMLButtonElement>('button[aria-label^="nova,"]');
     expect(linha).not.toBeNull();
     expect(linha!.disabled).toBe(bloqueada);
+    act(() => root.unmount());
+  });
+
+  it.each([
+    ['claude', true],
+    ['antigravity', false],
+  ])('sem vínculo: %s oferece Retomar? %s', async (provider, oferece) => {
+    const { container, root } = await render({ ...base, name: 'nova', provider: provider as AggSession['provider'], tracked: false });
+    expect(!!container.querySelector('[aria-label="sessao_retomar"]')).toBe(oferece);
     act(() => root.unmount());
   });
 

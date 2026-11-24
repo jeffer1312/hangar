@@ -1,6 +1,6 @@
 // crates/hangar-server/src/search/mod.rs
 //! Índice SQLite (FTS5) das conversas Claude de todas as contas, porte de
-//! `backend/app/transcript_index.py`, mais as de Codex, Pi, omp e Kimi (`agents`). Um escritor só (o produtor ou a passada disparada pela busca,
+//! `backend/app/transcript_index.py`, mais as de Codex, Pi, omp, Kimi e Antigravity (`agents`). Um escritor só (o produtor ou a passada disparada pela busca,
 //! sob a mesma trava); cada leitura abre conexão própria e o WAL a deixa ler durante a escrita.
 //! Também guarda por arquivo o que o Arquivo precisa (cabeçalho, conta, se tem usuário, última
 //! mensagem), para listar sem reabrir os transcripts.
@@ -152,7 +152,7 @@ struct Inner {
     wake: Mutex<Option<std::sync::mpsc::Sender<watch::Wake>>>,
     /// Pastas que o produtor vigia agora; `None` = produtor parado ou observador fora.
     watched: Mutex<Option<watch::Targets>>,
-    /// De onde saem as conversas de Codex, Pi, omp e Kimi; vazio = só Claude.
+    /// De onde saem as conversas de Codex, Pi, omp, Kimi e Antigravity; vazio = só Claude.
     agents: std::sync::OnceLock<AccountEnvironment>,
     /// Falhas já no diário, por (código, chave): só a entrada no estado de falha vai para lá.
     reported: Mutex<HashSet<(&'static str, String)>>,
@@ -192,7 +192,7 @@ impl Index {
         self
     }
 
-    /// Liga as conversas de Codex, Pi, omp e Kimi do ambiente ao índice (uma vez, antes do produtor).
+    /// Liga as conversas de Codex, Pi, omp, Kimi e Antigravity do ambiente ao índice (uma vez, antes do produtor).
     pub fn with_agents(self, env: AccountEnvironment) -> Self {
         let _ = self.inner.agents.set(env);
         self

@@ -264,9 +264,9 @@ impl SessionInfo {
         self.provider == "claude" && self.engine_account.as_deref().is_some_and(|a| !a.is_empty())
     }
     pub fn readable(&self) -> bool { self.tracked != Some(false) && self.jsonl.is_some() }
-    /// O Kimi cria o histórico no primeiro envio. A vida gerenciada já identifica o destino.
-    pub fn waiting_for_kimi_input(&self) -> bool {
-        self.provider == "kimi" && self.tracked == Some(false) && self.jsonl.is_none()
+    /// O Kimi e o Antigravity criam o histórico no primeiro envio. A vida gerenciada já identifica o destino.
+    pub fn waiting_for_first_input(&self) -> bool {
+        matches!(self.provider.as_str(), "kimi" | "antigravity") && self.tracked == Some(false) && self.jsonl.is_none()
             && !self.headless && self.state != "dead" && self.guest_kind.is_none()
             && hangar_api::session::runtime_key(self.lifecycle_id.as_deref()).is_some_and(|key| !key.is_empty())
     }
@@ -279,7 +279,7 @@ impl SessionInfo {
     pub fn orq(&self) -> bool { self.provider == "orq" }
     /// Tem compositor: a linha `orq` lê a linha do tempo, mas ninguém escreve nela.
     pub fn takes_messages(&self) -> bool {
-        (self.readable() || self.waiting_for_kimi_input()) && !self.orq() && !self.read_only()
+        (self.readable() || self.waiting_for_first_input()) && !self.orq() && !self.read_only()
     }
     /// A sessão da outra pessoa num par externo: acompanha, sem escrever nem mexer nela.
     pub fn read_only(&self) -> bool { self.guest_kind.as_deref() == Some("pair") }

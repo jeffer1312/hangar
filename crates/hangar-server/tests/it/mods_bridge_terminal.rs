@@ -92,7 +92,12 @@ async fn a_hand_opened_session_band_and_toasts_match_python() {
         assert_eq!(status, step["status"].as_u64().unwrap() as u16, "{}", step["title"]);
         let frames = mods.replay(name);
         if route == "ui" {
-            if !step["emits"].is_null() { ui = Some(step["emits"].clone()); }
+            if !step["emits"].is_null() {
+                // Diferença deliberada do Python: painel sem árvore (o estado do `/btw` de um `claude -p`) não vira painel solto.
+                let mut emits = step["emits"].clone();
+                if let Some(panes) = emits["panes"].as_array_mut() { panes.retain(|pane| !pane["tree"].is_null()); }
+                ui = Some(emits);
+            }
             let got = frames.iter().find(|(event, _)| *event == "plugin_ui").map(|(_, data)| serde_json::from_str::<Value>(data).unwrap());
             assert_eq!(got, ui, "{}", step["title"]);
         } else {

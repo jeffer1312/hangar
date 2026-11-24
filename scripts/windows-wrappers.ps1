@@ -92,6 +92,25 @@ $MarcasLegadas = @(
     @{ Ini = '# >>> claude-pocket >>>';  Fim = '# <<< claude-pocket <<<'  }
 )
 
+function Raiz-Do-Perfil {
+    <#
+      O bloco aponta pelo ~\.hangar\current quando ele e esta mesma copia: a pasta da versao some na
+      poda, e o current acompanha a troca. Outra copia, ou alvo relativo, fica com a raiz de quem roda.
+    #>
+    $atual = Join-Path $HOME '.hangar\current'
+    if (-not (Test-Path -LiteralPath $atual)) { return $raiz }
+    $item = Get-Item -LiteralPath $atual
+    $alvo = if ($item.LinkType) { @($item.Target)[0] } else { $item.FullName }
+    if (-not $alvo -or -not [IO.Path]::IsPathRooted($alvo)) { return $raiz }
+    # Caminho que o .NET nao normaliza fica com a raiz de quem roda, sem derrubar o passo.
+    try {
+        $de = [IO.Path]::GetFullPath($alvo).TrimEnd('\')
+        $para = [IO.Path]::GetFullPath($raiz).TrimEnd('\')
+    } catch { return $raiz }
+    if ($de -ieq $para) { return $atual }
+    return $raiz
+}
+
 function Instalar-Bloco-No-Perfil($perfil) {
     <#
       Poe (ou atualiza) o bloco do wrapper NUM perfil. Devolve um texto curto pro log.
@@ -117,11 +136,16 @@ function Instalar-Bloco-No-Perfil($perfil) {
     #>
     $texto = Ler-Texto $perfil
     if ($null -eq $texto) { $texto = '' }
-    $bloco = @($MarcaWrapper,
-               ". `"$raiz\scripts\shell\claude.ps1`"",
-               ". `"$raiz\scripts\shell\claude-conta.ps1`"",
-               ". `"$raiz\scripts\shell\codex.ps1`"",
-               $MarcaWrapperFim) -join "`r`n"
+    # O ajudante comum primeiro: os wrappers usam as funcoes dele. So entra o que existe nesta copia,
+    # e o Test-Path no perfil segura a volta para uma versao que ainda nao tinha o arquivo.
+    $raizPerfil = Raiz-Do-Perfil
+    $linhas = @($MarcaWrapper)
+    foreach ($w in @('hangar-open', 'claude', 'claude-conta', 'codex', 'pi', 'omp', 'kimi', 'agy')) {
+        $arq = "$raizPerfil\scripts\shell\$w.ps1"
+        if (Test-Path -LiteralPath $arq -PathType Leaf) { $linhas += "if (Test-Path -LiteralPath `"$arq`") { . `"$arq`" }" }
+    }
+    $linhas += $MarcaWrapperFim
+    $bloco = $linhas -join "`r`n"
 
     # Marca de abertura SEM a de fechamento: arquivo mexido na mao. Nao adivinha onde o bloco
     # termina — o regex abaixo tambem nao casaria, e ai o bloco novo entraria embaixo do meio-bloco

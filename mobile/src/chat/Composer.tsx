@@ -12,7 +12,7 @@ import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting, settleDelivered } from '../stores/chat';
 import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessage, readFirstInput, sendFirstInput, useNewConversation, withAttach } from '../stores/newConversation';
 import { useSessions } from '../stores/sessions';
-import { clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, pendingMediaUpload, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft } from '../stores/drafts';
+import { clearDraft, clearRecoverableDraft, draftOfAnotherSession, sameLifeOwner, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, pendingMediaUpload, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft } from '../stores/drafts';
 import { useServers } from '../stores/servers';
 import { revealOnSend } from '../features/sessions/revealOnSend';
 import { removeDraftAttachment, retainDraftAttachment } from './draftAttachments';
@@ -103,10 +103,10 @@ function dropCopy(uri: string): void {
 
 type DraftLoad = { draft: ConversationDraft | null; recoverable: ConversationDraft | null; dictation: DictationDraft | null; issue: string; blocked: boolean };
 
-function loadDraft(serverId: string, name: string, transcript: string | null): DraftLoad {
+function loadDraft(serverId: string, name: string, transcript: string | null, life: string | null): DraftLoad {
   let resolved: ReturnType<typeof resolveDraftTranscript>;
   try {
-    resolved = resolveDraftTranscript(serverId, name, transcript);
+    resolved = resolveDraftTranscript(serverId, name, transcript, life);
   } catch (e) {
     const issue = e instanceof Error ? e.message : m.draft_read_error();
     // Formato inválido não tem o que salvar; falha de leitura bloqueia gravar para não apagar o guardado.
@@ -130,7 +130,9 @@ const joinDrafts = (before: string, after: string) => (before.trim() && after.tr
 // Guarda o antigo antes de a sessão recriada gravar; um pendente de outra recriação é somado, nunca trocado.
 function keepRecoverable(serverId: string, name: string, old: ConversationDraft): ConversationDraft {
   const pending = readRecoverableDraft(serverId, name);
-  if (pending && pending.transcript === old.transcript && pending.revision === old.revision) return pending;
+  // Sem transcript, duas sessões podem ter a mesma revisão: só a vida separa o pendente desta do da outra.
+  if (pending && pending.transcript === old.transcript && pending.revision === old.revision
+    && (old.transcript !== null || sameLifeOwner(pending.life, old.life))) return pending;
   const value = pending ? { ...old, text: joinDrafts(pending.text, old.text), attachments: mergeAttachments(pending.attachments, old.attachments),
     recordings: mergeRecordings(pending.recordings, old.recordings) } : old;
   writeRecoverableDraft(serverId, name, value);
@@ -241,7 +243,11 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   const transcript = useSessions((s) => (s.byServerRecord?.[origin.serverId]?.find((x) => x.name === origin.name)?.jsonl
     ?? s.rows.find((x) => x.serverId === origin.serverId && x.name === origin.name)?.jsonl) || null);
   const transcriptRef = useRef(transcript);
-  const [boot] = useState(() => loadDraft(origin.serverId, origin.name, transcript));
+  // A vida separa sessões de mesmo nome que não têm transcript (Antigravity) ou ainda não o têm.
+  const life = useSessions((s) => (s.byServerRecord?.[origin.serverId]?.find((x) => x.name === origin.name)?.lifecycle_id
+    ?? s.rows.find((x) => x.serverId === origin.serverId && x.name === origin.name)?.lifecycle_id) || null);
+  const lifeRef = useRef(life);
+  const [boot] = useState(() => loadDraft(origin.serverId, origin.name, transcript, life));
   const draftRef = useRef<ConversationDraft | null>(boot.draft);
   const blockedRef = useRef(boot.blocked);
   const [readBlocked, setReadBlocked] = useState(boot.blocked);
@@ -279,12 +285,13 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       }
       current = draftRef.current;
     }
-    if (current?.transcript && transcriptRef.current && current.transcript !== transcriptRef.current) current = draftRef.current;
+    if (current && draftOfAnotherSession(current, transcriptRef.current, lifeRef.current)) current = draftRef.current;
     const base: ConversationDraft = current
       ?? { version: 1, text: '', revision: 0, transcript: transcriptRef.current, attachments: [], submission: null };
     const value: ConversationDraft = {
       ...base,
       transcript: base.transcript ?? transcriptRef.current,
+      ...(!base.life && lifeRef.current ? { life: lifeRef.current } : {}),
       ...(patch.text !== undefined ? { text: patch.text, revision: base.revision + 1 } : {}),
       ...(patch.attachments !== undefined ? { attachments: toDraftAttachments(patch.attachments) } : {}),
       ...(patch.recordings !== undefined ? { recordings: patch.recordings } : {}),
@@ -398,7 +405,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
         }
         return;
       }
-      if (latest.transcript && transcriptRef.current && latest.transcript !== transcriptRef.current) return;
+      if (draftOfAnotherSession(latest, transcriptRef.current, lifeRef.current)) return;
       const unchanged = textRef.current === (draftRef.current?.text ?? '');
       draftRef.current = latest;
       setRecordings(latest.recordings ?? []);
@@ -453,19 +460,22 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     }
   }, [origin]);
 
-  // null → caminho é a primeira confirmação (Codex iniciando); caminho → outro é sessão recriada.
+  // null → caminho é a primeira confirmação (Codex iniciando); caminho → outro, ou outra vida no nome, é sessão recriada.
   useEffect(() => {
     transcriptRef.current = transcript;
-    const known = draftRef.current?.transcript;
-    if (transcript === null || blockedRef.current) return;
+    lifeRef.current = life;
+    const known = draftRef.current;
+    if ((transcript === null && life === null) || blockedRef.current) return;
     try {
-      setDictation(associateDictationTranscript(origin.serverId, origin.name, transcript));
-      const target = recordingTargetRef.current;
-      if (target?.snapshot.transcript === null) {
-        target.snapshot = { ...target.snapshot, transcript };
+      if (transcript !== null) {
+        setDictation(associateDictationTranscript(origin.serverId, origin.name, transcript));
+        const target = recordingTargetRef.current;
+        if (target?.snapshot.transcript === null) {
+          target.snapshot = { ...target.snapshot, transcript };
+        }
       }
-      if (known === undefined || known === transcript) return;
-      const { draft: kept, recoverable: old } = resolveDraftTranscript(origin.serverId, origin.name, transcript);
+      if (!known || ((transcript === null || known.transcript === transcript) && (life === null || known.life === life))) return;
+      const { draft: kept, recoverable: old } = resolveDraftTranscript(origin.serverId, origin.name, transcript, life);
       if (old) {
         // Gravação que falhou deixou o campo à frente do guardado: conservar o que está na tela.
         const latest = draftRef.current?.text === textRef.current ? old : { ...old, text: textRef.current };
@@ -479,7 +489,8 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
         setPendingAttachments([]);
         setText('');
       } else {
-        draftRef.current = kept ?? (draftRef.current && { ...draftRef.current, transcript });
+        draftRef.current = kept ?? (draftRef.current && { ...draftRef.current, transcript: transcript ?? draftRef.current.transcript,
+          ...(life ? { life } : {}) });
       }
     } catch (e) {
       // Sem onde conservar o antigo, gravar o texto novo o apagaria.
@@ -487,7 +498,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       setReadBlocked(true);
       setDraftIssue(e instanceof Error ? e.message : m.draft_read_error());
     }
-  }, [transcript, origin, setPendingAttachments]);
+  }, [transcript, life, origin, setPendingAttachments]);
 
   useEffect(() => {
     const target = { serverId: origin.serverId, name: origin.name, transcript: transcriptRef.current };
@@ -535,7 +546,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   }, [origin, recoverable]);
 
   const handleRereadDraft = useCallback(() => {
-    const load = loadDraft(origin.serverId, origin.name, transcriptRef.current);
+    const load = loadDraft(origin.serverId, origin.name, transcriptRef.current, lifeRef.current);
     setDraftIssue(load.issue);
     if (load.blocked) return;
     // Texto igual ao último guardado não foi digitado no bloqueio: se for de sessão morta, já está no recuperável.
@@ -1296,7 +1307,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     if (textRef.current !== (draftRef.current?.text ?? '')) return;
     try {
       const before = textRef.current.trim();
-      const applied = applyReadyDictation(origin.serverId, origin.name, transcriptRef.current);
+      const applied = applyReadyDictation(origin.serverId, origin.name, transcriptRef.current, lifeRef.current);
       if (applied) {
         if (applied.voice.issue) cancelVoiceSend(false);
         adoptDictation(applied.voice, before, applied);

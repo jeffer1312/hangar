@@ -9,6 +9,11 @@
 # Instalado pelo install.ps1, que adiciona um bloco marcado no $PROFILE chamando este arquivo.
 # Compativel com Windows PowerShell 5.1 (nada de operador ternario nem API de .NET Core).
 
+# Perfil gravado antes do hangar-open.ps1 existir carrega so este arquivo: o ajudante vem junto.
+if (-not (Get-Command Find-HangarServer -CommandType Function -ErrorAction SilentlyContinue)) {
+    . (Join-Path $PSScriptRoot 'hangar-open.ps1')
+}
+
 function claude {
     # Motor de modelo (Kimi, gateway proprio): mesma regra do wrapper POSIX - quando CP_ENGINE
     # esta setado quem executa e o hangar-engine, que aplica o env e da exec no claude.
@@ -101,37 +106,8 @@ function claude {
             [Console]::Error.WriteLine("hangar: o argumento '$barrou' nao cabe no pedido do Hangar; abrindo o claude sem o Hangar")
         }
         if ($cobre) {
-            # A regra unica dos atalhos (scripts/hangar-server-lookup): CP_RUST_SERVER_BIN vence e nao
-            # cai para outro; sem ela, o bin\ da versao em uso pelo caminho real do current; senao o
-            # mais novo entre o build desta copia e o baixado (empate fica com a copia).
-            $servidor = $null
-            $melhor = $null
-            $escolhido = "$env:CP_RUST_SERVER_BIN".Trim()
-            if ($escolhido) {
-                if ($escolhido -eq '~' -or $escolhido.StartsWith('~\') -or $escolhido.StartsWith('~/')) { $escolhido = $HOME + $escolhido.Substring(1) }
-                if (Test-Path -LiteralPath $escolhido -PathType Leaf) { $servidor = $escolhido }
-            } else {
-                # A troca no Windows deixa so o `current.old` por um instante: espera o link novo ate 1 s.
-                $atual = Join-Path $HOME '.hangar\current'
-                for ($espera = 0; $espera -lt 20 -and -not (Test-Path -LiteralPath $atual) -and (Test-Path -LiteralPath "$atual.old"); $espera++) { Start-Sleep -Milliseconds 50 }
-                $doPacote = Join-Path $atual 'bin\hangar-server.exe'
-                if (Test-Path -LiteralPath $doPacote -PathType Leaf) {
-                    # Pelo caminho real da versao (o `cd -P` do sh); alvo relativo nao e seguido.
-                    $item = Get-Item -LiteralPath $atual
-                    $alvo = if ($item.LinkType) { @($item.Target)[0] } else { $null }
-                    $real = if ($alvo -and [IO.Path]::IsPathRooted($alvo)) { $alvo } else { $item.FullName }
-                    $servidor = Join-Path $real 'bin\hangar-server.exe'
-                } else {
-                    foreach ($c in @((Join-Path $PSScriptRoot '..\..\crates\target\release\hangar-server.exe'),
-                                     (Join-Path $HOME '.hangar\bin\hangar-server.exe'))) {
-                        if (Test-Path -LiteralPath $c -PathType Leaf) {
-                            $item = Get-Item -LiteralPath $c
-                            if (-not $melhor -or $item.LastWriteTimeUtc -gt $melhor.LastWriteTimeUtc) { $melhor = $item }
-                        }
-                    }
-                    if ($melhor) { $servidor = $melhor.FullName }
-                }
-            }
+            # A regra unica dos atalhos mora no scripts/shell/hangar-open.ps1.
+            $servidor = Find-HangarServer
             if (-not $servidor) {
                 [Console]::Error.WriteLine('hangar: hangar-server nao encontrado; abrindo o claude sem o Hangar')
             } else {

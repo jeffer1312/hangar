@@ -93,6 +93,7 @@ Passos marcados:
 | `2026-11-17-vigia-no-lancador-windows` | remove a tarefa `hangar-vigia` e o `.vbs` dela; lançador estável renovado |
 | `2026-11-21-libmpv-video-no-app` | libmpv: pacote do sistema (Linux), Homebrew (macOS), `libmpv-2.dll` ao lado do `Hangar.exe` (Windows) |
 | `2026-11-22-mcp-na-conta-padrao-com-config-dir` | MCP `hangar` no `.claude.json` que a conta padrão lê com `CLAUDE_CONFIG_DIR` (fora da pasta da versão; no pacote, só passo de máquina roda) |
+| `2026-11-23-wrappers-windows-agentes` | bloco dos wrappers no perfil do PowerShell (Windows) |
 
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
 `install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `hangar-server mcp-register` (conteúdo e

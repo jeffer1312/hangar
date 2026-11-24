@@ -128,7 +128,9 @@ impl PricingRefresh {
     pub async fn run(&self) {
         let target = self.dir.join(CACHE);
         let now = SystemTime::now();
-        let modified = tokio::fs::metadata(&target).await.and_then(|m| m.modified()).ok();
+        // Sem o arquivo das janelas, o cache fresco não basta: baixa de novo, sem o 304.
+        let windows_missing = tokio::fs::metadata(target.with_file_name(WINDOWS)).await.is_err();
+        let modified = tokio::fs::metadata(&target).await.and_then(|m| m.modified()).ok().filter(|_| !windows_missing);
         {
             let mut attempted = self.attempted.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if attempted.is_some_and(|at| now.duration_since(at).unwrap_or_default() < TTL) {
