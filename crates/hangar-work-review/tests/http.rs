@@ -164,6 +164,30 @@ async fn a_saved_draft_comes_back_until_the_round_changes() {
     assert_eq!((&body["review"]["id"], body.get("draft")), (&json!("r-2"), None), "rodada nova começa sem escolha: {body}");
 }
 
+/// Duas sessões no mesmo ticket: a que ficou com a rodada velha não passa por cima do rascunho da nova.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_old_round_from_another_session_does_not_replace_the_new_draft() {
+    let routes = Routes::new();
+    routes.bench.connector("help", true, &["--plain-key", "on"]);
+    routes.bench.set_review("help", review("r-1", "waiting", &["47", "86"], "2026-11-18T10:00:00Z"));
+    let old = routes.bench.session("s1", "life-1", None);
+    routes.bench.link("help", "1", &old);
+    routes.bench.session("s2", "life-2", Some("1"));
+    let (status, body) = routes.send("GET", "/api/sessions/s1/work-review", Some(TOKEN), None).await;
+    assert_eq!((status, &body["review"]["id"]), (StatusCode::OK, &json!("r-1")), "{body}");
+    routes.bench.set_review("help", review("r-2", "waiting", &["47", "86"], "2026-11-18T11:00:00Z"));
+    let (_, body) = routes.send("GET", "/api/sessions/s2/work-review", Some(TOKEN), None).await;
+    assert_eq!((&body["ticket_id"], &body["review"]["id"]), (&json!("1"), &json!("r-2")), "{body}");
+    let new = json!({"review_id": "r-2", "choices": {"86": {"choice": "igualar", "reason": ""}}});
+    let (status, body) = routes.send("PUT", "/api/sessions/s2/work-review/draft", Some(TOKEN), Some(new.to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let stale = json!({"review_id": "r-1", "choices": {"47": {"choice": "manter", "reason": "velha"}}});
+    let (status, body) = routes.send("PUT", "/api/sessions/s1/work-review/draft", Some(TOKEN), Some(stale.to_string())).await;
+    assert_eq!((status, &body["detail"]["code"]), (StatusCode::CONFLICT, &json!("stale_review")), "{body}");
+    let (_, body) = routes.send("GET", "/api/sessions/s2/work-review", Some(TOKEN), None).await;
+    assert_eq!(body["draft"], json!({"86": {"choice": "igualar", "reason": ""}}), "{body}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn asset_without_review_id_is_a_bad_request() {
     let routes = Routes::new();

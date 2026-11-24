@@ -203,6 +203,17 @@ describe('WorkReviewSection', () => {
     expect(button(m.work_review_pending_one())).toBeTruthy();
   });
 
+  it('releitura da mesma rodada traz o que outro aparelho mudou', async () => {
+    const both = { 47: { choice: 'igualar', reason: '' }, 86: { choice: 'igualar', reason: '' } };
+    api.fetch.mockResolvedValue({ ...linked(waiting()), draft: both });
+    await render();
+    expect(container.textContent).toContain(m.work_review_ready());
+    api.fetch.mockResolvedValue({ ...linked(waiting()), draft: { ...both, 47: { choice: 'manter', reason: '' } } });
+    await act(async () => setWorkReviewSummaries('srv', { pm: { review_id: 'r-7', state: 'waiting', badge: null, updated_at: 'outra' } }));
+    await flush();
+    expect(button(m.work_review_pending_one())).toBeTruthy();
+  });
+
   it('gravação recusada guarda a escolha para a próxima', async () => {
     api.fetch.mockResolvedValue(linked(waiting()));
     api.save.mockRejectedValueOnce(Object.assign(new Error('400: x'), { status: 400 }));

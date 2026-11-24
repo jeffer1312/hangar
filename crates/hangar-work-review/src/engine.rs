@@ -279,7 +279,14 @@ impl Engine {
                 choices.append(&mut draft.choices);
                 draft.choices = choices;
             }
-            Ok(_) => {}
+            // O rascunho é do ticket, e outra sessão nele pode já estar na rodada nova: quem decide é a revisão de agora.
+            Ok(Some(_)) => {
+                let current = self.read(&session, false).await?.and_then(|linked| linked.review).map(|review| review.id);
+                if current.as_deref() != Some(draft.review_id.as_str()) {
+                    return Err(CallError::connector(ErrorCode::StaleReview, "a revisão mudou; releia antes de marcar").into());
+                }
+            }
+            Ok(None) => {}
             Err(error) => self.warn(&session.name, "work_review_draft_unreadable", &error.kind().to_string()),
         }
         self.drafts.write(&target.connector, &target.ticket_id, &draft).await

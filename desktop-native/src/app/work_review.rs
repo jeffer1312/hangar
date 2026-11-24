@@ -299,10 +299,12 @@ impl Hangar {
         if let Some(loaded) = &loaded {
             // Rodada que abre agora vem com o que ficou guardado, na primeira que falta.
             let queued = panel.saving.get(&key).and_then(|slot| slot.unsaved.as_ref()).filter(|(id, _)| *id == loaded.review.id);
-            let mut local = queued.map(|(_, choices)| choices.clone()).unwrap_or_default();
-            local.extend(panel.choices.drain());
-            panel.choices = model::carry(&model::with_saved(&local, &loaded.draft), &loaded.review);
-            panel.reasons.retain(|id, _| panel.choices.contains_key(id));
+            // Só o que este aparelho ainda não confirmou vence o guardado: o já confirmado outro aparelho pode ter mudado.
+            let unsaved = queued.map(|(_, choices)| choices.clone()).unwrap_or_default();
+            let previous = std::mem::take(&mut panel.choices);
+            panel.choices = model::carry(&model::with_saved(&unsaved, &loaded.draft), &loaded.review);
+            // Caixa de motivo cujo texto mudou de fora nasce de novo com o texto novo.
+            panel.reasons.retain(|id, _| panel.choices.get(id).is_some_and(|picked| previous.get(id) == Some(picked)));
             panel.index = if fresh { model::first_pending(&loaded.review, &panel.choices) }
                 else { panel.index.min(loaded.review.decisions.len().saturating_sub(1)) };
             unboxed = loaded.review.decisions.iter().filter_map(|d| {

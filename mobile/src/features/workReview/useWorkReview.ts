@@ -115,13 +115,13 @@ export function useWorkReview(serverId: string, name: string, enabled = true) {
     // Só o que a rodada ainda mostra: decisões de lotes já enviados saem.
     const keep = (c: WorkReviewChoices) => Object.fromEntries(Object.entries(c).filter(([id]) => shown?.decisions.some((d) => d.id === id)));
     const saved = keep(merged);
-    // Rodada nova abre com o que ficou guardado, na primeira que falta; a mesma rodada (lotes) conserva o que a pessoa
-    // já escolheu aqui por cima do guardado.
+    // Abre com o guardado e, por cima, o que este aparelho ainda não confirmou; rodada nova vai à primeira que falta.
+    // Na mesma rodada o guardado também vence o que já foi confirmado aqui: outro aparelho pode tê-lo mudado.
     if (reviewId.current !== next) {
       reviewId.current = next;
       setChoices(saved);
       setIndex(data.linked && data.review ? firstPendingIndex(data.review, saved) : 0);
-    } else setChoices((prev) => keep({ ...saved, ...prev }));
+    } else setChoices(saved);
     hasData.current = true;
     setLoad({ status: 'ready', data });
   }, [serverId, name]);
