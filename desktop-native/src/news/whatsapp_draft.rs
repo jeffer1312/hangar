@@ -38,7 +38,7 @@ fn sample() -> Option<app::WhatsAppDraft> {
         "id": "news", "origin": format!("{}::site", tr("vault_news_machine")), "chat_number": NUMBER, "chat_name": "Marina",
         "chat_name_source": "contact", "text": tr_shared("whatsapp_draft_news_text", &[]),
         "file": {"name": file, "size": 2_516_582, "source": format!("/home/ana/site/{file}"), "outside_cwd": false},
-        "expires_at": "2026-11-24T14:10:00Z", "state": "pending"
+        "expires_at": "2026-11-24T14:10:00Z", "answer_by": "2026-11-24T14:09:30Z", "state": "pending"
     })).ok()
 }
 
@@ -65,7 +65,8 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
             Some(draft) => {
                 let decline = app::request_button("whatsapp-decline", "news-whatsapp-draft", tr_shared("whatsapp_draft_decline", &[]), false)
                     .outline().tab_stop(false);
-                app::whatsapp_draft_card(&draft, &tr("vault_news_machine"), app::whatsapp_countdown_label("9:12"), send, decline, None)
+                let text = app::whatsapp_mark_invisibles(&tr_shared("whatsapp_draft_news_text", &[]));
+                app::whatsapp_draft_card(&draft, &text, &tr("vault_news_machine"), app::whatsapp_countdown_label("9:12"), send, decline, None)
                     .mx_0().my_0().into_any_element()
             }
             None => div().flex().flex_col().gap_1()

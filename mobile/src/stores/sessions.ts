@@ -54,6 +54,9 @@ const vaultRaw = new Map<string, string>();
 const whatsappOutboxRaw = new Map<string, string>();
 const workReviewsRaw = new Map<string, string>();
 const VAULT_STATES = new Set(['open', 'locked', 'absent', 'offline', 'key_lost']);
+/** Campos guardados por máquina a partir de um evento da lista. */
+type KeyedField = 'vault' | 'whatsappOutbox';
+type KeyedEvent<K extends KeyedField> = SessionsState[K] extends Record<string, infer E> ? E : never;
 
 /** Evento `vault` torto devolve `null`; cartão sem id, interação ou tipo conhecido sai da lista. */
 export function parseVaultEvent(data: string): VaultEvent | null {
@@ -575,28 +578,23 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       slots.set(s.id, patchSlot(slots, s.id, { keyring: state }));
       recompute(set);
     });
-    // Cofre: estado e pedidos abertos, na conexão e a cada troca. Repetido ou torto mantém o último.
-    es.addEventListener('vault', (e) => {
-      if (!active()) return;
-      answered();
-      const data: string = e.data;
-      if (vaultRaw.get(s.id) === data) return;
-      const event = parseVaultEvent(data);
-      if (!event) return;
-      vaultRaw.set(s.id, data);
-      set({ vault: { ...get().vault, [s.id]: event } });
-    });
-    // Rascunhos de WhatsApp pendentes: na conexão e a cada troca. Repetido ou torto mantém o último.
-    es.addEventListener('whatsapp_outbox', (e) => {
-      if (!active()) return;
-      answered();
-      const data: string = e.data;
-      if (whatsappOutboxRaw.get(s.id) === data) return;
-      const event = parseWhatsAppOutboxEvent(data);
-      if (!event) return;
-      whatsappOutboxRaw.set(s.id, data);
-      set({ whatsappOutbox: { ...get().whatsappOutbox, [s.id]: event } });
-    });
+    // Evento guardado por máquina: chega na conexão e a cada troca. Repetido ou torto mantém o último.
+    const listenKeyed = <K extends KeyedField>(name: string, raw: Map<string, string>, parse: (data: string) => KeyedEvent<K> | null, field: K) => {
+      es.addEventListener(name, (e) => {
+        if (!active()) return;
+        answered();
+        const data: string = e.data;
+        if (raw.get(s.id) === data) return;
+        const event = parse(data);
+        if (!event) return;
+        raw.set(s.id, data);
+        set({ [field]: { ...get()[field], [s.id]: event } } as Pick<SessionsState, K>);
+      });
+    };
+    // Cofre: estado e pedidos abertos.
+    listenKeyed('vault', vaultRaw, parseVaultEvent, 'vault');
+    // Rascunhos de WhatsApp pendentes.
+    listenKeyed('whatsapp_outbox', whatsappOutboxRaw, parseWhatsAppOutboxEvent, 'whatsappOutbox');
     // Etiquetas da máquina e das contas: chegam na conexão e a cada troca. Repetido ou torto mantém as últimas.
     es.addEventListener('tags', (e) => {
       if (!active()) return;

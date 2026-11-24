@@ -1,25 +1,13 @@
-import { useCallback, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useIsFocused } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { dreamErrorText, dreamProgressLines, dreamSince, dreamSpan, dreamUsd, type DreamProgress } from '@hangar/core';
 import { SectionCard } from '../config/SectionCard';
 import { useSettingsColors } from '../config/colors';
 import { Icon } from '../../ui/Icon';
+import { useNow } from '../../ui/useNow';
 import { Pulse } from './rows';
 import * as m from '../../paraglide/messages';
-
-/** Relógio da tela para "há N s" e "Sonhou há…": só corre com a tela em foco. Não lê o servidor. */
-function useNow(running: boolean) {
-  const [now, setNow] = useState(() => Date.now());
-  useFocusEffect(useCallback(() => {
-    if (!running) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [running]));
-  return now;
-}
 
 // Alvo de toque mínimo; o raio é a metade para o botão de uma linha sair em pílula.
 const BUTTON = 44;
@@ -45,7 +33,9 @@ export function ProgressCard({ live, finished, busy, nextHour, onStop, onChanges
 }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
-  const now = useNow(!!live || !!finished);
+  // O relógio de "há N s" e "Sonhou há…" só corre com a tela em foco.
+  const focused = useIsFocused();
+  const now = useNow(focused && (!!live || !!finished));
   if (live) {
     const lines = dreamProgressLines(live);
     return <SectionCard>

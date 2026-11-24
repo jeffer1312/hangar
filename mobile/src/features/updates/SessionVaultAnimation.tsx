@@ -2,7 +2,7 @@ import { Text, View } from 'react-native';
 import Animated, { useAnimatedStyle, useReducedMotion, withTiming } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 import { ComposerBox } from '../../chat/ComposerField';
-import { RequestNotice } from '../vault/VaultRequests';
+import { RequestNotice } from '../requests/ownerRequests';
 import { superficie } from '../../theme/superficie';
 import { useScriptStep } from './scriptStep';
 import * as m from '../../paraglide/messages';
@@ -30,7 +30,8 @@ export function SessionVaultAnimation({ width }: { width: number }) {
     {/* A faixa fica no layout mesmo invisível: a altura não muda de um quadro para outro. */}
     <View>
       <Animated.View style={card}>
-        <RequestNotice title={m.vault_app_session_entry({ label: m.vault_app_session_news_label() })} onPress={noop} />
+        <RequestNotice icon="KeyRound" hint={m.vault_app_requests_open()} title={m.vault_app_session_entry({ label: m.vault_app_session_news_label() })}
+          onPress={noop} />
       </Animated.View>
       <Animated.View style={[styles.result, result]}>
         <Text style={styles.agent}>{m.vault_app_session_news_result()}</Text>

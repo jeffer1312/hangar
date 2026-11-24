@@ -100,8 +100,9 @@ pub(crate) use controls::{SPEED_TIERS, speed_label, speed_texts};
 pub(crate) use settings::segments_preview;
 pub(crate) use whatsapp::{ConnectedFacts as WhatsAppConnected, connected_summary as whatsapp_connected_summary, pair_card as whatsapp_pair_card,
     qr_row as whatsapp_qr_row, risk_box as whatsapp_risk_box, usage_box as whatsapp_usage_box};
-pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
-pub(crate) use whatsapp_outbox::{Draft as WhatsAppDraft, countdown_label as whatsapp_countdown_label, draft_card as whatsapp_draft_card};
+pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_heading, request_pair};
+pub(crate) use whatsapp_outbox::{Draft as WhatsAppDraft, countdown_label as whatsapp_countdown_label, draft_card as whatsapp_draft_card,
+    mark_invisibles as whatsapp_mark_invisibles};
 pub(crate) use create::{base_button, base_row, mode_row, provider_segment, provider_track, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
@@ -2212,17 +2213,15 @@ impl Hangar {
                         servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "keyring" => keyring::locked(&frame.data),
                         _ => None,
                     };
-                    // Pedidos do cofre dela, com a mesma regra da queda.
-                    let vault = match &update {
-                        servers::RemoteUpdate::Stream(Update::Offline(_)) => Some(None),
-                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "vault" => Some(Some(frame.data.clone())),
-                        _ => None,
-                    };
-                    // Rascunhos de WhatsApp dela, com a mesma regra da queda.
-                    let whatsapp = match &update {
-                        servers::RemoteUpdate::Stream(Update::Offline(_)) => Some(None),
-                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "whatsapp_outbox" => Some(Some(frame.data.clone())),
-                        _ => None,
+                    // Pedidos do cofre e rascunhos de WhatsApp dela, com a mesma regra da queda: o stream caído apaga os dois.
+                    let (vault, whatsapp) = match &update {
+                        servers::RemoteUpdate::Stream(Update::Offline(_)) => (Some(None), Some(None)),
+                        servers::RemoteUpdate::Stream(Update::Frame(frame)) => match frame.event.as_str() {
+                            "vault" => (Some(Some(frame.data.clone())), None),
+                            "whatsapp_outbox" => (None, Some(Some(frame.data.clone()))),
+                            _ => (None, None),
+                        },
+                        _ => (None, None),
                     };
                     // Pedido de navegador de uma sessão desta máquina chega pela lista dela, seja ela a ativa ou não.
                     let nav = match &update {
@@ -2251,7 +2250,7 @@ impl Hangar {
                         self.redraw(panes::Area::Nav, cx);
                         cx.notify();
                     }
-                    if let Some(data) = whatsapp && self.set_whatsapp_outbox(&key, data.as_ref(), cx) {
+                    if let Some(data) = whatsapp && self.set_whatsapp_outbox(&key, data.as_ref(), cx) == Some(true) {
                         self.redraw(panes::Area::Nav, cx);
                         cx.notify();
                     }
@@ -2337,7 +2336,7 @@ impl Hangar {
                     let server = self.active_key();
                     if self.set_keyring(&server, false, window, cx) { self.redraw(panes::Area::Nav, cx); }
                     if self.set_vault_requests(&server, None, window, cx) { self.redraw(panes::Area::Nav, cx); }
-                    if self.set_whatsapp_outbox(&server, None, cx) { self.redraw(panes::Area::Nav, cx); }
+                    if self.set_whatsapp_outbox(&server, None, cx) == Some(true) { self.redraw(panes::Area::Nav, cx); }
                     // Stream da lista caído: o chip e os blocos não mostram terminal velho dele.
                     if !std::mem::take(&mut self.live_terms).is_empty() {
                         let server = self.active_key();
@@ -2382,9 +2381,10 @@ impl Hangar {
                 }
                 else if frame.event == "whatsapp_outbox" {
                     let server = self.active_key();
-                    visible = self.set_whatsapp_outbox(&server, Some(&frame.data), cx);
+                    let read = self.set_whatsapp_outbox(&server, Some(&frame.data), cx);
+                    visible = read == Some(true);
                     if visible { self.redraw(panes::Area::Nav, cx); }
-                    whatsapp_outbox::parse(&frame.data).is_some()
+                    read.is_some()
                 }
                 else if frame.event == "tags" {
                     let server = self.active_key();

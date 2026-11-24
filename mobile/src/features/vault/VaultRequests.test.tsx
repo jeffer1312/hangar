@@ -80,3 +80,9 @@ it('no chat da sessão que pediu, a faixa abre aquele pedido; em outra sessão, 
   expect(useVaultTarget.getState().target).toEqual({ serverId: 'a', requestId: 'r1' });
   expect(container.textContent).toContain('gh auth status');
 });
+
+it('no chat, pedido de máquina com a lista caída não aparece', async () => {
+  useSessions.setState({ byServer: [bucket('a', { error: 'offline' })] });
+  await act(async () => { root.render(<SessionVaultRequests serverId="a" name="sessao" />); });
+  expect(container.querySelector(`button[aria-label="${m.vault_app_session_approve({ entry: 'github' })}"]`)).toBeNull();
+});

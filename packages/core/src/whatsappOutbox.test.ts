@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  DRAFT_TOOL_DEADLINE_S, answerWhatsAppDraft, draftCharCount, draftFileSize, draftRefusalEndsCard, draftSecondsLeft, formatCountdown, invisibleMark,
-  markInvisibles, parseWhatsAppOutboxEvent, whatsappDraftRefusalText,
+  answerWhatsAppDraft, draftCharCount, draftRefusalEndsCard, draftSecondsLeft, invisibleMark, markInvisibles, parseWhatsAppOutboxEvent,
+  whatsappDraftRefusalText,
 } from './whatsappOutbox';
+import { formatCountdown } from './format';
+import invisibleCases from './whatsappInvisible.fixtures.json';
 import * as m from './paraglide/messages';
 
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
@@ -11,7 +13,7 @@ const draft = (extra: Record<string, unknown> = {}) => ({
   id: 'd1', origin: 'casa::web', chat: '5511987654321@s.whatsapp.net', chat_kind: 'contact', chat_number: '5511987654321',
   chat_name: 'Carlos', chat_name_source: 'push', recent: [{ from_me: false, sender: 'Carlos', at: '2026-11-24T14:02:00Z', text: 'oi' }],
   text: 'segue', reply_to: '', quoted_text: '', file: null, created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z',
-  state: 'pending', via: '', answered_at: '', message_id: '', error: '', wa_code: 0, ...extra,
+  answer_by: '2026-11-24T14:09:30Z', state: 'pending', via: '', answered_at: '', message_id: '', error: '', wa_code: 0, ...extra,
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -27,6 +29,7 @@ describe('evento whatsapp_outbox', () => {
     expect(event?.drafts.map((d) => d.id)).toEqual(['d1']);
     expect(event?.drafts[0]).toMatchObject({ chat_name_source: 'push', chat_kind: 'contact', file: { name: 'a.zip', outside_cwd: true } });
     expect(event?.drafts[0].recent).toEqual([{ from_me: false, sender: 'Carlos', at: '2026-11-24T14:02:00Z', text: 'oi' }]);
+    expect(event?.drafts[0].answer_by).toBe('2026-11-24T14:09:30Z');
   });
 
   it('lista vazia é sem cartões; corpo torto é null (o anterior fica)', () => {
@@ -45,24 +48,13 @@ describe('evento whatsapp_outbox', () => {
 describe('caracteres invisíveis', () => {
   const shown = (text: string) => markInvisibles(text).map((p) => (p.kind === 'mark' ? invisibleMark(p.code) : p.text)).join('');
 
-  it('marca espaço de largura zero, controle e inversão de direção', () => {
-    expect(shown('nada perdido\u200B')).toBe('nada perdido⟨U+200B⟩');
-    expect(shown('a\u202Eb\u0007c\u00ADd')).toBe('a⟨U+202E⟩b⟨U+0007⟩c⟨U+00AD⟩d');
-    expect(shown('x\r\ny')).toBe('x⟨U+000D⟩\ny');
+  // Os mesmos casos do nativo (`whatsapp_outbox.rs`).
+  it.each(invisibleCases.cases)('$name', ({ input, shown: expected }) => {
+    expect(shown(input)).toBe(expected);
   });
 
-  it('quebra de linha e tabulação ficam como estão', () => {
+  it('quebra de linha e tabulação ficam num trecho só', () => {
     expect(markInvisibles('a\n\tb')).toEqual([{ kind: 'text', text: 'a\n\tb' }]);
-  });
-
-  it('caractere de tag (texto escondido) é marcado com o código de cinco dígitos', () => {
-    expect(shown('ok\u{E0041}')).toBe('ok⟨U+E0041⟩');
-  });
-
-  it('ZWJ e seletor de emoji dentro de emoji não são marcados; soltos no texto, são', () => {
-    expect(shown('👨\u200D👩 ❤\uFE0F ©\uFE0F')).toBe('👨\u200D👩 ❤\uFE0F ©\uFE0F');
-    expect(shown('Enviar\u200D')).toBe('Enviar⟨U+200D⟩');
-    expect(shown('\u200B\u200D')).toBe('⟨U+200B⟩⟨U+200D⟩');
   });
 
   it('separa os trechos na ordem', () => {
@@ -75,33 +67,18 @@ describe('cartão', () => {
     expect(draftCharCount('🚀a')).toBe(2);
   });
 
-  it('tempo restante em segundos e no formato m:ss', () => {
+  it('conta até answer_by; sem ele legível, até expires_at', () => {
     const now = Date.parse('2026-11-24T14:00:48Z');
-    const left = (expires_at: string, created_at = '') => draftSecondsLeft({ created_at, expires_at }, now);
-    expect(left('2026-11-24T14:10:00Z')).toBe(552);
-    expect(formatCountdown(552)).toBe('9:12');
-    expect(left('2026-11-24T13:00:00Z')).toBe(0);
-    expect(left('ruim')).toBe(0);
-  });
-
-  it('conta até o prazo da tool (570 s da criação) quando ele vem antes de expires_at', () => {
-    const now = Date.parse('2026-11-24T14:00:48Z');
-    const left = (expires_at: string, created_at: string) => draftSecondsLeft({ created_at, expires_at }, now);
-    expect(DRAFT_TOOL_DEADLINE_S).toBe(570);
-    // Criado às 14:00:00: a tool desiste às 14:09:30, antes das 14:10:00 do serviço.
-    expect(left('2026-11-24T14:10:00Z', '2026-11-24T14:00:00Z')).toBe(522);
+    const left = (answer_by: string, expires_at = '2026-11-24T14:10:00Z') => draftSecondsLeft({ answer_by, expires_at }, now);
+    // O Hangar manda o prazo da tool (14:09:30), antes das 14:10:00 do serviço.
+    expect(left('2026-11-24T14:09:30Z')).toBe(522);
     expect(formatCountdown(522)).toBe('8:42');
-    // expires_at antes do prazo da tool vale ele.
-    expect(left('2026-11-24T14:05:00Z', '2026-11-24T14:00:00Z')).toBe(252);
-    expect(left('2026-11-24T14:10:00Z', 'ruim')).toBe(552);
-    expect(left('ruim', '2026-11-24T14:00:00Z')).toBe(0);
-    expect(draftSecondsLeft({ created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z' }, Date.parse('2026-11-24T14:09:45Z'))).toBe(0);
-  });
-
-  it('tamanho do anexo', () => {
-    expect(draftFileSize(500)).toBe('500 B');
-    expect(draftFileSize(88 * 1024)).toBe('88 KB');
-    expect(draftFileSize(2.4 * 1024 * 1024)).toMatch(/^2[.,]4 MB$/);
+    expect(left('')).toBe(552);
+    expect(formatCountdown(552)).toBe('9:12');
+    expect(left('ruim')).toBe(552);
+    expect(left('2026-11-24T13:00:00Z')).toBe(0);
+    expect(left('', 'ruim')).toBe(0);
+    expect(draftSecondsLeft({ answer_by: '2026-11-24T14:09:30Z', expires_at: '2026-11-24T14:10:00Z' }, Date.parse('2026-11-24T14:09:45Z'))).toBe(0);
   });
 
   it('expirado, respondido e inexistente tiram o cartão; os outros ficam', () => {

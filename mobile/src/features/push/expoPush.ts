@@ -96,8 +96,8 @@ export function openFromNotification(data: unknown, servers: Server[]): void {
     openWhatsAppDraft({ serverId: d.server_id as string, draftId: d.whatsapp_draft_id });
     router.push('/');
   // Pedido do cofre: a folha mora na raiz do app; a lista mantém o stream que a carrega.
-  } else if (typeof d.request_id === 'string' && d.request_id && typeof d.server_id === 'string' && servers.some((s) => s.id === d.server_id)) {
-    openVaultRequest({ serverId: d.server_id, requestId: d.request_id });
+  } else if (typeof d.request_id === 'string' && d.request_id && ownerKnown) {
+    openVaultRequest({ serverId: d.server_id as string, requestId: d.request_id });
     router.push('/');
   } else if (known && typeof d.session === 'string' && d.session) {
     router.push({ pathname: '/s/[server]/[name]', params: { server: d.server as string, name: d.session } });

@@ -74,7 +74,8 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
                 .into_any_element()
         } else {
             let body = app::approve_body(Some("exec"), &tr("vault_news_command"), allow, deny);
-            app::request_card("news", &tr("vault_news_machine"), title, &tr("vault_news_reason"), body, None).mx_0().my_0().into_any_element()
+            app::request_card("news", app::request_heading(tr("vault_request_heading"), &tr("vault_news_machine"), None), title, &tr("vault_news_reason"), body, None)
+                .mx_0().my_0().into_any_element()
         };
         div().relative().top(px(((SLIDE_STEPS - step) * 4) as f32)).opacity(0.25 + 0.25 * step as f32).child(content)
     });

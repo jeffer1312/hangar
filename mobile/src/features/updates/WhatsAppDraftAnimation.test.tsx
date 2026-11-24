@@ -2,7 +2,7 @@
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
-import { draftFileSize } from '@hangar/core';
+import { fmtBytes } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
 // O mock padrão do reanimated já responde movimento reduzido.
@@ -33,7 +33,7 @@ it('movimento reduzido para no cartão aberto: número, texto exato, anexo com c
     const draft = sampleDraft();
     expect(text).toContain('5500912345678');
     expect(text).toContain(m.whatsapp_draft_news_text());
-    expect(text).toContain(`${draft.file!.name} · ${draftFileSize(draft.file!.size)}`);
+    expect(text).toContain(`${draft.file!.name} · ${fmtBytes(draft.file!.size)}`);
     expect(text).toContain(draft.file!.source);
     expect(text).toContain(m.whatsapp_draft_send());
     expect(text).toContain('9:12');

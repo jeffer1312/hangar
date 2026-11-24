@@ -22,14 +22,14 @@ vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: mocks.ok, erro: mocks.erro } }));
 vi.mock('../pair/identities', () => ({ useIdentities: () => ({ identities: new Map([['a', 'a']]), loading: new Set() }) }));
 
-// Relógio fixo: a tool desiste 570 s depois de created_at (14:09:30), antes do expires_at (14:10:00); às 14:00:48 o
-// cartão mostra 8:42.
+// Relógio fixo: o cartão conta até answer_by (14:09:30, o prazo da tool, antes do expires_at das 14:10:00); às 14:00:48
+// mostra 8:42.
 const NOW = new Date('2026-11-24T14:00:48Z');
 
 const draft = (id: string, extra: Partial<WhatsAppDraft> = {}): WhatsAppDraft => ({
   id, origin: 'a::sessao', chat: '5511987654321@s.whatsapp.net', chat_kind: 'contact', chat_number: '5511987654321',
   chat_name: 'Carlos', chat_name_source: 'contact', recent: [], text: 'nada perdido\u200B', reply_to: '', quoted_text: '',
-  file: null, created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', state: 'pending', ...extra,
+  file: null, created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', answer_by: '2026-11-24T14:09:30Z', state: 'pending', ...extra,
 });
 const event = (...drafts: WhatsAppDraft[]): WhatsAppOutboxEvent => ({ drafts });
 const bucket = (id: string, extra: Partial<ServerBucket> = {}) => ({
@@ -94,6 +94,18 @@ it('no chat da sessão que pediu, o aviso abre aquele rascunho; em outra sessão
   await act(async () => { button(banner)!.click(); });
   expect(useWhatsAppTarget.getState().target).toEqual({ serverId: 'a', draftId: 'd3' });
   expect(container.textContent).toContain('5511987654321');
+});
+
+it('no chat, rascunho de máquina com a lista caída não aparece', async () => {
+  useSessions.setState({ byServer: [bucket('a', { error: 'offline' })], whatsappOutbox: { a: event(draft('d9')) } });
+  await act(async () => { root.render(<SessionOutboxRequests serverId="a" name="sessao" />); });
+  expect(button(m.whatsapp_draft_session_notice({ name: 'Carlos' }))).toBeNull();
+});
+
+it('sem answer_by legível, conta até expires_at', async () => {
+  await render([bucket('a')], { a: event(draft('d10', { answer_by: '' })) });
+  await act(async () => { openWhatsAppDraft({ serverId: 'a', draftId: 'd10' }); });
+  expect(container.textContent).toContain('9:12');
 });
 
 it('Enviar responde com via mobile e o cartão some', async () => {

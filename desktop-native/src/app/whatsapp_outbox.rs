@@ -43,24 +43,23 @@ pub(crate) struct Draft {
     quoted_text: Option<String>,
     #[serde(default)]
     file: Option<DraftFile>,
-    #[serde(default)]
-    created_at: Option<String>,
     expires_at: String,
+    /// Até quando o cartão conta: o menor entre `expires_at` e o prazo da tool que espera a resposta (do Hangar).
+    #[serde(default)]
+    answer_by: Option<String>,
     state: String,
 }
 
-#[derive(serde::Deserialize)]
-struct Event { drafts: Vec<Value> }
-
 /// Rascunhos pendentes do evento; `None` = corpo que não se lê (o anterior fica). Rascunho torto ou que não está mais
-/// pendente sai da lista: só `pending` aceita resposta.
+/// pendente sai da lista: só `pending` aceita resposta. Lê cada rascunho direto do evento, sem copiar o JSON.
 pub(super) fn parse(data: &Value) -> Option<Vec<Draft>> {
-    let event = serde_json::from_value::<Event>(data.clone()).ok()?;
-    Some(event.drafts.into_iter().filter_map(|d| serde_json::from_value::<Draft>(d).ok())
+    let drafts = data.get("drafts")?.as_array()?;
+    Some(drafts.iter().filter_map(|d| <Draft as serde::Deserialize>::deserialize(d).ok())
         .filter(|d| d.state == "pending" && !d.id.is_empty() && !d.chat_number.is_empty()).collect())
 }
 
-// A mesma lista do `whatsappOutbox.ts` do core: o que não aparece na tela ou mexe na ordem do texto.
+// A mesma lista do `whatsappOutbox.ts` do core, conferida pelos casos de `whatsappInvisible.fixtures.json`: o que não
+// aparece na tela ou mexe na ordem do texto.
 const INVISIBLE: &[(u32, u32)] = &[
     (0x0000, 0x0008), (0x000b, 0x001f), (0x007f, 0x009f), (0x00ad, 0x00ad), (0x034f, 0x034f), (0x061c, 0x061c),
     (0x115f, 0x1160), (0x17b4, 0x17b5), (0x180b, 0x180f), (0x200b, 0x200f), (0x2028, 0x202e), (0x2060, 0x206f),
@@ -73,9 +72,12 @@ fn emoji_glue(cp: u32) -> bool { matches!(cp, 0x200d | 0xfe0e | 0xfe0f) }
 
 fn invisible(cp: u32) -> bool { INVISIBLE.iter().any(|&(a, b)| (a..=b).contains(&cp)) }
 
-/// O texto com cada caractere invisível ou de controle trocado pela marca `⟨U+200B⟩`, e onde cada marca ficou (em bytes),
-/// para o destaque. Quebra de linha e tabulação ficam como estão.
-pub(super) fn mark_invisibles(text: &str) -> (String, Vec<Range<usize>>) {
+/// O texto como o cartão o mostra e onde cada marca ficou (em bytes), para o destaque.
+pub(crate) type MarkedText = (SharedString, Vec<Range<usize>>);
+
+/// O texto com cada caractere invisível ou de controle trocado pela marca `⟨U+200B⟩`. Quebra de linha e tabulação ficam como
+/// estão.
+pub(crate) fn mark_invisibles(text: &str) -> MarkedText {
     let (mut out, mut marks) = (String::with_capacity(text.len()), Vec::new());
     let (mut prev, mut prev_marked) = (None::<u32>, false);
     for ch in text.chars() {
@@ -91,35 +93,19 @@ pub(super) fn mark_invisibles(text: &str) -> (String, Vec<Range<usize>>) {
         }
         (prev, prev_marked) = (Some(cp), mark);
     }
-    (out, marks)
+    (out.into(), marks)
 }
 
-/// A tool `whatsapp_draft` recusa o rascunho aos 570 s da chamada (o MCP corta antes dos 600 s do serviço): depois disso
-/// ninguém espera a resposta, então o cartão conta só até aí. O mesmo número do `whatsappOutbox.ts` do core.
-const TOOL_DEADLINE_SECS: i64 = 570;
-
-/// Segundos até o rascunho deixar de aceitar resposta: o menor entre `expires_at` e `created_at` + o prazo da tool. Nunca
-/// negativo; `expires_at` ilegível conta como expirado; `created_at` ilegível fica de fora.
-pub(super) fn seconds_left(created_at: Option<&str>, expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> i64 {
+/// Até quando o rascunho aceita resposta: `answer_by`; sem ele legível, `expires_at`. `None`: nenhum se lê, e o cartão conta
+/// como expirado.
+pub(super) fn answer_deadline(answer_by: Option<&str>, expires_at: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     let parse = |at: &str| chrono::DateTime::parse_from_rfc3339(at).ok().map(|t| t.with_timezone(&chrono::Utc));
-    let Some(expires) = parse(expires_at) else { return 0 };
-    let end = created_at.and_then(parse).map_or(expires, |created| expires.min(created + chrono::TimeDelta::seconds(TOOL_DEADLINE_SECS)));
-    (end - now).num_seconds().max(0)
+    answer_by.and_then(|at| parse(at)).or_else(|| parse(expires_at))
 }
 
-/// `9:12`.
-pub(super) fn countdown(seconds: i64) -> String { format!("{}:{:02}", seconds / 60, seconds % 60) }
-
-/// Tamanho do anexo como o core: bytes, KB inteiro, MB e GB com uma casa (unidades de 1024).
-pub(super) fn file_size(bytes: u64, english: bool) -> String {
-    const MB: f64 = 1024. * 1024.;
-    let one = |value: f64| { let text = format!("{value:.1}"); if english { text } else { text.replace('.', ",") } };
-    match bytes {
-        b if b < 1024 => format!("{b} B"),
-        b if b < 1024 * 1024 => format!("{} KB", (b as f64 / 1024.).round() as u64),
-        b if (b as f64) < MB * 1024. => format!("{} MB", one(b as f64 / MB)),
-        b => format!("{} GB", one(b as f64 / (MB * 1024.))),
-    }
+/// Segundos até `deadline`, nunca negativo.
+pub(super) fn seconds_left(deadline: Option<chrono::DateTime<chrono::Utc>>, now: chrono::DateTime<chrono::Utc>) -> i64 {
+    deadline.map_or(0, |end| (end - now).num_seconds().max(0))
 }
 
 /// Hora local de uma mensagem (`14:02`); vazio quando a data não se lê.
@@ -156,32 +142,18 @@ pub(super) fn refusal_text(code: Option<&str>, locked_until: Option<&str>) -> Op
     Some(tr_shared(key, &[]))
 }
 
-/// O "expira em 9:12" do cartão, redesenhado a cada segundo enquanto o cartão existe.
-pub(super) struct Countdown { created: Option<String>, expires: String }
+/// O "expira em 9:12" do cartão: o relógio da `WhatsAppOutbox` o redesenha a cada segundo.
+pub(super) struct Countdown { deadline: Option<chrono::DateTime<chrono::Utc>> }
 
 impl Render for Countdown {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        countdown_label(&countdown(seconds_left(self.created.as_deref(), &self.expires, chrono::Utc::now())))
+        countdown_label(&crate::audio::clock(seconds_left(self.deadline, chrono::Utc::now()) as f64))
     }
 }
 
 /// O "expira em 9:12" do cabeçalho do cartão.
 pub(crate) fn countdown_label(left: &str) -> Div {
     div().flex_shrink_0().font_weight(FontWeight::NORMAL).text_color(theme::muted()).child(tr_shared("whatsapp_draft_expires_in", &[("time", left)]))
-}
-
-fn countdown_view(draft: &Draft, cx: &mut App) -> Entity<Countdown> {
-    let (created, expires) = (draft.created_at.clone(), draft.expires_at.clone());
-    cx.new(|cx| {
-        // O cartão some e leva a view junto: o laço para no primeiro `update` que falha.
-        cx.spawn(async move |view, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                if view.update(cx, |_, cx| if chrome::window_active() { cx.notify() }).is_err() { break; }
-            }
-        }).detach();
-        Countdown { created, expires }
-    })
 }
 
 /// Clique que responde o cartão `id`. Pela referência fraca, como no cofre.
@@ -192,26 +164,48 @@ fn answer_on(id: &str, send: bool, cx: &mut Context<WhatsAppOutbox>) -> impl Fn(
     }
 }
 
-struct Card { draft: Draft, clock: Entity<Countdown>, sending: bool, error: Option<String> }
+/// `text`: o texto do rascunho já marcado, calculado quando o rascunho chega, não a cada desenho.
+struct Card { draft: Draft, text: MarkedText, clock: Entity<Countdown>, sending: bool, error: Option<String> }
 
-/// Os cartões de uma máquina. Entidade própria: o diálogo da barra de abas mostra a mesma.
-pub(super) struct WhatsAppOutbox { api: Option<Api>, runtime: Arc<Runtime>, machine: String, cards: Vec<Card> }
+/// Os cartões de uma máquina. Entidade própria: o diálogo da barra de abas mostra a mesma. `clock`: um relógio para todos os
+/// cartões, ligado só enquanto há cartão.
+pub(super) struct WhatsAppOutbox { api: Option<Api>, runtime: Arc<Runtime>, machine: String, cards: Vec<Card>, clock: Option<Task<()>> }
 
 impl WhatsAppOutbox {
     /// Rascunho que continua na lista guarda o envio em curso e o erro mostrado.
     fn apply(&mut self, api: Option<Api>, machine: String, list: Vec<Draft>, cx: &mut Context<Self>) {
         (self.api, self.machine) = (api, machine);
         let mut old = std::mem::take(&mut self.cards);
-        self.cards = list.into_iter().map(|draft| match old.iter().position(|c| c.draft.id == draft.id) {
-            Some(at) => {
-                let mut card = old.swap_remove(at);
-                if (&card.draft.created_at, &card.draft.expires_at) != (&draft.created_at, &draft.expires_at) { card.clock = countdown_view(&draft, cx); }
-                card.draft = draft;
-                card
+        self.cards = list.into_iter().map(|draft| {
+            let deadline = answer_deadline(draft.answer_by.as_deref(), &draft.expires_at);
+            match old.iter().position(|c| c.draft.id == draft.id) {
+                Some(at) => {
+                    let mut card = old.swap_remove(at);
+                    if card.draft.text != draft.text { card.text = mark_invisibles(&draft.text); }
+                    card.clock.update(cx, |clock, _| clock.deadline = deadline);
+                    card.draft = draft;
+                    card
+                }
+                None => Card { text: mark_invisibles(&draft.text), clock: cx.new(|_| Countdown { deadline }), draft, sending: false, error: None },
             }
-            None => Card { clock: countdown_view(&draft, cx), draft, sending: false, error: None },
         }).collect();
+        self.tick(cx);
         cx.notify();
+    }
+
+    /// Liga o relógio quando há cartão e o desliga quando não há.
+    fn tick(&mut self, cx: &mut Context<Self>) {
+        if self.cards.is_empty() { self.clock = None; return; }
+        if self.clock.is_some() { return; }
+        self.clock = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let alive = this.update(cx, |this, cx| if chrome::window_active() {
+                    for card in &this.cards { card.clock.update(cx, |_, cx| cx.notify()); }
+                });
+                if alive.is_err() { break; }
+            }
+        }));
     }
 
     pub(super) fn count(&self) -> usize { self.cards.len() }
@@ -249,6 +243,7 @@ impl WhatsAppOutbox {
                     // Quem tira o cartão de vez é o evento; aqui ele só sai da frente.
                     Ok(_) => {
                         this.cards.retain(|c| c.draft.id != id);
+                        this.tick(cx);
                         if send { window.push_notification(Notification::success(tr_shared("whatsapp_draft_sending", &[])), cx); }
                     }
                     Err(error) => {
@@ -257,6 +252,7 @@ impl WhatsAppOutbox {
                         // Expirado, respondido em outra tela ou apagado não volta: o cartão sai e o motivo vai no aviso.
                         if ends_card(code) {
                             this.cards.retain(|c| c.draft.id != id);
+                            this.tick(cx);
                             window.push_notification(Notification::warning(text), cx);
                         } else if let Some(card) = this.cards.iter_mut().find(|c| c.draft.id == id) {
                             (card.sending, card.error) = (false, Some(text));
@@ -273,18 +269,15 @@ impl WhatsAppOutbox {
         let (id, off) = (card.draft.id.clone(), card.sending);
         let send = request_button("whatsapp-send", &id, tr_shared("whatsapp_draft_send", &[]), off).primary().on_click(answer_on(&id, true, cx));
         let decline = request_button("whatsapp-decline", &id, tr_shared("whatsapp_draft_decline", &[]), off).outline().on_click(answer_on(&id, false, cx));
-        draft_card(&card.draft, &self.machine, card.clock.clone(), send, decline, card.error.clone()).into_any_element()
+        draft_card(&card.draft, &card.text, &self.machine, card.clock.clone(), send, decline, card.error.clone()).into_any_element()
     }
 }
 
-/// O cartão de um rascunho, só desenho: a tela passa a contagem viva e os botões com clique; a novidade da atualização, a
-/// contagem parada e os botões sem clique.
-pub(crate) fn draft_card(d: &Draft, machine: &str, clock: impl IntoElement, send: Button, decline: Button, error: Option<String>) -> Stateful<Div> {
+/// O cartão de um rascunho, só desenho, na casca dos pedidos do cofre: a tela passa o texto marcado, a contagem viva e os
+/// botões com clique; a novidade da atualização, a contagem parada e os botões sem clique.
+pub(crate) fn draft_card(d: &Draft, text: &MarkedText, machine: &str, clock: impl IntoElement, send: Button, decline: Button, error: Option<String>) -> Stateful<Div> {
     let id = &d.id;
-    let title = tr_shared("whatsapp_draft_wants", &[("origin", &d.origin)]);
-    let heading = div().flex().justify_between().gap_2().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning())
-        .child(div().min_w_0().whitespace_normal().child(format!("{} · {}", tr_shared("whatsapp_draft_title", &[]), machine)))
-        .child(clock);
+    let heading = request_heading(tr_shared("whatsapp_draft_title", &[]), machine, Some(clock.into_any_element()));
     let source = d.chat_name_source.as_deref().and_then(|s| match s {
         "contact" => Some("whatsapp_draft_source_contact"), "push" => Some("whatsapp_draft_source_push"), "group" => Some("whatsapp_draft_source_group"), _ => None,
     }).map(|key| tr_shared(key, &[]));
@@ -297,15 +290,12 @@ pub(crate) fn draft_card(d: &Draft, machine: &str, clock: impl IntoElement, send
             .children(source.map(|s| div().px(px(5.)).rounded(px(4.)).border_1().border_color(theme::border()).child(s)))));
     let recent = d.recent.clone().unwrap_or_default();
     let quoted = d.quoted_text.clone().unwrap_or_default();
-    let (shown, marks) = mark_invisibles(&d.text);
+    let (shown, marks) = text;
     let mark = HighlightStyle { color: Some(theme::warning()), background_color: Some(theme::warning().opacity(0.14)), ..Default::default() };
     let text = (!d.text.is_empty()).then(|| div().id(SharedString::from(format!("whatsapp-text-{id}"))).max_h(px(132.)).overflow_y_scroll()
         .px(px(8.)).py(px(6.)).rounded(px(5.)).bg(theme::boxed()).font_family(theme::MONO).text_color(theme::text()).whitespace_normal()
-        .child(StyledText::new(shown).with_highlights(marks.into_iter().map(|range| (range, mark)))));
-    div().id(SharedString::from(format!("whatsapp-draft-{id}"))).flex_shrink_0().mx(px(8.)).my(px(4.)).p_2().rounded(px(8.)).bg(theme::inset())
-        .flex().flex_col().gap_1().text_xs().text_color(theme::text()).role(Role::Group).aria_label(title.clone())
-        .child(heading)
-        .child(div().whitespace_normal().child(title))
+        .child(StyledText::new(shown.clone()).with_highlights(marks.iter().map(|range| (range.clone(), mark)))));
+    let body = div().flex().flex_col().gap_1().text_xs().text_color(theme::text())
         .child(destination)
         .when(d.chat_name_source.as_deref() == Some("push"), |el| el.child(warn_line(tr_shared("whatsapp_draft_push_warning", &[]))))
         .when(!recent.is_empty(), |el| el.child(label(tr_shared("whatsapp_draft_recent", &[])))
@@ -318,9 +308,8 @@ pub(crate) fn draft_card(d: &Draft, machine: &str, clock: impl IntoElement, send
             .child(text))
         .when_some(d.file.as_ref(), |el, file| el.child(label(tr_shared("whatsapp_draft_attachment", &[]))).child(file_row(file))
             .when(file.outside_cwd.unwrap_or(true), |el| el.child(warn_line(tr_shared("whatsapp_draft_outside_cwd", &[])))))
-        .child(request_pair(send, decline))
-        .children(error.map(|error| div().id(SharedString::from(format!("whatsapp-draft-error-{id}"))).role(Role::Alert)
-            .text_color(theme::danger()).whitespace_normal().child(error)))
+        .child(request_pair(send, decline));
+    request_card(id, heading, tr_shared("whatsapp_draft_wants", &[("origin", &d.origin)]), "", body, error)
 }
 
 fn label(text: String) -> Div { div().mt(px(3.)).text_color(theme::faint()).child(text) }
@@ -348,7 +337,7 @@ fn file_row(file: &DraftFile) -> Div {
         .child(div().flex_shrink_0().size(px(26.)).rounded(px(5.)).bg(theme::hover()).flex().items_center().justify_center()
             .text_color(theme::muted()).child(ext))
         .child(div().min_w_0().flex().flex_col()
-            .child(div().whitespace_normal().child(StyledText::new(format!("{} · {}", file.name, file_size(file.size.unwrap_or(0), crate::i18n::english())))
+            .child(div().whitespace_normal().child(StyledText::new(format!("{} · {}", file.name, api::download::size_label(file.size.unwrap_or(0), crate::i18n::english())))
                 .with_highlights([(0..file.name.len(), HighlightStyle { font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() })])))
             .child(div().font_family(theme::MONO).whitespace_normal().text_color(if outside { theme::warning() } else { theme::muted() })
                 .child(file.source.clone())))
@@ -364,59 +353,40 @@ impl Render for WhatsAppOutbox {
 
 impl Hangar {
     /// Rascunhos pendentes de uma máquina (evento `whatsapp_outbox`; `None` na queda do stream, que os reenvia ao voltar).
-    /// Devolve se mudou.
-    pub(super) fn set_whatsapp_outbox(&mut self, key: &str, data: Option<&Value>, cx: &mut Context<Self>) -> bool {
+    /// `None`: corpo que não se lê (os cartões anteriores ficam); senão, se mudou.
+    pub(super) fn set_whatsapp_outbox(&mut self, key: &str, data: Option<&Value>, cx: &mut Context<Self>) -> Option<bool> {
         let list = match data {
             None => Vec::new(),
             Some(data) => match parse(data) {
                 Some(list) => list,
                 None => {
                     crate::log_line("whatsapp: evento whatsapp_outbox ilegível; os cartões anteriores ficam");
-                    return false;
+                    return None;
                 }
             },
         };
-        if list.is_empty() { return self.whatsapp_outbox.remove(key).is_some(); }
+        if list.is_empty() { return Some(self.whatsapp_outbox.remove(key).is_some()); }
         let (api, machine) = (self.machine_api(key), self.vault_machine_label(key, cx));
         let runtime = self.runtime.clone();
         let entity = self.whatsapp_outbox.entry(key.to_owned())
-            .or_insert_with(|| cx.new(|_| WhatsAppOutbox { api: None, runtime, machine: String::new(), cards: Vec::new() }))
+            .or_insert_with(|| cx.new(|_| WhatsAppOutbox { api: None, runtime, machine: String::new(), cards: Vec::new(), clock: None }))
             .clone();
         entity.update(cx, |outbox, cx| outbox.apply(api, machine, list, cx));
         // Sem o identificador das máquinas, o cartão não acha a sessão que pediu.
         self.ensure_identities();
-        true
+        Some(true)
     }
 
     /// Cartões que passam em `keep`, de todas as máquinas, a ativa primeiro.
     pub(super) fn whatsapp_cards(&self, keep: &dyn Fn(&str) -> bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let active = self.active_key();
-        let mut keys: Vec<&String> = self.whatsapp_outbox.keys().collect();
-        keys.sort_by_key(|key| (**key != active, (*key).clone()));
-        keys.into_iter().flat_map(|key| self.whatsapp_outbox[key].update(cx, |outbox, cx| outbox.render_where(keep, cx))).collect()
+        self.machines_active_first(&self.whatsapp_outbox).into_iter()
+            .flat_map(|key| self.whatsapp_outbox[key].update(cx, |outbox, cx| outbox.render_where(keep, cx))).collect()
     }
 
     /// Na barra das abas e no trilho, ao lado do botão do cofre: um botão por máquina que abre os cartões num diálogo.
     pub(super) fn render_whatsapp_chips(&self, rail: bool, cx: &App) -> Vec<AnyElement> {
-        let active = self.active_key();
-        let mut keys: Vec<&String> = self.whatsapp_outbox.keys().collect();
-        keys.sort_by_key(|key| (**key != active, (*key).clone()));
-        keys.into_iter().filter_map(|key| {
-            let entity = self.whatsapp_outbox.get(key)?.clone();
-            let count = entity.read(cx).count();
-            if count == 0 { return None; }
-            let machine = self.vault_machine_label(key, cx);
-            let label = tr("whatsapp_draft_chip").replace("{n}", &count.to_string()).replace("{machine}", &machine);
-            let title = format!("{} · {machine}", tr_shared("whatsapp_draft_title", &[]));
-            let button = Button::new(SharedString::from(format!("whatsapp-chip-{key}"))).xsmall().outline().flex_shrink_0().icon(IconName::MessageCircle);
-            let button = if rail { button.label(count.to_string()).tooltip(label.clone()).accessibility_label(label) } else { button.label(label) };
-            Some(button
-                .on_click(move |_, window, cx| {
-                    let (entity, title) = (entity.clone(), title.clone());
-                    window.open_dialog(cx, move |dialog, _, _| popup::dialog(dialog).w(px(420.)).title(title.clone()).child(entity.clone()));
-                })
-                .into_any_element())
-        }).collect()
+        self.request_chips(&self.whatsapp_outbox, WhatsAppOutbox::count, rail, "whatsapp", IconName::MessageCircle, "whatsapp_draft_chip",
+            &tr_shared("whatsapp_draft_title", &[]), cx)
     }
 }
 
@@ -429,7 +399,7 @@ mod tests {
         json!({"id": id, "origin": "casa::web", "chat": "5511987654321@s.whatsapp.net", "chat_kind": "contact", "chat_number": "5511987654321",
             "chat_name": "Carlos", "chat_name_source": "push", "recent": [{"from_me": false, "sender": "Carlos", "at": "2026-11-24T14:02:00Z", "text": "oi"}],
             "text": "segue", "reply_to": "", "quoted_text": "", "file": {"name": "a.zip", "size": 10, "sha256": "x", "source": "/home/a.zip", "outside_cwd": true},
-            "created_at": "2026-11-24T14:00:00Z", "expires_at": "2026-11-24T14:10:00Z", "state": state, "via": "", "answered_at": "",
+            "created_at": "2026-11-24T14:00:00Z", "expires_at": "2026-11-24T14:10:00Z", "answer_by": "2026-11-24T14:09:30Z", "state": state, "via": "", "answered_at": "",
             "message_id": "", "error": "", "wa_code": 0})
     }
 
@@ -443,71 +413,65 @@ mod tests {
         assert_eq!(parse(&json!({"drafts": []})), Some(Vec::new()));
         assert_eq!(parse(&json!({"drafts": {}})), None);
         assert_eq!(parse(&json!({})), None);
+        assert_eq!(parse(&json!([])), None);
     }
 
     #[test]
     fn null_optional_fields_still_read() {
         let mut d = draft("d1", "pending");
-        for key in ["chat_name", "chat_name_source", "recent", "quoted_text", "file"] { d[key] = Value::Null; }
+        for key in ["chat_name", "chat_name_source", "recent", "quoted_text", "file", "answer_by"] { d[key] = Value::Null; }
         let list = parse(&json!({"drafts": [d]})).unwrap();
         assert_eq!(list.len(), 1);
         assert!(list[0].file.is_none());
     }
 
-    fn shown(text: &str) -> String { mark_invisibles(text).0 }
+    fn shown(text: &str) -> String { mark_invisibles(text).0.to_string() }
 
+    /// Os mesmos casos do core (`whatsappOutbox.test.ts`).
     #[test]
     fn invisible_and_control_characters_are_marked_like_the_core() {
-        assert_eq!(shown("nada perdido\u{200B}"), "nada perdido⟨U+200B⟩");
-        assert_eq!(shown("a\u{202E}b\u{7}c\u{AD}d"), "a⟨U+202E⟩b⟨U+0007⟩c⟨U+00AD⟩d");
-        assert_eq!(shown("x\r\ny"), "x⟨U+000D⟩\ny");
-        assert_eq!(shown("a\n\tb"), "a\n\tb");
-        assert_eq!(shown("ok\u{E0041}"), "ok⟨U+E0041⟩");
-        assert_eq!(shown("👨\u{200D}👩 ❤\u{FE0F} ©\u{FE0F}"), "👨\u{200D}👩 ❤\u{FE0F} ©\u{FE0F}");
-        assert_eq!(shown("Enviar\u{200D}"), "Enviar⟨U+200D⟩");
-        assert_eq!(shown("\u{200B}\u{200D}"), "⟨U+200B⟩⟨U+200D⟩");
+        let fixtures: Value = serde_json::from_str(include_str!("../../../packages/core/src/whatsappInvisible.fixtures.json")).unwrap();
+        let cases = fixtures["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            assert_eq!(shown(case["input"].as_str().unwrap()), case["shown"].as_str().unwrap(), "{}", case["name"]);
+        }
     }
 
     #[test]
     fn marks_point_at_their_bytes() {
         let (text, marks) = mark_invisibles("a\u{2060}b");
+        let text: &str = &text;
         assert_eq!(marks.len(), 1);
         assert_eq!(&text[marks[0].clone()], "⟨U+2060⟩");
         assert!(text.starts_with('a') && text.ends_with('b'));
     }
 
     #[test]
-    fn countdown_size_and_refusals() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-11-24T14:00:48Z").unwrap().with_timezone(&chrono::Utc);
-        assert_eq!(seconds_left(None, "2026-11-24T14:10:00Z", now), 552);
-        assert_eq!(countdown(552), "9:12");
-        assert_eq!(seconds_left(None, "2026-11-24T13:00:00Z", now), 0);
-        assert_eq!(seconds_left(None, "ruim", now), 0);
-        assert_eq!(file_size(500, false), "500 B");
-        assert_eq!(file_size(88 * 1024, false), "88 KB");
-        assert_eq!(file_size(2_516_582, false), "2,4 MB");
-        assert_eq!(file_size(2_516_582, true), "2.4 MB");
+    fn countdown_runs_to_answer_by_and_falls_back_to_expires_at() {
+        let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc);
+        let now = at("2026-11-24T14:00:48Z");
+        let left = |answer_by: Option<&str>, expires_at: &str| seconds_left(answer_deadline(answer_by, expires_at), now);
+        // O Hangar manda o prazo da tool (14:09:30), antes das 14:10:00 do serviço.
+        assert_eq!(left(Some("2026-11-24T14:09:30Z"), "2026-11-24T14:10:00Z"), 522);
+        assert_eq!(crate::audio::clock(522.), "8:42");
+        assert_eq!(left(None, "2026-11-24T14:10:00Z"), 552);
+        assert_eq!(left(Some("ruim"), "2026-11-24T14:10:00Z"), 552);
+        assert_eq!(crate::audio::clock(552.), "9:12");
+        assert_eq!(left(None, "2026-11-24T13:00:00Z"), 0);
+        assert_eq!(left(None, "ruim"), 0);
+        assert_eq!(seconds_left(answer_deadline(Some("2026-11-24T14:09:30Z"), "2026-11-24T14:10:00Z"), at("2026-11-24T14:09:45Z")), 0);
+        // O evento traz `answer_by` e o cartão o lê.
+        let list = parse(&json!({"drafts": [draft("d1", "pending")]})).unwrap();
+        assert_eq!(list[0].answer_by.as_deref(), Some("2026-11-24T14:09:30Z"));
+    }
+
+    #[test]
+    fn refusals_that_end_the_card() {
         assert!(["whatsapp_expired", "whatsapp_answered", "whatsapp_not_found"].iter().all(|c| ends_card(Some(c))));
         assert!(!ends_card(Some("whatsapp_rate_limited")) && !ends_card(None));
         assert_eq!(refusal_text(Some("whatsapp_qualquer"), None), None);
         assert_eq!(refusal_text(None, None), None);
-    }
-
-    #[test]
-    fn countdown_stops_at_the_tool_deadline_before_expires_at() {
-        let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc);
-        let now = at("2026-11-24T14:00:48Z");
-        // Criado às 14:00:00: a tool desiste às 14:09:30, antes das 14:10:00 do serviço.
-        assert_eq!(seconds_left(Some("2026-11-24T14:00:00Z"), "2026-11-24T14:10:00Z", now), 522);
-        assert_eq!(countdown(522), "8:42");
-        // `expires_at` antes do prazo da tool vale ele.
-        assert_eq!(seconds_left(Some("2026-11-24T14:00:00Z"), "2026-11-24T14:05:00Z", now), 252);
-        assert_eq!(seconds_left(Some("ruim"), "2026-11-24T14:10:00Z", now), 552);
-        assert_eq!(seconds_left(Some("2026-11-24T14:00:00Z"), "ruim", now), 0);
-        assert_eq!(seconds_left(Some("2026-11-24T14:00:00Z"), "2026-11-24T14:10:00Z", at("2026-11-24T14:09:45Z")), 0);
-        // O evento traz `created_at` e o cartão o lê.
-        let list = parse(&json!({"drafts": [draft("d1", "pending")]})).unwrap();
-        assert_eq!(list[0].created_at.as_deref(), Some("2026-11-24T14:00:00Z"));
     }
 
     /// `tr_shared` devolve a própria chave quando falta a frase: aqui a falta vira erro.

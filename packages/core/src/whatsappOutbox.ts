@@ -38,6 +38,8 @@ export interface WhatsAppDraft {
   file: WhatsAppDraftFile | null;
   created_at: string;
   expires_at: string;
+  /** Até quando o cartão conta: o menor entre `expires_at` e o prazo da tool que espera a resposta (do Hangar). */
+  answer_by: string;
   state: WhatsAppDraftState;
 }
 
@@ -71,7 +73,7 @@ function draftOf(raw: unknown): WhatsAppDraft | null {
   return {
     id, origin, chat: str(r.chat), chat_kind: r.chat_kind === 'group' ? 'group' : 'contact',
     chat_number, chat_name: str(r.chat_name), chat_name_source: source, recent, text,
-    reply_to: str(r.reply_to), quoted_text: str(r.quoted_text), file, created_at: str(r.created_at), expires_at, state: 'pending',
+    reply_to: str(r.reply_to), quoted_text: str(r.quoted_text), file, created_at: str(r.created_at), expires_at, answer_by: str(r.answer_by), state: 'pending',
   };
 }
 
@@ -95,7 +97,8 @@ export function answerWhatsAppDraft(s: Server, id: string, answer: WhatsAppDraft
 /** Trecho do texto: o que aparece como veio, ou a marca de um caractere invisível ou de controle (`U+200B`). */
 export type InvisiblePart = { kind: 'text'; text: string } | { kind: 'mark'; code: string };
 
-// A mesma lista do nativo (`whatsapp_outbox.rs`): o que não aparece na tela ou mexe na ordem do texto.
+// A mesma lista do nativo (`whatsapp_outbox.rs`), conferida pelos casos de `whatsappInvisible.fixtures.json`: o que não aparece
+// na tela ou mexe na ordem do texto.
 const INVISIBLE: ReadonlyArray<readonly [number, number]> = [
   [0x0000, 0x0008], [0x000b, 0x001f], [0x007f, 0x009f], [0x00ad, 0x00ad], [0x034f, 0x034f], [0x061c, 0x061c],
   [0x115f, 0x1160], [0x17b4, 0x17b5], [0x180b, 0x180f], [0x200b, 0x200f], [0x2028, 0x202e], [0x2060, 0x206f],
@@ -137,35 +140,18 @@ export function markInvisibles(text: string): InvisiblePart[] {
 /** Caracteres como o serviço conta (pontos de código, não unidades UTF-16). */
 export const draftCharCount = (text: string) => Array.from(text).length;
 
-/** A tool `whatsapp_draft` recusa o rascunho aos 570 s da chamada (o MCP corta antes dos 600 s do serviço):
- *  depois disso ninguém espera a resposta, então o cartão conta só até aí. */
-export const DRAFT_TOOL_DEADLINE_S = 570;
-
-/** Segundos até o rascunho deixar de aceitar resposta: o menor entre `expires_at` e `created_at` + o prazo da tool.
- *  Nunca negativo; `expires_at` ilegível conta como expirado; `created_at` ilegível fica de fora. */
-export function draftSecondsLeft(draft: Pick<WhatsAppDraft, 'created_at' | 'expires_at'>, now = Date.now()): number {
-  const expires = Date.parse(draft.expires_at);
-  if (!Number.isFinite(expires)) return 0;
-  const created = Date.parse(draft.created_at);
-  const end = Number.isFinite(created) ? Math.min(expires, created + DRAFT_TOOL_DEADLINE_S * 1000) : expires;
-  return Math.max(0, Math.floor((end - now) / 1000));
+/** Segundos até o rascunho deixar de aceitar resposta: até `answer_by`; sem ele legível, até `expires_at`. Nunca negativo;
+ *  nenhum dos dois legível conta como expirado. */
+export function draftSecondsLeft(draft: Pick<WhatsAppDraft, 'answer_by' | 'expires_at'>, now = Date.now()): number {
+  const answerBy = Date.parse(draft.answer_by);
+  const end = Number.isFinite(answerBy) ? answerBy : Date.parse(draft.expires_at);
+  return Number.isFinite(end) ? Math.max(0, Math.floor((end - now) / 1000)) : 0;
 }
 
 /** Hora local de uma mensagem (`14:02`); vazio quando a data não se lê. */
 export function draftClock(at: string): string {
   const t = Date.parse(at);
   return Number.isFinite(t) ? new Date(t).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' }) : '';
-}
-
-/** `9:12`. */
-export const formatCountdown = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-
-/** Tamanho do anexo: bytes, KB inteiro, MB e GB com uma casa (unidades de 1024, como o nativo). */
-export function draftFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  const fmt = (v: number) => v.toLocaleString(intlLocale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-  return bytes < 1024 ** 3 ? `${fmt(bytes / 1024 ** 2)} MB` : `${fmt(bytes / 1024 ** 3)} GB`;
 }
 
 /** Recusa que tira o cartão: o rascunho não aceita mais resposta. */

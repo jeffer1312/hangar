@@ -4,7 +4,7 @@ import Animated, { FadeIn, useAnimatedStyle, useReducedMotion, withTiming } from
 import { StyleSheet } from 'react-native-unistyles';
 import type { WhatsAppDraft } from '@hangar/core';
 import { ComposerBox } from '../../chat/ComposerField';
-import { RequestNotice } from '../vault/VaultRequests';
+import { RequestNotice } from '../requests/ownerRequests';
 import { DraftCardView } from '../whatsapp/OutboxRequests';
 import { superficie } from '../../theme/superficie';
 import { useScriptStep } from './scriptStep';
@@ -26,7 +26,7 @@ const STILL = 3;
 const FADE = { duration: 240 };
 // Número de mentira: o DDD 00 não existe.
 const NUMBER = '5500912345678';
-// Fixo: o cartão mostra "9:12" em todo quadro (conta até 570 s depois do created_at do exemplo).
+// Fixo: o cartão mostra "9:12" em todo quadro (conta até o answer_by do exemplo).
 const NOW = Date.parse('2026-11-24T14:00:18Z');
 // Altura mínima da MachineRow: o toque cai no meio da penúltima linha, o Enviar.
 const ROW = 56;
@@ -40,7 +40,7 @@ export function sampleDraft(): WhatsAppDraft {
     id: 'news', origin: `${m.native_vault_news_machine()}::site`, chat: `${NUMBER}@s.whatsapp.net`, chat_kind: 'contact',
     chat_number: NUMBER, chat_name: 'Marina', chat_name_source: 'contact', recent: [], text: m.whatsapp_draft_news_text(),
     reply_to: '', quoted_text: '', file: { name: file, size: 2_516_582, sha256: '', source: `/home/ana/site/${file}`, outside_cwd: false },
-    created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', state: 'pending',
+    created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', answer_by: '2026-11-24T14:09:30Z', state: 'pending',
   };
 }
 
