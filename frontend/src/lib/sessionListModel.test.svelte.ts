@@ -421,7 +421,7 @@ describe('abrir sessão (divergência #18)', () => {
     expect(m1.open({ name: 'c', serverId: 'srv-a', tracked: false, provider: 'codex' })).toBe(true);
     expect(o.onOpen).toHaveBeenCalledWith('c');
   });
-  it('rastreada abre; "sem id" bloqueia, exceto Kimi', () => {
+  it('rastreada abre; "sem id" bloqueia, exceto Kimi e Antigravity', () => {
     const o = opts('desktop'); const m1 = createSessionListModel(o);
     expect(m1.open({ name: 'x', serverId: 'srv-a', tracked: true })).toBe(true);
     expect(selectServer).toHaveBeenCalledWith('srv-a');
@@ -429,6 +429,7 @@ describe('abrir sessão (divergência #18)', () => {
     expect(m1.open({ name: 'y', serverId: 'srv-a', tracked: false, provider: 'claude' })).toBe(false);
     expect(o.onOpen).toHaveBeenCalledTimes(1);
     expect(m1.open({ name: 'k', serverId: 'srv-a', tracked: false, provider: 'kimi' })).toBe(true);
+    expect(m1.open({ name: 'a', serverId: 'srv-a', tracked: false, provider: 'antigravity' })).toBe(true);
   });
 });
 

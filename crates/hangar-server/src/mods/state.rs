@@ -268,12 +268,15 @@ struct Loose {
 }
 
 /// A entrada solta do processo `owner`: outro processo com o mesmo nome não herda faixa nem avisos, como no `attach`.
-fn loose_of<'a>(loose: &'a mut HashMap<String, Loose>, name: &str, owner: Option<&str>) -> &'a mut Loose {
+/// `true` quando a entrada era de outro processo e tinha faixa ou aviso, que o hub ainda guarda no retrato.
+fn loose_of<'a>(loose: &'a mut HashMap<String, Loose>, name: &str, owner: Option<&str>) -> (&'a mut Loose, bool) {
     let entry = loose.entry(name.to_owned()).or_default();
+    let mut replaced = false;
     if entry.owner.as_deref() != owner {
+        replaced = entry.ui.is_some() || !entry.toasts.is_empty();
         *entry = Loose { owner: owner.map(str::to_owned), ..Loose::default() };
     }
-    entry
+    (entry, replaced)
 }
 
 /// O aviso com o número `seq`, guardado em `toasts` com o vencimento, até `TOASTS_KEPT` vivos.
@@ -527,15 +530,17 @@ impl Mods {
         if text.trim().is_empty() {
             return;
         }
-        let toast = {
+        let (toast, replaced) = {
             let mut inner = self.inner.lock().unwrap();
             // Entrou no Rust no meio: o aviso dela é do processo, pela ponte com a sessão.
             if inner.sessions.contains_key(name) { return; }
             inner.toast_seq += 1;
             let seq = inner.toast_seq;
             let now = self.now();
-            push_toast(&mut loose_of(&mut inner.loose, name, owner).toasts, now, seq, plugin, text, timeout_ms)
+            let (loose, replaced) = loose_of(&mut inner.loose, name, owner);
+            (push_toast(&mut loose.toasts, now, seq, plugin, text, timeout_ms), replaced)
         };
+        if replaced { self.forget_loose(name); }
         self.deliver(name, "plugin_toast", &toast.to_string());
     }
 
@@ -549,13 +554,15 @@ impl Mods {
         let raw: Arc<str> = json!({"above": above, "panes": panes}).to_string().into();
         let lock = self.publishing(name);
         let _publishing = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        {
+        let replaced = {
             let mut inner = self.inner.lock().unwrap();
             if inner.sessions.contains_key(name) { return; }
-            let loose = loose_of(&mut inner.loose, name, owner);
+            let (loose, replaced) = loose_of(&mut inner.loose, name, owner);
             if loose.ui.as_ref() == Some(&raw) { return; }
             loose.ui = Some(raw.clone());
-        }
+            replaced
+        };
+        if replaced { self.forget_loose(name); }
         self.deliver(name, "plugin_ui", &raw);
     }
 
@@ -952,6 +959,13 @@ impl Mods {
     fn deliver(&self, name: &str, event: &str, data: &str) {
         if let Some(hubs) = self.hubs.get().and_then(WeakHubs::upgrade) {
             hubs.deliver_mods(name, event, data);
+        }
+    }
+
+    /// O nome solto passou a outro processo: a faixa e os avisos do anterior saem do retrato do hub e dos aparelhos.
+    fn forget_loose(&self, name: &str) {
+        if let Some(hubs) = self.hubs.get().and_then(WeakHubs::upgrade) {
+            hubs.forget_mods(name, &json!({"above": null, "panes": []}).to_string());
         }
     }
 }

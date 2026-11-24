@@ -1148,10 +1148,15 @@ foreach ($a in @('pi', 'omp')) {
     $nome = $nomesAgentes[$a]
     $argsExtensoes = @('harness-setup', 'extensions', $a, '--repo', $raizExtensoes)
     $rcExtensoes = Srv @argsExtensoes
-    if ($rcExtensoes -eq 0) { Ok "extensoes do $nome ligadas" }
-    elseif ($rcExtensoes -eq 4) { Falta "extensoes do $nome nao ligadas: symlink sem admin nao funciona - ligue o Modo Desenvolvedor (Configuracoes > Sistema > Para desenvolvedores) e rode o instalador de novo" }
+    if ($rcExtensoes -eq 0) { Ok "extensoes do $nome ligadas"; continue }
+    if ($rcExtensoes -eq 4) { Falta "extensoes do $nome nao ligadas: symlink sem admin nao funciona - ligue o Modo Desenvolvedor (Configuracoes > Sistema > Para desenvolvedores) e rode o instalador de novo" }
     elseif ($rcExtensoes -eq 2) { Falta "extensoes do ${nome}: o hangar-server desta maquina e anterior a este codigo (nao tem 'harness-setup extensions') - rode scripts\install-server-binaries.ps1 e .\install.ps1 -Update de novo" }
     else { Falta "extensoes do $nome nao ligadas (exit $rcExtensoes) - sem elas o app nao mostra o estado do $nome; o painel Harnesses do app tem o conserto" }
+    # Como o Modo Desenvolvedor la em cima: no -Update fica o aviso, sem derrubar a atualizacao por isso.
+    if (-not $Update) {
+        if ($rcExtensoes -eq 4) { Add-AppPending 'modo desenvolvedor' 'modo-desenvolvedor' }
+        else { Add-AppPending "extensoes do $nome" 'outro' }
+    }
 }
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve. Depois dos
 # binarios: no checkout novo o hangar-server so existe a partir daqui.

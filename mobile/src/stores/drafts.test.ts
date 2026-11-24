@@ -4,7 +4,7 @@ import {
   clearDraft, clearRecoverableDraft, deliveredDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, reusableUploadPath, withoutUpload,
   writeDraft, writeRecoverableDraft,
   readDictation, writeDictation, clearDictation, finishDictation, recoverDictation, associateDictationTranscript,
-  setDictationInFlight, applyReadyDictation, removeDraftRecording,
+  setDictationInFlight, applyReadyDictation, removeDraftRecording, sameLifeOwner,
 } from './drafts';
 import type { ConversationDraft, DraftAttachment, DictationDraft } from './drafts';
 
@@ -161,6 +161,15 @@ describe('drafts', () => {
     expect(resolveDraftTranscript('linux', 'sessao', '/sessions/original.jsonl', 't:222')).toEqual({ draft: reopened, recoverable: null });
     expect(readDraft('linux', 'sessao')).toEqual(reopened);
     expect(resolveDraftTranscript('linux', 'sessao', '/sessions/other.jsonl', 't:222')).toEqual({ draft: null, recoverable: reopened });
+  });
+
+  it('a mesma vida conta outra geração da mesma chave; vidas diferentes não', () => {
+    const owner = `k:${'a'.repeat(32)}`;
+    expect(sameLifeOwner(`${owner}:g:1`, `${owner}:g:2`)).toBe(true);
+    expect(sameLifeOwner(`${owner}:g:1`, `k:${'b'.repeat(32)}:g:1`)).toBe(false);
+    expect(sameLifeOwner('t:1', 't:2')).toBe(false);
+    expect(sameLifeOwner(undefined, undefined)).toBe(true);
+    expect(sameLifeOwner('t:1', undefined)).toBe(false);
   });
 
   it('rascunho recuperável tem chave própria por servidor e sessão, sem tocar a principal', () => {
@@ -374,6 +383,15 @@ describe('ditado conservado na origem', () => {
     expect(applyReadyDictation('linux', 'sessao', transcript)).toBeNull();
     expect(readDraft('linux', 'sessao')).toEqual(current);
     expect(readDictation('linux', 'sessao')?.status).toBe('ready');
+  });
+
+  it('ditado pronto de outra sessão com o mesmo nome não entra no campo da nova; na mesma, entra', () => {
+    const old = draft({ transcript: null, life: `k:${'a'.repeat(32)}:g:1` });
+    writeDraft('linux', 'sessao', old);
+    writeDictation('linux', 'sessao', voice({ status: 'ready', text: 'Ditado', transcript: null }));
+    expect(applyReadyDictation('linux', 'sessao', null, `k:${'b'.repeat(32)}:g:1`)).toBeNull();
+    expect(readDraft('linux', 'sessao')).toEqual(old);
+    expect(applyReadyDictation('linux', 'sessao', null, `k:${'a'.repeat(32)}:g:2`)?.draft?.text).toBe('Mensagem atual Ditado');
   });
 
   it('ditado novo não grava por cima de um POST vivo da mesma conversa', () => {

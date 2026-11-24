@@ -2743,6 +2743,13 @@ impl Hangar {
         let gone = servers::left_list(&self.sessions, &sessions);
         let closed = !gone.is_empty();
         self.sessions = sessions;
+        // Rascunho digitado antes do histórico existir vai à chave dele também fora da seleção: reaberta, a sessão o acha.
+        if let Some(server) = self.server.clone() {
+            for session in &self.sessions {
+                if let Some((from, to)) = SessionKey::opening_to_transcript(&server, session)
+                    && let Some(draft) = self.drafts.remove(&from) { self.drafts.entry(to).or_insert(draft); }
+            }
+        }
         self.recents_sessions_changed(closed, cx);
         self.resolve_local_dirs(cx);
         // Cada aba guarda o próprio foco pela vida da sessão; aba de sessão que sumiu leva o dela junto.

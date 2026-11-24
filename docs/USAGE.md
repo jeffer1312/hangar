@@ -128,10 +128,10 @@ falha:
 
 ### O que o Windows ainda não tem
 
-- O `install.ps1` não liga as extensões do Pi e do omp (`hangar-state.ts` e as outras de
-  `scripts/pi`): no painel Harnesses do app, o item Extensões do Pi ou do omp tem o botão
-  Consertar, que cria os links (o Windows só cria link com o Modo Desenvolvedor ligado ou como
-  administrador).
+- O `install.ps1` tenta ligar as extensões do Pi e do omp (`hangar-state.ts` e as outras de
+  `scripts/pi`) quando acha o comando, mas o Windows só cria o link com o Modo Desenvolvedor
+  ligado ou como administrador. Se não ligou, o instalador avisa, e no painel Harnesses do app o
+  item Extensões do Pi ou do omp tem o botão Consertar, que cria os links de novo.
 - Os wrappers do `claude`, `claude-conta`, `codex`, `pi`, `omp`, `kimi` e `agy` vivem no perfil
   do PowerShell (5.1 e 7). Aberto em outro shell (Git Bash, `cmd`), o CLI não vira sessão do
   Hangar; criado pelo app, funciona. Sem o `hangar-server`, a sessão abre no psmux com o nome da

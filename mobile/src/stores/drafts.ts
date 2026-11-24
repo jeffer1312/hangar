@@ -277,7 +277,7 @@ export function recoverDictation(serverId: string, name: string, id: string): Re
 }
 
 // Entra sozinho só com o rascunho como estava ao gravar e na mesma conversa (jsonl).
-export function applyReadyDictation(serverId: string, name: string, transcript: string | null):
+export function applyReadyDictation(serverId: string, name: string, transcript: string | null, life: string | null = null):
   (ReturnType<typeof finishDictation> & { voice: DictationDraft }) | null {
   const voice = readDictation(serverId, name);
   if (!voice || voice.status !== 'ready' || !voice.text) return null;
@@ -286,6 +286,8 @@ export function applyReadyDictation(serverId: string, name: string, transcript: 
     ?? { version: 1 as const, text: '', revision: 0, transcript, attachments: [], submission: null };
   if (latest.revision !== voice.draftRevision) return null;
   if (voice.transcript !== null && latest.transcript !== null && latest.transcript !== voice.transcript) return null;
+  // Nome reaproveitado: o ditado pronto e o rascunho são da sessão anterior, que o campo novo não recebe.
+  if (draftOfAnotherSession(latest, transcript, life)) return null;
   return { ...insertDictation(serverId, name, latest, voice), voice };
 }
 
@@ -305,6 +307,9 @@ function insertDictation(serverId: string, name: string, latest: ConversationDra
 
 // A geração (`:g:N`) sobe quando o agente religa na mesma sessão; o rascunho é da chave, como os arquivos dela.
 const lifeOwner = (life: string) => /^(k:[0-9a-f]{32}):g:[1-9]\d*$/i.exec(life)?.[1] ?? life;
+
+/** A mesma vida, contando outra geração da mesma chave como ela; sem vida dos dois lados também é igual. */
+export const sameLifeOwner = (a: string | undefined, b: string | undefined) => (a ? lifeOwner(a) : null) === (b ? lifeOwner(b) : null);
 
 /** O rascunho é de outra sessão que teve este nome: o transcript decide; sem ele, a vida. */
 export function draftOfAnotherSession(draft: ConversationDraft, transcript: string | null, life: string | null): boolean {

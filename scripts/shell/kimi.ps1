@@ -25,24 +25,27 @@ function kimi {
     $exe = (Get-Command kimi -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     if (-not $exe) { Write-Error 'kimi nao encontrado no PATH'; return }
     $lista = @($args)
+    # Entrada pelo pipeline (`Get-Content f | kimi ...`) vai ao CLI cru, como o `[ -t 0 ]` do POSIX.
+    $entrada = $null
+    if ($MyInvocation.ExpectingInput) { $entrada = @($input) }
 
     # Subcomando so vale como PRIMEIRO argumento (`kimi export x` e subcomando; `kimi "export x"` e prompt).
     $sub = @('export', 'provider', 'acp', 'web', 'server', 'login', 'doctor', 'vis', 'migrate', 'upgrade', 'update')
-    if ($lista.Count -gt 0 -and $sub -ccontains [string]$lista[0]) { Invoke-HangarNative $exe $lista; return }
+    if ($lista.Count -gt 0 -and $sub -ccontains [string]$lista[0]) { Invoke-HangarNative $exe $lista $entrada; return }
     # O kimi imprime e sai: nao ha TUI pra envolver no psmux.
     if (Test-HangarArg $lista '^(-p|--prompt|--prompt=.*|--output-format|--output-format=.*|--help|-h|--version|-V)$') {
-        Invoke-HangarNative $exe $lista; return
+        Invoke-HangarNative $exe $lista $entrada; return
     }
 
     Sync-HangarSkills
 
     if (Test-HangarArg $lista '^(-S|--session|--session=.*|-c|--continue)$') {
-        Invoke-HangarNative $exe $lista; return
+        Invoke-HangarNative $exe $lista $entrada; return
     }
 
     Clear-HangarStaleTmux
 
-    if (-not $env:TMUX -and (Test-HangarInteractive)) {
+    if (-not $env:TMUX -and $null -eq $entrada -and (Test-HangarInteractive)) {
         Open-HangarSession 'kimi' 'kimi' $lista
         if ($LASTEXITCODE -ne 100) { return }
         # KIMI_CODE_TUI_FULL_SCREEN=1: mesma TUI das sessoes que o app abre.
@@ -50,5 +53,5 @@ function kimi {
         return
     }
 
-    Invoke-HangarNative $exe $lista
+    Invoke-HangarNative $exe $lista $entrada
 }

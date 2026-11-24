@@ -433,6 +433,8 @@ pub(super) fn link_extensions(
         .map_err(LinkError::other)?
         .join("extensions");
     std::fs::create_dir_all(&target).map_err(LinkError::other)?;
+    // O link resolve a partir de `extensions`: `--repo .` relativo apontaria para lá e sairia quebrado.
+    let repo = std::path::absolute(repo).map_err(LinkError::other)?;
     let mut count = 0;
     for name in [
         "hangar-state",

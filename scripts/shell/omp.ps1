@@ -51,23 +51,26 @@ function omp {
     $exe = (Get-Command omp -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     if (-not $exe) { Write-Error 'omp nao encontrado no PATH'; return }
     $lista = @($args)
+    # Entrada pelo pipeline (`Get-Content f | omp ...`) vai ao CLI cru, como o `[ -t 0 ]` do POSIX.
+    $entrada = $null
+    if ($MyInvocation.ExpectingInput) { $entrada = @($input) }
 
     # Subcomando so vale como PRIMEIRO argumento (`omp models` lista; `omp "models are slow"` e prompt).
     $sub = @('acp', 'agents', 'auth-broker', 'auth-gateway', 'bench', 'browser-relay', 'cleanse', 'commit',
              'completions', 'compress', 'config', 'dry-balance', 'gallery', 'gc', 'git', 'grep', 'grievances',
              'if-bench', 'images', 'install', 'join', 'models', 'plugin', 'ps', 'read', 'render', 'say', 'search',
              'setup', 'share', 'shell', 'ssh', 'stats', 'tiny-models', 'token', 'ttsr', 'update', 'usage', 'worktree')
-    if ($lista.Count -gt 0 -and $sub -ccontains [string]$lista[0]) { Invoke-HangarNative $exe $lista; return }
+    if ($lista.Count -gt 0 -and $sub -ccontains [string]$lista[0]) { Invoke-HangarNative $exe $lista $entrada; return }
     # `--mode rpc`/`json` e consumidor programatico por stdio: envolver no psmux o quebraria.
     if (Test-HangarArg $lista '^(-p|--print|--mode|--mode=.*|--alias|--alias=.*|--export|--export=.*|--help|-h|--version|-v)$') {
-        Invoke-HangarNative $exe $lista; return
+        Invoke-HangarNative $exe $lista $entrada; return
     }
 
     Sync-HangarSkills
 
     # Sobrepor `--session` a um `omp -c` abriria sessao FRESCA em vez de continuar.
     if (Test-HangarArg $lista '^(--session|--session=.*|--resume|--resume=.*|-r|--continue|-c|--no-session|--session-dir|--session-dir=.*)$') {
-        Invoke-HangarNative $exe $lista; return
+        Invoke-HangarNative $exe $lista $entrada; return
     }
 
     $perfil = Get-HangarOmpProfile $lista
@@ -75,7 +78,7 @@ function omp {
 
     Clear-HangarStaleTmux
 
-    if (-not $env:TMUX -and (Test-HangarInteractive)) {
+    if (-not $env:TMUX -and $null -eq $entrada -and (Test-HangarInteractive)) {
         Open-HangarSession 'omp' 'omp' $lista
         if ($LASTEXITCODE -ne 100) { return }
         $id = [guid]::NewGuid().ToString()
@@ -88,5 +91,5 @@ function omp {
     # Cru com o caminho: ja no psmux ou entrada redirecionada.
     $id = [guid]::NewGuid().ToString()
     $env:CP_PI_SESSION = $id
-    Invoke-HangarNative $exe (@('--session', (Get-HangarOmpTarget $id)) + $lista)
+    Invoke-HangarNative $exe (@('--session', (Get-HangarOmpTarget $id)) + $lista) $entrada
 }

@@ -937,6 +937,14 @@ impl Hub {
         self.deliver_frame(event, data, binding.provider == Provider::Claude);
     }
 
+    /// Outro processo assumiu o nome: os avisos do anterior saem do retrato e a faixa vazia vai aos aparelhos.
+    fn forget_mods(&self, empty_ui: &str) {
+        let bound = self.bound.lock().unwrap();
+        let Some(binding) = bound.as_ref().map(|bound| &bound.binding).filter(|binding| binding.takes_mods()) else { return };
+        self.cache.lock().unwrap().toasts.clear();
+        self.deliver_frame("plugin_ui", empty_ui, binding.provider == Provider::Claude);
+    }
+
     fn deliver_bound(&self, event: &str, data: &str, pane_question: bool) {
         let gated = if event == "state" { self.gate_problem(data, pane_question) } else { None };
         self.deliver_frame(event, gated.as_deref().unwrap_or(data), pane_question);
@@ -1292,6 +1300,13 @@ impl Hubs {
         let hub = self.0.lock().unwrap().get(name).map(|(hub, _)| hub.clone());
         if let Some(hub) = hub {
             hub.deliver_mods(event, data);
+        }
+    }
+
+    pub fn forget_mods(&self, name: &str, empty_ui: &str) {
+        let hub = self.0.lock().unwrap().get(name).map(|(hub, _)| hub.clone());
+        if let Some(hub) = hub {
+            hub.forget_mods(empty_ui);
         }
     }
 
@@ -2259,6 +2274,27 @@ mod tests {
             assert!(cache.latest[PLUGIN_UI].is_none() && cache.toasts.is_empty(), "o agente novo começa sem os mods do Claude");
         }
         assert!(ctx.mods.replay("s").is_empty());
+        close_hub(&lease.hub);
+    }
+
+    /// Outro processo Claude solto com o mesmo nome: o retrato do hub larga a faixa e os avisos do anterior; o mesmo
+    /// processo publicando de novo mantém a faixa.
+    #[tokio::test]
+    async fn a_loose_owner_change_clears_the_band_and_toasts_the_hub_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = idle_ctx();
+        ctx.mods.bind_hubs(ctx.hubs.downgrade());
+        let claude = Binding { provider: Provider::Claude, jsonl: dir.path().join("t.jsonl"), key: "k".into(), headless: false, life: Some("k:s".into()) };
+        let lease = ctx.hubs.acquire("s", claude, &ctx);
+        let band = |hub: &Hub| hub.cache.lock().unwrap().latest[PLUGIN_UI].as_ref().is_some_and(|f| String::from_utf8_lossy(f).contains("faixa"));
+        let toasts = |hub: &Hub| hub.cache.lock().unwrap().toasts.iter().map(|(_, _, t)| t["text"].as_str().unwrap_or("").to_owned()).collect::<Vec<_>>();
+        ctx.mods.loose_ui("s", Some("velha"), serde_json::json!({"type": "Text", "children": ["faixa"]}), Vec::new());
+        ctx.mods.loose_toast("s", Some("velha"), "m", "aviso da velha", 60_000);
+        ctx.mods.loose_toast("s", Some("velha"), "m", "outro da velha", 60_000);
+        assert!(band(&lease.hub), "o mesmo processo mantém a faixa");
+        ctx.mods.loose_toast("s", Some("nova"), "m", "aviso da nova", 60_000);
+        assert!(!band(&lease.hub), "a faixa da anterior saiu do retrato");
+        assert_eq!(toasts(&lease.hub), ["aviso da nova"]);
         close_hub(&lease.hub);
     }
 

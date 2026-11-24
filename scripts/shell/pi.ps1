@@ -23,26 +23,29 @@ function pi {
     $exe = (Get-Command pi -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     if (-not $exe) { Write-Error 'pi nao encontrado no PATH'; return }
     $lista = @($args)
+    # Entrada pelo pipeline (`Get-Content f | pi ...`) vai ao CLI cru, como o `[ -t 0 ]` do POSIX.
+    $entrada = $null
+    if ($MyInvocation.ExpectingInput) { $entrada = @($input) }
 
     # Subcomando so vale como PRIMEIRO argumento (`pi remove x` e subcomando; `pi "remove x"` e prompt).
     if ($lista.Count -gt 0 -and @('install', 'remove', 'uninstall', 'update', 'list', 'config', 'auth') -ccontains [string]$lista[0]) {
-        Invoke-HangarNative $exe $lista; return
+        Invoke-HangarNative $exe $lista $entrada; return
     }
     # O pi imprime e sai: nao ha TUI pra abrir como sessao.
     if (Test-HangarArg $lista '^(-p|--print|--mode|--mode=.*|--list-models|--list-models=.*|--export|--export=.*|--help|-h|--version|-v)$') {
-        Invoke-HangarNative $exe $lista; return
+        Invoke-HangarNative $exe $lista $entrada; return
     }
 
     Sync-HangarSkills
 
     # Um id novo por cima de `pi -c` abriria sessao FRESCA em vez de continuar.
     if (Test-HangarArg $lista '^(--session-id|--session-id=.*|--resume|--resume=.*|-r|--continue|-c|--session|--session=.*|--fork|--fork=.*|--no-session)$') {
-        Invoke-HangarNative $exe $lista; return
+        Invoke-HangarNative $exe $lista $entrada; return
     }
 
     Clear-HangarStaleTmux
 
-    if (-not $env:TMUX -and (Test-HangarInteractive)) {
+    if (-not $env:TMUX -and $null -eq $entrada -and (Test-HangarInteractive)) {
         Open-HangarSession 'pi' 'pi' $lista
         if ($LASTEXITCODE -ne 100) { return }
         $id = [guid]::NewGuid().ToString()
@@ -53,5 +56,5 @@ function pi {
     # Cru com o id: ja no psmux ou entrada redirecionada.
     $id = [guid]::NewGuid().ToString()
     $env:CP_PI_SESSION = $id
-    Invoke-HangarNative $exe (@('--session-id', $id) + $lista)
+    Invoke-HangarNative $exe (@('--session-id', $id) + $lista) $entrada
 }

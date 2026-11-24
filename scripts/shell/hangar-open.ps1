@@ -67,11 +67,12 @@ function ConvertTo-HangarNativeArgs([string]$exe, [object[]]$lista) {
         $a = [string]$item
         if ($legado) {
             # Vazio some no modo antigo; aspa ganha \ e as barras antes dela dobram. Com espaco o
-            # PowerShell poe aspas em volta, entao a barra do fim tambem dobra.
+            # PowerShell poe aspas em volta, e so o 5.1 nao dobra a barra do fim antes delas (o 7
+            # ja dobra no NativeCommandParameterBinder; dobrar aqui tambem chegaria \\).
             if ($a -eq '') { $a = '""' }
             else {
                 $a = $a -replace '(\\*)"', '$1$1\"'
-                if ($a -match '\s') { $a = $a -replace '(\\+)$', '$1$1' }
+                if ($a -match '\s' -and $PSVersionTable.PSEdition -ne 'Core') { $a = $a -replace '(\\+)$', '$1$1' }
             }
         }
         $saida.Add($a)
@@ -81,9 +82,10 @@ function ConvertTo-HangarNativeArgs([string]$exe, [object[]]$lista) {
 
 # Roda o executavel com os argumentos inteiros. A saida vai direto ao terminal: nunca chamar
 # atribuindo o resultado, senao a TUI perde o console.
-function Invoke-HangarNative([string]$exe, [object[]]$lista) {
+function Invoke-HangarNative([string]$exe, [object[]]$lista, [object[]]$entrada = $null) {
     $argv = ConvertTo-HangarNativeArgs $exe $lista
-    & $exe @argv
+    # So o que veio pelo pipeline vai ao stdin; sem ele o console fica inteiro com a TUI.
+    if ($null -ne $entrada) { $entrada | & $exe @argv } else { & $exe @argv }
 }
 
 # A ponte de skills do Claude para o pi/omp/kimi/agy, refeita na largada como o hangar-skills-sync do

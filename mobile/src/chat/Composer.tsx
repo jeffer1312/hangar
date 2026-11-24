@@ -12,7 +12,7 @@ import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting, settleDelivered } from '../stores/chat';
 import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessage, readFirstInput, sendFirstInput, useNewConversation, withAttach } from '../stores/newConversation';
 import { useSessions } from '../stores/sessions';
-import { clearDraft, clearRecoverableDraft, draftOfAnotherSession, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, pendingMediaUpload, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft } from '../stores/drafts';
+import { clearDraft, clearRecoverableDraft, draftOfAnotherSession, sameLifeOwner, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, pendingMediaUpload, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft } from '../stores/drafts';
 import { useServers } from '../stores/servers';
 import { revealOnSend } from '../features/sessions/revealOnSend';
 import { removeDraftAttachment, retainDraftAttachment } from './draftAttachments';
@@ -130,7 +130,9 @@ const joinDrafts = (before: string, after: string) => (before.trim() && after.tr
 // Guarda o antigo antes de a sessão recriada gravar; um pendente de outra recriação é somado, nunca trocado.
 function keepRecoverable(serverId: string, name: string, old: ConversationDraft): ConversationDraft {
   const pending = readRecoverableDraft(serverId, name);
-  if (pending && pending.transcript === old.transcript && pending.revision === old.revision) return pending;
+  // Sem transcript, duas sessões podem ter a mesma revisão: só a vida separa o pendente desta do da outra.
+  if (pending && pending.transcript === old.transcript && pending.revision === old.revision
+    && (old.transcript !== null || sameLifeOwner(pending.life, old.life))) return pending;
   const value = pending ? { ...old, text: joinDrafts(pending.text, old.text), attachments: mergeAttachments(pending.attachments, old.attachments),
     recordings: mergeRecordings(pending.recordings, old.recordings) } : old;
   writeRecoverableDraft(serverId, name, value);
@@ -1305,7 +1307,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     if (textRef.current !== (draftRef.current?.text ?? '')) return;
     try {
       const before = textRef.current.trim();
-      const applied = applyReadyDictation(origin.serverId, origin.name, transcriptRef.current);
+      const applied = applyReadyDictation(origin.serverId, origin.name, transcriptRef.current, lifeRef.current);
       if (applied) {
         if (applied.voice.issue) cancelVoiceSend(false);
         adoptDictation(applied.voice, before, applied);

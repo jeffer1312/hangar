@@ -36,6 +36,16 @@ fn text(args: &Args, key: &str) -> Option<String> { args.get(key)?.as_str().map(
 
 fn first_text(args: &Args, keys: &[&str]) -> Option<String> { keys.iter().find_map(|key| text(args, key)) }
 
+/// Conteúdo opcional: ausente vale vazio; presente com outro tipo é `Err`, e a chamada segue como veio em vez de
+/// virar escrita ou troca vazia que ela não pediu.
+fn optional_text(args: &Args, keys: &[&str]) -> Result<String, ()> {
+    match keys.iter().find_map(|key| args.get(*key)) {
+        None => Ok(String::new()),
+        Some(Value::String(s)) => Ok(s.clone()),
+        Some(_) => Err(()),
+    }
+}
+
 /// Número que às vezes chega como texto (`"30"`).
 fn number(args: &Args, key: &str) -> Option<u64> {
     match args.get(key)? {
@@ -85,14 +95,16 @@ fn read(args: &Args) -> Option<Args> {
 fn target_file(args: &Args) -> Option<String> { first_text(args, &["TargetFile", "target_file", "Path"]) }
 
 fn write(args: &Args) -> Option<Args> {
-    let content = first_text(args, &["CodeContent", "Content"]).unwrap_or_default();
+    // Acréscimo não é o arquivo inteiro: como `Write`, os apps mostrariam um arquivo criado só com o trecho.
+    if flag(args, "Append") { return None; }
+    let content = optional_text(args, &["CodeContent", "Content"]).ok()?;
     Some(object([("file_path", target_file(args)?.into()), ("content", content.into())]))
 }
 
 fn replacement(item: &Args) -> Option<Args> {
     let old = first_text(item, &["TargetContent", "Target"])?;
     // Substituto vazio é apagar o trecho.
-    let new = first_text(item, &["ReplacementContent", "Replacement"]).unwrap_or_default();
+    let new = optional_text(item, &["ReplacementContent", "Replacement"]).ok()?;
     let mut edit = object([("old_string", old.into()), ("new_string", new.into())]);
     if flag(item, "AllowMultiple") { edit.insert("replace_all".into(), true.into()); }
     Some(edit)
@@ -207,6 +219,21 @@ mod tests {
         assert_eq!(call("write_to_file", json!({"TargetFile":"/w/n.md","CodeContent":"# N\n","Overwrite":false})),
             ("Write".to_owned(), json!({"file_path":"/w/n.md","content":"# N\n"})));
         assert_eq!(call("write_file", json!({"Path":"/w/n.md","Content":"x"})).1, json!({"file_path":"/w/n.md","content":"x"}));
+        assert_eq!(call("write_file", json!({"Path":"/w/n.md","Content":""})).1, json!({"file_path":"/w/n.md","content":""}));
+        assert_eq!(call("write_file", json!({"Path":"/w/n.md"})).1, json!({"file_path":"/w/n.md","content":""}));
+    }
+
+    #[test]
+    fn an_append_or_a_content_of_another_type_keeps_the_original_call() {
+        for (name, args) in [
+            ("write_file", json!({"Path":"/w/LOG.txt","Content":"ok\n","Append":true})),
+            ("write_to_file", json!({"TargetFile":"/w/n.md","CodeContent":42})),
+            ("replace_file_content", json!({"TargetFile":"/w/a.rs","TargetContent":"a","ReplacementContent":42})),
+        ] {
+            assert_eq!(call(name, args.clone()), (name.to_owned(), args));
+        }
+        assert_eq!(call("replace_file_content", json!({"TargetFile":"/w/a.rs","TargetContent":"a","ReplacementContent":""})).1,
+            json!({"file_path":"/w/a.rs","old_string":"a","new_string":""}));
     }
 
     #[test]

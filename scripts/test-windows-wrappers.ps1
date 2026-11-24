@@ -27,7 +27,10 @@ $i = [Array]::IndexOf($argv, '__HANGAR_FAKE__')
 $quem = $argv[$i + 1]
 $resto = @()
 if ($argv.Count -gt $i + 2) { $resto = @($argv[($i + 2)..($argv.Count - 1)]) }
-$linha = [ordered]@{ who = $quem; args = $resto; pwd = "$env:PWD"; pi_session = "$env:CP_PI_SESSION"; omp_profile = "$env:OMP_PROFILE" }
+# Le o stdin so do CLI do caso do pipeline: nos outros ele pode ser o terminal (ou o ssh) e a leitura nao terminaria.
+$stdin = ''
+if ($env:HT_READ_STDIN -ceq $quem) { $stdin = [Console]::In.ReadToEnd() }
+$linha = [ordered]@{ who = $quem; args = $resto; pwd = "$env:PWD"; pi_session = "$env:CP_PI_SESSION"; omp_profile = "$env:OMP_PROFILE"; stdin = $stdin }
 [IO.File]::AppendAllText($env:HT_LOG, (ConvertTo-Json $linha -Compress -Depth 3) + [char]10)
 $codigo = 0
 $primeiro = ''
@@ -78,7 +81,7 @@ try {
 
     function Reset {
         if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
-        foreach ($v in @('TMUX', 'TMUX_PANE', 'CP_PI_SESSION', 'OMP_PROFILE', 'HT_TAKEN')) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+        foreach ($v in @('TMUX', 'TMUX_PANE', 'CP_PI_SESSION', 'OMP_PROFILE', 'HT_TAKEN', 'HT_READ_STDIN')) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
         $env:HT_OPEN_RC = '0'; $env:HT_OPEN_NAME = 'sessao-hangar'; $env:HT_PANE_RC = '0'
         $script:interativo = $true
     }
@@ -185,6 +188,16 @@ try {
     Reset; $script:interativo = $false; Run 'pi' @('oi')
     $raw = @(Of 'pi')
     Check ($raw.Count -eq 1 -and (Same $raw[0].args @('--session-id', $raw[0].pi_session, 'oi')) -and @(OpenCalls).Count -eq 0) "pi (entrada redirecionada): $(Show $raw.args)"
+
+    # Pipeline: o texto chega ao stdin do CLI cru, e nada abre pelo Hangar, com ou sem a flag que imprime.
+    Reset; $env:HT_READ_STDIN = 'pi'
+    try { 'linha 1', 'linha 2' | pi -p } catch { $falhas.Add("pi (pipeline): $($_.Exception.Message)") }
+    $raw = @(Of 'pi')
+    Check ($raw.Count -eq 1 -and (Same $raw[0].args @('-p')) -and ([string]$raw[0].stdin) -match 'linha 1\r?\nlinha 2' -and @(OpenCalls).Count -eq 0) "pi (pipeline): $(Show $raw.args), stdin '$($raw.stdin)'"
+    Reset; $env:HT_READ_STDIN = 'kimi'
+    try { 'pergunta' | kimi } catch { $falhas.Add("kimi (pipeline): $($_.Exception.Message)") }
+    $raw = @(Of 'kimi')
+    Check ($raw.Count -eq 1 -and ([string]$raw[0].stdin) -match 'pergunta' -and @(OpenCalls).Count -eq 0) "kimi (pipeline sem flag): $(Show $raw.args), stdin '$($raw.stdin)'"
 
     # Nome da pasta ja em uso: o sufixo -2.
     Reset; $env:HT_OPEN_RC = '100'; $env:HT_TAKEN = 'Projeto-Acao'; Run 'kimi' @()

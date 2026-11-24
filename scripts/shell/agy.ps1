@@ -25,32 +25,35 @@ function agy {
     $exe = (Get-Command agy -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     if (-not $exe) { Write-Error 'agy nao encontrado no PATH'; return }
     $lista = @($args)
+    # Entrada pelo pipeline (`Get-Content f | agy ...`) vai ao CLI cru, como o `[ -t 0 ]` do POSIX.
+    $entrada = $null
+    if ($MyInvocation.ExpectingInput) { $entrada = @($input) }
 
     # Subcomando so vale como PRIMEIRO argumento (`agy update x` e subcomando; `agy "update x"` e prompt).
     $sub = @('acp', 'agent', 'agents', 'changelog', 'help', 'install', 'mcp', 'mic-serve', 'models', 'plugin',
              'plugins', 'remote-control', 'update')
-    if ($lista.Count -gt 0 -and $sub -ccontains [string]$lista[0]) { Invoke-HangarNative $exe $lista; return }
+    if ($lista.Count -gt 0 -and $sub -ccontains [string]$lista[0]) { Invoke-HangarNative $exe $lista $entrada; return }
     # O agy imprime e sai: nao ha TUI pra envolver no psmux.
     $imprime = '^(-p|--print|--prompt|--prompt=.*|--output-format|--output-format=.*|--input-format|' +
                '--input-format=.*|--json-schema|--json-schema=.*|--help|-h|--version|-v)$'
     if (Test-HangarArg $lista $imprime) {
-        Invoke-HangarNative $exe $lista; return
+        Invoke-HangarNative $exe $lista $entrada; return
     }
 
     Sync-HangarSkills
 
     if (Test-HangarArg $lista '^(--conversation|--conversation=.*|-c|--continue)$') {
-        Invoke-HangarNative $exe $lista; return
+        Invoke-HangarNative $exe $lista $entrada; return
     }
 
     Clear-HangarStaleTmux
 
-    if (-not $env:TMUX -and (Test-HangarInteractive)) {
+    if (-not $env:TMUX -and $null -eq $entrada -and (Test-HangarInteractive)) {
         Open-HangarSession 'antigravity' 'agy' $lista
         if ($LASTEXITCODE -ne 100) { return }
         Open-HangarFolderSession @() (@('agy') + $lista)
         return
     }
 
-    Invoke-HangarNative $exe $lista
+    Invoke-HangarNative $exe $lista $entrada
 }
