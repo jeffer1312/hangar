@@ -953,16 +953,43 @@ async fn direct_delivery_counts_the_cli_queue_as_steered_without_the_hint() {
 #[tokio::test]
 async fn direct_delivery_background_agent_does_not_hold_a_prompt() {
     use std::sync::atomic::Ordering;
-    for label in ["Waiting for 1 background agent to finish", "Waiting for 2 background agents to finish… (3m 2s)"] {
+    let rule = "────────────────────────────────";
+    // Sem a linha de espera, só o painel de agentes abaixo da caixa mostra o subagente que segue rodando.
+    let panel = "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ↓ to manage\n\n  ● main\n  ◯ general-purpose  Verificando progresso do agente     5m 25s · ↓ 203.8k tokens";
+    let band = "● ▾ PM-20170: revisão e finalização (Review automático)        5/10 passos · 20h 08m [-]\n▸ PM-20172 · Configuração";
+    for pane in [
+        format!("✻ Waiting for 1 background agent to finish\n{rule}\n❯ \n{rule}\n"),
+        format!("✻ Waiting for 2 background agents to finish… (3m 2s)\n{rule}\n❯ \n{rule}\n"),
+        format!("● A mudança está rodando em segundo plano.\n{band}\n\n{rule}\n❯ \n{rule}\n{panel}\n"),
+        // O resumo do turno que acabou tem o símbolo da animação, mas não é linha viva.
+        format!("● Disparei o subagente.\n\n✻ Worked for 2m 10s\n\n{rule}\n❯ \n{rule}\n{panel}\n"),
+        // Quadro de um turno anterior, acima do último prompt da pessoa, não é o turno de agora.
+        format!("✻ Precipitating… (2m 12s)\n\n❯ e agora?\n\n● Subagente iniciado.\n\n{rule}\n❯ \n{rule}\n{panel}\n"),
+    ] {
         let f = Fixture::new().await;
         f.idle.store(false, Ordering::Release);
         let h = f.start();
         // A CLI pode manter busy no registro nativo mesmo quando só um subagente trabalha.
-        let rule = "────────────────────────────────";
-        *f.io.panes.lock().unwrap() = vec![format!("✻ {label}\n{rule}\n❯ \n{rule}\n")];
+        *f.io.panes.lock().unwrap() = vec![pane.clone()];
         let result = h.command(f.command("background", "Próxima mensagem")).await.unwrap();
-        assert_ne!(result.payload["code"], "terminal_turn_hold", "{label}: {}", result.payload);
-        assert!(f.sent_prompts().iter().any(|text| text == "Próxima mensagem"), "{label}");
+        assert_ne!(result.payload["code"], "terminal_turn_hold", "{pane}: {}", result.payload);
+        assert!(f.sent_prompts().iter().any(|text| text == "Próxima mensagem"), "{pane}");
+        h.stop().await.unwrap();
+    }
+    // Com o turno principal trabalhando (linha viva acima da caixa), o painel de agentes não libera a entrega,
+    // nem quando uma linha `●` fora do formato dos mods fica entre a linha viva e a caixa.
+    for pane in [
+        format!("● resposta\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n{rule}\n❯ \n{rule}\n{panel}\n"),
+        format!("● resposta\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n● faixa de outro plugin\n{rule}\n❯ \n{rule}\n{panel}\n"),
+        // Linha `◯` abaixo da caixa sem o `main` do painel de agentes não é o painel.
+        format!("● resposta\n\n{rule}\n❯ \n{rule}\n  ◯ outra coisa no rodapé\n"),
+    ] {
+        let f = Fixture::new().await;
+        f.idle.store(false, Ordering::Release);
+        let h = f.start();
+        *f.io.panes.lock().unwrap() = vec![pane.clone()];
+        let result = h.command(f.command("working", "Próxima mensagem")).await.unwrap();
+        assert_eq!(result.payload["code"], "terminal_turn_hold", "{pane}: {}", result.payload);
         h.stop().await.unwrap();
     }
 }

@@ -30,6 +30,7 @@ vi.mock('../../stores/prefs', () => ({ prefs: {
   getString: (key: string) => stored.get(key), set: (key: string, value: string) => { stored.set(key, value); }, remove: (key: string) => { stored.delete(key); },
 } }));
 vi.mock('expo-linking', () => ({ openURL: vi.fn() }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
 // A folha da etiqueta puxa o teclado e a área segura nativos, que não carregam no teste.
 vi.mock('../machines/parts', () => ({ MachineSheet: () => null, Notice: () => null }));
@@ -250,6 +251,9 @@ describe('contas Codex', () => {
     expect(container.textContent).not.toContain('trabalho');
     expect(container.textContent).toContain(m.mobile_antigravity_terms_pending());
     expect(container.textContent).toContain(m.mobile_antigravity_no_quota());
+    // Termos pendentes na padrão: a ação abre a sessão do agy, e o texto diz que quem aceita é a pessoa.
+    expect(container.textContent).toContain(m.mobile_antigravity_accept_terms());
+    expect(container.textContent).toContain(m.mobile_antigravity_accept_terms_hint());
     const buttons = () => [...container.querySelectorAll('button')];
     expect(buttons().filter((b) => b.textContent === 'Entrar')).toHaveLength(1);
     expect(buttons().some((b) => b.textContent === m.lista_remover())).toBe(false);

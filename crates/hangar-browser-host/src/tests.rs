@@ -153,3 +153,24 @@ async fn state_updates_and_confirmed_open_feed_list() {
     drop(host);
     assert_eq!(registry.list(), "s  http://localhost:5173/  MORTO (reabra com: hangar-preview open http://localhost:5173/)  (aba 1)");
 }
+
+#[tokio::test]
+async fn host_answers_when_another_machine_last_showed_the_session() {
+    let registry = Arc::new(Registry::default());
+    assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Err(Refusal::NoHost));
+    let before = now_ms();
+    let (mut host, mut rx) = registry.attach();
+    // Foco sozinho (o app reconectando) não diz que a pessoa está lá.
+    host.text(r#"{"type":"focus","session":"s"}"#);
+    assert_eq!(registry.last_seen("s"), None);
+    host.text(r#"{"type":"seen","session":"s"}"#);
+    let seen = registry.last_seen("s").expect("uso registrado");
+    assert!(seen >= before);
+    assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Ok(Reply::Text(format!("ok: host {seen}"))));
+    // A pergunta não chega ao app.
+    assert!(rx.try_recv().is_err());
+    // O app desligou: a hora fica, e o verbo seguinte recusa em vez de ir a outro navegador.
+    drop(host);
+    assert_eq!(registry.last_seen("s"), Some(seen));
+    assert_eq!(registry.command("s", body(json!({"verbo": "url"}))).await, Err(Refusal::NoHost));
+}

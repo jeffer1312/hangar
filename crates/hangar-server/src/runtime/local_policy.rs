@@ -86,6 +86,8 @@ fn prepare_with(payload: &Value, provider: &str, shrink: bool) -> Result<Value, 
             let name = trimmed.starts_with('/').then(|| trimmed.split(py_space).next().unwrap_or("")[1..].to_owned());
             Ok(json!({"input": [{"type": "text", "text": text}], "skill_name": name}))
         }
+        // Bloco de texto do ACP; imagem anexada ainda vai só como o caminho no texto.
+        "antigravity" => Ok(json!({"prompt": [{"type": "text", "text": text}]})),
         _ => Err(error("policy_provider")),
     }
 }
@@ -111,6 +113,7 @@ pub(super) fn batch_validator(provider:String,mut template:Value) -> super::queu
         }
         if terminal {template["text"]=row["text"].clone();}
         else if provider=="claude" {template["message"]["content"]=prepared["content"].clone();}
+        else if provider=="antigravity" {template["params"]["prompt"]=prepared["prompt"].clone();}
         else {template["params"]["input"]=prepared["input"].clone();}
         if template.to_string().len()>super::protocol::MAX_FRAME {
             return Err(super::queue::invalid(super::queue::BATCH_SIZE_MESSAGE));

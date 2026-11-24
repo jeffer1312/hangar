@@ -101,3 +101,12 @@ export function resumoCota(c: CotaContaResumo | undefined): string {
     .map((j) => `${j.rotulo} ${Math.round(j.pct)}%`)
     .join(' · ');
 }
+
+/** O `agy` divide a cota por grupo de modelos: o do Gemini vem nas janelas gerais e o "Claude/GPT" nas janelas por
+ *  modelo. A sessão vê só o grupo do modelo dela, com os rótulos de sempre ("5h", "7d"). */
+export function cotaDoModeloAgy<T extends { janelas: JanelaCotaResumo[] }>(cota: T, model: string | null | undefined): T {
+  const terceiro = /claude|gpt/i.test(model ?? '');
+  const janelas = cota.janelas.filter((j) => !!j.por_modelo === terceiro)
+    .map((j) => ({ ...j, rotulo: j.rotulo.replace(/^.*\s(?=\S+$)/, ''), por_modelo: false }));
+  return { ...cota, janelas };
+}

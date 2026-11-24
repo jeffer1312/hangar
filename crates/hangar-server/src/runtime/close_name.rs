@@ -96,6 +96,34 @@ pub(super) async fn close_codex_headless(registry:&RuntimeRegistry,home:&Path,qu
     Ok(json!({"closed":true,"killed":true}))
 }
 
+impl RuntimeRegistry {
+    /// Antigravity sem terminal, aberto aqui ou parado: o ator sai, o `agy acp` morre e sidecar, fila e o shell
+    /// marcado saem. `None`: não há sessão dele com esse nome.
+    pub async fn kill_antigravity(&self,fallback:Option<NameEnv>,name:&str) -> Option<Result<Value,RuntimeError>> {
+        let env = match self.watcher_ref() {
+            Some(watcher)=>NameEnv { home:watcher.cfg.home.clone(),queue_dir:watcher.cfg.queue_dir.clone(),mux_program:watcher.cfg.mux_program.clone() },
+            None=>fallback?,
+        };
+        let dir = super::antigravity_sidecar::dir(&env.home);
+        let open = self.antigravity_headless(name).await;
+        let meta = match read(&dir,name).await { Ok(meta)=>meta, Err(error)=>return Some(Err(error)) };
+        if open.is_none() && meta.is_none() { return None; }
+        Some(async {
+            let _ingress = ClosedIngress::acquire_unless_transfer(self.ingress(),name).await?;
+            if let Some((key,generation,_)) = open { self.close_with_kill(&key,generation).await?; }
+            stop_parked(&dir,name,&env.queue_dir).await?;
+            kill_hidden(&MuxProcess::new(&env.mux_program,TIMEOUT),name).await;
+            forget(&env.queue_dir,name).await?;
+            let mut value = json!({"closed":true,"killed":true});
+            let text = |field:&str|meta.as_ref().and_then(|m|m.get(field)).and_then(Value::as_str).filter(|s|!s.is_empty()).map(str::to_owned);
+            if let (Some(dir),Some(id)) = (text("brain_dir"),text("conversation_id")) && hangar_antigravity::paths::valid_conversation_id(&id) {
+                value["transcript"] = json!(Path::new(&dir).join(id).join(".system_generated").join("logs").join("transcript_full.jsonl").to_string_lossy());
+            }
+            Ok::<_,RuntimeError>(value)
+        }.await)
+    }
+}
+
 /// `kill-session` confirmado e o shell `term-<nome>` só com a nossa marca; ausente não mata nada.
 async fn kill_pane(mux:&MuxProcess,name:&str,present:bool) -> Result<(),RuntimeError> {
     if present {

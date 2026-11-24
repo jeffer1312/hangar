@@ -10,6 +10,9 @@ pub const UNAVAILABLE: &str = "list_facts_unavailable";
 /// Provedores de terminal cujo ator publica os fatos da lista.
 pub const OTHERS: [&str; 4] = ["pi", "omp", "kimi", "antigravity"];
 
+/// Linha com terminal de um desses provedores: o Antigravity sem terminal é do ator sem terminal, não do pane.
+pub fn is_other(provider: &str, headless: bool) -> bool { !headless && OTHERS.contains(&provider) }
+
 /// Estado publicado pelo ator da sessão.
 #[derive(Clone, Debug, Deserialize)]
 pub struct RowState {
@@ -87,7 +90,7 @@ impl FactsClient {
 
 /// Problema mais preciso que a linha já tenha fica.
 pub fn mark_stale(rows: &mut [SessionRow], facts: &ListFacts, ok: bool) {
-    for row in rows.iter_mut().filter(|r| facts.unknown || (!ok && OTHERS.contains(&r.provider.as_str()))) {
+    for row in rows.iter_mut().filter(|r| facts.unknown || (!ok && is_other(&r.provider, r.headless))) {
         row.problema.get_or_insert_with(|| UNAVAILABLE.into());
     }
 }
@@ -161,7 +164,7 @@ pub fn apply(rows: Vec<SessionRow>, facts: &ListFacts, ok: bool) -> (Vec<Session
         if facts.frozen.contains(&row.name) { aside.push(row.clone()) } else { work.push(row.clone()) }
     }
     aside.extend(facts.orq.iter().cloned());
-    for row in work.iter_mut().filter(|r| OTHERS.contains(&r.provider.as_str())) {
+    for row in work.iter_mut().filter(|r| is_other(&r.provider, r.headless)) {
         if let Some(s) = facts.states.get(&row.name) {
             row.state.clone_from(&s.state);
             row.label.clone_from(&s.label);

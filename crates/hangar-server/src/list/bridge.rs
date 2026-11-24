@@ -690,13 +690,13 @@ impl ListBridge {
         let mut states = HashMap::new();
         let mut fresh = true;
         let Some(registry) = self.plugin_runtime.get() else {
-            for row in rows.iter_mut().filter(|row| list_facts::OTHERS.contains(&row.provider.as_str())) {
+            for row in rows.iter_mut().filter(|row| list_facts::is_other(&row.provider, row.headless)) {
                 row.problema = Some(list_facts::UNAVAILABLE.into());
                 fresh = false;
             }
             return list_facts::Fetched { states: Arc::new(states), ok: true, fresh };
         };
-        for row in rows.iter_mut().filter(|row| list_facts::OTHERS.contains(&row.provider.as_str())) {
+        for row in rows.iter_mut().filter(|row| list_facts::is_other(&row.provider, row.headless)) {
             // Adotada ou abrindo já tem quem vigie a vida (o ator e o laço de abertura): adotar só sem dono.
             let mut info = registry.other_info(&row.name).await;
             if info.is_none() {
@@ -712,7 +712,7 @@ impl ListBridge {
             }
         }
         let snapshots = registry.list_snapshots_readonly().await;
-        for row in rows.iter_mut().filter(|row| list_facts::OTHERS.contains(&row.provider.as_str())) {
+        for row in rows.iter_mut().filter(|row| list_facts::is_other(&row.provider, row.headless)) {
             let read = (|| {
                 let key = super::links::runtime_key(row.lifecycle_id.as_deref())?;
                 let snapshot = snapshots.get(key)?;
@@ -1166,7 +1166,7 @@ fn claude_problems(rows: &[SessionRow], headless: &BTreeMap<String, String>, ter
 
 fn headless_by_name(rows: &[SessionRow], by_key: BTreeMap<String, Value>) -> BTreeMap<String, Value> {
     let mut by_key = by_key;
-    rows.iter().filter(|r| r.provider == "codex" || (r.headless && r.provider == "claude")).filter_map(|r| {
+    rows.iter().filter(|r| r.provider == "codex" || (r.headless && matches!(r.provider.as_str(), "claude" | "antigravity"))).filter_map(|r| {
         let key = r.lifecycle_id.as_deref()?.strip_prefix("k:")?;
         Some((r.name.clone(), by_key.remove(key)?))
     }).collect()

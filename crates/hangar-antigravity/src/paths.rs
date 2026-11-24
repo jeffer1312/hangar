@@ -43,6 +43,9 @@ impl Account {
     pub fn hooks_path(&self, home: &Path) -> PathBuf { self.gemini_dir(home).join("config").join("hooks.json") }
 
     pub fn settings_path(&self, home: &Path) -> PathBuf { self.data_dir(home).join("settings.json") }
+
+    /// Os servidores MCP do usuário (`agy mcp add` grava aqui).
+    pub fn mcp_config_path(&self, home: &Path) -> PathBuf { self.gemini_dir(home).join("config").join("mcp_config.json") }
 }
 
 /// UUID em minúsculas (`8-4-4-4-12`), o formato que o `agy` usa para conversa.

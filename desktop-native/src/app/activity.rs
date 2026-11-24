@@ -1452,6 +1452,7 @@ impl Hangar {
             // Lembrada de outra execução ou fechada no ×, a aba só volta depois que o navegador for aberto de novo.
             SideTab::Browser if key.is_some_and(|k| self.side.browser_open.contains(&k)) => SideTab::Browser,
             SideTab::Review if self.work_review_tab_shown() => SideTab::Review,
+            SideTab::Ports if self.ports_tab_open() => SideTab::Ports,
             _ => SideTab::Context,
         }
     }
@@ -1476,6 +1477,16 @@ impl Hangar {
         for tab in &self.act.tabs { tab.view.update(cx, |view, cx| { view.set_native_states(states, cx); view.set_data(activity, processes, cx); view.set_plugin_servers(&servers, cx); }); }
     }
 
+    /// Mostra a aba só nesta sessão, por cima do menu e da aba de subagente, sem gravar como preferência.
+    pub(super) fn show_side_tab_here(&mut self, key: String, tab: SideTab, cx: &mut Context<Self>) {
+        self.side.menu = false;
+        self.act.active_tab = None;
+        self.act.pending_tab = None;
+        self.act.tab_error = None;
+        self.side.tabs.insert(key, tab);
+        self.sync_activity(cx);
+    }
+
     /// Clique numa aba do painel: fecha a aba de subagente aberta e grava a escolha como as outras preferências de tela.
     pub(super) fn choose_side_tab(&mut self, tab: SideTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected.is_none() { return };
@@ -1485,7 +1496,7 @@ impl Hangar {
         self.act.tab_error = None;
         if let Some(key) = self.side_key() { self.side.tabs.insert(key, tab); }
         // A Revisão só existe nas sessões ligadas a ticket: vira padrão das outras não, fica só na desta.
-        if tab != SideTab::Review && appearance::get().side_tab != tab { self.apply_appearance(appearance::Appearance { side_tab: tab, ..appearance::get() }, true, cx); }
+        if !matches!(tab, SideTab::Review | SideTab::Ports) && appearance::get().side_tab != tab { self.apply_appearance(appearance::Appearance { side_tab: tab, ..appearance::get() }, true, cx); }
         if self.side_tab() == SideTab::Files { self.show_tree(true, Some(window), cx); }
         self.sync_activity(cx);
         cx.notify();
@@ -1496,6 +1507,8 @@ impl Hangar {
     pub(super) fn toggle_side_menu(&mut self, cx: &mut Context<Self>) {
         self.side.menu = !self.side_menu_shown();
         if self.side.menu { self.act.active_tab = None; }
+        // O "porta inválida" é da tentativa anterior: não volta ao reabrir o menu.
+        self.clear_other_port_error();
         self.sync_activity(cx);
         cx.notify();
     }
@@ -1851,6 +1864,12 @@ impl Hangar {
             .when(self.has_activity(), |el| el.child(tab("side-tab-activity", self.background_label(), SideTab::Activity, None, cx)))
             .when(git, |el| el.child(tab("side-tab-git", web("git_coluna_abrir"), SideTab::Git, None, cx)))
             .when_some(browser, |el, close| el.child(tab("side-tab-browser", tr("browser"), SideTab::Browser, Some(close.into_any_element()), cx)))
+            .when(self.ports_tab_open(), |el| {
+                let close = Button::new("side-tab-ports-close").ghost().xsmall().icon(TAB_CROSS)
+                    .tooltip(tr("ports_close")).accessibility_label(tr("ports_close"))
+                    .on_click(cx.listener(|this, _, _, cx| { cx.stop_propagation(); this.close_ports(cx); }));
+                el.child(tab("side-tab-ports", tr("ports_title"), SideTab::Ports, Some(close.into_any_element()), cx))
+            })
             .into_any_element()
     }
 

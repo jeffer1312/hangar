@@ -101,7 +101,7 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci --workspace=@hangar/core --workspace=frontend
         if: always()
-      - name: Texto da interface
+      - name: Texto da interface e blocos <hangar-ref>
         if: always()
         run: python3 -I scripts/rule-tests.py frontend
 
@@ -254,14 +254,19 @@ jobs:
         run: |
           set -euo pipefail
           tudo=0 app=()
+          git diff --no-renames --name-only "$BASE...$HEAD_SHA" > "$RUNNER_TEMP/mudados"
           while IFS= read -r f; do
             case "$f" in
               mobile/package.json|mobile/package-lock.json|mobile/tsconfig*.json|mobile/vitest*.ts|mobile/babel.config.js|\
               mobile/metro.config.js|mobile/app.json|mobile/eas.json|mobile/plugins/*|packages/core/*|messages/*|\
               project.inlang/*|package.json|package-lock.json|.node-version|scripts/i18n-compile.mjs|scripts/verificar-app.mjs) tudo=1 ;;
-              mobile/*) [ -f "$f" ] && app+=("$GITHUB_WORKSPACE/$f") ;;
+              mobile/*)
+                [ -f "$f" ] || continue
+                app+=("$GITHUB_WORKSPACE/$f")
+                # Teste que lê o arquivo sem importá-lo (readFileSync) fica fora do grafo do `related`.
+                while IFS= read -r t; do app+=("$GITHUB_WORKSPACE/$t"); done < <(grep -rlF --include='*.test.*' "$(basename "$f")" mobile/src || true) ;;
             esac
-          done < <(git diff --no-renames --name-only "$BASE...$HEAD_SHA")
+          done < "$RUNNER_TEMP/mudados"
           if (( tudo )); then
             npm run test:app
           elif (( ${#app[@]} )); then

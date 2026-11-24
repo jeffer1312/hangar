@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { getCredentialsForServer, resumoCota, type Credencial, type Server } from '@hangar/core';
+import { cotaDoModeloAgy, getCredentialsForServer, resumoCota, type Credencial, type Server } from '@hangar/core';
 import { Icon } from '../ui/Icon';
 import { superficie } from '../theme/superficie';
 import { sessionCredential, type AccountSession } from './sessionAccountOptions';
@@ -26,7 +26,9 @@ export function SessionAccountSummary({ server, session, label, onPress }: {
   }, [server, session.conta, session.config_dir, session.codex_home, session.codex_account, session.engine, session.engine_account, session.engine_binding, retry]);
   const credential = state.credential;
   const noBinding = credential?.cliproxy && !session.engine_account;
-  const quota = !noBinding && credential?.cota ? resumoCota({ ...credential.cota, id: credential.id }) : '';
+  // No Antigravity a sessão vê só o grupo de modelos dela (Gemini ou Claude/GPT).
+  const cota = credential?.cota && credential.tipo === 'antigravity' ? cotaDoModeloAgy(credential.cota, session.model) : credential?.cota;
+  const quota = !noBinding && cota ? resumoCota({ ...cota, id: credential!.id }) : '';
   const accountName = noBinding ? m.cliproxy_no_bound_account() : credential?.apelido || credential?.nome || label;
   const detail = state.loading ? m.comum_carregando() : state.error ? m.conta_erro_listar({ erro: state.error }) : quota || m.conta_cota_sem_leitura();
   const content = <>

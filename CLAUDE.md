@@ -114,7 +114,9 @@ máquina**: o check `merge-gate` (`.github/workflows/gate.yml`) barra regra desc
 PR mudou: crates mudados e os que dependem deles (`scripts/gate-areas.py`; o `hangar-server` em três
 fatias, `scripts/rust-pr-tests.py`), o desktop inteiro e os testes do Expo ligados aos arquivos mudados;
 backend e front ficam no workflow `CI`; as suítes inteiras rodam no push da `main`. Push e
-`gh pr create` não exigem nada local. Regra que a máquina confere ganha trava no portão; decisão em
+`gh pr create` não exigem nada local. Regra que a máquina confere ganha trava no portão; a que pede
+julgamento é checagem do CodeRabbit (`.coderabbit.yaml`), que só avisa. A marca
+`HANGAR_<REGRA>_AUTORIZADO: <motivo>` só entra num commit com a autorização dita pelo dono; decisão em
 [instalacao.md](docs/decisoes/instalacao.md#portão-do-pr-compila-e-testa-o-que-mudou-24112026).
 `scripts/verificar-local` é opcional, para conferir antes do push: ele roda, numa árvore fixa da
 máquina e em fila única, só o ligado aos arquivos que o commit muda (`--completo`: o que o CI rodaria),

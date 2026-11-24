@@ -72,10 +72,11 @@ struct Ctx { st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, home: PathBuf, cl
 enum Done { Group, Mux, Sidecar(PathBuf), File(PathBuf, PathBuf), LoopFile(PathBuf, PathBuf), LoopBackup(PathBuf, PathBuf), ParkedQueue(String), Guest, Spec, Mission, Transfer, Share, Pairs, Shortcuts(Vec<String>), HiddenShell }
 
 #[derive(PartialEq)]
-enum Kind { ClaudeHeadless, CodexHeadless, Terminal }
+enum Kind { ClaudeHeadless, CodexHeadless, AntigravityHeadless, Terminal }
 
 fn claude_dir(home: &Path) -> PathBuf { home.join(".hangar").join("claude-headless") }
 fn codex_dir(home: &Path) -> PathBuf { crate::runtime::codex_sidecar::dir(home) }
+fn antigravity_dir(home: &Path) -> PathBuf { crate::runtime::antigravity_sidecar::dir(home) }
 
 async fn blocking<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> T {
     tokio::task::spawn_blocking(job).await.unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
@@ -156,6 +157,7 @@ impl Ctx {
         let headless = blocking(move || crate::runtime::codex_sidecar::load(&path)).await
             .is_some_and(|meta| meta.get("headless").is_some_and(truthy));
         if headless { return Ok(Kind::CodexHeadless); }
+        if self.sidecar_exists(antigravity_dir(&self.home), old).await { return Ok(Kind::AntigravityHeadless); }
         match self.mux.has_session(old).await {
             Some(true) => Ok(Kind::Terminal),
             Some(false) => Err(no(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "sessao nao encontrada")),
@@ -164,7 +166,8 @@ impl Ctx {
     }
 
     async fn check_free(&self, new: &str) -> Result<(), Refusal> {
-        if self.sidecar_exists(claude_dir(&self.home), new).await || self.sidecar_exists(codex_dir(&self.home), new).await { return Err(in_use()); }
+        if self.sidecar_exists(claude_dir(&self.home), new).await || self.sidecar_exists(codex_dir(&self.home), new).await
+            || self.sidecar_exists(antigravity_dir(&self.home), new).await { return Err(in_use()); }
         match self.mux.has_session(new).await {
             Some(false) => Ok(()),
             Some(true) => Err(in_use()),
@@ -184,7 +187,7 @@ impl Ctx {
             if !self.mux_rename(old, new).await { return Err(("mux", "sessao_falha_renomear".into())); }
             done.push(Done::Mux);
         }
-        for dir in [claude_dir(&self.home), codex_dir(&self.home)] {
+        for dir in [claude_dir(&self.home), codex_dir(&self.home), antigravity_dir(&self.home)] {
             let (d, o, n) = (dir.clone(), old.to_owned(), new.to_owned());
             if blocking(move || files::move_sidecar(&d, &o, &n)).await.map_err(|e| ("sidecar", io_code(&e)))? { done.push(Done::Sidecar(dir)); }
         }
@@ -267,7 +270,7 @@ impl Ctx {
 
     /// A chave da sessão sem terminal parada (sem entrada aqui), pelo sidecar já no nome novo.
     async fn parked_queue_key(&self, new: &str) -> Option<String> {
-        for dir in [claude_dir(&self.home), codex_dir(&self.home)] {
+        for dir in [claude_dir(&self.home), codex_dir(&self.home), antigravity_dir(&self.home)] {
             let path = crate::runtime::codex_sidecar::path(&dir, new);
             if let Some(meta) = blocking(move || crate::runtime::codex_sidecar::load(&path)).await {
                 return meta.get("key").and_then(Value::as_str).filter(|k| !k.is_empty()).map(str::to_owned);
@@ -278,7 +281,7 @@ impl Ctx {
 
     /// O sidecar já no nome novo e a vida da sessão (`k:<chave>` ou `t:<nascimento no multiplexador>`).
     async fn identity(&self, new: &str) -> (Option<Value>, Option<String>) {
-        for dir in [codex_dir(&self.home), claude_dir(&self.home)] {
+        for dir in [codex_dir(&self.home), claude_dir(&self.home), antigravity_dir(&self.home)] {
             let path = crate::runtime::codex_sidecar::path(&dir, new);
             if let Some(meta) = blocking(move || crate::runtime::codex_sidecar::load(&path)).await {
                 let life = meta.get("key").and_then(Value::as_str).filter(|k| !k.is_empty()).map(|k| format!("k:{k}"));

@@ -371,6 +371,13 @@ impl Classifier {
             {
                 row.status_line = Some(line.to_owned());
             }
+            // Antigravity sem terminal: o estado é a vista do ator, sem marcador de hook nem pane.
+            if row.provider == "antigravity" && row.headless {
+                row.asleep = false;
+                row.last_activity = mtime(&row.name, row.jsonl.as_deref());
+                headless_state(row, facts.headless, None);
+                continue;
+            }
             if row.provider != "claude" {
                 // Sem retrato do runtime a candidata não se confirma.
                 row.asleep = false;

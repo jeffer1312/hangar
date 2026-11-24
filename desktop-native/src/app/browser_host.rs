@@ -23,6 +23,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// O mesmo prazo do CLI quando o pedido não diz o dele.
 const DEFAULT_DEADLINE: Duration = Duration::from_secs(45);
 const READY_POLL: Duration = Duration::from_millis(150);
+const SEEN_EVERY: Duration = Duration::from_secs(10);
 #[cfg(not(target_os = "linux"))]
 const LOCAL_REFUSED: &str = "endereço local deste computador recusado";
 
@@ -47,6 +48,10 @@ pub(super) struct Hosts {
     links: HashMap<String, Link>,
     /// Pedidos dos canais para a janela; a ponta de leitura é drenada por uma tarefa da janela.
     incoming: Option<async_channel::Sender<(String, Value)>>,
+    /// Última sessão (`servidor::sessão`) dada como usada aqui, e quando: o aviso se repete no máximo a cada `SEEN_EVERY`.
+    seen: Option<(String, Instant)>,
+    /// Sessão à vista na janela ativa no quadro anterior.
+    pub(super) shown: Option<String>,
 }
 
 /// O que o quadro faz com o canal que já existe; `[identidade, rota, token]` de antes e de agora.
@@ -300,6 +305,20 @@ impl Hangar {
         self.browser_hosts.links.insert(server, Link { out, conn, task });
     }
 
+    /// Clique ou tecla na janela: a pessoa está usando a sessão aqui, e o navegador do agente vem para este app. Sessão
+    /// desta máquina grava a hora em `_focus.json`; de outra, avisa o servidor dela pelo canal. No máximo a cada 10 s.
+    pub(super) fn note_session_seen(&mut self, cx: &mut Context<Self>) {
+        let (Some(api), Some(name)) = (self.session_api(), self.selected.as_ref().map(|s| s.name.clone())) else { return };
+        let Some(key) = self.side_key() else { return };
+        if self.browser_hosts.seen.as_ref().is_some_and(|(k, at)| *k == key && at.elapsed() < SEEN_EVERY) { return; }
+        self.browser_hosts.seen = Some((key, Instant::now()));
+        if api.is_loopback() {
+            cx.background_spawn(async move { crate::browser::server::record_focus(&name) }).detach();
+        } else if let Some(link) = self.session_server().and_then(|s| self.browser_hosts.links.get(&servers::norm(&s))) {
+            let _ = link.out.try_send(Out::Text(json!({"type": "seen", "session": name}).to_string()));
+        }
+    }
+
     /// A cada quadro, o canal de servidor que saiu do app ou virou convite fecha (o `Drop` do `Link` derruba o socket).
     fn browser_host_prune(&mut self) {
         let servers = &self.servers;
@@ -362,6 +381,8 @@ impl Hangar {
             Target::Tunnel { url, port } => {
                 let Some(api) = self.machine_api(&server) else { let _ = out.try_send(refusal(id, "sem conexão com a máquina da sessão")); return };
                 let token = self.server_token(&server);
+                // O túnel do agente aparece em Portas da sessão dele, com Parar.
+                self.note_forward_origin(api.identity(), port, key.clone());
                 let opening = self.ports.forwards.open(self.runtime.handle(), &api, &token, port);
                 (String::new(), url.to_string(), None, Some((opening, url, port)))
             }

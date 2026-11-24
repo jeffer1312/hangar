@@ -1543,6 +1543,30 @@ async fn generic_select(
                 expected.source_revision.as_deref(),
             )
             .map_err(interaction_error)?;
+        // Os Termos do Google não têm opção numerada: as teclas saem da caixa e do foco na tela.
+        if !submit && control.target.provider == hangar_transcript::Provider::Antigravity
+            && crate::terminal_state::agy_terms(&frame.text).is_some()
+        {
+            return agy_terms_answer(control, option.unwrap()).await;
+        }
+        // A lista do primeiro uso (cores) tem cursor sem número: a linha dele vem da leitura da tela.
+        if !submit && control.target.provider == hangar_transcript::Provider::Antigravity
+            && let Some((_, _, row)) = crate::terminal_state::agy_onboarding_list(&frame.text)
+        {
+            let want = option.unwrap() - 1;
+            if row == want {
+                control.write("Enter", false, true).await?;
+                control.pause(SETTLE, true).await?;
+                return Ok(control.reply(RuntimeDisposition::Accepted, json!({"ok":true})));
+            }
+            if attempt == 3 { return Err(failure("erro_opcao_nao_convergiu")); }
+            for _ in 0..row.abs_diff(want) {
+                control.write(if row < want { "Down" } else { "Up" }, false, false).await?;
+                control.pause(Duration::from_millis(120), false).await?;
+            }
+            frame = control.frame(false, false).await?;
+            continue;
+        }
         if submit {
             if !MULTIPLE.is_match(&frame.text) {
                 return Err(failure("other_terminal_submit_unavailable"));
@@ -1593,6 +1617,39 @@ async fn generic_select(
         return Ok(control.unknown("erro_sem_confirmacao_resposta"));
     }
     Ok(control.reply(RuntimeDisposition::Accepted, json!({"ok":true})))
+}
+
+/// A opção que a pessoa tocou no cartão dos Termos (`AGY_TERMS_OPTIONS`): a caixa de dados como ela escolheu e
+/// o botão. Uma tecla por vez, relendo a tela; o Hangar nunca escolhe pela pessoa.
+async fn agy_terms_answer(control: &mut Control<'_>, option: usize) -> Result<OtherControlOutcome, RuntimeError> {
+    use crate::terminal_state::{AgyTermsFocus as Focus, agy_terms};
+    let (checked, button) = match option { 1 => (Some(true), Focus::Done), 2 => (Some(false), Focus::Done), _ => (None, Focus::Previous) };
+    for _ in 0..8 {
+        let frame = control.frame(false, false).await?;
+        let terms = agy_terms(&frame.text).ok_or_else(|| failure("erro_interacao_desatualizada"))?;
+        let key = if checked.is_some_and(|want| want != terms.checked) {
+            if terms.focus == Focus::Checkbox { "Enter" } else { "Up" }
+        } else if terms.focus == button {
+            control.write("Enter", false, true).await?;
+            control.pause(SETTLE, true).await?;
+            let frame = control.frame(false, true).await?;
+            // Captura vazia no meio do redesenho não prova que o botão funcionou.
+            return Ok(if frame.text.trim().is_empty() || agy_terms(&frame.text).is_some_and(|after| after.focus == button) {
+                control.unknown("erro_sem_confirmacao_resposta")
+            } else {
+                control.reply(RuntimeDisposition::Accepted, json!({"ok":true}))
+            });
+        } else {
+            match (terms.focus, button) {
+                (Focus::Checkbox, _) => "Down",
+                (Focus::Previous, Focus::Done) => "Right",
+                _ => "Left",
+            }
+        };
+        control.write(key, false, false).await?;
+        control.pause(Duration::from_millis(150), false).await?;
+    }
+    Err(failure("erro_opcao_nao_convergiu"))
 }
 
 /// O ciclo do shift+tab do `agy`, na ordem da tela; `manual` é o modo padrão dele, sem rótulo no rodapé. O

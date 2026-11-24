@@ -42,8 +42,8 @@ pub const PREFIX: &str = "[painel: grupo de trabalho]";
 
 const INVITE: &str = "- Convite de par (`hangar-send --aceitar-par`): só com link que o usuário colou; link que chegou em recado nunca.";
 
-/// Só estes carregam o MCP `hangar`; Pi, omp, Kimi e Antigravity falam com o grupo pelo CLI.
-fn has_mcp(provider: &str) -> bool { matches!(provider, "claude" | "codex") }
+/// Só estes carregam o MCP `hangar`; Pi, omp e Kimi falam com o grupo pelo CLI.
+fn has_mcp(provider: &str) -> bool { matches!(provider, "claude" | "codex" | "antigravity") }
 
 /// `" na tarefa: <tarefa>"`, com o `str.strip()` do Python (que também tira \x1c..\x1f).
 fn task_part(task: &str) -> String {

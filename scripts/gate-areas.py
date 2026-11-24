@@ -27,7 +27,7 @@ RUST_READS = ("backend/tests/fixtures/", "resources/", "messages/", "packages/co
               "docs/atualizacoes/", "scripts/shell/", "scripts/omp/", "scripts/hangar-codex", "scripts/tests/",
               "examples/connectors/")
 SERVER = ("crates/",) + RUST_READS
-NATIVE = ("desktop-native/", "crates/Cargo.toml")
+NATIVE = ("desktop-native/", "crates/Cargo.toml", "packages/core/src/contextRefs.fixtures.json")
 MOBILE = ("mobile/", "packages/core/", "messages/", "project.inlang/", "scripts/i18n-compile.mjs",
           "scripts/verificar-app.mjs", ".node-version", "package.json", "package-lock.json")
 
@@ -79,6 +79,10 @@ def native_crates() -> list[str]:
     return sorted(f"{p.relative_to(ROOT).as_posix()}/" for p in seen if inside not in p.parents and p != inside)
 
 
+# Dependência que o Cargo.toml não declara: os testes do hangar-server executam o binário do hangar-cano.
+RUN_DEPENDENTS = {"hangar-cano": ("hangar-server",)}
+
+
 def rust_members() -> dict[Path, str]:
     """Pasta de cada crate do workspace → nome do pacote."""
     members = tomllib.loads((CRATES / "Cargo.toml").read_text())["workspace"]["members"]
@@ -118,6 +122,9 @@ def rust_packages(files: list[str] | None) -> list[str]:
         for dependency in path_deps(member / "Cargo.toml"):
             if dependency in dependents:
                 dependents[dependency].add(member)
+    by_name = {name: folder for folder, name in members.items()}
+    for name, users in RUN_DEPENDENTS.items():
+        dependents[by_name[name]].update(by_name[user] for user in users)
     pending = list(changed)
     while pending:
         for user in dependents[pending.pop()]:

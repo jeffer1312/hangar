@@ -2410,34 +2410,46 @@ if (Tem 'git') {
     $cand = Join-Path $gitDir 'bin\bash.exe'
     if (Test-Path $cand) { $bash = $cand }
 }
+$binUsuario = Join-Path $HOME '.local\bin'
+New-Item -ItemType Directory -Force -Path $binUsuario | Out-Null
+# Atalhos em maquina migrada vao pelo current do perfil: o caminho real da versao seria podado.
+$raizAtalhos = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { '%USERPROFILE%\.hangar\current' } else { $raiz }
+# (2) lancador pro PowerShell: o hangar-send e o `hangar-server send`, chamado direto (sem o
+# bash) pelo executavel que o scripts\hangar-server-lookup.cmd acha. A linha `rem` guarda o
+# caminho do scripts\hangar-send entre aspas: plugins de terceiros o procuram no texto do atalho.
+# Na maquina com pacote vai pela copia dos hooks: a versao anterior troca o lancador e nao tem o
+# lookup.cmd, mas nao conhece a copia, e o atalho segue de pe na volta de versao. Sem a copia
+# (instalacao nova, checkout) ou com CP_RUST_SERVER_BIN escolhido, a regra do lookup.cmd.
+function Achar-Servidor([string]$quem, [string]$codigo) {
+    $alvo = if ($quem) { " $quem" } else { '' }
+    $lookup = "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`"$alvo || exit /b $codigo`r`n"
+    if ($raizAtalhos -ne '%USERPROFILE%\.hangar\current') { return $lookup }
+    return "set `"HANGAR_SERVER_BIN=%USERPROFILE%\.hangar\bin\hangar-hooks.exe`"`r`n" +
+           "if defined CP_RUST_SERVER_BIN set `"HANGAR_SERVER_BIN=`"`r`n" +
+           "if not exist `"%HANGAR_SERVER_BIN%`" (`r`n    $lookup)`r`n"
+}
+# O MCP `hangar` por stdio do `agy`, que so manda cabecalho fixo: o mcp_config.json grava este caminho.
+# Nada pode sair no stdout antes do servidor: ele e o canal do MCP. Fica fora do ramo do Git Bash: so chama o
+# executavel Rust, e a instalacao sem Git tambem precisa do MCP do agy.
+$lancadorMcpStdio = Join-Path $binUsuario 'hangar-mcp-stdio.cmd'
+$conteudoMcpStdio = "@echo off`r`n" +
+                    "setlocal`r`n" +
+                    (Achar-Servidor 'hangar-mcp-stdio' '1') +
+                    "`"%HANGAR_SERVER_BIN%`" mcp-stdio --root `"$raizAtalhos`"`r`n" +
+                    "exit /b %ERRORLEVEL%`r`n"
+if (Escrever-Lancador $lancadorMcpStdio $conteudoMcpStdio 'cmd') { Ok "lancador hangar-mcp-stdio.cmd criado em $binUsuario" }
+else { Ok 'lancador hangar-mcp-stdio.cmd ja atualizado' }
+
 if (-not $bash) {
     Falta 'bash do Git for Windows nao encontrado - hangar-send fica de fora'
     $sendOk = $false
     Nota 'instale o Git e rode este instalador de novo'
 } else {
-    $binUsuario = Join-Path $HOME '.local\bin'
-    New-Item -ItemType Directory -Force -Path $binUsuario | Out-Null
     # Forma /c/... do mesmo diretorio, pra usar dentro do bash.
     $binMsys = ($binUsuario -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
 
-    # Atalhos em maquina migrada vao pelo current do perfil: o caminho real da versao seria podado.
-    $raizAtalhos = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { '%USERPROFILE%\.hangar\current' } else { $raiz }
     # A mesma raiz na forma /c/... dos atalhos do Git Bash.
     $shimRootMsys = $(if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { Join-Path $HOME '.hangar\current' } else { $raiz }) -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
-    # (2) lancador pro PowerShell: o hangar-send e o `hangar-server send`, chamado direto (sem o
-    # bash) pelo executavel que o scripts\hangar-server-lookup.cmd acha. A linha `rem` guarda o
-    # caminho do scripts\hangar-send entre aspas: plugins de terceiros o procuram no texto do atalho.
-    # Na maquina com pacote vai pela copia dos hooks: a versao anterior troca o lancador e nao tem o
-    # lookup.cmd, mas nao conhece a copia, e o atalho segue de pe na volta de versao. Sem a copia
-    # (instalacao nova, checkout) ou com CP_RUST_SERVER_BIN escolhido, a regra do lookup.cmd.
-    function Achar-Servidor([string]$quem, [string]$codigo) {
-        $alvo = if ($quem) { " $quem" } else { '' }
-        $lookup = "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`"$alvo || exit /b $codigo`r`n"
-        if ($raizAtalhos -ne '%USERPROFILE%\.hangar\current') { return $lookup }
-        return "set `"HANGAR_SERVER_BIN=%USERPROFILE%\.hangar\bin\hangar-hooks.exe`"`r`n" +
-               "if defined CP_RUST_SERVER_BIN set `"HANGAR_SERVER_BIN=`"`r`n" +
-               "if not exist `"%HANGAR_SERVER_BIN%`" (`r`n    $lookup)`r`n"
-    }
     $lancador = Join-Path $binUsuario 'hangar-send.cmd'
     $conteudo = "@echo off`r`n" +
                 "setlocal`r`n" +

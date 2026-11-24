@@ -1,7 +1,8 @@
 //! A entrada do Hangar no `hooks.json` da conta (`<gemini>/config/hooks.json`). O arquivo é da pessoa: só a
 //! entrada `"hangar"` é nossa, e as outras ficam como estão.
 //!
-//! Nunca `PreToolUse` nem `PostToolUse`: um `PreToolUse` que devolve `{}` bloqueia a ferramenta (provado no agy 1.5.15).
+//! Estado só pelos quatro eventos sem ferramenta. O único `PreToolUse` é a guarda, que sempre responde um
+//! `decision`: `{}` ou saída diferente de zero bloqueiam a ferramenta (provado no agy 1.5.15 e 1.5.16).
 use std::io;
 use std::path::Path;
 
@@ -10,6 +11,8 @@ use serde_json::{json, Map, Value};
 pub const ENTRY: &str = "hangar";
 pub const EVENTS: [&str; 4] = ["SessionStart", "PreInvocation", "PostInvocation", "Stop"];
 const TIMEOUT_S: u64 = 10;
+/// As ferramentas que a guarda confere: o shell (tmux e o arquivo do cofre) e a leitura de arquivo.
+pub const GUARD_MATCHER: &str = "run_command|view_file|grep_search";
 
 #[derive(Debug)]
 pub enum Error {
@@ -31,15 +34,21 @@ impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self { Self::Io(e) }
 }
 
-pub fn entry(command: &str) -> Value {
-    let handler = json!([{ "type": "command", "command": command, "timeout": TIMEOUT_S }]);
-    Value::Object(EVENTS.iter().map(|e| ((*e).to_owned(), handler.clone())).collect())
+/// `state` é o comando do hook de estado; `guard`, o da guarda do multiplexador e do cofre.
+pub fn entry(state: &str, guard: &str) -> Value {
+    let handler = json!([{ "type": "command", "command": state, "timeout": TIMEOUT_S }]);
+    let mut events: Map<String, Value> = EVENTS.iter().map(|e| ((*e).to_owned(), handler.clone())).collect();
+    events.insert("PreToolUse".to_owned(), json!([{
+        "matcher": GUARD_MATCHER,
+        "hooks": [{ "type": "command", "command": guard, "timeout": TIMEOUT_S }],
+    }]));
+    Value::Object(events)
 }
 
 /// `true` quando gravou. Arquivo ausente nasce só com a entrada do Hangar.
-pub fn install(path: &Path, command: &str) -> Result<bool, Error> {
+pub fn install(path: &Path, state: &str, guard: &str) -> Result<bool, Error> {
     let mut doc = read(path)?;
-    let wanted = entry(command);
+    let wanted = entry(state, guard);
     if doc.get(ENTRY) == Some(&wanted) { return Ok(false); }
     doc.insert(ENTRY.to_owned(), wanted);
     write(path, &doc)?;
@@ -82,19 +91,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn installs_only_the_four_state_events_and_keeps_the_rest() {
+    fn installs_the_state_events_and_the_guard_and_keeps_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config/hooks.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, r#"{"lint":{"PostToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"./lint.sh"}]}]}}"#).unwrap();
-        assert!(install(&path, "/opt/hangar/hangar-server agy-state-hook").unwrap());
+        assert!(install(&path, "/opt/hangar/hangar-server agy-state-hook", "/opt/hangar/hangar-server agy-guard-tmux").unwrap());
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(doc["lint"]["PostToolUse"][0]["matcher"], "run_command");
         let ours = doc[ENTRY].as_object().unwrap();
-        assert_eq!(ours.keys().map(String::as_str).collect::<Vec<_>>(), EVENTS);
-        assert!(!ours.contains_key("PreToolUse") && !ours.contains_key("PostToolUse"));
+        assert_eq!(ours.keys().map(String::as_str).collect::<Vec<_>>(), [&EVENTS[..], &["PreToolUse"]].concat());
+        assert!(!ours.contains_key("PostToolUse"));
         assert_eq!(ours["Stop"][0]["command"], "/opt/hangar/hangar-server agy-state-hook");
-        assert!(!install(&path, "/opt/hangar/hangar-server agy-state-hook").unwrap(), "segunda vez não regrava");
+        assert_eq!(ours["PreToolUse"][0]["matcher"], GUARD_MATCHER);
+        assert_eq!(ours["PreToolUse"][0]["hooks"][0]["command"], "/opt/hangar/hangar-server agy-guard-tmux");
+        assert!(!install(&path, "/opt/hangar/hangar-server agy-state-hook", "/opt/hangar/hangar-server agy-guard-tmux").unwrap(), "segunda vez não regrava");
     }
 
     #[test]
@@ -102,7 +113,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hooks.json");
         std::fs::write(&path, "{ quebrado").unwrap();
-        assert!(matches!(install(&path, "x"), Err(Error::Unreadable(_))));
+        assert!(matches!(install(&path, "x", "y"), Err(Error::Unreadable(_))));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ quebrado");
     }
 
@@ -110,7 +121,7 @@ mod tests {
     fn a_missing_file_is_created_and_uninstall_leaves_the_others() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config/hooks.json");
-        assert!(install(&path, "cmd").unwrap());
+        assert!(install(&path, "cmd", "guard").unwrap());
         assert!(uninstall(&path).unwrap());
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(doc, json!({}));

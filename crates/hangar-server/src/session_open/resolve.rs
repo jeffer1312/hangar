@@ -293,7 +293,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
                     codex_account = Some(info.codex_account.clone().unwrap_or_else(|| "default".into()));
                     source = AccountSource::Inherited;
                 }
-                if headless.is_none() && matches!(provider, AgentProvider::Claude | AgentProvider::Codex) && !request.read_only {
+                if headless.is_none() && matches!(provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity) && !request.read_only {
                     headless = Some(info.headless);
                 }
                 // O 1º recado de uma criadora em bypass para uma irmã em Manual fica retido no receptor.
@@ -376,7 +376,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     }
 
     let headless = headless.unwrap_or_else(|| {
-        !request.read_only && matches!(provider, AgentProvider::Claude | AgentProvider::Codex) && facts.defaults().headless
+        !request.read_only && matches!(provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity) && facts.defaults().headless
     });
     // Pedido explícito de `manual` no Antigravity com terminal: ele abriria em `auto`, que roda comando sem perguntar.
     if asked_manual && !headless {
@@ -696,10 +696,10 @@ fn validate(request: &SessionOpenRequest, caller: &OpenCaller, provider: AgentPr
     };
     // No Antigravity a pasta é a conta Google (`GEMINI_HOME`), não uma conta Claude.
     if provider == AgentProvider::Antigravity {
-        // O `agy` com terminal ignora o `GEMINI_HOME` (o login da adicional cai na padrão): só a conta padrão.
-        if config_dir.is_some() && !headless {
+        // O `agy` grava os dados em `~/.gemini` mesmo com o `GEMINI_HOME` de outra pasta (com e sem terminal): só a conta padrão.
+        if config_dir.is_some() {
             return Err(OpenError::new(409, "erro_conta_antigravity_adicional",
-                "o Antigravity com terminal só usa a conta padrão (a do ~/.gemini); abra sem escolher conta"));
+                "o Antigravity só usa a conta padrão (a do ~/.gemini); abra sem escolher conta"));
         }
         if let Some(dir) = config_dir && !hangar_antigravity::paths::is_account_dir(std::path::Path::new(dir)) {
             return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
@@ -782,8 +782,9 @@ fn validate_choice(provider: AgentProvider, model: Option<&str>, effort: Option<
                 "effort: use letras minúsculas (2 a 32) — os níveis do Codex variam por modelo e vêm do provedor")),
             AgentProvider::Claude => &EFFORT_CLAUDE,
             AgentProvider::Pi | AgentProvider::Omp => &EFFORT_PI,
-            // O esforço do Antigravity vem no id do modelo (`gemini-4-neon-high`).
-            AgentProvider::Kimi | AgentProvider::Antigravity => return Err(OpenError::plain(400, format!("provider '{name}' não aceita escolha de esforço aqui"))),
+            // `agy --effort` aceita os mesmos níveis do Claude.
+            AgentProvider::Antigravity => &EFFORT_CLAUDE,
+            AgentProvider::Kimi => return Err(OpenError::plain(400, format!("provider '{name}' não aceita escolha de esforço aqui"))),
         };
         if !levels.is_empty() && !levels.contains(&effort) {
             return Err(OpenError::plain(400, format!("effort: use um de {}", levels.join(", "))));
@@ -817,8 +818,8 @@ fn validate_name(raw: &str, provider: AgentProvider, headless: bool, request: &S
         return Err(OpenError::new(409, "session_transfer_busy", "A sessão está trocando de agente; tente novamente quando terminar."));
     }
     if headless {
-        if !matches!(provider, AgentProvider::Claude | AgentProvider::Codex) {
-            return Err(conflict("sessao sem terminal so vale para provider claude ou codex"));
+        if !matches!(provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity) {
+            return Err(conflict("sessao sem terminal so vale para provider claude, codex ou antigravity"));
         }
         // O prompt inicial é entregue em todo provedor; só leitura continua exigindo terminal.
         if request.read_only {
