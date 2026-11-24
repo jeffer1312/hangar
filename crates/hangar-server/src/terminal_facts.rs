@@ -196,6 +196,7 @@ impl LocalTerminalFacts {
         let driver = TerminalDriver::new(binding.clone(), Arc::new(NoFacts), self.io.clone(), InputLimits::default());
         let screen = driver.facts_screen().await.map_err(|error| ServiceError(error.code))?;
         let (ready, mut idle) = input::input_state(&screen);
+        let screen_idle = idle;
         let (files, plugin_store, question_frame) = (target.clone(), self.plugin.clone(), screen.clone());
         let (native, question) = tokio::task::spawn_blocking(move || {
             let native = native_record(&files.metadata, &files.binding.conversation)?;
@@ -212,9 +213,10 @@ impl LocalTerminalFacts {
         else if current && let Some(state) = plugin["plugin_state"]["state"].as_str().filter(|_| plugin_alive(&plugin) || plugin["plugin_state"]["age_ms"].as_u64().is_some_and(|age| age <= 90_000)) { idle = state == "idle"; }
         else {
             let (metadata, conversation, created) = (target.metadata.clone(), binding.conversation.clone(), target.created);
-            // O `Notification` também sai com o Claude parado esperando a pessoa: caixa livre e sem pergunta é parado.
+            // O `Notification` também sai com o Claude parado esperando a pessoa: só conta como parado com a tela
+            // parada, porque depois de uma permissão concedida o marcador fica nele até o `PostToolUse`.
             if let Some(state) = tokio::task::spawn_blocking(move || hook_state(&metadata, &conversation, created)).await.map_err(|_| ServiceError("terminal_hook_unavailable"))?? {
-                idle = state == "idle" || state == "awaiting_input" && ready && !open_question;
+                idle = state == "idle" || state == "awaiting_input" && ready && screen_idle && !open_question;
             }
         }
         let live = current && plugin["waiter_open"] == true;
@@ -551,6 +553,9 @@ mod tests {
         std::fs::write(dir.path().join(".hangar-state/sid.json"),json!({"state":"idle","ts":now+2.0}).to_string()).unwrap();assert!(local.read(&target,&target.binding,"").await.unwrap().idle);
         std::fs::write(dir.path().join(".hangar-state/sid.json"),json!({"state":"awaiting_input","ts":now+2.0}).to_string()).unwrap();
         assert!(local.read(&target,&target.binding,"").await.unwrap().idle,"aviso de espera com a caixa livre e sem pergunta é parado");
+        let rule="────────────────────────────────";
+        let working=LocalTerminalFacts::new(Arc::new(FrameIo(format!("● resposta\n\n✻ Precipitating… (2m 12s)\n\n{rule}\n❯ \n{rule}\n").into_bytes())),Some(plugin.clone()),None);
+        assert!(!working.read(&target,&target.binding,"").await.unwrap().idle,"aviso de espera com a tela trabalhando não é parado");
         drop(poll);plugin.forget("key").unwrap();assert!(local.read(&target,&target.binding,"").await.is_err());
     }
     #[cfg(target_os="linux")]
