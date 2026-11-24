@@ -28,6 +28,11 @@ NATIVE = [
     "app::create::default_tests::the_open_body_does_not_depend_on_what_this_computer_saved",
     "app::create::scheduled_launch::tests::a_new_template_does_not_freeze_what_the_screen_showed",
     "app::create::scheduled_launch::tests::switching_provider_on_a_new_template_keeps_only_the_provider",
+    # Os três leitores do <hangar-ref> seguem os mesmos casos.
+    "context_refs::tests::notes_match_the_shared_cases",
+    "context_refs::tests::serializes_and_reads_back_the_shared_cases",
+    "context_refs::tests::reads_the_shared_raw_cases",
+    "context_refs::tests::labels_follow_the_shared_cases",
 ]
 # Arquivo → títulos; lista vazia é o arquivo inteiro.
 MOBILE = {
@@ -35,12 +40,15 @@ MOBILE = {
         "modelo e esforço lembrados no aparelho não vão no pedido sem padrão do servidor",
         "modo de execução vem do servidor e só vai no pedido quando a pessoa escolhe",
         "conta Codex lembrada no aparelho não substitui a padrão do servidor",
+        "o pedido de abertura não muda com nada guardado no aparelho: claude",
+        "o pedido de abertura não muda com nada guardado no aparelho: codex",
     ],
     "src/theme/fontScaleGuard.test.ts": [],
     "src/theme/layoutScaleGuard.test.ts": [],
 }
 # Texto de interface vem das mensagens, e pt e en têm as mesmas chaves.
 FRONTEND = {"src/lib/i18nGuard.test.ts": []}
+CORE = {"src/contextRefs.test.ts": []}
 
 
 def cargo(folder: str, args: list[str], names: list[str]) -> list[str]:
@@ -92,7 +100,7 @@ AREAS = {
     "server": lambda: cargo("crates", ["--workspace", "--lib", "--test", "open_fields"], SERVER),
     "native": lambda: cargo("desktop-native", [], NATIVE),
     "mobile": lambda: vitest("mobile", MOBILE),
-    "frontend": lambda: vitest("frontend", FRONTEND),
+    "frontend": lambda: vitest("frontend", FRONTEND) + vitest("packages/core", CORE),
 }
 
 

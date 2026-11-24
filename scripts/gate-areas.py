@@ -17,7 +17,7 @@ GATE = ("scripts/gate-areas.py", "scripts/rule-tests.py", ".github/workflows/gat
 
 # O que pode derrubar as travas do scripts/rule-tests.py; o resto é das suítes do push.
 SERVER = ("crates/",)
-NATIVE = ("desktop-native/", "crates/Cargo.toml")
+NATIVE = ("desktop-native/", "crates/Cargo.toml", "packages/core/src/contextRefs.fixtures.json")
 MOBILE = ("mobile/", "packages/core/", "messages/", "project.inlang/", "scripts/i18n-compile.mjs",
           "scripts/verificar-app.mjs", ".node-version", "package.json", "package-lock.json")
 
