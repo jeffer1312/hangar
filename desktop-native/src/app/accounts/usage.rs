@@ -104,6 +104,10 @@ impl Hangar {
                 .map(|w| (w.label.clone(), w.pct))
         } else {
             match build_row(c, &HashMap::new(), false, now()).quota {
+                QuotaView::Bars { bars, .. } if c.kind == "antigravity" => {
+                    let bars = agy_group(bars, model.as_deref());
+                    fullest(&bars, None).map(|b| (b.label.clone(), b.pct))
+                }
                 QuotaView::Bars { bars, .. } => fullest(&bars, model.as_deref()).map(|b| (b.label.clone(), b.pct)),
                 _ => None,
             }
@@ -316,6 +320,28 @@ mod tests {
         session.engine = None;
         assert_eq!(super::account_in_use(&list, Some(&session)).unwrap().id, "claude:/storage");
     }
+
+    #[test]
+    fn agy_sessions_see_only_the_quota_group_of_their_model() {
+        let bar = |label: &str, pct: f64, per_model: bool| super::super::Bar { label: label.into(), reset: String::new(), reset_days: String::new(),
+            pct, reset_at: None, per_model };
+        let bars = || vec![bar("7d", 3., false), bar("5h", 4., false), bar("Claude/GPT 7d", 50., true), bar("Claude/GPT 5h", 60., true)];
+        let gemini = super::agy_group(bars(), Some("gemini-4-neon-high"));
+        assert_eq!(super::fullest(&gemini, None).map(|b| (b.label.as_str(), b.pct)), Some(("5h", 4.)));
+        let claude = super::agy_group(bars(), Some("claude-opus-5-5"));
+        assert_eq!(super::fullest(&claude, None).map(|b| (b.label.as_str(), b.pct)), Some(("5h", 60.)));
+    }
+}
+
+/// No `agy` a cota é por grupo de modelos: o do Gemini nas janelas gerais e o "Claude/GPT" nas por modelo. A sessão
+/// vê só o grupo do modelo dela, com o rótulo de sempre ("5h", "7d").
+fn agy_group(bars: Vec<Bar>, model: Option<&str>) -> Vec<Bar> {
+    let third = model.is_some_and(|m| m.contains("claude") || m.contains("gpt"));
+    bars.into_iter().filter(|b| b.per_model == third).map(|mut b| {
+        if let Some((_, window)) = b.label.rsplit_once(' ') { b.label = window.to_owned(); }
+        b.per_model = false;
+        b
+    }).collect()
 }
 
 /// A janela mais cheia; janela de um modelo só conta quando é o modelo da sessão, e no empate vence a que renova antes.

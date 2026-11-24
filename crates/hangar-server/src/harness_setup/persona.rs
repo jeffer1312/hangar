@@ -40,12 +40,48 @@ const AGY_RULES_LIMIT: u64 = 24_000;
 /// Só o `~/.gemini/config/AGENTS.md` -> `~/.claude/CLAUDE.md`, na subida do servidor e a cada abertura do `agy`:
 /// sem o `harness-setup` manual o `agy` ficava sem as regras globais. Arquivo de verdade da pessoa fica; tudo
 /// só vai ao log.
+/// Marcas do bloco Sessões-irmãs que o instalador grava no `CLAUDE.md`.
+const BLOCK_START: &str = "<!-- claude-pocket:sessoes-irmas:start -->";
+const BLOCK_END: &str = "<!-- claude-pocket:sessoes-irmas:end -->";
+/// Primeira linha do corpo da regra: arquivo sem ela é da pessoa e não é regravado.
+const RULE_MARK: &str = "<!-- hangar: gerado pelo Hangar a partir do bloco Sessões-irmãs; não edite -->";
+
+/// O protocolo do Hangar como regra própria do `agy` (`~/.gemini/config/rules/hangar.md`, sempre ativa): o
+/// `AGENTS.md` ligado ao `CLAUDE.md` é cortado em 24.000 bytes e o bloco fica no fim dele.
+pub fn agy_rule(claude_md: &str) -> Option<String> {
+    let start = claude_md.find(BLOCK_START)?;
+    let end = claude_md[start..].find(BLOCK_END)? + start + BLOCK_END.len();
+    let block = &claude_md[start..end];
+    Some(format!("---\ntrigger: always_on\ndescription: \"Hangar: sessões-irmãs, recados (hangar-send), MCP hangar e navegador embutido\"\n---\n\n\
+{RULE_MARK}\n\n{block}\n\n\
+- **Antigravity:** no sandbox do terminal o `~/.hangar` some e IP direto é recusado: `hangar-send` e `hangar-preview` só \
+funcionam pelo run_command com BypassSandbox. Prefira as tools do MCP hangar (`sessions`, `send`, `group`, `browser_*`).\n"))
+}
+
+fn sync_agy_rule(dir: &Path, source: &Path) {
+    let Some(rule) = fs::read_to_string(source).ok().as_deref().and_then(agy_rule) else { return };
+    let path = dir.join("rules").join("hangar.md");
+    match fs::read_to_string(&path) {
+        Ok(current) if current == rule => return,
+        Ok(current) if !current.contains(RULE_MARK) => {
+            tracing::info!(file = %path.display(), "rules/hangar.md do agy é da pessoa; protocolo do Hangar não gravado");
+            return;
+        }
+        _ => {}
+    }
+    let written = fs::create_dir_all(dir.join("rules")).and_then(|()| hangar_core::fs::atomic_write(&path, rule.as_bytes()));
+    if let Err(error) = written {
+        tracing::warn!(code = "agy_rule_failed", %error, "protocolo do Hangar não gravado nas regras do agy");
+    }
+}
+
 pub fn sync_agy(home: &Path) {
     let agy = hangar_antigravity::Account::default();
     let source = home.join(".claude/CLAUDE.md");
     if !agy.data_dir(home).is_dir() || !source.is_file() {
         return;
     }
+    sync_agy_rule(&agy.gemini_dir(home).join("config"), &source);
     let dir = agy.gemini_dir(home).join("config");
     match fs::create_dir_all(&dir).and_then(|()| link(&dir.join("AGENTS.md"), &source, false)) {
         Ok(true) => {}
@@ -155,6 +191,24 @@ mod tests {
         fs::write(&rules, "minhas regras").unwrap();
         sync_agy(home.path());
         assert_eq!(fs::read_to_string(&rules).unwrap(), "minhas regras");
+    }
+
+    #[test]
+    fn the_hangar_block_becomes_an_always_on_rule_of_agy_and_a_file_of_the_person_stays() {
+        let home = home();
+        let block = format!("{BLOCK_START}\n# Sessões-irmãs (hangar)\n- hangar-send --list\n{BLOCK_END}");
+        fs::write(home.path().join(".claude/CLAUDE.md"), format!("# regras\n{}\n{block}\n", "x".repeat(30_000))).unwrap();
+        fs::create_dir_all(home.path().join(".gemini/antigravity-cli")).unwrap();
+        sync_agy(home.path());
+        let rule = home.path().join(".gemini/config/rules/hangar.md");
+        let text = fs::read_to_string(&rule).unwrap();
+        assert!(text.starts_with("---\ntrigger: always_on\n"), "{text}");
+        assert!(text.contains(&block) && text.contains("BypassSandbox"), "{text}");
+        assert!(text.len() < 24_000);
+        fs::write(&rule, "minha regra").unwrap();
+        sync_agy(home.path());
+        assert_eq!(fs::read_to_string(&rule).unwrap(), "minha regra");
+        assert_eq!(agy_rule("sem bloco"), None);
     }
 
     #[test]
