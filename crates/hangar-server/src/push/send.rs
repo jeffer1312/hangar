@@ -166,6 +166,8 @@ pub struct Outgoing {
     pub url: Option<String>,
     /// (`server_id`, `request_id`) do pedido do cofre: o aviso abre a folha dele.
     pub vault: Option<(String, String)>,
+    /// (`server_id`, id do rascunho) do WhatsApp: o aviso abre a folha dele.
+    pub whatsapp_draft: Option<(String, String)>,
 }
 
 impl Outgoing {
@@ -177,6 +179,7 @@ impl Outgoing {
             tag: None,
             url: None,
             vault: None,
+            whatsapp_draft: None,
         }
     }
 
@@ -184,14 +187,15 @@ impl Outgoing {
     pub fn vault_request(session: &str, server_id: String, request_id: String, origin: String, label: String) -> Self {
         let notice = Notice::VaultRequest { server_id: server_id.clone(), request_id: request_id.clone(), origin, label };
         Self { session: session.to_owned(), body: Box::new(move |l| notice.body(l)), title: Some(Box::new(|l| msg(l, "cofre").to_owned())),
-            tag: None, url: Some("/".to_owned()), vault: Some((server_id, request_id)) }
+            tag: None, url: Some("/".to_owned()), vault: Some((server_id, request_id)), whatsapp_draft: None }
     }
 
     /// Rascunho de WhatsApp: frase fixa, sem conversa, número nem texto (passa por Expo e Web Push); `url` `/`, onde o
     /// cartão está.
-    pub fn whatsapp_draft(session: &str) -> Self {
+    pub fn whatsapp_draft(session: &str, server_id: String, draft_id: String) -> Self {
         Self { session: session.to_owned(), body: Box::new(|l| msg(l, "whatsapp_rascunho").to_owned()),
-            title: Some(Box::new(|l| msg(l, "whatsapp").to_owned())), tag: None, url: Some("/".to_owned()), vault: None }
+            title: Some(Box::new(|l| msg(l, "whatsapp").to_owned())), tag: None, url: Some("/".to_owned()), vault: None,
+            whatsapp_draft: Some((server_id, draft_id)) }
     }
 
     /// Várias sessões no mesmo ciclo: "N sessões aguardando: a, b", abre a lista.
@@ -206,6 +210,7 @@ impl Outgoing {
             tag: Some(COALESCE_TAG),
             url: Some("/".to_owned()),
             vault: None,
+            whatsapp_draft: None,
         }
     }
 
@@ -249,6 +254,11 @@ impl Outgoing {
             p["url"] = json!(format!("/?server={server}&vault_request={request_id}"));
             p["server_id"] = json!(server);
             p["request_id"] = json!(request_id);
+        }
+        if let Some((server_id, draft_id)) = &self.whatsapp_draft {
+            let server = entry["serverId"].as_str().filter(|s| !s.is_empty()).unwrap_or(server_id);
+            p["server_id"] = json!(server);
+            p["whatsapp_draft_id"] = json!(draft_id);
         }
         Ok(p)
     }
@@ -426,7 +436,7 @@ impl Sender {
 
     /// Rascunho de WhatsApp esperando o dono: como o cofre, só o horário de silêncio segura; a sessão que pediu fica
     /// parada esperando a resposta.
-    pub fn whatsapp_draft(self: &Arc<Self>, session: &str) {
+    pub fn whatsapp_draft(self: &Arc<Self>, session: &str, server_id: String, draft_id: String) {
         if test_binary() { return; }
         let (me, session) = (self.clone(), session.to_owned());
         tokio::spawn(async move {
@@ -440,7 +450,7 @@ impl Sender {
                 Ok(true) => return,
                 Err(_) => return held(),
             }
-            me.broadcast(Outgoing::whatsapp_draft(&session)).await
+            me.broadcast(Outgoing::whatsapp_draft(&session, server_id, draft_id)).await
         });
     }
 
@@ -497,6 +507,7 @@ impl Sender {
             pick(&*out.body),
             out.url.as_deref() == Some("/"),
             out.vault.as_ref().map(|(_, request_id)| request_id.clone()),
+            out.whatsapp_draft.as_ref().map(|(_, draft_id)| draft_id.clone()),
         );
         let Some(vapid) = webpush::vapid(&self.env) else {
             // Sem chave o Web Push está desligado; chave pública presente e par inválido é falha.

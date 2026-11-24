@@ -74,6 +74,9 @@ struct Notify {
     /// `request_id` do pedido do cofre: o app abre a folha dele. Só o Rust preenche.
     #[serde(skip)]
     vault_request: Option<String>,
+    /// Id do rascunho de WhatsApp: o app abre a folha dele. Só o Rust preenche.
+    #[serde(skip)]
+    whatsapp_draft: Option<String>,
 }
 
 // O Expo guarda recibos por 24 h e lê até 1000 por chamada; ticket sem recibo não fica para sempre.
@@ -187,6 +190,7 @@ pub(crate) fn send(
     body: (String, String),
     list: bool,
     vault_request: Option<String>,
+    whatsapp_draft: Option<String>,
 ) {
     let base = state
         .accounts
@@ -209,6 +213,7 @@ pub(crate) fn send(
         },
         list,
         vault_request,
+        whatsapp_draft,
     };
     tokio::spawn(deliver(
         path(&state.accounts.env.home),
@@ -310,6 +315,10 @@ async fn deliver(path: PathBuf, base: String, diag: DiagClient, notify: Notify) 
             if let Some(request_id) = &notify.vault_request {
                 data["server_id"] = json!(e.server_id);
                 data["request_id"] = json!(request_id);
+            }
+            if let Some(draft_id) = &notify.whatsapp_draft {
+                data["server_id"] = json!(e.server_id);
+                data["whatsapp_draft_id"] = json!(draft_id);
             }
             json!({"to": e.token, "title": format!("{} · {}", e.label, notify.title.pick(&e.locale)),
                 "body": notify.body.pick(&e.locale), "data": data, "channelId": "default", "priority": "high"})

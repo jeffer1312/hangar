@@ -171,6 +171,7 @@ impl Fixture {
                 tag: None,
                 url: list.then(|| "/".into()),
                 vault: None,
+                whatsapp_draft: None,
             })
             .await;
     }
