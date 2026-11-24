@@ -87,3 +87,19 @@ async fn draft_turn_menu_and_bypass_are_refused_without_a_key() {
         assert!(io.keys().is_empty(), "{name}");
     }
 }
+
+/// Os Termos do Google: o Hangar só aperta as teclas da opção que a pessoa tocou, relendo a tela a cada uma.
+#[tokio::test(start_paused = true)]
+async fn the_terms_card_unchecks_the_data_box_and_presses_done_only_for_the_chosen_option() {
+    let io = Screens::new(&["terms.txt", "terms.txt", "terms-unchecked.txt", "terms-unchecked-previous.txt", "terms-unchecked-done.txt", "idle.txt"]);
+    let store = InteractionStore::default();
+    let target = target();
+    let binding = crate::interactions::InteractionBinding { key: target.key.clone(), conversation: target.binding.conversation.clone(), generation: target.generation };
+    store.bind(&binding).unwrap();
+    let analysis = crate::terminal_state::agy_analyze(&screen("terms.txt"));
+    let pending = super::menu_interaction(analysis.question, analysis.options.unwrap());
+    let id = store.observe(&binding, &pending.target, Some(pending.semantic)).unwrap().unwrap();
+    let reply = control(&target, &io, &store, "op", "select", &json!({"option": 2, "interaction_id": id}), None).await.unwrap().reply;
+    assert_eq!(reply.disposition, RuntimeDisposition::Accepted, "{}", reply.payload);
+    assert_eq!(io.keys(), ["Enter", "Down", "Right", "Enter"]);
+}

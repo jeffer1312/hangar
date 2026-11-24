@@ -8,7 +8,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Antigravity (`agy`) roda o binário oficial do Google, sem ler o login nem chamar o Google.**
   Com terminal, a TUI fica no tmux; o estado vem dos hooks `SessionStart`, `PreInvocation`,
   `PostInvocation` e `Stop` (`provider_hooks` `agy-state-hook`), nunca de `PreToolUse` ou
-  `PostToolUse`, onde a resposta `{}` bloqueia a ferramenta. A conversa vem do
+  `PostToolUse`, onde a resposta `{}` bloqueia a ferramenta (o único `PreToolUse` é a guarda, regra abaixo). A conversa vem do
   `transcript_full.jsonl` (`hangar-transcript/src/antigravity.rs`); a tela diz permissão e ocupado
   (`agy_analyze`), e o rodapé (`agy_footer`) diz modo e modelo. Com terminal só existe a conta
   padrão: o `agy` ignora o `GEMINI_HOME`, e conta adicional é 409 `erro_conta_antigravity_adicional`
@@ -24,6 +24,27 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   modo ou modelo só com a sessão parada e a caixa vazia. O contexto da linha é `input_tokens +
   cache_read_tokens` da última `PLANNER_RESPONSE`, com `window: 0` (janela desconhecida). Ver
   [Antigravity com terminal](#antigravity-agy-com-terminal-23112026).
+
+- **Antigravity fala com o Hangar pelo MCP `hangar` em stdio e pelos hooks, como Claude e Codex.** O `agy`
+  só manda cabeçalho fixo ao MCP HTTP: o `mcp-register` grava em `~/.gemini/config/mcp_config.json` o
+  lançador `~/.local/bin/hangar-mcp-stdio` (`.cmd` no Windows), que roda `hangar-server mcp-stdio`
+  (crate `hangar-mcp-stdio`), com `timeoutSeconds: 660` para o cofre; a ponte lê o token do `.env` e a
+  identidade do ambiente que o `agy` repassa ao filho (`CP_SESSION_KEY`, `TMUX_PANE`, `CP_SESSION_NAME`,
+  `HANGAR_JEV`). No `settings.json` do `agy` entram só as regras de `settings::HANGAR_RULES`: as quatro
+  tools de recado (`mcp(hangar/send)`…) e o CLI de recado e do navegador, nunca `command(hangar-send)`
+  inteiro (o `--new` escaparia da aprovação). No sandbox do terminal (modo `auto`, o padrão) o `~/.hangar`
+  some e IP direto é recusado: `hangar-send`/`hangar-preview` só rodam com `BypassSandbox`, e o
+  `SessionStart` avisa isso ao modelo. O `agy-state-hook` injeta por `injectSteps` (`systemMessage`, fora
+  do chat): no `SessionStart` o aviso do sandbox e o protocolo do grupo; no `PreInvocation` com
+  `invocationNum` 0 (cada mensagem) a dica do navegador. A guarda `agy-guard-tmux` (`run_command|view_file|
+  grep_search`) sempre sai 0 com `decision`: `{}` ou saída diferente de zero barram a ferramenta. A
+  confirmação da fila tira o `/plan ` que o modo plano põe na mensagem e aceita o carimbo em segundos
+  inteiros do mesmo segundo do despacho. A cota da conta padrão sai de `agy -p /usage --output-format json`
+  numa pasta neutra (sem turno nem token), pelo cache das cotas (`TTL`, 429), nunca em laço próprio: o grupo
+  do Gemini vira `5h`/`7d` gerais e os outros grupos janelas por modelo. A tela dos Termos e a das cores do
+  primeiro uso viram cartão (`agy_terms`, `agy_onboarding_list`), e a tecla só sai da opção que a pessoa
+  tocou; o Hangar nunca aceita os Termos sozinho. Ver
+  [MCP, hooks e sandbox do Antigravity](#antigravity-mcp-hooks-e-sandbox-24112026).
 
 - **Troca de agente pelo seletor de modelos espera o turno e segura a fila.** `POST /conta` com
   `when_idle` registra a troca (`RuntimeRegistry::hold_handoff`) e responde 202 na hora; a fila
@@ -764,7 +785,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   drena com o Claude parado, composer legível e sem pergunta, um lote por vez, no tique do ator; a
   entrega que encontrou o Claude parado faz a próxima esperar até 3 s (`turn_start_wait`) pelo
   turno que ela abriu. Para despachar, a indicação de que a CLI só espera subagentes em segundo
-  plano também libera o prompt legível e sem pergunta. Recado com socket nativo (`[de: …]`,
+  plano também libera o prompt legível e sem pergunta: a linha "Waiting for N background agents"
+  ou, sem ela e sem linha viva acima da caixa, o painel de agentes (`◯ <subagente>`) abaixo dela. Recado com socket nativo (`[de: …]`,
   `[grupo: …]`, `[painel: …]`) e comando de barra não são segurados, e o recado passa no meio do turno
   mesmo atrás de mensagem segurada. Com mensagem esperando, comando de barra é recusado na tela
   (`queue_waiting`): não passa à frente nem
@@ -1176,8 +1198,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   É o comando do `SessionStart` (`startup|resume|clear|compact`) que o `harness_setup/hooks.rs` grava em
   cada conta, com a pasta `.hangar-pair` no argv e `|| exit 0`: lê o sidecar e os pares externos do
   disco, sem rede nem token, e responde com o servidor parado. Grupo com par de fora traz as duas
-  partes. Só o Claude tem esse gancho: Codex, Pi, omp e Kimi perdem o protocolo ao compactar
-  (limite registrado). Ver [grupos: o Rust grava](plataforma.md#grupos-o-rust-grava).
+  partes. O Antigravity recebe o mesmo texto pelo `SessionStart` do `agy-state-hook`. Codex, Pi, omp e
+  Kimi perdem o protocolo ao compactar (limite registrado). Ver [grupos: o Rust grava](plataforma.md#grupos-o-rust-grava).
 
 - **A pasta da sessão Claude nasce confiada, gravada sob a trava do próprio Claude Code.** O
   `claude::pretrust` marca `hasTrustDialogAccepted` no `.claude.json` da conta segurando a pasta
@@ -1267,12 +1289,40 @@ Medido no `agy` 1.5.13 a 1.5.15, Linux, num servidor isolado (HOME, `TMUX_TMPDIR
   `CLI app data directory: $HOME/.gemini/antigravity-cli` com a variável apontando para outra pasta, e
   o login da conta adicional foi gravado na pasta da padrão. Por isso este PR fica só com a conta
   padrão. Antes, no ACP: só `GEMINI_HOME` não isola o login, que fica no chaveiro; com
-  `SSH_CONNECTION` local e `AGY_ACP_FORCE_FILE_STORAGE=1`, cada pasta teve o seu (`agy models`); falta
-  medir se a pasta vale para a sessão do `agy acp`. Pasta nova abre os Termos do Google com opt-in de
+  `SSH_CONNECTION` local e `AGY_ACP_FORCE_FILE_STORAGE=1`, cada pasta teve o seu (`agy models`). No
+  `agy acp` 1.5.15 com as três variáveis e uma pasta vazia, o login também é da pasta (`authenticate`
+  recusa e `session/new` responde "Authentication required"), mas o log `acp-server-*.log` foi gravado
+  em `~/.gemini/antigravity-cli/log` e a pasta ficou vazia: os dados do `agy` não seguem a variável, e o
+  sem terminal também fica só com a conta padrão. Onde a conversa cai com login numa adicional ainda
+  não foi visto (pede o login da pessoa). Pasta nova abre os Termos do Google com opt-in de
   dados (`cache/onboarding.json`), e quem aceita é a pessoa. `agy models` lista `id\tnome` sem gastar
   cota e serve de prova de login.
 - **Permissão com terminal:** a tela traz "Requesting permission for:" e as opções numeradas; o
   `/select` com `interaction_id` respondeu "No, cancel" e recusou um `rm -rf`.
+
+## Antigravity: MCP, hooks e sandbox (24/11/2026)
+
+Medido no `agy` 1.5.16, Linux, em sessões abertas pelo Hangar desta máquina.
+
+- **Ambiente do MCP:** um servidor stdio de teste gravou o ambiente que recebeu: `CP_SESSION_KEY`,
+  `TMUX_PANE`, `CP_SESSION_NAME` e `HANGAR_JEV` da sessão chegam inteiros. É o que permite a ponte em stdio
+  identificar a sessão; o `agy` não tem cabeçalho por variável no MCP HTTP.
+- **Formato do `mcp_config.json`:** `agy mcp add` grava `{"mcpServers": {"<nome>": {"command", "args",
+  "disabled"}}}`; a doc acrescenta `timeoutSeconds` (padrão 300 s para conectar e 180 s por tool; negativo
+  desliga) e as regras `mcp(servidor/tool)`.
+- **Injeção:** `{"injectSteps":[{"systemMessage":{"systemMessage":"…"}}]}` funcionou no `SessionStart` e no
+  `PreInvocation`: o modelo repetiu as duas palavras-código e o transcript gravou `SYSTEM_MESSAGE` ("injected by
+  a SessionStart hook"), que o leitor do chat já deixa de fora. `invocationNum` volta a 0 a cada mensagem.
+- **`PreToolUse`:** `{"decision":"allow"}` deixou o comando seguir no fluxo normal; um hook que sai 1 sem
+  saída barrou o `echo` ("JSON hook … failed: exit status 1"). Por isso a guarda nunca sai diferente de zero.
+- **Sandbox:** no modo `auto` o comando roda com `NoNewPrivs` e seccomp, sem ver `~/.hangar`
+  (`hangar-send: comando não encontrado`) e com IP direto recusado ("Direct IP access is not allowed").
+  A regra `command(hangar-send)` sozinha não muda nada: o comando segue no sandbox. Pedido fora dele, o
+  modelo mandou `run_command` com `"BypassSandbox": true` e o `hangar-send --list` respondeu com a sessão
+  marcada `(você)`, sem perguntar.
+- **Regras globais:** o `agy` corta cada arquivo de regras em 24.000 bytes; o `~/.claude/CLAUDE.md` desta
+  máquina tem ~37 KB, então o `AGENTS.md` ligado a ele chega cortado (o fim, com o bloco das sessões-irmãs,
+  fica de fora). O aviso de `SessionStart` cobre o que o `agy` precisa do Hangar.
 
 ## Orientar pela fila da CLI (22/11/2026)
 
@@ -5722,6 +5772,13 @@ transcript em 0,2 s. O subagente terminou depois da entrada do novo prompt. Em o
 já constava no transcript cinco segundos antes de o Hangar avisar que ela continuava esperando.
 O recibo da própria entrada agora encerra a tentativa de antecipação. A indicação de subagentes
 em segundo plano só é usada para liberar o despacho de prompts.
+
+Em 24/11/2026, com o Claude Code 2.1.331, o turno principal acabou com um subagente em segundo plano
+e a tela ficou só com a caixa livre e o painel de agentes abaixo dela (`● main` /
+`◯ general-purpose … · ↓ 203.8k tokens`), sem a linha "Waiting for …". O registro nativo seguiu
+`busy` e o Hangar reteve uma mensagem por 10 min 46 s (`terminal_turn_hold` das 14:05:14 às 14:16:00
+UTC), até o subagente acabar. O painel abaixo da caixa, sem linha viva acima dela, passou a valer
+como a linha de espera.
 
 ## Catálogo de comandos e reload-plugins
 

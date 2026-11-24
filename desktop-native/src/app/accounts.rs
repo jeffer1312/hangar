@@ -202,6 +202,8 @@ struct Row {
     codex: Option<(String, bool)>,
     /// Conta Antigravity: o id da rota dela e se o agy disse que tem login.
     agy: Option<(String, bool)>,
+    /// Termos do Google pendentes: a casa da máquina, onde a sessão do agy abre para a pessoa aceitá-los.
+    agy_terms: Option<String>,
     reset: Option<ResetOffer>,
     /// Editar o modelo: `Some(false)` quando os detalhes dele não chegaram (a leitura dos modelos falhou).
     edit: Option<bool>,
@@ -470,6 +472,7 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
     let mut agy = None;
     let mut edit = None;
     let mut sign_in = None;
+    let mut agy_terms = None;
     let email = c.login.as_ref().filter(|_| logged == Some(true) && matches!(c.kind.as_str(), "claude" | "codex"))
         .and_then(|l| l.email.clone()).filter(|e| !e.is_empty());
     let initial =c.name.chars().find(|ch| ch.is_alphanumeric()).map(|ch| ch.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
@@ -528,7 +531,11 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
                 Some(false) => subtitle.push(muted(tr("accounts_agy_signed_out"))),
                 None => {}
             }
-            if c.agy.as_ref().is_some_and(|a| !a.terms) { subtitle.push((tr("accounts_agy_terms_pending"), Tone::Warn)); }
+            if c.agy.as_ref().is_some_and(|a| !a.terms) {
+                subtitle.push((tr("accounts_agy_terms_pending"), Tone::Warn));
+                // A sessão abre na casa (a pasta-mãe do `~/.gemini`): com terminal o agy só usa a conta padrão.
+                agy_terms = c.agy.as_ref().filter(|a| a.default).and(c.path.as_deref().and_then(server_parent));
+            }
             let id = c.agy.as_ref().map_or_else(|| antigravity::route_id(c.path.as_deref()), |a| a.id.clone());
             agy = Some((id, signed == Some(true)));
         }
@@ -574,7 +581,8 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
     }
     let subtitle = (line, marks);
 
-    let quota = if c.kind == "antigravity" { QuotaView::Note(tr("accounts_agy_no_quota")) } else { match (c.read_windows(), c.quota.as_ref()) {
+    // A cota do agy vem do `/usage` dele; sem leitura ainda, a nota diz de onde ela virá.
+    let quota = if c.kind == "antigravity" && c.quota.is_none() { QuotaView::Note(tr("accounts_agy_no_quota")) } else { match (c.read_windows(), c.quota.as_ref()) {
         (Some(windows), Some(q)) => {
             let mut bars: Vec<Bar> = windows.iter().map(|w| Bar {
                 label: w.label.clone(), reset: reset_text(w.reset_at, now), reset_days: reset_days_text(w.reset_at, now),
@@ -615,7 +623,7 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
     };
     Row {
         id: c.id.clone(), name: c.name.clone(), label: c.natural.clone(), natural: c.natural.clone(), alias: c.alias.clone().unwrap_or_default(),
-        active: c.active, filter: Filter::of(&c.kind), email, glyph, subtitle, login_note, chips, plan, login_days: if c.kind == "claude" { c.login_days(now) } else { None }, resets, quota, codex, agy: agy.clone(), reset: codex::reset_offer(c, now), edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
+        active: c.active, filter: Filter::of(&c.kind), email, glyph, subtitle, login_note, chips, plan, login_days: if c.kind == "claude" { c.login_days(now) } else { None }, resets, quota, codex, agy: agy.clone(), agy_terms, reset: codex::reset_offer(c, now), edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
         sign_out: match c.kind.as_str() {
             "claude" if c.managed != Some(false) && logged == Some(true) && !c.expired() =>
                 Some(vec!["claude-configs".into(), c.natural.clone(), "logout".into()]),
@@ -721,6 +729,15 @@ pub(super) fn fold(text: &str) -> String {
         'á' | 'à' | 'â' | 'ã' | 'ä' => 'a', 'é' | 'è' | 'ê' | 'ë' => 'e', 'í' | 'ì' | 'î' | 'ï' => 'i',
         'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o', 'ú' | 'ù' | 'û' | 'ü' => 'u', 'ç' => 'c', 'ñ' => 'n', other => other,
     }).collect()
+}
+
+/// A pasta-mãe pelas regras do servidor, que pode ser Windows: o `std::path` daqui só conhece o separador do cliente.
+fn server_parent(path: &str) -> Option<String> {
+    let path = path.trim_end_matches(['/', '\\']);
+    let cut = path.rfind(['/', '\\'])?;
+    let parent = &path[..cut];
+    // A raiz (`/`, `C:\`) guarda o separador.
+    Some(if parent.is_empty() || parent.ends_with(':') { path[..=cut].to_owned() } else { parent.to_owned() })
 }
 
 fn row_matches(row: &Row, term: &str) -> bool {
@@ -1503,6 +1520,10 @@ impl Hangar {
                 .when(row.sign_out.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-out-{}", row.id))).outline().small()
                     .label(tr("accounts_agy_sign_out")).disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(id.clone(), ChangeKind::SignOut, window, cx)))))
+                .children(row.agy_terms.clone().map(|home| Button::new(SharedString::from(format!("accounts-agy-terms-{}", row.id))).outline().small()
+                    .label(tr("accounts_agy_accept_terms")).tooltip(tr("accounts_agy_accept_terms_hint"))
+                    .accessibility_label(tr("accounts_agy_accept_terms_hint")).disabled(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.start_agy_terms(home.clone(), window, cx)))))
                 .when(!signed && row.remove.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-remove-{}", row.id)))
                     .outline().small().label(tr("accounts_agy_remove")).disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(remove_id.clone(), ChangeKind::Remove, window, cx)))))
@@ -1647,7 +1668,7 @@ fn mini_quota(bars: &[Bar], labels: &[String]) -> Div {
 #[cfg(test)]
 mod tests {
     use super::{Credential, Engine, Filter, Group, QuotaView, Tone, age, build_row, build_sections, build_summary, group_of, model_names,
-        next_sort, reset_text, row_matches, sort_rows};
+        next_sort, reset_text, row_matches, server_parent, sort_rows};
     use crate::i18n::tr;
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -1826,7 +1847,7 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_rows_take_sign_in_and_terms_from_the_agy_list_and_have_no_quota() {
+    fn antigravity_rows_take_sign_in_and_terms_from_the_agy_list_and_the_quota_of_the_usage_command() {
         let line = |path: &str, logged: Value| json!({"id": format!("antigravity:{path}"), "tipo": "antigravity", "nome": "n",
             "auth_method": "oauth", "path": path, "login": {"loggedIn": logged}, "gerenciada": true});
         let list = vec![credential(line("/h/.gemini", Value::Null)), credential(line("/h/.antigravity-trabalho", json!(true)))];
@@ -1848,6 +1869,26 @@ mod tests {
         assert!(extra.sign_out.is_none());
         assert_eq!(extra.remove.as_ref().map(|r| r.0.clone()), Some(vec!["antigravity-contas".to_owned(), "trabalho".to_owned()]));
         assert!(extra.subtitle.0.contains(&tr("accounts_agy_terms_pending")));
+        assert_eq!(default.agy_terms, None, "Termos aceitos não oferecem a sessão");
+        assert_eq!(extra.agy_terms, None, "a adicional não abre com terminal");
+        let pending: Vec<super::antigravity::AgyAccount> = serde_json::from_value(json!([
+            {"id": "default", "padrao": true, "credencial": "antigravity:/h/.gemini", "logado": true, "termos_aceitos": false}])).unwrap();
+        let pending = build_row(&super::antigravity::merge(&list[..1], &pending)[0], &HashMap::new(), false, 0.);
+        assert_eq!(pending.agy_terms.as_deref(), Some("/h"), "a sessão dos Termos abre na casa");
+        // Servidor Windows visto de um cliente Linux: a casa sai pelo separador do servidor, nunca vazia.
+        let windows = vec![credential(line(r"C:\Users\u\.gemini", Value::Null))];
+        let agy_windows: Vec<super::antigravity::AgyAccount> = serde_json::from_value(json!([
+            {"id": "default", "padrao": true, "credencial": r"antigravity:C:\Users\u\.gemini", "logado": true, "termos_aceitos": false}])).unwrap();
+        let on_windows = build_row(&super::antigravity::merge(&windows, &agy_windows)[0], &HashMap::new(), false, 0.);
+        assert_eq!(on_windows.agy_terms.as_deref(), Some(r"C:\Users\u"));
+        assert_eq!(server_parent(r"C:\.gemini").as_deref(), Some(r"C:\"));
+        assert_eq!(server_parent("/.gemini").as_deref(), Some("/"));
+        // Com a leitura do `/usage`, as barras são as mesmas do Claude.
+        let mut read = line("/h/.gemini", json!(true));
+        read["cota"] = json!({"estado": "lida", "ts": 1.0, "janelas": [{"rotulo": "5h", "pct": 4.4, "reset_ts": 9.0e9},
+            {"rotulo": "7d", "pct": 2.7, "reset_ts": 9.0e9}, {"rotulo": "Claude/GPT 5h", "pct": 0.0, "por_modelo": true}]});
+        let with_quota = build_row(&credential(read), &HashMap::new(), false, 0.);
+        assert!(matches!(&with_quota.quota, QuotaView::Bars { bars, .. } if bars.len() == 3 && bars.iter().any(|b| b.label == "5h" && !b.per_model)));
         // Sem a lista do agy, o id da rota sai da pasta.
         let alone = build_row(&list[1], &HashMap::new(), false, 0.);
         assert_eq!(alone.agy, Some(("trabalho".to_owned(), true)));

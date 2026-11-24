@@ -6,6 +6,19 @@ use crate::port_forward::{ForwardError, OpenError, Opening, PortForwards};
 /// A prévia do Connect que esta tela pediu: o link só existe aqui, o servidor guarda o hash.
 pub(super) struct PortLink { pub server: String, pub port: u16, pub url: String }
 
+struct Listed {
+    remote: bool,
+    server: String,
+    /// A sessão já veio na lista do servidor.
+    loaded: bool,
+    list_error: Option<String>,
+    /// As que a sessão abriu (só estas têm Parar servidor).
+    own: Vec<u16>,
+    ports: Vec<(u16, String, bool)>,
+    forwards: Vec<crate::port_forward::ForwardState>,
+    opening: Vec<u16>,
+}
+
 #[derive(Default)]
 pub(super) struct Ports {
     /// Um registro para o app inteiro, pela identidade de cada servidor.
@@ -22,7 +35,10 @@ pub(super) struct Ports {
     other_error: Option<String>,
     /// A última porta digitada em "Outra porta…" (servidor, porta): vira linha mesmo sem a sessão listar (container,
     /// servidor macOS), para abrir e pedir o link de fora.
+    /// Chave `servidor::sessão`: a porta digitada numa sessão não aparece nas outras da mesma máquina.
     typed: Option<(String, u16)>,
+    /// (servidor, porta) → sessão que pediu o encaminhamento: o túnel é da máquina, a linha fica na sessão que o abriu.
+    origin: HashMap<(String, u16), String>,
     /// "Parar servidor" em voo, um por vez: (servidor, porta).
     stopping: Option<(String, u16)>,
 }
@@ -107,6 +123,11 @@ impl Hangar {
         if self.is_active_key(server) { self.active_token.clone() } else { self.server_entry(server).map(|s| s.token.clone()).unwrap_or_default() }
     }
 
+    /// A sessão (`servidor::sessão`) em cuja seção Portas o encaminhamento aparece.
+    pub(super) fn note_forward_origin(&mut self, server: String, port: u16, session: String) {
+        self.ports.origin.insert((server, port), session);
+    }
+
     /// A sonda e a busca de porta livre rodam no runtime; enquanto isso a linha diz "abrindo…".
     fn forward_port(&mut self, port: u16, cx: &mut Context<Self>) -> Option<Opening> {
         let Some(api) = self.session_api() else {
@@ -118,6 +139,7 @@ impl Hangar {
         let token = self.server_token(&self.open_server());
         self.ports.failed.remove(&key);
         self.ports.failed.remove(&(String::new(), port));
+        if let Some(session) = self.side_key() { self.note_forward_origin(key.0.clone(), port, session); }
         let opening = self.ports.forwards.open(self.runtime.handle(), &api, &token, port);
         let result = opening.clone();
         cx.spawn(async move |this, cx| {
@@ -194,8 +216,14 @@ impl Hangar {
             (Some(_), None) => self.ports.other_error = Some(tr("ports_err_network")),
             // Daqui a porta já é deste computador: só vira linha. De outra máquina, também encaminha.
             (Some(port), Some(api)) => {
-                self.ports.typed = Some((api.identity(), port));
+                let Some(key) = self.side_key() else { return };
+                self.ports.typed = Some((key.clone(), port));
                 if !api.is_loopback() { self.forward_port(port, cx); }
+                // A linha nasce na aba Portas: menu e aba de subagente saem da frente para ela aparecer.
+                self.side.ports_open.insert(key.clone());
+                self.show_side_tab_here(key, crate::appearance::SideTab::Ports, cx);
+                // Campo novo, vazio: o número não fica esperando um Enter que o mande de novo, noutra sessão.
+                self.ports.other = None;
             }
         }
         cx.notify();
@@ -228,33 +256,80 @@ impl Hangar {
         if self.ports.link.as_ref().is_some_and(|link| link.server == server) { self.ports.link = None; }
     }
 
-    pub(super) fn render_ports(&mut self, beta: bool, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// As portas da sessão à vista: as que ela abriu, mais as que ela encaminhou ou digitou. `None` = sem servidor
+    /// do dono (convidado não tem portas nem túnel).
+    fn listed_ports(&self) -> Option<Listed> {
         let (api, name) = (self.session_api()?, self.selected.as_ref()?.name.clone());
         let server = api.identity();
-        // Convidado não tem portas nem túnel: a seção mentiria "nenhuma porta" e o Encaminhar daria erro.
         if !owner_server(&self.servers, &servers::norm(&server)) { return None; }
-        let remote = !api.is_loopback();
         let list = self.sessions_of(&server);
         let row = list.iter().find(|s| s.name == name);
         let list_error = if self.is_active_key(&servers::norm(&server)) { self.list_error.clone() }
             else { self.remote.get(&servers::norm(&server)).and_then(|l| l.error.clone()) };
+        let own: Vec<u16> = row.map(|r| r.ports.iter().map(|p| p.port).collect()).unwrap_or_default();
         let mut ports: Vec<(u16, String, bool)> = row.map(|r| r.ports.iter().map(|p| (p.port, p.process.clone(), p.shared)).collect()).unwrap_or_default();
         let forwards = self.ports.forwards.list(&server);
         let opening = self.ports.forwards.opening(&server);
-        // Porta digitada em "Outra porta…" não é da sessão: aparece a última digitada e as encaminhadas ou abrindo.
-        let typed = self.ports.typed.as_ref().filter(|(s, _)| *s == server).map(|(_, port)| *port);
-        for port in forwards.iter().map(|f| f.port).chain(opening.iter().copied()).chain(typed) {
+        let session_key = self.side_key();
+        // O túnel cuja sessão não está mais na lista (fechada, renomeada) ou sem dona fica em todas: nenhum some com Parar.
+        let mine = |port: &u16| match self.ports.origin.get(&(server.clone(), *port)) {
+            Some(origin) => Some(origin) == session_key.as_ref()
+                || !list.iter().any(|s| origin.rsplit_once("::").is_some_and(|(_, n)| n == s.name)),
+            None => true,
+        };
+        let typed = self.ports.typed.as_ref().filter(|(key, _)| Some(key) == session_key.as_ref()).map(|(_, port)| *port);
+        let extra: Vec<u16> = forwards.iter().map(|f| f.port).chain(opening.iter().copied()).filter(mine).chain(typed).collect();
+        for port in extra {
             if !ports.iter().any(|(known, ..)| *known == port) { ports.push((port, String::new(), false)); }
         }
         ports.sort_by_key(|(port, ..)| *port);
-        let title = if beta { super::side::beta_title(tr("ports_title")).mb_0() } else { chrome::section_label(tr("ports_title")) };
-        let body = match row {
-            None => match list_error {
-                Some(error) => port_note(tr("ports_error").replace("{error}", &error), theme::warning()).into_any_element(),
-                None => port_note(tr("ports_loading"), theme::muted()).into_any_element(),
-            },
-            Some(_) if ports.is_empty() => port_note(tr("ports_empty"), theme::muted()).into_any_element(),
-            Some(_) => div().flex().flex_col().gap(px(10.)).children(ports.into_iter().map(|(port, process, shared)| {
+        // A lista do servidor ainda não chegou: só aí é "carregando"; chegou sem a sessão, ela não tem portas.
+        let loaded = row.is_some() || !list.is_empty();
+        Some(Listed { remote: !api.is_loopback(), server, loaded, list_error, own, ports, forwards, opening })
+    }
+
+    /// "Portas" no "+", com quantas há.
+    pub(super) fn ports_menu_label(&self) -> String {
+        match self.listed_ports().map_or(0, |l| l.ports.len()) {
+            0 => tr("ports_title"),
+            n => format!("{} · {n}", tr("ports_title")),
+        }
+    }
+
+    /// Aberta pelo "+" nesta sessão, e a sessão ainda é das que têm portas (do dono, não só leitura, não orq).
+    pub(super) fn ports_tab_open(&self) -> bool {
+        self.side_menu_ports() && self.side_key().is_some_and(|k| self.side.ports_open.contains(&k))
+    }
+
+    pub(super) fn open_ports(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.side_key() else { return };
+        self.side.ports_open.insert(key.clone());
+        self.show_side_tab_here(key, crate::appearance::SideTab::Ports, cx);
+        cx.notify();
+    }
+
+    /// Fecha só nesta sessão e volta ao Contexto sem gravar a escolha: a aba padrão das outras fica como estava.
+    pub(super) fn close_ports(&mut self, cx: &mut Context<Self>) {
+        let showing = self.side_tab() == crate::appearance::SideTab::Ports;
+        let Some(key) = self.side_key() else { return };
+        self.side.ports_open.remove(&key);
+        if showing { self.show_side_tab_here(key, crate::appearance::SideTab::Context, cx); }
+        cx.notify();
+    }
+
+    /// A aba Portas: as linhas, ou o estado da lista, e o campo da porta que a sessão não listou.
+    pub(super) fn render_ports_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(Listed { remote, server, loaded, list_error, own, ports, forwards, opening }) = self.listed_ports() else {
+            return port_note(tr("ports_guest"), theme::muted()).into_any_element();
+        };
+        // O erro da lista vai acima das linhas: as que estão à vista podem ser de antes dele.
+        let error = list_error.map(|error| port_note(tr("ports_error").replace("{error}", &error), theme::warning()));
+        let note = match (loaded, ports.is_empty()) {
+            (false, true) if error.is_none() => Some(port_note(tr("ports_loading"), theme::muted())),
+            (true, true) => Some(port_note(tr("ports_empty"), theme::muted())),
+            _ => None,
+        };
+        let body = div().flex().flex_col().gap(px(10.)).children(error).children(note).children(ports.into_iter().map(|(port, process, shared)| {
                 let forward = forwards.iter().find(|f| f.port == port);
                 let is_opening = opening.contains(&port);
                 let local =forward.map(|f| f.local).or((!remote).then_some(port));
@@ -276,6 +351,7 @@ impl Hangar {
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.ports.forwards.close(&server_close, port);
                                     this.ports.failed.remove(&(server_close.clone(), port));
+                                    this.ports.origin.remove(&(server_close.clone(), port));
                                     cx.notify();
                                 })),
                             None => buttons.forward.loading(is_opening).disabled(is_opening)
@@ -287,7 +363,7 @@ impl Hangar {
                             .disabled(self.ports.link_busy.is_some())
                             .on_click(cx.listener(move |this, _, _, cx| this.request_port_link(port, cx))))
                         // Só a porta da sessão: a digitada em "Outra porta…" não é dela.
-                        .when(row.is_some_and(|r| r.ports.iter().any(|p| p.port == port)), |el| el.child(buttons.stop_server
+                        .when(own.contains(&port), |el| el.child(buttons.stop_server
                             .loading(self.ports.stopping.as_ref().is_some_and(|(s, p)| *s == server && *p == port))
                             .disabled(self.ports.stopping.is_some())
                             .on_click(cx.listener(move |this, _, window, cx| this.confirm_stop_server(port, window, cx))))))
@@ -302,30 +378,40 @@ impl Hangar {
                             open.on_click(move |_, _, cx| cx.open_url(&opened))))
                     })
                     .into_any_element()
-            })).into_any_element(),
+            }));
+        let other = self.render_other_port(remote, window, cx);
+        div().flex().flex_col().gap(px(16.)).child(body).child(other).into_any_element()
+    }
+
+    pub(super) fn clear_other_port_error(&mut self) { self.ports.other_error = None; }
+
+    /// Linha do "+" do painel: só na sessão do dono que ele pode mexer, como a seção Portas (a orq não tem a seção).
+    pub(super) fn side_menu_ports(&self) -> bool {
+        self.selected.as_ref().is_some_and(|s| s.readable() && !s.read_only() && !s.orq())
+            && self.session_api().is_some_and(|api| owner_server(&self.servers, &servers::norm(&api.identity())))
+    }
+
+    /// Porta que a sessão não listou (container, servidor macOS): a digitada vira linha, com Abrir e Link de fora.
+    fn render_other_port(&mut self, remote: bool, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let input = match &self.ports.other {
+            Some((input, _)) => input.clone(),
+            None => {
+                let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("ports_number")));
+                let sub = cx.subscribe(&input, |this: &mut Hangar, _, event: &InputEvent, cx| {
+                    if let InputEvent::PressEnter { .. } = event { this.forward_other(cx); }
+                });
+                self.ports.other = Some((input.clone(), sub));
+                input
+            }
         };
-        // Porta que a sessão não listou (container, servidor macOS): a digitada vira linha, com Abrir e Link de fora.
-        let other = {
-            let input = match &self.ports.other {
-                Some((input, _)) => input.clone(),
-                None => {
-                    let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("ports_other")));
-                    let sub = cx.subscribe(&input, |this: &mut Hangar, _, event: &InputEvent, cx| {
-                        if let InputEvent::PressEnter { .. } = event { this.forward_other(cx); }
-                    });
-                    self.ports.other = Some((input.clone(), sub));
-                    input
-                }
-            };
-            div().flex().flex_col().gap(px(4.))
-                .child(div().flex().items_center().gap_1()
-                    .child(div().flex_1().min_w_0().child(Input::new(&input).xsmall().aria_label(tr("ports_other"))))
-                    .child(Button::new("ports-other-forward").xsmall().outline().flex_shrink_0()
-                        .label(if remote { tr("ports_forward") } else { tr("ports_other_add") })
-                        .on_click(cx.listener(|this, _, _, cx| this.forward_other(cx)))))
-                .children(self.ports.other_error.clone().map(|text| port_note(text, theme::warning())))
-        };
-        Some(div().flex().flex_col().gap(px(10.)).child(title).child(body).child(other).into_any_element())
+        div().flex().flex_col().gap(px(6.))
+            .child(div().px(px(4.)).text_size(px(11.)).text_color(theme::muted()).child(tr("ports_other")))
+            .child(div().flex().items_center().gap_1()
+                .child(div().flex_1().min_w_0().child(Input::new(&input).small().aria_label(tr("ports_other"))))
+                .child(Button::new("ports-other-forward").small().outline().flex_shrink_0()
+                    .label(if remote { tr("ports_forward") } else { tr("ports_other_add") })
+                    .on_click(cx.listener(|this, _, _, cx| this.forward_other(cx)))))
+            .children(self.ports.other_error.clone().map(|text| port_note(text, theme::warning())))
     }
 }
 

@@ -37,6 +37,37 @@ fn other_terminal_receipt_proves_the_new_occurrence_only_and_keeps_partial_lines
     }
 }
 
+/// O `agy` no modo plano grava `/plan <texto>`, e a primeira mensagem nasce com o transcript, carimbada em
+/// segundos inteiros no mesmo segundo do despacho: a entrega ainda se prova pelo texto que a fila mandou.
+#[test]
+fn other_terminal_first_antigravity_message_in_plan_mode_is_proved() {
+    let dir=tempfile::tempdir().unwrap();let path=dir.path().join("transcript_full.jsonl");
+    let mut index=ReceiptIndex::new("antigravity","9440eec3-e68e-4a43-9949-11ac7aec16b8");
+    let cursor:hangar_server::runtime::receipt::DispatchCursor=serde_json::from_value(json!({"conversation":"9440eec3-e68e-4a43-9949-11ac7aec16b8",
+        "file_identity":null,"offset":0,"anchor":"da39a3ee5e6b4b0d3255bfef95601890afd80709","absent_since":1795516392.3089454})).unwrap();
+    std::fs::write(&path,format!("{}\n",json!({"step_index":0,"type":"USER_INPUT","status":"DONE","created_at":"2026-11-24T10:33:12Z",
+        "content":"<USER_REQUEST>\n/plan Responda apenas: PLANO-OK\n</USER_REQUEST>"}))).unwrap();
+    index.scan(&path).unwrap();
+    let row=json!({"id":"a","text":"Responda apenas: PLANO-OK","ts":1795516392.2,"delivered":true});
+    assert!(index.match_after(&path,&cursor,&row,&BTreeMap::new()).unwrap().is_some(),"o carimbo em segundos do mesmo segundo vale");
+}
+
+#[test]
+fn other_terminal_receipt_of_antigravity_ignores_the_plan_prefix() {
+    let agy = |step: u64, text: &str| format!("{}\n", json!({"step_index":step,"type":"USER_INPUT","status":"DONE",
+        "created_at":"2026-11-24T09:00:00Z","content":format!("<USER_REQUEST>\n{text}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nx\n</ADDITIONAL_METADATA>")}));
+    let dir=tempfile::tempdir().unwrap();let path=dir.path().join("transcript_full.jsonl");
+    std::fs::write(&path,agy(0,"antes")).unwrap();
+    let mut index=ReceiptIndex::new("antigravity","conversation-a");
+    let cursor=index.capture(&path).unwrap();
+    let mut file=OpenOptions::new().append(true).open(&path).unwrap();
+    file.write_all(agy(1,"/plan seguir com a tarefa").as_bytes()).unwrap();file.flush().unwrap();
+    index.scan(&path).unwrap();
+    let row=json!({"id":"entry-a","text":"seguir com a tarefa","ts":1786453180.0,"delivered":true});
+    let proof=index.match_after(&path,&cursor,&row,&BTreeMap::new()).unwrap().expect("a mensagem no modo plano prova a entrega");
+    assert_eq!(proof.occurrence.text,"seguir com a tarefa");
+}
+
 #[tokio::test]
 async fn other_terminal_empty_transport_keeps_input_durably_in_the_common_queue() {
     use hangar_server::runtime::{other_terminal::{OtherTarget,OtherOptions,OtherHandle},queue::{QueueActor,Store,State,acquire_lease},protocol::{OperationKind,RuntimeCommand}};

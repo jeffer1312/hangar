@@ -1557,6 +1557,22 @@ está no CI) não exercitam a atualização nem a criação de sessão.
   desktop compilam só o alvo de teste delas e filtram por nome. As suítes ficaram no push da main e do
   canal, onde o teste vermelho segura a publicação daquele sistema. O preço é teste quebrado que não seja de regra
   aparecer depois do merge: na rodada anterior do #499 o portão antigo pegou dois.
+- **Travas de linha nova (24/11/2026).** O `check-rules.py` olha só o que o diff acrescenta: componente
+  `.svelte` novo, `claude-pocket` em código, `KeyboardAvoidingView` do `react-native`, vibração fora do
+  `src/ui/haptics.ts`, `baseUrl` cru em chamada e `new-session` fora do `session_open/`. O que já existia
+  não conta, por isso não há teto nem lista de exceções: 4 arquivos do Expo com `expo-haptics`, 2 chamadas da
+  web com `baseUrl` e 4 usos de `new-session` que não abrem agente por fora (shell separado, runner de projeto,
+  janela de login do Claude e atalho) seguem como estão. A saída é `HANGAR_<REGRA>_AUTORIZADO: <motivo>` num
+  commit. Rodadas nos 50 merges mais recentes da main, só o #462 ficaria vermelho: criou o `HandoffLine.svelte`
+  depois da regra da web.
+- **Trava geral do Expo.** O teste recarrega a tela com todo valor guardado no aparelho ligado e exige o mesmo
+  pedido. Recarregar importa: os stores leem a preferência ao carregar o módulo, e foi assim que o Code Mode
+  entrou no desktop. Fica fora o que o core guarda pelo próprio storage.
+- **Leitor do plugin no teste do core.** O kit de teste do plugin só roda dentro do Claude Code; o
+  `contextRefs.ts` dele é TypeScript puro, e o core roda os casos compartilhados nele também.
+- **Julgamento fica no CodeRabbit, em `warning`.** São 10 checagens no `.coderabbit.yaml` (o plano Advanced
+  aceita 20). Em `.coderabbit/pre-merge-checks/` cada uma viraria check do GitHub, e o inconclusivo
+  (`action_required`) seguraria o merge da `pr-review-auto`.
 - **Nome que não rodou é falha.** O filtro do cargo e o do vitest passam verdes com zero testes:
   renomear a trava a tiraria do portão sem aviso.
 - **Nunca o workflow do servidor no PR.** O portão antigo chamava o `server-jobs.yml`, que pede

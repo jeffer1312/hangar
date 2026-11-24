@@ -45,6 +45,7 @@ pub fn sync_startup(service: &AccountService) {
     if let Err(error) = agy_hooks::sync(&service.env.home) {
         tracing::warn!(code = "harness_startup_agy_hooks_failed", %error, "hooks do Antigravity não conferidos na subida");
     }
+    persona::sync_agy(&service.env.home);
 }
 
 pub fn sync_hooks(service: &AccountService, repo: &Path) -> Value {

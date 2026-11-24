@@ -35,7 +35,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
                 .child(b.stop_server.loading(stopping).tab_stop(false)))
     };
     let body = if step == 0 {
-        app::port_note(tr("ports_empty"), theme::muted()).into_any_element()
+        div().into_any_element()
     } else {
         div().flex().flex_col().gap(px(10.))
             .when(step < 4, |el| el.child(row(3000, "next-server", false, step == 3)))

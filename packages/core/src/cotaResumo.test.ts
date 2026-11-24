@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { contaComFolga, cotaDaConta, motivoCotaAntiga, resumoCota, type CotaContaResumo } from './cotaResumo';
+import { contaComFolga, cotaDaConta, cotaDoModeloAgy, motivoCotaAntiga, resumoCota, type CotaContaResumo } from './cotaResumo';
 import { overwriteGetLocale } from './paraglide/runtime';
 import * as m from './paraglide/messages';
 
@@ -93,5 +93,15 @@ describe('resumoCota', () => {
     expect(resumoCota({ ...lida, estado: 'expirada' })).toBe('');
     expect(resumoCota({ ...lida, janelas: [] })).toBe('');
     expect(resumoCota({ ...lida, janelas: [{ rotulo: '5h', pct: NaN }] })).toBe('');
+  });
+});
+
+describe('cotaDoModeloAgy', () => {
+  const cota = { janelas: [{ rotulo: '7d', pct: 3 }, { rotulo: '5h', pct: 4 },
+    { rotulo: 'Claude/GPT 7d', pct: 50, por_modelo: true }, { rotulo: 'Claude/GPT 5h', pct: 60, por_modelo: true }] };
+  it('mostra o grupo do Gemini para modelo Gemini e o outro para Claude ou GPT', () => {
+    expect(cotaDoModeloAgy(cota, 'gemini-4-neon-high').janelas.map((j) => [j.rotulo, j.pct])).toEqual([['7d', 3], ['5h', 4]]);
+    expect(cotaDoModeloAgy(cota, 'claude-opus-5-5').janelas.map((j) => [j.rotulo, j.pct, j.por_modelo])).toEqual([['7d', 50, false], ['5h', 60, false]]);
+    expect(cotaDoModeloAgy(cota, 'gpt-oss-120b').janelas).toHaveLength(2);
   });
 });

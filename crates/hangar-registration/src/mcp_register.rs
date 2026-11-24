@@ -1,7 +1,8 @@
 //! `hangar-server mcp-register`: o MCP `hangar` em cada conta do Claude (`mcpServers.hangar`, com
-//! `headersHelper`: o token nunca entra no ambiente da sessão) e no `config.toml` de cada conta do
-//! Codex (bloco marcado com `http_headers`), mais a liberação das ferramentas de recado no
-//! `~/.claude/settings.json` principal. Idempotente; uma conta com problema não impede as outras.
+//! `headersHelper`: o token nunca entra no ambiente da sessão), no `config.toml` de cada conta do
+//! Codex (bloco marcado com `http_headers`) e no `mcp_config.json` de cada conta do Antigravity (pelo
+//! `mcp-stdio`), mais a liberação das ferramentas de recado no `~/.claude/settings.json` principal e no
+//! `settings.json` do `agy`. Idempotente; uma conta com problema não impede as outras.
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -51,13 +52,101 @@ pub fn run(invocation: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
     let claude_ok = claude(&home, config_dir.map(String::as_str), &entry, out, err);
     let settings_ok = claude_permissions(&home.join(".claude").join("settings.json"), out, err);
     let codex_ok = codex(&home, &codex_block(&url, token), out, err);
+    let launcher = home.join(".local").join("bin").join(if invocation.windows { "hangar-mcp-stdio.cmd" } else { "hangar-mcp-stdio" });
+    let agy_ok = agy(&home, &launcher, out, err);
     if !claude_ok {
         let _ = writeln!(err, "erro: alguma conta do Claude ficou sem o MCP hangar (veja acima)");
     }
     if !codex_ok {
         let _ = writeln!(err, "erro: alguma conta do Codex ficou sem o MCP hangar (veja acima)");
     }
-    u8::from(!(claude_ok && settings_ok && codex_ok))
+    if !agy_ok {
+        let _ = writeln!(err, "erro: alguma conta do Antigravity ficou sem o MCP hangar (veja acima)");
+    }
+    u8::from(!(claude_ok && settings_ok && codex_ok && agy_ok))
+}
+
+/// Cada conta do `agy` já usada (a pasta de dados existe). O `agy` só manda cabeçalho fixo ao MCP HTTP: a
+/// identidade da sessão vem do `mcp-stdio`, que herda o ambiente dela, e o token ele lê do `.env`.
+fn agy(home: &Path, launcher: &Path, out: &mut dyn Write, err: &mut dyn Write) -> bool {
+    let mut all_ok = true;
+    for account in hangar_antigravity::paths::known_accounts(home) {
+        if !account.data_dir(home).is_dir() {
+            continue;
+        }
+        let file = account.mcp_config_path(home);
+        if let Err(detail) = agy_account(&file, launcher, out, err) {
+            let _ = writeln!(err, "erro: {}: MCP hangar não registrado: {detail}", file.display());
+            all_ok = false;
+        }
+        let settings = account.settings_path(home);
+        match hangar_antigravity::settings::allow(&settings, &hangar_antigravity::settings::HANGAR_RULES) {
+            Ok(true) => { let _ = writeln!(out, "ok: recado pelo MCP hangar liberado em {}", settings.display()); }
+            Ok(false) => {}
+            // Como no Claude: arquivo da pessoa ilegível é pulado com aviso, não regravado.
+            Err(hangar_antigravity::hooks::Error::Unreadable(why)) => {
+                let _ = writeln!(err, "erro: {} ilegível ({why}) — liberação do recado não gravada", settings.display());
+            }
+            Err(error) => {
+                let _ = writeln!(err, "erro: {}: liberação do recado não gravada: {error}", settings.display());
+                all_ok = false;
+            }
+        }
+    }
+    all_ok
+}
+
+/// A entrada `hangar` que o Hangar quer: o lançador estável, sem argumento, com o prazo do cofre. O que a
+/// pessoa pôs nela (`disabled`, `enabledTools`…) fica; transporte HTTP antigo sai.
+fn agy_entry(current: Option<&Value>, launcher: &Path) -> Value {
+    let mut entry = match current {
+        Some(Value::Object(map)) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for key in ["serverUrl", "url", "httpUrl", "headers"] {
+        entry.remove(key);
+    }
+    entry.insert("command".into(), json!(launcher.to_string_lossy()));
+    entry.insert("args".into(), json!([]));
+    entry.insert("timeoutSeconds".into(), json!(TOOL_TIMEOUT_S));
+    Value::Object(entry)
+}
+
+fn agy_account(file: &Path, launcher: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<(), String> {
+    let target = files::through_links(file);
+    let exists = target.exists();
+    let mut data = if exists {
+        let text = std::fs::read_to_string(&target).map_err(|error| files::os_error(&error, file))?;
+        let text = text.trim_start_matches('\u{feff}');
+        // O `agy` cria o arquivo vazio.
+        if text.trim().is_empty() {
+            json!({})
+        } else if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+            parsed
+        } else {
+            let _ = writeln!(err, "erro: {} não é JSON válido — pulado", file.display());
+            return Ok(());
+        }
+    } else {
+        json!({})
+    };
+    let Value::Object(map) = &mut data else { return Err("o arquivo não é um objeto JSON".into()) };
+    let Value::Object(servers) = map.entry("mcpServers").or_insert_with(|| json!({})) else {
+        return Err("mcpServers não é um objeto".into());
+    };
+    let wanted = agy_entry(servers.get("hangar"), launcher);
+    if servers.get("hangar") == Some(&wanted) {
+        return Ok(());
+    }
+    servers.insert("hangar".into(), wanted);
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir).map_err(|error| files::os_error(&error, dir))?;
+    }
+    let text = serde_json::to_string_pretty(&data).map_err(|error| error.to_string())?;
+    let mode = if exists { files::mode_of(&target).unwrap_or(0o644) } else { 0o644 };
+    files::replace(&target, format!("{text}\n").as_bytes(), mode)?;
+    let _ = writeln!(out, "ok: MCP hangar em {}", file.display());
+    Ok(())
 }
 
 /// `~/.claude.json`, o que a conta padrão lê com `CLAUDE_CONFIG_DIR` (criado se a pasta existe) e cada

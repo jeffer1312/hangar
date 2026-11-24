@@ -7,6 +7,7 @@ import {
   hasContextRefs, locateInMarkdown, locateQuote, parseContextRefs, quoteAffixesInMarkdown, quoteAffixes, quoteTooLong, serializeContextRef,
   splitContextRefs, withContextRefComment, type ContextRef, type QuoteRef,
 } from './contextRefs';
+import { parseContextRefs as parsePluginContextRefs } from '../../../plugins/hangar/hooks/contextRefs';
 
 describe('contextRefs: casos compartilhados', () => {
   it('as notas são as do contrato', () => {
@@ -47,6 +48,13 @@ describe('contextRefs: cópia dos casos no plugin', () => {
     const corpo = ts.slice(inicio!.index + inicio![0].length).replace(/;\s*$/, '');
     expect(JSON.parse(corpo)).toEqual(json);
   });
+
+  // O kit de teste do plugin só roda dentro do Claude Code; o leitor dele é TypeScript puro.
+  for (const c of [...fixtures.parse, ...fixtures.serialize]) {
+    it(`o leitor do plugin lê: ${c.name}`, () => {
+      expect(parsePluginContextRefs(c.message)).toEqual(c.segments);
+    });
+  }
 });
 
 const quote = (extra: Partial<QuoteRef> = {}): QuoteRef =>

@@ -247,6 +247,21 @@ fn parse_body(bytes: &[u8]) -> Result<Body, String> {
     Ok(Body { key, verb, args, tab: v["aba"].as_i64(), cdp, alvo: v["alvo"].as_str().map(str::to_owned), secret })
 }
 
+/// Grava a hora em que a sessão desta máquina apareceu na janela ativa (`_focus.json`, sessão → ms). O CLI e o MCP
+/// comparam com a hora do app de outra máquina para mandar o navegador a quem a mostrou por último.
+pub fn record_focus(session: &str) {
+    let Some(dir) = nav_dir() else { return };
+    let mut map = std::fs::read(dir.join("_focus.json")).ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Map<String, Value>>(&b).ok()).unwrap_or_default();
+    // ponytail: teto por varredura do mais antigo; só cresce com sessões novas mostradas.
+    while map.len() >= 256 && !map.contains_key(session) {
+        let Some(old) = map.iter().min_by_key(|(_, ms)| ms.as_u64()).map(|(k, _)| k.clone()) else { break };
+        map.remove(&old);
+    }
+    map.insert(session.to_owned(), json!(now_ms() as u64));
+    if let Err(e) = write_json("_focus", &Value::Object(map)) { crate::log_line(&format!("nav: _focus.json não gravado: {e}")); }
+}
+
 /// Apaga o `_srv.json` ao fechar, só se ainda for deste processo.
 pub fn forget_own() {
     let Some(path) = nav_dir().map(|d| d.join("_srv.json")) else { return };

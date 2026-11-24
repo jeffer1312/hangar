@@ -184,7 +184,8 @@ async fn sidecar_code(list: &crate::list::bridge::ListBridge, name: &str) -> Opt
     tokio::task::spawn_blocking(move || {
         use crate::runtime::codex_sidecar::{dir, path};
         if path(&dir(&home), &owned).exists() { Some("codex_sidecar_invalid") }
-        else if path(&home.join(".hangar").join("claude-headless"), &owned).exists() { Some("claude_sidecar_invalid") } else { None }
+        else if path(&home.join(".hangar").join("claude-headless"), &owned).exists() { Some("claude_sidecar_invalid") }
+        else if path(&crate::runtime::antigravity_sidecar::dir(&home), &owned).exists() { Some("antigravity_sidecar_invalid") } else { None }
     }).await.ok().flatten()
 }
 

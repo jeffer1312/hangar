@@ -16,6 +16,7 @@ use tokio::sync::{broadcast,Mutex};
 
 mod rename;
 mod other;
+mod antigravity;
 pub use rename::Detached;
 
 /// `Headless`: ator sem terminal (cano). `Terminal`: entrada terminal do Claude. `CodexTerminal`: o mesmo
@@ -56,6 +57,9 @@ async fn runtime_account_guard(provider: &str, metadata: &Value) -> Result<crate
     crate::accounts::claude_refresh::acquire_for_session(&locks, &key, std::time::Instant::now() + Duration::from_secs(5)).await
         .map_err(|_| failure("account_busy"))
 }
+
+/// O campo do sidecar com a conversa de cada provedor sem terminal.
+fn conversation_field(provider:&str) -> &'static str { match provider { "claude" => "session_id", "antigravity" => "conversation_id", _ => "thread_id" } }
 
 /// Até aqui o ator ocupado entregando (leitura de tela lenta no psmux) só faz a escrita esperar; depois conta como
 /// travado. Igual ao prazo do fechamento da porta e abaixo do transporte do Python.
@@ -300,9 +304,12 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
     let (base,dir,mut meta) = (policy.codex_environment(),sidecar_dir.to_owned(),target.metadata.clone());
     if let Value::Object(fields) = &mut meta { fields.insert("name".into(),json!(target.name)); fields.insert("key".into(),json!(target.key)); }
     let (claude,bridge,name,runtime) = (target.provider == "claude",policy.plugin_bridge(),target.name.clone(),tokio::runtime::Handle::current());
+    let agy = target.provider == "antigravity";
     let (program,env,stamp) = tokio::task::spawn_blocking(move||if claude {
         let launch = super::claude_launch::prepare(&base,bridge.as_ref(),&meta,&name,runtime)?;
         Ok((launch.program,launch.env,claude_config_stamp(meta["config_dir"].as_str().filter(|d|!d.is_empty()))))
+    } else if agy {
+        super::antigravity_launch::launch_env(&base,&meta).map(|launch|(launch.program,launch.env,None))
     } else {
         super::codex_launch::launch_env(&base,&dir,&meta).map(|launch|(launch.program,launch.env,None))
     }).await.map_err(|_|failure("launch_job"))??;
@@ -391,6 +398,10 @@ pub(super) async fn launch_sidecar(target:&RuntimeTarget,sidecar_dir:&std::path:
 /// `session.patch_meta`/`session.clear_cano` de uma sessão sem terminal, gravados no sidecar do provedor.
 /// Bloqueante: chamar fora do runtime.
 pub(super) fn sidecar_service(provider:&str,dir:&std::path::Path,name:&str,key:&str,kind:&str,payload:&Value,view:&Value) -> Result<Value,RuntimeError> {
+    if provider == "antigravity" {
+        return if kind == "session.clear_cano" { super::antigravity_sidecar::clear_cano(dir,name,key,payload) }
+            else { super::antigravity_sidecar::patch(dir,name,key,payload,view) };
+    }
     match (provider == "claude",kind == "session.clear_cano") {
         (true,true)=>super::claude_sidecar::clear_cano(dir,name,key,payload),
         (true,false)=>super::claude_sidecar::patch(dir,name,key,payload,view),
@@ -619,6 +630,7 @@ impl RuntimeRegistry {
             EntryHandle::CodexTerminal {..}=>watcher()?.adopt_now(self,name).await,
             EntryHandle::OtherTerminal {..}=>self.adopt_other(name).await,
             EntryHandle::Headless(_) if provider == "codex"=>watcher()?.open_parked(self,name).await,
+            EntryHandle::Headless(_) if provider == "antigravity"=>self.open_antigravity_headless(name).await,
             EntryHandle::Headless(_)=>self.open_claude_headless(name,true).await,
         };
         reopened.ok_or_else(||failure("runtime_binding"))??;
@@ -655,6 +667,7 @@ impl RuntimeRegistry {
             Err(_)=>return Some(Err(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))),
         };
         if let Some(opened) = self.open_claude_headless(name,true).await { return Some(opened); }
+        if let Some(opened) = self.open_antigravity_headless(name).await { return Some(opened); }
         let watcher = match self.wait_watcher().await { Ok(found) => found?, Err(error) => return Some(Err(error)) };
         if let Some(adopted) = watcher.adopt_now(self,name).await { return Some(adopted); }
         watcher.adopt_claude(self,name).await
@@ -1903,14 +1916,17 @@ impl RuntimeRegistry {
             if generation != target.generation { return Err(failure("runtime_generation")); }
             match handle {EntryHandle::Headless(handle)=>handle,_=>return Err(failure("runtime_provider"))}
         } else {
-        if !["claude","codex"].contains(&target.provider.as_str()) || target.binding.versao != 2 { return Err(failure("runtime_provider")); }
-        let account_guard = runtime_account_guard(&target.provider, &target.metadata).await?;
+        if !["claude","codex","antigravity"].contains(&target.provider.as_str()) || target.binding.versao != 2 { return Err(failure("runtime_provider")); }
+        // O Antigravity não lê conta Claude nem Codex: a conta Google é a pasta do sidecar.
+        let account_guard = match target.provider.as_str() { "antigravity" => None, provider => Some(runtime_account_guard(provider, &target.metadata).await?) };
         let lease = wait_lease(&target.lease_path).await?;
         let store = open_store(&target.state_path,&target.projection_dir,&target.key,target.generation,&target.name,lease.clone()).await?;
         let mut metadata = target.metadata.clone();
         if let Some(fields) = store.state().runtime_state["view"].as_object() {
-            if fields.get("conversation").is_some_and(|conversation|conversation == &metadata[if target.provider == "claude" { "session_id" } else { "thread_id" }]) {
-                for (key,value) in fields { if key != "public_state" { metadata[key] = value.clone(); } }
+            if fields.get("conversation").is_some_and(|conversation|conversation == &metadata[conversation_field(&target.provider)]) {
+                // O modo do Antigravity é o do sidecar: a volta do terminal grava lá o do rodapé, e a vista salva é da vida anterior.
+                let sidecar_owns = |key:&str|target.provider == "antigravity" && matches!(key,"permission_mode"|"mode");
+                for (key,value) in fields { if key != "public_state" && !sidecar_owns(key) { metadata[key] = value.clone(); } }
             }
         }
         let queue = QueueActor::start(store,lease);
@@ -1982,7 +1998,7 @@ impl RuntimeRegistry {
             Some(Arc::new(recipe))
         } else {None};
         let adopted_birth=claude_recipe.as_ref().map(|recipe|recipe.root_identity().map(|(_,birth)|birth)).transpose()?;
-        if target.provider=="codex" && let Some(sidecar_dir) = &managed { engine = engine.with_launch(LaunchConfig { sidecar_dir:sidecar_dir.clone(),backoff:self.respawn_base }); }
+        if matches!(target.provider.as_str(),"codex" | "antigravity") && let Some(sidecar_dir) = &managed { engine = engine.with_launch(LaunchConfig { sidecar_dir:sidecar_dir.clone(),backoff:self.respawn_base }); }
         if let Some(mods) = &self.mods { engine = engine.with_mods(mods.clone()); }
         engine = engine.with_live(self.live_sender(&target.name)).with_lifecycle(self.self_ref.get().cloned())
             .with_cano_birth(adopted_birth).with_reconnect_waits(self.reconnect_waits.normal.clone(),self.reconnect_waits.pending.clone(),self.reconnect_waits.stall)
@@ -2003,8 +2019,8 @@ impl RuntimeRegistry {
         };
         if let Ok(mut parked)=self.barrier(&target.key).await.parked.lock() {*parked=None;}
         self.entries.lock().await.insert(target.key.clone(),Entry { generation:target.generation,handle:EntryHandle::Headless(handle.clone()),
-            lease_path:target.lease_path.clone(),name:target.name.clone(),mods_life:life,provider:target.provider.clone(),account_key:Some(account_guard.key.clone()),relaunch:claude_recipe,settings_owner:None,
-            mode_source:crate::terminal_facts::ModeSource {binding:crate::interactions::InteractionBinding {key:target.key.clone(),generation:target.generation,conversation:target.metadata[if target.provider=="claude" {"session_id"} else {"thread_id"}].as_str().unwrap_or("").into()},transcript:target.transcript.clone(),confirmed:target.metadata["permission_mode"].as_str().filter(|mode|*mode!="plan").map(str::to_owned)},
+            lease_path:target.lease_path.clone(),name:target.name.clone(),mods_life:life,provider:target.provider.clone(),account_key:account_guard.as_ref().map(|guard|guard.key.clone()),relaunch:claude_recipe,settings_owner:None,
+            mode_source:crate::terminal_facts::ModeSource {binding:crate::interactions::InteractionBinding {key:target.key.clone(),generation:target.generation,conversation:target.metadata[conversation_field(&target.provider)].as_str().unwrap_or("").into()},transcript:target.transcript.clone(),confirmed:target.metadata["permission_mode"].as_str().filter(|mode|*mode!="plan").map(str::to_owned)},
             live:self.live_sender(&target.name),runtime_target:(target.provider=="claude").then(||target.clone()),
             cano_birth:adopted_birth,auto_respawn:managed.as_ref().filter(|_|target.provider=="claude").map(|_|self.respawn_base),respawn_inflight:false });
         handle

@@ -107,7 +107,7 @@ impl ReceiptIndex {
     }
 
     pub(super) fn set_other_rows(&mut self, state: std::sync::Arc<super::queue::State>) {
-        if matches!(self.provider.as_str(), "pi" | "omp" | "kimi") {
+        if matches!(self.provider.as_str(), "pi" | "omp" | "kimi" | "antigravity") {
             self.other_rows = Some(state);
         }
     }
@@ -266,6 +266,11 @@ impl ReceiptIndex {
         for event in events {
             if event.kind != hangar_api::chat::ChatKind::UserMsg { continue; }
             let Some(text) = event.text.filter(|text| !text.trim().is_empty()) else { continue; };
+            // O `agy` no modo plano grava a mensagem como `/plan <texto>`: a prova é do texto enviado.
+            let text = match text.strip_prefix("/plan ") {
+                Some(sent) if self.provider == "antigravity" => sent.to_owned(),
+                _ => text,
+            };
             let offset = event.offset.unwrap_or(self.scan_offset);
             self.occurrences.push(Occurrence {
                 id: format!("{}|{identity}|{}", self.conversation, event.id),
@@ -395,6 +400,7 @@ fn cursor_accepts(cursor:&DispatchCursor,occurrence:&Occurrence)->bool {
     // Rollout do Codex sem `session_meta`: não há como provar a conversa; vale o cursor sem arquivo.
     if occurrence.identity_unprovable { return true; }
     // Arquivo novo só comprova a conversa explícita e uma ocorrência posterior ao despacho.
+    // Carimbo em segundos inteiros (o `created_at` do `agy`) cai antes do despacho do mesmo segundo.
     occurrence.recorded_conversation.as_deref() == Some(cursor.conversation.as_str())
-        && occurrence.timestamp.is_some_and(|ts|ts >= since)
+        && occurrence.timestamp.is_some_and(|ts|ts >= since || (ts.fract() == 0.0 && ts >= since.floor()))
 }

@@ -151,7 +151,7 @@ mod find;
 mod costs;
 mod mission;
 pub(crate) use mission::ticket_card_view;
-pub(crate) use ports_panel::{port_actions, port_buttons, port_note, port_row_view};
+pub(crate) use ports_panel::{port_actions, port_buttons, port_row_view};
 pub(crate) use activity::{side_tab_button, side_tab_slot};
 pub(crate) use work_review::{choice_button as review_choice_button, decision_card as review_decision_card, decision_frame_width as review_frame_width,
     decision_nav as review_decision_nav, decision_nav_row as review_decision_nav_row, frames_row as review_frames_row, render_band as review_band,
@@ -9310,7 +9310,9 @@ impl Render for Hangar {
         div().id("hangar-root").track_focus(&self.root_focus).relative().size_full().flex()
             .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                 for browser in this.side.browsers.values() { browser.read(cx).release_focus() }
+                this.note_session_seen(cx);
             }))
+            .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.note_session_seen(cx)))
             // Sessão solta fora da lista: nada acontece, só termina o arrasto.
             .on_drop(cx.listener(|this, _: &grouping::SessionDrag, _, cx| this.end_session_drag(cx)))
             .bg(if !chat_background { theme::window_fill() }

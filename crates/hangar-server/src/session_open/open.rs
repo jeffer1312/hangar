@@ -132,7 +132,7 @@ pub fn refusal_diary(op: String, name: &str, provider: &'static str, error: &Ope
     let in_use = error.code == Some("erro_nome_em_uso");
     let invalid = error.code == Some("erro_criacao_sessao") && error.msg.starts_with("nome invalido");
     let agent = error.code == Some("erro_criacao_sessao")
-        && ["sessao sem terminal so vale para provider claude ou codex", "Nome de perfil OMP inválido", "sessao sem terminal nao aceita read_only",
+        && ["sessao sem terminal so vale para provider claude, codex ou antigravity", "Nome de perfil OMP inválido", "sessao sem terminal nao aceita read_only",
             "permission_mode: use um de Ask for approval, Approve for me, Full Access"].contains(&error.msg.as_str());
     if !(in_use || invalid || agent) { return None; }
     let mut diary = Diary::new(op, if invalid { "" } else { name }, provider);
@@ -390,9 +390,9 @@ pub fn requested_provider(request: &super::SessionOpenRequest) -> &'static str {
     request.provider.as_deref().and_then(AgentProvider::parse).map_or("claude", AgentProvider::name)
 }
 
-/// O que esta abertura atende: sessão com terminal de todo provedor, e o Claude e o Codex sem terminal.
+/// O que esta abertura atende: sessão com terminal de todo provedor, e o Claude, o Codex e o Antigravity sem terminal.
 pub fn opens_here(spec: &SessionSpec) -> bool {
-    spec.surface == Surface::Terminal || matches!(spec.provider, AgentProvider::Claude | AgentProvider::Codex)
+    spec.surface == Surface::Terminal || matches!(spec.provider, AgentProvider::Claude | AgentProvider::Codex | AgentProvider::Antigravity)
 }
 
 /// Abre a sessão do spec resolvido: com terminal de todo provedor, ou o Claude e o Codex sem terminal.
@@ -460,7 +460,7 @@ pub async fn open_adopting(host: &dyn OpenHost, resolved: Resolved, caller: &Ope
                  resume.as_deref(), restore, adopting).await {
         Ok((jsonl, warnings, route)) => {
             // O Codex sem terminal já subiu dentro da abertura (`warm_codex`).
-            if spec.surface == Surface::Headless && spec.provider == AgentProvider::Claude { host.wake(&spec.name); }
+            if spec.surface == Surface::Headless && matches!(spec.provider, AgentProvider::Claude | AgentProvider::Antigravity) { host.wake(&spec.name); }
             Ok(Opened { body: created_body(&spec, jsonl.as_deref(), warnings, route.as_ref(), codex_home.as_deref(), provider_source), undo, key: spec.key.clone() })
         }
         // Incerta, a sessão pode estar de pé na worktree: desfazer apagaria a pasta debaixo dela.
@@ -487,6 +487,8 @@ async fn launch(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: Option<V
         (Surface::Terminal, _) => terminal_life(host, spec, read_only.as_deref(), initial_prompt, &mut diary, remember_provider, runtime, codex_home, resume, restore).await,
         (Surface::Headless, Some(home)) =>
             codex_headless_life(host, spec, home, initial_prompt, &mut diary, remember_provider, resume).await.map(|w| (None, w, None)),
+        (Surface::Headless, None) if spec.provider == AgentProvider::Antigravity =>
+            antigravity_headless_life(host, spec, initial_prompt, &mut diary, remember_provider, resume).await.map(|(jsonl, w)| (jsonl, w, None)),
         (Surface::Headless, None) => headless_life(host, spec, previous_non_plan, initial_prompt, &mut diary, remember_provider, resume, adopting).await,
     };
     let events = diary.end(result.as_ref().err());
@@ -696,7 +698,7 @@ async fn headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, previous_non
     // A resolução conferiu o nome antes de conta e worktree: outra sessão pode ter nascido desde então.
     // Sem pane, o multiplexador que não responde (ou não existe) não impede, como no `_create_headless`.
     let pane = terminal::presence(host.mux(), host.terminal(), &spec.name).await.0 == terminal::Presence::Present;
-    if pane || taken("claude-headless") || taken("codex-sessions") {
+    if pane || taken("claude-headless") || taken("codex-sessions") || taken("antigravity-sessions") {
         diary.refused("aviso", "nome_ja_em_uso", None, None);
         return Err(name_in_use());
     }
@@ -802,6 +804,48 @@ async fn name_still_free(host: &dyn OpenHost, spec: &SessionSpec, diary: &mut Di
     }
 }
 
+/// O Antigravity sem terminal: o sidecar (`antigravity-sessions/`) e o registro; a primeira mensagem vai à fila
+/// durável e o processo sobe pelo `wake` logo depois, como o Claude sem terminal. O `agy acp` só sabe a conversa
+/// depois do `session/new`; a retomada já nasce nela.
+async fn antigravity_headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, initial_prompt: Option<&str>, diary: &mut Diary,
+                                   remember_provider: bool, resume: Option<&str>) -> Result<(Option<String>, Vec<String>), OpenError> {
+    diary.step("validar");
+    let sidecars = host.home().join(".hangar");
+    let taken = |kind: &str| crate::runtime::codex_sidecar::path(&sidecars.join(kind), &spec.name).exists();
+    if taken("claude-headless") || taken("codex-sessions") || taken("antigravity-sessions") {
+        diary.refused("aviso", "nome_ja_em_uso", None, None);
+        return Err(name_in_use());
+    }
+    name_still_free(host, spec, diary).await?;
+    let mut warnings = host.leave_old_group(&spec.name).await?;
+    spec.conversation = resume.map(str::to_owned);
+    diary.step("confiar_pasta");
+    agents::agy_pretrust(host.home(), &spec.account, &spec.cwd);
+    host.release_name(&spec.name).await?;
+    if let Some(text) = initial_prompt.filter(|p| !p.is_empty()) {
+        progress_step(&spec.name, "recado", json!({}));
+        let queue_dir = crate::accounts::environment::AccountEnvironment::from_map(host.env().clone()).claude_base.join(".hangar-queue");
+        let (key, name, text) = (spec.key.clone(), spec.name.clone(), text.to_owned());
+        let queued = tokio::task::spawn_blocking(move || enqueue_first(&queue_dir, &key, &name, &text)).await
+            .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+        if let Err(error) = queued {
+            diary.refused("erro", "fila_nao_gravada", Some("sidecar_gravado"), Some(&error.kind().to_string()));
+            return Err(OpenError::new(500, "erro_criacao_sessao", format!("a primeira mensagem não entrou na fila: {error}")));
+        }
+    }
+    let account = agents::agy_account(&spec.account);
+    let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    let meta = json!({"name": spec.name, "provider": "antigravity", "headless": true, "key": spec.key, "cwd": spec.cwd,
+        "gemini_home": account.gemini_home, "brain_dir": account.brain_dir(host.home()), "conversation_id": resume,
+        "model": spec.model, "permission_mode": spec.permission_mode.unwrap_or(PermissionMode::Manual).name(), "jev": spec.jev, "created": created});
+    let meta = meta.as_object().cloned().unwrap_or_default();
+    persist(host, spec, diary, "sidecar_gravado", &crate::runtime::antigravity_sidecar::dir(host.home()), &meta)?;
+    let jsonl = resume.and_then(|id| account.transcript_path(host.home(), id)).map(|p| p.to_string_lossy().into_owned());
+    let born = Born { name: spec.name.clone(), provider: spec.provider, jsonl: jsonl.clone(), remember_provider, codex_terminal: None, restored: false, first_message: false };
+    warnings.extend(announce(host, spec, diary, &born, "sidecar_gravado").await);
+    Ok((jsonl, warnings))
+}
+
 /// `_create_codex_headless`: o sidecar sem terminal (com a chave do spec) e o registro; o processo
 /// sobe logo depois pelo runtime (`warm_codex`), como o aquecimento da criação no Python.
 async fn codex_headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, codex_home: &str, initial_prompt: Option<&str>, diary: &mut Diary,
@@ -831,7 +875,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
                        -> Result<(Option<String>, Vec<String>, Option<claude::EngineRoute>), OpenError> {
     diary.step("validar");
     let claude = spec.provider == AgentProvider::Claude;
-    if matches!(spec.provider, AgentProvider::Pi | AgentProvider::Kimi) { sync_skills(host).await; }
+    if matches!(spec.provider, AgentProvider::Pi | AgentProvider::Kimi | AgentProvider::Antigravity) { sync_skills(host).await; }
     // A resolução conferiu o nome antes de conta e worktree: outro pane pode ter nascido desde então.
     name_still_free(host, spec, diary).await?;
     let mut warnings = if restore { Vec::new() } else { host.leave_old_group(&spec.name).await? };
