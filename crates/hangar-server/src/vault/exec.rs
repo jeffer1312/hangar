@@ -215,7 +215,7 @@ fn claude_config(env: &[(OsString, OsString)], home: &Path) -> PathBuf {
 fn session_env(st: &AppState, name: &str, provider: &str, headless: bool, pid: Option<u32>, key: Option<&str>) -> Option<Env> {
     if !headless { return pid.and_then(environ); }
     let base = &st.accounts.env;
-    let dir = base.home.join(".hangar").join(if provider == "codex" { "codex-sessions" } else { "claude-headless" });
+    let dir = base.home.join(".hangar").join(match provider { "codex" => "codex-sessions", "antigravity" => "antigravity-sessions", _ => "claude-headless" });
     let meta = crate::runtime::codex_sidecar::load(&crate::runtime::codex_sidecar::path(&dir, name))?;
     let cano = meta.get("cano").and_then(|c| c.get("pid")).and_then(serde_json::Value::as_u64).and_then(|p| u32::try_from(p).ok());
     let mine = |env: &Env| key.is_some_and(|key| env.iter().any(|(k, v)| k == "CP_SESSION_KEY" && v == key));
@@ -226,6 +226,7 @@ fn session_env(st: &AppState, name: &str, provider: &str, headless: bool, pid: O
 fn launch_env(base: &crate::accounts::environment::AccountEnvironment, provider: &str, name: &str, meta: &serde_json::Value) -> Option<Env> {
     let map = match provider {
         "codex" => crate::runtime::codex_launch::launch_env(base, &crate::runtime::codex_sidecar::dir(&base.home), meta).ok()?.env,
+        "antigravity" => crate::runtime::antigravity_launch::launch_env(base, meta).ok()?.env,
         "claude" => {
             let spec = crate::session_open::record::claude_live(&base.home, meta, name).ok()?;
             let facts = crate::session_open::facts::LocalFacts::new(base.clone(), tokio::runtime::Handle::try_current().ok()?);

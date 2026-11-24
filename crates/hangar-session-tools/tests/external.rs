@@ -119,7 +119,10 @@ mod unix {
         }
         fn program(&self, name: &str, body: &str) {
             let file = self.root.path().join(name);
-            fs::write(&file, format!("#!/bin/sh\nprintf '%s' \"$$\" > \"$PID_FILE\"\ntrap 'printf done > \"$DONE\"' 0\n{body}\n")).unwrap();
+            let source = self.root.path().join(format!("{name}.src"));
+            fs::write(&source, format!("#!/bin/sh\nprintf '%s' \"$$\" > \"$PID_FILE\"\ntrap 'printf done > \"$DONE\"' 0\n{body}\n")).unwrap();
+            // Gravado por outro processo: um fork de outro teste herdaria o descritor de escrita, e o exec dá ETXTBSY.
+            assert!(std::process::Command::new("cp").arg(&source).arg(&file).status().unwrap().success());
             fs::set_permissions(file, fs::Permissions::from_mode(0o700)).unwrap();
         }
         async fn result(&self) -> String {

@@ -80,6 +80,7 @@ pub async fn mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
     let panels = Some(st.term.clone());
     let (st2, owned) = (st.clone(), name.clone());
     let outcome = detached_relaunch(async move {
+        if let Some(agy) = during_life_change(&st2, &owned, antigravity_switch(&st2, &runtime, &owned, terminal)).await { return Some(Relaunched::Codex(agy)); }
         if let Some(codex) = during_life_change(&st2, &owned, runtime.relaunch_codex(&owned, terminal, panels)).await { return Some(Relaunched::Codex(codex)); }
         let surface = if terminal { Surface::Terminal } else { Surface::Headless };
         let change = SessionChange { reason: ChangeReason::ModeSwitch, surface: Some(surface), account: None, permission_mode: None,
@@ -185,6 +186,92 @@ async fn unowned_mode(st: &AppState, name: &str) -> (StatusCode, Value) {
 }
 
 enum Relaunched { Codex(Result<Value, RuntimeError>), Claude(Result<Reopened, ReopenFailure>, bool) }
+
+/// A pílula do Antigravity, sob a porta de entrada exclusiva do nome. Para o sem terminal o registro faz tudo;
+/// para o terminal, o pane abre pelo caminho do restore (`agy --conversation`, grupo e fila do nome ficam), e
+/// só depois de nascer o sidecar sem terminal sai; se não nascer, a sessão volta sem terminal. `None`: não é
+/// sessão do Antigravity.
+async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::gateway::RuntimeRegistry>, name: &str, terminal: bool)
+    -> Option<Result<Value, RuntimeError>> {
+    let headless_open = runtime.antigravity_headless(name).await.is_some();
+    let terminal_open = runtime.other_info(name).await.is_some_and(|info| info.provider == "antigravity");
+    if !headless_open && !terminal_open {
+        let home = st.accounts.env.home.clone();
+        let sidecar = crate::runtime::codex_sidecar::path(&crate::runtime::antigravity_sidecar::dir(&home), name);
+        let exists = match tokio::task::spawn_blocking(move || sidecar.try_exists()).await {
+            Ok(Ok(exists)) => exists,
+            _ => return Some(Err(RuntimeError::new("antigravity_sidecar_unreadable", "o arquivo da sessão do Antigravity sem terminal não foi lido"))),
+        };
+        if !exists {
+            // Pane sem ator ainda (abrindo, ou na tela de primeiro uso do agy): a recusa diz isso, não "só Claude".
+            let listed = st.list.discovered_session(name).await.ok().flatten().is_some_and(|(row, _)| row.provider == "antigravity");
+            if listed {
+                return Some(Err(RuntimeError::new("erro_troca_modo",
+                    "o Antigravity com terminal ainda não respondeu (abrindo ou na tela de primeiro uso); tente de novo quando ele estiver pronto")));
+            }
+            return None;
+        }
+        // Sem terminal estacionada: já está onde pediram.
+        if !terminal { return Some(Ok(json!({"ok": true, "terminal": false}))); }
+    }
+    if terminal_open && terminal || headless_open && !terminal { return Some(Ok(json!({"ok": true, "terminal": terminal}))); }
+    let _closed = match crate::runtime::lifecycle::ClosedIngress::acquire_exclusive(runtime.ingress(), name).await {
+        Ok(closed) => closed,
+        Err(error) => return Some(Err(error)),
+    };
+    if !terminal { return runtime.antigravity_to_headless(name).await; }
+    let left = match runtime.antigravity_leave_headless(name).await? {
+        Ok(left) => left,
+        Err(error) => return Some(Err(error)),
+    };
+    let opened = async {
+        let home = st.accounts.env.home.clone();
+        let (h, key) = (home.clone(), left.key.clone());
+        let spec = tokio::task::spawn_blocking(move || crate::session_open::record::read(&h, &key)).await
+            .map_err(|_| RuntimeError::new("spec_job", "a leitura do registro não terminou"))?
+            .map_err(|error| RuntimeError::new("erro_troca_modo", &format!("o registro da sessão não foi lido: {:?}", error.kind())))?
+            .ok_or_else(|| RuntimeError::new("erro_troca_modo", "A sessão não tem registro de abertura; a sessão foi mantida."))?;
+        let mut next = spec.with(&SessionChange { reason: ChangeReason::ModeSwitch, surface: Some(Surface::Terminal), account: None,
+            permission_mode: Some(left.permission_mode), model: left.model.clone(), effort: None, service_tier: None });
+        next.conversation = Some(left.conversation.clone());
+        let (h, written) = (home.clone(), next.clone());
+        tokio::task::spawn_blocking(move || crate::session_open::record::write(&h, &written)).await
+            .map_err(|_| RuntimeError::new("spec_job", "a gravação do registro não terminou"))?
+            .map_err(|error| RuntimeError::new("erro_troca_modo", &format!("o registro da sessão não foi gravado: {:?}", error.kind())))?;
+        let host = crate::session_open::server::ServerHost::new(st.clone()).await;
+        let entry = crate::session_open::restore::Entry { name: name.to_owned(), provider: crate::session_open::AgentProvider::Antigravity,
+            conversation: Some(left.conversation.clone()), permission_mode: None, missing_since: None, unit: None };
+        let projects = st.accounts.env.claude_base.join("projects");
+        let result = match crate::session_open::restore::resolved_for(&home, &projects, &left.key, &entry) {
+            Ok(resolved) => crate::session_open::open::open_session(&host, resolved, &crate::session_open::OpenCaller::Owner).await
+                .map_err(|error| RuntimeError::new(error.code.unwrap_or("erro_troca_modo"), &error.msg)),
+            Err(code) => Err(RuntimeError::new(&code, "o terminal do Antigravity não abriu pelo registro")),
+        };
+        if let Err(error) = result {
+            let (h, previous) = (home.clone(), spec.clone());
+            let undone = tokio::task::spawn_blocking(move || crate::session_open::record::write(&h, &previous)).await;
+            if !matches!(undone, Ok(Ok(()))) {
+                tracing::warn!(session = %name, "o registro da sessão não voltou ao sem terminal depois da troca falha");
+                return Err(RuntimeError::new(&error.code, &format!("{}; o registro da sessão não voltou ao sem terminal", error.message)));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }.await;
+    match opened {
+        Ok(()) => {
+            runtime.finish_leave_headless(name, &left.key).await;
+            Some(Ok(json!({"ok": true, "terminal": true})))
+        }
+        Err(error) => {
+            // O terminal não nasceu: a sessão volta sem terminal, na mesma conversa.
+            if let Some(Err(reopen)) = runtime.open_antigravity_headless(name).await {
+                tracing::warn!(session = %name, code = %reopen.code, "o Antigravity sem terminal não voltou depois da troca falha");
+            }
+            Some(Err(error))
+        }
+    }
+}
 
 /// Numa tarefa própria, como a do Codex: a troca admitida termina mesmo que o cliente desista.
 async fn detached_relaunch(work: impl Future<Output = Option<Relaunched>> + Send + 'static) -> Option<Relaunched> {

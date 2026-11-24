@@ -64,7 +64,7 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  Sem --headless/--terminal, herda desta sessão; chamado de fora
                                  de uma sessão, vale o padrão escolhido no Hangar.
                                  --terminal abre com terminal; não combina com --headless.
-                                 --headless (claude ou codex) abre a sessão SEM terminal: o agente
+                                 --headless (claude, codex ou antigravity) abre a sessão SEM terminal: o agente
                                  roda fora do tmux e conversa só pelo app. Combina com --model,
                                  --effort e --permissao. Ex.: --provider codex --headless
                                  --permissao "Full Access".

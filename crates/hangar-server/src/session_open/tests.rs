@@ -782,16 +782,19 @@ fn antigravity_with_a_terminal_drops_a_saved_manual_and_refuses_an_explicit_one(
     assert_eq!((error.status, error.code), (409, Some("erro_permissao_manual_sem_terminal")));
 }
 
-/// O `agy` com terminal ignora o `GEMINI_HOME`: conta adicional é recusada, a padrão (sem pasta) abre.
+/// O `agy` grava os dados em `~/.gemini` com qualquer `GEMINI_HOME`: conta adicional é recusada com e sem
+/// terminal, a padrão (sem pasta) abre.
 #[test]
-fn antigravity_with_a_terminal_refuses_an_additional_account() {
-    let mut fixture = with_saved_default("antigravity", Value::Null);
-    fixture["scenario"]["steps"][0]["json"]["provider"] = json!("antigravity");
-    fixture["scenario"]["steps"][0]["json"]["headless"] = json!(false);
-    assert!(resolve_fixture(&fixture).is_ok(), "a conta padrão abre");
-    fixture["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.antigravity-trabalho");
-    let error = resolve_fixture(&fixture).unwrap_err();
-    assert_eq!((error.status, error.code), (409, Some("erro_conta_antigravity_adicional")));
+fn antigravity_refuses_an_additional_account_with_and_without_a_terminal() {
+    for headless in [false, true] {
+        let mut fixture = with_saved_default("antigravity", Value::Null);
+        fixture["scenario"]["steps"][0]["json"]["provider"] = json!("antigravity");
+        fixture["scenario"]["steps"][0]["json"]["headless"] = json!(headless);
+        assert!(resolve_fixture(&fixture).is_ok(), "a conta padrão abre (headless={headless})");
+        fixture["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.antigravity-trabalho");
+        let error = resolve_fixture(&fixture).unwrap_err();
+        assert_eq!((error.status, error.code), (409, Some("erro_conta_antigravity_adicional")), "headless={headless}");
+    }
 }
 
 /// `inherit: true` é a sessão pedindo para a filha nascer no modo dela.

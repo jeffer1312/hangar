@@ -1288,8 +1288,12 @@ Medido no `agy` 1.5.13 a 1.5.15, Linux, num servidor isolado (HOME, `TMUX_TMPDIR
   `CLI app data directory: $HOME/.gemini/antigravity-cli` com a variável apontando para outra pasta, e
   o login da conta adicional foi gravado na pasta da padrão. Por isso este PR fica só com a conta
   padrão. Antes, no ACP: só `GEMINI_HOME` não isola o login, que fica no chaveiro; com
-  `SSH_CONNECTION` local e `AGY_ACP_FORCE_FILE_STORAGE=1`, cada pasta teve o seu (`agy models`); falta
-  medir se a pasta vale para a sessão do `agy acp`. Pasta nova abre os Termos do Google com opt-in de
+  `SSH_CONNECTION` local e `AGY_ACP_FORCE_FILE_STORAGE=1`, cada pasta teve o seu (`agy models`). No
+  `agy acp` 1.5.15 com as três variáveis e uma pasta vazia, o login também é da pasta (`authenticate`
+  recusa e `session/new` responde "Authentication required"), mas o log `acp-server-*.log` foi gravado
+  em `~/.gemini/antigravity-cli/log` e a pasta ficou vazia: os dados do `agy` não seguem a variável, e o
+  sem terminal também fica só com a conta padrão. Onde a conversa cai com login numa adicional ainda
+  não foi visto (pede o login da pessoa). Pasta nova abre os Termos do Google com opt-in de
   dados (`cache/onboarding.json`), e quem aceita é a pessoa. `agy models` lista `id\tnome` sem gastar
   cota e serve de prova de login.
 - **Permissão com terminal:** a tela traz "Requesting permission for:" e as opções numeradas; o

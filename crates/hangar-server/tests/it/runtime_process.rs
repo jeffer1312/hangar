@@ -150,9 +150,10 @@ fn startup_sweep_keeps_the_keys_of_both_session_folders() {
     let mut children: Vec<_> = [&claude_key, &codex_key, &terminal_key, &gone_key].into_iter().map(|key| spawn(key)).collect();
     std::thread::sleep(std::time::Duration::from_millis(100));
     // Pasta ilegível: nada é varrido, porque a sessão viva dela pareceria órfã.
-    assert_eq!(sweep_orphans(&claude.join("s1.json"), &codex, &owner), None);
+    let agy = home.path().join("antigravity-sessions");
+    assert_eq!(sweep_orphans(&claude.join("s1.json"), &codex, &agy, &owner), None);
     assert!(children.iter_mut().all(|child| child.try_wait().unwrap().is_none()));
-    assert_eq!(sweep_orphans(&claude, &codex, &owner), Some(2));
+    assert_eq!(sweep_orphans(&claude, &codex, &agy, &owner), Some(2));
     use std::os::unix::process::ExitStatusExt;
     assert!(children[0].try_wait().unwrap().is_none() && children[1].try_wait().unwrap().is_none());
     assert_eq!(children[2].wait().unwrap().signal(), Some(libc::SIGTERM));
@@ -173,9 +174,41 @@ fn startup_sweep_keeps_the_keys_of_a_transfer_in_progress() {
     let mut child = std::process::Command::new("/bin/sleep").arg("300").env("HANGAR_CANO_KEY", &prepared_key)
         .env("HANGAR_CANO_OWNER", &owner).spawn().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(100));
-    assert_eq!(sweep_orphans(&claude, &codex, &owner), Some(0));
+    assert_eq!(sweep_orphans(&claude, &codex, &home.path().join("antigravity-sessions"), &owner), Some(0));
     assert!(child.try_wait().unwrap().is_none(), "o processo da transferência em curso fica");
     child.kill().unwrap(); child.wait().unwrap();
+}
+
+/// O `agy acp` de uma sessão Antigravity sem terminal viva sobrevive à varredura da subida; o de uma sessão
+/// já fechada, ou o arquivo de uma sessão com terminal, não protege cano nenhum.
+#[test]
+fn startup_sweep_keeps_the_agy_acp_of_a_live_antigravity_session() {
+    let home = tempfile::tempdir().unwrap();
+    let owner = home.path().to_string_lossy().into_owned();
+    let (claude, codex, agy) = (home.path().join("claude-headless"), home.path().join("codex-sessions"), home.path().join("antigravity-sessions"));
+    std::fs::create_dir_all(&agy).unwrap();
+    let (live_key, terminal_key, gone_key) = (unique_key() + "f", unique_key() + "g", unique_key() + "h");
+    std::fs::write(agy.join("ag.json"), serde_json::json!({"name":"ag","provider":"antigravity","key":live_key,"headless":true,
+        "cano":{"pid":1,"escuta":"unix:/x","token":"t","versao":2}}).to_string()).unwrap();
+    std::fs::write(agy.join("ag2.json"), serde_json::json!({"name":"ag2","key":terminal_key,"headless":false}).to_string()).unwrap();
+    let spawn = |key: &str| std::process::Command::new("/bin/sleep").arg("300").env("HANGAR_CANO_KEY", key)
+        .env("HANGAR_CANO_OWNER", &owner).spawn().unwrap();
+    let mut children: Vec<_> = [&live_key, &terminal_key, &gone_key].into_iter().map(|key| spawn(key)).collect();
+    // O exec do sleep troca o environ: a varredura só enxerga a chave depois dele.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    for (child, key) in children.iter().zip([&live_key, &terminal_key, &gone_key]) {
+        let wanted = format!("HANGAR_CANO_KEY={key}");
+        while !std::fs::read(format!("/proc/{}/environ", child.id())).is_ok_and(|raw| raw.split(|b| *b == 0).any(|item| item == wanted.as_bytes())) {
+            assert!(std::time::Instant::now() < deadline, "o filho não trocou o ambiente no prazo");
+            std::thread::yield_now();
+        }
+    }
+    assert_eq!(sweep_orphans(&claude, &codex, &agy, &owner), Some(2));
+    use std::os::unix::process::ExitStatusExt;
+    assert!(children[0].try_wait().unwrap().is_none(), "o agy acp da sessão viva fica");
+    assert_eq!(children[1].wait().unwrap().signal(), Some(libc::SIGTERM));
+    assert_eq!(children[2].wait().unwrap().signal(), Some(libc::SIGTERM));
+    children[0].kill().unwrap(); children[0].wait().unwrap();
 }
 
 /// Encerrar uma vida do cano limpa os rastros dela, não os de uma vida mais nova da mesma chave: o socket

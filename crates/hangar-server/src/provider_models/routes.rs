@@ -133,11 +133,11 @@ fn validate_kind(row: &SessionRow, provider: &str) -> Result<(), ModelError> {
             ));
         }
     } else if provider == "antigravity" {
-        if row.provider != "antigravity" || row.headless {
+        if row.provider != "antigravity" {
             return Err(coded(
                 400,
                 "erro_rota_so_antigravity",
-                "esta rota só existe pra sessões Antigravity com terminal",
+                "esta rota só existe pra sessões Antigravity",
             ));
         }
     } else if row.provider != "kimi" {
@@ -249,6 +249,53 @@ async fn antigravity_models(st: &Arc<AppState>, row: SessionRow, pid: Option<u32
     Ok(json!({"models": models, "current": current}))
 }
 
+/// Sem terminal a lista e a troca são do ator ACP: a lista é a que a conversa abriu e a troca vai pelo
+/// `session/set_model`. Parada, a leitura vem do sidecar sem subir o `agy acp`; a troca o acorda.
+async fn headless_agy(st: &Arc<AppState>, name: &str, model: Option<&str>) -> Result<Value, ModelError> {
+    use crate::runtime::{gateway::EntryHandle, protocol::{Disposition, OperationKind, RuntimeCommand}};
+    let runtime = st.state.runtime.get().cloned()
+        .ok_or_else(|| coded(503, "runtime_unhealthy", "o runtime do servidor ainda não subiu"))?;
+    if model.is_none() && runtime.antigravity_headless(name).await.is_none() && let Some(meta) = runtime.antigravity_headless_meta(name).await {
+        let catalog = antigravity_catalog(st, None).await?;
+        let current = meta.get("model").filter(|m| m.as_str().is_some_and(|m| !m.is_empty())).cloned();
+        return Ok(json!({"models": catalog["models"], "current": current}));
+    }
+    let closed = || coded(409, "erro_sessao_ocupada", "a sessão está trocando de modo; tente de novo");
+    let mut found = crate::session_write::enter_then_find(&runtime, name, st.write_gate_wait).await.map_err(|_| closed())?;
+    if found.is_none() {
+        if let Some(Err(error)) = runtime.open_antigravity_headless(name).await { return Err(coded(409, &error.code, &error.message)); }
+        runtime.antigravity_wait_ready(name).await.map_err(|error| coded(409, &error.code, &error.message))?;
+        found = crate::session_write::enter_then_find(&runtime, name, st.write_gate_wait).await.map_err(|_| closed())?;
+    }
+    let Some((pass, target)) = found.filter(|(_, target)| target.provider == "antigravity" && !target.terminal) else {
+        return Err(coded(409, "erro_sessao_parada", "a sessão sem terminal não está aberta aqui"));
+    };
+    let EntryHandle::Headless(handle) = &target.handle else { return Err(closed()) };
+    let (kind, payload) = match model {
+        Some(id) => (OperationKind::SetModel, json!({"model": id})),
+        None => (OperationKind::ListModels, json!({})),
+    };
+    let command = RuntimeCommand { operation_id: crate::mods::state::random_hex(16), kind, payload };
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(40), handle.command(command)).await
+        .map_err(|_| coded(504, "erro_modelo_sem_confirmacao", "o Antigravity não respondeu à troca de modelo"))?
+        .map_err(|error| match error.code.as_str() {
+            "antigravity_model_invalid" => ModelError::coded(422, "erro_modelo_antigravity_invalido", &error.message, json!({"model": model})),
+            _ => coded(409, &error.code, &error.message),
+        })?;
+    drop(pass);
+    if reply.disposition != Disposition::Accepted {
+        let detail = reply.payload["error"].as_str().unwrap_or("sem detalhe");
+        return Err(coded(409, "erro_modelo_antigravity_recusado", &format!("o Antigravity não trocou o modelo: {detail}")));
+    }
+    Ok(match model {
+        Some(id) => json!({"ok": true, "current": id}),
+        // A retomada pode vir sem a lista: a pílula cai no catálogo da conta, como com a sessão parada.
+        None if reply.payload["models"].as_array().is_none_or(|models| models.is_empty()) =>
+            json!({"models": antigravity_catalog(st, None).await?["models"], "current": reply.payload["current"]}),
+        None => json!({"models": reply.payload["models"], "current": reply.payload["current"]}),
+    })
+}
+
 /// A borda do servidor já decidiu quem pode usar a rota; o WebSocket confere ainda self-connect/token.
 pub async fn serve(st: &Arc<AppState>, request: Request) -> Response {
     serve_with_catalogs(st, request, super::catalog::CATALOGS.clone()).await
@@ -304,6 +351,7 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
             return Ok(pure::pi_response(&session_catalog(st, &row, pid).await?.0));
         }
         if provider == "antigravity" {
+            if row.headless { return headless_agy(st, &name, None).await; }
             return antigravity_models(st, row, pid).await;
         }
         let home = st.origins_home.clone();
@@ -319,6 +367,10 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
     let body = parse_http_body(&bytes, provider, content_type.as_deref())?;
     let (row, _pid) = discovered(st, &name).await?;
     validate_kind(&row, provider)?;
+    if provider == "antigravity" && row.headless {
+        let id = body["model"].as_str().filter(|v| !v.is_empty()).ok_or_else(|| coded(422, "erro_model_effort_faltando", "informe model"))?;
+        return headless_agy(st, &name, Some(id)).await;
+    }
     let home = st.origins_home.clone();
     let lock_name = name.clone();
     let guard =

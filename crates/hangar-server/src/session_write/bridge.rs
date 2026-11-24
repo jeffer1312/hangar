@@ -68,7 +68,10 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             let known = runtime.context_transcript(&name).await.ok().map(|(_, path)| path);
             match runtime.kill_claude(&name).await {
                 Some(claude) => claude,
-                None => runtime.close_by_name(name_env(&st), &name, known, listed_transcript(&st, &name)).await,
+                None => match runtime.kill_antigravity(name_env(&st), &name).await {
+                    Some(antigravity) => antigravity,
+                    None => runtime.close_by_name(name_env(&st), &name, known, listed_transcript(&st, &name)).await,
+                },
             }
         }
     };

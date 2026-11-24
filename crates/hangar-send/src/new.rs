@@ -212,7 +212,7 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
     }
     // O `agy` com terminal ignora o `GEMINI_HOME`: `--conta` não escolhe nada, e nunca prepara conta Claude no lugar.
     if options.provider == "antigravity" && !options.account.is_empty() {
-        return fail(err, "erro: --conta não vale para o Antigravity: com terminal ele só usa a conta padrão (a do ~/.gemini)", 2);
+        return fail(err, "erro: --conta não vale para o Antigravity: ele só usa a conta padrão (a do ~/.gemini)", 2);
     }
     if options.provider == "codex" && !options.account.is_empty() {
         if options.account == "auto" {
@@ -251,8 +251,8 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             _ => return fail(err, "erro: --customizations precisa ser um objeto JSON", 2),
         }
     };
-    if options.headless == "true" && !options.provider.is_empty() && options.provider != "claude" && options.provider != "codex" {
-        return fail(err, &format!("erro: --headless só vale com provider claude ou codex (veio: {})", options.provider), 2);
+    if options.headless == "true" && !matches!(options.provider.as_str(), "" | "claude" | "codex" | "antigravity") {
+        return fail(err, &format!("erro: --headless só vale com provider claude, codex ou antigravity (veio: {})", options.provider), 2);
     }
     // Sem conta com leitura de cota, para aqui em vez de cair calado na padrão (talvez a esgotada).
     if options.account == "auto" {

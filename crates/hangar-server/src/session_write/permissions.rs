@@ -7,6 +7,8 @@ use crate::{routes::{AppState,who,cors},runtime::{gateway::EntryHandle,protocol:
 use super::{BODY_LIMIT,enter_then_find,json_response,detail_body,session_name};
 // A ordem do `MODOS_PERMISSAO_CLAUDE` do Python: é a que os clientes recebiam.
 const MODES:[&str;6]=["acceptEdits","auto","bypassPermissions","manual","dontAsk","plan"];
+// Os do ciclo do `agy` com terminal mais o bypass, que sem terminal religa o `agy acp` com a flag.
+const AGY_HEADLESS_MODES:[&str;5]=["auto","plan","manual","acceptEdits","bypassPermissions"];
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ModeBody {mode:Option<String>,permission_mode:Option<String>}
@@ -36,6 +38,15 @@ const ONLY_CLAUDE_MSG:&str="modo de permissao so vale para claude";
 async fn listed(st:&AppState,name:&str)->Result<Option<(String,bool)>,&'static str> {
     st.list.discovered_session(name).await.map(|row|row.map(|(row,_)|(row.provider,row.headless))).map_err(|e|e.code)
 }
+/// O modo do sidecar do Antigravity sem terminal parado: ler não sobe o `agy acp`.
+async fn reply_agy_sidecar(runtime:&crate::runtime::gateway::RuntimeRegistry,name:&str,reply:impl Fn(StatusCode,Value)->Response)->Option<Response> {
+    let meta=runtime.antigravity_headless_meta(name).await?;
+    let (status,body)=match crate::runtime::antigravity_launch::stored_mode(&meta) {
+        Ok(mode)=>(StatusCode::OK,json!({"current":mode.name(),"modes":AGY_HEADLESS_MODES,"sondavel":false,"previous_non_plan":null})),
+        Err(error)=>(StatusCode::CONFLICT,detail_body(&error.code,&error.message,json!({}))),
+    };
+    Some(reply(status,body))
+}
 /// O modo gravado no spec, para quem não deve acordar nem subir o processo só para ler.
 async fn reply_spec(runtime:&crate::runtime::gateway::RuntimeRegistry,name:&str,reply:impl Fn(StatusCode,Value)->Response)->Response {
     let (status,body)=match runtime.claude_spec(name).await {
@@ -60,12 +71,12 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
     let reply=|status:StatusCode,body:Value|{let mut response=json_response(status,body);cors(&headers,response.headers_mut());response};
     // Ler não acorda a adormecida (o app pergunta ao passar o mouse na aba): o modo vem do spec dela.
     if !set && runtime.asleep(&name).await.is_some() {return reply_spec(&runtime,&name,reply).await;}
+    if !set && runtime.antigravity_headless(&name).await.is_none() && let Some(response)=reply_agy_sidecar(&runtime,&name,&reply).await {return response;}
     // Claude com terminal ainda sem ator aqui: o Rust o adota agora, em vez de mandar ao Python.
     let found=match enter_then_find(&runtime,&name,st.write_gate_wait).await {
         // Sem terminal parado, como a adormecida: ler não sobe o processo.
         Ok(None) if !set && listed(&st,&name).await.is_ok_and(|row|row.is_some_and(|(provider,headless)|provider=="claude" && headless))
-            =>return reply_spec(&runtime,&name,reply).await,
-        Ok(None)=>match runtime.adopt_now(&name).await {
+            =>return reply_spec(&runtime,&name,reply).await,        Ok(None)=>match runtime.adopt_now(&name).await {
             Some(Ok(()))=>enter_then_find(&runtime,&name,st.write_gate_wait).await,
             // Codex abrindo a conversa: esta rota é do Claude, e segue como antes.
             Some(Err(error)) if error.code==crate::runtime::codex_relaunch::STARTING=>Ok(None),
@@ -106,6 +117,7 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
             EntryHandle::Terminal {handle,..}=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),if let Some(mode)=&mode {json!({"mode":mode})} else {json!({"probe":probe})}).await?,
             EntryHandle::OtherTerminal {handle,..} if target.provider=="antigravity"=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),json!({"mode":mode})).await?,
             EntryHandle::Headless(handle) if set=> {
+                if target.provider=="antigravity" {crate::runtime::gateway::RuntimeRegistry::antigravity_ready(handle).await?;}
                 let mut reply=handle.command(RuntimeCommand {operation_id:id.clone(),kind:OperationKind::SetPermissionMode,payload:json!({"mode":mode})}).await?;
                 if reply.disposition==Disposition::Accepted && reply.payload["reopened"]!=true {
                     let view=handle.view().await?;
@@ -115,7 +127,8 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
             },
             EntryHandle::Headless(handle)=> {
                 let view=handle.view().await?;
-                return Ok((StatusCode::OK,json!({"current":view["permission_mode"],"modes":MODES,"sondavel":false,"previous_non_plan":view["previous_non_plan"]})));
+                let modes:&[&str]=if target.provider=="antigravity" {&AGY_HEADLESS_MODES} else {&MODES};
+                return Ok((StatusCode::OK,json!({"current":view["permission_mode"],"modes":modes,"sondavel":false,"previous_non_plan":view["previous_non_plan"]})));
             },
             _=>return Err(crate::runtime::protocol::RuntimeError::new("lifecycle_provider","sessão não é Claude")),
         };

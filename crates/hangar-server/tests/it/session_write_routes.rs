@@ -382,5 +382,5 @@ fn table_hands_nothing_to_python_and_the_announced_ownership_stays() {
         }
     }
     assert_eq!(owned_modes(), vec![(Provider::Claude, true), (Provider::Claude, false), (Provider::Codex, true), (Provider::Codex, false),
-        (Provider::Pi, false), (Provider::Omp, false), (Provider::Kimi, false), (Provider::Antigravity, false)]);
+        (Provider::Pi, false), (Provider::Omp, false), (Provider::Kimi, false), (Provider::Antigravity, true), (Provider::Antigravity, false)]);
 }
