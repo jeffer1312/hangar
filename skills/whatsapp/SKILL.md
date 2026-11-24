@@ -59,7 +59,7 @@ só pelas ferramentas do MCP `hangar`:
 - Ache o `chat` por `whatsapp_chats`. Antes de chamar, mostre ao usuário o destino (nome e número),
   o texto exato e o arquivo; o cartão do app repete isso e ele aprova lá.
 - A chamada espera a resposta dele por até ~9 min. Avise que o cartão está esperando no app.
-- `status`:
+- `status` (o app não avisa o resultado: conte-o ao usuário na conversa):
   - `sent`: saiu; `message_id` é o id da mensagem.
   - `declined` ou `expired`: não saiu. Não crie outro rascunho para o mesmo envio sem ele pedir
     de novo.
