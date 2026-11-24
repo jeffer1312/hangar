@@ -172,6 +172,10 @@ fn remove_unmarked(env: &AccountEnvironment, path: &Path) -> Result<Vec<String>,
         }
         if !skip { out.push_str(line); }
     }
+    // A leitura por linha não vê tabela inline nem cabeçalho fora do formato: confere antes de gravar.
+    let fixed: Value = toml::from_str(&out).map_err(|_|"config-invalido-apos-limpeza".to_owned())?;
+    let left: Vec<&str> = ours.iter().filter(|n| !fixed["providers"][n.as_str()].is_null()).map(String::as_str).collect();
+    if !left.is_empty() { return Err(format!("nao-removido: {}",left.join(", "))); }
     backup(path)?; write_preserving(path,&out)?;
     Ok(ours)
 }
@@ -252,6 +256,21 @@ mod tests {
         fs::write(&config, format!("{OWN}{unmarked}{HOOKS}")).unwrap();
         assert!(purge_kimi(&env_at(home.path())).unwrap().is_empty());
         assert_eq!(fs::read_to_string(&config).unwrap(), format!("{OWN}{unmarked}{HOOKS}"));
+    }
+
+    /// Provedor que a leitura por linha não consegue tirar (tabela inline) volta como erro, sem
+    /// regravar o arquivo nem dizer que saiu.
+    #[test]
+    fn purge_reports_an_engine_it_could_not_take_out() {
+        let home = tempfile::tempdir().unwrap();
+        write_engine(home.path(), "astra", "k");
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let inline = format!("{OWN}[providers]\nastra = {{ type = \"kimi\", api_key = \"k\", base_url = \"http://127.0.0.1:8317/v1\" }}\n");
+        fs::write(&config, &inline).unwrap();
+        let error = purge_kimi(&env_at(home.path())).unwrap_err();
+        assert!(error.contains("astra"), "{error}");
+        assert_eq!(fs::read_to_string(&config).unwrap(), inline);
     }
 
     /// Um bloco quebrado não impede tirar os outros; o erro volta com o que foi tirado.
