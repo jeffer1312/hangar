@@ -5,7 +5,8 @@ use crate::accounts::environment::AccountEnvironment;
 use crate::orchestration::truthy;
 
 static LOCK: Mutex<()> = Mutex::new(());
-static TABLE: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"^\s*\[\[?([^\]]+)\]\]?\s*$").unwrap());
+static TABLE: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"^\s*\[\[?([^\]]+)\]\]?\s*(?:#.*)?\s*$").unwrap());
+static ENGINE_BLOCK: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"(?m)^# >>> hangar: provedor (\S+) \(app/agentes_sync\)").unwrap());
 
 pub use crate::harness_setup::files::{directory, write_preserving};
 
@@ -106,20 +107,9 @@ fn apply_one(env: &AccountEnvironment,target: &str,name: &str,url: &str,key: &st
         write_json(&path,&data)?; return Ok(path.to_string_lossy().into_owned());
     }
     let (begin,end) = markers(name); let path = dir.join("config.toml");
-    if target == "codex" {
-        let var = format!("HANGAR_{}_API_KEY",name.to_uppercase().replace('-',"_"));
-        let block = format!("{begin}\n[model_providers.{}]\nname = {}\nbase_url = {}\nenv_key = {}\nwire_api = \"responses\"\n{end}\n",quoted(name),quoted(name),quoted(&base(url)),quoted(&var));
-        return toml_block(&path,name,Some(&block),BTreeMap::from([("model_providers".into(),vec![name.into()])])).map(|s|format!("{s} (exporte {var})"));
-    }
-    let mut block = format!("{begin}\n[providers.{}]\ntype = \"kimi\"\napi_key = {}\nbase_url = {}\n\n",quoted(name),quoted(key),quoted(&base(url))); let mut model_keys = Vec::new();
-    for m in models.iter().filter(|m|m.is_object() && truthy(&m["id"])) {
-        let id = m["id"].as_str().map(str::to_owned).unwrap_or_else(||m["id"].to_string()); let mk = format!("{name}/{id}"); model_keys.push(mk.clone());
-        block += &format!("[models.{}]\nprovider = {}\nmodel = {}\n",quoted(&mk),quoted(name),quoted(&id));
-        if m["context_length"].as_number().is_some_and(|n|!n.is_f64()) { block += &format!("max_context_size = {}\n",m["context_length"]); }
-        block += &format!("display_name = {}\n\n",quoted(&id));
-    }
-    block += &format!("{end}\n");
-    toml_block(&path,name,Some(&block),BTreeMap::from([("providers".into(),vec![name.into()]),("models".into(),model_keys)]))
+    let var = format!("HANGAR_{}_API_KEY",name.to_uppercase().replace('-',"_"));
+    let block = format!("{begin}\n[model_providers.{}]\nname = {}\nbase_url = {}\nenv_key = {}\nwire_api = \"responses\"\n{end}\n",quoted(name),quoted(name),quoted(&base(url)),quoted(&var));
+    toml_block(&path,name,Some(&block),BTreeMap::from([("model_providers".into(),vec![name.into()])])).map(|s|format!("{s} (exporte {var})"))
 }
 
 fn remove_one(env: &AccountEnvironment,target: &str,name: &str) -> Result<String,String> {
@@ -133,15 +123,214 @@ fn remove_one(env: &AccountEnvironment,target: &str,name: &str) -> Result<String
     toml_block(&dir.join("config.toml"),name,None,tables)
 }
 
+/// Destinos que recebem o motor: o Kimi fica só com os provedores dele (harnesses.md).
+pub const SYNC_TARGETS: [&str; 2] = ["pi","codex"];
+
 pub fn sync(env: &AccountEnvironment,name: &str,url: &str,key: &str,models: &[Value],targets: &[String]) -> Value {
-    run(targets,|target|apply_one(env,target,name,url,key,models))
+    run(targets,&SYNC_TARGETS,|target|apply_one(env,target,name,url,key,models))
 }
-pub fn remove(env: &AccountEnvironment,name: &str,targets: &[String]) -> Value { run(targets,|target|remove_one(env,target,name)) }
-fn run(targets: &[String], mut operation: impl FnMut(&str)->Result<String,String>) -> Value {
+pub fn remove(env: &AccountEnvironment,name: &str,targets: &[String]) -> Value { run(targets,&["pi","kimi","codex"],|target|remove_one(env,target,name)) }
+
+/// Tira do `config.toml` do Kimi todo bloco de motor gravado por versão antiga; devolve os nomes tirados.
+pub fn purge_kimi(env: &AccountEnvironment) -> Result<Vec<String>,String> {
+    let _lock = LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let path = directory(env,"kimi").join("config.toml");
+    let names: Vec<String> = ENGINE_BLOCK.captures_iter(&text(&path)?).map(|c|c[1].to_owned()).collect();
+    let (mut removed, mut failed) = (Vec::new(), Vec::new());
+    for name in names {
+        match remove_one(env,"kimi",&name) { Ok(_) => removed.push(name), Err(e) => failed.push(format!("{name}: {e}")) }
+    }
+    match remove_unmarked(env,&path,&removed) { Ok(names) => removed.extend(names), Err(e) => failed.push(e) }
+    if failed.is_empty() { Ok(removed) } else { Err(format!("{}; tirados: [{}]",failed.join("; "),removed.join(", "))) }
+}
+
+/// Motor cujo marcador o Kimi tirou ao regravar o arquivo: sai o provedor com o nome, a chave e o
+/// endereço do motor, e os modelos dele. Provedor pessoal com o mesmo nome e outra chave fica.
+fn remove_unmarked(env: &AccountEnvironment, path: &Path, purged: &[String]) -> Result<Vec<String>,String> {
+    let raw = text(path)?;
+    if raw.trim().is_empty() { return Ok(vec![]); }
+    let parsed: Value = toml::from_str(&raw).map_err(|_|"config-invalido".to_owned())?;
+    let engines = crate::engines::store::state(env).0;
+    let ours: Vec<String> = engines.iter().filter(|(name,data)| {
+        let provider = &parsed["providers"][name.as_str()];
+        truthy(&data["api_key"]) && provider["api_key"] == data["api_key"]
+            && provider["base_url"].as_str() == data["base_url"].as_str().map(base).as_deref()
+    }).map(|(name,_)|name.clone()).collect();
+    let has_models = |doc: &Value, n: &str| doc["models"].as_object().is_some_and(|m|m.keys().any(|k|k.starts_with(&format!("{n}/"))));
+    // Modelo de motor já tirado cujo provedor sumiu (ficou depois de uma tabela pessoal no bloco).
+    let orphans: Vec<&String> = purged.iter().filter(|n| parsed["providers"][n.as_str()].is_null() && has_models(&parsed,n)).collect();
+    if ours.is_empty() && orphans.is_empty() { return Ok(ours); }
+    let models_of: Vec<&String> = ours.iter().chain(orphans.iter().copied()).collect();
+    let owned = |table: &str| ours.iter().any(|n| table == format!("providers.{n}") || table.starts_with(&format!("providers.{n}.")))
+        || models_of.iter().any(|n| table.starts_with(&format!("models.{n}/")));
+    // Comentário e linha em branco antes de uma tabela são de quem vem depois: só saem se ela também sair.
+    let (mut out, mut pending, mut skip) = (String::new(), String::new(), false);
+    for line in raw.split_inclusive('\n') {
+        if let Some(c) = TABLE.captures(line) {
+            skip = owned(c[1].replace('"',"").trim());
+            if !skip { out.push_str(&pending); }
+            pending.clear();
+        } else if skip {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') { pending.push_str(line); } else { pending.clear(); }
+            continue;
+        }
+        if !skip { out.push_str(line); }
+    }
+    // A leitura por linha não vê tabela inline nem cabeçalho fora do formato: confere antes de gravar.
+    let fixed: Value = toml::from_str(&out).map_err(|e|format!("config-invalido-apos-limpeza (nada gravado): {e}"))?;
+    let left: Vec<&str> = models_of.iter().filter(|n| (ours.contains(n) && !fixed["providers"][n.as_str()].is_null()) || has_models(&fixed,n)).map(|n|n.as_str()).collect();
+    if !left.is_empty() { return Err(format!("nao-removido (nada gravado): {}",left.join(", "))); }
+    backup(path)?; write_preserving(path,&out)?;
+    Ok(ours)
+}
+fn run(targets: &[String], allowed: &[&str], mut operation: impl FnMut(&str)->Result<String,String>) -> Value {
     let _lock = LOCK.lock().unwrap_or_else(|e|e.into_inner()); let mut result = json!({});
     for target in targets {
-        let answer = if ["pi","kimi","codex"].contains(&target.as_str()) { operation(target) } else { Err("alvo-desconhecido".into()) };
+        let answer = if allowed.contains(&target.as_str()) { operation(target) } else { Err("alvo-desconhecido".into()) };
         result[target] = match answer { Ok(reason) => json!({"ok":true,"motivo":reason}),Err(reason) => json!({"ok":false,"motivo":reason}) };
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_at(home: &Path) -> AccountEnvironment {
+        let home = home.to_string_lossy().into_owned();
+        AccountEnvironment::from_pairs([("HOME", home.clone()), ("USERPROFILE", home)])
+    }
+
+    fn engine_block(name: &str) -> String {
+        let (begin,end) = markers(name);
+        format!("{begin}\n[providers.\"{name}\"]\ntype = \"kimi\"\napi_key = \"k\"\nbase_url = \"http://127.0.0.1:8317/v1\"\n\n[models.\"{name}/gpt-x\"]\nprovider = \"{name}\"\nmodel = \"gpt-x\"\ndisplay_name = \"gpt-x\"\n\n{end}\n")
+    }
+
+    const OWN: &str = "default_model = \"kimi-code/k3\"\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\n\n";
+    const HOOKS: &str = "\n# hangar: integração da sessão.\n[[hooks]]\nevent = \"Stop\"\ncommand = \"x\"\ntimeout = 5\n";
+
+    /// O Kimi recusa gravar a própria configuração com modelo de motor sem `max_context_size`: o
+    /// Hangar não leva motor nenhum para lá.
+    #[test]
+    fn engine_sync_never_writes_into_the_kimi_config() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, OWN).unwrap();
+        let result = sync(&env_at(home.path()), "astra", "http://127.0.0.1:8317/v1", "k", &[json!({"id": "gpt-x"})], &["kimi".into()]);
+        assert_eq!(result["kimi"]["ok"], false);
+        assert_eq!(fs::read_to_string(&config).unwrap(), OWN);
+    }
+
+    /// Os blocos que versões antigas gravaram saem; o que é do Kimi e os hooks ficam byte a byte.
+    #[test]
+    fn purge_removes_every_engine_block_and_keeps_the_rest() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, format!("{OWN}{}{}{HOOKS}", engine_block("astra"), engine_block("sol"))).unwrap();
+        let mut removed = purge_kimi(&env_at(home.path())).unwrap();
+        removed.sort();
+        assert_eq!(removed, ["astra", "sol"]);
+        assert_eq!(fs::read_to_string(&config).unwrap(), format!("{OWN}{HOOKS}"));
+    }
+
+    fn write_engine(home: &Path, name: &str, key: &str) {
+        let path = home.join(".claude/engines.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, json!({name: {"base_url": "http://127.0.0.1:8317", "api_key": key, "model": "gpt-x"}}).to_string()).unwrap();
+    }
+
+    /// O Kimi regrava o arquivo sem comentários: o motor que ficou sem marcador sai pelo nome e pela
+    /// chave dele; provedor pessoal com o mesmo nome e outra chave fica.
+    #[test]
+    fn purge_removes_an_engine_whose_markers_the_kimi_rewrite_dropped() {
+        let home = tempfile::tempdir().unwrap();
+        write_engine(home.path(), "astra", "k");
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let unmarked = "[providers.astra]\ntype = \"kimi\"\napi_key = \"k\"\nbase_url = \"http://127.0.0.1:8317/v1\"\n\n[models.\"astra/gpt-x\"]\nprovider = \"astra\"\nmodel = \"gpt-x\"\nmax_context_size = 128000\ndisplay_name = \"gpt-x\"\n\n";
+        fs::write(&config, format!("{OWN}{unmarked}{HOOKS}")).unwrap();
+        assert_eq!(purge_kimi(&env_at(home.path())).unwrap(), ["astra"]);
+        let fixed = fs::read_to_string(&config).unwrap();
+        assert!(fixed.starts_with(OWN) && !fixed.contains("astra") && fixed.ends_with(HOOKS.trim_start()), "{fixed}");
+        assert!(toml::from_str::<Value>(&fixed).is_ok());
+
+        write_engine(home.path(), "astra", "outra");
+        fs::write(&config, format!("{OWN}{unmarked}{HOOKS}")).unwrap();
+        assert!(purge_kimi(&env_at(home.path())).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(&config).unwrap(), format!("{OWN}{unmarked}{HOOKS}"));
+    }
+
+    /// Tabela pessoal no meio do bloco fica, e o modelo do motor que vinha depois dela sai junto:
+    /// modelo sem provedor deixa o arquivo inválido para o Kimi.
+    #[test]
+    fn purge_takes_out_engine_models_left_after_a_personal_table() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let personal = "[providers.pessoal]\ntype = \"kimi\"\napi_key = \"p\"\n\n";
+        let block = engine_block("astra").replace("[models.\"astra/gpt-x\"]", &format!("{personal}[models.\"astra/gpt-x\"]"));
+        fs::write(&config, format!("{OWN}{block}")).unwrap();
+        assert_eq!(purge_kimi(&env_at(home.path())).unwrap(), ["astra"]);
+        let fixed = fs::read_to_string(&config).unwrap();
+        assert!(fixed.contains("[providers.pessoal]") && !fixed.contains("astra"), "{fixed}");
+    }
+
+    /// Cabeçalho com comentário no fim continua sendo o começo de outra tabela, que fica.
+    #[test]
+    fn purge_keeps_a_personal_table_whose_header_has_a_comment() {
+        let home = tempfile::tempdir().unwrap();
+        write_engine(home.path(), "astra", "k");
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let unmarked = "[providers.astra]\ntype = \"kimi\"\napi_key = \"k\"\nbase_url = \"http://127.0.0.1:8317/v1\"\n\n";
+        let personal = "[providers.pessoal] # meu\ntype = \"kimi\"\napi_key = \"p\"\n";
+        fs::write(&config, format!("{OWN}{unmarked}{personal}")).unwrap();
+        assert_eq!(purge_kimi(&env_at(home.path())).unwrap(), ["astra"]);
+        let fixed = fs::read_to_string(&config).unwrap();
+        assert!(fixed.starts_with(OWN) && fixed.ends_with(personal) && !fixed.contains("astra"), "{fixed}");
+    }
+
+    /// Provedor que a leitura por linha não consegue tirar (tabela inline) volta como erro, sem
+    /// regravar o arquivo nem dizer que saiu.
+    #[test]
+    fn purge_reports_an_engine_it_could_not_take_out() {
+        let home = tempfile::tempdir().unwrap();
+        write_engine(home.path(), "astra", "k");
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let inline = format!("{OWN}[providers]\nastra = {{ type = \"kimi\", api_key = \"k\", base_url = \"http://127.0.0.1:8317/v1\" }}\n");
+        fs::write(&config, &inline).unwrap();
+        let error = purge_kimi(&env_at(home.path())).unwrap_err();
+        assert!(error.contains("astra"), "{error}");
+        assert_eq!(fs::read_to_string(&config).unwrap(), inline);
+    }
+
+    /// Um bloco quebrado não impede tirar os outros; o erro volta com o que foi tirado.
+    #[test]
+    fn purge_goes_on_past_a_broken_block() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let broken = engine_block("astra").replace(&markers("astra").1, "");
+        fs::write(&config, format!("{OWN}{}{broken}", engine_block("sol"))).unwrap();
+        let error = purge_kimi(&env_at(home.path())).unwrap_err();
+        assert!(error.contains("astra") && error.contains("bloco-incompleto") && error.contains("sol"), "{error}");
+        assert!(!fs::read_to_string(&config).unwrap().contains("provedor sol"));
+    }
+
+    /// Sem Kimi instalado, ou sem bloco do Hangar, não há o que tirar nem arquivo a criar.
+    #[test]
+    fn purge_without_kimi_or_without_blocks_touches_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(purge_kimi(&env_at(home.path())).unwrap().is_empty());
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, OWN).unwrap();
+        assert!(purge_kimi(&env_at(home.path())).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(&config).unwrap(), OWN);
+        assert!(!home.path().join(".kimi-code/config.toml.bak-hangar").exists());
+    }
 }
