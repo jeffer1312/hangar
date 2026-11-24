@@ -24,6 +24,8 @@ pub(super) struct Ports {
     /// servidor macOS), para abrir e pedir o link de fora.
     /// Chave `servidor::sessão`: a porta digitada numa sessão não aparece nas outras da mesma máquina.
     typed: Option<(String, u16)>,
+    /// (servidor, porta) → sessão que pediu o encaminhamento: o túnel é da máquina, a linha fica na sessão que o abriu.
+    origin: HashMap<(String, u16), String>,
     /// "Parar servidor" em voo, um por vez: (servidor, porta).
     stopping: Option<(String, u16)>,
 }
@@ -119,6 +121,7 @@ impl Hangar {
         let token = self.server_token(&self.open_server());
         self.ports.failed.remove(&key);
         self.ports.failed.remove(&(String::new(), port));
+        if let Some(session) = self.side_key() { self.ports.origin.insert(key.clone(), session); }
         let opening = self.ports.forwards.open(self.runtime.handle(), &api, &token, port);
         let result = opening.clone();
         cx.spawn(async move |this, cx| {
@@ -247,10 +250,12 @@ impl Hangar {
         let mut ports: Vec<(u16, String, bool)> = row.map(|r| r.ports.iter().map(|p| (p.port, p.process.clone(), p.shared)).collect()).unwrap_or_default();
         let forwards = self.ports.forwards.list(&server);
         let opening = self.ports.forwards.opening(&server);
-        // Porta digitada em "Outra porta…" não é da sessão: aparece a última digitada e as encaminhadas ou abrindo.
+        // Porta que a sessão não lista: a última digitada nela e as que ela encaminhou (ou está abrindo).
         let session_key = self.side_key();
+        let mine = |port: &u16| self.ports.origin.get(&(server.clone(), *port)) == session_key.as_ref();
         let typed = self.ports.typed.as_ref().filter(|(key, _)| Some(key) == session_key.as_ref()).map(|(_, port)| *port);
-        for port in forwards.iter().map(|f| f.port).chain(opening.iter().copied()).chain(typed) {
+        let extra: Vec<u16> = forwards.iter().map(|f| f.port).chain(opening.iter().copied()).filter(mine).chain(typed).collect();
+        for port in extra {
             if !ports.iter().any(|(known, ..)| *known == port) { ports.push((port, String::new(), false)); }
         }
         ports.sort_by_key(|(port, ..)| *port);
