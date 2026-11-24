@@ -292,6 +292,14 @@ pub fn footer_focus(pane: &str) -> bool {
         .any(|l| P.agent_cursor.is_match(l) || l.contains("Enter to view") || l.contains("↑/↓ to select")))
 }
 
+/// Painel de agentes do Claude Code abaixo da caixa ("● main" e um "◯ <subagente> …" por subagente vivo): é o
+/// único sinal na tela do subagente em segundo plano quando a CLI não mostra a linha "Waiting for …".
+pub fn background_agents_listed(pane: &str) -> bool {
+    let lines = lines(pane);
+    composer_end(&lines, lines.len()).is_some_and(|end| lines[end + 1..].iter()
+        .any(|l| left(l).trim_start_matches('❯').trim_start().starts_with("◯ ")))
+}
+
 fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
     let cursor = lines.iter().rposition(|l| P.unnumbered.is_match(l) && !P.cursor.is_match(l))?;
     if lines[cursor + 1..].iter().any(|l| P.rule.is_match(l)) { return None; }

@@ -785,7 +785,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   drena com o Claude parado, composer legível e sem pergunta, um lote por vez, no tique do ator; a
   entrega que encontrou o Claude parado faz a próxima esperar até 3 s (`turn_start_wait`) pelo
   turno que ela abriu. Para despachar, a indicação de que a CLI só espera subagentes em segundo
-  plano também libera o prompt legível e sem pergunta. Recado com socket nativo (`[de: …]`,
+  plano também libera o prompt legível e sem pergunta: a linha "Waiting for N background agents"
+  ou, sem ela e sem linha viva acima da caixa, o painel de agentes (`◯ <subagente>`) abaixo dela. Recado com socket nativo (`[de: …]`,
   `[grupo: …]`, `[painel: …]`) e comando de barra não são segurados, e o recado passa no meio do turno
   mesmo atrás de mensagem segurada. Com mensagem esperando, comando de barra é recusado na tela
   (`queue_waiting`): não passa à frente nem
@@ -5767,6 +5768,13 @@ transcript em 0,2 s. O subagente terminou depois da entrada do novo prompt. Em o
 já constava no transcript cinco segundos antes de o Hangar avisar que ela continuava esperando.
 O recibo da própria entrada agora encerra a tentativa de antecipação. A indicação de subagentes
 em segundo plano só é usada para liberar o despacho de prompts.
+
+Em 24/11/2026, com o Claude Code 2.1.331, o turno principal acabou com um subagente em segundo plano
+e a tela ficou só com a caixa livre e o painel de agentes abaixo dela (`● main` /
+`◯ general-purpose … · ↓ 203.8k tokens`), sem a linha "Waiting for …". O registro nativo seguiu
+`busy` e o Hangar reteve uma mensagem por 10 min 46 s (`terminal_turn_hold` das 14:05:14 às 14:16:00
+UTC), até o subagente acabar. O painel abaixo da caixa, sem linha viva acima dela, passou a valer
+como a linha de espera.
 
 ## Catálogo de comandos e reload-plugins
 
