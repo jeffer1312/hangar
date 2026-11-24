@@ -5,6 +5,10 @@ Lê os caminhos mudados (um por linha, relativos à raiz) no stdin e escreve `se
 `mobile=` (`true`/`false`) no formato do GITHUB_OUTPUT. `--all` liga as três, para quando não há
 base com que comparar. As pastas do desktop saem da cadeia de dependências por caminho dos
 Cargo.toml, não de uma lista: crate novo de que o desktop dependa entra sozinho.
+
+Escreve também `rust_packages=` (os crates do workspace que mudaram e os que dependem deles, cujos
+testes o PR roda) e `rust_server=` (se o hangar-server está entre eles). `--rust-packages` imprime
+só essa lista, um por linha, para o scripts/verificar-local.
 """
 import sys
 import tomllib
@@ -16,7 +20,10 @@ ROOT = Path(__file__).resolve().parent.parent
 GATE = ("scripts/gate-areas.py", "scripts/rule-tests.py", ".github/workflows/gate.yml")
 
 # O que pode derrubar as travas do scripts/rule-tests.py; o resto é das suítes do push.
-SERVER = ("crates/",)
+SERVER = ("crates/", "backend/tests/fixtures/")
+CRATES = ROOT / "crates"
+# Fora do crates/ e lido pelos testes de Rust (amostras de contrato): qualquer mudança vale para todos.
+RUST_READS = ("backend/tests/fixtures/",)
 NATIVE = ("desktop-native/", "crates/Cargo.toml")
 MOBILE = ("mobile/", "packages/core/", "messages/", "project.inlang/", "scripts/i18n-compile.mjs",
           "scripts/verificar-app.mjs", ".node-version", "package.json", "package-lock.json")
@@ -69,13 +76,54 @@ def native_crates() -> list[str]:
     return sorted(f"{p.relative_to(ROOT).as_posix()}/" for p in seen if inside not in p.parents and p != inside)
 
 
+def rust_members() -> dict[Path, str]:
+    """Pasta de cada crate do workspace → nome do pacote."""
+    members = tomllib.loads((CRATES / "Cargo.toml").read_text())["workspace"]["members"]
+    found = {}
+    for member in members:
+        folder = (CRATES / member).resolve()
+        found[folder] = tomllib.loads((folder / "Cargo.toml").read_text())["package"]["name"]
+    return found
+
+
+def rust_packages(files: list[str] | None) -> list[str]:
+    """Os crates mudados e os que dependem deles, direta ou indiretamente (dependência de teste inclusa).
+    Arquivo do crates/ fora de qualquer crate (Cargo.toml, Cargo.lock, toolchain) e `None` valem todos."""
+    members = rust_members()
+    if files is None or touches(files, RUST_READS):
+        return sorted(members.values())
+    changed: set[Path] = set()
+    for name in (f for f in files if f.startswith("crates/")):
+        path = (ROOT / name).resolve()
+        owner = next((m for m in members if m == path.parent or m in path.parents), None)
+        if owner is None:
+            return sorted(members.values())
+        changed.add(owner)
+    dependents: dict[Path, set[Path]] = {m: set() for m in members}
+    for member in members:
+        for dependency in path_deps(member / "Cargo.toml"):
+            if dependency in dependents:
+                dependents[dependency].add(member)
+    pending = list(changed)
+    while pending:
+        for user in dependents[pending.pop()]:
+            if user not in changed:
+                changed.add(user)
+                pending.append(user)
+    return sorted(members[m] for m in changed)
+
+
 def touches(files: list[str], prefixes: tuple[str, ...]) -> bool:
     return any(f == p or (p.endswith("/") and f.startswith(p)) for f in files for p in prefixes)
 
 
 def main() -> None:
+    if "--rust-packages" in sys.argv[1:]:
+        print("\n".join(rust_packages([line.strip() for line in sys.stdin if line.strip()])))
+        return
     if "--all" in sys.argv[1:]:
         areas = dict(server=True, native=True, mobile=True)
+        files = None
     else:
         files = [line.strip() for line in sys.stdin if line.strip()]
         every = touches(files, GATE)
@@ -86,6 +134,9 @@ def main() -> None:
         )
     for name, on in areas.items():
         print(f"{name}={'true' if on else 'false'}")
+    packages = rust_packages(files) if areas["server"] else []
+    print(f"rust_packages={' '.join(packages)}")
+    print(f"rust_server={'true' if 'hangar-server' in packages else 'false'}")
 
 
 if __name__ == "__main__":
