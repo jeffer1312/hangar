@@ -5,7 +5,7 @@ use crate::accounts::environment::AccountEnvironment;
 use crate::orchestration::truthy;
 
 static LOCK: Mutex<()> = Mutex::new(());
-static TABLE: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"^\s*\[\[?([^\]]+)\]\]?\s*$").unwrap());
+static TABLE: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"^\s*\[\[?([^\]]+)\]\]?\s*(?:#.*)?\s*$").unwrap());
 static ENGINE_BLOCK: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"(?m)^# >>> hangar: provedor (\S+) \(app/agentes_sync\)").unwrap());
 
 pub use crate::harness_setup::files::{directory, write_preserving};
@@ -140,13 +140,13 @@ pub fn purge_kimi(env: &AccountEnvironment) -> Result<Vec<String>,String> {
     for name in names {
         match remove_one(env,"kimi",&name) { Ok(_) => removed.push(name), Err(e) => failed.push(format!("{name}: {e}")) }
     }
-    match remove_unmarked(env,&path) { Ok(names) => removed.extend(names), Err(e) => failed.push(e) }
+    match remove_unmarked(env,&path,&removed) { Ok(names) => removed.extend(names), Err(e) => failed.push(e) }
     if failed.is_empty() { Ok(removed) } else { Err(format!("{}; tirados: [{}]",failed.join("; "),removed.join(", "))) }
 }
 
 /// Motor cujo marcador o Kimi tirou ao regravar o arquivo: sai o provedor com o nome, a chave e o
 /// endereço do motor, e os modelos dele. Provedor pessoal com o mesmo nome e outra chave fica.
-fn remove_unmarked(env: &AccountEnvironment, path: &Path) -> Result<Vec<String>,String> {
+fn remove_unmarked(env: &AccountEnvironment, path: &Path, purged: &[String]) -> Result<Vec<String>,String> {
     let raw = text(path)?;
     if raw.trim().is_empty() { return Ok(vec![]); }
     let parsed: Value = toml::from_str(&raw).map_err(|_|"config-invalido".to_owned())?;
@@ -156,8 +156,13 @@ fn remove_unmarked(env: &AccountEnvironment, path: &Path) -> Result<Vec<String>,
         truthy(&data["api_key"]) && provider["api_key"] == data["api_key"]
             && provider["base_url"].as_str() == data["base_url"].as_str().map(base).as_deref()
     }).map(|(name,_)|name.clone()).collect();
-    if ours.is_empty() { return Ok(ours); }
-    let owned = |table: &str| ours.iter().any(|n| table == format!("providers.{n}") || table.starts_with(&format!("providers.{n}.")) || table.starts_with(&format!("models.{n}/")));
+    let has_models = |doc: &Value, n: &str| doc["models"].as_object().is_some_and(|m|m.keys().any(|k|k.starts_with(&format!("{n}/"))));
+    // Modelo de motor já tirado cujo provedor sumiu (ficou depois de uma tabela pessoal no bloco).
+    let orphans: Vec<&String> = purged.iter().filter(|n| parsed["providers"][n.as_str()].is_null() && has_models(&parsed,n)).collect();
+    if ours.is_empty() && orphans.is_empty() { return Ok(ours); }
+    let models_of: Vec<&String> = ours.iter().chain(orphans.iter().copied()).collect();
+    let owned = |table: &str| ours.iter().any(|n| table == format!("providers.{n}") || table.starts_with(&format!("providers.{n}.")))
+        || models_of.iter().any(|n| table.starts_with(&format!("models.{n}/")));
     // Comentário e linha em branco antes de uma tabela são de quem vem depois: só saem se ela também sair.
     let (mut out, mut pending, mut skip) = (String::new(), String::new(), false);
     for line in raw.split_inclusive('\n') {
@@ -174,8 +179,7 @@ fn remove_unmarked(env: &AccountEnvironment, path: &Path) -> Result<Vec<String>,
     }
     // A leitura por linha não vê tabela inline nem cabeçalho fora do formato: confere antes de gravar.
     let fixed: Value = toml::from_str(&out).map_err(|e|format!("config-invalido-apos-limpeza (nada gravado): {e}"))?;
-    let left: Vec<&str> = ours.iter().filter(|n| !fixed["providers"][n.as_str()].is_null()
-        || fixed["models"].as_object().is_some_and(|m|m.keys().any(|k|k.starts_with(&format!("{n}/"))))).map(String::as_str).collect();
+    let left: Vec<&str> = models_of.iter().filter(|n| (ours.contains(n) && !fixed["providers"][n.as_str()].is_null()) || has_models(&fixed,n)).map(|n|n.as_str()).collect();
     if !left.is_empty() { return Err(format!("nao-removido (nada gravado): {}",left.join(", "))); }
     backup(path)?; write_preserving(path,&out)?;
     Ok(ours)
@@ -257,6 +261,36 @@ mod tests {
         fs::write(&config, format!("{OWN}{unmarked}{HOOKS}")).unwrap();
         assert!(purge_kimi(&env_at(home.path())).unwrap().is_empty());
         assert_eq!(fs::read_to_string(&config).unwrap(), format!("{OWN}{unmarked}{HOOKS}"));
+    }
+
+    /// Tabela pessoal no meio do bloco fica, e o modelo do motor que vinha depois dela sai junto:
+    /// modelo sem provedor deixa o arquivo inválido para o Kimi.
+    #[test]
+    fn purge_takes_out_engine_models_left_after_a_personal_table() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let personal = "[providers.pessoal]\ntype = \"kimi\"\napi_key = \"p\"\n\n";
+        let block = engine_block("astra").replace("[models.\"astra/gpt-x\"]", &format!("{personal}[models.\"astra/gpt-x\"]"));
+        fs::write(&config, format!("{OWN}{block}")).unwrap();
+        assert_eq!(purge_kimi(&env_at(home.path())).unwrap(), ["astra"]);
+        let fixed = fs::read_to_string(&config).unwrap();
+        assert!(fixed.contains("[providers.pessoal]") && !fixed.contains("astra"), "{fixed}");
+    }
+
+    /// Cabeçalho com comentário no fim continua sendo o começo de outra tabela, que fica.
+    #[test]
+    fn purge_keeps_a_personal_table_whose_header_has_a_comment() {
+        let home = tempfile::tempdir().unwrap();
+        write_engine(home.path(), "astra", "k");
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let unmarked = "[providers.astra]\ntype = \"kimi\"\napi_key = \"k\"\nbase_url = \"http://127.0.0.1:8317/v1\"\n\n";
+        let personal = "[providers.pessoal] # meu\ntype = \"kimi\"\napi_key = \"p\"\n";
+        fs::write(&config, format!("{OWN}{unmarked}{personal}")).unwrap();
+        assert_eq!(purge_kimi(&env_at(home.path())).unwrap(), ["astra"]);
+        let fixed = fs::read_to_string(&config).unwrap();
+        assert!(fixed.starts_with(OWN) && fixed.ends_with(personal) && !fixed.contains("astra"), "{fixed}");
     }
 
     /// Provedor que a leitura por linha não consegue tirar (tabela inline) volta como erro, sem
