@@ -21,7 +21,7 @@ const mockTheme: any = {
   base: {
     space: { 0.5: 2, 1: 4, 1.5: 6, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24, 8: 32, 10: 40 } as any,
     weight: { normal: '400', medium: '500', semibold: '600', bold: '700' },
-    text: { xxxs: 11, xxs: 12, xs: 13, sm: 15, base: 17, lg: 19, xl: 22 } as any,
+    text: { xxxs: 11, xxs: 12, xs: 13, sm: 15, base: 17, lg: 19, xl: 22, xxl: 28 } as any,
     radius: { sm: 4, md: 8, lg: 12, xl: 16, full: 999 } as any,
     fontMono: 'monospace',
   },

@@ -9,7 +9,7 @@ import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount, getAn
   getEnginesForServer, getSessionDefaultsForServer, getConfigForServer, getMeForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
-  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory } from '@hangar/core';
+  PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer, getHistory, getRootsForServer, pickFolderRoot } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
   CREATE_SESSION_PROVIDERS, canChooseSurface, permissionModes, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
 import type { AccountBadge } from '@hangar/core';
@@ -17,7 +17,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useSessions } from '../../stores/sessions';
 import { MACHINE_ICON_NAME } from '../tags/tagVisuals';
 import { AccountGlyph } from '../sessions/SessionPlate';
-import type { AntigravityAccount, ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo, Server, WorktreeChoice, WorktreeRepo } from '@hangar/core';
+import type { AntigravityAccount, ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo, Server, SessionDefaults, WorktreeChoice, WorktreeRepo } from '@hangar/core';
 import { SessionSettingsControl } from '../../chat/SessionSettings';
 import { semEsforco } from '../pills/pills';
 import { SettingsList } from '../../ui/SettingsList';
@@ -25,9 +25,11 @@ import { useServers } from '../../stores/servers';
 import { readProject, rememberProject } from '../../stores/createPreferences';
 import { autoSessionName, NO_PROJECT_CWD, type NewConversationInput } from '../../stores/newConversation';
 import { CwdPicker } from './CwdPicker';
+import { recentCwds, recentProjects } from './folderGroups';
 import { loadErrorText } from './loadError';
 import { useCanceledLoadRetry } from './useCanceledLoadRetry';
-import { ProviderPicker } from './ProviderPicker';
+import { ProviderLogoTabs, ProviderTrack } from './ProviderChoice';
+import { DefaultChecks, useDefaultChecks } from './DefaultChecks';
 import { BranchPicker, samePath } from './BranchPicker';
 import { CodexContextControl, useCodexContextControl } from './CodexContextControl';
 import { NewConversation, type HomePresentation } from './NewConversation';
@@ -43,6 +45,7 @@ type ProviderProbe = Record<string, { disponivel: boolean; motivo: string | null
 type Choice = Omit<ComponentProps<typeof QuietPill>, 'ref'>;
 // Em cima só o vão até a pílula da máquina: mais que isso roubaria o toque dela.
 const LINK_SLOP = { top: 4, bottom: 12, left: 12, right: 12 };
+// A linha já tem 44 pt de altura; dos lados pouco, para um nome não roubar o toque do vizinho.
 
 function valorModelo(mm: ModelOption): string {
   return mm.provider ? `${mm.provider}/${mm.id}` : mm.id;
@@ -224,6 +227,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [esforco, setEsforco] = useState('');
   const [permissao, setPermissao] = useState('');
   const [loadedDefaultsKey, setLoadedDefaultsKey] = useState<string | null>(null);
+  // O padrão gravado no servidor para o escopo da chave: marca a caixa "Usar como padrão".
+  const [savedDefault, setSavedDefault] = useState<{ key: string; value: SessionDefaults | null } | null>(null);
   const [defaultsError, setDefaultsError] = useState('');
   const [defaultsTry, setDefaultsTry] = useState(0);
   const engineConfig = provider === 'claude' ? motores[engine] : undefined;
@@ -503,6 +508,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         if (!alive) return;
         if (value && !choiceTouched.current) desired.current = { model: value.model, effort: value.effort };
         if (!permissionTouched.current) setPermissao(value?.permission ?? '');
+        setSavedDefault({ key: defaultsKey, value: value ?? null });
         setLoadedDefaultsKey(defaultsKey);
       })
       .catch((cause: unknown) => {
@@ -707,6 +713,17 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   useEffect(() => { reserve.current?.update(active, reserveBody); }, [active, reserveKey]);
   const takePrewarm = useCallback(() => reserve.current?.take() ?? null, []);
   const resumePrewarm = useCallback(() => reserve.current?.resume(), []);
+
+  // A escolha de agora no formato do padrão do servidor; a permissão é a que iria no pedido.
+  const defaultPermission = provider === 'claude' ? permissao : provider === 'codex' ? (canHeadless && headless ? permissao : '')
+    : provider === 'antigravity' ? agyPermission : '';
+  const onDefaultSaved = useCallback((key: string, value: SessionDefaults | null) => setSavedDefault({ key, value }), []);
+  const defaultChecks = useDefaultChecks({ server: active,
+    scope: { key: defaultsKey, provider, engine: catalogEngine, engineAccount: engineAccount ?? null },
+    choice: { model: modelo, effort: esforco, permission: defaultPermission },
+    saved: savedDefault?.key === defaultsKey ? savedDefault.value : null, onSaved: onDefaultSaved });
+  // Como no PC: só com a lista de modelos lida e o padrão do servidor conhecido.
+  const defaultChecksShown = !retomavel && defaultsReady && !modelsLoading && !erroModelos && !bindingBlocked;
 
   // Nada daqui é guardado no aparelho: o padrão da próxima abertura é o do servidor.
   const chooseProvider = (p: Provider) => {
@@ -1074,7 +1091,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       {quotaNotice}
       {nameField}
       {codexContextField}
-      {engineField}
       {permissionField}
       {subagentField}
       {resumeField}
@@ -1124,8 +1140,39 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
           subtitle: sv.label.trim() && sv.label !== view.label ? sv.label : undefined,
           leading: <Icon name={view.icon} size={14} color={theme.tokens.text.muted} /> };
       })}
-      onAction={(id) => { if (id !== active.id) onPickMachine(id); }} />
+      onAction={(id) => { if (id !== active.id) onPickMachine(id); }} size="lg" />
   );
+
+  // Atalho, não essencial: sem lista ainda (carregando, falha) a linha só não aparece. Só as pastas
+  // mudam o resultado, então a lista ao vivo não redesenha a tela a cada evento.
+  const lastCwds = useSessions(useShallow((s) => recentCwds(s.byServerRecord?.[active.id], 12)));
+  const recents = active.invite ? [] : recentProjects(lastCwds, repos, picked, 3);
+  const pickRecent = (path: string) => {
+    void handlePick(path);
+    const generation = pickGeneration.current;
+    const current = () => mounted.current && generation === pickGeneration.current;
+    // Como a escolha no painel, a pasta fica lembrada com a raiz dela; sem raiz conhecida vale só a escolha.
+    getRootsForServer(active).then((roots) => {
+      const root = pickFolderRoot(roots, path);
+      if (!root || !current()) return;
+      try { rememberProject(active.id, { root, cwd: path }); }
+      catch { setProjectWarning(m.criar_projeto_salvar_erro()); }
+    }, () => { if (current()) setProjectWarning(m.criar_projeto_salvar_erro()); });
+  };
+  const recentLine = recents.length ? (
+    <View style={styles.recents}>
+      <Text style={styles.recentsLabel}>{m.native_new_chat_recents()}</Text>
+      <View style={styles.recentGrid}>
+        {recents.map((path) => (
+          <Pressable key={path} onPress={() => pickRecent(path)} style={styles.recentItem}
+            accessibilityRole="button" accessibilityLabel={m.native_new_chat_recent_aria({ path })}>
+            <Icon name="Folder" size={20} color={theme.tokens.accent.base} />
+            <Text style={styles.recentName} numberOfLines={2}>{basename(path)}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  ) : null;
 
   const blocked = contextBusy || retomando || !!retomavel || (!!picked && !codexReady);
   const branchBlocked = !!(worktree?.new_branch && branchTaken);
@@ -1197,14 +1244,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   };
 
   if (layout === 'form') {
-    const providerActions = CREATE_SESSION_PROVIDERS.map((p) => {
-      const probe = providerProbe?.[p];
-      const off = !!probe && !probe.disponivel;
-      return { id: p, title: providerName(p), state: on(p === provider), attributes: { disabled: off },
-        subtitle: !off ? undefined : probe.motivo == null || probe.motivo === 'nao_encontrado'
-          ? m.native_create_provider_missing({ p: providerName(p) })
-          : probe.motivo === 'sem_permissao' ? m.native_create_provider_execution_denied({ p: providerName(p) }) : probe.motivo };
-    });
     const modelActions = [{ id: '', title: m.criar_padrao(), state: on(!modelo) },
       ...modelos.filter((md) => md.id !== 'default').map((md) => ({ id: valorModelo(md), title: md.name ?? md.id, state: on(valorModelo(md) === modelo),
         subtitle: [md.provider, md.context ?? (md.context_length ? ctxWindow(md.context_length).toUpperCase() : '')].filter(Boolean).join(' · ') || undefined }))];
@@ -1242,9 +1281,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
               {picked && !noProject ? <SettingRow ref={branchRef} icon="GitBranch" label={m.native_create_checkout_branch()} value={branchLabel}
                 onPress={() => setBranchOpen(true)} /> : null}
             </RowGroup>
+            {/* Os seis agentes à vista, como o seletor do PC: um menu preso à linha cortava os de baixo. */}
+            <ProviderTrack value={provider} onChange={chooseProvider} probe={providerProbe} disabled={creating} />
             <RowGroup>
-              <SettingRow icon="Bot" label={m.criar_agente()} value={providerName(provider)} actions={providerActions}
-                onAction={(id) => chooseProvider(id as Provider)} />
               {accountChoice ? <SettingRow icon={accountChoice.icon ?? 'CircleUser'} label={accountLabel} value={accountChoice.label}
                 tone={accountChoice.tone} disabled={accountChoice.disabled} actions={accountChoice.actions}
                 menuTitle={accountChoice.menuTitle} onAction={accountChoice.onAction} /> : null}
@@ -1309,12 +1348,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             <Text style={styles.heroText} accessibilityRole="header">{m.native_new_chat_hero()}</Text>
             {machinePill}
             <View style={styles.headingLine}>
-              <Text style={styles.hint}>{`${m.native_new_chat_no_project_line()} · `}</Text>
+              <Text style={styles.heroHint}>{`${m.native_new_chat_no_project_line()} · `}</Text>
               <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityLabel={`${m.native_new_chat_folder()}: ${folderLabel}`}>
-                <Text style={styles.headingLink}>{m.native_new_chat_choose_folder()}</Text>
+                <Text style={[styles.headingLink, styles.heroLink]}>{m.native_new_chat_choose_folder()}</Text>
               </Pressable>
             </View>
+            {recentLine}
           </>
         ) : (
           <>
@@ -1322,9 +1362,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             <View style={styles.headingLine}>
               <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={12} accessibilityRole="button"
                 accessibilityLabel={`${m.native_new_chat_folder()}: ${folderLabel}`} style={styles.headingFolder}>
-                <Icon name="Folder" size={20} color={theme.tokens.accent.base} />
+                <Icon name="Folder" size={24} color={theme.tokens.accent.base} />
                 <Text style={[styles.heroText, styles.headingFolderText]} numberOfLines={1}>{folderLabel}</Text>
-                <Icon name="ChevronDown" size={16} color={theme.tokens.text.muted} />
+                <Icon name="ChevronDown" size={20} color={theme.tokens.text.muted} />
               </Pressable>
               <Text style={styles.heroText}> ?</Text>
             </View>
@@ -1332,9 +1372,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             {!active.invite ? (
               <Pressable onPress={() => { void handlePick(NO_PROJECT_CWD); }} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityHint={m.native_new_chat_no_project_hint()}>
-                <Text style={styles.headingLink}>{m.native_new_chat_start_without_project()}</Text>
+                <Text style={[styles.headingLink, styles.heroLink]}>{m.native_new_chat_start_without_project()}</Text>
               </Pressable>
             ) : null}
+            {recentLine}
           </>
         );
       }}
@@ -1350,18 +1391,25 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         </>
       )}
       providerChip={(
-        <SessionSettingsControl glyph={retomavel ? undefined : <ProviderGlyph provider={provider} size={16} inline />} open={settingsOpen} onOpen={() => setSettingsOpen(true)} onClose={() => setSettingsOpen(false)}
-          header={<ProviderPicker value={provider} onChange={chooseProvider} disabledMap={providerProbe ?? undefined} providers={CREATE_SESSION_PROVIDERS} />}
+        <SessionSettingsControl leading={retomavel ? undefined : <ProviderGlyph provider={provider} size={16} inline />} open={settingsOpen} onOpen={() => setSettingsOpen(true)} onClose={() => setSettingsOpen(false)}
+          header={<View style={styles.menuHeader}>
+            <ProviderLogoTabs value={provider} onChange={chooseProvider} probe={providerProbe} disabled={creating} />
+            {engineField ? <View style={styles.menuEngine}>{engineField}</View> : null}
+          </View>}
           model={{ display: chipLabel, loading: modelsLoading, notice: erroModelos,
             items: retomavel ? [] : [{ id: '', label: m.criar_padrao(), selected: !modelo },
+              // A dica do PC: o id quando o nome é outro, o provedor e a janela.
               ...modelos.filter((md) => md.id !== 'default').map((md) => ({ id: valorModelo(md), label: md.name ?? md.id,
-                hint: [md.provider, md.context ?? (md.context_length ? ctxWindow(md.context_length).toUpperCase() : '')].filter(Boolean).join(' · '), selected: valorModelo(md) === modelo }))],
+                hint: [md.name && md.name !== md.id ? md.id : '', md.provider, md.context ?? (md.context_length ? ctxWindow(md.context_length).toUpperCase() : '')]
+                  .filter(Boolean).join(' · '), selected: valorModelo(md) === modelo }))],
             select: async (it) => chooseModel(it.id ?? '') }}
           effort={{ value: esforco, hidden: !!retomavel || !niveisEsforco.length,
             items: [{ id: '', label: m.criar_padrao(), selected: !esforco }, ...niveisEsforco.map((lv) => ({ label: lv, selected: lv === esforco }))],
             select: async (value) => chooseEffort(value) }}
           fast={{ hidden: !!retomavel || !fastVisible, tier: speed, available: fastAvailable, ultrafast: ultrafastAvailable,
             choose: chooseSpeed }}>
+          {defaultChecksShown ? <DefaultChecks control={defaultChecks} providerLabel={providerName(provider)} ready={defaultsReady}
+            disabled={creating} /> : null}
           <Pressable accessibilityRole="button" accessibilityState={{ expanded: extrasOpen }}
             onPress={() => setExtrasOpen((value) => !value)} style={styles.more}>
             <Text style={styles.hint}>{m.criar_mais_opcoes()}</Text>
@@ -1406,6 +1454,8 @@ const styles = StyleSheet.create((theme) => ({
   sep: { height: StyleSheet.hairlineWidth, marginLeft: theme.base.space[10] + theme.base.space[0.5], backgroundColor: theme.tokens.border.default },
   pickerWrap: { minHeight: 380, flex: 1 },
   more: { minHeight: 36, paddingHorizontal: theme.base.space[2], justifyContent: 'center' },
+  menuHeader: { gap: theme.base.space[2], paddingBottom: theme.base.space[1] },
+  menuEngine: { paddingHorizontal: theme.base.space[1] },
   extras: { gap: theme.base.space[3], padding: theme.base.space[2] },
   input: {
     flex: 1,
@@ -1423,7 +1473,19 @@ const styles = StyleSheet.create((theme) => ({
   hint: { fontSize: theme.base.text.sm, color: theme.tokens.text.secondary },
   hintAlerta: { color: theme.tokens.status.warning },
   headingLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center' },
-  heroText: { fontSize: theme.base.text.xl, lineHeight: 30, fontWeight: theme.base.weight.medium, color: theme.tokens.text.primary, textAlign: 'center' },
+  heroText: { fontSize: theme.base.text.xxl, lineHeight: 38, fontWeight: theme.base.weight.medium, color: theme.tokens.text.primary, textAlign: 'center' },
+  heroHint: { fontSize: theme.base.text.base, color: theme.tokens.text.secondary },
+  heroLink: { fontSize: theme.base.text.base },
+  // Pastas recentes sob o título: atalhos em grade, ícone e nome, um toque troca a pasta.
+  recents: { width: '100%', maxWidth: 420, alignSelf: 'center', gap: theme.base.space[3], marginTop: theme.base.space[6], paddingHorizontal: theme.base.space[4] },
+  recentsLabel: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted, textAlign: 'center' },
+  recentGrid: { flexDirection: 'row', gap: theme.base.space[3] },
+  recentItem: {
+    flex: 1, minHeight: 72, alignItems: 'center', justifyContent: 'center', gap: theme.base.space[1.5],
+    paddingHorizontal: theme.base.space[2], paddingVertical: theme.base.space[2],
+    borderRadius: theme.base.radius.md, borderWidth: 1, borderColor: theme.tokens.border.subtle, backgroundColor: superficie(theme),
+  },
+  recentName: { fontSize: theme.base.text.xs, color: theme.tokens.text.secondary, textAlign: 'center' },
   // A pasta do título: sublinhada, para se ler como o que dá para trocar.
   headingFolder: {
     flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5], maxWidth: '100%',

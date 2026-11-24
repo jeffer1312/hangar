@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 
 // A escala do app. O tema expõe estes mesmos objetos (`theme.base.*`, `theme.type`); importar daqui
 // é para estilo montado fora do alcance do `theme` (componente sem hook, estilo inline).
-export const TEXT = { xxxs: 11, xxs: 12, xs: 13, sm: 15, base: 17, lg: 19, xl: 22 } as const;
+export const TEXT = { xxxs: 11, xxs: 12, xs: 13, sm: 15, base: 17, lg: 19, xl: 22, xxl: 28 } as const;
 export const MONO = Platform.select({ ios: 'Menlo', default: 'monospace' });
 // Passo de 4 com dois meios-passos; valor fora daqui arredonda para o vizinho, não vira token.
 export const SPACE = { 0.5: 2, 1: 4, 1.5: 6, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24, 8: 32, 10: 40 } as const;

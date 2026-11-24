@@ -229,11 +229,12 @@ export type FastView = Pick<ReturnType<typeof useServiceTierControl>, 'tier' | '
   Partial<Pick<ReturnType<typeof useServiceTierControl>, 'hidden' | 'fast' | 'ultrafast' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
 
 // A criação entrega escolhas locais; só o controlador do chat conhece uma sessão viva.
-export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, glyph, modeText, header, children, panel }: {
+export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, glyph, leading, modeText, header, children, panel }: {
   open: boolean; onOpen: () => void; onClose: () => void;
   model: ModelView; effort: EffortView; fast: FastView;
   // `glyph`: o chip mostra só ele e a seta; modelo e esforço seguem no valor lido e no painel.
-  plan?: boolean; icon?: IconName; glyph?: ReactNode; modeText?: string | null; header?: ReactNode; children?: ReactNode; panel?: ReactNode;
+  // `leading`: vem antes do modelo e do esforço, como o logo do agente na pílula do PC.
+  plan?: boolean; icon?: IconName; glyph?: ReactNode; leading?: ReactNode; modeText?: string | null; header?: ReactNode; children?: ReactNode; panel?: ReactNode;
 }) {
   const { theme } = useUnistyles();
   const anchor = useRef<View>(null);
@@ -245,6 +246,7 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
       accessibilityRole="button" accessibilityLabel={m.composer_session_settings()} accessibilityHint={m.composer_session_settings_hint()}
       accessibilityValue={{ text: [modeText, model.display, effortText, fast.tier !== 'default' ? speedLabel(fast.tier) : null].filter(Boolean).join(', ') }}>
       {icon ? <Icon name={icon} size={13} color={tint} /> : null}
+      {leading}
       {glyph ?? <Text style={styles.chipText} numberOfLines={1}>
         {plan ? <Text style={[styles.chipStrong, { color: tint }]}>{`${m.chat_mode_plan()} · `}</Text> : null}
         <Text style={[plan ? { color: tint } : styles.chipStrong, !plan && { color: model.failed ? theme.tokens.status.error : theme.tokens.text.primary }]}>{model.display}</Text>
@@ -257,13 +259,13 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
       closeLabel={m.native_close()} radius={12} padding={4} maxHeightRatio={1}>
       <ScrollView style={styles.panel} contentContainerStyle={styles.panelContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
         {header}
-        <Title text={m.native_ctl_model_title()} /><Notice text={model.notice} />
+        <Notice text={model.notice} />
         {model.refresh ? <Pressable accessibilityRole="button" disabled={model.loading}
           onPress={() => void model.refresh?.()} style={{ minHeight: 44, justifyContent: 'center' }}>
           <Text style={[styles.note, { color: theme.tokens.accent.base }]}>{m.native_voice_models_refresh()}</Text>
         </Pressable> : null}
         {model.loading ? <Skeleton rows={5} /> : model.error ? <Failure text={model.error} onRetry={() => void (model.refresh ?? model.load)?.()} /> :
-          <SettingsList items={model.items.map((it) => ({ id: modelItemKey(it), label: it.label, hint: it.hint, selected: it.selected, disabled: !!it.unavailable }))}
+          <SettingsList searchable="always" split items={model.items.map((it) => ({ id: modelItemKey(it), label: it.label, hint: it.hint, selected: it.selected, disabled: !!it.unavailable }))}
             onPick={id => pickModel(model, id, onClose)} />}
         {effort.hidden ? null : <>
           <Separator /><Title text={m.native_new_chat_reasoning()} />
@@ -271,7 +273,7 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
             : effort.items.length === 0 ? <Empty text={m.modelo_sem_niveis()} /> :
               <View style={[styles.efforts, effort.items.length > 5 && styles.wrap]} accessibilityRole="radiogroup">
                 {effort.items.map((it) => <Pressable key={it.label} onPress={() => { if (!it.selected) void effort.select(it.id ?? it.label); }}
-                  disabled={effort.applying} hitSlop={{ top: 4, bottom: 4 }}
+                  disabled={effort.applying} hitSlop={{ top: 7, bottom: 7 }}
                   style={({ pressed }) => [styles.effort, effort.items.length <= 5 && styles.share,
                     { backgroundColor: it.selected ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' }, effort.applying && styles.busy]}
                   accessibilityRole="radio" accessibilityLabel={effortLabel(it.label)} accessibilityState={{ selected: !!it.selected, checked: !!it.selected, disabled: effort.applying }}>
@@ -281,7 +283,7 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
           <Notice text={effort.notice} />
         </>}
         <FastControl fast={fast} />
-        {children}
+        {children ? <><Separator />{children}</> : null}
       </ScrollView>
     </AnchoredPanel>}
   </>;

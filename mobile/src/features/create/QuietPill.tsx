@@ -34,13 +34,16 @@ type Props = {
   iconOnly?: boolean;
   // Texto à vista quando ele não é o nome lido ("em notebook" para a máquina "notebook").
   shown?: string;
+  // Um degrau acima, para a pílula que mora no título da conversa nova.
+  size?: 'lg';
 };
 
 // A pílula quieta do app de PC (quiet_pill): 26 de altura, texto 12.5 apagado, ícone 14 e a seta do
 // menu. O hitSlop leva o toque aos 44 pt sem engordar o desenho.
 export const QuietPill = forwardRef<View, Props>(function QuietPill(
-  { icon, label, aria, disabled, actions, menuTitle, onAction, onPress, tone, plain, leading, iconOnly, shown }, ref,
+  { icon, label, aria, disabled, actions, menuTitle, onAction, onPress, tone, plain, leading, iconOnly, shown, size }, ref,
 ) {
+  const large = size === 'lg';
   const anchor = useRef<View>(null);
   useImperativeHandle(ref, () => anchor.current!, []);
   const [open, setOpen] = useState(false);
@@ -54,15 +57,15 @@ export const QuietPill = forwardRef<View, Props>(function QuietPill(
       onPressIn={press.onPressIn}
       onPressOut={press.onPressOut}
       disabled={disabled}
-      hitSlop={{ top: 9, bottom: 9, left: iconOnly ? 7 : 2, right: iconOnly ? 7 : 2 }}
+      hitSlop={{ top: large ? 7 : 9, bottom: large ? 7 : 9, left: iconOnly ? 7 : 2, right: iconOnly ? 7 : 2 }}
       accessibilityRole="button"
       accessibilityLabel={`${aria}: ${label}`}
       accessibilityState={{ disabled: !!disabled }}
-      style={[styles.pill, press.style, disabled && styles.disabled]}
+      style={[styles.pill, large && styles.pillLarge, press.style, disabled && styles.disabled]}
     >
-      {leading ?? (icon ? <Icon name={icon} size={14} color={ink} /> : null)}
-      {iconOnly ? null : <Text style={[styles.text, tone && { color: ink }]} numberOfLines={1}>{shown ?? label}</Text>}
-      {plain || iconOnly ? null : <Icon name="ChevronDown" size={12} color={theme.tokens.text.muted} />}
+      {leading ?? (icon ? <Icon name={icon} size={large ? 16 : 14} color={ink} /> : null)}
+      {iconOnly ? null : <Text style={[styles.text, large && styles.textLarge, tone && { color: ink }]} numberOfLines={1}>{shown ?? label}</Text>}
+      {plain || iconOnly ? null : <Icon name="ChevronDown" size={large ? 14 : 12} color={theme.tokens.text.muted} />}
     </AnimatedPressable>
   );
   return (
@@ -88,6 +91,8 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: 'center',
     gap: theme.base.space[1.5],
   },
+  pillLarge: { height: 30 },
   text: { flexShrink: 1, maxWidth: 220, fontSize: theme.base.text.xs, color: theme.tokens.text.muted },
+  textLarge: { maxWidth: 260, fontSize: theme.base.text.sm },
   disabled: { opacity: 0.5 },
 }));

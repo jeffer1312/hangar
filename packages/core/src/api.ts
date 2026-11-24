@@ -1346,6 +1346,15 @@ export async function getSessionDefaultsForServer(server: Server, provider: Prov
   return result.defaults;
 }
 
+/** O padrão de criação gravado no servidor para o escopo; `null` apaga. Devolve o que ficou gravado. */
+export async function saveSessionDefaultsForServer(server: Server, provider: Provider, defaults: SessionDefaults | null,
+  engine?: string | null, engineAccount?: string | null): Promise<SessionDefaults | null> {
+  const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}), ...(engineAccount ? { engine_account: engineAccount } : {}) });
+  const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server, `/api/session-defaults?${query}`,
+    { method: 'PUT', body: JSON.stringify({ defaults, if_absent: false }) }, 10_000);
+  return result.defaults;
+}
+
 // 404 = servidor antigo, sem a rota: `null`, sem erro na tela.
 async function nullOn404<T>(request: Promise<T>): Promise<T | null> {
   try {

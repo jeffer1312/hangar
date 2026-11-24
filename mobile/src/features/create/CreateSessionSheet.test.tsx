@@ -13,6 +13,7 @@ const calls = vi.hoisted(() => ({
   target: null as null | { id: string; label: string; baseUrl: string; token: string },
   accounts: vi.fn(),
   providers: vi.fn(), defaults: vi.fn(), config: vi.fn(), me: vi.fn(),
+  saveDefaults: vi.fn(), claudeDefaults: vi.fn(), applyDefault: vi.fn(),
   mutate: vi.fn(),
   contextFetch: vi.fn(),
   models: vi.fn(),
@@ -163,6 +164,9 @@ vi.mock('@hangar/core', async (original) => ({
   // Sonda de providers da folha nova: sem ela o teste fazia fetch de verdade para b.local.
   getProvidersForServer: calls.providers,
   getSessionDefaultsForServer: calls.defaults,
+  saveSessionDefaultsForServer: calls.saveDefaults,
+  setClaudeDefaultsForServer: calls.claudeDefaults,
+  applySessionDefault: calls.applyDefault,
   getConfigForServer: calls.config,
   getMeForServer: calls.me,
   setServiceTier: calls.mutate, setModelEffort: calls.mutate, setCodexModel: calls.mutate,
@@ -224,6 +228,7 @@ vi.mock('../../paraglide/messages', () => ({
   native_create_use_folder: () => 'native_create_use_folder', native_create_computer_folder: () => 'native_create_computer_folder',
   native_create_no_subfolders: () => 'native_create_no_subfolders', native_create_no_results: () => 'native_create_no_results',
   native_create_open: ({ nome }: { nome: string }) => `native_create_open:${nome}`, native_create_use: () => 'native_create_use',
+  native_new_chat_recent_aria: ({ path }: { path: string }) => `native_new_chat_recent_aria:${path}`,
   native_create_path_placeholder: () => 'native_create_path_placeholder', native_create_path_aria: () => 'native_create_path_aria',
   native_retry: () => 'native_retry', cota_conta_no_limite: ({ janela }: { janela: string }) => `cota_conta_no_limite:${janela}`,
   new_chat_account_switched: ({ conta }: { conta: string }) => `new_chat_account_switched:${conta}`,
@@ -270,7 +275,7 @@ vi.mock('../../paraglide/messages', () => ({
     'worktree_menu_buscar worktree_menu_no_match native_create_checkout_dirty native_folder_git_branch_entry ' +
     'worktree_menu_ocupada worktree_menu_parte_de worktree_menu_branch worktree_menu_ja_existe worktree_menu_ja_aberta worktree_menu_pasta_destino ' +
     'worktree_nova_so_remoto worktree_subagentes worktree_parada_dias worktree_dias_atras ' +
-    'native_new_chat_hero native_new_chat_hero_in native_new_chat_no_project_line native_new_chat_choose_folder native_new_chat_start_without_project native_new_chat_on_machine ' +
+    'native_new_chat_recents native_new_chat_hero native_new_chat_hero_in native_new_chat_no_project_line native_new_chat_choose_folder native_new_chat_start_without_project native_new_chat_on_machine ' +
     'native_new_chat_place_new native_new_chat_place_here ' +
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
@@ -281,7 +286,8 @@ vi.mock('../../paraglide/messages', () => ({
     'reasoning_level_low reasoning_level_medium reasoning_level_high reasoning_level_xhigh reasoning_level_max reasoning_level_ultra ' +
     'native_mode_plan native_mode_manual native_mode_auto native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk chat_mode_plan config_motores_modelo_padrao ' +
     'codex_contexto_titulo codex_contexto_padrao codex_contexto_salvando comum_falha_aplicar config_server_tentar_de_novo home_new_conversation ' +
-    'tags_apply_all tags_apply_ok tags_apply_offline tags_apply_old tags_apply_absent tags_apply_failed tags_apply_retry tags_saving ' +
+    'tags_apply_all tags_apply_ok tags_apply_offline tags_apply_old tags_apply_absent tags_apply_failed tags_apply_retry tags_saving tags_apply_needs_default ' +
+    'native_create_provider_aria native_create_default_for_harness ' +
     'criar_criar criar_agente comum_voltar comum_cancelar criar_escolher_pasta native_create_worktrees native_create_worktrees_merged native_create_worktree_session ' +
     'mobile_create_antigravity_account mobile_antigravity_default_account mobile_antigravity_signed_in mobile_antigravity_login_unknown ' +
     'mobile_antigravity_accounts_error mobile_antigravity_sign_in_first mobile_antigravity_signed_out mobile_antigravity_terms_hint erro_agy_ausente'
@@ -292,6 +298,7 @@ import { motivoCotaAntiga, type CotaContaResumo } from '@hangar/core';
 import { CreateSessionSheet } from './CreateSessionSheet';
 import { _resetNewConversationForTests } from '../../stores/newConversation';
 import { _resetCarriedForTests } from './NewConversation';
+import { useSessions } from '../../stores/sessions';
 
 const connected = { id: 'work', credential_id: 'codex:/work', name: 'Trabalho', home: '/work', is_default: false, auth: { method: 'oauth', status: 'connected', email: 'work@example.com', plan: 'Plus' }, sync: { status: 'ready', trust_pending: false, issues: [] } };
 const defaultAccount = { id: 'default', credential_id: 'codex:/default', name: 'Padrão', home: '/default', is_default: true, auth: { method: 'oauth', status: 'connected', email: 'default@example.com', plan: 'Plus' }, sync: { status: 'ready', trust_pending: false, issues: [] } };
@@ -362,6 +369,9 @@ describe('CreateSessionSheet Codex', () => {
     calls.mutate.mockReset();
     calls.providers.mockReset().mockResolvedValue({});
     calls.defaults.mockReset().mockResolvedValue(null);
+    calls.saveDefaults.mockReset().mockImplementation(async (_server, _provider, value) => value);
+    calls.claudeDefaults.mockReset().mockResolvedValue({ ok: true, written: [] });
+    calls.applyDefault.mockReset().mockResolvedValue(undefined);
     calls.config.mockReset().mockResolvedValue({ campos: { headless_default: { valor: true, definido: true, origem: 'app' } }, somente_leitura: {} });
     calls.me.mockReset().mockResolvedValue({ role: 'owner', name: null });
     calls.models.mockReset().mockResolvedValue({ models: [], reduced: false });
@@ -436,6 +446,11 @@ describe('CreateSessionSheet Codex', () => {
     const trigger = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label')?.startsWith(`${label}:`))!;
     await act(async () => trigger.click());
     await act(async () => button(container, value)!.click());
+  }
+
+  // Gravações em cadeia (padrão, espelho, outras máquinas) resolvem em várias voltas.
+  async function settle() {
+    for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
   }
 
   async function flushDismiss() {
@@ -1139,7 +1154,7 @@ describe('CreateSessionSheet Codex', () => {
     } finally { await act(async () => root.unmount()); }
   });
 
-  it('home mantém campo, anexo e destino montados entre lista e criação, e uso durante a escrita', async () => {
+  it('home mantém campo, anexo e destino montados entre lista e criação, sem o cartão de uso', async () => {
     const container = document.createElement('div');
     const root = createRoot(container);
     let focusRequest = 0;
@@ -1154,8 +1169,10 @@ describe('CreateSessionSheet Codex', () => {
     focusRequest++;
     await show('newConversation');
     expect(focus).toHaveBeenCalledTimes(1);
+    // O uso saiu da tela inicial: fica no ícone de custos do cabeçalho.
+    expect(container.querySelector('[data-home-usage]')).toBeNull();
     await act(async () => type(container, 'kept-draft'));
-    expect(container.querySelector('[data-home-usage]')).not.toBeNull();
+    expect(container.querySelector('[data-home-usage]')).toBeNull();
     await act(async () => button(container, 'composer_adicionar_ao_chat')!.click());
     await act(async () => button(container, 'pick-fixture')!.click());
     expect(container.textContent).toContain('fixture.png');
@@ -1170,6 +1187,43 @@ describe('CreateSessionSheet Codex', () => {
     expect(calls.create).not.toHaveBeenCalled();
     expect(calls.send).not.toHaveBeenCalled();
     await act(async () => root.unmount());
+  });
+
+  it('recentes sob o título: três pastas da máquina sem a escolhida, e o toque escolhe e lembra a pasta', async () => {
+    const session = (name: string, cwd: string, last_activity: number) => ({ name, cwd, last_activity, state: 'idle' });
+    useSessions.setState({ byServerRecord: { [server.id]: [
+      session('a', '/repo', 50), session('b', '/repo/web', 40), session('c', '~', 45), session('d', '/repo/api', 30),
+      session('e', '/repo/web/', 20), session('f', '/repo/docs', 10), session('g', '/repo/old', 5),
+    ] } } as never);
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(button(container, 'native_new_chat_folder: repo')).toBeTruthy();
+      const recent = (path: string) => button(container, `native_new_chat_recent_aria:${path}`);
+      // A escolhida, a pessoal e a repetida ficam de fora; só as três mais recentes entram.
+      expect([...container.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'))
+        .filter((label) => label?.startsWith('native_new_chat_recent_aria:'))).toEqual([
+        'native_new_chat_recent_aria:/repo/web', 'native_new_chat_recent_aria:/repo/api', 'native_new_chat_recent_aria:/repo/docs',
+      ]);
+      expect(recent('/repo/api')!.textContent).toBe('api');
+      await act(async () => recent('/repo/api')!.click());
+      for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+      expect(button(container, 'native_new_chat_folder: api')).toBeTruthy();
+      expect(localStorage.getItem('create.project.v1:server-b')).toBe('{"root":"/repo","cwd":"/repo/api"}');
+      // A pasta deixada volta para a linha.
+      expect(recent('/repo')).toBeTruthy();
+      expect(recent('/repo/api')).toBeUndefined();
+    } finally {
+      useSessions.setState({ byServerRecord: {} } as never);
+      await act(async () => root.unmount());
+    }
+  });
+
+  it('recentes somem sem sessões na máquina', async () => {
+    const { container, root } = await renderSheet(false, false);
+    try {
+      expect(button(container, 'native_new_chat_folder: repo')).toBeTruthy();
+      expect(container.textContent).not.toContain('native_new_chat_recents');
+    } finally { await act(async () => root.unmount()); }
   });
 
   it('home inicia ditado pela faixa sem pedir teclado e transcreve ao voltar à lista', async () => {
@@ -1563,6 +1617,124 @@ describe('CreateSessionSheet Codex', () => {
     await send(container);
     expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ provider: 'claude' }));
     root.unmount();
+  });
+
+  it('menu de modelo mostra os seis agentes como abas de logo e a aba escolhe o agente', async () => {
+    calls.providers.mockResolvedValue({ claude: { disponivel: true, default: true }, omp: { disponivel: false, motivo: 'nao_encontrado' } });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await openSettings(container);
+      const tabs = container.querySelector('[role="radiogroup"][aria-label="native_create_provider_aria"]')!;
+      expect([...tabs.querySelectorAll('button')].map((b) => b.getAttribute('aria-label')))
+        .toEqual(['Claude', 'Codex', 'Pi', 'Kimi', 'OMP', 'Antigravity']);
+      expect(button(tabs as HTMLElement, 'Claude')!.getAttribute('aria-checked')).toBe('true');
+      expect(button(tabs as HTMLElement, 'OMP')!.disabled).toBe(true);
+      expect(container.textContent).toContain('native_create_provider_missing:OMP');
+      // Busca sempre à vista, mesmo com poucos modelos.
+      expect(container.querySelector('[aria-label="native_ctl_search"]')).not.toBeNull();
+      await act(async () => button(tabs as HTMLElement, 'Pi')!.click());
+      expect(button(container, 'Pi')!.getAttribute('aria-checked')).toBe('true');
+      await send(container);
+      expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ provider: 'pi' }));
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('chip da conversa nova mostra o modelo e o esforço ao lado do logo', async () => {
+    calls.defaults.mockResolvedValue({ model: 'opus', effort: 'high', permission: '' });
+    calls.models.mockResolvedValue({ kind: 'claude', reduced: false, models: [{ id: 'opus', name: 'Opus' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      const chip = button(container, 'composer_session_settings')!;
+      expect(chip.textContent).toContain('Opus');
+      expect(chip.textContent).toContain('high');
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('o motor do Claude fica no topo do menu, não em Mais opções', async () => {
+    calls.engines.mockResolvedValue({ motores: { proxy: { label: 'Proxy', model: 'sol' } } });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await openSettings(container);
+      expect(button(container, 'criar_mais_opcoes')!.getAttribute('aria-expanded')).not.toBe('true');
+      expect(button(container, 'criar_claude_sua_conta')).toBeDefined();
+      await act(async () => button(container, 'criar_mais_opcoes')!.click());
+      expect([...container.querySelectorAll('button')].filter((b) => b.getAttribute('aria-label') === 'criar_claude_sua_conta')).toHaveLength(1);
+      await act(async () => button(container, 'Codex')!.click());
+      expect(button(container, 'criar_claude_sua_conta')).toBeUndefined();
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('caixa de padrão grava a escolha no servidor, espelha no Claude e desmarcar apaga', async () => {
+    calls.models.mockResolvedValue({ kind: 'claude', reduced: false, models: [{ id: 'opus', name: 'Opus' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await openSettings(container);
+      await act(async () => button(container, 'Opus')!.click());
+      const check = () => button(container, 'native_create_default_for_harness')!;
+      expect(check().getAttribute('aria-checked')).toBe('false');
+      await act(async () => check().click());
+      await settle();
+      const value = { model: 'opus', effort: '', permission: '' };
+      expect(calls.saveDefaults).toHaveBeenCalledExactlyOnceWith(server, 'claude', value, null, null);
+      expect(calls.claudeDefaults).toHaveBeenCalledExactlyOnceWith(server, value);
+      expect(check().getAttribute('aria-checked')).toBe('true');
+      await act(async () => check().click());
+      await settle();
+      expect(calls.saveDefaults).toHaveBeenLastCalledWith(server, 'claude', null, null, null);
+      expect(calls.claudeDefaults).toHaveBeenCalledOnce();
+      expect(check().getAttribute('aria-checked')).toBe('false');
+      expect(calls.create).not.toHaveBeenCalled();
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('padrão já gravado igual à escolha abre marcado; falha ao gravar aparece', async () => {
+    calls.defaults.mockResolvedValue({ model: 'opus', effort: 'high', permission: '' });
+    calls.models.mockResolvedValue({ kind: 'claude', reduced: false, models: [{ id: 'opus', name: 'Opus' }] });
+    calls.saveDefaults.mockRejectedValueOnce(Object.assign(new Error('write-failed'), { status: 500 }));
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await openSettings(container);
+      const check = () => button(container, 'native_create_default_for_harness')!;
+      expect(check().getAttribute('aria-checked')).toBe('true');
+      await act(async () => check().click());
+      await settle();
+      expect(container.textContent).toContain('default_failed:write-failed');
+      expect(check().getAttribute('aria-checked')).toBe('true');
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('padrão com motor vai no escopo do motor e não mexe no settings.json do Claude', async () => {
+    calls.engines.mockResolvedValue({ motores: { proxy: { label: 'Proxy', model: 'sol' } } });
+    calls.models.mockResolvedValue({ kind: 'engine', reduced: false, models: [{ id: 'sol', name: 'Sol' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await openSettings(container);
+      await act(async () => button(container, 'criar_claude_sua_conta')!.click());
+      await act(async () => button(container, 'Proxy')!.click());
+      await settle();
+      await act(async () => button(container, 'native_create_default_for_harness')!.click());
+      await settle();
+      expect(calls.saveDefaults).toHaveBeenCalledWith(server, 'claude', { model: '', effort: '', permission: '' }, 'proxy', null);
+      expect(calls.claudeDefaults).not.toHaveBeenCalled();
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it('em todas as minhas máquinas espera o padrão marcado e repete a gravação nas outras', async () => {
+    calls.target = { id: 'server-c', label: 'Servidor C', baseUrl: 'https://c.local', token: 'token-c' };
+    calls.models.mockResolvedValue({ kind: 'claude', reduced: false, models: [{ id: 'opus', name: 'Opus' }] });
+    const { container, root } = await renderSheet(false, false);
+    try {
+      await openSettings(container);
+      await act(async () => button(container, 'tags_apply_all')!.click());
+      expect(container.textContent).toContain('tags_apply_needs_default');
+      expect(calls.applyDefault).not.toHaveBeenCalled();
+      await act(async () => button(container, 'native_create_default_for_harness')!.click());
+      await settle();
+      expect(calls.applyDefault).toHaveBeenCalledExactlyOnceWith(calls.target, { provider: 'claude', engine: null, engineAccount: null,
+        value: { model: '', effort: '', permission: '' }, mirror: true });
+      expect(calls.saveDefaults).toHaveBeenCalledWith(server, 'claude', { model: '', effort: '', permission: '' }, null, null);
+      expect(container.textContent).toContain('Servidor C: tags_apply_ok');
+    } finally { await act(async () => root.unmount()); }
   });
 
   it('descarta esforço padrão incompatível com Haiku', async () => {
@@ -2402,7 +2574,7 @@ describe('CreateSessionSheet Codex', () => {
       const { container, root } = await renderForm();
       try {
         expect(button(container, 'native_new_chat_machine: Servidor B')).toBeDefined();
-        expect(button(container, 'criar_agente: Claude')).toBeDefined();
+        expect(button(container, 'Claude')?.getAttribute('aria-checked')).toBe('true');
         await pickFolder(container);
         expect(button(container, 'native_new_chat_folder: hangar')).toBeDefined();
         await act(async () => button(container, 'criar_criar')!.click());
@@ -2413,6 +2585,27 @@ describe('CreateSessionSheet Codex', () => {
         expect(body.name).toBe('hangar');
         expect(calls.send).not.toHaveBeenCalled();
         expect(calls.replace).toHaveBeenCalledWith('/s/server-b/nova');
+      } finally { act(() => root.unmount()); }
+    });
+
+    it('o agente é escolhido no controle segmentado com os seis à vista e o motivo do apagado embaixo', async () => {
+      calls.scan.mockResolvedValue({ entries: [folder] });
+      calls.providers.mockResolvedValue({ claude: { disponivel: true, default: true }, antigravity: { disponivel: false, motivo: 'sem_permissao' } });
+      const { container, root } = await renderForm();
+      try {
+        const track = container.querySelector<HTMLElement>('[role="radiogroup"][aria-label="native_create_provider_aria"]')!;
+        expect([...track.querySelectorAll('button')].map((b) => b.getAttribute('aria-label')))
+          .toEqual(['Claude', 'Codex', 'Pi', 'Kimi', 'OMP', 'Antigravity']);
+        expect(button(track, 'Antigravity')!.disabled).toBe(true);
+        expect(container.textContent).toContain('native_create_provider_execution_denied:Antigravity');
+        await act(async () => button(track, 'Kimi')!.click());
+        await settle();
+        expect(button(track, 'Kimi')!.getAttribute('aria-checked')).toBe('true');
+        expect(button(track, 'Claude')!.getAttribute('aria-checked')).toBe('false');
+        await pickFolder(container);
+        await act(async () => button(container, 'criar_criar')!.click());
+        await act(async () => Promise.resolve());
+        expect(calls.create.mock.calls[0][1]).toMatchObject({ provider: 'kimi' });
       } finally { act(() => root.unmount()); }
     });
 
