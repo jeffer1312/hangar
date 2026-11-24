@@ -94,6 +94,9 @@ struct Slot {
     selecting: bool,
     fixture_loaded: bool,
     fixture_error: bool,
+    /// O que o terminal produziu e a fila do socket ainda não aceitou.
+    unsent: std::collections::VecDeque<Vec<u8>>,
+    retry_armed: bool,
 }
 
 impl Slot {
@@ -105,7 +108,7 @@ impl Slot {
             Err(_) => (TermView::new(80, 24), Status::Failed(tr("term_fixture_error")), false, true),
         };
         Self { uid, kind, name, view, socket: None, status, generation: 0, bounds: Rc::new(Cell::new(Bounds::default())),
-            selecting: false, fixture_loaded, fixture_error }
+            selecting: false, fixture_loaded, fixture_error, unsent: Default::default(), retry_armed: false }
     }
 
     fn shortcut(&self) -> Option<&ShortcutTerm> { if let Kind::Shortcut(term) = &self.kind { Some(term) } else { None } }
@@ -212,6 +215,21 @@ impl Panel {
         }
     }
 }
+
+/// Manda o que espera, na ordem. Fila cheia guarda o resto para a próxima vez; outra falha volta como erro.
+fn send_in_order(unsent: &mut std::collections::VecDeque<Vec<u8>>, mut send: impl FnMut(&[u8]) -> Result<(), ws::Error>) -> Result<(), ws::Error> {
+    while let Some(bytes) = unsent.front() {
+        match send(bytes) {
+            Ok(()) => { unsent.pop_front(); }
+            Err(ws::Error::QueueFull) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Com teclas esperando a fila do socket, a próxima tentativa sai sozinha neste intervalo.
+const SEND_RETRY: std::time::Duration = std::time::Duration::from_millis(30);
 
 fn socket_error(error: ws::Error) -> String {
     match error {
@@ -548,14 +566,18 @@ impl Hangar {
                         slot.view = TermView::new(cols as usize, rows as usize);
                         slot.bounds.set(Bounds::default());
                         slot.fixture_loaded = false;
+                        // Teclas de antes da conexão nova foram para um programa que já não as espera.
+                        slot.unsent.clear();
                         slot.status = Status::Connected;
                     }
                     Ok(ws::Event::Data(bytes)) => {
                         let changed = slot.view.feed(&bytes);
-                        Self::flush_terminal(slot);
+                        let waiting = Self::flush_terminal(slot);
+                        let failed = matches!(slot.status, Status::Failed(_));
+                        if waiting { self.keep_sending(uid, cx); }
                         // Saída do programa chega o tempo todo: repinta só a raiz, onde o terminal é desenhado, e só da
                         // aba à vista. O `notify` do `Hangar` acordaria todas as áreas guardadas.
-                        if !matches!(slot.status, Status::Failed(_)) {
+                        if !failed {
                             if changed && shown && !motion::tick_root(cx) { cx.notify(); }
                             return;
                         }
@@ -622,16 +644,37 @@ impl Hangar {
         cx.notify();
     }
 
-    fn flush_terminal(slot: &mut Slot) {
-        let Some(socket) = &slot.socket else { return };
-        for bytes in slot.view.take_output() {
-            if let Err(error) = socket.send(&bytes) {
-                crate::log_line(&format!("terminal {}: envio falhou ({} bytes): {error:?}", slot.name, bytes.len()));
-                slot.status = Status::Failed(socket_error(error));
-                // O resto não pode chegar ao programa com um buraco no meio.
-                break;
-            }
+    /// Devolve se ficou algo esperando a fila do socket: quem chama arma o reenvio (`keep_sending`).
+    fn flush_terminal(slot: &mut Slot) -> bool {
+        let Some(socket) = &slot.socket else { return false };
+        slot.unsent.extend(slot.view.take_output());
+        if let Err(error) = send_in_order(&mut slot.unsent, |bytes| socket.send(bytes)) {
+            crate::log_line(&format!("terminal {}: envio falhou ({} quadros pendentes): {error:?}", slot.name, slot.unsent.len()));
+            slot.status = Status::Failed(socket_error(error));
+            // O resto não pode chegar ao programa com um buraco no meio.
+            slot.unsent.clear();
         }
+        !slot.unsent.is_empty()
+    }
+
+    /// Tecla repetida (Backspace segurado) enche a fila do socket mais rápido que o servidor lê: o resto sai sozinho
+    /// quando houver lugar, sem esperar outra tecla nem dar o terminal como desconectado.
+    fn keep_sending(&mut self, uid: u64, cx: &mut Context<Self>) {
+        let Some(panel) = self.terminal.as_mut() else { return };
+        let panel_id = panel.id;
+        let Some(slot) = panel.tabs.iter_mut().find(|slot| slot.uid == uid) else { return };
+        if slot.retry_armed || slot.unsent.is_empty() { return; }
+        slot.retry_armed = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEND_RETRY).await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(slot) = this.terminal.as_mut().filter(|panel| panel.id == panel_id)
+                    .and_then(|panel| panel.tabs.iter_mut().find(|slot| slot.uid == uid)) else { return };
+                slot.retry_armed = false;
+                Self::flush_terminal(slot);
+                this.keep_sending(uid, cx);
+            });
+        }).detach();
     }
 
     /// A roda num quadro só (a fila do socket tem 8 lugares) e, com a fila cheia, perdida em vez de dar o
@@ -640,6 +683,8 @@ impl Hangar {
         let Some(socket) = &slot.socket else { return };
         let bytes = slot.view.take_output().concat();
         if bytes.is_empty() { return; }
+        // Teclas esperando a fila: a roda não passa na frente delas.
+        if !slot.unsent.is_empty() { return; }
         match socket.send(&bytes) {
             Ok(_) => {}
             Err(crate::ws::Error::QueueFull) => crate::log_line(&format!("terminal {}: fila cheia, rolagem descartada", slot.name)),
@@ -669,7 +714,11 @@ impl Hangar {
             return;
         }
         let result = slot.view.key_down(event);
-        if result.handled { Self::flush_terminal(slot); cx.stop_propagation(); }
+        let uid = slot.uid;
+        if result.handled {
+            if Self::flush_terminal(slot) { self.keep_sending(uid, cx); }
+            cx.stop_propagation();
+        }
         if result.redraw { cx.notify(); }
     }
 
@@ -905,7 +954,8 @@ impl Hangar {
                     if !slot.accepts_input() { return; }
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                         if slot.view.paste(&text) { cx.notify(); }
-                        Self::flush_terminal(slot);
+                        let uid = slot.uid;
+                        if Self::flush_terminal(slot) { this.keep_sending(uid, cx); }
                     }
                 }
             }))
@@ -985,6 +1035,26 @@ mod tests {
             ShortcutTerm { id: "d4e5f6".into(), label: "Build".into(), alive: false, exit_code: Some(2) },
         ]);
         assert!(parse_shortcut_terms(&Value::Null).is_empty());
+    }
+
+    /// Fila do socket cheia (tecla repetida mais rápido que o servidor lê): as teclas esperam na ordem; só a falha
+    /// de verdade as descarta.
+    #[test]
+    fn a_full_queue_keeps_the_keys_in_order_and_only_a_real_failure_drops_them() {
+        use std::collections::VecDeque;
+        use crate::ws::Error;
+        let frames = |list: &[&[u8]]| list.iter().map(|bytes| bytes.to_vec()).collect::<VecDeque<_>>();
+        let mut unsent = frames(&[b"a", b"b", b"c"]);
+        let (sent, room) = (std::cell::RefCell::new(Vec::new()), std::cell::Cell::new(1));
+        let send = |bytes: &[u8]| if room.get() == 0 { Err(Error::QueueFull) } else { room.set(room.get() - 1); sent.borrow_mut().push(bytes.to_vec()); Ok(()) };
+        assert!(super::send_in_order(&mut unsent, send).is_ok());
+        assert_eq!(unsent, frames(&[b"b", b"c"]), "o que não coube espera, na ordem");
+        room.set(5);
+        assert!(super::send_in_order(&mut unsent, send).is_ok());
+        assert!(unsent.is_empty());
+        assert_eq!(sent.into_inner(), frames(&[b"a", b"b", b"c"]).into_iter().collect::<Vec<_>>());
+        let mut unsent = frames(&[b"d"]);
+        assert!(matches!(super::send_in_order(&mut unsent, |_| Err(Error::Closed)), Err(Error::Closed)));
     }
 
     #[test]
