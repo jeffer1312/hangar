@@ -292,7 +292,7 @@ impl AccountService {
             Ok(Ok(Some(Err(reason)))) => { failed("agy_usage_unreadable", reason); reading("indisponivel", vec![], Some("agy-usage-ilegivel")) }
             Ok(Ok(None)) => { failed("agy_usage_timeout", String::new()); reading("indisponivel", vec![], Some("agy-usage-prazo")) }
             Ok(Err(error)) => { failed("agy_usage_spawn_failed", error.to_string()); reading("indisponivel", vec![], Some("agy-usage-ilegivel")) }
-            Err(_) => reading("indisponivel", vec![], Some("agy-usage-ilegivel")),
+            Err(error) => { failed("agy_usage_task_failed", error.to_string()); reading("indisponivel", vec![], Some("agy-usage-ilegivel")) }
         }
     }
 
