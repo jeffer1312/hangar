@@ -340,7 +340,8 @@ Decisões:
   travada e recusa todo envio até lá. Envio interrompido por queda do binário vira `failed`
   (`interrupted`) na subida, nunca reenviado.
 - **Anexo.** Caminho absoluto, até 100 MB, aberto sem seguir link e copiado para a pasta do rascunho
-  com sha256. Recusado (`file_refused`): a pasta de dados do binário, `~/.hangar`, `~/.ssh`,
+  com sha256. Recusado (`file_refused`): a pasta de dados do binário, `~/.hangar` (menos
+  `~/.hangar/worktrees/`, onde ficam as worktrees das sessões), `~/.ssh`,
   `~/.gnupg`, `~/.config`, `~/.claude*`, qualquer pasta oculta no caminho, `.env*`, `*.key`, `*.pem`.
 
 Do lado do Hangar (C6):
