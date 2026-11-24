@@ -7,6 +7,9 @@ pub fn run(args: &[String]) -> ExitCode {
     if args.first().map(String::as_str) == Some("install") {
         return install(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("extensions") {
+        return extensions(&args[1..]);
+    }
     let Some(mode) = args
         .first()
         .map(String::as_str)
@@ -106,6 +109,56 @@ fn install(args: &[String]) -> ExitCode {
     }
 }
 
+/// Uso errado de `extensions`.
+const EXTENSIONS_USAGE: u8 = 2;
+/// O Windows recusou o symlink: falta o Modo Desenvolvedor (ou admin).
+const EXTENSIONS_DEVELOPER_MODE: u8 = 4;
+
+/// `extensions pi|omp [--repo CAMINHO]`; `None` é uso errado.
+fn parse_extensions(args: &[String]) -> Option<(&str, Option<PathBuf>)> {
+    let (cli, repo) = match args {
+        [cli] => (cli, None),
+        [cli, flag, path] if flag == "--repo" && !path.is_empty() => (cli, Some(PathBuf::from(path))),
+        _ => return None,
+    };
+    matches!(cli.as_str(), "pi" | "omp").then_some((cli.as_str(), repo))
+}
+
+/// O mesmo conserto `extensoes:pi|omp` do painel, para o instalador do Windows.
+fn extensions(args: &[String]) -> ExitCode {
+    let Some((cli, repo)) = parse_extensions(args) else {
+        eprintln!("uso: hangar-server harness-setup extensions pi|omp [--repo CAMINHO]");
+        return ExitCode::from(EXTENSIONS_USAGE);
+    };
+    let env = AccountEnvironment::capture();
+    let Some(repo) = repo
+        .or_else(|| crate::install_root::root(&env.home))
+        .filter(|p| hangar_core::paths::is_install_root(p) || p.join("backend").is_dir())
+    else {
+        eprintln!("raiz da instalação do Hangar não encontrada");
+        return ExitCode::FAILURE;
+    };
+    // Sem as fontes o conserto não liga nada e diria "0 ligadas" como se estivesse certo.
+    if !repo.join("scripts/pi/hangar-state.ts").is_file() {
+        eprintln!("{cli}: {} não tem as extensões (scripts/pi)", repo.display());
+        return ExitCode::FAILURE;
+    }
+    match super::repair::link_extensions(&env, &repo, cli) {
+        Ok(count) => {
+            println!("{cli}: {count} extensões ligadas a {}", repo.join("scripts/pi").display());
+            ExitCode::SUCCESS
+        }
+        Err(error) if error.needs_developer_mode => {
+            eprintln!("{cli}: {error}");
+            ExitCode::from(EXTENSIONS_DEVELOPER_MODE)
+        }
+        Err(error) => {
+            eprintln!("{cli}: extensões não ligadas: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn repair_codex()->ExitCode {
     let result=(||->Result<(),String>{
         let env=AccountEnvironment::capture();
@@ -116,4 +169,44 @@ fn repair_codex()->ExitCode {
         runtime.block_on(async{let result=service.repair_all().await;let closed=service.shutdown().await;result.and(closed)})
     })();
     match result {Ok(())=>ExitCode::SUCCESS,Err(error)=>{eprintln!("Reparo das contas Codex falhou: {error}");ExitCode::FAILURE}}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn extensions_takes_pi_or_omp_and_an_optional_repo() {
+        assert_eq!(parse_extensions(&args(&["pi"])), Some(("pi", None)));
+        assert_eq!(parse_extensions(&args(&["omp"])), Some(("omp", None)));
+        assert_eq!(
+            parse_extensions(&args(&["omp", "--repo", "/x/hangar"])),
+            Some(("omp", Some(PathBuf::from("/x/hangar"))))
+        );
+    }
+
+    #[test]
+    fn extensions_refuses_anything_else() {
+        for wrong in [
+            &[][..],
+            &["codex"][..],
+            &["kimi"][..],
+            &["pi", "omp"][..],
+            &["pi", "--repo"][..],
+            &["pi", "--repo", ""][..],
+            &["pi", "--root", "/x"][..],
+            &["pi", "--repo", "/x", "mais"][..],
+        ] {
+            assert_eq!(parse_extensions(&args(wrong)), None, "{wrong:?}");
+        }
+    }
+
+    #[test]
+    fn extensions_usage_is_refused_with_its_code() {
+        assert_eq!(extensions(&args(&["kimi"])), ExitCode::from(EXTENSIONS_USAGE));
+    }
 }

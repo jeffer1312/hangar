@@ -860,7 +860,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             <button
               class="sess-main"
               class:untracked={s.tracked === false}
-              class:untracked-open={s.tracked === false && (s.provider === 'kimi' || s.provider === 'codex')}
+              class:untracked-open={s.tracked === false && (s.provider === 'kimi' || s.provider === 'antigravity' || s.provider === 'codex')}
               aria-pressed={model.selectMode ? model.selected.has(selKey) : undefined}
               aria-label={!expanded ? `${s.name} · ${srvLabel} · ${estadoTxt}${questionLabel ? ` · ${questionLabel}` : ''}` : undefined}
               title={dropRecusa !== null
@@ -1077,7 +1077,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                     <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                   </svg>
                 </button>
-              {:else if s.tracked === false && s.provider !== 'pi' && s.provider !== 'kimi' && s.provider !== 'omp' && s.provider !== 'codex'}
+              {:else if s.tracked === false && s.provider !== 'pi' && s.provider !== 'kimi' && s.provider !== 'omp' && s.provider !== 'antigravity' && s.provider !== 'codex'}
                 <button
                   class="sess-resume"
                   onclick={(e) => handleResume(s.name, s.serverId, undefined, e)}

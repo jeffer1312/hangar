@@ -185,7 +185,7 @@ pub fn claude_from_meta(meta: &Value, name: &str, created_at: f64) -> io::Result
 }
 
 /// Spec de uma sessão viva que nasceu antes do registro, montado do sidecar dela. A conta gravada
-/// vale como escolhida (reabrir nunca a troca pela cota). Claude com terminal, Pi, omp, Kimi e o
+/// vale como escolhida (reabrir nunca a troca pela cota). Claude com terminal, Pi, omp, Kimi, Antigravity e o
 /// sidecar sem `key` (Codex com terminal, CDX-9) não dão spec: `None`.
 /// Sidecar ilegível, que não é objeto ou sem `cwd` é erro, nunca "sessão sem sidecar".
 pub fn from_sidecars(home: &Path, name: &str) -> io::Result<Option<SessionSpec>> {

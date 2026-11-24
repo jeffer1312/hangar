@@ -151,6 +151,7 @@ pub fn own_skills(roots: &Roots) -> BTreeSet<String> {
 /// máquinas ainda não atualizadas gravam. Lista fixa: a pasta `backend/hooks` sai do pacote.
 pub const OWN_HOOKS: &[&str] = &[
     "state-hook", "preview-hook", "nav-hook", "askq-capture", "pair-context", "guard-tmux", "kimi-state-hook",
+    "agy-state-hook",
     "state_hook.py", "preview_hook.py", "nav_hook.py", "askq_capture.py", "subagent_hook.py", "guard_tmux.py",
     "kimi_state_hook.py",
 ];

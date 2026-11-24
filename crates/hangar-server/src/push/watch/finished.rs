@@ -152,7 +152,7 @@ mod tests {
     }
     #[tokio::test]
     async fn guest_push_watch_finished_discovers_terminal_after_settle() {
-        for provider in ["pi", "omp", "kimi"] {
+        for provider in ["pi", "omp", "kimi", "antigravity"] {
             let home = tempfile::tempdir().unwrap();
             let mut state = crate::routes::AppState::new(crate::config::Config {
                 listen: "127.0.0.1:0".parse().unwrap(),

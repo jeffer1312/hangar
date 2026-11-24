@@ -57,7 +57,7 @@ impl Bench {
         let host = Host::new(Registry::new(dir.path().join("connectors.json")), options);
         let store = Arc::new(Store::new(dir.path().join("mission")));
         let (sessions, diag) = (Arc::new(FakeSessions::default()), Arc::new(FakeDiag::default()));
-        let engine = Engine::new(host.clone(), store.clone(), sessions.clone(), diag.clone(), dir.path().join("cache"));
+        let engine = Engine::new(host.clone(), store.clone(), sessions.clone(), diag.clone(), dir.path().join("cache"), dir.path().join("drafts"));
         Self { dir, host, store, sessions, diag, engine }
     }
 

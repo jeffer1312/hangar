@@ -113,6 +113,19 @@ it('grava o provedor quando a pessoa o escolhe', async () => {
   expect(writes[0]).toMatchObject({ target: { kind: 'new', launch: { cwd: '/projeto', provider: 'claude' } } });
 });
 
+it('oferece o Antigravity como agente da conversa nova, com o catálogo dele', async () => {
+  providers = { ...providers, antigravity: { disponivel: true } };
+  await mount({ ...task, target: { kind: 'new', launch: { cwd: '/projeto' }, worktree: false } });
+  const row = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label')?.startsWith(`${m.scheduled_agent()}:`))!;
+  await act(async () => row.click());
+  const agy = [...host.querySelectorAll<HTMLElement>('button, [role="button"], [role="menuitem"]')].find((b) => b.getAttribute('aria-label') === 'Antigravity' || b.textContent === 'Antigravity')!;
+  await act(async () => agy.click());
+  for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+  expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain('https://example.test/api/model-options?provider=antigravity');
+  await act(async () => save().click());
+  expect(writes[0]).toMatchObject({ target: { kind: 'new', launch: { cwd: '/projeto', provider: 'antigravity' } } });
+});
+
 it('edita o nome de Once encerrado preservando o offset e os segundos originais', async () => {
   const at = '2027-11-01T09:00:37-03:00';
   const original: ScheduledTask = { ...task, schedule: { kind: 'once', at }, last_status: 'sent' };

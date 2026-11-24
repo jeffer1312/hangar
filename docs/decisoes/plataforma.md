@@ -5480,6 +5480,21 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   `work_reviews` sai só pelo laço da lista do dono, nunca pelo do convidado (teste em `list/hub.rs`).
   Corpo: `{"reviews": {"<sessão>": {"review_id", "state", "badge": {"text","tone"}|null, "updated_at"}}}`,
   só com as sessões atuais que têm revisão, publicado quando muda o resumo ou as linhas.
+- **Escolha marcada vai ao servidor na hora (23/11/2026).** Antes as escolhas viviam só na memória do
+  cliente até o "Enviar": trocar de sessão ou fechar o app perdeu 50 decisões de uma comparação com o mock. Cada escolha
+  e cada motivo vão por `PUT /api/sessions/{nome}/work-review/draft` (`{"review_id", "choices"}`),
+  gravado em `~/.hangar/work-review-drafts/<sha1 do conector e do ticket>.json` (não é cache); o `GET` da
+  sessão devolve `draft` só da rodada lida e só com decisão e escolha que ela ainda mostra. O servidor junta por decisão com o que já guardou da mesma
+  rodada (outro aparelho aberto não apaga as escolhas deste), resumo de outra rodada é relido antes
+  de recusar, e rascunho de outra rodada já gravado no ticket (outra sessão nele) só é trocado se a
+  revisão relida agora for a do pedido; rodada diferente da lida de novo é 409 `stale_review`. O cliente faz uma gravação por vez por sessão, só com as decisões mudadas que o
+  servidor ainda não confirmou (o servidor junta numa trava só, e a rodada é conferida de novo dentro
+  dela); rede fora ou 5xx tenta de novo a cada 5 s por 1 min, e o que não foi confirmado nunca é
+  descartado, vai junto na próxima escolha. O que este aparelho ainda não confirmou vence o guardado, e o
+  já confirmado vem do servidor (outro aparelho pode tê-lo mudado); o envio final manda o que a tela
+  mostra; leitura começada antes de uma gravação confirmar é refeita, e o painel abre na primeira
+  que falta. O conector não
+  vê o rascunho: o `decide` continua com o lote inteiro.
 - **Falha em segundo plano vai ao diário.** Releitura que falha mantém o resumo anterior e registra
   `rust.work_review` com o código, uma vez por minuto por sessão e código; a tela não vê. Falha da
   leitura que a pessoa pediu (abrir o painel, enviar) aparece na seção.

@@ -1,4 +1,4 @@
-//! Catálogos e escolha de modelo Pi, omp e Kimi, com confirmação no agente.
+//! Catálogos e escolha de modelo Pi, omp, Kimi e Antigravity, com confirmação no agente.
 pub mod driver;
 pub mod inbox;
 mod pure;

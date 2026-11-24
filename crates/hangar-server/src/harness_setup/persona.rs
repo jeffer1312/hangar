@@ -43,20 +43,24 @@ pub fn sync(home: &Path) -> Result<Vec<String>, String> {
     let source = home.join(".claude/CLAUDE.md");
     let mut done = Vec::new();
     let mut warnings = Vec::new();
-    for (name, relative, persona) in [
-        ("kimi", ".kimi-code", "AGENTS.md"),
-        ("pi", ".pi/agent", "CLAUDE.md"),
+    let agy = hangar_antigravity::Account::default();
+    // `root` diz se o agente já foi usado; `dir` é onde ele lê as instruções globais. O `agy` lê as
+    // regras globais de `~/.gemini/config/AGENTS.md` mesmo numa conta adicional.
+    for (name, root, dir, persona) in [
+        ("kimi", home.join(".kimi-code"), home.join(".kimi-code"), "AGENTS.md"),
+        ("pi", home.join(".pi/agent"), home.join(".pi/agent"), "CLAUDE.md"),
+        ("agy", agy.data_dir(home), agy.gemini_dir(home).join("config"), "AGENTS.md"),
     ] {
-        let root = home.join(relative);
         if !root.is_dir() {
             continue;
         }
-        if source.is_file()
-            && !link(&root.join(persona), &source, false).map_err(|e| e.to_string())?
-        {
-            warnings.push(format!(
-                "  {name}: {persona} já existe como arquivo de verdade — não mexi"
-            ));
+        if source.is_file() {
+            fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            if !link(&dir.join(persona), &source, false).map_err(|e| e.to_string())? {
+                warnings.push(format!(
+                    "  {name}: {persona} já existe como arquivo de verdade — não mexi"
+                ));
+            }
         }
         done.push(name);
         if name == "pi" {
@@ -85,4 +89,43 @@ pub fn sync(home: &Path) -> Result<Vec<String>, String> {
     let mut messages = vec![format!("ponte: {label}")];
     messages.extend(warnings);
     Ok(messages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join(".claude/plugins")).unwrap();
+        fs::write(home.path().join(".claude/plugins/installed_plugins.json"), "{}").unwrap();
+        fs::write(home.path().join(".claude/CLAUDE.md"), "# regras\n").unwrap();
+        home
+    }
+
+    #[test]
+    fn agy_gets_the_global_instructions_only_where_it_was_used() {
+        let home = home();
+        let rules = home.path().join(".gemini/config/AGENTS.md");
+        assert_eq!(sync(home.path()).unwrap(), ["ponte: nenhum agente instalado, nada a fazer"]);
+        assert!(!home.path().join(".gemini").exists(), "sem uso do agy nada nasce");
+        fs::create_dir_all(home.path().join(".gemini/antigravity-cli")).unwrap();
+        assert_eq!(sync(home.path()).unwrap(), ["ponte: agy"]);
+        assert_eq!(fs::read_link(&rules).unwrap(), home.path().join(".claude/CLAUDE.md"));
+        assert_eq!(sync(home.path()).unwrap(), ["ponte: agy"], "segunda vez não muda nada");
+        assert_eq!(fs::read_link(&rules).unwrap(), home.path().join(".claude/CLAUDE.md"));
+    }
+
+    #[test]
+    fn agy_keeps_a_rules_file_of_the_person() {
+        let home = home();
+        let rules = home.path().join(".gemini/config/AGENTS.md");
+        fs::create_dir_all(home.path().join(".gemini/antigravity-cli")).unwrap();
+        fs::create_dir_all(rules.parent().unwrap()).unwrap();
+        fs::write(&rules, "minhas regras").unwrap();
+        let lines = sync(home.path()).unwrap();
+        assert_eq!(lines[1], "  agy: AGENTS.md já existe como arquivo de verdade — não mexi");
+        assert!(!rules.is_symlink());
+        assert_eq!(fs::read_to_string(&rules).unwrap(), "minhas regras");
+    }
 }

@@ -4,7 +4,7 @@ import {
   clearDraft, clearRecoverableDraft, deliveredDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, reusableUploadPath, withoutUpload,
   writeDraft, writeRecoverableDraft,
   readDictation, writeDictation, clearDictation, finishDictation, recoverDictation, associateDictationTranscript,
-  setDictationInFlight, applyReadyDictation, removeDraftRecording,
+  setDictationInFlight, applyReadyDictation, removeDraftRecording, sameLifeOwner,
 } from './drafts';
 import type { ConversationDraft, DraftAttachment, DictationDraft } from './drafts';
 
@@ -133,6 +133,43 @@ describe('drafts', () => {
     expect(memory.get('draft.v1:linux::sessao')).toBe(raw);
     expect(resolveDraftTranscript('linux', 'sessao', '/sessions/original.jsonl'))
       .toEqual({ draft: value, recoverable: null });
+  });
+
+  it('outra vida com o mesmo nome e sem transcript (Antigravity) não herda o rascunho da sessão Claude anterior', () => {
+    const claude = draft({ text: 'digitado no Claude', life: 'k:claude-velha' });
+    writeDraft('linux', 'sessao', claude);
+    expect(resolveDraftTranscript('linux', 'sessao', null, 'k:antigravity-nova:g:1'))
+      .toEqual({ draft: null, recoverable: claude });
+    expect(readDraft('linux', 'sessao')).toEqual(claude);
+  });
+
+  it('a vida chega depois: associa sem trocar o rascunho, e a geração nova da mesma chave continua dele', () => {
+    const owner = `k:${'a'.repeat(32)}`;
+    const value = draft({ transcript: null });
+    writeDraft('linux', 'sessao', value);
+    const associated = { ...value, life: `${owner}:g:1` };
+    expect(resolveDraftTranscript('linux', 'sessao', null, `${owner}:g:1`)).toEqual({ draft: associated, recoverable: null });
+    expect(readDraft('linux', 'sessao')).toEqual(associated);
+    expect(resolveDraftTranscript('linux', 'sessao', null, `${owner}:g:2`)).toEqual({ draft: associated, recoverable: null });
+    expect(resolveDraftTranscript('linux', 'sessao', null, `k:${'b'.repeat(32)}:g:1`)).toEqual({ draft: null, recoverable: associated });
+  });
+
+  it('reabrir a mesma conversa troca a vida e mantém o rascunho, que passa a guardar a vida nova', () => {
+    const value = draft({ transcript: '/sessions/original.jsonl', life: 't:111' });
+    writeDraft('linux', 'sessao', value);
+    const reopened = { ...value, life: 't:222' };
+    expect(resolveDraftTranscript('linux', 'sessao', '/sessions/original.jsonl', 't:222')).toEqual({ draft: reopened, recoverable: null });
+    expect(readDraft('linux', 'sessao')).toEqual(reopened);
+    expect(resolveDraftTranscript('linux', 'sessao', '/sessions/other.jsonl', 't:222')).toEqual({ draft: null, recoverable: reopened });
+  });
+
+  it('a mesma vida conta outra geração da mesma chave; vidas diferentes não', () => {
+    const owner = `k:${'a'.repeat(32)}`;
+    expect(sameLifeOwner(`${owner}:g:1`, `${owner}:g:2`)).toBe(true);
+    expect(sameLifeOwner(`${owner}:g:1`, `k:${'b'.repeat(32)}:g:1`)).toBe(false);
+    expect(sameLifeOwner('t:1', 't:2')).toBe(false);
+    expect(sameLifeOwner(undefined, undefined)).toBe(true);
+    expect(sameLifeOwner('t:1', undefined)).toBe(false);
   });
 
   it('rascunho recuperável tem chave própria por servidor e sessão, sem tocar a principal', () => {
@@ -346,6 +383,15 @@ describe('ditado conservado na origem', () => {
     expect(applyReadyDictation('linux', 'sessao', transcript)).toBeNull();
     expect(readDraft('linux', 'sessao')).toEqual(current);
     expect(readDictation('linux', 'sessao')?.status).toBe('ready');
+  });
+
+  it('ditado pronto de outra sessão com o mesmo nome não entra no campo da nova; na mesma, entra', () => {
+    const old = draft({ transcript: null, life: `k:${'a'.repeat(32)}:g:1` });
+    writeDraft('linux', 'sessao', old);
+    writeDictation('linux', 'sessao', voice({ status: 'ready', text: 'Ditado', transcript: null }));
+    expect(applyReadyDictation('linux', 'sessao', null, `k:${'b'.repeat(32)}:g:1`)).toBeNull();
+    expect(readDraft('linux', 'sessao')).toEqual(old);
+    expect(applyReadyDictation('linux', 'sessao', null, `k:${'a'.repeat(32)}:g:2`)?.draft?.text).toBe('Mensagem atual Ditado');
   });
 
   it('ditado novo não grava por cima de um POST vivo da mesma conversa', () => {

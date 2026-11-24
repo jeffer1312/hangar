@@ -158,6 +158,11 @@ pub fn session_token_ok(secret: &str, name: &str, token: &str) -> bool {
     expected.as_bytes().ct_eq(token.as_bytes()).into()
 }
 
+/// O processo do token com chave (`chave.hmac`): a faixa solta é dele, não só do nome.
+fn token_owner(token: &str) -> Option<&str> {
+    token.split_once('.').map(|(key, _)| key)
+}
+
 pub fn machine_key(secret: &str) -> String { hmac_hex(secret, "plugin:machine") }
 
 pub fn machine_key_ok(secret: &str, key: &str) -> bool {
@@ -246,7 +251,7 @@ pub async fn ui(State(st): State<Arc<AppState>>, req: Request) -> Response {
         return forbidden();
     }
     let Some(name) = name else {
-        st.mods.loose_ui(&sessao, body.above, body.panes);
+        st.mods.loose_ui(&sessao, token_owner(&token), body.above, body.panes);
         return ok();
     };
     // Sessão do Rust sem terminal: a faixa dela vem da superfície; do plugin entram só o que ele atende e o
@@ -270,7 +275,7 @@ pub async fn toast(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let (plugin, ms) = (body.plugin.as_deref().unwrap_or(""), toast_ms(body.timeout_ms));
     match name {
         Some(name) => if let Some(life) = st.mods.life(&name) { st.mods.toast(&name, life, plugin, &body.text, ms) },
-        None => st.mods.loose_toast(&envelope.sessao, plugin, &body.text, ms),
+        None => st.mods.loose_toast(&envelope.sessao, token_owner(&envelope.token), plugin, &body.text, ms),
     }
     ok()
 }
@@ -361,8 +366,8 @@ mod tests {
             let got = toast_ms(ms);
             prop_assert!(got == 0 || (1000..=300_000).contains(&got));
             let mods = crate::mods::state::Mods::default();
-            mods.loose_toast("solta", &plugin, &text, got);
-            mods.loose_ui("solta", Value::Null, Vec::new());
+            mods.loose_toast("solta", None, &plugin, &text, got);
+            mods.loose_ui("solta", None, Value::Null, Vec::new());
         }
     }
 }

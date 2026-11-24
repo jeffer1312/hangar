@@ -8,6 +8,8 @@ use serde_json::{Map, Value};
 
 use crate::{event, finish, py};
 
+mod tools;
+
 const REQUEST_OPEN: &str = "<USER_REQUEST>";
 const REQUEST_CLOSE: &str = "</USER_REQUEST>";
 
@@ -39,14 +41,20 @@ impl AgyStream {
                 for (n, call) in value["tool_calls"].as_array().into_iter().flatten().enumerate() {
                     let id = format!("agy:{step}:{n}");
                     self.pending.push_back(id.clone());
-                    events.push(ChatEvent { ts, tool_name: call["name"].as_str().map(str::to_owned), tool_input: Some(args(&call["args"])),
+                    let (tool_name, tool_input) = match call["name"].as_str() {
+                        Some(name) => { let (name, input) = tools::canonical(name, args(&call["args"])); (Some(name), input) }
+                        None => (None, args(&call["args"])),
+                    };
+                    events.push(ChatEvent { ts, tool_name, tool_input: Some(tool_input),
                         tool_use_id: Some(id.clone()), ..event(ChatKind::ToolUse, id) });
                 }
             }
-            Some("GENERIC") => {
+            // Versão do agy que grava a saída do comando em passo próprio, com o código de saída.
+            Some("GENERIC" | "RUN_COMMAND") => {
                 let call = self.pending.pop_front();
+                let failed = value["status"] == "ERROR" || value["exit_code"].as_i64().is_some_and(|code| code != 0);
                 events.push(ChatEvent { ts, tool_use_id: call, result: Some(content.to_owned()),
-                    is_error: Some(value["status"] == "ERROR"), ..event(ChatKind::ToolResult, format!("res:agy:{step}")) });
+                    is_error: Some(failed), ..event(ChatKind::ToolResult, format!("res:agy:{step}")) });
             }
             _ => {}
         }
@@ -125,15 +133,30 @@ mod tests {
     }
 
     #[test]
+    fn a_command_output_step_closes_the_call_and_a_nonzero_exit_is_an_error() {
+        let events = feed_all(&[
+            json!({"step_index":7,"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"run_command","args":{"CommandLine":"false"}}]}),
+            json!({"step_index":8,"type":"RUN_COMMAND","status":"DONE","exit_code":1,"content":"Command output:\n"}),
+        ]);
+        assert_eq!(events[1].kind, ChatKind::ToolResult);
+        assert_eq!(events[1].tool_use_id.as_deref(), Some("agy:7:0"));
+        assert_eq!(events[1].is_error, Some(true));
+    }
+
+    #[test]
     fn system_messages_stay_out_and_quoted_args_are_unwrapped() {
         let events = feed_all(&[
             json!({"step_index":3,"type":"SYSTEM_MESSAGE","status":"DONE","content":"<SYSTEM_MESSAGE>x</SYSTEM_MESSAGE>"}),
-            json!({"step_index":7,"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"run_command","args":{"CommandLine":"\"ls -la\"","WaitMsBeforeAsync":"5000"}}]}),
+            json!({"step_index":7,"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"run_command","args":{"CommandLine":"\"ls -la\"","WaitMsBeforeAsync":"5000"}},
+                {"name":"command_status","args":{"CommandId":"\"c1\"","WaitDurationSeconds":"5000"}}]}),
         ]);
-        assert_eq!(events.len(), 1);
-        let input = events[0].tool_input.as_ref().unwrap();
-        assert_eq!(input["CommandLine"], "ls -la");
-        assert_eq!(input["WaitMsBeforeAsync"], "5000");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].tool_name.as_deref(), Some("Bash"));
+        assert_eq!(events[0].tool_input.as_ref().unwrap()["command"], "ls -la");
+        let raw = events[1].tool_input.as_ref().unwrap();
+        assert_eq!(events[1].tool_name.as_deref(), Some("command_status"));
+        assert_eq!(raw["CommandId"], "c1");
+        assert_eq!(raw["WaitDurationSeconds"], "5000");
     }
 
     #[test]

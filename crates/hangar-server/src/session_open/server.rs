@@ -20,7 +20,7 @@ use super::{OpenCaller, OpenError, SessionOpenRequest};
 use crate::accounts::environment::AccountEnvironment;
 use crate::routes::AppState;
 
-/// Marca do bastão que o Rust repassa ao Python (`rust`): a sucessora com terminal (Claude, Pi, omp, Kimi) volta como
+/// Marca do bastão que o Rust repassa ao Python (`rust`): a sucessora com terminal (Claude, Pi, omp, Kimi, Antigravity) volta como
 /// pedido de abertura, com a mesma marca, e o Rust a abre. Vinda de fora, sai antes.
 pub const DECLINED: &str = "x-hangar-open";
 

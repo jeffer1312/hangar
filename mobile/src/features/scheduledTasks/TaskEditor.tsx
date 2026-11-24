@@ -5,7 +5,7 @@ import { usePreventRemove } from 'expo-router/react-navigation';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { StyleSheet } from 'react-native-unistyles';
 import { fetchSessionsForServer, getCodexAccountsForServer, getProvidersForServer, listClaudeConfigsForServer,
-  getSessionDefaultsForServer, modelOptionsForServer, providerName, SESSION_PROVIDERS, taskDateParts, taskDateToInstant, validateScheduledTask,
+  getSessionDefaultsForServer, modelOptionsForServer, providerName, CREATE_SESSION_PROVIDERS, taskDateParts, taskDateToInstant, validateScheduledTask,
   type ConfigDirInfo, type CodexAccount, type ModelOption, type Provider, type ScheduledTask, type ScheduledTaskInput,
   type Server, type SessionInfo, type TaskLaunch, type TaskTarget, type TaskValidation } from '@hangar/core';
 import { Pagina } from '../config/Pagina';
@@ -82,8 +82,8 @@ export function TaskEditor({ server, timezone, task, onSave, onClose, onReload, 
         if (!alive) return;
         setProbe(providers);
         if (!launch.provider && !serverProvider) {
-          setServerProvider(SESSION_PROVIDERS.find((p) => providers[p]?.default && providers[p]?.disponivel)
-            ?? SESSION_PROVIDERS.find((p) => providers[p]?.disponivel) ?? 'claude');
+          setServerProvider(CREATE_SESSION_PROVIDERS.find((p) => providers[p]?.default && providers[p]?.disponivel)
+            ?? CREATE_SESSION_PROVIDERS.find((p) => providers[p]?.disponivel) ?? 'claude');
           return;
         }
         const [defaults, modelList, accountList] = await Promise.all([
@@ -166,7 +166,7 @@ export function TaskEditor({ server, timezone, task, onSave, onClose, onReload, 
         <SettingRow icon="Folder" label={m.scheduled_folder()} value={launch.cwd || m.scheduled_choose_folder()} disabled={busy} onPress={() => setFolderOpen(!folderOpen)} />
         {folderOpen ? <CwdPicker server={server} selected={launch.cwd} autoSelect={false} compact onPick={(cwd) => patchLaunch({ cwd })} onDone={() => setFolderOpen(false)} /> : null}
         <SettingRow icon="Activity" label={m.scheduled_agent()} value={providerKnown ? providerName(provider) : m.scheduled_loading()} disabled={busy || catalogLoading}
-          actions={SESSION_PROVIDERS.map((p) => ({ id: p, title: providerName(p), attributes: { disabled: probe[p]?.disponivel === false } }))}
+          actions={CREATE_SESSION_PROVIDERS.map((p) => ({ id: p, title: providerName(p), attributes: { disabled: probe[p]?.disponivel === false } }))}
           onAction={(p) => { setLaunch({ cwd: launch.cwd, provider: p as Provider }); setDirty(true); }} />
         {provider === 'claude' || provider === 'codex' ? <SettingRow icon="User" label={m.scheduled_account()} value={accounts.find((a) => a.id === accountValue)?.label ?? (accountValue || m.scheduled_account_default())}
           disabled={busy || catalogLoading || !!catalogError} actions={[{ id: '', title: m.scheduled_account_default() }, ...accounts.map((a) => ({ id: a.id, title: a.label, attributes: { disabled: a.disabled } }))]}

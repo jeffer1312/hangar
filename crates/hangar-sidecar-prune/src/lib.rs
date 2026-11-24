@@ -1,5 +1,5 @@
 //! Poda dos sidecars de sessão morta em `<conta Claude>/.hangar-*` (statusline, estado, prévia,
-//! fila, bastão, bilhetes do Pi e do Kimi). Sidecar de sessão morta mente — um pane reaproveitado
+//! fila, bastão, bilhetes do Pi, do Kimi e do Antigravity). Sidecar de sessão morta mente — um pane reaproveitado
 //! já mostrou o custo de outra execução —, mas a leitura tem teto próprio: a poda é higiene.
 //!
 //! A regra é conservadora: chave viva nunca sai; chave morta só sai depois de `MIN_AGE`, para a
@@ -32,7 +32,7 @@ const STEM_KEYED: [&str; 6] = [".hangar-status", ".hangar-state", ".hangar-previ
 /// Pelo nome sanitizado: a fila sobrevive ao `/clear` e o bastão é do destino.
 const NAME_KEYED: [(&str, &str); 2] = [(".hangar-queue", ".jsonl"), (".hangar-bastao", ".md")];
 /// Bilhetes: pela chave da sessão, pelo nome (psmux) ou pelo pane, conforme quem gravou.
-const TICKETS: [&str; 2] = [".hangar-pi", ".hangar-kimi"];
+const TICKETS: [&str; 3] = [".hangar-pi", ".hangar-kimi", ".hangar-agy"];
 
 /// Quem está vivo. `None` = não se sabe; nenhum arquivo dessa família sai.
 #[derive(Clone, Debug, Default)]

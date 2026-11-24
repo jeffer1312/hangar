@@ -434,6 +434,13 @@ fn codex_session(srv: &Srv, dir: &Path) {
     srv.python.set_info(info_json("codex", &jsonl));
 }
 
+/// Claude sem terminal e sem ator no registro: o hub só reparte o que as fontes do Rust entregam.
+fn claude_headless_session(srv: &Srv, dir: &Path) {
+    let jsonl = dir.join("s.jsonl");
+    std::fs::write(&jsonl, "").unwrap();
+    srv.python.set_info(info_json("claude-headless", &jsonl));
+}
+
 async fn until_state(es: &mut Events, data: &str) -> Vec<String> {
     let mut seen = Vec::new();
     loop {
@@ -451,14 +458,15 @@ async fn guest_events_drop_plugin_toast_and_nav() {
     let mut hubs = None;
     let srv = plain_srv(dir.path(), |st| { mods = Some(st.mods.clone()); hubs = Some(st.side.hubs.clone()); }).await;
     let hubs = hubs.unwrap();
-    codex_session(&srv, dir.path());
+    // Mods só chegam a sessão do Claude.
+    claude_headless_session(&srv, dir.path());
     let t = srv.g.token("s", Kind::Share);
     let mut owner = sse(open_events(srv.owner, "s", "", &[]).await);
     let mut guest = open_sse(format!("http://{}/api/sessions/s/events?token={t}", srv.guest)).await;
     hubs.deliver("s", "state", "\"m0\"");
     until_state(&mut owner, "\"m0\"").await;
     until_state(&mut guest, "\"m0\"").await;
-    mods.unwrap().loose_toast("s", "m", "segredo", 60000);
+    mods.unwrap().loose_toast("s", None, "m", "segredo", 60000);
     hubs.deliver("s", "nav", &json!({"url": "http://127.0.0.1:5173/?token=dono"}).to_string());
     hubs.deliver("s", "state", "\"m1\"");
     let seen = until_state(&mut owner, "\"m1\"").await;

@@ -125,7 +125,7 @@ pub(crate) async fn renamed(st: &AppState, old: &str, new: &str) {
     }
 }
 
-/// Pi, omp e Kimi não têm retorno automático: nem seguram a assinatura da lista.
+/// Pi, omp, Kimi e Antigravity não têm retorno automático: nem seguram a assinatura da lista.
 fn returnable(provider: &str) -> bool {
     matches!(Provider::parse(provider), Some(Provider::Claude | Provider::ClaudeHeadless | Provider::Codex))
 }
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn only_claude_and_codex() {
         for p in ["claude", "claude-headless", "codex"] { assert!(returnable(p), "{p}"); }
-        for p in ["pi", "omp", "kimi"] { assert!(!returnable(p), "{p}"); }
+        for p in ["pi", "omp", "kimi", "antigravity"] { assert!(!returnable(p), "{p}"); }
     }
 
     #[test]

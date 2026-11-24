@@ -5,8 +5,9 @@ use crate::{
     engines::{mirrors, probe},
     orchestration::codec,
 };
+use crate::accounts::environment::AccountEnvironment;
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, time::Duration};
+use std::{collections::BTreeSet, path::Path, time::Duration};
 #[derive(Debug)]
 pub struct Failure {
     pub code: Option<&'static str>,
@@ -301,64 +302,11 @@ impl Service {
                     .map_err(|e| failed(e.to_string()))?;
                 Ok("fullscreen ligado; vale nas sessões novas".into())
             }
-            "extensoes:pi" | "extensoes:omp" => self.link_extensions(&id[10..]),
+            "extensoes:pi" | "extensoes:omp" => link_extensions(env, &self.repo, &id[10..])
+                .map(|count| format!("{count} extensões ligadas"))
+                .map_err(|e| failed(e.to_string())),
             _ => Err(invalid(format!("conserto desconhecido: {id}"))),
         }
-    }
-    fn link_extensions(&self, cli: &str) -> Result<String, Failure> {
-        let target = health::agent_dir(&self.accounts.env, cli)
-            .map_err(failed)?
-            .join("extensions");
-        std::fs::create_dir_all(&target).map_err(|e| failed(e.to_string()))?;
-        let mut count = 0;
-        for name in [
-            "hangar-state",
-            "rich-status-line",
-            "claude-bridge",
-            "claude-todo",
-            "claude-hooks-adapter",
-            "git-checkpoint",
-            "fullscreen-tui",
-            "lib",
-        ] {
-            let file = if name == "lib" {
-                name.to_owned()
-            } else {
-                format!("{name}.ts")
-            };
-            let path = target.join(&file);
-            let source = self.repo.join("scripts/pi").join(file);
-            let wanted = cli != "omp" || !matches!(name, "claude-todo" | "fullscreen-tui");
-            if !wanted {
-                if path.is_symlink()
-                    && std::fs::canonicalize(&path)
-                        .ok()
-                        .is_some_and(|p| std::fs::canonicalize(&source).ok().as_ref() == Some(&p))
-                {
-                    std::fs::remove_file(path).map_err(|e| failed(e.to_string()))?;
-                }
-                continue;
-            }
-            if !source.exists() || (path.exists() && !path.is_symlink()) {
-                continue;
-            }
-            if path.is_symlink() {
-                std::fs::remove_file(&path).map_err(|e| failed(e.to_string()))?;
-            }
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&source, &path).map_err(|e| failed(e.to_string()))?;
-            #[cfg(windows)]
-            {
-                if name == "lib" {
-                    std::os::windows::fs::symlink_dir(&source, &path)
-                } else {
-                    std::os::windows::fs::symlink_file(&source, &path)
-                }
-                .map_err(|e| failed(e.to_string()))?;
-            }
-            count += 1;
-        }
-        Ok(format!("{count} extensões ligadas"))
     }
     async fn repair_wrapper(&self, id: &str) -> Result<String, Failure> {
         let (argv, label, success) = if cfg!(windows) {
@@ -440,6 +388,114 @@ impl Service {
         Ok(success.into())
     }
 }
+/// Falha ao ligar as extensões; `needs_developer_mode` é o Windows que recusa symlink sem admin.
+#[derive(Debug)]
+pub(super) struct LinkError {
+    pub needs_developer_mode: bool,
+    pub message: String,
+}
+impl std::fmt::Display for LinkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl LinkError {
+    fn other(error: impl ToString) -> Self {
+        Self {
+            needs_developer_mode: false,
+            message: error.to_string(),
+        }
+    }
+    fn symlink(error: std::io::Error) -> Self {
+        if needs_developer_mode(cfg!(windows), &error) {
+            return Self {
+                needs_developer_mode: true,
+                message: format!("symlink sem admin não funciona: ligue o Modo Desenvolvedor (Configurações > Sistema > Para desenvolvedores) e rode de novo ({error})"),
+            };
+        }
+        Self::other(error)
+    }
+}
+/// 1314 é ERROR_PRIVILEGE_NOT_HELD: o Windows sem Modo Desenvolvedor nem admin.
+fn needs_developer_mode(windows: bool, error: &std::io::Error) -> bool {
+    windows
+        && (error.raw_os_error() == Some(1314)
+            || error.kind() == std::io::ErrorKind::PermissionDenied)
+}
+/// Liga as extensões do Pi ou do omp às de `repo`; o painel e o instalador passam por aqui.
+/// Arquivo que não é symlink é da pessoa e fica; devolve quantas foram ligadas.
+pub(super) fn link_extensions(
+    env: &AccountEnvironment,
+    repo: &Path,
+    cli: &str,
+) -> Result<usize, LinkError> {
+    let target = health::agent_dir(env, cli)
+        .map_err(LinkError::other)?
+        .join("extensions");
+    std::fs::create_dir_all(&target).map_err(LinkError::other)?;
+    // O link resolve a partir de `extensions`: `--repo .` relativo apontaria para lá e sairia quebrado.
+    let repo = std::path::absolute(repo).map_err(LinkError::other)?;
+    let mut count = 0;
+    for name in [
+        "hangar-state",
+        "rich-status-line",
+        "claude-bridge",
+        "claude-todo",
+        "claude-hooks-adapter",
+        "git-checkpoint",
+        "fullscreen-tui",
+        "lib",
+    ] {
+        let file = if name == "lib" {
+            name.to_owned()
+        } else {
+            format!("{name}.ts")
+        };
+        let path = target.join(&file);
+        let source = repo.join("scripts/pi").join(file);
+        let wanted = cli != "omp" || !matches!(name, "claude-todo" | "fullscreen-tui");
+        if !wanted {
+            if path.is_symlink()
+                && std::fs::canonicalize(&path)
+                    .ok()
+                    .is_some_and(|p| std::fs::canonicalize(&source).ok().as_ref() == Some(&p))
+            {
+                remove_link(&path).map_err(LinkError::other)?;
+            }
+            continue;
+        }
+        if !source.exists() || (path.exists() && !path.is_symlink()) {
+            continue;
+        }
+        if path.is_symlink() {
+            remove_link(&path).map_err(LinkError::other)?;
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&source, &path).map_err(LinkError::symlink)?;
+        #[cfg(windows)]
+        {
+            if name == "lib" {
+                std::os::windows::fs::symlink_dir(&source, &path)
+            } else {
+                std::os::windows::fs::symlink_file(&source, &path)
+            }
+            .map_err(LinkError::symlink)?;
+        }
+        count += 1;
+    }
+    Ok(count)
+}
+/// No Windows o link de pasta (`lib`) só sai por `remove_dir`; `remove_file` falha nele.
+fn remove_link(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink_dir()) {
+            return std::fs::remove_dir(path);
+        }
+    }
+    std::fs::remove_file(path)
+}
 fn omp_key(
     env: &crate::accounts::environment::AccountEnvironment,
     provider: &str,
@@ -472,5 +528,106 @@ fn omp_key(
         Ok(false) => (true, "ja-existe".into()),
         Ok(true) => (true, path.to_string_lossy().into_owned()),
         Err(e) => (false, format!("sqlite: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_windows_asks_for_developer_mode() {
+        let privilege = std::io::Error::from_raw_os_error(1314);
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(needs_developer_mode(true, &privilege));
+        assert!(needs_developer_mode(true, &denied));
+        assert!(!needs_developer_mode(true, &missing));
+        assert!(!needs_developer_mode(false, &privilege));
+        assert!(!needs_developer_mode(false, &denied));
+    }
+
+    #[cfg(unix)]
+    mod links {
+        use super::*;
+        use std::path::PathBuf;
+
+        const ALL: [&str; 7] = [
+            "hangar-state",
+            "rich-status-line",
+            "claude-bridge",
+            "claude-todo",
+            "claude-hooks-adapter",
+            "git-checkpoint",
+            "fullscreen-tui",
+        ];
+
+        fn setup() -> (tempfile::TempDir, AccountEnvironment, PathBuf) {
+            let home = tempfile::tempdir().unwrap();
+            let env = AccountEnvironment::from_pairs([
+                ("HOME", home.path().to_string_lossy().to_string()),
+                ("PATH", String::new()),
+            ]);
+            let repo = home.path().join("repo");
+            let pi = repo.join("scripts/pi");
+            std::fs::create_dir_all(pi.join("lib")).unwrap();
+            for name in ALL {
+                std::fs::write(pi.join(format!("{name}.ts")), "// ext\n").unwrap();
+            }
+            (home, env, repo)
+        }
+
+        fn points_to(link: &Path, source: &Path) -> bool {
+            link.is_symlink()
+                && std::fs::canonicalize(link).unwrap() == std::fs::canonicalize(source).unwrap()
+        }
+
+        #[test]
+        fn pi_gets_every_extension_and_the_lib() {
+            let (_home, env, repo) = setup();
+            assert_eq!(link_extensions(&env, &repo, "pi").unwrap(), 8);
+            let dir = health::agent_dir(&env, "pi").unwrap().join("extensions");
+            for name in ALL {
+                let file = format!("{name}.ts");
+                assert!(points_to(&dir.join(&file), &repo.join("scripts/pi").join(&file)), "{name}");
+            }
+            assert!(points_to(&dir.join("lib"), &repo.join("scripts/pi/lib")));
+            assert_eq!(health::extensions(&env, &repo, "pi").unwrap()["ok"], true);
+            // De novo refaz os mesmos links, sem erro.
+            assert_eq!(link_extensions(&env, &repo, "pi").unwrap(), 8);
+        }
+
+        #[test]
+        fn omp_drops_the_links_it_has_natively() {
+            let (_home, env, repo) = setup();
+            let dir = health::agent_dir(&env, "omp").unwrap().join("extensions");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::os::unix::fs::symlink(repo.join("scripts/pi/claude-todo.ts"), dir.join("claude-todo.ts")).unwrap();
+            assert_eq!(link_extensions(&env, &repo, "omp").unwrap(), 6);
+            assert!(!dir.join("claude-todo.ts").exists() && !dir.join("claude-todo.ts").is_symlink());
+            assert!(!dir.join("fullscreen-tui.ts").exists());
+            assert!(points_to(&dir.join("hangar-state.ts"), &repo.join("scripts/pi/hangar-state.ts")));
+            assert_eq!(health::extensions(&env, &repo, "omp").unwrap()["ok"], true);
+        }
+
+        #[test]
+        fn a_file_of_the_person_stays() {
+            let (_home, env, repo) = setup();
+            let dir = health::agent_dir(&env, "pi").unwrap().join("extensions");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("hangar-state.ts"), "// minha\n").unwrap();
+            assert_eq!(link_extensions(&env, &repo, "pi").unwrap(), 7);
+            assert!(!dir.join("hangar-state.ts").is_symlink());
+            assert_eq!(std::fs::read_to_string(dir.join("hangar-state.ts")).unwrap(), "// minha\n");
+        }
+
+        #[test]
+        fn a_missing_source_is_not_linked() {
+            let (_home, env, repo) = setup();
+            std::fs::remove_file(repo.join("scripts/pi/git-checkpoint.ts")).unwrap();
+            assert_eq!(link_extensions(&env, &repo, "pi").unwrap(), 7);
+            let dir = health::agent_dir(&env, "pi").unwrap().join("extensions");
+            assert!(!dir.join("git-checkpoint.ts").is_symlink());
+        }
     }
 }

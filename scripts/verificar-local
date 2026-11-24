@@ -104,7 +104,7 @@ base_padrao() {
 # Imprime "linux: p1 p2" e "windows: p1" a partir da lista de arquivos no stdin.
 classificar() {
     local f lin=() win=()
-    local rust=0 back=0 front=0 mobile=0 nativo=0 wrap=0 status=0 pi=0 winback=0
+    local rust=0 back=0 front=0 mobile=0 nativo=0 wrap=0 status=0 pi=0 winback=0 winwrap=0
     while IFS= read -r f; do
         [[ -z "$f" ]] && continue
         case "$f" in
@@ -145,6 +145,9 @@ classificar() {
         case "$f" in
             *.ps1) winback=1 ;;
         esac
+        case "$f" in
+            scripts/shell/*.ps1|scripts/windows-wrappers.ps1|scripts/setup-windows-wrappers.ps1|scripts/test-windows-wrappers.ps1) winwrap=1 ;;
+        esac
     done
     (( rust )) && lin+=(rust) && win+=(rust)
     (( back )) && lin+=(backend)
@@ -155,19 +158,20 @@ classificar() {
     (( status )) && lin+=(statusline) && win+=(statusline)
     (( pi )) && lin+=(pi)
     (( winback && ! rust )) && win+=(runtime)
+    (( winwrap )) && win+=(wrappers)
     echo "linux: ${lin[*]}"
     echo "windows: ${win[*]}"
 }
 
 TODOS_LINUX="rust backend front mobile nativo shell statusline pi"
-TODOS_WINDOWS="rust statusline"
+TODOS_WINDOWS="rust statusline wrappers"
 RAPIDOS="rust_rapido backend_rapido front_rapido mobile_rapido"
 
 # O plano padrão, que as travas exigem: só o ligado aos arquivos mudados (cada passo `*_rapido` lê a
 # lista); a bateria inteira é do CI e do `--completo`. Windows só com arquivo de Windows no diff.
 classificar_rapido() {
     local f lin=() win=()
-    local rust=0 back=0 front=0 mobile=0 nativo=0 wrap=0 status=0 pi=0 winback=0
+    local rust=0 back=0 front=0 mobile=0 nativo=0 wrap=0 status=0 pi=0 winback=0 winwrap=0
     while IFS= read -r f; do
         [[ -z "$f" ]] && continue
         case "$f" in crates/*) rust=1 ;; esac
@@ -187,6 +191,9 @@ classificar_rapido() {
         case "$f" in scripts/*statusline*) status=1 ;; esac
         case "$f" in scripts/pi/*|scripts/test-pi-hangar-state.mjs) pi=1 ;; esac
         case "$f" in *.ps1|crates/hangar-core/src/fs.rs) winback=1 ;; esac
+        case "$f" in
+            scripts/shell/*.ps1|scripts/windows-wrappers.ps1|scripts/setup-windows-wrappers.ps1|scripts/test-windows-wrappers.ps1) winwrap=1 ;;
+        esac
     done
     (( rust )) && lin+=(rust_rapido)
     (( back )) && lin+=(backend_rapido)
@@ -197,6 +204,7 @@ classificar_rapido() {
     (( status )) && lin+=(statusline) && win+=(statusline)
     (( pi )) && lin+=(pi)
     (( winback )) && win+=(runtime)
+    (( winwrap )) && win+=(wrappers)
     echo "linux: ${lin[*]}"
     echo "windows: ${win[*]}"
 }
@@ -346,6 +354,10 @@ passo_shell() {
     [[ "$SO" == linux ]] && { bash scripts/test-deploy.sh || return 1; }
     [[ ! -f scripts/test-claude-conta.sh ]] || bash scripts/test-claude-conta.sh || return 1
     [[ ! -f scripts/test-services-launchd.sh ]] || bash scripts/test-services-launchd.sh || return 1
+    # Fora do Windows a mesma prova dos wrappers do PowerShell, quando há pwsh (sem a busca e o perfil).
+    if [[ "$SO" == linux ]] && command -v pwsh >/dev/null 2>&1; then
+        pwsh -NoProfile -NonInteractive -File scripts/test-windows-wrappers.ps1 || return 1
+    fi
     return 0
 }
 passo_statusline() {
@@ -354,6 +366,14 @@ passo_statusline() {
     return 0
 }
 passo_pi() { node scripts/test-pi-hangar-state.mjs; }
+# Os wrappers do PowerShell nas duas versões: o 5.1 é o terminal padrão do Windows e o que estraga aspas.
+passo_wrappers() {
+    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test-windows-wrappers.ps1 || return 1
+    if command -v pwsh >/dev/null 2>&1; then
+        pwsh -NoProfile -NonInteractive -File scripts/test-windows-wrappers.ps1 || return 1
+    fi
+    return 0
+}
 
 # ── passos rápidos: só o ligado aos arquivos mudados (ARQUIVOS, um por linha); o resto é do CI ──
 # Chamam vitest/tsc direto, fora do flock global dos scripts npm: a fila daquele é a das suítes
@@ -959,7 +979,7 @@ filtrar() {   # $1 = lista, resto = passos aceitos; imprime a lista só com os a
     echo "${saida[*]}"
 }
 if [[ -n "$so_passos" ]]; then
-    for p in $so_passos; do [[ " $TODOS_LINUX $RAPIDOS " == *" $p "* ]] || erro "passo desconhecido: $p"; done
+    for p in $so_passos; do [[ " $TODOS_LINUX $TODOS_WINDOWS $RAPIDOS " == *" $p "* ]] || erro "passo desconhecido: $p"; done
     # O rápido precisa da lista de arquivos mudados, que o --tudo não calcula.
     (( tudo )) && [[ " $so_passos " == *"_rapido "* ]] && erro "--tudo roda passos completos; sem passo rápido"
     # shellcheck disable=SC2086
