@@ -251,15 +251,27 @@ impl Engine {
             state.slots.get(&session.name).filter(|slot| slot.life == session.lifecycle_id)
                 .and_then(|slot| Some((slot.target.clone()?, slot.summary.as_ref().map(|summary| summary.review_id.clone()))))
         };
+        // Resumo de outra rodada pode só estar atrasado: relê antes de recusar.
         let (target, current) = match known {
-            Some(known) => known,
-            None => {
+            Some((target, Some(review))) if review == draft.review_id => (target, Some(review)),
+            _ => {
                 let linked = self.read(&session, false).await?.ok_or(Failure::NotLinked)?;
                 (linked.target, linked.review.map(|review| review.id))
             }
         };
         if current.as_deref() != Some(draft.review_id.as_str()) {
             return Err(CallError::connector(ErrorCode::StaleReview, "a revisão mudou; releia antes de marcar").into());
+        }
+        // Junta por decisão: outro aparelho que não viu as escolhas deste não as apaga.
+        let mut draft = draft;
+        match self.drafts.read(&target.connector, &target.ticket_id).await {
+            Ok(Some(saved)) if saved.review_id == draft.review_id => {
+                let mut choices = saved.choices;
+                choices.append(&mut draft.choices);
+                draft.choices = choices;
+            }
+            Ok(_) => {}
+            Err(error) => self.warn(&session.name, "work_review_draft_unreadable", &error.kind().to_string()),
         }
         self.drafts.write(&target.connector, &target.ticket_id, &draft).await
             .map_err(|error| CallError::connector(ErrorCode::Unavailable, format!("escolhas não gravadas: {error}")).into())

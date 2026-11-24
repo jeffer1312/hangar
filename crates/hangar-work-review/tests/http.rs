@@ -145,6 +145,13 @@ async fn a_saved_draft_comes_back_until_the_round_changes() {
     let expected = json!({"47": {"choice": "manter", "reason": "regra do Delphi"}, "86": {"choice": "igualar", "reason": ""}});
     let (_, body) = routes.send("GET", read, Some(TOKEN), None).await;
     assert_eq!(body["draft"], expected, "a decisão que a rodada não tem fica de fora: {body}");
+    // Outro aparelho que só conhece a 86 não apaga a 47: o servidor junta por decisão.
+    let other = json!({"review_id": "r-1", "choices": {"86": {"choice": "manter", "reason": "do celular"}}});
+    let (status, body) = routes.send("PUT", uri, Some(TOKEN), Some(other.to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let expected = json!({"47": {"choice": "manter", "reason": "regra do Delphi"}, "86": {"choice": "manter", "reason": "do celular"}});
+    let (_, body) = routes.send("GET", read, Some(TOKEN), None).await;
+    assert_eq!(body["draft"], expected, "juntado por decisão: {body}");
     routes.app = router(&routes.bench, hangar_work_review::Engine::new(routes.bench.host.clone(), routes.bench.store.clone(),
         routes.bench.sessions.clone(), routes.bench.diag.clone(), routes.bench.path("cache"), routes.bench.path("drafts")));
     let (_, body) = routes.send("GET", read, Some(TOKEN), None).await;

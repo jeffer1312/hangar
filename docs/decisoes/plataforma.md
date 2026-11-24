@@ -5484,8 +5484,9 @@ motor no crate `hangar-work-review`, ligado em `crates/hangar-server/src/work_re
   cliente até o "Enviar": trocar de sessão ou fechar o app perdeu 50 decisões de uma comparação com o mock. Cada escolha
   e cada motivo vão por `PUT /api/sessions/{nome}/work-review/draft` (`{"review_id", "choices"}`),
   gravado em `~/.hangar/work-review-drafts/<sha1 do conector e do ticket>.json` (não é cache); o `GET` da
-  sessão devolve `draft` só da rodada lida e só com decisão e escolha que ela ainda mostra. Rodada
-  diferente da lida é 409 `stale_review`. O cliente faz uma gravação por vez por sessão e manda só a
+  sessão devolve `draft` só da rodada lida e só com decisão e escolha que ela ainda mostra. O servidor junta por decisão com o que já guardou da mesma
+  rodada (outro aparelho aberto não apaga as escolhas deste), e resumo de outra rodada é relido antes
+  de recusar; rodada diferente da lida de novo é 409 `stale_review`. O cliente faz uma gravação por vez por sessão e manda só a
   última; rede fora ou 5xx tenta de novo a cada 5 s por 1 min. A escolha feita aqui vence a ainda em
   gravação, que vence a guardada (a leitura que volta antes da gravação não a apaga), e o painel abre na
   primeira que falta. O conector não
