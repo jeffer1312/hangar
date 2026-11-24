@@ -972,14 +972,20 @@ async fn direct_delivery_background_agent_does_not_hold_a_prompt() {
         assert!(f.sent_prompts().iter().any(|text| text == "Próxima mensagem"), "{pane}");
         h.stop().await.unwrap();
     }
-    // Com o turno principal trabalhando (linha viva acima da caixa), o painel de agentes não libera a entrega.
-    let f = Fixture::new().await;
-    f.idle.store(false, Ordering::Release);
-    let h = f.start();
-    *f.io.panes.lock().unwrap() = vec![format!("● resposta\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n{rule}\n❯ \n{rule}\n{panel}\n")];
-    let result = h.command(f.command("working", "Próxima mensagem")).await.unwrap();
-    assert_eq!(result.payload["code"], "terminal_turn_hold", "{}", result.payload);
-    h.stop().await.unwrap();
+    // Com o turno principal trabalhando (linha viva acima da caixa), o painel de agentes não libera a entrega,
+    // nem quando uma linha `●` fora do formato dos mods fica entre a linha viva e a caixa.
+    for pane in [
+        format!("● resposta\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n{rule}\n❯ \n{rule}\n{panel}\n"),
+        format!("● resposta\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n● faixa de outro plugin\n{rule}\n❯ \n{rule}\n{panel}\n"),
+    ] {
+        let f = Fixture::new().await;
+        f.idle.store(false, Ordering::Release);
+        let h = f.start();
+        *f.io.panes.lock().unwrap() = vec![pane.clone()];
+        let result = h.command(f.command("working", "Próxima mensagem")).await.unwrap();
+        assert_eq!(result.payload["code"], "terminal_turn_hold", "{pane}: {}", result.payload);
+        h.stop().await.unwrap();
+    }
 }
 #[tokio::test]
 async fn terminal_runtime_steer_without_body_steers_the_first_waiting_entry() {

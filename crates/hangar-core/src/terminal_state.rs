@@ -292,12 +292,20 @@ pub fn footer_focus(pane: &str) -> bool {
         .any(|l| P.agent_cursor.is_match(l) || l.contains("Enter to view") || l.contains("↑/↓ to select")))
 }
 
-/// Painel de agentes do Claude Code abaixo da caixa ("● main" e um "◯ <subagente> …" por subagente vivo): é o
-/// único sinal na tela do subagente em segundo plano quando a CLI não mostra a linha "Waiting for …".
+/// Painel de agentes do Claude Code abaixo da caixa ("● main" e um "◯ <subagente> …" por subagente vivo), sem quadro
+/// da animação do turno acima dela: é o único sinal na tela de que só o subagente trabalha quando a CLI não mostra a
+/// linha "Waiting for …". O quadro é procurado em toda a tela, não só abaixo da última resposta: uma linha `●` de outro
+/// painel entre ele e a caixa o esconderia do `analyze`.
 pub fn background_agents_listed(pane: &str) -> bool {
     let lines = lines(pane);
-    composer_end(&lines, lines.len()).is_some_and(|end| lines[end + 1..].iter()
-        .any(|l| left(l).trim_start_matches('❯').trim_start().starts_with("◯ ")))
+    let frame = |l: &str| {
+        let s = trim(l);
+        let mut chars = s.chars();
+        let glyph = chars.next().is_some_and(|c| SPINNERS.contains(c) || c == '*') && chars.next() == Some(' ');
+        glyph && s.split_once('…').is_some_and(|(_, rest)| rest.trim_start().starts_with('('))
+    };
+    composer_end(&lines, lines.len()).is_some_and(|end| !lines[..end].iter().any(|l| frame(l))
+        && lines[end + 1..].iter().any(|l| left(l).trim_start_matches('❯').trim_start().starts_with("◯ ")))
 }
 
 fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
