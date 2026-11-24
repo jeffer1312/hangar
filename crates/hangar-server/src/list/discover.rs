@@ -584,6 +584,30 @@ fn agent_of_pane(tree: Option<&Tree>) -> (&'static str, Option<i64>) {
         .unwrap_or(("claude", None))
 }
 
+/// Pid dono do `sessions/<pid>.json` do agente `pid`. O Claude nativo pode se relançar como filho único
+/// com os mesmos argumentos, e aí só o filho grava o registro; o pai segue sendo o agente da sessão.
+pub(crate) fn native_owner(procs: &dyn ProcessView, config: &Path, pid: i64) -> i64 {
+    if config.join("sessions").join(format!("{pid}.json")).exists() { return pid; }
+    // Sem a árvore, fica o próprio pid: o registro continua ausente e quem lê segue a prova sem ele.
+    procs.children(std::time::Duration::ZERO).map_or(pid, |children| reexec_leaf(procs, pid, &children))
+}
+
+fn reexec_leaf(procs: &dyn ProcessView, mut pid: i64, children: &ChildrenMap) -> i64 {
+    let mut seen = HashSet::new();
+    while seen.insert(pid) {
+        let argv = procs.argv(pid);
+        let Some((_, args)) = argv.split_first().filter(|(_, args)| !args.is_empty()) else { break };
+        let same: Vec<i64> = children.get(&pid).into_iter().flatten().copied()
+            .filter(|child| procs.argv(*child).split_first().is_some_and(|(_, rest)| rest == args))
+            .collect();
+        match same.as_slice() {
+            [child] => pid = *child,
+            _ => break,
+        }
+    }
+    pid
+}
+
 /// Uma linha por sessão do multiplexador, na ordem do `list-panes`, sem as escondidas e sem as que
 /// `skip` tira pelo nome (sidecar Codex de mesmo nome, `registry.py:1331`): estas nem passam pela
 /// resolução, para não mexer no cache de quem não aparece.
@@ -681,6 +705,35 @@ mod tests {
         fn env_var(&self, _: i64, _: &str) -> io::Result<Option<OsString>> { Ok(None) }
         fn start_time(&self, _: i64) -> Option<f64> { None }
         fn fds(&self, _: i64) -> Vec<PathBuf> { Vec::new() }
+    }
+
+    struct Argvs(HashMap<i64, Vec<String>>, ChildrenMap);
+    impl ProcessView for Argvs {
+        fn children(&self, _: Duration) -> io::Result<Arc<ChildrenMap>> { Ok(Arc::new(self.1.clone())) }
+        fn argv(&self, pid: i64) -> Vec<String> { self.0.get(&pid).cloned().unwrap_or_default() }
+        fn cwd(&self, _: i64) -> Option<PathBuf> { None }
+        fn env_var(&self, _: i64, _: &str) -> io::Result<Option<OsString>> { Ok(None) }
+        fn start_time(&self, _: i64) -> Option<f64> { None }
+        fn fds(&self, _: i64) -> Vec<PathBuf> { Vec::new() }
+    }
+
+    #[test]
+    fn native_record_of_a_claude_relaunched_as_its_own_child_is_the_childs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sessions")).unwrap();
+        let args = |exe: &str| [exe, "--session-id", "S", "prompt"].map(String::from).to_vec();
+        let children = ChildrenMap::from([(10, vec![11]), (11, vec![12])]);
+        let procs = Argvs(HashMap::from([(10, args("claude")), (11, args("/h/.local/share/claude/versions/2.1.331")),
+            (12, vec!["hangar-computer".into()])]), children.clone());
+        assert_eq!(native_owner(&procs, dir.path(), 10), 11);
+        std::fs::write(dir.path().join("sessions").join("10.json"), "{}").unwrap();
+        assert_eq!(native_owner(&procs, dir.path(), 10), 10, "o registro do próprio pid vence");
+        // Filho com outros argumentos é processo do Claude, não o próprio Claude relançado.
+        let other = Argvs(HashMap::from([(20, args("claude")), (21, vec!["/h/versions/2.1.331".into(), "-p".into(), "x".into()])]),
+            ChildrenMap::from([(20, vec![21])]));
+        assert_eq!(native_owner(&other, dir.path(), 20), 20);
+        let bare = Argvs(HashMap::from([(30, vec!["claude".into()]), (31, vec!["bash".into()])]), ChildrenMap::from([(30, vec![31])]));
+        assert_eq!(native_owner(&bare, dir.path(), 30), 30, "sem argumentos não há o que comparar");
     }
 
     fn pane(name: &str, cwd: &str) -> Pane {

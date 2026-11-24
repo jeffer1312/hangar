@@ -199,6 +199,7 @@ pub fn target_value(target:&super::terminal::TerminalTarget)->serde_json::Value 
             "agent_birth":target.metadata.agent_birth,"legacy_import_after":target.metadata.legacy_import_after,"fingerprint":target.metadata.fingerprint,"origin":target.metadata.origin}})
 }
 pub fn read_native_conversation(config:&std::path::Path,pid:i64)->Result<String,RuntimeError> {
+    let pid=crate::list::discover::native_owner(&crate::list::procs::SystemProcs::default(),config,pid);
     let raw=std::fs::read(config.join("sessions").join(format!("{pid}.json"))).map_err(|_|failure("lifecycle_native_read"))?;
     let value:serde_json::Value=serde_json::from_slice(&raw).map_err(|_|failure("lifecycle_native_read"))?;
     let sid=value["sessionId"].as_str().filter(|sid|!sid.is_empty() && sid.bytes().all(|b|b.is_ascii_alphanumeric() || b"-_".contains(&b))).ok_or_else(||failure("lifecycle_native_read"))?;

@@ -66,9 +66,10 @@ impl TerminalMetadata {
             if matches.next().is_some() { return Err(ServiceError("terminal_metadata_ambiguous")); }
             let pid = row.agent_pid.and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0).ok_or(ServiceError("terminal_metadata_process_unavailable"))?;
             let birth = agent_birth(pid).ok_or(ServiceError("terminal_agent_unavailable"))?;
-            let record = read_native_record(&config.join("sessions").join(format!("{pid}.json")))?;
+            let owner = crate::list::discover::native_owner(&procs, &config, i64::from(pid));
+            let record = read_native_record(&config.join("sessions").join(format!("{owner}.json")))?;
             let proven = match record {
-                Some(record) => record["pid"].as_u64() == Some(u64::from(pid)) && record["sessionId"].as_str() == Some(&binding.conversation),
+                Some(record) => record["pid"].as_i64() == Some(owner) && record["sessionId"].as_str() == Some(&binding.conversation),
                 None => proven_without_record(plugin_agent, pid, row.repl_sid.as_deref() == Some(&binding.conversation) && row.transcript.as_ref().is_some_and(|source| source.tracked && source.jsonl.as_deref().is_some_and(|path| Path::new(path) == transcript))),
             };
             if !proven { return Err(ServiceError("terminal_native_record_changed")); }
@@ -179,7 +180,7 @@ impl LocalTerminalFacts {
         }).await.map_err(|_| ServiceError("terminal_files_unavailable"))??;
         let held = match &self.plugin { Some(store) => !store.pending_all(&Self::binding(target), Instant::now())?.is_empty(), None => false };
         if question || held { return Err(ServiceError("erro_sessao_esperando_resposta")); }
-        if hook.is_some_and(|state| state != "idle") { return Err(ServiceError("erro_sessao_trabalhando")); }
+        if hook.is_some_and(|state| state != "idle" && state != "awaiting_input") { return Err(ServiceError("erro_sessao_trabalhando")); }
         self.check_agent(target, binding).await.map(|_| ())
     }
     pub async fn read(&self, target: &TerminalTarget, binding: &TerminalBinding, text: &str) -> Result<InputFacts, ServiceError> {
@@ -195,6 +196,7 @@ impl LocalTerminalFacts {
         let driver = TerminalDriver::new(binding.clone(), Arc::new(NoFacts), self.io.clone(), InputLimits::default());
         let screen = driver.facts_screen().await.map_err(|error| ServiceError(error.code))?;
         let (ready, mut idle) = input::input_state(&screen);
+        let screen_idle = idle;
         let (files, plugin_store, question_frame) = (target.clone(), self.plugin.clone(), screen.clone());
         let (native, question) = tokio::task::spawn_blocking(move || {
             let native = native_record(&files.metadata, &files.binding.conversation)?;
@@ -206,14 +208,18 @@ impl LocalTerminalFacts {
         }).await.map_err(|_| ServiceError("terminal_files_unavailable"))??;
         let plugin = self.plugin_facts(target)?;
         let current = plugin_current(&plugin, target.metadata.cut(target.created));
+        let open_question = question || plugin["questions"].as_array().is_some_and(|questions| !questions.is_empty());
         if let Some(state) = native.as_ref().and_then(|record| native_state(record["status"].as_str()?)) { idle = state == "idle"; }
         else if current && let Some(state) = plugin["plugin_state"]["state"].as_str().filter(|_| plugin_alive(&plugin) || plugin["plugin_state"]["age_ms"].as_u64().is_some_and(|age| age <= 90_000)) { idle = state == "idle"; }
         else {
             let (metadata, conversation, created) = (target.metadata.clone(), binding.conversation.clone(), target.created);
-            if let Some(state) = tokio::task::spawn_blocking(move || hook_state(&metadata, &conversation, created)).await.map_err(|_| ServiceError("terminal_hook_unavailable"))?? { idle = state == "idle"; }
+            // O `Notification` também sai com o Claude parado esperando a pessoa: só conta como parado com a tela
+            // parada, porque depois de uma permissão concedida o marcador fica nele até o `PostToolUse`.
+            if let Some(state) = tokio::task::spawn_blocking(move || hook_state(&metadata, &conversation, created)).await.map_err(|_| ServiceError("terminal_hook_unavailable"))?? {
+                idle = state == "idle" || state == "awaiting_input" && ready && screen_idle && !open_question;
+            }
         }
         let live = current && plugin["waiter_open"] == true;
-        let open_question = question || plugin["questions"].as_array().is_some_and(|questions| !questions.is_empty());
         // Em qualquer SO, como o `_native_socket` do Python: quem não fala o socket (o escritor fora do Unix)
         // responde `NotWritten` e a entrega segue pelo teclado.
         let native = if let Some((sender, _)) = input::message_prefix(text)
@@ -307,8 +313,9 @@ pub(crate) fn read_native_record(path: &Path) -> Result<Option<Value>, ServiceEr
     Ok(None)
 }
 fn native_record(metadata: &TerminalMetadata, conversation: &str) -> Result<Option<Value>, ServiceError> {
-    let record = read_native_record(&metadata.config_dir.join("sessions").join(format!("{}.json", metadata.agent_pid)))?;
-    if let Some(record) = &record && (record["pid"].as_u64() != Some(u64::from(metadata.agent_pid)) || record["sessionId"].as_str() != Some(conversation)) { return Err(ServiceError("terminal_native_record_changed")); } Ok(record)
+    let owner = crate::list::discover::native_owner(&SystemProcs::default(), &metadata.config_dir, i64::from(metadata.agent_pid));
+    let record = read_native_record(&metadata.config_dir.join("sessions").join(format!("{owner}.json")))?;
+    if let Some(record) = &record && (record["pid"].as_i64() != Some(owner) || record["sessionId"].as_str() != Some(conversation)) { return Err(ServiceError("terminal_native_record_changed")); } Ok(record)
 }
 /// `recent`: o `/pull` visto há pouco cobre só a leitura que falta (nenhum transcript aberto, ou os arquivos
 /// do processo e as pastas que não se leem); nunca um transcript aberto ilegível, outro aberto ou mais de um.
@@ -544,6 +551,11 @@ mod tests {
         std::fs::write(&native,json!({"pid":target.metadata.agent_pid,"sessionId":"sid"}).to_string()).unwrap();
         assert!(!local.read(&target,&target.binding,"").await.unwrap().idle);target.metadata.legacy_import_after=Some(now+1.0);
         std::fs::write(dir.path().join(".hangar-state/sid.json"),json!({"state":"idle","ts":now+2.0}).to_string()).unwrap();assert!(local.read(&target,&target.binding,"").await.unwrap().idle);
+        std::fs::write(dir.path().join(".hangar-state/sid.json"),json!({"state":"awaiting_input","ts":now+2.0}).to_string()).unwrap();
+        assert!(local.read(&target,&target.binding,"").await.unwrap().idle,"aviso de espera com a caixa livre e sem pergunta é parado");
+        let rule="────────────────────────────────";
+        let working=LocalTerminalFacts::new(Arc::new(FrameIo(format!("● resposta\n\n✻ Precipitating… (2m 12s)\n\n{rule}\n❯ \n{rule}\n").into_bytes())),Some(plugin.clone()),None);
+        assert!(!working.read(&target,&target.binding,"").await.unwrap().idle,"aviso de espera com a tela trabalhando não é parado");
         drop(poll);plugin.forget("key").unwrap();assert!(local.read(&target,&target.binding,"").await.is_err());
     }
     #[cfg(target_os="linux")]
