@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Trava a regra única de qual `hangar-server` os atalhos rodam (scripts/hangar-server-lookup) e o que
-# cada atalho repassa: hangar-send, hangar-open, hangar-conta, hangar-mcp-headers, hangar-server-command
+# cada atalho repassa: hangar-send, hangar-open, hangar-conta, hangar-mcp-headers, hangar-mcp-stdio, hangar-server-command
 # e hangar-engine. Binários falsos que só registram o argv; HOME e cópia em pasta temporária.
 #
 # Uso: ./scripts/test-hangar-server-lookup.sh
@@ -28,7 +28,7 @@ caso() {
     C="$TMP/c$RANDOM$RANDOM"
     mkdir -p "$C/root/scripts" "$C/home"
     cp "$REPO/scripts/hangar-server-lookup" "$REPO/scripts/hangar-send" "$REPO/scripts/hangar-open" \
-        "$REPO/scripts/hangar-conta" "$REPO/scripts/hangar-mcp-headers.sh" "$REPO/scripts/hangar-server-command" \
+        "$REPO/scripts/hangar-conta" "$REPO/scripts/hangar-mcp-headers.sh" "$REPO/scripts/hangar-mcp-stdio.sh" "$REPO/scripts/hangar-server-command" \
         "$REPO/scripts/hangar-engine" "$C/root/scripts/"
     export HOME="$C/home" FAKE_LOG="$C/log"
     unset CP_RUST_SERVER_BIN FAKE_RC FAKE_SIGNAL
@@ -81,6 +81,8 @@ sh "$C/root/scripts/hangar-send" alvo "oi a"
 checa "hangar-send repassa a raiz" "$C/home/.hangar/bin/hangar-server [send] [--root] [$C/root] [alvo] [oi a]" "$(cat "$C/log")"
 sh "$C/root/scripts/hangar-mcp-headers.sh"
 checa "hangar-mcp-headers repassa a raiz" "$C/home/.hangar/bin/hangar-server [mcp-headers] [--root] [$C/root]" "$(cat "$C/log")"
+sh "$C/root/scripts/hangar-mcp-stdio.sh"
+checa "hangar-mcp-stdio repassa a raiz" "$C/home/.hangar/bin/hangar-server [mcp-stdio] [--root] [$C/root]" "$(cat "$C/log")"
 sh "$C/root/scripts/hangar-engine" --list
 checa "hangar-engine" "$C/home/.hangar/bin/hangar-server [engine] [--list]" "$(cat "$C/log")"
 ln -s "$C/root/scripts/hangar-send" "$C/home/link-send"

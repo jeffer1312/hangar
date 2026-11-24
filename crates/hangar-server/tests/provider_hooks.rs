@@ -31,7 +31,6 @@ fn provider_hooks_kimi_turn_permission_and_question_events() {
     let root = tempfile::tempdir().unwrap();
     for (event, tool, expected) in [
         ("UserPromptSubmit", "", "working"),
-        ("TurnStarted", "", "working"),
         ("Stop", "", "idle"),
         ("Interrupt", "", "idle"),
         ("PermissionRequest", "", "awaiting_input"),
@@ -243,13 +242,32 @@ fn provider_hooks_installer_migrates_python_preserves_toml_and_backup() {
     assert!(!first.contains("python"));
     assert!(!first.contains(".py"));
     let data: toml::Value = toml::from_str(&first).unwrap();
-    assert_eq!(data["hooks"].as_array().unwrap().len(), 10);
+    assert_eq!(data["hooks"].as_array().unwrap().len(), 9);
     assert_eq!(
         std::fs::read_to_string(root.path().join(".kimi-code/config.toml.bak-hangar")).unwrap(),
         raw
     );
     assert!(kimi_hooks::sync(&env, root.path()).unwrap().is_empty());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+}
+
+/// O Kimi Code recusa gravar a configuração com evento que ele não conhece; o `TurnStarted` que o
+/// Hangar instalava sai na subida, e o resto do arquivo fica.
+#[test]
+fn provider_hooks_kimi_repair_drops_the_retired_turn_started_hook() {
+    use hangar_server::{accounts::environment::AccountEnvironment, harness_setup::kimi_hooks};
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join(".kimi-code")).unwrap();
+    let path = root.path().join(".kimi-code/config.toml");
+    let raw = "default_model = 'k3'\n\n# hangar: integração da sessão.\n[[hooks]]\nevent = 'TurnStarted'\ncommand = 'python /antigo/backend/hooks/kimi_state_hook.py'\ntimeout = 5\n\n[[hooks]]\nevent = 'TurnStarted'\ncommand = 'notifier --pessoal'\n";
+    std::fs::write(&path, raw).unwrap();
+    let env = AccountEnvironment::from_map(
+        [("HOME".into(), root.path().to_string_lossy().into_owned())].into(),
+    );
+    assert_eq!(kimi_hooks::repair(&env).unwrap().len(), 1);
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(fixed, "default_model = 'k3'\n\n[[hooks]]\nevent = 'TurnStarted'\ncommand = 'notifier --pessoal'\n");
+    assert!(kimi_hooks::repair(&env).unwrap().is_empty());
 }
 
 #[test]
@@ -371,7 +389,7 @@ fn provider_hooks_kimi_concurrent_processes_publish_complete_json() {
         let handles: Vec<_> = (0..12).map(|i| {
             let root = root.path();
             scope.spawn(move || {
-                run(root, "kimi-state-hook", &serde_json::to_vec(&json!({"session_id":"same","hook_event_name":"TurnStarted","cwd":format!("/ação/{i}")})).unwrap(), &[("TMUX_PANE", "%2")])
+                run(root, "kimi-state-hook", &serde_json::to_vec(&json!({"session_id":"same","hook_event_name":"UserPromptSubmit","cwd":format!("/ação/{i}")})).unwrap(), &[("TMUX_PANE", "%2")])
             })
         }).collect();
         for handle in handles {
@@ -545,7 +563,7 @@ fn provider_hooks_guard_wrong_command_logs_code_and_ignores_other_tools() {
 }
 
 #[test]
-fn provider_hooks_installer_creates_missing_config_with_nine_native_entries() {
+fn provider_hooks_installer_creates_missing_config_with_eight_native_entries() {
     use hangar_server::{accounts::environment::AccountEnvironment, harness_setup::kimi_hooks};
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join(".kimi-code")).unwrap();
@@ -585,7 +603,6 @@ fn provider_hooks_installer_creates_missing_config_with_nine_native_entries() {
         let mut expected = vec![
             ("SessionStart", None, "kimi-state-hook"),
             ("UserPromptSubmit", None, "kimi-state-hook"),
-            ("TurnStarted", None, "kimi-state-hook"),
             ("Stop", None, "kimi-state-hook"),
             ("Interrupt", None, "kimi-state-hook"),
             ("PermissionRequest", None, "kimi-state-hook"),
@@ -1140,7 +1157,7 @@ fn provider_hooks_agy_state_and_ticket_answer_an_empty_object() {
     ] {
         let result = run(root.path(), "agy-state-hook", &agy_payload(event, extra), &[("TMUX_PANE", "%7")]);
         assert!(result.status.success(), "{event}: {}", String::from_utf8_lossy(&result.stderr));
-        // O agy espera um objeto JSON; `{}` não decide nada (um PreToolUse com {} bloquearia, por isso ele nem é registrado).
+        // O agy espera um objeto JSON; `{}` não injeta nada (no PreToolUse ele bloquearia: lá a guarda responde `decision`).
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "{}");
         let state: Value = serde_json::from_slice(&std::fs::read(root.path().join(format!("config/.hangar-state/{AGY_CONV}.json"))).unwrap()).unwrap();
         assert_eq!(state["state"].as_str(), expected, "{event}");
@@ -1170,4 +1187,53 @@ fn provider_hooks_agy_refuses_a_conversation_id_that_is_not_a_uuid() {
     assert!(result.status.success(), "falha do Hangar nunca prende o agente");
     assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "{}");
     assert!(!root.path().join("config/.hangar-state").exists());
+}
+
+
+#[test]
+fn provider_hooks_agy_session_start_injects_the_sandbox_note_and_the_group_protocol() {
+    let root = tempfile::tempdir().unwrap();
+    // Sem tmux no teste: o nome vem do sidecar sem terminal pela chave, como no `pair-context`.
+    std::fs::create_dir_all(root.path().join(".hangar/claude-headless")).unwrap();
+    std::fs::write(root.path().join(".hangar/claude-headless/filha.json"), r#"{"key":"abc","name":"filha"}"#).unwrap();
+    std::fs::create_dir_all(root.path().join("config/.hangar-pair")).unwrap();
+    std::fs::write(root.path().join("config/.hangar-pair/filha.json"), r#"{"peers":["pai"],"gid":"g1","task":"T-1 teste"}"#).unwrap();
+    let result = run(root.path(), "agy-state-hook", &agy_payload("SessionStart", json!({})), &[("CP_SESSION_KEY", "abc")]);
+    assert!(result.status.success());
+    let out: Value = serde_json::from_slice(&result.stdout).unwrap();
+    let steps: Vec<&str> = out["injectSteps"].as_array().unwrap().iter()
+        .map(|step| step["systemMessage"]["systemMessage"].as_str().unwrap()).collect();
+    assert_eq!(steps.len(), 2, "{out}");
+    assert!(steps[0].contains("BypassSandbox"), "{}", steps[0]);
+    assert!(steps[1].contains("Você, 'filha', está num grupo de trabalho na tarefa: T-1 teste"), "{}", steps[1]);
+    assert!(steps[1].contains("pela tool `send` do MCP hangar"), "o agy tem o MCP agora: {}", steps[1]);
+    // Fora de sessão do Hangar nada é injetado.
+    let alone = run(root.path(), "agy-state-hook", &agy_payload("SessionStart", json!({})), &[]);
+    assert_eq!(String::from_utf8_lossy(&alone.stdout).trim(), "{}");
+    // As outras chamadas do turno não repetem nada.
+    let later = run(root.path(), "agy-state-hook", &agy_payload("PreInvocation", json!({"invocationNum": 1, "lastUserInput": "abre a página"})), &[("CP_SESSION_KEY", "abc")]);
+    assert_eq!(String::from_utf8_lossy(&later.stdout).trim(), "{}");
+}
+
+fn agy_tool(name: &str, args: Value) -> Vec<u8> {
+    serde_json::to_vec(&json!({"conversationId": AGY_CONV, "hookEventName": "PreToolUse", "toolCall": {"name": name, "args": args}})).unwrap()
+}
+
+#[test]
+fn provider_hooks_agy_guard_always_answers_a_decision() {
+    let root = tempfile::tempdir().unwrap();
+    let decide = |payload: &[u8]| {
+        let result = run(root.path(), "agy-guard-tmux", payload, &[]);
+        assert!(result.status.success(), "saída diferente de zero barra a ferramenta no agy");
+        serde_json::from_slice::<Value>(&result.stdout).unwrap()
+    };
+    let killed = decide(&agy_tool("run_command", json!({"CommandLine": "tmux kill-server"})));
+    assert_eq!(killed["decision"], "deny");
+    assert!(killed["reason"].as_str().unwrap().starts_with("BLOQUEADO:"));
+    assert_eq!(decide(&agy_tool("run_command", json!({"CommandLine": "echo ok"}))), json!({"decision": "allow"}));
+    assert_eq!(decide(&agy_tool("view_file", json!({"AbsolutePath": "/run/user/1/hangar/vault-files/x"})))["decision"], "deny");
+    assert_eq!(decide(&agy_tool("view_file", json!({"AbsolutePath": "/tmp/x.txt"}))), json!({"decision": "allow"}));
+    assert_eq!(decide(&agy_tool("list_dir", json!({"DirectoryPath": "/"}))), json!({"decision": "allow"}));
+    // Falha da guarda deixa passar: `{}` bloquearia toda ferramenta.
+    assert_eq!(decide(b"{ quebrado"), json!({"decision": "allow"}));
 }

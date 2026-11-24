@@ -103,6 +103,8 @@ struct Answer {
 }
 struct Question {
     public: PluginQuestion,
+    /// Ordem de chegada: o terminal mostra as chamadas simultâneas nessa ordem, e o id não a guarda.
+    order: u64,
     seen: Instant,
     interrupted: Option<Instant>,
     expired: bool,
@@ -187,13 +189,14 @@ fn visible_questions(interactions: &InteractionStore, s: &mut Session, now: Inst
     let mut out = Vec::new();
     for q in s.questions.values_mut() {
         if question_visible(q.interrupted.is_some() || q.expired, q.waiter.is_some(), now.saturating_duration_since(q.seen)) {
-            out.push(q.public.clone());
+            out.push((q.order, q.public.clone()));
         } else {
             close_question(interactions, &s.binding, &q.public.id)?;
             q.expired = true;
         }
     }
-    Ok(out)
+    out.sort_by_key(|(order, _)| *order);
+    Ok(out.into_iter().map(|(_, q)| q).collect())
 }
 fn discard_unhanded_answer(question: &mut Question, now: Instant) {
     if question.answer.as_ref().is_some_and(|a| !a.handed && a.poll_id.is_none() && now >= a.deadline)
@@ -326,11 +329,13 @@ impl Store {
             .map_err(|error| ServiceError(error.code()))?.ok_or_else(unavailable)?;
         let replace = s.questions.get(&ask.id).is_none_or(|q| q.public.interaction_id != interaction_id);
         if replace {
+            // Pergunta refeita fica no lugar dela na fila.
+            let order = s.questions.get(&ask.id).map_or(poll_id, |q| q.order);
             if let Some(old) = s.questions.remove(&ask.id) { finish_question(old, PluginReply::Unknown); }
             s.closed.remove(&ask.id);
             s.questions.insert(ask.id.clone(), Question {
                 public: PluginQuestion { id: ask.id.clone(), interaction_id, questions: semantic["questions"].clone(), tool: ask.tool, summary: ask.summary },
-                seen: now, interrupted: None, expired: false, waiter: None, answer: None,
+                order, seen: now, interrupted: None, expired: false, waiter: None, answer: None,
             });
         }
         let q = s.questions.get_mut(&ask.id).ok_or_else(unavailable)?;
@@ -850,6 +855,15 @@ mod tests {
         let poll = store.begin_ask(&binding, ask("q"), gate(), Instant::now()).unwrap();
         assert!(store.pending(&binding, Instant::now()).is_some());
         drop(poll);
+    }
+
+    #[test]
+    fn held_questions_keep_the_order_they_arrived() {
+        let (store, binding) = setup();
+        let polls: Vec<_> = ["ask:z", "ask:a", "ask:m"].map(|id| store.begin_ask(&binding, ask(id), gate(), Instant::now()).unwrap()).into();
+        let ids: Vec<String> = store.pending_all(&binding, Instant::now()).unwrap().into_iter().map(|q| q.id).collect();
+        assert_eq!(ids, ["ask:z", "ask:a", "ask:m"]);
+        drop(polls);
     }
 
     #[test]

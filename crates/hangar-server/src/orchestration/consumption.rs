@@ -220,6 +220,7 @@ pub fn rows_for(
             provider,
         ),
         "kimi" => folded(path, costs::simple::new_kimi_fold(path), None, provider),
+        "antigravity" => folded(path, costs::simple::new_agy_fold(path), None, provider),
         _ => None,
     }
 }

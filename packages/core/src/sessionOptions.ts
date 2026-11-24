@@ -4,7 +4,7 @@ import type { ModelOption, ModelOptionsResponse } from './api';
 import type { Provider } from './types';
 
 export const SESSION_PROVIDERS: readonly Provider[] = ['claude', 'codex', 'pi', 'kimi', 'omp'];
-/** Os que a criação de sessão do Expo oferece; as outras telas seguem com `SESSION_PROVIDERS`. */
+/** Os que a criação de sessão do Expo (folha e tarefa agendada) oferece; as outras telas seguem com `SESSION_PROVIDERS`. */
 export const CREATE_SESSION_PROVIDERS: readonly Provider[] = [...SESSION_PROVIDERS, 'antigravity'];
 
 // Sem entrada para o Kimi de propósito: ele escolhe modelo mas o CLI não tem nível de esforço.

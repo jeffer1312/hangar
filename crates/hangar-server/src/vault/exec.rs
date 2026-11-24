@@ -12,8 +12,9 @@ use super::{Summary, VaultError, config::{self, Placement},
     remote::{Remote, RemoteError, UseStart, WaitStatus}, requests::{self, RequestError}, wire::{AskReq, UseReq, WAIT_HOLD}};
 use crate::{groups::peers::PeerClient, routes::AppState};
 
-/// Claude e Codex cortam a tool em 60 s sem o prazo do servidor `hangar`, que o `hangar-server mcp-register`
-/// grava na configuração da conta (`timeout` no `.claude.json`, `tool_timeout_sec` no `config.toml`).
+/// Claude e Codex cortam a tool em 60 s e o `agy` em 180 s sem o prazo do servidor `hangar`, que o
+/// `hangar-server mcp-register` grava na configuração da conta (`timeout` no `.claude.json`, `tool_timeout_sec`
+/// no `config.toml`, `timeoutSeconds` no `mcp_config.json`).
 const CLAUDE_TIMEOUT_MIN_MS: f64 = 600_000.0;
 const CODEX_TOOL_TIMEOUT_MIN: i64 = 600;
 /// Saída lida do comando: só o fim, antes da máscara e da cauda de 8 KB.
@@ -193,6 +194,8 @@ pub async fn agent(st: &Arc<AppState>, name: &str) -> Result<Agent, String> {
         let config = match provider.as_str() {
             "codex" => codex_home.map(|home| home.join("config.toml")),
             "claude" => env.as_deref().map(|env| claude_config(env, &st.accounts.env.home)),
+            // Com terminal o `agy` só usa a conta padrão.
+            "antigravity" => Some(hangar_antigravity::Account::default().mcp_config_path(&st.accounts.env.home)),
             _ => None,
         };
         let config = config.and_then(|path| std::fs::read_to_string(path).ok());
@@ -212,7 +215,7 @@ fn claude_config(env: &[(OsString, OsString)], home: &Path) -> PathBuf {
 fn session_env(st: &AppState, name: &str, provider: &str, headless: bool, pid: Option<u32>, key: Option<&str>) -> Option<Env> {
     if !headless { return pid.and_then(environ); }
     let base = &st.accounts.env;
-    let dir = base.home.join(".hangar").join(if provider == "codex" { "codex-sessions" } else { "claude-headless" });
+    let dir = base.home.join(".hangar").join(match provider { "codex" => "codex-sessions", "antigravity" => "antigravity-sessions", _ => "claude-headless" });
     let meta = crate::runtime::codex_sidecar::load(&crate::runtime::codex_sidecar::path(&dir, name))?;
     let cano = meta.get("cano").and_then(|c| c.get("pid")).and_then(serde_json::Value::as_u64).and_then(|p| u32::try_from(p).ok());
     let mine = |env: &Env| key.is_some_and(|key| env.iter().any(|(k, v)| k == "CP_SESSION_KEY" && v == key));
@@ -223,6 +226,7 @@ fn session_env(st: &AppState, name: &str, provider: &str, headless: bool, pid: O
 fn launch_env(base: &crate::accounts::environment::AccountEnvironment, provider: &str, name: &str, meta: &serde_json::Value) -> Option<Env> {
     let map = match provider {
         "codex" => crate::runtime::codex_launch::launch_env(base, &crate::runtime::codex_sidecar::dir(&base.home), meta).ok()?.env,
+        "antigravity" => crate::runtime::antigravity_launch::launch_env(base, meta).ok()?.env,
         "claude" => {
             let spec = crate::session_open::record::claude_live(&base.home, meta, name).ok()?;
             let facts = crate::session_open::facts::LocalFacts::new(base.clone(), tokio::runtime::Handle::try_current().ok()?);
@@ -247,8 +251,8 @@ fn environ(pid: u32) -> Option<Vec<(OsString, OsString)>> {
 #[cfg(not(target_os = "linux"))]
 fn environ(_pid: u32) -> Option<Vec<(OsString, OsString)>> { None }
 
-/// A conta da sessão não tem o prazo longo do servidor `hangar`: `config` é o `.claude.json` (Claude) ou o
-/// `config.toml` (Codex) dela. Sem leitura a chamada segue.
+/// A conta da sessão não tem o prazo longo do servidor `hangar`: `config` é o `.claude.json` (Claude), o
+/// `config.toml` (Codex) ou o `mcp_config.json` (Antigravity) dela. Sem leitura a chamada segue.
 // shortcut: o agente lê a configuração ao subir; sessão aberta antes de a conta ser atualizada passa aqui e cai em 60 s.
 pub fn lacks_deadline(provider: &str, config: Option<&str>) -> bool {
     match provider {
@@ -258,6 +262,10 @@ pub fn lacks_deadline(provider: &str, config: Option<&str>) -> bool {
         "codex" => config.and_then(|raw| toml::from_str::<toml::Table>(raw).ok()).is_some_and(|config| {
             let timeout = config.get("mcp_servers").and_then(|m| m.get("hangar")).and_then(|h| h.get("tool_timeout_sec"));
             !timeout.and_then(|t| t.as_integer().or_else(|| t.as_float().map(|f| f as i64))).is_some_and(|t| t >= CODEX_TOOL_TIMEOUT_MIN)
+        }),
+        // Negativo desliga o prazo do `agy`.
+        "antigravity" => config.and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.trim_start_matches('\u{feff}')).ok()).is_some_and(|config| {
+            !config["mcpServers"]["hangar"]["timeoutSeconds"].as_f64().is_some_and(|t| t < 0.0 || t >= CODEX_TOOL_TIMEOUT_MIN as f64)
         }),
         _ => false,
     }

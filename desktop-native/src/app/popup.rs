@@ -308,7 +308,7 @@ impl Hangar {
         };
         let trigger = anchor_bounds(&anchor)?;
         // O seletor de modelos tem trilho, lista e coluna de raciocínio lado a lado: mais largo que os outros.
-        let picker = anchor == "ctl-model";
+        let picker = anchor == "ctl-model" || anchor == "new-chat-model";
         let surface = chrome::popover(content?, narrow && !card && !picker && anchor != "machines-tray-toggle");
         // O de contas é mais largo que os outros: o email inteiro e o reset semanal cabem na linha.
         let surface = if card { div().w(px(480.)).child(surface).into_any_element() }

@@ -37,6 +37,8 @@ const calls = vi.hoisted(() => ({
   branches: vi.fn(),
   commands: vi.fn(),
   agy: vi.fn(),
+  // O que o aparelho "guardou" na chave pedida; undefined cai no localStorage do teste.
+  saved: (_key: string): string | undefined => undefined,
 }));
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
 
@@ -144,7 +146,9 @@ vi.mock('../../stores/servers', () => ({
   ),
 }));
 vi.mock('../../stores/prefs', () => ({ prefs: {
-  getString: (key: string) => localStorage.getItem(key) ?? undefined,
+  getString: (key: string) => calls.saved(key) ?? localStorage.getItem(key) ?? undefined,
+  getBoolean: (key: string) => calls.saved(key) === undefined ? undefined : calls.saved(key) !== 'false',
+  getNumber: (key: string) => calls.saved(key) === undefined ? undefined : 1,
   set: (key: string, value: string) => { calls.save(key, value); localStorage.setItem(key, value); },
   remove: (key: string) => localStorage.removeItem(key),
 } }));
@@ -232,6 +236,11 @@ vi.mock('../../paraglide/messages', () => ({
   native_create_path_placeholder: () => 'native_create_path_placeholder', native_create_path_aria: () => 'native_create_path_aria',
   native_retry: () => 'native_retry', cota_conta_no_limite: ({ janela }: { janela: string }) => `cota_conta_no_limite:${janela}`,
   new_chat_account_switched: ({ conta }: { conta: string }) => `new_chat_account_switched:${conta}`,
+  new_chat_account_force_note: ({ conta, pct, janela, destino }: Record<string, string>) => `force_note:${conta}:${pct}:${janela}:${destino}`,
+  new_chat_account_force_action: ({ conta }: { conta: string }) => `force_action:${conta}`,
+  new_chat_account_forced_note: ({ conta, pct, janela }: Record<string, string>) => `forced_note:${conta}:${pct}:${janela}`,
+  comum_desfazer: () => 'comum_desfazer',
+  cota_janela_7d: () => 'na_semana', cota_janela_5h: () => 'nas_5h', cota_janela_outra: ({ janela }: { janela: string }) => `na_janela:${janela}`,
   native_dictation_active: () => 'native_dictation_active', native_dictation_level: () => 'native_dictation_level',
   native_dictation_cancel: () => 'native_dictation_cancel',
   nova_conversa_placeholder: () => 'nova_conversa_placeholder', nova_conversa_enviar: () => 'nova_conversa_enviar',
@@ -624,6 +633,45 @@ describe('CreateSessionSheet Codex', () => {
       expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ model: null, effort: null }));
     } finally { act(() => root.unmount()); }
   });
+
+  // Trava da abertura única, como a do desktop (default_tests.rs): qualquer preferência do aparelho, de hoje
+  // ou nova, responde com um valor ligado, e o pedido tem de sair igual. O módulo é recarregado porque os
+  // stores leem a preferência ao carregar. Cobre o que passa por stores/prefs; SecureStore fica de fora.
+  const openingWith = async (provider: 'claude' | 'codex', value?: string) => {
+    calls.saved = (key) => /^create\.(machine|project|attempt)\.v1/.test(key) || /draft/i.test(key) ? undefined : value;
+    vi.resetModules();
+    calls.create.mockClear();
+    localStorage.clear();
+    const { CreateSessionSheet: Sheet } = await import('./CreateSessionSheet');
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(Sheet)));
+      for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+      if (provider === 'codex') {
+        await openSettings(container);
+        await act(async () => button(container, 'Codex')!.click());
+        await closePanel(container, 'composer_session_settings');
+      }
+      await send(container);
+      expect(calls.create).toHaveBeenCalledTimes(1);
+      return calls.create.mock.calls[0][1];
+    } finally {
+      act(() => root.unmount());
+      calls.saved = () => undefined;
+    }
+  };
+  for (const provider of ['claude', 'codex'] as const) {
+    it(`o pedido de abertura não muda com nada guardado no aparelho: ${provider}`, async () => {
+      const plain = await openingWith(provider);
+      const everyField = JSON.stringify(Object.fromEntries(['provider', 'config_dir', 'configDir', 'codex_account', 'codexAccount', 'engine', 'model',
+        'effort', 'service_tier', 'serviceTier', 'permission_mode', 'permissionMode', 'subagent_model', 'subagentModel', 'code_mode', 'codeMode', 'jev',
+        'headless'].map((key) => [key, /mode$|jev|headless/i.test(key) && !/permission/i.test(key) ? true : 'guardado'])));
+      for (const value of ['1', 'true', 'false', 'on', 'priority', everyField]) {
+        expect(await openingWith(provider, value), value).toEqual(plain);
+      }
+    }, 60_000);
+  }
 
   it('modo de execução vem do servidor e só vai no pedido quando a pessoa escolhe', async () => {
     localStorage.setItem('create.choices.v1:server-b', JSON.stringify({ headless: true }));
@@ -2201,6 +2249,52 @@ describe('CreateSessionSheet Codex', () => {
     const { container, root } = await renderSheet(false, false);
     await send(container);
     expect(calls.create.mock.calls.at(-1)?.[1]?.config_dir).toBe('/b');
+    expect(calls.create.mock.calls.at(-1)?.[1]?.force_account).toBeUndefined();
+    root.unmount();
+  });
+
+  it('a conta trocada pela cota pode abrir mesmo assim, e desfazer volta para a de mais folga', async () => {
+    calls.configs.mockResolvedValue([{ path: '/a', label: 'Conta A', active: true }, { path: '/b', label: 'Conta B', active: false }]);
+    calls.cotas = [
+      { id: 'claude:/a', estado: 'lida', janelas: [{ rotulo: '5h', pct: 2 }, { rotulo: '7d', pct: 96 }] },
+      { id: 'claude:/b', estado: 'lida', janelas: [{ rotulo: '7d', pct: 48 }] },
+    ];
+    const { container, root } = await renderSheet(false, false);
+    expect(container.textContent).toContain('force_note:Conta A:96:na_semana:Conta B');
+    await act(async () => button(container, 'force_action:Conta A')!.click());
+    expect(container.textContent).toContain('forced_note:Conta A:96:na_semana');
+    await act(async () => button(container, 'comum_desfazer')!.click());
+    expect(container.textContent).toContain('force_note:Conta A:96:na_semana:Conta B');
+    await act(async () => button(container, 'force_action:Conta A')!.click());
+    await send(container);
+    expect(calls.create.mock.calls.at(-1)?.[1]).toMatchObject({ config_dir: '/a', force_account: true });
+    root.unmount();
+  });
+
+  it('a linha mostra a janela que decidiu a troca, mesmo a de um modelo', async () => {
+    calls.configs.mockResolvedValue([{ path: '/a', label: 'Conta A', active: true }, { path: '/b', label: 'Conta B', active: false }]);
+    calls.cotas = [
+      { id: 'claude:/a', estado: 'lida', janelas: [{ rotulo: '5h', pct: 20 }, { rotulo: '7d opus', pct: 97, por_modelo: true }] },
+      { id: 'claude:/b', estado: 'lida', janelas: [{ rotulo: '7d', pct: 40 }] },
+    ];
+    const { container, root } = await renderSheet(false, false);
+    expect(container.textContent).toContain('force_note:Conta A:97:na_janela:7d opus:Conta B');
+    root.unmount();
+  });
+
+  it('a conta esgotada escolhida à mão vai para a de mais folga, com a opção de abrir nela', async () => {
+    calls.configs.mockResolvedValue([{ path: '/a', label: 'Conta A', active: true }, { path: '/b', label: 'Conta B', active: false }]);
+    calls.cotas = [
+      { id: 'claude:/a', estado: 'lida', janelas: [{ rotulo: '7d', pct: 40 }] },
+      { id: 'claude:/b', estado: 'lida', janelas: [{ rotulo: '5h', pct: 97 }] },
+    ];
+    const { container, root } = await renderSheet(false, false);
+    expect(container.textContent).not.toContain('force_note');
+    await pickAccount(container, 'Conta B', false);
+    expect(container.textContent).toContain('force_note:Conta B:97:nas_5h:Conta A');
+    await act(async () => button(container, 'force_action:Conta B')!.click());
+    await send(container);
+    expect(calls.create.mock.calls.at(-1)?.[1]).toMatchObject({ config_dir: '/b', force_account: true });
     root.unmount();
   });
 

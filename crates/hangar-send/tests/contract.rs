@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 const CASES: &str = include_str!("contract/send_cases.json");
 
-const NEW_USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--resume <id da conversa>]\n";
+const NEW_USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--forcar-conta] [--resume <id da conversa>]\n";
 const PAIR_USAGE: &str = "uso: hangar-send --pair <sessao|servidor::sessao> [tarefa...] [--substituir-tarefa] [--orq] | --pair --orq [tarefa...]\n";
 const CONTRACT_USAGE: &str = "uso: hangar-send --contrato [--gravar <arquivo> [--mtime <valor da leitura>]]\n";
 const UNREADABLE_SEND: &str = "— não dá para dizer se foi entregue; confira com hangar-send --list\n";

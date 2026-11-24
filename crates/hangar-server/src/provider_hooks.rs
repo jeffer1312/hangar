@@ -37,44 +37,30 @@ fn log_failure(file: &str, code: &str) {
 
 pub fn run(mode: &str) -> ExitCode {
     let mut input = Vec::new();
-    let result = std::io::stdin()
-        .read_to_end(&mut input)
-        .map_err(|_| "stdin_read_failed")
+    let read = std::io::stdin().read_to_end(&mut input).map_err(|_| "stdin_read_failed");
+    match mode {
+        "agy-state-hook" => return agy_state(read.map(|_| input.as_slice())),
+        "agy-guard-tmux" => return agy_guard(read.map(|_| input.as_slice())),
+        _ => {}
+    }
+    let result = read
         .and_then(|_| {
             let value: Value = serde_json::from_str(&String::from_utf8_lossy(&input))
                 .map_err(|_| "invalid_json")?;
             if !value.is_object() {
                 return Err("payload_not_object");
             }
-            if mode == "agy-state-hook" {
+            if mode == "kimi-state-hook" {
                 let home = std::env::home_dir().ok_or("home_unavailable")?;
-                let base = std::env::var_os("CLAUDE_CONFIG_DIR")
-                    .filter(|s| !s.is_empty())
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home.join(".claude"));
-                write_agy(
-                    &value,
-                    &base,
-                    std::env::var("TMUX_PANE").ok().as_deref(),
-                    std::env::var("PSMUX_SESSION").ok().as_deref(),
-                )?;
-                Ok(None)
-            } else if mode == "kimi-state-hook" {
-                let home = std::env::home_dir().ok_or("home_unavailable")?;
-                let base = std::env::var_os("CLAUDE_CONFIG_DIR")
-                    .filter(|s| !s.is_empty())
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home.join(".claude"));
                 write_kimi(
                     &value,
-                    &base,
+                    &marker_base(&home),
                     std::env::var("TMUX_PANE").ok().as_deref(),
                     std::env::var("PSMUX_SESSION").ok().as_deref(),
                 )?;
                 Ok(None)
             } else {
                 let tool = value["tool_name"].as_str().unwrap_or("");
-                // PowerShell: a tool de shell do Claude Code no Windows, quando ligada.
                 if !["Bash", "PowerShell", "Read", "Grep"].contains(&tool) {
                     return Ok(None);
                 }
@@ -83,29 +69,7 @@ pub fn run(mode: &str) -> ExitCode {
                     Some(input) => input,
                     None => &Value::Null,
                 };
-                if !["Bash", "PowerShell"].contains(&tool) {
-                    let read = ["file_path", "path", "glob"].iter().any(|k| input[k].as_str().is_some_and(vault_path))
-                        || (tool == "Grep" && input["path"].as_str().is_some_and(above_vault));
-                    return Ok(read.then(|| VAULT_DENIED.to_owned()));
-                }
-                let command = &input["command"];
-                if !crate::orchestration::truthy(command) {
-                    return Ok(None);
-                }
-                let command = command.as_str().ok_or("command_not_string")?;
-                if reads_vault(command, 0, tool == "PowerShell") {
-                    return Ok(Some(VAULT_DENIED.to_owned()));
-                }
-                // Caminho do Windows sem aspas (PowerShell, ou o Bash do Codex no Windows): a barra
-                // invertida é separador, não escape. Conferido também assim, só para barrar mais; só
-                // nas palavras com cara de caminho, para não mexer no escape de um padrão do `pkill -f`.
-                let reason = dangerous(command, 0).or_else(|| {
-                    let slashed = windows_paths_slashed(command);
-                    (slashed != command).then(|| dangerous(&slashed, 0)).flatten()
-                });
-                Ok(reason.map(|reason| format!(
-                    "BLOQUEADO: {reason}.\nPrecisa de tmux limpo para uma sonda? Suba um SERVIDOR SEPARADO com socket próprio:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default, onde vivem as sessões de trabalho (TMUX_TMPDIR não isola: dentro do tmux quem manda é $TMUX).\nPara matar UMA sessão: `tmux kill-session -t '=nome:'`."
-                )))
+                guard(tool, input)
             }
         });
     match result {
@@ -118,25 +82,149 @@ pub fn run(mode: &str) -> ExitCode {
             let _ = writeln!(std::io::stderr().lock(), "{text}");
             ExitCode::from(2)
         }
-        Ok(None) => {
-            // O agy espera um objeto JSON na saída; `{}` não decide nada.
-            if mode == "agy-state-hook" { let _ = writeln!(std::io::stdout().lock(), "{{}}"); }
-            ExitCode::SUCCESS
-        }
+        Ok(None) => ExitCode::SUCCESS,
         Err(code) => {
-            log_failure(
-                match mode {
-                    "kimi-state-hook" => "kimi_hook_error.log",
-                    "agy-state-hook" => "agy_hook_error.log",
-                    _ => "guard_tmux-falhas.log",
-                },
-                code,
-            );
-            // Falha do Hangar nunca prende o agente.
-            if mode == "agy-state-hook" { let _ = writeln!(std::io::stdout().lock(), "{{}}"); }
+            log_failure(if mode == "kimi-state-hook" { "kimi_hook_error.log" } else { "guard_tmux-falhas.log" }, code);
             ExitCode::SUCCESS
         }
     }
+}
+
+/// `CLAUDE_CONFIG_DIR` não vazio, senão `~/.claude`: onde moram os marcadores e os grupos.
+fn marker_base(home: &Path) -> PathBuf {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"))
+}
+
+/// O motivo para barrar a ferramenta, com os nomes e campos do Claude Code; `None` deixa passar.
+fn guard(tool: &str, input: &Value) -> Result<Option<String>, &'static str> {
+    // PowerShell: a tool de shell do Claude Code no Windows, quando ligada.
+    if !["Bash", "PowerShell", "Read", "Grep"].contains(&tool) {
+        return Ok(None);
+    }
+    if !["Bash", "PowerShell"].contains(&tool) {
+        let read = ["file_path", "path", "glob"].iter().any(|k| input[k].as_str().is_some_and(vault_path))
+            || (tool == "Grep" && input["path"].as_str().is_some_and(above_vault));
+        return Ok(read.then(|| VAULT_DENIED.to_owned()));
+    }
+    let command = &input["command"];
+    if !crate::orchestration::truthy(command) {
+        return Ok(None);
+    }
+    let command = command.as_str().ok_or("command_not_string")?;
+    if reads_vault(command, 0, tool == "PowerShell") {
+        return Ok(Some(VAULT_DENIED.to_owned()));
+    }
+    // Caminho do Windows sem aspas (PowerShell, ou o Bash do Codex no Windows): a barra
+    // invertida é separador, não escape. Conferido também assim, só para barrar mais; só
+    // nas palavras com cara de caminho, para não mexer no escape de um padrão do `pkill -f`.
+    let reason = dangerous(command, 0).or_else(|| {
+        let slashed = windows_paths_slashed(command);
+        (slashed != command).then(|| dangerous(&slashed, 0)).flatten()
+    });
+    Ok(reason.map(|reason| format!(
+        "BLOQUEADO: {reason}.\nPrecisa de tmux limpo para uma sonda? Suba um SERVIDOR SEPARADO com socket próprio:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default, onde vivem as sessões de trabalho (TMUX_TMPDIR não isola: dentro do tmux quem manda é $TMUX).\nPara matar UMA sessão: `tmux kill-session -t '=nome:'`."
+    )))
+}
+
+/// A ferramenta do `agy` traduzida para a do Claude Code que a guarda conhece; `None` = não conferida.
+fn agy_tool(value: &Value, windows: bool) -> Option<(&'static str, Value)> {
+    let args = &value["toolCall"]["args"];
+    let text = |key: &str| args[key].clone();
+    match value["toolCall"]["name"].as_str()? {
+        // No Windows o `run_command` roda no PowerShell.
+        "run_command" => Some((if windows { "PowerShell" } else { "Bash" }, json!({"command": text("CommandLine")}))),
+        "view_file" => Some(("Read", json!({"file_path": text("AbsolutePath")}))),
+        "grep_search" => Some(("Grep", json!({"path": text("SearchPath")}))),
+        _ => None,
+    }
+}
+
+/// O `PreToolUse` do `agy` exige um `decision`: `{}` ou saída diferente de zero barram a ferramenta. Falha da
+/// guarda deixa passar, com a linha no log.
+fn agy_guard_decision(input: Result<&[u8], &'static str>, windows: bool) -> Value {
+    let reason = input
+        .and_then(|bytes| serde_json::from_slice::<Value>(bytes).map_err(|_| "invalid_json"))
+        .and_then(|value| match agy_tool(&value, windows) {
+            Some((tool, args)) => guard(tool, &args),
+            None => Ok(None),
+        });
+    match reason {
+        Ok(Some(reason)) => json!({"decision": "deny", "reason": reason}),
+        Ok(None) => json!({"decision": "allow"}),
+        Err(code) => {
+            log_failure("guard_tmux-falhas.log", code);
+            json!({"decision": "allow"})
+        }
+    }
+}
+
+fn agy_guard(input: Result<&[u8], &'static str>) -> ExitCode {
+    let _ = writeln!(std::io::stdout().lock(), "{}", agy_guard_decision(input, cfg!(windows)));
+    ExitCode::SUCCESS
+}
+
+/// Avisos que só existem no `agy`: dentro do sandbox do terminal o `~/.hangar` some e IP direto é recusado.
+const AGY_SANDBOX: &str = "[hangar] Nesta sessão do Antigravity, `hangar-send` e `hangar-preview` só funcionam fora do sandbox do \
+terminal: rode-os pelo run_command com BypassSandbox. Prefira as tools do MCP hangar (`sessions`, `send`, `group`, `browser_*`).";
+
+/// O texto que o `agy` põe na conversa: na abertura, o aviso do sandbox e o protocolo do grupo; no primeiro
+/// `PreInvocation` de cada mensagem, a dica do navegador. Só em sessão do Hangar.
+fn agy_inject(value: &Value, home: &Path) -> Vec<String> {
+    if std::env::var("CP_SESSION_KEY").map_or(true, |key| key.is_empty()) {
+        return Vec::new();
+    }
+    match value["hookEventName"].as_str() {
+        Some("SessionStart") => {
+            let pair_dir = marker_base(home).join(".hangar-pair");
+            std::iter::once(AGY_SANDBOX.to_owned())
+                .chain(crate::groups::context_cmd::protocol_text(&pair_dir, "antigravity"))
+                .collect()
+        }
+        // O número volta a 0 a cada mensagem da pessoa; as outras chamadas do turno não repetem a dica.
+        Some("PreInvocation") if value["invocationNum"] == 0 => {
+            let prompt = value["lastUserInput"].as_str().unwrap_or_default();
+            hangar_agent_hooks::nav::hint_for(prompt, &hangar_agent_hooks::Context::from_process()).into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Os passos no formato do `agy` (`injectSteps` de `systemMessage`); sem nenhum, `{}`.
+fn agy_output(steps: Vec<String>) -> Value {
+    if steps.is_empty() {
+        return json!({});
+    }
+    let steps: Vec<Value> = steps.into_iter().map(|text| json!({"systemMessage": {"systemMessage": text}})).collect();
+    json!({"injectSteps": steps})
+}
+
+fn agy_state(input: Result<&[u8], &'static str>) -> ExitCode {
+    let home = std::env::home_dir();
+    let value = input
+        .and_then(|bytes| serde_json::from_slice::<Value>(bytes).map_err(|_| "invalid_json"))
+        .and_then(|value| if value.is_object() { Ok(value) } else { Err("payload_not_object") });
+    let written = value.as_ref().map_err(|code| *code).and_then(|value| {
+        let home = home.as_deref().ok_or("home_unavailable")?;
+        write_agy(
+            value,
+            &marker_base(home),
+            std::env::var("TMUX_PANE").ok().as_deref(),
+            std::env::var("PSMUX_SESSION").ok().as_deref(),
+        )
+    });
+    if let Err(code) = written {
+        log_failure("agy_hook_error.log", code);
+    }
+    // O bilhete e o texto não dependem um do outro; falha do Hangar nunca prende o agente.
+    let steps = match (&value, &home) {
+        (Ok(value), Some(home)) => agy_inject(value, home),
+        _ => Vec::new(),
+    };
+    let _ = writeln!(std::io::stdout().lock(), "{}", agy_output(steps));
+    ExitCode::SUCCESS
 }
 
 fn write_kimi(
@@ -154,7 +242,7 @@ fn write_kimi(
     };
     let event = value["hook_event_name"].as_str().unwrap_or_default();
     let state = match event {
-        "UserPromptSubmit" | "TurnStarted" => Some("working"),
+        "UserPromptSubmit" => Some("working"),
         "Stop" | "Interrupt" => Some("idle"),
         "PermissionRequest" => Some("awaiting_input"),
         "PreToolUse" if value["tool_name"] == "AskUserQuestion" => Some("awaiting_input"),

@@ -241,9 +241,9 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
       onPress={fallen ? undefined : () => onPress(s)}
       // no-op de propósito: soltar o dedo depois do toque longo que abriu o menu não abre a conversa
       onLongPress={acoesMenu.length === 0 ? undefined : Platform.OS === 'ios' ? abrirAcoesIOS : () => {}}
-      // kimi sem id é estado NORMAL pré-1º prompt, e codex sem thread ainda está no startup:
+      // kimi e antigravity sem id é estado NORMAL pré-1º prompt, e codex sem thread ainda está no startup:
       // a tela da conversa espera o vínculo sem herdar transcript de outra sessão
-      disabled={selected || (!!onResume && untracked && s.provider !== 'kimi' && s.provider !== 'codex')}
+      disabled={selected || (!!onResume && untracked && s.provider !== 'kimi' && s.provider !== 'antigravity' && s.provider !== 'codex')}
       style={({ pressed }) => [styles.row, compact && styles.compact, fora && styles.fora,
         (selected || pressed) && { backgroundColor: superficie(theme, selected ? 0.8 : 0.6) }]}
       accessibilityState={selected === undefined ? undefined : { selected, disabled: selected }}
@@ -372,7 +372,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
             ) : null}
           </View>
         ) : null}
-        {onResume && untracked && s.provider !== 'kimi' && s.provider !== 'pi' && s.provider !== 'omp' ? (
+        {onResume && untracked && s.provider !== 'kimi' && s.provider !== 'pi' && s.provider !== 'omp' && s.provider !== 'antigravity' ? (
           <Pressable onPress={() => onResume(s)} style={styles.resume} accessibilityRole="button" accessibilityLabel={m.sessao_retomar()}>
             <Icon name="RotateCw" size={12} color={theme.tokens.text.secondary} />
             <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.sessao_retomar()}</Text>

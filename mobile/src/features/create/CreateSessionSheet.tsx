@@ -220,8 +220,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // servidor troca a que estiver a 95% ou mais. A que a tela trocou por cota esgotada vai como a que a
   // tela mostra: a regra é a mesma do servidor.
   const [accountChosen, setAccountChosen] = useState(false);
-  // Conta que a troca automática deixou para trás; a pílula avisa até a próxima escolha.
+  // Conta (caminho) que a troca por cota deixou para trás; a linha acima da pílula oferece abrir nela.
   const [switchedFrom, setSwitchedFrom] = useState('');
+  // A conta a 95% ou mais em que a pessoa mandou abrir: vai `force_account` enquanto ela for a escolhida.
+  const [forcedPath, setForcedPath] = useState('');
+  const forceAccount = !!forcedPath && forcedPath === selectedConfig;
+  const contaLabel = (path: string) => configs.find((c) => c.path === path)?.label ?? basename(path);
   const [motores, setMotores] = useState<Awaited<ReturnType<typeof getEnginesForServer>>['motores']>({});
   const [engine, setEngine] = useState('');
   const [modelos, setModelos] = useState<ModelOption[]>([]);
@@ -330,6 +334,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setAccountChosen(false);
     providerTouched.current = false;
     setSwitchedFrom('');
+    setForcedPath('');
     setAgyAccounts([]);
     setAgyAccount('');
     setAgyInstalled(true);
@@ -615,10 +620,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     if (provider !== 'claude' || engine || accountTouched.current || configsLoading) return;
     const target = contaComFolga(selectedConfig, configs, cotas);
     if (!target || target === selectedConfig) return;
-    const from = configs.find((c) => c.path === selectedConfig)?.label ?? basename(selectedConfig ?? '');
+    const from = selectedConfig ?? '';
     setSelectedConfig(target);
     setSwitchedFrom(from);
-    AccessibilityInfo.announceForAccessibility(m.new_chat_account_switched({ conta: from }));
+    AccessibilityInfo.announceForAccessibility(m.new_chat_account_switched({ conta: contaLabel(from) }));
   }, [provider, engine, configs, cotas, selectedConfig, configsLoading]);
 
   const handlePick = useCallback(async (p: string, root?: string) => {
@@ -689,6 +694,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       provider,
       // A conta trocada pela cota também vai: é a que a tela mostra.
       config_dir: provider === 'claude' && (accountChosen || !!switchedFrom) ? selectedConfig : null,
+      ...(provider === 'claude' && !engine && forceAccount ? { force_account: true } : {}),
       engine: provider === 'claude' ? engine || null : null,
       ...(engineAccount ? { engine_account: engineAccount, engine_binding: engineConfig?.cliproxy_binding } : {}),
       model: (provider === 'claude' || provider === 'pi' || provider === 'kimi' || provider === 'omp') ? modelo || null : null,
@@ -767,8 +773,25 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setProvidersError('');
     accountTouched.current = true;
     setAccountChosen(true);
+    setForcedPath('');
+    // A escolhida à mão a 95% ou mais também sai para a de mais folga; a linha deixa abrir nela.
+    const target = provider === 'claude' && !engine ? contaComFolga(v, configs, cotas) : null;
+    setSwitchedFrom(target ? v : '');
+    setSelectedConfig(target ?? v);
+  };
+  const forceSwitched = () => {
+    accountTouched.current = true;
+    setAccountChosen(true);
+    setSelectedConfig(switchedFrom);
     setSwitchedFrom('');
-    setSelectedConfig(v);
+    setForcedPath(switchedFrom);
+  };
+  const undoForce = () => {
+    setForcedPath('');
+    const target = contaComFolga(selectedConfig, configs, cotas);
+    if (!target || !selectedConfig) return;
+    setSwitchedFrom(selectedConfig);
+    setSelectedConfig(target);
   };
   const chooseCodexAccount = (value: string) => {
     providerTouched.current = true;
@@ -878,6 +901,34 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   };
 
   const janelaCheia = provider === 'claude' ? janelaEsgotada(cotaSelecionada) : null;
+  // A janela que decide a troca (`contaComFolga`): a mais cheia de qualquer tipo, fora as que já viraram.
+  const janelaMaisCheia = (path: string) => {
+    const agora = Date.now() / 1000;
+    const js = cotaDaConta(cotas, path)?.janelas.filter((j) => typeof j.pct === 'number' && isFinite(j.pct)
+      && !(typeof j.reset_ts === 'number' && j.reset_ts <= agora)) ?? [];
+    return js.reduce<(typeof js)[number] | undefined>((a, j) => (!a || j.pct > a.pct ? j : a), undefined);
+  };
+  const forcedWindow = provider === 'claude' && !engine && forceAccount && selectedConfig ? janelaMaisCheia(selectedConfig) : undefined;
+  const textoJanela = (rotulo: string) => rotulo === '7d' ? m.cota_janela_7d() : rotulo === '5h' ? m.cota_janela_5h() : m.cota_janela_outra({ janela: rotulo });
+  // Acima da pílula da conta: a que ficou de fora pela cota, com o botão para abrir nela, ou a forçada, com o desfazer.
+  const accountNotice = (() => {
+    if (provider !== 'claude' || engine) return null;
+    const forced = forceAccount && !!selectedConfig;
+    const from = forced ? selectedConfig : switchedFrom;
+    const win = from ? janelaMaisCheia(from) : undefined;
+    if (!from || !win) return null;
+    const args = { conta: contaLabel(from), pct: String(Math.round(win.pct)), janela: textoJanela(win.rotulo) };
+    return (
+      <View style={styles.accountNote}>
+        <Text style={styles.accountNoteText}>
+          {forced ? m.new_chat_account_forced_note(args) : m.new_chat_account_force_note({ ...args, destino: contaLabel(selectedConfig ?? '') })}
+        </Text>
+        <Pressable accessibilityRole="button" hitSlop={8} onPress={forced ? undoForce : forceSwitched}>
+          <Text style={styles.accountNoteAction}>{forced ? m.comum_desfazer() : m.new_chat_account_force_action({ conta: args.conta })}</Text>
+        </Pressable>
+      </View>
+    );
+  })();
   // Etiqueta da conta pela mesma chave da conta da lista: claude:<pasta>, codex:<home>.
   const activeTags = machineTags[machines.findIndex((sv) => sv.id === active.id)] ?? null;
   const tagGlyph = (key: string) => {
@@ -902,14 +953,17 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     // O estado da cota mora na pílula da conta: esgotada mostra a janela cheia em cor de aviso, e o
     // motivo (ou a troca automática) vem no título do menu, junto da cota de cada conta.
     const label = configs.find((c) => c.path === selectedConfig)?.label ?? m.criar_padrao();
-    const full = janelaCheia ? cotaSelecionada?.janelas.find((j) => j.rotulo === janelaCheia) : undefined;
-    const detail = janelaCheia ? m.cota_conta_no_limite({ janela: janelaCheia })
-      : switchedFrom ? m.new_chat_account_switched({ conta: switchedFrom }) : '';
+    // A forçada mostra a janela que decidiu a troca; a cheia de antes pode já ter virado.
+    const full = forcedWindow ?? (janelaCheia ? cotaSelecionada?.janelas.find((j) => j.rotulo === janelaCheia) : undefined);
+    // Forçada: a linha abaixo da pílula já diz o uso; o "no limite" da janela que já virou a contradiria.
+    const detail = forcedWindow ? '' : janelaCheia ? m.cota_conta_no_limite({ janela: janelaCheia })
+      : switchedFrom ? m.new_chat_account_switched({ conta: contaLabel(switchedFrom) }) : '';
+    const alert = !!janelaCheia || !!forcedWindow;
     return provider === 'claude' ? {
-      icon: janelaCheia ? 'TriangleAlert' : switchedFrom ? 'ArrowLeftRight' : 'CircleUser',
-      tone: janelaCheia ? 'warning' : switchedFrom ? 'accent' : undefined,
+      icon: alert ? 'TriangleAlert' : switchedFrom ? 'ArrowLeftRight' : 'CircleUser',
+      tone: alert ? 'warning' : switchedFrom ? 'accent' : undefined,
       // Aviso de cota ou troca vence a etiqueta: é estado que a pessoa precisa ver.
-      leading: janelaCheia || switchedFrom ? undefined : tagGlyph(`claude:${selectedConfig}`),
+      leading: alert || switchedFrom ? undefined : tagGlyph(`claude:${selectedConfig}`),
       label: full ? `${label} · ${full.rotulo} ${Math.round(full.pct)}%` : label,
       aria: detail ? `${aria} (${detail})` : aria,
       menuTitle: detail || aria,
@@ -1306,6 +1360,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             </RowGroup>
             {nameField}
             {quotaNotice}
+            {accountNotice}
             <Pressable accessibilityRole="button" accessibilityState={{ expanded: extrasOpen }}
               onPress={() => setExtrasOpen((value) => !value)} style={styles.more}>
               <Text style={styles.hint}>{m.criar_mais_opcoes()}</Text>
@@ -1428,6 +1483,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         onPick: (id) => { void handleResume(id); },
       } : null}
       notices={notices}
+      optionNotice={accountNotice}
       body={body}
       takePrewarm={takePrewarm}
       resumePrewarm={resumePrewarm}
@@ -1477,6 +1533,12 @@ const styles = StyleSheet.create((theme) => ({
   rowCenter: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
   hint: { fontSize: theme.base.text.sm, color: theme.tokens.text.secondary },
   hintAlerta: { color: theme.tokens.status.warning },
+  accountNote: {
+    marginHorizontal: theme.base.space[3], marginBottom: theme.base.space[1.5], padding: theme.base.space[2], gap: theme.base.space[1],
+    borderRadius: theme.base.radius.md, borderWidth: 1, borderColor: theme.tokens.status.warning, backgroundColor: superficie(theme),
+  },
+  accountNoteText: { fontSize: theme.base.text.sm, color: theme.tokens.text.secondary },
+  accountNoteAction: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold, color: theme.tokens.accent.base },
   headingLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center' },
   heroText: { fontSize: theme.base.text.xxl, lineHeight: 38, fontWeight: theme.base.weight.medium, color: theme.tokens.text.primary, textAlign: 'center' },
   heroHint: { fontSize: theme.base.text.base, color: theme.tokens.text.secondary },

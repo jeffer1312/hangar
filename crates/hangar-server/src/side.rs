@@ -51,8 +51,17 @@ impl Binding {
     /// Troca que vale na hora: provider ou modo (a sessão terminando de se identificar) ou outra
     /// sessão com o mesmo nome. A troca de transcript dentro da mesma sessão espera confirmação.
     pub fn changes_at_once(&self, other: &Binding) -> bool {
-        let other_life = matches!((&self.life, &other.life), (Some(a), Some(b)) if a != b);
-        self.provider != other.provider || self.headless != other.headless || other_life
+        self.provider != other.provider || self.headless != other.headless || self.other_life(other)
+    }
+
+    /// Outra sessão com o mesmo nome: as duas vidas conhecidas e diferentes.
+    pub fn other_life(&self, other: &Binding) -> bool {
+        matches!((&self.life, &other.life), (Some(a), Some(b)) if a != b)
+    }
+
+    /// Só o Claude carrega o plugin do Hangar: faixa, painéis e avisos de mod não são de outro agente.
+    pub fn takes_mods(&self) -> bool {
+        matches!(self.provider, Provider::Claude | Provider::ClaudeHeadless)
     }
 
     /// Eventos do estado que o Rust publica para esta ligação: os quatro do `Monitor` (Claude com
@@ -862,6 +871,7 @@ impl Hub {
         let mut bound = self.bound.lock().unwrap();
         let Some(cur) = bound.as_ref() else { return };
         let generation = cur.generation + 1;
+        let (takes_mods, foreign) = (binding.takes_mods(), !binding.takes_mods() || cur.binding.other_life(&binding));
         let tail = FileTail::spawn_with_transfer(
             binding.jsonl.clone(),
             binding.key.clone(),
@@ -880,11 +890,14 @@ impl Hub {
         { let mut problems = self.problems.lock().unwrap(); problems.epoch += 1; if let Some(timer) = problems.timer.take() { timer.abort(); } problems.gate = crate::problem_gate::ProblemGate::showing(self.ctx.shown_problems.get(&self.name)); }
         // Os avisos de mod ficam (o `cache.toasts` os guarda): são da sessão, não do transcript. A faixa
         // do Rust também é da sessão: volta ao retrato antes do `reset`, senão quem religa depois de um
-        // `/clear` fica sem ela até o mod redesenhar. Limpeza e semeadura sob uma trava só.
-        let ui = self.ctx.mods.replay(&self.name).into_iter().find(|(event, _)| *event == "plugin_ui");
+        // `/clear` fica sem ela até o mod redesenhar. Limpeza e semeadura sob uma trava só. Outra vida ou
+        // agente sem o plugin do Claude não herda nenhum dos dois.
+        if foreign { self.ctx.mods.release_loose(&self.name); }
+        let ui = takes_mods.then(|| self.ctx.mods.replay(&self.name).into_iter().find(|(event, _)| *event == "plugin_ui")).flatten();
         {
             let mut cache = self.cache.lock().unwrap();
             cache.latest = Default::default();
+            if foreign { cache.toasts.clear(); }
             // A fila é da conversa: o produtor da geração nova a relê.
             cache.queue.clear();
             // Sem a vista anterior no retrato, a próxima sai inteira.
@@ -914,6 +927,22 @@ impl Hub {
     fn deliver(&self, event: &str, data: &str) {
         let pane_question = self.bound.lock().unwrap().as_ref().is_some_and(|b| b.binding.provider == Provider::Claude);
         self.deliver_bound(event, data, pane_question);
+    }
+
+    /// Quadro dos mods: conferido sob a trava da ligação, como o `rebind`, para não cair num hub que acabou de
+    /// passar a outro agente.
+    fn deliver_mods(&self, event: &str, data: &str) {
+        let bound = self.bound.lock().unwrap();
+        let Some(binding) = bound.as_ref().map(|bound| &bound.binding).filter(|binding| binding.takes_mods()) else { return };
+        self.deliver_frame(event, data, binding.provider == Provider::Claude);
+    }
+
+    /// Outro processo assumiu o nome: os avisos do anterior saem do retrato e a faixa vazia vai aos aparelhos.
+    fn forget_mods(&self, empty_ui: &str) {
+        let bound = self.bound.lock().unwrap();
+        let Some(binding) = bound.as_ref().map(|bound| &bound.binding).filter(|binding| binding.takes_mods()) else { return };
+        self.cache.lock().unwrap().toasts.clear();
+        self.deliver_frame("plugin_ui", empty_ui, binding.provider == Provider::Claude);
     }
 
     fn deliver_bound(&self, event: &str, data: &str, pane_question: bool) {
@@ -1235,13 +1264,15 @@ impl Hubs {
                 hub.clone()
             }
             None => {
+                let takes_mods = binding.takes_mods();
                 let hub = Hub::start(name, binding, ctx.clone());
                 // O convidado conta sob a mesma trava do `n`: fora dela, `app_present` veria o hub só com ele como do dono.
                 if guest { hub.guests.fetch_add(1, Ordering::AcqRel); }
                 map.insert(name.to_string(), (hub.clone(), 1));
                 drop(map);
-                // Hub novo começa sem retrato: a faixa e os avisos que o Rust já publicou entram agora.
-                hub.seed(ctx.mods.replay(name));
+                // Hub novo começa sem retrato: a faixa e os avisos que o Rust já publicou entram agora. Agente sem o
+                // plugin do Claude não recebe os de uma sessão anterior com o mesmo nome.
+                if takes_mods { hub.seed(ctx.mods.replay(name)); } else { ctx.mods.release_loose(name); }
                 return Lease { hubs: self.clone(), hub, guest };
             }
         };
@@ -1261,6 +1292,21 @@ impl Hubs {
         let hub = self.0.lock().unwrap().get(name).map(|(hub, _)| hub.clone());
         if let Some(hub) = hub {
             hub.deliver(event, data);
+        }
+    }
+
+    /// Faixa e avisos dos mods (`Mods`) para o hub da sessão, só se ela é do Claude.
+    pub fn deliver_mods(&self, name: &str, event: &str, data: &str) {
+        let hub = self.0.lock().unwrap().get(name).map(|(hub, _)| hub.clone());
+        if let Some(hub) = hub {
+            hub.deliver_mods(event, data);
+        }
+    }
+
+    pub fn forget_mods(&self, name: &str, empty_ui: &str) {
+        let hub = self.0.lock().unwrap().get(name).map(|(hub, _)| hub.clone());
+        if let Some(hub) = hub {
+            hub.forget_mods(empty_ui);
         }
     }
 
@@ -2181,6 +2227,75 @@ mod tests {
         lease.hub.seed(stale);
         let kept = lease.hub.cache.lock().unwrap().latest[PLUGIN_UI].clone().unwrap();
         assert!(String::from_utf8_lossy(&kept).contains("nova"), "a faixa nova fica");
+    }
+
+    /// O nome de uma sessão Claude reaproveitado por um agente sem o plugin do Claude (Antigravity): o painel do
+    /// `/btw` que a anterior publicou pela ponte não chega a ele, nem guardado nem ao vivo.
+    #[tokio::test]
+    async fn an_agent_without_the_claude_plugin_never_gets_the_mods_of_the_previous_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = idle_ctx();
+        ctx.mods.bind_hubs(ctx.hubs.downgrade());
+        let btw = || vec![crate::mods::state::TerminalPane { id: "hangar-btw".into(), title: String::new(), placement: "inline".into(),
+            columns: None, tree: serde_json::json!({"type": "Box"}), data: None }];
+        ctx.mods.loose_ui("s", Some("claude-velha"), serde_json::Value::Null, btw());
+        ctx.mods.loose_toast("s", Some("claude-velha"), "m", "aviso da velha", 60_000);
+        let binding = Binding { provider: Provider::Antigravity, jsonl: dir.path().join("t.jsonl"), key: "k".into(), headless: false, life: Some("k:nova".into()) };
+        let lease = ctx.hubs.acquire("s", binding, &ctx);
+        let empty = |hub: &Hub| { let cache = hub.cache.lock().unwrap(); cache.latest[PLUGIN_UI].is_none() && cache.toasts.is_empty() };
+        assert!(empty(&lease.hub), "o retrato do hub novo nasce sem a faixa da anterior");
+        assert!(ctx.mods.replay("s").is_empty(), "a entrada solta da anterior saiu com o nome");
+        let mut rx = lease.hub.tx.subscribe();
+        ctx.mods.loose_ui("s", Some("claude-velha"), serde_json::Value::Null, btw());
+        ctx.mods.loose_toast("s", Some("claude-velha"), "m", "outro aviso", 60_000);
+        assert!(empty(&lease.hub), "o processo velho ainda vivo não publica no agente novo");
+        while let Ok(out) = rx.try_recv() {
+            let mods = matches!(&out, Out::Ui(_)) || matches!(&out, Out::Side(frame) if frame.starts_with(b"event: plugin_"));
+            assert!(!mods, "quadro dos mods saiu aos aparelhos: {out:?}");
+        }
+        close_hub(&lease.hub);
+    }
+
+    /// O hub do Claude que passa a outro agente com o mesmo nome (troca na hora) larga a faixa e os avisos.
+    #[tokio::test]
+    async fn rebinding_to_an_agent_without_the_claude_plugin_drops_the_band_and_the_toasts() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = idle_ctx();
+        ctx.mods.bind_hubs(ctx.hubs.downgrade());
+        let claude = Binding { provider: Provider::Claude, jsonl: dir.path().join("t.jsonl"), key: "k".into(), headless: false, life: Some("k:velha".into()) };
+        let lease = ctx.hubs.acquire("s", claude, &ctx);
+        ctx.mods.loose_ui("s", Some("velha"), serde_json::json!({"type": "Text", "children": ["faixa"]}), Vec::new());
+        ctx.mods.loose_toast("s", Some("velha"), "m", "aviso", 60_000);
+        assert!(lease.hub.cache.lock().unwrap().latest[PLUGIN_UI].is_some(), "a faixa chega ao Claude");
+        let agy = Binding { provider: Provider::Antigravity, jsonl: dir.path().join("agy.jsonl"), key: "a".into(), headless: false, life: Some("k:nova".into()) };
+        lease.hub.rebind(agy);
+        {
+            let cache = lease.hub.cache.lock().unwrap();
+            assert!(cache.latest[PLUGIN_UI].is_none() && cache.toasts.is_empty(), "o agente novo começa sem os mods do Claude");
+        }
+        assert!(ctx.mods.replay("s").is_empty());
+        close_hub(&lease.hub);
+    }
+
+    /// Outro processo Claude solto com o mesmo nome: o retrato do hub larga a faixa e os avisos do anterior; o mesmo
+    /// processo publicando de novo mantém a faixa.
+    #[tokio::test]
+    async fn a_loose_owner_change_clears_the_band_and_toasts_the_hub_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = idle_ctx();
+        ctx.mods.bind_hubs(ctx.hubs.downgrade());
+        let claude = Binding { provider: Provider::Claude, jsonl: dir.path().join("t.jsonl"), key: "k".into(), headless: false, life: Some("k:s".into()) };
+        let lease = ctx.hubs.acquire("s", claude, &ctx);
+        let band = |hub: &Hub| hub.cache.lock().unwrap().latest[PLUGIN_UI].as_ref().is_some_and(|f| String::from_utf8_lossy(f).contains("faixa"));
+        let toasts = |hub: &Hub| hub.cache.lock().unwrap().toasts.iter().map(|(_, _, t)| t["text"].as_str().unwrap_or("").to_owned()).collect::<Vec<_>>();
+        ctx.mods.loose_ui("s", Some("velha"), serde_json::json!({"type": "Text", "children": ["faixa"]}), Vec::new());
+        ctx.mods.loose_toast("s", Some("velha"), "m", "aviso da velha", 60_000);
+        ctx.mods.loose_toast("s", Some("velha"), "m", "outro da velha", 60_000);
+        assert!(band(&lease.hub), "o mesmo processo mantém a faixa");
+        ctx.mods.loose_toast("s", Some("nova"), "m", "aviso da nova", 60_000);
+        assert!(!band(&lease.hub), "a faixa da anterior saiu do retrato");
+        assert_eq!(toasts(&lease.hub), ["aviso da nova"]);
+        close_hub(&lease.hub);
     }
 
     #[test]

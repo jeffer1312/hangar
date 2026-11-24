@@ -19,7 +19,7 @@ fn main() -> std::process::ExitCode {
     {
         std::process::exit(hangar_server::codex_setup::hook_command::run(mode, &hook_args[1..]));
     }
-    if matches!(hook_args.first().and_then(|arg| arg.to_str()), Some("kimi-state-hook" | "agy-state-hook" | "guard-tmux")) {
+    if matches!(hook_args.first().and_then(|arg| arg.to_str()), Some("kimi-state-hook" | "agy-state-hook" | "agy-guard-tmux" | "guard-tmux")) {
         return hangar_server::provider_hooks::run(hook_args[0].to_str().unwrap());
     }
     // Hooks de marcador do Claude e do Codex: um processo por evento, nada antes deles.
@@ -112,6 +112,8 @@ fn main() -> std::process::ExitCode {
     // Registro do MCP `hangar`, agentes das skills e bloco do CLAUDE.md, pelo instalador e pelos passos.
     match args.first().map(String::as_str) {
         Some("mcp-headers") => return hangar_registration::mcp_headers::cli(&args[1..]),
+        // O MCP `hangar` por stdio, para o `agy`: repassa ao `/mcp/` com a identidade da sessão.
+        Some("mcp-stdio") => return hangar_mcp_stdio::cli(&args[1..]),
         Some("mcp-register") => return hangar_registration::mcp_register::cli(&args[1..]),
         Some("agents-install") => return hangar_registration::agents_install::cli(&args[1..]),
         Some("claude-md-block") => return hangar_registration::claude_md_block::cli(&args[1..]),

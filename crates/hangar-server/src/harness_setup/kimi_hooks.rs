@@ -7,14 +7,18 @@ use std::{collections::BTreeSet, fs, io::Write, ops::Range, path::Path};
 pub const ENTRIES: &[(&str, Option<&str>, &str)] = &[
     ("SessionStart", None, "kimi-state-hook"),
     ("UserPromptSubmit", None, "kimi-state-hook"),
-    ("TurnStarted", None, "kimi-state-hook"),
     ("Stop", None, "kimi-state-hook"),
     ("Interrupt", None, "kimi-state-hook"),
     ("PermissionRequest", None, "kimi-state-hook"),
     ("PreToolUse", Some("AskUserQuestion"), "kimi-state-hook"),
     ("PostToolUse", Some("AskUserQuestion"), "kimi-state-hook"),
+    // No Windows a ferramenta de shell do Kimi também se chama `Bash` (roda no Git Bash).
     ("PreToolUse", Some("Bash"), "guard-tmux"),
 ];
+
+/// Eventos que versões antigas do Hangar instalavam e que o Kimi Code não conhece: com eles, toda
+/// gravação de configuração do Kimi (o login, por exemplo) recusa o arquivo.
+const RETIRED_EVENTS: &[&str] = &["TurnStarted"];
 
 #[derive(Deserialize)]
 struct Config {
@@ -37,8 +41,8 @@ pub fn installed(home: &Path, command: &str, mode: &str) -> bool {
             == super::hooks::tokens(&expected, cfg!(windows))
     })
 }
-fn native_command(command: &str, mode: &str) -> bool {
-    let tokens = super::hooks::tokens(command, cfg!(windows));
+fn native_command(command: &str, mode: &str, windows: bool) -> bool {
+    let tokens = super::hooks::tokens(command, windows);
     tokens.len() == 2
         && tokens[1] == mode
         && super::hooks::hangar_program(&tokens[0])
@@ -49,7 +53,7 @@ fn ours(command: &str) -> Option<&'static str> {
     [("kimi_state_hook.py", "kimi-state-hook"), ("guard_tmux.py", "guard-tmux")]
         .into_iter()
         .find(|(legacy, mode)| {
-            super::hooks::refers_platform(&json!(command), legacy, true, cfg!(windows)) || native_command(command, mode)
+            super::hooks::refers_platform(&json!(command), legacy, true, cfg!(windows)) || native_command(command, mode, cfg!(windows))
         })
         .map(|(_, mode)| mode)
 }
@@ -148,6 +152,12 @@ fn sync_impl(env: &AccountEnvironment, install: bool) -> Result<Vec<String>, Str
         };
         let event = hook.event.as_ref().and_then(toml::Value::as_str).unwrap_or_default().to_owned();
         let matcher = hook.matcher.as_ref().and_then(toml::Value::as_str).map(str::to_owned);
+        if RETIRED_EVENTS.contains(&event.as_str()) {
+            if let Some(ranges) = &ranges {
+                edits.push((ranges[index].clone(), String::new()));
+            }
+            continue;
+        }
         // Cada raiz de venv antiga deixava uma entrada: a primeira de cada evento fica e vira o
         // subcomando, as repetidas saem com o comentário do Hangar acima delas.
         if !seen.insert((event, matcher, mode)) {
@@ -215,4 +225,23 @@ fn sync_impl(env: &AccountEnvironment, install: bool) -> Result<Vec<String>, Str
     }
     super::files::write_preserving(&path, &out)?;
     Ok(vec![path.to_string_lossy().into_owned()])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No Windows o Kimi roda o hook por `cmd.exe /d /s /c "<comando>"` (Node com `shell: true`): o
+    /// `/s` tira só as aspas de fora, e o caminho entre aspas, com espaço e `.exe`, chega inteiro.
+    #[test]
+    fn a_windows_hook_command_survives_the_toml_and_stays_ours() {
+        let command = r#""C:\Users\Ana Maria\.hangar\bin\hangar-hooks.exe" kimi-state-hook"#;
+        let raw = format!("[[hooks]]\nevent = \"Stop\"\ncommand = {}\n", serde_json::to_string(command).unwrap());
+        let parsed: Config = toml::from_str(&raw).unwrap();
+        let written = parsed.hooks[0].command.as_ref().unwrap().get_ref().as_str().unwrap().to_owned();
+        assert_eq!(written, command);
+        assert_eq!(super::super::hooks::tokens(&written, true), [r"C:\Users\Ana Maria\.hangar\bin\hangar-hooks.exe", "kimi-state-hook"]);
+        assert!(native_command(&written, "kimi-state-hook", true));
+        assert!(!native_command(&written, "guard-tmux", true));
+    }
 }

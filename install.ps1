@@ -11,7 +11,7 @@
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -SoChecar  # so diz o que falta
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Update    # re-aplica o que o git pull nao atualiza
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Avancado  # volta a perguntar tudo
-#   powershell -ExecutionPolicy Bypass -File install.ps1 -Agentes codex,pi  # claude, codex, pi, omp, kimi
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -Agentes codex,pi  # claude, codex, pi, omp, kimi, antigravity
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -App -Tailscale sim -SemNativo  # assistente do app nativo
 #   -ConsertarRoda (so com -App): conserta a roda do mouse reiniciando o psmux, que fecha as sessoes abertas
 #
@@ -52,8 +52,13 @@ $pacoteNovo = ($env:HANGAR_FRESH_PACKAGE -eq '1')
 Remove-Item Env:HANGAR_FRESH_PACKAGE -ErrorAction SilentlyContinue
 
 # O Hangar pilota agentes de codigo e precisa de pelo menos um; o Claude Code e o padrao, nao o unico.
-$todosAgentes = @('claude', 'codex', 'pi', 'omp', 'kimi')
-$nomesAgentes = @{ claude = 'Claude Code'; codex = 'Codex'; pi = 'Pi'; omp = 'omp'; kimi = 'Kimi Code' }
+$todosAgentes = @('claude', 'codex', 'pi', 'omp', 'kimi', 'antigravity')
+$nomesAgentes = @{ claude = 'Claude Code'; codex = 'Codex'; pi = 'Pi'; omp = 'omp'; kimi = 'Kimi Code'; antigravity = 'Antigravity' }
+# O id do Antigravity e o do produto e o comando e `agy`, como no harness_setup::commands::program.
+function Programa-Agente($id) {
+    if ($id -eq 'antigravity') { return 'agy' }
+    return $id
+}
 function Lista-Agentes($texto) {
     # Virgula ou espaco: chamado de dentro do PowerShell, `-Agentes codex,pi` chega como "codex pi".
     $lista = @("$texto" -split '[,\s]+' | Where-Object { $_ })
@@ -219,7 +224,7 @@ function Mark-ItemSince($id, [int]$antes, $texto) {
 }
 # Pendencia com codigo para o app (a frase e o botao saem dele); sem codigo vira 'outro'.
 function Add-AppPending($rotulo, $codigo) {
-    $script:pendencias += $rotulo
+    if ($script:pendencias -notcontains $rotulo) { $script:pendencias += $rotulo }
     $script:pendingCodes[$rotulo] = $codigo
 }
 function Test-Internet {
@@ -906,7 +911,7 @@ if ($Update -and $Tailscale -ne 'nao' -and (Tem 'tailscale')) { $script:querTail
 Mark-Step 'preparar' 'fazendo'
 Titulo '1/8 Dependencias'
 Instale 'psmux (multiplexador)' 'psmux'  'marlocarlo.psmux'     'sem ele nao existe sessao' | Out-Null
-$achados = @($todosAgentes | Where-Object { Tem $_ })
+$achados = @($todosAgentes | Where-Object { Tem (Programa-Agente $_) })
 # So o -Avancado pergunta: o guiado tem duas perguntas e decide o resto pelo que ja esta no disco.
 if (-not $Agentes -and $Avancado -and $script:Interativo -and -not $Update -and -not $SoChecar) {
     $padrao = if ($achados.Count) { $achados -join ',' } else { 'claude' }
@@ -925,7 +930,7 @@ $script:agentesNovos = @()
 if ($listaAgentes.Count) {
     foreach ($a in $listaAgentes) {
         if ($a -eq 'claude') { Instale-ClaudeCode 'agente escolhido' | Out-Null }
-        elseif (Tem $a) { Ok $nomesAgentes[$a]; Mark-Item $a 'ok' $nomesAgentes[$a] }
+        elseif (Tem (Programa-Agente $a)) { Ok $nomesAgentes[$a]; Mark-Item $a 'ok' $nomesAgentes[$a] }
         elseif ($SoChecar -or $Update) { Falta "$($nomesAgentes[$a]) - agente escolhido"; Mark-Item $a 'fila' $nomesAgentes[$a]; $script:pendencias += $nomesAgentes[$a] }
         else { $script:agentesNovos += $a; Mark-Item $a 'fila' $nomesAgentes[$a]; Nota "$($nomesAgentes[$a]): instalado no passo 2/8" }
     }
@@ -1127,12 +1132,31 @@ foreach ($a in $script:agentesNovos) {
     Mark-Item $a 'fazendo' $nome
     $rcAgente = Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $raiz 'scripts\hangar-server-command.ps1') harness-setup install $a
     Atualiza-Path
-    if ($rcAgente -eq 0 -and (Tem $a)) { Ok "$nome instalado"; Mark-Item $a 'ok' $nome; continue }
-    if ($rcAgente -eq 0) { Falta "$nome instalou, mas o comando $a nao aparece no PATH - abra outro terminal e rode o instalador de novo" }
+    if ($rcAgente -eq 0 -and (Tem (Programa-Agente $a))) { Ok "$nome instalado"; Mark-Item $a 'ok' $nome; continue }
+    if ($rcAgente -eq 0) { Falta "$nome instalou, mas o comando $(Programa-Agente $a) nao aparece no PATH - abra outro terminal e rode o instalador de novo" }
     elseif ($rcAgente -eq 2) { Falta "$nome nao tem instalador conferido para Windows - veja o painel Harnesses do app" }
     else { Falta "$nome nao instalou (exit $rcAgente) - instale pelo painel Harnesses do app" }
     Mark-Item $a 'falhou' $nome
     Add-AppPending $nome 'agente-nao-instalou'
+}
+# Sem as extensoes o Pi e o omp sobem sem estado nem previa no app, sem erro nenhum. Mesmo passo do
+# install-claude-wrapper.sh; os links vao pelo current, porque o caminho real da versao e podado.
+# Saida 2 com argumentos validos e binario anterior ao subcomando.
+$raizExtensoes = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { Join-Path $HOME '.hangar\current' } else { $raiz }
+foreach ($a in @('pi', 'omp')) {
+    if (-not (Tem $a)) { continue }
+    $nome = $nomesAgentes[$a]
+    $argsExtensoes = @('harness-setup', 'extensions', $a, '--repo', $raizExtensoes)
+    $rcExtensoes = Srv @argsExtensoes
+    if ($rcExtensoes -eq 0) { Ok "extensoes do $nome ligadas"; continue }
+    if ($rcExtensoes -eq 4) { Falta "extensoes do $nome nao ligadas: symlink sem admin nao funciona - ligue o Modo Desenvolvedor (Configuracoes > Sistema > Para desenvolvedores) e rode o instalador de novo" }
+    elseif ($rcExtensoes -eq 2) { Falta "extensoes do ${nome}: o hangar-server desta maquina e anterior a este codigo (nao tem 'harness-setup extensions') - rode scripts\install-server-binaries.ps1 e .\install.ps1 -Update de novo" }
+    else { Falta "extensoes do $nome nao ligadas (exit $rcExtensoes) - sem elas o app nao mostra o estado do $nome; o painel Harnesses do app tem o conserto" }
+    # Como o Modo Desenvolvedor la em cima: no -Update fica o aviso, sem derrubar a atualizacao por isso.
+    if (-not $Update) {
+        if ($rcExtensoes -eq 4) { Add-AppPending 'modo desenvolvedor' 'modo-desenvolvedor' }
+        else { Add-AppPending "extensoes do $nome" 'outro' }
+    }
 }
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve. Depois dos
 # binarios: no checkout novo o hangar-server so existe a partir daqui.
@@ -1145,7 +1169,7 @@ elseif (ServerTooOld $rcVapid 'chaves do push para o celular' 'vapid-setup') { }
 elseif ($pacote) { Falha 'chaves do push para o celular' 'rodar na mao:  ~\.hangar\current\bin\hangar-server.exe vapid-setup' }
 else { Falha 'chaves do push para o celular' "rodar na mao:  powershell -File scripts\hangar-server-command.ps1 vapid-setup --root `"$raiz`"" }
 # Prova do minimo: sem nenhum agente o app abre, mas nao tem o que pilotar.
-if (-not @($todosAgentes | Where-Object { Tem $_ }).Count) {
+if (-not @($todosAgentes | Where-Object { Tem (Programa-Agente $_) }).Count) {
     Pare 'nenhum agente de codigo instalado - o Hangar precisa de pelo menos um' @('powershell -ExecutionPolicy Bypass -File install.ps1 -Agentes claude') 'sem-agente'
 }
 
@@ -2386,34 +2410,46 @@ if (Tem 'git') {
     $cand = Join-Path $gitDir 'bin\bash.exe'
     if (Test-Path $cand) { $bash = $cand }
 }
+$binUsuario = Join-Path $HOME '.local\bin'
+New-Item -ItemType Directory -Force -Path $binUsuario | Out-Null
+# Atalhos em maquina migrada vao pelo current do perfil: o caminho real da versao seria podado.
+$raizAtalhos = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { '%USERPROFILE%\.hangar\current' } else { $raiz }
+# (2) lancador pro PowerShell: o hangar-send e o `hangar-server send`, chamado direto (sem o
+# bash) pelo executavel que o scripts\hangar-server-lookup.cmd acha. A linha `rem` guarda o
+# caminho do scripts\hangar-send entre aspas: plugins de terceiros o procuram no texto do atalho.
+# Na maquina com pacote vai pela copia dos hooks: a versao anterior troca o lancador e nao tem o
+# lookup.cmd, mas nao conhece a copia, e o atalho segue de pe na volta de versao. Sem a copia
+# (instalacao nova, checkout) ou com CP_RUST_SERVER_BIN escolhido, a regra do lookup.cmd.
+function Achar-Servidor([string]$quem, [string]$codigo) {
+    $alvo = if ($quem) { " $quem" } else { '' }
+    $lookup = "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`"$alvo || exit /b $codigo`r`n"
+    if ($raizAtalhos -ne '%USERPROFILE%\.hangar\current') { return $lookup }
+    return "set `"HANGAR_SERVER_BIN=%USERPROFILE%\.hangar\bin\hangar-hooks.exe`"`r`n" +
+           "if defined CP_RUST_SERVER_BIN set `"HANGAR_SERVER_BIN=`"`r`n" +
+           "if not exist `"%HANGAR_SERVER_BIN%`" (`r`n    $lookup)`r`n"
+}
+# O MCP `hangar` por stdio do `agy`, que so manda cabecalho fixo: o mcp_config.json grava este caminho.
+# Nada pode sair no stdout antes do servidor: ele e o canal do MCP. Fica fora do ramo do Git Bash: so chama o
+# executavel Rust, e a instalacao sem Git tambem precisa do MCP do agy.
+$lancadorMcpStdio = Join-Path $binUsuario 'hangar-mcp-stdio.cmd'
+$conteudoMcpStdio = "@echo off`r`n" +
+                    "setlocal`r`n" +
+                    (Achar-Servidor 'hangar-mcp-stdio' '1') +
+                    "`"%HANGAR_SERVER_BIN%`" mcp-stdio --root `"$raizAtalhos`"`r`n" +
+                    "exit /b %ERRORLEVEL%`r`n"
+if (Escrever-Lancador $lancadorMcpStdio $conteudoMcpStdio 'cmd') { Ok "lancador hangar-mcp-stdio.cmd criado em $binUsuario" }
+else { Ok 'lancador hangar-mcp-stdio.cmd ja atualizado' }
+
 if (-not $bash) {
     Falta 'bash do Git for Windows nao encontrado - hangar-send fica de fora'
     $sendOk = $false
     Nota 'instale o Git e rode este instalador de novo'
 } else {
-    $binUsuario = Join-Path $HOME '.local\bin'
-    New-Item -ItemType Directory -Force -Path $binUsuario | Out-Null
     # Forma /c/... do mesmo diretorio, pra usar dentro do bash.
     $binMsys = ($binUsuario -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
 
-    # Atalhos em maquina migrada vao pelo current do perfil: o caminho real da versao seria podado.
-    $raizAtalhos = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { '%USERPROFILE%\.hangar\current' } else { $raiz }
     # A mesma raiz na forma /c/... dos atalhos do Git Bash.
     $shimRootMsys = $(if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { Join-Path $HOME '.hangar\current' } else { $raiz }) -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
-    # (2) lancador pro PowerShell: o hangar-send e o `hangar-server send`, chamado direto (sem o
-    # bash) pelo executavel que o scripts\hangar-server-lookup.cmd acha. A linha `rem` guarda o
-    # caminho do scripts\hangar-send entre aspas: plugins de terceiros o procuram no texto do atalho.
-    # Na maquina com pacote vai pela copia dos hooks: a versao anterior troca o lancador e nao tem o
-    # lookup.cmd, mas nao conhece a copia, e o atalho segue de pe na volta de versao. Sem a copia
-    # (instalacao nova, checkout) ou com CP_RUST_SERVER_BIN escolhido, a regra do lookup.cmd.
-    function Achar-Servidor([string]$quem, [string]$codigo) {
-        $alvo = if ($quem) { " $quem" } else { '' }
-        $lookup = "call `"$raizAtalhos\scripts\hangar-server-lookup.cmd`" `"$raizAtalhos`"$alvo || exit /b $codigo`r`n"
-        if ($raizAtalhos -ne '%USERPROFILE%\.hangar\current') { return $lookup }
-        return "set `"HANGAR_SERVER_BIN=%USERPROFILE%\.hangar\bin\hangar-hooks.exe`"`r`n" +
-               "if defined CP_RUST_SERVER_BIN set `"HANGAR_SERVER_BIN=`"`r`n" +
-               "if not exist `"%HANGAR_SERVER_BIN%`" (`r`n    $lookup)`r`n"
-    }
     $lancador = Join-Path $binUsuario 'hangar-send.cmd'
     $conteudo = "@echo off`r`n" +
                 "setlocal`r`n" +
@@ -2932,7 +2968,7 @@ $urlCel = if ($script:cpPublicUrl) { $script:cpPublicUrl } else { "http://127.0.
 if ($qrMostrado) { $linha2 = "No celular: leia o QR acima (ou abra $urlCel e digite o token)." }
 elseif ($script:cpPublicUrl) { $linha2 = "No celular: abra $urlCel e digite o token." }
 else { $linha2 = "Neste PC: abra $urlCel. Pro celular entrar, veja 'acesso pelo celular' no guia." }
-$primeiroAgente = @($todosAgentes | Where-Object { Tem $_ }) | Select-Object -First 1
+$primeiroAgente = @($todosAgentes | ForEach-Object { Programa-Agente $_ } | Where-Object { Tem $_ }) | Select-Object -First 1
 if (-not $primeiroAgente) { $primeiroAgente = 'claude' }
 Write-Host @"
 

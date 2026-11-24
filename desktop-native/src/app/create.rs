@@ -573,6 +573,8 @@ pub(in crate::app) struct NewSession {
     scheduled_original: Option<Value>,
     scheduled_changed: HashSet<&'static str>,
     menu: Rc<std::cell::Cell<Option<Menu>>>,
+    /// A lista de permissões aberta no lugar da de modelos, no menu do modelo.
+    access_open: bool,
     /// A busca dos menus de lista (máquina, modelo, conta, branch); a pasta usa a `query` da lista de pastas.
     menu_query: Entity<InputState>,
     servers: Remote<Vec<ServerChoice>>,
@@ -659,6 +661,10 @@ pub(in crate::app) struct NewSession {
     account_touched: bool,
     /// A sugestão de cota mostrou outra conta que não a ativa: ela vai no pedido, senão a sessão nasceria noutra.
     account_suggested: bool,
+    /// A conta a 95% ou mais que a troca por cota deixou para trás; a linha abaixo das pílulas oferece abrir nela.
+    switched_from: Option<String>,
+    /// A pessoa mandou abrir na conta a 95% ou mais: vai `force_account` e o servidor não troca.
+    force_account: bool,
     effort: String,
     service_tier: Option<String>,
     permission: String,
@@ -789,7 +795,7 @@ impl NewSession {
         };
         let prewarm = prewarm::Reserve::new(link.runtime.clone());
         let mut dialog = Self {
-            link, purpose: SessionDialogPurpose::Create, transfer_blocked: false, compact: false, scheduled: false, scheduled_template: None, scheduled_original: None, scheduled_changed: HashSet::new(), menu: Default::default(), menu_query, servers: Remote::default(),
+            link, purpose: SessionDialogPurpose::Create, transfer_blocked: false, compact: false, scheduled: false, scheduled_template: None, scheduled_original: None, scheduled_changed: HashSet::new(), menu: Default::default(), access_open: false, menu_query, servers: Remote::default(),
             roots: Remote::default(), root: None, dir: String::new(), scan: Remote::default(), folders: Vec::new(),
             folder_active: None, folder_scroll: UniformListScrollHandle::new(), root_scans: Vec::new(), search_all, search_error, query, picked: None, picked_query: String::new(), picked_dir: String::new(), enter_repeat: false, create_when_ready: false,
             checkout: Remote::default(), branch: String::new(), worktrees: Remote::default(), existing: None, picking: false, agents_open: false, base_open: false,
@@ -800,7 +806,7 @@ impl NewSession {
             customizations_focus: cx.focus_handle().tab_stop(true), codex: Remote::default(), codex_account: String::new(), codex_pick: None,
             agy: Remote::default(), headless: true, headless_owner: None, headless_touched: false, headless_saving: false,
             difference: false, manual_open: false, manual, choosing: false, choose_error: None, create_seq: 0, creating: false, started: None,
-            step: String::new(), error: None, clock: None, models: Remote::default(), model: String::new(), model_choice_touched: false, account_touched: false, account_suggested: false, effort: String::new(), service_tier: None,
+            step: String::new(), error: None, clock: None, models: Remote::default(), model: String::new(), model_choice_touched: false, account_touched: false, account_suggested: false, switched_from: None, force_account: false, effort: String::new(), service_tier: None,
             permission: String::new(), saved_default: None, defaults_ready: false, default_saving: false, default_save_seq: 0, permission_touched: false, subagent: String::new(), engine: String::new(), engine_account: String::new(), engine_account_pick: None, model_pick: None, effort_pick: None,
             permission_pick: None, subagent_pick: None, engine_pick: None, engines: Remote::default(), jev: Remote::default(), jev_on: false,
             more: false, omp, quotas: Remote::default(), reopen_config: None, reopen_default: false, asking: false, confirming: false, holders: None, keep_transcripts: true, account_busy: false, account_seq: 0, account_name,
@@ -1082,6 +1088,7 @@ impl NewSession {
     fn load_configs(&mut self, cx: &mut Context<Self>) {
         let seq = self.configs.start();
         (self.model_choice_touched, self.account_touched, self.account_suggested) = (false, false, false);
+        (self.switched_from, self.force_account) = (None, false);
         self.request(cx, move |api, send| Box::pin(async move { send(CreateReply::Configs(seq, api.server_read(&["claude-configs"], &[], 15).await)).await }));
     }
 
@@ -1212,7 +1219,7 @@ impl NewSession {
         if self.is_transfer() || self.creating { return; }
         self.provider_touched = true;
         if provider == self.provider { return; }
-        (self.provider, self.error) = (provider, None);
+        (self.provider, self.error, self.access_open) = (provider, None, false);
         self.model.clear();
         self.effort.clear();
         // Vazio = "Padrão": o campo não vai e o servidor usa o modo da conta (Claude) ou Full Access (Codex).
@@ -1391,6 +1398,7 @@ impl NewSession {
         match provider {
             "claude" => {
                 body["config_dir"] = self.requested_config();
+                if self.force_account && self.engine.is_empty() { body["force_account"] = json!(true); }
                 body["engine"] = text(&self.engine);
                 if self.proxy_accounts().is_some() { body["engine_account"] = json!(self.engine_account); }
                 if let Some(binding) = self.proxy_binding() { body["engine_binding"] = json!(binding); }
@@ -1679,6 +1687,7 @@ impl NewSession {
                 if !self.configs.finish(seq, list) { return None; }
                 self.config = self.config.clone().filter(|path| self.scheduled && self.configs.ok().is_some_and(|list| list.iter().any(|c| &c.path == path)))
                     .or_else(|| self.fallback_config());
+                (self.switched_from, self.force_account) = (None, false);
                 self.leave_exhausted_account();
                 self.build_config_pick(window, cx);
                 // Lista que falhou também pede o catálogo: sem conta, o backend usa a padrão.
@@ -1693,7 +1702,7 @@ impl NewSession {
             CreateReply::ConfigSuggestion(seq, models, result) => {
                 // Trocar conta, provider ou motor relê o catálogo e invalida a sugestão inicial.
                 if seq != self.configs.seq || models != self.models.seq || self.model_choice_touched || self.creating || self.account_busy
-                    || self.provider != "claude" || !self.engine.is_empty() || self.target().is_some() { return None; }
+                    || self.force_account || self.provider != "claude" || !self.engine.is_empty() || self.target().is_some() { return None; }
                 let path = result.ok().and_then(|v| v.get("path").and_then(Value::as_str).map(str::to_owned));
                 if let Some(path) = path.filter(|p| self.accounts().any(|c| &c.path == p) && self.config.as_ref() != Some(p)) {
                     (self.config, self.account_suggested) = (Some(path), true);
@@ -2410,9 +2419,9 @@ fn quiet_pill(menu: Menu, open: bool, icon: IconName, text: String, aria: String
 
 /// A pílula quieta com a marca de etiqueta no lugar do ícone; `tip` diz por inteiro o que o texto curto resume.
 #[allow(clippy::too_many_arguments)]
-fn mark_pill(menu: Menu, open: bool, mark: AnyElement, text: String, aria: String, tip: Option<String>, disabled: bool,
+fn mark_pill(menu: Menu, open: bool, mark: AnyElement, text: String, alert: Option<String>, aria: String, tip: Option<String>, disabled: bool,
     cx: &mut Context<NewSession>) -> Div {
-    let label = format!("{aria}: {text}");
+    let label = match &alert { Some(alert) => format!("{aria}: {text} · {alert}"), None => format!("{aria}: {text}") };
     popup::anchor(div(), menu.anchor()).child(Button::new(menu.anchor())
         .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
         .h(px(26.)).px(px(8.)).rounded(px(6.)).selected(open).disabled(disabled).accessibility_label(label)
@@ -2420,6 +2429,8 @@ fn mark_pill(menu: Menu, open: bool, mark: AnyElement, text: String, aria: Strin
         .child(div().flex().items_center().gap(px(6.)).text_size(px(12.5))
             .child(mark)
             .child(div().max_w(px(320.)).truncate().child(text))
+            .children(alert.map(|alert| div().flex().gap(px(4.)).flex_shrink_0()
+                .child(div().text_color(theme::faint()).child("·")).child(div().text_color(theme::danger()).child(alert))))
             .child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint())))
         .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx))))
 }
@@ -2443,6 +2454,7 @@ fn account_mark(badge: Option<&super::tags::Badge>, provider: &str, size: f32) -
 impl NewSession {
     pub(super) fn toggle_menu(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
         let open = self.menu.get() != Some(menu) && !self.creating;
+        self.access_open = false;
         let leaving_account = self.menu.get() == Some(Menu::Account) && !(open && menu == Menu::Account);
         self.menu.set(open.then_some(menu));
         if leaving_account && self.leave_exhausted_account() { self.build_config_pick(window, cx); self.load_models(window, cx); }
@@ -2571,16 +2583,18 @@ impl NewSession {
             _ => (None, None),
         };
         let badge = credential.as_deref().and_then(|id| self.account_badge(id)).cloned();
+        // A conta forçada acima do limite mostra o uso na pílula, na cor do menu de contas.
+        let forced = self.forced_window().map(|(window, pct)| format!("{window} {}%", pct.round()));
         let tag = self.machine_tag(&super::servers::norm(&self.link.api.identity())).cloned();
         let machine = super::tags::machine_name(tag.as_ref(), &self.server_label(), &self.link.api.identity());
         let place = if self.no_project() { None } else { self.place_label() };
         let text = place.map_or_else(|| machine.clone(), |place| format!("{machine} · {place}"));
         div().flex().items_center().gap(px(2.)).pt(px(2.)).pl(px(6.))
-            .child(mark_pill(Menu::Machine, open == Some(Menu::Machine), machine_mark(tag.as_ref(), 14.), text, tr("new_chat_where"),
+            .child(mark_pill(Menu::Machine, open == Some(Menu::Machine), machine_mark(tag.as_ref(), 14.), text, None, tr("new_chat_where"),
                 self.branch_pill_label(cx).filter(|_| !self.no_project()), false, cx))
             .children(account.map(|(label, aria)| {
                 let label = badge.as_ref().map(|b| b.name.trim()).filter(|n| !n.is_empty()).map_or(label, str::to_owned);
-                mark_pill(Menu::Account, open == Some(Menu::Account), account_mark(badge.as_ref(), self.provider, 14.), label, aria, None,
+                mark_pill(Menu::Account, open == Some(Menu::Account), account_mark(badge.as_ref(), self.provider, 14.), label, forced.clone(), aria, None,
                     self.configs.loading || self.codex.loading || self.agy.loading, cx)
             }))
             .children(self.render_mode_pill(open == Some(Menu::Mode), cx))
@@ -2841,7 +2855,8 @@ impl NewSession {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.menu.set(None);
                                 (this.model_choice_touched, this.account_touched) = (true, true);
-                                if this.config.as_ref() != Some(&path) { this.config = Some(path.clone()); this.load_models(window, cx); }
+                                // A mesma conta mantém o "abrir nela mesmo assim"; outra passa pela regra dos 95%.
+                                if this.config.as_ref() != Some(&path) { this.pick_account(path.clone(), window, cx); }
                                 cx.notify();
                             }))
                             .into_any_element()
@@ -3360,9 +3375,9 @@ impl Hangar {
         let hint = gpui_kit::component::kbd::Kbd::global_binding_for_action(&super::NewChatNoProject, window)
             .map(|key| key.appearance(false).into_any_element());
         let tags = &self.tags;
-        let (top, bottom, note) = view.update(cx, |view, cx| {
+        let (top, bottom, account_note, note) = view.update(cx, |view, cx| {
             if view.tags != *tags { view.tags = tags.clone(); }
-            (view.render_top_pills(hint, cx), view.render_bottom_pills(cx), view.note())
+            (view.render_top_pills(hint, cx), view.render_bottom_pills(cx), view.render_account_note(cx), view.note())
         });
         // Anexo recusado (grande demais, ilegível) avisa aqui, onde a tela sem sessão mostra os avisos dela.
         let note = self.action_feedback.get(&new_chat_key()).cloned().or(note);
@@ -3376,6 +3391,7 @@ impl Hangar {
                 .child(landing_column(popup::anchor(top, super::landing::TOP)))
                 .child(composer)
                 .child(landing_column(div().flex().flex_col().gap_1().child(popup::anchor(bottom, super::landing::BOTTOM))
+                    .children(account_note.map(|note| note.px(px(14.))))
                     .children(note.map(|(text, warning)| div().id("new-chat-note").role(if warning { Role::Alert } else { Role::Status })
                         .px(px(14.)).text_sm().whitespace_normal().text_color(if warning { theme::warning() } else { theme::muted() }).child(text))))))
             .into_any_element()

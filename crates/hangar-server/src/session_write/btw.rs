@@ -269,7 +269,7 @@ enum Mode { Terminal, Headless }
 #[derive(Debug, PartialEq, Eq)]
 pub enum Route { Terminal, Headless, Unowned }
 pub fn route(provider: &str, terminal: bool) -> Result<Route, (StatusCode, &'static str)> {
-    // O /btw é da TUI do Claude Code: Codex, Pi, omp e Kimi não têm o comando nem o overlay.
+    // O /btw é da TUI do Claude Code: Codex, Pi, omp, Kimi e Antigravity não têm o comando nem o overlay.
     if provider != "claude" { return Err((StatusCode::BAD_REQUEST, "erro_btw_so_claude")); }
     Ok(if terminal { Route::Terminal } else { Route::Headless })
 }

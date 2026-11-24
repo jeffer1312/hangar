@@ -7,7 +7,7 @@ use crate::Invocation;
 
 /// O `.env` do servidor: `~/.hangar/config/.env` quando existe; senão o da `backend/` da cópia
 /// (máquina não migrada).
-pub(crate) fn env_file(invocation: &Invocation) -> PathBuf {
+pub fn env_file(invocation: &Invocation) -> PathBuf {
     let config = invocation.home.join(".hangar").join("config").join(".env");
     if config.exists() {
         return config;
@@ -16,7 +16,7 @@ pub(crate) fn env_file(invocation: &Invocation) -> PathBuf {
 }
 
 /// As chaves do `.env` (em minúsculas, a última linha vale), pelo leitor da subida do servidor.
-pub(crate) fn read_env(path: &Path) -> io::Result<BTreeMap<String, String>> {
+pub fn read_env(path: &Path) -> io::Result<BTreeMap<String, String>> {
     let text = std::fs::read_to_string(path)?;
     Ok(hangar_core::user_data::parse_env_file(&text).into_iter().collect())
 }

@@ -138,7 +138,7 @@ fn known_accounts(accounts: &AccountService) -> Result<Vec<(String, Value)>, &'s
 /// link sem `~/.claude`) sai resolvida pelo link, e o cliente casa a linha e a etiqueta pelo texto.
 fn row_id(id: String) -> String {
     match id.split_once(':') {
-        Some((kind @ ("claude" | "codex"), path)) =>
+        Some((kind @ ("claude" | "codex" | "antigravity"), path)) =>
             format!("{kind}:{}", crate::list::links::resolve_lenient(std::path::Path::new(path)).to_string_lossy()),
         _ => id,
     }

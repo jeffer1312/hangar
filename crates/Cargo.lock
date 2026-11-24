@@ -1972,6 +1972,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-mcp-stdio"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "eventsource-stream",
+ "futures-util",
+ "hangar-core",
+ "hangar-registration",
+ "reqwest",
+ "rmcp",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "hangar-mission"
 version = "0.1.0"
 dependencies = [
@@ -2133,6 +2149,7 @@ name = "hangar-registration"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "hangar-antigravity",
  "hangar-core",
  "libc",
  "proptest",
@@ -2227,6 +2244,7 @@ dependencies = [
  "hangar-http-file",
  "hangar-install-setup",
  "hangar-local-server",
+ "hangar-mcp-stdio",
  "hangar-mission",
  "hangar-notice-actions",
  "hangar-notice-ignores",

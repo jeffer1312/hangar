@@ -502,7 +502,7 @@ mod tests {
     #[test]
     fn only_claude_and_codex_have_an_executor() {
         assert!(has_executor("claude") && has_executor("codex"));
-        for provider in ["pi", "omp", "kimi"] { assert!(!has_executor(provider), "{provider}"); }
+        for provider in ["pi", "omp", "kimi", "antigravity"] { assert!(!has_executor(provider), "{provider}"); }
     }
 
     #[test]

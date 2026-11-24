@@ -782,16 +782,19 @@ fn antigravity_with_a_terminal_drops_a_saved_manual_and_refuses_an_explicit_one(
     assert_eq!((error.status, error.code), (409, Some("erro_permissao_manual_sem_terminal")));
 }
 
-/// O `agy` com terminal ignora o `GEMINI_HOME`: conta adicional é recusada, a padrão (sem pasta) abre.
+/// O `agy` grava os dados em `~/.gemini` com qualquer `GEMINI_HOME`: conta adicional é recusada com e sem
+/// terminal, a padrão (sem pasta) abre.
 #[test]
-fn antigravity_with_a_terminal_refuses_an_additional_account() {
-    let mut fixture = with_saved_default("antigravity", Value::Null);
-    fixture["scenario"]["steps"][0]["json"]["provider"] = json!("antigravity");
-    fixture["scenario"]["steps"][0]["json"]["headless"] = json!(false);
-    assert!(resolve_fixture(&fixture).is_ok(), "a conta padrão abre");
-    fixture["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.antigravity-trabalho");
-    let error = resolve_fixture(&fixture).unwrap_err();
-    assert_eq!((error.status, error.code), (409, Some("erro_conta_antigravity_adicional")));
+fn antigravity_refuses_an_additional_account_with_and_without_a_terminal() {
+    for headless in [false, true] {
+        let mut fixture = with_saved_default("antigravity", Value::Null);
+        fixture["scenario"]["steps"][0]["json"]["provider"] = json!("antigravity");
+        fixture["scenario"]["steps"][0]["json"]["headless"] = json!(headless);
+        assert!(resolve_fixture(&fixture).is_ok(), "a conta padrão abre (headless={headless})");
+        fixture["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.antigravity-trabalho");
+        let error = resolve_fixture(&fixture).unwrap_err();
+        assert_eq!((error.status, error.code), (409, Some("erro_conta_antigravity_adicional")), "headless={headless}");
+    }
 }
 
 /// `inherit: true` é a sessão pedindo para a filha nascer no modo dela.
@@ -3575,6 +3578,39 @@ fn an_explicit_exhausted_account_is_born_on_the_one_with_room() {
     let resolved = resolve_fixture(&full).unwrap();
     assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude".into() }, AccountSource::Explicit));
     assert!(resolved.warnings.is_empty());
+}
+
+/// `force_account` mantém a conta pedida mesmo a 95% ou mais, com o aviso do uso; sem conta pedida, é recusado.
+#[test]
+fn a_forced_account_stays_even_when_exhausted() {
+    let mut fixture = fixture_named("create_quota_explicit_account_moves");
+    fixture["scenario"]["steps"][0]["json"]["force_account"] = json!(true);
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude".into() }, AccountSource::Explicit));
+    assert_eq!(resolved.warnings, ["conta default com 97% de uso; aberta nela a pedido"]);
+
+    // Com folga, nada a avisar.
+    fixture["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.claude-b");
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Explicit));
+    assert!(resolved.warnings.is_empty());
+
+    let mut codex = fixture_named("create_codex_terminal_default");
+    let row = |home: &str, label: &str, pct: f64| json!({"id": format!("codex:<ROOT>/home/{home}"), "label": label,
+        "provedor": "codex", "ativa": false, "estado": "lida", "janelas": [{"rotulo": "7d", "pct": pct}]});
+    codex["scenario"]["fakes"]["quotas"] = json!([row(".codex", "Codex", 99.0), row(".codex-trabalho", "trabalho", 30.0)]);
+    codex["scenario"]["steps"][0]["json"]["codex_account"] = json!("default");
+    codex["scenario"]["steps"][0]["json"]["force_account"] = json!(true);
+    let connected = vec![resolve::CodexLogin { id: "default".into(), is_default: true }, resolve::CodexLogin { id: "trabalho".into(), is_default: false }];
+    let resolved = open_with(&codex, &FixtureFacts { connected, ..FixtureFacts::of(&codex) }).unwrap();
+    assert_eq!(resolved.spec.account, Account::Codex { account_id: "default".into() });
+    // No Codex a origem continua `default` mesmo com a conta pedida (só `config_dir` marca `explicit`).
+    assert_eq!((resolved.spec.account_source, resolved.warnings), (AccountSource::Default, vec!["conta Codex com 99% de uso; aberta nela a pedido".to_owned()]));
+
+    let mut unchosen = fixture_named("create_quota_switch");
+    unchosen["scenario"]["steps"][0]["json"]["force_account"] = json!(true);
+    let error = resolve_fixture(&unchosen).err().expect("sem conta pedida não há o que manter");
+    assert_eq!((error.status, error.code), (422, Some("erro_forcar_conta_sem_conta")));
 }
 
 /// Com a cota atual desconhecida, destino só abaixo dos 95%; a que bateu o limite (`limit-spent`)

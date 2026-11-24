@@ -151,7 +151,7 @@ mod find;
 mod costs;
 mod mission;
 pub(crate) use mission::ticket_card_view;
-pub(crate) use ports_panel::{port_actions, port_buttons, port_note, port_row_view};
+pub(crate) use ports_panel::{port_actions, port_buttons, port_row_view};
 pub(crate) use activity::{side_tab_button, side_tab_slot};
 pub(crate) use work_review::{choice_button as review_choice_button, decision_card as review_decision_card, decision_frame_width as review_frame_width,
     decision_nav as review_decision_nav, decision_nav_row as review_decision_nav_row, frames_row as review_frames_row, render_band as review_band,
@@ -1862,7 +1862,7 @@ impl Hangar {
         // O app responde: o formulário que a lista trouxe já abre o passo a passo (`/answer`), antes do stream.
         if let Some(ask) = list_form(&session) { self.chat.update_ask(Some(ask)); }
         self.error = None;
-        let opens_chat = session.readable() || session.waiting_for_kimi_input();
+        let opens_chat = session.readable() || session.waiting_for_first_input();
         self.loading = opens_chat;
         self.history_started = false;
         self.history_installed = false;
@@ -2743,6 +2743,15 @@ impl Hangar {
         let gone = servers::left_list(&self.sessions, &sessions);
         let closed = !gone.is_empty();
         self.sessions = sessions;
+        // Rascunho digitado antes do histórico existir vai à chave dele também fora da seleção: reaberta, a sessão o acha.
+        if let Some(server) = self.server.clone() {
+            for session in &self.sessions {
+                // Destino com texto (mesma vida religada) fica como está, e o de antes não se perde.
+                if let Some((from, to)) = SessionKey::opening_to_transcript(&server, session)
+                    && !self.drafts.contains_key(&to)
+                    && let Some(draft) = self.drafts.remove(&from) { self.drafts.insert(to, draft); }
+            }
+        }
         self.recents_sessions_changed(closed, cx);
         self.resolve_local_dirs(cx);
         // Cada aba guarda o próprio foco pela vida da sessão; aba de sessão que sumiu leva o dela junto.
@@ -2811,8 +2820,8 @@ impl Hangar {
         if let Some(old) = self.selected.clone() {
             match list.iter().find(|s| s.name == old.name).cloned() {
                 Some(new) if new.jsonl != old.jsonl || new.tracked != old.tracked
-                    || new.waiting_for_kimi_input() != old.waiting_for_kimi_input()
-                    || new.waiting_for_kimi_input() && new.lifecycle_id != old.lifecycle_id => {
+                    || new.waiting_for_first_input() != old.waiting_for_first_input()
+                    || new.waiting_for_first_input() && new.lifecycle_id != old.lifecycle_id => {
                     let moved = self.follow_transcript(&old, &new, cx);
                     self.open_session(self.open_api.clone(), new, window, cx);
                     if let Some(from) = moved { self.drafts.remove(&from); }
@@ -5387,7 +5396,10 @@ impl Hangar {
         let body = body.into_any_element();
         let completed = self.ask_picks(cx).iter().zip(&ask.payload.questions)
             .filter(|(pick, item)| interaction::answer(&ask, item, pick).is_some()).count();
-        let progress = tr("ask_progress").replace("{done}", &completed.to_string()).replace("{total}", &total.to_string());
+        let mut progress = tr("ask_progress").replace("{done}", &completed.to_string()).replace("{total}", &total.to_string());
+        if ask.payload.more_after > 0 {
+            progress = format!("{progress} · {}", tr_shared("askq_more_after", &[("n", &ask.payload.more_after.to_string())]));
+        }
         let minimized = self.ask_form.minimized;
         Some(in_column_with(questions::card(minimized, progress, tabs, body,
             div().flex().flex_wrap().items_center().gap_2()
@@ -5957,7 +5969,7 @@ impl Hangar {
         // Desenhado na prévia da aba, o campo é o dela: ações e colar chegam antes dos ouvintes de tecla da prévia, que
         // trocam a conversa, e trocam aqui mesmo para não agirem na sessão principal.
         let preview = self.in_tab_preview;
-        let editable = readable || self.selected.as_ref().is_some_and(SessionInfo::waiting_for_kimi_input) || new_chat || reopen;
+        let editable = readable || self.selected.as_ref().is_some_and(SessionInfo::waiting_for_first_input) || new_chat || reopen;
         let textarea = Textarea::new(&self.composer).accessibility_id("composer-input").appearance(false).disabled(!editable || creating || resuming).on_paste(move |item, window, cx| {
             paste_target.update(cx, |this, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.paste(item, cx) }).unwrap_or(false)
         });
@@ -8282,12 +8294,14 @@ impl Hangar {
                         .on_click(cx.listener(move |this, _, _, cx| this.reopen_target(target.clone(), cx)))));
             } else if let Some(card) = prethread {
                 content = content.child(card);
-            } else if selected.waiting_for_kimi_input() {
+            } else if selected.waiting_for_first_input() {
                 let sent = self.selected_key().is_some_and(|key| {
                     matches!(self.delivery.outcome(&key), Some(SendOutcome::Delivered | SendOutcome::Queued))
                 });
-                let hint = if sent { "chat_mensagem_enviada_kimi" } else { "chat_envie_primeira_kimi" };
-                content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr_shared(hint, &[])));
+                let hint = if sent { tr_shared("chat_mensagem_enviada_kimi", &[]) }
+                    else if selected.provider == "antigravity" { tr("chat_send_first_antigravity") }
+                    else { tr_shared("chat_envie_primeira_kimi", &[]) };
+                content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(hint));
             } else if !selected.readable() {
                 content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr(if selected.tracked == Some(false) { "untracked" } else { "starting" })));
             } else {
@@ -9299,7 +9313,9 @@ impl Render for Hangar {
         div().id("hangar-root").track_focus(&self.root_focus).relative().size_full().flex()
             .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                 for browser in this.side.browsers.values() { browser.read(cx).release_focus() }
+                this.note_session_seen(cx);
             }))
+            .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.note_session_seen(cx)))
             // Sessão solta fora da lista: nada acontece, só termina o arrasto.
             .on_drop(cx.listener(|this, _: &grouping::SessionDrag, _, cx| this.end_session_drag(cx)))
             .bg(if !chat_background { theme::window_fill() }

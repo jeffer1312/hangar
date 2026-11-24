@@ -903,7 +903,7 @@ fn diary_readable(dir: Option<&Path>, log_base: Option<&Path>) -> Result<(), &'s
 /// Raízes das sessões sem terminal e os canos ligados, pelos sidecars do Claude e do Codex.
 fn sidecar_roots(hangar: &Path, roots: &mut HashMap<String, Vec<Root>>, bound: &mut HashSet<u32>) {
     let mut problems = crate::list::discover::Problems::default();
-    for (dir, provider) in [("claude-headless", "claude"), ("codex-sessions", "codex")] {
+    for (dir, provider) in [("claude-headless", "claude"), ("codex-sessions", "codex"), ("antigravity-sessions", "antigravity")] {
         let found = crate::list::discover_other::sidecars(&hangar.join(dir), "sidecar lido pela tela Status", &mut problems);
         for (_, meta) in found.iter() {
             let Some(name) = meta.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()) else { continue };

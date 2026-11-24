@@ -95,7 +95,7 @@ npm --prefix frontend run build            # production build — does NOT typec
 npm --prefix frontend run check            # svelte-check + tsc — THIS is the type gate
 
 scripts/cargo-pinned build -p hangar-server   # target comum da máquina, trava, jobs e teto pela memória livre; fixa o binário em crates/target da worktree
-scripts/verificar-local                    # só o ligado aos arquivos mudados (o que a trava pre-push exige)
+scripts/verificar-local                    # opcional: só o ligado aos arquivos mudados (quem trava o PR é o CI)
 scripts/verificar-local --completo         # o que o CI rodaria para o commit (Linux + VM Windows)
 scripts/verificar-local --passos rust      # repete só um passo (o que já passou nesta árvore fica gravado)
 ./scripts/test-wrappers.sh                 # claude-engine (bash/zsh/fish) against a fake `claude`, no tmux
@@ -108,21 +108,25 @@ automatizado avulso (vitest, pytest, check) só roda quando o usuário pedir** �
 push; nem entre edições, nem ao terminar a tarefa. Pedido o focado: num comando só, os testes dos
 arquivos tocados (`cd backend && uv run pytest tests/test_x.py tests/test_y.py`,
 `cd frontend && npx vitest run src/x.test.ts src/y.test.ts`); falhou → repita só o que falhou.
-Pedido o completo: `npm run check` na raiz, `vitest` e `pytest` inteiros. **`scripts/verificar-local` é exigido ao
-abrir PR e ao subir para a `main` ou para branch com PR aberto**: ele roda, numa árvore fixa da
+Pedido o completo: `npm run check` na raiz, `vitest` e `pytest` inteiros. **Quem trava o PR é o CI, não a
+máquina**: o check `merge-gate` (`.github/workflows/gate.yml`) barra regra descumprida
+(`scripts/check-*` e os testes de `scripts/rule-tests.py`) e o que não compila ou quebra teste do que o
+PR mudou: crates mudados e os que dependem deles (`scripts/gate-areas.py`; o `hangar-server` em três
+fatias, `scripts/rust-pr-tests.py`), o desktop inteiro e os testes do Expo ligados aos arquivos mudados;
+backend e front ficam no workflow `CI`; as suítes inteiras rodam no push da `main`. Push e
+`gh pr create` não exigem nada local. Regra que a máquina confere ganha trava no portão; a que pede
+julgamento é checagem do CodeRabbit (`.coderabbit.yaml`), que só avisa. A marca
+`HANGAR_<REGRA>_AUTORIZADO: <motivo>` só entra num commit com a autorização dita pelo dono; decisão em
+[instalacao.md](docs/decisoes/instalacao.md#portão-do-pr-compila-e-testa-o-que-mudou-24112026).
+`scripts/verificar-local` é opcional, para conferir antes do push: ele roda, numa árvore fixa da
 máquina e em fila única, só o ligado aos arquivos que o commit muda (`--completo`: o que o CI rodaria),
 no Linux e, com arquivo de Windows no diff, na VM (`git config hangar.verificarWindows <host>`, teto de
-10 min), e grava pela árvore cada passo que passou. De Rust o padrão só confere se o workspace
-compila (`cargo check`) e testa os crates menores: os testes do `hangar-server` são do workflow
-`Server` e do `--completo`. No Linux os
+10 min), e grava pela árvore cada passo que passou; commit cujo ancestral já passou roda só o que mudou
+desde ele. De Rust o padrão confere se o workspace compila (`cargo check`) e testa os crates mudados e
+os que dependem deles, menos o `hangar-server`. No Linux os
 passos rodam em faixas paralelas e o pytest em vários processos: `git config hangar.verificarProcessos <n>`
 (padrão 4; `1` = tudo em fila). O Node é o do `.node-version`, o mesmo do CI: com o `fnm` instalado, o
-script e o `ci-gates.sh` trocam sozinhos; sem ele, o aviso diz que front e mobile podem falhar por isso. O hook do
-`gh pr create` (`.claude/settings.json`) confere o PR inteiro desde a base; a trava `pre-push`, cada
-push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. No GitHub
-o merge passa pelo check `merge-gate` (`.github/workflows/gate.yml`), que testa servidor, desktop e
-Expo pelo que o PR muda; regra em [instalacao.md](docs/decisoes/instalacao.md#portão-de-merge-22112026). O que ela cobre e o que só o CI cobre:
-[instalacao.md](docs/decisoes/instalacao.md#verificação-local-antes-do-push-06102026). `npm run build` só para servir o `dist` local. Ao reportar, diga o que foi conferido no uso real e que os testes automatizados não rodaram.
+script e o `ci-gates.sh` trocam sozinhos; sem ele, o aviso diz que front e mobile podem falhar por isso. `npm run build` só para servir o `dist` local. Ao reportar, diga o que foi conferido no uso real e que os testes automatizados não rodaram.
 
 Claude sessions with a terminal must run as `claude --session-id <uuid>` **inside tmux** —
 `scripts/install-claude-wrapper.sh` sets this up. Headless Claude/Codex sessions are created by the

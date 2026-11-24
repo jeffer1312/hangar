@@ -76,8 +76,8 @@ function explained(item: HarnessItem, cli: string): boolean {
   switch (item.id) {
     case 'credenciais': return ['codex', 'pi', 'omp', 'kimi'].includes(cli) && !!item.conserto?.startsWith('sync:');
     case 'extensoes': return ['pi', 'omp'].includes(cli);
-    case 'skills': return ['pi', 'kimi'].includes(cli);
-    case 'hooks': return ['claude', 'kimi'].includes(cli);
+    case 'skills': return ['pi', 'kimi', 'antigravity'].includes(cli);
+    case 'hooks': return ['claude', 'kimi', 'antigravity'].includes(cli);
     case 'contas': return cli === 'claude';
     default: return false;
   }

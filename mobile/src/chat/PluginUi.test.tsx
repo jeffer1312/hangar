@@ -168,7 +168,7 @@ test('recusa permanece visível e só leitura não envia clique, campo ou fecham
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-test('delta sem base fica visível mesmo com mods ocultos; painel sem desenho mostra espera', () => {
+test('delta sem base fica visível mesmo com mods ocultos; painel sem desenho não fica carregando', () => {
   const container = renderUi();
   act(() => chatStore('srv2', 'sess').use.setState({ pluginUiError: m.plugin_ui_falhou() }));
   expect(container.querySelector('[role="alert"]')?.textContent).toBe(m.plugin_ui_falhou());
@@ -176,7 +176,13 @@ test('delta sem base fica visível mesmo com mods ocultos; painel sem desenho mo
     useMods.setState({ visible: true });
     chatStore('srv2', 'sess').use.setState({ pluginUi: parsePluginUi({ panes: [{ id: 'loading', tree: { type: 'engine' } }] }), pluginUiError: null });
   });
-  expect(container.textContent).toContain(m.plugin_painel_carregando());
+  expect(container.textContent).toContain('loading');
+  expect(container.textContent).not.toContain(m.plugin_painel_carregando());
+  // O painel só de estado do `/btw` (árvore nula) que chegou de uma sessão anterior não gira para sempre.
+  act(() => chatStore('srv2', 'sess').use.setState({ pluginUi: parsePluginUi({ above: null,
+    panes: [{ id: 'hangar-btw', title: '', placement: 'inline', columns: null, tree: null }] }) }));
+  expect(container.textContent).toContain('hangar-btw');
+  expect(container.textContent).not.toContain(m.plugin_painel_carregando());
 });
 
 test('troca e fechamento esperam confirmação do servidor e campo do terminal fica bloqueado', async () => {

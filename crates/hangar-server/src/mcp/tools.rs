@@ -141,7 +141,7 @@ struct NewSession {
     service_tier: Option<String>, branch: Option<String>, #[serde(default)] new_branch: bool, base: Option<String>,
     codex_account: Option<String>, subagent_model: Option<String>, initial_prompt: Option<String>, engine_account: Option<String>,
     omp_profile: Option<String>, claude_customizations: Option<Value>, inherit: Option<bool>, #[serde(default)] remember_provider: bool,
-    resume: Option<String>, #[serde(default)] link: bool,
+    resume: Option<String>, #[serde(default)] link: bool, #[serde(default)] forcar_conta: bool,
 }
 
 impl NewSession {
@@ -151,7 +151,7 @@ impl NewSession {
             ("jev", self.jev.is_some()), ("code_mode", self.code_mode.is_some()), ("service_tier", self.service_tier.is_some()), ("branch", self.branch.as_deref().is_some_and(|b| !b.is_empty())),
             ("new_branch", self.new_branch), ("subagent_model", self.subagent_model.is_some()), ("initial_prompt", self.initial_prompt.is_some()),
             ("omp_profile", self.omp_profile.is_some()), ("claude_customizations", self.claude_customizations.is_some()),
-            ("inherit", self.inherit.is_some()), ("remember_provider", self.remember_provider), ("link", self.link)];
+            ("inherit", self.inherit.is_some()), ("remember_provider", self.remember_provider), ("link", self.link), ("forcar_conta", self.forcar_conta)];
         if let Some((key, _)) = unsupported.iter().find(|(_, set)| *set) { return Err(format!("{key} não combina com resume")); }
         let mut body = json!({"name": self.nome});
         for (key, value) in [("provider", &self.provider), ("engine", &self.engine), ("model", &self.model), ("config_dir", &self.conta),
@@ -174,7 +174,7 @@ impl NewSession {
             ("initial_prompt", self.initial_prompt.map(Value::from)), ("engine_account", self.engine_account.map(Value::from)),
             ("omp_profile", self.omp_profile.map(Value::from)), ("claude_customizations", self.claude_customizations),
             ("read_only", self.read_only.then_some(Value::Bool(true))), ("new_branch", self.new_branch.then_some(Value::Bool(true))),
-            ("remember_provider", self.remember_provider.then_some(Value::Bool(true)))];
+            ("remember_provider", self.remember_provider.then_some(Value::Bool(true))), ("force_account", self.forcar_conta.then_some(Value::Bool(true)))];
         for (key, value) in optional {
             if let Some(value) = value { body[key] = value; }
         }
@@ -663,8 +663,8 @@ impl Tools {
     }
 
     async fn new_session(&self, headers: &HeaderMap, mut a: NewSession) -> Outcome {
-        if a.headless == Some(true) && let Some(provider) = a.provider.as_deref().filter(|p| !matches!(*p, "claude" | "codex")) {
-            return Err(format!("headless só vale com provider claude ou codex (veio: {provider})"));
+        if a.headless == Some(true) && let Some(provider) = a.provider.as_deref().filter(|p| !matches!(*p, "claude" | "codex" | "antigravity")) {
+            return Err(format!("headless só vale com provider claude, codex ou antigravity (veio: {provider})"));
         }
         // Quem chama precisa ser resolvido também para abrir noutra máquina, mesmo sem herdar nada.
         let (me, voice) = self.caller(headers).await?;
@@ -721,17 +721,27 @@ impl Tools {
         self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
     }
 
-    /// Sem app desktop nesta máquina: o verbo vai pela `browser-cmd` ao app de quem usa a sessão.
+    /// O navegador fica no app que mostrou a sessão por último: o de outra máquina quando ele a mostrou depois do app
+    /// desta (ou este não existe). Se o de lá desligou, a `browser-cmd` recusa em vez de cair num navegador daqui.
+    fn remote_browser(&self, name: &str, home: &std::path::Path) -> Result<bool, String> {
+        if let Some(remote) = self.st.browser_host.last_seen(name)
+            && nav::local_focus(home, name).is_none_or(|local| remote > local) {
+            return Ok(true);
+        }
+        Ok(!nav::local_app(home).map_err(|e| e.0)?)
+    }
+
+    /// O verbo vai pela `browser-cmd` ao app de quem usa a sessão em outra máquina.
     async fn host_verb(&self, name: &str, verb: &str, args: &[String], tab: Option<i64>, deadline: Duration) -> Result<String, nav::Unavailable> {
         let body = nav::host_body(verb, args, tab, deadline);
         let (status, value) = self.route(Method::POST, &format!("/api/sessions/{}/browser-cmd", segment(name)), Some(body)).await;
-        nav::host_answer(status, &value)
+        nav::host_answer(status, &value, nav::local_app(&self.home()).unwrap_or(false))
     }
 
     async fn browser_open(&self, headers: &HeaderMap, a: BrowserOpen) -> Outcome {
         let me = self.me(headers, &a.sessao).await?;
         let (since, home) = (now_ms(), self.home());
-        if !nav::local_app(&home).map_err(|e| e.0)? {
+        if self.remote_browser(&me, &home)? {
             // O app de lá só responde com o navegador pronto: a resposta é a URL, como a do `url`.
             let text = self.host_verb(&me, "open", std::slice::from_ref(&a.url), None, Duration::from_secs(20)).await.map_err(|e| e.0)?;
             let Some(url) = nav::ok_value(&text) else { return Err(text) };
@@ -873,8 +883,8 @@ impl Tools {
             args = vec![dir.join(format!("{}.png", now_ms())).to_string_lossy().into_owned()];
         }
         let timeout = if verb == "login" { LOGIN_TIMEOUT } else { nav::VERB_TIMEOUT };
-        let answer = if nav::local_app(&home).map_err(|e| e.0)? { nav::verb(&self.http, &home, name, verb, &args, tab, timeout).await }
-            else { self.host_verb(name, verb, &args, tab, timeout).await };
+        let answer = if self.remote_browser(name, &home)? { self.host_verb(name, verb, &args, tab, timeout).await }
+            else { nav::verb(&self.http, &home, name, verb, &args, tab, timeout).await };
         let answer = answer.map_err(|e| e.0)?;
         if answer.starts_with("erro:") { Err(answer) } else { Ok(answer) }
     }
@@ -1091,6 +1101,13 @@ impl Tools {
 
     /// O host da página do navegador da sessão; só http(s) tem domínio para comparar com a entrada.
     async fn fill_host(&self, home: &Path, name: &str) -> Result<String, String> {
+        // O valor só vai ao app desta máquina: com a sessão aberta noutra, a página que a pessoa vê é a de lá, e um
+        // navegador velho daqui receberia a senha.
+        // Sem app aqui, o `page_url` abaixo já diz que ele não está aberto.
+        if nav::local_app(home).map_err(|e| e.0)? && self.remote_browser(name, home)? {
+            return Err("erro_cofre_sem_navegador: o navegador desta sessão está no app desktop de outra máquina, e o cofre só \
+                preenche no app desta máquina".into());
+        }
         let url = nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
         exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
             .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))

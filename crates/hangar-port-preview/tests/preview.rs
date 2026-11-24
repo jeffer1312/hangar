@@ -48,6 +48,11 @@ fn output(success: bool, stdout: &str, stderr: &str) -> Result<CommandOutput, Co
     })
 }
 
+// Porta que ninguém escuta: a sondagem de `start` conecta de verdade, e a 3000 pode estar em uso na máquina.
+fn closed_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
 async fn value(response: axum::response::Response) -> (u16, Value) {
     let status = response.status().as_u16();
     let bytes = axum::body::to_bytes(response.into_body(), 10240)
@@ -65,15 +70,16 @@ async fn start_checks_dns_before_touching_only_the_preview_slot() {
         output(true, r#"{"Self":{"DNSName":"fixture.ts.net."}}"#, ""),
         output(true, "", ""),
     ]);
-    let response = value(hangar_port_preview::start(&commands, 3000).await).await;
+    let port = closed_port();
+    let response = value(hangar_port_preview::start(&commands, port).await).await;
     assert_eq!(response.0, 200);
     assert_eq!(response.1["url"], "https://fixture.ts.net:10000/");
-    assert_eq!(response.1["port"], 3000);
+    assert_eq!(response.1["port"], port);
     let calls = commands.calls.lock().unwrap();
     assert_eq!(calls[0], ["status", "--json"]);
     assert_eq!(
         calls[1],
-        ["serve", "--bg", "--https=10000", "localhost:3000"]
+        ["serve", "--bg", "--https=10000", format!("localhost:{port}").as_str()]
     );
 }
 
@@ -161,7 +167,7 @@ async fn dns_failure_prevents_changes_and_serve_errors_keep_their_status() {
     ] {
         let commands = Recorder::new([answer]);
         assert_eq!(
-            hangar_port_preview::start(&commands, 3000).await.status(),
+            hangar_port_preview::start(&commands, closed_port()).await.status(),
             expected
         );
         assert!(
@@ -182,7 +188,7 @@ async fn dns_failure_prevents_changes_and_serve_errors_keep_their_status() {
             output(true, r#"{"Self":{"DNSName":"fixture.ts.net"}}"#, ""),
             answer,
         ]);
-        let response = value(hangar_port_preview::start(&commands, 3000).await).await;
+        let response = value(hangar_port_preview::start(&commands, closed_port()).await).await;
         assert_eq!(response.0, expected);
         assert!(response.1["detail"].is_string());
     }

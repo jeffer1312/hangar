@@ -582,7 +582,7 @@ impl Store {
 }
 
 fn other_terminal_policy(state: &State) -> bool {
-    matches!(state.runtime_state["other_terminal_life"]["provider"].as_str(), Some("pi" | "omp" | "kimi"))
+    matches!(state.runtime_state["other_terminal_life"]["provider"].as_str(), Some("pi" | "omp" | "kimi" | "antigravity"))
 }
 
 fn append_row(state: &mut State, row: Value) -> io::Result<Value> {

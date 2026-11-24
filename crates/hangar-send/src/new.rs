@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::http::Endpoint;
 use crate::{Ctx, identity, msys_drive_path, parse, text, truthy};
 
-const USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--resume <id da conversa>]";
+const USAGE: &str = "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless|--terminal] [--jev|--sem-jev] [--code-mode|--sem-code-mode] [--read-only] [--inherit|--no-inherit] [--engine-account <id>] [--branch <nome> [--new-branch [--base <ref>]]] [--customizations <json>] [--prompt <texto>] [--remember-provider] [--link] [--forcar-conta] [--resume <id da conversa>]";
 /// Preparar conta e worktree passa dos 30 s; desistir antes dizia "inacessível" com a sessão nascendo.
 const CREATE_TIMEOUT: f64 = 120.0;
 
@@ -42,6 +42,7 @@ struct Options {
     prompt: String,
     resume: String,
     link: bool,
+    force_account: bool,
 }
 
 fn fail(err: &mut dyn Write, text: &str, code: u8) -> u8 {
@@ -98,10 +99,11 @@ fn parse_options(args: &[String], err: &mut dyn Write) -> Result<Options, u8> {
                 }
                 *slot = found;
             }
-            "--new-branch" | "--link" | "--remember-provider" | "--read-only" => {
+            "--new-branch" | "--link" | "--remember-provider" | "--read-only" | "--forcar-conta" => {
                 let slot = match arg {
                     "--new-branch" => &mut options.new_branch,
                     "--link" => &mut options.link,
+                    "--forcar-conta" => &mut options.force_account,
                     "--remember-provider" => &mut options.remember_provider,
                     _ => &mut options.read_only,
                 };
@@ -212,7 +214,7 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
     }
     // O `agy` com terminal ignora o `GEMINI_HOME`: `--conta` não escolhe nada, e nunca prepara conta Claude no lugar.
     if options.provider == "antigravity" && !options.account.is_empty() {
-        return fail(err, "erro: --conta não vale para o Antigravity: com terminal ele só usa a conta padrão (a do ~/.gemini)", 2);
+        return fail(err, "erro: --conta não vale para o Antigravity: ele só usa a conta padrão (a do ~/.gemini)", 2);
     }
     if options.provider == "codex" && !options.account.is_empty() {
         if options.account == "auto" {
@@ -251,8 +253,8 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
             _ => return fail(err, "erro: --customizations precisa ser um objeto JSON", 2),
         }
     };
-    if options.headless == "true" && !options.provider.is_empty() && options.provider != "claude" && options.provider != "codex" {
-        return fail(err, &format!("erro: --headless só vale com provider claude ou codex (veio: {})", options.provider), 2);
+    if options.headless == "true" && !matches!(options.provider.as_str(), "" | "claude" | "codex" | "antigravity") {
+        return fail(err, &format!("erro: --headless só vale com provider claude, codex ou antigravity (veio: {})", options.provider), 2);
     }
     // Sem conta com leitura de cota, para aqui em vez de cair calado na padrão (talvez a esgotada).
     if options.account == "auto" {
@@ -408,6 +410,7 @@ fn resume(cx: &Ctx, endpoint: &Endpoint, remote: &str, name: &str, options: &Opt
         ("--prompt", !options.prompt.is_empty()),
         ("--remember-provider", options.remember_provider),
         ("--link", options.link),
+        ("--forcar-conta", options.force_account),
     ];
     if let Some((flag, _)) = refused.iter().find(|(_, given)| *given) {
         return fail(err, &format!("erro: {flag} não combina com --resume"), 2);
@@ -480,6 +483,9 @@ fn creation_body(name: &str, options: &Options, creator: &str, customizations: O
     }
     if options.remember_provider {
         put("remember_provider", true.into());
+    }
+    if options.force_account {
+        put("force_account", true.into());
     }
     if !creator.is_empty() {
         put("creator", creator.into());

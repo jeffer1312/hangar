@@ -241,8 +241,7 @@ fn login_status(id: &str, attempt_id: Option<&str>, home: &Path) -> Response {
                 forget_signed(&account, home);
                 // A conta nova ganha o hook de estado já no primeiro login.
                 if ok {
-                    let installed = crate::provider_hooks::command(home, "agy-state-hook")
-                        .and_then(|command| hangar_antigravity::hooks::install(&account.hooks_path(home), &command).map_err(|e| e.to_string()));
+                    let installed = crate::harness_setup::agy_hooks::install(home, &account.hooks_path(home));
                     if let Err(error) = installed {
                         tracing::warn!(code = "agy_hooks_after_login_failed", %error, "hook do Antigravity não gravado depois do login");
                     }

@@ -37,7 +37,8 @@ vi.mock('../stores/chat', async (original) => ({
   ...await original<typeof import('../stores/chat')>(), chatStore: () => h.chat, filaCount: () => 0,
 }));
 vi.mock('../stores/sessions', () => {
-  const value = { rows: [{ serverId: 'srv', name: 'sess', provider: 'claude', jsonl: '/sessions/current' }], byServerRecord: {} };
+  const value = { rows: [{ serverId: 'srv', name: 'sess', provider: 'claude', jsonl: '/sessions/current' },
+    { serverId: 'srv', name: 'agy', provider: 'antigravity', jsonl: null, lifecycle_id: 'k:agy-nova:g:1' }], byServerRecord: {} };
   return { useSessions: Object.assign((select: (state: typeof value) => unknown) => select(value), { getState: () => value }) };
 });
 vi.mock('../stores/servers', () => {
@@ -327,6 +328,17 @@ describe('Composer — ditado', () => {
     expect(readDraft('srv', 'sess')).toMatchObject({ text: 'Texto anterior',
       recordings: [{ id: 'old', serverPath: '/uploads/old.m4a' }] });
     expect(container.querySelectorAll('[data-audio]')).toHaveLength(1);
+  });
+
+  it('sessão de outro agente com o mesmo nome e sem transcript não traz o rascunho do Claude anterior', async () => {
+    writeDraft('srv', 'agy', { version: 1, text: 'digitado no Claude', revision: 2, transcript: '/sessions/claude', life: 'k:claude-velha',
+      attachments: [], submission: null });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => root.render(createElement(Composer, { ...props, name: 'agy' })));
+    expect(container.querySelector('textarea')!.value).toBe('');
+    expect(container.textContent).toContain(m.composer_draft_previous({ text: 'digitado no Claude' }));
   });
 
   it('o X retira também o chip persistido quando a limpeza do ditado aplicado falhou', async () => {

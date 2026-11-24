@@ -184,18 +184,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   transiente, o motor nasce no cgroup do backend e o `systemctl restart` o mata antes de gravar
   "pronto". Nas etapas `reiniciar` e `nativo`, backend com outro pid e disco no `commit_para` =
   sucesso com aviso de que o app nativo não foi atualizado; fora disso, falha.
-- **`scripts/verificar-local` é exigido ao abrir PR e ao subir para a `main` ou para branch com PR
-  aberto; branch sem PR sobe livre.** Todo passo fixa o par do porteiro numa cópia própria
+- **`scripts/verificar-local` é opcional: push e `gh pr create` não o exigem; quem trava o PR é o
+  `merge-gate`.** Todo passo fixa o par do porteiro numa cópia própria
   (`target/par-auth`), e com a `main` juntada a base do plano é o `merge-base` com `origin/main`.
-  O hook PreToolUse do `gh pr create` (`.claude/settings.json`)
-  confere o PR inteiro, desde o ponto em que a ponta saiu da base; a trava `pre-push` confere cada
-  push, e consulta o PR com prazo de 10 s: sem `gh` ou sem resposta, segue com aviso. PR aberto pelo
-  site fica com o CI. O padrão, que as travas exigem, é o rápido: só o ligado aos arquivos mudados
-  (de Rust, `cargo check` do workspace com testes e exemplos, e `cargo test` dos crates que não são o
-  `hangar-server`: os testes dele ficam no workflow `Server`, a cada push, e no `--completo`. A
-  `main` não exige esse check, e ele só dispara quando o push mexe nos caminhos do `server.yml`
-  (`crates/**` e os arquivos de runtime do backend): nesse caso, quem mescla confere que o `Server`
-  do último commit do PR terminou verde, e ele aparece entre os checks desse commit; pytest dos testes
+  Commit cujo ancestral (até 30 na linha principal) já passou em todo o plano dele roda só o plano do
+  que mudou desde esse ancestral, e grava o plano inteiro. O padrão é o rápido: só o ligado aos arquivos mudados
+  (de Rust, `cargo check` do workspace com testes e exemplos, e `cargo test` dos crates mudados e dos
+  que dependem deles, menos o `hangar-server`, pela conta do `scripts/gate-areas.py`; pytest dos testes
   mudados e dos que citam o módulo mudado, a suíte inteira quando muda dependência, conftest ou
   helper; `vitest related` e typecheck só com `.ts`/`.svelte`/mensagens no diff, tudo quando muda
   dependência ou configuração; o nativo inteiro, num target próprio da árvore fixa, porque o custo é
@@ -207,20 +202,25 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   contra ~33 min do Linux completo.
   `--completo` roda o que o CI rodaria para o que o commit muda, num clone fixo por máquina (`~/.cache/hangar-verificacao/arvore`), em fila
   única (`flock`) e prioridade baixa, com HOME vazio e o `omp` fixo do CI; Windows por SSH na VM
-  de `git config hangar.verificarWindows`, com mutex. O registro é pelo tree sha; a trava só o lê.
-  Escape nos dois: `HANGAR_SEM_VERIFICACAO=1`. Na VM roda só o que o CI roda no Windows (Rust e os 6
+  de `git config hangar.verificarWindows`, com mutex. O registro é pelo tree sha. Na VM roda só o que o CI roda no Windows (Rust e os 6
   `test_runtime_*`), nunca o pytest inteiro. O passo `mobile` só entra quando muda `mobile/`; mudança no
-  core ou nas mensagens passa pelo `front` aqui e pelo app inteiro no portão do PR (`gate.yml`) (à mão:
+  core ou nas mensagens passa pelo `front` aqui e pelo app inteiro no push da main (`gate.yml`) (à mão:
   `--tudo --passos mobile`). Evidência em
   [Verificação local antes do push](#verificação-local-antes-do-push-06102026).
-- **O merge na main passa pelo check `merge-gate` (`gate.yml`), que roda em todo pull request.** Ele
-  decide pelo diff (`scripts/gate-areas.py`) o que roda: testes do servidor (`server-jobs.yml`),
-  do desktop (`native-check.yml`, com os crates de que ele depende tirados dos `Cargo.toml`) e
-  do app Expo (typecheck e testes inteiros). Parte acionada tem de terminar verde e parte não
-  acionada tem de ter sido pulada; mexer no próprio portão aciona tudo. O `server.yml` e o
-  `native.yml` rodam no push só da main e do canal, que é onde publicam: branch sem PR se testa
-  pelo `workflow_dispatch`. Workflow novo que testa algo exigido entra no portão, nunca como
-  check à parte. Evidência em [Portão de merge](#portão-de-merge-22112026).
+- **O check `merge-gate` (`gate.yml`) roda em todo pull request e barra regra descumprida e o que
+  não compila ou quebra teste do que o PR mudou.** As
+  regras que saem do diff estão em `scripts/check-*` (linha nova em `backend/app`, crate dependendo do
+  `hangar-server`, passo de atualização, `CLIENT_API`); as que são teste, na lista por nome de
+  `scripts/rule-tests.py`, que falha se um deles não rodar. Regra nova que a máquina confere entra num
+  dos dois, nunca como check à parte. O `scripts/gate-areas.py` decide quais travas o diff aciona;
+  mexer no próprio portão aciona todas. No PR rodam os testes dos crates mudados e dos que dependem
+  deles (o `hangar-server` em três fatias, `scripts/rust-pr-tests.py`, pelo crc32 do nome do teste
+  de unidade e um em três dos executáveis de `tests/`), o desktop inteiro e os testes do Expo
+  ligados aos arquivos mudados, com o `check:app`. As suítes inteiras do servidor (Linux e Windows) e
+  do Expo rodam no push da main e do canal. Evidência em
+  [Portão do PR compila e testa o que mudou](#portão-do-pr-compila-e-testa-o-que-mudou-24112026). Linha nova em `backend/app` com autorização do dono leva
+  `HANGAR_PYTHON_AUTORIZADO: <motivo>` na mensagem de um commit. Evidência em
+  [Portão de merge](#portão-de-merge-22112026).
 - **No Linux a verificação prepara uma vez e roda os passos em duas faixas (cargo e o resto); o
   registro é por passo.** Faixa que abre com a memória disponível abaixo de
   `HANGAR_VERIFICAR_MEM_GB` (padrão 6) espera a anterior terminar, com os mesmos passos. Quando o
@@ -660,7 +660,7 @@ Creating a session wraps `tmux` in
 
 ## O botão Atualizar não roda o instalador; o instalador só roda por passo declarado
 
-(`atualizar._preparar`, `scripts/check-passo-de-atualizacao.sh`, job `passos` do CI, 14/09/2026.)
+(`atualizar._preparar`, `scripts/check-passo-de-atualizacao.sh`, job `passos` do CI, 14/09/2026, hoje o `regras` do `gate.yml`.)
 O motor chamava `install.ps1 -Update` / `install.sh --update` em toda atualização — 8 etapas, 24
 ramos `if ($Update)` só no `.ps1`, cada um uma chance de falhar sem ninguém ter pedido nada dele.
 Foi assim que usuários Windows receberam "NAO terminou: tarefas agendadas, backend no ar" num
@@ -1538,31 +1538,72 @@ Os quatro apareceriam na primeira tentativa de atualizar uma máquina de teste e
 testes automáticos do Windows (`verificar-local` roda só o runtime; o `test-windows-tasks.ps1` não
 está no CI) não exercitam a atualização nem a criação de sessão.
 
+## Portão do PR compila e testa o que mudou (24/11/2026)
+
+- **Caso.** O dono pediu travas para as regras do `CLAUDE.md` e um portão que não demorasse, não que o
+  PR deixasse de compilar Rust. O portão de regras (PR #500) tirou do PR todo teste que não fosse de
+  regra, e o único lugar que compilava Rust antes do merge ficou sendo o `scripts/verificar-local`,
+  exigido no push e no `gh pr create`. Correção pequena levava 2 h ou mais.
+- **Medido na máquina (registros de andamento em `~/.local/state/hangar-verificacao/`, até 24/11).**
+  `rust_rapido`: média de 350 s em 61 rodadas, até 908 s; dois `cargo check` do workspace (3 e 3 a
+  6 min) e o `cargo test` de 47 crates, ~130 executáveis. Nativo ~113 s, front ~220 s, mobile ~200 s,
+  na outra faixa. Fila única: três rodadas de 24/11 esperaram 15, 21 e 33 min. O registro é por árvore
+  e o plano é o do PR inteiro: commit de uma linha repetia tudo. Testes intermitentes
+  (`hangar-session-tools --test external`, ETXTBSY) obrigavam a repetir o passo inteiro.
+- **No CI.** O job das travas do servidor compila as bibliotecas de teste do workspace em ~4,5 min
+  com o cache da main. Na main, os testes de unidade do `hangar-server` levam ~13 min num executável
+  só, e o passo inteiro de testes 27 min: daí as três fatias.
+- **Como fazem projetos Rust grandes** (Ruff/uv, rust-analyzer, Omicron, Zed): na máquina, o editor e o
+  teste do crate mexido, nada obrigatório; no PR, o CI compila e testa as áreas que o diff toca; a
+  suíte inteira, Windows e release na main. Linker (mold) e debuginfo reduzida já estavam aplicados.
+- **Escolha do dono:** CI como portão (regras, compilação e testes do que mudou), `verificar-local`
+  opcional e rápido.
+- **Medido no PR #505**, com todas as partes acionadas (o PR muda o próprio portão): 17,6 a 18,4 min no
+  total; fatias do servidor de 12,6 a 17,2 min; travas e testes dos outros crates de 8,3 a 10 min; desktop
+  inteiro 2,5 min; Expo de 1,5 a 2,1 min. Os testes do `it` precisam do `hangar-cano` compilado acima do
+  executável, que só a suíte do workspace compilava. A divisão expôs um teste de log que dependia dos
+  vizinhos (`connect_account_devices`, interesse do `tracing` em cache; 1 falha em 3 rodadas, 0 em 6
+  depois de refazer o cache) e, rodando sobre o merge com a main, um teste que a main quebrou (#503).
+
 ## Portão de merge (22/11/2026)
 
-- **Caso.** A regra da main exigia PR, mas nenhum check. Não dava para exigir os que existiam: o
-  `server.yml` e o `native.yml` disparavam só em push, com filtro de pastas, e um PR que não
-  tocasse nelas esperaria para sempre um check que nunca chega; os testes do Expo não rodavam em
-  workflow nenhum (só no `verificar-local`). A trava da abertura única
-  (`every_open_field_is_said_by_the_cli_and_the_mcp_or_is_only_of_the_server`) podia ficar
-  vermelha e o merge passar.
-- **Desenho.** Um check de nome fixo, `merge-gate`, num workflow que roda em todo pull request
-  (`gate.yml`). As partes pesadas são chamadas como workflows reutilizáveis (`server-jobs.yml`,
-  `native-check.yml`) ou ficam no próprio portão (Expo), e só rodam quando o diff toca a área
-  delas; o `merge-gate` confere o resultado de cada uma contra o que foi acionado, então falha,
-  cancelamento ou pulo indevido o deixam vermelho, e PR só de docs passa sem rodar o pesado.
-- **Sem testar duas vezes.** O push de PR disparava o `server.yml` e o `native.yml` e agora
-  dispararia o portão também. Os dois passaram a rodar no push só da main e do canal, onde
-  publicam e onde o `package.yml` e os `*-macos.yml` os esperam; no push da main o portão roda só
-  o Expo. Branch sem PR perdeu o teste automático no push: roda pelo `workflow_dispatch`.
+- **Medido no PR #500 (24/11/2026).** Com todas as partes acionadas, 6 min 51 s: servidor 6 min 24 s,
+  desktop 2 min 35 s, Expo 1 min 11 s, regras do diff 32 s. No PR #501, temporário, tirar o
+  `code_mode` do `new_session` deixou o `merge-gate` vermelho em `new_session_says_every_open_field`.
+- **Caso.** O PR #460 guardou o Code Mode no `appearance.json` do desktop, contra a regra da abertura
+  única, que estava escrita no `CLAUDE.md`. O dono pediu uma trava que bloqueasse isso, porque regra
+  escrita não obriga. As travas viraram testes (PR #482), mas a regra da main não exigia check
+  nenhum: teste vermelho não impedia o merge.
+- **Primeiro portão (PR #488), refeito em 24/11/2026.** Rodava no PR as suítes inteiras do servidor
+  (Linux e Windows), do desktop e do Expo para proteger poucas travas. Nos runs verdes em que tudo
+  rodou (PRs #497 e #498) levou 37 e 38 min, com o Linux em 22 e 24 min e o Windows em 37: o Windows
+  é experimental, não barrava, e mesmo assim o portão o esperava. No PR #499 o passo de testes do
+  Windows passou de 54 min, contra 24 e 25 min nesses dois runs.
+- **Desenho de 22/11 a 24/11** (refeito em [Portão do PR compila e testa o que mudou](#portão-do-pr-compila-e-testa-o-que-mudou-24112026)). O PR rodava só as regras. As do diff saem em segundos; as travas do servidor e do
+  desktop compilam só o alvo de teste delas e filtram por nome. As suítes ficaram no push da main e do
+  canal, onde o teste vermelho segura a publicação daquele sistema. O preço é teste quebrado que não seja de regra
+  aparecer depois do merge: na rodada anterior do #499 o portão antigo pegou dois.
+- **Travas de linha nova (24/11/2026).** O `check-rules.py` olha só o que o diff acrescenta: componente
+  `.svelte` novo, `claude-pocket` em código, `KeyboardAvoidingView` do `react-native`, vibração fora do
+  `src/ui/haptics.ts`, `baseUrl` cru em chamada e `new-session` fora do `session_open/`. O que já existia
+  não conta, por isso não há teto nem lista de exceções: 4 arquivos do Expo com `expo-haptics`, 2 chamadas da
+  web com `baseUrl` e 4 usos de `new-session` que não abrem agente por fora (shell separado, runner de projeto,
+  janela de login do Claude e atalho) seguem como estão. A saída é `HANGAR_<REGRA>_AUTORIZADO: <motivo>` num
+  commit. Rodadas nos 50 merges mais recentes da main, só o #462 ficaria vermelho: criou o `HandoffLine.svelte`
+  depois da regra da web.
+- **Trava geral do Expo.** O teste recarrega a tela com todo valor guardado no aparelho ligado e exige o mesmo
+  pedido. Recarregar importa: os stores leem a preferência ao carregar o módulo, e foi assim que o Code Mode
+  entrou no desktop. Fica fora o que o core guarda pelo próprio storage.
+- **Leitor do plugin no teste do core.** O kit de teste do plugin só roda dentro do Claude Code; o
+  `contextRefs.ts` dele é TypeScript puro, e o core roda os casos compartilhados nele também.
+- **Julgamento fica no CodeRabbit, em `warning`.** São 10 checagens no `.coderabbit.yaml` (o plano Advanced
+  aceita 20). Em `.coderabbit/pre-merge-checks/` cada uma viraria check do GitHub, e o inconclusivo
+  (`action_required`) seguraria o merge da `pr-review-auto`.
+- **Nome que não rodou é falha.** O filtro do cargo e o do vitest passam verdes com zero testes:
+  renomear a trava a tiraria do portão sem aviso.
+- **Nunca o workflow do servidor no PR.** O portão antigo chamava o `server-jobs.yml`, que pede
+  permissão de escrita por causa da publicação. O atual não o chama e tem só leitura.
 - **Áreas do desktop pela cadeia de dependências.** O filtro do `native.yml` listava
   `hangar-api` e `hangar-workspace`, mas o desktop também depende de `hangar-local-server` e
   `hangar-video`: mudança neles não rodava o `Native`. O `gate-areas.py` segue os `path` dos
   `Cargo.toml` (inclusive os `workspace = true`), e o filtro do `native.yml` ganhou os dois.
-- **Área é também o que o teste lê.** Os testes do servidor leem `scripts/`, `docs/atualizacoes/`,
-  fixtures de `packages/core/src/` e `messages/`; os do desktop, `docs/novidades/`, `docs/manual/`
-  e as mesmas fixtures. Essas pastas acionam a parte delas no portão. O filtro do `server.yml` não
-  as ganhou: o `package.yml` usa aquele filtro para decidir se reaproveita os binários da release.
-- **Branch passada ao `server-jobs.yml` é `pr-<número>`, nunca a do PR.** Um PR da `beta` para a
-  `main` passaria `beta`, que liga a publicação da `server-beta` e cai na concorrência dos runs de
-  push dela.

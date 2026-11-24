@@ -51,11 +51,13 @@ saida="$(printf 'crates/hangar-server/src/main.rs\n' | bash "$alone/run.sh" --cl
 grep -qx "linux: rust_rapido" <<< "$saida" || { echo "FALHOU roteiro copiado sozinho: \"$saida\""; falhou=1; }
 rm -rf "$alone"
 
-# Rust no rápido: confere o workspace; testes só dos crates que não são o hangar-server.
+# Rust no rápido: confere o workspace; testes dos crates mudados e de quem depende deles, menos o
+# hangar-server. A conta de quem depende é a do scripts/gate-areas.py, sobre o workspace real.
 quick_rust() {   # $1 = arquivos mudados, $2 = chamadas esperadas do cargo
     (
         d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
-        mkdir -p "$d/crates"
+        mkdir -p "$d/crates" "$d/scripts"
+        ln -s "$(realpath "$(dirname "$V")/gate-areas.py")" "$d/scripts/gate-areas.py"
         cargo() { printf '%s\n' "$*" >> "$d/cargo.log"; }
         wait_for_memory() { :; }
         mudados() { grep -E "$1" <<< "$ARQUIVOS" || true; }
@@ -68,10 +70,13 @@ quick_rust() {   # $1 = arquivos mudados, $2 = chamadas esperadas do cargo
 # As bibliotecas em modo de teste antes do resto: as duas conferências do hangar-server em fila.
 check_calls=$'check --locked --workspace --lib --profile test\ncheck --locked --workspace --all-targets'
 quick_rust "crates/hangar-server/src/main.rs" "$check_calls"
-quick_rust $'crates/hangar-server/src/main.rs\ncrates/hangar-core/src/lib.rs' \
-    "$check_calls"$'\ntest --locked --no-fail-fast --workspace --exclude hangar-server'
-quick_rust "crates/Cargo.lock" \
-    "$check_calls"$'\ntest --locked --no-fail-fast --workspace --exclude hangar-server'
+# hangar-port-stop: os testes dele, e o hangar-server, que depende dele, fica de fora.
+quick_rust "crates/hangar-port-stop/src/lib.rs" "$check_calls"$'\ntest --locked --no-fail-fast -p hangar-port-stop'
+quick_rust $'crates/hangar-server/src/main.rs\ncrates/hangar-port-preview/src/lib.rs' \
+    "$check_calls"$'\ntest --locked --no-fail-fast -p hangar-port-preview'
+# Fora de qualquer crate: todos, menos o hangar-server.
+todos="$(python3 -I "$(dirname "$V")/gate-areas.py" --rust-packages <<< crates/Cargo.lock | grep -vx hangar-server | sed 's/^/-p /' | tr '\n' ' ')"
+quick_rust "crates/Cargo.lock" "$check_calls"$'\n'"test --locked --no-fail-fast ${todos% }"
 quick_rust "frontend/src/b.ts" ""
 caso() {   # $1 = arquivos (um por linha), $2 = linux esperado, $3 = windows esperado
     local saida lin win
@@ -96,6 +101,8 @@ caso "mobile/src/App.tsx" "backend mobile" ""
 caso "desktop-native/src/main.rs" "nativo" ""
 caso "install.ps1" "backend" "runtime"
 caso "scripts/shell/claude.fish" "backend shell" ""
+caso "scripts/shell/pi.ps1" "backend shell" "runtime wrappers"
+caso "scripts/test-windows-wrappers.ps1" "backend" "runtime wrappers"
 caso "scripts/hooks/pre-push" "backend shell" ""
 caso "scripts/memory-scope" "backend shell" ""
 caso "scripts/configure-statusline.cjs" "backend statusline" "statusline"
@@ -128,6 +135,8 @@ rapido "mobile/src/App.tsx" "mobile_rapido" ""
 rapido "desktop-native/src/main.rs" "nativo" ""
 rapido "install.ps1" "" "runtime"
 rapido "scripts/shell/claude.fish" "shell" ""
+rapido "scripts/shell/pi.ps1" "shell" "runtime wrappers"
+rapido "scripts/windows-wrappers.ps1" "" "runtime wrappers"
 rapido "scripts/memory-scope" "shell" ""
 rapido "scripts/test_memory_scope.py" "shell" ""
 rapido "scripts/configure-statusline.cjs" "statusline" "statusline"
@@ -179,33 +188,33 @@ plano="$(cd "$hist" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "$Vabs"
 grep -q mobile_rapido <<< "$plano" || { echo "FALHOU mudança da branch em arquivo da main ficou fora do plano: $plano"; falhou=1; }
 rm -rf "$hist"
 
+# Commit cujo ancestral já passou em todo o plano dele: só o que mudou desde o ancestral entra.
+hist="$(mktemp -d)" estado="$(mktemp -d)"
+(cd "$hist" && export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 && git init -q -b main && \
+    g() { git -c user.name=t -c user.email=t@t "$@"; } && \
+    g commit -q --allow-empty -m base && git update-ref refs/remotes/origin/main HEAD && git checkout -q -b tarefa && \
+    mkdir -p crates/hangar-server mobile docs && touch crates/hangar-server/a.rs mobile/b.tsx && git add . && g commit -q -m a && \
+    touch docs/x.md && git add . && g commit -q -m docs)
+mkdir -p "$estado/hangar-verificacao/resultados"
+registro_de() {   # $1 = commit, $2 = passos
+    printf 'commit=%s\nbase=%s\npassos=%s\n' "$(git -C "$hist" rev-parse "$1")" "$(git -C "$hist" rev-parse main)" "$2" \
+        > "$estado/hangar-verificacao/resultados/$(git -C "$hist" rev-parse "$1^{tree}")-linux"
+}
+plano_de() { (cd "$hist" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 XDG_STATE_HOME="$estado" "$Vabs" --plano 2>&1 | sed -n 's/^linux: *//p'); }
+registro_de HEAD~1 "rust_rapido mobile_rapido"
+plano="$(plano_de)"
+[[ "$plano" == "nada a rodar" ]] || { echo "FALHOU ancestral verificado não cobriu o commit de docs: \"$plano\""; falhou=1; }
+(cd "$hist" && touch mobile/c.tsx && git add . && git -c user.name=t -c user.email=t@t commit -q -m c)
+plano="$(plano_de)"
+[[ "$plano" == "mobile_rapido" ]] || { echo "FALHOU depois do ancestral verificado, o plano não foi só o do que mudou: \"$plano\""; falhou=1; }
+# Ancestral que não passou em tudo não serve: o plano volta a ser o do PR inteiro.
+registro_de HEAD~2 "rust_rapido"
+plano="$(plano_de)"
+[[ "$plano" == "rust_rapido mobile_rapido" ]] || { echo "FALHOU ancestral com passo faltando serviu de base: \"$plano\""; falhou=1; }
+rm -rf "$hist" "$estado"
+
 # Erro no cálculo do plano nunca vira "nada a verificar".
 "$V" --plano --base ref-que-nao-existe >/dev/null 2>&1 && { echo "FALHOU --plano com base inválida saiu 0"; falhou=1; }
-"$V" --exigir 0000000000000000000000000000000000000000 >/dev/null 2>&1 && { echo "FALHOU --exigir com commit inválido saiu 0"; falhou=1; }
-
-# Hook do `gh pr create` (.claude/settings.json): só age no comando dele, aceita o escape e recusa
-# com frase quando não consegue resolver a base.
-hook() {   # $1 = comando, $2 = código esperado
-    local rc
-    printf '{"cwd":"%s","tool_input":{"command":"%s"}}' "$PWD" "$1" | node "$(dirname "$0")/hook-pr-verificado.mjs" 2>/dev/null
-    rc=$?
-    (( rc == $2 )) || { echo "FALHOU hook \"$1\": saiu $rc (esperado $2)"; falhou=1; }
-}
-hook "git status" 0
-hook "git commit -m 'o hook do gh pr create --base now'" 0
-hook "printf '%s' 'x && gh pr create --base nao-existe'" 0
-hook "HANGAR_SEM_VERIFICACAO=1 gh pr create --base main" 0
-if [[ "$(uname -s)" == Linux ]]; then
-    hook "gh pr create --base base-que-nao-existe" 2
-    hook "true && gh pr create --base base-que-nao-existe" 2
-    hook "(cd . && FOO=1 gh pr create --base base-que-nao-existe)" 2
-    hook "if true; then gh pr create --base base-que-nao-existe; fi" 2
-    hook "gh -R dono/repo pr create --base base-que-nao-existe" 2
-    hook "cd / && gh pr create --base base-que-nao-existe" 0
-    hook "gh pr create --base 'base-que-nao-existe' --body 'x'" 2
-    hook "gh pr create --body 'usa --base base-que-nao-existe' --help" 0
-    hook "gh pr create --base main --head main --body 'cita --base base-que-nao-existe'" 0
-fi
 
 "$V" --plano --passos inexistente >/dev/null 2>&1 && { echo "FALHOU --passos desconhecido saiu 0"; falhou=1; }
 HANGAR_VERIFICAR_PROCESSOS=0 "$V" --plano >/dev/null 2>&1 && { echo "FALHOU com 0 processos saiu 0"; falhou=1; }
@@ -356,7 +365,7 @@ base="$(mktemp -d)"
 (
     set -e
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
-    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t.invalid HANGAR_SEM_VERIFICACAO=1
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t.invalid
     chave="sk-$(printf 'a%.0s' {1..24})"
     git init -q --bare -b main "$base/publico.git"
     git clone -q "$base/publico.git" "$base/w" 2> /dev/null

@@ -44,8 +44,21 @@ fn nav_dir(context: &Context) -> Option<PathBuf> {
     Some(context.home.as_ref()?.join(".hangar").join("nav"))
 }
 
+/// A dica para o texto que a pessoa mandou, para agente que avisa o prompt por outro gancho (o `PreInvocation`
+/// do `agy`). Falha vai ao log e sai sem dica, como no hook.
+pub fn hint_for(prompt: &str, context: &Context) -> Option<String> {
+    hint_prompt(prompt, context).unwrap_or_else(|reason| {
+        crate::log::record(context, LOG, &format!("main falhou ({reason})"));
+        None
+    })
+}
+
 /// `Ok(None)` = sem dica (caso normal); `Err` = falha que o `main` do Python registrava.
 fn hint(stdin: &[u8], context: &Context) -> Result<Option<String>, String> {
+    hint_prompt(&prompt(stdin), context)
+}
+
+fn hint_prompt(prompt: &str, context: &Context) -> Result<Option<String>, String> {
     let Some(nav) = nav_dir(context) else { return Ok(None) };
     // O arquivo sobrevive a um crash do app: só o pid vivo diz que ele está no ar.
     let Some(server) = std::fs::read(nav.join("_srv.json")).ok()
@@ -54,8 +67,7 @@ fn hint(stdin: &[u8], context: &Context) -> Result<Option<String>, String> {
     if !pid_alive(server.get("pid").unwrap_or(&Value::Null)) {
         return Ok(None);
     }
-    let prompt = prompt(stdin);
-    if notification(&prompt) {
+    if notification(prompt) {
         return Ok(None);
     }
     let url = match session_name(context) {
@@ -64,7 +76,7 @@ fn hint(stdin: &[u8], context: &Context) -> Result<Option<String>, String> {
     };
     // Fechado, a dica só vai em mensagem de tela: em toda mensagem ela custava contexto a quem nunca
     // abre página (o árbitro de uma orquestração).
-    if url.is_none() && !needs_browser(&prompt, context) {
+    if url.is_none() && !needs_browser(prompt, context) {
         return Ok(None);
     }
     Ok(Some(text(url.as_deref(), context.var("HANGAR_JEV") == Some("on"))))

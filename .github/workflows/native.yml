@@ -3,15 +3,15 @@
 # `native-latest.json` dessa release para oferecer o "Atualizar" (desktop-native/src/update.rs).
 # O canal de testes (`beta`) publica na pré-release `native-beta`, que é a que o app procura quando o servidor da
 # máquina está no canal dessa branch. O manifesto mantém o nome em toda release.
-# Roda no push da main e do canal: `check` (build e test em debug, Linux), `build` e `publish`. Pull request é
-# testado pelo `check` que o gate.yml chama.
+# Roda no push da main e do canal: `check` (build e test em debug, Linux), `build` e `publish`. No pull request o
+# gate.yml roda só as travas das regras.
 # `workflow_dispatch` em outra branch compila sem publicar. Trocar o canal é trocar `beta` aqui, no server.yml e
 # nos *-macos.yml. O build está no native-build.yml. O macOS roda à parte, no native-macos.yml, depois que este
 # run termina, e acrescenta os arquivos dele ao manifesto desta versão: nada daqui espera por ele.
 name: Native
 
 on:
-  # Só onde publica: os pull requests são testados pelo gate.yml, e uma branch sem PR roda pelo workflow_dispatch.
+  # Só onde publica; a suíte em outra branch roda pelo workflow_dispatch.
   push:
     branches: [main, beta]
     paths:
@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' && github.ref_name != 'beta' }}
 
 jobs:
-  # Build e testes em debug, no native-check.yml (o mesmo que o gate.yml roda nos pull requests).
+  # Build e testes em debug, no native-check.yml.
   check:
     uses: ./.github/workflows/native-check.yml
     permissions:

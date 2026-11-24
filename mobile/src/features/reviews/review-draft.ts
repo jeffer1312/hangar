@@ -14,8 +14,9 @@ export async function prepareReviewDraft(server: Server, name: string, text: str
   const sessions = await fetchSessionsForServer(server);
   const session = sessions.find((item) => item.name === name);
   if (!session || !current()) throw new Error(m.native_request_changed());
-  const { draft, recoverable } = resolveDraftTranscript(server.id, name, session.jsonl ?? null);
+  const { draft, recoverable } = resolveDraftTranscript(server.id, name, session.jsonl ?? null, session.lifecycle_id ?? null);
   if (recoverable) throw new Error(m.mobile_review_draft_changed());
-  const base = draft ?? { version: 1 as const, text: '', revision: 0, transcript: session.jsonl ?? null, attachments: [], submission: null };
+  const base = draft ?? { version: 1 as const, text: '', revision: 0, transcript: session.jsonl ?? null,
+    ...(session.lifecycle_id ? { life: session.lifecycle_id } : {}), attachments: [], submission: null };
   writeDraft(server.id, name, { ...base, text: [base.text.trimEnd(), text].filter(Boolean).join('\n\n'), revision: base.revision + 1 });
 }

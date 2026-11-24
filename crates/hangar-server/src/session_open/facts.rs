@@ -69,6 +69,10 @@ impl LocalFacts {
         crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&self.env().home), name)
     }
 
+    fn antigravity_sidecar(&self, name: &str) -> PathBuf {
+        crate::runtime::codex_sidecar::path(&crate::runtime::antigravity_sidecar::dir(&self.env().home), name)
+    }
+
     /// Contas Codex visíveis e o último login conhecido de cada uma (`_codex_auth_states`).
     fn codex_states(&self) -> Result<Vec<(crate::accounts::catalog::Account, String)>, OpenError> {
         // Lista que não se lê não é "nenhuma conta": trocaria a conta ou o provedor calado.
@@ -368,6 +372,11 @@ impl OpenFacts for LocalFacts {
                 config_dir: Ok(None), permission_mode: meta.get("permission_mode").and_then(text),
                 codex_account: meta.get("codex_account").and_then(text) }));
         }
+        // No Antigravity a conta é a pasta Google (`gemini_home`), que a abertura recebe como `config_dir`.
+        if let Some(meta) = read(&self.antigravity_sidecar(name))? {
+            return Ok(Some(CreatorFacts { provider: AgentProvider::Antigravity, headless: meta.get("headless") == Some(&Value::Bool(true)),
+                config_dir: Ok(meta.get("gemini_home").and_then(text)), permission_mode: meta.get("permission_mode").and_then(text), codex_account: None }));
+        }
         Ok(self.terminal_creator(name))
     }
 
@@ -513,7 +522,7 @@ impl OpenFacts for LocalFacts {
     }
 
     fn name_in_use(&self, name: &str) -> Result<bool, OpenError> {
-        if self.headless_sidecar(name).exists() || self.codex_sidecar(name).exists() { return Ok(true); }
+        if self.headless_sidecar(name).exists() || self.codex_sidecar(name).exists() || self.antigravity_sidecar(name).exists() { return Ok(true); }
         // Sem resposta do multiplexador o nome não está livre: só a ausência conhecida (sem servidor ou
         // sem o programa) é "nenhum pane".
         let panes = match self.runtime.block_on(self.mux.list_panes()) {

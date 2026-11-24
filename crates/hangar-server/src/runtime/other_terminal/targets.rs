@@ -84,6 +84,10 @@ pub fn discovery(list: Arc<ListBridge>) -> OtherDiscovery {
                             .map(|_| Err(failed(error.code)));
                     }
                 };
+                // O Antigravity sem terminal é do ator ACP: não há pane a procurar.
+                if context.row.as_ref().is_some_and(|row| row.headless) {
+                    return None;
+                }
                 let kind = context
                     .row
                     .as_ref()
@@ -131,7 +135,7 @@ pub fn discovery(list: Arc<ListBridge>) -> OtherDiscovery {
                     .map_err(|error| failed(error.code))?;
                 let mut names = rows
                     .iter()
-                    .filter(|row| provider(&row.provider).is_some())
+                    .filter(|row| !row.headless && provider(&row.provider).is_some())
                     .map(|row| row.name.clone())
                     .collect::<Vec<_>>();
                 names.extend(
@@ -148,6 +152,24 @@ pub fn discovery(list: Arc<ListBridge>) -> OtherDiscovery {
         }),
     }
 }
+/// A conversa provisória do `agy` enquanto a tela do primeiro uso está aberta: um UUID tirado da chave da
+/// sessão, que nunca coincide com uma conversa do agy.
+pub(in crate::runtime) fn onboarding_conversation(key: &str) -> String {
+    let hex = sha1_smol::Sha1::from(format!("agy-onboarding:{key}")).digest().to_string();
+    format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
+}
+
+/// A vida adotada só para a tela do primeiro uso.
+pub(in crate::runtime) fn is_onboarding(target: &OtherTarget) -> bool {
+    target.provider == hangar_transcript::Provider::Antigravity && target.binding.conversation == onboarding_conversation(&target.key)
+}
+
+async fn onboarding_screen(program: &str, address: &str) -> bool {
+    let output = ProcessMux::default().run(vec![program.into(), "capture-pane".into(), "-p".into(), "-t".into(), address.into()]).await;
+    output.code == Some(0)
+        && (crate::terminal_state::agy_terms(&output.stdout).is_some() || crate::terminal_state::agy_onboarding_list(&output.stdout).is_some())
+}
+
 async fn resolve(
     name: String,
     kind: hangar_transcript::Provider,
@@ -282,6 +304,16 @@ async fn resolve(
             value
         }
         None => return Err(failed("other_terminal_opening_unproved")),
+    };
+    // O primeiro uso do `agy` (cores, Termos) vem antes da conversa: com essa tela no pane a vida é adotada numa
+    // conversa provisória, para a tela virar cartão no chat sem mandar mensagem.
+    let source = match source {
+        None if kind == hangar_transcript::Provider::Antigravity && agent.is_some() && onboarding_screen(&program, &address).await => {
+            crate::session_open::agents::agy_account(&spec.account)
+                .transcript_path(&context.dirs.home, &onboarding_conversation(&key))
+                .map(|path| path.to_string_lossy().into_owned())
+        }
+        source => source,
     };
     let projection = context.dirs.claude.join(".hangar-queue");
     let owned_projection = projection.clone();

@@ -126,7 +126,7 @@ mod tests {
             json!({"hidden_from_list":false}), json!({"state":"awaiting_input"}), json!({"pending_questions":1}),
             json!({"problema":"x"}), json!({"linked_by":"p"}), json!({"orq_arbiter":"o"}),
             json!({"loop_status":"running"}), json!({"loop_status":"paused_awaiting"}), json!({"provider":"pi"}),
-            json!({"provider":"omp"}), json!({"provider":"kimi"}), json!({"asleep":true}), json!({"headless":true}),
+            json!({"provider":"omp"}), json!({"provider":"kimi"}), json!({"provider":"antigravity"}), json!({"asleep":true}), json!({"headless":true}),
             json!({"shared":true}), json!({"owner":"convidado"}), json!({"pair_external":{"alias":"x"}}),
             json!({"pair_externals":[{"alias":"x","owner":"o","session":"s","address":"https://a.ts.net:8443","level":"view","pending":false}]}),
         ] {
