@@ -886,6 +886,8 @@ impl NewSession {
         let target = if self.quota_rule_applies() { self.quota_target(Some(&path)) } else { None };
         self.force_account = false;
         self.switched_from = target.as_ref().map(|_| path.clone());
+        // O seletor mostra a conta clicada: com a troca, ele é refeito fora do próprio clique.
+        if target.is_some() { cx.defer_in(window, |this, window, cx| this.build_config_pick(window, cx)); }
         (self.config, self.account_touched) = (Some(target.unwrap_or(path)), true);
         self.load_models(window, cx);
     }
