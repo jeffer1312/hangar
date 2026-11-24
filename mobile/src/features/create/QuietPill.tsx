@@ -21,6 +21,8 @@ type Props = {
   aria: string;
   disabled?: boolean;
   actions?: PillAction[];
+  // Menu próprio no lugar da lista de `actions`, para linhas mais ricas que as da lista simples.
+  menu?: (close: () => void) => ReactNode;
   menuTitle?: string;
   onAction?: (id: string) => void;
   onPress?: () => void;
@@ -41,7 +43,7 @@ type Props = {
 // A pílula quieta do app de PC (quiet_pill): 26 de altura, texto 12.5 apagado, ícone 14 e a seta do
 // menu. O hitSlop leva o toque aos 44 pt sem engordar o desenho.
 export const QuietPill = forwardRef<View, Props>(function QuietPill(
-  { icon, label, aria, disabled, actions, menuTitle, onAction, onPress, tone, plain, leading, iconOnly, shown, size }, ref,
+  { icon, label, aria, disabled, actions, menu, menuTitle, onAction, onPress, tone, plain, leading, iconOnly, shown, size }, ref,
 ) {
   const large = size === 'lg';
   const anchor = useRef<View>(null);
@@ -53,7 +55,7 @@ export const QuietPill = forwardRef<View, Props>(function QuietPill(
   const body = (
     <AnimatedPressable
       ref={anchor}
-      onPress={actions ? () => setOpen(true) : onPress}
+      onPress={actions || menu ? () => setOpen(true) : onPress}
       onPressIn={press.onPressIn}
       onPressOut={press.onPressOut}
       disabled={disabled}
@@ -71,7 +73,10 @@ export const QuietPill = forwardRef<View, Props>(function QuietPill(
   return (
     <Animated.View entering={FadeIn.duration(220)} style={iconOnly ? undefined : styles.shrink}>
       {body}
-      {actions ? <AnchoredPanel open={open && !disabled} anchor={anchor.current} onClose={() => setOpen(false)}
+      {menu ? <AnchoredPanel open={open && !disabled} anchor={anchor.current} onClose={() => setOpen(false)}
+        label={menuTitle ?? aria} closeLabel={m.native_close()} radius={16} padding={6} maxHeightRatio={0.75}>
+        {menu(() => setOpen(false))}
+      </AnchoredPanel> : actions ? <AnchoredPanel open={open && !disabled} anchor={anchor.current} onClose={() => setOpen(false)}
         label={menuTitle ?? aria} closeLabel={m.native_close()} radius={12} padding={4}>
         <SettingsList items={actions.map((it) => ({ id: it.id, label: it.title, hint: it.subtitle,
           selected: it.state === 'on', disabled: it.attributes?.disabled, leading: it.leading, labelColor: it.titleColor }))}

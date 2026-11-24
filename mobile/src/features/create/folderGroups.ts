@@ -32,12 +32,16 @@ export function groupFolders(entries: FsEntry[], repos: WorktreeRepo[]): FolderR
 const samePlace = (a: string, b: string) => pickFolderRoot([{ path: a }], b) !== null && pickFolderRoot([{ path: b }], a) !== null;
 
 // Pastas das sessões da máquina, da usada por último para trás, sem repetir; a pessoal (`~`) fica de fora.
+// A pasta pessoal é o "sem projeto": o servidor às vezes devolve o caminho inteiro em vez de `~`.
+const HOME_DIR = /^(?:~|\/root|\/home\/[^/]+|\/Users\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)[\\/]?$/;
+export const isHomeDir = (cwd: string): boolean => HOME_DIR.test(cwd.trim());
+
 export function recentCwds(sessions: readonly { cwd?: string; last_activity?: number | null }[] | undefined, limit: number): string[] {
   const out: string[] = [];
   const ordered = [...(sessions ?? [])].sort((a, b) => (b.last_activity ?? 0) - (a.last_activity ?? 0));
   for (const s of ordered) {
     const cwd = s.cwd?.trim();
-    if (!cwd || cwd === '~' || out.some((p) => samePlace(p, cwd))) continue;
+    if (!cwd || isHomeDir(cwd) || out.some((p) => samePlace(p, cwd))) continue;
     out.push(cwd);
     if (out.length >= limit) break;
   }

@@ -62,5 +62,5 @@ export function HomeQuietMark({ size }: { size: number }) {
 
 const styles = StyleSheet.create({
   wrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
-  quiet: { opacity: 0.14 },
+  quiet: { opacity: 0.09 },
 });

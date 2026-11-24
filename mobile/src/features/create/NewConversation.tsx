@@ -128,6 +128,8 @@ export function NewConversation({
   const [sheet, setSheet] = useState<'folder' | 'resume' | null>(null);
   const resumeAnchor = useRef<View>(null);
   const sheetOpener = useRef<View | null>(null);
+  // O painel de pasta sobe da linha acima da caixa, não do título no meio da tela: dali cabem várias pastas.
+  const folderAnchor = useRef<View>(null);
   // Enviar só depois de ler a tentativa gravada: antes disso um toque poderia seguir a antiga.
   const [restored, setRestored] = useState(false);
   const mounted = useRef(true);
@@ -487,7 +489,7 @@ export function NewConversation({
 
       <Animated.View style={[styles.shrink, !home && riseStyle]}>
 
-      <View style={styles.optionPills}>{optionPills}</View>
+      <View ref={folderAnchor} collapsable={false} style={styles.optionPills}>{optionPills}</View>
       {/* Campo em cima, na largura toda; anexo, microfone, chip do provider e Enviar na linha de baixo. */}
       <ComposerBox focused={focused} footer={(
         <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
@@ -548,7 +550,8 @@ export function NewConversation({
       {/* O menu de pasta do PC (render_compact_folders): painel preso à pílula, como os menus das outras pílulas. */}
       <AnchoredPanel
         open={sheet === 'folder'}
-        anchor={sheetOpener.current}
+        anchor={folderAnchor.current ?? sheetOpener.current}
+        maxHeightRatio={0.75}
         onClose={closeSheet}
         onDismissed={onSheetDismiss}
         label={m.native_new_chat_folder()}
@@ -589,7 +592,7 @@ const FIELD_MIN_HEIGHT = 24 * 2 + 16;
 const MIDDLE_RESERVE = 120;
 // Um alvo de toque: o mínimo que ainda dá para arrastar e baixar o teclado.
 const MIDDLE_MIN_RESERVE = 44;
-const MARK_SIZE = 110;
+const MARK_SIZE = 84;
 
 const styles = StyleSheet.create((theme) => ({
   root: { flex: 1, backgroundColor: 'transparent' },
@@ -625,9 +628,10 @@ const styles = StyleSheet.create((theme) => ({
   optionPills: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.base.space[0.5],
+    // Respiro entre as pílulas e até a caixa: alvos pequenos colados levam o dedo ao vizinho.
+    gap: theme.base.space[3],
     paddingHorizontal: theme.base.space[3],
-    paddingBottom: theme.base.space[1],
+    paddingBottom: theme.base.space[3],
     minHeight: 34,
   },
   underBox: { height: theme.base.space[2] },

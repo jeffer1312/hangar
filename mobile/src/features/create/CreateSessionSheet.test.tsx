@@ -277,6 +277,8 @@ vi.mock('../../paraglide/messages', () => ({
     'worktree_nova_so_remoto worktree_subagentes worktree_parada_dias worktree_dias_atras ' +
     'native_new_chat_recents native_new_chat_hero native_new_chat_hero_in native_new_chat_no_project_line native_new_chat_choose_folder native_new_chat_start_without_project native_new_chat_on_machine ' +
     'native_new_chat_place_new native_new_chat_place_here ' +
+    'native_new_chat_machine_menu_title native_new_chat_machine_demo native_new_chat_machine_demo_hint native_new_chat_machine_offline native_new_chat_machine_more ' +
+    'native_create_copies_1 native_create_copies native_create_use_named native_where_new native_where_existing ' +
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
     'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable ' +
@@ -400,6 +402,8 @@ describe('CreateSessionSheet Codex', () => {
     const buttons = [...container.querySelectorAll('button')];
     return buttons.find((b) => b.getAttribute('aria-label') === text) ?? buttons.find((b) => b.textContent === text);
   };
+  // O menu compacto diz o nome da pasta no botão ("Usar api"); o formulário cheio, "Usar esta pasta".
+  const useFolderButton = (container: HTMLElement) => button(container, 'native_create_use_named') ?? button(container, 'native_create_use_folder');
   // Escolha de velocidade do painel: Normal, Fast e Ultra Fast.
   const speedRadio = (container: HTMLElement, label: string) => container.querySelector<HTMLButtonElement>(`[role="radio"][aria-label="${label}"]`);
 
@@ -574,7 +578,7 @@ describe('CreateSessionSheet Codex', () => {
       await act(async () => pill.click());
       for (let i = 0; i < 3; i++) await act(async () => Promise.resolve());
       const panel = container.querySelector('[data-testid="folder-panel"][aria-label="native_create_checkout_branch"]') as HTMLElement;
-      await act(async () => button(panel, 'worktree_menu_nova')!.click());
+      await act(async () => button(panel, 'native_where_new')!.click());
       const field = panel.querySelector('textarea[aria-label="worktree_menu_branch"]') as HTMLTextAreaElement;
       await act(async () => { field.value = 'main'; field.dispatchEvent(new Event('input', { bubbles: true })); });
       expect(panel.textContent).toContain('worktree_menu_ja_aberta');
@@ -852,7 +856,7 @@ describe('CreateSessionSheet Codex', () => {
       await appState('background');
       await appState('active');
       expect(container.textContent).not.toContain('native_network_error');
-      expect(button(container, 'native_create_use_folder')).toBeTruthy();
+      expect(useFolderButton(container)).toBeTruthy();
       expect(calls.roots).toHaveBeenCalledTimes(reads);
       expect(calls.scan).toHaveBeenCalledTimes(scans + 1);
       expect(calls.scan).toHaveBeenLastCalledWith(server, '/repo', '/repo', expect.any(AbortSignal));
@@ -2017,7 +2021,7 @@ describe('CreateSessionSheet Codex', () => {
     expect(container.querySelector('[data-folder-panel]')).toBeNull();
     expect(calls.pickerActive).toBe(1);
     // Carregando agora é esqueleto, sem texto: nada escolhível enquanto as raízes não chegam.
-    expect(button(container, 'native_create_use_folder')).toBeUndefined();
+    expect(useFolderButton(container)).toBeUndefined();
     expect(button(container, 'Repo')).toBeUndefined();
     expect(button(container, 'nova_conversa_enviar')!.disabled).toBe(true);
     await act(async () => roots.resolve([{ name: 'Missing', path: '/missing' }, { name: 'Repo', path: '/repo' }]));
@@ -2055,7 +2059,7 @@ describe('CreateSessionSheet Codex', () => {
       expect(initialSignal.aborted).toBe(true);
       expect(sheetSignal.aborted).toBe(false);
     }
-    if (picked) expect(button(container, 'native_create_use_folder')).toBeTruthy();
+    if (picked) expect(useFolderButton(container)).toBeTruthy();
     await act(async () => button(container, closing === 'gesto' ? 'back-panel' : 'close-panel')!.click());
     expect(calls.dismiss).toBeTruthy();
     expect(container.querySelector('[data-folder-panel]')).toBe(sheet);
@@ -2064,7 +2068,7 @@ describe('CreateSessionSheet Codex', () => {
     expect(calls.pickerPeak).toBe(1);
     if (sheetSignal) expect(sheetSignal.aborted).toBe(true);
     expect(sheet.querySelector('[data-testid="cwd-picker"]')).toBeNull();
-    expect(button(sheet as HTMLElement, 'native_create_use_folder')).toBeUndefined();
+    expect(useFolderButton(sheet as HTMLElement)).toBeUndefined();
     if (picked) expect(button(container, 'native_new_chat_folder: repo')).toBeTruthy();
     else expect(container.querySelectorAll('[data-testid="cwd-picker"]').length).toBe(1);
     await flushDismiss();
@@ -2705,7 +2709,7 @@ describe('CreateSessionSheet Codex', () => {
         await act(async () => button(container, 'native_create_checkout_branch: native_create_checkout_current')!.click());
         await act(async () => Promise.resolve());
         const panel = () => container.querySelector('[data-testid="folder-panel"][aria-label="native_create_checkout_branch"]') as HTMLElement;
-        await act(async () => button(panel(), 'worktree_menu_existente')!.click());
+        await act(async () => button(panel(), 'native_where_existing')!.click());
         await act(async () => button(panel(), 'hangar-menu')!.click());
         await act(async () => Promise.resolve());
         await act(async () => button(container, 'criar_criar')!.click());

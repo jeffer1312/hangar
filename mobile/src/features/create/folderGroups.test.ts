@@ -36,6 +36,12 @@ it('recentes: da sessão mais recente para trás, sem repetir a mesma pasta nem 
   expect(recentCwds(undefined, 3)).toEqual([]);
 });
 
+it('a pasta pessoal não entra nas recentes, em nenhuma das grafias do servidor', () => {
+  const s = (cwd: string, last: number) => ({ cwd, last_activity: last });
+  expect(recentCwds([s('/home/ana', 9), s('/Users/ana/', 8), s('C:\\Users\\ana', 7), s('/root', 6), s('/home/ana/proj', 5)], 3))
+    .toEqual(['/home/ana/proj']);
+});
+
 it('recentes: worktree conhecida vira o repositório, e a pasta escolhida sai da lista', () => {
   const repos: WorktreeRepo[] = [{ repo: '/p/hangar', worktrees: [wt('hangar-menu')] }];
   expect(recentProjects(['/p/hangar-menu', '/p/hangar', '/p/forge', '/p/web', '/p/api'], repos, '/p/forge', 3)).toEqual(['/p/hangar', '/p/web', '/p/api']);

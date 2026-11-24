@@ -25,6 +25,8 @@ import { useServers } from '../../stores/servers';
 import { readProject, rememberProject } from '../../stores/createPreferences';
 import { autoSessionName, NO_PROJECT_CWD, type NewConversationInput } from '../../stores/newConversation';
 import { CwdPicker } from './CwdPicker';
+import { MachineMenu, MachineTile } from './MachineMenu';
+import { isDemoUrl } from '../../net/demo';
 import { recentCwds, recentProjects } from './folderGroups';
 import { loadErrorText } from './loadError';
 import { useCanceledLoadRetry } from './useCanceledLoadRetry';
@@ -113,6 +115,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const { theme } = useUnistyles();
   // Etiquetas das máquinas (a mesma fonte da lista de sessões); valor estável, sem redesenhar a cada evento.
   const machineTags = useSessions(useShallow((s) => machines.map((sv) => s.tags?.[sv.id] ?? null)));
+  const machineOffline = useSessions(useShallow((s) => machines.map((sv) => s.byServer.find((b) => b.server.id === sv.id)?.error === 'offline')));
   const [initialized, setInitialized] = useState(home?.mode !== 'sessions');
   const enabled = initialized || home?.mode !== 'sessions';
   useEffect(() => {
@@ -952,7 +955,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
 
   const notices = (
     <View style={styles.field}>
-      {hasSameFolder ? <Text style={styles.hint}>{m.criar_ja_existe()}</Text> : null}
+      {/* Na conversa nova o aviso fica sob a pasta do título. */}
+      {layout === 'form' && hasSameFolder ? <Text style={styles.hint}>{m.criar_ja_existe()}</Text> : null}
       {picked && !codexReady ? (
         codexError ? <Text style={styles.error} accessibilityRole="alert">{codexError}</Text>
           : <Text style={styles.hint}>{codexLoading ? m.comum_carregando() : m.contas_nao_conectada()}</Text>
@@ -1126,21 +1130,19 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // Máquina com a etiqueta dela (ícone, nome e cor), como na lista de sessões.
   const machineView = (sv: Server, i: number) => {
     const tags = machineTags[i];
-    return { label: machineLabel(sv, tags), color: tagHex(tags?.machine?.color) ?? serverColor(sv.id),
-      icon: tags?.machine ? MACHINE_ICON_NAME[tags.machine.icon] : 'Monitor' as const };
+    return { id: sv.id, label: machineLabel(sv, tags), color: tagHex(tags?.machine?.color) ?? serverColor(sv.id),
+      icon: tags?.machine ? MACHINE_ICON_NAME[tags.machine.icon] : 'Laptop' as const,
+      accounts: tags?.accounts, demo: isDemoUrl(`${sv.baseUrl}/`), offline: machineOffline[i] ?? false };
   };
   const activeMachine = machineView(active, machines.findIndex((sv) => sv.id === active.id));
-  // A máquina fica sob o título da conversa nova ("em notebook"), com o menu das máquinas.
+  // A máquina fica sob o título da conversa nova ("em notebook"), com o menu das máquinas e as contas de cada uma.
   const machinePill = (
-    <QuietPill icon={activeMachine.icon} label={activeMachine.label} shown={m.native_new_chat_on_machine({ maquina: activeMachine.label })}
+    <QuietPill label={activeMachine.label} shown={m.native_new_chat_on_machine({ maquina: activeMachine.label })}
+      leading={<MachineTile icon={activeMachine.icon} color={activeMachine.color} size={22} />}
       aria={m.native_new_chat_machine()} menuTitle={m.native_new_chat_machine()}
-      actions={machines.map((sv, i) => {
-        const view = machineView(sv, i);
-        return { id: sv.id, title: view.label, titleColor: view.color, state: on(sv.id === active.id),
-          subtitle: sv.label.trim() && sv.label !== view.label ? sv.label : undefined,
-          leading: <Icon name={view.icon} size={14} color={theme.tokens.text.muted} /> };
-      })}
-      onAction={(id) => { if (id !== active.id) onPickMachine(id); }} size="lg" />
+      menu={(close) => <MachineMenu machines={machines.map(machineView)} active={active.id}
+        onPick={(id) => { close(); if (id !== active.id) onPickMachine(id); }} />}
+      size="lg" />
   );
 
   // Atalho, não essencial: sem lista ainda (carregando, falha) a linha só não aparece. Só as pastas
@@ -1167,7 +1169,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
           <Pressable key={path} onPress={() => pickRecent(path)} style={styles.recentItem}
             accessibilityRole="button" accessibilityLabel={m.native_new_chat_recent_aria({ path })}>
             <Icon name="Folder" size={20} color={theme.tokens.accent.base} />
-            <Text style={styles.recentName} numberOfLines={2}>{basename(path)}</Text>
+            {/* Uma linha que encolhe a fonte antes de cortar: nome de pasta não quebra no meio da palavra. */}
+            <Text style={styles.recentName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} ellipsizeMode="middle">{basename(path)}</Text>
           </Pressable>
         ))}
       </View>
@@ -1346,8 +1349,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         return noProject ? (
           <>
             <Text style={styles.heroText} accessibilityRole="header">{m.native_new_chat_hero()}</Text>
-            {machinePill}
-            <View style={styles.headingLine}>
+            <View style={styles.heroMachine}>{machinePill}</View>
+            <View style={[styles.headingLine, styles.heroLinkRow]}>
               <Text style={styles.heroHint}>{`${m.native_new_chat_no_project_line()} · `}</Text>
               <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityLabel={`${m.native_new_chat_folder()}: ${folderLabel}`}>
@@ -1368,10 +1371,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
               </Pressable>
               <Text style={styles.heroText}> ?</Text>
             </View>
-            {machinePill}
+            {/* O aviso é sobre a pasta, então mora colado nela, discreto. */}
+            {hasSameFolder ? <Text style={styles.heroNote}>{m.criar_ja_existe()}</Text> : null}
+            <View style={styles.heroMachine}>{machinePill}</View>
             {!active.invite ? (
               <Pressable onPress={() => { void handlePick(NO_PROJECT_CWD); }} hitSlop={LINK_SLOP} accessibilityRole="button"
-                accessibilityHint={m.native_new_chat_no_project_hint()}>
+                accessibilityHint={m.native_new_chat_no_project_hint()} style={styles.heroLinkRow}>
                 <Text style={[styles.headingLink, styles.heroLink]}>{m.native_new_chat_start_without_project()}</Text>
               </Pressable>
             ) : null}
@@ -1476,6 +1481,10 @@ const styles = StyleSheet.create((theme) => ({
   heroText: { fontSize: theme.base.text.xxl, lineHeight: 38, fontWeight: theme.base.weight.medium, color: theme.tokens.text.primary, textAlign: 'center' },
   heroHint: { fontSize: theme.base.text.base, color: theme.tokens.text.secondary },
   heroLink: { fontSize: theme.base.text.base },
+  // Título, máquina e "sem projeto" em três partes, com o mesmo respiro entre elas.
+  heroMachine: { marginTop: theme.base.space[3] },
+  heroLinkRow: { marginTop: theme.base.space[2] },
+  heroNote: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted, textAlign: 'center', marginTop: theme.base.space[1], paddingHorizontal: theme.base.space[4] },
   // Pastas recentes sob o título: atalhos em grade, ícone e nome, um toque troca a pasta.
   recents: { width: '100%', maxWidth: 420, alignSelf: 'center', gap: theme.base.space[3], marginTop: theme.base.space[6], paddingHorizontal: theme.base.space[4] },
   recentsLabel: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted, textAlign: 'center' },
