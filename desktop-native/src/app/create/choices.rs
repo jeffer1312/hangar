@@ -955,7 +955,7 @@ impl NewSession {
         let highlights: Vec<_> = text.find(&number).map(|at| (at..at + number.len(),
             gpui_kit::HighlightStyle { color: Some(theme::danger()), ..Default::default() })).into_iter().collect();
         let action = if forced { tr_shared("comum_desfazer", &[]) } else { tr_shared("new_chat_account_force_action", &[("conta", &account)]) };
-        Some(div().id("new-chat-account-note").px(px(14.)).flex().flex_wrap().items_center().gap_x(px(8.))
+        Some(div().id("new-chat-account-note").flex().flex_wrap().items_center().gap_x(px(8.))
             .text_size(px(12.5)).text_color(theme::muted())
             .child(gpui_kit::StyledText::new(text).with_highlights(highlights))
             .child(Button::new("new-chat-account-force").link().xsmall().label(action)
@@ -1322,6 +1322,7 @@ impl NewSession {
                     .accessibility_label(tr("create_delete_account_aria").replace("{nome}", &name))
                     .on_click(cx.listener(|this, _, _, cx| { (this.confirming, this.keep_transcripts, this.notice, this.holders) = (true, true, None, None); cx.notify(); })))))
             .when_some(selected_quota, |el, q| el.child(self.render_quota("create-claude-quota".into(), q)))
+            .children(self.render_account_note(cx))
             .when_some(self.deletable().filter(|_| self.confirming && self.holders.is_none()), |el, name| el.child(div().flex().items_center().gap(px(8.))
                 .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal()
                     .child(format!("{} ", tr("create_delete_start"))).child(div().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(name))

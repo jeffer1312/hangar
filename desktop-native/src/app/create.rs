@@ -3388,7 +3388,7 @@ impl Hangar {
                 .child(landing_column(popup::anchor(top, super::landing::TOP)))
                 .child(composer)
                 .child(landing_column(div().flex().flex_col().gap_1().child(popup::anchor(bottom, super::landing::BOTTOM))
-                    .children(account_note)
+                    .children(account_note.map(|note| note.px(px(14.))))
                     .children(note.map(|(text, warning)| div().id("new-chat-note").role(if warning { Role::Alert } else { Role::Status })
                         .px(px(14.)).text_sm().whitespace_normal().text_color(if warning { theme::warning() } else { theme::muted() }).child(text))))))
             .into_any_element()
