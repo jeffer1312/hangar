@@ -961,6 +961,10 @@ async fn direct_delivery_background_agent_does_not_hold_a_prompt() {
         format!("✻ Waiting for 1 background agent to finish\n{rule}\n❯ \n{rule}\n"),
         format!("✻ Waiting for 2 background agents to finish… (3m 2s)\n{rule}\n❯ \n{rule}\n"),
         format!("● A mudança está rodando em segundo plano.\n{band}\n\n{rule}\n❯ \n{rule}\n{panel}\n"),
+        // O resumo do turno que acabou tem o símbolo da animação, mas não é linha viva.
+        format!("● Disparei o subagente.\n\n✻ Worked for 2m 10s\n\n{rule}\n❯ \n{rule}\n{panel}\n"),
+        // Quadro de um turno anterior, acima do último prompt da pessoa, não é o turno de agora.
+        format!("✻ Precipitating… (2m 12s)\n\n❯ e agora?\n\n● Subagente iniciado.\n\n{rule}\n❯ \n{rule}\n{panel}\n"),
     ] {
         let f = Fixture::new().await;
         f.idle.store(false, Ordering::Release);
@@ -977,6 +981,8 @@ async fn direct_delivery_background_agent_does_not_hold_a_prompt() {
     for pane in [
         format!("● resposta\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n{rule}\n❯ \n{rule}\n{panel}\n"),
         format!("● resposta\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n● faixa de outro plugin\n{rule}\n❯ \n{rule}\n{panel}\n"),
+        // Linha `◯` abaixo da caixa sem o `main` do painel de agentes não é o painel.
+        format!("● resposta\n\n{rule}\n❯ \n{rule}\n  ◯ outra coisa no rodapé\n"),
     ] {
         let f = Fixture::new().await;
         f.idle.store(false, Ordering::Release);

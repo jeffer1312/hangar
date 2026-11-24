@@ -64,7 +64,9 @@ impl InputFacts {
                 });
             // A CLI nem sempre escreve a linha de espera: sem linha viva acima da caixa, o painel de
             // agentes abaixo dela é o que prova que o busy vem só do subagente.
-            waiting || state.spinner.is_none() && crate::terminal_state::background_agents_listed(screen)
+            // O resumo do turno que acabou ("✻ Worked for 2m") também vem como `spinner`; só o quadro com "…" é vivo.
+            waiting || !state.spinner.as_deref().is_some_and(|s| s.contains('…'))
+                && crate::terminal_state::background_agents_listed(screen)
         })
     }
 }

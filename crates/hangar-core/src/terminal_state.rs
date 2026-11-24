@@ -292,10 +292,10 @@ pub fn footer_focus(pane: &str) -> bool {
         .any(|l| P.agent_cursor.is_match(l) || l.contains("Enter to view") || l.contains("↑/↓ to select")))
 }
 
-/// Painel de agentes do Claude Code abaixo da caixa ("● main" e um "◯ <subagente> …" por subagente vivo), sem quadro
-/// da animação do turno acima dela: é o único sinal na tela de que só o subagente trabalha quando a CLI não mostra a
-/// linha "Waiting for …". O quadro é procurado em toda a tela, não só abaixo da última resposta: uma linha `●` de outro
-/// painel entre ele e a caixa o esconderia do `analyze`.
+/// Painel de agentes do Claude Code abaixo da caixa (a linha `main` e uma por subagente vivo, marcadas com `●` ou
+/// `◯`), sem quadro da animação do turno acima dela: é o único sinal na tela de que só o subagente trabalha quando a
+/// CLI não mostra a linha "Waiting for …". O quadro é procurado desde o último prompt da pessoa, não só abaixo da
+/// última resposta: uma linha `●` de outro painel entre ele e a caixa o esconderia do `analyze`.
 pub fn background_agents_listed(pane: &str) -> bool {
     let lines = lines(pane);
     let frame = |l: &str| {
@@ -304,8 +304,14 @@ pub fn background_agents_listed(pane: &str) -> bool {
         let glyph = chars.next().is_some_and(|c| SPINNERS.contains(c) || c == '*') && chars.next() == Some(' ');
         glyph && s.split_once('…').is_some_and(|(_, rest)| rest.trim_start().starts_with('('))
     };
-    composer_end(&lines, lines.len()).is_some_and(|end| !lines[..end].iter().any(|l| frame(l))
-        && lines[end + 1..].iter().any(|l| left(l).trim_start_matches('❯').trim_start().starts_with("◯ ")))
+    let Some(end) = composer_end(&lines, lines.len()) else { return false };
+    let Some(top) = lines[..end].iter().rposition(|l| P.rule.is_match(l)) else { return false };
+    let turn = lines[..top].iter().rposition(|l| left(l).starts_with('❯')).map_or(0, |prompt| prompt + 1);
+    let rows: Vec<&str> = lines[end + 1..].iter().map(|l| left(l).trim_start_matches('❯').trim_start()).collect();
+    fn entry(row: &str) -> Option<&str> { row.strip_prefix("● ").or_else(|| row.strip_prefix("◯ ")).map(str::trim_start) }
+    !lines[turn..top].iter().any(|l| frame(l))
+        && rows.iter().any(|row| entry(row).is_some_and(|name| name.split_whitespace().next() == Some("main")))
+        && rows.iter().any(|row| entry(row).is_some_and(|name| name.split_whitespace().next() != Some("main")))
 }
 
 fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
