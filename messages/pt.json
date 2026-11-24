@@ -1921,6 +1921,7 @@
   "askq_conversar_sobre": "💬 Conversar sobre isso",
   "askq_sua_resposta": "Sua resposta…",
   "askq_revisar": "Revisar respostas",
+  "askq_more_after": "Mais {n} depois desta",
   "askq_erro_envio": "Erro ao enviar respostas",
   "askq_conversar": "Conversar",
   "askq_enviando": "Enviando…",

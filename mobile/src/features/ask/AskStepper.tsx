@@ -113,6 +113,9 @@ function AskStepperContent({ payload, onSubmit, onClose }: Props) {
       <View style={[styles.statusBadge, { backgroundColor: `${theme.tokens.status.warning}20` }]}>
         <Text style={[styles.statusBadgeText, { color: theme.tokens.status.warning }]}>{m.estado_aguardando()}</Text>
       </View>
+      {payload.more_after ? (
+        <Text style={[styles.counter, { color: theme.tokens.text.muted }]}>{m.askq_more_after({ n: payload.more_after })}</Text>
+      ) : null}
     </View>
   );
 

@@ -89,7 +89,12 @@ pub enum Pick { Empty, Options(Vec<usize>), Text(String), Chat }
 pub struct Ask { pub payload: AskPayload, pub fingerprint: String, pub tool_use_id: Option<String> }
 
 impl Ask {
-    pub fn new(payload: AskPayload, raw: &Value) -> Self { Self { payload, fingerprint: raw.to_string(), tool_use_id: None } }
+    pub fn new(payload: AskPayload, raw: &Value) -> Self {
+        // A contagem das que esperam muda sem trocar a pergunta: fora da identidade, o formulário não se refaz.
+        let mut key = raw.clone();
+        if let Some(fields) = key.as_object_mut() { fields.remove("more_after"); }
+        Self { payload, fingerprint: key.to_string(), tool_use_id: None }
+    }
     pub fn codex(&self) -> bool { self.payload.provider.as_deref() == Some("codex") }
     pub fn allows_text(&self, item: &AskItem) -> bool { !self.codex() || item.is_other || item.options.is_empty() }
     pub fn allows_chat(&self) -> bool { !self.codex() }
@@ -130,7 +135,7 @@ pub fn ask_from_events(events: &[ChatEvent], provider: &str) -> Option<Ask> {
     let questions: Vec<AskItem> = questions.into_iter().filter(|q| !q.question.is_empty() && !q.options.is_empty()).collect();
     if questions.is_empty() { return None; }
     let id = event.tool_use_id.clone()?;
-    Some(Ask { fingerprint: format!("tool:{id}:{}", serde_json::to_string(input).unwrap_or_default()), payload: AskPayload { provider: None, request_id: None, interaction_id: None, is_async: false, questions }, tool_use_id: Some(id) })
+    Some(Ask { fingerprint: format!("tool:{id}:{}", serde_json::to_string(input).unwrap_or_default()), payload: AskPayload { provider: None, request_id: None, interaction_id: None, is_async: false, questions, more_after: 0 }, tool_use_id: Some(id) })
 }
 
 pub fn toggle(item: &AskItem, pick: &Pick, index: usize) -> Pick {
@@ -541,7 +546,7 @@ mod tests {
             options: labels.iter().map(|l| AskOption { label: (*l).into(), ..Default::default() }).collect() }
     }
     fn ask(provider: Option<&str>, request_id: Option<Value>, questions: Vec<AskItem>) -> Ask {
-        let payload = AskPayload { provider: provider.map(str::to_owned), request_id, interaction_id: None, is_async: false, questions };
+        let payload = AskPayload { provider: provider.map(str::to_owned), request_id, interaction_id: None, is_async: false, questions, more_after: 0 };
         Ask { fingerprint: "f".into(), payload, tool_use_id: None }
     }
 
@@ -594,6 +599,9 @@ mod tests {
         assert_eq!(a.payload.questions, b.payload.questions);
         assert_ne!(a, b);
         assert_ne!(a.fingerprint, b.fingerprint);
+        let mut counted = raw.clone();
+        counted["more_after"] = json!(2);
+        assert_eq!(Ask::new(serde_json::from_value(counted.clone()).unwrap(), &counted).fingerprint, a.fingerprint, "a contagem das que esperam não refaz o cartão");
         let body = answer_body(&a, &[Pick::Options(vec![0])]).unwrap();
         assert_eq!(body["interaction_id"], "interaction-a");
         assert_eq!(body["request_id"], 7);

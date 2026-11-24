@@ -5396,7 +5396,10 @@ impl Hangar {
         let body = body.into_any_element();
         let completed = self.ask_picks(cx).iter().zip(&ask.payload.questions)
             .filter(|(pick, item)| interaction::answer(&ask, item, pick).is_some()).count();
-        let progress = tr("ask_progress").replace("{done}", &completed.to_string()).replace("{total}", &total.to_string());
+        let mut progress = tr("ask_progress").replace("{done}", &completed.to_string()).replace("{total}", &total.to_string());
+        if ask.payload.more_after > 0 {
+            progress = format!("{progress} · {}", tr_shared("askq_more_after", &[("n", &ask.payload.more_after.to_string())]));
+        }
         let minimized = self.ask_form.minimized;
         Some(in_column_with(questions::card(minimized, progress, tabs, body,
             div().flex().flex_wrap().items_center().gap_2()
