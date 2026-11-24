@@ -124,8 +124,8 @@ export function markInvisibles(text: string): InvisiblePart[] {
   let prevMarked = false;
   for (const ch of text) {
     const cp = ch.codePointAt(0)!;
-    const glue = EMOJI_GLUE.has(cp) && prev !== null && !prevMarked && (prev >= 0x2000 || prev === 0xa9 || prev === 0xae);
-    const mark = isInvisible(cp) && !glue;
+    const glue: boolean = EMOJI_GLUE.has(cp) && prev !== null && !prevMarked && (prev >= 0x2000 || prev === 0xa9 || prev === 0xae);
+    const mark: boolean = isInvisible(cp) && !glue;
     if (mark) {
       if (plain) { parts.push({ kind: 'text', text: plain }); plain = ''; }
       parts.push({ kind: 'mark', code: codePointLabel(cp) });

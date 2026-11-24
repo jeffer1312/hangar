@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ComponentType } from 'react';
+import { useEffect, useMemo, useSyncExternalStore, type ComponentType } from 'react';
 import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { Server, ServerBucket } from '@hangar/core';
@@ -20,7 +20,7 @@ export interface RequestTarget { serverId: string; id: string | null }
 /** O que cada tipo de pedido (cofre, rascunho de WhatsApp) entrega à camada comum. */
 export interface OwnerRequestsSpec<E, T extends OwnerRequest> {
   /** Último evento de cada máquina, pelo id dela. */
-  select: (s: SessionsState) => Record<string, E> | undefined;
+  select(s: SessionsState): Record<string, E> | undefined;
   items: (event: E) => T[];
   useTarget: () => RequestTarget | null;
   setTarget: (target: RequestTarget | null) => void;
@@ -40,12 +40,19 @@ const liveServers = (byServer: ServerBucket[]) => byServer.filter((b) => !b.erro
 
 /** Pedidos esperando o dono, por máquina: aviso na lista, botão da barra, aviso no chat de quem pediu e a folha que responde. */
 export function ownerRequests<E, T extends OwnerRequest>(spec: OwnerRequestsSpec<E, T>) {
-  // Respondido aqui some da folha na hora; o evento seguinte da máquina confirma.
-  const answered = new Set<string>();
-  const pending = (event: E | undefined) => (event ? spec.items(event) : []).filter((r) => !answered.has(r.id));
+  // Respondido aqui some do aviso e da folha na hora; o evento seguinte da máquina confirma.
+  const done = new Set<string>();
+  const listeners = new Set<() => void>();
+  let version = 0;
+  const answered = { add(id: string) { done.add(id); version += 1; listeners.forEach((l) => l()); } };
+  const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+  const pending = (event: E | undefined) => (event ? spec.items(event) : []).filter((r) => !done.has(r.id));
   // Estado de teste montado sem o campo não derruba a lista.
   const NONE: Record<string, E> = {};
-  const useEvents = () => useSessions(spec.select) ?? NONE;
+  const useEvents = () => {
+    useSyncExternalStore(subscribe, () => version);
+    return useSessions(spec.select) ?? NONE;
+  };
   const waiting = (byServer: ServerBucket[], events: Record<string, E>) => liveServers(byServer).flatMap((b) => {
     const count = pending(events[b.server.id]).length;
     return count ? [{ server: b.server, label: b.label ?? b.server.label, count }] : [];

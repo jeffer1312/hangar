@@ -588,7 +588,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
         const event = parse(data);
         if (!event) return;
         raw.set(s.id, data);
-        set({ [field]: { ...get()[field], [s.id]: event } } as Pick<SessionsState, K>);
+        set({ [field]: { ...get()[field], [s.id]: event } } as unknown as Pick<SessionsState, K>);
       });
     };
     // Cofre: estado e pedidos abertos.

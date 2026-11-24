@@ -35,7 +35,7 @@ fn until_next_step(t: f32) -> f32 {
 fn sample() -> Option<app::WhatsAppDraft> {
     let file = tr_shared("whatsapp_draft_news_file", &[]);
     serde_json::from_value(json!({
-        "id": "news", "origin": format!("{}::site", tr("vault_news_machine")), "chat_number": NUMBER, "chat_name": "Marina",
+        "id": "news", "origin": format!("{}::site", tr("vault_news_machine")), "chat_number": NUMBER, "chat_name": tr_shared("whatsapp_draft_news_contact", &[]),
         "chat_name_source": "contact", "text": tr_shared("whatsapp_draft_news_text", &[]),
         "file": {"name": file, "size": 2_516_582, "source": format!("/home/ana/site/{file}"), "outside_cwd": false},
         "expires_at": "2026-11-24T14:10:00Z", "answer_by": "2026-11-24T14:09:30Z", "state": "pending"
@@ -118,7 +118,7 @@ mod tests {
         for english in [false, true] {
             crate::i18n::english_in_this_thread(english);
             assert!(sample().is_some(), "rascunho de exemplo ilegível ({english})");
-            for key in ["whatsapp_draft_news_agent", "whatsapp_draft_news_text", "whatsapp_draft_news_file"] {
+            for key in ["whatsapp_draft_news_contact", "whatsapp_draft_news_agent", "whatsapp_draft_news_text", "whatsapp_draft_news_file"] {
                 assert_ne!(tr_shared(key, &[]), key, "frase sem tradução ({english})");
             }
         }

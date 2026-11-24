@@ -38,7 +38,7 @@ export function sampleDraft(): WhatsAppDraft {
   const file = m.whatsapp_draft_news_file();
   return {
     id: 'news', origin: `${m.native_vault_news_machine()}::site`, chat: `${NUMBER}@s.whatsapp.net`, chat_kind: 'contact',
-    chat_number: NUMBER, chat_name: 'Marina', chat_name_source: 'contact', recent: [], text: m.whatsapp_draft_news_text(),
+    chat_number: NUMBER, chat_name: m.whatsapp_draft_news_contact(), chat_name_source: 'contact', recent: [], text: m.whatsapp_draft_news_text(),
     reply_to: '', quoted_text: '', file: { name: file, size: 2_516_582, sha256: '', source: `/home/ana/site/${file}`, outside_cwd: false },
     created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', answer_by: '2026-11-24T14:09:30Z', state: 'pending',
   };
