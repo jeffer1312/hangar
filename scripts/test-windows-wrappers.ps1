@@ -97,8 +97,8 @@ try {
         $raw = @(Of $cli)
         Check ($raw.Count -eq 1) "$cli ($caso): $($raw.Count) chamada(s) do binario, esperado 1"
         if ($raw.Count -eq 1) { Check (Same $raw[0].args $esperado) "$cli ($caso): argv $(Show $raw[0].args), esperado $(Show $esperado)" }
-        Check ((OpenCalls).Count -eq 0) "$cli ($caso): abriu pelo Hangar"
-        Check ((TmuxCalls 'new-session').Count -eq 0) "$cli ($caso): abriu sessao no psmux"
+        Check (@(OpenCalls).Count -eq 0) "$cli ($caso): abriu pelo Hangar"
+        Check (@(TmuxCalls 'new-session').Count -eq 0) "$cli ($caso): abriu sessao no psmux"
     }
 
     $casos = @(
@@ -114,7 +114,7 @@ try {
         $cli = $c.cli
         Reset; Run $cli $c.sub; CheckRaw $cli $c.sub $c.sub 'subcomando'
         Reset; Run $cli $c.print; CheckRaw $cli $c.print $c.print 'flag que imprime'
-        Check ((Of 'hangar-server').Count -eq 0) "$cli (flag que imprime): chamou o hangar-server"
+        Check (@(Of 'hangar-server').Count -eq 0) "$cli (flag que imprime): chamou o hangar-server"
         Reset; Run $cli $c.resume; CheckRaw $cli $c.resume $c.resume 'retomada'
 
         # Fora do psmux e em terminal: open-cli com os argumentos e attach no nome que ele imprimiu.
@@ -127,7 +127,7 @@ try {
         }
         $attach = @(TmuxCalls 'attach-session')
         Check ($attach.Count -eq 1 -and (Same $attach[0].args @('attach-session', '-t', "s-$cli"))) "$cli (abrir): attach $(Show $attach.args)"
-        Check ((Of $cli).Count -eq 0) "$cli (abrir): rodou o binario cru"
+        Check (@(Of $cli).Count -eq 0) "$cli (abrir): rodou o binario cru"
 
         Reset; Run $cli $dificil
         $open = @(OpenCalls)
@@ -158,12 +158,12 @@ try {
                 'agy' { Check (Same $resto @('agy', 'oi')) "agy (100): $(Show $resto)" }
             }
         }
-        Check ((Of $cli).Count -eq 0) "$cli (100): rodou o binario cru fora do psmux"
+        Check (@(Of $cli).Count -eq 0) "$cli (100): rodou o binario cru fora do psmux"
 
         # Ja dentro do psmux vivo: cru, com o id da sessao no pi/omp.
         Reset; $env:TMUX = 'psmux-1,1,0'; $env:TMUX_PANE = '%1'; Run $cli @('oi')
         $raw = @(Of $cli)
-        Check ($raw.Count -eq 1 -and (OpenCalls).Count -eq 0) "$cli (dentro do psmux): $($raw.Count) chamada(s) crua(s), $((OpenCalls).Count) open-cli"
+        Check ($raw.Count -eq 1 -and @(OpenCalls).Count -eq 0) "$cli (dentro do psmux): $($raw.Count) chamada(s) crua(s), $(@(OpenCalls).Count) open-cli"
         if ($raw.Count -eq 1) {
             $a = @($raw[0].args)
             switch ($cli) {
@@ -178,13 +178,13 @@ try {
 
         # TMUX herdado de pane morto: limpa e abre pelo Hangar.
         Reset; $env:TMUX = 'psmux-1,1,0'; $env:TMUX_PANE = '%9'; $env:HT_PANE_RC = '1'; Run $cli @('oi')
-        Check ((OpenCalls).Count -eq 1 -and -not $env:TMUX) "$cli (TMUX morto): nao abriu pelo Hangar ou o TMUX ficou"
+        Check (@(OpenCalls).Count -eq 1 -and -not $env:TMUX) "$cli (TMUX morto): nao abriu pelo Hangar ou o TMUX ficou"
     }
 
     # Entrada redirecionada: cru com o id, como dentro do psmux.
     Reset; $script:interativo = $false; Run 'pi' @('oi')
     $raw = @(Of 'pi')
-    Check ($raw.Count -eq 1 -and (Same $raw[0].args @('--session-id', $raw[0].pi_session, 'oi')) -and (OpenCalls).Count -eq 0) "pi (entrada redirecionada): $(Show $raw.args)"
+    Check ($raw.Count -eq 1 -and (Same $raw[0].args @('--session-id', $raw[0].pi_session, 'oi')) -and @(OpenCalls).Count -eq 0) "pi (entrada redirecionada): $(Show $raw.args)"
 
     # Nome da pasta ja em uso: o sufixo -2.
     Reset; $env:HT_OPEN_RC = '100'; $env:HT_TAKEN = 'Projeto-Acao'; Run 'kimi' @()
