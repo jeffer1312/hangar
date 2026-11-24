@@ -306,10 +306,11 @@ function insertDictation(serverId: string, name: string, latest: ConversationDra
 // A geração (`:g:N`) sobe quando o agente religa na mesma sessão; o rascunho é da chave, como os arquivos dela.
 const lifeOwner = (life: string) => /^(k:[0-9a-f]{32}):g:[1-9]\d*$/i.exec(life)?.[1] ?? life;
 
-/** O rascunho é de outra sessão que teve este nome: outra vida conhecida, ou outro transcript. */
+/** O rascunho é de outra sessão que teve este nome: o transcript decide; sem ele, a vida. */
 export function draftOfAnotherSession(draft: ConversationDraft, transcript: string | null, life: string | null): boolean {
-  if (life !== null && draft.life && lifeOwner(draft.life) !== lifeOwner(life)) return true;
-  return transcript !== null && draft.transcript !== null && draft.transcript !== transcript;
+  // Reabrir a mesma conversa troca a vida (`t:` do nascimento, `k:` da chave) e mantém o transcript.
+  if (transcript !== null && draft.transcript !== null) return draft.transcript !== transcript;
+  return life !== null && !!draft.life && lifeOwner(draft.life) !== lifeOwner(life);
 }
 
 export function resolveDraftTranscript(serverId: string, name: string, transcript: string | null, life: string | null = null): {
@@ -321,7 +322,7 @@ export function resolveDraftTranscript(serverId: string, name: string, transcrip
   // O consumidor conserva recoverable antes de gravar texto da sessão recriada.
   if (draftOfAnotherSession(draft, transcript, life)) return { draft: null, recoverable: draft };
   const addTranscript = draft.transcript === null && transcript !== null;
-  const addLife = !draft.life && life !== null;
+  const addLife = life !== null && (!draft.life || lifeOwner(draft.life) !== lifeOwner(life));
   if (!addTranscript && !addLife) return { draft, recoverable: null };
   const associated = { ...draft, ...(addTranscript ? { transcript } : {}), ...(addLife ? { life } : {}) };
   writeDraft(serverId, name, associated);

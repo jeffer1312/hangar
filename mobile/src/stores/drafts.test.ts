@@ -154,6 +154,15 @@ describe('drafts', () => {
     expect(resolveDraftTranscript('linux', 'sessao', null, `k:${'b'.repeat(32)}:g:1`)).toEqual({ draft: null, recoverable: associated });
   });
 
+  it('reabrir a mesma conversa troca a vida e mantém o rascunho, que passa a guardar a vida nova', () => {
+    const value = draft({ transcript: '/sessions/original.jsonl', life: 't:111' });
+    writeDraft('linux', 'sessao', value);
+    const reopened = { ...value, life: 't:222' };
+    expect(resolveDraftTranscript('linux', 'sessao', '/sessions/original.jsonl', 't:222')).toEqual({ draft: reopened, recoverable: null });
+    expect(readDraft('linux', 'sessao')).toEqual(reopened);
+    expect(resolveDraftTranscript('linux', 'sessao', '/sessions/other.jsonl', 't:222')).toEqual({ draft: null, recoverable: reopened });
+  });
+
   it('rascunho recuperável tem chave própria por servidor e sessão, sem tocar a principal', () => {
     const current = draft({ text: 'Sessão nova', transcript: '/sessions/recreated.jsonl' });
     const old = draft({ text: 'Sessão morta' });

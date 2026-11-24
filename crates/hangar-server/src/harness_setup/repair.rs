@@ -458,7 +458,7 @@ pub(super) fn link_extensions(
                     .ok()
                     .is_some_and(|p| std::fs::canonicalize(&source).ok().as_ref() == Some(&p))
             {
-                std::fs::remove_file(path).map_err(LinkError::other)?;
+                remove_link(&path).map_err(LinkError::other)?;
             }
             continue;
         }
@@ -466,7 +466,7 @@ pub(super) fn link_extensions(
             continue;
         }
         if path.is_symlink() {
-            std::fs::remove_file(&path).map_err(LinkError::other)?;
+            remove_link(&path).map_err(LinkError::other)?;
         }
         #[cfg(unix)]
         std::os::unix::fs::symlink(&source, &path).map_err(LinkError::symlink)?;
@@ -482,6 +482,17 @@ pub(super) fn link_extensions(
         count += 1;
     }
     Ok(count)
+}
+/// No Windows o link de pasta (`lib`) só sai por `remove_dir`; `remove_file` falha nele.
+fn remove_link(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink_dir()) {
+            return std::fs::remove_dir(path);
+        }
+    }
+    std::fs::remove_file(path)
 }
 fn omp_key(
     env: &crate::accounts::environment::AccountEnvironment,
