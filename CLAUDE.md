@@ -122,7 +122,9 @@ script e o `ci-gates.sh` trocam sozinhos; sem ele, o aviso diz que front e mobil
 push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. No GitHub
 o merge passa pelo check `merge-gate` (`.github/workflows/gate.yml`), que só barra regra descumprida
 (`scripts/check-*` e os testes listados em `scripts/rule-tests.py`); as suítes rodam no push da `main`. Regra que a
-máquina confere ganha trava ali; decisão em [instalacao.md](docs/decisoes/instalacao.md#portão-de-merge-22112026). O que a verificação local cobre e o que só o CI cobre:
+máquina confere ganha trava ali; a que pede julgamento é checagem do CodeRabbit (`.coderabbit.yaml`), que só
+avisa. A marca `HANGAR_<REGRA>_AUTORIZADO: <motivo>` só entra num commit com a autorização dita pelo dono;
+decisão em [instalacao.md](docs/decisoes/instalacao.md#portão-de-merge-22112026). O que a verificação local cobre e o que só o CI cobre:
 [instalacao.md](docs/decisoes/instalacao.md#verificação-local-antes-do-push-06102026). `npm run build` só para servir o `dist` local. Ao reportar, diga o que foi conferido no uso real e que os testes automatizados não rodaram.
 
 Claude sessions with a terminal must run as `claude --session-id <uuid>` **inside tmux** —

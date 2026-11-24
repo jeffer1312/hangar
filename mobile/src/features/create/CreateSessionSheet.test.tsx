@@ -36,6 +36,8 @@ const calls = vi.hoisted(() => ({
   branches: vi.fn(),
   commands: vi.fn(),
   agy: vi.fn(),
+  // O que o aparelho "guardou" na chave pedida; undefined cai no localStorage do teste.
+  saved: (_key: string): string | undefined => undefined,
 }));
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
 
@@ -143,7 +145,9 @@ vi.mock('../../stores/servers', () => ({
   ),
 }));
 vi.mock('../../stores/prefs', () => ({ prefs: {
-  getString: (key: string) => localStorage.getItem(key) ?? undefined,
+  getString: (key: string) => calls.saved(key) ?? localStorage.getItem(key) ?? undefined,
+  getBoolean: (key: string) => calls.saved(key) === undefined ? undefined : calls.saved(key) !== 'false',
+  getNumber: (key: string) => calls.saved(key) === undefined ? undefined : 1,
   set: (key: string, value: string) => { calls.save(key, value); localStorage.setItem(key, value); },
   remove: (key: string) => localStorage.removeItem(key),
 } }));
@@ -605,6 +609,45 @@ describe('CreateSessionSheet Codex', () => {
       expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ model: null, effort: null }));
     } finally { act(() => root.unmount()); }
   });
+
+  // Trava da abertura única, como a do desktop (default_tests.rs): qualquer preferência do aparelho, de hoje
+  // ou nova, responde com um valor ligado, e o pedido tem de sair igual. O módulo é recarregado porque os
+  // stores leem a preferência ao carregar.
+  const openingWith = async (provider: 'claude' | 'codex', value?: string) => {
+    calls.saved = (key) => /^create\.(machine|project|attempt)\.v1/.test(key) || /draft/i.test(key) ? undefined : value;
+    vi.resetModules();
+    calls.create.mockClear();
+    localStorage.clear();
+    const { CreateSessionSheet: Sheet } = await import('./CreateSessionSheet');
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(Sheet)));
+      for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+      if (provider === 'codex') {
+        await openSettings(container);
+        await act(async () => button(container, 'Codex')!.click());
+        await closePanel(container, 'composer_session_settings');
+      }
+      await send(container);
+      expect(calls.create).toHaveBeenCalledTimes(1);
+      return calls.create.mock.calls[0][1];
+    } finally {
+      act(() => root.unmount());
+      calls.saved = () => undefined;
+    }
+  };
+  for (const provider of ['claude', 'codex'] as const) {
+    it(`o pedido de abertura não muda com nada guardado no aparelho: ${provider}`, async () => {
+      const plain = await openingWith(provider);
+      const everyField = JSON.stringify(Object.fromEntries(['provider', 'config_dir', 'configDir', 'codex_account', 'codexAccount', 'engine', 'model',
+        'effort', 'service_tier', 'serviceTier', 'permission_mode', 'permissionMode', 'subagent_model', 'subagentModel', 'code_mode', 'codeMode', 'jev',
+        'headless'].map((key) => [key, /mode$|jev|headless/i.test(key) && !/permission/i.test(key) ? true : 'guardado'])));
+      for (const value of ['1', 'true', 'false', 'on', 'priority', everyField]) {
+        expect(await openingWith(provider, value), value).toEqual(plain);
+      }
+    }, 60_000);
+  }
 
   it('modo de execução vem do servidor e só vai no pedido quando a pessoa escolhe', async () => {
     localStorage.setItem('create.choices.v1:server-b', JSON.stringify({ headless: true }));

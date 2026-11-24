@@ -117,6 +117,91 @@ class CheckRules(unittest.TestCase):
         self.commit("dep")
         self.assertEqual(self.check()[0], 1)
 
+    def refused(self, name, text, mark):
+        """A linha nova é recusada, a que já existia não, e a marca com motivo libera."""
+        self.put(name, text)
+        self.commit("add")
+        code, output = self.check()
+        self.assertEqual(code, 1, output)
+        self.assertIn(f"HANGAR_{mark}_AUTORIZADO", output)
+        self.assertIn(name, output)
+        self.put("docs/x.md", "oi\n")
+        self.commit(f"more\n\nHANGAR_{mark}_AUTORIZADO: pedido do dono")
+        self.assertEqual(self.check()[0], 0)
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.put("docs/x.md", "oi de novo\n")
+        self.put(name, text + "\n")
+        self.commit("touch")
+        self.assertEqual(self.check()[0], 0)
+
+    def passes(self, name, text):
+        self.put(name, text)
+        self.commit("add")
+        code, output = self.check()
+        self.assertEqual(code, 0, output)
+
+    def test_a_new_web_screen_is_refused_and_an_edited_one_passes(self):
+        self.refused("frontend/src/components/New.svelte", "<p>oi</p>\n" * 5, "WEB")
+        self.passes("frontend/src/components/New.svelte", "<p>tchau</p>\n")
+
+    def test_a_moved_web_screen_passes(self):
+        self.put("frontend/src/Old.svelte", "".join(f"<p>{n}</p>\n" for n in range(20)))
+        self.commit("old")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        (self.repo / "frontend/src/screens").mkdir()
+        self.git("mv", "frontend/src/Old.svelte", "frontend/src/screens/Old.svelte")
+        self.commit("move")
+        self.assertEqual(self.check()[0], 0)
+
+    def test_the_old_name_in_code_is_refused(self):
+        self.refused("crates/hangar-core/src/lib.rs", 'const DIR: &str = ".claude-pocket";\n', "NOME_ANTIGO")
+
+    def test_the_old_name_in_docs_comments_and_tests_passes(self):
+        self.passes("docs/x.md", "era claude-pocket\n")
+        self.passes("crates/hangar-core/src/lib.rs", "// vem do claude-pocket\n")
+        self.passes("crates/hangar-core/tests/old.rs", 'let x = ".claude_pocket";\n')
+
+    def test_the_react_native_keyboard_is_refused_in_one_or_many_lines(self):
+        self.refused("mobile/app/a.tsx", "import { View, KeyboardAvoidingView } from 'react-native';\n", "TECLADO")
+        self.git("rm", "-q", "mobile/app/a.tsx")
+        self.commit("remove")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.refused("mobile/app/b.tsx", "import {\n  View,\n  KeyboardAvoidingView,\n} from 'react-native';\n", "TECLADO")
+
+    def test_the_keyboard_controller_passes(self):
+        self.passes("mobile/app/a.tsx", "import { View } from 'react-native';\nimport { KeyboardAvoidingView } from 'react-native-keyboard-controller';\n")
+
+    def test_vibration_outside_the_haptics_module_is_refused(self):
+        self.refused("mobile/src/a.tsx", "import * as Haptics from 'expo-haptics';\n", "VIBRACAO")
+
+    def test_a_new_vibration_call_in_a_file_that_already_imports_it_is_refused(self):
+        self.refused("mobile/src/a.tsx", "void Haptics.selectionAsync();\n", "VIBRACAO")
+
+    def test_vibration_in_the_haptics_module_and_in_tests_passes(self):
+        self.passes("mobile/src/ui/haptics.ts", "import * as Haptics from 'expo-haptics';\nHaptics.selectionAsync();\n")
+        self.passes("mobile/src/a.test.tsx", "vi.mock('expo-haptics', () => ({}));\n")
+        self.passes("mobile/src/b.tsx", "haptics.selection();\n")
+
+    def test_a_call_with_a_raw_base_url_is_refused_in_every_form(self):
+        forms = [
+            "fetch(`${s.baseUrl}/api/x`);\n",
+            "fetch(s.baseUrl + '/api/x');\n",
+            "new URL('/api/x', server.baseUrl);\n",
+        ]
+        for number, form in enumerate(forms):
+            with self.subTest(form):
+                self.refused(f"mobile/src/net/a{number}.ts", form, "ENDERECO")
+
+    def test_a_base_url_that_is_identity_or_label_passes(self):
+        self.passes("mobile/src/a.tsx", "key={`${s.id}:${s.baseUrl}:${s.token}`}\nconst u = `${getBaseUrl()}/api/x`;\n")
+
+    def test_a_session_opened_outside_the_launcher_is_refused(self):
+        self.refused("crates/hangar-server/src/other.rs", 'args = vec!["new-session", "-d"];\n', "LANCADOR")
+
+    def test_the_launcher_and_its_tests_pass(self):
+        self.passes("crates/hangar-server/src/session_open/terminal.rs", 'args = vec!["new-session", "-d"];\n')
+        self.passes("crates/hangar-server/src/accounts/tests.rs", 'assert_eq!(args[0], "new-session");\n')
+
     def test_an_unreadable_base_is_an_error_and_not_a_pass(self):
         self.base = "0" * 40
         self.assertEqual(self.check()[0], 2)
