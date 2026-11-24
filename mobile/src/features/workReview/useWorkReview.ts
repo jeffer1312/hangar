@@ -195,7 +195,8 @@ export function useWorkReview(serverId: string, name: string, enabled = true) {
     sendWorkReviewDecisions(target, name, body).then((res) => {
       if (!current()) return;
       haptic.success();
-      if (res.review && load.status === 'ready' && load.data.linked) apply({ ...load.data, review: res.review });
+      // O rascunho da última leitura é anterior às escolhas desta tela: ela vai como o guardado até a releitura.
+      if (res.review && load.status === 'ready' && load.data.linked) apply({ ...load.data, review: res.review, draft: choicesRef.current });
       reload(true);
     }).catch((e: unknown) => {
       if (!current()) return;
