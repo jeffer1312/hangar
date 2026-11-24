@@ -3,9 +3,11 @@
 #![forbid(unsafe_code)]
 
 mod assets;
+mod draft;
 mod engine;
 pub mod http;
 mod turns;
 
+pub use draft::{Draft, Pick};
 pub use engine::{DecideBody, Diag, Engine, Failure, Linked, SessionRef, Sessions, Target, Task, Via};
 pub use turns::{Ended, TurnRow, TurnTracker};

@@ -17,12 +17,16 @@ const TOKEN: &str = "dono-da-prova";
 
 struct Routes { bench: Bench, app: axum::Router }
 
+fn router(bench: &Bench, engine: Arc<hangar_work_review::Engine>) -> axum::Router {
+    let edge = Edge { trusted: TrustedHosts::parse("127.0.0.1"), auth: Auth::configured(TOKEN),
+        diag: DiagClient::new().with_diary(Some(bench.path("diary"))) };
+    hangar_work_review::http::router::<()>(edge, engine)
+}
+
 impl Routes {
     fn new() -> Self {
         let bench = Bench::new();
-        let edge = Edge { trusted: TrustedHosts::parse("127.0.0.1"), auth: Auth::configured(TOKEN),
-            diag: DiagClient::new().with_diary(Some(bench.path("diary"))) };
-        let app = hangar_work_review::http::router::<()>(edge, bench.engine.clone());
+        let app = router(&bench, bench.engine.clone());
         Self { bench, app }
     }
 
@@ -121,6 +125,67 @@ async fn decisions_answer_ok_refuse_stale_and_oversized_bodies() {
     let (status, body) = routes.send("POST", uri, Some(TOKEN), Some(good)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!((&body["ok"], &body["review"]["id"]), (&json!(true), &json!("r-1")));
+}
+
+/// O que a pessoa marcou e não enviou volta na leitura seguinte, também com o servidor recriado.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_saved_draft_comes_back_until_the_round_changes() {
+    let mut routes = Routes::new();
+    routes.bench.connector("help", true, &[]);
+    routes.bench.set_review("help", review("r-1", "waiting", &["47", "86"], "2026-11-18T10:00:00Z"));
+    let session = routes.bench.session("s1", "life-1", None);
+    routes.bench.link("help", "1", &session);
+    let (uri, read) = ("/api/sessions/s1/work-review/draft", "/api/sessions/s1/work-review");
+    let (status, body) = routes.send("GET", read, Some(TOKEN), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let draft = json!({"review_id": "r-1", "choices": {"47": {"choice": "manter", "reason": "regra do Delphi"},
+        "86": {"choice": "igualar", "reason": ""}, "99": {"choice": "igualar", "reason": ""}}});
+    let (status, body) = routes.send("PUT", uri, Some(TOKEN), Some(draft.to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let expected = json!({"47": {"choice": "manter", "reason": "regra do Delphi"}, "86": {"choice": "igualar", "reason": ""}});
+    let (_, body) = routes.send("GET", read, Some(TOKEN), None).await;
+    assert_eq!(body["draft"], expected, "a decisão que a rodada não tem fica de fora: {body}");
+    // Outro aparelho que só conhece a 86 não apaga a 47: o servidor junta por decisão.
+    let other = json!({"review_id": "r-1", "choices": {"86": {"choice": "manter", "reason": "do celular"}}});
+    let (status, body) = routes.send("PUT", uri, Some(TOKEN), Some(other.to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let expected = json!({"47": {"choice": "manter", "reason": "regra do Delphi"}, "86": {"choice": "manter", "reason": "do celular"}});
+    let (_, body) = routes.send("GET", read, Some(TOKEN), None).await;
+    assert_eq!(body["draft"], expected, "juntado por decisão: {body}");
+    routes.app = router(&routes.bench, hangar_work_review::Engine::new(routes.bench.host.clone(), routes.bench.store.clone(),
+        routes.bench.sessions.clone(), routes.bench.diag.clone(), routes.bench.path("cache"), routes.bench.path("drafts")));
+    let (_, body) = routes.send("GET", read, Some(TOKEN), None).await;
+    assert_eq!(body["draft"], expected, "servidor recriado: {body}");
+    let stale = json!({"review_id": "r-0", "choices": {}}).to_string();
+    let (status, body) = routes.send("PUT", uri, Some(TOKEN), Some(stale)).await;
+    assert_eq!((status, &body["detail"]["code"]), (StatusCode::CONFLICT, &json!("stale_review")), "{body}");
+    routes.bench.set_review("help", review("r-2", "waiting", &["47"], "2026-11-18T11:00:00Z"));
+    let (_, body) = routes.send("GET", read, Some(TOKEN), None).await;
+    assert_eq!((&body["review"]["id"], body.get("draft")), (&json!("r-2"), None), "rodada nova começa sem escolha: {body}");
+}
+
+/// Duas sessões no mesmo ticket: a que ficou com a rodada velha não passa por cima do rascunho da nova.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_old_round_from_another_session_does_not_replace_the_new_draft() {
+    let routes = Routes::new();
+    routes.bench.connector("help", true, &["--plain-key", "on"]);
+    routes.bench.set_review("help", review("r-1", "waiting", &["47", "86"], "2026-11-18T10:00:00Z"));
+    let old = routes.bench.session("s1", "life-1", None);
+    routes.bench.link("help", "1", &old);
+    routes.bench.session("s2", "life-2", Some("1"));
+    let (status, body) = routes.send("GET", "/api/sessions/s1/work-review", Some(TOKEN), None).await;
+    assert_eq!((status, &body["review"]["id"]), (StatusCode::OK, &json!("r-1")), "{body}");
+    routes.bench.set_review("help", review("r-2", "waiting", &["47", "86"], "2026-11-18T11:00:00Z"));
+    let (_, body) = routes.send("GET", "/api/sessions/s2/work-review", Some(TOKEN), None).await;
+    assert_eq!((&body["ticket_id"], &body["review"]["id"]), (&json!("1"), &json!("r-2")), "{body}");
+    let new = json!({"review_id": "r-2", "choices": {"86": {"choice": "igualar", "reason": ""}}});
+    let (status, body) = routes.send("PUT", "/api/sessions/s2/work-review/draft", Some(TOKEN), Some(new.to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let stale = json!({"review_id": "r-1", "choices": {"47": {"choice": "manter", "reason": "velha"}}});
+    let (status, body) = routes.send("PUT", "/api/sessions/s1/work-review/draft", Some(TOKEN), Some(stale.to_string())).await;
+    assert_eq!((status, &body["detail"]["code"]), (StatusCode::CONFLICT, &json!("stale_review")), "{body}");
+    let (_, body) = routes.send("GET", "/api/sessions/s2/work-review", Some(TOKEN), None).await;
+    assert_eq!(body["draft"], json!({"86": {"choice": "igualar", "reason": ""}}), "{body}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

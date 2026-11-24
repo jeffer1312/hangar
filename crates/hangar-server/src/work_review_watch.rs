@@ -19,8 +19,9 @@ const TICK: Duration = Duration::from_secs(2);
 const RECHECK: Duration = Duration::from_secs(60);
 const EVENT: &str = "rust.work_review";
 
-pub(crate) fn engine(host: Arc<hangar_connectors::Host>, mission: Arc<hangar_mission::Store>, sessions: Arc<SessionNotify>, diag: DiagClient) -> Arc<Engine> {
-    Engine::new(host, mission, sessions, Arc::new(DiagSink(diag)), cache_dir())
+/// `drafts_dir` guarda o que a pessoa marcou e não enviou: não é cache, fica na pasta do Hangar.
+pub(crate) fn engine(host: Arc<hangar_connectors::Host>, mission: Arc<hangar_mission::Store>, sessions: Arc<SessionNotify>, diag: DiagClient, drafts_dir: PathBuf) -> Arc<Engine> {
+    Engine::new(host, mission, sessions, Arc::new(DiagSink(diag)), cache_dir(), drafts_dir)
 }
 
 /// A mesma base do índice de custos (`<cache>/hangar`): é cache, pode sumir.

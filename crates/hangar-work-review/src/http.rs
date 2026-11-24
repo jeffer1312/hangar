@@ -1,5 +1,6 @@
 //! Rotas do dono para a revisão da sessão. A autenticação vem antes de ler corpo ou sessão; convidado
 //! e token errado nunca chegam ao conector.
+use crate::draft::Draft;
 use crate::engine::{DecideBody, Engine, Failure};
 use axum::Router;
 use axum::body::to_bytes;
@@ -88,7 +89,22 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
                 Err(failure) => error(&failure),
             }
         }
+        (Method::PUT, ["api", "sessions", name, "work-review", "draft"]) => {
+            let name = (*name).to_owned();
+            let Ok(bytes) = to_bytes(request.into_body(), MAX_BODY).await else {
+                return detail(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", "corpo acima de 512 KiB", json!({}));
+            };
+            let draft: Draft = match serde_json::from_slice(&bytes) {
+                Ok(draft) => draft,
+                Err(error) => return detail(StatusCode::BAD_REQUEST, "invalid_params", &format!("corpo inválido: {error}"), json!({})),
+            };
+            match state.engine.save_draft(&name, draft).await {
+                Ok(()) => json_response(StatusCode::OK, json!({"ok": true})),
+                Err(failure) => error(&failure),
+            }
+        }
         (_, ["api", "sessions", _, "work-review"]) | (_, ["api", "sessions", _, "work-review", "decisions"])
+        | (_, ["api", "sessions", _, "work-review", "draft"])
         | (_, ["api", "sessions", _, "work-review", "assets", _]) => detail(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed", "método não aceito nesta rota", json!({})),
         _ => detail(StatusCode::NOT_FOUND, "not_found", "rota desconhecida", json!({})),
     }
