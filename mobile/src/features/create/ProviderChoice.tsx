@@ -23,9 +23,9 @@ function Reasons({ probe }: { probe: Probe | null | undefined }) {
   </View> : null;
 }
 
+// Tocar no agente já marcado também passa adiante: confirma a escolha antes de a sonda responder.
 const pick = (value: Provider, p: Provider, onChange: (p: Provider) => void) => {
-  if (p === value) return;
-  haptic.selection();
+  if (p !== value) haptic.selection();
   onChange(p);
 };
 
