@@ -94,7 +94,7 @@ impl Harness {
             codex: vec![CodexScope { home: base.join("codex"), account: format!("codex:{}", base.join("codex").display()), label: "Codex · default".into() }],
             pi: vec![PiScope { root: base.join("pi"), source: "pi".into() }],
             kimi: Some(KimiScope { root: base.join("kimi/sessions"), index: base.join("kimi/session_index.jsonl") }),
-            repo: base.clone(),
+            repo: base.clone(), antigravity: vec![],
         };
         let upstream = Arc::new(Upstream { scopes: Mutex::new(has_scopes.then_some(scopes)), scope_reads: AtomicUsize::new(0), infos: Mutex::new(indexmap::IndexMap::new()), hits: Mutex::new(Vec::new()),
             info_failures: Mutex::new(Default::default()), journal: tempfile::tempdir().unwrap() });

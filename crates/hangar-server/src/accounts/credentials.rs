@@ -76,7 +76,7 @@ fn engine_natural(name: &str, data: &Map<String, Value>) -> Option<Value> {
 }
 
 /// O que a linha de `/api/credenciais` lê além do id e do nome.
-pub(crate) enum Origin { Claude(Value, Account), Engine(Map<String, Value>), Codex(Account), Kimi }
+pub(crate) enum Origin { Claude(Value, Account), Engine(Map<String, Value>), Codex(Account), Kimi, Antigravity(hangar_antigravity::Account) }
 
 pub(crate) struct Listed { pub id: String, pub natural: Value, pub origin: Origin }
 
@@ -109,6 +109,14 @@ pub(crate) fn listed_ids(service: &AccountService, config: &other::Config) -> (V
             origin: Origin::Codex(account),
         })),
         Err(err) => problems.push((Provider::Codex, err.code)),
+    }
+    // Contas Google do Antigravity: sem cota (o Hangar não lê o login do agy).
+    // A padrão só aparece onde o agy já foi usado; máquina sem ele não ganha linha.
+    for account in hangar_antigravity::paths::known_accounts(&service.env.home).into_iter()
+        .filter(|a| !a.is_default() || a.data_dir(&service.env.home).is_dir()) {
+        let dir = account.gemini_dir(&service.env.home);
+        let natural = json!(super::antigravity::label(&account));
+        out.push(Listed { id: format!("antigravity:{}", super::catalog::resolved(&dir).to_string_lossy()), natural, origin: Origin::Antigravity(account) });
     }
     // Mesma fonte e mesmo nome das linhas Kimi da cota.
     for source in config.sources.iter().filter(|s| s.id.starts_with("kimi:")) {
@@ -302,6 +310,12 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
                 out.push(item);
             }
             Origin::Kimi => {}
+            Origin::Antigravity(account) => {
+                let mut item = line(id, "antigravity", "oauth", natural, aliases, &quota);
+                item["path"] = json!(account.gemini_dir(&service.env.home).to_string_lossy());
+                item["login"] = json!({"loggedIn": super::antigravity::cached_signed(account, &service.env.home)});
+                out.push(item);
+            }
         }
     }
     // Cota sem cadastro continua visível, mas não comprova autenticação do Codex.

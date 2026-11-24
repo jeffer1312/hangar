@@ -199,6 +199,7 @@ pub fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEv
         Err(e) => return Err(e),
     };
     let mut pi = super::PiStream::default();
+    let mut agy = super::AgyStream::default();
     let mut repl = super::code_mode::ReplLinks::default();
     for raw in BufReader::new(file).split(b'\n') {
         let raw = raw?;
@@ -214,6 +215,7 @@ pub fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEv
             Provider::Codex => codex::parse_rollout_obj(&value),
             Provider::Pi | Provider::Omp => pi.feed(&value),
             Provider::Kimi => super::parse_kimi_object(&value),
+            Provider::Antigravity => agy.feed(&value),
             Provider::Orq => return Ok(()),
         };
         for event in events {
@@ -323,6 +325,10 @@ fn ts_of_obj(obj: &Map<String, Value>) -> f64 {
     if let Some(t) = obj.get("timestamp").and_then(Value::as_str) {
         return py::iso_timestamp(&t.replace('Z', "+00:00")).unwrap_or(0.0);
     }
+    // Antigravity: `created_at` em ISO.
+    if let Some(t) = obj.get("created_at").and_then(Value::as_str) {
+        return py::iso_timestamp(&t.replace('Z', "+00:00")).unwrap_or(0.0);
+    }
     if let Some(n) = obj.get("message").and_then(Value::as_object).and_then(|m| m.get("timestamp")).and_then(Value::as_f64) {
         return n / 1000.0;
     }
@@ -369,6 +375,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
     }
     let mut held_ids = HashSet::new();
     let mut pi = super::PiStream::default();
+    let mut agy = super::AgyStream::default();
     let mut repl = super::code_mode::ReplLinks::default();
     let mut raw = Vec::new();
     let mut i = 0u64;
@@ -419,6 +426,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
                     Provider::Codex => codex::parse_rollout_obj(&value),
                     Provider::Pi | Provider::Omp => pi.feed(&value),
                     Provider::Kimi => super::parse_kimi_object(&value),
+                    Provider::Antigravity => agy.feed(&value),
                     Provider::Orq => super::parse_orq(&value, req.jsonl.parent()),
                 };
                 if let Some(fold) = notices.as_mut() { fold.feed(obj, &mut evs); }

@@ -21,6 +21,8 @@ const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(5);
 pub struct Scopes {
     pub claude: Vec<ClaudeScope>, pub codex: Vec<CodexScope>, pub pi: Vec<PiScope>,
     pub kimi: Option<KimiScope>, pub repo: PathBuf,
+    #[serde(default)]
+    pub antigravity: Vec<AntigravityScope>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ClaudeScope { pub root: PathBuf, pub account: String, pub label: String }
@@ -30,6 +32,9 @@ pub struct CodexScope { pub home: PathBuf, pub account: String, pub label: Strin
 pub struct PiScope { pub root: PathBuf, pub source: String }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct KimiScope { pub root: PathBuf, pub index: PathBuf }
+/// Uma conta Google do Antigravity: `root` é o `brain` dela, `history` o `history.jsonl` que dá a pasta de cada conversa.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AntigravityScope { pub root: PathBuf, pub history: PathBuf, pub account: String, pub label: String }
 
 #[derive(Debug)]
 pub enum CollectError { NoScopes, Index(IndexError) }
@@ -85,6 +90,7 @@ struct Metadata {
     active: Option<Scopes>,
     labels: Vec<(String, String)>,
     kimi_projects: std::collections::HashMap<String, String>,
+    antigravity_projects: std::collections::HashMap<String, String>,
     generation: u64,
 }
 
@@ -211,6 +217,7 @@ impl Collector {
                 let mut labels = IndexMap::new();
                 for scope in &scopes.claude { labels.insert(scope.account.clone(), scope.label.clone()); }
                 for scope in &scopes.codex { labels.insert(scope.account.clone(), scope.label.clone()); }
+                for scope in &scopes.antigravity { labels.insert(scope.account.clone(), scope.label.clone()); }
                 let labels: Vec<_> = labels.into_iter().collect();
                 let mut metadata = self.metadata.lock().unwrap();
                 if metadata.labels != labels { metadata.generation += 1; }
@@ -230,6 +237,7 @@ impl Collector {
         let pi_root = scopes.pi.iter().find(|s| s.source == "pi").map(|s| &s.root);
         active.pi.retain(|scope| scope.root.is_dir() && !(scope.source == "omp" && pi_root == Some(&scope.root)));
         active.kimi = scopes.kimi.filter(|scope| scope.root.is_dir());
+        active.antigravity.retain(|scope| scope.root.is_dir());
         let mut claude_files = Vec::new(); let mut pi_files = Vec::new();
         for scope in &active.claude {
             let listing = list_dir(&scope.root, |n| n.ends_with(".jsonl"), &mut unread_kinds);
@@ -244,6 +252,13 @@ impl Collector {
             let listing = list_dir(&scope.root, |n| n == "wire.jsonl", &mut unread_kinds);
             self.progress.set(&kimi_key(scope), 0, listing.files.len()); listing
         });
+        let agy_files: Vec<Listing> = active.antigravity.iter().map(|scope| {
+            let mut listing = list_dir(&scope.root, |n| n == "transcript_full.jsonl", &mut unread_kinds);
+            // Só o da conversa (`brain/<id>/.system_generated/logs/`): o resto da pasta é do agy.
+            listing.files.retain(|path| hangar_antigravity::paths::conversation_of_transcript(path).is_some()
+                && path.ancestors().nth(4) == Some(scope.root.as_path()));
+            self.progress.set(&scope.account, 0, listing.files.len()); listing
+        }).collect();
         *self.unread_issue.lock().unwrap() = unread_kinds.first().map(|kind| format!("costs_dir_{}", kind_slug(*kind)));
         let redo = |entries: &_| self.areas.area_lines(entries);
         let signature = self.areas.signature(); let mut keys = Vec::new();
@@ -267,6 +282,10 @@ impl Collector {
             let key = kimi_key(scope);
             index.sync_keeping(&key, &listing.files, &listing.unread, &simple::new_kimi_fold, simple::KIMI_VERSION, signature, &redo, &self.progress)?;
             keys.push(key);
+        }
+        for (scope, listing) in active.antigravity.iter().zip(agy_files) {
+            index.sync_keeping(&scope.account, &listing.files, &listing.unread, &simple::new_agy_fold, simple::AGY_VERSION, signature, &redo, &self.progress)?;
+            keys.push(scope.account.clone());
         }
         index.forget_outside(&keys)?;
         let mut metadata = self.metadata.lock().unwrap();
@@ -315,6 +334,16 @@ impl Collector {
             let mut rows = index.read_costs(Some(&kimi_key(scope)), since, None)?;
             for row in &mut rows {
                 row.project = projects.get(&row.session_id).filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| "desconhecido".into());
+            }
+            output.extend(rows);
+        }
+        for scope in &active.antigravity {
+            let projects = antigravity_projects(scope);
+            let mut rows = index.read_costs(Some(&scope.account), since, None)?;
+            for row in &mut rows {
+                row.project = projects.get(&row.session_id).cloned().unwrap_or_else(|| "desconhecido".into());
+                row.account_id = Some(scope.account.clone());
+                if row.provider == "google" { row.provider = scope.account.clone(); }
             }
             output.extend(rows);
         }
@@ -382,6 +411,8 @@ impl Collector {
         let mut metadata = self.metadata.lock().unwrap();
         let projects = metadata.active.as_ref().and_then(|s| s.kimi.as_ref()).map(|s| simple::kimi_projects(&s.index)).unwrap_or_default();
         if projects != metadata.kimi_projects { metadata.kimi_projects = projects; metadata.generation += 1; }
+        let agy: std::collections::HashMap<String, String> = metadata.active.as_ref().map(|s| s.antigravity.iter().flat_map(antigravity_projects).collect()).unwrap_or_default();
+        if agy != metadata.antigravity_projects { metadata.antigravity_projects = agy; metadata.generation += 1; }
         metadata.generation + self.index.get().map_or(0, Index::generation)
     }
     pub fn pricing(&self) -> MutexGuard<'_, Pricing> { self.pricing.lock().unwrap() }
@@ -392,6 +423,16 @@ impl Collector {
 fn claude_key(scope: &ClaudeScope) -> String { format!("claude:{}", scope.root.display()) }
 fn pi_key(scope: &PiScope) -> String { format!("{}:{}", scope.source, scope.root.display()) }
 fn kimi_key(scope: &KimiScope) -> String { format!("kimi:{}", scope.root.display()) }
+
+/// A pasta de cada conversa da conta; `history.jsonl` ilegível deixa o projeto desconhecido, sem esconder o custo.
+fn antigravity_projects(scope: &AntigravityScope) -> std::collections::HashMap<String, String> {
+    crate::archive_list::antigravity_workspaces(&scope.history).unwrap_or_else(|error| {
+        if crate::warn_limit::allow(None, "costs_antigravity_history_unreadable") {
+            tracing::warn!(code = "costs_antigravity_history_unreadable", kind = ?error.kind());
+        }
+        Default::default()
+    })
+}
 
 /// Só para quem não apaga nada a partir da lista; a varredura usa `rollout_listing`.
 pub fn rollout_owners(codex: &[CodexScope]) -> IndexMap<String, (CodexScope, Vec<PathBuf>)> {

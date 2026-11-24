@@ -19,7 +19,7 @@ fn main() -> std::process::ExitCode {
     {
         std::process::exit(hangar_server::codex_setup::hook_command::run(mode, &hook_args[1..]));
     }
-    if matches!(hook_args.first().and_then(|arg| arg.to_str()), Some("kimi-state-hook" | "guard-tmux")) {
+    if matches!(hook_args.first().and_then(|arg| arg.to_str()), Some("kimi-state-hook" | "agy-state-hook" | "guard-tmux")) {
         return hangar_server::provider_hooks::run(hook_args[0].to_str().unwrap());
     }
     // Hooks de marcador do Claude e do Codex: um processo por evento, nada antes deles.

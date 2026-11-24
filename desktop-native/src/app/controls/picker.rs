@@ -539,6 +539,7 @@ impl Hangar {
         let shown = match (self.provider().0, ctl) {
             ("claude", Ctl::Mode) => tr(&format!("mode_{value}")),
             ("codex", Ctl::Mode) => tr(&format!("codex_mode_{value}")),
+            ("antigravity", Ctl::Mode) => shown(Ctl::Mode, value),
             _ => value,
         };
         Some(Button::new("picker-access").ghost().small().disabled(!self.chat_online)

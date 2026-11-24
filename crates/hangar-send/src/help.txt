@@ -55,8 +55,8 @@ hangar-send — mensagem entre sessões Claude via hangar.
   hangar-send --new <nome> --resume <id>  a sessão nova RETOMA uma conversa que existe no disco
                                  (a pasta vem dela, sem cwd). Combina com --provider, --conta,
                                  --model, --engine, --engine-account e --headless/--terminal.
-                                 --provider <claude|codex|pi|omp|kimi> escolhe o AGENTE da sessão
-                                 nova. Omitido, vem desta sessão (a criadora); chamado de fora de
+                                 --provider <claude|codex|pi|omp|kimi|antigravity> escolhe o
+                                 AGENTE da sessão nova. Omitido, vem desta sessão (a criadora); chamado de fora de
                                  uma sessão, o último que o app lembrou. Ex: --provider kimi abre o Kimi Code.
                                  --remember-provider grava o provedor desta criação como padrão.
                                  Sem o flag, abrir auxiliares não muda a preferência do app.

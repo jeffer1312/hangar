@@ -4,6 +4,7 @@ pub mod codex_hooks;
 pub mod files;
 pub mod hooks;
 pub mod kimi_hooks;
+pub mod agy_hooks;
 pub mod persona;
 pub mod skills;
 use crate::accounts::{AccountService, environment::AccountEnvironment};
@@ -40,6 +41,10 @@ pub fn sync_startup(service: &AccountService) {
     if let Err(error) = kimi_hooks::repair(&service.env) {
         tracing::warn!(code = "harness_startup_kimi_hooks_failed", %error, "hooks do Kimi não conferidos na subida");
     }
+    // O hook do Antigravity é o que liga o pane à conversa: sem ele a sessão com terminal não acha o transcript.
+    if let Err(error) = agy_hooks::sync(&service.env.home) {
+        tracing::warn!(code = "harness_startup_agy_hooks_failed", %error, "hooks do Antigravity não conferidos na subida");
+    }
 }
 
 pub fn sync_hooks(service: &AccountService, repo: &Path) -> Value {
@@ -49,6 +54,14 @@ pub fn sync_hooks(service: &AccountService, repo: &Path) -> Value {
         Err(error) => {
             tracing::warn!(%error,"Hooks Kimi não atualizados");
             result["kimi"] = serde_json::json!([]);
+        }
+    }
+    match agy_hooks::sync(&service.env.home) {
+        Ok(paths) => result["antigravity"] = serde_json::json!(paths),
+        Err(error) => {
+            tracing::warn!(%error, "Hooks Antigravity não atualizados");
+            result["antigravity"] = serde_json::json!([]);
+            result["antigravity_erro"] = serde_json::json!(error.to_string());
         }
     }
     match codex_hooks::sync(&service.env.codex_default, &service.env.home, cfg!(windows)) {

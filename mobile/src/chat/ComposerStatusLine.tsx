@@ -73,7 +73,8 @@ export function ComposerStatusLine({ serverId, name, onOpenSettings }: Props) {
   }
   const claudeMode = stateEvent?.claude_permission_mode;
   const codexMode = stateEvent?.codex_mode;
-  const mode = session?.provider === 'claude' ? (claudeMode ? permissionLabel(claudeMode) : m.chat_mode_label())
+  // O Antigravity publica o modo no campo do Claude, com os mesmos nomes.
+  const mode = session?.provider === 'claude' || session?.provider === 'antigravity' ? (claudeMode ? permissionLabel(claudeMode) : m.chat_mode_label())
     : session?.provider === 'codex' ? (codexMode === 'plan' ? m.chat_mode_plan() : codexMode === 'default' ? m.chat_mode_normal() : m.chat_mode_label()) : null;
   if (mode) {
     items.push({ key: 'mode', spoken: mode, shrink: true, onPress: onOpenSettings ? () => onOpenSettings('mode') : undefined,

@@ -111,6 +111,7 @@ pub fn ticket_transcript(provider: &str, pane_id: &str, pane_pid: Option<i64>, c
     match provider {
         "pi" | "omp" => pi_transcript(pane_id, pane_pid, cwd, provider, procs, dirs, problems),
         "kimi" => kimi_transcript(pane_id, pane_pid, cwd, procs, dirs, problems),
+        "antigravity" => agy_transcript(pane_id, pane_pid, procs, dirs, problems),
         _ => None,
     }
 }
@@ -334,6 +335,25 @@ fn kimi_transcript(pane_id: &str, pid: Option<i64>, cwd: &str, procs: &dyn Proce
     }
     let wd = data.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()).unwrap_or(cwd);
     kimi_transcript_of_id(wd, sid, dirs, problems)
+}
+
+/// O transcript do `agy` pelo bilhete do hook (`.hangar-agy/<pane>.json`). O caminho é recalculado pela conta do
+/// processo (`GEMINI_HOME`), nunca tirado do bilhete: o id passa pela conferência de UUID antes de virar caminho.
+fn agy_transcript(pane_id: &str, pid: Option<i64>, procs: &dyn ProcessView, dirs: &Dirs, problems: &mut Problems) -> Option<String> {
+    let base = pid.and_then(|p| config_dir_of(procs, p)).unwrap_or_else(|| dirs.default_claude());
+    let ticket = base.join(".hangar-agy").join(format!("{}.json", ticket_key(pane_id, pid, procs)));
+    let data = ticket_object(&ticket, problems)?;
+    let sid = data.get("session_id").and_then(Value::as_str).filter(|s| hangar_antigravity::paths::valid_conversation_id(s))?;
+    let born = pid.and_then(|p| procs.start_time(p));
+    match (born, number(data.get("ts"))) {
+        (None, _) => { warn_limited(pane_id, "list_agy_ticket_refused", "nascimento"); return None }
+        (_, None) => { warn_limited(pane_id, "list_agy_ticket_refused", "ts"); return None }
+        (Some(born), Some(ts)) if ts < born - TICKET_SLACK => return None,
+        _ => {}
+    }
+    let account = pid.and_then(|p| env(procs, p, "GEMINI_HOME"))
+        .map_or_else(hangar_antigravity::Account::default, |home| hangar_antigravity::Account::extra(PathBuf::from(home)));
+    account.transcript_path(&dirs.home, sid).map(|p| p.to_string_lossy().into_owned())
 }
 
 fn kimi_wire(session_dir: &Path) -> String {

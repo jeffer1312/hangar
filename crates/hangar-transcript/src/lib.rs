@@ -6,7 +6,9 @@ mod claude;
 mod code_mode;
 mod codex;
 mod agents;
+mod antigravity;
 pub use agents::{parse_pi_object, parse_kimi_object, PiStream};
+pub use antigravity::AgyStream;
 pub mod history;
 mod peer;
 pub mod interactions;
@@ -44,6 +46,7 @@ pub enum Provider {
     Pi,
     Omp,
     Kimi,
+    Antigravity,
     Orq,
 }
 
@@ -56,6 +59,7 @@ impl Provider {
             "pi" => Some(Self::Pi),
             "omp" => Some(Self::Omp),
             "kimi" => Some(Self::Kimi),
+            "antigravity" => Some(Self::Antigravity),
             "orq" => Some(Self::Orq),
             _ => None,
         }
@@ -69,6 +73,7 @@ impl Provider {
             Self::Pi => "pi",
             Self::Omp => "omp",
             Self::Kimi => "kimi",
+            Self::Antigravity => "antigravity",
             Self::Orq => "orq",
         }
     }
@@ -107,6 +112,7 @@ pub struct LineParser {
     path: Option<std::path::PathBuf>,
     notices: Option<claude::NoticeFold>,
     pi: PiStream,
+    agy: AgyStream,
     repl: code_mode::ReplLinks,
 }
 
@@ -116,7 +122,7 @@ impl LineParser {
     pub fn has_pending(&self) -> bool { self.pi.has_pending() }
     pub fn pending_offset(&self) -> Option<u64> { self.pi.pending_offset() }
     pub fn new(provider: Provider) -> Self {
-        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, path: None, notices: None, pi: PiStream::default(), repl: code_mode::ReplLinks::default() }
+        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, path: None, notices: None, pi: PiStream::default(), agy: AgyStream::default(), repl: code_mode::ReplLinks::default() }
     }
 
     /// Com as notas dos avisos da CLI (hook que falha, nova tentativa, recusa). Só o chat as pede: quem procura
@@ -160,7 +166,7 @@ impl LineParser {
     }
 
     fn at_line(&mut self, offset: u64) {
-        if offset == 0 { self.pi = PiStream::default(); }
+        if offset == 0 { self.pi = PiStream::default(); self.agy = AgyStream::default(); }
         let Some(fold) = self.notices.as_mut() else { return };
         if offset == 0 {
             fold.file_start();
@@ -180,6 +186,7 @@ impl LineParser {
             (Provider::Codex, _) => codex::parse_rollout_obj(&value),
             (Provider::Pi | Provider::Omp, _) => self.pi.feed_with_offset(&value, Some(offset)),
             (Provider::Kimi, _) => parse_kimi_object(&value),
+            (Provider::Antigravity, _) => self.agy.feed(&value),
             (Provider::Orq, _) => parse_orq(&value, self.run_dir.as_deref()),
             (Provider::Claude | Provider::ClaudeHeadless, Value::Object(obj)) if self.rewrite.keep(obj) => {
                 let mut evs = claude::parse_obj(obj, self.peer_resolver);

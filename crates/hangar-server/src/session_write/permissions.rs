@@ -75,12 +75,13 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
         other=>other,
     };
     let target=match found {
-        Ok(Some((held,target))) if target.provider=="claude"=>(held,target),
+        // O Antigravity com terminal troca pelo rodapé e pelo shift+tab, no ator dele.
+        Ok(Some((held,target))) if target.provider=="claude" || target.provider=="antigravity"=>(held,target),
         Ok(Some(_))=>return reply(StatusCode::CONFLICT,detail_body(ONLY_CLAUDE,ONLY_CLAUDE_MSG,json!({}))),
         // Sem entrada aqui: a linha da lista diz se a sessão existe e de quem é; nunca Shift+Tab por fora.
         Ok(None)=>return match listed(&st,&name).await {
             Ok(None)=>reply(StatusCode::NOT_FOUND,detail_body("erro_sessao_inexistente","sessao nao encontrada",json!({}))),
-            Ok(Some((provider,_))) if provider!="claude"=>reply(StatusCode::CONFLICT,detail_body(ONLY_CLAUDE,ONLY_CLAUDE_MSG,json!({}))),
+            Ok(Some((provider,_))) if provider!="claude" && provider!="antigravity"=>reply(StatusCode::CONFLICT,detail_body(ONLY_CLAUDE,ONLY_CLAUDE_MSG,json!({}))),
             // Sem terminal parado que nada religou: repetir não muda; só reabrir a sessão.
             Ok(Some((_,true)))=>reply(StatusCode::CONFLICT,detail_body("erro_permissao_sessao_parada","a sessão está parada; reabra-a para trocar o modo de permissão",json!({}))),
             Ok(Some(_))=>reply(StatusCode::SERVICE_UNAVAILABLE,detail_body("runtime_unhealthy","o terminal desta sessão não está com o servidor; tente de novo",json!({}))),
@@ -103,6 +104,7 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
     let job=tokio::spawn(async move {
         let reply=match &target.handle {
             EntryHandle::Terminal {handle,..}=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),if let Some(mode)=&mode {json!({"mode":mode})} else {json!({"probe":probe})}).await?,
+            EntryHandle::OtherTerminal {handle,..} if target.provider=="antigravity"=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),json!({"mode":mode})).await?,
             EntryHandle::Headless(handle) if set=> {
                 let mut reply=handle.command(RuntimeCommand {operation_id:id.clone(),kind:OperationKind::SetPermissionMode,payload:json!({"mode":mode})}).await?;
                 if reply.disposition==Disposition::Accepted && reply.payload["reopened"]!=true {

@@ -2,7 +2,7 @@ import { memo, useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated, { FadeIn, FadeInDown, FadeOut, LinearTransition, useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
-import { accountMatchRange, type CodexAccount, type Credencial, type Server } from '@hangar/core';
+import { accountMatchRange, type AntigravityAccount, type CodexAccount, type Credencial, type Server } from '@hangar/core';
 import { Pill } from '../config/PageHeader';
 import { useSettingsColors, withAlpha } from '../config/colors';
 import { ProviderGlyph } from '../../ui/ProviderGlyph';
@@ -15,7 +15,7 @@ import * as m from '../../paraglide/messages';
 
 export type AccountRowData = {
   key: string;
-  provider: 'claude' | 'codex' | 'kimi' | '';
+  provider: 'claude' | 'codex' | 'kimi' | 'antigravity' | '';
   title: string;
   plan: string;
   email: string;
@@ -24,6 +24,8 @@ export type AccountRowData = {
   account: CodexAccount | null;
   credential: Credencial | null;
   engineName?: string;
+  /** Conta Google do Antigravity (`/api/antigravity-contas`); `canSignIn` já diz se o agy está instalado. */
+  antigravity?: AntigravityAccount | null;
   canSignIn: boolean;
 };
 
@@ -33,6 +35,9 @@ export type AccountRowHandlers = {
   editEngine: (name: string) => void;
   removeEngine: (name: string) => void;
   refreshClaude: () => Promise<void>;
+  antigravitySignIn: (accountId: string) => void;
+  antigravitySignOut: (account: AntigravityAccount) => void;
+  antigravityRemove: (account: AntigravityAccount) => void;
 };
 
 const MOVE = LinearTransition.duration(420);
@@ -117,6 +122,15 @@ export const AccountRow = memo(function AccountRow({ row, term, enterIndex, serv
           <View style={styles.actions}>
             <Pill label={m.mobile_accounts_engine_edit()} disabled={engineBusy} onPress={() => handlers.editEngine(row.engineName!)} />
             <Pill label={m.mobile_accounts_engine_delete()} disabled={engineBusy} onPress={() => handlers.removeEngine(row.engineName!)} />
+          </View>
+        ) : null}
+        {row.antigravity ? (
+          <View style={styles.actions}>
+            {row.canSignIn ? <Pill icon="LogIn" label={m.contas_entrar()} onPress={() => handlers.antigravitySignIn(row.antigravity!.id)} disabled={busy} /> : null}
+            {row.antigravity.logado === true ? <Pill icon="LogOut" label={m.contas_sair()} onPress={() => handlers.antigravitySignOut(row.antigravity!)} disabled={busy} /> : null}
+            {/* Com um agy aberto nela, o servidor recusa apagar a pasta. */}
+            {!row.antigravity.padrao ? <Pill icon="Trash2" label={m.lista_remover()} onPress={() => handlers.antigravityRemove(row.antigravity!)}
+              disabled={busy || row.antigravity.em_uso} /> : null}
           </View>
         ) : null}
         {account && (row.canSignIn || !account.is_default) ? (

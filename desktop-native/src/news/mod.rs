@@ -2,6 +2,7 @@
 
 mod account_tags;
 mod agent_fix;
+mod antigravity;
 mod auto_report;
 mod claude_notices;
 mod cliproxy_wizard;
@@ -117,6 +118,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "whatsapp-somente-leitura" => Some(whatsapp_readonly::render),
         "entrar-pelo-connect" => Some(connect_sign_in::render),
         "portas-da-sessao" => Some(session_ports::render),
+        "antigravity" => Some(antigravity::render),
         _ => None,
     }
 }

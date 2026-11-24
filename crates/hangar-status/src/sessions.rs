@@ -9,7 +9,7 @@ use hangar_api::status::{DeadSession, SessionsBlock, Usage};
 /// ppid → filhos, no formato do `ChildrenMap` do servidor (`list/procs.rs`).
 pub type Children = HashMap<i64, Vec<i64>>;
 
-const PROVIDERS: [&str; 5] = ["claude", "codex", "pi", "omp", "kimi"];
+const PROVIDERS: [&str; 6] = ["claude", "codex", "pi", "omp", "kimi", "antigravity"];
 
 /// Grupo de processo de `SessionsBlock.by_process`, na ordem em que sai.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -41,7 +41,7 @@ impl ProcessGroup {
         match base {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::CodexAppServer),
-            "pi" | "omp" | "kimi" => Some(Self::PiOmpKimi),
+            "pi" | "omp" | "kimi" | "agy" => Some(Self::PiOmpKimi),
             "hangar-cano" => Some(Self::Cano),
             "tmux" | "psmux" => Some(Self::Tmux),
             // O servidor do tmux troca o título para `tmux: server`.
@@ -55,7 +55,7 @@ impl ProcessGroup {
         match provider {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::CodexAppServer),
-            "pi" | "omp" | "kimi" => Some(Self::PiOmpKimi),
+            "pi" | "omp" | "kimi" | "antigravity" => Some(Self::PiOmpKimi),
             _ => None,
         }
     }

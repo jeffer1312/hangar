@@ -4,6 +4,8 @@ import type { ModelOption, ModelOptionsResponse } from './api';
 import type { Provider } from './types';
 
 export const SESSION_PROVIDERS: readonly Provider[] = ['claude', 'codex', 'pi', 'kimi', 'omp'];
+/** Os que a criação de sessão do Expo oferece; as outras telas seguem com `SESSION_PROVIDERS`. */
+export const CREATE_SESSION_PROVIDERS: readonly Provider[] = [...SESSION_PROVIDERS, 'antigravity'];
 
 // Sem entrada para o Kimi de propósito: ele escolhe modelo mas o CLI não tem nível de esforço.
 // OMP é o fork do Pi, mesmos níveis.
@@ -26,16 +28,25 @@ export const CLAUDE_PERMISSION_MODES = [
   'plan', 'manual', 'auto', 'acceptEdits', 'bypassPermissions', 'dontAsk',
 ] as const;
 
+// Antigravity com os nomes do Claude (o servidor traduz para o `--mode` do agy). `manual` é o modo que
+// pergunta antes de agir, e o agy só o tem sem terminal.
+export const ANTIGRAVITY_PERMISSION_MODES = ['plan', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'] as const;
+
 // Codex sem terminal: o modo vira sandbox/approval, com os nomes do próprio Codex.
 export const CODEX_HEADLESS_PERMISSION_MODES = ['Ask for approval', 'Approve for me', 'Full Access'] as const;
 
-/** Só Claude e Codex sem terminal escolhem permissão. */
+/** Claude, Antigravity e Codex sem terminal escolhem permissão. */
 export function permissionModes(provider: string, headless: boolean): readonly string[] {
   if (provider === 'claude') return CLAUDE_PERMISSION_MODES;
+  if (provider === 'antigravity') return headless ? ANTIGRAVITY_PERMISSION_MODES : ANTIGRAVITY_PERMISSION_MODES.filter((mode) => mode !== 'manual');
   return provider === 'codex' && headless ? CODEX_HEADLESS_PERMISSION_MODES : [];
 }
 
 export const hasExecutionMode = (provider: string) => provider === 'claude' || provider === 'codex';
+
+/** Escolha entre com e sem terminal na criação do Expo. O Antigravity abre só com terminal enquanto o
+ *  servidor recusa o modo sem terminal dele. */
+export const canChooseSurface = (provider: string) => provider === 'claude' || provider === 'codex';
 
 const CONTEXT_SUFFIX = '[1m]';
 /** Janela de 1M do Claude com motor GPT: o backend lê só o sufixo do `model` (engines.catalog_model). */

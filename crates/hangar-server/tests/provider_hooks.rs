@@ -1113,3 +1113,61 @@ fn d05_nav_hook_reads_stdin_bytes_as_utf8() {
     let out: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert!(out["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("navegador embutido"), "{out}");
 }
+
+
+const AGY_CONV: &str = "76f42045-fea3-4d76-880b-9bafad9a794f";
+
+fn agy_payload(event: &str, extra: Value) -> Vec<u8> {
+    let mut value = json!({
+        "conversationId": AGY_CONV, "hookEventName": event, "cwd": "/tmp/agy-prova",
+        "transcriptPath": format!("/h/.gemini/antigravity-cli/brain/{AGY_CONV}/.system_generated/logs/transcript_full.jsonl"),
+    });
+    for (k, v) in extra.as_object().unwrap() { value[k] = v.clone(); }
+    serde_json::to_vec(&value).unwrap()
+}
+
+#[test]
+fn provider_hooks_agy_state_and_ticket_answer_an_empty_object() {
+    let root = tempfile::tempdir().unwrap();
+    let started = run(root.path(), "agy-state-hook", &agy_payload("SessionStart", json!({})), &[("TMUX_PANE", "%7")]);
+    assert!(started.status.success());
+    assert!(!root.path().join(format!("config/.hangar-state/{AGY_CONV}.json")).exists(), "SessionStart não marca trabalhando");
+    assert!(root.path().join("config/.hangar-agy/7.json").is_file(), "SessionStart grava o bilhete");
+    for (event, extra, expected) in [
+        ("PreInvocation", json!({}), Some("working")),
+        ("Stop", json!({"fullyIdle": false}), Some("working")),
+        ("Stop", json!({"fullyIdle": true}), Some("idle")),
+    ] {
+        let result = run(root.path(), "agy-state-hook", &agy_payload(event, extra), &[("TMUX_PANE", "%7")]);
+        assert!(result.status.success(), "{event}: {}", String::from_utf8_lossy(&result.stderr));
+        // O agy espera um objeto JSON; `{}` não decide nada (um PreToolUse com {} bloquearia, por isso ele nem é registrado).
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "{}");
+        let state: Value = serde_json::from_slice(&std::fs::read(root.path().join(format!("config/.hangar-state/{AGY_CONV}.json"))).unwrap()).unwrap();
+        assert_eq!(state["state"].as_str(), expected, "{event}");
+    }
+    let ticket: Value = serde_json::from_slice(&std::fs::read(root.path().join("config/.hangar-agy/7.json")).unwrap()).unwrap();
+    assert_eq!(ticket["session_id"], AGY_CONV);
+    assert_eq!(ticket["cwd"], "/tmp/agy-prova");
+    assert!(ticket["transcript_path"].as_str().unwrap().ends_with("transcript_full.jsonl"));
+}
+
+#[test]
+fn provider_hooks_agy_without_a_pane_writes_nothing_even_with_a_session_key() {
+    // O `agy acp` sem terminal também roda os hooks e herda o CP_SESSION_KEY de quem o lançou.
+    let root = tempfile::tempdir().unwrap();
+    let result = run(root.path(), "agy-state-hook", &agy_payload("PreInvocation", json!({})), &[("CP_SESSION_KEY", "abc")]);
+    assert!(result.status.success());
+    assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "{}");
+    assert!(!root.path().join("config/.hangar-state").exists());
+    assert!(!root.path().join("config/.hangar-agy").exists());
+}
+
+#[test]
+fn provider_hooks_agy_refuses_a_conversation_id_that_is_not_a_uuid() {
+    let root = tempfile::tempdir().unwrap();
+    let payload = serde_json::to_vec(&json!({"conversationId": "../../etc", "hookEventName": "Stop", "fullyIdle": true})).unwrap();
+    let result = run(root.path(), "agy-state-hook", &payload, &[("TMUX_PANE", "%7")]);
+    assert!(result.status.success(), "falha do Hangar nunca prende o agente");
+    assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "{}");
+    assert!(!root.path().join("config/.hangar-state").exists());
+}

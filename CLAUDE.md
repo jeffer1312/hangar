@@ -1,6 +1,6 @@
 # Hangar
 
-Drive live Claude Code, Codex, Pi, omp, and Kimi sessions from your phone over LAN/VPN. Terminal
+Drive live Claude Code, Codex, Pi, omp, Kimi, and Antigravity sessions from your phone over LAN/VPN. Terminal
 sessions run in `tmux`; Claude and Codex can instead run as Hangar-managed headless processes.
 Single-user, LAN/VPN-only by design. Server: Rust `hangar-server` (`crates/`); `backend/` keeps only the
 Python tools that are not the server yet (Codex launcher, orq scripts, push keys). Frontend: Svelte 5 PWA (`frontend/`).
@@ -391,10 +391,10 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   binário novo (iOS: `ios-dev.yml` Release + SideStore; Android: `eas build --profile preview`).
   Nunca publicar OTA de um push que falhou. Passo a passo em `mobile/README.md`.
 
-### Harnesses — Claude, Codex, Pi, omp, Kimi → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
+### Harnesses — Claude, Codex, Pi, omp, Kimi, Antigravity → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
 
 **Antes de mexer em** `backend/app/adapters/codex/`, `codex_*.py`, `crates/hangar-server/src/harness_setup/`,
-`crates/hangar-server/src/runtime/` (atores Claude/Codex,
+`crates/hangar-antigravity/`, `crates/hangar-server/src/runtime/` (atores Claude/Codex,
 lançamento, relançamento e religação ao mesmo cano em `cano_reconnect.rs`), statusline/prévia, hooks de estado, ou em sessão sem terminal:
 **leia a seção "Regras vigentes" de `docs/decisoes/harnesses.md`**. Cada regra ali já custou um
 bug calado.

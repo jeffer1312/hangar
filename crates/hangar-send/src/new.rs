@@ -139,7 +139,7 @@ fn parse_options(args: &[String], err: &mut dyn Write) -> Result<Options, u8> {
                     "--engine" => (&mut options.engine, "uso: --engine <motor>"),
                     "--profile" => (&mut options.profile, "uso: --profile <nome>"),
                     "--conta" => (&mut options.account, "uso: --conta <nome>"),
-                    "--provider" => (&mut options.provider, "uso: --provider <claude|codex|pi|omp|kimi>"),
+                    "--provider" => (&mut options.provider, "uso: --provider <claude|codex|pi|omp|kimi|antigravity>"),
                     "--model" => (&mut options.model, "uso: --model <id>"),
                     "--effort" => (&mut options.effort, "uso: --effort <nivel>"),
                     _ => (&mut options.permission, "uso: --permissao <acceptEdits|auto|bypassPermissions|manual|dontAsk|plan>"),
@@ -209,6 +209,10 @@ pub(crate) fn run(cx: &Ctx, args: &[String], out: &mut dyn Write, err: &mut dyn 
                 Err(code) => return code,
             }
         }
+    }
+    // O `agy` com terminal ignora o `GEMINI_HOME`: `--conta` não escolhe nada, e nunca prepara conta Claude no lugar.
+    if options.provider == "antigravity" && !options.account.is_empty() {
+        return fail(err, "erro: --conta não vale para o Antigravity: com terminal ele só usa a conta padrão (a do ~/.gemini)", 2);
     }
     if options.provider == "codex" && !options.account.is_empty() {
         if options.account == "auto" {

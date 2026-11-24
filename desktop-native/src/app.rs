@@ -100,7 +100,7 @@ pub(crate) use settings::segments_preview;
 pub(crate) use whatsapp::{ConnectedFacts as WhatsAppConnected, connected_summary as whatsapp_connected_summary, pair_card as whatsapp_pair_card,
     qr_row as whatsapp_qr_row, risk_box as whatsapp_risk_box, usage_box as whatsapp_usage_box};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
-pub(crate) use create::{base_button, base_row, mode_row, quiet_button, worktree_field_label, worktree_warning};
+pub(crate) use create::{base_button, base_row, mode_row, provider_segment, provider_track, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
@@ -262,6 +262,15 @@ pub(crate) fn model_pill(id: impl Into<ElementId>, provider: &str, text: String,
         .child(div().max_w(px(150.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
         .when_some(effort, |el, effort| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(effort)))
         .when_some(fast, |el, fast| el.child(div().id("ctl-fast-active").flex_shrink_0().text_xs().text_color(theme::muted()).child(fast)))
+}
+
+/// Pílula de um seletor da sessão sem esforço ao lado: a ✦ no esforço do Claude (`star`) e o símbolo do agente na do
+/// modelo (`provider`), como a do Antigravity e a do Haiku.
+pub(crate) fn ctl_pill(id: impl Into<ElementId>, text: String, provider: Option<&str>, star: bool, cx: &App) -> Button {
+    chrome::pill_button(id, cx).gap(px(4.))
+        .when(star, |el| el.child(div().text_size(px(10.)).text_color(theme::faint()).child("✦")))
+        .when_some(provider, |el, provider| el.child(chrome::provider_glyph(provider, 14.)))
+        .child(div().max_w(px(130.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
 }
 
 /// Pílula com seta de menu (modo de permissão, estilo do ditado); `accent` realça o valor (modo plano).
@@ -7633,7 +7642,7 @@ fn pair_badges(session: &SessionInfo) -> impl Iterator<Item = Div> {
 }
 
 fn agent_name(provider: &str) -> &'static str {
-    match provider { "codex" => "Codex", "kimi" => "Kimi", "pi" => "Pi", "omp" => "OMP", _ => "Claude" }
+    match provider { "codex" => "Codex", "kimi" => "Kimi", "pi" => "Pi", "omp" => "OMP", "antigravity" => "Antigravity", _ => "Claude" }
 }
 
 fn human_size(bytes: u64) -> String {
@@ -9385,11 +9394,11 @@ impl Render for Hangar {
             .capture_action(cx.listener(|this, _: &gpui_kit::base::input::MovePageDown, window, cx| {
                 if this.chat_keys_apply(window, cx) && this.chat_page_key("pagedown", window, cx) { cx.stop_propagation(); }
             }))
-            // Shift+Tab no campo de mensagem é a tecla do terminal do Claude e do Codex; nos outros campos segue recuando.
+            // Shift+Tab no campo de mensagem é a tecla do terminal do Claude, do Antigravity e do Codex; nos outros campos segue recuando.
             .capture_action(cx.listener(|this, _: &gpui_kit::base::input::OutdentInline, window, cx| {
                 if this.connection_dialog || !this.composer.read(cx).focus_handle(cx).is_focused(window) { return; }
                 match this.provider().0 {
-                    "claude" => this.cycle_permission(cx),
+                    "claude" | "antigravity" => this.cycle_permission(cx),
                     "codex" => this.toggle_codex_mode(cx),
                     _ => return,
                 }

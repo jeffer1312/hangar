@@ -6,7 +6,7 @@ use crate::session_open::AgentProvider;
 
 /// O recorte do `AgentProvider` que o Rust escreve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Provider { Claude, Codex, Pi, Omp, Kimi }
+pub enum Provider { Claude, Codex, Pi, Omp, Kimi, Antigravity }
 
 impl Provider {
     /// Nome conhecido de um provedor; modo e rota são decididos pela tabela.
@@ -18,7 +18,7 @@ impl Provider {
 
 impl From<Provider> for AgentProvider {
     fn from(provider: Provider) -> Self {
-        match provider { Provider::Claude => AgentProvider::Claude, Provider::Codex => AgentProvider::Codex, Provider::Pi=>AgentProvider::Pi, Provider::Omp=>AgentProvider::Omp, Provider::Kimi=>AgentProvider::Kimi }
+        match provider { Provider::Claude => AgentProvider::Claude, Provider::Codex => AgentProvider::Codex, Provider::Pi=>AgentProvider::Pi, Provider::Omp=>AgentProvider::Omp, Provider::Kimi=>AgentProvider::Kimi, Provider::Antigravity=>AgentProvider::Antigravity }
     }
 }
 
@@ -32,6 +32,7 @@ impl TryFrom<AgentProvider> for Provider {
             AgentProvider::Pi=>Ok(Provider::Pi),
             AgentProvider::Omp=>Ok(Provider::Omp),
             AgentProvider::Kimi=>Ok(Provider::Kimi),
+            AgentProvider::Antigravity=>Ok(Provider::Antigravity),
         }
     }
 }
@@ -57,10 +58,10 @@ pub enum Owner { Rust, Refused }
 /// terminal, teclas cruas e a aba Submit são recusadas pela própria rota (não há pane).
 pub fn decide(route: WriteRoute, provider: Provider, terminal: bool) -> Owner {
     if route == WriteRoute::StopTask { return Owner::Rust; }
-    // Pi, omp e Kimi só existem com terminal.
-    if !terminal && matches!(provider,Provider::Pi|Provider::Omp|Provider::Kimi) {return Owner::Refused;}
+    // Pi, omp, Kimi e Antigravity só existem com terminal.
+    if !terminal && matches!(provider,Provider::Pi|Provider::Omp|Provider::Kimi|Provider::Antigravity) {return Owner::Refused;}
     match route {
-        WriteRoute::CodexControl | WriteRoute::CodexPermission if provider == Provider::Claude => Owner::Refused,
+        WriteRoute::CodexControl | WriteRoute::CodexPermission if matches!(provider, Provider::Claude | Provider::Antigravity) => Owner::Refused,
         _ => Owner::Rust,
     }
 }
@@ -73,7 +74,7 @@ impl Provider {
 /// saúde anuncia, para o Python não guardar a mesma lista.
 pub fn owned_modes() -> Vec<(Provider, bool)> {
     let mut owned = Vec::new();
-    for provider in [Provider::Claude, Provider::Codex, Provider::Pi, Provider::Omp, Provider::Kimi] {
+    for provider in [Provider::Claude, Provider::Codex, Provider::Pi, Provider::Omp, Provider::Kimi, Provider::Antigravity] {
         for headless in [true, false] {
             if decide(WriteRoute::Input, provider, !headless) == Owner::Rust { owned.push((provider, headless)); }
         }
@@ -119,12 +120,14 @@ mod tests {
         for terminal in [true, false] {
             assert_eq!(decide(CodexControl, Provider::Codex, terminal), Owner::Rust);
             assert_eq!(decide(CodexControl, Provider::Claude, terminal), Owner::Refused);
+            assert_eq!(decide(CodexControl, Provider::Antigravity, terminal), Owner::Refused);
+            assert_eq!(decide(CodexPermission, Provider::Antigravity, terminal), Owner::Refused);
         }
     }
 
     #[test]
     fn owned_modes_come_from_the_table() {
-        assert_eq!(owned_modes(), vec![(Provider::Claude, true), (Provider::Claude, false), (Provider::Codex, true), (Provider::Codex, false), (Provider::Pi,false), (Provider::Omp,false), (Provider::Kimi,false)]);
+        assert_eq!(owned_modes(), vec![(Provider::Claude, true), (Provider::Claude, false), (Provider::Codex, true), (Provider::Codex, false), (Provider::Pi,false), (Provider::Omp,false), (Provider::Kimi,false), (Provider::Antigravity, false)]);
     }
 
     #[test]
@@ -133,7 +136,7 @@ mod tests {
         assert_eq!(Provider::from_str("codex"), Some(Provider::Codex));
         assert_eq!(Provider::from_str("pi"), Some(Provider::Pi));
         assert_eq!(Provider::from_str("Claude"), None);
-        for provider in [Provider::Claude, Provider::Codex, Provider::Pi, Provider::Omp, Provider::Kimi] {
+        for provider in [Provider::Claude, Provider::Codex, Provider::Pi, Provider::Omp, Provider::Kimi, Provider::Antigravity] {
             assert_eq!(Provider::try_from(AgentProvider::from(provider)), Ok(provider));
             assert_eq!(Provider::from_str(provider.name()), Some(provider));
         }

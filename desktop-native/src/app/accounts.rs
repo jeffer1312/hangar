@@ -3,8 +3,10 @@
 //! montado na chegada da resposta e a cada meio minuto (o "há X" e os prazos envelhecem); o desenho só lê.
 //! Renomear escreve daqui; entrar, sair, remover e adicionar conta Claude moram em `actions`; o formulário do modelo, a
 //! chave de outro agente e o cookie do OpenCode, em `keys`; entrar no Codex, importar ou herdar e usar a redefinição, em `codex`;
-//! instalar o CLIProxyAPI, conectar a conta e criar o modelo dele, em `cliproxy`.
+//! instalar o CLIProxyAPI, conectar a conta e criar o modelo dele, em `cliproxy`; as contas Google do Antigravity, em
+//! `antigravity`.
 mod actions;
+mod antigravity;
 mod cliproxy;
 mod codex;
 mod keys;
@@ -14,6 +16,7 @@ mod usage;
 use super::*;
 use super::device::Remote;
 use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
+use antigravity::{AgyFlow, AgyReply};
 use cliproxy::{CliproxyReply, CliproxyWizard};
 use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
 use keys::{CookieForm, EngineForm, KeysReply};
@@ -61,11 +64,16 @@ pub(super) struct Credential {
     #[serde(rename = "aceita_cookie", default)] accepts_cookie: bool,
     #[serde(rename = "cookie_definido", default)] cookie_set: bool,
     #[serde(rename = "gerenciada")] managed: Option<bool>,
+    /// Pasta da conta (Claude, Codex, Antigravity).
+    #[serde(default)] path: Option<String>,
+    /// Login e Termos da conta Antigravity, da lista dele (`/api/antigravity-contas`).
+    #[serde(skip)] agy: Option<antigravity::AgyAccount>,
 }
 
 #[derive(Clone, Deserialize)]
 struct Login {
-    #[serde(rename = "estado")] state: String,
+    /// A linha do Antigravity manda só `loggedIn`.
+    #[serde(rename = "estado", default)] state: String,
     #[serde(rename = "loggedIn")] logged_in: Option<bool>,
     email: Option<String>,
     #[serde(rename = "plano")] plan: Option<String>,
@@ -157,7 +165,7 @@ impl Filter {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Tone { Muted, Warn, Danger }
+enum Tone { Muted, Good, Warn, Danger }
 
 struct Bar { label: String, reset: String, reset_days: String, pct: f64, reset_at: Option<f64>, per_model: bool }
 
@@ -192,6 +200,8 @@ struct Row {
     quota: QuotaView,
     /// Conta Codex: o id dela e se a ação da linha é herdar da padrão (senão, entrar).
     codex: Option<(String, bool)>,
+    /// Conta Antigravity: o id da rota dela e se o agy disse que tem login.
+    agy: Option<(String, bool)>,
     reset: Option<ResetOffer>,
     /// Editar o modelo: `Some(false)` quando os detalhes dele não chegaram (a leitura dos modelos falhou).
     edit: Option<bool>,
@@ -245,6 +255,10 @@ pub(super) struct Accounts {
     /// Número de cada pedido do formulário, do cookie e do painel do Codex: resposta de outro pedido não mexe no atual.
     keys_seq: u64,
     codex: Option<CodexFlow>,
+    /// Painel de entrar numa conta Google do Antigravity, no lugar da lista.
+    antigravity: Option<AgyFlow>,
+    /// Login e Termos das contas Antigravity, lidos só com a página aberta.
+    agy: Remote<antigravity::AgyList>,
     /// Assistente do CLIProxyAPI aberto no lugar da lista.
     cliproxy: Option<CliproxyWizard>,
     /// Versão nova do proxy instalado pelo Hangar e a atualização dele.
@@ -278,6 +292,7 @@ pub(super) enum AccountsReply {
     Action(ActionReply),
     Keys(KeysReply),
     Codex(CodexReply),
+    Antigravity(AgyReply),
     Cliproxy(CliproxyReply),
     ProxyUpdate(proxy_update::UpdateReply),
 }
@@ -452,6 +467,7 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
     let mut login_note = None;
     let mut chips = Vec::new();
     let mut codex = None;
+    let mut agy = None;
     let mut edit = None;
     let mut sign_in = None;
     let email = c.login.as_ref().filter(|_| logged == Some(true) && matches!(c.kind.as_str(), "claude" | "codex"))
@@ -460,6 +476,7 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
     let glyph = match c.kind.as_str() {
         "claude" => ("claude", "C".into()),
         "codex" => ("codex", "X".into()),
+        "antigravity" => ("antigravity", "A".into()),
         _ if c.base_url.as_deref().is_some_and(|u| u.contains("kimi")) || c.id.starts_with("kimi:") => ("kimi", initial),
         _ => ("", initial),
     };
@@ -499,6 +516,21 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
                 (_, Some("idle"), Some(true)) => Some((id, true)),
                 _ => None,
             });
+        }
+        "antigravity" => {
+            // A saída confirmada aqui (estado "ok") vale até a lista do agy ser relida; depois, a resposta do agy.
+            let signed = c.login.as_ref().filter(|l| l.state == "ok").and_then(|l| l.logged_in)
+                .or_else(|| c.agy.as_ref().and_then(|a| a.signed_in))
+                .or_else(|| c.login.as_ref().and_then(|l| l.logged_in));
+            subtitle.push(muted("Antigravity".to_owned()));
+            match signed {
+                Some(true) => subtitle.push((tr("accounts_agy_signed_in"), Tone::Good)),
+                Some(false) => subtitle.push(muted(tr("accounts_agy_signed_out"))),
+                None => {}
+            }
+            if c.agy.as_ref().is_some_and(|a| !a.terms) { subtitle.push((tr("accounts_agy_terms_pending"), Tone::Warn)); }
+            let id = c.agy.as_ref().map_or_else(|| antigravity::route_id(c.path.as_deref()), |a| a.id.clone());
+            agy = Some((id, signed == Some(true)));
         }
         _ => match engine {
             // Como no mock: só o que foge do padrão vira ficha; o endereço e o resto ficam no Editar.
@@ -542,7 +574,7 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
     }
     let subtitle = (line, marks);
 
-    let quota = match (c.read_windows(), c.quota.as_ref()) {
+    let quota = if c.kind == "antigravity" { QuotaView::Note(tr("accounts_agy_no_quota")) } else { match (c.read_windows(), c.quota.as_ref()) {
         (Some(windows), Some(q)) => {
             let mut bars: Vec<Bar> = windows.iter().map(|w| Bar {
                 label: w.label.clone(), reset: reset_text(w.reset_at, now), reset_days: reset_days_text(w.reset_at, now),
@@ -559,15 +591,19 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
             _ => "accounts_quota_sign_in",
         })),
         _ => QuotaView::Note(tr("accounts_quota_none")),
-    };
+    } };
     let codex_extra = c.kind == "codex" && c.codex_account.is_some() && !c.active;
-    let can_remove = codex_extra || engine.is_some() || (c.kind != "codex" && c.managed != Some(false));
+    // A conta padrão do agy (o `~/.gemini`) não se apaga pelo Hangar.
+    let agy_extra = agy.as_ref().is_some_and(|(id, _)| id != "default");
+    let can_remove = codex_extra || agy_extra || engine.is_some() || (!matches!(c.kind.as_str(), "codex" | "antigravity") && c.managed != Some(false));
     // Cada tipo tem a rota de sempre, com o nome no disco (como no web).
     let remove = can_remove.then(|| match (c.id.strip_prefix("kimi:"), c.kind.as_str()) {
         (Some(name), _) => (vec!["credenciais".into(), "kimi".into(), name.into()], 30, "accounts_remove_desc_key"),
         (_, "chave") => (vec!["engines".into(), c.engine_name().unwrap_or(&c.natural).into()], 30,
             if engine.is_some() { "accounts_remove_desc_model" } else { "accounts_remove_desc_key" }),
         (_, "codex") => (vec!["codex-contas".into(), c.codex_account.clone().unwrap_or_default()], 120, "accounts_remove_desc_codex"),
+        (_, "antigravity") => (vec!["antigravity-contas".into(), agy.as_ref().map(|(id, _)| id.clone()).unwrap_or_default()], 30,
+            "accounts_remove_desc_antigravity"),
         _ => (vec!["claude-configs".into(), c.claude_folder().unwrap_or(&c.natural).into()], 60, "accounts_remove_desc_claude"),
     });
     let plan = c.login.as_ref().filter(|_| logged == Some(true)).and_then(|l| l.plan.as_deref()).filter(|p| !p.is_empty())
@@ -579,11 +615,13 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
     };
     Row {
         id: c.id.clone(), name: c.name.clone(), label: c.natural.clone(), natural: c.natural.clone(), alias: c.alias.clone().unwrap_or_default(),
-        active: c.active, filter: Filter::of(&c.kind), email, glyph, subtitle, login_note, chips, plan, login_days: if c.kind == "claude" { c.login_days(now) } else { None }, resets, quota, codex, reset: codex::reset_offer(c, now), edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
+        active: c.active, filter: Filter::of(&c.kind), email, glyph, subtitle, login_note, chips, plan, login_days: if c.kind == "claude" { c.login_days(now) } else { None }, resets, quota, codex, agy: agy.clone(), reset: codex::reset_offer(c, now), edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
         sign_out: match c.kind.as_str() {
             "claude" if c.managed != Some(false) && logged == Some(true) && !c.expired() =>
                 Some(vec!["claude-configs".into(), c.natural.clone(), "logout".into()]),
             "codex" if logged == Some(true) => c.codex_account.clone().map(|id| vec!["codex-contas".into(), id, "logout".into()]),
+            // Só a padrão: o `agy` com terminal ignora o `GEMINI_HOME`, e a saída de uma adicional tiraria o login da padrão.
+            "antigravity" => agy.as_ref().filter(|(id, signed)| *signed && id == "default").map(|(id, _)| vec!["antigravity-contas".into(), id.clone(), "logout".into()]),
             _ => None,
         },
         remove,
@@ -734,6 +772,7 @@ impl Hangar {
     pub(super) fn accounts_opened(&mut self, cx: &mut Context<Self>) {
         self.accounts.outcome = None;
         if !self.accounts.list.loading { self.load_accounts(false, cx); }
+        if !self.accounts.agy.loading { self.load_agy_accounts(cx); }
         if !self.accounts.engines.loading { self.load_engines(cx); }
         self.load_proxy_install(cx);
         if self.accounts.clock { return; }
@@ -769,6 +808,7 @@ impl Hangar {
             let query: &[(&str, &str)] = if force { &[("forcar", "true")] } else { &[] };
             done(AccountsReply::List(seq, api.server_read(&["credenciais"], query, 30).await)).await
         });
+        if self.settings == Some(Page::Accounts) && !self.accounts.agy.loading { self.load_agy_accounts(cx); }
         cx.notify();
     }
 
@@ -916,7 +956,8 @@ impl Hangar {
         }).collect() };
         let before = bars(&accounts.sections);
         let proxy_version = accounts.proxy.install.as_ref().and_then(|i| i.managed_version());
-        accounts.sections = accounts.list.ok().map(|list| build_sections(list, engines, proxy_version, now())).unwrap_or_default();
+        let agy = accounts.agy.ok().map(|l| l.accounts.as_slice()).unwrap_or_default();
+        accounts.sections = accounts.list.ok().map(|list| build_sections(&antigravity::merge(list, agy), engines, proxy_version, now())).unwrap_or_default();
         let at = Instant::now();
         accounts.bar_moves.retain(|_, (_, start)| *start + motion::FADE_IN.total() > at);
         for (key, pct) in bars(&accounts.sections) {
@@ -1033,6 +1074,7 @@ impl Hangar {
             AccountsReply::Action(reply) => self.receive_action(reply, window, cx),
             AccountsReply::Keys(reply) => self.receive_keys(reply, window, cx),
             AccountsReply::Codex(reply) => self.receive_codex(reply, window, cx),
+            AccountsReply::Antigravity(reply) => self.receive_agy(reply, window, cx),
             AccountsReply::Cliproxy(reply) => self.receive_cliproxy(reply, window, cx),
             AccountsReply::ProxyUpdate(reply) => self.receive_proxy_update(reply, window, cx),
         }
@@ -1070,6 +1112,7 @@ impl Hangar {
         }
         if let Some(panel) = self.render_engine_form(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_codex(cx) { return page.child(top(None)).child(panel).into_any_element(); }
+        if let Some(panel) = self.render_agy(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_cliproxy_wizard(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {
             (None, _) => return page.child(top(None)).child(settings_box().mt(px(20.))
@@ -1329,7 +1372,8 @@ impl Hangar {
         let (text, marks) = &row.subtitle;
         let subtitle = div().min_w_0().text_size(px(13.)).text_color(theme::muted()).truncate()
             .child(StyledText::new(text.clone()).with_highlights(marks.iter().map(|(range, tone)| (range.clone(),
-                HighlightStyle { color: Some(if *tone == Tone::Danger { theme::danger() } else { theme::warning() }), ..Default::default() }))));
+                HighlightStyle { color: Some(match tone { Tone::Danger => theme::danger(), Tone::Good => theme::success(), _ => theme::warning() }),
+                    ..Default::default() }))));
         // Sem espaço, a última ficha encolhe com reticências em vez de sair cortada na borda.
         let chips = div().flex().min_w_0().overflow_hidden().gap(px(5.)).children(row.chips.iter().enumerate().map(|(n, chip)| div()
             .map(|el| if n + 1 == row.chips.len() { el.min_w_0().truncate() } else { el.flex_shrink_0() }).px(px(5.)).rounded(px(4.)).border_1()
@@ -1449,10 +1493,25 @@ impl Hangar {
                 .when(inherit, |el| el.tooltip(tr("accounts_inherit")).accessibility_label(tr("accounts_inherit")))
                 .on_click(cx.listener(move |this, _, window, cx| this.start_codex(Some(account.clone()), inherit, window, cx)))
         });
+        // Antigravity, como no mock: Entrar sem login e Sair com login só na padrão; Apagar na adicional sem login.
+        let agy = row.agy.clone().filter(|_| changing.is_none()).map(|(account, signed)| {
+            let (id, remove_id) = (row.id.clone(), row.id.clone());
+            div().flex().items_center().gap(px(6.))
+                .when(!signed && account == "default", |el| el.child(Button::new(SharedString::from(format!("accounts-agy-in-{}", row.id))).outline().small()
+                    .label(tr("accounts_agy_sign_in")).disabled(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.start_agy(Some(account.clone()), window, cx)))))
+                .when(row.sign_out.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-out-{}", row.id))).outline().small()
+                    .label(tr("accounts_agy_sign_out")).disabled(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(id.clone(), ChangeKind::SignOut, window, cx)))))
+                .when(!signed && row.remove.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-remove-{}", row.id)))
+                    .outline().small().label(tr("accounts_agy_remove")).disabled(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(remove_id.clone(), ChangeKind::Remove, window, cx)))))
+        });
         let actions = div().w(px(ACTIONS)).flex_shrink_0().flex().items_center().justify_end().gap(px(6.))
             .children(changing.map(|text| div().text_size(px(12.5)).text_color(theme::muted()).child(text)))
             .children(sign_in)
             .children(codex)
+            .children(agy)
             .children(edit)
             .children(cookie)
             .child(menu);
@@ -1764,6 +1823,36 @@ mod tests {
         assert_eq!(row.sign_in, Some(tr("accounts_sign_in")));
         assert!(matches!(row.quota, QuotaView::Note(ref t) if *t == tr("accounts_quota_live_session")));
         assert!(row.sign_out.is_none());
+    }
+
+    #[test]
+    fn antigravity_rows_take_sign_in_and_terms_from_the_agy_list_and_have_no_quota() {
+        let line = |path: &str, logged: Value| json!({"id": format!("antigravity:{path}"), "tipo": "antigravity", "nome": "n",
+            "auth_method": "oauth", "path": path, "login": {"loggedIn": logged}, "gerenciada": true});
+        let list = vec![credential(line("/h/.gemini", Value::Null)), credential(line("/h/.antigravity-trabalho", json!(true)))];
+        let agy: Vec<super::antigravity::AgyAccount> = serde_json::from_value(json!([
+            {"id": "default", "padrao": true, "credencial": "antigravity:/h/.gemini", "logado": true, "termos_aceitos": true},
+            {"id": "trabalho", "padrao": false, "credencial": "antigravity:/h/.antigravity-trabalho", "logado": false, "termos_aceitos": false}]))
+            .unwrap();
+        let merged = super::antigravity::merge(&list, &agy);
+        assert!(group_of(&merged[0], &Default::default()) == Some(Group::Subscriptions), "a assinatura Google entra no grupo Assinaturas");
+        let default = build_row(&merged[0], &HashMap::new(), false, 0.);
+        assert_eq!(default.agy, Some(("default".to_owned(), true)));
+        assert_eq!(default.sign_out, Some(vec!["antigravity-contas".to_owned(), "default".to_owned(), "logout".to_owned()]));
+        assert!(default.remove.is_none(), "a conta padrão do agy não se apaga pelo Hangar");
+        assert!(matches!(&default.quota, QuotaView::Note(text) if *text == tr("accounts_agy_no_quota")));
+        assert!(default.subtitle.1.iter().any(|(_, tone)| *tone == Tone::Good));
+        // A lista do agy vence o login guardado na lista de contas.
+        let extra = build_row(&merged[1], &HashMap::new(), false, 0.);
+        assert_eq!(extra.agy, Some(("trabalho".to_owned(), false)));
+        assert!(extra.sign_out.is_none());
+        assert_eq!(extra.remove.as_ref().map(|r| r.0.clone()), Some(vec!["antigravity-contas".to_owned(), "trabalho".to_owned()]));
+        assert!(extra.subtitle.0.contains(&tr("accounts_agy_terms_pending")));
+        // Sem a lista do agy, o id da rota sai da pasta.
+        let alone = build_row(&list[1], &HashMap::new(), false, 0.);
+        assert_eq!(alone.agy, Some(("trabalho".to_owned(), true)));
+        // Logada ou não, a adicional não sai pelo Hangar: o agy com terminal só conhece a pasta da padrão.
+        assert!(alone.sign_out.is_none());
     }
 
     #[test]

@@ -35,11 +35,24 @@ export interface StatusFields {
 /** Rótulo curto de um id do Claude quando o catálogo não traz nome: `claude-opus-5-5` → `Opus 5.5`,
  * `opus[1m]` → `Opus 1M`. Id de outro formato volta como veio. */
 export function rotuloModelo(id: string): string {
+  const gemini = geminiLabel(id);
+  if (gemini) return gemini;
   const m = /^(?:claude-)?(opus|sonnet|haiku|fable)(?:-(\d+)(?:-(\d+))?)?(\[1m\])?$/i.exec(id.trim());
   if (!m) return id;
   const nome = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
   const versao = m[2] ? ` ${m[2]}${m[3] ? `.${m[3]}` : ''}` : '';
   return `${nome}${versao}${m[4] ? ' 1M' : ''}`;
+}
+
+const GEMINI_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+
+/** `gemini-4-neon-high` → `Gemini 4 Neon (High)`, como o `agy models` escreve; o esforço vem no id. */
+function geminiLabel(id: string): string | null {
+  const parts = id.trim().toLowerCase().split('-');
+  if (parts[0] !== 'gemini' || parts.length < 2 || parts.some((p) => !/^[a-z0-9.]+$/.test(p))) return null;
+  const effort = parts.length > 2 && GEMINI_EFFORTS.has(parts[parts.length - 1]) ? parts.pop()! : null;
+  const name = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+  return effort ? `${name} (${effort.charAt(0).toUpperCase()}${effort.slice(1)})` : name;
 }
 
 // "44k" -> 44000, "1M" -> 1_000_000, "1.5k" -> 1500
@@ -75,7 +88,9 @@ export function parseStatusLine(raw: string | null | undefined, session?: Sessio
         dirty: session.git_dirty == null ? undefined : session.git_dirty > 0 }
     : null;
   const listed = session?.model?.trim() || null;
-  if (!raw && !git && !listed) return null;
+  // `window` entre aspas: a trava de fronteira lê a palavra solta como o global do DOM.
+  const listedCtx = session?.context && session.context['window'] > 0 ? session.context : null;
+  if (!raw && !git && !listed && !listedCtx) return null;
   raw ??= '';
   const out: StatusFields = { raw };
 
@@ -128,6 +143,13 @@ export function parseStatusLine(raw: string | null | undefined, session?: Sessio
         out.ctxPct = clampPct((used / total) * 100);
       }
     }
+  }
+
+  // Sem contexto na linha (Antigravity não tem a statusline do Hangar), vale o da lista.
+  if (out.ctxPct === undefined && listedCtx) {
+    out.ctxUsed = listedCtx.used;
+    out.ctxTotal = listedCtx['window'];
+    out.ctxPct = clampPct((listedCtx.used / listedCtx['window']) * 100);
   }
 
   const cost = raw.match(/💵\s*\$?\s*([\d.,]+)/u);

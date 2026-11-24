@@ -63,7 +63,7 @@ pub(super) enum OrchestrationReply {
 }
 
 pub(super) fn provider_name(provider: &str) -> &'static str {
-    match provider { "codex" => "Codex", "pi" => "Pi", "kimi" => "Kimi", "omp" => "OMP", _ => "Claude" }
+    match provider { "codex" => "Codex", "pi" => "Pi", "kimi" => "Kimi", "omp" => "OMP", "antigravity" => "Antigravity", _ => "Claude" }
 }
 
 fn initials(name: &str) -> String {

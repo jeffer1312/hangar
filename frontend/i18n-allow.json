@@ -1,6 +1,7 @@
 [
   {
     "_justificativas": {
+      "accounts.google.com": "Host do login do Google: accountLogin.ts só aceita o link do agy que aponta para ele. É endereço, não texto de tela.",
       "Ask for approval": "Nome nativo do modo Codex: Composer.svelte compara o valor recebido e CreateSessionSheet.svelte envia permission_mode ao backend. O seletor mantém o nome do picker nativo; o rótulo compacto usa m.*. Traduzir o valor muda o protocolo.",
       "Approve for me": "Nome nativo do modo Codex, usado nas comparações do Composer e no permission_mode da criação. O seletor mantém o nome nativo; o rótulo compacto usa m.*. Mesma razão de Ask for approval.",
       "Full Access": "Nome nativo do modo Codex, usado nas comparações do Composer e no permission_mode da criação. O seletor mantém o nome nativo; o rótulo compacto usa m.*. Mesma razão de Ask for approval.",
@@ -406,5 +407,6 @@
   "com.apple.quicktime-movie",
   "com.apple.m4v-video",
   "com.microsoft.waveform-audio",
-  "com.apple.m4a-audio"
+  "com.apple.m4a-audio",
+  "accounts.google.com"
 ]

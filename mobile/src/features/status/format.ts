@@ -81,7 +81,8 @@ export function processName(key: string): string {
   switch (key) {
     case 'claude': return m.status_process_claude();
     case 'codex_app_server': return m.status_process_codex_app_server();
-    case 'pi_omp_kimi': return m.status_process_pi_omp_kimi();
+    // O agy entra no mesmo grupo de processo do Pi, do omp e do Kimi.
+    case 'pi_omp_kimi': return m.mobile_status_process_pi_omp_kimi_agy();
     case 'cano': return m.status_process_cano();
     case 'tmux': return m.status_process_tmux();
     default: return key;

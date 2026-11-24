@@ -6,7 +6,7 @@ use super::discover::DiscoveryProblem;
 
 /// Os 8 campos de `list_panes_all` e o endereço do pane no psmux, numa chamada só.
 pub const LIST_PANES_FORMAT: &str = "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}\t#{@cp_hidden}\t#{CP_PROVIDER}\t#{session_created}\t#{window_index}\t#{pane_index}\t#{pane_dead}";
-const PROVIDERS: [&str; 5] = ["claude", "codex", "pi", "omp", "kimi"];
+const PROVIDERS: [&str; 6] = ["claude", "codex", "pi", "omp", "kimi", "antigravity"];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Pane {

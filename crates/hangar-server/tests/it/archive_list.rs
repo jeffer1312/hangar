@@ -980,3 +980,54 @@ async fn prv10_omp_profile_sessions_stay_out() {
     let (_, body) = h.get(&format!("/api/archive-por-cwd?cwd={}&provider=omp", enc(cwd))).await;
     assert_eq!(sids(&body), ["01a06932"]);
 }
+
+/// Uma conversa do agy na conta `account` (`None` = a padrão, no `.gemini`); `workspace` vai ao `history.jsonl` dela.
+fn agy_conversation(home: &Path, account: Option<&str>, sid: &str, workspace: Option<&str>, reply: &str, mtime: u64) {
+    let dir = match account {
+        None => home.join(".gemini"),
+        Some(name) => {
+            let dir = home.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(".hangar-antigravity-conta"), r#"{"version":1,"id":"x"}"#).unwrap();
+            dir
+        }
+    };
+    let data = dir.join("antigravity-cli");
+    let transcript = data.join("brain").join(sid).join(".system_generated/logs/transcript_full.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, format!("{}{}",
+        line(&json!({"step_index":0,"type":"USER_INPUT","status":"DONE","created_at":"2026-11-23T11:59:12Z",
+            "content":"<USER_REQUEST>\nok prova\n</USER_REQUEST>"})),
+        line(&json!({"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-23T11:59:14Z","content":reply})))).unwrap();
+    set_mtime(&transcript, UNIX_EPOCH + Duration::from_secs(mtime));
+    if let Some(workspace) = workspace {
+        let history = data.join("history.jsonl");
+        let before = std::fs::read_to_string(&history).unwrap_or_default();
+        std::fs::write(&history, before + &line(&json!({"display":"ok prova","workspace":workspace,"conversationId":sid}))).unwrap();
+    }
+}
+
+/// As conversas do Antigravity de todas as contas entram no Arquivo pela pasta do `history.jsonl`; sem ela, ficam fora.
+#[tokio::test]
+async fn antigravity_conversations_of_every_account_enter_by_the_history_folder() {
+    fn edit(home: &Path) {
+        agy_conversation(home, None, "11111111-1111-1111-1111-111111111111", Some("/tmp/agy-prova"), "resposta padrão", T0 + 5000);
+        agy_conversation(home, Some(".antigravity-trabalho"), "22222222-2222-2222-2222-222222222222", Some("/tmp/agy-prova"), "resposta adicional", T0 + 6000);
+        agy_conversation(home, None, "33333333-3333-3333-3333-333333333333", None, "sem pasta", T0 + 7000);
+    }
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, edit).await;
+        let (status, body) = h.get("/api/archive-por-cwd?cwd=/tmp/agy-prova&provider=antigravity").await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(sids(&body), ["22222222", "11111111"]);
+        let entries = body.as_array().unwrap();
+        assert!(entries.iter().all(|e| e["provider"] == "antigravity" && e["project"] == "-tmp-agy-prova" && e["config_dir"].is_null()), "{body}");
+        assert_eq!(entries[0]["ultima"], "resposta adicional");
+        let (status, folder) = h.get("/api/archive/-tmp-agy-prova?provider=antigravity").await;
+        assert_eq!(status, 200, "{folder}");
+        assert_eq!(sids(&folder), ["22222222", "11111111"]);
+        let (_, folders) = h.get("/api/archive").await;
+        let agy = folders.as_array().unwrap().iter().find(|f| f["project"] == "-tmp-agy-prova").cloned();
+        assert_eq!(agy.map(|f| (f["count"].clone(), f["cwd"].clone())), Some((json!(2), json!("/tmp/agy-prova"))));
+    }
+}

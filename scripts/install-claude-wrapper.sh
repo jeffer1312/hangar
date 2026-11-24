@@ -113,12 +113,13 @@ source \"$SHELL_DIR/codex.posix.sh\"
 source \"$SHELL_DIR/claude-engine.posix.sh\"
 source \"$SHELL_DIR/pi.posix.sh\"
 source \"$SHELL_DIR/omp.posix.sh\"
-source \"$SHELL_DIR/kimi.posix.sh\""
+source \"$SHELL_DIR/kimi.posix.sh\"
+source \"$SHELL_DIR/agy.posix.sh\""
 }
 
 install_fish() {
   local name dst src
-  for name in claude codex claude-engine claude-conta pi omp kimi; do
+  for name in claude codex claude-engine claude-conta pi omp kimi agy; do
     src="$SHELL_DIR/$name.fish"
     dst="$HOME/.config/fish/functions/$name.fish"
     mkdir -p "$(dirname "$dst")"

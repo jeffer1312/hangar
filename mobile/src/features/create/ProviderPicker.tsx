@@ -5,16 +5,17 @@ import type { Provider } from '@hangar/core';
 import { superficie } from '../../theme/superficie';
 import * as m from '../../paraglide/messages';
 
-const PROVIDERS = SESSION_PROVIDERS;
-
 export function ProviderPicker({
   value,
   onChange,
   disabledMap,
+  providers: PROVIDERS = SESSION_PROVIDERS,
 }: {
   value: Provider;
   onChange: (p: Provider) => void;
   disabledMap?: Record<string, { disponivel: boolean; motivo?: string | null }>;
+  /** A criação de sessão oferece também o Antigravity; a orquestração fica com os de sempre. */
+  providers?: readonly Provider[];
 }) {
   return (
     <View>

@@ -1592,6 +1592,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-antigravity"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-api"
 version = "0.1.0"
 dependencies = [
@@ -2196,6 +2205,7 @@ dependencies = [
  "form_urlencoded",
  "futures-util",
  "hangar-agent-hooks",
+ "hangar-antigravity",
  "hangar-api",
  "hangar-auth",
  "hangar-boot",

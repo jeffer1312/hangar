@@ -21,6 +21,8 @@ pub(super) struct Observation {
     pub files: Vec<crate::state::preview::HookFile>,
     pub marker: Option<(String, f64)>,
     pub now: f64,
+    /// O rodapé do `agy`: modelo e esforço vão ao retrato, que a lista lê.
+    pub footer: Option<crate::terminal_state::AgyFooter>,
 }
 #[derive(Default)]
 pub(super) struct FileCache {
@@ -50,6 +52,8 @@ pub(super) fn pending(target: &OtherTarget) -> Result<Option<PendingInteraction>
         hangar_transcript::Provider::Pi => read_pending_pi_call(&target.transcript, "question"),
         hangar_transcript::Provider::Omp => read_pending_pi_call(&target.transcript, "ask"),
         hangar_transcript::Provider::Kimi => read_pending_kimi_call(&target.transcript),
+        // O `agy` não grava pergunta pendente no transcript: a pergunta é lida da tela (menu).
+        hangar_transcript::Provider::Antigravity => return Ok(None),
         _ => return Err(failed("other_terminal_provider")),
     };
     let call = match read {
@@ -132,7 +136,7 @@ pub(super) fn read(
     {
         pending = None;
     }
-    let mut analysis = crate::terminal_state::analyze(pane);
+    let mut analysis = super::drive::screen(target.provider, pane);
     if target.provider == hangar_transcript::Provider::Kimi
         && hook.as_deref() != Some("awaiting_input")
     {
@@ -188,6 +192,10 @@ pub(super) fn read(
         limit_reset: analysis.limit_reset,
         ..Default::default()
     };
+    // O Antigravity diz o modo no rodapé; ele sai no mesmo campo do Claude para as telas usarem a mesma pílula.
+    let footer = (target.provider == hangar_transcript::Provider::Antigravity)
+        .then(|| crate::terminal_state::agy_footer(pane)).flatten();
+    state.claude_permission_mode = footer.as_ref().and_then(|footer| footer.mode).map(str::to_owned);
     if let Some(pending) = &pending {
         state.state = "awaiting_input".into();
         if let Some(approval) = &pending.approval {
@@ -228,6 +236,7 @@ pub(super) fn read(
         files,
         marker: marker.map(|marker| (marker.state, marker.ts)),
         now,
+        footer,
     })
 }
 

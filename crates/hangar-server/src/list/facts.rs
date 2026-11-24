@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 pub const UNAVAILABLE: &str = "list_facts_unavailable";
 /// Provedores de terminal cujo ator publica os fatos da lista.
-pub const OTHERS: [&str; 3] = ["pi", "omp", "kimi"];
+pub const OTHERS: [&str; 4] = ["pi", "omp", "kimi", "antigravity"];
 
 /// Estado publicado pelo ator da sessão.
 #[derive(Clone, Debug, Deserialize)]

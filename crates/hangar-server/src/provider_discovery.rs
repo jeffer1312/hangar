@@ -128,9 +128,10 @@ fn scan(env: &AccountEnvironment, path: &str, windows: bool) -> Providers {
             )
         })
         .collect();
-    ["claude", "codex", "pi", "omp", "kimi"]
+    // A chave é o nome do provedor; o executável do Antigravity se chama `agy`.
+    [("claude", "claude"), ("codex", "codex"), ("pi", "pi"), ("omp", "omp"), ("kimi", "kimi"), ("antigravity", "agy")]
         .into_iter()
-        .map(|name| {
+        .map(|(provider, name)| {
             let (mut available, mut denied) = (false, false);
             'directories: for directory in &directories {
                 let base = std::path::Path::new(directory);
@@ -154,7 +155,7 @@ fn scan(env: &AccountEnvironment, path: &str, windows: bool) -> Providers {
                 }
             }
             (
-                name.into(),
+                provider.into(),
                 Availability {
                     available,
                     reason: if available {

@@ -35,14 +35,17 @@ use serde_json::{Value, json};
 /// Agente da sessão. O `session_write::Provider` (Claude e Codex) é o recorte que o Rust escreve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum AgentProvider { Claude, Codex, Pi, Omp, Kimi }
+pub enum AgentProvider { Claude, Codex, Pi, Omp, Kimi, Antigravity }
 
 impl AgentProvider {
     /// Também a ordem de preferência do provedor padrão (`session_defaults.choose_provider`).
-    pub const ALL: [AgentProvider; 5] = [Self::Claude, Self::Codex, Self::Pi, Self::Omp, Self::Kimi];
+    pub const ALL: [AgentProvider; 6] = [Self::Claude, Self::Codex, Self::Pi, Self::Omp, Self::Kimi, Self::Antigravity];
 
     pub fn name(self) -> &'static str {
-        match self { Self::Claude => "claude", Self::Codex => "codex", Self::Pi => "pi", Self::Omp => "omp", Self::Kimi => "kimi" }
+        match self {
+            Self::Claude => "claude", Self::Codex => "codex", Self::Pi => "pi", Self::Omp => "omp", Self::Kimi => "kimi",
+            Self::Antigravity => "antigravity",
+        }
     }
 
     pub fn parse(name: &str) -> Option<Self> { Self::ALL.into_iter().find(|p| p.name() == name) }
@@ -82,6 +85,9 @@ impl PermissionMode {
     /// Na ordem do `MODOS_PERMISSAO_CLAUDE`: a mensagem de recusa lista assim.
     pub const CLAUDE: [Self; 6] = [Self::AcceptEdits, Self::Auto, Self::BypassPermissions, Self::Manual, Self::DontAsk, Self::Plan];
     pub const CODEX: [Self; 3] = [Self::AskForApproval, Self::ApproveForMe, Self::FullAccess];
+    /// Os modos do `agy` com os nomes do Claude: `manual` é o `default` dele, `bypassPermissions` o
+    /// `--dangerously-skip-permissions`.
+    pub const ANTIGRAVITY: [Self; 5] = [Self::Manual, Self::AcceptEdits, Self::Auto, Self::Plan, Self::BypassPermissions];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -92,6 +98,12 @@ impl PermissionMode {
     }
 
     pub fn claude(name: &str) -> Option<Self> { Self::CLAUDE.into_iter().find(|m| m.name() == name) }
+
+    pub fn antigravity(name: &str) -> Option<Self> {
+        // Aceita também o nome que o `agy --mode` usa.
+        let name = match name { "default" => "manual", "accept-edits" => "acceptEdits", other => other };
+        Self::ANTIGRAVITY.into_iter().find(|m| m.name() == name)
+    }
 
     /// Sem diferenciar maiúscula nem espaço nas pontas, como o `sem_terminal.MODOS` do Python.
     pub fn codex(name: &str) -> Option<Self> {
@@ -110,6 +122,11 @@ pub enum Account {
     Claude { config_dir: String },
     Codex { account_id: String },
     Omp { profile: String, config_dir: Option<String> },
+    /// Conta Google do Antigravity: `None` = a do `~/.gemini`; senão a pasta usada como `GEMINI_HOME`.
+    Antigravity {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gemini_home: Option<String>,
+    },
     /// Claude num motor do `engines.json`; `account` é a conta ChatGPT fixa do CLIProxyAPI.
     /// `context_window_unknown`: o catálogo do motor não respondeu na abertura; a janela é
     /// relida a cada reabertura (`SessionSpec::refresh_engine_window`).
@@ -128,7 +145,7 @@ impl Account {
         match self {
             Self::Claude { config_dir } => Some(config_dir),
             Self::Omp { config_dir, .. } | Self::Engine { config_dir, .. } => config_dir.as_deref(),
-            Self::Default | Self::Codex { .. } => None,
+            Self::Default | Self::Codex { .. } | Self::Antigravity { .. } => None,
         }
     }
 }
