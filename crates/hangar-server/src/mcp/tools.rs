@@ -1097,6 +1097,12 @@ impl Tools {
 
     /// O host da página do navegador da sessão; só http(s) tem domínio para comparar com a entrada.
     async fn fill_host(&self, home: &Path, name: &str) -> Result<String, String> {
+        // O valor só vai ao app desta máquina: com a sessão aberta noutra, a página que a pessoa vê é a de lá, e um
+        // navegador velho daqui receberia a senha.
+        if self.remote_browser(name, home)? {
+            return Err("erro_cofre_sem_navegador: o navegador desta sessão está no app desktop de outra máquina, e o cofre só \
+                preenche no app desta máquina".into());
+        }
         let url = nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
         exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
             .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))

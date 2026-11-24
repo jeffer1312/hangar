@@ -249,13 +249,18 @@ function sidecarDa(nome) {
 }
 
 // Os verbos vão pelo servidor ao app de outra máquina que está com a sessão aberta (é onde a pessoa olha) e, sem ele,
-// ao app desta máquina. `objetivo`/`confere` e `list` só existem aqui quando há app local.
+// ao app desta máquina. `list` e `folha` não perguntam: leem o que está aqui.
 // Lido uma vez: o app que abre no meio do comando não rouba um `batch` em curso.
 async function hostElsewhere() {
   const nome = nomeSessao();
-  // Sem token não há como perguntar: fica o app daqui, que não precisa dele.
-  const token = nome && ownerToken(() => '');
-  if (!token) return false;
+  if (!nome) return false;
+  // A pergunta que não tem resposta fica com o app daqui, dito no stderr: a pessoa olhando o outro app saberia por quê.
+  const semResposta = (motivo) => {
+    process.stderr.write(`aviso: não deu para saber se o app de outra máquina está com a sessão (${motivo}); usando o navegador desta máquina\n`);
+    return false;
+  };
+  const token = ownerToken(() => '');
+  if (!token) return semResposta('sem CP_AUTH_TOKEN');
   try {
     const r = await fetch(`${BACKEND}/api/sessions/${encodeURIComponent(nome)}/browser-cmd`, {
       method: 'POST',
@@ -264,10 +269,11 @@ async function hostElsewhere() {
       signal: AbortSignal.timeout(5000),
     });
     // Servidor antigo repassa `host` ao app de lá, que responde `erro:` em 200: a resposta já prova que ele existe.
-    // Sem app de lá é 409; qualquer outra recusa fica com o app daqui.
-    return r.ok;
-  } catch {
-    return false;
+    if (r.ok) return true;
+    if (r.status === 409) return false;
+    return semResposta(`servidor respondeu ${r.status}`);
+  } catch (err) {
+    return semResposta(err.cause?.code || err.name || err.message);
   }
 }
 
@@ -347,7 +353,9 @@ function ownerToken(sair = erro) {
 // O prazo que o servidor espera o app; o `open` espera o navegador ficar pronto, o `login` espera a pessoa.
 const deadlineFor = (verbo) => (verbo === 'login' ? 110_000 : verbo === 'open' ? PRONTO_MS : 45_000);
 
-const remote = !externo && (!localApp() || (!['objetivo', 'confere', 'list'].includes(cmd) && await hostElsewhere()));
+// `objetivo`/`confere` com a sessão aberta noutro app caem na recusa de "outra máquina" abaixo, nunca num navegador velho daqui.
+const usaNavegador = VERBOS_SERVIDOR.has(cmd) || ['open', 'tab', 'batch', 'objetivo', 'confere'].includes(cmd);
+const remote = !externo && (!localApp() || (usaNavegador && await hostElsewhere()));
 
 // O verbo pelo servidor desta máquina (`browser-cmd`), que o repassa ao app desktop com a sessão aberta.
 // Uma linha no stderr por comando: quem lê sabe que o navegador não é o desta máquina.
