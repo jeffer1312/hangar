@@ -140,17 +140,7 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
             );
         }
         let models = probe::fetch(base, key).await.unwrap_or_default();
-        let mut targets: Vec<String> = body["alvos"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .filter(|v| mirrors::SYNC_TARGETS.contains(v))
-            .map(str::to_owned)
-            .collect();
-        if targets.is_empty() {
-            targets = mirrors::SYNC_TARGETS.map(str::to_owned).to_vec();
-        }
+        let targets = sync_targets(&body);
         let (id, name, base, key) = (
             id.to_owned(),
             name.to_owned(),
@@ -485,4 +475,40 @@ pub async fn cors_layer(
     crate::http_route_response::suppress_head(&method, &mut response);
     crate::http_cors::apply(&headers, &mut response);
     response
+}
+
+
+/// Os destinos pedidos em `alvos`; sem nenhum, os padrões. Destino recusado (o Kimi, por exemplo)
+/// segue para o espelho, que o devolve como `alvo-desconhecido` sem gravar em outro lugar.
+fn sync_targets(body: &Value) -> Vec<String> {
+    let targets: Vec<String> = body["alvos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    if targets.is_empty() {
+        mirrors::SYNC_TARGETS.map(str::to_owned).to_vec()
+    } else {
+        targets
+    }
+}
+
+#[cfg(test)]
+mod sync_targets_tests {
+    use super::*;
+
+    /// Destino pedido e recusado volta no resultado como recusado; nunca vira os outros destinos.
+    #[test]
+    fn an_explicit_refused_target_is_kept_not_replaced_by_the_defaults() {
+        assert_eq!(sync_targets(&json!({"alvos": ["kimi"]})), ["kimi"]);
+        assert_eq!(sync_targets(&json!({"alvos": ["codex", "kimi"]})), ["codex", "kimi"]);
+    }
+
+    #[test]
+    fn no_target_asked_means_the_defaults() {
+        assert_eq!(sync_targets(&json!({})), ["pi", "codex"]);
+        assert_eq!(sync_targets(&json!({"alvos": []})), ["pi", "codex"]);
+    }
 }

@@ -136,7 +136,12 @@ pub fn purge_kimi(env: &AccountEnvironment) -> Result<Vec<String>,String> {
     let _lock = LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let path = directory(env,"kimi").join("config.toml");
     let names: Vec<String> = ENGINE_BLOCK.captures_iter(&text(&path)?).map(|c|c[1].to_owned()).collect();
-    names.into_iter().map(|name|remove_one(env,"kimi",&name).map(|_|name)).collect()
+    let mut removed = Vec::new();
+    for name in names {
+        remove_one(env,"kimi",&name)?;
+        removed.push(name);
+    }
+    Ok(removed)
 }
 fn run(targets: &[String], allowed: &[&str], mut operation: impl FnMut(&str)->Result<String,String>) -> Value {
     let _lock = LOCK.lock().unwrap_or_else(|e|e.into_inner()); let mut result = json!({});

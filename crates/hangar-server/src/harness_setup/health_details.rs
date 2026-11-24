@@ -234,7 +234,7 @@ pub fn kimi_hooks(env: &AccountEnvironment, _repo: &Path) -> Result<Value, Strin
         })
     }).count();
     Ok(if missing == 0 {
-        item("hooks", Some(true), "hooks_ok", None, false, &[("n", "9".into())])
+        item("hooks", Some(true), "hooks_ok", None, false, &[("n", super::kimi_hooks::ENTRIES.len().to_string())])
     } else {
         item("hooks", Some(false), "faltam_n", Some("hooks-kimi"), false, &[("n", missing.to_string())])
     })
