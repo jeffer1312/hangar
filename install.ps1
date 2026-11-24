@@ -224,7 +224,7 @@ function Mark-ItemSince($id, [int]$antes, $texto) {
 }
 # Pendencia com codigo para o app (a frase e o botao saem dele); sem codigo vira 'outro'.
 function Add-AppPending($rotulo, $codigo) {
-    $script:pendencias += $rotulo
+    if ($script:pendencias -notcontains $rotulo) { $script:pendencias += $rotulo }
     $script:pendingCodes[$rotulo] = $codigo
 }
 function Test-Internet {

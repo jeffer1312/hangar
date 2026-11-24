@@ -36,11 +36,11 @@ fn text(args: &Args, key: &str) -> Option<String> { args.get(key)?.as_str().map(
 
 fn first_text(args: &Args, keys: &[&str]) -> Option<String> { keys.iter().find_map(|key| text(args, key)) }
 
-/// Conteúdo opcional: ausente vale vazio; presente com outro tipo é `Err`, e a chamada segue como veio em vez de
+/// Conteúdo opcional: ausente ou `null` vale vazio; presente com outro tipo é `Err`, e a chamada segue como veio em vez de
 /// virar escrita ou troca vazia que ela não pediu.
 fn optional_text(args: &Args, keys: &[&str]) -> Result<String, ()> {
     match keys.iter().find_map(|key| args.get(*key)) {
-        None => Ok(String::new()),
+        None | Some(Value::Null) => Ok(String::new()),
         Some(Value::String(s)) => Ok(s.clone()),
         Some(_) => Err(()),
     }

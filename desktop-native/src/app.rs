@@ -2746,8 +2746,10 @@ impl Hangar {
         // Rascunho digitado antes do histórico existir vai à chave dele também fora da seleção: reaberta, a sessão o acha.
         if let Some(server) = self.server.clone() {
             for session in &self.sessions {
+                // Destino com texto (mesma vida religada) fica como está, e o de antes não se perde.
                 if let Some((from, to)) = SessionKey::opening_to_transcript(&server, session)
-                    && let Some(draft) = self.drafts.remove(&from) { self.drafts.entry(to).or_insert(draft); }
+                    && !self.drafts.contains_key(&to)
+                    && let Some(draft) = self.drafts.remove(&from) { self.drafts.insert(to, draft); }
             }
         }
         self.recents_sessions_changed(closed, cx);
