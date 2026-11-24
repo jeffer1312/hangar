@@ -735,7 +735,7 @@ impl Tools {
     async fn host_verb(&self, name: &str, verb: &str, args: &[String], tab: Option<i64>, deadline: Duration) -> Result<String, nav::Unavailable> {
         let body = nav::host_body(verb, args, tab, deadline);
         let (status, value) = self.route(Method::POST, &format!("/api/sessions/{}/browser-cmd", segment(name)), Some(body)).await;
-        nav::host_answer(status, &value)
+        nav::host_answer(status, &value, nav::local_app(&self.home()).unwrap_or(false))
     }
 
     async fn browser_open(&self, headers: &HeaderMap, a: BrowserOpen) -> Outcome {

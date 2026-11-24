@@ -11,7 +11,9 @@ use zeroize::Zeroizing;
 pub const VERB_TIMEOUT: Duration = Duration::from_secs(45);
 pub const PAUSED: &str = "o usuario pausou o navegador; espere ele clicar em Retomar no painel e tente de novo";
 const NOT_OPEN: &str = "o app desktop não está aberto nesta máquina";
-const NO_HOST: &str = "nenhum app desktop ligado está com esta sessão aberta (o navegador dela fica no app que a mostrou por último): \
+const NO_HOST: &str = "o app desktop não está aberto nesta máquina e nenhum app de outra máquina está com esta sessão aberta: \
+    abra a sessão no app desktop e repita";
+const STALE_HOST: &str = "a sessão foi usada por último no app desktop de outra máquina, e ele não está mais ligado: \
     abra a sessão no app desktop que você está usando e repita";
 
 /// O app não atende: a frase volta como erro da tool.
@@ -101,12 +103,13 @@ pub fn host_body(verb: &str, args: &[String], tab: Option<i64>, deadline: Durati
 }
 
 /// A resposta da `browser-cmd` como a rota interna a devolve: texto do app (`{"detail": texto}`) ou a recusa.
-pub fn host_answer(status: u16, body: &Value) -> Result<String, Unavailable> {
+/// `local_app`: esta máquina tem app desktop, e o verbo saiu dela porque a sessão foi usada por último em outra.
+pub fn host_answer(status: u16, body: &Value, local_app: bool) -> Result<String, Unavailable> {
     // ponytail: texto que por acaso é JSON volta reserializado; só muda espaçamento, nunca o conteúdo.
     if (200..300).contains(&status) { return Ok(body["detail"].as_str().map_or_else(|| body.to_string(), str::to_owned)); }
     let detail = &body["detail"];
     Err(Unavailable(match (status, detail["code"].as_str()) {
-        (409, Some("browser_host_none")) => NO_HOST.into(),
+        (409, Some("browser_host_none")) => if local_app { STALE_HOST } else { NO_HOST }.into(),
         (403, Some("browser_host_not_allowed")) => "o app desktop recusou usar o navegador dele".into(),
         _ => detail["msg"].as_str().or_else(|| detail.as_str()).map_or_else(|| format!("HTTP {status}"), str::to_owned),
     }))
@@ -217,14 +220,16 @@ mod tests {
 
     #[test]
     fn host_answer_reads_the_app_text_and_says_why_it_did_not_run() {
-        assert_eq!(host_answer(200, &json!({"detail": "ok: click @e1"})), Ok("ok: click @e1".into()));
-        assert_eq!(host_answer(200, &json!(42)), Ok("42".into()));
+        assert_eq!(host_answer(200, &json!({"detail": "ok: click @e1"}), false), Ok("ok: click @e1".into()));
+        assert_eq!(host_answer(200, &json!(42), false), Ok("42".into()));
         let none = json!({"detail": {"code": "browser_host_none", "msg": "x"}});
-        assert!(host_answer(409, &none).unwrap_err().0.starts_with("o app desktop não está aberto nesta máquina e nenhum app de outra"));
+        assert!(host_answer(409, &none, false).unwrap_err().0.starts_with("o app desktop não está aberto nesta máquina e nenhum app de outra"));
+        // Com app aqui, o verbo só saiu porque a sessão foi usada por último noutra máquina, que desligou.
+        assert!(host_answer(409, &none, true).unwrap_err().0.starts_with("a sessão foi usada por último no app desktop de outra máquina"));
         let denied = json!({"detail": {"code": "browser_host_not_allowed", "msg": "x"}});
-        assert_eq!(host_answer(403, &denied), Err(Unavailable("o app desktop recusou usar o navegador dele".into())));
+        assert_eq!(host_answer(403, &denied, false), Err(Unavailable("o app desktop recusou usar o navegador dele".into())));
         let gone = json!({"detail": {"code": "browser_host_gone", "msg": "o app caiu; o shot pode ter sido executado"}});
-        assert_eq!(host_answer(502, &gone).unwrap_err().0, "o app caiu; o shot pode ter sido executado");
+        assert_eq!(host_answer(502, &gone, false).unwrap_err().0, "o app caiu; o shot pode ter sido executado");
     }
 
     #[test]

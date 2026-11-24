@@ -391,7 +391,11 @@ async function callServer(nome, verbo, cmdArgs, aba = flags.aba, sair = erro) {
   if (r.ok) return { texto, codigo: texto.startsWith('erro:') ? 1 : 0 };
   let detalhe = {};
   try { detalhe = JSON.parse(texto).detail ?? {}; } catch { /* corpo sem JSON */ }
-  if (r.status === 409 && detalhe.code === 'browser_host_none') return sair('nenhum app desktop ligado está com esta sessão aberta (o navegador dela fica no app que a mostrou por último): abra a sessão no app desktop que você está usando e repita');
+  if (r.status === 409 && detalhe.code === 'browser_host_none') {
+    return sair(localApp()
+      ? 'a sessão foi usada por último no app desktop de outra máquina, e ele não está mais ligado: abra a sessão no app desktop que você está usando e repita'
+      : 'o app desktop não está aberto nesta máquina e nenhum app de outra máquina está com esta sessão aberta: abra a sessão no app desktop e repita');
+  }
   if (r.status === 403 && detalhe.code === 'browser_host_not_allowed') return sair('o app desktop recusou usar o navegador dele');
   return sair(detalhe.msg ? semToken(detalhe.msg) : `o servidor recusou: ${r.status} ${semToken(texto)}`);
 }
