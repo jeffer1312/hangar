@@ -23,12 +23,13 @@ async fn health_answers_without_token_and_with_cors() {
     assert_eq!(v["ok"], true);
     assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(v["protocol"], hangar_server::INTERNAL_PROTOCOL);
-    // A saúde anuncia também a posse dos três provedores migrados com terminal.
+    // A saúde anuncia também a posse dos provedores migrados, com e sem terminal.
     assert_eq!(v["owns"], serde_json::json!([
         {"provider": "claude", "headless": true}, {"provider": "claude", "headless": false},
         {"provider": "codex", "headless": true}, {"provider": "codex", "headless": false},
         {"provider": "pi", "headless": false}, {"provider": "omp", "headless": false},
-        {"provider": "kimi", "headless": false}, {"provider": "antigravity", "headless": false}]));
+        {"provider": "kimi", "headless": false},
+        {"provider": "antigravity", "headless": true}, {"provider": "antigravity", "headless": false}]));
     assert!(v.get("terminal_address").is_none(), "{v}");
     assert!(v["groups"].is_boolean(), "{v}");
 }
