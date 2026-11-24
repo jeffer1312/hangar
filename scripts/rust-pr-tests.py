@@ -4,9 +4,9 @@
 Uso: rust-pr-tests.py rest <pacote>...        os pacotes dados, menos o hangar-server
      rust-pr-tests.py server <fatia> <total>  uma fatia dos testes do hangar-server
 
-Os testes de unidade do hangar-server ficam num executável só e levam a maior parte da suíte. A fatia
-leva os testes dele cujo nome cai nela pelo crc32, mais um em cada <total> dos executáveis de
-tests/; a fatia 0 leva também binários, exemplos e doctests. Fatia sem teste nenhum é falha: um
+Os testes de unidade e o executável `it` do hangar-server levam a maior parte da suíte. A fatia leva
+os testes desses dois cujo nome cai nela pelo crc32, mais um em cada <total> dos outros executáveis
+de tests/; a fatia 0 leva também binários, exemplos e doctests. Fatia sem teste nenhum é falha: um
 filtro errado não pode passar verde.
 """
 import subprocess
@@ -34,32 +34,48 @@ def rest(packages: list[str]) -> int:
     return cargo(*(a for p in packages for a in ("-p", p)))
 
 
-def server(part: int, total: int) -> int:
+def listed(target: list[str]) -> list[str] | None:
+    """Os testes de um executável do hangar-server, pelo próprio libtest; `None` quando não compila."""
     listing = subprocess.run(
-        ["cargo", "test", "--locked", "-p", SERVER, "--lib", "--", "--list", "--format", "terse"],
+        ["cargo", "test", "--locked", "-p", SERVER, *target, "--", "--list", "--format", "terse"],
         cwd=CRATES, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
     )
     if listing.returncode:
         print(listing.stdout)
-        return listing.returncode
-    names = [line[: -len(": test")] for line in listing.stdout.splitlines() if line.endswith(": test")]
-    if not names:
-        print(f"::error::a lista dos testes de unidade do {SERVER} veio vazia")
+        return None
+    return [line[: -len(": test")] for line in listing.stdout.splitlines() if line.endswith(": test")]
+
+
+def server(part: int, total: int) -> int:
+    # Os testes procuram o hangar-cano acima do próprio executável; só a suíte do workspace o compilava.
+    if subprocess.run(["cargo", "build", "--locked", "-p", "hangar-cano"], cwd=CRATES).returncode:
         return 1
-    mine = [n for n in names if zlib.crc32(n.encode()) % total == part]
     manifest = tomllib.loads((CRATES / SERVER / "Cargo.toml").read_text())
     targets = sorted(t["name"] for t in manifest.get("test", []))
-    targets = [t for i, t in enumerate(targets) if i % total == part]
-    print(f"fatia {part}/{total}: {len(mine)} de {len(names)} testes de unidade, executáveis {' '.join(targets) or 'nenhum'}")
     failed = 0
-    if mine:
-        failed |= cargo("-p", SERVER, "--lib", "--", "--exact", *mine)
-    extra = [a for t in targets for a in ("--test", t)] + (["--bins", "--examples"] if part == 0 else [])
+    ran = 0
+    # Os dois executáveis grandes dividem os testes pelo nome; os outros, um em cada <total>.
+    for target in (["--lib"], ["--test", "it"]):
+        names = listed(target)
+        if names is None:
+            return 1
+        if not names:
+            print(f"::error::a lista dos testes de {' '.join(target)} do {SERVER} veio vazia")
+            return 1
+        mine = [n for n in names if zlib.crc32(n.encode()) % total == part]
+        print(f"fatia {part}/{total}: {len(mine)} de {len(names)} testes de {' '.join(target)}")
+        if mine:
+            ran += len(mine)
+            failed |= cargo("-p", SERVER, *target, "--", "--exact", *mine)
+    small = [t for i, t in enumerate(t for t in targets if t != "it") if i % total == part]
+    print(f"fatia {part}/{total}: executáveis {' '.join(small) or 'nenhum'}")
+    extra = [a for t in small for a in ("--test", t)] + (["--bins", "--examples"] if part == 0 else [])
     if extra:
+        ran += 1
         failed |= cargo("-p", SERVER, *extra)
     if part == 0:
         failed |= cargo("-p", SERVER, "--doc")
-    if not mine and not extra:
+    if not ran:
         print(f"::error::a fatia {part}/{total} ficou sem teste")
         return 1
     return 1 if failed else 0
