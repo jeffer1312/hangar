@@ -362,7 +362,9 @@ Do lado do Hangar (C6):
   `POST /api/whatsapp/outbox/{id}/decline`, repassadas ao binário com o prefixo `whatsapp_` nos
   códigos, pelo mesmo `owner_only` das leituras.
 - **Evento `whatsapp_outbox`** na lista do dono, como o do cofre, com os rascunhos pendentes; fica em
-  `side.rs::owner_only` e não chega a convidado. Relido a cada criação ou resposta e a cada 30 s.
+  `side.rs::owner_only` e não chega a convidado. Relido a cada criação ou resposta e a cada 30 s. Cada
+  rascunho leva `answer_by`, o menor entre a expiração e o prazo da tool, e os cartões contam até ele:
+  o prazo mora só no servidor.
 - **Na subida do Hangar, todo rascunho pendente é recusado**: nenhuma tool espera por ele depois do
   reinício.
 - **Push sem conteúdo.** "Rascunho de WhatsApp aguardando aprovação", sem nome, número nem texto,
