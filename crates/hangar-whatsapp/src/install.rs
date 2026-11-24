@@ -23,7 +23,7 @@ pub const SERVICE: ServiceId = ServiceId {
     unit: "hangar-whatsapp.service",
     launchd_label: "dev.hangar.whatsapp",
     task: "hangar-whatsapp",
-    description: "WhatsApp do Hangar (somente leitura)",
+    description: "WhatsApp do Hangar",
     no_restart_exit: Some(SCHEMA_NEWER_EXIT),
 };
 

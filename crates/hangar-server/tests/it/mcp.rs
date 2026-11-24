@@ -229,7 +229,7 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
     let known = names(&python);
     let all = names(listed.as_array().unwrap());
     for tool in ["request_secret", "vault_list", "vault_exec", "vault_file", "vault_fill", "mission",
-                 "whatsapp_chats", "whatsapp_read", "whatsapp_search", "whatsapp_request_media"] {
+                 "whatsapp_chats", "whatsapp_read", "whatsapp_search", "whatsapp_request_media", "whatsapp_draft"] {
         assert!(all.iter().any(|n| n == tool), "falta {tool} no catálogo");
     }
     let listed: Vec<Value> = listed.as_array().unwrap().iter()

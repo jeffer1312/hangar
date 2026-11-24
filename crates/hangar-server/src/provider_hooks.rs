@@ -105,17 +105,27 @@ fn guard(tool: &str, input: &Value) -> Result<Option<String>, &'static str> {
         return Ok(None);
     }
     if !["Bash", "PowerShell"].contains(&tool) {
-        let read = ["file_path", "path", "glob"].iter().any(|k| input[k].as_str().is_some_and(vault_path))
-            || (tool == "Grep" && input["path"].as_str().is_some_and(above_vault));
-        return Ok(read.then(|| VAULT_DENIED.to_owned()));
+        let cites = |secret: &Secret| ["file_path", "path", "glob"].iter().any(|k| input[k].as_str().is_some_and(|text| (secret.hits)(text) > 0));
+        let grep_above = |above: fn(&str) -> bool| tool == "Grep" && input["path"].as_str().is_some_and(above);
+        if cites(&VAULT) || grep_above(above_vault) {
+            return Ok(Some(VAULT_DENIED.to_owned()));
+        }
+        return Ok((cites(&OWNER_KEYS) || grep_above(above_owner_keys)).then(|| OWNER_KEYS_DENIED.to_owned()));
     }
     let command = &input["command"];
     if !crate::orchestration::truthy(command) {
         return Ok(None);
     }
     let command = command.as_str().ok_or("command_not_string")?;
-    if reads_vault(command, 0, tool == "PowerShell") {
+    let pwsh = tool == "PowerShell";
+    if reads(&VAULT, command, 0, pwsh) {
         return Ok(Some(VAULT_DENIED.to_owned()));
+    }
+    if reads(&OWNER_KEYS, command, 0, pwsh) {
+        return Ok(Some(OWNER_KEYS_DENIED.to_owned()));
+    }
+    if answers_draft(command) {
+        return Ok(Some(DRAFT_ANSWER_DENIED.to_owned()));
     }
     // Caminho do Windows sem aspas (PowerShell, ou o Bash do Codex no Windows): a barra
     // invertida é separador, não escape. Conferido também assim, só para barrar mais; só
@@ -519,7 +529,7 @@ const READERS: &[&str] = &[
     "cat", "tac", "head", "tail", "less", "more", "bat", "nl", "od", "xxd", "hexdump", "strings",
     "base64", "wc", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "b2sum", "cut", "sort",
     "uniq", "diff", "cmp", "cp", "type", "get-content", "gc", "get-filehash", "format-hex",
-    "certutil", "mapfile", "readarray", "read",
+    "certutil", "mapfile", "readarray", "read", "source", ".",
 ];
 /// Leitores cujo primeiro argumento é o padrão de busca, que pode citar a pasta sem ler nada.
 const PATTERN_FIRST: &[&str] = &["grep", "egrep", "rg", "sed", "awk", "select-string", "sls"];
@@ -599,20 +609,33 @@ fn shell_script(segment: &str) -> Option<String> {
     Some(unquoted.unwrap_or(script).to_owned())
 }
 
+/// Um arquivo que o guarda não deixa ler, e por onde a leitura dele aparece num comando.
+struct Secret {
+    /// Citações do arquivo como caminho.
+    hits: fn(&str) -> usize,
+    /// `< arquivo`.
+    redirect: fn(&str) -> bool,
+    /// O `cd` que entra na pasta do arquivo.
+    folder: fn(&str) -> bool,
+    /// Dentro da pasta, o segmento que lê o arquivo sem citar o caminho.
+    bare: fn(&str) -> bool,
+}
+
+const VAULT: Secret = Secret { hits: vault_hits, redirect: vault_redirect, folder: vault_path, bare: any_segment };
+const OWNER_KEYS: Secret = Secret { hits: owner_key_hits, redirect: owner_key_redirect, folder: owner_key_folder, bare: owner_key_bare };
+
 /// Ler o arquivo, não usá-lo: o caminho como argumento de outro programa passa. `pwsh`: o texto é
 /// PowerShell (a tool PowerShell ou o script de um `powershell -c`).
-fn reads_vault(command: &str, depth: u8, pwsh: bool) -> bool {
-    if !vault_path(command) {
+fn reads(secret: &Secret, command: &str, depth: u8, pwsh: bool) -> bool {
+    if (secret.hits)(command) == 0 && !(secret.folder)(command) {
         return false;
     }
     // .NET (`[IO.File]::ReadAllText`, `ReadLines`, `OpenText`, `StreamReader`…); fora do PowerShell é só texto.
     let lower = command.to_ascii_lowercase();
-    if pwsh && ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
+    if pwsh && (secret.hits)(command) > 0 && ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
         return true;
     }
     let command = strip_heredocs(command);
-    static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let redirect = REDIRECT.get_or_init(|| regex::Regex::new(r#"(?i)<\s*['"]?[^\s'"]*vault-files"#).unwrap());
     let mut inside = false;
     segments(&command).iter().any(|segment| {
         let words = tokens(segment);
@@ -623,24 +646,93 @@ fn reads_vault(command: &str, depth: u8, pwsh: bool) -> bool {
             // O texto cru guarda o caminho do Windows, que `tokens` desfaz; os pedaços pegam o shell atrás de `sudo`/`env`.
             let inner = ["powershell", "pwsh"].contains(&name);
             return depth < 3
-                && (shell_script(segment).is_some_and(|s| reads_vault(&s, depth + 1, inner))
-                    || reads_vault(&args.join(" "), depth + 1, inner));
+                && (shell_script(segment).is_some_and(|s| reads(secret, &s, depth + 1, inner))
+                    || reads(secret, &args.join(" "), depth + 1, inner));
         }
-        // Entrar na pasta faz `cat *` ler a senha sem citar o caminho.
+        // Entrar na pasta faz `cat *` ler o arquivo sem citar o caminho.
         if ["cd", "pushd", "set-location", "sl", "push-location"].contains(&name) {
-            inside |= vault_path(segment);
+            inside |= (secret.folder)(segment);
             return false;
         }
-        if redirect.is_match(segment) {
+        if (secret.redirect)(segment) {
             return true;
         }
+        let bare = inside && (secret.bare)(segment);
         if PATTERN_FIRST.contains(&name) {
-            let file_option = args.windows(2).any(|w| FILE_OPTIONS.contains(&w[0].to_ascii_lowercase().as_str()) && w[1].to_ascii_lowercase().contains("vault-files"));
-            // Mais citações da pasta no texto cru do que no padrão: alguma é arquivo lido.
-            let pattern = args.iter().find(|a| !a.starts_with('-')).map_or(0, |p| vault_hits(p));
-            return inside || file_option || vault_hits(segment) > pattern;
+            let file_option = args.windows(2).any(|w| FILE_OPTIONS.contains(&w[0].to_ascii_lowercase().as_str()) && (secret.hits)(&w[1]) > 0);
+            // Mais citações do arquivo no texto cru do que no padrão: alguma é arquivo lido.
+            let pattern = args.iter().find(|a| !a.starts_with('-')).map_or(0, |p| (secret.hits)(p));
+            return bare || file_option || (secret.hits)(segment) > pattern;
         }
-        READERS.contains(&name) && (inside || vault_path(segment))
+        READERS.contains(&name) && (bare || (secret.hits)(segment) > 0)
+    })
+}
+
+fn any_segment(_: &str) -> bool {
+    true
+}
+
+fn vault_redirect(segment: &str) -> bool {
+    static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    REDIRECT.get_or_init(|| regex::Regex::new(r#"(?i)<\s*['"]?[^\s'"]*vault-files"#).unwrap()).is_match(segment)
+}
+
+const OWNER_KEYS_DENIED: &str = "BLOQUEADO: o `.env` do Hangar e o `control.key` do WhatsApp guardam as chaves do dono e não se leem.\nPara mandar algo pelo WhatsApp, crie o rascunho com `whatsapp_draft`: quem envia é o dono, no cartão do app.";
+const DRAFT_ANSWER_DENIED: &str = "BLOQUEADO: aprovar ou recusar um rascunho de WhatsApp (`/api/whatsapp/outbox/<id>/send` ou `/decline`) é só do dono, no cartão do app.\nCrie o rascunho com `whatsapp_draft` e espere a resposta dele.";
+
+/// As chaves do dono: o `control.key` do WhatsApp e o `.env` do Hangar (`~/.hangar/config/.env`, `backend/.env`).
+fn owner_key_hits(text: &str) -> usize {
+    static KEYS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    KEYS.get_or_init(|| {
+        regex::Regex::new(r#"(?i)(^|[/\\\s'"=<])(\.hangar[/\\]+config[/\\]+\.env|backend[/\\]+\.env|whatsapp[/\\]+control\.key)([\s'"*;|&)]|$)"#).unwrap()
+    })
+    .find_iter(text)
+    .count()
+}
+
+fn owner_key_redirect(segment: &str) -> bool {
+    static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let redirect = REDIRECT.get_or_init(|| regex::Regex::new(r#"<\s*['"]?([^\s'"<]+)"#).unwrap());
+    redirect.captures_iter(segment).any(|c| owner_key_hits(&c[1]) > 0)
+}
+
+/// `~/.hangar/whatsapp`, `~/.hangar/config` e `backend` como pasta inteira (destino de um `cd`).
+fn owner_key_folder(text: &str) -> bool {
+    static FOLDER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    FOLDER
+        .get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\\s'"=])(\.hangar[/\\]+(whatsapp|config)|backend)[/\\]*(['"\s;|&)]|$)"#).unwrap())
+        .is_match(text)
+}
+
+/// O nome solto (`.env`, `control.key`) ou `*`: na pasta do `backend` o resto continua livre.
+fn owner_key_bare(segment: &str) -> bool {
+    static BARE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    BARE.get_or_init(|| {
+        regex::Regex::new(r#"(?i)(^|[/\\\s'"=<])(\.env|control\.key)([\s'"*;|&)]|$)|(^|\s)\*(\s|$)"#).unwrap()
+    })
+    .is_match(segment)
+}
+
+/// `Grep` em `~/.hangar` ou nas pastas das chaves as varre inteiras.
+fn above_owner_keys(path: &str) -> bool {
+    static ABOVE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    ABOVE.get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\])\.hangar([/\\]+(whatsapp|config))?[/\\]*$"#).unwrap()).is_match(path)
+}
+
+/// Programas que só procuram ou registram texto: citar a rota neles não a chama.
+const ROUTE_QUOTERS: &[&str] = &["grep", "egrep", "fgrep", "rg", "git", "select-string", "sls"];
+
+/// `…/api/whatsapp/outbox/<id>/send` ou `/decline` chamado da sessão: a resposta ao rascunho é do dono, no app.
+fn answers_draft(command: &str) -> bool {
+    static ROUTE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let route = ROUTE.get_or_init(|| regex::Regex::new(r#"(?i)/api/whatsapp/outbox/[^\s'"/?#]+/+(send|decline)([^A-Za-z0-9_-]|$)"#).unwrap());
+    if !route.is_match(command) {
+        return false;
+    }
+    segments(&strip_heredocs(command)).iter().any(|segment| {
+        // Substituição de comando dentro das aspas roda, mesmo atrás de `git` ou `grep`.
+        let quoted = ROUTE_QUOTERS.contains(&program(segment).as_str()) && !segment.contains("$(") && !segment.contains('`');
+        route.is_match(segment) && !quoted
     })
 }
 
