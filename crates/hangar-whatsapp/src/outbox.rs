@@ -177,10 +177,14 @@ impl Outbox {
     }
 }
 
+/// A chamada da tool começa antes de o binário gravar `created_at` (a cópia de um anexo grande fica no meio): o cartão
+/// fecha um pouco antes do prazo dela.
+const ANSWER_MARGIN: TimeDelta = TimeDelta::seconds(10);
+
 /// Até quando a resposta do dono ainda chega a quem pediu: a expiração do binário ou o prazo da tool, o que vier
 /// antes. Sem horário legível fica de fora, e o cliente conta até `expires_at`.
 fn with_answer_by(mut draft: Value) -> Value {
-    let tool = at(&draft, "created_at").and_then(|created| created.checked_add_signed(TOOL_DEADLINE));
+    let tool = at(&draft, "created_at").and_then(|created| created.checked_add_signed(TOOL_DEADLINE - ANSWER_MARGIN));
     let by = [at(&draft, "expires_at"), tool].into_iter().flatten().min();
     if let (Some(by), Some(fields)) = (by, draft.as_object_mut()) {
         fields.insert("answer_by".into(), json!(by.to_rfc3339_opts(SecondsFormat::Secs, true)));
@@ -259,7 +263,7 @@ mod tests {
     #[test]
     fn the_card_counts_down_to_the_earlier_of_the_expiry_and_the_tool_deadline() {
         let draft = |expires: &str| json!({"id": "d1", "created_at": "2026-11-24T10:00:00Z", "expires_at": expires});
-        assert_eq!(with_answer_by(draft("2026-11-24T10:10:00Z"))["answer_by"], json!("2026-11-24T10:09:30Z"), "prazo da tool");
+        assert_eq!(with_answer_by(draft("2026-11-24T10:10:00Z"))["answer_by"], json!("2026-11-24T10:09:20Z"), "prazo da tool, com a folga");
         assert_eq!(with_answer_by(draft("2026-11-24T10:05:00Z"))["answer_by"], json!("2026-11-24T10:05:00Z"), "expira antes");
         let unread = with_answer_by(json!({"id": "d1", "created_at": "ontem", "expires_at": "2026-11-24T10:10:00Z"}));
         assert_eq!(unread["answer_by"], json!("2026-11-24T10:10:00Z"), "sem criação legível, vale a expiração");

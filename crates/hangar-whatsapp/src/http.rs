@@ -150,7 +150,12 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
         },
         (Method::POST, "/logout") => forward(wa, Method::POST, "/v1/logout", &[], None).await,
         (Method::POST, "/wipe") => match body(request).await {
-            Ok(body) => wipe(wa, &body).await,
+            Ok(body) => {
+                let response = wipe(wa, &body).await;
+                // Os rascunhos somem com os dados: a lista relê, e a espera da tool acorda e vê o rascunho sumido.
+                wa.outbox.poke();
+                response
+            }
             Err(response) => response,
         },
         (Method::POST, "/uninstall") => match body(request).await {

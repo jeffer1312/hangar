@@ -211,6 +211,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
     let mut outbox = hub.whatsapp.get().cloned();
     let review = list.work_review.get().cloned();
     loop {
+        bind_outbox(&hub, &mut outbox);
         let clients = {
             let mut r = lock(&hub.refs);
             if r.clients + r.guests == 0 {
@@ -560,6 +561,12 @@ fn publish_vault(tx: &watch::Sender<Arc<Published>>, last: &mut Last, feed: Arc<
 }
 
 type OutboxFeed = watch::Receiver<Option<Arc<hangar_whatsapp::outbox::Feed>>>;
+
+/// O WhatsApp é ligado no fim da subida, e a lista aberta antes já tem produtor: até a ligação, ele a procura a cada
+/// volta.
+fn bind_outbox(hub: &ListHub, outbox: &mut Option<OutboxFeed>) {
+    if outbox.is_none() { *outbox = hub.whatsapp.get().cloned(); }
+}
 
 fn current_outbox(outbox: &mut Option<OutboxFeed>) -> Option<Arc<hangar_whatsapp::outbox::Feed>> {
     outbox.as_mut().and_then(|outbox| outbox.borrow_and_update().clone())
@@ -1170,6 +1177,24 @@ mod tests {
         publish_whatsapp_outbox(&tx, &mut last, Some(outbox_feed(&[])));
         let f = frames(&tx.borrow(), &mut sent);
         assert!(f.iter().any(|f| f.starts_with(b"event: whatsapp_outbox\r\ndata: {\"drafts\":[]}")), "o cartão respondido some");
+    }
+
+    /// Lista aberta antes de a subida ligar o WhatsApp: o produtor que nasceu sem ele passa a publicar depois da ligação.
+    #[test]
+    fn a_producer_born_before_the_whatsapp_binding_publishes_after_it() {
+        let hub = ListHub::default();
+        let (tx, _rx) = watch::channel(Arc::new(Published::default()));
+        let mut last = Last::default();
+        let mut outbox = hub.whatsapp.get().cloned();
+        bind_outbox(&hub, &mut outbox);
+        publish_whatsapp_outbox(&tx, &mut last, current_outbox(&mut outbox));
+        assert!(outbox.is_none() && tx.borrow().whatsapp_outbox.is_none(), "ainda sem WhatsApp");
+        let (_feed_tx, feed_rx) = watch::channel(Some(outbox_feed(&["d1"])));
+        hub.bind_whatsapp(feed_rx);
+        bind_outbox(&hub, &mut outbox);
+        publish_whatsapp_outbox(&tx, &mut last, current_outbox(&mut outbox));
+        assert!(tx.borrow().whatsapp_outbox.as_ref().is_some_and(|f| f.starts_with(b"event: whatsapp_outbox\r\ndata: {\"drafts\":[{")),
+            "a volta seguinte à ligação publica o cartão");
     }
 
     #[tokio::test]

@@ -15,6 +15,9 @@ const SENDING_SECS: i64 = 600;
 const EXPIRY_GRACE_SECS: i64 = 5;
 /// Releitura do rascunho saindo e da leitura que falhou: nesses casos a lista dos pendentes não muda e não acorda.
 const REREAD: TimeDelta = TimeDelta::seconds(3);
+/// Pendente, a mudança da lista acorda a espera; a volta da lista (`REFRESH`) é o teto, para a leitura da
+/// lista que falhou não deixar a tool dormindo até o prazo.
+const PENDING_REREAD: TimeDelta = TimeDelta::seconds(super::REFRESH.as_secs() as i64);
 /// Quanto a chamada cancelada espera a recusa para dizer se o rascunho saiu da fila.
 const DECLINE_WAIT: Duration = Duration::from_secs(10);
 
@@ -186,7 +189,7 @@ pub async fn wait_draft<P: DraftPort>(port: &mut P, progress: &Progress, id: &st
             Wait::Until(at) => {
                 until = Some(at);
                 // Pendente, a resposta do dono muda a lista dos pendentes e acorda a pausa; nos outros casos nada avisa.
-                if pending { at } else { (now + REREAD).min(at) }
+                (now + if pending { PENDING_REREAD } else { REREAD }).min(at)
             }
             Wait::PendingOverdue => match port.decline(id).await {
                 Ok(Declined::Declined | Declined::Expired) => {
@@ -424,8 +427,8 @@ mod tests {
         progress
     }
 
-    /// O dono não responde: pendente, a espera dorme até o prazo da chamada de uma vez (nada a reler no meio), recusa e
-    /// responde `expired`.
+    /// O dono não responde: pendente, a espera dorme em voltas de 30 s (a lista acorda antes quando muda) até o prazo
+    /// da chamada, recusa e responde `expired`.
     #[tokio::test]
     async fn a_pending_draft_sleeps_to_the_call_deadline_and_is_declined_as_expired() {
         let mut port = FakePort::new(vec![], Read::Found(draft("pending")));
@@ -434,7 +437,9 @@ mod tests {
         let out = wait_draft(&mut port, &progress, "d1", draft("pending"), deadline()).await.unwrap();
         assert_eq!((&out["status"], &out["id"]), (&json!("expired"), &json!("d1")), "{out}");
         assert_eq!(port.declined, 1);
-        assert_eq!(port.pauses, [(t0(), deadline())], "uma pausa só, até o prazo");
+        assert_eq!(port.now, deadline());
+        assert_eq!(port.pauses.len(), 19, "570 s em voltas de 30 s: {:?}", port.pauses);
+        assert!(port.pauses.iter().all(|(from, until)| *until - *from == TimeDelta::seconds(30)), "{:?}", port.pauses);
         assert!(!progress.needs_decline(), "a espera chegou ao fim");
     }
 

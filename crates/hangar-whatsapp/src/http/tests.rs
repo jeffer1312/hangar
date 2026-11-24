@@ -542,7 +542,7 @@ async fn the_first_round_declines_what_another_life_left_pending() {
     assert_eq!(pending_reads(&s), 1, "as recusas tiram da lista o que saiu, sem reler");
     assert_eq!(feed_ids(&s.wa), ["d2", "d3"]);
     let feed = s.wa.outbox().feed().borrow().clone().unwrap();
-    assert_eq!(feed.drafts[0]["answer_by"], json!("2026-11-24T10:09:30Z"), "o prazo da tool vence antes da expiração");
+    assert_eq!(feed.drafts[0]["answer_by"], json!("2026-11-24T10:09:20Z"), "o prazo da tool, com a folga, vence antes da expiração");
     assert_eq!(*hooks.new.lock().unwrap(), ["d2", "d3"]);
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert_eq!(*hooks.new.lock().unwrap(), ["d2", "d3"], "o mesmo rascunho não avisa de novo");
