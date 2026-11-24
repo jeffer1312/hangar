@@ -2680,6 +2680,10 @@ async fn relaunch(policy:PolicyClient,mut target:RuntimeTarget,sidecar_dir:std::
     if !patch.is_null() {
         let written = super::gateway::launch_sidecar(&target,&sidecar_dir,"session.patch_meta",patch.clone()).await.map_err(|error|(error,Value::Null))?;
         if written["updated"] != true { return Err((RuntimeError::new("session_patch_stale","o arquivo da sessão não aceitou o modo novo"),Value::Null)); }
+        // O lançamento lê os metadados em memória: sem o patch, o processo novo subiria no modo antigo.
+        if let (Value::Object(meta),Some(fields)) = (&mut target.metadata,patch.as_object()) {
+            for (key,value) in fields { meta.insert(key.clone(),value.clone()); }
+        }
     }
     let spawned = super::gateway::launch_if_needed(&policy,&mut target,&sidecar_dir).await.map_err(|error|(error,patch.clone()))?;
     match super::cano::connect(&target.binding).await {

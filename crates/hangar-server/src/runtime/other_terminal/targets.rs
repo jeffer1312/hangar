@@ -84,6 +84,10 @@ pub fn discovery(list: Arc<ListBridge>) -> OtherDiscovery {
                             .map(|_| Err(failed(error.code)));
                     }
                 };
+                // O Antigravity sem terminal é do ator ACP: não há pane a procurar.
+                if context.row.as_ref().is_some_and(|row| row.headless) {
+                    return None;
+                }
                 let kind = context
                     .row
                     .as_ref()
@@ -131,7 +135,7 @@ pub fn discovery(list: Arc<ListBridge>) -> OtherDiscovery {
                     .map_err(|error| failed(error.code))?;
                 let mut names = rows
                     .iter()
-                    .filter(|row| provider(&row.provider).is_some())
+                    .filter(|row| !row.headless && provider(&row.provider).is_some())
                     .map(|row| row.name.clone())
                     .collect::<Vec<_>>();
                 names.extend(

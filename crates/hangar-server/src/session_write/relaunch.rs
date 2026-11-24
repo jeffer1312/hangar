@@ -198,7 +198,15 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
     if !headless_open && !terminal_open {
         let home = st.accounts.env.home.clone();
         let sidecar = crate::runtime::codex_sidecar::path(&crate::runtime::antigravity_sidecar::dir(&home), name);
-        if !tokio::task::spawn_blocking(move || sidecar.exists()).await.unwrap_or(false) { return None; }
+        if !tokio::task::spawn_blocking(move || sidecar.exists()).await.unwrap_or(false) {
+            // Pane sem ator ainda (abrindo, ou na tela de primeiro uso do agy): a recusa diz isso, não "só Claude".
+            let listed = st.list.discovered_session(name).await.ok().flatten().is_some_and(|(row, _)| row.provider == "antigravity");
+            if listed {
+                return Some(Err(RuntimeError::new("erro_troca_modo",
+                    "o Antigravity com terminal ainda não respondeu (abrindo ou na tela de primeiro uso); tente de novo quando ele estiver pronto")));
+            }
+            return None;
+        }
     }
     if terminal_open && terminal || headless_open && !terminal { return Some(Ok(json!({"ok": true, "terminal": terminal}))); }
     let _closed = match crate::runtime::lifecycle::ClosedIngress::acquire_exclusive(runtime.ingress(), name).await {
