@@ -173,9 +173,10 @@ fn remove_unmarked(env: &AccountEnvironment, path: &Path) -> Result<Vec<String>,
         if !skip { out.push_str(line); }
     }
     // A leitura por linha não vê tabela inline nem cabeçalho fora do formato: confere antes de gravar.
-    let fixed: Value = toml::from_str(&out).map_err(|_|"config-invalido-apos-limpeza".to_owned())?;
-    let left: Vec<&str> = ours.iter().filter(|n| !fixed["providers"][n.as_str()].is_null()).map(String::as_str).collect();
-    if !left.is_empty() { return Err(format!("nao-removido: {}",left.join(", "))); }
+    let fixed: Value = toml::from_str(&out).map_err(|e|format!("config-invalido-apos-limpeza (nada gravado): {e}"))?;
+    let left: Vec<&str> = ours.iter().filter(|n| !fixed["providers"][n.as_str()].is_null()
+        || fixed["models"].as_object().is_some_and(|m|m.keys().any(|k|k.starts_with(&format!("{n}/"))))).map(String::as_str).collect();
+    if !left.is_empty() { return Err(format!("nao-removido (nada gravado): {}",left.join(", "))); }
     backup(path)?; write_preserving(path,&out)?;
     Ok(ours)
 }
