@@ -793,9 +793,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   entrada na fila do Hangar (`terminal_turn_hold`, `delivered:false`) em vez de digitá-la. A fila
   drena com o Claude parado, composer legível e sem pergunta, um lote por vez, no tique do ator; a
   entrega que encontrou o Claude parado faz a próxima esperar até 3 s (`turn_start_wait`) pelo
-  turno que ela abriu. O agente da sessão, dono do registro nativo, é o Claude relançado como filho
-  único com os mesmos argumentos, quando há um; no marcador de hook, `awaiting_input` com a caixa
-  livre e sem pergunta conta como parado. Para despachar, a indicação de que a CLI só espera subagentes em segundo
+  turno que ela abriu. Sem `sessions/<agente>.json`, o registro nativo lido é o do filho
+  único com os mesmos argumentos (`native_owner`), e o agente gravado continua o pai; no marcador de
+  hook, `awaiting_input` com a caixa livre e sem pergunta conta como parado, na entrega e na guarda
+  de reabertura. Para despachar, a indicação de que a CLI só espera subagentes em segundo
   plano também libera o prompt legível e sem pergunta: a linha "Waiting for N background agents"
   ou, sem ela e sem linha viva acima da caixa, o painel de agentes (`◯ <subagente>`) abaixo dela. Recado com socket nativo (`[de: …]`,
   `[grupo: …]`, `[painel: …]`) e comando de barra não são segurados, e o recado passa no meio do turno
@@ -1270,7 +1271,8 @@ O Hangar lia o registro do pai, o log repetia "registro nativo ilegível", e a e
 (velho) e no marcador de hook, que dizia `awaiting_input` (o `Notification` de um minuto depois do
 turno). Como só `idle` contava como parado, a mensagem "a" ficou em `terminal_turn_hold` de
 17:52 UTC em diante com o Claude parado. A sessão `caso-leonardo`, na mesma versão, não se relançou;
-a causa do relançamento não foi achada.
+a causa do relançamento não foi achada. Trocar o pid gravado pelo do filho não serve: ele nasce depois
+da adoção, e o pid gravado entra na identidade da vida da sessão.
 
 ## Antigravity (agy) com terminal (23/11/2026)
 

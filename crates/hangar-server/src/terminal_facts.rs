@@ -66,9 +66,10 @@ impl TerminalMetadata {
             if matches.next().is_some() { return Err(ServiceError("terminal_metadata_ambiguous")); }
             let pid = row.agent_pid.and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0).ok_or(ServiceError("terminal_metadata_process_unavailable"))?;
             let birth = agent_birth(pid).ok_or(ServiceError("terminal_agent_unavailable"))?;
-            let record = read_native_record(&config.join("sessions").join(format!("{pid}.json")))?;
+            let owner = crate::list::discover::native_owner(&procs, &config, i64::from(pid));
+            let record = read_native_record(&config.join("sessions").join(format!("{owner}.json")))?;
             let proven = match record {
-                Some(record) => record["pid"].as_u64() == Some(u64::from(pid)) && record["sessionId"].as_str() == Some(&binding.conversation),
+                Some(record) => record["pid"].as_i64() == Some(owner) && record["sessionId"].as_str() == Some(&binding.conversation),
                 None => proven_without_record(plugin_agent, pid, row.repl_sid.as_deref() == Some(&binding.conversation) && row.transcript.as_ref().is_some_and(|source| source.tracked && source.jsonl.as_deref().is_some_and(|path| Path::new(path) == transcript))),
             };
             if !proven { return Err(ServiceError("terminal_native_record_changed")); }
@@ -179,7 +180,7 @@ impl LocalTerminalFacts {
         }).await.map_err(|_| ServiceError("terminal_files_unavailable"))??;
         let held = match &self.plugin { Some(store) => !store.pending_all(&Self::binding(target), Instant::now())?.is_empty(), None => false };
         if question || held { return Err(ServiceError("erro_sessao_esperando_resposta")); }
-        if hook.is_some_and(|state| state != "idle") { return Err(ServiceError("erro_sessao_trabalhando")); }
+        if hook.is_some_and(|state| state != "idle" && state != "awaiting_input") { return Err(ServiceError("erro_sessao_trabalhando")); }
         self.check_agent(target, binding).await.map(|_| ())
     }
     pub async fn read(&self, target: &TerminalTarget, binding: &TerminalBinding, text: &str) -> Result<InputFacts, ServiceError> {
@@ -310,8 +311,9 @@ pub(crate) fn read_native_record(path: &Path) -> Result<Option<Value>, ServiceEr
     Ok(None)
 }
 fn native_record(metadata: &TerminalMetadata, conversation: &str) -> Result<Option<Value>, ServiceError> {
-    let record = read_native_record(&metadata.config_dir.join("sessions").join(format!("{}.json", metadata.agent_pid)))?;
-    if let Some(record) = &record && (record["pid"].as_u64() != Some(u64::from(metadata.agent_pid)) || record["sessionId"].as_str() != Some(conversation)) { return Err(ServiceError("terminal_native_record_changed")); } Ok(record)
+    let owner = crate::list::discover::native_owner(&SystemProcs::default(), &metadata.config_dir, i64::from(metadata.agent_pid));
+    let record = read_native_record(&metadata.config_dir.join("sessions").join(format!("{owner}.json")))?;
+    if let Some(record) = &record && (record["pid"].as_i64() != Some(owner) || record["sessionId"].as_str() != Some(conversation)) { return Err(ServiceError("terminal_native_record_changed")); } Ok(record)
 }
 /// `recent`: o `/pull` visto há pouco cobre só a leitura que falta (nenhum transcript aberto, ou os arquivos
 /// do processo e as pastas que não se leem); nunca um transcript aberto ilegível, outro aberto ou mais de um.

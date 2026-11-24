@@ -576,22 +576,27 @@ fn agent_pane<'p>(panes: &[&'p Pane], procs: &dyn ProcessView, children: &Childr
 
 /// Qual agente roda no pane e o pid dele (`agente_do_pane`); sem agente, "claude" e nenhum pid.
 /// O argv íntegro, não o cmdline separado por espaço: no Windows o caminho do node tem espaço.
-fn agent_of_pane(tree: Option<&Tree>, procs: &dyn ProcessView, children: &ChildrenMap) -> (&'static str, Option<i64>) {
+fn agent_of_pane(tree: Option<&Tree>) -> (&'static str, Option<i64>) {
     tree.into_iter()
         .flat_map(|t| t.pids.iter().zip(&t.argvs))
         .filter(|(_, argv)| !is_aux(argv))
-        .find_map(|(p, argv)| provider_from_argv(argv)
-            .map(|prov| (prov, Some(if prov == "claude" { reexec_leaf(procs, *p, children) } else { *p }))))
+        .find_map(|(p, argv)| provider_from_argv(argv).map(|prov| (prov, Some(*p))))
         .unwrap_or(("claude", None))
 }
 
-/// O Claude nativo pode se relançar como filho único com os mesmos argumentos: o registro nativo
-/// (`sessions/<pid>.json`) e a conversa passam a ser do filho, e o pai só espera.
-pub(crate) fn reexec_leaf(procs: &dyn ProcessView, mut pid: i64, children: &ChildrenMap) -> i64 {
+/// Pid dono do `sessions/<pid>.json` do agente `pid`. O Claude nativo pode se relançar como filho único
+/// com os mesmos argumentos, e aí só o filho grava o registro; o pai segue sendo o agente da sessão.
+pub(crate) fn native_owner(procs: &dyn ProcessView, config: &Path, pid: i64) -> i64 {
+    if config.join("sessions").join(format!("{pid}.json")).exists() { return pid; }
+    // Sem a árvore, fica o próprio pid: o registro continua ausente e quem lê segue a prova sem ele.
+    procs.children(std::time::Duration::ZERO).map_or(pid, |children| reexec_leaf(procs, pid, &children))
+}
+
+fn reexec_leaf(procs: &dyn ProcessView, mut pid: i64, children: &ChildrenMap) -> i64 {
     let mut seen = HashSet::new();
     while seen.insert(pid) {
         let argv = procs.argv(pid);
-        let Some((_, args)) = argv.split_first() else { break };
+        let Some((_, args)) = argv.split_first().filter(|(_, args)| !args.is_empty()) else { break };
         let same: Vec<i64> = children.get(&pid).into_iter().flatten().copied()
             .filter(|child| procs.argv(*child).split_first().is_some_and(|(_, rest)| rest == args))
             .collect();
@@ -629,7 +634,7 @@ pub fn discover_panes(panes: &[Pane], procs: &dyn ProcessView, children: &Childr
         // pid 0 tem a máquina inteira embaixo no mapa.
         let pid = p.pid.filter(|pid| *pid != 0).map(i64::from);
         let tree = pid.map(|pid| Tree::new(procs, pid, children));
-        let (mut provider, agent_pid) = agent_of_pane(tree.as_ref(), procs, children);
+        let (mut provider, agent_pid) = agent_of_pane(tree.as_ref());
         if agent_pid.is_none() && tree.as_ref().is_some_and(|t| t.unreadable.is_some()) {
             // Pi, omp ou Kimi com o argv ilegível sairia `claude` sem ninguém saber.
             resolver.problems.note("list_argv_unreadable", &p.session, "argv do processo do pane ilegível; agente não reconhecido");
@@ -702,9 +707,9 @@ mod tests {
         fn fds(&self, _: i64) -> Vec<PathBuf> { Vec::new() }
     }
 
-    struct Argvs(HashMap<i64, Vec<String>>);
+    struct Argvs(HashMap<i64, Vec<String>>, ChildrenMap);
     impl ProcessView for Argvs {
-        fn children(&self, _: Duration) -> io::Result<Arc<ChildrenMap>> { Ok(Arc::default()) }
+        fn children(&self, _: Duration) -> io::Result<Arc<ChildrenMap>> { Ok(Arc::new(self.1.clone())) }
         fn argv(&self, pid: i64) -> Vec<String> { self.0.get(&pid).cloned().unwrap_or_default() }
         fn cwd(&self, _: i64) -> Option<PathBuf> { None }
         fn env_var(&self, _: i64, _: &str) -> io::Result<Option<OsString>> { Ok(None) }
@@ -713,15 +718,22 @@ mod tests {
     }
 
     #[test]
-    fn claude_relaunched_as_its_own_child_is_the_child() {
+    fn native_record_of_a_claude_relaunched_as_its_own_child_is_the_childs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sessions")).unwrap();
         let args = |exe: &str| [exe, "--session-id", "S", "prompt"].map(String::from).to_vec();
         let children = ChildrenMap::from([(10, vec![11]), (11, vec![12])]);
         let procs = Argvs(HashMap::from([(10, args("claude")), (11, args("/h/.local/share/claude/versions/2.1.331")),
-            (12, vec!["hangar-computer".into()])]));
-        assert_eq!(agent_of_pane(Some(&Tree::new(&procs, 10, &children)), &procs, &children), ("claude", Some(11)));
+            (12, vec!["hangar-computer".into()])]), children.clone());
+        assert_eq!(native_owner(&procs, dir.path(), 10), 11);
+        std::fs::write(dir.path().join("sessions").join("10.json"), "{}").unwrap();
+        assert_eq!(native_owner(&procs, dir.path(), 10), 10, "o registro do próprio pid vence");
         // Filho com outros argumentos é processo do Claude, não o próprio Claude relançado.
-        let other = Argvs(HashMap::from([(10, args("claude")), (11, vec!["/h/versions/2.1.331".into(), "-p".into(), "x".into()])]));
-        assert_eq!(agent_of_pane(Some(&Tree::new(&other, 10, &children)), &other, &children), ("claude", Some(10)));
+        let other = Argvs(HashMap::from([(20, args("claude")), (21, vec!["/h/versions/2.1.331".into(), "-p".into(), "x".into()])]),
+            ChildrenMap::from([(20, vec![21])]));
+        assert_eq!(native_owner(&other, dir.path(), 20), 20);
+        let bare = Argvs(HashMap::from([(30, vec!["claude".into()]), (31, vec!["bash".into()])]), ChildrenMap::from([(30, vec![31])]));
+        assert_eq!(native_owner(&bare, dir.path(), 30), 30, "sem argumentos não há o que comparar");
     }
 
     fn pane(name: &str, cwd: &str) -> Pane {
