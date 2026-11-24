@@ -239,6 +239,8 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
             .map_err(|_| RuntimeError::new("spec_job", "a gravação do registro não terminou"))?
             .map_err(|error| RuntimeError::new("erro_troca_modo", &format!("o registro da sessão não foi gravado: {:?}", error.kind())))?;
         if let Err(error) = open_agy_terminal(st, &home, &left.key, name, &left.conversation).await {
+            // O tmux não respondeu e o pane pode ter nascido: o registro fica com terminal, e o sem terminal não volta.
+            if error.code == crate::session_open::open::UNCERTAIN { return Err(error); }
             let (h, previous) = (home.clone(), spec.clone());
             let undone = tokio::task::spawn_blocking(move || crate::session_open::record::write(&h, &previous)).await;
             if !matches!(undone, Ok(Ok(()))) {
@@ -254,6 +256,7 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
             runtime.finish_leave_headless(name, &left.key).await;
             Some(Ok(json!({"ok": true, "terminal": true})))
         }
+        Err(error) if error.code == crate::session_open::open::UNCERTAIN => Some(Err(error)),
         Err(error) => {
             // O terminal não nasceu: a sessão volta sem terminal, na mesma conversa.
             if let Some(Err(reopen)) = runtime.open_antigravity_headless(name).await {
@@ -301,15 +304,18 @@ pub(crate) async fn antigravity_terminal_reopen(st: &Arc<AppState>, runtime: &Ar
     };
     write_record(&home, reopened(mode)).await?;
     if let Err(error) = runtime.stop_other_for_switch(name).await {
-        if let Err(undo) = write_record(&home, left.spec.clone()).await {
-            return Err(RuntimeError::new(&error.code, &format!("{}; o registro da sessão não voltou: {}", error.message, undo.message)));
-        }
-        return Err(error);
+        // Como na troca para sem terminal: o registro volta, e quem não fechou o pane já religou o ator nele.
+        let mut message = error.message.clone();
+        if let Err(undo) = write_record(&home, left.spec.clone()).await { message = format!("{message}; o registro da sessão não voltou: {}", undo.message); }
+        if runtime.other_info(name).await.is_none() { message = format!("{message}; o terminal pode ter fechado: reabra a sessão"); }
+        return Err(RuntimeError::new(&error.code, &message));
     }
     let Err(error) = open_agy_terminal(st, &home, &key, name, &left.conversation).await else {
         return Ok(json!({"ok": true, "mode": mode.name(), "current": mode.name(), "requested": mode.name(), "changed": true,
             "previous_non_plan": null, "reopened": true}));
     };
+    // O tmux não respondeu e o pane pode ter nascido no modo novo: o registro fica nele, e abrir outro duplicaria.
+    if error.code == crate::session_open::open::UNCERTAIN { return Err(error); }
     let back = match write_record(&home, reopened(left.mode)).await {
         Ok(()) => open_agy_terminal(st, &home, &key, name, &left.conversation).await,
         Err(undo) => Err(undo),
