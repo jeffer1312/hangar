@@ -314,5 +314,9 @@ fn a_session_born_without_the_long_deadline_is_detected_where_readable() {
     assert!(exec::lacks_deadline("codex", Some("[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n")));
     assert!(exec::lacks_deadline("codex", Some("[mcp_servers.hangar]\ntool_timeout_sec = 60\n")), "o padrão do Codex");
     assert!(!exec::lacks_deadline("codex", None), "config.toml não lido segue");
+    assert!(!exec::lacks_deadline("antigravity", Some(r#"{"mcpServers": {"hangar": {"command": "x", "timeoutSeconds": 660}}}"#)));
+    assert!(!exec::lacks_deadline("antigravity", Some(r#"{"mcpServers": {"hangar": {"timeoutSeconds": -1}}}"#)), "negativo desliga o prazo");
+    assert!(exec::lacks_deadline("antigravity", Some(r#"{"mcpServers": {"hangar": {"command": "x"}}}"#)), "o padrão do agy: 180 s");
+    assert!(!exec::lacks_deadline("antigravity", None), "mcp_config.json não lido segue");
     assert!(exec::env_name_ok("CF_TOKEN") && !exec::env_name_ok("1X") && !exec::env_name_ok("A-B") && !exec::env_name_ok("CP_AUTH_TOKEN"));
 }

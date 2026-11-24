@@ -2512,6 +2512,17 @@ if (-not $bash) {
     if (Escrever-Lancador $lancadorMcp $conteudoMcp 'cmd') { Ok "lancador hangar-mcp-headers.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-mcp-headers.cmd ja atualizado' }
 
+    # O MCP `hangar` por stdio do `agy`, que so manda cabecalho fixo: o mcp_config.json grava este caminho.
+    # Nada pode sair no stdout antes do servidor: ele e o canal do MCP.
+    $lancadorMcpStdio = Join-Path $binUsuario 'hangar-mcp-stdio.cmd'
+    $conteudoMcpStdio = "@echo off`r`n" +
+                        "setlocal`r`n" +
+                        (Achar-Servidor 'hangar-mcp-stdio' '1') +
+                        "`"%HANGAR_SERVER_BIN%`" mcp-stdio --root `"$raizAtalhos`"`r`n" +
+                        "exit /b %ERRORLEVEL%`r`n"
+    if (Escrever-Lancador $lancadorMcpStdio $conteudoMcpStdio 'cmd') { Ok "lancador hangar-mcp-stdio.cmd criado em $binUsuario" }
+    else { Ok 'lancador hangar-mcp-stdio.cmd ja atualizado' }
+
     # (2e) lancadores do Codex. O `hangar-codex-tui` e o COMANDO do pane de toda sessao Codex, e o
     # backend o procura com `shutil.which` (registry._exigir_lancador_codex). No Windows o `which`
     # so acha o que casa PATHEXT (.COM;.EXE;.BAT;.CMD;...), entao arquivo SEM extensao nunca e
