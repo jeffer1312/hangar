@@ -141,10 +141,6 @@ fn refuse(message:&str) -> RuntimeError { RuntimeError::new("erro_troca_modo",me
 fn waiting(rows:&Value) -> bool { rows.as_array().is_some_and(|rows|rows.iter().any(|row|row["delivered"] == false)) }
 
 impl RuntimeRegistry {
-    /// Com terminal → sem terminal, sob a porta de entrada que quem chama segura: o pane sai sem a limpeza do
-    /// fechamento (grupo, convites, fila e `then` ficam), o sidecar sem terminal nasce com a mesma chave e
-    /// conversa, o spec troca de superfície e o ator ACP abre pelo `session/resume`. `None`: não é Antigravity
-    /// com terminal aberto aqui.
     /// O Antigravity com terminal pronto para sair do pane: ocioso, sem pergunta, com conversa e fila vazia. `None`:
     /// não é Antigravity com terminal aberto aqui.
     pub async fn antigravity_terminal_left(&self,name:&str,headless:bool) -> Option<Result<TerminalLeft,RuntimeError>> {
@@ -190,6 +186,10 @@ impl RuntimeRegistry {
         Ok(spec.is_some_and(|spec|spec.permission_mode == Some(crate::session_open::PermissionMode::BypassPermissions)))
     }
 
+    /// Com terminal → sem terminal, sob a porta de entrada que quem chama segura: o pane sai sem a limpeza do
+    /// fechamento (grupo, convites, fila e `then` ficam), o sidecar sem terminal nasce com a mesma chave e
+    /// conversa, o spec troca de superfície e o ator ACP abre pelo `session/resume`. `None`: não é Antigravity
+    /// com terminal aberto aqui.
     pub async fn antigravity_to_headless(&self,name:&str) -> Option<Result<Value,RuntimeError>> {
         let left = self.antigravity_terminal_left(name,true).await?;
         Some(async {

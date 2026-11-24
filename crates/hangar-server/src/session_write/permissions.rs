@@ -117,7 +117,12 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
             EntryHandle::Terminal {handle,..}=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),if let Some(mode)=&mode {json!({"mode":mode})} else {json!({"probe":probe})}).await?,
             EntryHandle::OtherTerminal {handle,..} if target.provider=="antigravity"=> {
                 // O bypass é flag do processo e não aparece no rodapé: o registro da abertura diz se ele está ligado.
-                let bypass=runtime.antigravity_spec_bypass(&target.key).await?;
+                let bypass=match runtime.antigravity_spec_bypass(&target.key).await {
+                    Ok(bypass)=>bypass,
+                    // Ler segue pelo rodapé; trocar sem saber de onde parte reabriria às cegas.
+                    Err(error) if !set=>{tracing::warn!(session=%name,code=%error.code,"registro do Antigravity ilegível; o modo vem do rodapé");false},
+                    Err(error)=>return Err(error),
+                };
                 let wanted=mode.as_deref()==Some("bypassPermissions");
                 if set && wanted!=bypass {
                     drop(held);

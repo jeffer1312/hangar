@@ -35,8 +35,14 @@ impl FileCache {
     fn agy_bypass(&mut self, target: &OtherTarget) -> bool {
         let life = (target.key.clone(), target.agent_pid);
         if let Some((seen, bypass)) = &self.agy_bypass && *seen == life { return *bypass; }
-        let Ok(spec) = crate::session_open::record::read(&target.dirs.home, &target.key) else { return false };
-        let bypass = spec.is_some_and(|spec| spec.permission_mode == Some(crate::session_open::PermissionMode::BypassPermissions));
+        let bypass = match crate::session_open::record::read(&target.dirs.home, &target.key) {
+            Ok(spec) => spec.is_some_and(|spec| spec.permission_mode == Some(crate::session_open::PermissionMode::BypassPermissions)),
+            // Guardado também na falha: reler a cada rodada faria o modo da tela alternar.
+            Err(error) => {
+                tracing::warn!(session = %target.name, kind = ?error.kind(), "registro do Antigravity ilegível; o modo vem do rodapé");
+                false
+            }
+        };
         self.agy_bypass = Some((life, bypass));
         bypass
     }
