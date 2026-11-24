@@ -31,7 +31,6 @@ fn provider_hooks_kimi_turn_permission_and_question_events() {
     let root = tempfile::tempdir().unwrap();
     for (event, tool, expected) in [
         ("UserPromptSubmit", "", "working"),
-        ("TurnStarted", "", "working"),
         ("Stop", "", "idle"),
         ("Interrupt", "", "idle"),
         ("PermissionRequest", "", "awaiting_input"),
@@ -243,13 +242,32 @@ fn provider_hooks_installer_migrates_python_preserves_toml_and_backup() {
     assert!(!first.contains("python"));
     assert!(!first.contains(".py"));
     let data: toml::Value = toml::from_str(&first).unwrap();
-    assert_eq!(data["hooks"].as_array().unwrap().len(), 10);
+    assert_eq!(data["hooks"].as_array().unwrap().len(), 9);
     assert_eq!(
         std::fs::read_to_string(root.path().join(".kimi-code/config.toml.bak-hangar")).unwrap(),
         raw
     );
     assert!(kimi_hooks::sync(&env, root.path()).unwrap().is_empty());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+}
+
+/// O Kimi Code recusa gravar a configuração com evento que ele não conhece; o `TurnStarted` que o
+/// Hangar instalava sai na subida, e o resto do arquivo fica.
+#[test]
+fn provider_hooks_kimi_repair_drops_the_retired_turn_started_hook() {
+    use hangar_server::{accounts::environment::AccountEnvironment, harness_setup::kimi_hooks};
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join(".kimi-code")).unwrap();
+    let path = root.path().join(".kimi-code/config.toml");
+    let raw = "default_model = 'k3'\n\n# hangar: integração da sessão.\n[[hooks]]\nevent = 'TurnStarted'\ncommand = 'python /antigo/backend/hooks/kimi_state_hook.py'\ntimeout = 5\n\n[[hooks]]\nevent = 'TurnStarted'\ncommand = 'notifier --pessoal'\n";
+    std::fs::write(&path, raw).unwrap();
+    let env = AccountEnvironment::from_map(
+        [("HOME".into(), root.path().to_string_lossy().into_owned())].into(),
+    );
+    assert_eq!(kimi_hooks::repair(&env).unwrap().len(), 1);
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(fixed, "default_model = 'k3'\n\n[[hooks]]\nevent = 'TurnStarted'\ncommand = 'notifier --pessoal'\n");
+    assert!(kimi_hooks::repair(&env).unwrap().is_empty());
 }
 
 #[test]
@@ -371,7 +389,7 @@ fn provider_hooks_kimi_concurrent_processes_publish_complete_json() {
         let handles: Vec<_> = (0..12).map(|i| {
             let root = root.path();
             scope.spawn(move || {
-                run(root, "kimi-state-hook", &serde_json::to_vec(&json!({"session_id":"same","hook_event_name":"TurnStarted","cwd":format!("/ação/{i}")})).unwrap(), &[("TMUX_PANE", "%2")])
+                run(root, "kimi-state-hook", &serde_json::to_vec(&json!({"session_id":"same","hook_event_name":"UserPromptSubmit","cwd":format!("/ação/{i}")})).unwrap(), &[("TMUX_PANE", "%2")])
             })
         }).collect();
         for handle in handles {
@@ -545,7 +563,7 @@ fn provider_hooks_guard_wrong_command_logs_code_and_ignores_other_tools() {
 }
 
 #[test]
-fn provider_hooks_installer_creates_missing_config_with_nine_native_entries() {
+fn provider_hooks_installer_creates_missing_config_with_eight_native_entries() {
     use hangar_server::{accounts::environment::AccountEnvironment, harness_setup::kimi_hooks};
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join(".kimi-code")).unwrap();
@@ -585,7 +603,6 @@ fn provider_hooks_installer_creates_missing_config_with_nine_native_entries() {
         let mut expected = vec![
             ("SessionStart", None, "kimi-state-hook"),
             ("UserPromptSubmit", None, "kimi-state-hook"),
-            ("TurnStarted", None, "kimi-state-hook"),
             ("Stop", None, "kimi-state-hook"),
             ("Interrupt", None, "kimi-state-hook"),
             ("PermissionRequest", None, "kimi-state-hook"),

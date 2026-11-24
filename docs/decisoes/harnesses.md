@@ -8,7 +8,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **O Kimi fica só com os provedores dele: motor nenhum vai ao `config.toml` do Kimi.** O espelho de
   credenciais (`engines/mirrors.rs`) leva motores só ao Pi e ao Codex (`SYNC_TARGETS`); "Sincronizar"
   e o reparo de credenciais da saúde não oferecem o Kimi, e a subida tira os blocos
-  `# >>> hangar: provedor …` que versões antigas gravaram lá (`purge_kimi`). Ver
+  `# >>> hangar: provedor …` que versões antigas gravaram lá (`purge_kimi`). Hook do Hangar no Kimi
+  só com evento que o Kimi Code conhece: o `TurnStarted` antigo sai no reparo da subida
+  (`kimi_hooks::RETIRED_EVENTS`). Ver
   [Kimi só com os provedores dele](#kimi-só-com-os-provedores-dele-24112026).
 
 - **Antigravity (`agy`) roda o binário oficial do Google, sem ler o login nem chamar o Google.**
@@ -3351,6 +3353,13 @@ causa escondida era `Model "astra/gpt-5.6-terra" must define a positive max_cont
 também enchiam o seletor de modelos do Kimi com modelos que não são dele. Decisão do usuário: o Kimi
 fica só com os provedores dele. O espelho leva motores ao Pi e ao Codex; a subida e o
 `DELETE /api/credenciais/kimi/{nome}` tiram os blocos antigos.
+
+Tirados os motores, o login ainda recusava: o Hangar instalava um hook `TurnStarted`, e o Kimi Code
+2.7.3 só aceita `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`,
+`PermissionResult`, `UserPromptSubmit`, `Stop`, `StopFailure`, `Interrupt`, `SessionStart`,
+`SessionEnd`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact` e `Notification`. O evento
+nunca disparava (o `UserPromptSubmit` já marca "trabalhando"); saiu da lista instalada, e o reparo da
+subida tira a entrada antiga com o comentário do Hangar acima dela.
 
 ## Painel de saúde dos harnesses
 
