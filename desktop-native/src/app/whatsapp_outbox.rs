@@ -28,7 +28,7 @@ pub(super) struct DraftFile {
 
 /// O rascunho do C5, só com o que o cartão mostra.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
-pub(super) struct Draft {
+pub(crate) struct Draft {
     id: String,
     origin: String,
     chat_number: String,
@@ -151,9 +151,13 @@ pub(super) struct Countdown { expires: String }
 
 impl Render for Countdown {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let left = countdown(seconds_left(&self.expires, chrono::Utc::now()));
-        div().flex_shrink_0().font_weight(FontWeight::NORMAL).text_color(theme::muted()).child(tr_shared("whatsapp_draft_expires_in", &[("time", &left)]))
+        countdown_label(&countdown(seconds_left(&self.expires, chrono::Utc::now())))
     }
+}
+
+/// O "expira em 9:12" do cabeçalho do cartão.
+pub(crate) fn countdown_label(left: &str) -> Div {
+    div().flex_shrink_0().font_weight(FontWeight::NORMAL).text_color(theme::muted()).child(tr_shared("whatsapp_draft_expires_in", &[("time", left)]))
 }
 
 fn countdown_view(expires: String, cx: &mut App) -> Entity<Countdown> {
@@ -255,53 +259,57 @@ impl WhatsAppOutbox {
     }
 
     fn render_card(&self, card: &Card, cx: &mut Context<Self>) -> AnyElement {
-        let d = &card.draft;
-        let id = d.id.clone();
-        let off = card.sending;
+        let (id, off) = (card.draft.id.clone(), card.sending);
         let send = request_button("whatsapp-send", &id, tr_shared("whatsapp_draft_send", &[]), off).primary().on_click(answer_on(&id, true, cx));
         let decline = request_button("whatsapp-decline", &id, tr_shared("whatsapp_draft_decline", &[]), off).outline().on_click(answer_on(&id, false, cx));
-        let title = tr_shared("whatsapp_draft_wants", &[("origin", &d.origin)]);
-        let heading = div().flex().justify_between().gap_2().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning())
-            .child(div().min_w_0().whitespace_normal().child(format!("{} · {}", tr_shared("whatsapp_draft_title", &[]), self.machine)))
-            .child(card.clock.clone());
-        let source = d.chat_name_source.as_deref().and_then(|s| match s {
-            "contact" => Some("whatsapp_draft_source_contact"), "push" => Some("whatsapp_draft_source_push"), "group" => Some("whatsapp_draft_source_group"), _ => None,
-        }).map(|key| tr_shared(key, &[]));
-        let name = d.chat_name.clone().unwrap_or_default();
-        let destination = div().flex().flex_wrap().items_baseline().gap_2()
-            .child(div().px(px(7.)).py(px(2.)).rounded(px(5.)).bg(theme::boxed()).font_family(theme::MONO).text_size(px(14.))
-                .font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(d.chat_number.clone()))
-            .when(!name.is_empty() || source.is_some(), |el| el.child(div().flex().items_center().gap_1().text_color(theme::muted())
-                .when(!name.is_empty(), |el| el.child(name.clone()))
-                .children(source.map(|s| div().px(px(5.)).rounded(px(4.)).border_1().border_color(theme::border()).child(s)))));
-        let recent = d.recent.clone().unwrap_or_default();
-        let quoted = d.quoted_text.clone().unwrap_or_default();
-        let (shown, marks) = mark_invisibles(&d.text);
-        let mark = HighlightStyle { color: Some(theme::warning()), background_color: Some(theme::warning().opacity(0.14)), ..Default::default() };
-        let text = (!d.text.is_empty()).then(|| div().id(SharedString::from(format!("whatsapp-text-{id}"))).max_h(px(132.)).overflow_y_scroll()
-            .px(px(8.)).py(px(6.)).rounded(px(5.)).bg(theme::boxed()).font_family(theme::MONO).text_color(theme::text()).whitespace_normal()
-            .child(StyledText::new(shown).with_highlights(marks.into_iter().map(|range| (range, mark)))));
-        div().id(SharedString::from(format!("whatsapp-draft-{id}"))).flex_shrink_0().mx(px(8.)).my(px(4.)).p_2().rounded(px(8.)).bg(theme::inset())
-            .flex().flex_col().gap_1().text_xs().text_color(theme::text()).role(Role::Group).aria_label(title.clone())
-            .child(heading)
-            .child(div().whitespace_normal().child(title))
-            .child(destination)
-            .when(d.chat_name_source.as_deref() == Some("push"), |el| el.child(warn_line(tr_shared("whatsapp_draft_push_warning", &[]))))
-            .when(!recent.is_empty(), |el| el.child(label(tr_shared("whatsapp_draft_recent", &[])))
-                .child(div().border_l_2().border_color(theme::border()).pl_2().flex().flex_col().gap(px(2.)).children(recent.iter().map(recent_line))))
-            .when(!quoted.is_empty(), |el| el.child(label(tr_shared("whatsapp_draft_quoted", &[])))
-                .child(div().border_l_2().border_color(theme::accent()).bg(theme::accent_dim()).px_2().py_1().rounded_r(px(5.))
-                    .text_color(theme::muted()).whitespace_normal().child(quoted.clone())))
-            .when_some(text, |el, text| el
-                .child(label(tr_shared("whatsapp_draft_text", &[("count", &d.text.chars().count().to_string())])))
-                .child(text))
-            .when_some(d.file.as_ref(), |el, file| el.child(label(tr_shared("whatsapp_draft_attachment", &[]))).child(file_row(file))
-                .when(file.outside_cwd.unwrap_or(true), |el| el.child(warn_line(tr_shared("whatsapp_draft_outside_cwd", &[])))))
-            .child(request_pair(send, decline))
-            .children(card.error.clone().map(|error| div().id(SharedString::from(format!("whatsapp-draft-error-{id}"))).role(Role::Alert)
-                .text_color(theme::danger()).whitespace_normal().child(error)))
-            .into_any_element()
+        draft_card(&card.draft, &self.machine, card.clock.clone(), send, decline, card.error.clone()).into_any_element()
     }
+}
+
+/// O cartão de um rascunho, só desenho: a tela passa a contagem viva e os botões com clique; a novidade da atualização, a
+/// contagem parada e os botões sem clique.
+pub(crate) fn draft_card(d: &Draft, machine: &str, clock: impl IntoElement, send: Button, decline: Button, error: Option<String>) -> Stateful<Div> {
+    let id = &d.id;
+    let title = tr_shared("whatsapp_draft_wants", &[("origin", &d.origin)]);
+    let heading = div().flex().justify_between().gap_2().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning())
+        .child(div().min_w_0().whitespace_normal().child(format!("{} · {}", tr_shared("whatsapp_draft_title", &[]), machine)))
+        .child(clock);
+    let source = d.chat_name_source.as_deref().and_then(|s| match s {
+        "contact" => Some("whatsapp_draft_source_contact"), "push" => Some("whatsapp_draft_source_push"), "group" => Some("whatsapp_draft_source_group"), _ => None,
+    }).map(|key| tr_shared(key, &[]));
+    let name = d.chat_name.clone().unwrap_or_default();
+    let destination = div().flex().flex_wrap().items_baseline().gap_2()
+        .child(div().px(px(7.)).py(px(2.)).rounded(px(5.)).bg(theme::boxed()).font_family(theme::MONO).text_size(px(14.))
+            .font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(d.chat_number.clone()))
+        .when(!name.is_empty() || source.is_some(), |el| el.child(div().flex().items_center().gap_1().text_color(theme::muted())
+            .when(!name.is_empty(), |el| el.child(name.clone()))
+            .children(source.map(|s| div().px(px(5.)).rounded(px(4.)).border_1().border_color(theme::border()).child(s)))));
+    let recent = d.recent.clone().unwrap_or_default();
+    let quoted = d.quoted_text.clone().unwrap_or_default();
+    let (shown, marks) = mark_invisibles(&d.text);
+    let mark = HighlightStyle { color: Some(theme::warning()), background_color: Some(theme::warning().opacity(0.14)), ..Default::default() };
+    let text = (!d.text.is_empty()).then(|| div().id(SharedString::from(format!("whatsapp-text-{id}"))).max_h(px(132.)).overflow_y_scroll()
+        .px(px(8.)).py(px(6.)).rounded(px(5.)).bg(theme::boxed()).font_family(theme::MONO).text_color(theme::text()).whitespace_normal()
+        .child(StyledText::new(shown).with_highlights(marks.into_iter().map(|range| (range, mark)))));
+    div().id(SharedString::from(format!("whatsapp-draft-{id}"))).flex_shrink_0().mx(px(8.)).my(px(4.)).p_2().rounded(px(8.)).bg(theme::inset())
+        .flex().flex_col().gap_1().text_xs().text_color(theme::text()).role(Role::Group).aria_label(title.clone())
+        .child(heading)
+        .child(div().whitespace_normal().child(title))
+        .child(destination)
+        .when(d.chat_name_source.as_deref() == Some("push"), |el| el.child(warn_line(tr_shared("whatsapp_draft_push_warning", &[]))))
+        .when(!recent.is_empty(), |el| el.child(label(tr_shared("whatsapp_draft_recent", &[])))
+            .child(div().border_l_2().border_color(theme::border()).pl_2().flex().flex_col().gap(px(2.)).children(recent.iter().map(recent_line))))
+        .when(!quoted.is_empty(), |el| el.child(label(tr_shared("whatsapp_draft_quoted", &[])))
+            .child(div().border_l_2().border_color(theme::accent()).bg(theme::accent_dim()).px_2().py_1().rounded_r(px(5.))
+                .text_color(theme::muted()).whitespace_normal().child(quoted.clone())))
+        .when_some(text, |el, text| el
+            .child(label(tr_shared("whatsapp_draft_text", &[("count", &d.text.chars().count().to_string())])))
+            .child(text))
+        .when_some(d.file.as_ref(), |el, file| el.child(label(tr_shared("whatsapp_draft_attachment", &[]))).child(file_row(file))
+            .when(file.outside_cwd.unwrap_or(true), |el| el.child(warn_line(tr_shared("whatsapp_draft_outside_cwd", &[])))))
+        .child(request_pair(send, decline))
+        .children(error.map(|error| div().id(SharedString::from(format!("whatsapp-draft-error-{id}"))).role(Role::Alert)
+            .text_color(theme::danger()).whitespace_normal().child(error)))
 }
 
 fn label(text: String) -> Div { div().mt(px(3.)).text_color(theme::faint()).child(text) }

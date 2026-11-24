@@ -131,12 +131,9 @@ function useNow(): number {
 }
 
 function DraftCard({ server, draft, onDone }: { server: Server; draft: WhatsAppDraft; onDone: () => void }) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
   const now = useNow();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const warn = theme.tokens.status.warning;
 
   const answer = async (kind: WhatsAppDraftAnswer) => {
     if (busy) return;
@@ -166,6 +163,20 @@ function DraftCard({ server, draft, onDone }: { server: Server; draft: WhatsAppD
     } finally { setBusy(false); }
   };
 
+  return <DraftCardView draft={draft} now={now} busy={busy} error={error} onAnswer={(kind) => void answer(kind)} />;
+}
+
+/** O cartão do rascunho, só desenho: a folha passa o estado e a resposta; a novidade da atualização, um quadro do roteiro. */
+export function DraftCardView({ draft, now, busy, error, onAnswer }: {
+  draft: WhatsAppDraft;
+  now: number;
+  busy: boolean;
+  error: string;
+  onAnswer: (kind: WhatsAppDraftAnswer) => void;
+}) {
+  const { theme } = useUnistyles();
+  const c = useSettingsColors();
+  const warn = theme.tokens.status.warning;
   const source = SOURCE[draft.chat_name_source]?.();
   const file = draft.file;
   return <>
@@ -209,8 +220,8 @@ function DraftCard({ server, draft, onDone }: { server: Server; draft: WhatsAppD
     </MachineGroup> : null}
     <Notice text={error} error />
     <MachineGroup>
-      <MachineRow title={m.whatsapp_draft_send()} action disabled={busy} onPress={() => void answer('send')} />
-      <MachineRow title={m.whatsapp_draft_decline()} danger disabled={busy} onPress={() => void answer('decline')} />
+      <MachineRow title={m.whatsapp_draft_send()} action disabled={busy} onPress={() => onAnswer('send')} />
+      <MachineRow title={m.whatsapp_draft_decline()} danger disabled={busy} onPress={() => onAnswer('decline')} />
     </MachineGroup>
   </>;
 }
