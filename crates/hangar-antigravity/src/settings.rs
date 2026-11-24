@@ -69,6 +69,9 @@ fn read(path: &Path) -> Result<Map<String, Value>, Error> {
 }
 
 fn write(path: &Path, doc: &Map<String, Value>) -> io::Result<()> {
+    // `settings.json` ligado a um dotfile: grava no alvo, senão o rename trocaria o link por um arquivo comum.
+    let real = std::fs::canonicalize(path);
+    let path = match &real { Ok(real) => real.as_path(), Err(_) => path };
     if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
     let mut bytes = serde_json::to_vec_pretty(doc).map_err(io::Error::other)?;
     bytes.push(b'\n');
@@ -114,6 +117,22 @@ mod tests {
         assert_eq!(allowed.len(), 1 + HANGAR_RULES.len());
         assert_eq!(doc["permissions"]["deny"][0], "command(sudo *)");
         assert!(!allowed.contains(&"command(hangar-send)"), "criar sessão fica de fora");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_file_stays_a_link_and_the_target_gets_the_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("dotfiles-settings.json");
+        std::fs::write(&target, "{}").unwrap();
+        let path = dir.path().join("settings.json");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(allow(&path, &HANGAR_RULES).unwrap());
+        assert!(trust_workspace(&path, Path::new("/home/u/proj")).unwrap());
+        assert!(std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+        assert_eq!(doc["permissions"]["allow"].as_array().unwrap().len(), HANGAR_RULES.len());
+        assert_eq!(doc[TRUSTED], serde_json::json!(["/home/u/proj"]));
     }
 
     #[test]

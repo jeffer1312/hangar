@@ -1633,7 +1633,8 @@ async fn agy_terms_answer(control: &mut Control<'_>, option: usize) -> Result<Ot
             control.write("Enter", false, true).await?;
             control.pause(SETTLE, true).await?;
             let frame = control.frame(false, true).await?;
-            return Ok(if agy_terms(&frame.text).is_some_and(|after| after.focus == button) {
+            // Captura vazia no meio do redesenho não prova que o botão funcionou.
+            return Ok(if frame.text.trim().is_empty() || agy_terms(&frame.text).is_some_and(|after| after.focus == button) {
                 control.unknown("erro_sem_confirmacao_resposta")
             } else {
                 control.reply(RuntimeDisposition::Accepted, json!({"ok":true}))

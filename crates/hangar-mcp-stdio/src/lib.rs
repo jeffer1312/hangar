@@ -136,6 +136,8 @@ struct Bridge {
     session: Mutex<Option<String>>,
     protocol: Mutex<Option<String>>,
     init: Mutex<Option<Value>>,
+    /// Reabertura que não terminou: sem sessão o servidor recusa o pedido comum, então o próximo refaz o handshake.
+    stale: Mutex<bool>,
     out: mpsc::UnboundedSender<String>,
 }
 
@@ -145,7 +147,7 @@ impl Bridge {
         let client = hangar_core::net::http_client().no_proxy().connect_timeout(CONNECT_TIMEOUT).build()
             .unwrap_or_else(|_| reqwest::Client::new());
         let token = read_token(&config.env_file).unwrap_or_default();
-        Self { client, config, token: Mutex::new(token), session: Mutex::new(None), protocol: Mutex::new(None), init: Mutex::new(None), out }
+        Self { client, config, token: Mutex::new(token), session: Mutex::new(None), protocol: Mutex::new(None), init: Mutex::new(None), stale: Mutex::new(false), out }
     }
 
     fn emit(&self, message: &Value) {
@@ -154,7 +156,13 @@ impl Bridge {
 
     /// Um envio do agente; pedido que não chega ao servidor volta ao agente como erro, nunca em silêncio.
     async fn exchange(&self, message: Value) {
-        if let Err(reason) = self.forward(&message, Sink::Agent).await
+        let result = async {
+            if method(&message) != Some("initialize") && *self.stale.lock().unwrap() {
+                self.reopen().await?;
+            }
+            self.forward(&message, Sink::Agent).await
+        }.await;
+        if let Err(reason) = result
             && let Some(id) = request_id(&message)
         {
             self.emit(&json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": format!("hangar mcp-stdio: {reason}")}}));
@@ -162,19 +170,23 @@ impl Bridge {
     }
 
     async fn forward(&self, message: &Value, sink: Sink) -> Result<(), String> {
-        let mut retried = false;
+        // Cada recuperação uma vez só: token relido e sessão reaberta não gastam a vez uma da outra.
+        let (mut token_reread, mut reopened) = (false, false);
         loop {
             let response = self.post(message).await.map_err(|error| format!("o hangar-server não respondeu em {}: {error}", self.config.url))?;
             let status = response.status();
-            if !retried && status == reqwest::StatusCode::UNAUTHORIZED {
+            if !token_reread && status == reqwest::StatusCode::UNAUTHORIZED {
                 // O token pode ter mudado com o servidor de pé.
-                retried = true;
+                token_reread = true;
                 *self.token.lock().unwrap() = read_token(&self.config.env_file)?;
                 continue;
             }
-            if !retried && status == reqwest::StatusCode::NOT_FOUND && method(message) != Some("initialize") && self.session.lock().unwrap().is_some() {
+            // Só pedido do agente reabre: o `notifications/initialized` da própria reabertura não entra em laço.
+            if !reopened && sink == Sink::Agent && status == reqwest::StatusCode::NOT_FOUND && method(message) != Some("initialize")
+                && self.session.lock().unwrap().is_some()
+            {
                 // Servidor reiniciado esquece a sessão MCP: abre outra com o mesmo `initialize` e repete.
-                retried = true;
+                reopened = true;
                 self.reopen().await?;
                 continue;
             }
@@ -260,10 +272,13 @@ impl Bridge {
     /// Abre outra sessão MCP com o `initialize` que o agente mandou; a resposta fica aqui.
     async fn reopen(&self) -> Result<(), String> {
         let Some(mut init) = self.init.lock().unwrap().clone() else { return Err("sessão MCP perdida antes do initialize".into()) };
+        *self.stale.lock().unwrap() = true;
         *self.session.lock().unwrap() = None;
         init["id"] = json!(REOPEN_ID);
         Box::pin(self.forward(&init, Sink::Discard)).await?;
-        Box::pin(self.forward(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}), Sink::Discard)).await
+        Box::pin(self.forward(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}), Sink::Discard)).await?;
+        *self.stale.lock().unwrap() = false;
+        Ok(())
     }
 
     /// Fecha a sessão MCP no servidor; sem resposta em pouco tempo, o servidor a esquece sozinho.

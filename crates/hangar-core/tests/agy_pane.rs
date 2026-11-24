@@ -120,4 +120,7 @@ fn the_color_scheme_screen_of_the_first_use_is_a_question_too() {
     let analysis = agy_analyze(&fixture("onboarding-colors.txt"));
     assert_eq!((analysis.state.as_str(), analysis.options.map(|o| o.len())), ("awaiting_input", Some(8)));
     assert_eq!(agy_onboarding_list(&fixture("terms.txt")), None);
+    // Marcadores fora de ordem numa conversa: nada de pânico, e não é a tela.
+    assert_eq!(agy_onboarding_list("[Next]\nChoose your color scheme:\n"), None);
+    agy_analyze("[Next]\nChoose your color scheme:\n");
 }

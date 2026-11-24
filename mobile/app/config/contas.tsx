@@ -291,8 +291,11 @@ function ServerAccounts({ server }: { server: Server | null }) {
     const home = account.pasta.replace(/[\\/][^\\/]+[\\/]?$/, '');
     try {
       const session = await createSessionForServer(server, { name: 'agy-termos', cwd: home, provider: 'antigravity', headless: false });
+      // A tela desmontou (troca de servidor): navegar agora tiraria a pessoa do servidor novo.
+      if (!alive.current) return;
       router.push(`/s/${server.id}/${session.name}` as never);
     } catch (error) {
+      if (!alive.current) return;
       Alert.alert(m.mobile_antigravity_accept_terms(), error instanceof Error ? error.message : String(error));
     }
   };

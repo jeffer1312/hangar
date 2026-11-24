@@ -597,6 +597,8 @@ pub fn agy_onboarding_list(pane: &str) -> Option<(String, Vec<String>, usize)> {
     let lines = lines(pane);
     let title = lines.iter().position(|l| trim(l).starts_with("Choose your color scheme"))?;
     let next = lines.iter().rposition(|l| trim(l) == "[Next]" || trim(l) == "> Next" || trim(l) == ">  Next")?;
+    // Os marcadores fora de ordem (texto de conversa, não a tela) fariam o fatiamento entrar em pânico.
+    if next <= title { return None; }
     let left_of = |line: &str| trim(line.split('│').next().unwrap_or(line)).to_owned();
     let mut options = Vec::new();
     let mut cursor = None;

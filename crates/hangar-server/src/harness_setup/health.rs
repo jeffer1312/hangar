@@ -633,7 +633,7 @@ pub fn claude_hooks(directory: &Path) -> Value {
 
 /// A entrada do Hangar em toda conta onde o `agy` já rodou; sem ela o pane não acha a conversa.
 pub fn agy_hooks(home: &Path) -> Value {
-    use hangar_antigravity::hooks::{ENTRY, EVENTS};
+    use hangar_antigravity::hooks::{ENTRY, EVENTS, GUARD_MATCHER};
     let mut used = false;
     let mut missing: Vec<&str> = Vec::new();
     for account in hangar_antigravity::paths::known_accounts(home) {
@@ -658,6 +658,15 @@ pub fn agy_hooks(home: &Path) -> Value {
                 missing.push(event);
             }
         }
+        // Sem a guarda o agy roda tmux e lê o arquivo do cofre sem conferência.
+        let guarded = doc[ENTRY]["PreToolUse"].as_array().into_iter().flatten().any(|block| {
+            block["matcher"] == GUARD_MATCHER
+                && block["hooks"].as_array().into_iter().flatten()
+                    .any(|handler| handler["command"].as_str().is_some_and(|c| c.contains(super::agy_hooks::GUARD_MODE)))
+        });
+        if !guarded && !missing.contains(&"PreToolUse") {
+            missing.push("PreToolUse");
+        }
     }
     if !used {
         return item("hooks", None, "agy_hooks_sem_uso", None, true, &[]);
@@ -665,8 +674,8 @@ pub fn agy_hooks(home: &Path) -> Value {
     if missing.is_empty() {
         item("hooks", Some(true), "hooks_ok", None, false, &[("n", EVENTS.len().to_string())])
     } else {
-        // A ordem é a de EVENTS, não a de leitura das contas.
-        missing.sort_by_key(|event| EVENTS.iter().position(|e| e == event));
+        // A ordem é a de EVENTS, não a de leitura das contas; a guarda vem por último.
+        missing.sort_by_key(|event| EVENTS.iter().position(|e| e == event).unwrap_or(EVENTS.len()));
         item("hooks", Some(false), "faltam", Some("hooks-agy"), false, &[("lista", missing.join(", "))])
     }
 }
@@ -725,12 +734,12 @@ mod tests {
         let value = agy_hooks(home.path());
         assert_eq!(value["ok"], false);
         assert_eq!(value["codigo"], "faltam");
-        assert_eq!(value["params"]["lista"], "SessionStart, PreInvocation, PostInvocation, Stop");
+        assert_eq!(value["params"]["lista"], "SessionStart, PreInvocation, PostInvocation, Stop, PreToolUse");
         assert_eq!(value["conserto"], "hooks-agy");
         hooks_file(home.path(), &json!({"hangar":{"Stop":[{"type":"command","command":"/x/hangar-server agy-state-hook"}]},"lint":{}}));
         let value = agy_hooks(home.path());
         assert_eq!(value["codigo"], "faltam");
-        assert_eq!(value["params"]["lista"], "SessionStart, PreInvocation, PostInvocation");
+        assert_eq!(value["params"]["lista"], "SessionStart, PreInvocation, PostInvocation, PreToolUse");
         assert_eq!(value["conserto"], "hooks-agy");
     }
 
@@ -746,6 +755,14 @@ mod tests {
         assert_eq!(value["codigo"], "hooks_ok");
         assert_eq!(value["params"]["n"], "4");
         assert_eq!(value["conserto"], Value::Null);
+        // Só a guarda some: o conserto é oferecido.
+        let mut unguarded = doc.clone();
+        unguarded["hangar"].as_object_mut().unwrap().remove("PreToolUse");
+        hooks_file(home.path(), &unguarded);
+        let value = agy_hooks(home.path());
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["params"]["lista"], "PreToolUse");
+        assert_eq!(value["conserto"], "hooks-agy");
         std::fs::write(home.path().join(".gemini/config/hooks.json"), "{ quebrado").unwrap();
         let value = agy_hooks(home.path());
         assert_eq!(value["ok"], Value::Null);

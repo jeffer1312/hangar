@@ -143,6 +143,7 @@ impl Hangar {
     /// como cartão, com as opções do agy, e só a escolha da pessoa vira tecla.
     pub(super) fn start_agy_terms(&mut self, home: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
+        let connection = self.connection;
         let body = json!({"name": "agy-termos", "cwd": home, "provider": "antigravity", "headless": false});
         let task = self.runtime.spawn(async move { api.server_send(reqwest::Method::POST, &["sessions"], Some(body), 120).await });
         cx.spawn_in(window, async move |this, cx| {
@@ -150,6 +151,8 @@ impl Hangar {
             let _ = this.update_in(cx, |this, window, cx| {
                 let error = match joined {
                     Ok(Ok(value)) => match serde_json::from_value::<SessionInfo>(value) {
+                        // Trocou de servidor no meio: o nome não é desta conexão e abriria outra sessão, ou nenhuma.
+                        Ok(_) if this.connection != connection => tr("accounts_agy_terms_server_changed"),
                         Ok(session) => { this.select(session, window, cx); return }
                         Err(_) => tr("invalid_response"),
                     },

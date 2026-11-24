@@ -67,7 +67,13 @@ fn sync_agy_rule(dir: &Path, source: &Path) {
             tracing::info!(file = %path.display(), "rules/hangar.md do agy é da pessoa; protocolo do Hangar não gravado");
             return;
         }
-        _ => {}
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        // Ilegível (fora de UTF-8, sem permissão) pode ser da pessoa: regravar apagaria o conteúdo dela.
+        Err(error) => {
+            tracing::warn!(code = "agy_rule_unreadable", file = %path.display(), %error, "rules/hangar.md do agy ilegível; protocolo do Hangar não gravado");
+            return;
+        }
     }
     let written = fs::create_dir_all(dir.join("rules")).and_then(|()| hangar_core::fs::atomic_write(&path, rule.as_bytes()));
     if let Err(error) = written {
@@ -208,6 +214,10 @@ mod tests {
         fs::write(&rule, "minha regra").unwrap();
         sync_agy(home.path());
         assert_eq!(fs::read_to_string(&rule).unwrap(), "minha regra");
+        // Regra da pessoa fora de UTF-8 (Latin-1) não é lida, e por isso também não é regravada.
+        fs::write(&rule, b"minha regra \xe9").unwrap();
+        sync_agy(home.path());
+        assert_eq!(fs::read(&rule).unwrap(), b"minha regra \xe9");
         assert_eq!(agy_rule("sem bloco"), None);
     }
 

@@ -153,7 +153,7 @@ impl Hangar {
             .map(|((life, jsonl), target)| (target, life.to_owned(), jsonl.to_owned()));
         let body = match (&list.value, list.ok()) {
             (_, Some(list)) => {
-                let mut mine: Vec<&Credential> = list.iter().filter(|c| c.kind == "claude" || (c.kind == "codex" && !proxy)
+                let mut mine: Vec<&Credential> = list.iter().filter(|c| c.kind == "claude" || c.kind == "antigravity" || (c.kind == "codex" && !proxy)
                     || (proxy && matches!(c.kind.as_str(), "codex" | "cliproxy") && (in_use(c)
                         || self.session_engine().and_then(|e| e.cliproxy_accounts.as_ref()).is_some_and(|accounts| accounts.iter().any(|a| a.credential_id == c.id))))).collect();
                 if session.is_some_and(|s| s.engine_binding.is_some()) {

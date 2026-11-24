@@ -534,8 +534,7 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
             if c.agy.as_ref().is_some_and(|a| !a.terms) {
                 subtitle.push((tr("accounts_agy_terms_pending"), Tone::Warn));
                 // A sessão abre na casa (a pasta-mãe do `~/.gemini`): com terminal o agy só usa a conta padrão.
-                agy_terms = c.agy.as_ref().filter(|a| a.default)
-                    .and(c.path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(|p| p.to_string_lossy().into_owned()));
+                agy_terms = c.agy.as_ref().filter(|a| a.default).and(c.path.as_deref().and_then(server_parent));
             }
             let id = c.agy.as_ref().map_or_else(|| antigravity::route_id(c.path.as_deref()), |a| a.id.clone());
             agy = Some((id, signed == Some(true)));
@@ -730,6 +729,15 @@ pub(super) fn fold(text: &str) -> String {
         'á' | 'à' | 'â' | 'ã' | 'ä' => 'a', 'é' | 'è' | 'ê' | 'ë' => 'e', 'í' | 'ì' | 'î' | 'ï' => 'i',
         'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o', 'ú' | 'ù' | 'û' | 'ü' => 'u', 'ç' => 'c', 'ñ' => 'n', other => other,
     }).collect()
+}
+
+/// A pasta-mãe pelas regras do servidor, que pode ser Windows: o `std::path` daqui só conhece o separador do cliente.
+fn server_parent(path: &str) -> Option<String> {
+    let path = path.trim_end_matches(['/', '\\']);
+    let cut = path.rfind(['/', '\\'])?;
+    let parent = &path[..cut];
+    // A raiz (`/`, `C:\`) guarda o separador.
+    Some(if parent.is_empty() || parent.ends_with(':') { path[..=cut].to_owned() } else { parent.to_owned() })
 }
 
 fn row_matches(row: &Row, term: &str) -> bool {
@@ -1660,7 +1668,7 @@ fn mini_quota(bars: &[Bar], labels: &[String]) -> Div {
 #[cfg(test)]
 mod tests {
     use super::{Credential, Engine, Filter, Group, QuotaView, Tone, age, build_row, build_sections, build_summary, group_of, model_names,
-        next_sort, reset_text, row_matches, sort_rows};
+        next_sort, reset_text, row_matches, server_parent, sort_rows};
     use crate::i18n::tr;
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -1867,6 +1875,14 @@ mod tests {
             {"id": "default", "padrao": true, "credencial": "antigravity:/h/.gemini", "logado": true, "termos_aceitos": false}])).unwrap();
         let pending = build_row(&super::antigravity::merge(&list[..1], &pending)[0], &HashMap::new(), false, 0.);
         assert_eq!(pending.agy_terms.as_deref(), Some("/h"), "a sessão dos Termos abre na casa");
+        // Servidor Windows visto de um cliente Linux: a casa sai pelo separador do servidor, nunca vazia.
+        let windows = vec![credential(line(r"C:\Users\u\.gemini", Value::Null))];
+        let agy_windows: Vec<super::antigravity::AgyAccount> = serde_json::from_value(json!([
+            {"id": "default", "padrao": true, "credencial": r"antigravity:C:\Users\u\.gemini", "logado": true, "termos_aceitos": false}])).unwrap();
+        let on_windows = build_row(&super::antigravity::merge(&windows, &agy_windows)[0], &HashMap::new(), false, 0.);
+        assert_eq!(on_windows.agy_terms.as_deref(), Some(r"C:\Users\u"));
+        assert_eq!(server_parent(r"C:\.gemini").as_deref(), Some(r"C:\"));
+        assert_eq!(server_parent("/.gemini").as_deref(), Some("/"));
         // Com a leitura do `/usage`, as barras são as mesmas do Claude.
         let mut read = line("/h/.gemini", json!(true));
         read["cota"] = json!({"estado": "lida", "ts": 1.0, "janelas": [{"rotulo": "5h", "pct": 4.4, "reset_ts": 9.0e9},
