@@ -216,8 +216,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [accountChosen, setAccountChosen] = useState(false);
   // Conta (caminho) que a troca por cota deixou para trás; a linha acima da pílula oferece abrir nela.
   const [switchedFrom, setSwitchedFrom] = useState('');
-  // A pessoa mandou abrir na conta a 95% ou mais: vai `force_account` e o servidor não troca.
-  const [forceAccount, setForceAccount] = useState(false);
+  // A conta a 95% ou mais em que a pessoa mandou abrir: vai `force_account` enquanto ela for a escolhida.
+  const [forcedPath, setForcedPath] = useState('');
+  const forceAccount = !!forcedPath && forcedPath === selectedConfig;
   const contaLabel = (path: string) => configs.find((c) => c.path === path)?.label ?? basename(path);
   const [motores, setMotores] = useState<Awaited<ReturnType<typeof getEnginesForServer>>['motores']>({});
   const [engine, setEngine] = useState('');
@@ -325,7 +326,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setAccountChosen(false);
     providerTouched.current = false;
     setSwitchedFrom('');
-    setForceAccount(false);
+    setForcedPath('');
     setAgyAccounts([]);
     setAgyAccount('');
     setAgyInstalled(true);
@@ -752,7 +753,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setProvidersError('');
     accountTouched.current = true;
     setAccountChosen(true);
-    setForceAccount(false);
+    setForcedPath('');
     // A escolhida à mão a 95% ou mais também sai para a de mais folga; a linha deixa abrir nela.
     const target = provider === 'claude' && !engine ? contaComFolga(v, configs, cotas) : null;
     setSwitchedFrom(target ? v : '');
@@ -763,10 +764,10 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setAccountChosen(true);
     setSelectedConfig(switchedFrom);
     setSwitchedFrom('');
-    setForceAccount(true);
+    setForcedPath(switchedFrom);
   };
   const undoForce = () => {
-    setForceAccount(false);
+    setForcedPath('');
     const target = contaComFolga(selectedConfig, configs, cotas);
     if (!target || !selectedConfig) return;
     setSwitchedFrom(selectedConfig);
@@ -880,11 +881,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   };
 
   const janelaCheia = provider === 'claude' ? janelaEsgotada(cotaSelecionada) : null;
-  // A janela mais cheia entre as gerais (a de um modelo só sem outra): diz por que a conta passou do limite.
+  // A janela que decide a troca (`contaComFolga`): a mais cheia de qualquer tipo, fora as que já viraram.
   const janelaMaisCheia = (path: string) => {
-    const js = cotaDaConta(cotas, path)?.janelas.filter((j) => typeof j.pct === 'number' && isFinite(j.pct)) ?? [];
-    const gerais = js.filter((j) => !j.por_modelo);
-    return (gerais.length ? gerais : js).reduce<(typeof js)[number] | undefined>((a, j) => (!a || j.pct > a.pct ? j : a), undefined);
+    const agora = Date.now() / 1000;
+    const js = cotaDaConta(cotas, path)?.janelas.filter((j) => typeof j.pct === 'number' && isFinite(j.pct)
+      && !(typeof j.reset_ts === 'number' && j.reset_ts <= agora)) ?? [];
+    return js.reduce<(typeof js)[number] | undefined>((a, j) => (!a || j.pct > a.pct ? j : a), undefined);
   };
   const forcedWindow = provider === 'claude' && !engine && forceAccount && selectedConfig ? janelaMaisCheia(selectedConfig) : undefined;
   const textoJanela = (rotulo: string) => rotulo === '7d' ? m.cota_janela_7d() : rotulo === '5h' ? m.cota_janela_5h() : m.cota_janela_outra({ janela: rotulo });

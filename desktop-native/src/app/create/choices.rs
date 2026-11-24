@@ -916,11 +916,11 @@ impl NewSession {
         self.load_models(window, cx);
     }
 
-    /// A janela geral mais cheia da conta (sessão ou semana): a que a pôs acima do limite.
+    /// A janela que decide a troca (`quota_switch`): a mais cheia de qualquer tipo, fora as que já viraram.
     fn fullest_window(&self, path: &str) -> Option<(String, f64)> {
-        let all: Vec<(String, f64)> = self.quota_of(&format!("claude:{path}"))?.windows().map(|(w, p)| (w.label.clone(), p)).collect();
-        let general: Vec<(String, f64)> = all.iter().filter(|(l, _)| matches!(l.as_str(), "5h" | "7d")).cloned().collect();
-        (if general.is_empty() { all } else { general }).into_iter().max_by(|a, b| a.1.total_cmp(&b.1))
+        let now = chrono::Local::now().timestamp() as f64;
+        self.quota_of(&format!("claude:{path}"))?.windows().filter(|(w, _)| w.reset_ts.is_none_or(|r| r > now))
+            .map(|(w, p)| (w.label.clone(), p)).max_by(|a, b| a.1.total_cmp(&b.1))
     }
 
     pub(super) fn forced_window(&self) -> Option<(String, f64)> {

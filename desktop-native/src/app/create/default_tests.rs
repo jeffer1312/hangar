@@ -145,7 +145,8 @@ fn an_account_over_the_limit_can_be_forced_and_undone(cx: &mut TestAppContext) {
         dialog.configs.set(Ok(serde_json::from_value(json!([
             {"path": "/a", "label": "A", "active": true}, {"path": "/b", "label": "B", "active": false}])).unwrap()));
         dialog.quotas.set(Ok(serde_json::from_value(json!([
-            {"id": "claude:/a", "estado": "lida", "janelas": [{"rotulo": "5h", "pct": 2.0}, {"rotulo": "7d", "pct": 97.0}]},
+            {"id": "claude:/a", "estado": "lida", "janelas": [{"rotulo": "5h", "pct": 2.0}, {"rotulo": "7d", "pct": 97.0},
+                {"rotulo": "Fable", "pct": 99.0, "por_modelo": true}]},
             {"id": "claude:/b", "estado": "lida", "janelas": [{"rotulo": "7d", "pct": 40.0}]}])).unwrap()));
 
         dialog.pick_account("/a".into(), window, cx);
@@ -156,7 +157,8 @@ fn an_account_over_the_limit_can_be_forced_and_undone(cx: &mut TestAppContext) {
         dialog.force_switched_account(window, cx);
         let body = dialog.open_body("s", "/p", "", cx);
         assert_eq!((&body["config_dir"], &body["force_account"]), (&json!("/a"), &json!(true)));
-        assert_eq!(dialog.forced_window(), Some(("7d".to_owned(), 97.0)));
+        // A janela que decide a troca, mesmo a de um modelo.
+        assert_eq!(dialog.forced_window(), Some(("Fable".to_owned(), 99.0)));
 
         dialog.undo_forced_account(window, cx);
         assert_eq!((dialog.config.as_deref(), dialog.switched_from.as_deref(), dialog.force_account), (Some("/b"), Some("/a"), false));

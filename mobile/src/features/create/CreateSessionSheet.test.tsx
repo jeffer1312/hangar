@@ -2052,6 +2052,17 @@ describe('CreateSessionSheet Codex', () => {
     root.unmount();
   });
 
+  it('a linha mostra a janela que decidiu a troca, mesmo a de um modelo', async () => {
+    calls.configs.mockResolvedValue([{ path: '/a', label: 'Conta A', active: true }, { path: '/b', label: 'Conta B', active: false }]);
+    calls.cotas = [
+      { id: 'claude:/a', estado: 'lida', janelas: [{ rotulo: '5h', pct: 20 }, { rotulo: '7d opus', pct: 97, por_modelo: true }] },
+      { id: 'claude:/b', estado: 'lida', janelas: [{ rotulo: '7d', pct: 40 }] },
+    ];
+    const { container, root } = await renderSheet(false, false);
+    expect(container.textContent).toContain('force_note:Conta A:97:na_janela:7d opus:Conta B');
+    root.unmount();
+  });
+
   it('a conta esgotada escolhida à mão vai para a de mais folga, com a opção de abrir nela', async () => {
     calls.configs.mockResolvedValue([{ path: '/a', label: 'Conta A', active: true }, { path: '/b', label: 'Conta B', active: false }]);
     calls.cotas = [
