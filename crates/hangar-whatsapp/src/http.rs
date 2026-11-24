@@ -57,8 +57,13 @@ impl WhatsApp {
     }
 
     pub fn with_context(ctx: Context) -> Arc<Self> {
+        Self::with_outbox(ctx, Outbox::default())
+    }
+
+    /// `outbox` com a subida desta vida já marcada ([`Outbox::started_at`]).
+    pub fn with_outbox(ctx: Context, outbox: Outbox) -> Arc<Self> {
         let client = Client::new(ctx.paths.data.clone());
-        Arc::new(Self { ctx, installer: Installer::default(), client, qr: Mutex::default(), outbox: Outbox::default() })
+        Arc::new(Self { ctx, installer: Installer::default(), client, qr: Mutex::default(), outbox })
     }
 
     /// Os rascunhos pendentes (evento `whatsapp_outbox`).
@@ -356,15 +361,15 @@ async fn create_draft(wa: &WhatsApp, body: &Value) -> Response {
         return response;
     }
     let reply = wa.client.call(reqwest::Method::POST, "/v1/outbox", &[], Some(&Value::Object(out))).await;
+    // Guardado antes de reler: a volta acordada já sabe que ele é desta vida.
+    if let Ok(reply) = &reply
+        && (200..300).contains(&reply.status)
+        && let Some(id) = serde_json::from_slice::<Value>(&reply.body).ok().and_then(|d| d["id"].as_str().map(str::to_owned)) {
+        wa.outbox.created(&id);
+    }
     wa.outbox.poke();
     match reply {
-        Ok(reply) => {
-            if (200..300).contains(&reply.status)
-                && let Some(id) = serde_json::from_slice::<Value>(&reply.body).ok().and_then(|d| d["id"].as_str().map(str::to_owned)) {
-                wa.outbox.created(&id);
-            }
-            relay_outbox(reply)
-        }
+        Ok(reply) => relay_outbox(reply),
         Err(error) => call_error(&error),
     }
 }

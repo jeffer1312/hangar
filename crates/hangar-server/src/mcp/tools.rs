@@ -27,7 +27,7 @@ use crate::groups::peers::PeerClient;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
 use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
-use hangar_whatsapp::outbox::{self, Wait};
+use hangar_whatsapp::outbox;
 use zeroize::Zeroizing;
 
 const VOICE_CLOSE_REFUSED: &str = "recusado: a voz fecha sessão pela própria ferramenta close_session, que pede o sim \
@@ -579,9 +579,10 @@ impl Tools {
         }
     }
 
-    /// Rascunho de WhatsApp: cria pela rota do dono e espera a resposta dele no cartão. Só a sessão sem convidado e
-    /// com o prazo longo do MCP pede; erro depois da criação leva o id.
+    /// Rascunho de WhatsApp: cria pela rota do dono e espera a resposta dele no cartão, dentro do prazo da chamada. Só
+    /// a sessão sem convidado e com o prazo longo do MCP pede; erro depois da criação leva o id.
     async fn whatsapp_draft(&self, headers: &HeaderMap, a: WhatsAppDraft, progress: Arc<whatsapp::DraftProgress>) -> Outcome {
+        let deadline = chrono::Utc::now() + whatsapp::call_budget();
         let (me, voice) = self.caller(headers).await?;
         if voice { return Err(whatsapp::DRAFT_NEEDS_SESSION.into()); }
         self.whatsapp_unshared(&me).await?;
@@ -591,52 +592,10 @@ impl Tools {
             .map_err(|e| if whatsapp::reply_lost(&e) { format!("{e}; {}", whatsapp::DRAFT_MAYBE_CREATED) } else { e })?;
         let id = created["id"].as_str().filter(|id| outbox::id_ok(id)).map(str::to_owned)
             .ok_or_else(|| format!("whatsapp_bad_reply: o serviço criou o rascunho sem id; {}", whatsapp::DRAFT_MAYBE_CREATED))?;
-        let mut guard = whatsapp::DeclineOnDrop::new(self.api.clone(), self.st.cfg.auth_token.clone(), me.clone(), id.clone(), progress);
-        let mut feed = self.st.whatsapp.get().map(|wa| wa.outbox().feed());
-        let mut read = Read::Found(created);
-        let mut deadline = None;
-        loop {
-            let now = chrono::Utc::now();
-            let step = match &read {
-                // Serviço reiniciando no meio da espera: tenta de novo até o prazo do último estado lido.
-                Read::Failed(error) => {
-                    if deadline.is_none_or(|d| now >= d) { return Err(whatsapp::after_creation(&id, error)); }
-                    None
-                }
-                Read::Found(draft) => {
-                    guard.saw(draft["state"].as_str().unwrap_or_default());
-                    Some(outbox::wait_step(&id, Some(draft), now))
-                }
-                Read::Gone => Some(outbox::wait_step(&id, None, now)),
-            };
-            match step {
-                None => {}
-                Some(Wait::Done(result)) => {
-                    guard.finish();
-                    return Ok(dict(result));
-                }
-                Some(Wait::Until(until)) => deadline = Some(until),
-                Some(Wait::PendingOverdue) => {
-                    let (status, value) = self.route_from(Some(&me), Method::POST, &whatsapp::draft_path(&id, "/decline"), None).await;
-                    match (status, value["detail"]["code"].as_str()) {
-                        (200, _) | (409, Some("whatsapp_expired")) => {
-                            guard.finish();
-                            return Ok(dict(outbox::expired(&id)));
-                        }
-                        // O dono aprovou no último instante: a espera segue no envio.
-                        (409, Some("whatsapp_answered")) => {}
-                        _ => return Err(whatsapp::after_creation(&id, &coded(status, &value))),
-                    }
-                }
-                Some(Wait::SendingOverdue) => {
-                    guard.finish();
-                    return Err(whatsapp::sending_overdue(&id));
-                }
-                Some(Wait::Unknown(what)) => return Err(whatsapp::after_creation(&id, &format!("whatsapp_bad_reply: {what}"))),
-            }
-            whatsapp::pause(&mut feed).await;
-            read = self.draft_read(&me, &id).await;
-        }
+        let guard = whatsapp::DeclineOnDrop::new(self.api.clone(), self.st.cfg.auth_token.clone(), me.clone(), id.clone(), progress);
+        let feed = self.st.whatsapp.get().map(|wa| wa.outbox().feed());
+        let mut port = DraftRoute { tools: self, me, feed, guard };
+        whatsapp::wait_draft(&mut port, &id, created, deadline).await.map(dict)
     }
 
     async fn draft_read(&self, me: &str, id: &str) -> Read {
@@ -1078,6 +1037,30 @@ impl Tools {
     }
 }
 
+/// A espera do `whatsapp_draft` pelas rotas do dono, com o relógio de verdade e a recusa no fim da espera.
+struct DraftRoute<'a> {
+    tools: &'a Tools,
+    me: String,
+    feed: Option<tokio::sync::watch::Receiver<Arc<outbox::Feed>>>,
+    guard: whatsapp::DeclineOnDrop,
+}
+
+impl whatsapp::DraftPort for DraftRoute<'_> {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> { chrono::Utc::now() }
+
+    async fn read(&mut self, id: &str) -> Read { self.tools.draft_read(&self.me, id).await }
+
+    async fn decline(&mut self, id: &str) -> (u16, Value) {
+        self.tools.route_from(Some(&self.me), Method::POST, &whatsapp::draft_path(id, "/decline"), None).await
+    }
+
+    async fn pause(&mut self) { whatsapp::pause(&mut self.feed).await }
+
+    fn saw(&mut self, state: &str) { self.guard.saw(state) }
+
+    fn finish(&mut self) { self.guard.finish() }
+}
+
 /// O cofre (`vault/exec.rs`): o valor nunca entra no resultado nem no erro.
 impl Tools {
     /// A sessão pela chave dela, nunca pelo pane nem pelo nome: é a chave que a dona prende à
@@ -1479,7 +1462,7 @@ fn unshared_failed(why: &str) -> String {
 }
 
 /// O código na frente, quando a rota deu um: o agente decide por ele (`erro_contrato_mudou`, `mission_gate_pending`).
-fn coded(status: u16, value: &Value) -> String {
+pub(super) fn coded(status: u16, value: &Value) -> String {
     match value["detail"]["code"].as_str() {
         Some(code) => format!("{code}: {}", detail(status, value)),
         None => detail(status, value),

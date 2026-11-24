@@ -559,12 +559,12 @@ fn publish_vault(tx: &watch::Sender<Arc<Published>>, last: &mut Last, feed: Arc<
     tx.send_replace(Arc::new(next));
 }
 
-/// Como o cofre: fora da rodada, só quando muda, e só à lista do dono (`frames`). Enquanto nunca houve rascunho
-/// (WhatsApp sem envio ou desligado) nada sai.
+/// Como o cofre: fora da rodada, só quando muda, e só à lista do dono (`frames`). Lista vazia lida do binário sai
+/// (quem abre a folha por um aviso espera resposta); sem WhatsApp com envio, nada sai.
 fn publish_whatsapp_outbox(tx: &watch::Sender<Arc<Published>>, last: &mut Last, feed: Arc<hangar_whatsapp::outbox::Feed>) {
     match last.whatsapp_outbox.as_deref() {
         Some(previous) if previous == &*feed => return,
-        None if feed.drafts.is_empty() => return,
+        None if !feed.read && feed.drafts.is_empty() => return,
         _ => {}
     }
     let Ok(json) = serde_json::to_string(&*feed) else { return };
@@ -1131,15 +1131,23 @@ mod tests {
     }
 
     fn outbox_feed(ids: &[&str]) -> Arc<hangar_whatsapp::outbox::Feed> {
-        Arc::new(hangar_whatsapp::outbox::Feed { drafts: ids.iter().map(|id| json!({"id": id, "state": "pending"})).collect() })
+        Arc::new(hangar_whatsapp::outbox::Feed { drafts: ids.iter().map(|id| json!({"id": id, "state": "pending"})).collect(), read: true })
     }
 
+    /// Sem WhatsApp com envio nada sai; lida a lista, sai mesmo vazia, também para a lista que fechou e reabriu (o
+    /// produtor recomeça do zero), senão a folha aberta pelo aviso fica esperando para sempre.
     #[test]
-    fn the_whatsapp_outbox_event_goes_out_only_on_change_and_never_before_a_draft() {
+    fn the_whatsapp_outbox_event_goes_out_once_read_and_only_on_change() {
         let (tx, _rx) = watch::channel(Arc::new(Published::default()));
         let mut last = Last::default();
+        publish_whatsapp_outbox(&tx, &mut last, Arc::default());
+        assert!(tx.borrow().whatsapp_outbox.is_none(), "sem WhatsApp com envio, nada sai");
         publish_whatsapp_outbox(&tx, &mut last, outbox_feed(&[]));
-        assert!(tx.borrow().whatsapp_outbox.is_none(), "sem rascunho nunca visto, nada sai");
+        assert!(tx.borrow().whatsapp_outbox.as_ref().is_some_and(|f| f.starts_with(b"event: whatsapp_outbox\r\ndata: {\"drafts\":[]}")),
+            "lida e vazia, sai");
+        let (reopened, _rx) = watch::channel(Arc::new(Published::default()));
+        publish_whatsapp_outbox(&reopened, &mut Last::default(), outbox_feed(&[]));
+        assert!(reopened.borrow().whatsapp_outbox.is_some(), "a lista reaberta recebe a vazia");
         publish_whatsapp_outbox(&tx, &mut last, outbox_feed(&["d1"]));
         let seq = tx.borrow().whatsapp_outbox_seq;
         publish_whatsapp_outbox(&tx, &mut last, outbox_feed(&["d1"]));

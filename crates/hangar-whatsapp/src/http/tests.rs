@@ -15,6 +15,8 @@ const OWNER: &str = "dono-whatsapp";
 const KEY: [u8; 32] = [7; 32];
 /// Cabe num `i32` e passa do maior pid do Linux: nunca é um processo vivo.
 const DEAD_PID: u32 = 2_147_483_000;
+/// A subida desta vida do Hangar na prova: o C5 falso cria os rascunhos às 10:00 do mesmo dia.
+const STARTED: &str = "2026-11-24T09:00:00Z";
 
 struct Scene {
     home: tempfile::TempDir,
@@ -36,7 +38,8 @@ enum Signing {
 impl Scene {
     fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
-        let wa = WhatsApp::with_context(Context::new(home.path()));
+        let started = chrono::DateTime::parse_from_rfc3339(STARTED).unwrap().with_timezone(&chrono::Utc);
+        let wa = WhatsApp::with_outbox(Context::new(home.path()), outbox::Outbox::started_at(started));
         Self { home, wa, seen: Arc::default(), drafts: Arc::default() }
     }
 
@@ -177,6 +180,7 @@ fn fake_outbox(method: &str, path: &str, uri: &str, body: &[u8], drafts: &Mutex<
             draft["via"] = serde_json::from_slice::<Value>(body).unwrap_or(Value::Null)["via"].clone();
             (202, draft.to_string().into_bytes())
         }
+        ("POST", "decline") if draft["fail_decline"] == true => error(500, "internal"),
         ("POST", "decline") => {
             draft["state"] = json!("declined");
             (200, draft.to_string().into_bytes())
@@ -514,28 +518,55 @@ fn feed_ids(wa: &WhatsApp) -> Vec<String> {
     wa.outbox().feed().borrow().drafts.iter().map(|d| d["id"].as_str().unwrap_or_default().to_owned()).collect()
 }
 
-/// Na primeira leitura desta vida, o pendente que outra vida deixou é recusado; o criado agora fica, entra no
-/// evento e avisa uma vez só.
+/// Na primeira leitura desta vida, o pendente criado antes da subida é recusado. O criado depois fica, entra no
+/// evento e avisa uma vez só, inclusive o que ainda está a caminho, sem id guardado pela rota.
 #[tokio::test]
 async fn the_first_round_declines_what_another_life_left_pending() {
     let s = Scene::new();
     s.serve_api(Signing::Signed, 2).await;
-    s.drafts.lock().unwrap().push(json!({"id": "d0", "state": "pending", "expires_at": "2099-01-01T00:00:00Z"}));
+    s.drafts.lock().unwrap().push(json!({"id": "d0", "state": "pending", "created_at": "2026-11-24T08:59:59Z",
+        "expires_at": "2099-01-01T00:00:00Z"}));
     let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"5564999","text":"oi","origin":"casa::s0"}"#)).await;
     assert_eq!((status, &body["id"]), (201, &json!("d2")), "{body}");
+    s.drafts.lock().unwrap().push(json!({"id": "d3", "state": "pending", "created_at": "2026-11-24T10:00:05Z",
+        "expires_at": "2099-01-01T00:00:00Z"}));
     let hooks = Recorded::default();
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert_eq!(s.drafts.lock().unwrap()[0]["state"], json!("declined"), "o de outra vida saiu da fila");
-    assert_eq!(feed_ids(&s.wa), ["d2"]);
-    assert_eq!(*hooks.new.lock().unwrap(), ["d2"]);
+    assert_eq!(s.drafts.lock().unwrap()[2]["state"], json!("pending"), "o criado nesta vida, ainda sem id guardado, fica");
+    assert_eq!(feed_ids(&s.wa), ["d2", "d3"]);
+    assert_eq!(*hooks.new.lock().unwrap(), ["d2", "d3"]);
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
-    assert_eq!(*hooks.new.lock().unwrap(), ["d2"], "o mesmo rascunho não avisa de novo");
+    assert_eq!(*hooks.new.lock().unwrap(), ["d2", "d3"], "o mesmo rascunho não avisa de novo");
+    s.call(Method::POST, "/api/whatsapp/outbox/d3/decline", true, None).await;
 
     let (status, _) = s.call(Method::POST, "/api/whatsapp/outbox/d2/decline", true, None).await;
     assert_eq!(status, 200);
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert!(feed_ids(&s.wa).is_empty(), "respondido sai do evento");
+    assert!(s.wa.outbox().feed().borrow().read, "lista vazia lida também é resposta");
     assert!(hooks.failed.lock().unwrap().is_empty());
+}
+
+/// Recusa da subida que falha não dá a volta por feita: o rascunho de outra vida aparece no cartão sem avisar o
+/// celular, e a volta seguinte tenta de novo.
+#[tokio::test]
+async fn a_failed_start_decline_is_retried_on_the_next_round() {
+    let s = Scene::new();
+    s.serve_api(Signing::Signed, 2).await;
+    s.drafts.lock().unwrap().push(json!({"id": "d0", "state": "pending", "created_at": "2026-11-24T08:00:00Z",
+        "expires_at": "2099-01-01T00:00:00Z", "fail_decline": true}));
+    let hooks = Recorded::default();
+    s.wa.outbox.refresh(&s.wa.client, &hooks).await;
+    assert_eq!(*hooks.failed.lock().unwrap(), ["whatsapp_outbox_sweep_failed"]);
+    assert_eq!(s.drafts.lock().unwrap()[0]["state"], json!("pending"));
+    assert_eq!(feed_ids(&s.wa), ["d0"]);
+    assert!(hooks.new.lock().unwrap().is_empty(), "o de outra vida não avisa o celular");
+
+    s.drafts.lock().unwrap()[0]["fail_decline"] = json!(false);
+    s.wa.outbox.refresh(&s.wa.client, &hooks).await;
+    assert_eq!(s.drafts.lock().unwrap()[0]["state"], json!("declined"), "tentou de novo");
+    assert!(feed_ids(&s.wa).is_empty());
 }
 
 /// Sem a api 2 nada é lido nem avisado; leitura que falha vai uma vez ao diário e a última lista continua.
@@ -546,6 +577,7 @@ async fn without_the_send_api_nothing_is_read_and_a_failed_read_keeps_the_list()
     let hooks = Recorded::default();
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert!(s.seen.lock().unwrap().is_empty() && feed_ids(&s.wa).is_empty());
+    assert!(!s.wa.outbox().feed().borrow().read, "sem envio, o evento não sai");
 
     s.serve_api(Signing::Signed, 2).await;
     s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"5564999","text":"oi","origin":"casa::s0"}"#)).await;
@@ -561,6 +593,7 @@ async fn without_the_send_api_nothing_is_read_and_a_failed_read_keeps_the_list()
     s.write_control_api(1, DEAD_PID, 2);
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert!(feed_ids(&s.wa).is_empty(), "serviço desligado: nada a aprovar");
+    assert!(!s.wa.outbox().feed().borrow().read);
 }
 
 /// Contra o binário real. Rodar à mão:
