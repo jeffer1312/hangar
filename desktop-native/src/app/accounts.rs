@@ -1317,7 +1317,7 @@ impl Hangar {
                     .child(chrome::small_icon(icon, 18., theme::faint())))
                 .child(div().max_w(px(460.)).text_center().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(text)));
         }
-        let labels = fit_columns(window_labels(&shown));
+        let labels = fit_columns(window_labels(&shown), column_room(f32::from(window.viewport_size().width)));
         let keys: Vec<String> = shown.iter().map(|r| r.id.clone()).collect();
         {
             let mut book = accounts.flip.borrow_mut();
@@ -1632,13 +1632,20 @@ fn window_labels(rows: &[&Row]) -> Vec<String> {
     labels.into_iter().map(|(label, _)| label).collect()
 }
 
-/// Colunas que cabem ao lado do nome da conta: 5 horas e semana (com o reset) sempre, janela de um modelo até o teto.
-/// A que sobra vai numa linha embaixo do nome, senão o nome fica espremido até sair uma letra por linha.
-const MAX_COLUMNS: usize = 4;
+/// Quantas colunas de cota cabem na página, que ocupa a largura ao lado da navegação das configurações (284 px),
+/// deixando ao nome da conta pelo menos `NAME_MIN`; nunca menos que 5 horas, semana, reset e uma de modelo.
+const NAME_MIN: f32 = 300.;
 
-fn fit_columns(labels: Vec<String>) -> Vec<String> {
+fn column_room(viewport: f32) -> usize {
+    let free = viewport - 284. - 40. - 32. - 24. - ACTIONS - NAME_MIN;
+    (((free + COLUMN_GAP) / (COLUMN + COLUMN_GAP)).floor().max(0.) as usize).max(4)
+}
+
+/// Colunas que cabem ao lado do nome: 5 horas e semana (com o reset) sempre, janela de um modelo até `room`.
+/// A que sobra vai numa linha embaixo do nome, senão o nome fica espremido até sair uma letra por linha.
+fn fit_columns(labels: Vec<String>, room: usize) -> Vec<String> {
     let mut used = usize::from(labels.iter().any(|label| label == "7d"));
-    labels.into_iter().filter(|_| { used += 1; used <= MAX_COLUMNS }).collect()
+    labels.into_iter().filter(|_| { used += 1; used <= room }).collect()
 }
 
 fn sort_label(key: &str) -> String {
@@ -1701,7 +1708,9 @@ mod tests {
     #[test]
     fn model_windows_beyond_the_ceiling_leave_the_table() {
         let labels = ["5h", "7d", "Fable", "Claude/GPT 7d", "Claude/GPT 5h"].map(String::from).to_vec();
-        assert_eq!(super::fit_columns(labels), ["5h", "7d", "Fable"].map(String::from).to_vec());
+        assert_eq!(super::fit_columns(labels.clone(), 4), ["5h", "7d", "Fable"].map(String::from).to_vec());
+        assert_eq!(super::fit_columns(labels.clone(), super::column_room(1920.)), labels, "tela cheia mostra todas");
+        assert_eq!(super::column_room(1000.), 4);
     }
 
     #[test]
