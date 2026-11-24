@@ -58,6 +58,8 @@ type Props = {
   // Conversas antigas desta pasta que dá para continuar (hoje só o Codex lista).
   resume: { entries: { id: string; label: string }[]; busy: boolean; onPick: (id: string) => void } | null;
   notices: ReactNode;
+  // Logo acima da linha de pílulas (a conta que a cota tirou, com o "abrir mesmo assim").
+  optionNotice?: ReactNode;
   // null enquanto falta destino ou conta; o texto continua editável.
   body: NewConversationInput['body'] | null;
   // Reserva pré-aquecida do corpo atual; chamar para a renovação dela antes do POST.
@@ -107,7 +109,7 @@ function HistoryButton({ onPress, disabled, busy }: { onPress: () => void; disab
 
 export function NewConversation({
   server, destination, destinationPending, providerLabel, folderPanel,
-  topPills, optionPills, providerChip, resume, notices, body, takePrewarm, resumePrewarm, blocked, keyboardOffset, home,
+  topPills, optionPills, providerChip, resume, notices, optionNotice, body, takePrewarm, resumePrewarm, blocked, keyboardOffset, home,
   commandSource = null,
 }: Props) {
   const collapsed = home?.mode === 'sessions';
@@ -464,6 +466,7 @@ export function NewConversation({
 
       <Animated.View style={!home ? riseStyle : undefined}>
 
+      {optionNotice}
       <View style={styles.optionPills}>{optionPills}</View>
       {/* Campo em cima, na largura toda; anexo, microfone, chip do provider e Enviar na linha de baixo. */}
       <ComposerBox focused={focused} footer={(

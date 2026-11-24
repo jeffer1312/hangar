@@ -334,8 +334,11 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
     }
 
     // Conta a 95% ou mais sai da escolha, mesmo a mandada pela tela: a sessão nasce na de mais folga,
-    // sem perguntar, e a tela mostra o aviso.
+    // sem perguntar, e a tela mostra o aviso. `force_account` mantém a pedida.
     let explicit = if provider == AgentProvider::Codex { request.codex_account.is_some() } else { explicit_account };
+    if request.force_account && !explicit {
+        return Err(OpenError::new(422, "erro_forcar_conta_sem_conta", "force_account precisa da conta pedida (config_dir ou codex_account)"));
+    }
     let quota_rule = match provider {
         // A conta que o convidado escolheu não troca por outra do dono.
         AgentProvider::Claude => !truthy(&request.engine) && !(guest && explicit),
@@ -347,6 +350,10 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         let current = if provider == AgentProvider::Codex { codex_account.as_deref().or(Some("default")) } else { config_dir.as_deref() };
         let switch = match quota_check(provider, current, facts, reads) {
             QuotaCheck::Room => None,
+            QuotaCheck::Exhausted { current, .. } if request.force_account => {
+                warnings.push(format!("conta {} com {:.0}% de uso; aberta nela a pedido", current.label, current.usage.unwrap_or(100.0)));
+                None
+            }
             // Ninguém escolheu a conta: nascer numa de cota lida evita gastar às cegas uma que pode estar no fim.
             QuotaCheck::Unknown { current, best: Some(best) } if !explicit =>
                 Some((format!("cota da conta {} não pôde ser lida; a sessão nasceu em {}", current.label, best.label), best)),
