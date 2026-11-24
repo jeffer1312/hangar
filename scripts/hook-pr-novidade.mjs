@@ -13,7 +13,7 @@ try {
 } catch {
   process.exit(0);
 }
-// Mesma quebra do hook-pr-verificado.mjs: só o trecho que É a chamada conta, não texto entre aspas.
+// Só o trecho que É a chamada conta, não texto entre aspas.
 function trechos(texto) {
   const saida = [];
   let atual = '', aspas = '';
@@ -66,7 +66,7 @@ try {
   ponta = git(raiz, 'rev-parse', '--verify', `${branch && branch !== atual ? `origin/${branch}` : 'HEAD'}^{commit}`);
   origem = git(raiz, 'merge-base', alvo, ponta);
 } catch {
-  // Sem base resolvível o lembrete se cala; quem barra PR sem base é o hook-pr-verificado.
+  // Sem base resolvível o lembrete se cala; quem confere o PR é o portão do CI.
   process.exit(0);
 }
 const script = join(raiz, 'scripts', 'check-novidade.sh');

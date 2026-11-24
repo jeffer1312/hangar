@@ -1,6 +1,7 @@
 # Portão de merge: um check só, `merge-gate`. Barra o pull request que descumpre uma regra do CLAUDE.md que a máquina
-# consegue conferir, e nada além disso: as suítes do servidor, do desktop e do Expo rodam no push da main e do canal
-# (server.yml, native.yml e o mobile-suite daqui), onde já seguram a publicação.
+# consegue conferir e o que não compila ou quebra um teste do que ele mudou: crates mudados e os que dependem deles
+# (o hangar-server em fatias paralelas), o desktop inteiro e os testes do Expo ligados aos arquivos mudados. As suítes
+# inteiras rodam no push da main e do canal (server.yml, native.yml e o mobile-suite daqui).
 # As regras que saem do diff estão em scripts/check-*; as que são teste, em scripts/rule-tests.py. Parte que o PR não
 # toca (scripts/gate-areas.py) é pulada; parte acionada precisa terminar verde.
 name: Portão
@@ -27,6 +28,8 @@ jobs:
       server: ${{ steps.areas.outputs.server }}
       native: ${{ steps.areas.outputs.native }}
       mobile: ${{ steps.areas.outputs.mobile }}
+      rust_packages: ${{ steps.areas.outputs.rust_packages }}
+      rust_server: ${{ steps.areas.outputs.rust_server }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,13 +109,23 @@ jobs:
     needs: areas
     if: needs.areas.outputs.server == 'true' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # O que os testes do servidor chamam: python3 do cano, CLI do Codex dos contratos de contas e tmux.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      # Mesma versão do server-jobs.yml.
+      - run: npm install --global @openai/codex@0.161.0
+      - run: tmux -V
       # Só lê o cache dos testes, que o server-jobs.yml grava na main: mesmos caminhos e mesma chave de lá.
       - uses: actions/cache/restore@v4
         with:
@@ -123,6 +136,48 @@ jobs:
           key: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
           restore-keys: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
       - run: python3 -I scripts/rule-tests.py server
+      - name: Testes dos crates mudados e dos que dependem deles
+        if: ${{ !cancelled() }}
+        env:
+          PACOTES: ${{ needs.areas.outputs.rust_packages }}
+        run: python3 -I scripts/rust-pr-tests.py rest $PACOTES
+
+  # Os testes do hangar-server levam a maior parte da suíte: três máquinas, cada uma com um terço.
+  server-tests:
+    needs: areas
+    if: needs.areas.outputs.rust_server == 'true' && github.event_name == 'pull_request'
+    name: server-tests (${{ matrix.fatia }}/3)
+    strategy:
+      fail-fast: false
+      matrix:
+        fatia: [0, 1, 2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # O que os testes do servidor chamam: python3 do cano, CLI do Codex dos contratos de contas e tmux.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      # Mesma versão do server-jobs.yml.
+      - run: npm install --global @openai/codex@0.161.0
+      - run: tmux -V
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target/debug
+          key: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
+      - run: python3 -I scripts/rust-pr-tests.py server ${{ matrix.fatia }} 3
 
   native:
     needs: areas
@@ -159,15 +214,19 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: git ls-files -z vendor | xargs -0 touch -t 200001010000
       - run: python3 -I ../scripts/rule-tests.py native
+      # A suíte do desktop inteira: as travas acima já compilaram os testes dela.
+      - if: ${{ !cancelled() }}
+        run: cargo test --locked --no-fail-fast
 
   mobile:
     needs: areas
     if: needs.areas.outputs.mobile == 'true' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -183,6 +242,38 @@ jobs:
       - run: npm run i18n:compile -w @hangar/core
       - run: npm run i18n:compile --prefix mobile
       - run: python3 -I scripts/rule-tests.py mobile
+      - run: npm run check:app
+        if: ${{ !cancelled() }}
+      # Os testes ligados aos arquivos do app que o PR muda. Dependência, configuração, core ou mensagens
+      # mudados valem para o app inteiro: não há "relacionado" a eles.
+      - name: Testes do que mudou no app
+        if: ${{ !cancelled() }}
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          tudo=0 app=()
+          git diff --no-renames --name-only "$BASE...$HEAD_SHA" > "$RUNNER_TEMP/mudados"
+          while IFS= read -r f; do
+            case "$f" in
+              mobile/package.json|mobile/package-lock.json|mobile/tsconfig*.json|mobile/vitest*.ts|mobile/babel.config.js|\
+              mobile/metro.config.js|mobile/app.json|mobile/eas.json|mobile/plugins/*|packages/core/*|messages/*|\
+              project.inlang/*|package.json|package-lock.json|.node-version|scripts/i18n-compile.mjs|scripts/verificar-app.mjs) tudo=1 ;;
+              mobile/*)
+                [ -f "$f" ] || continue
+                app+=("$GITHUB_WORKSPACE/$f")
+                # Teste que lê o arquivo sem importá-lo (readFileSync) fica fora do grafo do `related`.
+                while IFS= read -r t; do app+=("$GITHUB_WORKSPACE/$t"); done < <(grep -rlF --include='*.test.*' "$(basename "$f")" mobile/src || true) ;;
+            esac
+          done < "$RUNNER_TEMP/mudados"
+          if (( tudo )); then
+            npm run test:app
+          elif (( ${#app[@]} )); then
+            cd mobile && npx vitest related --run --passWithNoTests "${app[@]}"
+          else
+            echo "nenhum arquivo do app mudou"
+          fi
 
   # A suíte do app inteiro, que nenhum outro workflow roda: só no push, o PR não espera por ela.
   mobile-suite:
@@ -212,7 +303,7 @@ jobs:
       - run: npm run test:app
 
   merge-gate:
-    needs: [areas, regras, server, native, mobile, mobile-suite]
+    needs: [areas, regras, server, server-tests, native, mobile, mobile-suite]
     if: always()
     runs-on: ubuntu-latest
     permissions: {}
@@ -225,6 +316,8 @@ jobs:
           NATIVE_ON: ${{ needs.areas.outputs.native }}
           MOBILE_ON: ${{ needs.areas.outputs.mobile }}
           SERVER: ${{ needs.server.result }}
+          SERVER_TESTS_ON: ${{ needs.areas.outputs.rust_server }}
+          SERVER_TESTS: ${{ needs.server-tests.result }}
           NATIVE: ${{ needs.native.result }}
           MOBILE: ${{ needs.mobile.result }}
           SUITE: ${{ needs.mobile-suite.result }}
@@ -234,7 +327,7 @@ jobs:
           if [ "$AREAS" != success ]; then echo "::error::não consegui decidir as partes do portão ($AREAS)"; exit 1; fi
           SUITE_ON=$MOBILE_ON
           # No push, as travas rodam dentro das suítes; no PR, a suíte do Expo fica de fora.
-          if [ "$EVENT" = pull_request ]; then SUITE_ON=false; else SERVER_ON=false; NATIVE_ON=false; MOBILE_ON=false; fi
+          if [ "$EVENT" = pull_request ]; then SUITE_ON=false; else SERVER_ON=false; SERVER_TESTS_ON=false; NATIVE_ON=false; MOBILE_ON=false; fi
           confere() {
             local parte=$1 acionada=$2 resultado=$3 esperado=skipped
             [ "$acionada" = true ] && esperado=success
@@ -247,6 +340,7 @@ jobs:
           }
           confere regras true "$REGRAS"
           confere servidor "$SERVER_ON" "$SERVER"
+          confere testes-do-servidor "$SERVER_TESTS_ON" "$SERVER_TESTS"
           confere desktop "$NATIVE_ON" "$NATIVE"
           confere expo "$MOBILE_ON" "$MOBILE"
           confere suite-expo "$SUITE_ON" "$SUITE"

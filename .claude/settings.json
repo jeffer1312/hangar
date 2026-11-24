@@ -22,10 +22,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hook-pr-verificado.mjs\""
-          },
-          {
-            "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hook-pr-novidade.mjs\""
           }
         ]

@@ -92,8 +92,7 @@ same point.
    (`fix(scope): …`), never the branch name.
 2. Push to the PR branch. The review hook blocks the first push: run the stack reviewer once on
    the round's diff, apply what holds, push again — fixes from the reviewer are not reviewed again.
-   Push with `HANGAR_SEM_VERIFICACAO=1 git push` (the maintainer's choice for this skill): do
-   not run `scripts/verificar-local`; the PR's CI is the gate, and §5 only merges on green CI.
+   Do not run `scripts/verificar-local`: the PR's CI is the gate, and §5 only merges on green CI.
 3. For each fixed thread reply once:
    `gh api repos/<repo>/pulls/<N>/comments/<root_comment_id>/replies -f body="@coderabbitai Corrigido em <sha>. <what changed>."`
    then resolve it:
