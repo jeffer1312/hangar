@@ -12451,7 +12451,8 @@
   "native_accounts_agy_signed_in": "logado",
   "native_accounts_agy_signed_out": "não logado",
   "native_accounts_agy_terms_pending": "Termos pendentes",
-  "native_accounts_agy_no_quota": "Sem cota: o Hangar não lê o login do Google.",
+  "native_accounts_agy_terms_server_changed": "A sessão dos Termos foi criada no servidor anterior; ela não foi aberta neste.",
+  "native_accounts_agy_no_quota": "Cota ainda sem leitura: ela vem do /usage do próprio agy.",
   "native_accounts_remove_desc_antigravity": "Apaga a pasta desta conta do Google neste servidor, com o login e as conversas do agy que estão nela.",
   "native_create_agy_account": "Conta do Google",
   "native_create_agy_default": "Google (padrão)",
@@ -12500,7 +12501,7 @@
   "mobile_antigravity_in_use": "em uso por uma sessão",
   "mobile_antigravity_delete_failed": "Não foi possível apagar a conta do Google",
   "mobile_accounts_antigravity_add": "+ Conta do Google",
-  "mobile_antigravity_no_quota": "Sem cota: o Hangar não lê o login do Google.",
+  "mobile_antigravity_no_quota": "Cota do Antigravity ainda sem leitura: ela vem do /usage do próprio agy.",
   "erro_conta_antigravity_adicional": "O Antigravity com terminal só usa a conta padrão (a do ~/.gemini). Abra sem escolher outra conta.",
   "erro_permissao_so_na_abertura": "Este modo só vale ao abrir a sessão; reabra nele para usar.",
   "erro_permissao_ciclo_agy": "Não alcançou {alvo} no ciclo do shift+tab — ficou em {ficou}.",
@@ -12509,5 +12510,9 @@
   "erro_rota_so_antigravity": "Esta rota só existe para sessões Antigravity com terminal.",
   "erro_modelo_antigravity_invalido": "Esse modelo não está na lista do Antigravity desta conta.",
   "erro_modelo_sem_confirmacao": "Digitei /model, mas o Antigravity não confirmou a troca. Veja o modelo no terminal.",
-  "native_create_agy_default_needs_login": "A conta do Google padrão está sem login. Entre nela em Configurações › Contas."
+  "native_create_agy_default_needs_login": "A conta do Google padrão está sem login. Entre nela em Configurações › Contas.",
+  "native_accounts_agy_accept_terms": "Aceitar os Termos",
+  "native_accounts_agy_accept_terms_hint": "Abre uma sessão do Antigravity: os Termos do Google aparecem na conversa e quem escolhe é você. O Hangar nunca aceita por você.",
+  "mobile_antigravity_accept_terms": "Aceitar os Termos",
+  "mobile_antigravity_accept_terms_hint": "Abre uma sessão do Antigravity: os Termos do Google aparecem na conversa e quem escolhe é você. O Hangar nunca aceita por você."
 }

@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
+import { useRouter } from 'expo-router';
 import { ACCOUNT_FILTERS, accountInFilter, accountMatches, codexCliAusente, credentialAuth, credentialGroup, deleteCodexAccountForServer,
   getCodexAccountsForServer, getCredentialsForServer, accountDeletedNotice, motivoLoginIndisponivel, parseAccountSort, sortAccounts,
-  getAntigravityAccountsForServer, deleteAntigravityAccountForServer, signOutAntigravityAccountForServer, providerName,
+  getAntigravityAccountsForServer, deleteAntigravityAccountForServer, signOutAntigravityAccountForServer, providerName, createSessionForServer,
   type AccountFilter, type AccountSort, type AntigravityAccount, type AntigravityAccounts, type CodexAccount, type Credencial, type Server } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader, Pill, type PageAction } from '../../src/features/config/PageHeader';
@@ -79,6 +80,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
   const rowCache = useRef(new Map<string, { sig: string; row: IdentityRow }>());
   const painted = useRef(false);
   const handlersNow = useRef<AccountRowHandlers | null>(null);
+  const router = useRouter();
   // Mesmo objeto em toda pintura: as linhas memorizadas não redesenham por causa dele.
   const handlers = useMemo<AccountRowHandlers>(() => ({
     signIn: (id) => handlersNow.current?.signIn(id),
@@ -89,6 +91,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
     antigravitySignIn: (id) => handlersNow.current?.antigravitySignIn(id),
     antigravitySignOut: (account) => handlersNow.current?.antigravitySignOut(account),
     antigravityRemove: (account) => handlersNow.current?.antigravityRemove(account),
+    antigravityTerms: (account) => handlersNow.current?.antigravityTerms(account),
   }), []);
 
   const agyTarget = useRef('');
@@ -282,6 +285,20 @@ function ServerAccounts({ server }: { server: Server | null }) {
       { text: m.contas_apagar_com_conversas(), style: 'destructive', onPress: () => agyAction(account, () => deleteAntigravityAccountForServer(s, account.id), m.mobile_antigravity_delete_failed()) },
     ]);
   };
+  // Os Termos só aparecem dentro do agy: a sessão abre na casa da máquina (a pasta-mãe do ~/.gemini).
+  const openAgyTerms = async (account: AntigravityAccount) => {
+    if (!server) return;
+    const home = account.pasta.replace(/[\\/][^\\/]+[\\/]?$/, '');
+    try {
+      const session = await createSessionForServer(server, { name: 'agy-termos', cwd: home, provider: 'antigravity', headless: false });
+      // A tela desmontou (troca de servidor): navegar agora tiraria a pessoa do servidor novo.
+      if (!alive.current) return;
+      router.push(`/s/${server.id}/${session.name}` as never);
+    } catch (error) {
+      if (!alive.current) return;
+      Alert.alert(m.mobile_antigravity_accept_terms(), error instanceof Error ? error.message : String(error));
+    }
+  };
   const startLogin = (accountId?: string) => {
     if (!server) return;
     setNewLogin(accountId === undefined);
@@ -384,6 +401,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
     antigravitySignIn: (id) => setAgyLogin({ accountId: id }),
     antigravitySignOut: (account) => signOutAgy(account),
     antigravityRemove: (account) => removeAgy(account),
+    antigravityTerms: (account) => { void openAgyTerms(account); },
   };
   // Entrada escalonada só na primeira lista pintada; quem aparece depois (filtro, busca) só surge.
   const firstPaint = !painted.current && visible.length > 0;
@@ -437,7 +455,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
           ) : null}
         </SectionCard>
       ) : null}
-      {visible.some((row) => row.provider === 'antigravity') ? <Text style={styles.muted}>{m.mobile_antigravity_no_quota()}</Text> : null}
+      {visible.some((row) => row.provider === 'antigravity' && !row.credential?.cota) ? <Text style={styles.muted}>{m.mobile_antigravity_no_quota()}</Text> : null}
       {server && agyLogin ? (
         <AntigravityContaLogin key={JSON.stringify([server.id, server.baseUrl, server.token, agyLogin.accountId ?? ''])} server={server}
           accounts={agy?.contas ?? []} accountId={agyLogin.accountId}

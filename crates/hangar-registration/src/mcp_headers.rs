@@ -35,18 +35,25 @@ pub fn run(invocation: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
         return 1;
     }
     let mut headers = vec![("Authorization", format!("Bearer {token}"))];
-    for (header, var) in HEADERS {
-        if let Some(value) = invocation.vars.get(var).filter(|value| !value.is_empty())
-            && !headers.iter().any(|(name, _)| *name == header)
-        {
-            headers.push((header, value.clone()));
-        }
-    }
+    headers.extend(identity(&invocation.vars));
     let pairs: Vec<String> = headers.iter().map(|(name, value)| format!("{}: {}", ascii_json(name), ascii_json(value))).collect();
     match writeln!(out, "{{{}}}", pairs.join(", ")) {
         Ok(()) => 0,
         Err(_) => 1,
     }
+}
+
+/// Os cabeçalhos de identidade da sessão, pelo ambiente de quem chama (o `agy` passa o dele ao `mcp-stdio`).
+pub fn identity(vars: &std::collections::BTreeMap<String, String>) -> Vec<(&'static str, String)> {
+    let mut headers: Vec<(&'static str, String)> = Vec::new();
+    for (header, var) in HEADERS {
+        if let Some(value) = vars.get(var).filter(|value| !value.is_empty())
+            && !headers.iter().any(|(name, _)| *name == header)
+        {
+            headers.push((header, value.clone()));
+        }
+    }
+    headers
 }
 
 /// Uma string como o `json.dumps` do Python a escreve (`ensure_ascii`, fora do BMP em par de surrogates).

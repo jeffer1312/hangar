@@ -239,7 +239,7 @@ pub fn context_window(dir: &Path, model: &str) -> Option<u64> {
     }
     let windows = &memo.as_ref()?.2;
     let model = key(model);
-    let base = ["-low", "-medium", "-high", "-xhigh"].iter().find_map(|suffix| model.strip_suffix(suffix)).unwrap_or(&model);
+    let base = ["-low", "-medium", "-high", "-xhigh", "-max"].iter().find_map(|suffix| model.strip_suffix(suffix)).unwrap_or(&model);
     windows.get(&model).or_else(|| windows.get(base)).copied()
 }
 

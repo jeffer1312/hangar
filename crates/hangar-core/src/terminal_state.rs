@@ -543,7 +543,8 @@ pub fn other_pane_preview(provider: &str, pane: &str) -> String {
 pub fn agy_analyze(pane: &str) -> PaneAnalysis {
     let lines = lines(pane);
     let mut result = PaneAnalysis { preview: other_pane_preview("antigravity", pane), ..Default::default() };
-    if let Some(menu) = agy_menu(&lines) {
+    let onboarding = agy_onboarding_list(pane).map(|(title, options, _)| TerminalQuestion { question: Some(title), options });
+    if let Some(menu) = agy_terms_question(&lines).or(onboarding).or_else(|| agy_menu(&lines)) {
         result.state = "awaiting_input".into();
         result.question = menu.question;
         result.options = Some(menu.options);
@@ -558,6 +559,67 @@ pub fn agy_analyze(pane: &str) -> PaneAnalysis {
         result.spinner = result.label.clone();
     }
     result
+}
+
+/// O título da tela dos Termos do Google, a primeira vez que uma conta abre o `agy`.
+pub const AGY_TERMS_TITLE: &str = "Terms of Service & Data Use";
+/// As respostas do cartão dos Termos, na ordem do `option` do `/select` (1 = primeira). Quem escolhe é a
+/// pessoa: o Hangar só aperta as teclas da opção que ela tocou.
+pub const AGY_TERMS_OPTIONS: [&str; 3] = [
+    "Done — [x] Yes, I agree to help improve Antigravity CLI (o Google coleta os dados de interação)",
+    "Done — [ ] sem compartilhar os dados de interação",
+    "Previous",
+];
+
+/// Onde está o cursor na tela dos Termos.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgyTermsFocus { Checkbox, Previous, Done }
+
+/// A tela dos Termos lida: a caixa de compartilhar os dados marcada ou não e o foco.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AgyTerms { pub checked: bool, pub focus: AgyTermsFocus }
+
+pub fn agy_terms(pane: &str) -> Option<AgyTerms> {
+    let lines = lines(pane);
+    lines.iter().position(|l| trim(l) == AGY_TERMS_TITLE)?;
+    let check = lines.iter().map(|l| trim(l)).find(|l| (l.contains("[x]") || l.contains("[ ]")) && l.contains("I agree"))?;
+    let buttons = lines.iter().map(|l| trim(l)).rfind(|l| l.contains("Previous") && l.contains("Done"))?;
+    let focus = if check.starts_with('>') { AgyTermsFocus::Checkbox }
+        else if buttons.starts_with('>') { AgyTermsFocus::Previous }
+        else if buttons.contains("> Done") || buttons.contains(">  Done") { AgyTermsFocus::Done }
+        else { return None };
+    Some(AgyTerms { checked: check.contains("[x]"), focus })
+}
+
+/// A primeira tela do primeiro uso (`Choose your color scheme:`): as opções da coluna da esquerda, com o cursor
+/// `>`; o quadro à direita é só a amostra. `(título, opções, índice do cursor)`.
+pub fn agy_onboarding_list(pane: &str) -> Option<(String, Vec<String>, usize)> {
+    let lines = lines(pane);
+    let title = lines.iter().position(|l| trim(l).starts_with("Choose your color scheme"))?;
+    let next = lines.iter().rposition(|l| trim(l) == "[Next]" || trim(l) == "> Next" || trim(l) == ">  Next")?;
+    // Os marcadores fora de ordem (texto de conversa, não a tela) fariam o fatiamento entrar em pânico.
+    if next <= title { return None; }
+    let left_of = |line: &str| trim(line.split('│').next().unwrap_or(line)).to_owned();
+    let mut options = Vec::new();
+    let mut cursor = None;
+    for line in &lines[title + 1..next] {
+        let text = left_of(line);
+        // A amostra continua abaixo da lista: a primeira linha sem texto à esquerda encerra as opções.
+        if text.is_empty() || text.starts_with(['╭', '╰']) { if options.is_empty() { continue } else { break } }
+        if let Some(rest) = text.strip_prefix('>') { cursor = Some(options.len()); options.push(trim(rest).to_owned()); } else { options.push(text); }
+    }
+    let title = lines[title].split('╭').next().unwrap_or_default().trim().to_owned();
+    (options.len() >= 2).then_some((title, options, cursor?))
+}
+
+/// O cartão dos Termos: o aviso, o texto da caixa e os links, como a tela mostra.
+fn agy_terms_question(lines: &[&str]) -> Option<TerminalQuestion> {
+    let title = lines.iter().position(|l| trim(l) == AGY_TERMS_TITLE)?;
+    let buttons = lines.iter().rposition(|l| trim(l).contains("Previous") && trim(l).contains("Done"))?;
+    if buttons <= title { return None; }
+    let body: Vec<&str> = lines[title..buttons].iter().map(|l| trim(l)).filter(|l| !l.is_empty() && !l.chars().all(|c| c == '-'))
+        .map(|l| l.trim_start_matches('>').trim()).collect();
+    Some(TerminalQuestion { question: Some(body.join("\n")), options: AGY_TERMS_OPTIONS.iter().map(|o| (*o).to_owned()).collect() })
 }
 
 fn agy_option(line: &str) -> Option<String> {

@@ -423,3 +423,67 @@ fn json_value() -> impl Strategy<Value = serde_json::Value> {
             .prop_map(|map| serde_json::Value::Object(map.into_iter().collect())),
     ])
 }
+
+
+/// O `agy` só ganha o MCP onde já foi usado, pelo lançador estável do `mcp-stdio`, com o prazo do cofre e as
+/// liberações do recado; os servidores e as escolhas da pessoa ficam.
+#[test]
+fn agy_gets_the_stdio_bridge_only_where_it_was_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    with_token(home, "CP_AUTH_TOKEN=t\n");
+    let (code, _, err) = run(mcp_register::run, &invocation(home, ""));
+    assert_eq!(code, 0, "{err}");
+    assert!(!home.join(".gemini").exists(), "sem uso do agy nada nasce");
+    std::fs::create_dir_all(home.join(".gemini/antigravity-cli")).unwrap();
+    write(&home.join(".gemini/config/mcp_config.json"), "");
+    let (code, out, err) = run(mcp_register::run, &invocation(home, ""));
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("mcp_config.json"), "{out}");
+    let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(home.join(".gemini/config/mcp_config.json")).unwrap()).unwrap();
+    let entry = &config["mcpServers"]["hangar"];
+    assert_eq!(entry["command"], home.join(".local/bin/hangar-mcp-stdio").to_string_lossy().as_ref());
+    assert_eq!(entry["args"], serde_json::json!([]));
+    assert_eq!(entry["timeoutSeconds"], 660);
+    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(home.join(".gemini/antigravity-cli/settings.json")).unwrap()).unwrap();
+    let allowed = settings["permissions"]["allow"].as_array().unwrap();
+    assert!(allowed.contains(&serde_json::json!("mcp(hangar/send)")) && allowed.contains(&serde_json::json!("command(hangar-send --list)")));
+    let (code, out, _) = run(mcp_register::run, &invocation(home, ""));
+    assert_eq!(code, 0);
+    assert!(!out.contains(".gemini"), "segunda vez não regrava: {out}");
+}
+
+#[test]
+fn agy_keeps_the_servers_and_choices_of_the_person() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    with_token(home, "CP_AUTH_TOKEN=t\n");
+    std::fs::create_dir_all(home.join(".gemini/antigravity-cli")).unwrap();
+    write(&home.join(".gemini/config/mcp_config.json"),
+        r#"{"mcpServers":{"fs":{"command":"npx","args":["-y","x"]},"hangar":{"serverUrl":"http://127.0.0.1:8765/mcp/","headers":{"A":"b"},"disabled":true}}}"#);
+    let mut inv = invocation(home, "");
+    inv.windows = true;
+    let (code, _, err) = run(mcp_register::run, &inv);
+    assert_eq!(code, 0, "{err}");
+    let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(home.join(".gemini/config/mcp_config.json")).unwrap()).unwrap();
+    assert_eq!(config["mcpServers"]["fs"]["command"], "npx");
+    let entry = &config["mcpServers"]["hangar"];
+    assert!(entry["command"].as_str().unwrap().ends_with("hangar-mcp-stdio.cmd"), "{entry}");
+    assert_eq!(entry["disabled"], true, "desligado pela pessoa continua desligado");
+    assert!(entry.get("serverUrl").is_none() && entry.get("headers").is_none(), "o transporte HTTP antigo sai: {entry}");
+}
+
+#[test]
+fn agy_with_a_broken_config_is_skipped_and_the_others_still_register() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    with_token(home, "CP_AUTH_TOKEN=t\n");
+    std::fs::create_dir_all(home.join(".gemini/antigravity-cli")).unwrap();
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    write(&home.join(".gemini/config/mcp_config.json"), "{ quebrado");
+    let (code, _, err) = run(mcp_register::run, &invocation(home, ""));
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("mcp_config.json não é JSON válido — pulado"), "{err}");
+    assert_eq!(std::fs::read_to_string(home.join(".gemini/config/mcp_config.json")).unwrap(), "{ quebrado");
+    assert!(std::fs::read_to_string(home.join(".codex/config.toml")).unwrap().contains("[mcp_servers.hangar]"));
+}

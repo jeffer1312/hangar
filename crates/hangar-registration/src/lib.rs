@@ -1,5 +1,5 @@
 //! O registro do Hangar nos agentes desta máquina, chamado pelo instalador e pelos passos de
-//! atualização: o MCP `hangar` nas contas do Claude e do Codex (`mcp-register`) e o cabeçalho que o
+//! atualização: o MCP `hangar` nas contas do Claude, do Codex e do Antigravity (`mcp-register`) e o cabeçalho que o
 //! Claude pede a cada conexão (`mcp-headers`), os agentes das skills (`agents-install`) e o bloco
 //! Sessões-irmãs do `~/.claude/CLAUDE.md` (`claude-md-block`). Antes eram scripts Python.
 use std::collections::BTreeMap;
@@ -13,7 +13,7 @@ mod files;
 pub mod mcp_headers;
 pub mod mcp_register;
 
-pub use files::toml_string;
+pub use files::{env_file, read_env, toml_string};
 
 /// Uma chamada de um dos comandos, com o ambiente lido uma vez.
 #[derive(Clone, Debug, Default)]
@@ -68,7 +68,7 @@ pub fn home_of(vars: &BTreeMap<String, String>) -> PathBuf {
 }
 
 /// O ambiente do processo; `stdin` só para quem o lê.
-fn from_process(args: &[String], command: &str, read_stdin: bool, err: &mut dyn Write) -> Result<Invocation, u8> {
+pub fn from_process(args: &[String], command: &str, read_stdin: bool, err: &mut dyn Write) -> Result<Invocation, u8> {
     let (root, home_arg) = parse_args(args).map_err(|message| {
         let _ = writeln!(err, "uso: hangar-server {command} [--root <raiz>] [--home <casa>] ({message})");
         2
