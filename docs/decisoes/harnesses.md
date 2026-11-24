@@ -8,7 +8,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **O Kimi fica só com os provedores dele: motor nenhum vai ao `config.toml` do Kimi.** O espelho de
   credenciais (`engines/mirrors.rs`) leva motores só ao Pi e ao Codex (`SYNC_TARGETS`); "Sincronizar"
   e o reparo de credenciais da saúde não oferecem o Kimi, e a subida tira os blocos
-  `# >>> hangar: provedor …` que versões antigas gravaram lá (`purge_kimi`). Hook do Hangar no Kimi
+  `# >>> hangar: provedor …` que versões antigas gravaram lá (`purge_kimi`), e também o motor que o
+  Kimi regravou sem esse comentário, reconhecido pelo nome, pela chave e pelo endereço do motor. Hook do Hangar no Kimi
   só com evento que o Kimi Code conhece: o `TurnStarted` antigo sai no reparo da subida
   (`kimi_hooks::RETIRED_EVENTS`). Ver
   [Kimi só com os provedores dele](#kimi-só-com-os-provedores-dele-24112026).

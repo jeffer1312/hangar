@@ -136,12 +136,44 @@ pub fn purge_kimi(env: &AccountEnvironment) -> Result<Vec<String>,String> {
     let _lock = LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let path = directory(env,"kimi").join("config.toml");
     let names: Vec<String> = ENGINE_BLOCK.captures_iter(&text(&path)?).map(|c|c[1].to_owned()).collect();
-    let mut removed = Vec::new();
+    let (mut removed, mut failed) = (Vec::new(), Vec::new());
     for name in names {
-        remove_one(env,"kimi",&name)?;
-        removed.push(name);
+        match remove_one(env,"kimi",&name) { Ok(_) => removed.push(name), Err(e) => failed.push(format!("{name}: {e}")) }
     }
-    Ok(removed)
+    match remove_unmarked(env,&path) { Ok(names) => removed.extend(names), Err(e) => failed.push(e) }
+    if failed.is_empty() { Ok(removed) } else { Err(format!("{}; tirados: [{}]",failed.join("; "),removed.join(", "))) }
+}
+
+/// Motor cujo marcador o Kimi tirou ao regravar o arquivo: sai o provedor com o nome, a chave e o
+/// endereço do motor, e os modelos dele. Provedor pessoal com o mesmo nome e outra chave fica.
+fn remove_unmarked(env: &AccountEnvironment, path: &Path) -> Result<Vec<String>,String> {
+    let raw = text(path)?;
+    if raw.trim().is_empty() { return Ok(vec![]); }
+    let parsed: Value = toml::from_str(&raw).map_err(|_|"config-invalido".to_owned())?;
+    let engines = crate::engines::store::state(env).0;
+    let ours: Vec<String> = engines.iter().filter(|(name,data)| {
+        let provider = &parsed["providers"][name.as_str()];
+        truthy(&data["api_key"]) && provider["api_key"] == data["api_key"]
+            && provider["base_url"].as_str() == data["base_url"].as_str().map(base).as_deref()
+    }).map(|(name,_)|name.clone()).collect();
+    if ours.is_empty() { return Ok(ours); }
+    let owned = |table: &str| ours.iter().any(|n| table == format!("providers.{n}") || table.starts_with(&format!("providers.{n}.")) || table.starts_with(&format!("models.{n}/")));
+    // Comentário e linha em branco antes de uma tabela são de quem vem depois: só saem se ela também sair.
+    let (mut out, mut pending, mut skip) = (String::new(), String::new(), false);
+    for line in raw.split_inclusive('\n') {
+        if let Some(c) = TABLE.captures(line) {
+            skip = owned(c[1].replace('"',"").trim());
+            if !skip { out.push_str(&pending); }
+            pending.clear();
+        } else if skip {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') { pending.push_str(line); } else { pending.clear(); }
+            continue;
+        }
+        if !skip { out.push_str(line); }
+    }
+    backup(path)?; write_preserving(path,&out)?;
+    Ok(ours)
 }
 fn run(targets: &[String], allowed: &[&str], mut operation: impl FnMut(&str)->Result<String,String>) -> Value {
     let _lock = LOCK.lock().unwrap_or_else(|e|e.into_inner()); let mut result = json!({});
@@ -193,6 +225,46 @@ mod tests {
         removed.sort();
         assert_eq!(removed, ["astra", "sol"]);
         assert_eq!(fs::read_to_string(&config).unwrap(), format!("{OWN}{HOOKS}"));
+    }
+
+    fn write_engine(home: &Path, name: &str, key: &str) {
+        let path = home.join(".claude/engines.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, json!({name: {"base_url": "http://127.0.0.1:8317", "api_key": key, "model": "gpt-x"}}).to_string()).unwrap();
+    }
+
+    /// O Kimi regrava o arquivo sem comentários: o motor que ficou sem marcador sai pelo nome e pela
+    /// chave dele; provedor pessoal com o mesmo nome e outra chave fica.
+    #[test]
+    fn purge_removes_an_engine_whose_markers_the_kimi_rewrite_dropped() {
+        let home = tempfile::tempdir().unwrap();
+        write_engine(home.path(), "astra", "k");
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let unmarked = "[providers.astra]\ntype = \"kimi\"\napi_key = \"k\"\nbase_url = \"http://127.0.0.1:8317/v1\"\n\n[models.\"astra/gpt-x\"]\nprovider = \"astra\"\nmodel = \"gpt-x\"\nmax_context_size = 128000\ndisplay_name = \"gpt-x\"\n\n";
+        fs::write(&config, format!("{OWN}{unmarked}{HOOKS}")).unwrap();
+        assert_eq!(purge_kimi(&env_at(home.path())).unwrap(), ["astra"]);
+        let fixed = fs::read_to_string(&config).unwrap();
+        assert!(fixed.starts_with(OWN) && !fixed.contains("astra") && fixed.ends_with(HOOKS.trim_start()), "{fixed}");
+        assert!(toml::from_str::<Value>(&fixed).is_ok());
+
+        write_engine(home.path(), "astra", "outra");
+        fs::write(&config, format!("{OWN}{unmarked}{HOOKS}")).unwrap();
+        assert!(purge_kimi(&env_at(home.path())).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(&config).unwrap(), format!("{OWN}{unmarked}{HOOKS}"));
+    }
+
+    /// Um bloco quebrado não impede tirar os outros; o erro volta com o que foi tirado.
+    #[test]
+    fn purge_goes_on_past_a_broken_block() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".kimi-code/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let broken = engine_block("astra").replace(&markers("astra").1, "");
+        fs::write(&config, format!("{OWN}{}{broken}", engine_block("sol"))).unwrap();
+        let error = purge_kimi(&env_at(home.path())).unwrap_err();
+        assert!(error.contains("astra") && error.contains("bloco-incompleto") && error.contains("sol"), "{error}");
+        assert!(!fs::read_to_string(&config).unwrap().contains("provedor sol"));
     }
 
     /// Sem Kimi instalado, ou sem bloco do Hangar, não há o que tirar nem arquivo a criar.
