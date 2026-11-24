@@ -811,6 +811,8 @@ impl NewSession {
     pub(super) fn render_model_menu(&self, cx: &mut Context<Self>) -> Div {
         use crate::app::controls::picker;
         let query = self.menu_filter(cx);
+        // Lista de permissões que deixou de existir (o modo trocou na releitura): volta aos modelos.
+        let access_open = self.access_open && self.permissions().is_some();
         let rail = (!self.is_transfer()).then(|| picker::rail_view(PROVIDERS.iter().map(|&p| {
             let available = self.providers.ok().and_then(|m| m.get(p)).is_none_or(|probe| probe.disponivel);
             picker::rail_tab(picker::rail_button(&format!("new-chat-{p}"), self.provider == p, provider_name(p).to_owned(),
@@ -822,7 +824,7 @@ impl NewSession {
             .text_size(px(15.)).font_weight(FontWeight::NORMAL).child(label)
             .when(!hint.is_empty(), |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(hint.clone()).build(window, cx)))
             .into_any_element();
-        let list = if self.access_open {
+        let list = if access_open {
             let current = self.permission.clone();
             let rows = std::iter::once(String::new()).chain(self.permissions().unwrap_or_default().iter().map(|m| (*m).to_owned()))
                 .map(|mode| picker::row_view(SharedString::from(format!("new-chat-permission-{mode}")), "",
@@ -893,15 +895,15 @@ impl NewSession {
             .child(Input::new(&self.menu_query).appearance(false).h(px(40.)).text_size(px(16.)).aria_label(tr("picker_search"))
                 .prefix(chrome::small_icon(IconName::Search, 16., theme::faint())));
         let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).children(engine)
-            .when(!self.access_open, |el| el.child(search)).child(list);
+            .when(!access_open, |el| el.child(search)).child(list);
         let access = self.permissions().map(|_| {
             let shown = permission_label(&self.permission);
-            Button::new("new-chat-access").ghost().small().selected(self.access_open).disabled(self.creating)
+            Button::new("new-chat-access").ghost().small().selected(access_open).disabled(self.creating)
                 .accessibility_label(format!("{}: {shown}", tr("create_permission")))
                 .child(div().flex().items_center().gap(px(6.)).text_size(px(13.5)).text_color(theme::muted())
                     .child(chrome::small_icon(IconName::KeyRound, 14., theme::faint())).child(shown)
-                    .child(chrome::small_icon(if self.access_open { IconName::ChevronDown } else { IconName::ChevronUp }, 13., theme::faint())))
-                .on_click(cx.listener(|this, _, _, cx| { this.access_open = !this.access_open; cx.notify(); }))
+                    .child(chrome::small_icon(if access_open { IconName::ChevronDown } else { IconName::ChevronUp }, 13., theme::faint())))
+                .on_click(cx.listener(|this, _, _, cx| { this.access_open = !(this.access_open && this.permissions().is_some()); cx.notify(); }))
         });
         let footer = access.map(|access| div().mt(px(4.)).pt(px(8.)).px(px(4.)).flex().items_center().gap_2()
             .border_t_1().border_color(theme::border()).child(div().flex_1()).child(access));
