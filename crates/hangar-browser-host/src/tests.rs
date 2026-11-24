@@ -153,3 +153,16 @@ async fn state_updates_and_confirmed_open_feed_list() {
     drop(host);
     assert_eq!(registry.list(), "s  http://localhost:5173/  MORTO (reabra com: hangar-preview open http://localhost:5173/)  (aba 1)");
 }
+
+#[tokio::test]
+async fn host_answers_whether_another_machine_has_the_session_open() {
+    let registry = Arc::new(Registry::default());
+    assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Err(Refusal::NoHost));
+    let (mut host, mut rx) = registry.attach();
+    host.text(r#"{"type":"focus","session":"s"}"#);
+    assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Ok(Reply::Text("ok: host".into())));
+    // A pergunta não chega ao app.
+    assert!(rx.try_recv().is_err());
+    drop(host);
+    assert!(!registry.has_host("s"));
+}

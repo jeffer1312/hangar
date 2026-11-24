@@ -248,9 +248,28 @@ function sidecarDa(nome) {
   erro(`"${nome}" existe em mais de um servidor — use a chave completa:\n` + achados.map((s) => `  ${s.chave}`).join('\n'));
 }
 
-// Sem app desktop nesta máquina, os verbos vão pelo servidor ao app de quem usa a sessão (canal anfitrião).
+// Os verbos vão pelo servidor ao app de outra máquina que está com a sessão aberta (é onde a pessoa olha) e, sem ele,
+// ao app desta máquina. `objetivo`/`confere` e `list` só existem aqui quando há app local.
 // Lido uma vez: o app que abre no meio do comando não rouba um `batch` em curso.
-const remote = !externo && !localApp();
+async function hostElsewhere() {
+  const nome = nomeSessao();
+  // Sem token não há como perguntar: fica o app daqui, que não precisa dele.
+  const token = nome && ownerToken(() => '');
+  if (!token) return false;
+  try {
+    const r = await fetch(`${BACKEND}/api/sessions/${encodeURIComponent(nome)}/browser-cmd`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verbo: 'host', args: [], deadline_ms: 3000 }),
+      signal: AbortSignal.timeout(5000),
+    });
+    // Servidor antigo repassa `host` ao app de lá, que responde `erro:` em 200: a resposta já prova que ele existe.
+    // Sem app de lá é 409; qualquer outra recusa fica com o app daqui.
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
 
 // Com --cdp não há chave: a página é escolhida pelo endereço e pelo --alvo. Sem app local, o servidor acha o
 // navegador pelo nome da sessão.
@@ -313,7 +332,7 @@ const BACKEND = `http://127.0.0.1:${process.env.PORT || 8765}`;
 // Token do `~/.hangar/config/.env` ou, sem ele, do backend/.env ao lado do script, mesmo padrão do hangar-send.
 // Lido uma vez: um `batch` chama o servidor a cada linha.
 let ownerTokenCache;
-function ownerToken() {
+function ownerToken(sair = erro) {
   if (ownerTokenCache) return ownerTokenCache;
   const repo = join(dirname(realpathSync(process.argv[1])), '..');
   const novo = join(homedir(), '.hangar', 'config', '.env');
@@ -321,12 +340,14 @@ function ownerToken() {
   try {
     token = readFileSync(existsSync(novo) ? novo : join(repo, 'backend', '.env'), 'utf8').match(/^CP_AUTH_TOKEN=(.+)$/m)?.[1]?.trim() ?? '';
   } catch { /* sem .env */ }
-  if (!token) erro('não achei CP_AUTH_TOKEN no ~/.hangar/config/.env nem no backend/.env do repo');
+  if (!token) return sair('não achei CP_AUTH_TOKEN no ~/.hangar/config/.env nem no backend/.env do repo');
   return (ownerTokenCache = token);
 }
 
 // O prazo que o servidor espera o app; o `open` espera o navegador ficar pronto, o `login` espera a pessoa.
 const deadlineFor = (verbo) => (verbo === 'login' ? 110_000 : verbo === 'open' ? PRONTO_MS : 45_000);
+
+const remote = !externo && (!localApp() || (!['objetivo', 'confere', 'list'].includes(cmd) && await hostElsewhere()));
 
 // O verbo pelo servidor desta máquina (`browser-cmd`), que o repassa ao app desktop com a sessão aberta.
 // Uma linha no stderr por comando: quem lê sabe que o navegador não é o desta máquina.
@@ -334,7 +355,7 @@ let warnedRemote = false;
 async function callServer(nome, verbo, cmdArgs, aba = flags.aba, sair = erro) {
   if (!warnedRemote) {
     warnedRemote = true;
-    process.stderr.write('sem app local nesta máquina; usando o navegador do app desktop de outra máquina\n');
+    process.stderr.write('usando o navegador do app desktop de outra máquina, onde a sessão está aberta\n');
   }
   const prazo = deadlineFor(verbo);
   let r, texto;

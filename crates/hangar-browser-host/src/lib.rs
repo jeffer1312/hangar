@@ -158,6 +158,10 @@ impl Registry {
         if verb == "list" {
             return Ok(Reply::Text(self.list()));
         }
+        // Só a pergunta do CLI: o navegador vai para o app de outra máquina antes do app desta.
+        if verb == "host" {
+            return if self.has_host(session) { Ok(Reply::Text("ok: host".into())) } else { Err(Refusal::NoHost) };
+        }
         let deadline = deadline_of(&body);
         let url = matches!(verb.as_str(), "open" | "goto")
             .then(|| body.get("args").and_then(|a| a.get(0)).and_then(Value::as_str).map(str::to_owned))
@@ -186,6 +190,9 @@ impl Registry {
             Err(_) => Err(Refusal::Timeout),
         }
     }
+
+    /// Um app de outra máquina ligado está com esta sessão aberta: ele, e não o app desta máquina, recebe o navegador.
+    pub fn has_host(&self, session: &str) -> bool { self.lock().chosen(session).is_some() }
 
     /// O `list` do CLI: as sessões com navegador conhecido; vivo = algum anfitrião ligado com foco nela.
     pub fn list(&self) -> String {

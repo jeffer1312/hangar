@@ -721,7 +721,13 @@ impl Tools {
         self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
     }
 
-    /// Sem app desktop nesta máquina: o verbo vai pela `browser-cmd` ao app de quem usa a sessão.
+    /// O navegador vai ao app de outra máquina que está com a sessão aberta (é onde a pessoa olha) ou, sem ele, ao
+    /// app desta; sem nenhum dos dois, a `browser-cmd` dá a recusa.
+    fn remote_browser(&self, name: &str, home: &std::path::Path) -> Result<bool, String> {
+        Ok(self.st.browser_host.has_host(name) || !nav::local_app(home).map_err(|e| e.0)?)
+    }
+
+    /// O verbo vai pela `browser-cmd` ao app de quem usa a sessão em outra máquina.
     async fn host_verb(&self, name: &str, verb: &str, args: &[String], tab: Option<i64>, deadline: Duration) -> Result<String, nav::Unavailable> {
         let body = nav::host_body(verb, args, tab, deadline);
         let (status, value) = self.route(Method::POST, &format!("/api/sessions/{}/browser-cmd", segment(name)), Some(body)).await;
@@ -731,7 +737,7 @@ impl Tools {
     async fn browser_open(&self, headers: &HeaderMap, a: BrowserOpen) -> Outcome {
         let me = self.me(headers, &a.sessao).await?;
         let (since, home) = (now_ms(), self.home());
-        if !nav::local_app(&home).map_err(|e| e.0)? {
+        if self.remote_browser(&me, &home)? {
             // O app de lá só responde com o navegador pronto: a resposta é a URL, como a do `url`.
             let text = self.host_verb(&me, "open", std::slice::from_ref(&a.url), None, Duration::from_secs(20)).await.map_err(|e| e.0)?;
             let Some(url) = nav::ok_value(&text) else { return Err(text) };
@@ -873,8 +879,8 @@ impl Tools {
             args = vec![dir.join(format!("{}.png", now_ms())).to_string_lossy().into_owned()];
         }
         let timeout = if verb == "login" { LOGIN_TIMEOUT } else { nav::VERB_TIMEOUT };
-        let answer = if nav::local_app(&home).map_err(|e| e.0)? { nav::verb(&self.http, &home, name, verb, &args, tab, timeout).await }
-            else { self.host_verb(name, verb, &args, tab, timeout).await };
+        let answer = if self.remote_browser(name, &home)? { self.host_verb(name, verb, &args, tab, timeout).await }
+            else { nav::verb(&self.http, &home, name, verb, &args, tab, timeout).await };
         let answer = answer.map_err(|e| e.0)?;
         if answer.starts_with("erro:") { Err(answer) } else { Ok(answer) }
     }
