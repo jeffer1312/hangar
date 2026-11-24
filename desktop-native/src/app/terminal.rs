@@ -338,6 +338,7 @@ impl Hangar {
             } else if slot.socket.is_some() || !matches!(slot.status, Status::Connecting) {
                 if let Some(socket) = slot.socket.as_mut() { socket.close(); }
                 slot.socket = None;
+                slot.unsent.clear();
                 slot.generation += 1;
                 slot.status = Status::Connecting;
             }
@@ -465,6 +466,7 @@ impl Hangar {
         if slot.fixture_error { return; }
         if let Some(socket) = slot.socket.as_mut() { socket.close(); }
         slot.socket = None;
+        slot.unsent.clear();
         slot.generation += 1;
         slot.status = Status::Connecting;
         let (id, uid, generation, name) = (panel.id, slot.uid, slot.generation, slot.name.clone());
@@ -586,11 +588,11 @@ impl Hangar {
                     }
                     Ok(ws::Event::Closed) => {
                         crate::log_line(&format!("terminal {}: o servidor fechou o socket", slot.name));
-                        slot.socket = None; slot.status = Status::Failed(tr("term_disconnected"));
+                        slot.socket = None; slot.unsent.clear(); slot.status = Status::Failed(tr("term_disconnected"));
                     }
                     Err(error) => {
                         crate::log_line(&format!("terminal {}: socket caiu: {error:?}", slot.name));
-                        slot.socket = None; slot.status = Status::Failed(socket_error(error));
+                        slot.socket = None; slot.unsent.clear(); slot.status = Status::Failed(socket_error(error));
                     }
                 }
             }
@@ -667,14 +669,19 @@ impl Hangar {
         let Some(slot) = panel.tabs.iter_mut().find(|slot| slot.uid == uid) else { return };
         if slot.retry_armed || slot.unsent.is_empty() { return; }
         slot.retry_armed = true;
+        let generation = slot.generation;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SEND_RETRY).await;
             let _ = this.update(cx, |this, cx| {
                 let Some(slot) = this.terminal.as_mut().filter(|panel| panel.id == panel_id)
                     .and_then(|panel| panel.tabs.iter_mut().find(|slot| slot.uid == uid)) else { return };
                 slot.retry_armed = false;
+                // Socket trocado: as teclas eram do programa de antes.
+                if slot.generation != generation { return; }
                 Self::flush_terminal(slot);
+                let failed = matches!(slot.status, Status::Failed(_));
                 this.keep_sending(uid, cx);
+                if failed { cx.notify(); }
             });
         }).detach();
     }

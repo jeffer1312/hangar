@@ -389,6 +389,8 @@ pub enum Proof { Present, Absent, Unreadable }
 #[derive(Clone, Debug)]
 pub struct ComposerSnapshot { pub content: String, pub placeholders: BTreeSet<String>, pub stashed: bool }
 static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[(Pasted text|Image) #(\d+)").unwrap());
+static PASTE_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[Pasted text #\d+(?: \+(\d+) lines)?\]").unwrap());
+static LINE_BREAK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\r\n|\r|\n").unwrap());
 static CURSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*[❯›]\s*(\d+)\.\s").unwrap());
 static AGENT_ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:❯\s+)?[●◯]\s+(\S+)").unwrap());
 // Dica de argumento que o Claude desenha depois de um comando com barra completo (`/clear │ [name]`,
@@ -458,8 +460,11 @@ impl ComposerSnapshot {
     /// O campo tem exatamente `text` e mais nada (nem anexo): só então um Enter de novo não leva texto alheio.
     fn only(&self, text: &str) -> bool { self.placeholders.is_empty() && !self.is_empty() && compact(&self.content) == compact(text) }
     /// Também vale o campo só com colagens novas: o Claude mostra o recado longo como `[Pasted text #N]`.
+    /// O `+N lines` é a conta de quebras do Claude: colagem da pessoa, de outro tamanho, não leva o nosso Enter.
     fn resendable(&self, text: &str, before: &Self) -> bool {
-        self.only(text) || !self.placeholders.is_empty() && self.placeholders.iter().all(|p| p.starts_with("Pasted text:")) && self.owned(text, before)
+        let lines: usize = PASTE_LINES.captures_iter(&self.content).map(|c| c.get(1).map_or(0, |n| n.as_str().parse().unwrap_or(usize::MAX))).sum();
+        self.only(text) || !self.placeholders.is_empty() && self.placeholders.iter().all(|p| p.starts_with("Pasted text:"))
+            && lines == LINE_BREAK.find_iter(text).count() && self.owned(text, before)
     }
     fn owned(&self, text: &str, before: &Self) -> bool {
         if self.typed(text, before) == compact(text) { return true; }
@@ -2025,7 +2030,7 @@ mod repeat_enter_tests {
     }
     #[test]
     fn our_long_message_shown_as_a_paste_allows_another_enter() {
-        let long = "linha\n".repeat(30);
+        let long = "linha\n".repeat(30) + "fim";
         let empty = field("");
         assert!(field("[Pasted text #1 +30 lines]").resendable(&long, &empty), "o Claude resume o recado longo");
         assert!(field("Olá de novo").resendable("Olá de novo", &empty));
@@ -2033,6 +2038,8 @@ mod repeat_enter_tests {
         assert!(!field("[Pasted text #1 +30 lines] e mais").resendable(&long, &empty), "texto da pessoa junto");
         assert!(!field("[Pasted text #1 +30 lines] [Image #2]").resendable(&long, &empty), "anexo junto");
         assert!(!field("[Image #1]").resendable(&long, &empty));
+        assert!(!field("[Pasted text #2 +5 lines]").resendable(&long, &empty), "colagem da pessoa, de outro tamanho");
+        assert!(field("[Pasted text #1 +10 lines] [Pasted text #2 +20 lines]").resendable(&long, &empty), "o nosso recado em dois pedaços");
     }
 }
 #[cfg(all(test, windows))]

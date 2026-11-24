@@ -329,11 +329,13 @@ impl Store {
             .map_err(|error| ServiceError(error.code()))?.ok_or_else(unavailable)?;
         let replace = s.questions.get(&ask.id).is_none_or(|q| q.public.interaction_id != interaction_id);
         if replace {
+            // Pergunta refeita fica no lugar dela na fila.
+            let order = s.questions.get(&ask.id).map_or(poll_id, |q| q.order);
             if let Some(old) = s.questions.remove(&ask.id) { finish_question(old, PluginReply::Unknown); }
             s.closed.remove(&ask.id);
             s.questions.insert(ask.id.clone(), Question {
                 public: PluginQuestion { id: ask.id.clone(), interaction_id, questions: semantic["questions"].clone(), tool: ask.tool, summary: ask.summary },
-                order: poll_id, seen: now, interrupted: None, expired: false, waiter: None, answer: None,
+                order, seen: now, interrupted: None, expired: false, waiter: None, answer: None,
             });
         }
         let q = s.questions.get_mut(&ask.id).ok_or_else(unavailable)?;
