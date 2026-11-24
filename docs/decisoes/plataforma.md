@@ -342,7 +342,8 @@ Decisões:
 - **Anexo.** Caminho absoluto, até 100 MB, aberto sem seguir link e copiado para a pasta do rascunho
   com sha256. Recusado (`file_refused`): a pasta de dados do binário, `~/.hangar` (menos
   `~/.hangar/worktrees/`, onde ficam as worktrees das sessões), `~/.ssh`,
-  `~/.gnupg`, `~/.config`, `~/.claude*`, qualquer pasta oculta no caminho, `.env*`, `*.key`, `*.pem`.
+  `~/.gnupg`, `~/.config`, `~/.claude*`, qualquer pasta oculta no caminho, `.env*`, `*.key`, `*.pem`, `/proc`, `/sys`, `/dev`, link
+  simbólico no último trecho e o que não for arquivo comum.
 
 Do lado do Hangar (C6):
 
