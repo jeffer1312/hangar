@@ -89,7 +89,12 @@ enum Origin {
     Account(Provider, Account),
     Other(other::Reader),
     CliProxy(String),
+    /// A conta padrão do `agy`, pelo `/usage` do próprio CLI.
+    Antigravity(std::path::PathBuf),
 }
+
+/// O `/usage` responde em ~4 s; mais que isso é o `agy` preso.
+const AGY_USAGE_LIMIT: Duration = Duration::from_secs(20);
 
 /// A leitura curta de cota da abertura sai pela rede; os testes de integração a desligam, porque as
 /// contas deles têm token falso e ela iria à Anthropic. Do processo inteiro, como o `use_cano_binary`.
@@ -268,6 +273,29 @@ impl AccountService {
         }
     }
 
+    /// A cota do `agy` pelo comando `/usage` do binário oficial, numa pasta neutra: sem ler o login, sem chamar
+    /// o Google. O cache (`TTL`) é quem espaça as leituras; nunca há laço próprio.
+    async fn read_agy_quota(&self, program: std::path::PathBuf) -> Value {
+        let account = hangar_antigravity::Account::default();
+        let env = hangar_antigravity::env::process_env(&account, self.env.base.keys().cloned());
+        let cwd = std::env::temp_dir();
+        let read = tokio::task::spawn_blocking(move || hangar_antigravity::usage::read(&program, &cwd, &env, AGY_USAGE_LIMIT)).await;
+        let failed = |code: &'static str, detail: String| {
+            tracing::warn!(code, %detail, "cota do Antigravity não lida");
+            if let Some(diag) = self.quotas.diag.get() {
+                diag.report("rust.quota_sources_partial", "cotas:antigravity", code, "cota do Antigravity não lida pelo /usage");
+            }
+        };
+        match read {
+            Ok(Ok(Some(Ok(groups)))) => reading("lida", hangar_antigravity::usage::windows(&groups), None),
+            Ok(Ok(Some(Err(reason)))) if reason.to_lowercase().contains("sign in") => reading("sem_credencial", vec![], Some("agy-sem-login")),
+            Ok(Ok(Some(Err(reason)))) => { failed("agy_usage_unreadable", reason); reading("indisponivel", vec![], Some("agy-usage-ilegivel")) }
+            Ok(Ok(None)) => { failed("agy_usage_timeout", String::new()); reading("indisponivel", vec![], Some("agy-usage-prazo")) }
+            Ok(Err(error)) => { failed("agy_usage_spawn_failed", error.to_string()); reading("indisponivel", vec![], Some("agy-usage-ilegivel")) }
+            Err(_) => reading("indisponivel", vec![], Some("agy-usage-ilegivel")),
+        }
+    }
+
     async fn read_cliproxy_quota(&self, binding: &str) -> Value {
         const MANAGEMENT: &str = "cliproxy-management";
         const LIMITED: &str = "cliproxy-gerenciamento-http-429";
@@ -337,6 +365,15 @@ impl AccountService {
             let path = crate::accounts::catalog::resolved(&account.home);
             sources.push((json!({"id":format!("codex:{}",path.to_string_lossy()),
                 "label":if account.is_default {"Codex"} else {&account.id},"provedor":"codex","ativa":false}),Origin::Account(Provider::Codex,account)));
+        }
+        // Com terminal o `agy` só usa a conta padrão; sem o agy instalado ou usado, nada a ler.
+        let agy = hangar_antigravity::Account::default();
+        if agy.data_dir(&self.env.home).is_dir()
+            && let Some(program) = crate::cli_probe::resolve_program("agy", &self.env)
+        {
+            let dir = crate::accounts::catalog::resolved(&agy.gemini_dir(&self.env.home));
+            sources.push((json!({"id":format!("antigravity:{}", dir.to_string_lossy()),"label":crate::accounts::antigravity::label(&agy),
+                "provedor":"antigravity","ativa":false}), Origin::Antigravity(program)));
         }
         match crate::engines::proxy::quota_bindings(&self.env) {
             Ok(bindings) => sources.extend(bindings.into_iter().map(|(binding, label)| (
@@ -417,6 +454,7 @@ impl AccountService {
                                 (value, signature, None)
                             }
                             Origin::CliProxy(binding) => (service.read_cliproxy_quota(&binding).await, None, None),
+                            Origin::Antigravity(program) => (service.read_agy_quota(program).await, None, None),
                             Origin::Other(reader) => {
                                 let outcome = other::read(
                                     &other_client,
