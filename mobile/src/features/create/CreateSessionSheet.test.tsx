@@ -612,7 +612,7 @@ describe('CreateSessionSheet Codex', () => {
 
   // Trava da abertura única, como a do desktop (default_tests.rs): qualquer preferência do aparelho, de hoje
   // ou nova, responde com um valor ligado, e o pedido tem de sair igual. O módulo é recarregado porque os
-  // stores leem a preferência ao carregar.
+  // stores leem a preferência ao carregar. Cobre o que passa por stores/prefs; SecureStore fica de fora.
   const openingWith = async (provider: 'claude' | 'codex', value?: string) => {
     calls.saved = (key) => /^create\.(machine|project|attempt)\.v1/.test(key) || /draft/i.test(key) ? undefined : value;
     vi.resetModules();

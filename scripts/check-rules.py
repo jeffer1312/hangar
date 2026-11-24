@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 SERVER = "hangar-server"
-TESTS = re.compile(r"\.test\.|(^|/)tests?/|/__mocks__/|fixtures|(^|[/_])tests?\.rs$|/cases\.rs$|\.nativeSetup\.|vitest\.config\.|(^|/)test[_-]")
+TESTS = re.compile(r"\.test\.|(^|/)tests?/|/__mocks__/|(^|/)fixtures?(/|\.)|(^|[/_])tests?\.rs$|/cases\.rs$|\.nativeSetup\.|vitest\.config\.|(^|/)test[_-]")
 COMMENT = re.compile(r"\s*(//|#|\*|/\*|<!--)")
 KEYBOARD = re.compile(
     r"import\s+(?:type\s+)?(?:\w+\s*,\s*)?\{[^}]*\bKeyboardAvoidingView\b[^}]*\}\s*from\s*['\"]react-native['\"]")
@@ -43,30 +43,41 @@ LINE_RULES = (
         "Toda URL de chamada a um servidor sai por baseOf(servidor) (ou getBaseUrl do ApiEnv): baseUrl cru ignora a rede local.",
         tuple(f"{folder}/*.{ext}" for folder in ("frontend/src", "mobile/src", "mobile/app", "packages/core/src")
               for ext in ("ts", "tsx", "svelte")),
-        re.compile(r"\bbaseUrl\}/(api|ws|cdp)\b|\bbaseUrl\s*\+\s*['\"`]/|new URL\(\s*['\"`]/(api|ws|cdp)\b[^)]*\bbaseUrl\b"),
+        re.compile(r"\.baseUrl\}(/(api|ws|cdp)\b|\$\{)|\.baseUrl\s*\+|new URL\([^)]*,\s*[\w.?]*\.baseUrl\s*\)"),
         re.compile(r"(?!)")),
     LineRule(
         "LANCADOR", "Sessão aberta fora do lançador",
         "Abrir sessão é de um lançador só (crates/hangar-server/src/session_open); o resto manda um SessionOpenRequest.",
-        ("crates/*.rs",), re.compile(r"['\"]new-session['\"]"), re.compile(r"^crates/hangar-server/src/session_open/")),
+        ("crates/*.rs",), re.compile(r"['\"]([^'\"\n]*\s)?new-session(?![\w-])"), re.compile(r"^crates/hangar-server/src/session_open/")),
 )
 
 
 def authorized(base: str, head: str, mark: str) -> bool:
-    pattern = rf"(^|[^A-Za-z_])HANGAR_{mark}_AUTORIZADO:[ \t]+\S"
+    # O motivo de verdade: o "<motivo>" copiado da ajuda não vale.
+    pattern = rf"(^|[^A-Za-z_])HANGAR_{mark}_AUTORIZADO:[ \t]+(?!<)\S"
     return re.search(pattern, git("log", "--no-merges", "--format=%B", f"{base}..{head}"), re.M) is not None
 
 
-def added_lines(base: str, head: str, *paths: str, renames: bool = True) -> list[tuple[str, str]]:
-    """As linhas que o diff acrescenta, com o arquivo de cada uma."""
-    found, name = [], ""
+def diff_lines(base: str, head: str, *paths: str, renames: bool = True) -> list[tuple[int, str, str, str]]:
+    """(arquivo no diff, nome no head, "+" ou "-", texto) de cada linha que o diff muda."""
+    found, entry, name, header = [], -1, "", False
     for line in git("-c", "core.quotePath=false", "diff", "--find-renames" if renames else "--no-renames", "--no-ext-diff",
-                    "--no-color", "-U0", f"{base}...{head}", "--", *paths).splitlines():
-        if line.startswith("+++ "):
-            name = line[6:]
-        elif line.startswith("+"):
-            found.append((name, line[1:]))
+                    "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "-U0", f"{base}...{head}", "--", *paths).splitlines():
+        if line.startswith("diff --git "):
+            entry, name, header = entry + 1, "", True
+        elif line.startswith("@@"):
+            header = False
+        elif header:
+            # Só no cabeçalho: uma linha de conteúdo "++ x" vira "+++ x" no diff.
+            if line.startswith("+++ b/"):
+                name = line[6:].rstrip("\t")
+        elif line[:1] in "+-":
+            found.append((entry, name, line[0], line[1:]))
     return found
+
+
+def added_lines(base: str, head: str, *paths: str, renames: bool = True) -> list[tuple[str, str]]:
+    return [(name, text) for _, name, sign, text in diff_lines(base, head, *paths, renames=renames) if sign == "+"]
 
 
 def git(*args: str) -> str:
@@ -87,9 +98,20 @@ def new_python(base: str, head: str) -> list[str]:
 
 
 def new_lines(base: str, head: str, rule: LineRule) -> list[str]:
-    found = [f"{name}: {line.strip()[:120]}" for name, line in added_lines(base, head, *rule.paths)
-             if rule.pattern.search(line) and not COMMENT.match(line) and not TESTS.search(name) and not rule.allowed.search(name)]
+    """Linha antiga só reformatada sai como "-" e "+": conta o arquivo que ganhou mais casos do que perdeu."""
+    lines = [(entry, name, sign, text) for entry, name, sign, text in diff_lines(base, head, *rule.paths)
+             if rule.pattern.search(text) and not COMMENT.match(text)]
+    balance: dict[int, int] = {}
+    for entry, _, sign, _ in lines:
+        balance[entry] = balance.get(entry, 0) + (1 if sign == "+" else -1)
+    found = [f"{name}: {text.strip()[:120]}" for entry, name, sign, text in lines
+             if sign == "+" and balance[entry] > 0 and not TESTS.search(name) and not rule.allowed.search(name)]
     return [] if not found or authorized(base, head, rule.mark) else found
+
+
+def show(rev: str, path: str) -> str:
+    done = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return done.stdout if done.returncode == 0 else ""
 
 
 def changed_files(base: str, head: str, status: str, *paths: str) -> list[str]:
@@ -104,9 +126,15 @@ def new_web_screens(base: str, head: str) -> list[str]:
 
 
 def raw_keyboard(base: str, head: str) -> list[str]:
-    """O import pode ocupar várias linhas: a linha nova diz o arquivo, e o arquivo inteiro diz de onde vem."""
-    touched = {name for name, line in added_lines(base, head, "mobile/*.ts", "mobile/*.tsx") if "KeyboardAvoidingView" in line}
-    found = [name for name in sorted(touched) if not TESTS.search(name) and KEYBOARD.search(git("show", f"{head}:{name}"))]
+    """O import pode ocupar várias linhas: vale o arquivo inteiro, e só o que passou a importar conta."""
+    start = git("merge-base", base, head).strip()
+    found = []
+    for line in git("-c", "core.quotePath=false", "diff", "--find-renames", "--name-status", "--diff-filter=AMR",
+                    f"{base}...{head}", "--", "mobile/*.ts", "mobile/*.tsx").splitlines():
+        status, *names = line.split("\t")
+        old, new = names[0], names[-1]
+        if not TESTS.search(new) and KEYBOARD.search(show(head, new)) and not KEYBOARD.search(show(start, old)):
+            found.append(new)
     return [] if not found or authorized(base, head, "TECLADO") else found
 
 

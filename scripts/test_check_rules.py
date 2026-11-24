@@ -202,6 +202,41 @@ class CheckRules(unittest.TestCase):
         self.passes("crates/hangar-server/src/session_open/terminal.rs", 'args = vec!["new-session", "-d"];\n')
         self.passes("crates/hangar-server/src/accounts/tests.rs", 'assert_eq!(args[0], "new-session");\n')
 
+    def test_the_mark_copied_from_the_help_does_not_authorize(self):
+        self.put("frontend/src/New.svelte", "<p>oi</p>\n")
+        self.commit("add\n\nHANGAR_WEB_AUTORIZADO: <motivo>")
+        self.assertEqual(self.check()[0], 1)
+
+    def rebase_on(self, name, text):
+        self.put(name, text)
+        self.commit("before")
+        self.base = self.git("rev-parse", "HEAD").strip()
+
+    def test_a_reformatted_old_line_is_not_new(self):
+        self.rebase_on("mobile/src/a.tsx", "import * as Haptics from 'expo-haptics';\n")
+        self.passes("mobile/src/a.tsx", 'import * as Haptics from "expo-haptics";\n')
+
+    def test_a_file_that_already_imported_the_keyboard_passes_an_edit(self):
+        self.rebase_on("mobile/app/a.tsx", "import { KeyboardAvoidingView } from 'react-native';\n<View />\n")
+        self.passes("mobile/app/a.tsx", "import { KeyboardAvoidingView } from 'react-native';\n<KeyboardAvoidingView />\n")
+
+    def test_a_content_line_that_looks_like_a_header_keeps_the_file_name(self):
+        self.refused("crates/hangar-core/src/a.rs", "++ x\nconst D: &str = \".claude-pocket\";\n", "NOME_ANTIGO")
+
+    def test_a_local_base_already_resolved_passes(self):
+        self.passes("packages/core/src/a.ts", "const baseUrl = baseOf(s);\nfetch(`${baseUrl}/api/x`);\n")
+
+    def test_a_raw_base_url_joined_to_a_path_is_refused(self):
+        for number, form in enumerate(["fetch(`${s.baseUrl}${path}`);\n", "fetch(s.baseUrl + path);\n", "new URL(path, server.baseUrl);\n"]):
+            with self.subTest(form):
+                self.refused(f"packages/core/src/b{number}.ts", form, "ENDERECO")
+
+    def test_a_session_opened_by_a_whole_command_string_is_refused(self):
+        self.refused("crates/hangar-core/src/a.rs", 'let c = format!("tmux new-session -d -s {n}");\n', "LANCADOR")
+
+    def test_an_id_that_only_contains_new_session_passes(self):
+        self.passes("crates/hangar-core/src/a.rs", 'let id = "launcher__new-session-sync";\nlet t = "new-session-x";\n')
+
     def test_an_unreadable_base_is_an_error_and_not_a_pass(self):
         self.base = "0" * 40
         self.assertEqual(self.check()[0], 2)
