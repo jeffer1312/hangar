@@ -53,6 +53,9 @@ jobs:
   regras:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # O commit do PR, não o merge: com a base atrasada, o merge traria commits alheios (e as marcas deles).
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -70,24 +73,21 @@ jobs:
       - run: python3 -I scripts/test_check_rules.py
       - name: Regras do diff
         if: always() && steps.base.outputs.sha != ''
-        env:
-          # O commit do PR, não o merge: com a base atrasada, o merge traria commits alheios (e a marca deles).
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 -I scripts/check-rules.py "${{ steps.base.outputs.sha }}" "$HEAD_SHA"
       # Mudança em instalador/script sem passo declarado em docs/atualizacoes/. O pre-commit faz o mesmo por commit,
       # mas é pulável e some no clone; aqui é o intervalo inteiro do push.
       - name: Passo de atualização
         if: always() && steps.base.outputs.sha != ''
-        run: bash scripts/check-passo-de-atualizacao.sh "${{ steps.base.outputs.sha }}..HEAD"
+        run: bash scripts/check-passo-de-atualizacao.sh "${{ steps.base.outputs.sha }}..$HEAD_SHA"
       # Mudança na API que o app nativo consome sem subir o CLIENT_API (no PR, contra a base).
       - name: CLIENT_API
         if: always() && steps.base.outputs.sha != ''
-        run: bash scripts/check-client-api.sh "${{ steps.base.outputs.sha }}..HEAD"
+        run: bash scripts/check-client-api.sh "${{ steps.base.outputs.sha }}..$HEAD_SHA"
       # Mudança visível no app sem novidade em docs/novidades/: só avisa, nunca falha.
       - name: novidade
         if: always() && steps.base.outputs.sha != ''
         continue-on-error: true
-        run: bash scripts/check-novidade.sh "${{ steps.base.outputs.sha }}..HEAD" || true
+        run: bash scripts/check-novidade.sh "${{ steps.base.outputs.sha }}..$HEAD_SHA" || true
       - uses: actions/setup-node@v4
         if: always()
         with:
