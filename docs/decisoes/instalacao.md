@@ -1558,6 +1558,12 @@ está no CI) não exercitam a atualização nem a criação de sessão.
   suíte inteira, Windows e release na main. Linker (mold) e debuginfo reduzida já estavam aplicados.
 - **Escolha do dono:** CI como portão (regras, compilação e testes do que mudou), `verificar-local`
   opcional e rápido.
+- **Medido no PR #505**, com todas as partes acionadas (o PR muda o próprio portão): 17,6 a 18,4 min no
+  total; fatias do servidor de 12,6 a 17,2 min; travas e testes dos outros crates de 8,3 a 10 min; desktop
+  inteiro 2,5 min; Expo de 1,5 a 2,1 min. Os testes do `it` precisam do `hangar-cano` compilado acima do
+  executável, que só a suíte do workspace compilava. A divisão expôs um teste de log que dependia dos
+  vizinhos (`connect_account_devices`, interesse do `tracing` em cache; 1 falha em 3 rodadas, 0 em 6
+  depois de refazer o cache) e, rodando sobre o merge com a main, um teste que a main quebrou (#503).
 
 ## Portão de merge (22/11/2026)
 
