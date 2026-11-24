@@ -349,9 +349,12 @@ Do lado do Hangar (C6):
 - **Tool `whatsapp_draft(chat, text, file?, reply_to?)`.** Recusa em sessão compartilhada
   (`whatsapp_shared_session`, a mesma conferência das leituras) e em sessão sem o prazo de 660 s,
   como `erro_cofre_sessao_sem_prazo`; binário com `api` menor que 2 dá `whatsapp_send_unsupported`.
-  A origem é `servidor::sessao` e a pasta da sessão que chama. Ela espera o rascunho chegar ao fim,
-  com relógio próprio de 600 s, e devolve `sent`, `declined`, `expired` ou `failed`; erro depois da
-  criação leva o `id` e manda não criar outro rascunho. Cancelada, recusa o rascunho no binário.
+  A origem é `servidor::sessao` e a pasta da sessão que chama. Ela espera o rascunho chegar ao fim:
+  enquanto pendente, até ele expirar; enquanto saindo, até 10 min depois da aprovação (teto do upload de
+  100 MB no binário). Devolve `sent`, `declined`, `expired` ou `failed`; erro depois da criação leva o
+  `id` e manda não criar outro rascunho. `failed` com `unconfirmed` diz que a mensagem pode ter saído.
+  Cancelada, recusa o rascunho no binário; já aprovado, avisa que pode sair. Binário desatualizado dá
+  `whatsapp_outdated`.
 - **Rotas do dono** `POST/GET /api/whatsapp/outbox`, `POST /api/whatsapp/outbox/{id}/send` e
   `POST /api/whatsapp/outbox/{id}/decline`, repassadas ao binário com o prefixo `whatsapp_` nos
   códigos, pelo mesmo `owner_only` das leituras.
