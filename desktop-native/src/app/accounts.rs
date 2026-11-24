@@ -1414,7 +1414,7 @@ impl Hangar {
         let identity = div().flex_1().min_w_0().flex().flex_col().gap(px(3.)).child(name_line)
             .when(renaming.is_none(), |el| el.children(row.email.clone().map(|email| div().min_w_0().truncate()
                 .text_size(px(if compact { 12. } else { 12.5 })).text_color(theme::muted()).child(email))))
-            .when(renaming.is_none() && !overflow.is_empty(), |el| el.child(div().min_w_0().truncate().text_size(px(12.))
+            .when(renaming.is_none() && !overflow.is_empty(), |el| el.child(div().min_w_0().whitespace_normal().text_size(px(12.))
                 .text_color(theme::muted()).child(overflow)))
             .when(renaming.is_none() && !compact, |el| el.when(!row.subtitle.0.is_empty(),|el| el.child(subtitle))
                 .children(reset_line)
@@ -1632,10 +1632,10 @@ fn window_labels(rows: &[&Row]) -> Vec<String> {
     labels.into_iter().map(|(label, _)| label).collect()
 }
 
-/// Quantas colunas de cota cabem na página, que ocupa a largura ao lado da navegação das configurações (284 px),
-/// deixando ao nome da conta pelo menos `NAME_MIN`; nunca menos que 5 horas, semana, reset e uma de modelo.
 const NAME_MIN: f32 = 300.;
 
+/// Quantas colunas de cota cabem na página, que ocupa a largura ao lado da navegação das configurações (284 px) menos
+/// as margens, deixando ao nome da conta cerca de `NAME_MIN`; nunca menos que 5 horas, semana, reset e uma de modelo.
 fn column_room(viewport: f32) -> usize {
     let free = viewport - 284. - 40. - 32. - 24. - ACTIONS - NAME_MIN;
     (((free + COLUMN_GAP) / (COLUMN + COLUMN_GAP)).floor().max(0.) as usize).max(4)
