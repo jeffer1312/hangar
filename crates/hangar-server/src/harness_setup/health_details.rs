@@ -91,6 +91,10 @@ pub fn present(env: &AccountEnvironment, cli: &str) -> Result<BTreeSet<String>, 
 }
 pub fn available(env: &AccountEnvironment, cli: &str) -> Vec<(String, Option<Value>)> {
     let mut out: Vec<(String, Option<Value>)> = Vec::new();
+    // O Kimi fica só com os provedores dele: nenhum motor falta lá.
+    if cli == "kimi" {
+        return out;
+    }
     let engines = crate::engines::store::state(env).0;
     for (name, data) in &engines {
         let base = data["base_url"].as_str().unwrap_or("");
@@ -109,7 +113,7 @@ pub fn available(env: &AccountEnvironment, cli: &str) -> Vec<(String, Option<Val
             out.push((target.into(), value));
         }
     }
-    if cli != "kimi" && (oauth_saved(env) || codex_login(env)) {
+    if oauth_saved(env) || codex_login(env) {
         if let Some((_, value)) = out.iter_mut().find(|(name, _)| name == OAUTH) {
             *value = None;
         } else {
@@ -230,7 +234,7 @@ pub fn kimi_hooks(env: &AccountEnvironment, _repo: &Path) -> Result<Value, Strin
         })
     }).count();
     Ok(if missing == 0 {
-        item("hooks", Some(true), "hooks_ok", None, false, &[("n", "9".into())])
+        item("hooks", Some(true), "hooks_ok", None, false, &[("n", super::kimi_hooks::ENTRIES.len().to_string())])
     } else {
         item("hooks", Some(false), "faltam_n", Some("hooks-kimi"), false, &[("n", missing.to_string())])
     })

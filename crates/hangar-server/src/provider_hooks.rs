@@ -242,7 +242,7 @@ fn write_kimi(
     };
     let event = value["hook_event_name"].as_str().unwrap_or_default();
     let state = match event {
-        "UserPromptSubmit" | "TurnStarted" => Some("working"),
+        "UserPromptSubmit" => Some("working"),
         "Stop" | "Interrupt" => Some("idle"),
         "PermissionRequest" => Some("awaiting_input"),
         "PreToolUse" if value["tool_name"] == "AskUserQuestion" => Some("awaiting_input"),

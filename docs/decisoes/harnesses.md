@@ -5,6 +5,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **O Kimi fica só com os provedores dele: motor nenhum vai ao `config.toml` do Kimi.** O espelho de
+  credenciais (`engines/mirrors.rs`) leva motores só ao Pi e ao Codex (`SYNC_TARGETS`); "Sincronizar"
+  e o reparo de credenciais da saúde não oferecem o Kimi, e a subida tira os blocos
+  `# >>> hangar: provedor …` que versões antigas gravaram lá (`purge_kimi`), e também o motor que o
+  Kimi regravou sem esse comentário, reconhecido pelo nome, pela chave e pelo endereço do motor. Hook do Hangar no Kimi
+  só com evento que o Kimi Code conhece: o `TurnStarted` antigo sai no reparo da subida
+  (`kimi_hooks::RETIRED_EVENTS`). Ver
+  [Kimi só com os provedores dele](#kimi-só-com-os-provedores-dele-24112026).
+
 - **Antigravity (`agy`) roda o binário oficial do Google, sem ler o login nem chamar o Google.**
   Com terminal, a TUI fica no tmux; o estado vem dos hooks `SessionStart`, `PreInvocation`,
   `PostInvocation` e `Stop` (`provider_hooks` `agy-state-hook`), nunca de `PreToolUse` ou
@@ -3384,6 +3393,25 @@ isolada: `plugin_accepted`, marca ainda presente), então com algo guardado o es
   projeto (19 hooks pendentes na pergunta da TUI); o lançador passa a aceitá-lo pelo caminho do
   arquivo, além das origens `user` e `plugin`.
 
+## Kimi só com os provedores dele (24/11/2026)
+
+O espelho gravava cada motor do Hangar (ex.: `astra` e `sol`, 40 modelos cada, pelo CLIProxy local)
+no `config.toml` do Kimi, sem `max_context_size` quando o `/v1/models` do provedor não traz
+`context_length`. O Kimi Code 2.7.3 abre a sessão com esse arquivo (a leitura tolera), e o
+`kimi doctor` diz "OK" (valida por outro caminho), mas toda gravação de configuração relê com o esquema
+estrito e recusa: `kimi login` falhava com `Cannot change settings while … config.toml is invalid`, cuja
+causa escondida era `Model "astra/gpt-5.6-terra" must define a positive max_context_size`. Os motores
+também enchiam o seletor de modelos do Kimi com modelos que não são dele. Decisão do usuário: o Kimi
+fica só com os provedores dele. O espelho leva motores ao Pi e ao Codex; a subida e o
+`DELETE /api/credenciais/kimi/{nome}` tiram os blocos antigos.
+
+Tirados os motores, o login ainda recusava: o Hangar instalava um hook `TurnStarted`, e o Kimi Code
+2.7.3 só aceita `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`,
+`PermissionResult`, `UserPromptSubmit`, `Stop`, `StopFailure`, `Interrupt`, `SessionStart`,
+`SessionEnd`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact` e `Notification`. O evento
+nunca disparava (o `UserPromptSubmit` já marca "trabalhando"); saiu da lista instalada, e o reparo da
+subida tira a entrada antiga com o comentário do Hangar acima dela.
+
 ## Painel de saúde dos harnesses
 
 (`app/harness_saude.py` + `harness_api.py` +
@@ -3393,8 +3421,8 @@ isolada: `plugin_accepted`, marca ainda presente), então com algo guardado o es
   existe** (`hook_installer.ensure_*`, `skill_bridge.rebuild`, `contas.reconciliar`,
   `oauth_codex.propagar`, o symlink das `scripts/pi/*.ts`). A checagem é só leitura; o texto vai como
   `codigo`+`params` e o front traduz (`harness_<codigo>`). O item **Credenciais** cruza o store de
-  cada CLI (auth.json+models.json do Pi, `auth_credentials` do omp, `providers` do Kimi,
-  `model_providers`+login do Codex) com o que o app conhece (engines.json + cofre OAuth), no nome
+  cada CLI (auth.json+models.json do Pi, `auth_credentials` do omp,
+  `model_providers`+login do Codex; o Kimi não entra, ver [Kimi só com os provedores dele](#kimi-só-com-os-provedores-dele-24112026)) com o que o app conhece (engines.json + cofre OAuth), no nome
   que AQUELE harness usa (`provedor_embutido_do_pi` pra Pi/omp, o nome do motor pros outros);
   o card Codex tem uma seção própria de integração nativa e não oferece a ponte antiga de skills.
   "Sincronizar" reusa o `agentes_sync` e, no omp, grava a chave no mesmo SQLite do login. O Codex

@@ -7,7 +7,6 @@ use std::{collections::BTreeSet, fs, io::Write, ops::Range, path::Path};
 pub const ENTRIES: &[(&str, Option<&str>, &str)] = &[
     ("SessionStart", None, "kimi-state-hook"),
     ("UserPromptSubmit", None, "kimi-state-hook"),
-    ("TurnStarted", None, "kimi-state-hook"),
     ("Stop", None, "kimi-state-hook"),
     ("Interrupt", None, "kimi-state-hook"),
     ("PermissionRequest", None, "kimi-state-hook"),
@@ -16,6 +15,10 @@ pub const ENTRIES: &[(&str, Option<&str>, &str)] = &[
     // No Windows a ferramenta de shell do Kimi também se chama `Bash` (roda no Git Bash).
     ("PreToolUse", Some("Bash"), "guard-tmux"),
 ];
+
+/// Eventos que versões antigas do Hangar instalavam e que o Kimi Code não conhece: com eles, toda
+/// gravação de configuração do Kimi (o login, por exemplo) recusa o arquivo.
+const RETIRED_EVENTS: &[&str] = &["TurnStarted"];
 
 #[derive(Deserialize)]
 struct Config {
@@ -149,6 +152,12 @@ fn sync_impl(env: &AccountEnvironment, install: bool) -> Result<Vec<String>, Str
         };
         let event = hook.event.as_ref().and_then(toml::Value::as_str).unwrap_or_default().to_owned();
         let matcher = hook.matcher.as_ref().and_then(toml::Value::as_str).map(str::to_owned);
+        if RETIRED_EVENTS.contains(&event.as_str()) {
+            if let Some(ranges) = &ranges {
+                edits.push((ranges[index].clone(), String::new()));
+            }
+            continue;
+        }
         // Cada raiz de venv antiga deixava uma entrada: a primeira de cada evento fica e vira o
         // subcomando, as repetidas saem com o comentário do Hangar acima delas.
         if !seen.insert((event, matcher, mode)) {
