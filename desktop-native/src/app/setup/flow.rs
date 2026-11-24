@@ -195,6 +195,7 @@ mod tests {
     fn agents_default_to_claude_plus_installed_and_keep_order() {
         assert_eq!(default_agents(&[]), vec!["claude"]);
         assert_eq!(default_agents(&["kimi", "codex"]), vec!["claude", "codex", "kimi"]);
+        assert_eq!(default_agents(&["antigravity", "codex"]), vec!["claude", "codex", "antigravity"]);
         assert_eq!(toggle_agent(&["claude", "kimi"], "codex"), vec!["claude", "codex", "kimi"]);
         assert_eq!(toggle_agent(&["claude"], "claude"), Vec::<&str>::new());
     }

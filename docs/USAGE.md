@@ -106,8 +106,9 @@ Quer escolher cada extra? No checkout: `./install.sh --avancado` / `.\install.ps
 (o `bootstrap.ps1` não repassa argumentos; o `bootstrap.sh` aceita `bash -s -- --avancado`).
 Agentes de código: o instalador usa os que já estão no computador e só instala o Claude Code
 quando não acha nenhum. Para escolher: `./install.sh --agentes=codex,pi` /
-`.\install.ps1 -Agentes codex,pi` (aceita `claude`, `codex`, `pi`, `omp` e `kimi`); o
-`--avancado` também pergunta. Os outros se instalam depois pelo painel Harnesses do app.
+`.\install.ps1 -Agentes codex,pi` (aceita `claude`, `codex`, `pi`, `omp`, `kimi` e
+`antigravity`, cujo comando é `agy`); o `--avancado` também pergunta. Os outros se instalam
+depois pelo painel Harnesses do app.
 Algo não abriu? `hangar-doctor` diz o que falta e como consertar.
 
 ### hangar-doctor
