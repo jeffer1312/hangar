@@ -278,7 +278,9 @@ impl Hangar {
             if !ports.iter().any(|(known, ..)| *known == port) { ports.push((port, String::new(), false)); }
         }
         ports.sort_by_key(|(port, ..)| *port);
-        Some(Listed { remote: !api.is_loopback(), server, loaded: row.is_some(), list_error, own, ports, forwards, opening })
+        // A lista do servidor ainda não chegou: só aí é "carregando"; chegou sem a sessão, ela não tem portas.
+        let loaded = row.is_some() || !list.is_empty();
+        Some(Listed { remote: !api.is_loopback(), server, loaded, list_error, own, ports, forwards, opening })
     }
 
     /// "Portas" no "+", com quantas há.
@@ -289,7 +291,10 @@ impl Hangar {
         }
     }
 
-    pub(super) fn ports_tab_open(&self) -> bool { self.side_key().is_some_and(|k| self.side.ports_open.contains(&k)) }
+    /// Aberta pelo "+" nesta sessão, e a sessão ainda é das que têm portas (do dono, não só leitura, não orq).
+    pub(super) fn ports_tab_open(&self) -> bool {
+        self.side_menu_ports() && self.side_key().is_some_and(|k| self.side.ports_open.contains(&k))
+    }
 
     pub(super) fn open_ports(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.side_key() else { return };
@@ -309,13 +314,14 @@ impl Hangar {
         let Some(Listed { remote, server, loaded, list_error, own, ports, forwards, opening }) = self.listed_ports() else {
             return port_note(tr("ports_guest"), theme::muted()).into_any_element();
         };
-        let note = match (&list_error, loaded, ports.is_empty()) {
-            (Some(error), false, _) => Some(port_note(tr("ports_error").replace("{error}", error), theme::warning())),
-            (None, false, true) => Some(port_note(tr("ports_loading"), theme::muted())),
-            (_, true, true) => Some(port_note(tr("ports_empty"), theme::muted())),
+        // O erro da lista vai acima das linhas: as que estão à vista podem ser de antes dele.
+        let error = list_error.map(|error| port_note(tr("ports_error").replace("{error}", &error), theme::warning()));
+        let note = match (loaded, ports.is_empty()) {
+            (false, true) if error.is_none() => Some(port_note(tr("ports_loading"), theme::muted())),
+            (true, true) => Some(port_note(tr("ports_empty"), theme::muted())),
             _ => None,
         };
-        let body = div().flex().flex_col().gap(px(10.)).children(note).children(ports.into_iter().map(|(port, process, shared)| {
+        let body = div().flex().flex_col().gap(px(10.)).children(error).children(note).children(ports.into_iter().map(|(port, process, shared)| {
                 let forward = forwards.iter().find(|f| f.port == port);
                 let is_opening = opening.contains(&port);
                 let local =forward.map(|f| f.local).or((!remote).then_some(port));
