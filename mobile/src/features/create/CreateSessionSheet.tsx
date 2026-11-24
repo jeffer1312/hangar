@@ -935,7 +935,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     const label = configs.find((c) => c.path === selectedConfig)?.label ?? m.criar_padrao();
     // A forçada mostra a janela que decidiu a troca; a cheia de antes pode já ter virado.
     const full = forcedWindow ?? (janelaCheia ? cotaSelecionada?.janelas.find((j) => j.rotulo === janelaCheia) : undefined);
-    const detail = janelaCheia ? m.cota_conta_no_limite({ janela: janelaCheia })
+    // Forçada: a linha abaixo da pílula já diz o uso; o "no limite" da janela que já virou a contradiria.
+    const detail = forcedWindow ? '' : janelaCheia ? m.cota_conta_no_limite({ janela: janelaCheia })
       : switchedFrom ? m.new_chat_account_switched({ conta: contaLabel(switchedFrom) }) : '';
     const alert = !!janelaCheia || !!forcedWindow;
     return provider === 'claude' ? {
