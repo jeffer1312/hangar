@@ -573,6 +573,8 @@ pub(in crate::app) struct NewSession {
     scheduled_original: Option<Value>,
     scheduled_changed: HashSet<&'static str>,
     menu: Rc<std::cell::Cell<Option<Menu>>>,
+    /// A lista de permissões aberta no lugar da de modelos, no menu do modelo.
+    access_open: bool,
     /// A busca dos menus de lista (máquina, modelo, conta, branch); a pasta usa a `query` da lista de pastas.
     menu_query: Entity<InputState>,
     servers: Remote<Vec<ServerChoice>>,
@@ -793,7 +795,7 @@ impl NewSession {
         };
         let prewarm = prewarm::Reserve::new(link.runtime.clone());
         let mut dialog = Self {
-            link, purpose: SessionDialogPurpose::Create, transfer_blocked: false, compact: false, scheduled: false, scheduled_template: None, scheduled_original: None, scheduled_changed: HashSet::new(), menu: Default::default(), menu_query, servers: Remote::default(),
+            link, purpose: SessionDialogPurpose::Create, transfer_blocked: false, compact: false, scheduled: false, scheduled_template: None, scheduled_original: None, scheduled_changed: HashSet::new(), menu: Default::default(), access_open: false, menu_query, servers: Remote::default(),
             roots: Remote::default(), root: None, dir: String::new(), scan: Remote::default(), folders: Vec::new(),
             folder_active: None, folder_scroll: UniformListScrollHandle::new(), root_scans: Vec::new(), search_all, search_error, query, picked: None, picked_query: String::new(), picked_dir: String::new(), enter_repeat: false, create_when_ready: false,
             checkout: Remote::default(), branch: String::new(), worktrees: Remote::default(), existing: None, picking: false, agents_open: false, base_open: false,
@@ -1217,7 +1219,7 @@ impl NewSession {
         if self.is_transfer() || self.creating { return; }
         self.provider_touched = true;
         if provider == self.provider { return; }
-        (self.provider, self.error) = (provider, None);
+        (self.provider, self.error, self.access_open) = (provider, None, false);
         self.model.clear();
         self.effort.clear();
         // Vazio = "Padrão": o campo não vai e o servidor usa o modo da conta (Claude) ou Full Access (Codex).
@@ -2452,6 +2454,7 @@ fn account_mark(badge: Option<&super::tags::Badge>, provider: &str, size: f32) -
 impl NewSession {
     pub(super) fn toggle_menu(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
         let open = self.menu.get() != Some(menu) && !self.creating;
+        self.access_open = false;
         let leaving_account = self.menu.get() == Some(Menu::Account) && !(open && menu == Menu::Account);
         self.menu.set(open.then_some(menu));
         if leaving_account && self.leave_exhausted_account() { self.build_config_pick(window, cx); self.load_models(window, cx); }

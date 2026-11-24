@@ -9,6 +9,13 @@ pub(in crate::app) const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "
 pub(in crate::app) const PI_EFFORTS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 pub(in crate::app) const PERMISSIONS: [&str; 6] = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
 pub(in crate::app) const CODEX_PERMISSIONS: [&str; 3] = ["Ask for approval", "Approve for me", "Full Access"];
+
+/// O nome do modo como o seletor da conversa mostra; o do Codex já vem escrito, e o vazio é o padrão da conta.
+fn permission_label(mode: &str) -> String {
+    if mode.is_empty() { tr("create_permission_default") }
+    else if PERMISSIONS.contains(&mode) { tr(&format!("mode_{mode}")) }
+    else { mode.to_owned() }
+}
 /// Faixas da cota, as da `QuotaStrip` do web: âmbar acima de 80%, vermelho acima de 90%.
 const QUOTA_WARN: f64 = 80.;
 const QUOTA_FULL: f64 = 90.;
@@ -789,7 +796,7 @@ impl NewSession {
                 .trigger(Button::new("transfer-model-trigger").outline().label(title).icon(IconName::ChevronDown)
                     .disabled(self.creating || self.models.loading || !self.has_transfer_models()).accessibility_label(tr("create_model")))
                 .content(move |_, window, cx| view.update(cx, |view, cx| view.render_model_menu(cx)
-                    .w((window.rem_size() * 24.).min(window.viewport_size().width - window.rem_size() * 2.))
+                    .w(px(720.).min(window.viewport_size().width - window.rem_size() * 2.))
                     .into_any_element()).unwrap_or_else(|_| div().into_any_element()))
                 .on_open_change(move |open, window, cx| { let _ = opening.update(cx, |view, cx| {
                     view.menu.set(open.then_some(Menu::Model));
@@ -799,32 +806,55 @@ impl NewSession {
             .when(!self.effort.is_empty(), |el| el.child(muted(format!("{}: {}", tr("create_effort"), self.effort))))
     }
 
-    /// O menu da pílula de modelo, no desenho do Zeron: o provider em abas, a busca, a lista e o esforço no rodapé.
+    /// O menu da pílula de modelo, no mesmo desenho do seletor da conversa: os agentes no trilho, a busca e a lista no
+    /// meio, o raciocínio ao lado e, embaixo, a velocidade e a permissão; o padrão do servidor fecha o menu.
     pub(super) fn render_model_menu(&self, cx: &mut Context<Self>) -> Div {
+        use crate::app::controls::picker;
         let query = self.menu_filter(cx);
-        let tabs = div().id("new-chat-providers").role(Role::Group).aria_label(tr("create_provider_aria")).flex().items_center().gap(px(2.))
-            .px(px(4.)).pb(px(4.)).children(PROVIDERS.iter().map(|&p| {
-                let available = self.providers.ok().and_then(|m| m.get(p)).is_none_or(|probe| probe.disponivel);
-                Button::new(SharedString::from(format!("new-chat-provider-{p}"))).ghost().small().selected(self.provider == p)
-                    .disabled(!available || self.creating).tooltip(provider_name(p)).accessibility_label(provider_name(p))
-                    .child(chrome::provider_glyph(p, 18.))
-                    .on_click(cx.listener(move |this, _, window, cx| this.choose_provider(p, window, cx)))
-            }));
-        let list = match &self.models.value {
+        // Lista de permissões que deixou de existir (o modo trocou na releitura): volta aos modelos.
+        let access_open = self.access_open && self.permissions().is_some();
+        let rail = (!self.is_transfer()).then(|| picker::rail_view(PROVIDERS.iter().map(|&p| {
+            let available = self.providers.ok().and_then(|m| m.get(p)).is_none_or(|probe| probe.disponivel);
+            picker::rail_tab(picker::rail_button(&format!("new-chat-{p}"), self.provider == p, provider_name(p).to_owned(),
+                chrome::provider_glyph(p, 18.).into_any_element())
+                .disabled(!available || self.creating)
+                .on_click(cx.listener(move |this, _, window, cx| this.choose_provider(p, window, cx))), self.provider == p).into_any_element()
+        }).collect()));
+        let name = |id: &str, label: String, hint: String| div().id(SharedString::from(format!("new-chat-name-{id}"))).min_w_0().truncate()
+            .text_size(px(15.)).font_weight(FontWeight::NORMAL).child(label)
+            .when(!hint.is_empty(), |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(hint.clone()).build(window, cx)))
+            .into_any_element();
+        let list = if access_open {
+            let current = self.permission.clone();
+            let rows = std::iter::once(String::new()).chain(self.permissions().unwrap_or_default().iter().map(|m| (*m).to_owned()))
+                .map(|mode| picker::row_view(SharedString::from(format!("new-chat-permission-{mode}")), "",
+                        name(&format!("permission-{mode}"), permission_label(&mode), String::new()), current == mode, false, None, None)
+                    .disabled(self.creating)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.scheduled_touch(&["permission_mode"]);
+                        (this.permission, this.permission_touched, this.access_open) = (mode.clone(), true, false);
+                        this.build_permission_pick(window, cx);
+                        cx.notify();
+                    }))
+                    .into_any_element()).collect();
+            div().flex().flex_col().gap(px(2.)).child(popup::title(tr("create_permission"), None)).child(Self::menu_list("new-chat-permission-list", rows))
+                .into_any_element()
+        } else { match &self.models.value {
             _ if self.models.loading || self.models.value.is_none() => popup::skeleton("new-chat-models", 5).into_any_element(),
             Some(Err(error)) => Self::menu_failure("new-chat-models-error", format!("{}: {error}", tr("create_models_failed")),
                 |this, window, cx| this.load_models(window, cx), cx),
             _ => {
+                let provider = self.provider;
                 let rows = std::iter::once((String::new(), tr("create_default"), String::new()))
                     .chain(self.catalog().iter().filter(|m| m.id != "default").map(|m| (m.value(), m.label(), m.hint())))
                     .filter(|(_, label, hint)| wanted(&query, label, hint))
                     .map(|(id, label, hint)| {
                         let on = self.model == id || matched_model(self.catalog(), self.provider, self.proxy_accounts().is_some(), &self.model)
                             .is_some_and(|m| m.value() == id);
-                        menu_row(SharedString::from(format!("new-chat-model-{id}")), on, label, hint)
+                        picker::row_view(SharedString::from(format!("new-chat-model-{id}")), provider, name(&id, label, hint), on, false, None, None)
                             .disabled(self.creating || (self.proxy_accounts().is_some() && !self.engine_ready()))
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                // O menu fica aberto: o esforço, logo abaixo, costuma ser a escolha seguinte.
+                                // O menu fica aberto: o raciocínio, ao lado, costuma ser a escolha seguinte.
                                 this.model_choice_touched = true;
                                 this.model = chosen_model(this.catalog(), this.provider, this.proxy_accounts().is_some(), &this.model, &id);
                                 if !this.fast_available() { this.service_tier = None; }
@@ -836,22 +866,19 @@ impl NewSession {
                     }).collect();
                 Self::menu_list("new-chat-model-list", rows)
             }
-        };
+        } };
         let levels = self.levels();
-        // "Padrão" mais até 4 níveis numa linha; mais que isso quebra linha em vez de cortar o rótulo.
-        let many = levels.len() > 4;
-        let effort = (!levels.is_empty()).then(|| div().flex().flex_col().gap(px(2.))
-            .child(popup::separator())
-            .child(popup::title(tr("new_chat_reasoning"), None))
-            .child(div().id("new-chat-efforts").role(Role::Group).aria_label(tr("new_chat_reasoning")).px(px(4.)).pb(px(2.)).flex()
-                .when(many, |el| el.flex_wrap())
-                .gap(px(2.)).children(std::iter::once(String::new()).chain(levels).map(|level| {
-                    let label = if level.is_empty() { tr("create_default") } else { level.clone() };
-                    Button::new(SharedString::from(format!("new-chat-effort-{level}"))).ghost().xsmall().when(!many, |b| b.flex_1().min_w_0())
-                        .selected(self.effort == level).label(label).disabled(self.creating)
-                        .on_click(cx.listener(move |this, _, window, cx| { this.model_choice_touched = true; this.effort = level.clone(); this.build_effort_pick(window, cx); cx.notify(); }))
-                }))));
-        let default = self.render_default_check(cx).map(|check| div().flex().flex_col().gap(px(4.)).child(popup::separator()).child(check.py(px(4.))));
+        let model_label = matched_model(self.catalog(), self.provider, self.proxy_accounts().is_some(), &self.model).map(ModelOption::label)
+            .unwrap_or_else(|| tr("create_default"));
+        let efforts = if levels.is_empty() { Vec::new() } else {
+            std::iter::once(String::new()).chain(levels).map(|level| {
+                let label = if level.is_empty() { tr("create_default") } else { level.clone() };
+                picker::effort_row(&label, self.effort == level).disabled(self.creating)
+                    .on_click(cx.listener(move |this, _, window, cx| { this.model_choice_touched = true; this.effort = level.clone(); this.build_effort_pick(window, cx); cx.notify(); }))
+                    .into_any_element()
+            }).collect()
+        };
+        let reasoning = picker::reasoning_view(model_label, efforts);
         let engine = (self.compact && self.provider == "claude").then(|| {
             let body = if self.engines.loading { popup::skeleton("new-chat-engines", 1).into_any_element() }
                 else if let Some(Err(error)) = &self.engines.value {
@@ -863,9 +890,28 @@ impl NewSession {
             div().px_1().py_1().flex().flex_col().gap_2().child(body)
                 .when(self.proxy_accounts().is_some(), |el| el.child(self.render_engine_account()))
         });
-        div().p(px(popup::INSET)).flex().flex_col().gap(px(2.)).when(!self.is_transfer(), |el| el.child(tabs))
-            .children(engine).child(self.menu_search()).child(list).children(effort).children(self.render_fast_choice(cx))
-            .children(self.render_engine_context(cx)).children(default)
+        // Busca do seletor da conversa: sem caixa, com um traço fino na cor de destaque.
+        let search = div().mx(px(4.)).mb(px(6.)).border_b_1().border_color(theme::accent())
+            .child(Input::new(&self.menu_query).appearance(false).h(px(40.)).text_size(px(16.)).aria_label(tr("picker_search"))
+                .prefix(chrome::small_icon(IconName::Search, 16., theme::faint())));
+        let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).children(engine)
+            .when(!access_open, |el| el.child(search)).child(list);
+        let access = self.permissions().map(|_| {
+            let shown = permission_label(&self.permission);
+            Button::new("new-chat-access").ghost().small().selected(access_open).disabled(self.creating)
+                .accessibility_label(format!("{}: {shown}", tr("create_permission")))
+                .child(div().flex().items_center().gap(px(6.)).text_size(px(13.5)).text_color(theme::muted())
+                    .child(chrome::small_icon(IconName::KeyRound, 14., theme::faint())).child(shown)
+                    .child(chrome::small_icon(if access_open { IconName::ChevronDown } else { IconName::ChevronUp }, 13., theme::faint())))
+                .on_click(cx.listener(|this, _, _, cx| { this.access_open = !(this.access_open && this.permissions().is_some()); cx.notify(); }))
+        });
+        let footer = access.map(|access| div().mt(px(4.)).pt(px(8.)).px(px(4.)).flex().items_center().gap_2()
+            .border_t_1().border_color(theme::border()).child(div().flex_1()).child(access));
+        let default = self.render_default_check(cx).map(|check| div().flex().flex_col().gap(px(4.)).child(popup::separator()).child(check.py(px(4.))));
+        div().p(px(popup::INSET)).flex().flex_col().gap(px(2.))
+            .child(div().flex().min_h(px(300.)).children(rail).child(center).child(reasoning))
+            .children(self.render_fast_choice(cx)).children(self.render_engine_context(cx))
+            .children(footer).children(default)
     }
 
     pub(super) fn build_config_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
