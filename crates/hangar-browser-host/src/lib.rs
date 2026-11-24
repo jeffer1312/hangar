@@ -93,7 +93,7 @@ struct Inner {
     hosts: HashMap<u64, Host>,
     /// Sessão → anfitrião → ordem do último foco dele nela.
     focus: HashMap<String, HashMap<u64, u64>>,
-    /// Sessão → hora (ms) do último foco vindo de outra máquina. Fica depois que o app desliga: o navegador da
+    /// Sessão → hora (ms) do último uso (`seen`) num app de outra máquina. Fica depois que o app desliga: o navegador da
     /// sessão continua sendo o de lá até um app mostrar a sessão de novo, e o verbo recusa em vez de cair noutro.
     seen: HashMap<String, u64>,
     state: BTreeMap<String, BrowserState>,
@@ -220,13 +220,20 @@ impl Registry {
         {
             inner.focus.remove(&old);
         }
+        inner.focus.entry(session).or_default().insert(host, order);
+    }
+
+    /// A pessoa usou a sessão no app de lá (clique ou tecla): ele passa a receber o navegador. Reconectar só manda
+    /// `focus`, que não mexe nesta hora.
+    fn seen(&self, host: u64, session: String) {
+        self.focus(host, session.clone());
+        let mut inner = self.lock();
         if !inner.seen.contains_key(&session) && inner.seen.len() >= MAX_SESSIONS
             && let Some(old) = inner.seen.iter().min_by_key(|(_, ms)| **ms).map(|(k, _)| k.clone())
         {
             inner.seen.remove(&old);
         }
-        inner.seen.insert(session.clone(), now_ms());
-        inner.focus.entry(session).or_default().insert(host, order);
+        inner.seen.insert(session, now_ms());
     }
 
     fn set_state(&self, session: String, url: Option<String>, tab: Option<Value>) {
@@ -294,6 +301,7 @@ impl Connection {
         let session = msg.get("session").and_then(Value::as_str).map(str::to_owned);
         match (msg.get("type").and_then(Value::as_str), session) {
             (Some("focus"), Some(session)) => return self.registry.focus(self.id, session),
+            (Some("seen"), Some(session)) => return self.registry.seen(self.id, session),
             (Some("state"), Some(session)) => {
                 let url = msg.get("url").and_then(Value::as_str).map(str::to_owned);
                 return self.registry.set_state(session, url, msg.get("aba").cloned());

@@ -160,8 +160,11 @@ async fn host_answers_when_another_machine_last_showed_the_session() {
     assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Err(Refusal::NoHost));
     let before = now_ms();
     let (mut host, mut rx) = registry.attach();
+    // Foco sozinho (o app reconectando) não diz que a pessoa está lá.
     host.text(r#"{"type":"focus","session":"s"}"#);
-    let seen = registry.last_seen("s").expect("foco registrado");
+    assert_eq!(registry.last_seen("s"), None);
+    host.text(r#"{"type":"seen","session":"s"}"#);
+    let seen = registry.last_seen("s").expect("uso registrado");
     assert!(seen >= before);
     assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Ok(Reply::Text(format!("ok: host {seen}"))));
     // A pergunta não chega ao app.

@@ -9290,7 +9290,9 @@ impl Render for Hangar {
         div().id("hangar-root").track_focus(&self.root_focus).relative().size_full().flex()
             .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                 for browser in this.side.browsers.values() { browser.read(cx).release_focus() }
+                this.note_session_seen(cx);
             }))
+            .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.note_session_seen(cx)))
             // Sessão solta fora da lista: nada acontece, só termina o arrasto.
             .on_drop(cx.listener(|this, _: &grouping::SessionDrag, _, cx| this.end_session_drag(cx)))
             .bg(if !chat_background { theme::window_fill() }

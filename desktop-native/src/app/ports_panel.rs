@@ -271,7 +271,12 @@ impl Hangar {
         let forwards = self.ports.forwards.list(&server);
         let opening = self.ports.forwards.opening(&server);
         let session_key = self.side_key();
-        let mine = |port: &u16| self.ports.origin.get(&(server.clone(), *port)) == session_key.as_ref();
+        // O túnel cuja sessão não está mais na lista (fechada, renomeada) ou sem dona fica em todas: nenhum some com Parar.
+        let mine = |port: &u16| match self.ports.origin.get(&(server.clone(), *port)) {
+            Some(origin) => Some(origin) == session_key.as_ref()
+                || !list.iter().any(|s| origin.rsplit_once("::").is_some_and(|(_, n)| n == s.name)),
+            None => true,
+        };
         let typed = self.ports.typed.as_ref().filter(|(key, _)| Some(key) == session_key.as_ref()).map(|(_, port)| *port);
         let extra: Vec<u16> = forwards.iter().map(|f| f.port).chain(opening.iter().copied()).filter(mine).chain(typed).collect();
         for port in extra {
@@ -303,10 +308,13 @@ impl Hangar {
         cx.notify();
     }
 
-    pub(super) fn close_ports(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Fecha só nesta sessão e volta ao Contexto sem gravar a escolha: a aba padrão das outras fica como estava.
+    pub(super) fn close_ports(&mut self, cx: &mut Context<Self>) {
         let showing = self.side_tab() == crate::appearance::SideTab::Ports;
-        if let Some(key) = self.side_key() { self.side.ports_open.remove(&key); }
-        if showing { self.choose_side_tab(crate::appearance::SideTab::Context, window, cx); } else { cx.notify(); }
+        let Some(key) = self.side_key() else { return };
+        self.side.ports_open.remove(&key);
+        if showing { self.show_side_tab_here(key, crate::appearance::SideTab::Context, cx); }
+        cx.notify();
     }
 
     /// A aba Portas: as linhas, ou o estado da lista, e o campo da porta que a sessão não listou.

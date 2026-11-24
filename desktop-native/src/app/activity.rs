@@ -1496,7 +1496,7 @@ impl Hangar {
         self.act.tab_error = None;
         if let Some(key) = self.side_key() { self.side.tabs.insert(key, tab); }
         // A Revisão só existe nas sessões ligadas a ticket: vira padrão das outras não, fica só na desta.
-        if tab != SideTab::Review && appearance::get().side_tab != tab { self.apply_appearance(appearance::Appearance { side_tab: tab, ..appearance::get() }, true, cx); }
+        if !matches!(tab, SideTab::Review | SideTab::Ports) && appearance::get().side_tab != tab { self.apply_appearance(appearance::Appearance { side_tab: tab, ..appearance::get() }, true, cx); }
         if self.side_tab() == SideTab::Files { self.show_tree(true, Some(window), cx); }
         self.sync_activity(cx);
         cx.notify();
@@ -1867,7 +1867,7 @@ impl Hangar {
             .when(self.ports_tab_open(), |el| {
                 let close = Button::new("side-tab-ports-close").ghost().xsmall().icon(TAB_CROSS)
                     .tooltip(tr("ports_close")).accessibility_label(tr("ports_close"))
-                    .on_click(cx.listener(|this, _, window, cx| { cx.stop_propagation(); this.close_ports(window, cx); }));
+                    .on_click(cx.listener(|this, _, _, cx| { cx.stop_propagation(); this.close_ports(cx); }));
                 el.child(tab("side-tab-ports", tr("ports_title"), SideTab::Ports, Some(close.into_any_element()), cx))
             })
             .into_any_element()

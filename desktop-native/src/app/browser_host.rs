@@ -23,6 +23,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// O mesmo prazo do CLI quando o pedido não diz o dele.
 const DEFAULT_DEADLINE: Duration = Duration::from_secs(45);
 const READY_POLL: Duration = Duration::from_millis(150);
+const SEEN_EVERY: Duration = Duration::from_secs(10);
 #[cfg(not(target_os = "linux"))]
 const LOCAL_REFUSED: &str = "endereço local deste computador recusado";
 
@@ -47,8 +48,10 @@ pub(super) struct Hosts {
     links: HashMap<String, Link>,
     /// Pedidos dos canais para a janela; a ponta de leitura é drenada por uma tarefa da janela.
     incoming: Option<async_channel::Sender<(String, Value)>>,
-    /// Sessão desta máquina à vista numa janela ativa, já gravada em `_focus.json`.
-    local_focus: Option<String>,
+    /// Última sessão (`servidor::sessão`) dada como usada aqui, e quando: o aviso se repete no máximo a cada `SEEN_EVERY`.
+    seen: Option<(String, Instant)>,
+    /// Sessão à vista na janela ativa no quadro anterior.
+    pub(super) shown: Option<String>,
 }
 
 /// O que o quadro faz com o canal que já existe; `[identidade, rota, token]` de antes e de agora.
@@ -261,23 +264,11 @@ impl Hangar {
     /// A cada quadro: sessão de outra máquina na tela dá foco no canal dela, que nasce na primeira vez.
     pub(super) fn browser_host_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.browser_host_prune();
-        // O navegador do agente vai ao app que mostrou a sessão por último: aqui, a hora da sessão desta máquina.
-        let active = window.is_window_active();
-        let local = self.session_api().filter(|api| api.is_loopback() && active).and(self.selected.as_ref().map(|s| s.name.clone()));
-        if local != self.browser_hosts.local_focus {
-            if let Some(name) = &local { crate::browser::server::record_focus(name); }
-            self.browser_hosts.local_focus = local;
-        }
         let Some(api) = self.session_api().filter(|api| !api.is_loopback()) else { return };
         let (Some(server), Some(name)) = (self.session_server().map(|s| servers::norm(&s)), self.selected.as_ref().map(|s| s.name.clone()))
             else { return };
         // Convite e par externo não são do dono: o canal é só do dono do servidor.
         if !owner_server(&self.servers, &server) { return; }
-        // Janela em segundo plano não conta como olhar a sessão: o foco volta ao servidor quando ela se ativa de novo.
-        if !active {
-            if let Some(link) = self.browser_hosts.links.get(&server) { lock(&link.conn).focus = None; }
-            return;
-        }
         let (identity, route, token) = (api.identity(), api.route().to_string(), self.server_token(&server));
         if let Some(link) = self.browser_hosts.links.get(&server) {
             let change = {
@@ -312,6 +303,20 @@ impl Hangar {
         let (out, out_rx) = async_channel::unbounded();
         let task = self.runtime.spawn(run(server.clone(), conn.clone(), out_rx, incoming));
         self.browser_hosts.links.insert(server, Link { out, conn, task });
+    }
+
+    /// Clique ou tecla na janela: a pessoa está usando a sessão aqui, e o navegador do agente vem para este app. Sessão
+    /// desta máquina grava a hora em `_focus.json`; de outra, avisa o servidor dela pelo canal. No máximo a cada 10 s.
+    pub(super) fn note_session_seen(&mut self, cx: &mut Context<Self>) {
+        let (Some(api), Some(name)) = (self.session_api(), self.selected.as_ref().map(|s| s.name.clone())) else { return };
+        let Some(key) = self.side_key() else { return };
+        if self.browser_hosts.seen.as_ref().is_some_and(|(k, at)| *k == key && at.elapsed() < SEEN_EVERY) { return; }
+        self.browser_hosts.seen = Some((key, Instant::now()));
+        if api.is_loopback() {
+            cx.background_spawn(async move { crate::browser::server::record_focus(&name) }).detach();
+        } else if let Some(link) = self.session_server().and_then(|s| self.browser_hosts.links.get(&servers::norm(&s))) {
+            let _ = link.out.try_send(Out::Text(json!({"type": "seen", "session": name}).to_string()));
+        }
     }
 
     /// A cada quadro, o canal de servidor que saiu do app ou virou convite fecha (o `Drop` do `Link` derruba o socket).
