@@ -1218,7 +1218,10 @@ impl Hangar {
 
     /// Alguma linha do menu vale para esta sessão; sem nenhuma, o "+" some.
     /// Sem Chromium a linha Navegador fica (desligada, com o motivo), então ela também segura o "+".
-    fn side_tools(&self) -> bool { self.side_menu_browser() || crate::browser::Engine::available().is_err() || self.side_menu_terminal() || self.side_menu_git() }
+    fn side_tools(&self) -> bool {
+        self.side_menu_browser() || crate::browser::Engine::available().is_err() || self.side_menu_terminal() || self.side_menu_git()
+            || self.side_menu_ports()
+    }
 
     /// O menu toma o corpo do painel; sem nenhuma ferramenta para esta sessão, fica a aba lembrada.
     pub(super) fn side_menu_shown(&self) -> bool {
@@ -1226,8 +1229,9 @@ impl Hangar {
     }
 
     /// Menu da superfície vazia do Zeron: uma linha por ferramenta, no meio do painel.
-    fn render_side_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_side_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let (browser, terminal, git) = (self.side_menu_browser(), self.side_menu_terminal(), self.side_menu_git());
+        let ports = self.side_menu_ports().then(|| self.render_other_port(window, cx));
         let row = |id: &'static str, icon: IconName, label: String, cx: &mut Context<Self>| Button::new(id)
             .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
             .w_full().h(px(44.)).px(px(14.)).rounded(px(10.)).border_1().border_color(theme::border()).accessibility_label(label.clone())
@@ -1250,7 +1254,8 @@ impl Hangar {
                     .child(row("side-menu-diffs", IconName::List, tr("git_changes"), cx)
                         .on_click(cx.listener(|this, _, window, cx| this.choose_side_tab(SideTab::Git, window, cx))))
                     .child(row("side-menu-history", IconName::GitBranch, tr("git_history"), cx)
-                        .on_click(cx.listener(|this, _, window, cx| this.open_git_history(window, cx))))))
+                        .on_click(cx.listener(|this, _, window, cx| this.open_git_history(window, cx)))))
+                .children(ports.map(|el| el.pt(px(8.)))))
             .into_any_element()
     }
 
@@ -1340,7 +1345,7 @@ impl Hangar {
             content = content.child(section(self.render_context(status.as_ref(), width, cx)))
                 .when(!notices.is_empty(), |el| el.child(div().px_4().py_3().border_b_1().border_color(theme::border()).flex().flex_col().gap_2().children(notices)));
             if !read_only && let Some(project) = self.render_project(status.as_ref(), cx) { content = content.child(section(project)); }
-            if !read_only && let Some(ports) = self.render_ports(beta, window, cx) { content = content.child(section(ports)); }
+            if !read_only && let Some(ports) = self.render_ports(beta, cx) { content = content.child(section(ports)); }
             if !read_only && let Some(actions) = self.render_shortcuts(readable, width, cx) {
                 content = content.child(div().map(|el| if beta { el.px(px(BETA_SIDE_PAD)).py(px(18.)) } else { el.px(px(SIDE_PAD)).py(px(14.)) }).child(actions));
             }
@@ -1366,7 +1371,7 @@ impl Hangar {
                 .child(header)
                 .children(self.render_subagent_tabs(cx))
                 .child(div().flex_1().min_h_0().flex().flex_col().opacity(tab_in).child(match tab {
-                    None if menu => self.render_side_menu(cx),
+                    None if menu => self.render_side_menu(window, cx),
                     None => div().flex_1().min_h_0().children(self.subagent_tab_view()).into_any_element(),
                     Some(SideTab::Files) => div().flex_1().min_h_0().child(self.render_tree(cx)).into_any_element(),
                     Some(SideTab::Media) => div().flex_1().min_h_0().child(self.render_media_panel(width, cx)).into_any_element(),

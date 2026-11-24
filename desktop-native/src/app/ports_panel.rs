@@ -196,6 +196,9 @@ impl Hangar {
             (Some(port), Some(api)) => {
                 self.ports.typed = Some((api.identity(), port));
                 if !api.is_loopback() { self.forward_port(port, cx); }
+                // A linha nasce na seção Portas do Contexto: o menu sai da frente para ela aparecer.
+                self.side.menu = false;
+                if let Some(key) = self.side_key() { self.side.tabs.insert(key, crate::appearance::SideTab::Context); }
             }
         }
         cx.notify();
@@ -228,7 +231,7 @@ impl Hangar {
         if self.ports.link.as_ref().is_some_and(|link| link.server == server) { self.ports.link = None; }
     }
 
-    pub(super) fn render_ports(&mut self, beta: bool, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_ports(&mut self, beta: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (api, name) = (self.session_api()?, self.selected.as_ref()?.name.clone());
         let server = api.identity();
         // Convidado não tem portas nem túnel: a seção mentiria "nenhuma porta" e o Encaminhar daria erro.
@@ -247,14 +250,12 @@ impl Hangar {
             if !ports.iter().any(|(known, ..)| *known == port) { ports.push((port, String::new(), false)); }
         }
         ports.sort_by_key(|(port, ..)| *port);
+        // Sem porta não há seção: a lista chegando ou vazia só ocupava espaço. "Outra porta…" mora no "+" do painel.
+        if ports.is_empty() && (row.is_some() || list_error.is_none()) { return None; }
         let title = if beta { super::side::beta_title(tr("ports_title")).mb_0() } else { chrome::section_label(tr("ports_title")) };
-        let body = match row {
-            None => match list_error {
-                Some(error) => port_note(tr("ports_error").replace("{error}", &error), theme::warning()).into_any_element(),
-                None => port_note(tr("ports_loading"), theme::muted()).into_any_element(),
-            },
-            Some(_) if ports.is_empty() => port_note(tr("ports_empty"), theme::muted()).into_any_element(),
-            Some(_) => div().flex().flex_col().gap(px(10.)).children(ports.into_iter().map(|(port, process, shared)| {
+        let body = match (row, list_error) {
+            (None, Some(error)) => port_note(tr("ports_error").replace("{error}", &error), theme::warning()).into_any_element(),
+            _ => div().flex().flex_col().gap(px(10.)).children(ports.into_iter().map(|(port, process, shared)| {
                 let forward = forwards.iter().find(|f| f.port == port);
                 let is_opening = opening.contains(&port);
                 let local =forward.map(|f| f.local).or((!remote).then_some(port));
@@ -304,28 +305,37 @@ impl Hangar {
                     .into_any_element()
             })).into_any_element(),
         };
-        // Porta que a sessão não listou (container, servidor macOS): a digitada vira linha, com Abrir e Link de fora.
-        let other = {
-            let input = match &self.ports.other {
-                Some((input, _)) => input.clone(),
-                None => {
-                    let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("ports_other")));
-                    let sub = cx.subscribe(&input, |this: &mut Hangar, _, event: &InputEvent, cx| {
-                        if let InputEvent::PressEnter { .. } = event { this.forward_other(cx); }
-                    });
-                    self.ports.other = Some((input.clone(), sub));
-                    input
-                }
-            };
-            div().flex().flex_col().gap(px(4.))
-                .child(div().flex().items_center().gap_1()
-                    .child(div().flex_1().min_w_0().child(Input::new(&input).xsmall().aria_label(tr("ports_other"))))
-                    .child(Button::new("ports-other-forward").xsmall().outline().flex_shrink_0()
-                        .label(if remote { tr("ports_forward") } else { tr("ports_other_add") })
-                        .on_click(cx.listener(|this, _, _, cx| this.forward_other(cx)))))
-                .children(self.ports.other_error.clone().map(|text| port_note(text, theme::warning())))
+        Some(div().flex().flex_col().gap(px(10.)).child(title).child(body).into_any_element())
+    }
+
+    /// Linha do "+" do painel: só na sessão do dono que ele pode mexer, como a seção Portas.
+    pub(super) fn side_menu_ports(&self) -> bool {
+        self.selected.as_ref().is_some_and(|s| s.readable() && !s.read_only())
+            && self.session_api().is_some_and(|api| owner_server(&self.servers, &servers::norm(&api.identity())))
+    }
+
+    /// Porta que a sessão não listou (container, servidor macOS): a digitada vira linha, com Abrir e Link de fora.
+    pub(super) fn render_other_port(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let remote = self.session_api().is_some_and(|api| !api.is_loopback());
+        let input = match &self.ports.other {
+            Some((input, _)) => input.clone(),
+            None => {
+                let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("ports_number")));
+                let sub = cx.subscribe(&input, |this: &mut Hangar, _, event: &InputEvent, cx| {
+                    if let InputEvent::PressEnter { .. } = event { this.forward_other(cx); }
+                });
+                self.ports.other = Some((input.clone(), sub));
+                input
+            }
         };
-        Some(div().flex().flex_col().gap(px(10.)).child(title).child(body).child(other).into_any_element())
+        div().flex().flex_col().gap(px(6.))
+            .child(div().px(px(4.)).text_size(px(11.)).text_color(theme::muted()).child(tr("ports_other")))
+            .child(div().flex().items_center().gap_1()
+                .child(div().flex_1().min_w_0().child(Input::new(&input).small().aria_label(tr("ports_other"))))
+                .child(Button::new("ports-other-forward").small().outline().flex_shrink_0()
+                    .label(if remote { tr("ports_forward") } else { tr("ports_other_add") })
+                    .on_click(cx.listener(|this, _, _, cx| this.forward_other(cx)))))
+            .children(self.ports.other_error.clone().map(|text| port_note(text, theme::warning())))
     }
 }
 
