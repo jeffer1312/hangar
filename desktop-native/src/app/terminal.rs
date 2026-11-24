@@ -677,7 +677,7 @@ impl Hangar {
                     .and_then(|panel| panel.tabs.iter_mut().find(|slot| slot.uid == uid)) else { return };
                 slot.retry_armed = false;
                 // Socket trocado: as teclas eram do programa de antes.
-                if slot.generation != generation { return; }
+                if slot.generation != generation { this.keep_sending(uid, cx); return; }
                 Self::flush_terminal(slot);
                 let failed = matches!(slot.status, Status::Failed(_));
                 this.keep_sending(uid, cx);
