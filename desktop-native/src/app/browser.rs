@@ -2229,6 +2229,12 @@ impl Hangar {
     pub(super) fn sync_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(not(target_os = "macos"))]
         self.browser_host_focus(window, cx);
+        // Escolher a sessão com a janela ativa também é usá-la: o clique na lista é capturado antes da troca.
+        let key = self.side_key().filter(|_| window.is_window_active());
+        if key.is_some() && key != self.browser_hosts.shown {
+            self.browser_hosts.shown = key;
+            self.note_session_seen(cx);
+        }
         let (visible, covered) = self.browser_visible(window, cx);
         // A tela remota é desenhada pela GPUI: camada por cima não a esconde, só sair de vista a desconecta.
         let remote = self.remote_browser_shown().map(|r| r.entity_id());
