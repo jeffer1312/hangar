@@ -5023,7 +5023,7 @@ export function requestMermaid(
   return apiFetchRes('/api/mermaid', { method: 'POST', body: JSON.stringify(body), signal }, server ?? undefined, false, false);
 }
 
-// WhatsApp só leitura do servidor (rotas do dono `/api/whatsapp*`). Erro vem com código `whatsapp_*`.
+// WhatsApp do servidor (rotas do dono `/api/whatsapp*`). Erro vem com código `whatsapp_*`.
 export type WhatsAppService = 'running' | 'stopped' | 'absent';
 export type WhatsAppLinkState = 'unpaired' | 'pairing' | 'connected' | 'logged_out' | 'outdated';
 
