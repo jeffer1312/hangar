@@ -457,6 +457,10 @@ impl ComposerSnapshot {
     }
     /// O campo tem exatamente `text` e mais nada (nem anexo): só então um Enter de novo não leva texto alheio.
     fn only(&self, text: &str) -> bool { self.placeholders.is_empty() && !self.is_empty() && compact(&self.content) == compact(text) }
+    /// Também vale o campo só com colagens novas: o Claude mostra o recado longo como `[Pasted text #N]`.
+    fn resendable(&self, text: &str, before: &Self) -> bool {
+        self.only(text) || !self.placeholders.is_empty() && self.placeholders.iter().all(|p| p.starts_with("Pasted text:")) && self.owned(text, before)
+    }
     fn owned(&self, text: &str, before: &Self) -> bool {
         if self.typed(text, before) == compact(text) { return true; }
         let mut residual = self.content.clone();
@@ -1195,11 +1199,11 @@ impl TerminalDriver {
                         if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
                     }
                 }
-                // Enter perdido (multiplexador lento): o campo ainda só com o nosso texto ganha outro Enter, uma vez.
+                // Enter perdido (multiplexador lento): o campo ainda só com o nosso texto (ou a colagem dele) ganha outro Enter, uma vez.
                 // Mandado, o Claude esvazia o campo; texto ali é envio que não houve, e nada alheio vai junto.
                 if expected.is_none() && !slash && !resent && attempt >= attempts / 4
-                    && ComposerSnapshot::parse(&typed).is_some_and(|now| now.only(text))
-                    && ComposerSnapshot::parse(&screen).is_some_and(|now| now.only(text)) {
+                    && ComposerSnapshot::parse(&typed).is_some_and(|now| now.resendable(text, before))
+                    && ComposerSnapshot::parse(&screen).is_some_and(|now| now.resendable(text, before)) {
                     let blocked = match self.verify().await { Ok(facts) if !facts.open_question => None, Ok(_) => Some("open_question"), Err(e) => Some(e.code) };
                     // Barrado, segue para a prova do transcript desta leitura.
                     if let Some(code) = blocked {
@@ -1213,8 +1217,8 @@ impl TerminalDriver {
                         }
                         // A conferência e o transcript cedem a vez: a pessoa pode ter digitado no campo enquanto isso.
                         let still = match self.composer_capture().await {
-                            Ok((screen, typed)) => ComposerSnapshot::parse(&typed).is_some_and(|now| now.only(text))
-                                && ComposerSnapshot::parse(&screen).is_some_and(|now| now.only(text)),
+                            Ok((screen, typed)) => ComposerSnapshot::parse(&typed).is_some_and(|now| now.resendable(text, before))
+                                && ComposerSnapshot::parse(&screen).is_some_and(|now| now.resendable(text, before)),
                             Err(e) => { last_error = Some(e.code); false }
                         };
                         if still {
@@ -2018,6 +2022,17 @@ mod repeat_enter_tests {
         assert!(!field("Olá").only("Olá de novo"), "pedaço");
         assert!(!field("Olá de novo [Image #1]").only("Olá de novo"), "anexo junto");
         assert!(!field("").only("Olá de novo"));
+    }
+    #[test]
+    fn our_long_message_shown_as_a_paste_allows_another_enter() {
+        let long = "linha\n".repeat(30);
+        let empty = field("");
+        assert!(field("[Pasted text #1 +30 lines]").resendable(&long, &empty), "o Claude resume o recado longo");
+        assert!(field("Olá de novo").resendable("Olá de novo", &empty));
+        assert!(!field("[Pasted text #1 +30 lines]").resendable(&long, &field("[Pasted text #1 +30 lines]")), "colagem que já estava lá");
+        assert!(!field("[Pasted text #1 +30 lines] e mais").resendable(&long, &empty), "texto da pessoa junto");
+        assert!(!field("[Pasted text #1 +30 lines] [Image #2]").resendable(&long, &empty), "anexo junto");
+        assert!(!field("[Image #1]").resendable(&long, &empty));
     }
 }
 #[cfg(all(test, windows))]
