@@ -150,7 +150,7 @@ impl RuntimeRegistry {
             let created = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
             let meta = json!({"name":name,"provider":"antigravity","headless":true,"key":target.key,"cwd":target.cwd,"gemini_home":gemini_home,
                 "brain_dir":account.brain_dir(&env.home),"conversation_id":conversation,"model":spec.model,
-                "permission_mode":shown.or(spec.permission_mode).unwrap_or(crate::session_open::PermissionMode::Manual).name(),"created":created});
+                "permission_mode":shown.or(spec.permission_mode).unwrap_or(crate::session_open::PermissionMode::Manual).name(),"jev":spec.jev,"created":created});
             let mut next = spec.with(&crate::session_open::SessionChange { reason:crate::session_open::ChangeReason::ModeSwitch,
                 surface:Some(crate::session_open::Surface::Headless),account:None,permission_mode:shown,model:None,effort:None,service_tier:None });
             next.conversation = Some(conversation);

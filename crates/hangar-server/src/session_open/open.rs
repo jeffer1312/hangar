@@ -837,7 +837,7 @@ async fn antigravity_headless_life(host: &dyn OpenHost, spec: &mut SessionSpec, 
     let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let meta = json!({"name": spec.name, "provider": "antigravity", "headless": true, "key": spec.key, "cwd": spec.cwd,
         "gemini_home": account.gemini_home, "brain_dir": account.brain_dir(host.home()), "conversation_id": resume,
-        "model": spec.model, "permission_mode": spec.permission_mode.unwrap_or(PermissionMode::Manual).name(), "created": created});
+        "model": spec.model, "permission_mode": spec.permission_mode.unwrap_or(PermissionMode::Manual).name(), "jev": spec.jev, "created": created});
     let meta = meta.as_object().cloned().unwrap_or_default();
     persist(host, spec, diary, "sidecar_gravado", &crate::runtime::antigravity_sidecar::dir(host.home()), &meta)?;
     let jsonl = resume.and_then(|id| account.transcript_path(host.home(), id)).map(|p| p.to_string_lossy().into_owned());

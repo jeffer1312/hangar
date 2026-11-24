@@ -41,7 +41,7 @@ pub fn argv(meta:&Value) -> Result<Vec<String>,RuntimeError> {
     Ok(argv)
 }
 
-/// O ambiente do servidor sem o pane de quem o subiu, com a conta Google da sessão e a chave dela.
+/// O ambiente do servidor sem o pane de quem o subiu, com a conta Google da sessão, a chave dela e o Jev da abertura.
 pub fn launch_env(base:&AccountEnvironment,meta:&Value) -> Result<Launch,RuntimeError> {
     let field = |name:&str|meta[name].as_str().filter(|value|!value.is_empty())
         .ok_or_else(||RuntimeError::new("launch_meta",&format!("sidecar sem `{name}`")));
@@ -55,6 +55,8 @@ pub fn launch_env(base:&AccountEnvironment,meta:&Value) -> Result<Launch,Runtime
     env.insert("CP_SESSION_KEY".into(),key.into());
     env.insert("HANGAR_CANO_KEY".into(),key.into());
     env.insert("HANGAR_CANO_OWNER".into(),base.home.to_string_lossy().into_owned());
+    // O `mcp-stdio` repassa o HANGAR_JEV ao servidor; sem ele, browser_goal e browser_check recusam.
+    env.extend(super::codex_launch::jev_env(meta["jev"].as_bool() == Some(true),&super::codex_launch::runtime_config(base)));
     Ok(Launch { program:argv(meta)?,env })
 }
 
@@ -79,6 +81,20 @@ mod tests {
         assert_eq!((launch.env["CP_SESSION_KEY"].as_str(),launch.env["HANGAR_CANO_KEY"].as_str()),("k1","k1"));
         assert_eq!(launch.env["HANGAR_CANO_OWNER"],"/h");
         assert_eq!(launch.env["PATH"],"/bin");
+        assert_eq!(launch.env["HANGAR_JEV"],"off");
+    }
+
+    #[test]
+    fn the_jev_chosen_at_opening_reaches_agy_acp_with_the_configured_destination() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        std::fs::write(home.path().join(".claude/runtime-config.json"),json!({"jev_api_key":"tsk-fake"}).to_string()).unwrap();
+        let base = AccountEnvironment::from_pairs([("HOME",&*home.path().to_string_lossy()),("PATH","/bin")]);
+        let on = launch_env(&base,&json!({"name":"ag","key":"k1","jev":true})).unwrap();
+        assert_eq!((on.env["HANGAR_JEV"].as_str(),on.env["TYPESAFE_API_KEY"].as_str()),("on","tsk-fake"));
+        let off = launch_env(&base,&json!({"name":"ag","key":"k1","jev":false})).unwrap();
+        assert_eq!(off.env["HANGAR_JEV"],"off");
+        assert!(!off.env.contains_key("TYPESAFE_API_KEY"),"desligado não leva a chave");
     }
 
     #[test]
