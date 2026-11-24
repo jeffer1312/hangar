@@ -22,10 +22,14 @@ vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: mocks.ok, erro: mocks.erro } }));
 vi.mock('../pair/identities', () => ({ useIdentities: () => ({ identities: new Map([['a', 'a']]), loading: new Set() }) }));
 
+// Relógio fixo: a tool desiste 570 s depois de created_at (14:09:30), antes do expires_at (14:10:00); às 14:00:48 o
+// cartão mostra 8:42.
+const NOW = new Date('2026-11-24T14:00:48Z');
+
 const draft = (id: string, extra: Partial<WhatsAppDraft> = {}): WhatsAppDraft => ({
   id, origin: 'a::sessao', chat: '5511987654321@s.whatsapp.net', chat_kind: 'contact', chat_number: '5511987654321',
   chat_name: 'Carlos', chat_name_source: 'contact', recent: [], text: 'nada perdido\u200B', reply_to: '', quoted_text: '',
-  file: null, created_at: '2026-11-24T14:00:00Z', expires_at: new Date(Date.now() + 9 * 60_000).toISOString(), state: 'pending', ...extra,
+  file: null, created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z', state: 'pending', ...extra,
 });
 const event = (...drafts: WhatsAppDraft[]): WhatsAppOutboxEvent => ({ drafts });
 const bucket = (id: string, extra: Partial<ServerBucket> = {}) => ({
@@ -43,6 +47,8 @@ const button = (label: string) => container.querySelector<HTMLElement>(`button[a
 const sheet = () => container.querySelector(`section[aria-label="${m.whatsapp_draft_title()}"]`);
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(NOW);
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement('div');
   root = createRoot(container);
@@ -57,6 +63,7 @@ afterEach(async () => {
   await act(async () => { root.unmount(); });
   useSessions.setState({ whatsappOutbox: {}, byServer: [] });
   openWhatsAppDraft(null);
+  vi.useRealTimers();
 });
 
 it('tocar no aviso da máquina abre a folha com o número, o texto exato e o invisível marcado', async () => {
@@ -68,6 +75,7 @@ it('tocar no aviso da máquina abre a folha com o número, o texto exato e o inv
   expect(container.textContent).toContain('5511987654321');
   expect(container.textContent).toContain('nada perdido⟨U+200B⟩');
   expect(container.textContent).toContain(m.whatsapp_draft_text({ count: 13 }));
+  expect(container.textContent).toContain('8:42');
 });
 
 it('máquina com erro ou ainda carregando não mostra o aviso', async () => {

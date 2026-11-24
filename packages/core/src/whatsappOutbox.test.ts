@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  answerWhatsAppDraft, draftCharCount, draftFileSize, draftRefusalEndsCard, draftSecondsLeft, formatCountdown, invisibleMark,
+  DRAFT_TOOL_DEADLINE_S, answerWhatsAppDraft, draftCharCount, draftFileSize, draftRefusalEndsCard, draftSecondsLeft, formatCountdown, invisibleMark,
   markInvisibles, parseWhatsAppOutboxEvent, whatsappDraftRefusalText,
 } from './whatsappOutbox';
 import * as m from './paraglide/messages';
@@ -77,10 +77,25 @@ describe('cartão', () => {
 
   it('tempo restante em segundos e no formato m:ss', () => {
     const now = Date.parse('2026-11-24T14:00:48Z');
-    expect(draftSecondsLeft('2026-11-24T14:10:00Z', now)).toBe(552);
+    const left = (expires_at: string, created_at = '') => draftSecondsLeft({ created_at, expires_at }, now);
+    expect(left('2026-11-24T14:10:00Z')).toBe(552);
     expect(formatCountdown(552)).toBe('9:12');
-    expect(draftSecondsLeft('2026-11-24T13:00:00Z', now)).toBe(0);
-    expect(draftSecondsLeft('ruim', now)).toBe(0);
+    expect(left('2026-11-24T13:00:00Z')).toBe(0);
+    expect(left('ruim')).toBe(0);
+  });
+
+  it('conta até o prazo da tool (570 s da criação) quando ele vem antes de expires_at', () => {
+    const now = Date.parse('2026-11-24T14:00:48Z');
+    const left = (expires_at: string, created_at: string) => draftSecondsLeft({ created_at, expires_at }, now);
+    expect(DRAFT_TOOL_DEADLINE_S).toBe(570);
+    // Criado às 14:00:00: a tool desiste às 14:09:30, antes das 14:10:00 do serviço.
+    expect(left('2026-11-24T14:10:00Z', '2026-11-24T14:00:00Z')).toBe(522);
+    expect(formatCountdown(522)).toBe('8:42');
+    // expires_at antes do prazo da tool vale ele.
+    expect(left('2026-11-24T14:05:00Z', '2026-11-24T14:00:00Z')).toBe(252);
+    expect(left('2026-11-24T14:10:00Z', 'ruim')).toBe(552);
+    expect(left('ruim', '2026-11-24T14:00:00Z')).toBe(0);
+    expect(draftSecondsLeft({ created_at: '2026-11-24T14:00:00Z', expires_at: '2026-11-24T14:10:00Z' }, Date.parse('2026-11-24T14:09:45Z'))).toBe(0);
   });
 
   it('tamanho do anexo', () => {

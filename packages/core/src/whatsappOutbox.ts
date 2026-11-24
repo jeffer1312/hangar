@@ -137,10 +137,18 @@ export function markInvisibles(text: string): InvisiblePart[] {
 /** Caracteres como o serviço conta (pontos de código, não unidades UTF-16). */
 export const draftCharCount = (text: string) => Array.from(text).length;
 
-/** Segundos até expirar, nunca negativo; data ilegível conta como expirada. */
-export function draftSecondsLeft(expiresAt: string, now = Date.now()): number {
-  const at = Date.parse(expiresAt);
-  return Number.isFinite(at) ? Math.max(0, Math.floor((at - now) / 1000)) : 0;
+/** A tool `whatsapp_draft` recusa o rascunho aos 570 s da chamada (o MCP corta antes dos 600 s do serviço):
+ *  depois disso ninguém espera a resposta, então o cartão conta só até aí. */
+export const DRAFT_TOOL_DEADLINE_S = 570;
+
+/** Segundos até o rascunho deixar de aceitar resposta: o menor entre `expires_at` e `created_at` + o prazo da tool.
+ *  Nunca negativo; `expires_at` ilegível conta como expirado; `created_at` ilegível fica de fora. */
+export function draftSecondsLeft(draft: Pick<WhatsAppDraft, 'created_at' | 'expires_at'>, now = Date.now()): number {
+  const expires = Date.parse(draft.expires_at);
+  if (!Number.isFinite(expires)) return 0;
+  const created = Date.parse(draft.created_at);
+  const end = Number.isFinite(created) ? Math.min(expires, created + DRAFT_TOOL_DEADLINE_S * 1000) : expires;
+  return Math.max(0, Math.floor((end - now) / 1000));
 }
 
 /** Hora local de uma mensagem (`14:02`); vazio quando a data não se lê. */

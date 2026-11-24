@@ -187,7 +187,7 @@ export function DraftCardView({ draft, now, busy, error, onAnswer }: {
         {draft.chat_name_source === 'push' ? <Text style={[styles.small, { color: warn }]}>{m.whatsapp_draft_push_warning()}</Text> : null}
       </Block>
       <MachineRow title={m.whatsapp_draft_origin()} value={draft.origin} />
-      <MachineRow title={m.whatsapp_draft_expires()} value={formatCountdown(draftSecondsLeft(draft.expires_at, now))} />
+      <MachineRow title={m.whatsapp_draft_expires()} value={formatCountdown(draftSecondsLeft(draft, now))} />
     </MachineGroup>
     {draft.recent.length || draft.quoted_text ? <MachineGroup>
       {draft.recent.length ? <Block label={m.whatsapp_draft_recent()}>

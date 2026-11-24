@@ -16,7 +16,7 @@ import * as m from '../../paraglide/messages';
 export type Act = 'install' | 'update' | 'pair' | 'logout' | 'wipe' | 'uninstall';
 
 // As ferramentas que as sessões usam: nomes do catálogo MCP, iguais nos dois idiomas.
-const TOOLS = 'whatsapp_chats · whatsapp_read · whatsapp_search · whatsapp_request_media';
+const TOOLS = 'whatsapp_chats · whatsapp_read · whatsapp_search · whatsapp_request_media · whatsapp_draft';
 const STEP_LABEL: Record<typeof STEPS[number], () => string> = {
   download: m.native_whatsapp_step_download,
   service: m.native_whatsapp_step_service,
@@ -112,7 +112,7 @@ export function AcceptRisks({ accepted, busy, onToggle }: { accepted: boolean; b
   const c = useSettingsColors();
   const risks: Array<[IconName, string, string, boolean]> = [
     ['TriangleAlert', m.native_whatsapp_risk_unofficial_title(), m.native_whatsapp_risk_unofficial(), true],
-    ['Eye', m.native_whatsapp_risk_readonly_title(), m.native_whatsapp_risk_readonly(), false],
+    ['Send', m.native_whatsapp_risk_send_title(), m.native_whatsapp_risk_send(), false],
     ['HardDrive', m.native_whatsapp_risk_local_title(), m.native_whatsapp_risk_local(), false],
     ['KeyRound', m.native_whatsapp_risk_who_title(), m.native_whatsapp_risk_who(), false],
   ];

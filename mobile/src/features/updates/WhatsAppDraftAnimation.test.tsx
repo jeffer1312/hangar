@@ -36,6 +36,7 @@ it('movimento reduzido para no cartão aberto: número, texto exato, anexo com c
     expect(text).toContain(`${draft.file!.name} · ${draftFileSize(draft.file!.size)}`);
     expect(text).toContain(draft.file!.source);
     expect(text).toContain(m.whatsapp_draft_send());
+    expect(text).toContain('9:12');
     expect(text).not.toContain(m.whatsapp_draft_sending());
   } finally {
     act(() => root.unmount());

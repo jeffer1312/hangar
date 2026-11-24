@@ -26,8 +26,8 @@ const STILL = 3;
 const FADE = { duration: 240 };
 // Número de mentira: o DDD 00 não existe.
 const NUMBER = '5500912345678';
-// Fixo: o cartão mostra "9:12" em todo quadro.
-const NOW = Date.parse('2026-11-24T14:00:48Z');
+// Fixo: o cartão mostra "9:12" em todo quadro (conta até 570 s depois do created_at do exemplo).
+const NOW = Date.parse('2026-11-24T14:00:18Z');
 // Altura mínima da MachineRow: o toque cai no meio da penúltima linha, o Enviar.
 const ROW = 56;
 const RING = 40;

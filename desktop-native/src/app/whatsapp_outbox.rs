@@ -43,6 +43,8 @@ pub(crate) struct Draft {
     quoted_text: Option<String>,
     #[serde(default)]
     file: Option<DraftFile>,
+    #[serde(default)]
+    created_at: Option<String>,
     expires_at: String,
     state: String,
 }
@@ -92,9 +94,17 @@ pub(super) fn mark_invisibles(text: &str) -> (String, Vec<Range<usize>>) {
     (out, marks)
 }
 
-/// Segundos até expirar, nunca negativo; data ilegível conta como expirada.
-pub(super) fn seconds_left(expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(expires_at).map_or(0, |at| (at.with_timezone(&chrono::Utc) - now).num_seconds().max(0))
+/// A tool `whatsapp_draft` recusa o rascunho aos 570 s da chamada (o MCP corta antes dos 600 s do serviço): depois disso
+/// ninguém espera a resposta, então o cartão conta só até aí. O mesmo número do `whatsappOutbox.ts` do core.
+const TOOL_DEADLINE_SECS: i64 = 570;
+
+/// Segundos até o rascunho deixar de aceitar resposta: o menor entre `expires_at` e `created_at` + o prazo da tool. Nunca
+/// negativo; `expires_at` ilegível conta como expirado; `created_at` ilegível fica de fora.
+pub(super) fn seconds_left(created_at: Option<&str>, expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> i64 {
+    let parse = |at: &str| chrono::DateTime::parse_from_rfc3339(at).ok().map(|t| t.with_timezone(&chrono::Utc));
+    let Some(expires) = parse(expires_at) else { return 0 };
+    let end = created_at.and_then(parse).map_or(expires, |created| expires.min(created + chrono::TimeDelta::seconds(TOOL_DEADLINE_SECS)));
+    (end - now).num_seconds().max(0)
 }
 
 /// `9:12`.
@@ -147,11 +157,11 @@ pub(super) fn refusal_text(code: Option<&str>, locked_until: Option<&str>) -> Op
 }
 
 /// O "expira em 9:12" do cartão, redesenhado a cada segundo enquanto o cartão existe.
-pub(super) struct Countdown { expires: String }
+pub(super) struct Countdown { created: Option<String>, expires: String }
 
 impl Render for Countdown {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        countdown_label(&countdown(seconds_left(&self.expires, chrono::Utc::now())))
+        countdown_label(&countdown(seconds_left(self.created.as_deref(), &self.expires, chrono::Utc::now())))
     }
 }
 
@@ -160,7 +170,8 @@ pub(crate) fn countdown_label(left: &str) -> Div {
     div().flex_shrink_0().font_weight(FontWeight::NORMAL).text_color(theme::muted()).child(tr_shared("whatsapp_draft_expires_in", &[("time", left)]))
 }
 
-fn countdown_view(expires: String, cx: &mut App) -> Entity<Countdown> {
+fn countdown_view(draft: &Draft, cx: &mut App) -> Entity<Countdown> {
+    let (created, expires) = (draft.created_at.clone(), draft.expires_at.clone());
     cx.new(|cx| {
         // O cartão some e leva a view junto: o laço para no primeiro `update` que falha.
         cx.spawn(async move |view, cx| {
@@ -169,7 +180,7 @@ fn countdown_view(expires: String, cx: &mut App) -> Entity<Countdown> {
                 if view.update(cx, |_, cx| if chrome::window_active() { cx.notify() }).is_err() { break; }
             }
         }).detach();
-        Countdown { expires }
+        Countdown { created, expires }
     })
 }
 
@@ -194,11 +205,11 @@ impl WhatsAppOutbox {
         self.cards = list.into_iter().map(|draft| match old.iter().position(|c| c.draft.id == draft.id) {
             Some(at) => {
                 let mut card = old.swap_remove(at);
-                if card.draft.expires_at != draft.expires_at { card.clock = countdown_view(draft.expires_at.clone(), cx); }
+                if (&card.draft.created_at, &card.draft.expires_at) != (&draft.created_at, &draft.expires_at) { card.clock = countdown_view(&draft, cx); }
                 card.draft = draft;
                 card
             }
-            None => Card { clock: countdown_view(draft.expires_at.clone(), cx), draft, sending: false, error: None },
+            None => Card { clock: countdown_view(&draft, cx), draft, sending: false, error: None },
         }).collect();
         cx.notify();
     }
@@ -468,10 +479,10 @@ mod tests {
     #[test]
     fn countdown_size_and_refusals() {
         let now = chrono::DateTime::parse_from_rfc3339("2026-11-24T14:00:48Z").unwrap().with_timezone(&chrono::Utc);
-        assert_eq!(seconds_left("2026-11-24T14:10:00Z", now), 552);
+        assert_eq!(seconds_left(None, "2026-11-24T14:10:00Z", now), 552);
         assert_eq!(countdown(552), "9:12");
-        assert_eq!(seconds_left("2026-11-24T13:00:00Z", now), 0);
-        assert_eq!(seconds_left("ruim", now), 0);
+        assert_eq!(seconds_left(None, "2026-11-24T13:00:00Z", now), 0);
+        assert_eq!(seconds_left(None, "ruim", now), 0);
         assert_eq!(file_size(500, false), "500 B");
         assert_eq!(file_size(88 * 1024, false), "88 KB");
         assert_eq!(file_size(2_516_582, false), "2,4 MB");
@@ -480,6 +491,23 @@ mod tests {
         assert!(!ends_card(Some("whatsapp_rate_limited")) && !ends_card(None));
         assert_eq!(refusal_text(Some("whatsapp_qualquer"), None), None);
         assert_eq!(refusal_text(None, None), None);
+    }
+
+    #[test]
+    fn countdown_stops_at_the_tool_deadline_before_expires_at() {
+        let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc);
+        let now = at("2026-11-24T14:00:48Z");
+        // Criado às 14:00:00: a tool desiste às 14:09:30, antes das 14:10:00 do serviço.
+        assert_eq!(seconds_left(Some("2026-11-24T14:00:00Z"), "2026-11-24T14:10:00Z", now), 522);
+        assert_eq!(countdown(522), "8:42");
+        // `expires_at` antes do prazo da tool vale ele.
+        assert_eq!(seconds_left(Some("2026-11-24T14:00:00Z"), "2026-11-24T14:05:00Z", now), 252);
+        assert_eq!(seconds_left(Some("ruim"), "2026-11-24T14:10:00Z", now), 552);
+        assert_eq!(seconds_left(Some("2026-11-24T14:00:00Z"), "ruim", now), 0);
+        assert_eq!(seconds_left(Some("2026-11-24T14:00:00Z"), "2026-11-24T14:10:00Z", at("2026-11-24T14:09:45Z")), 0);
+        // O evento traz `created_at` e o cartão o lê.
+        let list = parse(&json!({"drafts": [draft("d1", "pending")]})).unwrap();
+        assert_eq!(list[0].created_at.as_deref(), Some("2026-11-24T14:00:00Z"));
     }
 
     /// `tr_shared` devolve a própria chave quando falta a frase: aqui a falta vira erro.
