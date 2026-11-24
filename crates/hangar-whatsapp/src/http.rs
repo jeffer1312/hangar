@@ -345,8 +345,7 @@ async fn media_request(wa: &WhatsApp, body: &Value) -> Response {
     forward(wa, Method::POST, "/v1/media/request", &[], Some(&Value::Object(out))).await
 }
 
-/// `POST /api/whatsapp/outbox`: cria o rascunho no binário. Só os campos do C5 seguem; o id criado fica
-/// guardado para a recusa da subida não o tocar.
+/// `POST /api/whatsapp/outbox`: cria o rascunho no binário. Só os campos do C5 seguem.
 async fn create_draft(wa: &WhatsApp, body: &Value) -> Response {
     let mut out = Map::new();
     for (field, required) in [("chat", true), ("text", true), ("origin", true), ("file", false), ("reply_to", false), ("origin_cwd", false)] {
@@ -360,18 +359,9 @@ async fn create_draft(wa: &WhatsApp, body: &Value) -> Response {
     if let Err(response) = send_supported(wa) {
         return response;
     }
-    let reply = wa.client.call(reqwest::Method::POST, "/v1/outbox", &[], Some(&Value::Object(out))).await;
-    // Guardado antes de reler: a volta acordada já sabe que ele é desta vida.
-    if let Ok(reply) = &reply
-        && (200..300).contains(&reply.status)
-        && let Some(id) = serde_json::from_slice::<Value>(&reply.body).ok().and_then(|d| d["id"].as_str().map(str::to_owned)) {
-        wa.outbox.created(&id);
-    }
+    let response = forward(wa, Method::POST, "/v1/outbox", &[], Some(&Value::Object(out))).await;
     wa.outbox.poke();
-    match reply {
-        Ok(reply) => relay_outbox(reply),
-        Err(error) => call_error(&error),
-    }
+    response
 }
 
 /// `GET /api/whatsapp/outbox`: os pendentes, salvo outro `state` pedido.
@@ -383,7 +373,7 @@ async fn list_drafts(wa: &WhatsApp, query: &str) -> Response {
     if params.is_empty() {
         params.push(("state".into(), "pending".into()));
     }
-    outbox_forward(wa, Method::GET, "/v1/outbox", &params, None).await
+    forward(wa, Method::GET, "/v1/outbox", &params, None).await
 }
 
 /// `GET /api/whatsapp/outbox/{id}`, `POST …/{id}/send` (`{"via":"desktop"|"mobile"}`) e `POST …/{id}/decline`.
@@ -397,7 +387,7 @@ async fn draft(wa: &WhatsApp, method: Method, rest: &str, request: Request) -> R
     }
     let path = format!("/v1/outbox/{id}");
     match (method, action) {
-        (Method::GET, "") => outbox_forward(wa, Method::GET, &path, &[], None).await,
+        (Method::GET, "") => forward(wa, Method::GET, &path, &[], None).await,
         (Method::POST, "send") => {
             let body = match body(request).await {
                 Ok(body) => body,
@@ -407,12 +397,12 @@ async fn draft(wa: &WhatsApp, method: Method, rest: &str, request: Request) -> R
                 Some(via @ ("desktop" | "mobile")) => via,
                 _ => return refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "via é \"desktop\" ou \"mobile\""),
             };
-            let response = outbox_forward(wa, Method::POST, &format!("{path}/send"), &[], Some(&json!({"via": via}))).await;
+            let response = forward(wa, Method::POST, &format!("{path}/send"), &[], Some(&json!({"via": via}))).await;
             wa.outbox.poke();
             response
         }
         (Method::POST, "decline") => {
-            let response = outbox_forward(wa, Method::POST, &format!("{path}/decline"), &[], None).await;
+            let response = forward(wa, Method::POST, &format!("{path}/decline"), &[], None).await;
             wa.outbox.poke();
             response
         }
@@ -427,23 +417,6 @@ fn send_supported(wa: &WhatsApp) -> Result<(), Response> {
         Some(control) if control.api < outbox::SEND_API => Err(refused(StatusCode::CONFLICT, "whatsapp_send_unsupported", UNSUPPORTED_MSG)),
         _ => Ok(()),
     }
-}
-
-async fn outbox_forward(wa: &WhatsApp, method: Method, path: &str, query: &[(String, String)], body: Option<&Value>) -> Response {
-    let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-    match wa.client.call(method, path, &query, body).await {
-        Ok(reply) => relay_outbox(reply),
-        Err(error) => call_error(&error),
-    }
-}
-
-/// Como [`relay`], com a frase própria do `outdated`: quem resolve é atualizar o binário.
-fn relay_outbox(reply: Reply) -> Response {
-    if !(200..300).contains(&reply.status) && c2_code(&reply.body).as_deref() == Some("outdated") {
-        let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::CONFLICT);
-        return refused(status, "whatsapp_outdated", OUTDATED_MSG);
-    }
-    relay(reply)
 }
 
 async fn forward(wa: &WhatsApp, method: Method, path: &str, query: &[(String, String)], body: Option<&Value>) -> Response {
@@ -476,7 +449,8 @@ fn relay(reply: Reply) -> Response {
     }
     let parsed: Value = serde_json::from_slice(&reply.body).unwrap_or(Value::Null);
     let code = c2_code(&reply.body).map_or_else(|| "whatsapp_error".to_owned(), |code| format!("whatsapp_{code}"));
-    let msg = parsed["detail"]["msg"].as_str().unwrap_or("o serviço do WhatsApp recusou o pedido");
+    // `outdated`: quem resolve é atualizar o binário, e a frase diz isso.
+    let msg = if code == "whatsapp_outdated" { OUTDATED_MSG } else { parsed["detail"]["msg"].as_str().unwrap_or("o serviço do WhatsApp recusou o pedido") };
     // 401 do binário é a assinatura do Hangar recusada (chave ou relógio), não o token de quem pediu.
     let status = if status == StatusCode::UNAUTHORIZED { StatusCode::BAD_GATEWAY } else { status };
     detail(status, &code, msg, json!({}))
@@ -498,7 +472,7 @@ fn call_error(error: &CallError) -> Response {
     refused(status, code, msg)
 }
 
-fn call_failure(error: &CallError) -> (StatusCode, &'static str, &'static str) {
+pub(crate) fn call_failure(error: &CallError) -> (StatusCode, &'static str, &'static str) {
     match error {
         CallError::Off(_) => (StatusCode::CONFLICT, "whatsapp_off", OFF_MSG),
         CallError::Untrusted(_) => (StatusCode::BAD_GATEWAY, "whatsapp_untrusted", "a resposta do serviço do WhatsApp não tem a assinatura dele"),

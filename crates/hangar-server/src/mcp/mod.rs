@@ -113,7 +113,7 @@ impl ServerHandler for Handler {
         let headers = context.extensions.get::<axum::http::request::Parts>().map(|p| p.headers.clone()).unwrap_or_default();
         let name = OLD_NAMES.iter().find(|(old, _)| *old == request.name).map_or(&*request.name, |(_, new)| new);
         let args = request.arguments.unwrap_or_default();
-        let draft = (name == "whatsapp_draft").then(|| Arc::new(whatsapp::DraftProgress::default()));
+        let draft = (name == "whatsapp_draft").then(|| Arc::new(hangar_whatsapp::outbox::Progress::default()));
         let call = self.tools.call(name, args, &headers, draft.clone());
         // O rmcp só cancela o token no `notifications/cancelled`: largar o futuro é o que cancela o pedido na dona do cofre
         // e o que recusa o rascunho do WhatsApp, que mora no binário. O `select!` larga o futuro antes do braço rodar.
@@ -121,7 +121,7 @@ impl ServerHandler for Handler {
             return Ok(CallToolResponse::Complete(tokio::select! {
                 result = call => result,
                 () = context.ct.cancelled() => match draft {
-                    Some(draft) => draft.cancelled().await,
+                    Some(draft) => CallToolResult::error(vec![ContentBlock::text(draft.cancelled().await)]),
                     None => CallToolResult::error(vec![ContentBlock::text("erro_cofre_cancelado: a chamada foi cancelada")]),
                 },
             }));

@@ -515,11 +515,16 @@ impl outbox::Hooks for Recorded {
 }
 
 fn feed_ids(wa: &WhatsApp) -> Vec<String> {
-    wa.outbox().feed().borrow().drafts.iter().map(|d| d["id"].as_str().unwrap_or_default().to_owned()).collect()
+    let feed = wa.outbox().feed().borrow().clone();
+    feed.map(|f| f.drafts.iter().map(|d| d["id"].as_str().unwrap_or_default().to_owned()).collect()).unwrap_or_default()
 }
 
-/// Na primeira leitura desta vida, o pendente criado antes da subida é recusado. O criado depois fica, entra no
-/// evento e avisa uma vez só, inclusive o que ainda está a caminho, sem id guardado pela rota.
+fn pending_reads(s: &Scene) -> usize {
+    s.seen.lock().unwrap().iter().filter(|r| *r == "GET /v1/outbox?state=pending").count()
+}
+
+/// Na primeira leitura desta vida, o pendente criado antes da subida é recusado e sai da lista sem relê-la. O
+/// criado depois fica pelo horário, entra no evento com o `answer_by` e avisa uma vez só.
 #[tokio::test]
 async fn the_first_round_declines_what_another_life_left_pending() {
     let s = Scene::new();
@@ -533,8 +538,11 @@ async fn the_first_round_declines_what_another_life_left_pending() {
     let hooks = Recorded::default();
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert_eq!(s.drafts.lock().unwrap()[0]["state"], json!("declined"), "o de outra vida saiu da fila");
-    assert_eq!(s.drafts.lock().unwrap()[2]["state"], json!("pending"), "o criado nesta vida, ainda sem id guardado, fica");
+    assert_eq!(s.drafts.lock().unwrap()[2]["state"], json!("pending"), "o criado nesta vida fica");
+    assert_eq!(pending_reads(&s), 1, "as recusas tiram da lista o que saiu, sem reler");
     assert_eq!(feed_ids(&s.wa), ["d2", "d3"]);
+    let feed = s.wa.outbox().feed().borrow().clone().unwrap();
+    assert_eq!(feed.drafts[0]["answer_by"], json!("2026-11-24T10:09:30Z"), "o prazo da tool vence antes da expiração");
     assert_eq!(*hooks.new.lock().unwrap(), ["d2", "d3"]);
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert_eq!(*hooks.new.lock().unwrap(), ["d2", "d3"], "o mesmo rascunho não avisa de novo");
@@ -544,7 +552,7 @@ async fn the_first_round_declines_what_another_life_left_pending() {
     assert_eq!(status, 200);
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert!(feed_ids(&s.wa).is_empty(), "respondido sai do evento");
-    assert!(s.wa.outbox().feed().borrow().read, "lista vazia lida também é resposta");
+    assert!(s.wa.outbox().feed().borrow().is_some(), "lista vazia lida também é resposta");
     assert!(hooks.failed.lock().unwrap().is_empty());
 }
 
@@ -577,7 +585,7 @@ async fn without_the_send_api_nothing_is_read_and_a_failed_read_keeps_the_list()
     let hooks = Recorded::default();
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert!(s.seen.lock().unwrap().is_empty() && feed_ids(&s.wa).is_empty());
-    assert!(!s.wa.outbox().feed().borrow().read, "sem envio, o evento não sai");
+    assert!(s.wa.outbox().feed().borrow().is_none(), "sem envio, o evento não sai");
 
     s.serve_api(Signing::Signed, 2).await;
     s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"5564999","text":"oi","origin":"casa::s0"}"#)).await;
@@ -592,8 +600,7 @@ async fn without_the_send_api_nothing_is_read_and_a_failed_read_keeps_the_list()
 
     s.write_control_api(1, DEAD_PID, 2);
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
-    assert!(feed_ids(&s.wa).is_empty(), "serviço desligado: nada a aprovar");
-    assert!(!s.wa.outbox().feed().borrow().read);
+    assert_eq!(s.wa.outbox().feed().borrow().as_deref(), Some(&outbox::Feed::default()), "serviço desligado: o cartão na tela some");
 }
 
 /// Contra o binário real. Rodar à mão:

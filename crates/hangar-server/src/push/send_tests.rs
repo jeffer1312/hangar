@@ -154,3 +154,16 @@ fn the_whatsapp_draft_push_says_only_that_a_draft_waits() {
     let en = Outgoing::whatsapp_draft("s0", "casa".into(), "d1".into()).payload(&json!({"locale": "en"})).unwrap();
     assert_eq!(en["body"], json!("WhatsApp draft awaiting approval"));
 }
+
+/// O cofre abre a folha pela `url` e pelo `request_id`, com o id que a inscrição conhece para esta máquina.
+#[test]
+fn the_vault_push_opens_its_sheet_by_the_subscription_server() {
+    let out = || Outgoing::vault_request("s0", "casa".into(), "r1".into(), "s0".into(), "GitHub".into());
+    let p = out().payload(&json!({"serverId": "notebook"})).unwrap();
+    assert_eq!(p["url"], json!("/?server=notebook&vault_request=r1"));
+    assert_eq!((&p["server_id"], &p["request_id"]), (&json!("notebook"), &json!("r1")));
+    assert!(p.get("whatsapp_draft_id").is_none());
+    let unnamed = out().payload(&json!({})).unwrap();
+    assert_eq!((&unnamed["server_id"], &unnamed["url"]), (&json!("casa"), &json!("/?server=casa&vault_request=r1")),
+        "sem id na inscrição, o da máquina");
+}

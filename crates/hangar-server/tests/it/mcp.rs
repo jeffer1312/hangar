@@ -117,6 +117,8 @@ async fn scene_share(groups: bool, peers: Option<hangar_server::groups::peers::P
     let state=Arc::new(state);
     let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    // A lista dos rascunhos, como na subida: a resposta do dono a muda, e é a mudança que acorda a espera da tool.
+    drop(hangar_server::whatsapp_outbox::spawn(state.clone()));
     Scene { addr, home, sink, state, _dir: dir }
 }
 
@@ -1038,8 +1040,9 @@ async fn fake_c5(request: axum::extract::Request, drafts: &Mutex<Vec<Value>>, se
     (axum::http::StatusCode::from_u16(status).unwrap(), [(hangar_whatsapp::control::SIGNATURE_HEADER, signature)], bytes).into_response()
 }
 
-/// Horários fixos, longe de hoje: a espera da tool decide igual em qualquer dia. A conversa `vencido` nasce com o prazo
-/// já passado, como um rascunho que o dono deixou expirar.
+/// Expiração fixa, longe de hoje: a espera da tool decide igual em qualquer dia. A conversa `vencido` nasce com o prazo
+/// já passado, como um rascunho que o dono deixou expirar. A criação é agora: o de antes da subida seria recusado pela
+/// lista dos pendentes como sobra de outra vida.
 fn c5_reply(method: &str, uri: &str, body: &[u8], drafts: &Mutex<Vec<Value>>, outcome: &Value) -> (u16, Value) {
     let error = |status: u16, code: &str| (status, json!({"detail": {"code": code, "msg": format!("recusado: {code}")}}));
     let mut drafts = drafts.lock().unwrap();
@@ -1050,7 +1053,8 @@ fn c5_reply(method: &str, uri: &str, body: &[u8], drafts: &Mutex<Vec<Value>>, ou
                 let asked: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
                 let expires = if asked["chat"] == "vencido" { "2000-01-01T00:10:00Z" } else { "2099-01-01T00:10:00Z" };
                 let draft = json!({"id": format!("d{}", drafts.len() + 1), "origin": asked["origin"], "chat": asked["chat"],
-                    "text": asked["text"], "state": "pending", "created_at": "2000-01-01T00:00:00Z", "expires_at": expires, "answered_at": null,
+                    "text": asked["text"], "state": "pending", "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    "expires_at": expires, "answered_at": null,
                     "message_id": "", "error": "", "asked": asked});
                 drafts.push(draft.clone());
                 (201, draft)
@@ -1099,6 +1103,13 @@ async fn until<T>(fake: &FakeWhatsApp, mut probe: impl FnMut() -> Option<T>) -> 
     }
 }
 
+/// O cartão do rascunho apareceu: a lista dos pendentes, que o dono vê, já o tem.
+async fn on_card(s: &Scene, id: &str) {
+    let mut feed = s.state.whatsapp.get().unwrap().outbox().feed();
+    let shown = |feed: &Option<Arc<hangar_whatsapp::outbox::Feed>>| feed.as_ref().is_some_and(|f| f.drafts.iter().any(|d| d["id"] == id));
+    tokio::time::timeout(Duration::from_secs(10), feed.wait_for(shown)).await.expect("o cartão não apareceu em 10 s").unwrap();
+}
+
 /// O dono responde no cartão: a mesma rota que o app chama.
 async fn owner_answers(s: &Scene, id: &str, action: &str) -> u16 {
     client().post(format!("http://{}/api/whatsapp/outbox/{id}/{action}", s.addr)).bearer_auth(OWNER)
@@ -1125,6 +1136,7 @@ async fn whatsapp_draft_waits_for_the_owner_and_returns_the_sent_message() {
         (&json!("5564999"), &json!("segue o arquivo"), &json!("/tmp/a.zip"), &json!("local::s0")), "{asked}");
     assert!(asked["origin_cwd"].as_str().is_some_and(|cwd| cwd.ends_with("w0")), "a pasta da sessão: {asked}");
     assert!(!task.is_finished(), "a tool espera o dono");
+    on_card(&s, &id).await;
     assert_eq!(owner_answers(&s, &id, "send").await, 202);
     let result = task.await.unwrap();
     assert!(!failed(&result), "{result}");
@@ -1142,11 +1154,14 @@ async fn whatsapp_draft_returns_declined_failed_and_expired() {
         let s = scene_shared(false, None, false, "", true).await;
         let fake = fake_whatsapp(&s.home, 2, outcome).await;
         let (task, id) = draft_in_flight(&s, &fake, chat).await;
-        if let Some(action) = action { owner_answers(&s, &id, action).await; }
+        if let Some(action) = action {
+            on_card(&s, &id).await;
+            owner_answers(&s, &id, action).await;
+        }
         let result = task.await.unwrap();
         let out = &result["structuredContent"];
         assert_eq!((&out["status"], &out["id"]), (&json!(case), &json!(id)), "{case}: {result}");
-        assert!(out["note"].as_str().is_some_and(|n| n.contains("não crie outro rascunho para o mesmo envio")), "{case}: {result}");
+        assert!(out["note"].as_str().is_some_and(|n| n.contains(hangar_whatsapp::outbox::DONT_REPEAT)), "{case}: {result}");
         if case == "failed" {
             assert_eq!(out["error"], json!("unconfirmed"));
             assert!(out["note"].as_str().unwrap().contains("pode ter saído"), "{result}");
@@ -1163,7 +1178,10 @@ async fn whatsapp_draft_after_a_wipe_is_final() {
     let s = scene_shared(false, None, false, "", true).await;
     let fake = fake_whatsapp(&s.home, 2, json!({})).await;
     let (task, id) = draft_in_flight(&s, &fake, "5564999").await;
+    on_card(&s, &id).await;
     fake.drafts.lock().unwrap().clear();
+    // O wipe some com a lista inteira: a releitura dela é o que acorda a espera.
+    s.state.whatsapp.get().unwrap().outbox().poke();
     let result = task.await.unwrap();
     let out = &result["structuredContent"];
     assert_eq!((&out["status"], &out["id"], &out["error"]), (&json!("failed"), &json!(id), &json!("not_found")), "{result}");
@@ -1201,6 +1219,7 @@ async fn a_cancelled_whatsapp_draft_is_declined_unless_already_approved() {
         let id = until(&fake, || fake.drafts.lock().unwrap().first().and_then(|d| d["id"].as_str().map(str::to_owned))).await;
         let reads = |fake: &FakeWhatsApp| fake.seen.lock().unwrap().iter().filter(|r| **r == format!("GET /v1/outbox/{id}")).count();
         if approved {
+            on_card(&s, &id).await;
             assert_eq!(owner_answers(&s, &id, "send").await, 202);
             // A segunda leitura depois do envio só sai quando a tool já tratou a primeira, que viu o envio aprovado.
             let before = reads(&fake);

@@ -1105,12 +1105,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
                 state.mission.clone(),state.connectors.clone(),state.mission_notify.clone())).clone()))
         .merge(hangar_work_review::http::router(state.edge(), state.work_review.clone()))
         // WhatsApp: só o dono, nunca na porta do convidado (o Python não tem as rotas).
-        .merge({
-            let whatsapp = state.whatsapp.get_or_init(|| hangar_whatsapp::WhatsApp::new(&state.accounts.env.home)).clone();
-            // Os rascunhos pendentes vão ao evento `whatsapp_outbox` da lista do dono.
-            state.hub.bind_whatsapp(whatsapp.outbox().feed());
-            hangar_whatsapp::router(state.edge(), whatsapp)
-        })
+        .merge(hangar_whatsapp::router(state.edge(),
+            state.whatsapp.get_or_init(|| hangar_whatsapp::WhatsApp::new(&state.accounts.env.home)).clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_registered))
         .route("/api/claude/commands", get(crate::commands::new_chat_route).fallback(pass_registered))
         // Senha do chaveiro: só o dono; o preflight do CORS cai no caminho sem rota.

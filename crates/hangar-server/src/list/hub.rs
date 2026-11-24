@@ -106,8 +106,8 @@ pub struct ListHub {
     refs: Mutex<Refs>,
     /// Pedidos do cofre (`vault::requests`); o padrão é um canal sem quem escreva.
     vault: watch::Receiver<Arc<crate::vault::requests::Feed>>,
-    /// Rascunhos de WhatsApp pendentes; ligado quando o roteador cria o WhatsApp.
-    whatsapp: std::sync::OnceLock<watch::Receiver<Arc<hangar_whatsapp::outbox::Feed>>>,
+    /// Rascunhos de WhatsApp pendentes; ligado por `whatsapp_outbox::spawn`, na subida.
+    whatsapp: std::sync::OnceLock<OutboxFeed>,
 }
 
 impl Default for ListHub {
@@ -134,7 +134,7 @@ impl ListHub {
     pub fn with_vault(vault: watch::Receiver<Arc<crate::vault::requests::Feed>>) -> Self { Self { vault, ..Self::default() } }
 
     /// A primeira ligação vale: o WhatsApp do servidor é um só.
-    pub fn bind_whatsapp(&self, outbox: watch::Receiver<Arc<hangar_whatsapp::outbox::Feed>>) { let _ = self.whatsapp.set(outbox); }
+    pub fn bind_whatsapp(&self, outbox: watch::Receiver<Option<Arc<hangar_whatsapp::outbox::Feed>>>) { let _ = self.whatsapp.set(outbox); }
 
     fn subscribe(self: &Arc<Self>, list: &Arc<ListBridge>, devices: &Arc<Registry>, diag: &DiagClient, owner: bool) -> Subscription {
         let mut r = lock(&self.refs);
@@ -208,7 +208,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         }
     });
     let mut vault = hub.vault.clone();
-    let mut outbox = hub.whatsapp.get().cloned().unwrap_or_else(|| watch::channel(Arc::default()).1);
+    let mut outbox = hub.whatsapp.get().cloned();
     let review = list.work_review.get().cloned();
     loop {
         let clients = {
@@ -241,7 +241,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         publish_nav(&hub.tx, &mut last, list.nav.live(crate::nav_requests::now()));
         publish_keyring(&hub.tx, &mut last, *keyring.borrow_and_update());
         publish_vault(&hub.tx, &mut last, vault.borrow_and_update().clone());
-        publish_whatsapp_outbox(&hub.tx, &mut last, outbox.borrow_and_update().clone());
+        publish_whatsapp_outbox(&hub.tx, &mut last, current_outbox(&mut outbox));
         // Só a lista do dono recebe: sem ela (convidado, assinatura interna) nada é lido.
         if clients > 0 {
             publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
@@ -268,8 +268,8 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
                     publish_vault(&hub.tx, &mut last, vault.borrow_and_update().clone());
                     continue;
                 }
-                Ok(()) = outbox.changed() => {
-                    publish_whatsapp_outbox(&hub.tx, &mut last, outbox.borrow_and_update().clone());
+                () = outbox_changed(&mut outbox) => {
+                    publish_whatsapp_outbox(&hub.tx, &mut last, current_outbox(&mut outbox));
                     continue;
                 }
                 () = list.tags.changed.notified(), if clients > 0 => {
@@ -559,14 +559,24 @@ fn publish_vault(tx: &watch::Sender<Arc<Published>>, last: &mut Last, feed: Arc<
     tx.send_replace(Arc::new(next));
 }
 
+type OutboxFeed = watch::Receiver<Option<Arc<hangar_whatsapp::outbox::Feed>>>;
+
+fn current_outbox(outbox: &mut Option<OutboxFeed>) -> Option<Arc<hangar_whatsapp::outbox::Feed>> {
+    outbox.as_mut().and_then(|outbox| outbox.borrow_and_update().clone())
+}
+
+/// A lista dos rascunhos mudou; sem WhatsApp ligado, nunca.
+async fn outbox_changed(outbox: &mut Option<OutboxFeed>) {
+    if let Some(outbox) = outbox.as_mut() && outbox.changed().await.is_ok() { return; }
+    std::future::pending::<()>().await;
+}
+
 /// Como o cofre: fora da rodada, só quando muda, e só à lista do dono (`frames`). Lista vazia lida do binário sai
-/// (quem abre a folha por um aviso espera resposta); sem WhatsApp com envio, nada sai.
-fn publish_whatsapp_outbox(tx: &watch::Sender<Arc<Published>>, last: &mut Last, feed: Arc<hangar_whatsapp::outbox::Feed>) {
-    match last.whatsapp_outbox.as_deref() {
-        Some(previous) if previous == &*feed => return,
-        None if !feed.read && feed.drafts.is_empty() => return,
-        _ => {}
-    }
+/// (quem abre a folha por um aviso espera resposta); antes da primeira leitura com envio (`None`), nada sai. O
+/// `Outbox` só troca o `Arc` quando a lista muda: o mesmo ponteiro é a mesma lista.
+fn publish_whatsapp_outbox(tx: &watch::Sender<Arc<Published>>, last: &mut Last, feed: Option<Arc<hangar_whatsapp::outbox::Feed>>) {
+    let Some(feed) = feed else { return };
+    if last.whatsapp_outbox.as_ref().is_some_and(|previous| Arc::ptr_eq(previous, &feed)) { return; }
     let Ok(json) = serde_json::to_string(&*feed) else { return };
     let mut next = (**tx.borrow()).clone();
     next.whatsapp_outbox = Some(sse_frame("whatsapp_outbox", &json, None));
@@ -1131,7 +1141,7 @@ mod tests {
     }
 
     fn outbox_feed(ids: &[&str]) -> Arc<hangar_whatsapp::outbox::Feed> {
-        Arc::new(hangar_whatsapp::outbox::Feed { drafts: ids.iter().map(|id| json!({"id": id, "state": "pending"})).collect(), read: true })
+        Arc::new(hangar_whatsapp::outbox::Feed { drafts: ids.iter().map(|id| json!({"id": id, "state": "pending"})).collect() })
     }
 
     /// Sem WhatsApp com envio nada sai; lida a lista, sai mesmo vazia, também para a lista que fechou e reabriu (o
@@ -1140,23 +1150,24 @@ mod tests {
     fn the_whatsapp_outbox_event_goes_out_once_read_and_only_on_change() {
         let (tx, _rx) = watch::channel(Arc::new(Published::default()));
         let mut last = Last::default();
-        publish_whatsapp_outbox(&tx, &mut last, Arc::default());
+        publish_whatsapp_outbox(&tx, &mut last, None);
         assert!(tx.borrow().whatsapp_outbox.is_none(), "sem WhatsApp com envio, nada sai");
-        publish_whatsapp_outbox(&tx, &mut last, outbox_feed(&[]));
+        publish_whatsapp_outbox(&tx, &mut last, Some(outbox_feed(&[])));
         assert!(tx.borrow().whatsapp_outbox.as_ref().is_some_and(|f| f.starts_with(b"event: whatsapp_outbox\r\ndata: {\"drafts\":[]}")),
             "lida e vazia, sai");
         let (reopened, _rx) = watch::channel(Arc::new(Published::default()));
-        publish_whatsapp_outbox(&reopened, &mut Last::default(), outbox_feed(&[]));
+        publish_whatsapp_outbox(&reopened, &mut Last::default(), Some(outbox_feed(&[])));
         assert!(reopened.borrow().whatsapp_outbox.is_some(), "a lista reaberta recebe a vazia");
-        publish_whatsapp_outbox(&tx, &mut last, outbox_feed(&["d1"]));
+        let d1 = outbox_feed(&["d1"]);
+        publish_whatsapp_outbox(&tx, &mut last, Some(d1.clone()));
         let seq = tx.borrow().whatsapp_outbox_seq;
-        publish_whatsapp_outbox(&tx, &mut last, outbox_feed(&["d1"]));
-        assert_eq!(tx.borrow().whatsapp_outbox_seq, seq, "igual não republica");
+        publish_whatsapp_outbox(&tx, &mut last, Some(d1));
+        assert_eq!(tx.borrow().whatsapp_outbox_seq, seq, "a mesma lista não republica");
         let p = tx.borrow().clone();
         let mut sent = Sent::default();
         assert!(frames(&p, &mut sent).iter().any(|f| f.starts_with(b"event: whatsapp_outbox\r\n")), "quem abre a lista recebe o último");
         assert!(frames(&p, &mut sent).is_empty(), "uma vez por conexão");
-        publish_whatsapp_outbox(&tx, &mut last, outbox_feed(&[]));
+        publish_whatsapp_outbox(&tx, &mut last, Some(outbox_feed(&[])));
         let f = frames(&tx.borrow(), &mut sent);
         assert!(f.iter().any(|f| f.starts_with(b"event: whatsapp_outbox\r\ndata: {\"drafts\":[]}")), "o cartão respondido some");
     }
@@ -1169,12 +1180,12 @@ mod tests {
             codex_home: tmp.path().join(".codex"), pi_sessions: tmp.path().join("pi"), omp_config: tmp.path().join("omp"),
             omp_agent: tmp.path().join("omp/agent"), kimi_home: tmp.path().join("kimi") };
         let share = crate::share::from_env(Some(tmp.path().join("shares.json")), Some(&dirs), "missing-test-mux".into(), None).unwrap();
-        let (feed_tx, feed_rx) = watch::channel(outbox_feed(&[]));
+        let (feed_tx, feed_rx) = watch::channel(Some(outbox_feed(&[])));
         let hub = Arc::new(ListHub::default());
         hub.bind_whatsapp(feed_rx);
-        feed_tx.send_replace(outbox_feed(&["d1"]));
-        let mut outbox = hub.whatsapp.get().cloned().unwrap();
-        publish_whatsapp_outbox(&hub.tx, &mut Last::default(), outbox.borrow_and_update().clone());
+        feed_tx.send_replace(Some(outbox_feed(&["d1"])));
+        let mut outbox = hub.whatsapp.get().cloned();
+        publish_whatsapp_outbox(&hub.tx, &mut Last::default(), current_outbox(&mut outbox));
         let (owner_tx, owner_rx) = mpsc::channel(16);
         tokio::spawn(client_loop(Subscription { hub: hub.clone(), rx: hub.tx.subscribe(), owner: true }, owner_tx));
         let (guest_tx, guest_rx) = mpsc::channel(16);

@@ -28,11 +28,12 @@ impl hangar_whatsapp::outbox::Hooks for Hooks {
 /// A sessão de `servidor::sessao`; o que não tem cara de nome de sessão não vai ao aviso.
 fn origin_session(origin: &str) -> &str {
     let name = origin.rsplit_once("::").map_or(origin, |(_, name)| name);
-    let ok = !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
-    if ok { name } else { "" }
+    if hangar_core::ids::valid_session_name(name) { name } else { "" }
 }
 
-/// A lista dos rascunhos pendentes, com ou sem lista aberta: o aviso ao celular não espera app aberto.
+/// A lista dos rascunhos pendentes, com ou sem lista aberta: o aviso ao celular não espera app aberto. Liga também o
+/// evento da lista do dono, aqui e só aqui: o WhatsApp nasce depois do `ListHub`, pela pasta das contas que as provas
+/// trocam depois de criar o estado.
 pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     let whatsapp = st.whatsapp.get_or_init(|| hangar_whatsapp::WhatsApp::new(&st.accounts.env.home)).clone();
     st.hub.bind_whatsapp(whatsapp.outbox().feed());

@@ -157,6 +157,37 @@ impl Notice {
     }
 }
 
+/// O cartão que o aviso abre no app, com o id da máquina que o criou.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Opens {
+    /// Pedido do cofre.
+    Vault { server_id: String, request_id: String },
+    /// Rascunho de WhatsApp.
+    WhatsAppDraft { server_id: String, draft_id: String },
+}
+
+impl Opens {
+    /// A chave do id no `data` do aviso, a que o app lê.
+    pub fn data_key(&self) -> &'static str {
+        match self {
+            Self::Vault { .. } => "request_id",
+            Self::WhatsAppDraft { .. } => "whatsapp_draft_id",
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Vault { request_id: id, .. } | Self::WhatsAppDraft { draft_id: id, .. } => id,
+        }
+    }
+
+    fn server_id(&self) -> &str {
+        match self {
+            Self::Vault { server_id, .. } | Self::WhatsAppDraft { server_id, .. } => server_id,
+        }
+    }
+}
+
 /// Um aviso pronto para os canais: o que muda por idioma é calculado por inscrição.
 pub struct Outgoing {
     pub session: String,
@@ -164,10 +195,7 @@ pub struct Outgoing {
     pub title: Option<Box<dyn Fn(&str) -> String + Send + Sync>>,
     pub tag: Option<&'static str>,
     pub url: Option<String>,
-    /// (`server_id`, `request_id`) do pedido do cofre: o aviso abre a folha dele.
-    pub vault: Option<(String, String)>,
-    /// (`server_id`, id do rascunho) do WhatsApp: o aviso abre a folha dele.
-    pub whatsapp_draft: Option<(String, String)>,
+    pub opens: Option<Opens>,
 }
 
 impl Outgoing {
@@ -178,8 +206,7 @@ impl Outgoing {
             title: None,
             tag: None,
             url: None,
-            vault: None,
-            whatsapp_draft: None,
+            opens: None,
         }
     }
 
@@ -187,15 +214,15 @@ impl Outgoing {
     pub fn vault_request(session: &str, server_id: String, request_id: String, origin: String, label: String) -> Self {
         let notice = Notice::VaultRequest { server_id: server_id.clone(), request_id: request_id.clone(), origin, label };
         Self { session: session.to_owned(), body: Box::new(move |l| notice.body(l)), title: Some(Box::new(|l| msg(l, "cofre").to_owned())),
-            tag: None, url: Some("/".to_owned()), vault: Some((server_id, request_id)), whatsapp_draft: None }
+            tag: None, url: Some("/".to_owned()), opens: Some(Opens::Vault { server_id, request_id }) }
     }
 
     /// Rascunho de WhatsApp: frase fixa, sem conversa, número nem texto (passa por Expo e Web Push); `url` `/`, onde o
     /// cartão está.
     pub fn whatsapp_draft(session: &str, server_id: String, draft_id: String) -> Self {
         Self { session: session.to_owned(), body: Box::new(|l| msg(l, "whatsapp_rascunho").to_owned()),
-            title: Some(Box::new(|l| msg(l, "whatsapp").to_owned())), tag: None, url: Some("/".to_owned()), vault: None,
-            whatsapp_draft: Some((server_id, draft_id)) }
+            title: Some(Box::new(|l| msg(l, "whatsapp").to_owned())), tag: None, url: Some("/".to_owned()),
+            opens: Some(Opens::WhatsAppDraft { server_id, draft_id }) }
     }
 
     /// Várias sessões no mesmo ciclo: "N sessões aguardando: a, b", abre a lista.
@@ -209,8 +236,7 @@ impl Outgoing {
             title: Some(Box::new(move |l| msg(l, "sessoes").replace("{n}", &n))),
             tag: Some(COALESCE_TAG),
             url: Some("/".to_owned()),
-            vault: None,
-            whatsapp_draft: None,
+            opens: None,
         }
     }
 
@@ -248,17 +274,14 @@ impl Outgoing {
         if let Some(tag) = self.tag {
             p["tag"] = json!(tag);
         }
-        if let Some((server_id, request_id)) = &self.vault {
+        if let Some(opens) = &self.opens {
             // O id que o cliente conhece para esta máquina é o da inscrição.
-            let server = entry["serverId"].as_str().filter(|s| !s.is_empty()).unwrap_or(server_id);
-            p["url"] = json!(format!("/?server={server}&vault_request={request_id}"));
+            let server = entry["serverId"].as_str().filter(|s| !s.is_empty()).unwrap_or(opens.server_id());
+            if let Opens::Vault { request_id, .. } = opens {
+                p["url"] = json!(format!("/?server={server}&vault_request={request_id}"));
+            }
             p["server_id"] = json!(server);
-            p["request_id"] = json!(request_id);
-        }
-        if let Some((server_id, draft_id)) = &self.whatsapp_draft {
-            let server = entry["serverId"].as_str().filter(|s| !s.is_empty()).unwrap_or(server_id);
-            p["server_id"] = json!(server);
-            p["whatsapp_draft_id"] = json!(draft_id);
+            p[opens.data_key()] = json!(opens.id());
         }
         Ok(p)
     }
@@ -414,33 +437,23 @@ impl Sender {
         });
     }
 
-    /// Pedido do cofre: só o horário de silêncio segura; o mudo da sessão que pediu, não. Não depende de
-    /// app aberto nem do dono no PC: o agente fica parado esperando a resposta.
+    /// Pedido do cofre esperando o dono.
     pub fn vault_request(self: &Arc<Self>, session: &str, server_id: String, request_id: String, origin: String, label: String) {
-        if test_binary() { return; }
-        let (me, session) = (self.clone(), session.to_owned());
-        tokio::spawn(async move {
-            let held = || me.st.diag.report("rust.push_gate_failed", &session, "push_gate_invalid", "preferências incompatíveis; aviso do cofre segurado");
-            let dir = me.dir();
-            let Ok(Ok(prefs)) = tokio::task::spawn_blocking(move || store::prefs(&dir)).await else { return held() };
-            let quiet = store::in_quiet_hours(&prefs, chrono::Local::now().time());
-            crate::orchestration::codec::discard(prefs);
-            match quiet {
-                Ok(false) => {}
-                Ok(true) => return,
-                Err(_) => return held(),
-            }
-            me.broadcast(Outgoing::vault_request(&session, server_id, request_id, origin, label)).await
-        });
+        self.urgent(session, Outgoing::vault_request(session, server_id, request_id, origin, label), "preferências incompatíveis; aviso do cofre segurado");
     }
 
-    /// Rascunho de WhatsApp esperando o dono: como o cofre, só o horário de silêncio segura; a sessão que pediu fica
-    /// parada esperando a resposta.
+    /// Rascunho de WhatsApp esperando o dono.
     pub fn whatsapp_draft(self: &Arc<Self>, session: &str, server_id: String, draft_id: String) {
+        self.urgent(session, Outgoing::whatsapp_draft(session, server_id, draft_id), "preferências incompatíveis; aviso do rascunho de WhatsApp segurado");
+    }
+
+    /// Aviso de quem está parado esperando o dono: só o horário de silêncio segura; o mudo da sessão que pediu, não.
+    /// Não depende de app aberto nem do dono no PC. `what` é a frase do diário quando as preferências não se leem.
+    fn urgent(self: &Arc<Self>, session: &str, out: Outgoing, what: &'static str) {
         if test_binary() { return; }
         let (me, session) = (self.clone(), session.to_owned());
         tokio::spawn(async move {
-            let held = || me.st.diag.report("rust.push_gate_failed", &session, "push_gate_invalid", "preferências incompatíveis; aviso do rascunho de WhatsApp segurado");
+            let held = || me.st.diag.report("rust.push_gate_failed", &session, "push_gate_invalid", what);
             let dir = me.dir();
             let Ok(Ok(prefs)) = tokio::task::spawn_blocking(move || store::prefs(&dir)).await else { return held() };
             let quiet = store::in_quiet_hours(&prefs, chrono::Local::now().time());
@@ -450,7 +463,7 @@ impl Sender {
                 Ok(true) => return,
                 Err(_) => return held(),
             }
-            me.broadcast(Outgoing::whatsapp_draft(&session, server_id, draft_id)).await
+            me.broadcast(out).await
         });
     }
 
@@ -506,8 +519,7 @@ impl Sender {
             pick(&|l| out.title_suffix(l)),
             pick(&*out.body),
             out.url.as_deref() == Some("/"),
-            out.vault.as_ref().map(|(_, request_id)| request_id.clone()),
-            out.whatsapp_draft.as_ref().map(|(_, draft_id)| draft_id.clone()),
+            out.opens.clone(),
         );
         let Some(vapid) = webpush::vapid(&self.env) else {
             // Sem chave o Web Push está desligado; chave pública presente e par inválido é falha.

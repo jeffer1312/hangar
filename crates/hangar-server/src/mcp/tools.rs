@@ -20,7 +20,7 @@ use tower_service::Service;
 
 use super::identity::{self, Local, Origin};
 use super::nav;
-use super::whatsapp::{self, Read, Trim};
+use super::whatsapp::{self, Trim};
 use crate::groups::exit::segment;
 use crate::groups::model::Sidecar;
 use crate::groups::peers::PeerClient;
@@ -401,7 +401,7 @@ impl Tools {
     }
 
     /// `draft`: o andamento do `whatsapp_draft`, lido pelo cancelamento em `mod.rs`.
-    pub async fn call(&self, name: &str, raw: JsonObject, headers: &HeaderMap, draft: Option<Arc<whatsapp::DraftProgress>>) -> CallToolResult {
+    pub async fn call(&self, name: &str, raw: JsonObject, headers: &HeaderMap, draft: Option<Arc<outbox::Progress>>) -> CallToolResult {
         let outcome = match name {
             "who_am_i" => self.who_am_i(headers).await,
             "sessions" => self.sessions(headers).await,
@@ -581,30 +581,31 @@ impl Tools {
 
     /// Rascunho de WhatsApp: cria pela rota do dono e espera a resposta dele no cartão, dentro do prazo da chamada. Só
     /// a sessão sem convidado e com o prazo longo do MCP pede; erro depois da criação leva o id.
-    async fn whatsapp_draft(&self, headers: &HeaderMap, a: WhatsAppDraft, progress: Arc<whatsapp::DraftProgress>) -> Outcome {
-        let deadline = chrono::Utc::now() + whatsapp::call_budget();
+    async fn whatsapp_draft(&self, headers: &HeaderMap, a: WhatsAppDraft, progress: Arc<outbox::Progress>) -> Outcome {
+        let deadline = chrono::Utc::now() + outbox::TOOL_DEADLINE;
         let (me, voice) = self.caller(headers).await?;
         if voice { return Err(whatsapp::DRAFT_NEEDS_SESSION.into()); }
         self.whatsapp_unshared(&me).await?;
         let cwd = whatsapp::draft_cwd(&exec::agent(&self.st, &me).await?)?;
         let body = a.body(format!("{}::{me}", self.vault_origin()), cwd);
-        let created = self.answer(Some(&me), Method::POST, "/api/whatsapp/outbox", Some(body), coded).await
-            .map_err(|e| if whatsapp::reply_lost(&e) { format!("{e}; {}", whatsapp::DRAFT_MAYBE_CREATED) } else { e })?;
-        let id = created["id"].as_str().filter(|id| outbox::id_ok(id)).map(str::to_owned)
-            .ok_or_else(|| format!("whatsapp_bad_reply: o serviço criou o rascunho sem id; {}", whatsapp::DRAFT_MAYBE_CREATED))?;
-        let guard = whatsapp::DeclineOnDrop::new(self.api.clone(), self.st.cfg.auth_token.clone(), me.clone(), id.clone(), progress);
+        // Assinada antes de criar: a resposta do dono que chegar antes de a espera começar ainda a acorda.
         let feed = self.st.whatsapp.get().map(|wa| wa.outbox().feed());
-        let mut port = DraftRoute { tools: self, me, feed, guard };
-        whatsapp::wait_draft(&mut port, &id, created, deadline).await.map(dict)
+        let created = self.answer(Some(&me), Method::POST, "/api/whatsapp/outbox", Some(body), coded).await
+            .map_err(|e| if whatsapp::reply_lost(&e) { format!("{e}; {}", outbox::DRAFT_MAYBE_CREATED) } else { e })?;
+        let id = created["id"].as_str().filter(|id| outbox::id_ok(id)).map(str::to_owned)
+            .ok_or_else(|| format!("whatsapp_bad_reply: o serviço criou o rascunho sem id; {}", outbox::DRAFT_MAYBE_CREATED))?;
+        let _decline = whatsapp::DeclineOnDrop::new(self.api.clone(), self.st.cfg.auth_token.clone(), me.clone(), id.clone(), progress.clone());
+        let mut port = DraftRoute { tools: self, me, feed };
+        outbox::wait_draft(&mut port, &progress, &id, created, deadline).await.map(dict)
     }
 
-    async fn draft_read(&self, me: &str, id: &str) -> Read {
+    async fn draft_read(&self, me: &str, id: &str) -> outbox::Read {
         let (status, value) = self.route_from(Some(me), Method::GET, &whatsapp::draft_path(id, ""), None).await;
         match (status, value["detail"]["code"].as_str()) {
-            (200, _) => Read::Found(value),
+            (200, _) => outbox::Read::Found(value),
             // Os dados do WhatsApp foram apagados: o rascunho não volta.
-            (404, Some("whatsapp_not_found")) => Read::Gone,
-            _ => Read::Failed(coded(status, &value)),
+            (404, Some("whatsapp_not_found")) => outbox::Read::Gone,
+            _ => outbox::Read::Failed(coded(status, &value)),
         }
     }
 
@@ -1037,28 +1038,38 @@ impl Tools {
     }
 }
 
-/// A espera do `whatsapp_draft` pelas rotas do dono, com o relógio de verdade e a recusa no fim da espera.
+/// A espera do `whatsapp_draft` pelas rotas do dono, com o relógio de verdade.
 struct DraftRoute<'a> {
     tools: &'a Tools,
     me: String,
-    feed: Option<tokio::sync::watch::Receiver<Arc<outbox::Feed>>>,
-    guard: whatsapp::DeclineOnDrop,
+    /// A lista dos pendentes: a resposta do dono a muda e acorda a pausa.
+    feed: Option<tokio::sync::watch::Receiver<Option<Arc<outbox::Feed>>>>,
 }
 
-impl whatsapp::DraftPort for DraftRoute<'_> {
+impl outbox::DraftPort for DraftRoute<'_> {
     fn now(&self) -> chrono::DateTime<chrono::Utc> { chrono::Utc::now() }
 
-    async fn read(&mut self, id: &str) -> Read { self.tools.draft_read(&self.me, id).await }
+    async fn read(&mut self, id: &str) -> outbox::Read { self.tools.draft_read(&self.me, id).await }
 
-    async fn decline(&mut self, id: &str) -> (u16, Value) {
-        self.tools.route_from(Some(&self.me), Method::POST, &whatsapp::draft_path(id, "/decline"), None).await
+    async fn decline(&mut self, id: &str) -> Result<outbox::Declined, String> {
+        let (status, value) = self.tools.route_from(Some(&self.me), Method::POST, &whatsapp::draft_path(id, "/decline"), None).await;
+        match outbox::Declined::of(status, &value, None) {
+            outbox::Declined::Unconfirmed => Err(coded(status, &value)),
+            declined => Ok(declined),
+        }
     }
 
-    async fn pause(&mut self) { whatsapp::pause(&mut self.feed).await }
-
-    fn saw(&mut self, state: &str) { self.guard.saw(state) }
-
-    fn finish(&mut self) { self.guard.finish() }
+    async fn pause(&mut self, until: chrono::DateTime<chrono::Utc>) {
+        let wait = (until - chrono::Utc::now()).to_std().unwrap_or_default();
+        let changed = async {
+            if let Some(feed) = self.feed.as_mut() && feed.changed().await.is_ok() { return; }
+            std::future::pending::<()>().await;
+        };
+        tokio::select! {
+            () = tokio::time::sleep(wait) => {}
+            () = changed => {}
+        }
+    }
 }
 
 /// O cofre (`vault/exec.rs`): o valor nunca entra no resultado nem no erro.
@@ -1462,7 +1473,7 @@ fn unshared_failed(why: &str) -> String {
 }
 
 /// O código na frente, quando a rota deu um: o agente decide por ele (`erro_contrato_mudou`, `mission_gate_pending`).
-pub(super) fn coded(status: u16, value: &Value) -> String {
+fn coded(status: u16, value: &Value) -> String {
     match value["detail"]["code"].as_str() {
         Some(code) => format!("{code}: {}", detail(status, value)),
         None => detail(status, value),
