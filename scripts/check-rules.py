@@ -94,13 +94,14 @@ def new_python(base: str, head: str) -> list[str]:
 
 
 def matches(text: str, rule: LineRule) -> list[tuple[str, str]]:
-    """(identidade, trecho) de cada caso: as linhas inteiras que o casamento ocupa, sem espaço e com uma aspa só."""
+    """(identidade, linha) de cada caso: a identidade é só o trecho casado, sem espaço e com uma aspa só, para que
+    mexer no resto da linha não torne nova a ocorrência antiga."""
     found = []
     for match in rule.pattern.finditer(text):
-        start, end = text.rfind("\n", 0, match.start()) + 1, text.find("\n", match.end())
-        lines = text[start:end if end >= 0 else len(text)]
-        if not COMMENT.match(lines):
-            found.append((re.sub(r"\s+", "", re.sub(r"[\"`]", "'", lines)), " ".join(lines.split())))
+        start, end = text.rfind("\n", 0, match.start()) + 1, text.find("\n", match.start())
+        line = text[start:end if end >= 0 else len(text)]
+        if not COMMENT.match(line):
+            found.append((re.sub(r"\s+", "", re.sub(r"[\"`]", "'", match.group())), " ".join(line.split())))
     return found
 
 
@@ -110,10 +111,13 @@ def new_lines(base: str, head: str, rule: LineRule) -> list[str]:
     start = git("merge-base", base, head).strip()
     old: dict[str, int] = {}
     fresh: list[tuple[str, str, str]] = []
+    judged = lambda name: not TESTS.search(name) and not rule.allowed.search(name)
     for status, before, after in changed(base, head, *rule.paths):
-        for key, _ in matches(show(start, before), rule):
-            old[key] = old.get(key, 0) + 1
-        if status != "D" and not TESTS.search(after) and not rule.allowed.search(after):
+        # Velha é só a que a regra já julgava: copiar de um teste para a produção é ocorrência nova.
+        if status != "A" and judged(before):
+            for key, _ in matches(show(start, before), rule):
+                old[key] = old.get(key, 0) + 1
+        if status != "D" and judged(after):
             fresh += [(after, key, line) for key, line in matches(show(head, after), rule)]
     found = []
     for name, key, line in fresh:
@@ -140,8 +144,9 @@ def changed(base: str, head: str, *paths: str) -> list[tuple[str, str, str]]:
 
 
 def show(rev: str, path: str) -> str:
-    done = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    return done.stdout if done.returncode == 0 and "\0" not in done.stdout else ""
+    """O arquivo naquele commit; binário não tem texto a julgar."""
+    text = git("show", f"{rev}:{path}")
+    return "" if "\0" in text else text
 
 
 def changed_files(base: str, head: str, status: str, *paths: str) -> list[str]:
@@ -160,7 +165,7 @@ def raw_keyboard(base: str, head: str) -> list[str]:
     start = git("merge-base", base, head).strip()
     found = [after for status, before, after in changed(base, head, "mobile/*.ts", "mobile/*.tsx")
              if status != "D" and not TESTS.search(after) and KEYBOARD.search(show(head, after))
-             and not KEYBOARD.search(show(start, before))]
+             and (status == "A" or not KEYBOARD.search(show(start, before)))]
     return [] if not found or authorized(base, head, "TECLADO") else found
 
 

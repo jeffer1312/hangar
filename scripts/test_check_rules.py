@@ -253,6 +253,16 @@ class CheckRules(unittest.TestCase):
         self.commit("move")
         self.assertEqual(self.check()[0], 0)
 
+    def test_a_call_copied_from_a_test_into_production_is_new(self):
+        self.rebase_on("mobile/src/a.test.tsx", "import * as Haptics from 'expo-haptics';\n")
+        self.git("mv", "mobile/src/a.test.tsx", "mobile/src/a.tsx")
+        self.commit("move")
+        self.assertEqual(self.check()[0], 1)
+
+    def test_editing_the_rest_of_an_old_line_keeps_it_old(self):
+        self.rebase_on("packages/core/src/a.ts", "fetch(`${s.baseUrl}/api/x`);\n")
+        self.passes("packages/core/src/a.ts", "await fetch(`${s.baseUrl}/api/x`, { signal }); // longo\n")
+
     def test_an_unreadable_base_is_an_error_and_not_a_pass(self):
         self.base = "0" * 40
         self.assertEqual(self.check()[0], 2)
