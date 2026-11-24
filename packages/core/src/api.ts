@@ -1079,6 +1079,8 @@ export interface CreateSessionBody {
   name: string;
   cwd?: string | null;
   config_dir?: string | null;
+  // Mantém a conta pedida (`config_dir` ou `codex_account`) mesmo com 95% ou mais de uso; sem ela, o servidor recusa.
+  force_account?: boolean;
   provider?: Provider;
   remember_provider?: boolean;
   engine?: string | null;

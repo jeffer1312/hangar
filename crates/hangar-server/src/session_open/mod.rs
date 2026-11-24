@@ -236,6 +236,9 @@ pub struct SessionOpenRequest {
     /// Liga a sessão nova à criadora: entra no grupo dela.
     #[serde(default, skip_serializing_if = "is_false")]
     pub link: bool,
+    /// A conta pedida (`config_dir`/`codex_account`) fica mesmo com 95% ou mais de uso.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub force_account: bool,
     /// A reserva pré-aquecida (`PUT /api/sessions/prewarm`) que esta abertura adota se couber.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prewarm: Option<String>,

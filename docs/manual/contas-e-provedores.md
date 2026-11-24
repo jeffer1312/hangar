@@ -34,6 +34,8 @@ de 80% a barra muda de cor; acima de 90%, muda de novo.
 
 A conta aparece junto da caixa de mensagem. Ao abrir uma conversa, uma conta com 95% ou mais de uso
 fica de fora, e a conversa nasce na conta com mais folga. O aviso diz em qual conta ela nasceu.
+Para usar a conta cheia mesmo assim, toque em **Abrir na <conta> mesmo assim**, na linha que aparece
+junto da conta; **Desfazer** volta para a de mais folga.
 
 Quando uma conversa do Claude bate o limite de uso, ela passa sozinha para outra conta Claude com
 folga. Sem nenhuma com folga, fica parada até a cota voltar.

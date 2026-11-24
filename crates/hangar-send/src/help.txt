@@ -73,6 +73,8 @@ hangar-send — mensagem entre sessões Claude via hangar.
                                  --conta <nome> nasce em OUTRA CONTA Anthropic (ver abaixo); com
                                  --provider codex, numa conta Codex (~/.codex-<nome>;
                                  openai-codex = a padrão).
+                                 --forcar-conta mantém a conta de --conta mesmo com 95% ou mais
+                                 de uso; sem ele, a sessão nasce na de mais folga.
                                  --subagente <modelo> (claude sem motor) define o modelo dos
                                  subagentes da sessão.
                                  --service-tier <default|priority> liga (priority) ou desliga o

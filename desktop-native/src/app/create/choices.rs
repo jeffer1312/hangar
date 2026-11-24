@@ -876,11 +876,93 @@ impl NewSession {
             exhausted: Some(&c.path) != self.config.as_ref() && self.account_exhausted(&c.path),
         }).collect();
         let at = choices.iter().position(|c| Some(&c.choice.id) == self.config.as_ref());
-        self.config_pick = Some(picker(choices, at, false, |this, path, window, cx| {
-            this.scheduled_touch(&["config_dir", "model", "effort", "service_tier", "subagent_model", "permission_mode"]);
-            (this.config, this.account_touched) = (Some(path), true);
-            this.load_models(window, cx);
-        }, window, cx));
+        self.config_pick = Some(picker(choices, at, false, |this, path, window, cx| this.pick_account(path, window, cx), window, cx));
+    }
+
+    /// Escolha à mão no menu. A conta a 95% ou mais cede a vez à de mais folga, como no servidor; a linha abaixo das
+    /// pílulas deixa abrir nela mesmo assim.
+    pub(super) fn pick_account(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.scheduled_touch(&["config_dir", "model", "effort", "service_tier", "subagent_model", "permission_mode"]);
+        let target = if self.quota_rule_applies() { self.quota_target(Some(&path)) } else { None };
+        self.force_account = false;
+        self.switched_from = target.as_ref().map(|_| path.clone());
+        // O seletor mostra a conta clicada: com a troca, ele é refeito fora do próprio clique.
+        if target.is_some() { cx.defer_in(window, |this, window, cx| this.build_config_pick(window, cx)); }
+        (self.config, self.account_touched) = (Some(target.unwrap_or(path)), true);
+        self.load_models(window, cx);
+    }
+
+    /// A troca por cota vale para a conta Claude da tela sem sessão; motor, retomada e agendamento ficam de fora.
+    fn quota_rule_applies(&self) -> bool {
+        self.provider == "claude" && self.engine.is_empty() && self.target().is_none() && !self.scheduled
+    }
+
+    /// A conta de mais folga para `path` a 95% ou mais (`quota_switch`); `None` = fica nela.
+    fn quota_target(&self, path: Option<&str>) -> Option<String> {
+        let accounts: Vec<_> = self.accounts().map(|c| (c.path.as_str(), c.active, self.quota_of(&format!("claude:{}", c.path)))).collect();
+        quota_switch(path, &accounts, chrono::Local::now().timestamp() as f64)
+    }
+
+    /// "Abrir nela mesmo assim": volta para a conta que a cota tirou e o pedido leva `force_account`.
+    pub(super) fn force_switched_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.switched_from.take() else { return };
+        (self.config, self.account_touched, self.force_account) = (Some(path), true, true);
+        self.build_config_pick(window, cx);
+        self.load_models(window, cx);
+    }
+
+    pub(super) fn undo_forced_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.force_account = false;
+        if let Some(target) = self.quota_target(self.config.as_deref()) { self.switched_from = self.config.replace(target); }
+        self.build_config_pick(window, cx);
+        self.load_models(window, cx);
+    }
+
+    /// A janela que decide a troca (`quota_switch`): a mais cheia de qualquer tipo, fora as que já viraram.
+    fn fullest_window(&self, path: &str) -> Option<(String, f64)> {
+        let now = chrono::Local::now().timestamp() as f64;
+        self.quota_of(&format!("claude:{path}"))?.windows().filter(|(w, _)| w.reset_ts.is_none_or(|r| r > now))
+            .map(|(w, p)| (w.label.clone(), p)).max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    pub(super) fn forced_window(&self) -> Option<(String, f64)> {
+        if !self.force_account || !self.quota_rule_applies() { return None; }
+        self.fullest_window(self.config.as_deref()?)
+    }
+
+    /// Abaixo das pílulas: a conta que a cota tirou, com "abrir nela mesmo assim", ou a forçada, com o desfazer.
+    pub(super) fn render_account_note(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        if !self.quota_rule_applies() { return None; }
+        let forced = self.force_account;
+        let from = if forced { self.config.clone()? } else { self.switched_from.clone()? };
+        let (window_label, pct) = self.fullest_window(&from)?;
+        let name = |path: &str| self.accounts().find(|c| c.path == path).map(|c| c.label.clone()).unwrap_or_else(|| basename(path).to_owned());
+        let account = name(&from);
+        let window = match window_label.as_str() {
+            "7d" => tr_shared("cota_janela_7d", &[]),
+            "5h" => tr_shared("cota_janela_5h", &[]),
+            other => tr_shared("cota_janela_outra", &[("janela", other)]),
+        };
+        let pct = format!("{}", pct.round());
+        let text = if forced {
+            tr_shared("new_chat_account_forced_note", &[("conta", &account), ("pct", &pct), ("janela", &window)])
+        } else {
+            let destination = name(self.config.as_deref()?);
+            tr_shared("new_chat_account_force_note", &[("conta", &account), ("pct", &pct), ("janela", &window), ("destino", &destination)])
+        };
+        // O uso em vermelho, como no menu de contas.
+        let number = format!("{pct}%");
+        let highlights: Vec<_> = text.find(&number).map(|at| (at..at + number.len(),
+            gpui_kit::HighlightStyle { color: Some(theme::danger()), ..Default::default() })).into_iter().collect();
+        let action = if forced { tr_shared("comum_desfazer", &[]) } else { tr_shared("new_chat_account_force_action", &[("conta", &account)]) };
+        Some(div().id("new-chat-account-note").flex().flex_wrap().items_center().gap_x(px(8.))
+            .text_size(px(12.5)).text_color(theme::muted())
+            .child(gpui_kit::StyledText::new(text).with_highlights(highlights))
+            .child(Button::new("new-chat-account-force").link().xsmall().label(action)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if forced { this.undo_forced_account(window, cx) } else { this.force_switched_account(window, cx) }
+                    cx.notify();
+                }))))
     }
 
     /// Cota lida com a janela de sessão ou de semana cheia e ainda não renovada.
@@ -914,10 +996,10 @@ impl NewSession {
         // Com o menu de conta aberto, a lista não muda debaixo do clique: fechar ou a próxima cota reavalia.
         if self.account_touched || self.menu.get() == Some(Menu::Account) || self.reopen_config.is_some() || self.creating || self.account_busy
             || self.provider != "claude" || !self.engine.is_empty() || self.target().is_some() { return false; }
-        let accounts: Vec<_> = self.accounts().map(|c| (c.path.as_str(), c.active, self.quota_of(&format!("claude:{}", c.path)))).collect();
-        let Some(path) = quota_switch(self.config.as_deref(), &accounts, chrono::Local::now().timestamp() as f64) else { return false };
+        let Some(path) = self.quota_target(self.config.as_deref()) else { return false };
         // A conta mostrada é a que vai no pedido; sem isso o servidor refaz a troca e avisa como se ninguém tivesse escolhido.
-        (self.config, self.account_suggested) = (Some(path), true);
+        self.switched_from = self.config.replace(path);
+        self.account_suggested = true;
         true
     }
 
@@ -1240,6 +1322,7 @@ impl NewSession {
                     .accessibility_label(tr("create_delete_account_aria").replace("{nome}", &name))
                     .on_click(cx.listener(|this, _, _, cx| { (this.confirming, this.keep_transcripts, this.notice, this.holders) = (true, true, None, None); cx.notify(); })))))
             .when_some(selected_quota, |el, q| el.child(self.render_quota("create-claude-quota".into(), q)))
+            .children(self.render_account_note(cx))
             .when_some(self.deletable().filter(|_| self.confirming && self.holders.is_none()), |el, name| el.child(div().flex().items_center().gap(px(8.))
                 .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal()
                     .child(format!("{} ", tr("create_delete_start"))).child(div().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(name))

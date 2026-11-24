@@ -34,6 +34,7 @@ pub const FIELDS: &[OpenField] = &[
     field("new_branch", "new_branch", &["--branch", "b1", "--new-branch"], false),
     field("base", "base", &["--branch", "b1", "--new-branch", "--base", "main"], false),
     field("config_dir", "conta", &["--conta", "c1"], true),
+    field("force_account", "forcar_conta", &["--conta", "c1", "--forcar-conta"], false),
     field("provider", "provider", &["--provider", "pi"], true),
     field("remember_provider", "remember_provider", &["--remember-provider"], false),
     field("codex_account", "codex_account", &["--provider", "codex", "--conta", "a1"], true),
