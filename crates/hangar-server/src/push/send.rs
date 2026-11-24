@@ -103,6 +103,8 @@ pub fn msg(locale: &str, key: &str) -> &'static str {
         }
         "cofre" => if en { "Password vault" } else { "Cofre de senhas" },
         "cofre_pedido" => if en { "{origin} asks for {label}" } else { "{origin} pede {label}" },
+        "whatsapp" => "WhatsApp",
+        "whatsapp_rascunho" => if en { "WhatsApp draft awaiting approval" } else { "Rascunho de WhatsApp aguardando aprovação" },
         _ => "",
     }
 }
@@ -183,6 +185,13 @@ impl Outgoing {
         let notice = Notice::VaultRequest { server_id: server_id.clone(), request_id: request_id.clone(), origin, label };
         Self { session: session.to_owned(), body: Box::new(move |l| notice.body(l)), title: Some(Box::new(|l| msg(l, "cofre").to_owned())),
             tag: None, url: Some("/".to_owned()), vault: Some((server_id, request_id)) }
+    }
+
+    /// Rascunho de WhatsApp: frase fixa, sem conversa, número nem texto (passa por Expo e Web Push); `url` `/`, onde o
+    /// cartão está.
+    pub fn whatsapp_draft(session: &str) -> Self {
+        Self { session: session.to_owned(), body: Box::new(|l| msg(l, "whatsapp_rascunho").to_owned()),
+            title: Some(Box::new(|l| msg(l, "whatsapp").to_owned())), tag: None, url: Some("/".to_owned()), vault: None }
     }
 
     /// Várias sessões no mesmo ciclo: "N sessões aguardando: a, b", abre a lista.
@@ -412,6 +421,26 @@ impl Sender {
                 Err(_) => return held(),
             }
             me.broadcast(Outgoing::vault_request(&session, server_id, request_id, origin, label)).await
+        });
+    }
+
+    /// Rascunho de WhatsApp esperando o dono: como o cofre, só o horário de silêncio segura; a sessão que pediu fica
+    /// parada esperando a resposta.
+    pub fn whatsapp_draft(self: &Arc<Self>, session: &str) {
+        if test_binary() { return; }
+        let (me, session) = (self.clone(), session.to_owned());
+        tokio::spawn(async move {
+            let held = || me.st.diag.report("rust.push_gate_failed", &session, "push_gate_invalid", "preferências incompatíveis; aviso do rascunho de WhatsApp segurado");
+            let dir = me.dir();
+            let Ok(Ok(prefs)) = tokio::task::spawn_blocking(move || store::prefs(&dir)).await else { return held() };
+            let quiet = store::in_quiet_hours(&prefs, chrono::Local::now().time());
+            crate::orchestration::codec::discard(prefs);
+            match quiet {
+                Ok(false) => {}
+                Ok(true) => return,
+                Err(_) => return held(),
+            }
+            me.broadcast(Outgoing::whatsapp_draft(&session)).await
         });
     }
 

@@ -114,6 +114,7 @@ pub use hangar_core::user_data;
 pub mod connectors_cli;
 pub mod mission_notify;
 pub mod work_review_watch;
+pub mod whatsapp_outbox;
 pub mod machine_peers;
 pub mod install_root;
 pub mod update;

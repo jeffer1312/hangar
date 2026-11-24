@@ -463,6 +463,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _work_review_watch = crate::AbortOnDrop(crate::work_review_watch::spawn(state.clone()));
     let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
+    // Rascunhos de WhatsApp: a recusa dos que ficaram de antes, o evento e o aviso ao celular.
+    let _whatsapp_outbox = crate::AbortOnDrop(crate::whatsapp_outbox::spawn(state.clone()));
     // O aviso no celular é decidido aqui, com ou sem lista aberta.
     let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     // Assina as transições depois do vigia de avisos, que as publica.
@@ -1102,9 +1104,13 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
             state.ticket_actions.get_or_init(|| hangar_ticket_actions::Engine::new(hangar_ticket_actions::Ledger::new(state.hangar_dir.join("ticket-actions")),
                 state.mission.clone(),state.connectors.clone(),state.mission_notify.clone())).clone()))
         .merge(hangar_work_review::http::router(state.edge(), state.work_review.clone()))
-        // WhatsApp só leitura: só o dono, nunca na porta do convidado (o Python não tem as rotas).
-        .merge(hangar_whatsapp::router(state.edge(),
-            state.whatsapp.get_or_init(|| hangar_whatsapp::WhatsApp::new(&state.accounts.env.home)).clone()))
+        // WhatsApp: só o dono, nunca na porta do convidado (o Python não tem as rotas).
+        .merge({
+            let whatsapp = state.whatsapp.get_or_init(|| hangar_whatsapp::WhatsApp::new(&state.accounts.env.home)).clone();
+            // Os rascunhos pendentes vão ao evento `whatsapp_outbox` da lista do dono.
+            state.hub.bind_whatsapp(whatsapp.outbox().feed());
+            hangar_whatsapp::router(state.edge(), whatsapp)
+        })
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_registered))
         .route("/api/claude/commands", get(crate::commands::new_chat_route).fallback(pass_registered))
         // Senha do chaveiro: só o dono; o preflight do CORS cai no caminho sem rota.

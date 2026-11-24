@@ -20,13 +20,14 @@ use tower_service::Service;
 
 use super::identity::{self, Local, Origin};
 use super::nav;
-use super::whatsapp::{self, Trim};
+use super::whatsapp::{self, Read, Trim};
 use crate::groups::exit::segment;
 use crate::groups::model::Sidecar;
 use crate::groups::peers::PeerClient;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
 use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
+use hangar_whatsapp::outbox::{self, Wait};
 use zeroize::Zeroizing;
 
 const VOICE_CLOSE_REFUSED: &str = "recusado: a voz fecha sessão pela própria ferramenta close_session, que pede o sim \
@@ -320,6 +321,9 @@ struct WhatsAppSearch { query: String, chat: Option<String>, limit: Option<u32> 
 #[derive(Deserialize)]
 struct WhatsAppMedia { chat: String, id: Option<String>, since: Option<String> }
 
+#[derive(Deserialize)]
+struct WhatsAppDraft { chat: String, text: String, file: Option<String>, reply_to: Option<String> }
+
 // A rota de cada tool do WhatsApp, a mesma no despacho e no teste.
 impl WhatsAppChats {
     fn path(&self) -> String { hangar_whatsapp::api_path("chats", &[("q", opt(&self.query)), ("limit", &limit_text(self.limit))]) }
@@ -335,6 +339,17 @@ impl WhatsAppRead {
 impl WhatsAppSearch {
     fn path(&self) -> String {
         hangar_whatsapp::api_path("search", &[("q", &self.query), ("chat", opt(&self.chat)), ("limit", &limit_text(self.limit))])
+    }
+}
+
+impl WhatsAppDraft {
+    /// O corpo do `POST /api/whatsapp/outbox`: `origin` e `origin_cwd` vêm da sessão, nunca do modelo.
+    fn body(self, origin: String, cwd: Option<String>) -> Value {
+        let mut body = json!({"chat": self.chat, "text": self.text, "origin": origin});
+        for (field, value) in [("file", self.file), ("reply_to", self.reply_to), ("origin_cwd", cwd)] {
+            if let Some(value) = value.filter(|v| !v.is_empty()) { body[field] = json!(value); }
+        }
+        body
     }
 }
 
@@ -385,7 +400,8 @@ impl Tools {
         Self { st, api, http, server_id, nav_locks: Mutex::default() }
     }
 
-    pub async fn call(&self, name: &str, raw: JsonObject, headers: &HeaderMap) -> CallToolResult {
+    /// `draft`: o andamento do `whatsapp_draft`, lido pelo cancelamento em `mod.rs`.
+    pub async fn call(&self, name: &str, raw: JsonObject, headers: &HeaderMap, draft: Option<Arc<whatsapp::DraftProgress>>) -> CallToolResult {
         let outcome = match name {
             "who_am_i" => self.who_am_i(headers).await,
             "sessions" => self.sessions(headers).await,
@@ -425,6 +441,10 @@ impl Tools {
                 Ok(a) => self.whatsapp(headers, Method::POST, "/api/whatsapp/media/request", Some(a.body()), Trim::None).await,
                 Err(e) => Err(e),
             },
+            "whatsapp_draft" => match args::<WhatsAppDraft>(name, raw) {
+                Ok(a) => self.whatsapp_draft(headers, a, draft.unwrap_or_default()).await,
+                Err(e) => Err(e),
+            },
             _ => Err(format!("Unknown tool: {name}")),
         };
         outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]))
@@ -460,18 +480,7 @@ impl Tools {
     /// `caller`: a sessão que chamou a tool. Vai no `user-agent`, que o diário grava como `cliente`:
     /// sem ele, fechar ou mandar pelo MCP fica igual a um clique do dono.
     async fn route_from(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
-        let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), mcp_agent);
-        let mut request = Request::builder().method(method).uri(path).header("user-agent", agent)
-            .header("authorization", format!("Bearer {}", self.st.cfg.auth_token));
-        if body.is_some() { request = request.header("content-type", "application/json"); }
-        let Ok(mut request) = request.body(body.map_or_else(Body::empty, |b| Body::from(b.to_string()))) else {
-            return (500, json!({"detail": "caminho inválido"}));
-        };
-        request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-        let Ok(response) = self.api.clone().call(request).await;
-        let status = response.status().as_u16();
-        let raw = axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await.unwrap_or_default();
-        (status, serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"detail": String::from_utf8_lossy(&raw)})))
+        call_route(self.api.clone(), &self.st.cfg.auth_token, caller, method, path, body).await
     }
 
     /// Corpo de sucesso da rota, ou a frase do erro.
@@ -567,6 +576,76 @@ impl Tools {
             Some(false) => Ok(()),
             Some(true) => Err(whatsapp::SHARED_REFUSAL.into()),
             None => Err(unshared_failed(&format!("a dona '{}' não disse quem está no grupo", fed.owner))),
+        }
+    }
+
+    /// Rascunho de WhatsApp: cria pela rota do dono e espera a resposta dele no cartão. Só a sessão sem convidado e
+    /// com o prazo longo do MCP pede; erro depois da criação leva o id.
+    async fn whatsapp_draft(&self, headers: &HeaderMap, a: WhatsAppDraft, progress: Arc<whatsapp::DraftProgress>) -> Outcome {
+        let (me, voice) = self.caller(headers).await?;
+        if voice { return Err(whatsapp::DRAFT_NEEDS_SESSION.into()); }
+        self.whatsapp_unshared(&me).await?;
+        let cwd = whatsapp::draft_cwd(&exec::agent(&self.st, &me).await?)?;
+        let body = a.body(format!("{}::{me}", self.vault_origin()), cwd);
+        let created = self.answer(Some(&me), Method::POST, "/api/whatsapp/outbox", Some(body), coded).await
+            .map_err(|e| if whatsapp::reply_lost(&e) { format!("{e}; {}", whatsapp::DRAFT_MAYBE_CREATED) } else { e })?;
+        let id = created["id"].as_str().filter(|id| outbox::id_ok(id)).map(str::to_owned)
+            .ok_or_else(|| format!("whatsapp_bad_reply: o serviço criou o rascunho sem id; {}", whatsapp::DRAFT_MAYBE_CREATED))?;
+        let mut guard = whatsapp::DeclineOnDrop::new(self.api.clone(), self.st.cfg.auth_token.clone(), me.clone(), id.clone(), progress);
+        let mut feed = self.st.whatsapp.get().map(|wa| wa.outbox().feed());
+        let mut read = Read::Found(created);
+        let mut deadline = None;
+        loop {
+            let now = chrono::Utc::now();
+            let step = match &read {
+                // Serviço reiniciando no meio da espera: tenta de novo até o prazo do último estado lido.
+                Read::Failed(error) => {
+                    if deadline.is_none_or(|d| now >= d) { return Err(whatsapp::after_creation(&id, error)); }
+                    None
+                }
+                Read::Found(draft) => {
+                    guard.saw(draft["state"].as_str().unwrap_or_default());
+                    Some(outbox::wait_step(&id, Some(draft), now))
+                }
+                Read::Gone => Some(outbox::wait_step(&id, None, now)),
+            };
+            match step {
+                None => {}
+                Some(Wait::Done(result)) => {
+                    guard.finish();
+                    return Ok(dict(result));
+                }
+                Some(Wait::Until(until)) => deadline = Some(until),
+                Some(Wait::PendingOverdue) => {
+                    let (status, value) = self.route_from(Some(&me), Method::POST, &whatsapp::draft_path(&id, "/decline"), None).await;
+                    match (status, value["detail"]["code"].as_str()) {
+                        (200, _) | (409, Some("whatsapp_expired")) => {
+                            guard.finish();
+                            return Ok(dict(outbox::expired(&id)));
+                        }
+                        // O dono aprovou no último instante: a espera segue no envio.
+                        (409, Some("whatsapp_answered")) => {}
+                        _ => return Err(whatsapp::after_creation(&id, &coded(status, &value))),
+                    }
+                }
+                Some(Wait::SendingOverdue) => {
+                    guard.finish();
+                    return Err(whatsapp::sending_overdue(&id));
+                }
+                Some(Wait::Unknown(what)) => return Err(whatsapp::after_creation(&id, &format!("whatsapp_bad_reply: {what}"))),
+            }
+            whatsapp::pause(&mut feed).await;
+            read = self.draft_read(&me, &id).await;
+        }
+    }
+
+    async fn draft_read(&self, me: &str, id: &str) -> Read {
+        let (status, value) = self.route_from(Some(me), Method::GET, &whatsapp::draft_path(id, ""), None).await;
+        match (status, value["detail"]["code"].as_str()) {
+            (200, _) => Read::Found(value),
+            // Os dados do WhatsApp foram apagados: o rascunho não volta.
+            (404, Some("whatsapp_not_found")) => Read::Gone,
+            _ => Read::Failed(coded(status, &value)),
         }
     }
 
@@ -1377,6 +1456,22 @@ mod tests {
         }
         assert!(resumed(&json!({"name": "s", "avisos": []}), None).structured_content.unwrap().get("avisos").is_none());
     }
+}
+
+/// A rota pública como o dono, fora de uma tool: a recusa do rascunho na chamada largada também passa por aqui.
+pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
+    let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), mcp_agent);
+    let mut request = Request::builder().method(method).uri(path).header("user-agent", agent)
+        .header("authorization", format!("Bearer {token}"));
+    if body.is_some() { request = request.header("content-type", "application/json"); }
+    let Ok(mut request) = request.body(body.map_or_else(Body::empty, |b| Body::from(b.to_string()))) else {
+        return (500, json!({"detail": "caminho inválido"}));
+    };
+    request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+    let Ok(response) = api.call(request).await;
+    let status = response.status().as_u16();
+    let raw = axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await.unwrap_or_default();
+    (status, serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"detail": String::from_utf8_lossy(&raw)})))
 }
 
 fn unshared_failed(why: &str) -> String {

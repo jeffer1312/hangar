@@ -141,3 +141,15 @@ mod external {
         }
     }
 }
+
+/// O aviso do rascunho de WhatsApp é a frase fixa: nada da conversa, do número nem do texto.
+#[test]
+fn the_whatsapp_draft_push_says_only_that_a_draft_waits() {
+    let entry = json!({"serverId": "casa", "locale": "pt"});
+    let p = Outgoing::whatsapp_draft("s0").payload(&entry).unwrap();
+    assert_eq!(p["body"], json!("Rascunho de WhatsApp aguardando aprovação"));
+    assert_eq!(p["title"], json!("claude · WhatsApp"));
+    assert_eq!(p["url"], json!("/"));
+    let en = Outgoing::whatsapp_draft("s0").payload(&json!({"locale": "en"})).unwrap();
+    assert_eq!(en["body"], json!("WhatsApp draft awaiting approval"));
+}

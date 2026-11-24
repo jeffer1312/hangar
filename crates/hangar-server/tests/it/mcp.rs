@@ -995,3 +995,224 @@ async fn a_session_a_login_guest_sees_does_not_read_whatsapp() {
     let result = mcp.call("whatsapp_chats", json!({})).await;
     assert!(failed(&result) && first_text(&result).starts_with("whatsapp_shared_session:"), "vê as sessões do dono: {result}");
 }
+
+/// O C5 de mentira do `hangar-whatsapp` na pasta `~/.hangar/whatsapp` da cena: assina as respostas como o binário e
+/// guarda os rascunhos. `outcome` são os campos que o envio aprovado ganha quando a tool relê o rascunho.
+struct FakeWhatsApp { drafts: Arc<Mutex<Vec<Value>>>, seen: Arc<Mutex<Vec<String>>> }
+
+const WA_KEY: [u8; 32] = [9; 32];
+
+async fn fake_whatsapp(home: &Path, api: u32, outcome: Value) -> FakeWhatsApp {
+    let data = home.join(".hangar/whatsapp");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("control.key"), WA_KEY.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
+    let fake = FakeWhatsApp { drafts: Arc::default(), seen: Arc::default() };
+    let (drafts, seen) = (fake.drafts.clone(), fake.seen.clone());
+    let app = axum::Router::new().fallback(move |request: axum::extract::Request| {
+        let (drafts, seen, outcome) = (drafts.clone(), seen.clone(), outcome.clone());
+        async move { fake_c5(request, &drafts, &seen, &outcome).await }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    std::fs::write(data.join("control.json"), json!({"version": 1, "api": api, "port": port, "pid": std::process::id()}).to_string()).unwrap();
+    fake
+}
+
+async fn fake_c5(request: axum::extract::Request, drafts: &Mutex<Vec<Value>>, seen: &Mutex<Vec<String>>, outcome: &Value) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let method = request.method().as_str().to_owned();
+    let uri = request.uri().path_and_query().map_or("/", |p| p.as_str()).to_owned();
+    let ts = request.headers().get(hangar_whatsapp::control::SIGNATURE_HEADER).and_then(|v| v.to_str().ok())
+        .and_then(|h| h.split_once('.')).map(|(ts, _)| ts.to_owned()).unwrap_or_default();
+    let body = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap();
+    seen.lock().unwrap().push(format!("{method} {uri}"));
+    let (status, out) = c5_reply(&method, &uri, &body, drafts, outcome);
+    let bytes = out.to_string().into_bytes();
+    let signature = hangar_whatsapp::control::sign_response(&WA_KEY, &ts, status, &bytes);
+    (axum::http::StatusCode::from_u16(status).unwrap(), [(hangar_whatsapp::control::SIGNATURE_HEADER, signature)], bytes).into_response()
+}
+
+/// A conversa `vencido` nasce com o prazo já passado, como um rascunho que o dono deixou expirar.
+fn c5_reply(method: &str, uri: &str, body: &[u8], drafts: &Mutex<Vec<Value>>, outcome: &Value) -> (u16, Value) {
+    let error = |status: u16, code: &str| (status, json!({"detail": {"code": code, "msg": format!("recusado: {code}")}}));
+    let stamp = |offset: i64| (chrono::Utc::now() + chrono::TimeDelta::seconds(offset)).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let mut drafts = drafts.lock().unwrap();
+    let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
+    if path == "/v1/outbox" {
+        return match (method, query) {
+            ("POST", _) => {
+                let asked: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                let expires = if asked["chat"] == "vencido" { stamp(-60) } else { stamp(600) };
+                let draft = json!({"id": format!("d{}", drafts.len() + 1), "origin": asked["origin"], "chat": asked["chat"],
+                    "text": asked["text"], "state": "pending", "created_at": stamp(0), "expires_at": expires, "answered_at": null,
+                    "message_id": "", "error": "", "asked": asked});
+                drafts.push(draft.clone());
+                (201, draft)
+            }
+            ("GET", "state=pending") => (200, json!({"drafts": drafts.iter().filter(|d| d["state"] == "pending").collect::<Vec<_>>()})),
+            _ => error(400, "bad_request"),
+        };
+    }
+    let rest = path.strip_prefix("/v1/outbox/").unwrap_or_default();
+    let (id, action) = rest.split_once('/').unwrap_or((rest, ""));
+    let Some(draft) = drafts.iter_mut().find(|d| d["id"] == id) else { return error(404, "not_found") };
+    let expired = draft["expires_at"].as_str().is_some_and(|at| at < stamp(0).as_str());
+    match (method, action) {
+        ("GET", "") => {
+            if draft["state"] == "sending" && let Some(fields) = outcome.as_object() {
+                for (key, value) in fields { draft[key] = value.clone(); }
+            }
+            (200, draft.clone())
+        }
+        ("POST", "send" | "decline") if draft["state"] != "pending" => error(409, "answered"),
+        ("POST", "send" | "decline") if expired => {
+            draft["state"] = json!("expired");
+            error(409, "expired")
+        }
+        ("POST", "send") => {
+            draft["state"] = json!("sending");
+            draft["answered_at"] = json!(stamp(0));
+            (202, draft.clone())
+        }
+        ("POST", "decline") => {
+            draft["state"] = json!("declined");
+            (200, draft.clone())
+        }
+        _ => error(404, "bad_request"),
+    }
+}
+
+/// Espera até 10 s pela condição: a tool roda noutra tarefa, presa na espera do dono.
+async fn until<T>(mut probe: impl FnMut() -> Option<T>) -> T {
+    for _ in 0..200 {
+        if let Some(value) = probe() { return value; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("a condição não chegou em 10 s");
+}
+
+/// O dono responde no cartão: a mesma rota que o app chama.
+async fn owner_answers(s: &Scene, id: &str, action: &str) -> u16 {
+    client().post(format!("http://{}/api/whatsapp/outbox/{id}/{action}", s.addr)).bearer_auth(OWNER)
+        .header("content-type", "application/json").body(json!({"via": "desktop"}).to_string()).send().await.unwrap().status().as_u16()
+}
+
+/// A tool numa tarefa própria, com a sessão `s0` (pane `%0`), e o id do rascunho que ela criou.
+async fn draft_in_flight(s: &Scene, fake: &FakeWhatsApp, chat: &str) -> (tokio::task::JoinHandle<Value>, String) {
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    let args = json!({"chat": chat, "text": "segue o arquivo", "file": "/tmp/a.zip"});
+    let task = tokio::spawn(async move { mcp.call("whatsapp_draft", args).await });
+    let drafts = fake.drafts.clone();
+    let id = until(|| drafts.lock().unwrap().first().and_then(|d| d["id"].as_str().map(str::to_owned))).await;
+    (task, id)
+}
+
+/// O rascunho leva a sessão como origem e a pasta dela; a tool espera o "Enviar" do dono e devolve o envio.
+#[tokio::test(flavor = "multi_thread")]
+async fn whatsapp_draft_waits_for_the_owner_and_returns_the_sent_message() {
+    let s = scene_shared(false, None, false, "", true).await;
+    let fake = fake_whatsapp(&s.home, 2, json!({"state": "sent", "message_id": "3EB0AA"})).await;
+    let (task, id) = draft_in_flight(&s, &fake, "5564999").await;
+    let asked = fake.drafts.lock().unwrap()[0]["asked"].clone();
+    assert_eq!((&asked["chat"], &asked["text"], &asked["file"], &asked["origin"]),
+        (&json!("5564999"), &json!("segue o arquivo"), &json!("/tmp/a.zip"), &json!("local::s0")), "{asked}");
+    assert!(asked["origin_cwd"].as_str().is_some_and(|cwd| cwd.ends_with("w0")), "a pasta da sessão: {asked}");
+    assert!(!task.is_finished(), "a tool espera o dono");
+    assert_eq!(owner_answers(&s, &id, "send").await, 202);
+    let result = task.await.unwrap();
+    assert!(!failed(&result), "{result}");
+    assert_eq!(result["structuredContent"], json!({"status": "sent", "id": id, "message_id": "3EB0AA"}));
+}
+
+/// Recusado pelo dono, falho sem confirmação e expirado: estado final com o id e o aviso de não repetir.
+#[tokio::test(flavor = "multi_thread")]
+async fn whatsapp_draft_returns_declined_failed_and_expired() {
+    for (case, outcome, chat, action) in [
+        ("declined", json!({}), "5564999", Some("decline")),
+        ("failed", json!({"state": "failed", "error": "unconfirmed"}), "5564999", Some("send")),
+        ("expired", json!({}), "vencido", None),
+    ] {
+        let s = scene_shared(false, None, false, "", true).await;
+        let fake = fake_whatsapp(&s.home, 2, outcome).await;
+        let (task, id) = draft_in_flight(&s, &fake, chat).await;
+        if let Some(action) = action { owner_answers(&s, &id, action).await; }
+        let result = task.await.unwrap();
+        let out = &result["structuredContent"];
+        assert_eq!((&out["status"], &out["id"]), (&json!(case), &json!(id)), "{case}: {result}");
+        assert!(out["note"].as_str().is_some_and(|n| n.contains("não crie outro rascunho para o mesmo envio")), "{case}: {result}");
+        if case == "failed" {
+            assert_eq!(out["error"], json!("unconfirmed"));
+            assert!(out["note"].as_str().unwrap().contains("pode ter saído"), "{result}");
+        }
+        if case == "expired" {
+            assert!(fake.seen.lock().unwrap().iter().any(|r| r == &format!("POST /v1/outbox/{id}/decline")), "a tool recusa o vencido");
+        }
+    }
+}
+
+/// Depois de um `wipe` o binário não conhece mais o rascunho: a tool para, com o id, sem saber se saiu.
+#[tokio::test(flavor = "multi_thread")]
+async fn whatsapp_draft_after_a_wipe_is_final() {
+    let s = scene_shared(false, None, false, "", true).await;
+    let fake = fake_whatsapp(&s.home, 2, json!({})).await;
+    let (task, id) = draft_in_flight(&s, &fake, "5564999").await;
+    fake.drafts.lock().unwrap().clear();
+    let result = task.await.unwrap();
+    let out = &result["structuredContent"];
+    assert_eq!((&out["status"], &out["id"], &out["error"]), (&json!("failed"), &json!(id), &json!("not_found")), "{result}");
+}
+
+/// Sessão compartilhada e binário sem envio recusam antes de o pedido chegar ao serviço.
+#[tokio::test(flavor = "multi_thread")]
+async fn whatsapp_draft_refuses_a_shared_session_and_a_binary_without_send() {
+    let s = scene_shared(false, None, false, "", true).await;
+    let fake = fake_whatsapp(&s.home, 1, json!({})).await;
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    let result = mcp.call("whatsapp_draft", json!({"chat": "5564999", "text": "oi"})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_send_unsupported:"), "{result}");
+    assert!(first_text(&result).contains("atualize o hangar-whatsapp"), "{result}");
+
+    let share = s.state.share.clone().unwrap();
+    share.store.create("s0", None, hangar_server::share::store::Kind::Share, false).unwrap();
+    let result = mcp.call("whatsapp_draft", json!({"chat": "5564999", "text": "oi"})).await;
+    assert!(failed(&result) && first_text(&result).starts_with("whatsapp_shared_session:"), "{result}");
+    assert!(fake.seen.lock().unwrap().iter().all(|r| !r.contains("/v1/outbox")), "nada chegou ao serviço");
+}
+
+/// Cancelada a chamada, o rascunho pendente é recusado no binário: largar a espera não bastaria, ele mora lá.
+/// Já aprovado, o envio segue e nada é recusado.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_whatsapp_draft_is_declined_unless_already_approved() {
+    for approved in [false, true] {
+        let s = scene_shared(false, None, false, "", true).await;
+        let fake = fake_whatsapp(&s.home, 2, json!({"state": "sending"})).await;
+        let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+        let canceller = Mcp { addr: mcp.addr, headers: mcp.headers.clone(), session: mcp.session.clone(), next: 0 };
+        let request = mcp.next + 1;
+        let task = tokio::spawn(async move { mcp.request("tools/call", json!({"name": "whatsapp_draft",
+            "arguments": {"chat": "5564999", "text": "oi"}})).await });
+        let drafts = fake.drafts.clone();
+        let id = until(|| drafts.lock().unwrap().first().and_then(|d| d["id"].as_str().map(str::to_owned))).await;
+        let reads = |fake: &FakeWhatsApp| fake.seen.lock().unwrap().iter().filter(|r| **r == format!("GET /v1/outbox/{id}")).count();
+        if approved {
+            assert_eq!(owner_answers(&s, &id, "send").await, 202);
+            // A segunda leitura depois do envio só sai quando a tool já tratou a primeira, que viu o envio aprovado.
+            let before = reads(&fake);
+            until(|| (reads(&fake) > before + 1).then_some(())).await;
+        }
+        let cancel = canceller.post(json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+            "params": {"requestId": request, "reason": "teste"}})).send().await.unwrap();
+        assert_eq!(cancel.status(), 202);
+        let decline = format!("POST /v1/outbox/{id}/decline");
+        if approved {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert!(!fake.seen.lock().unwrap().contains(&decline), "aprovado não é recusado");
+            assert_eq!(fake.drafts.lock().unwrap()[0]["state"], json!("sending"));
+        } else {
+            until(|| fake.seen.lock().unwrap().contains(&decline).then_some(())).await;
+            assert_eq!(fake.drafts.lock().unwrap()[0]["state"], json!("declined"));
+        }
+        task.abort();
+    }
+}
