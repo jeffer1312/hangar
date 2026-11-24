@@ -13,9 +13,11 @@ from typing import NamedTuple
 
 SERVER = "hangar-server"
 TESTS = re.compile(r"\.test\.|(^|/)tests?/|/__mocks__/|(^|/)fixtures?(/|\.)|(^|[/_])tests?\.rs$|/cases\.rs$|\.nativeSetup\.|vitest\.config\.|(^|/)test[_-]")
-COMMENT = re.compile(r"\s*(//|#|\*|/\*|<!--)")
+COMMENT = re.compile(r"\s*(//|/\*|\*(\s|/|$)|<!--)")
+HASH_COMMENT = re.compile(r"\s*#(?!\[)")
+HASH_FILES = (".py", ".sh", ".fish", ".ps1", ".yaml", ".yml", ".toml")
 KEYBOARD = re.compile(
-    r"import\s+(?:type\s+)?(?:\w+\s*,\s*)?\{[^}]*\bKeyboardAvoidingView\b[^}]*\}\s*from\s*['\"]react-native['\"]")
+    r"(?m)^\s*import\s+(?:type\s+)?(?:\w+\s*,\s*)?\{[^}]*\bKeyboardAvoidingView\b[^}]*\}\s*from\s*['\"]react-native['\"]")
 
 
 class LineRule(NamedTuple):
@@ -32,18 +34,18 @@ LINE_RULES = (
     LineRule(
         "NOME_ANTIGO", "Nome antigo (claude-pocket)",
         "O nome antigo só existe em ponte de compatibilidade: escreva com o nome novo e não leia o antigo.",
-        ("*", ":!*.md"), re.compile(r"claude[-_]pocket", re.I), re.compile(r"^scripts/(test_)?check[-_]rules\.py$")),
+        ("*", ":!*.md"), re.compile(r"[\w.:/-]*claude[-_]pocket[\w.:/-]*", re.I), re.compile(r"^scripts/(test_)?check[-_]rules\.py$")),
     LineRule(
         "VIBRACAO", "Vibração fora do src/ui/haptics.ts",
         "No Expo, a vibração sai só por mobile/src/ui/haptics.ts.",
-        ("mobile/*.ts", "mobile/*.tsx"), re.compile(r"['\"]expo-haptics['\"]|\bHaptics\.\w|\bVibration\.\w"),
+        ("mobile/*.ts", "mobile/*.tsx"), re.compile(r"['\"]expo-haptics['\"]|\bHaptics\.\w+|\bVibration\.\w+"),
         re.compile(r"^mobile/src/ui/haptics\.ts$")),
     LineRule(
         "ENDERECO", "Chamada com baseUrl cru",
         "Toda URL de chamada a um servidor sai por baseOf(servidor) (ou getBaseUrl do ApiEnv): baseUrl cru ignora a rede local.",
         tuple(f"{folder}/*.{ext}" for folder in ("frontend/src", "mobile/src", "mobile/app", "packages/core/src")
               for ext in ("ts", "tsx", "svelte")),
-        re.compile(r"\.baseUrl\}(/(api|ws|cdp)\b|\$\{)|\.baseUrl\s*\+|new URL\([^)]*,\s*[\w.?]*\.baseUrl\s*\)"),
+        re.compile(r"\.baseUrl\}(/(api|ws|cdp)\b|\$\{)|\.baseUrl\s*\+|new URL\((?:[^()]|\([^()]*\))*?,\s*[\w.?]*\.baseUrl\s*\)"),
         re.compile(r"(?!)")),
     LineRule(
         "LANCADOR", "Sessão aberta fora do lançador",
@@ -58,10 +60,11 @@ def authorized(base: str, head: str, mark: str) -> bool:
     return re.search(pattern, git("log", "--no-merges", "--format=%B", f"{base}..{head}"), re.M) is not None
 
 
-def added_lines(base: str, head: str, *paths: str, renames: bool = True) -> list[tuple[str, str]]:
+def added_lines(base: str, head: str, *paths: str) -> list[tuple[str, str]]:
     """(nome no head, texto) de cada linha que o diff acrescenta."""
     found, name, header = [], "", False
-    for line in git("-c", "core.quotePath=false", "diff", "--find-renames" if renames else "--no-renames", "--no-ext-diff",
+    # Sem rename: arquivo movido para dentro conta inteiro.
+    for line in git("-c", "core.quotePath=false", "diff", "--no-renames", "--no-ext-diff",
                     "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "-U0", f"{base}...{head}", "--", *paths).splitlines():
         if line.startswith("diff --git "):
             name, header = "", True
@@ -88,43 +91,47 @@ def new_python(base: str, head: str) -> list[str]:
     """Linhas que o backend ganhou: nada nasce no Python sem autorização do dono."""
     if authorized(base, head, "PYTHON"):
         return []
-    # Sem rename: arquivo movido para dentro conta inteiro.
-    return [f"{name}: {line.strip()[:120]}" for name, line in added_lines(base, head, "backend/app", renames=False)
+    return [f"{name}: {line.strip()[:120]}" for name, line in added_lines(base, head, "backend/app")
             if line.strip() and not line.lstrip().startswith("#")]
 
 
-def matches(text: str, rule: LineRule) -> list[tuple[str, str]]:
+def code(path: str, text: str) -> str:
+    """O que a regra julga: no Rust, o módulo de teste do fim do arquivo fica de fora."""
+    return text.split("#[cfg(test)]", 1)[0] if path.endswith(".rs") else text
+
+
+def matches(path: str, text: str, rule: LineRule) -> list[tuple[str, str]]:
     """(identidade, linha) de cada caso: a identidade é só o trecho casado, sem espaço e com uma aspa só, para que
     mexer no resto da linha não torne nova a ocorrência antiga."""
     found = []
-    for match in rule.pattern.finditer(text):
+    comment = HASH_COMMENT if path.endswith(HASH_FILES) else COMMENT
+    for match in rule.pattern.finditer(code(path, text)):
         start, end = text.rfind("\n", 0, match.start()) + 1, text.find("\n", match.start())
         line = text[start:end if end >= 0 else len(text)]
-        if not COMMENT.match(line):
+        if not comment.match(line):
             found.append((re.sub(r"\s+", "", re.sub(r"[\"`]", "'", match.group())), " ".join(line.split())))
     return found
 
 
 def new_lines(base: str, head: str, rule: LineRule) -> list[str]:
-    """O arquivo inteiro, antes e depois: só é velho o mesmo trecho que já existia, mesmo reformatado ou movido
-    entre arquivos do PR. Casa também a chamada que ocupa várias linhas."""
+    """O arquivo inteiro, antes e depois: só é velho o mesmo trecho que já estava no mesmo arquivo (ou no de onde ele
+    foi renomeado), mesmo reformatado. Casa também a chamada que ocupa várias linhas."""
     start = git("merge-base", base, head).strip()
-    old: dict[str, int] = {}
-    fresh: list[tuple[str, str, str]] = []
     judged = lambda name: not TESTS.search(name) and not rule.allowed.search(name)
-    for status, before, after in changed(base, head, *rule.paths):
-        # Velha é só a que a regra já julgava: copiar de um teste para a produção é ocorrência nova.
-        if status != "A" and judged(before):
-            for key, _ in matches(show(start, before), rule):
-                old[key] = old.get(key, 0) + 1
-        if status != "D" and judged(after):
-            fresh += [(after, key, line) for key, line in matches(show(head, after), rule)]
     found = []
-    for name, key, line in fresh:
-        if old.get(key, 0) > 0:
-            old[key] -= 1
-        else:
-            found.append(f"{name}: {line[:120]}")
+    for status, before, after in changed(base, head, *rule.paths):
+        if status == "D" or not judged(after):
+            continue
+        # Velha é só a que a regra já julgava: copiar de um teste para a produção é ocorrência nova.
+        old: dict[str, int] = {}
+        if status != "A" and judged(before):
+            for key, _ in matches(before, show(start, before), rule):
+                old[key] = old.get(key, 0) + 1
+        for key, line in matches(after, show(head, after), rule):
+            if old.get(key, 0) > 0:
+                old[key] -= 1
+            else:
+                found.append(f"{after}: {line[:120]}")
     return [] if not found or authorized(base, head, rule.mark) else found
 
 
@@ -165,7 +172,7 @@ def raw_keyboard(base: str, head: str) -> list[str]:
     start = git("merge-base", base, head).strip()
     found = [after for status, before, after in changed(base, head, "mobile/*.ts", "mobile/*.tsx")
              if status != "D" and not TESTS.search(after) and KEYBOARD.search(show(head, after))
-             and (status == "A" or not KEYBOARD.search(show(start, before)))]
+             and (status == "A" or TESTS.search(before) or not KEYBOARD.search(show(start, before)))]
     return [] if not found or authorized(base, head, "TECLADO") else found
 
 

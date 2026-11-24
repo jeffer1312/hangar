@@ -221,7 +221,11 @@ class CheckRules(unittest.TestCase):
         self.passes("mobile/app/a.tsx", "import { KeyboardAvoidingView } from 'react-native';\n<KeyboardAvoidingView />\n")
 
     def test_a_content_line_that_looks_like_a_header_keeps_the_file_name(self):
-        self.refused("crates/hangar-core/src/a.rs", "++ x\nconst D: &str = \".claude-pocket\";\n", "NOME_ANTIGO")
+        self.put("backend/app/x.py", "a = 1\nb = 2\n++ x\nc = 3\n")
+        self.commit("add")
+        code, output = self.check()
+        self.assertEqual(code, 1, output)
+        self.assertIn("backend/app/x.py: c = 3", output)
 
     def test_a_local_base_already_resolved_passes(self):
         self.passes("packages/core/src/a.ts", "const baseUrl = baseOf(s);\nfetch(`${baseUrl}/api/x`);\n")
@@ -246,10 +250,10 @@ class CheckRules(unittest.TestCase):
         self.commit("swap")
         self.assertEqual(self.check()[0], 1)
 
-    def test_an_old_call_moved_to_another_file_of_the_pr_is_not_new(self):
+    def test_an_old_call_renamed_with_its_file_is_not_new(self):
         self.rebase_on("mobile/src/a.tsx", "import * as Haptics from 'expo-haptics';\n")
         self.git("mv", "mobile/src/a.tsx", "mobile/src/b.tsx")
-        self.put("mobile/src/b.tsx", "// outro arquivo\n" * 30 + "import * as Haptics from 'expo-haptics';\n")
+        self.put("mobile/src/b.tsx", "import * as Haptics from 'expo-haptics';\nexport {};\n")
         self.commit("move")
         self.assertEqual(self.check()[0], 0)
 
@@ -262,6 +266,37 @@ class CheckRules(unittest.TestCase):
     def test_editing_the_rest_of_an_old_line_keeps_it_old(self):
         self.rebase_on("packages/core/src/a.ts", "fetch(`${s.baseUrl}/api/x`);\n")
         self.passes("packages/core/src/a.ts", "await fetch(`${s.baseUrl}/api/x`, { signal }); // longo\n")
+
+    def test_a_new_session_in_a_rust_test_module_passes(self):
+        self.passes("crates/hangar-core/src/a.rs", 'fn f() {}\n#[cfg(test)]\nmod tests {\n    const N: &str = "new-session";\n}\n')
+
+    def test_another_vibration_method_is_new(self):
+        self.rebase_on("mobile/src/a.tsx", "void Haptics.selectionAsync();\n")
+        self.put("mobile/src/a.tsx", "void Haptics.successAsync();\n")
+        self.commit("swap")
+        self.assertEqual(self.check()[0], 1)
+
+    def test_removing_the_old_name_in_one_file_does_not_pay_for_another(self):
+        self.rebase_on("crates/hangar-core/src/old.rs", 'const D: &str = ".claude-pocket";\n')
+        self.put("crates/hangar-core/src/old.rs", "\n")
+        self.put("crates/hangar-core/src/new.rs", 'const D: &str = ".claude-pocket";\n')
+        self.commit("swap")
+        self.assertEqual(self.check()[0], 1)
+
+    def test_a_private_field_is_not_a_comment_in_typescript(self):
+        self.refused("packages/core/src/p.ts", "class C {\n  #url = server.baseUrl + '/api/x';\n}\n", "ENDERECO")
+
+    def test_a_call_inside_the_first_argument_still_counts(self):
+        self.refused("mobile/src/net/q.ts", "new URL(encodeURI(p), s.baseUrl);\n", "ENDERECO")
+
+    def test_a_keyboard_file_renamed_from_a_test_is_new(self):
+        self.rebase_on("mobile/src/k.test.tsx", "import { KeyboardAvoidingView } from 'react-native';\n")
+        self.git("mv", "mobile/src/k.test.tsx", "mobile/src/k.tsx")
+        self.commit("move")
+        self.assertEqual(self.check()[0], 1)
+
+    def test_a_commented_keyboard_import_passes(self):
+        self.passes("mobile/app/c.tsx", "// import { KeyboardAvoidingView } from 'react-native';\n")
 
     def test_an_unreadable_base_is_an_error_and_not_a_pass(self):
         self.base = "0" * 40
