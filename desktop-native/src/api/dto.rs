@@ -852,7 +852,12 @@ pub struct WorkReviewResponse {
     #[serde(default)] pub via: Option<String>,
     #[serde(default)] pub supported: bool,
     #[serde(default)] pub review: Option<WorkReview>,
+    /// O que a pessoa marcou nesta rodada e ainda não enviou, guardado no servidor.
+    #[serde(default)] pub draft: HashMap<String, WorkReviewDraftPick>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct WorkReviewDraftPick { pub choice: String, #[serde(default)] pub reason: String }
 
 /// Uma linha do evento `work_reviews` da lista do dono.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]

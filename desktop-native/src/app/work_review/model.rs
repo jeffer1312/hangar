@@ -1,5 +1,5 @@
 //! Contas puras da revisão do trabalho: as mesmas de `packages/core/src/workReview.ts`, que o nativo não importa.
-use crate::api::dto::{WorkReview, WorkReviewChoice, WorkReviewDecision, WorkReviewState, WorkReviewSteps, WorkReviewSummary};
+use crate::api::dto::{WorkReview, WorkReviewChoice, WorkReviewDecision, WorkReviewDraftPick, WorkReviewState, WorkReviewSteps, WorkReviewSummary};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -77,6 +77,30 @@ pub(super) fn decisions_payload(review: &WorkReview, choices: &Choices) -> Optio
 pub(super) fn carry(previous: &Choices, review: &WorkReview) -> Choices {
     previous.iter().filter(|(id, picked)| review.decisions.iter().any(|d| d.id == **id && d.choices.iter().any(|c| c.id == picked.choice)))
         .map(|(id, picked)| (id.clone(), picked.clone())).collect()
+}
+
+/// Onde o painel abre: na primeira decisão que falta; nada faltando, na primeira.
+pub(super) fn first_pending(review: &WorkReview, choices: &Choices) -> usize {
+    review.decisions.iter().position(|d| !decided(d, choices.get(&d.id))).unwrap_or(0)
+}
+
+/// O que ficou guardado no servidor por baixo do que a pessoa já escolheu aqui.
+pub(super) fn with_saved(local: &Choices, saved: &HashMap<String, WorkReviewDraftPick>) -> Choices {
+    let mut merged: Choices = saved.iter().map(|(id, p)| (id.clone(), Picked { choice: p.choice.clone(), reason: p.reason.clone() })).collect();
+    merged.extend(local.iter().map(|(id, p)| (id.clone(), p.clone())));
+    merged
+}
+
+/// Corpo do `PUT …/work-review/draft`: todas as escolhas da rodada, com o texto da caixa.
+pub(super) fn draft_payload(review_id: &str, choices: &Choices) -> Value {
+    let choices: serde_json::Map<String, Value> = choices.iter()
+        .map(|(id, p)| (id.clone(), json!({"choice": p.choice, "reason": p.reason}))).collect();
+    json!({"review_id": review_id, "choices": choices})
+}
+
+/// Tira do que falta gravar o que o servidor confirmou, se não mudou de novo enquanto a gravação ia.
+pub(super) fn confirm(unsaved: &mut Choices, sent: &Choices) {
+    unsaved.retain(|id, picked| sent.get(id) != Some(picked));
 }
 
 /// A releitura só vale quando a rodada, o estado ou a hora mudaram; o selo sozinho não pede outra leitura.
@@ -275,6 +299,38 @@ mod tests {
         let mut r = two();
         r.decisions[1].choices[0].id = "outra".into();
         assert_eq!(carry(&c, &r), Choices::from([("47".to_owned(), pick("manter", "x"))]));
+    }
+
+    #[test]
+    fn opens_at_the_first_decision_still_missing() {
+        assert_eq!(first_pending(&two(), &Choices::new()), 0);
+        assert_eq!(first_pending(&two(), &Choices::from([("47".to_owned(), pick("igualar", ""))])), 1);
+        assert_eq!(first_pending(&two(), &Choices::from([("47".to_owned(), pick("manter", " "))])), 0, "motivo em branco ainda falta");
+        let all = Choices::from([("47".to_owned(), pick("igualar", "")), ("86".to_owned(), pick("igualar", ""))]);
+        assert_eq!(first_pending(&two(), &all), 0, "tudo decidido abre na primeira");
+    }
+
+    #[test]
+    fn what_was_picked_here_wins_over_the_saved() {
+        let saved = HashMap::from([("47".to_owned(), WorkReviewDraftPick { choice: "manter".into(), reason: "do servidor".into() }),
+            ("86".to_owned(), WorkReviewDraftPick { choice: "igualar".into(), reason: String::new() })]);
+        let local = Choices::from([("47".to_owned(), pick("igualar", ""))]);
+        assert_eq!(with_saved(&local, &saved), Choices::from([("47".to_owned(), pick("igualar", "")), ("86".to_owned(), pick("igualar", ""))]));
+    }
+
+    #[test]
+    fn draft_payload_keeps_every_pick_with_its_reason() {
+        let c = Choices::from([("47".to_owned(), pick("manter", "regra")), ("86".to_owned(), pick("igualar", ""))]);
+        assert_eq!(draft_payload("r1", &c), json!({"review_id": "r1", "choices": {
+            "47": {"choice": "manter", "reason": "regra"}, "86": {"choice": "igualar", "reason": ""}}}));
+    }
+
+    #[test]
+    fn confirm_keeps_what_changed_while_saving() {
+        let sent = Choices::from([("47".to_owned(), pick("manter", "a")), ("86".to_owned(), pick("igualar", ""))]);
+        let mut unsaved = Choices::from([("47".to_owned(), pick("manter", "ab")), ("86".to_owned(), pick("igualar", "")), ("9".to_owned(), pick("igualar", ""))]);
+        confirm(&mut unsaved, &sent);
+        assert_eq!(unsaved, Choices::from([("47".to_owned(), pick("manter", "ab")), ("9".to_owned(), pick("igualar", ""))]));
     }
 
     #[test]

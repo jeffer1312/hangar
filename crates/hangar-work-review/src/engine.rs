@@ -1,5 +1,6 @@
 //! Ticket da sessão, leitura da revisão (uma por vez por sessão), resumo do chip e envio das decisões.
 use crate::assets::{self, AssetCache};
+use crate::draft::{Draft, Drafts, Pick};
 use hangar_connectors::host::{ConnectorStatus, Host};
 use hangar_connectors::protocol::{ConnectorError, ErrorCode};
 use hangar_connectors::registry::Entry;
@@ -96,6 +97,9 @@ pub struct Linked {
     pub supported: bool,
     pub review: Option<Review>,
     pub fetched_at: String,
+    /// O que a pessoa marcou nesta rodada e ainda não enviou; só na leitura pedida pelo painel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft: Option<std::collections::BTreeMap<String, Pick>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -162,6 +166,9 @@ pub struct Engine {
     sessions: Arc<dyn Sessions>,
     diag: Arc<dyn Diag>,
     assets: AssetCache,
+    drafts: Drafts,
+    /// Ler, juntar e gravar o rascunho é uma operação só: duas gravações juntas não se apagam.
+    draft_lock: tokio::sync::Mutex<()>,
     state: Mutex<State>,
     queues: Mutex<HashMap<String, Arc<Semaphore>>>,
     changed: Notify,
@@ -170,8 +177,8 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(host: Arc<Host>, mission: Arc<Store>, sessions: Arc<dyn Sessions>, diag: Arc<dyn Diag>, cache_dir: PathBuf) -> Arc<Self> {
-        Arc::new(Self { host, mission, sessions, diag, assets: AssetCache::new(&cache_dir, assets::LIMIT),
+    pub fn new(host: Arc<Host>, mission: Arc<Store>, sessions: Arc<dyn Sessions>, diag: Arc<dyn Diag>, cache_dir: PathBuf, drafts_dir: PathBuf) -> Arc<Self> {
+        Arc::new(Self { host, mission, sessions, diag, assets: AssetCache::new(&cache_dir, assets::LIMIT), drafts: Drafts::new(drafts_dir), draft_lock: tokio::sync::Mutex::new(()),
             state: Mutex::default(), queues: Mutex::default(), changed: Notify::new(), version: AtomicU64::new(0) })
     }
 
@@ -226,7 +233,64 @@ impl Engine {
     /// Leitura pedida pela pessoa: fura a fila do conector e atualiza o resumo.
     pub async fn session_review(&self, name: &str) -> Result<Option<Linked>, Failure> {
         let Some(session) = self.resolve(name).await? else { return Ok(None) };
-        self.read(&session, false).await
+        let Some(mut linked) = self.read(&session, false).await? else { return Ok(None) };
+        if let Some(review) = &linked.review {
+            linked.draft = match self.drafts.read(&linked.target.connector, &linked.target.ticket_id).await {
+                Ok(draft) => draft.and_then(|draft| draft.for_review(review)),
+                // Rascunho ilegível: o painel abre sem as escolhas, e o motivo vai ao diário.
+                Err(error) => { self.warn(&session.name, "work_review_draft_unreadable", &error.kind().to_string()); None }
+            };
+        }
+        Ok(Some(linked))
+    }
+
+    /// Guarda o que a pessoa marcou na rodada lida por último; rodada que não é a atual é recusada.
+    pub async fn save_draft(&self, name: &str, draft: Draft) -> Result<(), Failure> {
+        draft.check().map_err(invalid)?;
+        let session = self.resolve(name).await?.ok_or(Failure::NotLinked)?;
+        let known = {
+            let state = self.lock();
+            state.slots.get(&session.name).filter(|slot| slot.life == session.lifecycle_id)
+                .and_then(|slot| Some((slot.target.clone()?, slot.summary.as_ref().map(|summary| summary.review_id.clone()))))
+        };
+        // Resumo de outra rodada pode só estar atrasado: relê antes de recusar.
+        let (target, current) = match known {
+            Some((target, Some(review))) if review == draft.review_id => (target, Some(review)),
+            _ => {
+                let linked = self.read(&session, false).await?.ok_or(Failure::NotLinked)?;
+                (linked.target, linked.review.map(|review| review.id))
+            }
+        };
+        if current.as_deref() != Some(draft.review_id.as_str()) {
+            return Err(CallError::connector(ErrorCode::StaleReview, "a revisão mudou; releia antes de marcar").into());
+        }
+        let _turn = self.draft_lock.lock().await;
+        // A rodada pode ter mudado enquanto esperava a vez: gravação de rodada velha não passa por cima da nova.
+        let now = self.lock().slots.get(&session.name).filter(|slot| slot.life == session.lifecycle_id)
+            .and_then(|slot| slot.summary.as_ref().map(|summary| summary.review_id.clone()));
+        if now.is_some_and(|id| id != draft.review_id) {
+            return Err(CallError::connector(ErrorCode::StaleReview, "a revisão mudou; releia antes de marcar").into());
+        }
+        // Junta por decisão: o cliente manda só as que mudou, e as dos outros aparelhos ficam.
+        let mut draft = draft;
+        match self.drafts.read(&target.connector, &target.ticket_id).await {
+            Ok(Some(saved)) if saved.review_id == draft.review_id => {
+                let mut choices = saved.choices;
+                choices.append(&mut draft.choices);
+                draft.choices = choices;
+            }
+            // O rascunho é do ticket, e outra sessão nele pode já estar na rodada nova: quem decide é a revisão de agora.
+            Ok(Some(_)) => {
+                let current = self.read(&session, false).await?.and_then(|linked| linked.review).map(|review| review.id);
+                if current.as_deref() != Some(draft.review_id.as_str()) {
+                    return Err(CallError::connector(ErrorCode::StaleReview, "a revisão mudou; releia antes de marcar").into());
+                }
+            }
+            Ok(None) => {}
+            Err(error) => self.warn(&session.name, "work_review_draft_unreadable", &error.kind().to_string()),
+        }
+        self.drafts.write(&target.connector, &target.ticket_id, &draft).await
+            .map_err(|error| CallError::connector(ErrorCode::Unavailable, format!("escolhas não gravadas: {error}")).into())
     }
 
     pub async fn asset(&self, name: &str, asset: &str, review_id: &str) -> Result<Asset, Failure> {
@@ -395,7 +459,7 @@ impl Engine {
         if self.publish(session, turn, Some(&target), review.as_ref()) && let Some(review) = &review {
             self.assets.keep_only(&target.connector, &target.ticket_id, &review.id).await;
         }
-        Ok(Some(Linked { target, supported, review, fetched_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true) }))
+        Ok(Some(Linked { target, supported, review, fetched_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true), draft: None }))
     }
 
     /// O vínculo do Tickets vence; sem ele, o ticket cujo `key` é a branch, em cada conector com a revisão.
@@ -496,7 +560,7 @@ mod tests {
     #[test]
     fn linked_serializes_the_target_flat_in_place() {
         let linked = Linked { target: Target { via: Via::Branch, connector: "help".into(), ticket_id: "1".into(), key: "PM-1".into() },
-            supported: true, review: None, fetched_at: "2026-11-18T10:00:00.000Z".into() };
+            supported: true, review: None, fetched_at: "2026-11-18T10:00:00.000Z".into(), draft: None };
         assert_eq!(serde_json::to_string(&linked).unwrap(),
             r#"{"via":"branch","connector":"help","ticket_id":"1","key":"PM-1","supported":true,"review":null,"fetched_at":"2026-11-18T10:00:00.000Z"}"#);
     }
@@ -521,7 +585,7 @@ mod tests {
     async fn read_started_before_a_write_does_not_publish() {
         let dir = tempfile::tempdir().unwrap();
         let host = Host::new(hangar_connectors::registry::Registry::new(dir.path().join("c.json")), Default::default());
-        let engine = Engine::new(host, Arc::new(Store::new(dir.path().join("m"))), Arc::new(NoSessions), Arc::new(NoDiag), dir.path().join("cache"));
+        let engine = Engine::new(host, Arc::new(Store::new(dir.path().join("m"))), Arc::new(NoSessions), Arc::new(NoDiag), dir.path().join("cache"), dir.path().join("drafts"));
         let session = SessionRef { name: "s1".into(), lifecycle_id: Some("l".into()), ..Default::default() };
         let summary = |engine: &Engine| engine.summaries_for(&[("s1", Some("l"))])["reviews"]["s1"]["state"].clone();
         let before = engine.begin(&session);

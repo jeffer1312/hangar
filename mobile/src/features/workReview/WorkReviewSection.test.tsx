@@ -7,12 +7,13 @@ import * as m from '../../paraglide/messages';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const api = vi.hoisted(() => ({ fetch: vi.fn(), send: vi.fn() }));
+const api = vi.hoisted(() => ({ fetch: vi.fn(), send: vi.fn(), save: vi.fn() }));
 const curtain = vi.hoisted(() => ({ last: null as null | { items: { title: string; leftTag: string; rightTag: string }[]; index: number } }));
 vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
   fetchWorkReview: api.fetch,
   sendWorkReviewDecisions: api.send,
+  saveWorkReviewDraft: api.save,
   workReviewAssetSource: (_s: unknown, _n: string, review: string, asset: string) => ({ uri: `img:${review}:${asset}`, headers: {} }),
 }));
 vi.mock('../../stores/servers', () => {
@@ -64,6 +65,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   api.fetch.mockReset();
   api.send.mockReset();
+  api.save.mockReset();
   curtain.last = null;
   clearWorkReviewSummaries();
   container = document.createElement('div');
@@ -135,6 +137,94 @@ describe('WorkReviewSection', () => {
     });
     // Depois do envio a revisão é relida.
     expect(api.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('cada escolha é guardada no servidor e volta ao abrir, na primeira que falta', async () => {
+    api.fetch.mockResolvedValue({ ...linked(waiting()), draft: { 47: { choice: 'igualar', reason: '' } } });
+    await render();
+    expect(container.textContent).toContain('Título da impressão');
+    expect(button(m.work_review_pending_one())).toBeTruthy();
+    await click('Manter');
+    // Só a decisão que mudou: o servidor junta com o que já guardou.
+    expect(api.save).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'srv' }), 'pm',
+      { review_id: 'r-7', choices: { 86: { choice: 'manter', reason: 'kit' } } });
+    let answer!: () => void;
+    api.save.mockReturnValueOnce(new Promise<void>((resolve) => { answer = resolve; }));
+    await type(container.querySelector('textarea')!, 'regra');
+    await type(container.querySelector('textarea')!, 'regra do kit');
+    // Uma gravação por vez: a do meio é pulada, e a última sai quando a anterior termina.
+    expect(api.save).toHaveBeenCalledTimes(2);
+    await act(async () => answer());
+    await flush();
+    expect(api.save).toHaveBeenCalledTimes(3);
+    expect(api.save).toHaveBeenLastCalledWith(expect.anything(), 'pm',
+      { review_id: 'r-7', choices: { 86: { choice: 'manter', reason: 'regra do kit' } } });
+  });
+
+  it('voltar antes de a gravação terminar mantém a escolha; falha de rede tenta de novo', async () => {
+    api.fetch.mockResolvedValue(linked(waiting()));
+    let fail!: (e: unknown) => void;
+    api.save.mockReturnValueOnce(new Promise<void>((_, reject) => { fail = reject; }));
+    await render();
+    await click('Igualar ao mock');
+    await act(async () => root.render(createElement(WorkReviewSection, { serverId: 'srv', name: 'outra' })));
+    await flush();
+    await act(async () => root.render(createElement(WorkReviewSection, { serverId: 'srv', name: 'pm' })));
+    await flush();
+    expect(button(m.work_review_pending_one())).toBeTruthy();
+    await act(async () => fail(Object.assign(new Error('network'), { code: 'network_error' })));
+    await flush();
+    expect(api.save).toHaveBeenCalledTimes(1);
+    await act(async () => { vi.advanceTimersByTime(5_000); });
+    await flush();
+    expect(api.save).toHaveBeenCalledTimes(2);
+    expect(api.save).toHaveBeenLastCalledWith(expect.anything(), 'pm', { review_id: 'r-7', choices: { 47: { choice: 'igualar', reason: '' } } });
+  });
+
+  it('leitura começada antes da gravação confirmar é refeita, e a escolha não some', async () => {
+    api.fetch.mockResolvedValue(linked(waiting()));
+    let saved!: () => void;
+    api.save.mockReturnValueOnce(new Promise<void>((resolve) => { saved = resolve; }));
+    await render();
+    await click('Igualar ao mock');
+    await act(async () => root.render(createElement(WorkReviewSection, { serverId: 'srv', name: 'outra' })));
+    await flush();
+    let stale!: (v: unknown) => void;
+    api.fetch.mockReturnValueOnce(new Promise((resolve) => { stale = resolve; }));
+    api.fetch.mockResolvedValue({ ...linked(waiting()), draft: { 47: { choice: 'igualar', reason: '' } } });
+    await act(async () => root.render(createElement(WorkReviewSection, { serverId: 'srv', name: 'pm' })));
+    await flush();
+    const reads = api.fetch.mock.calls.length;
+    await act(async () => saved());
+    await flush();
+    await act(async () => stale(linked(waiting())));
+    await flush();
+    expect(api.fetch.mock.calls.length).toBe(reads + 1);
+    expect(button(m.work_review_pending_one())).toBeTruthy();
+  });
+
+  it('releitura da mesma rodada traz o que outro aparelho mudou', async () => {
+    const both = { 47: { choice: 'igualar', reason: '' }, 86: { choice: 'igualar', reason: '' } };
+    api.fetch.mockResolvedValue({ ...linked(waiting()), draft: both });
+    await render();
+    expect(container.textContent).toContain(m.work_review_ready());
+    api.fetch.mockResolvedValue({ ...linked(waiting()), draft: { ...both, 47: { choice: 'manter', reason: '' } } });
+    await act(async () => setWorkReviewSummaries('srv', { pm: { review_id: 'r-7', state: 'waiting', badge: null, updated_at: 'outra' } }));
+    await flush();
+    expect(button(m.work_review_pending_one())).toBeTruthy();
+  });
+
+  it('gravação recusada guarda a escolha para a próxima', async () => {
+    api.fetch.mockResolvedValue(linked(waiting()));
+    api.save.mockRejectedValueOnce(Object.assign(new Error('400: x'), { status: 400 }));
+    await render();
+    await click('Igualar ao mock');
+    await flush();
+    await act(async () => { vi.advanceTimersByTime(250); });
+    await click('Igualar ao mock');
+    await flush();
+    expect(api.save).toHaveBeenLastCalledWith(expect.anything(), 'pm',
+      { review_id: 'r-7', choices: { 47: { choice: 'igualar', reason: '' }, 86: { choice: 'igualar', reason: '' } } });
   });
 
   it('com a revisão trocada o envio diz que mudou e relê', async () => {

@@ -291,7 +291,7 @@ impl AppState {
                 .with_config(Arc::new(move || crate::runtime::codex_launch::runtime_config(&env))))
         };
         let mission=Arc::new(hangar_mission::Store::new(hangar_dir.join("mission")));
-        let work_review = crate::work_review_watch::engine(connectors.clone(), mission.clone(), mission_notify.clone(), diag.clone());
+        let work_review = crate::work_review_watch::engine(connectors.clone(), mission.clone(), mission_notify.clone(), diag.clone(), hangar_dir.join("work-review-drafts"));
         let _ = list.work_review.set(work_review.clone());
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
             Arc::new(crate::groups::orq::OrqVault::new()

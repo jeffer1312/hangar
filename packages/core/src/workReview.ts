@@ -38,6 +38,8 @@ export type WorkReviewResponse =
   | {
     linked: true; via: 'ticket' | 'branch'; connector: string; ticket_id: string; key: string | null;
     supported: boolean; review: WorkReview | null; fetched_at: string | null;
+    /** O que a pessoa marcou nesta rodada e ainda não enviou, guardado no servidor. */
+    draft?: WorkReviewChoices;
   };
 /** `POST /api/sessions/{nome}/work-review/decisions`. */
 export interface WorkReviewDecideResponse { ok: true; review: WorkReview | null }
@@ -50,6 +52,8 @@ export interface WorkReviewsEvent { reviews: Record<string, WorkReviewSummary> }
 export type WorkReviewChoices = Record<string, { choice: string; reason: string }>;
 /** Teto do motivo que o servidor aceita (`MAX_REASON` do conector), em caracteres. */
 export const WORK_REVIEW_MAX_REASON = 2000;
+/** `PUT /api/sessions/{nome}/work-review/draft`. */
+export interface WorkReviewDraftBody { review_id: string; choices: WorkReviewChoices }
 export interface WorkReviewDecisionsBody { review_id: string; decisions: { id: string; choice: string; reason?: string }[] }
 
 export type WorkReviewStepStatus = 'done' | 'current' | 'pending';
@@ -124,6 +128,15 @@ const review = (v: unknown): WorkReview => {
     links: opt(o.links, (l) => list(l, link)) ?? [],
   });
 };
+// Escolha guardada torta sai sozinha: ela só adianta o que a pessoa já marcou, não derruba a revisão.
+const draftOf = (v: unknown): WorkReviewChoices | undefined => {
+  if (!isObject(v)) return undefined;
+  const out: WorkReviewChoices = {};
+  for (const [id, pick] of Object.entries(v)) {
+    if (isObject(pick) && typeof pick.choice === 'string') out[id] = { choice: pick.choice, reason: typeof pick.reason === 'string' ? pick.reason : '' };
+  }
+  return out;
+};
 const attempt = <T>(read: () => T): T | null => {
   try { return read(); } catch (e) { if (e instanceof Bad) return null; throw e; }
 };
@@ -136,11 +149,12 @@ export function parseWorkReviewResponse(raw: unknown): WorkReviewResponse | null
     const o = obj(raw);
     if (o.linked === false) return { linked: false };
     if (o.linked !== true) throw new Bad();
-    return {
-      linked: true, via: oneOf(o.via, ['ticket', 'branch'] as const), connector: str(o.connector), ticket_id: str(o.ticket_id),
+    return clean({
+      linked: true as const, via: oneOf(o.via, ['ticket', 'branch'] as const), connector: str(o.connector), ticket_id: str(o.ticket_id),
       key: o.key == null ? null : str(o.key), supported: bool(o.supported),
       review: o.review == null ? null : review(o.review), fetched_at: o.fetched_at == null ? null : str(o.fetched_at),
-    };
+      draft: draftOf(o.draft),
+    });
   });
 }
 
@@ -192,6 +206,11 @@ export function waitingHeadlineText(headline: WorkReviewHeadline | undefined, pe
 /** O servidor recebe todas as pendentes de uma vez, e só enquanto a revisão espera. */
 export function readyToSend(review: WorkReview, choices: WorkReviewChoices): boolean {
   return review.state === 'waiting' && review.decisions.length > 0 && pendingCount(review, choices) === 0;
+}
+
+/** Onde o painel abre: na primeira decisão que falta; nada faltando, na primeira. */
+export function firstPendingIndex(review: WorkReview, choices: WorkReviewChoices): number {
+  return Math.max(0, review.decisions.findIndex((d) => !isDecided(d, choices[d.id])));
 }
 
 export function initialReason(choice: WorkReviewChoice): string { return choice.default_reason ?? ''; }

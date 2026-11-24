@@ -2,7 +2,7 @@
 //! das rotas da sessão no servidor dela; o texto da revisão é do conector, e o genérico, das chaves `work_review_*`.
 use super::*;
 use super::device::Remote;
-use crate::api::dto::{WorkReview, WorkReviewChoice, WorkReviewDecision, WorkReviewResponse, WorkReviewSide, WorkReviewState, WorkReviewSummary, WorkReviewTone};
+use crate::api::dto::{WorkReview, WorkReviewChoice, WorkReviewDecision, WorkReviewDraftPick, WorkReviewResponse, WorkReviewSide, WorkReviewState, WorkReviewSummary, WorkReviewTone};
 use gpui_kit::component::{link::Link, progress::Progress};
 use model::{Choices, Picked, StepStatus, Tone};
 
@@ -31,7 +31,18 @@ type AssetKey = (String, bool);
 #[derive(Clone, Copy)]
 struct FailedAsset { read: u64, stale: bool }
 
-pub(super) struct Loaded { pub(super) via_branch: bool, pub(super) review: Arc<WorkReview> }
+pub(super) struct Loaded { pub(super) via_branch: bool, pub(super) review: Arc<WorkReview>, draft: HashMap<String, WorkReviewDraftPick> }
+
+/// Gravação das escolhas de uma sessão, uma em voo. `unsaved` junta as decisões mudadas que o servidor ainda não
+/// confirmou: cada PUT leva só elas (o servidor junta por decisão, e as de outro aparelho ficam), a leitura as põe
+/// por cima do guardado, e só sai o que o servidor confirmou. `epoch` sobe a cada confirmação: leitura começada
+/// antes dela trouxe o guardado velho e é refeita.
+#[derive(Default)]
+struct DraftSave { running: bool, unsaved: Option<(String, Choices)>, tries: u32, epoch: u64 }
+
+/// ponytail: rede fora ou servidor em erro tenta de novo a cada 5 s por 1 min; depois só a próxima escolha leva tudo.
+const DRAFT_RETRIES: u32 = 12;
+const DRAFT_RETRY: Duration = Duration::from_secs(5);
 
 pub(super) struct Reason { input: Entity<TextareaState>, _changed: Subscription }
 
@@ -44,6 +55,8 @@ pub(super) struct Panel {
     /// Quem pediu a leitura em voo: a falha que `model::shows_failure` não mostra vai ao log, e a tela fica com o que tinha.
     reading: model::Read,
     choices: Choices,
+    /// Por sessão, fora do `clear_round`: sair dela no meio não interrompe a gravação.
+    saving: HashMap<SessionKey, DraftSave>,
     reasons: HashMap<String, Reason>,
     index: usize,
     sending: bool,
@@ -66,7 +79,7 @@ pub(super) struct Panel {
 
 impl Default for Panel {
     fn default() -> Self {
-        Self { owner: None, seen: None, read: Remote::default(), reading: model::Read::Open, choices: Choices::new(), reasons: HashMap::new(), index: 0,
+        Self { owner: None, seen: None, read: Remote::default(), reading: model::Read::Open, choices: Choices::new(), saving: HashMap::new(), reasons: HashMap::new(), index: 0,
             sending: false, send_error: None, resolved_closed: false, kept_open: false, images: media::MediaCache::with_budget(IMAGE_BUDGET), failed: HashMap::new(), reads: 0, round: 0,
             advance_seq: 0, strip: ScrollHandle::new(), scroll: ScrollHandle::new() }
     }
@@ -130,7 +143,7 @@ pub(super) fn chip(text: String, tone: WorkReviewTone) -> Div {
 
 fn present(response: WorkReviewResponse) -> Option<Loaded> {
     if !response.linked || !response.supported { return None; }
-    Some(Loaded { via_branch: response.via.as_deref() == Some("branch"), review: Arc::new(response.review?) })
+    Some(Loaded { via_branch: response.via.as_deref() == Some("branch"), review: Arc::new(response.review?), draft: response.draft })
 }
 
 fn pending_text(pending: usize) -> String {
@@ -245,16 +258,22 @@ impl Hangar {
         let Some(api) = self.api_for(&key.server) else { return };
         let seq = self.work_review.read.start();
         self.work_review.reading = reading;
+        let epoch = self.work_review.saving.get(&key).map_or(0, |slot| slot.epoch);
         let name = key.name.clone();
         let request = async move {
             let value = api.read(&name, &["work-review"], &[], 30).await?;
             serde_json::from_value::<WorkReviewResponse>(value).map_err(|_| Failure::local("invalid_response"))
         };
-        run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| this.receive_work_review(key, seq, result, window, cx));
+        run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| this.receive_work_review(key, seq, epoch, result, window, cx));
     }
 
-    fn receive_work_review(&mut self, key: SessionKey, seq: u64, result: Result<WorkReviewResponse, Failure>, window: &mut Window, cx: &mut Context<Self>) {
+    fn receive_work_review(&mut self, key: SessionKey, seq: u64, epoch: u64, result: Result<WorkReviewResponse, Failure>, window: &mut Window, cx: &mut Context<Self>) {
         if self.work_review.owner.as_ref() != Some(&key) || self.work_review.read.seq != seq { return; }
+        // Uma gravação confirmou no meio da leitura: o guardado que veio é anterior a ela.
+        if self.work_review.saving.get(&key).map_or(0, |slot| slot.epoch) != epoch {
+            self.load_work_review(self.work_review.reading, window, cx);
+            return;
+        }
         let loaded = match result {
             Ok(response) => present(response),
             // Servidor sem a rota (anterior a ela) ou sem acesso a ela: a seção não aparece.
@@ -274,14 +293,29 @@ impl Hangar {
         let panel = &mut self.work_review;
         let before = panel.review().map(|r| r.id.clone());
         let now = loaded.as_ref().map(|l| l.review.id.clone());
-        if before != now { panel.clear_round(window, cx); }
+        let fresh = before != now;
+        if fresh { panel.clear_round(window, cx); }
+        let mut unboxed = Vec::new();
         if let Some(loaded) = &loaded {
-            panel.choices = model::carry(&panel.choices, &loaded.review);
-            panel.reasons.retain(|id, _| panel.choices.contains_key(id));
-            panel.index = panel.index.min(loaded.review.decisions.len().saturating_sub(1));
+            // Rodada que abre agora vem com o que ficou guardado, na primeira que falta.
+            let queued = panel.saving.get(&key).and_then(|slot| slot.unsaved.as_ref()).filter(|(id, _)| *id == loaded.review.id);
+            // Só o que este aparelho ainda não confirmou vence o guardado: o já confirmado outro aparelho pode ter mudado.
+            let unsaved = queued.map(|(_, choices)| choices.clone()).unwrap_or_default();
+            let previous = std::mem::take(&mut panel.choices);
+            panel.choices = model::carry(&model::with_saved(&unsaved, &loaded.draft), &loaded.review);
+            // Caixa de motivo cujo texto mudou de fora nasce de novo com o texto novo.
+            panel.reasons.retain(|id, _| panel.choices.get(id).is_some_and(|picked| previous.get(id) == Some(picked)));
+            panel.index = if fresh { model::first_pending(&loaded.review, &panel.choices) }
+                else { panel.index.min(loaded.review.decisions.len().saturating_sub(1)) };
+            unboxed = loaded.review.decisions.iter().filter_map(|d| {
+                let picked = panel.choices.get(&d.id)?;
+                let required = d.choices.iter().any(|c| c.id == picked.choice && c.requires_reason);
+                (required && !panel.reasons.contains_key(&d.id)).then(|| (d.id.clone(), picked.reason.clone()))
+            }).collect();
         }
         panel.reads += 1;
         panel.read.finish(seq, Ok(loaded));
+        for (decision, reason) in unboxed { self.review_reason_input(decision, reason, false, window, cx); }
     }
 
     /// Busca o asset uma vez por rodada (a que falhou, de novo depois da próxima leitura); `full` decodifica no tamanho dos quadros e da cortina, senão a miniatura.
@@ -347,6 +381,8 @@ impl Hangar {
         if !option.requires_reason {
             panel.choices.insert(decision.clone(), Picked { choice, reason: String::new() });
             panel.reasons.remove(&decision);
+            self.save_review_draft(&decision, window, cx);
+            let panel = &mut self.work_review;
             let (seq, from) = (panel.advance_seq, panel.index);
             if from + 1 < total {
                 cx.spawn_in(window, async move |this, cx| {
@@ -364,8 +400,15 @@ impl Hangar {
         let kept = panel.choices.get(&decision).filter(|p| p.choice == choice).map(|p| p.reason.clone());
         let reason = kept.unwrap_or_else(|| model::initial_reason(&option));
         panel.choices.insert(decision.clone(), Picked { choice, reason: reason.clone() });
+        self.save_review_draft(&decision, window, cx);
+        self.review_reason_input(decision, reason, true, window, cx);
+        cx.notify();
+    }
+
+    /// A caixa do motivo de uma decisão; cada mudança vai ao servidor.
+    fn review_reason_input(&mut self, decision: String, reason: String, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 6));
-        input.update(cx, |input, cx| { input.set_value(reason, window, cx); input.focus(window, cx); });
+        input.update(cx, |input, cx| { input.set_value(reason, window, cx); if focus { input.focus(window, cx); } });
         let id = decision.clone();
         let changed = cx.subscribe_in(&input, window, move |this: &mut Hangar, input, event: &InputEvent, window, cx| {
             if !matches!(event, InputEvent::Change) { return; }
@@ -376,10 +419,63 @@ impl Hangar {
                 input.update(cx, |input, cx| input.set_value(capped, window, cx));
             }
             if let Some(picked) = this.work_review.choices.get_mut(&id) { picked.reason = value; }
+            this.save_review_draft(&id, window, cx);
             cx.notify();
         });
         self.work_review.reasons.insert(decision, Reason { input, _changed: changed });
-        cx.notify();
+    }
+
+    /// Guarda no servidor o que a pessoa marcou: sair, trocar de aba ou fechar o app não perde a escolha.
+    fn save_review_draft(&mut self, decision: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = &self.work_review;
+        let (Some(key), Some(review)) = (panel.owner.clone(), panel.review()) else { return };
+        let Some(picked) = panel.choices.get(decision).cloned() else { return };
+        let review_id = review.id.clone();
+        let slot = self.work_review.saving.entry(key.clone()).or_default();
+        match &mut slot.unsaved {
+            Some((id, choices)) if *id == review_id => { choices.insert(decision.to_owned(), picked); }
+            unsaved => *unsaved = Some((review_id, Choices::from([(decision.to_owned(), picked)]))),
+        }
+        if slot.running { return; }
+        slot.running = true;
+        self.send_review_draft(key, window, cx);
+    }
+
+    fn send_review_draft(&mut self, key: SessionKey, window: &mut Window, cx: &mut Context<Self>) {
+        let api = self.api_for(&key.server);
+        let Some(slot) = self.work_review.saving.get_mut(&key) else { return };
+        let (Some((review_id, sent)), Some(api)) = (slot.unsaved.clone(), api) else { slot.running = false; return };
+        let (name, body) = (key.name.clone(), model::draft_payload(&review_id, &sent));
+        let request = async move { api.request(&name, reqwest::Method::PUT, &["work-review", "draft"], None, Some(body), 15).await };
+        run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| {
+            let Some(slot) = this.work_review.saving.get_mut(&key) else { return };
+            match result {
+                Ok(_) => {
+                    slot.tries = 0;
+                    slot.epoch += 1;
+                    if let Some((id, choices)) = &mut slot.unsaved && *id == review_id {
+                        model::confirm(choices, &sent);
+                        if choices.is_empty() { slot.unsaved = None; }
+                    }
+                }
+                Err(error) => {
+                    crate::log_line(&format!("work_review.draft_failed status={:?} code={}", error.status, error.code.as_deref().unwrap_or("-")));
+                    // Recusa (4xx) não melhora repetindo; rede e erro do servidor esperam e tentam de novo. Esgotou: o
+                    // que falta fica guardado aqui, e a próxima escolha o leva junto.
+                    if error.status.is_none_or(|status| status >= 500) && slot.tries < DRAFT_RETRIES {
+                        slot.tries += 1;
+                        cx.spawn_in(window, async move |this, cx| {
+                            cx.background_executor().timer(DRAFT_RETRY).await;
+                            let _ = this.update_in(cx, |this: &mut Hangar, window, cx| this.send_review_draft(key, window, cx));
+                        }).detach();
+                    } else {
+                        (slot.running, slot.tries) = (false, 0);
+                    }
+                    return;
+                }
+            }
+            this.send_review_draft(key, window, cx);
+        });
     }
 
     fn step_review(&mut self, forward: bool, cx: &mut Context<Self>) {

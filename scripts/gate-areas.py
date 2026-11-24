@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quais partes do portão de merge (gate.yml) um conjunto de arquivos mudados aciona.
+"""Quais travas do portão de merge (gate.yml) um conjunto de arquivos mudados aciona.
 
 Lê os caminhos mudados (um por linha, relativos à raiz) no stdin e escreve `server=`, `native=` e
 `mobile=` (`true`/`false`) no formato do GITHUB_OUTPUT. `--all` liga as três, para quando não há
@@ -13,14 +13,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # Mudou o próprio portão: tudo roda, senão um portão quebrado passaria sem ser exercitado.
-GATE = ("scripts/gate-areas.py", ".github/workflows/gate.yml")
+GATE = ("scripts/gate-areas.py", "scripts/rule-tests.py", ".github/workflows/gate.yml")
 
-# Além do código, o que os testes leem do resto do repositório (scripts, passos de atualização, fixtures do core,
-# mensagens, novidades e manual).
-SERVER = ("crates/", "backend/tests/fixtures/", "plugins/hangar/hooks/", "scripts/", "docs/atualizacoes/",
-          "packages/core/src/", "messages/", ".github/workflows/server.yml", ".github/workflows/server-jobs.yml")
-NATIVE = ("desktop-native/", "messages/", "VERSION", "crates/Cargo.toml", "packages/core/src/", "docs/manual/",
-          "docs/novidades/", ".github/workflows/native.yml", ".github/workflows/native-check.yml")
+# O que pode derrubar as travas do scripts/rule-tests.py; o resto é das suítes do push.
+SERVER = ("crates/",)
+NATIVE = ("desktop-native/", "crates/Cargo.toml")
 MOBILE = ("mobile/", "packages/core/", "messages/", "project.inlang/", "scripts/i18n-compile.mjs",
           "scripts/verificar-app.mjs", ".node-version", "package.json", "package-lock.json")
 
