@@ -49,7 +49,7 @@ async fn the_modes_read_comes_from_the_footer_in_the_cycle_order() {
     let reply = run(&io, "permission_modes", json!({"probe": false})).await;
     assert_eq!(reply.disposition, RuntimeDisposition::Accepted);
     assert_eq!(reply.payload["current"], "manual");
-    assert_eq!(reply.payload["modes"], json!(["auto", "plan", "manual", "acceptEdits"]));
+    assert_eq!(reply.payload["modes"], json!(["auto", "plan", "manual", "acceptEdits", "bypassPermissions"]));
     assert!(io.keys().is_empty());
 }
 

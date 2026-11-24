@@ -7,8 +7,8 @@ import * as m from '../../paraglide/messages';
 // Ordem do segmentado, do mais cauteloso ao mais solto.
 const CLAUDE_MODES = ['manual', 'auto', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk'];
 const CODEX_MODES = ['default', 'plan'];
-// O ciclo do shift+tab do agy, com os nomes do Claude; `bypassPermissions` só existe na abertura.
-const ANTIGRAVITY_MODES = ['manual', 'auto', 'acceptEdits', 'plan'];
+// Os modos do agy com os nomes do Claude; `bypassPermissions` fica fora do shift+tab e o servidor reabre a sessão nele.
+const ANTIGRAVITY_MODES = ['manual', 'auto', 'acceptEdits', 'plan', 'bypassPermissions'];
 
 interface Args {
   serverId: string;

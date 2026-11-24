@@ -101,8 +101,8 @@ it('Antigravity: o modo segue o campo do Claude no SSE e troca pela rota do Clau
   await act(async () => Promise.resolve());
   expect(api.modes).toHaveBeenCalledWith('agy', false, server);
   expect(container.querySelector('output')!.textContent).toBe('true:manual:false');
-  // O ciclo do agy, sem o bypass que só existe na abertura.
-  expect(buttons(container).map(b => b.textContent)).toEqual(['manual', 'auto', 'acceptEdits', 'plan']);
+  // O ciclo do agy e o bypass, que reabre a sessão.
+  expect(buttons(container).map(b => b.textContent)).toEqual(['manual', 'auto', 'acceptEdits', 'plan', 'bypassPermissions']);
   footer = 'auto';
   await act(async () => chatStore(server.id, 'agy').use.setState({ stateEvent: { session: 'agy', state: 'idle', claude_permission_mode: 'auto' } as never }));
   expect(container.querySelector('output')!.textContent).toContain(':auto:');
