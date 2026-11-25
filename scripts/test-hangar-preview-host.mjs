@@ -30,13 +30,13 @@ async function backend(answer) {
   return { port: server.address().port, verbs, close: () => server.close() };
 }
 
-async function home(registro = { pid: 999999999, porta: 1, token: 'x' }) {
+async function home(record = { pid: 999999999, porta: 1, token: 'x' }) {
   const dir = await mkdtemp(join(tmpdir(), 'hangar-preview-host-'));
   const nav = join(dir, '.hangar', 'nav');
   await Promise.all([mkdir(nav, { recursive: true }), mkdir(join(dir, '.hangar', 'config'), { recursive: true })]);
   await Promise.all([
     writeFile(join(dir, '.hangar', 'config', '.env'), 'CP_AUTH_TOKEN=teste\n'),
-    writeFile(join(nav, '_srv.json'), JSON.stringify(registro)),
+    writeFile(join(nav, '_srv.json'), JSON.stringify(record)),
     // O caído deixou o sidecar e o foco dele, mais novos que qualquer hora de lá.
     writeFile(join(nav, 'srv-sessaoteste.json'), JSON.stringify({ chave: 'srv::sessaoteste', url: 'http://localhost:3000/' })),
     writeFile(join(nav, '_focus.json'), JSON.stringify({ sessaoteste: Date.now() })),

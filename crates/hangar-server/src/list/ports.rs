@@ -23,6 +23,8 @@ pub(crate) use hangar_session_ports::owners::{StopFacts, session_keys};
 pub(crate) const UNAVAILABLE: &str = "session_ports_unavailable";
 /// Porta de sessão sem loopback só dela: só log, o túnel segue a ordem de sempre.
 pub(crate) const UNREACHED: &str = "session_port_unreached";
+/// Mapa do túnel sem rodada recente: só log, o túnel segue a ordem de sempre.
+pub(crate) const MAP_STALE: &str = "session_port_map_stale";
 
 fn pid_of(value: &Value) -> Option<u32> { value.as_u64().and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0) }
 
@@ -54,8 +56,7 @@ static UNREACHED_LAST: LazyLock<Mutex<BTreeSet<u16>>> = LazyLock::new(Mutex::def
 /// Tiques da lista sem rodada nova antes de o mapa do túnel deixar de valer.
 const DIAL_STALE: Duration = Duration::from_millis(4 * super::hub::TICK.as_millis() as u64);
 
-/// O mapa do túnel e a hora da rodada que o gravou. A lista fechada para o produtor sem rodada que limpe o mapa, e
-/// processo trocado de porta nesse meio desviaria a conexão para ele: mapa velho não vale.
+/// O mapa do túnel e a hora da rodada que o gravou: mapa sem rodada recente não vale.
 #[derive(Default)]
 struct DialMap { at: Option<Instant>, ports: HashMap<u16, IpAddr>, stale_noted: bool }
 
@@ -67,7 +68,7 @@ impl DialMap {
         // ao 127.0.0.1 calado.
         if !self.stale_noted {
             self.stale_noted = true;
-            tracing::warn!(code = "session_port_map_stale", port, "mapa do túnel sem rodada recente; a porta segue a ordem de sempre");
+            tracing::warn!(code = MAP_STALE, port, "mapa do túnel sem rodada recente; a porta segue a ordem de sempre");
         }
         None
     }
@@ -98,7 +99,7 @@ fn newly_unreached(last: &mut BTreeSet<u16>, now: BTreeSet<u16>) -> Vec<u16> {
     new
 }
 
-/// Uma linha por porta que fica sem caminho só da sessão, não uma por tique: a lista roda a cada 1,5 s.
+/// Uma linha por porta sem caminho só da sessão, não uma por tique da lista.
 fn note_unreached(now: BTreeSet<u16>) {
     let new = newly_unreached(&mut UNREACHED_LAST.lock().unwrap_or_else(|e| e.into_inner()), now);
     if !new.is_empty() {

@@ -250,6 +250,11 @@ async fn pump(socket: reqwest::Upgraded, focus: Option<String>, server: &str, ou
     }
 }
 
+/// Até quando quem pediu espera: o `deadline_ms` do pedido, contado de quando ele chegou.
+fn verb_deadline(request: &Value, arrived: Instant) -> Option<Instant> {
+    request["deadline_ms"].as_u64().map(|ms| arrived + Duration::from_millis(ms))
+}
+
 fn refusal(id: u64, error: &str) -> Out { Out::Text(json!({"id": id, "ok": false, "error": error}).to_string()) }
 
 fn reply_out(id: u64, reply: Reply, pairs: &[(u16, u16)]) -> Out {
@@ -336,6 +341,8 @@ impl Hangar {
     }
 
     fn host_execute(&mut self, server: String, mut request: Value, window: &mut Window, cx: &mut Context<Self>) {
+        // O prazo de quem pediu corre desde aqui, não desde a vez do verbo no navegador.
+        let arrived = Instant::now();
         let Some(id) = request["id"].as_u64() else { return };
         // O valor do cofre sai do pedido antes de tudo: nada adiante (args, log, resposta) o vê.
         let value = match request.as_object_mut().and_then(|o| o.remove("valor")) { Some(Value::String(v)) => Some(Secret::new(v)), _ => None };
@@ -354,11 +361,11 @@ impl Hangar {
             _ => None,
         };
         if matches!(verb.as_str(), "open" | "goto") {
-            let deadline = Instant::now() + request["deadline_ms"].as_u64().map_or(DEFAULT_DEADLINE, Duration::from_millis);
+            let deadline = verb_deadline(&request, arrived).unwrap_or(arrived + DEFAULT_DEADLINE);
             return self.host_navigate(server, id, key, session, verb, args.first().cloned().unwrap_or_default(), deadline, window, cx);
         }
         let (tx, rx) = futures::channel::oneshot::channel();
-        self.host_run_verb(key, verb, args, request["aba"].as_i64(), request["deadline_ms"].as_u64(), secret, tx, cx);
+        self.host_run_verb(key, verb, args, request["aba"].as_i64(), verb_deadline(&request, arrived), secret, tx, cx);
         let pairs = self.host_pairs(&server);
         cx.spawn(async move |_, _| {
             let reply = rx.await.unwrap_or_else(|_| Reply::Text("erro: o navegador fechou no meio do comando".into()));
@@ -430,9 +437,8 @@ impl Hangar {
             let run = |this: &WeakEntity<Hangar>, cx: &mut AsyncWindowContext, verb: &str, args: Vec<String>| {
                 let (tx, rx) = futures::channel::oneshot::channel();
                 let (key, verb) = (key.clone(), verb.to_owned());
-                // O que sobra do prazo do `open`/`goto`: o verbo não segura a vez depois de o servidor desistir.
-                let left = deadline.saturating_duration_since(Instant::now()).as_millis() as u64;
-                let sent = this.update(cx, |this, cx| this.host_run_verb(key, verb, args, None, Some(left), None, tx, cx)).is_ok();
+                // O prazo do `open`/`goto`: o verbo não segura a vez depois de o servidor desistir.
+                let sent = this.update(cx, |this, cx| this.host_run_verb(key, verb, args, None, Some(deadline), None, tx, cx)).is_ok();
                 async move { if sent { rx.await.ok() } else { None } }
             };
             let first = if ready { run(&this, cx, "goto", vec![url.clone()]).await } else {
@@ -479,7 +485,7 @@ impl Hangar {
     /// Verbo do agente remoto. No Linux só na página aberta no contexto dele: a que a pessoa abriu no painel ele não
     /// lê nem dirige.
     #[allow(clippy::too_many_arguments)]
-    fn host_run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>, deadline: Option<u64>,
+    fn host_run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>, deadline: Option<Instant>,
         secret: Option<Secret>, reply: futures::channel::oneshot::Sender<Reply>, cx: &mut Context<Self>) {
         #[cfg(target_os = "linux")]
         if let Some(browser) = self.side.browsers.get(&key).cloned() {
@@ -522,6 +528,13 @@ mod tests {
     fn the_focus_announces_fill_secret() {
         let focus: Value = serde_json::from_str(&focus_text("s")).unwrap();
         assert_eq!(focus, json!({"type": "focus", "session": "s", "caps": ["fill_secret"]}));
+    }
+
+    #[test]
+    fn the_deadline_counts_from_the_arrival_of_the_request() {
+        let arrived = Instant::now();
+        assert_eq!(verb_deadline(&json!({"id": 1, "deadline_ms": 8000}), arrived), Some(arrived + Duration::from_millis(8000)));
+        assert_eq!(verb_deadline(&json!({"id": 1}), arrived), None, "sem prazo, o teto do próprio verbo");
     }
 
     #[test]

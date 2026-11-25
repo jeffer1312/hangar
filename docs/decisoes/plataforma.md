@@ -71,7 +71,8 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
     sem isso, a sessão seguinte no `0.0.0.0` desviava a porta para o processo dela. A rota lê o mapa da
     última rodada da lista, sem varrer sockets por conexão. O mapa leva a hora da rodada e deixa de valer
     depois de quatro tiques (6 s) sem rodada nova: a lista fechada para o produtor sem limpá-lo, e o
-    túnel volta à ordem de sempre.
+    túnel volta à ordem de sempre. O mapa vencido registra `session_port_map_stale` no log, uma vez até a
+    rodada seguinte; o código está em `DIAGNOSTIC` e nunca chega à tela.
     Porta da sessão em que nenhum loopback chega só a ela (outro processo no mesmo `0.0.0.0`) fica na
     ordem de sempre e registra `session_port_unreached` no log, uma vez até a porta sair desse estado;
     o código está em `DIAGNOSTIC` e nunca chega à tela.
@@ -224,9 +225,12 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
 - **Lado do app e do CLI.** O nativo abre um canal anfitrião por servidor remoto do dono quando
   mostra uma sessão dele, e religa com espera de 1 s até 30 s. Sem app local, o `hangar-preview`
   manda o verbo por `browser-cmd`, com prazo de 20 s no `open`, 110 s no `login` (120 s pelas tools do MCP) e 45 s nos outros.
-  No app, cada verbo tem teto próprio (20 s; `wait`, o `--timeout` dele mais 2 s; nunca além do `deadline_ms`
-  menos uma folga): chamada CDP presa solta a vez com `erro: … (preso em <método>)` e grava `nav: verb_stuck` no
+  No app, cada verbo tem teto próprio (20 s; `wait`, o `--timeout` dele mais 2 s; nunca além do que sobra do
+  `deadline_ms` menos uma folga): chamada CDP presa solta a vez com `erro: … (preso em <método>)` e grava `nav: verb_stuck` no
   `native.log`. Tamanho e escala que o painel pede e falham também vão ao `native.log`.
+  - O `deadline_ms` conta da chegada do pedido ao app (canal anfitrião e `/cmd` local), não da vez do verbo. O
+    verbo que pega a vez com ele vencido responde `erro: <verbo> não começou: o prazo de quem pediu venceu na fila`
+    sem tocar a página: quem pediu já desistiu, e a ação feita depois disso ninguém confere.
   - `goto`, `back` e `reload` não ganham os 20 s: ficam com o limite que já tinham (a espera do carregamento,
     15 s depois da navegação) e só o `deadline_ms` os corta. Página lenta para abrir não é página presa.
   - Clique cortado depois do `mousePressed` manda o `mouseReleased` no mesmo ponto, sem esperar resposta além de
@@ -249,7 +253,15 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
     vai só no quadro ao app, zerado depois do envio, fora do pedido em curso, do estado e do `list`;
     a rota recusa o verbo e o campo. O app tira o `valor` do pedido antes de tudo e o controlador
     confere, na vez do verbo e antes do clique, que a página ainda é desse domínio
-    (`erro_cofre_dominio_diferente`). Decidido pelo dono: o canal em http na rede local também
+    (`erro_cofre_dominio_diferente`), e confere de novo na mesma chamada que digita: o valor entra por
+    `document.execCommand('insertText')` num `Runtime.callFunctionOn` sobre o próprio campo, que antes compara
+    o `location` do documento dele com o domínio aprovado e o foco no campo. O `Input.insertText` digitava no
+    que tivesse foco no momento, e uma navegação entre a conferência e a digitação levava o valor ao campo de
+    outra página. O `Fetch` (segurar a navegação durante o preenchimento) ficou de fora: pedia assinar
+    `Fetch.requestPaused` nos dois motores e soltar as navegações presas em todo corte de teto; a chamada única
+    vale igual no Chromium do Linux e no WebView2, que já usam o `callFunctionOn`. Limites: o host comparado é
+    o do documento do campo, então campo em iframe de outro domínio é recusado; navegação dentro do mesmo
+    documento (`history.pushState`) mantém o host e não é barrada. Decidido pelo dono: o canal em http na rede local também
     serve, como qualquer rota do dono.
   - App de antes do `fill-secret` pelo canal não anuncia `fill_secret` no `caps`: tomaria o verbo por
     desconhecido com o valor já recebido. O `vault_fill` confere o app escolhido

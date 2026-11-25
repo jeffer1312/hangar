@@ -96,7 +96,7 @@ const SETTLE_MS: u64 = 150;
 /// Teto de um verbo cuja página não responde: sem ele uma chamada CDP presa segurava a vez para sempre, e todo verbo
 /// seguinte esgotava o prazo com a página viva.
 const VERB_MS: u64 = 20_000;
-/// Folga abaixo do prazo de quem espera (`deadline_ms`), para o erro do teto ainda chegar antes de ele desistir.
+/// Folga abaixo do prazo de quem espera, para o erro do teto ainda chegar antes de ele desistir.
 const VERB_MARGIN_MS: u64 = 2_000;
 /// O efeito que o verbo cortado depois de mandar texto ou tecla pode ter deixado na página.
 const TEXT_SENT: &str = "o texto pode ter sido aplicado";
@@ -168,6 +168,10 @@ impl Drop for Secret {
 
 /// O alvo é o elemento com foco na raiz dele (documento, shadow root ou iframe) e, se for, se é campo de senha.
 const TARGET_FOCUS: &str = "function(){const r=this.getRootNode&&this.getRootNode();if(!r||r.activeElement!==this)return 'fora';return this.tagName==='INPUT'&&this.type==='password'?'senha':'campo'}";
+/// Confere e digita numa só tarefa do documento do campo: entre duas chamadas CDP a página pode navegar, e o
+/// `Input.insertText` digitaria no que tivesse foco no documento novo. Argumentos: valor, host aprovado (ou `null`)
+/// e se o campo é de senha. O host sai só de `location` e `===`, que a página não consegue trocar.
+const FILL_SECRET: &str = "function(v,h,p){if(h!==null){const n=location.hostname,o=location.protocol;if((o!=='http:'&&o!=='https:')||(n!==h&&n!==h+'.'&&n!=='['+h+']'))return 'dominio:'+n}const r=this.getRootNode&&this.getRootNode();if(!r||r.activeElement!==this)return 'fora';if(p&&!(this.tagName==='INPUT'&&this.type==='password'))return 'campo';if(typeof this.select==='function')this.select();else document.execCommand('selectAll',false);return document.execCommand('insertText',false,v)?'ok':'recusado'}";
 
 pub struct Controller<P: Page> {
     page: P,
@@ -441,9 +445,10 @@ impl<P: Page> Controller<P> {
     pub async fn run_with(&self, verb: &str, args: &[String], secret: Option<Secret>) -> Reply { self.run_until(verb, args, secret, None).await }
 
     /// `secret`: o valor do `fill-secret`, que nunca vem nos `args`. Toda resposta de texto sai com as senhas já
-    /// preenchidas trocadas por `••••`. `deadline_ms`: quanto quem pediu espera; o verbo para antes, com folga.
-    pub async fn run_until(&self, verb: &str, args: &[String], secret: Option<Secret>, deadline_ms: Option<u64>) -> Reply {
-        match self.run_inner(verb, args, secret, deadline_ms).await {
+    /// preenchidas trocadas por `••••`. `deadline`: até quando quem pediu espera, contado da chegada do pedido; o
+    /// verbo para antes, com folga.
+    pub async fn run_until(&self, verb: &str, args: &[String], secret: Option<Secret>, deadline: Option<Instant>) -> Reply {
+        match self.run_inner(verb, args, secret, deadline).await {
             Reply::Text(text) => Reply::Text(self.masked(text)),
             png => png,
         }
@@ -453,7 +458,7 @@ impl<P: Page> Controller<P> {
         self.state.borrow().secrets.iter().fold(text, |out, secret| mask(&out, &secret.forms))
     }
 
-    async fn run_inner(&self, verb: &str, args: &[String], mut secret: Option<Secret>, deadline_ms: Option<u64>) -> Reply {
+    async fn run_inner(&self, verb: &str, args: &[String], mut secret: Option<Secret>, deadline: Option<Instant>) -> Reply {
         if let Some(why) = self.blocked().filter(|_| ACTING.contains(&verb)) { return Reply::Text(why.into()); }
         // Antes da vez: o verbo que segura a vez pode estar parado justamente no diálogo.
         if verb == "dialog" { return Reply::Text(self.answer_dialog(args).await); }
@@ -471,6 +476,9 @@ impl<P: Page> Controller<P> {
         if let Some((kind, message, _)) = self.dialog_open.borrow().clone() && !WITH_DIALOG.contains(&verb) {
             return Reply::Text(format!("erro: a pagina esta com um dialogo {kind} aberto: “{message}”. Responda antes: {}", Self::dialog_hint(&kind)));
         }
+        // Prazo vencido na fila: quem pediu já desistiu, e o verbo não mexe na página por ele.
+        let left = deadline.map(|d| d.saturating_duration_since(Instant::now()).as_millis() as u64);
+        if left == Some(0) { return Reply::Text(format!("erro: {verb} não começou: o prazo de quem pediu venceu na fila")); }
         let (signal, opened) = futures::channel::oneshot::channel();
         *self.dialog_signal.borrow_mut() = Some(signal);
         let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or("");
@@ -523,7 +531,7 @@ impl<P: Page> Controller<P> {
                 }
             }
         };
-        let ceiling = verb_ceiling(verb, args, deadline_ms);
+        let ceiling = verb_ceiling(verb, args, left);
         let finished = match ceiling { Some(ms) => within(&self.page, ms, raced).await, None => Some(raced.await) };
         let result = match finished {
             Some(result) => result,
@@ -766,9 +774,10 @@ impl<P: Page> Controller<P> {
             Some("campo") => return Ok(format!("erro: erro_cofre_campo_nao_senha: {r} nao e um campo de senha (input type=password)")),
             _ => return Ok(format!("erro: fill-secret {r}: o foco nao ficou no campo da ref — rode snapshot")),
         }
-        self.call("Input.dispatchKeyEvent", json!({"type": "keyDown", "commands": ["selectAll"]})).await?;
         // shortcut: a cópia do valor no JSON do CDP não é zerada; trocar se o transporte passar a guardar os pedidos.
-        let insert = json!({"text": secret.as_str()});
+        let fill = json!({"objectId": object, "functionDeclaration": FILL_SECRET, "returnByValue": true,
+            "arguments": [{"value": secret.as_str()}, {"value": secret.host.as_deref()}, {"value": password}]});
+        let expected = secret.host.clone().unwrap_or_default();
         // Registrada antes de digitar: se o envio falhar depois de o texto chegar à página, o snapshot já a esconde.
         if password {
             let mut s = self.state.borrow_mut();
@@ -780,7 +789,17 @@ impl<P: Page> Controller<P> {
             }
         }
         self.secret_sent.set(true);
-        self.call("Input.insertText", insert).await?;
+        let typed = self.call("Runtime.callFunctionOn", fill).await?;
+        let said = returned(&typed)?.as_str().unwrap_or_default().to_owned();
+        match said.as_str() {
+            "ok" => {}
+            "campo" => return Ok(format!("erro: erro_cofre_campo_nao_senha: {r} nao e um campo de senha (input type=password)")),
+            "recusado" => return Ok(format!("erro: fill-secret {r}: a pagina nao aceitou o texto no campo — nada foi digitado")),
+            other => match other.strip_prefix("dominio:") {
+                Some(host) => return Ok(format!("erro: erro_cofre_dominio_diferente: a pagina saiu de {expected} para {host}")),
+                None => return Ok(format!("erro: fill-secret {r}: o foco saiu do campo antes de digitar — nada foi digitado; rode snapshot")),
+            },
+        }
         self.frame().await;
         Ok(format!("ok: fill-secret {r}"))
     }
@@ -1091,16 +1110,16 @@ fn exception_line(d: &Value) -> String {
 }
 
 /// Teto do verbo: `wait` tem o próprio (`--timeout` ou a pausa em ms) mais a folga; a navegação, nenhum além do
-/// carregamento que ela já espera; os outros, `VERB_MS`. Com `deadline_ms`, nunca além do prazo de quem espera,
-/// menos a folga (no máximo um quarto do prazo). `None` = sem teto.
-fn verb_ceiling(verb: &str, args: &[String], deadline_ms: Option<u64>) -> Option<u64> {
+/// carregamento que ela já espera; os outros, `VERB_MS`. Com `left_ms` (o que sobra do prazo de quem espera), nunca
+/// além dele, menos a folga (no máximo um quarto do que sobra). `None` = sem teto.
+fn verb_ceiling(verb: &str, args: &[String], left_ms: Option<u64>) -> Option<u64> {
     let own = match (verb, split_timeout(args)) {
         ("wait", Ok((rest, limit))) => Some(rest.first().and_then(|t| t.parse::<u64>().ok()).unwrap_or(limit).saturating_add(VERB_MARGIN_MS)),
         // Página lenta para abrir não é página presa: o teto padrão cortaria uma navegação que antes terminava.
         ("goto" | "back" | "reload" | "open", _) => None,
         _ => Some(VERB_MS),
     };
-    let cap = deadline_ms.map(|d| d - VERB_MARGIN_MS.min(d / 4));
+    let cap = left_ms.map(|d| d - VERB_MARGIN_MS.min(d / 4));
     match (own, cap) { (Some(own), Some(cap)) => Some(own.min(cap)), (own, cap) => own.or(cap) }
 }
 
@@ -1118,7 +1137,7 @@ fn note_panel(line: &str) {
 
 /// Uma linha no log do app por verbo preso: só verbo, método e teto, nunca conteúdo da página.
 fn note_stuck(verb: &str, method: Option<&str>, ms: u64) {
-    let line = format!("nav: verb_stuck verbo={verb} metodo={} teto_ms={ms}", method.unwrap_or("-"));
+    let line = format!("nav: verb_stuck verb={verb} method={} ceiling_ms={ms}", method.unwrap_or("-"));
     if cfg!(test) { eprintln!("{line}") } else { crate::log_line(&line) }
 }
 
@@ -1161,7 +1180,7 @@ mod tests {
     use serde_json::json;
     use std::cell::RefCell;
 
-    /// `stuck`: método que nunca responde, como página presa num laço de JS.
+    /// `stuck`: método (ou função do `callFunctionOn`) que nunca responde, como página presa num laço de JS.
     /// `panel`/`held`: o lado do motor do painel, que guarda o tamanho aplicado e obedece ao layout pedido.
     struct Fake { calls: RefCell<Vec<(String, Value)>>, answer: Box<dyn Fn(&str, &Value) -> Result<Value, String>>, stuck: &'static str,
         panel: Cell<Option<(u32, u32, f32)>>, held: Cell<bool> }
@@ -1173,7 +1192,9 @@ mod tests {
         fn hold_size(&self, held: bool) { self.held.set(held) }
         fn call(&self, method: &str, params: Value) -> impl Future<Output = Result<Value, String>> {
             self.calls.borrow_mut().push((method.into(), params.clone()));
-            if method == self.stuck { Either::Left(std::future::pending()) } else { Either::Right(std::future::ready((self.answer)(method, &params))) }
+            // `stuck` também casa a função de um `Runtime.callFunctionOn`: só aquela chamada fica presa.
+            let stuck = method == self.stuck || params["functionDeclaration"].as_str() == Some(self.stuck);
+            if stuck { Either::Left(std::future::pending()) } else { Either::Right(std::future::ready((self.answer)(method, &params))) }
         }
         fn sleep(&self, _: u64) -> impl Future<Output = ()> { std::future::ready(()) }
     }
@@ -1237,6 +1258,7 @@ mod tests {
                 {"nodeId": "2", "role": {"value": "textbox"}, "name": {"value": "Senha"}, "value": {"value": SECRET}, "backendDOMNodeId": 7, "childIds": []}]}),
             "DOM.getBoxModel" => json!({"model": {"content": [0, 0, 20, 0, 20, 10, 0, 10]}}),
             "DOM.resolveNode" => json!({"object": {"objectId": "o7"}}),
+            "Runtime.callFunctionOn" if p["functionDeclaration"] == FILL_SECRET => json!({"result": {"value": "ok"}}),
             "Runtime.callFunctionOn" => json!({"result": {"value": focus}}),
             "Runtime.evaluate" => match p["expression"].as_str().unwrap_or("") {
                 e if e.starts_with("(typeof window.__hangarSonda") => json!({"result": {"value": 1}}),
@@ -1247,6 +1269,11 @@ mod tests {
             },
             _ => json!({}),
         }
+    }
+
+    /// O valor saiu para a página: digitado no foco ou pela função que digita no campo.
+    fn typed_secret(c: &Controller<Fake>) -> bool {
+        c.page.calls.borrow().iter().any(|(m, p)| m == "Input.insertText" || p["functionDeclaration"] == FILL_SECRET)
     }
 
     fn fill_secret(c: &Controller<Fake>, kind: &str) -> String {
@@ -1282,8 +1309,9 @@ mod tests {
     fn a_filled_secret_never_comes_back_in_snapshot_eval_or_text() {
         let c = login_page("senha");
         assert_eq!(fill_secret(&c, "password"), "ok: fill-secret @e1");
-        let typed: Vec<Value> = c.page.calls.borrow().iter().filter(|(m, _)| m == "Input.insertText").map(|(_, p)| p.clone()).collect();
-        assert_eq!(typed, vec![json!({"text": SECRET})]);
+        let typed: Vec<Value> = c.page.calls.borrow().iter().filter(|(_, p)| p["functionDeclaration"] == FILL_SECRET).map(|(_, p)| p["arguments"].clone()).collect();
+        assert_eq!(typed, vec![json!([{"value": SECRET}, {"value": null}, {"value": true}])]);
+        assert!(!methods(&c).contains(&"Input.insertText".to_string()), "o valor nunca vai ao que estiver com foco");
         let snapshot = text(block_on(c.run("snapshot", &[])));
         assert_eq!(snapshot, "- RootWebArea \"Login\"\n  - textbox \"Senha\" [ref=@e1]", "o nó marcado sai sem value");
         assert_eq!(text(block_on(c.run("eval", &s(&["document.querySelector('input').value"])))), format!("ok: \"{}\"", crate::browser::preview_fmt::MASK));
@@ -1294,7 +1322,7 @@ mod tests {
 
     #[test]
     fn a_failed_insert_still_hides_the_secret() {
-        let c = ctl(|m, p| if m == "Input.insertText" { Err("caiu".into()) } else { Ok(login_answer("senha", m, p)) });
+        let c = ctl(|m, p| if p["functionDeclaration"] == FILL_SECRET { Err("caiu".into()) } else { Ok(login_answer("senha", m, p)) });
         assert!(!fill_secret(&c, "password").starts_with("ok:"));
         assert_eq!(text(block_on(c.run("snapshot", &[]))), "- RootWebArea \"Login\"\n  - textbox \"Senha\" [ref=@e1]");
         assert!(!text(block_on(c.run("text", &[]))).contains("S3nh"));
@@ -1320,13 +1348,39 @@ mod tests {
         assert_eq!(page_host("about:blank"), None);
     }
 
+    /// A página troca de domínio depois de o alvo confirmar o foco e antes de o valor entrar. O falso confere o host
+    /// como a função do campo confere: o valor nunca vai como digitação ao que estiver com foco, e o outro domínio
+    /// responde com o nome dele.
+    #[test]
+    fn a_navigation_between_the_check_and_the_typing_never_types_the_secret() {
+        let moved = std::rc::Rc::new(Cell::new(false));
+        let page = moved.clone();
+        let c = ctl(move |m, p| {
+            let host = if page.get() { "evil.io" } else { "github.com" };
+            Ok(match m {
+                "Page.getNavigationHistory" => json!({"currentIndex": 0, "entries": [{"url": format!("https://{host}/login")}]}),
+                "Runtime.callFunctionOn" if p["functionDeclaration"] == TARGET_FOCUS => { page.set(true); json!({"result": {"value": "senha"}}) }
+                "Runtime.callFunctionOn" if p["functionDeclaration"] == FILL_SECRET => {
+                    let said = if p["arguments"][1]["value"] == host { "ok".to_owned() } else { format!("dominio:{host}") };
+                    json!({"result": {"value": said}})
+                }
+                _ => login_answer("senha", m, p),
+            })
+        });
+        block_on(c.run("snapshot", &[]));
+        let said = text(block_on(c.run_with("fill-secret", &s(&["@e1", "password"]), Some(Secret::new(SECRET.into()).for_host("github.com".into())))));
+        assert!(moved.get(), "a página navegou depois da conferência de antes do clique");
+        assert_eq!(said, "erro: erro_cofre_dominio_diferente: a pagina saiu de github.com para evil.io");
+        assert!(!c.page.calls.borrow().iter().any(|(m, p)| m == "Input.insertText" || p["text"] == SECRET), "nada digitado no foco do documento novo");
+    }
+
     #[test]
     fn a_password_only_goes_into_a_password_field() {
         let c = login_page("campo");
         assert!(fill_secret(&c, "password").starts_with("erro: erro_cofre_campo_nao_senha:"));
         let c = login_page("fora");
         assert!(fill_secret(&c, "password").starts_with("erro: fill-secret @e1: o foco nao ficou"));
-        assert!(!methods(&c).contains(&"Input.insertText".to_string()), "nada digitado fora do campo de senha");
+        assert!(!typed_secret(&c), "nada digitado fora do campo de senha");
         // O usuário vai em campo de texto, e sem valor o verbo nem toca a página.
         assert_eq!(fill_secret(&login_page("campo"), "username"), "ok: fill-secret @e1");
         let c = login_page("senha");
@@ -1651,7 +1705,7 @@ mod tests {
         assert_eq!(methods(&c).iter().filter(|m| !m.ends_with(".enable")).count(), 2);
     }
 
-    /// Página com o clique preso no CDP, como a que travou depois de um `click` e esgotou todo verbo seguinte.
+    /// Página com o clique preso no CDP: o verbo seguinte precisa da vez de volta.
     fn stuck_click() -> Controller<Fake> {
         Controller::new(fake(|m, _| Ok(match m {
             "Accessibility.getFullAXTree" => tree(),
@@ -1670,13 +1724,49 @@ mod tests {
         assert_eq!(text(block_on(c.run("url", &[]))), "ok: \"http://a/\"");
     }
 
+    fn in_ms(ms: u64) -> Instant { Instant::now() + std::time::Duration::from_millis(ms) }
+
+    /// O teto que a resposta do verbo cortado cita (`… em N ms …`).
+    fn ceiling_in(said: &str) -> u64 {
+        said.split(" em ").nth(1).and_then(|rest| rest.split(' ').next()).and_then(|n| n.parse().ok()).unwrap_or_else(|| panic!("{said}"))
+    }
+
     #[test]
     fn a_shorter_deadline_bounds_the_verb_below_it() {
         let c = stuck_click();
         block_on(c.run("snapshot", &[]));
-        assert_eq!(text(block_on(c.run_until("click", &s(&["@e1"]), None, Some(8000)))), "erro: click não respondeu em 6000 ms (preso em Input.dispatchMouseEvent)");
+        let said = text(block_on(c.run_until("click", &s(&["@e1"]), None, Some(in_ms(8000)))));
+        assert!(said.starts_with("erro: click não respondeu em ") && said.ends_with("(preso em Input.dispatchMouseEvent)"), "{said}");
+        assert!((5000..=6000).contains(&ceiling_in(&said)), "{said}");
+        assert_eq!(verb_ceiling("click", &s(&["@e1"]), Some(8000)), Some(6000));
         // Prazo curto: a folga é no máximo um quarto dele.
-        assert_eq!(text(block_on(c.run_until("click", &s(&["@e1"]), None, Some(2000)))), "erro: click não respondeu em 1500 ms (preso em Input.dispatchMouseEvent)");
+        assert_eq!(verb_ceiling("click", &s(&["@e1"]), Some(2000)), Some(1500));
+    }
+
+    /// O prazo conta da chegada do pedido: o que passou antes de o verbo pegar a vez sai do teto dele.
+    #[test]
+    fn the_ceiling_uses_only_what_is_left_of_the_deadline() {
+        let c = stuck_click();
+        block_on(c.run("snapshot", &[]));
+        let deadline = in_ms(8000);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let said = text(block_on(c.run_until("click", &s(&["@e1"]), None, Some(deadline))));
+        assert!((4000..6000).contains(&ceiling_in(&said)), "{said}");
+    }
+
+    /// Verbo na fila atrás de um preso, com o prazo de quem pediu vencido ao pegar a vez: recusa sem tocar a página.
+    #[test]
+    fn a_verb_whose_deadline_expired_in_the_queue_never_touches_the_page() {
+        let c = stuck_click();
+        block_on(c.run("snapshot", &[]));
+        let expired = Instant::now();
+        let (first, second) = block_on(futures::future::join(c.run("click", &s(&["@e1"])),
+            c.run_until("click", &s(&["@e1"]), None, Some(expired))));
+        assert!(text(first).starts_with("erro: click não respondeu"));
+        assert_eq!(text(second), "erro: click não começou: o prazo de quem pediu venceu na fila");
+        let input = c.page.calls.borrow().iter().filter(|(m, _)| m.starts_with("Input.")).count();
+        assert_eq!(input, 2, "só o botão apertado e solto pelo primeiro");
+        assert!(!c.busy());
     }
 
     #[test]
@@ -1684,7 +1774,9 @@ mod tests {
         let c = Controller::new(fake(|_, _| Ok(json!({})), "Network.enable"), false);
         assert_eq!(text(block_on(c.run("wait", &s(&["--idle", "--timeout", "30000"])))), "erro: wait não respondeu em 32000 ms (preso em Network.enable)");
         // O prazo de quem espera continua mandando.
-        assert_eq!(text(block_on(c.run_until("wait", &s(&["--idle", "--timeout", "30000"]), None, Some(10_000)))), "erro: wait não respondeu em 8000 ms (preso em Network.enable)");
+        assert_eq!(verb_ceiling("wait", &s(&["--idle", "--timeout", "30000"]), Some(10_000)), Some(8000));
+        let said = text(block_on(c.run_until("wait", &s(&["--idle", "--timeout", "30000"]), None, Some(in_ms(10_000)))));
+        assert!((7000..=8000).contains(&ceiling_in(&said)) && said.ends_with("(preso em Network.enable)"), "{said}");
         assert_eq!(verb_ceiling("wait", &s(&["30000"]), None), Some(32_000), "a pausa em ms é o teto dela");
         assert_eq!(verb_ceiling("click", &s(&["@e1"]), None), Some(VERB_MS));
     }
@@ -1698,7 +1790,8 @@ mod tests {
             assert_eq!(verb_ceiling(verb, &s(&["http://a/"]), Some(45_000)), Some(43_000), "{verb}");
         }
         let c = Controller::new(fake(|_, _| Ok(json!({})), "Page.navigate"), false);
-        assert_eq!(text(block_on(c.run_until("goto", &s(&["http://a/"]), None, Some(8000)))), "erro: goto não respondeu em 6000 ms (preso em Page.navigate)");
+        let said = text(block_on(c.run_until("goto", &s(&["http://a/"]), None, Some(in_ms(8000)))));
+        assert!(said.starts_with("erro: goto não respondeu em ") && (5000..=6000).contains(&ceiling_in(&said)), "{said}");
     }
 
     /// Clique cortado com o botão apertado: o `mouseReleased` sai no mesmo ponto, e o próximo verbo não herda o botão.
@@ -1719,12 +1812,12 @@ mod tests {
     /// antes, é a falha de sempre.
     #[test]
     fn a_fill_secret_cut_after_typing_says_the_value_may_be_in() {
-        let c = Controller::new(fake(|m, p| Ok(login_answer("senha", m, p)), "Input.insertText"), false);
+        let c = Controller::new(fake(|m, p| Ok(login_answer("senha", m, p)), FILL_SECRET), false);
         let said = fill_secret(&c, "password");
-        assert_eq!(said, "erro: erro_cofre_incerto: fill-secret não confirmou em 20000 ms; o valor pode ter sido digitado (preso em Input.insertText)");
-        let c = Controller::new(fake(|m, p| Ok(login_answer("senha", m, p)), "Input.dispatchKeyEvent"), false);
-        assert_eq!(fill_secret(&c, "password"), "erro: fill-secret não respondeu em 20000 ms (preso em Input.dispatchKeyEvent)");
-        assert!(!methods(&c).contains(&"Input.insertText".to_string()));
+        assert_eq!(said, "erro: erro_cofre_incerto: fill-secret não confirmou em 20000 ms; o valor pode ter sido digitado (preso em Runtime.callFunctionOn)");
+        let c = Controller::new(fake(|m, p| Ok(login_answer("senha", m, p)), "DOM.resolveNode"), false);
+        assert_eq!(fill_secret(&c, "password"), "erro: fill-secret não respondeu em 20000 ms (preso em DOM.resolveNode)");
+        assert!(!typed_secret(&c));
     }
 
     /// `type` e `fill` cortados depois de mandar o texto: a resposta diz que ele pode ter entrado; cortado antes de

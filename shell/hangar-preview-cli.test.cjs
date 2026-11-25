@@ -323,52 +323,52 @@ test('objetivo com o print recusado: o passo 1 fraco registra a falha, o passo 2
 
 // Sem app nesta máquina (sem `_srv.json`), o servidor daqui repassa cada verbo ao app de outra máquina. O falso grava o
 // print do `shot` no caminho absoluto pedido, como o servidor de verdade faz na máquina da sessão.
-async function servidorRemoto() {
-  const verbos = [];
+async function remoteServer() {
+  const verbs = [];
   const server = http.createServer((req, res) => {
-    let bruto = '';
-    req.on('data', (d) => { bruto += d; });
+    let raw = '';
+    req.on('data', (d) => { raw += d; });
     req.on('end', () => {
-      const { verbo, args = [] } = JSON.parse(bruto || '{}');
-      verbos.push(verbo);
-      const texto = (status, corpo) => { res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(corpo); };
-      if (verbo === 'host') {
+      const { verbo: verb, args = [] } = JSON.parse(raw || '{}');
+      verbs.push(verb);
+      const text = (status, body) => { res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(body); };
+      if (verb === 'host') {
         res.writeHead(409, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ detail: { code: 'browser_host_none', msg: 'x', params: {} } }));
-      } else if (verbo === 'snapshot') {
-        texto(200, '- RootWebArea "Lista"\n  - button "Novo" [ref=@e1]');
-      } else if (verbo === 'shot') {
+      } else if (verb === 'snapshot') {
+        text(200, '- RootWebArea "Lista"\n  - button "Novo" [ref=@e1]');
+      } else if (verb === 'shot') {
         fs.writeFileSync(args[0], png(1280, 800));
-        texto(200, `ok: shot ${args[0]}`);
+        text(200, `ok: shot ${args[0]}`);
       } else {
-        texto(200, 'erro: verbo inesperado');
+        text(200, 'erro: verbo inesperado');
       }
     });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  return { verbos, porta: server.address().port, fechar: () => server.close() };
+  return { verbs, port: server.address().port, close: () => server.close() };
 }
 
 test('confere com a sessao no app de outra maquina le o print que o servidor gravou', async () => {
-  const jevFalso = await jevDoConfere(0.5, 0.7);
-  const srv = await servidorRemoto();
+  const fakeJev = await jevDoConfere(0.5, 0.7);
+  const srv = await remoteServer();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hangar-preview-remoto-'));
   fs.mkdirSync(path.join(home, '.hangar', 'config'), { recursive: true });
   fs.writeFileSync(path.join(home, '.hangar', 'config', '.env'), 'CP_AUTH_TOKEN=teste\n');
 
   const r = await rodarCli(['confere', 'a lista mostra o botao Novo', '--sessao', 'sessaoteste'], {
     home,
-    env: { ...jevFalso.env, PORT: String(srv.porta), USERPROFILE: home },
+    env: { ...fakeJev.env, PORT: String(srv.port), USERPROFILE: home },
   });
-  srv.fechar();
-  jevFalso.fechar();
+  srv.close();
+  fakeJev.fechar();
 
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim(), 'confere: 0.70');
   assert.match(r.stderr, /usando o navegador do app desktop de outra máquina/);
-  assert.deepEqual(srv.verbos, ['host', 'snapshot', 'shot']);
-  assert.equal(jevFalso.corpos.length, 2);
-  assert.ok(jevFalso.corpos[1].state.tela, 'o print gravado pelo servidor vai ao Jev');
+  assert.deepEqual(srv.verbs, ['host', 'snapshot', 'shot']);
+  assert.equal(fakeJev.corpos.length, 2);
+  assert.ok(fakeJev.corpos[1].state.tela, 'o print gravado pelo servidor vai ao Jev');
 });
 
 test('shot com --max e sem caminho grava no caminho padrao, nunca num arquivo chamado --max', async () => {

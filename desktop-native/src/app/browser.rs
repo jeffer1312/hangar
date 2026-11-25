@@ -2424,11 +2424,11 @@ impl Hangar {
     }
 
     /// Um verbo do `/cmd` no navegador da sessão `key`: o executor do servidor local e do canal anfitrião.
-    /// `deadline`: quanto quem pediu espera (ms); o controlador solta a vez antes.
+    /// `deadline`: até quando quem pediu espera, contado da chegada do pedido; o controlador solta a vez antes.
     #[cfg(not(target_os = "macos"))]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>,
-        secret: Option<crate::browser::control::Secret>, deadline: Option<u64>, reply: futures::channel::oneshot::Sender<crate::browser::control::Reply>,
+        secret: Option<crate::browser::control::Secret>, deadline: Option<std::time::Instant>, reply: futures::channel::oneshot::Sender<crate::browser::control::Reply>,
         cx: &mut Context<Self>) {
         use crate::browser::control::Reply;
         fn answer(reply: futures::channel::oneshot::Sender<Reply>, text: String) { let _ = reply.send(Reply::Text(text)); }
