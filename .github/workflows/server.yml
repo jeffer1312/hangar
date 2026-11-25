@@ -1,4 +1,4 @@
-# hangar-server e hangar-cano (crates/, Rust): testa e compila Linux e Windows e publica numa release FIXA
+# hangar-server e hangar-cano (crates/, Rust): testa e compila o Linux e publica numa release FIXA
 # `server-latest`, reescrita a cada push na main, como o `native-latest` do native.yml. O instalador e a atualização
 # leem o `server-latest.json` dessa release e conferem o sha256 de cada binário antes de usar.
 # O canal de testes (`beta`) publica na pré-release `server-beta`, que é a que o backend/app/rust_release.py procura
@@ -6,8 +6,9 @@
 # No pull request o gate.yml roda só as travas das regras; `workflow_dispatch` em outra branch testa e compila sem
 # publicar.
 # Trocar o canal é trocar `beta` aqui, no native.yml e nos *-macos.yml.
-# Os jobs estão no server-jobs.yml. O macOS roda à parte, no server-macos.yml, depois que este run termina: nada
-# daqui nem o Package (que dispara no fim deste run) esperam por ele.
+# Os jobs estão no server-jobs.yml. O Windows roda ao lado, no server-windows.yml, com run próprio: o Package dispara
+# no fim de cada um e publica o sistema que ficou pronto, sem o Linux esperar o Windows. O macOS roda à parte, no
+# server-macos.yml, depois que este run termina, e nada espera por ele.
 name: Server
 
 on:
@@ -39,16 +40,12 @@ jobs:
       branch: ${{ github.ref_name }}
       # glibc 2.28 via cargo-zigbuild: o gnu comum do ubuntu-latest exige a glibc do runner e não abre em
       # sistema mais antigo (Debian 10/11, RHEL 8). O zigbuild linka contra a 2.28 e mantém o alocador do gnu.
-      # Falha do Windows não segura a release do Linux.
       sistemas: >-
         [
           {"os": "ubuntu-latest", "platform": "linux-x86_64", "exe": "", "target": "x86_64-unknown-linux-gnu",
-           "zigbuild": true, "dir": "target/x86_64-unknown-linux-gnu", "experimental": false},
-          {"os": "windows-latest", "platform": "windows-x86_64", "exe": ".exe", "target": "", "zigbuild": false,
-           "dir": "target", "experimental": true}
+           "zigbuild": true, "dir": "target/x86_64-unknown-linux-gnu", "experimental": false}
         ]
       cache_release: >-
         [
-          {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu", "zigbuild": true},
-          {"os": "windows-latest", "target": "", "zigbuild": false}
+          {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu", "zigbuild": true}
         ]

@@ -67,7 +67,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   O binário é o de `platforms.<sistema>` no `server-latest.json` da release da branch (sem a
   chave, o `commit` do topo); o contrato é o `protocol` dele ou o `RUST_SERVER_PROTOCOL` do commit. O checkout vai
   do commit desse binário até o mais novo do primeiro pai com conteúdo idêntico ao publicado nos
-  `paths` do push no `.github/workflows/server.yml` de lá, nunca recua, e o download usa o manifesto lido na
+  `paths` do push do workflow que compila o sistema (`server-windows.yml` no Windows, `server.yml` nos outros;
+  sem o do Windows no commit, o `server.yml`), nunca recua, e o download usa o manifesto lido na
   escolha; sem ler a lista, para no commit do binário. Só binário de commit fora de `origin/<branch>`
   cai no commit mais novo com o mesmo número. A tela conta as mudanças até esse commit e também oferece atualizar quando o binário
   instalado não é o publicado (código em dia, binário que saiu depois). Atrás do topo, a tela vem
@@ -119,22 +120,26 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   em paralelo, cada um com o seu erro; o binário só é gravado com a tela no lugar (tela que levanta
   erro volta o checkout, e binário novo sob o Python velho recusaria o protocolo). A conferência do Chromium roda no máximo uma vez por dia
   (marca `chromium-ok` com menos de 24 h e sem "falhou" pula).
-- **Build do CI: testes ao lado do build, e o push novo cancela o run substituído.** No `server.yml`
+- **Build do CI: testes ao lado do build, e o push novo cancela o run substituído.** No `server-jobs.yml`
   os testes de cada sistema são um job próprio, em paralelo ao build de release, e o `publish` daquele
   sistema só sobe com os dois artefatos dele (`server-<sistema>` e `testes-ok-<sistema>`). Na main e no
   canal, o push novo cancela os jobs de teste e de build do run anterior; o `publish` (Server e Native)
   tem grupo próprio sem cancelamento e nunca é cortado no meio do upload. Cache só a main grava, e quem
   grava apaga as cópias antigas do mesmo prefixo. O LTO completo do `dist` fica. Evidência em
   [CI paralelo e cancelamento](#ci-testes-em-paralelo-e-cancelamento-do-run-substituído-19102026).
-- **macOS no CI roda à parte e nada espera por ele.** `server.yml` e `native.yml` compilam só Linux e
-  Windows; os jobs estão em `server-jobs.yml` e `native-build.yml` (`workflow_call`). O `server-macos.yml`
+- **Cada sistema do servidor tem o próprio run no CI, e nenhum espera o outro.** O `server.yml` compila só o
+  Linux e o `server-windows.yml`, com os mesmos gatilhos, só o Windows; o Package escuta os dois e confere cada
+  sistema no workflow dele. Num run só, o `publish` e o Package do Linux esperavam os testes do Windows.
+  [Medição](#servidor-linux-e-windows-em-runs-separados-25112026).
+- **macOS no CI roda à parte e nada espera por ele.** O `native.yml` compila só Linux e Windows (o servidor,
+  como dito acima); os jobs estão em `server-jobs.yml` e `native-build.yml` (`workflow_call`). O `server-macos.yml`
   e o `native-macos.yml` disparam por `workflow_run` quando o Server ou o Native da main ou do `beta`
   termina, sobre o mesmo commit (`branch`/`ref` passados aos jobs: no `workflow_run` o `github.ref_name`
   e o `github.sha` são os da main). O Server macOS publica as entradas dele no `server-latest.json` pelas
   fontes por sistema; o Native macOS acrescenta os arquivos ao `native-latest.json` só se o manifesto
   ainda é do mesmo commit, e troca a linha dele nas notas, no mesmo grupo de concorrência do publish do
   Native (a release não tem gravação condicional). O topo do `server-latest.json` e a tag ficam no commit
-  mais novo entre as fontes, para o Mac atrasado não voltá-los. O Package escuta só Server e CI. Outras
+  mais novo entre as fontes, para o Mac atrasado não voltá-los. O Package escuta só Server, Server Windows e CI. Outras
   branches não testam macOS. Antes, o run inteiro esperava o Mac (cerca de 1 h a 1,5 h contra 20 min do
   Linux) e o Package e as publicações de Linux e Windows ficavam presas nele.
 - **O app nativo segue o canal do servidor desta máquina.** `pre_voo.alvo` fora da main → release
@@ -346,8 +351,8 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   `backend/.env` da máquina não migrada pelo cwd), senão na raiz; e a tarefa do Windows nasce com
   `Dir = "$raiz\backend"` (`install.ps1`). O PR que tirar `backend/` do pacote troca a pasta de
   trabalho da tarefa para a raiz junto.
-- **O pacote só sai de commit com o `ci.yml` (job `backend`) e os testes do `server.yml` daquele
-  sistema verdes.** O `package.yml` publica em `package-latest` (main) ou `package-<branch>`, com o
+- **O pacote só sai de commit com o `ci.yml` (job `backend`) e os testes do workflow do servidor daquele
+  sistema verdes** (`server.yml` no Linux, `server-windows.yml` no Windows). O `package.yml` publica em `package-latest` (main) ou `package-<branch>`, com o
   índice `package-<canal>.json` por último; sistema não pronto fica com a entrada anterior.
   Dependência sem wheel vira wheel no CI, a partir do sdist conferido por hash.
 - **Extração conferida.** O extrator (`crates/hangar-package`) extrai em `versions/<versao>.tmp/`,
@@ -1607,3 +1612,13 @@ está no CI) não exercitam a atualização nem a criação de sessão.
   `hangar-api` e `hangar-workspace`, mas o desktop também depende de `hangar-local-server` e
   `hangar-video`: mudança neles não rodava o `Native`. O `gate-areas.py` segue os `path` dos
   `Cargo.toml` (inclusive os `workspace = true`), e o filtro do `native.yml` ganhou os dois.
+
+## Servidor Linux e Windows em runs separados (25/11/2026)
+
+No merge do PR #522 (`4853833ac`), os jobs do run único do `server.yml` terminaram assim (UTC): build Linux 20:45,
+testes Linux 20:53, build Windows 21:00, testes Windows 21:18. O `publish` tem `needs: [testes, build]`, que espera
+a matriz inteira, então o Linux só publicou às 21:18; e o Package, que dispara por `workflow_run` no fim do run,
+só montou às 21:19. O Linux pronto esperou 25 minutos pelo Windows, que é experimental. Antes disso a separação
+existia só para o macOS (30/10/2026); a frase "Falha do Windows não segura a release do Linux" valia para falha, não
+para demora. O Windows foi para o `server-windows.yml`, run próprio com os mesmos gatilhos, e o Package passou a
+escutar os dois e a procurar os artefatos de cada sistema no workflow dele.

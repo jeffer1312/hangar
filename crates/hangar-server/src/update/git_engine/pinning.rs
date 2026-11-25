@@ -7,6 +7,15 @@ use super::{
 use serde_json::Value;
 // O número que o Python repetia em `RUST_SERVER_PROTOCOL` andou sempre igual a este.
 const PROTOCOL: &str = "crates/hangar-server/src/lib.rs";
+const SERVER_WORKFLOW: &str = ".github/workflows/server.yml";
+// Cada sistema é compilado pelo workflow dele; o macOS sai no fim do run do server.yml.
+fn build_workflow(platform: &str) -> &'static str {
+    if platform.starts_with("windows-") {
+        ".github/workflows/server-windows.yml"
+    } else {
+        SERVER_WORKFLOW
+    }
+}
 impl Service {
     pub fn protocol_at(&self, rev: &str) -> Option<u64> {
         let output = self.git(&["show", &format!("{rev}:{PROTOCOL}")], 30).ok()?;
@@ -83,16 +92,18 @@ impl Service {
         }
         None
     }
-    pub fn last_same_build(&self, published: &str, top: &str) -> String {
-        let Ok(workflow) = self.git(
-            &["show", &format!("{top}:.github/workflows/server.yml")],
-            30,
-        ) else {
-            return published.into();
+    pub fn last_same_build(&self, published: &str, top: &str, platform: &str) -> String {
+        let show = |path: &str| self.git(&["show", &format!("{top}:{path}")], 30);
+        // Só o arquivo ausente no commit cai no server.yml (branch de antes do workflow próprio do Windows); git que
+        // falhou ou estourou o prazo para no binário publicado.
+        let workflow = match show(build_workflow(platform)) {
+            Ok(output) if output.code == 0 => output,
+            Ok(_) if build_workflow(platform) != SERVER_WORKFLOW => match show(SERVER_WORKFLOW) {
+                Ok(output) if output.code == 0 => output,
+                _ => return published.into(),
+            },
+            _ => return published.into(),
         };
-        if workflow.code != 0 {
-            return published.into();
-        }
         let mut inside = false;
         let mut paths = vec![];
         for line in workflow.stdout.lines() {
@@ -176,7 +187,7 @@ impl Service {
             .git(&["merge-base", "--is-ancestor", &published, &top], 30)
             .is_ok_and(|v| v.code == 0)
         {
-            Some(self.last_same_build(&published, &top))
+            Some(self.last_same_build(&published, &top, platform))
         } else {
             self.newest_protocol(&top, want)
         };
@@ -263,3 +274,7 @@ pub fn published_api(release: Option<&Release>, platform: &str) -> u64 {
         .filter(|v| *v >= 1)
         .unwrap_or(1)
 }
+
+#[cfg(test)]
+#[path = "pinning_tests.rs"]
+mod tests;

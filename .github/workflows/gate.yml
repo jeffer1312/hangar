@@ -1,7 +1,7 @@
 # Portão de merge: um check só, `merge-gate`. Barra o pull request que descumpre uma regra do CLAUDE.md que a máquina
 # consegue conferir e o que não compila ou quebra um teste do que ele mudou: crates mudados e os que dependem deles
 # (o hangar-server em fatias paralelas), o desktop inteiro e os testes do Expo ligados aos arquivos mudados. As suítes
-# inteiras rodam no push da main e do canal (server.yml, native.yml e o mobile-suite daqui).
+# inteiras rodam no push da main e do canal (server.yml, server-windows.yml, native.yml e o mobile-suite daqui).
 # As regras que saem do diff estão em scripts/check-*; as que são teste, em scripts/rule-tests.py. Parte que o PR não
 # toca (scripts/gate-areas.py) é pulada; parte acionada precisa terminar verde.
 name: Portão

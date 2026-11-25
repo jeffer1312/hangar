@@ -1,0 +1,43 @@
+# hangar-server e hangar-cano no Windows, em run próprio ao lado do server.yml (Linux), com os mesmos gatilhos e os
+# jobs do server-jobs.yml. Run próprio porque o Package só dispara quando um run termina: no mesmo run, o Linux pronto
+# esperava os testes do Windows, que são os mais lentos. Publica as entradas de Windows na mesma release
+# (server-latest ou server-<branch>), pelas fontes por sistema do publish. Windows é experimental: falha dele não
+# segura nada, só não publica.
+name: Server Windows
+
+on:
+  # Só onde publica; a suíte em outra branch roda pelo workflow_dispatch.
+  push:
+    branches: [main, beta]
+    paths:
+      - "crates/**"
+      - "backend/tests/fixtures/**"
+      - "plugins/hangar/hooks/**"
+      - ".github/workflows/server-windows.yml"
+      - ".github/workflows/server-jobs.yml"
+  workflow_dispatch:
+
+# Na main e no canal cada run tem o próprio grupo: quem cancela o run que um push novo substituiu são os jobs de
+# teste e de build (concorrência por job, no server-jobs.yml); o `publish` nunca é cancelado no meio do upload.
+# Onde não publica, o push novo cancela o run anterior inteiro.
+concurrency:
+  group: ${{ (github.ref_name == 'main' || github.ref_name == 'beta') && format('server-windows-run-{0}', github.run_id) || format('server-windows-{0}', github.ref_name) }}
+  cancel-in-progress: ${{ github.ref_name != 'main' && github.ref_name != 'beta' }}
+
+jobs:
+  server:
+    uses: ./.github/workflows/server-jobs.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      branch: ${{ github.ref_name }}
+      sistemas: >-
+        [
+          {"os": "windows-latest", "platform": "windows-x86_64", "exe": ".exe", "target": "", "zigbuild": false,
+           "dir": "target", "experimental": true}
+        ]
+      cache_release: >-
+        [
+          {"os": "windows-latest", "target": "", "zigbuild": false}
+        ]
