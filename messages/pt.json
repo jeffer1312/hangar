@@ -8884,6 +8884,8 @@
   "native_create_mode_headless_help": "O Claude Code roda como processo do próprio Hangar, sem tmux: permissões e perguntas chegam direto no chat, sem ler tela. Não existe painel de terminal nem espelho — o histórico continua no .jsonl do Claude e dá pra retomar depois com `claude --resume`. O processo reinicia com o Hangar e retoma a conversa no próximo prompt.",
   "native_create_mode_tmux_help_codex": "A TUI do Codex abre numa sessão tmux desta máquina, com o app-server ao lado: dá pra abrir o painel de terminal e continuar a mesma conversa por lá.",
   "native_create_mode_headless_help_codex": "O app-server do Codex roda sem TUI, como processo do próprio Hangar: aprovações de comando e de arquivo chegam como cartão no chat. Não existe painel de terminal nem os pickers da TUI (/status, /approvals); o modo de permissão troca pelo app. Sobrevive ao restart do Hangar e a conversa continua no rollout do Codex.",
+  "native_create_mode_tmux_help_agy": "O Antigravity abre numa sessão tmux desta máquina: dá pra abrir o painel de terminal e continuar a mesma conversa por lá. O modo que pergunta antes de agir (manual) só existe sem terminal.",
+  "native_create_mode_headless_help_agy": "O Antigravity roda como processo do próprio Hangar, sem tmux: permissões e perguntas chegam direto no chat, inclusive no modo manual. Não existe painel de terminal; a conversa pode voltar para o terminal depois, pelo menu da sessão.",
   "native_create_beta": "Beta",
   "native_create_creating": "Criando…",
   "native_create_submit": "Nova sessão",

@@ -44,9 +44,8 @@ export function permissionModes(provider: string, headless: boolean): readonly s
 
 export const hasExecutionMode = (provider: string) => provider === 'claude' || provider === 'codex';
 
-/** Escolha entre com e sem terminal na criação do Expo. O Antigravity abre só com terminal enquanto o
- *  servidor recusa o modo sem terminal dele. */
-export const canChooseSurface = (provider: string) => provider === 'claude' || provider === 'codex';
+/** Quem escolhe entre com e sem terminal, na criação e na troca dentro da conversa. */
+export const canChooseSurface = (provider: string) => provider === 'claude' || provider === 'codex' || provider === 'antigravity';
 
 const CONTEXT_SUFFIX = '[1m]';
 /** Janela de 1M do Claude com motor GPT: o backend lê só o sufixo do `model` (engines.catalog_model). */

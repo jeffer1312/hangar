@@ -24,11 +24,11 @@ describe('opções de abertura', () => {
     expect(effortLevels('antigravity', [{ id: 'gemini-4-neon-high' }], 'gemini-4-neon-high')).toEqual([]);
   });
 
-  it('Antigravity só entra na criação do Expo, e só com terminal', () => {
+  it('Antigravity entra na criação do Expo, com e sem terminal', () => {
     expect(CREATE_SESSION_PROVIDERS).toContain('antigravity');
     expect(SESSION_PROVIDERS).not.toContain('antigravity');
     for (const p of SESSION_PROVIDERS) expect(CREATE_SESSION_PROVIDERS).toContain(p);
-    expect(canChooseSurface('antigravity')).toBe(false);
+    expect(canChooseSurface('antigravity')).toBe(true);
     expect(hasExecutionMode('antigravity')).toBe(false);
     expect(canChooseSurface('claude') && canChooseSurface('codex')).toBe(true);
     expect(hasExecutionMode('claude') && hasExecutionMode('codex')).toBe(true);

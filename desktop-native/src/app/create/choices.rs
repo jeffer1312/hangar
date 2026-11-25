@@ -716,8 +716,9 @@ impl NewSession {
         match (self.provider, self.headless && !self.headless_inherited()) {
             ("claude", _) => Some(&PERMISSIONS),
             ("codex", true) => Some(&CODEX_PERMISSIONS),
-            // Só com terminal por enquanto: sem o `manual`, que o `agy` com terminal não tem.
-            ("antigravity", _) => Some(&AGY_TERMINAL_PERMISSIONS),
+            ("antigravity", true) => Some(&AGY_HEADLESS_PERMISSIONS),
+            // Sem o `manual`, que o `agy` com terminal não tem.
+            ("antigravity", false) => Some(&AGY_TERMINAL_PERMISSIONS),
             _ => None,
         }
     }
@@ -758,6 +759,8 @@ impl NewSession {
 
     pub(super) fn build_permission_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(modes) = self.permissions() else { self.permission_pick = None; return };
+        // O `manual` escolhido sem terminal não vai para o agy com terminal, que recusaria a abertura.
+        if self.provider == "antigravity" && !self.permission.is_empty() && !modes.contains(&self.permission.as_str()) { self.permission.clear(); }
         let choices: Vec<ModelChoice> = std::iter::once(ModelChoice { id: String::new(), label: tr("create_permission_default"), hint: String::new() })
             .chain(modes.iter().map(|m| ModelChoice { id: (*m).into(), label: (*m).into(), hint: String::new() })).collect();
         let at = Self::pick_at(&choices, &self.permission);

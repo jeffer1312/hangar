@@ -60,6 +60,8 @@ impl NewSession {
 const PROVIDERS: [&str; 6] = ["claude", "codex", "pi", "kimi", "omp", "antigravity"];
 /// Os modos do `agy` com terminal: o `--mode` dele não abre no que pergunta antes de agir (`manual`).
 pub(super) const AGY_TERMINAL_PERMISSIONS: [&str; 4] = ["acceptEdits", "auto", "plan", "bypassPermissions"];
+/// Sem terminal o `agy` também abre no `manual`.
+pub(super) const AGY_HEADLESS_PERMISSIONS: [&str; 5] = ["acceptEdits", "auto", "plan", "manual", "bypassPermissions"];
 /// O web pergunta o passo da criação a cada 800 ms.
 const STEP_POLL: Duration = Duration::from_millis(800);
 /// Topo do diálogo: mais alto que o padrão do kit (um décimo da janela), para as duas colunas caberem.
@@ -69,8 +71,8 @@ fn provider_name(p: &str) -> &'static str {
     match p { "codex" => "Codex", "pi" => "Pi", "kimi" => "Kimi", "omp" => "OMP", "antigravity" => "Antigravity", _ => "Claude" }
 }
 
-/// O agente que escolhe entre com e sem terminal. O Antigravity abre só com terminal por enquanto.
-pub(crate) fn has_surfaces(provider: &str) -> bool { matches!(provider, "claude" | "codex") }
+/// O agente que escolhe entre com e sem terminal.
+pub(crate) fn has_surfaces(provider: &str) -> bool { matches!(provider, "claude" | "codex" | "antigravity") }
 
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct Root { pub(super) name: String, pub(super) path: String }
@@ -2290,9 +2292,10 @@ impl NewSession {
                 option_card(id, on, title, beta, summary, busy || self.headless_saving || self.headless_unread(), cx)
                     .on_click(cx.listener(move |this, _, window, cx| this.set_headless(headless, true, window, cx)))
             };
-            let help = match (codex, self.headless) {
-                (false, false) => "create_mode_tmux_help", (false, true) => "create_mode_headless_help",
-                (true, false) => "create_mode_tmux_help_codex", (true, true) => "create_mode_headless_help_codex",
+            let help = match (self.provider, self.headless) {
+                ("codex", false) => "create_mode_tmux_help_codex", ("codex", true) => "create_mode_headless_help_codex",
+                ("antigravity", false) => "create_mode_tmux_help_agy", ("antigravity", true) => "create_mode_headless_help_agy",
+                (_, false) => "create_mode_tmux_help", (_, true) => "create_mode_headless_help",
             };
             let this = cx.entity().downgrade();
             div().flex().flex_col().gap(px(8.))
@@ -3587,7 +3590,9 @@ mod tests {
         assert!(super::default_agy_account(&accounts[..1]).is_none());
         assert!(super::default_agy_account(&[]).is_none());
         assert!(super::AGY_TERMINAL_PERMISSIONS.iter().all(|mode| *mode != "manual"), "com terminal o agy não abre no que pergunta");
-        assert!(!super::has_surfaces("antigravity") && super::has_surfaces("claude") && super::has_surfaces("codex"));
+        assert!(super::AGY_HEADLESS_PERMISSIONS.contains(&"manual"), "sem terminal o agy abre no que pergunta");
+        assert!(super::has_surfaces("antigravity") && super::has_surfaces("claude") && super::has_surfaces("codex"));
+        assert!(!super::has_surfaces("pi") && !super::has_surfaces("kimi") && !super::has_surfaces("omp"));
     }
 
     #[test]
