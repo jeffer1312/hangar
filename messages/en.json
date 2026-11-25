@@ -8798,6 +8798,8 @@
   "native_new_chat_machine_demo_hint": "Sample sessions, no account",
   "native_new_chat_machine_offline": "offline",
   "native_new_chat_machine_more": "+{n}",
+  "native_new_chat_machine_accounts": "{n} accounts",
+  "native_new_chat_machine_other_accounts": "Other accounts",
   "native_create_copies_1": "1 copy",
   "native_create_copies": "{n} copies",
   "native_create_use_named": "Use {nome}",

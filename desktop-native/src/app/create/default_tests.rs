@@ -78,7 +78,7 @@ fn changing_server_invalidates_the_old_save_reply(cx: &mut TestAppContext) {
         dialog.default_save_seq = 1;
         dialog.default_saving = true;
         dialog.servers.set(Ok(vec![ServerChoice { key: "other".into(), label: "Outra máquina".into(),
-            address: "http://127.0.0.1:2".into(), token: "fixture-owner".into(), offline: false }]));
+            address: "http://127.0.0.1:2".into(), token: "fixture-owner".into(), offline: false, id: "other".into() }]));
         dialog.pick_machine("other".into(), window, cx);
         assert!(!dialog.default_saving);
         assert!(dialog.default_save_seq > 1);

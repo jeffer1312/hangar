@@ -552,7 +552,9 @@ pub(in crate::app) struct Link { api: Api, runtime: Arc<Runtime>, tx: async_chan
 /// Uma máquina da lista do app; `key` é o endereço normalizado. `offline`: a lista dela falhou na abertura do diálogo.
 #[derive(Clone)]
 pub(super) struct ServerChoice { pub(super) key: String, pub(super) label: String, pub(super) address: String, pub(super) token: String,
-    pub(super) offline: bool }
+    pub(super) offline: bool,
+    /// Id do servidor na lista: dá a cor da máquina sem etiqueta, a mesma da barra de baixo.
+    pub(super) id: String }
 
 /// Os menus da tela sem sessão, cada um preso à própria pílula.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2608,9 +2610,59 @@ fn mark_pill(menu: Menu, open: bool, mark: AnyElement, text: String, alert: Opti
 }
 
 /// Ícone da etiqueta da máquina na cor dela; sem etiqueta, o monitor apagado de antes.
-fn machine_mark(tag: Option<&super::tags::Tag>, size: f32) -> AnyElement {
-    let color = tag.and_then(|t| t.color.as_deref()).and_then(theme::tag_color).unwrap_or_else(theme::faint);
-    chrome::small_icon(tag.map_or(IconName::Monitor, |t| super::tags::machine_icon(&t.icon)), size, color).into_any_element()
+fn machine_mark(tag: Option<&super::tags::Tag>, id: &str, size: f32) -> AnyElement {
+    let (icon, color) = machine_look(tag, id);
+    chrome::small_icon(icon, size, color).into_any_element()
+}
+
+/// Ícone e cor da máquina: os da etiqueta; sem etiqueta, o notebook na cor da máquina, a mesma da barra de baixo.
+fn machine_look(tag: Option<&super::tags::Tag>, id: &str) -> (IconName, Hsla) {
+    let color = tag.and_then(|t| t.color.as_deref()).and_then(theme::tag_color).unwrap_or_else(|| theme::server_color(id));
+    (tag.map_or(IconName::Laptop, |t| super::tags::machine_icon(&t.icon)), color)
+}
+
+/// O quadrado da máquina no menu "Rodar em": o ícone na cor dela sobre um fundo da mesma cor, apagado.
+fn machine_tile(tag: Option<&super::tags::Tag>, id: &str) -> AnyElement {
+    let (icon, color) = machine_look(tag, id);
+    div().size(px(30.)).flex_shrink_0().rounded(px(8.)).bg(color.opacity(0.16)).flex().items_center().justify_center()
+        .child(chrome::small_icon(icon, 16., color)).into_any_element()
+}
+
+/// O grupo da conta pelo prefixo do id: as do CLIProxy entram no Codex, como na pílula de conta; prefixo fora dos agentes
+/// e das chaves de API (ou sem prefixo) cai num grupo só de outras contas, vazio.
+fn account_group(id: &str) -> &str {
+    match id.split_once(':').map_or("", |(p, _)| p) {
+        "cliproxy" => "codex",
+        p if p == "chave" || PROVIDERS.contains(&p) => p,
+        _ => "",
+    }
+}
+
+/// As contas da máquina por agente, na ordem dos agentes da tela: (agente, nomes em ordem). As chaves de API (`chave:`)
+/// formam um grupo só depois dos agentes; as outras contas vêm por último.
+fn account_groups(accounts: &HashMap<String, super::tags::Badge>) -> Vec<(String, Vec<String>)> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for (id, badge) in accounts {
+        let provider = account_group(id);
+        let name = badge.name.trim().to_owned();
+        match groups.iter_mut().find(|(p, _)| p == provider) {
+            Some((_, names)) => names.push(name),
+            None => groups.push((provider.to_owned(), vec![name])),
+        }
+    }
+    let rank = |p: &str| PROVIDERS.iter().position(|known| *known == p).unwrap_or(PROVIDERS.len() + usize::from(p.is_empty()));
+    groups.sort_by_key(|g| rank(&g.0));
+    for (_, names) in &mut groups { names.sort(); }
+    groups
+}
+
+/// O nome do agente na dica das contas.
+fn agent_title(provider: &str) -> String {
+    match provider {
+        "chave" => tr("agents_keys"),
+        "" => tr("new_chat_machine_other_accounts"),
+        p => provider_name(p).to_owned(),
+    }
 }
 
 /// Ícone da etiqueta da conta na cor dela (`provider` desenha o logo do agente); sem etiqueta, o usuário apagado.
@@ -2762,34 +2814,40 @@ impl NewSession {
 
     /// As contas da máquina `key` sob o nome dela no menu: o logo do agente (ou o ícone da etiqueta) e o nome, até cinco.
     fn machine_accounts(&self, key: &str) -> Option<AnyElement> {
-        // Uma linha só: o menu de máquina divide a altura com o Git da pasta e onde o agente trabalha. Entram as contas que
-        // cabem inteiras nessa linha (pela conta de letras), as outras viram "+N"; apertar todas deixava os nomes ilegíveis.
-        const LINE_CHARS: usize = 34;
-        const NAME_CHARS: usize = 16;
-        let mut accounts: Vec<(&String, &super::tags::Badge)> = self.tags.get(key)?.accounts.iter().collect();
-        if accounts.is_empty() { return None; }
-        // O evento chega num mapa: a ordem por agente e nome não pula de um evento para o outro.
-        let provider_of = |id: &str| id.split_once(':').map_or("", |(p, _)| p).to_owned();
-        let rank = |p: &str| PROVIDERS.iter().position(|known| *known == p).unwrap_or(PROVIDERS.len());
-        accounts.sort_by(|a, b| (rank(&provider_of(a.0)), &a.1.name).cmp(&(rank(&provider_of(b.0)), &b.1.name)));
-        let mut used = 0;
-        let shown = accounts.iter().take_while(|(_, badge)| {
-            used += badge.name.trim().chars().count().min(NAME_CHARS) + 3;
-            used <= LINE_CHARS
-        }).count().max(1);
-        let extra = accounts.len() - shown;
-        Some(div().w_full().min_w_0().overflow_hidden().flex().items_center().gap(px(10.)).text_xs().text_color(theme::muted())
-            .children(accounts.into_iter().take(shown).map(|(id, badge)| {
-                let provider = provider_of(id);
-                // O logo diz de qual agente é a conta: nomes como "default" se repetem entre agentes.
-                let mark = if provider == "chave" { chrome::small_icon(IconName::KeyRound, 11., theme::faint()).into_any_element() }
-                    else { super::tags::provider_mark(&provider, 11., theme::muted()) };
-                div().flex().items_center().gap(px(4.)).min_w_0()
+        // Um item por agente: o nome da conta quando é uma, "N contas" quando são mais. Nenhum agente some: sem espaço, os
+        // nomes encolhem com "…" e, se ainda não couber, a linha quebra. A lista inteira fica na dica da linha.
+        let groups = account_groups(&self.tags.get(key)?.accounts);
+        if groups.is_empty() { return None; }
+        Some(div().w_full().min_w_0().overflow_hidden().flex().flex_wrap().items_center().gap_x(px(10.)).gap_y(px(2.))
+            .text_xs().text_color(theme::muted())
+            .children(groups.into_iter().map(|(provider, names)| {
+                let mark = match provider.as_str() {
+                    "chave" => chrome::small_icon(IconName::KeyRound, 11., theme::muted()).into_any_element(),
+                    "" => chrome::small_icon(IconName::CreditCard, 11., theme::muted()).into_any_element(),
+                    p => super::tags::provider_mark(p, 11., theme::muted()),
+                };
+                // "N contas" e os logos nunca encolhem; só o nome de uma conta cede, guardando umas três letras e o "…".
+                let single = names.len() == 1;
+                let text = if single { names[0].clone() } else { tr("new_chat_machine_accounts").replace("{n}", &names.len().to_string()) };
+                div().flex().items_center().gap(px(4.))
+                    .map(|el| if single { el.min_w(px(46.)).flex_shrink_1() } else { el.flex_shrink_0() })
                     .child(div().flex_shrink_0().child(mark))
-                    .child(div().max_w(px(104.)).truncate().child(badge.name.trim().to_owned()))
+                    .child(if single { div().min_w(px(30.)).truncate().child(text) } else { div().whitespace_nowrap().child(text) })
             }))
-            .when(extra > 0, |el| el.child(div().flex_shrink_0().text_color(theme::accent()).child(tr("new_chat_machine_more").replace("{n}", &extra.to_string()))))
             .into_any_element())
+    }
+
+    /// A dica da linha da máquina: todas as contas, uma linha por agente.
+    fn accounts_tip(&self, key: &str) -> Option<String> {
+        let groups = account_groups(&self.tags.get(key)?.accounts);
+        (!groups.is_empty()).then(|| groups.iter().map(|(provider, names)| format!("{}: {}", agent_title(provider), names.join(", ")))
+            .collect::<Vec<_>>().join("\n"))
+    }
+
+    /// Id da máquina desta tela na lista de servidores; sem a lista ainda, o endereço, que só muda a cor.
+    fn machine_id(&self) -> String {
+        self.servers.ok().and_then(|list| list.iter().find(|c| self.current_server(c))).map(|c| c.id.clone())
+            .unwrap_or_else(|| self.link.api.identity())
     }
 
     /// A etiqueta da conta `id` (o id de `/api/credenciais`), lida na máquina desta tela.
@@ -2838,7 +2896,7 @@ impl NewSession {
         let place = if self.no_project() { None } else { self.place_label() };
         let text = place.map_or_else(|| machine.clone(), |place| format!("{machine} · {place}"));
         div().flex().items_center().gap(px(2.)).pt(px(2.)).pl(px(6.))
-            .child(mark_pill(Menu::Machine, open == Some(Menu::Machine), machine_mark(tag.as_ref(), 14.), text, None, tr("new_chat_where"),
+            .child(mark_pill(Menu::Machine, open == Some(Menu::Machine), machine_mark(tag.as_ref(), &self.machine_id(), 14.), text, None, tr("new_chat_where"),
                 self.branch_pill_label(cx).filter(|_| !self.no_project()), false, cx))
             .children(account.map(|(label, aria)| {
                 let label = badge.as_ref().map(|b| b.name.trim()).filter(|n| !n.is_empty()).map_or(label, str::to_owned);
@@ -3010,10 +3068,17 @@ impl NewSession {
                             let tag = self.machine_tag(&choice.key);
                             let name = super::tags::machine_name(tag, &choice.label, &choice.address);
                             // Etiqueta com outro nome: o nome desta tela fica ao lado, menor, para reconhecer a máquina.
-                            let hint = [(name != choice.label).then(|| choice.label.clone()), choice.offline.then(|| tr("new_chat_machine_offline")),
-                                current.then(|| tr("create_current"))].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                            // A atual fica só com o visto, como no celular: o "atual" escrito tirava a largura das contas. O leitor de
+                            // tela ainda ouve "atual".
+                            let hint = [(name != choice.label).then(|| choice.label.clone()), choice.offline.then(|| tr("new_chat_machine_offline"))]
+                                .into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                            let aria = [Some(name.clone()), (!hint.is_empty()).then(|| hint.clone()), current.then(|| tr("create_current"))]
+                                .into_iter().flatten().collect::<Vec<_>>().join(", ");
+                            let tip = self.accounts_tip(&choice.key);
                             menu_row_marked(SharedString::from(format!("new-chat-machine-{}", choice.key)), current,
-                                Some(machine_mark(tag, 14.)), name, hint, self.machine_accounts(&choice.key))
+                                Some(machine_tile(tag, &choice.id)), name, hint, self.machine_accounts(&choice.key))
+                                .accessibility_label(aria)
+                                .when_some(tip, |row, tip| row.tooltip(tip))
                                 .when(!current, |row| row.on_click(cx.listener(move |this, _, window, cx| this.pick_machine(key.clone(), window, cx))))
                                 .into_any_element()
                         }).collect();
@@ -4178,5 +4243,40 @@ mod worktree_tests {
         assert_eq!(worktree_body("nova", true, "develop"),
                    serde_json::json!({"branch": "nova", "new_branch": true, "base": "develop"}));
         assert_eq!(worktree_body("x", false, ""), serde_json::json!({"branch": "x"}));
+    }
+}
+
+#[cfg(test)]
+mod account_group_tests {
+    use super::{account_groups, HashMap};
+    use super::super::tags::Badge;
+
+    fn badge(name: &str) -> Badge { Badge { name: name.to_owned(), icon: "credit-card".to_owned(), color: None } }
+
+    #[test]
+    fn one_item_per_agent_in_screen_order_with_keys_last() {
+        let accounts: HashMap<String, Badge> = [
+            ("antigravity:/g", "Google (padrão)"), ("chave:openrouter", "OpenRouter"), ("codex:/b", "jeffer1312"),
+            ("claude:/b", "Felizardo 2"), ("codex:/a", "claude-200-2"), ("claude:/a", "Felizardo"),
+        ].into_iter().map(|(id, name)| (id.to_owned(), badge(name))).collect();
+        let groups = account_groups(&accounts);
+        let order: Vec<&str> = groups.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(order, ["claude", "codex", "antigravity", "chave"]);
+        assert_eq!(groups[0].1, ["Felizardo", "Felizardo 2"]);
+        assert_eq!(groups[2].1, ["Google (padrão)"]);
+        assert!(account_groups(&HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn cliproxy_joins_codex_and_unknown_prefixes_share_one_last_group() {
+        let accounts: HashMap<String, Badge> = [
+            ("estranho:x", "Zeta"), ("sem-prefixo", "Alfa"), ("cliproxy:cpa-1", "ChatGPT Pro"), ("codex:/a", "jeffer1312"),
+            ("chave:openrouter", "OpenRouter"),
+        ].into_iter().map(|(id, name)| (id.to_owned(), badge(name))).collect();
+        let groups = account_groups(&accounts);
+        let order: Vec<&str> = groups.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(order, ["codex", "chave", ""]);
+        assert_eq!(groups[0].1, ["ChatGPT Pro", "jeffer1312"]);
+        assert_eq!(groups[2].1, ["Alfa", "Zeta"]);
     }
 }
