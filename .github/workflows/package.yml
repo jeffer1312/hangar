@@ -3,11 +3,12 @@
 # `package-latest` (main) ou `package-<branch>`, com o índice `package-<canal>.json` escrito por último.
 #
 # Só publica um commit cujos testes passaram NAQUELE commit: o job `backend` de um run de push do ci.yml
-# (Python) e os testes do server.yml do mesmo sistema (artefatos `testes-ok-<sistema>` e `server-<sistema>`).
-# Roda quando qualquer um dos dois termina; enquanto o outro não terminou, sai sem publicar e o fim dele
-# dispara de novo. Commit sem run do server.yml (o filtro de caminhos dele não pegou nada) usa os binários
-# da release `server-*` se nenhum caminho daquele filtro mudou desde o commit deles. Sistema que não está
-# pronto ou falhou fica com a entrada anterior no índice.
+# (Python) e os testes do workflow do servidor daquele sistema (server.yml no Linux, server-windows.yml no Windows;
+# artefatos `testes-ok-<sistema>` e `server-<sistema>`). Roda quando qualquer um deles termina; sistema cujo
+# workflow ainda roda sai sem publicar e o fim dele dispara de novo, sem segurar o outro sistema. Commit sem run
+# do workflow do sistema (o filtro de caminhos dele não pegou nada) usa os binários da release `server-*` se
+# nenhum caminho daquele filtro mudou desde o commit deles. Sistema que não está pronto ou falhou fica com a
+# entrada anterior no índice.
 #
 # Dois jobs: `montar` roda o código do commit e o build do sdist sem permissão de escrita e sem token no
 # passo; `publicar` só sobe o que o `montar` deixou como artefato.
@@ -17,7 +18,7 @@ name: Package
 
 on:
   workflow_run:
-    workflows: [Server, CI]
+    workflows: [Server, Server Windows, CI]
     types: [completed]
     branches: [main, beta]
   workflow_dispatch:
@@ -85,9 +86,10 @@ jobs:
             nao "sem o job backend verde num run de push do ci.yml neste commit"
           fi
 
-          server=$(runs server.yml '')
+          case "$PLATFORM" in windows-*) wf=server-windows.yml ;; *) wf=server.yml ;; esac
+          server=$(runs "$wf" '')
           if [ -n "$server" ]; then
-            if grep -qv ' completed$' <<<"$server"; then nao "o server.yml ainda roda (o fim dele dispara de novo)"; fi
+            if grep -qv ' completed$' <<<"$server"; then nao "o $wf ainda roda (o fim dele dispara de novo)"; fi
             while read -r id status; do
               nomes=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts" --paginate --jq '.artifacts[] | select(.expired | not) | .name' </dev/null)
               if grep -qxF "server-$PLATFORM" <<<"$nomes" && grep -qxF "testes-ok-$PLATFORM" <<<"$nomes"; then
@@ -96,17 +98,17 @@ jobs:
                 exit 0
               fi
             done <<<"$server"
-            nao "o server.yml deste commit não tem build e testes verdes de $PLATFORM"
+            nao "o $wf deste commit não tem build e testes verdes de $PLATFORM"
           fi
 
-          # Sem run do server.yml: vale o binário publicado se nada do que o server.yml testa mudou desde o
-          # commit dele. A lista é a do filtro `on.push.paths` do server.yml deste commit.
+          # Sem run do $wf: vale o binário publicado se nada do que ele testa mudou desde o commit dele. A lista
+          # é a do filtro `on.push.paths` do $wf deste commit.
           if [ "$BRANCH" = main ]; then stag=server-latest; else stag="server-${BRANCH//[^A-Za-z0-9._-]/-}"; fi
-          mapfile -t caminhos < <(yq -r '.on.push.paths[]' .github/workflows/server.yml | sed 's/^/:(glob)/')
-          [ "${#caminhos[@]}" -gt 0 ] || { echo "::error::não li on.push.paths do server.yml"; exit 1; }
+          mapfile -t caminhos < <(yq -r '.on.push.paths[]' ".github/workflows/$wf" | sed 's/^/:(glob)/')
+          [ "${#caminhos[@]}" -gt 0 ] || { echo "::error::não li on.push.paths do $wf"; exit 1; }
           # Só a release inexistente é "não pronto"; rede, token ou limite da API derrubam o passo.
           if ! gh release view "$stag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>rel.err; then
-            grep -qi 'release not found' rel.err && nao "sem run do server.yml e sem a release $stag"
+            grep -qi 'release not found' rel.err && nao "sem run do $wf e sem a release $stag"
             cat rel.err >&2; exit 1
           fi
           gh release download "$stag" --repo "$GITHUB_REPOSITORY" --pattern server-latest.json --dir srv
@@ -114,7 +116,7 @@ jobs:
           [ -n "$de" ] && git cat-file -e "$de^{commit}" 2>/dev/null || nao "binário de $stag sem commit conhecido"
           rc=0; git diff --quiet "$de" "$SHA" -- "${caminhos[@]}" || rc=$?
           if [ "$rc" -ne 0 ]; then
-            [ "$rc" -eq 1 ] && nao "sem run do server.yml e algum caminho que ele testa mudou desde $de, o commit do binário de $stag"
+            [ "$rc" -eq 1 ] && nao "sem run do $wf e algum caminho que ele testa mudou desde $de, o commit do binário de $stag"
             exit "$rc"
           fi
           exe=; [ "$PLATFORM" = windows-x86_64 ] && exe=.exe

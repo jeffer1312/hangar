@@ -1,7 +1,7 @@
 # hangar-server e hangar-cano no macOS (Apple Silicon e Intel), à parte do server.yml: o runner de Mac é lento e
 # falha de forma intermitente, e nada depende deste run. Roda quando o Server da main ou do canal `beta` termina,
 # sobre o mesmo commit, e publica só as entradas de macOS na mesma release (server-latest ou server-<branch>);
-# Linux e Windows já publicaram sem esperar. O Package não escuta este workflow.
+# o Linux já publicou sem esperar, e o Windows publica pelo server-windows.yml. O Package não escuta este workflow.
 # `workflow_run` só vale com este arquivo na branch padrão (main), também para os runs da `beta`.
 name: Server macOS
 
