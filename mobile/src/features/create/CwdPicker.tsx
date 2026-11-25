@@ -9,8 +9,8 @@ import { readProject } from '../../stores/createPreferences';
 import { loadErrorText } from './loadError';
 import { useCanceledLoadRetry } from './useCanceledLoadRetry';
 import { Icon } from '../../ui/Icon';
+import { INK } from '../../theme/scale';
 import { useSettingsColors } from '../config/colors';
-import { TextTabs } from '../usage/HomeUsageCard';
 import * as m from '../../paraglide/messages';
 
 function scanMessage(error: FsScanError): string {
@@ -27,6 +27,10 @@ function relPath(root: string, path: string): string {
   const parent = cut > 0 ? root.slice(0, cut + 1) : '';
   return parent && path.startsWith(parent) ? path.slice(parent.length) : path;
 }
+
+// Linha do menu compacto: nome e, embaixo, quando foi mexida.
+const C_ROW = 56;
+const WT_ROW = 44;
 
 function parentOf(path: string): string {
   const cut = path.replace(/[/\\]+$/, '').search(/[/\\][^/\\]*$/);
@@ -255,6 +259,20 @@ export function CwdPicker({
       </Pressable>
     );
   };
+  // No menu compacto o grupo de worktrees é uma etiqueta "N cópias", com o mesmo toque que abre a lista delas.
+  const copiesBadge = (row: FolderRow) => {
+    const open = openGroups.has(row.entry.path);
+    const n = row.visible.length + row.merged.length;
+    return (
+      <Pressable onPress={() => toggle(setOpenGroups, row.entry.path)} hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }} accessibilityRole="button"
+        accessibilityLabel={`${row.entry.name}: ${m.native_create_worktrees({ n })}`} accessibilityState={{ expanded: open }}
+        style={({ pressed }) => [styles.cBadge, { backgroundColor: open || pressed ? c.accentDim : c.hover }]}>
+        <Text style={[styles.cBadgeTxt, { color: c.accent }]} numberOfLines={1}>
+          {n === 1 ? m.native_create_copies_1() : m.native_create_copies({ n })}
+        </Text>
+      </Pressable>
+    );
+  };
   const worktreeRow = (e: FsEntry, status: WorktreeStatus) => {
     const on = selected === e.path;
     const title = displayTitle(status);
@@ -325,7 +343,7 @@ export function CwdPicker({
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         // Altura explícita: dentro do painel que encolhe, a lista sem altura colapsava em uma linha.
-        style={[styles.cList, { height: Math.min(items.length, 5) * 44.5 }]}
+        style={[styles.cList, { height: items.slice(0, 8).reduce((h, it) => h + (it.kind === 'folder' ? C_ROW : WT_ROW), 0) }]}
         ItemSeparatorComponent={() => <View style={[styles.cSep, { backgroundColor: c.border }]} />}
         renderItem={({ item }) => {
           if (item.kind !== 'folder') return special(item);
@@ -341,15 +359,19 @@ export function CwdPicker({
                 accessibilityState={{ selected: on }}
                 style={({ pressed }) => [styles.cRow, pressed && !on && { backgroundColor: c.hover }]}
               >
-                <Icon name="Folder" size={16} color={c.faint} />
-                <View style={{ flex: 1 }}>
+                <Icon name="Folder" size={18} color={c.accent} />
+                <View style={styles.cText}>
                   <Text style={[styles.cName, { color: c.text }]} numberOfLines={1} ellipsizeMode="tail">{e.name}</Text>
-                  {searching ? <Text style={[styles.cPath, { color: c.muted }]} numberOfLines={1}>{rootFor(e).name} · {relPath(rootFor(e).path, e.path)}</Text> : null}
+                  {searching ? <Text style={[styles.cPath, { color: c.muted }]} numberOfLines={1}>{rootFor(e).name} · {relPath(rootFor(e).path, e.path)}</Text>
+                    : e.is_git || when ? (
+                      <View style={styles.cMeta}>
+                        {e.is_git ? <Icon name="GitBranch" size={11} color={c.faint} /> : null}
+                        {when ? <Text style={[styles.cWhen, { color: c.faint }]} numberOfLines={1}>{when}</Text> : null}
+                      </View>
+                    ) : null}
                 </View>
-                {e.is_git ? <Icon name="GitBranch" size={12} color={c.faint} /> : null}
-                {when ? <Text style={[styles.cWhen, { color: c.faint }]}>{when}</Text> : null}
               </Pressable>
-              {item.group ? groupButton(item.group) : null}
+              {item.group ? copiesBadge(item.group) : null}
               <Pressable onPress={() => drill(e.path, rootFor(e))} style={({ pressed }) => [styles.cDrill, pressed && { backgroundColor: c.hover }]}
                          accessibilityRole="button" accessibilityLabel={m.native_create_open({ nome: e.name })}>
                 <Icon name="ChevronRight" size={14} color={c.faint} />
@@ -372,13 +394,17 @@ export function CwdPicker({
         ) : !roots.length ? (
           note(m.arquivo_sem_raizes())
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll} keyboardShouldPersistTaps="handled">
-            <TextTabs
-              label={m.native_create_roots()}
-              value={activeRoot?.path ?? ''}
-              onChange={(p) => { const r = roots.find((x) => x.path === p); if (r) selectRoot(r); }}
-              options={roots.map((r) => ({ v: r.path, label: r.name }))}
-            />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll} contentContainerStyle={styles.cChips}
+                      accessibilityLabel={m.native_create_roots()} keyboardShouldPersistTaps="handled">
+            {roots.map((r) => {
+              const on = activeRoot?.path === r.path;
+              return (
+                <Pressable key={r.path} onPress={() => selectRoot(r)} accessibilityRole="button" accessibilityState={{ selected: on }}
+                           hitSlop={{ top: 6, bottom: 6 }} style={[styles.chip, on && styles.chipOn]}>
+                  <Text style={[styles.chipTxt, on && styles.chipTxtOn]} numberOfLines={1}>{r.name}</Text>
+                </Pressable>
+              );
+            })}
           </ScrollView>
         )}
 
@@ -420,17 +446,21 @@ export function CwdPicker({
         </View> : null}
         {searching && searchLoading && filtered.length ? note(m.comum_carregando()) : null}
 
-        <View style={styles.cFooter}>
+        <View style={[styles.cFooter, { borderTopColor: c.border }]}>
+          <Pressable onPress={() => setManualOpen((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: manualOpen }}
+                     style={({ pressed }) => [styles.cButton, styles.cButtonOutline, { borderColor: c.border }, pressed && { backgroundColor: c.hover }]}>
+            <Text style={[styles.cButtonTxt, { color: c.muted }]} numberOfLines={1}>{m.native_create_computer_folder()}</Text>
+          </Pressable>
           {activeRoot ? (
             <Pressable onPress={() => choose(path || activeRoot.path, activeRoot.path)} accessibilityRole="button"
-                       style={({ pressed }) => [styles.cPill, { borderColor: c.accent }, pressed && { backgroundColor: c.accentDim }]}>
-              <Text style={[styles.cPillTxt, { color: c.accent }]}>{m.native_create_use_folder()}</Text>
+                       style={({ pressed }) => [styles.cButton, { backgroundColor: c.accent }, pressed && styles.cPressed]}>
+              {/* O nome da pasta no botão diz o que o toque escolhe: a raiz ou a subpasta aberta. */}
+              <Text style={[styles.cButtonTxt, styles.cPrimaryTxt]} numberOfLines={1} ellipsizeMode="middle">
+                {m.native_create_use_named({ nome: !path || path === activeRoot.path ? activeRoot.name
+                  : path.split(/[/\\]/).filter(Boolean).pop() ?? activeRoot.name })}
+              </Text>
             </Pressable>
           ) : null}
-          <Pressable onPress={() => setManualOpen((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: manualOpen }}
-                     hitSlop={6} style={styles.cTextBtn}>
-            <Text style={[styles.cTextBtnTxt, { color: c.muted }]}>{m.native_create_computer_folder()}</Text>
-          </Pressable>
         </View>
         {manualOpen ? (
           <View style={styles.manual}>
@@ -745,21 +775,31 @@ const styles = StyleSheet.create((theme) => ({
   cList: { flexGrow: 0, flexShrink: 1 },
   cSkeletons: { gap: theme.base.space[4], paddingVertical: theme.base.space[3], paddingLeft: theme.base.space[2] },
   cSkeleton: { height: 8, borderRadius: theme.base.radius.full },
-  cRowWrap: { flexDirection: 'row', alignItems: 'center', borderRadius: theme.base.radius.sm },
-  cRow: { flex: 1, minWidth: 0, height: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingLeft: theme.base.space[2], borderRadius: theme.base.radius.sm },
+  cRowWrap: { flexDirection: 'row', alignItems: 'center', borderRadius: theme.base.radius.md },
+  cRow: { flex: 1, minWidth: 0, height: C_ROW, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], paddingLeft: theme.base.space[2], borderRadius: theme.base.radius.md },
+  cText: { flex: 1, minWidth: 0, gap: theme.base.space[0.5] },
+  cMeta: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1] },
   cName: { flexShrink: 1, fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
-  cWhen: { marginLeft: 'auto', paddingLeft: theme.base.space[2], fontSize: theme.base.text.xs, fontVariant: ['tabular-nums'] },
-  cDrill: { width: 40, height: 44, borderRadius: theme.base.radius.sm, alignItems: 'center', justifyContent: 'center' },
-  // Recuo até o texto: 8 de margem + ícone 16 + gap 10.
-  cSep: { height: StyleSheet.hairlineWidth, marginLeft: theme.base.space[8] + theme.base.space[0.5] },
-  cFooter: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], paddingTop: theme.base.space[0.5] },
+  cWhen: { flexShrink: 1, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] },
+  cBadge: { height: 24, paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.full, justifyContent: 'center', marginLeft: theme.base.space[1] },
+  cBadgeTxt: { fontSize: theme.base.text.xxxs, fontWeight: theme.base.weight.semibold },
+  cDrill: { width: 44, height: C_ROW, borderRadius: theme.base.radius.md, alignItems: 'center', justifyContent: 'center' },
+  // Recuo até o texto: 8 de margem + ícone 18 + gap 12.
+  cSep: { height: StyleSheet.hairlineWidth, marginLeft: theme.base.space[10] - theme.base.space[0.5] },
+  cChips: { flexDirection: 'row', gap: theme.base.space[1.5] },
+  cFooter: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingTop: theme.base.space[2], borderTopWidth: StyleSheet.hairlineWidth },
+  cButton: { flex: 1, minWidth: 0, height: 44, paddingHorizontal: theme.base.space[3], borderRadius: theme.base.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cButtonOutline: { borderWidth: 1 },
+  cButtonTxt: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
+  cPrimaryTxt: { color: INK.onAccent },
   cPill: { height: 32, paddingHorizontal: theme.base.space[3], borderRadius: theme.base.radius.full, borderWidth: 1, justifyContent: 'center' },
   cPillTxt: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
+  cPressed: { opacity: 0.85 },
   cManualInput: { flex: 1, fontFamily: theme.base.fontMono, fontSize: theme.base.text.sm },
   group: { minWidth: 44, height: 44, borderRadius: theme.base.radius.sm, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: theme.base.space[0.5], paddingHorizontal: theme.base.space[1] },
   groupTxt: { fontSize: theme.base.text.xs, fontVariant: ['tabular-nums'] },
   // Recuo de um nível: a worktree mora dentro do repositório da linha de cima.
-  wtRow: { minHeight: 44, marginLeft: theme.base.space[6] + theme.base.space[0.5], flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.sm },
+  wtRow: { minHeight: WT_ROW, marginLeft: theme.base.space[6] + theme.base.space[0.5], flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.sm },
   wtName: { flexShrink: 1, fontSize: theme.base.text.sm },
   wtBranch: { flex: 1, minWidth: 0, fontSize: theme.base.text.xs, fontFamily: theme.base.fontMono },
   wtChip: { fontSize: theme.base.text.xs, fontWeight: theme.base.weight.semibold },

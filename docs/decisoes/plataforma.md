@@ -3906,6 +3906,12 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
     sempre ("conta X com N% de uso; a sessão nasceu em Y"), e `account_source` vem `quota`.
     Decisão do usuário em 28/10: a regra é a mesma para todo cliente (D-003 da abertura única),
     sem confirmação;
+  - exceção pedida (24/11/2026): `force_account: true` com a conta pedida (`config_dir` ou
+    `codex_account`) mantém essa conta mesmo a 95% ou mais, com o aviso "conta X com N% de uso;
+    aberta nela a pedido" e `account_source` `explicit`. Sem conta pedida, 422
+    `erro_forcar_conta_sem_conta`. A tela só manda o campo quando a pessoa clica em "abrir nela
+    mesmo assim"; MCP `forcar_conta`, CLI `--forcar-conta`. Motivo: a troca deixava a pessoa
+    sem como usar a conta que ela sabe que ainda aguenta o trabalho;
   - cota da conta desconhecida mesmo depois da leitura: a escolhida fica; a padrão ou herdada vai
     para a de cota lida abaixo dos 95% e de mais folga, com aviso; nenhuma assim, fica;
   - destino só com leitura atual (`lida`), e conta no limite (100% ou `limit-spent.json` valendo)

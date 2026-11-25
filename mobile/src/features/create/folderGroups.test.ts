@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { FsEntry, WorktreeRepo, WorktreeStatus } from '@hangar/core';
-import { groupFolders } from './folderGroups';
+import { groupFolders, recentCwds, recentProjects } from './folderGroups';
 
 const dir = (name: string, mtime: number): FsEntry => ({ name, path: `/p/${name}`, is_git: true, has_claude_md: false, mtime });
 const wt = (name: string, extra: Partial<WorktreeStatus> = {}): WorktreeStatus => ({
@@ -28,4 +28,21 @@ it('worktree cujo repositório está fora da lista continua como pasta comum', (
 
 it('sem leitura de worktrees, só ordena por data', () => {
   expect(groupFolders([dir('a', 1), dir('b', 2)], []).map((r) => r.entry.name)).toEqual(['b', 'a']);
+});
+
+it('recentes: da sessão mais recente para trás, sem repetir a mesma pasta nem a pessoal', () => {
+  const s = (cwd: string, last_activity: number | null) => ({ cwd, last_activity });
+  expect(recentCwds([s('/p/a', 1), s('/p/b', 5), s('~', 9), s('/p/b/', 3), s('/p/c', null), s('', 8)], 3)).toEqual(['/p/b', '/p/a', '/p/c']);
+  expect(recentCwds(undefined, 3)).toEqual([]);
+});
+
+it('a pasta pessoal não entra nas recentes, em nenhuma das grafias do servidor', () => {
+  const s = (cwd: string, last: number) => ({ cwd, last_activity: last });
+  expect(recentCwds([s('/home/ana', 9), s('/Users/ana/', 8), s('C:\\Users\\ana', 7), s('/root', 6), s('/home/ana/proj', 5)], 3))
+    .toEqual(['/home/ana/proj']);
+});
+
+it('recentes: worktree conhecida vira o repositório, e a pasta escolhida sai da lista', () => {
+  const repos: WorktreeRepo[] = [{ repo: '/p/hangar', worktrees: [wt('hangar-menu')] }];
+  expect(recentProjects(['/p/hangar-menu', '/p/hangar', '/p/forge', '/p/web', '/p/api'], repos, '/p/forge', 3)).toEqual(['/p/hangar', '/p/web', '/p/api']);
 });

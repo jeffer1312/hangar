@@ -142,7 +142,7 @@ struct NewSession {
     service_tier: Option<String>, branch: Option<String>, #[serde(default)] new_branch: bool, base: Option<String>,
     codex_account: Option<String>, subagent_model: Option<String>, initial_prompt: Option<String>, engine_account: Option<String>,
     omp_profile: Option<String>, claude_customizations: Option<Value>, inherit: Option<bool>, #[serde(default)] remember_provider: bool,
-    resume: Option<String>, #[serde(default)] link: bool,
+    resume: Option<String>, #[serde(default)] link: bool, #[serde(default)] forcar_conta: bool,
 }
 
 impl NewSession {
@@ -152,7 +152,7 @@ impl NewSession {
             ("jev", self.jev.is_some()), ("code_mode", self.code_mode.is_some()), ("service_tier", self.service_tier.is_some()), ("branch", self.branch.as_deref().is_some_and(|b| !b.is_empty())),
             ("new_branch", self.new_branch), ("subagent_model", self.subagent_model.is_some()), ("initial_prompt", self.initial_prompt.is_some()),
             ("omp_profile", self.omp_profile.is_some()), ("claude_customizations", self.claude_customizations.is_some()),
-            ("inherit", self.inherit.is_some()), ("remember_provider", self.remember_provider), ("link", self.link)];
+            ("inherit", self.inherit.is_some()), ("remember_provider", self.remember_provider), ("link", self.link), ("forcar_conta", self.forcar_conta)];
         if let Some((key, _)) = unsupported.iter().find(|(_, set)| *set) { return Err(format!("{key} não combina com resume")); }
         let mut body = json!({"name": self.nome});
         for (key, value) in [("provider", &self.provider), ("engine", &self.engine), ("model", &self.model), ("config_dir", &self.conta),
@@ -175,7 +175,7 @@ impl NewSession {
             ("initial_prompt", self.initial_prompt.map(Value::from)), ("engine_account", self.engine_account.map(Value::from)),
             ("omp_profile", self.omp_profile.map(Value::from)), ("claude_customizations", self.claude_customizations),
             ("read_only", self.read_only.then_some(Value::Bool(true))), ("new_branch", self.new_branch.then_some(Value::Bool(true))),
-            ("remember_provider", self.remember_provider.then_some(Value::Bool(true)))];
+            ("remember_provider", self.remember_provider.then_some(Value::Bool(true))), ("force_account", self.forcar_conta.then_some(Value::Bool(true)))];
         for (key, value) in optional {
             if let Some(value) = value { body[key] = value; }
         }

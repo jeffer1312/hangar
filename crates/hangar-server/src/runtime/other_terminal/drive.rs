@@ -1653,8 +1653,9 @@ async fn agy_terms_answer(control: &mut Control<'_>, option: usize) -> Result<Ot
 }
 
 /// O ciclo do shift+tab do `agy`, na ordem da tela; `manual` é o modo padrão dele, sem rótulo no rodapé. O
-/// `bypassPermissions` só existe na abertura (`--dangerously-skip-permissions`) e não entra no ciclo.
+/// `bypassPermissions` é a flag `--dangerously-skip-permissions`, fora do ciclo: a rota reabre o pane para ele.
 const AGY_MODES: [&str; 4] = ["auto", "plan", "manual", "acceptEdits"];
+const AGY_LISTED: [&str; 5] = ["auto", "plan", "manual", "acceptEdits", "bypassPermissions"];
 const AGY_MODE_WAIT: Duration = Duration::from_secs(2);
 const AGY_MODE_POLL: Duration = Duration::from_millis(150);
 
@@ -1667,14 +1668,16 @@ async fn agy_permission(context: &mut Control<'_>, payload: &Value, set: bool) -
     };
     if !set {
         return Ok(context.reply(RuntimeDisposition::Accepted,
-            json!({"ok":true,"current":initial,"modes":AGY_MODES,"sondavel":false,"previous_non_plan":null,"uncertain":false})));
+            json!({"ok":true,"current":initial,"modes":AGY_LISTED,"sondavel":false,"previous_non_plan":null,"uncertain":false})));
     }
     let requested = payload["mode"].as_str().unwrap_or_default();
+    // A rota reabre o pane para entrar ou sair do bypass; aqui só confere que a tela permite fechá-lo.
+    let reopen = payload["reopen"] == true;
     let refuse = |context: &Control<'_>, code: &str| context.reply(RuntimeDisposition::Rejected,
         json!({"ok":false,"mode":initial,"current":initial,"requested":requested,"error_code":code}));
-    if requested == "bypassPermissions" { return Ok(refuse(context, "erro_permissao_so_na_abertura")); }
-    if !AGY_MODES.contains(&requested) { return Ok(refuse(context, "erro_permissao_invalida")); }
-    if requested == initial {
+    if requested == "bypassPermissions" && !reopen { return Ok(refuse(context, "erro_permissao_so_na_abertura")); }
+    if !AGY_LISTED.contains(&requested) { return Ok(refuse(context, "erro_permissao_invalida")); }
+    if requested == initial && !reopen {
         return Ok(context.reply(RuntimeDisposition::Accepted,
             json!({"ok":true,"mode":initial,"current":initial,"requested":requested,"changed":false,"previous_non_plan":null})));
     }
@@ -1686,6 +1689,10 @@ async fn agy_permission(context: &mut Control<'_>, payload: &Value, set: bool) -
         Some(composer) if composer.content.trim().is_empty() => {}
         Some(_) => return Ok(refuse(context, "erro_caixa_com_rascunho")),
         None => return Ok(refuse(context, "erro_permissao_leitura")),
+    }
+    if reopen {
+        return Ok(context.reply(RuntimeDisposition::Accepted,
+            json!({"ok":true,"mode":initial,"current":initial,"requested":requested,"requires_reopen":true})));
     }
     let mut current = initial;
     for _ in 0..AGY_MODES.len() {

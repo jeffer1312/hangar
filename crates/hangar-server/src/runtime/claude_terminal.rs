@@ -134,10 +134,11 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginCl
     if login(&argv) { return Ok(None); }
     let env = |var: &str| procs.env_var(i64::from(agent), var).ok().flatten().map(|v| v.to_string_lossy().into_owned()).filter(|v| !v.is_empty());
     let config_dir = env("CLAUDE_CONFIG_DIR").map_or_else(|| claude_base.to_owned(), PathBuf::from);
-    let record = config_dir.join("sessions").join(format!("{agent}.json"));
+    let owner = crate::list::discover::native_owner(&procs, &config_dir, i64::from(agent));
+    let record = config_dir.join("sessions").join(format!("{owner}.json"));
     let native = match crate::terminal_facts::read_native_record(&record) {
         Ok(Some(native)) => {
-            if native["pid"].as_u64() != Some(u64::from(agent)) { return Err(refused("terminal_native_record_changed", "o registro do Claude no terminal é de outro processo")); }
+            if native["pid"].as_i64() != Some(owner) { return Err(refused("terminal_native_record_changed", "o registro do Claude no terminal é de outro processo")); }
             native["sessionId"].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
         }
         Ok(None) => None,

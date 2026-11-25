@@ -863,7 +863,7 @@ mod tests {
         assert!(last.contains(&Effect::WakeQueue));
         let view = engine.control_view();
         assert_eq!((view["ready"].as_bool(),view["conversation_id"].as_str()),(Some(true),Some(OPENED)));
-        assert_eq!(view["rollout_path"],format!("/h/.gemini/antigravity-cli/brain/{OPENED}/.system_generated/logs/transcript_full.jsonl"));
+        assert_eq!(view["rollout_path"],std::path::Path::new("/h/.gemini/antigravity-cli/brain").join(OPENED).join(".system_generated").join("logs").join("transcript_full.jsonl").to_string_lossy().as_ref());
         assert!(engine.deliverable());
     }
 
@@ -1028,6 +1028,14 @@ mod tests {
         assert_eq!(replies(&done),[("m2".to_owned(),Disposition::Accepted)]);
         assert!(done.iter().any(|e|matches!(e,Effect::Policy { payload,.. } if payload["permission_mode"] == "plan")));
         assert_eq!(command(&mut engine,"m3",OperationKind::SetPermissionMode,json!({"mode":"Full Access"})).unwrap_err().code,"erro_modo_desconhecido");
+    }
+
+    #[test]
+    fn leaving_bypass_respawns_without_the_flag_in_the_mode_asked() {
+        let mut engine = opened(json!({"permission_mode":"bypassPermissions"}));
+        let plan = command(&mut engine,"m1",OperationKind::SetPermissionMode,json!({"mode":"plan"})).unwrap();
+        assert!(plan.iter().any(|e|matches!(e,Effect::Respawn { patch,.. } if patch["permission_mode"] == "plan")),"{plan:?}");
+        assert!(frames(&plan).is_empty(),"sair do bypass não vai por session/set_mode");
     }
 
     #[test]

@@ -46,7 +46,6 @@ PADROES+=('IP da tailnet (endereço real de máquina)::100\.(6[5-9]|[7-9][0-9]|1
 
 ZERO=0000000000000000000000000000000000000000
 achou=0
-enviados=()
 # Fora da varredura: o que o destino já tem e a main pública. O fork de um PR não tem a main, e
 # `$1` nem é nome de remoto quando o push vai por URL: sem isso o merge dela cairia inteiro aqui.
 # A ponta vem do próprio GitHub: `origin/main` local pode ser de um espelho privado ou estar velha.
@@ -75,7 +74,6 @@ while read -r _localref localsha _remoteref remotesha; do
         echo "pre-push: não consegui varrer $intervalo — trava incompleta, push recusado." >&2
         exit 1
     fi
-    enviados+=("$localsha $_remoteref $remotesha")
     adicionado="$(printf '%s\n' "$log_saida" | grep '^+' | grep -v '^+++' || true)"
     [[ -z "$adicionado" ]] && continue
     for entrada in "${PADROES[@]}"; do
@@ -106,70 +104,4 @@ FIM
     exit 1
 fi
 
-# Testes: push para a main, ou de branch com PR aberto, exige que `scripts/verificar-local` tenha
-# passado na árvore do commit enviado (Linux e, com git config hangar.verificarWindows, Windows).
-# Branch sem PR sobe livre: o PR nasce verificado pelo hook do `gh pr create` (.claude/settings.json).
-# A trava antiga perguntava pelo /dev/tty, que o push de um agente nunca tem: os testes eram pulados.
-# Emergência, explícita e nunca automática:  HANGAR_SEM_VERIFICACAO=1 git push ...
-if [[ -n "${HANGAR_SEM_VERIFICACAO:-}" ]]; then
-    echo "pre-push: verificação local PULADA por HANGAR_SEM_VERIFICACAO=1." >&2
-    exit 0
-fi
-if [[ "$(uname -s)" != Linux ]]; then
-    echo "pre-push: a verificação local só é exigida no Linux; aqui quem confere é o CI." >&2
-    exit 0
-fi
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
-raiz="$(git rev-parse --show-toplevel)" || exit 1
-cd "$raiz" || exit 1
-if [[ ! -x scripts/verificar-local ]]; then   # checkout de antes do script: nada a exigir
-    echo "pre-push: sem scripts/verificar-local executável neste checkout; verificação local não exigida." >&2
-    exit 0
-fi
-
-# Consulta do PR com prazo. Sem gh ou com a consulta falhando, o push segue com aviso: o CI confere.
-tem_pr() {   # $1 = branch; 0 = tem PR aberto, 1 = não tem, 2 = não deu para saber
-    command -v gh >/dev/null 2>&1 || return 2
-    local n
-    n="$(timeout 10 gh pr list --head "$1" --state open --json number --jq length 2>/dev/null)" || return 2
-    [[ "$n" =~ ^[0-9]+$ ]] || return 2
-    (( n > 0 ))
-}
-
-falta=0
-for par in "${enviados[@]}"; do
-    read -r s ref destino <<< "$par"
-    case "$ref" in
-        refs/heads/main) ;;
-        refs/heads/*)
-            tem_pr "${ref#refs/heads/}"
-            case $? in
-                0) ;;
-                1) continue ;;
-                *) echo "pre-push: AVISO: não consegui ver se ${ref#refs/heads/} tem PR aberto (gh ausente ou sem resposta); push segue sem a verificação local, o CI confere." >&2
-                   continue ;;
-            esac ;;
-        *) continue ;;
-    esac
-    # Base = o que o destino já tem: commit que já está noutra branch do remoto ainda conta quando
-    # chega à main ou ao PR. Branch nova no destino fica com a base padrão (o que nenhum remoto tem).
-    if [[ "$destino" != "$ZERO" ]] && git cat-file -e "$destino^{commit}" 2>/dev/null; then
-        scripts/verificar-local --base "$destino" --exigir "$s" || falta=1
-    else
-        scripts/verificar-local --exigir "$s" || falta=1
-    fi
-done
-if (( falta )); then
-    cat >&2 <<'FIM'
-
-  ── push recusado: falta a verificação local ───────────────────────────────
-  Push para a main ou de branch com PR aberto. Rode o que o CI rodaria
-  para estes commits (fila única na máquina):
-      scripts/verificar-local --commit <sha acima>
-  Emergência, sabendo o que está fazendo:
-      HANGAR_SEM_VERIFICACAO=1 git push ...
-
-FIM
-    exit 1
-fi
 exit 0

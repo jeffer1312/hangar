@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Roda nesta máquina o que está ligado aos arquivos que o commit muda (o rápido, que as travas
-# exigem) ou, com --completo, o que o CI rodaria para essas áreas, e grava o resultado pela árvore
-# (tree sha) para a trava pre-push conferir. Windows roda por SSH numa VM (git config
+# Roda nesta máquina o que está ligado aos arquivos que o commit muda (o rápido) ou, com --completo,
+# o que o CI rodaria para essas áreas, e grava o resultado pela árvore (tree sha). É opcional: quem
+# trava o PR é o portão do CI (gate.yml). Windows roda por SSH numa VM (git config
 # hangar.verificarWindows <host>), ao mesmo tempo que o Linux, só com arquivo de Windows no diff no
 # rápido, e com teto de tempo (HANGAR_VERIFICAR_WINDOWS_MAX, 600 s; 2400 s no completo).
 #
@@ -14,7 +14,6 @@
 #       scripts/verificar-local --passos "a b"  só esses passos do plano (ex.: repetir um que falhou)
 #       scripts/verificar-local --de-novo       repete os passos que já passaram nesta árvore
 #       scripts/verificar-local --plano         só mostra o que rodaria
-#       scripts/verificar-local --exigir <sha>  (pre-push) sai 1 se falta verificação
 #
 # Paralelismo: git config hangar.verificarProcessos <n> (ou HANGAR_VERIFICAR_PROCESSOS), padrão 4.
 # Teto do crates/target da árvore fixa: HANGAR_VERIFICAR_TARGET_GB (padrão 40); passou, limpa.
@@ -24,7 +23,7 @@
 # a segunda faixa: ela espera a primeira terminar, com os mesmos passos.
 #
 # Rust no rápido: só confere se o workspace compila (`cargo check`) e roda os testes dos crates
-# menores; os do hangar-server ficam no CI e no --completo. Antes de conferir, e antes do build de
+# mudados e dos que dependem deles, menos o hangar-server, cujos testes ficam no CI e no --completo. Antes de conferir, e antes do build de
 # Rust do --completo, espera a memória disponível (HANGAR_VERIFY_CHECK_GB e HANGAR_VERIFY_BUILD_GB)
 # por até HANGAR_VERIFY_WAIT segundos (padrão 300) e, sem ela, falha dizendo quanto falta.
 #
@@ -32,7 +31,7 @@
 # mudou desde a última verificação, nunca mistura binário de outro checkout e deixa o checkout
 # livre para editar enquanto roda. Uma verificação por vez na máquina (flock) e uma por vez na VM
 # (mutex), em prioridade baixa. Cada passo que passa fica gravado para a árvore: a próxima rodada
-# só repete o que falta.
+# só repete o que falta, e um commit cujo ancestral já passou roda só o que mudou desde ele.
 set -uo pipefail
 
 # Sem memória, o systemd-oomd mata a verificação, não a sessão do agente que a chamou. Na VM o
@@ -134,7 +133,7 @@ classificar() {
             scripts/verificar-local|scripts/test-verificar-local.sh|scripts/podar-target|scripts/test-podar-target.sh|\
             scripts/memory-scope|scripts/test_memory_scope.py|scripts/deploy.sh|scripts/test-deploy.sh|\
             scripts/test-claude-conta.sh|scripts/services-launchd.sh|scripts/test-services-launchd.sh|\
-            scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
+            scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in
             scripts/*statusline*) status=1 ;;
@@ -167,7 +166,7 @@ TODOS_LINUX="rust backend front mobile nativo shell statusline pi"
 TODOS_WINDOWS="rust statusline wrappers"
 RAPIDOS="rust_rapido backend_rapido front_rapido mobile_rapido"
 
-# O plano padrão, que as travas exigem: só o ligado aos arquivos mudados (cada passo `*_rapido` lê a
+# O plano padrão: só o ligado aos arquivos mudados (cada passo `*_rapido` lê a
 # lista); a bateria inteira é do CI e do `--completo`. Windows só com arquivo de Windows no diff.
 classificar_rapido() {
     local f lin=() win=()
@@ -186,7 +185,7 @@ classificar_rapido() {
             scripts/verificar-local|scripts/test-verificar-local.sh|scripts/podar-target|scripts/test-podar-target.sh|\
             scripts/memory-scope|scripts/test_memory_scope.py|scripts/deploy.sh|scripts/test-deploy.sh|\
             scripts/test-claude-conta.sh|scripts/services-launchd.sh|scripts/test-services-launchd.sh|\
-            scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
+            scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in scripts/*statusline*) status=1 ;; esac
         case "$f" in scripts/pi/*|scripts/test-pi-hangar-state.mjs) pi=1 ;; esac
@@ -381,11 +380,12 @@ passo_wrappers() {
 mudados() { grep -E "$1" <<< "$ARQUIVOS" || true; }
 
 passo_rust_rapido() {
-    local f others=0
+    local pacotes=() p args=()
     [[ -n "$(mudados '^crates/')" ]] || { echo "nenhum crate mudou"; return 0; }
-    while IFS= read -r f; do
-        case "$f" in crates/hangar-server/*) ;; *) others=1 ;; esac
-    done <<< "$(mudados '^crates/')"
+    # Os crates mudados e os que dependem deles, a mesma conta do portão do PR.
+    local lista
+    lista="$(python3 -I scripts/gate-areas.py --rust-packages <<< "$ARQUIVOS")" || return 1
+    mapfile -t pacotes < <(grep . <<< "$lista")
     wait_for_memory "$MEM_CHECK_GB" || return 1
     # Tipos, testes e exemplos do workspace inteiro: crate de base muda quem depende dele. O
     # hangar-server é conferido duas vezes (normal e de teste), cada rustc com alguns GB: primeiro as
@@ -393,11 +393,9 @@ passo_rust_rapido() {
     (cd crates && cargo check --locked --workspace --lib --profile test && \
         cargo check --locked --workspace --all-targets) || return 1
     # Os testes do hangar-server, com os dois rustc grandes dele, são do CI e do --completo.
-    # shortcut: roda os de todos os outros crates, e sem o servidor o cargo resolve outro grafo de
-    # features (uma segunda cópia das dependências que só ele configura); quando a divisão do
-    # servidor os deixar pesados, escolher só o crate mexido e quem depende dele.
-    (( others )) || return 0
-    (cd crates && cargo test --locked --no-fail-fast --workspace --exclude hangar-server)
+    for p in "${pacotes[@]}"; do [[ "$p" == hangar-server ]] || args+=(-p "$p"); done
+    (( ${#args[@]} )) || return 0
+    (cd crates && cargo test --locked --no-fail-fast "${args[@]}")
 }
 
 # Espera a memória disponível chegar a $1 GB, até $MEMORY_WAIT segundos; sai 1 se não chegar.
@@ -773,6 +771,26 @@ faltando() {
     echo "${saida[*]}"
 }
 
+# O commit mais novo entre a base e $1 (sem ele) que já passou em tudo o que o plano dele pedia
+# desde a mesma base: o que ele cobriu não muda, e a rodada só precisa do que mudou desde ele.
+ancora_verificada() {   # $1 = sha, $2 = base; imprime o commit ou nada
+    local c arquivos_c plano_c lin_c win_c
+    while IFS= read -r c; do
+        [[ -f "$(registro "$c" linux)" || -f "$(registro "$c" windows)" ]] || continue
+        arquivos_c="$(git -c core.quotepath=off diff --name-only --no-renames "$2" "$c")" || continue
+        if (( completo )); then plano_c="$(classificar <<< "$arquivos_c")"; else plano_c="$(classificar_rapido <<< "$arquivos_c")"; fi
+        lin_c="$(sed -n 's/^linux: //p' <<< "$plano_c")"
+        win_c="$(sed -n 's/^windows: //p' <<< "$plano_c")"
+        [[ -z "$VM" ]] && win_c=""
+        # shellcheck disable=SC2086
+        [[ -z "$(BASE_ATUAL="$2" faltando "$(registro "$c" linux)" $lin_c)" ]] || continue
+        # shellcheck disable=SC2086
+        [[ -z "$(BASE_ATUAL="$2" faltando "$(registro "$c" windows)" $win_c)" ]] || continue
+        echo "$c"
+        return
+    done < <(git rev-list --first-parent --max-count=30 "$1^" --not "$2" 2>/dev/null)
+}
+
 # ── Windows pela VM ───────────────────────────────────────────────────────────────────────────
 
 # Keepalive: VM que para de responder no meio derruba a conexão em ~1 min em vez de pendurar.
@@ -937,7 +955,6 @@ while (( $# )); do
         --so) so="${2:?}"; shift ;;
         --passos) so_passos="${2:?}"; shift ;;
         --plano) modo=plano ;;
-        --exigir) modo=exigir; commit="${2:?}"; shift ;;
         -h|--help) sed -n '2,26p' "$SCRIPT" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) erro "opção desconhecida: $1" ;;
     esac
@@ -973,6 +990,24 @@ fi
 [[ "$so" == windows ]] && plano_lin=""
 [[ "$so" == linux ]] && plano_win=""
 
+# Ancestral já verificado: o plano é o do que mudou desde ele, e o que ele cobriu entra no registro.
+base_passos="$base" cobertos_lin="" cobertos_win=""
+if (( ! tudo && ! de_novo )) && [[ -z "$so_passos" ]]; then
+    ancora="$(ancora_verificada "$sha" "$base")"
+    if [[ -n "$ancora" ]]; then
+        arquivos="$(git -c core.quotepath=off diff --name-only --no-renames "$ancora" "$sha")" || erro "não consegui comparar $ancora com $sha"
+        if (( completo )); then plano="$(classificar <<< "$arquivos")"; else plano="$(classificar_rapido <<< "$arquivos")"; fi
+        delta_lin="$(sed -n 's/^linux: //p' <<< "$plano")"
+        delta_win="$(sed -n 's/^windows: //p' <<< "$plano")"
+        [[ -z "$VM" || "$so" == linux ]] && delta_win=""
+        [[ "$so" == windows ]] && delta_lin=""
+        for p in $plano_lin; do [[ " $delta_lin " == *" $p "* ]] || cobertos_lin+="$p "; done
+        for p in $plano_win; do [[ " $delta_win " == *" $p "* ]] || cobertos_win+="$p "; done
+        echo "verificar-local: ${ancora:0:10} já passou; só o que mudou desde ele (cobertos: ${cobertos_lin:-nada}${cobertos_win:+, windows: $cobertos_win})."
+        plano_lin="$delta_lin" plano_win="$delta_win" base_passos="$ancora"
+    fi
+fi
+
 filtrar() {   # $1 = lista, resto = passos aceitos; imprime a lista só com os aceitos, na ordem dela
     local p saida=() aceitos=" ${*:2} "
     for p in $1; do [[ "$aceitos" == *" $p "* ]] && saida+=("$p"); done
@@ -986,16 +1021,6 @@ if [[ -n "$so_passos" ]]; then
     plano_lin="$(filtrar "$plano_lin" $so_passos)"
     # shellcheck disable=SC2086
     plano_win="$(filtrar "$plano_win" $so_passos)"
-fi
-
-if [[ "$modo" == exigir ]]; then
-    # shellcheck disable=SC2086
-    fl="$(faltando "$(registro "$sha" linux)" $plano_lin)"
-    # shellcheck disable=SC2086
-    fw="$(faltando "$(registro "$sha" windows)" $plano_win)"
-    [[ -z "$fl$fw" ]] && exit 0
-    echo "  ${sha:0:10}: falta verificação local de${fl:+ linux ($fl)}${fw:+ windows ($fw)}" >&2
-    exit 1
 fi
 
 if (( ! de_novo )); then
@@ -1028,8 +1053,14 @@ fi
 
 [[ "$commit" == HEAD && -n "$(git status --porcelain --untracked-files=no)" ]] && \
     echo "verificar-local: há mudanças não commitadas; só o commit ${sha:0:10} é verificado." >&2
-[[ -z "$plano_lin$plano_win" ]] && { echo "verificar-local: nada a rodar para ${sha:0:10} (comparado com ${base:0:10})."; \
-    gravar "$sha" linux "$base"; exit 0; }
+if [[ -z "$plano_lin$plano_win" ]]; then
+    echo "verificar-local: nada a rodar para ${sha:0:10} (comparado com ${base_passos:0:10})."
+    # shellcheck disable=SC2086
+    gravar "$sha" linux "$base" $cobertos_lin
+    # shellcheck disable=SC2086
+    [[ -n "$cobertos_win" ]] && gravar "$sha" windows "$base" $cobertos_win
+    exit 0
+fi
 
 echo "verificar-local: ${sha:0:10} contra ${base:0:10}"
 echo "  linux:   ${plano_lin:-nada}${plano_lin:+ ($PROCESSOS processos)}"
@@ -1093,7 +1124,7 @@ exec 3> >(marcar "$ANDAMENTO" >&2)
         baixa=(nice -n 10)
         command -v ionice >/dev/null && baixa+=(ionice -c 3)
         ORIGEM="$ORIGEM" HANGAR_VERIFICAR_PROCESSOS="$PROCESSOS" HANGAR_VERIFICAR_ARQUIVOS="${arquivos:-}" \
-            HANGAR_VERIFICAR_BASE="$base" "${baixa[@]}" \
+            HANGAR_VERIFICAR_BASE="$base_passos" "${baixa[@]}" \
             bash "$SCRIPT" --executar linux "$sha" - $plano_lin 9>&- | tee "$saida_lin"
         rl=${PIPESTATUS[0]}
     fi
@@ -1119,9 +1150,9 @@ esac
 # Linux: cada passo que passou, mesmo que outro tenha falhado (o resumo diz quais).
 passaram="$(sed -n '/^=== resumo linux/,$p' "$saida_lin" | awk '$1 == "ok" {print $2}' | xargs)"
 # shellcheck disable=SC2086
-[[ -n "$passaram" ]] && gravar "$sha" linux "$base" $passaram
+[[ -n "$passaram$cobertos_lin" ]] && gravar "$sha" linux "$base" $passaram $cobertos_lin
 # shellcheck disable=SC2086
-[[ -n "$plano_win" ]] && (( ! rc_win )) && gravar "$sha" windows "$base" $plano_win
+[[ -n "$plano_win$cobertos_win" ]] && (( ! rc_win )) && gravar "$sha" windows "$base" $plano_win $cobertos_win
 if (( rc_lin || rc_win )); then
     echo "verificar-local: FALHOU; o que passou ficou gravado, e a próxima rodada só repete o que falta."
     exit 1

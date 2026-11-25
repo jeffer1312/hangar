@@ -442,7 +442,7 @@ fn agy_gets_the_stdio_bridge_only_where_it_was_used() {
     assert!(out.contains("mcp_config.json"), "{out}");
     let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(home.join(".gemini/config/mcp_config.json")).unwrap()).unwrap();
     let entry = &config["mcpServers"]["hangar"];
-    assert_eq!(entry["command"], home.join(".local/bin/hangar-mcp-stdio").to_string_lossy().as_ref());
+    assert_eq!(entry["command"], home.join(".local").join("bin").join("hangar-mcp-stdio").to_string_lossy().as_ref());
     assert_eq!(entry["args"], serde_json::json!([]));
     assert_eq!(entry["timeoutSeconds"], 660);
     let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(home.join(".gemini/antigravity-cli/settings.json")).unwrap()).unwrap();

@@ -78,7 +78,7 @@ fn changing_server_invalidates_the_old_save_reply(cx: &mut TestAppContext) {
         dialog.default_save_seq = 1;
         dialog.default_saving = true;
         dialog.servers.set(Ok(vec![ServerChoice { key: "other".into(), label: "Outra máquina".into(),
-            address: "http://127.0.0.1:2".into(), token: "fixture-owner".into(), offline: false }]));
+            address: "http://127.0.0.1:2".into(), token: "fixture-owner".into(), offline: false, id: "other".into() }]));
         dialog.pick_machine("other".into(), window, cx);
         assert!(!dialog.default_saving);
         assert!(dialog.default_save_seq > 1);
@@ -132,5 +132,57 @@ fn home_mode_pill_applies_to_this_conversation_only(cx: &mut TestAppContext) {
         dialog.choose_mode(false, window, cx);
         assert!(!dialog.headless_saving, "a pílula nunca grava o padrão do servidor");
         assert_eq!(dialog.open_body("s", "/p", "", cx)["headless"], json!(false));
+    }));
+}
+
+/// Conta a 95% ou mais escolhida à mão cede a vez à de mais folga; "abrir nela mesmo assim" volta para ela e o pedido
+/// leva `force_account`; desfazer troca de novo.
+#[::gpui::test]
+fn an_account_over_the_limit_can_be_forced_and_undone(cx: &mut TestAppContext) {
+    let (view, cx) = dialog(cx);
+    cx.update(|window, cx| view.update(cx, |dialog, cx| {
+        dialog.provider = "claude";
+        dialog.configs.set(Ok(serde_json::from_value(json!([
+            {"path": "/a", "label": "A", "active": true}, {"path": "/b", "label": "B", "active": false}])).unwrap()));
+        dialog.quotas.set(Ok(serde_json::from_value(json!([
+            {"id": "claude:/a", "estado": "lida", "janelas": [{"rotulo": "5h", "pct": 2.0}, {"rotulo": "7d", "pct": 97.0},
+                {"rotulo": "Fable", "pct": 99.0, "por_modelo": true}]},
+            {"id": "claude:/b", "estado": "lida", "janelas": [{"rotulo": "7d", "pct": 40.0}]}])).unwrap()));
+
+        dialog.pick_account("/a".into(), window, cx);
+        assert_eq!((dialog.config.as_deref(), dialog.switched_from.as_deref()), (Some("/b"), Some("/a")));
+        let body = dialog.open_body("s", "/p", "", cx);
+        assert_eq!((&body["config_dir"], body.get("force_account")), (&json!("/b"), None));
+
+        dialog.force_switched_account(window, cx);
+        let body = dialog.open_body("s", "/p", "", cx);
+        assert_eq!((&body["config_dir"], &body["force_account"]), (&json!("/a"), &json!(true)));
+        // A janela que decide a troca, mesmo a de um modelo.
+        assert_eq!(dialog.forced_window(), Some(("Fable".to_owned(), 99.0)));
+
+        dialog.undo_forced_account(window, cx);
+        assert_eq!((dialog.config.as_deref(), dialog.switched_from.as_deref(), dialog.force_account), (Some("/b"), Some("/a"), false));
+        assert_eq!(dialog.open_body("s", "/p", "", cx).get("force_account"), None);
+
+        // Abaixo do limite, a escolha fica e não há o que forçar.
+        dialog.pick_account("/b".into(), window, cx);
+        assert_eq!((dialog.config.as_deref(), dialog.switched_from.as_deref()), (Some("/b"), None));
+    }));
+}
+
+#[::gpui::test]
+fn saved_agy_manual_comes_back_when_the_server_mode_arrives_headless(cx: &mut TestAppContext) {
+    let (view, cx) = dialog(cx);
+    cx.update(|window, cx| view.update(cx, |dialog, cx| {
+        dialog.set_provider("antigravity", window, cx);
+        let scope = dialog.models.seq;
+        let saved = Some((String::new(), String::new(), "manual".to_owned()));
+        dialog.receive_models(scope, Ok(json!({"models":[]})), Default::default(), Ok(saved), window, cx);
+        assert_eq!(dialog.permission, "", "antes do modo do servidor a lista é a do terminal, sem o manual");
+        let seq = dialog.jev.seq;
+        dialog.receive(CreateReply::Config(seq, (true, Ok(Some(json!({"campos": {"headless_default": {"valor": true}}}))))), window, cx);
+        assert_eq!(dialog.permission, "manual");
+        dialog.set_headless(false, false, window, cx);
+        assert_eq!(dialog.permission, "", "com terminal o manual sai");
     }));
 }

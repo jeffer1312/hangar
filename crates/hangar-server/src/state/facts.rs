@@ -80,7 +80,8 @@ pub fn plugin_surfaces(questions: &[Value]) -> Result<(Option<&Value>, Option<&V
             continue;
         }
         if question["questions"].as_array().is_none_or(Vec::is_empty) { return Err("plugin_question_invalid".into()); }
-        if form.replace(question).is_some() { return Err("erro_interacao_indisponivel".into()); }
+        // Formulários também: o Claude Code roda juntas as chamadas do turno, e o terminal as mostra na ordem.
+        form.get_or_insert(question);
     }
     Ok((selector, form))
 }
@@ -96,6 +97,7 @@ pub fn project_plugin_state(state: &mut hangar_api::state::StateEvent, questions
                 error = Some("erro_interacao_indisponivel".to_owned());
             } else {
                 let mut payload = question.as_object().cloned().ok_or("plugin_question_invalid")?;
+                if forms.len() > 1 { payload.insert("more_after".into(), json!(forms.len() - 1)); }
                 payload.insert("request_id".into(), question["id"].clone());
                 payload.insert("provider".into(), json!("claude"));
                 state.codex_question = Some(payload);
@@ -356,10 +358,18 @@ mod tests {
         assert!(state.interaction_id.is_none());
     }
 
+    /// O Claude Code roda as chamadas do AskUserQuestion de um turno ao mesmo tempo: o cartão mostra a
+    /// primeira que chegou e diz quantas esperam depois dela; nunca o problema no lugar do cartão.
     #[test]
-    fn same_surface_ambiguity_is_not_an_empty_question() {
-        let forms = vec![json!({"id":"ask:a","interaction_id":"a","questions":[{}]}), json!({"id":"ask:b","interaction_id":"b","questions":[{}]})];
-        assert_eq!(plugin_surfaces(&forms).unwrap_err(), "erro_interacao_indisponivel");
+    fn held_forms_come_one_at_a_time_with_the_rest_counted() {
+        let form = |id: &str| json!({"id":format!("ask:{id}"),"interaction_id":id,"questions":[{"question":"Pasta?","options":[]}]});
+        let mut state = hangar_api::state::StateEvent::default();
+        project_plugin_state(&mut state, &[form("c"), form("a"), form("b")]).unwrap();
+        let shown = state.codex_question.unwrap();
+        assert_eq!((shown["interaction_id"].as_str(), shown["more_after"].as_u64()), (Some("c"), Some(2)));
+        let mut state = hangar_api::state::StateEvent::default();
+        project_plugin_state(&mut state, &[form("a")]).unwrap();
+        assert!(state.codex_question.unwrap().get("more_after").is_none(), "pergunta sozinha não fala de fila");
     }
 
     /// Decisão do usuário (P21): duas permissões seguradas saem uma de cada vez; respondida a primeira,

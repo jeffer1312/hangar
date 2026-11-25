@@ -15,8 +15,9 @@ export interface SettingsItem {
   labelColor?: string;
 }
 
-export function SettingsList({ items, onPick, searchable = true, comfortable = false }: {
-  items: SettingsItem[]; onPick: (id: string) => void; searchable?: boolean | 'always'; comfortable?: boolean;
+// `split`: o nome à esquerda e a dica à direita, apagada, como as linhas do menu de modelo do PC.
+export function SettingsList({ items, onPick, searchable = true, comfortable = false, split = false }: {
+  items: SettingsItem[]; onPick: (id: string) => void; searchable?: boolean | 'always'; comfortable?: boolean; split?: boolean;
 }) {
   const { theme } = useUnistyles();
   const [query, setQuery] = useState('');
@@ -32,14 +33,17 @@ export function SettingsList({ items, onPick, searchable = true, comfortable = f
     </View> : null}
     {visible.length ? <ScrollView style={comfortable ? styles.comfortableList : styles.list} keyboardShouldPersistTaps="handled" nestedScrollEnabled accessibilityRole="radiogroup">
       {visible.map((it) => <Pressable key={it.id} onPress={() => onPick(it.id)} disabled={it.disabled}
-        style={({ pressed }) => [styles.row, comfortable && styles.comfortableRow, { backgroundColor: it.selected ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' }, it.disabled && styles.disabled]}
+        style={({ pressed }) => [styles.row, comfortable && styles.comfortableRow, split && styles.splitRow, { backgroundColor: it.selected ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' }, it.disabled && styles.disabled]}
         accessibilityRole="radio" accessibilityLabel={it.label} accessibilityHint={it.hint}
         accessibilityState={{ selected: !!it.selected, checked: !!it.selected, disabled: !!it.disabled }}>
         {it.leading}
         {comfortable ? <View style={styles.rowText}>
           <Text style={styles.comfortableName}>{it.label}</Text>
           {it.hint ? <Text style={styles.comfortableHint}>{it.hint}</Text> : null}
-        </View> : <Text style={styles.rowText} numberOfLines={2}>
+        </View> : split ? <>
+          <Text style={[styles.rowText, styles.modelName, it.labelColor ? { color: it.labelColor } : null]} numberOfLines={1}>{it.label}</Text>
+          {it.hint ? <Text style={[styles.detail, styles.splitHint]} numberOfLines={1}>{it.hint}</Text> : null}
+        </> : <Text style={styles.rowText} numberOfLines={2}>
           <Text style={[styles.modelName, it.labelColor ? { color: it.labelColor } : null]}>{it.label}</Text>
           {it.hint ? <Text style={styles.detail}>{`  ${it.hint}`}</Text> : null}
         </Text>}
@@ -67,6 +71,8 @@ const styles = StyleSheet.create((theme) => ({
   row: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], paddingVertical: theme.base.space[1.5], borderRadius: theme.base.radius.sm },
   rowText: { flex: 1, minWidth: 0, fontSize: theme.base.text.xs, color: theme.tokens.text.primary },
   modelName: { fontWeight: theme.base.weight.medium },
+  splitRow: { minHeight: 44 },
+  splitHint: { flexShrink: 1, maxWidth: '50%', textAlign: 'right' },
   detail: { fontSize: theme.base.text.xxs, color: theme.tokens.text.muted },
   empty: { paddingHorizontal: theme.base.space[2], paddingVertical: theme.base.space[4], fontSize: theme.base.text.xxs, textAlign: 'center', color: theme.tokens.text.muted },
   disabled: { opacity: 0.5 },

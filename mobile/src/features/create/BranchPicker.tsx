@@ -6,11 +6,12 @@ import {
   sanitizeSessionName, worktreeAgeDays, worktreeIsAgent, worktreeTitle, worktreeStaleDays,
   type FolderBranches, type FolderGit, type Server, type WorktreeChoice, type WorktreeRepo, type WorktreeStatus,
 } from '@hangar/core';
-import { Icon } from '../../ui/Icon';
+import { Icon, type IconName } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { superficie } from '../../theme/superficie';
 import { FolderBranchMenu } from './FolderBranchMenu';
 import { FolderGitCard } from './FolderGitCard';
+import { samePath } from './folderGroups';
 import * as m from '../../paraglide/messages';
 
 type Props = { server: Server;
@@ -36,8 +37,6 @@ const isNotRepo = (e: unknown) => {
 // A API prefixa o status HTTP ("409: ..."); na tela vale só o texto da recusa.
 const reason = (e: unknown) => (e instanceof Error ? e.message.replace(/^\d{3}: /, '') : String(e));
 const inside = (root: string, path: string) => pickFolderRoot([{ path: root }], path) !== null;
-// Mesma pasta com outra grafia (barra final, `\`, letra da unidade): uma contém a outra.
-export const samePath = (a: string, b: string) => inside(a, b) && inside(b, a);
 
 function worktreeHint(w: WorktreeStatus, now: number): string {
   if (w.sessions[0]) return m.worktree_menu_em_uso({ nome: w.sessions[0] });
@@ -47,14 +46,18 @@ function worktreeHint(w: WorktreeStatus, now: number): string {
   return days ? m.worktree_dias_atras({ n: days }) : '';
 }
 
-function OptionRow({ title, hint, on, onPress, trailing, dot }: { title: string; hint: string; on: boolean; onPress: () => void; trailing?: 'chevron' | undefined; dot?: string | undefined }) {
+function OptionRow({ title, hint, on, onPress, trailing, dot, icon, muted }: {
+  title: string; hint: string; on: boolean; onPress: () => void; trailing?: 'chevron' | undefined; dot?: string | undefined;
+  icon?: IconName | undefined; muted?: boolean | undefined;
+}) {
   const { theme } = useUnistyles();
   return (
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={title} accessibilityHint={hint || undefined}
       accessibilityState={{ selected: on }} style={[styles.option, on && styles.on]}>
       {dot ? <View style={[styles.dot, { backgroundColor: dot }]} /> : null}
+      {icon ? <View style={styles.optionIcon}><Icon name={icon} size={17} color={muted ? theme.tokens.text.muted : theme.tokens.accent.base} /></View> : null}
       <View style={styles.optionText}>
-        <Text style={styles.optionTitle} numberOfLines={1}>{title}</Text>
+        <Text style={[styles.optionTitle, muted && styles.mutedTitle]} numberOfLines={1}>{title}</Text>
         {hint ? <Text style={styles.help} numberOfLines={2}>{hint}</Text> : null}
       </View>
       {on ? <Icon name="Check" size={16} color={theme.tokens.accent.base} /> : null}
@@ -240,8 +243,8 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
   const busy = !fresh && chosen?.sessions[0];
   const notice = busy ? <Text style={styles.warn} accessibilityRole="alert">{m.worktree_menu_ocupada({ nome: busy })}</Text> : null;
 
-  const option = (key: string, title: string, hint: string, on: boolean, onPress: () => void, trailing?: 'chevron', dot?: string) => (
-    <OptionRow key={key} title={title} hint={hint} on={on} onPress={onPress} trailing={trailing} dot={dot} />
+  const option = (key: string, title: string, hint: string, on: boolean, onPress: () => void, trailing?: 'chevron', dot?: string, icon?: IconName, muted?: boolean) => (
+    <OptionRow key={key} title={title} hint={hint} on={on} onPress={onPress} trailing={trailing} dot={dot} icon={icon} muted={muted} />
   );
 
   if (branching && git?.repo) {
@@ -357,8 +360,8 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
       {option('here', m.worktree_menu_pasta(), m.worktree_menu_pasta_dica({ pasta: basename(home), branch: homeBranch }), !fresh && !chosen, () => {
         setFresh(false);
         if (chosen && wts) onPickFolder(wts.repo, false);
-      })}
-      {option('new', m.worktree_menu_nova(), m.worktree_menu_nova_dica(), fresh, () => setFresh(true))}
+      }, undefined, undefined, 'Folder')}
+      {option('new', m.native_where_new(), m.worktree_menu_nova_dica(), fresh, () => setFresh(true), undefined, undefined, 'Plus')}
       {fresh ? (
         <View style={styles.fields}>
           <BaseField info={info} base={base} open={baseOpen} disabled={known} onToggle={() => setBaseOpen((o) => !o)}
@@ -386,12 +389,12 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
           {info.dirty ? <Text style={styles.help}>{m.native_create_checkout_dirty()}</Text> : null}
         </View>
       ) : null}
-      {option('existing', m.worktree_menu_existente(), summary, !fresh && !!chosen, () => setPicking(true), 'chevron')}
+      {option('existing', m.native_where_existing(), summary, !fresh && !!chosen, () => setPicking(true), 'chevron', undefined, 'Copy')}
       {notice}
       {git?.repo ? (
         <>
           <View style={styles.separator} />
-          {option('branches', m.native_folder_git_branch_entry(), '', false, () => setBranching(true), 'chevron')}
+          {option('branches', m.native_folder_git_branch_entry(), '', false, () => setBranching(true), 'chevron', undefined, 'GitBranch', true)}
         </>
       ) : null}
     </ScrollView>
@@ -408,6 +411,8 @@ const styles = StyleSheet.create((theme) => ({
   on: { backgroundColor: theme.tokens.accent.dim },
   optionText: { flex: 1, minWidth: 0, gap: theme.base.space[0.5] },
   optionTitle: { fontSize: theme.base.text.sm, color: theme.tokens.text.primary },
+  mutedTitle: { color: theme.tokens.text.secondary },
+  optionIcon: { width: 22, alignItems: 'center' },
   grow: { flex: 1, minWidth: 0 },
   fields: {
     gap: theme.base.space[2], padding: theme.base.space[3], marginHorizontal: theme.base.space[2],

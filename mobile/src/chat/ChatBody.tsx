@@ -34,7 +34,7 @@ import { SessionProblem, showsSessionProblem } from './SessionProblem';
 import { SessionPickerSheet } from './SessionPickerSheet';
 import { useLiveVoice } from '../features/voice/liveVoiceStore';
 import { PlanActions } from './PlanActions';
-import { askPayloadFromToolUse, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, recarregarSessao, setModoExecucao, implementCodexPlan, setPermissionMode, projectSubagentActivity, subagentEnded } from '@hangar/core';
+import { askPayloadFromToolUse, canChooseSurface, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, recarregarSessao, setModoExecucao, implementCodexPlan, setPermissionMode, projectSubagentActivity, subagentEnded } from '@hangar/core';
 import { agentIdentities } from '../features/activity/agentModel';
 import { createEventProjection } from './eventProjection';
 import type { Provider, SessionInfo } from '@hangar/core';
@@ -450,7 +450,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
     void recarregarSessao(name, target).catch((e) => mostrarAviso(e)).finally(() => setRecarregando(false));
   };
   // Terminal ⇄ sem terminal na mesma conversa, como no nativo: reinicia o processo, então pergunta antes.
-  const modoTrocavel = currentSession?.provider === 'claude' || currentSession?.provider === 'codex';
+  const modoTrocavel = canChooseSurface(currentSession?.provider ?? '');
   const [trocandoModo, setTrocandoModo] = useState(false);
   const trocandoModoRef = useRef(false);
   const modoBloqueado = stateEvent?.state !== 'idle' || trocandoModo;

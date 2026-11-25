@@ -9,8 +9,8 @@ pub(in crate::app) use picker::HandoffAccount;
 
 const CLAUDE_EFFORTS: [&str; 6] = ["low", "medium", "high", "xhigh", "max", "ultracode"];
 const CLAUDE_MODES: [&str; 6] = ["plan", "auto", "manual", "acceptEdits", "bypassPermissions", "dontAsk"];
-// Os modos que o Shift+Tab do `agy` percorre, na ordem do painel do Claude; o `bypassPermissions` só existe na abertura.
-const ANTIGRAVITY_MODES: [&str; 4] = ["plan", "auto", "manual", "acceptEdits"];
+// Os modos do `agy` na ordem do painel do Claude; o `bypassPermissions` fica fora do Shift+Tab e o servidor reabre a sessão nele.
+const ANTIGRAVITY_MODES: [&str; 5] = ["plan", "auto", "manual", "acceptEdits", "bypassPermissions"];
 // O esforço do Antigravity vem no fim do id do modelo (`gemini-4-neon-low`).
 const ANTIGRAVITY_EFFORTS: [&str; 4] = ["low", "medium", "high", "xhigh"];
 // Acima disto a lista ganha busca e só as linhas visíveis são montadas (catálogo do Pi/OMP tem dezenas).
@@ -1570,13 +1570,12 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_modes_are_the_agy_cycle_with_claude_names() {
+    fn antigravity_modes_are_the_agy_cycle_and_bypass_with_claude_names() {
         let all = antigravity_modes(&serde_json::json!({}));
-        assert_eq!(all, vec![("plan", true), ("auto", true), ("manual", true), ("acceptEdits", true)]);
-        assert!(all.iter().all(|(m, _)| *m != "bypassPermissions"), "o bypass só existe na abertura do agy");
-        // A leitura disse o ciclo: o que ficou fora aparece desligado.
+        assert_eq!(all, vec![("plan", true), ("auto", true), ("manual", true), ("acceptEdits", true), ("bypassPermissions", true)]);
+        // A leitura disse os modos: o que ficou fora aparece desligado.
         let read = antigravity_modes(&serde_json::json!({"modes": ["auto", "plan"]}));
-        assert_eq!(read, vec![("plan", true), ("auto", true), ("manual", false), ("acceptEdits", false)]);
+        assert_eq!(read, vec![("plan", true), ("auto", true), ("manual", false), ("acceptEdits", false), ("bypassPermissions", false)]);
         // Cada modo tem a frase de modo que o Claude já usa.
         for (mode, _) in all { assert_ne!(crate::i18n::tr(&format!("mode_{mode}")), format!("mode_{mode}")); }
     }

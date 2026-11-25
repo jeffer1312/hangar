@@ -9,6 +9,13 @@ pub(in crate::app) const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "
 pub(in crate::app) const PI_EFFORTS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 pub(in crate::app) const PERMISSIONS: [&str; 6] = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
 pub(in crate::app) const CODEX_PERMISSIONS: [&str; 3] = ["Ask for approval", "Approve for me", "Full Access"];
+
+/// O nome do modo como o seletor da conversa mostra; o do Codex já vem escrito, e o vazio é o padrão da conta.
+fn permission_label(mode: &str) -> String {
+    if mode.is_empty() { tr("create_permission_default") }
+    else if PERMISSIONS.contains(&mode) { tr(&format!("mode_{mode}")) }
+    else { mode.to_owned() }
+}
 /// Faixas da cota, as da `QuotaStrip` do web: âmbar acima de 80%, vermelho acima de 90%.
 const QUOTA_WARN: f64 = 80.;
 const QUOTA_FULL: f64 = 90.;
@@ -709,8 +716,9 @@ impl NewSession {
         match (self.provider, self.headless && !self.headless_inherited()) {
             ("claude", _) => Some(&PERMISSIONS),
             ("codex", true) => Some(&CODEX_PERMISSIONS),
-            // Só com terminal por enquanto: sem o `manual`, que o `agy` com terminal não tem.
-            ("antigravity", _) => Some(&AGY_TERMINAL_PERMISSIONS),
+            ("antigravity", true) => Some(&AGY_HEADLESS_PERMISSIONS),
+            // Sem o `manual`, que o `agy` com terminal não tem.
+            ("antigravity", false) => Some(&AGY_TERMINAL_PERMISSIONS),
             _ => None,
         }
     }
@@ -749,8 +757,19 @@ impl NewSession {
         self.effort_pick = Some(picker(choices, at, false, |this, id, _, _| { this.scheduled_touch(&["effort"]); this.model_choice_touched = true; this.effort = id; }, window, cx));
     }
 
+    /// O `manual` salvo do Antigravity, descartado porque a lista chegou antes do modo do servidor, volta quando passa a caber.
+    /// Só nele: o catálogo dele sempre é lido de fato, então, terminada a leitura, o padrão guardado é o dele, e não o do agente
+    /// de antes (o Codex sem conta termina a leitura sem ler nada).
+    pub(super) fn restore_saved_permission(&mut self) {
+        if self.provider != "antigravity" || self.permission_touched || self.models.loading { return; }
+        let Some(saved) = self.saved_default.as_ref().map(|s| s.2.clone()) else { return };
+        if self.permissions().is_some_and(|list| list.contains(&saved.as_str())) { self.permission = saved; }
+    }
+
     pub(super) fn build_permission_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(modes) = self.permissions() else { self.permission_pick = None; return };
+        // O `manual` escolhido sem terminal não vai para o agy com terminal, que recusaria a abertura.
+        if self.provider == "antigravity" && !self.permission.is_empty() && !modes.contains(&self.permission.as_str()) { self.permission.clear(); }
         let choices: Vec<ModelChoice> = std::iter::once(ModelChoice { id: String::new(), label: tr("create_permission_default"), hint: String::new() })
             .chain(modes.iter().map(|m| ModelChoice { id: (*m).into(), label: (*m).into(), hint: String::new() })).collect();
         let at = Self::pick_at(&choices, &self.permission);
@@ -789,7 +808,7 @@ impl NewSession {
                 .trigger(Button::new("transfer-model-trigger").outline().label(title).icon(IconName::ChevronDown)
                     .disabled(self.creating || self.models.loading || !self.has_transfer_models()).accessibility_label(tr("create_model")))
                 .content(move |_, window, cx| view.update(cx, |view, cx| view.render_model_menu(cx)
-                    .w((window.rem_size() * 24.).min(window.viewport_size().width - window.rem_size() * 2.))
+                    .w(px(720.).min(window.viewport_size().width - window.rem_size() * 2.))
                     .into_any_element()).unwrap_or_else(|_| div().into_any_element()))
                 .on_open_change(move |open, window, cx| { let _ = opening.update(cx, |view, cx| {
                     view.menu.set(open.then_some(Menu::Model));
@@ -799,32 +818,55 @@ impl NewSession {
             .when(!self.effort.is_empty(), |el| el.child(muted(format!("{}: {}", tr("create_effort"), self.effort))))
     }
 
-    /// O menu da pílula de modelo, no desenho do Zeron: o provider em abas, a busca, a lista e o esforço no rodapé.
+    /// O menu da pílula de modelo, no mesmo desenho do seletor da conversa: os agentes no trilho, a busca e a lista no
+    /// meio, o raciocínio ao lado e, embaixo, a velocidade e a permissão; o padrão do servidor fecha o menu.
     pub(super) fn render_model_menu(&self, cx: &mut Context<Self>) -> Div {
+        use crate::app::controls::picker;
         let query = self.menu_filter(cx);
-        let tabs = div().id("new-chat-providers").role(Role::Group).aria_label(tr("create_provider_aria")).flex().items_center().gap(px(2.))
-            .px(px(4.)).pb(px(4.)).children(PROVIDERS.iter().map(|&p| {
-                let available = self.providers.ok().and_then(|m| m.get(p)).is_none_or(|probe| probe.disponivel);
-                Button::new(SharedString::from(format!("new-chat-provider-{p}"))).ghost().small().selected(self.provider == p)
-                    .disabled(!available || self.creating).tooltip(provider_name(p)).accessibility_label(provider_name(p))
-                    .child(chrome::provider_glyph(p, 18.))
-                    .on_click(cx.listener(move |this, _, window, cx| this.choose_provider(p, window, cx)))
-            }));
-        let list = match &self.models.value {
+        // Lista de permissões que deixou de existir (o modo trocou na releitura): volta aos modelos.
+        let access_open = self.access_open && self.permissions().is_some();
+        let rail = (!self.is_transfer()).then(|| picker::rail_view(PROVIDERS.iter().map(|&p| {
+            let available = self.providers.ok().and_then(|m| m.get(p)).is_none_or(|probe| probe.disponivel);
+            picker::rail_tab(picker::rail_button(&format!("new-chat-{p}"), self.provider == p, provider_name(p).to_owned(),
+                chrome::provider_glyph(p, 18.).into_any_element())
+                .disabled(!available || self.creating)
+                .on_click(cx.listener(move |this, _, window, cx| this.choose_provider(p, window, cx))), self.provider == p).into_any_element()
+        }).collect()));
+        let name = |id: &str, label: String, hint: String| div().id(SharedString::from(format!("new-chat-name-{id}"))).min_w_0().truncate()
+            .text_size(px(15.)).font_weight(FontWeight::NORMAL).child(label)
+            .when(!hint.is_empty(), |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(hint.clone()).build(window, cx)))
+            .into_any_element();
+        let list = if access_open {
+            let current = self.permission.clone();
+            let rows = std::iter::once(String::new()).chain(self.permissions().unwrap_or_default().iter().map(|m| (*m).to_owned()))
+                .map(|mode| picker::row_view(SharedString::from(format!("new-chat-permission-{mode}")), "",
+                        name(&format!("permission-{mode}"), permission_label(&mode), String::new()), current == mode, false, None, None)
+                    .disabled(self.creating)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.scheduled_touch(&["permission_mode"]);
+                        (this.permission, this.permission_touched, this.access_open) = (mode.clone(), true, false);
+                        this.build_permission_pick(window, cx);
+                        cx.notify();
+                    }))
+                    .into_any_element()).collect();
+            div().flex().flex_col().gap(px(2.)).child(popup::title(tr("create_permission"), None)).child(Self::menu_list("new-chat-permission-list", rows))
+                .into_any_element()
+        } else { match &self.models.value {
             _ if self.models.loading || self.models.value.is_none() => popup::skeleton("new-chat-models", 5).into_any_element(),
             Some(Err(error)) => Self::menu_failure("new-chat-models-error", format!("{}: {error}", tr("create_models_failed")),
                 |this, window, cx| this.load_models(window, cx), cx),
             _ => {
+                let provider = self.provider;
                 let rows = std::iter::once((String::new(), tr("create_default"), String::new()))
                     .chain(self.catalog().iter().filter(|m| m.id != "default").map(|m| (m.value(), m.label(), m.hint())))
                     .filter(|(_, label, hint)| wanted(&query, label, hint))
                     .map(|(id, label, hint)| {
                         let on = self.model == id || matched_model(self.catalog(), self.provider, self.proxy_accounts().is_some(), &self.model)
                             .is_some_and(|m| m.value() == id);
-                        menu_row(SharedString::from(format!("new-chat-model-{id}")), on, label, hint)
+                        picker::row_view(SharedString::from(format!("new-chat-model-{id}")), provider, name(&id, label, hint), on, false, None, None)
                             .disabled(self.creating || (self.proxy_accounts().is_some() && !self.engine_ready()))
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                // O menu fica aberto: o esforço, logo abaixo, costuma ser a escolha seguinte.
+                                // O menu fica aberto: o raciocínio, ao lado, costuma ser a escolha seguinte.
                                 this.model_choice_touched = true;
                                 this.model = chosen_model(this.catalog(), this.provider, this.proxy_accounts().is_some(), &this.model, &id);
                                 if !this.fast_available() { this.service_tier = None; }
@@ -836,22 +878,19 @@ impl NewSession {
                     }).collect();
                 Self::menu_list("new-chat-model-list", rows)
             }
-        };
+        } };
         let levels = self.levels();
-        // "Padrão" mais até 4 níveis numa linha; mais que isso quebra linha em vez de cortar o rótulo.
-        let many = levels.len() > 4;
-        let effort = (!levels.is_empty()).then(|| div().flex().flex_col().gap(px(2.))
-            .child(popup::separator())
-            .child(popup::title(tr("new_chat_reasoning"), None))
-            .child(div().id("new-chat-efforts").role(Role::Group).aria_label(tr("new_chat_reasoning")).px(px(4.)).pb(px(2.)).flex()
-                .when(many, |el| el.flex_wrap())
-                .gap(px(2.)).children(std::iter::once(String::new()).chain(levels).map(|level| {
-                    let label = if level.is_empty() { tr("create_default") } else { level.clone() };
-                    Button::new(SharedString::from(format!("new-chat-effort-{level}"))).ghost().xsmall().when(!many, |b| b.flex_1().min_w_0())
-                        .selected(self.effort == level).label(label).disabled(self.creating)
-                        .on_click(cx.listener(move |this, _, window, cx| { this.model_choice_touched = true; this.effort = level.clone(); this.build_effort_pick(window, cx); cx.notify(); }))
-                }))));
-        let default = self.render_default_check(cx).map(|check| div().flex().flex_col().gap(px(4.)).child(popup::separator()).child(check.py(px(4.))));
+        let model_label = matched_model(self.catalog(), self.provider, self.proxy_accounts().is_some(), &self.model).map(ModelOption::label)
+            .unwrap_or_else(|| tr("create_default"));
+        let efforts = if levels.is_empty() { Vec::new() } else {
+            std::iter::once(String::new()).chain(levels).map(|level| {
+                let label = if level.is_empty() { tr("create_default") } else { level.clone() };
+                picker::effort_row(&label, self.effort == level).disabled(self.creating)
+                    .on_click(cx.listener(move |this, _, window, cx| { this.model_choice_touched = true; this.effort = level.clone(); this.build_effort_pick(window, cx); cx.notify(); }))
+                    .into_any_element()
+            }).collect()
+        };
+        let reasoning = picker::reasoning_view(model_label, efforts);
         let engine = (self.compact && self.provider == "claude").then(|| {
             let body = if self.engines.loading { popup::skeleton("new-chat-engines", 1).into_any_element() }
                 else if let Some(Err(error)) = &self.engines.value {
@@ -863,9 +902,28 @@ impl NewSession {
             div().px_1().py_1().flex().flex_col().gap_2().child(body)
                 .when(self.proxy_accounts().is_some(), |el| el.child(self.render_engine_account()))
         });
-        div().p(px(popup::INSET)).flex().flex_col().gap(px(2.)).when(!self.is_transfer(), |el| el.child(tabs))
-            .children(engine).child(self.menu_search()).child(list).children(effort).children(self.render_fast_choice(cx))
-            .children(self.render_engine_context(cx)).children(default)
+        // Busca do seletor da conversa: sem caixa, com um traço fino na cor de destaque.
+        let search = div().mx(px(4.)).mb(px(6.)).border_b_1().border_color(theme::accent())
+            .child(Input::new(&self.menu_query).appearance(false).h(px(40.)).text_size(px(16.)).aria_label(tr("picker_search"))
+                .prefix(chrome::small_icon(IconName::Search, 16., theme::faint())));
+        let center = div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).px(px(4.)).children(engine)
+            .when(!access_open, |el| el.child(search)).child(list);
+        let access = self.permissions().map(|_| {
+            let shown = permission_label(&self.permission);
+            Button::new("new-chat-access").ghost().small().selected(access_open).disabled(self.creating)
+                .accessibility_label(format!("{}: {shown}", tr("create_permission")))
+                .child(div().flex().items_center().gap(px(6.)).text_size(px(13.5)).text_color(theme::muted())
+                    .child(chrome::small_icon(IconName::KeyRound, 14., theme::faint())).child(shown)
+                    .child(chrome::small_icon(if access_open { IconName::ChevronDown } else { IconName::ChevronUp }, 13., theme::faint())))
+                .on_click(cx.listener(|this, _, _, cx| { this.access_open = !(this.access_open && this.permissions().is_some()); cx.notify(); }))
+        });
+        let footer = access.map(|access| div().mt(px(4.)).pt(px(8.)).px(px(4.)).flex().items_center().gap_2()
+            .border_t_1().border_color(theme::border()).child(div().flex_1()).child(access));
+        let default = self.render_default_check(cx).map(|check| div().flex().flex_col().gap(px(4.)).child(popup::separator()).child(check.py(px(4.))));
+        div().p(px(popup::INSET)).flex().flex_col().gap(px(2.))
+            .child(div().flex().min_h(px(300.)).children(rail).child(center).child(reasoning))
+            .children(self.render_fast_choice(cx)).children(self.render_engine_context(cx))
+            .children(footer).children(default)
     }
 
     pub(super) fn build_config_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -876,11 +934,93 @@ impl NewSession {
             exhausted: Some(&c.path) != self.config.as_ref() && self.account_exhausted(&c.path),
         }).collect();
         let at = choices.iter().position(|c| Some(&c.choice.id) == self.config.as_ref());
-        self.config_pick = Some(picker(choices, at, false, |this, path, window, cx| {
-            this.scheduled_touch(&["config_dir", "model", "effort", "service_tier", "subagent_model", "permission_mode"]);
-            (this.config, this.account_touched) = (Some(path), true);
-            this.load_models(window, cx);
-        }, window, cx));
+        self.config_pick = Some(picker(choices, at, false, |this, path, window, cx| this.pick_account(path, window, cx), window, cx));
+    }
+
+    /// Escolha à mão no menu. A conta a 95% ou mais cede a vez à de mais folga, como no servidor; a linha abaixo das
+    /// pílulas deixa abrir nela mesmo assim.
+    pub(super) fn pick_account(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.scheduled_touch(&["config_dir", "model", "effort", "service_tier", "subagent_model", "permission_mode"]);
+        let target = if self.quota_rule_applies() { self.quota_target(Some(&path)) } else { None };
+        self.force_account = false;
+        self.switched_from = target.as_ref().map(|_| path.clone());
+        // O seletor mostra a conta clicada: com a troca, ele é refeito fora do próprio clique.
+        if target.is_some() { cx.defer_in(window, |this, window, cx| this.build_config_pick(window, cx)); }
+        (self.config, self.account_touched) = (Some(target.unwrap_or(path)), true);
+        self.load_models(window, cx);
+    }
+
+    /// A troca por cota vale para a conta Claude da tela sem sessão; motor, retomada e agendamento ficam de fora.
+    fn quota_rule_applies(&self) -> bool {
+        self.provider == "claude" && self.engine.is_empty() && self.target().is_none() && !self.scheduled
+    }
+
+    /// A conta de mais folga para `path` a 95% ou mais (`quota_switch`); `None` = fica nela.
+    fn quota_target(&self, path: Option<&str>) -> Option<String> {
+        let accounts: Vec<_> = self.accounts().map(|c| (c.path.as_str(), c.active, self.quota_of(&format!("claude:{}", c.path)))).collect();
+        quota_switch(path, &accounts, chrono::Local::now().timestamp() as f64)
+    }
+
+    /// "Abrir nela mesmo assim": volta para a conta que a cota tirou e o pedido leva `force_account`.
+    pub(super) fn force_switched_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.switched_from.take() else { return };
+        (self.config, self.account_touched, self.force_account) = (Some(path), true, true);
+        self.build_config_pick(window, cx);
+        self.load_models(window, cx);
+    }
+
+    pub(super) fn undo_forced_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.force_account = false;
+        if let Some(target) = self.quota_target(self.config.as_deref()) { self.switched_from = self.config.replace(target); }
+        self.build_config_pick(window, cx);
+        self.load_models(window, cx);
+    }
+
+    /// A janela que decide a troca (`quota_switch`): a mais cheia de qualquer tipo, fora as que já viraram.
+    fn fullest_window(&self, path: &str) -> Option<(String, f64)> {
+        let now = chrono::Local::now().timestamp() as f64;
+        self.quota_of(&format!("claude:{path}"))?.windows().filter(|(w, _)| w.reset_ts.is_none_or(|r| r > now))
+            .map(|(w, p)| (w.label.clone(), p)).max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    pub(super) fn forced_window(&self) -> Option<(String, f64)> {
+        if !self.force_account || !self.quota_rule_applies() { return None; }
+        self.fullest_window(self.config.as_deref()?)
+    }
+
+    /// Abaixo das pílulas: a conta que a cota tirou, com "abrir nela mesmo assim", ou a forçada, com o desfazer.
+    pub(super) fn render_account_note(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        if !self.quota_rule_applies() { return None; }
+        let forced = self.force_account;
+        let from = if forced { self.config.clone()? } else { self.switched_from.clone()? };
+        let (window_label, pct) = self.fullest_window(&from)?;
+        let name = |path: &str| self.accounts().find(|c| c.path == path).map(|c| c.label.clone()).unwrap_or_else(|| basename(path).to_owned());
+        let account = name(&from);
+        let window = match window_label.as_str() {
+            "7d" => tr_shared("cota_janela_7d", &[]),
+            "5h" => tr_shared("cota_janela_5h", &[]),
+            other => tr_shared("cota_janela_outra", &[("janela", other)]),
+        };
+        let pct = format!("{}", pct.round());
+        let text = if forced {
+            tr_shared("new_chat_account_forced_note", &[("conta", &account), ("pct", &pct), ("janela", &window)])
+        } else {
+            let destination = name(self.config.as_deref()?);
+            tr_shared("new_chat_account_force_note", &[("conta", &account), ("pct", &pct), ("janela", &window), ("destino", &destination)])
+        };
+        // O uso em vermelho, como no menu de contas.
+        let number = format!("{pct}%");
+        let highlights: Vec<_> = text.find(&number).map(|at| (at..at + number.len(),
+            gpui_kit::HighlightStyle { color: Some(theme::danger()), ..Default::default() })).into_iter().collect();
+        let action = if forced { tr_shared("comum_desfazer", &[]) } else { tr_shared("new_chat_account_force_action", &[("conta", &account)]) };
+        Some(div().id("new-chat-account-note").flex().flex_wrap().items_center().gap_x(px(8.))
+            .text_size(px(12.5)).text_color(theme::muted())
+            .child(gpui_kit::StyledText::new(text).with_highlights(highlights))
+            .child(Button::new("new-chat-account-force").link().xsmall().label(action)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if forced { this.undo_forced_account(window, cx) } else { this.force_switched_account(window, cx) }
+                    cx.notify();
+                }))))
     }
 
     /// Cota lida com a janela de sessão ou de semana cheia e ainda não renovada.
@@ -914,10 +1054,10 @@ impl NewSession {
         // Com o menu de conta aberto, a lista não muda debaixo do clique: fechar ou a próxima cota reavalia.
         if self.account_touched || self.menu.get() == Some(Menu::Account) || self.reopen_config.is_some() || self.creating || self.account_busy
             || self.provider != "claude" || !self.engine.is_empty() || self.target().is_some() { return false; }
-        let accounts: Vec<_> = self.accounts().map(|c| (c.path.as_str(), c.active, self.quota_of(&format!("claude:{}", c.path)))).collect();
-        let Some(path) = quota_switch(self.config.as_deref(), &accounts, chrono::Local::now().timestamp() as f64) else { return false };
+        let Some(path) = self.quota_target(self.config.as_deref()) else { return false };
         // A conta mostrada é a que vai no pedido; sem isso o servidor refaz a troca e avisa como se ninguém tivesse escolhido.
-        (self.config, self.account_suggested) = (Some(path), true);
+        self.switched_from = self.config.replace(path);
+        self.account_suggested = true;
         true
     }
 
@@ -944,6 +1084,7 @@ impl NewSession {
                 if !self.headless_touched && !self.creating {
                     if let Ok(Some(value)) = &result {
                         self.headless = value.pointer("/campos/headless_default/valor").and_then(Value::as_bool).unwrap_or(true);
+                        self.restore_saved_permission();
                         self.build_permission_pick(window, cx);
                     } else if let Err(error) = &result { self.error = Some(Hangar::fetch_failure(error)); }
                 }
@@ -1240,6 +1381,7 @@ impl NewSession {
                     .accessibility_label(tr("create_delete_account_aria").replace("{nome}", &name))
                     .on_click(cx.listener(|this, _, _, cx| { (this.confirming, this.keep_transcripts, this.notice, this.holders) = (true, true, None, None); cx.notify(); })))))
             .when_some(selected_quota, |el, q| el.child(self.render_quota("create-claude-quota".into(), q)))
+            .children(self.render_account_note(cx))
             .when_some(self.deletable().filter(|_| self.confirming && self.holders.is_none()), |el, name| el.child(div().flex().items_center().gap(px(8.))
                 .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal()
                     .child(format!("{} ", tr("create_delete_start"))).child(div().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(name))

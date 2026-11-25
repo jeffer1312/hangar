@@ -3580,6 +3580,39 @@ fn an_explicit_exhausted_account_is_born_on_the_one_with_room() {
     assert!(resolved.warnings.is_empty());
 }
 
+/// `force_account` mantém a conta pedida mesmo a 95% ou mais, com o aviso do uso; sem conta pedida, é recusado.
+#[test]
+fn a_forced_account_stays_even_when_exhausted() {
+    let mut fixture = fixture_named("create_quota_explicit_account_moves");
+    fixture["scenario"]["steps"][0]["json"]["force_account"] = json!(true);
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude".into() }, AccountSource::Explicit));
+    assert_eq!(resolved.warnings, ["conta default com 97% de uso; aberta nela a pedido"]);
+
+    // Com folga, nada a avisar.
+    fixture["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.claude-b");
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Explicit));
+    assert!(resolved.warnings.is_empty());
+
+    let mut codex = fixture_named("create_codex_terminal_default");
+    let row = |home: &str, label: &str, pct: f64| json!({"id": format!("codex:<ROOT>/home/{home}"), "label": label,
+        "provedor": "codex", "ativa": false, "estado": "lida", "janelas": [{"rotulo": "7d", "pct": pct}]});
+    codex["scenario"]["fakes"]["quotas"] = json!([row(".codex", "Codex", 99.0), row(".codex-trabalho", "trabalho", 30.0)]);
+    codex["scenario"]["steps"][0]["json"]["codex_account"] = json!("default");
+    codex["scenario"]["steps"][0]["json"]["force_account"] = json!(true);
+    let connected = vec![resolve::CodexLogin { id: "default".into(), is_default: true }, resolve::CodexLogin { id: "trabalho".into(), is_default: false }];
+    let resolved = open_with(&codex, &FixtureFacts { connected, ..FixtureFacts::of(&codex) }).unwrap();
+    assert_eq!(resolved.spec.account, Account::Codex { account_id: "default".into() });
+    // No Codex a origem continua `default` mesmo com a conta pedida (só `config_dir` marca `explicit`).
+    assert_eq!((resolved.spec.account_source, resolved.warnings), (AccountSource::Default, vec!["conta Codex com 99% de uso; aberta nela a pedido".to_owned()]));
+
+    let mut unchosen = fixture_named("create_quota_switch");
+    unchosen["scenario"]["steps"][0]["json"]["force_account"] = json!(true);
+    let error = resolve_fixture(&unchosen).err().expect("sem conta pedida não há o que manter");
+    assert_eq!((error.status, error.code), (422, Some("erro_forcar_conta_sem_conta")));
+}
+
 /// Com a cota atual desconhecida, destino só abaixo dos 95%; a que bateu o limite (`limit-spent`)
 /// nunca é destino, em nenhum dos dois casos.
 #[test]

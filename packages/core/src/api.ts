@@ -1079,6 +1079,8 @@ export interface CreateSessionBody {
   name: string;
   cwd?: string | null;
   config_dir?: string | null;
+  // Mantém a conta pedida (`config_dir` ou `codex_account`) mesmo com 95% ou mais de uso; sem ela, o servidor recusa.
+  force_account?: boolean;
   provider?: Provider;
   remember_provider?: boolean;
   engine?: string | null;
@@ -1346,6 +1348,15 @@ export async function getSessionDefaultsForServer(server: Server, provider: Prov
   return result.defaults;
 }
 
+/** O padrão de criação gravado no servidor para o escopo; `null` apaga. Devolve o que ficou gravado. */
+export async function saveSessionDefaultsForServer(server: Server, provider: Provider, defaults: SessionDefaults | null,
+  engine?: string | null, engineAccount?: string | null): Promise<SessionDefaults | null> {
+  const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}), ...(engineAccount ? { engine_account: engineAccount } : {}) });
+  const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server, `/api/session-defaults?${query}`,
+    { method: 'PUT', body: JSON.stringify({ defaults, if_absent: false }) }, 10_000);
+  return result.defaults;
+}
+
 // 404 = servidor antigo, sem a rota: `null`, sem erro na tela.
 async function nullOn404<T>(request: Promise<T>): Promise<T | null> {
   try {
@@ -1420,7 +1431,7 @@ export function createSession(
                            model: model ?? null, effort: effort ?? null, codex_account: codexAccount, remember_provider: true };
   if (permissionMode) body.permission_mode = permissionMode;
   if (ompProfile) body.omp_profile = ompProfile;
-  if (headless !== undefined && (provider === 'claude' || provider === 'codex')) body.headless = headless;
+  if (headless !== undefined && (provider === 'claude' || provider === 'codex' || provider === 'antigravity')) body.headless = headless;
   if (subagentModel && provider === 'claude') body.subagent_model = subagentModel;
   if (jev) body.jev = true;
   if (worktree?.branch) Object.assign(body, worktree);
