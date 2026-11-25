@@ -2,6 +2,7 @@
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Alert } from 'react-native';
 import { AntigravityTermos } from './AntigravityTermos';
 import * as m from '../../paraglide/messages';
 
@@ -54,6 +55,91 @@ function mount() {
 }
 
 describe('AntigravityTermos', () => {
+  it('o erro de uma ação fica na tela enquanto a sondagem de 1 s lê a mesma etapa', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    calls.answer.mockRejectedValueOnce(new Error('resposta-falhou'));
+    calls.open.mockRejectedValueOnce(new Error('link-falhou'));
+    const view = mount();
+    try {
+      await view.render();
+      await flush();
+      await press(view.container, m.mobile_antigravity_terms_accept_share());
+      await flush();
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await flush();
+      expect(view.container.textContent).toContain('resposta-falhou');
+
+      await press(view.container, terms);
+      await flush();
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await flush();
+      expect(view.container.textContent).toContain('link-falhou');
+    } finally { await act(async () => view.root.unmount()); }
+  });
+
+  it('a resposta aceita deixa a espera na tela até a leitura seguinte, sem os botões de volta', async () => {
+    const view = mount();
+    try {
+      await view.render();
+      await flush();
+      // A leitura depois da resposta ainda não voltou.
+      calls.read.mockReturnValue(new Promise(() => {}));
+      await press(view.container, m.mobile_antigravity_terms_accept_share());
+      await flush();
+      expect(calls.answer).toHaveBeenCalledTimes(1);
+      expect(find(view.container, m.mobile_antigravity_terms_accept_share())).toBeFalsy();
+      expect(view.container.textContent).toContain(m.mobile_antigravity_terms_answering());
+    } finally { await act(async () => view.root.unmount()); }
+  });
+
+  it('a tentativa perdida no meio dos Termos tira os botões dela: fica o erro, Cancelar e Abrir no terminal', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const view = mount();
+    try {
+      await view.render();
+      await flush();
+      expect(find(view.container, m.mobile_antigravity_terms_accept_share())).toBeTruthy();
+      calls.read.mockRejectedValue(Object.assign(new Error('404'), { status: 404, code: 'erro_tentativa_inexistente' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      await flush();
+      expect(view.container.textContent).toContain(m.mobile_antigravity_terms_attempt_lost());
+      expect(find(view.container, m.mobile_antigravity_terms_accept_share())).toBeFalsy();
+      expect(view.container.textContent).not.toContain('Depois escolha.');
+      expect(find(view.container, m.mobile_antigravity_terms_cancel())).toBeTruthy();
+      expect(find(view.container, m.mobile_antigravity_terms_open_terminal())).toBeTruthy();
+    } finally { await act(async () => view.root.unmount()); }
+  });
+
+  it('a tentativa aberta depois de a folha sair é encerrada, e a falha desse encerramento é avisada', async () => {
+    let started!: (value: unknown) => void;
+    calls.start.mockReturnValue(new Promise((resolve) => { started = resolve; }));
+    calls.cancel.mockRejectedValue(new Error('delete-falhou'));
+    vi.mocked(Alert.alert).mockClear();
+    const view = mount();
+    await view.render();
+    await act(async () => view.root.unmount());
+    await act(async () => { started({ attempt_id: 't9', estado: 'iniciando' }); });
+    await flush();
+    expect(calls.cancel).toHaveBeenCalledExactlyOnceWith(server, 'default', 't9');
+    expect(Alert.alert).toHaveBeenCalledWith(m.mobile_antigravity_terms_title(), expect.stringContaining('delete-falhou'));
+  });
+
+  it('leitura recusada (403) é falha final: para a sondagem, mostra o erro e Abrir no terminal, e sair encerra a tentativa', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    calls.read.mockRejectedValue(Object.assign(new Error('recusado'), { status: 403 }));
+    const view = mount();
+    try {
+      await view.render();
+      await flush();
+      await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+      await flush();
+      expect(calls.read).toHaveBeenCalledTimes(1);
+      expect(view.container.textContent).toContain('recusado');
+      expect(find(view.container, m.mobile_antigravity_terms_open_terminal())).toBeTruthy();
+    } finally { await act(async () => view.root.unmount()); }
+    expect(calls.cancel).toHaveBeenCalledExactlyOnceWith(server, 'default', 't1');
+  });
+
   it('sonda a cada 1 s até os Termos; o link abre; a opção tocada vai ao servidor e o aceite fecha com o aviso', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     calls.read.mockResolvedValueOnce({ attempt_id: 't1', estado: 'iniciando' });

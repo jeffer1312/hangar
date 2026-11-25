@@ -57,6 +57,10 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
   // O DELETE falhou com a janela aberta: só o Cancelar fica, e ele manda o DELETE de novo.
   const [stuck, setStuck] = useState(false);
   const live = useRef<Live | null>(null);
+  // A etapa na tela, para a leitura de 1 s comparar sem redesenhar.
+  const shown = useRef<AntigravityTermsAttempt | null>(null);
+  // O erro na tela é de uma leitura: a próxima leitura boa o tira. O de uma ação fica até a etapa mudar.
+  const readFailed = useRef(false);
   const generation = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const reader = useRef<AbortController | null>(null);
@@ -64,6 +68,8 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
   done.current = onDone;
 
   const stopReading = () => { clearTimeout(timer.current); reader.current?.abort(); reader.current = null; };
+  const show = (next: AntigravityTermsAttempt | null) => { shown.current = next; setAttempt(next); };
+  const actionError = (text: string) => { readFailed.current = false; setError(text); };
 
   function settle(next: AntigravityTermsAttempt) {
     // Na etapa de login o terminal segue aberto até o painel fechar (DELETE).
@@ -71,7 +77,7 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
     live.current = null;
     if (next.estado !== 'concluido') { haptic.error(); return; }
     toast.ok(m.mobile_antigravity_terms_done());
-    void Promise.resolve().then(() => done.current()).catch((e: unknown) => setError(fail(e)));
+    void Promise.resolve().then(() => done.current()).catch((e: unknown) => actionError(fail(e)));
   }
 
   async function read(g: number) {
@@ -82,19 +88,28 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
     reader.current = controller;
     try {
       const next = await getAntigravityTermsForServer(now.server, ACCOUNT, now.attemptId, controller.signal);
-      if (g !== generation.current) return;
-      setAttempt((prev) => same(prev, next) ? prev : next);
-      setError('');
+      if (g !== generation.current || controller.signal.aborted) return;
+      const changed = !same(shown.current, next);
+      if (changed) show(next);
+      if (changed || readFailed.current) { readFailed.current = false; setError(''); }
       if (polling(next)) timer.current = setTimeout(() => void read(g), POLL_MS);
       else settle(next);
     } catch (e) {
       if (g !== generation.current || controller.signal.aborted) return;
       // 404: a tentativa acabou ou foi trocada por outra; insistir não traz ela de volta.
-      if ((e as { status?: number } | null)?.status === 404) {
+      const status = (e as { status?: number } | null)?.status;
+      if (status === 404) {
         live.current = null;
-        setError(m.mobile_antigravity_terms_attempt_lost());
+        show(null);
+        actionError(m.mobile_antigravity_terms_attempt_lost());
+        haptic.error();
+      } else if (status !== undefined && status >= 400 && status < 500) {
+        // Recusa (401, 403, 409) não muda insistindo. A tentativa fica em `live`: sair ainda a encerra.
+        show(null);
+        actionError(fail(e));
         haptic.error();
       } else {
+        readFailed.current = true;
         setError(fail(e));
         timer.current = setTimeout(() => void read(g), POLL_MS * 3);
       }
@@ -110,15 +125,16 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
     try {
       const next = await startAntigravityTermsForServer(s, ACCOUNT);
       if (g !== generation.current) {
-        if (next.attempt_id) void cancelAntigravityTermsForServer(s, ACCOUNT, next.attempt_id).catch(() => {});
+        const orphan = { server: s, attemptId: next.attempt_id };
+        if (orphan.attemptId) void cancelAntigravityTermsForServer(s, ACCOUNT, orphan.attemptId).catch((e: unknown) => alertNotClosed(orphan, e));
         return;
       }
       if (!next.attempt_id) throw new Error(m.erro_desconhecido());
       live.current = { server: s, attemptId: next.attempt_id };
-      setAttempt(next);
+      show(next);
       void read(g);
     } catch (e) {
-      if (g === generation.current) { setError(fail(e)); haptic.error(); }
+      if (g === generation.current) { actionError(fail(e)); haptic.error(); }
     } finally {
       if (g === generation.current) setBusy(null);
     }
@@ -129,12 +145,13 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
     if (!now || busy) return;
     haptic.selection();
     const g = generation.current;
-    setBusy('answer'); setError('');
+    setBusy('answer'); actionError('');
     try {
       await answerAntigravityTermsForServer(now.server, ACCOUNT, now.attemptId, opcao);
-      if (g === generation.current) void read(g);
+      // Sem isto os botões voltariam até a próxima leitura, e o segundo toque levaria 409.
+      if (g === generation.current) { show({ attempt_id: now.attemptId, estado: 'respondendo' }); void read(g); }
     } catch (e) {
-      if (g === generation.current) { setError(fail(e)); haptic.error(); }
+      if (g === generation.current) { actionError(fail(e)); haptic.error(); }
     } finally {
       if (g === generation.current) setBusy(null);
     }
@@ -160,7 +177,7 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
         live.current = now;
         setBusy(null);
         setStuck(true);
-        setError((e as { code?: string } | null)?.code === 'erro_termos_janela_aberta' ? m.mobile_antigravity_terms_error_window_open() : fail(e));
+        actionError((e as { code?: string } | null)?.code === 'erro_termos_janela_aberta' ? m.mobile_antigravity_terms_error_window_open() : fail(e));
         haptic.error();
         return;
       }
@@ -169,7 +186,7 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
   }
 
   async function openLink(link: string) {
-    try { await Linking.openURL(link); } catch (e) { setError(fail(e)); }
+    try { await Linking.openURL(link); } catch (e) { actionError(fail(e)); }
   }
 
   useEffect(() => {
@@ -194,7 +211,7 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
       <ScrollView contentContainerStyle={styles.root}>
         <TermosPainel serverLabel={server.label} stage={stage} text={attempt?.estado === 'termos' ? attempt.texto : ''}
           sending={busy === 'answer'} failed={failed} error={error} cancelDisabled={busy === 'cancel'}
-          terminal={!!failed || (!!error && !live.current && busy !== 'start')}
+          terminal={!!failed || (!!error && (!live.current || !attempt) && busy !== 'start')}
           onAnswer={(opcao) => void answer(opcao)} onLink={(link) => void openLink(link)} onSignIn={onSignIn}
           onCancel={() => void cancel()} onOpenTerminal={onOpenTerminal} />
       </ScrollView>

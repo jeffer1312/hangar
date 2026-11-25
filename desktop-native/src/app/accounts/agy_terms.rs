@@ -93,6 +93,8 @@ pub(super) struct AgyTermsFlow {
     closing: bool,
     turn: u64,
     task: Option<JoinHandle<()>>,
+    /// O painel saiu: o POST em voo fecha sozinho a tentativa que abrir.
+    gone: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AgyTermsFlow {
@@ -111,8 +113,12 @@ impl AgyTermsFlow {
 }
 
 impl Drop for AgyTermsFlow {
-    // Tarefa do tokio não morre com o handle: sem isto a leitura seguiria depois do painel fechado.
-    fn drop(&mut self) { if let Some(task) = self.task.take() { task.abort(); } }
+    // Tarefa do tokio não morre com o handle: sem isto a leitura seguiria depois do painel fechado. Sem tentativa, a
+    // tarefa é o POST que começa: ela segue para fechar a tentativa que o servidor abrir, que ninguém mais conhece.
+    fn drop(&mut self) {
+        self.gone.store(true, std::sync::atomic::Ordering::SeqCst);
+        if self.attempt.is_some() && let Some(task) = self.task.take() { task.abort(); }
+    }
 }
 
 pub(in crate::app) enum TermsReply {
@@ -124,12 +130,17 @@ pub(in crate::app) enum TermsReply {
 }
 
 /// Fecha no servidor o terminal escondido da tentativa; quem já saiu da tela não tem onde mostrar a falha.
-fn close_attempt(runtime: &Runtime, api: Api, attempt: String) {
-    runtime.spawn(async move {
-        if let Err(error) = api.server_delete(&TERMS, &[("attempt_id", &attempt)], 15).await {
-            eprintln!("Termos do Antigravity: o terminal escondido não foi fechado no servidor: {}", error.detail);
-        }
-    });
+fn close_attempt(runtime: &Runtime, api: Api, attempt: String) { runtime.spawn(delete_attempt(api, attempt)); }
+
+async fn delete_attempt(api: Api, attempt: String) {
+    if let Err(error) = api.server_delete(&TERMS, &[("attempt_id", &attempt)], 15).await {
+        eprintln!("Termos do Antigravity: o terminal escondido não foi fechado no servidor: {}", error.detail);
+    }
+}
+
+/// A tentativa que o POST que começa abriu.
+fn opened(result: &Result<Value, Failure>) -> Option<String> {
+    result.as_ref().ok()?.get("attempt_id")?.as_str().map(str::to_owned)
 }
 
 impl Hangar {
@@ -137,12 +148,19 @@ impl Hangar {
     pub(super) fn open_agy_terms(&mut self, cx: &mut Context<Self>) {
         if self.api.is_none() || self.accounts.terms.is_some() { return; }
         self.accounts.outcome = None;
-        self.accounts.terms = Some(AgyTermsFlow { attempt: None, stage: TermsStage::Starting, error: None, busy: true, read_failed: false, closing: false, turn: 0, task: None });
+        self.accounts.terms = Some(AgyTermsFlow { attempt: None, stage: TermsStage::Starting, error: None, busy: true, read_failed: false, closing: false, turn: 0, task: None, gone: Default::default() });
         let Some((turn, api)) = self.terms_turn() else { return };
         let done = self.accounts_send_later();
         if let Some(flow) = self.accounts.terms.as_mut() {
+            let gone = flow.gone.clone();
             flow.task = Some(self.runtime.spawn(async move {
-                done(AccountsReply::AgyTerms(TermsReply::Started(turn, api.server_post(&TERMS, 30).await))).await
+                let result = api.server_post(&TERMS, 30).await;
+                // O painel já saiu: a resposta não o acharia (nem chega, se a máquina trocou), então a tentativa fecha aqui.
+                if gone.load(std::sync::atomic::Ordering::SeqCst) {
+                    if let Some(attempt) = opened(&result) { delete_attempt(api, attempt).await; }
+                    return;
+                }
+                done(AccountsReply::AgyTerms(TermsReply::Started(turn, result))).await
             }));
         }
         cx.notify();
@@ -241,10 +259,7 @@ impl Hangar {
             TermsReply::Started(turn, result) => {
                 let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.turn == turn) else {
                     // O painel fechou com o pedido em voo: a tentativa que o servidor abriu fecha aqui.
-                    if let (Ok(value), Some(api)) = (&result, self.api.clone())
-                        && let Some(attempt) = value.get("attempt_id").and_then(Value::as_str) {
-                        close_attempt(&self.runtime, api, attempt.to_owned());
-                    }
+                    if let (Some(attempt), Some(api)) = (opened(&result), self.api.clone()) { close_attempt(&self.runtime, api, attempt); }
                     return false;
                 };
                 flow.busy = false;
@@ -434,7 +449,7 @@ mod tests {
     #[test]
     fn a_cancel_whose_window_stayed_open_keeps_the_panel_with_the_error_and_cancel_tries_again() {
         let mut flow = AgyTermsFlow { attempt: Some("t1".into()), stage: TermsStage::Terms("t".into()), error: None, busy: true,
-            read_failed: false, closing: false, turn: 1, task: None };
+            read_failed: false, closing: false, turn: 1, task: None, gone: Default::default() };
         let open = Failure { status: Some(500), detail: "a janela escondida dos Termos não fechou".into(), retry_after: None, uncertain: false,
             code: Some("erro_termos_janela_aberta".into()) };
         assert!(!flow.cancelled(Err(open)), "o painel fica");
@@ -442,5 +457,28 @@ mod tests {
         assert_eq!(flow.actions(), [Cancel], "só o Cancelar, sem Aceitar de uma tentativa que o servidor já soltou");
         assert_eq!(flow.attempt.as_deref(), Some("t1"), "o segundo Cancelar vai à mesma tentativa");
         assert!(flow.cancelled(Ok(serde_json::json!({"ok": true}))), "o DELETE que deu certo fecha");
+    }
+
+    /// Fecha um painel com a tarefa dada e diz se ela chegou ao fim e o que viu em `gone`.
+    fn drop_with_task(attempt: Option<&str>) -> Result<bool, tokio::sync::oneshot::error::RecvError> {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (go, wait) = tokio::sync::oneshot::channel::<()>();
+        let (report, seen) = tokio::sync::oneshot::channel();
+        let gone = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = gone.clone();
+        let task = runtime.spawn(async move {
+            let _ = wait.await;
+            let _ = report.send(flag.load(std::sync::atomic::Ordering::SeqCst));
+        });
+        drop(AgyTermsFlow { attempt: attempt.map(str::to_owned), stage: TermsStage::Starting, error: None, busy: true, read_failed: false,
+            closing: false, turn: 1, task: Some(task), gone });
+        let _ = go.send(());
+        runtime.block_on(seen)
+    }
+
+    #[test]
+    fn closing_the_panel_with_the_start_in_flight_lets_the_start_close_the_attempt_it_opens() {
+        assert_eq!(drop_with_task(None), Ok(true), "o POST segue e sabe que o painel saiu");
+        assert!(drop_with_task(Some("t1")).is_err(), "com a tentativa já conhecida, a leitura de 1 s para");
     }
 }
