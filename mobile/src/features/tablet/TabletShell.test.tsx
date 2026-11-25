@@ -70,6 +70,7 @@ vi.mock('react-native-gesture-handler', async original => ({ ...await original<t
 vi.mock('../../chat/ChatBody', () => ({ ChatBody: () => createElement('article', null, 'conversation') }));
 vi.mock('../files/FilesPanel', () => ({ FilesPanel: () => null }));
 vi.mock('../vault/VaultRequests', () => ({ VaultRequestsButton: () => null, VaultRequestSheet: () => null }));
+vi.mock('../integrations/IntegrationRequests', () => ({ IntegrationRequestsButton: () => null, IntegrationRequestSheet: () => null }));
 vi.mock('../activity/ActivityPanel', () => ({ ActivityPanel: () => null }));
 vi.mock('../git/GitPanel', () => ({ GitPanel: ({ name }: { name: string }) => createElement('section', { 'data-git-session': name }) }));
 vi.mock('./ContextTab', () => ({ ContextTab: ({ name }: { name: string }) => createElement('section', { 'data-context-session': name }) }));
