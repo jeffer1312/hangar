@@ -724,11 +724,17 @@ impl Tools {
     /// O navegador fica no app que mostrou a sessão por último: o de outra máquina quando ele a mostrou depois do app
     /// desta (ou este não existe). Se o de lá desligou, a `browser-cmd` recusa em vez de cair num navegador daqui.
     fn remote_browser(&self, name: &str, home: &std::path::Path) -> Result<bool, String> {
-        if let Some(remote) = self.st.browser_host.last_seen(name)
+        let host = &self.st.browser_host;
+        if let Some(remote) = host.last_seen(name)
             && nav::local_focus(home, name).is_none_or(|local| remote > local) {
             return Ok(true);
         }
-        Ok(!nav::local_app(home).map_err(|e| e.0)?)
+        match nav::local_app(home) {
+            Ok(local) => Ok(!local),
+            // App daqui caído: o de outra máquina com a sessão serve; sem ninguém lá, a recusa diz que o daqui reinicia.
+            Err(_) if nav::local_app_dead(home) && (host.last_seen(name).is_some() || host.has_host(name)) => Ok(true),
+            Err(e) => Err(e.0),
+        }
     }
 
     /// O verbo vai pela `browser-cmd` ao app de quem usa a sessão em outra máquina.
@@ -1099,18 +1105,19 @@ impl Tools {
         Ok(dict(reply))
     }
 
-    /// O host da página do navegador da sessão; só http(s) tem domínio para comparar com a entrada.
-    async fn fill_host(&self, home: &Path, name: &str) -> Result<String, String> {
-        // O valor só vai ao app desta máquina: com a sessão aberta noutra, a página que a pessoa vê é a de lá, e um
-        // navegador velho daqui receberia a senha.
-        // Sem app aqui, o `page_url` abaixo já diz que ele não está aberto.
-        if nav::local_app(home).map_err(|e| e.0)? && self.remote_browser(name, home)? {
-            return Err("erro_cofre_sem_navegador: o navegador desta sessão está no app desktop de outra máquina, e o cofre só \
-                preenche no app desta máquina".into());
-        }
-        let url = nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
-        exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
-            .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))
+    /// O host da página do navegador da sessão, e se ela está no app de outra máquina; só http(s) tem domínio para
+    /// comparar com a entrada. A página que conta é a do app que a pessoa usa, o mesmo que recebe o valor.
+    async fn fill_host(&self, home: &Path, name: &str) -> Result<(String, bool), String> {
+        let remote = self.remote_browser(name, home)?;
+        let url = if remote {
+            let text = self.host_verb(name, "url", &[], None, nav::VERB_TIMEOUT).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+            nav::ok_value(&text).ok_or_else(|| format!("erro_cofre_sem_navegador: {text}"))?
+        } else {
+            nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?
+        };
+        let host = exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
+            .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))?;
+        Ok((host, remote))
     }
 
     /// O usuário sai do resumo da entrada (o `vault_list` já o mostra); a senha, pelo pedido de uso
@@ -1127,7 +1134,7 @@ impl Tools {
         let owner = exec::Owner::of(&self.st)?;
         let home = self.home();
         let long_enough = async { if password { self.vault_agent(&name).await.map(drop) } else { Ok(()) } };
-        let ((), host, entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
+        let ((), (host, _), entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
         let entry = entries.iter().find(|e| crate::vault::same_name(&e.name, &a.entry)).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
         if let Some(refusal) = exec::fill_refusal(entry.url.as_deref(), &host) { return Err(refusal); }
         let value = if password {
@@ -1140,10 +1147,19 @@ impl Tools {
         let lock = self.nav_lock(&name);
         let _held = lock.lock().await;
         // A página pode ter navegado durante a aprovação: o valor só entra no domínio aprovado.
-        let now = self.fill_host(&home, &name).await?;
+        let (now, remote) = self.fill_host(&home, &name).await?;
         if now != host { return Err(format!("erro_cofre_dominio_diferente: a página saiu de {host} para {now} durante a aprovação")); }
-        let answer = nav::fill_secret(&self.http, &home, &name, &[a.target, a.field], &value).await
-            .map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+        let args = [a.target, a.field];
+        let answer = if remote {
+            // Dentro do processo: a rota `browser-cmd` recusa o valor. O app confere o domínio de novo antes de digitar.
+            match self.st.browser_host.fill_secret(&name, &args, &host, value.clone()).await {
+                Ok(hangar_browser_host::Reply::Text(text)) => text,
+                Ok(hangar_browser_host::Reply::Png(_)) => "erro: o app respondeu uma imagem ao preenchimento".into(),
+                Err(refusal) => return Err(format!("erro_cofre_sem_navegador: {}", refusal.message("fill-secret"))),
+            }
+        } else {
+            nav::fill_secret(&self.http, &home, &name, &args, &value).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?
+        };
         let answer = exec::mask(&answer, &value);
         if answer.starts_with("ok:") { return Ok(text("preenchido")); }
         let detail = answer.strip_prefix("erro:").map_or(answer.as_str(), str::trim);

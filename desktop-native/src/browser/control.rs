@@ -131,11 +131,26 @@ struct State {
 
 /// Senha do cofre na memória do controlador, com as formas que a resposta troca por `••••` (preenchidas ao guardá-la):
 /// tudo zerado ao sair. Sem `Debug` de propósito.
-pub struct Secret { value: String, forms: Vec<String> }
+pub struct Secret { value: String, forms: Vec<String>, host: Option<String> }
 
 impl Secret {
-    pub fn new(value: String) -> Self { Self { value, forms: Vec::new() } }
+    pub fn new(value: String) -> Self { Self { value, forms: Vec::new(), host: None } }
+    /// Valor que só entra em página de `host`: o pedido veio pelo canal anfitrião, e a página pode ter navegado depois
+    /// que o servidor de lá leu o domínio dela.
+    pub fn for_host(mut self, host: String) -> Self { self.host = Some(host); self }
     pub fn as_str(&self) -> &str { &self.value }
+}
+
+/// O host da página como o servidor o compara (`vault::exec::host_of`): minúsculas, sem usuário, porta nem ponto
+/// final. Só http(s) tem domínio.
+fn page_host(url: &str) -> Option<String> {
+    let url = url.trim();
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = match host.strip_prefix('[') { Some(v6) => v6.split(']').next()?, None => host.split(':').next()? };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
 }
 
 impl Drop for Secret {
@@ -695,6 +710,15 @@ impl<P: Page> Controller<P> {
             "username" => false,
             _ => return Ok("erro: fill-secret: o campo e username ou password".into()),
         };
+        // Na vez do verbo, logo antes do clique: a leitura que o servidor de lá fez pode já ser de outra página.
+        if let Some(expected) = secret.host.as_deref() {
+            let now = self.current_url().await?;
+            let url = now.strip_prefix("ok: ").and_then(|v| serde_json::from_str::<String>(v).ok()).unwrap_or_default();
+            let host = page_host(&url);
+            if host.as_deref() != Some(expected) {
+                return Ok(format!("erro: erro_cofre_dominio_diferente: a pagina saiu de {expected} para {}", host.unwrap_or(url)));
+            }
+        }
         let clicked = self.click_as("fill-secret", r).await?;
         if clicked.starts_with("erro:") { return Ok(clicked); }
         if let Some(why) = self.blocked() { return Ok(why.into()); }
@@ -1225,6 +1249,26 @@ mod tests {
         assert!(!fill_secret(&c, "password").starts_with("ok:"));
         assert_eq!(text(block_on(c.run("snapshot", &[]))), "- RootWebArea \"Login\"\n  - textbox \"Senha\" [ref=@e1]");
         assert!(!text(block_on(c.run("text", &[]))).contains("S3nh"));
+    }
+
+    /// Pedido de outra máquina: o valor só entra se a página ainda é do domínio que o servidor de lá aprovou.
+    #[test]
+    fn a_secret_from_another_machine_only_goes_into_the_approved_domain() {
+        let on = |url: &'static str| ctl(move |m, p| Ok(if m == "Page.getNavigationHistory" {
+            json!({"currentIndex": 0, "entries": [{"url": url}]})
+        } else { login_answer("senha", m, p) }));
+        let fill = |c: &Controller<Fake>| {
+            block_on(c.run("snapshot", &[]));
+            text(block_on(c.run_with("fill-secret", &s(&["@e1", "password"]), Some(Secret::new(SECRET.into()).for_host("github.com".into())))))
+        };
+        let c = on("https://evil.io/login");
+        let refused = fill(&c);
+        assert!(refused.starts_with("erro: erro_cofre_dominio_diferente:") && refused.contains("evil.io") && !refused.contains("S3nh"), "{refused}");
+        assert!(!methods(&c).iter().any(|m| m == "Input.insertText" || m == "Input.dispatchMouseEvent"), "nada clicado nem digitado noutro domínio");
+        assert!(c.state.borrow().secrets.is_empty());
+        assert_eq!(fill(&on("https://GitHub.com:443/login")), "ok: fill-secret @e1");
+        assert_eq!(page_host("http://user:pw@exemplo.com.br./a").as_deref(), Some("exemplo.com.br"));
+        assert_eq!(page_host("about:blank"), None);
     }
 
     #[test]

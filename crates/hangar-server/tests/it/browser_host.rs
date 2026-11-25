@@ -127,6 +127,39 @@ async fn browser_host_refusals_follow_the_contract() {
 }
 
 #[tokio::test]
+async fn browser_host_route_never_carries_a_vault_value() {
+    let home = tempfile::tempdir().unwrap();
+    let addr = server(home.path()).await;
+    let mut app = host(addr).await;
+    focused(addr, &mut app, "s").await;
+    for body in [json!({"verbo": "fill-secret", "args": ["@e1", "password"]}), json!({"verbo": "fill", "args": ["@e1", "x"], "valor": "segredo-7Qz"})] {
+        let r = cmd(addr, "s", body.clone()).send().await.unwrap();
+        assert_eq!(r.status(), 422, "{body}");
+        let text = r.text().await.unwrap();
+        assert!(text.contains("browser_host_secret_refused") && !text.contains("segredo-7Qz"), "{text}");
+    }
+    // Nada chegou ao app: o primeiro pedido que ele vê é o `url`.
+    let call = tokio::spawn(cmd(addr, "s", json!({"verbo": "url", "args": [], "deadline_ms": 5000})).send());
+    let asked = next_request(&mut app).await;
+    assert_eq!(asked["verbo"], "url");
+    send(&mut app, json!({"id": asked["id"], "ok": true, "text": "ok: \"about:blank\""})).await;
+    assert_eq!(call.await.unwrap().unwrap().status(), 200);
+}
+
+/// O CLI pergunta `host`: com o app de lá só com foco (sem clique), a hora 0; sem app nenhum, 409.
+#[tokio::test]
+async fn browser_host_host_verb_answers_zero_for_focus_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let addr = server(home.path()).await;
+    let none = cmd(addr, "s", json!({"verbo": "host", "args": []})).send().await.unwrap();
+    assert_eq!(none.status(), 409);
+    let mut app = host(addr).await;
+    focused(addr, &mut app, "s").await;
+    let r = cmd(addr, "s", json!({"verbo": "host", "args": []})).send().await.unwrap();
+    assert_eq!(r.text().await.unwrap(), "ok: host 0");
+}
+
+#[tokio::test]
 async fn browser_host_bad_bodies_are_422() {
     let home = tempfile::tempdir().unwrap();
     let addr = server(home.path()).await;

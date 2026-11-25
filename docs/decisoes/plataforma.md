@@ -185,6 +185,15 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   Ele manda `{"type":"focus","session":…}` ao mostrar uma sessão. O CLI e o MCP sem app local
   mandam o verbo por `POST /api/sessions/{name}/browser-cmd`, e o servidor o repassa ao app com o
   foco mais recente naquela sessão (`hangar-browser-host`).
+  - O verbo `host` (só a pergunta do CLI) responde a hora do último `seen` (clique ou tecla no app de
+    lá) e, sem `seen`, `ok: host 0` quando um app ligado tem a sessão em foco. O `seen` só sai do
+    uso e só vive na memória do servidor: reiniciado o servidor, ou só com a sessão na tela, a
+    pergunta ficava sem resposta.
+  - App daqui caído (`_srv.json` presente com o pid sem processo) e outro app com a sessão: o CLI e
+    o MCP usam o de lá, sem olhar o `_focus.json` que o caído deixou. Ninguém lá: fica a recusa
+    "o app daqui está reiniciando". Com o app daqui vivo nada muda, porque a hora 0 perde para
+    qualquer foco gravado. O MCP confere o pid também no Windows (`terminal_process::pid_alive`);
+    antes só o Linux via o pid morto.
 
   | Caso | Resposta |
   |---|---|
@@ -192,7 +201,8 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   | App recusou o servidor (o atual nunca manda) | 403 `browser_host_not_allowed` |
   | Canal caiu com o pedido em curso | 502 `browser_host_gone`, "pode ter sido executado" |
   | Prazo (`deadline_ms`, padrão 45 s, teto 10 min) | 504 `browser_host_timeout` |
-  | `objetivo` e `confere` | 422 `browser_host_verb_unsupported` |
+  | `objetivo` e `confere` como verbo | 422 `browser_host_verb_unsupported` |
+  | `fill-secret`, ou qualquer corpo com `valor` | 422 `browser_host_secret_refused` |
 
   O print chega como binário e é gravado pelo servidor na máquina da sessão
   (`~/.hangar/nav/shots/<sessão>/`), para o caminho que o agente cita valer lá. O canal tem o mesmo
@@ -203,8 +213,18 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   No app, cada verbo tem teto próprio (20 s; `wait`, o `--timeout` dele mais 2 s; nunca além do `deadline_ms`
   menos uma folga): chamada CDP presa solta a vez com `erro: … (preso em <método>)` e grava `nav: verb_stuck` no
   `native.log`.
-  As tools MCP `browser_*` usam a mesma rota dentro do processo. `objetivo`, `confere` e
-  `vault_fill` não existem por anfitrião remoto.
+  As tools MCP `browser_*` usam a mesma rota dentro do processo.
+  - `objetivo` e `confere` (CLI e `browser_goal`/`browser_check`) rodam pelo laço do CLI com os
+    verbos de sempre, um a um, pela `browser-cmd`; o print do Jev é o `shot` com caminho absoluto,
+    gravado pelo servidor nesta máquina, onde o CLI o lê. Os dois nomes nunca vão ao canal.
+  - `vault_fill` com a sessão no app de outra máquina: o servidor da sessão lê a página pelo verbo
+    `url` do canal, pede a senha como sempre (cartão na máquina dona do cofre) e manda o valor por
+    `Registry::fill_secret`, dentro do processo, com o domínio aprovado (`expected_host`). O valor
+    vai só no quadro ao app, zerado depois do envio, fora do pedido em curso, do estado e do `list`;
+    a rota recusa o verbo e o campo. O app tira o `valor` do pedido antes de tudo e o controlador
+    confere, na vez do verbo e antes do clique, que a página ainda é desse domínio
+    (`erro_cofre_dominio_diferente`). Decidido pelo dono: o canal em http na rede local também
+    serve, como qualquer rota do dono.
 - **D1, decidida em 23/11: sem cartão nem pergunta.** O app serve sozinho as sessões das máquinas
   do dono (entrada de servidor que não é convite nem par externo); convite e par externo nunca
   ganham o canal. O túnel existe para o notebook alcançar o `localhost` da máquina da sessão, e

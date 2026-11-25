@@ -59,17 +59,28 @@ pub async fn fill_secret(http: &reqwest::Client, home: &Path, name: &str, args: 
     verb_on(http, home, sidecar(home, name).as_ref(), "fill-secret", args, None, VERB_TIMEOUT, Some(value)).await
 }
 
-/// Porta e token do app; `None` = sem arquivo ou incompleto. Pid morto no arquivo é recusa na hora: outra execução do
-/// app pode tê-lo publicado e morrido.
-fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
-    // Só a ausência é "sem app aqui": arquivo ilegível mandaria o verbo calado ao app de outra máquina.
+/// O `_srv.json` lido; `None` = sem arquivo. Só a ausência é "sem app aqui": arquivo ilegível mandaria o verbo calado
+/// ao app de outra máquina.
+fn registration(home: &Path) -> Result<Option<Value>, Unavailable> {
     let raw = match std::fs::read(nav_dir(home).join("_srv.json")) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(unreadable(&e.to_string())),
     };
-    let srv = serde_json::from_slice::<Value>(&raw).map_err(|e| unreadable(&e.to_string()))?;
-    if !crate::orchestration::runs::pid_alive(&srv["pid"]) {
+    serde_json::from_slice::<Value>(&raw).map(Some).map_err(|e| unreadable(&e.to_string()))
+}
+
+/// O pid do registro sabidamente sem processo. Sem pid, ou sem resposta do sistema, não decide.
+fn dead_pid(srv: &Value) -> bool {
+    let pid = srv["pid"].as_u64().or_else(|| srv["pid"].as_str().and_then(|p| p.trim().parse().ok()));
+    pid.and_then(|p| u32::try_from(p).ok()).is_some_and(|pid| matches!(crate::terminal_process::pid_alive(pid), Ok(false)))
+}
+
+/// Porta e token do app; `None` = sem arquivo ou incompleto. Pid morto no arquivo é recusa na hora: outra execução do
+/// app pode tê-lo publicado e morrido.
+fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
+    let Some(srv) = registration(home)? else { return Ok(None) };
+    if dead_pid(&srv) {
         return Err(Unavailable(format!("o servidor do navegador registrado em ~/.hangar/nav/_srv.json (pid {}) não está mais rodando; \
             abra o app desktop do Hangar; se ele já está aberto, retoma o registro em poucos segundos: tente de novo e, se continuar, feche e abra o app",
             srv["pid"])));
@@ -88,6 +99,9 @@ pub fn local_app(home: &Path) -> Result<bool, Unavailable> {
     // Os apps apagam o registro ao fechar: pid morto com o arquivo presente é reinício ou queda, e a recusa é daqui.
     server(home).map(|found| found.is_some())
 }
+
+/// O registro do app desta máquina existe e o pid dele não tem processo: o app daqui reiniciando ou caído.
+pub fn local_app_dead(home: &Path) -> bool { registration(home).ok().flatten().is_some_and(|srv| dead_pid(&srv)) }
 
 /// Quando (ms) o app desktop desta máquina mostrou a sessão por último (`_focus.json`, gravado por ele).
 pub fn local_focus(home: &Path, name: &str) -> Option<u64> {
@@ -191,7 +205,7 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
 
 #[cfg(test)]
 mod tests {
-    use super::{Unavailable, host_answer, local_app, navigated};
+    use super::{Unavailable, host_answer, local_app, local_app_dead, navigated};
     use serde_json::json;
 
     #[test]
@@ -202,6 +216,8 @@ mod tests {
         std::fs::create_dir_all(&nav).unwrap();
         std::fs::write(nav.join("_srv.json"), b"{not json").unwrap();
         assert!(local_app(home.path()).unwrap_err().0.contains("não deu para ler"), "corrompido: recusa daqui");
+        // Ilegível não é app caído: o verbo não vai a outra máquina por um arquivo que não se leu.
+        assert!(!local_app_dead(home.path()));
     }
 
     // Pid que sabidamente morreu só se consegue no Linux; no Windows a conferência não decide por um número inventado.
@@ -216,6 +232,11 @@ mod tests {
         child.wait().unwrap();
         std::fs::write(nav.join("_srv.json"), json!({"porta": 1, "token": "t", "pid": dead}).to_string()).unwrap();
         assert!(local_app(home.path()).unwrap_err().0.contains("não está mais rodando"), "pid morto: o app daqui reiniciando");
+        assert!(local_app_dead(home.path()));
+        std::fs::write(nav.join("_srv.json"), json!({"porta": 1, "token": "t", "pid": std::process::id()}).to_string()).unwrap();
+        assert!(!local_app_dead(home.path()), "pid vivo");
+        std::fs::remove_file(nav.join("_srv.json")).unwrap();
+        assert!(!local_app_dead(home.path()), "sem registro não é app caído");
     }
 
     #[test]

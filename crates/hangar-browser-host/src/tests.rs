@@ -9,7 +9,7 @@ fn spawn(registry: &Arc<Registry>, session: &str, raw: Value) -> tokio::task::Jo
     tokio::spawn(async move { registry.command(&session, body(raw)).await })
 }
 
-async fn request(rx: &mut mpsc::UnboundedReceiver<String>) -> Value {
+async fn request(rx: &mut mpsc::UnboundedReceiver<Zeroizing<String>>) -> Value {
     serde_json::from_str(&rx.recv().await.expect("pedido ao anfitrião")).unwrap()
 }
 
@@ -173,4 +173,61 @@ async fn host_answers_when_another_machine_last_showed_the_session() {
     drop(host);
     assert_eq!(registry.last_seen("s"), Some(seen));
     assert_eq!(registry.command("s", body(json!({"verbo": "url"}))).await, Err(Refusal::NoHost));
+}
+
+#[tokio::test]
+async fn host_answers_zero_while_an_app_has_the_session_in_focus_without_use() {
+    let registry = Arc::new(Registry::default());
+    let (mut host, mut rx) = registry.attach();
+    host.text(r#"{"type":"focus","session":"s"}"#);
+    // Sem `seen`: o app de lá serve quem perdeu o app daqui, e a hora 0 perde para o foco de um app vivo daqui.
+    assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Ok(Reply::Text("ok: host 0".into())));
+    assert!(registry.has_host("s") && !registry.has_host("outra"));
+    assert_eq!(registry.command("outra", body(json!({"verbo": "host"}))).await, Err(Refusal::NoHost));
+    assert!(rx.try_recv().is_err(), "a pergunta não chega ao app");
+    drop(host);
+    assert!(!registry.has_host("s"));
+    assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Err(Refusal::NoHost));
+}
+
+#[tokio::test]
+async fn fill_secret_and_valor_never_come_from_the_route() {
+    let registry = Arc::new(Registry::default());
+    let (mut host, mut rx) = registry.attach();
+    host.text(r#"{"type":"focus","session":"s"}"#);
+    for raw in [json!({"verbo": "fill-secret", "args": ["@e1", "password"]}), json!({"verbo": "fill", "args": ["@e1", "x"], "valor": "senha"})] {
+        assert_eq!(registry.command("s", body(raw)).await, Err(Refusal::Secret));
+    }
+    assert_eq!((Refusal::Secret.status(), Refusal::Secret.code()), (422, "browser_host_secret_refused"));
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn fill_secret_puts_the_value_only_in_the_frame() {
+    const VALUE: &str = "S3nh@ \"x\"/é";
+    let registry = Arc::new(Registry::default());
+    let (mut host, mut rx) = registry.attach();
+    host.text(r#"{"type":"focus","session":"s"}"#);
+    host.text(r#"{"type":"state","session":"s","url":"https://github.com/login"}"#);
+    let call = {
+        let registry = registry.clone();
+        tokio::spawn(async move {
+            registry.fill_secret("s", &["@e3".to_owned(), "password".to_owned()], "github.com", Zeroizing::new(VALUE.to_owned())).await
+        })
+    };
+    let sent = request(&mut rx).await;
+    assert_eq!((sent["verbo"].as_str(), sent["valor"].as_str(), sent["expected_host"].as_str()), (Some("fill-secret"), Some(VALUE), Some("github.com")));
+    assert_eq!(sent["args"], json!(["@e3", "password"]));
+    assert_eq!(sent["session"], "s");
+    // Em curso, o pedido guarda só a sessão: nada do valor fica no registro.
+    {
+        let inner = registry.lock();
+        let pending: Vec<&Pending> = inner.hosts.values().flat_map(|h| h.pending.values()).collect();
+        assert!(pending.len() == 1 && pending[0].url.is_none() && pending[0].session == "s");
+    }
+    host.text(&json!({"id": sent["id"], "ok": true, "text": "ok: fill-secret @e3"}).to_string());
+    assert_eq!(call.await.unwrap(), Ok(Reply::Text("ok: fill-secret @e3".into())));
+    let list = registry.list();
+    assert_eq!(list, "s  https://github.com/login  vivo");
+    assert!(!list.contains("S3nh"));
 }

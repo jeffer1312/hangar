@@ -57,6 +57,12 @@ enum Share {
 }
 
 async fn scene_share(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>, owned: bool, server: &str, share: Share) -> Scene {
+    scene_tuned(groups, peers, owned, server, share, |_| {}).await
+}
+
+/// `tune` ajusta o estado antes de o servidor subir (o cofre falso, por exemplo).
+async fn scene_tuned(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>, owned: bool, server: &str, share: Share,
+    tune: impl FnOnce(&mut AppState)) -> Scene {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     list_support::sessions(root, 2);
@@ -112,6 +118,7 @@ async fn scene_share(groups: bool, peers: Option<hangar_server::groups::peers::P
         let pair = PairDir::new(home.join(".claude/.hangar-pair"), root.join("arquivo"));
         state.groups = Some(Arc::new(GroupService::new(pair, Arc::new(OrqVault::from_state(&state)), if server.is_empty() {"casa"} else {server}.into())));
     }
+    tune(&mut state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let state=Arc::new(state);
@@ -630,6 +637,120 @@ async fn browser_open_with_a_dead_desktop_server_fails_at_once() {
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "esperou {:?}", started.elapsed());
     let verb = mcp.call("browser", json!({"verbo": "snapshot"})).await;
     assert!(failed(&verb) && first_text(&verb).contains(&format!("pid {dead}")), "{verb}");
+}
+
+/// O app desktop de outra máquina com `session` em foco, pelo canal anfitrião: anota cada pedido e responde o texto de `answer`.
+async fn remote_app(addr: SocketAddr, session: &str, answer: impl Fn(&Value) -> String + Send + 'static) -> Arc<Mutex<Vec<Value>>> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser-host?token={OWNER}")).await.expect("canal anfitrião");
+    ws.send(Message::Text(json!({"type": "focus", "session": session}).to_string().into())).await.unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        while let Some(Ok(message)) = ws.next().await {
+            let Message::Text(text) = message else { continue };
+            let asked: Value = serde_json::from_str(&text).unwrap();
+            let reply = json!({"id": asked["id"], "ok": true, "text": answer(&asked)});
+            log.lock().unwrap().push(asked);
+            if ws.send(Message::Text(reply.to_string().into())).await.is_err() { break; }
+        }
+    });
+    seen
+}
+
+/// O app daqui caiu (pid morto no `_srv.json`): sem ninguém lá, a recusa diz que ele reinicia; com o app de outra
+/// máquina mostrando a sessão, mesmo sem uso registrado, o verbo vai a ele.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dead_desktop_app_here_hands_the_browser_to_the_app_that_shows_the_session() {
+    let s = scene().await;
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    write_json(&s.home.join(".hangar/nav/_srv.json"), json!({"porta": 1, "token": "t", "pid": dead}));
+    write_json(&s.home.join(".hangar/nav/casa-beta.json"), json!({"chave": "casa::beta", "url": "http://antes/", "ts": 0}));
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
+    let alone = mcp.call("browser", json!({"verbo": "url"})).await;
+    assert!(failed(&alone) && first_text(&alone).contains(&format!("pid {dead}")), "{alone}");
+    let asked = remote_app(s.addr, "beta", |_| "ok: \"http://localhost:3000/\"".into()).await;
+    let state = s.state.clone();
+    fake::wait_until(move || state.browser_host.has_host("beta")).await;
+    let url = mcp.call("browser", json!({"verbo": "url"})).await;
+    assert_eq!(first_text(&url), "ok: \"http://localhost:3000/\"", "{url}");
+    let verbs: Vec<Value> = asked.lock().unwrap().iter().map(|a| a["verbo"].clone()).collect();
+    assert_eq!(verbs, [json!("url")]);
+}
+
+/// O cofre da cena, com a chave na memória.
+#[derive(Default)]
+struct Keys(Mutex<Option<[u8; 32]>>);
+
+impl hangar_server::vault::KeyStore for Keys {
+    fn read(&self) -> futures_util::future::BoxFuture<'_, Result<Option<hangar_server::vault::Key>, hangar_server::vault::KeyError>> {
+        let key = self.0.lock().unwrap().map(zeroize::Zeroizing::new);
+        Box::pin(async move { Ok(key) })
+    }
+    fn write(&self, key: hangar_server::vault::Key) -> futures_util::future::BoxFuture<'_, Result<(), hangar_server::vault::KeyError>> {
+        *self.0.lock().unwrap() = Some(*key);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// Com a sessão no app de outra máquina, o `vault_fill` lê a página pelo canal e manda o valor por dentro do servidor:
+/// o app recebe o valor e o domínio aprovado; a resposta, o `list` e a rota `browser-cmd` nunca o levam. Página que
+/// trocou de domínio entre as duas leituras não recebe nada.
+#[tokio::test(flavor = "multi_thread")]
+async fn vault_fill_reaches_the_app_of_another_machine_inside_the_server() {
+    const USER: &str = "usuario-do-cofre-9Qz";
+    let s = scene_tuned(false, None, false, "", Share::Absent, |st| {
+        st.hangar_dir = st.origins_home.join(".hangar");
+        st.vault = Arc::new(hangar_server::vault::Vault::new(Arc::new(Keys::default())));
+    }).await;
+    s.state.vault.create(&s.state.hangar_dir).await.unwrap();
+    s.state.vault.add(&s.state.hangar_dir, hangar_server::vault::NewEntry { name: "gh".into(), username: Some(USER.into()),
+        password: zeroize::Zeroizing::new("senha-nao-usada".into()), url: Some("https://github.com".into()), notes: None,
+        policy: hangar_server::vault::Policy::Ask }).await.unwrap();
+    // As páginas que o `url` responde, uma por leitura; a última se repete.
+    let pages = Arc::new(Mutex::new(vec!["https://github.com/login".to_owned()]));
+    let shown = pages.clone();
+    let asked = remote_app(s.addr, "sem-term", move |a| match a["verbo"].as_str() {
+        Some("url") => {
+            let mut pages = shown.lock().unwrap();
+            let page = if pages.len() > 1 { pages.remove(0) } else { pages[0].clone() };
+            format!("ok: {}", Value::String(page))
+        }
+        Some("fill-secret") => format!("ok: fill-secret {}", a["args"][0].as_str().unwrap_or_default()),
+        _ => "ok".into(),
+    }).await;
+    let state = s.state.clone();
+    fake::wait_until(move || state.browser_host.has_host("sem-term")).await;
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-key", "k123")]).await;
+    let fill = json!({"entry": "gh", "field": "username", "ref": "@e3", "reason": "login"});
+    let filled = mcp.call("vault_fill", fill.clone()).await;
+    assert!(!failed(&filled) && first_text(&filled) == "preenchido", "{filled}");
+    assert!(!filled.to_string().contains(USER));
+    let frames = asked.lock().unwrap().clone();
+    let sent = frames.iter().find(|f| f["verbo"] == "fill-secret").expect("o app recebe o preenchimento");
+    assert_eq!((sent["valor"].as_str(), sent["expected_host"].as_str()), (Some(USER), Some("github.com")));
+    assert_eq!(sent["args"], json!(["@e3", "username"]));
+    assert!(frames.iter().filter(|f| f["verbo"] != "fill-secret").all(|f| !f.to_string().contains(USER)), "o valor só vai no quadro do preenchimento");
+
+    let route = |body: Value| client().post(format!("http://{}/api/sessions/sem-term/browser-cmd", s.addr)).bearer_auth(OWNER).json(&body).send();
+    let list = route(json!({"verbo": "list"})).await.unwrap().text().await.unwrap();
+    assert!(!list.contains(USER), "{list}");
+    let refused = route(json!({"verbo": "fill-secret", "args": ["@e3", "username"], "valor": USER})).await.unwrap();
+    assert_eq!(refused.status(), 422);
+    let body = refused.text().await.unwrap();
+    assert!(body.contains("browser_host_secret_refused") && !body.contains(USER), "{body}");
+
+    // A página trocou de domínio entre a leitura de antes da aprovação e a de antes do envio.
+    *pages.lock().unwrap() = vec!["https://github.com/login".into(), "https://evil.io/login".into()];
+    let before = asked.lock().unwrap().len();
+    let moved = mcp.call("vault_fill", fill).await;
+    assert!(failed(&moved) && first_text(&moved).starts_with("erro_cofre_dominio_diferente:"), "{moved}");
+    assert!(!moved.to_string().contains(USER));
+    assert!(asked.lock().unwrap()[before..].iter().all(|f| f["verbo"] != "fill-secret"), "a página de outro domínio não recebe o valor");
 }
 
 #[tokio::test(flavor = "multi_thread")]

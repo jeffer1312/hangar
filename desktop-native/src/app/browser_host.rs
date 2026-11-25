@@ -9,7 +9,7 @@ use tokio::{io::{AsyncWrite, AsyncWriteExt}, time::timeout};
 
 use super::*;
 use super::ports_panel::owner_server;
-use crate::browser::control::Reply;
+use crate::browser::control::{Reply, Secret};
 use crate::{api::route::blocked_url, ws};
 
 const PATH: &str = "/api/browser-host";
@@ -334,8 +334,10 @@ impl Hangar {
         self.ports.forwards.list(&api.identity()).into_iter().map(|f| (f.local, f.port)).collect()
     }
 
-    fn host_execute(&mut self, server: String, request: Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn host_execute(&mut self, server: String, mut request: Value, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = request["id"].as_u64() else { return };
+        // O valor do cofre sai do pedido antes de tudo: nada adiante (args, log, resposta) o vê.
+        let value = match request.as_object_mut().and_then(|o| o.remove("valor")) { Some(Value::String(v)) => Some(Secret::new(v)), _ => None };
         // Pedido em voo de um servidor que acabou de virar convite ou sair não passa.
         if !owner_server(&self.servers, &server) { return; }
         let Some(out) = self.browser_hosts.out(&server) else { return };
@@ -344,12 +346,18 @@ impl Hangar {
         let verb = request["verbo"].as_str().unwrap_or_default().to_owned();
         let args: Vec<String> = request["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_owned)).collect();
         let key = format!("{server}::{session}");
+        // Só o `fill-secret` leva valor, e só com o domínio aprovado: o controlador confere a página contra ele.
+        let secret = match (verb.as_str(), value, request["expected_host"].as_str().filter(|h| !h.is_empty())) {
+            ("fill-secret", Some(value), Some(host)) => Some(value.for_host(host.to_owned())),
+            ("fill-secret", ..) => { let _ = out.try_send(refusal(id, "fill-secret sem o valor ou o dominio aprovado")); return; }
+            _ => None,
+        };
         if matches!(verb.as_str(), "open" | "goto") {
             let deadline = Instant::now() + request["deadline_ms"].as_u64().map_or(DEFAULT_DEADLINE, Duration::from_millis);
             return self.host_navigate(server, id, key, session, verb, args.first().cloned().unwrap_or_default(), deadline, window, cx);
         }
         let (tx, rx) = futures::channel::oneshot::channel();
-        self.host_run_verb(key, verb, args, request["aba"].as_i64(), request["deadline_ms"].as_u64(), tx, cx);
+        self.host_run_verb(key, verb, args, request["aba"].as_i64(), request["deadline_ms"].as_u64(), secret, tx, cx);
         let pairs = self.host_pairs(&server);
         cx.spawn(async move |_, _| {
             let reply = rx.await.unwrap_or_else(|_| Reply::Text("erro: o navegador fechou no meio do comando".into()));
@@ -423,7 +431,7 @@ impl Hangar {
                 let (key, verb) = (key.clone(), verb.to_owned());
                 // O que sobra do prazo do `open`/`goto`: o verbo não segura a vez depois de o servidor desistir.
                 let left = deadline.saturating_duration_since(Instant::now()).as_millis() as u64;
-                let sent = this.update(cx, |this, cx| this.host_run_verb(key, verb, args, None, Some(left), tx, cx)).is_ok();
+                let sent = this.update(cx, |this, cx| this.host_run_verb(key, verb, args, None, Some(left), None, tx, cx)).is_ok();
                 async move { if sent { rx.await.ok() } else { None } }
             };
             let first = if ready { run(&this, cx, "goto", vec![url.clone()]).await } else {
@@ -471,7 +479,7 @@ impl Hangar {
     /// lê nem dirige.
     #[allow(clippy::too_many_arguments)]
     fn host_run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>, deadline: Option<u64>,
-        reply: futures::channel::oneshot::Sender<Reply>, cx: &mut Context<Self>) {
+        secret: Option<Secret>, reply: futures::channel::oneshot::Sender<Reply>, cx: &mut Context<Self>) {
         #[cfg(target_os = "linux")]
         if let Some(browser) = self.side.browsers.get(&key).cloned() {
             self.arm_agent(&browser, &key, cx);
@@ -480,7 +488,7 @@ impl Hangar {
                 return;
             }
         }
-        self.run_verb(key, verb, args, tab, None, deadline, reply, cx);
+        self.run_verb(key, verb, args, tab, secret, deadline, reply, cx);
     }
 
     /// O contexto do agente remoto no painel da sessão `key`: o SOCKS em modo agente do servidor dela, relido a cada

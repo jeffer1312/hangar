@@ -7,12 +7,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
+use zeroize::Zeroizing;
 
 /// O mesmo teto do `/cmd` local quando o CLI não manda prazo.
 pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(45);
 /// O `login` espera a pessoa no painel; mais que isso é pedido esquecido.
 pub const MAX_DEADLINE: Duration = Duration::from_secs(600);
 const UNSUPPORTED: [&str; 2] = ["objetivo", "confere"];
+const FILL_SECRET: &str = "fill-secret";
 const NOT_ALLOWED: &str = "browser_host_not_allowed";
 /// Os nomes de sessão vêm do app: sem teto, um anfitrião encheria a memória.
 const MAX_SESSIONS: usize = 1024;
@@ -37,6 +39,8 @@ pub enum Refusal {
     Gone,
     Timeout,
     Unsupported,
+    /// `fill-secret` ou o campo `valor` vindos de fora do servidor: o valor do cofre só sai pelo `fill_secret`.
+    Secret,
 }
 
 impl Refusal {
@@ -47,6 +51,7 @@ impl Refusal {
             Refusal::Gone => "browser_host_gone",
             Refusal::Timeout => "browser_host_timeout",
             Refusal::Unsupported => "browser_host_verb_unsupported",
+            Refusal::Secret => "browser_host_secret_refused",
         }
     }
 
@@ -56,7 +61,7 @@ impl Refusal {
             Refusal::NotAllowed => 403,
             Refusal::Gone => 502,
             Refusal::Timeout => 504,
-            Refusal::Unsupported => 422,
+            Refusal::Unsupported | Refusal::Secret => 422,
         }
     }
 
@@ -67,6 +72,7 @@ impl Refusal {
             Refusal::Gone => format!("o app desktop desligou no meio do comando; o {verb} pode ter sido executado"),
             Refusal::Timeout => format!("o app desktop não respondeu o {verb} no prazo"),
             Refusal::Unsupported => format!("{verb} não funciona no navegador de outra máquina"),
+            Refusal::Secret => "o valor do cofre só vai ao navegador pela tool vault_fill".into(),
         }
     }
 }
@@ -100,7 +106,8 @@ struct Inner {
 }
 
 struct Host {
-    out: mpsc::UnboundedSender<String>,
+    /// Zerado ao sair: o quadro do `fill_secret` leva o valor do cofre.
+    out: mpsc::UnboundedSender<Zeroizing<String>>,
     pending: HashMap<u64, Pending>,
 }
 
@@ -132,6 +139,21 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
+/// O texto do quadro, com o `valor` fora do `Value`, que não zera o que guarda.
+fn frame(body: Map<String, Value>, secret: Option<&str>) -> Zeroizing<String> {
+    let base = Zeroizing::new(Value::Object(body).to_string());
+    let Some(secret) = secret else { return base };
+    // shortcut: a cópia que o WebSocket leva do quadro não é zerada; trocar se o transporte passar a guardar quadros.
+    let quoted = Zeroizing::new(serde_json::to_string(secret).unwrap_or_default());
+    // Capacidade certa de saída: crescer no meio largaria cópias do valor sem zerar.
+    let mut frame = Zeroizing::new(String::with_capacity(base.len() + quoted.len() + 10));
+    frame.push_str(&base[..base.len() - 1]);
+    frame.push_str(",\"valor\":");
+    frame.push_str(&quoted);
+    frame.push('}');
+    frame
+}
+
 fn deadline_of(body: &Map<String, Value>) -> Duration {
     body.get("deadline_ms").and_then(Value::as_u64).map_or(DEFAULT_DEADLINE, |ms| Duration::from_millis(ms.max(1)).min(MAX_DEADLINE))
 }
@@ -142,7 +164,7 @@ impl Registry {
     }
 
     /// Um anfitrião novo. O receptor leva os pedidos em texto para o socket; soltar a `Connection` o remove.
-    pub fn attach(self: &Arc<Self>) -> (Connection, mpsc::UnboundedReceiver<String>) {
+    pub fn attach(self: &Arc<Self>) -> (Connection, mpsc::UnboundedReceiver<Zeroizing<String>>) {
         let (out, rx) = mpsc::unbounded_channel();
         let mut inner = self.lock();
         inner.next_host += 1;
@@ -152,8 +174,11 @@ impl Registry {
     }
 
     /// Repassa um verbo do corpo do `/cmd` ao anfitrião com foco na sessão e espera até o `deadline_ms`.
-    pub async fn command(&self, session: &str, mut body: Map<String, Value>) -> Result<Reply, Refusal> {
+    pub async fn command(&self, session: &str, body: Map<String, Value>) -> Result<Reply, Refusal> {
         let verb = body.get("verbo").and_then(Value::as_str).unwrap_or_default().to_owned();
+        if verb == FILL_SECRET || body.contains_key("valor") {
+            return Err(Refusal::Secret);
+        }
         // `--cdp` é página da máquina do app: o agente daqui não a alcança.
         if UNSUPPORTED.contains(&verb.as_str()) || body.contains_key("cdp") {
             return Err(Refusal::Unsupported);
@@ -163,12 +188,35 @@ impl Registry {
         }
         // Só a pergunta do CLI: o navegador vai para o app de outra máquina antes do app desta.
         if verb == "host" {
-            return self.last_seen(session).map(|ms| Reply::Text(format!("ok: host {ms}"))).ok_or(Refusal::NoHost);
+            let inner = self.lock();
+            // Sem uso registrado, o app de lá com a sessão em foco ainda serve a quem perdeu o app daqui; a hora 0
+            // perde para qualquer foco gravado por um app vivo desta máquina.
+            return match inner.seen.get(session) {
+                Some(ms) => Ok(Reply::Text(format!("ok: host {ms}"))),
+                None if inner.chosen(session).is_some() => Ok(Reply::Text("ok: host 0".into())),
+                None => Err(Refusal::NoHost),
+            };
         }
-        let deadline = deadline_of(&body);
         let url = matches!(verb.as_str(), "open" | "goto")
             .then(|| body.get("args").and_then(|a| a.get(0)).and_then(Value::as_str).map(str::to_owned))
             .flatten();
+        self.dispatch(session, body, url, None).await
+    }
+
+    /// O `fill-secret` do `vault_fill`, só de dentro do servidor. O valor vai no quadro ao anfitrião e em nenhum outro
+    /// lugar: nem no pedido em curso, nem no estado, nem no `list`; `expected_host` é o domínio aprovado, que o app
+    /// confere na página antes de digitar.
+    pub async fn fill_secret(&self, session: &str, args: &[String], expected_host: &str, value: Zeroizing<String>)
+        -> Result<Reply, Refusal> {
+        let body = json!({"verbo": FILL_SECRET, "args": args, "expected_host": expected_host});
+        let Value::Object(body) = body else { return Err(Refusal::NoHost) };
+        self.dispatch(session, body, None, Some(value)).await
+    }
+
+    /// Manda o pedido ao anfitrião com foco na sessão e espera a resposta. `secret` entra só no texto do quadro.
+    async fn dispatch(&self, session: &str, mut body: Map<String, Value>, url: Option<String>, secret: Option<Zeroizing<String>>)
+        -> Result<Reply, Refusal> {
+        let deadline = deadline_of(&body);
         let (host, id, rx) = {
             let mut inner = self.lock();
             let host = inner.chosen(session).ok_or(Refusal::NoHost)?;
@@ -180,8 +228,9 @@ impl Registry {
             body.insert("deadline_ms".into(), json!(deadline.as_millis() as u64));
             let (reply, rx) = oneshot::channel();
             let entry = inner.hosts.get_mut(&host).ok_or(Refusal::NoHost)?;
+            let frame = frame(body, secret.as_deref().map(String::as_str));
             // Canal já fechando: o verbo não saiu, então não "pode ter sido executado".
-            entry.out.send(Value::Object(body).to_string()).map_err(|_| Refusal::NoHost)?;
+            entry.out.send(frame).map_err(|_| Refusal::NoHost)?;
             entry.pending.insert(id, Pending { reply, session: session.to_owned(), url });
             (host, id, rx)
         };
@@ -197,6 +246,9 @@ impl Registry {
     /// Quando (ms) um app de outra máquina mostrou esta sessão por último; quem a mostrou depois, ele ou o app desta
     /// máquina, recebe o navegador.
     pub fn last_seen(&self, session: &str) -> Option<u64> { self.lock().seen.get(session).copied() }
+
+    /// Algum app de outra máquina ligado está com a sessão em foco.
+    pub fn has_host(&self, session: &str) -> bool { self.lock().chosen(session).is_some() }
 
     /// O `list` do CLI: as sessões com navegador conhecido; vivo = algum anfitrião ligado com foco nela.
     pub fn list(&self) -> String {

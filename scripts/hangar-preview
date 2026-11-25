@@ -330,7 +330,8 @@ function srv(sair = erro) {
 }
 
 // "Sem app" é só arquivo ausente: os apps o apagam ao fechar. Pid morto com o arquivo presente é o app daqui
-// reiniciando ou caído, e a recusa local diz isso; corrompido ou ilegível mandaria o comando, calado, para outra máquina.
+// reiniciando ou caído: a recusa local diz isso, salvo quando outro app está com a sessão aberta. Corrompido ou
+// ilegível mandaria o comando, calado, para outra máquina.
 function localApp() {
   const arquivo = join(DIR, '_srv.json');
   try {
@@ -339,6 +340,15 @@ function localApp() {
   } catch (err) {
     if (err.code === 'ENOENT') return false;
     return erro(`não deu para ler ${arquivo} (${err.message}): feche e reabra o app desktop`);
+  }
+}
+
+// Só quando `localApp()` já leu o arquivo: aqui ele está presente e legível.
+function localAppDead() {
+  try {
+    return !pidVivo(JSON.parse(readFileSync(join(DIR, '_srv.json'), 'utf8')).pid);
+  } catch {
+    return false;
   }
 }
 
@@ -362,10 +372,12 @@ function ownerToken(sair = erro) {
 // O prazo que o servidor espera o app; o `open` espera o navegador ficar pronto, o `login` espera a pessoa.
 const deadlineFor = (verbo) => (verbo === 'login' ? 110_000 : verbo === 'open' ? PRONTO_MS : 45_000);
 
-// `objetivo`/`confere` com a sessão aberta noutro app caem na recusa de "outra máquina" abaixo, nunca num navegador velho daqui.
+// `objetivo`/`confere` com a sessão aberta noutro app rodam com os verbos de lá, nunca num navegador velho daqui.
 const usesBrowser = VERBOS_SERVIDOR.has(cmd) || ['open', 'tab', 'batch', 'objetivo', 'confere'].includes(cmd);
 const seenElsewhere = !externo && usesBrowser ? await lastSeenElsewhere() : null;
-const remote = !externo && (!localApp() || (seenElsewhere !== null && seenElsewhere > (localFocus() ?? 0)));
+// App daqui caído e outro app com a sessão: o de lá serve, e o `_focus.json` que o caído deixou não conta.
+const remote = !externo && (!localApp()
+  || (seenElsewhere !== null && (localAppDead() || seenElsewhere > (localFocus() ?? 0))));
 
 // O verbo pelo servidor desta máquina (`browser-cmd`), que o repassa ao app desktop com a sessão aberta.
 // Uma linha no stderr por comando: quem lê sabe que o navegador não é o desta máquina.
@@ -504,10 +516,6 @@ if (cmd === 'list' && remote) {
   // Os navegadores emprestados pelo app de outra máquina: quem guarda o estado deles é o servidor.
   console.log(semToken((await callServer(nomeSessao() || 'list', 'list', [])).texto));
   process.exit(0);
-}
-
-if (remote && (cmd === 'objetivo' || cmd === 'confere')) {
-  erro(`${cmd} não funciona no navegador de outra máquina (browser_host_verb_unsupported): use os verbos um a um`);
 }
 
 if (cmd === 'list') {
