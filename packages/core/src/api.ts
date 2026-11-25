@@ -1431,7 +1431,7 @@ export function createSession(
                            model: model ?? null, effort: effort ?? null, codex_account: codexAccount, remember_provider: true };
   if (permissionMode) body.permission_mode = permissionMode;
   if (ompProfile) body.omp_profile = ompProfile;
-  if (headless !== undefined && (provider === 'claude' || provider === 'codex')) body.headless = headless;
+  if (headless !== undefined && (provider === 'claude' || provider === 'codex' || provider === 'antigravity')) body.headless = headless;
   if (subagentModel && provider === 'claude') body.subagent_model = subagentModel;
   if (jev) body.jev = true;
   if (worktree?.branch) Object.assign(body, worktree);

@@ -169,3 +169,20 @@ fn an_account_over_the_limit_can_be_forced_and_undone(cx: &mut TestAppContext) {
         assert_eq!((dialog.config.as_deref(), dialog.switched_from.as_deref()), (Some("/b"), None));
     }));
 }
+
+#[::gpui::test]
+fn saved_agy_manual_comes_back_when_the_server_mode_arrives_headless(cx: &mut TestAppContext) {
+    let (view, cx) = dialog(cx);
+    cx.update(|window, cx| view.update(cx, |dialog, cx| {
+        dialog.set_provider("antigravity", window, cx);
+        let scope = dialog.models.seq;
+        let saved = Some((String::new(), String::new(), "manual".to_owned()));
+        dialog.receive_models(scope, Ok(json!({"models":[]})), Default::default(), Ok(saved), window, cx);
+        assert_eq!(dialog.permission, "", "antes do modo do servidor a lista é a do terminal, sem o manual");
+        let seq = dialog.jev.seq;
+        dialog.receive(CreateReply::Config(seq, (true, Ok(Some(json!({"campos": {"headless_default": {"valor": true}}}))))), window, cx);
+        assert_eq!(dialog.permission, "manual");
+        dialog.set_headless(false, false, window, cx);
+        assert_eq!(dialog.permission, "", "com terminal o manual sai");
+    }));
+}

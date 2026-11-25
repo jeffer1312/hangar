@@ -716,8 +716,9 @@ impl NewSession {
         match (self.provider, self.headless && !self.headless_inherited()) {
             ("claude", _) => Some(&PERMISSIONS),
             ("codex", true) => Some(&CODEX_PERMISSIONS),
-            // Só com terminal por enquanto: sem o `manual`, que o `agy` com terminal não tem.
-            ("antigravity", _) => Some(&AGY_TERMINAL_PERMISSIONS),
+            ("antigravity", true) => Some(&AGY_HEADLESS_PERMISSIONS),
+            // Sem o `manual`, que o `agy` com terminal não tem.
+            ("antigravity", false) => Some(&AGY_TERMINAL_PERMISSIONS),
             _ => None,
         }
     }
@@ -756,8 +757,19 @@ impl NewSession {
         self.effort_pick = Some(picker(choices, at, false, |this, id, _, _| { this.scheduled_touch(&["effort"]); this.model_choice_touched = true; this.effort = id; }, window, cx));
     }
 
+    /// O `manual` salvo do Antigravity, descartado porque a lista chegou antes do modo do servidor, volta quando passa a caber.
+    /// Só nele: o catálogo dele sempre é lido de fato, então, terminada a leitura, o padrão guardado é o dele, e não o do agente
+    /// de antes (o Codex sem conta termina a leitura sem ler nada).
+    pub(super) fn restore_saved_permission(&mut self) {
+        if self.provider != "antigravity" || self.permission_touched || self.models.loading { return; }
+        let Some(saved) = self.saved_default.as_ref().map(|s| s.2.clone()) else { return };
+        if self.permissions().is_some_and(|list| list.contains(&saved.as_str())) { self.permission = saved; }
+    }
+
     pub(super) fn build_permission_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(modes) = self.permissions() else { self.permission_pick = None; return };
+        // O `manual` escolhido sem terminal não vai para o agy com terminal, que recusaria a abertura.
+        if self.provider == "antigravity" && !self.permission.is_empty() && !modes.contains(&self.permission.as_str()) { self.permission.clear(); }
         let choices: Vec<ModelChoice> = std::iter::once(ModelChoice { id: String::new(), label: tr("create_permission_default"), hint: String::new() })
             .chain(modes.iter().map(|m| ModelChoice { id: (*m).into(), label: (*m).into(), hint: String::new() })).collect();
         let at = Self::pick_at(&choices, &self.permission);
@@ -1072,6 +1084,7 @@ impl NewSession {
                 if !self.headless_touched && !self.creating {
                     if let Ok(Some(value)) = &result {
                         self.headless = value.pointer("/campos/headless_default/valor").and_then(Value::as_bool).unwrap_or(true);
+                        self.restore_saved_permission();
                         self.build_permission_pick(window, cx);
                     } else if let Err(error) = &result { self.error = Some(Hangar::fetch_failure(error)); }
                 }
