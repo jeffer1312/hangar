@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, AppState, Keyboard, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, AppState, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import Animated, {
   Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming,
 } from 'react-native-reanimated';
@@ -201,15 +201,6 @@ export function NewConversation({
     if (collapsed && dictation.gravando) void dictation.stop();
   }, [collapsed, dictation.gravando, dictation.stop]);
 
-  // No iOS o "will" chega com o teclado ainda subindo: o título sai junto, sem esperar o fim.
-  const [keyboardOpen, setKeyboardOpen] = useState(() => Keyboard.isVisible());
-  useEffect(() => {
-    const ios = Platform.OS === 'ios';
-    const show = Keyboard.addListener(ios ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardOpen(true));
-    const hide = Keyboard.addListener(ios ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardOpen(false));
-    return () => { show.remove(); hide.remove(); };
-  }, []);
-
   // A caixa sempre cabe acima do teclado: o teto do campo é o que sobra da área depois das pílulas,
   // do anexo, dos botões e de uma faixa do meio que segue arrastável para baixar o teclado.
   const [areaHeight, setAreaHeight] = useState(0);
@@ -360,14 +351,13 @@ export function NewConversation({
 
   // Sem pasta escolhida o seletor ocupa o meio; escolhida, o meio fica com o título, como no PC.
   const showPicker = destinationPending && sheet === null;
-  // Com o teclado aberto ficam só as pílulas e a caixa: título, recentes e marca saem.
-  const showHero = !keyboardOpen;
   // Sem pasta o título fica colado à caixa, com o seletor no meio; pela pasta pendente, e não pelo
   // seletor à vista, para a pílula não mudar de lugar com o painel de pasta aberto preso a ela.
   const heroInMiddle = !destinationPending;
-  const hero = showHero ? (
+  // O teclado abre junto com a tela: o título fica à vista com ele, e o meio rola quando não cabe.
+  const hero = (
     <Animated.View style={[styles.topPills, !home && riseTopStyle]}>{topPills((opener) => openSheet('folder', opener))}</Animated.View>
-  ) : null;
+  );
 
   return (
     <View style={styles.root}>
@@ -386,7 +376,7 @@ export function NewConversation({
       <ScrollView style={styles.states} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         {!home && !reduced && !showPicker && !pending ? <HomeIntroMark epoch={intro.epoch} /> : null}
         {showPicker ? destination : null}
-        {heroInMiddle && hero ? (
+        {heroInMiddle ? (
           // Os dois vãos iguais centram o título; a marca mora no de cima e só aparece se couber.
           <View style={styles.heroArea}>
             <View style={styles.heroSpace} onLayout={(event) => setMarkRoom(event.nativeEvent.layout.height)}>
@@ -394,11 +384,6 @@ export function NewConversation({
             </View>
             {hero}
             <View style={styles.heroSpace} />
-          </View>
-        ) : null}
-        {!home && !showHero && !showPicker && !pending ? (
-          <View style={styles.emptyHint}>
-            <Text style={styles.hint}>{m.native_empty_chat_hint({ agent: providerLabel })}</Text>
           </View>
         ) : null}
         {notices}
@@ -487,7 +472,9 @@ export function NewConversation({
         onLayout={home ? (event) => { formHeight.value = event.nativeEvent.layout.height; } : undefined}>
       {/* O teto da doca segura a caixa enquanto a medida do campo não chega: ela encolhe e o Enviar fica à vista. */}
       <ComposerDock onLayout={(event) => setBlockHeight(event.nativeEvent.layout.height)}>
-      {!heroInMiddle ? hero : null}
+      {!heroInMiddle ? (
+        <ScrollView style={styles.dockHero} bounces={false} overScrollMode="never" keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">{hero}</ScrollView>
+      ) : null}
 
       <Animated.View style={[styles.shrink, !home && riseStyle]}>
 
@@ -613,8 +600,9 @@ const styles = StyleSheet.create((theme) => ({
   launcherText: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
   launcherMic: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   scroll: { flexGrow: 1, padding: theme.base.space[4], gap: theme.base.space[4] },
-  emptyHint: { flexGrow: 1, minHeight: 140, alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.base.space[5] },
   heroArea: { flexGrow: 1 },
+  // Na doca, sem espaço, o título rola e encolhe muito antes da caixa: o Enviar fica à vista com o teclado.
+  dockHero: { flexGrow: 0, flexShrink: 1000, minHeight: 0 },
   heroSpace: { flexGrow: 1, flexBasis: 0, position: 'relative' },
   // O título da conversa nova, no meio da área livre (ou colado à caixa enquanto falta a pasta).
   topPills: {
