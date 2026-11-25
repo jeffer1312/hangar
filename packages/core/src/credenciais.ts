@@ -64,6 +64,13 @@ export interface AntigravityLoginAttempt {
   /** Só no fim: as últimas linhas do agy, para dizer por que falhou. */
   saida?: string[];
 }
+
+/** Tentativa de aceitar os Termos do Google pelo agy num terminal escondido que o servidor conduz
+ * (`/api/antigravity-contas/{id}/termos`). Os rótulos das opções são do cliente; `texto` é a pergunta do agy, com os links. */
+export type AntigravityTermsAttempt = { attempt_id?: string } & (
+  | { estado: 'iniciando' | 'respondendo' | 'login' | 'concluido' }
+  | { estado: 'termos'; texto: string }
+  | { estado: 'falhou'; codigo: string });
 export interface CotaResumo extends Omit<CotaContaResumo, 'id'> {
   ts?: number | null;
   idade_s?: number | null;

@@ -1,5 +1,5 @@
 import { apiFetchForServer, comTeto, errorDetail, probeServerResponse } from './api';
-import type { AntigravityLoginAttempt } from './credenciais';
+import type { AntigravityLoginAttempt, AntigravityTermsAttempt } from './credenciais';
 import type { Server } from './servers';
 
 export interface ClaudeLoginStep {
@@ -76,6 +76,30 @@ export function submitAntigravityLoginCodeForServer(server: Server, id: string, 
 
 export function cancelAntigravityLoginForServer(server: Server, id: string, attemptId: string): Promise<{ ok: true }> {
   return apiFetchForServer(server, `${antigravityLoginPath(id)}?attempt_id=${encodeURIComponent(attemptId)}`, { method: 'DELETE' }, 15_000);
+}
+
+// Termos do Google do agy: o servidor conduz um agy num terminal escondido e só aperta a opção tocada.
+function antigravityTermsPath(id: string, suffix = ''): string {
+  return `/api/antigravity-contas/${encodeURIComponent(id)}/termos${suffix}`;
+}
+
+export function startAntigravityTermsForServer(server: Server, id: string): Promise<AntigravityTermsAttempt> {
+  return apiFetchForServer(server, antigravityTermsPath(id), { method: 'POST' }, 30_000);
+}
+
+export function getAntigravityTermsForServer(server: Server, id: string, attemptId: string, signal?: AbortSignal): Promise<AntigravityTermsAttempt> {
+  return apiFetchForServer(server, `${antigravityTermsPath(id)}?attempt_id=${encodeURIComponent(attemptId)}`, { signal: comTeto(signal, 10_000) }, 10_000);
+}
+
+/** `opcao` 1 aceita compartilhando os dados de uso, 2 aceita sem compartilhar. */
+export function answerAntigravityTermsForServer(server: Server, id: string, attemptId: string, opcao: 1 | 2): Promise<{ ok: true }> {
+  return apiFetchForServer(server, antigravityTermsPath(id, '/resposta'), {
+    method: 'POST', body: JSON.stringify({ attempt_id: attemptId, opcao }),
+  }, 30_000);
+}
+
+export function cancelAntigravityTermsForServer(server: Server, id: string, attemptId: string): Promise<{ ok: true }> {
+  return apiFetchForServer(server, `${antigravityTermsPath(id)}?attempt_id=${encodeURIComponent(attemptId)}`, { method: 'DELETE' }, 15_000);
 }
 
 /** Sai da conta pelo próprio agy; a pasta e as conversas ficam. */
