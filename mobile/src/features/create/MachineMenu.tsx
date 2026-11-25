@@ -18,24 +18,31 @@ export type MachineEntry = {
   offline: boolean;
 };
 
-// Mesma ordem dos agentes do app de PC; chave de API (`chave:`) e prefixo desconhecido vêm depois.
+// Mesma ordem dos agentes do app de PC; depois as chaves de API (`chave:`) e, por último, as outras contas.
 const PROVIDER_ORDER = ['claude', 'codex', 'pi', 'kimi', 'omp', 'antigravity'];
 
 export type AccountGroup = { provider: string; names: string[] };
+
+/** O grupo da conta pelo prefixo: CLIProxy entra no Codex, como no PC; fora dos agentes e das chaves, o grupo vazio. */
+function groupOf(key: string): string {
+  const prefix = key.includes(':') ? key.slice(0, key.indexOf(':')) : '';
+  if (prefix === 'cliproxy') return 'codex';
+  return prefix === 'chave' || PROVIDER_ORDER.includes(prefix) ? prefix : '';
+}
 
 /** As contas da máquina por agente: um item por agente, para nenhum agente sumir atrás de um "+N". */
 export function accountGroups(accounts: Record<string, AccountBadge> | undefined): AccountGroup[] {
   const groups = new Map<string, string[]>();
   for (const [key, badge] of Object.entries(accounts ?? {})) {
-    const provider = key.slice(0, Math.max(0, key.indexOf(':')));
+    const provider = groupOf(key);
     groups.set(provider, [...(groups.get(provider) ?? []), badge.name.trim()]);
   }
   const rank = (p: string) => {
     const i = PROVIDER_ORDER.indexOf(p);
-    return i >= 0 ? i : PROVIDER_ORDER.length + (p === 'chave' ? 1 : 0);
+    return i >= 0 ? i : PROVIDER_ORDER.length + (p === '' ? 1 : 0);
   };
   return [...groups].map(([provider, names]) => ({ provider, names: names.sort() }))
-    .sort((a, b) => rank(a.provider) - rank(b.provider) || a.provider.localeCompare(b.provider));
+    .sort((a, b) => rank(a.provider) - rank(b.provider));
 }
 
 /** O quadrado da máquina: o ícone da etiqueta na cor dela, igual na pílula e no menu. */
@@ -56,7 +63,7 @@ function Accounts({ accounts }: { accounts: Record<string, AccountBadge> | undef
       {groups.map(({ provider, names }) => (
         <View key={provider} style={styles.account}>
           {PROVIDER_ORDER.includes(provider) ? <ProviderGlyph provider={provider} size={14} />
-            : <Icon name="KeyRound" size={12} color={theme.tokens.text.muted} />}
+            : <Icon name={provider === 'chave' ? 'KeyRound' : 'CreditCard'} size={12} color={theme.tokens.text.muted} />}
           <Text style={styles.accountName} numberOfLines={1}>
             {names.length === 1 ? names[0] : m.native_new_chat_machine_accounts({ n: names.length })}
           </Text>

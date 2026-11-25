@@ -21,6 +21,16 @@ describe('accountGroups', () => {
     expect(groups[2].names).toEqual(['Google (padrão)']);
   });
 
+  it('puts CLIProxy accounts in Codex and unknown prefixes in one last group', () => {
+    const groups = accountGroups({
+      'estranho:x': badge('Zeta'), 'sem-prefixo': badge('Alfa'), 'cliproxy:cpa-1': badge('ChatGPT Pro'),
+      'codex:/a': badge('jeffer1312'), 'chave:openrouter': badge('OpenRouter'),
+    });
+    expect(groups.map((g) => g.provider)).toEqual(['codex', 'chave', '']);
+    expect(groups[0].names).toEqual(['ChatGPT Pro', 'jeffer1312']);
+    expect(groups[2].names).toEqual(['Alfa', 'Zeta']);
+  });
+
   it('is empty without accounts', () => {
     expect(accountGroups(undefined)).toEqual([]);
   });

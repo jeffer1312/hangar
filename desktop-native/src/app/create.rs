@@ -2628,20 +2628,30 @@ fn machine_tile(tag: Option<&super::tags::Tag>, id: &str) -> AnyElement {
         .child(chrome::small_icon(icon, 16., color)).into_any_element()
 }
 
+/// O grupo da conta pelo prefixo do id: as do CLIProxy entram no Codex, como na pílula de conta; prefixo fora dos agentes
+/// e das chaves de API (ou sem prefixo) cai num grupo só de outras contas, vazio.
+fn account_group(id: &str) -> &str {
+    match id.split_once(':').map_or("", |(p, _)| p) {
+        "cliproxy" => "codex",
+        p if p == "chave" || PROVIDERS.contains(&p) => p,
+        _ => "",
+    }
+}
+
 /// As contas da máquina por agente, na ordem dos agentes da tela: (agente, nomes em ordem). As chaves de API (`chave:`)
-/// formam um grupo só; prefixo desconhecido vem depois, pelo nome.
+/// formam um grupo só depois dos agentes; as outras contas vêm por último.
 fn account_groups(accounts: &HashMap<String, super::tags::Badge>) -> Vec<(String, Vec<String>)> {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for (id, badge) in accounts {
-        let provider = id.split_once(':').map_or("", |(p, _)| p);
+        let provider = account_group(id);
         let name = badge.name.trim().to_owned();
         match groups.iter_mut().find(|(p, _)| p == provider) {
             Some((_, names)) => names.push(name),
             None => groups.push((provider.to_owned(), vec![name])),
         }
     }
-    let rank = |p: &str| PROVIDERS.iter().position(|known| *known == p).unwrap_or(PROVIDERS.len() + usize::from(p == "chave"));
-    groups.sort_by(|a, b| (rank(&a.0), &a.0).cmp(&(rank(&b.0), &b.0)));
+    let rank = |p: &str| PROVIDERS.iter().position(|known| *known == p).unwrap_or(PROVIDERS.len() + usize::from(p.is_empty()));
+    groups.sort_by_key(|g| rank(&g.0));
     for (_, names) in &mut groups { names.sort(); }
     groups
 }
@@ -2650,8 +2660,8 @@ fn account_groups(accounts: &HashMap<String, super::tags::Badge>) -> Vec<(String
 fn agent_title(provider: &str) -> String {
     match provider {
         "chave" => tr("agents_keys"),
-        p if PROVIDERS.contains(&p) => provider_name(p).to_owned(),
-        p => p.to_owned(),
+        "" => tr("new_chat_machine_other_accounts"),
+        p => provider_name(p).to_owned(),
     }
 }
 
@@ -2810,8 +2820,11 @@ impl NewSession {
         if groups.is_empty() { return None; }
         Some(div().w_full().min_w_0().overflow_hidden().flex().items_center().gap(px(10.)).text_xs().text_color(theme::muted())
             .children(groups.into_iter().map(|(provider, names)| {
-                let mark = if provider == "chave" { chrome::small_icon(IconName::KeyRound, 11., theme::faint()).into_any_element() }
-                    else { super::tags::provider_mark(&provider, 11., theme::muted()) };
+                let mark = match provider.as_str() {
+                    "chave" => chrome::small_icon(IconName::KeyRound, 11., theme::muted()).into_any_element(),
+                    "" => chrome::small_icon(IconName::CreditCard, 11., theme::muted()).into_any_element(),
+                    p => super::tags::provider_mark(p, 11., theme::muted()),
+                };
                 let text = if names.len() == 1 { names[0].clone() }
                     else { tr("new_chat_machine_accounts").replace("{n}", &names.len().to_string()) };
                 div().flex().items_center().gap(px(4.)).min_w_0().flex_shrink_1()
@@ -4244,5 +4257,18 @@ mod account_group_tests {
         assert_eq!(groups[0].1, ["Felizardo", "Felizardo 2"]);
         assert_eq!(groups[2].1, ["Google (padrão)"]);
         assert!(account_groups(&HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn cliproxy_joins_codex_and_unknown_prefixes_share_one_last_group() {
+        let accounts: HashMap<String, Badge> = [
+            ("estranho:x", "Zeta"), ("sem-prefixo", "Alfa"), ("cliproxy:cpa-1", "ChatGPT Pro"), ("codex:/a", "jeffer1312"),
+            ("chave:openrouter", "OpenRouter"),
+        ].into_iter().map(|(id, name)| (id.to_owned(), badge(name))).collect();
+        let groups = account_groups(&accounts);
+        let order: Vec<&str> = groups.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(order, ["codex", "chave", ""]);
+        assert_eq!(groups[0].1, ["ChatGPT Pro", "jeffer1312"]);
+        assert_eq!(groups[2].1, ["Alfa", "Zeta"]);
     }
 }
