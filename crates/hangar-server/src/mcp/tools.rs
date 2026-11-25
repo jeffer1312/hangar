@@ -725,16 +725,8 @@ impl Tools {
     /// desta (ou este não existe). Se o de lá desligou, a `browser-cmd` recusa em vez de cair num navegador daqui.
     fn remote_browser(&self, name: &str, home: &std::path::Path) -> Result<bool, String> {
         let host = &self.st.browser_host;
-        if let Some(remote) = host.last_seen(name)
-            && nav::local_focus(home, name).is_none_or(|local| remote > local) {
-            return Ok(true);
-        }
-        match nav::local_app(home) {
-            Ok(local) => Ok(!local),
-            // App daqui caído: o de outra máquina com a sessão serve; sem ninguém lá, a recusa diz que o daqui reinicia.
-            Err(_) if nav::local_app_dead(home) && (host.last_seen(name).is_some() || host.has_host(name)) => Ok(true),
-            Err(e) => Err(e.0),
-        }
+        browser_is_remote(host.last_seen(name), host.has_host(name), || nav::local_focus(home, name), || nav::local_app(home),
+            || nav::local_app_dead(home))
     }
 
     /// O verbo vai pela `browser-cmd` ao app de quem usa a sessão em outra máquina.
@@ -1134,16 +1126,19 @@ impl Tools {
         let owner = exec::Owner::of(&self.st)?;
         let home = self.home();
         let long_enough = async { if password { self.vault_agent(&name).await.map(drop) } else { Ok(()) } };
-        let ((), (host, _), entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
+        let ((), (host, remote), entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
         let entry = entries.iter().find(|e| crate::vault::same_name(&e.name, &a.entry)).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
         if let Some(refusal) = exec::fill_refusal(entry.url.as_deref(), &host) { return Err(refusal); }
-        let value = if password {
-            let req = UseReq { origin_server: self.vault_origin(), session_key: key, session: name.clone(), entry: a.entry, kind: UseKind::Fill,
-                reason: a.reason, target: host.clone() };
-            exec::secret(&owner, req, deadline).await?
-        } else {
-            Zeroizing::new(entry.username.clone().ok_or("erro_cofre_sem_usuario: esta senha não tem usuário cadastrado")?)
-        };
+        let req = password.then(|| UseReq { origin_server: self.vault_origin(), session_key: key, session: name.clone(), entry: a.entry,
+            kind: UseKind::Fill, reason: a.reason, target: host.clone() });
+        let ready = if remote { self.st.browser_host.can_fill_secret(&name) } else { Ok(()) };
+        let owner = &owner;
+        let value = fill_value(ready, move || async move {
+            match req {
+                Some(req) => exec::secret(owner, req, deadline).await,
+                None => entry.username.clone().map(Zeroizing::new).ok_or_else(|| "erro_cofre_sem_usuario: esta senha não tem usuário cadastrado".to_owned()),
+            }
+        }).await?;
         let lock = self.nav_lock(&name);
         let _held = lock.lock().await;
         // A página pode ter navegado durante a aprovação: o valor só entra no domínio aprovado.
@@ -1163,6 +1158,28 @@ impl Tools {
         if answer.starts_with("ok:") { return Ok(text("preenchido")); }
         Err(fill_failure(&answer))
     }
+}
+
+/// `remote_browser` sem o disco: `seen` é a hora do uso num app de outra máquina, `attached` diz se há um app de lá
+/// ligado com a sessão em foco.
+fn browser_is_remote(seen: Option<u64>, attached: bool, local_focus: impl FnOnce() -> Option<u64>,
+                     local_app: impl FnOnce() -> Result<bool, nav::Unavailable>, local_dead: impl FnOnce() -> bool) -> Result<bool, String> {
+    if let Some(remote) = seen && local_focus().is_none_or(|local| remote > local) { return Ok(true); }
+    match local_app() {
+        Ok(local) => Ok(!local),
+        // App daqui caído: só um app de lá ligado serve. A hora de um que já desligou fica, mas não liga ninguém: a
+        // recusa diz que o daqui reinicia.
+        Err(_) if attached && local_dead() => Ok(true),
+        Err(e) => Err(e.0),
+    }
+}
+
+/// O valor do `vault_fill`, lido do cofre só depois de o app que vai recebê-lo aceitar o `fill-secret`: o app antigo
+/// recusaria depois de a pessoa aprovar o cartão.
+async fn fill_value<F>(ready: Result<(), hangar_browser_host::Refusal>, read: impl FnOnce() -> F) -> Result<Zeroizing<String>, String>
+where F: std::future::Future<Output = Result<Zeroizing<String>, String>> {
+    ready.map_err(host_fill_refusal)?;
+    read().await
 }
 
 /// O erro do `vault_fill` para a resposta que não é `ok:`: código do cofre vindo do navegador segue como veio.
@@ -1266,6 +1283,38 @@ mod tests {
         let png = fill_failure(&host_fill_answer(hangar_browser_host::Reply::Png(vec![1, 2, 3])));
         assert!(png.starts_with("erro_cofre_incerto:") && png.contains("pode ter sido digitado"), "{png}");
         assert_eq!(fill_failure(&host_fill_answer(hangar_browser_host::Reply::Text("erro: caiu".into()))), "erro_cofre_preenchimento: caiu");
+    }
+
+    #[test]
+    fn a_dead_local_app_hands_the_browser_only_to_an_app_still_attached() {
+        let dead = || Err::<bool, _>(nav::Unavailable("reiniciando".into()));
+        // O app de lá viu a sessão antes do foco daqui e desligou: a recusa segue dizendo que o daqui reinicia.
+        assert_eq!(browser_is_remote(Some(5), false, || Some(10), dead, || true), Err("reiniciando".into()));
+        assert_eq!(browser_is_remote(None, false, || None, dead, || true), Err("reiniciando".into()));
+        // Ligado, com ou sem uso registrado, ele serve.
+        assert_eq!(browser_is_remote(Some(5), true, || Some(10), dead, || true), Ok(true));
+        assert_eq!(browser_is_remote(None, true, || None, dead, || true), Ok(true));
+        // Registro ilegível (sem pid morto) nunca vai a outra máquina.
+        assert_eq!(browser_is_remote(None, true, || None, dead, || false), Err("reiniciando".into()));
+        // Mostrou depois do daqui: o navegador segue o de lá mesmo desligado, e a `browser-cmd` recusa.
+        assert_eq!(browser_is_remote(Some(20), false, || Some(10), || Ok(true), || false), Ok(true));
+        assert_eq!(browser_is_remote(Some(5), true, || Some(10), || Ok(true), || false), Ok(false));
+    }
+
+    #[tokio::test]
+    async fn an_outdated_app_is_refused_before_the_vault_is_read() {
+        let registry = std::sync::Arc::new(hangar_browser_host::Registry::default());
+        let (mut app, _rx) = registry.attach();
+        app.text(r#"{"type":"focus","session":"s"}"#);
+        let count = std::cell::Cell::new(0);
+        let reads = &count;
+        let read = move || async move { reads.set(reads.get() + 1); Ok(Zeroizing::new("S3nh@".to_owned())) };
+        let refused = fill_value(registry.can_fill_secret("s"), read).await.unwrap_err();
+        assert!(refused.starts_with("erro_cofre_sem_navegador:") && refused.contains("atualize o app desktop"), "{refused}");
+        assert_eq!(count.get(), 0, "nem cartão de aprovação nem leitura do cofre");
+        app.text(r#"{"type":"focus","session":"s","caps":["fill_secret"]}"#);
+        assert_eq!(fill_value(registry.can_fill_secret("s"), read).await.map(|v| (*v).clone()), Ok("S3nh@".to_owned()));
+        assert_eq!(count.get(), 1);
     }
 
     #[test]

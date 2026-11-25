@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use hangar_api::session::SessionRow;
 use hangar_session_ports::Scan;
@@ -47,18 +48,39 @@ fn roots(rows: &[SessionRow], panes: &[Pane], agent_pids: &HashMap<String, u32>,
 static LAST: LastScan = LastScan::new(CHILDREN_TTL);
 static OUTSIDERS: LazyLock<Mutex<Outsiders>> = LazyLock::new(Mutex::default);
 static FAILING: AtomicBool = AtomicBool::new(false);
-static DIAL_FIRST: LazyLock<Mutex<HashMap<u16, IpAddr>>> = LazyLock::new(Mutex::default);
+static DIAL_FIRST: LazyLock<Mutex<DialMap>> = LazyLock::new(Mutex::default);
 static UNREACHED_LAST: LazyLock<Mutex<BTreeSet<u16>>> = LazyLock::new(Mutex::default);
 
-/// O loopback que chega ao processo da sessão em `port` quando não é o `127.0.0.1` de sempre, pela última rodada
+/// Tiques da lista sem rodada nova antes de o mapa do túnel deixar de valer.
+const DIAL_STALE: Duration = Duration::from_millis(4 * super::hub::TICK.as_millis() as u64);
+
+/// O mapa do túnel e a hora da rodada que o gravou. A lista fechada para o produtor sem rodada que limpe o mapa, e
+/// processo trocado de porta nesse meio desviaria a conexão para ele: mapa velho não vale.
+#[derive(Default)]
+struct DialMap { at: Option<Instant>, ports: HashMap<u16, IpAddr> }
+
+impl DialMap {
+    fn get(&self, port: u16, now: Instant) -> Option<IpAddr> {
+        self.at.filter(|at| now.saturating_duration_since(*at) < DIAL_STALE)?;
+        self.ports.get(&port).copied()
+    }
+
+    /// Quantas portas o mapa anterior desviava.
+    fn set(&mut self, found: HashMap<u16, IpAddr>, at: Instant) -> usize {
+        self.at = Some(at);
+        std::mem::replace(&mut self.ports, found).len()
+    }
+}
+
+/// O loopback que chega ao processo da sessão em `port` quando não é o `127.0.0.1` de sempre, pela rodada recente
 /// da lista (`port_tunnel`). Sem lista aberta não há rodada, e o túnel segue a ordem de sempre.
 pub(crate) fn dial_first(port: u16) -> Option<IpAddr> {
-    DIAL_FIRST.lock().unwrap_or_else(|e| e.into_inner()).get(&port).copied()
+    DIAL_FIRST.lock().unwrap_or_else(|e| e.into_inner()).get(port, Instant::now())
 }
 
 /// Quantas portas o mapa anterior desviava.
 fn set_dial_first(found: HashMap<u16, IpAddr>) -> usize {
-    std::mem::replace(&mut *DIAL_FIRST.lock().unwrap_or_else(|e| e.into_inner()), found).len()
+    DIAL_FIRST.lock().unwrap_or_else(|e| e.into_inner()).set(found, Instant::now())
 }
 
 /// As portas que passaram a ficar sem loopback só da sessão desde a rodada anterior.
@@ -132,6 +154,18 @@ mod tests {
         assert_eq!(newly_unreached(&mut last, BTreeSet::from([3000, 5432])), vec![5432], "só a nova");
         assert_eq!(newly_unreached(&mut last, BTreeSet::new()), Vec::<u16>::new());
         assert_eq!(newly_unreached(&mut last, BTreeSet::from([3000])), vec![3000], "voltou a ficar sem caminho: nova linha");
+    }
+
+    #[test]
+    fn the_tunnel_map_stops_counting_when_no_round_refreshes_it() {
+        let (t0, tick, ip): (Instant, Duration, IpAddr) = (Instant::now(), super::super::hub::TICK, "::1".parse().unwrap());
+        let mut map = DialMap::default();
+        assert_eq!(map.get(3000, t0), None);
+        assert_eq!(map.set(HashMap::from([(3000, ip)]), t0), 0);
+        assert_eq!(map.get(3000, t0 + tick), Some(ip), "rodadas em dia");
+        assert_eq!(map.get(3000, t0 + DIAL_STALE), None, "lista fechada: o produtor parou e o mapa velho não desvia");
+        assert_eq!(map.set(HashMap::from([(3000, ip)]), t0 + DIAL_STALE), 1);
+        assert_eq!(map.get(3000, t0 + DIAL_STALE + tick), Some(ip), "a lista reaberta volta a valer");
     }
 
     #[test]

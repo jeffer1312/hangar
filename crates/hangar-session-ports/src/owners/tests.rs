@@ -279,3 +279,11 @@ fn dial_first_names_the_session_ports_that_no_loopback_reaches_alone() {
         BTreeSet::from([3000]), "sozinha, a sessão a não tem loopback só dela");
     assert_eq!(dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new()).unreached, BTreeSet::new());
 }
+
+#[test]
+fn a_port_of_two_sessions_stays_with_the_first_even_on_the_usual_loopback() {
+    // a no 127.0.0.1 de sempre, b no 0.0.0.0 da mesma porta: o 127.0.0.2 chegaria só a b, mas a porta é de a.
+    let owned = BTreeMap::from([("a".to_owned(), set(&[11])), ("b".to_owned(), set(&[12]))]);
+    let sockets = [socket_at(3000, Some(11), "node", "127.0.0.1"), socket_at(3000, Some(12), "vite", "0.0.0.0")];
+    assert_eq!(dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new()), Dial::default());
+}

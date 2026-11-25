@@ -232,21 +232,23 @@ pub fn reach(sockets: &[&Socket], ours: impl Fn(&Socket) -> bool) -> Option<IpAd
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Dial { pub first: HashMap<u16, IpAddr>, pub unreached: BTreeSet<u16> }
 
-/// Porta de duas sessões fica com a primeira, em ordem de nome.
+/// Porta de duas sessões fica com a primeira, em ordem de nome, que a alcança sozinha. O `127.0.0.1` também conta como
+/// dono: sem ele, a sessão seguinte desviaria a porta para o processo dela.
 pub fn dial_first(owned: &BTreeMap<String, BTreeSet<u32>>, keys: &HashMap<String, String>, excluded: &HashSet<u32>,
                   sockets: &[Socket], procs: &HashMap<u32, ProcessInfo>) -> Dial {
-    let (mut out, mut reached) = (Dial::default(), BTreeSet::new());
+    let (mut out, mut reached) = (Dial::default(), HashMap::new());
     for mine in session_pids(owned, keys, excluded, sockets, procs).values() {
         let ours = |s: &Socket| s.pid.is_some_and(|pid| mine.contains(&pid));
         let ports: BTreeSet<u16> = sockets.iter().filter(|s| ours(s)).map(|s| s.port).collect();
         for port in ports {
+            if reached.contains_key(&port) { continue; }
             let here: Vec<&Socket> = sockets.iter().filter(|s| s.port == port).collect();
             let Some(ip) = reach(&here, &ours) else { out.unreached.insert(port); continue };
-            reached.insert(port);
-            if ip != DIAL[0] { out.first.entry(port).or_insert(ip); }
+            reached.insert(port, ip);
         }
     }
-    out.unreached.retain(|port| !reached.contains(port));
+    out.unreached.retain(|port| !reached.contains_key(port));
+    out.first = reached.into_iter().filter(|(_, ip)| *ip != DIAL[0]).collect();
     out
 }
 

@@ -152,15 +152,22 @@ fn frame(body: Map<String, Value>, secret: Option<&str>) -> Zeroizing<String> {
     let base = Zeroizing::new(Value::Object(body).to_string());
     let Some(secret) = secret else { return base };
     // shortcut: a cópia que o WebSocket leva do quadro não é zerada; trocar se o transporte passar a guardar quadros.
-    let quoted = Zeroizing::new(serde_json::to_string(secret).unwrap_or_default());
-    // Capacidade certa de saída: crescer no meio largaria cópias do valor sem zerar.
-    let mut frame = Zeroizing::new(String::with_capacity(base.len() + quoted.len() + 10));
-    frame.push_str(&base[..base.len() - 1]);
-    frame.push_str(",\"valor\":");
-    frame.push_str(&quoted);
-    frame.push('}');
-    frame
+    // O teto do valor em JSON (`\u00XX` por byte, mais as aspas) reservado antes: crescer no meio largaria cópias sem zerar.
+    let mut out = Zeroizing::new(Vec::with_capacity(frame_capacity(base.len(), secret)));
+    out.extend_from_slice(&base.as_bytes()[..base.len() - 1]);
+    out.extend_from_slice(b",\"valor\":");
+    // Escrita num `Vec` não falha.
+    let _ = serde_json::to_writer(&mut *out, secret);
+    out.push(b'}');
+    // O `String` fica com o mesmo buffer; JSON é sempre UTF-8.
+    match String::from_utf8(std::mem::take(&mut *out)) {
+        Ok(text) => Zeroizing::new(text),
+        Err(e) => { drop(Zeroizing::new(e.into_bytes())); Zeroizing::new(String::new()) }
+    }
 }
+
+/// O quadro sem o `}` final, a chave `,"valor":`, o valor escapado no pior caso e o `}`.
+fn frame_capacity(base: usize, secret: &str) -> usize { base + 10 + secret.len() * 6 + 2 }
 
 fn deadline_of(body: &Map<String, Value>) -> Duration {
     body.get("deadline_ms").and_then(Value::as_u64).map_or(DEFAULT_DEADLINE, |ms| Duration::from_millis(ms.max(1)).min(MAX_DEADLINE))
@@ -198,11 +205,13 @@ impl Registry {
         if verb == "host" {
             let inner = self.lock();
             // Sem uso registrado, o app de lá com a sessão em foco ainda serve a quem perdeu o app daqui; a hora 0
-            // perde para qualquer foco gravado por um app vivo desta máquina.
-            return match inner.seen.get(session) {
-                Some(ms) => Ok(Reply::Text(format!("ok: host {ms}"))),
-                None if inner.chosen(session).is_some() => Ok(Reply::Text("ok: host 0".into())),
-                None => Err(Refusal::NoHost),
+            // perde para qualquer foco gravado por um app vivo desta máquina. Sem app ligado a hora segue, marcada
+            // `detached`: ela ainda vence o foco daqui, mas o app daqui caído não passa a sessão a ninguém.
+            return match (inner.seen.get(session), inner.chosen(session).is_some()) {
+                (Some(ms), true) => Ok(Reply::Text(format!("ok: host {ms}"))),
+                (Some(ms), false) => Ok(Reply::Text(format!("ok: host {ms} detached"))),
+                (None, true) => Ok(Reply::Text("ok: host 0".into())),
+                (None, false) => Err(Refusal::NoHost),
             };
         }
         let url = matches!(verb.as_str(), "open" | "goto")
@@ -259,6 +268,14 @@ impl Registry {
 
     /// Algum app de outra máquina ligado está com a sessão em foco.
     pub fn has_host(&self, session: &str) -> bool { self.lock().chosen(session).is_some() }
+
+    /// O app que receberia o `fill_secret` agora o aceita. Conferido antes de ler o cofre: a recusa depois da aprovação
+    /// faria a pessoa aprovar à toa.
+    pub fn can_fill_secret(&self, session: &str) -> Result<(), Refusal> {
+        let inner = self.lock();
+        let host = inner.chosen(session).ok_or(Refusal::NoHost)?;
+        if inner.hosts.get(&host).is_some_and(|h| h.fill_secret) { Ok(()) } else { Err(Refusal::Outdated) }
+    }
 
     /// O `list` do CLI: as sessões com navegador conhecido; vivo = algum anfitrião ligado com foco nela.
     pub fn list(&self) -> String {

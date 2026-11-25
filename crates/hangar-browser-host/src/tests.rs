@@ -173,6 +173,8 @@ async fn host_answers_when_another_machine_last_showed_the_session() {
     drop(host);
     assert_eq!(registry.last_seen("s"), Some(seen));
     assert_eq!(registry.command("s", body(json!({"verbo": "url"}))).await, Err(Refusal::NoHost));
+    // A hora segue para o CLI, marcada: sem app ligado, o app daqui caído não passa a sessão adiante.
+    assert_eq!(registry.command("s", body(json!({"verbo": "host"}))).await, Ok(Reply::Text(format!("ok: host {seen} detached"))));
 }
 
 #[tokio::test]
@@ -262,4 +264,34 @@ async fn fill_secret_is_refused_to_an_app_that_did_not_announce_it() {
     assert_eq!((sent["verbo"].as_str(), sent["valor"].as_str()), (Some("fill-secret"), Some(VALUE)));
     host.text(&json!({"id": sent["id"], "ok": true, "text": "ok: fill-secret @e1"}).to_string());
     assert_eq!(call.await.unwrap(), Ok(Reply::Text("ok: fill-secret @e1".into())));
+}
+
+#[tokio::test]
+async fn can_fill_secret_follows_the_app_that_would_receive_the_value() {
+    let registry = Arc::new(Registry::default());
+    assert_eq!(registry.can_fill_secret("s"), Err(Refusal::NoHost));
+    let (mut old, _old_rx) = registry.attach();
+    old.text(r#"{"type":"focus","session":"s"}"#);
+    assert_eq!(registry.can_fill_secret("s"), Err(Refusal::Outdated));
+    let (mut new, _new_rx) = registry.attach();
+    new.text(r#"{"type":"focus","session":"s","caps":["fill_secret"]}"#);
+    assert_eq!(registry.can_fill_secret("s"), Ok(()));
+    // O foco volta ao app antigo: é ele que receberia o valor.
+    old.text(r#"{"type":"focus","session":"s"}"#);
+    assert_eq!(registry.can_fill_secret("s"), Err(Refusal::Outdated));
+}
+
+/// O quadro com o valor é o JSON de sempre, e o buffer reservado antes não cresceu (nenhuma cópia ficou para trás).
+#[test]
+fn the_secret_frame_keeps_its_text_and_never_grows() {
+    for secret in ["S3nh@ \"x\"/é", "\u{1}\u{1f}\\", ""] {
+        let map = body(json!({"verbo": "fill-secret", "id": 7}));
+        let base = Value::Object(map.clone()).to_string();
+        let out = frame(map, Some(secret));
+        let expected = format!("{},\"valor\":{}}}", &base[..base.len() - 1], serde_json::to_string(secret).unwrap());
+        assert_eq!(*out, expected);
+        assert_eq!(serde_json::from_str::<Value>(&out).unwrap()["valor"], secret);
+        assert_eq!(out.capacity(), frame_capacity(base.len(), secret), "{secret:?}");
+    }
+    assert_eq!(*frame(Map::new(), None), "{}");
 }

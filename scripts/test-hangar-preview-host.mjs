@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// O app desktop daqui caiu (o `_srv.json` ficou com um pid sem processo): com outro app mostrando a sessão, mesmo sem
-// clique (`host` responde 0), o CLI usa o de lá; sem ninguém lá, a recusa segue dizendo que o app daqui reinicia.
+// O app desktop daqui caiu (o `_srv.json` ficou com um pid sem processo): com outro app ligado mostrando a sessão, mesmo
+// sem clique (`host` responde 0), o CLI usa o de lá; sem ninguém ligado lá, a recusa segue dizendo que o app daqui reinicia.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
@@ -82,6 +82,18 @@ try {
     assert.match(r.stderr, /reiniciando/);
     assert.deepEqual(srv.verbs, ['host'], 'sem ninguém lá, nada mais vai ao servidor');
     console.log('ok: app daqui caído e ninguém lá: a recusa diz que o app daqui reinicia');
+  }
+  {
+    // O app de lá usou a sessão antes do foco daqui e desligou: a hora dele não substitui o app daqui caído.
+    const dir = await home();
+    dirs.push(dir);
+    const srv = await backend((verb) => (verb === 'host' ? [200, 'ok: host 1 detached'] : [409, none]));
+    const r = await run(dir, srv.port);
+    srv.close();
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /reiniciando/);
+    assert.deepEqual(srv.verbs, ['host'], 'nada vai ao app que desligou');
+    console.log('ok: app daqui caído e o de lá desligado: a recusa diz que o app daqui reinicia');
   }
   {
     // Sem pid o registro não decide, como no MCP: o verbo fica no app daqui, mesmo com outro app com a sessão em foco.

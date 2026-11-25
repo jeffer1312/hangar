@@ -66,8 +66,12 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
     (`owners::dial_first`): o endereço exato vence o "qualquer" da mesma família, e o `::` só recebe
     IPv4 sem socket IPv4 na porta. Na DELPHI-02 um `portproxy` em `127.0.0.1:3000` tapava o Next em
     `0.0.0.0:3000`: o túnel caía no proxy. Com o Next no `::`, o túnel disca `[::1]`; só em `0.0.0.0`,
-    disca `127.0.0.2`, que o `0.0.0.0` recebe e o `127.0.0.1` de fora não. A rota lê o mapa da última
-    rodada da lista, sem varrer sockets por conexão; sem lista aberta, fica a ordem de sempre.
+    disca `127.0.0.2`, que o `0.0.0.0` recebe e o `127.0.0.1` de fora não. Porta de duas sessões fica
+    com a primeira, em ordem de nome, que a alcança sozinha, também quando é pelo `127.0.0.1` de sempre:
+    sem isso, a sessão seguinte no `0.0.0.0` desviava a porta para o processo dela. A rota lê o mapa da
+    última rodada da lista, sem varrer sockets por conexão. O mapa leva a hora da rodada e deixa de valer
+    depois de quatro tiques (6 s) sem rodada nova: a lista fechada para o produtor sem limpá-lo, e o
+    túnel volta à ordem de sempre.
     Porta da sessão em que nenhum loopback chega só a ela (outro processo no mesmo `0.0.0.0`) fica na
     ordem de sempre e registra `session_port_unreached` no log, uma vez até a porta sair desse estado;
     o código está em `DIAGNOSTIC` e nunca chega à tela.
@@ -193,10 +197,12 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   - O verbo `host` (só a pergunta do CLI) responde a hora do último `seen` (clique ou tecla no app de
     lá) e, sem `seen`, `ok: host 0` quando um app ligado tem a sessão em foco. O `seen` só sai do
     uso e só vive na memória do servidor: reiniciado o servidor, ou só com a sessão na tela, a
-    pergunta ficava sem resposta.
-  - App daqui caído (`_srv.json` presente com o pid sem processo) e outro app com a sessão: o CLI e
-    o MCP usam o de lá, sem olhar o `_focus.json` que o caído deixou. Ninguém lá: fica a recusa
-    "o app daqui está reiniciando". Com o app daqui vivo nada muda, porque a hora 0 perde para
+    pergunta ficava sem resposta. Com o app de lá já desligado a hora segue, como `ok: host <ms> detached`:
+    ela ainda vence o foco do app daqui vivo, e o verbo recusa em vez de cair no navegador daqui.
+  - App daqui caído (`_srv.json` presente com o pid sem processo) e outro app ligado com a sessão em
+    foco: o CLI e o MCP usam o de lá, sem olhar o `_focus.json` que o caído deixou. Ninguém ligado
+    lá: fica a recusa "o app daqui está reiniciando". O `seen` de um app que desligou não conta aqui:
+    ele fica depois do desligamento, e a recusa passava a ser "o app de lá não está mais ligado". Com o app daqui vivo nada muda, porque a hora 0 perde para
     qualquer foco gravado. O MCP confere o pid também no Windows (`terminal_process::pid_alive`);
     antes só o Linux via o pid morto. Registro sem pid (ou com pid que o sistema não responde) não
     decide, no CLI e no MCP: o verbo fica no app daqui. O CLI tratava a falta de pid como morte e
@@ -246,8 +252,10 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
     (`erro_cofre_dominio_diferente`). Decidido pelo dono: o canal em http na rede local também
     serve, como qualquer rota do dono.
   - App de antes do `fill-secret` pelo canal não anuncia `fill_secret` no `caps`: tomaria o verbo por
-    desconhecido com o valor já recebido. O `Registry::fill_secret` recusa antes de montar o quadro, e o
-    `vault_fill` diz para atualizar o app desktop.
+    desconhecido com o valor já recebido. O `vault_fill` confere o app escolhido
+    (`Registry::can_fill_secret`) antes de ler o cofre, sem cartão de aprovação à toa, e diz para
+    atualizar o app desktop; o `Registry::fill_secret` ainda recusa antes de montar o quadro. O valor
+    entra no quadro pelo `serde_json::to_writer` num buffer reservado para o pior escape, sem crescer.
 - **D1, decidida em 23/11: sem cartão nem pergunta.** O app serve sozinho as sessões das máquinas
   do dono (entrada de servidor que não é convite nem par externo); convite e par externo nunca
   ganham o canal. O túnel existe para o notebook alcançar o `localhost` da máquina da sessão, e
