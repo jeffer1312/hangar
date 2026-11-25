@@ -55,8 +55,6 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
   onOpenTerminal: () => void;
   onClose: () => void;
 }) {
-  const c = useSettingsColors();
-  const { theme } = useUnistyles();
   const [attempt, setAttempt] = useState<AntigravityTermsAttempt | null>(null);
   const [busy, setBusy] = useState<'start' | 'answer' | 'cancel' | null>(null);
   const [error, setError] = useState('');
@@ -199,64 +197,97 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
   return (
     <Sheet open sizes={['large']} scrollable dismissible={busy !== 'cancel'} onDismiss={() => void cancel(true)}>
       <ScrollView contentContainerStyle={styles.root}>
-        <Text accessibilityRole="header" style={[styles.title, { color: c.text }]}>{m.mobile_antigravity_terms_title()}</Text>
-        <Text style={[styles.text, { color: c.muted }]}>{m.contas_login_servidor({ nome: server.label })}</Text>
-
-        {busy === 'start' || stage === 'iniciando' ? (
-          <View style={styles.line}>
-            <ActivityIndicator color={c.accent} />
-            <Text style={[styles.text, { color: c.text }]} accessibilityLiveRegion="polite">{m.mobile_antigravity_terms_starting()}</Text>
-          </View>
-        ) : null}
-
-        {attempt?.estado === 'termos' ? (
-          <>
-            <Text style={[styles.text, { color: c.muted }]}>{m.mobile_antigravity_terms_intro()}</Text>
-            <Text selectable style={[styles.terms, { color: c.text, borderColor: c.border, backgroundColor: c.inset }]}>
-              {parts(attempt.texto).map((part, i) => part.link ? (
-                <Text key={i} accessibilityRole="link" onPress={() => void openLink(part.link!)}
-                  style={[styles.link, { color: c.accentText }]}>{part.text}</Text>
-              ) : part.text)}
-            </Text>
-            {!answering ? (
-              <View style={styles.actions}>
-                <Pill icon="Check" label={m.mobile_antigravity_terms_accept_share()} onPress={() => void answer(1)} />
-                <Pill icon="Check" label={m.mobile_antigravity_terms_accept_private()} onPress={() => void answer(2)} />
-              </View>
-            ) : null}
-          </>
-        ) : null}
-
-        {answering ? (
-          <View style={styles.line}>
-            <ActivityIndicator color={c.accent} />
-            <Text style={[styles.text, { color: c.text }]} accessibilityLiveRegion="polite">{m.mobile_antigravity_terms_answering()}</Text>
-          </View>
-        ) : null}
-
-        {stage === 'login' ? (
-          <>
-            <Text style={[styles.text, { color: c.text }]}>{m.mobile_antigravity_terms_login()}</Text>
-            <View style={styles.actions}><Pill icon="LogIn" label={m.contas_entrar()} onPress={onSignIn} /></View>
-          </>
-        ) : null}
-
-        {failed ? <Text accessibilityRole="alert" style={[styles.text, { color: theme.tokens.status.error }]}>{failed}</Text> : null}
-        {error ? <Text accessibilityRole="alert" style={[styles.text, { color: theme.tokens.status.error }]}>{error}</Text> : null}
-
-        <View style={styles.actions}>
-          <Pill label={m.mobile_antigravity_terms_cancel()} disabled={busy === 'cancel'} onPress={() => void cancel()} />
-          {failed || (error && !live.current && busy !== 'start') ? (
-            <Pill icon="Terminal" label={m.mobile_antigravity_terms_open_terminal()} onPress={onOpenTerminal} />
-          ) : null}
-        </View>
+        <TermosPainel serverLabel={server.label} starting={busy === 'start' || stage === 'iniciando'}
+          terms={attempt?.estado === 'termos' ? attempt.texto : null} answering={answering} login={stage === 'login'}
+          failed={failed} error={error} cancelDisabled={busy === 'cancel'}
+          terminal={!!failed || (!!error && !live.current && busy !== 'start')}
+          onAnswer={(opcao) => void answer(opcao)} onLink={(link) => void openLink(link)} onSignIn={onSignIn}
+          onCancel={() => void cancel()} onOpenTerminal={onOpenTerminal} />
       </ScrollView>
     </Sheet>
   );
 }
 
+/** O conteúdo da folha dos Termos numa etapa; a animação da novidade desenha o mesmo, sem servidor. */
+export function TermosPainel({ serverLabel, starting, terms, answering, login, failed, error, cancelDisabled, terminal,
+  onAnswer, onLink, onSignIn, onCancel, onOpenTerminal }: {
+  serverLabel: string;
+  starting: boolean;
+  /** O texto do agy quando a etapa é a dos Termos. */
+  terms: string | null;
+  answering: boolean;
+  login: boolean;
+  failed: string;
+  error: string;
+  cancelDisabled: boolean;
+  /** Oferece "Abrir no terminal". */
+  terminal: boolean;
+  onAnswer: (opcao: 1 | 2) => void;
+  onLink: (link: string) => void;
+  onSignIn: () => void;
+  onCancel: () => void;
+  onOpenTerminal: () => void;
+}) {
+  const c = useSettingsColors();
+  const { theme } = useUnistyles();
+  return (
+    <View style={styles.body}>
+      <Text accessibilityRole="header" style={[styles.title, { color: c.text }]}>{m.mobile_antigravity_terms_title()}</Text>
+      <Text style={[styles.text, { color: c.muted }]}>{m.contas_login_servidor({ nome: serverLabel })}</Text>
+
+      {starting ? (
+        <View style={styles.line}>
+          <ActivityIndicator color={c.accent} />
+          <Text style={[styles.text, { color: c.text }]} accessibilityLiveRegion="polite">{m.mobile_antigravity_terms_starting()}</Text>
+        </View>
+      ) : null}
+
+      {terms !== null ? (
+        <>
+          <Text style={[styles.text, { color: c.muted }]}>{m.mobile_antigravity_terms_intro()}</Text>
+          <Text selectable style={[styles.terms, { color: c.text, borderColor: c.border, backgroundColor: c.inset }]}>
+            {parts(terms).map((part, i) => part.link ? (
+              <Text key={i} accessibilityRole="link" onPress={() => onLink(part.link!)}
+                style={[styles.link, { color: c.accentText }]}>{part.text}</Text>
+            ) : part.text)}
+          </Text>
+          {!answering ? (
+            <View style={styles.actions}>
+              <Pill icon="Check" label={m.mobile_antigravity_terms_accept_share()} onPress={() => onAnswer(1)} />
+              <Pill icon="Check" label={m.mobile_antigravity_terms_accept_private()} onPress={() => onAnswer(2)} />
+            </View>
+          ) : null}
+        </>
+      ) : null}
+
+      {answering ? (
+        <View style={styles.line}>
+          <ActivityIndicator color={c.accent} />
+          <Text style={[styles.text, { color: c.text }]} accessibilityLiveRegion="polite">{m.mobile_antigravity_terms_answering()}</Text>
+        </View>
+      ) : null}
+
+      {login ? (
+        <>
+          <Text style={[styles.text, { color: c.text }]}>{m.mobile_antigravity_terms_login()}</Text>
+          <View style={styles.actions}><Pill icon="LogIn" label={m.contas_entrar()} onPress={onSignIn} /></View>
+        </>
+      ) : null}
+
+      {failed ? <Text accessibilityRole="alert" style={[styles.text, { color: theme.tokens.status.error }]}>{failed}</Text> : null}
+      {error ? <Text accessibilityRole="alert" style={[styles.text, { color: theme.tokens.status.error }]}>{error}</Text> : null}
+
+      <View style={styles.actions}>
+        <Pill label={m.mobile_antigravity_terms_cancel()} disabled={cancelDisabled} onPress={onCancel} />
+        {terminal ? <Pill icon="Terminal" label={m.mobile_antigravity_terms_open_terminal()} onPress={onOpenTerminal} /> : null}
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create((theme) => ({
-  root: { padding: theme.base.space[4], paddingBottom: theme.base.space[8], gap: theme.base.space[3] },
+  root: { padding: theme.base.space[4], paddingBottom: theme.base.space[8] },
+  body: { gap: theme.base.space[3] },
   title: { fontSize: theme.base.text.lg, fontWeight: theme.base.weight.semibold },
   text: { fontSize: theme.base.text.sm },
   terms: { fontSize: theme.base.text.sm, lineHeight: 20, borderWidth: 1, borderRadius: theme.base.radius.md, padding: theme.base.space[3] },

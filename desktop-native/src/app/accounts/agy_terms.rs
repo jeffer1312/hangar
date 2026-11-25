@@ -4,7 +4,7 @@ use super::*;
 
 /// A etapa da tentativa, como o GET dos Termos manda.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum TermsStage {
+pub(crate) enum TermsStage {
     Starting,
     /// A pergunta do agy, com os links dos Termos.
     Terms(String),
@@ -18,7 +18,7 @@ pub(super) enum TermsStage {
 
 /// O que o painel oferece em cada etapa.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum TermsAction {
+pub(crate) enum TermsAction {
     /// A `opcao` do agy: 1 aceita e compartilha os dados de uso, 2 aceita sem compartilhar.
     Accept(u8),
     Cancel,
@@ -265,53 +265,65 @@ impl Hangar {
     /// O painel no lugar da lista: a etapa que o servidor publicou e os botões dela.
     pub(super) fn render_agy_terms(&self, cx: &mut Context<Self>) -> Option<Div> {
         let f = self.accounts.terms.as_ref()?;
-        let (color, _) = theme::provider("antigravity");
-        let logo = div().size(px(36.)).flex_shrink_0().rounded(px(10.)).bg(color.opacity(0.16)).flex().items_center()
-            .justify_center().children(chrome::provider_logo("antigravity", 20., color));
-        let head = div().flex().items_center().gap(px(12.)).child(logo)
-            .child(div().flex().flex_col().gap(px(2.)).min_w_0()
-                .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(tr("accounts_agy_terms_title")))
-                .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("accounts_login_server").replace("{server}", &self.server_label(cx)))));
-        let line = |text: String| div().text_size(px(13.)).whitespace_normal().child(text);
-        let waiting = |id: &'static str, text: String| div().flex().items_center().gap(px(8.)).text_size(px(13.)).text_color(theme::muted())
-            .child(chrome::Spinner::new(id, IconName::LoaderCircle, px(14.), theme::accent())).child(text);
-        let mut panel = settings_box().mt(px(24.)).p(px(20.)).gap(px(16.)).child(head);
-        panel = match &f.stage {
-            TermsStage::Starting => panel.child(waiting("accounts-agy-terms-starting", tr("accounts_agy_terms_starting"))),
-            TermsStage::Terms(text) => {
-                // Os links dos Termos abrem fora do app, pelo mesmo leitor do cartão de opções.
-                let links = crate::interaction::question_links(text).into_iter().enumerate().map(|(i, url)|
-                    Button::new(SharedString::from(format!("accounts-agy-terms-link-{i}"))).small().ghost().icon(IconName::ExternalLink)
-                        .label(url.clone()).on_click(move |_, _, cx| cx.open_url(&url)));
-                panel.child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr("accounts_agy_terms_intro")))
-                    .child(div().p(px(12.)).rounded(px(8.)).border_1().border_color(theme::border()).bg(theme::inset())
-                        .text_size(px(12.5)).whitespace_normal().child(text.clone()))
-                    .child(div().flex().flex_col().items_start().gap(px(4.)).children(links))
-            }
-            TermsStage::Answering => panel.child(waiting("accounts-agy-terms-answering", tr("accounts_agy_terms_answering"))),
-            TermsStage::Login => panel.child(line(tr("accounts_agy_terms_login"))),
-            TermsStage::Failed(code) => panel.child(line(failed_text(code.as_deref())).text_color(theme::danger())),
-            TermsStage::Done => panel,
-        };
-        panel = panel.children(f.error.clone().map(|e| line(e).text_color(theme::danger())));
-        // Cancelar e Voltar à esquerda, a ação da etapa por último.
-        let home = self.agy_terms_home().is_some();
-        let buttons = f.stage.actions().into_iter().rev().map(|action| match action {
-            TermsAction::Accept(option) => Button::new(SharedString::from(format!("accounts-agy-terms-accept-{option}"))).primary().small()
-                .label(tr(if option == 1 { "accounts_agy_terms_accept_share" } else { "accounts_agy_terms_accept_private" })).disabled(f.busy)
-                .on_click(cx.listener(move |this, _, _, cx| this.agy_terms_answer(option, cx))),
-            TermsAction::Cancel => Button::new("accounts-agy-terms-cancel").outline().small().label(tr("accounts_agy_terms_cancel"))
-                .on_click(cx.listener(|this, _, window, cx| this.agy_terms_back(window, cx))),
-            TermsAction::Back => Button::new("accounts-agy-terms-back").outline().small().label(tr("settings_back"))
-                .on_click(cx.listener(|this, _, window, cx| this.agy_terms_back(window, cx))),
-            TermsAction::SignIn => Button::new("accounts-agy-terms-sign-in").primary().small().label(tr("accounts_agy_sign_in"))
-                .on_click(cx.listener(|this, _, window, cx| this.agy_terms_sign_in(window, cx))),
-            TermsAction::OpenTerminal => Button::new("accounts-agy-terms-terminal").primary().small().icon(IconName::SquareTerminal)
-                .label(tr("accounts_agy_terms_open_terminal")).disabled(!home)
-                .on_click(cx.listener(|this, _, window, cx| this.agy_terms_open_terminal(window, cx))),
+        let buttons = terms_buttons(&f.stage, f.busy, self.agy_terms_home().is_some(), |action, button| match action {
+            TermsAction::Accept(option) => button.on_click(cx.listener(move |this, _, _, cx| this.agy_terms_answer(option, cx))),
+            TermsAction::Cancel | TermsAction::Back => button.on_click(cx.listener(|this, _, window, cx| this.agy_terms_back(window, cx))),
+            TermsAction::SignIn => button.on_click(cx.listener(|this, _, window, cx| this.agy_terms_sign_in(window, cx))),
+            TermsAction::OpenTerminal => button.on_click(cx.listener(|this, _, window, cx| this.agy_terms_open_terminal(window, cx))),
         });
-        Some(panel.child(div().mt(px(4.)).flex().flex_wrap().justify_end().gap(px(8.)).children(buttons)))
+        Some(terms_panel(&f.stage, f.error.clone(), &self.server_label(cx), buttons).mt(px(24.)))
     }
+}
+
+/// Os botões da etapa, na ordem da tela: Cancelar e Voltar à esquerda, a ação da etapa por último. `wire` liga cada um
+/// à sua ação; a animação da novidade não liga nenhum.
+pub(crate) fn terms_buttons(stage: &TermsStage, busy: bool, home: bool, mut wire: impl FnMut(TermsAction, Button) -> Button) -> Vec<Button> {
+    stage.actions().into_iter().rev().map(|action| {
+        let button = match action {
+            TermsAction::Accept(option) => Button::new(SharedString::from(format!("accounts-agy-terms-accept-{option}"))).primary().small()
+                .label(tr(if option == 1 { "accounts_agy_terms_accept_share" } else { "accounts_agy_terms_accept_private" })).disabled(busy),
+            TermsAction::Cancel => Button::new("accounts-agy-terms-cancel").outline().small().label(tr("accounts_agy_terms_cancel")),
+            TermsAction::Back => Button::new("accounts-agy-terms-back").outline().small().label(tr("settings_back")),
+            TermsAction::SignIn => Button::new("accounts-agy-terms-sign-in").primary().small().label(tr("accounts_agy_sign_in")),
+            TermsAction::OpenTerminal => Button::new("accounts-agy-terms-terminal").primary().small().icon(IconName::SquareTerminal)
+                .label(tr("accounts_agy_terms_open_terminal")).disabled(!home),
+        };
+        wire(action, button)
+    }).collect()
+}
+
+/// O painel dos Termos numa etapa, com os botões já ligados. `server` é o nome da máquina onde o agy roda.
+pub(crate) fn terms_panel(stage: &TermsStage, error: Option<String>, server: &str, buttons: Vec<Button>) -> Div {
+    let (color, _) = theme::provider("antigravity");
+    let logo = div().size(px(36.)).flex_shrink_0().rounded(px(10.)).bg(color.opacity(0.16)).flex().items_center()
+        .justify_center().children(chrome::provider_logo("antigravity", 20., color));
+    let head = div().flex().items_center().gap(px(12.)).child(logo)
+        .child(div().flex().flex_col().gap(px(2.)).min_w_0()
+            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(tr("accounts_agy_terms_title")))
+            .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("accounts_login_server").replace("{server}", server))));
+    let line = |text: String| div().text_size(px(13.)).whitespace_normal().child(text);
+    let waiting = |id: &'static str, text: String| div().flex().items_center().gap(px(8.)).text_size(px(13.)).text_color(theme::muted())
+        .child(chrome::Spinner::new(id, IconName::LoaderCircle, px(14.), theme::accent())).child(text);
+    let mut panel = settings_box().p(px(20.)).gap(px(16.)).child(head);
+    panel = match stage {
+        TermsStage::Starting => panel.child(waiting("accounts-agy-terms-starting", tr("accounts_agy_terms_starting"))),
+        TermsStage::Terms(text) => {
+            // Os links dos Termos abrem fora do app, pelo mesmo leitor do cartão de opções.
+            let links = crate::interaction::question_links(text).into_iter().enumerate().map(|(i, url)|
+                Button::new(SharedString::from(format!("accounts-agy-terms-link-{i}"))).small().ghost().icon(IconName::ExternalLink)
+                    .label(url.clone()).on_click(move |_, _, cx| cx.open_url(&url)));
+            panel.child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr("accounts_agy_terms_intro")))
+                .child(div().p(px(12.)).rounded(px(8.)).border_1().border_color(theme::border()).bg(theme::inset())
+                    .text_size(px(12.5)).whitespace_normal().child(text.clone()))
+                .child(div().flex().flex_col().items_start().gap(px(4.)).children(links))
+        }
+        TermsStage::Answering => panel.child(waiting("accounts-agy-terms-answering", tr("accounts_agy_terms_answering"))),
+        TermsStage::Login => panel.child(line(tr("accounts_agy_terms_login"))),
+        TermsStage::Failed(code) => panel.child(line(failed_text(code.as_deref())).text_color(theme::danger())),
+        TermsStage::Done => panel,
+    };
+    panel.children(error.map(|e| line(e).text_color(theme::danger())))
+        .child(div().mt(px(4.)).flex().flex_wrap().justify_end().gap(px(8.)).children(buttons))
 }
 
 #[cfg(test)]

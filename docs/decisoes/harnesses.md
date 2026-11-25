@@ -52,7 +52,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   numa pasta neutra (sem turno nem token), pelo cache das cotas (`TTL`, 429), nunca em laço próprio: o grupo
   do Gemini vira `5h`/`7d` gerais e os outros grupos janelas por modelo. A tela dos Termos e a das cores do
   primeiro uso viram cartão (`agy_terms`, `agy_onboarding_list`), e a tecla só sai da opção que a pessoa
-  tocou; o Hangar nunca aceita os Termos sozinho. Ver
+  tocou; o Hangar nunca aceita os Termos sozinho. Na página de contas o aceite é pelo painel (desktop e
+  Expo): o servidor abre o `agy` numa janela escondida (`term-agy-terms-`, `@cp_hidden` antes do comando),
+  confirma a tela de cores sozinho, mostra os Termos e só aperta a opção tocada
+  (`/api/antigravity-contas/default/termos`, condutor puro em `hangar-antigravity/src/terms.rs`); "Abrir no
+  terminal" fica como saída. Ver [Termos pela página de contas](#termos-do-antigravity-pela-página-de-contas-25112026). Ver
   [MCP, hooks e sandbox do Antigravity](#antigravity-mcp-hooks-e-sandbox-24112026).
 
 - **Troca de agente pelo seletor de modelos espera o turno e segura a fila.** `POST /conta` com
@@ -1323,6 +1327,18 @@ Medido no `agy` 1.5.13 a 1.5.15, Linux, num servidor isolado (HOME, `TMUX_TMPDIR
   cota e serve de prova de login.
 - **Permissão com terminal:** a tela traz "Requesting permission for:" e as opções numeradas; o
   `/select` com `interaction_id` respondeu "No, cancel" e recusou um `rm -rf`.
+
+## Termos do Antigravity pela página de contas (25/11/2026)
+
+Medido no `agy` 1.5.17, Windows (psmux), com HOME e pastas do usuário apontando para uma pasta vazia.
+
+- **Sem login, a primeira tela é a de entrar**, antes das cores e dos Termos: "You are currently not signed in."
+  seguido de "Select login method:" (`agy_login_screen`, fixture `hangar-core/tests/fixtures/agy/login.txt`).
+  O `agy_analyze` a lê como menu genérico, por isso o condutor confere o login antes.
+- **A tecla que chega antes do `agy` ler a entrada se perde no psmux**: o Enter da tela de cores é repetido se a
+  mesma tela continua 3 s depois. A tela dos Termos abre com o foco no checkbox, então um Enter atrasado só
+  desmarca a caixa, nunca aceita.
+- **Linha do aviso de login tem 66 colunas e a caixa dos Termos 202**: a janela escondida nasce com 240.
 
 ## Antigravity: MCP, hooks e sandbox (24/11/2026)
 

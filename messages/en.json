@@ -8316,6 +8316,7 @@
   "native_news_login_browser_profile": "Personal",
   "native_news_login_browser_email": "you@example.com",
   "native_news_login_browser_page": "Authorize access?",
+  "native_news_agy_terms_sample": "Terms of Service & Data Use\n[x] Yes, I agree to help improve Antigravity CLI by allowing Google to collect and use my Interactions data, subject to the Google Antigravity CLI Terms of Service and Google Privacy Policy.\nLinks:\n- Terms of Service: https://antigravity.google/terms\n- Privacy Policy: https://policies.google.com/privacy",
   "native_news_login_browser_authorize": "Authorize",
   "native_voice_style_limpar_hint": "Removes hesitation, adds punctuation and writes paths and commands correctly. Keeps the order.",
   "native_voice_style_prosa": "Reorganize",

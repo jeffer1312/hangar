@@ -18,6 +18,7 @@ use super::*;
 use super::device::Remote;
 use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
 use agy_terms::{AgyTermsFlow, TermsReply};
+pub(crate) use agy_terms::{TermsAction as AgyTermsAction, TermsStage as AgyTermsStage, terms_buttons as agy_terms_buttons, terms_panel as agy_terms_panel};
 use antigravity::{AgyFlow, AgyReply};
 use cliproxy::{CliproxyReply, CliproxyWizard};
 use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
