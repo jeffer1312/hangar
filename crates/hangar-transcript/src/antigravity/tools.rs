@@ -13,7 +13,22 @@ pub(super) fn canonical(name: &str, args: Args) -> (String, Args) {
         "write_to_file" | "write_file" => write(&args).map(|input| ("Write", input)),
         "replace_file_content" | "multi_replace_file_content" | "edit_file" => edit(&args),
         "update_steps" => steps(&args).map(|input| ("TodoWrite", input)),
-        "invoke_subagent" => subagents(&args),
+        "invoke_subagent" => subagents(&args).or_else(|| subagent(&args)),
+        "exit_plan_mode" => text(&args, "plan").map(|plan| ("ExitPlanMode", object([("plan", plan.into())]))),
+        "enter_plan_mode" => text(&args, "reason").map(|reason| ("EnterPlanMode", object([("reason", reason.into())]))),
+        "manage_subagents" => text(&args, "Action").map(|action| ("manage_subagents", object([("action", action.into())]))),
+        "manage_task" => task(&args).map(|input| ("manage_task", input)),
+        "schedule" => number(&args, "DurationSeconds").map(|seconds| {
+            let mut input = object([("delaySeconds", seconds.into())]);
+            if let Some(prompt) = text(&args, "Prompt") { input.insert("prompt".into(), prompt.into()); }
+            ("ScheduleWakeup", input)
+        }),
+        "send_message" => message(&args).map(|input| ("SendMessage", input)),
+        "define_subagent" => text(&args, "Name").map(|name| {
+            let mut input = object([("name", name.into())]);
+            if let Some(description) = text(&args, "Description") { input.insert("description".into(), description.into()); }
+            ("define_subagent", input)
+        }),
         "browser_subagent" => browser(&args).map(|input| ("Agent", input)),
         "grep_search" => search(&args, "Query", "SearchPath").map(|input| ("Grep", input)),
         "find_by_name" => search(&args, "Pattern", "SearchDirectory").map(|input| ("Glob", input)),
@@ -158,6 +173,29 @@ fn subagents(args: &Args) -> Option<(&'static str, Args)> {
     }
 }
 
+/// O formato do `agy` 1.5.17: um subagente por chamada, que roda em segundo plano e manda o relatório depois.
+fn subagent(args: &Args) -> Option<(&'static str, Args)> {
+    let prompt = text(args, "Prompt")?;
+    let mut input = Args::new();
+    if let Some(role) = first_text(args, &["Role", "TypeName"]) { input.insert("description".into(), role.into()); }
+    if let Some(kind) = text(args, "TypeName") { input.insert("subagent_type".into(), kind.into()); }
+    input.insert("prompt".into(), prompt.into());
+    input.insert("run_in_background".into(), true.into());
+    Some(("Agent", input))
+}
+
+/// O id da tarefa sem a conversa (`task-N`), como o comando de fundo aparece no chat.
+fn task(args: &Args) -> Option<Args> {
+    let id = text(args, "TaskId")?;
+    let mut input = object([("task_id", id.rsplit('/').next().unwrap_or(&id).into())]);
+    if let Some(action) = text(args, "Action") { input.insert("action".into(), action.into()); }
+    Some(input)
+}
+
+fn message(args: &Args) -> Option<Args> {
+    Some(object([("to", text(args, "Recipient")?.into()), ("message", text(args, "Message")?.into())]))
+}
+
 fn browser(args: &Args) -> Option<Args> {
     let mut input = object([("subagent_type", "browser_subagent".into())]);
     if let Some(name) = text(args, "TaskName") { input.insert("description".into(), name.into()); }
@@ -254,6 +292,29 @@ mod tests {
         assert_eq!(input["items"].as_array().map(Vec::len), Some(2));
         assert_eq!(call("browser_subagent", json!({"TaskName":"Abrir","Task":"Abra a página"})).1,
             json!({"subagent_type":"browser_subagent","description":"Abrir","prompt":"Abra a página"}));
+    }
+
+    /// Formato do `agy` 1.5.17: um subagente por chamada, sempre em segundo plano (o relatório chega depois).
+    #[test]
+    fn a_flat_subagent_call_is_a_background_agent() {
+        let (name, input) = call("invoke_subagent", json!({"Prompt":"Liste os arquivos","Role":"Directory Lister","TypeName":"self"}));
+        assert_eq!(name, "Agent");
+        assert_eq!(input, json!({"description":"Directory Lister","subagent_type":"self","prompt":"Liste os arquivos","run_in_background":true}));
+    }
+
+    #[test]
+    fn plan_message_and_subagent_definition_use_the_claude_names() {
+        assert_eq!(call("exit_plan_mode", json!({"plan":"1. Ler\n2. Editar"})), ("ExitPlanMode".to_owned(), json!({"plan":"1. Ler\n2. Editar"})));
+        assert_eq!(call("send_message", json!({"Recipient":"eb8ac2c0-bd0c-4771-b60f-1d146a580e7a","Message":"Corrija o Cargo.toml"})),
+            ("SendMessage".to_owned(), json!({"to":"eb8ac2c0-bd0c-4771-b60f-1d146a580e7a","message":"Corrija o Cargo.toml"})));
+        assert_eq!(call("enter_plan_mode", json!({"reason":"T1 e T2 prontas; falta decidir T3"})), ("EnterPlanMode".to_owned(), json!({"reason":"T1 e T2 prontas; falta decidir T3"})));
+        assert_eq!(call("manage_subagents", json!({"Action":"list"})), ("manage_subagents".to_owned(), json!({"action":"list"})));
+        assert_eq!(call("manage_task", json!({"Action":"status","TaskId":"5837ea9c-4418-4a9b-84da-33407ae57b6f/task-157"})),
+            ("manage_task".to_owned(), json!({"action":"status","task_id":"task-157"})));
+        assert_eq!(call("schedule", json!({"DurationSeconds":90,"Prompt":"Verificar task-157","TimerCondition":"5837ea9c-4418-4a9b-84da-33407ae57b6f/task-157"})),
+            ("ScheduleWakeup".to_owned(), json!({"delaySeconds":90,"prompt":"Verificar task-157"})));
+        assert_eq!(call("define_subagent", json!({"Name":"pm-revisor","Description":"Revisor somente leitura","SystemPrompt":"Você é...","EnableWriteTools":false})),
+            ("define_subagent".to_owned(), json!({"name":"pm-revisor","description":"Revisor somente leitura"})));
     }
 
     #[test]

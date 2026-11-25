@@ -79,8 +79,22 @@ pub struct AgyContextCache {
 
 impl AgyContextCache {
     /// Preenche `context` e `model` da linha; `row.model` chega com o do rodapé (ou vazio).
-    pub fn decorate(&mut self, row: &mut SessionRow, pricing_dir: &Path) {
-        let Some(jsonl) = row.jsonl.clone().filter(|jsonl| !jsonl.is_empty()) else { return };
+    /// `live` é o retrato do ator sem terminal: o ACP diz o modelo escolhido e o contexto com a janela.
+    pub fn decorate(&mut self, row: &mut SessionRow, pricing_dir: &Path, live: Option<&Value>) {
+        let live = live.filter(|view| view["alive"] == true);
+        if let Some(model) = live.and_then(|view| view["current_model"].as_str()).filter(|m| !m.is_empty()) {
+            row.model = Some(model.to_owned());
+        }
+        let usage = live.map(|view| &view["token_usage"]);
+        let acp = usage.and_then(|u| Some((u["used"].as_u64().filter(|used| *used > 0)?, u["size"].as_u64()?)));
+        // Com modelo e contexto do ACP, o rabo do transcript não acrescenta nada.
+        if acp.is_none() || row.model.is_none() {
+            if let Some(jsonl) = row.jsonl.clone().filter(|jsonl| !jsonl.is_empty()) { self.from_transcript(row, pricing_dir, jsonl); }
+        }
+        if let Some((used, window)) = acp { row.context = Some(ContextUse { used, window }); }
+    }
+
+    fn from_transcript(&mut self, row: &mut SessionRow, pricing_dir: &Path, jsonl: String) {
         let version = std::fs::metadata(&jsonl).ok().and_then(|metadata| file_key(&metadata));
         let cached = self.entries.get(&jsonl).filter(|(seen, _)| version.is_some() && *seen == version).map(|(_, reading)| reading.clone());
         let reading = match cached {
@@ -147,6 +161,20 @@ mod tests {
         assert_eq!(row_model(None, None), None);
     }
 
+    /// Sem terminal, o ACP diz o modelo escolhido e o contexto com a janela; o `model` do transcript é o executor
+    /// interno no modo planejador/executor (`gemini-flash-worker-agy`), fora do models.dev.
+    #[test]
+    fn without_a_terminal_the_acp_gives_the_model_and_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript_full.jsonl");
+        std::fs::write(&path, line(json!({"type":"PLANNER_RESPONSE","model":"gemini-flash-worker-agy","input_tokens":2163,"cache_read_tokens":7232}))).unwrap();
+        let mut row: SessionRow = serde_json::from_value(json!({"name": "agy", "provider": "antigravity", "headless": true, "jsonl": path.to_string_lossy()})).unwrap();
+        let live = json!({"alive": true, "current_model": "gemini-pro-orchestrator-neon", "token_usage": {"used": 315737, "size": 1048576}});
+        AgyContextCache::default().decorate(&mut row, &dir.path().join("pricing"), Some(&live));
+        assert_eq!(row.model.as_deref(), Some("gemini-pro-orchestrator-neon"));
+        assert_eq!(row.context, Some(ContextUse { used: 315737, window: 1048576 }));
+    }
+
     #[test]
     fn the_row_gets_tokens_without_a_window_and_rereads_only_a_new_version() {
         let dir = tempfile::tempdir().unwrap();
@@ -155,13 +183,13 @@ mod tests {
         let mut row: SessionRow = serde_json::from_value(json!({"name": "agy", "provider": "antigravity", "jsonl": path.to_string_lossy()})).unwrap();
         let mut cache = AgyContextCache::default();
         let pricing = dir.path().join("pricing");
-        cache.decorate(&mut row, &pricing);
+        cache.decorate(&mut row, &pricing, None);
         assert_eq!(row.context, Some(ContextUse { used: 9395, window: 0 }), "sem cache do models.dev, sem janela");
         assert_eq!(row.model.as_deref(), Some("gemini-4-neon-low"));
         row.model = Some("gemini-4-neon-medium".into());
         std::fs::create_dir_all(&pricing).unwrap();
         std::fs::write(pricing.join(crate::costs::pricing_refresh::WINDOWS), r#"{"gemini-4-neon":1048576}"#).unwrap();
-        cache.decorate(&mut row, &pricing);
+        cache.decorate(&mut row, &pricing, None);
         assert_eq!(row.context, Some(ContextUse { used: 9395, window: 1048576 }), "a janela do modelo base vale para o esforço");
         assert_eq!(row.model.as_deref(), Some("gemini-4-neon-medium"), "o rodapé novo vence o transcript antigo");
     }

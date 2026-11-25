@@ -513,12 +513,15 @@ impl Engine {
                     }
                     acp::Event::TextDelta(piece) => if let Some(text) = self.preview.append(&piece,now) { self.publish("preview",text,effects); },
                     acp::Event::ThoughtDelta(piece) => if let Some(text) = self.thinking.append(&piece,now) { self.publish("thinking",text,effects); },
-                    acp::Event::ToolStarted { title,name,.. } => {
+                    acp::Event::ToolStarted { title,name,input,.. } => {
                         // Texto depois de uma ferramenta é outra mensagem; o definitivo vem do transcript.
                         if let Some(text) = self.preview.clear() { self.publish("preview",text,effects); }
-                        let label = title.or(name).unwrap_or_default();
-                        self.tool = Some(label.clone());
-                        self.publish("tool",label,effects);
+                        let (nome,input) = match name {
+                            Some(name) => hangar_transcript::agy_live_tool(&name,input.as_ref().unwrap_or(&Value::Null)),
+                            None => (title.unwrap_or_else(||"tool".into()),serde_json::Map::new()),
+                        };
+                        self.publish("tool",super::live_tool_text(&nome,&Value::Object(input)),effects);
+                        self.tool = Some(nome);
                     }
                     acp::Event::ToolUpdated { status,.. } => if matches!(status.as_deref(),Some("completed" | "failed")) && self.tool.take().is_some() {
                         self.publish("tool",String::new(),effects);
@@ -926,6 +929,25 @@ mod tests {
         assert_eq!(engine.view()["state"],"idle");
         assert!(last.contains(&Effect::WakeQueue));
         assert!(engine.deliverable());
+    }
+
+    /// O cliente lê a ferramenta ao vivo como `{"nome","input"}`: rótulo solto derrubava a conversa no app nativo.
+    #[test]
+    fn a_live_tool_is_published_with_the_transcript_name_and_input() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"oi"})).unwrap();
+        written(&mut engine,"in1");
+        let call = |update:Value| json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":OPENED,"update":update}});
+        let tools = |effects:Vec<Effect>| effects.into_iter().filter_map(|e| match e {
+            Effect::Publish { channel,data } if channel == "tool" => Some(serde_json::from_str::<Value>(data["text"].as_str().unwrap()).unwrap()),
+            _ => None,
+        }).collect::<Vec<_>>();
+        let named = feed(&mut engine,call(json!({"sessionUpdate":"tool_call","toolCallId":"c1","name":"run_command","kind":"execute",
+            "title":"rm -f /tmp/x","rawInput":{"CommandLine":"rm -f /tmp/x","WaitMsBeforeAsync":5000}})),2.0);
+        let named = tools(named);
+        assert_eq!((named[0]["nome"].as_str(),named[0]["input"]["command"].as_str()),(Some("Bash"),Some("rm -f /tmp/x")));
+        let titled = tools(feed(&mut engine,call(json!({"sessionUpdate":"tool_call","toolCallId":"c2","title":"Pesquisando"})),3.0));
+        assert_eq!(titled[0],json!({"nome":"Pesquisando","input":{}}));
     }
 
     #[test]

@@ -408,7 +408,7 @@ fn interim_notification(text: &str) -> bool {
         .is_some_and(|(summary, _)| summary.contains("is waiting on its own background work"))
 }
 
-fn task_result(id: String, task: &str) -> ChatEvent {
+pub(crate) fn task_result(id: String, task: &str) -> ChatEvent {
     ChatEvent {
         tool_use_id: Some(format!("task:{task}")),
         result: Some("task-notification".into()),

@@ -299,12 +299,41 @@ fn write_agy(value: &Value, base: &Path, pane: Option<&str>, psmux: Option<&str>
     if let Some(state) = state {
         marker(base, ".hangar-state", conversation, &json!({"state": state, "ts": timestamp()}))?;
     }
+    let bound = fs::read(base.join(".hangar-agy").join(format!("{key}.json"))).ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .and_then(|ticket| ticket["session_id"].as_str().map(str::to_owned)).filter(|bound| bound != conversation);
+    let brain = value["transcriptPath"].as_str().and_then(|path| hangar_antigravity::paths::place_of_transcript(Path::new(path))).map(|(brain, _)| brain);
+    if let (Some(bound), Some(brain)) = (bound, brain) {
+        if descends(&brain, &bound, conversation) { return Ok(()); }
+        // O `agy` grava o arquivo do subagente pouco antes do `SessionStart` dele: a reconferência cobre a máquina
+        // lenta. Só espera o início sem pedido da pessoa com o pane ligado a uma conversa que tem subagentes.
+        if value["hookEventName"] == "SessionStart" && value["lastUserInput"].as_str().is_none_or(str::is_empty)
+            && hangar_antigravity::paths::subagents_dir(&brain, &bound).is_dir() {
+            for _ in 0..3 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if descends(&brain, &bound, conversation) { return Ok(()); }
+            }
+        }
+    }
     marker(base, ".hangar-agy", &key, &json!({
         "session_id": conversation,
         "transcript_path": value.get("transcriptPath").unwrap_or(&Value::Null),
         "cwd": value.get("cwd").unwrap_or(&Value::Null),
         "ts": timestamp(),
     }))
+}
+
+/// O subagente roda os hooks no mesmo pane com a própria conversa: sem isto o chat pularia para ela. Vale para
+/// subagente de subagente, até três níveis abaixo da conversa já ligada ao pane.
+fn descends(brain: &Path, bound: &str, conversation: &str) -> bool {
+    use hangar_antigravity::paths::{subagent_ids, subagents_dir};
+    let mut level = vec![bound.to_owned()];
+    for _ in 0..3 {
+        if level.iter().any(|parent| subagents_dir(brain, parent).join(format!("{conversation}.json")).is_file()) { return true; }
+        level = level.iter().flat_map(|parent| subagent_ids(brain, parent)).collect();
+        if level.is_empty() { return false; }
+    }
+    false
 }
 
 /// A chave do bilhete: o nome da sessão no psmux, senão o pane do tmux sem o `%`.

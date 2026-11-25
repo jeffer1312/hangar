@@ -33,9 +33,7 @@ impl Account {
 
     /// `None` para id que não é UUID: o id vem de hook e de spec, e vira parte de caminho.
     pub fn transcript_path(&self, home: &Path, conversation: &str) -> Option<PathBuf> {
-        valid_conversation_id(conversation).then(|| {
-            self.data_dir(home).join("brain").join(conversation).join(".system_generated").join("logs").join("transcript_full.jsonl")
-        })
+        transcript_in(&self.brain_dir(home), conversation)
     }
 
     pub fn brain_dir(&self, home: &Path) -> PathBuf { self.data_dir(home).join("brain") }
@@ -77,6 +75,47 @@ pub fn workspace_of(account: &Account, home: &Path, conversation: &str) -> Optio
 pub fn conversation_of_transcript(path: &Path) -> Option<String> {
     let id = path.parent()?.parent()?.parent()?.file_name()?.to_str()?;
     valid_conversation_id(id).then(|| id.to_owned())
+}
+
+/// A pasta `brain` da conta e o id da conversa a partir do caminho do transcript dela.
+pub fn place_of_transcript(path: &Path) -> Option<(PathBuf, String)> {
+    let conversation = conversation_of_transcript(path)?;
+    Some((path.parent()?.parent()?.parent()?.parent()?.to_path_buf(), conversation))
+}
+
+/// O transcript de uma conversa dentro da pasta `brain`; `None` para id que não é UUID.
+pub fn transcript_in(brain: &Path, conversation: &str) -> Option<PathBuf> {
+    valid_conversation_id(conversation).then(|| brain.join(conversation).join(".system_generated/logs/transcript_full.jsonl"))
+}
+
+/// Onde o `agy` registra os subagentes que a conversa lançou (`<id>.json` cada um).
+pub fn subagents_dir(brain: &Path, conversation: &str) -> PathBuf { brain.join(conversation).join(".system_generated/subagents") }
+
+/// Os subagentes que a conversa lançou, em ordem.
+pub fn subagent_ids(brain: &Path, conversation: &str) -> Vec<String> {
+    if !valid_conversation_id(conversation) { return Vec::new(); }
+    let mut ids: Vec<String> = std::fs::read_dir(subagents_dir(brain, conversation)).into_iter().flatten().flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.strip_suffix(".json").map(str::to_owned))
+        .filter(|id| valid_conversation_id(id)).collect();
+    ids.sort();
+    ids
+}
+
+/// O descritor (`{typeName, role}`) do subagente `child` lançado pela conversa `parent`; `None` quando `child`
+/// não é subagente dela. O `agy` grava o descritor como objeto ou como texto JSON.
+pub fn subagent_descriptor(brain: &Path, parent: &str, child: &str) -> Option<serde_json::Value> {
+    if !valid_conversation_id(parent) || !valid_conversation_id(child) { return None; }
+    let text = std::fs::read_to_string(subagents_dir(brain, parent).join(format!("{child}.json"))).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(match &value["subagentDescriptor"] {
+        serde_json::Value::String(raw) => serde_json::from_str(raw).unwrap_or_default(),
+        other => other.clone(),
+    })
+}
+
+/// O nome do subagente para a tela: `role`, senão `typeName`.
+pub fn subagent_name(descriptor: &serde_json::Value) -> Option<String> {
+    ["role", "typeName"].iter().find_map(|key| descriptor[*key].as_str().filter(|s| !s.trim().is_empty())).map(str::to_owned)
 }
 
 #[cfg(test)]
