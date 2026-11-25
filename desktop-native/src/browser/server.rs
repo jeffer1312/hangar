@@ -19,8 +19,9 @@ const RECLAIM_EVERY: Duration = Duration::from_secs(3);
 
 pub enum Request {
     /// Verbo do `/cmd`, o do hangar-preview.
-    /// `secret`: o `valor` do corpo (senha do cofre do `fill-secret`), fora dos `args`.
-    Command { key: String, verb: String, args: Vec<String>, tab: Option<i64>, secret: Option<Secret>, reply: oneshot::Sender<Reply> },
+    /// `secret`: o `valor` do corpo (senha do cofre do `fill-secret`), fora dos `args`. `deadline`: o `deadline_ms` do
+    /// corpo, quanto quem pediu espera; o controlador desiste antes.
+    Command { key: String, verb: String, args: Vec<String>, tab: Option<i64>, secret: Option<Secret>, deadline: Option<u64>, reply: oneshot::Sender<Reply> },
     /// Comando CDP do `/cdp`, já conferido contra `relay::RELAYED`.
     Cdp { key: String, method: String, params: Value, reply: oneshot::Sender<Result<Value, String>> },
     /// Espectador novo da tela remota; tira o anterior daquele navegador.
@@ -46,7 +47,7 @@ struct Head {
 enum Route { Cmd, Cdp(String), Browser(String), Local(String) }
 
 /// `cdp`: a página é de fora do app (`hangar-preview --cdp`), e `alvo` escolhe qual; aí a chave de sessão não entra.
-struct Body { key: String, verb: String, args: Vec<String>, tab: Option<i64>, cdp: Option<String>, alvo: Option<String>, secret: Option<Secret> }
+struct Body { key: String, verb: String, args: Vec<String>, tab: Option<i64>, cdp: Option<String>, alvo: Option<String>, secret: Option<Secret>, deadline: Option<u64> }
 
 fn nav_dir() -> Option<PathBuf> { std::env::home_dir().map(|h| h.join(".hangar").join("nav")) }
 
@@ -244,7 +245,7 @@ fn parse_body(bytes: &[u8]) -> Result<Body, String> {
     let args = v["args"].as_array().into_iter().flatten().map(|a| a.as_str().map_or_else(|| a.to_string(), str::to_owned)).collect();
     // shortcut: o corpo lido e o `Value` não são zerados; só o valor que fica vivo no controlador é.
     let secret = v["valor"].as_str().map(|s| Secret::new(s.to_owned()));
-    Ok(Body { key, verb, args, tab: v["aba"].as_i64(), cdp, alvo: v["alvo"].as_str().map(str::to_owned), secret })
+    Ok(Body { key, verb, args, tab: v["aba"].as_i64(), cdp, alvo: v["alvo"].as_str().map(str::to_owned), secret, deadline: v["deadline_ms"].as_u64() })
 }
 
 /// Grava a hora em que a sessão desta máquina apareceu na janela ativa (`_focus.json`, sessão → ms). O CLI e o MCP
@@ -421,7 +422,7 @@ async fn answer(bytes: &[u8], requests: &async_channel::Sender<Request>) -> Stri
         match super::external::submit(&cdp, body.alvo, body.verb, body.args) { Ok(rx) => rx, Err(e) => return e }
     } else {
         let (tx, rx) = oneshot::channel();
-        if requests.send(Request::Command { key: body.key, verb: body.verb, args: body.args, tab: body.tab, secret: body.secret, reply: tx }).await.is_err() {
+        if requests.send(Request::Command { key: body.key, verb: body.verb, args: body.args, tab: body.tab, secret: body.secret, deadline: body.deadline, reply: tx }).await.is_err() {
             return "erro: o app nativo esta fechando".into();
         }
         rx
@@ -824,7 +825,8 @@ mod tests {
         assert_eq!(parse_body(b"{").err(), Some("erro: corpo invalido".into()));
         assert_eq!(parse_body(br#"{"verbo":"snapshot"}"#).err(), Some("erro: corpo invalido".into()));
         let with_tab = parse_body(br#"{"chave":"k","verbo":"url","aba":2}"#).unwrap();
-        assert_eq!((with_tab.tab, with_tab.args.len()), (Some(2), 0));
+        assert_eq!((with_tab.tab, with_tab.args.len(), with_tab.deadline), (Some(2), 0, None));
+        assert_eq!(parse_body(br#"{"chave":"k","verbo":"click","deadline_ms":8000}"#).unwrap().deadline, Some(8000), "o prazo chega ao controlador");
         let external = parse_body(br#"{"cdp":"http://127.0.0.1:9222","alvo":"/agenda","verbo":"url"}"#).unwrap();
         assert_eq!((external.key.as_str(), external.cdp.as_deref(), external.alvo.as_deref()), ("", Some("http://127.0.0.1:9222"), Some("/agenda")));
     }

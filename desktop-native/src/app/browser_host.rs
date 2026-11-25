@@ -349,7 +349,7 @@ impl Hangar {
             return self.host_navigate(server, id, key, session, verb, args.first().cloned().unwrap_or_default(), deadline, window, cx);
         }
         let (tx, rx) = futures::channel::oneshot::channel();
-        self.host_run_verb(key, verb, args, request["aba"].as_i64(), tx, cx);
+        self.host_run_verb(key, verb, args, request["aba"].as_i64(), request["deadline_ms"].as_u64(), tx, cx);
         let pairs = self.host_pairs(&server);
         cx.spawn(async move |_, _| {
             let reply = rx.await.unwrap_or_else(|_| Reply::Text("erro: o navegador fechou no meio do comando".into()));
@@ -421,7 +421,9 @@ impl Hangar {
             let run = |this: &WeakEntity<Hangar>, cx: &mut AsyncWindowContext, verb: &str, args: Vec<String>| {
                 let (tx, rx) = futures::channel::oneshot::channel();
                 let (key, verb) = (key.clone(), verb.to_owned());
-                let sent = this.update(cx, |this, cx| this.host_run_verb(key, verb, args, None, tx, cx)).is_ok();
+                // O que sobra do prazo do `open`/`goto`: o verbo não segura a vez depois de o servidor desistir.
+                let left = deadline.saturating_duration_since(Instant::now()).as_millis() as u64;
+                let sent = this.update(cx, |this, cx| this.host_run_verb(key, verb, args, None, Some(left), tx, cx)).is_ok();
                 async move { if sent { rx.await.ok() } else { None } }
             };
             let first = if ready { run(&this, cx, "goto", vec![url.clone()]).await } else {
@@ -467,7 +469,8 @@ impl Hangar {
 
     /// Verbo do agente remoto. No Linux só na página aberta no contexto dele: a que a pessoa abriu no painel ele não
     /// lê nem dirige.
-    fn host_run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>,
+    #[allow(clippy::too_many_arguments)]
+    fn host_run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>, deadline: Option<u64>,
         reply: futures::channel::oneshot::Sender<Reply>, cx: &mut Context<Self>) {
         #[cfg(target_os = "linux")]
         if let Some(browser) = self.side.browsers.get(&key).cloned() {
@@ -477,7 +480,7 @@ impl Hangar {
                 return;
             }
         }
-        self.run_verb(key, verb, args, tab, None, reply, cx);
+        self.run_verb(key, verb, args, tab, None, deadline, reply, cx);
     }
 
     /// O contexto do agente remoto no painel da sessão `key`: o SOCKS em modo agente do servidor dela, relido a cada

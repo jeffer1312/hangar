@@ -93,6 +93,11 @@ pub const PICKING: &str = "erro: o usuário está escolhendo um elemento no pain
 /// Espera da primeira ação depois de a faixa do agente ter sumido: ela volta e encolhe a página, e o alvo tem de ser
 /// medido depois disso. Com a faixa já na tela, nenhuma espera.
 const SETTLE_MS: u64 = 150;
+/// Teto de um verbo cuja página não responde: sem ele uma chamada CDP presa segurava a vez para sempre, e todo verbo
+/// seguinte esgotava o prazo com a página viva.
+const VERB_MS: u64 = 20_000;
+/// Folga abaixo do prazo de quem espera (`deadline_ms`), para o erro do teto ainda chegar antes de ele desistir.
+const VERB_MARGIN_MS: u64 = 2_000;
 
 
 struct State {
@@ -169,6 +174,8 @@ pub struct Controller<P: Page> {
     /// Acorda o verbo em andamento quando um diálogo abre: o clique que o abriu só voltaria depois da resposta.
     dialog_signal: RefCell<Option<futures::channel::oneshot::Sender<()>>>,
     on_dialog_answer: RefCell<Option<Box<dyn Fn(bool, Option<String>, futures::channel::oneshot::Sender<Result<(), String>>)>>>,
+    /// Método CDP sem resposta ainda: o teto do verbo diz em qual a página parou.
+    in_flight: RefCell<Option<String>>,
 }
 
 fn push(list: &mut VecDeque<String>, line: String) {
@@ -192,7 +199,7 @@ fn without_query(url: &str) -> &str { url.split(['?', '#']).next().unwrap_or(url
 
 impl<P: Page> Controller<P> {
     pub fn new(page: P, hidden: bool) -> Self {
-        Self { page, turn: Mutex::new(()), wanted_hidden: Cell::new(hidden), paused: Cell::new(false), picking: Cell::new(false), on_activity: RefCell::new(None), on_layout: RefCell::new(None), on_page_error: RefCell::new(None), dialog_open: RefCell::new(None), strip_shown: Cell::new(false), settle: Cell::new(false), dialog_answered: Cell::new(false), dialog_signal: RefCell::new(None), on_dialog_answer: RefCell::new(None), state: RefCell::new(State { refs: HashMap::new(), console: VecDeque::new(),
+        Self { page, turn: Mutex::new(()), wanted_hidden: Cell::new(hidden), paused: Cell::new(false), picking: Cell::new(false), on_activity: RefCell::new(None), on_layout: RefCell::new(None), on_page_error: RefCell::new(None), dialog_open: RefCell::new(None), strip_shown: Cell::new(false), settle: Cell::new(false), dialog_answered: Cell::new(false), dialog_signal: RefCell::new(None), on_dialog_answer: RefCell::new(None), in_flight: RefCell::new(None), state: RefCell::new(State { refs: HashMap::new(), console: VecDeque::new(),
             network: VecDeque::new(), inflight: HashSet::new(), requests: HashMap::new(), dialog: None, last_network: Instant::now(), noise: HashSet::new(), theme: "sistema", layout: Layout::Desktop,
             hidden: false, scale: None, navigated: false, navs: 0, enabled: HashSet::new(), marked: HashSet::new(), secrets: Vec::new() }) }
     }
@@ -219,7 +226,7 @@ impl<P: Page> Controller<P> {
         let _turn = self.turn.lock().await;
         self.state.borrow_mut().hidden = self.wanted_hidden.get();
         let layout = self.state.borrow().layout;
-        if let Err(e) = self.apply_layout(layout).await { eprintln!("[nav] layout nao aplicado: {e}"); }
+        if let Err(e) = self.bounded("layout", self.apply_layout(layout)).await { eprintln!("[nav] layout nao aplicado: {e}"); }
     }
 
     /// A página caiu e voltou no mesmo alvo: os domínios ligados morreram com ela, e o próximo verbo os liga de novo.
@@ -299,7 +306,26 @@ impl<P: Page> Controller<P> {
     pub async fn set_scale(&self, scale: f32) {
         let _turn = self.turn.lock().await;
         let (layout, hidden) = { let mut s = self.state.borrow_mut(); s.scale = Some(scale); (s.layout, s.hidden) };
-        if layout == Layout::Desktop && !hidden && let Err(e) = self.apply_layout(layout).await { eprintln!("[nav] escala nao aplicada: {e}"); }
+        if layout == Layout::Desktop && !hidden && let Err(e) = self.bounded("escala", self.apply_layout(layout)).await { eprintln!("[nav] escala nao aplicada: {e}"); }
+    }
+
+    /// Trabalho que segura a vez fora de um verbo (tamanho e escala do painel): o mesmo teto, para a vez nunca ficar presa.
+    async fn bounded(&self, what: &str, work: impl Future<Output = Result<(), String>>) -> Result<(), String> {
+        self.in_flight.borrow_mut().take();
+        within(&self.page, VERB_MS, work).await.unwrap_or_else(|| {
+            let stuck = self.in_flight.borrow_mut().take();
+            note_stuck(what, stuck.as_deref(), VERB_MS);
+            Err(stuck_text(what, VERB_MS, stuck.as_deref()))
+        })
+    }
+
+    /// Toda chamada do controlador passa aqui. Chamada largada pelo teto fica sem quem leia: a resposta atrasada vai
+    /// para o id dela no transporte, nunca para a do verbo seguinte.
+    async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        *self.in_flight.borrow_mut() = Some(method.to_owned());
+        let reply = self.page.call(method, params).await;
+        self.in_flight.borrow_mut().take();
+        reply
     }
 
     pub fn on_event(&self, method: &str, p: &Value) {
@@ -387,10 +413,12 @@ impl<P: Page> Controller<P> {
 
     pub async fn run(&self, verb: &str, args: &[String]) -> Reply { self.run_with(verb, args, None).await }
 
+    pub async fn run_with(&self, verb: &str, args: &[String], secret: Option<Secret>) -> Reply { self.run_until(verb, args, secret, None).await }
+
     /// `secret`: o valor do `fill-secret`, que nunca vem nos `args`. Toda resposta de texto sai com as senhas já
-    /// preenchidas trocadas por `••••`.
-    pub async fn run_with(&self, verb: &str, args: &[String], secret: Option<Secret>) -> Reply {
-        match self.run_inner(verb, args, secret).await {
+    /// preenchidas trocadas por `••••`. `deadline_ms`: quanto quem pediu espera; o verbo para antes, com folga.
+    pub async fn run_until(&self, verb: &str, args: &[String], secret: Option<Secret>, deadline_ms: Option<u64>) -> Reply {
+        match self.run_inner(verb, args, secret, deadline_ms).await {
             Reply::Text(text) => Reply::Text(self.masked(text)),
             png => png,
         }
@@ -400,11 +428,12 @@ impl<P: Page> Controller<P> {
         self.state.borrow().secrets.iter().fold(text, |out, secret| mask(&out, &secret.forms))
     }
 
-    async fn run_inner(&self, verb: &str, args: &[String], mut secret: Option<Secret>) -> Reply {
+    async fn run_inner(&self, verb: &str, args: &[String], mut secret: Option<Secret>, deadline_ms: Option<u64>) -> Reply {
         if let Some(why) = self.blocked().filter(|_| ACTING.contains(&verb)) { return Reply::Text(why.into()); }
         // Antes da vez: o verbo que segura a vez pode estar parado justamente no diálogo.
         if verb == "dialog" { return Reply::Text(self.answer_dialog(args).await); }
         let _turn = self.turn.lock().await;
+        self.in_flight.borrow_mut().take();
         if let Some(why) = self.blocked().filter(|_| ACTING.contains(&verb)) { return Reply::Text(why.into()); }
         for _ in 0..20 {
             if !(self.dialog_answered.get() && self.dialog_open.borrow().is_some()) { break; }
@@ -456,12 +485,24 @@ impl<P: Page> Controller<P> {
         };
         // Diálogo aberto no meio do verbo (o clique em "Excluir"): a página para até a resposta, e o verbo volta agora.
         let opened = async { if opened.await.is_err() { std::future::pending::<()>().await } };
-        let result = match select(std::pin::pin!(work), std::pin::pin!(opened)).await {
-            Either::Left((result, _)) => result,
-            Either::Right(_) => {
+        let raced = async {
+            match select(std::pin::pin!(work), std::pin::pin!(opened)).await {
+                Either::Left((result, _)) => result,
+                Either::Right(_) => {
+                    let _ = within(&self.page, 500, self.unmark()).await;
+                    let (kind, message, _) = self.dialog_open.borrow().clone().unwrap_or_default();
+                    Ok(Reply::Text(format!("ok: {verb} parou: a pagina abriu um dialogo {kind}: “{message}”. Responda com: {}", Self::dialog_hint(&kind))))
+                }
+            }
+        };
+        let ceiling = verb_ceiling(verb, args, deadline_ms);
+        let result = match within(&self.page, ceiling, raced).await {
+            Some(result) => result,
+            None => {
+                let stuck = self.in_flight.borrow_mut().take();
+                note_stuck(verb, stuck.as_deref(), ceiling);
                 let _ = within(&self.page, 500, self.unmark()).await;
-                let (kind, message, _) = self.dialog_open.borrow().clone().unwrap_or_default();
-                Ok(Reply::Text(format!("ok: {verb} parou: a pagina abriu um dialogo {kind}: “{message}”. Responda com: {}", Self::dialog_hint(&kind))))
+                Ok(Reply::Text(format!("erro: {}", stuck_text(verb, ceiling, stuck.as_deref()))))
             }
         };
         self.dialog_signal.borrow_mut().take();
@@ -483,7 +524,7 @@ impl<P: Page> Controller<P> {
 
     async fn enable(&self, domain: &'static str) -> Result<(), String> {
         if self.state.borrow().enabled.contains(domain) { return Ok(()); }
-        self.page.call(&format!("{domain}.enable"), json!({})).await.map_err(|e| format!("{domain}.enable falhou: {e}"))?;
+        self.call(&format!("{domain}.enable"), json!({})).await.map_err(|e| format!("{domain}.enable falhou: {e}"))?;
         let mut s = self.state.borrow_mut();
         s.enabled.insert(domain);
         if domain == "Network" { s.last_network = Instant::now(); }
@@ -491,17 +532,17 @@ impl<P: Page> Controller<P> {
     }
 
     async fn frame(&self) {
-        let _ = within(&self.page, 500, self.page.call("Runtime.evaluate", json!({"expression": FRAME, "awaitPromise": true}))).await;
+        let _ = within(&self.page, 500, self.call("Runtime.evaluate", json!({"expression": FRAME, "awaitPromise": true}))).await;
     }
 
     async fn value(&self, expression: &str) -> Result<Value, String> {
-        let r = self.page.call("Runtime.evaluate", json!({"expression": expression, "returnByValue": true})).await?;
+        let r = self.call("Runtime.evaluate", json!({"expression": expression, "returnByValue": true})).await?;
         Ok(r["result"]["value"].clone())
     }
 
     /// Árvore inteira (`wait @eN` usa só as refs).
     async fn current_url(&self) -> Result<String, String> {
-        let h = self.page.call("Page.getNavigationHistory", json!({})).await?;
+        let h = self.call("Page.getNavigationHistory", json!({})).await?;
         let index = h["currentIndex"].as_u64().unwrap_or(0) as usize;
         match h["entries"].get(index).and_then(|e| e["url"].as_str()) {
             Some(url) => Ok(format!("ok: {}", Value::String(url.to_owned()))),
@@ -513,7 +554,7 @@ impl<P: Page> Controller<P> {
 
     async fn tree(&self, refs_only: bool) -> Result<Vec<String>, String> {
         self.enable("Accessibility").await?;
-        let mut tree = self.page.call("Accessibility.getFullAXTree", json!({})).await?;
+        let mut tree = self.call("Accessibility.getFullAXTree", json!({})).await?;
         let mut nodes = tree["nodes"].take();
         {
             let marked = &self.state.borrow().marked;
@@ -543,8 +584,8 @@ impl<P: Page> Controller<P> {
     /// Outra falha do CDP (página travada, sessão caída) não é ref velha: sobe como erro, porque snapshot novo não resolve.
     async fn center(&self, r: &str) -> Result<Option<(i64, i64)>, String> {
         let Some(id) = self.state.borrow().refs.get(r).copied() else { return Ok(None) };
-        let _ = self.page.call("DOM.scrollIntoViewIfNeeded", json!({"backendNodeId": id})).await;
-        let model = match self.page.call("DOM.getBoxModel", json!({"backendNodeId": id})).await {
+        let _ = self.call("DOM.scrollIntoViewIfNeeded", json!({"backendNodeId": id})).await;
+        let model = match self.call("DOM.getBoxModel", json!({"backendNodeId": id})).await {
             Ok(m) => m,
             Err(e) if e.contains("No node") => return Ok(None),
             Err(e) => return Err(format!("{r}: {e}")),
@@ -559,8 +600,8 @@ impl<P: Page> Controller<P> {
     /// nem segura o clique, e no Windows aparece dentro do WebView2. Roda antes de `center`.
     async fn mark(&self, verb: &str, r: &str) {
         let Some(id) = self.state.borrow().refs.get(r).copied() else { return };
-        let _ = self.page.call("DOM.scrollIntoViewIfNeeded", json!({"backendNodeId": id})).await;
-        let name = self.page.call("Accessibility.getPartialAXTree", json!({"backendNodeId": id, "fetchRelatives": false})).await.ok()
+        let _ = self.call("DOM.scrollIntoViewIfNeeded", json!({"backendNodeId": id})).await;
+        let name = self.call("Accessibility.getPartialAXTree", json!({"backendNodeId": id, "fetchRelatives": false})).await.ok()
             .and_then(|t| t["nodes"].as_array()?.iter().find_map(|n| n["name"]["value"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)));
         self.report(verb, name);
         if self.state.borrow().hidden { return; }
@@ -568,7 +609,7 @@ impl<P: Page> Controller<P> {
         let shown = async {
             self.enable("DOM").await?;
             self.enable("Overlay").await?;
-            self.page.call("Overlay.highlightNode", json!({"backendNodeId": id,
+            self.call("Overlay.highlightNode", json!({"backendNodeId": id,
                 "highlightConfig": {"borderColor": color(1.), "contentColor": color(0.18), "showInfo": false}})).await
         };
         match shown.await {
@@ -586,7 +627,7 @@ impl<P: Page> Controller<P> {
     }
 
     async fn unmark(&self) {
-        if self.state.borrow().enabled.contains("Overlay") { let _ = self.page.call("Overlay.hideHighlight", json!({})).await; }
+        if self.state.borrow().enabled.contains("Overlay") { let _ = self.call("Overlay.hideHighlight", json!({})).await; }
     }
 
     /// Ouvinte em captura prova que o EVENTO chegou ao documento. `pointerdown` antes de `mousedown`: um
@@ -594,7 +635,7 @@ impl<P: Page> Controller<P> {
     async fn arrived(&self, types: &[&str], fire: impl AsyncFn() -> Result<(), String>) -> Result<bool, String> {
         let arm = format!("(()=>{{window.__hangarSonda=0;const ts={};const f=()=>{{window.__hangarSonda=1;ts.forEach(t=>removeEventListener(t,f,true))}};ts.forEach(t=>addEventListener(t,f,true));return 1}})()",
             serde_json::to_string(types).unwrap_or_default());
-        self.page.call("Runtime.evaluate", json!({"expression": arm})).await.map_err(|e| format!("sonda nao armada: {e}"))?;
+        self.call("Runtime.evaluate", json!({"expression": arm})).await.map_err(|e| format!("sonda nao armada: {e}"))?;
         fire().await?;
         self.frame().await;
         // Marcador sumido (2) ou contexto da sonda destruído = documento novo: o evento navegou, logo chegou.
@@ -616,8 +657,8 @@ impl<P: Page> Controller<P> {
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
         let base = |t: &str| json!({"type": t, "x": x, "y": y, "button": "left", "clickCount": 1});
         let ok = self.arrived(&["pointerdown", "mousedown"], async || {
-            self.page.call("Input.dispatchMouseEvent", base("mousePressed")).await?;
-            self.page.call("Input.dispatchMouseEvent", base("mouseReleased")).await.map(|_| ())
+            self.call("Input.dispatchMouseEvent", base("mousePressed")).await?;
+            self.call("Input.dispatchMouseEvent", base("mouseReleased")).await.map(|_| ())
         }).await;
         let ok = ok?;
         Ok(if ok { format!("ok: click {r}") } else { format!("erro: click {r}: o evento nao chegou na pagina (aba escondida sem quadro) — tire um shot e repita") })
@@ -637,8 +678,8 @@ impl<P: Page> Controller<P> {
             return Ok(format!("erro: fill {r}: o clique nao deixou um campo de texto com foco (foco em {focus}) — a ref e mesmo um campo? rode snapshot"));
         }
         // `commands` seleciona o campo inteiro; insertText substitui a seleção, vazio incluído.
-        self.page.call("Input.dispatchKeyEvent", json!({"type": "keyDown", "commands": ["selectAll"]})).await?;
-        self.page.call("Input.insertText", json!({"text": text})).await?;
+        self.call("Input.dispatchKeyEvent", json!({"type": "keyDown", "commands": ["selectAll"]})).await?;
+        self.call("Input.insertText", json!({"text": text})).await?;
         self.frame().await;
         Ok(format!("ok: fill {r}"))
     }
@@ -662,16 +703,16 @@ impl<P: Page> Controller<P> {
         }
         let Some(id) = self.state.borrow().refs.get(r).copied() else { return Ok(format!("erro: ref {r} nao existe (rode snapshot de novo)")) };
         self.enable("DOM").await?;
-        let node = self.page.call("DOM.resolveNode", json!({"backendNodeId": id})).await?;
+        let node = self.call("DOM.resolveNode", json!({"backendNodeId": id})).await?;
         let object = node["object"]["objectId"].as_str().ok_or("fill-secret: o alvo nao tem objeto na pagina")?;
-        let found = self.page.call("Runtime.callFunctionOn", json!({"objectId": object, "functionDeclaration": TARGET_FOCUS, "returnByValue": true})).await?;
+        let found = self.call("Runtime.callFunctionOn", json!({"objectId": object, "functionDeclaration": TARGET_FOCUS, "returnByValue": true})).await?;
         match returned(&found)?.as_str() {
             Some("senha") => {}
             Some("campo") if !password => {}
             Some("campo") => return Ok(format!("erro: erro_cofre_campo_nao_senha: {r} nao e um campo de senha (input type=password)")),
             _ => return Ok(format!("erro: fill-secret {r}: o foco nao ficou no campo da ref — rode snapshot")),
         }
-        self.page.call("Input.dispatchKeyEvent", json!({"type": "keyDown", "commands": ["selectAll"]})).await?;
+        self.call("Input.dispatchKeyEvent", json!({"type": "keyDown", "commands": ["selectAll"]})).await?;
         // shortcut: a cópia do valor no JSON do CDP não é zerada; trocar se o transporte passar a guardar os pedidos.
         let insert = json!({"text": secret.as_str()});
         // Registrada antes de digitar: se o envio falhar depois de o texto chegar à página, o snapshot já a esconde.
@@ -684,7 +725,7 @@ impl<P: Page> Controller<P> {
                 s.secrets.push(secret);
             }
         }
-        self.page.call("Input.insertText", insert).await?;
+        self.call("Input.insertText", insert).await?;
         self.frame().await;
         Ok(format!("ok: fill-secret {r}"))
     }
@@ -693,7 +734,7 @@ impl<P: Page> Controller<P> {
         if let Some(focus) = self.not_editable().await? {
             return Ok(format!("erro: type: nenhum campo de texto com foco (foco em {focus}) — use fill @eN, ou click no campo antes"));
         }
-        self.page.call("Input.insertText", json!({"text": text})).await?;
+        self.call("Input.insertText", json!({"text": text})).await?;
         self.frame().await;
         Ok("ok: type".into())
     }
@@ -708,10 +749,10 @@ impl<P: Page> Controller<P> {
         let ok = self.arrived(&["keydown"], async || {
             let mut d = down.clone();
             d["type"] = "keyDown".into();
-            self.page.call("Input.dispatchKeyEvent", d).await?;
+            self.call("Input.dispatchKeyEvent", d).await?;
             let mut u = up.clone();
             u["type"] = "keyUp".into();
-            self.page.call("Input.dispatchKeyEvent", u).await.map(|_| ())
+            self.call("Input.dispatchKeyEvent", u).await.map(|_| ())
         }).await?;
         Ok(if ok { format!("ok: press {key}") }
         else if open_list { format!("ok: press {key} (foi para a lista aberta do select, que nao avisa a pagina; confira com snapshot)") }
@@ -722,14 +763,14 @@ impl<P: Page> Controller<P> {
         self.mark("hover", r).await;
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
         let Some((x, y)) = self.measured(r).await? else { return Ok(format!("erro: ref {r} nao existe (rode snapshot de novo)")) };
-        self.page.call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": x, "y": y})).await?;
+        self.call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": x, "y": y})).await?;
         self.frame().await;
         Ok(format!("ok: hover {r}"))
     }
 
     async fn eval(&self, js: &str) -> Result<String, String> {
         let wrapped = format!("(async()=>{{const v=({js});await {FRAME};return v}})()");
-        let run = |params: Value| within(&self.page, WAIT_MS, self.page.call("Runtime.evaluate", params));
+        let run = |params: Value| within(&self.page, WAIT_MS, self.call("Runtime.evaluate", params));
         let Some(mut r) = run(json!({"expression": wrapped, "awaitPromise": true, "returnByValue": true})).await else {
             return Ok(format!("erro: eval nao respondeu em {WAIT_MS}ms"));
         };
@@ -820,32 +861,32 @@ impl<P: Page> Controller<P> {
         if url.is_empty() { return Ok("erro: goto precisa de uma url".into()); }
         let url = if url.contains("://") { url.to_owned() } else { format!("http://{url}") };
         let before = self.state.borrow().navs;
-        let r = self.page.call("Page.navigate", json!({"url": url})).await?;
+        let r = self.call("Page.navigate", json!({"url": url})).await?;
         if let Some(e) = r["errorText"].as_str().filter(|e| !e.is_empty()) { return Ok(format!("erro: goto {url}: {e}")); }
         self.settle("goto", before).await
     }
 
     async fn back(&self) -> Result<String, String> {
-        let h = self.page.call("Page.getNavigationHistory", json!({})).await?;
+        let h = self.call("Page.getNavigationHistory", json!({})).await?;
         let index = h["currentIndex"].as_i64().unwrap_or(0);
         let Some(entry) = usize::try_from(index - 1).ok().and_then(|i| h["entries"].get(i)) else {
             return Ok("erro: back: nao ha pagina anterior".into());
         };
         let before = self.state.borrow().navs;
-        self.page.call("Page.navigateToHistoryEntry", json!({"entryId": entry["id"]})).await?;
+        self.call("Page.navigateToHistoryEntry", json!({"entryId": entry["id"]})).await?;
         self.settle("back", before).await
     }
 
     async fn reload(&self) -> Result<String, String> {
         let before = self.state.borrow().navs;
-        self.page.call("Page.reload", json!({})).await?;
+        self.call("Page.reload", json!({})).await?;
         self.settle("reload", before).await
     }
 
     async fn apply_theme(&self) -> Result<(), String> {
         let value = match self.state.borrow().theme { "claro" => "light", "escuro" => "dark", _ => "" };
         let features = if value.is_empty() { json!([]) } else { json!([{"name": "prefers-color-scheme", "value": value}]) };
-        self.page.call("Emulation.setEmulatedMedia", json!({"features": features})).await.map(|_| ())
+        self.call("Emulation.setEmulatedMedia", json!({"features": features})).await.map(|_| ())
     }
 
     async fn theme(&self, mode: &str) -> Result<String, String> {
@@ -860,30 +901,30 @@ impl<P: Page> Controller<P> {
         // Antes de qualquer chamada: um ajuste do painel que chegue no meio não desfaz o layout pedido.
         self.page.hold_size(layout != Layout::Desktop);
         if layout == Layout::Mobile {
-            self.page.call("Emulation.setDeviceMetricsOverride", metrics(390, 844, 2., true)).await?;
-            self.page.call("Emulation.setTouchEmulationEnabled", json!({"enabled": true, "maxTouchPoints": 5})).await?;
-            self.page.call("Emulation.setUserAgentOverride", json!({"userAgent": MOBILE_UA})).await?;
+            self.call("Emulation.setDeviceMetricsOverride", metrics(390, 844, 2., true)).await?;
+            self.call("Emulation.setTouchEmulationEnabled", json!({"enabled": true, "maxTouchPoints": 5})).await?;
+            self.call("Emulation.setUserAgentOverride", json!({"userAgent": MOBILE_UA})).await?;
             return Ok(());
         }
-        self.page.call("Emulation.setTouchEmulationEnabled", json!({"enabled": false})).await?;
+        self.call("Emulation.setTouchEmulationEnabled", json!({"enabled": false})).await?;
         // Sem troca o Chromium do Linux se apresenta como "HeadlessChrome", e Google, GitHub e afins recusam o login.
-        let version = self.page.call("Browser.getVersion", json!({})).await.unwrap_or_else(|e| {
+        let version = self.call("Browser.getVersion", json!({})).await.unwrap_or_else(|e| {
             eprintln!("[nav] Browser.getVersion falhou ({e}): o User-Agent fica o do Chromium sem janela");
             Default::default()
         });
-        self.page.call("Emulation.setUserAgentOverride", desktop_agent(&version)).await?;
+        self.call("Emulation.setUserAgentOverride", desktop_agent(&version)).await?;
         match layout {
-            Layout::Custom(w, h) => self.page.call("Emulation.setDeviceMetricsOverride", metrics(w, h, 1., false)).await?,
-            _ if self.state.borrow().hidden => self.page.call("Emulation.setDeviceMetricsOverride", metrics(HIDDEN_VIEWPORT.0, HIDDEN_VIEWPORT.1, 1., false)).await?,
+            Layout::Custom(w, h) => self.call("Emulation.setDeviceMetricsOverride", metrics(w, h, 1., false)).await?,
+            _ if self.state.borrow().hidden => self.call("Emulation.setDeviceMetricsOverride", metrics(HIDDEN_VIEWPORT.0, HIDDEN_VIEWPORT.1, 1., false)).await?,
             // O Chromium sem janela não segue a janela: limpar deixava a página no tamanho velho, e o quadro esticado.
-            _ if let Some((w, h, scale)) = self.page.panel_size() => self.page.call("Emulation.setDeviceMetricsOverride", metrics(w, h, scale, false)).await?,
+            _ if let Some((w, h, scale)) = self.page.panel_size() => self.call("Emulation.setDeviceMetricsOverride", metrics(w, h, scale, false)).await?,
             _ => {
                 // WebView2: a página segue a janela de verdade.
-                self.page.call("Emulation.clearDeviceMetricsOverride", json!({})).await?;
+                self.call("Emulation.clearDeviceMetricsOverride", json!({})).await?;
                 // Largura e altura 0 = o tamanho segue a janela; só a escala é emulada. Depois de limpar: sem isso o
                 // 0×0 mantém o tamanho da emulação anterior (a da página escondida).
                 let scale = self.state.borrow().scale;
-                match scale { Some(scale) => self.page.call("Emulation.setDeviceMetricsOverride", metrics(0, 0, scale, false)).await?, None => json!({}) }
+                match scale { Some(scale) => self.call("Emulation.setDeviceMetricsOverride", metrics(0, 0, scale, false)).await?, None => json!({}) }
             }
         };
         Ok(())
@@ -922,7 +963,7 @@ impl<P: Page> Controller<P> {
         if let Layout::Custom(w, h) = self.state.borrow().layout {
             params = json!({"format": "png", "captureBeyondViewport": true, "clip": {"x": 0, "y": 0, "width": w, "height": h, "scale": 1}});
         }
-        let Some(r) = within(&self.page, SHOT_MS, self.page.call("Page.captureScreenshot", params)).await else {
+        let Some(r) = within(&self.page, SHOT_MS, self.call("Page.captureScreenshot", params)).await else {
             return Ok(Reply::Text("erro: o navegador desta sessao nao produziu quadro — text/snapshot/click funcionam".into()));
         };
         let data = r.map_err(|e| format!("captureScreenshot falhou: {e}"))?;
@@ -986,6 +1027,26 @@ fn exception_line(d: &Value) -> String {
         .map(|u| format!(" ({u}:{}:{})", d["lineNumber"].as_i64().unwrap_or(0) + 1, d["columnNumber"].as_i64().unwrap_or(0) + 1))
         .unwrap_or_default();
     format!("erro nao tratado: {text}{at}")
+}
+
+/// Teto do verbo: `wait` tem o próprio (`--timeout` ou a pausa em ms) mais a folga; os outros, `VERB_MS`. Com
+/// `deadline_ms`, nunca além do prazo de quem espera, menos a folga (no máximo um quarto do prazo).
+fn verb_ceiling(verb: &str, args: &[String], deadline_ms: Option<u64>) -> u64 {
+    let own = match (verb, split_timeout(args)) {
+        ("wait", Ok((rest, limit))) => rest.first().and_then(|t| t.parse::<u64>().ok()).unwrap_or(limit).saturating_add(VERB_MARGIN_MS),
+        _ => VERB_MS,
+    };
+    deadline_ms.map_or(own, |d| own.min(d - VERB_MARGIN_MS.min(d / 4)))
+}
+
+fn stuck_text(verb: &str, ms: u64, method: Option<&str>) -> String {
+    format!("{verb} não respondeu em {ms} ms{}", method.map(|m| format!(" (preso em {m})")).unwrap_or_default())
+}
+
+/// Uma linha no log do app por verbo preso: só verbo, método e teto, nunca conteúdo da página.
+fn note_stuck(verb: &str, method: Option<&str>, ms: u64) {
+    let line = format!("nav: verb_stuck verbo={verb} metodo={} teto_ms={ms}", method.unwrap_or("-"));
+    if cfg!(test) { eprintln!("{line}") } else { crate::log_line(&line) }
 }
 
 /// Tira `--timeout <ms>` dos argumentos do `wait`. O teto fica abaixo dos 45 s que o servidor espera pela resposta.
@@ -1495,6 +1556,52 @@ mod tests {
         let (a, b) = block_on(futures::future::join(c.run("eval", &s(&["1"])), c.run("text", &[])));
         assert_eq!((text(a), text(b)), ("ok: \"x\"".into(), "x".into()));
         assert_eq!(methods(&c).iter().filter(|m| !m.ends_with(".enable")).count(), 2);
+    }
+
+    /// Página com o clique preso no CDP, como a que travou depois de um `click` e esgotou todo verbo seguinte.
+    fn stuck_click() -> Controller<Fake> {
+        Controller::new(fake(|m, _| Ok(match m {
+            "Accessibility.getFullAXTree" => tree(),
+            "DOM.getBoxModel" => boxed(),
+            "Page.getNavigationHistory" => json!({"currentIndex": 0, "entries": [{"url": "http://a/"}]}),
+            _ => json!({}),
+        }), "Input.dispatchMouseEvent"), false)
+    }
+
+    #[test]
+    fn a_stuck_click_releases_the_turn_and_names_the_method() {
+        let c = stuck_click();
+        block_on(c.run("snapshot", &[]));
+        assert_eq!(text(block_on(c.run("click", &s(&["@e1"])))), "erro: click não respondeu em 20000 ms (preso em Input.dispatchMouseEvent)");
+        assert!(!c.busy(), "a vez voltou");
+        assert_eq!(text(block_on(c.run("url", &[]))), "ok: \"http://a/\"");
+    }
+
+    #[test]
+    fn a_shorter_deadline_bounds_the_verb_below_it() {
+        let c = stuck_click();
+        block_on(c.run("snapshot", &[]));
+        assert_eq!(text(block_on(c.run_until("click", &s(&["@e1"]), None, Some(8000)))), "erro: click não respondeu em 6000 ms (preso em Input.dispatchMouseEvent)");
+        // Prazo curto: a folga é no máximo um quarto dele.
+        assert_eq!(text(block_on(c.run_until("click", &s(&["@e1"]), None, Some(2000)))), "erro: click não respondeu em 1500 ms (preso em Input.dispatchMouseEvent)");
+    }
+
+    #[test]
+    fn wait_keeps_its_own_ceiling_above_the_default() {
+        let c = Controller::new(fake(|_, _| Ok(json!({})), "Network.enable"), false);
+        assert_eq!(text(block_on(c.run("wait", &s(&["--idle", "--timeout", "30000"])))), "erro: wait não respondeu em 32000 ms (preso em Network.enable)");
+        // O prazo de quem espera continua mandando.
+        assert_eq!(text(block_on(c.run_until("wait", &s(&["--idle", "--timeout", "30000"]), None, Some(10_000)))), "erro: wait não respondeu em 8000 ms (preso em Network.enable)");
+        assert_eq!(verb_ceiling("wait", &s(&["30000"]), None), 32_000, "a pausa em ms é o teto dela");
+        assert_eq!(verb_ceiling("goto", &s(&["x"]), None), VERB_MS);
+    }
+
+    #[test]
+    fn a_stuck_layout_from_the_panel_never_keeps_the_turn() {
+        let c = Controller::new(fake(|m, _| Ok(if m == "Page.getNavigationHistory" { json!({"currentIndex": 0, "entries": [{"url": "http://a/"}]}) } else { json!({}) }),
+            "Emulation.setTouchEmulationEnabled"), false);
+        block_on(c.set_hidden(true));
+        assert_eq!(text(block_on(c.run("url", &[]))), "ok: \"http://a/\"");
     }
 
     #[test]

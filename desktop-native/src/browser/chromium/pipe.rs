@@ -668,6 +668,23 @@ mod tests {
     }
 
     #[test]
+    fn a_late_reply_to_an_abandoned_call_never_reaches_the_next_one() {
+        let (wire, _reader) = wire();
+        let (events, _received) = async_channel::unbounded();
+        let (stuck, abandoned) = futures::channel::oneshot::channel::<Reply>();
+        wire.send(None, "Input.dispatchMouseEvent", json!({}), Some(Box::new(move |r| { let _ = stuck.send(r); })));
+        // O teto do verbo largou a espera.
+        drop(abandoned);
+        let (tx, rx) = mpsc::channel();
+        wire.send(None, "Page.getNavigationHistory", json!({}), Some(Box::new(move |r| tx.send(r).unwrap())));
+        route(json!({"id": 1, "result": {"atrasada": true}}), &wire, &events);
+        assert!(rx.try_recv().is_err(), "a resposta atrasada não vira a do verbo seguinte");
+        route(json!({"id": 2, "result": {"currentIndex": 0}}), &wire, &events);
+        assert_eq!(rx.try_recv().unwrap(), Ok(json!({"currentIndex": 0})));
+        assert!(lock(&wire.pending).is_empty());
+    }
+
+    #[test]
     fn a_dropped_session_fails_only_its_own_calls() {
         let (wire, _reader) = wire();
         let (tx, rx) = mpsc::channel();
