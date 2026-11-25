@@ -11,6 +11,7 @@ import { haptic } from '../../ui/haptics';
 import { superficie } from '../../theme/superficie';
 import { FolderBranchMenu } from './FolderBranchMenu';
 import { FolderGitCard } from './FolderGitCard';
+import { samePath } from './folderGroups';
 import * as m from '../../paraglide/messages';
 
 type Props = { server: Server;
@@ -36,8 +37,6 @@ const isNotRepo = (e: unknown) => {
 // A API prefixa o status HTTP ("409: ..."); na tela vale só o texto da recusa.
 const reason = (e: unknown) => (e instanceof Error ? e.message.replace(/^\d{3}: /, '') : String(e));
 const inside = (root: string, path: string) => pickFolderRoot([{ path: root }], path) !== null;
-// Mesma pasta com outra grafia (barra final, `\`, letra da unidade): uma contém a outra.
-export const samePath = (a: string, b: string) => inside(a, b) && inside(b, a);
 
 function worktreeHint(w: WorktreeStatus, now: number): string {
   if (w.sessions[0]) return m.worktree_menu_em_uso({ nome: w.sessions[0] });

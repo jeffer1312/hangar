@@ -29,7 +29,7 @@ export function groupFolders(entries: FsEntry[], repos: WorktreeRepo[]): FolderR
 }
 
 // Mesma pasta com outra grafia (barra final, `\`, letra da unidade).
-const samePlace = (a: string, b: string) => pickFolderRoot([{ path: a }], b) !== null && pickFolderRoot([{ path: b }], a) !== null;
+export const samePath = (a: string, b: string) => pickFolderRoot([{ path: a }], b) !== null && pickFolderRoot([{ path: b }], a) !== null;
 
 // Pastas das sessões da máquina, da usada por último para trás, sem repetir; a pessoal (`~`) fica de fora.
 // A pasta pessoal é o "sem projeto": o servidor às vezes devolve o caminho inteiro em vez de `~`.
@@ -41,7 +41,7 @@ export function recentCwds(sessions: readonly { cwd?: string; last_activity?: nu
   const ordered = [...(sessions ?? [])].sort((a, b) => (b.last_activity ?? 0) - (a.last_activity ?? 0));
   for (const s of ordered) {
     const cwd = s.cwd?.trim();
-    if (!cwd || isHomeDir(cwd) || out.some((p) => samePlace(p, cwd))) continue;
+    if (!cwd || isHomeDir(cwd) || out.some((p) => samePath(p, cwd))) continue;
     out.push(cwd);
     if (out.length >= limit) break;
   }
@@ -52,8 +52,8 @@ export function recentCwds(sessions: readonly { cwd?: string; last_activity?: nu
 export function recentProjects(cwds: readonly string[], repos: readonly WorktreeRepo[], exclude: string | null, limit: number): string[] {
   const out: string[] = [];
   for (const cwd of cwds) {
-    const project = repos.flatMap((r) => r.worktrees).find((w) => samePlace(w.path, cwd))?.repo ?? cwd;
-    if ((exclude && samePlace(project, exclude)) || out.some((p) => samePlace(p, project))) continue;
+    const project = repos.flatMap((r) => r.worktrees).find((w) => samePath(w.path, cwd))?.repo ?? cwd;
+    if ((exclude && samePath(project, exclude)) || out.some((p) => samePath(p, project))) continue;
     out.push(project);
     if (out.length >= limit) break;
   }

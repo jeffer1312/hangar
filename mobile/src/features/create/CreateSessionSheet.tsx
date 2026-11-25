@@ -27,12 +27,12 @@ import { autoSessionName, NO_PROJECT_CWD, type NewConversationInput } from '../.
 import { CwdPicker } from './CwdPicker';
 import { MachineMenu, MachineTile } from './MachineMenu';
 import { isDemoUrl } from '../../net/demo';
-import { recentCwds, recentProjects } from './folderGroups';
+import { recentCwds, recentProjects, samePath } from './folderGroups';
 import { loadErrorText } from './loadError';
 import { useCanceledLoadRetry } from './useCanceledLoadRetry';
 import { ProviderLogoTabs, ProviderTrack } from './ProviderChoice';
 import { DefaultChecks, useDefaultChecks } from './DefaultChecks';
-import { BranchPicker, samePath } from './BranchPicker';
+import { BranchPicker } from './BranchPicker';
 import { CodexContextControl, useCodexContextControl } from './CodexContextControl';
 import { NewConversation, type HomePresentation } from './NewConversation';
 import { SPEED_TIERS, speedHint, speedLabel, type Tier } from '../pills/serviceTierControl';
@@ -725,7 +725,9 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // A escolha de agora no formato do padrão do servidor; a permissão é a que iria no pedido.
   const defaultPermission = provider === 'claude' ? permissao : provider === 'codex' ? (canHeadless && headless ? permissao : '')
     : provider === 'antigravity' ? agyPermission : '';
-  const onDefaultSaved = useCallback((key: string, value: SessionDefaults | null) => setSavedDefault({ key, value }), []);
+  // Gravação de um escopo que já saiu não cobre o padrão lido do escopo novo.
+  const onDefaultSaved = useCallback((key: string, value: SessionDefaults | null) =>
+    setSavedDefault((cur) => (cur && cur.key !== key ? cur : { key, value })), []);
   const defaultChecks = useDefaultChecks({ server: active,
     scope: { key: defaultsKey, provider, engine: catalogEngine, engineAccount: engineAccount ?? null },
     choice: { model: modelo, effort: esforco, permission: defaultPermission },
@@ -1224,7 +1226,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             accessibilityRole="button" accessibilityLabel={m.native_new_chat_recent_aria({ path })}>
             <Icon name="Folder" size={20} color={theme.tokens.accent.base} />
             {/* Uma linha que encolhe a fonte antes de cortar: nome de pasta não quebra no meio da palavra. */}
-            <Text style={styles.recentName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} ellipsizeMode="middle">{basename(path)}</Text>
+            <Text style={styles.recentName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={theme.base.text.xxxs / theme.base.text.xs} ellipsizeMode="middle">{basename(path)}</Text>
           </Pressable>
         ))}
       </View>

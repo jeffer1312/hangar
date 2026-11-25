@@ -34,6 +34,8 @@ export function useDefaultChecks({ server, scope, choice, saved, onSaved }: {
   const [spread, setSpread] = useState<{ write: SessionDefaultWrite; lines: Line[] } | null>(null);
   const saveSeq = useRef(0);
   const spreadSeq = useRef(0);
+  // Uma gravação nas outras máquinas por vez: cada máquina termina com a última escolha.
+  const spreadChain = useRef<Promise<unknown>>(Promise.resolve());
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   // O resultado é do escopo em que foi gravado: outro agente ou motor começa sem ele.
@@ -52,7 +54,9 @@ export function useDefaultChecks({ server, scope, choice, saved, onSaved }: {
     setSpread((cur) => ({ write, lines: only && cur
       ? cur.lines.map((l): Line => targets.some((t) => t.id === l.serverId) ? { serverId: l.serverId, status: 'pending' } : l)
       : targets.map((t): Line => ({ serverId: t.id, status: 'pending' })) }));
-    const fresh = await applyToOwnServers(targets, (s) => applySessionDefault(s, write));
+    const run = spreadChain.current.then(() => applyToOwnServers(targets, (s) => applySessionDefault(s, write)));
+    spreadChain.current = run.catch(() => undefined);
+    const fresh = await run;
     if (!alive.current || seq !== spreadSeq.current) return;
     setSpread((cur) => cur ? { ...cur, lines: cur.lines.map((l) => fresh.find((f) => f.serverId === l.serverId) ?? l) } : cur);
     if (fresh.every((r) => r.status === 'ok' || r.status === 'absent')) haptic.success(); else haptic.error();

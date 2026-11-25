@@ -783,7 +783,7 @@ const styles = StyleSheet.create((theme) => ({
   cWhen: { flexShrink: 1, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] },
   cBadge: { height: 24, paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.full, justifyContent: 'center', marginLeft: theme.base.space[1] },
   cBadgeTxt: { fontSize: theme.base.text.xxxs, fontWeight: theme.base.weight.semibold },
-  cDrill: { width: 40, height: C_ROW, borderRadius: theme.base.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cDrill: { width: 44, height: C_ROW, borderRadius: theme.base.radius.md, alignItems: 'center', justifyContent: 'center' },
   // Recuo até o texto: 8 de margem + ícone 18 + gap 12.
   cSep: { height: StyleSheet.hairlineWidth, marginLeft: theme.base.space[10] - theme.base.space[0.5] },
   cChips: { flexDirection: 'row', gap: theme.base.space[1.5] },
