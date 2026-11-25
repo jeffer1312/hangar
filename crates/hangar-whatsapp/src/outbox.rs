@@ -1,6 +1,6 @@
 //! Rascunhos de saída do C5 (binário com a rota de envio): a lista dos pendentes para o cartão do dono e a recusa dos que sobraram de
 //! outra vida do Hangar. A espera da tool `whatsapp_draft` e as frases dela moram em `wait`.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -23,6 +23,9 @@ pub const REFRESH: Duration = Duration::from_secs(30);
 /// O prazo próprio da tool `whatsapp_draft`, contado do começo da chamada: fica abaixo do corte do MCP. O cartão
 /// conta até ele (`answer_by`), porque resposta depois dele não chega a quem pediu.
 pub const TOOL_DEADLINE: TimeDelta = TimeDelta::seconds(570);
+/// O menor corte de chamada que a sessão pode ter e ainda criar rascunho (abaixo dele o servidor recusa): o trabalho
+/// depois do prazo da tool termina antes dele.
+pub const CALL_CUTOFF_MIN: TimeDelta = TimeDelta::seconds(600);
 
 /// O evento `whatsapp_outbox`: os rascunhos pendentes como o binário os descreve, cada um com o `answer_by`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -54,6 +57,8 @@ struct State {
     seen: HashSet<String>,
     /// A falha em curso: o diário recebe a primeira, não uma a cada releitura.
     failing: Option<&'static str>,
+    /// O prazo real da tool que criou cada rascunho desta vida: ela conta do começo da chamada, antes da criação.
+    deadlines: HashMap<String, DateTime<Utc>>,
 }
 
 enum ReadError {
@@ -70,7 +75,7 @@ impl Default for Outbox {
 impl Outbox {
     /// `started` é a subida desta vida do Hangar, injetada para a prova não depender do relógio.
     pub fn started_at(started: DateTime<Utc>) -> Self {
-        let state = State { started, swept: false, seen: HashSet::new(), failing: None };
+        let state = State { started, swept: false, seen: HashSet::new(), failing: None, deadlines: HashMap::new() };
         Self { tx: watch::channel(None).0, wake: Notify::new(), state: Mutex::new(state) }
     }
 
@@ -81,6 +86,12 @@ impl Outbox {
     /// Relê agora: rascunho criado ou respondido muda a lista antes do próximo tique.
     pub fn poke(&self) {
         self.wake.notify_one();
+    }
+
+    /// O prazo da tool que espera o rascunho `id`: o cartão conta até ele, não até a criação mais o prazo.
+    pub fn track(&self, id: &str, deadline: DateTime<Utc>) {
+        self.lock().deadlines.insert(id.to_owned(), deadline);
+        self.poke();
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -137,6 +148,9 @@ impl Outbox {
             let fresh = drafts.iter()
                 .filter(|d| !from_before(d, started) && draft_id(d).is_some_and(|id| !state.seen.contains(id)))
                 .collect();
+            // Some o prazo do rascunho que saiu da lista; o que ainda não apareceu nela fica até vencer.
+            let now = Utc::now();
+            state.deadlines.retain(|id, by| ids.contains(id) || *by > now);
             state.seen = ids;
             fresh
         };
@@ -159,7 +173,11 @@ impl Outbox {
     }
 
     fn publish(&self, drafts: Vec<Value>) {
-        let feed = Feed { drafts: drafts.into_iter().map(with_answer_by).collect() };
+        let deadlines = self.lock().deadlines.clone();
+        let feed = Feed { drafts: drafts.into_iter().map(|d| {
+            let tool = draft_id(&d).and_then(|id| deadlines.get(id)).copied();
+            with_answer_by(d, tool)
+        }).collect() };
         self.tx.send_if_modified(|current| {
             if current.as_deref() == Some(&feed) { return false; }
             *current = Some(Arc::new(feed));
@@ -177,14 +195,15 @@ impl Outbox {
     }
 }
 
-/// A chamada da tool começa antes de o binário gravar `created_at` (a cópia de um anexo grande fica no meio): o cartão
-/// fecha um pouco antes do prazo dela.
+/// No prazo a tool recusa: o cartão fecha um pouco antes, para o "Enviar" não chegar junto com a recusa.
 const ANSWER_MARGIN: TimeDelta = TimeDelta::seconds(10);
 
-/// Até quando a resposta do dono ainda chega a quem pediu: a expiração do binário ou o prazo da tool, o que vier
-/// antes. Sem horário legível fica de fora, e o cliente conta até `expires_at`.
-fn with_answer_by(mut draft: Value) -> Value {
-    let tool = at(&draft, "created_at").and_then(|created| created.checked_add_signed(TOOL_DEADLINE - ANSWER_MARGIN));
+/// Até quando a resposta do dono ainda chega a quem pediu: a expiração do binário ou o prazo da chamada da tool, o
+/// que vier antes. `tool` é o prazo guardado pela tool; sem ele (rascunho de outra vida) conta da criação, que vem
+/// depois do começo da chamada. Sem horário legível fica de fora, e o cliente conta até `expires_at`.
+fn with_answer_by(mut draft: Value, tool: Option<DateTime<Utc>>) -> Value {
+    let tool = tool.or_else(|| at(&draft, "created_at").and_then(|created| created.checked_add_signed(TOOL_DEADLINE)))
+        .and_then(|by| by.checked_sub_signed(ANSWER_MARGIN));
     let by = [at(&draft, "expires_at"), tool].into_iter().flatten().min();
     if let (Some(by), Some(fields)) = (by, draft.as_object_mut()) {
         fields.insert("answer_by".into(), json!(by.to_rfc3339_opts(SecondsFormat::Secs, true)));
@@ -263,11 +282,27 @@ mod tests {
     #[test]
     fn the_card_counts_down_to_the_earlier_of_the_expiry_and_the_tool_deadline() {
         let draft = |expires: &str| json!({"id": "d1", "created_at": "2026-11-24T10:00:00Z", "expires_at": expires});
-        assert_eq!(with_answer_by(draft("2026-11-24T10:10:00Z"))["answer_by"], json!("2026-11-24T10:09:20Z"), "prazo da tool, com a folga");
-        assert_eq!(with_answer_by(draft("2026-11-24T10:05:00Z"))["answer_by"], json!("2026-11-24T10:05:00Z"), "expira antes");
-        let unread = with_answer_by(json!({"id": "d1", "created_at": "ontem", "expires_at": "2026-11-24T10:10:00Z"}));
+        assert_eq!(with_answer_by(draft("2026-11-24T10:10:00Z"), None)["answer_by"], json!("2026-11-24T10:09:20Z"), "prazo da tool, com a folga");
+        assert_eq!(with_answer_by(draft("2026-11-24T10:05:00Z"), None)["answer_by"], json!("2026-11-24T10:05:00Z"), "expira antes");
+        let unread = with_answer_by(json!({"id": "d1", "created_at": "ontem", "expires_at": "2026-11-24T10:10:00Z"}), None);
         assert_eq!(unread["answer_by"], json!("2026-11-24T10:10:00Z"), "sem criação legível, vale a expiração");
-        assert!(with_answer_by(json!({"id": "d1"})).get("answer_by").is_none(), "sem horário nenhum, o cliente conta até expires_at");
+        assert!(with_answer_by(json!({"id": "d1"}), None).get("answer_by").is_none(), "sem horário nenhum, o cliente conta até expires_at");
+    }
+
+    /// A tool conta o prazo do começo da chamada; com um anexo grande a criação vem bem depois. O prazo guardado por ela
+    /// vence a conta pela criação, e só o rascunho que ela guardou o usa.
+    #[test]
+    fn the_card_counts_down_to_the_deadline_the_tool_kept() {
+        let outbox = Outbox::started_at(t("2026-11-24T09:00:00Z"));
+        let feed = outbox.feed();
+        // A chamada começou dois minutos antes de o binário gravar a criação.
+        outbox.track("d1", t("2026-11-24T09:58:00Z") + TOOL_DEADLINE);
+        let draft = |id: &str| json!({"id": id, "created_at": "2026-11-24T10:00:00Z", "expires_at": "2026-11-24T10:10:00Z"});
+        outbox.publish(vec![draft("d1"), draft("d2")]);
+        let shown = feed.borrow().clone().unwrap();
+        assert_eq!(shown.drafts[0]["answer_by"], json!("2026-11-24T10:07:20Z"), "prazo da chamada, com a folga");
+        assert_eq!(shown.drafts[1]["answer_by"], json!("2026-11-24T10:09:20Z"), "sem prazo guardado, conta da criação");
+        assert_eq!(with_answer_by(draft("d1"), Some(t("2026-11-24T10:20:00Z")))["answer_by"], json!("2026-11-24T10:10:00Z"), "expira antes");
     }
 
     #[test]

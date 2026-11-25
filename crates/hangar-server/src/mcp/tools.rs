@@ -589,12 +589,13 @@ impl Tools {
         let cwd = whatsapp::draft_cwd(&exec::agent(&self.st, &me).await?)?;
         let body = a.body(format!("{}::{me}", self.vault_origin()), cwd);
         // Assinada antes de criar: a resposta do dono que chegar antes de a espera começar ainda a acorda.
-        let feed = self.st.whatsapp.get().map(|wa| wa.outbox().feed());
-        let created = self.answer(Some(&me), Method::POST, "/api/whatsapp/outbox", Some(body), coded).await
-            .map_err(|e| if whatsapp::reply_lost(&e) { format!("{e}; {}", outbox::DRAFT_MAYBE_CREATED) } else { e })?;
-        let id = created["id"].as_str().filter(|id| outbox::id_ok(id)).map(str::to_owned)
-            .ok_or_else(|| format!("whatsapp_bad_reply: o serviço criou o rascunho sem id; {}", outbox::DRAFT_MAYBE_CREATED))?;
-        let _decline = whatsapp::DeclineOnDrop::new(self.api.clone(), self.st.cfg.auth_token.clone(), me.clone(), id.clone(), progress.clone());
+        let wa = self.st.whatsapp.get().cloned();
+        let feed = wa.as_ref().map(|wa| wa.outbox().feed());
+        // A criação corre numa tarefa própria: a chamada largada no meio dela (cópia de um anexo grande) não a corta, e a
+        // guarda que ela devolve cai com o resultado não lido e recusa o rascunho que nasceu.
+        let creation = tokio::spawn(create_draft(self.api.clone(), self.st.cfg.auth_token.clone(), me.clone(), body, wa, deadline, progress.clone()));
+        let (created, id, _decline) = creation.await
+            .map_err(|e| format!("whatsapp_draft_failed: a criação do rascunho parou ({e}); {}", outbox::DRAFT_MAYBE_CREATED))??;
         let mut port = DraftRoute { tools: self, me, feed };
         outbox::wait_draft(&mut port, &progress, &id, created, deadline).await.map(dict)
     }
@@ -1046,17 +1047,41 @@ struct DraftRoute<'a> {
     feed: Option<tokio::sync::watch::Receiver<Option<Arc<outbox::Feed>>>>,
 }
 
+/// A criação do rascunho pela rota do dono, com a guarda que o recusa se ninguém ler o resultado, e o prazo da chamada
+/// guardado para o cartão.
+async fn create_draft(api: Router, token: String, me: String, body: Value, wa: Option<Arc<hangar_whatsapp::WhatsApp>>,
+    deadline: chrono::DateTime<chrono::Utc>, progress: Arc<outbox::Progress>) -> Result<(Value, String, whatsapp::DeclineOnDrop), String> {
+    let (status, created) = call_route(api.clone(), &token, Some(&me), Method::POST, "/api/whatsapp/outbox", Some(body)).await;
+    if !(200..300).contains(&status) {
+        let error = coded(status, &created);
+        return Err(if whatsapp::reply_lost(&error) { format!("{error}; {}", outbox::DRAFT_MAYBE_CREATED) } else { error });
+    }
+    let id = created["id"].as_str().filter(|id| outbox::id_ok(id)).map(str::to_owned)
+        .ok_or_else(|| format!("whatsapp_bad_reply: o serviço criou o rascunho sem id; {}", outbox::DRAFT_MAYBE_CREATED))?;
+    let decline = whatsapp::DeclineOnDrop::new(api, token, me, id.clone(), progress);
+    if let Some(wa) = wa { wa.outbox().track(&id, deadline); }
+    Ok((created, id, decline))
+}
+
+/// O que falta até `by`; já passado, nada.
+fn left(by: chrono::DateTime<chrono::Utc>) -> Duration {
+    (by - chrono::Utc::now()).to_std().unwrap_or_default()
+}
+
 impl outbox::DraftPort for DraftRoute<'_> {
     fn now(&self) -> chrono::DateTime<chrono::Utc> { chrono::Utc::now() }
 
-    async fn read(&mut self, id: &str) -> outbox::Read { self.tools.draft_read(&self.me, id).await }
+    async fn read(&mut self, id: &str, by: chrono::DateTime<chrono::Utc>) -> Option<outbox::Read> {
+        tokio::time::timeout(left(by), self.tools.draft_read(&self.me, id)).await.ok()
+    }
 
-    async fn decline(&mut self, id: &str) -> Result<outbox::Declined, String> {
-        let (status, value) = self.tools.route_from(Some(&self.me), Method::POST, &whatsapp::draft_path(id, "/decline"), None).await;
-        match outbox::Declined::of(status, &value, None) {
+    async fn decline(&mut self, id: &str, by: chrono::DateTime<chrono::Utc>) -> Option<Result<outbox::Declined, String>> {
+        let path = whatsapp::draft_path(id, "/decline");
+        let (status, value) = tokio::time::timeout(left(by), self.tools.route_from(Some(&self.me), Method::POST, &path, None)).await.ok()?;
+        Some(match outbox::Declined::of(status, &value, None) {
             outbox::Declined::Unconfirmed => Err(coded(status, &value)),
             declined => Ok(declined),
-        }
+        })
     }
 
     async fn pause(&mut self, until: chrono::DateTime<chrono::Utc>) {

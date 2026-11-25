@@ -20,6 +20,8 @@ const REREAD: TimeDelta = TimeDelta::seconds(3);
 const PENDING_REREAD: TimeDelta = TimeDelta::seconds(super::REFRESH.as_secs() as i64);
 /// Quanto a chamada cancelada espera a recusa para dizer se o rascunho saiu da fila.
 const DECLINE_WAIT: Duration = Duration::from_secs(10);
+/// Folga entre o fim do trabalho depois do prazo e o menor corte que a sessão aceita: a resposta ainda tem de chegar.
+const CUTOFF_MARGIN: TimeDelta = TimeDelta::seconds(5);
 
 pub const DONT_REPEAT: &str = "não crie outro rascunho para o mesmo envio";
 pub const DRAFT_MAYBE_CREATED: &str = "o rascunho pode ter sido criado; ele só sai se o dono aprovar e expira em 10 min: \
@@ -58,11 +60,12 @@ impl Declined {
 }
 
 /// O que a espera usa de fora: a rota do dono, o relógio e a pausa. A prova troca tudo, inclusive o relógio.
+/// Leitura e recusa terminam até `by`; `None` quando não terminaram a tempo.
 pub trait DraftPort {
     fn now(&self) -> DateTime<Utc>;
-    fn read(&mut self, id: &str) -> impl std::future::Future<Output = Read> + Send;
+    fn read(&mut self, id: &str, by: DateTime<Utc>) -> impl std::future::Future<Output = Option<Read>> + Send;
     /// `Err` com a frase da rota quando a recusa não se confirmou.
-    fn decline(&mut self, id: &str) -> impl std::future::Future<Output = Result<Declined, String>> + Send;
+    fn decline(&mut self, id: &str, by: DateTime<Utc>) -> impl std::future::Future<Output = Option<Result<Declined, String>>> + Send;
     /// Até `until`, ou antes quando a lista dos pendentes muda.
     fn pause(&mut self, until: DateTime<Utc>) -> impl std::future::Future<Output = ()> + Send;
 }
@@ -162,13 +165,18 @@ fn note(result: &Value) -> String {
 }
 
 /// Espera o rascunho criado chegar ao fim até `deadline`, o prazo da chamada. Pendente no prazo é recusado e
-/// responde `expired`; aprovado e ainda saindo responde `sending`.
+/// responde `expired`; aprovado e ainda saindo responde `sending`. O que sobra depois do prazo (recusa, releitura)
+/// termina antes do menor corte que a sessão aceita, senão a resposta não chegaria a quem pediu.
 pub async fn wait_draft<P: DraftPort>(port: &mut P, progress: &Progress, id: &str, created: Value, deadline: DateTime<Utc>) -> Result<Value, String> {
+    let cutoff = deadline - super::TOOL_DEADLINE + super::CALL_CUTOFF_MIN - CUTOFF_MARGIN;
     let mut read = Read::Found(created);
     let mut until = None;
+    // A recusa do prazo foi negada porque o dono respondeu: daí em diante, sem leitura, a mensagem pode sair.
+    let mut answered_late = false;
     loop {
         let now = port.now();
         let step = match &read {
+            Read::Failed(_) if answered_late => return Err(answered_unread(id, progress)),
             // Serviço reiniciando no meio da espera: tenta de novo até o prazo do último estado lido.
             Read::Failed(error) => match until {
                 Some(at) if now < at => Wait::Until(at),
@@ -191,18 +199,21 @@ pub async fn wait_draft<P: DraftPort>(port: &mut P, progress: &Progress, id: &st
                 // Pendente, a resposta do dono muda a lista dos pendentes e acorda a pausa; nos outros casos nada avisa.
                 (now + if pending { PENDING_REREAD } else { REREAD }).min(at)
             }
-            Wait::PendingOverdue => match port.decline(id).await {
-                Ok(Declined::Declined | Declined::Expired) => {
+            Wait::PendingOverdue => match port.decline(id, cutoff).await {
+                None => return Err(cut_off(id, answered_late, progress)),
+                Some(Ok(Declined::Declined | Declined::Expired)) => {
                     progress.finish();
                     return Ok(expired(id));
                 }
                 // O dono respondeu no último instante: o estado real decide.
-                Ok(Declined::Answered(_)) => {
-                    read = port.read(id).await;
+                Some(Ok(Declined::Answered(_))) => {
+                    answered_late = true;
+                    let Some(next) = port.read(id, cutoff).await else { return Err(cut_off(id, answered_late, progress)) };
+                    read = next;
                     continue;
                 }
-                Ok(Declined::Unconfirmed) => return Err(after_creation(id, "whatsapp_unreachable: a recusa no prazo não se confirmou")),
-                Err(error) => return Err(after_creation(id, &error)),
+                Some(Ok(Declined::Unconfirmed)) => return Err(after_creation(id, "whatsapp_unreachable: a recusa no prazo não se confirmou")),
+                Some(Err(error)) => return Err(after_creation(id, &error)),
             },
             Wait::SendingOverdue => {
                 progress.finish();
@@ -211,8 +222,24 @@ pub async fn wait_draft<P: DraftPort>(port: &mut P, progress: &Progress, id: &st
             Wait::Unknown(what) => return Err(after_creation(id, &format!("whatsapp_bad_reply: {what}"))),
         };
         port.pause(wake).await;
-        read = port.read(id).await;
+        let Some(next) = port.read(id, cutoff).await else { return Err(cut_off(id, answered_late, progress)) };
+        read = next;
     }
+}
+
+/// O dono respondeu à recusa do prazo e a leitura seguinte falhou: diz que ele respondeu e que a mensagem pode sair.
+/// A espera chega ao fim ali: a chamada largada não recusa de novo o que o dono já respondeu.
+fn answered_unread(id: &str, progress: &Progress) -> String {
+    progress.finish();
+    format!("whatsapp_draft_unconfirmed: o dono respondeu o rascunho {id} no fim do prazo; {}", answered(id, None))
+}
+
+/// O tempo depois do prazo acabou sem resposta do serviço. Sem resposta do dono, o rascunho segue pendente e a
+/// chamada largada o recusa; o que houve com ele não se sabe.
+fn cut_off(id: &str, answered_late: bool, progress: &Progress) -> String {
+    if answered_late { return answered_unread(id, progress); }
+    format!("whatsapp_draft_unconfirmed: o prazo da chamada acabou sem resposta do serviço sobre o rascunho {id}; o dono pode ter \
+aprovado e a mensagem pode sair: {DONT_REPEAT}")
 }
 
 /// Erro depois de o rascunho existir: o id vai junto, para o agente não pedir outro.
@@ -398,22 +425,37 @@ mod tests {
     }
 
     /// Relógio e respostas de mentira. Cada pausa anda `step` segundos sem passar do `until` pedido (a lista dos
-    /// pendentes mudando antes); o que acabar o roteiro repete `last`.
-    struct FakePort { now: DateTime<Utc>, step: i64, reads: VecDeque<Read>, last: Read, decline: Result<Declined, String>,
+    /// pendentes mudando antes); cada leitura e recusa leva `cost` segundos e, sem caber até o `by`, para nele sem
+    /// resposta. O que acabar o roteiro repete `last`.
+    struct FakePort { now: DateTime<Utc>, step: i64, cost: i64, reads: VecDeque<Read>, last: Read, decline: Result<Declined, String>,
         declined: usize, pauses: Vec<(DateTime<Utc>, DateTime<Utc>)> }
 
     impl FakePort {
         fn new(reads: Vec<Read>, last: Read) -> Self {
-            Self { now: t0(), step: 60, reads: reads.into(), last, decline: Ok(Declined::Declined), declined: 0, pauses: Vec::new() }
+            Self { now: t0(), step: 60, cost: 0, reads: reads.into(), last, decline: Ok(Declined::Declined), declined: 0, pauses: Vec::new() }
+        }
+
+        fn spend(&mut self, by: DateTime<Utc>) -> bool {
+            let done = self.now + TimeDelta::seconds(self.cost);
+            if done > by {
+                self.now = self.now.max(by);
+                return false;
+            }
+            self.now = done;
+            true
         }
     }
 
     impl DraftPort for FakePort {
         fn now(&self) -> DateTime<Utc> { self.now }
-        async fn read(&mut self, _: &str) -> Read { self.reads.pop_front().unwrap_or_else(|| self.last.clone()) }
-        async fn decline(&mut self, _: &str) -> Result<Declined, String> {
+        async fn read(&mut self, _: &str, by: DateTime<Utc>) -> Option<Read> {
+            if !self.spend(by) { return None; }
+            Some(self.reads.pop_front().unwrap_or_else(|| self.last.clone()))
+        }
+        async fn decline(&mut self, _: &str, by: DateTime<Utc>) -> Option<Result<Declined, String>> {
             self.declined += 1;
-            self.decline.clone()
+            if !self.spend(by) { return None; }
+            Some(self.decline.clone())
         }
         async fn pause(&mut self, until: DateTime<Utc>) {
             self.pauses.push((self.now, until));
@@ -478,6 +520,52 @@ mod tests {
         let out = wait_draft(&mut port, &progress(), "d1", draft("pending"), deadline()).await.unwrap();
         assert_eq!(out["status"], json!("declined"), "{out}");
         assert_eq!(port.declined, 1);
+    }
+
+    /// O dono respondeu à recusa do prazo e a releitura falhou: a tool diz que ele respondeu e que a mensagem pode sair,
+    /// e a chamada largada depois não recusa de novo.
+    #[tokio::test]
+    async fn an_unread_last_moment_answer_says_the_message_may_leave() {
+        let mut port = FakePort::new(vec![], Read::Failed("whatsapp_unreachable: sem resposta".into()));
+        port.decline = Ok(Declined::Answered(None));
+        port.now = deadline();
+        let progress = progress();
+        let error = wait_draft(&mut port, &progress, "d1", draft("pending"), deadline()).await.unwrap_err();
+        assert!(error.starts_with("whatsapp_draft_unconfirmed:") && error.contains("o dono respondeu o rascunho d1"), "{error}");
+        assert!(error.contains("a mensagem pode sair") && error.contains(DONT_REPEAT), "{error}");
+        assert_eq!(port.declined, 1);
+        assert!(!progress.needs_decline(), "o dono já respondeu: nada a recusar");
+    }
+
+    /// Recusa e releitura depois do prazo da tool param antes do menor corte que a sessão aceita, mesmo com o serviço
+    /// lento e o laço repetindo: a resposta tem de chegar a quem pediu.
+    #[tokio::test]
+    async fn the_work_after_the_deadline_ends_before_the_shortest_cutoff() {
+        let cutoff = deadline() - super::super::TOOL_DEADLINE + super::super::CALL_CUTOFF_MIN - CUTOFF_MARGIN;
+        assert!(cutoff > deadline());
+
+        // A recusa não responde a tempo: estado desconhecido, e o rascunho segue para a chamada largada recusar.
+        let mut port = FakePort::new(vec![], Read::Found(draft("pending")));
+        port.now = deadline();
+        port.cost = 60;
+        let unanswered = progress();
+        let error = wait_draft(&mut port, &unanswered, "d1", draft("pending"), deadline()).await.unwrap_err();
+        assert!(error.starts_with("whatsapp_draft_unconfirmed:") && error.contains("rascunho d1"), "{error}");
+        assert!(error.contains("a mensagem pode sair") && error.contains(DONT_REPEAT), "{error}");
+        assert_eq!(port.now, cutoff);
+        assert!(unanswered.needs_decline(), "sem resposta do dono, a chamada largada recusa");
+
+        // O dono respondeu, a releitura volta pendente e o laço recusa de novo: o corte para tudo no limite.
+        let mut port = FakePort::new(vec![], Read::Found(draft("pending")));
+        port.decline = Ok(Declined::Answered(None));
+        port.now = deadline();
+        port.cost = 8;
+        let answered = progress();
+        let error = wait_draft(&mut port, &answered, "d1", draft("pending"), deadline()).await.unwrap_err();
+        assert!(error.contains("o dono respondeu o rascunho d1") && error.contains("a mensagem pode sair"), "{error}");
+        assert!(port.now <= cutoff, "{} > {cutoff}", port.now);
+        assert!(port.declined >= 2, "o laço repetiu: {}", port.declined);
+        assert!(!answered.needs_decline());
     }
 
     /// Serviço que não responde: relê a cada `REREAD` até o prazo e para com o id.

@@ -221,11 +221,30 @@ fn provider_hooks_guard_blocks_reading_vault_files_but_not_passing_the_path() {
     }
 }
 
+/// Uma cópia do Hangar de mentira (o guarda a reconhece por `crates/hangar-server`) e outro projeto
+/// com a mesma `backend/`.
+fn checkouts(root: &std::path::Path) -> (String, String) {
+    let hangar = root.join("hangar");
+    std::fs::create_dir_all(hangar.join("crates/hangar-server")).unwrap();
+    std::fs::create_dir_all(hangar.join("backend")).unwrap();
+    let other = root.join("outro");
+    std::fs::create_dir_all(other.join("backend")).unwrap();
+    (hangar.to_string_lossy().into_owned(), other.to_string_lossy().into_owned())
+}
+
+/// O payload com a pasta do agente, como o Claude Code manda.
+fn in_dir(payload: &Value, cwd: &str) -> Value {
+    let mut payload = payload.clone();
+    payload["cwd"] = json!(cwd);
+    payload
+}
+
 /// R6 do envio pelo WhatsApp: a sessão não lê as chaves do dono nem responde ao rascunho no lugar dele.
 #[test]
 fn provider_hooks_guard_blocks_the_owner_keys_and_the_draft_answer_routes() {
     let root = tempfile::tempdir().unwrap();
-    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(payload).unwrap(), &[]);
+    let (hangar, _) = checkouts(root.path());
+    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(&in_dir(payload, &hangar)).unwrap(), &[]);
     let bash = |command: &str| json!({"tool_name":"Bash","tool_input":{"command":command}});
     let denied = |payload: &Value| -> String {
         let result = guard(payload);
@@ -240,7 +259,7 @@ fn provider_hooks_guard_blocks_the_owner_keys_and_the_draft_answer_routes() {
         bash("cat /home/eu/.hangar/config/.env"),
         bash("grep CP_AUTH_TOKEN ~/.hangar/config/.env"),
         bash("source backend/.env && echo $CP_AUTH_TOKEN"),
-        bash(". /home/eu/Projetos/hangar/backend/.env"),
+        bash(&format!(". {hangar}/backend/.env")),
         bash("TOKEN=$(sed -n 's/^CP_AUTH_TOKEN=//p' backend/.env)"),
         bash("cat < ~/.hangar/config/.env"),
         bash("cd ~/.hangar/whatsapp && cat control.key"),
@@ -249,7 +268,7 @@ fn provider_hooks_guard_blocks_the_owner_keys_and_the_draft_answer_routes() {
         json!({"tool_name":"PowerShell","tool_input":{"command":r"Get-Content C:\Users\eu\.hangar\config\.env"}}),
         json!({"tool_name":"Read","tool_input":{"file_path":"/home/eu/.hangar/whatsapp/control.key"}}),
         json!({"tool_name":"Read","tool_input":{"file_path":"/home/eu/.hangar/config/.env"}}),
-        json!({"tool_name":"Read","tool_input":{"file_path":"/home/eu/Projetos/hangar/backend/.env"}}),
+        json!({"tool_name":"Read","tool_input":{"file_path":format!("{hangar}/backend/.env")}}),
         json!({"tool_name":"Grep","tool_input":{"pattern":"TOKEN","path":"/home/eu/.hangar/config"}}),
         json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":"/home/eu/.hangar/whatsapp"}}),
         json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":"/home/eu/.hangar"}}),
@@ -296,13 +315,14 @@ fn provider_hooks_guard_blocks_the_owner_keys_and_the_draft_answer_routes() {
 #[test]
 fn provider_hooks_guard_resolves_dot_segments_before_matching_the_owner_keys() {
     let root = tempfile::tempdir().unwrap();
-    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(payload).unwrap(), &[]);
+    let (hangar, _) = checkouts(root.path());
+    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(&in_dir(payload, &hangar)).unwrap(), &[]);
     let bash = |command: &str| json!({"tool_name":"Bash","tool_input":{"command":command}});
     let read = |path: &str| json!({"tool_name":"Read","tool_input":{"file_path":path}});
     for payload in [
         read("/home/eu/.hangar/config/./.env"),
         read("/home/eu/.hangar/config/../config/.env"),
-        read("/home/eu/Projetos/hangar/backend/../backend/.env"),
+        read(&format!("{hangar}/backend/../backend/.env")),
         read("backend/../backend/.env"),
         read("/home/eu/.hangar/whatsapp/./control.key"),
         json!({"tool_name":"Grep","tool_input":{"pattern":"TOKEN","path":"/home/eu/.hangar/config/."}}),
@@ -328,6 +348,110 @@ fn provider_hooks_guard_resolves_dot_segments_before_matching_the_owner_keys() {
         bash("cat backend/../backend/.env.example"),
         bash("cd backend/. && cat pyproject.toml"),
         bash(". ./scripts/env.sh"),
+    ] {
+        let result = guard(&payload);
+        assert!(result.status.success(), "{payload}");
+        assert!(result.stdout.is_empty(), "{payload}");
+    }
+}
+
+/// O ´backend/.env´ só é chave do dono numa cópia do Hangar (checkout ou a anotada pelo servidor): noutro
+/// projeto o arquivo, a pasta ´backend´ e o ´*´ dentro dela são livres. As chaves de ´~/.hangar´ valem em toda pasta.
+#[test]
+fn provider_hooks_guard_anchors_backend_env_to_the_hangar_copy() {
+    let root = tempfile::tempdir().unwrap();
+    let (hangar, other) = checkouts(root.path());
+    let installed = root.path().join("instalado");
+    std::fs::create_dir_all(installed.join("backend")).unwrap();
+    std::fs::write(installed.join("manifest.json"), "{}").unwrap();
+    std::fs::create_dir_all(root.path().join(".hangar")).unwrap();
+    std::fs::write(root.path().join(".hangar/install-root-dir"), installed.to_string_lossy().as_bytes()).unwrap();
+    let installed = installed.to_string_lossy().into_owned();
+    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(payload).unwrap(), &[]);
+    let bash = |command: &str, cwd: &str| json!({"tool_name":"Bash","cwd":cwd,"tool_input":{"command":command}});
+    let read = |path: &str, cwd: &str| json!({"tool_name":"Read","cwd":cwd,"tool_input":{"file_path":path}});
+    for payload in [
+        bash("cp backend/.env.example backend/.env", &other),
+        bash("cd backend && grep -rn TODO *", &other),
+        bash("cat backend/.env", &other),
+        bash("source backend/.env", &other),
+        bash(&format!("cat {other}/backend/.env"), &hangar),
+        read("backend/.env", &other),
+        read(&format!("{other}/backend/.env"), &hangar),
+        json!({"tool_name":"Bash","tool_input":{"command":"cat backend/.env"}}),
+        json!({"tool_name":"Read","tool_input":{"file_path":"backend/.env"}}),
+    ] {
+        let result = guard(&payload);
+        assert!(result.status.success(), "{payload}");
+        assert!(result.stdout.is_empty(), "{payload}");
+    }
+    for payload in [
+        bash("cat backend/.env", &hangar),
+        bash("cd backend && grep -rn TODO *", &hangar),
+        bash(&format!("cat {hangar}/backend/.env"), &other),
+        bash(&format!("cat {installed}/backend/.env"), &other),
+        read("backend/.env", &hangar),
+        bash("cat ~/.hangar/config/.env", &other),
+        bash("cat ~/.hangar/whatsapp/control.key", &other),
+        bash("cd ~/.hangar/config && grep -rn TODO *", &other),
+        json!({"tool_name":"Bash","tool_input":{"command":"cat ~/.hangar/config/.env"}}),
+    ] {
+        let result = guard(&payload);
+        assert_eq!(result.status.code(), Some(2), "{payload}");
+        let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert!(reason.contains("control.key"), "{payload}: {reason}");
+    }
+}
+
+/// Aspas, barra de escape e curinga de shell não escondem as chaves do dono nem a rota do rascunho: o
+/// guarda lê o comando como o shell o entrega e casa o curinga com o nome protegido.
+#[test]
+fn provider_hooks_guard_sees_owner_keys_through_quotes_escapes_and_globs() {
+    let root = tempfile::tempdir().unwrap();
+    let (_, other) = checkouts(root.path());
+    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(payload).unwrap(), &[]);
+    let bash = |command: &str| json!({"tool_name":"Bash","cwd":other,"tool_input":{"command":command}});
+    let reason_of = |payload: &Value| -> String {
+        let result = guard(payload);
+        assert_eq!(result.status.code(), Some(2), "{payload}");
+        let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+        output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap().to_owned()
+    };
+    for payload in [
+        bash("cat ~/.hangar/whatsapp/control.ke?"),
+        bash("cat ~/.hangar/config/.en?"),
+        bash("cat ~/.hangar/config/.e[n]v"),
+        bash("cat ~/.hangar/config/{peers.json,.env}"),
+        bash("cat ~/.hangar/conf*/.env"),
+        bash("cat ~/.hangar/config/*"),
+        bash("cat ~/.hangar/config/.e\"n\"v"),
+        bash(r"cat ~/.hangar/config/.e\nv"),
+        bash("cat ~/.hangar/whatsapp/'control'.key"),
+        bash("cd ~/.hangar/whatsapp && cat control.ke?"),
+        json!({"tool_name":"PowerShell","tool_input":{"command":r"Get-Content C:\Users\eu\.hangar\config\.en?"}}),
+    ] {
+        let reason = reason_of(&payload);
+        assert!(reason.contains("control.key"), "{payload}: {reason}");
+    }
+    for payload in [
+        bash("curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/$ID/\"send\""),
+        bash(r"curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/se\nd"),
+        bash("curl -X POST 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/{send,x}'"),
+        bash("curl -X POST http://127.0.0.1:8765/api/whatsapp/outbox/d1/dec'line'"),
+    ] {
+        let reason = reason_of(&payload);
+        assert!(reason.contains("/api/whatsapp/outbox/"), "{payload}: {reason}");
+    }
+    for payload in [
+        bash("cat ~/.hangar/config/peers.json"),
+        bash("cat ~/.hangar/config/.env.example"),
+        bash("cat ~/.hangar/whatsapp/media/*.jpg"),
+        bash("cat */*/*"),
+        bash("wc -l */*"),
+        bash("ls ~/.hangar/config/*"),
+        bash("curl -s http://127.0.0.1:8765/api/whatsapp/outbox/d1"),
+        bash("curl -s 'http://127.0.0.1:8765/api/whatsapp/outbox/d1/media'"),
     ] {
         let result = guard(&payload);
         assert!(result.status.success(), "{payload}");

@@ -17,7 +17,8 @@ vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsy
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {}, remove: () => {} }) }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: vi.fn(), erro: vi.fn() } }));
-vi.mock('../pair/identities', () => ({ useIdentities: () => ({ identities: new Map([['a', 'a']]), loading: new Set() }) }));
+const ids = vi.hoisted(() => ({ known: true }));
+vi.mock('../pair/identities', () => ({ useIdentities: () => ({ identities: new Map<string, string>(ids.known ? [['a', 'a']] : []), loading: new Set() }) }));
 
 const event: VaultEvent = { state: 'open', requests: [{ id: 'r1', interaction_id: 'i1', kind: 'approve', origin: 'a::sessao',
   entry_name: 'github', reason: 'login', use: 'exec', target: 'gh auth status', expires_at: 1 }] };
@@ -45,6 +46,7 @@ afterEach(async () => {
   await act(async () => { root.unmount(); });
   useSessions.setState({ vault: {}, byServer: [] });
   openVaultRequest(null);
+  ids.known = true;
 });
 
 it('tocar no aviso do pedido pendente abre a folha daquela máquina', async () => {
@@ -85,4 +87,15 @@ it('no chat, pedido de máquina com a lista caída não aparece', async () => {
   useSessions.setState({ byServer: [bucket('a', { error: 'offline' })] });
   await act(async () => { root.render(<SessionVaultRequests serverId="a" name="sessao" />); });
   expect(container.querySelector(`button[aria-label="${m.vault_app_session_approve({ entry: 'github' })}"]`)).toBeNull();
+});
+
+it('sem o identificador da máquina, o pedido guardado na dona do cofre (outra máquina) aparece no chat da sessão', async () => {
+  ids.known = false;
+  useSessions.setState({ vault: { b: event }, byServer: [bucket('a'), bucket('b')] });
+  const banner = m.vault_app_session_approve({ entry: 'github' });
+  await act(async () => { root.render(<><SessionVaultRequests serverId="a" name="sessao" /><VaultRequestSheet /></>); });
+  await act(async () => { container.querySelector<HTMLElement>(`button[aria-label="${banner}"]`)!.click(); });
+
+  expect(useVaultTarget.getState().target).toEqual({ serverId: 'b', requestId: 'r1' });
+  expect(container.textContent).toContain('gh auth status');
 });

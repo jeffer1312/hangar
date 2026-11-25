@@ -356,15 +356,19 @@ Do lado do Hangar (C6):
   uma mensagem já saindo. No prazo, rascunho ainda pendente é recusado (`expired`) e aprovado ainda
   saindo devolve `sending`. Devolve `sent`, `declined`, `expired`, `failed` ou `sending`; erro depois
   da criação leva o `id` e manda não criar outro rascunho. `failed` com `unconfirmed` diz que a mensagem pode ter saído.
-  Cancelada, recusa o rascunho no binário; já aprovado, avisa que pode sair. Binário desatualizado dá
+  Recusa e releitura depois do prazo terminam antes do menor corte aceito; sem resposta a tempo, diz
+  que a mensagem pode sair, como quando o dono responde no instante da recusa do prazo e a releitura falha.
+  Cancelada, recusa o rascunho no binário, inclusive o que nasce depois do cancelamento, com a criação
+  ainda correndo; já aprovado, avisa que pode sair. Binário desatualizado dá
   `whatsapp_outdated`.
 - **Rotas do dono** `POST/GET /api/whatsapp/outbox`, `POST /api/whatsapp/outbox/{id}/send` e
   `POST /api/whatsapp/outbox/{id}/decline`, repassadas ao binário com o prefixo `whatsapp_` nos
   códigos, pelo mesmo `owner_only` das leituras.
 - **Evento `whatsapp_outbox`** na lista do dono, como o do cofre, com os rascunhos pendentes; fica em
   `side.rs::owner_only` e não chega a convidado. Relido a cada criação ou resposta e a cada 30 s. Cada
-  rascunho leva `answer_by`, o menor entre a expiração e o prazo da tool, e os cartões contam até ele:
-  o prazo mora só no servidor.
+  rascunho leva `answer_by`, o menor entre a expiração e o prazo da chamada da tool (contado do começo
+  da chamada, antes da cópia do anexo, e guardado pela tool para o rascunho que ela criou; o de outra
+  vida conta da criação), menos uma folga, e os cartões contam até ele: o prazo mora só no servidor.
 - **Na subida do Hangar, todo rascunho pendente é recusado**: nenhuma tool espera por ele depois do
   reinício.
 - **Push sem conteúdo.** "Rascunho de WhatsApp aguardando aprovação", sem nome, número nem texto,

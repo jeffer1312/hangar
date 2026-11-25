@@ -1745,7 +1745,9 @@ impl Hangar {
     fn drop_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // O cartão responde pela conexão que guarda; a lista nova traz os pedidos de volta.
         self.vault.remove(&self.active_key());
-        self.whatsapp_outbox.remove(&self.active_key());
+        // O diálogo aberto pelo botão segura a entidade: esvaziada, ele não segue com o cartão e a Api antigos.
+        let key = self.active_key();
+        whatsapp_outbox::drop_outbox(&mut self.whatsapp_outbox, &key, cx);
         self.close_terminal(false, window, cx);
         // As respostas da conexão velha são descartadas: a prévia ficaria esperando para sempre.
         self.close_tab_preview(cx);

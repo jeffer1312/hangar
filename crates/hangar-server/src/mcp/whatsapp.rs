@@ -219,6 +219,21 @@ mod tests {
         assert_eq!(draft_cwd(&exec::Agent { cwd: None, env: None, lacks_deadline: false }), Ok(None));
     }
 
+    /// O trabalho da tool depois do prazo dela termina antes do menor corte que a sessão pode ter e ainda criar
+    /// rascunho: esse corte é o mesmo que a recusa por falta de prazo usa.
+    #[test]
+    fn the_shortest_cutoff_the_tool_counts_on_is_the_one_a_session_needs() {
+        use hangar_whatsapp::outbox::{CALL_CUTOFF_MIN, TOOL_DEADLINE};
+        let secs = CALL_CUTOFF_MIN.num_seconds();
+        let codex = |t: i64| exec::lacks_deadline("codex", Some(&format!("[mcp_servers.hangar]\ntool_timeout_sec = {t}\n")));
+        assert!(!codex(secs) && codex(secs - 1));
+        let claude = |ms: i64| exec::lacks_deadline("claude", Some(&json!({"mcpServers": {"hangar": {"timeout": ms}}}).to_string()));
+        assert!(!claude(secs * 1000) && claude(secs * 1000 - 1));
+        let agy = |t: i64| exec::lacks_deadline("antigravity", Some(&json!({"mcpServers": {"hangar": {"timeoutSeconds": t}}}).to_string()));
+        assert!(!agy(secs) && agy(secs - 1));
+        assert!(TOOL_DEADLINE < CALL_CUTOFF_MIN);
+    }
+
     fn stores(dir: &std::path::Path) -> (ShareStore, PairStore) {
         (ShareStore::open(dir.join("shares.json"), Arc::new(|| 1_000.0)), PairStore::open(dir.join("external_pairs.json")))
     }

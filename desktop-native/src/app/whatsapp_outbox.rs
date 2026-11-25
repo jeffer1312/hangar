@@ -361,7 +361,7 @@ fn file_row(file: &DraftFile) -> Div {
 
 /// Tira a máquina `key` do mapa; devolve se havia. O diálogo aberto segura a entidade: sem esvaziá-la, ele seguiria mostrando
 /// o último cartão.
-fn drop_outbox(map: &mut HashMap<String, Entity<WhatsAppOutbox>>, key: &str, cx: &mut App) -> bool {
+pub(super) fn drop_outbox(map: &mut HashMap<String, Entity<WhatsAppOutbox>>, key: &str, cx: &mut App) -> bool {
     let Some(outbox) = map.remove(key) else { return false };
     outbox.update(cx, |outbox, cx| outbox.clear(cx));
     true

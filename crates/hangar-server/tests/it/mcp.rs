@@ -1001,7 +1001,11 @@ async fn a_session_a_login_guest_sees_does_not_read_whatsapp() {
 /// O C5 de mentira do `hangar-whatsapp` na pasta `~/.hangar/whatsapp` da cena: assina as respostas como o binário e
 /// guarda os rascunhos. `outcome` são os campos que o envio aprovado ganha quando a tool relê o rascunho; `calls` anda a
 /// cada pedido recebido, o sinal que os testes esperam.
-struct FakeWhatsApp { drafts: Arc<Mutex<Vec<Value>>>, seen: Arc<Mutex<Vec<String>>>, calls: Arc<tokio::sync::watch::Sender<u64>> }
+struct FakeWhatsApp { drafts: Arc<Mutex<Vec<Value>>>, seen: Arc<Mutex<Vec<String>>>, calls: Arc<tokio::sync::watch::Sender<u64>>, hold: Hold }
+
+/// A criação da conversa `lento` fica presa até `release`, como a cópia de um anexo grande; `held` avisa que chegou.
+#[derive(Clone, Default)]
+struct Hold { held: Arc<tokio::sync::Notify>, release: Arc<tokio::sync::Notify> }
 
 const WA_KEY: [u8; 32] = [9; 32];
 
@@ -1009,12 +1013,12 @@ async fn fake_whatsapp(home: &Path, api: u32, outcome: Value) -> FakeWhatsApp {
     let data = home.join(".hangar/whatsapp");
     std::fs::create_dir_all(&data).unwrap();
     std::fs::write(data.join("control.key"), WA_KEY.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
-    let fake = FakeWhatsApp { drafts: Arc::default(), seen: Arc::default(), calls: Arc::new(tokio::sync::watch::channel(0).0) };
-    let (drafts, seen, calls) = (fake.drafts.clone(), fake.seen.clone(), fake.calls.clone());
+    let fake = FakeWhatsApp { drafts: Arc::default(), seen: Arc::default(), calls: Arc::new(tokio::sync::watch::channel(0).0), hold: Hold::default() };
+    let (drafts, seen, calls, hold) = (fake.drafts.clone(), fake.seen.clone(), fake.calls.clone(), fake.hold.clone());
     let app = axum::Router::new().fallback(move |request: axum::extract::Request| {
-        let (drafts, seen, calls, outcome) = (drafts.clone(), seen.clone(), calls.clone(), outcome.clone());
+        let (drafts, seen, calls, outcome, hold) = (drafts.clone(), seen.clone(), calls.clone(), outcome.clone(), hold.clone());
         async move {
-            let response = fake_c5(request, &drafts, &seen, &outcome).await;
+            let response = fake_c5(request, &drafts, &seen, &outcome, &hold).await;
             calls.send_modify(|n| *n += 1);
             response
         }
@@ -1026,7 +1030,8 @@ async fn fake_whatsapp(home: &Path, api: u32, outcome: Value) -> FakeWhatsApp {
     fake
 }
 
-async fn fake_c5(request: axum::extract::Request, drafts: &Mutex<Vec<Value>>, seen: &Mutex<Vec<String>>, outcome: &Value) -> axum::response::Response {
+async fn fake_c5(request: axum::extract::Request, drafts: &Mutex<Vec<Value>>, seen: &Mutex<Vec<String>>, outcome: &Value, hold: &Hold)
+    -> axum::response::Response {
     use axum::response::IntoResponse;
     let method = request.method().as_str().to_owned();
     let uri = request.uri().path_and_query().map_or("/", |p| p.as_str()).to_owned();
@@ -1034,6 +1039,10 @@ async fn fake_c5(request: axum::extract::Request, drafts: &Mutex<Vec<Value>>, se
         .and_then(|h| h.split_once('.')).map(|(ts, _)| ts.to_owned()).unwrap_or_default();
     let body = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap();
     seen.lock().unwrap().push(format!("{method} {uri}"));
+    if method == "POST" && uri == "/v1/outbox" && serde_json::from_slice::<Value>(&body).is_ok_and(|b| b["chat"] == "lento") {
+        hold.held.notify_one();
+        hold.release.notified().await;
+    }
     let (status, out) = c5_reply(&method, &uri, &body, drafts, outcome);
     let bytes = out.to_string().into_bytes();
     let signature = hangar_whatsapp::control::sign_response(&WA_KEY, &ts, status, &bytes);
@@ -1239,4 +1248,30 @@ async fn a_cancelled_whatsapp_draft_is_declined_unless_already_approved() {
         }
         task.abort();
     }
+}
+
+/// Cancelada com a criação ainda correndo (a cópia de um anexo grande), a tool não chega a guardar o rascunho: a
+/// criação termina sozinha e recusa o que nasceu, senão ele ficaria aprovável por 10 min sem ninguém esperando.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_draft_born_after_the_call_was_cancelled_is_declined() {
+    let s = scene_shared(false, None, false, "", true).await;
+    let fake = fake_whatsapp(&s.home, 2, json!({})).await;
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%0")]).await;
+    let canceller = Mcp { addr: mcp.addr, headers: mcp.headers.clone(), session: mcp.session.clone(), next: 0 };
+    let request = mcp.next + 1;
+    let task = tokio::spawn(async move { mcp.request("tools/call", json!({"name": "whatsapp_draft",
+        "arguments": {"chat": "lento", "text": "oi"}})).await });
+    tokio::time::timeout(Duration::from_secs(10), fake.hold.held.notified()).await.expect("a criação não chegou ao serviço em 10 s");
+    let cancel = canceller.post(json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": {"requestId": request, "reason": "teste"}})).send().await.unwrap();
+    assert_eq!(cancel.status(), 202);
+    assert!(fake.drafts.lock().unwrap().is_empty(), "a criação ainda está presa");
+    // O cancelamento chega à tool antes da volta da criação, que ainda faz dois saltos de HTTP: sem a tarefa própria,
+    // a criação morre com a chamada e o rascunho não nasce, ou nasce sem ninguém para recusá-lo.
+    fake.hold.release.notify_one();
+    let id = until(&fake, || fake.drafts.lock().unwrap().first().and_then(|d| d["id"].as_str().map(str::to_owned))).await;
+    let decline = format!("POST /v1/outbox/{id}/decline");
+    until(&fake, || fake.seen.lock().unwrap().contains(&decline).then_some(())).await;
+    assert_eq!(fake.drafts.lock().unwrap()[0]["state"], json!("declined"));
+    task.abort();
 }

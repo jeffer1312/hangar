@@ -27,6 +27,7 @@ const vault = ownerRequests<VaultEvent, VaultRequest>({
     title: () => m.vault_app_request_title(), noServer: () => m.vault_app_request_no_server(), loading: () => m.vault_app_loading(),
     gone: () => m.vault_err_pedido_perdido(), next: () => m.vault_app_request_next(),
   },
+  storedElsewhere: true,
   Card: RequestCard,
 });
 

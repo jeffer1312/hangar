@@ -31,6 +31,9 @@ export interface OwnerRequestsSpec<E, T extends OwnerRequest> {
   /** Aviso no chat da sessão que pediu. */
   sessionTitle: (item: T) => string;
   sheet: { title: () => string; noServer: () => string; loading: () => string; gone: () => string; next: () => string };
+  /** O pedido pode estar guardado noutra máquina que não a da sessão (o cofre mora na dona dele): sem o identificador da
+   * máquina, o aviso no chat aceita qualquer dona, porque o pedido não pode sumir do chat. */
+  storedElsewhere?: boolean;
   /** O corpo da folha para um pedido; `onDone` abre o próximo da máquina. */
   Card: ComponentType<{ server: Server; item: T; onDone: () => void }>;
 }
@@ -96,9 +99,10 @@ export function ownerRequests<E, T extends OwnerRequest>(spec: OwnerRequestsSpec
     const liveIds = useSessions((s) => liveServers(s.byServer ?? []).map((b) => b.server.id).join('\n'));
     const live = useMemo(() => new Set(liveIds.split('\n')), [liveIds]);
     const id = useIdentities(servers).identities.get(serverId);
-    // Sem o identificador da máquina (ainda lendo ou falhou), vale o nome da sessão, mas só no que esta máquina guarda: outra
-    // máquina pode ter sessão com o mesmo nome.
-    const fromHere = (owner: string, origin: string) => id ? origin === `${id}::${name}` : owner === serverId && origin.endsWith(`::${name}`);
+    // Sem o identificador da máquina (ainda lendo ou falhou), vale o nome da sessão; o que só esta máquina guarda fica preso
+    // a ela, porque outra máquina pode ter sessão com o mesmo nome.
+    const fromHere = (owner: string, origin: string) => id ? origin === `${id}::${name}`
+      : (spec.storedElsewhere || owner === serverId) && origin.endsWith(`::${name}`);
     const mine = Object.entries(events).filter(([owner]) => live.has(owner))
       .flatMap(([owner, event]) => pending(event).filter((r) => fromHere(owner, r.origin)).map((item) => ({ owner, item })));
     return <>
