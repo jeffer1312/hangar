@@ -445,7 +445,9 @@ pub fn get_subagent(provider: &str, jsonl: &Path, agent_id: &str, events: i64) -
     if provider == "codex" { return codex::get(jsonl, agent_id, events); }
     let limit = usize::try_from(events.max(0)).unwrap_or(0);
     let (mut a, file, kind) = if let Some((brain, conversation)) = agy_place(provider, jsonl) {
-        let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, agent_id)?;
+        // A lista mostra o subagente mesmo com o descritor ilegível: o detalhe abre o mesmo.
+        if !hangar_antigravity::paths::subagent_ids(&brain, &conversation).iter().any(|id| id == agent_id) { return None; }
+        let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, agent_id).unwrap_or_default();
         let (agent, f) = read_agent_agy(&brain, &descriptor, agent_id, DETAIL_TAIL)?;
         (agent, f, Layout::Agy)
     } else if let Some(root) = pi_agents_dir(provider, jsonl) {

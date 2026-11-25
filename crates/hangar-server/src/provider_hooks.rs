@@ -299,10 +299,15 @@ fn write_agy(value: &Value, base: &Path, pane: Option<&str>, psmux: Option<&str>
     if let Some(state) = state {
         marker(base, ".hangar-state", conversation, &json!({"state": state, "ts": timestamp()}))?;
     }
-    let bound = fs::read(base.join(".hangar-agy").join(format!("{key}.json"))).ok()
-        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
-        .and_then(|ticket| ticket["session_id"].as_str().map(str::to_owned)).filter(|bound| bound != conversation);
+    // Bilhete ausente é a primeira vez do pane; ilegível, a conferência do subagente não roda e o log diz por quê.
+    let bound = match fs::read(base.join(".hangar-agy").join(format!("{key}.json"))) {
+        Ok(raw) => serde_json::from_slice::<Value>(&raw).ok().and_then(|ticket| ticket["session_id"].as_str().map(str::to_owned))
+            .or_else(|| { log_failure("agy_hook_error.log", "agy_ticket_unreadable"); None }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => { log_failure("agy_hook_error.log", "agy_ticket_unreadable"); None }
+    }.filter(|bound| bound != conversation);
     let brain = value["transcriptPath"].as_str().and_then(|path| hangar_antigravity::paths::place_of_transcript(Path::new(path))).map(|(brain, _)| brain);
+    if brain.is_none() { log_failure("agy_hook_error.log", "agy_transcript_path_unknown"); }
     if let (Some(bound), Some(brain)) = (bound, brain) {
         if descends(&brain, &bound, conversation) { return Ok(()); }
         // O `agy` grava o arquivo do subagente pouco antes do `SessionStart` dele: a reconferência cobre a máquina

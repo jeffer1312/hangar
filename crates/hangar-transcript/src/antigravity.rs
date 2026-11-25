@@ -15,6 +15,7 @@ mod tools;
 
 const REQUEST_OPEN: &str = "<USER_REQUEST>";
 const REQUEST_CLOSE: &str = "</USER_REQUEST>";
+static LAUNCH_UNREAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Como aparece, nos recados dentro de um subagente, a conversa que o lançou.
 pub const MAIN_SENDER: &str = "principal";
 const SUBAGENT_CREATED: &str = "Created the following subagent:";
@@ -77,7 +78,14 @@ impl AgyStream {
                 let tool = tool.flatten();
                 let failed = value["status"] == "ERROR" || value["exit_code"].as_i64().is_some_and(|code| code != 0);
                 // Só a saída da própria chamada vale: um `cat` de arquivo com o mesmo texto não lança nada.
-                let launched = tool.as_deref().filter(|t| *t == "invoke_subagent").and_then(|_| launched_subagent(content));
+                let launched = tool.as_deref().filter(|t| *t == "invoke_subagent").and_then(|_| {
+                    let launched = launched_subagent(content);
+                    // O `agy` mudou o texto da saída: o subagente deixaria de ser acompanhado sem ninguém saber.
+                    if launched.is_none() && !content.contains("error") && !LAUNCH_UNREAD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::warn!(code = "agy_subagent_launch_unread", "saída do invoke_subagent sem o id do subagente");
+                    }
+                    launched
+                });
                 events.push(ChatEvent { ts, tool_use_id: call, result: Some(content.to_owned()), is_error: Some(failed),
                     bg_agent_id: launched, ..event(ChatKind::ToolResult, format!("res:agy:{step}")) });
                 // O comando foi para o fundo depois de chamado: os clientes só acompanham um `Bash` de fundo.
