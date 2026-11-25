@@ -67,7 +67,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   O binário é o de `platforms.<sistema>` no `server-latest.json` da release da branch (sem a
   chave, o `commit` do topo); o contrato é o `protocol` dele ou o `RUST_SERVER_PROTOCOL` do commit. O checkout vai
   do commit desse binário até o mais novo do primeiro pai com conteúdo idêntico ao publicado nos
-  `paths` do push no `.github/workflows/server.yml` de lá, nunca recua, e o download usa o manifesto lido na
+  `paths` do push do workflow que compila o sistema (`server-windows.yml` no Windows, `server.yml` nos outros;
+  sem o do Windows no commit, o `server.yml`), nunca recua, e o download usa o manifesto lido na
   escolha; sem ler a lista, para no commit do binário. Só binário de commit fora de `origin/<branch>`
   cai no commit mais novo com o mesmo número. A tela conta as mudanças até esse commit e também oferece atualizar quando o binário
   instalado não é o publicado (código em dia, binário que saiu depois). Atrás do topo, a tela vem
@@ -119,7 +120,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   em paralelo, cada um com o seu erro; o binário só é gravado com a tela no lugar (tela que levanta
   erro volta o checkout, e binário novo sob o Python velho recusaria o protocolo). A conferência do Chromium roda no máximo uma vez por dia
   (marca `chromium-ok` com menos de 24 h e sem "falhou" pula).
-- **Build do CI: testes ao lado do build, e o push novo cancela o run substituído.** No `server.yml`
+- **Build do CI: testes ao lado do build, e o push novo cancela o run substituído.** No `server-jobs.yml`
   os testes de cada sistema são um job próprio, em paralelo ao build de release, e o `publish` daquele
   sistema só sobe com os dois artefatos dele (`server-<sistema>` e `testes-ok-<sistema>`). Na main e no
   canal, o push novo cancela os jobs de teste e de build do run anterior; o `publish` (Server e Native)
