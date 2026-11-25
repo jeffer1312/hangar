@@ -49,7 +49,7 @@ async fn the_modes_read_comes_from_the_footer_in_the_cycle_order() {
     let reply = run(&io, "permission_modes", json!({"probe": false})).await;
     assert_eq!(reply.disposition, RuntimeDisposition::Accepted);
     assert_eq!(reply.payload["current"], "manual");
-    assert_eq!(reply.payload["modes"], json!(["auto", "plan", "manual", "acceptEdits"]));
+    assert_eq!(reply.payload["modes"], json!(["auto", "plan", "manual", "acceptEdits", "bypassPermissions"]));
     assert!(io.keys().is_empty());
 }
 
@@ -84,6 +84,26 @@ async fn draft_turn_menu_and_bypass_are_refused_without_a_key() {
         let io = Screens::new(&[name]);
         let reply = run(&io, "set_permission_mode", json!({"mode": mode})).await;
         assert_eq!((reply.disposition, reply.payload["error_code"].as_str()), (RuntimeDisposition::Rejected, Some(code)), "{name}");
+        assert!(io.keys().is_empty(), "{name}");
+    }
+}
+
+/// Entrar ou sair do bypass reabre o pane pela rota: aqui só a tela é conferida, sem tecla.
+#[tokio::test(start_paused = true)]
+async fn the_bypass_reopen_check_refuses_a_draft_and_presses_nothing() {
+    for (name, mode, code) in [
+        ("draft.txt", "bypassPermissions", Some("erro_caixa_com_rascunho")),
+        ("working.txt", "plan", Some("erro_sessao_trabalhando")),
+        ("permission.txt", "bypassPermissions", Some("permission_menu_open")),
+        ("idle.txt", "bypassPermissions", None),
+        ("idle.txt", "auto", None),
+    ] {
+        let io = Screens::new(&[name]);
+        let reply = run(&io, "set_permission_mode", json!({"mode": mode, "reopen": true})).await;
+        match code {
+            Some(code) => assert_eq!((reply.disposition, reply.payload["error_code"].as_str()), (RuntimeDisposition::Rejected, Some(code)), "{name}"),
+            None => assert_eq!((reply.disposition, reply.payload["requires_reopen"].as_bool()), (RuntimeDisposition::Accepted, Some(true)), "{name}"),
+        }
         assert!(io.keys().is_empty(), "{name}");
     }
 }

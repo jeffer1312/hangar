@@ -132,30 +132,44 @@ impl RuntimeRegistry {
 /// O que a saída do sem terminal deixa para a abertura do terminal (e para desfazer, se ela falhar).
 pub struct HeadlessLeft { pub key:String, pub conversation:String, pub permission_mode:crate::session_open::PermissionMode, pub model:Option<String> }
 
+/// O que a saída do pane deixa para quem o abre de novo: a conversa, o modo em vigor e o spec lido.
+pub struct TerminalLeft { pub target:super::super::other_terminal::OtherTarget, pub conversation:String, pub mode:crate::session_open::PermissionMode, pub spec:crate::session_open::SessionSpec }
+
 fn refuse(message:&str) -> RuntimeError { RuntimeError::new("erro_troca_modo",message) }
 
 /// Alguma linha ainda não entregue: trocar agora a mandaria para o processo que está saindo.
 fn waiting(rows:&Value) -> bool { rows.as_array().is_some_and(|rows|rows.iter().any(|row|row["delivered"] == false)) }
 
 impl RuntimeRegistry {
-    /// Com terminal → sem terminal, sob a porta de entrada que quem chama segura: o pane sai sem a limpeza do
-    /// fechamento (grupo, convites, fila e `then` ficam), o sidecar sem terminal nasce com a mesma chave e
-    /// conversa, o spec troca de superfície e o ator ACP abre pelo `session/resume`. `None`: não é Antigravity
-    /// com terminal aberto aqui.
-    pub async fn antigravity_to_headless(&self,name:&str) -> Option<Result<Value,RuntimeError>> {
+    /// O Antigravity com terminal pronto para sair do pane: ocioso, sem pergunta, com conversa e fila vazia. `None`:
+    /// não é Antigravity com terminal aberto aqui.
+    /// `reopen`: o modo em que o pane vai abrir de novo; a tela do `agy` é conferida (menu, turno, rascunho) antes de
+    /// alguém fechá-lo. Sem ele, a saída é para o sem terminal.
+    pub async fn antigravity_terminal_left(&self,name:&str,reopen:Option<crate::session_open::PermissionMode>) -> Option<Result<TerminalLeft,RuntimeError>> {
         let (handle,target) = self.entries.lock().await.values().find_map(|entry|match &entry.handle {
             EntryHandle::OtherTerminal { target,handle } if entry.name == name && target.provider == hangar_transcript::Provider::Antigravity =>
                 Some((handle.clone(),(**target).clone())),
             _ => None,
         })?;
+        let (idle,first) = if reopen.is_none() {
+            ("Espere a sessão ficar ociosa antes de continuar sem terminal.","Envie a primeira mensagem antes de continuar sem terminal.")
+        } else {
+            ("Espere a sessão ficar ociosa antes de trocar o modo de permissão.","Envie a primeira mensagem antes de trocar o modo de permissão.")
+        };
         Some(async {
             let snapshot = handle.snapshot().await?;
             let state = &snapshot["view"]["public_state"];
-            if state["state"] != "idle" || !state["question"].is_null() { return Err(refuse("Espere a sessão ficar ociosa antes de continuar sem terminal.")); }
-            // O shift+tab troca o modo só na tela: o rodapé vale mais que o spec da abertura.
+            if state["state"] != "idle" || !state["question"].is_null() { return Err(refuse(idle)); }
+            if let Some(mode) = reopen {
+                let id = format!("agy-reopen:{}",crate::mods::state::random_hex(8));
+                let ready = handle.control(id,"set_permission_mode".into(),json!({"mode":mode.name(),"reopen":true})).await?;
+                if ready.disposition != Disposition::Accepted || ready.payload["requires_reopen"] != true {
+                    let code = ready.payload["error_code"].as_str().unwrap_or("erro_permissao_leitura");
+                    return Err(RuntimeError::new(code,"a tela do Antigravity não permite fechar o terminal agora"));
+                }
+            }
             let shown = state["claude_permission_mode"].as_str().and_then(crate::session_open::PermissionMode::antigravity);
-            let conversation = hangar_antigravity::paths::conversation_of_transcript(&target.transcript)
-                .ok_or_else(||refuse("Envie a primeira mensagem antes de continuar sem terminal."))?;
+            let conversation = hangar_antigravity::paths::conversation_of_transcript(&target.transcript).ok_or_else(||refuse(first))?;
             if waiting(&handle.queue(format!("agy-switch:{}",crate::mods::state::random_hex(8)),Action::Load).await?) {
                 return Err(refuse("Espere a fila esvaziar antes de trocar de modo."));
             }
@@ -164,14 +178,41 @@ impl RuntimeRegistry {
             let spec = tokio::task::spawn_blocking(move||crate::session_open::record::read(&home,&key)).await.map_err(|_|failure("spec_job"))?
                 .map_err(|_|refuse("O registro da sessão não foi lido; a sessão foi mantida."))?
                 .ok_or_else(||refuse("A sessão não tem registro de abertura; a sessão foi mantida."))?;
+            // O bypass é flag do processo e não aparece no rodapé; fora dele, o shift+tab vale mais que o spec.
+            let mode = if spec.permission_mode == Some(crate::session_open::PermissionMode::BypassPermissions) {
+                crate::session_open::PermissionMode::BypassPermissions
+            } else {
+                shown.or(spec.permission_mode).unwrap_or(crate::session_open::PermissionMode::Manual)
+            };
+            Ok(TerminalLeft { target,conversation,mode,spec })
+        }.await)
+    }
+
+    /// O registro da sessão abriu o `agy` com terminal em bypass.
+    pub async fn antigravity_spec_bypass(&self,key:&str) -> Result<bool,RuntimeError> {
+        let (home,key) = (self.policy.codex_environment().home.clone(),key.to_owned());
+        let spec = tokio::task::spawn_blocking(move||crate::session_open::record::read(&home,&key)).await.map_err(|_|failure("spec_job"))?
+            .map_err(|_|RuntimeError::new("erro_permissao_leitura","o registro da sessão não foi lido"))?;
+        Ok(spec.is_some_and(|spec|spec.permission_mode == Some(crate::session_open::PermissionMode::BypassPermissions)))
+    }
+
+    /// Com terminal → sem terminal, sob a porta de entrada que quem chama segura: o pane sai sem a limpeza do
+    /// fechamento (grupo, convites, fila e `then` ficam), o sidecar sem terminal nasce com a mesma chave e
+    /// conversa, o spec troca de superfície e o ator ACP abre pelo `session/resume`. `None`: não é Antigravity
+    /// com terminal aberto aqui.
+    pub async fn antigravity_to_headless(&self,name:&str) -> Option<Result<Value,RuntimeError>> {
+        let left = self.antigravity_terminal_left(name,None).await?;
+        Some(async {
+            let TerminalLeft { target,conversation,mode,spec } = left?;
+            let env = self.policy.codex_environment();
             let gemini_home = match &spec.account { crate::session_open::Account::Antigravity { gemini_home } => gemini_home.clone(), _ => None };
             let account = gemini_home.as_ref().map_or_else(hangar_antigravity::Account::default,|dir|hangar_antigravity::Account::extra(dir.into()));
             let created = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
             let meta = json!({"name":name,"provider":"antigravity","headless":true,"key":target.key,"cwd":target.cwd,"gemini_home":gemini_home,
                 "brain_dir":account.brain_dir(&env.home),"conversation_id":conversation,"model":spec.model,
-                "permission_mode":shown.or(spec.permission_mode).unwrap_or(crate::session_open::PermissionMode::Manual).name(),"jev":spec.jev,"created":created});
+                "permission_mode":mode.name(),"jev":spec.jev,"created":created});
             let mut next = spec.with(&crate::session_open::SessionChange { reason:crate::session_open::ChangeReason::ModeSwitch,
-                surface:Some(crate::session_open::Surface::Headless),account:None,permission_mode:shown,model:None,effort:None,service_tier:None });
+                surface:Some(crate::session_open::Surface::Headless),account:None,permission_mode:Some(mode),model:None,effort:None,service_tier:None });
             next.conversation = Some(conversation);
             let (dir,home,owned) = (super::super::antigravity_sidecar::dir(&env.home),env.home.clone(),name.to_owned());
             // Grava antes de matar o pane: falhar aqui deixa o terminal como estava.

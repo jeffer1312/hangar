@@ -238,16 +238,9 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
         tokio::task::spawn_blocking(move || crate::session_open::record::write(&h, &written)).await
             .map_err(|_| RuntimeError::new("spec_job", "a gravação do registro não terminou"))?
             .map_err(|error| RuntimeError::new("erro_troca_modo", &format!("o registro da sessão não foi gravado: {:?}", error.kind())))?;
-        let host = crate::session_open::server::ServerHost::new(st.clone()).await;
-        let entry = crate::session_open::restore::Entry { name: name.to_owned(), provider: crate::session_open::AgentProvider::Antigravity,
-            conversation: Some(left.conversation.clone()), permission_mode: None, missing_since: None, unit: None };
-        let projects = st.accounts.env.claude_base.join("projects");
-        let result = match crate::session_open::restore::resolved_for(&home, &projects, &left.key, &entry) {
-            Ok(resolved) => crate::session_open::open::open_session(&host, resolved, &crate::session_open::OpenCaller::Owner).await
-                .map_err(|error| RuntimeError::new(error.code.unwrap_or("erro_troca_modo"), &error.msg)),
-            Err(code) => Err(RuntimeError::new(&code, "o terminal do Antigravity não abriu pelo registro")),
-        };
-        if let Err(error) = result {
+        if let Err(error) = open_agy_terminal(st, &home, &left.key, name, &left.conversation).await {
+            // O tmux não respondeu e o pane pode ter nascido: o registro fica com terminal, e o sem terminal não volta.
+            if error.code == crate::session_open::open::UNCERTAIN { return Err(error); }
             let (h, previous) = (home.clone(), spec.clone());
             let undone = tokio::task::spawn_blocking(move || crate::session_open::record::write(&h, &previous)).await;
             if !matches!(undone, Ok(Ok(()))) {
@@ -263,6 +256,11 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
             runtime.finish_leave_headless(name, &left.key).await;
             Some(Ok(json!({"ok": true, "terminal": true})))
         }
+        Err(error) if error.code == crate::session_open::open::UNCERTAIN => {
+            // O registro já diz terminal: o sidecar sem terminal sai, senão a subida abriria outro `agy` na conversa.
+            runtime.finish_leave_headless(name, &left.key).await;
+            Some(Err(error))
+        }
         Err(error) => {
             // O terminal não nasceu: a sessão volta sem terminal, na mesma conversa.
             if let Some(Err(reopen)) = runtime.open_antigravity_headless(name).await {
@@ -271,6 +269,66 @@ async fn antigravity_switch(st: &Arc<AppState>, runtime: &Arc<crate::runtime::ga
             Some(Err(error))
         }
     }
+}
+
+/// Abre o pane do Antigravity pelo registro gravado, na conversa dada (`agy --conversation`).
+async fn open_agy_terminal(st: &Arc<AppState>, home: &std::path::Path, key: &str, name: &str, conversation: &str) -> Result<(), RuntimeError> {
+    let host = crate::session_open::server::ServerHost::new(st.clone()).await;
+    let entry = crate::session_open::restore::Entry { name: name.to_owned(), provider: crate::session_open::AgentProvider::Antigravity,
+        conversation: Some(conversation.to_owned()), permission_mode: None, missing_since: None, unit: None };
+    let projects = st.accounts.env.claude_base.join("projects");
+    match crate::session_open::restore::resolved_for(home, &projects, key, &entry) {
+        Ok(resolved) => crate::session_open::open::open_session(&host, resolved, &crate::session_open::OpenCaller::Owner).await
+            .map(|_| ()).map_err(|error| RuntimeError::new(error.code.unwrap_or("erro_troca_modo"), &error.msg)),
+        Err(code) => Err(RuntimeError::new(&code, "o terminal do Antigravity não abriu pelo registro")),
+    }
+}
+
+async fn write_record(home: &std::path::Path, spec: crate::session_open::SessionSpec) -> Result<(), RuntimeError> {
+    let home = home.to_owned();
+    tokio::task::spawn_blocking(move || crate::session_open::record::write(&home, &spec)).await
+        .map_err(|_| RuntimeError::new("spec_job", "a gravação do registro não terminou"))?
+        .map_err(|error| RuntimeError::new("erro_permissao_reabrir", &format!("o registro da sessão não foi gravado: {:?}", error.kind())))
+}
+
+/// O bypass do `agy` é flag do processo e fica fora do shift+tab: entrar ou sair dele fecha o pane e o abre de novo
+/// pelo registro, na mesma conversa. Falha depois de fechar volta o registro e o terminal de antes.
+pub(crate) async fn antigravity_terminal_reopen(st: &Arc<AppState>, runtime: &Arc<crate::runtime::gateway::RuntimeRegistry>, name: &str,
+    mode: crate::session_open::PermissionMode) -> Result<Value, RuntimeError> {
+    let _closed = crate::runtime::lifecycle::ClosedIngress::acquire_exclusive(runtime.ingress(), name).await?;
+    let left = runtime.antigravity_terminal_left(name, Some(mode)).await
+        .ok_or_else(|| RuntimeError::new("erro_permissao_reabrir", "o terminal do Antigravity não está aberto aqui"))??;
+    let home = st.accounts.env.home.clone();
+    let key = left.target.key.clone();
+    let reopened = |mode: crate::session_open::PermissionMode| {
+        let mut spec = left.spec.with(&SessionChange { reason: ChangeReason::Bypass, surface: None, account: None,
+            permission_mode: Some(mode), model: None, effort: None, service_tier: None });
+        spec.conversation = Some(left.conversation.clone());
+        spec
+    };
+    write_record(&home, reopened(mode)).await?;
+    if let Err(error) = runtime.stop_other_for_switch(name).await {
+        // Como na troca para sem terminal: o registro volta, e quem não fechou o pane já religou o ator nele.
+        let mut message = error.message.clone();
+        if let Err(undo) = write_record(&home, left.spec.clone()).await { message = format!("{message}; o registro da sessão não voltou: {}", undo.message); }
+        if runtime.other_info(name).await.is_none() { message = format!("{message}; o terminal pode ter fechado: reabra a sessão"); }
+        return Err(RuntimeError::new(&error.code, &message));
+    }
+    let Err(error) = open_agy_terminal(st, &home, &key, name, &left.conversation).await else {
+        return Ok(json!({"ok": true, "mode": mode.name(), "current": mode.name(), "requested": mode.name(), "changed": true,
+            "previous_non_plan": null, "reopened": true}));
+    };
+    // O tmux não respondeu e o pane pode ter nascido no modo novo: o registro fica nele, e abrir outro duplicaria.
+    if error.code == crate::session_open::open::UNCERTAIN { return Err(error); }
+    let back = match write_record(&home, reopened(left.mode)).await {
+        Ok(()) => open_agy_terminal(st, &home, &key, name, &left.conversation).await,
+        Err(undo) => Err(undo),
+    };
+    let message = match back {
+        Ok(()) => format!("não reabri em {}: {}; o terminal voltou em {}", mode.name(), error.message, left.mode.name()),
+        Err(back) => format!("não reabri em {}: {}; o terminal de antes também não voltou: {}", mode.name(), error.message, back.message),
+    };
+    Err(RuntimeError::new(&error.code, &message))
 }
 
 /// Numa tarefa própria, como a do Codex: a troca admitida termina mesmo que o cliente desista.

@@ -28,6 +28,24 @@ pub(super) struct Observation {
 pub(super) struct FileCache {
     states: crate::list::facts_files::HookStates,
     previews: crate::state::preview::HookFiles,
+    agy_bypass: Option<((String, i64), bool)>,
+}
+impl FileCache {
+    /// O bypass do `agy` é flag do processo e não aparece no rodapé: o registro da abertura diz, lido uma vez por processo.
+    fn agy_bypass(&mut self, target: &OtherTarget) -> bool {
+        let life = (target.key.clone(), target.agent_pid);
+        if let Some((seen, bypass)) = &self.agy_bypass && *seen == life { return *bypass; }
+        let bypass = match crate::session_open::record::read(&target.dirs.home, &target.key) {
+            Ok(spec) => spec.is_some_and(|spec| spec.permission_mode == Some(crate::session_open::PermissionMode::BypassPermissions)),
+            // Guardado também na falha: reler a cada rodada faria o modo da tela alternar.
+            Err(error) => {
+                tracing::warn!(session = %target.name, kind = ?error.kind(), "registro do Antigravity ilegível; o modo vem do rodapé");
+                false
+            }
+        };
+        self.agy_bypass = Some((life, bypass));
+        bypass
+    }
 }
 static APPROVAL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"↵\s*confirm|Type feedback").unwrap());
@@ -195,7 +213,11 @@ pub(super) fn read(
     // O Antigravity diz o modo no rodapé; ele sai no mesmo campo do Claude para as telas usarem a mesma pílula.
     let footer = (target.provider == hangar_transcript::Provider::Antigravity)
         .then(|| crate::terminal_state::agy_footer(pane)).flatten();
-    state.claude_permission_mode = footer.as_ref().and_then(|footer| footer.mode).map(str::to_owned);
+    state.claude_permission_mode = if footer.is_some() && cache.agy_bypass(target) {
+        Some("bypassPermissions".to_owned())
+    } else {
+        footer.as_ref().and_then(|footer| footer.mode).map(str::to_owned)
+    };
     if let Some(pending) = &pending {
         state.state = "awaiting_input".into();
         if let Some(approval) = &pending.approval {

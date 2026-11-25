@@ -182,7 +182,7 @@ pub(crate) fn mux_unavailable(detail: &str) -> OpenError {
 }
 
 /// O pane pode ter nascido sem o multiplexador confirmar: nada em volta dele é desfeito.
-const UNCERTAIN: &str = "session_open_uncertain";
+pub(crate) const UNCERTAIN: &str = "session_open_uncertain";
 
 /// O passo de cada criação em curso, pelo nome sanitizado da sessão nova (`GET
 /// /api/sessions/creation-progress`): a tela de criar consulta enquanto espera e sabe que não travou.

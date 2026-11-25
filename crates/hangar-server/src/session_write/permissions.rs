@@ -115,7 +115,26 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
     let job=tokio::spawn(async move {
         let reply=match &target.handle {
             EntryHandle::Terminal {handle,..}=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),if let Some(mode)=&mode {json!({"mode":mode})} else {json!({"probe":probe})}).await?,
-            EntryHandle::OtherTerminal {handle,..} if target.provider=="antigravity"=>handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),json!({"mode":mode})).await?,
+            EntryHandle::OtherTerminal {handle,..} if target.provider=="antigravity"=> {
+                // O bypass é flag do processo e não aparece no rodapé: o registro da abertura diz se ele está ligado.
+                let bypass=match runtime.antigravity_spec_bypass(&target.key).await {
+                    Ok(bypass)=>bypass,
+                    // Ler segue pelo rodapé; trocar sem saber de onde parte reabriria às cegas.
+                    Err(error) if !set=>{tracing::warn!(session=%name,code=%error.code,"registro do Antigravity ilegível; o modo vem do rodapé");false},
+                    Err(error)=>return Err(error),
+                };
+                let wanted=mode.as_deref()==Some("bypassPermissions");
+                if set && wanted!=bypass {
+                    drop(held);
+                    return agy_terminal_reopen(&life_st,&runtime,&name,mode.as_deref().unwrap_or_default()).await;
+                }
+                if set && bypass {
+                    return Ok((StatusCode::OK,json!({"ok":true,"mode":"bypassPermissions","current":"bypassPermissions","requested":"bypassPermissions","changed":false,"previous_non_plan":null})));
+                }
+                let mut reply=handle.control(id.clone(),if set {"set_permission_mode"} else {"permission_modes"}.into(),json!({"mode":mode})).await?;
+                if bypass && reply.disposition==Disposition::Accepted {reply.payload["current"]=json!("bypassPermissions");}
+                reply
+            },
             EntryHandle::Headless(handle) if set=> {
                 if target.provider=="antigravity" {crate::runtime::gateway::RuntimeRegistry::antigravity_ready(handle).await?;}
                 let mut reply=handle.command(RuntimeCommand {operation_id:id.clone(),kind:OperationKind::SetPermissionMode,payload:json!({"mode":mode})}).await?;
@@ -149,6 +168,14 @@ async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response 
         Err(_)=>(StatusCode::SERVICE_UNAVAILABLE,detail_body("lifecycle_panic","não consegui confirmar o modo de permissão",json!({}))),
     };
     let mut response=json_response(status,body);cors(&headers,response.headers_mut());response
+}
+/// Antigravity com terminal entrando ou saindo do bypass: o pane reabre pelo registro, na mesma conversa.
+async fn agy_terminal_reopen(st:&Arc<AppState>,runtime:&Arc<crate::runtime::gateway::RuntimeRegistry>,name:&str,mode:&str)-> Result<(StatusCode,Value),crate::runtime::protocol::RuntimeError> {
+    let mode=crate::session_open::PermissionMode::antigravity(mode)
+        .ok_or_else(||crate::runtime::protocol::RuntimeError::new("erro_permissao_invalida","modo desconhecido para o Antigravity"))?;
+    let reopened=crate::session_write::relaunch::during_life_change(st,name,crate::session_write::relaunch::antigravity_terminal_reopen(st,runtime,name,mode)).await;
+    st.list.invalidate();
+    reopened.map(|value|(StatusCode::OK,value))
 }
 /// Bypass fora do ciclo do terminal: a sessão reabre pelo spec já em bypass. A falha depois de encerrar
 /// volta pelo spec de antes e diz onde a sessão ficou.

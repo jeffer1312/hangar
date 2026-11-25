@@ -1031,6 +1031,14 @@ mod tests {
     }
 
     #[test]
+    fn leaving_bypass_respawns_without_the_flag_in_the_mode_asked() {
+        let mut engine = opened(json!({"permission_mode":"bypassPermissions"}));
+        let plan = command(&mut engine,"m1",OperationKind::SetPermissionMode,json!({"mode":"plan"})).unwrap();
+        assert!(plan.iter().any(|e|matches!(e,Effect::Respawn { patch,.. } if patch["permission_mode"] == "plan")),"{plan:?}");
+        assert!(frames(&plan).is_empty(),"sair do bypass não vai por session/set_mode");
+    }
+
+    #[test]
     fn model_and_effort_become_one_agy_model_id() {
         assert_eq!(model_id(Some("gemini-4-neon"),Some("high"),None).as_deref(),Some("gemini-4-neon-high"));
         assert_eq!(model_id(None,Some("xhigh"),Some("gemini-4-neon-high")).as_deref(),Some("gemini-4-neon-xhigh"));
