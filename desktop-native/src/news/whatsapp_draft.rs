@@ -1,4 +1,4 @@
-//! `whatsapp-rascunho`: o agente deixa um rascunho de WhatsApp, o cartão aparece na conversa dele com o número, o texto
+//! `whatsapp-draft`: o agente deixa um rascunho de WhatsApp, o cartão aparece na conversa dele com o número, o texto
 //! exato e o anexo, e a mensagem só sai quando a pessoa toca em Enviar. O cartão é o mesmo da tela.
 
 use std::time::Instant;

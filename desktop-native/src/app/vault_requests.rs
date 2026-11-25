@@ -304,7 +304,9 @@ impl Hangar {
         let here = self.vault_origin_here()?;
         let mut cards = self.vault_cards(&|origin: &str| origin == here, cx);
         cards.extend(self.whatsapp_cards(&|origin: &str| origin == here, cx));
-        (!cards.is_empty()).then(|| div().flex_shrink_0().w_full().max_w(px(760.)).mx_auto().flex().flex_col().children(cards).into_any_element())
+        // A mesma contenção da coluna flutuante: cartões grandes rolam em vez de empurrar os botões e a caixa de mensagem para fora.
+        (!cards.is_empty()).then(|| div().id("vault-session").flex_shrink_0().w_full().max_w(px(760.)).mx_auto().max_h(px(520.)).overflow_y_scroll()
+            .flex().flex_col().children(cards).into_any_element())
     }
 
     /// Pedido de outra sessão (do cofre ou rascunho de WhatsApp): flutua sobre a conversa, igual em toda forma de navegação.

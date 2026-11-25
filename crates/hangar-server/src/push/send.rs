@@ -104,7 +104,7 @@ pub fn msg(locale: &str, key: &str) -> &'static str {
         "cofre" => if en { "Password vault" } else { "Cofre de senhas" },
         "cofre_pedido" => if en { "{origin} asks for {label}" } else { "{origin} pede {label}" },
         "whatsapp" => "WhatsApp",
-        "whatsapp_rascunho" => if en { "WhatsApp draft awaiting approval" } else { "Rascunho de WhatsApp aguardando aprovação" },
+        "whatsapp_draft" => if en { "WhatsApp draft awaiting approval" } else { "Rascunho de WhatsApp aguardando aprovação" },
         _ => "",
     }
 }
@@ -160,9 +160,7 @@ impl Notice {
 /// O cartão que o aviso abre no app, com o id da máquina que o criou.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Opens {
-    /// Pedido do cofre.
     Vault { server_id: String, request_id: String },
-    /// Rascunho de WhatsApp.
     WhatsAppDraft { server_id: String, draft_id: String },
 }
 
@@ -220,7 +218,7 @@ impl Outgoing {
     /// Rascunho de WhatsApp: frase fixa, sem conversa, número nem texto (passa por Expo e Web Push); `url` `/`, onde o
     /// cartão está.
     pub fn whatsapp_draft(session: &str, server_id: String, draft_id: String) -> Self {
-        Self { session: session.to_owned(), body: Box::new(|l| msg(l, "whatsapp_rascunho").to_owned()),
+        Self { session: session.to_owned(), body: Box::new(|l| msg(l, "whatsapp_draft").to_owned()),
             title: Some(Box::new(|l| msg(l, "whatsapp").to_owned())), tag: None, url: Some("/".to_owned()),
             opens: Some(Opens::WhatsAppDraft { server_id, draft_id }) }
     }

@@ -12,6 +12,7 @@ use hangar_managed_binary::service::{self, Arg, Service, ServiceId};
 use serde_json::{Value, json};
 
 use crate::client::{CallError, Client};
+use crate::control;
 use crate::release::{self, Github, Platform};
 
 pub use hangar_managed_binary::jobs::Busy;
@@ -274,7 +275,7 @@ pub async fn start(ctx: &Context) -> Result<(), Failure> {
 }
 
 /// Troca pela release mais nova da mesma versão maior; se ela não responder, volta para a anterior, salvo se
-/// ela já abriu os dados.
+/// ela já abriu os dados. Sem release mais nova, religa a instalação registrada que não responde.
 ///
 /// # Errors
 ///
@@ -285,12 +286,13 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
     progress(Step::Download);
     let latest = release::latest(&ctx.github).await?;
     if !release::newer(&latest.tag, &old.tag) {
-        return Ok(Outcome::AlreadyLatest);
+        return ensure_up(ctx, &old, progress).await;
     }
     let binary = release::BINARY.fetch(&ctx.github, &latest, ctx.platform, &ctx.paths.service).await?;
     let version = release::check(&binary).await?;
     let client = Client::new(ctx.paths.data.clone());
     let before = client.claimed().map(|c| c.pid);
+    let recorded_before = recorded_pid(&ctx.paths.data);
     progress(Step::Service);
     // No Windows o registro para o processo antigo antes de poder falhar ao ligar o novo.
     let registered = service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&binary)).await.map_err(Failure::from);
@@ -305,7 +307,7 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
     };
     let new = Installed { tag: latest.tag, binary };
     if let Err(failure) = up.and_then(|()| write_record(&ctx.paths, &new)) {
-        if opened_by_new(switched, before, client.claimed().map(|c| c.pid)) {
+        if opened_by_new(switched, recorded_before, recorded_pid(&ctx.paths.data)) {
             return Err(keep_new(&ctx.paths, &new, failure));
         }
         let back = service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&old.binary)).await;
@@ -319,6 +321,22 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
         && let Err(error) = std::fs::remove_dir_all(dir) {
         tracing::warn!(dir = %dir.display(), %error, "whatsapp: atualizado, mas a pasta da versão anterior ficou");
     }
+    Ok(Outcome::Updated)
+}
+
+/// Sem release mais nova, a instalação registrada só está em dia se responde assinada com a versão dela: uma
+/// atualização que manteve a nova registrada depois de falhar deixa o serviço parado, e repetir religa.
+async fn ensure_up(ctx: &Context, installed: &Installed, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
+    let version = release::check(&installed.binary).await?;
+    let client = Client::new(ctx.paths.data.clone());
+    if client.status().await.is_ok_and(|status| same_version(&status, &version).is_ok()) {
+        return Ok(Outcome::AlreadyLatest);
+    }
+    let before = client.claimed().map(|c| c.pid);
+    progress(Step::Service);
+    service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&installed.binary)).await?;
+    progress(Step::Start);
+    wait_up(&client, &version, before).await?;
     Ok(Outcome::Updated)
 }
 
@@ -371,8 +389,8 @@ fn same_version(status: &Value, version: &str) -> Result<(), String> {
     }
 }
 
-/// A versão nova abriu os dados quando o `control.json` passou a outro processo depois de ela ser registrada:
-/// o binário só o grava depois de abrir (e migrar) o `messages.db`.
+/// A versão nova abriu os dados quando o `control.json` passou a outro pid depois de ela ser registrada: o
+/// binário só o grava depois de abrir (e migrar) o `messages.db`. Os pids são os gravados no arquivo, vivos ou não.
 fn opened_by_new(registered: bool, before: Option<u32>, now: Option<u32>) -> bool {
     registered && now.is_some() && now != before
 }
@@ -383,6 +401,12 @@ fn keep_new(paths: &Paths, new: &Installed, failure: Failure) -> Failure {
     let record = write_record(paths, new).err().map(|e| format!("; {}", e.detail)).unwrap_or_default();
     Failure::new("whatsapp_update_data_migrated",
         format!("{}{record}; os dados já estão no formato novo; tente atualizar de novo", failure.detail))
+}
+
+/// O pid do `control.json` sem conferir se o processo vive: a nova pode gravar o arquivo e morrer antes da
+/// conferência, e a prova de que ela abriu os dados tem que sobreviver a isso.
+fn recorded_pid(data: &Path) -> Option<u32> {
+    control::read_control(data).ok().map(|c| c.pid)
 }
 
 fn not_installed() -> Failure {
@@ -503,12 +527,32 @@ mod tests {
         assert_eq!(current(&paths), Some(new));
     }
 
-    /// Sem release mais nova que a instalada, atualizar não baixa nem religa nada e diz isso.
-    #[tokio::test]
-    async fn updating_to_the_installed_release_says_it_is_already_the_latest() {
+    /// A nova grava o `control.json` e morre antes da conferência: a prova de que ela abriu os dados é o pid
+    /// gravado, não o processo vivo. Um `control.json` antigo, de processo morto, não é abertura da nova.
+    #[test]
+    fn the_new_version_owns_the_data_even_after_dying_once_it_wrote_the_control_file() {
+        // Acima de qualquer pid que o sistema dê: nunca é um processo vivo.
+        const DEAD: u32 = i32::MAX.unsigned_abs();
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        let write = |pid: u32| std::fs::write(data.join("control.json"),
+            json!({"version": 1, "api": 1, "port": 40123, "pid": pid}).to_string()).unwrap();
+        assert!(opened_by_new(true, recorded_pid(data), Some(DEAD)), "nada gravado antes");
+        write(DEAD);
+        let before = recorded_pid(data);
+        assert_eq!(before, Some(DEAD));
+        assert_eq!(Client::new(data.to_path_buf()).claimed(), None, "nada vivo antes da troca");
+        assert!(!opened_by_new(true, before, recorded_pid(data)), "o arquivo de uma execução anterior ficou igual");
+        write(DEAD - 1);
+        assert_eq!(Client::new(data.to_path_buf()).claimed(), None, "a nova já morreu");
+        assert!(opened_by_new(true, before, recorded_pid(data)), "a nova gravou o arquivo e morreu");
+    }
+
+    /// Releases no GitHub de mentira com `v0.1.0` como a mais nova, e a instalação `v0.1.0` registrada.
+    async fn installed_latest(routes: axum::Router) -> (tempfile::TempDir, Context, PathBuf, u16) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let api = format!("http://{}", listener.local_addr().unwrap());
-        let releases = axum::Router::new().route("/repos/{owner}/{repo}/releases",
+        let port = listener.local_addr().unwrap().port();
+        let releases = routes.route("/repos/{owner}/{repo}/releases",
             axum::routing::get(|| async {
                 ([(axum::http::header::CONTENT_TYPE, "application/json")],
                     json!([{"tag_name": "v0.1.0"}, {"tag_name": "v0.0.9"}]).to_string())
@@ -516,12 +560,49 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, releases).await.unwrap() });
         let dir = tempfile::tempdir().unwrap();
         let ctx = Context { paths: Paths::new(dir.path()), platform: Platform::local(),
-            github: Github { api, download: "http://127.0.0.1:9/nada".into() } };
+            github: Github { api: format!("http://127.0.0.1:{port}"), download: "http://127.0.0.1:9/nada".into() } };
         let binary = ctx.paths.service.join("bin/0.1.0/hangar-whatsapp");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, b"x").unwrap();
         write_record(&ctx.paths, &Installed { tag: "v0.1.0".into(), binary: binary.clone() }).unwrap();
+        (dir, ctx, binary, port)
+    }
+
+    /// Sem release mais nova e com o serviço respondendo assinado na versão instalada, atualizar não baixa nem
+    /// religa nada e diz isso.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn updating_to_the_installed_release_says_it_is_already_the_latest() {
+        let key: Vec<u8> = (0u8..32).collect();
+        let signing = key.clone();
+        let status = axum::Router::new().route("/v1/status", axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let key = signing.clone();
+            async move {
+                let header = headers.get(control::SIGNATURE_HEADER).and_then(|v| v.to_str().ok()).unwrap_or_default();
+                let (ts, _) = header.split_once('.').unwrap_or_default();
+                let body = json!({"api": 1, "version": "0.1.0", "state": "connected"}).to_string();
+                let signature = control::sign_response(&key, ts, 200, body.as_bytes());
+                ([(control::SIGNATURE_HEADER, signature)], body)
+            }
+        }));
+        let (_dir, ctx, binary, port) = installed_latest(status).await;
+        std::fs::write(&binary, "#!/bin/sh\necho 'hangar-whatsapp 0.1.0 (api 1)'\n").unwrap();
+        std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::fs::create_dir_all(&ctx.paths.data).unwrap();
+        std::fs::write(ctx.paths.data.join("control.key"), hangar_managed_binary::hex::encode(&key)).unwrap();
+        std::fs::write(ctx.paths.data.join("control.json"),
+            json!({"version": 1, "api": 1, "port": port, "pid": std::process::id()}).to_string()).unwrap();
         assert_eq!(update(&ctx, &|_| {}).await, Ok(Outcome::AlreadyLatest));
+        assert_eq!(current(&ctx.paths), Some(Installed { tag: "v0.1.0".into(), binary }), "o registro não mudou");
+    }
+
+    /// A tentativa seguinte a uma atualização que deixou a nova registrada e parada acha a mesma tag: sem o
+    /// serviço de pé, ela não é "já é a mais nova". Aqui o programa nem roda, e a falha aparece antes de religar.
+    #[tokio::test]
+    async fn the_installed_release_that_does_not_answer_is_not_already_the_latest() {
+        let (_dir, ctx, binary, _) = installed_latest(axum::Router::new()).await;
+        let got = update(&ctx, &|_| {}).await;
+        assert_eq!(got.map_err(|f| f.code), Err("whatsapp_version_unreadable"));
         assert_eq!(current(&ctx.paths), Some(Installed { tag: "v0.1.0".into(), binary }), "o registro não mudou");
     }
 }

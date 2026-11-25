@@ -343,7 +343,7 @@ mod tests {
         assert!(matches!(wait_step("d1", Some(&bad), now, far()), Wait::Unknown(_)));
     }
 
-    /// O envio aprovado tem até 10 min depois da aprovação, não depois da criação.
+    /// O envio aprovado tem o prazo `SENDING_SECS` contado da aprovação, não da criação.
     #[test]
     fn a_sending_draft_waits_ten_minutes_after_the_approval() {
         assert_eq!(wait_step("d1", Some(&draft("sending")), t("2026-11-24T10:10:00Z"), far()), Wait::Until(t("2026-11-24T10:11:00Z")));
@@ -427,7 +427,7 @@ mod tests {
         progress
     }
 
-    /// O dono não responde: pendente, a espera dorme em voltas de 30 s (a lista acorda antes quando muda) até o prazo
+    /// O dono não responde: pendente, a espera dorme em voltas de `PENDING_REREAD` (a lista acorda antes quando muda) até o prazo
     /// da chamada, recusa e responde `expired`.
     #[tokio::test]
     async fn a_pending_draft_sleeps_to_the_call_deadline_and_is_declined_as_expired() {
@@ -443,7 +443,7 @@ mod tests {
         assert!(!progress.needs_decline(), "a espera chegou ao fim");
     }
 
-    /// Aprovado e ainda saindo no prazo: relê a cada 3 s (a lista dos pendentes não avisa) e responde `sending`, sem
+    /// Aprovado e ainda saindo no prazo: relê a cada `REREAD` (a lista dos pendentes não avisa) e responde `sending`, sem
     /// recusar nada.
     #[tokio::test]
     async fn an_approved_draft_is_reread_every_few_seconds_and_answers_sending_at_the_deadline() {
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(port.declined, 1);
     }
 
-    /// Serviço que não responde: relê a cada 3 s até o prazo e para com o id.
+    /// Serviço que não responde: relê a cada `REREAD` até o prazo e para com o id.
     #[tokio::test]
     async fn read_failures_stop_at_the_deadline_with_the_id() {
         let mut port = FakePort::new(vec![], Read::Failed("whatsapp_unreachable: sem resposta".into()));

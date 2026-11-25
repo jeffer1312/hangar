@@ -1,4 +1,4 @@
-//! Rascunhos de saída do C5 (api 2): a lista dos pendentes para o cartão do dono e a recusa dos que sobraram de
+//! Rascunhos de saída do C5 (binário com a rota de envio): a lista dos pendentes para o cartão do dono e a recusa dos que sobraram de
 //! outra vida do Hangar. A espera da tool `whatsapp_draft` e as frases dela moram em `wait`.
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -16,11 +16,11 @@ mod wait;
 
 pub use wait::{DONT_REPEAT, DRAFT_MAYBE_CREATED, Declined, DraftPort, Progress, Read, wait_draft};
 
-/// O envio por rascunho nasce na api 2 do binário.
+/// A versão da API do binário que traz a rota de envio por rascunho.
 pub const SEND_API: u32 = 2;
 /// Releitura sem pedido: o binário expira rascunho sozinho, e o cartão some junto.
 pub const REFRESH: Duration = Duration::from_secs(30);
-/// O prazo próprio da tool `whatsapp_draft`, contado do começo da chamada: o MCP corta entre 600 e 660 s. O cartão
+/// O prazo próprio da tool `whatsapp_draft`, contado do começo da chamada: fica abaixo do corte do MCP. O cartão
 /// conta até ele (`answer_by`), porque resposta depois dele não chega a quem pediu.
 pub const TOOL_DEADLINE: TimeDelta = TimeDelta::seconds(570);
 

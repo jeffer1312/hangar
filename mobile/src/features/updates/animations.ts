@@ -74,7 +74,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'tela-de-status': StatusAnimation,
   'worktree-atualizada': WorktreeFreshAnimation,
   'whatsapp-somente-leitura': WhatsAppReadonlyAnimation,
-  'whatsapp-rascunho': WhatsAppDraftAnimation,
+  'whatsapp-draft': WhatsAppDraftAnimation,
   'portas-da-sessao': PortsAnimation,
 };
 

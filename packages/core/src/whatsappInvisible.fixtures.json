@@ -8,6 +8,7 @@
     { "name": "caractere de tag com cinco dígitos", "input": "ok\udb40\udc41", "shown": "ok⟨U+E0041⟩" },
     { "name": "ZWJ e seletor dentro de emoji ficam", "input": "👨\u200d👩 ❤\ufe0f ©\ufe0f", "shown": "👨\u200d👩 ❤\ufe0f ©\ufe0f" },
     { "name": "ZWJ solto no texto é marcado", "input": "Enviar\u200d", "shown": "Enviar⟨U+200D⟩" },
+    { "name": "ZWJ entre letras é marcado", "input": "漢\u200d字", "shown": "漢⟨U+200D⟩字" },
     { "name": "ZWJ depois de outra marca é marcado", "input": "\u200b\u200d", "shown": "⟨U+200B⟩⟨U+200D⟩" },
     { "name": "marca no meio do texto", "input": "a\u2060b", "shown": "a⟨U+2060⟩b" }
   ]

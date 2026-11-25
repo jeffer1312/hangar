@@ -15,7 +15,7 @@ const OWNER: &str = "dono-whatsapp";
 const KEY: [u8; 32] = [7; 32];
 /// Cabe num `i32` e passa do maior pid do Linux: nunca é um processo vivo.
 const DEAD_PID: u32 = 2_147_483_000;
-/// A subida desta vida do Hangar na prova: o C5 falso cria os rascunhos às 10:00 do mesmo dia.
+/// A subida desta vida do Hangar na prova: o C5 falso cria os rascunhos depois dela, no mesmo dia.
 const STARTED: &str = "2026-11-24T09:00:00Z";
 
 struct Scene {
@@ -471,7 +471,7 @@ async fn drafts_are_created_and_answered_with_the_house_codes() {
     assert_eq!((status, code(&body)), (400, "whatsapp_bad_request"), "id fora do formato não vai ao caminho do binário");
 }
 
-/// Binário da api 1 não tem saída: a recusa sai daqui, sem pedido ao serviço.
+/// Binário sem a rota de envio não tem saída: a recusa sai daqui, sem pedido ao serviço.
 #[tokio::test]
 async fn the_outbox_needs_the_send_api() {
     let s = Scene::new();
@@ -577,7 +577,7 @@ async fn a_failed_start_decline_is_retried_on_the_next_round() {
     assert!(feed_ids(&s.wa).is_empty());
 }
 
-/// Sem a api 2 nada é lido nem avisado; leitura que falha vai uma vez ao diário e a última lista continua.
+/// Sem a rota de envio nada é lido nem avisado; leitura que falha vai uma vez ao diário e a última lista continua.
 #[tokio::test]
 async fn without_the_send_api_nothing_is_read_and_a_failed_read_keeps_the_list() {
     let s = Scene::new();

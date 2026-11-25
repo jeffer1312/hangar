@@ -415,7 +415,7 @@ async fn draft(wa: &WhatsApp, method: Method, rest: &str, request: Request) -> R
     }
 }
 
-/// Binário que se anuncia sem a api 2 não tem as rotas de saída. Sem `control.json` segue: o pedido responde
+/// Binário que se anuncia sem a rota de envio não tem as rotas de saída. Sem `control.json` segue: o pedido responde
 /// `whatsapp_off`.
 fn send_supported(wa: &WhatsApp) -> Result<(), Response> {
     match wa.client.claimed() {

@@ -10,7 +10,7 @@ import { superficie } from '../../theme/superficie';
 import { useScriptStep } from './scriptStep';
 import * as m from '../../paraglide/messages';
 
-// Roteiro do `whatsapp-rascunho`: o aviso do rascunho aparece no chat da sessão, a folha abre com o cartão (número,
+// Roteiro do `whatsapp-draft`: o aviso do rascunho aparece no chat da sessão, a folha abre com o cartão (número,
 // texto exato e anexo), desce até os botões, o Enviar é tocado e o cartão sai com o aviso do envio.
 const WIDTH = 390;
 const HEIGHT = 520;
@@ -26,7 +26,7 @@ const STILL = 3;
 const FADE = { duration: 240 };
 // Número de mentira: o DDD 00 não existe.
 const NUMBER = '5500912345678';
-// Fixo: o cartão mostra "9:12" em todo quadro (conta até o answer_by do exemplo).
+// Fixo: o cartão mostra a mesma contagem em todo quadro (conta até o answer_by do exemplo).
 const NOW = Date.parse('2026-11-24T14:00:18Z');
 // Altura mínima da MachineRow: o toque cai no meio da penúltima linha, o Enviar.
 const ROW = 56;

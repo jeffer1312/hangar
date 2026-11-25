@@ -110,8 +110,14 @@ const INVISIBLE: ReadonlyArray<readonly [number, number]> = [
   [0x2800, 0x2800], [0x3164, 0x3164], [0xfe00, 0xfe0f], [0xfeff, 0xfeff], [0xffa0, 0xffa0], [0xfff0, 0xfffb],
   [0x1bca0, 0x1bca3], [0x1d173, 0x1d17a], [0xe0000, 0xe0fff],
 ];
-// ZWJ e seletores de emoji fazem parte de emoji (👨‍👩‍👧, ❤️): depois de símbolo, não são marcados.
-const EMOJI_GLUE = new Set([0x200d, 0xfe0e, 0xfe0f]);
+// Seletores de emoji fazem parte de emoji (❤️, ©️): depois de símbolo, não são marcados.
+const EMOJI_SELECTOR = new Set([0xfe0e, 0xfe0f]);
+const ZWJ = 0x200d;
+// O ZWJ só cola emoji (👨‍👩‍👧, ❤️‍🔥); entre letras ele não aparece e muda o texto. A mesma regra do nativo.
+const EMOJI: ReadonlyArray<readonly [number, number]> = [
+  [0x1f000, 0x1faff], [0x2600, 0x27bf], [0x2300, 0x23ff], [0x2b00, 0x2bff], [0xfe0f, 0xfe0f],
+];
+const isEmoji = (cp: number | undefined) => cp !== undefined && EMOJI.some(([a, b]) => cp >= a && cp <= b);
 
 const isInvisible = (cp: number) => INVISIBLE.some(([a, b]) => cp >= a && cp <= b);
 
@@ -125,19 +131,21 @@ export const invisibleMark = (code: string) => `⟨${code}⟩`;
 export function markInvisibles(text: string): InvisiblePart[] {
   const parts: InvisiblePart[] = [];
   let plain = '';
-  let prev: number | null = null;
+  const chars = Array.from(text);
   let prevMarked = false;
-  for (const ch of text) {
+  chars.forEach((ch, i) => {
     const cp = ch.codePointAt(0)!;
-    const glue: boolean = EMOJI_GLUE.has(cp) && prev !== null && !prevMarked && (prev >= 0x2000 || prev === 0xa9 || prev === 0xae);
-    const mark: boolean = isInvisible(cp) && !glue;
+    const prev = chars[i - 1]?.codePointAt(0);
+    const glue = prev !== undefined && !prevMarked && (cp === ZWJ
+      ? isEmoji(prev) && isEmoji(chars[i + 1]?.codePointAt(0))
+      : EMOJI_SELECTOR.has(cp) && (prev >= 0x2000 || prev === 0xa9 || prev === 0xae));
+    const mark = isInvisible(cp) && !glue;
     if (mark) {
       if (plain) { parts.push({ kind: 'text', text: plain }); plain = ''; }
       parts.push({ kind: 'mark', code: codePointLabel(cp) });
     } else plain += ch;
-    prev = cp;
     prevMarked = mark;
-  }
+  });
   if (plain) parts.push({ kind: 'text', text: plain });
   return parts;
 }

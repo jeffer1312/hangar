@@ -292,6 +292,49 @@ fn provider_hooks_guard_blocks_the_owner_keys_and_the_draft_answer_routes() {
     }
 }
 
+/// `.` e `..` no caminho não escondem as chaves do dono: o guarda resolve o caminho antes de comparar.
+#[test]
+fn provider_hooks_guard_resolves_dot_segments_before_matching_the_owner_keys() {
+    let root = tempfile::tempdir().unwrap();
+    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(payload).unwrap(), &[]);
+    let bash = |command: &str| json!({"tool_name":"Bash","tool_input":{"command":command}});
+    let read = |path: &str| json!({"tool_name":"Read","tool_input":{"file_path":path}});
+    for payload in [
+        read("/home/eu/.hangar/config/./.env"),
+        read("/home/eu/.hangar/config/../config/.env"),
+        read("/home/eu/Projetos/hangar/backend/../backend/.env"),
+        read("backend/../backend/.env"),
+        read("/home/eu/.hangar/whatsapp/./control.key"),
+        json!({"tool_name":"Grep","tool_input":{"pattern":"TOKEN","path":"/home/eu/.hangar/config/."}}),
+        json!({"tool_name":"Grep","tool_input":{"pattern":"TOKEN","path":"/home/eu/.hangar/x/../config"}}),
+        bash("cat /home/eu/.hangar/config/./.env"),
+        bash("cat /home/eu/.hangar/config/../config/.env"),
+        bash("grep TOKEN backend/./.env"),
+        bash("cd /home/eu/.hangar/config/. && cat .env"),
+        bash("cd /home/eu/.hangar/x/../config && cat .env"),
+        bash("cd backend/. && cat .env"),
+    ] {
+        let result = guard(&payload);
+        assert_eq!(result.status.code(), Some(2), "{payload}");
+        let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny", "{payload}");
+        let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert!(reason.contains("control.key"), "{payload}: {reason}");
+    }
+    for payload in [
+        read("backend/.env.example"),
+        read("backend/./.env.example"),
+        read("/home/eu/.hangar/config/../whatsapp/media/foto.jpg"),
+        bash("cat backend/../backend/.env.example"),
+        bash("cd backend/. && cat pyproject.toml"),
+        bash(". ./scripts/env.sh"),
+    ] {
+        let result = guard(&payload);
+        assert!(result.status.success(), "{payload}");
+        assert!(result.stdout.is_empty(), "{payload}");
+    }
+}
+
 #[test]
 fn provider_hooks_installer_migrates_python_preserves_toml_and_backup() {
     use hangar_server::{accounts::environment::AccountEnvironment, harness_setup::kimi_hooks};

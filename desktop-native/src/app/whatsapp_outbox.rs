@@ -68,8 +68,10 @@ const INVISIBLE: &[(u32, u32)] = &[
     (0x1bca0, 0x1bca3), (0x1d173, 0x1d17a), (0xe0000, 0xe0fff),
 ];
 
-/// ZWJ e seletores de emoji fazem parte de emoji (👨‍👩‍👧, ❤️): depois de símbolo, não são marcados.
-fn emoji_glue(cp: u32) -> bool { matches!(cp, 0x200d | 0xfe0e | 0xfe0f) }
+/// Emoji para a cola do ZWJ; a mesma classificação do core.
+fn emoji(cp: u32) -> bool {
+    matches!(cp, 0x1f000..=0x1faff | 0x2600..=0x27bf | 0x2300..=0x23ff | 0x2b00..=0x2bff | 0xfe0f)
+}
 
 fn invisible(cp: u32) -> bool { INVISIBLE.iter().any(|&(a, b)| (a..=b).contains(&cp)) }
 
@@ -81,9 +83,15 @@ pub(crate) type MarkedText = (SharedString, Vec<Range<usize>>);
 pub(crate) fn mark_invisibles(text: &str) -> MarkedText {
     let (mut out, mut marks) = (String::with_capacity(text.len()), Vec::new());
     let (mut prev, mut prev_marked) = (None::<u32>, false);
-    for ch in text.chars() {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
         let cp = ch as u32;
-        let glue = emoji_glue(cp) && !prev_marked && prev.is_some_and(|p| p >= 0x2000 || p == 0xa9 || p == 0xae);
+        // Fazem parte do emoji e não são marcados: ZWJ só entre dois emojis (👨‍👩‍👧, ❤️‍🔥), seletor depois de símbolo (❤️, ©️).
+        let glue = !prev_marked && prev.is_some_and(|p| match cp {
+            0x200d => emoji(p) && chars.peek().is_some_and(|&next| emoji(next as u32)),
+            0xfe0e | 0xfe0f => p >= 0x2000 || p == 0xa9 || p == 0xae,
+            _ => false,
+        });
         let mark = invisible(cp) && !glue;
         if mark {
             let start = out.len();
@@ -177,9 +185,9 @@ impl WhatsAppOutbox {
     fn apply(&mut self, api: Option<Api>, machine: String, list: Vec<Draft>, cx: &mut Context<Self>) {
         (self.api, self.machine) = (api, machine);
         let mut old = std::mem::take(&mut self.cards);
-        self.cards = list.into_iter().map(|draft| {
+        for draft in list {
             let deadline = answer_deadline(draft.answer_by.as_deref(), &draft.expires_at);
-            match old.iter().position(|c| c.draft.id == draft.id) {
+            let card = match old.iter().position(|c| c.draft.id == draft.id) {
                 Some(at) => {
                     let mut card = old.swap_remove(at);
                     if card.draft.text != draft.text { card.text = mark_invisibles(&draft.text); }
@@ -188,8 +196,9 @@ impl WhatsAppOutbox {
                     card
                 }
                 None => Card { text: mark_invisibles(&draft.text), clock: cx.new(|_| Countdown { deadline }), draft, sending: false, error: None },
-            }
-        }).collect();
+            };
+            self.cards.push(card);
+        }
         self.tick(cx);
         cx.notify();
     }
@@ -210,6 +219,12 @@ impl WhatsAppOutbox {
     }
 
     pub(super) fn count(&self) -> usize { self.cards.len() }
+
+    fn clear(&mut self, cx: &mut Context<Self>) {
+        self.cards.clear();
+        self.tick(cx);
+        cx.notify();
+    }
 
     /// Os cartões cujo `servidor::sessao` de origem passa em `keep`.
     pub(super) fn render_where(&self, keep: &dyn Fn(&str) -> bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -344,6 +359,14 @@ fn file_row(file: &DraftFile) -> Div {
                 .child(file.source.clone())))
 }
 
+/// Tira a máquina `key` do mapa; devolve se havia. O diálogo aberto segura a entidade: sem esvaziá-la, ele seguiria mostrando
+/// o último cartão.
+fn drop_outbox(map: &mut HashMap<String, Entity<WhatsAppOutbox>>, key: &str, cx: &mut App) -> bool {
+    let Some(outbox) = map.remove(key) else { return false };
+    outbox.update(cx, |outbox, cx| outbox.clear(cx));
+    true
+}
+
 impl Render for WhatsAppOutbox {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.cards.is_empty() { return div().p_2().text_sm().text_color(theme::muted()).child(tr("whatsapp_draft_none")); }
@@ -366,7 +389,7 @@ impl Hangar {
                 }
             },
         };
-        if list.is_empty() { return Some(self.whatsapp_outbox.remove(key).is_some()); }
+        if list.is_empty() { return Some(drop_outbox(&mut self.whatsapp_outbox, key, cx)); }
         let (api, machine) = (self.machine_api(key), self.vault_machine_label(key, cx));
         let runtime = self.runtime.clone();
         let entity = self.whatsapp_outbox.entry(key.to_owned())
@@ -437,6 +460,33 @@ mod tests {
         for case in cases {
             assert_eq!(shown(case["input"].as_str().unwrap()), case["shown"].as_str().unwrap(), "{}", case["name"]);
         }
+    }
+
+    #[test]
+    fn zwj_is_left_unmarked_only_between_emoji() {
+        assert_eq!(shown("漢\u{200D}字"), "漢⟨U+200D⟩字");
+        assert_eq!(shown("❤\u{FE0F}\u{200D}🔥"), "❤\u{FE0F}\u{200D}🔥");
+        assert_eq!(shown("👨\u{200D}a"), "👨⟨U+200D⟩a");
+        assert_eq!(shown("a\u{200D}👩"), "a⟨U+200D⟩👩");
+        assert_eq!(shown("👨\u{200D}"), "👨⟨U+200D⟩");
+    }
+
+    #[::gpui::test]
+    fn an_empty_event_empties_the_outbox_an_open_dialog_still_holds(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let runtime = Arc::new(Runtime::new().unwrap());
+        let outbox = cx.new(|_| WhatsAppOutbox { api: None, runtime, machine: String::new(), cards: Vec::new(), clock: None });
+        let list = parse(&json!({"drafts": [draft("d1", "pending")]})).unwrap();
+        outbox.update(cx, |outbox, cx| outbox.apply(None, "casa".into(), list, cx));
+        // O diálogo guarda o seu clone; o mapa perde o dele.
+        let mut map = HashMap::from([("casa".to_owned(), outbox.clone())]);
+        assert!(cx.update(|cx| drop_outbox(&mut map, "casa", cx)));
+        assert!(map.is_empty());
+        outbox.update(cx, |outbox, _| {
+            assert_eq!(outbox.count(), 0);
+            assert!(outbox.clock.is_none());
+        });
+        assert!(!cx.update(|cx| drop_outbox(&mut map, "casa", cx)));
     }
 
     #[test]

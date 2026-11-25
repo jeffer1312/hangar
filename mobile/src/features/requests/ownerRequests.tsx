@@ -46,6 +46,9 @@ export function ownerRequests<E, T extends OwnerRequest>(spec: OwnerRequestsSpec
   let version = 0;
   const answered = { add(id: string) { done.add(id); version += 1; listeners.forEach((l) => l()); } };
   const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+  // O alvo que a folha mostra agora: a resposta de um pedido chega depois do await, e a folha só avança se ainda for ele.
+  let shown: RequestTarget | null = null;
+  const sameTarget = (a: RequestTarget | null, b: RequestTarget) => !!a && a.serverId === b.serverId && a.id === b.id;
   const pending = (event: E | undefined) => (event ? spec.items(event) : []).filter((r) => !done.has(r.id));
   // Estado de teste montado sem o campo não derruba a lista.
   const NONE: Record<string, E> = {};
@@ -93,10 +96,11 @@ export function ownerRequests<E, T extends OwnerRequest>(spec: OwnerRequestsSpec
     const liveIds = useSessions((s) => liveServers(s.byServer ?? []).map((b) => b.server.id).join('\n'));
     const live = useMemo(() => new Set(liveIds.split('\n')), [liveIds]);
     const id = useIdentities(servers).identities.get(serverId);
-    // Sem o identificador da máquina (ainda lendo ou falhou), vale o nome da sessão: o pedido não pode sumir do chat.
-    const fromHere = (origin: string) => id ? origin === `${id}::${name}` : origin.endsWith(`::${name}`);
+    // Sem o identificador da máquina (ainda lendo ou falhou), vale o nome da sessão, mas só no que esta máquina guarda: outra
+    // máquina pode ter sessão com o mesmo nome.
+    const fromHere = (owner: string, origin: string) => id ? origin === `${id}::${name}` : owner === serverId && origin.endsWith(`::${name}`);
     const mine = Object.entries(events).filter(([owner]) => live.has(owner))
-      .flatMap(([owner, event]) => pending(event).filter((r) => fromHere(r.origin)).map((item) => ({ owner, item })));
+      .flatMap(([owner, event]) => pending(event).filter((r) => fromHere(owner, r.origin)).map((item) => ({ owner, item })));
     return <>
       {mine.map(({ owner, item }) => <RequestNotice key={item.id} icon={spec.icon} hint={spec.hint()} title={spec.sessionTitle(item)}
         onPress={() => spec.setTarget({ serverId: owner, id: item.id })} />)}
@@ -108,6 +112,7 @@ export function ownerRequests<E, T extends OwnerRequest>(spec: OwnerRequestsSpec
     const events = useEvents();
     const byServer = useSessions((s) => s.byServer) ?? [];
     const target = spec.useTarget();
+    shown = target;
     if (!target) return null;
     const bucket = byServer.find((b) => b.server.id === target.serverId);
     return <SheetBody server={bucket?.server ?? null} ready={!!bucket?.loaded && !bucket.error && !!events[target.serverId]}
@@ -119,7 +124,8 @@ export function ownerRequests<E, T extends OwnerRequest>(spec: OwnerRequestsSpec
     const item = id ? items.find((r) => r.id === id) : items[0];
     // Respondido o último pedido aberto pela lista, a folha fecha sozinha.
     useEffect(() => { if (ready && !id && !item) close(); }, [ready, id, item]);
-    const next = () => { if (server) spec.setTarget({ serverId: server.id, id: null }); };
+    // Capturado no desenho deste pedido: se a pessoa já abriu outro (até em outra máquina), a folha fica nele.
+    const next = () => { if (server && sameTarget(shown, { serverId: server.id, id })) spec.setTarget({ serverId: server.id, id: null }); };
     const { Card } = spec;
     return <MachineSheet title={spec.sheet.title()} onClose={close}>
       {!server ? <Notice text={spec.sheet.noServer()} error />

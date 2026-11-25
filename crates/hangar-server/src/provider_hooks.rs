@@ -686,8 +686,61 @@ fn owner_key_hits(text: &str) -> usize {
     KEYS.get_or_init(|| {
         regex::Regex::new(r#"(?i)(^|[/\\\s'"=<])(\.hangar[/\\]+config[/\\]+\.env|backend[/\\]+\.env|whatsapp[/\\]+control\.key)([\s'"*;|&)]|$)"#).unwrap()
     })
-    .find_iter(text)
+    .find_iter(&lexical_paths(text))
     .count()
+}
+
+/// O texto com `.` e `..` resolvidos em cada caminho, sem tocar o disco: `config/./.env` e
+/// `backend/../backend/.env` abrem o mesmo arquivo que o caminho direto.
+fn lexical_paths(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("/.") && !text.contains("\\.") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    for c in text.chars() {
+        if c.is_whitespace() || ['\'', '"', '=', '<', '>', ';', '|', '&', '(', ')', '`'].contains(&c) {
+            out.push_str(&lexical_path(&word));
+            word.clear();
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    out.push_str(&lexical_path(&word));
+    std::borrow::Cow::Owned(out)
+}
+
+fn lexical_path(word: &str) -> String {
+    let parts: Vec<&str> = word.split(['/', '\\']).collect();
+    if parts.len() < 2 || !parts.iter().any(|p| *p == "." || *p == "..") {
+        return word.to_owned();
+    }
+    let absolute = parts[0].is_empty();
+    let mut kept: Vec<&str> = Vec::new();
+    for part in parts {
+        match part {
+            "" | "." => {}
+            ".." => match kept.last() {
+                Some(&last) if last != ".." => {
+                    kept.pop();
+                }
+                None if absolute => {}
+                _ => kept.push(".."),
+            },
+            other => kept.push(other),
+        }
+    }
+    let mut path = kept.join("/");
+    if absolute {
+        path.insert(0, '/');
+    } else if path.is_empty() {
+        path.push('.');
+    }
+    if word.ends_with(['/', '\\']) && !kept.is_empty() {
+        path.push('/');
+    }
+    path
 }
 
 fn owner_key_redirect(segment: &str) -> bool {
@@ -701,7 +754,7 @@ fn owner_key_folder(text: &str) -> bool {
     static FOLDER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     FOLDER
         .get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\\s'"=])(\.hangar[/\\]+(whatsapp|config)|backend)[/\\]*(['"\s;|&)]|$)"#).unwrap())
-        .is_match(text)
+        .is_match(&lexical_paths(text))
 }
 
 /// O nome solto (`.env`, `control.key`) ou `*`: na pasta do `backend` o resto continua livre.
@@ -716,7 +769,7 @@ fn owner_key_bare(segment: &str) -> bool {
 /// `Grep` em `~/.hangar` ou nas pastas das chaves as varre inteiras.
 fn above_owner_keys(path: &str) -> bool {
     static ABOVE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    ABOVE.get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\])\.hangar([/\\]+(whatsapp|config))?[/\\]*$"#).unwrap()).is_match(path)
+    ABOVE.get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\])\.hangar([/\\]+(whatsapp|config))?[/\\]*$"#).unwrap()).is_match(&lexical_paths(path))
 }
 
 /// Programas que só procuram ou registram texto: citar a rota neles não a chama.

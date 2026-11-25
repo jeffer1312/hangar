@@ -15,7 +15,7 @@ impl hangar_whatsapp::outbox::Hooks for Hooks {
         let session = origin_session(draft["origin"].as_str().unwrap_or_default());
         let id = draft["id"].as_str().unwrap_or_default().to_owned();
         match crate::push::send::Sender::from_state(self.st.clone()) {
-            Ok(sender) => sender.whatsapp_draft(session, self.st.server_id.clone(), id),
+            Ok(sender) => sender.whatsapp_draft(session, self.st.current_server_id(), id),
             Err(code) => self.st.diag.report("rust.push_config_failed", session, code, "configuração inválida impediu o aviso do rascunho de WhatsApp"),
         }
     }

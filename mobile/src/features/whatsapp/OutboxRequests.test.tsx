@@ -22,8 +22,7 @@ vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: mocks.ok, erro: mocks.erro } }));
 vi.mock('../pair/identities', () => ({ useIdentities: () => ({ identities: new Map([['a', 'a']]), loading: new Set() }) }));
 
-// Relógio fixo: o cartão conta até answer_by (14:09:30, o prazo da tool, antes do expires_at das 14:10:00); às 14:00:48
-// mostra 8:42.
+// Relógio fixo: o cartão conta até answer_by (o prazo da tool, antes do expires_at).
 const NOW = new Date('2026-11-24T14:00:48Z');
 
 const draft = (id: string, extra: Partial<WhatsAppDraft> = {}): WhatsAppDraft => ({
@@ -96,6 +95,19 @@ it('no chat da sessão que pediu, o aviso abre aquele rascunho; em outra sessão
   expect(container.textContent).toContain('5511987654321');
 });
 
+it('sem o identificador da máquina, o chat só mostra rascunho guardado nela, mesmo com sessão homônima em outra', async () => {
+  // 'c' e 'd' ficam fora do mapa de identificadores do mock: o aviso cai no ramo pelo nome da sessão.
+  useSessions.setState({
+    byServer: [bucket('c'), bucket('d')],
+    whatsappOutbox: { c: event(draft('d11', { origin: 'x::sessao' })), d: event(draft('d12', { origin: 'y::sessao' })) },
+  });
+  const banner = m.whatsapp_draft_session_notice({ name: '5511987654321 · Carlos' });
+  await act(async () => { root.render(<SessionOutboxRequests serverId="c" name="sessao" />); });
+  expect(container.querySelectorAll(`button[aria-label="${banner}"]`)).toHaveLength(1);
+  await act(async () => { button(banner)!.click(); });
+  expect(useWhatsAppTarget.getState().target).toEqual({ serverId: 'c', draftId: 'd11' });
+});
+
 it('no chat, rascunho de máquina com a lista caída não aparece', async () => {
   useSessions.setState({ byServer: [bucket('a', { error: 'offline' })], whatsappOutbox: { a: event(draft('d9')) } });
   await act(async () => { root.render(<SessionOutboxRequests serverId="a" name="sessao" />); });
@@ -126,6 +138,19 @@ it('dois toques seguidos em Enviar respondem uma vez só', async () => {
   await act(async () => { const send = button(m.whatsapp_draft_send())!; send.click(); send.click(); });
   expect(mocks.answer).toHaveBeenCalledTimes(1);
   await act(async () => { release(); });
+});
+
+it('resposta que chega depois de a pessoa abrir outro pedido em outra máquina não tira a folha dele', async () => {
+  let release!: () => void;
+  mocks.answer.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve; }));
+  await render([bucket('a'), bucket('b')], { a: event(draft('d21')), b: event(draft('e1')) });
+  await act(async () => { openWhatsAppDraft({ serverId: 'a', draftId: 'd21' }); });
+  await act(async () => { button(m.whatsapp_draft_send())!.click(); });
+  await act(async () => { openWhatsAppDraft({ serverId: 'b', draftId: 'e1' }); });
+  await act(async () => { release(); });
+  expect(mocks.ok).toHaveBeenCalledWith(m.whatsapp_draft_sending());
+  expect(notice('a')).toBeNull();
+  expect(useWhatsAppTarget.getState().target).toEqual({ serverId: 'b', draftId: 'e1' });
 });
 
 it('Recusar responde decline', async () => {
