@@ -8798,6 +8798,7 @@
   "native_new_chat_machine_demo_hint": "Sessões de exemplo, sem conta",
   "native_new_chat_machine_offline": "fora do ar",
   "native_new_chat_machine_more": "+{n}",
+  "native_new_chat_machine_accounts": "{n} contas",
   "native_create_copies_1": "1 cópia",
   "native_create_copies": "{n} cópias",
   "native_create_use_named": "Usar {nome}",

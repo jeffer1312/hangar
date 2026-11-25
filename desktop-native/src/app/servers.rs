@@ -420,7 +420,7 @@ impl Hangar {
         self.servers.iter().filter(|s| !s.disabled && !s.invite).map(|s| {
             let key = norm(&s.address);
             let offline = self.remote.get(&key).is_some_and(|l| l.error.is_some());
-            super::create::ServerChoice { key, label: s.label.clone(), address: s.address.clone(), token: s.token.clone(), offline }
+            super::create::ServerChoice { key, label: s.label.clone(), address: s.address.clone(), token: s.token.clone(), offline, id: s.id.clone() }
         }).collect()
     }
 
