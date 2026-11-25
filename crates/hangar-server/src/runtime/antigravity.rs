@@ -516,12 +516,12 @@ impl Engine {
                     acp::Event::ToolStarted { title,name,input,.. } => {
                         // Texto depois de uma ferramenta é outra mensagem; o definitivo vem do transcript.
                         if let Some(text) = self.preview.clear() { self.publish("preview",text,effects); }
-                        let (nome,input) = match name {
+                        let (tool_name,input) = match name {
                             Some(name) => hangar_transcript::agy_live_tool(&name,input.as_ref().unwrap_or(&Value::Null)),
                             None => (title.unwrap_or_else(||"tool".into()),serde_json::Map::new()),
                         };
-                        self.publish("tool",super::live_tool_text(&nome,&Value::Object(input)),effects);
-                        self.tool = Some(nome);
+                        self.publish("tool",super::live_tool_text(&tool_name,&Value::Object(input)),effects);
+                        self.tool = Some(tool_name);
                     }
                     acp::Event::ToolUpdated { status,.. } => if matches!(status.as_deref(),Some("completed" | "failed")) && self.tool.take().is_some() {
                         self.publish("tool",String::new(),effects);

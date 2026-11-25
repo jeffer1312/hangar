@@ -2280,6 +2280,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                                     live.update(|state| {
                                         state.binding=view["conversation"].as_str().filter(|conversation|!conversation.is_empty()).map(|conversation|crate::interactions::InteractionBinding {key:target.key.clone(),generation:target.generation,conversation:conversation.into()});
                                         state.public_state = view["public_state"].clone();
+                                        state.usage = json!({"current_model": view["current_model"], "token_usage": view["token_usage"]});
                                     });
                                     durable_view = view.clone();
                                     publish(&events,&target,&mut revision,"view",view.clone());

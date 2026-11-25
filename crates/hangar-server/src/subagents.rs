@@ -406,7 +406,11 @@ pub fn list_subagents(provider: &str, jsonl: &Path) -> Vec<Map<String, Value>> {
     if provider == "codex" { return codex::list(jsonl); }
     let mut out = Vec::new();
     if let Some((brain, conversation)) = agy_place(provider, jsonl) {
-        for id in hangar_antigravity::paths::subagent_ids(&brain, &conversation) {
+        let ids = hangar_antigravity::paths::subagent_ids(&brain, &conversation).unwrap_or_else(|error| {
+            tracing::warn!(code = "agy_subagents_unreadable", kind = ?error.kind(), "subagents: pasta de subagentes do Antigravity ilegível");
+            Vec::new()
+        });
+        for id in ids {
             let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, &id).unwrap_or_default();
             if let Some((agent, _)) = read_agent_agy(&brain, &descriptor, &id, LIST_TAIL) { out.push(agent); }
         }
@@ -446,7 +450,9 @@ pub fn get_subagent(provider: &str, jsonl: &Path, agent_id: &str, events: i64) -
     let limit = usize::try_from(events.max(0)).unwrap_or(0);
     let (mut a, file, kind) = if let Some((brain, conversation)) = agy_place(provider, jsonl) {
         // A lista mostra o subagente mesmo com o descritor ilegível: o detalhe abre o mesmo.
-        if !hangar_antigravity::paths::subagent_ids(&brain, &conversation).iter().any(|id| id == agent_id) { return None; }
+        let ids = hangar_antigravity::paths::subagent_ids(&brain, &conversation)
+            .map_err(|error| tracing::warn!(code = "agy_subagents_unreadable", kind = ?error.kind(), "subagents: pasta de subagentes do Antigravity ilegível")).ok()?;
+        if !ids.iter().any(|id| id == agent_id) { return None; }
         let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, agent_id).unwrap_or_default();
         let (agent, f) = read_agent_agy(&brain, &descriptor, agent_id, DETAIL_TAIL)?;
         (agent, f, Layout::Agy)
@@ -1047,7 +1053,7 @@ fn tail_events(f: &Path, limit: usize, layout: Layout) -> Option<Vec<ChatEvent>>
 mod tests {
     use super::*;
 
-    /// Conversa real do `agy` 1.5.17 (pai com um subagente), com a pasta `brain` da fixture do leitor.
+    /// Conversa real do `agy` (pai com um subagente), com a pasta `brain` da fixture do leitor.
     #[test]
     fn antigravity_subagents_come_from_the_conversation_folder() {
         const PARENT: &str = "d4260961-71cd-4a60-9ae1-410cae6b046d";

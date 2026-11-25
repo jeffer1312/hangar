@@ -15,6 +15,7 @@ mod tools;
 
 const REQUEST_OPEN: &str = "<USER_REQUEST>";
 const REQUEST_CLOSE: &str = "</USER_REQUEST>";
+static EXIT_CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Command exited with code (-?\d+)").unwrap());
 static LAUNCH_UNREAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Como aparece, nos recados dentro de um subagente, a conversa que o lançou.
 pub const MAIN_SENDER: &str = "principal";
@@ -118,9 +119,11 @@ impl AgyStream {
         let Some(found) = MESSAGE.captures(content) else { return };
         let sender = &found[1];
         let text = found[2].trim_end().trim_end_matches("</SYSTEM_MESSAGE>").trim().to_owned();
-        let finish = |id: &str| ChatEvent { ts, ..crate::claude::task_result(format!("agy:{step}:fim"), id) };
+        let finish = |id: &str| ChatEvent { ts, ..crate::claude::task_result(format!("agy:{step}:end"), id) };
         if let Some((_, task)) = sender.rsplit_once('/') {
-            if task.starts_with("task-") { events.push(finish(task)); }
+            // O fim traz o código de saída do comando: diferente de zero é falha, sem código fica como antes.
+            let code = EXIT_CODE.captures(&text).and_then(|found| found[1].parse::<i64>().ok());
+            if task.starts_with("task-") { events.push(ChatEvent { is_error: code.map(|code| code != 0), ..finish(task) }); }
             return;
         }
         if !hangar_antigravity::paths::valid_conversation_id(sender) { return; }
@@ -204,7 +207,7 @@ mod tests {
         events.iter().any(|e| e.kind == ChatKind::ToolResult && e.tool_use_id.as_deref() == Some(&format!("task:{id}")) && e.result.as_deref() == Some("task-notification"))
     }
 
-    /// Conversa real do `agy` 1.5.17: tarefa de fundo e subagente lançados juntos, relatório e fim da tarefa depois.
+    /// Conversa real do `agy`: tarefa de fundo e subagente lançados juntos, relatório e fim da tarefa depois.
     #[test]
     fn a_real_subagent_and_background_task_launch_report_and_finish() {
         let events = real(PARENT, 0);
@@ -221,6 +224,16 @@ mod tests {
         assert!(task_end(&events, SUB) && task_end(&events, "task-5"));
         let ids: std::collections::HashSet<_> = events.iter().map(|e| e.id.clone()).collect();
         assert_eq!(ids.len(), events.len(), "ids repetidos");
+    }
+
+    /// Tarefa de fundo que acaba com código diferente de zero fecha como falha.
+    #[test]
+    fn a_background_task_that_exits_non_zero_finishes_as_an_error() {
+        let message = |step: u64, code: i64| json!({"step_index": step, "type": "SYSTEM_MESSAGE",
+            "content": format!("<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-25T12:22:24Z sender={PARENT}/task-{step} priority=MESSAGE_PRIORITY_HIGH content=Task id \"{PARENT}/task-{step}\" finished with result:\nCommand exited with code {code}.\n</SYSTEM_MESSAGE>")});
+        let events = feed_all(&[message(63, 101), message(64, 0)]);
+        let end = |task: &str| events.iter().find(|e| e.tool_use_id.as_deref() == Some(&format!("task:{task}"))).map(|e| e.is_error).unwrap();
+        assert_eq!((end("task-63"), end("task-64")), (Some(true), Some(false)));
     }
 
     /// A compactação sai como o aviso do Claude; os avisos do modo planejador/executor continuam fora.

@@ -173,7 +173,7 @@ fn subagents(args: &Args) -> Option<(&'static str, Args)> {
     }
 }
 
-/// O formato do `agy` 1.5.17: um subagente por chamada, que roda em segundo plano e manda o relatório depois.
+/// O formato atual do `agy`: um subagente por chamada, que roda em segundo plano e manda o relatório depois.
 fn subagent(args: &Args) -> Option<(&'static str, Args)> {
     let prompt = text(args, "Prompt")?;
     let mut input = Args::new();
@@ -294,7 +294,7 @@ mod tests {
             json!({"subagent_type":"browser_subagent","description":"Abrir","prompt":"Abra a página"}));
     }
 
-    /// Formato do `agy` 1.5.17: um subagente por chamada, sempre em segundo plano (o relatório chega depois).
+    /// Formato atual do `agy`: um subagente por chamada, sempre em segundo plano (o relatório chega depois).
     #[test]
     fn a_flat_subagent_call_is_a_background_agent() {
         let (name, input) = call("invoke_subagent", json!({"Prompt":"Liste os arquivos","Role":"Directory Lister","TypeName":"self"}));

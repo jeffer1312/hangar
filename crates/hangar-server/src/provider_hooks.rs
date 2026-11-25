@@ -335,7 +335,14 @@ fn descends(brain: &Path, bound: &str, conversation: &str) -> bool {
     let mut level = vec![bound.to_owned()];
     for _ in 0..3 {
         if level.iter().any(|parent| subagents_dir(brain, parent).join(format!("{conversation}.json")).is_file()) { return true; }
-        level = level.iter().flat_map(|parent| subagent_ids(brain, parent)).collect();
+        let mut next = Vec::new();
+        for parent in &level {
+            match subagent_ids(brain, parent) {
+                Ok(ids) => next.extend(ids),
+                Err(_) => log_failure("agy_hook_error.log", "agy_subagents_unreadable"),
+            }
+        }
+        level = next;
         if level.is_empty() { return false; }
     }
     false
