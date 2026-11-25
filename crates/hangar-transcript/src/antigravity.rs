@@ -173,8 +173,7 @@ fn user_request(content: &str) -> String {
     py::strip(&rest[..end]).to_owned()
 }
 
-/// A chamada que o ACP anuncia ao vivo, no mesmo nome e entrada do transcript: o cliente casa a ferramenta ao vivo
-/// com o bloco definitivo pelo nome.
+/// Mesmo nome e entrada do transcript, para o cliente casar o bloco ao vivo com o definitivo.
 pub fn live_tool(name: &str, input: &Value) -> (String, Map<String, Value>) { tools::canonical(name, args(input)) }
 
 /// Os argumentos às vezes chegam com o valor em texto JSON (`"\"ls -la\""`): desembrulha só quando o texto

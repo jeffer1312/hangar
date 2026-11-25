@@ -537,7 +537,7 @@ impl Engine {
                         effects.push(Effect::StateChanged);
                     }
                     acp::Event::ModelChanged(model) => { self.model = Some(model); effects.push(Effect::StateChanged); }
-                    acp::Event::ContextUsage { used,size } => self.token_usage = json!({"used":used,"size":size}),
+                    acp::Event::ContextUsage { used,size } => { self.token_usage = json!({"used":used,"size":size}); effects.push(Effect::StateChanged); }
                     _ => {}
                 },
             }
