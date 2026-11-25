@@ -757,10 +757,11 @@ impl NewSession {
         self.effort_pick = Some(picker(choices, at, false, |this, id, _, _| { this.scheduled_touch(&["effort"]); this.model_choice_touched = true; this.effort = id; }, window, cx));
     }
 
-    /// O padrão salvo que não cabia na lista do modo anterior (o `manual` lido antes do modo do servidor) volta quando passa a
-    /// caber; com a lista do agente ainda chegando, o padrão guardado pode ser o do agente de antes.
+    /// O `manual` salvo do Antigravity, descartado porque a lista chegou antes do modo do servidor, volta quando passa a caber.
+    /// Só nele: o catálogo dele sempre é lido de fato, então, terminada a leitura, o padrão guardado é o dele, e não o do agente
+    /// de antes (o Codex sem conta termina a leitura sem ler nada).
     pub(super) fn restore_saved_permission(&mut self) {
-        if self.permission_touched || self.models.loading { return; }
+        if self.provider != "antigravity" || self.permission_touched || self.models.loading { return; }
         let Some(saved) = self.saved_default.as_ref().map(|s| s.2.clone()) else { return };
         if self.permissions().is_some_and(|list| list.contains(&saved.as_str())) { self.permission = saved; }
     }
