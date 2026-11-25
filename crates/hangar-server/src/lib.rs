@@ -35,6 +35,7 @@ pub mod diag;
 pub(crate) mod diag_report;
 pub use hangar_core::display_env;
 pub mod groups;
+pub mod integrations;
 pub mod interactions;
 pub(crate) use hangar_core::json_envelope;
 pub mod list;

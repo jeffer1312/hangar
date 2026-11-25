@@ -755,6 +755,35 @@ impl LoginBrowser {
         host.map(|host| local_targets(machine, &host)).unwrap_or_default()
     }
 
+    /// Abre uma URL HTTP(S) já validada no navegador padrão do sistema (usado pelo handoff OAuth).
+    pub(crate) async fn open_default_url(&self, url: &str) -> Result<(), AccountError> {
+        let valid_http = !url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+            && reqwest::Url::parse(url).is_ok_and(|parsed| {
+                matches!(parsed.scheme(), "http" | "https") && parsed.has_host()
+            });
+        if !valid_http {
+            return Err(refused(422, "erro_integracao_oauth_invalido", "link de autorização recusado"));
+        }
+        let probe = self.probe.clone();
+        let host = tokio::task::spawn_blocking(move || probe()).await.map_err(|_| AccountError::io())?;
+        let target = Target {
+            machine: String::new(),
+            kind: TargetKind::DefaultBrowser,
+            profile: None,
+            label: String::new(),
+            email: None,
+        };
+        let command = browser_command(&host, &target, url)
+            .ok_or_else(|| refused(409, "erro_login_target_missing", "navegador padrão não está disponível nesta máquina"))?;
+        let launcher = self.launcher.clone();
+        let launched = tokio::task::spawn_blocking(move || launcher(command)).await;
+        if !matches!(launched, Ok(Ok(()))) {
+            tracing::warn!(code = "integrations_oauth_browser_launch_failed", detail = ?launched, "o navegador padrão não abriu para o OAuth da integração");
+            return Err(refused(502, "erro_login_browser_failed", "não consegui abrir o navegador"));
+        }
+        Ok(())
+    }
+
     pub async fn open(&self, request: OpenRequest) -> Result<(), AccountError> {
         let link = parse_authorize_url(&request.url)
             .ok_or_else(|| refused(422, "erro_login_link_refused", "link de autorização recusado"))?;

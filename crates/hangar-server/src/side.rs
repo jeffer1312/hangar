@@ -1150,7 +1150,7 @@ async fn run_side(hub: Arc<Hub>) {
 /// Quadro que só o dono recebe: aviso de mod (texto dele), pedido de navegador (url com o token) e
 /// pedido do cofre.
 pub(crate) fn owner_only(frame: &[u8]) -> bool {
-    state_frame(frame, &["plugin_toast", "nav", "vault"])
+    state_frame(frame, &["plugin_toast", "nav", "vault", "integrations_approvals"])
 }
 
 /// Quadro de um dos eventos do estado dados.

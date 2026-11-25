@@ -91,6 +91,9 @@ struct Published {
     /// `{state, requests}` do cofre desta máquina; só o dono recebe.
     vault: Option<Bytes>,
     vault_seq: u64,
+    /// Pedidos de aprovação das integrações MCP desta máquina; só o dono recebe.
+    integrations_approvals: Option<Bytes>,
+    integrations_approvals_seq: u64,
 }
 
 /// `clients`: listas do dono (o que o Python conta como app aberto); `guests`, as da 8766 e a
@@ -103,10 +106,19 @@ pub struct ListHub {
     refs: Mutex<Refs>,
     /// Pedidos do cofre (`vault::requests`); o padrão é um canal sem quem escreva.
     vault: watch::Receiver<Arc<crate::vault::requests::Feed>>,
+    /// Pedidos de aprovação das integrações MCP; o padrão é um canal sem quem escreva.
+    integrations_approvals: watch::Receiver<Arc<hangar_integrations::approvals::ApprovalFeed>>,
 }
 
 impl Default for ListHub {
-    fn default() -> Self { Self { tx: watch::channel(Arc::default()).0, refs: Mutex::default(), vault: watch::channel(Arc::default()).1 } }
+    fn default() -> Self {
+        Self {
+            tx: watch::channel(Arc::default()).0,
+            refs: Mutex::default(),
+            vault: watch::channel(Arc::default()).1,
+            integrations_approvals: watch::channel(Arc::default()).1,
+        }
+    }
 }
 
 /// Uma lista aberta; solta a contagem ao cair.
@@ -124,6 +136,13 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> { m.lock().unwrap_or_el
 
 impl ListHub {
     pub fn with_vault(vault: watch::Receiver<Arc<crate::vault::requests::Feed>>) -> Self { Self { vault, ..Self::default() } }
+
+    pub fn with_feeds(
+        vault: watch::Receiver<Arc<crate::vault::requests::Feed>>,
+        integrations_approvals: watch::Receiver<Arc<hangar_integrations::approvals::ApprovalFeed>>,
+    ) -> Self {
+        Self { vault, integrations_approvals, ..Self::default() }
+    }
 
     fn subscribe(self: &Arc<Self>, list: &Arc<ListBridge>, devices: &Arc<Registry>, diag: &DiagClient, owner: bool) -> Subscription {
         let mut r = lock(&self.refs);
@@ -159,6 +178,7 @@ impl InternalSubscription {
 struct Last { sig: Option<String>, nav: Vec<(String, crate::nav_requests::Marker)>, shortcuts: Option<String>,
     keyring: Option<crate::keyring::KeyringState>, tags: Option<Arc<str>>, tags_error: Option<&'static str>,
     devices: Option<Arc<str>>, vault: Option<Arc<crate::vault::requests::Feed>>,
+    integrations_approvals: Option<Arc<hangar_integrations::approvals::ApprovalFeed>>,
     notice_ignores: Option<Arc<str>>, notice_ignores_failed: bool, work_reviews: Option<Value>,
     /// Versão do motor e linhas da última leitura dos resumos: iguais, o corpo não mudou.
     work_reviews_read: Option<(u64, Arc<Vec<SessionRow>>, Arc<crate::list::facts::ListFacts>)> }
@@ -196,6 +216,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         }
     });
     let mut vault = hub.vault.clone();
+    let mut integrations_approvals = hub.integrations_approvals.clone();
     let review = list.work_review.get().cloned();
     loop {
         let clients = {
@@ -228,6 +249,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         publish_nav(&hub.tx, &mut last, list.nav.live(crate::nav_requests::now()));
         publish_keyring(&hub.tx, &mut last, *keyring.borrow_and_update());
         publish_vault(&hub.tx, &mut last, vault.borrow_and_update().clone());
+        publish_integrations_approvals(&hub.tx, &mut last, integrations_approvals.borrow_and_update().clone());
         // Só a lista do dono recebe: sem ela (convidado, assinatura interna) nada é lido.
         if clients > 0 {
             publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
@@ -252,6 +274,10 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
                 }
                 Ok(()) = vault.changed() => {
                     publish_vault(&hub.tx, &mut last, vault.borrow_and_update().clone());
+                    continue;
+                }
+                Ok(()) = integrations_approvals.changed() => {
+                    publish_integrations_approvals(&hub.tx, &mut last, integrations_approvals.borrow_and_update().clone());
                     continue;
                 }
                 () = list.tags.changed.notified(), if clients > 0 => {
@@ -541,6 +567,21 @@ fn publish_vault(tx: &watch::Sender<Arc<Published>>, last: &mut Last, feed: Arc<
     tx.send_replace(Arc::new(next));
 }
 
+/// Fora da rodada, como o cofre; sai só quando muda e chega só à lista do dono (`frames`).
+fn publish_integrations_approvals(
+    tx: &watch::Sender<Arc<Published>>,
+    last: &mut Last,
+    feed: Arc<hangar_integrations::approvals::ApprovalFeed>,
+) {
+    if last.integrations_approvals.as_deref() == Some(&*feed) { return; }
+    let Ok(json) = serde_json::to_string(&*feed) else { return };
+    let mut next = (**tx.borrow()).clone();
+    next.integrations_approvals = Some(sse_frame("integrations_approvals", &json, None));
+    next.integrations_approvals_seq += 1;
+    last.integrations_approvals = Some(feed);
+    tx.send_replace(Arc::new(next));
+}
+
 /// Fora da rodada; sai só quando o texto muda (mesmo `Arc` compara pelo ponteiro). Leitura com falha
 /// mantém o último publicado.
 fn publish_tags(tx: &watch::Sender<Arc<Published>>, last: &mut Last, read: Option<Result<Arc<str>, &'static str>>, diag: &DiagClient) {
@@ -644,7 +685,7 @@ fn nav_entries(nav: &[(String, crate::nav_requests::Marker)]) -> Vec<(String, f6
 
 /// O que uma conexão já entregou.
 #[derive(Default)]
-struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, tags: u64, notice_ignores: u64, work_reviews: u64, devices: u64, vault: u64, nav: HashMap<String, f64> }
+struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, tags: u64, notice_ignores: u64, work_reviews: u64, devices: u64, vault: u64, integrations_approvals: u64, nav: HashMap<String, f64> }
 
 /// Quadros que esta conexão ainda não mandou do que está publicado.
 fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
@@ -685,6 +726,10 @@ fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
     if let Some(v) = p.vault.as_ref().filter(|_| sent.vault != p.vault_seq) {
         sent.vault = p.vault_seq;
         out.push(v.clone());
+    }
+    if let Some(ia) = p.integrations_approvals.as_ref().filter(|_| sent.integrations_approvals != p.integrations_approvals_seq) {
+        sent.integrations_approvals = p.integrations_approvals_seq;
+        out.push(ia.clone());
     }
     for (name, ts, frame) in p.nav.iter() {
         if sent.nav.get(name) != Some(ts) {
@@ -1090,6 +1135,65 @@ mod tests {
         let is_vault = |f: &Bytes| f.starts_with(b"event: vault\r\n");
         assert!(drain(owner_rx).await.iter().any(is_vault));
         assert!(!drain(guest_rx).await.iter().any(is_vault));
+    }
+
+    #[test]
+    fn the_integrations_approvals_event_goes_out_only_on_change_and_again_to_a_new_list() {
+        let (tx, _rx) = watch::channel(Arc::new(Published::default()));
+        let mut last = Last::default();
+        let feed = Arc::new(hangar_integrations::approvals::ApprovalFeed { requests: vec![] });
+        publish_integrations_approvals(&tx, &mut last, feed.clone());
+        let seq = tx.borrow().integrations_approvals_seq;
+        publish_integrations_approvals(&tx, &mut last, Arc::new((*feed).clone()));
+        assert_eq!(tx.borrow().integrations_approvals_seq, seq, "igual não republica");
+        let p = tx.borrow().clone();
+        let f = frames(&p, &mut Sent::default());
+        assert!(
+            f.iter().any(|f| f.starts_with(b"event: integrations_approvals\r\n")),
+            "quem abre a lista recebe o último"
+        );
+        let mut sent = Sent::default();
+        frames(&p, &mut sent);
+        assert!(frames(&p, &mut sent).is_empty(), "uma vez por conexão");
+    }
+
+    #[tokio::test]
+    async fn the_integrations_approvals_event_reaches_the_owner_list_and_never_a_guest() {
+        assert!(
+            crate::side::owner_only(b"event: integrations_approvals\r\ndata: {}\r\n\r\n"),
+            "no chat também é só do dono"
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = crate::list::discover_other::Dirs {
+            home: tmp.path().into(),
+            claude: tmp.path().join(".claude"),
+            codex_home: tmp.path().join(".codex"),
+            pi_sessions: tmp.path().join("pi"),
+            omp_config: tmp.path().join("omp"),
+            omp_agent: tmp.path().join("omp/agent"),
+            kimi_home: tmp.path().join("kimi"),
+        };
+        let share = crate::share::from_env(Some(tmp.path().join("shares.json")), Some(&dirs), "missing-test-mux".into(), None).unwrap();
+        let approvals = hangar_integrations::ApprovalStore::new();
+        let hub = Arc::new(ListHub::with_feeds(watch::channel(Arc::default()).1, approvals.feed()));
+        let _waiter = approvals.open_request(hangar_integrations::OpenApprovalRequest {
+            origin: "pc::s1".into(),
+            session_key: "k1".into(),
+            integration_id: "github".into(),
+            integration_name: "GitHub".into(),
+            tool: "create_issue".into(),
+            arguments_preview: "{}".into(),
+            reason: "criar issue".into(),
+        }).unwrap();
+        publish_integrations_approvals(&hub.tx, &mut Last::default(), hub.integrations_approvals.clone().borrow_and_update().clone());
+        let (owner_tx, owner_rx) = mpsc::channel(16);
+        tokio::spawn(client_loop(Subscription { hub: hub.clone(), rx: hub.tx.subscribe(), owner: true }, owner_tx));
+        let (guest_tx, guest_rx) = mpsc::channel(16);
+        let rx = hub.tx.subscribe();
+        tokio::spawn(guest_loop(Subscription { hub, rx, owner: false }, share, "tok".into(), guest_tx));
+        let is_approvals = |f: &Bytes| f.starts_with(b"event: integrations_approvals\r\n");
+        assert!(drain(owner_rx).await.iter().any(is_approvals));
+        assert!(!drain(guest_rx).await.iter().any(is_approvals));
     }
 }
 

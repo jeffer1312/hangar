@@ -470,3 +470,5 @@ mod jev_page;
 mod cliproxy_keys;
 
 mod shortcut_transfer_gaps;
+
+mod integrations;

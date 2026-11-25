@@ -1943,6 +1943,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-integrations"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "form_urlencoded",
+ "futures-util",
+ "hangar-core",
+ "http",
+ "percent-encoding",
+ "reqwest",
+ "ring",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "hangar-local-server"
 version = "0.1.0"
 dependencies = [
@@ -2243,6 +2265,7 @@ dependencies = [
  "hangar-guest-accounts",
  "hangar-http-file",
  "hangar-install-setup",
+ "hangar-integrations",
  "hangar-local-server",
  "hangar-mcp-stdio",
  "hangar-mission",
@@ -4490,6 +4513,7 @@ dependencies = [
  "pastey",
  "pin-project-lite",
  "rand 0.10.3",
+ "reqwest",
  "schemars",
  "serde",
  "serde_json",
