@@ -950,6 +950,20 @@ mod tests {
         assert_eq!(titled[0],json!({"nome":"Pesquisando","input":{}}));
     }
 
+    /// Turno real com subagente e tarefa de fundo: cada medição de contexto do ACP chega ao estado, com a janela.
+    #[test]
+    fn the_acp_context_usage_reaches_the_view_as_it_arrives() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"oi"})).unwrap();
+        written(&mut engine,"in1");
+        let mut changed = 0;
+        for line in fixture("acp-subagent.jsonl").into_iter().filter(|l|l["params"]["update"]["sessionUpdate"] == "usage_update") {
+            changed += feed(&mut engine,line,2.0).iter().filter(|e|matches!(e,Effect::StateChanged)).count();
+        }
+        assert!(changed > 0, "a medição avisa o ator");
+        assert_eq!((engine.control_view()["token_usage"]["used"].as_u64(),engine.control_view()["token_usage"]["size"].as_u64()),(Some(36232),Some(1048576)));
+    }
+
     #[test]
     fn a_text_turn_streams_the_preview_and_clears_it_at_the_end() {
         let mut engine = opened(json!({}));

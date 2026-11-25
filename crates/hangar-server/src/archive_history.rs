@@ -220,7 +220,7 @@ pub(crate) fn read_history(st: &AppState, path: &Path, provider: AgentProvider, 
     match tail {
         None => {
             let raw = std::fs::read(path)?;
-            Ok(agent_lines(provider, raw.split(|b| *b == b'\n')))
+            Ok(agent_lines(provider, Some(path), raw.split(|b| *b == b'\n')))
         }
         Some(n) => agent_tail(path, provider, n),
     }
@@ -242,7 +242,7 @@ fn agent_tail(path: &Path, provider: AgentProvider, n: usize) -> io::Result<Vec<
         file.read_to_end(&mut raw)?;
         // O começo da janela pode cair no meio de uma linha.
         let lines = raw.split(|b| *b == b'\n').skip(usize::from(start > 0));
-        let mut msgs: Vec<ChatEvent> = agent_lines(provider, lines).into_iter().filter(is_message).collect();
+        let mut msgs: Vec<ChatEvent> = agent_lines(provider, Some(path), lines).into_iter().filter(is_message).collect();
         if start == 0 || msgs.len() >= n {
             msgs.drain(..msgs.len().saturating_sub(n));
             return Ok(msgs);
@@ -262,8 +262,14 @@ fn transcript_provider(provider: AgentProvider) -> Provider {
     }
 }
 
-fn agent_lines<'a>(provider: AgentProvider, lines: impl Iterator<Item = &'a [u8]>) -> Vec<ChatEvent> {
-    let mut parser = crate::transcript::LineParser::new(transcript_provider(provider));
+/// O leitor do Antigravity precisa do caminho para saber quem manda cada recado (subagente ou principal).
+fn parser_at(provider: AgentProvider, path: Option<&Path>) -> crate::transcript::LineParser {
+    let parser = crate::transcript::LineParser::new(transcript_provider(provider));
+    match path.filter(|_| provider == AgentProvider::Antigravity) { Some(path) => parser.with_path(path), None => parser }
+}
+
+fn agent_lines<'a>(provider: AgentProvider, path: Option<&Path>, lines: impl Iterator<Item = &'a [u8]>) -> Vec<ChatEvent> {
+    let mut parser = parser_at(provider, path);
     let mut events = Vec::new();
     let mut offset = 0;
     for line in lines {
@@ -275,12 +281,12 @@ fn agent_lines<'a>(provider: AgentProvider, lines: impl Iterator<Item = &'a [u8]
 }
 
 /// Leitura isolada para consumidores que não atravessam fronteiras de linha.
-pub(crate) fn agent_line(provider: AgentProvider, raw: &[u8]) -> Vec<ChatEvent> {
+pub(crate) fn agent_line(provider: AgentProvider, path: Option<&Path>, raw: &[u8]) -> Vec<ChatEvent> {
     let Some(value) = crate::transcript::decode_line(raw) else { return Vec::new() };
     match provider {
         AgentProvider::Kimi => hangar_transcript::parse_kimi_object(&value),
         AgentProvider::Pi | AgentProvider::Omp => hangar_transcript::parse_pi_object(&value),
-        _ => crate::transcript::LineParser::new(transcript_provider(provider)).feed(raw, 0),
+        _ => parser_at(provider, path).feed(raw, 0),
     }
 }
 

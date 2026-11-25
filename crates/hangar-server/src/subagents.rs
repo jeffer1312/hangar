@@ -729,7 +729,6 @@ fn parse_agent_claude(f: &Path, tail: usize) -> Option<Map<String, Value>> {
 
 // ── Kimi ──────────────────────────────────────────────────────────────────────
 
-/// A pasta `agents/` quando o transcript é o `agents/main/wire.jsonl` do Kimi.
 /// A pasta `brain` e a conversa de uma sessão Antigravity: os subagentes moram em
 /// `brain/<conversa>/.system_generated/subagents/<id>.json`, cada um com conversa própria em `brain/<id>`.
 fn agy_place(provider: &str, jsonl: &Path) -> Option<(PathBuf, String)> {
@@ -767,6 +766,7 @@ fn read_agent_agy(brain: &Path, descriptor: &Value, id: &str, tail: usize) -> Op
     Some((m, f))
 }
 
+/// A pasta `agents/` quando o transcript é o `agents/main/wire.jsonl` do Kimi.
 fn kimi_agents_dir(jsonl: &Path) -> Option<PathBuf> {
     let main = jsonl.parent()?;
     let agents = main.parent()?;

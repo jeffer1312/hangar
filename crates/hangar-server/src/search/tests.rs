@@ -1109,7 +1109,7 @@ impl Env {
     /// Os ids que o histórico do Arquivo devolve para o arquivo (mensagens com texto, em ordem).
     fn history_ids(&self, rel: &str, provider: crate::session_open::AgentProvider) -> Vec<String> {
         fs::read(self.home().join(rel)).unwrap().split(|b| *b == b'\n')
-            .flat_map(|line| crate::archive_history::agent_line(provider, line))
+            .flat_map(|line| crate::archive_history::agent_line(provider, None, line))
             .filter(crate::archive_history::is_message).map(|e| e.id).collect()
     }
 

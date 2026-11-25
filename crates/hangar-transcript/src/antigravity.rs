@@ -124,7 +124,7 @@ impl AgyStream {
         if let Some((_, task)) = sender.rsplit_once('/') {
             // O fim traz o código de saída do comando: diferente de zero é falha, sem código fica como antes.
             let code = EXIT_CODE.captures(&text).and_then(|found| found[1].parse::<i64>().ok());
-            if code.is_none() && !EXIT_UNREAD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            if code.is_none() && task.starts_with("task-") && !EXIT_UNREAD.swap(true, std::sync::atomic::Ordering::Relaxed) {
                 tracing::warn!(code = "agy_task_exit_unread", "fim de tarefa de fundo sem o código de saída");
             }
             if task.starts_with("task-") { events.push(ChatEvent { is_error: code.map(|code| code != 0), ..finish(task) }); }

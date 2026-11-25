@@ -245,6 +245,8 @@ fn composer_for(provider: hangar_transcript::Provider, frame: &OtherFrame) -> Op
             .windows(2)
             .rev()
             .map(|pair| (pair[0], pair[1]))
+            // A caixa é o último par ou o de cima do painel de tarefas: um pedido antigo repetido mais acima não conta.
+            .take(2)
             .take_while(|(_, bottom)| lines.len() - bottom <= AGY_BOX_FROM_END)
             .find(|(top, bottom)| *bottom > top + 1
                 && lines[top + 1].trim().trim_start_matches(['│', '┃', '║']).trim_start().starts_with(['>', '❯']))?

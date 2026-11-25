@@ -164,6 +164,7 @@ fn subagents(args: &Args) -> Option<(&'static str, Args)> {
             if let Some(role) = label(entry) { input.insert("description".into(), role.into()); }
             if let Some(kind) = text(entry, "TypeName") { input.insert("subagent_type".into(), kind.into()); }
             if let Some(prompt) = text(entry, "Prompt") { input.insert("prompt".into(), prompt.into()); }
+            input.insert("run_in_background".into(), true.into());
             Some(("Agent", input))
         }
         many => {
@@ -285,7 +286,7 @@ mod tests {
     fn one_subagent_is_an_agent_and_several_are_a_swarm() {
         let (name, input) = call("invoke_subagent", json!({"Subagents":[{"TypeName":"research","Role":"Pesquisador","Prompt":"Ache X"}]}));
         assert_eq!(name, "Agent");
-        assert_eq!(input, json!({"description":"Pesquisador","subagent_type":"research","prompt":"Ache X"}));
+        assert_eq!(input, json!({"description":"Pesquisador","subagent_type":"research","prompt":"Ache X","run_in_background":true}));
         let (name, input) = call("invoke_subagent", json!({"Subagents":[{"TypeName":"a","Prompt":"1"},{"TypeName":"b","Role":"Revisor","Prompt":"2"}]}));
         assert_eq!(name, "AgentSwarm");
         assert_eq!(input["description"], "a, Revisor");
