@@ -64,6 +64,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   usuário se grava como `REG_EXPAND_SZ` (`Set-ItemProperty -Type ExpandString` + `WM_SETTINGCHANGE`),
   nunca por `[Environment]::SetEnvironmentVariable`. O `powershell.exe` filho vem de `$PSHOME`, não
   do PATH.
+- **Programa que não está no PATH capturado na subida é procurado também no PATH atual do
+  registro** (máquina + usuário, expandido), em `hangar_core::process::resolve_program`, por onde
+  passam a sonda, a conferência da instalação e a abertura de sessão. O instalador de um CLI (o
+  `agy`, por exemplo) grava a pasta dele no PATH do usuário, e o servidor, que copiou o ambiente ao
+  subir, dizia "não instalado" até reiniciar. PATH vazio continua sendo "nenhum programa".
 - **O instalador não instala nem procura Python.** Nenhum lançador passa por Python: `hangar-send`,
   `hangar-conta` e o `hangar-codex-tui` chamam o `hangar-server.exe`; o passo
   `2026-11-17-atalhos-windows-sem-python` regrava os que a versão antiga gravou pelo Python. Os
