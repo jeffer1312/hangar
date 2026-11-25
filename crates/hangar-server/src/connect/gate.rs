@@ -141,6 +141,9 @@ fn is_public(method: &Method, path: &str, query: Option<&str>) -> bool {
         // Sem `device` a prova é assinada com a senha do dono: quem pedisse poderia testá-la fora daqui.
         "/api/peers/prova" => method == Method::GET
             && form_urlencoded::parse(query.unwrap_or_default().as_bytes()).any(|(key, value)| key == "device" && !value.is_empty()),
+        // O callback OAuth do celular entra sem credencial; exige `state` não vazio e descarta credenciais no gate.
+        "/api/integrations/oauth/callback" => method == Method::GET
+            && form_urlencoded::parse(query.unwrap_or_default().as_bytes()).any(|(key, value)| key == "state" && !value.is_empty()),
         "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/sync/login" => method == Method::POST,
         _ => false,
     }
@@ -225,4 +228,48 @@ fn rewrite_query(req: &mut Request, swap: &impl Fn(&[u8]) -> Option<Vec<u8>>) {
     parts.path_and_query = target.parse().ok();
     // Partes vindas de um `Uri` válido e valor codificado: não há como falhar de verdade.
     *req.uri_mut() = Uri::from_parts(parts).expect("caminho reescrito");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_callback_is_public_only_on_get_with_nonempty_state() {
+        assert!(is_public(
+            &Method::GET,
+            "/api/integrations/oauth/callback",
+            Some("state=abc&code=xyz"),
+        ));
+        assert!(is_public(
+            &Method::GET,
+            "/api/integrations/oauth/callback",
+            Some("code=xyz&state=abc"),
+        ));
+        assert!(!is_public(
+            &Method::GET,
+            "/api/integrations/oauth/callback",
+            None,
+        ));
+        assert!(!is_public(
+            &Method::GET,
+            "/api/integrations/oauth/callback",
+            Some("code=xyz"),
+        ));
+        assert!(!is_public(
+            &Method::GET,
+            "/api/integrations/oauth/callback",
+            Some("state=&code=xyz"),
+        ));
+        assert!(!is_public(
+            &Method::POST,
+            "/api/integrations/oauth/callback",
+            Some("state=abc"),
+        ));
+        assert!(!is_public(
+            &Method::GET,
+            "/api/integrations/oauth/%63allback",
+            Some("state=abc"),
+        ));
+    }
 }

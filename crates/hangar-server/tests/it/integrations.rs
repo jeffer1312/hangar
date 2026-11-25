@@ -177,8 +177,10 @@ fn build_isolated_state(
     (state, launched_urls)
 }
 
-async fn spawn_test_server(secret_keys: Arc<dyn SecretKeyStore>) -> TestServer {
-    let dir = tempfile::tempdir().unwrap();
+async fn spawn_test_server_in_dir(
+    dir: TempDir,
+    secret_keys: Arc<dyn SecretKeyStore>,
+) -> TestServer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let cfg = config("127.0.0.1");
@@ -195,6 +197,10 @@ async fn spawn_test_server(secret_keys: Arc<dyn SecretKeyStore>) -> TestServer {
         state,
         task,
     }
+}
+
+async fn spawn_test_server(secret_keys: Arc<dyn SecretKeyStore>) -> TestServer {
+    spawn_test_server_in_dir(tempfile::tempdir().unwrap(), secret_keys).await
 }
 
 async fn call_raw(
@@ -952,12 +958,10 @@ async fn secrets_store_errors_are_surfaced_without_masking() {
     assert!(matches!(st_err, 500 | 503), "erro em secrets.bin deve aparecer como 500/503, veio {st_err}: {raw_err}");
     assert!(err_body["detail"]["code"].as_str().is_some(), "{raw_err}");
 
-    // Chaveiro indisponível (Bus) também retorna 503 sem mascarar.
-    let srv_bus = spawn_test_server(FailingSecretKeys::failing_read(SecretKeyError::Bus)).await;
-    srv_bus
-        .state
-        .integrations
-        .registry
+    // Chaveiro indisponível (Bus) com `secrets.bin` já existente também retorna 503 sem mascarar.
+    let bus_dir = tempfile::tempdir().unwrap();
+    let seed_registry = hangar_integrations::IntegrationRegistry::new(bus_dir.path());
+    seed_registry
         .create(hangar_integrations::IntegrationConfig {
             id: "integ-bus".into(),
             name: "Bus".into(),
@@ -976,8 +980,30 @@ async fn secrets_store_errors_are_surfaced_without_masking() {
             updated_at: 1.0,
         })
         .unwrap();
-    let (st_bus, _, raw_bus) = call_owner(srv_bus.addr, Method::GET, "/api/integrations", None).await;
+    let seed_secrets =
+        hangar_integrations::SecretStore::new(bus_dir.path(), Arc::new(MemoryKeyStore::new()));
+    seed_secrets
+        .set(
+            "integ-bus",
+            hangar_integrations::IntegrationSecrets {
+                bearer_token: Some(Zeroizing::new("tok-bus".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let srv_bus =
+        spawn_test_server_in_dir(bus_dir, FailingSecretKeys::failing_read(SecretKeyError::Bus))
+            .await;
+    let (st_bus, bus_body, raw_bus) =
+        call_owner(srv_bus.addr, Method::GET, "/api/integrations", None).await;
     assert_eq!(st_bus, 503, "{raw_bus}");
+    assert_eq!(
+        bus_body["detail"]["code"],
+        "integration_secrets_unavailable",
+        "{raw_bus}"
+    );
 }
 
 #[tokio::test]
@@ -989,9 +1015,7 @@ async fn oauth_flow_uses_bound_local_port_handoff_browser_callback_test_and_expi
     let dir = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let owner_addr = listener.local_addr().unwrap();
-    let probe_guest = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let guest_addr = probe_guest.local_addr().unwrap();
-    drop(probe_guest);
+    let guest_addr = crate::connect_port::free_port();
 
     let mut cfg = config("127.0.0.1");
     cfg.listen = "127.0.0.1:0".parse().unwrap();
@@ -1232,12 +1256,12 @@ async fn stdio_fixture_mcp_test_tools_patch_invalidation_and_delete_cleanup() {
             "transport": {
                 "kind": "local_stdio",
                 "command": [bin.to_string_lossy()],
-                "env_keys": ["FIXTURE_SECRET"]
+                "env_keys": ["FIXTURE_SECRET_VAR"]
             },
             "auth": { "kind": "none" },
             "policy": "read_free_ask_write",
             "secrets": {
-                "env": { "FIXTURE_SECRET": "segredo-stdio-v1" }
+                "env": { "FIXTURE_SECRET_VAR": "segredo-stdio-v1" }
             }
         })),
     )
@@ -1257,7 +1281,7 @@ async fn stdio_fixture_mcp_test_tools_patch_invalidation_and_delete_cleanup() {
         .state
         .integrations
         .clients
-        .call_tool("fixture-stdio", "dump_env", json!({"keys": ["FIXTURE_SECRET"]}))
+        .call_tool("fixture-stdio", "dump_env", json!({"keys": ["FIXTURE_SECRET_VAR"]}))
         .await
         .unwrap();
     assert!(env_v1.text.contains("segredo-stdio-v1"), "{}", env_v1.text);
@@ -1266,21 +1290,25 @@ async fn stdio_fixture_mcp_test_tools_patch_invalidation_and_delete_cleanup() {
         srv.addr,
         Method::PATCH,
         "/api/integrations/fixture-stdio",
-        Some(json!({ "secrets": { "env": { "FIXTURE_SECRET": "segredo-stdio-v2" } } })),
+        Some(json!({ "secrets": { "env": { "FIXTURE_SECRET_VAR": "segredo-stdio-v2" } } })),
     )
     .await;
     assert_eq!(st_patch, 200);
+    assert!(
+        srv.state.integrations.tools_cache.get("fixture-stdio").is_none(),
+        "PATCH com invalidação deve limpar o tools_cache"
+    );
 
     let env_v2 = srv
         .state
         .integrations
         .clients
-        .call_tool("fixture-stdio", "dump_env", json!({"keys": ["FIXTURE_SECRET"]}))
+        .call_tool("fixture-stdio", "dump_env", json!({"keys": ["FIXTURE_SECRET_VAR"]}))
         .await
         .unwrap();
     assert!(env_v2.text.contains("segredo-stdio-v2"), "cliente deve ter sido invalidado após PATCH: {}", env_v2.text);
 
-    // Desabilitada retorna 409 integration_disabled no /test.
+    // Desabilitada retorna 409 integration_disabled no /test e limpa o cache de ferramentas.
     let (st_dis, _, _) = call_owner(
         srv.addr,
         Method::PATCH,
@@ -1289,12 +1317,17 @@ async fn stdio_fixture_mcp_test_tools_patch_invalidation_and_delete_cleanup() {
     )
     .await;
     assert_eq!(st_dis, 200);
+    let (st_tools_dis, tools_dis_body, _) =
+        call_owner(srv.addr, Method::GET, "/api/integrations/fixture-stdio/tools", None).await;
+    assert_eq!(st_tools_dis, 200);
+    assert_eq!(tools_dis_body["tools"], json!([]));
     let (st_dis_test, dis_body, _) = call_owner(srv.addr, Method::POST, "/api/integrations/fixture-stdio/test", None).await;
     assert_eq!(st_dis_test, 409);
     assert_eq!(dis_body["detail"]["code"], "integration_disabled");
 
     let (st_del, _, _) = call_owner(srv.addr, Method::DELETE, "/api/integrations/fixture-stdio", None).await;
     assert_eq!(st_del, 200);
+    assert!(srv.state.integrations.tools_cache.get("fixture-stdio").is_none());
     srv.state.integrations.shutdown().await;
 }
 
@@ -1524,9 +1557,7 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
 
     let owner_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let owner_addr = owner_listener.local_addr().unwrap();
-    let probe_guest = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let guest_addr = probe_guest.local_addr().unwrap();
-    drop(probe_guest);
+    let guest_addr = crate::connect_port::free_port();
 
     let mut cfg = config("127.0.0.1");
     cfg.listen = owner_addr;
@@ -1604,10 +1635,24 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
         .unwrap();
     let req_id = waiter.card().id.clone();
 
-    let ev = crate::fake::next_named(&mut owner_sse, "integrations_approvals").await;
-    let payload: Value = serde_json::from_str(&ev.data).unwrap();
-    assert_eq!(payload["requests"][0]["id"], req_id);
-    assert_eq!(payload["requests"][0]["tool"], "create_issue");
+    // Descarta o snapshot vazio inicial que o `ListHub` pode emitir antes do `open_request`.
+    let payload = loop {
+        let ev = crate::fake::next_named(&mut owner_sse, "integrations_approvals").await;
+        let payload: Value = serde_json::from_str(&ev.data).unwrap();
+        if payload["requests"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["id"] == req_id))
+        {
+            break payload;
+        }
+    };
+    let card = payload["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == req_id)
+        .unwrap();
+    assert_eq!(card["tool"], "create_issue");
 
     // Convidado recebe `sessions`, mas nunca `integrations_approvals`.
     let _ = crate::fake::next_named(&mut guest_sse, "sessions").await;
@@ -1632,4 +1677,412 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
     })
     .await
     .expect("prazo do SSE excedido");
+}
+
+#[tokio::test]
+async fn allow_always_persistence_failure_rolls_back_claim_without_waking_waiter() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let srv = spawn_test_server(Arc::new(MemoryKeyStore::new())).await;
+        let bin = fixture_mcp_bin();
+        let (st_c, _, raw_c) = call_owner(
+            srv.addr,
+            Method::POST,
+            "/api/integrations",
+            Some(json!({
+                "id": "fixture-rollback",
+                "name": "Fixture Rollback",
+                "transport": { "kind": "local_stdio", "command": [bin.to_string_lossy()], "env_keys": [] },
+                "auth": { "kind": "none" },
+                "policy": "read_free_ask_write"
+            })),
+        )
+        .await;
+        assert_eq!(st_c, 201, "{raw_c}");
+
+        let config_path = srv._dir.path().join("integrations/config.json");
+        let valid_config = std::fs::read(&config_path).unwrap();
+
+        let waiter = srv
+            .state
+            .integrations
+            .approvals
+            .open_request(OpenApprovalRequest {
+                origin: "sessao-rb".into(),
+                session_key: "sk-rb".into(),
+                integration_id: "fixture-rollback".into(),
+                integration_name: "Fixture Rollback".into(),
+                tool: "write_action".into(),
+                arguments_preview: r#"{"payload":"rb"}"#.into(),
+                reason: "Testar rollback de AllowAlways".into(),
+            })
+            .unwrap();
+        let card = waiter.card().clone();
+        let wait_handle = tokio::spawn(async move { waiter.wait().await });
+        tokio::task::yield_now().await;
+
+        // Corrompe `config.json` para forçar erro real em `add_allowed_tool`.
+        std::fs::write(&config_path, b"{corrompido").unwrap();
+
+        let (st_fail, fail_body, raw_fail) = call_owner(
+            srv.addr,
+            Method::POST,
+            &format!("/api/integrations/approvals/{}", card.id),
+            Some(json!({
+                "interaction_id": card.interaction_id,
+                "decision": "allow_always"
+            })),
+        )
+        .await;
+        assert_eq!(st_fail, 500, "{raw_fail}");
+        assert_eq!(
+            fail_body["detail"]["code"],
+            "integration_registry_corrupted",
+            "{raw_fail}"
+        );
+
+        // Falha de persistência libera a reserva sem acordar o waiter nem remover do SSE.
+        tokio::task::yield_now().await;
+        assert!(
+            !wait_handle.is_finished(),
+            "waiter não pode acordar quando add_allowed_tool falha"
+        );
+        assert!(
+            srv.state
+                .integrations
+                .approvals
+                .feed()
+                .borrow()
+                .requests
+                .iter()
+                .any(|item| item.id == card.id),
+            "cartão deve permanecer no feed SSE após rollback"
+        );
+
+        // Restaura `config.json` e reenvia com o mesmo `interaction_id`.
+        std::fs::write(&config_path, valid_config).unwrap();
+        let (st_ok, ok_body, raw_ok) = call_owner(
+            srv.addr,
+            Method::POST,
+            &format!("/api/integrations/approvals/{}", card.id),
+            Some(json!({
+                "interaction_id": card.interaction_id,
+                "decision": "allow_always"
+            })),
+        )
+        .await;
+        assert_eq!(st_ok, 200, "{raw_ok}");
+        assert_eq!(ok_body["decision"], "allow_always");
+        assert_eq!(wait_handle.await.unwrap(), ApprovalResolution::AllowAlways);
+        assert!(srv.state.integrations.approvals.feed().borrow().requests.is_empty());
+
+        let (st_list, list_body, _) = call_owner(srv.addr, Method::GET, "/api/integrations", None).await;
+        assert_eq!(st_list, 200);
+        assert_eq!(list_body["integrations"][0]["allowed_tools"], json!(["write_action"]));
+        srv.state.integrations.shutdown().await;
+    })
+    .await
+    .expect("prazo de allow_always_persistence_failure excedido");
+}
+
+#[tokio::test]
+async fn connect_port_allows_oauth_callback_with_state_and_rejects_without_state() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let (mock_addr, _mock_state, mock_task) = spawn_mock_oauth_mcp().await;
+        let dir = tempfile::tempdir().unwrap();
+        let connect_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let connect_addr = connect_listener.local_addr().unwrap();
+
+        let mut cfg = config("127.0.0.1");
+        cfg.listen = connect_addr;
+        let (mut state, _) = build_isolated_state(&dir, cfg, Arc::new(MemoryKeyStore::new()));
+        let login_guests = LoginGuestService::new(LoginGuestSettings {
+            guests: dir.path().join("guests.json"),
+            vault: dir.path().join("login-vault.json"),
+            runtime_config: dir.path().join("runtime-config.json"),
+            sync_enabled: false,
+            bootstrap: String::new(),
+            secret: b"fixture".to_vec(),
+            secure: false,
+            rate_max: 10.into(),
+            rate_window: 300.into(),
+        });
+        login_guests
+            .store
+            .create("Ana", dir.path().to_str().unwrap(), false, true, "ana".into(), "login-guest-tok".into())
+            .unwrap();
+        state.login_guests = Arc::new(login_guests);
+        state.integrations.set_local_port(connect_addr.port());
+        let state = Arc::new(state);
+
+        let connect_app = hangar_server::routes::router(state.clone())
+            .layer(axum::middleware::map_request(hangar_server::connect::gate::rewrite_peer))
+            .into_make_service_with_connect_info::<hangar_server::connect::gate::ConnectConn>();
+        let connect_task = tokio::spawn(async move {
+            axum::serve(connect_listener, connect_app).await.unwrap();
+        });
+
+        state
+            .integrations
+            .registry
+            .create(hangar_integrations::IntegrationConfig {
+                id: "connect-oauth".into(),
+                name: "Connect OAuth".into(),
+                preset: None,
+                enabled: true,
+                transport: hangar_integrations::Transport::RemoteHttp {
+                    url: format!("http://{mock_addr}/mcp"),
+                    header_names: vec![],
+                },
+                auth: hangar_integrations::AuthConfig::OAuthDcr,
+                policy: Default::default(),
+                pinned: false,
+                projects: vec![],
+                allowed_tools: BTreeSet::new(),
+                created_at: 1.0,
+                updated_at: 1.0,
+            })
+            .unwrap();
+
+        let outcome = state
+            .integrations
+            .oauth
+            .start(
+                "connect-oauth",
+                hangar_integrations::OAuthStartInput {
+                    origin_client: hangar_integrations::OAuthOrigin::Desktop,
+                    local_port: connect_addr.port(),
+                    public_base_url: None,
+                    cimd_client_id_url: None,
+                },
+            )
+            .await
+            .unwrap();
+        let authorize_url = match outcome {
+            hangar_integrations::OAuthStartOutcome::OpenUrl { authorize_url, .. } => authorize_url,
+            other => panic!("esperava OpenUrl: {other:?}"),
+        };
+        let (code, real_state) = simulate_oauth_authorize(&authorize_url).await;
+
+        // Sem `state` ou com `state=` vazio o gate do Connect recusa com 401.
+        let (st_no_state, _, raw_no_state) = call_raw(
+            connect_addr,
+            Method::GET,
+            "/api/integrations/oauth/callback",
+            None,
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(st_no_state, 401, "{raw_no_state}");
+
+        let (st_empty_state, _, raw_empty_state) = call_raw(
+            connect_addr,
+            Method::GET,
+            "/api/integrations/oauth/callback?state=",
+            None,
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(st_empty_state, 401, "{raw_empty_state}");
+
+        // Convidado de login continua bloqueado em 403 e não consome o `state`.
+        let (st_guest, _, raw_guest) = call_raw(
+            connect_addr,
+            Method::GET,
+            &format!("/api/integrations/oauth/callback?state={real_state}&code={code}"),
+            Some("login-guest-tok"),
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(st_guest, 403, "{raw_guest}");
+
+        // Callback legítimo com `state` passa no Connect (limpando eventual `?token=`) e conclui OAuth.
+        let (st_ok, raw_ok, _) = call_raw(
+            connect_addr,
+            Method::GET,
+            &format!("/api/integrations/oauth/callback?state={real_state}&code={code}&token={OWNER}"),
+            None,
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(st_ok, 200, "{raw_ok}");
+        assert!(
+            state
+                .integrations
+                .secrets
+                .get("connect-oauth")
+                .await
+                .unwrap()
+                .and_then(|s| s.oauth)
+                .is_some(),
+            "callback pelo Connect deve concluir OAuth e salvar tokens"
+        );
+
+        // Rota administrativa continua negando na porta do Connect mesmo com `?token={OWNER}`.
+        let (st_admin, _, _) = call_raw(
+            connect_addr,
+            Method::GET,
+            &format!("/api/integrations?token={OWNER}"),
+            None,
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(st_admin, 401);
+
+        connect_task.abort();
+        mock_task.abort();
+    })
+    .await
+    .expect("prazo do callback no Connect excedido");
+}
+
+#[tokio::test]
+async fn patch_and_delete_clear_tools_cache_and_cancel_pending_oauth() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let srv = spawn_test_server(Arc::new(MemoryKeyStore::new())).await;
+        let (mock_addr, _mock_state, mock_task) = spawn_mock_oauth_mcp().await;
+
+        let (st_c1, _, raw_c1) = call_owner(
+            srv.addr,
+            Method::POST,
+            "/api/integrations",
+            Some(json!({
+                "id": "oauth-patch",
+                "name": "OAuth Patch",
+                "transport": { "kind": "remote_http", "url": format!("http://{mock_addr}/mcp"), "header_names": [] },
+                "auth": { "kind": "oauth_dcr" },
+                "policy": "read_free_ask_write"
+            })),
+        )
+        .await;
+        assert_eq!(st_c1, 201, "{raw_c1}");
+
+        // Conclui um login OAuth inicial e popula `tools_cache` com `/test`.
+        let (st_s1, s1_body, _) = call_owner(
+            srv.addr,
+            Method::POST,
+            "/api/integrations/oauth-patch/oauth/start",
+            Some(json!({ "origin_client": "desktop" })),
+        )
+        .await;
+        assert_eq!(st_s1, 200);
+        let (code1, state1) = simulate_oauth_authorize(s1_body["authorize_url"].as_str().unwrap()).await;
+        let (st_cb1, _, _) = call_raw(
+            srv.addr,
+            Method::GET,
+            &format!("/api/integrations/oauth/callback?code={code1}&state={state1}"),
+            None,
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(st_cb1, 200);
+
+        let (st_t1, _, _) = call_owner(srv.addr, Method::POST, "/api/integrations/oauth-patch/test", None).await;
+        assert_eq!(st_t1, 200);
+        assert!(srv.state.integrations.tools_cache.get("oauth-patch").is_some());
+
+        // Inicia novo fluxo OAuth pendente e troca `auth` via PATCH -> limpa cache e cancela pendente.
+        let (st_s2, s2_body, _) = call_owner(
+            srv.addr,
+            Method::POST,
+            "/api/integrations/oauth-patch/oauth/start",
+            Some(json!({ "origin_client": "desktop" })),
+        )
+        .await;
+        assert_eq!(st_s2, 200);
+        assert!(srv.state.integrations.oauth.latest_pending_authorize_url("oauth-patch").is_some());
+        let (code_pending, state_pending) =
+            simulate_oauth_authorize(s2_body["authorize_url"].as_str().unwrap()).await;
+
+        let (st_patch, _, raw_patch) = call_owner(
+            srv.addr,
+            Method::PATCH,
+            "/api/integrations/oauth-patch",
+            Some(json!({ "auth": { "kind": "bearer" } })),
+        )
+        .await;
+        assert_eq!(st_patch, 200, "{raw_patch}");
+        assert!(srv.state.integrations.tools_cache.get("oauth-patch").is_none());
+        assert!(srv.state.integrations.oauth.latest_pending_authorize_url("oauth-patch").is_none());
+
+        let (st_tools, tools_body, _) =
+            call_owner(srv.addr, Method::GET, "/api/integrations/oauth-patch/tools", None).await;
+        assert_eq!(st_tools, 200);
+        assert_eq!(tools_body["tools"], json!([]));
+
+        let (st_cb_old, _, _) = call_raw(
+            srv.addr,
+            Method::GET,
+            &format!("/api/integrations/oauth/callback?state={state_pending}&code={code_pending}"),
+            None,
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(st_cb_old, 400);
+        let stored_after_patch = srv.state.integrations.secrets.get("oauth-patch").await.unwrap().unwrap();
+        assert_eq!(
+            stored_after_patch.oauth.as_ref().unwrap().access_token.as_str(),
+            "oauth-access-secret-1",
+            "callback cancelado pelo PATCH não pode sobrescrever o token"
+        );
+
+        // DELETE também cancela OAuth pendente e impede callback órfão.
+        let (st_c2, _, raw_c2) = call_owner(
+            srv.addr,
+            Method::POST,
+            "/api/integrations",
+            Some(json!({
+                "id": "oauth-del",
+                "name": "OAuth Delete",
+                "transport": { "kind": "remote_http", "url": format!("http://{mock_addr}/mcp"), "header_names": [] },
+                "auth": { "kind": "oauth_dcr" },
+                "policy": "read_free_ask_write"
+            })),
+        )
+        .await;
+        assert_eq!(st_c2, 201, "{raw_c2}");
+
+        let (st_sd, sd_body, _) = call_owner(
+            srv.addr,
+            Method::POST,
+            "/api/integrations/oauth-del/oauth/start",
+            Some(json!({ "origin_client": "desktop" })),
+        )
+        .await;
+        assert_eq!(st_sd, 200);
+        let (code_del, state_del) =
+            simulate_oauth_authorize(sd_body["authorize_url"].as_str().unwrap()).await;
+        assert!(srv.state.integrations.oauth.latest_pending_authorize_url("oauth-del").is_some());
+
+        let (st_del, _, _) = call_owner(srv.addr, Method::DELETE, "/api/integrations/oauth-del", None).await;
+        assert_eq!(st_del, 200);
+        assert!(srv.state.integrations.oauth.latest_pending_authorize_url("oauth-del").is_none());
+        assert!(srv.state.integrations.tools_cache.get("oauth-del").is_none());
+
+        let (st_cb_del, _, _) = call_raw(
+            srv.addr,
+            Method::GET,
+            &format!("/api/integrations/oauth/callback?state={state_del}&code={code_del}"),
+            None,
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(st_cb_del, 400);
+        assert!(
+            srv.state.integrations.secrets.get("oauth-del").await.unwrap().is_none(),
+            "callback após DELETE não pode gravar segredo órfão"
+        );
+
+        mock_task.abort();
+        srv.state.integrations.shutdown().await;
+    })
+    .await
+    .expect("prazo de patch_and_delete_clear_tools_cache excedido");
 }

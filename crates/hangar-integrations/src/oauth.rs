@@ -234,6 +234,12 @@ impl OAuthManager {
             .map(|pending| pending.authorize_url.clone())
     }
 
+    /// Cancela todas as tentativas OAuth pendentes vinculadas a `integration_id`.
+    pub fn cancel_pending_for(&self, integration_id: &str) {
+        let mut guard = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.retain(|_, pending| pending.integration_id != integration_id);
+    }
+
     /// Inicia o fluxo OAuth 2.1 para `integration_id`, descobrindo endpoints e montando a URL.
     ///
     /// # Errors
@@ -333,8 +339,9 @@ impl OAuthManager {
     /// # Errors
     ///
     /// Retorna [`OAuthError::InvalidState`] para `state` desconhecido ou já utilizado,
-    /// [`OAuthError::ExpiredState`] se o `state` tiver expirado, [`OAuthError::ProviderError`]
-    /// se o provedor retornou erro, ou falhas de troca de código/armazenamento.
+    /// [`OAuthError::ExpiredState`] se o `state` tiver expirado, [`OAuthError::NotFound`] ou
+    /// [`OAuthError::UnsupportedAuth`] se a integração foi removida ou deixou de usar OAuth,
+    /// [`OAuthError::ProviderError`] se o provedor retornou erro, ou falhas de troca de código/armazenamento.
     pub async fn handle_callback(
         &self,
         state: &str,
@@ -375,6 +382,9 @@ impl OAuthManager {
             .filter(|c| !c.is_empty())
             .ok_or_else(|| OAuthError::Validation("código de autorização ausente".into()))?;
 
+        // Evita trocar o código se a integração já foi removida ou mudou para outro método.
+        self.ensure_oauth_integration(&entry.integration_id)?;
+
         let mut form_params: Vec<(&str, &str)> = vec![
             ("grant_type", "authorization_code"),
             ("code", auth_code),
@@ -403,6 +413,9 @@ impl OAuthManager {
         let client_id = entry.client_id;
         let client_secret = entry.client_secret;
         let redirect_uri = entry.redirect_uri;
+
+        // Revalida antes de persistir para impedir segredo órfão se DELETE/PATCH ocorrer durante o `/token`.
+        self.ensure_oauth_integration(&integration_id)?;
 
         self.secrets
             .update_with(&integration_id, move |slot| {
@@ -604,6 +617,22 @@ impl OAuthManager {
             .entry(integration_id.to_owned())
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone()
+    }
+
+    fn ensure_oauth_integration(&self, integration_id: &str) -> Result<(), OAuthError> {
+        let config = self
+            .registry
+            .get(integration_id)?
+            .ok_or_else(|| OAuthError::NotFound(integration_id.to_owned()))?;
+        if !matches!(config.transport, Transport::RemoteHttp { .. })
+            || !matches!(
+                config.auth,
+                AuthConfig::OAuthDcr | AuthConfig::OAuthManualClient { .. }
+            )
+        {
+            return Err(OAuthError::UnsupportedAuth);
+        }
+        Ok(())
     }
 
     async fn mark_auth_expired_if_unchanged(
@@ -1652,5 +1681,200 @@ mod tests {
             validate_discovered_as_metadata(&meta, false).is_ok(),
             "MCP http:// local deve continuar aceitando endpoints http://"
         );
+    }
+
+    fn insert_pending_for_test(
+        oauth: &super::OAuthManager,
+        state: &str,
+        integration_id: &str,
+        authorize_url: &str,
+        token_endpoint: &str,
+    ) {
+        let mut guard = oauth
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.insert(
+            state.to_owned(),
+            super::PendingAuth {
+                integration_id: integration_id.to_owned(),
+                authorize_url: authorize_url.to_owned(),
+                code_verifier: Zeroizing::new("verifier-teste-123".to_owned()),
+                redirect_uri: "http://127.0.0.1:8765/api/integrations/oauth/callback".to_owned(),
+                token_endpoint: token_endpoint.to_owned(),
+                client_id: "cid-teste".to_owned(),
+                client_secret: None,
+                scopes: vec![],
+                persist_client_id: true,
+                is_dcr: true,
+                created_at: std::time::Instant::now(),
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_pending_for_clears_only_target_integration_states() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let registry = std::sync::Arc::new(crate::registry::IntegrationRegistry::new(dir.path()));
+        let secrets = std::sync::Arc::new(crate::secrets::SecretStore::new(
+            dir.path(),
+            std::sync::Arc::new(crate::secrets::MemoryKeyStore::new()),
+        ));
+        let oauth = super::OAuthManager::new(registry, secrets);
+
+        insert_pending_for_test(
+            &oauth,
+            "state-a1",
+            "integ-a",
+            "https://auth.example.com/authorize?state=state-a1",
+            "https://auth.example.com/token",
+        );
+        insert_pending_for_test(
+            &oauth,
+            "state-a2",
+            "integ-a",
+            "https://auth.example.com/authorize?state=state-a2",
+            "https://auth.example.com/token",
+        );
+        insert_pending_for_test(
+            &oauth,
+            "state-b1",
+            "integ-b",
+            "https://auth.example.com/authorize?state=state-b1",
+            "https://auth.example.com/token",
+        );
+
+        oauth.cancel_pending_for("integ-a");
+
+        assert!(!oauth.is_pending_authorize_url(
+            "integ-a",
+            "https://auth.example.com/authorize?state=state-a1"
+        ));
+        assert_eq!(oauth.latest_pending_authorize_url("integ-a"), None);
+        assert!(oauth.is_pending_authorize_url(
+            "integ-b",
+            "https://auth.example.com/authorize?state=state-b1"
+        ));
+        assert_eq!(
+            oauth.latest_pending_authorize_url("integ-b").as_deref(),
+            Some("https://auth.example.com/authorize?state=state-b1")
+        );
+
+        let err = oauth
+            .handle_callback("state-a1", Some("code-1"), None, None)
+            .await
+            .expect_err("state cancelado não pode ser aceito");
+        assert_eq!(err, OAuthError::InvalidState);
+    }
+
+    #[tokio::test]
+    async fn handle_callback_after_delete_or_auth_change_rejects_without_writing_secret() {
+        use axum::extract::State;
+        use axum::http::StatusCode;
+        use axum::response::{IntoResponse, Response};
+        use axum::{Router, routing::post};
+        use std::sync::Arc;
+
+        async fn delete_during_token(State(reg): State<Arc<crate::registry::IntegrationRegistry>>) -> Response {
+            let _ = reg.delete("integ-race");
+            let body = serde_json::to_vec(&serde_json::json!({
+                "access_token": "tok-orphan-race",
+                "token_type": "Bearer",
+                "expires_in": 3600
+            }))
+            .expect("serializar token");
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response()
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let registry = Arc::new(crate::registry::IntegrationRegistry::new(dir.path()));
+        let secrets = Arc::new(crate::secrets::SecretStore::new(
+            dir.path(),
+            Arc::new(crate::secrets::MemoryKeyStore::new()),
+        ));
+        let oauth = super::OAuthManager::new(registry.clone(), secrets.clone());
+
+        // 1. Integração apagada antes da chegada do callback.
+        let mut cfg_del = sample_cfg(true, AuthConfig::OAuthDcr);
+        cfg_del.id = "integ-del".to_owned();
+        registry.create(cfg_del).unwrap();
+        insert_pending_for_test(
+            &oauth,
+            "state-del",
+            "integ-del",
+            "https://auth.example.com/authorize?state=state-del",
+            "http://127.0.0.1:1/token",
+        );
+        registry.delete("integ-del").unwrap();
+
+        let err_del = oauth
+            .handle_callback("state-del", Some("code-del"), None, None)
+            .await
+            .expect_err("callback após delete deve ser rejeitado");
+        assert_eq!(err_del, OAuthError::NotFound("integ-del".to_owned()));
+        assert!(secrets.get("integ-del").await.unwrap().is_none());
+
+        // 2. Integração trocou de OAuth para Bearer antes do callback.
+        let mut cfg_bearer = sample_cfg(true, AuthConfig::OAuthDcr);
+        cfg_bearer.id = "integ-bearer".to_owned();
+        registry.create(cfg_bearer).unwrap();
+        insert_pending_for_test(
+            &oauth,
+            "state-bearer",
+            "integ-bearer",
+            "https://auth.example.com/authorize?state=state-bearer",
+            "http://127.0.0.1:1/token",
+        );
+        registry
+            .update(
+                "integ-bearer",
+                crate::registry::IntegrationUpdate {
+                    auth: Some(AuthConfig::Bearer),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let err_auth = oauth
+            .handle_callback("state-bearer", Some("code-bearer"), None, None)
+            .await
+            .expect_err("callback após troca para Bearer deve falhar");
+        assert_eq!(err_auth, OAuthError::UnsupportedAuth);
+        assert!(secrets.get("integ-bearer").await.unwrap().is_none());
+
+        // 3. Integração apagada durante a troca de código em /token também não grava segredo órfão.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/token", post(delete_during_token))
+            .with_state(registry.clone());
+        let srv_handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let mut cfg_race = sample_cfg(true, AuthConfig::OAuthDcr);
+        cfg_race.id = "integ-race".to_owned();
+        registry.create(cfg_race).unwrap();
+        insert_pending_for_test(
+            &oauth,
+            "state-race",
+            "integ-race",
+            "https://auth.example.com/authorize?state=state-race",
+            &format!("http://{addr}/token"),
+        );
+
+        let err_race = oauth
+            .handle_callback("state-race", Some("code-race"), None, None)
+            .await
+            .expect_err("delete durante /token deve impedir gravação órfã");
+        assert_eq!(err_race, OAuthError::NotFound("integ-race".to_owned()));
+        assert!(secrets.get("integ-race").await.unwrap().is_none());
+
+        srv_handle.abort();
     }
 }

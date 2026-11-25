@@ -132,13 +132,27 @@ pub struct AnsweredApproval {
     pub decision: ApprovalDecision,
 }
 
+/// Reserva em duas fases de uma resposta ao cartão; devolve o pedido para a fila no `Drop` se não confirmada.
+pub struct ClaimedApproval {
+    inner: Arc<StoreInner>,
+    request_id: String,
+    integration_id: String,
+    tool: String,
+    decision: ApprovalDecision,
+    armed: bool,
+}
+
 struct PendingRequest {
     card: ApprovalCard,
     seq: u64,
     session_key: String,
     deadline: Instant,
+    /// Reserva em curso durante a gravação de `AllowAlways`; segunda resposta recebe `Answered`.
+    claimed: bool,
     outcome: Option<ApprovalResolution>,
     tx: watch::Sender<Option<ApprovalResolution>>,
+    /// Acorda `run_deadline` ao confirmar ou liberar uma reserva sem mexer em `tx`.
+    state_tx: watch::Sender<()>,
 }
 
 #[derive(Default)]
@@ -241,7 +255,7 @@ impl ApprovalStore {
         };
 
         let (tx, rx) = watch::channel(None);
-        let deadline_rx = tx.subscribe();
+        let (state_tx, _) = watch::channel(());
 
         {
             let mut state = lock_state(&self.inner.state);
@@ -278,8 +292,10 @@ impl ApprovalStore {
                     seq,
                     session_key: params.session_key,
                     deadline,
+                    claimed: false,
                     outcome: None,
                     tx,
+                    state_tx,
                 },
             );
             publish(&self.inner.feed, &state);
@@ -287,7 +303,7 @@ impl ApprovalStore {
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let inner = Arc::clone(&self.inner);
-            handle.spawn(run_deadline(inner, id, deadline_rx));
+            handle.spawn(run_deadline(inner, id));
         }
 
         Ok(ApprovalWaiter {
@@ -298,12 +314,50 @@ impl ApprovalStore {
         })
     }
 
+    /// Reserva o cartão para resposta em duas fases antes de persistir `AllowAlways`.
+    ///
+    /// Não define `outcome`, não acorda o chamador nem remove o cartão do feed; se a guarda
+    /// [`ClaimedApproval`] for descartada sem [`ClaimedApproval::commit`], a reserva é liberada.
+    ///
+    /// # Errors
+    ///
+    /// Retorna [`ApprovalError::Lost`] se o pedido sumiu ou foi cancelado,
+    /// [`ApprovalError::Answered`] se já foi respondido, expirou ou possui outra resposta em voo, e
+    /// [`ApprovalError::Stale`] se o `interaction_id` não confere com o cartão atual.
+    pub fn claim_answer(
+        &self,
+        request_id: &str,
+        interaction_id: &str,
+        decision: ApprovalDecision,
+    ) -> Result<ClaimedApproval, ApprovalError> {
+        let mut state = lock_state(&self.inner.state);
+        let Some(req) = state.requests.get_mut(request_id) else {
+            return Err(ApprovalError::Lost);
+        };
+        if req.outcome.is_some() || req.claimed {
+            return Err(ApprovalError::Answered);
+        }
+        if req.card.interaction_id != interaction_id {
+            return Err(ApprovalError::Stale);
+        }
+
+        req.claimed = true;
+        Ok(ClaimedApproval {
+            inner: Arc::clone(&self.inner),
+            request_id: request_id.to_owned(),
+            integration_id: req.card.integration_id.clone(),
+            tool: req.card.tool.clone(),
+            decision,
+            armed: true,
+        })
+    }
+
     /// Registra a decisão do dono para o cartão aberto.
     ///
     /// # Errors
     ///
     /// Retorna [`ApprovalError::Lost`] se o pedido sumiu ou foi cancelado,
-    /// [`ApprovalError::Answered`] se já foi respondido ou expirou, e
+    /// [`ApprovalError::Answered`] se já foi respondido, expirou ou possui outra resposta em voo, e
     /// [`ApprovalError::Stale`] se o `interaction_id` não confere com o cartão atual.
     pub fn answer(
         &self,
@@ -311,40 +365,8 @@ impl ApprovalStore {
         interaction_id: &str,
         decision: ApprovalDecision,
     ) -> Result<AnsweredApproval, ApprovalError> {
-        let mut state = lock_state(&self.inner.state);
-        let Some(req) = state.requests.get_mut(request_id) else {
-            return Err(ApprovalError::Lost);
-        };
-        if req.outcome.is_some() {
-            return Err(ApprovalError::Answered);
-        }
-        if req.card.interaction_id != interaction_id {
-            return Err(ApprovalError::Stale);
-        }
-
-        let resolution = match decision {
-            ApprovalDecision::AllowOnce => ApprovalResolution::AllowOnce,
-            ApprovalDecision::AllowAlways => ApprovalResolution::AllowAlways,
-            ApprovalDecision::Deny => ApprovalResolution::Denied,
-        };
-        req.outcome = Some(resolution);
-        let _ = req.tx.send_replace(Some(resolution));
-
-        let answered = AnsweredApproval {
-            integration_id: req.card.integration_id.clone(),
-            tool: req.card.tool.clone(),
-            decision,
-        };
-        let session_key = req.session_key.clone();
-
-        if decision == ApprovalDecision::Deny && self.inner.config.cooldown > Duration::ZERO {
-            state
-                .cooldown
-                .insert(session_key, Instant::now() + self.inner.config.cooldown);
-        }
-
-        publish(&self.inner.feed, &state);
-        Ok(answered)
+        self.claim_answer(request_id, interaction_id, decision)?
+            .commit()
     }
 
     /// Cancela um pedido ainda aberto e remove o cartão da fila.
@@ -371,6 +393,81 @@ impl ApprovalStore {
             }
         }
         publish(&self.inner.feed, &state);
+    }
+}
+
+impl ClaimedApproval {
+    /// Identificador da integração do pedido reservado.
+    pub fn integration_id(&self) -> &str {
+        &self.integration_id
+    }
+
+    /// Nome da ferramenta do pedido reservado.
+    pub fn tool(&self) -> &str {
+        &self.tool
+    }
+
+    /// Decisão validada e reservada para confirmação.
+    pub fn decision(&self) -> ApprovalDecision {
+        self.decision
+    }
+
+    /// Confirma a resposta reservada, aplica cooldown, acorda o chamador e atualiza o feed.
+    ///
+    /// # Errors
+    ///
+    /// Retorna [`ApprovalError::Lost`] se o cartão foi cancelado durante a persistência, ou
+    /// [`ApprovalError::Answered`] se já havia sido encerrado.
+    pub fn commit(mut self) -> Result<AnsweredApproval, ApprovalError> {
+        self.armed = false;
+        let mut state = lock_state(&self.inner.state);
+        let Some(req) = state.requests.get_mut(&self.request_id) else {
+            return Err(ApprovalError::Lost);
+        };
+        if req.outcome.is_some() {
+            req.claimed = false;
+            return Err(ApprovalError::Answered);
+        }
+
+        let resolution = match self.decision {
+            ApprovalDecision::AllowOnce => ApprovalResolution::AllowOnce,
+            ApprovalDecision::AllowAlways => ApprovalResolution::AllowAlways,
+            ApprovalDecision::Deny => ApprovalResolution::Denied,
+        };
+        req.claimed = false;
+        req.outcome = Some(resolution);
+        let _ = req.tx.send_replace(Some(resolution));
+        let _ = req.state_tx.send_replace(());
+
+        let answered = AnsweredApproval {
+            integration_id: req.card.integration_id.clone(),
+            tool: req.card.tool.clone(),
+            decision: self.decision,
+        };
+        let session_key = req.session_key.clone();
+
+        if self.decision == ApprovalDecision::Deny && self.inner.config.cooldown > Duration::ZERO {
+            state
+                .cooldown
+                .insert(session_key, Instant::now() + self.inner.config.cooldown);
+        }
+
+        publish(&self.inner.feed, &state);
+        Ok(answered)
+    }
+}
+
+impl Drop for ClaimedApproval {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.armed = false;
+        let mut state = lock_state(&self.inner.state);
+        if let Some(req) = state.requests.get_mut(&self.request_id) {
+            req.claimed = false;
+            let _ = req.state_tx.send_replace(());
+        }
     }
 }
 
@@ -516,37 +613,44 @@ fn publish(feed: &watch::Sender<Arc<ApprovalFeed>>, state: &StoreState) {
     });
 }
 
-async fn run_deadline(
-    inner: Arc<StoreInner>,
-    id: String,
-    mut rx: watch::Receiver<Option<ApprovalResolution>>,
-) {
-    let deadline = {
-        let state = lock_state(&inner.state);
-        let Some(req) = state.requests.get(&id) else {
-            return;
-        };
-        if req.outcome.is_some() {
-            return;
-        }
-        req.deadline
-    };
-
-    tokio::select! {
-        () = tokio::time::sleep_until(deadline) => {
+async fn run_deadline(inner: Arc<StoreInner>, id: String) {
+    loop {
+        let (wake_at, mut state_rx) = {
             let mut state = lock_state(&inner.state);
             let Some(req) = state.requests.get_mut(&id) else {
                 return;
             };
-            if req.outcome.is_none() {
+            // Mesmo se já respondido antes do primeiro poll, segue para a retenção e remoção.
+            if req.outcome.is_some() {
+                break;
+            }
+            if req.claimed {
+                (None, req.state_tx.subscribe())
+            } else if Instant::now() >= req.deadline {
                 req.outcome = Some(ApprovalResolution::TimedOut);
                 let _ = req.tx.send_replace(Some(ApprovalResolution::TimedOut));
                 publish(&inner.feed, &state);
+                break;
+            } else {
+                (Some(req.deadline), req.state_tx.subscribe())
             }
-        }
-        res = rx.changed() => {
-            if res.is_err() {
-                return;
+        };
+
+        match wake_at {
+            Some(deadline) => {
+                tokio::select! {
+                    () = tokio::time::sleep_until(deadline) => {}
+                    res = state_rx.changed() => {
+                        if res.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+            None => {
+                if state_rx.changed().await.is_err() {
+                    return;
+                }
             }
         }
     }
@@ -820,5 +924,124 @@ mod tests {
             store.open_request(invalid_tool),
             Err(ApprovalError::Invalid(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn claim_answer_rollback_on_drop_keeps_card_and_allows_retry() {
+        let store = ApprovalStore::new();
+        let feed = store.feed();
+        let waiter = store
+            .open_request(sample_request("sess-claim", "create_issue"))
+            .expect("deve abrir pedido");
+        let card = waiter.card().clone();
+
+        let wait_handle = tokio::spawn(async move { waiter.wait().await });
+        tokio::task::yield_now().await;
+
+        let claim = store
+            .claim_answer(&card.id, &card.interaction_id, ApprovalDecision::AllowAlways)
+            .unwrap_or_else(|err| panic!("reserva deve funcionar: {err}"));
+        assert_eq!(claim.integration_id(), "github");
+        assert_eq!(claim.tool(), "create_issue");
+        assert_eq!(claim.decision(), ApprovalDecision::AllowAlways);
+
+        // Enquanto reservado: continua no feed, waiter não acorda e segunda tentativa recebe Answered.
+        assert_eq!(feed.borrow().requests.len(), 1);
+        assert_eq!(store.open_count(), 1);
+        assert_eq!(
+            store
+                .claim_answer(&card.id, &card.interaction_id, ApprovalDecision::AllowAlways)
+                .err(),
+            Some(ApprovalError::Answered)
+        );
+        tokio::task::yield_now().await;
+        assert!(
+            !wait_handle.is_finished(),
+            "waiter não pode acordar antes do commit da reserva"
+        );
+
+        // Drop sem confirmar libera a reserva para nova tentativa.
+        drop(claim);
+        tokio::task::yield_now().await;
+        assert_eq!(feed.borrow().requests.len(), 1);
+        assert_eq!(store.open_count(), 1);
+        assert!(!wait_handle.is_finished());
+
+        let retried = store
+            .claim_answer(&card.id, &card.interaction_id, ApprovalDecision::AllowAlways)
+            .unwrap_or_else(|err| panic!("nova reserva após drop deve funcionar: {err}"));
+        let answered = retried
+            .commit()
+            .expect("commit deve resolver após persistência");
+        assert_eq!(answered.decision, ApprovalDecision::AllowAlways);
+        assert!(feed.borrow().requests.is_empty());
+        assert_eq!(wait_handle.await.unwrap(), ApprovalResolution::AllowAlways);
+    }
+
+    #[tokio::test]
+    async fn claim_answer_does_not_timeout_while_claimed_and_times_out_after_rollback() {
+        let store = ApprovalStore::with_config(ApprovalConfig {
+            expires: Duration::from_millis(30),
+            cooldown: Duration::from_secs(30),
+            retention: Duration::from_millis(15),
+        });
+        let feed = store.feed();
+        let waiter = store
+            .open_request(sample_request("sess-claim-ttl", "create_issue"))
+            .expect("deve abrir pedido");
+        let card = waiter.card().clone();
+        let wait_handle = tokio::spawn(async move { waiter.wait().await });
+        tokio::task::yield_now().await;
+
+        let claim = store
+            .claim_answer(&card.id, &card.interaction_id, ApprovalDecision::AllowAlways)
+            .unwrap_or_else(|err| panic!("reserva deve funcionar: {err}"));
+
+        // Aguarda além do prazo enquanto a reserva está ativa: não pode expirar no meio da gravação.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(feed.borrow().requests.len(), 1);
+        assert!(!wait_handle.is_finished());
+
+        // Ao descartar a reserva vencida sem confirmar, `run_deadline` acorda e expira o cartão.
+        drop(claim);
+        let resolution = tokio::time::timeout(Duration::from_secs(2), wait_handle)
+            .await
+            .expect("waiter deve expirar após drop da reserva vencida")
+            .unwrap();
+        assert_eq!(resolution, ApprovalResolution::TimedOut);
+        assert!(feed.borrow().requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn immediate_answer_before_deadline_task_runs_still_cleans_up_requests() {
+        let store = ApprovalStore::with_config(ApprovalConfig {
+            expires: Duration::from_secs(60),
+            cooldown: Duration::from_secs(30),
+            retention: Duration::from_millis(15),
+        });
+        let waiter = store
+            .open_request(sample_request("sess-leak", "write_file"))
+            .expect("deve abrir");
+        let card = waiter.card().clone();
+
+        // Responde antes do primeiro `yield_now`, quando `run_deadline` ainda não foi executada.
+        store
+            .answer(&card.id, &card.interaction_id, ApprovalDecision::AllowOnce)
+            .expect("resposta imediata deve suceder");
+        tokio::task::yield_now().await;
+        assert_eq!(waiter.wait().await, ApprovalResolution::AllowOnce);
+
+        // Após a janela de retenção, `run_deadline` deve remover o registro de `state.requests`.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if lock_state(&store.inner.state).requests.is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "run_deadline vazou pedido respondido antes do primeiro poll"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 }

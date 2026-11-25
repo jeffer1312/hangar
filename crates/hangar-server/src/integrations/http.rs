@@ -573,9 +573,9 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         Err(err) => return registry_error(err),
     };
 
+    let transport_or_auth_changed = body.transport.is_some() || body.auth.is_some();
     let should_invalidate = body.enabled == Some(false)
-        || body.transport.is_some()
-        || body.auth.is_some()
+        || transport_or_auth_changed
         || body.secrets.is_some();
 
     let rollback_update = IntegrationUpdate {
@@ -673,6 +673,10 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
     state.integrations.clear_error(id);
     if should_invalidate {
         state.integrations.clients.invalidate(id).await;
+        state.integrations.tools_cache.remove(id);
+    }
+    if transport_or_auth_changed {
+        state.integrations.oauth.cancel_pending_for(id);
     }
 
     let view = build_view(updated, secrets_after.as_ref(), None);
@@ -681,6 +685,8 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
 
 async fn delete_integration(state: &AppState, id: &str) -> Response {
     state.integrations.clients.invalidate(id).await;
+    state.integrations.tools_cache.remove(id);
+    state.integrations.oauth.cancel_pending_for(id);
     state.integrations.approvals.cancel_for_integration(id);
     state.integrations.clear_error(id);
 
@@ -923,25 +929,42 @@ async fn answer_approval(state: &AppState, request_id: &str, request: Request) -
         Err(resp) => return resp,
     };
 
-    let answered = match state.integrations.approvals.answer(
+    let claim = match state.integrations.approvals.claim_answer(
         request_id,
         &body.interaction_id,
         body.decision,
     ) {
-        Ok(ans) => ans,
+        Ok(claim) => claim,
         Err(err) => return approval_error(err),
     };
 
-    if answered.decision == ApprovalDecision::AllowAlways {
-        match state
-            .integrations
-            .registry
-            .add_allowed_tool(&answered.integration_id, &answered.tool)
-        {
-            Ok(_) | Err(RegistryError::NotFound(_)) => {}
-            Err(err) => return registry_error(err),
+    if claim.decision() == ApprovalDecision::AllowAlways {
+        let registry = state.integrations.registry.clone();
+        let integration_id = claim.integration_id().to_owned();
+        let tool = claim.tool().to_owned();
+        let persisted = tokio::task::spawn_blocking(move || {
+            registry.add_allowed_tool(&integration_id, &tool)
+        })
+        .await;
+        match persisted {
+            Ok(Ok(_)) | Ok(Err(RegistryError::NotFound(_))) => {}
+            Ok(Err(err)) => {
+                drop(claim);
+                return registry_error(err);
+            }
+            Err(_) => {
+                drop(claim);
+                return registry_error(RegistryError::Io(
+                    "tarefa de gravação de ferramenta liberada interrompida".into(),
+                ));
+            }
         }
     }
+
+    let answered = match claim.commit() {
+        Ok(ans) => ans,
+        Err(err) => return approval_error(err),
+    };
 
     json_response(
         StatusCode::OK,

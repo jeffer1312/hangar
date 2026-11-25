@@ -47,9 +47,13 @@ def listed(target: list[str]) -> list[str] | None:
 
 
 def server(part: int, total: int) -> int:
-    # Os testes procuram o hangar-cano acima do próprio executável; só a suíte do workspace o compilava.
-    if subprocess.run(["cargo", "build", "--locked", "-p", "hangar-cano"], cwd=CRATES).returncode:
-        return 1
+    # Os testes procuram o hangar-cano e o hangar-fixture-mcp acima do próprio executável; só a suíte do workspace os compilava.
+    for build in (
+        ["cargo", "build", "--locked", "-p", "hangar-cano"],
+        ["cargo", "build", "--locked", "-p", "hangar-integrations", "--bin", "hangar-fixture-mcp"],
+    ):
+        if subprocess.run(build, cwd=CRATES).returncode:
+            return 1
     manifest = tomllib.loads((CRATES / SERVER / "Cargo.toml").read_text())
     targets = sorted(t["name"] for t in manifest.get("test", []))
     failed = 0
