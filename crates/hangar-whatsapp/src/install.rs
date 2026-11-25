@@ -307,7 +307,7 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
     };
     let new = Installed { tag: latest.tag, binary };
     if let Err(failure) = up.and_then(|()| write_record(&ctx.paths, &new)) {
-        if opened_by_new(switched, recorded_before, recorded_pid(&ctx.paths.data)) {
+        if opened_after(switched, recorded_before, &ctx.paths.data) {
             return Err(keep_new(&ctx.paths, &new, failure));
         }
         let back = service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&old.binary)).await;
@@ -329,9 +329,12 @@ pub async fn update(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> R
 async fn ensure_up(ctx: &Context, installed: &Installed, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
     let version = release::check(&installed.binary).await?;
     let client = Client::new(ctx.paths.data.clone());
-    if client.status().await.is_ok_and(|status| same_version(&status, &version).is_ok()) {
+    let healthy = || async { client.status().await.is_ok_and(|status| same_version(&status, &version).is_ok()) };
+    // Uma segunda leitura antes de religar: um status que falhou de passagem não derruba um serviço saudável.
+    if healthy().await || healthy().await {
         return Ok(Outcome::AlreadyLatest);
     }
+    tracing::warn!(tag = %installed.tag, "whatsapp: a versão registrada não respondeu; religando");
     let before = client.claimed().map(|c| c.pid);
     progress(Step::Service);
     service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&installed.binary)).await?;
@@ -407,6 +410,19 @@ fn keep_new(paths: &Paths, new: &Installed, failure: Failure) -> Failure {
 /// conferência, e a prova de que ela abriu os dados tem que sobreviver a isso.
 fn recorded_pid(data: &Path) -> Option<u32> {
     control::read_control(data).ok().map(|c| c.pid)
+}
+
+/// [`opened_by_new`] pelo arquivo depois da falha; arquivo que não se lê conta como aberto, porque voltar sobre
+/// dados migrados deixa o WhatsApp parado.
+fn opened_after(registered: bool, before: Option<u32>, data: &Path) -> bool {
+    match control::read_control(data) {
+        Ok(control) => opened_by_new(registered, before, Some(control.pid)),
+        Err(control::ReadError::Missing) => false,
+        Err(control::ReadError::Invalid(why)) => {
+            tracing::warn!(%why, "whatsapp: control.json ilegível depois da troca de versão");
+            registered
+        }
+    }
 }
 
 fn not_installed() -> Failure {
@@ -546,6 +562,17 @@ mod tests {
         write(DEAD - 1);
         assert_eq!(Client::new(data.to_path_buf()).claimed(), None, "a nova já morreu");
         assert!(opened_by_new(true, before, recorded_pid(data)), "a nova gravou o arquivo e morreu");
+    }
+
+    /// Um `control.json` que não se lê depois da troca não prova que a nova deixou de abrir os dados.
+    #[test]
+    fn an_unreadable_control_file_after_the_switch_keeps_the_new_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        assert!(!opened_after(true, None, data), "sem arquivo, a nova não abriu");
+        std::fs::write(data.join("control.json"), "{").unwrap();
+        assert!(opened_after(true, None, data));
+        assert!(!opened_after(false, None, data), "sem o registro, a nova nem subiu");
     }
 
     /// Releases no GitHub de mentira com `v0.1.0` como a mais nova, e a instalação `v0.1.0` registrada.
