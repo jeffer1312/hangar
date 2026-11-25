@@ -3,8 +3,9 @@ import Animated, {
   Easing, useAnimatedProps, useAnimatedStyle, useSharedValue, withDelay, withSequence, withTiming, type SharedValue,
 } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HANGAR_MARK_ARCS } from '../../ui/HangarMark';
+import { HANGAR_MARK_ARCS, HangarMark } from '../../ui/HangarMark';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const ease = Easing.out(Easing.cubic);
@@ -49,6 +50,17 @@ export function HomeIntroMark({ epoch }: { epoch: number }) {
   );
 }
 
+// A marca parada e apagada no vazio acima do título: decoração, fora do toque e do leitor de tela.
+export function HomeQuietMark({ size }: { size: number }) {
+  const { theme } = useUnistyles();
+  return (
+    <View style={[styles.wrap, styles.quiet]} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      <HangarMark size={size} color={theme.tokens.text.secondary} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   wrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  quiet: { opacity: 0.09 },
 });

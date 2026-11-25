@@ -21,7 +21,7 @@ const h = vi.hoisted(() => ({
   navigation: { addListener: () => () => {}, isFocused: () => true },
 }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({
-  getString: (key: string) => h.disk.get(key), set: (key: string, value: string) => h.disk.set(key, value),
+  getString: (key: string) => h.disk.get(key), getBoolean: () => undefined, set: (key: string, value: string) => h.disk.set(key, value),
   remove: (key: string) => h.disk.delete(key),
 }) }));
 vi.mock('react-native', async (original) => {

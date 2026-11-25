@@ -23,6 +23,7 @@ vi.mock('../ditado/useDitado', () => ({
   },
 }));
 vi.mock('../ditado/ditadoEstiloStore', () => ({ dictationStyleStore: () => ({ getState: () => ({ pronto: false }) }) }));
+vi.mock('../../stores/prefs', () => ({ prefs: { getBoolean: () => undefined, set: () => {} } }));
 
 import { useHomeDictation } from './useHomeDictation';
 

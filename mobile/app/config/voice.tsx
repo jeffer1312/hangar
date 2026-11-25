@@ -11,6 +11,7 @@ import { PROVIDERS, textOf, useServerConfig, type ServerConfig } from '../../src
 import { TranscriptionProviders } from '../../src/features/config/TranscriptionProviders';
 import { useSettingsColors } from '../../src/features/config/colors';
 import { Icon } from '../../src/ui/Icon';
+import { useHandsFree } from '../../src/stores/handsFree';
 import * as m from '../../src/paraglide/messages';
 
 const ORGANIZATION_MODES = [
@@ -98,6 +99,7 @@ export default function Voice() {
 
       <BlockHead title={m.native_voice_after()} />
       <Box>
+        <HandsFreeRow />
         <ConfigRow cfg={cfg} k="ditado_vocabulario" removable />
         <ConfigRow cfg={cfg} k="dictation_max_minutes" removable />
       </Box>
@@ -163,6 +165,17 @@ function StyleRow({ cfg }: { cfg: ServerConfig }) {
         value={current} label={m.native_voice_style()} disabled={!('ditado_estilo' in cfg.fields)} onChange={(v) => cfg.stage('ditado_estilo', v)} />
       {hint ? <Muted>{hint}</Muted> : null}
     </RowShell>
+  );
+}
+
+// Do aparelho, não da máquina: fica fora do rascunho e grava na hora, como no PC.
+function HandsFreeRow() {
+  const c = useSettingsColors();
+  const on = useHandsFree((s) => s.on);
+  return (
+    <RowShell icon="Mic" title={m.native_voice_hands_free()} help={m.native_voice_hands_free_help()}
+      right={<Switch accessibilityLabel={m.native_voice_hands_free()} value={on}
+        onValueChange={(next) => useHandsFree.getState().set(next)} trackColor={{ true: c.accent }} />} />
   );
 }
 

@@ -14,6 +14,7 @@ import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessa
 import { useSessions } from '../stores/sessions';
 import { clearDraft, clearRecoverableDraft, draftOfAnotherSession, sameLifeOwner, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, pendingMediaUpload, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft } from '../stores/drafts';
 import { useServers } from '../stores/servers';
+import { useHandsFree } from '../stores/handsFree';
 import { revealOnSend } from '../features/sessions/revealOnSend';
 import { removeDraftAttachment, retainDraftAttachment } from './draftAttachments';
 import { useNavigation, useRouter } from 'expo-router';
@@ -1096,9 +1097,11 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     [runTranscription, cancelVoiceSend],
   );
 
+  const handsFree = useHandsFree((s) => s.on);
   const { gravando, rms, iniciar, parar } = useDitado({
     server: styleServer,
     pieces: true,
+    handsFree,
     onFim: handleTranscribe,
     onErroParada: (e) => {
       cancelVoiceSend();

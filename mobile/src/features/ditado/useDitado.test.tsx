@@ -115,7 +115,7 @@ import type { MotivoFim, Server } from '@hangar/core';
 import type { PiecesHandle } from './livePieces';
 
 function mountHook(opts: { onFim: (f: File, m: MotivoFim, uri: string, stop?: RecordingStop, pieces?: PiecesHandle | null) => void;
-  onErroParada?: (e: Error) => void; server?: Server | null; pieces?: boolean }) {
+  onErroParada?: (e: Error) => void; server?: Server | null; pieces?: boolean; handsFree?: boolean }) {
   let renders = 0;
   let hook: ReturnType<typeof useDitado> | null = null;
   function Comp(p: typeof opts) {
@@ -846,11 +846,30 @@ describe('useDitado — medidor e segundo plano', () => {
 });
 
 describe('useDitado — VAD e teto', () => {
-  it('encerra por silêncio depois de ouvir fala usando o RMS bruto', async () => {
+  it('sem mãos-livres o silêncio depois da fala não encerra a gravação', async () => {
     fakeRec.getStatus.mockReturnValue({ metering: -20 });
     const onFim = vi.fn();
     const h = mountHook({ onFim });
     await h.mount({ onFim });
+    await act(async () => {
+      await h.getHook().iniciar();
+      vi.advanceTimersByTime(600);
+    });
+    fakeRec.getStatus.mockReturnValue({ metering: -160 });
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    expect(h.getHook().gravando).toBe(true);
+    expect(fakeRec.stop).not.toHaveBeenCalled();
+    expect(onFim).not.toHaveBeenCalled();
+    await act(async () => { await h.getHook().parar('botao'); });
+    expect(onFim.mock.calls[0]?.[1]).toBe('botao');
+    await h.unmount();
+  });
+
+  it('com mãos-livres encerra por silêncio depois de ouvir fala usando o RMS bruto', async () => {
+    fakeRec.getStatus.mockReturnValue({ metering: -20 });
+    const onFim = vi.fn();
+    const h = mountHook({ onFim, handsFree: true });
+    await h.mount({ onFim, handsFree: true });
     await act(async () => {
       await h.getHook().iniciar();
       vi.advanceTimersByTime(600);
@@ -863,10 +882,10 @@ describe('useDitado — VAD e teto', () => {
     await h.unmount();
   });
 
-  it('fora da tela a fala que termina encerra pelo VAD como escondeu', async () => {
+  it('com mãos-livres, fora da tela a fala que termina encerra pelo VAD como escondeu', async () => {
     const onFim = vi.fn();
-    const h = mountHook({ onFim });
-    await h.mount({ onFim });
+    const h = mountHook({ onFim, handsFree: true });
+    await h.mount({ onFim, handsFree: true });
     await act(async () => { await h.getHook().iniciar(); });
     await act(async () => { changeAppState('background'); });
     fakeRec.getStatus.mockReturnValue({ metering: -20 });

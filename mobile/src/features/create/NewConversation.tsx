@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, AppState, Keyboard, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, AppState, Keyboard, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import Animated, {
   Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming,
 } from 'react-native-reanimated';
@@ -7,7 +7,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SettingsList } from '../../ui/SettingsList';
-import { ComposerActions, ComposerBox, ComposerInput } from '../../chat/ComposerField';
+import { ComposerActions, ComposerBox, ComposerDock, ComposerInput, ComposerViewport } from '../../chat/ComposerField';
 import { formataErro, replaceSlashToken, slashMatches, slashTokenAt, type CommandInfo, type PrewarmTicket, type Server } from '@hangar/core';
 import { useNewChatCommands, type NewChatCommandSource } from '../../chat/newChatCommands';
 import { SlashSuggest } from '../../chat/SlashSuggest';
@@ -19,7 +19,6 @@ import { AttachmentPreview } from '../../ui/AttachmentPreview';
 import { fromPastedFile, readClipboard, type PickedAttachment } from '../../ui/attachmentPicker';
 import { AttachSheet } from '../../ui/AttachSheet';
 import { usePressScale } from '../../ui/pressScale';
-import { HomeUsageCard } from '../usage/HomeUsageCard';
 import { DictationStyleMenu, useDictationStyleLabel } from '../ditado/EstiloPill';
 import { removeDraftAttachment, retainDraftAttachment } from '../../chat/draftAttachments';
 import { withoutUpload } from '../../stores/drafts';
@@ -28,7 +27,7 @@ import {
   adoptCandidate, attemptAttachment, beginAttempt, discardAttempt, recoverAttempt, restoreAttempt, sendFirstInput,
   useNewConversation, type NewConversationInput,
 } from '../../stores/newConversation';
-import { HomeIntroMark } from './HomeAmbient';
+import { HomeIntroMark, HomeQuietMark } from './HomeAmbient';
 import { useHomeDictation } from './useHomeDictation';
 import * as m from '../../paraglide/messages';
 
@@ -131,6 +130,8 @@ export function NewConversation({
   const [sheet, setSheet] = useState<'folder' | 'resume' | null>(null);
   const resumeAnchor = useRef<View>(null);
   const sheetOpener = useRef<View | null>(null);
+  // O painel de pasta sobe da linha acima da caixa, não do título no meio da tela: dali cabem várias pastas.
+  const folderAnchor = useRef<View>(null);
   // Enviar só depois de ler a tentativa gravada: antes disso um toque poderia seguir a antiga.
   const [restored, setRestored] = useState(false);
   const mounted = useRef(true);
@@ -151,16 +152,13 @@ export function NewConversation({
   }, []);
   const rise = useSharedValue(reduced ? 1 : 0);
   const riseTop = useSharedValue(reduced ? 1 : 0);
-  const usageIn = useSharedValue(reduced ? 1 : 0);
   useEffect(() => {
-    if (reduced) { rise.value = 1; riseTop.value = 1; usageIn.value = 1; return; }
+    if (reduced) { rise.value = 1; riseTop.value = 1; return; }
     rise.value = 0;
     riseTop.value = 0;
-    usageIn.value = 0;
     rise.value = withSpring(1, RISE_SPRING);
     riseTop.value = withDelay(80, withSpring(1, RISE_SPRING));
-    usageIn.value = withDelay(360, withTiming(1, { duration: 260, easing: Easing.out(Easing.cubic) }));
-  }, [intro.epoch, reduced, rise, riseTop, usageIn]);
+  }, [intro.epoch, reduced, rise, riseTop]);
   const riseStyle = useAnimatedStyle(() => ({
     opacity: Math.min(1, rise.value * 1.4),
     transform: [{ translateY: (1 - rise.value) * 28 }],
@@ -168,10 +166,6 @@ export function NewConversation({
   const riseTopStyle = useAnimatedStyle(() => ({
     opacity: Math.min(1, riseTop.value * 1.4),
     transform: [{ translateY: (1 - riseTop.value) * 20 }],
-  }));
-  const usageStyle = useAnimatedStyle(() => ({
-    opacity: usageIn.value,
-    transform: [{ translateY: (1 - usageIn.value) * 8 }],
   }));
 
   useEffect(() => { carried.text = text; }, [text]);
@@ -207,12 +201,27 @@ export function NewConversation({
     if (collapsed && dictation.gravando) void dictation.stop();
   }, [collapsed, dictation.gravando, dictation.stop]);
 
+  // No iOS o "will" chega com o teclado ainda subindo: o título sai junto, sem esperar o fim.
   const [keyboardOpen, setKeyboardOpen] = useState(() => Keyboard.isVisible());
   useEffect(() => {
-    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardOpen(true));
-    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardOpen(false));
+    const ios = Platform.OS === 'ios';
+    const show = Keyboard.addListener(ios ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener(ios ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardOpen(false));
     return () => { show.remove(); hide.remove(); };
   }, []);
+
+  // A caixa sempre cabe acima do teclado: o teto do campo é o que sobra da área depois das pílulas,
+  // do anexo, dos botões e de uma faixa do meio que segue arrastável para baixar o teclado.
+  const [areaHeight, setAreaHeight] = useState(0);
+  const [blockHeight, setBlockHeight] = useState(0);
+  const [fieldHeight, setFieldHeight] = useState(0);
+  // Tela baixa (iPhone SE, celular deitado): a faixa do meio cede antes do campo, senão o Enviar sai da área.
+  const middleReserve = Math.min(MIDDLE_RESERVE, Math.max(MIDDLE_MIN_RESERVE, areaHeight * 0.15));
+  const fieldMax = areaHeight && blockHeight && fieldHeight
+    ? Math.max(FIELD_MIN_HEIGHT, Math.min(FIELD_MAX_HEIGHT, areaHeight - middleReserve - (blockHeight - fieldHeight)))
+    : FIELD_MAX_HEIGHT;
+  // A marca só entra se couber inteira no vazio acima do título.
+  const [markRoom, setMarkRoom] = useState(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -349,15 +358,23 @@ export function NewConversation({
   const hasContent = !!text.trim() || !!attachment;
   const canSend = !!body && !blocked && !busy && restored && !pending && !recording && hasContent;
 
-  // Sem pasta escolhida o seletor ocupa o meio; escolhida, o meio fica com a marca, como no PC.
+  // Sem pasta escolhida o seletor ocupa o meio; escolhida, o meio fica com o título, como no PC.
   const showPicker = destinationPending && sheet === null;
-  // Com o teclado fechado e o campo vazio, o alto mostra o uso da máquina, como na tela inicial do PC.
-  const showUsage = home ? !collapsed : !keyboardOpen && !hasContent;
+  // Com o teclado aberto ficam só as pílulas e a caixa: título, recentes e marca saem.
+  const showHero = !keyboardOpen;
+  // Sem pasta o título fica colado à caixa, com o seletor no meio; pela pasta pendente, e não pelo
+  // seletor à vista, para a pílula não mudar de lugar com o painel de pasta aberto preso a ela.
+  const heroInMiddle = !destinationPending;
+  const hero = showHero ? (
+    <Animated.View style={[styles.topPills, !home && riseTopStyle]}>{topPills((opener) => openSheet('folder', opener))}</Animated.View>
+  ) : null;
 
   return (
     <View style={styles.root}>
       <KeyboardAvoidingView behavior="padding" automaticOffset={keyboardOffset === undefined}
                             keyboardVerticalOffset={keyboardOffset} style={styles.keyboard}>
+      <View style={styles.area} onLayout={(event) => setAreaHeight(event.nativeEvent.layout.height)}>
+      <ComposerViewport>
       <View style={styles.middle}>
       {home ? <Animated.View style={[styles.homeList, listStyle]} pointerEvents={collapsed ? 'auto' : 'none'}
         accessibilityElementsHidden={!collapsed} importantForAccessibility={collapsed ? 'auto' : 'no-hide-descendants'}>
@@ -365,15 +382,21 @@ export function NewConversation({
       </Animated.View> : null}
       <Animated.View style={[styles.states, home && conversationStyle]} pointerEvents={collapsed ? 'none' : 'auto'}
         accessibilityElementsHidden={collapsed} importantForAccessibility={collapsed ? 'no-hide-descendants' : 'auto'}>
-      <ScrollView style={styles.states} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      {/* Arrastar o meio para baixo fecha o teclado, como na conversa. */}
+      <ScrollView style={styles.states} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         {!home && !reduced && !showPicker && !pending ? <HomeIntroMark epoch={intro.epoch} /> : null}
         {showPicker ? destination : null}
-        {!showPicker && !pending && showUsage ? (
-          <Animated.View style={[styles.usage, !home && usageStyle]}>
-            <HomeUsageCard intro={reduced ? null : intro} />
-          </Animated.View>
+        {heroInMiddle && hero ? (
+          // Os dois vãos iguais centram o título; a marca mora no de cima e só aparece se couber.
+          <View style={styles.heroArea}>
+            <View style={styles.heroSpace} onLayout={(event) => setMarkRoom(event.nativeEvent.layout.height)}>
+              {markRoom >= MARK_SIZE + theme.base.space[4] ? <HomeQuietMark size={MARK_SIZE} /> : null}
+            </View>
+            {hero}
+            <View style={styles.heroSpace} />
+          </View>
         ) : null}
-        {!showPicker && !pending && !showUsage ? (
+        {!home && !showHero && !showPicker && !pending ? (
           <View style={styles.emptyHint}>
             <Text style={styles.hint}>{m.native_empty_chat_hint({ agent: providerLabel })}</Text>
           </View>
@@ -435,7 +458,7 @@ export function NewConversation({
       </Animated.View>
       </View>
 
-      <Animated.View style={home ? [styles.formFrame, frameStyle] : undefined}>
+      <Animated.View style={home ? [styles.formFrame, frameStyle] : styles.shrink}>
       {home ? <Animated.View style={[styles.launcherPosition, launcherStyle]} pointerEvents={collapsed ? 'auto' : 'none'}
         accessibilityElementsHidden={!collapsed} importantForAccessibility={collapsed ? 'auto' : 'no-hide-descendants'}
         onLayout={(event) => { launcherHeight.value = event.nativeEvent.layout.height; }}>
@@ -459,15 +482,17 @@ export function NewConversation({
           {dictation.error ? <Text style={styles.error} accessibilityRole="alert">{dictation.error}</Text> : null}
         </Glass>
       </Animated.View> : null}
-      <Animated.View style={home ? [styles.measuredForm, formStyle] : undefined} pointerEvents={collapsed ? 'none' : 'auto'}
+      <Animated.View style={home ? [styles.measuredForm, formStyle] : styles.shrink} pointerEvents={collapsed ? 'none' : 'auto'}
         accessibilityElementsHidden={collapsed} importantForAccessibility={collapsed ? 'no-hide-descendants' : 'auto'}
         onLayout={home ? (event) => { formHeight.value = event.nativeEvent.layout.height; } : undefined}>
-      <Animated.View style={[styles.topPills, !home && riseTopStyle]}>{topPills((opener) => openSheet('folder', opener))}</Animated.View>
+      {/* O teto da doca segura a caixa enquanto a medida do campo não chega: ela encolhe e o Enviar fica à vista. */}
+      <ComposerDock onLayout={(event) => setBlockHeight(event.nativeEvent.layout.height)}>
+      {!heroInMiddle ? hero : null}
 
-      <Animated.View style={!home ? riseStyle : undefined}>
+      <Animated.View style={[styles.shrink, !home && riseStyle]}>
 
       {optionNotice}
-      <View style={styles.optionPills}>{optionPills}</View>
+      <View ref={folderAnchor} collapsable={false} style={styles.optionPills}>{optionPills}</View>
       {/* Campo em cima, na largura toda; anexo, microfone, chip do provider e Enviar na linha de baixo. */}
       <ComposerBox focused={focused} footer={(
         <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
@@ -481,11 +506,12 @@ export function NewConversation({
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
         <SlashSuggest matches={suggestions} onPick={pickSlash}
           error={slashQuery !== null ? commandsError : ''} onRetry={retryCommands} />
-        {/* Cinco linhas e rola: o título ocupa o alto, e mais que isso entrava embaixo do teclado. */}
+        {/* Até cinco linhas e rola; com o teclado aberto, só o que cabe acima dele. */}
+        <View onLayout={(event) => setFieldHeight(event.nativeEvent.layout.height)}>
         <ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
           selection={selection}
           onSelectionChange={(e) => { setSelection(undefined); setCaret(e.nativeEvent.selection); }}
-          maxHeight={FIELD_MAX_HEIGHT}
+          maxHeight={fieldMax}
           placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
           onPaste={(files, error) => {
@@ -496,6 +522,7 @@ export function NewConversation({
             pick(fromPastedFile(f));
             if (files.length > 1) setAttachError(m.nova_conversa_um_anexo());
           }} />
+        </View>
         {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
         {dictation.error ? (
           <View style={styles.errorRow}>
@@ -511,8 +538,11 @@ export function NewConversation({
       </ComposerBox>
       <View style={styles.underBox} />
       </Animated.View>
+      </ComposerDock>
       </Animated.View>
       </Animated.View>
+      </ComposerViewport>
+      </View>
       </KeyboardAvoidingView>
 
       <AnchoredPanel open={sheet === 'resume'} anchor={sheetOpener.current} onClose={closeSheet} onDismissed={onSheetDismiss}
@@ -523,7 +553,8 @@ export function NewConversation({
       {/* O menu de pasta do PC (render_compact_folders): painel preso à pílula, como os menus das outras pílulas. */}
       <AnchoredPanel
         open={sheet === 'folder'}
-        anchor={sheetOpener.current}
+        anchor={folderAnchor.current ?? sheetOpener.current}
+        maxHeightRatio={0.75}
         onClose={closeSheet}
         onDismissed={onSheetDismiss}
         label={m.native_new_chat_folder()}
@@ -557,10 +588,20 @@ export function NewConversation({
 // Imagem, Transparência) vale aqui como no chat.
 // Cinco linhas do corpo (24) mais o respiro de cima e de baixo do campo.
 const FIELD_MAX_HEIGHT = 24 * 5 + 16;
+// Duas linhas: menos que isso o campo deixa de servir para escrever.
+const FIELD_MIN_HEIGHT = 24 * 2 + 16;
+// O que o meio guarda com o teclado aberto, para arrastar e fechá-lo. Acima da reserva do
+// ComposerDock (96): assim a doca só aperta antes da primeira medida, e a medida nunca sai torta.
+const MIDDLE_RESERVE = 120;
+// Um alvo de toque: o mínimo que ainda dá para arrastar e baixar o teclado.
+const MIDDLE_MIN_RESERVE = 44;
+const MARK_SIZE = 84;
 
 const styles = StyleSheet.create((theme) => ({
   root: { flex: 1, backgroundColor: 'transparent' },
   keyboard: { flex: 1 },
+  area: { flex: 1 },
+  shrink: { flexShrink: 1, minHeight: 0 },
   middle: { flex: 1, minHeight: 44, position: 'relative' },
   homeList: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   states: { flex: 1, minHeight: 44 },
@@ -572,10 +613,10 @@ const styles = StyleSheet.create((theme) => ({
   launcherText: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
   launcherMic: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   scroll: { flexGrow: 1, padding: theme.base.space[4], gap: theme.base.space[4] },
-  // Como no PC: o uso fica no alto, longe da caixa de mensagem.
-  usage: { paddingTop: theme.base.space[2] },
   emptyHint: { flexGrow: 1, minHeight: 140, alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.base.space[5] },
-  // O título da conversa nova, no meio; o respiro de cima o separa do resumo de uso.
+  heroArea: { flexGrow: 1 },
+  heroSpace: { flexGrow: 1, flexBasis: 0, position: 'relative' },
+  // O título da conversa nova, no meio da área livre (ou colado à caixa enquanto falta a pasta).
   topPills: {
     alignItems: 'center',
     gap: theme.base.space[1],
@@ -590,9 +631,10 @@ const styles = StyleSheet.create((theme) => ({
   optionPills: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.base.space[0.5],
+    // Respiro entre as pílulas e até a caixa: alvos pequenos colados levam o dedo ao vizinho.
+    gap: theme.base.space[3],
     paddingHorizontal: theme.base.space[3],
-    paddingBottom: theme.base.space[1],
+    paddingBottom: theme.base.space[3],
     minHeight: 34,
   },
   underBox: { height: theme.base.space[2] },
