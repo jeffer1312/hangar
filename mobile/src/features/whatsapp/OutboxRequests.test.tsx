@@ -118,6 +118,16 @@ it('Enviar responde com via mobile e o cartão some', async () => {
   expect(notice('a')).toBeNull();
 });
 
+it('dois toques seguidos em Enviar respondem uma vez só', async () => {
+  let release!: () => void;
+  mocks.answer.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve; }));
+  await render([bucket('a')], { a: event(draft('d20')) });
+  await act(async () => { openWhatsAppDraft({ serverId: 'a', draftId: 'd20' }); });
+  await act(async () => { const send = button(m.whatsapp_draft_send())!; send.click(); send.click(); });
+  expect(mocks.answer).toHaveBeenCalledTimes(1);
+  await act(async () => { release(); });
+});
+
 it('Recusar responde decline', async () => {
   await render([bucket('a')], { a: event(draft('d5')) });
   await act(async () => { openWhatsAppDraft({ serverId: 'a', draftId: 'd5' }); });

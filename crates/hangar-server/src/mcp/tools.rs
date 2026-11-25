@@ -1228,6 +1228,14 @@ impl Tools {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn a_route_body_past_the_limit_is_an_error_not_an_empty_answer() {
+        let api = Router::new().route("/big", axum::routing::get(|| async { vec![b'x'; ROUTE_BODY_LIMIT + 1] }));
+        let (status, value) = call_route(api, "t", None, Method::GET, "/big", None).await;
+        assert_eq!(status, 502, "{value}");
+        assert!(value["detail"].as_str().is_some_and(|d| !d.is_empty()), "{value}");
+    }
+
     /// Trava da abertura única: todo campo da tabela de abertura existe no `new_session` (catálogo e
     /// argumentos) e chega ao corpo do `POST /api/sessions` com a chave do pedido.
     #[test]
@@ -1464,7 +1472,10 @@ pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str
     request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
     let Ok(response) = api.call(request).await;
     let status = response.status().as_u16();
-    let raw = axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await.unwrap_or_default();
+    let raw = match axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await {
+        Ok(raw) => raw,
+        Err(error) => return (502, json!({"detail": format!("resposta da rota {path} ilegível ({status}): {error}")})),
+    };
     (status, serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"detail": String::from_utf8_lossy(&raw)})))
 }
 

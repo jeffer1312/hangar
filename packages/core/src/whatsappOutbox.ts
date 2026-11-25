@@ -84,7 +84,12 @@ export function parseWhatsAppOutboxEvent(data: string): WhatsAppOutboxEvent | nu
   if (!raw || typeof raw !== 'object') return null;
   const drafts = (raw as { drafts?: unknown }).drafts;
   if (!Array.isArray(drafts)) return null;
-  return { drafts: drafts.flatMap((d) => { const draft = draftOf(d); return draft ? [draft] : []; }) };
+  return { drafts: drafts.flatMap((d) => {
+    const draft = draftOf(d);
+    // Pendente que não se lê nunca vira cartão: a sessão que pediu fica esperando sem ninguém saber por quê.
+    if (!draft && (d as { state?: unknown } | null)?.state === 'pending') console.warn('whatsapp outbox: unreadable pending draft', (d as { id?: unknown }).id);
+    return draft ? [draft] : [];
+  }) };
 }
 
 /** Responde o rascunho na máquina do WhatsApp; `via` só vai no envio e serve ao registro do serviço. */

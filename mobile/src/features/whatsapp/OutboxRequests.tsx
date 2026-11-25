@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type ReactNode } from 'react';
+import { memo, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
@@ -56,9 +56,12 @@ export const OutboxRequestSheet = outbox.Sheet;
 function DraftCard({ server, item: draft, onDone }: { server: Server; item: WhatsAppDraft; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // O `busy` só chega no próximo render: dois toques no mesmo quadro passariam os dois.
+  const inFlight = useRef(false);
 
   const answer = async (kind: WhatsAppDraftAnswer) => {
-    if (busy) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError('');
     try {
@@ -81,7 +84,10 @@ function DraftCard({ server, item: draft, onDone }: { server: Server; item: What
         ? await getWhatsApp(server).then((s) => s.status?.reachout_locked_until ?? null, () => null) : null;
       setError(whatsappDraftRefusalText(code, until) ?? fallback);
       haptic.error();
-    } finally { setBusy(false); }
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
   };
 
   return <DraftCardView draft={draft} busy={busy} error={error} onAnswer={(kind) => void answer(kind)} />;

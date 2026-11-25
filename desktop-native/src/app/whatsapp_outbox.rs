@@ -54,7 +54,8 @@ pub(crate) struct Draft {
 /// pendente sai da lista: só `pending` aceita resposta. Lê cada rascunho direto do evento, sem copiar o JSON.
 pub(super) fn parse(data: &Value) -> Option<Vec<Draft>> {
     let drafts = data.get("drafts")?.as_array()?;
-    Some(drafts.iter().filter_map(|d| <Draft as serde::Deserialize>::deserialize(d).ok())
+    Some(drafts.iter().filter_map(|d| <Draft as serde::Deserialize>::deserialize(d)
+            .map_err(|error| eprintln!("whatsapp: rascunho {} que o app não lê: {error}", d["id"].as_str().unwrap_or("?"))).ok())
         .filter(|d| d.state == "pending" && !d.id.is_empty() && !d.chat_number.is_empty()).collect())
 }
 
