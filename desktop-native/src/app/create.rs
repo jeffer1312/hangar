@@ -1242,6 +1242,7 @@ impl NewSession {
         self.scheduled_touch(&["headless"]);
         self.headless = headless;
         self.headless_touched = true;
+        self.restore_saved_permission();
         self.build_permission_pick(window, cx);
         cx.notify();
         if !save || self.headless_owner != Some(true) { return; }

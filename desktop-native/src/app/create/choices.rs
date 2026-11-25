@@ -757,6 +757,14 @@ impl NewSession {
         self.effort_pick = Some(picker(choices, at, false, |this, id, _, _| { this.scheduled_touch(&["effort"]); this.model_choice_touched = true; this.effort = id; }, window, cx));
     }
 
+    /// O padrão salvo que não cabia na lista do modo anterior (o `manual` lido antes do modo do servidor) volta quando passa a
+    /// caber; com a lista do agente ainda chegando, o padrão guardado pode ser o do agente de antes.
+    pub(super) fn restore_saved_permission(&mut self) {
+        if self.permission_touched || self.models.loading { return; }
+        let Some(saved) = self.saved_default.as_ref().map(|s| s.2.clone()) else { return };
+        if self.permissions().is_some_and(|list| list.contains(&saved.as_str())) { self.permission = saved; }
+    }
+
     pub(super) fn build_permission_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(modes) = self.permissions() else { self.permission_pick = None; return };
         // O `manual` escolhido sem terminal não vai para o agy com terminal, que recusaria a abertura.
@@ -1075,6 +1083,7 @@ impl NewSession {
                 if !self.headless_touched && !self.creating {
                     if let Ok(Some(value)) = &result {
                         self.headless = value.pointer("/campos/headless_default/valor").and_then(Value::as_bool).unwrap_or(true);
+                        self.restore_saved_permission();
                         self.build_permission_pick(window, cx);
                     } else if let Err(error) = &result { self.error = Some(Hangar::fetch_failure(error)); }
                 }
