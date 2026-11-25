@@ -92,6 +92,7 @@ pub(crate) fn fill(rows: &mut [SessionRow], panes: &[Pane], agent_pids: &HashMap
         Ok(found) => { FAILING.store(false, Ordering::Relaxed); found }
         Err(error) => {
             let cleared = set_dial_first(HashMap::new());
+            note_unreached(BTreeSet::new());
             // Uma linha por queda: a lista roda a cada 1,5 s.
             if !FAILING.swap(true, Ordering::Relaxed) {
                 tracing::warn!(code = UNAVAILABLE, kind = ?error.kind(), dial_first_cleared = cleared,
