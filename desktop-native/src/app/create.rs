@@ -836,7 +836,7 @@ impl NewSession {
             preview_scroll: ScrollHandle::new(), resuming: false, baton, baton_by_model: false, baton_open: false,
             baton_preview: Remote::default(), suggested_name: String::new(), prewarm, tags: HashMap::new(),
             recent: Vec::new(), repos: Remote::default(), copies_open: HashSet::new(), merged_open: HashSet::new(),
-            room: Rc::new(Cell::new([0.; 5])), recents_fit: false, _subscriptions: subscriptions,
+            room: Rc::new(Cell::new([0.; 5])), recents_fit: true, _subscriptions: subscriptions,
         };
         dialog.start_prewarm(cx);
         dialog
@@ -1665,9 +1665,10 @@ impl NewSession {
                 self.worktrees.finish(seq, list);
             }
             CreateReply::Repos(seq, result) => {
-                // Falha aqui só tira as cópias e a dobra das recentes: a escolha da pasta segue igual.
+                // Falha aqui só tira as cópias e a dobra das recentes: a escolha da pasta segue igual, e o motivo vai ao log.
                 let repos = result.map_err(|e| Hangar::fetch_failure(&e))
                     .and_then(|v| serde_json::from_value::<Vec<super::worktrees::WorktreeRepo>>(v["repos"].clone()).map_err(|_| tr("invalid_response")));
+                if let Err(erro) = &repos { eprintln!("[nova-conversa] worktrees da máquina não lidas: {erro}"); }
                 if self.repos.finish(seq, repos) { self.refilter(cx); }
             }
             CreateReply::Scan(seq, result) => { if self.scan.finish(seq, result) { self.refilter(cx); } }
@@ -2040,9 +2041,18 @@ impl NewSession {
         }
     }
 
+    /// O que o realce guarda de cada linha: a pasta, ou uma chave da linha "já mescladas", que não é pasta, para as setas
+    /// passarem por ela e o Enter abri-la.
+    fn row_key(&self, ix: usize) -> Option<String> {
+        match self.folders.get(ix)? {
+            FolderIndex::Merged { parent, .. } => self.row_path(*parent).map(|repo| format!("merged:{repo}")),
+            _ => self.row_path(ix).map(str::to_owned),
+        }
+    }
+
     fn active_folder_index(&self) -> Option<usize> {
-        let path = self.folder_active.as_deref()?;
-        (0..self.folders.len()).find(|ix| self.row_path(*ix) == Some(path))
+        let key = self.folder_active.as_deref()?;
+        (0..self.folders.len()).find(|ix| self.row_key(*ix).as_deref() == Some(key))
     }
 
     /// Escolher uma cópia entra na raiz do repositório dela, como escolher o repositório.
@@ -2050,7 +2060,13 @@ impl NewSession {
         let (root_ix, path) = match self.folders.get(ix) {
             Some(FolderIndex::Copy { parent, path }) => (*parent, path.clone()),
             Some(FolderIndex::Merged { parent, .. }) => {
-                if let Some(repo) = self.row_path(*parent).map(str::to_owned) { self.merged_open.insert(repo); self.refilter(cx); cx.notify(); }
+                if let Some(repo) = self.row_path(*parent).map(str::to_owned) {
+                    self.merged_open.insert(repo);
+                    self.refilter(cx);
+                    // A linha some e a primeira cópia mesclada ocupa o lugar dela: o realce continua ali, não volta ao topo.
+                    self.folder_active = self.row_key(ix);
+                    cx.notify();
+                }
                 return;
             }
             Some(_) => match self.row_path(ix) { Some(path) => (ix, path.to_owned()), None => return },
@@ -2064,7 +2080,7 @@ impl NewSession {
     fn move_folder(&mut self, delta: isize, cx: &mut Context<Self>) {
         if self.creating { return; }
         let Some(next) = wrap_step(self.active_folder_index(), self.folders.len(), delta) else { return };
-        self.folder_active = self.row_path(next).map(str::to_owned);
+        self.folder_active = self.row_key(next);
         self.folder_scroll.scroll_to_item(next, ScrollStrategy::Nearest);
         cx.notify();
     }
@@ -2230,8 +2246,15 @@ impl NewSession {
             FolderIndex::Copy { path, .. } => return Some(self.copy_row(ix, path, cx)),
             FolderIndex::Merged { count, .. } => {
                 let count = *count;
-                return Some(div().w_full().pl(px(26.)).pb(px(2.)).child(Button::new(SharedString::from(format!("new-chat-merged-{ix}")))
-                    .ghost().small().disabled(self.creating).label(tr("create_worktrees_merged").replace("{n}", &count.to_string()))
+                let key = self.row_key(ix);
+                let active = key.is_some() && self.folder_active == key;
+                return Some(div().w_full().pl(px(26.)).pb(px(2.))
+                    .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
+                        if this.folder_active != key { this.folder_active = key.clone(); cx.notify(); }
+                    }))
+                    .child(Button::new(SharedString::from(format!("new-chat-merged-{ix}")))
+                    .ghost().small().disabled(self.creating).when(active, |b| b.bg(theme::hover()))
+                    .label(tr("create_worktrees_merged").replace("{n}", &count.to_string()))
                     .on_click(cx.listener(move |this, _, window, cx| this.pick_row(ix, window, cx)))).into_any_element());
             }
             _ => {}
@@ -2291,7 +2314,7 @@ impl NewSession {
         if n == 0 { return None; }
         let open = self.copies_open.contains(path);
         let repo = path.to_owned();
-        let text = tr("create_copies").replace("{n}", &n.to_string());
+        let text = if n == 1 { tr("create_copies_1") } else { tr("create_copies").replace("{n}", &n.to_string()) };
         Some(Button::new(SharedString::from(format!("new-chat-copies-{path}")))
             .custom(ButtonCustomVariant::new(cx).color(theme::accent_dim()).foreground(theme::accent()).hover(theme::accent_focus()).active(theme::accent_focus()))
             .xsmall().rounded_full().flex_shrink_0().selected(open).disabled(self.creating)
@@ -3610,16 +3633,19 @@ impl Hangar {
         let machine = super::servers::norm(&view.read(cx).link.api.identity());
         let sessions = if machine == self.active_key() { Some(self.sessions.as_slice()) }
             else { self.remote.get(&machine).map(|list| list.sessions.as_slice()) };
-        let recent = sessions.map(recents::recent_cwds).unwrap_or_default();
+        // Convidado não vê as pastas de quem o convidou, como no celular.
+        let guest = self.server_entry(&machine).is_some_and(|s| s.invite);
+        let recent = sessions.filter(|_| !guest).map(recents::recent_cwds).unwrap_or_default();
         // O compositor e as pílulas têm a vez: as recentes entram só se o conteúdo sem elas, somado à linha delas, cabe na
         // área. A conta parte do conteúdo sem a linha, que não muda com a decisão: ela não fica indo e voltando.
         let room = view.read(cx).room.clone();
         let [area, content, row, width, row_width] = room.get();
         let drawn = view.read(cx).recents_drawn();
-        let without = content - if drawn { row } else { 0. };
         // A linha medida noutra largura (antes de a janela mudar) não vale: estima-se uma linha só, e a medida corrige.
         let needed = if row > 0. && (row_width - width).abs() < 0.5 { row } else { 36. };
-        let fit = area > 0. && without + needed <= area;
+        let without = content - if drawn { needed } else { 0. };
+        // Antes da primeira medida, mostra: o caso comum é caber, e assim a caixa não pula ao abrir a tela.
+        let fit = area <= 0. || without + needed <= area;
         let (top, bottom, account_note, note) = view.update(cx, |view, cx| {
             if view.tags != *tags { view.tags = tags.clone(); }
             if view.recent != recent { view.recent = recent; }
