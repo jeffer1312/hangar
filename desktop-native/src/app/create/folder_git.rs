@@ -268,23 +268,28 @@ impl NewSession {
         let locked = self.git_locked();
         let now = chrono::Local::now().timestamp() as f64;
         let folder = self.picked.as_deref().map(basename).unwrap_or_default().to_owned();
-        let head = div().px(px(8.)).pt(px(4.)).flex().flex_col().gap(px(2.))
-            .child(div().flex().items_center().gap(px(6.)).text_sm()
-                .child(div().font_weight(FontWeight::SEMIBOLD).truncate().child(folder))
-                .child(chrome::small_icon(IconName::GitBranch, 13., theme::faint()))
-                .child(div().truncate().child(git.current.clone().unwrap_or_else(|| "HEAD".into()))))
-            .child(div().id("new-chat-git-status").role(Role::Status).text_xs().text_color(theme::muted()).whitespace_normal()
-                .child(status_line(&git, now)));
         let pull_blocked = git.dirty > 0 || git.upstream.is_none() || git.diverged();
-        let actions = div().px(px(8.)).pt(px(4.)).flex().gap_2()
-            .child(Button::new("new-chat-git-fetch").outline().small().icon(IconName::RefreshCw).label(tr("folder_git_fetch"))
+        // Fetch e Pull viram botões de ícone na linha da pasta; o nome vai na dica e no leitor de tela.
+        let actions = div().flex_shrink_0().flex().gap(px(4.))
+            .child(Button::new("new-chat-git-fetch").outline().small().icon(IconName::RefreshCw)
+                .tooltip(tr("folder_git_fetch")).accessibility_label(tr("folder_git_fetch"))
                 .loading(busy == Some(GitAction::Fetch)).disabled(locked)
                 .on_click(cx.listener(|this, _, _, cx| this.git_act(GitAction::Fetch, String::new(), false, cx))))
-            .child(Button::new("new-chat-git-pull").small().icon(IconName::ArrowDown).label(tr("folder_git_pull"))
+            .child(Button::new("new-chat-git-pull").small().icon(IconName::ArrowDown)
+                .tooltip(tr("folder_git_pull")).accessibility_label(tr("folder_git_pull"))
                 .map(|b| if git.behind.unwrap_or(0) > 0 && !pull_blocked { b.primary() } else { b.outline() })
                 .loading(busy == Some(GitAction::Pull)).disabled(locked || pull_blocked)
                 .on_click(cx.listener(|this, _, _, cx| this.git_act(GitAction::Pull, String::new(), false, cx))));
-        Some(div().pb(px(4.)).flex().flex_col().gap(px(6.)).child(head).child(actions).children(self.git_feedback(cx)).into_any_element())
+        // A situação inteira (atrás, à frente, fetch) segue logo abaixo: numa linha só ela seria cortada no desktop.
+        let head = div().px(px(8.)).pt(px(4.)).flex().flex_col().gap(px(2.))
+            .child(div().flex().items_center().gap(px(6.)).text_sm()
+                .child(chrome::small_icon(IconName::GitBranch, 13., theme::faint()))
+                .child(div().font_weight(FontWeight::SEMIBOLD).flex_shrink_0().max_w(px(160.)).truncate().child(folder))
+                .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(git.current.clone().unwrap_or_else(|| "HEAD".into())))
+                .child(actions))
+            .child(div().id("new-chat-git-status").role(Role::Status).text_xs().text_color(theme::muted()).whitespace_normal()
+                .child(status_line(&git, now)));
+        Some(div().pb(px(4.)).flex().flex_col().gap(px(6.)).child(head).children(self.git_feedback(cx)).into_any_element())
     }
 
     /// A linha que leva à tela interna de trocar e criar a branch da própria pasta; some fora de repositório.
