@@ -1168,6 +1168,33 @@ fn provider_hooks_agy_state_and_ticket_answer_an_empty_object() {
     assert!(ticket["transcript_path"].as_str().unwrap().ends_with("transcript_full.jsonl"));
 }
 
+/// O subagente roda os hooks no mesmo pane com a conversa dele: o bilhete continua na do principal. Conversa
+/// nova que não é subagente (`/clear`, `/resume`) troca o bilhete.
+#[test]
+fn provider_hooks_agy_subagent_hooks_keep_the_pane_on_the_main_conversation() {
+    const SUB: &str = "d5194f5d-0b70-49c7-9c27-566b54db74d5";
+    const OTHER: &str = "29e6f68d-ffaf-4159-b3ae-44e0e0247081";
+    let root = tempfile::tempdir().unwrap();
+    let brain = root.path().join("brain");
+    let transcript = |id: &str| brain.join(id).join(".system_generated/logs/transcript_full.jsonl").to_string_lossy().into_owned();
+    std::fs::create_dir_all(brain.join(AGY_CONV).join(".system_generated/subagents")).unwrap();
+    std::fs::write(brain.join(AGY_CONV).join(format!(".system_generated/subagents/{SUB}.json")),
+        json!({"conversationId": SUB, "subagentDescriptor": {"typeName": "self", "role": "Directory Lister"}, "state": "SUBAGENT_STATE_ALIVE"}).to_string()).unwrap();
+    let hook = |conversation: &str, event: &str| {
+        let payload = json!({"conversationId": conversation, "hookEventName": event, "cwd": "/w", "transcriptPath": transcript(conversation)});
+        let result = run(root.path(), "agy-state-hook", &serde_json::to_vec(&payload).unwrap(), &[("TMUX_PANE", "%7")]);
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    };
+    let bound = || serde_json::from_slice::<Value>(&std::fs::read(root.path().join("config/.hangar-agy/7.json")).unwrap()).unwrap()["session_id"].clone();
+    hook(AGY_CONV, "SessionStart");
+    hook(SUB, "SessionStart");
+    hook(SUB, "PreInvocation");
+    assert_eq!(bound(), AGY_CONV, "o subagente não toma o pane");
+    assert!(root.path().join(format!("config/.hangar-state/{SUB}.json")).is_file(), "o estado do subagente continua gravado");
+    hook(OTHER, "SessionStart");
+    assert_eq!(bound(), OTHER, "conversa nova que não é subagente troca o bilhete");
+}
+
 #[test]
 fn provider_hooks_agy_without_a_pane_writes_nothing_even_with_a_session_key() {
     // O `agy acp` sem terminal também roda os hooks e herda o CP_SESSION_KEY de quem o lançou.

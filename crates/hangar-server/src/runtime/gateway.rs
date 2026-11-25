@@ -3235,7 +3235,8 @@ impl RuntimeRegistry {
                 EntryHandle::Terminal {..}=>unavailable(),
                 _=>match entry.live.borrow().clone() {
                     Some(live) if live.binding.as_ref().is_some_and(|binding|binding.key==*key && binding.generation==entry.generation && !binding.conversation.is_empty()) && live.public_state["state"].is_string()=>{
-                        json!({"key":key,"generation":entry.generation,"error":live.error.as_ref().map(|error|&error.0),"view":{"alive":live.public_state["state"]!="dead","conversation":live.binding.as_ref().map(|binding|&binding.conversation),"headless":matches!(entry.handle,EntryHandle::Headless(_)),"public_state":live.public_state}})
+                        json!({"key":key,"generation":entry.generation,"error":live.error.as_ref().map(|error|&error.0),"view":{"alive":live.public_state["state"]!="dead","conversation":live.binding.as_ref().map(|binding|&binding.conversation),"headless":matches!(entry.handle,EntryHandle::Headless(_)),"public_state":live.public_state,
+                            "current_model":live.usage["current_model"],"token_usage":live.usage["token_usage"]}})
                     },
                     _=>unavailable(),
                 },

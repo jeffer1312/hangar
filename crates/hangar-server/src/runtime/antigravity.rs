@@ -513,12 +513,15 @@ impl Engine {
                     }
                     acp::Event::TextDelta(piece) => if let Some(text) = self.preview.append(&piece,now) { self.publish("preview",text,effects); },
                     acp::Event::ThoughtDelta(piece) => if let Some(text) = self.thinking.append(&piece,now) { self.publish("thinking",text,effects); },
-                    acp::Event::ToolStarted { title,name,.. } => {
+                    acp::Event::ToolStarted { title,name,input,.. } => {
                         // Texto depois de uma ferramenta é outra mensagem; o definitivo vem do transcript.
                         if let Some(text) = self.preview.clear() { self.publish("preview",text,effects); }
-                        let label = title.or(name).unwrap_or_default();
-                        self.tool = Some(label.clone());
-                        self.publish("tool",label,effects);
+                        let (tool_name,input) = match name {
+                            Some(name) => hangar_transcript::agy_live_tool(&name,input.as_ref().unwrap_or(&Value::Null)),
+                            None => (title.unwrap_or_else(||"tool".into()),serde_json::Map::new()),
+                        };
+                        self.publish("tool",super::live_tool_text(&tool_name,&Value::Object(input)),effects);
+                        self.tool = Some(tool_name);
                     }
                     acp::Event::ToolUpdated { status,.. } => if matches!(status.as_deref(),Some("completed" | "failed")) && self.tool.take().is_some() {
                         self.publish("tool",String::new(),effects);
@@ -534,7 +537,7 @@ impl Engine {
                         effects.push(Effect::StateChanged);
                     }
                     acp::Event::ModelChanged(model) => { self.model = Some(model); effects.push(Effect::StateChanged); }
-                    acp::Event::ContextUsage { used,size } => self.token_usage = json!({"used":used,"size":size}),
+                    acp::Event::ContextUsage { used,size } => { self.token_usage = json!({"used":used,"size":size}); effects.push(Effect::StateChanged); }
                     _ => {}
                 },
             }
@@ -926,6 +929,39 @@ mod tests {
         assert_eq!(engine.view()["state"],"idle");
         assert!(last.contains(&Effect::WakeQueue));
         assert!(engine.deliverable());
+    }
+
+    /// O cliente lê a ferramenta ao vivo como `{"nome","input"}`: rótulo solto derrubava a conversa no app nativo.
+    #[test]
+    fn a_live_tool_is_published_with_the_transcript_name_and_input() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"oi"})).unwrap();
+        written(&mut engine,"in1");
+        let call = |update:Value| json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":OPENED,"update":update}});
+        let tools = |effects:Vec<Effect>| effects.into_iter().filter_map(|e| match e {
+            Effect::Publish { channel,data } if channel == "tool" => Some(serde_json::from_str::<Value>(data["text"].as_str().unwrap()).unwrap()),
+            _ => None,
+        }).collect::<Vec<_>>();
+        let named = feed(&mut engine,call(json!({"sessionUpdate":"tool_call","toolCallId":"c1","name":"run_command","kind":"execute",
+            "title":"rm -f /tmp/x","rawInput":{"CommandLine":"rm -f /tmp/x","WaitMsBeforeAsync":5000}})),2.0);
+        let named = tools(named);
+        assert_eq!((named[0]["nome"].as_str(),named[0]["input"]["command"].as_str()),(Some("Bash"),Some("rm -f /tmp/x")));
+        let titled = tools(feed(&mut engine,call(json!({"sessionUpdate":"tool_call","toolCallId":"c2","title":"Pesquisando"})),3.0));
+        assert_eq!(titled[0],json!({"nome":"Pesquisando","input":{}}));
+    }
+
+    /// Turno real com subagente e tarefa de fundo: cada medição de contexto do ACP chega ao estado, com a janela.
+    #[test]
+    fn the_acp_context_usage_reaches_the_view_as_it_arrives() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"oi"})).unwrap();
+        written(&mut engine,"in1");
+        let mut changed = 0;
+        for line in fixture("acp-subagent.jsonl").into_iter().filter(|l|l["params"]["update"]["sessionUpdate"] == "usage_update") {
+            changed += feed(&mut engine,line,2.0).iter().filter(|e|matches!(e,Effect::StateChanged)).count();
+        }
+        assert!(changed > 0, "a medição avisa o ator");
+        assert_eq!((engine.control_view()["token_usage"]["used"].as_u64(),engine.control_view()["token_usage"]["size"].as_u64()),(Some(36232),Some(1048576)));
     }
 
     #[test]

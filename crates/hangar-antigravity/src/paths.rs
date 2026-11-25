@@ -33,9 +33,7 @@ impl Account {
 
     /// `None` para id que não é UUID: o id vem de hook e de spec, e vira parte de caminho.
     pub fn transcript_path(&self, home: &Path, conversation: &str) -> Option<PathBuf> {
-        valid_conversation_id(conversation).then(|| {
-            self.data_dir(home).join("brain").join(conversation).join(".system_generated").join("logs").join("transcript_full.jsonl")
-        })
+        transcript_in(&self.brain_dir(home), conversation)
     }
 
     pub fn brain_dir(&self, home: &Path) -> PathBuf { self.data_dir(home).join("brain") }
@@ -79,6 +77,57 @@ pub fn conversation_of_transcript(path: &Path) -> Option<String> {
     valid_conversation_id(id).then(|| id.to_owned())
 }
 
+/// A pasta `brain` da conta e o id da conversa a partir do caminho do transcript dela.
+pub fn place_of_transcript(path: &Path) -> Option<(PathBuf, String)> {
+    let conversation = conversation_of_transcript(path)?;
+    Some((path.parent()?.parent()?.parent()?.parent()?.to_path_buf(), conversation))
+}
+
+/// O transcript de uma conversa dentro da pasta `brain`; `None` para id que não é UUID.
+pub fn transcript_in(brain: &Path, conversation: &str) -> Option<PathBuf> {
+    valid_conversation_id(conversation).then(|| brain.join(conversation).join(".system_generated/logs/transcript_full.jsonl"))
+}
+
+/// Onde o `agy` registra os subagentes que a conversa lançou (`<id>.json` cada um).
+pub fn subagents_dir(brain: &Path, conversation: &str) -> PathBuf { brain.join(conversation).join(".system_generated/subagents") }
+
+/// Os subagentes que a conversa lançou, em ordem. Sem a pasta não há subagente; outra falha de leitura volta
+/// como erro, para não parecer conversa sem subagentes.
+pub fn subagent_ids(brain: &Path, conversation: &str) -> std::io::Result<Vec<String>> {
+    if !valid_conversation_id(conversation) { return Ok(Vec::new()); }
+    let entries = match std::fs::read_dir(subagents_dir(brain, conversation)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut ids = Vec::new();
+    for entry in entries {
+        let name = entry?.file_name();
+        if let Some(id) = name.to_str().and_then(|name| name.strip_suffix(".json")).filter(|id| valid_conversation_id(id)) {
+            ids.push(id.to_owned());
+        }
+    }
+    ids.sort();
+    Ok(ids)
+}
+
+/// O descritor (`{typeName, role}`) do subagente `child` lançado pela conversa `parent`; `None` quando `child`
+/// não é subagente dela. O `agy` grava o descritor como objeto ou como texto JSON.
+pub fn subagent_descriptor(brain: &Path, parent: &str, child: &str) -> Option<serde_json::Value> {
+    if !valid_conversation_id(parent) || !valid_conversation_id(child) { return None; }
+    let text = std::fs::read_to_string(subagents_dir(brain, parent).join(format!("{child}.json"))).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(match &value["subagentDescriptor"] {
+        serde_json::Value::String(raw) => serde_json::from_str(raw).unwrap_or_default(),
+        other => other.clone(),
+    })
+}
+
+/// O nome do subagente para a tela: `role`, senão `typeName`.
+pub fn subagent_name(descriptor: &serde_json::Value) -> Option<String> {
+    ["role", "typeName"].iter().find_map(|key| descriptor[*key].as_str().filter(|s| !s.trim().is_empty())).map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +141,15 @@ mod tests {
         assert_eq!(path, Path::new("/home/u/.gemini/antigravity-cli/brain/904fd70e-847b-49ed-9999-a13d7a4d9a98/.system_generated/logs/transcript_full.jsonl"));
         assert_eq!(conversation_of_transcript(&path).as_deref(), Some(ID));
         assert_eq!(Account::default().hooks_path(home), Path::new("/home/u/.gemini/config/hooks.json"));
+    }
+
+    #[test]
+    fn a_missing_subagent_folder_is_no_subagent_and_an_unreadable_one_is_an_error() {
+        let brain = tempfile::tempdir().unwrap();
+        assert_eq!(subagent_ids(brain.path(), ID).unwrap(), Vec::<String>::new());
+        std::fs::create_dir_all(brain.path().join(ID).join(".system_generated")).unwrap();
+        std::fs::write(subagents_dir(brain.path(), ID), "não é pasta").unwrap();
+        assert!(subagent_ids(brain.path(), ID).is_err());
     }
 
     #[test]

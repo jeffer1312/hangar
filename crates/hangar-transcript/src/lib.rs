@@ -8,7 +8,7 @@ mod codex;
 mod agents;
 mod antigravity;
 pub use agents::{parse_pi_object, parse_kimi_object, PiStream};
-pub use antigravity::AgyStream;
+pub use antigravity::{AgyStream, MAIN_SENDER as AGY_MAIN_SENDER, live_tool as agy_live_tool};
 pub mod history;
 mod peer;
 pub mod interactions;
@@ -122,7 +122,7 @@ impl LineParser {
     pub fn has_pending(&self) -> bool { self.pi.has_pending() }
     pub fn pending_offset(&self) -> Option<u64> { self.pi.pending_offset() }
     pub fn new(provider: Provider) -> Self {
-        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, path: None, notices: None, pi: PiStream::default(), agy: AgyStream::default(), repl: code_mode::ReplLinks::default() }
+        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, path: None, notices: None, pi: PiStream::default(), agy: AgyStream::for_transcript(None), repl: code_mode::ReplLinks::default() }
     }
 
     /// Com as notas dos avisos da CLI (hook que falha, nova tentativa, recusa). Só o chat as pede: quem procura
@@ -137,6 +137,7 @@ impl LineParser {
     pub fn with_path(mut self, path: &std::path::Path) -> Self {
         self.run_dir = path.parent().map(std::path::Path::to_path_buf);
         self.path = Some(path.to_path_buf());
+        self.agy = AgyStream::for_transcript(Some(path));
         self
     }
 
@@ -166,7 +167,7 @@ impl LineParser {
     }
 
     fn at_line(&mut self, offset: u64) {
-        if offset == 0 { self.pi = PiStream::default(); self.agy = AgyStream::default(); }
+        if offset == 0 { self.pi = PiStream::default(); self.agy = AgyStream::for_transcript(self.path.as_deref()); }
         let Some(fold) = self.notices.as_mut() else { return };
         if offset == 0 {
             fold.file_start();

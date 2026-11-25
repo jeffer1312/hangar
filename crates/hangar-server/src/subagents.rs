@@ -405,7 +405,16 @@ pub(crate) fn conversation(row: &SessionRow, bound: Option<Binding>) -> Option<(
 pub fn list_subagents(provider: &str, jsonl: &Path) -> Vec<Map<String, Value>> {
     if provider == "codex" { return codex::list(jsonl); }
     let mut out = Vec::new();
-    if let Some(root) = pi_agents_dir(provider, jsonl) {
+    if let Some((brain, conversation)) = agy_place(provider, jsonl) {
+        let ids = hangar_antigravity::paths::subagent_ids(&brain, &conversation).unwrap_or_else(|error| {
+            tracing::warn!(code = "agy_subagents_unreadable", kind = ?error.kind(), "subagents: pasta de subagentes do Antigravity ilegível");
+            Vec::new()
+        });
+        for id in ids {
+            let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, &id).unwrap_or_default();
+            if let Some((agent, _)) = read_agent_agy(&brain, &descriptor, &id, LIST_TAIL) { out.push(agent); }
+        }
+    } else if let Some(root) = pi_agents_dir(provider, jsonl) {
         for task in sorted_dirs(&root) {
             let Some(run) = pi_run_dir(&task) else { continue };
             let id = file_name(&task);
@@ -439,7 +448,15 @@ pub fn list_subagents(provider: &str, jsonl: &Path) -> Vec<Map<String, Value>> {
 pub fn get_subagent(provider: &str, jsonl: &Path, agent_id: &str, events: i64) -> Option<Map<String, Value>> {
     if provider == "codex" { return codex::get(jsonl, agent_id, events); }
     let limit = usize::try_from(events.max(0)).unwrap_or(0);
-    let (mut a, file, kind) = if let Some(root) = pi_agents_dir(provider, jsonl) {
+    let (mut a, file, kind) = if let Some((brain, conversation)) = agy_place(provider, jsonl) {
+        // A lista mostra o subagente mesmo com o descritor ilegível: o detalhe abre o mesmo.
+        let ids = hangar_antigravity::paths::subagent_ids(&brain, &conversation)
+            .map_err(|error| tracing::warn!(code = "agy_subagents_unreadable", kind = ?error.kind(), "subagents: pasta de subagentes do Antigravity ilegível")).ok()?;
+        if !ids.iter().any(|id| id == agent_id) { return None; }
+        let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, agent_id).unwrap_or_default();
+        let (agent, f) = read_agent_agy(&brain, &descriptor, agent_id, DETAIL_TAIL)?;
+        (agent, f, Layout::Agy)
+    } else if let Some(root) = pi_agents_dir(provider, jsonl) {
         let task = child(&root, agent_id)?;
         let run = pi_run_dir(&task)?;
         let f = run.join("session.jsonl");
@@ -479,6 +496,7 @@ enum Layout {
     Claude,
     Kimi,
     Pi,
+    Agy,
 }
 
 /// Pasta filha de nome `id`, conferida pelo caminho resolvido: `..`, caminho absoluto, `D:x` e
@@ -710,6 +728,43 @@ fn parse_agent_claude(f: &Path, tail: usize) -> Option<Map<String, Value>> {
 }
 
 // ── Kimi ──────────────────────────────────────────────────────────────────────
+
+/// A pasta `brain` e a conversa de uma sessão Antigravity: os subagentes moram em
+/// `brain/<conversa>/.system_generated/subagents/<id>.json`, cada um com conversa própria em `brain/<id>`.
+fn agy_place(provider: &str, jsonl: &Path) -> Option<(PathBuf, String)> {
+    if provider != "antigravity" { return None; }
+    hangar_antigravity::paths::place_of_transcript(jsonl)
+}
+
+/// O subagente pelo leitor do chat: o pedido é o primeiro recado do principal, e o estado fica vazio porque o
+/// arquivo do `agy` diz "vivo" para sempre; quem fecha o subagente é o relatório no chat do pai.
+/// `None` só para id que não é UUID; transcript que não abre volta marcado `ilegivel`.
+fn read_agent_agy(brain: &Path, descriptor: &Value, id: &str, tail: usize) -> Option<(Map<String, Value>, PathBuf)> {
+    let f = hangar_antigravity::paths::transcript_in(brain, id)?;
+    let Ok(file) = File::open(&f) else { return Some((unreadable(id, mtime(&f)), f)) };
+    let mut stream = crate::transcript::AgyStream::for_transcript(Some(&f));
+    let mut acc = Acc::default();
+    for line in BufReader::new(file).split(b'\n') {
+        let Ok(line) = line else { return Some((unreadable(id, mtime(&f)), f)) };
+        let Some(value) = decode_line(&line) else { continue };
+        for ev in stream.feed(&value) {
+            if let Some(ts) = ev.ts { acc.when(ms_iso(Some(&json!(ts * 1000.0)))); }
+            match ev.kind {
+                ChatKind::UserMsg if acc.prompt.is_none() => {
+                    let main = format!("[de: {}] ", crate::transcript::AGY_MAIN_SENDER);
+                    acc.prompt = ev.text.as_deref().map(|t| t.strip_prefix(main.as_str()).unwrap_or(t).to_owned());
+                }
+                ChatKind::ToolUse => acc.call(ev.tool_name.as_deref().unwrap_or("?"), ev.tool_input.map(Value::Object).as_ref()),
+                ChatKind::AssistantMsg => if let Some(text) = ev.text.as_deref().map(str::trim).filter(|t| !t.is_empty()) { acc.last_text = text.to_owned(); },
+                _ => {}
+            }
+        }
+    }
+    acc.agent_type = descriptor["typeName"].as_str().map(str::to_owned);
+    let mut m = acc.into_map(id, mtime(&f), tail);
+    if let Some(role) = descriptor["role"].as_str().filter(|r| !r.trim().is_empty()) { m.insert("nickname".into(), role.into()); }
+    Some((m, f))
+}
 
 /// A pasta `agents/` quando o transcript é o `agents/main/wire.jsonl` do Kimi.
 fn kimi_agents_dir(jsonl: &Path) -> Option<PathBuf> {
@@ -967,11 +1022,13 @@ fn tail_events(f: &Path, limit: usize, layout: Layout) -> Option<Vec<ChatEvent>>
     let file = File::open(f).map_err(|e| tracing::warn!("subagents: não consegui ler os eventos de {}: {e}", f.display())).ok()?;
     let mut out = VecDeque::with_capacity(limit.min(1024));
     let mut claude = LineParser::new(Provider::Claude);
+    let mut agy = crate::transcript::AgyStream::for_transcript(Some(f));
     let mut offset = 0u64;
     for line in BufReader::new(file).split(b'\n') {
         let line = line.map_err(|e| tracing::warn!("subagents: não consegui ler os eventos de {}: {e}", f.display())).ok()?;
         let evs = match layout {
             Layout::Claude => claude.feed(&line, offset),
+            Layout::Agy => match decode_line(&line) { Some(value) => agy.feed(&value), None => Vec::new() },
             Layout::Kimi | Layout::Pi => match decode_line(&line) {
                 Some(Value::Object(o)) => if matches!(layout, Layout::Kimi) { kimi_events(&o) } else { pi_events(&o) },
                 _ => Vec::new(),
@@ -995,6 +1052,25 @@ fn tail_events(f: &Path, limit: usize, layout: Layout) -> Option<Vec<ChatEvent>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Conversa real do `agy` (pai com um subagente), com a pasta `brain` da fixture do leitor.
+    #[test]
+    fn antigravity_subagents_come_from_the_conversation_folder() {
+        const PARENT: &str = "d4260961-71cd-4a60-9ae1-410cae6b046d";
+        const SUB: &str = "d5194f5d-0b70-49c7-9c27-566b54db74d5";
+        let brain = Path::new(env!("CARGO_MANIFEST_DIR")).join("../hangar-transcript/tests/fixtures/agy-subagent");
+        let jsonl = brain.join(PARENT).join(".system_generated/logs/transcript_full.jsonl");
+        let list = list_subagents("antigravity", &jsonl);
+        assert_eq!(list.len(), 1);
+        let agent = &list[0];
+        assert_eq!((agent["agentId"].as_str(), agent["agentType"].as_str(), agent["nickname"].as_str()), (Some(SUB), Some("self"), Some("Directory Lister")));
+        assert!(agent["prompt"].as_str().is_some_and(|p| p.starts_with("Liste os arquivos")), "{:?}", agent["prompt"]);
+        assert_eq!(agent["toolCalls"], 3);
+        assert!(agent.get("state").is_none(), "o arquivo do agy diz ALIVE para sempre: quem decide é o chat do pai");
+        let detail = get_subagent("antigravity", &jsonl, SUB, 40).unwrap();
+        assert!(detail["events"].as_array().is_some_and(|events| !events.is_empty()));
+        assert!(get_subagent("antigravity", &jsonl, "../x", 40).is_none());
+    }
 
     fn write(p: &Path, lines: &[Value]) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();

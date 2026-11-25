@@ -173,6 +173,7 @@ impl ReceiptIndex {
         let provider = crate::transcript::Provider::parse(&self.provider).unwrap_or(crate::transcript::Provider::Claude);
         let other = matches!(provider, crate::transcript::Provider::Pi | crate::transcript::Provider::Omp | crate::transcript::Provider::Kimi | crate::transcript::Provider::Antigravity);
         let mut parser = crate::transcript::LineParser::new(provider);
+        if provider == crate::transcript::Provider::Antigravity { parser = parser.with_path(path); }
         let mut offset = self.scan_offset;
         let mut raw = Vec::new();
         loop {

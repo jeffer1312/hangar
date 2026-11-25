@@ -299,12 +299,53 @@ fn write_agy(value: &Value, base: &Path, pane: Option<&str>, psmux: Option<&str>
     if let Some(state) = state {
         marker(base, ".hangar-state", conversation, &json!({"state": state, "ts": timestamp()}))?;
     }
+    // Bilhete ausente é a primeira vez do pane; ilegível, a conferência do subagente não roda e o log diz por quê.
+    let bound = match fs::read(base.join(".hangar-agy").join(format!("{key}.json"))) {
+        Ok(raw) => serde_json::from_slice::<Value>(&raw).ok().and_then(|ticket| ticket["session_id"].as_str().map(str::to_owned))
+            .or_else(|| { log_failure("agy_hook_error.log", "agy_ticket_unreadable"); None }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => { log_failure("agy_hook_error.log", "agy_ticket_unreadable"); None }
+    }.filter(|bound| bound != conversation);
+    let brain = value["transcriptPath"].as_str().and_then(|path| hangar_antigravity::paths::place_of_transcript(Path::new(path))).map(|(brain, _)| brain);
+    if brain.is_none() { log_failure("agy_hook_error.log", "agy_transcript_path_unknown"); }
+    if let (Some(bound), Some(brain)) = (bound, brain) {
+        if descends(&brain, &bound, conversation) { return Ok(()); }
+        // O `agy` grava o arquivo do subagente pouco antes do `SessionStart` dele: a reconferência cobre a máquina
+        // lenta. Só espera o início sem pedido da pessoa com o pane ligado a uma conversa que tem subagentes.
+        if value["hookEventName"] == "SessionStart" && value["lastUserInput"].as_str().is_none_or(str::is_empty)
+            && hangar_antigravity::paths::subagents_dir(&brain, &bound).is_dir() {
+            for _ in 0..3 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if descends(&brain, &bound, conversation) { return Ok(()); }
+            }
+        }
+    }
     marker(base, ".hangar-agy", &key, &json!({
         "session_id": conversation,
         "transcript_path": value.get("transcriptPath").unwrap_or(&Value::Null),
         "cwd": value.get("cwd").unwrap_or(&Value::Null),
         "ts": timestamp(),
     }))
+}
+
+/// O subagente roda os hooks no mesmo pane com a própria conversa: sem isto o chat pularia para ela. Vale para
+/// subagente de subagente, até três níveis abaixo da conversa já ligada ao pane.
+fn descends(brain: &Path, bound: &str, conversation: &str) -> bool {
+    use hangar_antigravity::paths::{subagent_ids, subagents_dir};
+    let mut level = vec![bound.to_owned()];
+    for _ in 0..3 {
+        if level.iter().any(|parent| subagents_dir(brain, parent).join(format!("{conversation}.json")).is_file()) { return true; }
+        let mut next = Vec::new();
+        for parent in &level {
+            match subagent_ids(brain, parent) {
+                Ok(ids) => next.extend(ids),
+                Err(error) => log_failure("agy_hook_error.log", &format!("agy_subagents_unreadable:{:?}", error.kind())),
+            }
+        }
+        level = next;
+        if level.is_empty() { return false; }
+    }
+    false
 }
 
 /// A chave do bilhete: o nome da sessão no psmux, senão o pane do tmux sem o `%`.

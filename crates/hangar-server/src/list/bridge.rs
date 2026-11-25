@@ -1241,7 +1241,8 @@ fn decorate(env: &ListEnv, caches: &Caches, dirs: &Dirs, config_dirs: &[PathBuf]
         }
         let pricing = crate::costs::pricing::default_dir();
         for row in rows.iter_mut().filter(|r| r.provider == "antigravity") {
-            d.agy.decorate(row, &pricing);
+            let live = inp.headless.as_ref().and_then(|views| views.get(&row.name)).map(|snapshot| &snapshot["view"]);
+            d.agy.decorate(row, &pricing, live);
         }
         // O fim do transcript já gravado: o aviso de limite do Claude com terminal vai ao vigia daqui.
         // Antes das respostas: o vigia relê pelo mtime, e elas trocam `last_activity` pela hora da conversa.

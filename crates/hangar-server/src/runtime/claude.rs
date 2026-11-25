@@ -1616,7 +1616,7 @@ impl ClaudeEngine {
                         self.tool_input.clear(); self.tool_name = string(&block["name"]);
                         self.tool_visible = true;
                         self.label = Some(tool_label(self.tool_name.as_deref().unwrap_or("tool"),&json!({})));
-                        self.publish("tool",crate::transcript::pyjson::dumps(&json!({"nome":self.tool_name.as_deref().unwrap_or("tool"),"input":{}}),false),effects);
+                        self.publish("tool",super::live_tool_text(self.tool_name.as_deref().unwrap_or("tool"),&json!({})),effects);
                     }
                     _ => {},
                 }
@@ -1659,7 +1659,7 @@ impl ClaudeEngine {
         let input = partial_input(&text);
         self.label = Some(tool_label(&name,&input));
         self.tool_visible = true;
-        self.publish("tool",crate::transcript::pyjson::dumps(&json!({"nome":name,"input":input}),false),effects);
+        self.publish("tool",super::live_tool_text(&name,&input),effects);
         self.changed(effects,true);
     }
 
