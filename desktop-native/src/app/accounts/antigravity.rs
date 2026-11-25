@@ -96,7 +96,7 @@ pub(super) fn merge(list: &[Credential], agy: &[AgyAccount]) -> Vec<Credential> 
 }
 
 /// Frase do código que as rotas do Antigravity devolvem; os outros seguem pela frase comum.
-fn agy_failure(error: &Failure) -> String {
+pub(super) fn agy_failure(error: &Failure) -> String {
     let key = match error.code.as_deref() {
         Some("erro_codigo_vazio") => "accounts_agy_code_empty",
         Some("erro_codigo_invalido") => "accounts_agy_code_invalid",
@@ -138,9 +138,8 @@ impl Hangar {
         cx.notify();
     }
 
-    /// Abre o painel. Com `account` (o Entrar da linha) o login começa já; sem, mostra "Qual conta".
-    /// Aceitar os Termos: abre uma sessão do agy com terminal na casa da máquina. A tela dos Termos chega ao chat
-    /// como cartão, com as opções do agy, e só a escolha da pessoa vira tecla.
+    /// "Abrir no terminal" do painel dos Termos que falhou: abre uma sessão do agy com terminal na casa da máquina. A
+    /// tela dos Termos chega ao chat como cartão, com as opções do agy, e só a escolha da pessoa vira tecla.
     pub(super) fn start_agy_terms(&mut self, home: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         let connection = self.connection;
@@ -164,6 +163,7 @@ impl Hangar {
         }).detach();
     }
 
+    /// Abre o painel. Com `account` (o Entrar da linha) o login começa já; sem, mostra "Qual conta".
     pub(super) fn start_agy(&mut self, account: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if self.accounts_busy() || self.api.is_none() { return; }
         let code = cx.new(|cx| InputState::new(window, cx).placeholder(tr("accounts_agy_code_placeholder")));
@@ -264,6 +264,8 @@ impl Hangar {
 
     /// A página saiu com o painel aberto: a tentativa parada no servidor (um processo do agy esperando o código) fecha aqui.
     pub(super) fn agy_left(&mut self) {
+        self.accounts.terms_after_login = false;
+        self.agy_terms_close();
         let Some(flow) = self.accounts.antigravity.take() else { return };
         let (Some((id, attempt)), Some(api)) = (flow.open_attempt(), self.api.clone()) else { return };
         self.runtime.spawn(async move {
@@ -285,6 +287,11 @@ impl Hangar {
                         self.accounts.agy.loading = false;
                     },
                     parsed => { self.accounts.agy.finish(seq, parsed); }
+                }
+                // Login da padrão concluído com os Termos pendentes: o painel deles abre sozinho (D1).
+                if seq == self.accounts.agy.seq && std::mem::take(&mut self.accounts.terms_after_login) && self.accounts.antigravity.is_none()
+                    && self.accounts.agy.ok().is_some_and(|l| l.accounts.iter().any(|a| a.default && !a.terms)) {
+                    self.open_agy_terms(cx);
                 }
             }
             AgyReply::Attempt(turn, result, started) => {
@@ -312,8 +319,10 @@ impl Hangar {
                 match state.as_str() {
                     "concluido" => {
                         let name = match flow.account.as_deref() { Some("default") | None => tr("accounts_agy_default_name"), Some(id) => id.to_owned() };
+                        let default = flow.account.as_deref().is_none_or(|id| id == "default");
                         flow.task = None;
                         self.accounts.antigravity = None;
+                        self.accounts.terms_after_login = default;
                         self.accounts.outcome = Some((tr("accounts_agy_connected").replace("{name}", &name), false));
                         self.load_accounts(true, cx);
                         self.root_focus.focus(window, cx);

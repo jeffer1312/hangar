@@ -6,6 +6,7 @@
 //! instalar o CLIProxyAPI, conectar a conta e criar o modelo dele, em `cliproxy`; as contas Google do Antigravity, em
 //! `antigravity`.
 mod actions;
+mod agy_terms;
 mod antigravity;
 mod cliproxy;
 mod codex;
@@ -16,6 +17,7 @@ mod usage;
 use super::*;
 use super::device::Remote;
 use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
+use agy_terms::{AgyTermsFlow, TermsReply};
 use antigravity::{AgyFlow, AgyReply};
 use cliproxy::{CliproxyReply, CliproxyWizard};
 use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
@@ -261,6 +263,10 @@ pub(super) struct Accounts {
     antigravity: Option<AgyFlow>,
     /// Login e Termos das contas Antigravity, lidos só com a página aberta.
     agy: Remote<antigravity::AgyList>,
+    /// Painel dos Termos do Google do agy, no lugar da lista.
+    terms: Option<AgyTermsFlow>,
+    /// Login da conta padrão concluído: a próxima lista do agy com os Termos pendentes abre o painel deles.
+    terms_after_login: bool,
     /// Assistente do CLIProxyAPI aberto no lugar da lista.
     cliproxy: Option<CliproxyWizard>,
     /// Versão nova do proxy instalado pelo Hangar e a atualização dele.
@@ -295,6 +301,7 @@ pub(super) enum AccountsReply {
     Keys(KeysReply),
     Codex(CodexReply),
     Antigravity(AgyReply),
+    AgyTerms(TermsReply),
     Cliproxy(CliproxyReply),
     ProxyUpdate(proxy_update::UpdateReply),
 }
@@ -1092,6 +1099,7 @@ impl Hangar {
             AccountsReply::Keys(reply) => self.receive_keys(reply, window, cx),
             AccountsReply::Codex(reply) => self.receive_codex(reply, window, cx),
             AccountsReply::Antigravity(reply) => self.receive_agy(reply, window, cx),
+            AccountsReply::AgyTerms(reply) => self.receive_agy_terms(reply, window, cx),
             AccountsReply::Cliproxy(reply) => self.receive_cliproxy(reply, window, cx),
             AccountsReply::ProxyUpdate(reply) => self.receive_proxy_update(reply, window, cx),
         }
@@ -1130,6 +1138,7 @@ impl Hangar {
         if let Some(panel) = self.render_engine_form(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_codex(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_agy(cx) { return page.child(top(None)).child(panel).into_any_element(); }
+        if let Some(panel) = self.render_agy_terms(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_cliproxy_wizard(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {
             (None, _) => return page.child(top(None)).child(settings_box().mt(px(20.))
@@ -1528,10 +1537,10 @@ impl Hangar {
                 .when(row.sign_out.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-out-{}", row.id))).outline().small()
                     .label(tr("accounts_agy_sign_out")).disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(id.clone(), ChangeKind::SignOut, window, cx)))))
-                .children(row.agy_terms.clone().map(|home| Button::new(SharedString::from(format!("accounts-agy-terms-{}", row.id))).outline().small()
+                .when(row.agy_terms.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-terms-{}", row.id))).outline().small()
                     .label(tr("accounts_agy_accept_terms")).tooltip(tr("accounts_agy_accept_terms_hint"))
                     .accessibility_label(tr("accounts_agy_accept_terms_hint")).disabled(busy)
-                    .on_click(cx.listener(move |this, _, window, cx| this.start_agy_terms(home.clone(), window, cx)))))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_agy_terms(cx)))))
                 .when(!signed && row.remove.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-remove-{}", row.id)))
                     .outline().small().label(tr("accounts_agy_remove")).disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(remove_id.clone(), ChangeKind::Remove, window, cx)))))
