@@ -2,7 +2,8 @@
 //! confiada (renovação) de uma conta Claude: criar, digitar, ler o link, colar o código e fechar.
 //! A identidade é a operação (`term-login-<operação>`), nunca a conta: limpar a antiga não toca a nova.
 use super::AccountKey;
-use crate::session_open::terminal::{Mux, MuxOutput, ProcessMux, TerminalEnv, exports_config_dir};
+use super::private_window::{PrivateWindows, ProcessWindowMux, WindowMux};
+use crate::session_open::terminal::{MuxOutput, TerminalEnv, exports_config_dir};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
@@ -10,14 +11,6 @@ use std::{
     path::{Path, PathBuf},
     sync::LazyLock,
 };
-
-/// Quem roda o multiplexador; os testes trocam por um falso.
-pub trait WindowMux: Send + Sync {
-    /// Prefixo do escopo do systemd (`systemd-run … --`); vazio sem ele.
-    fn scope(&self) -> BoxFuture<'_, Vec<String>>;
-    /// `scope` vem antes do programa (só no `new-session`); `args` sem o programa; `stdin` vazio = sem entrada.
-    fn run(&self, scope: Vec<String>, args: Vec<String>, stdin: Vec<u8>) -> BoxFuture<'_, MuxOutput>;
-}
 
 /// O que o login e a renovação pedem à janela; os testes de quem chama trocam por um falso.
 pub trait WindowBackend: Send + Sync {
@@ -43,14 +36,10 @@ struct Table {
 }
 
 pub struct ClaudeWindows {
-    mux: Box<dyn WindowMux>,
+    win: PrivateWindows,
     env: TerminalEnv,
-    /// Marca as janelas deste servidor: a varredura nunca derruba a de outro processo (um teste com
-    /// outra HOME, outra instalação) que use o mesmo multiplexador.
-    owner: String,
     /// `BROWSER` da janela: com ele a CLI não abre navegador na máquina do servidor.
     browser: Option<String>,
-    diary: Option<PathBuf>,
     /// Abrir, varrer e fechar não se cruzam.
     table: tokio::sync::Mutex<Table>,
 }
@@ -101,21 +90,12 @@ pub fn trusted_folder(config_file: &Path) -> Option<PathBuf> {
 impl ClaudeWindows {
     pub fn new(mux: Box<dyn WindowMux>, env: TerminalEnv, browser: Option<String>, diary: Option<PathBuf>) -> Self {
         let owner = env.default_config_dir.to_string_lossy().into_owned();
-        Self { mux, env, owner, browser, diary, table: Default::default() }
+        Self { win: PrivateWindows::new(mux, env.windows, PREFIX, owner, diary), env, browser, table: Default::default() }
     }
 
-    fn pane(name: &str) -> String { format!("={name}:") }
+    fn pane(name: &str) -> String { PrivateWindows::pane(name) }
 
-    async fn run(&self, args: &[&str]) -> MuxOutput {
-        self.mux.run(Vec::new(), args.iter().map(|arg| (*arg).to_owned()).collect(), Vec::new()).await
-    }
-
-    fn note(&self, code: &'static str) {
-        tracing::warn!(code, "janela de login: limpeza de janela esquecida falhou");
-        if self.diary.is_some() {
-            crate::diag::record(self.diary.clone(), vec![json!({"evento": "conta.janela_orfa", "nivel": "aviso", "codigo": code})], "contas");
-        }
-    }
+    async fn run(&self, args: &[&str]) -> MuxOutput { self.win.run(args).await }
 
     pub async fn open(&self, key: &AccountKey, operation: &str) -> Result<(), &'static str> {
         self.start(key, operation, None, "claude auth login --claudeai", self.browser.as_deref()).await
@@ -151,8 +131,8 @@ impl ClaudeWindows {
         let cwd = folder.map_or_else(|| home.clone(), |folder| folder.to_string_lossy().into_owned());
         self.spawn(&name, &cwd, &home, browser).await?;
         table.active.insert(operation.to_owned(), key.clone());
-        if let Err(error) = self.type_line(&name, command).await {
-            if self.kill(&name).await.is_err() { self.note("nao_fechou"); }
+        if let Err(error) = self.win.type_line(&name, command).await {
+            if self.win.kill(&name).await.is_err() { self.win.note("nao_fechou"); }
             table.active.remove(operation);
             return Err(error);
         }
@@ -160,58 +140,16 @@ impl ClaudeWindows {
     }
 
     async fn spawn(&self, name: &str, cwd: &str, home: &str, browser: Option<&str>) -> Result<(), &'static str> {
-        // Larga o bastante para o link (~500 colunas) caber numa linha: juntar linhas quebradas não
-        // distingue a última linha cheia do link da linha seguinte da tela.
-        let mut args: Vec<String> = ["new-session", "-d", "-s", name, "-c", cwd, "-x", "1000", "-y", "50"].map(str::to_owned).into();
         // O shell não tem comando onde pôr o `env -u`: no tmux a conta vai sempre no `-e`, senão a
         // credencial cairia na conta que o servidor tmux herdou. No psmux o pane herda de quem chama,
         // e a conta padrão é a ausência da variável.
         let config = exports_config_dir(&self.env, Some(home)).or_else(|| (!self.env.windows).then(|| home.to_owned()));
-        if let Some(dir) = config { args.extend(["-e".into(), format!("CLAUDE_CONFIG_DIR={dir}")]); }
-        if let Some(browser) = browser { args.extend(["-e".into(), format!("BROWSER={browser}")]); }
-        let scope = if self.env.windows { Vec::new() } else { self.mux.scope().await };
-        let scoped = !scope.is_empty();
-        let mut created = self.mux.run(scope, args.clone(), Vec::new()).await;
-        // `systemd-run` que não cria mais escopo: sobe sem ele, como a sessão.
-        if scoped && created.code != Some(0) && created.stderr.trim_start().starts_with("Failed to ") {
-            created = self.mux.run(Vec::new(), args, Vec::new()).await;
-        }
-        if created.code != Some(0) && self.run(&["has-session", "-t", &format!("={name}")]).await.code != Some(0) {
-            let cause: String = created.stderr.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("").chars().take(200).collect();
-            tracing::warn!(code = "window_mux_refused", retorno = ?created.code, %cause, "janela de login não foi criada");
-            return Err("window_mux_refused");
-        }
-        // Sem a marca a janela vira card de sessão nas listas.
-        let hidden = self.run(&["set-option", "-t", &Self::pane(name), "@cp_hidden", "1"]).await;
-        let owned = self.run(&["set-option", "-t", &Self::pane(name), "@cp_login_owner", &self.owner]).await;
-        if hidden.code != Some(0) || owned.code != Some(0) {
-            if self.kill(name).await.is_err() { self.note("nao_fechou"); }
-            return Err("window_hide_failed");
-        }
-        Ok(())
-    }
-
-    async fn keys(&self, args: Vec<String>) -> MuxOutput {
-        let out = self.mux.run(Vec::new(), args.clone(), Vec::new()).await;
-        // Observador tmux somente de leitura herdado: o mesmo pane com cliente vazio passa.
-        if self.env.windows || out.code == Some(0) || out.stderr.trim() != "client is read-only" { return out; }
-        let mut retry = args;
-        retry.splice(1..1, ["-c".to_owned(), String::new()]);
-        self.mux.run(Vec::new(), retry, Vec::new()).await
-    }
-
-    async fn enter(&self, name: &str) -> bool {
-        // Fora do Windows, CR cru: com `extended-keys` o nome `Enter` sai codificado. No psmux o CR
-        // dentro de `-l` é engolido, e lá vale a tecla nomeada.
-        let tail: &[&str] = if self.env.windows { &["Enter"] } else { &["-l", "--", "\r"] };
-        let args = ["send-keys", "-t", &Self::pane(name)].iter().chain(tail).map(|arg| (*arg).to_owned()).collect();
-        self.keys(args).await.code == Some(0)
-    }
-
-    async fn type_line(&self, name: &str, text: &str) -> Result<(), &'static str> {
-        let typed = self.keys(["send-keys", "-t", &Self::pane(name), "-l", "--", text].map(str::to_owned).into()).await;
-        if typed.code != Some(0) || !self.enter(name).await { return Err("window_type_failed"); }
-        Ok(())
+        let mut env = Vec::new();
+        if let Some(dir) = config { env.push(("CLAUDE_CONFIG_DIR".to_owned(), dir)); }
+        if let Some(browser) = browser { env.push(("BROWSER".to_owned(), browser.to_owned())); }
+        // Larga o bastante para o link (~500 colunas) caber numa linha: juntar linhas quebradas não
+        // distingue a última linha cheia do link da linha seguinte da tela.
+        self.win.spawn(name, cwd, 1000, &env).await
     }
 
     /// A tela das últimas 200 linhas com o link juntado.
@@ -263,15 +201,15 @@ impl ClaudeWindows {
             let session: &[&str] = if self.env.windows { &["-t", &name] } else { &[] };
             std::iter::once(verb).chain(session.iter().copied()).chain(tail.iter().copied()).map(str::to_owned).collect()
         };
-        let loaded = self.mux.run(Vec::new(), of_session("load-buffer", &["-b", &buffer, "-"]), code.as_bytes().to_vec()).await;
+        let loaded = self.win.run_input(of_session("load-buffer", &["-b", &buffer, "-"]), code.as_bytes().to_vec()).await;
         let result = if loaded.code != Some(0) {
             Err("window_buffer_failed")
-        } else if self.run(&["paste-buffer", "-t", &Self::pane(&name), "-b", &buffer, "-d"]).await.code != Some(0) || !self.enter(&name).await {
+        } else if self.run(&["paste-buffer", "-t", &Self::pane(&name), "-b", &buffer, "-d"]).await.code != Some(0) || !self.win.enter(&name).await {
             Err("window_paste_failed")
         } else {
             Ok(())
         };
-        let _ = self.mux.run(Vec::new(), of_session("delete-buffer", &["-b", &buffer]), Vec::new()).await;
+        let _ = self.win.run_input(of_session("delete-buffer", &["-b", &buffer]), Vec::new()).await;
         result
     }
 
@@ -282,20 +220,9 @@ impl ClaudeWindows {
         let mut table = self.table.lock().await;
         if table.active.get(operation).is_some_and(|owner| owner != key) { return Err("window_operation_diverged"); }
         table.closed.insert(operation.to_owned());
-        let result = self.kill(&format!("{PREFIX}{operation}")).await;
+        let result = self.win.kill(&format!("{PREFIX}{operation}")).await;
         table.active.remove(operation);
         result
-    }
-
-    /// Só a releitura prova: o psmux responde 0 ao `kill-session` com a sessão viva. No psmux o `=`
-    /// não vale no `kill-session` e o nome cru já é exato.
-    async fn kill(&self, name: &str) -> Result<(), &'static str> {
-        let _ = self.run(&["kill-session", "-t", &crate::session_open::terminal::target(self.env.windows, name)]).await;
-        match self.run(&["has-session", "-t", &format!("={name}")]).await.code {
-            Some(0) => Err("window_still_open"),
-            Some(1) => Ok(()),
-            _ => Err("window_close_unconfirmed"),
-        }
     }
 
     pub async fn sweep(&self) {
@@ -304,25 +231,7 @@ impl ClaudeWindows {
     }
 
     async fn sweep_locked(&self, table: &Table) {
-        let listed = self.run(&["list-sessions", "-F", "#{session_name}"]).await;
-        if listed.code != Some(0) {
-            let stderr = listed.stderr.trim_start();
-            let none = listed.code == Some(1) && ["no server", "no sessions", "error connecting to "].iter().any(|p| stderr.starts_with(p));
-            if !none { self.note("lista_indisponivel"); }
-            return;
-        }
-        for name in listed.stdout.lines().map(str::trim) {
-            let Some(operation) = name.strip_prefix(PREFIX).filter(|op| valid_operation(op)) else { continue };
-            if table.active.contains_key(operation) { continue; }
-            let option = |option: &'static str| async move {
-                let out = self.run(&["show-options", "-v", "-t", &Self::pane(name), option]).await;
-                (out.code == Some(0)).then(|| out.stdout.trim().to_owned())
-            };
-            if option("@cp_hidden").await.as_deref() != Some("1") || option("@cp_login_owner").await.as_deref() != Some(self.owner.as_str()) {
-                continue;
-            }
-            if self.kill(name).await.is_err() { self.note("nao_fechou"); }
-        }
+        self.win.sweep(|operation| valid_operation(operation) && !table.active.contains_key(operation)).await;
     }
 }
 
@@ -350,36 +259,6 @@ impl WindowBackend for ClaudeWindows {
     fn sweep(&self) -> BoxFuture<'_, ()> { Box::pin(ClaudeWindows::sweep(self)) }
 }
 
-/// O multiplexador de verdade: `ProcessMux` sem entrada; com entrada, o mesmo cliente com stdin.
-pub struct ProcessWindowMux { mux: ProcessMux, program: String }
-
-impl WindowMux for ProcessWindowMux {
-    fn scope(&self) -> BoxFuture<'_, Vec<String>> { self.mux.scope() }
-
-    fn run(&self, scope: Vec<String>, args: Vec<String>, stdin: Vec<u8>) -> BoxFuture<'_, MuxOutput> {
-        Box::pin(async move {
-            if stdin.is_empty() {
-                return self.mux.run(scope.into_iter().chain([self.program.clone()]).chain(args).collect()).await;
-            }
-            use tokio::io::AsyncWriteExt;
-            let mut command = crate::session_open::terminal::client_command(&self.program);
-            command.args(&args).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped()).kill_on_drop(true);
-            let run = async {
-                let mut child = command.spawn()?;
-                if let Some(mut input) = child.stdin.take() { input.write_all(&stdin).await?; }
-                child.wait_with_output().await
-            };
-            match tokio::time::timeout(self.mux.timeout, run).await {
-                Ok(Ok(out)) => MuxOutput { code: out.status.code(), stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&out.stderr).into_owned() },
-                Ok(Err(error)) => MuxOutput { code: None, stdout: String::new(), stderr: error.to_string() },
-                Err(_) => MuxOutput { code: None, stdout: String::new(), stderr: "o multiplexador não respondeu no prazo".into() },
-            }
-        })
-    }
-}
-
 /// Programa que recebe o link e não abre nada: a tela do Hangar mostra o link e o botão. No Windows a
 /// CLI roda o `BROWSER` no lugar do `rundll32`; o `hostname` recusa o argumento e sai sem janela.
 const BROWSER: Option<&str> = Some(if cfg!(windows) { "hostname.exe" } else { "true" });
@@ -394,7 +273,7 @@ pub fn local(accounts: &super::environment::AccountEnvironment) -> ClaudeWindows
         server_config_dir: accounts.base.get("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).cloned(),
         default_config_dir, birth: std::time::Duration::ZERO };
     let diary = crate::diag::diary_dir_in(accounts);
-    let mux = ProcessWindowMux { mux: ProcessMux { diary: diary.clone(), ..ProcessMux::default() }, program: env.program.clone() };
+    let mux = ProcessWindowMux::new(diary.clone());
     ClaudeWindows::new(Box::new(mux), env, BROWSER.map(str::to_owned), diary)
 }
 

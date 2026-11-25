@@ -10,6 +10,7 @@ pub mod claude_login;
 pub mod login_browser;
 pub mod login_view;
 pub mod claude_window;
+pub mod private_window;
 pub mod codex_login;
 pub mod codex_device_login;
 pub use hangar_core::account_env as environment;

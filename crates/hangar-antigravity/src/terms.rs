@@ -86,6 +86,11 @@ impl Driver {
         Ok(())
     }
 
+    /// Fim vindo de fora do condutor (janela que caiu, prazo total): daí em diante nada é apertado nem respondido.
+    pub fn fail(&mut self, code: &'static str) {
+        if !matches!(self.stage, Stage::Done | Stage::Failed(_)) { self.stage = Stage::Failed(code); }
+    }
+
     fn answering(&mut self, screen: &str, now: Instant) -> Option<AgyTermsKey> {
         if let Some(pressed) = self.pressed {
             if now.duration_since(pressed) >= CONFIRM_LIMIT { self.stage = Stage::Failed("termos_sem_confirmacao"); }
@@ -262,6 +267,22 @@ mod tests {
         for second in 1..=8 { assert_eq!(driver.observe(TERMS, false, at(t0, second)), Some(Down)); }
         assert_eq!(driver.observe(TERMS, false, at(t0, 9)), None);
         assert_eq!(driver.stage(), &Stage::Failed("termos_nao_convergiu"));
+    }
+
+    #[test]
+    fn terms_failure_from_outside_ends_the_terms_and_refuses_the_answer() {
+        let t0 = Instant::now();
+        let mut driver = Driver::new(t0);
+        driver.observe(TERMS, false, t0);
+        driver.fail("termos_terminal_falhou");
+        assert_eq!(driver.stage(), &Stage::Failed("termos_terminal_falhou"));
+        assert_eq!(driver.answer(1), Err(AnswerError::OutsideTerms));
+        driver.fail("termos_expirou");
+        assert_eq!(driver.stage(), &Stage::Failed("termos_terminal_falhou"), "o primeiro fim fica");
+        let mut done = Driver::new(t0);
+        done.observe(IDLE, true, t0);
+        done.fail("termos_expirou");
+        assert_eq!(done.stage(), &Stage::Done);
     }
 
     #[test]

@@ -288,6 +288,7 @@ pub async fn serve_until_with_guest(
             let transfer_share = state.share.clone();
             async move {
                 readiness.wait().await;
+                tokio::spawn(accounts::antigravity::sweep_terms(accounts.env.clone()));
         // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
         if let Err(error) = accounts.recover_claude_logins(accounts.claude_windows.clone()).await {
             tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
