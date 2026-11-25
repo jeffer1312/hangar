@@ -387,7 +387,8 @@ const seenElsewhere = !externo && usesBrowser ? await lastSeenElsewhere() : null
 // App daqui caído e outro app ligado com a sessão: o de lá serve, e o `_focus.json` que o caído deixou não conta. A hora
 // de um app que já desligou não serve no lugar dele: a recusa segue dizendo que o daqui reinicia.
 const remote = !externo && (!localApp()
-  || (seenElsewhere !== null && ((seenElsewhere.attached && localAppDead()) || seenElsewhere.ms > (localFocus() ?? 0))));
+  || (seenElsewhere !== null && ((seenElsewhere.attached && localAppDead())
+    || (seenElsewhere.ms > (localFocus() ?? 0) && (seenElsewhere.attached || !localAppDead())))));
 
 // O verbo pelo servidor desta máquina (`browser-cmd`), que o repassa ao app desktop com a sessão aberta.
 // Uma linha no stderr por comando: quem lê sabe que o navegador não é o desta máquina.

@@ -96,6 +96,18 @@ try {
     console.log('ok: app daqui caído e o de lá desligado: a recusa diz que o app daqui reinicia');
   }
   {
+    // Mesmo com o uso de lá mais novo que o foco daqui, app desligado não recebe o verbo quando o daqui caiu.
+    const dir = await home();
+    dirs.push(dir);
+    const srv = await backend((verb) => (verb === 'host' ? [200, `ok: host ${Date.now() + 60000} detached`] : [409, none]));
+    const r = await run(dir, srv.port);
+    srv.close();
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /reiniciando/);
+    assert.deepEqual(srv.verbs, ['host'], 'nada vai ao app que desligou, mesmo com uso mais novo');
+    console.log('ok: app daqui caído e o de lá desligado com uso mais novo: a recusa diz que o app daqui reinicia');
+  }
+  {
     // Sem pid o registro não decide, como no MCP: o verbo fica no app daqui, mesmo com outro app com a sessão em foco.
     const dir = await home({ porta: 1, token: 'x' });
     dirs.push(dir);

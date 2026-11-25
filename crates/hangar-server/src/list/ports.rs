@@ -57,17 +57,25 @@ const DIAL_STALE: Duration = Duration::from_millis(4 * super::hub::TICK.as_milli
 /// O mapa do túnel e a hora da rodada que o gravou. A lista fechada para o produtor sem rodada que limpe o mapa, e
 /// processo trocado de porta nesse meio desviaria a conexão para ele: mapa velho não vale.
 #[derive(Default)]
-struct DialMap { at: Option<Instant>, ports: HashMap<u16, IpAddr> }
+struct DialMap { at: Option<Instant>, ports: HashMap<u16, IpAddr>, stale_noted: bool }
 
 impl DialMap {
-    fn get(&self, port: u16, now: Instant) -> Option<IpAddr> {
-        self.at.filter(|at| now.saturating_duration_since(*at) < DIAL_STALE)?;
-        self.ports.get(&port).copied()
+    fn get(&mut self, port: u16, now: Instant) -> Option<IpAddr> {
+        let ip = self.ports.get(&port).copied()?;
+        if self.at.is_some_and(|at| now.saturating_duration_since(at) < DIAL_STALE) { return Some(ip) }
+        // Rodada atrasada com a lista aberta (scan lento sob carga) também cai aqui: sem a linha, o túnel voltaria
+        // ao 127.0.0.1 calado.
+        if !self.stale_noted {
+            self.stale_noted = true;
+            tracing::warn!(code = "session_port_map_stale", port, "mapa do túnel sem rodada recente; a porta segue a ordem de sempre");
+        }
+        None
     }
 
     /// Quantas portas o mapa anterior desviava.
     fn set(&mut self, found: HashMap<u16, IpAddr>, at: Instant) -> usize {
         self.at = Some(at);
+        self.stale_noted = false;
         std::mem::replace(&mut self.ports, found).len()
     }
 }
@@ -163,8 +171,11 @@ mod tests {
         assert_eq!(map.get(3000, t0), None);
         assert_eq!(map.set(HashMap::from([(3000, ip)]), t0), 0);
         assert_eq!(map.get(3000, t0 + tick), Some(ip), "rodadas em dia");
+        assert!(!map.stale_noted);
         assert_eq!(map.get(3000, t0 + DIAL_STALE), None, "lista fechada: o produtor parou e o mapa velho não desvia");
+        assert!(map.stale_noted, "o mapa vencido com a porta nele deixa uma linha no log");
         assert_eq!(map.set(HashMap::from([(3000, ip)]), t0 + DIAL_STALE), 1);
+        assert!(!map.stale_noted, "rodada nova: o próximo vencimento volta a registrar");
         assert_eq!(map.get(3000, t0 + DIAL_STALE + tick), Some(ip), "a lista reaberta volta a valer");
     }
 
