@@ -226,20 +226,27 @@ pub fn reach(sockets: &[&Socket], ours: impl Fn(&Socket) -> bool) -> Option<IpAd
     })
 }
 
-/// O loopback a discar primeiro em cada porta de sessão, quando não é o `127.0.0.1` de sempre. Porta de duas sessões
-/// fica com a primeira, em ordem de nome.
+/// O que a rodada decidiu para o túnel. `first`: o loopback a discar primeiro em cada porta de sessão, quando não é o
+/// `127.0.0.1` de sempre. `unreached`: portas de sessão em que nenhum loopback chega só a ela, onde o túnel segue a
+/// ordem de sempre e pode cair noutro processo.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Dial { pub first: HashMap<u16, IpAddr>, pub unreached: BTreeSet<u16> }
+
+/// Porta de duas sessões fica com a primeira, em ordem de nome.
 pub fn dial_first(owned: &BTreeMap<String, BTreeSet<u32>>, keys: &HashMap<String, String>, excluded: &HashSet<u32>,
-                  sockets: &[Socket], procs: &HashMap<u32, ProcessInfo>) -> HashMap<u16, IpAddr> {
-    let mut out = HashMap::new();
+                  sockets: &[Socket], procs: &HashMap<u32, ProcessInfo>) -> Dial {
+    let (mut out, mut reached) = (Dial::default(), BTreeSet::new());
     for mine in session_pids(owned, keys, excluded, sockets, procs).values() {
         let ours = |s: &Socket| s.pid.is_some_and(|pid| mine.contains(&pid));
         let ports: BTreeSet<u16> = sockets.iter().filter(|s| ours(s)).map(|s| s.port).collect();
         for port in ports {
             let here: Vec<&Socket> = sockets.iter().filter(|s| s.port == port).collect();
-            let Some(ip) = reach(&here, &ours) else { continue };
-            if ip != DIAL[0] { out.entry(port).or_insert(ip); }
+            let Some(ip) = reach(&here, &ours) else { out.unreached.insert(port); continue };
+            reached.insert(port);
+            if ip != DIAL[0] { out.first.entry(port).or_insert(ip); }
         }
     }
+    out.unreached.retain(|port| !reached.contains(port));
     out
 }
 

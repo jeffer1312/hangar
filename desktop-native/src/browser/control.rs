@@ -98,6 +98,9 @@ const SETTLE_MS: u64 = 150;
 const VERB_MS: u64 = 20_000;
 /// Folga abaixo do prazo de quem espera (`deadline_ms`), para o erro do teto ainda chegar antes de ele desistir.
 const VERB_MARGIN_MS: u64 = 2_000;
+/// O efeito que o verbo cortado depois de mandar texto ou tecla pode ter deixado na página.
+const TEXT_SENT: &str = "o texto pode ter sido aplicado";
+const KEY_SENT: &str = "a tecla pode ter sido aplicada";
 
 
 struct State {
@@ -191,10 +194,13 @@ pub struct Controller<P: Page> {
     on_dialog_answer: RefCell<Option<Box<dyn Fn(bool, Option<String>, futures::channel::oneshot::Sender<Result<(), String>>)>>>,
     /// Método CDP sem resposta ainda: o teto do verbo diz em qual a página parou.
     in_flight: RefCell<Option<String>>,
-    /// O `mouseReleased` do clique com o botão já apertado: o teto que corta o clique ali solta o botão.
-    pressed: RefCell<Option<Value>>,
+    /// Método e evento que soltam o botão do clique ou a tecla da `press` já apertados: o teto que corta o verbo ali
+    /// os solta.
+    pressed: RefCell<Option<(&'static str, Value)>>,
     /// O `fill-secret` já mandou o valor à página: cortado depois disso, a resposta não pode dizer que nada entrou.
     secret_sent: Cell<bool>,
+    /// Texto ou tecla já mandados à página: cortado depois disso, a resposta diz que o efeito pode ter acontecido.
+    input_sent: Cell<Option<&'static str>>,
 }
 
 fn push(list: &mut VecDeque<String>, line: String) {
@@ -218,7 +224,7 @@ fn without_query(url: &str) -> &str { url.split(['?', '#']).next().unwrap_or(url
 
 impl<P: Page> Controller<P> {
     pub fn new(page: P, hidden: bool) -> Self {
-        Self { page, turn: Mutex::new(()), wanted_hidden: Cell::new(hidden), paused: Cell::new(false), picking: Cell::new(false), on_activity: RefCell::new(None), on_layout: RefCell::new(None), on_page_error: RefCell::new(None), dialog_open: RefCell::new(None), strip_shown: Cell::new(false), settle: Cell::new(false), dialog_answered: Cell::new(false), dialog_signal: RefCell::new(None), on_dialog_answer: RefCell::new(None), in_flight: RefCell::new(None), pressed: RefCell::new(None), secret_sent: Cell::new(false), state: RefCell::new(State { refs: HashMap::new(), console: VecDeque::new(),
+        Self { page, turn: Mutex::new(()), wanted_hidden: Cell::new(hidden), paused: Cell::new(false), picking: Cell::new(false), on_activity: RefCell::new(None), on_layout: RefCell::new(None), on_page_error: RefCell::new(None), dialog_open: RefCell::new(None), strip_shown: Cell::new(false), settle: Cell::new(false), dialog_answered: Cell::new(false), dialog_signal: RefCell::new(None), on_dialog_answer: RefCell::new(None), in_flight: RefCell::new(None), pressed: RefCell::new(None), secret_sent: Cell::new(false), input_sent: Cell::new(None), state: RefCell::new(State { refs: HashMap::new(), console: VecDeque::new(),
             network: VecDeque::new(), inflight: HashSet::new(), requests: HashMap::new(), dialog: None, last_network: Instant::now(), noise: HashSet::new(), theme: "sistema", layout: Layout::Desktop,
             hidden: false, scale: None, navigated: false, navs: 0, enabled: HashSet::new(), marked: HashSet::new(), secrets: Vec::new() }) }
     }
@@ -245,7 +251,7 @@ impl<P: Page> Controller<P> {
         let _turn = self.turn.lock().await;
         self.state.borrow_mut().hidden = self.wanted_hidden.get();
         let layout = self.state.borrow().layout;
-        if let Err(e) = self.bounded("layout", self.apply_layout(layout)).await { eprintln!("[nav] layout nao aplicado: {e}"); }
+        if let Err(e) = self.bounded("layout", self.apply_layout(layout)).await { note_panel(&format!("[nav] layout nao aplicado: {e}")); }
     }
 
     /// A página caiu e voltou no mesmo alvo: os domínios ligados morreram com ela, e o próximo verbo os liga de novo.
@@ -325,7 +331,7 @@ impl<P: Page> Controller<P> {
     pub async fn set_scale(&self, scale: f32) {
         let _turn = self.turn.lock().await;
         let (layout, hidden) = { let mut s = self.state.borrow_mut(); s.scale = Some(scale); (s.layout, s.hidden) };
-        if layout == Layout::Desktop && !hidden && let Err(e) = self.bounded("escala", self.apply_layout(layout)).await { eprintln!("[nav] escala nao aplicada: {e}"); }
+        if layout == Layout::Desktop && !hidden && let Err(e) = self.bounded("escala", self.apply_layout(layout)).await { note_panel(&format!("[nav] escala nao aplicada: {e}")); }
     }
 
     /// Trabalho que segura a vez fora de um verbo (tamanho e escala do painel): o mesmo teto, para a vez nunca ficar presa.
@@ -455,6 +461,7 @@ impl<P: Page> Controller<P> {
         self.in_flight.borrow_mut().take();
         self.pressed.borrow_mut().take();
         self.secret_sent.set(false);
+        self.input_sent.set(None);
         if let Some(why) = self.blocked().filter(|_| ACTING.contains(&verb)) { return Reply::Text(why.into()); }
         for _ in 0..20 {
             if !(self.dialog_answered.get() && self.dialog_open.borrow().is_some()) { break; }
@@ -524,12 +531,14 @@ impl<P: Page> Controller<P> {
                 let ms = ceiling.unwrap_or_default();
                 let stuck = self.in_flight.borrow_mut().take();
                 note_stuck(verb, stuck.as_deref(), ms);
-                // Sem soltar, o verbo seguinte começaria com o botão preso; sem esperar a resposta além de um instante.
+                // Sem soltar, o verbo seguinte começaria com o botão ou a tecla presos; sem esperar a resposta além de um instante.
                 let release = self.pressed.borrow_mut().take();
-                if let Some(release) = release { let _ = within(&self.page, 500, self.page.call("Input.dispatchMouseEvent", release)).await; }
+                if let Some((method, release)) = release { let _ = within(&self.page, 500, self.page.call(method, release)).await; }
                 let _ = within(&self.page, 500, self.unmark()).await;
                 Ok(Reply::Text(if self.secret_sent.get() {
                     format!("erro: erro_cofre_incerto: {verb} não confirmou em {ms} ms; o valor pode ter sido digitado{}", stuck_at(stuck.as_deref()))
+                } else if let Some(effect) = self.input_sent.get() {
+                    format!("erro: {verb} não confirmou em {ms} ms; {effect}{}", stuck_at(stuck.as_deref()))
                 } else {
                     format!("erro: {}", stuck_text(verb, ms, stuck.as_deref()))
                 }))
@@ -688,7 +697,7 @@ impl<P: Page> Controller<P> {
         let base = |t: &str| json!({"type": t, "x": x, "y": y, "button": "left", "clickCount": 1});
         let ok = self.arrived(&["pointerdown", "mousedown"], async || {
             // Antes de apertar: o pedido pode chegar à página mesmo sem a resposta voltar.
-            *self.pressed.borrow_mut() = Some(base("mouseReleased"));
+            *self.pressed.borrow_mut() = Some(("Input.dispatchMouseEvent", base("mouseReleased")));
             self.call("Input.dispatchMouseEvent", base("mousePressed")).await?;
             let released = self.call("Input.dispatchMouseEvent", base("mouseReleased")).await;
             self.pressed.borrow_mut().take();
@@ -713,6 +722,8 @@ impl<P: Page> Controller<P> {
         }
         // `commands` seleciona o campo inteiro; insertText substitui a seleção, vazio incluído.
         self.call("Input.dispatchKeyEvent", json!({"type": "keyDown", "commands": ["selectAll"]})).await?;
+        // Antes de mandar: o texto pode chegar à página mesmo sem a resposta voltar.
+        self.input_sent.set(Some(TEXT_SENT));
         self.call("Input.insertText", json!({"text": text})).await?;
         self.frame().await;
         Ok(format!("ok: fill {r}"))
@@ -778,6 +789,7 @@ impl<P: Page> Controller<P> {
         if let Some(focus) = self.not_editable().await? {
             return Ok(format!("erro: type: nenhum campo de texto com foco (foco em {focus}) — use fill @eN, ou click no campo antes"));
         }
+        self.input_sent.set(Some(TEXT_SENT));
         self.call("Input.insertText", json!({"text": text})).await?;
         self.frame().await;
         Ok("ok: type".into())
@@ -793,10 +805,15 @@ impl<P: Page> Controller<P> {
         let ok = self.arrived(&["keydown"], async || {
             let mut d = down.clone();
             d["type"] = "keyDown".into();
-            self.call("Input.dispatchKeyEvent", d).await?;
             let mut u = up.clone();
             u["type"] = "keyUp".into();
-            self.call("Input.dispatchKeyEvent", u).await.map(|_| ())
+            // Antes de apertar, como no clique: a tecla pode chegar à página mesmo sem a resposta voltar.
+            *self.pressed.borrow_mut() = Some(("Input.dispatchKeyEvent", u.clone()));
+            self.input_sent.set(Some(KEY_SENT));
+            self.call("Input.dispatchKeyEvent", d).await?;
+            let released = self.call("Input.dispatchKeyEvent", u).await;
+            self.pressed.borrow_mut().take();
+            released.map(|_| ())
         }).await?;
         Ok(if ok { format!("ok: press {key}") }
         else if open_list { format!("ok: press {key} (foi para a lista aberta do select, que nao avisa a pagina; confira com snapshot)") }
@@ -1091,6 +1108,12 @@ fn stuck_at(method: Option<&str>) -> String { method.map(|m| format!(" (preso em
 
 fn stuck_text(verb: &str, ms: u64, method: Option<&str>) -> String {
     format!("{verb} não respondeu em {ms} ms{}", stuck_at(method))
+}
+
+/// Falha no tamanho ou na escala que o painel pediu: ninguém lê resposta, e aberto pelo lançador o stderr vai pro nada.
+fn note_panel(line: &str) {
+    eprintln!("{line}");
+    if !cfg!(test) { crate::log_line(line) }
 }
 
 /// Uma linha no log do app por verbo preso: só verbo, método e teto, nunca conteúdo da página.
@@ -1702,6 +1725,35 @@ mod tests {
         let c = Controller::new(fake(|m, p| Ok(login_answer("senha", m, p)), "Input.dispatchKeyEvent"), false);
         assert_eq!(fill_secret(&c, "password"), "erro: fill-secret não respondeu em 20000 ms (preso em Input.dispatchKeyEvent)");
         assert!(!methods(&c).contains(&"Input.insertText".to_string()));
+    }
+
+    /// `type` e `fill` cortados depois de mandar o texto: a resposta diz que ele pode ter entrado; cortado antes de
+    /// digitar, é a falha de sempre.
+    #[test]
+    fn text_cut_after_it_was_sent_says_it_may_be_in() {
+        let c = Controller::new(fake(|m, p| Ok(login_answer("campo", m, p)), "Input.insertText"), false);
+        assert_eq!(text(block_on(c.run("type", &s(&["abc"])))), "erro: type não confirmou em 20000 ms; o texto pode ter sido aplicado (preso em Input.insertText)");
+        block_on(c.run("snapshot", &[]));
+        assert_eq!(text(block_on(c.run("fill", &s(&["@e1", "abc"])))), "erro: fill não confirmou em 20000 ms; o texto pode ter sido aplicado (preso em Input.insertText)");
+        let c = Controller::new(fake(|m, p| Ok(login_answer("campo", m, p)), "Runtime.evaluate"), false);
+        assert_eq!(text(block_on(c.run("type", &s(&["abc"])))), "erro: type não respondeu em 20000 ms (preso em Runtime.evaluate)");
+    }
+
+    /// `press` cortado com a tecla apertada: a resposta diz que ela pode ter sido aplicada, e o `keyUp` sai na hora,
+    /// para o verbo seguinte não herdar a tecla.
+    #[test]
+    fn a_press_cut_with_the_key_down_says_so_and_releases_it() {
+        let c = Controller::new(fake(|_, _| Ok(json!({})), "Input.dispatchKeyEvent"), false);
+        assert_eq!(text(block_on(c.run("press", &s(&["Enter"])))), "erro: press não confirmou em 20000 ms; a tecla pode ter sido aplicada (preso em Input.dispatchKeyEvent)");
+        let keys: Vec<Value> = c.page.calls.borrow().iter().filter(|(m, _)| m == "Input.dispatchKeyEvent").map(|(_, p)| p.clone()).collect();
+        let kinds: Vec<&str> = keys.iter().map(|p| p["type"].as_str().unwrap_or_default()).collect();
+        assert_eq!(kinds, ["keyDown", "keyUp"]);
+        assert_eq!(keys[1]["key"], keys[0]["key"]);
+        assert!(keys[1].get("text").is_none(), "a soltura não digita de novo");
+        assert!(c.pressed.borrow().is_none());
+        // Cortado antes da tecla: a falha de sempre.
+        let c = Controller::new(fake(|_, _| Ok(json!({})), "Runtime.evaluate"), false);
+        assert_eq!(text(block_on(c.run("press", &s(&["Enter"])))), "erro: press não respondeu em 20000 ms (preso em Runtime.evaluate)");
     }
 
     #[test]

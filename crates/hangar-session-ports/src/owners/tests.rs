@@ -256,9 +256,26 @@ fn dial_first_keeps_only_the_ports_where_the_usual_loopback_misses_the_session()
     let owned = BTreeMap::from([("s".to_owned(), set(&[11]))]);
     let sockets = [socket_at(3000, Some(11), "node", "::"), socket_at(3000, Some(50), "svchost", "127.0.0.1"),
         socket_at(5432, Some(11), "pg", "127.0.0.1"), socket_at(8000, Some(50), "x", "::1")];
-    let first = dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new());
-    assert_eq!(first, HashMap::from([(3000, ip("::1"))]));
+    let dial = dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new());
+    assert_eq!(dial.first, HashMap::from([(3000, ip("::1"))]));
+    assert!(dial.unreached.is_empty(), "toda porta da sessão tem um loopback só dela");
     // A linha continua uma por porta, com o aviso de porta dividida.
     assert_eq!(assign(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new())["s"],
         vec![entry(3000, 11, "node", true), entry(5432, 11, "pg", false)]);
+}
+
+#[test]
+fn dial_first_names_the_session_ports_that_no_loopback_reaches_alone() {
+    // 3000: a sessão e um dono desconhecido no mesmo 0.0.0.0. 5432: só a sessão. 8000: só de fora.
+    let owned = BTreeMap::from([("s".to_owned(), set(&[11]))]);
+    let sockets = [socket_at(3000, Some(11), "node", "0.0.0.0"), socket_at(3000, None, "", "0.0.0.0"),
+        socket_at(5432, Some(11), "pg", "127.0.0.1"), socket_at(8000, Some(50), "x", "127.0.0.1")];
+    let dial = dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new());
+    assert_eq!(dial, Dial { first: HashMap::new(), unreached: BTreeSet::from([3000]) });
+    // A porta que outra sessão alcança sozinha não entra: ela tem para onde discar.
+    let owned = BTreeMap::from([("a".to_owned(), set(&[11])), ("b".to_owned(), set(&[12]))]);
+    let sockets = [socket_at(3000, Some(11), "node", "0.0.0.0"), socket_at(3000, Some(12), "node", "127.0.0.1"), socket_at(3000, None, "", "127.0.0.2")];
+    assert_eq!(dial_first(&BTreeMap::from([("a".to_owned(), set(&[11]))]), &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new()).unreached,
+        BTreeSet::from([3000]), "sozinha, a sessão a não tem loopback só dela");
+    assert_eq!(dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new()).unreached, BTreeSet::new());
 }

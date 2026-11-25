@@ -1153,8 +1153,7 @@ impl Tools {
         let answer = if remote {
             // Dentro do processo: a rota `browser-cmd` recusa o valor. O app confere o domínio de novo antes de digitar.
             match self.st.browser_host.fill_secret(&name, &args, &host, value.clone()).await {
-                Ok(hangar_browser_host::Reply::Text(text)) => text,
-                Ok(hangar_browser_host::Reply::Png(_)) => "erro: o app respondeu uma imagem ao preenchimento".into(),
+                Ok(reply) => host_fill_answer(reply),
                 Err(refusal) => return Err(host_fill_refusal(refusal)),
             }
         } else {
@@ -1162,8 +1161,22 @@ impl Tools {
         };
         let answer = exec::mask(&answer, &value);
         if answer.starts_with("ok:") { return Ok(text("preenchido")); }
-        let detail = answer.strip_prefix("erro:").map_or(answer.as_str(), str::trim);
-        Err(if detail.starts_with("erro_cofre_") { detail.to_owned() } else { format!("erro_cofre_preenchimento: {detail}") })
+        Err(fill_failure(&answer))
+    }
+}
+
+/// O erro do `vault_fill` para a resposta que não é `ok:`: código do cofre vindo do navegador segue como veio.
+fn fill_failure(answer: &str) -> String {
+    let detail = answer.strip_prefix("erro:").map_or(answer, str::trim);
+    if detail.starts_with("erro_cofre_") { detail.to_owned() } else { format!("erro_cofre_preenchimento: {detail}") }
+}
+
+/// Resposta do app ao `fill-secret`. Só texto diz o que houve: outra coisa chegou depois de o quadro com o valor sair,
+/// e ele pode já estar na página.
+fn host_fill_answer(reply: hangar_browser_host::Reply) -> String {
+    match reply {
+        hangar_browser_host::Reply::Text(text) => text,
+        hangar_browser_host::Reply::Png(_) => "erro: erro_cofre_incerto: o app desktop respondeu o fill-secret com uma imagem; o valor pode ter sido digitado".into(),
     }
 }
 
@@ -1249,6 +1262,10 @@ mod tests {
         let outdated = host_fill_refusal(Refusal::Outdated);
         assert!(outdated.starts_with("erro_cofre_sem_navegador:") && outdated.contains("atualize o app desktop"), "{outdated}");
         assert!(host_fill_refusal(Refusal::NoHost).starts_with("erro_cofre_sem_navegador:"));
+        // Resposta que não é texto também chegou depois de o valor sair: incerta, nunca falha genérica.
+        let png = fill_failure(&host_fill_answer(hangar_browser_host::Reply::Png(vec![1, 2, 3])));
+        assert!(png.starts_with("erro_cofre_incerto:") && png.contains("pode ter sido digitado"), "{png}");
+        assert_eq!(fill_failure(&host_fill_answer(hangar_browser_host::Reply::Text("erro: caiu".into()))), "erro_cofre_preenchimento: caiu");
     }
 
     #[test]

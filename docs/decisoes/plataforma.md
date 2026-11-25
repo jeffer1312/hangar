@@ -44,7 +44,8 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   de outro) sai com `shared: true`, e a tela avisa "Outra coisa também escuta nessa porta": o
   `localhost:N` pode cair no outro. O T3 apaga essa linha; aqui ela fica, porque é da sessão. A leitura é reaproveitada pelos mesmos candidatos dentro do prazo do cache
   de processos, para o tique e um `GET` simultâneo lerem uma vez só. Leitura que falha registra
-  `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`. Esse código
+  `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`; o mapa do túnel
+  (abaixo) é esvaziado, e a linha diz quantas portas ele desviava. Esse código
   está em `DIAGNOSTIC` e nunca chega à tela. A linha do convidado (convite e login) sai sem `ports`:
   o túnel não atende convidado.
 - **B2, macOS vazio.** No macOS a lista de portas volta vazia. Ler por `libproc` exige conferir o
@@ -67,6 +68,9 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
     `0.0.0.0:3000`: o túnel caía no proxy. Com o Next no `::`, o túnel disca `[::1]`; só em `0.0.0.0`,
     disca `127.0.0.2`, que o `0.0.0.0` recebe e o `127.0.0.1` de fora não. A rota lê o mapa da última
     rodada da lista, sem varrer sockets por conexão; sem lista aberta, fica a ordem de sempre.
+    Porta da sessão em que nenhum loopback chega só a ela (outro processo no mesmo `0.0.0.0`) fica na
+    ordem de sempre e registra `session_port_unreached` no log, uma vez até a porta sair desse estado;
+    o código está em `DIAGNOSTIC` e nunca chega à tela.
 
   Respostas antes do upgrade:
 
@@ -216,15 +220,19 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   manda o verbo por `browser-cmd`, com prazo de 20 s no `open`, 110 s no `login` (120 s pelas tools do MCP) e 45 s nos outros.
   No app, cada verbo tem teto próprio (20 s; `wait`, o `--timeout` dele mais 2 s; nunca além do `deadline_ms`
   menos uma folga): chamada CDP presa solta a vez com `erro: … (preso em <método>)` e grava `nav: verb_stuck` no
-  `native.log`.
+  `native.log`. Tamanho e escala que o painel pede e falham também vão ao `native.log`.
   - `goto`, `back` e `reload` não ganham os 20 s: ficam com o limite que já tinham (a espera do carregamento,
     15 s depois da navegação) e só o `deadline_ms` os corta. Página lenta para abrir não é página presa.
   - Clique cortado depois do `mousePressed` manda o `mouseReleased` no mesmo ponto, sem esperar resposta além de
-    500 ms: senão o verbo seguinte começaria com o botão apertado.
+    500 ms: senão o verbo seguinte começaria com o botão apertado. `press` cortado depois do `keyDown` manda o
+    `keyUp` da mesma tecla, do mesmo jeito.
+  - `type`, `fill` e `press` cortados depois de o texto ou a tecla irem à página respondem
+    `erro: <verbo> não confirmou em N ms; o texto pode ter sido aplicado` (`a tecla pode ter sido aplicada`),
+    nunca "não respondeu": o agente não pode repetir achando que nada entrou.
   - `fill-secret` cortado depois de o valor ir à página responde `erro: erro_cofre_incerto: fill-secret não
     confirmou em N ms; o valor pode ter sido digitado`, nunca uma falha limpa, e o valor não aparece. O
     `vault_fill` repete esse texto como veio, e trata do mesmo jeito o 504 e o 502 do canal com o quadro já
-    enviado.
+    enviado e a resposta do app que não é texto.
   As tools MCP `browser_*` usam a mesma rota dentro do processo.
   - `objetivo` e `confere` (CLI e `browser_goal`/`browser_check`) rodam pelo laço do CLI com os
     verbos de sempre, um a um, pela `browser-cmd`; o print do Jev é o `shot` com caminho absoluto,
