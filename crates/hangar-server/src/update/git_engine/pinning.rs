@@ -93,14 +93,16 @@ impl Service {
         None
     }
     pub fn last_same_build(&self, published: &str, top: &str, platform: &str) -> String {
-        let show = |path: &str| {
-            self.git(&["show", &format!("{top}:{path}")], 30)
-                .ok()
-                .filter(|output| output.code == 0)
-        };
-        // Branch de antes do workflow próprio do Windows: o binário dele ainda saía do server.yml.
-        let Some(workflow) = show(build_workflow(platform)).or_else(|| show(SERVER_WORKFLOW)) else {
-            return published.into();
+        let show = |path: &str| self.git(&["show", &format!("{top}:{path}")], 30);
+        // Só o arquivo ausente no commit cai no server.yml (branch de antes do workflow próprio do Windows); git que
+        // falhou ou estourou o prazo para no binário publicado.
+        let workflow = match show(build_workflow(platform)) {
+            Ok(output) if output.code == 0 => output,
+            Ok(_) if build_workflow(platform) != SERVER_WORKFLOW => match show(SERVER_WORKFLOW) {
+                Ok(output) if output.code == 0 => output,
+                _ => return published.into(),
+            },
+            _ => return published.into(),
         };
         let mut inside = false;
         let mut paths = vec![];
