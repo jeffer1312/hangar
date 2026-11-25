@@ -162,7 +162,7 @@ pub struct AppState {
     /// Avisos do Mission Control à sessão, pelo handler da rota de entrada; o estado entra quando o roteador nasce.
     pub mission_notify: Arc<crate::mission_notify::SessionNotify>,
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
-    /// WhatsApp só leitura (`hangar-whatsapp`); nasce com o roteador, pela pasta pessoal das contas.
+    /// WhatsApp: leitura e envio de rascunho aprovado (`hangar-whatsapp`); nasce com o roteador, pela pasta pessoal das contas.
     pub whatsapp: std::sync::OnceLock<Arc<hangar_whatsapp::WhatsApp>>,
     /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
     pub status: Arc<crate::status::Status>,

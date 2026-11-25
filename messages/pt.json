@@ -12205,6 +12205,7 @@
   "native_whatsapp_job_err_not_started": "o serviço foi registrado, mas não respondeu a tempo.",
   "native_whatsapp_job_err_job_crashed": "a tarefa foi interrompida no meio.",
   "native_whatsapp_job_err_update_no_rollback": "a versão nova falhou e a anterior não pôde ser restaurada.",
+  "native_whatsapp_job_err_update_data_migrated": "a versão nova já converteu os dados para o formato dela e a anterior não abriria mais; tente atualizar de novo.",
   "native_whatsapp_job_err_record_failed": "não consegui gravar o registro da instalação nesta máquina.",
   "native_whatsapp_job_err_accept_write_failed": "não consegui gravar o aceite dos riscos nesta máquina.",
   "native_whatsapp_pair_title": "Conectar o celular",

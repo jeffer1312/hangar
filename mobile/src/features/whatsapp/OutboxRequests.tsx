@@ -22,8 +22,8 @@ const SOURCE: Record<string, () => string> = {
   contact: m.whatsapp_draft_source_contact, push: m.whatsapp_draft_source_push, group: m.whatsapp_draft_source_group,
 };
 
-/** Nome do destino como o aviso fala dele: o nome do arquivo, senão o número. */
-const chatTitle = (d: WhatsAppDraft) => d.chat_name || d.chat_number;
+/** Destino como o aviso fala dele: o número primeiro, porque o nome pode ser o que a pessoa escolheu. */
+const chatTitle = (d: WhatsAppDraft) => [d.chat_number, d.chat_name].filter(Boolean).join(' · ');
 
 const outbox = ownerRequests<WhatsAppOutboxEvent, WhatsAppDraft>({
   select: (s) => s.whatsappOutbox,

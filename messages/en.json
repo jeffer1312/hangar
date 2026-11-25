@@ -12205,6 +12205,7 @@
   "native_whatsapp_job_err_not_started": "the service was registered but didn't respond in time.",
   "native_whatsapp_job_err_job_crashed": "the task was interrupted midway.",
   "native_whatsapp_job_err_update_no_rollback": "the new version failed and the previous one couldn't be restored.",
+  "native_whatsapp_job_err_update_data_migrated": "the new version already converted the data to its format and the previous one could no longer open it; try updating again.",
   "native_whatsapp_job_err_record_failed": "couldn't save the installation record on this machine.",
   "native_whatsapp_job_err_accept_write_failed": "couldn't save the risk acceptance on this machine.",
   "native_whatsapp_pair_title": "Connect your phone",

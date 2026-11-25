@@ -87,7 +87,7 @@ it('máquina com erro ou ainda carregando não mostra o aviso', async () => {
 
 it('no chat da sessão que pediu, o aviso abre aquele rascunho; em outra sessão, nada', async () => {
   useSessions.setState({ byServer: [bucket('a')], whatsappOutbox: { a: event(draft('d3')) } });
-  const banner = m.whatsapp_draft_session_notice({ name: 'Carlos' });
+  const banner = m.whatsapp_draft_session_notice({ name: '5511987654321 · Carlos' });
   await act(async () => { root.render(<SessionOutboxRequests serverId="a" name="outra" />); });
   expect(button(banner)).toBeNull();
   await act(async () => { root.render(<><SessionOutboxRequests serverId="a" name="sessao" /><OutboxRequestSheet /></>); });
@@ -99,7 +99,7 @@ it('no chat da sessão que pediu, o aviso abre aquele rascunho; em outra sessão
 it('no chat, rascunho de máquina com a lista caída não aparece', async () => {
   useSessions.setState({ byServer: [bucket('a', { error: 'offline' })], whatsappOutbox: { a: event(draft('d9')) } });
   await act(async () => { root.render(<SessionOutboxRequests serverId="a" name="sessao" />); });
-  expect(button(m.whatsapp_draft_session_notice({ name: 'Carlos' }))).toBeNull();
+  expect(button(m.whatsapp_draft_session_notice({ name: '5511987654321 · Carlos' }))).toBeNull();
 });
 
 it('sem answer_by legível, conta até expires_at', async () => {
