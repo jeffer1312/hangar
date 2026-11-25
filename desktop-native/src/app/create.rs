@@ -4,6 +4,7 @@ pub(super) mod choices;
 mod customizations;
 mod folder_git;
 mod prewarm;
+pub(super) mod recents;
 mod resume;
 mod scheduled_launch;
 #[cfg(test)]
@@ -90,7 +91,9 @@ pub(super) struct Entry {
 pub(super) struct Scan { pub(super) entries: Vec<Entry>, pub(super) error: Option<String> }
 
 struct RootScan { root: Root, scan: Remote<Scan> }
-enum FolderIndex { Current(usize), Root(usize, usize) }
+/// Linha da lista de pastas. No menu da tela sem sessão, as cópias de um repositório aberto vêm logo abaixo dele:
+/// `parent` é a posição da linha do repositório.
+enum FolderIndex { Current(usize), Root(usize, usize), Copy { parent: usize, path: String }, Merged { parent: usize, count: usize } }
 
 #[derive(Debug, PartialEq, Eq)]
 enum EnterAction { Pick, Submit, Nothing }
@@ -424,6 +427,8 @@ pub(super) enum CreateReply {
     GitElsewhere(String),
     /// As worktrees do servidor, para a pílula de branch mostrar as do repositório da pasta.
     Worktrees(u64, Result<Value, Failure>),
+    /// Todos os repositórios com worktrees da máquina, para as cópias do menu de pasta e as recentes.
+    Repos(u64, Result<Value, Failure>),
     /// "Em todas as minhas máquinas": o resultado de uma máquina (chave) na rodada `u64`.
     Spread(choices::SpreadOf, u64, String, choices::Applied),
 }
@@ -736,6 +741,13 @@ pub(in crate::app) struct NewSession {
     prewarm: prewarm::Reserve,
     /// Etiquetas por máquina, cópia do evento `tags` que o app guarda: a pílula e os menus mostram a mesma marca das abas.
     pub(in crate::app) tags: HashMap<String, super::tags::Event>,
+    /// Pastas das sessões desta máquina, da mais recente, vindas da lista que a janela já recebe.
+    pub(in crate::app) recent: Vec<String>,
+    /// Repositórios com worktrees desta máquina: as cópias no menu de pasta e as recentes dobradas no repositório.
+    repos: Remote<Vec<super::worktrees::WorktreeRepo>>,
+    /// Repositórios com as cópias abertas no menu de pasta, e com as já mescladas à mostra.
+    copies_open: HashSet<String>,
+    merged_open: HashSet<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -816,7 +828,8 @@ impl NewSession {
             spreads: Default::default(),
             archive: Remote::default(), want_resume: false, conversation: String::new(), before: None, preview: Remote::default(),
             preview_scroll: ScrollHandle::new(), resuming: false, baton, baton_by_model: false, baton_open: false,
-            baton_preview: Remote::default(), suggested_name: String::new(), prewarm, tags: HashMap::new(), _subscriptions: subscriptions,
+            baton_preview: Remote::default(), suggested_name: String::new(), prewarm, tags: HashMap::new(),
+            recent: Vec::new(), repos: Remote::default(), copies_open: HashSet::new(), merged_open: HashSet::new(), _subscriptions: subscriptions,
         };
         dialog.start_prewarm(cx);
         dialog
@@ -982,6 +995,8 @@ impl NewSession {
         (self.existing, self.preset) = (None, None);
         (self.picking, self.agents_open) = (false, false);
         self.worktrees.reset();
+        self.repos.reset();
+        (self.copies_open, self.merged_open) = (HashSet::new(), HashSet::new());
         self.new_branch_name.update(cx, |input, cx| input.set_value("", window, cx));
         self.roots.reset();
         self.root_scans.clear();
@@ -1054,6 +1069,15 @@ impl NewSession {
         if self.provider == "codex" { self.load_codex(cx); self.load_context(cx); }
         if self.provider == "antigravity" { self.load_agy(cx); }
         self.load_extras(cx);
+        if self.compact { self.load_repos(cx); }
+    }
+
+    /// Uma leitura por máquina escolhida, sem medir o disco: o menu de pasta não mostra espaço.
+    fn load_repos(&mut self, cx: &mut Context<Self>) {
+        let seq = self.repos.start();
+        self.request(cx, move |api, send| Box::pin(async move {
+            send(CreateReply::Repos(seq, api.server_read(&["worktrees"], &[("sizes", "false")], 30).await)).await
+        }));
     }
 
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1633,6 +1657,12 @@ impl NewSession {
                 let list = self.folder_worktrees(result);
                 self.worktrees.finish(seq, list);
             }
+            CreateReply::Repos(seq, result) => {
+                // Falha aqui só tira as cópias e a dobra das recentes: a escolha da pasta segue igual.
+                let repos = result.map_err(|e| Hangar::fetch_failure(&e))
+                    .and_then(|v| serde_json::from_value::<Vec<super::worktrees::WorktreeRepo>>(v["repos"].clone()).map_err(|_| tr("invalid_response")));
+                if self.repos.finish(seq, repos) { self.refilter(cx); }
+            }
             CreateReply::Scan(seq, result) => { if self.scan.finish(seq, result) { self.refilter(cx); } }
             CreateReply::RootScan(epoch, path, seq, result) => {
                 if epoch != self.roots.seq { return None; }
@@ -1990,19 +2020,44 @@ impl NewSession {
         match self.folders.get(ix)? {
             FolderIndex::Current(ei) => Some((self.root.as_ref()?, self.scan.ok()?.entries.get(*ei)?)),
             FolderIndex::Root(ri, ei) => { let s = self.root_scans.get(*ri)?; Some((&s.root, s.scan.ok()?.entries.get(*ei)?)) }
+            FolderIndex::Copy { .. } | FolderIndex::Merged { .. } => None,
+        }
+    }
+
+    /// A pasta que a linha escolhe: a da pasta, ou a da cópia; a linha "já mescladas" não escolhe pasta.
+    fn row_path(&self, ix: usize) -> Option<&str> {
+        match self.folders.get(ix)? {
+            FolderIndex::Copy { path, .. } => Some(path),
+            FolderIndex::Merged { .. } => None,
+            _ => self.folder_at(ix).map(|(_, e)| e.path.as_str()),
         }
     }
 
     fn active_folder_index(&self) -> Option<usize> {
         let path = self.folder_active.as_deref()?;
-        (0..self.folders.len()).find(|ix| self.folder_at(*ix).is_some_and(|(_, e)| e.path == path))
+        (0..self.folders.len()).find(|ix| self.row_path(*ix) == Some(path))
+    }
+
+    /// Escolher uma cópia entra na raiz do repositório dela, como escolher o repositório.
+    fn pick_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let (root_ix, path) = match self.folders.get(ix) {
+            Some(FolderIndex::Copy { parent, path }) => (*parent, path.clone()),
+            Some(FolderIndex::Merged { parent, .. }) => {
+                if let Some(repo) = self.row_path(*parent).map(str::to_owned) { self.merged_open.insert(repo); self.refilter(cx); cx.notify(); }
+                return;
+            }
+            Some(_) => match self.row_path(ix) { Some(path) => (ix, path.to_owned()), None => return },
+            None => return,
+        };
+        let Some(root) = self.folder_at(root_ix).map(|(r, _)| r.clone()) else { return };
+        self.pick_folder(root, path, window, cx);
     }
 
     /// ↑/↓ no campo de busca andam o realce pela lista, dando a volta nas pontas como a busca de conversas.
     fn move_folder(&mut self, delta: isize, cx: &mut Context<Self>) {
         if self.creating { return; }
         let Some(next) = wrap_step(self.active_folder_index(), self.folders.len(), delta) else { return };
-        self.folder_active = self.folder_at(next).map(|(_, e)| e.path.clone());
+        self.folder_active = self.row_path(next).map(str::to_owned);
         self.folder_scroll.scroll_to_item(next, ScrollStrategy::Nearest);
         cx.notify();
     }
@@ -2038,8 +2093,7 @@ impl NewSession {
     fn pick_active_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = !self.query.read(cx).value().trim().is_empty();
         let Some(ix) = self.active_folder_index().or_else(|| typed.then_some(0)) else { return };
-        let Some((root, entry)) = self.folder_at(ix).map(|(r, e)| (r.clone(), e.path.clone())) else { return };
-        self.pick_folder(root, entry, window, cx);
+        self.pick_row(ix, window, cx);
     }
 
     /// A linha de uma busca em todas as raízes pode ser de outra raiz: ela passa a ser a navegada.
@@ -2100,6 +2154,35 @@ impl NewSession {
             self.folders = self.scan.ok().into_iter().flat_map(|scan| scan.entries.iter().enumerate())
                 .filter(|(_, e)| shown(&query, root, e)).map(|(ix, _)| FolderIndex::Current(ix)).collect();
         }
+        self.expand_copies();
+    }
+
+    /// No menu da tela sem sessão: a worktree listada ao lado do repositório entra nele, e o repositório aberto mostra as
+    /// cópias logo abaixo, com as já mescladas atrás de uma linha.
+    fn expand_copies(&mut self) {
+        if !self.compact { return; }
+        let Some(repos) = self.repos.ok() else { return };
+        let listed: Vec<String> = (0..self.folders.len()).map(|ix| self.row_path(ix).unwrap_or_default().to_owned()).collect();
+        let listed_refs: Vec<&str> = listed.iter().map(String::as_str).collect();
+        let base = std::mem::take(&mut self.folders);
+        let mut folders = Vec::with_capacity(base.len());
+        for (index, path) in base.into_iter().zip(listed.iter()) {
+            if recents::nested_in_listed(repos, &listed_refs, path) { continue; }
+            let parent = folders.len();
+            folders.push(index);
+            if !self.copies_open.contains(path) { continue; }
+            let (visible, merged) = recents::copies_of(repos, path);
+            folders.extend(visible.iter().map(|w| FolderIndex::Copy { parent, path: w.path.clone() }));
+            if self.merged_open.contains(path) { folders.extend(merged.iter().map(|w| FolderIndex::Copy { parent, path: w.path.clone() })); }
+            else if !merged.is_empty() { folders.push(FolderIndex::Merged { parent, count: merged.len() }); }
+        }
+        self.folders = folders;
+    }
+
+    fn toggle_copies(&mut self, repo: String, cx: &mut Context<Self>) {
+        if !self.copies_open.remove(&repo) { self.copies_open.insert(repo); }
+        self.refilter(cx);
+        cx.notify();
     }
 
     fn set_search_all(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -2136,6 +2219,16 @@ impl NewSession {
     }
 
     fn folder_row(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        match self.folders.get(ix)? {
+            FolderIndex::Copy { path, .. } => return Some(self.copy_row(ix, path, cx)),
+            FolderIndex::Merged { count, .. } => {
+                let count = *count;
+                return Some(div().w_full().pl(px(26.)).pb(px(2.)).child(Button::new(SharedString::from(format!("new-chat-merged-{ix}")))
+                    .ghost().small().disabled(self.creating).label(tr("create_worktrees_merged").replace("{n}", &count.to_string()))
+                    .on_click(cx.listener(move |this, _, window, cx| this.pick_row(ix, window, cx)))).into_any_element());
+            }
+            _ => {}
+        }
         let (root, entry) = self.folder_at(ix)?;
         let pick_root = root.clone();
         let open_root = root.clone();
@@ -2163,6 +2256,7 @@ impl NewSession {
                 .when(soft, |el| el.child(div().size(px(32.)).flex_shrink_0().rounded(px(8.)).bg(if on { theme::accent_dim() } else { theme::hover() })
                     .flex().items_center().justify_center()
                     .child(chrome::small_icon(if on { IconName::FolderOpen } else { IconName::Folder }, 16., if on { theme::accent() } else { theme::muted() }))))
+                .when(!soft, |el| el.child(chrome::small_icon(if on { IconName::FolderOpen } else { IconName::Folder }, 16., theme::accent())))
                 .child(div().flex_1().min_w_0().flex().flex_col().items_start().gap(px(2.))
                     .child(div().w_full().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(entry.name.clone()))
                     .child(div().w_full().flex().items_center().gap(px(6.))
@@ -2172,6 +2266,7 @@ impl NewSession {
                         .when(entry.has_claude_md, |el| el.child(badge("CLAUDE.md")))
                         .when_some(entry.mtime, |el, t| el.child(div().flex_shrink_0().text_size(px(11.)).text_color(theme::faint()).child(folder_time(t)))))))
                 .on_click(cx.listener(move |this, _, window, cx| this.pick_folder(pick_root.clone(), pick.clone(), window, cx))))
+            .children(self.copies_badge(&entry.path, &entry.name, cx))
             .child(Button::new(SharedString::from(format!("create-open-{}", entry.path))).ghost().small().flex_shrink_0().disabled(self.creating)
                 .icon(IconName::ChevronRight).accessibility_label(tr("create_open").replace("{nome}", &entry.name))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -2179,6 +2274,49 @@ impl NewSession {
                     this.drill(open.clone(), window, cx);
                 })))
             .into_any_element())
+    }
+
+    /// "N cópias" no repositório com worktrees (só no menu da tela sem sessão): abre e fecha as cópias logo abaixo.
+    fn copies_badge(&self, path: &str, name: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.compact { return None; }
+        let (visible, merged) = recents::copies_of(self.repos.ok()?, path);
+        let n = visible.len() + merged.len();
+        if n == 0 { return None; }
+        let open = self.copies_open.contains(path);
+        let repo = path.to_owned();
+        let text = tr("create_copies").replace("{n}", &n.to_string());
+        Some(Button::new(SharedString::from(format!("new-chat-copies-{path}")))
+            .custom(ButtonCustomVariant::new(cx).color(theme::accent_dim()).foreground(theme::accent()).hover(theme::accent_focus()).active(theme::accent_focus()))
+            .xsmall().rounded_full().flex_shrink_0().selected(open).disabled(self.creating)
+            .accessibility_label(format!("{name}: {text}"))
+            .child(div().flex().items_center().gap(px(4.)).text_size(px(11.)).font_weight(FontWeight::SEMIBOLD)
+                .child(text).child(chrome::small_icon(if open { IconName::ChevronUp } else { IconName::ChevronDown }, 11., theme::accent())))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_copies(repo.clone(), cx)))
+            .into_any_element())
+    }
+
+    /// Uma cópia aberta sob o repositório: o ponto aceso quando tem sessão, a branch e se está em uso.
+    fn copy_row(&self, ix: usize, path: &str, cx: &mut Context<Self>) -> AnyElement {
+        let status = self.repos.ok().and_then(|repos| repos.iter().flat_map(|r| &r.worktrees).find(|w| recents::same_path(&w.path, path)));
+        let used = status.is_some_and(|w| !w.sessions.is_empty());
+        let on = self.picked.as_deref() == Some(path);
+        let active = !on && self.folder_active.as_deref() == Some(path);
+        let detail = [status.and_then(|w| w.branch.clone()), used.then(|| tr("accounts_in_use"))].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+        let hover_path = path.to_owned();
+        let name = basename(path).to_owned();
+        div().w_full().pl(px(26.)).pb(px(2.))
+            .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
+                if this.folder_active.as_deref() != Some(hover_path.as_str()) { this.folder_active = Some(hover_path.clone()); cx.notify(); }
+            }))
+            .child(choice(SharedString::from(format!("new-chat-copy-{path}")), on, cx).py(px(6.)).rounded(px(8.)).w_full().h_auto().px(px(10.))
+                .when(active, |el| el.bg(theme::hover())).disabled(self.creating).selected(on).accessibility_label(name.clone())
+                .child(div().w_full().min_w_0().flex().items_center().gap(px(10.))
+                    .child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(if used { theme::accent() } else { theme::faint() }))
+                    .child(div().flex_1().min_w_0().flex().flex_col().items_start().gap(px(2.))
+                        .child(div().w_full().truncate().text_sm().child(name))
+                        .child(div().w_full().truncate().font_family(theme::MONO).text_size(px(11.)).text_color(theme::muted()).child(detail))))
+                .on_click(cx.listener(move |this, _, window, cx| this.pick_row(ix, window, cx))))
+            .into_any_element()
     }
 
     fn render_left(&self, cx: &mut Context<Self>) -> Div {
@@ -2517,7 +2655,8 @@ impl NewSession {
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Folder, window, cx))));
             return div().flex().flex_col().items_center().gap(px(8.)).pb(px(14.))
                 .child(title.child(tr("new_chat_hero")))
-                .child(line.child(tr("new_chat_no_project_line")).child("·").child(choose));
+                .child(line.child(tr("new_chat_no_project_line")).child("·").child(choose))
+                .children(self.render_recents(cx));
         }
         let folder = self.picked.as_deref().map(basename).filter(|s| !s.is_empty()).map(str::to_owned).unwrap_or_else(|| tr("new_chat_folder"));
         let trigger = popup::anchor(div(), Menu::Folder.anchor()).child(Button::new(Menu::Folder.anchor())
@@ -2536,6 +2675,34 @@ impl NewSession {
         div().flex().flex_col().items_center().gap(px(6.)).pb(px(14.))
             .child(title.child(tr("new_chat_hero_in")).child(trigger).child("?"))
             .child(line.child(without).children(hint.map(|key| div().font_family(theme::MONO).text_size(px(11.)).child(key))))
+            .children(self.render_recents(cx))
+    }
+
+    /// As pastas mais usadas nesta máquina, entre o título e o compositor: um clique escolhe a pasta, como o menu dela.
+    fn render_recents(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.baton.is_some() || self.scheduled { return None; }
+        let repos = self.repos.ok().map(Vec::as_slice).unwrap_or_default();
+        let picked = self.picked.as_deref().filter(|p| *p != NO_PROJECT_CWD);
+        let recents = recents::recent_projects(&self.recent, repos, picked, 4);
+        if recents.is_empty() { return None; }
+        let tiles = recents.into_iter().map(|path| {
+            let name = basename(&path).to_owned();
+            let pick = path.clone();
+            // No desktop, chips baixos numa linha: blocos altos empurravam o compositor para fora em janela baixa.
+            Button::new(SharedString::from(format!("new-chat-recent-{path}"))).outline().small()
+                .h(px(28.)).px(px(10.)).rounded(px(7.)).disabled(self.creating)
+                .accessibility_label(tr("new_chat_recent_aria").replace("{path}", &path)).tooltip(path.clone())
+                .child(div().flex().items_center().gap(px(6.))
+                    .child(chrome::small_icon(IconName::Folder, 14., theme::accent()))
+                    .child(div().max_w(px(180.)).truncate().text_size(px(12.5)).child(name)))
+                .on_click(cx.listener(move |this, _, window, cx| this.pick(pick.clone(), window, cx)))
+                .into_any_element()
+        });
+        Some(div().id("new-chat-recents").role(Role::Group).aria_label(tr("new_chat_recents")).pt(px(8.))
+            .flex().flex_wrap().justify_center().items_center().gap(px(8.))
+            .child(div().text_size(px(11.5)).text_color(theme::faint()).child(tr("new_chat_recents")))
+            .children(tiles)
+            .into_any_element())
     }
 
     fn no_project(&self) -> bool { self.picked.as_deref() == Some(NO_PROJECT_CWD) }
@@ -2547,6 +2714,38 @@ impl NewSession {
 
     /// A etiqueta da máquina `key` (endereço normalizado), se o servidor dela mandou uma.
     fn machine_tag(&self, key: &str) -> Option<&super::tags::Tag> { self.tags.get(key)?.machine.as_ref() }
+
+    /// As contas da máquina `key` sob o nome dela no menu: o logo do agente (ou o ícone da etiqueta) e o nome, até cinco.
+    fn machine_accounts(&self, key: &str) -> Option<AnyElement> {
+        // Uma linha só: o menu de máquina divide a altura com o Git da pasta e onde o agente trabalha. Entram as contas que
+        // cabem inteiras nessa linha (pela conta de letras), as outras viram "+N"; apertar todas deixava os nomes ilegíveis.
+        const LINE_CHARS: usize = 34;
+        const NAME_CHARS: usize = 16;
+        let mut accounts: Vec<(&String, &super::tags::Badge)> = self.tags.get(key)?.accounts.iter().collect();
+        if accounts.is_empty() { return None; }
+        // O evento chega num mapa: a ordem por agente e nome não pula de um evento para o outro.
+        let provider_of = |id: &str| id.split_once(':').map_or("", |(p, _)| p).to_owned();
+        let rank = |p: &str| PROVIDERS.iter().position(|known| *known == p).unwrap_or(PROVIDERS.len());
+        accounts.sort_by(|a, b| (rank(&provider_of(a.0)), &a.1.name).cmp(&(rank(&provider_of(b.0)), &b.1.name)));
+        let mut used = 0;
+        let shown = accounts.iter().take_while(|(_, badge)| {
+            used += badge.name.trim().chars().count().min(NAME_CHARS) + 3;
+            used <= LINE_CHARS
+        }).count().max(1);
+        let extra = accounts.len() - shown;
+        Some(div().w_full().min_w_0().overflow_hidden().flex().items_center().gap(px(10.)).text_xs().text_color(theme::muted())
+            .children(accounts.into_iter().take(shown).map(|(id, badge)| {
+                let provider = provider_of(id);
+                // O logo diz de qual agente é a conta: nomes como "default" se repetem entre agentes.
+                let mark = if provider == "chave" { chrome::small_icon(IconName::KeyRound, 11., theme::faint()).into_any_element() }
+                    else { super::tags::provider_mark(&provider, 11., theme::muted()) };
+                div().flex().items_center().gap(px(4.)).min_w_0()
+                    .child(div().flex_shrink_0().child(mark))
+                    .child(div().max_w(px(104.)).truncate().child(badge.name.trim().to_owned()))
+            }))
+            .when(extra > 0, |el| el.child(div().flex_shrink_0().text_color(theme::accent()).child(tr("new_chat_machine_more").replace("{n}", &extra.to_string()))))
+            .into_any_element())
+    }
 
     /// A etiqueta da conta `id` (o id de `/api/credenciais`), lida na máquina desta tela.
     fn account_badge(&self, id: &str) -> Option<&super::tags::Badge> {
@@ -2766,10 +2965,10 @@ impl NewSession {
                             let tag = self.machine_tag(&choice.key);
                             let name = super::tags::machine_name(tag, &choice.label, &choice.address);
                             // Etiqueta com outro nome: o nome desta tela fica ao lado, menor, para reconhecer a máquina.
-                            let hint = [(name != choice.label).then(|| choice.label.clone()), current.then(|| tr("create_current"))]
-                                .into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                            let hint = [(name != choice.label).then(|| choice.label.clone()), choice.offline.then(|| tr("new_chat_machine_offline")),
+                                current.then(|| tr("create_current"))].into_iter().flatten().collect::<Vec<_>>().join(" · ");
                             menu_row_marked(SharedString::from(format!("new-chat-machine-{}", choice.key)), current,
-                                Some(machine_mark(tag, 14.)), name, hint, None)
+                                Some(machine_mark(tag, 14.)), name, hint, self.machine_accounts(&choice.key))
                                 .when(!current, |row| row.on_click(cx.listener(move |this, _, window, cx| this.pick_machine(key.clone(), window, cx))))
                                 .into_any_element()
                         }).collect();
@@ -2887,7 +3086,8 @@ impl NewSession {
         let chosen = self.existing.as_deref().filter(|_| !self.new_branch);
         let below = |text: String| Some(div().truncate().text_xs().text_color(theme::muted()).child(text).into_any_element());
         let folder = self.picked.as_deref().map(basename).unwrap_or_default().to_owned();
-        let here = menu_row_with("new-chat-branch-main", !fresh && chosen.is_none(), tr_shared("worktree_menu_pasta", &[]), String::new(),
+        let option_icon = |icon: IconName| Some(chrome::small_icon(icon, 15., theme::muted()).into_any_element());
+        let here = menu_row_marked("new-chat-branch-main", !fresh && chosen.is_none(), option_icon(IconName::Folder), tr_shared("worktree_menu_pasta", &[]), String::new(),
                 below(tr_shared("worktree_menu_pasta_dica", &[("pasta", &folder), ("branch", &current)])))
             .disabled(self.creating)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -2898,7 +3098,7 @@ impl NewSession {
                 cx.notify();
             }));
         // O menu fica aberto: de onde parte, o nome e a pasta da worktree nova aparecem logo abaixo.
-        let new = menu_row_with("new-chat-branch-new", fresh, tr_shared(if self.scheduled { "scheduled_worktree" } else { "worktree_menu_nova" }, &[]), String::new(),
+        let new = menu_row_marked("new-chat-branch-new", fresh, option_icon(IconName::Plus), tr_shared(if self.scheduled { "scheduled_worktree" } else { "worktree_menu_nova" }, &[]), String::new(),
                 below(tr_shared("worktree_menu_nova_dica", &[])))
             .disabled(self.creating)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -2928,6 +3128,7 @@ impl NewSession {
         let existing = popup::row("new-chat-branch-existing", chosen.is_some()).accessibility_label(tr_shared("worktree_menu_existente", &[]))
             .disabled(self.creating)
             .child(div().w_full().flex().items_center().gap_2()
+                .child(div().flex_shrink_0().child(chrome::small_icon(IconName::Copy, 15., theme::muted())))
                 .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
                     .child(div().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(tr_shared("worktree_menu_existente", &[])))
                     .when(!summary.is_empty(), |el| el.child(div().truncate().text_xs().text_color(theme::muted()).child(summary))))
@@ -3114,13 +3315,17 @@ impl NewSession {
                 .children(crumbs(root, &self.dir).into_iter().map(|(text, path)|
                     Button::new(SharedString::from(format!("new-chat-crumb-{path}"))).ghost().small().label(text)
                         .on_click(cx.listener(move |this, _, window, cx| this.drill(path.clone(), window, cx)))))))
-            // ponytail: lista mínima de 6rem; janela menor exige seletor em página própria.
-            .child(div().flex_basis(rems(12.)).flex_shrink_1().min_h(rems(6.)).relative().flex().flex_col().child(self.render_rows(cx)))
-            .child(div().flex().items_center().gap_2()
-                .child(Button::new("new-chat-use-folder").outline().small().label(tr("create_use_folder"))
-                    .on_click(cx.listener(|this, _, window, cx| this.pick(this.dir.clone(), window, cx))))
+            // A lista ocupa a altura livre do menu e encolhe até 6rem; janela menor exige seletor em página própria.
+            .child(div().flex_basis(rems(22.)).flex_shrink_1().min_h(rems(6.)).relative().flex().flex_col().child(self.render_rows(cx)))
+            .child(div().pt(px(10.)).border_t_1().border_color(theme::border()).flex().items_center().gap_2()
                 .child(Button::new("new-chat-computer-folder").ghost().small().icon(IconName::FolderOpen).label(tr("create_computer_folder"))
-                    .loading(self.choosing).on_click(cx.listener(|this, _, window, cx| this.choose_folder(window, cx)))))
+                    .loading(self.choosing).on_click(cx.listener(|this, _, window, cx| this.choose_folder(window, cx))))
+                .child(div().flex_1())
+                // O botão diz qual pasta vai usar: a navegada, que nem sempre é a do título.
+                .child(Button::new("new-chat-use-folder").primary().small().disabled(self.dir.is_empty() || self.creating)
+                    .label(Some(basename(&self.dir)).filter(|n| !n.is_empty())
+                        .map_or_else(|| tr("create_use_folder"), |name| tr("create_use_named").replace("{nome}", name)))
+                    .on_click(cx.listener(|this, _, window, cx| this.pick(this.dir.clone(), window, cx)))))
             .when_some(self.choose_error.clone(), |el, error| el.child(alert("new-chat-choose-error", error)))
     }
 }
@@ -3379,8 +3584,14 @@ impl Hangar {
         let hint = gpui_kit::component::kbd::Kbd::global_binding_for_action(&super::NewChatNoProject, window)
             .map(|key| key.appearance(false).into_any_element());
         let tags = &self.tags;
+        // As recentes saem da lista que a janela já recebe da máquina da tela, sem leitura própria.
+        let machine = super::servers::norm(&view.read(cx).link.api.identity());
+        let sessions = if machine == self.active_key() { Some(self.sessions.as_slice()) }
+            else { self.remote.get(&machine).map(|list| list.sessions.as_slice()) };
+        let recent = sessions.map(recents::recent_cwds).unwrap_or_default();
         let (top, bottom, account_note, note) = view.update(cx, |view, cx| {
             if view.tags != *tags { view.tags = tags.clone(); }
+            if view.recent != recent { view.recent = recent; }
             (view.render_top_pills(hint, cx), view.render_bottom_pills(cx), view.render_account_note(cx), view.note())
         });
         // Anexo recusado (grande demais, ilegível) avisa aqui, onde a tela sem sessão mostra os avisos dela.
