@@ -24,6 +24,7 @@ const FAILURES: Record<string, () => string> = {
   termos_sem_confirmacao: m.mobile_antigravity_terms_error_unconfirmed,
   termos_nao_convergiu: m.mobile_antigravity_terms_error_no_converge,
   termos_terminal_falhou: m.mobile_antigravity_terms_error_terminal,
+  termos_expirou: m.mobile_antigravity_terms_error_expired,
 };
 
 /** Trechos do texto do agy, com os endereços https que dá para tocar. */
@@ -58,6 +59,8 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
   const [attempt, setAttempt] = useState<AntigravityTermsAttempt | null>(null);
   const [busy, setBusy] = useState<'start' | 'answer' | 'cancel' | null>(null);
   const [error, setError] = useState('');
+  // O DELETE falhou com a janela aberta: só o Cancelar fica, e ele manda o DELETE de novo.
+  const [stuck, setStuck] = useState(false);
   const live = useRef<Live | null>(null);
   const generation = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -159,11 +162,12 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
           onClose();
           return;
         }
+        // Sem reler: o servidor pode já ter esquecido a tentativa, e a leitura daria "tentativa perdida".
         live.current = now;
         setBusy(null);
-        setError(fail(e));
-        const g = generation.current;
-        timer.current = setTimeout(() => void read(g), POLL_MS);
+        setStuck(true);
+        setError((e as { code?: string } | null)?.code === 'erro_termos_janela_aberta' ? m.mobile_antigravity_terms_error_window_open() : fail(e));
+        haptic.error();
         return;
       }
     }
@@ -197,8 +201,8 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
   return (
     <Sheet open sizes={['large']} scrollable dismissible={busy !== 'cancel'} onDismiss={() => void cancel(true)}>
       <ScrollView contentContainerStyle={styles.root}>
-        <TermosPainel serverLabel={server.label} starting={busy === 'start' || stage === 'iniciando'}
-          terms={attempt?.estado === 'termos' ? attempt.texto : null} answering={answering} login={stage === 'login'}
+        <TermosPainel serverLabel={server.label} starting={!stuck && (busy === 'start' || stage === 'iniciando')}
+          terms={!stuck && attempt?.estado === 'termos' ? attempt.texto : null} answering={!stuck && answering} login={!stuck && stage === 'login'}
           failed={failed} error={error} cancelDisabled={busy === 'cancel'}
           terminal={!!failed || (!!error && !live.current && busy !== 'start')}
           onAnswer={(opcao) => void answer(opcao)} onLink={(link) => void openLink(link)} onSignIn={onSignIn}

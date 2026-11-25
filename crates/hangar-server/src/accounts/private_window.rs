@@ -147,15 +147,17 @@ impl PrivateWindows {
         result
     }
 
-    /// Fecha as janelas escondidas deste servidor com o prefixo deste uso cujo id `orphan` aceita.
-    pub async fn sweep(&self, orphan: impl Fn(&str) -> bool) {
+    /// Fecha as janelas escondidas deste servidor com o prefixo deste uso cujo id `orphan` aceita. `false`: alguma
+    /// continuou aberta, ou a lista não veio.
+    pub async fn sweep(&self, orphan: impl Fn(&str) -> bool) -> bool {
         let listed = self.run(&["list-sessions", "-F", "#{session_name}"]).await;
         if listed.code != Some(0) {
             let stderr = listed.stderr.trim_start();
             let none = listed.code == Some(1) && ["no server", "no sessions", "error connecting to "].iter().any(|p| stderr.starts_with(p));
             if !none { self.note("lista_indisponivel"); }
-            return;
+            return none;
         }
+        let mut closed = true;
         for name in listed.stdout.lines().map(str::trim) {
             if !name.strip_prefix(self.prefix).is_some_and(&orphan) { continue; }
             let option = |option: &'static str| async move {
@@ -165,8 +167,12 @@ impl PrivateWindows {
             if option("@cp_hidden").await.as_deref() != Some("1") || option("@cp_login_owner").await.as_deref() != Some(self.owner.as_str()) {
                 continue;
             }
-            if self.kill(name).await.is_err() { self.note("nao_fechou"); }
+            if self.kill(name).await.is_err() {
+                self.note("nao_fechou");
+                closed = false;
+            }
         }
+        closed
     }
 }
 

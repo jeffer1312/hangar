@@ -43,7 +43,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         Step::Answering => AgyTermsStage::Answering,
     };
     let lit = step == Step::Tap;
-    let buttons = app::agy_terms_buttons(&stage, false, true, |action, button|
+    let buttons = app::agy_terms_buttons(stage.actions(), false, true, |action, button|
         button.tab_stop(false).selected(lit && action == AgyTermsAction::Accept(2)));
     let compact = width < px(COMPACT_BELOW);
     let body = if compact {

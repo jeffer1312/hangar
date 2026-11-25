@@ -152,7 +152,7 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
             start_terms(&TERMS, Arc::new(terms_windows(&state.accounts.env)), &home, env).await
         }
         (["termos"], Method::GET) => terms_status(&TERMS, query.get("attempt_id").map(String::as_str)).await,
-        (["termos"], Method::DELETE) => cancel_terms(&TERMS, query.get("attempt_id").map(String::as_str)).await,
+        (["termos"], Method::DELETE) => cancel_terms(&TERMS, &terms_windows(&state.accounts.env), query.get("attempt_id").map(String::as_str)).await,
         (["termos", "resposta"], Method::POST) => answer_terms(&TERMS, &body).await,
         (["logout"], Method::POST) => {
             let Some(program) = program() else { return fail(409, "erro_agy_ausente", "o agy não está instalado nesta máquina") };
@@ -478,12 +478,16 @@ async fn answer_terms(attempts: &TermsAttempts, body: &Value) -> Response {
     }
 }
 
-async fn cancel_terms(attempts: &TermsAttempts, attempt_id: Option<&str>) -> Response {
+/// Qualquer DELETE também fecha o que sobrou de um anterior que falhou: a tentativa já saiu do mapa, e o novo
+/// Cancelar tenta de novo em vez de responder ok com a janela aberta. A janela da tentativa viva fica.
+async fn cancel_terms(attempts: &TermsAttempts, win: &PrivateWindows, attempt_id: Option<&str>) -> Response {
     let mut slot = attempts.0.lock().await;
-    if slot.as_ref().is_some_and(|attempt| Some(attempt.id.as_str()) == attempt_id) && let Some(attempt) = slot.take()
-        && attempt.finish().await.is_err() {
-        return fail(500, "erro_termos_janela_aberta", "a janela escondida dos Termos não fechou");
+    let mut closed = true;
+    if slot.as_ref().is_some_and(|attempt| Some(attempt.id.as_str()) == attempt_id) && let Some(attempt) = slot.take() {
+        closed = attempt.finish().await.is_ok();
     }
+    let swept = win.sweep(|id| slot.as_ref().is_none_or(|attempt| attempt.id != id)).await;
+    if !(closed && swept) { return fail(500, "erro_termos_janela_aberta", "a janela escondida dos Termos não fechou"); }
     Json(json!({"ok": true})).into_response()
 }
 
@@ -664,6 +668,10 @@ mod tests {
             (home, Fake(Arc::new(Mutex::new(world))), TermsAttempts::default())
         }
 
+        fn mark(owner: &str) -> HashMap<String, String> {
+            HashMap::from([("@cp_hidden".to_owned(), "1".to_owned()), ("@cp_login_owner".to_owned(), owner.to_owned())])
+        }
+
         fn agy_env() -> ProcessEnv { hangar_antigravity::env::process_env(&Account::default(), []) }
 
         async fn reply_of(response: Response) -> (StatusCode, Value) {
@@ -761,10 +769,10 @@ mod tests {
         async fn terms_delete_closes_the_window_and_forgets_the_attempt() {
             let (home, fake, attempts) = setup(COLORS);
             let id = start(&attempts, &fake, home.path()).await;
-            let (code, body) = reply_of(cancel_terms(&attempts, Some("outra")).await).await;
+            let (code, body) = reply_of(cancel_terms(&attempts, &fake.windows(), Some("outra")).await).await;
             assert_eq!((code, body), (StatusCode::OK, json!({"ok": true})));
             assert_eq!(status(&attempts, &id).await.0, StatusCode::OK, "DELETE de outra tentativa não toca nesta");
-            assert_eq!(reply_of(cancel_terms(&attempts, Some(&id)).await).await.0, StatusCode::OK);
+            assert_eq!(reply_of(cancel_terms(&attempts, &fake.windows(), Some(&id)).await).await.0, StatusCode::OK);
             assert_eq!(fake.world(|w| w.created.len()), 1);
             assert!(fake.world(|w| w.sessions.is_empty()), "DELETE fecha a janela");
             assert_eq!(status(&attempts, &id).await.0, StatusCode::NOT_FOUND);
@@ -819,15 +827,37 @@ mod tests {
             let (home, fake, attempts) = setup(COLORS);
             let id = start(&attempts, &fake, home.path()).await;
             fake.0.lock().unwrap().kill_lies = true;
-            let (code, body) = reply_of(cancel_terms(&attempts, Some(&id)).await).await;
+            let (code, body) = reply_of(cancel_terms(&attempts, &fake.windows(), Some(&id)).await).await;
             assert_eq!((code, body["detail"]["code"].as_str()), (StatusCode::INTERNAL_SERVER_ERROR, Some("erro_termos_janela_aberta")), "{body}");
             assert!(fake.world(|w| w.kills) >= 2, "o kill que não derrubou é repetido");
+            // A tentativa já saiu do mapa: o segundo Cancelar tenta de novo em vez de responder ok.
+            let (code, body) = reply_of(cancel_terms(&attempts, &fake.windows(), Some(&id)).await).await;
+            assert_eq!((code, body["detail"]["code"].as_str()), (StatusCode::INTERNAL_SERVER_ERROR, Some("erro_termos_janela_aberta")), "{body}");
+            fake.0.lock().unwrap().kill_lies = false;
+            let (code, body) = reply_of(cancel_terms(&attempts, &fake.windows(), Some(&id)).await).await;
+            assert_eq!((code, body), (StatusCode::OK, json!({"ok": true})));
+            assert!(fake.world(|w| w.sessions.is_empty()));
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn terms_delete_of_an_unknown_attempt_sweeps_and_reports_a_window_still_open() {
+            let (_home, fake, attempts) = setup(IDLE);
+            {
+                let mut world = fake.0.lock().unwrap();
+                world.sessions.insert(format!("{TERMS_PREFIX}velha"), mark(OWNER));
+                world.kill_lies = true;
+            }
+            let (code, body) = reply_of(cancel_terms(&attempts, &fake.windows(), Some("velha")).await).await;
+            assert_eq!((code, body["detail"]["code"].as_str()), (StatusCode::INTERNAL_SERVER_ERROR, Some("erro_termos_janela_aberta")), "{body}");
+            fake.0.lock().unwrap().kill_lies = false;
+            let (code, body) = reply_of(cancel_terms(&attempts, &fake.windows(), None).await).await;
+            assert_eq!((code, body), (StatusCode::OK, json!({"ok": true})));
+            assert!(fake.world(|w| w.sessions.is_empty()), "a janela que sobrou fecha");
         }
 
         #[tokio::test(start_paused = true)]
         async fn terms_sweep_closes_only_hidden_orphans_of_this_server() {
             let (_home, fake, _) = setup(IDLE);
-            let mark = |owner: &str| HashMap::from([("@cp_hidden".to_owned(), "1".to_owned()), ("@cp_login_owner".to_owned(), owner.to_owned())]);
             {
                 let mut world = fake.0.lock().unwrap();
                 world.sessions.insert(format!("{TERMS_PREFIX}a"), mark(OWNER));

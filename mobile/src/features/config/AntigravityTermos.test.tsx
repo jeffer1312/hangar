@@ -119,6 +119,44 @@ describe('AntigravityTermos', () => {
     expect(calls.read.mock.calls.length).toBe(reads);
   });
 
+  it('Cancelar com a janela aberta mostra o erro e o Cancelar, sem reler nem trocar para tentativa perdida; o segundo Cancelar manda outro DELETE', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    calls.cancel.mockRejectedValueOnce(Object.assign(new Error('a janela escondida dos Termos não fechou'), { status: 500, code: 'erro_termos_janela_aberta' }));
+    const view = mount();
+    try {
+      await view.render();
+      await flush();
+      // O servidor já esqueceu a tentativa: uma releitura daria 404.
+      calls.read.mockRejectedValue(Object.assign(new Error('404'), { status: 404, code: 'erro_tentativa_inexistente' }));
+      const reads = calls.read.mock.calls.length;
+      await press(view.container, m.mobile_antigravity_terms_cancel());
+      await flush();
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      await flush();
+      expect(view.container.textContent).toContain(m.mobile_antigravity_terms_error_window_open());
+      expect(view.container.textContent).not.toContain(m.mobile_antigravity_terms_attempt_lost());
+      expect(calls.read.mock.calls.length).toBe(reads);
+      expect(view.onClose).not.toHaveBeenCalled();
+
+      await press(view.container, m.mobile_antigravity_terms_cancel());
+      await flush();
+      expect(calls.cancel).toHaveBeenCalledTimes(2);
+      expect(calls.cancel).toHaveBeenLastCalledWith(server, 'default', 't1');
+      expect(view.onClose).toHaveBeenCalledTimes(1);
+    } finally { await act(async () => view.root.unmount()); }
+    expect(calls.cancel).toHaveBeenCalledTimes(2);
+  });
+
+  it('o prazo total de 10 min tem a sua frase', async () => {
+    calls.read.mockResolvedValue({ attempt_id: 't1', estado: 'falhou', codigo: 'termos_expirou' });
+    const view = mount();
+    try {
+      await view.render();
+      await flush();
+      expect(view.container.textContent).toContain(m.mobile_antigravity_terms_error_expired());
+    } finally { await act(async () => view.root.unmount()); }
+  });
+
   it('o agy pedindo login: o texto e Entrar, que leva ao login', async () => {
     calls.read.mockResolvedValue({ attempt_id: 't1', estado: 'login' });
     const view = mount();

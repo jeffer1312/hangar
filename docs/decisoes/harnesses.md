@@ -56,7 +56,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   Expo): o servidor abre o `agy` numa janela escondida (`term-agy-terms-`, `@cp_hidden` antes do comando),
   confirma a tela de cores sozinho, mostra os Termos e só aperta a opção tocada
   (`/api/antigravity-contas/default/termos`, condutor puro em `hangar-antigravity/src/terms.rs`); "Abrir no
-  terminal" fica como saída. Ver [Termos pela página de contas](#termos-do-antigravity-pela-página-de-contas-25112026). Ver
+  terminal" fica como saída. Janela que não fecha no fim (o psmux responde 0 ao `kill-session` com ela viva)
+  fica registrada no diário e sai na próxima tentativa ou na subida. Ver [Termos pela página de contas](#termos-do-antigravity-pela-página-de-contas-25112026). Ver
   [MCP, hooks e sandbox do Antigravity](#antigravity-mcp-hooks-e-sandbox-24112026).
 
 - **Troca de agente pelo seletor de modelos espera o turno e segura a fila.** `POST /conta` com

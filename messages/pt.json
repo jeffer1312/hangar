@@ -12556,6 +12556,8 @@
   "native_accounts_agy_terms_error_unconfirmed": "O agy não confirmou o aceite.",
   "native_accounts_agy_terms_error_no_converge": "O Hangar não conseguiu marcar a opção escolhida na tela do agy.",
   "native_accounts_agy_terms_error_terminal": "O terminal escondido do agy não abriu.",
+  "native_accounts_agy_terms_error_expired": "Os Termos ficaram abertos por 10 minutos sem resposta.",
+  "native_accounts_agy_terms_error_window_open": "O agy não fechou. Toque em Cancelar de novo.",
   "native_accounts_agy_terms_attempt_lost": "O servidor não tem mais esta tentativa. Comece de novo.",
   "mobile_antigravity_accept_terms": "Aceitar os Termos",
   "mobile_antigravity_accept_terms_hint": "Os Termos do Google aparecem aqui e quem escolhe é você. O Hangar nunca aceita por você.",
@@ -12575,5 +12577,7 @@
   "mobile_antigravity_terms_error_unconfirmed": "O agy não confirmou o aceite.",
   "mobile_antigravity_terms_error_no_converge": "O Hangar não conseguiu marcar a opção escolhida na tela do agy.",
   "mobile_antigravity_terms_error_terminal": "O terminal escondido do agy não abriu.",
+  "mobile_antigravity_terms_error_expired": "Os Termos ficaram abertos por 10 minutos sem resposta.",
+  "mobile_antigravity_terms_error_window_open": "O agy não fechou. Toque em Cancelar de novo.",
   "mobile_antigravity_terms_attempt_lost": "O servidor não tem mais esta tentativa. Comece de novo."
 }

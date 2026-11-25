@@ -49,7 +49,7 @@ impl TermsStage {
         if self == Self::Answering && matches!(read, Self::Terms(_)) { self } else { read }
     }
 
-    pub(super) fn actions(&self) -> Vec<TermsAction> {
+    pub(crate) fn actions(&self) -> Vec<TermsAction> {
         use TermsAction::*;
         match self {
             Self::Starting => vec![Cancel],
@@ -69,6 +69,7 @@ pub(super) fn failed_text(code: Option<&str>) -> String {
         Some("termos_sem_confirmacao") => "accounts_agy_terms_error_unconfirmed",
         Some("termos_nao_convergiu") => "accounts_agy_terms_error_no_converge",
         Some("termos_terminal_falhou") => "accounts_agy_terms_error_terminal",
+        Some("termos_expirou") => "accounts_agy_terms_error_expired",
         _ => "accounts_agy_terms_failed",
     })
 }
@@ -85,8 +86,25 @@ pub(super) struct AgyTermsFlow {
     busy: bool,
     /// O erro na tela é de uma leitura que não veio: a próxima leitura boa o tira. O de uma ação fica até a etapa mudar.
     read_failed: bool,
+    /// O DELETE do Cancelar falhou com a janela aberta: só o Cancelar fica, e ele manda o DELETE de novo.
+    closing: bool,
     turn: u64,
     task: Option<JoinHandle<()>>,
+}
+
+impl AgyTermsFlow {
+    pub(super) fn actions(&self) -> Vec<TermsAction> { if self.closing { vec![TermsAction::Cancel] } else { self.stage.actions() } }
+
+    /// A resposta do DELETE do Cancelar; `true` fecha o painel. Sem reler depois do erro: o servidor pode já ter
+    /// esquecido a tentativa, e a leitura trocaria o erro por "tentativa perdida".
+    pub(super) fn cancelled(&mut self, result: Result<Value, Failure>) -> bool {
+        self.busy = false;
+        let Err(error) = result else { return true };
+        self.closing = true;
+        self.error = Some(if error.code.as_deref() == Some("erro_termos_janela_aberta") { tr("accounts_agy_terms_error_window_open") }
+            else { Hangar::setting_failure(&error) });
+        false
+    }
 }
 
 impl Drop for AgyTermsFlow {
@@ -99,6 +117,7 @@ pub(in crate::app) enum TermsReply {
     Read(u64, Result<Value, Failure>),
     /// A resposta da opção, pela tentativa a que ela foi.
     Answered(String, Result<Value, Failure>),
+    Cancelled(u64, Result<Value, Failure>),
 }
 
 /// Fecha no servidor o terminal escondido da tentativa; quem já saiu da tela não tem onde mostrar a falha.
@@ -115,7 +134,7 @@ impl Hangar {
     pub(super) fn open_agy_terms(&mut self, cx: &mut Context<Self>) {
         if self.api.is_none() || self.accounts.terms.is_some() { return; }
         self.accounts.outcome = None;
-        self.accounts.terms = Some(AgyTermsFlow { attempt: None, stage: TermsStage::Starting, error: None, busy: true, read_failed: false, turn: 0, task: None });
+        self.accounts.terms = Some(AgyTermsFlow { attempt: None, stage: TermsStage::Starting, error: None, busy: true, read_failed: false, closing: false, turn: 0, task: None });
         let Some((turn, api)) = self.terms_turn() else { return };
         let done = self.accounts_send_later();
         if let Some(flow) = self.accounts.terms.as_mut() {
@@ -177,6 +196,18 @@ impl Hangar {
     pub(super) fn agy_terms_close(&mut self) {
         let Some(flow) = self.accounts.terms.take() else { return };
         if let (Some(attempt), Some(api)) = (flow.attempt.clone(), self.api.clone()) { close_attempt(&self.runtime, api, attempt); }
+    }
+
+    /// Cancelar espera o DELETE: com a janela ainda aberta no servidor o painel fica com o erro, e Cancelar tenta de novo.
+    fn agy_terms_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(attempt) = self.accounts.terms.as_ref().and_then(|f| f.attempt.clone()) else { return self.agy_terms_back(window, cx) };
+        let Some((turn, api)) = self.terms_turn() else { return };
+        let done = self.accounts_send_later();
+        if let Some(flow) = self.accounts.terms.as_mut() { (flow.busy, flow.error, flow.read_failed) = (true, None, false); }
+        self.runtime.spawn(async move {
+            done(AccountsReply::AgyTerms(TermsReply::Cancelled(turn, api.server_delete(&TERMS, &[("attempt_id", &attempt)], 15).await))).await
+        });
+        cx.notify();
     }
 
     fn agy_terms_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -249,6 +280,13 @@ impl Hangar {
                     self.root_focus.focus(window, cx);
                 }
             }
+            TermsReply::Cancelled(turn, result) => {
+                let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.turn == turn) else { return };
+                if flow.cancelled(result) {
+                    self.accounts.terms = None;
+                    self.root_focus.focus(window, cx);
+                }
+            }
             TermsReply::Answered(attempt, result) => {
                 let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.attempt.as_deref() == Some(attempt.as_str())) else { return };
                 flow.busy = false;
@@ -265,9 +303,10 @@ impl Hangar {
     /// O painel no lugar da lista: a etapa que o servidor publicou e os botões dela.
     pub(super) fn render_agy_terms(&self, cx: &mut Context<Self>) -> Option<Div> {
         let f = self.accounts.terms.as_ref()?;
-        let buttons = terms_buttons(&f.stage, f.busy, self.agy_terms_home().is_some(), |action, button| match action {
+        let buttons = terms_buttons(f.actions(), f.busy, self.agy_terms_home().is_some(), |action, button| match action {
             TermsAction::Accept(option) => button.on_click(cx.listener(move |this, _, _, cx| this.agy_terms_answer(option, cx))),
-            TermsAction::Cancel | TermsAction::Back => button.on_click(cx.listener(|this, _, window, cx| this.agy_terms_back(window, cx))),
+            TermsAction::Cancel => button.on_click(cx.listener(|this, _, window, cx| this.agy_terms_cancel(window, cx))),
+            TermsAction::Back => button.on_click(cx.listener(|this, _, window, cx| this.agy_terms_back(window, cx))),
             TermsAction::SignIn => button.on_click(cx.listener(|this, _, window, cx| this.agy_terms_sign_in(window, cx))),
             TermsAction::OpenTerminal => button.on_click(cx.listener(|this, _, window, cx| this.agy_terms_open_terminal(window, cx))),
         });
@@ -277,8 +316,8 @@ impl Hangar {
 
 /// Os botões da etapa, na ordem da tela: Cancelar e Voltar à esquerda, a ação da etapa por último. `wire` liga cada um
 /// à sua ação; a animação da novidade não liga nenhum.
-pub(crate) fn terms_buttons(stage: &TermsStage, busy: bool, home: bool, mut wire: impl FnMut(TermsAction, Button) -> Button) -> Vec<Button> {
-    stage.actions().into_iter().rev().map(|action| {
+pub(crate) fn terms_buttons(actions: Vec<TermsAction>, busy: bool, home: bool, mut wire: impl FnMut(TermsAction, Button) -> Button) -> Vec<Button> {
+    actions.into_iter().rev().map(|action| {
         let button = match action {
             TermsAction::Accept(option) => Button::new(SharedString::from(format!("accounts-agy-terms-accept-{option}"))).primary().small()
                 .label(tr(if option == 1 { "accounts_agy_terms_accept_share" } else { "accounts_agy_terms_accept_private" })).disabled(busy),
@@ -328,8 +367,8 @@ pub(crate) fn terms_panel(stage: &TermsStage, error: Option<String>, server: &st
 
 #[cfg(test)]
 mod tests {
-    use super::{TermsAction::*, TermsStage, failed_text};
-    use crate::i18n::tr;
+    use super::{AgyTermsFlow, TermsAction::*, TermsStage, failed_text};
+    use crate::{api::Failure, i18n::tr};
     use serde_json::json;
 
     #[test]
@@ -378,7 +417,21 @@ mod tests {
         assert_eq!(failed_text(Some("termos_sem_confirmacao")), tr("accounts_agy_terms_error_unconfirmed"));
         assert_eq!(failed_text(Some("termos_nao_convergiu")), tr("accounts_agy_terms_error_no_converge"));
         assert_eq!(failed_text(Some("termos_terminal_falhou")), tr("accounts_agy_terms_error_terminal"));
+        assert_eq!(failed_text(Some("termos_expirou")), tr("accounts_agy_terms_error_expired"));
         assert_eq!(failed_text(Some("termos_novo")), tr("accounts_agy_terms_failed"));
         assert_eq!(failed_text(None), tr("accounts_agy_terms_failed"));
+    }
+
+    #[test]
+    fn a_cancel_whose_window_stayed_open_keeps_the_panel_with_the_error_and_cancel_tries_again() {
+        let mut flow = AgyTermsFlow { attempt: Some("t1".into()), stage: TermsStage::Terms("t".into()), error: None, busy: true,
+            read_failed: false, closing: false, turn: 1, task: None };
+        let open = Failure { status: Some(500), detail: "a janela escondida dos Termos não fechou".into(), retry_after: None, uncertain: false,
+            code: Some("erro_termos_janela_aberta".into()) };
+        assert!(!flow.cancelled(Err(open)), "o painel fica");
+        assert_eq!(flow.error, Some(tr("accounts_agy_terms_error_window_open")));
+        assert_eq!(flow.actions(), [Cancel], "só o Cancelar, sem Aceitar de uma tentativa que o servidor já soltou");
+        assert_eq!(flow.attempt.as_deref(), Some("t1"), "o segundo Cancelar vai à mesma tentativa");
+        assert!(flow.cancelled(Ok(serde_json::json!({"ok": true}))), "o DELETE que deu certo fecha");
     }
 }

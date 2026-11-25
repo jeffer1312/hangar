@@ -12556,6 +12556,8 @@
   "native_accounts_agy_terms_error_unconfirmed": "agy did not confirm the acceptance.",
   "native_accounts_agy_terms_error_no_converge": "Hangar could not select the chosen option on the agy screen.",
   "native_accounts_agy_terms_error_terminal": "The hidden agy terminal did not open.",
+  "native_accounts_agy_terms_error_expired": "The terms stayed open for 10 minutes without an answer.",
+  "native_accounts_agy_terms_error_window_open": "agy did not close. Tap Cancel again.",
   "native_accounts_agy_terms_attempt_lost": "The server no longer has this attempt. Start again.",
   "mobile_antigravity_accept_terms": "Accept the Terms",
   "mobile_antigravity_accept_terms_hint": "The Google Terms show up here and you make the choice. Hangar never accepts for you.",
@@ -12575,5 +12577,7 @@
   "mobile_antigravity_terms_error_unconfirmed": "agy did not confirm the acceptance.",
   "mobile_antigravity_terms_error_no_converge": "Hangar could not select the chosen option on the agy screen.",
   "mobile_antigravity_terms_error_terminal": "The hidden agy terminal did not open.",
+  "mobile_antigravity_terms_error_expired": "The terms stayed open for 10 minutes without an answer.",
+  "mobile_antigravity_terms_error_window_open": "agy did not close. Tap Cancel again.",
   "mobile_antigravity_terms_attempt_lost": "The server no longer has this attempt. Start again."
 }
