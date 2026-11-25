@@ -2814,11 +2814,12 @@ impl NewSession {
 
     /// As contas da máquina `key` sob o nome dela no menu: o logo do agente (ou o ícone da etiqueta) e o nome, até cinco.
     fn machine_accounts(&self, key: &str) -> Option<AnyElement> {
-        // Uma linha só, um item por agente: o nome da conta quando é uma, "N contas" quando são mais. Nenhum agente some;
-        // sem espaço, os nomes encolhem com "…". A lista inteira fica na dica da linha.
+        // Um item por agente: o nome da conta quando é uma, "N contas" quando são mais. Nenhum agente some: sem espaço, os
+        // nomes encolhem com "…" e, se ainda não couber, a linha quebra. A lista inteira fica na dica da linha.
         let groups = account_groups(&self.tags.get(key)?.accounts);
         if groups.is_empty() { return None; }
-        Some(div().w_full().min_w_0().overflow_hidden().flex().items_center().gap(px(10.)).text_xs().text_color(theme::muted())
+        Some(div().w_full().min_w_0().overflow_hidden().flex().flex_wrap().items_center().gap_x(px(10.)).gap_y(px(2.))
+            .text_xs().text_color(theme::muted())
             .children(groups.into_iter().map(|(provider, names)| {
                 let mark = match provider.as_str() {
                     "chave" => chrome::small_icon(IconName::KeyRound, 11., theme::muted()).into_any_element(),

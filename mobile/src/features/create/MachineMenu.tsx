@@ -64,9 +64,10 @@ function Accounts({ accounts }: { accounts: Record<string, AccountBadge> | undef
         <View key={provider} style={styles.account}>
           {PROVIDER_ORDER.includes(provider) ? <ProviderGlyph provider={provider} size={14} />
             : <Icon name={provider === 'chave' ? 'KeyRound' : 'CreditCard'} size={12} color={theme.tokens.text.muted} />}
-          <Text style={styles.accountName} numberOfLines={1}>
-            {names.length === 1 ? names[0] : m.native_new_chat_machine_accounts({ n: names.length })}
-          </Text>
+          {/* Só o nome de uma conta encolhe com "…"; a contagem fica sempre inteira. */}
+          {names.length === 1
+            ? <Text style={styles.accountName} numberOfLines={1}>{names[0]}</Text>
+            : <Text style={[styles.accountName, styles.accountCount]}>{m.native_new_chat_machine_accounts({ n: names.length })}</Text>}
         </View>
       ))}
     </View>
@@ -128,6 +129,7 @@ const styles = StyleSheet.create((theme) => ({
   accounts: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.base.space[3], rowGap: theme.base.space[1] },
   account: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], maxWidth: '100%' },
   accountName: { flexShrink: 1, fontSize: theme.base.text.xxs, color: theme.tokens.text.secondary },
+  accountCount: { flexShrink: 0 },
   check: { width: 22, height: 38, alignItems: 'center', justifyContent: 'center' },
   separator: { height: StyleSheet.hairlineWidth, backgroundColor: theme.tokens.border.default, marginVertical: theme.base.space[1], marginHorizontal: theme.base.space[2] },
 }));
