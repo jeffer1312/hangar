@@ -335,6 +335,9 @@ Decisões:
   anexo) devolve o mesmo, sem criar outro.
 - **Contato novo é recusado.** Conversa sem nenhuma mensagem recebida dá `new_contact`; conversa fora
   do arquivo, `unknown_chat`; lista de transmissão e canal, `unsupported_chat`. Grupo é aceito.
+- **Dono do arquivo.** O binário guarda o número que montou o arquivo; pareado com outro número,
+  criar e enviar dão `account_changed` (o pendente fica até expirar), e o status traz `account_changed`.
+  `logout` mantém o dono e `wipe` o apaga.
 - **Trava 463/475 sem reenvio.** Qualquer falha deixa `failed`, sem nova tentativa; 463 e 475 ficam
   com `reachout_locked`. O evento `NotifyAccountReachoutTimelock` grava até quando a conta está
   travada e recusa todo envio até lá. Envio interrompido por queda do binário vira `failed`
@@ -360,7 +363,8 @@ Do lado do Hangar (C6):
   que a mensagem pode sair, como quando o dono responde no instante da recusa do prazo e a releitura falha.
   Cancelada, recusa o rascunho no binário, inclusive o que nasce depois do cancelamento, com a criação
   ainda correndo; já aprovado, avisa que pode sair. Binário desatualizado dá
-  `whatsapp_outdated`.
+  `whatsapp_outdated`; conta pareada que não é a dona do arquivo, `whatsapp_account_changed`, com a
+  frase de apagar os dados do WhatsApp e parear de novo, também no erro do cartão.
 - **Rotas do dono** `POST/GET /api/whatsapp/outbox`, `POST /api/whatsapp/outbox/{id}/send` e
   `POST /api/whatsapp/outbox/{id}/decline`, repassadas ao binário com o prefixo `whatsapp_` nos
   códigos, pelo mesmo `owner_only` das leituras.

@@ -144,6 +144,7 @@ pub(super) fn refusal_text(code: Option<&str>, locked_until: Option<&str>) -> Op
         "whatsapp_not_found" => "whatsapp_draft_err_not_found",
         "whatsapp_rate_limited" => "whatsapp_draft_err_rate_limited",
         "whatsapp_not_paired" => "whatsapp_draft_err_not_paired",
+        "whatsapp_account_changed" => "whatsapp_draft_err_account_changed",
         // Serviço sem envio (api 1): o remédio é o mesmo.
         "whatsapp_outdated" | "whatsapp_send_unsupported" => "whatsapp_draft_err_outdated",
         _ => return None,
@@ -534,6 +535,7 @@ mod tests {
             "whatsapp_draft_send", "whatsapp_draft_decline", "whatsapp_draft_sending", "whatsapp_draft_err_expired",
             "whatsapp_draft_err_answered", "whatsapp_draft_err_not_found", "whatsapp_draft_err_reachout_locked",
             "whatsapp_draft_err_reachout_locked_unknown", "whatsapp_draft_err_rate_limited", "whatsapp_draft_err_not_paired",
+            "whatsapp_draft_err_account_changed",
             "whatsapp_draft_err_outdated"];
         for english in [false, true] {
             crate::i18n::english_in_this_thread(english);
@@ -543,6 +545,7 @@ mod tests {
         crate::i18n::english_in_this_thread(false);
         assert_eq!(refusal_text(Some("whatsapp_outdated"), None), Some(tr_shared("whatsapp_draft_err_outdated", &[])));
         assert_eq!(refusal_text(Some("whatsapp_reachout_locked"), None), Some(tr_shared("whatsapp_draft_err_reachout_locked_unknown", &[])));
+        assert_eq!(refusal_text(Some("whatsapp_account_changed"), None), Some(tr_shared("whatsapp_draft_err_account_changed", &[])));
         let locked = refusal_text(Some("whatsapp_reachout_locked"), Some("2026-11-25T12:30:00Z")).unwrap();
         assert_ne!(locked, tr_shared("whatsapp_draft_err_reachout_locked_unknown", &[]));
         assert!(!locked.contains("{date}") && !locked.contains("{time}"));

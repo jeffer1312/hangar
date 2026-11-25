@@ -94,6 +94,7 @@ describe('cartão', () => {
     expect(whatsappDraftRefusalText('whatsapp_not_paired')).toBe(m.whatsapp_draft_err_not_paired());
     expect(whatsappDraftRefusalText('whatsapp_expired')).toBe(m.whatsapp_draft_err_expired());
     expect(whatsappDraftRefusalText('whatsapp_reachout_locked')).toBe(m.whatsapp_draft_err_reachout_locked_unknown());
+    expect(whatsappDraftRefusalText('whatsapp_account_changed')).toBe(m.whatsapp_draft_err_account_changed());
     const locked = whatsappDraftRefusalText('whatsapp_reachout_locked', '2026-11-25T12:30:00Z');
     expect(locked).not.toBe(m.whatsapp_draft_err_reachout_locked_unknown());
     expect(locked).toMatch(/\d{2}:\d{2}/);

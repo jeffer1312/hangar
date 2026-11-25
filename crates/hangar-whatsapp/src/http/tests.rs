@@ -152,6 +152,7 @@ fn fake_outbox(method: &str, path: &str, uri: &str, body: &[u8], drafts: &Mutex<
                 match asked["chat"].as_str() {
                     Some("velho") => error(409, "outdated"),
                     Some("novo") => error(409, "new_contact"),
+                    Some("outro") => error(409, "account_changed"),
                     _ => {
                         let draft = json!({"id": format!("d{}", drafts.len() + 1), "origin": asked["origin"], "chat": asked["chat"],
                             "text": asked["text"], "state": "pending", "created_at": "2026-11-24T10:00:00Z", "expires_at": "2099-01-01T00:00:00Z",
@@ -465,6 +466,9 @@ async fn drafts_are_created_and_answered_with_the_house_codes() {
     assert!(body["detail"]["msg"].as_str().unwrap().contains("atualize o hangar-whatsapp"), "{body}");
     let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"novo","text":"oi","origin":"casa::s0"}"#)).await;
     assert_eq!((status, code(&body)), (409, "whatsapp_new_contact"));
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"outro","text":"oi","origin":"casa::s0"}"#)).await;
+    assert_eq!((status, code(&body)), (409, "whatsapp_account_changed"));
+    assert!(body["detail"]["msg"].as_str().unwrap().contains("pareie de novo"), "{body}");
     let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":5,"text":"oi","origin":"casa::s0"}"#)).await;
     assert_eq!((status, code(&body)), (400, "whatsapp_bad_request"));
     let (status, body) = s.call(Method::GET, "/api/whatsapp/outbox/a.b", true, None).await;
