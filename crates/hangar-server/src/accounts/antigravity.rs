@@ -64,6 +64,17 @@ struct TermsAttempt {
 /// O condutor e a etapa que o GET mostra; a resposta e a tarefa mudam os dois sob a mesma trava.
 struct Live { driver: Mutex<Driver>, stage: watch::Sender<Stage> }
 
+impl Live {
+    /// Quem espera a etapa só é avisado quando ela muda.
+    fn publish(&self, stage: &Stage) {
+        self.stage.send_if_modified(|current| {
+            let changed = current != stage;
+            if changed { *current = stage.clone(); }
+            changed
+        });
+    }
+}
+
 impl TermsAttempt {
     /// Para a tarefa e espera ela fechar a janela; `Err` = a janela ficou aberta.
     async fn finish(self) -> Result<(), &'static str> {
@@ -338,7 +349,8 @@ fn terms_windows(env: &super::environment::AccountEnvironment) -> PrivateWindows
     let diary = crate::diag::diary_dir_in(env);
     // Dono = a pasta do agy desta HOME: outro servidor no mesmo multiplexador tem outra.
     let owner = Account::default().gemini_dir(&env.home).to_string_lossy().into_owned();
-    PrivateWindows::new(Box::new(ProcessWindowMux::new(diary.clone())), cfg!(windows), TERMS_PREFIX, owner, diary)
+    let terminal = super::claude_window::terminal_env(env);
+    PrivateWindows::new(Box::new(ProcessWindowMux::new(&terminal, diary.clone())), &terminal, TERMS_PREFIX, owner, diary)
 }
 
 /// Na subida: a janela dos Termos que a instância anterior deixou.
@@ -350,17 +362,17 @@ pub async fn sweep_terms(env: super::environment::AccountEnvironment) {
 /// Nova tentativa encerra a anterior (e fecha a janela dela) antes de abrir a sua.
 async fn start_terms(attempts: &TermsAttempts, win: Arc<PrivateWindows>, home: &Path, env: ProcessEnv) -> Response {
     let mut slot = attempts.0.lock().await;
-    // A janela antiga que não fechou já ficou registrada; a varredura abaixo tenta de novo.
-    if let Some(old) = slot.take() { let _ = old.finish().await; }
-    // O que sobrou com o prefixo é de tentativa cujo fechamento falhou.
-    win.sweep(|_| true).await;
+    let closed = match slot.take() { Some(old) => old.finish().await.is_ok(), None => false };
+    // O que sobrou com o prefixo é de tentativa cujo fechamento falhou (já registrado), ou de outra instância.
+    if !closed { win.sweep(|_| true).await; }
     let id = crate::mods::state::random_hex(16);
     let started = tokio::time::Instant::now();
     let live = Arc::new(Live { driver: Mutex::new(Driver::new(started.into_std())), stage: watch::channel(Stage::Starting).0 });
     let stop = Arc::new(Notify::new());
     let task = tokio::spawn(conduct(win.clone(), id.clone(), home.to_owned(), env, live.clone(), stop.clone(), started));
-    *slot = Some(TermsAttempt { id: id.clone(), win, live, stop, task });
-    Json(json!({"attempt_id": id, "estado": "iniciando"})).into_response()
+    let reply = stage_json(&id, &Stage::Starting);
+    *slot = Some(TermsAttempt { id, win, live, stop, task });
+    Json(reply).into_response()
 }
 
 /// A tarefa da tentativa: toda saída tenta fechar a janela, e a etapa final sai depois disso. A janela que não
@@ -370,13 +382,10 @@ async fn conduct(win: Arc<PrivateWindows>, id: String, home: PathBuf, env: Proce
     let name = win.name(&id);
     let ended = drive(&win, &name, &home, &env, &live, &stop, started).await;
     let closed = win.kill(&name).await;
-    if let Err(code) = closed {
-        tracing::warn!(code, "Termos do agy: a janela escondida não fechou");
-        win.record("conta.janela_orfa", code);
-    }
+    if let Err(code) = closed { win.note(code); }
     if ended {
         let driver = live.driver.lock().unwrap_or_else(|e| e.into_inner());
-        live.stage.send_replace(driver.stage().clone());
+        live.publish(driver.stage());
     }
     closed
 }
@@ -395,9 +404,7 @@ async fn drive(win: &PrivateWindows, name: &str, home: &Path, env: &ProcessEnv, 
         live.driver.lock().unwrap_or_else(|e| e.into_inner()).fail(code);
         true
     };
-    // O psmux não tem `env`: lá o pane herda de quem chama, como na sessão.
-    let mut command = if win.windows() { Vec::new() } else { env.env_prefix() };
-    command.push("agy".into());
+    let command = env.command(win.windows(), vec!["agy".into()]);
     if let Err(code) = win.spawn(name, &home.to_string_lossy(), TERMS_WIDTH, &env.set).await { return end(window_failed(win, code)); }
     if let Err(code) = win.type_line(name, &command.join(" ")).await { return end(window_failed(win, code)); }
     let account = Account::default();
@@ -427,16 +434,13 @@ async fn drive(win: &PrivateWindows, name: &str, home: &Path, env: &ProcessEnv, 
             let mut driver = live.driver.lock().unwrap_or_else(|e| e.into_inner());
             let key = driver.observe(&screen, accepted, now.into_std());
             if matches!(driver.stage(), Stage::Done | Stage::Failed(_)) { return true; }
-            live.stage.send_replace(driver.stage().clone());
+            live.publish(driver.stage());
             key
         };
         let sent = match key {
             None => true,
             Some(AgyTermsKey::Enter) => win.enter(name).await,
-            Some(AgyTermsKey::Up) => win.key(name, "Up").await,
-            Some(AgyTermsKey::Down) => win.key(name, "Down").await,
-            Some(AgyTermsKey::Left) => win.key(name, "Left").await,
-            Some(AgyTermsKey::Right) => win.key(name, "Right").await,
+            Some(key) => win.key(name, key.name()).await,
         };
         if !sent { return end(window_failed(win, "window_key_failed")); }
     }
@@ -444,18 +448,22 @@ async fn drive(win: &PrivateWindows, name: &str, home: &Path, env: &ProcessEnv, 
 
 fn missing_attempt() -> Response { fail(404, "erro_tentativa_inexistente", "tentativa dos Termos não encontrada") }
 
-async fn terms_status(attempts: &TermsAttempts, attempt_id: Option<&str>) -> Response {
-    let slot = attempts.0.lock().await;
-    let Some(attempt) = slot.as_ref().filter(|attempt| Some(attempt.id.as_str()) == attempt_id) else { return missing_attempt() };
-    let id = attempt.id.as_str();
-    let reply = match &*attempt.live.stage.borrow() {
+/// A etapa como o POST e o GET dos Termos a mostram.
+fn stage_json(id: &str, stage: &Stage) -> Value {
+    match stage {
         Stage::Starting => json!({"attempt_id": id, "estado": "iniciando"}),
         Stage::Terms { text } => json!({"attempt_id": id, "estado": "termos", "texto": text}),
         Stage::Answering => json!({"attempt_id": id, "estado": "respondendo"}),
         Stage::Login => json!({"attempt_id": id, "estado": "login"}),
         Stage::Done => json!({"attempt_id": id, "estado": "concluido"}),
         Stage::Failed(code) => json!({"attempt_id": id, "estado": "falhou", "codigo": code}),
-    };
+    }
+}
+
+async fn terms_status(attempts: &TermsAttempts, attempt_id: Option<&str>) -> Response {
+    let slot = attempts.0.lock().await;
+    let Some(attempt) = slot.as_ref().filter(|attempt| Some(attempt.id.as_str()) == attempt_id) else { return missing_attempt() };
+    let reply = stage_json(&attempt.id, &attempt.live.stage.borrow());
     Json(reply).into_response()
 }
 
@@ -463,31 +471,37 @@ async fn terms_status(attempts: &TermsAttempts, attempt_id: Option<&str>) -> Res
 async fn answer_terms(attempts: &TermsAttempts, body: &Value) -> Response {
     let slot = attempts.0.lock().await;
     let Some(attempt) = slot.as_ref().filter(|attempt| body["attempt_id"].as_str() == Some(attempt.id.as_str())) else { return missing_attempt() };
-    let Some(option) = body["opcao"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return fail(422, "erro_corpo_invalido", "corpo inválido") };
+    let invalid = || fail(422, "erro_corpo_invalido", "corpo inválido");
+    let Some(option) = body["opcao"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return invalid() };
     let outside = || fail(409, "erro_termos_fora_da_tela", "a tela dos Termos não está aberta");
     let mut driver = attempt.live.driver.lock().unwrap_or_else(|e| e.into_inner());
     // A etapa publicada também: a tentativa que acabou nunca volta a "respondendo".
     if !matches!(*attempt.live.stage.borrow(), Stage::Terms { .. }) { return outside(); }
     match driver.answer(option) {
         Ok(()) => {
-            attempt.live.stage.send_replace(driver.stage().clone());
+            attempt.live.publish(driver.stage());
             Json(json!({"ok": true})).into_response()
         }
         Err(AnswerError::OutsideTerms) => outside(),
-        Err(AnswerError::InvalidOption) => fail(422, "erro_corpo_invalido", "corpo inválido"),
+        Err(AnswerError::InvalidOption) => invalid(),
     }
 }
 
-/// Qualquer DELETE também fecha o que sobrou de um anterior que falhou: a tentativa já saiu do mapa, e o novo
-/// Cancelar tenta de novo em vez de responder ok com a janela aberta. A janela da tentativa viva fica.
+/// A tentativa que fechou a própria janela responde ok. Senão a varredura fecha o que sobrou de uma que falhou: ela
+/// já saiu do mapa, e o novo Cancelar tenta de novo em vez de responder ok com a janela aberta. A janela da
+/// tentativa viva fica.
 async fn cancel_terms(attempts: &TermsAttempts, win: &PrivateWindows, attempt_id: Option<&str>) -> Response {
     let mut slot = attempts.0.lock().await;
-    let mut closed = true;
+    let mut own = None;
     if slot.as_ref().is_some_and(|attempt| Some(attempt.id.as_str()) == attempt_id) && let Some(attempt) = slot.take() {
-        closed = attempt.finish().await.is_ok();
+        let attempt_win = attempt.win.clone();
+        if attempt.finish().await.is_ok() { return Json(json!({"ok": true})).into_response(); }
+        own = Some(attempt_win);
     }
-    let swept = win.sweep(|id| slot.as_ref().is_none_or(|attempt| attempt.id != id)).await;
-    if !(closed && swept) { return fail(500, "erro_termos_janela_aberta", "a janela escondida dos Termos não fechou"); }
+    let win = own.as_deref().unwrap_or(win);
+    if !win.sweep(|id| slot.as_ref().is_none_or(|attempt| attempt.id != id)).await {
+        return fail(500, "erro_termos_janela_aberta", "a janela escondida dos Termos não fechou");
+    }
     Json(json!({"ok": true})).into_response()
 }
 
@@ -657,7 +671,9 @@ mod tests {
         impl Fake {
             fn world<T>(&self, read: impl FnOnce(&World) -> T) -> T { read(&self.0.lock().unwrap()) }
             fn windows(&self) -> Arc<PrivateWindows> {
-                Arc::new(PrivateWindows::new(Box::new(self.clone()), false, TERMS_PREFIX, OWNER.into(), None))
+                let env = crate::session_open::terminal::TerminalEnv { windows: false, program: "tmux".into(), display: Vec::new(),
+                    server_config_dir: None, default_config_dir: PathBuf::from("/fixture/.claude"), birth: Duration::ZERO };
+                Arc::new(PrivateWindows::new(Box::new(self.clone()), &env, TERMS_PREFIX, OWNER.into(), None))
             }
         }
 

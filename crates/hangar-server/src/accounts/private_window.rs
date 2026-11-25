@@ -1,7 +1,7 @@
 //! Janela escondida do multiplexador onde o servidor conduz um programa por conta da pessoa (login do Claude,
 //! Termos do `agy`): nasce com as marcas antes de qualquer comando, recebe linha e tecla, é lida e fechada, e as
 //! órfãs deste servidor saem na varredura. Cada uso tem prefixo de nome e dono próprios.
-use crate::session_open::terminal::{Mux, MuxOutput, ProcessMux};
+use crate::session_open::terminal::{Mux, MuxOutput, ProcessMux, TerminalEnv};
 use futures_util::future::BoxFuture;
 use serde_json::json;
 use std::{path::PathBuf, time::Duration};
@@ -28,8 +28,8 @@ pub struct PrivateWindows {
 }
 
 impl PrivateWindows {
-    pub fn new(mux: Box<dyn WindowMux>, windows: bool, prefix: &'static str, owner: String, diary: Option<PathBuf>) -> Self {
-        Self { mux, windows, prefix, owner, diary }
+    pub fn new(mux: Box<dyn WindowMux>, env: &TerminalEnv, prefix: &'static str, owner: String, diary: Option<PathBuf>) -> Self {
+        Self { mux, windows: env.windows, prefix, owner, diary }
     }
 
     pub fn name(&self, id: &str) -> String { format!("{}{id}", self.prefix) }
@@ -68,7 +68,7 @@ impl PrivateWindows {
         if scoped && created.code != Some(0) && created.stderr.trim_start().starts_with("Failed to ") {
             created = self.mux.run(Vec::new(), args, Vec::new()).await;
         }
-        if created.code != Some(0) && self.run(&["has-session", "-t", &format!("={name}")]).await.code != Some(0) {
+        if created.code != Some(0) && self.alive(name).await != Some(true) {
             let cause: String = created.stderr.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("").chars().take(200).collect();
             tracing::warn!(code = "window_mux_refused", retorno = ?created.code, %cause, "janela escondida não foi criada");
             return Err("window_mux_refused");
@@ -152,8 +152,7 @@ impl PrivateWindows {
     pub async fn sweep(&self, orphan: impl Fn(&str) -> bool) -> bool {
         let listed = self.run(&["list-sessions", "-F", "#{session_name}"]).await;
         if listed.code != Some(0) {
-            let stderr = listed.stderr.trim_start();
-            let none = listed.code == Some(1) && ["no server", "no sessions", "error connecting to "].iter().any(|p| stderr.starts_with(p));
+            let none = listed.code == Some(1) && hangar_core::terminal_process::mux_absence(listed.stderr.trim_start());
             if !none { self.note("lista_indisponivel"); }
             return none;
         }
@@ -180,7 +179,9 @@ impl PrivateWindows {
 pub struct ProcessWindowMux { mux: ProcessMux, program: String }
 
 impl ProcessWindowMux {
-    pub fn new(diary: Option<PathBuf>) -> Self { Self { mux: ProcessMux { diary, ..ProcessMux::default() }, program: "tmux".into() } }
+    pub fn new(env: &TerminalEnv, diary: Option<PathBuf>) -> Self {
+        Self { mux: ProcessMux { diary, ..ProcessMux::default() }, program: env.program.clone() }
+    }
 }
 
 impl WindowMux for ProcessWindowMux {
@@ -207,5 +208,36 @@ impl WindowMux for ProcessWindowMux {
                 Err(_) => MuxOutput { code: None, stdout: String::new(), stderr: "o multiplexador não respondeu no prazo".into() },
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// O multiplexador que dá a mesma resposta a tudo.
+    struct Answer(MuxOutput);
+
+    impl WindowMux for Answer {
+        fn scope(&self) -> BoxFuture<'_, Vec<String>> { Box::pin(async { Vec::new() }) }
+        fn run(&self, _scope: Vec<String>, _args: Vec<String>, _stdin: Vec<u8>) -> BoxFuture<'_, MuxOutput> {
+            let out = self.0.clone();
+            Box::pin(async move { out })
+        }
+    }
+
+    fn sweep_with(stderr: &str) -> bool {
+        let env = TerminalEnv { windows: true, program: "tmux".into(), display: Vec::new(), server_config_dir: None,
+            default_config_dir: PathBuf::from("/fixture/.claude"), birth: Duration::ZERO };
+        let out = MuxOutput { code: Some(1), stdout: String::new(), stderr: stderr.into() };
+        let win = PrivateWindows::new(Box::new(Answer(out)), &env, "term-x-", "owner".into(), None);
+        futures_util::FutureExt::now_or_never(win.sweep(|_| true)).expect("o falso responde na hora")
+    }
+
+    #[test]
+    fn sweep_reads_the_psmux_without_a_server_as_no_window() {
+        assert!(sweep_with("psmux: no server running on session 'default'\n"));
+        assert!(sweep_with("no server running on /tmp/tmux-0/default\n"));
+        assert!(!sweep_with("psmux: unknown command\n"), "recusa desconhecida não é lista vazia");
     }
 }

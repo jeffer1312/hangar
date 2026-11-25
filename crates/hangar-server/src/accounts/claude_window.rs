@@ -3,7 +3,7 @@
 //! A identidade é a operação (`term-login-<operação>`), nunca a conta: limpar a antiga não toca a nova.
 use super::AccountKey;
 use super::private_window::{PrivateWindows, ProcessWindowMux, WindowMux};
-use crate::session_open::terminal::{MuxOutput, TerminalEnv, exports_config_dir};
+use crate::session_open::terminal::{TerminalEnv, exports_config_dir};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
@@ -90,12 +90,8 @@ pub fn trusted_folder(config_file: &Path) -> Option<PathBuf> {
 impl ClaudeWindows {
     pub fn new(mux: Box<dyn WindowMux>, env: TerminalEnv, browser: Option<String>, diary: Option<PathBuf>) -> Self {
         let owner = env.default_config_dir.to_string_lossy().into_owned();
-        Self { win: PrivateWindows::new(mux, env.windows, PREFIX, owner, diary), env, browser, table: Default::default() }
+        Self { win: PrivateWindows::new(mux, &env, PREFIX, owner, diary), env, browser, table: Default::default() }
     }
-
-    fn pane(name: &str) -> String { PrivateWindows::pane(name) }
-
-    async fn run(&self, args: &[&str]) -> MuxOutput { self.win.run(args).await }
 
     pub async fn open(&self, key: &AccountKey, operation: &str) -> Result<(), &'static str> {
         self.start(key, operation, None, "claude auth login --claudeai", self.browser.as_deref()).await
@@ -154,12 +150,12 @@ impl ClaudeWindows {
 
     /// A tela das últimas 200 linhas com o link juntado.
     async fn screen(&self, name: &str) -> Result<String, &'static str> {
-        let width = self.run(&["display-message", "-p", "-t", &Self::pane(name), "#{pane_width}"]).await;
+        let width = self.win.run(&["display-message", "-p", "-t", &PrivateWindows::pane(name), "#{pane_width}"]).await;
         let width = (width.code == Some(0)).then(|| width.stdout.trim().parse().ok()).flatten();
         if width.is_none() {
             tracing::warn!(code = "window_width_unread", "janela de login: largura não lida; o link quebrado não é juntado");
         }
-        let out = self.run(&["capture-pane", "-p", "-J", "-t", &Self::pane(name), "-S", "-200"]).await;
+        let out = self.win.run(&["capture-pane", "-p", "-J", "-t", &PrivateWindows::pane(name), "-S", "-200"]).await;
         if out.stdout.is_empty() && out.code != Some(0) {
             tracing::warn!(code = "window_capture_failed", "janela de login: a tela não foi lida");
             return Err("window_capture_failed");
@@ -182,7 +178,7 @@ impl ClaudeWindows {
         match self.screen(&name).await {
             Ok(screen) => Ok(oauth_url(&screen)),
             // Janela que sumiu não terá link: o passo fecha a tentativa e solta a conta.
-            Err(_) if self.run(&["has-session", "-t", &format!("={name}")]).await.code == Some(1) => Err("window_gone"),
+            Err(_) if self.win.alive(&name).await == Some(false) => Err("window_gone"),
             // Tela que não se lê com a janela de pé é "ainda sem link".
             Err(_) => Ok(None),
         }
@@ -204,7 +200,7 @@ impl ClaudeWindows {
         let loaded = self.win.run_input(of_session("load-buffer", &["-b", &buffer, "-"]), code.as_bytes().to_vec()).await;
         let result = if loaded.code != Some(0) {
             Err("window_buffer_failed")
-        } else if self.run(&["paste-buffer", "-t", &Self::pane(&name), "-b", &buffer, "-d"]).await.code != Some(0) || !self.win.enter(&name).await {
+        } else if self.win.run(&["paste-buffer", "-t", &PrivateWindows::pane(&name), "-b", &buffer, "-d"]).await.code != Some(0) || !self.win.enter(&name).await {
             Err("window_paste_failed")
         } else {
             Ok(())
@@ -266,15 +262,20 @@ const BROWSER: Option<&str> = Some(if cfg!(windows) { "hostname.exe" } else { "t
 /// As janelas do multiplexador da máquina, no ambiente das contas. Sem as variáveis de tela do
 /// `TerminalEnv::local`: o shell do login não as usa, e achá-las pode consultar o systemd.
 pub fn local(accounts: &super::environment::AccountEnvironment) -> ClaudeWindows {
+    let env = terminal_env(accounts);
+    let diary = crate::diag::diary_dir_in(accounts);
+    let mux = ProcessWindowMux::new(&env, diary.clone());
+    ClaudeWindows::new(Box::new(mux), env, BROWSER.map(str::to_owned), diary)
+}
+
+/// O multiplexador da máquina no ambiente das contas, também o das janelas dos Termos do `agy`.
+pub(super) fn terminal_env(accounts: &super::environment::AccountEnvironment) -> TerminalEnv {
     // Na forma da chave da conta: a pasta padrão escrita de outro jeito ganharia o `-e` no psmux.
     let default = accounts.home.join(".claude");
     let default_config_dir = AccountKey::new(super::Provider::Claude, &default).map_or(default, |key| key.canonical_home);
-    let env = TerminalEnv { windows: cfg!(windows), program: "tmux".into(), display: Vec::new(),
+    TerminalEnv { windows: cfg!(windows), program: "tmux".into(), display: Vec::new(),
         server_config_dir: accounts.base.get("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).cloned(),
-        default_config_dir, birth: std::time::Duration::ZERO };
-    let diary = crate::diag::diary_dir_in(accounts);
-    let mux = ProcessWindowMux::new(diary.clone());
-    ClaudeWindows::new(Box::new(mux), env, BROWSER.map(str::to_owned), diary)
+        default_config_dir, birth: std::time::Duration::ZERO }
 }
 
 /// Janela que recusa tudo: teste de quem chama que não pode chegar ao multiplexador da máquina.

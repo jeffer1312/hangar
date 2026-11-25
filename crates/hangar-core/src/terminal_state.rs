@@ -605,6 +605,13 @@ pub struct AgyTerms { pub checked: bool, pub focus: AgyTermsFocus }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgyTermsKey { Up, Down, Left, Right, Enter }
 
+impl AgyTermsKey {
+    /// O nome da tecla no `send-keys`.
+    pub fn name(self) -> &'static str {
+        match self { Self::Up => "Up", Self::Down => "Down", Self::Left => "Left", Self::Right => "Right", Self::Enter => "Enter" }
+    }
+}
+
 /// Uma volta: acerta a caixa de dados como a pessoa escolheu e leva o foco ao botão. `Enter` fora do checkbox é o
 /// aperto final do botão; no checkbox, só troca a caixa.
 pub fn agy_terms_key(terms: AgyTerms, option: usize) -> Option<AgyTermsKey> {

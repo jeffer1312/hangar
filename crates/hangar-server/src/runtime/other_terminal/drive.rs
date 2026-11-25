@@ -1639,7 +1639,7 @@ async fn agy_terms_answer(control: &mut Control<'_>, option: usize) -> Result<Ot
                 control.reply(RuntimeDisposition::Accepted, json!({"ok":true}))
             });
         } else {
-            match key { Key::Up => "Up", Key::Down => "Down", Key::Left => "Left", Key::Right => "Right", Key::Enter => "Enter" }
+            key.name()
         };
         control.write(key, false, false).await?;
         control.pause(Duration::from_millis(150), false).await?;
