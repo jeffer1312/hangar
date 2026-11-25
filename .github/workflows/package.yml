@@ -86,7 +86,9 @@ jobs:
             nao "sem o job backend verde num run de push do ci.yml neste commit"
           fi
 
+          # Commit de antes do workflow próprio do Windows: o Windows dele saiu do server.yml.
           case "$PLATFORM" in windows-*) wf=server-windows.yml ;; *) wf=server.yml ;; esac
+          [ -f ".github/workflows/$wf" ] || wf=server.yml
           server=$(runs "$wf" '')
           if [ -n "$server" ]; then
             if grep -qv ' completed$' <<<"$server"; then nao "o $wf ainda roda (o fim dele dispara de novo)"; fi
