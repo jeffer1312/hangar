@@ -863,7 +863,7 @@ mod tests {
         assert!(last.contains(&Effect::WakeQueue));
         let view = engine.control_view();
         assert_eq!((view["ready"].as_bool(),view["conversation_id"].as_str()),(Some(true),Some(OPENED)));
-        assert_eq!(view["rollout_path"],format!("/h/.gemini/antigravity-cli/brain/{OPENED}/.system_generated/logs/transcript_full.jsonl"));
+        assert_eq!(view["rollout_path"],std::path::Path::new("/h/.gemini/antigravity-cli/brain").join(OPENED).join(".system_generated").join("logs").join("transcript_full.jsonl").to_string_lossy().as_ref());
         assert!(engine.deliverable());
     }
 
