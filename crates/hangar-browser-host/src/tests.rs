@@ -207,7 +207,7 @@ async fn fill_secret_puts_the_value_only_in_the_frame() {
     const VALUE: &str = "S3nh@ \"x\"/é";
     let registry = Arc::new(Registry::default());
     let (mut host, mut rx) = registry.attach();
-    host.text(r#"{"type":"focus","session":"s"}"#);
+    host.text(r#"{"type":"focus","session":"s","caps":["fill_secret"]}"#);
     host.text(r#"{"type":"state","session":"s","url":"https://github.com/login"}"#);
     let call = {
         let registry = registry.clone();
@@ -230,4 +230,36 @@ async fn fill_secret_puts_the_value_only_in_the_frame() {
     let list = registry.list();
     assert_eq!(list, "s  https://github.com/login  vivo");
     assert!(!list.contains("S3nh"));
+}
+
+/// App de uma versão sem o `fill-secret`: o valor nunca entra num quadro para ele, e a recusa diz para atualizar.
+#[tokio::test]
+async fn fill_secret_is_refused_to_an_app_that_did_not_announce_it() {
+    const VALUE: &str = "S3nh@-do-cofre";
+    let registry = Arc::new(Registry::default());
+    let (mut host, mut rx) = registry.attach();
+    host.text(r#"{"type":"focus","session":"s"}"#);
+    let args = ["@e1".to_owned(), "password".to_owned()];
+    assert_eq!(registry.fill_secret("s", &args, "github.com", Zeroizing::new(VALUE.to_owned())).await, Err(Refusal::Outdated));
+    assert_eq!((Refusal::Outdated.status(), Refusal::Outdated.code()), (409, "browser_host_app_outdated"));
+    assert!(Refusal::Outdated.message("fill-secret").contains("atualize o app desktop"));
+    while let Ok(frame) = rx.try_recv() { assert!(!frame.contains(VALUE), "nenhum quadro leva o valor"); }
+    // Outras capacidades não bastam, e os outros verbos seguem indo ao mesmo app.
+    host.text(r#"{"type":"focus","session":"s","caps":["outra"]}"#);
+    assert_eq!(registry.fill_secret("s", &args, "github.com", Zeroizing::new(VALUE.to_owned())).await, Err(Refusal::Outdated));
+    assert!(rx.try_recv().is_err());
+    let call = spawn(&registry, "s", json!({"verbo": "url"}));
+    let sent = request(&mut rx).await;
+    host.text(&json!({"id": sent["id"], "ok": true, "text": "ok"}).to_string());
+    assert_eq!(call.await.unwrap(), Ok(Reply::Text("ok".into())));
+    // Anunciada, o quadro sai com o valor.
+    host.text(r#"{"type":"focus","session":"s","caps":["fill_secret"]}"#);
+    let call = {
+        let registry = registry.clone();
+        tokio::spawn(async move { registry.fill_secret("s", &["@e1".to_owned(), "password".to_owned()], "github.com", Zeroizing::new(VALUE.to_owned())).await })
+    };
+    let sent = request(&mut rx).await;
+    assert_eq!((sent["verbo"].as_str(), sent["valor"].as_str()), (Some("fill-secret"), Some(VALUE)));
+    host.text(&json!({"id": sent["id"], "ok": true, "text": "ok: fill-secret @e1"}).to_string());
+    assert_eq!(call.await.unwrap(), Ok(Reply::Text("ok: fill-secret @e1".into())));
 }

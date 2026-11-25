@@ -191,6 +191,10 @@ pub struct Controller<P: Page> {
     on_dialog_answer: RefCell<Option<Box<dyn Fn(bool, Option<String>, futures::channel::oneshot::Sender<Result<(), String>>)>>>,
     /// Método CDP sem resposta ainda: o teto do verbo diz em qual a página parou.
     in_flight: RefCell<Option<String>>,
+    /// O `mouseReleased` do clique com o botão já apertado: o teto que corta o clique ali solta o botão.
+    pressed: RefCell<Option<Value>>,
+    /// O `fill-secret` já mandou o valor à página: cortado depois disso, a resposta não pode dizer que nada entrou.
+    secret_sent: Cell<bool>,
 }
 
 fn push(list: &mut VecDeque<String>, line: String) {
@@ -214,7 +218,7 @@ fn without_query(url: &str) -> &str { url.split(['?', '#']).next().unwrap_or(url
 
 impl<P: Page> Controller<P> {
     pub fn new(page: P, hidden: bool) -> Self {
-        Self { page, turn: Mutex::new(()), wanted_hidden: Cell::new(hidden), paused: Cell::new(false), picking: Cell::new(false), on_activity: RefCell::new(None), on_layout: RefCell::new(None), on_page_error: RefCell::new(None), dialog_open: RefCell::new(None), strip_shown: Cell::new(false), settle: Cell::new(false), dialog_answered: Cell::new(false), dialog_signal: RefCell::new(None), on_dialog_answer: RefCell::new(None), in_flight: RefCell::new(None), state: RefCell::new(State { refs: HashMap::new(), console: VecDeque::new(),
+        Self { page, turn: Mutex::new(()), wanted_hidden: Cell::new(hidden), paused: Cell::new(false), picking: Cell::new(false), on_activity: RefCell::new(None), on_layout: RefCell::new(None), on_page_error: RefCell::new(None), dialog_open: RefCell::new(None), strip_shown: Cell::new(false), settle: Cell::new(false), dialog_answered: Cell::new(false), dialog_signal: RefCell::new(None), on_dialog_answer: RefCell::new(None), in_flight: RefCell::new(None), pressed: RefCell::new(None), secret_sent: Cell::new(false), state: RefCell::new(State { refs: HashMap::new(), console: VecDeque::new(),
             network: VecDeque::new(), inflight: HashSet::new(), requests: HashMap::new(), dialog: None, last_network: Instant::now(), noise: HashSet::new(), theme: "sistema", layout: Layout::Desktop,
             hidden: false, scale: None, navigated: false, navs: 0, enabled: HashSet::new(), marked: HashSet::new(), secrets: Vec::new() }) }
     }
@@ -449,6 +453,8 @@ impl<P: Page> Controller<P> {
         if verb == "dialog" { return Reply::Text(self.answer_dialog(args).await); }
         let _turn = self.turn.lock().await;
         self.in_flight.borrow_mut().take();
+        self.pressed.borrow_mut().take();
+        self.secret_sent.set(false);
         if let Some(why) = self.blocked().filter(|_| ACTING.contains(&verb)) { return Reply::Text(why.into()); }
         for _ in 0..20 {
             if !(self.dialog_answered.get() && self.dialog_open.borrow().is_some()) { break; }
@@ -511,13 +517,22 @@ impl<P: Page> Controller<P> {
             }
         };
         let ceiling = verb_ceiling(verb, args, deadline_ms);
-        let result = match within(&self.page, ceiling, raced).await {
+        let finished = match ceiling { Some(ms) => within(&self.page, ms, raced).await, None => Some(raced.await) };
+        let result = match finished {
             Some(result) => result,
             None => {
+                let ms = ceiling.unwrap_or_default();
                 let stuck = self.in_flight.borrow_mut().take();
-                note_stuck(verb, stuck.as_deref(), ceiling);
+                note_stuck(verb, stuck.as_deref(), ms);
+                // Sem soltar, o verbo seguinte começaria com o botão preso; sem esperar a resposta além de um instante.
+                let release = self.pressed.borrow_mut().take();
+                if let Some(release) = release { let _ = within(&self.page, 500, self.page.call("Input.dispatchMouseEvent", release)).await; }
                 let _ = within(&self.page, 500, self.unmark()).await;
-                Ok(Reply::Text(format!("erro: {}", stuck_text(verb, ceiling, stuck.as_deref()))))
+                Ok(Reply::Text(if self.secret_sent.get() {
+                    format!("erro: erro_cofre_incerto: {verb} não confirmou em {ms} ms; o valor pode ter sido digitado{}", stuck_at(stuck.as_deref()))
+                } else {
+                    format!("erro: {}", stuck_text(verb, ms, stuck.as_deref()))
+                }))
             }
         };
         self.dialog_signal.borrow_mut().take();
@@ -672,8 +687,12 @@ impl<P: Page> Controller<P> {
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
         let base = |t: &str| json!({"type": t, "x": x, "y": y, "button": "left", "clickCount": 1});
         let ok = self.arrived(&["pointerdown", "mousedown"], async || {
+            // Antes de apertar: o pedido pode chegar à página mesmo sem a resposta voltar.
+            *self.pressed.borrow_mut() = Some(base("mouseReleased"));
             self.call("Input.dispatchMouseEvent", base("mousePressed")).await?;
-            self.call("Input.dispatchMouseEvent", base("mouseReleased")).await.map(|_| ())
+            let released = self.call("Input.dispatchMouseEvent", base("mouseReleased")).await;
+            self.pressed.borrow_mut().take();
+            released.map(|_| ())
         }).await;
         let ok = ok?;
         Ok(if ok { format!("ok: click {r}") } else { format!("erro: click {r}: o evento nao chegou na pagina (aba escondida sem quadro) — tire um shot e repita") })
@@ -749,6 +768,7 @@ impl<P: Page> Controller<P> {
                 s.secrets.push(secret);
             }
         }
+        self.secret_sent.set(true);
         self.call("Input.insertText", insert).await?;
         self.frame().await;
         Ok(format!("ok: fill-secret {r}"))
@@ -1053,18 +1073,24 @@ fn exception_line(d: &Value) -> String {
     format!("erro nao tratado: {text}{at}")
 }
 
-/// Teto do verbo: `wait` tem o próprio (`--timeout` ou a pausa em ms) mais a folga; os outros, `VERB_MS`. Com
-/// `deadline_ms`, nunca além do prazo de quem espera, menos a folga (no máximo um quarto do prazo).
-fn verb_ceiling(verb: &str, args: &[String], deadline_ms: Option<u64>) -> u64 {
+/// Teto do verbo: `wait` tem o próprio (`--timeout` ou a pausa em ms) mais a folga; a navegação, nenhum além do
+/// carregamento que ela já espera; os outros, `VERB_MS`. Com `deadline_ms`, nunca além do prazo de quem espera,
+/// menos a folga (no máximo um quarto do prazo). `None` = sem teto.
+fn verb_ceiling(verb: &str, args: &[String], deadline_ms: Option<u64>) -> Option<u64> {
     let own = match (verb, split_timeout(args)) {
-        ("wait", Ok((rest, limit))) => rest.first().and_then(|t| t.parse::<u64>().ok()).unwrap_or(limit).saturating_add(VERB_MARGIN_MS),
-        _ => VERB_MS,
+        ("wait", Ok((rest, limit))) => Some(rest.first().and_then(|t| t.parse::<u64>().ok()).unwrap_or(limit).saturating_add(VERB_MARGIN_MS)),
+        // Página lenta para abrir não é página presa: o teto padrão cortaria uma navegação que antes terminava.
+        ("goto" | "back" | "reload" | "open", _) => None,
+        _ => Some(VERB_MS),
     };
-    deadline_ms.map_or(own, |d| own.min(d - VERB_MARGIN_MS.min(d / 4)))
+    let cap = deadline_ms.map(|d| d - VERB_MARGIN_MS.min(d / 4));
+    match (own, cap) { (Some(own), Some(cap)) => Some(own.min(cap)), (own, cap) => own.or(cap) }
 }
 
+fn stuck_at(method: Option<&str>) -> String { method.map(|m| format!(" (preso em {m})")).unwrap_or_default() }
+
 fn stuck_text(verb: &str, ms: u64, method: Option<&str>) -> String {
-    format!("{verb} não respondeu em {ms} ms{}", method.map(|m| format!(" (preso em {m})")).unwrap_or_default())
+    format!("{verb} não respondeu em {ms} ms{}", stuck_at(method))
 }
 
 /// Uma linha no log do app por verbo preso: só verbo, método e teto, nunca conteúdo da página.
@@ -1636,8 +1662,46 @@ mod tests {
         assert_eq!(text(block_on(c.run("wait", &s(&["--idle", "--timeout", "30000"])))), "erro: wait não respondeu em 32000 ms (preso em Network.enable)");
         // O prazo de quem espera continua mandando.
         assert_eq!(text(block_on(c.run_until("wait", &s(&["--idle", "--timeout", "30000"]), None, Some(10_000)))), "erro: wait não respondeu em 8000 ms (preso em Network.enable)");
-        assert_eq!(verb_ceiling("wait", &s(&["30000"]), None), 32_000, "a pausa em ms é o teto dela");
-        assert_eq!(verb_ceiling("goto", &s(&["x"]), None), VERB_MS);
+        assert_eq!(verb_ceiling("wait", &s(&["30000"]), None), Some(32_000), "a pausa em ms é o teto dela");
+        assert_eq!(verb_ceiling("click", &s(&["@e1"]), None), Some(VERB_MS));
+    }
+
+    /// A navegação fica com o limite que já tinha (o carregamento): o teto padrão não a encurta; o prazo de quem
+    /// espera continua mandando.
+    #[test]
+    fn navigation_keeps_its_own_bound_and_only_the_deadline_caps_it() {
+        for verb in ["goto", "back", "reload"] {
+            assert_eq!(verb_ceiling(verb, &s(&["http://a/"]), None), None, "{verb}");
+            assert_eq!(verb_ceiling(verb, &s(&["http://a/"]), Some(45_000)), Some(43_000), "{verb}");
+        }
+        let c = Controller::new(fake(|_, _| Ok(json!({})), "Page.navigate"), false);
+        assert_eq!(text(block_on(c.run_until("goto", &s(&["http://a/"]), None, Some(8000)))), "erro: goto não respondeu em 6000 ms (preso em Page.navigate)");
+    }
+
+    /// Clique cortado com o botão apertado: o `mouseReleased` sai no mesmo ponto, e o próximo verbo não herda o botão.
+    #[test]
+    fn a_click_cut_with_the_button_down_releases_it() {
+        let c = stuck_click();
+        block_on(c.run("snapshot", &[]));
+        assert!(text(block_on(c.run("click", &s(&["@e1"])))).starts_with("erro: click não respondeu"));
+        let mouse: Vec<Value> = c.page.calls.borrow().iter().filter(|(m, _)| m == "Input.dispatchMouseEvent").map(|(_, p)| p.clone()).collect();
+        let kinds: Vec<&str> = mouse.iter().map(|p| p["type"].as_str().unwrap_or_default()).collect();
+        assert_eq!(kinds, ["mousePressed", "mouseReleased"]);
+        assert_eq!((&mouse[1]["x"], &mouse[1]["y"]), (&mouse[0]["x"], &mouse[0]["y"]));
+        // A soltura já saiu: não sobra para o teto do verbo seguinte.
+        assert!(c.pressed.borrow().is_none());
+    }
+
+    /// `fill-secret` cortado depois de mandar o valor: a resposta diz que ele pode ter entrado, sem o valor; cortado
+    /// antes, é a falha de sempre.
+    #[test]
+    fn a_fill_secret_cut_after_typing_says_the_value_may_be_in() {
+        let c = Controller::new(fake(|m, p| Ok(login_answer("senha", m, p)), "Input.insertText"), false);
+        let said = fill_secret(&c, "password");
+        assert_eq!(said, "erro: erro_cofre_incerto: fill-secret não confirmou em 20000 ms; o valor pode ter sido digitado (preso em Input.insertText)");
+        let c = Controller::new(fake(|m, p| Ok(login_answer("senha", m, p)), "Input.dispatchKeyEvent"), false);
+        assert_eq!(fill_secret(&c, "password"), "erro: fill-secret não respondeu em 20000 ms (preso em Input.dispatchKeyEvent)");
+        assert!(!methods(&c).contains(&"Input.insertText".to_string()));
     }
 
     #[test]

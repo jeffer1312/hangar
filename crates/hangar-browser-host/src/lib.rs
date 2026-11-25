@@ -15,6 +15,8 @@ pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(45);
 pub const MAX_DEADLINE: Duration = Duration::from_secs(600);
 const UNSUPPORTED: [&str; 2] = ["objetivo", "confere"];
 const FILL_SECRET: &str = "fill-secret";
+/// Capacidade que o app anuncia no `focus`: app sem ela não conhece o `fill-secret` e não pode receber o valor.
+pub const FILL_SECRET_CAP: &str = "fill_secret";
 const NOT_ALLOWED: &str = "browser_host_not_allowed";
 /// Os nomes de sessão vêm do app: sem teto, um anfitrião encheria a memória.
 const MAX_SESSIONS: usize = 1024;
@@ -41,6 +43,8 @@ pub enum Refusal {
     Unsupported,
     /// `fill-secret` ou o campo `valor` vindos de fora do servidor: o valor do cofre só sai pelo `fill_secret`.
     Secret,
+    /// O app com a sessão não anunciou `FILL_SECRET_CAP`: o valor do cofre não sai para ele.
+    Outdated,
 }
 
 impl Refusal {
@@ -52,12 +56,13 @@ impl Refusal {
             Refusal::Timeout => "browser_host_timeout",
             Refusal::Unsupported => "browser_host_verb_unsupported",
             Refusal::Secret => "browser_host_secret_refused",
+            Refusal::Outdated => "browser_host_app_outdated",
         }
     }
 
     pub fn status(self) -> u16 {
         match self {
-            Refusal::NoHost => 409,
+            Refusal::NoHost | Refusal::Outdated => 409,
             Refusal::NotAllowed => 403,
             Refusal::Gone => 502,
             Refusal::Timeout => 504,
@@ -73,6 +78,7 @@ impl Refusal {
             Refusal::Timeout => format!("o app desktop não respondeu o {verb} no prazo"),
             Refusal::Unsupported => format!("{verb} não funciona no navegador de outra máquina"),
             Refusal::Secret => "o valor do cofre só vai ao navegador pela tool vault_fill".into(),
+            Refusal::Outdated => format!("o app desktop com esta sessão é de uma versão que não faz o {verb}: atualize o app desktop do Hangar"),
         }
     }
 }
@@ -109,6 +115,8 @@ struct Host {
     /// Zerado ao sair: o quadro do `fill_secret` leva o valor do cofre.
     out: mpsc::UnboundedSender<Zeroizing<String>>,
     pending: HashMap<u64, Pending>,
+    /// Anunciou `FILL_SECRET_CAP` no último `focus`.
+    fill_secret: bool,
 }
 
 struct Pending {
@@ -169,7 +177,7 @@ impl Registry {
         let mut inner = self.lock();
         inner.next_host += 1;
         let id = inner.next_host;
-        inner.hosts.insert(id, Host { out, pending: HashMap::new() });
+        inner.hosts.insert(id, Host { out, pending: HashMap::new(), fill_secret: false });
         (Connection { registry: self.clone(), id, awaiting_png: None }, rx)
     }
 
@@ -228,6 +236,8 @@ impl Registry {
             body.insert("deadline_ms".into(), json!(deadline.as_millis() as u64));
             let (reply, rx) = oneshot::channel();
             let entry = inner.hosts.get_mut(&host).ok_or(Refusal::NoHost)?;
+            // Antes de montar o quadro: app antigo trataria o verbo como desconhecido, com o valor já na mão dele.
+            if secret.is_some() && !entry.fill_secret { return Err(Refusal::Outdated); }
             let frame = frame(body, secret.as_deref().map(String::as_str));
             // Canal já fechando: o verbo não saiu, então não "pode ter sido executado".
             entry.out.send(frame).map_err(|_| Refusal::NoHost)?;
@@ -261,6 +271,11 @@ impl Registry {
             let tab = st.tab.as_i64().map(|n| format!("  (aba {n})")).unwrap_or_default();
             format!("{session}  {}  {live}{tab}", st.url)
         }).collect::<Vec<_>>().join("\n")
+    }
+
+    fn set_caps(&self, host: u64, caps: Option<&Value>) {
+        let fills = caps.and_then(Value::as_array).is_some_and(|caps| caps.iter().any(|c| c.as_str() == Some(FILL_SECRET_CAP)));
+        if let Some(entry) = self.lock().hosts.get_mut(&host) { entry.fill_secret = fills; }
     }
 
     fn focus(&self, host: u64, session: String) {
@@ -352,7 +367,10 @@ impl Connection {
         let Ok(Value::Object(msg)) = serde_json::from_str::<Value>(raw) else { return };
         let session = msg.get("session").and_then(Value::as_str).map(str::to_owned);
         match (msg.get("type").and_then(Value::as_str), session) {
-            (Some("focus"), Some(session)) => return self.registry.focus(self.id, session),
+            (Some("focus"), Some(session)) => {
+                self.registry.set_caps(self.id, msg.get("caps"));
+                return self.registry.focus(self.id, session);
+            }
             (Some("seen"), Some(session)) => return self.registry.seen(self.id, session),
             (Some("state"), Some(session)) => {
                 let url = msg.get("url").and_then(Value::as_str).map(str::to_owned);

@@ -644,7 +644,7 @@ async fn remote_app(addr: SocketAddr, session: &str, answer: impl Fn(&Value) -> 
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/api/browser-host?token={OWNER}")).await.expect("canal anfitrião");
-    ws.send(Message::Text(json!({"type": "focus", "session": session}).to_string().into())).await.unwrap();
+    ws.send(Message::Text(json!({"type": "focus", "session": session, "caps": ["fill_secret"]}).to_string().into())).await.unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
     tokio::spawn(async move {
@@ -714,13 +714,16 @@ async fn vault_fill_reaches_the_app_of_another_machine_inside_the_server() {
     // As páginas que o `url` responde, uma por leitura; a última se repete.
     let pages = Arc::new(Mutex::new(vec!["https://github.com/login".to_owned()]));
     let shown = pages.clone();
+    // O que o app responde ao preenchimento; `None` = deu certo.
+    let fill_reply = Arc::new(Mutex::new(None::<String>));
+    let replied = fill_reply.clone();
     let asked = remote_app(s.addr, "sem-term", move |a| match a["verbo"].as_str() {
         Some("url") => {
             let mut pages = shown.lock().unwrap();
             let page = if pages.len() > 1 { pages.remove(0) } else { pages[0].clone() };
             format!("ok: {}", Value::String(page))
         }
-        Some("fill-secret") => format!("ok: fill-secret {}", a["args"][0].as_str().unwrap_or_default()),
+        Some("fill-secret") => replied.lock().unwrap().clone().unwrap_or_else(|| format!("ok: fill-secret {}", a["args"][0].as_str().unwrap_or_default())),
         _ => "ok".into(),
     }).await;
     let state = s.state.clone();
@@ -751,6 +754,14 @@ async fn vault_fill_reaches_the_app_of_another_machine_inside_the_server() {
     assert!(failed(&moved) && first_text(&moved).starts_with("erro_cofre_dominio_diferente:"), "{moved}");
     assert!(!moved.to_string().contains(USER));
     assert!(asked.lock().unwrap()[before..].iter().all(|f| f["verbo"] != "fill-secret"), "a página de outro domínio não recebe o valor");
+
+    // O app cortou o preenchimento depois de digitar: a tool repete o que ele disse, nem "preenchido" nem falha limpa.
+    *pages.lock().unwrap() = vec!["https://github.com/login".into()];
+    let uncertain = "erro_cofre_incerto: fill-secret não confirmou em 6000 ms; o valor pode ter sido digitado (preso em Input.insertText)";
+    *fill_reply.lock().unwrap() = Some(format!("erro: {uncertain}"));
+    let cut = mcp.call("vault_fill", json!({"entry": "gh", "field": "username", "ref": "@e3", "reason": "login"})).await;
+    assert!(failed(&cut) && first_text(&cut) == uncertain, "{cut}");
+    assert!(!cut.to_string().contains(USER));
 }
 
 #[tokio::test(flavor = "multi_thread")]

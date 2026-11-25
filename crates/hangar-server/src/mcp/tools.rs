@@ -1155,7 +1155,7 @@ impl Tools {
             match self.st.browser_host.fill_secret(&name, &args, &host, value.clone()).await {
                 Ok(hangar_browser_host::Reply::Text(text)) => text,
                 Ok(hangar_browser_host::Reply::Png(_)) => "erro: o app respondeu uma imagem ao preenchimento".into(),
-                Err(refusal) => return Err(format!("erro_cofre_sem_navegador: {}", refusal.message("fill-secret"))),
+                Err(refusal) => return Err(host_fill_refusal(refusal)),
             }
         } else {
             nav::fill_secret(&self.http, &home, &name, &args, &value).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?
@@ -1164,6 +1164,18 @@ impl Tools {
         if answer.starts_with("ok:") { return Ok(text("preenchido")); }
         let detail = answer.strip_prefix("erro:").map_or(answer.as_str(), str::trim);
         Err(if detail.starts_with("erro_cofre_") { detail.to_owned() } else { format!("erro_cofre_preenchimento: {detail}") })
+    }
+}
+
+/// Recusa do canal anfitrião ao `fill-secret`. Sem resposta depois de o quadro sair, o valor pode já estar na página:
+/// nunca "sem navegador".
+fn host_fill_refusal(refusal: hangar_browser_host::Refusal) -> String {
+    use hangar_browser_host::Refusal;
+    let message = refusal.message("fill-secret");
+    match refusal {
+        Refusal::Gone => format!("erro_cofre_incerto: {message}"),
+        Refusal::Timeout => format!("erro_cofre_incerto: {message}; o valor pode ter sido digitado"),
+        _ => format!("erro_cofre_sem_navegador: {message}"),
     }
 }
 
@@ -1227,6 +1239,16 @@ mod tests {
         assert_eq!(read.path(), "/api/whatsapp/messages?chat=c&before_id=m9&limit=20");
         let err = args::<WhatsAppRead>("whatsapp_read", json!({"since": "x"}).as_object().unwrap().clone()).err().unwrap();
         assert!(err.contains("missing field `chat`") && err.contains("chat (string)"), "{err}");
+    }
+
+    #[test]
+    fn a_fill_without_an_answer_from_the_app_is_uncertain_never_a_clean_failure() {
+        use hangar_browser_host::Refusal;
+        assert!(host_fill_refusal(Refusal::Timeout).starts_with("erro_cofre_incerto:") && host_fill_refusal(Refusal::Timeout).contains("pode ter sido digitado"));
+        assert!(host_fill_refusal(Refusal::Gone).starts_with("erro_cofre_incerto:"));
+        let outdated = host_fill_refusal(Refusal::Outdated);
+        assert!(outdated.starts_with("erro_cofre_sem_navegador:") && outdated.contains("atualize o app desktop"), "{outdated}");
+        assert!(host_fill_refusal(Refusal::NoHost).starts_with("erro_cofre_sem_navegador:"));
     }
 
     #[test]

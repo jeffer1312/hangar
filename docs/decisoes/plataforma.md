@@ -182,7 +182,8 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   não foi feita. Se cair, a correção é na configuração do Connect, nunca religar escondido.
 - **Navegador emprestado (canal anfitrião).** O app desktop abre `GET /api/browser-host`
   (WebSocket) no servidor da sessão, pela rota que já usa, com a mesma regra de credencial do túnel.
-  Ele manda `{"type":"focus","session":…}` ao mostrar uma sessão. O CLI e o MCP sem app local
+  Ele manda `{"type":"focus","session":…,"caps":["fill_secret"]}` ao mostrar uma sessão; `caps` diz o que
+  essa versão do app sabe fazer além dos verbos de sempre. O CLI e o MCP sem app local
   mandam o verbo por `POST /api/sessions/{name}/browser-cmd`, e o servidor o repassa ao app com o
   foco mais recente naquela sessão (`hangar-browser-host`).
   - O verbo `host` (só a pergunta do CLI) responde a hora do último `seen` (clique ou tecla no app de
@@ -193,7 +194,9 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
     o MCP usam o de lá, sem olhar o `_focus.json` que o caído deixou. Ninguém lá: fica a recusa
     "o app daqui está reiniciando". Com o app daqui vivo nada muda, porque a hora 0 perde para
     qualquer foco gravado. O MCP confere o pid também no Windows (`terminal_process::pid_alive`);
-    antes só o Linux via o pid morto.
+    antes só o Linux via o pid morto. Registro sem pid (ou com pid que o sistema não responde) não
+    decide, no CLI e no MCP: o verbo fica no app daqui. O CLI tratava a falta de pid como morte e
+    mandava o verbo à outra máquina.
 
   | Caso | Resposta |
   |---|---|
@@ -203,6 +206,7 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   | Prazo (`deadline_ms`, padrão 45 s, teto 10 min) | 504 `browser_host_timeout` |
   | `objetivo` e `confere` como verbo | 422 `browser_host_verb_unsupported` |
   | `fill-secret`, ou qualquer corpo com `valor` | 422 `browser_host_secret_refused` |
+  | `Registry::fill_secret` para app sem `fill_secret` no `caps` (versão antiga) | 409 `browser_host_app_outdated`, "atualize o app desktop" |
 
   O print chega como binário e é gravado pelo servidor na máquina da sessão
   (`~/.hangar/nav/shots/<sessão>/`), para o caminho que o agente cita valer lá. O canal tem o mesmo
@@ -213,6 +217,14 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   No app, cada verbo tem teto próprio (20 s; `wait`, o `--timeout` dele mais 2 s; nunca além do `deadline_ms`
   menos uma folga): chamada CDP presa solta a vez com `erro: … (preso em <método>)` e grava `nav: verb_stuck` no
   `native.log`.
+  - `goto`, `back` e `reload` não ganham os 20 s: ficam com o limite que já tinham (a espera do carregamento,
+    15 s depois da navegação) e só o `deadline_ms` os corta. Página lenta para abrir não é página presa.
+  - Clique cortado depois do `mousePressed` manda o `mouseReleased` no mesmo ponto, sem esperar resposta além de
+    500 ms: senão o verbo seguinte começaria com o botão apertado.
+  - `fill-secret` cortado depois de o valor ir à página responde `erro: erro_cofre_incerto: fill-secret não
+    confirmou em N ms; o valor pode ter sido digitado`, nunca uma falha limpa, e o valor não aparece. O
+    `vault_fill` repete esse texto como veio, e trata do mesmo jeito o 504 e o 502 do canal com o quadro já
+    enviado.
   As tools MCP `browser_*` usam a mesma rota dentro do processo.
   - `objetivo` e `confere` (CLI e `browser_goal`/`browser_check`) rodam pelo laço do CLI com os
     verbos de sempre, um a um, pela `browser-cmd`; o print do Jev é o `shot` com caminho absoluto,
@@ -225,6 +237,9 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
     confere, na vez do verbo e antes do clique, que a página ainda é desse domínio
     (`erro_cofre_dominio_diferente`). Decidido pelo dono: o canal em http na rede local também
     serve, como qualquer rota do dono.
+  - App de antes do `fill-secret` pelo canal não anuncia `fill_secret` no `caps`: tomaria o verbo por
+    desconhecido com o valor já recebido. O `Registry::fill_secret` recusa antes de montar o quadro, e o
+    `vault_fill` diz para atualizar o app desktop.
 - **D1, decidida em 23/11: sem cartão nem pergunta.** O app serve sozinho as sessões das máquinas
   do dono (entrada de servidor que não é convite nem par externo); convite e par externo nunca
   ganham o canal. O túnel existe para o notebook alcançar o `localhost` da máquina da sessão, e

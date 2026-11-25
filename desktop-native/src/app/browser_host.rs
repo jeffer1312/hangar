@@ -64,7 +64,8 @@ pub(super) fn link_change(have: [&str; 3], have_focus: Option<&str>, want: [&str
 
 fn lock(conn: &Mutex<Conn>) -> std::sync::MutexGuard<'_, Conn> { conn.lock().unwrap_or_else(|e| e.into_inner()) }
 
-fn focus_text(session: &str) -> String { json!({"type": "focus", "session": session}).to_string() }
+/// `caps`: o que este app sabe fazer além dos verbos de sempre. Sem `fill_secret`, o servidor não manda o valor do cofre.
+fn focus_text(session: &str) -> String { json!({"type": "focus", "session": session, "caps": ["fill_secret"]}).to_string() }
 
 impl Hosts {
     fn out(&self, server: &str) -> Option<async_channel::Sender<Out>> { self.links.get(server).map(|l| l.out.clone()) }
@@ -515,6 +516,13 @@ fn agent_ready(panel: &super::browser::BrowserPanel) -> bool {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    /// O servidor só manda o `fill-secret` (com o valor do cofre) ao app que anuncia saber fazê-lo.
+    #[test]
+    fn the_focus_announces_fill_secret() {
+        let focus: Value = serde_json::from_str(&focus_text("s")).unwrap();
+        assert_eq!(focus, json!({"type": "focus", "session": "s", "caps": ["fill_secret"]}));
+    }
 
     #[test]
     fn only_web_addresses_are_opened_and_a_bare_host_is_http() {

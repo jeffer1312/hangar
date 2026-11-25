@@ -30,13 +30,13 @@ async function backend(answer) {
   return { port: server.address().port, verbs, close: () => server.close() };
 }
 
-async function home() {
+async function home(registro = { pid: 999999999, porta: 1, token: 'x' }) {
   const dir = await mkdtemp(join(tmpdir(), 'hangar-preview-host-'));
   const nav = join(dir, '.hangar', 'nav');
   await Promise.all([mkdir(nav, { recursive: true }), mkdir(join(dir, '.hangar', 'config'), { recursive: true })]);
   await Promise.all([
     writeFile(join(dir, '.hangar', 'config', '.env'), 'CP_AUTH_TOKEN=teste\n'),
-    writeFile(join(nav, '_srv.json'), JSON.stringify({ pid: 999999999, porta: 1, token: 'x' })),
+    writeFile(join(nav, '_srv.json'), JSON.stringify(registro)),
     // O caído deixou o sidecar e o foco dele, mais novos que qualquer hora de lá.
     writeFile(join(nav, 'srv-sessaoteste.json'), JSON.stringify({ chave: 'srv::sessaoteste', url: 'http://localhost:3000/' })),
     writeFile(join(nav, '_focus.json'), JSON.stringify({ sessaoteste: Date.now() })),
@@ -82,6 +82,19 @@ try {
     assert.match(r.stderr, /reiniciando/);
     assert.deepEqual(srv.verbs, ['host'], 'sem ninguém lá, nada mais vai ao servidor');
     console.log('ok: app daqui caído e ninguém lá: a recusa diz que o app daqui reinicia');
+  }
+  {
+    // Sem pid o registro não decide, como no MCP: o verbo fica no app daqui, mesmo com outro app com a sessão em foco.
+    const dir = await home({ porta: 1, token: 'x' });
+    dirs.push(dir);
+    const srv = await backend((verb) => (verb === 'host' ? [200, 'ok: host 0'] : [200, 'ok: "http://localhost:3000/"']));
+    const r = await run(dir, srv.port);
+    srv.close();
+    assert.notEqual(r.code, 0);
+    assert.doesNotMatch(r.stderr, /outra máquina/);
+    assert.doesNotMatch(r.stderr, /reiniciando, como na atualizacao/, 'sem pid não é "app fora"');
+    assert.deepEqual(srv.verbs, ['host'], 'nada vai ao app de outra máquina');
+    console.log('ok: registro sem pid: o verbo fica no app daqui');
   }
 } finally {
   await Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true })));
