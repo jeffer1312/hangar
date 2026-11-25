@@ -472,7 +472,9 @@ export function NewConversation({
         onLayout={home ? (event) => { formHeight.value = event.nativeEvent.layout.height; } : undefined}>
       {/* O teto da doca segura a caixa enquanto a medida do campo não chega: ela encolhe e o Enviar fica à vista. */}
       <ComposerDock onLayout={(event) => setBlockHeight(event.nativeEvent.layout.height)}>
-      {!heroInMiddle ? hero : null}
+      {!heroInMiddle ? (
+        <ScrollView style={styles.dockHero} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">{hero}</ScrollView>
+      ) : null}
 
       <Animated.View style={[styles.shrink, !home && riseStyle]}>
 
@@ -599,6 +601,8 @@ const styles = StyleSheet.create((theme) => ({
   launcherMic: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   scroll: { flexGrow: 1, padding: theme.base.space[4], gap: theme.base.space[4] },
   heroArea: { flexGrow: 1 },
+  // Na doca, sem espaço, o título rola e encolhe muito antes da caixa: o Enviar fica à vista com o teclado.
+  dockHero: { flexGrow: 0, flexShrink: 1000, minHeight: 0 },
   heroSpace: { flexGrow: 1, flexBasis: 0, position: 'relative' },
   // O título da conversa nova, no meio da área livre (ou colado à caixa enquanto falta a pasta).
   topPills: {
