@@ -9,6 +9,8 @@ import * as m from '../../paraglide/messages';
 export type MachineEntry = {
   id: string;
   label: string;
+  // Nome do servidor quando a etiqueta o renomeou: separa duas máquinas de etiqueta parecida.
+  server?: string;
   color: string;
   icon: IconName;
   accounts: Record<string, AccountBadge> | undefined;
@@ -66,13 +68,14 @@ export function MachineMenu({ machines, active, onPick }: { machines: MachineEnt
     const state = sv.demo ? m.native_new_chat_machine_demo() : sv.offline ? m.native_new_chat_machine_offline() : '';
     return (
       <Pressable key={sv.id} onPress={() => { haptic.selection(); onPick(sv.id); }}
-        accessibilityRole="button" accessibilityLabel={state ? `${sv.label}, ${state}` : sv.label} accessibilityState={{ selected: on }}
+        accessibilityRole="button" accessibilityLabel={[sv.label, sv.server, state].filter(Boolean).join(', ')} accessibilityState={{ selected: on }}
         style={({ pressed }) => [styles.row, { backgroundColor: on ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' },
           sv.offline && styles.offline]}>
         <MachineTile icon={sv.icon} color={sv.color} />
         <View style={styles.text}>
           <Text style={styles.nameLine} numberOfLines={1}>
             <Text style={[styles.name, { color: sv.color }]}>{sv.label}</Text>
+            {sv.server ? <Text style={styles.state}>{` · ${sv.server}`}</Text> : null}
             {state ? <Text style={styles.state}>{` · ${state}`}</Text> : null}
           </Text>
           {sv.demo ? <Text style={styles.accountName}>{m.native_new_chat_machine_demo_hint()}</Text> : <Accounts accounts={sv.accounts} />}

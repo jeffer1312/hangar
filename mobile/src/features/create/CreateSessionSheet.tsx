@@ -47,7 +47,6 @@ type ProviderProbe = Record<string, { disponivel: boolean; motivo: string | null
 type Choice = Omit<ComponentProps<typeof QuietPill>, 'ref'>;
 // Em cima só o vão até a pílula da máquina: mais que isso roubaria o toque dela.
 const LINK_SLOP = { top: 4, bottom: 12, left: 12, right: 12 };
-// A linha já tem 44 pt de altura; dos lados pouco, para um nome não roubar o toque do vizinho.
 
 function valorModelo(mm: ModelOption): string {
   return mm.provider ? `${mm.provider}/${mm.id}` : mm.id;
@@ -1184,7 +1183,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // Máquina com a etiqueta dela (ícone, nome e cor), como na lista de sessões.
   const machineView = (sv: Server, i: number) => {
     const tags = machineTags[i];
-    return { id: sv.id, label: machineLabel(sv, tags), color: tagHex(tags?.machine?.color) ?? serverColor(sv.id),
+    const label = machineLabel(sv, tags);
+    return { id: sv.id, label, server: sv.label.trim() && sv.label !== label ? sv.label : undefined, color: tagHex(tags?.machine?.color) ?? serverColor(sv.id),
       icon: tags?.machine ? MACHINE_ICON_NAME[tags.machine.icon] : 'Laptop' as const,
       accounts: tags?.accounts, demo: isDemoUrl(`${sv.baseUrl}/`), offline: machineOffline[i] ?? false };
   };
@@ -1201,7 +1201,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
 
   // Atalho, não essencial: sem lista ainda (carregando, falha) a linha só não aparece. Só as pastas
   // mudam o resultado, então a lista ao vivo não redesenha a tela a cada evento.
-  const lastCwds = useSessions(useShallow((s) => recentCwds(s.byServerRecord?.[active.id], 12)));
+  const lastCwds = useSessions(useShallow((s) => recentCwds(s.byServerRecord?.[active.id], Infinity)));
   const recents = active.invite ? [] : recentProjects(lastCwds, repos, picked, 3);
   const pickRecent = (path: string) => {
     void handlePick(path);
@@ -1404,6 +1404,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         return noProject ? (
           <>
             <Text style={styles.heroText} accessibilityRole="header">{m.native_new_chat_hero()}</Text>
+            {hasSameFolder ? <Text style={styles.heroNote}>{m.criar_ja_existe()}</Text> : null}
             <View style={styles.heroMachine}>{machinePill}</View>
             <View style={[styles.headingLine, styles.heroLinkRow]}>
               <Text style={styles.heroHint}>{`${m.native_new_chat_no_project_line()} · `}</Text>

@@ -30,6 +30,7 @@ function relPath(root: string, path: string): string {
 
 // Linha do menu compacto: nome e, embaixo, quando foi mexida.
 const C_ROW = 56;
+const WT_ROW = 44;
 
 function parentOf(path: string): string {
   const cut = path.replace(/[/\\]+$/, '').search(/[/\\][^/\\]*$/);
@@ -263,7 +264,7 @@ export function CwdPicker({
     const open = openGroups.has(row.entry.path);
     const n = row.visible.length + row.merged.length;
     return (
-      <Pressable onPress={() => toggle(setOpenGroups, row.entry.path)} hitSlop={8} accessibilityRole="button"
+      <Pressable onPress={() => toggle(setOpenGroups, row.entry.path)} hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }} accessibilityRole="button"
         accessibilityLabel={`${row.entry.name}: ${m.native_create_worktrees({ n })}`} accessibilityState={{ expanded: open }}
         style={({ pressed }) => [styles.cBadge, { backgroundColor: open || pressed ? c.accentDim : c.hover }]}>
         <Text style={[styles.cBadgeTxt, { color: c.accent }]} numberOfLines={1}>
@@ -342,7 +343,7 @@ export function CwdPicker({
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         // Altura explícita: dentro do painel que encolhe, a lista sem altura colapsava em uma linha.
-        style={[styles.cList, { height: Math.min(items.length, 8) * C_ROW }]}
+        style={[styles.cList, { height: items.slice(0, 8).reduce((h, it) => h + (it.kind === 'folder' ? C_ROW : WT_ROW), 0) }]}
         ItemSeparatorComponent={() => <View style={[styles.cSep, { backgroundColor: c.border }]} />}
         renderItem={({ item }) => {
           if (item.kind !== 'folder') return special(item);
@@ -798,7 +799,7 @@ const styles = StyleSheet.create((theme) => ({
   group: { minWidth: 44, height: 44, borderRadius: theme.base.radius.sm, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: theme.base.space[0.5], paddingHorizontal: theme.base.space[1] },
   groupTxt: { fontSize: theme.base.text.xs, fontVariant: ['tabular-nums'] },
   // Recuo de um nível: a worktree mora dentro do repositório da linha de cima.
-  wtRow: { minHeight: 44, marginLeft: theme.base.space[6] + theme.base.space[0.5], flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.sm },
+  wtRow: { minHeight: WT_ROW, marginLeft: theme.base.space[6] + theme.base.space[0.5], flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.sm },
   wtName: { flexShrink: 1, fontSize: theme.base.text.sm },
   wtBranch: { flex: 1, minWidth: 0, fontSize: theme.base.text.xs, fontFamily: theme.base.fontMono },
   wtChip: { fontSize: theme.base.text.xs, fontWeight: theme.base.weight.semibold },
