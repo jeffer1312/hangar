@@ -1,5 +1,5 @@
 //! A tela do `agy` capturada de verdade (agy 1.5.15, 23/11/2026).
-use hangar_core::terminal_state::{AGY_TERMS_OPTIONS, AgyTerms, AgyTermsFocus, agy_analyze, agy_onboarding_list, agy_terms};
+use hangar_core::terminal_state::{AGY_TERMS_OPTIONS, AgyTerms, AgyTermsFocus, AgyTermsKey, agy_analyze, agy_login_screen, agy_onboarding_list, agy_terms, agy_terms_key};
 
 fn fixture(name: &str) -> String {
     std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/agy").join(name)).unwrap()
@@ -123,4 +123,33 @@ fn the_color_scheme_screen_of_the_first_use_is_a_question_too() {
     // Marcadores fora de ordem numa conversa: nada de pânico, e não é a tela.
     assert_eq!(agy_onboarding_list("[Next]\nChoose your color scheme:\n"), None);
     agy_analyze("[Next]\nChoose your color scheme:\n");
+}
+
+/// A tecla de cada volta, por caixa, foco e opção tocada: 1 = Done com a caixa marcada, 2 = Done desmarcada, 3 = Previous.
+#[test]
+fn the_terms_key_fixes_the_checkbox_first_and_then_walks_to_the_button() {
+    use AgyTermsFocus::{Checkbox, Done, Previous};
+    use AgyTermsKey::{Down, Enter, Left, Right, Up};
+    for (option, checked, focus, key) in [
+        (1, true, Checkbox, Down), (1, true, Previous, Right), (1, true, Done, Enter),
+        (1, false, Checkbox, Enter), (1, false, Previous, Up), (1, false, Done, Up),
+        (2, false, Checkbox, Down), (2, false, Previous, Right), (2, false, Done, Enter),
+        (2, true, Checkbox, Enter), (2, true, Previous, Up), (2, true, Done, Up),
+        (3, true, Checkbox, Down), (3, true, Previous, Enter), (3, true, Done, Left),
+        (3, false, Checkbox, Down), (3, false, Previous, Enter), (3, false, Done, Left),
+    ] {
+        assert_eq!(agy_terms_key(AgyTerms { checked, focus }, option), Some(key), "opção {option}, caixa {checked}, foco {focus:?}");
+    }
+    for option in [0, 4] {
+        assert_eq!(agy_terms_key(AgyTerms { checked: true, focus: Checkbox }, option), None, "opção {option}");
+    }
+}
+
+/// A tela de entrar do agy 1.5.17 sem login (Windows, pasta pessoal e chaveiro isolados, 25/11/2026).
+#[test]
+fn the_login_screen_is_recognized_and_the_first_use_screens_are_not() {
+    assert!(agy_login_screen(&fixture("login.txt")));
+    for name in ["terms.txt", "terms-done.txt", "onboarding-colors.txt", "idle.txt", "permission.txt"] {
+        assert!(!agy_login_screen(&fixture(name)), "{name}");
+    }
 }
