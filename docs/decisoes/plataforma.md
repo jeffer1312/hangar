@@ -28,7 +28,7 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   dono só entre os pids candidatos, nunca em todos os processos da máquina. No Linux lê
   `/proc/net/tcp{,6}` e os fds dos candidatos; no Windows usa `GetExtendedTcpTable` dentro do
   processo. Vale só endereço de loopback ou "qualquer" (`0.0.0.0`, `::`), que é o que o túnel
-  alcança, e v4 e v6 da mesma porta viram uma entrada. Quem dá a porta à sessão é `list/ports.rs`,
+  alcança, e v4 e v6 da mesma porta viram uma entrada na lista, guardando cada endereço para o túnel. Quem dá a porta à sessão é `list/ports.rs`,
   nesta ordem:
   - o escopo systemd próprio da sessão (`tmux-spawn-*.scope` do pane, `run-*.scope` do cano), que
     pega o `nohup … &` adotado pelo init;
@@ -44,7 +44,8 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   de outro) sai com `shared: true`, e a tela avisa "Outra coisa também escuta nessa porta": o
   `localhost:N` pode cair no outro. O T3 apaga essa linha; aqui ela fica, porque é da sessão. A leitura é reaproveitada pelos mesmos candidatos dentro do prazo do cache
   de processos, para o tique e um `GET` simultâneo lerem uma vez só. Leitura que falha registra
-  `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`. Esse código
+  `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`; o mapa do túnel
+  (abaixo) é esvaziado, e a linha diz quantas portas ele desviava. Esse código
   está em `DIAGNOSTIC` e nunca chega à tela. A linha do convidado (convite e login) sai sem `ports`:
   o túnel não atende convidado.
 - **B2, macOS vazio.** No macOS a lista de portas volta vazia. Ler por `libproc` exige conferir o
@@ -55,14 +56,34 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   (`runtime/process.rs`), numa unidade `run-*.scope` só dele. O servidor que perdeu o pai aparece
   também em sessão sem terminal. Sem `systemd-run` ou fora do Linux, sobra a descendência do
   `cano.pid`, e o processo adotado pelo init some da lista.
-- **Túnel.** `GET /api/port-tunnel?port=N` com upgrade WebSocket. Cada WebSocket é uma conexão TCP
-  com `127.0.0.1:N` (ou `[::1]:N`) desta máquina, com bytes crus nos dois sentidos
-  (`hangar-port-tunnel`). Respostas antes do upgrade:
+- **Túnel.** `GET /api/port-tunnel?port=N[&host=127.0.0.1|::1]` com upgrade WebSocket. Cada WebSocket é
+  uma conexão TCP com o loopback desta máquina, com bytes crus nos dois sentidos (`hangar-port-tunnel`).
+  - Com `host` (a página pediu um IP: `http://[::1]:5173`), disca só ele, sem tentar a outra família. O
+    SOCKS do nativo manda `host` só para IP explícito; nome, `0.0.0.0` e `::` vão sem ele. Servidor
+    antigo ignora o parâmetro, e cliente antigo não o manda.
+  - Sem `host`, disca primeiro o loopback que chega ao processo da sessão, depois `127.0.0.1` e
+    `[::1]`. A lista guarda o endereço de cada socket e, por porta da sessão, calcula esse loopback
+    (`owners::dial_first`): o endereço exato vence o "qualquer" da mesma família, e o `::` só recebe
+    IPv4 sem socket IPv4 na porta. Na DELPHI-02 um `portproxy` em `127.0.0.1:3000` tapava o Next em
+    `0.0.0.0:3000`: o túnel caía no proxy. Com o Next no `::`, o túnel disca `[::1]`; só em `0.0.0.0`,
+    disca `127.0.0.2`, que o `0.0.0.0` recebe e o `127.0.0.1` de fora não. Porta de duas sessões fica
+    com a primeira, em ordem de nome, que a alcança sozinha, também quando é pelo `127.0.0.1` de sempre:
+    sem isso, a sessão seguinte no `0.0.0.0` desviava a porta para o processo dela. A rota lê o mapa da
+    última rodada da lista, sem varrer sockets por conexão. O mapa leva a hora da rodada e deixa de valer
+    depois de quatro tiques (6 s) sem rodada nova: a lista fechada para o produtor sem limpá-lo, e o
+    túnel volta à ordem de sempre. O mapa vencido registra `session_port_map_stale` no log, uma vez até a
+    rodada seguinte; o código está em `DIAGNOSTIC` e nunca chega à tela.
+    Porta da sessão em que nenhum loopback chega só a ela (outro processo no mesmo `0.0.0.0`) fica na
+    ordem de sempre e registra `session_port_unreached` no log, uma vez até a porta sair desse estado;
+    o código está em `DIAGNOSTIC` e nunca chega à tela.
+
+  Respostas antes do upgrade:
 
   | Caso | Resposta |
   |---|---|
   | Nada escutando | 502 `port_tunnel_refused` |
   | Porta do Hangar (`connect_previews.refused`) ou fora de 1..65535 | 422 `port_tunnel_port_refused` |
+  | `host` que não é `127.0.0.1` nem `::1` | 422 `port_tunnel_host_refused` |
   | Sem `?token=` nem Bearer | 403 `port_tunnel_token_required` |
 
   Toda recusa leva o código também no cabeçalho `x-hangar-tunnel`, e os clientes classificam por ele,
@@ -170,9 +191,23 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   não foi feita. Se cair, a correção é na configuração do Connect, nunca religar escondido.
 - **Navegador emprestado (canal anfitrião).** O app desktop abre `GET /api/browser-host`
   (WebSocket) no servidor da sessão, pela rota que já usa, com a mesma regra de credencial do túnel.
-  Ele manda `{"type":"focus","session":…}` ao mostrar uma sessão. O CLI e o MCP sem app local
+  Ele manda `{"type":"focus","session":…,"caps":["fill_secret"]}` ao mostrar uma sessão; `caps` diz o que
+  essa versão do app sabe fazer além dos verbos de sempre. O CLI e o MCP sem app local
   mandam o verbo por `POST /api/sessions/{name}/browser-cmd`, e o servidor o repassa ao app com o
   foco mais recente naquela sessão (`hangar-browser-host`).
+  - O verbo `host` (só a pergunta do CLI) responde a hora do último `seen` (clique ou tecla no app de
+    lá) e, sem `seen`, `ok: host 0` quando um app ligado tem a sessão em foco. O `seen` só sai do
+    uso e só vive na memória do servidor: reiniciado o servidor, ou só com a sessão na tela, a
+    pergunta ficava sem resposta. Com o app de lá já desligado a hora segue, como `ok: host <ms> detached`:
+    ela ainda vence o foco do app daqui vivo, e o verbo recusa em vez de cair no navegador daqui.
+  - App daqui caído (`_srv.json` presente com o pid sem processo) e outro app ligado com a sessão em
+    foco: o CLI e o MCP usam o de lá, sem olhar o `_focus.json` que o caído deixou. Ninguém ligado
+    lá: fica a recusa "o app daqui está reiniciando". O `seen` de um app que desligou não conta aqui:
+    ele fica depois do desligamento, e a recusa passava a ser "o app de lá não está mais ligado". Com o app daqui vivo nada muda, porque a hora 0 perde para
+    qualquer foco gravado. O MCP confere o pid também no Windows (`terminal_process::pid_alive`);
+    antes só o Linux via o pid morto. Registro sem pid (ou com pid que o sistema não responde) não
+    decide, no CLI e no MCP: o verbo fica no app daqui. O CLI tratava a falta de pid como morte e
+    mandava o verbo à outra máquina.
 
   | Caso | Resposta |
   |---|---|
@@ -180,7 +215,9 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   | App recusou o servidor (o atual nunca manda) | 403 `browser_host_not_allowed` |
   | Canal caiu com o pedido em curso | 502 `browser_host_gone`, "pode ter sido executado" |
   | Prazo (`deadline_ms`, padrão 45 s, teto 10 min) | 504 `browser_host_timeout` |
-  | `objetivo` e `confere` | 422 `browser_host_verb_unsupported` |
+  | `objetivo` e `confere` como verbo | 422 `browser_host_verb_unsupported` |
+  | `fill-secret`, ou qualquer corpo com `valor` | 422 `browser_host_secret_refused` |
+  | `Registry::fill_secret` para app sem `fill_secret` no `caps` (versão antiga) | 409 `browser_host_app_outdated`, "atualize o app desktop" |
 
   O print chega como binário e é gravado pelo servidor na máquina da sessão
   (`~/.hangar/nav/shots/<sessão>/`), para o caminho que o agente cita valer lá. O canal tem o mesmo
@@ -188,8 +225,55 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
 - **Lado do app e do CLI.** O nativo abre um canal anfitrião por servidor remoto do dono quando
   mostra uma sessão dele, e religa com espera de 1 s até 30 s. Sem app local, o `hangar-preview`
   manda o verbo por `browser-cmd`, com prazo de 20 s no `open`, 110 s no `login` (120 s pelas tools do MCP) e 45 s nos outros.
-  As tools MCP `browser_*` usam a mesma rota dentro do processo. `objetivo`, `confere` e
-  `vault_fill` não existem por anfitrião remoto.
+  No app, cada verbo tem teto próprio (20 s; `wait`, o `--timeout` dele mais 2 s; nunca além do que sobra do
+  `deadline_ms` menos uma folga): chamada CDP presa solta a vez com `erro: … (preso em <método>)` e grava `nav: verb_stuck` no
+  `native.log`. Tamanho e escala que o painel pede e falham também vão ao `native.log`.
+  - O `deadline_ms` conta da chegada do pedido ao app (canal anfitrião e `/cmd` local), não da vez do verbo. O
+    verbo que pega a vez com ele vencido responde `erro: <verbo> não começou: o prazo de quem pediu venceu na fila`
+    sem tocar a página: quem pediu já desistiu, e a ação feita depois disso ninguém confere.
+  - `goto`, `back` e `reload` não ganham os 20 s: ficam com o limite que já tinham (a espera do carregamento,
+    15 s depois da navegação) e só o `deadline_ms` os corta. Página lenta para abrir não é página presa.
+  - Clique cortado depois do `mousePressed` manda o `mouseReleased` no mesmo ponto, sem esperar resposta além de
+    500 ms: senão o verbo seguinte começaria com o botão apertado. `press` cortado depois do `keyDown` manda o
+    `keyUp` da mesma tecla, do mesmo jeito.
+  - `type`, `fill` e `press` cortados depois de o texto ou a tecla irem à página respondem
+    `erro: <verbo> não confirmou em N ms; o texto pode ter sido aplicado` (`a tecla pode ter sido aplicada`),
+    nunca "não respondeu": o agente não pode repetir achando que nada entrou.
+  - `fill-secret` cortado depois de o valor ir à página responde `erro: erro_cofre_incerto: fill-secret não
+    confirmou em N ms; o valor pode ter sido digitado`, nunca uma falha limpa, e o valor não aparece. O
+    `vault_fill` repete esse texto como veio, e trata do mesmo jeito o 504 e o 502 do canal com o quadro já
+    enviado e a resposta do app que não é texto.
+  As tools MCP `browser_*` usam a mesma rota dentro do processo.
+  - `objetivo` e `confere` (CLI e `browser_goal`/`browser_check`) rodam pelo laço do CLI com os
+    verbos de sempre, um a um, pela `browser-cmd`; o print do Jev é o `shot` com caminho absoluto,
+    gravado pelo servidor nesta máquina, onde o CLI o lê. Os dois nomes nunca vão ao canal.
+  - `vault_fill` com a sessão no app de outra máquina: o servidor da sessão lê a página pelo verbo
+    `url` do canal, pede a senha como sempre (cartão na máquina dona do cofre) e manda o valor por
+    `Registry::fill_secret`, dentro do processo, com o domínio aprovado (`expected_host`). O valor
+    vai só no quadro ao app, zerado depois do envio, fora do pedido em curso, do estado e do `list`;
+    a rota recusa o verbo e o campo. O app tira o `valor` do pedido antes de tudo e o controlador
+    confere, na vez do verbo e antes do clique, que a página ainda é desse domínio
+    (`erro_cofre_dominio_diferente`), e confere de novo na mesma chamada que digita: o valor entra por
+    `document.execCommand('insertText')` num `Runtime.callFunctionOn` sobre o próprio campo, que antes compara
+    o `location` do documento dele com o domínio aprovado e o foco no campo. O `Input.insertText` digitava no
+    que tivesse foco no momento, e uma navegação entre a conferência e a digitação levava o valor ao campo de
+    outra página. Os dois hosts são comparados em minúsculas e sem ponto final. Antes de digitar, a mesma chamada
+    apaga o campo: `select()` quando ele cobre o campo todo; senão o setter nativo de `value` (input e textarea)
+    ou a seleção do conteúdo por `Range` (contenteditable); sem conseguir apagar, recusa com `recusado: campo não
+    suportado` sem digitar. Depois relê o campo (`value` ou `textContent`): input controlado que desfaz,
+    `maxlength` que corta ou `beforeinput` que barra deixam outro valor, e a resposta é
+    `erro_cofre_incerto: o campo não ficou com o valor`, sem o valor nem o tamanho. As recusas dizem que o valor não
+    foi digitado; a máscara da senha continua registrada antes da chamada. O `Fetch` (segurar a navegação durante o preenchimento) ficou de fora: pedia assinar
+    `Fetch.requestPaused` nos dois motores e soltar as navegações presas em todo corte de teto; a chamada única
+    vale igual no Chromium do Linux e no WebView2, que já usam o `callFunctionOn`. Limites: o host comparado é
+    o do documento do campo, então campo em iframe de outro domínio é recusado; navegação dentro do mesmo
+    documento (`history.pushState`) mantém o host e não é barrada. Decidido pelo dono: o canal em http na rede local também
+    serve, como qualquer rota do dono.
+  - App de antes do `fill-secret` pelo canal não anuncia `fill_secret` no `caps`: tomaria o verbo por
+    desconhecido com o valor já recebido. O `vault_fill` confere o app escolhido
+    (`Registry::can_fill_secret`) antes de ler o cofre, sem cartão de aprovação à toa, e diz para
+    atualizar o app desktop; o `Registry::fill_secret` ainda recusa antes de montar o quadro. O valor
+    entra no quadro pelo `serde_json::to_writer` num buffer reservado para o pior escape, sem crescer.
 - **D1, decidida em 23/11: sem cartão nem pergunta.** O app serve sozinho as sessões das máquinas
   do dono (entrada de servidor que não é convite nem par externo); convite e par externo nunca
   ganham o canal. O túnel existe para o notebook alcançar o `localhost` da máquina da sessão, e

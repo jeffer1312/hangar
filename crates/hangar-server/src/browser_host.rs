@@ -59,7 +59,8 @@ async fn serve(st: Arc<AppState>, socket: WebSocket, watcher: Option<Watcher>) {
                 if heard.elapsed() > PING_EVERY * 3 || !sent(&mut sink, Message::Ping(Default::default())).await { break None }
             }
             next = outgoing.recv() => match next {
-                Some(text) => if !sent(&mut sink, Message::Text(text.into())).await { break None },
+                // O `Zeroizing` zera o quadro (o do cofre leva a senha) quando sai daqui.
+                Some(text) => if !sent(&mut sink, Message::Text(text.as_str().into())).await { break None },
                 None => break None,
             },
             incoming = stream.next() => {

@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 pub const HOLD: Duration = Duration::from_secs(3);
 
 /// Falha de acompanhamento, dado velho ou condição que some sozinha: vai ao diário, nunca à tela.
-const DIAGNOSTIC: [&str; 14] = [
+const DIAGNOSTIC: [&str; 16] = [
     crate::state::facts::UNAVAILABLE, crate::state::monitor::OBSERVATION_FAILED, crate::state::monitor::PERMISSION_FAILED,
     crate::list::facts::UNAVAILABLE, "list_capture_failed", "list_runtime_unavailable", crate::list::classify::RUNTIME_ABSENT,
     "loop_life_changed", "loop_life_unavailable", "loop_list_unavailable", "loop_provider_unsupported", "codex_sem_conexao", crate::runtime::codex_terminal::CONTROL_LOST,
-    crate::list::ports::UNAVAILABLE,
+    crate::list::ports::UNAVAILABLE, crate::list::ports::UNREACHED, crate::list::ports::MAP_STALE,
 ];
 
 /// O código vai só ao diário, qualquer que seja o estado da sessão.
@@ -122,6 +122,7 @@ mod tests {
         assert!(diagnostic("interacao_indisponivel", "working"), "P1: fora da espera, diário");
         assert!(diagnostic("interacao_indisponivel", "idle"));
         assert!(!diagnostic("interacao_indisponivel", "awaiting_input"), "P1: esperando a pessoa, tela");
+        assert!(diagnostic("session_port_map_stale", "idle"), "mapa do túnel vencido: só log");
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! dois sentidos. Autenticação e portas reservadas ficam com quem monta a rota.
 use std::future::Future;
 use std::io;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -22,8 +23,31 @@ pub fn port_of(query: Option<&str>) -> Option<u16> {
     hangar_core::auth::query_param(query, "port")?.parse::<u16>().ok().filter(|port| *port != 0)
 }
 
-pub async fn connect(port: u16) -> io::Result<TcpStream> {
-    let stream = hangar_core::net::connect_loopback(port).await?;
+/// `host` da query não é `127.0.0.1` nem `::1`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HostRefused;
+
+/// `host` da query: o loopback de uma família que a página pediu, `127.0.0.1` ou `::1` (com ou sem colchetes).
+/// Sem o parâmetro, `Ok(None)`: cliente antigo, ou um nome como `localhost`.
+pub fn host_of(query: Option<&str>) -> Result<Option<IpAddr>, HostRefused> {
+    let Some(raw) = hangar_core::auth::query_param(query, "host") else { return Ok(None) };
+    let ip = raw.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>().map_err(|_| HostRefused)?;
+    [IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)].contains(&ip).then_some(Some(ip)).ok_or(HostRefused)
+}
+
+/// Endereço pedido: só ele, porque a página o escolheu. Sem ele, `first` (o loopback que chega ao processo da
+/// sessão, pela lista) e depois `127.0.0.1` e `[::1]`.
+pub fn dial_order(host: Option<IpAddr>, first: Option<IpAddr>) -> Vec<IpAddr> {
+    if let Some(host) = host { return vec![host]; }
+    let mut order: Vec<IpAddr> = first.into_iter().collect();
+    for ip in [IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)] {
+        if !order.contains(&ip) { order.push(ip); }
+    }
+    order
+}
+
+pub async fn connect(port: u16, order: &[IpAddr]) -> io::Result<TcpStream> {
+    let stream = hangar_core::net::connect_first(order, port).await?;
     let _ = stream.set_nodelay(true);
     Ok(stream)
 }

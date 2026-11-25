@@ -4,7 +4,7 @@ use crate::connect_port::{free_port, wait_up};
 use crate::fake::{Fake, OWNER, client, config, spawn_fake, spawn_state_for};
 
 use std::collections::{HashMap, HashSet};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -129,6 +129,31 @@ async fn out_of_range_and_hangar_ports_are_refused_with_422() {
     let missing = handshake(main, &format!("/api/port-tunnel?token={OWNER}")).send().await.unwrap();
     assert_eq!(missing.status(), 422);
     assert_eq!(code_of(missing).await, "port_tunnel_port_refused");
+}
+
+#[tokio::test]
+async fn a_host_other_than_the_loopback_is_refused_with_422_before_connecting() {
+    let (_python, main) = owner_server().await;
+    let (port, accepted) = echo().await;
+    for host in ["localhost", "0.0.0.0", "127.0.0.2", "10.0.0.1", "%3A%3A"] {
+        let response = handshake(main, &format!("/api/port-tunnel?port={port}&host={host}&token={OWNER}")).send().await.unwrap();
+        assert_eq!(response.status(), 422, "host {host}");
+        assert_eq!(code_of(response).await, "port_tunnel_host_refused", "host {host}");
+    }
+    assert_eq!(accepted.load(Ordering::SeqCst), 0);
+    let (mut v4, _) = connect_async(format!("ws://{main}/api/port-tunnel?port={port}&host=127.0.0.1&token={OWNER}")).await.unwrap();
+    round_trip(&mut v4, b"v4").await;
+}
+
+#[tokio::test]
+async fn host_ipv6_dials_only_the_ipv6_loopback() {
+    let (_python, main) = owner_server().await;
+    // Eco só em 127.0.0.1: pedir o [::1] não cai nele.
+    let (port, accepted) = echo().await;
+    if TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await.is_ok() { return }
+    let response = handshake(main, &format!("/api/port-tunnel?port={port}&host=%3A%3A1&token={OWNER}")).send().await.unwrap();
+    assert!(response.status() == 502 || response.status() == 503, "{}", response.status());
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "discou o 127.0.0.1 no lugar do [::1]");
 }
 
 #[tokio::test]

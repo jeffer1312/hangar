@@ -47,7 +47,8 @@ impl ForwardError {
         let ws::Error::Http(status, code) = error else { return Self::Network };
         match code.as_deref() {
             Some("port_tunnel_refused") => Self::NothingListening,
-            Some("port_tunnel_port_refused") => Self::PortRefused,
+            // `host` que não é `127.0.0.1` nem `::1` também é recusa do destino.
+            Some("port_tunnel_port_refused" | "port_tunnel_host_refused") => Self::PortRefused,
             Some("port_tunnel_token_required") => Self::TokenRequired,
             // A máquina do servidor não conseguiu discar a porta por outro motivo que não "nada escutando".
             Some("port_tunnel_unavailable") => Self::Network,
@@ -297,18 +298,25 @@ where F: FnMut(TcpStream) -> Fut, Fut: std::future::Future<Output = ()> + Send +
 }
 
 /// Uma conexão do túnel até `port` da máquina de `api`. A rota muda (rede local, Tailscale, Connect): é lida de novo
-/// a cada chamada.
-pub(crate) async fn tunnel(api: &Api, token: &str, port: u16) -> Result<reqwest::Upgraded, ForwardError> {
-    let url = ws::text_url(api, &format!("/api/port-tunnel?port={port}"), token);
+/// a cada chamada. `host`: o loopback que a página pediu (`127.0.0.1` ou `::1`); sem ele o servidor escolhe o que
+/// chega ao processo da sessão. Servidor antigo ignora o parâmetro.
+pub(crate) async fn tunnel(api: &Api, token: &str, port: u16, host: Option<IpAddr>) -> Result<reqwest::Upgraded, ForwardError> {
+    let url = ws::text_url(api, &tunnel_path(port, host), token);
     if url == blocked_url() { return Err(ForwardError::Blocked); }
     ws::handshake(url, Some(api.identity())).await.map_err(ForwardError::of)
+}
+
+fn tunnel_path(port: u16, host: Option<IpAddr>) -> String {
+    let host = host.map(|ip| format!("&host={}", url::form_urlencoded::byte_serialize(ip.to_string().as_bytes()).collect::<String>()));
+    format!("/api/port-tunnel?port={port}{}", host.unwrap_or_default())
 }
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum End { Closed, Dropped, Local }
 
 async fn connection(tcp: TcpStream, api: Api, token: String, port: u16, error: Shared) {
-    let socket = match tunnel(&api, &token, port).await {
+    // O encaminhamento é do `localhost` da lista: o servidor escolhe a família.
+    let socket = match tunnel(&api, &token, port, None).await {
         Ok(socket) => socket,
         Err(refused) => { *lock(&error) = Some(refused); return; }
     };
@@ -540,6 +548,7 @@ mod tests {
         for (status, code, expected) in [
             (502, Some("port_tunnel_refused"), NothingListening),
             (422, Some("port_tunnel_port_refused"), PortRefused),
+            (422, Some("port_tunnel_host_refused"), PortRefused),
             (403, Some("port_tunnel_token_required"), TokenRequired),
             (503, Some("port_tunnel_unavailable"), Network),
             (502, None, Unreachable),
@@ -565,6 +574,24 @@ mod tests {
         let tcp6 = "  0: 0000000000000000FFFF00000100007F:C350 0000000000000000FFFF00000100007F:0BB8 01 00000000:00000000 00:00000000 00000000  1002        0 4\n";
         assert_eq!(owner_uid(tcp6, client, server), Some(1002));
         assert_eq!(owner_uid(&tcp[..tcp.find("2: 0100007F:C350").unwrap()], client, server), None);
+    }
+
+    #[tokio::test]
+    async fn the_tunnel_asks_the_host_of_an_explicit_ip_and_nothing_for_a_name() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = seen.clone();
+        let addr = raw_server(move |mut socket, request, _| {
+            record.lock().unwrap().push(request.lines().next().unwrap_or_default().to_owned());
+            async move { respond(&mut socket, &request, 502, Some("port_tunnel_refused")).await }
+        }).await;
+        let api = api(addr);
+        for host in [Some(IpAddr::V6(Ipv6Addr::LOCALHOST)), Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), None] {
+            assert_eq!(tunnel(&api, "t", 3000, host).await.err(), Some(ForwardError::NothingListening));
+        }
+        let lines = seen.lock().unwrap().clone();
+        assert!(lines[0].starts_with("GET /api/port-tunnel?port=3000&host=%3A%3A1&token="), "{}", lines[0]);
+        assert!(lines[1].starts_with("GET /api/port-tunnel?port=3000&host=127.0.0.1&token="), "{}", lines[1]);
+        assert!(lines[2].starts_with("GET /api/port-tunnel?port=3000&token="), "{}", lines[2]);
     }
 
     #[tokio::test]

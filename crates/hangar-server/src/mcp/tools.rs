@@ -724,11 +724,9 @@ impl Tools {
     /// O navegador fica no app que mostrou a sessão por último: o de outra máquina quando ele a mostrou depois do app
     /// desta (ou este não existe). Se o de lá desligou, a `browser-cmd` recusa em vez de cair num navegador daqui.
     fn remote_browser(&self, name: &str, home: &std::path::Path) -> Result<bool, String> {
-        if let Some(remote) = self.st.browser_host.last_seen(name)
-            && nav::local_focus(home, name).is_none_or(|local| remote > local) {
-            return Ok(true);
-        }
-        Ok(!nav::local_app(home).map_err(|e| e.0)?)
+        let host = &self.st.browser_host;
+        browser_is_remote(host.last_seen(name), host.has_host(name), || nav::local_focus(home, name), || nav::local_app(home),
+            || nav::local_app_dead(home))
     }
 
     /// O verbo vai pela `browser-cmd` ao app de quem usa a sessão em outra máquina.
@@ -1099,18 +1097,19 @@ impl Tools {
         Ok(dict(reply))
     }
 
-    /// O host da página do navegador da sessão; só http(s) tem domínio para comparar com a entrada.
-    async fn fill_host(&self, home: &Path, name: &str) -> Result<String, String> {
-        // O valor só vai ao app desta máquina: com a sessão aberta noutra, a página que a pessoa vê é a de lá, e um
-        // navegador velho daqui receberia a senha.
-        // Sem app aqui, o `page_url` abaixo já diz que ele não está aberto.
-        if nav::local_app(home).map_err(|e| e.0)? && self.remote_browser(name, home)? {
-            return Err("erro_cofre_sem_navegador: o navegador desta sessão está no app desktop de outra máquina, e o cofre só \
-                preenche no app desta máquina".into());
-        }
-        let url = nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
-        exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
-            .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))
+    /// O host da página do navegador da sessão, e se ela está no app de outra máquina; só http(s) tem domínio para
+    /// comparar com a entrada. A página que conta é a do app que a pessoa usa, o mesmo que recebe o valor.
+    async fn fill_host(&self, home: &Path, name: &str) -> Result<(String, bool), String> {
+        let remote = self.remote_browser(name, home)?;
+        let url = if remote {
+            let text = self.host_verb(name, "url", &[], None, nav::VERB_TIMEOUT).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+            nav::ok_value(&text).ok_or_else(|| format!("erro_cofre_sem_navegador: {text}"))?
+        } else {
+            nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?
+        };
+        let host = exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
+            .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))?;
+        Ok((host, remote))
     }
 
     /// O usuário sai do resumo da entrada (o `vault_list` já o mostra); a senha, pelo pedido de uso
@@ -1127,27 +1126,86 @@ impl Tools {
         let owner = exec::Owner::of(&self.st)?;
         let home = self.home();
         let long_enough = async { if password { self.vault_agent(&name).await.map(drop) } else { Ok(()) } };
-        let ((), host, entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
+        let ((), (host, remote), entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
         let entry = entries.iter().find(|e| crate::vault::same_name(&e.name, &a.entry)).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
         if let Some(refusal) = exec::fill_refusal(entry.url.as_deref(), &host) { return Err(refusal); }
-        let value = if password {
-            let req = UseReq { origin_server: self.vault_origin(), session_key: key, session: name.clone(), entry: a.entry, kind: UseKind::Fill,
-                reason: a.reason, target: host.clone() };
-            exec::secret(&owner, req, deadline).await?
-        } else {
-            Zeroizing::new(entry.username.clone().ok_or("erro_cofre_sem_usuario: esta senha não tem usuário cadastrado")?)
-        };
+        let req = password.then(|| UseReq { origin_server: self.vault_origin(), session_key: key, session: name.clone(), entry: a.entry,
+            kind: UseKind::Fill, reason: a.reason, target: host.clone() });
+        let ready = if remote { self.st.browser_host.can_fill_secret(&name) } else { Ok(()) };
+        let owner = &owner;
+        let value = fill_value(ready, move || async move {
+            match req {
+                Some(req) => exec::secret(owner, req, deadline).await,
+                None => entry.username.clone().map(Zeroizing::new).ok_or_else(|| "erro_cofre_sem_usuario: esta senha não tem usuário cadastrado".to_owned()),
+            }
+        }).await?;
         let lock = self.nav_lock(&name);
         let _held = lock.lock().await;
         // A página pode ter navegado durante a aprovação: o valor só entra no domínio aprovado.
-        let now = self.fill_host(&home, &name).await?;
+        let (now, remote) = self.fill_host(&home, &name).await?;
         if now != host { return Err(format!("erro_cofre_dominio_diferente: a página saiu de {host} para {now} durante a aprovação")); }
-        let answer = nav::fill_secret(&self.http, &home, &name, &[a.target, a.field], &value).await
-            .map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+        let args = [a.target, a.field];
+        let answer = if remote {
+            // Dentro do processo: a rota `browser-cmd` recusa o valor. O app confere o domínio de novo antes de digitar.
+            match self.st.browser_host.fill_secret(&name, &args, &host, value.clone()).await {
+                Ok(reply) => host_fill_answer(reply),
+                Err(refusal) => return Err(host_fill_refusal(refusal)),
+            }
+        } else {
+            nav::fill_secret(&self.http, &home, &name, &args, &value).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?
+        };
         let answer = exec::mask(&answer, &value);
         if answer.starts_with("ok:") { return Ok(text("preenchido")); }
-        let detail = answer.strip_prefix("erro:").map_or(answer.as_str(), str::trim);
-        Err(if detail.starts_with("erro_cofre_") { detail.to_owned() } else { format!("erro_cofre_preenchimento: {detail}") })
+        Err(fill_failure(&answer))
+    }
+}
+
+/// `remote_browser` sem o disco: `seen` é a hora do uso num app de outra máquina, `attached` diz se há um app de lá
+/// ligado com a sessão em foco.
+fn browser_is_remote(seen: Option<u64>, attached: bool, local_focus: impl FnOnce() -> Option<u64>,
+                     local_app: impl FnOnce() -> Result<bool, nav::Unavailable>, local_dead: impl FnOnce() -> bool) -> Result<bool, String> {
+    if let Some(remote) = seen && local_focus().is_none_or(|local| remote > local) { return Ok(true); }
+    match local_app() {
+        Ok(local) => Ok(!local),
+        // App daqui caído: só um app de lá ligado serve. A hora de um que já desligou fica, mas não liga ninguém: a
+        // recusa diz que o daqui reinicia.
+        Err(_) if attached && local_dead() => Ok(true),
+        Err(e) => Err(e.0),
+    }
+}
+
+/// O valor do `vault_fill`, lido do cofre só depois de o app que vai recebê-lo aceitar o `fill-secret`: o app antigo
+/// recusaria depois de a pessoa aprovar o cartão.
+async fn fill_value<F>(ready: Result<(), hangar_browser_host::Refusal>, read: impl FnOnce() -> F) -> Result<Zeroizing<String>, String>
+where F: std::future::Future<Output = Result<Zeroizing<String>, String>> {
+    ready.map_err(host_fill_refusal)?;
+    read().await
+}
+
+/// O erro do `vault_fill` para a resposta que não é `ok:`: código do cofre vindo do navegador segue como veio.
+fn fill_failure(answer: &str) -> String {
+    let detail = answer.strip_prefix("erro:").map_or(answer, str::trim);
+    if detail.starts_with("erro_cofre_") { detail.to_owned() } else { format!("erro_cofre_preenchimento: {detail}") }
+}
+
+/// Resposta do app ao `fill-secret`. Só texto diz o que houve: outra coisa chegou depois de o quadro com o valor sair,
+/// e ele pode já estar na página.
+fn host_fill_answer(reply: hangar_browser_host::Reply) -> String {
+    match reply {
+        hangar_browser_host::Reply::Text(text) => text,
+        hangar_browser_host::Reply::Png(_) => "erro: erro_cofre_incerto: o app desktop respondeu o fill-secret com uma imagem; o valor pode ter sido digitado".into(),
+    }
+}
+
+/// Recusa do canal anfitrião ao `fill-secret`. Sem resposta depois de o quadro sair, o valor pode já estar na página:
+/// nunca "sem navegador".
+fn host_fill_refusal(refusal: hangar_browser_host::Refusal) -> String {
+    use hangar_browser_host::Refusal;
+    let message = refusal.message("fill-secret");
+    match refusal {
+        Refusal::Gone => format!("erro_cofre_incerto: {message}"),
+        Refusal::Timeout => format!("erro_cofre_incerto: {message}; o valor pode ter sido digitado"),
+        _ => format!("erro_cofre_sem_navegador: {message}"),
     }
 }
 
@@ -1211,6 +1269,52 @@ mod tests {
         assert_eq!(read.path(), "/api/whatsapp/messages?chat=c&before_id=m9&limit=20");
         let err = args::<WhatsAppRead>("whatsapp_read", json!({"since": "x"}).as_object().unwrap().clone()).err().unwrap();
         assert!(err.contains("missing field `chat`") && err.contains("chat (string)"), "{err}");
+    }
+
+    #[test]
+    fn a_fill_without_an_answer_from_the_app_is_uncertain_never_a_clean_failure() {
+        use hangar_browser_host::Refusal;
+        assert!(host_fill_refusal(Refusal::Timeout).starts_with("erro_cofre_incerto:") && host_fill_refusal(Refusal::Timeout).contains("pode ter sido digitado"));
+        assert!(host_fill_refusal(Refusal::Gone).starts_with("erro_cofre_incerto:"));
+        let outdated = host_fill_refusal(Refusal::Outdated);
+        assert!(outdated.starts_with("erro_cofre_sem_navegador:") && outdated.contains("atualize o app desktop"), "{outdated}");
+        assert!(host_fill_refusal(Refusal::NoHost).starts_with("erro_cofre_sem_navegador:"));
+        // Resposta que não é texto também chegou depois de o valor sair: incerta, nunca falha genérica.
+        let png = fill_failure(&host_fill_answer(hangar_browser_host::Reply::Png(vec![1, 2, 3])));
+        assert!(png.starts_with("erro_cofre_incerto:") && png.contains("pode ter sido digitado"), "{png}");
+        assert_eq!(fill_failure(&host_fill_answer(hangar_browser_host::Reply::Text("erro: caiu".into()))), "erro_cofre_preenchimento: caiu");
+    }
+
+    #[test]
+    fn a_dead_local_app_hands_the_browser_only_to_an_app_still_attached() {
+        let dead = || Err::<bool, _>(nav::Unavailable("reiniciando".into()));
+        // O app de lá viu a sessão antes do foco daqui e desligou: a recusa segue dizendo que o daqui reinicia.
+        assert_eq!(browser_is_remote(Some(5), false, || Some(10), dead, || true), Err("reiniciando".into()));
+        assert_eq!(browser_is_remote(None, false, || None, dead, || true), Err("reiniciando".into()));
+        // Ligado, com ou sem uso registrado, ele serve.
+        assert_eq!(browser_is_remote(Some(5), true, || Some(10), dead, || true), Ok(true));
+        assert_eq!(browser_is_remote(None, true, || None, dead, || true), Ok(true));
+        // Registro ilegível (sem pid morto) nunca vai a outra máquina.
+        assert_eq!(browser_is_remote(None, true, || None, dead, || false), Err("reiniciando".into()));
+        // Mostrou depois do daqui: o navegador segue o de lá mesmo desligado, e a `browser-cmd` recusa.
+        assert_eq!(browser_is_remote(Some(20), false, || Some(10), || Ok(true), || false), Ok(true));
+        assert_eq!(browser_is_remote(Some(5), true, || Some(10), || Ok(true), || false), Ok(false));
+    }
+
+    #[tokio::test]
+    async fn an_outdated_app_is_refused_before_the_vault_is_read() {
+        let registry = std::sync::Arc::new(hangar_browser_host::Registry::default());
+        let (mut app, _rx) = registry.attach();
+        app.text(r#"{"type":"focus","session":"s"}"#);
+        let count = std::cell::Cell::new(0);
+        let reads = &count;
+        let read = move || async move { reads.set(reads.get() + 1); Ok(Zeroizing::new("S3nh@".to_owned())) };
+        let refused = fill_value(registry.can_fill_secret("s"), read).await.unwrap_err();
+        assert!(refused.starts_with("erro_cofre_sem_navegador:") && refused.contains("atualize o app desktop"), "{refused}");
+        assert_eq!(count.get(), 0, "nem cartão de aprovação nem leitura do cofre");
+        app.text(r#"{"type":"focus","session":"s","caps":["fill_secret"]}"#);
+        assert_eq!(fill_value(registry.can_fill_secret("s"), read).await.map(|v| (*v).clone()), Ok("S3nh@".to_owned()));
+        assert_eq!(count.get(), 1);
     }
 
     #[test]
