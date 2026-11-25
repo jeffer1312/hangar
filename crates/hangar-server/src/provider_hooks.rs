@@ -537,6 +537,8 @@ const READERS: &[&str] = &[
 const PATTERN_FIRST: &[&str] = &["grep", "egrep", "rg", "sed", "awk", "select-string", "sls"];
 /// Opções desses leitores cujo valor é um arquivo lido (`-Path`, `grep -f`), não um padrão.
 const FILE_OPTIONS: &[&str] = &["-path", "-literalpath", "-f", "--file", "-filepath"];
+/// Programas que trocam a pasta onde o resto do comando roda.
+const DIR_CHANGERS: &[&str] = &["cd", "chdir", "pushd", "popd", "set-location", "sl", "push-location", "pop-location"];
 /// Shells cujo argumento é outro comando; os dois guardas entram neles.
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval"];
 
@@ -613,7 +615,9 @@ fn shell_script(segment: &str) -> Option<String> {
 
 /// Onde o comando roda: o `cwd` do hook põe o caminho relativo no lugar, e o home e as raízes anotadas
 /// dizem qual `backend/.env` é o do servidor.
+#[derive(Clone)]
 struct Place {
+    /// `None`: pasta desconhecida (o hook não mandou, ou um `cd` que não dá para seguir).
     cwd: Option<PathBuf>,
     home: Option<PathBuf>,
     roots: std::cell::OnceCell<Vec<PathBuf>>,
@@ -662,12 +666,81 @@ impl Place {
     }
 
     /// A pasta é a raiz de uma cópia do Hangar: a do servidor ou um checkout dele. Outro projeto com
-    /// `backend/.env` não é.
+    /// `backend/.env` não é. Pasta desconhecida conta como cópia: na dúvida o guarda barra.
     fn hangar_copy(&self, rooted: bool, names: &[&str]) -> bool {
-        let Some(dir) = self.locate(rooted, names) else { return false };
-        let real = dir.canonicalize().unwrap_or(dir);
+        self.locate(rooted, names).is_none_or(|dir| self.hangar_root(&dir))
+    }
+
+    fn hangar_root(&self, dir: &Path) -> bool {
+        let real = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         self.roots().contains(&real) || real.join("crates").join("hangar-server").is_dir()
     }
+
+    /// O mesmo lugar, com a pasta desconhecida.
+    fn lost(&self) -> Place {
+        let mut place = self.clone();
+        place.cwd = None;
+        place
+    }
+
+    /// A pasta depois do `cd` do segmento. Destino montado (variável, subcomando, curinga, `cd -`, `popd`),
+    /// `cd` fora da posição de programa (`if cd x`) ou que talvez não valha para o resto (`detached`:
+    /// subshell, pipeline, fundo) deixa a pasta desconhecida.
+    fn follow(&mut self, segment: &str, pwsh: bool, detached: bool) {
+        // No PowerShell a barra invertida é separador, não escape.
+        let text = if pwsh { segment.replace('\\', "/") } else { segment.to_owned() };
+        let words = tokens(&text);
+        let (name, args) = head(&words);
+        let name = name.to_ascii_lowercase();
+        let targets: Vec<&String> = args.iter().filter(|arg| !arg.starts_with('-')).collect();
+        self.cwd = match targets.as_slice() {
+            _ if detached || !DIR_CHANGERS.contains(&name.as_str()) || name.starts_with("pop") || args.iter().any(|arg| arg == "-") => None,
+            // Só o `cd` do shell sozinho volta ao home; os outros ficam ou trocam pela pilha.
+            [] if !pwsh && name == "cd" => self.home.clone(),
+            [target] => {
+                let (rooted, names) = path_names(target);
+                let expands = |index: usize, name: &&str| {
+                    let home = index == 0 && ["~", "$HOME", "${HOME}"].contains(name);
+                    !home && ((index == 0 && name.starts_with('~')) || name.contains(['$', '`', '%', '*', '?', '[', '{']))
+                };
+                if names.iter().enumerate().any(|(index, name)| expands(index, name)) { None } else { self.locate(rooted, &names) }
+            }
+            _ => None,
+        };
+    }
+}
+
+/// O comando tem subshell, substituição, pipeline ou fundo: um `cd` ali pode não valer para o resto.
+fn detaches(command: &str) -> bool {
+    let chars: Vec<char> = command.chars().collect();
+    let mut quote = None;
+    let mut index = 0;
+    while index < chars.len() {
+        let c = chars[index];
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                '\\' => index += 1,
+                '(' | ')' | '`' => return true,
+                '|' | '&' if chars.get(index + 1) == Some(&c) => index += 1,
+                // `2>&1` e `&>` são redirecionamento.
+                '&' if (index > 0 && matches!(chars[index - 1], '<' | '>')) || chars.get(index + 1) == Some(&'>') => {}
+                '|' | '&' => return true,
+                _ => {}
+            },
+        }
+        index += 1;
+    }
+    false
+}
+
+/// Alguma palavra do comando, também dentro de um `bash -c`, é um `cd`.
+fn moves(command: &str) -> bool {
+    shell_readings(command)
+        .iter()
+        .any(|reading| path_words(reading).any(|word| DIR_CHANGERS.contains(&word.to_ascii_lowercase().as_str())))
 }
 
 /// Um arquivo que o guarda não deixa ler, e por onde a leitura dele aparece num comando.
@@ -678,27 +751,42 @@ struct Secret {
     redirect: fn(&Place, &str) -> bool,
     /// O `cd` que entra na pasta do arquivo.
     folder: fn(&Place, &str) -> bool,
+    /// A pasta corrente é a do arquivo.
+    within: fn(&Place) -> bool,
     /// Dentro da pasta, o segmento que lê o arquivo sem citar o caminho.
     bare: fn(&str) -> bool,
 }
 
-const VAULT: Secret = Secret { hits: vault_hits_at, redirect: vault_redirect, folder: vault_folder, bare: any_segment };
-const OWNER_KEYS: Secret = Secret { hits: owner_key_hits, redirect: owner_key_redirect, folder: owner_key_folder, bare: owner_key_bare };
+const VAULT: Secret = Secret { hits: vault_hits_at, redirect: vault_redirect, folder: vault_folder, within: vault_within, bare: any_segment };
+const OWNER_KEYS: Secret =
+    Secret { hits: owner_key_hits, redirect: owner_key_redirect, folder: owner_key_folder, within: owner_key_within, bare: owner_key_bare };
 
 /// Ler o arquivo, não usá-lo: o caminho como argumento de outro programa passa. `pwsh`: o texto é
 /// PowerShell (a tool PowerShell ou o script de um `powershell -c`).
 fn reads(secret: &Secret, place: &Place, command: &str, depth: u8, pwsh: bool) -> bool {
-    if (secret.hits)(place, command) == 0 && !(secret.folder)(place, command) {
+    // Com `cd` a pasta de cada segmento é outra: o filtro rápido não vale e a varredura segue a pasta.
+    let moves = moves(command);
+    if !moves && (secret.hits)(place, command) == 0 && !(secret.folder)(place, command) && !(secret.within)(place) {
         return false;
     }
+    let lost;
+    let scope = if moves {
+        lost = place.lost();
+        &lost
+    } else {
+        place
+    };
     // .NET (`[IO.File]::ReadAllText`, `ReadLines`, `OpenText`, `StreamReader`…); fora do PowerShell é só texto.
     let lower = command.to_ascii_lowercase();
-    if pwsh && (secret.hits)(place, command) > 0 && ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
+    if pwsh && (secret.hits)(scope, command) > 0 && ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
         return true;
     }
     let command = strip_heredocs(command);
-    let mut inside = false;
+    let detached = detaches(&command);
+    let mut here = place.clone();
+    let mut inside = (secret.within)(place);
     segments(&command).iter().any(|segment| {
+        let place = &here;
         let words = tokens(segment);
         let (_, args) = head(&words);
         let name = program(segment);
@@ -711,10 +799,15 @@ fn reads(secret: &Secret, place: &Place, command: &str, depth: u8, pwsh: bool) -
                     || reads(secret, place, &args.join(" "), depth + 1, inner));
         }
         // Entrar na pasta faz `cat *` ler o arquivo sem citar o caminho.
-        if ["cd", "pushd", "set-location", "sl", "push-location"].contains(&name) {
+        if words.iter().any(|word| DIR_CHANGERS.contains(&word.to_ascii_lowercase().as_str())) {
             inside |= (secret.folder)(place, segment);
-            return false;
+            here.follow(segment, pwsh, detached);
+            inside |= (secret.within)(&here);
+            if DIR_CHANGERS.contains(&name) {
+                return false;
+            }
         }
+        let place = &here;
         if (secret.redirect)(place, segment) {
             return true;
         }
@@ -739,6 +832,10 @@ fn vault_hits_at(_: &Place, text: &str) -> usize {
 
 fn vault_folder(_: &Place, text: &str) -> bool {
     vault_path(text)
+}
+
+fn vault_within(place: &Place) -> bool {
+    place.cwd.as_ref().is_some_and(|cwd| vault_path(&cwd.to_string_lossy()))
 }
 
 fn vault_redirect(_: &Place, segment: &str) -> bool {
@@ -1013,6 +1110,17 @@ fn owner_key_folder(place: &Place, text: &str) -> bool {
                 || (ends_with_glob(&names, &["backend"]) && place.hangar_copy(rooted, &names[..names.len() - 1]))
         })
     })
+}
+
+/// A pasta corrente é `~/.hangar/config`, `~/.hangar/whatsapp` ou a `backend/` de uma cópia do Hangar.
+/// Desconhecida não conta: `cat *` numa pasta qualquer segue livre.
+fn owner_key_within(place: &Place) -> bool {
+    let Some(cwd) = &place.cwd else { return false };
+    let names: Vec<String> = cwd.iter().map(|name| name.to_string_lossy().to_ascii_lowercase()).collect();
+    let ends = |wanted: &[&str]| names.len() >= wanted.len() && names[names.len() - wanted.len()..].iter().zip(wanted).all(|(name, want)| name == want);
+    ends(&[".hangar", "config"])
+        || ends(&[".hangar", "whatsapp"])
+        || (ends(&["backend"]) && cwd.parent().is_some_and(|parent| place.hangar_root(parent)))
 }
 
 /// Dentro da pasta, o nome solto (`.env`, `control.key`) ou um curinga que case com ele (`*`, `.en?`).

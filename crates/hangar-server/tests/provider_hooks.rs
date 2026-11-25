@@ -356,7 +356,8 @@ fn provider_hooks_guard_resolves_dot_segments_before_matching_the_owner_keys() {
 }
 
 /// O ´backend/.env´ só é chave do dono numa cópia do Hangar (checkout ou a anotada pelo servidor): noutro
-/// projeto o arquivo, a pasta ´backend´ e o ´*´ dentro dela são livres. As chaves de ´~/.hangar´ valem em toda pasta.
+/// projeto o arquivo, a pasta ´backend´ e o ´*´ dentro dela são livres. Sem ´cwd´ a pasta é desconhecida e o
+/// relativo conta como cópia do Hangar. As chaves de ´~/.hangar´ valem em toda pasta.
 #[test]
 fn provider_hooks_guard_anchors_backend_env_to_the_hangar_copy() {
     let root = tempfile::tempdir().unwrap();
@@ -378,8 +379,6 @@ fn provider_hooks_guard_anchors_backend_env_to_the_hangar_copy() {
         bash(&format!("cat {other}/backend/.env"), &hangar),
         read("backend/.env", &other),
         read(&format!("{other}/backend/.env"), &hangar),
-        json!({"tool_name":"Bash","tool_input":{"command":"cat backend/.env"}}),
-        json!({"tool_name":"Read","tool_input":{"file_path":"backend/.env"}}),
     ] {
         let result = guard(&payload);
         assert!(result.status.success(), "{payload}");
@@ -395,12 +394,65 @@ fn provider_hooks_guard_anchors_backend_env_to_the_hangar_copy() {
         bash("cat ~/.hangar/whatsapp/control.key", &other),
         bash("cd ~/.hangar/config && grep -rn TODO *", &other),
         json!({"tool_name":"Bash","tool_input":{"command":"cat ~/.hangar/config/.env"}}),
+        json!({"tool_name":"Bash","tool_input":{"command":"cat backend/.env"}}),
+        json!({"tool_name":"Bash","tool_input":{"command":"cd backend && cat .env"}}),
+        json!({"tool_name":"Read","tool_input":{"file_path":"backend/.env"}}),
     ] {
         let result = guard(&payload);
         assert_eq!(result.status.code(), Some(2), "{payload}");
         let output: Value = serde_json::from_slice(&result.stdout).unwrap();
         let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
         assert!(reason.contains("control.key"), "{payload}: {reason}");
+    }
+}
+
+/// O `cd` do próprio comando muda a pasta em que o `backend/.env` é procurado; `cd` que não dá para seguir
+/// (variável, subshell, pipeline) deixa a pasta desconhecida, e desconhecida conta como cópia do Hangar.
+#[test]
+fn provider_hooks_guard_follows_the_command_cd_and_fails_closed_on_an_unknown_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let (hangar, other) = checkouts(root.path());
+    let guard = |payload: &Value| run(root.path(), "guard-tmux", &serde_json::to_vec(payload).unwrap(), &[]);
+    let bash = |command: &str, cwd: &str| json!({"tool_name":"Bash","cwd":cwd,"tool_input":{"command":command}});
+    let pwsh = |command: &str, cwd: &str| json!({"tool_name":"PowerShell","cwd":cwd,"tool_input":{"command":command}});
+    for payload in [
+        bash(&format!("cd {hangar} && cat backend/.env"), &other),
+        bash("cd hangar && cat backend/.env", root.path().to_str().unwrap()),
+        bash("cd ~/hangar && cat backend/.env", &other),
+        bash("cd crates && cat ../backend/.env", &hangar),
+        bash("cd crates && cd ../backend && cat .env", &hangar),
+        bash("cd crates/hangar-server && cd ../.. && cat backend/.env", &hangar),
+        bash("cd backend/sub && cd .. && cat .env", &hangar),
+        bash(&format!("bash -c 'cd {hangar} && cat backend/.env'"), &other),
+        bash(&format!("cd {other}; cd {hangar}; cat backend/.env"), &other),
+        bash("cd $DIR && cat backend/.env", &other),
+        bash("cd \"$(git rev-parse --show-toplevel)\" && cat backend/.env", &other),
+        bash("cd - && cat backend/.env", &other),
+        bash(&format!("(cd {other}); cat backend/.env"), &hangar),
+        bash(&format!("cd {other} | true; cat backend/.env"), &hangar),
+        bash("cat .env", &format!("{hangar}/backend")),
+        pwsh(&format!("Set-Location {hangar}; Get-Content backend\\.env"), &other),
+    ] {
+        let result = guard(&payload);
+        assert_eq!(result.status.code(), Some(2), "{payload}");
+        let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert!(reason.contains("control.key"), "{payload}: {reason}");
+    }
+    for payload in [
+        bash("cp backend/.env.example backend/.env", &other),
+        bash("cd backend && grep -rn TODO *", &other),
+        bash("cd backend && grep -rn TODO * | head", &other),
+        bash("cd backend && cat .env.example", &other),
+        bash("cd crates && cat ../backend/.env", &other),
+        bash(&format!("cd {other} && cat backend/.env"), &hangar),
+        bash("cd backend && cat pyproject.toml", &hangar),
+        bash("cat .env", &format!("{other}/backend")),
+        bash("cat *", &format!("{other}/backend")),
+    ] {
+        let result = guard(&payload);
+        assert!(result.status.success(), "{payload}");
+        assert!(result.stdout.is_empty(), "{payload}");
     }
 }
 
