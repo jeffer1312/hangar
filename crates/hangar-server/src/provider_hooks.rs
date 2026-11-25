@@ -339,7 +339,7 @@ fn descends(brain: &Path, bound: &str, conversation: &str) -> bool {
         for parent in &level {
             match subagent_ids(brain, parent) {
                 Ok(ids) => next.extend(ids),
-                Err(_) => log_failure("agy_hook_error.log", "agy_subagents_unreadable"),
+                Err(error) => log_failure("agy_hook_error.log", &format!("agy_subagents_unreadable:{:?}", error.kind())),
             }
         }
         level = next;

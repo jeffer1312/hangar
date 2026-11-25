@@ -17,6 +17,7 @@ const REQUEST_OPEN: &str = "<USER_REQUEST>";
 const REQUEST_CLOSE: &str = "</USER_REQUEST>";
 static EXIT_CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Command exited with code (-?\d+)").unwrap());
 static LAUNCH_UNREAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static EXIT_UNREAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Como aparece, nos recados dentro de um subagente, a conversa que o lançou.
 pub const MAIN_SENDER: &str = "principal";
 const SUBAGENT_CREATED: &str = "Created the following subagent:";
@@ -123,6 +124,9 @@ impl AgyStream {
         if let Some((_, task)) = sender.rsplit_once('/') {
             // O fim traz o código de saída do comando: diferente de zero é falha, sem código fica como antes.
             let code = EXIT_CODE.captures(&text).and_then(|found| found[1].parse::<i64>().ok());
+            if code.is_none() && !EXIT_UNREAD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(code = "agy_task_exit_unread", "fim de tarefa de fundo sem o código de saída");
+            }
             if task.starts_with("task-") { events.push(ChatEvent { is_error: code.map(|code| code != 0), ..finish(task) }); }
             return;
         }
