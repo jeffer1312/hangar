@@ -2708,7 +2708,7 @@ impl NewSession {
             .children(self.render_recents(cx))
     }
 
-    /// As pastas mais usadas nesta máquina, entre o título e o compositor: um clique escolhe a pasta, como o menu dela.
+    /// As últimas pastas usadas nesta máquina, entre o título e o compositor: um clique escolhe a pasta, como o menu dela.
     fn recent_folders(&self) -> Vec<String> {
         if self.baton.is_some() || self.scheduled { return Vec::new(); }
         let repos = self.repos.ok().map(Vec::as_slice).unwrap_or_default();
@@ -3642,7 +3642,9 @@ impl Hangar {
         let [area, content, row, width, row_width] = room.get();
         let drawn = view.read(cx).recents_drawn();
         // A linha medida noutra largura (antes de a janela mudar) não vale: estima-se uma linha só, e a medida corrige.
-        let needed = if row > 0. && (row_width - width).abs() < 0.5 { row } else { 36. };
+        // Conta também o vão que a coluna do título põe antes da linha (o `gap` de `render_top_pills`), que só existe com ela.
+        let gap = if view.read(cx).no_project() { 8. } else { 6. };
+        let needed = gap + if row > 0. && (row_width - width).abs() < 0.5 { row } else { 36. };
         let without = content - if drawn { needed } else { 0. };
         // Antes da primeira medida, mostra: o caso comum é caber, e assim a caixa não pula ao abrir a tela.
         let fit = area <= 0. || without + needed <= area;
