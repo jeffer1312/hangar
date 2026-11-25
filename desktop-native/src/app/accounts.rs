@@ -540,7 +540,7 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
                 None => {}
             }
             if c.agy.as_ref().is_some_and(|a| !a.terms) {
-                subtitle.push((tr("accounts_agy_terms_pending"), Tone::Warn));
+                subtitle.push((agy_terms::terms_tr("pending"), Tone::Warn));
                 // A sessão abre na casa (a pasta-mãe do `~/.gemini`): com terminal o agy só usa a conta padrão.
                 agy_terms = c.agy.as_ref().filter(|a| a.default).and(c.path.as_deref().and_then(server_parent));
             }
@@ -1029,8 +1029,8 @@ impl Hangar {
     }
 
     pub(super) fn receive_accounts(&mut self, reply: AccountsReply, window: &mut Window, cx: &mut Context<Self>) {
-        // As contas decidem passos do tour (`account_kinds`).
-        self.tour_dirty = true;
+        // As contas decidem passos do tour (`account_kinds`); os Termos não mexem nelas.
+        if !matches!(reply, AccountsReply::AgyTerms(_)) { self.tour_dirty = true; }
         let accounts = &mut self.accounts;
         match reply {
             AccountsReply::List(seq, result) => {
@@ -1100,7 +1100,8 @@ impl Hangar {
             AccountsReply::Keys(reply) => self.receive_keys(reply, window, cx),
             AccountsReply::Codex(reply) => self.receive_codex(reply, window, cx),
             AccountsReply::Antigravity(reply) => self.receive_agy(reply, window, cx),
-            AccountsReply::AgyTerms(reply) => self.receive_agy_terms(reply, window, cx),
+            // Nem a lista muda: só o painel, e só quando a etapa mudou.
+            AccountsReply::AgyTerms(reply) => { if self.receive_agy_terms(reply, window, cx) { cx.notify(); } return; }
             AccountsReply::Cliproxy(reply) => self.receive_cliproxy(reply, window, cx),
             AccountsReply::ProxyUpdate(reply) => self.receive_proxy_update(reply, window, cx),
         }
@@ -1916,7 +1917,7 @@ mod tests {
         assert_eq!(extra.agy, Some(("trabalho".to_owned(), false)));
         assert!(extra.sign_out.is_none());
         assert_eq!(extra.remove.as_ref().map(|r| r.0.clone()), Some(vec!["antigravity-contas".to_owned(), "trabalho".to_owned()]));
-        assert!(extra.subtitle.0.contains(&tr("accounts_agy_terms_pending")));
+        assert!(extra.subtitle.0.contains(&super::agy_terms::terms_tr("pending")));
         assert_eq!(default.agy_terms, None, "Termos aceitos não oferecem a sessão");
         assert_eq!(extra.agy_terms, None, "a adicional não abre com terminal");
         let pending: Vec<super::antigravity::AgyAccount> = serde_json::from_value(json!([

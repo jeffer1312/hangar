@@ -110,6 +110,21 @@ pub(super) fn agy_failure(error: &Failure) -> String {
     tr(key)
 }
 
+/// O logo do Antigravity no quadrado da cor dele.
+pub(super) fn agy_logo(size: f32) -> Div {
+    let (color, _) = theme::provider("antigravity");
+    div().size(px(size)).flex_shrink_0().rounded(px(size * 0.28)).bg(color.opacity(0.16)).flex().items_center()
+        .justify_center().children(chrome::provider_logo("antigravity", size * 0.56, color))
+}
+
+/// O topo dos painéis do Antigravity (login e Termos): logo, título e a máquina onde o agy roda.
+pub(super) fn agy_panel_head(title: String, server: &str) -> Div {
+    div().flex().items_center().gap(px(12.)).child(agy_logo(36.))
+        .child(div().flex().flex_col().gap(px(2.)).min_w_0()
+            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(title))
+            .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("accounts_login_server").replace("{server}", server))))
+}
+
 impl Hangar {
     fn agy_send(&self) -> impl Fn(AgyReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static {
         let done = self.accounts_send_later();
@@ -362,13 +377,7 @@ impl Hangar {
     /// O painel no lugar da lista: "Qual conta", depois o link e o código, como no mock aprovado.
     pub(super) fn render_agy(&self, cx: &mut Context<Self>) -> Option<Div> {
         let f = self.accounts.antigravity.as_ref()?;
-        let (color, _) = theme::provider("antigravity");
-        let logo = |size: f32| div().size(px(size)).flex_shrink_0().rounded(px(size * 0.28)).bg(color.opacity(0.16)).flex().items_center()
-            .justify_center().children(chrome::provider_logo("antigravity", size * 0.56, color));
-        let head = div().flex().items_center().gap(px(12.)).child(logo(36.))
-            .child(div().flex().flex_col().gap(px(2.)).min_w_0()
-                .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(tr("accounts_add_antigravity")))
-                .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("accounts_login_server").replace("{server}", &self.server_label(cx)))));
+        let head = agy_panel_head(tr("accounts_add_antigravity"), &self.server_label(cx));
         let line = |text: String, color: Hsla| div().text_size(px(13.)).whitespace_normal().child(div().text_color(color).child(text));
         let footer = || div().mt(px(4.)).flex().justify_end().gap(px(8.));
         let terms = div().text_size(px(12.5)).whitespace_normal().child(div().text_color(theme::warning()).child(tr("accounts_agy_terms_note")));
@@ -394,7 +403,7 @@ impl Hangar {
         // A tentativa aberta: o link do Google e o código que a página do Antigravity mostra.
         if let Some(attempt) = f.attempt.as_ref() {
             let name = match f.account.as_deref() { Some("default") | None => tr("accounts_agy_default_name"), Some(id) => id.to_owned() };
-            panel = panel.child(div().flex().items_center().gap(px(8.)).text_size(px(13.)).child(logo(22.))
+            panel = panel.child(div().flex().items_center().gap(px(8.)).text_size(px(13.)).child(agy_logo(22.))
                 .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name)));
             if attempt.state == "iniciando" || f.url.is_none() {
                 return Some(panel.child(div().flex().items_center().gap(px(8.)).text_size(px(13.)).text_color(theme::muted())
@@ -444,7 +453,7 @@ impl Hangar {
         let choice = |content: Div| div().px(px(12.)).py(px(10.)).rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::inset())
             .flex().items_center().gap(px(10.)).child(content);
         let default_signed = default.and_then(|a| a.signed_in) == Some(true);
-        let default_row = choice(div().flex_1().min_w_0().flex().items_center().gap(px(8.)).child(dot(default_signed)).child(logo(22.))
+        let default_row = choice(div().flex_1().min_w_0().flex().items_center().gap(px(8.)).child(dot(default_signed)).child(agy_logo(22.))
                 .child(div().min_w_0().whitespace_normal().text_size(px(13.)).child(tr("accounts_agy_default_choice"))))
             .child(Button::new("accounts-agy-default").outline().small().label(tr("accounts_agy_sign_in")).disabled(f.busy || missing)
                 .on_click(cx.listener(|this, _, _, cx| this.agy_begin("default".into(), cx))));

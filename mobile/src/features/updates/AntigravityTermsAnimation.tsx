@@ -5,7 +5,7 @@ import { useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 import { WorkingMarkPaused } from '../../ui/WorkingMark';
 import { superficie } from '../../theme/superficie';
-import { TermosPainel } from '../config/AntigravityTermos';
+import { TermosPainel, type TermosStage } from '../config/AntigravityTermos';
 import { useScriptStep } from './scriptStep';
 import * as m from '../../paraglide/messages';
 
@@ -22,6 +22,8 @@ const WIDTH = 380;
 const noop = () => {};
 
 export type TermosFrame = 'starting' | 'terms' | 'answering';
+
+const STAGE: Record<TermosFrame, TermosStage> = { starting: 'iniciando', terms: 'termos', answering: 'respondendo' };
 
 export function frameAt(t: number): TermosFrame {
   return t < TERMS ? 'starting' : t < ANSWER ? 'terms' : 'answering';
@@ -48,9 +50,8 @@ export function AntigravityTermsAnimation({ width }: { width: number }) {
   const frame = frameAt(useScriptStep(STEPS, CYCLE, STILL, still));
   const scale = width / WIDTH;
   const painel = (f: TermosFrame) => (
-    <TermosPainel serverLabel={m.native_news_login_browser_laptop()} starting={f === 'starting'}
-      terms={f === 'terms' ? m.native_news_agy_terms_sample() : null} answering={f === 'answering'} login={false}
-      failed="" error="" cancelDisabled={false} terminal={false}
+    <TermosPainel serverLabel={m.native_news_login_browser_laptop()} stage={STAGE[f]} text={m.native_news_agy_terms_sample()}
+      sending={false} failed="" error="" cancelDisabled={false} terminal={false}
       onAnswer={noop} onLink={noop} onSignIn={noop} onCancel={noop} onOpenTerminal={noop} />
   );
   return (

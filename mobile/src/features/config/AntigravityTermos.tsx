@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as Linking from 'expo-linking';
 import {
-  answerAntigravityTermsForServer, cancelAntigravityTermsForServer, getAntigravityTermsForServer,
+  answerAntigravityTermsForServer, cancelAntigravityTermsForServer, getAntigravityTermsForServer, questionParts,
   startAntigravityTermsForServer, type AntigravityTermsAttempt, type Server,
 } from '@hangar/core';
 import { Sheet } from '../../ui/Sheet';
@@ -27,23 +27,18 @@ const FAILURES: Record<string, () => string> = {
   termos_expirou: m.mobile_antigravity_terms_error_expired,
 };
 
-/** Trechos do texto do agy, com os endereços https que dá para tocar. */
-function parts(text: string): { text: string; link?: string }[] {
-  const out: { text: string; link?: string }[] = [];
-  let last = 0;
-  for (const match of text.matchAll(/https:\/\/[^\s<>"]+/g)) {
-    const raw = match[0].replace(/[.,;:!?)\]]+$/, '');
-    let link: string | undefined;
-    try { const url = new URL(raw); link = url.username || url.password ? undefined : url.href; } catch { link = undefined; }
-    if (!link) continue;
-    out.push({ text: text.slice(last, match.index) }, { text: raw, link });
-    last = match.index + raw.length;
-  }
-  out.push({ text: text.slice(last) });
-  return out.filter((part) => part.text);
-}
-
 type Live = { server: Server; attemptId: string };
+
+/** A etapa que a folha desenha: a do servidor, ou `stuck` quando o Cancelar falhou com a janela ainda aberta. */
+export type TermosStage = AntigravityTermsAttempt['estado'] | 'stuck';
+
+const detail = (a: AntigravityTermsAttempt | null) => a?.estado === 'termos' ? a.texto : a?.estado === 'falhou' ? a.codigo : '';
+// A leitura de 1 s quase sempre traz a mesma etapa: o objeto de antes fica e a folha não redesenha.
+const same = (a: AntigravityTermsAttempt | null, b: AntigravityTermsAttempt) => a?.estado === b.estado && detail(a) === detail(b);
+
+// O terminal escondido pode ter ficado vivo no servidor: a pessoa precisa saber.
+const alertNotClosed = (now: Live, e: unknown) =>
+  Alert.alert(m.mobile_antigravity_terms_title(), `${m.contas_login_servidor({ nome: now.server.label })}\n${fail(e)}`);
 
 /**
  * Termos do Google do agy pela página de contas: o servidor conduz o agy num terminal escondido e
@@ -88,7 +83,7 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
     try {
       const next = await getAntigravityTermsForServer(now.server, ACCOUNT, now.attemptId, controller.signal);
       if (g !== generation.current) return;
-      setAttempt(next);
+      setAttempt((prev) => same(prev, next) ? prev : next);
       setError('');
       if (polling(next)) timer.current = setTimeout(() => void read(g), POLL_MS);
       else settle(next);
@@ -156,9 +151,8 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
       try {
         await cancelAntigravityTermsForServer(now.server, ACCOUNT, now.attemptId);
       } catch (e) {
-        // O terminal escondido pode ter ficado vivo no servidor: a pessoa precisa saber.
         if (dismissed) {
-          Alert.alert(m.mobile_antigravity_terms_title(), `${m.contas_login_servidor({ nome: now.server.label })}\n${fail(e)}`);
+          alertNotClosed(now, e);
           onClose();
           return;
         }
@@ -186,24 +180,20 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
       const now = live.current;
       live.current = null;
       if (now) {
-        void cancelAntigravityTermsForServer(now.server, ACCOUNT, now.attemptId).catch((e: unknown) => {
-          Alert.alert(m.mobile_antigravity_terms_title(), `${m.contas_login_servidor({ nome: now.server.label })}\n${fail(e)}`);
-        });
+        void cancelAntigravityTermsForServer(now.server, ACCOUNT, now.attemptId).catch((e: unknown) => alertNotClosed(now, e));
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uma vez por folha; o contas.tsx remonta por servidor
   }, []);
 
-  const stage = attempt?.estado;
+  const stage: TermosStage | null = stuck ? 'stuck' : busy === 'start' ? 'iniciando' : attempt?.estado ?? null;
   const failed = attempt?.estado === 'falhou' ? (FAILURES[attempt.codigo] ?? m.mobile_antigravity_terms_failed)() : '';
-  const answering = busy === 'answer' || stage === 'respondendo';
 
   return (
     <Sheet open sizes={['large']} scrollable dismissible={busy !== 'cancel'} onDismiss={() => void cancel(true)}>
       <ScrollView contentContainerStyle={styles.root}>
-        <TermosPainel serverLabel={server.label} starting={!stuck && (busy === 'start' || stage === 'iniciando')}
-          terms={!stuck && attempt?.estado === 'termos' ? attempt.texto : null} answering={!stuck && answering} login={!stuck && stage === 'login'}
-          failed={failed} error={error} cancelDisabled={busy === 'cancel'}
+        <TermosPainel serverLabel={server.label} stage={stage} text={attempt?.estado === 'termos' ? attempt.texto : ''}
+          sending={busy === 'answer'} failed={failed} error={error} cancelDisabled={busy === 'cancel'}
           terminal={!!failed || (!!error && !live.current && busy !== 'start')}
           onAnswer={(opcao) => void answer(opcao)} onLink={(link) => void openLink(link)} onSignIn={onSignIn}
           onCancel={() => void cancel()} onOpenTerminal={onOpenTerminal} />
@@ -213,14 +203,14 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
 }
 
 /** O conteúdo da folha dos Termos numa etapa; a animação da novidade desenha o mesmo, sem servidor. */
-export function TermosPainel({ serverLabel, starting, terms, answering, login, failed, error, cancelDisabled, terminal,
+export function TermosPainel({ serverLabel, stage, text, sending, failed, error, cancelDisabled, terminal,
   onAnswer, onLink, onSignIn, onCancel, onOpenTerminal }: {
   serverLabel: string;
-  starting: boolean;
-  /** O texto do agy quando a etapa é a dos Termos. */
-  terms: string | null;
-  answering: boolean;
-  login: boolean;
+  stage: TermosStage | null;
+  /** O texto do agy na etapa dos Termos. */
+  text: string;
+  /** A opção tocada ainda vai ao servidor. */
+  sending: boolean;
   failed: string;
   error: string;
   cancelDisabled: boolean;
@@ -234,24 +224,26 @@ export function TermosPainel({ serverLabel, starting, terms, answering, login, f
 }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
+  const terms = useMemo(() => stage === 'termos' ? questionParts(text) : null, [stage, text]);
+  const answering = stage === 'respondendo' || (sending && stage !== 'stuck');
   return (
     <View style={styles.body}>
       <Text accessibilityRole="header" style={[styles.title, { color: c.text }]}>{m.mobile_antigravity_terms_title()}</Text>
       <Text style={[styles.text, { color: c.muted }]}>{m.contas_login_servidor({ nome: serverLabel })}</Text>
 
-      {starting ? (
+      {stage === 'iniciando' ? (
         <View style={styles.line}>
           <ActivityIndicator color={c.accent} />
           <Text style={[styles.text, { color: c.text }]} accessibilityLiveRegion="polite">{m.mobile_antigravity_terms_starting()}</Text>
         </View>
       ) : null}
 
-      {terms !== null ? (
+      {terms ? (
         <>
           <Text style={[styles.text, { color: c.muted }]}>{m.mobile_antigravity_terms_intro()}</Text>
           <Text selectable style={[styles.terms, { color: c.text, borderColor: c.border, backgroundColor: c.inset }]}>
-            {parts(terms).map((part, i) => part.link ? (
-              <Text key={i} accessibilityRole="link" onPress={() => onLink(part.link!)}
+            {terms.map((part, i) => part.kind === 'link' ? (
+              <Text key={i} accessibilityRole="link" onPress={() => onLink(part.text)}
                 style={[styles.link, { color: c.accentText }]}>{part.text}</Text>
             ) : part.text)}
           </Text>
@@ -271,7 +263,7 @@ export function TermosPainel({ serverLabel, starting, terms, answering, login, f
         </View>
       ) : null}
 
-      {login ? (
+      {stage === 'login' ? (
         <>
           <Text style={[styles.text, { color: c.text }]}>{m.mobile_antigravity_terms_login()}</Text>
           <View style={styles.actions}><Pill icon="LogIn" label={m.contas_entrar()} onPress={onSignIn} /></View>

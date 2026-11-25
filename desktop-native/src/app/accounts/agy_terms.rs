@@ -45,8 +45,8 @@ impl TermsStage {
     pub(super) fn polls(&self) -> bool { matches!(self, Self::Starting | Self::Terms(_) | Self::Answering) }
 
     /// Leitura que saiu antes de a resposta chegar ao servidor ainda mostra os Termos: a resposta já mandada vale.
-    pub(super) fn then(self, read: Self) -> Self {
-        if self == Self::Answering && matches!(read, Self::Terms(_)) { self } else { read }
+    pub(super) fn then(&self, read: Self) -> Self {
+        if *self == Self::Answering && matches!(read, Self::Terms(_)) { Self::Answering } else { read }
     }
 
     pub(crate) fn actions(&self) -> Vec<TermsAction> {
@@ -63,16 +63,19 @@ impl TermsStage {
 
 /// A frase do código de falha do servidor; código que o cliente não conhece fica com a genérica.
 pub(super) fn failed_text(code: Option<&str>) -> String {
-    tr(match code {
-        Some("termos_prazo") => "accounts_agy_terms_error_deadline",
-        Some("termos_tela_desconhecida") => "accounts_agy_terms_error_screen_gone",
-        Some("termos_sem_confirmacao") => "accounts_agy_terms_error_unconfirmed",
-        Some("termos_nao_convergiu") => "accounts_agy_terms_error_no_converge",
-        Some("termos_terminal_falhou") => "accounts_agy_terms_error_terminal",
-        Some("termos_expirou") => "accounts_agy_terms_error_expired",
-        _ => "accounts_agy_terms_failed",
+    terms_tr(match code {
+        Some("termos_prazo") => "error_deadline",
+        Some("termos_tela_desconhecida") => "error_screen_gone",
+        Some("termos_sem_confirmacao") => "error_unconfirmed",
+        Some("termos_nao_convergiu") => "error_no_converge",
+        Some("termos_terminal_falhou") => "error_terminal",
+        Some("termos_expirou") => "error_expired",
+        _ => "failed",
     })
 }
+
+/// As frases do painel são as do Expo (`mobile_antigravity_terms_*`): uma frase, um dicionário.
+pub(super) fn terms_tr(key: &str) -> String { crate::i18n::tr_shared(&format!("mobile_antigravity_terms_{key}"), &[]) }
 
 const TERMS: [&str; 3] = ["antigravity-contas", "default", "termos"];
 
@@ -101,7 +104,7 @@ impl AgyTermsFlow {
         self.busy = false;
         let Err(error) = result else { return true };
         self.closing = true;
-        self.error = Some(if error.code.as_deref() == Some("erro_termos_janela_aberta") { tr("accounts_agy_terms_error_window_open") }
+        self.error = Some(if error.code.as_deref() == Some("erro_termos_janela_aberta") { terms_tr("error_window_open") }
             else { Hangar::setting_failure(&error) });
         false
     }
@@ -232,7 +235,8 @@ impl Hangar {
         self.start_agy_terms(home, window, cx);
     }
 
-    pub(super) fn receive_agy_terms(&mut self, reply: TermsReply, window: &mut Window, cx: &mut Context<Self>) {
+    /// `false` quando nada da tela mudou (resposta de outra vez, leitura com a mesma etapa): não redesenha.
+    pub(super) fn receive_agy_terms(&mut self, reply: TermsReply, window: &mut Window, cx: &mut Context<Self>) -> bool {
         match reply {
             TermsReply::Started(turn, result) => {
                 let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.turn == turn) else {
@@ -241,7 +245,7 @@ impl Hangar {
                         && let Some(attempt) = value.get("attempt_id").and_then(Value::as_str) {
                         close_attempt(&self.runtime, api, attempt.to_owned());
                     }
-                    return;
+                    return false;
                 };
                 flow.busy = false;
                 match result {
@@ -256,39 +260,39 @@ impl Hangar {
                 }
             }
             TermsReply::Read(turn, result) => {
-                let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.turn == turn) else { return };
+                let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.turn == turn) else { return false };
                 match result {
                     Ok(value) => match TermsStage::read(&value) {
                         Some(stage) => {
-                            let next = flow.stage.clone().then(stage);
-                            if next != flow.stage || flow.read_failed { flow.error = None; }
-                            (flow.stage, flow.read_failed) = (next, false);
+                            let next = flow.stage.then(stage);
+                            if next == flow.stage && !flow.read_failed { return false; }
+                            (flow.stage, flow.error, flow.read_failed) = (next, None, false);
                         }
                         None => (flow.stage, flow.error) = (TermsStage::Failed(None), Some(tr("invalid_response"))),
                     },
                     // O servidor não tem mais a tentativa (reiniciou, ou outra a trocou): esperar por ela não adianta.
                     Err(error) if error.status == Some(404) =>
-                        (flow.stage, flow.error) = (TermsStage::Failed(None), Some(tr("accounts_agy_terms_attempt_lost"))),
+                        (flow.stage, flow.error) = (TermsStage::Failed(None), Some(terms_tr("attempt_lost"))),
                     Err(error) if error.status.is_some_and(|s| s < 500) =>
                         (flow.stage, flow.error) = (TermsStage::Failed(None), Some(Self::setting_failure(&error))),
                     Err(error) => (flow.error, flow.read_failed) = (Some(Self::failure(&error)), true),
                 }
                 if flow.stage == TermsStage::Done {
                     self.accounts.terms = None;
-                    self.accounts.outcome = Some((tr("accounts_agy_terms_done"), false));
+                    self.accounts.outcome = Some((terms_tr("done"), false));
                     self.load_accounts(true, cx);
                     self.root_focus.focus(window, cx);
                 }
             }
             TermsReply::Cancelled(turn, result) => {
-                let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.turn == turn) else { return };
+                let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.turn == turn) else { return false };
                 if flow.cancelled(result) {
                     self.accounts.terms = None;
                     self.root_focus.focus(window, cx);
                 }
             }
             TermsReply::Answered(attempt, result) => {
-                let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.attempt.as_deref() == Some(attempt.as_str())) else { return };
+                let Some(flow) = self.accounts.terms.as_mut().filter(|f| f.attempt.as_deref() == Some(attempt.as_str())) else { return false };
                 flow.busy = false;
                 match result {
                     Ok(_) => if matches!(flow.stage, TermsStage::Terms(_)) { flow.stage = TermsStage::Answering; },
@@ -298,6 +302,7 @@ impl Hangar {
                 }
             }
         }
+        true
     }
 
     /// O painel no lugar da lista: a etapa que o servidor publicou e os botões dela.
@@ -320,12 +325,12 @@ pub(crate) fn terms_buttons(actions: Vec<TermsAction>, busy: bool, home: bool, m
     actions.into_iter().rev().map(|action| {
         let button = match action {
             TermsAction::Accept(option) => Button::new(SharedString::from(format!("accounts-agy-terms-accept-{option}"))).primary().small()
-                .label(tr(if option == 1 { "accounts_agy_terms_accept_share" } else { "accounts_agy_terms_accept_private" })).disabled(busy),
-            TermsAction::Cancel => Button::new("accounts-agy-terms-cancel").outline().small().label(tr("accounts_agy_terms_cancel")),
+                .label(terms_tr(if option == 1 { "accept_share" } else { "accept_private" })).disabled(busy),
+            TermsAction::Cancel => Button::new("accounts-agy-terms-cancel").outline().small().label(terms_tr("cancel")),
             TermsAction::Back => Button::new("accounts-agy-terms-back").outline().small().label(tr("settings_back")),
             TermsAction::SignIn => Button::new("accounts-agy-terms-sign-in").primary().small().label(tr("accounts_agy_sign_in")),
             TermsAction::OpenTerminal => Button::new("accounts-agy-terms-terminal").primary().small().icon(IconName::SquareTerminal)
-                .label(tr("accounts_agy_terms_open_terminal")).disabled(!home),
+                .label(terms_tr("open_terminal")).disabled(!home),
         };
         wire(action, button)
     }).collect()
@@ -333,31 +338,25 @@ pub(crate) fn terms_buttons(actions: Vec<TermsAction>, busy: bool, home: bool, m
 
 /// O painel dos Termos numa etapa, com os botões já ligados. `server` é o nome da máquina onde o agy roda.
 pub(crate) fn terms_panel(stage: &TermsStage, error: Option<String>, server: &str, buttons: Vec<Button>) -> Div {
-    let (color, _) = theme::provider("antigravity");
-    let logo = div().size(px(36.)).flex_shrink_0().rounded(px(10.)).bg(color.opacity(0.16)).flex().items_center()
-        .justify_center().children(chrome::provider_logo("antigravity", 20., color));
-    let head = div().flex().items_center().gap(px(12.)).child(logo)
-        .child(div().flex().flex_col().gap(px(2.)).min_w_0()
-            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(tr("accounts_agy_terms_title")))
-            .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("accounts_login_server").replace("{server}", server))));
+    let head = super::antigravity::agy_panel_head(terms_tr("title"), server);
     let line = |text: String| div().text_size(px(13.)).whitespace_normal().child(text);
     let waiting = |id: &'static str, text: String| div().flex().items_center().gap(px(8.)).text_size(px(13.)).text_color(theme::muted())
         .child(chrome::Spinner::new(id, IconName::LoaderCircle, px(14.), theme::accent())).child(text);
     let mut panel = settings_box().p(px(20.)).gap(px(16.)).child(head);
     panel = match stage {
-        TermsStage::Starting => panel.child(waiting("accounts-agy-terms-starting", tr("accounts_agy_terms_starting"))),
+        TermsStage::Starting => panel.child(waiting("accounts-agy-terms-starting", terms_tr("starting"))),
         TermsStage::Terms(text) => {
             // Os links dos Termos abrem fora do app, pelo mesmo leitor do cartão de opções.
             let links = crate::interaction::question_links(text).into_iter().enumerate().map(|(i, url)|
                 Button::new(SharedString::from(format!("accounts-agy-terms-link-{i}"))).small().ghost().icon(IconName::ExternalLink)
                     .label(url.clone()).on_click(move |_, _, cx| cx.open_url(&url)));
-            panel.child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr("accounts_agy_terms_intro")))
+            panel.child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(terms_tr("intro")))
                 .child(div().p(px(12.)).rounded(px(8.)).border_1().border_color(theme::border()).bg(theme::inset())
                     .text_size(px(12.5)).whitespace_normal().child(text.clone()))
                 .child(div().flex().flex_col().items_start().gap(px(4.)).children(links))
         }
-        TermsStage::Answering => panel.child(waiting("accounts-agy-terms-answering", tr("accounts_agy_terms_answering"))),
-        TermsStage::Login => panel.child(line(tr("accounts_agy_terms_login"))),
+        TermsStage::Answering => panel.child(waiting("accounts-agy-terms-answering", terms_tr("answering"))),
+        TermsStage::Login => panel.child(line(terms_tr("login"))),
         TermsStage::Failed(code) => panel.child(line(failed_text(code.as_deref())).text_color(theme::danger())),
         TermsStage::Done => panel,
     };
@@ -367,8 +366,8 @@ pub(crate) fn terms_panel(stage: &TermsStage, error: Option<String>, server: &st
 
 #[cfg(test)]
 mod tests {
-    use super::{AgyTermsFlow, TermsAction::*, TermsStage, failed_text};
-    use crate::{api::Failure, i18n::tr};
+    use super::{AgyTermsFlow, TermsAction::*, TermsStage, failed_text, terms_tr};
+    use crate::api::Failure;
     use serde_json::json;
 
     #[test]
@@ -412,14 +411,24 @@ mod tests {
 
     #[test]
     fn each_failure_code_has_its_sentence_and_an_unknown_one_the_generic() {
-        assert_eq!(failed_text(Some("termos_prazo")), tr("accounts_agy_terms_error_deadline"));
-        assert_eq!(failed_text(Some("termos_tela_desconhecida")), tr("accounts_agy_terms_error_screen_gone"));
-        assert_eq!(failed_text(Some("termos_sem_confirmacao")), tr("accounts_agy_terms_error_unconfirmed"));
-        assert_eq!(failed_text(Some("termos_nao_convergiu")), tr("accounts_agy_terms_error_no_converge"));
-        assert_eq!(failed_text(Some("termos_terminal_falhou")), tr("accounts_agy_terms_error_terminal"));
-        assert_eq!(failed_text(Some("termos_expirou")), tr("accounts_agy_terms_error_expired"));
-        assert_eq!(failed_text(Some("termos_novo")), tr("accounts_agy_terms_failed"));
-        assert_eq!(failed_text(None), tr("accounts_agy_terms_failed"));
+        assert_eq!(failed_text(Some("termos_prazo")), terms_tr("error_deadline"));
+        assert_eq!(failed_text(Some("termos_tela_desconhecida")), terms_tr("error_screen_gone"));
+        assert_eq!(failed_text(Some("termos_sem_confirmacao")), terms_tr("error_unconfirmed"));
+        assert_eq!(failed_text(Some("termos_nao_convergiu")), terms_tr("error_no_converge"));
+        assert_eq!(failed_text(Some("termos_terminal_falhou")), terms_tr("error_terminal"));
+        assert_eq!(failed_text(Some("termos_expirou")), terms_tr("error_expired"));
+        assert_eq!(failed_text(Some("termos_novo")), terms_tr("failed"));
+        assert_eq!(failed_text(None), terms_tr("failed"));
+    }
+
+    // `tr_shared` devolve a chave crua quando ela não existe, e a trava do i18n só confere `tr`.
+    #[test]
+    fn every_terms_sentence_exists_in_the_expo_dictionary() {
+        for key in ["title", "starting", "intro", "accept_share", "accept_private", "cancel", "answering", "login", "done", "failed",
+            "open_terminal", "error_deadline", "error_screen_gone", "error_unconfirmed", "error_no_converge", "error_terminal",
+            "error_expired", "error_window_open", "attempt_lost", "pending"] {
+            assert_ne!(terms_tr(key), format!("mobile_antigravity_terms_{key}"), "{key}");
+        }
     }
 
     #[test]
@@ -429,7 +438,7 @@ mod tests {
         let open = Failure { status: Some(500), detail: "a janela escondida dos Termos não fechou".into(), retry_after: None, uncertain: false,
             code: Some("erro_termos_janela_aberta".into()) };
         assert!(!flow.cancelled(Err(open)), "o painel fica");
-        assert_eq!(flow.error, Some(tr("accounts_agy_terms_error_window_open")));
+        assert_eq!(flow.error, Some(terms_tr("error_window_open")));
         assert_eq!(flow.actions(), [Cancel], "só o Cancelar, sem Aceitar de uma tentativa que o servidor já soltou");
         assert_eq!(flow.attempt.as_deref(), Some("t1"), "o segundo Cancelar vai à mesma tentativa");
         assert!(flow.cancelled(Ok(serde_json::json!({"ok": true}))), "o DELETE que deu certo fecha");
