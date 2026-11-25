@@ -15,6 +15,7 @@ use choices::{AccountDone, Catalog, Jev, Motor, QuotaLine};
 use resume::{ArchiveEntry, PreviewLine};
 use super::accounts::ModelChoice;
 use super::device::Remote;
+use std::cell::Cell;
 use super::machines::{FocusOnClick, enter_to_focused};
 use super::settings::Disclosure;
 use super::sidebar::{Target, wrap_step};
@@ -748,6 +749,11 @@ pub(in crate::app) struct NewSession {
     /// Repositórios com as cópias abertas no menu de pasta, e com as já mescladas à mostra.
     copies_open: HashSet<String>,
     merged_open: HashSet<String>,
+    /// Medidas do último desenho da tela sem sessão: altura da área, do conteúdo e da linha das recentes, largura da área
+    /// e a largura da área em que a linha foi medida.
+    pub(in crate::app) room: Rc<Cell<[f32; 5]>>,
+    /// As recentes só entram se couberem sem empurrar o compositor para fora da área.
+    pub(in crate::app) recents_fit: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -829,7 +835,8 @@ impl NewSession {
             archive: Remote::default(), want_resume: false, conversation: String::new(), before: None, preview: Remote::default(),
             preview_scroll: ScrollHandle::new(), resuming: false, baton, baton_by_model: false, baton_open: false,
             baton_preview: Remote::default(), suggested_name: String::new(), prewarm, tags: HashMap::new(),
-            recent: Vec::new(), repos: Remote::default(), copies_open: HashSet::new(), merged_open: HashSet::new(), _subscriptions: subscriptions,
+            recent: Vec::new(), repos: Remote::default(), copies_open: HashSet::new(), merged_open: HashSet::new(),
+            room: Rc::new(Cell::new([0.; 5])), recents_fit: false, _subscriptions: subscriptions,
         };
         dialog.start_prewarm(cx);
         dialog
@@ -2679,11 +2686,19 @@ impl NewSession {
     }
 
     /// As pastas mais usadas nesta máquina, entre o título e o compositor: um clique escolhe a pasta, como o menu dela.
-    fn render_recents(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.baton.is_some() || self.scheduled { return None; }
+    fn recent_folders(&self) -> Vec<String> {
+        if self.baton.is_some() || self.scheduled { return Vec::new(); }
         let repos = self.repos.ok().map(Vec::as_slice).unwrap_or_default();
         let picked = self.picked.as_deref().filter(|p| *p != NO_PROJECT_CWD);
-        let recents = recents::recent_projects(&self.recent, repos, picked, 4);
+        recents::recent_projects(&self.recent, repos, picked, 4)
+    }
+
+    /// Há recentes a mostrar e elas cabem: o mesmo teste que decide se a linha é desenhada.
+    pub(in crate::app) fn recents_drawn(&self) -> bool { self.recents_fit && !self.recent_folders().is_empty() }
+
+    fn render_recents(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.recents_fit { return None; }
+        let recents = self.recent_folders();
         if recents.is_empty() { return None; }
         let tiles = recents.into_iter().map(|path| {
             let name = basename(&path).to_owned();
@@ -2698,8 +2713,15 @@ impl NewSession {
                 .on_click(cx.listener(move |this, _, window, cx| this.pick(pick.clone(), window, cx)))
                 .into_any_element()
         });
-        Some(div().id("new-chat-recents").role(Role::Group).aria_label(tr("new_chat_recents")).pt(px(8.))
+        let room = self.room.clone();
+        Some(div().id("new-chat-recents").role(Role::Group).aria_label(tr("new_chat_recents")).pt(px(8.)).relative()
             .flex().flex_wrap().justify_center().items_center().gap(px(8.))
+            // A altura da linha (que quebra em janela estreita) entra na conta de caber da tela.
+            .child(canvas(move |bounds, _, _| {
+                let mut m = room.get();
+                (m[2], m[4]) = (f32::from(bounds.size.height), m[3]);
+                room.set(m);
+            }, |_, _, _, _| {}).absolute().inset_0())
             .child(div().text_size(px(11.5)).text_color(theme::faint()).child(tr("new_chat_recents")))
             .children(tiles)
             .into_any_element())
@@ -3589,9 +3611,19 @@ impl Hangar {
         let sessions = if machine == self.active_key() { Some(self.sessions.as_slice()) }
             else { self.remote.get(&machine).map(|list| list.sessions.as_slice()) };
         let recent = sessions.map(recents::recent_cwds).unwrap_or_default();
+        // O compositor e as pílulas têm a vez: as recentes entram só se o conteúdo sem elas, somado à linha delas, cabe na
+        // área. A conta parte do conteúdo sem a linha, que não muda com a decisão: ela não fica indo e voltando.
+        let room = view.read(cx).room.clone();
+        let [area, content, row, width, row_width] = room.get();
+        let drawn = view.read(cx).recents_drawn();
+        let without = content - if drawn { row } else { 0. };
+        // A linha medida noutra largura (antes de a janela mudar) não vale: estima-se uma linha só, e a medida corrige.
+        let needed = if row > 0. && (row_width - width).abs() < 0.5 { row } else { 36. };
+        let fit = area > 0. && without + needed <= area;
         let (top, bottom, account_note, note) = view.update(cx, |view, cx| {
             if view.tags != *tags { view.tags = tags.clone(); }
             if view.recent != recent { view.recent = recent; }
+            view.recents_fit = fit;
             (view.render_top_pills(hint, cx), view.render_bottom_pills(cx), view.render_account_note(cx), view.note())
         });
         // Anexo recusado (grande demais, ilegível) avisa aqui, onde a tela sem sessão mostra os avisos dela.
@@ -3600,8 +3632,24 @@ impl Hangar {
         // A tela chega como um objeto só, descendo 10 px até o lugar (o `settle-down` do kit, no tempo do `fade-in`).
         let settle = motion::enter("new-chat-in", motion::FADE_IN, window, cx);
         // O fundo pertence à janela; a tela vazia nunca o cobre com uma superfície opaca. O compositor fica um pouco acima do meio.
-        div().id("new-chat").size_full().overflow_y_scroll().flex().flex_col()
-            .child(motion::settle_down(div(), settle).my_auto().pb(rems(4.)).w_full().flex_shrink_0().flex().flex_col()
+        // Mede a área e o conteúdo; mudou, redesenha a janela e a faixa de baixo (a tela é desenhada por uma das duas).
+        let (hangar, strip) = (cx.entity_id(), self.panes.bottom.entity_id());
+        let measure = move |slot: usize| {
+            let room = room.clone();
+            canvas(move |bounds, _, cx| {
+                let mut m = room.get();
+                let (height, width) = (f32::from(bounds.size.height), f32::from(bounds.size.width));
+                let changed = (m[slot] - height).abs() > 0.5 || slot == 0 && (m[3] - width).abs() > 0.5;
+                if changed {
+                    m[slot] = height;
+                    if slot == 0 { m[3] = width; }
+                    room.set(m);
+                    App::notify(cx, hangar); App::notify(cx, strip);
+                }
+            }, |_, _, _, _| {}).absolute().inset_0()
+        };
+        div().id("new-chat").size_full().overflow_y_scroll().flex().flex_col().relative().child(measure(0))
+            .child(motion::settle_down(div(), settle).my_auto().pb(rems(4.)).w_full().flex_shrink_0().flex().flex_col().relative().child(measure(1))
                 .child(landing_column(self.render_home_usage(cx)).mb_6())
                 .child(landing_column(popup::anchor(top, super::landing::TOP)))
                 .child(composer)
