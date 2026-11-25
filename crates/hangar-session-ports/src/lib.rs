@@ -22,6 +22,8 @@ pub struct Listener {
     pub pid: u32,
     /// Nome curto do executável (o `comm` no Linux).
     pub process: String,
+    /// Onde escuta: o túnel escolhe por ele o loopback que chega a este processo (`owners::dial_first`).
+    pub addr: IpAddr,
 }
 
 /// Socket em LISTEN alcançável pelo loopback que nenhum candidato segura.
@@ -30,11 +32,12 @@ pub struct Outside {
     pub port: u16,
     /// O inode do socket no Linux; `None` onde o dono não se procura (Windows).
     pub inode: Option<u64>,
+    pub addr: IpAddr,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Scan {
-    /// Uma por (porta, pid), em ordem de porta e pid.
+    /// Uma por (porta, pid, endereço), em ordem de porta e pid.
     pub listeners: Vec<Listener>,
     /// Em ordem de porta.
     pub outside: Vec<Outside>,
@@ -103,11 +106,12 @@ fn reachable_locally(ip: IpAddr) -> bool {
     }
 }
 
-/// A mesma porta do mesmo pid em v4 e v6 vira uma entrada; em ordem de porta e pid.
+/// O mesmo socket visto duas vezes (fd duplicado) sai uma vez; v4 e v6 do mesmo pid ficam, cada um com o seu
+/// endereço, e viram uma linha só na lista (`owners::assign`). Em ordem de porta e pid.
 fn sorted(found: impl IntoIterator<Item = Listener>) -> Vec<Listener> {
     let mut list: Vec<Listener> = found.into_iter().collect();
-    list.sort_by_key(|l| (l.port, l.pid));
-    list.dedup_by_key(|l| (l.port, l.pid));
+    list.sort_by_key(|l| (l.port, l.pid, l.addr));
+    list.dedup_by_key(|l| (l.port, l.pid, l.addr));
     list
 }
 
@@ -126,9 +130,11 @@ mod tests {
     }
 
     #[test]
-    fn same_port_and_pid_twice_comes_out_once_and_another_pid_stays() {
-        let l = |port, pid| Listener { port, pid, process: "p".into() };
+    fn same_socket_twice_comes_out_once_and_another_pid_or_address_stays() {
+        let at = |port, pid, addr: &str| Listener { port, pid, process: "p".into(), addr: addr.parse().unwrap() };
+        let l = |port, pid| at(port, pid, "127.0.0.1");
         assert_eq!(sorted([l(5432, 8), l(3000, 9), l(5432, 7), l(5432, 8)]), vec![l(3000, 9), l(5432, 7), l(5432, 8)]);
+        assert_eq!(sorted([at(3000, 9, "::"), l(3000, 9)]), vec![l(3000, 9), at(3000, 9, "::")], "o endereço de cada família sobrevive");
     }
 
     #[test]

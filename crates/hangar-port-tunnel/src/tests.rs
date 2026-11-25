@@ -1,6 +1,6 @@
 use super::*;
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use axum::Router;
 use axum::extract::ws::WebSocketUpgrade;
@@ -36,7 +36,7 @@ async fn tunnel(port: u16, ended: Option<oneshot::Receiver<()>>) -> Client {
     let app = Router::new().route("/", get(move |ws: WebSocketUpgrade| {
         let ended = ended.lock().unwrap().take();
         async move {
-            let tcp = connect(port).await.unwrap();
+            let tcp = connect(port, &dial_order(None, None)).await.unwrap();
             ws.on_upgrade(move |socket| relay(socket, tcp, async move {
                 match ended {
                     Some(rx) => { let _ = rx.await; }
@@ -150,6 +150,78 @@ async fn ended_access_drops_the_tunnel() {
     assert_eq!(next(&mut client).await, None, "o túnel continuou aberto depois do fim do acesso");
 }
 
+#[test]
+fn host_of_accepts_only_the_loopback_of_each_family() {
+    let v4 = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let v6 = Some(IpAddr::V6(Ipv6Addr::LOCALHOST));
+    assert_eq!(host_of(Some("port=3000&host=127.0.0.1")), Ok(v4));
+    for query in ["host=::1", "host=%3A%3A1", "host=%5B%3A%3A1%5D", "host=[::1]"] {
+        assert_eq!(host_of(Some(query)), Ok(v6), "{query}");
+    }
+    assert_eq!(host_of(Some("port=3000")), Ok(None));
+    assert_eq!(host_of(None), Ok(None));
+    for query in ["host=", "host=localhost", "host=127.0.0.2", "host=0.0.0.0", "host=::", "host=::ffff:127.0.0.1", "host=10.0.0.1", "host=example.com"] {
+        assert_eq!(host_of(Some(query)), Err(HostRefused), "{query}");
+    }
+}
+
+#[test]
+fn the_asked_host_is_dialed_alone_and_without_it_the_session_family_comes_first() {
+    let (v4, v6, other): (IpAddr, IpAddr, IpAddr) = (Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into(), Ipv4Addr::new(127, 0, 0, 2).into());
+    assert_eq!(dial_order(Some(v6), Some(v4)), vec![v6]);
+    assert_eq!(dial_order(Some(v4), None), vec![v4]);
+    assert_eq!(dial_order(None, None), vec![v4, v6]);
+    assert_eq!(dial_order(None, Some(v6)), vec![v6, v4]);
+    assert_eq!(dial_order(None, Some(v4)), vec![v4, v6]);
+    assert_eq!(dial_order(None, Some(other)), vec![other, v4, v6]);
+}
+
+/// Dois servidores na mesma porta, um em `127.0.0.1` e outro em `[::1]`, que se anunciam ao aceitar. `None` sem
+/// IPv6 no loopback ou sem achar uma porta livre nas duas famílias.
+async fn two_families() -> Option<u16> {
+    for _ in 0..20 {
+        let Ok(v6) = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).await else { return None };
+        let port = v6.local_addr().unwrap().port();
+        let Ok(v4) = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await else { continue };
+        for (listener, tag) in [(v4, &b"v4"[..]), (v6, &b"v6"[..])] {
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await { let _ = stream.write_all(tag).await; }
+            });
+        }
+        return Some(port);
+    }
+    None
+}
+
+async fn answer(port: u16, order: &[IpAddr]) -> Vec<u8> {
+    let mut tcp = connect(port, order).await.expect("conecta");
+    let mut tag = [0u8; 2];
+    tokio::time::timeout(WAIT, tcp.read_exact(&mut tag)).await.expect("prazo").unwrap();
+    tag.to_vec()
+}
+
+#[tokio::test]
+async fn each_family_reaches_only_its_own_server() {
+    // Máquina sem IPv6 no loopback: não há o que provar.
+    let Some(port) = two_families().await else { return };
+    let (v4, v6): (IpAddr, IpAddr) = (Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into());
+    assert_eq!(answer(port, &dial_order(Some(v6), None)).await, b"v6");
+    assert_eq!(answer(port, &dial_order(Some(v4), None)).await, b"v4");
+    // Sem `host`, o de sempre é o IPv4; a família da sessão vem antes quando a lista a conhece.
+    assert_eq!(answer(port, &dial_order(None, None)).await, b"v4");
+    assert_eq!(answer(port, &dial_order(None, Some(v6))).await, b"v6");
+}
+
+#[tokio::test]
+async fn an_asked_host_never_falls_back_to_the_other_family() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Outro programa no [::1] dessa porta tornaria a prova ambígua.
+    if TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await.is_ok() { return }
+    assert!(connect(port, &dial_order(Some(Ipv6Addr::LOCALHOST.into()), None)).await.is_err(), "discou o 127.0.0.1 no lugar do [::1]");
+    connect(port, &dial_order(Some(Ipv4Addr::LOCALHOST.into()), None)).await.expect("o 127.0.0.1 pedido");
+}
+
 #[tokio::test]
 async fn connect_falls_back_to_ipv6_loopback() {
     // Máquina sem IPv6 no loopback: não há o que provar.
@@ -158,6 +230,6 @@ async fn connect_falls_back_to_ipv6_loopback() {
     // Outro programa no mesmo número em IPv4 tornaria a prova ambígua.
     if TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.is_ok() { return }
     let accepted = tokio::spawn(async move { listener.accept().await.is_ok() });
-    connect(port).await.expect("o [::1] não foi tentado");
+    connect(port, &dial_order(None, None)).await.expect("o [::1] não foi tentado");
     assert!(accepted.await.unwrap());
 }

@@ -4,6 +4,7 @@
 //! servidores da pessoa. Quem escuta fora disso (`setsid`, outro pai) é da sessão cuja
 //! `CP_SESSION_KEY` herdou; navegador com `--remote-debugging-port` nunca conta.
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -112,7 +113,7 @@ pub fn owned(roots: &BTreeMap<String, Vec<Root>>, excluded: &HashSet<u32>, child
 
 /// Um socket em LISTEN desta rodada; `pid` vazio = dono desconhecido (outro usuário, fora do teto).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Socket { pub port: u16, pub pid: Option<u32>, pub process: String }
+pub struct Socket { pub port: u16, pub pid: Option<u32>, pub process: String, pub addr: IpAddr }
 
 /// Teto de fds lidos por varredura atrás do dono de um socket de fora.
 pub const FD_BUDGET: usize = 50_000;
@@ -154,8 +155,8 @@ pub fn resolve(cache: &mut Outsiders, scan: &Scan, alive: &dyn Fn(u32) -> bool,
         }
     }
     let holder = |inode: Option<u64>| match cache.inodes.get(&inode?) { Some(Holder::Pid(pid)) => Some(*pid), _ => None };
-    let mut sockets: Vec<Socket> = scan.listeners.iter().map(|l| Socket { port: l.port, pid: Some(l.pid), process: l.process.clone() })
-        .chain(scan.outside.iter().map(|o| Socket { port: o.port, pid: holder(o.inode), process: String::new() }))
+    let mut sockets: Vec<Socket> = scan.listeners.iter().map(|l| Socket { port: l.port, pid: Some(l.pid), process: l.process.clone(), addr: l.addr })
+        .chain(scan.outside.iter().map(|o| Socket { port: o.port, pid: holder(o.inode), process: String::new(), addr: o.addr }))
         .collect();
     let seen: HashSet<u32> = sockets.iter().filter_map(|s| s.pid).collect();
     cache.procs.retain(|pid, _| seen.contains(pid));
@@ -163,7 +164,7 @@ pub fn resolve(cache: &mut Outsiders, scan: &Scan, alive: &dyn Fn(u32) -> bool,
     for socket in sockets.iter_mut().filter(|s| s.process.is_empty()) {
         if let Some(found) = socket.pid.and_then(|pid| cache.procs.get(&pid)) { socket.process = found.process.clone(); }
     }
-    sockets.sort_by_key(|s| (s.port, s.pid));
+    sockets.sort_by_key(|s| (s.port, s.pid, s.addr));
     sockets
 }
 
@@ -171,16 +172,7 @@ pub fn resolve(cache: &mut Outsiders, scan: &Scan, alive: &dyn Fn(u32) -> bool,
 /// excluídos, entra na sessão da chave que herdou. `shared`: outro socket na mesma porta não é dela.
 pub fn assign(owned: &BTreeMap<String, BTreeSet<u32>>, keys: &HashMap<String, String>, excluded: &HashSet<u32>,
               sockets: &[Socket], procs: &HashMap<u32, ProcessInfo>) -> BTreeMap<String, Vec<PortEntry>> {
-    let in_tree: HashSet<u32> = owned.values().flatten().copied().collect();
-    let mut pids = owned.clone();
-    for pid in sockets.iter().filter_map(|s| s.pid).filter(|pid| !in_tree.contains(pid) && !excluded.contains(pid)) {
-        if let Some(name) = procs.get(&pid).and_then(|p| p.session_key.as_ref()).and_then(|key| keys.get(key)) {
-            pids.entry(name.clone()).or_default().insert(pid);
-        }
-    }
-    let devtools = |pid: &u32| procs.get(pid).is_some_and(|p| p.devtools);
-    pids.into_iter().filter_map(|(name, mut mine)| {
-        mine.retain(|pid| !devtools(pid));
+    session_pids(owned, keys, excluded, sockets, procs).into_iter().filter_map(|(name, mine)| {
         let ours = |s: &Socket| s.pid.is_some_and(|pid| mine.contains(&pid));
         let mut ports: BTreeMap<u16, PortEntry> = BTreeMap::new();
         for s in sockets.iter().filter(|s| ours(s)) {
@@ -189,6 +181,66 @@ pub fn assign(owned: &BTreeMap<String, BTreeSet<u32>>, keys: &HashMap<String, St
         for entry in ports.values_mut() { entry.shared = sockets.iter().any(|s| s.port == entry.port && !ours(s)); }
         (!ports.is_empty()).then(|| (name, ports.into_values().collect()))
     }).collect()
+}
+
+/// Os pids de cada sessão pela regra de `assign`: árvore e escopo, a chave herdada, sem DevTools.
+fn session_pids(owned: &BTreeMap<String, BTreeSet<u32>>, keys: &HashMap<String, String>, excluded: &HashSet<u32>,
+                sockets: &[Socket], procs: &HashMap<u32, ProcessInfo>) -> BTreeMap<String, BTreeSet<u32>> {
+    let in_tree: HashSet<u32> = owned.values().flatten().copied().collect();
+    let mut pids = owned.clone();
+    for pid in sockets.iter().filter_map(|s| s.pid).filter(|pid| !in_tree.contains(pid) && !excluded.contains(pid)) {
+        if let Some(name) = procs.get(&pid).and_then(|p| p.session_key.as_ref()).and_then(|key| keys.get(key)) {
+            pids.entry(name.clone()).or_default().insert(pid);
+        }
+    }
+    let devtools = |pid: &u32| procs.get(pid).is_some_and(|p| p.devtools);
+    for mine in pids.values_mut() { mine.retain(|pid| !devtools(pid)); }
+    pids
+}
+
+/// Os loopbacks que o túnel tenta, na ordem. O `127.0.0.2` alcança um `0.0.0.0` quando outro processo segura o
+/// `127.0.0.1` da porta (o `portproxy` do Windows, por exemplo).
+const DIAL: [IpAddr; 3] = [IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2))];
+
+/// Quanto um socket em `addr` vence para uma conexão a `to` (menor vence); `None`: não a recebe. O endereço exato
+/// vence o "qualquer" da mesma família (no Windows o `127.0.0.1` de outro processo tapa o `0.0.0.0`), e o `::` de
+/// duas pilhas só recebe IPv4 sem nenhum socket IPv4 na porta.
+fn rank(addr: IpAddr, to: IpAddr) -> Option<u8> {
+    let addr = match addr { IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(addr, IpAddr::V4), v4 => v4 };
+    if addr == to { return Some(0); }
+    if !addr.is_unspecified() { return None; }
+    match (addr.is_ipv4(), to.is_ipv4()) {
+        (true, true) | (false, false) => Some(1),
+        (false, true) => Some(2),
+        (true, false) => None,
+    }
+}
+
+/// O primeiro loopback de `DIAL` em que só sockets `ours` disputam a conexão, entre os sockets de uma porta.
+/// `None`: nenhum chega só a eles, e o túnel segue a ordem de sempre.
+pub fn reach(sockets: &[&Socket], ours: impl Fn(&Socket) -> bool) -> Option<IpAddr> {
+    DIAL.into_iter().find(|to| {
+        let ranked: Vec<(u8, &Socket)> = sockets.iter().filter_map(|s| Some((rank(s.addr, *to)?, *s))).collect();
+        let Some(best) = ranked.iter().map(|(r, _)| *r).min() else { return false };
+        ranked.iter().filter(|(r, _)| *r == best).all(|&(_, s)| ours(s))
+    })
+}
+
+/// O loopback a discar primeiro em cada porta de sessão, quando não é o `127.0.0.1` de sempre. Porta de duas sessões
+/// fica com a primeira, em ordem de nome.
+pub fn dial_first(owned: &BTreeMap<String, BTreeSet<u32>>, keys: &HashMap<String, String>, excluded: &HashSet<u32>,
+                  sockets: &[Socket], procs: &HashMap<u32, ProcessInfo>) -> HashMap<u16, IpAddr> {
+    let mut out = HashMap::new();
+    for mine in session_pids(owned, keys, excluded, sockets, procs).values() {
+        let ours = |s: &Socket| s.pid.is_some_and(|pid| mine.contains(&pid));
+        let ports: BTreeSet<u16> = sockets.iter().filter(|s| ours(s)).map(|s| s.port).collect();
+        for port in ports {
+            let here: Vec<&Socket> = sockets.iter().filter(|s| s.port == port).collect();
+            let Some(ip) = reach(&here, &ours) else { continue };
+            if ip != DIAL[0] { out.entry(port).or_insert(ip); }
+        }
+    }
+    out
 }
 
 /// A chave de runtime de cada linha, para o pid que a herdou (`assign`).

@@ -28,7 +28,7 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   dono só entre os pids candidatos, nunca em todos os processos da máquina. No Linux lê
   `/proc/net/tcp{,6}` e os fds dos candidatos; no Windows usa `GetExtendedTcpTable` dentro do
   processo. Vale só endereço de loopback ou "qualquer" (`0.0.0.0`, `::`), que é o que o túnel
-  alcança, e v4 e v6 da mesma porta viram uma entrada. Quem dá a porta à sessão é `list/ports.rs`,
+  alcança, e v4 e v6 da mesma porta viram uma entrada na lista, guardando cada endereço para o túnel. Quem dá a porta à sessão é `list/ports.rs`,
   nesta ordem:
   - o escopo systemd próprio da sessão (`tmux-spawn-*.scope` do pane, `run-*.scope` do cano), que
     pega o `nohup … &` adotado pelo init;
@@ -55,14 +55,26 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   (`runtime/process.rs`), numa unidade `run-*.scope` só dele. O servidor que perdeu o pai aparece
   também em sessão sem terminal. Sem `systemd-run` ou fora do Linux, sobra a descendência do
   `cano.pid`, e o processo adotado pelo init some da lista.
-- **Túnel.** `GET /api/port-tunnel?port=N` com upgrade WebSocket. Cada WebSocket é uma conexão TCP
-  com `127.0.0.1:N` (ou `[::1]:N`) desta máquina, com bytes crus nos dois sentidos
-  (`hangar-port-tunnel`). Respostas antes do upgrade:
+- **Túnel.** `GET /api/port-tunnel?port=N[&host=127.0.0.1|::1]` com upgrade WebSocket. Cada WebSocket é
+  uma conexão TCP com o loopback desta máquina, com bytes crus nos dois sentidos (`hangar-port-tunnel`).
+  - Com `host` (a página pediu um IP: `http://[::1]:5173`), disca só ele, sem tentar a outra família. O
+    SOCKS do nativo manda `host` só para IP explícito; nome, `0.0.0.0` e `::` vão sem ele. Servidor
+    antigo ignora o parâmetro, e cliente antigo não o manda.
+  - Sem `host`, disca primeiro o loopback que chega ao processo da sessão, depois `127.0.0.1` e
+    `[::1]`. A lista guarda o endereço de cada socket e, por porta da sessão, calcula esse loopback
+    (`owners::dial_first`): o endereço exato vence o "qualquer" da mesma família, e o `::` só recebe
+    IPv4 sem socket IPv4 na porta. Na DELPHI-02 um `portproxy` em `127.0.0.1:3000` tapava o Next em
+    `0.0.0.0:3000`: o túnel caía no proxy. Com o Next no `::`, o túnel disca `[::1]`; só em `0.0.0.0`,
+    disca `127.0.0.2`, que o `0.0.0.0` recebe e o `127.0.0.1` de fora não. A rota lê o mapa da última
+    rodada da lista, sem varrer sockets por conexão; sem lista aberta, fica a ordem de sempre.
+
+  Respostas antes do upgrade:
 
   | Caso | Resposta |
   |---|---|
   | Nada escutando | 502 `port_tunnel_refused` |
   | Porta do Hangar (`connect_previews.refused`) ou fora de 1..65535 | 422 `port_tunnel_port_refused` |
+  | `host` que não é `127.0.0.1` nem `::1` | 422 `port_tunnel_host_refused` |
   | Sem `?token=` nem Bearer | 403 `port_tunnel_token_required` |
 
   Toda recusa leva o código também no cabeçalho `x-hangar-tunnel`, e os clientes classificam por ele,
@@ -188,6 +200,9 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
 - **Lado do app e do CLI.** O nativo abre um canal anfitrião por servidor remoto do dono quando
   mostra uma sessão dele, e religa com espera de 1 s até 30 s. Sem app local, o `hangar-preview`
   manda o verbo por `browser-cmd`, com prazo de 20 s no `open`, 110 s no `login` (120 s pelas tools do MCP) e 45 s nos outros.
+  No app, cada verbo tem teto próprio (20 s; `wait`, o `--timeout` dele mais 2 s; nunca além do `deadline_ms`
+  menos uma folga): chamada CDP presa solta a vez com `erro: … (preso em <método>)` e grava `nav: verb_stuck` no
+  `native.log`.
   As tools MCP `browser_*` usam a mesma rota dentro do processo. `objetivo`, `confere` e
   `vault_fill` não existem por anfitrião remoto.
 - **D1, decidida em 23/11: sem cartão nem pergunta.** O app serve sozinho as sessões das máquinas

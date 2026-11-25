@@ -1,4 +1,4 @@
-//! `GET /api/port-tunnel?port=N`: quem abre e até qual porta; os bytes são do `hangar-port-tunnel`.
+//! `GET /api/port-tunnel?port=N[&host=127.0.0.1|::1]`: quem abre e até qual porta; os bytes são do `hangar-port-tunnel`.
 //! Só em `public_routes` (8765 e Connect): a 8766 do convidado não tem esta rota.
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -42,7 +42,12 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     let Some(port) = port else {
         return refusal(&parts.headers, StatusCode::UNPROCESSABLE_ENTITY, "port_tunnel_port_refused", "porta fora da faixa ou do Hangar");
     };
-    let tcp = match hangar_port_tunnel::connect(port).await {
+    let Ok(host) = hangar_port_tunnel::host_of(parts.uri.query()) else {
+        return refusal(&parts.headers, StatusCode::UNPROCESSABLE_ENTITY, "port_tunnel_host_refused", "host só 127.0.0.1 ou ::1");
+    };
+    // Sem `host` (`localhost`, cliente antigo): a lista diz qual loopback chega ao processo da sessão.
+    let first = if host.is_none() { crate::list::ports::dial_first(port) } else { None };
+    let tcp = match hangar_port_tunnel::connect(port, &hangar_port_tunnel::dial_order(host, first)).await {
         Ok(tcp) => tcp,
         Err(e) => {
             let (status, code, msg) = connect_failure(&e);

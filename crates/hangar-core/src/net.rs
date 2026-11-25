@@ -41,13 +41,20 @@ pub const PORT_NOT_HTTP: &str = "port_not_http";
 
 /// `127.0.0.1` primeiro; sem nada ali, o `[::1]` (servidor que só escuta em IPv6).
 pub async fn connect_loopback(port: u16) -> std::io::Result<tokio::net::TcpStream> {
-    use std::net::{Ipv4Addr, Ipv6Addr};
-    use tokio::net::TcpStream;
-    let v4 = match TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
-        Ok(tcp) => return Ok(tcp),
-        Err(e) => e,
-    };
-    TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await.map_err(|v6| loopback_error(v4, v6))
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    connect_first(&[IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)], port).await
+}
+
+/// Cada endereço na ordem, até um aceitar. O erro que volta segue `loopback_error`.
+pub async fn connect_first(ips: &[std::net::IpAddr], port: u16) -> std::io::Result<tokio::net::TcpStream> {
+    let mut failed: Option<std::io::Error> = None;
+    for ip in ips {
+        match tokio::net::TcpStream::connect((*ip, port)).await {
+            Ok(tcp) => return Ok(tcp),
+            Err(e) => failed = Some(match failed { Some(before) => loopback_error(before, e), None => e }),
+        }
+    }
+    Err(failed.unwrap_or_else(|| std::io::ErrorKind::InvalidInput.into()))
 }
 
 /// Sem IPv6 na máquina o `[::1]` falha por outro motivo; aí a recusa do IPv4 é a que diz "nada escuta ali".
@@ -88,5 +95,16 @@ mod tests {
         }
         assert_eq!(pick(ErrorKind::ConnectionRefused, ErrorKind::ConnectionRefused), ErrorKind::ConnectionRefused);
         assert_eq!(pick(ErrorKind::TimedOut, ErrorKind::AddrNotAvailable), ErrorKind::AddrNotAvailable);
+    }
+
+    #[tokio::test]
+    async fn connect_first_tries_in_order_and_an_empty_list_is_an_error() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Nada no [::1] dessa porta (ou máquina sem IPv6): a falha dele não impede o 127.0.0.1 depois.
+        let tcp = super::connect_first(&[IpAddr::V6(Ipv6Addr::LOCALHOST), IpAddr::V4(Ipv4Addr::LOCALHOST)], port).await.unwrap();
+        assert_eq!(tcp.peer_addr().unwrap().ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(super::connect_first(&[], port).await.unwrap_err().kind(), ErrorKind::InvalidInput);
     }
 }

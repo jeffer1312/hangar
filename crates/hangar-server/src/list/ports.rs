@@ -2,6 +2,7 @@
 //! `hangar_session_ports::owners`; aqui se lê o que é da lista (panes, sidecars, atalhos), se guarda a
 //! leitura entre os tiques e se publica nas linhas.
 use std::collections::{BTreeSet, HashMap};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -44,6 +45,15 @@ fn roots(rows: &[SessionRow], panes: &[Pane], agent_pids: &HashMap<String, u32>,
 static LAST: LastScan = LastScan::new(CHILDREN_TTL);
 static OUTSIDERS: LazyLock<Mutex<Outsiders>> = LazyLock::new(Mutex::default);
 static FAILING: AtomicBool = AtomicBool::new(false);
+static DIAL_FIRST: LazyLock<Mutex<HashMap<u16, IpAddr>>> = LazyLock::new(Mutex::default);
+
+/// O loopback que chega ao processo da sessão em `port` quando não é o `127.0.0.1` de sempre, pela última rodada
+/// da lista (`port_tunnel`). Sem lista aberta não há rodada, e o túnel segue a ordem de sempre.
+pub(crate) fn dial_first(port: u16) -> Option<IpAddr> {
+    DIAL_FIRST.lock().unwrap_or_else(|e| e.into_inner()).get(&port).copied()
+}
+
+fn set_dial_first(found: HashMap<u16, IpAddr>) { *DIAL_FIRST.lock().unwrap_or_else(|e| e.into_inner()) = found; }
 
 fn listening(candidates: Vec<u32>) -> std::io::Result<Arc<Scan>> { LAST.read(candidates, hangar_session_ports::scan) }
 
@@ -53,7 +63,7 @@ pub(crate) fn forget_scan() { LAST.forget(); }
 
 /// Bloqueante (proc e sockets): chamar fora da thread do runtime.
 pub(crate) fn fill(rows: &mut [SessionRow], panes: &[Pane], agent_pids: &HashMap<String, u32>, children: &ChildrenMap, dirs: &Dirs) {
-    if rows.is_empty() { return; }
+    if rows.is_empty() { set_dial_first(HashMap::new()); return; }
     let (roots, excluded) = roots(rows, panes, agent_pids, children, dirs);
     let owned = owners::owned(&roots, &excluded, children, &owners::system_scope);
     let candidates: Vec<u32> = owned.values().flatten().copied().collect::<BTreeSet<_>>().into_iter().collect();
@@ -64,6 +74,7 @@ pub(crate) fn fill(rows: &mut [SessionRow], panes: &[Pane], agent_pids: &HashMap
             if !FAILING.swap(true, Ordering::Relaxed) {
                 tracing::warn!(code = UNAVAILABLE, kind = ?error.kind(), "portas das sessões ilegíveis; linhas sem portas");
             }
+            set_dial_first(HashMap::new());
             return;
         }
     };
@@ -72,7 +83,9 @@ pub(crate) fn fill(rows: &mut [SessionRow], panes: &[Pane], agent_pids: &HashMap
     let sockets = owners::resolve(&mut cache, &scan, &hangar_session_ports::alive,
         &mut |wanted| hangar_session_ports::holders(wanted, FD_BUDGET), &mut hangar_session_ports::process_info);
     let mut by_session = owners::assign(&owned, &keys, &excluded, &sockets, cache.procs());
+    let first = owners::dial_first(&owned, &keys, &excluded, &sockets, cache.procs());
     drop(cache);
+    set_dial_first(first);
     for row in rows.iter_mut() { row.ports = by_session.remove(&row.name).unwrap_or_default(); }
 }
 
