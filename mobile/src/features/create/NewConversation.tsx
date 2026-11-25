@@ -473,7 +473,7 @@ export function NewConversation({
       {/* O teto da doca segura a caixa enquanto a medida do campo não chega: ela encolhe e o Enviar fica à vista. */}
       <ComposerDock onLayout={(event) => setBlockHeight(event.nativeEvent.layout.height)}>
       {!heroInMiddle ? (
-        <ScrollView style={styles.dockHero} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">{hero}</ScrollView>
+        <ScrollView style={styles.dockHero} bounces={false} overScrollMode="never" keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">{hero}</ScrollView>
       ) : null}
 
       <Animated.View style={[styles.shrink, !home && riseStyle]}>
