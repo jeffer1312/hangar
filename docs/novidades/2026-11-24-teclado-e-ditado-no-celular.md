@@ -4,6 +4,6 @@ tipo: correcao
 onde: celular
 ---
 
-Com uma mensagem longa e uma imagem anexada, o botão Enviar não fica mais escondido atrás do teclado, e arrastar a tela para baixo fecha o teclado.
+Com uma mensagem longa e uma imagem anexada, o botão Enviar não fica mais escondido atrás do teclado, e arrastar a tela para baixo fecha o teclado. Na conversa nova, a pasta, a máquina e as pastas recentes continuam à vista com o teclado aberto.
 
 O ditado não envia mais sozinho quando você fica em silêncio para pensar. Quem quiser o envio automático liga "Enviar transcrição automaticamente" em Configurações, Voz.
