@@ -140,7 +140,7 @@ impl Secret {
     pub fn new(value: String) -> Self { Self { value, forms: Vec::new(), host: None } }
     /// Valor que só entra em página de `host`: o pedido veio pelo canal anfitrião, e a página pode ter navegado depois
     /// que o servidor de lá leu o domínio dela.
-    pub fn for_host(mut self, host: String) -> Self { self.host = Some(host); self }
+    pub fn for_host(mut self, host: String) -> Self { self.host = Some(normal_host(&host)); self }
     pub fn as_str(&self) -> &str { &self.value }
 }
 
@@ -152,9 +152,12 @@ fn page_host(url: &str) -> Option<String> {
     let authority = rest.split(['/', '?', '#']).next()?;
     let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
     let host = match host.strip_prefix('[') { Some(v6) => v6.split(']').next()?, None => host.split(':').next()? };
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let host = normal_host(host);
     (!host.is_empty()).then_some(host)
 }
+
+/// O host aprovado chega pelo canal de outra máquina: comparado na mesma forma do da página.
+fn normal_host(host: &str) -> String { host.trim_start_matches('[').trim_end_matches(']').trim_end_matches('.').to_ascii_lowercase() }
 
 impl Drop for Secret {
     fn drop(&mut self) {
@@ -169,9 +172,12 @@ impl Drop for Secret {
 /// O alvo é o elemento com foco na raiz dele (documento, shadow root ou iframe) e, se for, se é campo de senha.
 const TARGET_FOCUS: &str = "function(){const r=this.getRootNode&&this.getRootNode();if(!r||r.activeElement!==this)return 'fora';return this.tagName==='INPUT'&&this.type==='password'?'senha':'campo'}";
 /// Confere e digita numa só tarefa do documento do campo: entre duas chamadas CDP a página pode navegar, e o
-/// `Input.insertText` digitaria no que tivesse foco no documento novo. Argumentos: valor, host aprovado (ou `null`)
-/// e se o campo é de senha. O host sai só de `location` e `===`, que a página não consegue trocar.
-const FILL_SECRET: &str = "function(v,h,p){if(h!==null){const n=location.hostname,o=location.protocol;if((o!=='http:'&&o!=='https:')||(n!==h&&n!==h+'.'&&n!=='['+h+']'))return 'dominio:'+n}const r=this.getRootNode&&this.getRootNode();if(!r||r.activeElement!==this)return 'fora';if(p&&!(this.tagName==='INPUT'&&this.type==='password'))return 'campo';if(typeof this.select==='function')this.select();else document.execCommand('selectAll',false);return document.execCommand('insertText',false,v)?'ok':'recusado'}";
+/// `Input.insertText` digitaria no que tivesse foco no documento novo. Argumentos: valor, host aprovado (ou `null`,
+/// já em minúsculas e sem ponto final) e se o campo é de senha. O host sai só de `location` e `===`, que a página
+/// não consegue trocar. Sem `select()` que cubra o campo todo, apaga pelo setter nativo (input) ou seleciona o
+/// conteúdo (contenteditable); sem apagar, não digita. Depois relê o campo: input controlado, `maxlength` ou
+/// `beforeinput` podem ter deixado outro valor, e aí a resposta não pode ser `ok`.
+const FILL_SECRET: &str = "function(v,h,p){if(h!==null){let n=location.hostname.toLowerCase();while(n.endsWith('.'))n=n.slice(0,-1);const o=location.protocol;if((o!=='http:'&&o!=='https:')||(n!==h&&n!=='['+h+']'))return 'dominio:'+n}const r=this.getRootNode&&this.getRootNode();if(!r||r.activeElement!==this)return 'fora';if(p&&!(this.tagName==='INPUT'&&this.type==='password'))return 'campo';const d=this.ownerDocument,t=this.tagName==='INPUT'||this.tagName==='TEXTAREA';let c=false;if(t){try{if(typeof this.select==='function'){this.select();c=this.selectionStart===0&&this.selectionEnd===this.value.length}}catch(e){}if(!c)try{Object.getOwnPropertyDescriptor((this.tagName==='INPUT'?HTMLInputElement:HTMLTextAreaElement).prototype,'value').set.call(this,'');c=this.value===''}catch(e){}}else if(this.isContentEditable){try{const s=d.getSelection(),g=d.createRange();g.selectNodeContents(this);s.removeAllRanges();s.addRange(g);c=s.rangeCount===1}catch(e){}}if(!c)return 'naoapagou';let k=false;try{k=d.execCommand('insertText',false,v)}catch(e){return 'diferente'}if(!k)return 'recusado';return (t?this.value:this.textContent)===v?'ok':'diferente'}";
 
 pub struct Controller<P: Page> {
     page: P,
@@ -791,13 +797,17 @@ impl<P: Page> Controller<P> {
         self.secret_sent.set(true);
         let typed = self.call("Runtime.callFunctionOn", fill).await?;
         let said = returned(&typed)?.as_str().unwrap_or_default().to_owned();
+        // O `secret_sent` e a máscara ficam como estão (conservadores); só o texto diz o que de fato aconteceu.
         match said.as_str() {
             "ok" => {}
-            "campo" => return Ok(format!("erro: erro_cofre_campo_nao_senha: {r} nao e um campo de senha (input type=password)")),
-            "recusado" => return Ok(format!("erro: fill-secret {r}: a pagina nao aceitou o texto no campo — nada foi digitado")),
+            // Nunca o valor nem o tamanho dele: diria quanto da senha a página cortou.
+            "diferente" => return Ok("erro: erro_cofre_incerto: o campo não ficou com o valor (pode ter sido alterado pela página)".into()),
+            "naoapagou" => return Ok(format!("erro: fill-secret {r}: recusado: campo não suportado (não deu para apagar o que havia nele) — o valor não foi digitado")),
+            "campo" => return Ok(format!("erro: erro_cofre_campo_nao_senha: {r} nao e um campo de senha (input type=password) — o valor não foi digitado")),
+            "recusado" => return Ok(format!("erro: fill-secret {r}: a pagina nao aceitou o texto no campo (o campo pode ter sido apagado) — o valor não foi digitado")),
             other => match other.strip_prefix("dominio:") {
-                Some(host) => return Ok(format!("erro: erro_cofre_dominio_diferente: a pagina saiu de {expected} para {host}")),
-                None => return Ok(format!("erro: fill-secret {r}: o foco saiu do campo antes de digitar — nada foi digitado; rode snapshot")),
+                Some(host) => return Ok(format!("erro: erro_cofre_dominio_diferente: a pagina saiu de {expected} para {host} — o valor não foi digitado")),
+                None => return Ok(format!("erro: fill-secret {r}: o foco saiu do campo antes de digitar — o valor não foi digitado; rode snapshot")),
             },
         }
         self.frame().await;
@@ -1370,8 +1380,51 @@ mod tests {
         block_on(c.run("snapshot", &[]));
         let said = text(block_on(c.run_with("fill-secret", &s(&["@e1", "password"]), Some(Secret::new(SECRET.into()).for_host("github.com".into())))));
         assert!(moved.get(), "a página navegou depois da conferência de antes do clique");
-        assert_eq!(said, "erro: erro_cofre_dominio_diferente: a pagina saiu de github.com para evil.io");
+        assert_eq!(said, "erro: erro_cofre_dominio_diferente: a pagina saiu de github.com para evil.io — o valor não foi digitado");
         assert!(!c.page.calls.borrow().iter().any(|(m, p)| m == "Input.insertText" || p["text"] == SECRET), "nada digitado no foco do documento novo");
+    }
+
+    /// Página cuja função de preenchimento responde `said`, com o resto da página de login.
+    fn fill_answers(said: &'static str) -> Controller<Fake> {
+        ctl(move |m, p| Ok(if p["functionDeclaration"] == FILL_SECRET { json!({"result": {"value": said}}) } else { login_answer("senha", m, p) }))
+    }
+
+    /// Input controlado que desfaz, `maxlength` que corta, `beforeinput` que barra: o campo releu outro valor. A
+    /// resposta não é `ok`, não traz o valor nem o tamanho dele, e a senha segue escondida.
+    #[test]
+    fn a_field_left_with_another_value_is_never_reported_as_filled() {
+        let c = fill_answers("diferente");
+        let said = fill_secret(&c, "password");
+        assert_eq!(said, "erro: erro_cofre_incerto: o campo não ficou com o valor (pode ter sido alterado pela página)");
+        assert!(!said.contains(&SECRET.len().to_string()));
+        assert_eq!(text(block_on(c.run("snapshot", &[]))), "- RootWebArea \"Login\"\n  - textbox \"Senha\" [ref=@e1]");
+        assert!(!text(block_on(c.run("text", &[]))).contains("S3nh"));
+    }
+
+    /// Campo que não deu para apagar é recusado antes de digitar; nenhuma recusa diz que o valor pode ter entrado.
+    #[test]
+    fn a_field_that_cannot_be_cleared_is_refused_and_refusals_never_claim_typing() {
+        assert_eq!(fill_secret(&fill_answers("naoapagou"), "password"),
+            "erro: fill-secret @e1: recusado: campo não suportado (não deu para apagar o que havia nele) — o valor não foi digitado");
+        for said in ["naoapagou", "recusado", "fora", "campo", "dominio:evil.io"] {
+            let reply = fill_secret(&fill_answers(said), "password");
+            assert!(reply.starts_with("erro:") && reply.contains("o valor não foi digitado"), "{said}: {reply}");
+            assert!(!reply.contains("pode ter sido digitado") && !reply.contains("S3nh"), "{said}: {reply}");
+        }
+    }
+
+    /// O host aprovado chega de outra máquina como veio: maiúsculas e ponto final não fazem recusar a página certa.
+    #[test]
+    fn the_approved_host_is_compared_in_lowercase_without_the_trailing_dot() {
+        let c = ctl(|m, p| Ok(if m == "Page.getNavigationHistory" {
+            json!({"currentIndex": 0, "entries": [{"url": "https://github.com./login"}]})
+        } else { login_answer("senha", m, p) }));
+        block_on(c.run("snapshot", &[]));
+        let said = text(block_on(c.run_with("fill-secret", &s(&["@e1", "password"]), Some(Secret::new(SECRET.into()).for_host("GitHub.COM.".into())))));
+        assert_eq!(said, "ok: fill-secret @e1");
+        let hosts: Vec<Value> = c.page.calls.borrow().iter().filter(|(_, p)| p["functionDeclaration"] == FILL_SECRET).map(|(_, p)| p["arguments"][1]["value"].clone()).collect();
+        assert_eq!(hosts, vec![json!("github.com")], "a página compara com o host já normalizado");
+        assert!(FILL_SECRET.contains("location.hostname.toLowerCase()"), "e normaliza o dela do mesmo jeito");
     }
 
     #[test]

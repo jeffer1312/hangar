@@ -257,7 +257,13 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
     `document.execCommand('insertText')` num `Runtime.callFunctionOn` sobre o próprio campo, que antes compara
     o `location` do documento dele com o domínio aprovado e o foco no campo. O `Input.insertText` digitava no
     que tivesse foco no momento, e uma navegação entre a conferência e a digitação levava o valor ao campo de
-    outra página. O `Fetch` (segurar a navegação durante o preenchimento) ficou de fora: pedia assinar
+    outra página. Os dois hosts são comparados em minúsculas e sem ponto final. Antes de digitar, a mesma chamada
+    apaga o campo: `select()` quando ele cobre o campo todo; senão o setter nativo de `value` (input e textarea)
+    ou a seleção do conteúdo por `Range` (contenteditable); sem conseguir apagar, recusa com `recusado: campo não
+    suportado` sem digitar. Depois relê o campo (`value` ou `textContent`): input controlado que desfaz,
+    `maxlength` que corta ou `beforeinput` que barra deixam outro valor, e a resposta é
+    `erro_cofre_incerto: o campo não ficou com o valor`, sem o valor nem o tamanho. As recusas dizem que o valor não
+    foi digitado; a máscara da senha continua registrada antes da chamada. O `Fetch` (segurar a navegação durante o preenchimento) ficou de fora: pedia assinar
     `Fetch.requestPaused` nos dois motores e soltar as navegações presas em todo corte de teto; a chamada única
     vale igual no Chromium do Linux e no WebView2, que já usam o `callFunctionOn`. Limites: o host comparado é
     o do documento do campo, então campo em iframe de outro domínio é recusado; navegação dentro do mesmo
