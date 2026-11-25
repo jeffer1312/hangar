@@ -3067,11 +3067,16 @@ impl NewSession {
                             let tag = self.machine_tag(&choice.key);
                             let name = super::tags::machine_name(tag, &choice.label, &choice.address);
                             // Etiqueta com outro nome: o nome desta tela fica ao lado, menor, para reconhecer a máquina.
-                            let hint = [(name != choice.label).then(|| choice.label.clone()), choice.offline.then(|| tr("new_chat_machine_offline")),
-                                current.then(|| tr("create_current"))].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                            // A atual fica só com o visto, como no celular: o "atual" escrito tirava a largura das contas. O leitor de
+                            // tela ainda ouve "atual".
+                            let hint = [(name != choice.label).then(|| choice.label.clone()), choice.offline.then(|| tr("new_chat_machine_offline"))]
+                                .into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                            let aria = [Some(name.clone()), (!hint.is_empty()).then(|| hint.clone()), current.then(|| tr("create_current"))]
+                                .into_iter().flatten().collect::<Vec<_>>().join(", ");
                             let tip = self.accounts_tip(&choice.key);
                             menu_row_marked(SharedString::from(format!("new-chat-machine-{}", choice.key)), current,
                                 Some(machine_tile(tag, &choice.id)), name, hint, self.machine_accounts(&choice.key))
+                                .accessibility_label(aria)
                                 .when_some(tip, |row, tip| row.tooltip(tip))
                                 .when(!current, |row| row.on_click(cx.listener(move |this, _, window, cx| this.pick_machine(key.clone(), window, cx))))
                                 .into_any_element()
