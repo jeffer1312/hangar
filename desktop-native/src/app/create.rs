@@ -2825,11 +2825,13 @@ impl NewSession {
                     "" => chrome::small_icon(IconName::CreditCard, 11., theme::muted()).into_any_element(),
                     p => super::tags::provider_mark(p, 11., theme::muted()),
                 };
-                let text = if names.len() == 1 { names[0].clone() }
-                    else { tr("new_chat_machine_accounts").replace("{n}", &names.len().to_string()) };
-                div().flex().items_center().gap(px(4.)).min_w_0().flex_shrink_1()
+                // "N contas" e os logos nunca encolhem; só o nome de uma conta cede, guardando umas três letras e o "…".
+                let single = names.len() == 1;
+                let text = if single { names[0].clone() } else { tr("new_chat_machine_accounts").replace("{n}", &names.len().to_string()) };
+                div().flex().items_center().gap(px(4.))
+                    .map(|el| if single { el.min_w(px(46.)).flex_shrink_1() } else { el.flex_shrink_0() })
                     .child(div().flex_shrink_0().child(mark))
-                    .child(div().min_w_0().truncate().child(text))
+                    .child(if single { div().min_w(px(30.)).truncate().child(text) } else { div().whitespace_nowrap().child(text) })
             }))
             .into_any_element())
     }
