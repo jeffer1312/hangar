@@ -1,15 +1,27 @@
 //! As tools do WhatsApp só leitura: quem não lê (sessão com convidado ou par de fora), a marca de texto
 //! de terceiros e o corte da resposta. As leituras em si são as rotas `/api/whatsapp*`.
+use axum::Router;
 use serde_json::{Map, Value, json};
 
+use super::shared_guard;
+use crate::routes::AppState;
+#[cfg(test)]
+use super::shared_guard::{has_remote_member, record_is_shared, shared_here};
+#[cfg(test)]
 use crate::groups::model::Sidecar;
-use crate::share::pairs::PairStore;
-use crate::share::store::ShareStore;
+#[cfg(test)]
+use crate::share::{pairs::PairStore, store::ShareStore};
 
-pub(super) const SHARED_REFUSAL: &str = "whatsapp_shared_session: esta sessão tem convidado ou par de fora (convite, convidado \
-com login que a vê, par externo, ou membro de outra máquina ou de fora no grupo) e não lê o WhatsApp; use uma sessão só sua";
-pub(super) const CHECK_FAILED: &str = "whatsapp_shared_check_failed";
+#[allow(dead_code)]
+pub(super) const SHARED_REFUSAL: &str = shared_guard::WHATSAPP.shared_refusal;
+#[allow(dead_code)]
+pub(super) const CHECK_FAILED: &str = shared_guard::WHATSAPP.check_failed_prefix;
 pub(super) const MEDIA_MAYBE_SENT: &str = "o pedido de mídia já pode ter chegado ao celular e contado no teto do dia: não repita";
+
+/// Delega a guarda de sessão compartilhada ao módulo compartilhado preservando os códigos do WhatsApp.
+pub(super) async fn ensure_unshared(st: &AppState, api: &Router, me: &str) -> Result<(), String> {
+    shared_guard::ensure_unshared(st, api, me, shared_guard::WHATSAPP).await
+}
 
 /// Erro da rota em que o pedido pode ter chegado ao serviço: a resposta é que se perdeu ou não se confirmou.
 pub(super) fn reply_lost(error: &str) -> bool {
@@ -26,33 +38,6 @@ pub(super) enum Trim {
     OldestFirst(&'static str),
     Tail(&'static str),
     None,
-}
-
-/// A própria sessão e os membros do grupo dela nesta máquina; `srv::nome` é de outra máquina ou de fora.
-pub(super) fn local_members<'a>(me: &'a str, link: Option<&'a Sidecar>) -> Vec<&'a str> {
-    let peers = link.into_iter().flat_map(|l| l.peers.iter().map(String::as_str)).filter(|p| !p.contains("::"));
-    std::iter::once(me).chain(peers).collect()
-}
-
-/// Convite ou par vivo na própria sessão ou num membro do grupo nesta máquina (o grupo repassa o que ela lê).
-/// Registro de convite de outra vida com o mesmo nome também conta: na dúvida, não lê.
-pub(super) fn shared_here(store: &ShareStore, pairs: &PairStore, me: &str, link: Option<&Sidecar>) -> bool {
-    local_members(me, link).iter().any(|m| store.session_has_active(m) || !pairs.by_local(m).is_empty())
-}
-
-/// Membro de outra máquina (do dono ou de fora) no grupo: daqui não se confere o que a outra máquina compartilha.
-pub(super) fn has_remote_member(link: Option<&Sidecar>) -> bool {
-    link.is_some_and(|l| l.peers.iter().any(|p| crate::groups::local::is_remote(p)))
-}
-
-/// Se o registro da dona de um grupo entre máquinas tem par de fora ou membro de outra máquina: a dona grava o
-/// registro antes dos sidecars, então ele vale mesmo com o sidecar daqui ainda sem o membro. Sem as duas listas,
-/// não dá para saber.
-pub(super) fn record_is_shared(record: &Value, here: &str) -> Option<bool> {
-    let outside = record.get("outside")?.as_array()?;
-    let members = record.get("members")?.as_array()?;
-    let elsewhere = members.iter().any(|m| m.get("server").and_then(Value::as_str) != Some(here));
-    Some(!outside.is_empty() || elsewhere)
 }
 
 /// O corpo da rota com a marca de terceiros e o aviso, cortado em `limit` tirando itens inteiros da lista:
