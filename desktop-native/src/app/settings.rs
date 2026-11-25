@@ -23,14 +23,14 @@ pub(crate) use guide::{group_heading as news_group_heading, kind_icon as news_ki
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
     General, Appearance, Sessions, Beta, Updates, Manual, Diary, About,
-    Servers, Sync, Guests, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, WhatsApp, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    Servers, Sync, Guests, Connect, Devices, SharedConfig, Accounts, Status, Plugins, Scheduled, Memory, Vault, Integrations, WhatsApp, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
     const DEVICE: [Page; 7] = [Page::General, Page::Appearance, Page::Sessions, Page::Beta, Page::Updates, Page::Manual, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 24] = [Page::Diary, Page::Servers, Page::Sync, Page::Guests, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::WhatsApp, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 25] = [Page::Diary, Page::Servers, Page::Sync, Page::Guests, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Status, Page::Plugins, Page::Scheduled, Page::Memory, Page::Vault, Page::Integrations, Page::WhatsApp, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -45,7 +45,7 @@ impl Page {
     pub(super) fn key(self) -> &'static str {
         match self {
             Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Beta => "beta", Page::Updates => "updates", Page::Manual => "manual", Page::Diary => "diary", Page::About => "about",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Guests => "guests", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::WhatsApp => "whatsapp", Page::Orchestration => "orchestration",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Guests => "guests", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Status => "status", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Memory => "memory", Page::Vault => "vault", Page::Integrations => "integrations", Page::WhatsApp => "whatsapp", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -56,7 +56,7 @@ impl Page {
             Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Beta => IconName::FlaskConical, Page::Diary => IconName::FileText,
             Page::Updates => IconName::Sparkles, Page::Manual => IconName::BookOpen,
             Page::About => IconName::Info, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Guests => IconName::UserPlus, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
-            Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::WhatsApp => IconName::MessageCircle, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
+            Page::Accounts => IconName::User, Page::Status => IconName::Gauge, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Memory => IconName::Moon, Page::Vault => IconName::KeyRound, Page::Integrations => IconName::Plug, Page::WhatsApp => IconName::MessageCircle, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
         }
@@ -71,6 +71,7 @@ impl Page {
             Page::SharedConfig => tr_shared("shared_config_title", &[]),
             Page::Status => tr("status_title"),
             Page::Guests => tr_shared("convidados_titulo", &[]),
+            Page::Integrations => tr_shared("integrations_title", &[]),
             _ => tr(&format!("settings_page_{}", self.key())),
         }
     }
@@ -127,6 +128,8 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("plugins_tab_marketplaces", None), ("plugins_check", None), ("plugins_marketplace_auto_update", None)]),
     (Page::Vault, &[("vault_entries", Some("vault_entries_hint")), ("vault_add", Some("vault_token_hint")),
         ("vault_backup", Some("vault_backup_hint")), ("vault_recovery", None)]),
+    (Page::Integrations, &[("integrations_search_row_catalog", Some("integrations_catalog_hint")),
+        ("integrations_search_row_custom", None), ("integrations_search_row_configured", None)]),
     (Page::WhatsApp, &[("whatsapp_intro_title", Some("whatsapp_intro")), ("whatsapp_risk_title", Some("whatsapp_risk_unofficial")),
         ("whatsapp_media_title", Some("whatsapp_media_desc")), ("whatsapp_usage_title", Some("whatsapp_usage_skill_hint")),
         ("whatsapp_remove", Some("whatsapp_remove_body"))]),
@@ -546,6 +549,7 @@ impl Hangar {
         let opening = self.settings.replace(page).is_none();
         // O Cofre relê a cada abertura, e a senha revelada não passa para a próxima.
         self.vault_page = None;
+        self.integrations_page = None;
         self.plugins_page = None;
         self.settings_ui.live = false;
         self.settings_ui.hit = None;
@@ -577,6 +581,7 @@ impl Hangar {
         if self.settings.take().is_some() {
             self.keyboard.cancel_edit();
             self.vault_page = None;
+            self.integrations_page = None;
             self.plugins_page = None;
             self.accounts_page_left();
             self.sync_page_left();
@@ -625,6 +630,7 @@ impl Hangar {
         if opened {
             // Como no `open_settings`: a senha revelada não sobrevive à saída da página.
             self.vault_page = None;
+            self.integrations_page = None;
             self.plugins_page = None;
             self.settings_opened(found.page, cx);
         }
@@ -949,6 +955,7 @@ impl Hangar {
             Page::Status => self.render_status(window, cx),
             Page::Accounts => self.render_accounts(accounts_wide, window, cx),
             Page::Vault => self.render_vault(window, cx),
+            Page::Integrations => self.render_integrations(window, cx),
             Page::WhatsApp => self.render_whatsapp(cx),
             Page::Plugins => self.render_plugins(window, cx),
             Page::Scheduled => self.render_scheduled(window, cx),
@@ -1299,6 +1306,15 @@ mod tests {
     fn jev_search_finds_every_jev_field() {
         let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Jev).expect("Jev na busca");
         for label in ["server_jev_key", "server_jev_default", "server_jev_endpoint", "server_jev_model", "server_jev_aux_endpoint", "server_jev_aux_key", "server_jev_aux_model", "server_jev_aux_effort", "server_jev_provider"] {
+            assert!(rows.iter().any(|(row, _)| *row == label), "{label} fora da busca");
+        }
+    }
+
+    #[test]
+    fn integrations_is_registered_in_navigation_and_search() {
+        assert!(super::Page::sections().any(|page| page == super::Page::Integrations));
+        let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Integrations).expect("Integrações na busca");
+        for label in ["integrations_search_row_catalog", "integrations_search_row_custom", "integrations_search_row_configured"] {
             assert!(rows.iter().any(|(row, _)| *row == label), "{label} fora da busca");
         }
     }

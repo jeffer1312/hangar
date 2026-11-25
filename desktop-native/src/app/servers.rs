@@ -106,6 +106,7 @@ impl Hangar {
         // Máquina desligada ou removida não deixa o aviso do chaveiro para trás.
         self.keyring.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         self.vault.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
+        self.integrations.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         self.tags.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         for s in &self.servers { api::route::seed(&s.address, s.invite, s.lan.as_ref(), s.connect.as_ref(), s.connect_refused); }
         for entry in wanted {

@@ -40,6 +40,8 @@ mod hangar_live;
 mod harness;
 mod keyring;
 mod plugins;
+mod integrations;
+mod integration_requests;
 mod vault;
 mod vault_requests;
 mod rename_suggest;
@@ -822,8 +824,12 @@ pub struct Hangar {
     keyring: HashMap<String, keyring::Prompt>,
     /// Pedidos do cofre esperando resposta, pelo evento `vault` da lista de cada máquina dona (chave `servers::norm`).
     vault: HashMap<String, Entity<vault_requests::VaultRequests>>,
+    /// Pedidos de aprovação de escrita das integrações MCP esperando resposta (evento `integrations_approvals`).
+    integrations: HashMap<String, Entity<integration_requests::IntegrationRequests>>,
     /// Página Cofre aberta, com a conexão em que nasceu.
     vault_page: Option<(u64, Entity<vault::VaultPage>)>,
+    /// Página Integrações aberta, com a conexão em que nasceu.
+    integrations_page: Option<(u64, Entity<integrations::IntegrationsPage>)>,
     /// Página Plugins aberta, com a conexão em que nasceu.
     plugins_page: Option<(u64, Entity<plugins::PluginsPage>)>,
     /// Atualizações e Manual das Configurações: o que foi lido e onde a pessoa está nas duas páginas.
@@ -1369,7 +1375,7 @@ impl Hangar {
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None, list_down_since: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), downloads: Default::default(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
-            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), work_reviews: HashMap::new(), work_review: Default::default(), notice_acted: HashMap::new(), question_open: None, question_card: None,
+            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), integrations: HashMap::new(), vault_page: None, integrations_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), work_reviews: HashMap::new(), work_review: Default::default(), notice_acted: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1740,6 +1746,8 @@ impl Hangar {
     fn drop_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // O cartão responde pela conexão que guarda; a lista nova traz os pedidos de volta.
         self.vault.remove(&self.active_key());
+        self.integrations.remove(&self.active_key());
+        self.integrations_page = None;
         self.close_terminal(false, window, cx);
         // As respostas da conexão velha são descartadas: a prévia ficaria esperando para sempre.
         self.close_tab_preview(cx);
@@ -2213,6 +2221,12 @@ impl Hangar {
                         servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "vault" => Some(Some(frame.data.clone())),
                         _ => None,
                     };
+                    // Pedidos de aprovação das integrações MCP dela, com a mesma regra da queda.
+                    let integrations = match &update {
+                        servers::RemoteUpdate::Stream(Update::Offline(_)) => Some(None),
+                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "integrations_approvals" => Some(Some(frame.data.clone())),
+                        _ => None,
+                    };
                     // Pedido de navegador de uma sessão desta máquina chega pela lista dela, seja ela a ativa ou não.
                     let nav = match &update {
                         servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "nav" => Some(frame.data.clone()),
@@ -2237,6 +2251,10 @@ impl Hangar {
                         cx.notify();
                     }
                     if let Some(data) = vault && self.set_vault_requests(&key, data.as_ref(), window, cx) {
+                        self.redraw(panes::Area::Nav, cx);
+                        cx.notify();
+                    }
+                    if let Some(data) = integrations && self.set_integration_requests(&key, data.as_ref(), cx) {
                         self.redraw(panes::Area::Nav, cx);
                         cx.notify();
                     }
@@ -2322,6 +2340,7 @@ impl Hangar {
                     let server = self.active_key();
                     if self.set_keyring(&server, false, window, cx) { self.redraw(panes::Area::Nav, cx); }
                     if self.set_vault_requests(&server, None, window, cx) { self.redraw(panes::Area::Nav, cx); }
+                    if self.set_integration_requests(&server, None, cx) { self.redraw(panes::Area::Nav, cx); }
                     // Stream da lista caído: o chip e os blocos não mostram terminal velho dele.
                     if !std::mem::take(&mut self.live_terms).is_empty() {
                         let server = self.active_key();
@@ -2363,6 +2382,12 @@ impl Hangar {
                     visible = self.set_vault_requests(&server, Some(&frame.data), window, cx);
                     if visible { self.redraw(panes::Area::Nav, cx); }
                     vault_requests::parse(&frame.data).is_some()
+                }
+                else if frame.event == "integrations_approvals" {
+                    let server = self.active_key();
+                    visible = self.set_integration_requests(&server, Some(&frame.data), cx);
+                    if visible { self.redraw(panes::Area::Nav, cx); }
+                    integration_requests::parse(&frame.data).is_some()
                 }
                 else if frame.event == "tags" {
                     let server = self.active_key();
@@ -7278,7 +7303,8 @@ impl Hangar {
                 .child(div().min_w_0().truncate().text_xs().text_color(theme::warning()).child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
             .children(self.keyring_keys().iter().filter_map(|key| self.render_keyring_notice(key, true, cx)).collect::<Vec<_>>())
-            .children(self.render_vault_chips(false, cx)),
+            .children(self.render_vault_chips(false, cx))
+            .children(self.render_integration_chips(false, cx)),
             px(if floating { theme::PANEL_RADIUS } else { 0. }))
     }
 
@@ -9151,9 +9177,15 @@ impl Render for Hangar {
         // Terminal e faixa do cofre mudam o teto da faixa de baixo sem mudar a coluna: só ela, guardada, refaz.
         let term = self.docked_terminal_height(window).unwrap_or(0.);
         if (self.panes.docked_term.replace(term) - term).abs() > 0.5 { self.redraw(panes::Area::Bottom, cx); }
-        let vault = self.render_vault_session(cx)
-            .map(|band| div().relative().flex_shrink_0().w_full().flex().flex_col().child(band).child(self.cap_measure(&self.panes.vault_height)));
-        if vault.is_none() && self.panes.vault_height.replace(0.) > 0. { self.redraw(panes::Area::Bottom, cx); }
+        let vault = self.render_vault_session(cx);
+        let integration = self.render_integration_session(cx);
+        let session_requests = (vault.is_some() || integration.is_some()).then(|| {
+            let band = div().flex_shrink_0().w_full().flex().flex_col().children(vault).children(integration);
+            div().relative().flex_shrink_0().w_full().flex().flex_col().child(band).child(self.cap_measure(&self.panes.vault_height))
+        });
+        if session_requests.is_none() && self.panes.vault_height.replace(0.) > 0. { self.redraw(panes::Area::Bottom, cx); }
+        let vault_float = self.render_vault_float(cx);
+        let integration_float = self.render_integration_float_at(if vault_float.is_some() { 392. } else { 0. }, cx);
         let content = div().relative().flex_1().min_w_0().h_full().flex().flex_col()
             .when(!beside_sidebar, |el| chat_fill(el, self, window))
             .child(self.cap_measure(&self.panes.column_height))
@@ -9200,14 +9232,15 @@ impl Render for Hangar {
             // Entre a conversa e a faixa de baixo: o que a faixa abre por cima (comandos, sugestões) cobre a marca. Sem a
             // conversa na tela, os lugares dela são do último desenho, de outra sessão.
             .when(page.is_none() && !self.new_chat_screen(), |el| el.child(self.working_mark_float(panes::Area::Conversation, WORKING_FADE, cx.reduce_motion())))
-            .children(vault)
+            .children(session_requests)
             .child(self.pane_element(panes::Area::Bottom, if self.new_chat_screen() { StyleRefinement::default().w_full().flex_1().min_h_0() }
                 else { StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get() + queue_step)).top(px(-drop)) }))
             // Os avatares animados da faixa de baixo (subagentes e pai da filha), pintados fora da cópia guardada dela.
             .when(page.is_none() && !self.new_chat_screen(), |el| el.child(self.working_mark_float(panes::Area::Bottom, WORKING_FADE, cx.reduce_motion())))
             .children(self.render_terminal(window, cx))
             .children(self.render_file_view(window, cx))
-            .children(self.render_vault_float(cx))
+            .children(vault_float)
+            .children(integration_float)
             // Depois das áreas: lê onde elas desenharam o campo, a linha da fila e a bolha.
             .children(self.render_send_flight(window, cx));
         // Visor de arquivos expandido: sem a lista de sessões e sem o painel direito.
