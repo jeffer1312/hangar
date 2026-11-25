@@ -38,6 +38,33 @@ pub fn resolve_program<'a>(name: &str, env: impl IntoIterator<Item = (&'a String
     resolve_with(name, env, installed)
 }
 
+/// O PATH com as pastas do PATH atual do registro que ainda não estão nele, no fim. O pane do psmux
+/// herda o PATH de quem o cria: sem isto, o CLI que a sonda achou no registro não abriria no terminal.
+pub fn with_installed_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
+    #[cfg(windows)]
+    let installed = (!cargo_test_binary()).then(registry_path).flatten();
+    #[cfg(not(windows))]
+    let installed = None;
+    append_missing(path, installed)
+}
+
+fn append_missing(path: &std::ffi::OsStr, installed: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    let mut joined = path.to_owned();
+    let Some(installed) = installed else { return joined };
+    let key = |dir: &Path| {
+        let dir = dir.to_string_lossy().trim_end_matches(['\\', '/']).to_owned();
+        if cfg!(windows) { dir.to_lowercase() } else { dir }
+    };
+    let mut seen: std::collections::HashSet<String> = std::env::split_paths(path).map(|dir| key(&dir)).collect();
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    for dir in std::env::split_paths(&installed).filter(|dir| !dir.as_os_str().is_empty()) {
+        if !seen.insert(key(&dir)) { continue; }
+        if !joined.is_empty() && !joined.to_string_lossy().ends_with(separator) { joined.push(separator.to_string()); }
+        joined.push(dir.as_os_str());
+    }
+    joined
+}
+
 fn resolve_with<'a>(
     name: &str,
     env: impl IntoIterator<Item = (&'a String, &'a String)> + Clone,
@@ -54,7 +81,8 @@ fn resolve_with<'a>(
         let lower = name.to_ascii_lowercase();
         if pathext.iter().any(|e| lower.ends_with(e.as_str())) { vec![String::new()] } else { pathext }
     } else { vec![String::new()] };
-    let find = |path: &std::ffi::OsStr| std::env::split_paths(path).find_map(|dir| {
+    // Entrada vazia (`;;`, `;` no fim) seria a pasta atual do servidor.
+    let find = |path: &std::ffi::OsStr| std::env::split_paths(path).filter(|dir| !dir.as_os_str().is_empty()).find_map(|dir| {
         exts.iter().map(|ext| dir.join(format!("{name}{ext}"))).find(|p| p.is_file())
     });
     let path = var("PATH")?;
@@ -67,13 +95,13 @@ fn resolve_with<'a>(
 #[allow(unsafe_code)] // RegGetValueW não tem equivalente no std.
 fn registry_path() -> Option<std::ffi::OsString> {
     use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegGetValueW};
     let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
     let value = wide("Path");
     // Sem RRF_NOEXPAND o REG_EXPAND_SZ já volta com %VAR% expandido.
-    let read = |root: HKEY, key: &str| -> Option<Vec<u16>> {
-        let key = wide(key);
+    let read = |root: HKEY, name: &str| -> Option<Vec<u16>> {
+        let key = wide(name);
         let mut buffer = vec![0u16; 2048];
         for _ in 0..4 {
             let mut size = (buffer.len() * 2) as u32;
@@ -88,9 +116,14 @@ fn registry_path() -> Option<std::ffi::OsString> {
                     return Some(buffer);
                 }
                 ERROR_MORE_DATA => buffer.resize((size as usize).div_ceil(2).max(buffer.len() * 2), 0),
-                _ => return None,
+                ERROR_FILE_NOT_FOUND => return None,
+                code => {
+                    tracing::warn!(code, key = name, "PATH do registro ilegível");
+                    return None;
+                }
             }
         }
+        tracing::warn!(key = name, "PATH do registro não coube no buffer");
         None
     };
     let parts: Vec<Vec<u16>> = [
@@ -127,6 +160,15 @@ mod tests {
         assert_eq!(resolve_with("agy", env, || None), None);
         let empty = [("PATH".to_owned(), String::new())];
         assert_eq!(resolve_with("agy", empty.iter().map(|(k, v)| (k, v)), current), None, "PATH vazio não procura no registro");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_pane_path_gains_only_the_installed_folders_it_lacks() {
+        let path = std::ffi::OsStr::new(r"C:\a;C:\b");
+        let installed = Some(std::ffi::OsString::from(r"c:\B\;C:\c;;"));
+        assert_eq!(append_missing(path, installed), std::ffi::OsString::from(r"C:\a;C:\b;C:\c"));
+        assert_eq!(append_missing(path, None), path.to_owned());
     }
 
     #[test]
