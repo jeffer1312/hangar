@@ -14,6 +14,12 @@ pub(super) struct Recent {
     at: Option<String>,
     #[serde(default)]
     text: Option<String>,
+    /// `text`, `image`, `video`, `audio`, `document`, `sticker` ou `other`; ausente no rascunho da 0.2.0, que é texto.
+    #[serde(default)]
+    kind: Option<String>,
+    /// Nome do arquivo de um documento, de terceiro como o texto.
+    #[serde(default)]
+    file_name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
@@ -36,6 +42,9 @@ pub(crate) struct Draft {
     chat_name: Option<String>,
     #[serde(default)]
     chat_name_source: Option<String>,
+    /// Foto da conversa em JPEG, base64; sem ela, o cartão mostra a inicial.
+    #[serde(default)]
+    chat_avatar: Option<String>,
     #[serde(default)]
     recent: Option<Vec<Recent>>,
     text: String,
@@ -57,6 +66,75 @@ pub(super) fn parse(data: &Value) -> Option<Vec<Draft>> {
     Some(drafts.iter().filter_map(|d| <Draft as serde::Deserialize>::deserialize(d)
             .map_err(|error| eprintln!("whatsapp: rascunho {} que o app não lê: {error}", d["id"].as_str().unwrap_or("?"))).ok())
         .filter(|d| d.state == "pending" && !d.id.is_empty() && !d.chat_number.is_empty()).collect())
+}
+
+/// Se a máquina aceita o texto editado (`edit` do evento). Ausente: hangar-server antigo, sem "Editar".
+pub(super) fn can_edit(data: &Value) -> bool { data["edit"].as_bool().unwrap_or(false) }
+
+/// Teto do texto do WhatsApp, em pontos de código, como o serviço conta.
+const TEXT_MAX: usize = 4096;
+
+/// `\r\n` e `\r` viram `\n`, como o serviço faz antes de comparar e de enviar.
+pub(super) fn normalize_newlines(text: &str) -> String { text.replace("\r\n", "\n").replace('\r', "\n") }
+
+/// O texto que vai pela rota da edição: `None` quando o campo, normalizado, é o do rascunho, e o Enviar normal basta.
+pub(super) fn edited_text(original: &str, field: &str) -> Option<String> {
+    let field = normalize_newlines(field);
+    (field != normalize_newlines(original)).then_some(field)
+}
+
+/// Chave do motivo pelo qual o texto não pode sair; as mesmas regras da criação do rascunho no serviço.
+pub(super) fn text_problem(text: &str, has_file: bool) -> Option<&'static str> {
+    if text.chars().count() > TEXT_MAX { Some("whatsapp_draft_err_text_long") }
+    else if text.trim().is_empty() && !has_file { Some("whatsapp_draft_err_text_empty") }
+    else { None }
+}
+
+/// O 202 do envio editado traz o texto que o serviço aprovou: só vale o mesmo que o cartão mandou.
+pub(super) fn sent_text_confirmed(reply: &Value, sent: &str) -> bool { reply["sent_text"].as_str() == Some(sent) }
+
+/// Lado da foto decodificada: o dobro do círculo de 40, para tela densa.
+const AVATAR_PIXELS: u32 = 80;
+const AVATAR: f32 = 40.;
+
+/// A foto da conversa pronta para desenhar; `None` sem foto ou com bytes que não são JPEG legível, e o cartão mostra a
+/// inicial. Só JPEG: o decodificador da casa também desenharia SVG, e a foto vem de terceiro.
+pub(crate) fn avatar_image(data: Option<&str>) -> Option<Arc<RenderImage>> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data?.trim()).ok()?;
+    if !bytes.starts_with(&[0xFF, 0xD8, 0xFF]) { return None; }
+    media::decode(&bytes, AVATAR_PIXELS, AVATAR_PIXELS, None)
+}
+
+/// A letra do círculo sem foto: a primeira visível do nome, maiúscula; sem nome, o primeiro dígito do número.
+pub(super) fn initial(name: Option<&str>, number: &str) -> String {
+    name.and_then(|name| name.chars().find(|c| !c.is_whitespace() && !invisible(*c as u32))).map(|c| c.to_uppercase().collect::<String>())
+        .or_else(|| number.chars().find(char::is_ascii_digit).map(String::from)).unwrap_or_default()
+}
+
+/// Chave da palavra do tipo de uma mensagem recente; `None` em texto, `other` e tipo desconhecido, que mostram só o texto.
+fn kind_key(kind: Option<&str>) -> Option<&'static str> {
+    Some(match kind? {
+        "image" => "whatsapp_draft_kind_image",
+        "video" => "whatsapp_draft_kind_video",
+        "audio" => "whatsapp_draft_kind_audio",
+        "sticker" => "whatsapp_draft_kind_sticker",
+        "document" => "whatsapp_draft_kind_document",
+        _ => return None,
+    })
+}
+
+/// O que o balão mostra: a etiqueta do tipo em maiúsculas e o texto já marcado. O texto é a legenda; em documento sem
+/// legenda, o nome do arquivo; sem nenhum, a palavra do tipo.
+pub(super) fn recent_body(r: &Recent) -> (Option<String>, MarkedText) {
+    let text = r.text.as_deref().unwrap_or_default();
+    let Some(key) = kind_key(r.kind.as_deref()) else { return (None, mark_invisibles(text)) };
+    let word = tr_shared(key, &[]);
+    let file = r.file_name.as_deref().filter(|_| r.kind.as_deref() == Some("document")).unwrap_or_default();
+    let shown = if !text.trim().is_empty() { mark_invisibles(text) }
+        else if !file.trim().is_empty() { mark_invisibles(file) }
+        else { (word.clone().into(), Vec::new()) };
+    (Some(word.to_uppercase()), shown)
 }
 
 // A mesma lista do `whatsappOutbox.ts` do core, conferida pelos casos de `whatsappInvisible.fixtures.json`: o que não
@@ -148,6 +226,8 @@ pub(super) fn refusal_text(code: Option<&str>, locked_until: Option<&str>) -> Op
         "whatsapp_new_contact" => "whatsapp_draft_err_new_contact",
         // Serviço sem envio (api 1): o remédio é o mesmo.
         "whatsapp_outdated" | "whatsapp_send_unsupported" => "whatsapp_draft_err_outdated",
+        // Hangar novo com serviço sem a rota da edição: o rascunho continua esperando.
+        "whatsapp_edit_unsupported" => "whatsapp_draft_err_edit_unsupported",
         _ => return None,
     };
     Some(tr_shared(key, &[]))
@@ -175,17 +255,35 @@ fn answer_on(id: &str, send: bool, cx: &mut Context<WhatsAppOutbox>) -> impl Fn(
     }
 }
 
-/// `text`: o texto do rascunho já marcado, calculado quando o rascunho chega, não a cada desenho.
-struct Card { draft: Draft, text: MarkedText, clock: Entity<Countdown>, sending: bool, error: Option<String> }
+/// Clique do "Editar" (`open`) ou do "Desfazer edição" do cartão `id`.
+fn edit_on(id: &str, open: bool, cx: &mut Context<WhatsAppOutbox>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static + use<> {
+    let (id, outbox) = (id.to_owned(), cx.entity().downgrade());
+    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+        let _ = outbox.update(cx, |this, cx| if open { this.start_edit(&id, window, cx) } else { this.undo_edit(&id, cx) });
+    }
+}
+
+/// O campo da edição, vivo só enquanto o cartão edita.
+struct Editor { input: Entity<TextareaState>, _changes: Subscription }
+
+/// `text`: o texto do rascunho já marcado, e `avatar` a foto decodificada, calculados quando o rascunho chega, não a
+/// cada desenho.
+struct Card { draft: Draft, text: MarkedText, avatar: Option<Arc<RenderImage>>, clock: Entity<Countdown>, sending: bool, error: Option<String>,
+    editor: Option<Editor> }
+
+/// A foto do cartão que saiu deixa a memória de texturas: cada rascunho traz a sua.
+fn forget(card: Card, cx: &mut App) {
+    if let Some(image) = card.avatar { cx.drop_image(image, None); }
+}
 
 /// Os cartões de uma máquina. Entidade própria: o diálogo da barra de abas mostra a mesma. `clock`: um relógio para todos os
-/// cartões, ligado só enquanto há cartão.
-pub(super) struct WhatsAppOutbox { api: Option<Api>, runtime: Arc<Runtime>, machine: String, cards: Vec<Card>, clock: Option<Task<()>> }
+/// cartões, ligado só enquanto há cartão. `edit`: a máquina aceita o texto editado.
+pub(super) struct WhatsAppOutbox { api: Option<Api>, runtime: Arc<Runtime>, machine: String, cards: Vec<Card>, clock: Option<Task<()>>, edit: bool }
 
 impl WhatsAppOutbox {
-    /// Rascunho que continua na lista guarda o envio em curso e o erro mostrado.
-    fn apply(&mut self, api: Option<Api>, machine: String, list: Vec<Draft>, cx: &mut Context<Self>) {
-        (self.api, self.machine) = (api, machine);
+    /// Rascunho que continua na lista guarda o envio em curso, o erro mostrado e a edição aberta.
+    fn apply(&mut self, api: Option<Api>, machine: String, list: Vec<Draft>, edit: bool, cx: &mut Context<Self>) {
+        (self.api, self.machine, self.edit) = (api, machine, edit);
         let mut old = std::mem::take(&mut self.cards);
         for draft in list {
             let deadline = answer_deadline(draft.answer_by.as_deref(), &draft.expires_at);
@@ -193,14 +291,20 @@ impl WhatsAppOutbox {
                 Some(at) => {
                     let mut card = old.swap_remove(at);
                     if card.draft.text != draft.text { card.text = mark_invisibles(&draft.text); }
+                    if card.draft.chat_avatar != draft.chat_avatar
+                        && let Some(stale) = std::mem::replace(&mut card.avatar, avatar_image(draft.chat_avatar.as_deref())) {
+                        cx.drop_image(stale, None);
+                    }
                     card.clock.update(cx, |clock, _| clock.deadline = deadline);
                     card.draft = draft;
                     card
                 }
-                None => Card { text: mark_invisibles(&draft.text), clock: cx.new(|_| Countdown { deadline }), draft, sending: false, error: None },
+                None => Card { text: mark_invisibles(&draft.text), avatar: avatar_image(draft.chat_avatar.as_deref()), clock: cx.new(|_| Countdown { deadline }),
+                    draft, sending: false, error: None, editor: None },
             };
             self.cards.push(card);
         }
+        for card in old { forget(card, cx); }
         self.tick(cx);
         cx.notify();
     }
@@ -223,9 +327,15 @@ impl WhatsAppOutbox {
     pub(super) fn count(&self) -> usize { self.cards.len() }
 
     fn clear(&mut self, cx: &mut Context<Self>) {
-        self.cards.clear();
+        for card in std::mem::take(&mut self.cards) { forget(card, cx); }
         self.tick(cx);
         cx.notify();
+    }
+
+    /// Tira o cartão `id` da frente; quem o tira de vez é o evento.
+    fn remove(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(at) = self.cards.iter().position(|c| c.draft.id == id) { forget(self.cards.remove(at), cx); }
+        self.tick(cx);
     }
 
     /// Os cartões cujo `servidor::sessao` de origem passa em `keep`.
@@ -233,8 +343,34 @@ impl WhatsAppOutbox {
         self.cards.iter().filter(|c| keep(&c.draft.origin)).map(|card| self.render_card(card, cx)).collect()
     }
 
+    /// Abre o texto do rascunho num campo do próprio cartão. Destino e anexo continuam os do rascunho.
+    fn start_edit(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(card) = self.cards.iter_mut().find(|c| c.draft.id == id).filter(|c| !c.sending && c.editor.is_none()) else { return };
+        let text = card.draft.text.clone();
+        let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(EDIT_ROWS, EDIT_MAX_ROWS).default_value(text));
+        let key = id.to_owned();
+        let changes = cx.subscribe_in(&input, window, move |this: &mut Self, _, event: &InputEvent, _, cx| if matches!(event, InputEvent::Change) {
+            // O erro da última tentativa era do texto de antes.
+            if let Some(card) = this.cards.iter_mut().find(|c| c.draft.id == key) { card.error = None; }
+            cx.notify();
+        });
+        input.update(cx, |state, cx| state.focus(window, cx));
+        card.editor = Some(Editor { input, _changes: changes });
+        cx.notify();
+    }
+
+    /// Fecha o campo e volta ao texto que a sessão escreveu.
+    fn undo_edit(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(card) = self.cards.iter_mut().find(|c| c.draft.id == id).filter(|c| !c.sending) else { return };
+        (card.editor, card.error) = (None, None);
+        cx.notify();
+    }
+
     fn answer(&mut self, id: String, send: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(card) = self.cards.iter_mut().find(|c| c.draft.id == id).filter(|c| !c.sending) else { return };
+        // Só o texto mudado vai pela rota da edição: igual ao do rascunho, sai pelo Enviar normal.
+        let edited = card.editor.as_ref().filter(|_| send).and_then(|editor| edited_text(&card.draft.text, &editor.input.read(cx).value()));
+        if edited.as_deref().is_some_and(|text| text_problem(text, card.draft.file.is_some()).is_some()) { return; }
         let Some(api) = self.api.clone() else {
             card.error = Some(tr("network_error"));
             cx.notify();
@@ -242,9 +378,13 @@ impl WhatsAppOutbox {
         };
         (card.sending, card.error) = (true, None);
         let (done, result) = tokio::sync::oneshot::channel();
-        let path = id.clone();
+        let (path, sent) = (id.clone(), edited.clone());
         self.runtime.spawn(async move {
-            let (action, body) = if send { ("send", Some(json!({"via": "desktop"}))) } else { ("decline", None) };
+            let (action, body) = match edited {
+                Some(text) => ("send-edited", Some(json!({"via": "desktop", "text": text}))),
+                None if send => ("send", Some(json!({"via": "desktop"}))),
+                None => ("decline", None),
+            };
             let result = api.server_send(reqwest::Method::POST, &["whatsapp", "outbox", &path, action], body, 30).await;
             // A trava diz até quando pelo status do serviço; sem ele, a frase sem data.
             let until = match &result {
@@ -258,10 +398,16 @@ impl WhatsAppOutbox {
             let (result, until) = result.await.unwrap_or_else(|_| (Err(Failure::local("network_error")), None));
             let _ = this.update_in(cx, |this, window, cx| {
                 match result {
+                    // O serviço aprovou outro texto: nunca dizer que saiu o editado. O cartão fica com o aviso e sem
+                    // botão, e o aviso vai também à notificação, porque o evento tira o cartão logo depois.
+                    Ok(reply) if sent.as_deref().is_some_and(|text| !sent_text_confirmed(&reply, text)) => {
+                        let warning = tr_shared("whatsapp_draft_err_sent_text_mismatch", &[]);
+                        if let Some(card) = this.cards.iter_mut().find(|c| c.draft.id == id) { card.error = Some(warning.clone()); }
+                        window.push_notification(Notification::warning(warning), cx);
+                    }
                     // Quem tira o cartão de vez é o evento; aqui ele só sai da frente.
                     Ok(_) => {
-                        this.cards.retain(|c| c.draft.id != id);
-                        this.tick(cx);
+                        this.remove(&id, cx);
                         if send { window.push_notification(Notification::success(tr_shared("whatsapp_draft_sending", &[])), cx); }
                     }
                     Err(error) => {
@@ -269,8 +415,7 @@ impl WhatsAppOutbox {
                         let text = refusal_text(code, until.as_deref()).unwrap_or_else(|| Hangar::fetch_failure(&error));
                         // Expirado, respondido em outra tela ou apagado não volta: o cartão sai e o motivo vai no aviso.
                         if ends_card(code) {
-                            this.cards.retain(|c| c.draft.id != id);
-                            this.tick(cx);
+                            this.remove(&id, cx);
                             window.push_notification(Notification::warning(text), cx);
                         } else if let Some(card) = this.cards.iter_mut().find(|c| c.draft.id == id) {
                             (card.sending, card.error) = (false, Some(text));
@@ -285,64 +430,135 @@ impl WhatsAppOutbox {
 
     fn render_card(&self, card: &Card, cx: &mut Context<Self>) -> AnyElement {
         let (id, off) = (card.draft.id.clone(), card.sending);
-        let send = request_button("whatsapp-send", &id, tr_shared("whatsapp_draft_send", &[]), off).primary().on_click(answer_on(&id, true, cx));
+        let (block, edited, problem) = match &card.editor {
+            Some(editor) => {
+                let value = editor.input.read(cx).value();
+                let field = normalize_newlines(&value);
+                let count = field.chars().count();
+                let undo = edit_button("edit-undo", &id, tr_shared("whatsapp_draft_edit_undo", &[]), off).on_click(edit_on(&id, false, cx));
+                let input = Textarea::new(&editor.input).aria_label(tr_shared("whatsapp_draft_text_editing", &[("count", &count.to_string())])).disabled(off);
+                (TextBlock::Editing { count, field: input.into_any_element(), undo }, edited_text(&card.draft.text, &value).is_some(),
+                    text_problem(&field, card.draft.file.is_some()))
+            }
+            None => {
+                let edit = self.edit.then(|| edit_button("edit", &id, tr_shared("whatsapp_draft_edit", &[]), off).on_click(edit_on(&id, true, cx)));
+                (TextBlock::Exact { text: &card.text, edit }, false, None)
+            }
+        };
+        let label = tr_shared(if edited { "whatsapp_draft_send_edited" } else { "whatsapp_draft_send" }, &[]);
+        let send = request_button("whatsapp-send", &id, label, off || problem.is_some()).primary().on_click(answer_on(&id, true, cx));
         let decline = request_button("whatsapp-decline", &id, tr_shared("whatsapp_draft_decline", &[]), off).outline().on_click(answer_on(&id, false, cx));
-        draft_card(&card.draft, &card.text, &self.machine, card.clock.clone(), send, decline, card.error.clone()).into_any_element()
+        let error = problem.map(|key| tr_shared(key, &[])).or_else(|| card.error.clone());
+        draft_card(&card.draft, block, card.avatar.clone(), &self.machine, card.clock.clone(), send, decline, error).into_any_element()
     }
 }
 
-/// O cartão de um rascunho, só desenho, na casca dos pedidos do cofre: a tela passa o texto marcado, a contagem viva e os
-/// botões com clique; a novidade da atualização, a contagem parada e os botões sem clique.
-pub(crate) fn draft_card(d: &Draft, text: &MarkedText, machine: &str, clock: impl IntoElement, send: Button, decline: Button, error: Option<String>) -> Stateful<Div> {
+/// Linhas do campo da edição: cresce de ~120 px até rolar.
+const EDIT_ROWS: usize = 7;
+const EDIT_MAX_ROWS: usize = 16;
+
+/// O bloco do texto do cartão: o texto exato, com o "Editar" quando a máquina aceita edição, ou o campo da edição com o
+/// "Desfazer edição" e a contagem do campo.
+pub(crate) enum TextBlock<'a> {
+    Exact { text: &'a MarkedText, edit: Option<Button> },
+    Editing { count: usize, field: AnyElement, undo: Button },
+}
+
+/// O "Editar" e o "Desfazer edição": link à direita do rótulo do texto.
+pub(crate) fn edit_button(suffix: &str, id: &str, label: String, off: bool) -> Button {
+    Button::new(SharedString::from(format!("whatsapp-{suffix}-{id}"))).link().xsmall().label(label).disabled(off)
+}
+
+/// O cartão de um rascunho, só desenho, na casca dos pedidos do cofre: a tela passa o bloco do texto, a foto, a contagem viva
+/// e os botões com clique; a novidade da atualização, a contagem parada e os botões sem clique.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draft_card(d: &Draft, block: TextBlock, avatar: Option<Arc<RenderImage>>, machine: &str, clock: impl IntoElement, send: Button,
+    decline: Button, error: Option<String>) -> Stateful<Div> {
     let id = &d.id;
     let heading = request_heading(tr_shared("whatsapp_draft_title", &[]), machine, Some(clock.into_any_element()));
     let source = d.chat_name_source.as_deref().and_then(|s| match s {
         "contact" => Some("whatsapp_draft_source_contact"), "push" => Some("whatsapp_draft_source_push"), "group" => Some("whatsapp_draft_source_group"), _ => None,
     }).map(|key| tr_shared(key, &[]));
     let name = d.chat_name.clone().unwrap_or_default();
-    let destination = div().flex().flex_wrap().items_baseline().gap_2()
-        .child(div().px(px(7.)).py(px(2.)).rounded(px(5.)).bg(theme::boxed()).font_family(theme::MONO).text_size(px(14.))
-            .font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(d.chat_number.clone()))
-        .when(!name.is_empty() || source.is_some(), |el| el.child(div().flex().items_center().gap_1().text_color(theme::muted())
-            .when(!name.is_empty(), |el| el.child(name.clone()))
-            .children(source.map(|s| div().px(px(5.)).rounded(px(4.)).border_1().border_color(theme::border()).child(s)))));
+    let circle = || div().id(SharedString::from(format!("whatsapp-avatar-{id}"))).flex_shrink_0().size(px(AVATAR)).rounded_full();
+    let photo = match avatar {
+        Some(image) => circle().border_1().border_color(theme::border_strong()).role(Role::Image)
+            .aria_label(tr_shared("whatsapp_draft_avatar", &[("name", if name.is_empty() { d.chat_number.as_str() } else { name.as_str() })]))
+            .child(img(image).size_full().rounded_full().object_fit(ObjectFit::Cover)),
+        None => circle().bg(theme::accent_dim()).flex().items_center().justify_center().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD)
+            .text_color(theme::accent_text()).child(initial(d.chat_name.as_deref(), &d.chat_number)),
+    };
+    let destination = div().flex().items_center().gap_2().child(photo)
+        .child(div().min_w_0().flex().flex_col().items_start().gap(px(3.))
+            .child(div().px(px(7.)).py(px(2.)).rounded(px(5.)).bg(theme::boxed()).font_family(theme::MONO).text_size(px(14.))
+                .font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(d.chat_number.clone()))
+            .when(!name.is_empty() || source.is_some(), |el| el.child(div().flex().flex_wrap().items_center().gap_1().text_color(theme::muted())
+                .when(!name.is_empty(), |el| el.child(name.clone()))
+                .children(source.map(|s| div().px(px(5.)).rounded(px(4.)).border_1().border_color(theme::border()).child(s))))));
     let recent = d.recent.clone().unwrap_or_default();
     let quoted = d.quoted_text.clone().unwrap_or_default();
-    let (shown, marks) = text;
     let mark = HighlightStyle { color: Some(theme::warning()), background_color: Some(theme::warning().opacity(0.14)), ..Default::default() };
-    let text = (!d.text.is_empty()).then(|| div().id(SharedString::from(format!("whatsapp-text-{id}"))).max_h(px(132.)).overflow_y_scroll()
-        .px(px(8.)).py(px(6.)).rounded(px(5.)).bg(theme::boxed()).font_family(theme::MONO).text_color(theme::text()).whitespace_normal()
-        .child(StyledText::new(shown.clone()).with_highlights(marks.iter().map(|range| (range.clone(), mark)))));
+    let text = match block {
+        TextBlock::Exact { text: (shown, marks), edit } => (!d.text.is_empty() || edit.is_some()).then(|| div().flex().flex_col().gap_1()
+            .child(label_row(tr_shared("whatsapp_draft_text", &[("count", &d.text.chars().count().to_string())]), edit))
+            .when(!d.text.is_empty(), |el| el.child(div().id(SharedString::from(format!("whatsapp-text-{id}"))).max_h(px(132.)).overflow_y_scroll()
+                .px(px(8.)).py(px(6.)).rounded(px(5.)).bg(theme::boxed()).font_family(theme::MONO).text_color(theme::text()).whitespace_normal()
+                .child(StyledText::new(shown.clone()).with_highlights(marks.iter().map(|range| (range.clone(), mark))))))),
+        TextBlock::Editing { count, field, undo } => Some(div().flex().flex_col().gap_1()
+            .child(label_row(tr_shared("whatsapp_draft_text_editing", &[("count", &count.to_string())]), Some(undo)))
+            .child(div().min_h(px(EDIT_MIN_HEIGHT)).px(px(8.)).py(px(6.)).rounded(px(5.)).bg(theme::boxed()).border_1().border_color(theme::warning())
+                .font_family(theme::MONO).text_color(theme::text()).child(field))),
+    };
+    let contact = if name.is_empty() { d.chat_number.clone() } else { name.clone() };
     let body = div().flex().flex_col().gap_1().text_xs().text_color(theme::text())
         .child(destination)
         .when(d.chat_name_source.as_deref() == Some("push"), |el| el.child(warn_line(tr_shared("whatsapp_draft_push_warning", &[]))))
         .when(!recent.is_empty(), |el| el.child(label(tr_shared("whatsapp_draft_recent", &[])))
-            .child(div().border_l_2().border_color(theme::border()).pl_2().flex().flex_col().gap(px(2.)).children(recent.iter().map(recent_line))))
+            .child(div().flex().flex_col().gap_1().p(px(6.)).rounded(px(6.)).bg(theme::boxed().opacity(0.4))
+                .children(recent.iter().map(|r| bubble(r, &contact, mark)))))
         .when(!quoted.is_empty(), |el| el.child(label(tr_shared("whatsapp_draft_quoted", &[])))
             .child(div().border_l_2().border_color(theme::accent()).bg(theme::accent_dim()).px_2().py_1().rounded_r(px(5.))
                 .text_color(theme::muted()).whitespace_normal().child(quoted.clone())))
-        .when_some(text, |el, text| el
-            .child(label(tr_shared("whatsapp_draft_text", &[("count", &d.text.chars().count().to_string())])))
-            .child(text))
+        .children(text)
         .when_some(d.file.as_ref(), |el, file| el.child(label(tr_shared("whatsapp_draft_attachment", &[]))).child(file_row(file))
             .when(file.outside_cwd.unwrap_or(true), |el| el.child(warn_line(tr_shared("whatsapp_draft_outside_cwd", &[])))))
         .child(request_pair(send, decline));
     request_card(id, heading, tr_shared("whatsapp_draft_wants", &[("origin", &d.origin)]), "", body, error)
 }
 
+/// Altura mínima do campo da edição, a do desenho aprovado.
+const EDIT_MIN_HEIGHT: f32 = 120.;
+
 fn label(text: String) -> Div { div().mt(px(3.)).text_color(theme::faint()).child(text) }
+
+/// O rótulo do texto com o link da edição à direita.
+fn label_row(text: String, link: Option<Button>) -> Div {
+    div().mt(px(3.)).flex().items_center().justify_between().gap_2()
+        .child(div().min_w_0().text_color(theme::faint()).child(text))
+        .children(link)
+}
 
 fn warn_line(text: String) -> Div { div().text_color(theme::warning()).whitespace_normal().child(text) }
 
-/// Uma das últimas mensagens: quem, a hora e o texto; as da própria conta no tom do texto.
-fn recent_line(r: &Recent) -> AnyElement {
-    let who = if r.from_me { tr_shared("whatsapp_draft_me", &[]) } else { r.sender.clone().unwrap_or_default() };
+/// Uma das últimas mensagens como balão: as minhas à direita, as dele à esquerda; embaixo, a hora (e quem, nas dele). Mídia
+/// ganha a etiqueta do tipo antes do texto. `contact`: quem fala quando a mensagem não diz.
+fn bubble(r: &Recent, contact: &str, mark: HighlightStyle) -> AnyElement {
+    let (tag, (shown, marks)) = recent_body(r);
     let at = r.at.as_deref().map(clock).unwrap_or_default();
-    let head = [who.as_str(), at.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
-    let line = format!("{head} — {}", r.text.clone().unwrap_or_default());
-    let strong = HighlightStyle { font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() };
-    div().whitespace_normal().text_color(if r.from_me { theme::text() } else { theme::muted() })
-        .child(StyledText::new(line).with_highlights((!who.is_empty()).then(|| (0..who.len(), strong))))
+    let who = if r.from_me { String::new() } else { r.sender.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| contact.to_owned()) };
+    let meta = [who.as_str(), at.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+    let text = div().min_w_0().whitespace_normal().child(StyledText::new(shown).with_highlights(marks.into_iter().map(|range| (range, mark))));
+    let content = match tag {
+        Some(tag) => div().flex().items_start().gap(px(5.)).text_color(theme::muted())
+            .child(div().flex_shrink_0().px(px(4.)).rounded(px(4.)).bg(theme::hover()).text_size(px(10.)).child(tag))
+            .child(text),
+        None => text,
+    };
+    div().max_w(relative(0.82)).px(px(8.)).py(px(4.)).rounded(px(8.))
+        .map(|el| if r.from_me { el.self_end().rounded_br(px(2.)).bg(theme::success().opacity(0.16)).text_color(theme::text()) }
+            else { el.self_start().rounded_bl(px(2.)).bg(theme::boxed()).text_color(theme::body_text()) })
+        .child(content)
+        .when(!meta.is_empty(), |el| el.child(div().mt(px(1.)).text_size(px(10.)).text_color(theme::faint()).child(meta)))
         .into_any_element()
 }
 
@@ -392,12 +608,13 @@ impl Hangar {
             },
         };
         if list.is_empty() { return Some(drop_outbox(&mut self.whatsapp_outbox, key, cx)); }
+        let edit = data.is_some_and(can_edit);
         let (api, machine) = (self.machine_api(key), self.vault_machine_label(key, cx));
         let runtime = self.runtime.clone();
         let entity = self.whatsapp_outbox.entry(key.to_owned())
-            .or_insert_with(|| cx.new(|_| WhatsAppOutbox { api: None, runtime, machine: String::new(), cards: Vec::new(), clock: None }))
+            .or_insert_with(|| cx.new(|_| WhatsAppOutbox { api: None, runtime, machine: String::new(), cards: Vec::new(), clock: None, edit: false }))
             .clone();
-        entity.update(cx, |outbox, cx| outbox.apply(api, machine, list, cx));
+        entity.update(cx, |outbox, cx| outbox.apply(api, machine, list, edit, cx));
         // Sem o identificador das máquinas, o cartão não acha a sessão que pediu.
         self.ensure_identities();
         Some(true)
@@ -477,9 +694,9 @@ mod tests {
     fn an_empty_event_empties_the_outbox_an_open_dialog_still_holds(cx: &mut gpui::TestAppContext) {
         use gpui::AppContext;
         let runtime = Arc::new(Runtime::new().unwrap());
-        let outbox = cx.new(|_| WhatsAppOutbox { api: None, runtime, machine: String::new(), cards: Vec::new(), clock: None });
+        let outbox = cx.new(|_| WhatsAppOutbox { api: None, runtime, machine: String::new(), cards: Vec::new(), clock: None, edit: false });
         let list = parse(&json!({"drafts": [draft("d1", "pending")]})).unwrap();
-        outbox.update(cx, |outbox, cx| outbox.apply(None, "casa".into(), list, cx));
+        outbox.update(cx, |outbox, cx| outbox.apply(None, "casa".into(), list, true, cx));
         // O diálogo guarda o seu clone; o mapa perde o dele.
         let mut map = HashMap::from([("casa".to_owned(), outbox.clone())]);
         assert!(cx.update(|cx| drop_outbox(&mut map, "casa", cx)));
@@ -520,6 +737,125 @@ mod tests {
     }
 
     #[test]
+    fn the_event_reads_edit_and_the_new_fields_and_an_old_draft_still_reads() {
+        assert!(!can_edit(&json!({"drafts": []})), "hangar-server antigo não manda edit");
+        assert!(can_edit(&json!({"drafts": [], "edit": true})));
+        assert!(!can_edit(&json!({"drafts": [], "edit": false})));
+        assert!(!can_edit(&json!({"drafts": [], "edit": "true"})));
+        let mut d = draft("d1", "pending");
+        d["chat_avatar"] = json!("/9j/AAAA");
+        d["edited"] = json!(false);
+        d["sent_text"] = json!("");
+        d["recent"] = json!([{"from_me": false, "sender": "Carlos", "at": "2026-11-24T14:02:00Z", "text": "", "kind": "document", "file_name": "nota.pdf"}]);
+        let list = parse(&json!({"drafts": [d], "edit": true})).unwrap();
+        assert_eq!(list[0].chat_avatar.as_deref(), Some("/9j/AAAA"));
+        let recent = list[0].recent.clone().unwrap();
+        assert_eq!((recent[0].kind.as_deref(), recent[0].file_name.as_deref()), (Some("document"), Some("nota.pdf")));
+        // Rascunho da 0.2.0: sem foto e sem tipo, a recente é texto.
+        let old = parse(&json!({"drafts": [draft("d2", "pending")]})).unwrap();
+        assert_eq!(old[0].chat_avatar, None);
+        let (tag, (shown, _)) = recent_body(&old[0].recent.clone().unwrap()[0]);
+        assert_eq!((tag, shown.to_string()), (None, "oi".to_owned()));
+        let mut null = draft("d3", "pending");
+        null["chat_avatar"] = Value::Null;
+        assert_eq!(parse(&json!({"drafts": [null]})).unwrap()[0].chat_avatar, None);
+    }
+
+    #[test]
+    fn an_unreadable_avatar_falls_back_to_the_initial() {
+        use base64::Engine as _;
+        assert!(avatar_image(None).is_none());
+        assert!(avatar_image(Some("")).is_none());
+        assert!(avatar_image(Some("isto não é base64!")).is_none());
+        let encoded = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        assert!(avatar_image(Some(&encoded(b"not a jpeg at all"))).is_none());
+        assert!(avatar_image(Some(&encoded(br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>"#))).is_none(), "só JPEG");
+        assert!(avatar_image(Some(&encoded(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0]))).is_none(), "JPEG cortado");
+        assert_eq!(initial(Some("carlos"), "5511987654321"), "C");
+        assert_eq!(initial(Some("  \u{200B}ana"), "5511987654321"), "A");
+        assert_eq!(initial(Some("élida"), "5511987654321"), "É");
+        assert_eq!(initial(None, "5511987654321"), "5");
+        assert_eq!(initial(Some(""), "+55 11"), "5");
+        assert_eq!(initial(None, ""), "");
+    }
+
+    fn recent(value: Value) -> Recent { serde_json::from_value(value).unwrap() }
+
+    fn body(value: Value) -> (Option<String>, String) {
+        let (tag, (shown, _)) = recent_body(&recent(value));
+        (tag, shown.to_string())
+    }
+
+    #[test]
+    fn a_media_message_shows_its_kind_and_the_caption_the_file_name_or_the_word() {
+        crate::i18n::english_in_this_thread(false);
+        let tagged = |tag: &str, text: &str| (Some(tag.to_owned()), text.to_owned());
+        assert_eq!(body(json!({"kind": "image", "text": "na praia"})), tagged("FOTO", "na praia"));
+        assert_eq!(body(json!({"kind": "image", "text": ""})), tagged("FOTO", "foto"));
+        assert_eq!(body(json!({"kind": "video"})), tagged("VÍDEO", "vídeo"));
+        assert_eq!(body(json!({"kind": "audio", "text": ""})), tagged("ÁUDIO", "áudio"));
+        assert_eq!(body(json!({"kind": "sticker", "text": ""})), tagged("FIGURINHA", "figurinha"));
+        assert_eq!(body(json!({"kind": "document", "text": "", "file_name": "nota.pdf"})), tagged("DOCUMENTO", "nota.pdf"));
+        assert_eq!(body(json!({"kind": "document", "text": "segue", "file_name": "nota.pdf"})), tagged("DOCUMENTO", "segue"));
+        assert_eq!(body(json!({"kind": "document", "text": "", "file_name": ""})), tagged("DOCUMENTO", "documento"));
+        // Nome de arquivo e legenda são de terceiro: os invisíveis aparecem marcados.
+        assert_eq!(body(json!({"kind": "document", "text": "", "file_name": "a\u{202E}fdp.exe"})), tagged("DOCUMENTO", "a⟨U+202E⟩fdp.exe"));
+        assert_eq!(body(json!({"kind": "image", "text": "x\u{200B}y"})), tagged("FOTO", "x⟨U+200B⟩y"));
+        // Texto, outro e tipo desconhecido: só o texto, e o nome de arquivo fica fora.
+        assert_eq!(body(json!({"kind": "text", "text": "oi", "file_name": "a.pdf"})), (None, "oi".to_owned()));
+        assert_eq!(body(json!({"kind": "other", "text": "localização"})), (None, "localização".to_owned()));
+        assert_eq!(body(json!({"kind": "poll", "text": "enquete"})), (None, "enquete".to_owned()));
+        assert_eq!(body(json!({"text": "\u{2060}"})), (None, "⟨U+2060⟩".to_owned()));
+        crate::i18n::english_in_this_thread(true);
+        assert_eq!(body(json!({"kind": "image", "text": ""})), tagged("PHOTO", "photo"));
+        crate::i18n::english_in_this_thread(false);
+    }
+
+    #[test]
+    fn the_send_button_follows_the_field_after_normalizing_line_breaks() {
+        // Igual depois de normalizar: Enviar e a rota normal.
+        assert_eq!(edited_text("a\r\nb", "a\nb"), None);
+        assert_eq!(edited_text("a\nb", "a\r\nb"), None);
+        assert_eq!(edited_text("a\rb", "a\nb"), None);
+        assert_eq!(edited_text("oi", "oi"), None);
+        // Diferente: Enviar texto editado, com o campo normalizado.
+        assert_eq!(edited_text("oi", "olá"), Some("olá".to_owned()));
+        assert_eq!(edited_text("oi", "oi\r\ntudo bem?\r"), Some("oi\ntudo bem?\n".to_owned()));
+        assert_eq!(edited_text("oi", ""), Some(String::new()));
+        assert_eq!(normalize_newlines("a\r\r\nb"), "a\n\nb");
+    }
+
+    #[test]
+    fn the_edited_text_follows_the_service_rules() {
+        assert_eq!(text_problem(&"x".repeat(4096), false), None);
+        assert_eq!(text_problem(&"x".repeat(4097), false), Some("whatsapp_draft_err_text_long"));
+        // Pontos de código, não bytes nem unidades UTF-16.
+        assert_eq!(text_problem(&"é".repeat(4096), false), None);
+        assert_eq!(text_problem(&"😀".repeat(4096), false), None);
+        assert_eq!(text_problem(&"😀".repeat(4097), true), Some("whatsapp_draft_err_text_long"));
+        assert_eq!(text_problem("", false), Some("whatsapp_draft_err_text_empty"));
+        assert_eq!(text_problem("  \n\t", false), Some("whatsapp_draft_err_text_empty"));
+        assert_eq!(text_problem("", true), None);
+        assert_eq!(text_problem("oi", false), None);
+    }
+
+    #[test]
+    fn the_accepted_reply_must_carry_the_text_that_was_sent() {
+        assert!(sent_text_confirmed(&json!({"id": "d1", "state": "sending", "sent_text": "olá\nmundo"}), "olá\nmundo"));
+        assert!(!sent_text_confirmed(&json!({"sent_text": "oi"}), "olá"));
+        assert!(!sent_text_confirmed(&json!({"id": "d1"}), "olá"));
+        assert!(!sent_text_confirmed(&json!({"sent_text": null}), "olá"));
+        assert!(!sent_text_confirmed(&Value::Null, ""));
+    }
+
+    #[test]
+    fn edit_unsupported_has_its_own_phrase_and_keeps_the_card() {
+        crate::i18n::english_in_this_thread(false);
+        assert_eq!(refusal_text(Some("whatsapp_edit_unsupported"), None), Some(tr_shared("whatsapp_draft_err_edit_unsupported", &[])));
+        assert!(!ends_card(Some("whatsapp_edit_unsupported")));
+    }
+
+    #[test]
     fn refusals_that_end_the_card() {
         assert!(["whatsapp_expired", "whatsapp_answered", "whatsapp_not_found"].iter().all(|c| ends_card(Some(c))));
         assert!(!ends_card(Some("whatsapp_rate_limited")) && !ends_card(None));
@@ -537,7 +873,10 @@ mod tests {
             "whatsapp_draft_err_answered", "whatsapp_draft_err_not_found", "whatsapp_draft_err_reachout_locked",
             "whatsapp_draft_err_reachout_locked_unknown", "whatsapp_draft_err_rate_limited", "whatsapp_draft_err_not_paired",
             "whatsapp_draft_err_new_contact",
-            "whatsapp_draft_err_outdated"];
+            "whatsapp_draft_err_outdated", "whatsapp_draft_kind_image", "whatsapp_draft_kind_video", "whatsapp_draft_kind_audio",
+            "whatsapp_draft_kind_sticker", "whatsapp_draft_kind_document", "whatsapp_draft_edit", "whatsapp_draft_edit_undo",
+            "whatsapp_draft_text_editing", "whatsapp_draft_send_edited", "whatsapp_draft_err_edit_unsupported", "whatsapp_draft_err_text_empty",
+            "whatsapp_draft_err_text_long", "whatsapp_draft_err_sent_text_mismatch", "whatsapp_draft_avatar"];
         for english in [false, true] {
             crate::i18n::english_in_this_thread(english);
             let missing: Vec<&str> = keys.into_iter().filter(|key| tr_shared(key, &[]) == *key).collect();

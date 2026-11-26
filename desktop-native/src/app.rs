@@ -101,7 +101,8 @@ pub(crate) use settings::segments_preview;
 pub(crate) use whatsapp::{ConnectedFacts as WhatsAppConnected, connected_summary as whatsapp_connected_summary, pair_card as whatsapp_pair_card,
     qr_row as whatsapp_qr_row, risk_box as whatsapp_risk_box, usage_box as whatsapp_usage_box};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_heading, request_pair};
-pub(crate) use whatsapp_outbox::{Draft as WhatsAppDraft, countdown_label as whatsapp_countdown_label, draft_card as whatsapp_draft_card,
+pub(crate) use whatsapp_outbox::{Draft as WhatsAppDraft, TextBlock as WhatsAppTextBlock, avatar_image as whatsapp_avatar_image,
+    countdown_label as whatsapp_countdown_label, draft_card as whatsapp_draft_card, edit_button as whatsapp_edit_button,
     mark_invisibles as whatsapp_mark_invisibles};
 pub(crate) use create::{base_button, base_row, mode_row, provider_segment, provider_track, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
