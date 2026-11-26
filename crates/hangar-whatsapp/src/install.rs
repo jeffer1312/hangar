@@ -123,12 +123,21 @@ pub struct CheckFailure {
     pub code: String,
 }
 
+/// Uma passada da atualização automática: `from` é a tag instalada antes; `to`, a release mais nova achada (a
+/// instalada depois quando trocou), ou `from` quando a procura no GitHub falhou.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutoUpdate {
+    pub from: String,
+    pub to: String,
+    pub result: Result<Outcome, Failure>,
+}
+
 /// O que a passada do relógio tem a fazer, decidido sem a vez do instalador ([`auto_wants`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AutoPlan {
     NotInstalled,
-    /// Nada a trocar, ou a procura no GitHub falhou. `to` é a release mais nova achada, ou `from` sem resposta.
-    Done { from: String, to: String, result: Result<Outcome, Failure> },
+    /// Nada a trocar, ou a procura no GitHub falhou.
+    Done(AutoUpdate),
     /// Há release mais nova a tentar: [`update_to`] no [`Mode::Auto`], na vez.
     Switch { from: String, latest: Release },
 }
@@ -290,7 +299,7 @@ pub async fn install(ctx: &Context, progress: &(dyn Fn(Step) + Send + Sync)) -> 
         None => release::check(&installed.binary).await?,
     };
     service::start(&ctx.paths.home, &SERVICE).await?;
-    wait_up(&client, &version, None).await?;
+    wait_up(&client, &version, None, None).await?;
     Ok(Outcome::Installed)
 }
 
@@ -337,7 +346,7 @@ pub async fn start(ctx: &Context) -> Result<(), Failure> {
     let installed = current(&ctx.paths).ok_or_else(not_installed)?;
     let version = release::check(&installed.binary).await?;
     service::start(&ctx.paths.home, &SERVICE).await?;
-    wait_up(&Client::new(ctx.paths.data.clone()), &version, None).await
+    wait_up(&Client::new(ctx.paths.data.clone()), &version, None, None).await
 }
 
 /// A última procura de atualização gravada, ou `None` sem arquivo legível.
@@ -363,15 +372,15 @@ pub async fn auto_wants(ctx: &Context) -> AutoPlan {
     let Some(old) = current(&ctx.paths) else { return AutoPlan::NotInstalled };
     let latest = match release::latest(&ctx.github).await {
         Ok(latest) => latest,
-        Err(failure) => return AutoPlan::Done { to: old.tag.clone(), from: old.tag, result: Err(failure) },
+        Err(failure) => return AutoPlan::Done(AutoUpdate { to: old.tag.clone(), from: old.tag, result: Err(failure) }),
     };
     if !release::newer(&latest.tag, &old.tag) {
         let result = Ok(Outcome::AlreadyLatest);
         record_check(&ctx.paths, &latest.tag, &Attempt { migration: Some(false), registered: false }, &result);
-        return AutoPlan::Done { from: old.tag, to: latest.tag, result };
+        return AutoPlan::Done(AutoUpdate { from: old.tag, to: latest.tag, result });
     }
     if skip_known(&ctx.paths, &latest.tag) {
-        return AutoPlan::Done { from: old.tag, to: latest.tag, result: Ok(Outcome::Skipped) };
+        return AutoPlan::Done(AutoUpdate { from: old.tag, to: latest.tag, result: Ok(Outcome::Skipped) });
     }
     AutoPlan::Switch { from: old.tag, latest }
 }
@@ -429,11 +438,15 @@ struct Attempt {
 fn skip_known(paths: &Paths, tag: &str) -> bool {
     let Some(check) = read_update_check(paths)
         .filter(|c| c.latest == tag && (c.failed.is_some() || (c.migration && c.last_error.is_none()))) else { return false };
-    let check = UpdateCheck { checked_at: now(), ..check };
-    if let Err(failure) = write_update_check(paths, &check) {
+    save_check(paths, &UpdateCheck { checked_at: now(), ..check });
+    true
+}
+
+/// [`write_update_check`] de quem não tem a quem devolver a falha: ela vai ao log.
+fn save_check(paths: &Paths, check: &UpdateCheck) {
+    if let Err(failure) = write_update_check(paths, check) {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: a procura de atualização não ficou gravada");
     }
-    true
 }
 
 /// [`update`] depois de achar a release mais nova; `attempt` recebe o que se sabe assim que se sabe.
@@ -448,14 +461,14 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
         };
     }
     // O fetch reaproveita o programa que já está na pasta: ele pode ser o que o serviço roda, e não sai daqui.
-    let fetched = !ctx.paths.service.join("bin").join(latest.version()).join(release::BINARY.program_file(ctx.platform)).exists();
-    let binary = release::BINARY.fetch(&ctx.github, latest, ctx.platform, &ctx.paths.service).await?;
-    let version = release::check(&binary).await?;
-    let (new_schema, file_schema) = tokio::join!(release::schema_of(&binary), release::data_schema_of(&binary, &ctx.paths.data));
+    let (binary, fetched) = release::BINARY.fetch_new(&ctx.github, latest, ctx.platform, &ctx.paths.service).await?;
+    let (version, new_schema, file_schema) = tokio::join!(release::check(&binary), release::schema_of(&binary),
+        release::data_schema_of(&binary, &ctx.paths.data));
+    let version = version?;
     let changes = format_changes(new_schema, file_schema);
     tracing::info!(?new_schema, ?file_schema, changes, "whatsapp: esquema do arquivo e da versão nova");
     attempt.migration = Some(changes);
-    if stops_for_confirmation(mode, changes) {
+    if changes && mode != Mode::Confirmed {
         tracing::info!(from = %old.tag, to = %latest.tag, "whatsapp: a versão nova pode mudar o formato dos dados; esperando confirmação");
         discard_download(old, &binary, fetched);
         return Ok(Outcome::NeedsConfirm);
@@ -476,7 +489,7 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
     // apontam sempre para a mesma versão.
     let migrating = Migrating { home: &ctx.paths.home, data: &ctx.paths.data, since };
     let up = match registered {
-        Ok(()) => wait_up_for(&client, &version, before, Some(migrating)).await,
+        Ok(()) => wait_up(&client, &version, before, Some(migrating)).await,
         Err(failure) => Err(failure),
     };
     let new = Installed { tag: latest.tag.clone(), binary };
@@ -489,8 +502,8 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
                 failure.detail, new.tag))).await);
         }
         let source = restore_source(mode, &ctx.paths.data, file_schema, since);
-        let same_format = !changes && file_schema.is_some_and(|file| file > 0);
-        return Err(match after_failure(opened_after(switched, recorded_before, &ctx.paths.data, since), source, same_format) {
+        return Err(match after_failure(opened_after(switched, recorded_before, &ctx.paths.data, since), source,
+            same_format(new_schema, file_schema)) {
             AfterFailure::Restore(schema) => restore(ctx, old, &new, schema, fetched, failure).await,
             AfterFailure::KeepNew => keep_new(&ctx.paths, &new, failure),
             AfterFailure::Rollback => rollback(ctx, old, failure).await,
@@ -504,9 +517,8 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
             rollback(ctx, old, failure).await
         });
     }
-    if let Some(dir) = old.binary.parent().filter(|d| Some(*d) != new.binary.parent())
-        && let Err(error) = std::fs::remove_dir_all(dir) {
-        tracing::warn!(dir = %dir.display(), %error, "whatsapp: atualizado, mas a pasta da versão anterior ficou");
+    if let Some(dir) = old.binary.parent().filter(|d| Some(*d) != new.binary.parent()) {
+        remove_version_dir(dir, "whatsapp: atualizado, mas a pasta da versão anterior ficou");
     }
     Ok(Outcome::Updated)
 }
@@ -518,22 +530,30 @@ fn format_changes(new: Option<u32>, file: Option<u32>) -> bool {
     !matches!((new, file), (Some(new), Some(file)) if file == 0 || file >= new)
 }
 
+/// O arquivo existia e já estava no esquema da nova, que só acrescenta colunas sem subir o `user_version`: a
+/// anterior o abre. Com arquivo 0 a nova o criou no esquema dela.
+fn same_format(new: Option<u32>, file: Option<u32>) -> bool {
+    !format_changes(new, file) && file.is_some_and(|file| file > 0)
+}
+
 /// O último processo do serviço saiu com [`BACKUP_FAILED_EXIT`]. Gerenciador que não responde não prova nada.
 async fn backup_failed(home: &Path, binary: &Path) -> bool {
     service::process_state(home, &SERVICE, binary).await
         .is_ok_and(|process| process.last_exit == Some(i32::from(BACKUP_FAILED_EXIT)))
 }
 
-fn stops_for_confirmation(mode: Mode, migration: bool) -> bool {
-    migration && mode != Mode::Confirmed
-}
-
 /// Um programa baixado e não confirmado não fica na pasta: a próxima tentativa o confere de novo. Só sai o que
 /// esta chamada baixou (`fetched`): o que já estava na pasta pode ser o que o serviço roda, com o registro atrás.
 fn discard_download(old: &Installed, binary: &Path, fetched: bool) {
-    if fetched && let Some(dir) = binary.parent().filter(|d| Some(*d) != old.binary.parent())
-        && let Err(error) = std::fs::remove_dir_all(dir) {
-        tracing::warn!(dir = %dir.display(), %error, "whatsapp: a versão que espera confirmação ficou na pasta");
+    if fetched && let Some(dir) = binary.parent().filter(|d| Some(*d) != old.binary.parent()) {
+        remove_version_dir(dir, "whatsapp: a versão baixada e não usada ficou na pasta");
+    }
+}
+
+/// A pasta de uma versão do programa; a que não sai só ocupa disco, e vai ao log com `why`.
+fn remove_version_dir(dir: &Path, why: &'static str) {
+    if let Err(error) = std::fs::remove_dir_all(dir) {
+        tracing::warn!(dir = %dir.display(), %error, "{why}");
     }
 }
 
@@ -553,10 +573,7 @@ fn record_check(paths: &Paths, latest: &str, attempt: &Attempt, result: &Result<
     };
     // Sem a resposta do programa novo (o download falhou), a mudança de formato vale como certa.
     let migration = attempt.migration.or(previous.map(|c| c.migration)).unwrap_or(true);
-    let check = UpdateCheck { latest: latest.to_owned(), migration, checked_at: now(), failed, last_error };
-    if let Err(failure) = write_update_check(paths, &check) {
-        tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: a procura de atualização não ficou gravada");
-    }
+    save_check(paths, &UpdateCheck { latest: latest.to_owned(), migration, checked_at: now(), failed, last_error });
 }
 
 /// Sem release mais nova, a instalação registrada só está em dia se responde assinada com a versão dela: uma
@@ -575,7 +592,7 @@ async fn ensure_up(ctx: &Context, installed: &Installed, registered: &mut bool, 
     *registered = true;
     service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&installed.binary)).await?;
     progress(Step::Start);
-    wait_up(&client, &version, before).await?;
+    wait_up(&client, &version, before, None).await?;
     Ok(Outcome::Updated)
 }
 
@@ -598,11 +615,6 @@ pub async fn uninstall(ctx: &Context) -> Result<(), Failure> {
     }
 }
 
-/// Espera o processo novo responder ao `status` com assinatura válida e a versão esperada.
-async fn wait_up(client: &Client, version: &str, before: Option<u32>) -> Result<(), Failure> {
-    wait_up_for(client, version, before, None).await
-}
-
 /// Uma troca de versão em curso: a nova grava a cópia `messages.db.schema<v>.bak` antes de migrar, e só grava o
 /// `control.json` depois.
 #[derive(Clone, Copy, Debug)]
@@ -620,14 +632,10 @@ impl Migrating<'_> {
     }
 }
 
-/// Até quando esperar a nova responder.
-fn wait_limit(migrating: bool) -> Duration {
-    if migrating { MIGRATION_TIMEOUT } else { START_TIMEOUT }
-}
-
-/// [`wait_up`] de uma troca: passado o [`START_TIMEOUT`], a espera segue até o [`MIGRATION_TIMEOUT`] enquanto a
-/// nova estiver migrando os dados ([`Migrating::in_progress`]).
-async fn wait_up_for(client: &Client, version: &str, before: Option<u32>, migrating: Option<Migrating<'_>>) -> Result<(), Failure> {
+/// Espera o processo novo responder ao `status` com assinatura válida e a versão esperada. Numa troca
+/// (`migrating`), passado o [`START_TIMEOUT`], a espera segue até o [`MIGRATION_TIMEOUT`] enquanto a nova estiver
+/// migrando os dados ([`Migrating::in_progress`]).
+async fn wait_up(client: &Client, version: &str, before: Option<u32>, migrating: Option<Migrating<'_>>) -> Result<(), Failure> {
     let started = Instant::now();
     let mut last = String::from("sem control.json");
     let limit = loop {
@@ -648,7 +656,7 @@ async fn wait_up_for(client: &Client, version: &str, before: Option<u32>, migrat
                 Some(migrating) => migrating.in_progress().await,
                 None => false,
             };
-            let limit = wait_limit(busy);
+            let limit = if busy { MIGRATION_TIMEOUT } else { START_TIMEOUT };
             if busy {
                 last = "migrando os dados".into();
                 pause = MIGRATION_POLL;
@@ -741,7 +749,7 @@ async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, f
     let client = Client::new(ctx.paths.data.clone());
     let before = client.claimed().map(|c| c.pid);
     let back = match service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&old.binary)).await {
-        Ok(()) => wait_up(&client, &version, before).await,
+        Ok(()) => wait_up(&client, &version, before, None).await,
         Err(e) => Err(Failure::from(e)),
     };
     match back {
@@ -770,16 +778,29 @@ fn restore_source(mode: Mode, data: &Path, file_schema: Option<u32>, since: Syst
     if let Some(schema) = file_schema {
         return Some(schema).filter(fresh);
     }
-    let mut found = std::fs::read_dir(data).ok()?.filter_map(|entry| {
-        let name = entry.ok()?.file_name();
-        name.to_str()?.strip_prefix("messages.db.schema")?.strip_suffix(".bak")?.parse::<u32>().ok()
-    }).filter(fresh);
+    let mut found = std::fs::read_dir(data).ok()?
+        .filter_map(|entry| backup_schema(entry.ok()?.file_name().to_str()?, false))
+        .filter(fresh);
     let schema = found.next()?;
     found.next().is_none().then_some(schema)
 }
 
+/// O começo do nome de toda cópia que o binário grava ao lado do `messages.db` antes de migrar.
+const BACKUP_PREFIX: &str = "messages.db.schema";
+/// O começo do conjunto migrado que a volta tira do caminho (`messages.db.migrated`, `-wal`…).
+pub(crate) const MIGRATED: &str = "messages.db.migrated";
+/// A cópia a caminho do lugar do `messages.db`, durante a volta.
+pub(crate) const RESTORING: &str = "messages.db.restoring";
+
+/// O esquema `v` de uma cópia `messages.db.schema<v>.bak`; com `with_tmp`, também da `.bak.tmp` que o binário
+/// ainda escreve antes de renomear.
+pub(crate) fn backup_schema(name: &str, with_tmp: bool) -> Option<u32> {
+    let rest = name.strip_prefix(BACKUP_PREFIX)?;
+    rest.strip_suffix(".bak").or_else(|| rest.strip_suffix(".bak.tmp").filter(|_| with_tmp))?.parse().ok()
+}
+
 fn backup_path(data: &Path, schema: u32) -> PathBuf {
-    data.join(format!("messages.db.schema{schema}.bak"))
+    data.join(format!("{BACKUP_PREFIX}{schema}.bak"))
 }
 
 /// Uma cópia `messages.db.schema<v>.bak` gravada desde `since`; com `writing`, também a `.bak.tmp` que o binário
@@ -787,24 +808,21 @@ fn backup_path(data: &Path, schema: u32) -> PathBuf {
 fn fresh_copy(data: &Path, since: SystemTime, writing: bool) -> bool {
     let Ok(entries) = std::fs::read_dir(data) else { return false };
     entries.flatten().any(|entry| {
-        let name = entry.file_name();
-        let Some(rest) = name.to_str().and_then(|n| n.strip_prefix("messages.db.schema")) else { return false };
-        let schema = rest.strip_suffix(".bak").or_else(|| rest.strip_suffix(".bak.tmp").filter(|_| writing));
-        schema.is_some_and(|s| s.parse::<u32>().is_ok())
+        entry.file_name().to_str().and_then(|name| backup_schema(name, writing)).is_some()
             && entry.metadata().and_then(|m| m.modified()).is_ok_and(|at| at >= since)
     })
 }
 
-/// Para o serviço e espera o gerenciador dizer que nenhum processo ficou e o pid do `control.json` sair: o
-/// gerenciador sozinho não vê um programa que escapou dele.
+/// Para o serviço e espera o pid do `control.json` sair e o gerenciador dizer que nenhum processo ficou: o
+/// gerenciador sozinho não vê um programa que escapou dele. O pid é olhado antes porque é barato; no Windows cada
+/// pergunta ao gerenciador abre um PowerShell.
 async fn stop_confirmed(home: &Path, managed_dir: &Path, data: &Path) -> Result<(), String> {
     service::stop(home, managed_dir, &SERVICE).await.map_err(|e| format!("o serviço não parou: {}: {}", e.step, e.detail))?;
     let deadline = Instant::now() + STOP_TIMEOUT;
     loop {
-        let running = service::process_running(home, &SERVICE).await
-            .map_err(|e| format!("não consegui confirmar que o serviço parou: {}: {}", e.step, e.detail))?;
         let pid = live_pid(data)?;
-        if !running && pid.is_none() {
+        if pid.is_none() && !service::process_running(home, &SERVICE).await
+            .map_err(|e| format!("não consegui confirmar que o serviço parou: {}: {}", e.step, e.detail))? {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -827,7 +845,7 @@ fn live_pid(data: &Path) -> Result<Option<u32>, String> {
 }
 
 /// O banco e os arquivos de lado dele: um `-wal` ou `-journal` que ficasse seria aplicado sobre a cópia.
-const DB_FILES: [&str; 4] = ["", "-wal", "-shm", "-journal"];
+pub(crate) const DB_FILES: [&str; 4] = ["", "-wal", "-shm", "-journal"];
 
 /// Põe a cópia `messages.db.schema<schema>.bak` no lugar do `messages.db`, com o programa parado. Nada se apaga:
 /// o conjunto migrado sai do caminho para `messages.db.migrated*`, onde fica até a próxima volta, e a cópia
@@ -838,7 +856,7 @@ const DB_FILES: [&str; 4] = ["", "-wal", "-shm", "-journal"];
 /// O que falhou e o estado em que os arquivos ficaram: o que tinha saído do caminho volta.
 fn restore_backup(data: &Path, schema: u32) -> Result<(), String> {
     let backup = backup_path(data, schema);
-    let staged = data.join("messages.db.restoring");
+    let staged = data.join(RESTORING);
     let copied = std::fs::copy(&backup, &staged)
         .and_then(|_| std::fs::OpenOptions::new().write(true).open(&staged)?.sync_all());
     if let Err(e) = copied {
@@ -847,10 +865,10 @@ fn restore_backup(data: &Path, schema: u32) -> Result<(), String> {
     }
     let mut moved = Vec::new();
     for suffix in DB_FILES {
-        let (from, to) = (data.join(format!("messages.db{suffix}")), data.join(format!("messages.db.migrated{suffix}")));
+        let (from, to) = (data.join(format!("messages.db{suffix}")), data.join(format!("{MIGRATED}{suffix}")));
         // Sem o arquivo agora, o da volta anterior com o mesmo nome iria junto com o banco desta.
         let (result, path) = if from.exists() {
-            (std::fs::rename(&from, &to).map(|()| true), &from)
+            (hangar_core::fs::replace(&from, &to).map(|()| true), &from)
         } else {
             (std::fs::remove_file(&to).map(|()| false).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(false) } else { Err(e) }), &to)
         };
@@ -860,13 +878,13 @@ fn restore_backup(data: &Path, schema: u32) -> Result<(), String> {
             Err(e) => return Err(undo(&staged, &moved, format!("{}: {e}", path.display()))),
         }
     }
-    std::fs::rename(&staged, data.join("messages.db")).map_err(|e| undo(&staged, &moved, format!("{}: {e}", staged.display())))
+    hangar_core::fs::replace(&staged, &data.join("messages.db")).map_err(|e| undo(&staged, &moved, format!("{}: {e}", staged.display())))
 }
 
 /// Põe de volta o que saiu do caminho e diz como os arquivos ficaram.
 fn undo(staged: &Path, moved: &[(PathBuf, PathBuf)], why: String) -> String {
     let _ = std::fs::remove_file(staged);
-    let stuck: Vec<String> = moved.iter().rev().filter_map(|(from, to)| std::fs::rename(to, from).err()
+    let stuck: Vec<String> = moved.iter().rev().filter_map(|(from, to)| hangar_core::fs::replace(to, from).err()
         .map(|e| format!("{} ficou como {}: {e}", from.display(), to.display()))).collect();
     if stuck.is_empty() {
         format!("{why}; os arquivos do banco voltaram como estavam")
@@ -1004,16 +1022,6 @@ mod tests {
         assert_eq!(installer.job()["outcome"], "skipped");
     }
 
-    #[test]
-    fn only_a_confirmed_update_crosses_a_change_of_the_data_format() {
-        for mode in [Mode::Auto, Mode::Manual] {
-            assert!(stops_for_confirmation(mode, true), "{mode:?}");
-            assert!(!stops_for_confirmation(mode, false), "{mode:?}");
-        }
-        assert!(!stops_for_confirmation(Mode::Confirmed, true));
-        assert!(!stops_for_confirmation(Mode::Confirmed, false));
-    }
-
     /// Programa de mentira: `--version` diz `version`; `--schema-version` diz `schema` e `--data-schema-version`,
     /// `data`; `None` sai 2, como o binário anterior ao C1 diante de uma flag que não conhece.
     #[cfg(unix)]
@@ -1129,13 +1137,22 @@ mod tests {
         assert!(!fresh_copy(data, since, false), "nome que não é de cópia");
     }
 
-    /// A espera vai aos 10 min só com a nova migrando; sem isso, os 30 s de sempre. Sem unit do serviço (a casa de
-    /// teste), o processo não conta como vivo e a cópia sozinha não estende nada.
+    /// Os nomes de cópia que o binário grava, com o esquema; o resto (outro prefixo, esquema que não é número) não é cópia.
+    #[test]
+    fn copy_names_carry_their_schema() {
+        assert_eq!(backup_schema("messages.db.schema1.bak", false), Some(1));
+        assert_eq!(backup_schema("messages.db.schema12.bak", false), Some(12));
+        assert_eq!(backup_schema("messages.db.schema1.bak.tmp", false), None, "a pela metade só com with_tmp");
+        assert_eq!(backup_schema("messages.db.schema1.bak.tmp", true), Some(1));
+        assert_eq!(backup_schema("messages.db.schemaX.bak", true), None);
+        assert_eq!(backup_schema("session.db.schema1.bak", true), None);
+        assert_eq!(backup_path(Path::new("d"), 2), Path::new("d").join("messages.db.schema2.bak"));
+    }
+
+    /// Sem unit do serviço (a casa de teste), o processo não conta como vivo e a cópia sozinha não estende a espera.
     #[cfg(unix)]
     #[tokio::test]
     async fn only_a_migration_in_progress_extends_the_wait() {
-        assert_eq!(wait_limit(false), START_TIMEOUT);
-        assert_eq!(wait_limit(true), MIGRATION_TIMEOUT);
         let home = tempfile::tempdir().unwrap();
         let data = home.path().join("dados");
         std::fs::create_dir_all(&data).unwrap();
@@ -1237,12 +1254,11 @@ mod tests {
     /// o tenha aberto. Mudança de formato, esquema desconhecido ou arquivo que a nova criou (0) não entram aqui.
     #[test]
     fn a_failed_switch_that_keeps_the_format_goes_back_to_the_previous_version() {
-        let same = |file: Option<u32>, new: Option<u32>| !format_changes(new, file) && file.is_some_and(|f| f > 0);
-        assert!(same(Some(2), Some(2)), "0.3.0 -> 0.3.1");
-        assert!(!same(Some(1), Some(2)), "muda o formato");
-        assert!(!same(None, Some(2)), "arquivo ilegível");
-        assert!(!same(Some(2), None), "a nova não diz o esquema");
-        assert!(!same(Some(0), Some(2)), "a nova criou o arquivo no esquema dela");
+        assert!(same_format(Some(2), Some(2)), "0.3.0 -> 0.3.1");
+        assert!(!same_format(Some(2), Some(1)), "muda o formato");
+        assert!(!same_format(Some(2), None), "arquivo ilegível");
+        assert!(!same_format(None, Some(2)), "a nova não diz o esquema");
+        assert!(!same_format(Some(2), Some(0)), "a nova criou o arquivo no esquema dela");
         assert_eq!(after_failure(true, None, true), AfterFailure::Rollback, "a nova abriu, e mesmo assim a anterior volta");
         assert_eq!(after_failure(false, None, true), AfterFailure::Rollback);
         assert_eq!(after_failure(true, Some(1), true), AfterFailure::Restore(1), "cópia desta tentativa vale mais");
@@ -1474,12 +1490,12 @@ mod tests {
         let (_dir, ctx, _, _) = installed_latest(axum::Router::new()).await;
         let failed = Some(CheckFailure { tag: "v0.1.0".into(), code: "whatsapp_not_started".into() });
         write_update_check(&ctx.paths, &UpdateCheck { latest: "v0.1.0".into(), migration: true, checked_at: "x".into(), failed, last_error: None }).unwrap();
-        assert_eq!(auto_wants(&ctx).await, AutoPlan::Done { from: "v0.1.0".into(), to: "v0.1.0".into(), result: Ok(Outcome::AlreadyLatest) });
+        assert_eq!(auto_wants(&ctx).await, AutoPlan::Done(AutoUpdate { from: "v0.1.0".into(), to: "v0.1.0".into(), result: Ok(Outcome::AlreadyLatest) }));
         let check = read_update_check(&ctx.paths).unwrap();
         assert_eq!((check.migration, check.failed, check.last_error), (false, None, None));
 
         let down = Context { github: Github { api: "http://127.0.0.1:9".into(), download: "http://127.0.0.1:9/nada".into() }, ..ctx.clone() };
-        let AutoPlan::Done { from, to, result } = auto_wants(&down).await else { panic!("GitHub fora não é troca") };
+        let AutoPlan::Done(AutoUpdate { from, to, result }) = auto_wants(&down).await else { panic!("GitHub fora não é troca") };
         assert_eq!((from.as_str(), to.as_str(), result.map_err(|f| f.code)), ("v0.1.0", "v0.1.0", Err(release::CODES.download_failed)));
 
         let (_dir, ctx, _, _) = installed_with(&["v0.2.0", "v0.1.0"], axum::Router::new()).await;
@@ -1505,7 +1521,7 @@ mod tests {
                 assert!(matches!(plan, AutoPlan::Switch { .. }), "{plan:?}");
                 continue;
             }
-            assert_eq!(plan, AutoPlan::Done { from: "v0.1.0".into(), to: "v0.2.0".into(), result: Ok(Outcome::Skipped) }, "{migration} {failed:?}");
+            assert_eq!(plan, AutoPlan::Done(AutoUpdate { from: "v0.1.0".into(), to: "v0.2.0".into(), result: Ok(Outcome::Skipped) }), "{migration} {failed:?}");
             assert_eq!(update(&ctx, Mode::Auto, &|_| {}).await, Ok(Outcome::Skipped), "na vez, a mesma regra");
             assert!(!downloaded.parent().unwrap().exists(), "o relógio baixou a tag que ia parar");
             let check = read_update_check(&ctx.paths).unwrap();
@@ -1517,23 +1533,16 @@ mod tests {
         }
     }
 
-    /// O arquivo já no esquema da nova (0.3.0 → 0.3.1), ou sem arquivo, segue sem confirmação; o atrás só com ela.
-    /// O registro em si não roda aqui (mexeria no gerenciador de serviços da máquina).
+    /// O arquivo já no esquema da nova (0.3.0 → 0.3.1), ou sem arquivo, não muda o formato, pela resposta do programa
+    /// novo; o atrás muda. A troca em si não roda aqui (mexeria no gerenciador de serviços da máquina).
     #[cfg(unix)]
     #[tokio::test]
-    async fn the_same_schema_or_a_confirmation_does_not_stop_the_update() {
+    async fn the_same_schema_does_not_stop_the_update() {
         let dir = tempfile::tempdir().unwrap();
         let (new, data) = (dir.path().join("new/hangar-whatsapp"), dir.path().join("dados"));
-        for file in [2, 0] {
+        for (file, changes) in [(2, false), (0, false), (1, true)] {
             fake_program(&new, "0.3.1", Some(2), Some(file));
-            let changes = format_changes_of(&new, &data).await;
-            for mode in [Mode::Auto, Mode::Manual, Mode::Confirmed] {
-                assert!(!stops_for_confirmation(mode, changes), "arquivo {file}, {mode:?}");
-            }
+            assert_eq!(format_changes_of(&new, &data).await, changes, "arquivo {file}");
         }
-        fake_program(&new, "0.3.1", Some(2), Some(1));
-        let changes = format_changes_of(&new, &data).await;
-        assert!(stops_for_confirmation(Mode::Manual, changes));
-        assert!(!stops_for_confirmation(Mode::Confirmed, changes));
     }
 }

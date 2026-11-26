@@ -15,7 +15,7 @@ use hangar_managed_binary::service::{Error as ServiceError, ProcessState};
 use serde_json::{Map, Value, json};
 
 use crate::client::{CallError, Client, Reply};
-use crate::install::{self, Busy, Context, Installed, Installer, UpdateCheck};
+use crate::install::{self, AutoUpdate, Busy, Context, Installed, Installer, UpdateCheck};
 use crate::outbox::{self, Outbox};
 
 const MAX_BODY: usize = 64 * 1024;
@@ -34,7 +34,7 @@ const OUTDATED_MSG: &str = "o WhatsApp recusou a versão do hangar-whatsapp; atu
 /// Frase do envio recusado porque uma troca de versão, do dono ou do relógio, segura a vez.
 const UPDATING_MSG: &str = "o WhatsApp está atualizando; tente de novo em instantes";
 /// A tarefa da passada do relógio: as telas reagem só a `update`, que é a do dono.
-pub const AUTO_UPDATE_KIND: &str = "auto_update";
+pub(crate) const AUTO_UPDATE_KIND: &str = "auto_update";
 
 /// O WhatsApp de uma máquina: instalação, aceite e o cliente do serviço.
 pub struct WhatsApp {
@@ -49,15 +49,6 @@ pub struct WhatsApp {
     /// Avisa quando um envio fica esperando outro: a prova da fila não depende de relógio.
     #[cfg(test)]
     send_waiting: tokio::sync::Notify,
-}
-
-/// Uma passada da atualização automática: `from` é a tag instalada antes; `to`, a release mais nova achada (a
-/// instalada depois quando trocou), ou `from` quando a procura no GitHub falhou.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AutoUpdate {
-    pub from: String,
-    pub to: String,
-    pub result: Result<install::Outcome, install::Failure>,
 }
 
 struct Http {
@@ -97,7 +88,7 @@ impl WhatsApp {
     pub async fn auto_update(&self) -> Option<AutoUpdate> {
         match install::auto_wants(&self.ctx).await {
             install::AutoPlan::NotInstalled => None,
-            install::AutoPlan::Done { from, to, result } => Some(AutoUpdate { from, to, result }),
+            install::AutoPlan::Done(done) => Some(done),
             install::AutoPlan::Switch { from, latest } => {
                 let reservation = self.installer.reserve(AUTO_UPDATE_KIND, install::Step::Download).ok()?;
                 Some(self.run_auto_update(reservation, from, latest).await)
@@ -373,7 +364,7 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
         Ok(reply) if (200..300).contains(&reply.status) => {
             // As cópias de uma volta são do Hangar, e a versão antiga religada por ela não conhece as `.bak`.
             let data = wa.ctx.paths.data.clone();
-            return match tokio::task::spawn_blocking(move || wipe_copies(&data, true, Vec::new())).await {
+            return match tokio::task::spawn_blocking(move || wipe_copies(&data, Vec::new())).await {
                 Ok(Ok(_)) => relay(reply),
                 Ok(Err(partial)) => partial_wipe(partial),
                 Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
@@ -624,8 +615,7 @@ pub(crate) fn call_failure(error: &CallError) -> (StatusCode, &'static str, &'st
 /// Envio recusado com a vez ocupada: `whatsapp_updating` só com uma troca de versão em curso; o resto é a operação de
 /// sempre.
 fn send_busy(wa: &WhatsApp) -> Response {
-    let job = wa.installer.job();
-    let updating = job["done"] == false && matches!(job["kind"].as_str(), Some(kind) if kind == "update" || kind == AUTO_UPDATE_KIND);
+    let updating = matches!(wa.installer.running_kind(), Some(kind) if kind == "update" || kind == AUTO_UPDATE_KIND);
     if updating { refused(StatusCode::CONFLICT, "whatsapp_updating", UPDATING_MSG) } else { busy() }
 }
 
@@ -664,7 +654,7 @@ fn wipe_data(data: &Path) -> Result<(), Partial> {
     let mut removed = Vec::new();
     let stop = |name: String, e: std::io::Error, removed: Vec<String>| Partial { detail: format!("{name}: {e}"), failed: name, removed };
     for db in ["messages.db", "session.db"] {
-        for suffix in ["", "-wal", "-shm", "-journal"] {
+        for suffix in install::DB_FILES {
             let name = format!("{db}{suffix}");
             match std::fs::remove_file(data.join(&name)) {
                 Ok(()) => removed.push(name),
@@ -673,7 +663,7 @@ fn wipe_data(data: &Path) -> Result<(), Partial> {
             }
         }
     }
-    let removed = wipe_copies(data, true, removed)?;
+    let removed = wipe_copies(data, removed)?;
     match std::fs::remove_dir_all(data.join("media")) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(stop("media".into(), e, removed)),
         _ => Ok(()),
@@ -682,15 +672,14 @@ fn wipe_data(data: &Path) -> Result<(), Partial> {
 
 /// Cópias do `messages.db` também são mensagens: as do binário antes de migrar (`.schema<v>.bak`, que o `/v1/wipe`
 /// de uma versão antiga não conhece) e as que a volta de uma atualização deixa.
-fn wipe_copies(data: &Path, with_backups: bool, mut removed: Vec<String>) -> Result<Vec<String>, Partial> {
+fn wipe_copies(data: &Path, mut removed: Vec<String>) -> Result<Vec<String>, Partial> {
     let entries = match std::fs::read_dir(data) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
         Err(e) => return Err(Partial { detail: format!("{}: {e}", data.display()), failed: data.display().to_string(), removed }),
     };
     let mut names: Vec<String> = entries.flatten().filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| name.starts_with("messages.db.migrated") || name == "messages.db.restoring"
-            || (with_backups && name.starts_with("messages.db.schema") && (name.ends_with(".bak") || name.ends_with(".bak.tmp"))))
+        .filter(|name| name.starts_with(install::MIGRATED) || name == install::RESTORING || install::backup_schema(name, true).is_some())
         .collect();
     names.sort();
     for name in names {
