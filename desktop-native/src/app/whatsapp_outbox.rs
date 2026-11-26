@@ -268,6 +268,17 @@ pub(super) fn refusal_text(code: Option<&str>, locked_until: Option<&str>) -> Op
     Some(tr_shared(key, &[]))
 }
 
+/// Vez ocupada (`whatsapp_busy`): a frase que o servidor mandou, que diz se é a atualização do WhatsApp ou outra
+/// operação; sem ela, a frase do app para a vez ocupada.
+pub(super) fn busy_text(error: &Failure) -> Option<String> {
+    if error.code.as_deref() != Some("whatsapp_busy") { return None; }
+    let msg = error.detail.trim();
+    let mut chars = msg.chars();
+    let Some(first) = chars.next().filter(|_| !msg.starts_with("HTTP ")) else { return Some(tr("whatsapp_update_busy")) };
+    let end = if msg.ends_with(['.', '!', '?']) { "" } else { "." };
+    Some(format!("{}{}{end}", first.to_uppercase(), chars.as_str()))
+}
+
 /// O "expira em 9:12" do cartão: o relógio da `WhatsAppOutbox` o redesenha a cada segundo.
 pub(super) struct Countdown { deadline: Option<chrono::DateTime<chrono::Utc>> }
 
@@ -455,7 +466,7 @@ impl WhatsAppOutbox {
                     }
                     Err(error) => {
                         let code = error.code.as_deref();
-                        let text = refusal_text(code, until.as_deref()).unwrap_or_else(|| Hangar::fetch_failure(&error));
+                        let text = refusal_text(code, until.as_deref()).or_else(|| busy_text(&error)).unwrap_or_else(|| Hangar::fetch_failure(&error));
                         // Expirado, respondido em outra tela ou apagado não volta: o cartão sai e o motivo vai no aviso.
                         if ends_card(code) {
                             this.remove(&id, cx);
@@ -938,6 +949,21 @@ mod tests {
         crate::i18n::english_in_this_thread(false);
         assert_eq!(refusal_text(Some("whatsapp_edit_unsupported"), None), Some(tr_shared("whatsapp_draft_err_edit_unsupported", &[])));
         assert!(!ends_card(Some("whatsapp_edit_unsupported")));
+    }
+
+    /// A troca de versão segura a vez do envio: o cartão diz o que o servidor mandou, não a falha genérica.
+    #[test]
+    fn busy_shows_the_server_sentence() {
+        crate::i18n::english_in_this_thread(false);
+        let busy = |detail: &str| Failure { status: Some(409), code: Some("whatsapp_busy".into()), ..Failure::local(detail) };
+        assert_eq!(busy_text(&busy("o WhatsApp está atualizando; tente de novo em instantes")),
+            Some("O WhatsApp está atualizando; tente de novo em instantes.".into()));
+        assert_eq!(busy_text(&busy("outra instalação ou remoção do WhatsApp está em curso")),
+            Some("Outra instalação ou remoção do WhatsApp está em curso.".into()));
+        assert_eq!(busy_text(&busy("HTTP 409")), Some(tr("whatsapp_update_busy")), "sem frase do servidor");
+        assert_eq!(busy_text(&busy("")), Some(tr("whatsapp_update_busy")));
+        assert_eq!(busy_text(&Failure { code: Some("whatsapp_rate_limited".into()), ..Failure::local("x") }), None);
+        assert!(!ends_card(Some("whatsapp_busy")), "o rascunho continua esperando");
     }
 
     #[test]

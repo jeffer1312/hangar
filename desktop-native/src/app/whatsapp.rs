@@ -69,6 +69,28 @@ struct Job {
     outcome: Option<Value>,
 }
 
+/// A versão que falhou ao trocar e por quê: a mesma tag não é tentada de novo sozinha.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct UpdateFailed {
+    #[serde(default)]
+    tag: String,
+    #[serde(default)]
+    code: String,
+}
+
+/// Versão mais nova que a instalada, achada pela última procura.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct UpdateInfo {
+    latest: String,
+    /// A versão nova muda o formato do arquivo de mensagens (ou não se sabe): só entra com confirmação.
+    #[serde(default)]
+    migration: bool,
+    #[serde(default)]
+    checked_at: Option<String>,
+    #[serde(default)]
+    failed: Option<UpdateFailed>,
+}
+
 /// Valor fora destes três faz a leitura falhar: resposta inválida, não tela inventada.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -89,6 +111,13 @@ struct WaState {
     /// Com o serviço parado, `whatsapp_schema_newer`: os dados são de um binário mais novo.
     #[serde(default)]
     status_error: Option<String>,
+    #[serde(default)]
+    installed_tag: Option<String>,
+    /// Hora da última procura, com ou sem versão nova.
+    #[serde(default)]
+    update_checked_at: Option<String>,
+    #[serde(default)]
+    update: Option<UpdateInfo>,
 }
 
 fn parse_state(value: Value) -> Result<WaState, String> {
@@ -106,7 +135,7 @@ fn code_of(error: &Value) -> Option<String> {
 
 /// O que a página mostra, decidido só pela resposta do `GET /api/whatsapp`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum View { Off, Working, Stopped, SchemaNewer, SchemaNewerLatest, Unreachable, Unpaired, Pairing, Connected, Outdated, Unknown }
+enum View { Off, Working, Stopped, BackupFailed, SchemaNewer, SchemaNewerLatest, Unreachable, Unpaired, Pairing, Connected, Outdated, Unknown }
 
 /// Em ordem: job em curso, desinstalado, serviço de pé (pelo `status`), dados mais novos e parado.
 fn view_of(state: &WaState) -> View {
@@ -126,6 +155,8 @@ fn view_of(state: &WaState) -> View {
         // Religar não adianta: só um binário mais novo abre esses dados. Atualizar que não achou outro também não.
         _ if schema_newer && already_latest(state) => View::SchemaNewerLatest,
         _ if schema_newer => View::SchemaNewer,
+        // A cópia do arquivo não foi gravada e nada foi convertido: religar a mesma versão resolve quando houver espaço.
+        _ if state.status_error.as_deref() == Some("whatsapp_backup_failed") => View::BackupFailed,
         _ => View::Stopped,
     }
 }
@@ -150,11 +181,58 @@ fn asks_accept(state: &WaState) -> bool {
     state.accepted_at.is_none()
 }
 
-/// O job que terminou com erro: o tipo dele (`install`/`update`) e o código.
+/// O job do dono que terminou com erro: o tipo dele (`install`/`update`) e o código. O da passada automática
+/// (`auto_update`) aparece pela `update.failed`, nunca como esta faixa.
 fn failed_job(state: &WaState) -> Option<(String, String)> {
-    let job = state.job.as_ref().filter(|job| job.done)?;
+    let job = state.job.as_ref().filter(|job| job.done && matches!(job.kind.as_str(), "install" | "update"))?;
     let code = job.error.as_ref().and_then(code_of)?;
     Some((job.kind.clone(), code))
+}
+
+/// A linha da versão no cartão de conectado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VersionRow { Current, Failed, Available, Migration }
+
+/// Só conectado e com a versão instalada conhecida; nas vistas de problema e de pareamento, nada.
+fn version_row(state: &WaState, view: View) -> Option<VersionRow> {
+    if view != View::Connected || state.installed_tag.is_none() { return None; }
+    Some(match &state.update {
+        None => VersionRow::Current,
+        // A tentativa falhou: quem oferece de novo é a faixa do topo; a linha só procura.
+        Some(update) if update.failed.is_some() => VersionRow::Failed,
+        Some(update) if update.migration => VersionRow::Migration,
+        Some(_) => VersionRow::Available,
+    })
+}
+
+/// A troca que falhou e ficou marcada, sem job em curso nem a faixa do job do dono: tag, código e a versão que roda.
+/// Só com o serviço de pé: a frase diz que a instalada continua rodando; parado, a vista de parado já explica.
+fn update_failure(state: &WaState) -> Option<(String, String, String)> {
+    if state.service != Service::Running || state.job.as_ref().is_some_and(|job| !job.done) || failed_job(state).is_some() { return None; }
+    let failed = state.update.as_ref()?.failed.as_ref().filter(|f| !f.tag.is_empty() && !f.code.is_empty())?;
+    Some((failed.tag.clone(), failed.code.clone(), state.installed_tag.clone()?))
+}
+
+/// A versão nova e a instalada, para o texto da confirmação.
+fn migration_tags(state: &WaState) -> Option<(String, String)> {
+    Some((state.update.as_ref()?.latest.clone(), state.installed_tag.clone()?))
+}
+
+/// O que a releitura diz da atualização que esta tela pediu, lida depois da resposta do POST.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OwnUpdate { Running, AskMigration, Finished }
+
+fn own_update_step(state: &WaState) -> OwnUpdate {
+    match state.job.as_ref() {
+        Some(job) if !job.done => OwnUpdate::Running,
+        Some(job) if job.kind == "update" && job.outcome.as_ref().and_then(Value::as_str) == Some("needs_confirm") => OwnUpdate::AskMigration,
+        _ => OwnUpdate::Finished,
+    }
+}
+
+/// Atualizar recusado com `whatsapp_busy`: com um job em curso a página o acompanha; sem ele, um envio segura a vez.
+fn update_refused_text(state: &WaState) -> Option<String> {
+    (view_of(state) != View::Working).then(|| tr("whatsapp_update_busy"))
 }
 
 fn should_poll(state: &WaState, awaiting_pair: bool) -> bool {
@@ -220,6 +298,10 @@ pub(in crate::app) struct WhatsApp {
     /// Apagou com o serviço parado: o aparelho continua na lista do celular.
     unlink_on_phone: bool,
     poll: Option<JoinHandle<()>>,
+    /// Atualizar sem confirmação pedido nesta tela: se o job parar em `needs_confirm`, a confirmação abre nesta janela.
+    own_update: Option<AnyWindowHandle>,
+    /// O último Atualizar voltou `whatsapp_busy`: a releitura decide se há job para acompanhar ou se avisa.
+    update_refused: bool,
 }
 
 impl Drop for WhatsApp {
@@ -258,6 +340,7 @@ impl Hangar {
         w.state.seq += 1;
         w.state.loading = false;
         (w.qr, w.qr_wanted) = (None, false);
+        (w.own_update, w.update_refused) = (None, false);
         if let Some(Ok(state)) = w.state.value.as_mut() { state.qr_svg = None; }
     }
 
@@ -313,10 +396,29 @@ impl Hangar {
                         _ => w.awaiting_pair = None,
                     }
                 }
+                let mut ask = None;
+                // Só a releitura feita depois da resposta do POST fala do job que ele abriu.
+                if let (Ok(state), None) = (&result, w.busy) {
+                    if std::mem::take(&mut w.update_refused) { if let Some(text) = update_refused_text(state) { w.error = Some(text); } }
+                    if let Some(handle) = w.own_update {
+                        match own_update_step(state) {
+                            OwnUpdate::Running => {}
+                            OwnUpdate::AskMigration => { w.own_update = None; ask = migration_tags(state).map(|_| handle); }
+                            OwnUpdate::Finished => w.own_update = None,
+                        }
+                    }
+                }
                 let poll = result.as_ref().is_ok_and(|state| should_poll(state, w.awaiting_pair.is_some_and(|until| Instant::now() < until)));
                 w.state.finish(seq, result);
                 w.poll = None;
                 if poll && self.settings == Some(Page::WhatsApp) && !self.window_tray.hidden { self.whatsapp_read(true, cx); }
+                // Fora do empréstimo de quem recebeu a resposta: o diálogo abre na janela onde o clique aconteceu.
+                if let Some(handle) = ask.filter(|_| self.settings == Some(Page::WhatsApp)) {
+                    let this = cx.entity().downgrade();
+                    cx.defer(move |cx| { let _ = cx.update_window(handle, |_, window, cx| {
+                        let _ = this.update(cx, |this, cx| this.confirm_whatsapp_migration(window, cx));
+                    }); });
+                }
             }
             WhatsAppReply::Acted(act, result) => {
                 let w = &mut self.whatsapp;
@@ -326,9 +428,13 @@ impl Hangar {
                         if act == Act::Wipe { w.unlink_on_phone = value.get("logout").and_then(Value::as_str) == Some("not_done"); }
                         if act == Act::Pair { w.awaiting_pair = Some(Instant::now() + PAIR_GRACE); }
                     }
-                    // Outro job já em curso: a página passa a acompanhar esse.
-                    Err(error) if matches!(act, Act::Install | Act::Update) && error.code.as_deref() == Some("whatsapp_busy") => {}
-                    Err(error) => w.error = Some(failure_text(&error)),
+                    // Outro job já em curso: a página passa a acompanhar esse; sem job, a releitura avisa.
+                    Err(error) if act == Act::Update && error.code.as_deref() == Some("whatsapp_busy") => (w.update_refused, w.own_update) = (true, None),
+                    Err(error) if act == Act::Install && error.code.as_deref() == Some("whatsapp_busy") => {}
+                    Err(error) => {
+                        if act == Act::Update { w.own_update = None; }
+                        w.error = Some(failure_text(&error));
+                    }
                 }
                 // A ação pode ter chegado antes da queda; a releitura mostra o estado real. Fora da página não relê:
                 // a reabertura já consulta o servidor, e o QR não volta à memória com a página fechada.
@@ -342,6 +448,29 @@ impl Hangar {
         let accepted = self.whatsapp.accepted || self.whatsapp.state.ok().is_some_and(|s| s.accepted_at.is_some());
         if !accepted { return; }
         self.whatsapp_act(Act::Install, Some(json!({"accept": true})), cx);
+    }
+
+    /// Atualizar sem confirmação: se a versão nova mudar o formato, o job para em `needs_confirm` e esta tela pergunta.
+    fn whatsapp_update(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.whatsapp.busy.is_some() { return; }
+        self.whatsapp.own_update = Some(window.window_handle());
+        self.whatsapp_act(Act::Update, None, cx);
+    }
+
+    fn whatsapp_update_confirmed(&mut self, cx: &mut Context<Self>) {
+        if self.whatsapp.busy.is_some() { return; }
+        self.whatsapp.own_update = None;
+        self.whatsapp_act(Act::Update, Some(json!({"confirm_migration": true})), cx);
+    }
+
+    /// O diálogo de sempre (o do Apagar dados), com o botão primário: a troca guarda a cópia e volta sozinha se falhar.
+    fn confirm_whatsapp_migration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((latest, installed)) = self.whatsapp.state.ok().and_then(migration_tags) else { return };
+        let body = format!("{}\n\n{}", tr("whatsapp_migration_body").replace("{tag}", &latest).replace("{installed}", &installed),
+            tr("whatsapp_migration_backup").replace("{installed}", &installed));
+        let this = cx.entity().downgrade();
+        chrome::confirm_alert(window, cx, tr("whatsapp_migration_title").replace("{tag}", &latest), body, tr("whatsapp_update"),
+            ButtonVariant::Primary, move |_, cx| { let _ = this.update(cx, |this, cx| this.whatsapp_update_confirmed(cx)); true });
     }
 
     fn whatsapp_pair(&mut self, phone: Option<String>, cx: &mut Context<Self>) {
@@ -441,17 +570,32 @@ impl Hangar {
             // Reinstalar exige o aceite, o gravado no servidor ou o marcado agora.
             let accepted = kind == "update" || install_accepted(state, self.whatsapp.accepted);
             let retry = Button::new("whatsapp-retry-job").outline().small().label(tr("server_retry")).disabled(busy || !accepted)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if kind == "update" { this.whatsapp_act(Act::Update, None, cx); } else { this.whatsapp_install(cx); }
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if kind == "update" { this.whatsapp_update(window, cx); } else { this.whatsapp_install(cx); }
                 }));
             page = page.child(div().id("whatsapp-job-failed").role(Role::Alert).flex().items_center().gap_3()
+                .child(div().flex_1().min_w_0().text_sm().text_color(theme::danger()).whitespace_normal().child(text))
+                .child(retry));
+        }
+        if let Some((tag, code, installed)) = update_failure(state).filter(|_| view != View::Working) {
+            let text = tr("whatsapp_auto_update_failed").replace("{tag}", &tag)
+                .replace("{reason}", &code_text("whatsapp_job_err_", &code)).replace("{installed}", &installed);
+            let migration = state.update.as_ref().is_some_and(|update| update.migration);
+            let busy = self.whatsapp.busy.is_some();
+            let retry = Button::new("whatsapp-retry-auto-update").outline().small().label(tr("server_retry"))
+                .loading(self.whatsapp.busy == Some(Act::Update)).disabled(busy)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if migration { this.confirm_whatsapp_migration(window, cx); } else { this.whatsapp_update(window, cx); }
+                }));
+            page = page.child(div().id("whatsapp-auto-update-failed").role(Role::Alert).flex().items_center().gap_3()
                 .child(div().flex_1().min_w_0().text_sm().text_color(theme::danger()).whitespace_normal().child(text))
                 .child(retry));
         }
         page = match view {
             View::Off => page.children(self.render_whatsapp_off(cx)),
             View::Working => page.child(render_working(state)),
-            View::Stopped => page.children(self.render_whatsapp_stopped(state, cx)),
+            View::Stopped => page.children(self.render_whatsapp_stopped(state, tr("whatsapp_stopped_body"), cx)),
+            View::BackupFailed => page.children(self.render_whatsapp_stopped(state, tr("whatsapp_status_err_backup_failed"), cx)),
             View::SchemaNewer => page.child(self.render_whatsapp_problem("whatsapp-schema-newer", tr("whatsapp_schema_newer_title"),
                 tr("whatsapp_schema_newer_body"), Some(Act::Update), cx)),
             // Botão secundário: só procura de novo, porque a versão posterior pode sair com o job ainda na memória.
@@ -459,14 +603,14 @@ impl Hangar {
                 tr("whatsapp_schema_newer_latest_body"))
                 .child(div().pt_1().flex().child(Button::new("whatsapp-check-again").outline().small().label(tr("whatsapp_check_again"))
                     .loading(self.whatsapp.busy == Some(Act::Update)).disabled(self.whatsapp.busy.is_some())
-                    .on_click(cx.listener(|this, _, _, cx| this.whatsapp_act(Act::Update, None, cx)))))),
+                    .on_click(cx.listener(|this, _, window, cx| this.whatsapp_update(window, cx)))))),
             View::Unreachable => page.child(self.render_whatsapp_problem("whatsapp-unreachable", tr("whatsapp_unreachable_title"),
                 tr("whatsapp_unreachable_body"), None, cx)),
             View::Unknown => page.child(self.render_whatsapp_problem("whatsapp-unknown", tr("whatsapp_unreachable_title"), tr("invalid_response"), None, cx)),
             View::Outdated => page.child(self.render_whatsapp_problem("whatsapp-outdated", tr("whatsapp_outdated_title"), tr("whatsapp_outdated_body"),
                 Some(Act::Update), cx)),
             View::Unpaired | View::Pairing => page.child(self.render_whatsapp_pair(state, view, cx)),
-            View::Connected => page.children(self.render_whatsapp_connected(state)),
+            View::Connected => page.children(self.render_whatsapp_connected(state, cx)),
         };
         if state.installed && view != View::Working { page = page.child(self.render_whatsapp_actions(view, cx)); }
         page.into_any_element()
@@ -494,12 +638,12 @@ impl Hangar {
     }
 
     /// Parado. Sem aceite gravado (a migração instala sem gravá-lo), religar pede o mesmo aceite do desligado.
-    fn render_whatsapp_stopped(&self, state: &WaState, cx: &mut Context<Self>) -> Vec<Div> {
+    fn render_whatsapp_stopped(&self, state: &WaState, body: String, cx: &mut Context<Self>) -> Vec<Div> {
         let busy = self.whatsapp.busy.is_some();
         let retry = Button::new("whatsapp-restart").outline().small().label(tr("server_retry"))
             .loading(self.whatsapp.busy == Some(Act::Install)).disabled(busy || !install_accepted(state, self.whatsapp.accepted))
             .on_click(cx.listener(|this, _, _, cx| this.whatsapp_install(cx)));
-        let problem = div().child(problem_box("whatsapp-stopped", tr("whatsapp_stopped_title"), tr("whatsapp_stopped_body"))
+        let problem = div().child(problem_box("whatsapp-stopped", tr("whatsapp_stopped_title"), body)
             .child(div().pt_1().flex().child(retry)));
         if asks_accept(state) { vec![problem, self.render_whatsapp_accept(cx)] } else { vec![problem] }
     }
@@ -509,7 +653,7 @@ impl Hangar {
         let action = match act {
             Some(Act::Update) => Button::new("whatsapp-update").primary().small().label(tr("whatsapp_update"))
                 .loading(self.whatsapp.busy == Some(Act::Update)).disabled(busy)
-                .on_click(cx.listener(|this, _, _, cx| this.whatsapp_act(Act::Update, None, cx))),
+                .on_click(cx.listener(|this, _, window, cx| this.whatsapp_update(window, cx))),
             Some(_) => Button::new("whatsapp-restart").outline().small().label(tr("server_retry"))
                 .loading(self.whatsapp.busy == Some(Act::Install)).disabled(busy)
                 .on_click(cx.listener(|this, _, _, cx| this.whatsapp_install(cx))),
@@ -582,14 +726,15 @@ impl Hangar {
         }
     }
 
-    fn render_whatsapp_connected(&self, state: &WaState) -> Vec<AnyElement> {
+    fn render_whatsapp_connected(&self, state: &WaState, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(status) = &state.status else { return Vec::new() };
         let t = &status.totals;
-        let summary = connected_summary(ConnectedFacts {
+        let mut summary = connected_summary(ConnectedFacts {
             device: status.device.as_deref(), device_name: status.device_name.as_deref(),
             last_seconds: status.last_message_at.as_deref().and_then(seconds_since), since: status.since.as_deref(),
             messages: t.messages, chats: t.chats, groups: t.groups, media_saved: t.media_saved,
         });
+        if let Some(row) = version_row(state, View::Connected) { summary = summary.child(self.render_whatsapp_version(state, row, cx)); }
         let media = settings_box().id("whatsapp-media").p_4().gap_1()
             .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_media_title")))
             .child(div().pb_1().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("whatsapp_media_desc")))
@@ -597,6 +742,42 @@ impl Hangar {
             .child(info_line(false, tr("whatsapp_media_lost").replace("{n}", &grouped_number(t.media_lost)), hint(tr("whatsapp_media_lost_hint"))));
         vec![summary.into_any_element(), self.mark(div().child(media), "whatsapp_media_title").into_any_element(),
             self.mark(div().child(usage_box()), "whatsapp_usage_title").into_any_element()]
+    }
+
+    /// A versão instalada abaixo dos números; versão nova não é falha, então não vira faixa.
+    fn render_whatsapp_version(&self, state: &WaState, row: VersionRow, cx: &mut Context<Self>) -> Div {
+        let busy = self.whatsapp.busy.is_some();
+        let latest = state.update.as_ref().map(|update| update.latest.clone()).unwrap_or_default();
+        let checked = state.update_checked_at.as_deref().or_else(|| state.update.as_ref().and_then(|u| u.checked_at.as_deref()))
+            .and_then(seconds_since).map(super::side::ago);
+        let mut head = div().flex().flex_wrap().items_center().gap_1().text_sm()
+            .child(tr("whatsapp_version_label"))
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(state.installed_tag.clone().unwrap_or_default()));
+        if matches!(row, VersionRow::Available | VersionRow::Migration) {
+            head = head.child(div().text_color(theme::muted()).child("·"))
+                .child(div().text_color(theme::success()).child(tr("whatsapp_update_available").replace("{tag}", &latest)));
+        }
+        let (note, color) = match row {
+            VersionRow::Current => (checked.map_or_else(|| tr("whatsapp_version_never"), |ago| tr("whatsapp_version_current").replace("{ago}", &ago)),
+                theme::muted()),
+            VersionRow::Failed => (checked.map_or_else(|| tr("whatsapp_version_never"), |ago| tr("whatsapp_version_checked").replace("{ago}", &ago)),
+                theme::muted()),
+            VersionRow::Available => (tr("whatsapp_update_quick"), theme::muted()),
+            VersionRow::Migration => (tr("whatsapp_update_migration"), theme::warning_text()),
+        };
+        let button = match row {
+            VersionRow::Current | VersionRow::Failed => Button::new("whatsapp-check-update").outline().small().label(tr("whatsapp_check_update"))
+                .on_click(cx.listener(|this, _, window, cx| this.whatsapp_update(window, cx))),
+            VersionRow::Available => Button::new("whatsapp-update-now").primary().small().label(tr("whatsapp_update"))
+                .on_click(cx.listener(|this, _, window, cx| this.whatsapp_update(window, cx))),
+            VersionRow::Migration => Button::new("whatsapp-update-ask").primary().small().label(tr("whatsapp_update_ask"))
+                .on_click(cx.listener(|this, _, window, cx| this.confirm_whatsapp_migration(window, cx))),
+        }.loading(self.whatsapp.busy == Some(Act::Update)).disabled(busy);
+        div().mt_2().pt_3().border_t_1().border_color(theme::border()).flex().items_center().gap_3()
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                .child(head)
+                .child(div().text_xs().text_color(color).whitespace_normal().child(note)))
+            .child(div().flex_shrink_0().child(button))
     }
 
     fn render_whatsapp_actions(&self, view: View, cx: &mut Context<Self>) -> Div {
@@ -749,7 +930,8 @@ fn notice(id: &'static str, color: Hsla, icon: IconName, text: String) -> Statef
 /// A instalação ou atualização em curso, com as etapas na ordem do `step` do servidor.
 fn render_working(state: &WaState) -> Stateful<Div> {
     let job = state.job.as_ref();
-    let update = job.is_some_and(|job| job.kind == "update");
+    // A passada automática também troca o programa: a mesma vista do Atualizar.
+    let update = job.is_some_and(|job| matches!(job.kind.as_str(), "update" | "auto_update"));
     let phases = step_states(&STEPS, job.map_or("", |job| job.step.as_str()));
     settings_box().id("whatsapp-working").role(Role::Status).p_4().gap_3()
         .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr(if update { "whatsapp_updating_title" } else { "whatsapp_installing_title" })))
@@ -759,8 +941,9 @@ fn render_working(state: &WaState) -> Stateful<Div> {
 
 #[cfg(test)]
 mod tests {
-    use super::{act_timeout, asks_accept, code_of, code_text, failed_job, install_accepted, pair_not_started, parse_state, phone_digits, should_poll,
-        step_states, view_of, Act, CliproxyItem, View, STEPS};
+    use super::{act_timeout, asks_accept, code_of, code_text, failed_job, install_accepted, migration_tags, own_update_step, pair_not_started, parse_state,
+        phone_digits, should_poll, step_states, update_failure, update_refused_text, version_row, view_of, Act, CliproxyItem, OwnUpdate, VersionRow, View,
+        STEPS};
     use core::prelude::v1::test;
     use serde_json::json;
 
@@ -851,6 +1034,134 @@ mod tests {
         let mut stopped = base("stopped", None);
         stopped["job"] = json!({"kind": "update", "step": "download", "done": true, "error": null, "outcome": "already_latest"});
         assert_eq!(view_of(&state(stopped)), View::Stopped, "parado por outro motivo continua oferecendo religar");
+    }
+
+    fn connected(tag: Option<&str>, update: serde_json::Value) -> serde_json::Value {
+        let mut value = base("running", Some(json!({"state": "connected"})));
+        value["installed_tag"] = json!(tag);
+        value["update_checked_at"] = json!("2026-11-26T10:00:00Z");
+        value["update"] = update;
+        value
+    }
+
+    fn newer(migration: bool, failed: serde_json::Value) -> serde_json::Value {
+        json!({"latest": "v0.3.1", "migration": migration, "checked_at": "2026-11-26T10:00:00Z", "failed": failed, "last_error": null})
+    }
+
+    /// A linha da versão só existe conectado e com a tag instalada; o estado dela sai do `update`.
+    #[test]
+    fn the_version_row_follows_the_update_check() {
+        let row = |value: serde_json::Value| { let s = state(value); version_row(&s, view_of(&s)) };
+        assert_eq!(row(connected(Some("v0.3.0"), json!(null))), Some(VersionRow::Current));
+        assert_eq!(row(connected(Some("v0.3.0"), newer(false, json!(null)))), Some(VersionRow::Available));
+        assert_eq!(row(connected(Some("v0.1.1"), newer(true, json!(null)))), Some(VersionRow::Migration));
+        let failed = json!({"tag": "v0.3.1", "code": "whatsapp_not_started"});
+        assert_eq!(row(connected(Some("v0.3.0"), newer(false, failed.clone()))), Some(VersionRow::Failed), "quem tenta de novo é a faixa");
+        assert_eq!(row(connected(Some("v0.1.1"), newer(true, failed))), Some(VersionRow::Failed));
+        assert_eq!(row(connected(None, newer(false, json!(null)))), None, "sem a tag instalada, nada");
+        let mut unpaired = connected(Some("v0.3.0"), newer(false, json!(null)));
+        unpaired["status"] = json!({"state": "unpaired"});
+        assert_eq!(row(unpaired), None, "vista de pareamento");
+        let mut stopped = connected(Some("v0.3.0"), json!(null));
+        stopped["service"] = json!("stopped");
+        assert_eq!(row(stopped), None, "vista de problema");
+    }
+
+    /// Servidor antigo, sem os campos novos: lê igual e não mostra linha.
+    #[test]
+    fn an_older_server_without_the_version_fields_still_reads() {
+        let s = state(base("running", Some(json!({"state": "connected"}))));
+        assert_eq!(version_row(&s, View::Connected), None);
+        assert_eq!(update_failure(&s), None);
+    }
+
+    /// A falha da troca marcada vira a linha vermelha do topo, com a versão que segue rodando; só uma faixa por vez.
+    #[test]
+    fn a_marked_update_failure_shows_once_and_only_without_a_job_running() {
+        let failed = json!({"tag": "v0.3.1", "code": "whatsapp_update_restored"});
+        let s = state(connected(Some("v0.3.0"), newer(false, failed.clone())));
+        assert_eq!(update_failure(&s), Some(("v0.3.1".into(), "whatsapp_update_restored".into(), "v0.3.0".into())));
+        // `last_error` (falha antes de mexer no serviço) não abre faixa.
+        let mut quiet = newer(false, json!(null));
+        quiet["last_error"] = json!({"tag": "v0.3.1", "code": "whatsapp_download_failed"});
+        assert_eq!(update_failure(&state(connected(Some("v0.3.0"), quiet))), None);
+        let mut running = connected(Some("v0.3.0"), newer(false, failed.clone()));
+        running["job"] = json!({"kind": "auto_update", "step": "service", "done": false, "error": null, "outcome": null});
+        assert_eq!(update_failure(&state(running)), None, "job em curso");
+        let mut manual = connected(Some("v0.3.0"), newer(false, failed.clone()));
+        manual["job"] = json!({"kind": "update", "step": "start", "done": true, "error": {"code": "whatsapp_not_started"}, "outcome": null});
+        let manual = state(manual);
+        assert!(failed_job(&manual).is_some());
+        assert_eq!(update_failure(&manual), None, "a faixa do job do dono já diz");
+        assert_eq!(update_failure(&state(connected(None, newer(false, failed.clone())))), None, "sem a versão que roda");
+        // `update_data_migrated` deixa a nova registrada e parada: "continua rodando" seria falso.
+        for service in ["stopped", "absent"] {
+            let mut stopped = connected(Some("v0.3.0"), newer(true, json!({"tag": "v0.3.1", "code": "whatsapp_update_data_migrated"})));
+            stopped["service"] = json!(service);
+            assert_eq!(update_failure(&state(stopped)), None, "{service}");
+        }
+    }
+
+    /// A passada automática nunca abre a faixa "A atualização parou"; enquanto anda, a vista é a de atualizando.
+    #[test]
+    fn the_automatic_job_never_opens_the_owner_banner() {
+        let mut value = connected(Some("v0.3.0"), json!(null));
+        value["job"] = json!({"kind": "auto_update", "step": "start", "done": true, "error": {"code": "whatsapp_not_started"}, "outcome": null});
+        assert_eq!(failed_job(&state(value.clone())), None);
+        value["job"] = json!({"kind": "auto_update", "step": "service", "done": false, "error": null, "outcome": null});
+        let running = state(value);
+        assert_eq!(view_of(&running), View::Working);
+        assert!(should_poll(&running, false));
+    }
+
+    /// A confirmação só abre sozinha para o Atualizar desta tela que parou em `needs_confirm`.
+    #[test]
+    fn needs_confirm_of_the_owner_update_asks_for_the_migration() {
+        let with_job = |kind: &str, done: bool, outcome: serde_json::Value| {
+            let mut value = connected(Some("v0.1.1"), newer(true, json!(null)));
+            value["job"] = json!({"kind": kind, "step": "download", "done": done, "error": null, "outcome": outcome});
+            own_update_step(&state(value))
+        };
+        assert_eq!(with_job("update", false, json!(null)), OwnUpdate::Running);
+        assert_eq!(with_job("update", true, json!("needs_confirm")), OwnUpdate::AskMigration);
+        assert_eq!(with_job("update", true, json!("updated")), OwnUpdate::Finished);
+        assert_eq!(with_job("auto_update", true, json!("needs_confirm")), OwnUpdate::Finished, "job de outra origem");
+        assert_eq!(own_update_step(&state(connected(Some("v0.1.1"), json!(null)))), OwnUpdate::Finished);
+        assert_eq!(migration_tags(&state(connected(Some("v0.1.1"), newer(true, json!(null))))), Some(("v0.3.1".into(), "v0.1.1".into())));
+        assert_eq!(migration_tags(&state(connected(Some("v0.1.1"), json!(null)))), None, "sem versão nova, sem diálogo");
+    }
+
+    /// Atualizar recusado pela vez: com job em curso a página o acompanha; sem ele, avisa.
+    #[test]
+    fn a_busy_refusal_without_a_job_is_said() {
+        crate::i18n::english_in_this_thread(false);
+        assert_eq!(update_refused_text(&state(connected(Some("v0.3.0"), json!(null)))), Some(crate::i18n::tr("whatsapp_update_busy")));
+        let mut running = connected(Some("v0.3.0"), json!(null));
+        running["job"] = json!({"kind": "auto_update", "step": "download", "done": false, "error": null, "outcome": null});
+        assert_eq!(update_refused_text(&state(running)), None);
+    }
+
+    /// Cópia do arquivo que não foi gravada: vista de parado com a frase própria, que só religa.
+    #[test]
+    fn a_failed_backup_stops_with_its_own_view() {
+        let mut value = base("stopped", None);
+        value["status_error"] = json!("whatsapp_backup_failed");
+        assert_eq!(view_of(&state(value.clone())), View::BackupFailed);
+        value["service"] = json!("running");
+        assert_eq!(view_of(&state(value)), View::Unreachable, "de pé, o código é de outra coisa");
+    }
+
+    #[test]
+    fn every_update_failure_has_its_own_phrase() {
+        for english in [false, true] {
+            crate::i18n::english_in_this_thread(english);
+            let generic = crate::i18n::tr("whatsapp_job_err_unknown");
+            let generic = generic.split('{').next().unwrap_or_default();
+            for code in ["update_restored", "update_data_migrated", "backup_failed", "not_started", "update_no_rollback"] {
+                let text = code_text("whatsapp_job_err_", &format!("whatsapp_{code}"));
+                assert!(!text.starts_with(generic), "{code} (english={english}) caiu na frase genérica: {text}");
+            }
+        }
     }
 
     /// O servidor dá 30 s ao binário para desvincular (`UNLINK_TIMEOUT` do `hangar-whatsapp`).
