@@ -3,6 +3,7 @@
 use serde_json::Value;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// O que a conversa diz do agente principal: modelo e esforço vigentes e os tokens no contexto.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -21,11 +22,14 @@ impl WireFacts {
         }
         match event["type"].as_str() {
             Some("profile.bind" | "config.update") => {
-                if let Some(alias) = event["modelAlias"].as_str().filter(|s| !s.is_empty()) {
-                    self.alias = Some(alias.to_owned());
+                let alias = event["modelAlias"].as_str().filter(|s| !s.is_empty());
+                let switched = alias.is_some_and(|alias| self.alias.as_deref() != Some(alias));
+                // Campo presente manda (vazio ou nulo desliga); modelo trocado sem ele não herda o esforço do anterior.
+                if event.get("thinkingEffort").is_some() || switched {
+                    self.effort = event["thinkingEffort"].as_str().filter(|s| !s.is_empty()).map(str::to_owned);
                 }
-                if let Some(effort) = event["thinkingEffort"].as_str().filter(|s| !s.is_empty()) {
-                    self.effort = Some(effort.to_owned());
+                if let Some(alias) = alias {
+                    self.alias = Some(alias.to_owned());
                 }
             }
             Some("token_counting.measured" | "token_counting.turn_recorded") => {
@@ -101,8 +105,36 @@ impl WireTail {
     }
 }
 
+/// Arquivo relido só quando muda (data e tamanho); leitura que falha tenta de novo na rodada seguinte.
+pub(crate) struct Stamped<T> {
+    stamp: Option<(PathBuf, Option<SystemTime>, u64)>,
+    value: Option<T>,
+}
+
+impl<T> Default for Stamped<T> {
+    fn default() -> Self {
+        Self { stamp: None, value: None }
+    }
+}
+
+impl<T> Stamped<T> {
+    pub(crate) fn get(&mut self, path: &Path, parse: impl FnOnce(&[u8]) -> Option<T>) -> Option<&T> {
+        let stamp = std::fs::metadata(path).ok().map(|m| (path.to_owned(), m.modified().ok(), m.len()));
+        if stamp.is_none() || self.stamp != stamp {
+            self.stamp = None;
+            self.value = None;
+            if let Ok(bytes) = std::fs::read(path) {
+                self.value = parse(&bytes);
+                self.stamp = stamp;
+            }
+        }
+        self.value.as_ref()
+    }
+}
+
 fn amount(n: f64) -> String {
-    if n >= 1e6 {
+    // 999,5k já arredonda para 1000k: a faixa do M começa aí.
+    if n >= 999_500.0 {
         let m = n / 1e6;
         if (m - m.round()).abs() < 0.05 { format!("{}M", m.round()) } else { format!("{m:.1}M") }
     } else if n >= 1e3 {
@@ -128,10 +160,9 @@ fn until(seconds: f64) -> Option<String> {
 }
 
 /// A linha no formato que os clientes já leem (`🤖`, `💬 ctx`, `⚡5h`, `📅7d`, `🗓30d`). Sem modelo conhecido, nada.
-pub(crate) fn line(facts: &WireFacts, config: &str, quotas: Option<&Value>, now: f64) -> Option<String> {
+pub(crate) fn line(facts: &WireFacts, config: Option<&toml::Table>, quotas: Option<&Value>, now: f64) -> Option<String> {
     let alias = facts.alias.as_deref()?;
-    let table = config.parse::<toml::Table>().ok();
-    let model = table.as_ref().and_then(|t| t.get("models")?.get(alias)?.as_table().cloned());
+    let model = config.and_then(|t| t.get("models")?.get(alias)?.as_table().cloned());
     let text = |key: &str| model.as_ref().and_then(|m| m.get(key)?.as_str().map(str::to_owned));
     let name = text("display_name").unwrap_or_else(|| alias.rsplit('/').next().unwrap_or(alias).to_owned());
     let mut head = format!("🤖 {name}");
@@ -143,9 +174,11 @@ pub(crate) fn line(facts: &WireFacts, config: &str, quotas: Option<&Value>, now:
     if let (Some(used), Some(window)) = (facts.tokens, window.filter(|w| *w > 0.0)) {
         parts.push(format!("💬 ctx {}/{}", amount(used), amount(window)));
     }
-    let provider = text("provider").or_else(|| alias.split_once('/').map(|(p, _)| p.to_owned()));
-    let windows = provider
-        .and_then(|provider| quotas?.get(format!("kimi:{provider}"))?.get("cota")?.get("janelas")?.as_array().cloned())
+    // A fonte de cota tem o nome da tabela do provedor (`kimi:<provider>`), que só o modelo diz.
+    let windows = text("provider")
+        .and_then(|provider| quotas?.get(format!("kimi:{provider}"))?.get("cota").cloned())
+        .filter(|cota| cota["estado"] == "lida")
+        .and_then(|cota| cota["janelas"].as_array().cloned())
         .unwrap_or_default();
     for window in windows {
         let icon = match window["rotulo"].as_str() {
@@ -155,8 +188,13 @@ pub(crate) fn line(facts: &WireFacts, config: &str, quotas: Option<&Value>, now:
             _ => continue,
         };
         let Some(pct) = window["pct"].as_f64().filter(|p| p.is_finite()) else { continue };
+        let reset_ts = window["reset_ts"].as_f64();
+        // Janela que já virou: o percentual guardado é da anterior.
+        if reset_ts.is_some_and(|ts| ts <= now) {
+            continue;
+        }
         let mut segment = format!("{icon}:{}%", pct.round());
-        if let Some(reset) = window["reset_ts"].as_f64().and_then(|ts| until(ts - now)) {
+        if let Some(reset) = reset_ts.and_then(|ts| until(ts - now)) {
             segment.push_str(&format!(" ↺{reset}"));
         }
         parts.push(segment);
@@ -164,18 +202,6 @@ pub(crate) fn line(facts: &WireFacts, config: &str, quotas: Option<&Value>, now:
     Some(parts.join(" │ "))
 }
 
-/// O cache de cota que a tela de contas grava (`AccountService::quota_path`).
-pub(crate) fn quota_cache_path(home: &Path) -> PathBuf {
-    if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA")
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join("AppData/Local"))
-            .join("hangar/cotas-cache.json")
-    } else {
-        home.join(".hangar/cotas-cache.json")
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -197,6 +223,38 @@ mod tests {
             facts.absorb(line);
         }
         assert_eq!(facts, WireFacts { alias: Some("kimi-code/k3-256k".into()), effort: Some("max".into()), tokens: Some(21058.0) });
+    }
+
+    #[test]
+    fn effort_follows_the_model_that_is_bound() {
+        let mut facts = WireFacts::default();
+        facts.absorb(r#"{"type":"profile.bind","agentId":"main","modelAlias":"a/x","thinkingEffort":"high"}"#);
+        facts.absorb(r#"{"type":"config.update","agentId":"main","modelAlias":"a/x"}"#);
+        assert_eq!(facts.effort.as_deref(), Some("high"), "o mesmo modelo sem o campo guarda o esforço");
+        facts.absorb(r#"{"type":"config.update","agentId":"main","modelAlias":"a/y"}"#);
+        assert_eq!(facts.effort, None, "outro modelo sem o campo não herda o esforço");
+        facts.absorb(r#"{"type":"config.update","agentId":"main","thinkingEffort":"low"}"#);
+        assert_eq!(facts.effort.as_deref(), Some("low"));
+        facts.absorb(r#"{"type":"config.update","agentId":"main","thinkingEffort":null}"#);
+        assert_eq!(facts.effort, None, "nulo desliga");
+    }
+
+    #[test]
+    fn amount_moves_to_millions_before_rounding_to_1000k() {
+        assert_eq!((amount(999_700.0), amount(999_400.0), amount(262_144.0)), ("1M".into(), "999k".into(), "262k".into()));
+    }
+
+    #[test]
+    fn stamped_rereads_only_when_the_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        let mut stamped = Stamped::<usize>::default();
+        assert_eq!(stamped.get(&path, |b| Some(b.len())), None);
+        std::fs::write(&path, "abc").unwrap();
+        assert_eq!(stamped.get(&path, |b| Some(b.len())), Some(&3));
+        assert_eq!(stamped.get(&path, |_| panic!("arquivo igual não é relido")), Some(&3));
+        std::fs::write(&path, "abcde").unwrap();
+        assert_eq!(stamped.get(&path, |b| Some(b.len())), Some(&5));
     }
 
     #[test]
@@ -232,15 +290,21 @@ mod tests {
     #[test]
     fn line_joins_model_context_and_plan_windows() {
         let facts = WireFacts { alias: Some("kimi-code/k3-256k".into()), effort: Some("high".into()), tokens: Some(21058.0) };
-        let quotas = json!({"kimi:managed:kimi-code":{"cota":{"janelas":[
+        let config = CONFIG.parse::<toml::Table>().unwrap();
+        let quotas = json!({"kimi:managed:kimi-code":{"cota":{"estado":"lida","janelas":[
             {"rotulo":"5h","pct":70.6,"reset_ts":1000.0 + 5880.0},
+            {"rotulo":"7d","pct":100.0,"reset_ts":900.0},
             {"rotulo":"30d","pct":4.7,"reset_ts":1000.0 + 24.0 * 86400.0}]}}});
         assert_eq!(
-            line(&facts, CONFIG, Some(&quotas), 1000.0).as_deref(),
-            Some("🤖 K3-256k (high) │ 💬 ctx 21k/262k │ ⚡5h:71% ↺1h38m │ 🗓30d:5% ↺24d")
+            line(&facts, Some(&config), Some(&quotas), 1000.0).as_deref(),
+            Some("🤖 K3-256k (high) │ 💬 ctx 21k/262k │ ⚡5h:71% ↺1h38m │ 🗓30d:5% ↺24d"),
+            "a janela de 7d já virou e sai da barra"
         );
-        assert_eq!(line(&WireFacts::default(), CONFIG, Some(&quotas), 1000.0), None);
+        assert_eq!(line(&WireFacts::default(), Some(&config), Some(&quotas), 1000.0), None);
         let unknown = WireFacts { alias: Some("p/m".into()), ..WireFacts::default() };
-        assert_eq!(line(&unknown, CONFIG, None, 1000.0).as_deref(), Some("🤖 m"));
+        assert_eq!(line(&unknown, Some(&config), Some(&quotas), 1000.0).as_deref(), Some("🤖 m"));
+        let expired = json!({"kimi:managed:kimi-code":{"cota":{"estado":"expirada","janelas":[{"rotulo":"5h","pct":90.0}]}}});
+        let no_quota = WireFacts { tokens: None, ..facts };
+        assert_eq!(line(&no_quota, Some(&config), Some(&expired), 1000.0).as_deref(), Some("🤖 K3-256k (high)"));
     }
 }

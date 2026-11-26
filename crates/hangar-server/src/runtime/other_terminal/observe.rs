@@ -30,6 +30,8 @@ pub(super) struct FileCache {
     previews: crate::state::preview::HookFiles,
     agy_bypass: Option<((String, i64), bool)>,
     kimi_wire: super::kimi_status::WireTail,
+    kimi_config: super::kimi_status::Stamped<toml::Table>,
+    kimi_quotas: super::kimi_status::Stamped<Value>,
 }
 impl FileCache {
     /// O bypass do `agy` é flag do processo e não aparece no rodapé: o registro da abertura diz, lido uma vez por processo.
@@ -48,13 +50,11 @@ impl FileCache {
         bypass
     }
     /// O Kimi não publica statusline: a barra sai da conversa, do `config.toml` e do cache de cota.
-    fn kimi_line(&mut self, target: &OtherTarget, now: f64) -> Option<String> {
+    fn kimi_line(&mut self, target: &OtherTarget, quota_cache: &std::path::Path, now: f64) -> Option<String> {
         let facts = self.kimi_wire.read(&target.transcript).ok()?.clone();
-        let config = std::fs::read_to_string(target.dirs.kimi_home.join("config.toml")).unwrap_or_default();
-        let quotas = std::fs::read(super::kimi_status::quota_cache_path(&target.dirs.home))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-        super::kimi_status::line(&facts, &config, quotas.as_ref(), now)
+        let config = self.kimi_config.get(&target.dirs.kimi_home.join("config.toml"), |bytes| std::str::from_utf8(bytes).ok()?.parse().ok());
+        let quotas = self.kimi_quotas.get(quota_cache, |bytes| serde_json::from_slice(bytes).ok());
+        super::kimi_status::line(&facts, config, quotas, now)
     }
 }
 static APPROVAL: LazyLock<Regex> =
@@ -203,7 +203,13 @@ pub(super) fn read(
             hook_state: hook,
             hook_grace: None,
             status_line: status.map(|status| status.line).or_else(|| {
-                (target.provider == hangar_transcript::Provider::Kimi).then(|| cache.kimi_line(target, now)).flatten()
+                (target.provider == hangar_transcript::Provider::Kimi)
+                    .then(|| {
+                        let local = std::env::var("LOCALAPPDATA").ok();
+                        let quota_cache = crate::accounts::quotas::cache_path(&target.dirs.home, local.as_deref());
+                        cache.kimi_line(target, &quota_cache, now)
+                    })
+                    .flatten()
             }),
             ..Default::default()
         },
@@ -340,15 +346,14 @@ mod kimi_line_tests {
         target.dirs.kimi_home = dir.path().join(".kimi-code");
         target.transcript = dir.path().join("wire.jsonl");
         std::fs::create_dir_all(&target.dirs.kimi_home).unwrap();
-        std::fs::create_dir_all(dir.path().join(".hangar")).unwrap();
         std::fs::write(target.dirs.kimi_home.join("config.toml"),
             "[models.\"kimi-code/k3\"]\nprovider = \"managed:kimi-code\"\nmax_context_size = 262144\ndisplay_name = \"K3\"\n").unwrap();
         std::fs::write(&target.transcript,
             "{\"type\":\"profile.bind\",\"agentId\":\"main\",\"modelAlias\":\"kimi-code/k3\",\"thinkingEffort\":\"high\"}\n{\"type\":\"token_counting.measured\",\"agentId\":\"main\",\"tokens\":52000}\n").unwrap();
-        std::fs::write(dir.path().join(".hangar/cotas-cache.json"),
-            r#"{"kimi:managed:kimi-code":{"cota":{"janelas":[{"rotulo":"30d","pct":12.0,"reset_ts":null}]}}}"#).unwrap();
+        let quota_cache = dir.path().join("cotas-cache.json");
+        std::fs::write(&quota_cache,
+            r#"{"kimi:managed:kimi-code":{"cota":{"estado":"lida","janelas":[{"rotulo":"30d","pct":12.0,"reset_ts":null}]}}}"#).unwrap();
         let mut cache = FileCache::default();
-        if cfg!(windows) { return; }
-        assert_eq!(cache.kimi_line(&target, 0.0).as_deref(), Some("🤖 K3 (high) │ 💬 ctx 52k/262k │ 🗓30d:12%"));
+        assert_eq!(cache.kimi_line(&target, &quota_cache, 0.0).as_deref(), Some("🤖 K3 (high) │ 💬 ctx 52k/262k │ 🗓30d:12%"));
     }
 }
