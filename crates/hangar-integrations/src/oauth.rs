@@ -38,6 +38,7 @@ const MAX_URL_BYTES: usize = 4096;
 #[serde(rename_all = "snake_case")]
 pub enum OAuthOrigin {
     Desktop,
+    RemoteDesktop,
     Mobile,
 }
 
@@ -1217,12 +1218,12 @@ fn resolve_redirect(
             redirect_uri: loopback_uri,
             handoff_reason: None,
         }),
-        OAuthOrigin::Mobile => {
+        OAuthOrigin::Mobile | OAuthOrigin::RemoteDesktop => {
             if requires_loopback {
                 return Ok(ResolvedRedirect {
                     redirect_uri: loopback_uri,
                     handoff_reason: Some(
-                        "este provedor exige redirecionamento em localhost (127.0.0.1); conclua o login no navegador do computador"
+                        "este provedor exige redirecionamento em localhost (127.0.0.1); conclua o login no navegador do computador servidor"
                             .into(),
                     ),
                 });
@@ -1236,7 +1237,7 @@ fn resolve_redirect(
                 return Ok(ResolvedRedirect {
                     redirect_uri: loopback_uri,
                     handoff_reason: Some(
-                        "endereço HTTPS público não configurado; conclua o login no navegador do computador"
+                        "endereço HTTPS público não configurado; conclua o login no navegador do computador servidor"
                             .into(),
                     ),
                 });
@@ -1246,7 +1247,7 @@ fn resolve_redirect(
                 return Ok(ResolvedRedirect {
                     redirect_uri: loopback_uri,
                     handoff_reason: Some(
-                        "o callback pelo celular exige URL HTTPS pública válida; conclua o login no navegador do computador"
+                        "o callback remoto exige URL HTTPS pública válida; conclua o login no navegador do computador servidor"
                             .into(),
                     ),
                 });

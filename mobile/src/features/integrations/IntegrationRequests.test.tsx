@@ -11,12 +11,16 @@ import {
 } from './IntegrationRequests';
 import { IntegrationDetailSheet } from './IntegrationSheets';
 import { IntegrationEditorSheet } from './IntegrationEditorSheet';
+import IntegrationsScreen from '../../../app/config/integrations';
 import { openIntegrationApproval, useIntegrationApprovalTarget } from './target';
+import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
 import * as m from '../../paraglide/messages';
 
 const mocks = vi.hoisted(() => ({
   answerIntegrationApproval: vi.fn(),
+  listCatalog: vi.fn(),
+  listIntegrations: vi.fn(),
   createIntegration: vi.fn(),
   updateIntegration: vi.fn(),
   deleteIntegration: vi.fn(),
@@ -27,12 +31,33 @@ const mocks = vi.hoisted(() => ({
   openURL: vi.fn(),
   toastOk: vi.fn(),
   toastErro: vi.fn(),
+  useIdentities: vi.fn(() => ({ identities: new Map([['a', 'a']]), loading: new Set<string>() })),
 }));
 
+vi.mock('react-native', async (original) => {
+  const native = await original<typeof import('react-native')>();
+  return {
+    ...native,
+    RefreshControl: () => null,
+    TextInput: ({ value, onChangeText, accessibilityLabel, editable, placeholder }: {
+      value?: string; onChangeText?: (value: string) => void; accessibilityLabel?: string; editable?: boolean; placeholder?: string;
+    }) => createElement('textarea', {
+      value: value ?? '',
+      placeholder,
+      'aria-label': accessibilityLabel,
+      disabled: editable === false,
+      onChange: (event: { currentTarget: { value: string } }) => onChangeText?.(event.currentTarget.value),
+    }),
+  };
+});
+vi.mock('expo-router', () => ({ Stack: { Screen: () => null } }));
+vi.mock('../config/Pagina', () => ({ Pagina: ({ children }: { children: ReactNode }) => createElement('main', null, children) }));
 vi.mock('expo-linking', () => ({ openURL: mocks.openURL }));
 vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
   answerIntegrationApproval: mocks.answerIntegrationApproval,
+  listCatalog: mocks.listCatalog,
+  listIntegrations: mocks.listIntegrations,
   createIntegration: mocks.createIntegration,
   updateIntegration: mocks.updateIntegration,
   deleteIntegration: mocks.deleteIntegration,
@@ -50,7 +75,7 @@ vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsy
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {}, remove: () => {} }) }));
 vi.mock('../../ui/Icon', () => ({ Icon: ({ name }: { name: string }) => createElement('i', { 'data-icon': name }) }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: mocks.toastOk, erro: mocks.toastErro } }));
-vi.mock('../pair/identities', () => ({ useIdentities: () => ({ identities: new Map([['a', 'a']]), loading: new Set() }) }));
+vi.mock('../pair/identities', () => ({ useIdentities: () => mocks.useIdentities() }));
 
 const makeEvent = (id = 'r1'): IntegrationApprovalEvent => ({
   requests: [{
@@ -87,6 +112,9 @@ const title = (label: string, count = 1) => m.integrations_approval_requests_tit
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
+  mocks.listCatalog.mockResolvedValue([]);
+  mocks.listIntegrations.mockResolvedValue([]);
+  mocks.useIdentities.mockImplementation(() => ({ identities: new Map([['a', 'a']]), loading: new Set<string>() }));
   container = document.createElement('div');
   root = createRoot(container);
   openIntegrationApproval(null);
@@ -95,7 +123,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => { root.unmount(); });
-  useSessions.setState({ integrationApprovals: {}, byServer: [] });
+  useSessions.setState({ integrationApprovals: {}, byServer: [], servers: [] });
+  useServers.setState({ servers: [], activeId: null, ready: true, vaultReadable: true });
   openIntegrationApproval(null);
 });
 
@@ -338,4 +367,250 @@ it('editor de preset Google exibe guia curto e nota dos 7 dias em Testing', asyn
   expect(container.textContent).toContain('Configurar Client ID do Google Cloud para Gmail MCP');
   expect(container.textContent).toContain('Passo 1 do console');
   expect(container.textContent).toContain(m.integrations_google_testing_hint());
+});
+
+it('com 2 servidores próprios e identidade pendente não vaza pedido de sessão homônima entre máquinas', async () => {
+  const srvA = bucket('a').server;
+  const srvB = bucket('b').server;
+  const inviteC = { ...bucket('c').server, invite: true };
+  const banner = m.integrations_approval_session_notice({ integration: 'GitHub', tool: 'create_issue' });
+  mocks.useIdentities.mockImplementation(() => ({ identities: new Map(), loading: new Set(['a', 'b']) }));
+
+  useSessions.setState({
+    servers: [srvA, srvB],
+    byServer: [bucket('a'), bucket('b')],
+    integrationApprovals: { a: makeEvent('homonima-1') },
+  });
+
+  await act(async () => { root.render(<SessionIntegrationRequests serverId="b" name="sessao" />); });
+  expect(container.querySelector(`button[aria-label="${banner}"]`)).toBeNull();
+
+  await act(async () => { root.render(<SessionIntegrationRequests serverId="a" name="sessao" />); });
+  expect(container.querySelector(`button[aria-label="${banner}"]`)).toBeNull();
+
+  // Com apenas 1 servidor próprio (convite externo não conta), só casa quando owner === serverId.
+  await act(async () => {
+    useSessions.setState({
+      servers: [srvA, inviteC],
+      byServer: [bucket('a')],
+      integrationApprovals: { a: makeEvent('single-1') },
+    });
+  });
+  await act(async () => { root.render(<SessionIntegrationRequests serverId="b" name="sessao" />); });
+  expect(container.querySelector(`button[aria-label="${banner}"]`)).toBeNull();
+
+  await act(async () => { root.render(<SessionIntegrationRequests serverId="a" name="sessao" />); });
+  expect(container.querySelector(`button[aria-label="${banner}"]`)).not.toBeNull();
+});
+
+it('editar integração com preset preserva url_editable=false, modos de auth permitidos e guia Google', async () => {
+  const srv = bucket('a').server;
+  const googlePreset: IntegrationPreset = {
+    id: 'google-gmail',
+    name: 'Google Gmail',
+    category: 'productivity',
+    description: 'E-mails no Gmail',
+    url: 'https://gmailmcp.googleapis.com/mcp/v1',
+    url_editable: false,
+    auth_kind: 'oauth_manual_client',
+    default_scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+    requires_loopback_redirect: true,
+    setup_guide: {
+      title: 'Configurar Client ID do Google Cloud para Gmail MCP',
+      steps: ['Passo 1 do console'],
+      docs_hint: 'Google Cloud Console',
+    },
+  };
+  const integration: IntegrationView = {
+    id: 'gmail-pessoal',
+    name: 'Gmail Pessoal',
+    preset: 'google-gmail',
+    enabled: true,
+    transport: { kind: 'remote_http', url: 'https://gmailmcp.googleapis.com/mcp/v1', header_names: [] },
+    auth: { kind: 'oauth_manual_client', client_id: 'cid-1', scopes: ['https://www.googleapis.com/auth/gmail.readonly'] },
+    policy: 'read_free_ask_write',
+    pinned: false,
+    projects: [],
+    allowed_tools: [],
+    created_at: 1000,
+    updated_at: 1000,
+    status: 'auth_required',
+  };
+  mocks.listIntegrations.mockResolvedValueOnce([integration]);
+  mocks.listCatalog.mockResolvedValueOnce([googlePreset]);
+  mocks.listIntegrationTools.mockResolvedValueOnce([]);
+  useServers.setState({ servers: [srv], activeId: srv.id, ready: true, vaultReadable: true });
+
+  await act(async () => { root.render(<IntegrationsScreen />); });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('button[aria-label="Gmail Pessoal"]')!.click();
+  });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_edit()}"]`)!.click();
+  });
+
+  const urlField = container.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${m.integrations_field_url()}"]`);
+  expect(urlField).not.toBeNull();
+  expect(urlField!.disabled).toBe(true);
+  expect(container.textContent).toContain('Configurar Client ID do Google Cloud para Gmail MCP');
+  expect(container.textContent).toContain(m.integrations_google_testing_hint());
+  expect(container.querySelector(`button[aria-label="${m.integrations_auth_oauth_dcr()}"]`)).toBeNull();
+  expect(container.querySelector(`button[aria-label="${m.integrations_auth_bearer()}"]`)).toBeNull();
+  expect(container.querySelector(`button[aria-label="${m.integrations_auth_none()}"]`)).toBeNull();
+});
+
+async function setField(label: string, value: string) {
+  const el = container.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`);
+  expect(el, label).not.toBeNull();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(el, value);
+    el!.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+it('editor rejeita cabeçalhos e variáveis de ambiente malformados ou cabeçalhos reservados MCP', async () => {
+  await act(async () => {
+    root.render(
+      <IntegrationEditorSheet
+        server={bucket('a').server}
+        existingIds={[]}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+  });
+
+  await setField(m.integrations_field_id(), 'custom-mcp');
+  await setField(m.integrations_field_name(), 'Custom MCP');
+  await setField(m.integrations_field_url(), 'https://mcp.example.com/mcp');
+
+  for (const [badHeader, expectedToken] of [
+    ['sem-separador', m.integrations_field_headers()],
+    [': valor-sem-nome', m.integrations_field_headers()],
+    ['X-Empty:   ', 'x-empty'],
+    ['Authorization: Bearer segredo', 'authorization'],
+    ['Accept: text/plain', 'accept'],
+    ['Mcp-Session-Id: 123', 'mcp-session-id'],
+    ['Mcp-Protocol-Version: 2025-03-26', 'mcp-protocol-version'],
+    ['Last-Event-Id: 9', 'last-event-id'],
+  ] as const) {
+    await setField(m.integrations_field_headers(), badHeader);
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_connect()}"]`)!.click();
+    });
+    expect(mocks.createIntegration).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(m.integrations_field_headers());
+    expect(container.textContent).toContain(expectedToken);
+  }
+
+  // Troca para stdio e testa env malformada.
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_transport_local()}"]`)!.click();
+  });
+  await setField(m.integrations_field_command(), 'npx -y @org/mcp-server');
+  for (const badEnv of ['SEM_IGUAL', '=valor-sem-chave']) {
+    await setField(m.integrations_field_env(), badEnv);
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+    });
+    expect(mocks.createIntegration).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(m.integrations_field_env());
+  }
+});
+
+it('edição mostra cabeçalhos e variáveis salvos e envia null em secrets ao remover chave', async () => {
+  const srv = bucket('a').server;
+  const remoteItem: IntegrationView = {
+    id: 'custom-http',
+    name: 'Custom HTTP',
+    preset: null,
+    enabled: true,
+    transport: { kind: 'remote_http', url: 'https://mcp.example.com/mcp', header_names: ['x-tenant', 'x-region'] },
+    auth: { kind: 'none' },
+    policy: 'read_free_ask_write',
+    pinned: false,
+    projects: [],
+    allowed_tools: [],
+    created_at: 1000,
+    updated_at: 1000,
+    status: 'ready',
+  };
+  mocks.updateIntegration.mockResolvedValueOnce({
+    ...remoteItem,
+    transport: { kind: 'remote_http', url: 'https://mcp.example.com/mcp', header_names: ['x-region'] },
+  });
+
+  await act(async () => {
+    root.render(
+      <IntegrationEditorSheet
+        server={srv}
+        editing={remoteItem}
+        existingIds={['custom-http']}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+  });
+
+  expect(container.textContent).toContain('x-tenant');
+  expect(container.textContent).toContain('x-region');
+  const rmTenantBtn = container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_remove()} x-tenant"]`);
+  expect(rmTenantBtn).not.toBeNull();
+
+  await act(async () => { rmTenantBtn!.click(); });
+  expect(container.textContent).toContain(m.native_server_remove_on_save());
+
+  const undoTenantBtn = container.querySelector<HTMLButtonElement>(`button[aria-label="${m.native_server_undo()} x-tenant"]`);
+  expect(undoTenantBtn).not.toBeNull();
+  await act(async () => { undoTenantBtn!.click(); });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_remove()} x-tenant"]`)!.click();
+  });
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+
+  expect(mocks.updateIntegration).toHaveBeenCalledWith(srv, 'custom-http', expect.objectContaining({
+    transport: { kind: 'remote_http', url: 'https://mcp.example.com/mcp', header_names: ['x-region'] },
+    secrets: { headers: { 'x-tenant': null } },
+  }));
+
+  // Agora testa remoção de env_key em transporte local_stdio.
+  const stdioItem: IntegrationView = {
+    ...remoteItem,
+    id: 'local-fs',
+    name: 'Local FS',
+    transport: { kind: 'local_stdio', command: ['npx', 'fs-mcp'], cwd: null, env_keys: ['API_KEY', 'MODE'] },
+  };
+  mocks.updateIntegration.mockResolvedValueOnce({
+    ...stdioItem,
+    transport: { kind: 'local_stdio', command: ['npx', 'fs-mcp'], cwd: null, env_keys: ['MODE', 'NEW_VAR'] },
+  });
+
+  await act(async () => {
+    root.render(
+      <IntegrationEditorSheet
+        key="stdio"
+        server={srv}
+        editing={stdioItem}
+        existingIds={['local-fs']}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+  });
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_remove()} API_KEY"]`)!.click();
+  });
+  await setField(m.integrations_field_env(), 'NEW_VAR=ok');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+
+  expect(mocks.updateIntegration).toHaveBeenLastCalledWith(srv, 'local-fs', expect.objectContaining({
+    transport: { kind: 'local_stdio', command: ['npx', 'fs-mcp'], cwd: null, env_keys: ['MODE', 'NEW_VAR'] },
+    secrets: { env: { API_KEY: null, NEW_VAR: 'ok' } },
+  }));
 });

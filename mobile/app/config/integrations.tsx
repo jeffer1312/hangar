@@ -216,7 +216,13 @@ export default function IntegrationsScreen() {
       {server && editor ? (
         <IntegrationEditorSheet
           server={server}
-          preset={editor.mode === 'preset' ? editor.preset : null}
+          preset={
+            editor.mode === 'preset'
+              ? editor.preset
+              : editor.mode === 'edit'
+                ? (presets.find((p) => p.id === editor.integration.preset) ?? null)
+                : null
+          }
           editing={editor.mode === 'edit' ? editor.integration : null}
           existingIds={existingIds}
           onClose={() => setEditor(null)}

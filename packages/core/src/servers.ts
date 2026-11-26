@@ -26,6 +26,7 @@ export interface Server {
   // Entrada montada só para um par externo (`reconcilePairEntries`): não é guardada nem vira seção.
   ephemeral?: boolean;
 }
+export const ownServers = <T extends Pick<Server, 'invite'>>(list: readonly T[]): T[] => list.filter((s) => !s.invite);
 export const SERVER_COLORS = ['#7c6af7', '#3ba55d', '#e0a23b', '#e0563b', '#3b9fe0', '#c43be0'];
 export function serverColor(id: string): string {
   let h = 0;

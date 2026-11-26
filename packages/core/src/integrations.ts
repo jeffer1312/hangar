@@ -1,7 +1,7 @@
 // Integrações MCP externas (`/api/integrations/*`) e aprovações SSE (`integrations_approvals`).
 // Segredos viajam somente na escrita (POST/PATCH) e nunca retornam em listagens.
 import { integrationsFetchForServer } from './api';
-import type { Server } from './servers';
+import type { LanInfo, Server } from './servers';
 import * as m from './paraglide/messages';
 
 export type PresetAuthKind = 'oauth_dcr' | 'oauth_manual_client' | 'oauth_dcr_or_bearer';
@@ -179,8 +179,13 @@ export function integrationFailureText(err: unknown): string | undefined {
 }
 
 /** Escolhe a URL HTTPS pública do servidor para o callback OAuth vindo do celular. */
-export function resolveMobilePublicBaseUrl(server: Pick<Server, 'baseUrl' | 'remote'>): string | undefined {
-  for (const candidate of [server.remote?.url, server.baseUrl]) {
+export function resolveMobilePublicBaseUrl(
+  server: Pick<Server, 'baseUrl'> & {
+    remote?: Pick<LanInfo, 'url'> | LanInfo;
+    connect?: Pick<LanInfo, 'url'> | LanInfo;
+  },
+): string | undefined {
+  for (const candidate of [server.remote?.url, server.connect?.url, server.baseUrl]) {
     if (!candidate) continue;
     const trimmed = candidate.trim();
     try {

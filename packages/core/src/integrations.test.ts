@@ -187,20 +187,28 @@ describe('clientes HTTP de integrações', () => {
 });
 
 describe('resolveMobilePublicBaseUrl', () => {
-  it('escolhe remote HTTPS antes de baseUrl HTTPS e ignora URLs HTTP ou inválidas', () => {
+  it('escolhe remote HTTPS antes de connect e baseUrl HTTPS e ignora URLs HTTP ou inválidas', () => {
     expect(resolveMobilePublicBaseUrl({
       baseUrl: 'https://base.example.com/',
       remote: { url: 'https://tail.ts.net/', id: 'pc' },
+      connect: { url: 'https://pc1.acme.hangar.dev.br/', id: 'pc' },
     })).toBe('https://tail.ts.net');
+
+    expect(resolveMobilePublicBaseUrl({
+      baseUrl: 'http://192.168.1.5:8765',
+      connect: { url: 'https://pc1.acme.hangar.dev.br/' },
+    })).toBe('https://pc1.acme.hangar.dev.br');
 
     expect(resolveMobilePublicBaseUrl({
       baseUrl: 'https://base.example.com/',
       remote: { url: 'http://100.64.0.2:8765', id: 'pc' },
+      connect: { url: 'https://user:pass@evil.example.com/', id: 'pc' },
     })).toBe('https://base.example.com');
 
     expect(resolveMobilePublicBaseUrl({
       baseUrl: 'http://192.168.1.5:8765',
       remote: { url: 'http://100.64.0.2:8765', id: 'pc' },
+      connect: { url: 'http://pc1.local:8765', id: 'pc' },
     })).toBeUndefined();
 
     expect(resolveMobilePublicBaseUrl({

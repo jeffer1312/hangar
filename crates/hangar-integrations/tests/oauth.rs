@@ -1212,6 +1212,39 @@ async fn desktop_vs_mobile_redirect_and_handoff_rules() {
         other => panic!("esperava OpenUrl com HTTPS para Linear no mobile, veio {other:?}"),
     }
 
+    // 4. Desktop conectado remotamente segue a mesma política remota (HTTPS direto ou handoff para o servidor).
+    let remote_desktop_handoff = oauth
+        .start(
+            "gmail-mob",
+            OAuthStartInput {
+                origin_client: OAuthOrigin::RemoteDesktop,
+                local_port: 9001,
+                public_base_url: Some("https://meu.tail.ts.net".to_owned()),
+                cimd_client_id_url: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(remote_desktop_handoff, OAuthStartOutcome::HandoffDesktop { .. }));
+
+    let remote_desktop_https = oauth
+        .start(
+            "linear-mob",
+            OAuthStartInput {
+                origin_client: OAuthOrigin::RemoteDesktop,
+                local_port: 9001,
+                public_base_url: Some("https://meu.tail.ts.net/".to_owned()),
+                cimd_client_id_url: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        remote_desktop_https,
+        OAuthStartOutcome::OpenUrl { ref redirect_uri, .. }
+        if redirect_uri == "https://meu.tail.ts.net/api/integrations/oauth/callback"
+    ));
+
     server_handle.abort();
 }
 

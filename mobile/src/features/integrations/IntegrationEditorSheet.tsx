@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { Pressable, Text, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   createIntegration,
   updateIntegration,
@@ -15,8 +17,10 @@ import {
 import { MachineField, MachineGroup, MachineHelp, MachineRow } from '../machines/MachineRows';
 import { MachineSheet, Notice } from '../machines/parts';
 import { Segmented } from '../config/Segmented';
+import { useSettingsColors } from '../config/colors';
 import { IntegrationPolicyRows, SetupGuideBlock } from './IntegrationRows';
 import { integrationErrorText } from './errors';
+import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
@@ -25,6 +29,14 @@ type TransportKind = 'remote_http' | 'local_stdio';
 type AuthKind = IntegrationAuthConfig['kind'];
 
 const SLUG_RE = /^[a-z][a-z0-9-]{0,63}$/;
+const RESERVED_HTTP_HEADERS = new Set([
+  'authorization',
+  'accept',
+  'mcp-session-id',
+  'mcp-protocol-version',
+  'last-event-id',
+]);
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9a-z]+$/;
 
 function suggestPresetSlug(baseId: string, existingIds: string[]): string {
   const used = new Set(existingIds);
@@ -70,38 +82,64 @@ function parseCommandArgs(raw: string): string[] {
   return out;
 }
 
-function parseHeaders(raw: string): { names: string[]; map: Record<string, string> } {
+type ParseHeadersResult =
+  | { ok: true; names: string[]; map: Record<string, string> }
+  | { ok: false; error: string };
+
+type ParseEnvResult =
+  | { ok: true; keys: string[]; map: Record<string, string> }
+  | { ok: false; error: string };
+
+function parseHeaders(raw: string): ParseHeadersResult {
   const names: string[] = [];
   const map: Record<string, string> = {};
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const sep = trimmed.indexOf(':');
-    if (sep <= 0) continue;
+    if (sep <= 0) return { ok: false, error: m.integrations_field_headers() };
     const name = trimmed.slice(0, sep).trim().toLowerCase();
     const val = trimmed.slice(sep + 1).trim();
-    if (!name || !val) continue;
+    // Cabeçalhos reservados de protocolo/auth e valores vazios são recusados antes de chegar ao PATCH.
+    if (
+      !name
+      || name.length > 256
+      || !HEADER_NAME_RE.test(name)
+      || RESERVED_HTTP_HEADERS.has(name)
+      || !val
+      || /[\x00-\x08\x0a-\x1f\x7f]/.test(val)
+    ) {
+      return {
+        ok: false,
+        error: name ? `${m.integrations_field_headers()}: ${name}` : m.integrations_field_headers(),
+      };
+    }
     if (!names.includes(name)) names.push(name);
     map[name] = val;
   }
-  return { names, map };
+  return { ok: true, names, map };
 }
 
-function parseEnvVars(raw: string): { keys: string[]; map: Record<string, string> } {
+function parseEnvVars(raw: string): ParseEnvResult {
   const keys: string[] = [];
   const map: Record<string, string> = {};
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const sep = trimmed.indexOf('=');
-    if (sep <= 0) continue;
+    if (sep <= 0) return { ok: false, error: m.integrations_field_env() };
     const key = trimmed.slice(0, sep).trim();
     const val = trimmed.slice(sep + 1);
-    if (!key) continue;
+    if (!key || key.length > 256 || key.includes('=') || /[\s\x00-\x1f\x7f]/.test(key) || val.includes('\0')) {
+      return {
+        ok: false,
+        error: key ? `${m.integrations_field_env()}: ${key}` : m.integrations_field_env(),
+      };
+    }
     if (!keys.includes(key)) keys.push(key);
     map[key] = val;
   }
-  return { keys, map };
+  return { ok: true, keys, map };
 }
 
 function parseLines(raw: string): string[] {
@@ -171,8 +209,24 @@ export function IntegrationEditorSheet({
   const [policy, setPolicy] = useState<PermissionPolicy>(editing?.policy ?? 'read_free_ask_write');
   const [pinned, setPinned] = useState<boolean>(editing?.pinned ?? false);
   const [projectsText, setProjectsText] = useState((editing?.projects ?? []).join('\n'));
+  const [removedHeaders, setRemovedHeaders] = useState<string[]>([]);
+  const [removedEnvKeys, setRemovedEnvKeys] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  const existingHeaderNames = useMemo(
+    () => (editing?.transport.kind === 'remote_http' ? editing.transport.header_names : []),
+    [editing],
+  );
+  const existingEnvKeys = useMemo(
+    () => (editing?.transport.kind === 'local_stdio' ? editing.transport.env_keys : []),
+    [editing],
+  );
+
+  const toggleRemoved = (setter: Dispatch<SetStateAction<string[]>>, key: string) => {
+    haptic.selection();
+    setter((cur) => (cur.includes(key) ? cur.filter((item) => item !== key) : [...cur, key]));
+  };
 
   const isPreset = !!preset;
   const urlEditable = isPreset ? preset.url_editable : true;
@@ -201,8 +255,12 @@ export function IntegrationEditorSheet({
     if (!name.trim()) return m.integrations_validation_name();
     if (transportKind === 'remote_http') {
       if (!isValidHttpUrl(url)) return m.integrations_validation_url();
-    } else if (parseCommandArgs(commandText).length === 0) {
-      return m.integrations_validation_command();
+      const headersResult = parseHeaders(headersText);
+      if (!headersResult.ok) return headersResult.error;
+    } else {
+      if (parseCommandArgs(commandText).length === 0) return m.integrations_validation_command();
+      const envResult = parseEnvVars(envText);
+      if (!envResult.ok) return envResult.error;
     }
     if (effectiveAuth === 'oauth_manual_client' && !clientId.trim()) {
       return m.integrations_validation_client_id();
@@ -219,25 +277,40 @@ export function IntegrationEditorSheet({
       return;
     }
 
+    const parsedHeaders = transportKind === 'remote_http'
+      ? parseHeaders(headersText)
+      : { ok: true as const, names: [], map: {} };
+    if (!parsedHeaders.ok) {
+      setError(parsedHeaders.error);
+      haptic.error();
+      return;
+    }
+    const parsedEnv = transportKind === 'local_stdio'
+      ? parseEnvVars(envText)
+      : { ok: true as const, keys: [], map: {} };
+    if (!parsedEnv.ok) {
+      setError(parsedEnv.error);
+      haptic.error();
+      return;
+    }
+
     setBusy(true);
     setError('');
     try {
-      const parsedHeaders = parseHeaders(headersText);
-      const parsedEnv = parseEnvVars(envText);
-      const existingHeaderNames = editing?.transport.kind === 'remote_http' ? editing.transport.header_names : [];
-      const existingEnvKeys = editing?.transport.kind === 'local_stdio' ? editing.transport.env_keys : [];
+      const keptHeaders = existingHeaderNames.filter((h) => !removedHeaders.includes(h));
+      const keptEnvKeys = existingEnvKeys.filter((k) => !removedEnvKeys.includes(k));
 
       const transport: IntegrationTransportInput = transportKind === 'remote_http'
         ? {
           kind: 'remote_http',
           url: url.trim(),
-          header_names: Array.from(new Set([...existingHeaderNames, ...parsedHeaders.names])),
+          header_names: Array.from(new Set([...keptHeaders, ...parsedHeaders.names])),
         }
         : {
           kind: 'local_stdio',
           command: parseCommandArgs(commandText),
           cwd: cwd.trim() || null,
-          env_keys: Array.from(new Set([...existingEnvKeys, ...parsedEnv.keys])),
+          env_keys: Array.from(new Set([...keptEnvKeys, ...parsedEnv.keys])),
         };
 
       const auth: IntegrationAuthConfig = effectiveAuth === 'oauth_manual_client'
@@ -255,11 +328,17 @@ export function IntegrationEditorSheet({
       if (effectiveAuth === 'oauth_manual_client' && clientSecret.trim()) {
         secrets.oauth_client_secret = clientSecret.trim();
       }
-      if (transportKind === 'remote_http' && parsedHeaders.names.length > 0) {
-        secrets.headers = parsedHeaders.map;
+      if (transportKind === 'remote_http') {
+        const headersPatch: Record<string, string | null> = {};
+        for (const removed of removedHeaders) headersPatch[removed] = null;
+        for (const [k, v] of Object.entries(parsedHeaders.map)) headersPatch[k] = v;
+        if (Object.keys(headersPatch).length > 0) secrets.headers = headersPatch;
       }
-      if (transportKind === 'local_stdio' && parsedEnv.keys.length > 0) {
-        secrets.env = parsedEnv.map;
+      if (transportKind === 'local_stdio') {
+        const envPatch: Record<string, string | null> = {};
+        for (const removed of removedEnvKeys) envPatch[removed] = null;
+        for (const [k, v] of Object.entries(parsedEnv.map)) envPatch[k] = v;
+        if (Object.keys(envPatch).length > 0) secrets.env = envPatch;
       }
       const hasSecrets = Object.keys(secrets).length > 0;
       const projects = parseLines(projectsText);
@@ -407,10 +486,32 @@ export function IntegrationEditorSheet({
       {transportKind === 'local_stdio' ? (
         <MachineHelp>{`${m.integrations_field_command_hint()} · ${m.integrations_field_env_hint()}`}</MachineHelp>
       ) : null}
-      {editing && ((transportKind === 'remote_http' && editing.transport.kind === 'remote_http' && editing.transport.header_names.length > 0)
-        || (transportKind === 'local_stdio' && editing.transport.kind === 'local_stdio' && editing.transport.env_keys.length > 0)) ? (
-          <MachineHelp>{m.integrations_secret_kept_hint()}</MachineHelp>
-        ) : null}
+      {editing && transportKind === 'remote_http' && existingHeaderNames.length > 0 ? (
+        <MachineGroup>
+          {existingHeaderNames.map((headerName) => (
+            <ExistingSecretRow
+              key={headerName}
+              name={headerName}
+              marked={removedHeaders.includes(headerName)}
+              disabled={busy}
+              onToggle={() => toggleRemoved(setRemovedHeaders, headerName)}
+            />
+          ))}
+        </MachineGroup>
+      ) : null}
+      {editing && transportKind === 'local_stdio' && existingEnvKeys.length > 0 ? (
+        <MachineGroup>
+          {existingEnvKeys.map((envKey) => (
+            <ExistingSecretRow
+              key={envKey}
+              name={envKey}
+              marked={removedEnvKeys.includes(envKey)}
+              disabled={busy}
+              onToggle={() => toggleRemoved(setRemovedEnvKeys, envKey)}
+            />
+          ))}
+        </MachineGroup>
+      ) : null}
 
       <MachineHelp>{m.integrations_field_auth()}</MachineHelp>
       <MachineGroup>
@@ -516,3 +617,73 @@ export function IntegrationEditorSheet({
     </MachineSheet>
   );
 }
+
+function ExistingSecretRow({
+  name,
+  marked,
+  disabled,
+  onToggle,
+}: {
+  name: string;
+  marked: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  const c = useSettingsColors();
+  const { theme } = useUnistyles();
+  const actionLabel = marked ? m.native_server_undo() : m.integrations_remove();
+  const actionTone = marked ? c.text : theme.tokens.status.error;
+  return (
+    <View style={[styles.secretRow, { borderTopColor: c.border }]}>
+      <View style={styles.secretInfo}>
+        <Text style={[styles.secretName, { color: marked ? c.muted : c.text }]}>{name}</Text>
+        <Text style={[styles.secretHint, { color: marked ? theme.tokens.status.error : c.muted }]}>
+          {marked ? m.native_server_remove_on_save() : m.integrations_secret_kept_hint()}
+        </Text>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${actionLabel} ${name}`}
+        accessibilityState={{ disabled }}
+        disabled={disabled}
+        onPress={onToggle}
+        style={({ pressed }) => [
+          styles.secretAction,
+          {
+            borderColor: c.borderStrong,
+            backgroundColor: pressed ? c.hover : 'transparent',
+            opacity: disabled ? 0.5 : 1,
+          },
+        ]}
+      >
+        <Icon name={marked ? 'RotateCcw' : 'Trash2'} size={14} color={actionTone} />
+        <Text style={[styles.secretActionText, { color: actionTone }]}>{actionLabel}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  secretRow: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[3],
+    paddingHorizontal: theme.base.space[4],
+    paddingVertical: theme.base.space[3],
+    borderTopWidth: 1,
+  },
+  secretInfo: { flex: 1, minWidth: 0, gap: theme.base.space[0.5] },
+  secretName: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
+  secretHint: { fontSize: theme.base.text.xs, lineHeight: 18 },
+  secretAction: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[1.5],
+    paddingHorizontal: theme.base.space[3],
+    borderWidth: 1,
+    borderRadius: theme.base.radius.sm,
+  },
+  secretActionText: { fontSize: theme.base.text.xs, fontWeight: theme.base.weight.medium },
+}));

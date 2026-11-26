@@ -632,11 +632,20 @@ async fn execute_checked_call(
                 match waiter.wait().await {
                     ApprovalResolution::AllowOnce => {}
                     ApprovalResolution::AllowAlways => {
-                        match st
-                            .integrations
-                            .registry
-                            .add_allowed_tool(&config.id, &discovered.name)
-                        {
+                        let registry = st.integrations.registry.clone();
+                        let integration_id = config.id.clone();
+                        let tool_name = discovered.name.clone();
+                        let added = tokio::task::spawn_blocking(move || {
+                            registry.add_allowed_tool(&integration_id, &tool_name)
+                        })
+                        .await
+                        .map_err(|_| {
+                            format!(
+                                "integration_registry_io: falha interna ao salvar liberação permanente de '{}'",
+                                config.id
+                            )
+                        })?;
+                        match added {
                             Ok(_) => {}
                             Err(RegistryError::NotFound(_)) => {
                                 return Err(format!(

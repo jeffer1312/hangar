@@ -428,6 +428,22 @@ pub(super) fn safe_authorize_url(url: &str) -> Option<String> {
         .map(|parsed| parsed.to_string())
 }
 
+pub(super) fn oauth_start_body(api: &Api) -> Value {
+    if api.is_loopback() {
+        return json!({ "origin_client": "desktop" });
+    }
+    let route = api.route();
+    let public_base_url = (route.scheme() == "https"
+        && route.has_host()
+        && route.username().is_empty()
+        && route.password().is_none())
+    .then(|| format!("{}{}", route.origin().ascii_serialization(), route.path().trim_end_matches('/')));
+    match public_base_url {
+        Some(url) => json!({ "origin_client": "remote_desktop", "public_base_url": url }),
+        None => json!({ "origin_client": "remote_desktop" }),
+    }
+}
+
 /// Divide o comando local em argumentos: várias linhas = 1 argumento por linha; linha única = espaço com aspas simples/duplas.
 pub(super) fn parse_command_args(raw: &str) -> Vec<String> {
     let lines: Vec<String> = raw
@@ -1012,13 +1028,14 @@ impl IntegrationsPage {
         self.notice = Some(tr_shared("integrations_oauth_opening", &[]));
         self.handoff = None;
         let (api, path) = (self.api.clone(), id.clone());
+        let start_body = oauth_start_body(&api);
         run(
             &self.runtime,
             async move {
                 api.server_send(
                     reqwest::Method::POST,
                     &["integrations", &path, "oauth", "start"],
-                    Some(json!({ "origin_client": "desktop" })),
+                    Some(start_body),
                     MUTATION_SECONDS,
                 )
                 .await
@@ -2891,6 +2908,27 @@ mod tests {
         assert_eq!(
             suggest_preset_id("google-gmail", &[item("google-gmail"), item("google-gmail-2")]),
             "google-gmail-3"
+        );
+    }
+
+    #[test]
+    fn oauth_start_body_distinguishes_local_desktop_from_remote_connections() {
+        let local = Api::new("http://127.0.0.1:8765", "t").unwrap();
+        assert_eq!(oauth_start_body(&local), json!({ "origin_client": "desktop" }));
+
+        let remote_https = Api::new("https://casa.tail.ts.net/", "t").unwrap();
+        assert_eq!(
+            oauth_start_body(&remote_https),
+            json!({
+                "origin_client": "remote_desktop",
+                "public_base_url": "https://casa.tail.ts.net"
+            })
+        );
+
+        let remote_lan = Api::new("http://192.168.0.7:8765", "t").unwrap();
+        assert_eq!(
+            oauth_start_body(&remote_lan),
+            json!({ "origin_client": "remote_desktop" })
         );
     }
 }

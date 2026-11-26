@@ -3,6 +3,7 @@ import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-nat
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   answerIntegrationApproval,
+  ownServers,
   type IntegrationApprovalDecision,
   type IntegrationApprovalEvent,
   type IntegrationApprovalRequest,
@@ -104,9 +105,11 @@ export function SessionIntegrationRequests({ serverId, name }: { serverId: strin
   const approvals = useSessions((s) => s.integrationApprovals) ?? NONE;
   const servers = useSessions((s) => s.servers) ?? EMPTY_SERVERS;
   const id = useIdentities(servers).identities.get(serverId);
+  const singleOwnServer = ownServers(servers).length <= 1;
   const fromHere = (owner: string, origin: string) => {
     if (id && origin === `${id}::${name}`) return true;
-    if (!id && origin.endsWith(`::${name}`)) return true;
+    // Enquanto a identidade da máquina não resolveu, só casa por sufixo se for a dona única.
+    if (!id && owner === serverId && singleOwnServer && origin.endsWith(`::${name}`)) return true;
     return !origin.includes('::') && owner === serverId && origin === name;
   };
   const mine = Object.entries(approvals).flatMap(([owner, event]) =>
