@@ -162,7 +162,7 @@ pub struct AppState {
     /// Avisos do Mission Control à sessão, pelo handler da rota de entrada; o estado entra quando o roteador nasce.
     pub mission_notify: Arc<crate::mission_notify::SessionNotify>,
     pub ticket_actions: std::sync::OnceLock<Arc<hangar_ticket_actions::Engine>>,
-    /// WhatsApp só leitura (`hangar-whatsapp`); nasce com o roteador, pela pasta pessoal das contas.
+    /// WhatsApp: leitura e envio de rascunho aprovado (`hangar-whatsapp`); nasce com o roteador, pela pasta pessoal das contas.
     pub whatsapp: std::sync::OnceLock<Arc<hangar_whatsapp::WhatsApp>>,
     /// Tela Status: hub do retrato e amostrador do processo; o teste troca a coleta.
     pub status: Arc<crate::status::Status>,
@@ -463,6 +463,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _work_review_watch = crate::AbortOnDrop(crate::work_review_watch::spawn(state.clone()));
     let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
+    // Rascunhos de WhatsApp: a recusa dos que ficaram de antes, o evento e o aviso ao celular.
+    let _whatsapp_outbox = crate::AbortOnDrop(crate::whatsapp_outbox::spawn(state.clone()));
     // O aviso no celular é decidido aqui, com ou sem lista aberta.
     let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
     // Assina as transições depois do vigia de avisos, que as publica.
@@ -1102,7 +1104,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
             state.ticket_actions.get_or_init(|| hangar_ticket_actions::Engine::new(hangar_ticket_actions::Ledger::new(state.hangar_dir.join("ticket-actions")),
                 state.mission.clone(),state.connectors.clone(),state.mission_notify.clone())).clone()))
         .merge(hangar_work_review::http::router(state.edge(), state.work_review.clone()))
-        // WhatsApp só leitura: só o dono, nunca na porta do convidado (o Python não tem as rotas).
+        // WhatsApp: só o dono, nunca na porta do convidado (o Python não tem as rotas).
         .merge(hangar_whatsapp::router(state.edge(),
             state.whatsapp.get_or_init(|| hangar_whatsapp::WhatsApp::new(&state.accounts.env.home)).clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_registered))

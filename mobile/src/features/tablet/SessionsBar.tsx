@@ -8,6 +8,7 @@ import { useSessions } from '../../stores/sessions';
 import { useServers } from '../../stores/servers';
 import { useIdentities } from '../pair/identities';
 import { VaultRequestsButton } from '../vault/VaultRequests';
+import { OutboxRequestsButton } from '../whatsapp/OutboxRequests';
 import { SessionRow } from '../sessions/SessionRow';
 import { SessionAvatar } from '../sessions/SessionAvatar';
 import { useNoticeClock } from '../sessions/useNoticeClock';
@@ -99,6 +100,7 @@ export function SessionsBar({ placement, selected, onPick, onNew, onWorkReview }
         </View>} />
       <View style={[styles.controls, horizontal && styles.horizontalControls]}>
         <VaultRequestsButton style={styles.control} />
+        <OutboxRequestsButton style={styles.control} />
         <Pressable onPress={toggleCollapsed} style={styles.control} accessibilityRole="button"
           accessibilityLabel={collapsed ? m.tablet_bar_expand() : m.tablet_bar_collapse()} accessibilityState={{ expanded: !collapsed }}>
           <Icon name="PanelLeft" size={20} />

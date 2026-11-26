@@ -42,6 +42,7 @@ mod keyring;
 mod plugins;
 mod vault;
 mod vault_requests;
+mod whatsapp_outbox;
 mod rename_suggest;
 mod tags;
 mod notice_line;
@@ -99,7 +100,9 @@ pub(crate) use controls::{SPEED_TIERS, speed_label, speed_texts};
 pub(crate) use settings::segments_preview;
 pub(crate) use whatsapp::{ConnectedFacts as WhatsAppConnected, connected_summary as whatsapp_connected_summary, pair_card as whatsapp_pair_card,
     qr_row as whatsapp_qr_row, risk_box as whatsapp_risk_box, usage_box as whatsapp_usage_box};
-pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
+pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_heading, request_pair};
+pub(crate) use whatsapp_outbox::{Draft as WhatsAppDraft, countdown_label as whatsapp_countdown_label, draft_card as whatsapp_draft_card,
+    mark_invisibles as whatsapp_mark_invisibles};
 pub(crate) use create::{base_button, base_row, mode_row, provider_segment, provider_track, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
@@ -822,6 +825,8 @@ pub struct Hangar {
     keyring: HashMap<String, keyring::Prompt>,
     /// Pedidos do cofre esperando resposta, pelo evento `vault` da lista de cada máquina dona (chave `servers::norm`).
     vault: HashMap<String, Entity<vault_requests::VaultRequests>>,
+    /// Rascunhos de WhatsApp esperando Enviar ou Recusar, pelo evento `whatsapp_outbox` da lista de cada máquina (chave `servers::norm`).
+    whatsapp_outbox: HashMap<String, Entity<whatsapp_outbox::WhatsAppOutbox>>,
     /// Página Cofre aberta, com a conexão em que nasceu.
     vault_page: Option<(u64, Entity<vault::VaultPage>)>,
     /// Página Plugins aberta, com a conexão em que nasceu.
@@ -1369,7 +1374,7 @@ impl Hangar {
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None, list_down_since: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), jev_note_at: HashMap::new(), file_cards: HashMap::new(), downloads: Default::default(), queue: Default::default(), send_flight: None, local_send: None, local_queue: None, idle_sends: Vec::new(), send_landed: Vec::new(),
-            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), work_reviews: HashMap::new(), work_review: Default::default(), notice_acted: HashMap::new(), question_open: None, question_card: None,
+            note_slide: Default::default(), note_last: None, flight_places: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), whatsapp_outbox: HashMap::new(), vault_page: None, plugins_page: None, guide: Default::default(), rename_suggest: Default::default(), tags: HashMap::new(), notice_ignores: HashMap::new(), work_reviews: HashMap::new(), work_review: Default::default(), notice_acted: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1656,7 +1661,7 @@ impl Hangar {
         if let Some((key, sessions, online, error, live_terms)) = previous {
             self.remote.insert(key, servers::RemoteList { loaded: true, online, sessions, error, api: None, live_terms, ..Default::default() });
         }
-        self.start_remote_lists();
+        self.start_remote_lists(cx);
         self.sync_updater(cx);
         if !self.active_invite() { self.ask_auto_report(window, cx); }
         self.connection_dialog = false;
@@ -1740,6 +1745,9 @@ impl Hangar {
     fn drop_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // O cartão responde pela conexão que guarda; a lista nova traz os pedidos de volta.
         self.vault.remove(&self.active_key());
+        // O diálogo aberto pelo botão segura a entidade: esvaziada, ele não segue com o cartão e a Api antigos.
+        let key = self.active_key();
+        whatsapp_outbox::drop_outbox(&mut self.whatsapp_outbox, &key, cx);
         self.close_terminal(false, window, cx);
         // As respostas da conexão velha são descartadas: a prévia ficaria esperando para sempre.
         self.close_tab_preview(cx);
@@ -2207,11 +2215,15 @@ impl Hangar {
                         servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "keyring" => keyring::locked(&frame.data),
                         _ => None,
                     };
-                    // Pedidos do cofre dela, com a mesma regra da queda.
-                    let vault = match &update {
-                        servers::RemoteUpdate::Stream(Update::Offline(_)) => Some(None),
-                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "vault" => Some(Some(frame.data.clone())),
-                        _ => None,
+                    // Pedidos do cofre e rascunhos de WhatsApp dela, com a mesma regra da queda: o stream caído apaga os dois.
+                    let (vault, whatsapp) = match &update {
+                        servers::RemoteUpdate::Stream(Update::Offline(_)) => (Some(None), Some(None)),
+                        servers::RemoteUpdate::Stream(Update::Frame(frame)) => match frame.event.as_str() {
+                            "vault" => (Some(Some(frame.data.clone())), None),
+                            "whatsapp_outbox" => (None, Some(Some(frame.data.clone()))),
+                            _ => (None, None),
+                        },
+                        _ => (None, None),
                     };
                     // Pedido de navegador de uma sessão desta máquina chega pela lista dela, seja ela a ativa ou não.
                     let nav = match &update {
@@ -2237,6 +2249,10 @@ impl Hangar {
                         cx.notify();
                     }
                     if let Some(data) = vault && self.set_vault_requests(&key, data.as_ref(), window, cx) {
+                        self.redraw(panes::Area::Nav, cx);
+                        cx.notify();
+                    }
+                    if let Some(data) = whatsapp && self.set_whatsapp_outbox(&key, data.as_ref(), cx) == Some(true) {
                         self.redraw(panes::Area::Nav, cx);
                         cx.notify();
                     }
@@ -2322,6 +2338,7 @@ impl Hangar {
                     let server = self.active_key();
                     if self.set_keyring(&server, false, window, cx) { self.redraw(panes::Area::Nav, cx); }
                     if self.set_vault_requests(&server, None, window, cx) { self.redraw(panes::Area::Nav, cx); }
+                    if self.set_whatsapp_outbox(&server, None, cx) == Some(true) { self.redraw(panes::Area::Nav, cx); }
                     // Stream da lista caído: o chip e os blocos não mostram terminal velho dele.
                     if !std::mem::take(&mut self.live_terms).is_empty() {
                         let server = self.active_key();
@@ -2363,6 +2380,13 @@ impl Hangar {
                     visible = self.set_vault_requests(&server, Some(&frame.data), window, cx);
                     if visible { self.redraw(panes::Area::Nav, cx); }
                     vault_requests::parse(&frame.data).is_some()
+                }
+                else if frame.event == "whatsapp_outbox" {
+                    let server = self.active_key();
+                    let read = self.set_whatsapp_outbox(&server, Some(&frame.data), cx);
+                    visible = read == Some(true);
+                    if visible { self.redraw(panes::Area::Nav, cx); }
+                    read.is_some()
                 }
                 else if frame.event == "tags" {
                     let server = self.active_key();
@@ -7278,7 +7302,8 @@ impl Hangar {
                 .child(div().min_w_0().truncate().text_xs().text_color(theme::warning()).child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
             .children(self.keyring_keys().iter().filter_map(|key| self.render_keyring_notice(key, true, cx)).collect::<Vec<_>>())
-            .children(self.render_vault_chips(false, cx)),
+            .children(self.render_vault_chips(false, cx))
+            .children(self.render_whatsapp_chips(false, cx)),
             px(if floating { theme::PANEL_RADIUS } else { 0. }))
     }
 

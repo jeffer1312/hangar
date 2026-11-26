@@ -212,7 +212,7 @@ impl Hangar {
 
     fn restart_lists_for_pairs(&mut self, cx: &mut Context<Self>) {
         self.servers_rev += 1;
-        self.start_remote_lists();
+        self.start_remote_lists(cx);
         self.redraw(panes::Area::Nav, cx);
         cx.notify();
     }

@@ -173,7 +173,7 @@ impl VaultRequests {
                 (tr("vault_request_entry_title").replace("{origin}", &r.origin).replace("{label}", &label), body)
             }
         };
-        request_card(&id, &self.machine, title, &r.reason, body, card.error.clone()).into_any_element()
+        request_card(&id, request_heading(tr("vault_request_heading"), &self.machine, None), title, &r.reason, body, card.error.clone()).into_any_element()
     }
 }
 
@@ -214,10 +214,15 @@ pub(crate) fn approve_body(usage: Option<&str>, target: &str, allow: Button, den
         .child(request_pair(allow, deny))
 }
 
-/// A casca de um cartão de pedido: de que máquina veio, o que pede, o motivo, o corpo e a falha da última resposta.
-pub(crate) fn request_card(id: &str, machine: &str, title: String, reason: &str, body: Div, error: Option<String>) -> Stateful<Div> {
-    let heading = div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning()).whitespace_normal()
-        .child(format!("{} · {machine}", tr("vault_request_heading")));
+/// Cabeçalho de um cartão de pedido: o que é e de que máquina veio; `aside` fica à direita (a contagem do rascunho de WhatsApp).
+pub(crate) fn request_heading(what: String, machine: &str, aside: Option<AnyElement>) -> Div {
+    div().flex().justify_between().gap_2().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning())
+        .child(div().min_w_0().whitespace_normal().child(format!("{what} · {machine}")))
+        .children(aside)
+}
+
+/// A casca de um cartão de pedido: o cabeçalho, o que pede, o motivo, o corpo e a falha da última resposta.
+pub(crate) fn request_card(id: &str, heading: Div, title: String, reason: &str, body: Div, error: Option<String>) -> Stateful<Div> {
     div().id(SharedString::from(format!("vault-request-{id}"))).flex_shrink_0().mx(px(8.)).my(px(4.)).p_2().rounded(px(8.)).bg(theme::inset())
         .flex().flex_col().gap_1().role(Role::Group).aria_label(title.clone())
         .child(heading)
@@ -280,44 +285,58 @@ impl Hangar {
         }
     }
 
+    /// Chaves de um mapa por máquina, a ativa primeiro e as outras em ordem.
+    pub(super) fn machines_active_first<'a, T>(&self, map: &'a HashMap<String, T>) -> Vec<&'a String> {
+        let active = self.active_key();
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort_by_key(|key| (**key != active, (*key).clone()));
+        keys
+    }
+
     /// Cartões que passam em `keep`, de todas as máquinas, a ativa primeiro.
     fn vault_cards(&self, keep: &dyn Fn(&str) -> bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let active = self.active_key();
-        let mut keys: Vec<&String> = self.vault.keys().collect();
-        keys.sort_by_key(|key| (**key != active, (*key).clone()));
-        keys.into_iter().flat_map(|key| self.vault[key].update(cx, |requests, cx| requests.render_where(keep, cx))).collect()
+        self.machines_active_first(&self.vault).into_iter()
+            .flat_map(|key| self.vault[key].update(cx, |requests, cx| requests.render_where(keep, cx))).collect()
     }
 
-    /// Pedido da sessão aberta: dentro da conversa dela, acima da caixa de mensagem.
+    /// Pedido da sessão aberta (do cofre ou rascunho de WhatsApp): dentro da conversa dela, acima da caixa de mensagem.
     pub(super) fn render_vault_session(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let here = self.vault_origin_here()?;
-        let cards = self.vault_cards(&|origin: &str| origin == here, cx);
-        (!cards.is_empty()).then(|| div().flex_shrink_0().w_full().max_w(px(760.)).mx_auto().flex().flex_col().children(cards).into_any_element())
+        let mut cards = self.vault_cards(&|origin: &str| origin == here, cx);
+        cards.extend(self.whatsapp_cards(&|origin: &str| origin == here, cx));
+        // A mesma contenção da coluna flutuante: cartões grandes rolam em vez de empurrar os botões e a caixa de mensagem para fora.
+        (!cards.is_empty()).then(|| div().id("vault-session").flex_shrink_0().w_full().max_w(px(760.)).mx_auto().max_h(px(520.)).overflow_y_scroll()
+            .flex().flex_col().children(cards).into_any_element())
     }
 
-    /// Pedido de outra sessão: flutua sobre a conversa, igual em toda forma de navegação.
+    /// Pedido de outra sessão (do cofre ou rascunho de WhatsApp): flutua sobre a conversa, igual em toda forma de navegação.
     pub(super) fn render_vault_float(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let here = self.vault_origin_here();
-        let cards = self.vault_cards(&|origin: &str| here.as_deref() != Some(origin), cx);
+        let mut cards = self.vault_cards(&|origin: &str| here.as_deref() != Some(origin), cx);
+        cards.extend(self.whatsapp_cards(&|origin: &str| here.as_deref() != Some(origin), cx));
         if cards.is_empty() { return None; }
         let cards = div().id("vault-float").max_h(px(520.)).overflow_y_scroll().py_1().flex().flex_col().children(cards);
         Some(div().absolute().top(px(52.)).right(px(16.)).occlude().child(chrome::popover(cards.into_any_element(), true)).into_any_element())
     }
 
     /// Na barra das abas e no trilho não cabe o cartão: um botão por máquina que abre os cartões num diálogo.
-    /// No trilho, só a contagem: o resto vai na dica.
     pub(super) fn render_vault_chips(&self, rail: bool, cx: &App) -> Vec<AnyElement> {
-        let active = self.active_key();
-        let mut keys: Vec<&String> = self.vault.keys().collect();
-        keys.sort_by_key(|key| (**key != active, (*key).clone()));
-        keys.into_iter().filter_map(|key| {
-            let entity = self.vault.get(key)?.clone();
-            let count = entity.read(cx).count();
+        self.request_chips(&self.vault, VaultRequests::count, rail, "vault", IconName::KeyRound, "vault_request_chip", &tr("vault_request_heading"), cx)
+    }
+
+    /// Um botão por máquina com pedido esperando, que abre os cartões dela num diálogo; no trilho, só a contagem, e o resto
+    /// vai na dica. `id` prefixa o id do botão; `chip` é a chave do texto (`{n}` e `{machine}`); `heading`, o título do diálogo.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn request_chips<V: Render + 'static>(&self, map: &HashMap<String, Entity<V>>, count_of: fn(&V) -> usize, rail: bool, id: &str, icon: IconName,
+        chip: &str, heading: &str, cx: &App) -> Vec<AnyElement> {
+        self.machines_active_first(map).into_iter().filter_map(|key| {
+            let entity = map.get(key)?.clone();
+            let count = count_of(entity.read(cx));
             if count == 0 { return None; }
             let machine = self.vault_machine_label(key, cx);
-            let label = tr("vault_request_chip").replace("{n}", &count.to_string()).replace("{machine}", &machine);
-            let title = format!("{} · {machine}", tr("vault_request_heading"));
-            let button = Button::new(SharedString::from(format!("vault-chip-{key}"))).xsmall().outline().flex_shrink_0().icon(IconName::KeyRound);
+            let label = tr(chip).replace("{n}", &count.to_string()).replace("{machine}", &machine);
+            let title = format!("{heading} · {machine}");
+            let button = Button::new(SharedString::from(format!("{id}-chip-{key}"))).xsmall().outline().flex_shrink_0().icon(icon);
             let button = if rail { button.label(count.to_string()).tooltip(label.clone()).accessibility_label(label) } else { button.label(label) };
             Some(button
                 .on_click(move |_, window, cx| {

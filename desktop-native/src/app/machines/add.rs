@@ -592,7 +592,7 @@ impl Hangar {
     fn servers_changed(&mut self, cx: &mut Context<Self>) {
         self.servers_rev += 1;
         self.persist_servers();
-        self.start_remote_lists();
+        self.start_remote_lists(cx);
         self.sync_updater(cx);
         self.load_saved_ids(cx);
     }

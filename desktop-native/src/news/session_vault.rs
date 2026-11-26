@@ -31,7 +31,8 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
             div().flex().flex_col().gap_1().child(div().truncate().text_xs().text_color(theme::text()).child(title)).child(keep).into_any_element()
         } else {
             let once = app::request_button("once", "news-session", tr("vault_request_once"), false).outline().tab_stop(false);
-            app::request_card("news-session", &tr("vault_news_machine"), title, &tr("vault_session_news_reason"), app::request_pair(keep, once), None)
+            app::request_card("news-session", app::request_heading(tr("vault_request_heading"), &tr("vault_news_machine"), None), title,
+                &tr("vault_session_news_reason"), app::request_pair(keep, once), None)
                 .mx_0().my_0().into_any_element()
         };
         div().relative().top(px(((SLIDE_STEPS - step) * 4) as f32)).opacity(0.25 + 0.25 * step as f32).child(content)

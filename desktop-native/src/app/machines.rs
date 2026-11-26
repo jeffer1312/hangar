@@ -702,11 +702,11 @@ impl Hangar {
     }
 
     /// "Mostrar as sessões dele": desligar só esconde, a entrada e o token ficam aqui.
-    fn follow_line(&mut self, entry_ids: &[String], on: bool) {
+    fn follow_line(&mut self, entry_ids: &[String], on: bool, cx: &mut Context<Self>) {
         for s in self.servers.iter_mut().filter(|s| entry_ids.contains(&s.id)) { s.disabled = !on; }
         self.servers_rev += 1;
         self.persist_servers();
-        self.start_remote_lists();
+        self.start_remote_lists(cx);
     }
 
     /// Tira de vez as entradas deste aparelho de uma máquina.
@@ -715,7 +715,7 @@ impl Hangar {
         for id in entry_ids { self.machines.ids.remove(id); self.machines.reasons.remove(id); }
         self.servers_rev += 1;
         self.persist_servers();
-        self.start_remote_lists();
+        self.start_remote_lists(cx);
         // A entrada que levava um par externo some: o par volta na entrada só dele.
         self.apply_external_pairs(cx);
         self.sync_updater(cx);
@@ -1802,7 +1802,7 @@ impl Hangar {
             .accessibility_label(format!("{}. {legend}", tr("machines_peer_show_sessions")))
             .on_click(cx.listener(move |this, on: &bool, _, cx| {
                 if !entry_ids.is_empty() {
-                    this.follow_line(&entry_ids, *on);
+                    this.follow_line(&entry_ids, *on, cx);
                     this.sync_updater(cx);
                     cx.notify();
                 }

@@ -16,6 +16,7 @@ use serde_json::{Map, Value, json};
 
 use crate::client::{CallError, Client, Reply};
 use crate::install::{self, Busy, Context, Installer};
+use crate::outbox::{self, Outbox};
 
 const MAX_BODY: usize = 64 * 1024;
 const OWNER_ONLY: (&str, &str) = ("whatsapp_owner_only", "só o dono usa o WhatsApp do Hangar");
@@ -24,6 +25,9 @@ const OFF_MSG: &str = "O WhatsApp está desligado. Ligue em Configurações > Wh
 const CHATS: &[&str] = &["q", "limit"];
 const MESSAGES: &[&str] = &["chat", "since", "until", "before_id", "limit"];
 const SEARCH: &[&str] = &["q", "chat", "limit"];
+const OUTBOX: &[&str] = &["state"];
+const UNSUPPORTED_MSG: &str = "o hangar-whatsapp instalado não envia mensagens; atualize o hangar-whatsapp";
+const OUTDATED_MSG: &str = "o WhatsApp recusou a versão do hangar-whatsapp; atualize o hangar-whatsapp";
 
 /// O WhatsApp de uma máquina: instalação, aceite e o cliente do serviço.
 pub struct WhatsApp {
@@ -32,6 +36,7 @@ pub struct WhatsApp {
     client: Client,
     /// O último texto do QR e o desenho dele: o resumo relido com o mesmo QR não o desenha de novo.
     qr: Mutex<Option<(String, Option<String>)>>,
+    outbox: Outbox,
 }
 
 struct Http {
@@ -52,8 +57,23 @@ impl WhatsApp {
     }
 
     pub fn with_context(ctx: Context) -> Arc<Self> {
+        Self::with_outbox(ctx, Outbox::default())
+    }
+
+    /// `outbox` com a subida desta vida já marcada ([`Outbox::started_at`]).
+    pub fn with_outbox(ctx: Context, outbox: Outbox) -> Arc<Self> {
         let client = Client::new(ctx.paths.data.clone());
-        Arc::new(Self { ctx, installer: Installer::default(), client, qr: Mutex::default() })
+        Arc::new(Self { ctx, installer: Installer::default(), client, qr: Mutex::default(), outbox })
+    }
+
+    /// Os rascunhos pendentes (evento `whatsapp_outbox`).
+    pub fn outbox(&self) -> &Outbox {
+        &self.outbox
+    }
+
+    /// A lista dos rascunhos pendentes, para sempre: a cada 30 s e a cada rascunho criado ou respondido.
+    pub async fn watch_outbox(&self, hooks: &dyn outbox::Hooks) {
+        self.outbox.run(&self.client, hooks).await;
     }
 
     /// O QR do pareamento em SVG, recodificado só quando o texto muda.
@@ -130,7 +150,12 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
         },
         (Method::POST, "/logout") => forward(wa, Method::POST, "/v1/logout", &[], None).await,
         (Method::POST, "/wipe") => match body(request).await {
-            Ok(body) => wipe(wa, &body).await,
+            Ok(body) => {
+                let response = wipe(wa, &body).await;
+                // Os rascunhos somem com os dados: a lista relê, e a espera da tool acorda e vê o rascunho sumido.
+                wa.outbox.poke();
+                response
+            }
             Err(response) => response,
         },
         (Method::POST, "/uninstall") => match body(request).await {
@@ -144,6 +169,12 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
             Ok(body) => media_request(wa, &body).await,
             Err(response) => response,
         },
+        (Method::POST, "/outbox") => match body(request).await {
+            Ok(body) => create_draft(wa, &body).await,
+            Err(response) => response,
+        },
+        (Method::GET, "/outbox") => list_drafts(wa, &query).await,
+        (method, route) if route.starts_with("/outbox/") => draft(wa, method, &route["/outbox/".len()..], request).await,
         _ => refused(StatusCode::NOT_FOUND, "whatsapp_not_found", "rota do WhatsApp desconhecida"),
     }
 }
@@ -319,6 +350,80 @@ async fn media_request(wa: &WhatsApp, body: &Value) -> Response {
     forward(wa, Method::POST, "/v1/media/request", &[], Some(&Value::Object(out))).await
 }
 
+/// `POST /api/whatsapp/outbox`: cria o rascunho no binário. Só os campos do C5 seguem.
+async fn create_draft(wa: &WhatsApp, body: &Value) -> Response {
+    let mut out = Map::new();
+    for (field, required) in [("chat", true), ("text", true), ("origin", true), ("file", false), ("reply_to", false), ("origin_cwd", false)] {
+        match &body[field] {
+            Value::Null if !required => {}
+            Value::String(text) => { out.insert(field.into(), json!(text)); }
+            _ => return refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request",
+                "chat, text e origin são texto; file, reply_to e origin_cwd, texto ou ausentes"),
+        }
+    }
+    if let Err(response) = send_supported(wa) {
+        return response;
+    }
+    let response = forward(wa, Method::POST, "/v1/outbox", &[], Some(&Value::Object(out))).await;
+    wa.outbox.poke();
+    response
+}
+
+/// `GET /api/whatsapp/outbox`: os pendentes, salvo outro `state` pedido.
+async fn list_drafts(wa: &WhatsApp, query: &str) -> Response {
+    if let Err(response) = send_supported(wa) {
+        return response;
+    }
+    let mut params = pick(query, OUTBOX);
+    if params.is_empty() {
+        params.push(("state".into(), "pending".into()));
+    }
+    forward(wa, Method::GET, "/v1/outbox", &params, None).await
+}
+
+/// `GET /api/whatsapp/outbox/{id}`, `POST …/{id}/send` (`{"via":"desktop"|"mobile"}`) e `POST …/{id}/decline`.
+async fn draft(wa: &WhatsApp, method: Method, rest: &str, request: Request) -> Response {
+    let (id, action) = rest.split_once('/').unwrap_or((rest, ""));
+    if !outbox::id_ok(id) {
+        return refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "id de rascunho inválido");
+    }
+    if let Err(response) = send_supported(wa) {
+        return response;
+    }
+    let path = format!("/v1/outbox/{id}");
+    match (method, action) {
+        (Method::GET, "") => forward(wa, Method::GET, &path, &[], None).await,
+        (Method::POST, "send") => {
+            let body = match body(request).await {
+                Ok(body) => body,
+                Err(response) => return response,
+            };
+            let via = match body["via"].as_str() {
+                Some(via @ ("desktop" | "mobile")) => via,
+                _ => return refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "via é \"desktop\" ou \"mobile\""),
+            };
+            let response = forward(wa, Method::POST, &format!("{path}/send"), &[], Some(&json!({"via": via}))).await;
+            wa.outbox.poke();
+            response
+        }
+        (Method::POST, "decline") => {
+            let response = forward(wa, Method::POST, &format!("{path}/decline"), &[], None).await;
+            wa.outbox.poke();
+            response
+        }
+        _ => refused(StatusCode::NOT_FOUND, "whatsapp_not_found", "rota do WhatsApp desconhecida"),
+    }
+}
+
+/// Binário que se anuncia sem a rota de envio não tem as rotas de saída. Sem `control.json` segue: o pedido responde
+/// `whatsapp_off`.
+fn send_supported(wa: &WhatsApp) -> Result<(), Response> {
+    match wa.client.claimed() {
+        Some(control) if control.api < outbox::SEND_API => Err(refused(StatusCode::CONFLICT, "whatsapp_send_unsupported", UNSUPPORTED_MSG)),
+        _ => Ok(()),
+    }
+}
+
 async fn forward(wa: &WhatsApp, method: Method, path: &str, query: &[(String, String)], body: Option<&Value>) -> Response {
     let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     match wa.client.call(method, path, &query, body).await {
@@ -349,7 +454,8 @@ fn relay(reply: Reply) -> Response {
     }
     let parsed: Value = serde_json::from_slice(&reply.body).unwrap_or(Value::Null);
     let code = c2_code(&reply.body).map_or_else(|| "whatsapp_error".to_owned(), |code| format!("whatsapp_{code}"));
-    let msg = parsed["detail"]["msg"].as_str().unwrap_or("o serviço do WhatsApp recusou o pedido");
+    // `outdated`: quem resolve é atualizar o binário, e a frase diz isso.
+    let msg = if code == "whatsapp_outdated" { OUTDATED_MSG } else { parsed["detail"]["msg"].as_str().unwrap_or("o serviço do WhatsApp recusou o pedido") };
     // 401 do binário é a assinatura do Hangar recusada (chave ou relógio), não o token de quem pediu.
     let status = if status == StatusCode::UNAUTHORIZED { StatusCode::BAD_GATEWAY } else { status };
     detail(status, &code, msg, json!({}))
@@ -371,7 +477,7 @@ fn call_error(error: &CallError) -> Response {
     refused(status, code, msg)
 }
 
-fn call_failure(error: &CallError) -> (StatusCode, &'static str, &'static str) {
+pub(crate) fn call_failure(error: &CallError) -> (StatusCode, &'static str, &'static str) {
     match error {
         CallError::Off(_) => (StatusCode::CONFLICT, "whatsapp_off", OFF_MSG),
         CallError::Untrusted(_) => (StatusCode::BAD_GATEWAY, "whatsapp_untrusted", "a resposta do serviço do WhatsApp não tem a assinatura dele"),

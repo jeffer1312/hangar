@@ -69,7 +69,7 @@ pub fn run(mode: &str) -> ExitCode {
                     Some(input) => input,
                     None => &Value::Null,
                 };
-                guard(tool, input)
+                guard(tool, input, value["cwd"].as_str())
             }
         });
     match result {
@@ -98,24 +98,41 @@ fn marker_base(home: &Path) -> PathBuf {
         .unwrap_or_else(|| home.join(".claude"))
 }
 
-/// O motivo para barrar a ferramenta, com os nomes e campos do Claude Code; `None` deixa passar.
-fn guard(tool: &str, input: &Value) -> Result<Option<String>, &'static str> {
+/// O motivo para barrar a ferramenta, com os nomes e campos do Claude Code; `None` deixa passar. `cwd`: a
+/// pasta do agente, que dá lugar ao caminho relativo.
+fn guard(tool: &str, input: &Value, cwd: Option<&str>) -> Result<Option<String>, &'static str> {
     // PowerShell: a tool de shell do Claude Code no Windows, quando ligada.
     if !["Bash", "PowerShell", "Read", "Grep"].contains(&tool) {
         return Ok(None);
     }
+    let place = Place::new(cwd);
     if !["Bash", "PowerShell"].contains(&tool) {
-        let read = ["file_path", "path", "glob"].iter().any(|k| input[k].as_str().is_some_and(vault_path))
-            || (tool == "Grep" && input["path"].as_str().is_some_and(above_vault));
-        return Ok(read.then(|| VAULT_DENIED.to_owned()));
+        // `file_path` e `path` são um caminho inteiro, sem shell no meio: espaço e `?`/`*` são parte do nome.
+        // Curinga só no `glob`.
+        let cites = |secret: &Secret| {
+            ["file_path", "path"].iter().any(|k| input[k].as_str().is_some_and(|path| (secret.path)(&place, path)))
+                || input["glob"].as_str().is_some_and(|glob| (secret.hits)(&place, glob) > 0)
+        };
+        let grep_above = |above: fn(&str) -> bool| tool == "Grep" && input["path"].as_str().is_some_and(above);
+        if cites(&VAULT) || grep_above(above_vault) {
+            return Ok(Some(VAULT_DENIED.to_owned()));
+        }
+        return Ok((cites(&OWNER_KEYS) || grep_above(above_owner_keys)).then(|| OWNER_KEYS_DENIED.to_owned()));
     }
     let command = &input["command"];
     if !crate::orchestration::truthy(command) {
         return Ok(None);
     }
     let command = command.as_str().ok_or("command_not_string")?;
-    if reads_vault(command, 0, tool == "PowerShell") {
+    let pwsh = tool == "PowerShell";
+    if reads(&VAULT, &place, command, 0, pwsh) {
         return Ok(Some(VAULT_DENIED.to_owned()));
+    }
+    if reads(&OWNER_KEYS, &place, command, 0, pwsh) {
+        return Ok(Some(OWNER_KEYS_DENIED.to_owned()));
+    }
+    if answers_draft(command) {
+        return Ok(Some(DRAFT_ANSWER_DENIED.to_owned()));
     }
     // Caminho do Windows sem aspas (PowerShell, ou o Bash do Codex no Windows): a barra
     // invertida é separador, não escape. Conferido também assim, só para barrar mais; só
@@ -129,15 +146,21 @@ fn guard(tool: &str, input: &Value) -> Result<Option<String>, &'static str> {
     )))
 }
 
-/// A ferramenta do `agy` traduzida para a do Claude Code que a guarda conhece; `None` = não conferida.
-fn agy_tool(value: &Value, windows: bool) -> Option<(&'static str, Value)> {
+/// A ferramenta do `agy` traduzida para a do Claude Code que a guarda conhece, com a pasta em que roda;
+/// `None` = não conferida.
+fn agy_tool(value: &Value, windows: bool) -> Option<(&'static str, Value, Option<&str>)> {
     let args = &value["toolCall"]["args"];
     let text = |key: &str| args[key].clone();
+    let cwd = value["cwd"].as_str();
     match value["toolCall"]["name"].as_str()? {
-        // No Windows o `run_command` roda no PowerShell.
-        "run_command" => Some((if windows { "PowerShell" } else { "Bash" }, json!({"command": text("CommandLine")}))),
-        "view_file" => Some(("Read", json!({"file_path": text("AbsolutePath")}))),
-        "grep_search" => Some(("Grep", json!({"path": text("SearchPath")}))),
+        // No Windows o `run_command` roda no PowerShell. A pasta dele vem nos argumentos (`Cwd`), não no topo.
+        "run_command" => Some((
+            if windows { "PowerShell" } else { "Bash" },
+            json!({"command": text("CommandLine")}),
+            args["Cwd"].as_str().filter(|dir| !dir.is_empty()).or(cwd),
+        )),
+        "view_file" => Some(("Read", json!({"file_path": text("AbsolutePath")}), cwd)),
+        "grep_search" => Some(("Grep", json!({"path": text("SearchPath")}), cwd)),
         _ => None,
     }
 }
@@ -148,7 +171,7 @@ fn agy_guard_decision(input: Result<&[u8], &'static str>, windows: bool) -> Valu
     let reason = input
         .and_then(|bytes| serde_json::from_slice::<Value>(bytes).map_err(|_| "invalid_json"))
         .and_then(|value| match agy_tool(&value, windows) {
-            Some((tool, args)) => guard(tool, &args),
+            Some((tool, args, cwd)) => guard(tool, &args, cwd),
             None => Ok(None),
         });
     match reason {
@@ -372,11 +395,41 @@ fn marker(base: &Path, directory: &str, key: &str, payload: &Value) -> Result<()
     .map_err(|_| "marker_write_failed")
 }
 
+/// Como um pedaço do comando se liga ao seguinte.
+#[derive(Clone, Copy, PartialEq)]
+enum Link {
+    /// Fim do comando, ou `<<`: o resto é corpo de heredoc.
+    End,
+    /// `;` ou nova linha: o seguinte roda mesmo que este falhe.
+    Then,
+    And,
+    Or,
+    Pipe,
+    /// `&` sozinho: o que veio antes vai para o fundo, num subshell.
+    Background,
+    /// O `&` de `2>&1` ou `&>`: o mesmo comando continua.
+    Redirect,
+    /// `(`, `)`, `$(` ou `` ` ``.
+    Nest,
+}
+
+/// Um pedaço do comando, o separador que o encerra e se ele roda num subshell.
+struct Piece {
+    text: String,
+    after: Link,
+    nested: bool,
+}
+
 fn segments(command: &str) -> Vec<String> {
+    pieces(command).into_iter().map(|piece| piece.text).collect()
+}
+
+fn pieces(command: &str) -> Vec<Piece> {
     let chars: Vec<char> = command.chars().collect();
     let mut out = Vec::new();
     let mut buf = String::new();
     let mut quote = None;
+    let (mut depth, mut backtick) = (0usize, false);
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -404,18 +457,30 @@ fn segments(command: &str) -> Vec<String> {
             break;
         }
         if ";|&\n()`".contains(c) || (c == '$' && chars.get(i + 1) == Some(&'(')) {
-            out.push(std::mem::take(&mut buf));
-            i += if c == '$' || ((c == '&' || c == '|') && chars.get(i + 1) == Some(&c)) {
-                2
-            } else {
-                1
+            let doubled = (c == '&' || c == '|') && chars.get(i + 1) == Some(&c);
+            let after = match c {
+                ';' | '\n' => Link::Then,
+                '&' if doubled => Link::And,
+                '|' if doubled => Link::Or,
+                '|' => Link::Pipe,
+                '&' if (i > 0 && matches!(chars[i - 1], '<' | '>')) || chars.get(i + 1) == Some(&'>') => Link::Redirect,
+                '&' => Link::Background,
+                _ => Link::Nest,
             };
+            out.push(Piece { text: std::mem::take(&mut buf), after, nested: depth > 0 || backtick });
+            match c {
+                '(' | '$' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                '`' => backtick = !backtick,
+                _ => {}
+            }
+            i += if c == '$' || doubled { 2 } else { 1 };
             continue;
         }
         buf.push(c);
         i += 1;
     }
-    out.push(buf);
+    out.push(Piece { text: buf, after: Link::End, nested: depth > 0 || backtick });
     out
 }
 fn tokens(segment: &str) -> Vec<String> {
@@ -560,12 +625,14 @@ const READERS: &[&str] = &[
     "cat", "tac", "head", "tail", "less", "more", "bat", "nl", "od", "xxd", "hexdump", "strings",
     "base64", "wc", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "b2sum", "cut", "sort",
     "uniq", "diff", "cmp", "cp", "type", "get-content", "gc", "get-filehash", "format-hex",
-    "certutil", "mapfile", "readarray", "read",
+    "certutil", "mapfile", "readarray", "read", "source", ".",
 ];
 /// Leitores cujo primeiro argumento é o padrão de busca, que pode citar a pasta sem ler nada.
 const PATTERN_FIRST: &[&str] = &["grep", "egrep", "rg", "sed", "awk", "select-string", "sls"];
 /// Opções desses leitores cujo valor é um arquivo lido (`-Path`, `grep -f`), não um padrão.
 const FILE_OPTIONS: &[&str] = &["-path", "-literalpath", "-f", "--file", "-filepath"];
+/// Programas que trocam a pasta onde o resto do comando roda.
+const DIR_CHANGERS: &[&str] = &["cd", "chdir", "pushd", "popd", "set-location", "sl", "push-location", "pop-location"];
 /// Shells cujo argumento é outro comando; os dois guardas entram neles.
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval"];
 
@@ -640,22 +707,186 @@ fn shell_script(segment: &str) -> Option<String> {
     Some(unquoted.unwrap_or(script).to_owned())
 }
 
+/// Onde o comando roda: o `cwd` do hook põe o caminho relativo no lugar, e o home e as raízes anotadas
+/// dizem qual `backend/.env` é o do servidor.
+#[derive(Clone)]
+struct Place {
+    /// `None`: pasta desconhecida (o hook não mandou, ou um `cd` que não dá para seguir).
+    cwd: Option<PathBuf>,
+    home: Option<PathBuf>,
+    roots: std::cell::OnceCell<Vec<PathBuf>>,
+}
+
+/// Um arquivo que o guarda não deixa ler, e por onde a leitura dele aparece num comando.
+struct Secret {
+    /// Citações do arquivo como caminho no texto de um comando, que passa pelo shell (aspas, curinga).
+    hits: fn(&Place, &str) -> usize,
+    /// O caminho inteiro e literal, sem shell (`file_path` do `Read`): espaço e curinga são parte do nome.
+    path: fn(&Place, &str) -> bool,
+    /// `< arquivo`.
+    redirect: fn(&Place, &str) -> bool,
+    /// O `cd` que entra na pasta do arquivo.
+    folder: fn(&Place, &str) -> bool,
+    /// A pasta corrente é a do arquivo.
+    within: fn(&Place) -> bool,
+    /// Dentro da pasta, o segmento que lê o arquivo sem citar o caminho.
+    bare: fn(&str) -> bool,
+}
+
+/// Uma peça de curinga de shell.
+enum GlobPart {
+    Any,
+    One,
+    Class(bool, Vec<(char, char)>),
+    Char(char),
+}
+
+impl Place {
+    fn new(cwd: Option<&str>) -> Self {
+        Place {
+            cwd: cwd.filter(|cwd| !cwd.is_empty()).map(PathBuf::from),
+            home: std::env::home_dir(),
+            roots: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// A cópia do Hangar que o servidor usa: a do `current`, a anotada ou a acima do binário.
+    fn roots(&self) -> &[PathBuf] {
+        self.roots.get_or_init(|| {
+            let Some(home) = &self.home else { return Vec::new() };
+            [hangar_core::install_root::root(home), hangar_core::install_root::noted_root(home)]
+                .into_iter()
+                .flatten()
+                .filter_map(|root| root.canonicalize().ok())
+                .collect()
+        })
+    }
+
+    /// Os nomes como pasta de verdade: `~` vira o home e o relativo junta ao `cwd`; sem `cwd`, `None`.
+    fn locate(&self, rooted: bool, names: &[&str]) -> Option<PathBuf> {
+        let drive = |name: &str| name.len() == 2 && name.ends_with(':') && name.as_bytes()[0].is_ascii_alphabetic();
+        let (mut path, rest) = match names.first() {
+            Some(&("~" | "$HOME" | "${HOME}")) if !rooted => (self.home.clone()?, &names[1..]),
+            _ if rooted => (PathBuf::from("/"), names),
+            Some(&first) if drive(first) => (PathBuf::from(format!("{first}\\")), &names[1..]),
+            _ => (self.cwd.clone()?, names),
+        };
+        for name in rest {
+            match *name {
+                "." => {}
+                ".." => {
+                    path.pop();
+                }
+                other => path.push(other),
+            }
+        }
+        Some(path)
+    }
+
+    /// A pasta é a raiz de uma cópia do Hangar: a do servidor ou um checkout dele. Outro projeto com
+    /// `backend/.env` não é. Pasta desconhecida conta como cópia: na dúvida o guarda barra.
+    fn hangar_copy(&self, rooted: bool, names: &[&str]) -> bool {
+        self.locate(rooted, names).is_none_or(|dir| self.hangar_root(&dir))
+    }
+
+    fn hangar_root(&self, dir: &Path) -> bool {
+        let real = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        self.roots().contains(&real) || real.join("crates").join("hangar-server").is_dir()
+    }
+
+    /// O mesmo lugar, com a pasta desconhecida.
+    fn lost(&self) -> Place {
+        let mut place = self.clone();
+        place.cwd = None;
+        place
+    }
+
+    /// A pasta depois do `cd` do segmento; `None` quando não dá para saber: destino montado (variável,
+    /// subcomando, curinga, `cd -`, `popd`) ou `cd` fora da posição de programa (`if cd x`).
+    fn target(&self, segment: &str, pwsh: bool) -> Option<PathBuf> {
+        // No PowerShell a barra invertida é separador, não escape.
+        let text = if pwsh { segment.replace('\\', "/") } else { segment.to_owned() };
+        let words = tokens(&text);
+        let (name, args) = head(&words);
+        let name = name.to_ascii_lowercase();
+        if !DIR_CHANGERS.contains(&name.as_str()) || name.starts_with("pop") || args.iter().any(|arg| arg == "-") {
+            return None;
+        }
+        let targets: Vec<&String> = args.iter().filter(|arg| !arg.starts_with('-')).collect();
+        match targets.as_slice() {
+            // Só o `cd` do shell sozinho volta ao home; os outros ficam ou trocam pela pilha.
+            [] if !pwsh && name == "cd" => self.home.clone(),
+            [target] => {
+                let (rooted, names) = path_names(target);
+                let expands = |index: usize, name: &&str| {
+                    let home = index == 0 && ["~", "$HOME", "${HOME}"].contains(name);
+                    !home && ((index == 0 && name.starts_with('~')) || name.contains(['$', '`', '%', '*', '?', '[', '{']))
+                };
+                if names.iter().enumerate().any(|(index, name)| expands(index, name)) { None } else { self.locate(rooted, &names) }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Alguma palavra do comando, também dentro de um `bash -c`, é um `cd`.
+fn moves(command: &str) -> bool {
+    shell_readings(command)
+        .iter()
+        .any(|reading| path_words(reading).any(|word| DIR_CHANGERS.contains(&word.to_ascii_lowercase().as_str())))
+}
+
+const VAULT: Secret =
+    Secret { hits: vault_hits_at, path: vault_literal, redirect: vault_redirect, folder: vault_folder, within: vault_within, bare: any_segment };
+const OWNER_KEYS: Secret = Secret {
+    hits: owner_key_hits,
+    path: owner_key_path,
+    redirect: owner_key_redirect,
+    folder: owner_key_folder,
+    within: owner_key_within,
+    bare: owner_key_bare,
+};
+
 /// Ler o arquivo, não usá-lo: o caminho como argumento de outro programa passa. `pwsh`: o texto é
 /// PowerShell (a tool PowerShell ou o script de um `powershell -c`).
-fn reads_vault(command: &str, depth: u8, pwsh: bool) -> bool {
-    if !vault_path(command) {
+fn reads(secret: &Secret, place: &Place, command: &str, depth: u8, pwsh: bool) -> bool {
+    // Com `cd` a pasta de cada segmento é outra: o filtro rápido não vale e a varredura segue a pasta.
+    let moves = moves(command);
+    if !moves && (secret.hits)(place, command) == 0 && !(secret.folder)(place, command) && !(secret.within)(place) {
         return false;
     }
+    let lost;
+    let scope = if moves {
+        lost = place.lost();
+        &lost
+    } else {
+        place
+    };
     // .NET (`[IO.File]::ReadAllText`, `ReadLines`, `OpenText`, `StreamReader`…); fora do PowerShell é só texto.
     let lower = command.to_ascii_lowercase();
-    if pwsh && ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
+    if pwsh && (secret.hits)(scope, command) > 0 && ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
         return true;
     }
     let command = strip_heredocs(command);
-    static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let redirect = REDIRECT.get_or_init(|| regex::Regex::new(r#"(?i)<\s*['"]?[^\s'"]*vault-files"#).unwrap());
-    let mut inside = false;
-    segments(&command).iter().any(|segment| {
+    let pieces = pieces(&command);
+    // O `&` de `2>&1` parte um comando em pedaços: a ligação dele é a do último.
+    let link_after = |index: usize| pieces[index..].iter().map(|piece| piece.after).find(|link| *link != Link::Redirect).unwrap_or(Link::End);
+    let mut here = place.clone();
+    let mut inside = (secret.within)(place);
+    // A pasta de antes dos `cd` que só valem se derem certo (`cd x && ...`): depois de `;`, nova linha, `||`
+    // ou `&`, o `cd` pode ter falhado e o shell seguir nela.
+    let mut undo: Option<(Place, bool)> = None;
+    for (index, piece) in pieces.iter().enumerate() {
+        let before = if index == 0 { Link::Then } else { pieces[index - 1].after };
+        if matches!(before, Link::Then | Link::Or | Link::Background) {
+            if let Some((earlier, was_inside)) = undo.take() {
+                if earlier.cwd != here.cwd {
+                    here = here.lost();
+                }
+                inside |= was_inside;
+            }
+        }
+        let segment = piece.text.as_str();
         let words = tokens(segment);
         let (_, args) = head(&words);
         let name = program(segment);
@@ -663,25 +894,472 @@ fn reads_vault(command: &str, depth: u8, pwsh: bool) -> bool {
         if is_shell(name) {
             // O texto cru guarda o caminho do Windows, que `tokens` desfaz; os pedaços pegam o shell atrás de `sudo`/`env`.
             let inner = ["powershell", "pwsh"].contains(&name);
-            return depth < 3
-                && (shell_script(segment).is_some_and(|s| reads_vault(&s, depth + 1, inner))
-                    || reads_vault(&args.join(" "), depth + 1, inner));
+            if depth < 3
+                && (shell_script(segment).is_some_and(|s| reads(secret, &here, &s, depth + 1, inner))
+                    || reads(secret, &here, &args.join(" "), depth + 1, inner))
+            {
+                return true;
+            }
+            continue;
         }
-        // Entrar na pasta faz `cat *` ler a senha sem citar o caminho.
-        if ["cd", "pushd", "set-location", "sl", "push-location"].contains(&name) {
-            inside |= vault_path(segment);
-            return false;
+        // Entrar na pasta faz `cat *` ler o arquivo sem citar o caminho.
+        if words.iter().any(|word| DIR_CHANGERS.contains(&word.to_ascii_lowercase().as_str())) {
+            let entered = (secret.folder)(&here, segment);
+            let mut moved = here.clone();
+            moved.cwd = here.target(segment, pwsh);
+            // Só o `cd` que roda no shell de fora (sem subshell, pipeline nem fundo) e de que o resto depende leva a pasta.
+            let certain = moved.cwd.is_some()
+                && !piece.nested
+                && matches!(before, Link::Then | Link::And | Link::Background)
+                && matches!(link_after(index), Link::And | Link::End);
+            if certain {
+                undo.get_or_insert_with(|| (here.clone(), inside));
+                inside = entered || (secret.within)(&moved);
+                here = moved;
+            } else {
+                // A pasta seguinte é a de antes ou a nova: desconhecida, e dentro se qualquer uma for.
+                inside = inside || entered || (secret.within)(&moved);
+                here = here.lost();
+            }
+            if DIR_CHANGERS.contains(&name) {
+                continue;
+            }
         }
-        if redirect.is_match(segment) {
+        let place = &here;
+        if (secret.redirect)(place, segment) {
             return true;
         }
+        let bare = inside && (secret.bare)(segment);
         if PATTERN_FIRST.contains(&name) {
-            let file_option = args.windows(2).any(|w| FILE_OPTIONS.contains(&w[0].to_ascii_lowercase().as_str()) && w[1].to_ascii_lowercase().contains("vault-files"));
-            // Mais citações da pasta no texto cru do que no padrão: alguma é arquivo lido.
-            let pattern = args.iter().find(|a| !a.starts_with('-')).map_or(0, |p| vault_hits(p));
-            return inside || file_option || vault_hits(segment) > pattern;
+            let file_option =
+                args.windows(2).any(|w| FILE_OPTIONS.contains(&w[0].to_ascii_lowercase().as_str()) && arg_hits(secret, place, &w[1]) > 0);
+            // Mais citações do arquivo no texto cru do que no padrão: alguma é arquivo lido.
+            let pattern = args.iter().find(|a| !a.starts_with('-')).map_or(0, |p| arg_hits(secret, place, p));
+            if bare || file_option || (secret.hits)(place, segment) > pattern {
+                return true;
+            }
+            continue;
         }
-        READERS.contains(&name) && (inside || vault_path(segment))
+        if READERS.contains(&name) && (bare || (secret.hits)(place, segment) > 0) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Citações num argumento que o shell já entregou, sem aspas: um espaço nele é parte do nome.
+fn arg_hits(secret: &Secret, place: &Place, arg: &str) -> usize {
+    (secret.hits)(place, arg).max(usize::from((secret.path)(place, arg)))
+}
+
+fn any_segment(_: &str) -> bool {
+    true
+}
+
+fn vault_hits_at(_: &Place, text: &str) -> usize {
+    vault_hits(text)
+}
+
+fn vault_folder(_: &Place, text: &str) -> bool {
+    vault_path(text)
+}
+
+/// A pasta `vault-files` como um dos nomes do caminho inteiro.
+fn vault_literal(_: &Place, path: &str) -> bool {
+    path_names(&lexical_path(path)).1.iter().any(|name| name.eq_ignore_ascii_case("vault-files"))
+}
+
+fn vault_within(place: &Place) -> bool {
+    place.cwd.as_ref().is_some_and(|cwd| vault_path(&cwd.to_string_lossy()))
+}
+
+fn vault_redirect(_: &Place, segment: &str) -> bool {
+    static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    REDIRECT.get_or_init(|| regex::Regex::new(r#"(?i)<\s*['"]?[^\s'"]*vault-files"#).unwrap()).is_match(segment)
+}
+
+const OWNER_KEYS_DENIED: &str = "BLOQUEADO: o `.env` do Hangar e o `control.key` do WhatsApp guardam as chaves do dono e não se leem.\nPara mandar algo pelo WhatsApp, crie o rascunho com `whatsapp_draft`: quem envia é o dono, no cartão do app.";
+const DRAFT_ANSWER_DENIED: &str = "BLOQUEADO: aprovar ou recusar um rascunho de WhatsApp (`/api/whatsapp/outbox/<id>/send` ou `/decline`) é só do dono, no cartão do app.\nCrie o rascunho com `whatsapp_draft` e espere a resposta dele.";
+
+/// As chaves do dono: o `control.key` do WhatsApp, o `.env` de `~/.hangar/config` e o `backend/.env` de uma
+/// cópia do Hangar. Conta as palavras que as citam, na leitura que mais acha. Melhor esforço: caminho
+/// montado por variável de ambiente passa.
+fn owner_key_hits(place: &Place, text: &str) -> usize {
+    word_readings(text).iter().map(|words| words.iter().filter(|word| owner_key_word(place, word)).count()).max().unwrap_or(0)
+}
+
+/// O caminho inteiro de `Read`/`Grep`, comparado nome a nome, sem curinga.
+fn owner_key_path(place: &Place, path: &str) -> bool {
+    let path = lexical_path(path);
+    let (rooted, names) = path_names(&path);
+    let ends = |wanted: &[&str]| {
+        names.len() >= wanted.len() && names[names.len() - wanted.len()..].iter().zip(wanted).all(|(name, want)| name.eq_ignore_ascii_case(want))
+    };
+    ends(&[".hangar", "config", ".env"])
+        || ends(&["whatsapp", "control.key"])
+        || (ends(&["backend", ".env"]) && place.hangar_copy(rooted, &names[..names.len() - 2]))
+}
+
+fn owner_key_word(place: &Place, word: &str) -> bool {
+    let (rooted, names) = path_names(word);
+    // Sem o `.hangar` só o nome escrito: `*/*` casaria qualquer pasta com dois níveis.
+    let literal = !names.iter().copied().any(is_glob);
+    ends_with_glob(&names, &[".hangar", "config", ".env"])
+        || ends_with_glob(&names, &[".hangar", "whatsapp", "control.key"])
+        || (literal && ends_with_glob(&names, &["whatsapp", "control.key"]))
+        || (ends_with_glob(&names, &["backend", ".env"]) && place.hangar_copy(rooted, &names[..names.len() - 2]))
+}
+
+/// O texto como o shell o entrega ao programa: sem aspas e, numa segunda leitura, também sem as barras
+/// de escape (`control.ke"y"`, `.en\v`). A primeira guarda a barra, que é separador no Windows.
+fn shell_readings(text: &str) -> [String; 2] {
+    let unquoted: String = text.chars().filter(|c| !matches!(c, '\'' | '"')).collect();
+    let mut unescaped = String::with_capacity(unquoted.len());
+    let mut chars = unquoted.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            unescaped.extend(chars.next());
+        } else {
+            unescaped.push(c);
+        }
+    }
+    [unquoted, unescaped]
+}
+
+/// As palavras do texto, com `.` e `..` resolvidos.
+fn path_words(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split(breaks_word).filter(|word| !word.is_empty()).map(lexical_path)
+}
+
+fn breaks_word(c: char) -> bool {
+    c.is_whitespace() || ['=', '<', '>', ';', '|', '&', '(', ')', '`'].contains(&c)
+}
+
+/// As palavras nas leituras do shell: as duas de `shell_readings`, que partem no espaço, e a que junta o
+/// que as aspas juntam (`'/meu projeto/backend/.env'`).
+fn word_readings(text: &str) -> [Vec<String>; 3] {
+    let [unquoted, unescaped] = shell_readings(text);
+    [path_words(&unquoted).collect(), path_words(&unescaped).collect(), quoted_words(text)]
+}
+
+/// As palavras como o shell as separa: o que está entre aspas fica numa palavra só, sem as aspas.
+fn quoted_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quote, mut started) = (None, false);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            } else {
+                word.push(c);
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => {
+                quote = Some(c);
+                started = true;
+            }
+            // A barra que escapa aspas, espaço ou separador some; a outra é separador do Windows.
+            '\\' if chars.peek().is_some_and(|next| matches!(*next, '\'' | '"') || breaks_word(*next)) => {
+                word.extend(chars.next());
+                started = true;
+            }
+            c if breaks_word(c) => {
+                if started {
+                    words.push(lexical_path(&std::mem::take(&mut word)));
+                    started = false;
+                }
+            }
+            c => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(lexical_path(&word));
+    }
+    words
+}
+
+/// Se o caminho começa na raiz, e os nomes dele sem as barras vazias.
+fn path_names(word: &str) -> (bool, Vec<&str>) {
+    (word.starts_with(['/', '\\']), word.split(['/', '\\']).filter(|name| !name.is_empty()).collect())
+}
+
+fn is_glob(name: &str) -> bool {
+    name.contains(['*', '?', '[', '{'])
+}
+
+/// Os últimos nomes do caminho casam, como curinga de shell, com os nomes pedidos.
+fn ends_with_glob(names: &[&str], wanted: &[&str]) -> bool {
+    let Some(start) = names.len().checked_sub(wanted.len()) else { return false };
+    let last = wanted.len() - 1;
+    names[start..].iter().zip(wanted).enumerate().all(|(index, (name, want))| glob_match(name, want, index == last))
+}
+
+/// Um nome casa um curinga de shell (`*`, `?`, `[..]`, `{a,b}`), sem tocar o disco e sem caixa. Pasta
+/// oculta só casa curinga que começa com ponto, como no bash; o arquivo final casa qualquer um, porque
+/// o PowerShell e o `dotglob` pegam o `.env` com `*`.
+fn glob_match(pattern: &str, name: &str, any_dot: bool) -> bool {
+    let name: Vec<char> = name.chars().collect();
+    let mut work = BRACE_WORK;
+    let Some(patterns) = expand_braces(&pattern.chars().collect::<Vec<_>>(), &mut work, 0) else {
+        return true;
+    };
+    patterns.iter().any(|pattern| (any_dot || name.first() != Some(&'.') || pattern.first() == Some(&'.')) && glob_one(pattern, &name))
+}
+
+/// Teto da expansão de `{a,b}`: alternativas, aninhamento e letras percorridas. Passar dele conta como
+/// casamento possível, porque o guarda só barra pelo casamento.
+const BRACE_ALTERNATIVES: usize = 64;
+const BRACE_DEPTH: usize = 16;
+const BRACE_WORK: usize = 1 << 16;
+
+/// As alternativas de `{a,b}`; `None` quando passa do teto.
+fn expand_braces(pattern: &[char], work: &mut usize, level: usize) -> Option<Vec<Vec<char>>> {
+    let Some(open) = pattern.iter().position(|c| *c == '{') else { return Some(vec![pattern.to_vec()]) };
+    if level >= BRACE_DEPTH {
+        return None;
+    }
+    *work = work.checked_sub(pattern.len())?;
+    let (mut depth, mut close, mut commas) = (0usize, None, Vec::new());
+    for (index, c) in pattern.iter().enumerate().skip(open) {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(index);
+                    break;
+                }
+            }
+            ',' if depth == 1 => commas.push(index),
+            _ => {}
+        }
+    }
+    let Some(close) = close.filter(|_| !commas.is_empty()) else {
+        // Sem par ou sem vírgula a chave é letra; o resto ainda pode ter alternativas.
+        let rest = expand_braces(&pattern[open + 1..], work, level + 1)?;
+        return Some(rest.into_iter().map(|rest| pattern[..=open].iter().copied().chain(rest).collect()).collect());
+    };
+    let bounds: Vec<usize> = std::iter::once(open).chain(commas).chain(std::iter::once(close)).collect();
+    let mut out = Vec::new();
+    for pair in bounds.windows(2) {
+        let alternative: Vec<char> = pattern[..open].iter().chain(&pattern[pair[0] + 1..pair[1]]).chain(&pattern[close + 1..]).copied().collect();
+        for expanded in expand_braces(&alternative, work, level + 1)? {
+            if out.len() == BRACE_ALTERNATIVES {
+                return None;
+            }
+            out.push(expanded);
+        }
+    }
+    Some(out)
+}
+
+fn glob_one(pattern: &[char], name: &[char]) -> bool {
+    let mut parts = Vec::new();
+    let mut index = 0;
+    while index < pattern.len() {
+        let part = match pattern[index] {
+            '*' => GlobPart::Any,
+            '?' => GlobPart::One,
+            '[' => match glob_class(pattern, index) {
+                Some((end, negated, ranges)) => {
+                    parts.push(GlobPart::Class(negated, ranges));
+                    index = end;
+                    continue;
+                }
+                None => GlobPart::Char('['),
+            },
+            other => GlobPart::Char(other),
+        };
+        parts.push(part);
+        index += 1;
+    }
+    // `reach[j]`: as partes lidas até aqui consomem `name[..j]`.
+    let mut reach = vec![false; name.len() + 1];
+    reach[0] = true;
+    for part in &parts {
+        let mut next = vec![false; name.len() + 1];
+        for j in (0..=name.len()).filter(|j| reach[*j]) {
+            if matches!(part, GlobPart::Any) {
+                next[j..].iter_mut().for_each(|slot| *slot = true);
+                break;
+            }
+            if name.get(j).is_some_and(|c| glob_char(part, *c)) {
+                next[j + 1] = true;
+            }
+        }
+        reach = next;
+    }
+    reach[name.len()]
+}
+
+fn glob_char(part: &GlobPart, c: char) -> bool {
+    let c = c.to_ascii_lowercase();
+    match part {
+        GlobPart::Any | GlobPart::One => true,
+        GlobPart::Char(want) => want.to_ascii_lowercase() == c,
+        GlobPart::Class(negated, ranges) => {
+            ranges.iter().any(|(low, high)| (low.to_ascii_lowercase()..=high.to_ascii_lowercase()).contains(&c)) != *negated
+        }
+    }
+}
+
+/// `[...]` a partir de `start`: onde termina, se nega (`!` ou `^`) e as faixas; sem `]`, não é classe.
+fn glob_class(pattern: &[char], start: usize) -> Option<(usize, bool, Vec<(char, char)>)> {
+    let mut index = start + 1;
+    let negated = matches!(pattern.get(index), Some('!' | '^'));
+    if negated {
+        index += 1;
+    }
+    let first = index;
+    let mut ranges = Vec::new();
+    loop {
+        let &c = pattern.get(index)?;
+        if c == ']' && index != first {
+            return Some((index + 1, negated, ranges));
+        }
+        match (pattern.get(index + 1), pattern.get(index + 2)) {
+            (Some('-'), Some(&high)) if high != ']' => {
+                ranges.push((c, high));
+                index += 3;
+            }
+            _ => {
+                ranges.push((c, c));
+                index += 1;
+            }
+        }
+    }
+}
+
+/// O texto com `.` e `..` resolvidos em cada caminho, sem tocar o disco: `config/./.env` e
+/// `backend/../backend/.env` abrem o mesmo arquivo que o caminho direto.
+fn lexical_paths(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("/.") && !text.contains("\\.") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    for c in text.chars() {
+        if c.is_whitespace() || ['\'', '"', '=', '<', '>', ';', '|', '&', '(', ')', '`'].contains(&c) {
+            out.push_str(&lexical_path(&word));
+            word.clear();
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    out.push_str(&lexical_path(&word));
+    std::borrow::Cow::Owned(out)
+}
+
+fn lexical_path(word: &str) -> String {
+    let parts: Vec<&str> = word.split(['/', '\\']).collect();
+    if parts.len() < 2 || !parts.iter().any(|p| *p == "." || *p == "..") {
+        return word.to_owned();
+    }
+    let absolute = parts[0].is_empty();
+    let mut kept: Vec<&str> = Vec::new();
+    for part in parts {
+        match part {
+            "" | "." => {}
+            ".." => match kept.last() {
+                Some(&last) if last != ".." => {
+                    kept.pop();
+                }
+                None if absolute => {}
+                _ => kept.push(".."),
+            },
+            other => kept.push(other),
+        }
+    }
+    let mut path = kept.join("/");
+    if absolute {
+        path.insert(0, '/');
+    } else if path.is_empty() {
+        path.push('.');
+    }
+    if word.ends_with(['/', '\\']) && !kept.is_empty() {
+        path.push('/');
+    }
+    path
+}
+
+fn owner_key_redirect(place: &Place, segment: &str) -> bool {
+    static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let redirect = REDIRECT.get_or_init(|| regex::Regex::new(r#"<\s*(?:'([^']*)'|"([^"]*)"|([^\s'"<]+))"#).unwrap());
+    redirect.captures_iter(segment).any(|c| match (c.get(1).or(c.get(2)), c.get(3)) {
+        // Entre aspas o caminho é um só, com espaço e sem curinga.
+        (Some(quoted), _) => owner_key_path(place, quoted.as_str()) || owner_key_hits(place, quoted.as_str()) > 0,
+        (_, Some(word)) => owner_key_hits(place, word.as_str()) > 0,
+        _ => false,
+    })
+}
+
+/// `~/.hangar/whatsapp`, `~/.hangar/config` e a `backend/` de uma cópia do Hangar como pasta inteira (destino de um `cd`).
+fn owner_key_folder(place: &Place, text: &str) -> bool {
+    word_readings(text).iter().flatten().any(|word| {
+        let (rooted, names) = path_names(word);
+        ends_with_glob(&names, &[".hangar", "config"])
+            || ends_with_glob(&names, &[".hangar", "whatsapp"])
+            || (ends_with_glob(&names, &["backend"]) && place.hangar_copy(rooted, &names[..names.len() - 1]))
+    })
+}
+
+/// A pasta corrente é `~/.hangar/config`, `~/.hangar/whatsapp` ou a `backend/` de uma cópia do Hangar.
+/// Desconhecida não conta: `cat *` numa pasta qualquer segue livre.
+fn owner_key_within(place: &Place) -> bool {
+    let Some(cwd) = &place.cwd else { return false };
+    let names: Vec<String> = cwd.iter().map(|name| name.to_string_lossy().to_ascii_lowercase()).collect();
+    let ends = |wanted: &[&str]| names.len() >= wanted.len() && names[names.len() - wanted.len()..].iter().zip(wanted).all(|(name, want)| name == want);
+    ends(&[".hangar", "config"])
+        || ends(&[".hangar", "whatsapp"])
+        || (ends(&["backend"]) && cwd.parent().is_some_and(|parent| place.hangar_root(parent)))
+}
+
+/// Dentro da pasta, o nome solto (`.env`, `control.key`) ou um curinga que case com ele (`*`, `.en?`).
+fn owner_key_bare(segment: &str) -> bool {
+    word_readings(segment).iter().flatten().any(|word| {
+        let (_, names) = path_names(word);
+        names.len() == 1 && [".env", "control.key"].iter().any(|key| glob_match(names[0], key, true))
+    })
+}
+
+/// `Grep` em `~/.hangar` ou nas pastas das chaves as varre inteiras.
+fn above_owner_keys(path: &str) -> bool {
+    static ABOVE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    ABOVE.get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\])\.hangar([/\\]+(whatsapp|config))?[/\\]*$"#).unwrap()).is_match(&lexical_paths(path))
+}
+
+/// Programas que só procuram ou registram texto: citar a rota neles não a chama.
+const ROUTE_QUOTERS: &[&str] = &["grep", "egrep", "fgrep", "rg", "git", "select-string", "sls"];
+
+/// `…/api/whatsapp/outbox/<id>/send` ou `/decline` chamado da sessão: a resposta ao rascunho é do dono, no app.
+/// Confere o texto como o shell o entrega (sem aspas nem escapes) e a ação escrita como curinga (`{send,x}`).
+/// A ação é o trecho inteiro da URL: `send.html` é outro caminho.
+fn answers_draft(command: &str) -> bool {
+    static ROUTE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static GLOB: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let route = ROUTE.get_or_init(|| regex::Regex::new(r#"(?i)/api/whatsapp/outbox/[^\s'"/?#]+/+(send|decline)([^A-Za-z0-9_.~%-]|$)"#).unwrap());
+    let glob = GLOB.get_or_init(|| regex::Regex::new(r#"(?i)/api/whatsapp/outbox/[^\s'"/?#]+/+([A-Za-z0-9_.~%*?\[\]{},!^-]+)"#).unwrap());
+    let calls = |text: &str| {
+        shell_readings(text).iter().any(|reading| {
+            route.is_match(reading)
+                || glob.captures_iter(reading).any(|c| ["send", "decline"].iter().any(|action| glob_match(&c[1], action, true)))
+        })
+    };
+    if !calls(command) {
+        return false;
+    }
+    segments(&strip_heredocs(command)).iter().any(|segment| {
+        // Substituição de comando dentro das aspas roda, mesmo atrás de `git` ou `grep`.
+        let quoted = ROUTE_QUOTERS.contains(&program(segment).as_str()) && !segment.contains("$(") && !segment.contains('`');
+        calls(segment) && !quoted
     })
 }
 

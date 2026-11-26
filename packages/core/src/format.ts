@@ -43,6 +43,9 @@ export function formatElapsed(seconds: number | null | undefined): string {
   return m.orq_elapsed_hours({ h: Math.floor(whole / 3600), m: Math.floor((whole % 3600) / 60) });
 }
 
+/** Contagem regressiva em `m:ss` (`9:12`). */
+export const formatCountdown = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+
 // Nome humano do provider da sessão. Existe porque cada tela escrevia o próprio ternário
 // (`provider === 'codex' ? 'Codex' : 'Claude'`) e, quando o Pi entrou como terceiro provider, toda
 // sessão Pi aparecia rotulada como "Claude". Um lugar só -> um provider novo não volta a mentir.

@@ -5034,7 +5034,7 @@ export function requestMermaid(
   return apiFetchRes('/api/mermaid', { method: 'POST', body: JSON.stringify(body), signal }, server ?? undefined, false, false);
 }
 
-// WhatsApp só leitura do servidor (rotas do dono `/api/whatsapp*`). Erro vem com código `whatsapp_*`.
+// WhatsApp do servidor (rotas do dono `/api/whatsapp*`). Erro vem com código `whatsapp_*`.
 export type WhatsAppService = 'running' | 'stopped' | 'absent';
 export type WhatsAppLinkState = 'unpaired' | 'pairing' | 'connected' | 'logged_out' | 'outdated';
 
@@ -5067,6 +5067,10 @@ export interface WhatsAppStatus {
   pair_code_expires_at?: string | null;
   tz?: string;
   totals?: Partial<WhatsAppTotals>;
+  /** Envios aprovados no último minuto e nas últimas 24 h, com os tetos (api 2). */
+  send?: { last_minute: number; today: number; per_minute: number; per_day: number };
+  /** Até quando o WhatsApp recusa mensagem a contato novo (UTC); `null` sem trava (api 2). */
+  reachout_locked_until?: string | null;
   since: string | null;
   last_message_at: string | null;
 }

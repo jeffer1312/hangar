@@ -1,6 +1,7 @@
 //! Aviso no celular pelo Expo Push: o dono registra o token e os produtores nativos decidem quando avisar.
 use crate::{
     diag::DiagClient,
+    push::send::Opens,
     routes::{AppState, gate},
     session_write::{detail_body, json_response},
 };
@@ -71,9 +72,21 @@ struct Notify {
     body: Localized,
     #[serde(default)]
     list: bool,
-    /// `request_id` do pedido do cofre: o app abre a folha dele. Só o Rust preenche.
+    /// O cartão que o app abre pelo aviso. Só o Rust preenche.
     #[serde(skip)]
-    vault_request: Option<String>,
+    opens: Option<Opens>,
+}
+
+impl Notify {
+    /// O `data` que o app lê ao tocar: a máquina pelo id que o aparelho registrou para ela, e a sessão ou o cartão.
+    fn data(&self, server_id: &str) -> Value {
+        let mut data = if self.list { json!({"server": server_id}) } else { json!({"server": server_id, "session": self.session}) };
+        if let Some(opens) = &self.opens {
+            data["server_id"] = json!(server_id);
+            data[opens.data_key()] = json!(opens.id());
+        }
+        data
+    }
 }
 
 // O Expo guarda recibos por 24 h e lê até 1000 por chamada; ticket sem recibo não fica para sempre.
@@ -186,7 +199,7 @@ pub(crate) fn send(
     title: (String, String),
     body: (String, String),
     list: bool,
-    vault_request: Option<String>,
+    opens: Option<Opens>,
 ) {
     let base = state
         .accounts
@@ -208,7 +221,7 @@ pub(crate) fn send(
             en: body.1,
         },
         list,
-        vault_request,
+        opens,
     };
     tokio::spawn(deliver(
         path(&state.accounts.env.home),
@@ -305,14 +318,8 @@ async fn deliver(path: PathBuf, base: String, diag: DiagClient, notify: Notify) 
     let mut tickets = Vec::new();
     for targets in all.chunks(MAX_MESSAGES) {
         let messages: Vec<Value> = targets.iter().map(|e| {
-            let mut data = if notify.list { json!({"server": e.server_id}) } else { json!({"server": e.server_id, "session": notify.session}) };
-            // Como no Web Push: o id da máquina é o que o aparelho registrou para ela.
-            if let Some(request_id) = &notify.vault_request {
-                data["server_id"] = json!(e.server_id);
-                data["request_id"] = json!(request_id);
-            }
             json!({"to": e.token, "title": format!("{} · {}", e.label, notify.title.pick(&e.locale)),
-                "body": notify.body.pick(&e.locale), "data": data, "channelId": "default", "priority": "high"})
+                "body": notify.body.pick(&e.locale), "data": notify.data(&e.server_id), "channelId": "default", "priority": "high"})
         }).collect();
         match post(
             client,
@@ -364,5 +371,25 @@ async fn deliver(path: PathBuf, base: String, diag: DiagClient, notify: Notify) 
     .await;
     if !matches!(saved, Ok(Ok(()))) {
         report("push_expo_registry");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn notify(list: bool, opens: Option<Opens>) -> Notify {
+        let text = || Localized { pt: "a".into(), en: "b".into() };
+        Notify { session: "s0".into(), title: text(), body: text(), list, opens }
+    }
+
+    /// O aviso abre o cartão pelo id da máquina que o aparelho registrou; o cofre segue com `request_id`.
+    #[test]
+    fn the_expo_data_opens_the_card_by_its_key() {
+        assert_eq!(notify(false, None).data("casa"), json!({"server": "casa", "session": "s0"}));
+        let vault = Opens::Vault { server_id: "outro-nome".into(), request_id: "r1".into() };
+        assert_eq!(notify(true, Some(vault)).data("casa"), json!({"server": "casa", "server_id": "casa", "request_id": "r1"}));
+        let draft = Opens::WhatsAppDraft { server_id: "casa".into(), draft_id: "d1".into() };
+        assert_eq!(notify(true, Some(draft)).data("casa"), json!({"server": "casa", "server_id": "casa", "whatsapp_draft_id": "d1"}));
     }
 }
