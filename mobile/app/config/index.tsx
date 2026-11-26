@@ -55,6 +55,8 @@ const SERVER: Page[] = [
     rows: [m.contas_atualizar, m.contas_secao_claude, m.contas_secao_modelos, m.contas_secao_outros] },
   { route: '/config/plugins', icon: 'PackageOpen', title: m.plugins_title,
     rows: [m.plugins_tab_installed, m.plugins_tab_discover, m.plugins_tab_marketplaces, m.plugins_check] },
+  { route: '/config/integrations', icon: 'Plug', title: m.integrations_title,
+    rows: [m.integrations_search_row_catalog, m.integrations_search_row_custom, m.integrations_search_row_configured] },
   { route: '/config/cofre', icon: 'KeyRound', title: m.vault_app_title, rows: [m.vault_app_where, m.vault_app_add] },
   { route: WHATSAPP, icon: 'MessageCircle', title: m.native_settings_page_whatsapp,
     rows: [m.native_whatsapp_intro_title, m.native_whatsapp_risk_title, m.native_whatsapp_pair_title, m.native_whatsapp_media_title,

@@ -35,6 +35,7 @@ pub mod diag;
 pub(crate) mod diag_report;
 pub use hangar_core::display_env;
 pub mod groups;
+pub mod integrations;
 pub mod interactions;
 pub(crate) use hangar_core::json_envelope;
 pub mod list;
@@ -242,6 +243,7 @@ pub async fn serve_until_with_guest(
     let browser_list = state.list.clone();
     let transcription = state.transcription.clone();
     let connectors = state.connectors.clone();
+    let integrations = state.integrations.clone();
     let startup_producers = state.startup_producers.clone();
     let omp_sync = state.omp_sync.clone();
     let codex_setup = state.codex_setup.clone();
@@ -378,6 +380,7 @@ pub async fn serve_until_with_guest(
         transcription.shutdown().await;
         // Conectores vivos saem com a árvore inteira, não só o processo líder.
         connectors.shutdown().await;
+        integrations.shutdown().await;
         let refresh = refresh_loop.lock().unwrap().take();
         if let Some((stop, task)) = refresh { let _ = stop.send(true); let _ = task.await; }
         tokio::join!(codex_readers.close(),codex_logins.close(),device_logins.close());

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { openSessionsStream, deviceIdentityReady, aggregateSessions, parseWhatsAppOutboxEvent, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverConnectRoute, discoverRemoteRoute, upgradeToDevice, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, parseWorkReviewsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
-import type { SessionInfo, Server, AggSession, ExternalPair, TagsEvent, VaultEvent, VaultRequest, WhatsAppOutboxEvent } from '@hangar/core';
+import { openSessionsStream, deviceIdentityReady, aggregateSessions, parseWhatsAppOutboxEvent, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverConnectRoute, discoverRemoteRoute, upgradeToDevice, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, parseWorkReviewsEvent, parseIntegrationApprovalEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
+import type { SessionInfo, Server, AggSession, ExternalPair, TagsEvent, VaultEvent, VaultRequest, IntegrationApprovalEvent, WhatsAppOutboxEvent } from '@hangar/core';
 import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, isServerParked, parkServer, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
@@ -26,6 +26,8 @@ export interface SessionsState {
   byServerRecord: Record<string, AggSession[]>;
   /** Último evento `vault` de cada servidor; vale só enquanto o balde dele está sem erro. */
   vault: Record<string, VaultEvent>;
+  /** Último evento `integrations_approvals` de cada servidor; limpo ao trocar token/desconectar. */
+  integrationApprovals: Record<string, IntegrationApprovalEvent>;
   /** Último evento `whatsapp_outbox` de cada servidor (rascunhos pendentes); como o cofre, vale só com o balde sem erro. */
   whatsappOutbox: Record<string, WhatsAppOutboxEvent>;
   /** Etiquetas de máquina e contas de cada servidor (evento `tags`); o valor de cada servidor só muda quando a etiqueta dele muda. */
@@ -51,11 +53,12 @@ const slots = new Map<string, Slot>();
 const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined, offlineSince: startOutage(id) });
 const streams = new Map<string, ReturnType<typeof openSessionsStream>>();
 const vaultRaw = new Map<string, string>();
+const integrationApprovalsRaw = new Map<string, string>();
 const whatsappOutboxRaw = new Map<string, string>();
 const workReviewsRaw = new Map<string, string>();
 const VAULT_STATES = new Set(['open', 'locked', 'absent', 'offline', 'key_lost']);
 /** Campos guardados por máquina a partir de um evento da lista. */
-type KeyedField = 'vault' | 'whatsappOutbox';
+type KeyedField = 'vault' | 'integrationApprovals' | 'whatsappOutbox';
 type KeyedEvent<K extends KeyedField> = SessionsState[K] extends Record<string, infer E> ? E : never;
 
 /** Evento `vault` torto devolve `null`; cartão sem id, interação ou tipo conhecido sai da lista. */
@@ -135,6 +138,16 @@ function isCurrent(attempt: ConnectionAttempt) {
   return foreground && refs > 0 && attempt.generation === generation && !attempt.abort.signal.aborted && hasServer(attempt.server);
 }
 
+function clearServerIntegrationApprovals(id: string) {
+  integrationApprovalsRaw.delete(id);
+  const current = useSessions.getState().integrationApprovals;
+  if (id in current) {
+    const rest = { ...current };
+    delete rest[id];
+    useSessions.setState({ integrationApprovals: rest });
+  }
+}
+
 function disconnect(id: string, abortPending = true) {
   const stream = streams.get(id);
   streams.delete(id);
@@ -144,6 +157,7 @@ function disconnect(id: string, abortPending = true) {
   const attempt = connecting.get(id);
   if (!abortPending && attempt && !attempt.routing) connecting.delete(id);
   if (abortPending) attempt?.abort.abort();
+  clearServerIntegrationApprovals(id);
   esquecerRota(id);
 }
 
@@ -593,6 +607,17 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     };
     // Cofre: estado e pedidos abertos.
     listenKeyed('vault', vaultRaw, parseVaultEvent, 'vault');
+    // Remove aprovações da conexão anterior antes de reconectar ou ao cair o stream.
+    const dropIntegrationApprovals = () => {
+      integrationApprovalsRaw.delete(s.id);
+      if (s.id in get().integrationApprovals) {
+        const { [s.id]: _dropped, ...integrationApprovals } = get().integrationApprovals;
+        set({ integrationApprovals });
+      }
+    };
+    dropIntegrationApprovals();
+    // Aprovações de integrações MCP.
+    listenKeyed('integrations_approvals', integrationApprovalsRaw, parseIntegrationApprovalEvent, 'integrationApprovals');
     // Rascunhos de WhatsApp pendentes.
     listenKeyed('whatsapp_outbox', whatsappOutboxRaw, parseWhatsAppOutboxEvent, 'whatsappOutbox');
     // Etiquetas da máquina e das contas: chegam na conexão e a cada troca. Repetido ou torto mantém as últimas.
@@ -626,6 +651,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     });
     es.onerror = (event) => {
       if (!active()) return;
+      dropIntegrationApprovals();
       const status = (event as { xhrStatus?: number } | null)?.xhrStatus ?? 0;
       const http = Number.isInteger(status) && status >= 100 && status <= 599;
       lastFailureHttp.set(s.id, http);
@@ -643,6 +669,11 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     streams.set(s.id, es);
   } catch (error) {
     if (!isCurrent(attempt)) return;
+    integrationApprovalsRaw.delete(s.id);
+    if (s.id in get().integrationApprovals) {
+      const { [s.id]: _dropped, ...integrationApprovals } = get().integrationApprovals;
+      set({ integrationApprovals });
+    }
     lastFailureHttp.set(s.id, false);
     registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'conexao',
       detalhe: error instanceof Error ? error.name : 'erro' }, s.baseUrl);
@@ -688,10 +719,12 @@ function refresh(get: () => SessionsState, set: (p: Partial<SessionsState>) => v
       slots.delete(s.id);
       // Mesmo id com outro token ou endereço: o pedido antigo não é desta conexão.
       vaultRaw.delete(s.id);
-      const { [s.id]: _dropped, ...vault } = get().vault;
+      integrationApprovalsRaw.delete(s.id);
       whatsappOutboxRaw.delete(s.id);
+      const { [s.id]: _dropped, ...vault } = get().vault;
+      const { [s.id]: _droppedApproval, ...integrationApprovals } = get().integrationApprovals;
       const { [s.id]: _droppedDrafts, ...whatsappOutbox } = get().whatsappOutbox;
-      set({ vault, whatsappOutbox });
+      set({ vault, integrationApprovals, whatsappOutbox });
     } else if (serversCache.find((next) => next.id === s.id)?.inviteEnded) {
       disconnect(s.id);
       slots.delete(s.id);
@@ -748,10 +781,11 @@ function stop(set: (p: Partial<SessionsState>) => void) {
   pause();
   slots.clear();
   vaultRaw.clear();
+  integrationApprovalsRaw.clear();
   whatsappOutboxRaw.clear();
   workReviewsRaw.clear();
   clearWorkReviewSummaries();
-  set({ vault: {}, whatsappOutbox: {} });
+  set({ vault: {}, integrationApprovals: {}, whatsappOutbox: {} });
   for (const [id, status] of refused) slots.set(id, { sessions: null, error: refusedError(status) });
   // hidden mantém? Não — limpa ao parar para próximo retain começar limpo
   hidden = new Map<string, string | null>();
@@ -763,6 +797,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   byServer: [],
   byServerRecord: {},
   vault: {},
+  integrationApprovals: {},
   whatsappOutbox: {},
   tags: {},
   noticeIgnores: {},
@@ -849,6 +884,7 @@ export function _resetSessionsForTests() {
   streams.clear();
   slots.clear();
   vaultRaw.clear();
+  integrationApprovalsRaw.clear();
   whatsappOutboxRaw.clear();
   workReviewsRaw.clear();
   clearWorkReviewSummaries();
@@ -870,5 +906,5 @@ export function _resetSessionsForTests() {
   _limparEsfriamentoParaTestes();
   definirArmazem(null);
   configureCooldown();
-  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, whatsappOutbox: {}, tags: {}, noticeIgnores: {}, loading: false, servers: [] });
+  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, integrationApprovals: {}, whatsappOutbox: {}, tags: {}, noticeIgnores: {}, loading: false, servers: [] });
 }

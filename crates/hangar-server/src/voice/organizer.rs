@@ -578,9 +578,15 @@ pub fn thread_config(config: &Value, effort: &str, hangar: Option<&Value>) -> Va
 }
 
 const HANGAR_MCP_NOTE: &str = "\n\nO MCP hangar também é seu, inteiro, depois das suas ferramentas e junto do hangar_api: who_am_i, sessions (sessões desta máquina), send (recado \
-    assinado [de: voz]), new_session, group, pair, unpair, browser_open, browser, browser_batch e html_render. Você não é sessão: \
+    assinado [de: voz]), new_session, group, pair, unpair, browser_open, browser, browser_batch, html_render, integrations_list, \
+    integration_tools e integration_call. Você não é sessão: \
     em group, pair, unpair, browser* e html_render passe sessao com o nome da sessão em nome de quem agir (em pair, sessao e alvo \
-    são as duas). Fechar sessão é sempre pelo seu close_session, com o sim falado.";
+    são as duas). Fechar sessão é sempre pelo seu close_session, com o sim falado. \
+    Integrações MCP externas: ao agir no escopo de um projeto, passe `session` em integrations_list, integration_tools e integration_call. \
+    integrations_list lista integrações habilitadas e elegíveis (sem `session`, limita-se apenas às integrações globais; verifique `status` e eventual `last_warning` de cada item antes de afirmar que está conectada); integration_tools lista ferramentas \
+    de uma integração (indicando leitura ou escrita); integration_call chama uma ferramenta da integração. Leituras rodam direto; se uma escrita devolver voice_confirmation_required, NUNCA \
+    confirme sozinha — resuma claramente em voz a integração, ferramenta e argumentos principais, peça o sim falado do dono e \
+    só então repita integration_call com confirmed: true (mesmo princípio de close_session).";
 
 /// O que o organizador faz agora; só vai à tela, nunca ao diário.
 #[derive(Clone, PartialEq, Debug)]
@@ -3625,6 +3631,32 @@ mod tests {
         assert!(!without["developerInstructions"].as_str().unwrap().contains("MCP"), "sem a entrada, nada de prometer o MCP");
         // Conta sem o hangar registrado: a entrada da voz basta.
         assert_eq!(thread_config(&json!({}), DEFAULT_EFFORT, Some(&entry))["mcp_servers"]["hangar"], expected);
+    }
+
+    #[test]
+    fn hangar_mcp_note_covers_integrations_and_spoken_confirmation() {
+        for required in [
+            "integrations_list",
+            "integration_tools",
+            "integration_call",
+            "session",
+            "voice_confirmation_required",
+            "confirmed: true",
+            "sim falado",
+        ] {
+            assert!(HANGAR_MCP_NOTE.contains(required), "faltou {required} em HANGAR_MCP_NOTE");
+        }
+        assert!(HANGAR_MCP_NOTE.contains("habilitadas e elegíveis") && HANGAR_MCP_NOTE.contains("status"));
+        assert!(!HANGAR_MCP_NOTE.contains("conectadas e elegíveis"));
+        assert!(HANGAR_MCP_NOTE.contains("NUNCA confirme sozinha") && HANGAR_MCP_NOTE.contains("close_session"));
+
+        let entry = json!({"enabled": true, "url": "http://127.0.0.1:8765/mcp/"});
+        let with = organizer_start(&json!({}), Path::new("/o"), None, "", &ModeModel::default(), tools(), "", Some(&entry));
+        let developer = with["developerInstructions"].as_str().unwrap();
+        assert!(developer.contains("integrations_list") && developer.contains("integration_call") && developer.contains("confirmed: true"));
+
+        let without = organizer_start(&json!({}), Path::new("/o"), None, "", &ModeModel::default(), tools(), "", None);
+        assert!(!without["developerInstructions"].as_str().unwrap().contains("integrations_list"));
     }
 
     #[test]

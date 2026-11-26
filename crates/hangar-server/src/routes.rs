@@ -153,6 +153,8 @@ pub struct AppState {
     pub vault: Arc<crate::vault::Vault>,
     /// Pedidos do cofre (aprovação e cadastro) na memória; o `hub` publica o evento `vault` deles.
     pub vault_requests: Arc<crate::vault::requests::Requests>,
+    /// Integrações MCP externas (catálogo, segredos isolados, OAuth e fila de aprovações).
+    pub integrations: Arc<crate::integrations::IntegrationsService>,
     /// Cadeado das mudanças em plugins do Claude e o último `check` bem-sucedido.
     pub claude_plugins: Arc<crate::plugins::Service>,
     /// Host dos conectores (`hangar-connectors`): catálogo em `~/.hangar/connectors.json`, processos sob demanda.
@@ -299,6 +301,7 @@ impl AppState {
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone(), mission.clone());
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
+        let integrations = Arc::new(crate::integrations::IntegrationsService::system(&hangar_dir));
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
         AppState { scheduled_tasks: Arc::default(), desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), local_commands: Arc::new(crate::auxiliary::NativeCommands(accounts.env.clone())), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env().with_connect_route()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
@@ -327,7 +330,8 @@ impl AppState {
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
             diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
             vault: Arc::new(crate::vault::Vault::system()),
-            hub: Arc::new(crate::list::hub::ListHub::with_vault(vault_requests.feed())),
+            hub: Arc::new(crate::list::hub::ListHub::with_feeds(vault_requests.feed(), integrations.approvals.feed())),
+            integrations,
             vault_requests,
             claude_plugins: Arc::default(),
             connectors,
@@ -406,8 +410,11 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
         false
     });
     let plugin = crate::plugin_listener::bind(&listener).await?;
-    state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
-    state.connect_previews.reserve([listener.local_addr()?.port()].into_iter()
+    let local_addr = listener.local_addr()?;
+    // Guarda a porta real vinculada (mesmo quando cfg.listen usa :0) para o callback OAuth.
+    state.integrations.set_local_port(local_addr.port());
+    state.voice.set_self(local_addr, &state.cfg.auth_token);
+    state.connect_previews.reserve([local_addr.port()].into_iter()
         .chain(plugin.as_ref().and_then(|plugin| plugin.local_addr().ok()).map(|addr| addr.port()))
         .chain([guest, state.front, state.connect, state.preview].into_iter().flatten().map(|addr| addr.port())));
     let public_v6 = state.public_v6.take();
@@ -527,6 +534,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
             }
         } => result,
     };
+    state.integrations.shutdown().await;
     result
 }
 
@@ -1141,6 +1149,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/vault/recovery", axum::routing::post(crate::vault::http::recovery).options(pass_any))
         .route("/api/vault/restore", axum::routing::post(crate::vault::http::restore).options(pass_any))
         .route("/api/vault/backup/{server_id}", get(crate::vault::http::backup_copy).put(crate::vault::http::backup_copy).options(pass_any))
+        // Integrações MCP externas: catálogo, configuração, OAuth e aprovações.
+        .merge(crate::integrations::http::router(state.clone()))
         // Relatório de diagnóstico: só o dono; o preflight do CORS cai no caminho sem rota.
         .route("/api/diag/report", axum::routing::post(crate::diag_report::report_route).options(pass_any))
         // SideStore no iPhone/iPad do cabo: só o dono, nunca repassado (a senha da Apple ID não vai ao Python).

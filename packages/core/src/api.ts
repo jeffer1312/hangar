@@ -460,6 +460,11 @@ export function pluginsFetchForServer<T>(s: Server, path: string, init?: Request
   return apiFetchForServer<T>(s, path, init, timeoutMs);
 }
 
+/** Rotas das integrações MCP (`integrations.ts`): o mesmo pedido de `apiFetchForServer`. */
+export function integrationsFetchForServer<T>(s: Server, path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+  return apiFetchForServer<T>(s, path, init, timeoutMs);
+}
+
 export { recentFailures, type RecentFailure };
 
 /** Teto do texto da pessoa no relatório; acima disso o servidor responde 422. */
