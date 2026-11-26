@@ -209,9 +209,21 @@ impl Hangar {
             // Como na conversa aberta: só troca a nota que a prévia já mostra.
             ChatUpdate::NoticeUpdate(event)=>{if self.chat.events.iter().any(|known|known.id==event.id) {self.chat.apply(event);}}
             ChatUpdate::Preview(preview)=>{self.chat.update_preview(preview);self.visible_preview=self.chat.preview.clone();}
-            ChatUpdate::State(state)=>{self.chat.update_state(state);if self.chat.ask.is_none() {self.ask_form=AskForm::default();}}
+            ChatUpdate::State(state)=>{
+                // Sem o cronômetro da conversa aberta: o que o registro não cobriu sai com o fim do turno (pedido de
+                // permissão não é fim: o registro ainda vem).
+                if !matches!(state.state.as_str(),"working"|"awaiting_input") {
+                    self.chat.live_thinking.clear();
+                    self.chat.drop_unawaited_preview();
+                }
+                self.chat.update_state(state);if self.chat.ask.is_none() {self.ask_form=AskForm::default();}
+            }
             ChatUpdate::Question(ask)=>{if self.chat.update_ask(ask) {self.ask_form=AskForm::default();}}
-            ChatUpdate::Thinking(text)=>{self.chat.update_live_thinking(text);}
+            ChatUpdate::Thinking(text)=>{
+                self.chat.update_live_thinking(text);
+                // Quadro que chega depois do fim do turno não tem outro estado para tirá-lo.
+                if !matches!(self.chat.state.state.as_str(),"working"|"awaiting_input") {self.chat.live_thinking.clear();}
+            }
             ChatUpdate::LiveTool(tool)=>{if let Some(tool)=tool {self.chat.update_live_tool(tool);} else {self.chat.live_tool=None;}}
             ChatUpdate::CommandOutput(output)=>self.chat.command_output=output,
             ChatUpdate::Reset=>{},

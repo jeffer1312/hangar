@@ -3081,12 +3081,9 @@ impl Hangar {
             }
             ChatUpdate::Question(ask) => if self.chat.update_ask(ask) { self.ask_form = AskForm::default(); },
             ChatUpdate::Thinking(text) => {
-                // Vazio é o bloco fechado: o registro chega pelo transcript; esperar deixava o primeiro pedaço preso na tela.
-                if text.is_empty() {
-                    self.chat.live_thinking.clear();
-                    self.live_clear_epoch[Live::Thinking as usize] += 1;
-                }
-                else if self.chat.update_live_thinking(text) { self.live_clear_epoch[Live::Thinking as usize] += 1; }
+                if self.chat.update_live_thinking(text) { self.live_clear_epoch[Live::Thinking as usize] += 1; }
+                // Quadro que chega depois da parada não tem outro estado para tirá-lo.
+                if self.chat.state.state != "working" { self.defer_live_clear(Live::Thinking, cx); }
             }
             ChatUpdate::LiveTool(tool) => match tool {
                 Some(tool) => if self.chat.update_live_tool(tool) { self.live_clear_epoch[Live::Tool as usize] += 1; },
@@ -4436,6 +4433,10 @@ impl Hangar {
         let heir = self.row_ids[patch.remove.clone()].iter().any(|id| id == PREVIEW).then(|| {
             patch.insert.clone().rev().find(|&i| kind_of(&self.conversation.items, from + i, events) == Some("assistant_msg")).map(|i| ids[i].clone())
         }).flatten().filter(|id| !self.rich.contains_key(id));
+        // O pensamento gravado toma o lugar do ao vivo: aparece direto, sem entrar de novo.
+        let thought = self.row_ids[patch.remove.clone()].iter().any(|id| id == LIVE_THINKING).then(|| {
+            patch.insert.clone().find(|&i| matches!(self.conversation.items.get(from + i), Some(Item::Thinking { .. }))).map(|i| ids[i].clone())
+        }).flatten();
         let mut old_parts = HashSet::new();
         if rebuilt.is_some() {
             for assets in self.row_assets.drain(from..) {
@@ -4478,7 +4479,7 @@ impl Hangar {
         if entering {
             let now = Instant::now();
             for (n, id) in ids[patch.insert.clone()].iter().enumerate() {
-                if id == WORKING || Some(id) == heir.as_ref() { continue; }
+                if id == WORKING || Some(id) == heir.as_ref() || Some(id) == thought.as_ref() { continue; }
                 self.arrived.insert(id.clone(), now);
                 // A que toma o lugar de uma linha que saiu já tem o espaço; as demais abrem a altura junto com o fade.
                 if n >= taken { self.row_opens(id, cx); }
