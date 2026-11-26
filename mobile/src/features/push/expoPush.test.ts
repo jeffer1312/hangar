@@ -33,6 +33,7 @@ vi.mock('../../paraglide/runtime', () => ({ getLocale: () => 'pt' }));
 vi.mock('../../stores/servers', () => ({ useServers: vi.fn() }));
 
 import { handleNotificationResponse, installNotificationHandler, openFromNotification, pushRegistrationKey, registerExpoPush, retryExpoPushIfDenied } from './expoPush';
+import { openWhatsAppDraft, useWhatsAppTarget } from '../whatsapp/target';
 
 const casa = { id: 'casa', label: 'Casa', baseUrl: 'https://casa.test', token: 't1' };
 const work = { id: 'work', label: 'Trabalho', baseUrl: 'https://work.test', token: 't2' };
@@ -117,6 +118,21 @@ describe('openFromNotification', () => {
 
   it('servidor fora da lista do aparelho abre a lista', () => {
     openFromNotification({ server: 'outro', session: 'x' }, [casa]);
+    expect(h.push).toHaveBeenCalledWith('/');
+  });
+
+  it('rascunho de WhatsApp abre a folha dele na lista', () => {
+    openWhatsAppDraft(null);
+    openFromNotification({ server_id: 'casa', whatsapp_draft_id: 'd1' }, [casa]);
+    expect(useWhatsAppTarget.getState().target).toEqual({ serverId: 'casa', draftId: 'd1' });
+    expect(h.push).toHaveBeenCalledWith('/');
+    openWhatsAppDraft(null);
+  });
+
+  it('rascunho de máquina fora da lista do aparelho não abre folha', () => {
+    openWhatsAppDraft(null);
+    openFromNotification({ server_id: 'outro', whatsapp_draft_id: 'd1' }, [casa]);
+    expect(useWhatsAppTarget.getState().target).toBeNull();
     expect(h.push).toHaveBeenCalledWith('/');
   });
 });

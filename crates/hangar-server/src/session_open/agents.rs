@@ -114,12 +114,8 @@ pub fn pane(spec: &SessionSpec, conversation: Conversation, ctx: &AgentContext) 
         .then(|| hangar_antigravity::env::process_env(&agy_account(&spec.account), ctx.server_env.keys().cloned()));
     if let Some(agy) = &agy_env {
         command.extend(agy_mode_args(spec.permission_mode));
-        // `env -u` tira do pane o que o servidor tmux herdou; o psmux não tem `env` (Windows fora, por ora).
-        if !ctx.windows {
-            let mut prefixed = agy.env_prefix();
-            prefixed.append(&mut command);
-            command = prefixed;
-        }
+        // `env -u` tira do pane o que o servidor tmux herdou (Windows fora, por ora).
+        command = agy.command(ctx.windows, command);
     }
     if let Some(prefix) = ctx.read_only {
         command = super::terminal::sandboxed(prefix, &command, ctx.windows);

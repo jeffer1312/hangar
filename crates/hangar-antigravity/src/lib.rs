@@ -9,6 +9,7 @@ pub mod login;
 pub mod paths;
 pub mod probe;
 pub mod settings;
+pub mod terms;
 pub mod usage;
 pub mod version;
 

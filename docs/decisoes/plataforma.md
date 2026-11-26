@@ -28,7 +28,7 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   dono só entre os pids candidatos, nunca em todos os processos da máquina. No Linux lê
   `/proc/net/tcp{,6}` e os fds dos candidatos; no Windows usa `GetExtendedTcpTable` dentro do
   processo. Vale só endereço de loopback ou "qualquer" (`0.0.0.0`, `::`), que é o que o túnel
-  alcança, e v4 e v6 da mesma porta viram uma entrada. Quem dá a porta à sessão é `list/ports.rs`,
+  alcança, e v4 e v6 da mesma porta viram uma entrada na lista, guardando cada endereço para o túnel. Quem dá a porta à sessão é `list/ports.rs`,
   nesta ordem:
   - o escopo systemd próprio da sessão (`tmux-spawn-*.scope` do pane, `run-*.scope` do cano), que
     pega o `nohup … &` adotado pelo init;
@@ -44,7 +44,8 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   de outro) sai com `shared: true`, e a tela avisa "Outra coisa também escuta nessa porta": o
   `localhost:N` pode cair no outro. O T3 apaga essa linha; aqui ela fica, porque é da sessão. A leitura é reaproveitada pelos mesmos candidatos dentro do prazo do cache
   de processos, para o tique e um `GET` simultâneo lerem uma vez só. Leitura que falha registra
-  `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`. Esse código
+  `session_ports_unavailable` no log, uma vez por queda, e a linha sai sem `ports`; o mapa do túnel
+  (abaixo) é esvaziado, e a linha diz quantas portas ele desviava. Esse código
   está em `DIAGNOSTIC` e nunca chega à tela. A linha do convidado (convite e login) sai sem `ports`:
   o túnel não atende convidado.
 - **B2, macOS vazio.** No macOS a lista de portas volta vazia. Ler por `libproc` exige conferir o
@@ -55,14 +56,34 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   (`runtime/process.rs`), numa unidade `run-*.scope` só dele. O servidor que perdeu o pai aparece
   também em sessão sem terminal. Sem `systemd-run` ou fora do Linux, sobra a descendência do
   `cano.pid`, e o processo adotado pelo init some da lista.
-- **Túnel.** `GET /api/port-tunnel?port=N` com upgrade WebSocket. Cada WebSocket é uma conexão TCP
-  com `127.0.0.1:N` (ou `[::1]:N`) desta máquina, com bytes crus nos dois sentidos
-  (`hangar-port-tunnel`). Respostas antes do upgrade:
+- **Túnel.** `GET /api/port-tunnel?port=N[&host=127.0.0.1|::1]` com upgrade WebSocket. Cada WebSocket é
+  uma conexão TCP com o loopback desta máquina, com bytes crus nos dois sentidos (`hangar-port-tunnel`).
+  - Com `host` (a página pediu um IP: `http://[::1]:5173`), disca só ele, sem tentar a outra família. O
+    SOCKS do nativo manda `host` só para IP explícito; nome, `0.0.0.0` e `::` vão sem ele. Servidor
+    antigo ignora o parâmetro, e cliente antigo não o manda.
+  - Sem `host`, disca primeiro o loopback que chega ao processo da sessão, depois `127.0.0.1` e
+    `[::1]`. A lista guarda o endereço de cada socket e, por porta da sessão, calcula esse loopback
+    (`owners::dial_first`): o endereço exato vence o "qualquer" da mesma família, e o `::` só recebe
+    IPv4 sem socket IPv4 na porta. Na DELPHI-02 um `portproxy` em `127.0.0.1:3000` tapava o Next em
+    `0.0.0.0:3000`: o túnel caía no proxy. Com o Next no `::`, o túnel disca `[::1]`; só em `0.0.0.0`,
+    disca `127.0.0.2`, que o `0.0.0.0` recebe e o `127.0.0.1` de fora não. Porta de duas sessões fica
+    com a primeira, em ordem de nome, que a alcança sozinha, também quando é pelo `127.0.0.1` de sempre:
+    sem isso, a sessão seguinte no `0.0.0.0` desviava a porta para o processo dela. A rota lê o mapa da
+    última rodada da lista, sem varrer sockets por conexão. O mapa leva a hora da rodada e deixa de valer
+    depois de quatro tiques (6 s) sem rodada nova: a lista fechada para o produtor sem limpá-lo, e o
+    túnel volta à ordem de sempre. O mapa vencido registra `session_port_map_stale` no log, uma vez até a
+    rodada seguinte; o código está em `DIAGNOSTIC` e nunca chega à tela.
+    Porta da sessão em que nenhum loopback chega só a ela (outro processo no mesmo `0.0.0.0`) fica na
+    ordem de sempre e registra `session_port_unreached` no log, uma vez até a porta sair desse estado;
+    o código está em `DIAGNOSTIC` e nunca chega à tela.
+
+  Respostas antes do upgrade:
 
   | Caso | Resposta |
   |---|---|
   | Nada escutando | 502 `port_tunnel_refused` |
   | Porta do Hangar (`connect_previews.refused`) ou fora de 1..65535 | 422 `port_tunnel_port_refused` |
+  | `host` que não é `127.0.0.1` nem `::1` | 422 `port_tunnel_host_refused` |
   | Sem `?token=` nem Bearer | 403 `port_tunnel_token_required` |
 
   Toda recusa leva o código também no cabeçalho `x-hangar-tunnel`, e os clientes classificam por ele,
@@ -170,9 +191,23 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   não foi feita. Se cair, a correção é na configuração do Connect, nunca religar escondido.
 - **Navegador emprestado (canal anfitrião).** O app desktop abre `GET /api/browser-host`
   (WebSocket) no servidor da sessão, pela rota que já usa, com a mesma regra de credencial do túnel.
-  Ele manda `{"type":"focus","session":…}` ao mostrar uma sessão. O CLI e o MCP sem app local
+  Ele manda `{"type":"focus","session":…,"caps":["fill_secret"]}` ao mostrar uma sessão; `caps` diz o que
+  essa versão do app sabe fazer além dos verbos de sempre. O CLI e o MCP sem app local
   mandam o verbo por `POST /api/sessions/{name}/browser-cmd`, e o servidor o repassa ao app com o
   foco mais recente naquela sessão (`hangar-browser-host`).
+  - O verbo `host` (só a pergunta do CLI) responde a hora do último `seen` (clique ou tecla no app de
+    lá) e, sem `seen`, `ok: host 0` quando um app ligado tem a sessão em foco. O `seen` só sai do
+    uso e só vive na memória do servidor: reiniciado o servidor, ou só com a sessão na tela, a
+    pergunta ficava sem resposta. Com o app de lá já desligado a hora segue, como `ok: host <ms> detached`:
+    ela ainda vence o foco do app daqui vivo, e o verbo recusa em vez de cair no navegador daqui.
+  - App daqui caído (`_srv.json` presente com o pid sem processo) e outro app ligado com a sessão em
+    foco: o CLI e o MCP usam o de lá, sem olhar o `_focus.json` que o caído deixou. Ninguém ligado
+    lá: fica a recusa "o app daqui está reiniciando". O `seen` de um app que desligou não conta aqui:
+    ele fica depois do desligamento, e a recusa passava a ser "o app de lá não está mais ligado". Com o app daqui vivo nada muda, porque a hora 0 perde para
+    qualquer foco gravado. O MCP confere o pid também no Windows (`terminal_process::pid_alive`);
+    antes só o Linux via o pid morto. Registro sem pid (ou com pid que o sistema não responde) não
+    decide, no CLI e no MCP: o verbo fica no app daqui. O CLI tratava a falta de pid como morte e
+    mandava o verbo à outra máquina.
 
   | Caso | Resposta |
   |---|---|
@@ -180,7 +215,9 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
   | App recusou o servidor (o atual nunca manda) | 403 `browser_host_not_allowed` |
   | Canal caiu com o pedido em curso | 502 `browser_host_gone`, "pode ter sido executado" |
   | Prazo (`deadline_ms`, padrão 45 s, teto 10 min) | 504 `browser_host_timeout` |
-  | `objetivo` e `confere` | 422 `browser_host_verb_unsupported` |
+  | `objetivo` e `confere` como verbo | 422 `browser_host_verb_unsupported` |
+  | `fill-secret`, ou qualquer corpo com `valor` | 422 `browser_host_secret_refused` |
+  | `Registry::fill_secret` para app sem `fill_secret` no `caps` (versão antiga) | 409 `browser_host_app_outdated`, "atualize o app desktop" |
 
   O print chega como binário e é gravado pelo servidor na máquina da sessão
   (`~/.hangar/nav/shots/<sessão>/`), para o caminho que o agente cita valer lá. O canal tem o mesmo
@@ -188,8 +225,55 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
 - **Lado do app e do CLI.** O nativo abre um canal anfitrião por servidor remoto do dono quando
   mostra uma sessão dele, e religa com espera de 1 s até 30 s. Sem app local, o `hangar-preview`
   manda o verbo por `browser-cmd`, com prazo de 20 s no `open`, 110 s no `login` (120 s pelas tools do MCP) e 45 s nos outros.
-  As tools MCP `browser_*` usam a mesma rota dentro do processo. `objetivo`, `confere` e
-  `vault_fill` não existem por anfitrião remoto.
+  No app, cada verbo tem teto próprio (20 s; `wait`, o `--timeout` dele mais 2 s; nunca além do que sobra do
+  `deadline_ms` menos uma folga): chamada CDP presa solta a vez com `erro: … (preso em <método>)` e grava `nav: verb_stuck` no
+  `native.log`. Tamanho e escala que o painel pede e falham também vão ao `native.log`.
+  - O `deadline_ms` conta da chegada do pedido ao app (canal anfitrião e `/cmd` local), não da vez do verbo. O
+    verbo que pega a vez com ele vencido responde `erro: <verbo> não começou: o prazo de quem pediu venceu na fila`
+    sem tocar a página: quem pediu já desistiu, e a ação feita depois disso ninguém confere.
+  - `goto`, `back` e `reload` não ganham os 20 s: ficam com o limite que já tinham (a espera do carregamento,
+    15 s depois da navegação) e só o `deadline_ms` os corta. Página lenta para abrir não é página presa.
+  - Clique cortado depois do `mousePressed` manda o `mouseReleased` no mesmo ponto, sem esperar resposta além de
+    500 ms: senão o verbo seguinte começaria com o botão apertado. `press` cortado depois do `keyDown` manda o
+    `keyUp` da mesma tecla, do mesmo jeito.
+  - `type`, `fill` e `press` cortados depois de o texto ou a tecla irem à página respondem
+    `erro: <verbo> não confirmou em N ms; o texto pode ter sido aplicado` (`a tecla pode ter sido aplicada`),
+    nunca "não respondeu": o agente não pode repetir achando que nada entrou.
+  - `fill-secret` cortado depois de o valor ir à página responde `erro: erro_cofre_incerto: fill-secret não
+    confirmou em N ms; o valor pode ter sido digitado`, nunca uma falha limpa, e o valor não aparece. O
+    `vault_fill` repete esse texto como veio, e trata do mesmo jeito o 504 e o 502 do canal com o quadro já
+    enviado e a resposta do app que não é texto.
+  As tools MCP `browser_*` usam a mesma rota dentro do processo.
+  - `objetivo` e `confere` (CLI e `browser_goal`/`browser_check`) rodam pelo laço do CLI com os
+    verbos de sempre, um a um, pela `browser-cmd`; o print do Jev é o `shot` com caminho absoluto,
+    gravado pelo servidor nesta máquina, onde o CLI o lê. Os dois nomes nunca vão ao canal.
+  - `vault_fill` com a sessão no app de outra máquina: o servidor da sessão lê a página pelo verbo
+    `url` do canal, pede a senha como sempre (cartão na máquina dona do cofre) e manda o valor por
+    `Registry::fill_secret`, dentro do processo, com o domínio aprovado (`expected_host`). O valor
+    vai só no quadro ao app, zerado depois do envio, fora do pedido em curso, do estado e do `list`;
+    a rota recusa o verbo e o campo. O app tira o `valor` do pedido antes de tudo e o controlador
+    confere, na vez do verbo e antes do clique, que a página ainda é desse domínio
+    (`erro_cofre_dominio_diferente`), e confere de novo na mesma chamada que digita: o valor entra por
+    `document.execCommand('insertText')` num `Runtime.callFunctionOn` sobre o próprio campo, que antes compara
+    o `location` do documento dele com o domínio aprovado e o foco no campo. O `Input.insertText` digitava no
+    que tivesse foco no momento, e uma navegação entre a conferência e a digitação levava o valor ao campo de
+    outra página. Os dois hosts são comparados em minúsculas e sem ponto final. Antes de digitar, a mesma chamada
+    apaga o campo: `select()` quando ele cobre o campo todo; senão o setter nativo de `value` (input e textarea)
+    ou a seleção do conteúdo por `Range` (contenteditable); sem conseguir apagar, recusa com `recusado: campo não
+    suportado` sem digitar. Depois relê o campo (`value` ou `textContent`): input controlado que desfaz,
+    `maxlength` que corta ou `beforeinput` que barra deixam outro valor, e a resposta é
+    `erro_cofre_incerto: o campo não ficou com o valor`, sem o valor nem o tamanho. As recusas dizem que o valor não
+    foi digitado; a máscara da senha continua registrada antes da chamada. O `Fetch` (segurar a navegação durante o preenchimento) ficou de fora: pedia assinar
+    `Fetch.requestPaused` nos dois motores e soltar as navegações presas em todo corte de teto; a chamada única
+    vale igual no Chromium do Linux e no WebView2, que já usam o `callFunctionOn`. Limites: o host comparado é
+    o do documento do campo, então campo em iframe de outro domínio é recusado; navegação dentro do mesmo
+    documento (`history.pushState`) mantém o host e não é barrada. Decidido pelo dono: o canal em http na rede local também
+    serve, como qualquer rota do dono.
+  - App de antes do `fill-secret` pelo canal não anuncia `fill_secret` no `caps`: tomaria o verbo por
+    desconhecido com o valor já recebido. O `vault_fill` confere o app escolhido
+    (`Registry::can_fill_secret`) antes de ler o cofre, sem cartão de aprovação à toa, e diz para
+    atualizar o app desktop; o `Registry::fill_secret` ainda recusa antes de montar o quadro. O valor
+    entra no quadro pelo `serde_json::to_writer` num buffer reservado para o pior escape, sem crescer.
 - **D1, decidida em 23/11: sem cartão nem pergunta.** O app serve sozinho as sessões das máquinas
   do dono (entrada de servidor que não é convite nem par externo); convite e par externo nunca
   ganham o canal. O túnel existe para o notebook alcançar o `localhost` da máquina da sessão, e
@@ -223,7 +307,7 @@ dele foi lido (github.com/pingdotgg/t3code, `main` em `99041246`); a comparaçã
 A página "WhatsApp" das Configurações (nativo e Expo) liga um arquivador só de leitura do WhatsApp
 do usuário, e as sessões leem pelas ferramentas MCP `whatsapp_chats`, `whatsapp_read`,
 `whatsapp_search` e `whatsapp_request_media` e pela skill `whatsapp`. Nada é enviado em nome
-dele. O crate `hangar-whatsapp` instala, liga e conversa com o serviço; o servidor só monta o
+dele (substituído em 24/11 pelo [envio por rascunho aprovado](#whatsapp-envio-por-rascunho-aprovado-24112026)). O crate `hangar-whatsapp` instala, liga e conversa com o serviço; o servidor só monta o
 router `/api/whatsapp*`.
 
 Decisões do usuário (22/11):
@@ -238,7 +322,8 @@ Decisões do usuário (22/11):
   erro, caminho nem unit. O Hangar instala a release mais nova da mesma versão maior e recusa
   binário com `api` menor que `MIN_API`. O `binaries.rs` do Connect (frpc/Caddy) é uma terceira
   cópia e ficou para depois.
-- **Só leitura.** O binário só chama `SendMediaRetryReceipt` (pedido de mídia antiga ao celular) e
+- **Só leitura** (substituído pelo [envio por rascunho aprovado](#whatsapp-envio-por-rascunho-aprovado-24112026):
+  a lista fechada passou a permitir o envio só no arquivo de saída). O binário só chama `SendMediaRetryReceipt` (pedido de mídia antiga ao celular) e
   os recibos automáticos do whatsmeow. Um teste de lista fechada das chamadas `Send*` barra
   qualquer outra. Os recibos automáticos são os de entrega, que o celular já manda pelos mesmos
   aparelhos; recibo de leitura não sai. "Só leitura" é nenhuma mensagem enviada. As leituras usam um pool só de leitura, separado do escritor, com prazo de 5 s
@@ -287,6 +372,95 @@ das chaves rodando (`--import` só com destino vazio e serviço parado; o `sessa
 de pareamento (`pair_timeout`, `logged_out`, `outdated`); tetos de mídia e de resposta; leitura
 separada da escrita; erro no formato da casa (`hangar_core::http::detail`, códigos `whatsapp_`);
 e os nomes reais do código do CLIProxy na extração.
+
+## WhatsApp: envio por rascunho aprovado (24/11/2026)
+
+Uma sessão do Hangar passa a mandar texto e arquivo pelo WhatsApp do dono, para uma conversa ou um
+grupo, sem controlar a tela do PC nem o celular. O modelo só cria rascunho, pela ferramenta MCP
+`whatsapp_draft`; a mensagem sai quando o dono toca em "Enviar" no cartão do desktop nativo ou do
+Expo. Volume baixo, sempre manual. O caso que motivou: um zip com texto para um grupo.
+
+Requisitos (pedido do usuário em 24/11/2026, salvo a fonte indicada):
+
+- **R1. O modelo nunca envia sozinho.** Só cria rascunho (conversa, texto, anexo).
+- **R2. O rascunho aparece no app com o texto exato** e só sai pelo "Enviar" de lá.
+- **R3. Aprovação no desktop e no celular.** Limite aceito, o mesmo do
+  [cofre](#cofre-de-senhas-uma-máquina-dona-chave-no-chaveiro-uso-aprovado-por-senha-30102026):
+  segura o uso normal e o modelo enganado por texto de terceiros, não um agente decidido a burlar. O
+  agente roda com o mesmo usuário do sistema e lê o token de dono no `.env` e o `control.key` do
+  binário; com eles chama as rotas de aprovação ou o serviço direto. O token é exigido também no
+  `127.0.0.1` (`hangar-core/src/auth.rs`: o loopback só fica fora do bloqueio por tentativas).
+- **R4. Sem flood.** Teto por minuto e por dia, rascunho que expira, registro do que saiu.
+- **R5. Baixo risco de ban.** Volume baixo, nada a contato novo, sem reenvio depois de trava. Pesquisa
+  de 24/11: o risco dominante em 2026 é a primeira mensagem a quem nunca falou com a conta (erro 463,
+  https://github.com/tulir/whatsmeow/issues/1197), e insistir depois do 463 vira ban
+  (https://github.com/WhiskeySockets/Baileys/issues/2707).
+- **R6. Camada barata a mais no Claude Code.** O hook `guard-tmux` (`provider_hooks.rs`, como o caso
+  `vault-files`) nega leitura de `~/.hangar/whatsapp/control.key` e do `.env` do Hangar e o comando
+  com `/api/whatsapp/outbox/` e `/send` ou `/decline`. O desenho aceito cobre o Claude Code.
+- **R7. Lido e "online" continuam fora.** `MarkRead`, `SendPresence` e `SubscribePresence` seguem
+  proibidos pela lista fechada do binário. A única presença que sai é `SendChatPresence` ("digitando"
+  e "pausado") na própria conversa, logo antes do envio aprovado.
+- **R8. O cartão não engana.** Lição do ataque da Invariant
+  (https://invariantlabs.ai/blog/whatsapp-mcp-exploited): texto inteiro com rolagem e caracteres
+  invisíveis à mostra, destino pelo número ou JID com a origem do nome (agenda, escolhido pela
+  pessoa, grupo), as 3 últimas mensagens da conversa, a mensagem citada, anexo com nome, tamanho e
+  caminho real (destacado quando fora da pasta da sessão), sessão que pediu e tempo restante.
+
+Decisões:
+
+- **O binário é o último ponto antes do WhatsApp.** Tetos, expiração, contato novo, filtro de anexo e
+  registro moram no `hangar-whatsapp` (api 2, tabela `outbox` no `messages.db`), e valem também
+  para quem chamar o serviço direto com o `control.key`. Contrato C5 em `docs/api.md` do binário.
+- **Tetos.** Envio: 3 por minuto e 20 por dia, contados numa transação só com a troca de `pending`
+  para `sending` (dois "Enviar" ao mesmo tempo não passam do teto nem enviam duas vezes; o segundo
+  recebe `answered`). Criação: 3 rascunhos abertos por origem e 10 no total (`too_many_drafts`).
+  Rascunho expira 10 min depois de criado. Rascunho igual a um pendente (origem, conversa, texto e
+  anexo) devolve o mesmo, sem criar outro.
+- **Contato novo é recusado.** Cada mensagem guarda o número que a recebeu; conversa sem nenhuma mensagem
+  recebida pelo número pareado agora dá `new_contact`, na criação e de novo no "Enviar" (rascunho
+  aprovado depois de parear outro número fica pendente até expirar, com a frase no cartão); conversa fora
+  do arquivo, `unknown_chat`; lista de transmissão e canal, `unsupported_chat`. Grupo é aceito.
+- **Trava 463/475 sem reenvio.** Qualquer falha deixa `failed`, sem nova tentativa; 463 e 475 ficam
+  com `reachout_locked`. O evento `NotifyAccountReachoutTimelock` grava até quando a conta está
+  travada e recusa todo envio até lá. Envio interrompido por queda do binário vira `failed`
+  (`interrupted`) na subida, nunca reenviado.
+- **Anexo.** Caminho absoluto, até 100 MB, aberto sem seguir link e copiado para a pasta do rascunho
+  com sha256. Recusado (`file_refused`): a pasta de dados do binário, `~/.hangar` (menos
+  `~/.hangar/worktrees/`, onde ficam as worktrees das sessões), `~/.ssh`,
+  `~/.gnupg`, `~/.config`, `~/.claude*`, qualquer pasta oculta no caminho, `.env*`, `*.key`, `*.pem`, `/proc`, `/sys`, `/dev`, link
+  simbólico no último trecho e o que não for arquivo comum.
+
+Do lado do Hangar (C6):
+
+- **Tool `whatsapp_draft(chat, text, file?, reply_to?)`.** Recusa em sessão compartilhada
+  (`whatsapp_shared_session`, a mesma conferência das leituras) e em sessão sem o prazo de 660 s,
+  como `erro_cofre_sessao_sem_prazo`; binário com `api` menor que 2 dá `whatsapp_send_unsupported`.
+  A origem é `servidor::sessao` e a pasta da sessão que chama. Ela espera o rascunho chegar ao fim,
+  com prazo próprio de 570 s desde o início da chamada, abaixo do corte do cliente MCP (660 s no Claude,
+  600 s no mínimo aceito): sem ele, o modelo recebia o corte sem o `id` e podia criar outro rascunho para
+  uma mensagem já saindo. No prazo, rascunho ainda pendente é recusado (`expired`) e aprovado ainda
+  saindo devolve `sending`. Devolve `sent`, `declined`, `expired`, `failed` ou `sending`; erro depois
+  da criação leva o `id` e manda não criar outro rascunho. `failed` com `unconfirmed` diz que a mensagem pode ter saído.
+  Recusa e releitura depois do prazo terminam antes do menor corte aceito; sem resposta a tempo, diz
+  que a mensagem pode sair, como quando o dono responde no instante da recusa do prazo e a releitura falha.
+  Cancelada, recusa o rascunho no binário, inclusive o que nasce depois do cancelamento, com a criação
+  ainda correndo; já aprovado, avisa que pode sair. Binário desatualizado dá
+  `whatsapp_outdated`.
+- **Rotas do dono** `POST/GET /api/whatsapp/outbox`, `POST /api/whatsapp/outbox/{id}/send` e
+  `POST /api/whatsapp/outbox/{id}/decline`, repassadas ao binário com o prefixo `whatsapp_` nos
+  códigos, pelo mesmo `owner_only` das leituras.
+- **Evento `whatsapp_outbox`** na lista do dono, como o do cofre, com os rascunhos pendentes; fica em
+  `side.rs::owner_only` e não chega a convidado. Relido a cada criação ou resposta e a cada 30 s. Cada
+  rascunho leva `answer_by`, o menor entre a expiração e o prazo da chamada da tool (contado do começo
+  da chamada, antes da cópia do anexo, e guardado pela tool para o rascunho que ela criou; o de outra
+  vida conta da criação), menos uma folga, e os cartões contam até ele: o prazo mora só no servidor.
+- **Na subida do Hangar, todo rascunho pendente é recusado**: nenhuma tool espera por ele depois do
+  reinício.
+- **Push sem conteúdo.** "Rascunho de WhatsApp aguardando aprovação", sem nome, número nem texto,
+  porque passa pelo Expo e pelo Web Push; mesmo caminho do pedido do cofre.
+
+Fora: PWA Svelte, áudio, imagem com miniatura, prévia de link, lista de transmissão e canal.
 
 ## CLIProxyAPI instalado e configurado pelo Hangar (19/11/2026)
 
@@ -425,6 +599,10 @@ Decisões do usuário:
   Entrada tirada por fora do Hangar (`claude mcp remove`, edição) também fica fora, pela marca de
   "o Hangar já registrou"; só o `PUT` de ligar religa. A gravação da entrada é uma só, no
   `writer.rs` do crate, decidida sob a trava.
+- **Alvo do próprio Windows (26/11/2026).** No Windows nada criava alvo sozinho: o hcu era baixado
+  e o MCP nunca ligava sem a pessoa cadastrar "este computador". Agora, sem alvo e sem o Hangar ter
+  registrado nem a pessoa ter desligado, o registro cria `targets/windows-agent.json` (local, o
+  mesmo da tela) e liga com ele. Linux fora do Hyprland segue sem alvo: o agente local só roda lá.
 - **P4.** `POST /api/computer-control/install` responde 410 `erro_computer_control_update_app`
   ("Atualize o app: o Computer Use agora é instalado sozinho"); `PUT` com `mode: "local"`, 400 com
   o mesmo código. Nativo e web perderam o botão Instalar.

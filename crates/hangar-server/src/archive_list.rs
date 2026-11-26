@@ -677,7 +677,7 @@ fn tail_text(path: &Path, provider: AgentProvider) -> String {
             let events = if provider == AgentProvider::Claude {
                 match crate::transcript::decode_line(line) { Some(Value::Object(o)) => crate::transcript::parse_claude_object(&o), _ => continue }
             } else {
-                crate::archive_history::agent_line(provider, line)
+                crate::archive_history::agent_line(provider, Some(path), line)
             };
             if let Some(text) = last_message(events.iter().rev()) { return text; }
         }

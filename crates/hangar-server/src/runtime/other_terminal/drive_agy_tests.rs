@@ -108,6 +108,14 @@ async fn the_bypass_reopen_check_refuses_a_draft_and_presses_nothing() {
     }
 }
 
+/// A tarefa em segundo plano (`1 task(s)`) aparece entre linhas abaixo da caixa: lida como rascunho, a fila parava.
+#[test]
+fn a_background_task_panel_below_the_box_is_not_a_draft() {
+    assert_eq!(super::drive::agy_draft(&screen("background_task.txt")).as_deref(), Some(""));
+    assert_eq!(super::drive::agy_draft(&screen("background_task_draft.txt")).as_deref(), Some("arrumar o teste do login"));
+    assert_eq!(super::drive::agy_draft(&screen("draft.txt")).as_deref(), Some("arrumar o teste do login"));
+}
+
 /// Os Termos do Google: o Hangar só aperta as teclas da opção que a pessoa tocou, relendo a tela a cada uma.
 #[tokio::test(start_paused = true)]
 async fn the_terms_card_unchecks_the_data_box_and_presses_done_only_for_the_chosen_option() {

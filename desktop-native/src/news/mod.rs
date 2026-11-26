@@ -2,6 +2,7 @@
 
 mod account_tags;
 mod agent_fix;
+mod agy_terms;
 mod antigravity;
 mod auto_report;
 mod claude_notices;
@@ -45,6 +46,7 @@ mod reviews;
 mod tickets;
 mod work_review;
 mod whatsapp_readonly;
+mod whatsapp_draft;
 
 use std::{cell::Cell, time::{Duration, Instant}};
 use gpui_kit::*;
@@ -116,9 +118,11 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "conversa-nova" => Some(new_conversation::render),
         "galeria-da-conversa" => Some(conversation_gallery::render),
         "whatsapp-somente-leitura" => Some(whatsapp_readonly::render),
+        "whatsapp-draft" => Some(whatsapp_draft::render),
         "entrar-pelo-connect" => Some(connect_sign_in::render),
         "portas-da-sessao" => Some(session_ports::render),
         "antigravity" => Some(antigravity::render),
+        "termos-antigravity" => Some(agy_terms::render),
         _ => None,
     }
 }

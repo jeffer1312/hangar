@@ -42,6 +42,7 @@ vi.mock('../../theme/aplicarMaterial', () => ({ aplicarMaterial: () => {} }));
 vi.mock('../../features/voice/LiveVoiceRoot', () => ({ LiveVoiceRoot: () => null }));
 vi.mock('../../features/vault/VaultRequests', () => ({ VaultRequestSheet: () => null }));
 vi.mock('../../features/integrations/IntegrationRequests', () => ({ IntegrationRequestSheet: () => null }));
+vi.mock('../../features/whatsapp/OutboxRequests', () => ({ OutboxRequestSheet: () => null }));
 vi.mock('../../features/push/expoPush', () => ({
   installNotificationHandler: () => {}, pushRegistrationKey: () => '', useNotificationNavigation: () => {},
   registerExpoPush: async () => {}, retryExpoPushIfDenied: async () => {},

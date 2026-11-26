@@ -87,14 +87,14 @@ async fn connection(mut tcp: TcpStream, conn: Conn, mode: Mode) {
         Ok((host, port)) => route(mode, &host, port, &System).await,
         Err(code) => Route::Refuse(code),
     };
-    let port = match decided {
-        Route::Tunnel(port) => port,
+    let (port, family) = match decided {
+        Route::Tunnel(port, family) => (port, family),
         Route::Refuse(code) => { let _ = reply(&mut tcp, code).await; return; }
         Route::Direct(addrs) => return direct(tcp, &addrs).await,
     };
     let (api, token) = lock(&conn).clone();
     // Nunca conexão direta neste computador: sem túnel, a página mostraria o localhost daqui.
-    match port_forward::tunnel(&api, &token, port).await {
+    match port_forward::tunnel(&api, &token, port, family.host()).await {
         Ok(socket) => if reply(&mut tcp, SUCCEEDED).await.is_ok() { port_forward::relay(socket, tcp).await; },
         Err(refused) => { let _ = reply(&mut tcp, code_of(refused)).await; }
     }
@@ -111,7 +111,28 @@ async fn direct(mut tcp: TcpStream, addrs: &[SocketAddr]) {
 
 /// O que fazer com um CONNECT.
 #[derive(Debug, PartialEq, Eq)]
-enum Route { Tunnel(u16), Direct(Vec<SocketAddr>), Refuse(u8) }
+enum Route { Tunnel(u16, Family), Direct(Vec<SocketAddr>), Refuse(u8) }
+
+/// Qual loopback de lá a página pediu. `Any` (nome, `0.0.0.0`, `::`) deixa o servidor escolher o que chega ao
+/// processo da sessão; um IP explícito é discado só nele.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Family { V4, V6, Any }
+
+impl Family {
+    fn of(host: &str) -> Self {
+        match host.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>() {
+            Ok(ip) if ip.is_unspecified() => Self::Any,
+            Ok(IpAddr::V6(v6)) if v6.to_ipv4_mapped().is_none() => Self::V6,
+            Ok(_) => Self::V4,
+            Err(_) => Self::Any,
+        }
+    }
+
+    /// O `host` do túnel; `None` não manda o parâmetro.
+    fn host(self) -> Option<IpAddr> {
+        match self { Self::V4 => Some(Ipv4Addr::LOCALHOST.into()), Self::V6 => Some(Ipv6Addr::LOCALHOST.into()), Self::Any => None }
+    }
+}
 
 /// O que a decisão do modo agente pergunta à rede; os testes trocam por um dublê.
 trait Net {
@@ -190,7 +211,7 @@ unsafe fn sockaddr_ip(sa: *const libc::sockaddr) -> Option<IpAddr> {
 }
 
 async fn route(mode: Mode, host: &str, port: u16, net: &impl Net) -> Route {
-    if loopback(host) { return Route::Tunnel(port); }
+    if loopback(host) { return Route::Tunnel(port, Family::of(host)); }
     if mode == Mode::Person { return Route::Refuse(NOT_ALLOWED); }
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let addrs = match host.parse::<IpAddr>() {
@@ -376,17 +397,30 @@ mod tests {
     fn name(host: &str) -> Vec<u8> { [&[host.len() as u8][..], host.as_bytes()].concat() }
 
     #[tokio::test]
-    async fn connect_to_loopback_gives_the_port() {
-        for request in [connect(3, &name("localhost"), 3000), connect(3, &name("127.0.0.1"), 3000), connect(3, &name("::1"), 3000),
-            connect(1, &[127, 0, 0, 1], 3000), connect(4, &std::net::Ipv6Addr::LOCALHOST.octets(), 3000), connect(3, &name("0.0.0.0"), 3000)] {
+    async fn connect_to_loopback_gives_the_port_and_the_asked_family() {
+        use Family::*;
+        for (request, family) in [(connect(3, &name("localhost"), 3000), Any), (connect(3, &name("127.0.0.1"), 3000), V4),
+            (connect(3, &name("::1"), 3000), V6), (connect(3, &name("[::1]"), 3000), V6), (connect(1, &[127, 0, 0, 1], 3000), V4),
+            (connect(4, &std::net::Ipv6Addr::LOCALHOST.octets(), 3000), V6), (connect(3, &name("0.0.0.0"), 3000), Any),
+            (connect(3, &name("::"), 3000), Any), (connect(3, &name("app.localhost"), 3000), Any)] {
             let (_, answered) = run(&request).await;
             assert_eq!(answered, [5, 0], "só a escolha do método; a resposta do CONNECT espera o túnel");
             let net = Fake::default();
             for mode in [Mode::Person, Mode::Agent] {
-                assert_eq!(decide(mode, &request, &net).await, Route::Tunnel(3000), "{mode:?} {request:?}");
+                assert_eq!(decide(mode, &request, &net).await, Route::Tunnel(3000, family), "{mode:?} {request:?}");
             }
             assert!(net.asked.borrow().is_empty(), "loopback não passa pelo DNS");
         }
+    }
+
+    #[test]
+    fn an_explicit_ip_asks_its_family_and_a_name_or_any_lets_the_server_choose() {
+        for host in ["127.0.0.1", "127.8.9.1", "::ffff:127.0.0.1"] { assert_eq!(Family::of(host), Family::V4, "{host}"); }
+        for host in ["::1", "[::1]"] { assert_eq!(Family::of(host), Family::V6, "{host}"); }
+        for host in ["localhost", "app.localhost", "0.0.0.0", "::", "[::]"] { assert_eq!(Family::of(host), Family::Any, "{host}"); }
+        assert_eq!(Family::V4.host(), Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert_eq!(Family::V6.host(), Some(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert_eq!(Family::Any.host(), None);
     }
 
     #[tokio::test]

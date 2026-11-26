@@ -86,7 +86,7 @@ pub fn create_target(paths: &Paths, request: &TargetRequest) -> Result<(), Error
             "nome do alvo: letras minúsculas, números, ponto, hífen ou sublinhado"));
     }
     let dir = paths.targets_dir();
-    let path = dir.join(format!("{name}{SUFFIX}"));
+    let path = target_path(paths, &name);
     if path.exists() {
         return Err(exists(&name));
     }
@@ -129,6 +129,10 @@ pub fn create_target(paths: &Paths, request: &TargetRequest) -> Result<(), Error
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(exists(&name)),
         Err(e) => Err(Error::at(&path, &e)),
     }
+}
+
+pub(crate) fn target_path(paths: &Paths, name: &str) -> std::path::PathBuf {
+    paths.targets_dir().join(format!("{name}{SUFFIX}"))
 }
 
 /// Os `<nome>-agent.json` de `targets/`, em ordem de nome.

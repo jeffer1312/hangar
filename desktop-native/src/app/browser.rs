@@ -2389,8 +2389,8 @@ impl Hangar {
     pub(super) fn dispatch_preview(&mut self, request: crate::browser::server::Request, window: &mut Window, cx: &mut Context<Self>) {
         use crate::browser::server::Request;
         let missing = |key: &str| format!("erro: a sessao {key} nao tem navegador aberto");
-        let (key, verb, args, tab, secret, reply) = match request {
-            Request::Command { key, verb, args, tab, secret, reply } => (key, verb, args, tab, secret, reply),
+        let (key, verb, args, tab, secret, deadline, reply) = match request {
+            Request::Command { key, verb, args, tab, secret, deadline, reply } => (key, verb, args, tab, secret, deadline, reply),
             Request::Cdp { key, method, params, reply } => {
                 let Some(cdp) = self.side.browsers.get(&key).and_then(|b| b.read(cx).relay_cdp()) else { let _ = reply.send(Err(missing(&key))); return };
                 let call = cdp.call(&method, params);
@@ -2420,14 +2420,15 @@ impl Hangar {
             #[cfg(target_os = "linux")]
             Request::Open { name, reply } => { let _ = reply.send(self.open_for_cdp(&name, window, cx)); return; }
         };
-        self.run_verb(key, verb, args, tab, secret, reply, cx);
+        self.run_verb(key, verb, args, tab, secret, deadline, reply, cx);
     }
 
     /// Um verbo do `/cmd` no navegador da sessão `key`: o executor do servidor local e do canal anfitrião.
+    /// `deadline`: até quando quem pediu espera, contado da chegada do pedido; o controlador solta a vez antes.
     #[cfg(not(target_os = "macos"))]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>,
-        secret: Option<crate::browser::control::Secret>, reply: futures::channel::oneshot::Sender<crate::browser::control::Reply>,
+        secret: Option<crate::browser::control::Secret>, deadline: Option<std::time::Instant>, reply: futures::channel::oneshot::Sender<crate::browser::control::Reply>,
         cx: &mut Context<Self>) {
         use crate::browser::control::Reply;
         fn answer(reply: futures::channel::oneshot::Sender<Reply>, text: String) { let _ = reply.send(Reply::Text(text)); }
@@ -2474,7 +2475,7 @@ impl Hangar {
         cx.spawn(async move |_, cx| {
             #[cfg(target_os = "windows")]
             if let Some(settle) = settle { settle.await; }
-            let _ = reply.send(ctl.run_with(&verb, &args, secret).await);
+            let _ = reply.send(ctl.run_until(&verb, &args, secret, deadline).await);
             let _ = browser.update(cx, |panel, cx| panel.agent_finished(cx));
         }).detach();
     }

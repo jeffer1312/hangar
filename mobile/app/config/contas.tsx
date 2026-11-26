@@ -12,6 +12,7 @@ import { SectionCard } from '../../src/features/config/SectionCard';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { CodexContaLogin } from '../../src/features/config/CodexContaLogin';
 import { AntigravityContaLogin } from '../../src/features/config/AntigravityContaLogin';
+import { AntigravityTermos } from '../../src/features/config/AntigravityTermos';
 import { antigravityAccountLabel, antigravityLoginText, isAdditionalAntigravity } from '../../src/features/accounts/antigravity';
 import { ResetFeedback } from '../../src/features/accounts/CodexReset';
 import { EngineStatus, useEngines } from '../../src/features/accounts/Engines';
@@ -63,6 +64,9 @@ function ServerAccounts({ server }: { server: Server | null }) {
   const [agy, setAgy] = useState<AntigravityAccounts | null>(null);
   const [agyError, setAgyError] = useState('');
   const [agyLogin, setAgyLogin] = useState<{ accountId?: string } | null>(null);
+  // Conta padrão com o painel dos Termos aberto; o login concluído dela pede os Termos na próxima lista.
+  const [agyTerms, setAgyTerms] = useState<AntigravityAccount | null>(null);
+  const termsAfterLogin = useRef(false);
   const agyGeneration = useRef(0);
   const [deleting, setDeleting] = useState<ReadonlySet<string>>(new Set());
   // Trava síncrona: dois alertas abertos antes do primeiro sim ainda veem o `deleting` antigo.
@@ -106,8 +110,12 @@ function ServerAccounts({ server }: { server: Server | null }) {
       if (!alive.current || generationNow !== agyGeneration.current) return;
       setAgy(next);
       setAgyError('');
+      const pending = termsAfterLogin.current ? next.contas.find((account) => account.padrao && account.termos_aceitos === false) : undefined;
+      termsAfterLogin.current = false;
+      if (pending) { setAgyLogin(null); setAgyTerms(pending); }
     } catch (cause: unknown) {
       if (!alive.current || generationNow !== agyGeneration.current) return;
+      termsAfterLogin.current = false;
       // Servidor sem a rota é de antes do Antigravity: a lista segue sem ele.
       if ((cause as { status?: number } | null)?.status === 404) { setAgy(null); setAgyError(''); return; }
       setAgyError(cause instanceof Error ? cause.message : String(cause));
@@ -159,6 +167,8 @@ function ServerAccounts({ server }: { server: Server | null }) {
     setNewLogin(false);
     setNewClaude(false);
     setAgyLogin(null);
+    setAgyTerms(null);
+    termsAfterLogin.current = false;
     void load(server);
     return () => {
       alive.current = false;
@@ -285,8 +295,8 @@ function ServerAccounts({ server }: { server: Server | null }) {
       { text: m.contas_apagar_com_conversas(), style: 'destructive', onPress: () => agyAction(account, () => deleteAntigravityAccountForServer(s, account.id), m.mobile_antigravity_delete_failed()) },
     ]);
   };
-  // Os Termos só aparecem dentro do agy: a sessão abre na casa da máquina (a pasta-mãe do ~/.gemini).
-  const openAgyTerms = async (account: AntigravityAccount) => {
+  // Saída do painel dos Termos quando ele falha: a sessão do agy abre na casa da máquina (a pasta-mãe do ~/.gemini).
+  const openAgyTermsInTerminal = async (account: AntigravityAccount) => {
     if (!server) return;
     const home = account.pasta.replace(/[\\/][^\\/]+[\\/]?$/, '');
     try {
@@ -401,7 +411,7 @@ function ServerAccounts({ server }: { server: Server | null }) {
     antigravitySignIn: (id) => setAgyLogin({ accountId: id }),
     antigravitySignOut: (account) => signOutAgy(account),
     antigravityRemove: (account) => removeAgy(account),
-    antigravityTerms: (account) => { void openAgyTerms(account); },
+    antigravityTerms: (account) => setAgyTerms(account),
   };
   // Entrada escalonada só na primeira lista pintada; quem aparece depois (filtro, busca) só surge.
   const firstPaint = !painted.current && visible.length > 0;
@@ -459,7 +469,17 @@ function ServerAccounts({ server }: { server: Server | null }) {
       {server && agyLogin ? (
         <AntigravityContaLogin key={JSON.stringify([server.id, server.baseUrl, server.token, agyLogin.accountId ?? ''])} server={server}
           accounts={agy?.contas ?? []} accountId={agyLogin.accountId}
-          onComplete={() => { void load(server); }} onClose={() => setAgyLogin(null)} />
+          onComplete={() => {
+            if ((agyLogin.accountId ?? 'default') === 'default') termsAfterLogin.current = true;
+            void load(server);
+          }} onClose={() => setAgyLogin(null)} />
+      ) : null}
+      {server && agyTerms ? (
+        <AntigravityTermos key={JSON.stringify([server.id, server.baseUrl, server.token])} server={server}
+          onDone={() => { setAgyTerms(null); void load(server); }}
+          onSignIn={() => { setAgyTerms(null); setAgyLogin({ accountId: 'default' }); }}
+          onOpenTerminal={() => { const account = agyTerms; setAgyTerms(null); void openAgyTermsInTerminal(account); }}
+          onClose={() => setAgyTerms(null)} />
       ) : null}
       {server && engines.editing !== null && engines.data ? (
         <Suspense fallback={<Text style={styles.muted}>{m.comum_carregando()}</Text>}>

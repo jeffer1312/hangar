@@ -329,7 +329,7 @@ pub(crate) fn absorb_agent_line(st: &mut FileState, raw: &[u8], provider: AgentP
     if matches!(provider, AgentProvider::Pi | AgentProvider::Omp) && line.windows(14).any(|w| w == b"\"model_change\"") {
         if let Some(model) = super::agents::model_provider(line) { st.model = Some(model); }
     }
-    let events = crate::archive_history::agent_line(provider, line);
+    let events = crate::archive_history::agent_line(provider, None, line);
     if events.iter().any(|e| e.kind == ChatKind::UserMsg) {
         st.has_user = true;
     }

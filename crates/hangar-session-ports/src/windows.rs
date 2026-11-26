@@ -17,11 +17,11 @@ pub(crate) fn scan(candidates: &[u32]) -> io::Result<Scan> {
     let (mine, others): (Vec<_>, Vec<_>) = found.into_iter()
         .filter(|&(addr, _, _)| reachable_locally(addr))
         .partition(|&(_, _, pid)| wanted.contains(&pid));
-    let mut outside: Vec<u16> = others.into_iter().map(|(_, port, _)| port).collect();
+    let mut outside: Vec<(u16, std::net::IpAddr)> = others.into_iter().map(|(addr, port, _)| (port, addr)).collect();
     outside.sort_unstable();
     Ok(Scan {
-        listeners: sorted(mine.into_iter().map(|(_, port, pid)| Listener { port, pid, process: image_name(pid) })),
-        outside: outside.into_iter().map(|port| Outside { port, inode: None }).collect(),
+        listeners: sorted(mine.into_iter().map(|(addr, port, pid)| Listener { port, pid, process: image_name(pid), addr })),
+        outside: outside.into_iter().map(|(port, addr)| Outside { port, inode: None, addr }).collect(),
     })
 }
 

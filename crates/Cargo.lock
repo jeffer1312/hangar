@@ -1636,6 +1636,7 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -2442,6 +2443,7 @@ dependencies = [
 name = "hangar-transcript"
 version = "0.1.0"
 dependencies = [
+ "hangar-antigravity",
  "hangar-api",
  "hangar-core",
  "hangar-notice-actions",

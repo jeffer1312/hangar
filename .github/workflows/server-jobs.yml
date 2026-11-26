@@ -1,6 +1,6 @@
 # Jobs do hangar-server por sistema (testes, build de release, publicação e cache), chamados pelo server.yml
-# (Linux e Windows, a cada push) e pelo server-macos.yml (macOS, depois que o Server da main ou do canal termina).
-# Assim o macOS, lento e instável, não segura a publicação nem o Package dos outros sistemas.
+# (Linux) e pelo server-windows.yml (Windows), cada um em run próprio a cada push, e pelo server-macos.yml (macOS,
+# depois que o Server da main ou do canal termina). Assim nenhum sistema segura a publicação nem o Package do outro.
 # `branch` e `ref` vêm de quem chama: no workflow_run o github.ref_name e o github.sha são os da main, não os do
 # commit testado, e as variáveis GITHUB_* não podem ser trocadas.
 name: Server (jobs)

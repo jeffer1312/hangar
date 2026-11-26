@@ -177,6 +177,22 @@ test('integrations_approvals: guarda aprovações por servidor, ignora repetido/
   expect(useSessions.getState().integrationApprovals).toEqual({});
 });
 
+test('rascunhos de WhatsApp: evento guarda os pendentes, torto mantém o anterior e servidor removido apaga', async () => {
+  const draft = { id: 'd1', origin: 'srv1::web', chat_number: '5511999990000', text: 'oi', expires_at: '2026-11-24T14:10:00Z', state: 'pending' };
+  const release = useSessions.getState().retain();
+  await settle();
+  created[0].trigger('whatsapp_outbox', JSON.stringify({ drafts: [draft, { ...draft, id: 'd2', state: 'sent' }] }));
+  expect(useSessions.getState().whatsappOutbox.srv1?.drafts.map((d) => d.id)).toEqual(['d1']);
+  created[0].trigger('whatsapp_outbox', '{"drafts":');
+  expect(useSessions.getState().whatsappOutbox.srv1?.drafts.map((d) => d.id)).toEqual(['d1']);
+  created[0].trigger('whatsapp_outbox', '{"drafts":[]}');
+  expect(useSessions.getState().whatsappOutbox.srv1?.drafts).toEqual([]);
+  useServers.setState({ servers: [] });
+  useSessions.getState().refreshServers();
+  expect(useSessions.getState().whatsappOutbox.srv1).toBeUndefined();
+  release();
+});
+
 test('descoberta espera lista válida e roda uma vez por conexão, inclusive após retomar', async () => {
   const discover = vi.fn();
   setMachineDiscovery(discover);

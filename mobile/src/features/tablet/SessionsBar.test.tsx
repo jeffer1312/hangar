@@ -20,6 +20,7 @@ vi.mock('../../stores/tabletPrefs', () => ({ useTabletPrefs: (selector: (s: type
 vi.mock('../pair/identities', () => ({ useIdentities: () => ({ identities: new Map() }) }));
 vi.mock('../vault/VaultRequests', () => ({ VaultRequestsButton: () => null }));
 vi.mock('../integrations/IntegrationRequests', () => ({ IntegrationRequestsButton: () => null }));
+vi.mock('../whatsapp/OutboxRequests', () => ({ OutboxRequestsButton: () => null }));
 vi.mock('react-native-keyboard-controller', () => ({
   useKeyboardState: (selector: (s: { isVisible: boolean }) => unknown) => selector({ isVisible: state.keyboardVisible }),
 }));

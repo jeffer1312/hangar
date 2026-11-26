@@ -93,6 +93,12 @@ impl Discovery {
             }
         }
         let path = self.login_path(env).await;
+        // A cada sondagem: o CLI instalado depois da subida grava a pasta só no PATH do registro.
+        let path = if cfg!(windows) {
+            hangar_core::process::with_installed_path(std::ffi::OsStr::new(&path)).to_string_lossy().into_owned()
+        } else {
+            path
+        };
         let env = env.clone();
         let providers = tokio::task::spawn_blocking(move || scan(&env, &path, cfg!(windows)))
             .await

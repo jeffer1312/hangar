@@ -219,6 +219,8 @@ pub struct LiveState {
     pub output: String,
     /// Erro durável do ator: (código, frase).
     pub error: Option<(String, String)>,
+    /// Modelo e uso de contexto que a linha da lista mostra (`current_model`, `token_usage` da vista do ator).
+    pub usage: Value,
 }
 
 pub type LiveSender = tokio::sync::watch::Sender<Option<std::sync::Arc<LiveState>>>;

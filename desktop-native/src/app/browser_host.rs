@@ -9,7 +9,7 @@ use tokio::{io::{AsyncWrite, AsyncWriteExt}, time::timeout};
 
 use super::*;
 use super::ports_panel::owner_server;
-use crate::browser::control::Reply;
+use crate::browser::control::{Reply, Secret};
 use crate::{api::route::blocked_url, ws};
 
 const PATH: &str = "/api/browser-host";
@@ -64,7 +64,8 @@ pub(super) fn link_change(have: [&str; 3], have_focus: Option<&str>, want: [&str
 
 fn lock(conn: &Mutex<Conn>) -> std::sync::MutexGuard<'_, Conn> { conn.lock().unwrap_or_else(|e| e.into_inner()) }
 
-fn focus_text(session: &str) -> String { json!({"type": "focus", "session": session}).to_string() }
+/// `caps`: o que este app sabe fazer além dos verbos de sempre. Sem `fill_secret`, o servidor não manda o valor do cofre.
+fn focus_text(session: &str) -> String { json!({"type": "focus", "session": session, "caps": ["fill_secret"]}).to_string() }
 
 impl Hosts {
     fn out(&self, server: &str) -> Option<async_channel::Sender<Out>> { self.links.get(server).map(|l| l.out.clone()) }
@@ -249,6 +250,11 @@ async fn pump(socket: reqwest::Upgraded, focus: Option<String>, server: &str, ou
     }
 }
 
+/// Até quando quem pediu espera: o `deadline_ms` do pedido, contado de quando ele chegou.
+fn verb_deadline(request: &Value, arrived: Instant) -> Option<Instant> {
+    request["deadline_ms"].as_u64().map(|ms| arrived + Duration::from_millis(ms))
+}
+
 fn refusal(id: u64, error: &str) -> Out { Out::Text(json!({"id": id, "ok": false, "error": error}).to_string()) }
 
 fn reply_out(id: u64, reply: Reply, pairs: &[(u16, u16)]) -> Out {
@@ -334,8 +340,12 @@ impl Hangar {
         self.ports.forwards.list(&api.identity()).into_iter().map(|f| (f.local, f.port)).collect()
     }
 
-    fn host_execute(&mut self, server: String, request: Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn host_execute(&mut self, server: String, mut request: Value, window: &mut Window, cx: &mut Context<Self>) {
+        // O prazo de quem pediu corre desde aqui, não desde a vez do verbo no navegador.
+        let arrived = Instant::now();
         let Some(id) = request["id"].as_u64() else { return };
+        // O valor do cofre sai do pedido antes de tudo: nada adiante (args, log, resposta) o vê.
+        let value = match request.as_object_mut().and_then(|o| o.remove("valor")) { Some(Value::String(v)) => Some(Secret::new(v)), _ => None };
         // Pedido em voo de um servidor que acabou de virar convite ou sair não passa.
         if !owner_server(&self.servers, &server) { return; }
         let Some(out) = self.browser_hosts.out(&server) else { return };
@@ -344,12 +354,18 @@ impl Hangar {
         let verb = request["verbo"].as_str().unwrap_or_default().to_owned();
         let args: Vec<String> = request["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_owned)).collect();
         let key = format!("{server}::{session}");
+        // Só o `fill-secret` leva valor, e só com o domínio aprovado: o controlador confere a página contra ele.
+        let secret = match (verb.as_str(), value, request["expected_host"].as_str().filter(|h| !h.is_empty())) {
+            ("fill-secret", Some(value), Some(host)) => Some(value.for_host(host.to_owned())),
+            ("fill-secret", ..) => { let _ = out.try_send(refusal(id, "fill-secret sem o valor ou o dominio aprovado")); return; }
+            _ => None,
+        };
         if matches!(verb.as_str(), "open" | "goto") {
-            let deadline = Instant::now() + request["deadline_ms"].as_u64().map_or(DEFAULT_DEADLINE, Duration::from_millis);
+            let deadline = verb_deadline(&request, arrived).unwrap_or(arrived + DEFAULT_DEADLINE);
             return self.host_navigate(server, id, key, session, verb, args.first().cloned().unwrap_or_default(), deadline, window, cx);
         }
         let (tx, rx) = futures::channel::oneshot::channel();
-        self.host_run_verb(key, verb, args, request["aba"].as_i64(), tx, cx);
+        self.host_run_verb(key, verb, args, request["aba"].as_i64(), verb_deadline(&request, arrived), secret, tx, cx);
         let pairs = self.host_pairs(&server);
         cx.spawn(async move |_, _| {
             let reply = rx.await.unwrap_or_else(|_| Reply::Text("erro: o navegador fechou no meio do comando".into()));
@@ -421,7 +437,8 @@ impl Hangar {
             let run = |this: &WeakEntity<Hangar>, cx: &mut AsyncWindowContext, verb: &str, args: Vec<String>| {
                 let (tx, rx) = futures::channel::oneshot::channel();
                 let (key, verb) = (key.clone(), verb.to_owned());
-                let sent = this.update(cx, |this, cx| this.host_run_verb(key, verb, args, None, tx, cx)).is_ok();
+                // O prazo do `open`/`goto`: o verbo não segura a vez depois de o servidor desistir.
+                let sent = this.update(cx, |this, cx| this.host_run_verb(key, verb, args, None, Some(deadline), None, tx, cx)).is_ok();
                 async move { if sent { rx.await.ok() } else { None } }
             };
             let first = if ready { run(&this, cx, "goto", vec![url.clone()]).await } else {
@@ -467,8 +484,9 @@ impl Hangar {
 
     /// Verbo do agente remoto. No Linux só na página aberta no contexto dele: a que a pessoa abriu no painel ele não
     /// lê nem dirige.
-    fn host_run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>,
-        reply: futures::channel::oneshot::Sender<Reply>, cx: &mut Context<Self>) {
+    #[allow(clippy::too_many_arguments)]
+    fn host_run_verb(&mut self, key: String, verb: String, args: Vec<String>, tab: Option<i64>, deadline: Option<Instant>,
+        secret: Option<Secret>, reply: futures::channel::oneshot::Sender<Reply>, cx: &mut Context<Self>) {
         #[cfg(target_os = "linux")]
         if let Some(browser) = self.side.browsers.get(&key).cloned() {
             self.arm_agent(&browser, &key, cx);
@@ -477,7 +495,7 @@ impl Hangar {
                 return;
             }
         }
-        self.run_verb(key, verb, args, tab, None, reply, cx);
+        self.run_verb(key, verb, args, tab, secret, deadline, reply, cx);
     }
 
     /// O contexto do agente remoto no painel da sessão `key`: o SOCKS em modo agente do servidor dela, relido a cada
@@ -504,6 +522,20 @@ fn agent_ready(panel: &super::browser::BrowserPanel) -> bool {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    /// O servidor só manda o `fill-secret` (com o valor do cofre) ao app que anuncia saber fazê-lo.
+    #[test]
+    fn the_focus_announces_fill_secret() {
+        let focus: Value = serde_json::from_str(&focus_text("s")).unwrap();
+        assert_eq!(focus, json!({"type": "focus", "session": "s", "caps": ["fill_secret"]}));
+    }
+
+    #[test]
+    fn the_deadline_counts_from_the_arrival_of_the_request() {
+        let arrived = Instant::now();
+        assert_eq!(verb_deadline(&json!({"id": 1, "deadline_ms": 8000}), arrived), Some(arrived + Duration::from_millis(8000)));
+        assert_eq!(verb_deadline(&json!({"id": 1}), arrived), None, "sem prazo, o teto do próprio verbo");
+    }
 
     #[test]
     fn only_web_addresses_are_opened_and_a_bare_host_is_http() {

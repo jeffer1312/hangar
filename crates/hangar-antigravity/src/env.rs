@@ -28,6 +28,14 @@ impl ProcessEnv {
         for key in &self.unset { argv.extend(["-u".to_owned(), key.clone()]); }
         argv
     }
+
+    /// O argv do pane com o `env -u` na frente. O psmux não tem `env`: no Windows o pane herda de quem chama.
+    pub fn command(&self, windows: bool, argv: Vec<String>) -> Vec<String> {
+        if windows { return argv; }
+        let mut command = self.env_prefix();
+        command.extend(argv);
+        command
+    }
 }
 
 /// `inherited` são os nomes do ambiente de quem lança: entram no `unset` os que casam com os prefixos.
@@ -84,5 +92,7 @@ mod tests {
         let env = ProcessEnv { set: vec![], unset: vec!["A".into(), "B".into()] };
         assert_eq!(env.env_prefix(), ["env", "-u", "A", "-u", "B"]);
         assert!(ProcessEnv::default().env_prefix().is_empty());
+        assert_eq!(env.command(false, vec!["agy".into()]), ["env", "-u", "A", "-u", "B", "agy"]);
+        assert_eq!(env.command(true, vec!["agy".into()]), ["agy"]);
     }
 }

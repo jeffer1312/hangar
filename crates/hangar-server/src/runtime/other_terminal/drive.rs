@@ -37,6 +37,8 @@ static PI_NOTICE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"Subagentasyncgroupedresultintercomdeliverywasnotacknowledgedfor.*?/tmp/pi-subagents-[^']*'?\.?").unwrap()
 });
 /// A caixa vazia do `agy` mostra a dica do modo (`Auto mode: … (shift+tab to cycle)`), não um rascunho.
+/// Até onde a caixa do `agy` pode estar do fim da tela: abaixo dela ficam o rodapé e o painel de tarefas de fundo.
+const AGY_BOX_FROM_END: usize = 24;
 static AGY_MODE_HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Z][\w-]* mode: .*\(shift\+tab to cycle\)\z").unwrap());
 static MULTIPLE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*[❯>]?\s*\d+\.\s*\[.?\]\s").unwrap());
@@ -236,9 +238,22 @@ fn composer_for(provider: hangar_transcript::Provider, frame: &OtherFrame) -> Op
         .filter(|(_, line)| line.matches('─').count() >= 20)
         .map(|(n, _)| n)
         .collect();
-    let bottom = *rules.last()?;
-    let top = *rules.get(rules.len().checked_sub(2)?)?;
-    if lines.len() - bottom > 8 || bottom - top > 15 {
+    let last = *rules.last()?;
+    let (top, bottom) = if provider == hangar_transcript::Provider::Antigravity {
+        // O `agy` desenha o painel de tarefas em segundo plano entre linhas, abaixo da caixa: a caixa é a que abre com `>`.
+        rules
+            .windows(2)
+            .rev()
+            .map(|pair| (pair[0], pair[1]))
+            // A caixa é o último par ou o de cima do painel de tarefas: um pedido antigo repetido mais acima não conta.
+            .take(2)
+            .take_while(|(_, bottom)| lines.len() - bottom <= AGY_BOX_FROM_END)
+            .find(|(top, bottom)| *bottom > top + 1
+                && lines[top + 1].trim().trim_start_matches(['│', '┃', '║']).trim_start().starts_with(['>', '❯']))?
+    } else {
+        (*rules.get(rules.len().checked_sub(2)?)?, last)
+    };
+    if lines.len() - last > 8 || bottom - top > 15 {
         return None;
     }
     let mut content = lines[top + 1..bottom]
@@ -1622,14 +1637,13 @@ async fn generic_select(
 /// A opção que a pessoa tocou no cartão dos Termos (`AGY_TERMS_OPTIONS`): a caixa de dados como ela escolheu e
 /// o botão. Uma tecla por vez, relendo a tela; o Hangar nunca escolhe pela pessoa.
 async fn agy_terms_answer(control: &mut Control<'_>, option: usize) -> Result<OtherControlOutcome, RuntimeError> {
-    use crate::terminal_state::{AgyTermsFocus as Focus, agy_terms};
-    let (checked, button) = match option { 1 => (Some(true), Focus::Done), 2 => (Some(false), Focus::Done), _ => (None, Focus::Previous) };
+    use crate::terminal_state::{AgyTermsFocus as Focus, AgyTermsKey as Key, agy_terms, agy_terms_key};
     for _ in 0..8 {
         let frame = control.frame(false, false).await?;
         let terms = agy_terms(&frame.text).ok_or_else(|| failure("erro_interacao_desatualizada"))?;
-        let key = if checked.is_some_and(|want| want != terms.checked) {
-            if terms.focus == Focus::Checkbox { "Enter" } else { "Up" }
-        } else if terms.focus == button {
+        let key = agy_terms_key(terms, option).ok_or_else(|| failure("erro_opcao_fora_da_lista"))?;
+        let key = if key == Key::Enter && terms.focus != Focus::Checkbox {
+            let button = terms.focus;
             control.write("Enter", false, true).await?;
             control.pause(SETTLE, true).await?;
             let frame = control.frame(false, true).await?;
@@ -1640,11 +1654,7 @@ async fn agy_terms_answer(control: &mut Control<'_>, option: usize) -> Result<Ot
                 control.reply(RuntimeDisposition::Accepted, json!({"ok":true}))
             });
         } else {
-            match (terms.focus, button) {
-                (Focus::Checkbox, _) => "Down",
-                (Focus::Previous, Focus::Done) => "Right",
-                _ => "Left",
-            }
+            key.name()
         };
         control.write(key, false, false).await?;
         control.pause(Duration::from_millis(150), false).await?;

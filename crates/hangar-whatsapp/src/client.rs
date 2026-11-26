@@ -11,6 +11,8 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// Desvincular espera o WhatsApp responder ao logout (até 10 s no binário) e, no `wipe`, ainda para,
 /// apaga e reabre os bancos. Os clientes esperam mais que isto, senão a tela estoura antes.
 pub const UNLINK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Criar o rascunho copia o anexo (até 100 MB) e soma o sha256 dele dentro do pedido.
+const DRAFT_CREATE_TIMEOUT: Duration = Duration::from_secs(120);
 /// O resumo da página espera menos que o prazo dos clientes: binário travado aparece como sem resposta,
 /// não como servidor fora do ar.
 pub const OVERVIEW_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -66,7 +68,8 @@ impl Client {
     /// [`CallError::Off`] sem serviço; [`CallError::Untrusted`] quando a resposta não tem a assinatura
     /// do binário; [`CallError::Transport`] para o resto.
     pub async fn call(&self, method: reqwest::Method, path: &str, query: &[(&str, &str)], body: Option<&Value>) -> Result<Reply, CallError> {
-        self.send(method, path, query, body, deadline(path)).await
+        let timeout = deadline(&method, path);
+        self.send(method, path, query, body, timeout).await
     }
 
     /// `GET /v1/status` com 200: a prova de que o serviço está de pé.
@@ -158,16 +161,20 @@ impl Client {
     }
 }
 
-/// O prazo de um caminho do C2: os que desvinculam o aparelho esperam o WhatsApp responder.
-fn deadline(path: &str) -> Duration {
+/// O prazo de um caminho do C2: os que desvinculam o aparelho esperam o WhatsApp responder, e criar
+/// rascunho espera a cópia do anexo.
+fn deadline(method: &reqwest::Method, path: &str) -> Duration {
     match path {
         "/v1/wipe" | "/v1/logout" => UNLINK_TIMEOUT,
+        "/v1/outbox" if method == reqwest::Method::POST => DRAFT_CREATE_TIMEOUT,
         _ => TIMEOUT,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use reqwest::Method;
+
     use super::*;
 
     /// O `wipe` do binário pode gastar 10 s no logout e ainda parar, apagar e reabrir; o `uninstall` com
@@ -175,9 +182,16 @@ mod tests {
     #[test]
     fn unlinking_waits_longer_than_the_other_calls() {
         assert!(UNLINK_TIMEOUT >= Duration::from_secs(30));
-        assert_eq!(deadline("/v1/wipe"), UNLINK_TIMEOUT);
-        assert_eq!(deadline("/v1/logout"), UNLINK_TIMEOUT);
-        assert_eq!(deadline("/v1/chats"), TIMEOUT);
-        assert_eq!(deadline("/v1/pair"), TIMEOUT);
+        assert_eq!(deadline(&Method::POST, "/v1/wipe"), UNLINK_TIMEOUT);
+        assert_eq!(deadline(&Method::POST, "/v1/logout"), UNLINK_TIMEOUT);
+        assert_eq!(deadline(&Method::GET, "/v1/chats"), TIMEOUT);
+        assert_eq!(deadline(&Method::POST, "/v1/pair"), TIMEOUT);
+    }
+
+    /// Criar o rascunho copia e soma o sha256 de um anexo de até 100 MB dentro do pedido.
+    #[test]
+    fn creating_a_draft_waits_for_the_attachment_copy() {
+        assert!(deadline(&Method::POST, "/v1/outbox") >= Duration::from_secs(120));
+        assert_eq!(deadline(&Method::GET, "/v1/outbox"), TIMEOUT);
     }
 }

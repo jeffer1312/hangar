@@ -10,7 +10,7 @@ use crate::{Listener, Outside, ProcessInfo, Scan, is_devtools, reachable_locally
 const LISTEN: u8 = 0x0A;
 
 pub(crate) fn scan(candidates: &[u32]) -> io::Result<Scan> {
-    let mut sockets: HashMap<u64, u16> = listen_sockets(&fs::read_to_string("/proc/net/tcp")?).collect();
+    let mut sockets: HashMap<u64, (u16, IpAddr)> = listen_sockets(&fs::read_to_string("/proc/net/tcp")?).collect();
     // Sem IPv6 no kernel o arquivo não existe.
     match fs::read_to_string("/proc/net/tcp6") {
         Ok(table) => sockets.extend(listen_sockets(&table)),
@@ -22,15 +22,15 @@ pub(crate) fn scan(candidates: &[u32]) -> io::Result<Scan> {
 
 /// Os sockets dos candidatos viram `listeners`; o resto, `outside`, sem procurar dono.
 fn split(
-    sockets: &HashMap<u64, u16>,
+    sockets: &HashMap<u64, (u16, IpAddr)>,
     candidates: &[u32],
     fd_inodes: impl FnMut(u32) -> Option<Vec<u64>>,
     name: impl FnMut(u32) -> String,
 ) -> Scan {
     let (listeners, held) = owners(sockets, candidates, fd_inodes, name);
-    let mut outside: Vec<(u16, u64)> = sockets.iter().filter(|(inode, _)| !held.contains(inode)).map(|(inode, port)| (*port, *inode)).collect();
+    let mut outside: Vec<(u16, u64, IpAddr)> = sockets.iter().filter(|(inode, _)| !held.contains(inode)).map(|(inode, (port, addr))| (*port, *inode, *addr)).collect();
     outside.sort_unstable();
-    Scan { listeners: sorted(listeners), outside: outside.into_iter().map(|(port, inode)| Outside { port, inode: Some(inode) }).collect() }
+    Scan { listeners: sorted(listeners), outside: outside.into_iter().map(|(port, inode, addr)| Outside { port, inode: Some(inode), addr }).collect() }
 }
 
 /// Varre os fds dos processos deste usuário até achar todos os inodes ou gastar o teto.
@@ -134,17 +134,17 @@ fn parse_addr(hex: &str) -> Option<IpAddr> {
     }
 }
 
-/// `(inode, porta)` de cada socket em LISTEN alcançável pelo loopback; o cabeçalho não casa.
-fn listen_sockets(table: &str) -> impl Iterator<Item = (u64, u16)> + '_ {
+/// `(inode, (porta, endereço))` de cada socket em LISTEN alcançável pelo loopback; o cabeçalho não casa.
+fn listen_sockets(table: &str) -> impl Iterator<Item = (u64, (u16, IpAddr))> + '_ {
     table.lines().filter_map(parse_line)
         .filter(|e| e.state == LISTEN && reachable_locally(e.addr))
-        .map(|e| (e.inode, e.port))
+        .map(|e| (e.inode, (e.port, e.addr)))
 }
 
 /// Procura os sockets só nos fds dos candidatos; pid que não se deixa ler fica de fora. Devolve
 /// também os inodes que algum candidato segura.
 fn owners(
-    sockets: &HashMap<u64, u16>,
+    sockets: &HashMap<u64, (u16, IpAddr)>,
     candidates: &[u32],
     mut fd_inodes: impl FnMut(u32) -> Option<Vec<u64>>,
     mut name: impl FnMut(u32) -> String,
@@ -159,13 +159,13 @@ fn owners(
             continue;
         }
         let Some(inodes) = fd_inodes(pid) else { continue };
-        let ports: Vec<u16> = inodes.iter().filter_map(|inode| sockets.get(inode).copied()).collect();
+        let ports: Vec<(u16, IpAddr)> = inodes.iter().filter_map(|inode| sockets.get(inode).copied()).collect();
         if ports.is_empty() {
             continue;
         }
         held.extend(inodes.iter().filter(|inode| sockets.contains_key(inode)));
         let process = name(pid);
-        found.extend(ports.into_iter().map(|port| Listener { port, pid, process: process.clone() }));
+        found.extend(ports.into_iter().map(|(port, addr)| Listener { port, pid, process: process.clone(), addr }));
     }
     (found, held)
 }
@@ -210,14 +210,15 @@ mod tests {
     }
 
     #[test]
-    fn only_listen_on_loopback_or_any_is_kept() {
-        assert_eq!(listen_sockets(TCP).collect::<Vec<_>>(), vec![(10673, 8317), (26902, 5432)]);
-        assert_eq!(listen_sockets(TCP6).collect::<Vec<_>>(), vec![(18355, 7331), (26903, 5432)]);
+    fn only_listen_on_loopback_or_any_is_kept_with_its_address() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        assert_eq!(listen_sockets(TCP).collect::<Vec<_>>(), vec![(10673, (8317, ip("127.0.0.1"))), (26902, (5432, ip("0.0.0.0")))]);
+        assert_eq!(listen_sockets(TCP6).collect::<Vec<_>>(), vec![(18355, (7331, ip("::1"))), (26903, (5432, ip("::")))]);
     }
 
     #[test]
-    fn same_port_in_v4_and_v6_comes_out_once_and_outsiders_are_never_scanned() {
-        let sockets: HashMap<u64, u16> = listen_sockets(TCP).chain(listen_sockets(TCP6)).collect();
+    fn each_address_of_a_port_is_kept_and_outsiders_are_never_scanned() {
+        let sockets: HashMap<u64, (u16, IpAddr)> = listen_sockets(TCP).chain(listen_sockets(TCP6)).collect();
         let mut scanned = Vec::new();
         let fds = |pid: u32| {
             scanned.push(pid);
@@ -230,23 +231,26 @@ mod tests {
         };
         let names = |pid: u32| if pid == 10 { "postgres".to_owned() } else { "node".to_owned() };
         let found = split(&sockets, &[10, 40, 20, 10], fds, names);
+        // O 5432 do pid 10 fica em v4 e v6: o túnel escolhe a família pelo endereço.
         assert_eq!(found.listeners, vec![
-            Listener { port: 5432, pid: 10, process: "postgres".into() },
-            Listener { port: 7331, pid: 20, process: "node".into() },
+            Listener { port: 5432, pid: 10, process: "postgres".into(), addr: Ipv4Addr::UNSPECIFIED.into() },
+            Listener { port: 5432, pid: 10, process: "postgres".into(), addr: Ipv6Addr::UNSPECIFIED.into() },
+            Listener { port: 7331, pid: 20, process: "node".into(), addr: Ipv6Addr::LOCALHOST.into() },
         ]);
         assert_eq!(scanned, vec![10, 40, 20]);
         // O 8317 (inode 10673) é de um processo que não foi lido.
-        assert_eq!(found.outside, vec![Outside { port: 8317, inode: Some(10673) }]);
+        assert_eq!(found.outside, vec![Outside { port: 8317, inode: Some(10673), addr: Ipv4Addr::LOCALHOST.into() }]);
     }
 
     #[test]
     fn the_other_half_of_a_divided_port_stays_outside() {
         // 5432 em v4 (26902) é do candidato; o v6 (26903) é de outro processo.
-        let sockets: HashMap<u64, u16> = listen_sockets(TCP).chain(listen_sockets(TCP6)).collect();
+        let sockets: HashMap<u64, (u16, IpAddr)> = listen_sockets(TCP).chain(listen_sockets(TCP6)).collect();
         let found = split(&sockets, &[10], |_| Some(vec![26902]), |_| "node".to_owned());
-        assert_eq!(found.listeners, vec![Listener { port: 5432, pid: 10, process: "node".into() }]);
-        assert_eq!(found.outside.iter().map(|o| (o.port, o.inode)).collect::<Vec<_>>(),
-            vec![(5432, Some(26903)), (7331, Some(18355)), (8317, Some(10673))]);
+        assert_eq!(found.listeners, vec![Listener { port: 5432, pid: 10, process: "node".into(), addr: Ipv4Addr::UNSPECIFIED.into() }]);
+        assert_eq!(found.outside.iter().map(|o| (o.port, o.inode, o.addr)).collect::<Vec<_>>(),
+            vec![(5432, Some(26903), IpAddr::from(Ipv6Addr::UNSPECIFIED)), (7331, Some(18355), IpAddr::from(Ipv6Addr::LOCALHOST)),
+                (8317, Some(10673), IpAddr::from(Ipv4Addr::LOCALHOST))]);
     }
 
     #[test]
@@ -277,7 +281,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let me = std::process::id();
         let found = scan(&[me]).unwrap();
-        assert!(found.listeners.iter().any(|l| l.port == port && l.pid == me), "{found:?}");
+        assert!(found.listeners.iter().any(|l| l.port == port && l.pid == me && l.addr == IpAddr::V4(Ipv4Addr::LOCALHOST)), "{found:?}");
         let inode = fd_inodes(me).unwrap().into_iter().find(|inode| {
             fs::read_to_string("/proc/net/tcp").unwrap().lines().filter_map(parse_line).any(|e| e.inode == *inode && e.port == port)
         }).unwrap();

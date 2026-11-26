@@ -142,6 +142,7 @@ vi.mock('./MoreSheet', () => ({ MoreSheet: () => null }));
 vi.mock('./PluginUi', () => ({ PluginUi: () => null }));
 vi.mock('../features/vault/VaultRequests', () => ({ SessionVaultRequests: () => null, VaultRequestSheet: () => null }));
 vi.mock('../features/integrations/IntegrationRequests', () => ({ SessionIntegrationRequests: () => null, IntegrationRequestSheet: () => null }));
+vi.mock('../features/whatsapp/OutboxRequests', () => ({ SessionOutboxRequests: () => null, OutboxRequestSheet: () => null }));
 vi.mock('./OptionButtons', () => ({ OptionButtons: () => null }));
 vi.mock('./PendingPlan', () => ({ PendingPlan: () => null }));
 vi.mock('./SessionPickerSheet', () => ({ SessionPickerSheet: () => null }));

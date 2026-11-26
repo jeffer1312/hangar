@@ -80,6 +80,11 @@ pub(crate) fn new_id() -> String {
     format!("srv-{:08x}", (stamp as u64) ^ std::process::id() as u64)
 }
 
+/// As chaves do mapa que `keep` não segura mais.
+fn leaving<T>(map: &HashMap<String, T>, keep: impl Fn(&str) -> bool) -> Vec<String> {
+    map.keys().filter(|key| !keep(key)).cloned().collect()
+}
+
 async fn run_list(api: Api, key: String, generation: u64, tx: async_channel::Sender<Envelope>) {
     let send = |update| Envelope { connection: 0, selection: None, payload: Payload::Remote(generation, key.clone(), update) };
     api::route::ensure(&api).await;
@@ -97,7 +102,7 @@ async fn run_list(api: Api, key: String, generation: u64, tx: async_channel::Sen
 
 impl Hangar {
     /// Um SSE de lista por servidor ligado que não é o ativo. Refeito a cada conexão: o ativo muda de lugar com os outros.
-    pub(super) fn start_remote_lists(&mut self) {
+    pub(super) fn start_remote_lists(&mut self, cx: &mut Context<Self>) {
         for task in self.remote_tasks.drain(..) { task.abort(); }
         self.remote_gen += 1;
         let active = self.server.as_deref().map(norm).unwrap_or_default();
@@ -107,6 +112,10 @@ impl Hangar {
         self.keyring.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         self.vault.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         self.integrations.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
+        // Tirar do mapa não basta: o diálogo aberto segura um clone e seguiria com o cartão e o relógio.
+        for key in leaving(&self.whatsapp_outbox, |key| key == active || wanted.iter().any(|s| norm(&s.address) == key)) {
+            super::whatsapp_outbox::drop_outbox(&mut self.whatsapp_outbox, &key, cx);
+        }
         self.tags.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         for s in &self.servers { api::route::seed(&s.address, s.invite, s.lan.as_ref(), s.connect.as_ref(), s.connect_refused); }
         for entry in wanted {
@@ -316,7 +325,7 @@ impl Hangar {
         for entry in incoming { upsert(&mut self.servers, entry); }
         self.servers_rev += 1;
         self.persist_servers();
-        self.start_remote_lists();
+        self.start_remote_lists(cx);
         self.sync_updater(cx);
     }
 
@@ -396,7 +405,7 @@ impl Hangar {
         let entry = entry.clone();
         self.persist_servers();
         if self.is_active_key(&norm(address)) { self.activate_server(entry, window, cx); }
-        else { self.start_remote_lists(); }
+        else { self.start_remote_lists(cx); }
     }
 
     pub(super) fn persist_servers(&self) {
@@ -489,6 +498,16 @@ mod tests {
         assert!(!closed("https://notebook.ts.net/|claude|api", None), "mesmo nome em outra máquina fica");
         assert!(!closed("http://127.0.0.1:8765/|claude|web", Some("web")), "a aberta fica");
         assert!(!closed("sem-separador", None));
+    }
+
+    /// A máquina desligada ou removida sai pela lista de `leaving`, que é por onde os rascunhos de WhatsApp dela são esvaziados.
+    #[test]
+    fn leaving_lists_only_the_keys_no_longer_kept() {
+        let map = HashMap::from([("ativa".to_owned(), 0), ("ligada".to_owned(), 1), ("desligada".to_owned(), 2), ("removida".to_owned(), 3)]);
+        let mut gone = leaving(&map, |key| key == "ativa" || key == "ligada");
+        gone.sort();
+        assert_eq!(gone, ["desligada", "removida"]);
+        assert!(leaving(&map, |_| true).is_empty());
     }
 
     #[test]

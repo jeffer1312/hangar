@@ -199,7 +199,7 @@ pub fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEv
         Err(e) => return Err(e),
     };
     let mut pi = super::PiStream::default();
-    let mut agy = super::AgyStream::default();
+    let mut agy = super::AgyStream::for_transcript(Some(jsonl));
     let mut repl = super::code_mode::ReplLinks::default();
     for raw in BufReader::new(file).split(b'\n') {
         let raw = raw?;
@@ -375,7 +375,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
     }
     let mut held_ids = HashSet::new();
     let mut pi = super::PiStream::default();
-    let mut agy = super::AgyStream::default();
+    let mut agy = super::AgyStream::for_transcript(Some(&req.jsonl));
     let mut repl = super::code_mode::ReplLinks::default();
     let mut raw = Vec::new();
     let mut i = 0u64;

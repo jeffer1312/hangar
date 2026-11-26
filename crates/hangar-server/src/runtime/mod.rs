@@ -65,3 +65,8 @@ impl LiveBuffer {
     pub fn unblock(&mut self) { if self.blocked { self.clear(); } }
     pub fn deadline(&self) -> Option<f64> { if self.dirty && !self.blocked { self.last.map(|last|last+0.15) } else { None } }
 }
+
+/// A ferramenta ao vivo como os clientes a leem (`{"nome","input"}`): texto em outro formato derruba o chat deles.
+pub(crate) fn live_tool_text(name: &str, input: &serde_json::Value) -> String {
+    crate::transcript::pyjson::dumps(&serde_json::json!({"nome": name, "input": input}), false)
+}

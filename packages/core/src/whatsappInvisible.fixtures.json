@@ -1,0 +1,15 @@
+{
+  "about": "Casos de caracteres invisíveis do cartão de rascunho de WhatsApp: entrada e o texto mostrado com as marcas. Lidos pelo teste do core (whatsappOutbox.test.ts) e do nativo (whatsapp_outbox.rs); a tabela de faixas fica nas duas linguagens.",
+  "cases": [
+    { "name": "espaço de largura zero", "input": "nada perdido\u200b", "shown": "nada perdido⟨U+200B⟩" },
+    { "name": "inversão de direção, controle e hífen suave", "input": "a\u202eb\u0007c\u00add", "shown": "a⟨U+202E⟩b⟨U+0007⟩c⟨U+00AD⟩d" },
+    { "name": "retorno de carro antes da quebra de linha", "input": "x\r\ny", "shown": "x⟨U+000D⟩\ny" },
+    { "name": "quebra de linha e tabulação ficam", "input": "a\n\tb", "shown": "a\n\tb" },
+    { "name": "caractere de tag com cinco dígitos", "input": "ok\udb40\udc41", "shown": "ok⟨U+E0041⟩" },
+    { "name": "ZWJ e seletor dentro de emoji ficam", "input": "👨\u200d👩 ❤\ufe0f ©\ufe0f", "shown": "👨\u200d👩 ❤\ufe0f ©\ufe0f" },
+    { "name": "ZWJ solto no texto é marcado", "input": "Enviar\u200d", "shown": "Enviar⟨U+200D⟩" },
+    { "name": "ZWJ entre letras é marcado", "input": "漢\u200d字", "shown": "漢⟨U+200D⟩字" },
+    { "name": "ZWJ depois de outra marca é marcado", "input": "\u200b\u200d", "shown": "⟨U+200B⟩⟨U+200D⟩" },
+    { "name": "marca no meio do texto", "input": "a\u2060b", "shown": "a⟨U+2060⟩b" }
+  ]
+}

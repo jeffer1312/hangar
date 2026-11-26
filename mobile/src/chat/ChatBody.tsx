@@ -28,6 +28,7 @@ import { MoreSheet } from './MoreSheet';
 import { PluginUi } from './PluginUi';
 import { SessionVaultRequests } from '../features/vault/VaultRequests';
 import { SessionIntegrationRequests } from '../features/integrations/IntegrationRequests';
+import { SessionOutboxRequests } from '../features/whatsapp/OutboxRequests';
 import { OptionButtons } from './OptionButtons';
 import { PendingPlan } from './PendingPlan';
 import { SessionProblem, showsSessionProblem } from './SessionProblem';
@@ -704,6 +705,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
         {!servidorSumiu && recarregavel && semTerminal ? <RecarregarPill motivo={stateEvent?.recarregar_motivo} bloqueado={recarregarBloqueado} onPress={recarregar} /> : null}
         {!servidorSumiu ? <SessionVaultRequests serverId={serverId} name={name} /> : null}
         {!servidorSumiu ? <SessionIntegrationRequests serverId={serverId} name={name} /> : null}
+        {!servidorSumiu ? <SessionOutboxRequests serverId={serverId} name={name} /> : null}
         <View testID="mods-dock" onLayout={(e) => setModsH(e.nativeEvent.layout.height)}>
           {!servidorSumiu && !codexPreThread && !dead && fetchedSession !== null
             ? <PluginUi key={rota} serverId={serverId} name={name} readOnly={soLeitura} /> : null}

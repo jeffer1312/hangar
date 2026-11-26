@@ -86,7 +86,8 @@ fn an_asleep_headless_session_has_no_cano_root() {
     assert!(roots.is_empty() && excluded.is_empty());
 }
 
-fn socket(port: u16, pid: Option<u32>, process: &str) -> Socket { Socket { port, pid, process: process.into() } }
+fn socket(port: u16, pid: Option<u32>, process: &str) -> Socket { socket_at(port, pid, process, "127.0.0.1") }
+fn socket_at(port: u16, pid: Option<u32>, process: &str, addr: &str) -> Socket { Socket { port, pid, process: process.into(), addr: addr.parse().unwrap() } }
 fn entry(port: u16, pid: u32, process: &str, shared: bool) -> PortEntry { PortEntry { port, process: process.into(), pid, shared } }
 fn key(key: &str) -> ProcessInfo { ProcessInfo { session_key: Some(key.into()), ..ProcessInfo::default() } }
 
@@ -144,8 +145,8 @@ fn session_keys_map_the_runtime_key_of_each_row_to_its_name() {
 
 fn scan_of(listeners: &[(u16, u32)], outside: &[(u16, u64)]) -> Scan {
     Scan {
-        listeners: listeners.iter().map(|&(port, pid)| Listener { port, pid, process: "node".into() }).collect(),
-        outside: outside.iter().map(|&(port, inode)| Outside { port, inode: Some(inode) }).collect(),
+        listeners: listeners.iter().map(|&(port, pid)| Listener { port, pid, process: "node".into(), addr: Ipv4Addr::LOCALHOST.into() }).collect(),
+        outside: outside.iter().map(|&(port, inode)| Outside { port, inode: Some(inode), addr: Ipv4Addr::LOCALHOST.into() }).collect(),
     }
 }
 
@@ -216,4 +217,73 @@ fn after_a_stop_the_next_round_reads_the_sockets_again() {
     assert_eq!(read(&[]).listeners.len(), 1);
     last.forget();
     assert!(read(&[]).listeners.is_empty());
+}
+
+fn ip(text: &str) -> IpAddr { text.parse().unwrap() }
+
+#[test]
+fn the_address_survives_the_resolve_of_session_and_outside_sockets() {
+    let mut scan = scan_of(&[(3000, 11)], &[(3000, 900)]);
+    scan.listeners[0].addr = ip("::");
+    let sockets = resolve(&mut Outsiders::default(), &scan, &|_| true, &mut |_| HashMap::from([(900, 50)]), &mut |_| ProcessInfo::default());
+    assert_eq!(sockets.iter().map(|s| (s.pid, s.addr)).collect::<Vec<_>>(), vec![(Some(11), ip("::")), (Some(50), ip("127.0.0.1"))]);
+}
+
+#[test]
+fn the_tunnel_dials_the_loopback_that_reaches_the_session_process() {
+    let ours = |s: &Socket| s.pid == Some(11);
+    let pick = |list: &[Socket]| reach(&list.iter().collect::<Vec<_>>(), &ours);
+    let (s, out) = (Some(11), Some(50));
+    // Sem disputa, o de sempre.
+    assert_eq!(pick(&[socket_at(3000, s, "node", "0.0.0.0")]), Some(ip("127.0.0.1")));
+    assert_eq!(pick(&[socket_at(3000, s, "node", "127.0.0.1"), socket_at(3000, out, "x", "::1")]), Some(ip("127.0.0.1")));
+    // O `portproxy` em 127.0.0.1 e a sessão no `::` de duas pilhas: o [::1] chega a ela.
+    assert_eq!(pick(&[socket_at(3000, out, "svchost", "127.0.0.1"), socket_at(3000, s, "node", "::")]), Some(ip("::1")));
+    assert_eq!(pick(&[socket_at(5173, out, "x", "127.0.0.1"), socket_at(5173, s, "vite", "::1")]), Some(ip("::1")));
+    // A sessão só em 0.0.0.0, tapada no 127.0.0.1: outro endereço do loopback IPv4 ainda chega ao 0.0.0.0.
+    assert_eq!(pick(&[socket_at(3000, out, "svchost", "127.0.0.1"), socket_at(3000, s, "node", "0.0.0.0")]), Some(ip("127.0.0.2")));
+    // O 0.0.0.0 vence o `::` no IPv4; mapeado conta como IPv4.
+    assert_eq!(pick(&[socket_at(3000, s, "node", "0.0.0.0"), socket_at(3000, out, "x", "::")]), Some(ip("127.0.0.1")));
+    assert_eq!(pick(&[socket_at(3000, out, "x", "::ffff:127.0.0.1"), socket_at(3000, s, "node", "::1")]), Some(ip("::1")));
+    // Dono desconhecido no mesmo endereço, ou nenhum endereço só da sessão: ordem de sempre.
+    assert_eq!(pick(&[socket_at(3000, s, "node", "0.0.0.0"), socket_at(3000, None, "", "0.0.0.0")]), None);
+    assert_eq!(pick(&[socket_at(3000, out, "x", "127.0.0.1"), socket_at(3000, out, "x", "::1"), socket_at(3000, s, "node", "127.0.0.5")]), None);
+}
+
+#[test]
+fn dial_first_keeps_only_the_ports_where_the_usual_loopback_misses_the_session() {
+    // 3000: `portproxy` 50 em 127.0.0.1, Next 11 no `::`. 5432: só a sessão. 8000: só de fora.
+    let owned = BTreeMap::from([("s".to_owned(), set(&[11]))]);
+    let sockets = [socket_at(3000, Some(11), "node", "::"), socket_at(3000, Some(50), "svchost", "127.0.0.1"),
+        socket_at(5432, Some(11), "pg", "127.0.0.1"), socket_at(8000, Some(50), "x", "::1")];
+    let dial = dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new());
+    assert_eq!(dial.first, HashMap::from([(3000, ip("::1"))]));
+    assert!(dial.unreached.is_empty(), "toda porta da sessão tem um loopback só dela");
+    // A linha continua uma por porta, com o aviso de porta dividida.
+    assert_eq!(assign(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new())["s"],
+        vec![entry(3000, 11, "node", true), entry(5432, 11, "pg", false)]);
+}
+
+#[test]
+fn dial_first_names_the_session_ports_that_no_loopback_reaches_alone() {
+    // 3000: a sessão e um dono desconhecido no mesmo 0.0.0.0. 5432: só a sessão. 8000: só de fora.
+    let owned = BTreeMap::from([("s".to_owned(), set(&[11]))]);
+    let sockets = [socket_at(3000, Some(11), "node", "0.0.0.0"), socket_at(3000, None, "", "0.0.0.0"),
+        socket_at(5432, Some(11), "pg", "127.0.0.1"), socket_at(8000, Some(50), "x", "127.0.0.1")];
+    let dial = dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new());
+    assert_eq!(dial, Dial { first: HashMap::new(), unreached: BTreeSet::from([3000]) });
+    // A porta que outra sessão alcança sozinha não entra: ela tem para onde discar.
+    let owned = BTreeMap::from([("a".to_owned(), set(&[11])), ("b".to_owned(), set(&[12]))]);
+    let sockets = [socket_at(3000, Some(11), "node", "0.0.0.0"), socket_at(3000, Some(12), "node", "127.0.0.1"), socket_at(3000, None, "", "127.0.0.2")];
+    assert_eq!(dial_first(&BTreeMap::from([("a".to_owned(), set(&[11]))]), &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new()).unreached,
+        BTreeSet::from([3000]), "sozinha, a sessão a não tem loopback só dela");
+    assert_eq!(dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new()).unreached, BTreeSet::new());
+}
+
+#[test]
+fn a_port_of_two_sessions_stays_with_the_first_even_on_the_usual_loopback() {
+    // a no 127.0.0.1 de sempre, b no 0.0.0.0 da mesma porta: o 127.0.0.2 chegaria só a b, mas a porta é de a.
+    let owned = BTreeMap::from([("a".to_owned(), set(&[11])), ("b".to_owned(), set(&[12]))]);
+    let sockets = [socket_at(3000, Some(11), "node", "127.0.0.1"), socket_at(3000, Some(12), "vite", "0.0.0.0")];
+    assert_eq!(dial_first(&owned, &HashMap::new(), &HashSet::new(), &sockets, &HashMap::new()), Dial::default());
 }
