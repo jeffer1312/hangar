@@ -17,6 +17,10 @@ pub struct Chat {
     pub live_tool: Option<LiveTool>,
     /// O motor avisou o fim do bloco que a prévia mostra: ela espera a resposta gravada, e um quadro novo é outro bloco.
     preview_ended: bool,
+    /// Primeiro evento que pode ser o registro do bloco da prévia; o que chegou antes é de outro bloco.
+    preview_from: usize,
+    thinking_ended: bool,
+    thinking_from: usize,
     pub command_output: HashMap<String, String>,
     /// Turno visto terminar nesta conversa, já em texto: a linha de trabalhando fica no lugar com ele, como o
     /// "Worked for 16s" do Claude Code, em vez de sair e puxar o chat para baixo.
@@ -78,15 +82,19 @@ impl Chat {
         if let Some(&i) = self.index.get(&event.id) {
             if self.events[i] == event { return; }
             if event.kind == "assistant_msg" && self.events[i].text != event.text
-                && event.text.as_deref().is_some_and(|text| self.records_preview(text)) {
+                && event.text.as_deref().is_some_and(|text| preview_matches(&self.preview.text, text)) {
                 self.clear_preview();
             }
             self.changed_at(i);
             self.events[i] = event;
             return;
         }
-        if event.kind == "assistant_msg" && event.text.as_deref().is_some_and(|text| self.records_preview(text)) {
-            self.clear_preview();
+        if event.kind == "assistant_msg" {
+            if event.text.as_deref().is_some_and(|text| self.takes_preview(text)) { self.clear_preview(); }
+            // Resposta que não começa pelo bloco em voo é de outro: o registro dele ainda vai chegar depois desta.
+            else if !self.preview_ended && !event.text.as_deref().is_some_and(|text| starts_with_preview(text, &self.preview.text)) {
+                self.preview_from = self.events.len() + 1;
+            }
         }
         if event.kind == "user_msg" && event.queued() {
             let candidates: Vec<_> = self.events.iter().filter(|e| e.kind == "user_msg" && e.queued()).collect();
@@ -131,7 +139,11 @@ impl Chat {
         match event.kind.as_str() {
             "thinking" => {
                 let text = event.text.clone().unwrap_or_default();
-                if thought_covers(&text, &self.live_thinking) { self.live_thinking.clear(); }
+                // Depois do fim do bloco, o próximo pensamento gravado é o dele, mesmo resumido de outro jeito.
+                if self.thinking_ended || thought_covers(&text, &self.live_thinking) {
+                    self.live_thinking.clear();
+                    self.thinking_ended = false;
+                }
                 self.settled_thinking = text;
             }
             "tool_use" => {
@@ -149,7 +161,20 @@ impl Chat {
     /// Returns false for a late frame of a thought that is already recorded.
     pub fn update_live_thinking(&mut self, text: String) -> bool {
         // Vazio é o bloco fechado: o ao vivo fica até o registro tomar o lugar dele, outro pensamento ou o fim do turno.
-        if text.is_empty() || thought_covers(&self.settled_thinking, &text) { return false; }
+        if text.is_empty() {
+            if self.live_thinking.is_empty() { return false; }
+            // O registro chegou antes do fim do bloco: toma o lugar agora.
+            if self.events.get(self.thinking_from..).is_some_and(|since| since.iter().any(|e| e.kind == "thinking")) {
+                self.live_thinking.clear();
+                self.thinking_ended = false;
+                return true;
+            }
+            self.thinking_ended = true;
+            return false;
+        }
+        if thought_covers(&self.settled_thinking, &text) { return false; }
+        if self.live_thinking.is_empty() || self.thinking_ended && text != self.live_thinking { self.thinking_from = self.events.len(); }
+        if text != self.live_thinking { self.thinking_ended = false; }
         self.live_thinking = text;
         true
     }
@@ -165,7 +190,7 @@ impl Chat {
         // Mantém os eventos ao vivo e as baixas que chegaram enquanto o HTTP estava em voo.
         // Reaplicar o histórico não é evento novo: o que está em voo continua como estava.
         let live = (self.preview.clone(), self.live_thinking.clone(), self.live_tool.clone(),
-            self.settled_thinking.clone(), self.settled_tool.clone());
+            self.settled_thinking.clone(), self.settled_tool.clone(), self.preview_ended, self.thinking_ended);
         let history: Vec<_> = history.into_iter().filter(|e| !self.removed.contains(&e.id)).collect();
         let ids: HashSet<_> = history.iter().map(|e| e.id.clone()).collect();
         let current = std::mem::take(&mut self.events);
@@ -174,8 +199,7 @@ impl Chat {
             self.events = Vec::new();
             self.index.clear();
             for event in history.into_iter().chain(current) { self.apply(event); }
-            (self.preview, self.live_thinking, self.live_tool, self.settled_thinking, self.settled_tool) = live;
-            self.drop_recorded_preview();
+            self.restore_live(live);
             return;
         };
         let mut merged = current[..first].to_vec();
@@ -194,20 +218,35 @@ impl Chat {
         self.events = Vec::new();
         self.index.clear();
         for event in merged { self.apply(event); }
-        (self.preview, self.live_thinking, self.live_tool, self.settled_thinking, self.settled_tool) = live;
+        self.restore_live(live);
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn restore_live(&mut self, live: (Preview, String, Option<LiveTool>, String, Option<(LiveTool, Option<String>)>, bool, bool)) {
+        (self.preview, self.live_thinking, self.live_tool, self.settled_thinking, self.settled_tool, self.preview_ended, self.thinking_ended) = live;
+        // Os índices mudaram com a reaplicação: o registro do bloco em voo é o que chegar daqui em diante.
+        (self.preview_from, self.thinking_from) = (self.events.len(), self.events.len());
         self.drop_recorded_preview();
     }
 
     // O histórico recarregado pode trazer gravada a resposta que a prévia ainda mostra.
     fn drop_recorded_preview(&mut self) {
-        if self.recently_committed(&self.preview.text) { self.clear_preview(); }
+        let ended_and_recorded = self.preview.vivo && self.preview_ended && self.events.iter().rev().find(|e| e.kind == "assistant_msg")
+            .and_then(|e| e.text.as_deref()).is_some_and(|text| starts_with_preview(text, &self.preview.text));
+        if ended_and_recorded || self.recently_committed(&self.preview.text) { self.clear_preview(); }
     }
 
     pub fn update_preview(&mut self, next: Preview) -> bool {
         // Vazio é o fim do bloco (motor) ou a tela piscando (pane): a prévia fica até a resposta gravada tomar o lugar
         // dela, outra prévia ou o fim do turno. Apagar aqui deixava a linha vazia até o transcript chegar.
         if next.text.is_empty() {
-            if next.vivo && !self.preview.text.is_empty() { self.preview_ended = true; }
+            if !next.vivo || self.preview.text.is_empty() { return false; }
+            // A resposta gravada chegou antes do fim do bloco: toma o lugar agora.
+            if self.events.get(self.preview_from..).is_some_and(|since| since.iter().any(|e| e.kind == "assistant_msg")) {
+                self.clear_preview();
+                return true;
+            }
+            self.preview_ended = true;
             return false;
         }
         if !self.preview_ended && self.preview.md == next.md && self.preview.full == next.full && self.preview.vivo == next.vivo
@@ -221,17 +260,16 @@ impl Chat {
             return visible;
         }
         // O mesmo quadro repetido continua o bloco que acabou; texto diferente é o bloco seguinte.
+        if self.preview.text.is_empty() || self.preview_ended && next.text != self.preview.text { self.preview_from = self.events.len(); }
         if next.text != self.preview.text { self.preview_ended = false; }
         self.preview = next;
         true
     }
 
-    // A prévia do motor é o texto exato da resposta: começo dela, mesmo curto, é a mesma resposta.
-    fn records_preview(&self, committed: &str) -> bool {
-        // Só depois do fim do bloco: começo curto de um bloco ainda em voo bate com a resposta anterior por acaso.
-        let preview = flatten(&self.preview.text);
-        preview_matches(&self.preview.text, committed)
-            || self.preview.vivo && self.preview_ended && !preview.is_empty() && flatten(committed).starts_with(&preview)
+    // Depois do fim do bloco, a próxima resposta gravada é a dele, mesmo com o texto refeito. Antes, só a que bate:
+    // começo curto de um bloco em voo coincide por acaso com outra resposta.
+    fn takes_preview(&self, committed: &str) -> bool {
+        preview_matches(&self.preview.text, committed) || self.preview.vivo && self.preview_ended && !self.preview.text.is_empty()
     }
 
     fn recently_committed(&self, preview: &str) -> bool {
@@ -324,6 +362,11 @@ fn given_up_slot(events: &[ChatEvent], event: &ChatEvent) -> usize {
     let Some(sent) = event.queued_ts.filter(|_| event.desistiu == Some(true)) else { return events.len() };
     if let Some(i) = events.iter().rposition(|e| e.ts.is_some_and(|ts| ts <= sent)) { return i + 1; }
     events.iter().position(|e| e.ts.is_some()).unwrap_or(events.len())
+}
+
+fn starts_with_preview(committed: &str, preview: &str) -> bool {
+    let preview = flatten(preview);
+    !preview.is_empty() && flatten(committed).starts_with(&preview)
 }
 
 fn preview_matches(preview: &str, committed: &str) -> bool {
@@ -696,6 +739,51 @@ mod tests {
         chat.update_preview(live(""));
         chat.drop_unawaited_preview();
         assert_eq!(chat.preview.text, "Pronto.", "o último bloco espera a resposta gravada");
+    }
+
+    #[test]
+    fn a_record_that_arrived_before_the_block_end_takes_the_preview_at_the_end() {
+        let mut chat = Chat::default();
+        let live = |text: &str| Preview { text: text.into(), md: true, full: true, vivo: true, ..Default::default() };
+        chat.update_preview(live("Pron"));
+        chat.apply(event("assistant_msg", "a", "Pronto."));
+        assert_eq!(chat.preview.text, "Pron", "sem o fim do bloco, começo curto não basta");
+        assert!(chat.update_preview(live("")));
+        assert!(chat.preview.text.is_empty());
+
+        chat.update_live_thinking("Pensando nisso".into());
+        chat.apply(event("thinking", "t", "Resumo refeito do pensamento"));
+        assert_eq!(chat.live_thinking, "Pensando nisso");
+        assert!(chat.update_live_thinking(String::new()), "o registro já chegou: o fim do bloco o põe no lugar");
+        assert!(chat.live_thinking.is_empty());
+    }
+
+    #[test]
+    fn after_the_block_end_the_next_record_takes_the_live_row_even_with_other_text() {
+        let mut chat = Chat::default();
+        chat.update_live_thinking("Checking the  timing gap".into());
+        chat.update_live_thinking(String::new());
+        chat.apply(event("thinking", "t", "Summarized differently."));
+        assert!(chat.live_thinking.is_empty());
+
+        let live = |text: &str| Preview { text: text.into(), md: true, full: true, vivo: true, ..Default::default() };
+        chat.apply(event("assistant_msg", "old", "O tmux mantém a sessão viva."));
+        chat.update_preview(live("O"));
+        chat.update_preview(live(""));
+        chat.apply(event("assistant_msg", "old", "O tmux mantém a sessão viva, revisto."));
+        assert_eq!(chat.preview.text, "O", "atualizar uma resposta antiga não é o registro do bloco");
+        chat.apply(event("assistant_msg", "new", "Outra redação da resposta."));
+        assert!(chat.preview.text.is_empty());
+    }
+
+    #[test]
+    fn history_reload_keeps_the_block_end_and_drops_a_recorded_short_preview() {
+        let mut chat = Chat::default();
+        let live = |text: &str| Preview { text: text.into(), md: true, full: true, vivo: true, ..Default::default() };
+        chat.update_preview(live("Pronto."));
+        chat.update_preview(live(""));
+        chat.merge_history(vec![event("assistant_msg", "a", "Pronto.")]);
+        assert!(chat.preview.text.is_empty());
     }
 
     #[test]
