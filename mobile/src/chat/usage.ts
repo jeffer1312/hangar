@@ -38,13 +38,13 @@ export function usageWindows(f: StatusFields | null): UsageWindow[] {
 }
 
 // O agy não publica linha de status: a cota vem da leitura da conta, só o grupo do modelo da sessão.
-export function agyUsageWindows(cota: { estado: string; janelas: JanelaCotaResumo[] } | null | undefined, model: string | null | undefined): UsageWindow[] {
-  if (cota?.estado !== 'lida') return [];
-  const janelas = cotaDoModeloAgy(cota, model).janelas;
+export function agyUsageWindows(quota: { estado: string; janelas: JanelaCotaResumo[] } | null | undefined, model: string | null | undefined): UsageWindow[] {
+  if (quota?.estado !== 'lida') return [];
+  const windows = cotaDoModeloAgy(quota, model).janelas;
   const out: UsageWindow[] = [];
   for (const [key, label] of [['5h', m.uso_janela_5h()], ['7d', m.uso_janela_7d()]] as const) {
-    const janela = janelas.find((j) => j.rotulo === key);
-    if (janela && known(janela.pct)) out.push({ key, label, pct: janela.pct, reset: resetsIn(janela.reset_ts) || undefined });
+    const window = windows.find((w) => w.rotulo === key);
+    if (window && known(window.pct)) out.push({ key, label, pct: window.pct, reset: resetsIn(window.reset_ts) || undefined });
   }
   return out;
 }

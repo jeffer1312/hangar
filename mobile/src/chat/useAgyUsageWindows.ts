@@ -14,7 +14,12 @@ export function useAgyUsageWindows(serverId: string, session: AccountSession | n
   latest.current = { server, agy };
   const [windows, setWindows] = useState<UsageWindow[]>(NONE);
   const [round, setRound] = useState(0);
-  useEffect(() => { if (idle) setRound((n) => n + 1); }, [idle]);
+  // Só o fim de um turno relê: abrir a conversa já parada não conta como fim.
+  const wasIdle = useRef(idle);
+  useEffect(() => {
+    if (idle && !wasIdle.current) setRound((n) => n + 1);
+    wasIdle.current = idle;
+  }, [idle]);
   // A leitura depende da conta, do modelo, do servidor e do turno: objeto novo da lista ou da loja não relê.
   const account = server && agy ? JSON.stringify([server.id, server.baseUrl, agy.conta, agy.model]) : null;
   useEffect(() => { setWindows(NONE); }, [account]);

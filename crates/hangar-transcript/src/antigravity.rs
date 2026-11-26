@@ -94,7 +94,9 @@ impl AgyStream {
                 events.push(ChatEvent { ts, tool_use_id: call, result: Some(content.to_owned()), is_error: Some(failed),
                     bg_agent_id: launched, ..event(ChatKind::ToolResult, format!("res:agy:{step}")) });
                 // Subagente encerrado não manda relatório: o cartão dele fecha aqui.
-                if content.contains(SUBAGENTS_KILLED) {
+                // A saída diz quantos saíram, não quais: só fecha quando bate com os pedidos.
+                let count = content.split(SUBAGENTS_KILLED).nth(1).and_then(|rest| rest.split_whitespace().next()).and_then(|n| n.parse::<usize>().ok());
+                if count == Some(killed.len()) {
                     for (n, id) in killed.iter().enumerate() {
                         events.push(ChatEvent { ts, ..crate::claude::task_result(format!("agy:{step}:kill:{n}"), id) });
                     }
@@ -253,6 +255,10 @@ mod tests {
             "tool_calls": [{"name": "manage_subagents", "args": {"Action": "kill", "ConversationIds": [SUB]}}]});
         let done = json!({"step_index": 11, "type": "GENERIC", "content": "Successfully killed 1 subagent(s) and their descendants. Killed roles: Revisor"});
         assert!(task_end(&feed_all(&[call.clone(), done]), SUB));
+        let two = json!({"step_index": 10, "type": "PLANNER_RESPONSE", "content": "",
+            "tool_calls": [{"name": "manage_subagents", "args": {"Action": "kill", "ConversationIds": [SUB, PARENT]}}]});
+        let one = json!({"step_index": 11, "type": "GENERIC", "content": "Successfully killed 1 subagent(s) and their descendants. Killed roles: Revisor"});
+        assert!(!task_end(&feed_all(&[two, one]), SUB), "parte encerrada não diz qual: nenhum cartão fecha");
         let refused = json!({"step_index": 11, "type": "GENERIC", "content": "Error: no subagent with that id"});
         assert!(!task_end(&feed_all(&[call, refused]), SUB));
     }

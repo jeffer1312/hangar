@@ -44,6 +44,7 @@ enum Answer { Option(String), Cancel }
 
 const SCHEDULE_TITLES:[&str;2] = ["Run schedule","Running schedule"];
 const LIVE_TOOL_TEXT_LIMIT:usize = 8_000;
+const KNOWN_KINDS:[&str;4] = ["allow_once","allow_always","reject_once","reject_always"];
 
 fn not_found(detail:&str) -> bool { detail.contains("(code 404)") || detail.contains("Error 404,") || detail.contains("HTTP 404") }
 
@@ -74,8 +75,9 @@ fn answers(request:&Value) -> Vec<(String,Answer)> {
         out.push((label,Answer::Option(id)));
     }
     if let Some((_,id)) = of_kind("reject_once") { out.push(("Negar".to_owned(),Answer::Option(id))); }
+    if let Some((_,id)) = of_kind("reject_always") { out.push(("Negar sempre".to_owned(),Answer::Option(id))); }
     // Tipo que o agy ainda não usava: a opção aparece com o nome dele em vez de sumir.
-    if out.is_empty() { out.extend(options.iter().filter_map(named)); }
+    out.extend(options.iter().filter(|option|!option["kind"].as_str().is_some_and(|kind|KNOWN_KINDS.contains(&kind))).filter_map(named));
     out.push(("Cancelar".to_owned(),Answer::Cancel));
     out
 }
@@ -141,6 +143,8 @@ pub struct Engine {
     commands:Vec<String>,
     /// O pedido da pessoa já recebeu o "continue" automático uma vez.
     resumed:bool,
+    /// O turno foi cancelado (Parar ou silêncio): não recomeça sozinho nem segura comando de fundo.
+    stopping:bool,
     /// Falha do modelo que o agy manda como texto: vira o aviso do turno quando ele termina.
     turn_failure:Option<String>,
     /// A abertura já pediu o modo uma vez nesta vida: recusado, segue sem ele (com nota).
@@ -166,7 +170,7 @@ impl Engine {
             state:StateEvent { session:metadata["name"].as_str().unwrap_or("").into(),state:"idle".into(),headless:true,..StateEvent::default() },
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool:None,
             rpc:BTreeMap::new(),server_requests:Vec::new(),request_epochs:BTreeMap::new(),answering:BTreeSet::new(),
-            wires:BTreeMap::new(),policies:BTreeMap::new(),cancel_due:None,open_tools:BTreeMap::new(),held:false,reply_open:false,settle_at:None,progress_at:clock.monotonic_s,turn_output:false,commands:Vec::new(),resumed:false,
+            wires:BTreeMap::new(),policies:BTreeMap::new(),cancel_due:None,open_tools:BTreeMap::new(),held:false,reply_open:false,settle_at:None,progress_at:clock.monotonic_s,turn_output:false,commands:Vec::new(),resumed:false,stopping:false,
             turn_failure:None,boot_mode_tried:false,last_event:clock.monotonic_s,
             decoder:acp::Session::new(String::new(),None),conversation }
     }
@@ -200,7 +204,7 @@ impl Engine {
             .chain(self.rpc.values().filter(|rpc|!rpc.timed_out).filter_map(|rpc|rpc.deadline))
             .chain(self.cancel_due.filter(|_|self.in_progress))
             // Prazo que o `tick` não consome nesse estado não entra: vencido, faria o ator girar sem parar.
-            .chain((self.in_progress && self.cancel_due.is_none() && !self.silence_held()).then_some(self.progress_at + INACTIVITY_LIMIT))
+            .chain(self.silence_limit().filter(|_|self.in_progress && self.cancel_due.is_none()).map(|limit|self.progress_at + limit))
             .chain(self.settle_at.filter(|_|!self.in_progress))
             .chain((self.held && !self.in_progress && self.reply_open).then_some(self.progress_at + REPLY_QUIET_LIMIT))
             .chain((self.held && !self.in_progress && self.open_tools.values().any(|outlives|*outlives)).then_some(self.progress_at + COMMAND_HOLD_LIMIT))
@@ -227,7 +231,12 @@ impl Engine {
         self.brain_dir.as_deref().is_some_and(|dir|hangar_antigravity::inbox::pending_reply(std::path::Path::new(dir),&self.conversation))
     }
 
-    fn silence_held(&self) -> bool { self.booting.is_some() || !self.server_requests.is_empty() || !self.open_tools.is_empty() }
+    /// Silêncio que encerra o turno: pergunta aberta e abertura seguram sem prazo (esperam a pessoa); ferramenta
+    /// aberta segura até o teto dos comandos, porque o agy às vezes perde o aviso de fim.
+    fn silence_limit(&self) -> Option<f64> {
+        if self.booting.is_some() || !self.server_requests.is_empty() { return None; }
+        Some(if self.open_tools.is_empty() { INACTIVITY_LIMIT } else { COMMAND_HOLD_LIMIT })
+    }
 
     pub(super) fn input_frame_template(&self) -> Value {
         json!({"jsonrpc":"2.0","id":format!("agy:{}:{}",self.generation,u64::MAX),"method":"session/prompt",
@@ -469,7 +478,7 @@ impl Engine {
                 let params = json!({"sessionId":self.conversation,"prompt":prompt});
                 let id = self.send(Some(operation_id.clone()),None,Call::Prompt,"session/prompt",params,&mut effects);
                 if let Some(wire) = self.wires.get_mut(&operation_id) { wire.kind = WireKind::Prompt { steer }; }
-                if !steer { self.turn_id = Some(id); self.turn_failure = None; self.turn_output = false; self.resumed = false; }
+                if !steer { self.turn_id = Some(id); self.turn_failure = None; self.turn_output = false; self.resumed = false; self.stopping = false; }
                 self.in_progress = true;
                 self.settle_at = None;
                 self.last_event = clock.monotonic_s;
@@ -495,6 +504,7 @@ impl Engine {
                         effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","id":id,"result":{"outcome":{"outcome":"cancelled"}}}),operation_id:None });
                     }
                 }
+                self.stopping = true;
                 self.wires.insert(operation_id.clone(),Wire { kind:WireKind::Cancel,request_id:None,server_request:None,server_epoch:None,interaction:None,final_result:false });
                 effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.conversation}}),operation_id:Some(operation_id.clone()) });
                 self.cancel_due = Some(clock.monotonic_s + CANCEL_LIMIT);
@@ -606,13 +616,13 @@ impl Engine {
             tracing::warn!(session=%self.state.session,"antigravity: o turno não parou depois do cancelamento; o processo sobe de novo");
             effects.push(Effect::Respawn { operation_id:format!("cancel_restart:{}:{}",self.generation,self.counter),reason:"restart".into(),patch:Value::Null,reply:json!({}) });
         }
-        if self.in_progress && self.cancel_due.is_none() && now >= self.progress_at + INACTIVITY_LIMIT {
+        if self.in_progress && self.cancel_due.is_none() && let Some(limit) = self.silence_limit() && now >= self.progress_at + limit {
             self.progress_at = now;
-            if self.silence_held() { return; }
+            self.stopping = true;
             // O agy segura o prompt enquanto acha que tem subagente ou tarefa viva; o cancelamento fecha o turno
             // sem matar o processo, e o prazo do cancelamento sobe o processo de novo se nem isso responder.
             tracing::warn!(session=%self.state.session,code="agy_prompt_inactive","antigravity: turno aberto sem saída do agy; cancelado");
-            let minutes = (INACTIVITY_LIMIT / 60.0).round() as u64;
+            let minutes = (limit / 60.0).round() as u64;
             self.note(format!("O Antigravity ficou {minutes} min sem mandar nada com o turno aberto; o Hangar cancelou o turno. Mande uma mensagem para continuar."),effects);
             effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.conversation}}),operation_id:None });
             self.cancel_due = Some(now + CANCEL_LIMIT);
@@ -647,8 +657,10 @@ impl Engine {
                 self.progress_at = now;
                 self.settle_at = None;
                 if self.in_progress && matches!(event,acp::Event::TextDelta(_) | acp::Event::ThoughtDelta(_) | acp::Event::ToolStarted { .. }) { self.turn_output = true; }
+                // Fim atrasado de uma ferramenta que já saiu (Parar, turno encerrado) não é o agy acordando.
+                let late = matches!(event,acp::Event::ToolUpdated { id,.. } if !self.open_tools.contains_key(id));
                 // Saída sem prompt aberto: o agy acordou sozinho (tarefa de fundo, recado de subagente).
-                if !self.in_progress && self.booting.is_none() && self.ready {
+                if !late && !self.in_progress && self.booting.is_none() && self.ready {
                     if !self.held { self.held = true; effects.push(Effect::StateChanged); }
                     if !matches!(event,acp::Event::PermissionAsked { .. } | acp::Event::ToolUpdated { .. }) { self.reply_open = true; }
                 }
@@ -658,12 +670,6 @@ impl Engine {
                 acp::Out::Write(text) => if let Ok(frame) = serde_json::from_str::<Value>(&text) { effects.push(Effect::Write { frame,operation_id:None }); },
                 acp::Out::Event(event) => match event {
                     acp::Event::PermissionAsked { rpc_id,.. } => {
-                        // Pedido de outra conversa (os subagentes pedem pela do principal) não tem cartão aqui.
-                        if !self.conversation.is_empty() && line["params"]["sessionId"].as_str().is_some_and(|s|s != self.conversation) {
-                            tracing::warn!(session=%self.state.session,code="agy_permission_other_session","antigravity: permissão pedida por outra conversa; cancelada");
-                            effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","id":rpc_id,"result":{"outcome":{"outcome":"cancelled"}}}),operation_id:None });
-                            continue;
-                        }
                         let Ok(id) = serde_json::from_value::<RequestId>(rpc_id) else { continue };
                         if self.server_requests.iter().any(|(known,_)|*known == id) { continue; }
                         self.counter += 1;
@@ -673,7 +679,11 @@ impl Engine {
                     }
                     acp::Event::TextDelta(piece) => {
                         // O agy seguiu depois da falha: o turno não terminou nela.
-                        if !piece.trim().is_empty() { self.turn_failure = None; }
+                        if !piece.trim().is_empty() {
+                            self.turn_failure = None;
+                            // O agy não grava o pensamento no transcript: ele termina quando a resposta começa.
+                            if let Some(text) = self.thinking.clear() { self.publish("thinking",text,effects); }
+                        }
                         if let Some(text) = self.preview.append(&piece,now) { self.publish("preview",text,effects); }
                     }
                     acp::Event::TurnFailed(detail) => self.turn_failure = Some(detail),
@@ -683,6 +693,7 @@ impl Engine {
                         self.open_tools.insert(id,outlives_prompt(kind.as_deref(),title.as_deref(),input.as_ref()));
                         // Texto depois de uma ferramenta é outra mensagem; o definitivo vem do transcript.
                         if let Some(text) = self.preview.clear() { self.publish("preview",text,effects); }
+                        if let Some(text) = self.thinking.clear() { self.publish("thinking",text,effects); }
                         let (tool_name,mut input) = match name {
                             Some(name) => hangar_transcript::agy_live_tool(&name,input.as_ref().unwrap_or(&Value::Null)),
                             None => (title.unwrap_or_else(||"tool".into()),serde_json::Map::new()),
@@ -836,8 +847,9 @@ impl Engine {
     fn turn_ended(&mut self,line:&Value,effects:&mut Vec<Effect>) {
         if self.prompt_open() { return; }
         self.in_progress = false; self.turn_id = None; self.cancel_due = None;
-        // Comando que continua depois do prompt segura o turno até avisar que acabou.
-        self.open_tools.retain(|_,outlives|*outlives);
+        let stopped = std::mem::take(&mut self.stopping) || line["result"]["stopReason"] == "cancelled";
+        // Comando que continua depois do prompt segura o turno até avisar que acabou; o cancelamento o derruba junto.
+        if stopped { self.open_tools.clear(); } else { self.open_tools.retain(|_,outlives|*outlives); }
         self.reply_open = false; self.settle_at = None;
         self.held = !self.open_tools.is_empty();
         if self.held { self.progress_at = self.clock.monotonic_s; }
@@ -847,7 +859,7 @@ impl Engine {
         let failure = line.get("error").filter(|e|!e.is_null()).map(|e|e["message"].as_str().unwrap_or("o turno falhou").to_owned());
         let failure = failure.or_else(||self.turn_failure.take());
         // 404 depois que o modelo já respondeu é falha passageira do Google: o agy segue com um "continue", uma vez por pedido.
-        if failure.as_deref().is_some_and(not_found) && self.turn_output && !self.resumed && !self.held {
+        if failure.as_deref().is_some_and(not_found) && self.turn_output && !self.resumed && !self.held && !stopped {
             self.resumed = true; self.turn_output = false;
             self.note("O Antigravity teve uma falha passageira (404) no meio da resposta; o Hangar pediu para ele continuar.".into(),effects);
             let params = json!({"sessionId":self.conversation,"prompt":[{"type":"text","text":"continue"}]});
@@ -970,6 +982,8 @@ impl Engine {
         let mut effects = Vec::new();
         self.clear_live(&mut effects);
         effects.extend(self.hydrate(snapshot)?);
+        // A pergunta que segurava o turno foi resolvida enquanto o socket estava fora: sem prazo, ninguém o soltaria.
+        if self.held && !self.in_progress && self.settle_at.is_none() { self.arm_settle(self.clock.monotonic_s); }
         if !self.in_progress { effects.push(Effect::WakeQueue); }
         Ok(effects)
     }
@@ -1278,8 +1292,8 @@ mod tests {
         command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
         written(&mut engine,"in1");
         feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"c1","status":"in_progress","title":"cargo build"})),10.0);
-        assert!(!cancelled(&engine.apply(EngineInput::Tick,at(10.0 + 3.0 * INACTIVITY_LIMIT)).unwrap()));
-        let done = 10.0 + 3.0 * INACTIVITY_LIMIT + 1.0;
+        assert!(!cancelled(&engine.apply(EngineInput::Tick,at(10.0 + COMMAND_HOLD_LIMIT - 1.0)).unwrap()));
+        let done = 10.0 + COMMAND_HOLD_LIMIT - 1.0;
         feed(&mut engine,update(json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"completed"})),done);
         assert!(!cancelled(&engine.apply(EngineInput::Tick,at(done + INACTIVITY_LIMIT - 1.0)).unwrap()));
         assert!(cancelled(&engine.apply(EngineInput::Tick,at(done + INACTIVITY_LIMIT)).unwrap()));
@@ -1444,9 +1458,7 @@ mod tests {
         written(&mut engine,"in1");
         feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
         feed(&mut engine,update(json!({"sessionUpdate":"tool_call_update","toolCallId":"r1","status":"in_progress"})),4.0);
-        assert!(engine.next_deadline().is_some(),"sessão segurada sem prazo fica em Trabalhando para sempre");
-        engine.apply(EngineInput::Tick,at(4.0 + SETTLE_DEBOUNCE)).unwrap();
-        assert_eq!(state(&engine),"idle");
+        assert_eq!(state(&engine),"idle","atualização de ferramenta que o turno já não tem não segura a sessão");
     }
 
     fn failure_text(text:&str) -> Value { chunk(&format!("\n⚠ agent executor error: {text}\n")) }
@@ -1514,18 +1526,6 @@ mod tests {
     }
 
     #[test]
-    fn a_permission_asked_by_another_conversation_is_cancelled() {
-        let mut engine = opened(json!({}));
-        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
-        written(&mut engine,"in1");
-        let mut asked = permission(json!({"toolCallId":"call_9","title":"rm -rf x"}),json!([{"optionId":"a","name":"Allow","kind":"allow_once"}]));
-        asked["params"]["sessionId"] = json!("11111111-2222-4333-8444-555555555555");
-        let out = feed(&mut engine,asked,2.0);
-        assert_eq!(frames(&out)[0]["result"]["outcome"],json!({"outcome":"cancelled"}));
-        assert_eq!(state(&engine),"working");
-    }
-
-    #[test]
     fn after_the_silence_cancel_no_deadline_is_left_in_the_past() {
         let mut engine = opened(json!({}));
         command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
@@ -1559,6 +1559,87 @@ mod tests {
         feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"x1","status":"in_progress","kind":"execute","title":"npm run dev"})),2.0);
         feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
         assert_eq!(state(&engine),"idle");
+    }
+
+    #[test]
+    fn a_tool_that_never_reports_back_does_not_hold_the_silence_clock_forever() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"c1","status":"in_progress","title":"x"})),10.0);
+        assert!(!cancelled(&engine.apply(EngineInput::Tick,at(10.0 + COMMAND_HOLD_LIMIT - 1.0)).unwrap()));
+        assert!(cancelled(&engine.apply(EngineInput::Tick,at(10.0 + COMMAND_HOLD_LIMIT)).unwrap()));
+    }
+
+    #[test]
+    fn a_stopped_turn_neither_resumes_after_a_404_nor_keeps_its_background_command() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,chunk("começando"),2.0);
+        feed(&mut engine,command_call("c1",json!({"CommandLine":"cargo build"})),2.5);
+        feed(&mut engine,failure_text("NOT_FOUND (code 404): Requested entity was not found."),3.0);
+        command(&mut engine,"int1",OperationKind::Interrupt,json!({})).unwrap();
+        let out = feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"cancelled"}}),4.0);
+        assert!(!frames(&out).iter().any(|f|f["method"] == "session/prompt"),"Parar não recomeça o turno");
+        assert_eq!(state(&engine),"idle","o Parar derruba o comando de fundo junto");
+    }
+
+    #[test]
+    fn a_reject_always_option_stays_on_the_card() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,permission(json!({"toolCallId":"call_1","title":"curl x"}),json!([
+            {"optionId":"once","name":"Allow","kind":"allow_once"},{"optionId":"no","name":"Deny","kind":"reject_once"},
+            {"optionId":"never","name":"Always deny","kind":"reject_always"}])),2.0);
+        assert_eq!(engine.view()["options"],json!(["Permitir uma vez","Negar","Negar sempre","Cancelar"]));
+        assert_eq!(frames(&select(&mut engine,"s1",3))[0]["result"]["outcome"],json!({"outcome":"selected","optionId":"never"}));
+    }
+
+    #[test]
+    fn a_held_turn_whose_question_the_cano_resolved_gets_a_deadline_on_reattach() {
+        let mut engine = opened(json!({}));
+        feed(&mut engine,permission(json!({"toolCallId":"call_1","title":"x"}),json!([{"optionId":"a","name":"Allow","kind":"allow_once"}])),5.0);
+        assert_eq!(state(&engine),"awaiting_input");
+        let init = json!({"jsonrpc":"2.0","id":"agy:0:3","result":{"sessionId":OPENED}}).to_string();
+        engine.reattach(CanoSnapshot { kind:"cano_snapshot".into(),versao:2,pid:9,init:Some(init),aberto:false,pendentes:vec![],ultimo_result:None,
+            rate_limit:None,stderr_tail:vec![],saiu:None,inflight:json!({}) }).unwrap();
+        assert!(engine.next_deadline().is_some(),"segurada sem prazo fica em Trabalhando para sempre");
+    }
+
+    #[test]
+    fn a_late_update_of_a_tool_already_closed_does_not_hold_the_session_again() {
+        let mut engine = opened(json!({}));
+        held_by_a_command(&mut engine);
+        command(&mut engine,"int1",OperationKind::Interrupt,json!({})).unwrap();
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"failed"})),5.0);
+        assert_eq!(state(&engine),"idle");
+    }
+
+    #[test]
+    fn a_permission_asked_by_another_conversation_still_gets_a_card() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let mut asked = permission(json!({"toolCallId":"call_9","title":"cargo test"}),json!([{"optionId":"a","name":"Allow","kind":"allow_once"}]));
+        asked["params"]["sessionId"] = json!("11111111-2222-4333-8444-555555555555");
+        feed(&mut engine,asked,2.0);
+        assert_eq!(state(&engine),"awaiting_input");
+    }
+
+    #[test]
+    fn a_thought_ends_when_the_agent_answers_or_calls_a_tool() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let thought = |text:&str| update(json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":text}}));
+        let cleared = |out:&[Effect]| out.iter().any(|e|matches!(e,Effect::Publish { channel,data } if channel == "thinking" && data["text"] == ""));
+        feed(&mut engine,thought("vou ler o arquivo"),2.0);
+        assert!(cleared(&feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"r1","status":"in_progress","title":"ler"})),3.0)),
+            "o agy não grava o pensamento: sem fechar aqui, o Pensando fica até o fim do turno");
+        feed(&mut engine,thought("agora respondo"),4.0);
+        assert!(cleared(&feed(&mut engine,chunk("pronto"),5.0)));
     }
 
     #[test]
