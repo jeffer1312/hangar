@@ -12331,6 +12331,7 @@
   "native_whatsapp_migration_backup": "Antes de converter, uma cópia do arquivo fica guardada. Se a versão nova não subir, o Hangar devolve a cópia e volta para a {installed}.",
   "native_whatsapp_auto_update_failed": "A atualização para {tag} parou: {reason} A {installed} continua rodando.",
   "native_whatsapp_update_busy": "Um envio ou outra operação do WhatsApp está em curso; tente de novo em instantes.",
+  "native_whatsapp_send_updating": "O WhatsApp está atualizando; tente de novo em instantes. Nada foi enviado.",
   "native_whatsapp_unreachable_title": "O serviço não respondeu",
   "native_whatsapp_unreachable_body": "O serviço do WhatsApp está ligado, mas não mandou o estado dele.",
   "native_whatsapp_err_accept_required": "Marque o aceite dos riscos antes de instalar.",
