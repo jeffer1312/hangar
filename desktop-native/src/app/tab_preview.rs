@@ -210,8 +210,11 @@ impl Hangar {
             ChatUpdate::NoticeUpdate(event)=>{if self.chat.events.iter().any(|known|known.id==event.id) {self.chat.apply(event);}}
             ChatUpdate::Preview(preview)=>{self.chat.update_preview(preview);self.visible_preview=self.chat.preview.clone();}
             ChatUpdate::State(state)=>{
-                // Sem o cronômetro da conversa aberta: o pensamento que o registro não cobriu sai com o fim do turno.
-                if state.state!="working" {self.chat.live_thinking.clear();}
+                // Sem o cronômetro da conversa aberta: o que o registro não cobriu sai com o fim do turno.
+                if state.state!="working" {
+                    self.chat.live_thinking.clear();
+                    if self.chat.preview.vivo {self.chat.clear_preview();self.visible_preview=Preview::default();}
+                }
                 self.chat.update_state(state);if self.chat.ask.is_none() {self.ask_form=AskForm::default();}
             }
             ChatUpdate::Question(ask)=>{if self.chat.update_ask(ask) {self.ask_form=AskForm::default();}}

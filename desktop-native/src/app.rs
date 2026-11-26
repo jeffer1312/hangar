@@ -3081,6 +3081,8 @@ impl Hangar {
             ChatUpdate::Question(ask) => if self.chat.update_ask(ask) { self.ask_form = AskForm::default(); },
             ChatUpdate::Thinking(text) => {
                 if self.chat.update_live_thinking(text) { self.live_clear_epoch[Live::Thinking as usize] += 1; }
+                // Quadro que chega depois da parada não tem outro estado para tirá-lo.
+                if self.chat.state.state != "working" { self.defer_live_clear(Live::Thinking, cx); }
             }
             ChatUpdate::LiveTool(tool) => match tool {
                 Some(tool) => if self.chat.update_live_tool(tool) { self.live_clear_epoch[Live::Tool as usize] += 1; },

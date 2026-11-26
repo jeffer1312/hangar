@@ -15,6 +15,8 @@ pub struct Chat {
     ask_seen: bool,
     pub live_thinking: String,
     pub live_tool: Option<LiveTool>,
+    /// O motor avisou o fim do bloco que a prévia mostra: ela espera a resposta gravada, e um quadro novo é outro bloco.
+    preview_ended: bool,
     pub command_output: HashMap<String, String>,
     /// Turno visto terminar nesta conversa, já em texto: a linha de trabalhando fica no lugar com ele, como o
     /// "Worked for 16s" do Claude Code, em vez de sair e puxar o chat para baixo.
@@ -204,8 +206,11 @@ impl Chat {
     pub fn update_preview(&mut self, next: Preview) -> bool {
         // Vazio é o fim do bloco (motor) ou a tela piscando (pane): a prévia fica até a resposta gravada tomar o lugar
         // dela, outra prévia ou o fim do turno. Apagar aqui deixava a linha vazia até o transcript chegar.
-        if next.text.is_empty() { return false; }
-        if self.preview.md == next.md && self.preview.full == next.full && self.preview.vivo == next.vivo
+        if next.text.is_empty() {
+            if next.vivo && !self.preview.text.is_empty() { self.preview_ended = true; }
+            return false;
+        }
+        if !self.preview_ended && self.preview.md == next.md && self.preview.full == next.full && self.preview.vivo == next.vivo
             && next.text.len() < self.preview.text.len() && self.preview.text.starts_with(&next.text) {
             return false;
         }
@@ -215,14 +220,18 @@ impl Chat {
             self.clear_preview();
             return visible;
         }
+        // O mesmo quadro repetido continua o bloco que acabou; texto diferente é o bloco seguinte.
+        if next.text != self.preview.text { self.preview_ended = false; }
         self.preview = next;
         true
     }
 
     // A prévia do motor é o texto exato da resposta: começo dela, mesmo curto, é a mesma resposta.
     fn records_preview(&self, committed: &str) -> bool {
+        // Só depois do fim do bloco: começo curto de um bloco ainda em voo bate com a resposta anterior por acaso.
         let preview = flatten(&self.preview.text);
-        preview_matches(&self.preview.text, committed) || self.preview.vivo && !preview.is_empty() && flatten(committed).starts_with(&preview)
+        preview_matches(&self.preview.text, committed)
+            || self.preview.vivo && self.preview_ended && !preview.is_empty() && flatten(committed).starts_with(&preview)
     }
 
     fn recently_committed(&self, preview: &str) -> bool {
@@ -299,6 +308,7 @@ impl Chat {
     }
 
     pub fn clear_preview(&mut self) {
+        self.preview_ended = false;
         self.preview = Preview::default();
     }
 }
@@ -660,6 +670,20 @@ mod tests {
         chat.update_preview(Preview { text: "Comp".into(), ..Default::default() });
         chat.apply(event("assistant_msg", "b", "Compilei de novo."));
         assert_eq!(chat.preview.text, "Comp", "prévia curta do pane não é a resposta");
+    }
+
+    #[test]
+    fn a_block_still_streaming_is_not_taken_by_an_older_answer_with_the_same_start() {
+        let mut chat = Chat::default();
+        let live = |text: &str| Preview { text: text.into(), md: true, full: true, vivo: true, ..Default::default() };
+        chat.update_preview(live("O"));
+        chat.apply(event("assistant_msg", "a", "O tmux mantém a sessão viva."));
+        assert_eq!(chat.preview.text, "O", "o bloco em voo só começa igual à resposta anterior");
+
+        chat.update_preview(live("Vou compilar o projeto."));
+        chat.update_preview(live(""));
+        assert!(chat.update_preview(live("Vou")), "depois do fim do bloco, o quadro curto é o bloco seguinte");
+        assert_eq!(chat.preview.text, "Vou");
     }
 
     #[test]
