@@ -410,10 +410,14 @@ pub fn list_subagents(provider: &str, jsonl: &Path) -> Vec<Map<String, Value>> {
             tracing::warn!(code = "agy_subagents_unreadable", kind = ?error.kind(), "subagents: pasta de subagentes do Antigravity ilegível");
             Vec::new()
         });
+        let died = if ids.is_empty() { HashMap::new() } else { agy_died(jsonl) };
         for id in ids {
             let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, &id).unwrap_or_default();
             let killed = hangar_antigravity::paths::subagent_state(&brain, &conversation, &id).as_deref() == Some(AGY_KILLED);
-            if let Some((agent, _)) = read_agent_agy(&brain, &descriptor, &id, LIST_TAIL, killed) { out.push(agent); }
+            if let Some((mut agent, f)) = read_agent_agy(&brain, &descriptor, &id, LIST_TAIL, killed) {
+                if let Some(at) = died.get(&id) { mark_died(&mut agent, &f, *at); }
+                out.push(agent);
+            }
         }
     } else if let Some(root) = pi_agents_dir(provider, jsonl) {
         for task in sorted_dirs(&root) {
@@ -456,7 +460,8 @@ pub fn get_subagent(provider: &str, jsonl: &Path, agent_id: &str, events: i64) -
         if !ids.iter().any(|id| id == agent_id) { return None; }
         let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, agent_id).unwrap_or_default();
         let killed = hangar_antigravity::paths::subagent_state(&brain, &conversation, agent_id).as_deref() == Some(AGY_KILLED);
-        let (agent, f) = read_agent_agy(&brain, &descriptor, agent_id, DETAIL_TAIL, killed)?;
+        let (mut agent, f) = read_agent_agy(&brain, &descriptor, agent_id, DETAIL_TAIL, killed)?;
+        if let Some(at) = agy_died(jsonl).get(agent_id) { mark_died(&mut agent, &f, *at); }
         (agent, f, Layout::Agy)
     } else if let Some(root) = pi_agents_dir(provider, jsonl) {
         let task = child(&root, agent_id)?;
@@ -743,6 +748,46 @@ fn agy_place(provider: &str, jsonl: &Path) -> Option<(PathBuf, String)> {
 /// e o estado `KILLED`.
 /// `None` só para id que não é UUID; transcript que não abre volta marcado `ilegivel`.
 const AGY_KILLED: &str = "SUBAGENT_STATE_KILLED";
+/// Marca de leitura rápida antes de decodificar a linha: o principal tem milhares de passos.
+const AGY_DIED_MARK: &[u8] = b"encountered an error";
+
+/// Folga entre o aviso do sistema e a última escrita do subagente que morreu.
+const AGY_REVIVED_AFTER_SECS: f64 = 60.0;
+
+/// Subagentes que o sistema avisou ao principal terem morrido (cota, rede), com a hora do último aviso: eles não gravam
+/// erro no próprio transcript.
+fn agy_died(parent: &Path) -> HashMap<String, f64> {
+    let file = match File::open(parent) {
+        Ok(file) => file,
+        Err(error) => {
+            tracing::warn!(code = "agy_parent_unreadable", kind = ?error.kind(), "subagents: transcript do principal do Antigravity ilegível");
+            return HashMap::new();
+        }
+    };
+    let mut died = HashMap::new();
+    for line in BufReader::new(file).split(b'\n') {
+        let line = match line {
+            Ok(line) => line,
+            Err(error) => {
+                tracing::warn!(code = "agy_parent_unreadable", kind = ?error.kind(), "subagents: leitura do transcript do principal do Antigravity parou");
+                break;
+            }
+        };
+        if !line.windows(AGY_DIED_MARK.len()).any(|w| w == AGY_DIED_MARK) { continue; }
+        let Some(value) = decode_line(&line).filter(|value| value["type"] == "SYSTEM_MESSAGE") else { continue };
+        let Some(id) = value["content"].as_str().and_then(crate::transcript::agy_failed_subagent) else { continue };
+        let at = value["created_at"].as_str().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map_or(0.0, |t| t.timestamp() as f64);
+        died.insert(id, at);
+    }
+    died
+}
+
+/// O agy revive o subagente morto quando o principal lhe manda outra mensagem: escrita bem depois do aviso é vida.
+fn mark_died(agent: &mut Map<String, Value>, transcript: &Path, died_at: f64) {
+    if agent.get("state").and_then(Value::as_str) == Some("finished") { return; }
+    if mtime(transcript) > died_at + AGY_REVIVED_AFTER_SECS { return; }
+    agent.insert("state".into(), json!("failed"));
+}
 
 fn read_agent_agy(brain: &Path, descriptor: &Value, id: &str, tail: usize, killed: bool) -> Option<(Map<String, Value>, PathBuf)> {
     let f = hangar_antigravity::paths::transcript_in(brain, id)?;
@@ -1108,6 +1153,34 @@ mod tests {
         let state = |id: &str| list.iter().find(|a| a["agentId"] == id).map(|a| (a["state"].clone(), a["endedAt"].is_string())).unwrap();
         assert_eq!(state(ERRORED), (json!("failed"), true));
         assert_eq!(state(KILLED), (json!("finished"), true));
+    }
+
+    /// Subagente que morreu por cota não grava erro no próprio transcript: só o principal recebe o aviso do sistema.
+    #[test]
+    fn an_antigravity_subagent_the_system_reports_as_failed_is_failed() {
+        const PARENT: &str = "d4260961-71cd-4a60-9ae1-410cae6b046d";
+        const DIED: &str = "946a2776-fe24-464a-8939-c17ab34556ab";
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join(PARENT).join(".system_generated");
+        let jsonl = parent.join("logs/transcript_full.jsonl");
+        let notice = format!("<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-26T14:07:22Z sender=system priority=MESSAGE_PRIORITY_HIGH content=The subagent Desktop Native Implementer C (self) with id \"{DIED}\" encountered an error and has either stopped or failed to start execution: RESOURCE_EXHAUSTED (code 429): Individual quota reached.\n</SYSTEM_MESSAGE>");
+        write(&jsonl, &[json!({"step_index": 0, "type": "USER_INPUT", "content": "oi"}),
+            json!({"step_index": 1, "type": "SYSTEM_MESSAGE", "created_at": "2026-11-26T14:07:22Z", "content": notice})]);
+        std::fs::create_dir_all(parent.join("subagents")).unwrap();
+        std::fs::write(parent.join("subagents").join(format!("{DIED}.json")),
+            json!({"conversationId": DIED, "subagentDescriptor": {"typeName": "self", "role": "Desktop Native Implementer C"}, "state": "SUBAGENT_STATE_ALIVE"}).to_string()).unwrap();
+        write(&root.path().join(DIED).join(".system_generated/logs/transcript_full.jsonl"),
+            &[json!({"step_index": 0, "type": "USER_INPUT", "content": "faça"}), json!({"step_index": 1, "type": "GENERIC", "content": "Made 1 replacement"})]);
+        let sub_jsonl = root.path().join(DIED).join(".system_generated/logs/transcript_full.jsonl");
+        let at = |t: &str| std::fs::File::options().write(true).open(&sub_jsonl).unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(chrono::DateTime::parse_from_rfc3339(t).unwrap().timestamp() as u64)).unwrap();
+        at("2026-11-26T14:07:20Z");
+        let list = list_subagents("antigravity", &jsonl);
+        assert_eq!(list[0]["state"], "failed");
+        assert_eq!(get_subagent("antigravity", &jsonl, DIED, 40).unwrap()["state"], "failed");
+        // Revivido por uma mensagem nova do principal: voltou a escrever depois do aviso.
+        at("2026-11-26T14:30:00Z");
+        assert!(list_subagents("antigravity", &jsonl)[0].get("state").is_none_or(|state| state != "failed"));
     }
 
     fn write(p: &Path, lines: &[Value]) {

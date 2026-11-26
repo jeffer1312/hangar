@@ -26,6 +26,9 @@ const SUBAGENTS_KILLED: &str = "Successfully killed ";
 
 /// Recado entre conversas do `agy` (relatório de subagente, pedido do principal, fim de tarefa de fundo), dentro de
 /// um `SYSTEM_MESSAGE`.
+static SUBAGENT_FAILED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^The subagent .* with id "([^"]+)" encountered an error"#).unwrap()
+});
 static MESSAGE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)\[Message\] timestamp=\S+ sender=(\S+) priority=\S+ content=(.*)").unwrap()
 });
@@ -141,6 +144,11 @@ impl AgyStream {
             if task.starts_with("task-") { events.push(ChatEvent { is_error: code.map(|code| code != 0), ..finish(task) }); }
             return;
         }
+        // Subagente que morreu (cota, rede) não manda relatório: só o sistema avisa o principal.
+        if sender == "system" {
+            if let Some(id) = failed_subagent_in(&text) { events.push(ChatEvent { is_error: Some(true), ..finish(&id) }); }
+            return;
+        }
         if !hangar_antigravity::paths::valid_conversation_id(sender) { return; }
         use hangar_antigravity::paths::{subagent_descriptor, subagent_name};
         let mine = self.place.as_ref().and_then(|(brain, me)| subagent_descriptor(brain, me, sender));
@@ -156,6 +164,17 @@ impl AgyStream {
         }
         if !parent { events.push(finish(sender)); }
     }
+}
+
+fn failed_subagent_in(text: &str) -> Option<String> {
+    SUBAGENT_FAILED.captures(text).map(|found| found[1].to_owned()).filter(|id| hangar_antigravity::paths::valid_conversation_id(id))
+}
+
+/// O subagente que o sistema avisa ter morrido, no `content` de um `SYSTEM_MESSAGE` do principal.
+pub fn failed_subagent(content: &str) -> Option<String> {
+    let found = MESSAGE.captures(content)?;
+    if &found[1] != "system" { return None; }
+    failed_subagent_in(found[2].trim())
 }
 
 /// Os subagentes que uma chamada `manage_subagents` com `kill` encerra.
@@ -261,6 +280,15 @@ mod tests {
         assert!(!task_end(&feed_all(&[two, one]), SUB), "parte encerrada não diz qual: nenhum cartão fecha");
         let refused = json!({"step_index": 11, "type": "GENERIC", "content": "Error: no subagent with that id"});
         assert!(!task_end(&feed_all(&[call, refused]), SUB));
+    }
+
+    /// Subagente que morreu (cota, rede) não manda relatório: o aviso do sistema ao principal fecha o cartão como falha.
+    #[test]
+    fn a_subagent_the_system_reports_as_failed_finishes_its_card_as_an_error() {
+        let line = json!({"step_index": 1552, "type": "SYSTEM_MESSAGE", "content": format!("<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-26T14:07:22Z sender=system priority=MESSAGE_PRIORITY_HIGH content=The subagent Desktop Native Implementer C (self) with id \"{SUB}\" encountered an error and has either stopped or failed to start execution: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 37m33s.\n</SYSTEM_MESSAGE>")});
+        let events = feed_all(&[line]);
+        assert!(task_end(&events, SUB));
+        assert!(events.iter().any(|e| e.tool_use_id.as_deref() == Some(&format!("task:{SUB}")) && e.is_error == Some(true)));
     }
 
     /// Tarefa de fundo que acaba com código diferente de zero fecha como falha.
