@@ -296,7 +296,20 @@ struct Batch { passos: Vec<Map<String, Value>>, #[serde(default)] sessao: String
 
 #[derive(Deserialize)]
 struct Goal { objetivo: String, dados: Option<Map<String, Value>>, #[serde(default = "fifteen")] passos: i64,
-    #[serde(default)] refazer: bool, #[serde(default)] pasta: String, #[serde(default)] sessao: String }
+    #[serde(default)] refazer: bool, #[serde(default)] pasta: String, #[serde(default)] permitir_risco: bool,
+    #[serde(default)] sessao: String }
+
+impl Goal {
+    /// Os argumentos do `hangar-preview objetivo`, sem a sessão e o cwd, que o servidor resolve.
+    fn cli_args(&self) -> Vec<String> {
+        let mut args = vec!["objetivo".to_owned(), self.objetivo.clone(), "--passos".into(), self.passos.clamp(1, 40).to_string()];
+        if let Some(dados) = self.dados.as_ref().filter(|d| !d.is_empty()) { args.extend(["--dados".into(), dumps_unicode(&Value::Object(dados.clone()), false)]); }
+        if self.refazer { args.push("--refazer".into()); }
+        if self.permitir_risco { args.push("--permitir-risco".into()); }
+        if !self.pasta.trim().is_empty() { args.extend(["--pasta".into(), self.pasta.trim().to_owned()]); }
+        args
+    }
+}
 
 fn fifteen() -> i64 { 15 }
 
@@ -1004,10 +1017,7 @@ impl Tools {
     }
 
     async fn browser_goal(&self, headers: &HeaderMap, a: Goal) -> Outcome {
-        let mut args = vec!["objetivo".to_owned(), a.objetivo, "--passos".into(), a.passos.clamp(1, 40).to_string()];
-        if let Some(dados) = a.dados.filter(|d| !d.is_empty()) { args.extend(["--dados".into(), dumps_unicode(&Value::Object(dados), false)]); }
-        if a.refazer { args.push("--refazer".into()); }
-        if !a.pasta.trim().is_empty() { args.extend(["--pasta".into(), a.pasta.trim().to_owned()]); }
+        let mut args = a.cli_args();
         // O script roda no cwd do servidor: a pasta do roteiro sai do git onde a sessão trabalha.
         let target = self.me(headers, &a.sessao).await?;
         let rows = self.ok(Method::GET, "/api/sessions", None).await.unwrap_or(Value::Null);
@@ -1367,6 +1377,16 @@ mod tests {
         assert_eq!(coded(409, &off), "whatsapp_off: O WhatsApp está desligado. Ligue em Configurações > WhatsApp.");
         let untrusted = json!({"detail": {"code": "whatsapp_untrusted", "params": {}, "msg": "sem assinatura"}});
         assert_eq!(coded(502, &untrusted), "whatsapp_untrusted: sem assinatura");
+    }
+
+    #[test]
+    fn browser_goal_passes_the_risk_release_only_when_asked() {
+        let catalog: Value = serde_json::from_str(include_str!("catalog.json")).unwrap();
+        let tool = catalog.as_array().unwrap().iter().find(|t| t["name"] == "browser_goal").unwrap();
+        assert!(tool["inputSchema"]["properties"].get("permitir_risco").is_some(), "o catálogo do browser_goal não tem permitir_risco");
+        let goal = |raw: Value| args::<Goal>("browser_goal", raw.as_object().unwrap().clone()).unwrap().cli_args();
+        assert!(goal(json!({"objetivo": "exclua o modelo Teste", "permitir_risco": true})).contains(&"--permitir-risco".to_owned()));
+        assert!(!goal(json!({"objetivo": "exclua o modelo Teste"})).contains(&"--permitir-risco".to_owned()));
     }
 
     #[test]
