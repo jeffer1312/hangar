@@ -51,29 +51,26 @@ fn register_on(
     }
     // O alvo `linux` automático do Hyprland não tem arquivo: alvo padrão vazio. A sonda pode levar
     // segundos, e o Claude Code espera a trava do `.claude.json` só 1 s: roda antes dela.
-    let target = match first_target(paths) {
-        None if local_auto && never_registered(paths)? => Some(local_target(paths)?),
-        found => found,
-    };
+    let target = first_target(paths);
     let hyprland = target.is_none() && hyprland();
     // Desligar no meio daqui até a trava: a decisão abaixo, toda sob a trava, já o vê.
     #[cfg(test)]
     crate::writer::race::fire(&paths.parked_file());
-    Ok(match register_entry(paths, target, hyprland, jev)? {
+    Ok(match register_entry(paths, target, hyprland, local_auto, jev)? {
         None => Registered::Skipped,
         Some(false) => Registered::Unchanged,
         Some(true) => Registered::Written,
     })
 }
 
-/// Nem ligado pelo Hangar nem desligado à mão: a máquina que acabou de instalar.
-fn never_registered(paths: &Paths) -> Result<bool, Error> {
-    Ok(crate::files::parked_entry(paths)?.is_none() && !paths.registered_marker().exists())
-}
-
 /// O alvo `windows` desta máquina, o mesmo que a tela cria em "este computador". O Linux não precisa:
 /// sob Hyprland o hcu tem o alvo `linux` automático, e fora dele o agente local não roda.
-fn local_target(paths: &Paths) -> Result<String, Error> {
+pub(crate) fn local_target(paths: &Paths) -> Result<String, Error> {
+    // Pasta de alvos ilegível é erro só aqui: tratada como vazia, criaria o alvo por cima dela.
+    let dir = paths.targets_dir();
+    if let Some(file) = targets::target_files_checked(paths).map_err(|e| Error::at(&dir, &e))?.into_iter().next() {
+        return Ok(dir.join(file).to_string_lossy().into_owned());
+    }
     let request = targets::TargetRequest {
         project_dir: String::new(),
         name: "windows".into(),
@@ -84,11 +81,11 @@ fn local_target(paths: &Paths) -> Result<String, Error> {
     };
     match targets::create_target(paths, &request) {
         Ok(()) => {}
-        // Outra passada criou no meio: o arquivo é o mesmo.
+        // O arquivo apareceu depois da listagem (a tela ou outra passada): é o alvo desta máquina.
         Err(error) if error.status == 409 => {}
         Err(error) => return Err(error),
     }
-    Ok(paths.targets_dir().join("windows-agent.json").to_string_lossy().into_owned())
+    Ok(targets::target_path(paths, &request.name).to_string_lossy().into_owned())
 }
 
 fn first_target(paths: &Paths) -> Option<String> {
@@ -204,6 +201,31 @@ mod tests {
         let home = Home::new();
         crate::remove_entry(&home.paths).unwrap();
         assert_eq!(register_on(&home.paths, true, true, || false, || Ok(jev())).unwrap(), Registered::Skipped);
+        assert!(crate::targets::target_files(&home.paths).is_empty());
+    }
+
+    /// Desligar entre as conferências de fora da trava e a gravação: nenhum alvo fica no disco.
+    #[test]
+    fn windows_turned_off_just_before_the_lock_leaves_no_target() {
+        let home = Home::new();
+        let paths = home.paths.clone();
+        let outcome = crate::writer::race::with(
+            &home.paths.parked_file(),
+            move || crate::remove_entry(&paths).unwrap(),
+            || register_on(&home.paths, true, true, || false, || Ok(jev())),
+        );
+        assert_eq!(outcome.unwrap(), Registered::Skipped);
+        assert!(crate::targets::target_files(&home.paths).is_empty());
+    }
+
+    /// Entrada já ativa (ligada à mão, sem a marca): nenhum alvo nasce, só a marca.
+    #[test]
+    fn windows_with_an_active_entry_creates_no_target() {
+        let home = Home::new();
+        let entry = json!({"command": home.binary(), "args": [], "env": {}});
+        std::fs::write(home.paths.main_file(), json!({"mcpServers": {NAME: entry}}).to_string()).unwrap();
+        std::fs::write(home.dir.path().join("acc/.claude.json"), json!({"mcpServers": {NAME: entry}}).to_string()).unwrap();
+        assert_eq!(register_on(&home.paths, true, true, || false, || Ok(jev())).unwrap(), Registered::Unchanged);
         assert!(crate::targets::target_files(&home.paths).is_empty());
     }
 

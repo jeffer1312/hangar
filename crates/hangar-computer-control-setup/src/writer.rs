@@ -109,6 +109,7 @@ pub(crate) fn register_entry(
     paths: &Paths,
     target: Option<String>,
     hyprland: bool,
+    local_auto: bool,
     jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
 ) -> Result<Option<bool>, Error> {
     let _locks = lock_all(paths)?;
@@ -120,7 +121,15 @@ pub(crate) fn register_entry(
     let off = || -> Result<bool, Error> {
         Ok(crate::files::parked_entry(paths)?.is_some() || paths.registered_marker().exists())
     };
-    if active.is_none() && (off()? || (target.is_none() && !hyprland)) {
+    if active.is_none() && off()? {
+        return Ok(None);
+    }
+    // Sob a trava: um desligar da tela ou uma entrada ativa não deixam alvo que ninguém pediu.
+    let target = match target {
+        None if active.is_none() && !hyprland && local_auto => Some(crate::register::local_target(paths)?),
+        found => found,
+    };
+    if active.is_none() && target.is_none() && !hyprland {
         return Ok(None);
     }
     let binary = paths.binary().to_string_lossy().into_owned();
