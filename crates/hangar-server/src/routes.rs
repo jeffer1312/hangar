@@ -569,7 +569,7 @@ where F: FnMut(SocketAddr) -> Fut, Fut: std::future::Future<Output = std::io::Re
 async fn bind_when_free(addr: SocketAddr) -> TcpListener {
     let mut warned = false;
     loop {
-        match TcpListener::bind(addr).await {
+        match listen_socket(addr).and_then(|socket| { socket.bind(addr)?; socket.listen(1024) }) {
             Ok(listener) => return listener,
             Err(e) => {
                 if !warned { tracing::warn!(listen = %addr, "porta do front ocupada, tentando de novo: {e}"); warned = true; }
@@ -1927,7 +1927,8 @@ mod tests {
     use std::io::Read;
 
     /// B-08: a porta do convidado (e as do Connect) abre com `SO_REUSEADDR` só fora do Windows; lá a
-    /// opção deixaria uma segunda escuta pegar a mesma porta.
+    /// opção deixaria uma segunda escuta pegar a mesma porta. No Windows ela abre exclusiva
+    /// (`listen_socket`, provado em `main.rs`).
     #[tokio::test]
     async fn guest_socket_reuses_the_address_only_outside_windows() {
         let listener = guest_socket("127.0.0.1:0".parse().unwrap()).unwrap();

@@ -46,10 +46,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   (Node, `python -m http.server`), e quem chega por IPv6 cai nele. Só IPv4 + dual-stack bloqueia os
   dois tipos; quem abre só IPv6 ainda passa. Falha da guarda é aviso no log, nunca queda do servidor.
   Medição em [Porta pública dividida com outro processo](#porta-pública-dividida-com-outro-processo-13102026).
-  O `0.0.0.0` (e a porta do convidado) abre com `SO_EXCLUSIVEADDRUSE` (`routes::listen_socket`): sem
-  ele outro programa abre `127.0.0.1` ou o IP da rede no mesmo número e recebe as conexões daquele
-  endereço, a saúde do lançador inclusive. Só o `0.0.0.0`: exclusivo também no `[::]`, a guarda não
-  abre. Medição em [Programa em `127.0.0.1` por cima da porta pública](#programa-em-127001-por-cima-da-porta-pública-25112026).
+  A porta pública (o endereço de `CP_LISTEN`, qualquer que seja), a ponte do plugin em `127.0.0.1`, a
+  porta do front, a do convidado e as de loopback do Connect e da prévia abrem com
+  `SO_EXCLUSIVEADDRUSE` (`routes::listen_socket`): sem ele outro programa abre `127.0.0.1` ou o IP da
+  rede no mesmo número e recebe as conexões daquele endereço, a saúde do lançador inclusive. A guarda
+  `[::]` dual-stack fica sem: exclusiva também, ela não abre. Medição em [Programa em `127.0.0.1` por cima da porta pública](#programa-em-127001-por-cima-da-porta-pública-25112026).
 - **Código de retorno no Windows não se lê como falha** (`taskkill` sem processo devolve 128).
   Separe "comando não existe" de "comando falhou"; stderr vem na codepage do console.
 - **Captura avulsa do pane (`state/capture.rs`) decide pela saída, não pelo código.** Saída com
@@ -282,8 +283,10 @@ TIME_WAIT e também com ela ainda aberta.
 - **PID 0 como dono da porta** (`qw7yzbiy`): a lista de portas deu o System Idle (PID 0) como
   dono da 8765 com o servidor vivo; o diagnóstico depois da volta dizia "ninguém escutando" com a porta
   aceitando conexão. O reinício recusava antes de parar qualquer coisa. Na conferência de antes da
-  parada, PID 0 com a saúde do `hangar-server` respondendo na porta não conta como outro programa; sem
-  a saúde, recusa como antes, sem parar nada.
+  parada, PID 0 em `0.0.0.0` ou `::` com a saúde do `hangar-server` respondendo na porta não conta
+  como outro programa; sem isso, recusa como antes, sem parar nada. Na espera da liberação, depois da
+  parada, PID 0 não segura a porta: quem a segura de fato faz o bind exclusivo do servidor novo falhar,
+  e a espera da versão nova acusa.
 
 ## Queda do servidor sem religada no Windows (16/11/2026)
 

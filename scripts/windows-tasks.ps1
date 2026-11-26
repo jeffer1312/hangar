@@ -203,13 +203,15 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         $candidates = @($candidates) + @(Get-HangarBackendLaunchers $rows $candidates $name)
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
         foreach ($listener in $listeners) {
-            # O Windows ja deu o PID 0 como dono da porta do servidor vivo: com a saude do hangar-server
-            # respondendo nela, nao e outro programa.
-            if ([int]$listener.OwningProcess -eq 0 -and (Test-HangarHealth $port)) { continue }
+            # O Windows ja deu o PID 0 como dono da porta do servidor vivo: no endereco que o hangar-server
+            # abre e com a saude dele respondendo, nao e outro programa.
+            if ([int]$listener.OwningProcess -eq 0 -and "$($listener.LocalAddress)" -in @('0.0.0.0', '::') -and (Test-HangarHealth $port)) { continue }
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {
                 if (Test-HangarServedFront $rows $name @($listener)) { continue }
                 $quem = Format-HangarPortOwner $rows $listener
-                throw "Porta $port ocupada por outro processo ($quem); $name nao sera reiniciada. Se nao for seu, encerre: Stop-Process -Id $($listener.OwningProcess) -Force"
+                $dica = if ([int]$listener.OwningProcess -eq 0) { 'O Windows nao informa o dono; confira com netstat -ano' }
+                        else { "Se nao for seu, encerre: Stop-Process -Id $($listener.OwningProcess) -Force" }
+                throw "Porta $port ocupada por outro processo ($quem); $name nao sera reiniciada. $dica"
             }
         }
         if ($task.State -eq 'Running' -and -not $candidates.Count) {
@@ -244,7 +246,10 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         }
         $held = @()
         foreach ($attempt in 1..10) {
-            $held = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+            # PID 0 depois da parada e a mesma leitura errada de antes dela: quem segura a porta de fato
+            # faz o bind exclusivo do servidor novo falhar, e a espera da versao nova acusa a falha.
+            $held = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue |
+                Where-Object { [int]$_.OwningProcess -ne 0 })
             if (-not $held.Count) { break }
             Start-Sleep -Milliseconds 500
         }

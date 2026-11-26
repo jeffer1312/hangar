@@ -63,6 +63,8 @@ function Reset-State {
     $script:frontOwner = $null
     $script:slowRelease = 0
     $script:idleOwner = $false
+    $script:idleStays = $false
+    $script:idleAddress = '0.0.0.0'
     $script:ignoredStarts = 0
     $script:frozenLastRun = $false
     $script:listening = $false
@@ -93,7 +95,8 @@ function Get-ScheduledTaskInfo { param($TaskName, $ErrorAction) return @{ LastRu
 function Set-ScheduledTask { param($TaskName, $Settings, $ErrorAction) $script:events += "settings:$($Settings.RestartCount)" }
 function Get-NetTCPConnection { param($State, $LocalPort, $ErrorAction)
     if ($LocalPort -eq 8765 -and $script:listening) { return @{ OwningProcess = 500 } }
-    if ($LocalPort -eq 8765 -and $script:idleOwner -and -not $script:events.Count) { return @{ OwningProcess = 0 } }
+    if ($LocalPort -eq 8765 -and $script:idleStays) { return @{ OwningProcess = 0; LocalAddress = $script:idleAddress } }
+    if ($LocalPort -eq 8765 -and $script:idleOwner -and -not $script:events.Count) { return @{ OwningProcess = 0; LocalAddress = $script:idleAddress } }
     if ($LocalPort -eq 5173 -and $script:frontOwner) { return @{ OwningProcess = $script:frontOwner } }
     if ($script:events.Count -and $script:lateOwner) { return @{ OwningProcess = $script:lateOwner } }
     if ($script:events.Count -and $script:slowRelease -gt 0) { $script:slowRelease--; return @{ OwningProcess = 777 } }
@@ -235,6 +238,24 @@ try {
     $failed = $null
     try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null } catch { $failed = "$_" }
     Assert ($failed -match 'ocupada por outro processo' -and -not $script:events.Count) "PID 0 sem o hangar-server parou o servidor: $failed $($script:events -join ',')"
+    Assert ($failed -notmatch 'Stop-Process -Id 0') "Mandou encerrar o System Idle: $failed"
+    # PID 0 num endereco que o hangar-server nao abre e outro programa, mesmo com a saude respondendo.
+    Reset-State
+    $script:owner = $null
+    $script:idleOwner = $true
+    $script:idleAddress = '::1'
+    $script:healthy = $true
+    $failed = $null
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null } catch { $failed = "$_" }
+    Assert ($failed -match 'ocupada por outro processo' -and -not $script:events.Count) "PID 0 em [::1] parou o servidor: $failed $($script:events -join ',')"
+    # A lista que deu PID 0 com o servidor vivo continua dando depois da parada: sobe mesmo assim.
+    Reset-State
+    $script:owner = $null
+    $script:idleStays = $true
+    $script:healthy = $true
+    $failed = $null
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null } catch { $failed = "$_" }
+    Assert (-not $failed -and 'start' -in $script:events) "PID 0 que ficou na lista depois da parada deixou o servidor parado: $failed"
     # Maquina migrada: o hangar-server novo abre a porta do front entre as duas conferencias.
     $frontRows = @(
         (Row 70 1 'node.exe' 'C:\repo\frontend\node_modules\vite\bin\vite.js preview'),

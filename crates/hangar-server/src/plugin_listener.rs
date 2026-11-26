@@ -16,7 +16,7 @@ pub(crate) async fn bind(public: &TcpListener) -> io::Result<Option<TcpListener>
         return Ok(None);
     }
     let loopback = SocketAddr::from((Ipv4Addr::LOCALHOST, address.port()));
-    TcpListener::bind(loopback).await.map(Some).map_err(|error| {
+    crate::routes::listen_socket(loopback).and_then(|socket| { socket.bind(loopback)?; socket.listen(1024) }).map(Some).map_err(|error| {
         io::Error::new(error.kind(), format!("não foi possível abrir a ponte do plugin em {loopback}: {error}"))
     })
 }
