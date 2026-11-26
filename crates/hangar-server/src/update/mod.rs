@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 
 pub(crate) use hangar_local_server::link::remove_link;
 
+pub(crate) mod auto_gate;
 pub mod dev;
 pub mod dev_mode;
 pub mod executor;

@@ -1,8 +1,6 @@
 //! O hcu (`hangar-computer-control-setup`) sem pedido: instala na subida se faltar e, de hora em hora,
 //! instala de novo se falhou ou atualiza sob os portões do Hangar. Relógio próprio: o `tick_inner` da
 //! atualização do Hangar sai cedo quando ele está em dia. Toda passada termina no registro do MCP.
-use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hangar_computer_control_setup as setup;
@@ -10,36 +8,23 @@ use serde_json::json;
 
 use crate::config_sync::runtime::RuntimeConfig;
 use crate::routes::AppState;
+use crate::update::auto_gate::{Gate, clock, guarded, policy};
 use crate::update::periodic::INTERVAL;
 
-const PANICKED: &str = "computer_control_task_panicked";
-const CONFIG_FAILED: &str = "computer_control_config_failed";
-const GATE: Gate = Gate { event: "computer_control.atualizar", config_failed: CONFIG_FAILED, what: "computer control" };
-
-/// Quem segue os portões do automático do Hangar: com a configuração ilegível, o diário diz de quem é a passada.
-pub(crate) struct Gate {
-    pub event: &'static str,
-    pub config_failed: &'static str,
-    pub what: &'static str,
-}
+const GATE: Gate = Gate {
+    event: "computer_control.atualizar",
+    config_failed: "computer_control_config_failed",
+    panicked: "computer_control_task_panicked",
+    what: "computer control",
+};
 
 /// Só a subida liga; nunca segura a subida. Falha já foi ao diário pelo crate.
 pub(crate) fn spawn(state: Arc<AppState>) {
     tokio::spawn(async move {
         let diary = crate::diag::diary_dir_in(&state.accounts.env);
-        guarded(diary.clone(), "computer_control.subida", pass(state.clone(), true)).await;
-        loop {
-            tokio::time::sleep(INTERVAL).await;
-            guarded(diary.clone(), "computer_control.passada", pass(state.clone(), false)).await;
-        }
+        guarded(diary.clone(), &GATE, "computer_control.subida", pass(state.clone(), true)).await;
+        clock(diary, &GATE, "computer_control.passada", INTERVAL, || pass(state.clone(), false)).await;
     });
-}
-
-/// Cada passada na sua tarefa: um pânico vai ao diário com código e o relógio continua.
-async fn guarded(diary: Option<PathBuf>, event: &'static str, work: impl Future<Output = ()> + Send + 'static) {
-    if let Err(error) = tokio::spawn(work).await {
-        panicked(diary.as_deref(), event, &error);
-    }
 }
 
 /// A subida migra o Jev e só instala; o relógio também atualiza. O cliente http é refeito a cada
@@ -55,7 +40,7 @@ async fn pass(state: Arc<AppState>, startup: bool) {
         })
         .await;
         if let Err(error) = migrated {
-            panicked(diary.as_deref(), "computer_control.migracao_jev", &error);
+            crate::update::auto_gate::panicked(diary.as_deref(), &GATE, "computer_control.migracao_jev", &error);
         }
     }
     let paths = setup::Paths::new(state.accounts.env.home.clone(), Vec::new());
@@ -87,14 +72,8 @@ async fn swapped(state: &Arc<AppState>, outcome: Result<setup::Swapped, setup::E
     let diary = crate::diag::diary_dir_in(&state.accounts.env);
     let state = state.clone();
     if let Err(error) = tokio::task::spawn_blocking(move || register(&state)).await {
-        panicked(diary.as_deref(), "computer_control.registrar", &error);
+        crate::update::auto_gate::panicked(diary.as_deref(), &GATE, "computer_control.registrar", &error);
     }
-}
-
-fn panicked(diary: Option<&Path>, event: &str, error: &tokio::task::JoinError) {
-    tracing::error!(code = PANICKED, event, %error, "Computer Use: a tarefa caiu");
-    let line = json!({"evento": event, "nivel": "erro", "codigo": PANICKED, "detalhe": error.to_string()});
-    crate::diag::record_blocking(diary, &[line], "computer control");
 }
 
 /// O registro sozinho com as contas do catálogo. Falha vai ao diário, nunca à tela.
@@ -124,37 +103,9 @@ pub(crate) fn register_in(state: &AppState, paths: &setup::Paths) {
     }
 }
 
-/// Os portões da atualização automática do Hangar, lidos a cada tique; o relógio do WhatsApp lê os mesmos.
-pub(crate) fn policy(state: &AppState, gate: &Gate, diary: Option<&Path>) -> setup::Policy {
-    let home = &state.accounts.env.home;
-    let package_channel = matches!(crate::update::http::mode(home), crate::update::http::Mode::Package(_))
-        .then(|| crate::update::channel(&crate::update::Layout::new(home)));
-    let automations = automations(RuntimeConfig::from_state(state), gate, diary);
-    setup::Policy { automations, package_channel }
-}
-
-/// Configuração ilegível não atualiza, e vai ao diário: o componente parado de atualizar fica com causa.
-fn automations(runtime: Result<RuntimeConfig, String>, gate: &Gate, diary: Option<&Path>) -> bool {
-    match runtime {
-        Ok(runtime) => {
-            let value = runtime.get("automations");
-            let enabled = crate::orchestration::truthy(&value);
-            crate::orchestration::codec::discard(value);
-            enabled
-        }
-        Err(error) => {
-            tracing::warn!(code = gate.config_failed, component = gate.what, %error, "sem configuração; não atualiza");
-            let line = json!({"evento": gate.event, "nivel": "erro", "codigo": gate.config_failed, "detalhe": error});
-            crate::diag::record_blocking(diary, &[line], gate.what);
-            false
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     use serde_json::Value;
 
@@ -171,10 +122,6 @@ mod tests {
             ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
         ])));
         Arc::new(state)
-    }
-
-    fn diary_text(dir: &Path) -> String {
-        std::fs::read_dir(dir).unwrap().flatten().map(|file| std::fs::read_to_string(file.path()).unwrap()).collect()
     }
 
     /// R3 → R4: o binário trocado passa pelo registro, que liga o MCP com o alvo cadastrado.
@@ -203,25 +150,5 @@ mod tests {
         std::fs::write(paths.targets_dir().join("vm-agent.json"), b"{}").unwrap();
         swapped(&state(home.path()), Ok(setup::Swapped::No)).await;
         assert!(!paths.main_file().exists());
-    }
-
-    /// Uma passada que entra em pânico vai ao diário com código, e a seguinte ainda roda.
-    #[tokio::test]
-    async fn a_panicking_pass_goes_to_the_diary_and_the_next_one_runs() {
-        let diary = tempfile::tempdir().unwrap();
-        guarded(Some(diary.path().to_owned()), "computer_control.passada", async { panic!("de propósito"); }).await;
-        let ran = Arc::new(AtomicBool::new(false));
-        let flag = ran.clone();
-        guarded(Some(diary.path().to_owned()), "computer_control.passada", async move { flag.store(true, Ordering::SeqCst) }).await;
-        assert!(ran.load(Ordering::SeqCst));
-        assert!(diary_text(diary.path()).contains(PANICKED), "{}", diary_text(diary.path()));
-    }
-
-    /// Configuração ilegível: não atualiza e diz por quê no diário.
-    #[test]
-    fn an_unreadable_config_does_not_update_and_goes_to_the_diary() {
-        let diary = tempfile::tempdir().unwrap();
-        assert!(!automations(Err("ilegível".into()), &GATE, Some(diary.path())));
-        assert!(diary_text(diary.path()).contains(CONFIG_FAILED), "{}", diary_text(diary.path()));
     }
 }
