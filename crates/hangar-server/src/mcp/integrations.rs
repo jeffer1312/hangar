@@ -157,7 +157,11 @@ pub(super) fn path_matches_project(raw_session_path: &str, project_entry: &str) 
         return true;
     }
     let norm_session = normalize_path(Path::new(session_trimmed));
-    if hangar_projects::slug(&norm_session.to_string_lossy()) == project_trimmed {
+    if norm_session
+        .ancestors()
+        .filter(|ancestor| ancestor.file_name().is_some())
+        .any(|ancestor| hangar_projects::slug(&ancestor.to_string_lossy()) == project_trimmed)
+    {
         return true;
     }
     let norm_project = normalize_path(Path::new(project_trimmed));
@@ -1031,7 +1035,10 @@ mod tests {
         let slug = hangar_projects::slug("/tmp/proj");
         assert!(path_matches_project("/tmp/proj", &slug));
         assert!(path_matches_project("/tmp/proj/", &slug));
+        assert!(path_matches_project("/tmp/proj/sub", &slug));
         assert!(!path_matches_project("/tmp/proj2", &slug));
+        assert!(!path_matches_project("/tmp/proj2/sub", &slug));
+        assert!(!path_matches_project("/tmp/proj", &hangar_projects::slug("/")));
     }
 
     #[test]

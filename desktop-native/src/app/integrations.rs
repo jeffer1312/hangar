@@ -2069,7 +2069,7 @@ impl IntegrationForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let init = InitialFormValues::from_mode(mode, existing);
+        let initial = InitialFormValues::from_mode(mode, existing);
         let input = |val: String, hint: String, window: &mut Window, cx: &mut Context<Self>| {
             cx.new(|cx| InputState::new(window, cx).default_value(val).placeholder(hint))
         };
@@ -2085,32 +2085,32 @@ impl IntegrationForm {
             })
         };
 
-        let secret_hint = if init.is_edit {
+        let secret_hint = if initial.is_edit {
             tr_shared("integrations_secret_kept_hint", &[])
         } else {
             String::new()
         };
 
-        let id_input = input(init.id, tr_shared("integrations_field_id_hint", &[]), window, cx);
+        let id_input = input(initial.id, tr_shared("integrations_field_id_hint", &[]), window, cx);
         let name_input = input(
-            init.name,
+            initial.name,
             tr_shared("integrations_field_name_placeholder", &[]),
             window,
             cx,
         );
-        let url_input = input(init.url, "https://...".into(), window, cx);
+        let url_input = input(initial.url, "https://...".into(), window, cx);
         let headers_input = area(String::new(), secret_hint.clone(), 2, window, cx);
         let command_input = area(
-            init.command,
+            initial.command,
             tr_shared("integrations_field_command_hint", &[]),
             3,
             window,
             cx,
         );
-        let cwd_input = input(init.cwd, tr_shared("integrations_optional", &[]), window, cx);
+        let cwd_input = input(initial.cwd, tr_shared("integrations_optional", &[]), window, cx);
         let env_input = area(
             String::new(),
-            if init.is_edit {
+            if initial.is_edit {
                 secret_hint.clone()
             } else {
                 tr_shared("integrations_field_env_hint", &[])
@@ -2119,12 +2119,12 @@ impl IntegrationForm {
             window,
             cx,
         );
-        let client_id_input = input(init.client_id, String::new(), window, cx);
+        let client_id_input = input(initial.client_id, String::new(), window, cx);
         let client_secret_input = masked_input(secret_hint.clone(), window, cx);
-        let scopes_input = input(init.scopes, tr_shared("integrations_optional", &[]), window, cx);
+        let scopes_input = input(initial.scopes, tr_shared("integrations_optional", &[]), window, cx);
         let bearer_input = masked_input(secret_hint, window, cx);
         let projects_input = area(
-            init.projects,
+            initial.projects,
             tr_shared("integrations_field_projects_hint", &[]),
             2,
             window,
@@ -2135,25 +2135,25 @@ impl IntegrationForm {
             api,
             runtime,
             page,
-            is_edit: init.is_edit,
-            preset: init.preset,
-            url_editable: init.url_editable,
-            preset_auth: init.preset_auth,
-            setup_guide: init.setup_guide,
-            enabled: init.enabled,
-            transport: init.transport,
-            auth_kind: init.auth_kind,
-            policy: init.policy,
-            pinned: init.pinned,
+            is_edit: initial.is_edit,
+            preset: initial.preset,
+            url_editable: initial.url_editable,
+            preset_auth: initial.preset_auth,
+            setup_guide: initial.setup_guide,
+            enabled: initial.enabled,
+            transport: initial.transport,
+            auth_kind: initial.auth_kind,
+            policy: initial.policy,
+            pinned: initial.pinned,
             id_input,
             name_input,
             url_input,
-            existing_headers: init.existing_headers,
+            existing_headers: initial.existing_headers,
             removed_headers: BTreeSet::new(),
             headers_input,
             command_input,
             cwd_input,
-            existing_env_keys: init.existing_env_keys,
+            existing_env_keys: initial.existing_env_keys,
             removed_env_keys: BTreeSet::new(),
             env_input,
             client_id_input,

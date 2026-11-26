@@ -872,7 +872,7 @@ async fn crud_persists_outside_vault_never_leaks_secrets_and_rolls_back_on_secre
     assert!(!secrets_bin.windows(secret_token.len()).any(|w| w == secret_token.as_bytes()), "secrets.bin deve ser cifrado");
     let (st_ve, vault_entries, _) = call_owner(srv.addr, Method::GET, "/api/vault/entries", None).await;
     assert_eq!(st_ve, 200);
-    assert_eq!(vault_entries["entries"].as_array().unwrap().len(), 0);
+    assert_eq!(vault_entries.as_array().unwrap().len(), 0);
 
     // PATCH parcial atualiza campos, preserva bearer_token ao atualizar header e alterna enabled.
     let (st_patch, patched, raw_patch) = call_owner(
@@ -1864,7 +1864,7 @@ async fn connect_port_allows_oauth_callback_with_state_and_rejects_without_state
         let (code, real_state) = simulate_oauth_authorize(&authorize_url).await;
 
         // Sem `state` ou com `state=` vazio o gate do Connect recusa com 401.
-        let (st_no_state, _, raw_no_state) = call_raw(
+        let (st_no_state, raw_no_state, _) = call_raw(
             connect_addr,
             Method::GET,
             "/api/integrations/oauth/callback",
@@ -1875,7 +1875,7 @@ async fn connect_port_allows_oauth_callback_with_state_and_rejects_without_state
         .await;
         assert_eq!(st_no_state, 401, "{raw_no_state}");
 
-        let (st_empty_state, _, raw_empty_state) = call_raw(
+        let (st_empty_state, raw_empty_state, _) = call_raw(
             connect_addr,
             Method::GET,
             "/api/integrations/oauth/callback?state=",
@@ -1887,7 +1887,7 @@ async fn connect_port_allows_oauth_callback_with_state_and_rejects_without_state
         assert_eq!(st_empty_state, 401, "{raw_empty_state}");
 
         // Convidado de login continua bloqueado em 403 e não consome o `state`.
-        let (st_guest, _, raw_guest) = call_raw(
+        let (st_guest, raw_guest, _) = call_raw(
             connect_addr,
             Method::GET,
             &format!("/api/integrations/oauth/callback?state={real_state}&code={code}"),

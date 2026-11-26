@@ -445,6 +445,14 @@ fn write_json(path: &Path, value: Value) {
     std::fs::write(path, value.to_string()).unwrap();
 }
 
+fn pane_key(name: &str) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, format!("key-{name}").as_bytes());
+    digest.as_ref()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn write_mux_script(root: &Path, entries: &[(&str, &Path, &str, &str)]) -> PathBuf {
     #[cfg(unix)]
     {
@@ -456,14 +464,24 @@ fn write_mux_script(root: &Path, entries: &[(&str, &Path, &str, &str)]) -> PathB
                 cwd.display()
             ));
         }
-        body.push_str("EOF\n    ;;\n  show-environment) exit 0 ;;\n  *) printf 'ok\\n' ;;\nesac\n");
+        body.push_str("EOF\n    ;;\n  show-environment)\n    tgt=\"${3#=}\"\n    case \"$tgt\" in\n");
+        for (name, _, _, _) in entries {
+            let key = pane_key(name);
+            body.push_str(&format!("      {name}) printf 'CP_SESSION_KEY={key}\\n' ;;\n"));
+        }
+        body.push_str("    esac\n    ;;\n  *) printf 'ok\\n' ;;\nesac\n");
         crate::write_executable(&path, body);
         path
     }
     #[cfg(windows)]
     {
         let path = root.join("mux.cmd");
-        let mut body = String::from("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\n");
+        let mut body = String::from("@echo off\r\nif \"%~1\"==\"show-environment\" (\r\n");
+        for (name, _, _, _) in entries {
+            let key = pane_key(name);
+            body.push_str(&format!("  if \"%~3\"==\"{name}\" echo CP_SESSION_KEY={key}\r\n"));
+        }
+        body.push_str("  exit /b 0\r\n)\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\n");
         for (name, cwd, pane, provider) in entries {
             body.push_str(&format!(
                 "echo {name}\t1\t\t{}\t{pane}\t\t{provider}\t\t0\t0\r\n",
@@ -543,9 +561,10 @@ impl SceneBuilder {
         let home = root.join("home");
         std::fs::create_dir_all(&home).unwrap();
         for (name, _, _, _) in &self.panes {
+            let key = pane_key(name);
             write_json(
-                &home.join(format!(".hangar/codex-sessions/{name}.json")),
-                json!({"name": name, "key": format!("key-{name}")}),
+                &home.join(format!(".hangar/session-specs/{key}.json")),
+                json!({"key": key, "name": name}),
             );
         }
         for (name, key) in &self.headless_no_cwd {
@@ -989,7 +1008,7 @@ async fn mcp_pinned_tools_list_respects_enabled_pinned_sanitization_long_names_a
             updated_at: 1.0,
         });
 
-        let mut session = McpClient::open(scene.addr, &[("x-hangar-key", "key-s0")]).await;
+        let mut session = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
         let listed = session.list_tools().await;
         let names: Vec<String> = listed
             .iter()
@@ -1087,7 +1106,7 @@ async fn mcp_pinned_fallback_works_after_restart_without_prior_list_tools() {
             created_at: 1.0,
             updated_at: 1.0,
         });
-        let mut mcp_a = McpClient::open(scene_a.addr, &[("x-hangar-key", "key-s0")]).await;
+        let mut mcp_a = McpClient::open(scene_a.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
         let long_mcp_name = mcp_a
             .list_tools()
             .await
@@ -1099,7 +1118,7 @@ async fn mcp_pinned_fallback_works_after_restart_without_prior_list_tools() {
 
         // Segundo boot no mesmo diretório: novo servidor com `PinnedToolIndex` e `tools_cache` vazios.
         let scene_b = SceneBuilder::with_dir(same_dir).build().await;
-        let mut mcp_b = McpClient::open(scene_b.addr, &[("x-hangar-key", "key-s0")]).await;
+        let mut mcp_b = McpClient::open(scene_b.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
         // Chama direto `int__*` sem chamar `tools/list` antes.
         let simple = mcp_b
             .call("int__gh-restart__read_info", json!({"payload": "pos-restart"}))
@@ -1259,7 +1278,7 @@ async fn mcp_integrations_list_tools_and_error_states_preserve_auth_and_secrets_
             .await
             .unwrap();
 
-        let mut mcp = McpClient::open(scene.addr, &[("x-hangar-key", "key-s0")]).await;
+        let mut mcp = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
 
         let list_before = structured(&mcp.call("integrations_list", json!({})).await);
         let entries = list_before["integrations"].as_array().unwrap();
@@ -1344,7 +1363,22 @@ async fn mcp_integrations_list_tools_and_error_states_preserve_auth_and_secrets_
         scene.shutdown().await;
 
         // Chaveiro falhando NÃO pode ser mascarado em `integrations_list` nem `integration_tools`.
-        let bad_keys_scene = SceneBuilder::new()
+        // Semeia `secrets.bin` em disco para exercitar leitura real de chave perdida.
+        let bad_keys_dir = crate::physical_tempdir();
+        hangar_integrations::SecretStore::new(
+            bad_keys_dir.path(),
+            Arc::new(MemoryKeyStore::new()),
+        )
+        .set(
+            "bearer-key-lost",
+            IntegrationSecrets {
+                bearer_token: Some(Zeroizing::new("tok-perdido".to_owned())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let bad_keys_scene = SceneBuilder::with_dir(bad_keys_dir)
             .secret_keys(FailingSecretKeys::read_error(SecretKeyError::Absent))
             .build()
             .await;
@@ -1366,7 +1400,7 @@ async fn mcp_integrations_list_tools_and_error_states_preserve_auth_and_secrets_
             updated_at: 1.0,
         });
         let mut bad_mcp =
-            McpClient::open(bad_keys_scene.addr, &[("x-hangar-key", "key-s0")]).await;
+            McpClient::open(bad_keys_scene.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
         let list_err = bad_mcp.call("integrations_list", json!({})).await;
         assert!(
             is_error(&list_err) && first_text(&list_err).starts_with("integration_secrets_key_lost:"),
@@ -1411,7 +1445,7 @@ async fn mcp_shared_guard_blocks_all_sharing_vectors_and_rechecks_mid_flight() {
             updated_at: 1.0,
         });
 
-        let mut mcp = McpClient::open(scene.addr, &[("x-hangar-key", "key-s0")]).await;
+        let mut mcp = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
         // Sem compartilhamento, `tools/list` expõe `int__app__*`.
         assert!(
             mcp.list_tools()
@@ -1600,7 +1634,7 @@ async fn mcp_shared_guard_blocks_all_sharing_vectors_and_rechecks_mid_flight() {
         for mode in [ShareMode::Unavailable, ShareMode::BadPairs] {
             let s_bad = SceneBuilder::new().share_mode(mode).build().await;
             s_bad.register_http("app", &mock.url());
-            let mut m_bad = McpClient::open(s_bad.addr, &[("x-hangar-key", "key-s0")]).await;
+            let mut m_bad = McpClient::open(s_bad.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
             assert!(
                 !m_bad
                     .list_tools()
@@ -1752,7 +1786,7 @@ async fn mcp_project_filter_is_fail_closed_by_slug_path_sibling_and_git_worktree
         });
 
         // Sessão em `proj/sub`: casa com `only-slug` e `only-path`, não com `only-wt`.
-        let mut m_proj = McpClient::open(scene.addr, &[("x-hangar-key", "key-s-proj")]).await;
+        let mut m_proj = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s-proj"))]).await;
         let proj_tools: Vec<String> = m_proj
             .list_tools()
             .await
@@ -1793,7 +1827,7 @@ async fn mcp_project_filter_is_fail_closed_by_slug_path_sibling_and_git_worktree
         );
 
         // Sessão em diretório irmão `/proj2`: nunca casa prefixo de string `/proj`.
-        let mut m_sib = McpClient::open(scene.addr, &[("x-hangar-key", "key-s-sib")]).await;
+        let mut m_sib = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s-sib"))]).await;
         assert!(
             !m_sib
                 .list_tools()
@@ -1814,7 +1848,7 @@ async fn mcp_project_filter_is_fail_closed_by_slug_path_sibling_and_git_worktree
         }
 
         // Sessão com worktree em `git_cwd`: vê e executa `only-wt`, mas não `only-path`.
-        let mut m_wt = McpClient::open(scene.addr, &[("x-hangar-key", "key-s-wt")]).await;
+        let mut m_wt = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s-wt"))]).await;
         let wt_tools: Vec<String> = m_wt
             .list_tools()
             .await
@@ -1916,7 +1950,7 @@ async fn mcp_approvals_policies_allow_once_allow_always_deny_and_cancellation() 
             updated_at: 1.0,
         });
 
-        let mut mcp = McpClient::open(scene.addr, &[("x-hangar-key", "key-s0")]).await;
+        let mut mcp = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
 
         // 1. Leitura livre sem abrir cartão.
         let read_res = mcp
@@ -2013,7 +2047,7 @@ async fn mcp_approvals_policies_allow_once_allow_always_deny_and_cancellation() 
         );
 
         // 5. Cancelamento via `notifications/cancelled` (em `s1`, fora do cooldown) limpa o cartão e não chama mock.
-        let mut mcp_s1 = McpClient::open(scene.addr, &[("x-hangar-key", "key-s1")]).await;
+        let mcp_s1 = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s1"))]).await;
         let calls_before_cancel = mock.tool_calls().len();
         feed.wait_for(|f| f.requests.is_empty()).await.unwrap();
 
@@ -2330,7 +2364,7 @@ async fn mcp_external_output_is_wrapped_truncated_at_64kib_utf8_and_preserves_is
         let scene = SceneBuilder::new().build().await;
         scene.register_http("app", &mock.url());
 
-        let mut mcp = McpClient::open(scene.addr, &[("x-hangar-key", "key-s0")]).await;
+        let mut mcp = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
 
         let big_res = mcp
             .call(
