@@ -105,7 +105,7 @@ impl WireTail {
     }
 }
 
-/// Arquivo relido só quando muda (data e tamanho); leitura que falha tenta de novo na rodada seguinte.
+/// Arquivo relido só quando muda (data e tamanho); leitura ou parse que falha tenta de novo na rodada seguinte.
 pub(crate) struct Stamped<T> {
     stamp: Option<(PathBuf, Option<SystemTime>, u64)>,
     value: Option<T>,
@@ -125,7 +125,7 @@ impl<T> Stamped<T> {
             self.value = None;
             if let Ok(bytes) = std::fs::read(path) {
                 self.value = parse(&bytes);
-                self.stamp = stamp;
+                self.stamp = stamp.filter(|_| self.value.is_some());
             }
         }
         self.value.as_ref()
