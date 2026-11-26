@@ -370,8 +370,8 @@ async fn a_wipe_during_an_update_waits_even_with_the_service_up() {
     assert!(!s.seen.lock().unwrap().iter().any(|r| r.ends_with("/v1/wipe")), "o pedido não chegou ao serviço");
 }
 
-/// Apagar leva também as cópias do banco: parado, as do binário e as da volta; de pé, o binário apaga as dele e o
-/// Hangar as da volta.
+/// Apagar leva também as cópias do banco, parado ou de pé: de pé pode estar a versão antiga que a volta religou, e o
+/// `/v1/wipe` dela não conhece as `.bak`.
 #[tokio::test]
 async fn a_wipe_takes_the_copies_of_the_messages_too() {
     let copies = ["messages.db.schema1.bak", "messages.db.schema1.bak.tmp", "messages.db.migrated", "messages.db.migrated-wal", "messages.db.restoring"];
@@ -397,10 +397,9 @@ async fn a_wipe_takes_the_copies_of_the_messages_too() {
     }
     let (status, _) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
     assert_eq!(status, 200);
-    for gone in ["messages.db.migrated", "messages.db.migrated-wal", "messages.db.restoring"] {
-        assert!(!data.join(gone).exists(), "{gone} ficou");
+    for gone in copies {
+        assert!(!data.join(gone).exists(), "{gone} ficou com o serviço de pé");
     }
-    assert!(data.join("messages.db.schema1.bak").exists(), "a cópia do binário é do /v1/wipe dele, que aqui é de mentira");
 }
 
 /// Um arquivo que não sai no meio (no Windows, aberto pelo serviço): a resposta diz o que já saiu.
@@ -881,7 +880,7 @@ async fn a_send_during_an_update_is_refused_as_updating() {
         }).unwrap();
         for (uri, body) in sends {
             let (status, reply) = s.call(Method::POST, uri, true, Some(body)).await;
-            assert_eq!((status, code(&reply)), (409, "whatsapp_busy"), "{kind} {uri}: {reply}");
+            assert_eq!((status, code(&reply)), (409, "whatsapp_updating"), "{kind} {uri}: {reply}");
             assert_eq!(reply["detail"]["msg"], json!(UPDATING_MSG), "{kind} {uri}");
         }
         release.send(()).unwrap();

@@ -489,7 +489,8 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, at
                 failure.detail, new.tag))).await);
         }
         let source = restore_source(mode, &ctx.paths.data, file_schema, since);
-        return Err(match after_failure(opened_after(switched, recorded_before, &ctx.paths.data, since), source) {
+        let same_format = !changes && file_schema.is_some_and(|file| file > 0);
+        return Err(match after_failure(opened_after(switched, recorded_before, &ctx.paths.data, since), source, same_format) {
             AfterFailure::Restore(schema) => restore(ctx, old, &new, schema, fetched, failure).await,
             AfterFailure::KeepNew => keep_new(&ctx.paths, &new, failure),
             AfterFailure::Rollback => rollback(ctx, old, failure).await,
@@ -696,13 +697,15 @@ enum AfterFailure {
 }
 
 /// A cópia desta tentativa vale mais que a prova de abertura: o binário sobe o `user_version` antes de gravar o
-/// `control.json`, e voltar a anterior sobre o banco migrado a deixaria saindo com 3. Sem cópia, quem abriu os
-/// dados fica com eles.
-fn after_failure(opened: bool, source: Option<u32>) -> AfterFailure {
+/// `control.json`, e voltar a anterior sobre o banco migrado a deixaria saindo com 3. `same_format`: o arquivo
+/// existia e já estava no esquema da nova, que só acrescenta colunas sem subir o `user_version`, e a anterior o
+/// abre; ficar com a nova deixaria o WhatsApp parado. Fora isso, quem abriu os dados fica com eles (com arquivo
+/// novo, a nova o criou no esquema dela).
+fn after_failure(opened: bool, source: Option<u32>, same_format: bool) -> AfterFailure {
     match (source, opened) {
         (Some(schema), _) => AfterFailure::Restore(schema),
-        (None, true) => AfterFailure::KeepNew,
-        (None, false) => AfterFailure::Rollback,
+        (None, true) if !same_format => AfterFailure::KeepNew,
+        (None, _) => AfterFailure::Rollback,
     }
 }
 
@@ -1224,10 +1227,25 @@ mod tests {
     /// de gravar o `control.json`.
     #[test]
     fn a_backup_of_this_attempt_restores_even_without_proof_of_opening() {
-        assert_eq!(after_failure(false, Some(1)), AfterFailure::Restore(1));
-        assert_eq!(after_failure(true, Some(1)), AfterFailure::Restore(1));
-        assert_eq!(after_failure(true, None), AfterFailure::KeepNew);
-        assert_eq!(after_failure(false, None), AfterFailure::Rollback);
+        assert_eq!(after_failure(false, Some(1), false), AfterFailure::Restore(1));
+        assert_eq!(after_failure(true, Some(1), false), AfterFailure::Restore(1));
+        assert_eq!(after_failure(true, None, false), AfterFailure::KeepNew);
+        assert_eq!(after_failure(false, None, false), AfterFailure::Rollback);
+    }
+
+    /// Troca sem mudança de formato, com o arquivo já existente: a anterior abre o arquivo, e volta mesmo que a nova
+    /// o tenha aberto. Mudança de formato, esquema desconhecido ou arquivo que a nova criou (0) não entram aqui.
+    #[test]
+    fn a_failed_switch_that_keeps_the_format_goes_back_to_the_previous_version() {
+        let same = |file: Option<u32>, new: Option<u32>| !format_changes(new, file) && file.is_some_and(|f| f > 0);
+        assert!(same(Some(2), Some(2)), "0.3.0 -> 0.3.1");
+        assert!(!same(Some(1), Some(2)), "muda o formato");
+        assert!(!same(None, Some(2)), "arquivo ilegível");
+        assert!(!same(Some(2), None), "a nova não diz o esquema");
+        assert!(!same(Some(0), Some(2)), "a nova criou o arquivo no esquema dela");
+        assert_eq!(after_failure(true, None, true), AfterFailure::Rollback, "a nova abriu, e mesmo assim a anterior volta");
+        assert_eq!(after_failure(false, None, true), AfterFailure::Rollback);
+        assert_eq!(after_failure(true, Some(1), true), AfterFailure::Restore(1), "cópia desta tentativa vale mais");
     }
 
     #[test]

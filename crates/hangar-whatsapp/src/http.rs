@@ -371,9 +371,9 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     // De pé é o serviço respondendo: só a falta de conexão leva ao ramo do disco, com as guardas dele.
     match wa.client.call(reqwest::Method::POST, "/v1/wipe", &[], Some(&json!({"confirm": true}))).await {
         Ok(reply) if (200..300).contains(&reply.status) => {
-            // As cópias de antes de uma volta são do Hangar: o binário não as conhece.
+            // As cópias de uma volta são do Hangar, e a versão antiga religada por ela não conhece as `.bak`.
             let data = wa.ctx.paths.data.clone();
-            return match tokio::task::spawn_blocking(move || wipe_copies(&data, false, Vec::new())).await {
+            return match tokio::task::spawn_blocking(move || wipe_copies(&data, true, Vec::new())).await {
                 Ok(Ok(_)) => relay(reply),
                 Ok(Err(partial)) => partial_wipe(partial),
                 Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
@@ -621,11 +621,12 @@ pub(crate) fn call_failure(error: &CallError) -> (StatusCode, &'static str, &'st
     }
 }
 
-/// Envio recusado com a vez ocupada: "atualizando" só com uma troca de versão em curso; o resto é a operação de sempre.
+/// Envio recusado com a vez ocupada: `whatsapp_updating` só com uma troca de versão em curso; o resto é a operação de
+/// sempre.
 fn send_busy(wa: &WhatsApp) -> Response {
     let job = wa.installer.job();
     let updating = job["done"] == false && matches!(job["kind"].as_str(), Some(kind) if kind == "update" || kind == AUTO_UPDATE_KIND);
-    if updating { refused(StatusCode::CONFLICT, "whatsapp_busy", UPDATING_MSG) } else { busy() }
+    if updating { refused(StatusCode::CONFLICT, "whatsapp_updating", UPDATING_MSG) } else { busy() }
 }
 
 fn busy() -> Response {
@@ -679,8 +680,8 @@ fn wipe_data(data: &Path) -> Result<(), Partial> {
     }
 }
 
-/// Cópias do `messages.db` também são mensagens: as do binário antes de migrar (`.schema<v>.bak`, só com o
-/// serviço parado, porque de pé o `/v1/wipe` as apaga) e as que a volta de uma atualização deixa.
+/// Cópias do `messages.db` também são mensagens: as do binário antes de migrar (`.schema<v>.bak`, que o `/v1/wipe`
+/// de uma versão antiga não conhece) e as que a volta de uma atualização deixa.
 fn wipe_copies(data: &Path, with_backups: bool, mut removed: Vec<String>) -> Result<Vec<String>, Partial> {
     let entries = match std::fs::read_dir(data) {
         Ok(entries) => entries,
