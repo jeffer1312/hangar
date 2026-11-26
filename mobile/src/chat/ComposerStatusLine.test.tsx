@@ -126,6 +126,20 @@ describe('Antigravity no rodapé', () => {
     expect(item(container, '7d')?.textContent).toBe('7d 1%');
   });
 
+  it('relê a cota quando o turno termina', async () => {
+    state.chat.statusLine = null;
+    state.chat.stateEvent = { session: 'sess', state: 'working' };
+    state.sessions.rows = [{ name: 'sess', serverId: 's1', provider: 'antigravity', conta: 'antigravity:/home/u/.gemini',
+      model: 'gemini-pro-orchestrator-neon', cwd: '/x/hangar' } as SessionInfo & { serverId: string }];
+    credentials.rows = [];
+    credentials.calls = 0;
+    const { root } = await render();
+    const before = credentials.calls;
+    state.chat.stateEvent = { session: 'sess', state: 'idle' };
+    await act(async () => root.render(createElement(ComposerStatusLine, base)));
+    expect(credentials.calls).toBe(before + 1);
+  });
+
   it('sessão do Claude não lê as contas: a cota vem da linha de status', async () => {
     credentials.calls = 0;
     await render();

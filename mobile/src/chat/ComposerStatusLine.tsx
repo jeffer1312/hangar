@@ -30,7 +30,7 @@ export function ComposerStatusLine({ serverId, name, onOpenSettings }: Props) {
     ?? s.rows.find((x) => x.serverId === serverId && x.name === name) ?? null);
   const status = useMemo(() => composerStatus(parseStatusLine(statusLine, session), session), [statusLine, session]);
   const accountLabel = session ? sessionAccountLabel(session) : null;
-  const agyWindows = useAgyUsageWindows(serverId, session);
+  const agyWindows = useAgyUsageWindows(serverId, session, stateEvent?.state === 'idle');
   const [usageOpen, setUsageOpen] = useState(false);
   const [availableWidth, setAvailableWidth] = useState(0);
   const [measured, setMeasured] = useState<Record<string, number>>({});

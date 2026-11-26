@@ -49,7 +49,8 @@ fn not_found(detail:&str) -> bool { detail.contains("(code 404)") || detail.cont
 
 /// Comando que não é servidor e agendamento seguem depois do prompt e avisam sozinhos quando acabam.
 fn outlives_prompt(kind:Option<&str>,title:Option<&str>,input:Option<&Value>) -> bool {
-    title.is_some_and(|t|SCHEDULE_TITLES.contains(&t)) || (kind == Some("execute") && input.is_none_or(|i|i["IsDaemon"] != true))
+    // Sem a entrada ainda não se sabe se é servidor: não segura o turno por um comando que pode nunca acabar.
+    title.is_some_and(|t|SCHEDULE_TITLES.contains(&t)) || (kind == Some("execute") && input.is_some_and(|i|i["IsDaemon"] != true))
 }
 
 /// O aviso do "permitir sempre" vale só para essa opção.
@@ -198,10 +199,11 @@ impl Engine {
         self.preview.deadline().into_iter().chain(self.thinking.deadline())
             .chain(self.rpc.values().filter(|rpc|!rpc.timed_out).filter_map(|rpc|rpc.deadline))
             .chain(self.cancel_due.filter(|_|self.in_progress))
-            .chain((self.in_progress && !self.silence_held()).then_some(self.progress_at + INACTIVITY_LIMIT))
-            .chain(self.settle_at)
-            .chain((self.held && self.reply_open).then_some(self.progress_at + REPLY_QUIET_LIMIT))
-            .chain((self.held && self.open_tools.values().any(|outlives|*outlives)).then_some(self.progress_at + COMMAND_HOLD_LIMIT))
+            // Prazo que o `tick` não consome nesse estado não entra: vencido, faria o ator girar sem parar.
+            .chain((self.in_progress && self.cancel_due.is_none() && !self.silence_held()).then_some(self.progress_at + INACTIVITY_LIMIT))
+            .chain(self.settle_at.filter(|_|!self.in_progress))
+            .chain((self.held && !self.in_progress && self.reply_open).then_some(self.progress_at + REPLY_QUIET_LIMIT))
+            .chain((self.held && !self.in_progress && self.open_tools.values().any(|outlives|*outlives)).then_some(self.progress_at + COMMAND_HOLD_LIMIT))
             .min_by(f64::total_cmp)
     }
 
@@ -469,6 +471,7 @@ impl Engine {
                 if let Some(wire) = self.wires.get_mut(&operation_id) { wire.kind = WireKind::Prompt { steer }; }
                 if !steer { self.turn_id = Some(id); self.turn_failure = None; self.turn_output = false; self.resumed = false; }
                 self.in_progress = true;
+                self.settle_at = None;
                 self.last_event = clock.monotonic_s;
                 self.progress_at = clock.monotonic_s;
                 effects.push(Effect::StateChanged);
@@ -657,6 +660,7 @@ impl Engine {
                     acp::Event::PermissionAsked { rpc_id,.. } => {
                         // Pedido de outra conversa (os subagentes pedem pela do principal) não tem cartão aqui.
                         if !self.conversation.is_empty() && line["params"]["sessionId"].as_str().is_some_and(|s|s != self.conversation) {
+                            tracing::warn!(session=%self.state.session,code="agy_permission_other_session","antigravity: permissão pedida por outra conversa; cancelada");
                             effects.push(Effect::Write { frame:json!({"jsonrpc":"2.0","id":rpc_id,"result":{"outcome":{"outcome":"cancelled"}}}),operation_id:None });
                             continue;
                         }
@@ -1519,6 +1523,42 @@ mod tests {
         let out = feed(&mut engine,asked,2.0);
         assert_eq!(frames(&out)[0]["result"]["outcome"],json!({"outcome":"cancelled"}));
         assert_eq!(state(&engine),"working");
+    }
+
+    #[test]
+    fn after_the_silence_cancel_no_deadline_is_left_in_the_past() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let at_limit = 1.0 + INACTIVITY_LIMIT;
+        assert!(cancelled(&engine.apply(EngineInput::Tick,at(at_limit)).unwrap()));
+        assert!(engine.next_deadline().is_some_and(|d|d > at_limit),"prazo vencido faz o ator girar até o agy responder");
+        // O Parar da pessoa depois de muito silêncio também não deixa o prazo do silêncio para trás.
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let late = 1.0 + INACTIVITY_LIMIT + 60.0;
+        engine.command(RuntimeCommand { operation_id:"int1".into(),kind:OperationKind::Interrupt,payload:json!({}) },at(late)).unwrap();
+        assert!(engine.next_deadline().is_some_and(|d|d > late));
+    }
+
+    #[test]
+    fn a_message_sent_while_the_turn_settles_leaves_no_deadline_in_the_past() {
+        let mut engine = opened(json!({}));
+        held_by_a_command(&mut engine);
+        feed(&mut engine,tool_done("c1"),60.0);
+        engine.command(RuntimeCommand { operation_id:"in2".into(),kind:OperationKind::Input,payload:json!({"text":"b"}) },at(70.0)).unwrap();
+        assert!(engine.next_deadline().is_some_and(|d|d > 70.0),"o fechamento do turno anterior não vale com um prompt aberto");
+    }
+
+    #[test]
+    fn a_command_without_its_input_yet_does_not_hold_the_turn() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        feed(&mut engine,update(json!({"sessionUpdate":"tool_call","toolCallId":"x1","status":"in_progress","kind":"execute","title":"npm run dev"})),2.0);
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
+        assert_eq!(state(&engine),"idle");
     }
 
     #[test]
