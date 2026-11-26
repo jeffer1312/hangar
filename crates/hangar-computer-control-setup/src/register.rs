@@ -185,7 +185,9 @@ mod tests {
     }
 
     /// Windows sem alvo e nunca registrado: nasce o alvo local `windows` e o MCP liga com ele.
+    /// `create_target` recusa o local onde não há release do hcu.
     #[test]
+    #[cfg(any(windows, all(target_os = "linux", target_arch = "x86_64")))]
     fn windows_without_target_creates_the_local_one() {
         let home = Home::new();
         assert_eq!(register_on(&home.paths, true, true, || false, || Ok(jev())).unwrap(), Registered::Written);

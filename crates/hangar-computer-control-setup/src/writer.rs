@@ -101,7 +101,8 @@ fn managed_env(paths: &Paths, agent_config: &str, previous: Map<String, Value>, 
 
 /// O registro sozinho, decidido inteiro sob a trava: um desligar que chega antes nunca é desfeito.
 /// Principal sem a entrada: registra só sem a guardada e sem a marca (com qualquer uma das duas ela foi
-/// desligada ou tirada à mão) e com alvo (`target`) ou Hyprland (sondado antes da trava). Entrada que já
+/// desligada ou tirada à mão) e com alvo (`target`), Hyprland (sondado antes da trava) ou `local_auto`, que cria aqui o alvo local
+/// `windows`. Entrada que já
 /// roda o binário do pacote fica intocada; com outro programa vira o binário, com o env dela. Conta aberta
 /// sem a entrada recebe a do principal. Com a entrada no principal, a marca é gravada se faltar. `None` =
 /// não registra; senão, se gravou alguma entrada.
