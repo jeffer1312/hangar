@@ -767,7 +767,7 @@
  },
  {
   "name": "browser_goal",
-  "description": "O Jev dirige o navegador desta sessão sozinho até cumprir um objetivo (navegar até uma tela, preencher um cadastro, escolher num combobox): uma chamada no lugar de vários snapshot+click. Só em sessão aberta com o Jev. `dados`: valores para os campos, com as chaves que quiser (o Jev casa cada um com o rótulo). Resposta: os passos, `parou:`, `trajeto:` (JSONL com cada decisão do Jev e do auxiliar, para ver por que parou), `url:`, `texto:` e, se faltou valor, `falta-dado: <campo>` — chame de novo com ele em `dados`; a página fica onde parou. Erro = não cumpriu. O objetivo que deu certo vira roteiro em `automacao/gravacoes/` na raiz do git da sessão (ou em `pasta`) e a próxima chamada igual o repete sem o Jev decidir cada passo; `refazer: true` ignora o roteiro. `sessao`: só para a assistente de voz, que não é sessão: a sessão em nome de quem agir; quem é sessão age sempre como ela mesma.",
+  "description": "O Jev dirige o navegador desta sessão sozinho até cumprir um objetivo (navegar até uma tela, preencher um cadastro, escolher num combobox): uma chamada no lugar de vários snapshot+click. Só em sessão aberta com o Jev. `dados`: valores para os campos, com as chaves que quiser (o Jev casa cada um com o rótulo). Resposta: os passos, `parou:`, `trajeto:` (JSONL com cada decisão do Jev e do auxiliar, para ver por que parou), `url:`, `texto:` e, se faltou valor, `falta-dado: <campo>` — chame de novo com ele em `dados`; a página fica onde parou. Erro = não cumpriu. O objetivo que deu certo vira roteiro em `automacao/gravacoes/` na raiz do git da sessão (ou em `pasta`) e a próxima chamada igual o repete sem o Jev decidir cada passo; `refazer: true` ignora o roteiro. Clique que exclui, compra, envia ou publica para com `operacao arriscada`, salvo quando o objetivo nomeia aquele botão; com a ordem do usuário, chame de novo com `permitir_risco: true`, que libera só nesta chamada. `sessao`: só para a assistente de voz, que não é sessão: a sessão em nome de quem agir; quem é sessão age sempre como ela mesma.",
   "inputSchema": {
    "properties": {
     "objetivo": {
@@ -801,6 +801,11 @@
      "default": "",
      "title": "Pasta",
      "type": "string"
+    },
+    "permitir_risco": {
+     "default": false,
+     "title": "Permitir Risco",
+     "type": "boolean"
     },
     "sessao": {
      "default": "",

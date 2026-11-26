@@ -242,7 +242,7 @@ const listasFechadas = (candidatos, editaveis, aberta) => (aberta ? [] : candida
  * campo ou clicar noutro lugar a fecha e joga fora o passo. Isso o código sabe, então não vira
  * pergunta — perguntando, o laço alternava entre abrir a lista e digitar noutro campo sem fim.
  */
-function montarPerguntas(candidatos, dados = {}, editaveis = new Set(), listaAberta = '', acabouDeDigitar = false, withImage = false) {
+function montarPerguntas(candidatos, dados = {}, editaveis = new Set(), listaAberta = '', acabouDeDigitar = false, withImage = false, noEffect = new Set()) {
   const opcoes = candidatos.filter((c) => c.papel === PAPEL_DE_OPCAO);
   // `combobox` ENTRA em clicaveis: o dropdown do Radix e um <button role="combobox"> que so abre
   // com clique, e a lista de opcoes so aparece na arvore depois de aberto. `option` tambem entra:
@@ -261,6 +261,7 @@ function montarPerguntas(candidatos, dados = {}, editaveis = new Set(), listaAbe
   if (!campos.length) delete disponiveis.TYPE_TEXT;
   if (!opcoes.length) delete disponiveis.SELECT;
   if (!acabouDeDigitar) delete disponiveis.PRESS_ENTER;
+  if (noEffect.has('SCROLL_DOWN')) delete disponiveis.SCROLL_DOWN;
   return {
     // Lista fechada tambem ganha pergunta de valor: com ela o laco abre e escolhe sozinho a opcao
     // igual ao dado, sem depender da operacao que o Jev escolheria para o formulario inteiro.
@@ -574,6 +575,72 @@ function jsDeCentralizar(rotuloDoCampo) {
     return 'centralizado';
   })()`;
 }
+
+/**
+ * Rola o maior contêiner que ainda desce, pelo JS da página: `PageDown` só move o que tem foco (a
+ * lista com rolagem própria ficava parada) e, numa aba sem quadro, a tecla nem chega.
+ */
+const JS_SCROLL = `(() => {
+  const raiz = document.scrollingElement || document.documentElement;
+  const desce = (e) => e.scrollHeight - e.clientHeight - e.scrollTop > 2;
+  const caixas = [...document.querySelectorAll('*')].filter((e) => e.clientHeight >= 40 && desce(e)
+    && /^(auto|scroll|overlay)$/.test(getComputedStyle(e).overflowY));
+  if (desce(raiz)) caixas.push(raiz);
+  const altura = (e) => (e === raiz ? innerHeight : e.clientHeight);
+  const alvo = caixas.sort((a, b) => (b === raiz ? innerWidth : b.clientWidth) * altura(b) - (a === raiz ? innerWidth : a.clientWidth) * altura(a))[0];
+  if (!alvo) return 'fim';
+  const antes = alvo.scrollTop;
+  alvo.scrollTop = antes + Math.max(40, Math.round(altura(alvo) * 0.85));
+  return alvo.scrollTop > antes ? 'rolou ' + Math.round(alvo.scrollTop - antes) : 'fim';
+})()`;
+
+/**
+ * O que está por cima do centro do botão `nome` (aviso fixo, diálogo): os nomes dos botões do que
+ * o cobre, em JSON, ou '' quando nada o cobre.
+ */
+function jsCoverOf(nome) {
+  return `(() => {
+    const nome = ${JSON.stringify(nome)};
+    const rotulo = (e) => (e.getAttribute('aria-label') || e.innerText || '').replace(/\\s+/g, ' ').trim();
+    const alvo = [...document.querySelectorAll('button,a,[role=button],[role=link],[role=menuitem],[role=tab]')].find((e) => rotulo(e) === nome);
+    if (!alvo) return '';
+    const r = alvo.getBoundingClientRect();
+    const topo = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    if (!topo || alvo.contains(topo) || topo.contains(alvo)) return '';
+    let cobre = topo;
+    for (let e = topo; e && e !== document.body; e = e.parentElement) {
+      if (/^(fixed|sticky)$/.test(getComputedStyle(e).position) || e.getAttribute('role') === 'dialog' || e.tagName === 'DIALOG') cobre = e;
+    }
+    return JSON.stringify([...cobre.querySelectorAll('button,a,[role=button]')].map(rotulo).filter(Boolean).slice(0, 10));
+  })()`;
+}
+
+// Só o botão que dispensa um aviso é clicado sem o Jev, e só quando todo botão do aviso é harmless:
+// "Fechar pedido" ou um "Cancelar / OK" de exclusão nunca passam.
+const DISMISS = /^(?:aceitar|aceito|accept|entendi|got it|fechar|close|dispensar|dismiss|agora n[aã]o|mais tarde|not now|×|x)(?:\s+(?:todos|tudo|all)(?:\s+(?:os\s+)?cookies)?|\s+(?:os\s+)?cookies|\s+e\s+continuar)?$/iu;
+const HARMLESS_ONLY = /^(?:rejeitar|recusar|reject|personalizar|customize|configurar|prefer[eê]ncias|settings|saiba mais|learn more|pol[ií]tica de (?:privacidade|cookies))(?:\s+(?:todos|tudo|all)(?:\s+(?:os\s+)?cookies)?|\s+(?:os\s+)?cookies)?$/iu;
+
+const CLICK_VERB = String.raw`(?:clique|clicar|clica|aperte|apertar|pressione|pressionar|toque|tocar|click|press|tap)`;
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** O objetivo manda clicar neste botão: verbo de clique logo antes do nome, sem negação na frente. */
+// Negação em qualquer ponto da oração ("não precisa clicar", "evite clicar") desfaz a ordem.
+const NEGATION = /(?<![\p{L}])(?:n[aã]o|nunca|jamais|evite|evitar|sem|never|avoid|don't|do not|without)(?![\p{L}])/iu;
+
+function goalOrdersClick(objetivo, nome) {
+  const n = normalizar(nome);
+  if (n.length < 4) return false;
+  const oracoes = normalizar(objetivo).split(/[.;!?\n]+/);
+  const alvo = new RegExp(`(?<![\\p{L}])${CLICK_VERB}\\s+(?:(?:em|no|na|on|o|a|the|bot[aã]o|button)\\s+)*["“'«]?${escapeRegex(n)}(?=["”'»]?(?:\\s*$|\\s*[.,;:!?)]|\\s+(?:e|and|depois|then|para|to)(?![\\p{L}])))`, 'iu');
+  return oracoes.some((o) => alvo.test(o) && !NEGATION.test(o));
+}
+
+// Reserva do Escape quando a tecla não chega (aba sem quadro): Radix e afins escutam o keydown no document.
+const JS_ESCAPE = `(() => {
+  const alvo = document.activeElement || document.body;
+  for (const tipo of ['keydown', 'keyup']) alvo.dispatchEvent(new KeyboardEvent(tipo, { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+  return 'escape';
+})()`;
 
 const HEAD_DA_OPERACAO = { CLICK: 'click_target', TYPE_TEXT: 'type_text_target', SELECT: 'select_target' };
 const TERMINAIS = new Set(['DONE', 'BLOCKED']);
@@ -1036,6 +1103,15 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
   const camposSecretos = new Set();
   let reolhou = 0;
   let urlDosEscritos = '';
+  // Ação que não mudou a página (clique covered por um aviso, rolagem no fim) sai das opções até a
+  // página mudar: repetida, ela só levava à trava de repetição e à parada.
+  let lastAction = null;
+  let noEffect = { pageMark: null, chaves: new Set() };
+  const targetKey = (c) => `${c.papel} "${c.nome}"`;
+  // O botão que o próprio objetivo manda clicar ("clique em Confirmar cadastro") já tem a ordem.
+  const namedInGoal = (c) => Boolean(c) && goalOrdersClick(objetivo, c.nome);
+  let escapeCount = 0;
+  const returnedOnScroll = new Set();
   // Último clique de envio e a última recusa lida depois dele (botão + avisos da página).
   let envio = null;
   let ultimaRecusa = null;
@@ -1086,9 +1162,68 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
     // A recusa também: era de outro formulário, e levava os valores dele ao modelo de texto.
     if (url !== urlDosEscritos) { escritos.clear(); pulados.clear(); recusados = {}; recusaParaTexto = null; filaDoAuxiliar = []; urlDosEscritos = url; }
     // Campo deixado de lado sai dos alvos: oferecido de novo, o Jev voltava a mirar o mesmo filtro.
-    const candidatos = parsarSnapshot(snapshot).filter((c) => !((PAPEIS_DE_TEXTO.has(c.papel) || c.papel === 'combobox') && pulados.has(c.nome)));
+    // Valores dos campos e avisos não aparecem na árvore: um envio recusado muda só eles.
+    const pageMark = `${url}\n${texto}\n${snapshot}\n${JSON.stringify([anotacaoLida.valores, anotacaoLida.avisos, anotacaoLida.lista_aberta])}`;
+    if (noEffect.pageMark !== pageMark) noEffect = { pageMark, chaves: new Set() };
+    let coverButtons = [];
+    if (lastAction?.pageMark === pageMark) {
+      noEffect.chaves.add(lastAction.chave);
+      log(`jev-objetivo passo ${passo}: ${lastAction.chave} nao mudou a pagina; fica fora ate ela mudar`);
+      if (lastAction.escolhido) {
+        try {
+          const bruto = String(await executar('eval', [jsCoverOf(lastAction.escolhido.nome)])).replace(/^ok:\s*/, '').trim();
+          // "Nada cobre" volta como texto vazio, que não é JSON.
+          const once = bruto.startsWith('"') ? JSON.parse(bruto) : bruto;
+          const lido = once ? JSON.parse(once) : [];
+          if (Array.isArray(lido)) coverButtons = lido.map(String);
+        } catch (err) {
+          log(`jev-objetivo passo ${passo}: leitura do que cobre ${lastAction.chave} falhou (${String(err?.message ?? err).slice(0, 120)}); o Jev decide`);
+        }
+      }
+    }
+    const covered = lastAction?.escolhido;
+    lastAction = null;
+    const candidatos = parsarSnapshot(snapshot).filter((c) => !((PAPEIS_DE_TEXTO.has(c.papel) || c.papel === 'combobox') && pulados.has(c.nome))
+      && !noEffect.chaves.has(targetKey(c)));
+    // O clique caiu num aviso por cima do alvo: com um só botão de dispensar nele, fecha e o alvo volta.
+    const harmless = coverButtons.length && coverButtons.every((b) => DISMISS.test(b) || HARMLESS_ONLY.test(b));
+    const dismissals = harmless ? candidatos.filter((c) => PAPEIS_QUE_ENVIAM.has(c.papel) && coverButtons.includes(c.nome) && DISMISS.test(c.nome)) : [];
+    if (dismissals.length === 1) {
+      const [d] = dismissals;
+      log(`jev-objetivo passo ${passo}: CLICK @${d.ref} (${rotulo(d)}) cobria ${rotulo(covered)}`);
+      registrar({ passo, tipo: 'decisao', operacao: 'CLICK', alvo: rotulo(d), via: 'laco', motivo: `cobria ${rotulo(covered)}` });
+      try {
+        await agir('click', [`@${d.ref}`]);
+      } catch (err) {
+        if (!(err instanceof FalhaDoNavegador)) throw err;
+        return { feito, sucesso: false, parou: `o navegador falhou no ${err.verbo}: ${err.message}` };
+      }
+      feito.push(`CLICK ${rotulo(d)}`);
+      await executar('wait', ESPERA_ASSENTAR);
+      continue;
+    }
+    // A árvore e o texto já trazem a página inteira, então rolar não muda a marca da página: quem diz se andou
+    // é a própria rolagem.
+    const scrollDown = async () => {
+      const r = String(await agir('eval', [JS_SCROLL])).replace(/^ok:\s*"?|"$/g, '');
+      log(`jev-objetivo passo ${passo}: SCROLL_DOWN (${r})`);
+      if (!/rolou/.test(r)) {
+        noEffect.chaves.add('SCROLL_DOWN');
+        return false;
+      }
+      // O clique que caiu num rodapé fixo pode ter saído de baixo dele: volta uma vez, não a cada rolagem.
+      for (const k of [...noEffect.chaves]) {
+        if (returnedOnScroll.has(k)) continue;
+        returnedOnScroll.add(k);
+        noEffect.chaves.delete(k);
+      }
+      feito.push('SCROLL_DOWN');
+      return true;
+    };
+    // Tudo o que a tela oferece já foi tentado sem efeito: não é página carregando, e a conclusão ainda é perguntada.
+    const allTried = !candidatos.length && noEffect.chaves.size > 0 && parsarSnapshot(snapshot).length > 0;
     // Logo depois de um `open` ou de um clique que navega, a arvore ainda e a da pagina em branco.
-    if (!candidatos.length && !esperouCarregar) {
+    if (!candidatos.length && !esperouCarregar && !allTried) {
       esperouCarregar = true;
       // Página em branco não é ação recém-feita: o carregamento inteiro pode levar segundos.
       await executar('wait', ['--idle', '--timeout', '5000']);
@@ -1148,6 +1283,7 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
     const estado = {
       ...montarEstado(objetivo, url, feito, texto, anotacao, cofre),
       ...(recusa ? { envio_recusado: textoDaRecusa(recusa) } : {}),
+      ...(noEffect.chaves.size ? { actions_without_effect: [...noEffect.chaves] } : {}),
     };
     // O laço não conhece o destino do Jev: quem pergunta tira a imagem do estado, monta o formato e
     // devolve no mesmo objeto como o pedido saiu (`status`, `motivo`).
@@ -1166,17 +1302,33 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
         }
       }
       const prova = typeof concluido?.noul === 'number' ? concluido.noul : 0;
+      // O que falta pode estar abaixo: botão que só nasce quando o fim da página aparece.
+      if (prova < conclusao && !noEffect.chaves.has('SCROLL_DOWN')) {
+        let moved;
+        try {
+          moved = await scrollDown();
+        } catch (err) {
+          if (!(err instanceof FalhaDoNavegador)) throw err;
+          return { feito, sucesso: false, parou: `o navegador falhou no ${err.verbo}: ${err.message}` };
+        }
+        if (moved) {
+          await executar('wait', ESPERA_ASSENTAR);
+          continue;
+        }
+      }
       return {
         feito,
         sucesso: prova >= conclusao,
         parou: prova >= conclusao
           ? `objetivo atingido, pagina confirma (${prova.toFixed(2)})`
-          : `a pagina nao tem elemento acionavel e nao confirma conclusao (${prova.toFixed(2)})`,
+          : allTried
+            ? comRecusa(`o que a tela oferece ja foi tentado sem mudar a pagina (${[...noEffect.chaves].join('; ')}) e ela nao confirma conclusao (${prova.toFixed(2)})`)
+            : `a pagina nao tem elemento acionavel e nao confirma conclusao (${prova.toFixed(2)})`,
       };
     }
 
     const acabouDeDigitar = String(feito.at(-1) ?? '').startsWith('TYPE_TEXT');
-    const questions = (withImage) => montarPerguntas(candidatos, cofre, anotacao.editaveis, anotacao.lista_aberta, acabouDeDigitar, withImage);
+    const questions = (withImage) => montarPerguntas(candidatos, cofre, anotacao.editaveis, anotacao.lista_aberta, acabouDeDigitar, withImage, noEffect.chaves);
     let respostas = await perguntar(estado, questions(false));
     let thresholds = LIMIARES;
     const terminal = TERMINAIS.has(respostas.operacao?.choice);
@@ -1232,12 +1384,16 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
     }
     // Com a ordem explicita de quem chamou, a trava de risco vira registro: o passo segue e o log diz
     // qual clique arriscado foi liberado.
-    const decide = (r, t) => {
-      const d = decidir(r, candidatos, t);
-      if (!(permitirRisco && d.parar?.startsWith('operacao arriscada'))) return d;
-      log(`jev-objetivo passo ${passo}: risco liberado por --permitir-risco (${d.parar})`);
-      return decidir(r, candidatos, { ...t, arriscado: Infinity, arriscadoAlvo: Infinity });
+    const releaseRisk = (fazer, t, origem) => {
+      const d = fazer(t);
+      if (!d.parar?.startsWith('operacao arriscada')) return d;
+      const livre = fazer({ ...t, arriscado: Infinity, arriscadoAlvo: Infinity });
+      const nomeado = !permitirRisco && namedInGoal(livre.escolhido);
+      if (!permitirRisco && !nomeado) return d;
+      log(`jev-objetivo passo ${passo}: risco liberado ${nomeado ? `porque o objetivo manda clicar em "${livre.escolhido.nome}"` : 'por --permitir-risco'} (${d.parar}${origem ? `, ${origem}` : ''})`);
+      return livre;
     };
+    const decide = (r, t) => releaseRisk((l) => decidir(r, candidatos, l), t);
     let decisao = decide(respostas, thresholds);
     // Tela que acabou de mudar (formulario abrindo, listas carregando) deixa o Jev sem alvo firme num
     // estado que nao e o final: antes de desistir, espera e olha de novo, uma vez por passo.
@@ -1285,15 +1441,10 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
         decisao = block ?? decide(respostas, thresholds);
       }
     }
-    // Olhou de novo e o Jev segue sem alvo: o modelo auxiliar lê a página e propõe o passo. Falha
+    // Olhou de novo e o Jev segue em dúvida: o modelo auxiliar lê a página e propõe o passo. Falha
     // dele não muda a parada, mas vai junto no texto dela.
-    if (ajudar && decisao.parar && / sem alvo confiavel/.test(decisao.parar)) {
-      const liberado = (fazer, origem) => {
-        const d = fazer(thresholds);
-        if (!(permitirRisco && d.parar?.startsWith('operacao arriscada'))) return d;
-        log(`jev-objetivo passo ${passo}: risco liberado por --permitir-risco (${d.parar}, ${origem})`);
-        return fazer({ ...thresholds, arriscado: Infinity, arriscadoAlvo: Infinity });
-      };
+    if (ajudar && decisao.parar && / sem alvo confiavel|^operacao indecisa|^BLOCKED fraco/.test(decisao.parar)) {
+      const liberado = (fazer, origem) => releaseRisk(fazer, thresholds, origem);
       let ajuda = null;
       // O passo seguinte que o auxiliar já propôs vem antes de chamá-lo de novo, se o elemento
       // continua na página (um só com o mesmo nome e papel); senão a fila inteira cai.
@@ -1338,6 +1489,24 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
       if (decisao.operacao === 'CLICK' && (PAPEIS_DE_TEXTO.has(decisao.escolhido.papel) || ehEditavel(decisao.escolhido, anotacao.editaveis))
         && (vazioNaPagina(decisao.escolhido) || buscasVazias.has(decisao.escolhido.nome))) decisao = { ...decisao, operacao: 'TYPE_TEXT' };
     }
+    // Lista aberta por cima do formulário esconde o resto da página (o modal do Radix tira tudo da
+    // árvore), e sem alvo ali o laço parava. Escape fecha e é reversível; o ciclo seguinte re-observa.
+    // Vem depois do auxiliar, que ainda pode escolher uma opção; duas vezes no máximo, porque o laço
+    // reabre a lista que ele mesmo quer preencher.
+    const listaAberta = anotacao.lista_aberta || /^\s*-\s+listbox\b/m.test(snapshot);
+    if (decisao.parar && / sem alvo confiavel/.test(decisao.parar) && listaAberta && !noEffect.chaves.has('ESCAPE') && escapeCount < 2) {
+      escapeCount += 1;
+      log(`jev-objetivo passo ${passo}: ESCAPE (lista aberta sem alvo para o objetivo)`);
+      registrar({ passo, tipo: 'decisao', operacao: 'ESCAPE', via: 'laco', motivo: decisao.parar });
+      if (String(await executar('press', ['Escape'])).startsWith('erro:')) {
+        const fallback = String(await executar('eval', [JS_ESCAPE]));
+        if (fallback.startsWith('erro:')) return { feito, sucesso: false, parou: `${decisao.parar}; o navegador falhou no Escape: ${fallback}` };
+      }
+      feito.push('ESCAPE');
+      lastAction = { chave: 'ESCAPE', pageMark };
+      await executar('wait', ESPERA_ASSENTAR);
+      continue;
+    }
     // A fila vale só para passos seguidos do auxiliar: depois que o Jev agiu, a tela já não é a que
     // o auxiliar planejou.
     if (!String(decisao.via ?? '').startsWith('auxiliar')) filaDoAuxiliar = [];
@@ -1378,7 +1547,8 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
     // A assinatura NAO pode incluir o estado da pagina: um dropdown que abre e fecha alterna o
     // snapshot a cada volta e escapava da guarda — 21 cliques seguidos no mesmo combobox.
     const assinatura = `${decisao.operacao}@${decisao.alvo ?? '-'}`;
-    repetidas = assinatura === anterior ? repetidas + 1 : 0;
+    // Rolagem que anda é progresso; a que não anda já sai das opções pelo `noEffect`.
+    repetidas = assinatura === anterior && decisao.operacao !== 'SCROLL_DOWN' ? repetidas + 1 : 0;
     anterior = assinatura;
     if (repetidas >= 2) {
       return { feito, sucesso: false, parou: comRecusa(`${decisao.operacao} em @${decisao.alvo} repetiu 3x sem avancar; parei`) };
@@ -1394,10 +1564,11 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
         const saida = /^\s*-\s+listbox\b/m.test(snapshot) ? SEM_SELECT
           : await executar('eval', [jsDeSelecionar(decisao.escolhido.nome)]);
         if (String(saida).includes(SEM_SELECT)) {
-          if (decisao.arriscado !== null && !permitirRisco) {
+          const nomeada = namedInGoal(decisao.escolhido);
+          if (decisao.arriscado !== null && !permitirRisco && !nomeada) {
             return { feito, sucesso: false, parou: `operacao arriscada (${decisao.arriscado.toFixed(2)}): precisa da ordem do usuario` };
           }
-          if (decisao.arriscado !== null) log(`jev-objetivo passo ${passo}: risco liberado por --permitir-risco (escolha na lista, ${decisao.arriscado.toFixed(2)})`);
+          if (decisao.arriscado !== null) log(`jev-objetivo passo ${passo}: risco liberado ${permitirRisco ? 'por --permitir-risco' : `porque o objetivo manda clicar em "${decisao.escolhido.nome}"`} (escolha na lista, ${decisao.arriscado.toFixed(2)})`);
           await agir('click', [`@${decisao.alvo}`]);
         }
         else if (String(saida).includes('erro:')) return { feito, sucesso: false, parou: `SELECT falhou: ${saida}` };
@@ -1407,9 +1578,7 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
         await agir('press', ['Enter']);
         feito.push('PRESS_ENTER');
       } else if (decisao.operacao === 'SCROLL_DOWN') {
-        log(`jev-objetivo passo ${passo}: SCROLL_DOWN`);
-        await agir('press', ['PageDown']);
-        feito.push('SCROLL_DOWN');
+        await scrollDown();
       } else if (decisao.operacao === 'TYPE_TEXT') {
         const vazio = (c) => !Object.entries(anotacao.valores).find(([k]) => normalizar(k) === normalizar(c.nome))?.[1];
         const vizinhos = candidatos.filter((c) => PAPEIS_DE_TEXTO.has(c.papel) && !semRotulo(c.nome) && !ehEditavel(c, anotacao.editaveis) && vazio(c)
@@ -1534,6 +1703,9 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
     } catch (err) {
       if (!(err instanceof FalhaDoNavegador)) throw err;
       return { feito, sucesso: false, parou: `o navegador falhou no ${err.verbo}: ${err.message}` };
+    }
+    if (decisao.escolhido && (decisao.operacao === 'CLICK' || decisao.operacao === 'SELECT')) {
+      lastAction = { chave: targetKey(decisao.escolhido), pageMark, escolhido: decisao.escolhido };
     }
     await executar('wait', ESPERA_ASSENTAR);
   }

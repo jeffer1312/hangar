@@ -150,7 +150,8 @@ Identidade: sidecar da sessão no modo sem terminal; tmux no modo com terminal.
                           lendo e2e/roteiros e .hangar/roteiros antigos como reserva; fora de repo,
                           ~/.cache/hangar/roteiros)
     --permitir-risco      libera, so nesta chamada, o clique que exclui, compra, envia ou publica
-                          (quem chama responde pela ordem do usuario; cada liberacao sai no log)
+                          (quem chama responde pela ordem do usuario; cada liberacao sai no log).
+                          O botao que o proprio objetivo nomeia ("clique em Confirmar") ja vale como ordem
     --dados <json>        valores para os campos, com as chaves que você quiser: o Jev casa cada
                           um com o rótulo da página. Campo não coberto cai no LLM pequeno
                           (modelo auxiliar do Jev: JEV_AUX_BASE_URL/_API_KEY/_MODELO/_ESFORCO,

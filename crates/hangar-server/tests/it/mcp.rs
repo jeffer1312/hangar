@@ -251,6 +251,16 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
             assert_eq!((&rust["inputSchema"], &rust["outputSchema"]), (&python["inputSchema"], &python["outputSchema"]), "{}", python["name"]);
             continue;
         }
+        // `permitir_risco` e a frase da trava de risco vieram depois do Python; os outros parâmetros são os dele.
+        if python["name"] == "browser_goal" {
+            assert_eq!(rust["outputSchema"], python["outputSchema"]);
+            assert_eq!(rust["inputSchema"]["required"], python["inputSchema"]["required"]);
+            for (key, schema) in python["inputSchema"]["properties"].as_object().unwrap() {
+                assert_eq!(&rust["inputSchema"]["properties"][key], schema, "parâmetro {key} do browser_goal igual ao Python");
+            }
+            assert!(rust["inputSchema"]["properties"]["permitir_risco"].is_object(), "falta permitir_risco no browser_goal");
+            continue;
+        }
         if python["name"] != "new_session" {
             assert_eq!(rust, python, "{} igual ao Python", python["name"]);
             continue;

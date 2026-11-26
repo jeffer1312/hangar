@@ -186,6 +186,16 @@ const navegador = (executados, snapshot = SNAPSHOT) => async (verbo, args) => {
   return 'ok';
 };
 
+// A página muda a cada clique (a árvore ganha uma linha): parada, o clique parece não ter pegado e sai dos alvos.
+const changesOnClick = (executar) => {
+  let n = 0;
+  return async (verbo, args) => {
+    if (verbo === 'click') n += 1;
+    const r = await executar(verbo, args);
+    return verbo === 'snapshot' ? `${r}\n  - StaticText "cliques ${n}"` : r;
+  };
+};
+
 test('o estado leva o valor atual dos campos, lido da pagina', async () => {
   let visto = null;
   await rodar({
@@ -417,7 +427,8 @@ test('insistir no mesmo alvo para, mesmo com a pagina alternando', async () => {
     // Snapshot alternando de tamanho a cada volta, como um dropdown que abre e fecha: a guarda
     // NAO pode olhar o estado da pagina, so o alvo repetido.
     executar: async (verbo) => {
-      if (verbo === 'snapshot') return n++ % 2 ? `${SNAPSHOT}\n  - StaticText "x"` : SNAPSHOT;
+      if (verbo === 'click') n += 1;
+      if (verbo === 'snapshot') return n % 2 ? `${SNAPSHOT}\n  - StaticText "x"` : SNAPSHOT;
       if (verbo === 'url') return 'http://local/x';
       if (verbo === 'text') return 'pagina';
       if (verbo === 'eval') return 'ok: "{}"';
@@ -435,7 +446,7 @@ test('alvos diferentes a cada passo nao disparam a guarda', async () => {
   const r = await rodar({
     objetivo: 'alterna alvo',
     maxPassos: 4,
-    executar: navegador([]),
+    executar: changesOnClick(navegador([])),
     perguntar: async () => resposta({ click: alvos[i++ % alvos.length] }),
   });
   assert.equal(r.feito.length, 4);
@@ -1740,7 +1751,7 @@ test('auxiliar que discordou nao e reperguntado na mesma pagina; pagina nova per
   await rodar({
     objetivo: 'iniciar o cadastro',
     maxPassos: 3,
-    executar: async (verbo, args) => (verbo === 'text' ? texto : base(verbo, args)),
+    executar: changesOnClick(async (verbo, args) => (verbo === 'text' ? texto : base(verbo, args))),
     capture: async () => SCREENSHOT,
     perguntar: askWithScreenshotStatus('enviada', withBlock(0.8)),
     ajudar: async () => { chamadas += 1; return '{"acoes":[],"motivo":""}'; },
@@ -1782,7 +1793,7 @@ test('captura que passa do teto ou sem quadro: o passo segue sem imagem e os seg
     await rodar({
       objetivo: 'iniciar o cadastro',
       maxPassos: 3,
-      executar: navegador([]),
+      executar: changesOnClick(navegador([])),
       capture: withCaptureCeiling(() => { chamadas += 1; return lenta(); }, { timeoutMs: 50 }),
       perguntar: askWithScreenshotStatus('enviada', undefined, vistos, () => resposta({ click: NENHUM })),
       ajudar: async () => '{"acoes":[{"operacao":"CLICK","ref":"e2"}],"motivo":"abrir"}',
@@ -1806,4 +1817,211 @@ test('outro sem_print (arquivo nao gravado) nao desliga a captura', async () => 
   assert.deepEqual(await capture(), { status: 'sem_print', motivo: 'o shot nao gravou o arquivo' });
   assert.deepEqual(await capture(), { status: 'sem_print', motivo: 'o shot nao gravou o arquivo' });
   assert.equal(chamadas, 2);
+});
+
+
+// Uma página que muda só quando o laço age nela: `acoes` decide o que cada eval de rolagem e cada clique fazem.
+const livePage = ({ snapshots, rolagem = () => 'ok: "fim"', clique = () => {} }) => {
+  const executados = [];
+  let i = 0;
+  const executar = async (verbo, args) => {
+    executados.push([verbo, ...args].join(' '));
+    if (verbo === 'snapshot') return snapshots[Math.min(i, snapshots.length - 1)];
+    if (verbo === 'url') return 'http://local/x';
+    if (verbo === 'text') return `pagina ${i}`;
+    if (verbo === 'eval' && String(args[0]).includes('scrollTop')) { const r = rolagem(i); if (/rolou/.test(r)) i += 1; return r; }
+    if (verbo === 'click') { if (clique(args[0], i)) i += 1; return 'ok'; }
+    return 'ok';
+  };
+  return { executar, executados };
+};
+
+test('SCROLL_DOWN rola pelo JS da pagina, sem PageDown, e a rolagem que andou nao conta como repeticao', async () => {
+  const { executar, executados } = livePage({ snapshots: [SNAPSHOT], rolagem: () => 'ok: "rolou 400"' });
+  let volta = 0;
+  const r = await rodar({ objetivo: 'achar o item', maxPassos: 5, executar,
+    perguntar: async () => (volta++ < 4 ? resposta({ op: 'SCROLL_DOWN' }) : resposta({ op: 'DONE' })) });
+  assert.equal(r.sucesso, true, r.parou);
+  assert.equal(r.feito.filter((f) => f === 'SCROLL_DOWN').length, 4);
+  assert.ok(!executados.some((l) => l.startsWith('press')), 'tecla nao chega numa aba sem quadro e nao move o contêiner interno');
+});
+
+test('rolagem que nao andou tira SCROLL_DOWN das opcoes ate a pagina mudar', async () => {
+  const { executar } = livePage({ snapshots: [SNAPSHOT] });
+  const vistas = [];
+  let volta = 0;
+  await rodar({ objetivo: 'achar o item', maxPassos: 2, executar,
+    perguntar: async (estado, q) => { vistas.push(Object.keys(q.operacao.criteria)); return volta++ === 0 ? resposta({ op: 'SCROLL_DOWN' }) : resposta({ op: 'DONE' }); } });
+  assert.ok(vistas[0].includes('SCROLL_DOWN'));
+  assert.ok(!vistas[1].includes('SCROLL_DOWN'), 'rolar de novo no fim da pagina so gasta passo');
+});
+
+test('clique que nao mudou a pagina sai dos alvos, e volta quando ela muda', async () => {
+  const COM_AVISO = SNAPSHOT.replace('- link "Ver ajuda" [ref=@e1]', '- button "Aceitar cookies" [ref=@e1]');
+  // e2 fica coberto: so muda a pagina depois de aceitar o aviso.
+  const { executar } = livePage({ snapshots: [COM_AVISO, SNAPSHOT, SNAPSHOT.replace('Iniciar cadastro', 'Cadastro iniciado')],
+    clique: (ref, i) => (ref === '@e1' && i === 0) || (ref === '@e2' && i === 1) });
+  const alvos = [];
+  const r = await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 6, executar,
+    perguntar: async (estado, q) => {
+      alvos.push(Object.keys(q.click_target?.criteria ?? {}));
+      if (estado.texto_da_pagina === 'pagina 2') return resposta({ op: 'DONE' });
+      return resposta({ click: Object.keys(q.click_target.criteria).includes('e2') ? 'e2' : 'e1' });
+    } });
+  assert.equal(r.sucesso, true, r.parou);
+  assert.ok(!alvos[1].includes('e2'), 'o segundo pedido nao oferece de novo o clique que nao pegou');
+  assert.ok(alvos[2].includes('e2'), 'depois de a pagina mudar o botao volta a ser alvo');
+  assert.deepEqual(r.feito, ['CLICK button "Iniciar cadastro"', 'CLICK button "Aceitar cookies"', 'CLICK button "Iniciar cadastro"']);
+});
+
+test('lista aberta sem alvo para o objetivo fecha com Escape e o laco segue', async () => {
+  const ABERTA = `- RootWebArea "Receita"
+  - combobox "Modelo" [ref=@e1] [expanded]
+  - listbox
+    - option "Modelo 1" [ref=@e2]
+    - option "Modelo 2" [ref=@e3]`;
+  const executados = [];
+  let fechada = false;
+  const r = await rodar({ objetivo: 'clicar em Iniciar cadastro', maxPassos: 4,
+    executar: async (verbo, args) => {
+      executados.push([verbo, ...args].join(' '));
+      if (verbo === 'press' && args[0] === 'Escape') fechada = true;
+      if (verbo === 'snapshot') return fechada ? SNAPSHOT : ABERTA;
+      if (verbo === 'url') return 'http://local/x';
+      if (verbo === 'text') return fechada ? 'formulario' : 'lista';
+      return 'ok';
+    },
+    perguntar: async () => (fechada ? resposta({ op: 'DONE' }) : resposta({ click: NENHUM })) });
+  assert.equal(r.sucesso, true, r.parou);
+  assert.ok(executados.includes('press Escape'));
+  assert.deepEqual(r.feito, ['ESCAPE']);
+});
+
+test('pagina sem nada clicavel que ainda rola desce antes de desistir', async () => {
+  let rolou = false;
+  const r = await rodar({ objetivo: 'clicar em Confirmar', maxPassos: 4,
+    executar: async (verbo, args) => {
+      if (verbo === 'eval' && String(args[0]).includes('scrollTop')) { if (rolou) return 'ok: "fim"'; rolou = true; return 'ok: "rolou 600"'; }
+      if (verbo === 'snapshot') return rolou ? SNAPSHOT : SO_TEXTO;
+      if (verbo === 'url') return 'http://local/x';
+      if (verbo === 'text') return rolou ? 'fim do contrato' : 'contrato';
+      return 'ok';
+    },
+    perguntar: async (estado, q) => (q.operacao ? resposta({ op: 'DONE' }) : { concluido: { noul: 0.01 } }) });
+  assert.equal(r.sucesso, true, r.parou);
+  assert.deepEqual(r.feito, ['SCROLL_DOWN']);
+});
+
+
+test('clique arriscado que o objetivo nomeia e a ordem: segue; sem nomear, para', async () => {
+  const rodarCom = (objetivo) => rodar({ objetivo, maxPassos: 1, executar: navegador([]),
+    perguntar: async () => ({ ...resposta(), click_risk: { choice: 'e2', probabilities: { e2: 0.9, [NENHUM]: 0.1 } } }) });
+  const nomeado = await rodarCom('clique em Iniciar cadastro');
+  assert.deepEqual(nomeado.feito, ['CLICK button "Iniciar cadastro"']);
+  assert.match((await rodarCom('comece um cadastro')).parou, /arriscada/);
+});
+
+test('clique coberto por um aviso: fecha o aviso pelo unico botao de dispensar e volta ao alvo', async () => {
+  const COM_AVISO = `${SNAPSHOT}\n  - dialog "Aviso de cookies"\n    - button "Aceitar cookies" [ref=@e30]`;
+  let aceito = false;
+  let feitoContinuar = false;
+  const r = await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 4,
+    executar: async (verbo, args) => {
+      if (verbo === 'click' && args[0] === '@e30') aceito = true;
+      if (verbo === 'click' && args[0] === '@e2' && aceito) feitoContinuar = true;
+      if (verbo === 'snapshot') return feitoContinuar ? SO_TEXTO.replace('salvo', 'iniciado') : (aceito ? SNAPSHOT : COM_AVISO);
+      if (verbo === 'url') return 'http://local/x';
+      if (verbo === 'text') return feitoContinuar ? 'iniciado' : 'cadastro';
+      if (verbo === 'eval' && String(args[0]).includes('elementFromPoint')) return 'ok: "[\\"Aceitar cookies\\"]"';
+      return 'ok';
+    },
+    perguntar: async (estado, q) => (q.operacao ? resposta() : { concluido: { noul: 0.9 } }) });
+  assert.equal(r.sucesso, true, r.parou);
+  assert.deepEqual(r.feito, ['CLICK button "Iniciar cadastro"', 'CLICK button "Aceitar cookies"', 'CLICK button "Iniciar cadastro"']);
+});
+
+
+
+test('rolagem que anda numa pagina longa sem carga preguicosa segue rolando', async () => {
+  let n = 0;
+  const base = navegador([]);
+  const r = await rodar({ objetivo: 'achar o item', maxPassos: 4,
+    executar: async (verbo, args) => (verbo === 'eval' && String(args[0]).includes('scrollTop') ? 'ok: "rolou 400"' : base(verbo, args)),
+    perguntar: async (estado, q) => (n++ < 3 && 'SCROLL_DOWN' in q.operacao.criteria ? resposta({ op: 'SCROLL_DOWN' }) : resposta({ op: 'DONE' })) });
+  assert.equal(r.sucesso, true, r.parou);
+  assert.equal(r.feito.length, 3, 'a arvore inteira nao muda com a rolagem: rolou nao e sem efeito');
+});
+
+test('clique arriscado com negacao ou so mencionado no objetivo continua parando', async () => {
+  for (const objetivo of ['preencha o cadastro mas nao clique em Iniciar cadastro', 'abra a tela Iniciar cadastro', 'clique em Iniciar cadastro completo',
+    'abra o modelo; não precisa clicar em Iniciar cadastro.', 'evite clicar em Iniciar cadastro']) {
+    const r = await rodar({ objetivo, maxPassos: 1, executar: navegador([]),
+      perguntar: async () => ({ ...resposta(), click_risk: { choice: 'e2', probabilities: { e2: 0.9, [NENHUM]: 0.1 } } }) });
+    assert.match(r.parou, /arriscada/, objetivo);
+  }
+});
+
+test('aviso com botao que nao so dispensa nao e clicado sozinho', async () => {
+  for (const botoes of [['Fechar pedido'], ['Cancelar', 'OK'], ['OK']]) {
+    const extra = botoes.map((b, i) => `\n    - button "${b}" [ref=@e3${i}]`).join('');
+    const executados = [];
+    await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 2,
+      executar: async (verbo, args) => {
+        executados.push([verbo, ...args].join(' '));
+        if (verbo === 'snapshot') return `${SNAPSHOT}\n  - dialog "Aviso"${extra}`;
+        if (verbo === 'url') return 'http://local/x';
+        if (verbo === 'text') return 'cadastro';
+        if (verbo === 'eval' && String(args[0]).includes('elementFromPoint')) return `ok: ${JSON.stringify(JSON.stringify(botoes))}`;
+        return 'ok';
+      },
+      perguntar: async () => resposta() });
+    assert.ok(!executados.some((l) => /^click @e3\d$/.test(l)), botoes.join('/'));
+  }
+});
+
+
+test('rolagem que andou devolve os cliques que nao tinham pegado', async () => {
+  const alvos = [];
+  let volta = 0;
+  const base = navegador([]);
+  await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 3,
+    executar: async (verbo, args) => (verbo === 'eval' && String(args[0]).includes('scrollTop') ? 'ok: "rolou 400"' : base(verbo, args)),
+    perguntar: async (estado, q) => { alvos.push(Object.keys(q.click_target.criteria)); return volta++ === 1 ? resposta({ op: 'SCROLL_DOWN' }) : resposta(); } });
+  assert.ok(!alvos[1].includes('e2'), 'o clique sem efeito sai');
+  assert.ok(alvos[2].includes('e2'), 'depois de rolar o botao pode ter saido de baixo do rodape');
+});
+
+test('tela em que tudo ja foi tentado sem efeito para dizendo isso, sem esperar carregar', async () => {
+  const executados = [];
+  const UM = '- RootWebArea "x"\n  - button "Continuar" [ref=@e1]';
+  const r = await rodar({ objetivo: 'continuar', maxPassos: 4,
+    executar: async (verbo, args) => {
+      executados.push([verbo, ...args].join(' '));
+      if (verbo === 'snapshot') return UM;
+      if (verbo === 'url') return 'http://local/x';
+      if (verbo === 'text') return 'x';
+      return 'ok';
+    },
+    perguntar: async () => resposta({ click: 'e1', concluido: 0.1 }) });
+  assert.match(r.parou, /sem mudar a pagina/);
+  assert.ok(!executados.includes('wait --idle --timeout 5000'));
+});
+
+
+test('ultimo clique sem efeito visivel com a pagina confirmando o fim conclui', async () => {
+  const UM = '- RootWebArea "x"\n  - button "Copiar link" [ref=@e1]';
+  let volta = 0;
+  const r = await rodar({ objetivo: 'copiar o link', maxPassos: 3,
+    executar: async (verbo) => (verbo === 'snapshot' ? UM : verbo === 'url' ? 'http://local/x' : verbo === 'text' ? 'Link copiado' : 'ok'),
+    perguntar: async (estado, q) => (q.operacao ? (volta++ === 0 ? resposta({ click: 'e1', concluido: 0.1 }) : resposta({ op: 'DONE' })) : { concluido: { noul: 0.9 } }) });
+  assert.equal(r.sucesso, true, r.parou);
+});
+
+test('clique sempre coberto nao volta a cada rolagem', async () => {
+  const executados = [];
+  const base = navegador(executados);
+  await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 8,
+    executar: async (verbo, args) => (verbo === 'eval' && String(args[0]).includes('scrollTop') ? 'ok: "rolou 400"' : base(verbo, args)),
+    perguntar: async (estado, q) => (Object.keys(q.click_target.criteria).includes('e2') ? resposta() : resposta({ op: 'SCROLL_DOWN' })) });
+  assert.ok(executados.filter((l) => l === 'click @e2').length <= 2, executados.filter((l) => l.startsWith('click')).join(','));
 });
