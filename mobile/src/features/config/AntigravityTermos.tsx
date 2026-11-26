@@ -125,8 +125,8 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
     try {
       const next = await startAntigravityTermsForServer(s, ACCOUNT);
       if (g !== generation.current) {
-        const orphan = { server: s, attemptId: next.attempt_id };
-        if (orphan.attemptId) void cancelAntigravityTermsForServer(s, ACCOUNT, orphan.attemptId).catch((e: unknown) => alertNotClosed(orphan, e));
+        const attemptId = next.attempt_id;
+        if (attemptId) void cancelAntigravityTermsForServer(s, ACCOUNT, attemptId).catch((e: unknown) => alertNotClosed({ server: s, attemptId }, e));
         return;
       }
       if (!next.attempt_id) throw new Error(m.erro_desconhecido());
