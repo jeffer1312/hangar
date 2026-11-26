@@ -177,8 +177,8 @@ pub(crate) fn line(facts: &WireFacts, config: Option<&toml::Table>, quotas: Opti
     // A fonte de cota tem o nome da tabela do provedor (`kimi:<provider>`), que só o modelo diz.
     let windows = text("provider")
         .and_then(|provider| quotas?.get(format!("kimi:{provider}"))?.get("cota").cloned())
-        .filter(|cota| cota["estado"] == "lida")
-        .and_then(|cota| cota["janelas"].as_array().cloned())
+        .filter(|quota| quota["estado"] == "lida")
+        .and_then(|quota| quota["janelas"].as_array().cloned())
         .unwrap_or_default();
     for window in windows {
         let icon = match window["rotulo"].as_str() {
