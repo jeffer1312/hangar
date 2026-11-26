@@ -324,6 +324,18 @@ it('serviço sem a edição deixa o cartão com a frase de atualizar', async () 
   expect(field()?.value).toBe('outro');
 });
 
+it('campo aberto continua editado quando o evento passa a dizer edit: false: nunca sai o original', async () => {
+  mocks.sendEdited.mockRejectedValueOnce(Object.assign(new Error('409: api'), { status: 409, code: 'whatsapp_edit_unsupported' }));
+  await openDraft('e7', editable(draft('e7')));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  await type('outro');
+  await act(async () => { useSessions.setState({ whatsappOutbox: { a: event(draft('e7')) } }); });
+  expect(field()?.value).toBe('outro');
+  await act(async () => { button(m.whatsapp_draft_send_edited())!.click(); });
+  expect(mocks.sendEdited).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }), 'e7', 'outro', 'mobile');
+  expect(mocks.answer).not.toHaveBeenCalled();
+});
+
 it('texto vazio sem anexo ou acima de 4096 desabilita o envio e diz o motivo no cartão', async () => {
   await openDraft('e6', editable(draft('e6')));
   await act(async () => { button(m.whatsapp_draft_edit())!.click(); });

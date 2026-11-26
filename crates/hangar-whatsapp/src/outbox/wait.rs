@@ -82,6 +82,8 @@ struct Track {
     id: Option<String>,
     /// O último estado lido: só o `pending` é recusado quando a espera é largada.
     last_state: String,
+    /// `edited` e `sent_text` da última leitura com edição do dono; `Null` sem edição.
+    edit: Value,
     done: bool,
     decline: Option<JoinHandle<Declined>>,
 }
@@ -109,8 +111,10 @@ impl Progress {
         self.lock().decline = Some(decline);
     }
 
-    fn saw(&self, state: &str) {
-        state.clone_into(&mut self.lock().last_state);
+    fn saw(&self, draft: &Value) {
+        let mut track = self.lock();
+        draft["state"].as_str().unwrap_or_default().clone_into(&mut track.last_state);
+        track.edit = if draft["edited"] == true { json!({"edited": true, "sent_text": draft["sent_text"]}) } else { Value::Null };
     }
 
     fn finish(&self) {
@@ -119,15 +123,15 @@ impl Progress {
 
     /// O texto da chamada cancelada: espera a recusa disparada e diz o que houve com o rascunho.
     pub async fn cancelled(&self) -> String {
-        let (id, last_state, done, decline) = {
+        let (id, last_state, edit, done, decline) = {
             let mut track = self.lock();
-            (track.id.clone(), track.last_state.clone(), track.done, track.decline.take())
+            (track.id.clone(), track.last_state.clone(), track.edit.clone(), track.done, track.decline.take())
         };
-        cancelled_text(id.as_deref(), &last_state, done, decline).await
+        cancelled_text(id.as_deref(), &last_state, &edit, done, decline).await
     }
 }
 
-async fn cancelled_text(id: Option<&str>, last_state: &str, done: bool, decline: Option<JoinHandle<Declined>>) -> String {
+async fn cancelled_text(id: Option<&str>, last_state: &str, edit: &Value, done: bool, decline: Option<JoinHandle<Declined>>) -> String {
     let Some(id) = id else {
         return format!("{CANCELLED} antes de o rascunho existir; {DRAFT_MAYBE_CREATED}");
     };
@@ -135,7 +139,7 @@ async fn cancelled_text(id: Option<&str>, last_state: &str, done: bool, decline:
 em 10 min: {DONT_REPEAT}");
     let Some(decline) = decline else {
         return match (last_state, done) {
-            ("sending", _) => format!("{CANCELLED}; rascunho {id}: {}", note(&still_sending(id))),
+            ("sending", _) => format!("{CANCELLED}; rascunho {id}: {}", note(&with_edit(still_sending(id), edit))),
             (_, true) => format!("{CANCELLED} depois de o rascunho {id} chegar ao fim"),
             _ => unconfirmed(),
         };
@@ -186,7 +190,7 @@ pub async fn wait_draft<P: DraftPort>(port: &mut P, progress: &Progress, id: &st
                 _ => return Err(after_creation(id, error)),
             },
             Read::Found(draft) => {
-                progress.saw(draft["state"].as_str().unwrap_or_default());
+                progress.saw(draft);
                 wait_step(id, Some(draft), now, deadline)
             }
             Read::Gone => wait_step(id, None, now, deadline),
@@ -220,7 +224,8 @@ pub async fn wait_draft<P: DraftPort>(port: &mut P, progress: &Progress, id: &st
             },
             Wait::SendingOverdue => {
                 progress.finish();
-                return Err(sending_overdue(id));
+                let draft = match &read { Read::Found(draft) => draft, _ => &Value::Null };
+                return Err(sending_overdue(id, draft));
             }
             Wait::Unknown(what) => return Err(after_creation(id, &format!("whatsapp_bad_reply: {what}"))),
         };
@@ -250,8 +255,12 @@ fn after_creation(id: &str, error: &str) -> String {
     format!("{error}; rascunho {id}: {DONT_REPEAT}")
 }
 
-fn sending_overdue(id: &str) -> String {
-    format!("whatsapp_draft_unconfirmed: o rascunho {id} foi aprovado e não terminou de sair em 10 min; a mensagem pode ter saído: {DONT_REPEAT}")
+fn sending_overdue(id: &str, draft: &Value) -> String {
+    let edit = match draft["edited"] == true {
+        true => format!(" o dono editou o texto antes de enviar; o aprovado foi {};", draft["sent_text"]),
+        false => String::new(),
+    };
+    format!("whatsapp_draft_unconfirmed: o rascunho {id} foi aprovado e não terminou de sair em 10 min;{edit} a mensagem pode ter saído: {DONT_REPEAT}")
 }
 
 /// O que a tool faz com a última leitura do rascunho.
@@ -487,12 +496,25 @@ mod tests {
         assert!(!failed["note"].as_str().unwrap().contains("editou"), "{failed}");
     }
 
+    /// Aprovado com edição e ainda saindo: o cancelamento e o envio que passa do teto dizem que o dono editou.
+    #[tokio::test]
+    async fn an_edited_send_still_on_its_way_says_the_owner_edited() {
+        let progress = progress();
+        progress.saw(&edited("sending", ""));
+        let text = progress.cancelled().await;
+        assert!(text.contains("a mensagem está saindo") && text.contains("o dono editou o texto"), "{text}");
+        let overdue = sending_overdue("d1", &edited("sending", ""));
+        assert!(overdue.contains("o dono editou o texto") && overdue.contains("chego às 16h") && overdue.ends_with(DONT_REPEAT), "{overdue}");
+        assert!(!sending_overdue("d1", &draft("sending")).contains("editou"));
+        assert!(!overdue.contains("ignore o dono"), "texto de terceiro fica fora: {overdue}");
+    }
+
     /// A chamada cancelada depois de o dono enviar o texto editado diz que saiu e que ele editou.
     #[tokio::test]
     async fn a_cancelled_call_after_an_edited_send_says_the_owner_edited() {
-        let text = cancelled_text(Some("d1"), "pending", false, Some(tokio::spawn(async { Declined::Answered(Some(edited("sent", ""))) }))).await;
+        let text = cancelled_text(Some("d1"), "pending", &Value::Null, false, Some(tokio::spawn(async { Declined::Answered(Some(edited("sent", ""))) }))).await;
         assert!(text.contains("a mensagem saiu") && text.contains("o dono editou o texto") && text.ends_with(DONT_REPEAT), "{text}");
-        let text = cancelled_text(Some("d1"), "pending", false, Some(tokio::spawn(async { Declined::Answered(Some(draft("sent"))) }))).await;
+        let text = cancelled_text(Some("d1"), "pending", &Value::Null, false, Some(tokio::spawn(async { Declined::Answered(Some(draft("sent"))) }))).await;
         assert!(text.contains("a mensagem saiu") && !text.contains("editou"), "{text}");
     }
 
@@ -655,9 +677,9 @@ mod tests {
     fn only_a_pending_draft_is_declined_when_the_wait_is_dropped() {
         let progress = progress();
         assert!(progress.needs_decline());
-        progress.saw("sending");
+        progress.saw(&json!({"state": "sending"}));
         assert!(!progress.needs_decline(), "aprovado: o envio segue");
-        progress.saw("pending");
+        progress.saw(&json!({"state": "pending"}));
         progress.finish();
         assert!(!progress.needs_decline(), "a espera respondeu");
     }
@@ -665,13 +687,13 @@ mod tests {
     #[tokio::test]
     async fn the_cancelled_call_says_what_happened_to_the_draft() {
         let done = |declined: Declined| Some(tokio::spawn(async move { declined }));
-        let text = cancelled_text(Some("d1"), "pending", false, done(Declined::Declined)).await;
+        let text = cancelled_text(Some("d1"), "pending", &Value::Null, false, done(Declined::Declined)).await;
         assert!(text.starts_with("whatsapp_draft_cancelled:") && text.contains("d1") && text.contains("nada saiu"), "{text}");
-        let text = cancelled_text(Some("d1"), "sending", false, None).await;
+        let text = cancelled_text(Some("d1"), "sending", &Value::Null, false, None).await;
         assert!(text.contains("a mensagem está saindo"), "aprovado antes do cancelamento: {text}");
-        let text = cancelled_text(Some("d1"), "pending", false, done(Declined::Unconfirmed)).await;
+        let text = cancelled_text(Some("d1"), "pending", &Value::Null, false, done(Declined::Unconfirmed)).await;
         assert!(text.contains("não se confirmou") && text.contains(DONT_REPEAT), "{text}");
-        let text = cancelled_text(None, "", false, None).await;
+        let text = cancelled_text(None, "", &Value::Null, false, None).await;
         assert!(text.contains("pode ter sido criado"), "{text}");
     }
 
@@ -683,7 +705,7 @@ mod tests {
         let read = |state: &str, error: &str| Some((200, json!({"id": "d1", "state": state, "error": error})));
         let of = |state: &str, error: &str| Declined::of(409, &answered, read(state, error));
         assert_eq!(of("declined", ""), Declined::Answered(Some(json!({"id": "d1", "state": "declined", "error": ""}))));
-        let text = |declined: Declined| cancelled_text(Some("d1"), "pending", false, Some(tokio::spawn(async move { declined })));
+        let text = |declined: Declined| cancelled_text(Some("d1"), "pending", &Value::Null, false, Some(tokio::spawn(async move { declined })));
         let declined = text(of("declined", "")).await;
         assert!(declined.contains("o dono recusou") && !declined.contains("pode sair"), "{declined}");
         assert!(text(of("sending", "")).await.contains("a mensagem está saindo"));

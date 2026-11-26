@@ -219,6 +219,8 @@ describe('texto editado', () => {
 
   it('o 202 só confirma o editado com sent_text igual ao enviado', () => {
     expect(sentTextMatches({ sent_text: 'x\ny' }, 'x\r\ny')).toBe(true);
+    // Texto igual ao do rascunho: o serviço devolve o cru, com \r\n.
+    expect(sentTextMatches({ sent_text: 'x\r\ny' }, 'x\ny')).toBe(true);
     expect(sentTextMatches({ sent_text: 'original' }, 'editado')).toBe(false);
     expect(sentTextMatches({ id: 'd1' }, 'editado')).toBe(false);
     expect(sentTextMatches(null, 'editado')).toBe(false);

@@ -153,7 +153,8 @@ export function sendEditedWhatsAppDraft(s: Server, id: string, text: string, via
 /** O serviço confirmou que saiu o texto editado? `sent_text` ausente ou diferente é não: o cartão nunca diz que saiu o editado. */
 export function sentTextMatches(body: unknown, text: string): boolean {
   const sent = body && typeof body === 'object' ? (body as { sent_text?: unknown }).sent_text : undefined;
-  return typeof sent === 'string' && sent === normalizeDraftText(text);
+  // Os dois lados normalizados: com texto igual ao do rascunho, o serviço devolve o texto cru dele, que pode ter `\r\n`.
+  return typeof sent === 'string' && normalizeDraftText(sent) === normalizeDraftText(text);
 }
 
 /** Endereço da foto do destino para a imagem do cartão. */

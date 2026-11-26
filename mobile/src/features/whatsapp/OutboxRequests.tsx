@@ -132,7 +132,8 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
   const file = draft.file;
   const [open, setOpen] = useState(false);
   const [field, setField] = useState(draft.text);
-  const editing = edit && open;
+  // Campo aberto não fecha se o evento passar a dizer `edit: false`: fechar faria sair o original; o servidor recusa com 409.
+  const editing = open;
   const changed = editing && draftTextChanged(draft.text, field);
   // Só o texto mudado vai pela edição; o igual sai pelo Enviar de sempre, que já passou pelas regras do serviço.
   const fieldError = changed ? draftTextError(field, !!file) : undefined;
@@ -169,9 +170,9 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
       </Block> : null}
     </MachineGroup> : null}
     {/* Como no nativo: rascunho só com anexo também ganha "Editar" para receber um texto. */}
-    {draft.text || edit ? <MachineGroup>
+    {draft.text || edit || editing ? <MachineGroup>
       <Block label={editing ? m.whatsapp_draft_text_editing({ count: draftCharCount(normalizeDraftText(field)) }) : m.whatsapp_draft_text({ count: draftCharCount(draft.text) })}
-        action={edit ? <Pressable accessibilityRole="button" accessibilityLabel={editing ? m.whatsapp_draft_edit_undo() : m.whatsapp_draft_edit()}
+        action={edit || editing ? <Pressable accessibilityRole="button" accessibilityLabel={editing ? m.whatsapp_draft_edit_undo() : m.whatsapp_draft_edit()}
           disabled={busy} hitSlop={LINK_SLOP} onPress={toggle}>
           <Text style={[styles.small, { color: c.accent }]}>{editing ? m.whatsapp_draft_edit_undo() : m.whatsapp_draft_edit()}</Text>
         </Pressable> : null}>

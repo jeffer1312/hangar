@@ -91,7 +91,10 @@ pub(super) fn text_problem(text: &str, has_file: bool) -> Option<&'static str> {
 }
 
 /// O 202 do envio editado traz o texto que o serviço aprovou: só vale o mesmo que o cartão mandou.
-pub(super) fn sent_text_confirmed(reply: &Value, sent: &str) -> bool { reply["sent_text"].as_str() == Some(sent) }
+/// Os dois lados normalizados: com texto igual ao do rascunho, o serviço devolve o texto cru dele, que pode ter `\r\n`.
+pub(super) fn sent_text_confirmed(reply: &Value, sent: &str) -> bool {
+    reply["sent_text"].as_str().is_some_and(|text| normalize_newlines(text) == normalize_newlines(sent))
+}
 
 /// Lado da foto decodificada: o dobro do círculo de 40, para tela densa.
 const AVATAR_PIXELS: u32 = 80;
@@ -842,6 +845,7 @@ mod tests {
     #[test]
     fn the_accepted_reply_must_carry_the_text_that_was_sent() {
         assert!(sent_text_confirmed(&json!({"id": "d1", "state": "sending", "sent_text": "olá\nmundo"}), "olá\nmundo"));
+        assert!(sent_text_confirmed(&json!({"sent_text": "olá\r\nmundo"}), "olá\nmundo"), "o texto cru do rascunho volta com \\r\\n");
         assert!(!sent_text_confirmed(&json!({"sent_text": "oi"}), "olá"));
         assert!(!sent_text_confirmed(&json!({"id": "d1"}), "olá"));
         assert!(!sent_text_confirmed(&json!({"sent_text": null}), "olá"));
