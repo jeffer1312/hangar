@@ -245,8 +245,9 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
         .filter(|t| t["name"].as_str().is_some_and(|n| known.iter().any(|k| k == n))).cloned().collect();
     assert_eq!(names(&listed), names(&python), "as 14 tools do Python, na mesma ordem");
     for (rust, python) in listed.iter().zip(&python) {
-        // O texto destas mudou com o grupo entre máquinas; os parâmetros continuam os do Python.
-        if matches!(python["name"].as_str(), Some("sessions" | "group" | "pair")) {
+        // O texto destas mudou depois do Python (grupo entre máquinas; alvos e esperas do navegador); os parâmetros
+        // continuam os do Python.
+        if matches!(python["name"].as_str(), Some("sessions" | "group" | "pair" | "browser" | "browser_open")) {
             assert_eq!((&rust["inputSchema"], &rust["outputSchema"]), (&python["inputSchema"], &python["outputSchema"]), "{}", python["name"]);
             continue;
         }
@@ -512,7 +513,7 @@ async fn browser_verbs_go_to_the_desktop_app() {
     let s = scene().await;
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
     let closed = mcp.call("browser", json!({"verbo": "snapshot"})).await;
-    assert!(failed(&closed) && first_text(&closed).contains("app desktop não está aberto"), "{closed}");
+    assert!(failed(&closed) && first_text(&closed).contains("não está aberto nesta máquina"), "{closed}");
     let unknown = mcp.call("nav", json!({"verbo": "voar"})).await;
     assert!(failed(&unknown) && first_text(&unknown).contains("verbo desconhecido"));
     let seen = desktop(&s.home, |verb| match verb {
@@ -635,7 +636,7 @@ async fn browser_open_with_a_dead_desktop_server_fails_at_once() {
     let started = std::time::Instant::now();
     let result = mcp.call("browser_open", json!({"url": "http://x"})).await;
     let text = first_text(&result);
-    assert!(failed(&result) && text.contains(&format!("pid {dead}")) && text.contains("abra o app desktop do Hangar"), "{text}");
+    assert!(failed(&result) && text.contains(&format!("pid {dead}")) && text.contains("precisa abrir o app"), "{text}");
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "esperou {:?}", started.elapsed());
     let verb = mcp.call("browser", json!({"verbo": "snapshot"})).await;
     assert!(failed(&verb) && first_text(&verb).contains(&format!("pid {dead}")), "{verb}");

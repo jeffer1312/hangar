@@ -10,9 +10,12 @@ use zeroize::Zeroizing;
 /// O app espera até 45 s pela resposta do navegador.
 pub const VERB_TIMEOUT: Duration = Duration::from_secs(45);
 pub const PAUSED: &str = "o usuario pausou o navegador; espere ele clicar em Retomar no painel e tente de novo";
-const NOT_OPEN: &str = "o app desktop não está aberto nesta máquina";
-const NO_HOST: &str = "o app desktop não está aberto nesta máquina e nenhum app de outra máquina está com esta sessão aberta: \
-    abra a sessão no app desktop e repita";
+/// Repetir sem o app não muda nada: a frase diz o que fazer no lugar da tentativa seguinte.
+const NOT_OPEN: &str = "o app desktop do Hangar não está aberto nesta máquina. Repetir não adianta: avise o usuário uma vez que ele \
+    precisa abrir o app; até lá, siga sem o navegador embutido (o agent-browser serve)";
+const NO_HOST: &str = "o app desktop não está aberto nesta máquina e nenhum app de outra máquina está com esta sessão aberta. \
+    Repetir não adianta: avise o usuário uma vez que ele precisa abrir a sessão no app desktop; até lá, siga sem o navegador embutido \
+    (o agent-browser serve)";
 const STALE_HOST: &str = "a sessão foi usada por último no app desktop de outra máquina, e ele não está mais ligado: \
     abra a sessão no app desktop que você está usando e repita";
 
@@ -81,8 +84,9 @@ fn dead_pid(srv: &Value) -> bool {
 fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
     let Some(srv) = registration(home)? else { return Ok(None) };
     if dead_pid(&srv) {
-        return Err(Unavailable(format!("o servidor do navegador registrado em ~/.hangar/nav/_srv.json (pid {}) não está mais rodando; \
-            abra o app desktop do Hangar; se ele já está aberto, retoma o registro em poucos segundos: tente de novo e, se continuar, feche e abra o app",
+        return Err(Unavailable(format!("o app desktop do Hangar não está rodando nesta máquina: o registro em ~/.hangar/nav/_srv.json \
+            aponta para o pid {}, que não está mais rodando. Se ele estava reiniciando (atualização), tente uma vez daqui a 15 s; \
+            falhou de novo, avise o usuário que ele precisa abrir o app e siga sem o navegador embutido (o agent-browser serve)",
             srv["pid"])));
     }
     let port = srv["porta"].as_u64().or_else(|| srv["porta"].as_str().and_then(|p| p.parse().ok())).filter(|p| *p > 0);
@@ -135,7 +139,7 @@ async fn verb_on(http: &reqwest::Client, home: &Path, sc: Option<&Value>, verb: 
     secret: Option<&str>) -> Result<String, Unavailable> {
     let (port, token) = server(home)?.ok_or_else(|| Unavailable(NOT_OPEN.into()))?;
     let Some(key) = sc.and_then(|sc| sc["chave"].as_str()) else {
-        return Err(Unavailable("esta sessão não tem navegador aberto".into()));
+        return Err(Unavailable("esta sessão não tem navegador aberto: abra com browser_open <url> (hangar-preview open <url>) antes".into()));
     };
     let mut body = json!({"chave": key, "verbo": verb, "args": args});
     if let Some(tab) = tab { body["aba"] = json!(tab); }
@@ -173,10 +177,14 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
     let started = Instant::now();
     let deadline = started + LIMIT;
     let left = || deadline.saturating_duration_since(Instant::now()).clamp(Duration::from_millis(500), VERB_TIMEOUT);
-    let (mut last, mut pause_checked) = (String::new(), false);
+    let (mut last, mut pause_checked, mut app_seen) = (String::new(), false, false);
     while Instant::now() < deadline {
         // Sem arquivo (app subindo) ou lido pela metade, a espera segue.
-        if let Err(dead) = server(home) && started.elapsed() >= DEAD_GRACE { return Err(dead); }
+        match server(home) {
+            Err(dead) if started.elapsed() >= DEAD_GRACE => return Err(dead),
+            Ok(Some(_)) => app_seen = true,
+            _ => {}
+        }
         let sc = sidecar(home, name);
         // Pausado pelo usuário o app não navega: dizer na hora em vez de esgotar o prazo.
         if sc.is_some() && !pause_checked {
@@ -199,8 +207,10 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
+    if !app_seen { return Err(Unavailable(NOT_OPEN.into())); }
     let detail = if last.is_empty() { String::new() } else { format!(" ({last})") };
-    Err(Unavailable(format!("o navegador não ficou pronto em 20s{detail}; o app desktop está aberto nesta máquina?")))
+    Err(Unavailable(format!("o app desktop recebeu o pedido, mas o navegador não ficou pronto em 20s{detail}. Tente uma vez de novo; \
+        falhou de novo, avise o usuário")))
 }
 
 #[cfg(test)]
