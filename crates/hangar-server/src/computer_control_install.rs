@@ -14,6 +14,14 @@ use crate::update::periodic::INTERVAL;
 
 const PANICKED: &str = "computer_control_task_panicked";
 const CONFIG_FAILED: &str = "computer_control_config_failed";
+const GATE: Gate = Gate { event: "computer_control.atualizar", config_failed: CONFIG_FAILED, what: "computer control" };
+
+/// Quem segue os portões do automático do Hangar: com a configuração ilegível, o diário diz de quem é a passada.
+pub(crate) struct Gate {
+    pub event: &'static str,
+    pub config_failed: &'static str,
+    pub what: &'static str,
+}
 
 /// Só a subida liga; nunca segura a subida. Falha já foi ao diário pelo crate.
 pub(crate) fn spawn(state: Arc<AppState>) {
@@ -56,7 +64,7 @@ async fn pass(state: Arc<AppState>, startup: bool) {
             let github = setup::Github::default();
             match setup::install_if_missing(&paths, &http, &github, diary.as_deref()).await {
                 Ok(setup::Swapped::No) if !startup => {
-                    setup::update_tick(&paths, &http, &github, &policy(&state, diary.as_deref()), diary.as_deref()).await
+                    setup::update_tick(&paths, &http, &github, &policy(&state, &GATE, diary.as_deref()), diary.as_deref()).await
                 }
                 other => other,
             }
@@ -116,17 +124,17 @@ pub(crate) fn register_in(state: &AppState, paths: &setup::Paths) {
     }
 }
 
-/// Os portões da atualização automática do Hangar, lidos a cada tique.
-fn policy(state: &AppState, diary: Option<&Path>) -> setup::Policy {
+/// Os portões da atualização automática do Hangar, lidos a cada tique; o relógio do WhatsApp lê os mesmos.
+pub(crate) fn policy(state: &AppState, gate: &Gate, diary: Option<&Path>) -> setup::Policy {
     let home = &state.accounts.env.home;
     let package_channel = matches!(crate::update::http::mode(home), crate::update::http::Mode::Package(_))
         .then(|| crate::update::channel(&crate::update::Layout::new(home)));
-    let automations = automations(RuntimeConfig::from_state(state), diary);
+    let automations = automations(RuntimeConfig::from_state(state), gate, diary);
     setup::Policy { automations, package_channel }
 }
 
-/// Configuração ilegível não atualiza, e vai ao diário: o hcu parado de atualizar fica com causa.
-fn automations(runtime: Result<RuntimeConfig, String>, diary: Option<&Path>) -> bool {
+/// Configuração ilegível não atualiza, e vai ao diário: o componente parado de atualizar fica com causa.
+fn automations(runtime: Result<RuntimeConfig, String>, gate: &Gate, diary: Option<&Path>) -> bool {
     match runtime {
         Ok(runtime) => {
             let value = runtime.get("automations");
@@ -135,9 +143,9 @@ fn automations(runtime: Result<RuntimeConfig, String>, diary: Option<&Path>) -> 
             enabled
         }
         Err(error) => {
-            tracing::warn!(code = CONFIG_FAILED, %error, "Computer Use: sem configuração; não atualiza");
-            let line = json!({"evento": "computer_control.atualizar", "nivel": "erro", "codigo": CONFIG_FAILED, "detalhe": error});
-            crate::diag::record_blocking(diary, &[line], "computer control");
+            tracing::warn!(code = gate.config_failed, component = gate.what, %error, "sem configuração; não atualiza");
+            let line = json!({"evento": gate.event, "nivel": "erro", "codigo": gate.config_failed, "detalhe": error});
+            crate::diag::record_blocking(diary, &[line], gate.what);
             false
         }
     }
@@ -213,7 +221,7 @@ mod tests {
     #[test]
     fn an_unreadable_config_does_not_update_and_goes_to_the_diary() {
         let diary = tempfile::tempdir().unwrap();
-        assert!(!automations(Err("ilegível".into()), Some(diary.path())));
+        assert!(!automations(Err("ilegível".into()), &GATE, Some(diary.path())));
         assert!(diary_text(diary.path()).contains(CONFIG_FAILED), "{}", diary_text(diary.path()));
     }
 }

@@ -75,6 +75,8 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
     // Migração do Jev, depois o hcu (instala se faltar, atualiza de hora em hora) e o registro do MCP,
     // nessa ordem, numa tarefa só que não segura a subida; falha vai ao diário.
     crate::computer_control_install::spawn(state.clone());
+    // O WhatsApp troca de versão sozinho sob os mesmos portões, 2 min depois da subida e de hora em hora.
+    crate::whatsapp_update::spawn(state.clone());
     {
         use crate::costs::pricing_refresh::{PricingRefresh, URL};
         let _ = PricingRefresh::start(crate::costs::pricing::default_dir(), URL, PricingRefresh::offline());

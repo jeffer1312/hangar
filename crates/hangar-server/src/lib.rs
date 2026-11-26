@@ -127,6 +127,7 @@ pub mod reviews;
 pub mod dream;
 mod computer_control;
 mod computer_control_install;
+mod whatsapp_update;
 mod worktree_context;
 mod worktree_fetch;
 pub mod worktree_policy;
