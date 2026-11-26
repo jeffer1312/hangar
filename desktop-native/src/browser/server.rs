@@ -125,7 +125,7 @@ fn local_endpoint(port: u16, name: &str) -> String {
 
 /// A casca das páginas nasce com `?page_ticket=` (servidor antigo: `?token=`) e só o tira depois de
 /// carregar; o sidecar é lido pelo `hangar-preview`, cuja saída vai para o transcript.
-fn without_token(raw: &str) -> String {
+pub(crate) fn without_token(raw: &str) -> String {
     let Ok(mut url) = url::Url::parse(raw) else { return raw.to_owned() };
     let secret = |key: &str| key == "token" || key == "page_ticket";
     if !url.query_pairs().any(|(k, _)| secret(&k)) { return raw.to_owned(); }

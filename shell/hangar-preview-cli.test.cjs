@@ -147,7 +147,7 @@ test('sidecar com pid morto e recusado com a mesma mensagem do sidecar ausente',
   const r = await rodarCli(['url', '--sessao', 'sessaoteste'], { home });
 
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /nao esta aberto nesta maquina/);
+  assert.match(r.stderr, /nao esta rodando nesta maquina/);
 });
 
 // Só o cabeçalho que o CLI lê (assinatura + IHDR com largura e altura).

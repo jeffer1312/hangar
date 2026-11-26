@@ -5,11 +5,11 @@
 //                                          o painel monta sozinho na tela do usuário)
 //   hangar-preview list                    navegadores vivos (chave, url, vivo/morto)
 //   hangar-preview snapshot [--refs] [--max n]  árvore de acessibilidade compacta, com refs @eN
-//   hangar-preview click @eN               clica no elemento da ref
-//   hangar-preview fill @eN <texto>        limpa o campo da ref e digita o texto
+//   hangar-preview click <alvo>            clica no elemento (@eN, texto visível ou css=<seletor>)
+//   hangar-preview fill <alvo> <texto>     limpa o campo e digita o texto
 //   hangar-preview type <texto>            digita no elemento com foco
 //   hangar-preview press <tecla>           uma tecla (Enter, Tab, Escape, ...)
-//   hangar-preview hover @eN               passa o mouse sobre a ref
+//   hangar-preview hover <alvo>            passa o mouse sobre o elemento
 //   hangar-preview wait <@eN|--url texto|--text texto|--idle|Nms> [--timeout ms]   espera algo acontecer
 //   hangar-preview goto <url> | back | reload    navega e espera carregar
 //   hangar-preview eval '<js>'             roda JS na página e imprime o resultado
@@ -55,6 +55,8 @@ import logs from '../shell/log.cjs';
 const CDP = 'http://127.0.0.1:9223';
 const DIR = join(homedir(), '.hangar', 'nav');
 const PRONTO_MS = 20_000;
+// O app aberto retoma um registro órfão a cada 3 s; o pid morto além disto não volta sozinho (o mesmo prazo do MCP).
+const APP_BACK_MS = 5_000;
 const PAUSADO = 'o usuario pausou o navegador; espere ele clicar em Retomar no painel e tente de novo';
 // Endereço do navegador da sessão, para a frase de reabertura quando o app cai no meio do comando.
 let urlAberta = '';
@@ -107,13 +109,14 @@ Identidade: sidecar da sessão no modo sem terminal; tmux no modo com terminal.
   list                    navegadores vivos (chave, url, vivo/morto)
   snapshot [--refs] [--max n]  árvore de acessibilidade com refs @eN e estados ([checked], [disabled]...);
                           --refs só os acionáveis; corta em 24 mil caracteres com aviso (--max muda)
-  click @eN               clica no elemento da ref
-  fill @eN <texto>        limpa o campo da ref e digita o texto
+  click <alvo>            clica no elemento; alvo = @eN, texto visível ou css=<seletor>; volta com a página assentada
+  fill <alvo> <texto>     limpa o campo e digita o texto
   type <texto>            digita no elemento com foco
-  press <tecla>           uma tecla (Enter, Tab, Escape, ...)
-  hover @eN               passa o mouse sobre a ref
+  press <tecla>           uma tecla (Enter, Tab, Escape, ...); volta com a página assentada
+  hover <alvo>            passa o mouse sobre o elemento
   wait <alvo>             @eN | --url <trecho> | --text <trecho> | --idle | <ms>
-                          (--text ignora maiúsculas; --timeout <ms> troca o teto de 15 s, até 40 s)
+                          (--text ignora maiúsculas e lê iframes do mesmo site; --timeout <ms> troca o teto de
+                          15 s, até 40 s; depois de click, press, goto e reload não precisa)
   goto <url>              navega e só volta com a página carregada
   back                    volta uma página no histórico
   reload                  recarrega a página
@@ -124,7 +127,9 @@ Identidade: sidecar da sessão no modo sem terminal; tmux no modo com terminal.
                           emula o tamanho sem redimensionar a janela (sem valor, diz o atual)
   console [--limpar]      log do console da página
   network                 últimas respostas de rede
-  text                    texto visível da página (innerText), sem árvore
+  text                    texto visível da página (innerText) e dos iframes do mesmo site, sem árvore
+  estado                  pausado ou livre
+  login [site]            pede ao usuário o login do Chrome dele para o site (espera até 110 s)
   url                     URL atual
   shot [arquivo.png]      screenshot (default ~/.hangar/nav/shots/<sessao>/<epoch ms>.png)
     --max <px>            reduz até o maior lado caber em px (só no app nativo; o Electron ignora)
@@ -307,7 +312,7 @@ async function targets() {
 // --- cliente do servidor local (Task 5) ---
 const MSG_SHELL_FORA = externo
   ? 'erro: --cdp roda dentro do app desktop do Hangar, e ele nao esta aberto nesta maquina (ou esta reiniciando): abra o app e repita'
-  : 'o app desktop do Hangar nao esta aberto nesta maquina (ou esta reiniciando, como na atualizacao): espere ele voltar e reabra o navegador com: hangar-preview open <url>';
+  : 'o app desktop do Hangar nao esta rodando nesta maquina. Se ele estava reiniciando (atualizacao), tente uma vez daqui a 15 s; falhou de novo, repetir nao adianta: avise o usuario que ele precisa abrir o app e siga sem o navegador embutido (o agent-browser serve)';
 
 // A porta de loopback do sidecar pode ter sido RECICLADA por outro processo depois que o app
 // fechou (o _srv.json não é apagado na saída — só no will-quit do main.cjs, e sinal/crash ainda
@@ -350,6 +355,11 @@ function localApp() {
     if (err.code === 'ENOENT') return false;
     return erro(`não deu para ler ${arquivo} (${err.message}): feche e reabra o app desktop`);
   }
+}
+
+// O `_srv.json` lido sem encerrar o processo: ausente ou pela metade (app subindo) é `null`.
+function srvRecord() {
+  try { return JSON.parse(readFileSync(join(DIR, '_srv.json'), 'utf8')); } catch { return null; }
 }
 
 // Só quando `localApp()` já leu o arquivo: aqui ele está presente e legível.
@@ -417,7 +427,7 @@ async function callServer(nome, verbo, cmdArgs, aba = flags.aba, sair = erro) {
   if (r.status === 409 && detalhe.code === 'browser_host_none') {
     return sair(localApp()
       ? 'a sessão foi usada por último no app desktop de outra máquina, e ele não está mais ligado: abra a sessão no app desktop que você está usando e repita'
-      : 'o app desktop não está aberto nesta máquina e nenhum app de outra máquina está com esta sessão aberta: abra a sessão no app desktop e repita');
+      : 'o app desktop não está aberto nesta máquina e nenhum app de outra máquina está com esta sessão aberta. Repetir não adianta: avise o usuário uma vez que ele precisa abrir a sessão no app desktop; até lá, siga sem o navegador embutido (o agent-browser serve)');
   }
   if (r.status === 403 && detalhe.code === 'browser_host_not_allowed') return sair('o app desktop recusou usar o navegador dele');
   return sair(detalhe.msg ? semToken(detalhe.msg) : `o servidor recusou: ${r.status} ${semToken(texto)}`);
@@ -497,7 +507,19 @@ if (cmd === 'open') {
   const navegou = (atual) => antes === null || atual !== antes || (pedida !== '' && antes.includes(pedida));
   let ultimo = '';
   let pausaConferida = false;
+  let appSeen = false;
+  let deadSince = null;
   while (Date.now() < prazo) {
+    // Como o MCP: pid morto por mais que o prazo, contado desde que morreu, é app fora; sem arquivo é app subindo.
+    const record = srvRecord();
+    const dead = record !== null && deadPid(record.pid);
+    if (record && !dead) { appSeen = true; deadSince = null; }
+    if (dead) {
+      deadSince ??= Date.now();
+      if (Date.now() - deadSince >= APP_BACK_MS) erro(MSG_SHELL_FORA);
+      await new Promise((r) => setTimeout(r, 150));
+      continue;
+    }
     const sc = lerSidecars().find(doNome);
     // Pausado pelo usuário, o app não navega: dizer na hora em vez de esgotar o prazo. Uma pergunta basta.
     if (sc && !pausaConferida) {
@@ -520,7 +542,8 @@ if (cmd === 'open') {
     }
     await new Promise((r) => setTimeout(r, 150));
   }
-  erro(`o navegador de "${nome}" nao ficou pronto em ${PRONTO_MS / 1000}s${ultimo ? ` (${semToken(ultimo)})` : ''}. O app desktop está aberto nesta máquina? Veja com: hangar-preview list`);
+  if (!appSeen) erro(MSG_SHELL_FORA);
+  erro(`o navegador de "${nome}" nao ficou pronto em ${PRONTO_MS / 1000}s${ultimo ? ` (${semToken(ultimo)})` : ''}, com o app desktop aparentemente aberto. Tente uma vez de novo; falhou de novo, avise o usuario`);
 }
 
 if (cmd === 'list' && remote) {

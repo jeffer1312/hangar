@@ -1,18 +1,17 @@
 ---
 name: hangar-preview
 description: |
-  Use sempre que o app desktop do Hangar estiver aberto (o hook avisa "[hangar] ... navegador
-  embutido" no prompt) e a tarefa envolver VER, ler, clicar, testar ou tirar screenshot de uma
-  página web — mexeu numa tela e quer conferir, "testa o login", "vê como ficou", "clica no botão
+  Use sempre que a tarefa envolver VER, ler, clicar, testar ou tirar screenshot de uma
+  página web, com ou sem o aviso "[hangar] ... navegador embutido" do hook e também em subagente — mexeu numa tela e quer conferir, "testa o login", "vê como ficou", "clica no botão
   lá", "lê o console da página" —, mesmo que o usuário não fale em preview ou navegador. A skill
   abre o navegador embutido desta sessão (`hangar-preview open URL`, ou a tool `browser_open` do
   MCP hangar) e o dirige por refs de acessibilidade. Sequência de várias ações numa tela que você
   ainda não conhece — navegar até uma tela, escolher item de lista, trocar combobox, preencher um
   cadastro inteiro — vai numa chamada só (verbo `objetivo`, o Jev decide cada passo), quando a
-  sessão tem o Jev. Com o app desktop aberto ela vence agent-browser e ver-front pra página local.
-  Cada sessão tem o SEU navegador; --sessao opera o de outra só quando o usuário pedir. NÃO use
-  para: máquina sem o app desktop (sem o aviso do hook, é agent-browser), ou o túnel de porta do
-  celular (PreviewSheet).
+  sessão tem o Jev. Ela vence agent-browser e ver-front. Cada sessão tem o SEU navegador;
+  --sessao opera o de outra só quando o usuário pedir. NÃO use para: quando o open respondeu que
+  o app desktop está fechado (aí é agent-browser, avisando o usuário uma vez), gravar vídeo, vários
+  navegadores ao mesmo tempo, navegador isolado, ou o túnel de porta do celular (PreviewSheet).
 allowed-tools: Bash(hangar-preview:*)
 ---
 
@@ -38,7 +37,8 @@ Pelo MCP, `erro:` volta como erro da tool e o `shot` devolve a imagem junto com 
 
 ## Qual leitura usar
 
-- **`text`** — ler conteúdo (mensagem de erro, lista, resultado). Texto visível, o mais barato.
+- **`text`** — ler conteúdo (mensagem de erro, lista, resultado). Texto visível, com os iframes do
+  mesmo site; o mais barato.
 - **`snapshot --refs`** — achar onde clicar: só as linhas acionáveis, com ref e estado.
 - **`snapshot`** — entender a estrutura da tela; corta em 24 mil caracteres com aviso (`--max`
   muda o teto).
@@ -63,10 +63,17 @@ na tela do usuário.
 O painel aparece na tela do usuário só quando ele abrir esta sessão no app. Diga que a página está
 aberta no navegador da sessão, nunca que apareceu na tela dele.
 
-## O ciclo: snapshot → @ref → ação
+## O ciclo: snapshot → alvo → ação
 
-Não há seletor CSS nem XPath. Toda ação em elemento usa uma **ref** (`@e1`, `@e2`...) do último
-`snapshot`. Só o que dá pra acionar ganha ref; estados vêm depois dela:
+`click`, `fill` e `hover` recebem um **alvo**, de três jeitos:
+
+- a **ref** (`@e1`, `@e2`...) do último `snapshot`: o caminho certo quando há vários parecidos;
+- o **texto visível** do elemento (`click Salvar`, `fill "E-mail" ana@x.com`): sem snapshot antes.
+  Casa primeiro o texto exato, depois o que contém; mais de um visível é recusa com a lista deles;
+- um **seletor CSS** (`css=#extrato`, ou direto `#extrato`, `[aria-label=Buscar]`).
+
+Não precisa de `eval` com `.click()` nem de `snapshot | grep` pra achar o botão. Só o que dá pra
+acionar ganha ref; estados vêm depois dela:
 
 ```
 $ hangar-preview snapshot --refs
@@ -93,18 +100,22 @@ clique que muda a lista já invalida as refs dela). A resposta é sempre
   responde: o verbo seguinte já funciona. Nasce mesmo com a sessão fora da tela, medido em
   1280×800; quando o usuário abrir a sessão, a medida passa a ser a do painel.
 - `snapshot [--refs] [--max <caracteres>]` — árvore de acessibilidade com refs e estados.
-- `click @eN` — clique de mouse real. O `ok:` só sai com o evento entregue à página; senão,
-  `erro: ... o evento nao chegou na pagina` — tire um `shot` e repita.
-- `fill @eN <texto>` — clica no campo e substitui o conteúdo (eventos de teclado reais; React ok).
+- `click <alvo>` — clique de mouse real. O `ok:` só sai com o evento entregue à página e a página
+  assentada (o DOM e a rede da página parados, até alguns segundos); se ela navegou, a resposta diz
+  para onde, já carregada; se não assentou, a resposta avisa.
+  Evento não entregue: `erro: ... o evento nao chegou na pagina` — tire um `shot` e repita.
+- `fill <alvo> <texto>` — clica no campo e substitui o conteúdo (eventos de teclado reais; React ok).
 - `type <texto>` — digita no campo que já está com foco.
-- `press <tecla>` — `Enter`, `Tab`, `Escape`, `ArrowDown`... Para voltar uma página use `back`
-  (`Alt+ArrowLeft` não volta).
-- `hover @eN` — passa o mouse (menus de hover).
+- `press <tecla>` — `Enter`, `Tab`, `Escape`, `ArrowDown`... Volta com a página assentada, como o
+  `click`. Para voltar uma página use `back` (`Alt+ArrowLeft` não volta).
+- `hover <alvo>` — passa o mouse (menus de hover).
 - `goto <url>`, `back`, `reload` — navegam e esperam carregar; respondem `ok: <verbo> <url final>`.
 - `wait <alvo> [--timeout <ms>]` — ver **Esperar**.
 - `eval '<js>'` — estado que não é DOM (`localStorage`, variável global). Aceita expressão ou
-  declarações (`const a=1; a+1`). Não use pra clicar, preencher ou navegar: há verbo pra isso.
-- `text` — texto visível (`innerText`).
+  declarações (`const a=1; a+1`). Não use pra clicar, preencher ou navegar: há verbo pra isso. Volta na hora;
+  se o js navegar, a resposta espera a página nova.
+- `text` — texto visível (`innerText`), com os iframes do mesmo site; iframe de outro site não dá
+  pra ler, e a resposta termina dizendo quantos ficaram de fora.
 - `url` — URL atual.
 - `console [--limpar]` — `console.log/warn/error` (objetos com prévia: `{a: 1, b: "x"}`), erros de
   JS não tratados e promessas recusadas (com arquivo:linha), diálogos respondidos e downloads
@@ -146,18 +157,22 @@ tente de novo`. A leitura (`snapshot`, `text`, `url`, `console`, `network`, `sho
 normal. Não insista em laço: termine o que dá pra ler, diga ao usuário que está esperando ele
 retomar, e confira com `estado`.
 
-## Esperar: `wait`, nunca `sleep`
+## Esperar: `wait` com alvo, nunca `sleep`
+
+`click`, `press`, `goto`, `back` e `reload` já voltam com a página assentada: depois deles
+não ponha `wait`. Espere só quando quer ver algo específico aparecer:
 
 ```
 hangar-preview wait --idle              # rede parada e documento completo
 hangar-preview wait --url login         # a URL passa a conter "login"
 hangar-preview wait --text "bem-vindo"  # o texto aparece (sem diferenciar maiúsculas; inclui rótulo de botão)
 hangar-preview wait @e3                 # a ref aparece (refaz o snapshot; refs mudam)
-hangar-preview wait 800                 # ms fixo — só quando nada acima serve
+hangar-preview wait 800                 # ms fixo: só atrasa; quase nunca é o que você quer
 ```
 
 Teto padrão de 15 s; `--timeout <ms>` muda, até 40 s. Estourar devolve
-`erro: wait ... nao aconteceu em <ms>ms`.
+`erro: wait ... nao aconteceu em <ms>ms`. `--text` lê também os iframes do mesmo site; com iframe de
+outro site na página, o erro diz quantos ficaram de fora (o texto pode estar lá: veja com `shot`).
 
 `--idle` é zero requisição em voo, 500 ms sem resposta e `readyState === 'complete'`. A escuta de
 rede liga no primeiro `--idle`: ele leva pelo menos 500 ms, e requisição já em voo antes dele não é
@@ -201,7 +216,9 @@ do `shot` ou para saber se uma ação deu certo.
 ## Se um comando falhar
 
 **Falha não autoriza trocar de navegador.** Não abra outro navegador nem use agent-browser,
-Playwright, ferramentas do Chrome ou cliques por JavaScript para contornar.
+Playwright, ferramentas do Chrome ou cliques por JavaScript para contornar. A exceção é o app
+desktop fechado: aí a resposta diz que repetir não adianta; avise o usuário uma vez e siga com
+agent-browser.
 
 1. Leia o erro e confira se a ação anterior já aconteceu antes de repeti-la (envio de formulário
    principalmente). `ok: click` não prova que o botão fez o que devia: confirme com `wait`.
@@ -212,14 +229,15 @@ Playwright, ferramentas do Chrome ou cliques por JavaScript para contornar.
 4. Tente de novo depois de verificar a condição. Persistindo, diga ao usuário o erro exato e o que
    conferiu.
 
-Se o app desktop fechar ou reiniciar (a atualização reinicia), o CLI responde em uma frase e diz
-como reabrir (`hangar-preview open <url>`).
+Se o app desktop fechar ou reiniciar (a atualização reinicia), o CLI responde em uma frase: tente
+uma vez depois de 15 s; falhando de novo, não repita o `open` em laço.
 
 ## O que NÃO alcança
 
-- **Conteúdo dentro de `iframe`.** O `snapshot` só enxerga o frame principal. Se o elemento não
-  aparece e a página usa iframe naquele trecho (editor rico, checkout de terceiro), avise o usuário
-  que está fora do alcance; não tente furar com `eval`.
+- **`snapshot` e alvos dentro de `iframe`.** O `snapshot` e os alvos só enxergam o frame principal;
+  `text` e `wait --text` leem iframes do mesmo site e só contam os de outro site (Memed, checkout de
+  terceiro). Se o que você precisa está num iframe de outro site, use `shot` e avise o usuário que
+  a leitura e o clique ali estão fora do alcance; não tente furar com `eval`.
 - **Electron antigo**: tem até 8 abas (`tab list|new <url>|<id>|close [id]`, `--aba <id>` age numa
   aba sem trocar a ativa); no app nativo elas respondem `erro: o app nativo ainda nao tem abas`.
   No Electron, aba que nasce fora da tela pode vir com `innerWidth` 0: use `layout 1280 800`.
