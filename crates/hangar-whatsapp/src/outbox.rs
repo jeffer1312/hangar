@@ -18,6 +18,8 @@ pub use wait::{DONT_REPEAT, DRAFT_MAYBE_CREATED, Declined, DraftPort, Progress, 
 
 /// A versão da API do binário que traz a rota de envio por rascunho.
 pub const SEND_API: u32 = 2;
+/// A versão que traz o envio com o texto editado pelo dono (`send-edited`).
+pub const EDIT_API: u32 = 3;
 /// Releitura sem pedido: o binário expira rascunho sozinho, e o cartão some junto.
 pub const REFRESH: Duration = Duration::from_secs(30);
 /// O prazo próprio da tool `whatsapp_draft`, contado do começo da chamada: fica abaixo do corte do MCP. O cartão
@@ -27,10 +29,12 @@ pub const TOOL_DEADLINE: TimeDelta = TimeDelta::seconds(570);
 /// depois do prazo da tool termina antes dele.
 pub const CALL_CUTOFF_MIN: TimeDelta = TimeDelta::seconds(600);
 
-/// O evento `whatsapp_outbox`: os rascunhos pendentes como o binário os descreve, cada um com o `answer_by`.
+/// O evento `whatsapp_outbox`: os rascunhos pendentes como o binário os descreve, cada um com o `answer_by`, e se o
+/// binário aceita o texto editado (`edit`): só com ele o cartão oferece "Editar".
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Feed {
     pub drafts: Vec<Value>,
+    pub edit: bool,
 }
 
 /// O que o servidor liga à lista: o aviso ao celular e o diário.
@@ -112,9 +116,11 @@ impl Outbox {
     /// Uma rodada. Sem serviço ou com binário sem envio, nada vai ao diário e o cartão na tela some; falha de
     /// leitura mantém a última lista publicada.
     pub(crate) async fn refresh(&self, client: &Client, hooks: &dyn Hooks) {
-        if !client.claimed().is_some_and(|control| control.api >= SEND_API) {
+        // O `control.json` é relido a cada volta: o binário atualizado muda o `edit` sem esperar rascunho novo.
+        let Some(control) = client.claimed().filter(|control| control.api >= SEND_API) else {
             return self.off();
-        }
+        };
+        let edit = control.api >= EDIT_API;
         let mut drafts = match pending(client).await {
             Ok(drafts) => drafts,
             Err(error) => return self.failed(error, hooks),
@@ -157,7 +163,7 @@ impl Outbox {
         for draft in fresh {
             hooks.new_draft(draft);
         }
-        self.publish(drafts);
+        self.publish(drafts, edit);
     }
 
     fn failed(&self, error: ReadError, hooks: &dyn Hooks) {
@@ -172,12 +178,12 @@ impl Outbox {
         }
     }
 
-    fn publish(&self, drafts: Vec<Value>) {
+    fn publish(&self, drafts: Vec<Value>, edit: bool) {
         let deadlines = self.lock().deadlines.clone();
         let feed = Feed { drafts: drafts.into_iter().map(|d| {
             let tool = draft_id(&d).and_then(|id| deadlines.get(id)).copied();
             with_answer_by(d, tool)
-        }).collect() };
+        }).collect(), edit };
         self.tx.send_if_modified(|current| {
             if current.as_deref() == Some(&feed) { return false; }
             *current = Some(Arc::new(feed));
@@ -185,10 +191,10 @@ impl Outbox {
         });
     }
 
-    /// Sem serviço não há o que aprovar: o cartão que estava na tela some, e quem nunca leu segue sem evento.
+    /// Sem serviço não há o que aprovar nem editar: o cartão que estava na tela some, e quem nunca leu segue sem evento.
     fn off(&self) {
         self.tx.send_if_modified(|current| {
-            let shown = current.as_ref().is_some_and(|feed| !feed.drafts.is_empty());
+            let shown = current.as_ref().is_some_and(|feed| !feed.drafts.is_empty() || feed.edit);
             if shown { *current = Some(Arc::default()); }
             shown
         });
@@ -298,7 +304,7 @@ mod tests {
         // A chamada começou dois minutos antes de o binário gravar a criação.
         outbox.track("d1", t("2026-11-24T09:58:00Z") + TOOL_DEADLINE);
         let draft = |id: &str| json!({"id": id, "created_at": "2026-11-24T10:00:00Z", "expires_at": "2026-11-24T10:10:00Z"});
-        outbox.publish(vec![draft("d1"), draft("d2")]);
+        outbox.publish(vec![draft("d1"), draft("d2")], false);
         let shown = feed.borrow().clone().unwrap();
         assert_eq!(shown.drafts[0]["answer_by"], json!("2026-11-24T10:07:20Z"), "prazo da chamada, com a folga");
         assert_eq!(shown.drafts[1]["answer_by"], json!("2026-11-24T10:09:20Z"), "sem prazo guardado, conta da criação");

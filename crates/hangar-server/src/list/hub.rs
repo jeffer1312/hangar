@@ -1148,7 +1148,7 @@ mod tests {
     }
 
     fn outbox_feed(ids: &[&str]) -> Arc<hangar_whatsapp::outbox::Feed> {
-        Arc::new(hangar_whatsapp::outbox::Feed { drafts: ids.iter().map(|id| json!({"id": id, "state": "pending"})).collect() })
+        Arc::new(hangar_whatsapp::outbox::Feed { drafts: ids.iter().map(|id| json!({"id": id, "state": "pending"})).collect(), edit: false })
     }
 
     /// Sem WhatsApp com envio nada sai; lida a lista, sai mesmo vazia, também para a lista que fechou e reabriu (o
@@ -1160,7 +1160,7 @@ mod tests {
         publish_whatsapp_outbox(&tx, &mut last, None);
         assert!(tx.borrow().whatsapp_outbox.is_none(), "sem WhatsApp com envio, nada sai");
         publish_whatsapp_outbox(&tx, &mut last, Some(outbox_feed(&[])));
-        assert!(tx.borrow().whatsapp_outbox.as_ref().is_some_and(|f| f.starts_with(b"event: whatsapp_outbox\r\ndata: {\"drafts\":[]}")),
+        assert!(tx.borrow().whatsapp_outbox.as_ref().is_some_and(|f| f.starts_with(b"event: whatsapp_outbox\r\ndata: {\"drafts\":[],\"edit\":false}")),
             "lida e vazia, sai");
         let (reopened, _rx) = watch::channel(Arc::new(Published::default()));
         publish_whatsapp_outbox(&reopened, &mut Last::default(), Some(outbox_feed(&[])));
@@ -1176,7 +1176,7 @@ mod tests {
         assert!(frames(&p, &mut sent).is_empty(), "uma vez por conexão");
         publish_whatsapp_outbox(&tx, &mut last, Some(outbox_feed(&[])));
         let f = frames(&tx.borrow(), &mut sent);
-        assert!(f.iter().any(|f| f.starts_with(b"event: whatsapp_outbox\r\ndata: {\"drafts\":[]}")), "o cartão respondido some");
+        assert!(f.iter().any(|f| f.starts_with(b"event: whatsapp_outbox\r\ndata: {\"drafts\":[],\"edit\":false}")), "o cartão respondido some");
     }
 
     /// Lista aberta antes de a subida ligar o WhatsApp: o produtor que nasceu sem ele passa a publicar depois da ligação.

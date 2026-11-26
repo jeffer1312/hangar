@@ -43,9 +43,35 @@ it('movimento reduzido para no cartão aberto: número, texto exato, anexo com c
   }
 });
 
+it('o cartão da novidade mostra a foto, a conversa com a mídia e o Editar', () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  act(() => root.render(createElement(WhatsAppDraftAnimation, { width: 340 })));
+  try {
+    const text = container.textContent ?? '';
+    expect(container.querySelector(`img[alt="${m.whatsapp_draft_avatar({ name: m.whatsapp_draft_news_contact() })}"]`)).not.toBeNull();
+    expect(text).toContain(m.whatsapp_draft_news_recent_mine());
+    expect(text).toContain(m.whatsapp_draft_news_recent_theirs());
+    expect(text).toContain(`${m.whatsapp_draft_kind_image().toLocaleUpperCase('pt-BR')}${m.whatsapp_draft_kind_image()}`);
+    expect(container.querySelector(`button[aria-label="${m.whatsapp_draft_edit()}"]`)).not.toBeNull();
+    // Não anima a edição: o campo não abre.
+    expect(container.querySelector('textarea')).toBeNull();
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
 it('o rascunho de exemplo usa número fictício e o anexo dentro da pasta da sessão', () => {
   const draft = sampleDraft();
   expect(draft.chat_number.slice(2, 4)).toBe('00');
   expect(draft.file?.outside_cwd).toBe(false);
   expect(draft.state).toBe('pending');
+  // A foto de exemplo é um JPEG que o cartão aceita, não a inicial.
+  expect(draft.chat_avatar?.startsWith('/9j/')).toBe(true);
+  expect(draft.recent.map((r) => [r.from_me, r.kind])).toEqual([[true, 'text'], [false, 'image'], [false, 'text']]);
+});
+
+it('as horas do exemplo são 14:02 e 14:03 no fuso de quem vê', () => {
+  const local = (at: string) => { const t = new Date(at); return [t.getHours(), t.getMinutes()]; };
+  expect(sampleDraft().recent.map((r) => local(r.at))).toEqual([[14, 2], [14, 3], [14, 3]]);
 });
