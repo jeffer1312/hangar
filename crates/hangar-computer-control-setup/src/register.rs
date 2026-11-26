@@ -1,5 +1,5 @@
 //! Registro sozinho do MCP: com máquina-alvo e o binário do pacote, a entrada nasce ligada em todas as
-//! contas; desligada à mão (ausente no principal e guardada) fica desligada. Entrada ativa com outro
+//! contas; no Windows sem alvo, o primeiro registro cria o alvo local `windows`; desligada à mão (ausente no principal e guardada) fica desligada. Entrada ativa com outro
 //! programa (checkout, `uvx`, `servidor_mcp.py`) passa para o binário do pacote com o mesmo env.
 use std::path::Path;
 
@@ -29,7 +29,7 @@ pub fn register(
     jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
     diary: Option<&Path>,
 ) -> Result<Registered, Error> {
-    let outcome = register_on(paths, crate::supported(), hyprland, jev);
+    let outcome = register_on(paths, crate::supported(), cfg!(windows), hyprland, jev);
     if let Err(error) = &outcome {
         tracing::warn!(code = FAILED, erro = error.code, msg = %error.msg, "Computer Use: registro do MCP falhou");
         let line = json!({"evento": "computer_control.registrar", "nivel": "erro", "codigo": FAILED,
@@ -42,6 +42,7 @@ pub fn register(
 fn register_on(
     paths: &Paths,
     supported: bool,
+    local_auto: bool,
     hyprland: impl FnOnce() -> bool,
     jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
 ) -> Result<Registered, Error> {
@@ -55,11 +56,36 @@ fn register_on(
     // Desligar no meio daqui até a trava: a decisão abaixo, toda sob a trava, já o vê.
     #[cfg(test)]
     crate::writer::race::fire(&paths.parked_file());
-    Ok(match register_entry(paths, target, hyprland, jev)? {
+    Ok(match register_entry(paths, target, hyprland, local_auto, jev)? {
         None => Registered::Skipped,
         Some(false) => Registered::Unchanged,
         Some(true) => Registered::Written,
     })
+}
+
+/// O alvo `windows` desta máquina, o mesmo que a tela cria em "este computador". O Linux não precisa:
+/// sob Hyprland o hcu tem o alvo `linux` automático, e fora dele o agente local não roda.
+pub(crate) fn local_target(paths: &Paths) -> Result<String, Error> {
+    // Pasta de alvos ilegível é erro só aqui: tratada como vazia, criaria o alvo por cima dela.
+    let dir = paths.targets_dir();
+    if let Some(file) = targets::target_files_checked(paths).map_err(|e| Error::at(&dir, &e))?.into_iter().next() {
+        return Ok(dir.join(file).to_string_lossy().into_owned());
+    }
+    let request = targets::TargetRequest {
+        project_dir: String::new(),
+        name: "windows".into(),
+        transport: targets::Transport::Local,
+        host: String::new(),
+        proxy_command: String::new(),
+        request_timeout: None,
+    };
+    match targets::create_target(paths, &request) {
+        Ok(()) => {}
+        // O arquivo apareceu depois da listagem (a tela ou outra passada): é o alvo desta máquina.
+        Err(error) if error.status == 409 => {}
+        Err(error) => return Err(error),
+    }
+    Ok(targets::target_path(paths, &request.name).to_string_lossy().into_owned())
 }
 
 fn first_target(paths: &Paths) -> Option<String> {
@@ -156,6 +182,53 @@ mod tests {
 
     fn jev() -> Map<String, Value> {
         Map::from_iter([("TYPESAFE_API_KEY".to_owned(), json!("fixture-key"))])
+    }
+
+    /// Windows sem alvo e nunca registrado: nasce o alvo local `windows` e o MCP liga com ele.
+    /// `create_target` recusa o local onde não há release do hcu.
+    #[test]
+    #[cfg(any(windows, all(target_os = "linux", target_arch = "x86_64")))]
+    fn windows_without_target_creates_the_local_one() {
+        let home = Home::new();
+        assert_eq!(register_on(&home.paths, true, true, || false, || Ok(jev())).unwrap(), Registered::Written);
+        let file = home.paths.targets_dir().join("windows-agent.json");
+        let cfg: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(cfg["transport"], json!("local"));
+        assert_eq!(home.main_entry().unwrap()["env"]["HCC_AGENT_CONFIG"], json!(file.to_string_lossy()));
+    }
+
+    /// Desligado pela tela antes: nenhum alvo nasce.
+    #[test]
+    fn windows_turned_off_creates_no_target() {
+        let home = Home::new();
+        crate::remove_entry(&home.paths).unwrap();
+        assert_eq!(register_on(&home.paths, true, true, || false, || Ok(jev())).unwrap(), Registered::Skipped);
+        assert!(crate::targets::target_files(&home.paths).is_empty());
+    }
+
+    /// Desligar entre as conferências de fora da trava e a gravação: nenhum alvo fica no disco.
+    #[test]
+    fn windows_turned_off_just_before_the_lock_leaves_no_target() {
+        let home = Home::new();
+        let paths = home.paths.clone();
+        let outcome = crate::writer::race::with(
+            &home.paths.parked_file(),
+            move || crate::remove_entry(&paths).unwrap(),
+            || register_on(&home.paths, true, true, || false, || Ok(jev())),
+        );
+        assert_eq!(outcome.unwrap(), Registered::Skipped);
+        assert!(crate::targets::target_files(&home.paths).is_empty());
+    }
+
+    /// Entrada já ativa (ligada à mão, sem a marca): nenhum alvo nasce, só a marca.
+    #[test]
+    fn windows_with_an_active_entry_creates_no_target() {
+        let home = Home::new();
+        let entry = json!({"command": home.binary(), "args": [], "env": {}});
+        std::fs::write(home.paths.main_file(), json!({"mcpServers": {NAME: entry}}).to_string()).unwrap();
+        std::fs::write(home.dir.path().join("acc/.claude.json"), json!({"mcpServers": {NAME: entry}}).to_string()).unwrap();
+        assert_eq!(register_on(&home.paths, true, true, || false, || Ok(jev())).unwrap(), Registered::Unchanged);
+        assert!(crate::targets::target_files(&home.paths).is_empty());
     }
 
     /// D4.1: sem alvo e sem Hyprland, nada.
@@ -302,7 +375,7 @@ mod tests {
     fn an_unsupported_platform_never_registers() {
         let home = Home::new();
         home.target("a");
-        assert_eq!(register_on(&home.paths, false, || true, || Ok(jev())).unwrap(), Registered::Skipped);
+        assert_eq!(register_on(&home.paths, false, false, || true, || Ok(jev())).unwrap(), Registered::Skipped);
         assert!(!home.paths.main_file().exists());
     }
 

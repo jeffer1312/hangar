@@ -599,6 +599,10 @@ Decisões do usuário:
   Entrada tirada por fora do Hangar (`claude mcp remove`, edição) também fica fora, pela marca de
   "o Hangar já registrou"; só o `PUT` de ligar religa. A gravação da entrada é uma só, no
   `writer.rs` do crate, decidida sob a trava.
+- **Alvo do próprio Windows (26/11/2026).** No Windows nada criava alvo sozinho: o hcu era baixado
+  e o MCP nunca ligava sem a pessoa cadastrar "este computador". Agora, sem alvo e sem o Hangar ter
+  registrado nem a pessoa ter desligado, o registro cria `targets/windows-agent.json` (local, o
+  mesmo da tela) e liga com ele. Linux fora do Hyprland segue sem alvo: o agente local só roda lá.
 - **P4.** `POST /api/computer-control/install` responde 410 `erro_computer_control_update_app`
   ("Atualize o app: o Computer Use agora é instalado sozinho"); `PUT` com `mode: "local"`, 400 com
   o mesmo código. Nativo e web perderam o botão Instalar.
