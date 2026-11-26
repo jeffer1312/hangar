@@ -101,7 +101,8 @@ clique que muda a lista já invalida as refs dela). A resposta é sempre
   1280×800; quando o usuário abrir a sessão, a medida passa a ser a do painel.
 - `snapshot [--refs] [--max <caracteres>]` — árvore de acessibilidade com refs e estados.
 - `click <alvo>` — clique de mouse real. O `ok:` só sai com o evento entregue à página e a página
-  assentada (o DOM parado, até 2 s); se ela navegou, a resposta diz para onde, já carregada.
+  assentada (o DOM e a rede da página parados, até alguns segundos); se ela navegou, a resposta diz
+  para onde, já carregada; se não assentou, a resposta avisa.
   Evento não entregue: `erro: ... o evento nao chegou na pagina` — tire um `shot` e repita.
 - `fill <alvo> <texto>` — clica no campo e substitui o conteúdo (eventos de teclado reais; React ok).
 - `type <texto>` — digita no campo que já está com foco.
@@ -111,8 +112,8 @@ clique que muda a lista já invalida as refs dela). A resposta é sempre
 - `goto <url>`, `back`, `reload` — navegam e esperam carregar; respondem `ok: <verbo> <url final>`.
 - `wait <alvo> [--timeout <ms>]` — ver **Esperar**.
 - `eval '<js>'` — estado que não é DOM (`localStorage`, variável global). Aceita expressão ou
-  declarações (`const a=1; a+1`). Não use pra clicar, preencher ou navegar: há verbo pra isso. Se o
-  js mexer no DOM, a resposta espera a página assentar.
+  declarações (`const a=1; a+1`). Não use pra clicar, preencher ou navegar: há verbo pra isso. Volta na hora;
+  se o js navegar, a resposta espera a página nova.
 - `text` — texto visível (`innerText`), com os iframes do mesmo site; iframe de outro site não dá
   pra ler, e a resposta termina dizendo quantos ficaram de fora.
 - `url` — URL atual.
@@ -158,7 +159,7 @@ retomar, e confira com `estado`.
 
 ## Esperar: `wait` com alvo, nunca `sleep`
 
-`click`, `press`, `eval`, `goto`, `back` e `reload` já voltam com a página assentada: depois deles
+`click`, `press`, `goto`, `back` e `reload` já voltam com a página assentada: depois deles
 não ponha `wait`. Espere só quando quer ver algo específico aparecer:
 
 ```

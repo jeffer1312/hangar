@@ -9,4 +9,4 @@ destrutivo: false
 
 As instruções do navegador embutido ficaram mais curtas e deixaram de depender do aviso do Hangar no
 prompt: subagentes também passam a usá-lo. Elas dizem que o clique aceita o texto do botão e que
-`click`, `press` e `eval` já esperam a página responder.
+`click` e `press` já esperam a página responder.

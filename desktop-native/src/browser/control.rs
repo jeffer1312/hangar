@@ -80,18 +80,17 @@ const FRAME: &str = "new Promise(r=>{requestAnimationFrame(()=>requestAnimationF
 /// '' = dá para digitar; senão, o que está com foco. Desce o shadow DOM: lá o foco do documento é só o invólucro.
 const FOCUS: &str = "(()=>{let a=document.activeElement;while(a&&a.shadowRoot&&a.shadowRoot.activeElement)a=a.shadowRoot.activeElement;if(!a||a===document.body)return 'nada';const t=a.tagName.toLowerCase();const ok=a.isContentEditable||t==='textarea'||(t==='input'&&!/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(a.type||''));return ok?'':t+(a.type?'['+a.type+']':'')})()";
 const PROBE_READ: &str = "(typeof window.__hangarSonda===\"undefined\"?2:window.__hangarSonda)";
-/// Lista nativa do `<select>` aberta: ela consome a tecla e o documento não vê o keydown.
 /// Acha o alvo que não é `@eN`: `css=`/seletor ou texto visível. Devolve o nó, ou "nenhum", "varios:N:lista" ou o erro.
-const FIND: &str = r#"/*__hangarAlvo*/((q)=>{const vis=e=>{const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return false;const s=getComputedStyle(e);return s.visibility!=='hidden'&&s.display!=='none'};const own=e=>e.type==='password'?'':(e.value||'');const norm=t=>(t||'').replace(/\s+/g,' ').trim().toLowerCase();const show=t=>(t||'').replace(/\s+/g,' ').trim();let css=null,txt=null;if(q.startsWith('css='))css=q.slice(4);else if(q.startsWith('text='))txt=q.slice(5);else if(/^[#.][A-Za-z_-]|^\[[A-Za-z_-]/.test(q))css=q;else txt=q;let found;if(css!==null){try{found=[...document.querySelectorAll(css)].filter(vis)}catch(e){return 'seletor css invalido: '+css+' (texto que parece seletor: use text=)'}}else{const n=norm(txt.replace(/^["'“]|["'”]$/g,''));const label=e=>norm(e.getAttribute('aria-label')||e.innerText||own(e)||e.placeholder||e.title||e.alt);const all=[...document.querySelectorAll('a,button,input,select,textarea,summary,label,option,[role],[onclick],[tabindex],[contenteditable]')].filter(vis);found=all.filter(e=>label(e)===n);if(!found.length)found=[...document.querySelectorAll('body *')].filter(e=>vis(e)&&norm(e.innerText)===n);if(!found.length)found=all.filter(e=>label(e).includes(n));found=found.filter(e=>!found.some(o=>o!==e&&e.contains(o)))}if(found.length===1)return found[0];if(!found.length)return 'nenhum';return 'varios:'+found.length+':'+found.slice(0,3).map(e=>e.tagName.toLowerCase()+' “'+show(e.innerText||own(e)||e.getAttribute('aria-label')).slice(0,40)+'”').join(', ')})"#;
-/// Conta mutações do DOM a partir de agora; `QUIET` espera elas pararem.
+const FIND: &str = r#"/*__hangarTarget*/((q)=>{const vis=e=>{const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return false;if(e.closest('[inert],[aria-hidden=true]'))return false;const s=getComputedStyle(e);return s.visibility!=='hidden'&&s.display!=='none'&&s.opacity!=='0'};const own=e=>e.type==='password'?'':String(e.value??'');const norm=t=>String(t??'').replace(/\s+/g,' ').trim().toLowerCase();const show=t=>String(t??'').replace(/\s+/g,' ').trim();let css=null,txt=null;if(q.startsWith('css='))css=q.slice(4);else if(q.startsWith('text='))txt=q.slice(5);else if(/^[#.][A-Za-z_-]|^\[[A-Za-z_-]/.test(q))css=q;else txt=q;let found;if(css!==null){try{found=[...document.querySelectorAll(css)].filter(vis)}catch(e){return 'seletor css invalido: '+css+' (texto que parece seletor: use text=)'}}else{const n=norm(txt.replace(/^["'“]|["'”]$/g,''));const label=e=>norm(e.getAttribute('aria-label')||e.innerText||own(e)||e.placeholder||e.title||e.alt);const all=[...document.querySelectorAll('a,button,input,select,textarea,summary,label,option,[role],[onclick],[tabindex],[contenteditable]')].filter(vis);found=all.filter(e=>label(e)===n);if(!found.length)found=[...document.querySelectorAll('body *')].filter(e=>vis(e)&&norm(e.innerText)===n);if(!found.length)found=all.filter(e=>label(e).includes(n));found=found.filter(e=>!found.some(o=>o!==e&&e.contains(o)))}if(found.length===1)return found[0];if(!found.length)return 'nenhum';return 'varios:'+found.length+':'+found.slice(0,3).map(e=>e.tagName.toLowerCase()+' “'+show(e.innerText||own(e)||e.getAttribute('aria-label')).slice(0,40)+'”').join(', ')})"#;
 /// Conta mudanças do DOM, a saída da página e, com `net`, fetch e XHR em voo a partir de agora. O `eval` não embrulha a
 /// rede: o js dele leria o embrulho no lugar do `fetch` da página. `drop` desfaz, e só devolve
 /// `fetch`/`send` que ainda forem os nossos: a página ou o agente podem tê-los trocado no meio.
-const QUIET_ARM: &str = "((net)=>{const p=window.__hangarQuieto;if(p)p.drop();let s;s=window.__hangarQuieto={n:0,p:0,t:performance.now(),saindo:0};const bump=d=>{s.n++;s.p+=d;s.t=performance.now()};s.o=new MutationObserver(()=>bump(0));s.o.observe(document,{subtree:true,childList:true,attributes:true,characterData:true});const sai=()=>{s.saindo=1};addEventListener('beforeunload',sai,true);const f=window.fetch;const wf=net&&f&&function(...a){bump(1);return f.apply(this,a).finally(()=>bump(-1))};if(wf)window.fetch=wf;const P=XMLHttpRequest.prototype,x=P.send;const wx=net&&function(...a){bump(1);this.addEventListener('loadend',()=>bump(-1),{once:true});return x.apply(this,a)};if(wx)P.send=wx;s.drop=()=>{s.o.disconnect();removeEventListener('beforeunload',sai,true);if(wf&&window.fetch===wf)window.fetch=f;if(wx&&P.send===wx)P.send=x;if(window.__hangarQuieto===s)delete window.__hangarQuieto};return 1})";
+const QUIET_ARM: &str = "((net)=>{const p=window.__hangarQuiet;if(p)p.drop();let s;s=window.__hangarQuiet={n:0,p:0,t:performance.now(),leaving:0};const bump=d=>{s.n++;s.p+=d;s.t=performance.now()};s.o=new MutationObserver(()=>bump(0));s.o.observe(document,{subtree:true,childList:true,attributes:true,characterData:true});const leave=()=>{s.leaving=1};addEventListener('beforeunload',leave,true);const f=window.fetch;const wf=net&&f&&function(...a){bump(1);return f.apply(this,a).finally(()=>bump(-1))};if(wf)window.fetch=wf;const P=XMLHttpRequest.prototype,x=P.send;const wx=net&&function(...a){bump(1);this.addEventListener('loadend',()=>bump(-1),{once:true});return x.apply(this,a)};if(wx)P.send=wx;s.drop=()=>{s.o.disconnect();removeEventListener('beforeunload',leave,true);if(wf&&window.fetch===wf)window.fetch=f;if(wx&&P.send===wx)P.send=x;if(window.__hangarQuiet===s)delete window.__hangarQuiet};return 1})";
 /// Desfaz o que o `QUIET_ARM` pôs na página, quando a ação não chega ao `calm`.
-const QUIET_DROP: &str = "(()=>{const s=window.__hangarQuieto;if(s)s.drop();return 1})()";
+const QUIET_DROP: &str = "(()=>{const s=window.__hangarQuiet;if(s)s.drop();return 1})()";
 /// Texto da página com os iframes do mesmo site; os de outro site o navegador não deixa ler.
-const TEXT_ALL: &str = "/*__hangarTexto*/(()=>{const out=[];let cross=0;const walk=d=>{out.push(d.body?d.body.innerText:'');for(const f of d.querySelectorAll('iframe,frame')){let c=null;try{c=f.contentDocument}catch(e){}if(c&&c.body)walk(c);else if(!c)cross++}};walk(document);return {t:out.join('\\n'),cross}})()";
+const TEXT_ALL: &str = "/*__hangarText*/(()=>{const out=[];let cross=0;const walk=d=>{out.push(d.body?d.body.innerText:'');for(const f of d.querySelectorAll('iframe,frame')){let c=null;try{c=f.contentDocument}catch(e){}if(c&&c.body)walk(c);else if(!c)cross++}};walk(document);return {t:out.join('\\n'),cross}})()";
+/// Lista nativa do `<select>` aberta: ela consome a tecla e o documento não vê o keydown.
 const OPEN_LIST: &str = "(()=>{const a=document.activeElement;try{return !!a&&a.tagName==='SELECT'&&a.matches(':open')}catch(e){return false}})()";
 /// Verbos que mudam a página: pausado, só estes são recusados; ler continua livre.
 const ACTING: [&str; 13] = ["click", "fill", "fill-secret", "type", "press", "hover", "eval", "layout", "tema", "goto", "back", "reload", "dialog"];
@@ -519,12 +518,13 @@ impl<P: Page> Controller<P> {
         }
         match verb {
             "snapshot" => self.snapshot_verb(args).await.map(Reply::Text),
-            "click" => self.click(arg(0)).await.map(Reply::Text),
+            // Alvo de texto com espaço sem aspas chega em vários args: é um alvo só.
+            "click" => self.click(&args.join(" ")).await.map(Reply::Text),
             "fill" => self.fill(arg(0), arg(1)).await.map(Reply::Text),
             "fill-secret" => self.fill_secret(arg(0), arg(1), secret.take()).await.map(Reply::Text),
             "type" => self.type_text(arg(0)).await.map(Reply::Text),
             "press" => self.press(arg(0)).await.map(Reply::Text),
-            "hover" => self.hover(arg(0)).await.map(Reply::Text),
+            "hover" => self.hover(&args.join(" ")).await.map(Reply::Text),
             "wait" => self.wait(args).await.map(Reply::Text),
             "eval" => self.eval(arg(0)).await.map(Reply::Text),
             // Pelo histórico do navegador, não por JS: responde mesmo com a página presa (diálogo aberto, laço de script).
@@ -760,25 +760,32 @@ impl<P: Page> Controller<P> {
     async fn calm(&self, verb: &str, (before, armed): (u64, bool), min_ms: u64) -> String {
         let mut said = String::new();
         if !armed {
+            // O armar pode ter rodado depois do prazo: não deixa o observador nem o embrulho na página.
+            self.drop_quiet().await;
             said = " (não deu para acompanhar a página depois da ação: confira com wait --text ou snapshot)".into();
         } else if !self.state.borrow().navigated {
-            let js = format!("new Promise(r=>{{const s=window.__hangarQuieto;if(!s)return r('sem');const t0=performance.now();const end=w=>{{s.drop();r(w)}};const tick=()=>{{const now=performance.now(),t=now-t0;if(s.saindo)return end('saindo');if(s.n===0&&t>={min_ms})return end('ok');if(s.p<=0&&s.n>0&&now-s.t>=300)return end('ok');if(s.p<=0&&t>={QUIET_DOM_MS})return end('mudando');if(t>={QUIET_MAX_MS})return end(s.p>0?'rede':'mudando');setTimeout(tick,50)}};tick()}})");
+            let js = format!("new Promise(r=>{{const s=window.__hangarQuiet;if(!s)return r('sem');const t0=performance.now();const end=w=>{{s.drop();r(w)}};const tick=()=>{{const now=performance.now(),t=now-t0;if(s.leaving)return end('leaving');if(s.n===0&&t>={min_ms})return end('ok');if(s.p<=0&&s.n>0&&now-s.t>=300)return end('ok');if(s.p<=0&&t>={QUIET_DOM_MS})return end('mudando');if(t>={QUIET_MAX_MS})return end(s.p>0?'rede':'mudando');setTimeout(tick,50)}};tick()}})");
             let answer = within(&self.page, QUIET_MAX_MS + 1_000, self.call("Runtime.evaluate", json!({"expression": js, "awaitPromise": true, "returnByValue": true}))).await;
             said = match answer {
                 Some(Ok(r)) => match r["result"]["value"].as_str() {
                     Some("ok") => String::new(),
                     Some("mudando") => " (a página ainda mudava; para esperar algo, wait --text)".into(),
                     Some("rede") => format!(" (a página ainda esperava a rede depois de {} s)", QUIET_MAX_MS / 1000),
-                    Some("saindo") => self.leaving(before).await,
+                    Some("leaving") => self.leaving(before).await,
                     // Documento trocado no meio: a navegação abaixo diz.
                     _ => String::new(),
                 },
                 // Contexto destruído = o documento trocou; o resto não confirmou a espera.
                 Some(Err(e)) if e.contains("context") || e.contains("navigated") => String::new(),
                 Some(Err(e)) => format!(" (a espera da página falhou: {e})"),
-                None => " (a página não respondeu à espera)".into(),
+                None => { self.drop_quiet().await; " (a página não respondeu à espera)".into() }
             };
         }
+        self.after_navigation_of(verb, before, said).await
+    }
+
+    /// O que a ação fez de navegação desde `before`, acrescentado a `said`.
+    async fn after_navigation_of(&self, verb: &str, before: u64, said: String) -> String {
         if self.state.borrow().navs == before { return said; }
         // Rota de SPA não troca o documento: as refs seguem valendo, e não há carga a esperar.
         if !self.state.borrow().navigated {
@@ -804,7 +811,7 @@ impl<P: Page> Controller<P> {
             self.page.sleep(POLL_MS).await;
             waited += POLL_MS;
         }
-        format!(" (a página avisou que ia sair, mas não navegou em {} s: pode ter sido um download ou uma saída cancelada)", LEAVE_MS / 1000)
+        format!(" (a página avisou que ia sair e ainda não navegou em {} s: servidor lento, download ou saída cancelada; confira com wait --url)", LEAVE_MS / 1000)
     }
 
     async fn page_text(&self) -> Result<String, String> {
@@ -986,13 +993,11 @@ impl<P: Page> Controller<P> {
     }
 
     async fn eval(&self, js: &str) -> Result<String, String> {
-        let quiet = self.arm_quiet(false).await;
-        let answer = match self.eval_raw(js).await {
-            Ok(answer) if answer.starts_with("ok:") => answer,
-            other => { self.drop_quiet().await; return other; }
-        };
-        // Eval que só lê não mexe no DOM e volta na hora; o que clica espera a página responder.
-        Ok(format!("{answer}{}", self.calm("eval", quiet, 0).await))
+        // Só a navegação: esperar o DOM atrasaria todo eval de leitura numa página animada.
+        let before = self.state.borrow().navs;
+        let answer = self.eval_raw(js).await?;
+        if !answer.starts_with("ok:") { return Ok(answer); }
+        Ok(format!("{answer}{}", self.after_navigation_of("eval", before, String::new()).await))
     }
 
     async fn eval_raw(&self, js: &str) -> Result<String, String> {
@@ -1021,7 +1026,7 @@ impl<P: Page> Controller<P> {
         if let Some(ms) = target.bytes().all(|b| b.is_ascii_digit()).then(|| target.parse::<u64>().ok()).flatten() {
             self.page.sleep(ms).await;
             return Ok(if ms >= 1000 {
-                format!("ok: wait {target}ms (click, press, eval, goto e reload já esperam a página assentar; para esperar algo, wait --text, --url ou @eN)")
+                format!("ok: wait {target}ms (click, press, goto e reload já esperam a página assentar; para esperar algo, wait --text, --url ou @eN)")
             } else { format!("ok: wait {target}ms") });
         }
         // O resto da linha é o trecho: `wait --text create account` sem aspas também vale.
@@ -1353,7 +1358,7 @@ mod tests {
     fn fake(answer: impl Fn(&str, &Value) -> Result<Value, String> + 'static, stuck: &'static str) -> Fake {
         let answer = move |m: &str, p: &Value| {
             let said = answer(m, p)?;
-            let quiet = p["expression"].as_str().filter(|e| e.contains("__hangarQuieto"));
+            let quiet = p["expression"].as_str().filter(|e| e.contains("__hangarQuiet"));
             Ok(match quiet {
                 Some(e) if said == json!({}) || said == json!({"result": {}}) =>
                     json!({"result": {"value": if e.starts_with("new Promise") { json!("ok") } else { json!(1) }}}),
@@ -1440,7 +1445,7 @@ mod tests {
                 e if e.contains("a.shadowRoot.activeElement;if(!a") => json!({"result": {"value": ""}}),
                 // O `eval` e o `text` leem o campo e devolvem o valor como a página o tem.
                 e if e.contains("querySelector('input').value") => json!({"result": {"value": SECRET}}),
-                e if e.contains("__hangarTexto") => json!({"result": {"value": {"t": SECRET, "cross": 0}}}),
+                e if e.contains("__hangarText") => json!({"result": {"value": {"t": SECRET, "cross": 0}}}),
                 _ => json!({"result": {}}),
             },
             _ => json!({}),
@@ -1693,7 +1698,7 @@ mod tests {
         assert!(text(block_on(c.run("click", &s(&["@e1"])))).starts_with("erro: click @e1: o evento nao chegou"));
     }
 
-fn finder(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contains("__hangarAlvo")) }
+fn finder(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contains("__hangarTarget")) }
 
     /// Texto visível no lugar de `@eN`: o nó achado na página vira o alvo do clique.
     #[test]
@@ -1733,8 +1738,8 @@ fn finder(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contai
             "DOM.getBoxModel" => json!({"model": {"content": [0, 0, 20, 0, 20, 10, 0, 10]}}),
             "Runtime.evaluate" => match p["expression"].as_str().unwrap_or("") {
                 e if e.starts_with("(typeof window.__hangarSonda") => json!({"result": {"value": 1}}),
-                e if e.starts_with("new Promise(r=>{const s=window.__hangarQuieto") => json!({"result": {"value": wait}}),
-                e if e.contains("window.__hangarQuieto={") => arm.clone(),
+                e if e.starts_with("new Promise(r=>{const s=window.__hangarQuiet") => json!({"result": {"value": wait}}),
+                e if e.contains("window.__hangarQuiet={") => arm.clone(),
                 _ => json!({}),
             },
             _ => json!({}),
@@ -1771,17 +1776,35 @@ fn finder(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contai
         assert!(dropped, "o fetch e o observador da página voltam ao que eram");
     }
 
+    /// Alvo de várias palavras sem aspas é um alvo só: `click Excluir conta` nunca vira `click Excluir`.
+    #[test]
+    fn a_multi_word_target_is_searched_whole() {
+        let c = ctl(|m, p| Ok(if m == "Runtime.evaluate" && finder(p) { json!({"result": {"type": "string", "value": "nenhum"}}) } else { json!({}) }));
+        block_on(c.run("click", &s(&["Excluir", "conta"])));
+        let asked: Vec<String> = c.page.calls.borrow().iter().filter(|(_, p)| finder(p))
+            .map(|(_, p)| p["expression"].as_str().unwrap().to_owned()).collect();
+        assert!(asked.iter().all(|e| e.ends_with("(\"Excluir conta\")")), "{asked:?}");
+    }
+
+    /// `eval` só de leitura não arma a espera do DOM: em página animada ele voltaria tarde e com aviso falso.
+    #[test]
+    fn eval_does_not_watch_the_dom() {
+        let c = ctl(|_, _| Ok(json!({"result": {"value": 1}})));
+        assert_eq!(text(block_on(c.run("eval", &s(&["1"])))), "ok: 1");
+        assert!(!c.page.calls.borrow().iter().any(|(_, p)| p["expression"].as_str().is_some_and(|e| e.contains("__hangarQuiet"))));
+    }
+
     #[test]
     fn wait_with_fixed_time_points_to_the_signal() {
         let c = ctl(|_, _| Ok(json!({})));
         assert_eq!(text(block_on(c.run("wait", &s(&["3000"])))),
-            "ok: wait 3000ms (click, press, eval, goto e reload já esperam a página assentar; para esperar algo, wait --text, --url ou @eN)");
+            "ok: wait 3000ms (click, press, goto e reload já esperam a página assentar; para esperar algo, wait --text, --url ou @eN)");
     }
 
     /// `text` lê os iframes do mesmo site e diz quantos de outro site ficaram de fora.
     #[test]
     fn text_reads_iframes_and_tells_the_cross_site_ones() {
-        let c = ctl(|m, p| Ok(if m == "Runtime.evaluate" && p["expression"].as_str().is_some_and(|e| e.contains("__hangarTexto")) {
+        let c = ctl(|m, p| Ok(if m == "Runtime.evaluate" && p["expression"].as_str().is_some_and(|e| e.contains("__hangarText")) {
             json!({"result": {"value": {"t": "topo\ndentro", "cross": 1}}})
         } else { json!({}) }));
         assert_eq!(text(block_on(c.run("text", &[]))), "topo\ndentro\n[1 iframe de outro site fica fora do text: veja com shot]");
@@ -2013,14 +2036,14 @@ fn finder(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contai
     #[test]
     fn runs_are_serialized() {
         let c = ctl(|_, p| Ok(match p["expression"].as_str().unwrap_or("") {
-            e if e.contains("__hangarTexto") => json!({"result": {"value": {"t": "x", "cross": 0}}}),
-            e if e.contains("__hangarQuieto") => json!({}),
+            e if e.contains("__hangarText") => json!({"result": {"value": {"t": "x", "cross": 0}}}),
+            e if e.contains("__hangarQuiet") => json!({}),
             _ => json!({"result": {"value": "x"}}),
         }));
         let (a, b) = block_on(futures::future::join(c.run("eval", &s(&["1"])), c.run("text", &[])));
         assert_eq!((text(a), text(b)), ("ok: \"x\"".into(), "x".into()));
         let read: Vec<bool> = c.page.calls.borrow().iter().filter(|(m, _)| m == "Runtime.evaluate")
-            .map(|(_, p)| p["expression"].as_str().is_some_and(|e| e.contains("__hangarTexto"))).collect();
+            .map(|(_, p)| p["expression"].as_str().is_some_and(|e| e.contains("__hangarText"))).collect();
         assert_eq!(read.iter().filter(|r| **r).count(), 1);
         assert_eq!(read.last(), Some(&true), "o text só começa depois do eval inteiro");
     }
