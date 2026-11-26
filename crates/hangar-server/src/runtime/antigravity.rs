@@ -513,10 +513,15 @@ impl Engine {
                         self.server_requests.push((id,line.clone()));
                         effects.push(Effect::StateChanged);
                     }
-                    acp::Event::TextDelta(piece) => if let Some(text) = self.preview.append(&piece,now) { self.publish("preview",text,effects); },
+                    acp::Event::TextDelta(piece) => {
+                        // O agy seguiu depois da falha: o turno não terminou nela.
+                        self.turn_failure = None;
+                        if let Some(text) = self.preview.append(&piece,now) { self.publish("preview",text,effects); }
+                    }
                     acp::Event::TurnFailed(detail) => self.turn_failure = Some(detail),
                     acp::Event::ThoughtDelta(piece) => if let Some(text) = self.thinking.append(&piece,now) { self.publish("thinking",text,effects); },
                     acp::Event::ToolStarted { title,name,input,.. } => {
+                        self.turn_failure = None;
                         // Texto depois de uma ferramenta é outra mensagem; o definitivo vem do transcript.
                         if let Some(text) = self.preview.clear() { self.publish("preview",text,effects); }
                         let (tool_name,input) = match name {
@@ -994,7 +999,7 @@ mod tests {
         written(&mut engine,"in1");
         let quota = "\n⚠ agent executor error: generating and executing: transport error (ResourceExhausted, HTTP 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h5m1s.: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h5m1s.\n";
         let chunk = json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":OPENED,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":quota}}}});
-        let during = feed(&mut engine,chunk,2.0);
+        let during = feed(&mut engine,chunk.clone(),2.0);
         assert!(!during.iter().any(|e|matches!(e,Effect::Publish { channel,data } if channel == "preview" && data["text"].as_str().is_some_and(|t|t.contains("executor")))));
         feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
         let view = engine.view();
@@ -1004,6 +1009,12 @@ mod tests {
         written(&mut engine,"in2");
         feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),4.0);
         assert!(engine.view()["problema"].is_null());
+        command(&mut engine,"in3",OperationKind::Input,json!({"text":"c"})).unwrap();
+        written(&mut engine,"in3");
+        feed(&mut engine,chunk,5.0);
+        feed(&mut engine,json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":OPENED,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"voltei"}}}}),5.5);
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),6.0);
+        assert!(engine.view()["problema"].is_null(),"seguiu depois da falha: sem aviso");
     }
 
     #[test]
