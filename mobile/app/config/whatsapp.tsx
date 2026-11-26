@@ -329,7 +329,7 @@ export default function WhatsApp() {
         : view === 'outdated' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_outdated_title()} text={m.native_whatsapp_outdated_body()}
           action={m.native_whatsapp_update()} primary busy={!!busy} loading={busy === 'update'} onPress={() => update()} />
         : view === 'connected' ? <Connected state={data} version={line
-          ? <Version line={line} busy={busy} onCheck={update} onUpdate={update} onAsk={() => setConfirm('migrate')} /> : null} />
+          ? <Version line={line} busy={busy} onUpdate={update} onAsk={() => setConfirm('migrate')} /> : null} />
         : <Pair state={data} view={view} busy={busy} qrWanted={qrWanted} asked={asked} phone={phone} phoneError={phoneError}
           awaiting={awaitUntil !== null && Date.now() < awaitUntil}
           onPhone={(t) => { setPhone(t); setPhoneError(''); }} onRequestCode={() => requestCode()} onShowQr={showQr}

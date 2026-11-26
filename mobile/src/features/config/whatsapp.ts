@@ -47,7 +47,7 @@ export function isWhatsAppState(v: unknown): v is WhatsAppState {
 }
 
 export function viewOf(state: WhatsAppState): WhatsAppView {
-  if (state.job && !state.job.done) return 'working';
+  if (jobRunning(state)) return 'working';
   if (!state.installed) return 'off';
   // Parado porque os dados são de um binário mais novo: religar não adianta, só atualizar; e atualizar que
   // não achou outro também não.
@@ -107,6 +107,11 @@ export function jobRunning(state: WhatsAppState): boolean {
   return !!state.job && !state.job.done;
 }
 
+/** A passada automática também troca o programa de verdade. */
+export function isUpdateJob(job: WhatsAppState['job']): boolean {
+  return job?.kind === 'update' || job?.kind === 'auto_update';
+}
+
 /** A linha da versão no cartão de conectado. Com uma falha registrada, a faixa do topo já oferece a nova
  * versão: a linha só diz quando procurou. `checkedAt` em segundos epoch, `null` sem procura legível. */
 export type VersionLine =
@@ -117,8 +122,9 @@ export function versionLine(state: WhatsAppState): VersionLine | null {
   const tag = state.installed_tag;
   if (!tag || viewOf(state) !== 'connected') return null;
   const update = state.update;
-  if (!update) return { kind: 'current', tag, checkedAt: epochSeconds(state.update_checked_at) };
-  if (update.failed) return { kind: 'checked', tag, checkedAt: epochSeconds(update.checked_at) };
+  const checkedAt = epochSeconds(state.update_checked_at);
+  if (!update) return { kind: 'current', tag, checkedAt };
+  if (update.failed) return { kind: 'checked', tag, checkedAt };
   return { kind: update.migration ? 'migration' : 'available', tag, latest: update.latest };
 }
 

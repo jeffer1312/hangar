@@ -5,7 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { intlLocale, relativeTime, type WhatsAppState, type WhatsAppTotals } from '@hangar/core';
 import { BlockHead, Muted, useInputStyle } from './ServerConfigParts';
 import { useSettingsColors, withAlpha } from './colors';
-import { STEPS, codeOf, minutesLeft, phrase, stepIndex, type VersionLine, type WhatsAppView } from './whatsapp';
+import { STEPS, codeOf, isUpdateJob, minutesLeft, phrase, stepIndex, type VersionLine, type WhatsAppView } from './whatsapp';
 import { InstallItems } from '../accounts/InstallItems';
 import { superficie } from '../../theme/superficie';
 import { Icon, type IconName } from '../../ui/Icon';
@@ -136,8 +136,7 @@ export function AcceptRisks({ accepted, busy, onToggle }: { accepted: boolean; b
 
 export function Working({ state }: { state: WhatsAppState }) {
   const c = useSettingsColors();
-  // A passada automática também troca o programa de verdade.
-  const update = state.job?.kind === 'update' || state.job?.kind === 'auto_update';
+  const update = isUpdateJob(state.job);
   const current = stepIndex(state.job?.step);
   return <>
     <Muted>{update ? m.native_whatsapp_updating_title() : m.native_whatsapp_installing_title()}</Muted>
@@ -269,8 +268,9 @@ export function Connected({ state, version }: { state: WhatsAppState; version?: 
 }
 
 /** A versão instalada e o botão que procura, atualiza ou pede a confirmação da mudança de formato. */
-export function Version({ line, busy, onCheck, onUpdate, onAsk }: {
-  line: VersionLine; busy: Act | null; onCheck: () => void; onUpdate: () => void; onAsk: () => void;
+/** `onUpdate`: procurar e atualizar são o mesmo pedido; o servidor troca quando acha versão sem mudança de formato. */
+export function Version({ line, busy, onUpdate, onAsk }: {
+  line: VersionLine; busy: Act | null; onUpdate: () => void; onAsk: () => void;
 }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
@@ -281,7 +281,7 @@ export function Version({ line, busy, onCheck, onUpdate, onAsk }: {
     : (line.kind === 'current' ? m.native_whatsapp_version_current : m.native_whatsapp_version_checked)({ ago: relativeTime(line.checkedAt) });
   const [kind, label, onPress]: ['primary' | 'ghost', string, () => void] = line.kind === 'migration' ? ['primary', m.native_whatsapp_update_ask(), onAsk]
     : line.kind === 'available' ? ['primary', m.native_whatsapp_update(), onUpdate]
-    : ['ghost', m.native_whatsapp_check_update(), onCheck];
+    : ['ghost', m.native_whatsapp_check_update(), onUpdate];
   return <Card>
     <Text style={[styles.body, { color: c.text }]}>
       {m.native_whatsapp_version_label()} <Text style={styles.strong}>{line.tag}</Text>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WhatsAppState } from '@hangar/core';
 import {
-  asksAccept, autoUpdateFailure, codeOf, failedJob, installAccepted, isWhatsAppState, jobRunning, minutesLeft, ownUpdateEnd, phoneDigits, phrase,
+  asksAccept, autoUpdateFailure, codeOf, failedJob, installAccepted, isUpdateJob, isWhatsAppState, jobRunning, minutesLeft, ownUpdateEnd, phoneDigits, phrase,
   readErrorShows, shouldPoll, stepIndex, stoppedByBackup, versionLine, viewOf,
 } from './whatsapp';
 
@@ -194,7 +194,7 @@ describe('atualização do programa', () => {
     expect(versionLine(connected({ update: newer(false) }))).toEqual({ kind: 'available', tag: 'v0.3.0', latest: 'v0.3.1' });
     expect(versionLine(connected({ update: newer(true) }))).toEqual({ kind: 'migration', tag: 'v0.3.0', latest: 'v0.3.1' });
     // A faixa do topo oferece a versão de novo: a linha só diz quando procurou.
-    expect(versionLine(connected({ update: newer(false, { tag: 'v0.3.1', code: 'whatsapp_not_started' }) })))
+    expect(versionLine(connected({ update: newer(false, { tag: 'v0.3.1', code: 'whatsapp_not_started' }), update_checked_at: '2026-11-26T13:48:00Z' })))
       .toEqual({ kind: 'checked', tag: 'v0.3.0', checkedAt: Date.parse('2026-11-26T13:48:00Z') / 1000 });
   });
 
@@ -232,6 +232,10 @@ describe('atualização do programa', () => {
   it('a passada automática em curso mostra a vista de atualizando', () => {
     const s = connected({ job: { kind: 'auto_update', step: 'service', done: false, error: null } });
     expect(viewOf(s)).toBe('working');
+    expect(isUpdateJob(s.job)).toBe(true);
+    expect(isUpdateJob({ ...s.job!, kind: 'update' })).toBe(true);
+    expect(isUpdateJob({ ...s.job!, kind: 'install' })).toBe(false);
+    expect(isUpdateJob(null)).toBe(false);
     expect(jobRunning(s)).toBe(true);
     expect(jobRunning(connected())).toBe(false);
   });
