@@ -63,7 +63,20 @@ pub fn parse_version(output: &str) -> Option<(String, u32)> {
 /// O esquema do `messages.db` que o programa grava, pelo `--schema-version` (contrato C1). `None` quando ele
 /// não diz: o binário anterior ao C1 recusa a flag e sai com outro código.
 pub async fn schema_of(binary: &Path) -> Option<u32> {
-    let output = tokio::time::timeout(VERSION_TIMEOUT, command(binary, "--schema-version").output()).await.ok()?.ok()?;
+    number(command(binary, "--schema-version")).await
+}
+
+/// O esquema do `messages.db` em `data`, lido pelo programa `binary` com `--data-schema-version --data <data>`, que
+/// só lê o arquivo e diz 0 sem ele. `None` quando ele não diz: binário sem a flag ou arquivo que não se lê.
+pub async fn data_schema_of(binary: &Path, data: &Path) -> Option<u32> {
+    let mut command = command(binary, "--data-schema-version");
+    command.arg("--data").arg(data);
+    number(command).await
+}
+
+/// Só a saída 0 com um número; prazo, erro ou outra saída é `None`.
+async fn number(mut command: tokio::process::Command) -> Option<u32> {
+    let output = tokio::time::timeout(VERSION_TIMEOUT, command.output()).await.ok()?.ok()?;
     if !output.status.success() {
         return None;
     }
@@ -167,6 +180,29 @@ mod tests {
             std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
             std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
             assert_eq!(schema_of(&program).await, want, "{script}");
+        }
+    }
+
+    /// O esquema do arquivo vem do programa novo, com a pasta dos dados; sem a flag, ou com o arquivo ilegível, não se sabe.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_data_schema_comes_from_the_program_with_the_data_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("hangar-whatsapp");
+        let data = dir.path().join("dados");
+        let asked = format!("[ \"$1\" = --data-schema-version ] && [ \"$2\" = --data ] && [ \"$3\" = '{}' ]", data.display());
+        let cases = [
+            (format!("{asked} && echo 1"), Some(1)),
+            (format!("{asked} && echo 0"), Some(0)),
+            ("echo 'flag provided but not defined: -data-schema-version' >&2; exit 2".to_owned(), None),
+            ("echo 'erro: read messages.db' >&2; exit 1".to_owned(), None),
+            ("echo 2; exit 1".to_owned(), None),
+            ("echo dois".to_owned(), None),
+        ];
+        for (script, want) in cases {
+            std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
+            std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            assert_eq!(data_schema_of(&program, &data).await, want, "{script}");
         }
     }
 }

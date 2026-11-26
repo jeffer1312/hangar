@@ -10,7 +10,7 @@ pub use managed::{Error, encode_vbs};
 pub const UNIT: &str = "hangar-cliproxy.service";
 pub const LAUNCHD_LABEL: &str = "dev.hangar.cliproxy";
 pub const TASK: &str = "hangar-cliproxy";
-pub const ID: ServiceId = ServiceId { unit: UNIT, launchd_label: LAUNCHD_LABEL, task: TASK, description: "CLIProxyAPI (instalado pelo Hangar)", no_restart_exit: None };
+pub const ID: ServiceId = ServiceId { unit: UNIT, launchd_label: LAUNCHD_LABEL, task: TASK, description: "CLIProxyAPI (instalado pelo Hangar)", no_restart_exit: &[] };
 
 #[derive(Clone, Debug)]
 pub struct Service {

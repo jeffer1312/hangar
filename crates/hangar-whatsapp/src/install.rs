@@ -20,6 +20,10 @@ pub use hangar_managed_binary::jobs::Busy;
 pub use hangar_managed_binary::record::Installed;
 
 const START_TIMEOUT: Duration = Duration::from_secs(30);
+/// Teto da espera quando a nova está migrando os dados: um `messages.db` grande leva minutos.
+const MIGRATION_TIMEOUT: Duration = Duration::from_secs(600);
+/// Passado o [`START_TIMEOUT`], cada volta pergunta ao gerenciador; no Windows isso abre um PowerShell.
+const MIGRATION_POLL: Duration = Duration::from_secs(5);
 /// O launchd não espera o programa sair para responder ao `unload`.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -28,12 +32,16 @@ pub const SERVICE: ServiceId = ServiceId {
     launchd_label: "dev.hangar.whatsapp",
     task: "hangar-whatsapp",
     description: "WhatsApp do Hangar",
-    no_restart_exit: Some(SCHEMA_NEWER_EXIT),
+    no_restart_exit: &[SCHEMA_NEWER_EXIT, BACKUP_FAILED_EXIT],
 };
 
 /// O binário sai com este código quando o `messages.db` é de um esquema mais novo que o dele: só um binário
 /// mais novo abre esses dados, e religar o mesmo não adianta.
 pub const SCHEMA_NEWER_EXIT: u8 = 3;
+
+/// O binário sai com este código quando não grava a cópia de antes de migrar: o `messages.db` fica como estava, e
+/// religar o mesmo só repetiria a falha.
+pub const BACKUP_FAILED_EXIT: u8 = 4;
 
 /// Versão do texto de risco que a pessoa aceitou.
 pub const ACCEPT_TEXT_VERSION: u32 = 1;
@@ -99,14 +107,30 @@ pub struct UpdateCheck {
     pub migration: bool,
     /// RFC 3339 em UTC.
     pub checked_at: String,
-    /// A última tentativa de chegar a `latest` que falhou; some quando uma dá certo ou a tag muda.
+    /// A tentativa de chegar a `latest` que falhou depois de registrar o serviço da nova; prende a tag para o
+    /// relógio. Some quando uma dá certo ou a tag muda.
+    #[serde(default)]
     pub failed: Option<CheckFailure>,
+    /// A última tentativa parou antes de registrar a nova (download, conferência): não prende a tag, e some quando
+    /// uma tentativa passa dessas etapas ou a tag muda.
+    #[serde(default)]
+    pub last_error: Option<CheckFailure>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckFailure {
     pub tag: String,
     pub code: String,
+}
+
+/// O que a passada do relógio tem a fazer, decidido sem a vez do instalador ([`auto_wants`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AutoPlan {
+    NotInstalled,
+    /// Nada a trocar, ou a procura no GitHub falhou. `to` é a release mais nova achada, ou `from` sem resposta.
+    Done { from: String, to: String, result: Result<Outcome, Failure> },
+    /// Há release mais nova a tentar: [`update_to`] no [`Mode::Auto`], na vez.
+    Switch { from: String, latest: Release },
 }
 
 /// Uma instalação, atualização ou remoção por vez; o andamento fica em memória para o `GET` da tela.
@@ -331,8 +355,29 @@ pub fn write_update_check(paths: &Paths, check: &UpdateCheck) -> Result<(), Fail
     write_file(&paths.update_check(), &body).map_err(|e| Failure::new("whatsapp_update_check_write_failed", e))
 }
 
-/// Troca pela release mais nova da mesma versão maior; se ela não responder, volta para a anterior, salvo se
-/// ela já abriu os dados. Release que muda o formato dos dados, ou não diz, só entra com [`Mode::Confirmed`].
+/// O que a passada do relógio tem a fazer, sem segurar a vez: procura a release mais nova e aplica as regras do
+/// [`Mode::Auto`]. Sem release nova não mexe no serviço; tag que a última procura já viu parar na confirmação ou
+/// falhar depois de registrar a nova é pulada ([`Outcome::Skipped`]). Só a troca a fazer volta como
+/// [`AutoPlan::Switch`]. A procura que responde fica em `update-check.json`.
+pub async fn auto_wants(ctx: &Context) -> AutoPlan {
+    let Some(old) = current(&ctx.paths) else { return AutoPlan::NotInstalled };
+    let latest = match release::latest(&ctx.github).await {
+        Ok(latest) => latest,
+        Err(failure) => return AutoPlan::Done { to: old.tag.clone(), from: old.tag, result: Err(failure) },
+    };
+    if !release::newer(&latest.tag, &old.tag) {
+        let result = Ok(Outcome::AlreadyLatest);
+        record_check(&ctx.paths, &latest.tag, &Attempt { migration: Some(false), registered: false }, &result);
+        return AutoPlan::Done { from: old.tag, to: latest.tag, result };
+    }
+    if skip_known(&ctx.paths, &latest.tag) {
+        return AutoPlan::Done { from: old.tag, to: latest.tag, result: Ok(Outcome::Skipped) };
+    }
+    AutoPlan::Switch { from: old.tag, latest }
+}
+
+/// Troca pela release mais nova da mesma versão maior; se ela não responder, volta para a anterior, salvo se ela
+/// já abriu os dados. Release que muda o formato dos dados, ou não diz, só entra com [`Mode::Confirmed`].
 /// Sem release mais nova, religa a instalação registrada que não responde, salvo no [`Mode::Auto`], que também
 /// pula a tag que a última procura já viu parar na confirmação ou falhar ([`Outcome::Skipped`]). Quando a
 /// procura no GitHub responde, o resultado fica em `update-check.json`.
@@ -340,46 +385,76 @@ pub fn write_update_check(paths: &Paths, check: &UpdateCheck) -> Result<(), Fail
 /// # Errors
 ///
 /// `whatsapp_not_installed`; falha do download, da conferência ou da subida (com a volta tentada);
+/// `whatsapp_backup_failed` quando a nova não gravou a cópia de antes de migrar e a anterior voltou;
 /// `whatsapp_update_restored` quando a nova não respondeu e a cópia dos dados que ela gravou nesta tentativa e a
 /// anterior voltaram ([`Mode::Confirmed`]); `whatsapp_update_data_migrated` quando a nova já abriu os dados e ficou
 /// registrada.
 pub async fn update(ctx: &Context, mode: Mode, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
-    let old = current(&ctx.paths).ok_or_else(not_installed)?;
+    current(&ctx.paths).ok_or_else(not_installed)?;
     progress(Step::Download);
     let latest = release::latest(&ctx.github).await?;
+    update_to(ctx, mode, &latest, progress).await
+}
+
+/// [`update`] para a release `latest` já achada: a passada do relógio procura fora da vez ([`auto_wants`]) e só
+/// a troca roda na vez. A instalação e a última procura são relidas aqui, porque podem ter mudado no meio.
+///
+/// # Errors
+///
+/// As de [`update`].
+pub async fn update_to(ctx: &Context, mode: Mode, latest: &Release, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
+    let old = current(&ctx.paths).ok_or_else(not_installed)?;
     // Sem isto o relógio baixaria a mesma release toda hora para parar no mesmo ponto; tentar de novo é da tela.
-    if mode == Mode::Auto && release::newer(&latest.tag, &old.tag)
-        && let Some(check) = read_update_check(&ctx.paths)
-            .filter(|c| c.latest == latest.tag && (c.migration || c.failed.is_some())) {
-        let check = UpdateCheck { checked_at: now(), ..check };
-        if let Err(failure) = write_update_check(&ctx.paths, &check) {
-            tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: a procura de atualização não ficou gravada");
-        }
+    if mode == Mode::Auto && release::newer(&latest.tag, &old.tag) && skip_known(&ctx.paths, &latest.tag) {
         return Ok(Outcome::Skipped);
     }
-    let mut migration = None;
-    let result = switch(ctx, mode, &old, &latest, &mut migration, progress).await;
-    record_check(&ctx.paths, &latest.tag, migration, &result);
+    let mut attempt = Attempt::default();
+    let result = switch(ctx, mode, &old, latest, &mut attempt, progress).await;
+    record_check(&ctx.paths, &latest.tag, &attempt, &result);
     result
 }
 
-/// [`update`] depois de achar a release mais nova; `migration` recebe a resposta assim que se sabe.
-async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, migration: &mut Option<bool>,
+/// O que uma tentativa ficou sabendo antes de terminar.
+#[derive(Clone, Copy, Debug, Default)]
+struct Attempt {
+    /// Trocar muda o formato dos dados; `None` quando ela parou antes de perguntar.
+    migration: Option<bool>,
+    /// O serviço já foi registrado: a falha daqui em diante prende a tag.
+    registered: bool,
+}
+
+/// A última procura viu `tag` esperando confirmação, ou falhando depois de registrar a nova: o relógio não a tenta,
+/// e a procura gravada só ganha a hora nova. Uma `migration` que a tentativa não chegou a ler (`last_error`) não
+/// prende a tag: ela foi herdada ou suposta.
+fn skip_known(paths: &Paths, tag: &str) -> bool {
+    let Some(check) = read_update_check(paths)
+        .filter(|c| c.latest == tag && (c.failed.is_some() || (c.migration && c.last_error.is_none()))) else { return false };
+    let check = UpdateCheck { checked_at: now(), ..check };
+    if let Err(failure) = write_update_check(paths, &check) {
+        tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: a procura de atualização não ficou gravada");
+    }
+    true
+}
+
+/// [`update`] depois de achar a release mais nova; `attempt` recebe o que se sabe assim que se sabe.
+async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, attempt: &mut Attempt,
     progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
     if !release::newer(&latest.tag, &old.tag) {
-        *migration = Some(false);
+        attempt.migration = Some(false);
         // O relógio não mexe no serviço: religar a instalada é da tela, onde a pessoa vê o resultado.
         return match mode {
             Mode::Auto => Ok(Outcome::AlreadyLatest),
-            Mode::Manual | Mode::Confirmed => ensure_up(ctx, old, progress).await,
+            Mode::Manual | Mode::Confirmed => ensure_up(ctx, old, &mut attempt.registered, progress).await,
         };
     }
     // O fetch reaproveita o programa que já está na pasta: ele pode ser o que o serviço roda, e não sai daqui.
     let fetched = !ctx.paths.service.join("bin").join(latest.version()).join(release::BINARY.program_file(ctx.platform)).exists();
     let binary = release::BINARY.fetch(&ctx.github, latest, ctx.platform, &ctx.paths.service).await?;
     let version = release::check(&binary).await?;
-    let changes = schema_changes(&old.binary, &binary).await;
-    *migration = Some(changes);
+    let (new_schema, file_schema) = tokio::join!(release::schema_of(&binary), release::data_schema_of(&binary, &ctx.paths.data));
+    let changes = format_changes(new_schema, file_schema);
+    tracing::info!(?new_schema, ?file_schema, changes, "whatsapp: esquema do arquivo e da versão nova");
+    attempt.migration = Some(changes);
     if stops_for_confirmation(mode, changes) {
         tracing::info!(from = %old.tag, to = %latest.tag, "whatsapp: a versão nova pode mudar o formato dos dados; esperando confirmação");
         discard_download(old, &binary, fetched);
@@ -388,9 +463,10 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, mi
     let client = Client::new(ctx.paths.data.clone());
     let before = client.claimed().map(|c| c.pid);
     let recorded_before = recorded_pid(&ctx.paths.data);
-    // A cópia dos dados que a volta pode usar é só a que a nova gravou nesta tentativa.
+    // A cópia dos dados que a volta e a espera usam é só a que a nova gravou nesta tentativa.
     let since = SystemTime::now();
     progress(Step::Service);
+    attempt.registered = true;
     // No Windows o registro para o processo antigo antes de poder falhar ao ligar o novo.
     let registered = service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&binary)).await.map_err(Failure::from);
     let switched = registered.is_ok();
@@ -398,14 +474,22 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, mi
     // O registro só passa para a versão nova depois de ela responder: senão a próxima tentativa diria
     // "atualizado" sem nada rodando. Sem o registro gravado, o serviço também volta: ele e o registro
     // apontam sempre para a mesma versão.
+    let migrating = Migrating { home: &ctx.paths.home, data: &ctx.paths.data, since };
     let up = match registered {
-        Ok(()) => wait_up(&client, &version, before).await,
+        Ok(()) => wait_up_for(&client, &version, before, Some(migrating)).await,
         Err(failure) => Err(failure),
     };
     let new = Installed { tag: latest.tag.clone(), binary };
     if let Err(failure) = up {
-        let source = restore_source(mode, &ctx.paths.data, release::schema_of(&old.binary).await, since);
-        return Err(match after_failure(opened_after(switched, recorded_before, &ctx.paths.data), source) {
+        // Sem a cópia a nova não migrou e deixou o arquivo como estava: a anterior volta sobre ele.
+        if switched && backup_failed(&ctx.paths.home, &new.binary).await {
+            tracing::warn!(from = %old.tag, to = %new.tag, "whatsapp: a versão nova não gravou a cópia dos dados; voltando para a anterior");
+            return Err(rollback(ctx, old, Failure::new("whatsapp_backup_failed", format!(
+                "{}; {} não conseguiu gravar a cópia dos dados antes de migrar (saída {BACKUP_FAILED_EXIT}) e não mexeu no messages.db",
+                failure.detail, new.tag))).await);
+        }
+        let source = restore_source(mode, &ctx.paths.data, file_schema, since);
+        return Err(match after_failure(opened_after(switched, recorded_before, &ctx.paths.data, since), source) {
             AfterFailure::Restore(schema) => restore(ctx, old, &new, schema, fetched, failure).await,
             AfterFailure::KeepNew => keep_new(&ctx.paths, &new, failure),
             AfterFailure::Rollback => rollback(ctx, old, failure).await,
@@ -413,7 +497,7 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, mi
     }
     // A nova respondeu e só o registro não gravou: os dados são dela, e a cópia não volta.
     if let Err(failure) = write_record(&ctx.paths, &new) {
-        return Err(if opened_after(switched, recorded_before, &ctx.paths.data) {
+        return Err(if opened_after(switched, recorded_before, &ctx.paths.data, since) {
             keep_new(&ctx.paths, &new, failure)
         } else {
             rollback(ctx, old, failure).await
@@ -426,12 +510,17 @@ async fn switch(ctx: &Context, mode: Mode, old: &Installed, latest: &Release, mi
     Ok(Outcome::Updated)
 }
 
-/// O formato dos dados só fica igual quando os dois programas dizem o mesmo esquema; quem não diz conta como
-/// mudança, porque subir o `user_version` não tem volta.
-async fn schema_changes(old: &Path, new: &Path) -> bool {
-    let (old, new) = tokio::join!(release::schema_of(old), release::schema_of(new));
-    tracing::info!(?old, ?new, "whatsapp: esquema dos dados antes e depois da troca");
-    !matches!((old, new), (Some(a), Some(b)) if a == b)
+/// O formato só fica igual quando a nova diz o esquema que grava e o arquivo já está nele (ou adiante), ou não
+/// existe (0: nada a converter); quem não diz conta como mudança, porque subir o `user_version` não tem volta. O
+/// programa instalado não é consultado: o arquivo é a verdade, e a 0.3.0 nem tem `--schema-version`.
+fn format_changes(new: Option<u32>, file: Option<u32>) -> bool {
+    !matches!((new, file), (Some(new), Some(file)) if file == 0 || file >= new)
+}
+
+/// O último processo do serviço saiu com [`BACKUP_FAILED_EXIT`]. Gerenciador que não responde não prova nada.
+async fn backup_failed(home: &Path, binary: &Path) -> bool {
+    service::process_state(home, &SERVICE, binary).await
+        .is_ok_and(|process| process.last_exit == Some(i32::from(BACKUP_FAILED_EXIT)))
 }
 
 fn stops_for_confirmation(mode: Mode, migration: bool) -> bool {
@@ -447,18 +536,23 @@ fn discard_download(old: &Installed, binary: &Path, fetched: bool) {
     }
 }
 
-/// A falha fica com a tag até uma tentativa dar certo; a espera por confirmação não a apaga, para a tela
-/// continuar dizendo que a última tentativa falhou.
-fn record_check(paths: &Paths, latest: &str, migration: Option<bool>, result: &Result<Outcome, Failure>) {
+/// A falha depois de registrar a nova (`failed`) fica com a tag até uma tentativa dar certo; a espera por
+/// confirmação não a apaga, para a tela continuar dizendo que a última troca falhou. A que veio antes
+/// (`last_error`) só descreve a última tentativa.
+fn record_check(paths: &Paths, latest: &str, attempt: &Attempt, result: &Result<Outcome, Failure>) {
     let previous = read_update_check(paths).filter(|c| c.latest == latest);
-    let failed = match result {
-        Ok(Outcome::NeedsConfirm) => previous.as_ref().and_then(|c| c.failed.clone()),
-        Ok(_) => None,
-        Err(failure) => Some(CheckFailure { tag: latest.to_owned(), code: failure.code.to_owned() }),
+    let kept = || previous.as_ref().and_then(|c| c.failed.clone());
+    let (failed, last_error) = match result {
+        Ok(Outcome::NeedsConfirm) => (kept(), None),
+        Ok(_) => (None, None),
+        Err(failure) => {
+            let failure = CheckFailure { tag: latest.to_owned(), code: failure.code.to_owned() };
+            if attempt.registered { (Some(failure), None) } else { (kept(), Some(failure)) }
+        }
     };
-    // Sem a resposta dos dois programas (o download falhou), a mudança de formato vale como certa.
-    let migration = migration.or(previous.map(|c| c.migration)).unwrap_or(true);
-    let check = UpdateCheck { latest: latest.to_owned(), migration, checked_at: now(), failed };
+    // Sem a resposta do programa novo (o download falhou), a mudança de formato vale como certa.
+    let migration = attempt.migration.or(previous.map(|c| c.migration)).unwrap_or(true);
+    let check = UpdateCheck { latest: latest.to_owned(), migration, checked_at: now(), failed, last_error };
     if let Err(failure) = write_update_check(paths, &check) {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: a procura de atualização não ficou gravada");
     }
@@ -466,7 +560,7 @@ fn record_check(paths: &Paths, latest: &str, migration: Option<bool>, result: &R
 
 /// Sem release mais nova, a instalação registrada só está em dia se responde assinada com a versão dela: uma
 /// atualização que manteve a nova registrada depois de falhar deixa o serviço parado, e repetir religa.
-async fn ensure_up(ctx: &Context, installed: &Installed, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
+async fn ensure_up(ctx: &Context, installed: &Installed, registered: &mut bool, progress: &(dyn Fn(Step) + Send + Sync)) -> Result<Outcome, Failure> {
     let version = release::check(&installed.binary).await?;
     let client = Client::new(ctx.paths.data.clone());
     let healthy = || async { client.status().await.is_ok_and(|status| same_version(&status, &version).is_ok()) };
@@ -477,6 +571,7 @@ async fn ensure_up(ctx: &Context, installed: &Installed, progress: &(dyn Fn(Step
     tracing::warn!(tag = %installed.tag, "whatsapp: a versão registrada não respondeu; religando");
     let before = client.claimed().map(|c| c.pid);
     progress(Step::Service);
+    *registered = true;
     service::register(&ctx.paths.home, &ctx.paths.service, &ctx.service(&installed.binary)).await?;
     progress(Step::Start);
     wait_up(&client, &version, before).await?;
@@ -504,9 +599,37 @@ pub async fn uninstall(ctx: &Context) -> Result<(), Failure> {
 
 /// Espera o processo novo responder ao `status` com assinatura válida e a versão esperada.
 async fn wait_up(client: &Client, version: &str, before: Option<u32>) -> Result<(), Failure> {
-    let deadline = Instant::now() + START_TIMEOUT;
+    wait_up_for(client, version, before, None).await
+}
+
+/// Uma troca de versão em curso: a nova grava a cópia `messages.db.schema<v>.bak` antes de migrar, e só grava o
+/// `control.json` depois.
+#[derive(Clone, Copy, Debug)]
+struct Migrating<'a> {
+    home: &'a Path,
+    data: &'a Path,
+    /// O começo da tentativa: cópia mais velha é de outra.
+    since: SystemTime,
+}
+
+impl Migrating<'_> {
+    /// A nova está migrando: a cópia desta tentativa (ou a que ela ainda escreve) está no disco e o processo vive.
+    async fn in_progress(&self) -> bool {
+        fresh_copy(self.data, self.since, true) && service::process_running(self.home, &SERVICE).await.unwrap_or(false)
+    }
+}
+
+/// Até quando esperar a nova responder.
+fn wait_limit(migrating: bool) -> Duration {
+    if migrating { MIGRATION_TIMEOUT } else { START_TIMEOUT }
+}
+
+/// [`wait_up`] de uma troca: passado o [`START_TIMEOUT`], a espera segue até o [`MIGRATION_TIMEOUT`] enquanto a
+/// nova estiver migrando os dados ([`Migrating::in_progress`]).
+async fn wait_up_for(client: &Client, version: &str, before: Option<u32>, migrating: Option<Migrating<'_>>) -> Result<(), Failure> {
+    let started = Instant::now();
     let mut last = String::from("sem control.json");
-    while Instant::now() < deadline {
+    let limit = loop {
         match client.claimed() {
             Some(control) if Some(control.pid) == before => last = "ainda o processo anterior".into(),
             Some(_) => match client.status().await {
@@ -518,9 +641,24 @@ async fn wait_up(client: &Client, version: &str, before: Option<u32>) -> Result<
             },
             None => {}
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    Err(Failure::new("whatsapp_not_started", format!("o serviço não respondeu em {}s ({last})", START_TIMEOUT.as_secs())))
+        let mut pause = Duration::from_millis(500);
+        if started.elapsed() >= START_TIMEOUT {
+            let busy = match migrating {
+                Some(migrating) => migrating.in_progress().await,
+                None => false,
+            };
+            let limit = wait_limit(busy);
+            if busy {
+                last = "migrando os dados".into();
+                pause = MIGRATION_POLL;
+            }
+            if started.elapsed() >= limit {
+                break limit;
+            }
+        }
+        tokio::time::sleep(pause).await;
+    };
+    Err(Failure::new("whatsapp_not_started", format!("o serviço não respondeu em {}s ({last})", limit.as_secs())))
 }
 
 /// O `status` assinado só prova a subida com a `version` esperada; sem o campo, não prova.
@@ -619,14 +757,14 @@ async fn restore(ctx: &Context, old: &Installed, new: &Installed, schema: u32, f
 }
 
 /// Só com a confirmação do dono, o esquema `v` da cópia `messages.db.schema<v>.bak` que a nova gravou desde
-/// `since`: a do esquema da anterior, ou, quando a anterior não diz o esquema, a única gravada nesta tentativa.
-/// Cópia de outra tentativa não serve: devolvê-la apagaria o que chegou depois dela.
-fn restore_source(mode: Mode, data: &Path, old_schema: Option<u32>, since: SystemTime) -> Option<u32> {
+/// `since`: a do esquema que o arquivo tinha antes da troca, ou, quando ele não se leu, a única gravada nesta
+/// tentativa. Cópia de outra tentativa não serve: devolvê-la apagaria o que chegou depois dela.
+fn restore_source(mode: Mode, data: &Path, file_schema: Option<u32>, since: SystemTime) -> Option<u32> {
     if mode != Mode::Confirmed {
         return None;
     }
     let fresh = |schema: &u32| std::fs::metadata(backup_path(data, *schema)).and_then(|m| m.modified()).is_ok_and(|at| at >= since);
-    if let Some(schema) = old_schema {
+    if let Some(schema) = file_schema {
         return Some(schema).filter(fresh);
     }
     let mut found = std::fs::read_dir(data).ok()?.filter_map(|entry| {
@@ -639,6 +777,19 @@ fn restore_source(mode: Mode, data: &Path, old_schema: Option<u32>, since: Syste
 
 fn backup_path(data: &Path, schema: u32) -> PathBuf {
     data.join(format!("messages.db.schema{schema}.bak"))
+}
+
+/// Uma cópia `messages.db.schema<v>.bak` gravada desde `since`; com `writing`, também a `.bak.tmp` que o binário
+/// ainda escreve antes de renomear.
+fn fresh_copy(data: &Path, since: SystemTime, writing: bool) -> bool {
+    let Ok(entries) = std::fs::read_dir(data) else { return false };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let Some(rest) = name.to_str().and_then(|n| n.strip_prefix("messages.db.schema")) else { return false };
+        let schema = rest.strip_suffix(".bak").or_else(|| rest.strip_suffix(".bak.tmp").filter(|_| writing));
+        schema.is_some_and(|s| s.parse::<u32>().is_ok())
+            && entry.metadata().and_then(|m| m.modified()).is_ok_and(|at| at >= since)
+    })
 }
 
 /// Para o serviço e espera o gerenciador dizer que nenhum processo ficou e o pid do `control.json` sair: o
@@ -728,8 +879,12 @@ fn recorded_pid(data: &Path) -> Option<u32> {
 }
 
 /// [`opened_by_new`] pelo arquivo depois da falha; arquivo que não se lê conta como aberto, porque voltar sobre
-/// dados migrados deixa o WhatsApp parado.
-fn opened_after(registered: bool, before: Option<u32>, data: &Path) -> bool {
+/// dados migrados deixa o WhatsApp parado. A cópia que a nova grava desde `since` também conta: ela a grava antes
+/// de subir o `user_version`, e o `control.json` só vem depois.
+fn opened_after(registered: bool, before: Option<u32>, data: &Path, since: SystemTime) -> bool {
+    if registered && fresh_copy(data, since, false) {
+        return true;
+    }
     match control::read_control(data) {
         Ok(control) => opened_by_new(registered, before, Some(control.pid)),
         Err(control::ReadError::Missing) => false,
@@ -781,12 +936,13 @@ mod tests {
         assert!(unit.contains("ExecStart=\"/home/u/.hangar/whatsapp-service/bin/0.1.0/hangar-whatsapp\" --data \"/home/u/.hangar/whatsapp\"\n"), "{unit}");
     }
 
-    /// Dados de esquema mais novo: o systemd para de religar a cada 10 s e a unit fica `failed` com a saída 3.
+    /// Dados de esquema mais novo (saída 3) ou cópia de antes de migrar que não gravou (saída 4): o systemd para de
+    /// religar a cada 10 s e a unit fica `failed` com a saída.
     #[test]
     fn the_unit_does_not_restart_after_the_schema_newer_exit() {
         let ctx = Context::new(Path::new("/home/u"));
         let unit = service::systemd_unit(&ctx.service(Path::new("/home/u/.hangar/whatsapp-service/bin/0.1.0/hangar-whatsapp")));
-        assert!(unit.contains("Restart=always\nRestartSec=10\nRestartPreventExitStatus=3\n\n[Install]\n"), "{unit}");
+        assert!(unit.contains("Restart=always\nRestartSec=10\nRestartPreventExitStatus=3 4\n\n[Install]\n"), "{unit}");
     }
 
     #[test]
@@ -855,26 +1011,31 @@ mod tests {
         assert!(!stops_for_confirmation(Mode::Confirmed, false));
     }
 
-    /// Programa de mentira: `--version` diz `version`; `--schema-version` diz `schema` ou sai 2, como o binário
-    /// anterior ao C1 diante de uma flag que não conhece.
+    /// Programa de mentira: `--version` diz `version`; `--schema-version` diz `schema` e `--data-schema-version`,
+    /// `data`; `None` sai 2, como o binário anterior ao C1 diante de uma flag que não conhece.
     #[cfg(unix)]
-    fn fake_program(path: &Path, version: &str, schema: Option<u32>) {
-        let schema = schema.map_or_else(|| "exit 2".to_owned(), |n| format!("echo {n}"));
+    fn fake_program(path: &Path, version: &str, schema: Option<u32>, data: Option<u32>) {
+        let answer = |n: Option<u32>| n.map_or_else(|| "exit 2".to_owned(), |n| format!("echo {n}"));
+        let (schema, data) = (answer(schema), answer(data));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, format!("#!/bin/sh\ncase \"$1\" in\n--version) echo 'hangar-whatsapp {version} (api 1)' ;;\n\
-            --schema-version) {schema} ;;\n*) exit 1 ;;\nesac\n")).unwrap();
+            --schema-version) {schema} ;;\n--data-schema-version) {data} ;;\n*) exit 1 ;;\nesac\n")).unwrap();
         std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     }
 
+    /// [`format_changes`] perguntando ao programa `binary` sobre os dados em `data`, como a troca faz.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn the_data_format_stays_only_when_both_programs_say_the_same_schema() {
-        let dir = tempfile::tempdir().unwrap();
-        let (old, new) = (dir.path().join("old/hangar-whatsapp"), dir.path().join("new/hangar-whatsapp"));
-        for (before, after, changes) in [(Some(2), Some(2), false), (None, Some(2), true), (Some(1), Some(2), true), (Some(2), None, true)] {
-            fake_program(&old, "0.1.0", before);
-            fake_program(&new, "0.2.0", after);
-            assert_eq!(schema_changes(&old, &new).await, changes, "{before:?} -> {after:?}");
+    async fn format_changes_of(binary: &Path, data: &Path) -> bool {
+        let (new, file) = tokio::join!(release::schema_of(binary), release::data_schema_of(binary, data));
+        format_changes(new, file)
+    }
+
+    /// Só o arquivo já no esquema da nova (ou adiante), ou sem arquivo, deixa o formato igual; quem não diz conta como mudança.
+    #[test]
+    fn the_data_format_stays_only_when_the_file_is_already_at_the_new_schema() {
+        for (new, file, changes) in [(Some(2), Some(2), false), (Some(2), Some(3), false), (Some(2), Some(0), false),
+            (Some(2), Some(1), true), (None, Some(2), true), (Some(2), None, true), (None, None, true), (None, Some(0), true)] {
+            assert_eq!(format_changes(new, file), changes, "novo {new:?}, arquivo {file:?}");
         }
     }
 
@@ -928,10 +1089,66 @@ mod tests {
     fn an_unreadable_control_file_after_the_switch_keeps_the_new_version() {
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path();
-        assert!(!opened_after(true, None, data), "sem arquivo, a nova não abriu");
+        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert!(!opened_after(true, None, data, since), "sem arquivo, a nova não abriu");
         std::fs::write(data.join("control.json"), "{").unwrap();
-        assert!(opened_after(true, None, data));
-        assert!(!opened_after(false, None, data), "sem o registro, a nova nem subiu");
+        assert!(opened_after(true, None, data, since));
+        assert!(!opened_after(false, None, data, since), "sem o registro, a nova nem subiu");
+    }
+
+    fn set_mtime(path: &Path, at: SystemTime) {
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(at).unwrap();
+    }
+
+    /// A cópia que a nova gravou nesta tentativa prova que ela abriu os dados, antes do `control.json`; a `.bak.tmp`
+    /// ainda sendo escrita não, e cópia de outra tentativa também não.
+    #[test]
+    fn a_copy_of_this_attempt_proves_the_new_version_opened_the_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        // Horas fixas: as cópias têm a hora que o teste dá a elas.
+        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let (fresh, stale) = (since + Duration::from_secs(5), since - Duration::from_secs(3600));
+        let copy = |name: &str, at: SystemTime| {
+            write_db_file(&data.join(name), "before");
+            set_mtime(&data.join(name), at);
+        };
+        copy("messages.db.schema1.bak", stale);
+        copy("messages.db.schema1.bak.tmp", fresh);
+        assert!(!opened_after(true, None, data, since), "cópia velha e cópia pela metade");
+        assert!(!fresh_copy(data, since, false));
+        assert!(fresh_copy(data, since, true), "a cópia sendo escrita mostra a nova trabalhando");
+        copy("messages.db.schema1.bak", fresh);
+        assert!(opened_after(true, None, data, since), "sem control.json, a cópia desta tentativa basta");
+        assert!(!opened_after(false, None, data, since), "sem o registro, a cópia é de outro processo");
+        write_db_file(&data.join("messages.db.schemaX.bak"), "x");
+        std::fs::remove_file(data.join("messages.db.schema1.bak")).unwrap();
+        assert!(!fresh_copy(data, since, false), "nome que não é de cópia");
+    }
+
+    /// A espera vai aos 10 min só com a nova migrando; sem isso, os 30 s de sempre. Sem unit do serviço (a casa de
+    /// teste), o processo não conta como vivo e a cópia sozinha não estende nada.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn only_a_migration_in_progress_extends_the_wait() {
+        assert_eq!(wait_limit(false), START_TIMEOUT);
+        assert_eq!(wait_limit(true), MIGRATION_TIMEOUT);
+        let home = tempfile::tempdir().unwrap();
+        let data = home.path().join("dados");
+        std::fs::create_dir_all(&data).unwrap();
+        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        write_db_file(&data.join("messages.db.schema1.bak.tmp"), "before");
+        set_mtime(&data.join("messages.db.schema1.bak.tmp"), since + Duration::from_secs(5));
+        let migrating = Migrating { home: home.path(), data: &data, since };
+        assert!(!migrating.in_progress().await, "sem processo do serviço, ninguém migra");
+    }
+
+    /// Sem unit ou plist o gerenciador não diz saída nenhuma: não é a cópia que falhou.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn without_the_service_the_backup_did_not_fail() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!backup_failed(home.path(), &home.path().join("hangar-whatsapp")).await);
     }
 
     fn write_db_file(path: &Path, body: &str) {
@@ -1064,7 +1281,7 @@ mod tests {
         assert_eq!(restore_source(Mode::Confirmed, data, None, since), None, "sem cópia nem esquema");
         backup(1, fresh);
         assert_eq!(restore_source(Mode::Confirmed, data, Some(1), since), Some(1));
-        assert_eq!(restore_source(Mode::Confirmed, data, None, since), Some(1), "a anterior sem --schema-version");
+        assert_eq!(restore_source(Mode::Confirmed, data, None, since), Some(1), "o esquema do arquivo não se leu");
         assert_eq!(restore_source(Mode::Confirmed, data, Some(2), since), None, "a cópia é de outro esquema");
         for mode in [Mode::Auto, Mode::Manual] {
             assert_eq!(restore_source(mode, data, Some(1), since), None, "{mode:?}");
@@ -1148,7 +1365,7 @@ mod tests {
     async fn the_clock_does_not_restart_the_installed_release() {
         let (_dir, ctx, binary, _) = installed_latest(axum::Router::new()).await;
         let failed = Some(CheckFailure { tag: "v0.1.0".into(), code: "whatsapp_not_started".into() });
-        write_update_check(&ctx.paths, &UpdateCheck { latest: "v0.1.0".into(), migration: true, checked_at: "x".into(), failed }).unwrap();
+        write_update_check(&ctx.paths, &UpdateCheck { latest: "v0.1.0".into(), migration: true, checked_at: "x".into(), failed, last_error: None }).unwrap();
         assert_eq!(update(&ctx, Mode::Auto, &|_| {}).await, Ok(Outcome::AlreadyLatest));
         assert_eq!(current(&ctx.paths), Some(Installed { tag: "v0.1.0".into(), binary }), "o registro não mudou");
         let check = read_update_check(&ctx.paths).unwrap();
@@ -1156,81 +1373,149 @@ mod tests {
         assert!(check.checked_at.ends_with('Z'), "{}", check.checked_at);
     }
 
-    /// Binário instalado sem `--schema-version` (anterior ao C1): a troca pode subir o `user_version`, e sem
-    /// confirmação nada é registrado, o programa baixado sai da pasta e a procura fica gravada.
+    /// O arquivo atrás do esquema da nova, a nova sem `--schema-version` ou o arquivo que não se lê: a troca pode
+    /// subir o `user_version`, e sem confirmação nada é registrado e a procura fica gravada. O programa instalado
+    /// (aqui sem nenhuma das flags) não é consultado.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_release_that_may_change_the_data_format_waits_for_confirmation() {
         let (_dir, ctx, binary, _) = installed_with(&["v0.2.0", "v0.1.0"], axum::Router::new()).await;
-        fake_program(&binary, "0.1.0", None);
+        fake_program(&binary, "0.1.0", None, None);
         let downloaded = ctx.paths.service.join("bin/0.2.0/hangar-whatsapp");
-        for mode in [Mode::Auto, Mode::Manual] {
-            fake_program(&downloaded, "0.2.0", Some(2));
-            assert_eq!(update(&ctx, mode, &|_| {}).await, Ok(Outcome::NeedsConfirm), "{mode:?}");
-            assert_eq!(current(&ctx.paths), Some(Installed { tag: "v0.1.0".into(), binary: binary.clone() }), "{mode:?}");
-            // O programa já estava na pasta antes da procura (o GitHub de mentira não serve download): não é desta chamada.
-            assert!(downloaded.exists(), "{mode:?}: o programa que já estava na pasta saiu");
-            assert!(binary.exists(), "{mode:?}: a versão instalada continua");
-            let check = read_update_check(&ctx.paths).unwrap();
-            assert_eq!((check.latest.as_str(), check.migration, check.failed), ("v0.2.0", true, None), "{mode:?}");
+        for (schema, data) in [(Some(2), Some(1)), (None, Some(1)), (None, Some(2)), (Some(2), None)] {
+            for mode in [Mode::Auto, Mode::Manual] {
+                let _ = std::fs::remove_file(ctx.paths.update_check());
+                fake_program(&downloaded, "0.2.0", schema, data);
+                assert_eq!(update(&ctx, mode, &|_| {}).await, Ok(Outcome::NeedsConfirm), "{mode:?} {schema:?} {data:?}");
+                assert_eq!(current(&ctx.paths), Some(Installed { tag: "v0.1.0".into(), binary: binary.clone() }), "{mode:?}");
+                // O programa já estava na pasta antes da procura (o GitHub de mentira não serve download): não é desta chamada.
+                assert!(downloaded.exists(), "{mode:?}: o programa que já estava na pasta saiu");
+                assert!(binary.exists(), "{mode:?}: a versão instalada continua");
+                let check = read_update_check(&ctx.paths).unwrap();
+                assert_eq!((check.latest.as_str(), check.migration, check.failed, check.last_error), ("v0.2.0", true, None, None), "{mode:?}");
+            }
         }
     }
 
-    /// A falha fica gravada com a tag; a passada seguinte que para na confirmação não a apaga.
+    /// A falha antes de registrar a nova (aqui o download) fica em `last_error` e não prende a tag: o relógio tenta
+    /// de novo na próxima passada. A tentativa que passa do download a apaga.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_failed_attempt_stays_with_its_tag() {
+    async fn a_failure_before_registering_does_not_hold_the_tag() {
         let (_dir, ctx, binary, _) = installed_with(&["v0.2.0", "v0.1.0"], axum::Router::new()).await;
-        fake_program(&binary, "0.1.0", None);
+        fake_program(&binary, "0.1.0", None, None);
+        let download = Some(CheckFailure { tag: "v0.2.0".into(), code: release::CODES.download_failed.into() });
         // Sem o programa na pasta, o download vai ao GitHub de mentira, que não serve nada.
-        let got = update(&ctx, Mode::Auto, &|_| {}).await;
-        assert_eq!(got.map_err(|f| f.code), Err(release::CODES.download_failed));
-        let failed = Some(CheckFailure { tag: "v0.2.0".into(), code: release::CODES.download_failed.into() });
-        let check = read_update_check(&ctx.paths).unwrap();
-        assert_eq!((check.latest.as_str(), check.migration, &check.failed), ("v0.2.0", true, &failed), "sem resposta conta como mudança");
-        fake_program(&ctx.paths.service.join("bin/0.2.0/hangar-whatsapp"), "0.2.0", Some(2));
+        for _ in 0..2 {
+            let got = update(&ctx, Mode::Auto, &|_| {}).await;
+            assert_eq!(got.map_err(|f| f.code), Err(release::CODES.download_failed), "a segunda passada tenta de novo");
+            let check = read_update_check(&ctx.paths).unwrap();
+            assert_eq!((check.latest.as_str(), check.migration, &check.failed, &check.last_error), ("v0.2.0", true, &None, &download),
+                "sem resposta conta como mudança, mas não prende a tag");
+        }
+        assert!(matches!(auto_wants(&ctx).await, AutoPlan::Switch { .. }));
+        fake_program(&ctx.paths.service.join("bin/0.2.0/hangar-whatsapp"), "0.2.0", Some(2), Some(1));
         assert_eq!(update(&ctx, Mode::Manual, &|_| {}).await, Ok(Outcome::NeedsConfirm));
-        assert_eq!(read_update_check(&ctx.paths).unwrap().failed, failed);
+        let check = read_update_check(&ctx.paths).unwrap();
+        assert_eq!((check.migration, check.failed, check.last_error), (true, None, None));
     }
 
-    /// O relógio não baixa de novo a tag que já parou na confirmação ou falhou; a tela, sim. A procura gravada
-    /// só ganha a hora nova.
+    /// Só a falha depois de registrar a nova prende a tag (`failed`), e a espera por confirmação não a apaga; a de
+    /// antes descreve só a última tentativa. Dar certo, ou outra tag, limpa as duas.
+    #[test]
+    fn only_a_failure_after_registering_holds_the_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        let failure = |tag: &str, code: &str| Some(CheckFailure { tag: tag.into(), code: code.into() });
+        let (before, after) = (Attempt { migration: None, registered: false }, Attempt { migration: Some(false), registered: true });
+        let read = || { let c = read_update_check(&paths).unwrap(); (c.migration, c.failed, c.last_error) };
+        record_check(&paths, "v0.2.0", &after, &Err(Failure::new("whatsapp_not_started", "x")));
+        assert_eq!(read(), (false, failure("v0.2.0", "whatsapp_not_started"), None));
+        record_check(&paths, "v0.2.0", &before, &Err(Failure::new("whatsapp_download_failed", "x")));
+        assert_eq!(read(), (false, failure("v0.2.0", "whatsapp_not_started"), failure("v0.2.0", "whatsapp_download_failed")),
+            "a migração lida antes fica, e a tag segue presa");
+        record_check(&paths, "v0.2.0", &Attempt { migration: Some(true), registered: false }, &Ok(Outcome::NeedsConfirm));
+        assert_eq!(read(), (true, failure("v0.2.0", "whatsapp_not_started"), None));
+        record_check(&paths, "v0.2.0", &after, &Ok(Outcome::Updated));
+        assert_eq!(read(), (false, None, None));
+        record_check(&paths, "v0.2.0", &after, &Err(Failure::new("whatsapp_not_started", "x")));
+        record_check(&paths, "v0.3.0", &before, &Err(Failure::new("whatsapp_download_failed", "x")));
+        assert_eq!(read(), (true, None, failure("v0.3.0", "whatsapp_download_failed")), "outra tag não herda nada");
+        let old = r#"{"latest":"v0.2.0","migration":true,"checked_at":"x"}"#;
+        std::fs::write(paths.update_check(), old).unwrap();
+        assert_eq!(read(), (true, None, None), "arquivo de antes de last_error");
+    }
+
+    /// A passada decide fora da vez: sem instalação, sem release nova (a procura gravada limpa a falha da tag),
+    /// GitHub fora e release nova a tentar.
+    #[tokio::test]
+    async fn the_clock_decides_without_the_turn() {
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(auto_wants(&Context::new(empty.path())).await, AutoPlan::NotInstalled);
+
+        let (_dir, ctx, _, _) = installed_latest(axum::Router::new()).await;
+        let failed = Some(CheckFailure { tag: "v0.1.0".into(), code: "whatsapp_not_started".into() });
+        write_update_check(&ctx.paths, &UpdateCheck { latest: "v0.1.0".into(), migration: true, checked_at: "x".into(), failed, last_error: None }).unwrap();
+        assert_eq!(auto_wants(&ctx).await, AutoPlan::Done { from: "v0.1.0".into(), to: "v0.1.0".into(), result: Ok(Outcome::AlreadyLatest) });
+        let check = read_update_check(&ctx.paths).unwrap();
+        assert_eq!((check.migration, check.failed, check.last_error), (false, None, None));
+
+        let down = Context { github: Github { api: "http://127.0.0.1:9".into(), download: "http://127.0.0.1:9/nada".into() }, ..ctx.clone() };
+        let AutoPlan::Done { from, to, result } = auto_wants(&down).await else { panic!("GitHub fora não é troca") };
+        assert_eq!((from.as_str(), to.as_str(), result.map_err(|f| f.code)), ("v0.1.0", "v0.1.0", Err(release::CODES.download_failed)));
+
+        let (_dir, ctx, _, _) = installed_with(&["v0.2.0", "v0.1.0"], axum::Router::new()).await;
+        assert_eq!(auto_wants(&ctx).await, AutoPlan::Switch { from: "v0.1.0".into(), latest: Release { tag: "v0.2.0".into() } });
+        assert_eq!(read_update_check(&ctx.paths), None, "decidir a troca não grava procura: a tentativa grava");
+    }
+
+    /// O relógio não baixa de novo a tag que já parou na confirmação ou falhou depois de registrar; a tela, sim. A
+    /// procura gravada só ganha a hora nova. A migração que a última tentativa não leu (`last_error`) não prende.
     #[cfg(unix)]
     #[tokio::test]
     async fn the_clock_skips_a_tag_it_already_knows_will_stop() {
         let failed = Some(CheckFailure { tag: "v0.2.0".into(), code: "whatsapp_not_started".into() });
-        for (migration, failed) in [(true, None), (false, failed)] {
+        let download = Some(CheckFailure { tag: "v0.2.0".into(), code: release::CODES.download_failed.into() });
+        for (migration, failed, last_error, skipped) in [(true, None, None, true), (false, failed, None, true), (true, None, download, false)] {
             let (_dir, ctx, binary, _) = installed_with(&["v0.2.0", "v0.1.0"], axum::Router::new()).await;
-            fake_program(&binary, "0.1.0", None);
-            let known = UpdateCheck { latest: "v0.2.0".into(), migration, checked_at: "x".into(), failed: failed.clone() };
+            fake_program(&binary, "0.1.0", None, None);
+            let known = UpdateCheck { latest: "v0.2.0".into(), migration, checked_at: "x".into(), failed: failed.clone(), last_error: last_error.clone() };
             write_update_check(&ctx.paths, &known).unwrap();
             let downloaded = ctx.paths.service.join("bin/0.2.0/hangar-whatsapp");
-            assert_eq!(update(&ctx, Mode::Auto, &|_| {}).await, Ok(Outcome::Skipped), "{migration} {failed:?}");
+            let plan = auto_wants(&ctx).await;
+            if !skipped {
+                assert!(matches!(plan, AutoPlan::Switch { .. }), "{plan:?}");
+                continue;
+            }
+            assert_eq!(plan, AutoPlan::Done { from: "v0.1.0".into(), to: "v0.2.0".into(), result: Ok(Outcome::Skipped) }, "{migration} {failed:?}");
+            assert_eq!(update(&ctx, Mode::Auto, &|_| {}).await, Ok(Outcome::Skipped), "na vez, a mesma regra");
             assert!(!downloaded.parent().unwrap().exists(), "o relógio baixou a tag que ia parar");
             let check = read_update_check(&ctx.paths).unwrap();
             assert_eq!((check.latest.as_str(), check.migration, &check.failed), ("v0.2.0", migration, &failed));
             assert_ne!(check.checked_at, "x", "a hora da procura não andou");
-            // O antigo sem `--schema-version` faz a tela parar na confirmação, depois de baixar.
-            fake_program(&downloaded, "0.2.0", Some(2));
+            fake_program(&downloaded, "0.2.0", Some(2), Some(1));
             assert_eq!(update(&ctx, Mode::Manual, &|_| {}).await, Ok(Outcome::NeedsConfirm), "{migration} {failed:?}");
             assert_eq!(current(&ctx.paths), Some(Installed { tag: "v0.1.0".into(), binary }));
         }
     }
 
-    /// Com o mesmo esquema dos dois lados a troca segue sem confirmação: sem ela, o programa baixado ficaria
-    /// para o registro do serviço. O registro em si não roda aqui (mexeria no gerenciador de serviços da máquina).
+    /// O arquivo já no esquema da nova (0.3.0 → 0.3.1), ou sem arquivo, segue sem confirmação; o atrás só com ela.
+    /// O registro em si não roda aqui (mexeria no gerenciador de serviços da máquina).
     #[cfg(unix)]
     #[tokio::test]
     async fn the_same_schema_or_a_confirmation_does_not_stop_the_update() {
         let dir = tempfile::tempdir().unwrap();
-        let (old, new) = (dir.path().join("old/hangar-whatsapp"), dir.path().join("new/hangar-whatsapp"));
-        fake_program(&old, "0.2.0", Some(2));
-        fake_program(&new, "0.3.0", Some(2));
-        let same = schema_changes(&old, &new).await;
-        for mode in [Mode::Auto, Mode::Manual, Mode::Confirmed] {
-            assert!(!stops_for_confirmation(mode, same), "{mode:?}");
+        let (new, data) = (dir.path().join("new/hangar-whatsapp"), dir.path().join("dados"));
+        for file in [2, 0] {
+            fake_program(&new, "0.3.1", Some(2), Some(file));
+            let changes = format_changes_of(&new, &data).await;
+            for mode in [Mode::Auto, Mode::Manual, Mode::Confirmed] {
+                assert!(!stops_for_confirmation(mode, changes), "arquivo {file}, {mode:?}");
+            }
         }
-        fake_program(&old, "0.1.0", None);
-        assert!(!stops_for_confirmation(Mode::Confirmed, schema_changes(&old, &new).await));
+        fake_program(&new, "0.3.1", Some(2), Some(1));
+        let changes = format_changes_of(&new, &data).await;
+        assert!(stops_for_confirmation(Mode::Manual, changes));
+        assert!(!stops_for_confirmation(Mode::Confirmed, changes));
     }
 }

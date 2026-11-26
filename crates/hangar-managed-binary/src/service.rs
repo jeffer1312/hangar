@@ -17,10 +17,10 @@ pub struct ServiceId {
     pub task: &'static str,
     /// `Description=` da unit.
     pub description: &'static str,
-    /// Código de saída em que o programa avisa que religar não adianta. A unit do systemd
-    /// (`RestartPreventExitStatus=`) e o laço do `.vbs` do Windows param nele; o launchd não filtra por
+    /// Códigos de saída em que o programa avisa que religar não adianta. A unit do systemd
+    /// (`RestartPreventExitStatus=`) e o laço do `.vbs` do Windows param neles; o launchd não filtra por
     /// código e segue religando no ritmo dele.
-    pub no_restart_exit: Option<u8>,
+    pub no_restart_exit: &'static [u8],
 }
 
 /// Argumento da linha de comando do serviço.
@@ -64,7 +64,8 @@ pub fn systemd_unit(s: &Service) -> String {
             Arg::Path(path) => format!("\"{}\"", escape(quoted(path))),
         });
     }
-    let prevent = s.id.no_restart_exit.map(|code| format!("RestartPreventExitStatus={code}\n")).unwrap_or_default();
+    let codes: Vec<String> = s.id.no_restart_exit.iter().map(u8::to_string).collect();
+    let prevent = if codes.is_empty() { String::new() } else { format!("RestartPreventExitStatus={}\n", codes.join(" ")) };
     format!(
         "[Unit]\nDescription={}\nAfter=network.target\n\n\
          [Service]\nType=simple\nExecStart={exec}\nRestart=always\nRestartSec=10\n{prevent}\n\
@@ -100,7 +101,7 @@ pub fn launchd_plist(s: &Service) -> String {
 
 /// O WSH abre o programa sem janela, espera por ele e o religa 10 s depois de cada saída, como o
 /// `Restart=always` da unit: o Agendador só religa a tarefa que falha ao iniciar, nunca o programa que cai.
-/// Com `no_restart_exit`, essa saída encerra o laço e vira o resultado da tarefa.
+/// Com `no_restart_exit`, essas saídas encerram o laço e viram o resultado da tarefa.
 pub fn windows_vbs(s: &Service) -> String {
     let mut line = format!("\"{}\"", s.executable.display());
     for arg in &s.args {
@@ -110,7 +111,8 @@ pub fn windows_vbs(s: &Service) -> String {
             Arg::Path(path) => format!("\"{}\"", path.display()),
         });
     }
-    let stop = s.id.no_restart_exit.map(|code| format!("If code = {code} Then WScript.Quit code\r\n")).unwrap_or_default();
+    let codes: Vec<String> = s.id.no_restart_exit.iter().map(|code| format!("code = {code}")).collect();
+    let stop = if codes.is_empty() { String::new() } else { format!("If {} Then WScript.Quit code\r\n", codes.join(" Or ")) };
     format!(
         "Set shell = CreateObject(\"WScript.Shell\")\r\nDo\r\ncode = shell.Run(\"{}\", 0, True)\r\n{stop}WScript.Sleep 10000\r\nLoop\r\n",
         line.replace('"', "\"\"")
@@ -479,7 +481,7 @@ fn launchd_state(list: &str) -> ProcessState {
     ProcessState { running: true, last_exit }
 }
 
-/// `State=` e `LastTaskResult=` da tarefa: o laço do `.vbs` só sai sozinho com o `no_restart_exit` do programa,
+/// `State=` e `LastTaskResult=` da tarefa: o laço do `.vbs` só sai sozinho com um `no_restart_exit` do programa,
 /// que vira o resultado dela; esperando religar, a tarefa segue `Running`.
 /// Sem o programa ou o `.vbs` no disco (`files_present` falso), o resultado é do Windows, não do programa: o 3
 /// também é `ERROR_PATH_NOT_FOUND`. `running` só é `false` com a tarefa pronta (`Ready`) ou desligada
@@ -503,7 +505,7 @@ mod tests {
         launchd_label: "dev.hangar.whatsapp",
         task: "hangar-whatsapp",
         description: "WhatsApp do Hangar",
-        no_restart_exit: None,
+        no_restart_exit: &[],
     };
 
     fn service(executable: &str, data: &str) -> Service {
@@ -560,10 +562,10 @@ mod tests {
         assert!(windows_vbs_path(home, &WHATSAPP).ends_with("hangar/hangar-whatsapp.vbs"));
     }
 
-    /// Como a unit, o laço do `.vbs` religa 10 s depois de qualquer saída, menos a do código pedido.
+    /// Como a unit, o laço do `.vbs` religa 10 s depois de qualquer saída, menos as dos códigos pedidos.
     #[test]
     fn a_code_that_must_not_restart_stops_the_unit_and_the_windows_loop_only_when_asked() {
-        let id = ServiceId { no_restart_exit: Some(3), ..WHATSAPP };
+        let id = ServiceId { no_restart_exit: &[3], ..WHATSAPP };
         let s = |id| Service { id, executable: "/x/p".into(), args: Vec::new() };
         let unit = systemd_unit(&s(id));
         assert!(unit.contains("Restart=always\nRestartSec=10\nRestartPreventExitStatus=3\n\n[Install]\n"), "{unit}");
@@ -576,6 +578,17 @@ mod tests {
         assert_eq!(launchd_plist(&s(id)), launchd_plist(&s(WHATSAPP)));
         let (vbs, dir) = (Path::new(r"C:\h\w.vbs"), Path::new(r"C:\h\w"));
         assert_eq!(windows_script(&id, vbs, dir, true), windows_script(&WHATSAPP, vbs, dir, true));
+    }
+
+    /// Vários códigos: a unit lista todos numa linha e o laço do `.vbs` para em qualquer um deles.
+    #[test]
+    fn several_codes_that_must_not_restart_stop_the_unit_and_the_windows_loop() {
+        let id = ServiceId { no_restart_exit: &[3, 4], ..WHATSAPP };
+        let s = Service { id, executable: "/x/p".into(), args: Vec::new() };
+        let unit = systemd_unit(&s);
+        assert!(unit.contains("Restart=always\nRestartSec=10\nRestartPreventExitStatus=3 4\n\n[Install]\n"), "{unit}");
+        assert_eq!(windows_vbs(&s), "Set shell = CreateObject(\"WScript.Shell\")\r\nDo\r\n\
+            code = shell.Run(\"\"\"/x/p\"\"\", 0, True)\r\nIf code = 3 Or code = 4 Then WScript.Quit code\r\nWScript.Sleep 10000\r\nLoop\r\n");
     }
 
     /// Parar mata o laço do `.vbs` antes do programa: vivo, ele religaria a versão antiga no meio da troca ou o

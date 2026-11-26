@@ -320,12 +320,14 @@ async fn a_stale_control_with_a_live_pid_counts_as_stopped() {
     assert!(!s.paths().data.join("messages.db").exists());
 }
 
-/// Só a saída 3 sem processo de pé vira o aviso de dados mais novos; o resto é o parado de sempre, também
+/// Só a saída 3 vira o aviso de dados mais novos, e a 4, o da cópia que não gravou; o resto é o parado de sempre, também
 /// quando o gerenciador não responde.
 #[test]
 fn a_service_that_quit_on_newer_data_says_so() {
     assert_eq!(stopped_error(Ok(ProcessState { running: false, last_exit: Some(3) })), json!("whatsapp_schema_newer"));
     assert_eq!(stopped_error(Ok(ProcessState { running: true, last_exit: Some(3) })), json!("whatsapp_schema_newer"), "unit antiga religando");
+    assert_eq!(stopped_error(Ok(ProcessState { running: false, last_exit: Some(4) })), json!("whatsapp_backup_failed"),
+        "a cópia de antes de migrar não gravou");
     assert_eq!(stopped_error(Ok(ProcessState { running: false, last_exit: Some(1) })), Value::Null);
     assert_eq!(stopped_error(Ok(ProcessState::default())), Value::Null);
     let unknown = ServiceError { step: "systemctl show".into(), detail: "Failed to connect to bus".into() };
@@ -816,7 +818,7 @@ async fn the_overview_says_the_installed_tag_and_a_newer_release() {
     let s = Scene::new();
     s.serve(Signing::Signed).await;
     let check = |latest: &str, failed: Option<install::CheckFailure>| install::UpdateCheck {
-        latest: latest.into(), migration: true, checked_at: "2026-11-26T12:00:00Z".into(), failed };
+        latest: latest.into(), migration: true, checked_at: "2026-11-26T12:00:00Z".into(), failed, last_error: None };
     let failed = install::CheckFailure { tag: "v0.2.0".into(), code: "whatsapp_not_started".into() };
     install::write_update_check(s.paths(), &check("v0.2.0", Some(failed))).unwrap();
     let (status, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
@@ -826,11 +828,13 @@ async fn the_overview_says_the_installed_tag_and_a_newer_release() {
     let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
     assert_eq!(body["installed_tag"], json!("v0.1.1"));
     assert_eq!(body["update"], json!({"latest": "v0.2.0", "migration": true, "checked_at": "2026-11-26T12:00:00Z",
-        "failed": {"tag": "v0.2.0", "code": "whatsapp_not_started"}}));
+        "failed": {"tag": "v0.2.0", "code": "whatsapp_not_started"}, "last_error": null}));
 
-    install::write_update_check(s.paths(), &check("v0.2.0", None)).unwrap();
+    let last_error = install::CheckFailure { tag: "v0.2.0".into(), code: "whatsapp_download_failed".into() };
+    install::write_update_check(s.paths(), &install::UpdateCheck { last_error: Some(last_error), ..check("v0.2.0", None) }).unwrap();
     let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
-    assert_eq!(body["update"]["failed"], Value::Null, "{body}");
+    assert_eq!((&body["update"]["failed"], &body["update"]["last_error"]),
+        (&Value::Null, &json!({"tag": "v0.2.0", "code": "whatsapp_download_failed"})), "{body}");
 
     install::write_update_check(s.paths(), &check("v0.1.1", None)).unwrap();
     let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
@@ -898,7 +902,8 @@ async fn a_send_during_an_update_is_refused_as_updating() {
 /// e sem se recusar, e sai depois do primeiro.
 #[tokio::test]
 async fn a_send_holds_the_turn_and_the_next_send_waits_for_it() {
-    let s = Scene::with_github(Some(fake_github(&["v0.1.1"]).await));
+    // Com release nova: a passada tem troca a fazer, e só a troca pede a vez.
+    let s = Scene::with_github(Some(fake_github(&["v0.2.0", "v0.1.1"]).await));
     s.serve_api(Signing::Signed, 3).await;
     s.install("v0.1.1");
     for _ in 0..2 {
@@ -930,11 +935,11 @@ async fn a_send_holds_the_turn_and_the_next_send_waits_for_it() {
     assert_eq!(s.wa.installer.job(), Value::Null, "a recusa do relógio não publicou tarefa");
 }
 
-/// A passada do relógio roda na vez do instalador, aparece no `GET` como as outras tarefas e diz as duas tags; sem
-/// instalação ou com a vez ocupada, nem começa.
+/// Só a troca de versão roda na vez do instalador, como tarefa que o `GET` mostra, e diz as duas tags; sem
+/// instalação nem começa, e com a vez ocupada a troca fica para a próxima passada.
 #[tokio::test]
-async fn the_automatic_update_runs_as_a_job_and_says_both_tags() {
-    let s = Scene::with_github(Some(fake_github(&["v0.1.1", "v0.1.0"]).await));
+async fn the_automatic_update_runs_as_a_job_only_to_switch() {
+    let s = Scene::with_github(Some(fake_github(&["v0.2.0", "v0.1.1"]).await));
     s.serve(Signing::Signed).await;
     assert_eq!(s.wa.auto_update().await, None, "sem instalação");
     s.install("v0.1.1");
@@ -943,31 +948,51 @@ async fn the_automatic_update_runs_as_a_job_and_says_both_tags() {
     drop(guard);
     assert_eq!(s.wa.installer.job(), Value::Null);
 
+    // O GitHub de mentira não serve download: a troca falha antes de registrar a nova.
+    let got = s.wa.auto_update().await.unwrap();
+    assert_eq!((got.from.as_str(), got.to.as_str()), ("v0.1.1", "v0.2.0"));
+    let code = got.result.unwrap_err().code;
+    assert_eq!(code, crate::release::CODES.download_failed);
+    let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
+    assert_eq!((&body["job"]["kind"], &body["job"]["done"], &body["job"]["error"]["code"]),
+        (&json!(AUTO_UPDATE_KIND), &json!(true), &json!(code)), "a passada não se passa pelo botão do dono: {body}");
+    assert_eq!((&body["update"]["latest"], &body["update"]["failed"], &body["update"]["last_error"]),
+        (&json!("v0.2.0"), &Value::Null, &json!({"tag": "v0.2.0", "code": code})), "falha antes do registro não prende a tag: {body}");
+}
+
+/// Sem release nova, a passada não pede a vez: nem com ela ocupada, nem deixa tarefa no `GET`.
+#[tokio::test]
+async fn the_automatic_update_without_a_new_release_does_not_take_the_turn() {
+    let s = Scene::with_github(Some(fake_github(&["v0.1.1", "v0.1.0"]).await));
+    s.serve(Signing::Signed).await;
+    s.install("v0.1.1");
+    let guard = s.wa.installer.inline().unwrap();
     let got = s.wa.auto_update().await.unwrap();
     assert_eq!(got, AutoUpdate { from: "v0.1.1".into(), to: "v0.1.1".into(), result: Ok(install::Outcome::AlreadyLatest) });
+    drop(guard);
     let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
-    assert_eq!(body["job"], json!({"kind": "auto_update", "step": "download", "done": true, "error": null, "outcome": "already_latest"}),
-        "a passada não se passa pelo botão do dono");
-    assert_eq!(body["update"], Value::Null, "a procura achou a instalada");
+    assert_eq!((&body["job"], &body["update"]), (&Value::Null, &Value::Null), "{body}");
     assert_eq!(install::read_update_check(s.paths()).map(|c| c.latest).as_deref(), Some("v0.1.1"));
 }
 
-/// Tag que a última procura já viu esperando confirmação: o relógio pula, e `to` é a `latest` dela.
+/// Tag que a última procura já viu esperando confirmação: o relógio pula sem pedir a vez, e `to` é a `latest` dela.
 #[tokio::test]
 async fn the_automatic_update_names_the_release_it_skipped() {
     let s = Scene::with_github(Some(fake_github(&["v0.2.0", "v0.1.1"]).await));
     s.serve(Signing::Signed).await;
     s.install("v0.1.1");
     install::write_update_check(s.paths(), &install::UpdateCheck { latest: "v0.2.0".into(), migration: true,
-        checked_at: "2026-11-26T12:00:00Z".into(), failed: None }).unwrap();
+        checked_at: "2026-11-26T12:00:00Z".into(), failed: None, last_error: None }).unwrap();
+    let guard = s.wa.installer.inline().unwrap();
     let got = s.wa.auto_update().await.unwrap();
+    drop(guard);
     assert_eq!(got, AutoUpdate { from: "v0.1.1".into(), to: "v0.2.0".into(), result: Ok(install::Outcome::Skipped) });
     let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
-    assert_eq!((&body["job"]["outcome"], &body["update"]["latest"], &body["update"]["migration"]),
-        (&json!("skipped"), &json!("v0.2.0"), &json!(true)), "{body}");
+    assert_eq!((&body["job"], &body["update"]["latest"], &body["update"]["migration"]),
+        (&Value::Null, &json!("v0.2.0"), &json!(true)), "{body}");
 }
 
-/// GitHub fora: a falha volta com o código da tarefa, e sem procura gravada `to` fica na instalada.
+/// GitHub fora: a falha volta sem tarefa (a procura não pede a vez), e `to` fica na instalada.
 #[tokio::test]
 async fn an_automatic_update_that_fails_keeps_the_installed_tag() {
     let s = Scene::with_github(Some("http://127.0.0.1:9".into()));
@@ -975,8 +1000,7 @@ async fn an_automatic_update_that_fails_keeps_the_installed_tag() {
     s.install("v0.1.1");
     let got = s.wa.auto_update().await.unwrap();
     assert_eq!((got.from.as_str(), got.to.as_str()), ("v0.1.1", "v0.1.1"));
-    let failure = got.result.unwrap_err();
-    let (_, body) = s.call(Method::GET, "/api/whatsapp", true, None).await;
-    assert_eq!((&body["job"]["done"], &body["job"]["error"]["code"]), (&json!(true), &json!(failure.code)), "{body}");
+    assert_eq!(got.result.map_err(|f| f.code), Err(crate::release::CODES.download_failed));
+    assert_eq!(s.wa.installer.job(), Value::Null);
     assert!(!s.wa.installer.busy());
 }

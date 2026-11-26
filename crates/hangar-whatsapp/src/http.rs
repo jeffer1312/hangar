@@ -51,8 +51,8 @@ pub struct WhatsApp {
     send_waiting: tokio::sync::Notify,
 }
 
-/// Uma passada da atualização automática: `from` é a tag instalada antes; `to`, a instalada depois quando trocou
-/// (`Updated`), senão a `latest` da última procura (ou `from`, sem procura gravada).
+/// Uma passada da atualização automática: `from` é a tag instalada antes; `to`, a release mais nova achada (a
+/// instalada depois quando trocou), ou `from` quando a procura no GitHub falhou.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AutoUpdate {
     pub from: String,
@@ -91,30 +91,33 @@ impl WhatsApp {
         })
     }
 
-    /// A atualização do relógio ([`install::Mode::Auto`]) na vez do instalador, como tarefa que o `GET` mostra.
-    /// `None`: WhatsApp não instalado, ou outra tarefa, operação ou envio segurando a vez.
+    /// A atualização do relógio ([`install::Mode::Auto`]). A procura no GitHub e as regras da passada correm fora da
+    /// vez ([`install::auto_wants`]): só a troca a reserva, e roda como tarefa que o `GET` mostra.
+    /// `None`: WhatsApp não instalado, ou troca a fazer com outra tarefa, operação ou envio segurando a vez.
     pub async fn auto_update(&self) -> Option<AutoUpdate> {
-        let from = install::current(&self.ctx.paths)?.tag;
-        let reservation = self.installer.reserve(AUTO_UPDATE_KIND, install::Step::Download).ok()?;
-        Some(self.run_auto_update(reservation, from).await)
+        match install::auto_wants(&self.ctx).await {
+            install::AutoPlan::NotInstalled => None,
+            install::AutoPlan::Done { from, to, result } => Some(AutoUpdate { from, to, result }),
+            install::AutoPlan::Switch { from, latest } => {
+                let reservation = self.installer.reserve(AUTO_UPDATE_KIND, install::Step::Download).ok()?;
+                Some(self.run_auto_update(reservation, from, latest).await)
+            }
+        }
     }
 
-    /// A passada na vez já guardada; `from` é a tag instalada antes dela.
-    async fn run_auto_update(&self, reservation: install::Reservation, from: String) -> AutoUpdate {
+    /// A troca na vez já guardada; `from` é a tag instalada antes dela.
+    async fn run_auto_update(&self, reservation: install::Reservation, from: String, latest: crate::release::Release) -> AutoUpdate {
         let (sent, got) = tokio::sync::oneshot::channel();
         let ctx = self.ctx.clone();
+        let to = latest.tag.clone();
         reservation.start(move |progress| async move {
-            let result = install::update(&ctx, install::Mode::Auto, &*progress).await;
+            let result = install::update_to(&ctx, install::Mode::Auto, &latest, &*progress).await;
             let _ = sent.send(result.clone());
             result
         }).await;
         // Sem resultado, a tarefa caiu no meio: o `Jobs` já gravou a queda para a tela.
         let result = got.await.unwrap_or_else(|_| Err(install::Failure::new("whatsapp_job_crashed", "a atualização automática parou no meio")));
-        let to = match &result {
-            Ok(install::Outcome::Updated) => install::current(&self.ctx.paths).map(|c| c.tag),
-            _ => install::read_update_check(&self.ctx.paths).map(|c| c.latest),
-        };
-        AutoUpdate { to: to.unwrap_or_else(|| from.clone()), from, result }
+        AutoUpdate { from, to, result }
     }
 
     /// Os rascunhos pendentes (evento `whatsapp_outbox`).
@@ -278,11 +281,13 @@ fn available_update(current: Option<&Installed>, check: Option<UpdateCheck>) -> 
 }
 
 /// Com o serviço parado, `whatsapp_schema_newer` quando o último processo saiu porque os dados são de uma
-/// versão mais nova do binário: religar não adianta, só atualizar. Gerenciador que não responde deixa o
-/// parado de sempre e vai ao log.
+/// versão mais nova do binário: religar não adianta, só atualizar. `whatsapp_backup_failed` quando ele não gravou a
+/// cópia de antes de migrar (disco cheio, permissão): os dados ficaram como estavam. Gerenciador que não responde
+/// deixa o parado de sempre e vai ao log.
 fn stopped_error(process: Result<ProcessState, ServiceError>) -> Value {
     match process {
         Ok(process) if process.last_exit == Some(i32::from(install::SCHEMA_NEWER_EXIT)) => json!("whatsapp_schema_newer"),
+        Ok(process) if process.last_exit == Some(i32::from(install::BACKUP_FAILED_EXIT)) => json!("whatsapp_backup_failed"),
         Ok(_) => Value::Null,
         Err(error) => {
             tracing::warn!(step = %error.step, detail = %error.detail, "whatsapp: estado do serviço ilegível");
