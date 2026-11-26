@@ -1841,7 +1841,11 @@ pub async fn control(
                         break;
                     }
                     context.pause(SETTLE, false).await?;
-                    before = context.frame(false, false).await;
+                    // Releitura que falha não vira Ctrl+S às cegas: vale o último quadro lido.
+                    match context.frame(false, false).await {
+                        Ok(frame) => before = Ok(frame),
+                        Err(_) => break,
+                    }
                 }
                 if waiting(&before) {
                     return Ok(context.reply(
