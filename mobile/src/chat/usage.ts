@@ -1,4 +1,4 @@
-import { abbrevNum, basename, rateLabel, type SessionInfo, type StatsEvent, type StatusFields } from '@hangar/core';
+import { abbrevNum, basename, cotaDoModeloAgy, rateLabel, resetsIn, type JanelaCotaResumo, type SessionInfo, type StatsEvent, type StatusFields } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
 const fmtDur = (ms: number) =>
@@ -34,6 +34,18 @@ export function usageWindows(f: StatusFields | null): UsageWindow[] {
   if (known(f.fiveHourPct)) out.push({ key: '5h', label: m.uso_janela_5h(), pct: f.fiveHourPct, reset: f.fiveHourReset });
   if (known(f.weeklyPct)) out.push({ key: '7d', label: m.uso_janela_7d(), pct: f.weeklyPct, reset: f.weeklyReset });
   if (known(f.monthlyPct)) out.push({ key: '30d', label: m.uso_janela_30d(), pct: f.monthlyPct, reset: f.monthlyReset });
+  return out;
+}
+
+// O agy não publica linha de status: a cota vem da leitura da conta, só o grupo do modelo da sessão.
+export function agyUsageWindows(cota: { estado: string; janelas: JanelaCotaResumo[] } | null | undefined, model: string | null | undefined): UsageWindow[] {
+  if (cota?.estado !== 'lida') return [];
+  const janelas = cotaDoModeloAgy(cota, model).janelas;
+  const out: UsageWindow[] = [];
+  for (const [key, label] of [['5h', m.uso_janela_5h()], ['7d', m.uso_janela_7d()]] as const) {
+    const janela = janelas.find((j) => j.rotulo === key);
+    if (janela && known(janela.pct)) out.push({ key, label, pct: janela.pct, reset: resetsIn(janela.reset_ts) || undefined });
+  }
   return out;
 }
 

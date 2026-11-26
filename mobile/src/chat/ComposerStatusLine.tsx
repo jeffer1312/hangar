@@ -10,6 +10,7 @@ import { ContextRing } from './ContextRing';
 import { UsageSheet } from './UsageSheet';
 import { composerStatus, fitComposerItems } from './usage';
 import { sessionAccountLabel } from './sessionAccountLabel';
+import { useAgyUsageWindows } from './useAgyUsageWindows';
 import * as m from '../paraglide/messages';
 
 interface Props {
@@ -29,6 +30,7 @@ export function ComposerStatusLine({ serverId, name, onOpenSettings }: Props) {
     ?? s.rows.find((x) => x.serverId === serverId && x.name === name) ?? null);
   const status = useMemo(() => composerStatus(parseStatusLine(statusLine, session), session), [statusLine, session]);
   const accountLabel = session ? sessionAccountLabel(session) : null;
+  const agyWindows = useAgyUsageWindows(serverId, session);
   const [usageOpen, setUsageOpen] = useState(false);
   const [availableWidth, setAvailableWidth] = useState(0);
   const [measured, setMeasured] = useState<Record<string, number>>({});
@@ -93,7 +95,7 @@ export function ComposerStatusLine({ serverId, name, onOpenSettings }: Props) {
       </>
     ) });
   }
-  for (const q of status.quotas ?? []) {
+  for (const q of status.quotas ?? agyWindows) {
     items.push({ key: q.key, spoken: `${q.label} ${Math.round(q.pct)}%`, onPress: openUsage, node: (
       <Text style={[styles.text, { color: tone(q.pct) }]} numberOfLines={1} ellipsizeMode="tail">{q.key} {Math.round(q.pct)}%</Text>
     ) });

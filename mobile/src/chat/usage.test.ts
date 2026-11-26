@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { overwriteGetLocale } from '../paraglide/runtime';
-import { composerStatus, fitComposerItems, linhaStats, settingsLabel, spacedModel, usageWindows } from './usage';
+import { agyUsageWindows, composerStatus, fitComposerItems, linhaStats, settingsLabel, spacedModel, usageWindows } from './usage';
 
 // O baseLocale do projeto é `en`; os rótulos esperados aqui são os de pt-BR.
 beforeAll(() => overwriteGetLocale(() => 'pt'));
@@ -18,6 +18,20 @@ describe('usageWindows', () => {
     expect(usageWindows(null)).toEqual([]);
     expect(usageWindows({ raw: '', weeklyPct: 74, fiveHourPct: 23, fiveHourReset: '1h55m' }).map((w) => [w.key, w.pct, w.reset]))
       .toEqual([['5h', 23, '1h55m'], ['7d', 74, undefined]]);
+  });
+});
+
+describe('agyUsageWindows', () => {
+  const cota = { estado: 'lida', janelas: [
+    { rotulo: '7d', pct: 1.1, reset_ts: null, por_modelo: false }, { rotulo: '5h', pct: 4.5, reset_ts: null, por_modelo: false },
+    { rotulo: 'Claude/GPT 7d', pct: 50, reset_ts: null, por_modelo: true }, { rotulo: 'Claude/GPT 5h', pct: 60, reset_ts: null, por_modelo: true }] };
+  it('pega o grupo do modelo da sessão, na ordem 5h, 7d', () => {
+    expect(agyUsageWindows(cota, 'gemini-pro-orchestrator-neon').map((w) => [w.key, w.pct])).toEqual([['5h', 4.5], ['7d', 1.1]]);
+    expect(agyUsageWindows(cota, 'claude-sonnet-4-6').map((w) => [w.key, w.pct])).toEqual([['5h', 60], ['7d', 50]]);
+  });
+  it('sem leitura da cota não inventa janela', () => {
+    expect(agyUsageWindows({ estado: 'indisponivel', janelas: [] }, 'gemini')).toEqual([]);
+    expect(agyUsageWindows(undefined, 'gemini')).toEqual([]);
   });
 });
 
