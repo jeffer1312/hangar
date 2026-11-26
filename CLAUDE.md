@@ -834,7 +834,7 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   binário antigo recebe 409 `whatsapp_edit_unsupported`, nunca o original no lugar). Atualiza sozinho: 2 min após a subida e de hora em hora, com os portões do hcu;
   release que muda o `user_version` só com confirmação do dono, e o binário grava
   `messages.db.schema<v>.bak` antes de migrar, devolvida se a nova não sobe; envio durante a troca é
-  409 `whatsapp_busy` (`whatsapp_updating`). `whatsapp_draft` recusa em sessão compartilhada e sem o
+  409 `whatsapp_updating` (outra operação na vez: `whatsapp_busy`). `whatsapp_draft` recusa em sessão compartilhada e sem o
   prazo de 660 s; `MarkRead`, `SendPresence` e `SubscribePresence` seguem proibidos (lista fechada).
   Instalar exige aceite (`accepted.json`); o router usa `Edge::owner_only` e a 8766 não o monta; as
   ferramentas marcam texto de terceiros. Mídia antiga só a pedido, com teto. Loopback com HMAC nos dois

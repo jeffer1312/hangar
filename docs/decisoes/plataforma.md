@@ -538,8 +538,8 @@ Decisões do usuário (26/11, opção A nas quatro):
   aparece como `whatsapp_backup_failed`, sem devolver cópia. "Apagar dados" leva também as cópias.
 
 O envio de rascunho (`…/send` e `…/send-edited`) segura a vez do `Installer` durante a chamada ao
-binário: troca em curso devolve 409 `whatsapp_busy` com a frase `whatsapp_updating` ("o WhatsApp está
-atualizando; tente de novo em instantes"), e envio em curso adia a troca. Antes, a troca no meio cortava
+binário: troca em curso devolve 409 `whatsapp_updating` (outra operação na vez, `whatsapp_busy`), com
+frase própria nos clientes em cada idioma, e envio em curso adia a troca. Antes, a troca no meio cortava
 o envio e o rascunho ficava `unconfirmed`.
 
 Fora: atualizar para outra versão maior (continua recusado) e um painel de versões de componentes.
