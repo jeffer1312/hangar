@@ -358,7 +358,7 @@ function localApp() {
 }
 
 // O `_srv.json` lido sem encerrar o processo: ausente ou pela metade (app subindo) é `null`.
-function srvRegistro() {
+function srvRecord() {
   try { return JSON.parse(readFileSync(join(DIR, '_srv.json'), 'utf8')); } catch { return null; }
 }
 
@@ -507,12 +507,19 @@ if (cmd === 'open') {
   const navegou = (atual) => antes === null || atual !== antes || (pedida !== '' && antes.includes(pedida));
   let ultimo = '';
   let pausaConferida = false;
-  let appVisto = false;
+  let appSeen = false;
+  let deadSince = null;
   while (Date.now() < prazo) {
-    // Como o MCP: pid morto além do prazo é app fora; sem arquivo é app subindo, e a espera segue.
-    const registro = srvRegistro();
-    if (registro && !deadPid(registro.pid)) appVisto = true;
-    if (registro && deadPid(registro.pid) && Date.now() - desde >= APP_BACK_MS) erro(MSG_SHELL_FORA);
+    // Como o MCP: pid morto por mais que o prazo, contado desde que morreu, é app fora; sem arquivo é app subindo.
+    const record = srvRecord();
+    const dead = record !== null && deadPid(record.pid);
+    if (record && !dead) { appSeen = true; deadSince = null; }
+    if (dead) {
+      deadSince ??= Date.now();
+      if (Date.now() - deadSince >= APP_BACK_MS) erro(MSG_SHELL_FORA);
+      await new Promise((r) => setTimeout(r, 150));
+      continue;
+    }
     const sc = lerSidecars().find(doNome);
     // Pausado pelo usuário, o app não navega: dizer na hora em vez de esgotar o prazo. Uma pergunta basta.
     if (sc && !pausaConferida) {
@@ -535,7 +542,7 @@ if (cmd === 'open') {
     }
     await new Promise((r) => setTimeout(r, 150));
   }
-  if (!appVisto) erro(MSG_SHELL_FORA);
+  if (!appSeen) erro(MSG_SHELL_FORA);
   erro(`o navegador de "${nome}" nao ficou pronto em ${PRONTO_MS / 1000}s${ultimo ? ` (${semToken(ultimo)})` : ''}, com o app desktop aparentemente aberto. Tente uma vez de novo; falhou de novo, avise o usuario`);
 }
 
