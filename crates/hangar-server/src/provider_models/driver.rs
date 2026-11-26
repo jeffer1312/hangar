@@ -343,7 +343,7 @@ async fn kimi_close_picker(io: &dyn Io, timing: Timing) -> Result<(), ModelError
         io.wait(timing.settle).await;
     }
     if pure::kimi_picker_open(&io.capture().await?) {
-        tracing::warn!("o picker do /model do Kimi continuou aberto depois de 3 Esc");
+        return Err(ModelError::text(409, "o picker do /model do Kimi ficou aberto no terminal: feche com Esc antes de mandar mensagem"));
     }
     Ok(())
 }
