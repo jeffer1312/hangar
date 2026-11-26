@@ -38,12 +38,17 @@ impl WireFacts {
     }
 }
 
+const BLOCK: usize = 256 * 1024;
+const MAX_LINE: usize = 1 << 20;
+
 /// Leitura incremental do `wire.jsonl`: só o que cresceu desde a última rodada, e a linha ainda incompleta espera.
 #[derive(Default)]
 pub(crate) struct WireTail {
     path: PathBuf,
     offset: u64,
     partial: Vec<u8>,
+    /// A linha em curso passou de `MAX_LINE`: o resto dela é descartado até a quebra.
+    skipping: bool,
     facts: WireFacts,
 }
 
@@ -56,19 +61,43 @@ impl WireTail {
             *self = Self { path: path.to_owned(), ..Self::default() };
         }
         if len > self.offset {
+            // Em blocos: a primeira leitura de uma conversa longa não carrega o arquivo inteiro na memória.
             file.seek(SeekFrom::Start(self.offset))?;
-            let mut chunk = Vec::new();
-            file.take(len - self.offset).read_to_end(&mut chunk)?;
-            self.offset += chunk.len() as u64;
-            self.partial.extend_from_slice(&chunk);
-            if let Some(end) = self.partial.iter().rposition(|b| *b == b'\n') {
-                let complete: Vec<u8> = self.partial.drain(..=end).collect();
-                for line in String::from_utf8_lossy(&complete).lines() {
-                    self.facts.absorb(line);
+            let mut block = vec![0; BLOCK];
+            let mut remaining = len - self.offset;
+            while remaining > 0 {
+                let want = remaining.min(BLOCK as u64) as usize;
+                let read = file.read(&mut block[..want])?;
+                if read == 0 {
+                    break;
                 }
+                self.offset += read as u64;
+                remaining -= read as u64;
+                self.consume(&block[..read]);
             }
         }
         Ok(&self.facts)
+    }
+
+    fn consume(&mut self, mut bytes: &[u8]) {
+        while let Some(end) = bytes.iter().position(|b| *b == b'\n') {
+            if !self.skipping && self.partial.len() + end <= MAX_LINE {
+                self.partial.extend_from_slice(&bytes[..end]);
+                self.facts.absorb(&String::from_utf8_lossy(&self.partial));
+            }
+            self.partial.clear();
+            self.skipping = false;
+            bytes = &bytes[end + 1..];
+        }
+        if self.skipping {
+            return;
+        }
+        if self.partial.len() + bytes.len() > MAX_LINE {
+            self.partial = Vec::new();
+            self.skipping = true;
+        } else {
+            self.partial.extend_from_slice(bytes);
+        }
     }
 }
 
@@ -181,6 +210,23 @@ mod tests {
         std::io::Write::write_all(&mut file, b"ens\":7}\n").unwrap();
         let facts = tail.read(&path).unwrap();
         assert_eq!((facts.alias.as_deref(), facts.tokens), (Some("a/x"), Some(7.0)));
+    }
+
+    #[test]
+    fn tail_reads_big_files_in_blocks_and_skips_oversized_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wire.jsonl");
+        let filler = format!("{{\"type\":\"context.append_message\",\"agentId\":\"main\",\"text\":\"{}\"}}\n", "x".repeat(300 * 1024));
+        let huge = format!("{{\"type\":\"token_counting.measured\",\"agentId\":\"main\",\"tokens\":1,\"pad\":\"{}\"}}\n", "y".repeat(MAX_LINE + 10));
+        let mut text = String::from("{\"type\":\"profile.bind\",\"agentId\":\"main\",\"modelAlias\":\"a/x\"}\n");
+        text.push_str(&filler);
+        text.push_str(&huge);
+        text.push_str("{\"type\":\"token_counting.measured\",\"agentId\":\"main\",\"tokens\":42}\n");
+        std::fs::write(&path, text).unwrap();
+        let mut tail = WireTail::default();
+        let facts = tail.read(&path).unwrap();
+        assert_eq!((facts.alias.as_deref(), facts.tokens), (Some("a/x"), Some(42.0)));
+        assert!(tail.partial.capacity() <= MAX_LINE + BLOCK, "a linha gigante não fica guardada");
     }
 
     #[test]
