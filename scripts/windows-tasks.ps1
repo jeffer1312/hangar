@@ -117,7 +117,8 @@ function Test-HangarHealth([int]$port) {
     } catch { return $false }
 }
 function Test-HangarPortOpen([int]$port) {
-    if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) { return $true }
+    # PID 0 e a leitura errada da lista: so a saude prova a subida.
+    if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Where-Object { [int]$_.OwningProcess -ne 0 }) { return $true }
     return (Test-HangarHealth $port)
 }
 
@@ -203,9 +204,10 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         $candidates = @($candidates) + @(Get-HangarBackendLaunchers $rows $candidates $name)
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
         foreach ($listener in $listeners) {
-            # O Windows ja deu o PID 0 como dono da porta do servidor vivo: no endereco que o hangar-server
-            # abre e com a saude dele respondendo, nao e outro programa.
-            if ([int]$listener.OwningProcess -eq 0 -and "$($listener.LocalAddress)" -in @('0.0.0.0', '::') -and (Test-HangarHealth $port)) { continue }
+            # O Windows ja deu o PID 0 como dono da porta do servidor vivo: num endereco que o hangar-server
+            # abre e com a saude dele respondendo em 127.0.0.1, nao e outro programa (quem abrisse ali
+            # responderia a saude no lugar dele).
+            if ([int]$listener.OwningProcess -eq 0 -and "$($listener.LocalAddress)" -in @('0.0.0.0', '::', '127.0.0.1') -and (Test-HangarHealth $port)) { continue }
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {
                 if (Test-HangarServedFront $rows $name @($listener)) { continue }
                 $quem = Format-HangarPortOwner $rows $listener

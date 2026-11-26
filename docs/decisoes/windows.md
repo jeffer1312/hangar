@@ -294,10 +294,11 @@ TIME_WAIT e também com ela ainda aberta.
 - **PID 0 como dono da porta** (`qw7yzbiy`): a lista de portas deu o System Idle (PID 0) como
   dono da 8765 com o servidor vivo; o diagnóstico depois da volta dizia "ninguém escutando" com a porta
   aceitando conexão. O reinício recusava antes de parar qualquer coisa. Na conferência de antes da
-  parada, PID 0 em `0.0.0.0` ou `::` com a saúde do `hangar-server` respondendo na porta não conta
-  como outro programa; sem isso, recusa como antes, sem parar nada. Na espera da liberação, depois da
-  parada, PID 0 não segura a porta: quem a segura de fato faz o bind exclusivo do servidor novo falhar,
-  e a espera da versão nova acusa.
+  parada, PID 0 em `0.0.0.0`, `::` ou `127.0.0.1` com a saúde do `hangar-server` respondendo em
+  `127.0.0.1` não conta como outro programa (quem abrisse `127.0.0.1` responderia a saúde no lugar
+  dele); sem isso, recusa como antes, sem parar nada. Depois da parada PID 0 não segura a porta (quem a
+  segura de fato faz o bind exclusivo do servidor novo falhar, e a espera da versão nova acusa) nem
+  prova a subida, que com só PID 0 na lista depende da saúde.
 
 ## Queda do servidor sem religada no Windows (16/11/2026)
 
