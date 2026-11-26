@@ -478,6 +478,59 @@ mídia, e deixa o dono editar o texto antes de enviar. Contrato C7 em `docs/api.
   legenda passam pela marca de invisíveis e nunca vão à tool.
 
 
+## WhatsApp atualiza sozinho (26/11/2026)
+
+Com o WhatsApp instalado, a release nova do `hangar-whatsapp` chega sem o dono abrir Configurações >
+WhatsApp, e a página mostra a versão instalada e "Atualizar" quando há outra, não só em erro. A release
+que muda o formato do `messages.db` só entra com o dono confirmando. Pedido do usuário (26/11/2026):
+atualizar o Hangar leva o WhatsApp à release mais nova, mudança de formato pede confirmação e falha não
+deixa o WhatsApp parado.
+
+Caso medido: a v0.2.0 subiu o `user_version` do `messages.db` de 1 para 2 (`SchemaVersion = 2`, a única
+tag com o commit d7fd50b), e o binário 0.1.x recusa o arquivo depois disso (`schema_newer`): de 0.1.1 para
+0.2.0 não há volta sem cópia. A v0.3.0 (api 3) acrescenta colunas (`outbox.edited`, `outbox.sent_text`) e
+tabelas (`avatars`, `avatar_fetches`) sem subir o `user_version`, de propósito, para o binário antigo
+continuar abrindo o arquivo. Só subir o `user_version` é mudança sem volta. O `--version` não diz o
+esquema, e acrescentar texto nessa linha quebra o `parse_version` dos Hangar já instalados
+(`whatsapp_version_unreadable`).
+
+Decisões do usuário (26/11, opção A nas quatro):
+
+- **D1. Relógio no servidor com os portões do hcu.** Primeira passada 2 min depois da subida, depois de
+  hora em hora (`update::periodic::INTERVAL`), só com automações ligadas, modo pacote e canal `latest`
+  (a mesma leitura de `policy()` do Computer Use), WhatsApp instalado, nenhum job em curso e nenhum envio
+  segurando a vez. É o precedente que já funciona no hcu; esperar a subida não disputa a partida com o
+  resto do servidor. A troca vai ao log e ao diário (`whatsapp.atualizado` com as duas tags), sem
+  novidade na tela de atualização; falha vai ao diário (`whatsapp.atualizar` com o código), e a tag que
+  falhou na passada automática não é tentada de novo sozinha. Sem release nova, a passada não religa a
+  instalada (isso continua do "Atualizar" e do `ensure_up` manual).
+- **D2. `--schema-version` no binário.** Imprime só o número (`2\n`) e sai 0; `--version` não muda.
+  Migração = os dois binários não respondem o mesmo número; binário antigo sai com erro de flag
+  desconhecida e conta como "muda". Ler o esquema pelo próprio binário evita tabela de versões no Hangar,
+  e na dúvida o lado seguro é perguntar.
+- **D3. Mudança de `user_version` nunca entra sozinha.** A passada automática e o "Atualizar" comum
+  param em `needs_confirm`, apagam o baixado e não registram nada; a página mostra "muda o formato do
+  arquivo" e um diálogo de confirmação, que manda `{"confirm_migration": true}` ao
+  `POST /api/whatsapp/update`. É a única troca que não se desfaz trocando o binário, e o dono decide
+  quando. O estado da última procura (`latest`, `migration`, `checked_at`, `failed`) fica em
+  `~/.hangar/whatsapp-service/update-check.json` e chega à tela por `installed_tag` e `update` no
+  `GET /api/whatsapp`.
+- **D4. Cópia antes de migrar e volta automática.** Antes de subir o `user_version` de `v` o binário
+  grava `messages.db.schema<v>.bak` (`VACUUM INTO`, uma por `v`, sobrescrita); sem conseguir gravar,
+  não migra e sai com código 4 (`backup_failed`). Se a nova não responde depois de abrir os dados, o
+  Hangar para o serviço sem desregistrar (`service::stop`), confere que o processo saiu, devolve a cópia
+  no lugar de `messages.db`, `-wal` e `-shm`, religa a anterior e responde
+  `whatsapp_update_restored`. Sem a parada confirmada ou sem cópia fica o `whatsapp_update_data_migrated`
+  de antes, com o serviço parado. Registrar a anterior antes de parar a nova deixaria ela abrir o banco
+  migrado e sair com 3.
+
+O envio de rascunho (`…/send` e `…/send-edited`) segura a vez do `Installer` durante a chamada ao
+binário: troca em curso devolve 409 `whatsapp_busy` com a frase `whatsapp_updating` ("o WhatsApp está
+atualizando; tente de novo em instantes"), e envio em curso adia a troca. Antes, a troca no meio cortava
+o envio e o rascunho ficava `unconfirmed`.
+
+Fora: atualizar para outra versão maior (continua recusado) e um painel de versões de componentes.
+
 ## CLIProxyAPI instalado e configurado pelo Hangar (19/11/2026)
 
 Montar o proxy à mão (baixar, escrever o `config.yaml`, inventar chave e senha, logar a conta,
