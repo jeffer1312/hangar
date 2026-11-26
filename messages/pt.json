@@ -12510,6 +12510,7 @@
   "mobile_create_antigravity_account": "Conta do Google",
   "mobile_antigravity_sign_in_first": "Esta conta do Google não entrou no Antigravity. Entre em Configurações › Contas.",
   "mobile_antigravity_terms_hint": "Depois de entrar, os Termos do Google aparecem aqui: quem aceita é você.",
+  "mobile_antigravity_terms_create_hint": "Esta conta ainda não aceitou os Termos do Google: aceite na página de contas.",
   "mobile_antigravity_login_title": "Conta do Google (Antigravity)",
   "mobile_antigravity_default_desc": "a que o agy já usa nesta máquina",
   "mobile_antigravity_new_account": "Nova conta adicional",

@@ -145,7 +145,7 @@ fn the_terms_key_fixes_the_checkbox_first_and_then_walks_to_the_button() {
     }
 }
 
-/// A tela de entrar do agy 1.5.17 sem login (Windows, pasta pessoal e chaveiro isolados, 25/11/2026).
+/// A tela de entrar do agy sem login.
 #[test]
 fn the_login_screen_is_recognized_and_the_first_use_screens_are_not() {
     assert!(agy_login_screen(&fixture("login.txt")));

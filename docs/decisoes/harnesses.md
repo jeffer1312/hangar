@@ -1340,6 +1340,11 @@ Medido no `agy` 1.5.17, Windows (psmux), com HOME e pastas do usuário apontando
   mesma tela continua 3 s depois. A tela dos Termos abre com o foco no checkbox, então um Enter atrasado só
   desmarca a caixa, nunca aceita.
 - **Linha do aviso de login tem 66 colunas e a caixa dos Termos 202**: a janela escondida nasce com 240.
+- **Nos Termos, a próxima tecla só sai depois que a tela mostrar a anterior.** O Enter no checkbox inverte a
+  caixa: repetido numa captura atrasada, ele a remarcava e o Done aceitava compartilhando os dados contra a
+  escolha da pessoa. Tela que não muda em 10 s falha com `termos_nao_convergiu`, sem repetir a tecla.
+- **O login encerra a tentativa**: a janela fecha e a etapa `login` fica publicada; os clientes passam ao login de
+  sempre e reabrem os Termos depois.
 
 ## Antigravity: MCP, hooks e sandbox (24/11/2026)
 

@@ -12510,6 +12510,7 @@
   "mobile_create_antigravity_account": "Google account",
   "mobile_antigravity_sign_in_first": "This Google account isn't signed in to Antigravity. Sign in under Settings › Accounts.",
   "mobile_antigravity_terms_hint": "After you sign in, the Google Terms show up here: you are the one who accepts.",
+  "mobile_antigravity_terms_create_hint": "This account has not accepted the Google Terms yet: accept them on the accounts page.",
   "mobile_antigravity_login_title": "Google account (Antigravity)",
   "mobile_antigravity_default_desc": "the one agy already uses on this machine",
   "mobile_antigravity_new_account": "New additional account",

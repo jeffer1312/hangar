@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use hangar_core::terminal_state::{AgyTermsFocus, AgyTermsKey, agy_analyze, agy_login_screen, agy_onboarding_list, agy_terms, agy_terms_key};
+use hangar_core::terminal_state::{AgyTerms, AgyTermsFocus, AgyTermsKey, agy_analyze, agy_login_screen, agy_onboarding_list, agy_terms, agy_terms_key};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stage {
@@ -37,11 +37,13 @@ pub struct Driver {
     pressed: Option<Instant>,
     /// Desde quando a tela dos Termos sumiu no meio da resposta.
     lost: Option<Instant>,
+    /// A tela em que a última tecla saiu: a próxima espera a tela mudar, porque o Enter no checkbox inverte a caixa.
+    sent: Option<(AgyTerms, Instant)>,
 }
 
 impl Driver {
     pub fn new(now: Instant) -> Self {
-        Self { stage: Stage::Starting, started: now, colors: None, option: 0, keys: 0, pressed: None, lost: None }
+        Self { stage: Stage::Starting, started: now, colors: None, option: 0, keys: 0, pressed: None, lost: None, sent: None }
     }
 
     pub fn stage(&self) -> &Stage { &self.stage }
@@ -103,12 +105,17 @@ impl Driver {
             return None;
         };
         self.lost = None;
+        if let Some((before, at)) = self.sent && before == terms {
+            if now.duration_since(at) >= CONFIRM_LIMIT { self.stage = Stage::Failed("termos_nao_convergiu"); }
+            return None;
+        }
         let key = agy_terms_key(terms, self.option)?;
         if self.keys == MAX_KEYS {
             self.stage = Stage::Failed("termos_nao_convergiu");
             return None;
         }
         self.keys += 1;
+        self.sent = Some((terms, now));
         if key == AgyTermsKey::Enter && terms.focus != AgyTermsFocus::Checkbox { self.pressed = Some(now); }
         Some(key)
     }
@@ -264,8 +271,34 @@ mod tests {
     fn terms_more_than_8_keys_without_pressing_done_fails() {
         let t0 = Instant::now();
         let mut driver = answering(t0, 1);
-        for second in 1..=8 { assert_eq!(driver.observe(TERMS, false, at(t0, second)), Some(Down)); }
-        assert_eq!(driver.observe(TERMS, false, at(t0, 9)), None);
+        for second in 1..=8 {
+            let (screen, key) = if second % 2 == 1 { (UNCHECKED, Enter) } else { (TERMS, Down) };
+            assert_eq!(driver.observe(screen, false, at(t0, second)), Some(key));
+        }
+        assert_eq!(driver.observe(UNCHECKED, false, at(t0, 9)), None);
+        assert_eq!(driver.stage(), &Stage::Failed("termos_nao_convergiu"));
+    }
+
+    /// O Enter no checkbox não se repete: apertado de novo numa tela atrasada, a caixa voltaria a marcar.
+    #[test]
+    fn terms_next_key_waits_for_the_screen_to_show_the_last_one() {
+        let t0 = Instant::now();
+        let mut driver = answering(t0, 2);
+        assert_eq!(driver.observe(TERMS, false, at(t0, 1)), Some(Enter));
+        assert_eq!(driver.observe(TERMS, false, at(t0, 2)), None, "a tela ainda não mostra a caixa desmarcada");
+        assert_eq!(driver.observe(UNCHECKED, false, at(t0, 3)), Some(Down));
+        assert_eq!(driver.observe(UNCHECKED, false, at(t0, 4)), None);
+        assert_eq!(driver.observe(UNCHECKED_DONE, false, at(t0, 5)), Some(Enter));
+    }
+
+    #[test]
+    fn terms_screen_that_ignores_a_key_for_10_s_fails() {
+        let t0 = Instant::now();
+        let mut driver = answering(t0, 1);
+        assert_eq!(driver.observe(TERMS, false, at(t0, 1)), Some(Down));
+        assert_eq!(driver.observe(TERMS, false, at(t0, 10)), None);
+        assert_eq!(driver.stage(), &Stage::Answering);
+        assert_eq!(driver.observe(TERMS, false, at(t0, 11)), None);
         assert_eq!(driver.stage(), &Stage::Failed("termos_nao_convergiu"));
     }
 

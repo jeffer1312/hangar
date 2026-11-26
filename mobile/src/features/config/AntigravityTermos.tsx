@@ -72,7 +72,7 @@ export function AntigravityTermos({ server, onDone, onSignIn, onOpenTerminal, on
   const actionError = (text: string) => { readFailed.current = false; setError(text); };
 
   function settle(next: AntigravityTermsAttempt) {
-    // Na etapa de login o terminal segue aberto até o painel fechar (DELETE).
+    // No login a tentativa acabou e a janela fechou no servidor: o painel só oferece entrar.
     if (next.estado === 'login') return;
     live.current = null;
     if (next.estado !== 'concluido') { haptic.error(); return; }

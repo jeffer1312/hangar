@@ -433,7 +433,8 @@ async fn drive(win: &PrivateWindows, name: &str, home: &Path, env: &ProcessEnv, 
         let key = {
             let mut driver = live.driver.lock().unwrap_or_else(|e| e.into_inner());
             let key = driver.observe(&screen, accepted, now.into_std());
-            if matches!(driver.stage(), Stage::Done | Stage::Failed(_)) { return true; }
+            // O login também encerra: os clientes passam ao login de sempre e não leem mais esta tentativa.
+            if matches!(driver.stage(), Stage::Done | Stage::Failed(_) | Stage::Login) { return true; }
             live.publish(driver.stage());
             key
         };
@@ -583,6 +584,7 @@ mod tests {
         const TERMS_SCREEN: &str = include_str!("../../../hangar-core/tests/fixtures/agy/terms.txt");
         const TERMS_DONE: &str = include_str!("../../../hangar-core/tests/fixtures/agy/terms-done.txt");
         const IDLE: &str = include_str!("../../../hangar-core/tests/fixtures/agy/idle.txt");
+        const LOGIN: &str = include_str!("../../../hangar-core/tests/fixtures/agy/login.txt");
         const OWNER: &str = "/fixture/.gemini";
 
         /// O multiplexador e o `agy` falsos: a tela anda com as teclas como no `agy` de verdade, e o Done grava o aceite.
@@ -757,6 +759,17 @@ mod tests {
             assert_eq!(status(&attempts, &id).await.1["estado"], "concluido");
             assert_eq!(fake.world(|w| w.keys.clone()), ["Enter", "Down", "Enter"]);
             assert!(fake.world(|w| w.sessions.is_empty()), "a janela fecha no fim");
+        }
+
+        /// Os clientes param de ler no login: a janela não fica aberta esperando quem não vai mais olhar.
+        #[tokio::test(start_paused = true)]
+        async fn terms_login_screen_ends_the_attempt_and_closes_the_window() {
+            let (home, fake, attempts) = setup(LOGIN);
+            let id = start(&attempts, &fake, home.path()).await;
+            reach(&attempts, &id, |stage| *stage == Stage::Login).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            assert_eq!(status(&attempts, &id).await.1["estado"], "login");
+            assert!(fake.world(|w| w.sessions.is_empty()), "a janela fecha no login");
         }
 
         #[tokio::test(start_paused = true)]
