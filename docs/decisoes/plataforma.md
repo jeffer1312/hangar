@@ -501,20 +501,28 @@ Decisões do usuário (26/11, opção A nas quatro):
   (a mesma leitura de `policy()` do Computer Use), WhatsApp instalado, nenhum job em curso e nenhum envio
   segurando a vez. É o precedente que já funciona no hcu; esperar a subida não disputa a partida com o
   resto do servidor. A troca vai ao log e ao diário (`whatsapp.atualizado` com as duas tags), sem
-  novidade na tela de atualização; falha vai ao diário (`whatsapp.atualizar` com o código), e a tag que
-  falhou na passada automática não é tentada de novo sozinha. Sem release nova, a passada não religa a
-  instalada (isso continua do "Atualizar" e do `ensure_up` manual).
-- **D2. `--schema-version` no binário.** Imprime só o número (`2\n`) e sai 0; `--version` não muda.
-  Migração = os dois binários não respondem o mesmo número; binário antigo sai com erro de flag
-  desconhecida e conta como "muda". Ler o esquema pelo próprio binário evita tabela de versões no Hangar,
-  e na dúvida o lado seguro é perguntar.
+  novidade na tela de atualização; falha vai ao diário (`whatsapp.atualizar` com o código). Só a falha
+  depois de registrar o serviço trava a tag (`failed`, não tentada de novo sozinha); falha antes
+  (download, conferência, leitura do esquema) fica em `last_error` e a passada seguinte tenta de novo
+  (decisão 3b, 26/11). A passada consulta o GitHub fora da vez do `Installer` e só a pega para trocar:
+  sem nada a fazer, um envio aprovado não recebe "atualizando". O job dela tem `kind: "auto_update"`,
+  que as telas não tratam como ação do dono. Sem release nova, a passada não religa a instalada (isso
+  continua do "Atualizar" e do `ensure_up` manual).
+- **D2. A versão nova diz o esquema dela e o do arquivo.** `--schema-version` imprime o esquema que ela
+  grava; `--data-schema-version --data <pasta>` imprime o `user_version` do `messages.db` no disco (`0`
+  sem arquivo), só leitura e com o serviço de pé. Migra quando o arquivo existe e está abaixo do esquema
+  novo; qualquer resposta que falte conta como "muda". O binário instalado não é consultado: até a v0.3.0
+  ele não tem as flags, e pela regra antiga (comparar os dois binários) a ida v0.3.0 → v0.3.1, que não mexe
+  no arquivo, pediria confirmação a todo mundo (decisão 3 = D, 26/11). O `--version` não muda: texto a mais
+  nessa linha quebra o `parse_version` dos Hangar instalados.
 - **D3. Mudança de `user_version` nunca entra sozinha.** A passada automática e o "Atualizar" comum
   param em `needs_confirm`, apagam o baixado e não registram nada; a página mostra "muda o formato do
   arquivo" e um diálogo de confirmação, que manda `{"confirm_migration": true}` ao
   `POST /api/whatsapp/update`. É a única troca que não se desfaz trocando o binário, e o dono decide
-  quando. O estado da última procura (`latest`, `migration`, `checked_at`, `failed`) fica em
-  `~/.hangar/whatsapp-service/update-check.json` e chega à tela por `installed_tag` e `update` no
-  `GET /api/whatsapp`.
+  quando. O estado da última procura (`latest`, `migration`, `checked_at`, `failed`, `last_error`)
+  fica em `~/.hangar/whatsapp-service/update-check.json` e chega à tela por `installed_tag`,
+  `update_checked_at` e `update` no `GET /api/whatsapp`. O diálogo só abre sozinho para o "Atualizar"
+  que a própria tela pediu.
 - **D4. Cópia antes de migrar e volta automática.** Antes de subir o `user_version` de `v` o binário
   grava `messages.db.schema<v>.bak` (`VACUUM INTO`, uma por `v`, sobrescrita); sem conseguir gravar,
   não migra e sai com código 4 (`backup_failed`). Se a nova não responde depois de abrir os dados, o
@@ -522,7 +530,12 @@ Decisões do usuário (26/11, opção A nas quatro):
   no lugar de `messages.db`, `-wal` e `-shm`, religa a anterior e responde
   `whatsapp_update_restored`. Sem a parada confirmada ou sem cópia fica o `whatsapp_update_data_migrated`
   de antes, com o serviço parado. Registrar a anterior antes de parar a nova deixaria ela abrir o banco
-  migrado e sair com 3.
+  migrado e sair com 3. Uma cópia gravada nesta tentativa vale como prova de que a nova abriu os dados
+  (o binário migra antes de gravar o `control.json`) e estende a espera da subida até 10 min enquanto o
+  processo vive: copiar e converter um banco grande passa dos 30 s. A troca de arquivos tira o conjunto
+  migrado do caminho por rename (`messages.db.migrated*`) em vez de apagar o WAL, e a parada só conta com o
+  gerenciador e o pid do `control.json` confirmando. Saída 4 não religa (`RestartPreventExitStatus=3 4`) e
+  aparece como `whatsapp_backup_failed`, sem devolver cópia. "Apagar dados" leva também as cópias.
 
 O envio de rascunho (`…/send` e `…/send-edited`) segura a vez do `Installer` durante a chamada ao
 binário: troca em curso devolve 409 `whatsapp_busy` com a frase `whatsapp_updating` ("o WhatsApp está
