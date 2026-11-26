@@ -1940,3 +1940,40 @@ test('clique coberto por um aviso: fecha o aviso pelo unico botao de dispensar e
   assert.deepEqual(r.feito, ['CLICK button "Iniciar cadastro"', 'CLICK button "Aceitar cookies"', 'CLICK button "Iniciar cadastro"']);
 });
 
+
+
+test('rolagem que anda numa pagina longa sem carga preguicosa segue rolando', async () => {
+  let n = 0;
+  const base = navegador([]);
+  const r = await rodar({ objetivo: 'achar o item', maxPassos: 4,
+    executar: async (verbo, args) => (verbo === 'eval' && String(args[0]).includes('scrollTop') ? 'ok: "rolou 400"' : base(verbo, args)),
+    perguntar: async (estado, q) => (n++ < 3 && 'SCROLL_DOWN' in q.operacao.criteria ? resposta({ op: 'SCROLL_DOWN' }) : resposta({ op: 'DONE' })) });
+  assert.equal(r.sucesso, true, r.parou);
+  assert.equal(r.feito.length, 3, 'a arvore inteira nao muda com a rolagem: rolou nao e sem efeito');
+});
+
+test('clique arriscado com negacao ou so mencionado no objetivo continua parando', async () => {
+  for (const objetivo of ['preencha o cadastro mas nao clique em Iniciar cadastro', 'abra a tela Iniciar cadastro', 'clique em Iniciar cadastro completo']) {
+    const r = await rodar({ objetivo, maxPassos: 1, executar: navegador([]),
+      perguntar: async () => ({ ...resposta(), click_risk: { choice: 'e2', probabilities: { e2: 0.9, [NENHUM]: 0.1 } } }) });
+    assert.match(r.parou, /arriscada/, objetivo);
+  }
+});
+
+test('aviso com botao que nao so dispensa nao e clicado sozinho', async () => {
+  for (const botoes of [['Fechar pedido'], ['Cancelar', 'OK']]) {
+    const extra = botoes.map((b, i) => `\n    - button "${b}" [ref=@e3${i}]`).join('');
+    const executados = [];
+    await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 2,
+      executar: async (verbo, args) => {
+        executados.push([verbo, ...args].join(' '));
+        if (verbo === 'snapshot') return `${SNAPSHOT}\n  - dialog "Aviso"${extra}`;
+        if (verbo === 'url') return 'http://local/x';
+        if (verbo === 'text') return 'cadastro';
+        if (verbo === 'eval' && String(args[0]).includes('elementFromPoint')) return `ok: ${JSON.stringify(JSON.stringify(botoes))}`;
+        return 'ok';
+      },
+      perguntar: async () => resposta() });
+    assert.ok(!executados.some((l) => /^click @e3\d$/.test(l)), botoes.join('/'));
+  }
+});
