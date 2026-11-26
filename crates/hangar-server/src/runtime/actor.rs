@@ -627,8 +627,8 @@ impl crate::mods::state::SurfaceLink for RuntimeHandle {
     }
 }
 
-/// O que o `prepare_prompt` junta ao comando: Claude (`content`) e Codex (`input`).
-const PREPARED_INPUT:[&str;2] = ["content","input"];
+/// O que o `prepare_prompt` junta ao comando: Claude (`content`), Codex (`input`) e Antigravity (`prompt`).
+const PREPARED_INPUT:[&str;3] = ["content","input","prompt"];
 
 struct Pending {
     from_queue:bool,

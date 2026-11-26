@@ -123,6 +123,14 @@ pub fn subagent_descriptor(brain: &Path, parent: &str, child: &str) -> Option<se
     })
 }
 
+/// O estado que o `agy` grava para o subagente (`SUBAGENT_STATE_ALIVE`, `SUBAGENT_STATE_KILLED`).
+pub fn subagent_state(brain: &Path, parent: &str, child: &str) -> Option<String> {
+    if !valid_conversation_id(parent) || !valid_conversation_id(child) { return None; }
+    let text = std::fs::read_to_string(subagents_dir(brain, parent).join(format!("{child}.json"))).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value["state"].as_str().map(str::to_owned)
+}
+
 /// O nome do subagente para a tela: `role`, senão `typeName`.
 pub fn subagent_name(descriptor: &serde_json::Value) -> Option<String> {
     ["role", "typeName"].iter().find_map(|key| descriptor[*key].as_str().filter(|s| !s.trim().is_empty())).map(str::to_owned)

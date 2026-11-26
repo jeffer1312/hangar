@@ -412,7 +412,8 @@ pub fn list_subagents(provider: &str, jsonl: &Path) -> Vec<Map<String, Value>> {
         });
         for id in ids {
             let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, &id).unwrap_or_default();
-            if let Some((agent, _)) = read_agent_agy(&brain, &descriptor, &id, LIST_TAIL) { out.push(agent); }
+            let killed = hangar_antigravity::paths::subagent_state(&brain, &conversation, &id).as_deref() == Some(AGY_KILLED);
+            if let Some((agent, _)) = read_agent_agy(&brain, &descriptor, &id, LIST_TAIL, killed) { out.push(agent); }
         }
     } else if let Some(root) = pi_agents_dir(provider, jsonl) {
         for task in sorted_dirs(&root) {
@@ -454,7 +455,8 @@ pub fn get_subagent(provider: &str, jsonl: &Path, agent_id: &str, events: i64) -
             .map_err(|error| tracing::warn!(code = "agy_subagents_unreadable", kind = ?error.kind(), "subagents: pasta de subagentes do Antigravity ilegível")).ok()?;
         if !ids.iter().any(|id| id == agent_id) { return None; }
         let descriptor = hangar_antigravity::paths::subagent_descriptor(&brain, &conversation, agent_id).unwrap_or_default();
-        let (agent, f) = read_agent_agy(&brain, &descriptor, agent_id, DETAIL_TAIL)?;
+        let killed = hangar_antigravity::paths::subagent_state(&brain, &conversation, agent_id).as_deref() == Some(AGY_KILLED);
+        let (agent, f) = read_agent_agy(&brain, &descriptor, agent_id, DETAIL_TAIL, killed)?;
         (agent, f, Layout::Agy)
     } else if let Some(root) = pi_agents_dir(provider, jsonl) {
         let task = child(&root, agent_id)?;
@@ -736,17 +738,22 @@ fn agy_place(provider: &str, jsonl: &Path) -> Option<(PathBuf, String)> {
     hangar_antigravity::paths::place_of_transcript(jsonl)
 }
 
-/// O subagente pelo leitor do chat: o pedido é o primeiro recado do principal, e o estado fica vazio porque o
-/// arquivo do `agy` diz "vivo" para sempre; quem fecha o subagente é o relatório no chat do pai.
+/// O subagente pelo leitor do chat: o pedido é o primeiro recado do principal. O arquivo do `agy` diz "vivo"
+/// mesmo depois do relatório, então quem fecha é o chat do pai; sem relatório, fecham o erro como último passo
+/// e o estado `KILLED`.
 /// `None` só para id que não é UUID; transcript que não abre volta marcado `ilegivel`.
-fn read_agent_agy(brain: &Path, descriptor: &Value, id: &str, tail: usize) -> Option<(Map<String, Value>, PathBuf)> {
+const AGY_KILLED: &str = "SUBAGENT_STATE_KILLED";
+
+fn read_agent_agy(brain: &Path, descriptor: &Value, id: &str, tail: usize, killed: bool) -> Option<(Map<String, Value>, PathBuf)> {
     let f = hangar_antigravity::paths::transcript_in(brain, id)?;
     let Ok(file) = File::open(&f) else { return Some((unreadable(id, mtime(&f)), f)) };
     let mut stream = crate::transcript::AgyStream::for_transcript(Some(&f));
     let mut acc = Acc::default();
+    let mut errored = false;
     for line in BufReader::new(file).split(b'\n') {
         let Ok(line) = line else { return Some((unreadable(id, mtime(&f)), f)) };
         let Some(value) = decode_line(&line) else { continue };
+        errored = value["type"] == "ERROR_MESSAGE";
         for ev in stream.feed(&value) {
             if let Some(ts) = ev.ts { acc.when(ms_iso(Some(&json!(ts * 1000.0)))); }
             match ev.kind {
@@ -763,6 +770,11 @@ fn read_agent_agy(brain: &Path, descriptor: &Value, id: &str, tail: usize) -> Op
     acc.agent_type = descriptor["typeName"].as_str().map(str::to_owned);
     let mut m = acc.into_map(id, mtime(&f), tail);
     if let Some(role) = descriptor["role"].as_str().filter(|r| !r.trim().is_empty()) { m.insert("nickname".into(), role.into()); }
+    let ended = if killed { Some("finished") } else if errored { Some("failed") } else { None };
+    if let Some(state) = ended {
+        m.insert("state".into(), json!(state));
+        m.insert("endedAt".into(), json!(ms_iso(Some(&json!(mtime(&f) * 1000.0)))));
+    }
     Some((m, f))
 }
 
@@ -1070,6 +1082,32 @@ mod tests {
         let detail = get_subagent("antigravity", &jsonl, SUB, 40).unwrap();
         assert!(detail["events"].as_array().is_some_and(|events| !events.is_empty()));
         assert!(get_subagent("antigravity", &jsonl, "../x", 40).is_none());
+    }
+
+    /// Subagente do `agy` que terminou em erro ou foi encerrado não manda relatório: o estado vem do que o agy gravou.
+    #[test]
+    fn an_antigravity_subagent_that_errored_or_was_killed_is_not_running() {
+        const PARENT: &str = "d4260961-71cd-4a60-9ae1-410cae6b046d";
+        const ERRORED: &str = "5837ea9c-4418-4a9b-84da-33407ae57b6f";
+        const KILLED: &str = "e7addc04-83fa-4acc-802c-54538338ad72";
+        let root = tempfile::tempdir().unwrap();
+        let brain = root.path();
+        let parent = brain.join(PARENT).join(".system_generated");
+        let jsonl = parent.join("logs/transcript_full.jsonl");
+        write(&jsonl, &[json!({"step_index": 0, "type": "USER_INPUT", "content": "oi"})]);
+        for (id, state) in [(ERRORED, "SUBAGENT_STATE_ALIVE"), (KILLED, "SUBAGENT_STATE_KILLED")] {
+            std::fs::create_dir_all(parent.join("subagents")).unwrap();
+            std::fs::write(parent.join("subagents").join(format!("{id}.json")),
+                json!({"conversationId": id, "subagentDescriptor": {"typeName": "pm-implementador", "role": "Implementador"}, "state": state}).to_string()).unwrap();
+            let last = if id == ERRORED { json!({"step_index": 1, "type": "ERROR_MESSAGE", "content": ""}) }
+                else { json!({"step_index": 1, "type": "PLANNER_RESPONSE", "content": "fazendo"}) };
+            write(&brain.join(id).join(".system_generated/logs/transcript_full.jsonl"),
+                &[json!({"step_index": 0, "type": "USER_INPUT", "content": "faça"}), last]);
+        }
+        let list = list_subagents("antigravity", &jsonl);
+        let state = |id: &str| list.iter().find(|a| a["agentId"] == id).map(|a| (a["state"].clone(), a["endedAt"].is_string())).unwrap();
+        assert_eq!(state(ERRORED), (json!("failed"), true));
+        assert_eq!(state(KILLED), (json!("finished"), true));
     }
 
     fn write(p: &Path, lines: &[Value]) {

@@ -14,6 +14,10 @@ const state = vi.hoisted(() => ({ chat: { statusLine: null as string | null, sta
   sessions: { rows: [] as (SessionInfo & { serverId: string })[], byServerRecord: {} as Record<string, SessionInfo[]> } }));
 vi.mock('../stores/chat', () => ({ chatStore: () => ({ use: (select: (s: typeof state.chat) => unknown) => select(state.chat) }) }));
 vi.mock('../stores/sessions', () => ({ useSessions: (select: (s: typeof state.sessions) => unknown) => select(state.sessions) }));
+const credentials = vi.hoisted(() => ({ rows: [] as unknown[], calls: 0 }));
+vi.mock('../stores/servers', () => ({ useServers: (select: (s: { servers: { id: string }[] }) => unknown) => select({ servers: [{ id: 's1' }] }) }));
+vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(),
+  getCredentialsForServer: async () => { credentials.calls += 1; return credentials.rows; } }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('@lodev09/react-native-true-sheet', () => ({ TrueSheet: forwardRef(function NativeSheet({ children, onDidDismiss }: {
@@ -104,6 +108,42 @@ describe('conta da lista no rodapé', () => {
     await measure();
     expect(item(container, 'account')?.textContent).toBe('local-gpt · engine-account');
     expect(item(container, 'account')?.getAttribute('aria-label')).toBe('local-gpt · engine-account');
+  });
+});
+
+describe('Antigravity no rodapé', () => {
+  it('mostra a conta Google e a cota do grupo do modelo, lidas da conta', async () => {
+    state.chat.statusLine = null;
+    state.sessions.rows = [{ name: 'sess', serverId: 's1', provider: 'antigravity', conta: 'antigravity:/home/u/.gemini',
+      model: 'gemini-pro-orchestrator-neon', cwd: '/x/hangar' } as SessionInfo & { serverId: string }];
+    credentials.rows = [{ id: 'antigravity:/home/u/.gemini', tipo: 'antigravity', nome: 'Google (padrão)', cota: { estado: 'lida', janelas: [
+      { rotulo: '7d', pct: 1.1, reset_ts: null, por_modelo: false }, { rotulo: '5h', pct: 4.5, reset_ts: null, por_modelo: false },
+      { rotulo: 'Claude/GPT 7d', pct: 50, reset_ts: null, por_modelo: true }, { rotulo: 'Claude/GPT 5h', pct: 60, reset_ts: null, por_modelo: true }] } }];
+    const { container } = await render();
+    await measure();
+    expect(item(container, 'account')?.textContent).toBe('Google (padrão)');
+    expect(item(container, '5h')?.textContent).toBe('5h 5%');
+    expect(item(container, '7d')?.textContent).toBe('7d 1%');
+  });
+
+  it('relê a cota quando o turno termina', async () => {
+    state.chat.statusLine = null;
+    state.chat.stateEvent = { session: 'sess', state: 'working' };
+    state.sessions.rows = [{ name: 'sess', serverId: 's1', provider: 'antigravity', conta: 'antigravity:/home/u/.gemini',
+      model: 'gemini-pro-orchestrator-neon', cwd: '/x/hangar' } as SessionInfo & { serverId: string }];
+    credentials.rows = [];
+    credentials.calls = 0;
+    const { root } = await render();
+    const before = credentials.calls;
+    state.chat.stateEvent = { session: 'sess', state: 'idle' };
+    await act(async () => root.render(createElement(ComposerStatusLine, base)));
+    expect(credentials.calls).toBe(before + 1);
+  });
+
+  it('sessão do Claude não lê as contas: a cota vem da linha de status', async () => {
+    credentials.calls = 0;
+    await render();
+    expect(credentials.calls).toBe(0);
   });
 });
 

@@ -47,6 +47,10 @@ fn model_failure(text: &str) -> Option<String> {
         let resets = message.split("Resets in ").nth(1).and_then(|rest| rest.split('.').next()).filter(|s| !s.is_empty());
         return Some(resets.map_or_else(|| "Cota do Antigravity esgotada".to_owned(), |r| format!("Cota do Antigravity esgotada; volta em {r}")));
     }
+    // A conversa salva traz um pensamento sem assinatura válida: toda mensagem seguinte falha igual.
+    if message.contains(".thinking.signature: Field required") || message.contains("Invalid `signature` in `thinking` block") {
+        return Some("A conversa salva do Antigravity não pode mais ir ao modelo (assinatura de pensamento inválida); abra uma conversa nova para continuar".to_owned());
+    }
     if message.contains("request failed:") {
         return Some(format!("O Antigravity não alcançou o Google: {}", message.rsplit(": ").next().unwrap_or(message)));
     }

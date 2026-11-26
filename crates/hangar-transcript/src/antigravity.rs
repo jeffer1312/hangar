@@ -22,6 +22,7 @@ static EXIT_UNREAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 pub const MAIN_SENDER: &str = "principal";
 const SUBAGENT_CREATED: &str = "Created the following subagent:";
 const BACKGROUND_TASK: &str = "Tool is running as a background task with task id: ";
+const SUBAGENTS_KILLED: &str = "Successfully killed ";
 
 /// Recado entre conversas do `agy` (relatório de subagente, pedido do principal, fim de tarefa de fundo), dentro de
 /// um `SYSTEM_MESSAGE`.
@@ -32,8 +33,8 @@ static MESSAGE: LazyLock<Regex> = LazyLock::new(|| {
 /// Pareia saída de ferramenta com a chamada pela ordem. Leitor que começa no meio do arquivo pode ver uma saída
 /// sem chamada: ela sai sem `tool_use_id`, nunca ligada à chamada errada.
 pub struct AgyStream {
-    /// Id e nome no `agy` de cada chamada da última resposta ainda sem saída.
-    pending: VecDeque<(String, Option<String>)>,
+    /// Id e nome no `agy` de cada chamada da última resposta ainda sem saída, e os subagentes que ela encerra.
+    pending: VecDeque<(String, Option<String>, Vec<String>)>,
     /// A pasta `brain` e o id desta conversa: dizem se quem manda um recado é subagente dela ou o principal.
     place: Option<(PathBuf, String)>,
 }
@@ -65,7 +66,7 @@ impl AgyStream {
                 }
                 for (n, call) in value["tool_calls"].as_array().into_iter().flatten().enumerate() {
                     let id = format!("agy:{step}:{n}");
-                    self.pending.push_back((id.clone(), call["name"].as_str().map(str::to_owned)));
+                    self.pending.push_back((id.clone(), call["name"].as_str().map(str::to_owned), killed_subagents(call)));
                     let (tool_name, tool_input) = match call["name"].as_str() {
                         Some(name) => { let (name, input) = tools::canonical(name, args(&call["args"])); (Some(name), input) }
                         None => (None, args(&call["args"])),
@@ -76,8 +77,10 @@ impl AgyStream {
             }
             // Versão do agy que grava a saída do comando em passo próprio, com o código de saída.
             Some("GENERIC" | "RUN_COMMAND") => {
-                let (call, tool) = self.pending.pop_front().unzip();
-                let tool = tool.flatten();
+                let (call, tool, killed) = match self.pending.pop_front() {
+                    Some((call, tool, killed)) => (Some(call), tool, killed),
+                    None => (None, None, Vec::new()),
+                };
                 let failed = value["status"] == "ERROR" || value["exit_code"].as_i64().is_some_and(|code| code != 0);
                 // Só a saída da própria chamada vale: um `cat` de arquivo com o mesmo texto não lança nada.
                 let launched = tool.as_deref().filter(|t| *t == "invoke_subagent").and_then(|_| {
@@ -90,6 +93,14 @@ impl AgyStream {
                 });
                 events.push(ChatEvent { ts, tool_use_id: call, result: Some(content.to_owned()), is_error: Some(failed),
                     bg_agent_id: launched, ..event(ChatKind::ToolResult, format!("res:agy:{step}")) });
+                // Subagente encerrado não manda relatório: o cartão dele fecha aqui.
+                // A saída diz quantos saíram, não quais: só fecha quando bate com os pedidos.
+                let count = content.split(SUBAGENTS_KILLED).nth(1).and_then(|rest| rest.split_whitespace().next()).and_then(|n| n.parse::<usize>().ok());
+                if count == Some(killed.len()) {
+                    for (n, id) in killed.iter().enumerate() {
+                        events.push(ChatEvent { ts, ..crate::claude::task_result(format!("agy:{step}:kill:{n}"), id) });
+                    }
+                }
                 // O comando foi para o fundo depois de chamado: os clientes só acompanham um `Bash` de fundo.
                 if let Some((task, command)) = tool.as_deref().filter(|t| *t == "run_command").and_then(|_| background_task(content)) {
                     let id = format!("agy:{step}:bg");
@@ -145,6 +156,14 @@ impl AgyStream {
         }
         if !parent { events.push(finish(sender)); }
     }
+}
+
+/// Os subagentes que uma chamada `manage_subagents` com `kill` encerra.
+fn killed_subagents(call: &Value) -> Vec<String> {
+    let args = &call["args"];
+    if call["name"] != "manage_subagents" || args["Action"] != "kill" { return Vec::new(); }
+    args["ConversationIds"].as_array().into_iter().flatten().filter_map(Value::as_str)
+        .filter(|id| hangar_antigravity::paths::valid_conversation_id(id)).map(str::to_owned).collect()
 }
 
 /// A conversa do subagente que a saída do `invoke_subagent` informa (`Created the following subagent: {…}`).
@@ -227,6 +246,21 @@ mod tests {
         assert!(task_end(&events, SUB) && task_end(&events, "task-5"));
         let ids: std::collections::HashSet<_> = events.iter().map(|e| e.id.clone()).collect();
         assert_eq!(ids.len(), events.len(), "ids repetidos");
+    }
+
+    /// Subagente encerrado pelo principal (`manage_subagents` com `kill`) fecha o cartão dele, sem relatório.
+    #[test]
+    fn a_subagent_killed_by_the_main_agent_finishes_its_card() {
+        let call = json!({"step_index": 10, "type": "PLANNER_RESPONSE", "content": "",
+            "tool_calls": [{"name": "manage_subagents", "args": {"Action": "kill", "ConversationIds": [SUB]}}]});
+        let done = json!({"step_index": 11, "type": "GENERIC", "content": "Successfully killed 1 subagent(s) and their descendants. Killed roles: Revisor"});
+        assert!(task_end(&feed_all(&[call.clone(), done]), SUB));
+        let two = json!({"step_index": 10, "type": "PLANNER_RESPONSE", "content": "",
+            "tool_calls": [{"name": "manage_subagents", "args": {"Action": "kill", "ConversationIds": [SUB, PARENT]}}]});
+        let one = json!({"step_index": 11, "type": "GENERIC", "content": "Successfully killed 1 subagent(s) and their descendants. Killed roles: Revisor"});
+        assert!(!task_end(&feed_all(&[two, one]), SUB), "parte encerrada não diz qual: nenhum cartão fecha");
+        let refused = json!({"step_index": 11, "type": "GENERIC", "content": "Error: no subagent with that id"});
+        assert!(!task_end(&feed_all(&[call, refused]), SUB));
     }
 
     /// Tarefa de fundo que acaba com código diferente de zero fecha como falha.
