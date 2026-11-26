@@ -174,6 +174,7 @@ fn fake_outbox(method: &str, path: &str, uri: &str, body: &[u8], drafts: &Mutex<
     match (method, action) {
         ("GET", "") => (200, draft.to_string().into_bytes()),
         ("POST", "send" | "decline") if draft["state"] != "pending" => error(409, "answered"),
+        ("POST", "send") if draft["chat"] == "trocado" => error(409, "new_contact"),
         ("POST", "send") => {
             draft["state"] = json!("sending");
             draft["answered_at"] = json!("2026-11-24T10:01:00Z");
@@ -464,6 +465,11 @@ async fn drafts_are_created_and_answered_with_the_house_codes() {
     assert_eq!((status, code(&body)), (409, "whatsapp_outdated"));
     assert!(body["detail"]["msg"].as_str().unwrap().contains("atualize o hangar-whatsapp"), "{body}");
     let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"novo","text":"oi","origin":"casa::s0"}"#)).await;
+    assert_eq!((status, code(&body)), (409, "whatsapp_new_contact"));
+    // Rascunho criado com um número e aprovado depois de parear outro: o `send` confere o contato de novo.
+    let (_, body) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"trocado","text":"oi","origin":"casa::s0"}"#)).await;
+    let id = body["id"].as_str().unwrap().to_owned();
+    let (status, body) = s.call(Method::POST, &format!("/api/whatsapp/outbox/{id}/send"), true, Some(r#"{"via":"desktop"}"#)).await;
     assert_eq!((status, code(&body)), (409, "whatsapp_new_contact"));
     let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":5,"text":"oi","origin":"casa::s0"}"#)).await;
     assert_eq!((status, code(&body)), (400, "whatsapp_bad_request"));

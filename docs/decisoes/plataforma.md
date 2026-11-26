@@ -334,7 +334,8 @@ Decisões:
   Rascunho expira 10 min depois de criado. Rascunho igual a um pendente (origem, conversa, texto e
   anexo) devolve o mesmo, sem criar outro.
 - **Contato novo é recusado.** Cada mensagem guarda o número que a recebeu; conversa sem nenhuma mensagem
-  recebida pelo número pareado agora dá `new_contact`; conversa fora
+  recebida pelo número pareado agora dá `new_contact`, na criação e de novo no "Enviar" (rascunho
+  aprovado depois de parear outro número fica pendente até expirar, com a frase no cartão); conversa fora
   do arquivo, `unknown_chat`; lista de transmissão e canal, `unsupported_chat`. Grupo é aceito.
 - **Trava 463/475 sem reenvio.** Qualquer falha deixa `failed`, sem nova tentativa; 463 e 475 ficam
   com `reachout_locked`. O evento `NotifyAccountReachoutTimelock` grava até quando a conta está

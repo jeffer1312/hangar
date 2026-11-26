@@ -1414,6 +1414,7 @@
   "whatsapp_draft_err_rate_limited": "Sending limit reached (per minute or per day). Nothing was sent; try again shortly.",
   "whatsapp_draft_err_not_paired": "WhatsApp is not connected on this machine. Nothing was sent.",
   "whatsapp_draft_err_outdated": "Update hangar-whatsapp to send. Nothing was sent.",
+  "whatsapp_draft_err_new_contact": "This person has never written to the WhatsApp paired now. Nothing was sent.",
   "whatsapp_draft_requests_title": "{label}: WhatsApp drafts ({count})",
   "whatsapp_draft_session_notice": "This session wants to send on WhatsApp: {name}",
   "whatsapp_draft_open": "Tap to answer",

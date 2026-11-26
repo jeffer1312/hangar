@@ -179,6 +179,8 @@ const REFUSAL: Record<string, () => string> = {
   whatsapp_rate_limited: m.whatsapp_draft_err_rate_limited,
   whatsapp_not_paired: m.whatsapp_draft_err_not_paired,
   whatsapp_outdated: m.whatsapp_draft_err_outdated,
+  // Aprovado depois de parear outro número: o serviço confere o contato de novo.
+  whatsapp_new_contact: m.whatsapp_draft_err_new_contact,
   // Serviço sem envio (api 1): o remédio é o mesmo.
   whatsapp_send_unsupported: m.whatsapp_draft_err_outdated,
 };
