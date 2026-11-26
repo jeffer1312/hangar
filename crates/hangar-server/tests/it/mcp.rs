@@ -1226,14 +1226,24 @@ fn c5_reply(method: &str, uri: &str, body: &[u8], drafts: &Mutex<Vec<Value>>, ou
             }
             (200, draft.clone())
         }
-        ("POST", "send" | "decline") if draft["state"] != "pending" => error(409, "answered"),
-        ("POST", "send" | "decline") if expired => {
+        ("POST", "send" | "send-edited" | "decline") if draft["state"] != "pending" => error(409, "answered"),
+        ("POST", "send" | "send-edited" | "decline") if expired => {
             draft["state"] = json!("expired");
             error(409, "expired")
         }
         ("POST", "send") => {
             draft["state"] = json!("sending");
             draft["answered_at"] = json!("2099-01-01T00:00:00Z");
+            (202, draft.clone())
+        }
+        // O C7: o texto que o dono editou sai no lugar do pedido pela sessão, que fica em `text`.
+        ("POST", "send-edited") => {
+            let text = serde_json::from_slice::<Value>(body).ok().and_then(|b| b["text"].as_str().map(str::to_owned)).unwrap_or_default();
+            draft["state"] = json!("sending");
+            draft["answered_at"] = json!("2099-01-01T00:00:00Z");
+            let edited = text != draft["text"].as_str().unwrap_or_default();
+            draft["edited"] = json!(edited);
+            draft["sent_text"] = json!(text);
             (202, draft.clone())
         }
         ("POST", "decline") => {
@@ -1297,6 +1307,25 @@ async fn whatsapp_draft_waits_for_the_owner_and_returns_the_sent_message() {
     let result = task.await.unwrap();
     assert!(!failed(&result), "{result}");
     assert_eq!(result["structuredContent"], json!({"status": "sent", "id": id, "message_id": "3EB0AA"}));
+}
+
+/// Binário `api` 3: o cartão oferece a edição, e o dono envia outro texto. A tool devolve o que saiu (`sent_text`) e a
+/// nota de que ele editou, para a sessão não dizer que saiu o texto dela.
+#[tokio::test(flavor = "multi_thread")]
+async fn whatsapp_draft_says_the_owner_edited_the_text() {
+    let s = scene_shared(false, None, false, "", true).await;
+    let fake = fake_whatsapp(&s.home, 3, json!({"state": "sent", "message_id": "3EB0AB"})).await;
+    let (task, id) = draft_in_flight(&s, &fake, "5564999").await;
+    on_card(&s, &id).await;
+    assert!(s.state.whatsapp.get().unwrap().outbox().feed().borrow().as_ref().is_some_and(|f| f.edit), "o cartão oferece Editar");
+    let status = client().post(format!("http://{}/api/whatsapp/outbox/{id}/send-edited", s.addr)).bearer_auth(OWNER)
+        .header("content-type", "application/json").body(json!({"via": "desktop", "text": "segue o zip"}).to_string())
+        .send().await.unwrap().status().as_u16();
+    assert_eq!(status, 202);
+    let result = task.await.unwrap();
+    assert!(!failed(&result), "{result}");
+    assert_eq!(result["structuredContent"], json!({"status": "sent", "id": id, "message_id": "3EB0AB", "edited": true,
+        "sent_text": "segue o zip", "note": "o dono editou o texto antes de enviar; o aprovado foi sent_text"}));
 }
 
 /// Recusado pelo dono, falho sem confirmação e expirado: estado final com o id e o aviso de não repetir.

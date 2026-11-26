@@ -67,6 +67,8 @@ só pelas ferramentas do MCP `hangar`:
     `error: reachout_locked` = o WhatsApp travou mensagens a contatos novos; insistir leva a ban.
   - `sending`: aprovado e ainda saindo. Não crie outro rascunho; confira depois com
     `whatsapp_read` na conversa se a mensagem aparece.
+  - `edited: true` (com qualquer um dos estados acima): o dono editou o texto no cartão antes de
+    enviar. O que saiu é `sent_text`, não o texto que você pediu; diga isso a ele.
 - Erro que traz o id do rascunho: ele já existe. Não crie outro.
 - Contato novo é recusado (`whatsapp_new_contact`): só sai para quem já escreveu para a conta.
   Não contorne.

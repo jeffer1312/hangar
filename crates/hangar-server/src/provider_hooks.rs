@@ -979,7 +979,7 @@ fn vault_redirect(_: &Place, segment: &str) -> bool {
 }
 
 const OWNER_KEYS_DENIED: &str = "BLOQUEADO: o `.env` do Hangar e o `control.key` do WhatsApp guardam as chaves do dono e não se leem.\nPara mandar algo pelo WhatsApp, crie o rascunho com `whatsapp_draft`: quem envia é o dono, no cartão do app.";
-const DRAFT_ANSWER_DENIED: &str = "BLOQUEADO: aprovar ou recusar um rascunho de WhatsApp (`/api/whatsapp/outbox/<id>/send` ou `/decline`) é só do dono, no cartão do app.\nCrie o rascunho com `whatsapp_draft` e espere a resposta dele.";
+const DRAFT_ANSWER_DENIED: &str = "BLOQUEADO: aprovar ou recusar um rascunho de WhatsApp (`/api/whatsapp/outbox/<id>/send`, `/send-edited` ou `/decline`) é só do dono, no cartão do app.\nCrie o rascunho com `whatsapp_draft` e espere a resposta dele.";
 
 /// As chaves do dono: o `control.key` do WhatsApp, o `.env` de `~/.hangar/config` e o `backend/.env` de uma
 /// cópia do Hangar. Conta as palavras que as citam, na leitura que mais acha. Melhor esforço: caminho
@@ -1339,18 +1339,18 @@ fn above_owner_keys(path: &str) -> bool {
 /// Programas que só procuram ou registram texto: citar a rota neles não a chama.
 const ROUTE_QUOTERS: &[&str] = &["grep", "egrep", "fgrep", "rg", "git", "select-string", "sls"];
 
-/// `…/api/whatsapp/outbox/<id>/send` ou `/decline` chamado da sessão: a resposta ao rascunho é do dono, no app.
+/// `…/api/whatsapp/outbox/<id>/send`, `/send-edited` ou `/decline` chamado da sessão: a resposta ao rascunho é do dono, no app.
 /// Confere o texto como o shell o entrega (sem aspas nem escapes) e a ação escrita como curinga (`{send,x}`).
 /// A ação é o trecho inteiro da URL: `send.html` é outro caminho.
 fn answers_draft(command: &str) -> bool {
     static ROUTE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static GLOB: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let route = ROUTE.get_or_init(|| regex::Regex::new(r#"(?i)/api/whatsapp/outbox/[^\s'"/?#]+/+(send|decline)([^A-Za-z0-9_.~%-]|$)"#).unwrap());
+    let route = ROUTE.get_or_init(|| regex::Regex::new(r#"(?i)/api/whatsapp/outbox/[^\s'"/?#]+/+(send-edited|send|decline)([^A-Za-z0-9_.~%-]|$)"#).unwrap());
     let glob = GLOB.get_or_init(|| regex::Regex::new(r#"(?i)/api/whatsapp/outbox/[^\s'"/?#]+/+([A-Za-z0-9_.~%*?\[\]{},!^-]+)"#).unwrap());
     let calls = |text: &str| {
         shell_readings(text).iter().any(|reading| {
             route.is_match(reading)
-                || glob.captures_iter(reading).any(|c| ["send", "decline"].iter().any(|action| glob_match(&c[1], action, true)))
+                || glob.captures_iter(reading).any(|c| ["send", "send-edited", "decline"].iter().any(|action| glob_match(&c[1], action, true)))
         })
     };
     if !calls(command) {

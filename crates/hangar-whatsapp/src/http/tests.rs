@@ -140,8 +140,9 @@ async fn fake_c2(request: Request, signing: Signing, seen: &Mutex<Vec<String>>, 
     response
 }
 
-/// O C5 de mentira: rascunho pendente criado, lista dos pendentes, leitura, envio e recusa. `chat` `velho` é o
-/// binário recusado pelo WhatsApp; `novo`, quem nunca escreveu para a conta.
+/// O C5 de mentira: rascunho pendente criado, lista dos pendentes, leitura, envio, envio editado (C7) e recusa. `chat`
+/// `velho` é o binário recusado pelo WhatsApp; `novo`, quem nunca escreveu para a conta. Rascunho com `no_edit_route`
+/// faz o papel do binário `api` 2, que não tem a rota `send-edited`.
 fn fake_outbox(method: &str, path: &str, uri: &str, body: &[u8], drafts: &Mutex<Vec<Value>>) -> (u16, Vec<u8>) {
     let error = |status: u16, code: &str| (status, json!({"detail": {"code": code, "msg": format!("erro {code}")}}).to_string().into_bytes());
     let mut drafts = drafts.lock().unwrap();
@@ -173,8 +174,22 @@ fn fake_outbox(method: &str, path: &str, uri: &str, body: &[u8], drafts: &Mutex<
     let Some(draft) = drafts.iter_mut().find(|d| d["id"] == id) else { return error(404, "not_found") };
     match (method, action) {
         ("GET", "") => (200, draft.to_string().into_bytes()),
-        ("POST", "send" | "decline") if draft["state"] != "pending" => error(409, "answered"),
-        ("POST", "send") if draft["chat"] == "trocado" => error(409, "new_contact"),
+        ("POST", "send-edited") if draft["no_edit_route"] == true => error(404, "bad_request"),
+        ("POST", "send" | "send-edited" | "decline") if draft["state"] != "pending" => error(409, "answered"),
+        ("POST", "send" | "send-edited") if draft["chat"] == "trocado" => error(409, "new_contact"),
+        ("POST", "send-edited") if draft["chat"] == "antigo" => error(409, "outdated"),
+        ("POST", "send-edited") => {
+            let asked: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let text = asked["text"].as_str().unwrap_or_default().replace("\r\n", "\n").replace('\r', "\n");
+            let edited = text != draft["text"].as_str().unwrap_or_default();
+            draft["edited"] = json!(edited);
+            draft["sent_text"] = json!(text);
+            draft["state"] = json!("sending");
+            draft["answered_at"] = json!("2026-11-24T10:01:00Z");
+            draft["via"] = asked["via"].clone();
+            draft["asked_edit"] = asked;
+            (202, draft.to_string().into_bytes())
+        }
         ("POST", "send") => {
             draft["state"] = json!("sending");
             draft["answered_at"] = json!("2026-11-24T10:01:00Z");
@@ -484,11 +499,75 @@ async fn the_outbox_needs_the_send_api() {
     s.serve(Signing::Signed).await;
     for (method, uri, body) in [(Method::POST, "/api/whatsapp/outbox", Some(r#"{"chat":"5564999","text":"oi","origin":"casa::s0"}"#)),
         (Method::GET, "/api/whatsapp/outbox", None), (Method::POST, "/api/whatsapp/outbox/d1/send", Some(r#"{"via":"desktop"}"#)),
+        (Method::POST, "/api/whatsapp/outbox/d1/send-edited", Some(r#"{"via":"desktop","text":"oi"}"#)),
         (Method::POST, "/api/whatsapp/outbox/d1/decline", None)] {
         let (status, reply) = s.call(method, uri, true, body).await;
         assert_eq!((status, code(&reply)), (409, "whatsapp_send_unsupported"), "{uri}");
     }
     assert!(s.seen.lock().unwrap().iter().all(|r| !r.contains("/v1/outbox")), "{:?}", s.seen.lock().unwrap());
+}
+
+/// Envio editado (C7): binário `api` 2 recusa aqui, sem pedido ao serviço, e o rascunho continua pendente.
+#[tokio::test]
+async fn an_edited_send_to_an_api_2_binary_is_refused_here() {
+    let s = Scene::new();
+    s.serve_api(Signing::Signed, 2).await;
+    let (status, _) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"5564999","text":"chego às 15h","origin":"casa::s0"}"#)).await;
+    assert_eq!(status, 201);
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox/d1/send-edited", true, Some(r#"{"via":"mobile","text":"chego às 16h"}"#)).await;
+    assert_eq!((status, code(&body)), (409, "whatsapp_edit_unsupported"), "{body}");
+    assert!(body["detail"]["msg"].as_str().unwrap().contains("atualize o hangar-whatsapp"), "{body}");
+    assert!(!s.seen.lock().unwrap().iter().any(|r| r.contains("send-edited")), "{:?}", s.seen.lock().unwrap());
+    assert_eq!(s.drafts.lock().unwrap()[0]["state"], json!("pending"), "nada saiu");
+}
+
+/// `api` 3: o corpo chega ao binário como veio, e a resposta 202 traz `edited` e o `sent_text` normalizado. Os erros do
+/// binário seguem com os códigos do `/send`; corpo sem `text` ou com `via` fora do contrato para aqui.
+#[tokio::test]
+async fn an_edited_send_is_forwarded_with_the_house_codes() {
+    let s = Scene::new();
+    s.serve_api(Signing::Signed, 3).await;
+    s.call(Method::POST, "/api/whatsapp/outbox", true, Some(r#"{"chat":"5564999","text":"chego às 15h","origin":"casa::s0"}"#)).await;
+    for bad in [r#"{"via":"mobile"}"#, r#"{"via":"mobile","text":5}"#, r#"{"via":"pc","text":"x"}"#, "[]"] {
+        let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox/d1/send-edited", true, Some(bad)).await;
+        assert_eq!((status, code(&body)), (400, "whatsapp_bad_request"), "{bad}: {body}");
+    }
+    assert!(!s.seen.lock().unwrap().iter().any(|r| r.contains("send-edited")), "corpo fora do contrato não vai ao binário");
+
+    let edited = r#"{"via":"mobile","text":"chego às 16h\r\nabraço"}"#;
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox/d1/send-edited", true, Some(edited)).await;
+    assert_eq!((status, &body["state"], &body["edited"]), (202, &json!("sending"), &json!(true)), "{body}");
+    assert_eq!((&body["sent_text"], &body["text"]), (&json!("chego às 16h\nabraço"), &json!("chego às 15h")), "{body}");
+    assert!(s.seen.lock().unwrap().iter().any(|r| r == "POST /v1/outbox/d1/send-edited"));
+    assert_eq!(s.drafts.lock().unwrap()[0]["asked_edit"], json!({"via": "mobile", "text": "chego às 16h\r\nabraço"}), "o corpo chega como veio");
+
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox/d1/send-edited", true, Some(edited)).await;
+    assert_eq!((status, code(&body)), (409, "whatsapp_answered"));
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox/d9/send-edited", true, Some(edited)).await;
+    assert_eq!((status, code(&body)), (404, "whatsapp_not_found"), "rascunho que não existe não é rota que falta");
+    for (chat, expected) in [("trocado", "whatsapp_new_contact"), ("antigo", "whatsapp_outdated")] {
+        let (_, created) = s.call(Method::POST, "/api/whatsapp/outbox", true, Some(json!({"chat": chat, "text": "oi", "origin": "casa::s0"}).to_string().as_str())).await;
+        let id = created["id"].as_str().unwrap().to_owned();
+        let (status, body) = s.call(Method::POST, &format!("/api/whatsapp/outbox/{id}/send-edited"), true, Some(edited)).await;
+        assert_eq!((status, code(&body)), (409, expected), "{chat}: {body}");
+        if expected == "whatsapp_outdated" {
+            assert!(body["detail"]["msg"].as_str().unwrap().contains("atualize o hangar-whatsapp"), "{body}");
+        }
+    }
+}
+
+/// Binário que se diz `api` 3 e responde à rota com o 404 genérico (rota desconhecida): é a mesma recusa do `api` 2,
+/// nunca sucesso nem "rascunho não encontrado".
+#[tokio::test]
+async fn a_missing_edit_route_is_edit_unsupported() {
+    let s = Scene::new();
+    s.serve_api(Signing::Signed, 3).await;
+    s.drafts.lock().unwrap().push(json!({"id": "d7", "state": "pending", "chat": "5564999", "text": "oi",
+        "created_at": "2026-11-24T10:00:00Z", "expires_at": "2099-01-01T00:00:00Z", "no_edit_route": true}));
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/outbox/d7/send-edited", true, Some(r#"{"via":"desktop","text":"olá"}"#)).await;
+    assert_eq!((status, code(&body)), (409, "whatsapp_edit_unsupported"), "{body}");
+    assert!(s.seen.lock().unwrap().iter().any(|r| r == "POST /v1/outbox/d7/send-edited"), "o binário foi perguntado");
+    assert_eq!(s.drafts.lock().unwrap()[0]["state"], json!("pending"));
 }
 
 #[tokio::test]
@@ -497,7 +576,8 @@ async fn a_guest_never_answers_a_draft() {
     s.serve_api(Signing::Signed, 2).await;
     let guest = Caller::Guest(Arc::new(GuestGrant {
         token: "convidado".into(), token_hash: String::new(), sessions: Default::default(), pair_roots: vec![], invite: true }));
-    for (method, uri) in [(Method::GET, "/api/whatsapp/outbox"), (Method::POST, "/api/whatsapp/outbox/d1/send")] {
+    for (method, uri) in [(Method::GET, "/api/whatsapp/outbox"), (Method::POST, "/api/whatsapp/outbox/d1/send"),
+        (Method::POST, "/api/whatsapp/outbox/d1/send-edited")] {
         let (status, body) = s.send(method, uri, true, Some(guest.clone()), Some(r#"{"via":"desktop"}"#)).await;
         assert_eq!((status, code(&body)), (403, "whatsapp_owner_only"), "{uri}");
     }
@@ -607,6 +687,32 @@ async fn without_the_send_api_nothing_is_read_and_a_failed_read_keeps_the_list()
     s.write_control_api(1, DEAD_PID, 2);
     s.wa.outbox.refresh(&s.wa.client, &hooks).await;
     assert_eq!(s.wa.outbox().feed().borrow().as_deref(), Some(&outbox::Feed::default()), "serviço desligado: o cartão na tela some");
+}
+
+fn feed_edit(wa: &WhatsApp) -> Option<bool> {
+    wa.outbox().feed().borrow().as_ref().map(|feed| feed.edit)
+}
+
+/// O evento diz se o binário aceita o texto editado: `api` 3 sim, 2 não. O `control.json` é relido a cada volta: o
+/// binário atualizado chega ao evento sem rascunho novo, e o ilegível conta como sem edição.
+#[tokio::test]
+async fn the_feed_says_whether_the_binary_takes_an_edited_text() {
+    let s = Scene::new();
+    let hooks = Recorded::default();
+    s.serve_api(Signing::Signed, 2).await;
+    s.wa.outbox.refresh(&s.wa.client, &hooks).await;
+    assert_eq!(feed_edit(&s.wa), Some(false));
+
+    s.serve_api(Signing::Signed, 3).await;
+    s.wa.outbox.refresh(&s.wa.client, &hooks).await;
+    assert_eq!(feed_edit(&s.wa), Some(true), "atualizado, sem rascunho novo");
+    let feed = s.wa.outbox().feed().borrow().clone().unwrap();
+    assert_eq!(serde_json::to_value(&*feed).unwrap(), json!({"drafts": [], "edit": true}), "o `edit` no topo do evento");
+
+    std::fs::write(s.paths().data.join("control.json"), "{").unwrap();
+    s.wa.outbox.refresh(&s.wa.client, &hooks).await;
+    assert_eq!(feed_edit(&s.wa), Some(false), "control.json ilegível: sem edição");
+    assert!(hooks.failed.lock().unwrap().is_empty());
 }
 
 /// Contra o binário real. Rodar à mão:
