@@ -17,10 +17,10 @@ pub struct Chat {
     pub live_tool: Option<LiveTool>,
     /// O motor avisou o fim do bloco que a prévia mostra: ela espera a resposta gravada, e um quadro novo é outro bloco.
     preview_ended: bool,
-    /// Primeiro evento que pode ser o registro do bloco da prévia; o que chegou antes é de outro bloco.
-    preview_from: usize,
+    /// Chegou resposta gravada desde que o bloco da prévia começou: no fim do bloco, ela é o registro dele.
+    preview_seen: bool,
     thinking_ended: bool,
-    thinking_from: usize,
+    thinking_seen: bool,
     pub command_output: HashMap<String, String>,
     /// Turno visto terminar nesta conversa, já em texto: a linha de trabalhando fica no lugar com ele, como o
     /// "Worked for 16s" do Claude Code, em vez de sair e puxar o chat para baixo.
@@ -91,10 +91,7 @@ impl Chat {
         }
         if event.kind == "assistant_msg" {
             if event.text.as_deref().is_some_and(|text| self.takes_preview(text)) { self.clear_preview(); }
-            // Resposta que não começa pelo bloco em voo é de outro: o registro dele ainda vai chegar depois desta.
-            else if !self.preview_ended && !event.text.as_deref().is_some_and(|text| starts_with_preview(text, &self.preview.text)) {
-                self.preview_from = self.events.len() + 1;
-            }
+            else if !self.preview.text.is_empty() { self.preview_seen = true; }
         }
         if event.kind == "user_msg" && event.queued() {
             let candidates: Vec<_> = self.events.iter().filter(|e| e.kind == "user_msg" && e.queued()).collect();
@@ -143,7 +140,7 @@ impl Chat {
                 if self.thinking_ended || thought_covers(&text, &self.live_thinking) {
                     self.live_thinking.clear();
                     self.thinking_ended = false;
-                }
+                } else if !self.live_thinking.is_empty() { self.thinking_seen = true; }
                 self.settled_thinking = text;
             }
             "tool_use" => {
@@ -164,7 +161,7 @@ impl Chat {
         if text.is_empty() {
             if self.live_thinking.is_empty() { return false; }
             // O registro chegou antes do fim do bloco: toma o lugar agora.
-            if self.events.get(self.thinking_from..).is_some_and(|since| since.iter().any(|e| e.kind == "thinking")) {
+            if self.thinking_seen {
                 self.live_thinking.clear();
                 self.thinking_ended = false;
                 return true;
@@ -173,7 +170,7 @@ impl Chat {
             return false;
         }
         if thought_covers(&self.settled_thinking, &text) { return false; }
-        if self.live_thinking.is_empty() || self.thinking_ended && text != self.live_thinking { self.thinking_from = self.events.len(); }
+        if self.live_thinking.is_empty() || self.thinking_ended && text != self.live_thinking { self.thinking_seen = false; }
         if text != self.live_thinking { self.thinking_ended = false; }
         self.live_thinking = text;
         true
@@ -190,7 +187,7 @@ impl Chat {
         // Mantém os eventos ao vivo e as baixas que chegaram enquanto o HTTP estava em voo.
         // Reaplicar o histórico não é evento novo: o que está em voo continua como estava.
         let live = (self.preview.clone(), self.live_thinking.clone(), self.live_tool.clone(),
-            self.settled_thinking.clone(), self.settled_tool.clone(), self.preview_ended, self.thinking_ended);
+            self.settled_thinking.clone(), self.settled_tool.clone(), (self.preview_ended, self.preview_seen, self.thinking_ended, self.thinking_seen));
         let history: Vec<_> = history.into_iter().filter(|e| !self.removed.contains(&e.id)).collect();
         let ids: HashSet<_> = history.iter().map(|e| e.id.clone()).collect();
         let current = std::mem::take(&mut self.events);
@@ -222,10 +219,12 @@ impl Chat {
     }
 
     #[allow(clippy::type_complexity)]
-    fn restore_live(&mut self, live: (Preview, String, Option<LiveTool>, String, Option<(LiveTool, Option<String>)>, bool, bool)) {
-        (self.preview, self.live_thinking, self.live_tool, self.settled_thinking, self.settled_tool, self.preview_ended, self.thinking_ended) = live;
-        // Os índices mudaram com a reaplicação: o registro do bloco em voo é o que chegar daqui em diante.
-        (self.preview_from, self.thinking_from) = (self.events.len(), self.events.len());
+    fn restore_live(&mut self, live: (Preview, String, Option<LiveTool>, String, Option<(LiveTool, Option<String>)>, (bool, bool, bool, bool))) {
+        let marks;
+        (self.preview, self.live_thinking, self.live_tool, self.settled_thinking, self.settled_tool, marks) = live;
+        (self.preview_ended, self.preview_seen, self.thinking_ended, self.thinking_seen) = marks;
+        // Pensamento já fechado quando o histórico chega: o registro dele está no histórico.
+        if self.thinking_ended { self.live_thinking.clear(); self.thinking_ended = false; }
         self.drop_recorded_preview();
     }
 
@@ -242,7 +241,7 @@ impl Chat {
         if next.text.is_empty() {
             if !next.vivo || self.preview.text.is_empty() { return false; }
             // A resposta gravada chegou antes do fim do bloco: toma o lugar agora.
-            if self.events.get(self.preview_from..).is_some_and(|since| since.iter().any(|e| e.kind == "assistant_msg")) {
+            if self.preview_seen {
                 self.clear_preview();
                 return true;
             }
@@ -260,7 +259,7 @@ impl Chat {
             return visible;
         }
         // O mesmo quadro repetido continua o bloco que acabou; texto diferente é o bloco seguinte.
-        if self.preview.text.is_empty() || self.preview_ended && next.text != self.preview.text { self.preview_from = self.events.len(); }
+        if self.preview.text.is_empty() || self.preview_ended && next.text != self.preview.text { self.preview_seen = false; }
         if next.text != self.preview.text { self.preview_ended = false; }
         self.preview = next;
         true
@@ -351,7 +350,7 @@ impl Chat {
     }
 
     pub fn clear_preview(&mut self) {
-        self.preview_ended = false;
+        (self.preview_ended, self.preview_seen) = (false, false);
         self.preview = Preview::default();
     }
 }
