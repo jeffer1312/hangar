@@ -187,7 +187,7 @@ const navegador = (executados, snapshot = SNAPSHOT) => async (verbo, args) => {
 };
 
 // A página muda a cada clique (a árvore ganha uma linha): parada, o clique parece não ter pegado e sai dos alvos.
-const mudaNoClique = (executar) => {
+const changesOnClick = (executar) => {
   let n = 0;
   return async (verbo, args) => {
     if (verbo === 'click') n += 1;
@@ -446,7 +446,7 @@ test('alvos diferentes a cada passo nao disparam a guarda', async () => {
   const r = await rodar({
     objetivo: 'alterna alvo',
     maxPassos: 4,
-    executar: mudaNoClique(navegador([])),
+    executar: changesOnClick(navegador([])),
     perguntar: async () => resposta({ click: alvos[i++ % alvos.length] }),
   });
   assert.equal(r.feito.length, 4);
@@ -1751,7 +1751,7 @@ test('auxiliar que discordou nao e reperguntado na mesma pagina; pagina nova per
   await rodar({
     objetivo: 'iniciar o cadastro',
     maxPassos: 3,
-    executar: mudaNoClique(async (verbo, args) => (verbo === 'text' ? texto : base(verbo, args))),
+    executar: changesOnClick(async (verbo, args) => (verbo === 'text' ? texto : base(verbo, args))),
     capture: async () => SCREENSHOT,
     perguntar: askWithScreenshotStatus('enviada', withBlock(0.8)),
     ajudar: async () => { chamadas += 1; return '{"acoes":[],"motivo":""}'; },
@@ -1793,7 +1793,7 @@ test('captura que passa do teto ou sem quadro: o passo segue sem imagem e os seg
     await rodar({
       objetivo: 'iniciar o cadastro',
       maxPassos: 3,
-      executar: mudaNoClique(navegador([])),
+      executar: changesOnClick(navegador([])),
       capture: withCaptureCeiling(() => { chamadas += 1; return lenta(); }, { timeoutMs: 50 }),
       perguntar: askWithScreenshotStatus('enviada', undefined, vistos, () => resposta({ click: NENHUM })),
       ajudar: async () => '{"acoes":[{"operacao":"CLICK","ref":"e2"}],"motivo":"abrir"}',
@@ -1821,7 +1821,7 @@ test('outro sem_print (arquivo nao gravado) nao desliga a captura', async () => 
 
 
 // Uma página que muda só quando o laço age nela: `acoes` decide o que cada eval de rolagem e cada clique fazem.
-const paginaViva = ({ snapshots, rolagem = () => 'ok: "fim"', clique = () => {} }) => {
+const livePage = ({ snapshots, rolagem = () => 'ok: "fim"', clique = () => {} }) => {
   const executados = [];
   let i = 0;
   const executar = async (verbo, args) => {
@@ -1837,7 +1837,7 @@ const paginaViva = ({ snapshots, rolagem = () => 'ok: "fim"', clique = () => {} 
 };
 
 test('SCROLL_DOWN rola pelo JS da pagina, sem PageDown, e a rolagem que andou nao conta como repeticao', async () => {
-  const { executar, executados } = paginaViva({ snapshots: [SNAPSHOT], rolagem: () => 'ok: "rolou 400"' });
+  const { executar, executados } = livePage({ snapshots: [SNAPSHOT], rolagem: () => 'ok: "rolou 400"' });
   let volta = 0;
   const r = await rodar({ objetivo: 'achar o item', maxPassos: 5, executar,
     perguntar: async () => (volta++ < 4 ? resposta({ op: 'SCROLL_DOWN' }) : resposta({ op: 'DONE' })) });
@@ -1847,7 +1847,7 @@ test('SCROLL_DOWN rola pelo JS da pagina, sem PageDown, e a rolagem que andou na
 });
 
 test('rolagem que nao andou tira SCROLL_DOWN das opcoes ate a pagina mudar', async () => {
-  const { executar } = paginaViva({ snapshots: [SNAPSHOT] });
+  const { executar } = livePage({ snapshots: [SNAPSHOT] });
   const vistas = [];
   let volta = 0;
   await rodar({ objetivo: 'achar o item', maxPassos: 2, executar,
@@ -1859,7 +1859,7 @@ test('rolagem que nao andou tira SCROLL_DOWN das opcoes ate a pagina mudar', asy
 test('clique que nao mudou a pagina sai dos alvos, e volta quando ela muda', async () => {
   const COM_AVISO = SNAPSHOT.replace('- link "Ver ajuda" [ref=@e1]', '- button "Aceitar cookies" [ref=@e1]');
   // e2 fica coberto: so muda a pagina depois de aceitar o aviso.
-  const { executar } = paginaViva({ snapshots: [COM_AVISO, SNAPSHOT, SNAPSHOT.replace('Iniciar cadastro', 'Cadastro iniciado')],
+  const { executar } = livePage({ snapshots: [COM_AVISO, SNAPSHOT, SNAPSHOT.replace('Iniciar cadastro', 'Cadastro iniciado')],
     clique: (ref, i) => (ref === '@e1' && i === 0) || (ref === '@e2' && i === 1) });
   const alvos = [];
   const r = await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 6, executar,
@@ -1953,7 +1953,8 @@ test('rolagem que anda numa pagina longa sem carga preguicosa segue rolando', as
 });
 
 test('clique arriscado com negacao ou so mencionado no objetivo continua parando', async () => {
-  for (const objetivo of ['preencha o cadastro mas nao clique em Iniciar cadastro', 'abra a tela Iniciar cadastro', 'clique em Iniciar cadastro completo']) {
+  for (const objetivo of ['preencha o cadastro mas nao clique em Iniciar cadastro', 'abra a tela Iniciar cadastro', 'clique em Iniciar cadastro completo',
+    'abra o modelo; não precisa clicar em Iniciar cadastro.', 'evite clicar em Iniciar cadastro']) {
     const r = await rodar({ objetivo, maxPassos: 1, executar: navegador([]),
       perguntar: async () => ({ ...resposta(), click_risk: { choice: 'e2', probabilities: { e2: 0.9, [NENHUM]: 0.1 } } }) });
     assert.match(r.parou, /arriscada/, objetivo);
@@ -1961,7 +1962,7 @@ test('clique arriscado com negacao ou so mencionado no objetivo continua parando
 });
 
 test('aviso com botao que nao so dispensa nao e clicado sozinho', async () => {
-  for (const botoes of [['Fechar pedido'], ['Cancelar', 'OK']]) {
+  for (const botoes of [['Fechar pedido'], ['Cancelar', 'OK'], ['OK']]) {
     const extra = botoes.map((b, i) => `\n    - button "${b}" [ref=@e3${i}]`).join('');
     const executados = [];
     await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 2,
@@ -1976,4 +1977,51 @@ test('aviso com botao que nao so dispensa nao e clicado sozinho', async () => {
       perguntar: async () => resposta() });
     assert.ok(!executados.some((l) => /^click @e3\d$/.test(l)), botoes.join('/'));
   }
+});
+
+
+test('rolagem que andou devolve os cliques que nao tinham pegado', async () => {
+  const alvos = [];
+  let volta = 0;
+  const base = navegador([]);
+  await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 3,
+    executar: async (verbo, args) => (verbo === 'eval' && String(args[0]).includes('scrollTop') ? 'ok: "rolou 400"' : base(verbo, args)),
+    perguntar: async (estado, q) => { alvos.push(Object.keys(q.click_target.criteria)); return volta++ === 1 ? resposta({ op: 'SCROLL_DOWN' }) : resposta(); } });
+  assert.ok(!alvos[1].includes('e2'), 'o clique sem efeito sai');
+  assert.ok(alvos[2].includes('e2'), 'depois de rolar o botao pode ter saido de baixo do rodape');
+});
+
+test('tela em que tudo ja foi tentado sem efeito para dizendo isso, sem esperar carregar', async () => {
+  const executados = [];
+  const UM = '- RootWebArea "x"\n  - button "Continuar" [ref=@e1]';
+  const r = await rodar({ objetivo: 'continuar', maxPassos: 4,
+    executar: async (verbo, args) => {
+      executados.push([verbo, ...args].join(' '));
+      if (verbo === 'snapshot') return UM;
+      if (verbo === 'url') return 'http://local/x';
+      if (verbo === 'text') return 'x';
+      return 'ok';
+    },
+    perguntar: async () => resposta({ click: 'e1', concluido: 0.1 }) });
+  assert.match(r.parou, /sem mudar a pagina/);
+  assert.ok(!executados.includes('wait --idle --timeout 5000'));
+});
+
+
+test('ultimo clique sem efeito visivel com a pagina confirmando o fim conclui', async () => {
+  const UM = '- RootWebArea "x"\n  - button "Copiar link" [ref=@e1]';
+  let volta = 0;
+  const r = await rodar({ objetivo: 'copiar o link', maxPassos: 3,
+    executar: async (verbo) => (verbo === 'snapshot' ? UM : verbo === 'url' ? 'http://local/x' : verbo === 'text' ? 'Link copiado' : 'ok'),
+    perguntar: async (estado, q) => (q.operacao ? (volta++ === 0 ? resposta({ click: 'e1', concluido: 0.1 }) : resposta({ op: 'DONE' })) : { concluido: { noul: 0.9 } }) });
+  assert.equal(r.sucesso, true, r.parou);
+});
+
+test('clique sempre coberto nao volta a cada rolagem', async () => {
+  const executados = [];
+  const base = navegador(executados);
+  await rodar({ objetivo: 'iniciar o cadastro', maxPassos: 8,
+    executar: async (verbo, args) => (verbo === 'eval' && String(args[0]).includes('scrollTop') ? 'ok: "rolou 400"' : base(verbo, args)),
+    perguntar: async (estado, q) => (Object.keys(q.click_target.criteria).includes('e2') ? resposta() : resposta({ op: 'SCROLL_DOWN' })) });
+  assert.ok(executados.filter((l) => l === 'click @e2').length <= 2, executados.filter((l) => l.startsWith('click')).join(','));
 });
