@@ -756,9 +756,9 @@ mod tests {
         assert_eq!(old[0].chat_avatar, None);
         let (tag, (shown, _)) = recent_body(&old[0].recent.clone().unwrap()[0]);
         assert_eq!((tag, shown.to_string()), (None, "oi".to_owned()));
-        let mut null = draft("d3", "pending");
-        null["chat_avatar"] = Value::Null;
-        assert_eq!(parse(&json!({"drafts": [null]})).unwrap()[0].chat_avatar, None);
+        let mut no_photo = draft("d3", "pending");
+        no_photo["chat_avatar"] = Value::Null;
+        assert_eq!(parse(&json!({"drafts": [no_photo]})).unwrap()[0].chat_avatar, None);
     }
 
     #[test]
