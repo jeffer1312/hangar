@@ -203,11 +203,13 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         # Por ultimo: parado o servidor, o lancador sai sozinho; parado o lancador, o Job leva o resto.
         $candidates = @($candidates) + @(Get-HangarBackendLaunchers $rows $candidates $name)
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+        # So o servidor que esta parada derruba pode ser o dono escondido: a saude de um aberto a mao, nao.
+        $servidorNaParada = [bool]@($candidates | Where-Object { $_.Name -match '^(hangar-server|python(?:\d+(?:\.\d+)*)?|uv)\.exe$' }).Count
         foreach ($listener in $listeners) {
             # O Windows ja deu o PID 0 como dono da porta do servidor vivo: num endereco que o hangar-server
-            # abre e com a saude dele respondendo em 127.0.0.1, nao e outro programa (quem abrisse ali
-            # responderia a saude no lugar dele).
-            if ([int]$listener.OwningProcess -eq 0 -and "$($listener.LocalAddress)" -in @('0.0.0.0', '::', '127.0.0.1') -and (Test-HangarHealth $port)) { continue }
+            # abre, com a saude dele respondendo em 127.0.0.1 e ele na parada, nao e outro programa (quem
+            # abrisse ali responderia a saude no lugar dele).
+            if ([int]$listener.OwningProcess -eq 0 -and $servidorNaParada -and "$($listener.LocalAddress)" -in @('0.0.0.0', '::', '127.0.0.1') -and (Test-HangarHealth $port)) { continue }
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {
                 if (Test-HangarServedFront $rows $name @($listener)) { continue }
                 $quem = Format-HangarPortOwner $rows $listener

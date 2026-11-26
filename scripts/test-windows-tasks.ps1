@@ -267,6 +267,17 @@ try {
     $failed = $null
     try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null } catch { $failed = "$_" }
     Assert ($failed -match 'nao iniciou') "PID 0 que sobrou na lista passou por subida sem servidor: $failed"
+    # A saude de um servidor que nao entra na parada (aberto a mao, tarefa sem processo) nao vale pelo PID 0.
+    Reset-State
+    $script:owner = $null
+    $script:idleOwner = $true
+    $script:healthy = $true
+    $script:processRows = $espera
+    $script:live = @{}
+    $script:task.State = 'Ready'
+    $failed = $null
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null } catch { $failed = "$_" }
+    Assert ($failed -match 'ocupada por outro processo' -and -not $script:events.Count) "Saude de servidor fora da parada liberou o PID 0: $failed $($script:events -join ',')"
     # Com CP_LISTEN em 127.0.0.1 a saude vai ao proprio endereco: PID 0 ali com a saude respondendo e o servidor.
     Reset-State
     $script:owner = $null

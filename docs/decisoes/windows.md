@@ -295,8 +295,9 @@ TIME_WAIT e também com ela ainda aberta.
   dono da 8765 com o servidor vivo; o diagnóstico depois da volta dizia "ninguém escutando" com a porta
   aceitando conexão. O reinício recusava antes de parar qualquer coisa. Na conferência de antes da
   parada, PID 0 em `0.0.0.0`, `::` ou `127.0.0.1` com a saúde do `hangar-server` respondendo em
-  `127.0.0.1` não conta como outro programa (quem abrisse `127.0.0.1` responderia a saúde no lugar
-  dele); sem isso, recusa como antes, sem parar nada. Depois da parada PID 0 não segura a porta (quem a
+  `127.0.0.1` e um `hangar-server` (ou o Python dele) na lista de parada não conta como outro programa
+  (quem abrisse `127.0.0.1` responderia a saúde no lugar dele; um servidor aberto à mão não seria
+  parado); sem isso, recusa como antes, sem parar nada. Depois da parada PID 0 não segura a porta (quem a
   segura de fato faz o bind exclusivo do servidor novo falhar, e a espera da versão nova acusa) nem
   prova a subida, que com só PID 0 na lista depende da saúde.
 
