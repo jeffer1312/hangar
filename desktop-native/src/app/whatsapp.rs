@@ -86,8 +86,6 @@ struct UpdateInfo {
     #[serde(default)]
     migration: bool,
     #[serde(default)]
-    checked_at: Option<String>,
-    #[serde(default)]
     failed: Option<UpdateFailed>,
 }
 
@@ -193,9 +191,9 @@ fn failed_job(state: &WaState) -> Option<(String, String)> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VersionRow { Current, Failed, Available, Migration }
 
-/// Só conectado e com a versão instalada conhecida; nas vistas de problema e de pareamento, nada.
-fn version_row(state: &WaState, view: View) -> Option<VersionRow> {
-    if view != View::Connected || state.installed_tag.is_none() { return None; }
+/// Só com a versão instalada conhecida; quem chama já é o cartão de conectado.
+fn version_row(state: &WaState) -> Option<VersionRow> {
+    state.installed_tag.as_ref()?;
     Some(match &state.update {
         None => VersionRow::Current,
         // A tentativa falhou: quem oferece de novo é a faixa do topo; a linha só procura.
@@ -573,9 +571,7 @@ impl Hangar {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if kind == "update" { this.whatsapp_update(window, cx); } else { this.whatsapp_install(cx); }
                 }));
-            page = page.child(div().id("whatsapp-job-failed").role(Role::Alert).flex().items_center().gap_3()
-                .child(div().flex_1().min_w_0().text_sm().text_color(theme::danger()).whitespace_normal().child(text))
-                .child(retry));
+            page = page.child(alert_row("whatsapp-job-failed", text, retry));
         }
         if let Some((tag, code, installed)) = update_failure(state).filter(|_| view != View::Working) {
             let text = tr("whatsapp_auto_update_failed").replace("{tag}", &tag)
@@ -587,9 +583,7 @@ impl Hangar {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if migration { this.confirm_whatsapp_migration(window, cx); } else { this.whatsapp_update(window, cx); }
                 }));
-            page = page.child(div().id("whatsapp-auto-update-failed").role(Role::Alert).flex().items_center().gap_3()
-                .child(div().flex_1().min_w_0().text_sm().text_color(theme::danger()).whitespace_normal().child(text))
-                .child(retry));
+            page = page.child(alert_row("whatsapp-auto-update-failed", text, retry));
         }
         page = match view {
             View::Off => page.children(self.render_whatsapp_off(cx)),
@@ -671,9 +665,8 @@ impl Hangar {
         let mut card = pair_card();
         if status.is_some_and(|s| s.state == "logged_out") { card = card.child(muted(tr("whatsapp_logged_out"))); }
         if let Some(code) = status.and_then(|s| s.error.as_ref()).and_then(code_of) {
-            card = card.child(div().id("whatsapp-pair-error").role(Role::Alert).flex().items_center().gap_3()
-                .child(div().flex_1().min_w_0().text_sm().text_color(theme::danger()).whitespace_normal().child(code_text("whatsapp_status_err_", &code)))
-                .child(Button::new("whatsapp-pair-retry").outline().small().label(tr("server_retry")).disabled(busy)
+            card = card.child(alert_row("whatsapp-pair-error", code_text("whatsapp_status_err_", &code),
+                Button::new("whatsapp-pair-retry").outline().small().label(tr("server_retry")).disabled(busy)
                     .on_click(cx.listener(|this, _, window, cx| {
                         if this.whatsapp.by_phone { this.whatsapp_request_code(cx); } else { this.whatsapp_by_qr(window, cx); }
                     }))));
@@ -734,7 +727,7 @@ impl Hangar {
             last_seconds: status.last_message_at.as_deref().and_then(seconds_since), since: status.since.as_deref(),
             messages: t.messages, chats: t.chats, groups: t.groups, media_saved: t.media_saved,
         });
-        if let Some(row) = version_row(state, View::Connected) { summary = summary.child(self.render_whatsapp_version(state, row, cx)); }
+        if let Some(row) = version_row(state) { summary = summary.child(self.render_whatsapp_version(state, row, cx)); }
         let media = settings_box().id("whatsapp-media").p_4().gap_1()
             .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("whatsapp_media_title")))
             .child(div().pb_1().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("whatsapp_media_desc")))
@@ -748,8 +741,7 @@ impl Hangar {
     fn render_whatsapp_version(&self, state: &WaState, row: VersionRow, cx: &mut Context<Self>) -> Div {
         let busy = self.whatsapp.busy.is_some();
         let latest = state.update.as_ref().map(|update| update.latest.clone()).unwrap_or_default();
-        let checked = state.update_checked_at.as_deref().or_else(|| state.update.as_ref().and_then(|u| u.checked_at.as_deref()))
-            .and_then(seconds_since).map(super::side::ago);
+        let checked = state.update_checked_at.as_deref().and_then(seconds_since).map(super::side::ago);
         let mut head = div().flex().flex_wrap().items_center().gap_1().text_sm()
             .child(tr("whatsapp_version_label"))
             .child(div().font_weight(FontWeight::SEMIBOLD).child(state.installed_tag.clone().unwrap_or_default()));
@@ -920,6 +912,13 @@ fn alert_line(id: &'static str, text: String) -> Stateful<Div> {
     div().id(id).role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(text)
 }
 
+/// A falha em vermelho com a ação que tenta de novo ao lado.
+fn alert_row(id: &'static str, text: String, action: Button) -> Stateful<Div> {
+    div().id(id).role(Role::Alert).flex().items_center().gap_3()
+        .child(div().flex_1().min_w_0().text_sm().text_color(theme::danger()).whitespace_normal().child(text))
+        .child(action)
+}
+
 fn notice(id: &'static str, color: Hsla, icon: IconName, text: String) -> Stateful<Div> {
     div().id(id).role(Role::Status).w_full().px(px(12.)).py(px(10.)).flex().items_start().gap(px(10.)).rounded(px(10.)).border_1()
         .border_color(color.alpha(0.3)).bg(color.alpha(0.08)).text_sm()
@@ -1051,7 +1050,7 @@ mod tests {
     /// A linha da versão só existe conectado e com a tag instalada; o estado dela sai do `update`.
     #[test]
     fn the_version_row_follows_the_update_check() {
-        let row = |value: serde_json::Value| { let s = state(value); version_row(&s, view_of(&s)) };
+        let row = |value: serde_json::Value| version_row(&state(value));
         assert_eq!(row(connected(Some("v0.3.0"), json!(null))), Some(VersionRow::Current));
         assert_eq!(row(connected(Some("v0.3.0"), newer(false, json!(null)))), Some(VersionRow::Available));
         assert_eq!(row(connected(Some("v0.1.1"), newer(true, json!(null)))), Some(VersionRow::Migration));
@@ -1059,19 +1058,13 @@ mod tests {
         assert_eq!(row(connected(Some("v0.3.0"), newer(false, failed.clone()))), Some(VersionRow::Failed), "quem tenta de novo é a faixa");
         assert_eq!(row(connected(Some("v0.1.1"), newer(true, failed))), Some(VersionRow::Failed));
         assert_eq!(row(connected(None, newer(false, json!(null)))), None, "sem a tag instalada, nada");
-        let mut unpaired = connected(Some("v0.3.0"), newer(false, json!(null)));
-        unpaired["status"] = json!({"state": "unpaired"});
-        assert_eq!(row(unpaired), None, "vista de pareamento");
-        let mut stopped = connected(Some("v0.3.0"), json!(null));
-        stopped["service"] = json!("stopped");
-        assert_eq!(row(stopped), None, "vista de problema");
     }
 
     /// Servidor antigo, sem os campos novos: lê igual e não mostra linha.
     #[test]
     fn an_older_server_without_the_version_fields_still_reads() {
         let s = state(base("running", Some(json!({"state": "connected"}))));
-        assert_eq!(version_row(&s, View::Connected), None);
+        assert_eq!(version_row(&s), None);
         assert_eq!(update_failure(&s), None);
     }
 
