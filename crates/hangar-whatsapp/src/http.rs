@@ -363,6 +363,15 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     let Ok(_guard) = wa.installer.inline() else { return busy() };
     // De pé é o serviço respondendo: só a falta de conexão leva ao ramo do disco, com as guardas dele.
     match wa.client.call(reqwest::Method::POST, "/v1/wipe", &[], Some(&json!({"confirm": true}))).await {
+        Ok(reply) if (200..300).contains(&reply.status) => {
+            // As cópias de antes de uma volta são do Hangar: o binário não as conhece.
+            let data = wa.ctx.paths.data.clone();
+            return match tokio::task::spawn_blocking(move || wipe_copies(&data, false, Vec::new())).await {
+                Ok(Ok(_)) => relay(reply),
+                Ok(Err(partial)) => partial_wipe(partial),
+                Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
+            };
+        }
         Ok(reply) => return relay(reply),
         Err(CallError::Off(_)) => {}
         Err(error) => return call_error(&error),
@@ -376,17 +385,19 @@ async fn wipe(wa: &WhatsApp, body: &Value) -> Response {
     let data = wa.ctx.paths.data.clone();
     match tokio::task::spawn_blocking(move || wipe_data(&data)).await {
         Ok(Ok(())) => json_response(StatusCode::OK, json!({"logout": "not_done"})),
-        Ok(Err(partial)) => {
-            tracing::warn!(detail = %partial.detail, removed = ?partial.removed, "whatsapp: apagar os dados falhou");
-            let (code, msg) = if partial.removed.is_empty() {
-                ("whatsapp_wipe_failed", "não consegui apagar os dados do WhatsApp")
-            } else {
-                ("whatsapp_wipe_partial", "apaguei só parte dos dados do WhatsApp")
-            };
-            detail(StatusCode::INTERNAL_SERVER_ERROR, code, msg, json!({"removed": partial.removed, "failed": partial.failed}))
-        }
+        Ok(Err(partial)) => partial_wipe(partial),
         Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "whatsapp_wipe_failed", "a limpeza parou no meio"),
     }
+}
+
+fn partial_wipe(partial: Partial) -> Response {
+    tracing::warn!(detail = %partial.detail, removed = ?partial.removed, "whatsapp: apagar os dados falhou");
+    let (code, msg) = if partial.removed.is_empty() {
+        ("whatsapp_wipe_failed", "não consegui apagar os dados do WhatsApp")
+    } else {
+        ("whatsapp_wipe_partial", "apaguei só parte dos dados do WhatsApp")
+    };
+    detail(StatusCode::INTERNAL_SERVER_ERROR, code, msg, json!({"removed": partial.removed, "failed": partial.failed}))
 }
 
 async fn uninstall(wa: &WhatsApp, body: &Value) -> Response {
@@ -654,10 +665,34 @@ fn wipe_data(data: &Path) -> Result<(), Partial> {
             }
         }
     }
+    let removed = wipe_copies(data, true, removed)?;
     match std::fs::remove_dir_all(data.join("media")) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(stop("media".into(), e, removed)),
         _ => Ok(()),
     }
+}
+
+/// Cópias do `messages.db` também são mensagens: as do binário antes de migrar (`.schema<v>.bak`, só com o
+/// serviço parado, porque de pé o `/v1/wipe` as apaga) e as que a volta de uma atualização deixa.
+fn wipe_copies(data: &Path, with_backups: bool, mut removed: Vec<String>) -> Result<Vec<String>, Partial> {
+    let entries = match std::fs::read_dir(data) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
+        Err(e) => return Err(Partial { detail: format!("{}: {e}", data.display()), failed: data.display().to_string(), removed }),
+    };
+    let mut names: Vec<String> = entries.flatten().filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with("messages.db.migrated") || name == "messages.db.restoring"
+            || (with_backups && name.starts_with("messages.db.schema") && (name.ends_with(".bak") || name.ends_with(".bak.tmp"))))
+        .collect();
+    names.sort();
+    for name in names {
+        match std::fs::remove_file(data.join(&name)) {
+            Ok(()) => removed.push(name),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Partial { detail: format!("{name}: {e}"), failed: name, removed }),
+        }
+    }
+    Ok(removed)
 }
 
 #[cfg(test)]

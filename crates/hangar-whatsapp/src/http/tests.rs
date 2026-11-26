@@ -368,6 +368,39 @@ async fn a_wipe_during_an_update_waits_even_with_the_service_up() {
     assert!(!s.seen.lock().unwrap().iter().any(|r| r.ends_with("/v1/wipe")), "o pedido não chegou ao serviço");
 }
 
+/// Apagar leva também as cópias do banco: parado, as do binário e as da volta; de pé, o binário apaga as dele e o
+/// Hangar as da volta.
+#[tokio::test]
+async fn a_wipe_takes_the_copies_of_the_messages_too() {
+    let copies = ["messages.db.schema1.bak", "messages.db.schema1.bak.tmp", "messages.db.migrated", "messages.db.migrated-wal", "messages.db.restoring"];
+    let s = Scene::new();
+    let data = s.paths().data.clone();
+    std::fs::create_dir_all(&data).unwrap();
+    for name in copies.iter().chain(&["messages.db", "control.key"]) {
+        std::fs::write(data.join(name), b"x").unwrap();
+    }
+    let (status, body) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
+    assert_eq!((status, body), (200, json!({"logout": "not_done"})));
+    for name in copies.iter().chain(&["messages.db"]) {
+        assert!(!data.join(name).exists(), "{name} ficou");
+    }
+    assert!(data.join("control.key").exists(), "o control fica para o binário subir igual");
+
+    let s = Scene::new();
+    s.serve(Signing::Signed).await;
+    let data = s.paths().data.clone();
+    std::fs::create_dir_all(&data).unwrap();
+    for name in copies {
+        std::fs::write(data.join(name), b"x").unwrap();
+    }
+    let (status, _) = s.call(Method::POST, "/api/whatsapp/wipe", true, Some(r#"{"confirm":true}"#)).await;
+    assert_eq!(status, 200);
+    for gone in ["messages.db.migrated", "messages.db.migrated-wal", "messages.db.restoring"] {
+        assert!(!data.join(gone).exists(), "{gone} ficou");
+    }
+    assert!(data.join("messages.db.schema1.bak").exists(), "a cópia do binário é do /v1/wipe dele, que aqui é de mentira");
+}
+
 /// Um arquivo que não sai no meio (no Windows, aberto pelo serviço): a resposta diz o que já saiu.
 #[cfg(unix)]
 #[tokio::test]
