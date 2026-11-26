@@ -25,6 +25,7 @@ vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 0 }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {}, deleteItemAsync: async () => {} }));
 vi.mock('expo-linking', () => ({ openURL: vi.fn() }));
+vi.mock('../config/AntigravityTermos', () => ({ AntigravityTermos: () => null }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
 // O login do Google usa o teclado nativo, que não carrega no teste.
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: ReactNode }) => children }));
