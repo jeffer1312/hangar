@@ -324,6 +324,15 @@ it('serviço sem a edição deixa o cartão com a frase de atualizar', async () 
   expect(field()?.value).toBe('outro');
 });
 
+it('o campo de edição avisa quantos caracteres invisíveis vão junto', async () => {
+  await openDraft('e8', editable(draft('e8', { text: 'oi\u200B tudo\u202Ebem' })));
+  await act(async () => { button(m.whatsapp_draft_edit())!.click(); });
+  expect(container.textContent).toContain(m.whatsapp_draft_edit_invisibles({ count: 2 }));
+  await type('oi tudo bem');
+  expect(container.textContent).not.toContain(m.whatsapp_draft_edit_invisibles({ count: 2 }));
+  expect(container.textContent).not.toContain(m.whatsapp_draft_edit_invisibles({ count: 0 }));
+});
+
 it('campo aberto continua editado quando o evento passa a dizer edit: false: nunca sai o original', async () => {
   mocks.sendEdited.mockRejectedValueOnce(Object.assign(new Error('409: api'), { status: 409, code: 'whatsapp_edit_unsupported' }));
   await openDraft('e7', editable(draft('e7')));

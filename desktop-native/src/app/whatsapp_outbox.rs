@@ -180,6 +180,9 @@ pub(crate) type MarkedText = (SharedString, Vec<Range<usize>>);
 
 /// O texto com cada caractere invisível ou de controle trocado pela marca `⟨U+200B⟩`. Quebra de linha e tabulação ficam como
 /// estão.
+/// Quantos caracteres do texto viram marca: no campo da edição eles não aparecem, e o aviso diz que vão junto.
+pub(super) fn invisible_count(text: &str) -> usize { mark_invisibles(text).1.len() }
+
 pub(crate) fn mark_invisibles(text: &str) -> MarkedText {
     let (mut out, mut marks) = (String::with_capacity(text.len()), Vec::new());
     let (mut prev, mut prev_marked) = (None::<u32>, false);
@@ -466,7 +469,8 @@ impl WhatsAppOutbox {
                 let problem = text_problem(&field, count, card.draft.file.is_some());
                 let undo = edit_button("edit-undo", &id, tr_shared("whatsapp_draft_edit_undo", &[]), off).on_click(edit_on(&id, false, cx));
                 let input = Textarea::new(&editor.input).aria_label(tr_shared("whatsapp_draft_text_editing", &[("count", &count.to_string())])).disabled(off);
-                (TextBlock::Editing { count, field: input.into_any_element(), undo }, edited_text(&editor.original, field).is_some(), problem)
+                let hidden = invisible_count(&field);
+                (TextBlock::Editing { count, hidden, field: input.into_any_element(), undo }, edited_text(&editor.original, field).is_some(), problem)
             }
             None => {
                 let edit = self.edit.then(|| edit_button("edit", &id, tr_shared("whatsapp_draft_edit", &[]), off).on_click(edit_on(&id, true, cx)));
@@ -489,7 +493,8 @@ const EDIT_MAX_ROWS: usize = 16;
 /// "Desfazer edição" e a contagem do campo.
 pub(crate) enum TextBlock<'a> {
     Exact { text: &'a MarkedText, edit: Option<Button> },
-    Editing { count: usize, field: AnyElement, undo: Button },
+    /// `hidden`: invisíveis no campo, que o editor mostra crus.
+    Editing { count: usize, hidden: usize, field: AnyElement, undo: Button },
 }
 
 /// O "Editar" e o "Desfazer edição": link à direita do rótulo do texto.
@@ -531,9 +536,10 @@ pub(crate) fn draft_card(d: &Draft, block: TextBlock, bubbles: &[RecentBubble], 
             .child(label_row(tr_shared("whatsapp_draft_text", &[("count", &d.text.chars().count().to_string())]), edit))
             .when(!d.text.is_empty(), |el| el.child(text_box().id(SharedString::from(format!("whatsapp-text-{id}"))).max_h(px(132.)).overflow_y_scroll()
                 .whitespace_normal().child(StyledText::new(shown.clone()).with_highlights(marks.iter().map(|range| (range.clone(), mark))))))),
-        TextBlock::Editing { count, field, undo } => Some(div().flex().flex_col().gap_1()
+        TextBlock::Editing { count, hidden, field, undo } => Some(div().flex().flex_col().gap_1()
             .child(label_row(tr_shared("whatsapp_draft_text_editing", &[("count", &count.to_string())]), Some(undo)))
-            .child(text_box().min_h(px(EDIT_MIN_HEIGHT)).border_1().border_color(theme::warning()).child(field))),
+            .child(text_box().min_h(px(EDIT_MIN_HEIGHT)).border_1().border_color(theme::warning()).child(field))
+            .when(hidden > 0, |el| el.child(warn_line(tr_shared("whatsapp_draft_edit_invisibles", &[("count", &hidden.to_string())]))))),
     };
     let body = div().flex().flex_col().gap_1().text_xs().text_color(theme::text())
         .child(destination)
@@ -914,6 +920,13 @@ mod tests {
         assert_eq!(refusal_text(None, None), None);
     }
 
+    #[test]
+    fn the_edit_field_counts_the_invisible_characters_it_hides() {
+        assert_eq!(invisible_count("oi\u{200B} tudo\u{202E}bem"), 2);
+        assert_eq!(invisible_count("linha 1\nlinha 2\tfim"), 0, "quebra de linha e tabulação aparecem");
+        assert_eq!(invisible_count("❤️ 👨\u{200D}👩\u{200D}👧"), 0, "emoji não conta");
+    }
+
     /// `tr_shared` devolve a própria chave quando falta a frase: aqui a falta vira erro.
     #[test]
     fn every_shared_phrase_exists_in_both_languages() {
@@ -927,7 +940,7 @@ mod tests {
             "whatsapp_draft_err_outdated", "whatsapp_draft_kind_image", "whatsapp_draft_kind_video", "whatsapp_draft_kind_audio",
             "whatsapp_draft_kind_sticker", "whatsapp_draft_kind_document", "whatsapp_draft_edit", "whatsapp_draft_edit_undo",
             "whatsapp_draft_text_editing", "whatsapp_draft_send_edited", "whatsapp_draft_err_edit_unsupported", "whatsapp_draft_err_text_empty",
-            "whatsapp_draft_err_text_long", "whatsapp_draft_err_sent_text_mismatch", "whatsapp_draft_avatar"];
+            "whatsapp_draft_err_text_long", "whatsapp_draft_err_sent_text_mismatch", "whatsapp_draft_avatar", "whatsapp_draft_edit_invisibles"];
         for english in [false, true] {
             crate::i18n::english_in_this_thread(english);
             let missing: Vec<&str> = keys.into_iter().filter(|key| tr_shared(key, &[]) == *key).collect();

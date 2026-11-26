@@ -130,6 +130,8 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
   const [editing, setEditing] = useState(false);
   const [field, setField] = useState(draft.text);
   const typed = useMemo(() => draftField(field), [field]);
+  // O campo mostra o texto cru: o que a leitura marcaria vai junto sem aparecer.
+  const hidden = useMemo(() => markInvisibles(typed.text).filter((p) => p.kind === 'mark').length, [typed.text]);
   const original = useMemo(() => normalizeDraftText(draft.text), [draft.text]);
   const changed = editing && typed.text !== original;
   // Só o texto mudado vai pela edição; o igual sai pelo Enviar de sempre, que já passou pelas regras do serviço.
@@ -177,7 +179,9 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
         {editing ? <TextInput multiline value={field} onChangeText={setField} editable={!busy} autoFocus
           accessibilityLabel={editingLabel}
           style={[styles.mono, styles.field, { color: c.text, backgroundColor: c.inset, borderColor: warn }]} />
-          : draft.text ? <ScrollView nestedScrollEnabled style={styles.textBox}>
+          : null}
+        {editing && hidden ? <Text style={[styles.small, { color: warn }]}>{m.whatsapp_draft_edit_invisibles({ count: hidden })}</Text> : null}
+        {editing ? null : draft.text ? <ScrollView nestedScrollEnabled style={styles.textBox}>
             <Marked text={draft.text} selectable style={[styles.mono, { color: c.text }]} />
           </ScrollView> : null}
       </Block>

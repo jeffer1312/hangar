@@ -1433,6 +1433,7 @@
   "whatsapp_draft_kind_document": "documento",
   "whatsapp_draft_edit": "Editar",
   "whatsapp_draft_edit_undo": "Desfazer edição",
+  "whatsapp_draft_edit_invisibles": "O texto tem caracteres invisíveis ({count}). Eles vão junto se você enviar.",
   "whatsapp_draft_text_editing": "Texto (editando · {count} caracteres)",
   "whatsapp_draft_send_edited": "Enviar texto editado",
   "whatsapp_draft_err_edit_unsupported": "Atualize o serviço do WhatsApp para enviar um texto editado. Nada foi enviado.",
