@@ -4,7 +4,7 @@
     "name": "Google Gmail",
     "category": "productivity",
     "description": "Leitura, busca e gerenciamento de e-mails no Gmail via servidor MCP oficial do Google.",
-    "url": "https://gmailmcp.googleapis.com/mcp/v1",
+    "url": "https://gmailmcp.googleapis.com/mcp/v1self",
     "url_editable": false,
     "auth_kind": "oauth_manual_client",
     "default_scopes": [
@@ -16,6 +16,7 @@
       "steps": [
         "No Google Cloud Console, crie ou selecione um projeto e habilite a API/MCP do Gmail para uso com agentes.",
         "Configure a tela de consentimento OAuth: em conta pessoal (@gmail.com) use Público-alvo Externo em modo Testing; em Google Workspace use Interno para evitar expiração semanal.",
+        "Se escolheu Externo em modo Testing, acesse Público-alvo → Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail do Google antes de tentar conectar.",
         "Crie uma credencial do tipo ID do cliente OAuth, marque a opção \"Use this client for an AI-powered agent\" (is_agentic) e adicione a URI de redirecionamento http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
         "Copie o Client ID e o Client Secret para os campos abaixo. Atenção: em contas @gmail.com em modo Testing, o refresh token expira a cada 7 dias e exige clicar em Reconectar."
       ],
@@ -39,6 +40,7 @@
       "steps": [
         "No Google Cloud Console, crie ou selecione um projeto e habilite a API/MCP do Google Drive.",
         "Configure a tela de consentimento OAuth: em conta pessoal (@gmail.com) use Externo em modo Testing; em Google Workspace prefira Interno para não expirar semanalmente.",
+        "Se escolheu Externo em modo Testing, acesse Público-alvo → Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail do Google antes de conectar a integração.",
         "Crie um ID do cliente OAuth marcando a opção \"Use this client for an AI-powered agent\" (is_agentic) e cadastre http://127.0.0.1:<porta>/api/integrations/oauth/callback como URI de redirecionamento autorizada.",
         "Copie o Client ID e o Client Secret abaixo. Em contas @gmail.com em modo Testing, a autorização expira após 7 dias (use Reconectar quando solicitado)."
       ],
@@ -62,6 +64,7 @@
       "steps": [
         "No Google Cloud Console, crie ou selecione um projeto e habilite a API/MCP do Google Calendar.",
         "Configure a tela de consentimento OAuth: conta pessoal (@gmail.com) usa Externo em modo Testing; Google Workspace pode usar Interno.",
+        "Se escolheu Externo em modo Testing, acesse Público-alvo → Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail do Google antes de conectar a integração.",
         "Crie um ID do cliente OAuth marcando a opção \"Use this client for an AI-powered agent\" (is_agentic) com URI de redirecionamento http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
         "Informe o Client ID e o Client Secret abaixo. Em contas @gmail.com pessoais em modo Testing, o acesso expira a cada 7 dias e pede Reconectar."
       ],
@@ -106,7 +109,7 @@
       "title": "Configurar Slack App com suporte MCP",
       "steps": [
         "Acesse api.slack.com/apps, crie um novo App no seu workspace e habilite o suporte a MCP (is_mcp_enabled) com PKCE no manifesto.",
-        "Em OAuth & Permissions, cadastre a URI de redirecionamento http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
+        "Em OAuth & Permissions, cadastre a URI de redirecionamento http://127.0.0.1:<porta>/api/integrations/oauth/callback e adicione em User Token Scopes os escopos necessários para leitura e busca: search:read, channels:history, groups:history, im:history, mpim:history, channels:read e users:read.",
         "Copie o Client ID (e Client Secret, se exigido pelo app) para os campos abaixo e conclua o login no navegador."
       ],
       "docs_hint": "api.slack.com/apps -> Basic Information & OAuth -> Redirect URLs"
@@ -158,7 +161,7 @@
     "id": "cloudflare",
     "name": "Cloudflare",
     "category": "cloud",
-    "description": "Documentação, Workers, DNS e serviços da conta Cloudflare (edite a URL para escolher outro endpoint MCP da Cloudflare).",
+    "description": "Busca na documentação da Cloudflare pela URL padrão (docs.mcp.cloudflare.com/mcp); edite a URL para conectar aos endpoints MCP de Workers, DNS e serviços da conta.",
     "url": "https://docs.mcp.cloudflare.com/mcp",
     "url_editable": true,
     "auth_kind": "oauth_dcr",

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Query, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
@@ -15,9 +15,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hangar_integrations::{
     AuthConfig, ClientConfig, IntegrationConfig, IntegrationRegistry, IntegrationSecrets,
-    IntegrationStatus, McpClientManager, MemoryKeyStore, OAUTH_CALLBACK_PATH, OAuthError,
-    OAuthManager, OAuthOrigin, OAuthStartInput, OAuthStartOutcome, PermissionPolicy,
-    PresetAuthKind, SecretStore, ToolsCache, Transport, catalog, compute_status, find_preset,
+    IntegrationStatus, IntegrationUpdate, McpClientManager, MemoryKeyStore, OAUTH_CALLBACK_PATH,
+    OAuthError, OAuthManager, OAuthOrigin, OAuthStartInput, OAuthStartOutcome, PermissionPolicy,
+    PresetAuthKind, SecretStore, TokenRefresher, ToolsCache, Transport, catalog, compute_status,
+    find_preset,
 };
 use ring::digest::{SHA256, digest};
 use rmcp::model::{
@@ -153,6 +154,8 @@ struct MockOAuthServerState {
     in_flight_refresh: Arc<AtomicUsize>,
     max_concurrent_refresh: Arc<AtomicUsize>,
     refresh_tokens_seen: Arc<Mutex<Vec<String>>>,
+    authorize_resources: Arc<Mutex<Vec<String>>>,
+    token_resources: Arc<Mutex<Vec<(String, String)>>>,
     token_seq: Arc<AtomicUsize>,
     code_seq: Arc<AtomicUsize>,
     refresh_gate: RefreshGate,
@@ -174,6 +177,8 @@ impl MockOAuthServerState {
             in_flight_refresh: Arc::new(AtomicUsize::new(0)),
             max_concurrent_refresh: Arc::new(AtomicUsize::new(0)),
             refresh_tokens_seen: Arc::new(Mutex::new(Vec::new())),
+            authorize_resources: Arc::new(Mutex::new(Vec::new())),
+            token_resources: Arc::new(Mutex::new(Vec::new())),
             token_seq: Arc::new(AtomicUsize::new(0)),
             code_seq: Arc::new(AtomicUsize::new(0)),
             refresh_gate: Arc::new(Mutex::new(None)),
@@ -417,6 +422,10 @@ async fn authorize_handler(
         }
     }
 
+    if let Some(res) = params.get("resource") {
+        state.authorize_resources.lock().await.push(res.clone());
+    }
+
     let seq = state.code_seq.fetch_add(1, Ordering::SeqCst) + 1;
     let code = format!("auth-code-{seq}");
     state.codes.lock().await.insert(
@@ -448,6 +457,13 @@ async fn token_handler(State(state): State<MockOAuthServerState>, body: Bytes) -
     let grant_type = form.get("grant_type").map(String::as_str).unwrap_or("");
     let client_id = form.get("client_id").cloned().unwrap_or_default();
     let client_secret = form.get("client_secret").cloned();
+    if let Some(res) = form.get("resource") {
+        state
+            .token_resources
+            .lock()
+            .await
+            .push((grant_type.to_owned(), res.clone()));
+    }
 
     let is_cimd = state.cfg.cimd_supported && client_id.starts_with("https://");
     if !is_cimd {
@@ -683,7 +699,7 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
     let expected = [
         (
             "google-gmail",
-            "https://gmailmcp.googleapis.com/mcp/v1",
+            "https://gmailmcp.googleapis.com/mcp/v1self",
             PresetAuthKind::OAuthManualClient,
             false,
             true,
@@ -817,10 +833,37 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
             if id.starts_with("google-") {
                 assert!(joined.contains("is_agentic") && joined.contains("@gmail.com"));
                 assert!(joined.contains("7 dias"));
+                assert!(
+                    joined.contains("Público-alvo")
+                        && joined.contains("Usuários de teste")
+                        && joined.contains("Adicionar usuários"),
+                    "guia Google de {id} deve orientar cadastro em Usuários de teste"
+                );
             }
             if id == "slack" {
                 assert!(joined.contains("is_mcp_enabled") && joined.contains("PKCE"));
+                for scope in [
+                    "search:read",
+                    "channels:history",
+                    "groups:history",
+                    "im:history",
+                    "mpim:history",
+                    "channels:read",
+                    "users:read",
+                ] {
+                    assert!(
+                        joined.contains(scope),
+                        "guia Slack deve listar o User Token Scope {scope}"
+                    );
+                }
             }
+        }
+        if id == "cloudflare" {
+            assert!(
+                preset.description.contains("docs.mcp.cloudflare.com/mcp")
+                    && preset.description.contains("Workers"),
+                "descrição da Cloudflare deve explicar o endpoint padrão de docs e edição para Workers/DNS"
+            );
         }
     }
     assert!(find_preset("nao-existe").is_none());
@@ -1308,7 +1351,7 @@ async fn state_security_single_use_entropy_expiry_and_provider_error() {
         prov_err,
         Err(OAuthError::ProviderError {
             error: "access_denied".to_owned(),
-            description: Some("usuario recusou".to_owned()),
+            description: Some("acesso negado pelo usuário ou provedor".to_owned()),
         })
     );
     // Replay do mesmo state falha com InvalidState.
@@ -1936,7 +1979,10 @@ async fn discovery_prefers_all_path_aware_candidates_before_root_fallback() {
             get(|State(st): State<TenantOrderState>| async move {
                 json_response(
                     StatusCode::OK,
-                    json!({"authorization_servers": [format!("{}/tenant-b", st.base_url)]}),
+                    json!({
+                        "resource": format!("{}/mcp", st.base_url),
+                        "authorization_servers": [format!("{}/tenant-b", st.base_url)]
+                    }),
                 )
             }),
         )
@@ -1946,6 +1992,7 @@ async fn discovery_prefers_all_path_aware_candidates_before_root_fallback() {
                 json_response(
                     StatusCode::OK,
                     json!({
+                        "issuer": st.base_url,
                         "authorization_endpoint": format!("{}/authorize-root-errado", st.base_url),
                         "token_endpoint": format!("{}/token-root", st.base_url),
                         "registration_endpoint": format!("{}/register", st.base_url)
@@ -1959,6 +2006,7 @@ async fn discovery_prefers_all_path_aware_candidates_before_root_fallback() {
                 json_response(
                     StatusCode::OK,
                     json!({
+                        "issuer": format!("{}/tenant-b", st.base_url),
                         "authorization_endpoint": format!("{}/authorize-tenant-b", st.base_url),
                         "token_endpoint": format!("{}/token-tenant-b", st.base_url)
                     }),
@@ -2235,6 +2283,892 @@ async fn pending_authorize_url_helpers_track_latest_and_clear_on_callback_or_exp
         expired_mgr.latest_pending_authorize_url("pending-helpers"),
         None
     );
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_sends_canonical_rfc8707_resource_across_authorize_exchange_and_refresh() {
+    let (addr, state, server_handle) = spawn_mock_oauth_server(MockOAuthConfig::default()).await;
+    let expected_resource = format!("http://{addr}/mcp");
+
+    let env = TestEnv::new();
+    env.registry
+        .create(remote_config(
+            "res-bound",
+            format!("http://{addr}/mcp/?project_ref=abc"),
+            None,
+            AuthConfig::OAuthDcr,
+        ))
+        .unwrap();
+
+    let oauth = env.oauth_manager();
+    let OAuthStartOutcome::OpenUrl { authorize_url, .. } = oauth
+        .start(
+            "res-bound",
+            OAuthStartInput {
+                origin_client: OAuthOrigin::Desktop,
+                local_port: 8765,
+                public_base_url: None,
+                cimd_client_id_url: None,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("esperava OpenUrl");
+    };
+    assert_eq!(
+        query_params(&authorize_url).get("resource"),
+        Some(&expected_resource)
+    );
+
+    let (code, state_param) = simulate_browser_authorize(&authorize_url).await;
+    assert_eq!(
+        *state.authorize_resources.lock().await,
+        vec![expected_resource.clone()]
+    );
+
+    oauth
+        .handle_callback(&state_param, Some(&code), None, None)
+        .await
+        .unwrap();
+    oauth.refresh_access_token("res-bound").await.unwrap();
+
+    assert_eq!(
+        *state.token_resources.lock().await,
+        vec![
+            ("authorization_code".to_owned(), expected_resource.clone()),
+            ("refresh_token".to_owned(), expected_resource),
+        ]
+    );
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_callback_aborts_without_persisting_if_target_config_changes_in_flight() {
+    #[derive(Clone)]
+    struct GateState {
+        base_url: String,
+        token_gate: Arc<Mutex<Option<(Arc<Notify>, Arc<Notify>)>>>,
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{addr}");
+    let token_started = Arc::new(Notify::new());
+    let token_allow = Arc::new(Notify::new());
+    let gate_state = GateState {
+        base_url: base_url.clone(),
+        token_gate: Arc::new(Mutex::new(Some((
+            token_started.clone(),
+            token_allow.clone(),
+        )))),
+    };
+
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(|State(st): State<GateState>| async move {
+                json_response(
+                    StatusCode::OK,
+                    json!({
+                        "resource": format!("{}/mcp", st.base_url),
+                        "authorization_servers": [st.base_url]
+                    }),
+                )
+            }),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(|State(st): State<GateState>| async move {
+                json_response(
+                    StatusCode::OK,
+                    json!({
+                        "issuer": st.base_url,
+                        "authorization_endpoint": format!("{}/authorize", st.base_url),
+                        "token_endpoint": format!("{}/token", st.base_url)
+                    }),
+                )
+            }),
+        )
+        .route(
+            "/authorize",
+            get(|Query(params): Query<HashMap<String, String>>| async move {
+                let redirect_uri = params.get("redirect_uri").cloned().unwrap_or_default();
+                let state_param = params.get("state").cloned().unwrap_or_default();
+                let location = format!("{redirect_uri}?code=gate-code-1&state={state_param}");
+                Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header(header::LOCATION, location)
+                    .body(Body::empty())
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/token",
+            post(|State(st): State<GateState>| async move {
+                if let Some((started, allow)) = st.token_gate.lock().await.take() {
+                    started.notify_one();
+                    let _ = tokio::time::timeout(Duration::from_secs(5), allow.notified()).await;
+                }
+                json_response(
+                    StatusCode::OK,
+                    json!({
+                        "access_token": "tok-tardio",
+                        "token_type": "Bearer",
+                        "refresh_token": "rt-tardio",
+                        "expires_in": 3600
+                    }),
+                )
+            }),
+        )
+        .route("/mcp", post(|| async { StatusCode::BAD_REQUEST }))
+        .with_state(gate_state);
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let env = TestEnv::new();
+    env.registry
+        .create(remote_config(
+            "target-change",
+            format!("{base_url}/mcp"),
+            None,
+            AuthConfig::OAuthManualClient {
+                client_id: "cid-1".to_owned(),
+                scopes: vec![],
+            },
+        ))
+        .unwrap();
+
+    let oauth = env.oauth_manager();
+    let OAuthStartOutcome::OpenUrl { authorize_url, .. } = oauth
+        .start(
+            "target-change",
+            OAuthStartInput {
+                origin_client: OAuthOrigin::Desktop,
+                local_port: 8765,
+                public_base_url: None,
+                cimd_client_id_url: None,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("esperava OpenUrl");
+    };
+    let (code, state_param) = simulate_browser_authorize(&authorize_url).await;
+
+    let oauth_bg = oauth.clone();
+    let cb_task = tokio::spawn(async move {
+        oauth_bg
+            .handle_callback(&state_param, Some(&code), None, None)
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), token_started.notified())
+        .await
+        .expect("POST /token deve iniciar em até 5s");
+
+    // Altera o destino da integração durante a troca de código antes de gravar tokens.
+    env.registry
+        .update(
+            "target-change",
+            IntegrationUpdate {
+                transport: Some(Transport::RemoteHttp {
+                    url: format!("{base_url}/mcp-v2"),
+                    header_names: vec![],
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    token_allow.notify_one();
+    let err = cb_task
+        .await
+        .unwrap()
+        .expect_err("callback deve abortar quando a integração muda em voo");
+    assert!(matches!(err, OAuthError::Validation(_)), "erro: {err:?}");
+    assert!(
+        env.secrets.get("target-change").await.unwrap().is_none(),
+        "nenhum segredo pode ser gravado após alteração da URL de destino"
+    );
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn discovery_rejects_missing_or_mismatched_prm_resource_and_as_issuer() {
+    #[derive(Clone)]
+    struct DiscState {
+        base_url: String,
+        mode: Arc<AtomicUsize>,
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{addr}");
+    let mode = Arc::new(AtomicUsize::new(0));
+    let state = DiscState {
+        base_url: base_url.clone(),
+        mode: mode.clone(),
+    };
+
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(|State(st): State<DiscState>| async move {
+                match st.mode.load(Ordering::SeqCst) {
+                    0 => json_response(
+                        StatusCode::OK,
+                        json!({"authorization_servers": [st.base_url]}),
+                    ),
+                    1 => json_response(
+                        StatusCode::OK,
+                        json!({
+                            "resource": format!("{}/outro-recurso", st.base_url),
+                            "authorization_servers": [st.base_url]
+                        }),
+                    ),
+                    _ => json_response(
+                        StatusCode::OK,
+                        json!({
+                            "resource": format!("{}/mcp", st.base_url),
+                            "authorization_servers": [st.base_url]
+                        }),
+                    ),
+                }
+            }),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(|State(st): State<DiscState>| async move {
+                match st.mode.load(Ordering::SeqCst) {
+                    2 => json_response(
+                        StatusCode::OK,
+                        json!({
+                            "authorization_endpoint": format!("{}/authorize", st.base_url),
+                            "token_endpoint": format!("{}/token", st.base_url)
+                        }),
+                    ),
+                    _ => json_response(
+                        StatusCode::OK,
+                        json!({
+                            "issuer": format!("{}/emissor-errado", st.base_url),
+                            "authorization_endpoint": format!("{}/authorize", st.base_url),
+                            "token_endpoint": format!("{}/token", st.base_url)
+                        }),
+                    ),
+                }
+            }),
+        )
+        .route("/mcp", post(|| async { StatusCode::BAD_REQUEST }))
+        .with_state(state);
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let env = TestEnv::new();
+    env.registry
+        .create(remote_config(
+            "disc-validate",
+            format!("{base_url}/mcp"),
+            None,
+            AuthConfig::OAuthManualClient {
+                client_id: "cid".to_owned(),
+                scopes: vec![],
+            },
+        ))
+        .unwrap();
+    let oauth = env.oauth_manager();
+    let input = OAuthStartInput {
+        origin_client: OAuthOrigin::Desktop,
+        local_port: 8765,
+        public_base_url: None,
+        cimd_client_id_url: None,
+    };
+
+    for m in 0..4 {
+        mode.store(m, Ordering::SeqCst);
+        let err = oauth
+            .start("disc-validate", input.clone())
+            .await
+            .expect_err(&format!("modo {m} deveria falhar validação RFC 9728/8414"));
+        assert!(
+            matches!(err, OAuthError::DiscoveryFailed(_)),
+            "modo {m} retornou erro inesperado: {err:?}"
+        );
+    }
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_streams_and_rejects_oversized_chunked_response_without_content_length() {
+    #[derive(Clone)]
+    struct BigState {
+        base_url: String,
+        oversize_prm: Arc<AtomicBool>,
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{addr}");
+    let oversize_prm = Arc::new(AtomicBool::new(true));
+    let state = BigState {
+        base_url: base_url.clone(),
+        oversize_prm: oversize_prm.clone(),
+    };
+
+    fn chunked_320k() -> Response {
+        // Gera >256 KiB em streaming sem Content-Length para provar corte incremental.
+        let body = Body::from_stream(futures_util::stream::iter((0..40).map(|_| {
+            Ok::<_, std::convert::Infallible>(Bytes::from(vec![b'a'; 8 * 1024]))
+        })));
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .unwrap()
+    }
+
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(|State(st): State<BigState>| async move {
+                if st.oversize_prm.load(Ordering::SeqCst) {
+                    chunked_320k()
+                } else {
+                    json_response(
+                        StatusCode::OK,
+                        json!({
+                            "resource": format!("{}/mcp", st.base_url),
+                            "authorization_servers": [st.base_url]
+                        }),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(|State(st): State<BigState>| async move {
+                json_response(
+                    StatusCode::OK,
+                    json!({
+                        "issuer": st.base_url,
+                        "authorization_endpoint": format!("{}/authorize", st.base_url),
+                        "token_endpoint": format!("{}/token", st.base_url)
+                    }),
+                )
+            }),
+        )
+        .route(
+            "/authorize",
+            get(|Query(params): Query<HashMap<String, String>>| async move {
+                let redirect_uri = params.get("redirect_uri").cloned().unwrap_or_default();
+                let state_param = params.get("state").cloned().unwrap_or_default();
+                let location = format!("{redirect_uri}?code=big-code-1&state={state_param}");
+                Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header(header::LOCATION, location)
+                    .body(Body::empty())
+                    .unwrap()
+            }),
+        )
+        .route("/token", post(|| async { chunked_320k() }))
+        .route("/mcp", post(|| async { StatusCode::BAD_REQUEST }))
+        .with_state(state);
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let env = TestEnv::new();
+    env.registry
+        .create(remote_config(
+            "oversize-test",
+            format!("{base_url}/mcp"),
+            None,
+            AuthConfig::OAuthManualClient {
+                client_id: "cid".to_owned(),
+                scopes: vec![],
+            },
+        ))
+        .unwrap();
+    let oauth = env.oauth_manager();
+    let start_input = OAuthStartInput {
+        origin_client: OAuthOrigin::Desktop,
+        local_port: 8765,
+        public_base_url: None,
+        cimd_client_id_url: None,
+    };
+
+    let prm_err = oauth
+        .start("oversize-test", start_input.clone())
+        .await
+        .expect_err("PRM em streaming >256 KiB deve abortar");
+    assert!(matches!(prm_err, OAuthError::DiscoveryFailed(_)));
+
+    oversize_prm.store(false, Ordering::SeqCst);
+    let OAuthStartOutcome::OpenUrl { authorize_url, .. } =
+        oauth.start("oversize-test", start_input).await.unwrap()
+    else {
+        panic!("esperava OpenUrl");
+    };
+    let (code, state_param) = simulate_browser_authorize(&authorize_url).await;
+    let token_err = oauth
+        .handle_callback(&state_param, Some(&code), None, None)
+        .await
+        .expect_err("resposta /token em streaming >256 KiB deve abortar");
+    assert!(matches!(token_err, OAuthError::Network(_)));
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_sanitizes_provider_error_descriptions_and_unknown_codes_across_flows() {
+    const LEAK_SENTINEL: &str = "segredo-interno-vazado-42";
+    const UNKNOWN_CODE: &str = "codigo_customizado_xpto";
+
+    #[derive(Clone)]
+    struct ErrState {
+        base_url: String,
+        dcr_error: Arc<AtomicBool>,
+        token_mode: Arc<AtomicUsize>,
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{addr}");
+    let dcr_error = Arc::new(AtomicBool::new(true));
+    let token_mode = Arc::new(AtomicUsize::new(0));
+    let state = ErrState {
+        base_url: base_url.clone(),
+        dcr_error: dcr_error.clone(),
+        token_mode: token_mode.clone(),
+    };
+
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(|State(st): State<ErrState>| async move {
+                json_response(
+                    StatusCode::OK,
+                    json!({
+                        "resource": format!("{}/mcp", st.base_url),
+                        "authorization_servers": [st.base_url]
+                    }),
+                )
+            }),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(|State(st): State<ErrState>| async move {
+                json_response(
+                    StatusCode::OK,
+                    json!({
+                        "issuer": st.base_url,
+                        "authorization_endpoint": format!("{}/authorize", st.base_url),
+                        "token_endpoint": format!("{}/token", st.base_url),
+                        "registration_endpoint": format!("{}/register", st.base_url)
+                    }),
+                )
+            }),
+        )
+        .route(
+            "/register",
+            post(|State(st): State<ErrState>| async move {
+                if st.dcr_error.load(Ordering::SeqCst) {
+                    return json_response(
+                        StatusCode::BAD_REQUEST,
+                        json!({"error": UNKNOWN_CODE, "error_description": LEAK_SENTINEL}),
+                    );
+                }
+                json_response(
+                    StatusCode::CREATED,
+                    json!({"client_id": "dcr-err-1", "token_endpoint_auth_method": "none"}),
+                )
+            }),
+        )
+        .route(
+            "/authorize",
+            get(|Query(params): Query<HashMap<String, String>>| async move {
+                let redirect_uri = params.get("redirect_uri").cloned().unwrap_or_default();
+                let state_param = params.get("state").cloned().unwrap_or_default();
+                let location = format!("{redirect_uri}?code=err-code-1&state={state_param}");
+                Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header(header::LOCATION, location)
+                    .body(Body::empty())
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/token",
+            post(|State(st): State<ErrState>| async move {
+                match st.token_mode.load(Ordering::SeqCst) {
+                    0 => json_response(
+                        StatusCode::OK,
+                        json!({
+                            "access_token": "tok-err-1",
+                            "token_type": "Bearer",
+                            "refresh_token": "rt-err-1",
+                            "expires_in": 3600
+                        }),
+                    ),
+                    1 => json_response(
+                        StatusCode::BAD_REQUEST,
+                        json!({"error": "invalid_grant", "error_description": LEAK_SENTINEL}),
+                    ),
+                    _ => json_response(
+                        StatusCode::BAD_REQUEST,
+                        json!({"error": UNKNOWN_CODE, "error_description": LEAK_SENTINEL}),
+                    ),
+                }
+            }),
+        )
+        .route("/mcp", post(|| async { StatusCode::BAD_REQUEST }))
+        .with_state(state);
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let env = TestEnv::new();
+    env.registry
+        .create(remote_config(
+            "err-sanitized",
+            format!("{base_url}/mcp"),
+            None,
+            AuthConfig::OAuthDcr,
+        ))
+        .unwrap();
+    let oauth = env.oauth_manager();
+    let input = OAuthStartInput {
+        origin_client: OAuthOrigin::Desktop,
+        local_port: 8765,
+        public_base_url: None,
+        cimd_client_id_url: None,
+    };
+
+    // 1) Erro no DCR não vaza código desconhecido nem error_description.
+    let reg_err = oauth.start("err-sanitized", input.clone()).await.unwrap_err();
+    let reg_text = format!("{reg_err} | {reg_err:?}");
+    assert!(!reg_text.contains(LEAK_SENTINEL));
+    assert!(!reg_text.contains(UNKNOWN_CODE));
+    assert!(reg_text.contains("HTTP 400"));
+
+    // 2) Erro no callback direto sanitiza error_description e código desconhecido.
+    dcr_error.store(false, Ordering::SeqCst);
+    let OAuthStartOutcome::OpenUrl { authorize_url, .. } =
+        oauth.start("err-sanitized", input.clone()).await.unwrap()
+    else {
+        panic!("esperava OpenUrl");
+    };
+    let state_cb = query_params(&authorize_url).get("state").cloned().unwrap();
+    let cb_err = oauth
+        .handle_callback(&state_cb, None, Some(UNKNOWN_CODE), Some(LEAK_SENTINEL))
+        .await
+        .unwrap_err();
+    let cb_text = format!("{cb_err} | {cb_err:?}");
+    assert!(!cb_text.contains(LEAK_SENTINEL));
+    assert!(!cb_text.contains(UNKNOWN_CODE));
+
+    // 3) Erro na troca /token com código conhecido ignora error_description.
+    token_mode.store(1, Ordering::SeqCst);
+    let OAuthStartOutcome::OpenUrl { authorize_url, .. } =
+        oauth.start("err-sanitized", input.clone()).await.unwrap()
+    else {
+        panic!("esperava OpenUrl");
+    };
+    let (code, state_tok) = simulate_browser_authorize(&authorize_url).await;
+    let tok_err = oauth
+        .handle_callback(&state_tok, Some(&code), None, None)
+        .await
+        .unwrap_err();
+    let tok_text = format!("{tok_err} | {tok_err:?}");
+    assert!(!tok_text.contains(LEAK_SENTINEL));
+    assert!(matches!(tok_err, OAuthError::InvalidGrant(_)));
+
+    // 4) Conclui login válido e valida sanitização no TokenRefresher::refresh.
+    token_mode.store(0, Ordering::SeqCst);
+    let OAuthStartOutcome::OpenUrl { authorize_url, .. } =
+        oauth.start("err-sanitized", input).await.unwrap()
+    else {
+        panic!("esperava OpenUrl");
+    };
+    let (code_ok, state_ok) = simulate_browser_authorize(&authorize_url).await;
+    oauth
+        .handle_callback(&state_ok, Some(&code_ok), None, None)
+        .await
+        .unwrap();
+
+    token_mode.store(2, Ordering::SeqCst);
+    let ref_err = TokenRefresher::refresh(oauth.as_ref(), "err-sanitized")
+        .await
+        .unwrap_err();
+    let ref_text = format!("{ref_err} | {ref_err:?}");
+    assert!(!ref_text.contains(LEAK_SENTINEL));
+    assert!(!ref_text.contains(UNKNOWN_CODE));
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_dcr_and_token_posts_do_not_follow_redirects() {
+    #[derive(Clone)]
+    struct RedirState {
+        base_url: String,
+        sink_url: String,
+        redirect_dcr: Arc<AtomicBool>,
+        redirect_token: Arc<AtomicBool>,
+    }
+
+    let sink_hits = Arc::new(AtomicUsize::new(0));
+    let sink_hits_srv = sink_hits.clone();
+    let sink_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let sink_addr = sink_listener.local_addr().unwrap();
+    let sink_url = format!("http://{sink_addr}/roubado");
+    let sink_app = Router::new().route(
+        "/roubado",
+        post(move || {
+            let hits = sink_hits_srv.clone();
+            async move {
+                hits.fetch_add(1, Ordering::SeqCst);
+                StatusCode::OK
+            }
+        }),
+    );
+    let sink_handle = tokio::spawn(async move {
+        axum::serve(sink_listener, sink_app).await.unwrap();
+    });
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{addr}");
+    let redirect_dcr = Arc::new(AtomicBool::new(true));
+    let redirect_token = Arc::new(AtomicBool::new(true));
+    let state = RedirState {
+        base_url: base_url.clone(),
+        sink_url,
+        redirect_dcr: redirect_dcr.clone(),
+        redirect_token: redirect_token.clone(),
+    };
+
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(|State(st): State<RedirState>| async move {
+                json_response(
+                    StatusCode::OK,
+                    json!({
+                        "resource": format!("{}/mcp", st.base_url),
+                        "authorization_servers": [st.base_url]
+                    }),
+                )
+            }),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(|State(st): State<RedirState>| async move {
+                json_response(
+                    StatusCode::OK,
+                    json!({
+                        "issuer": st.base_url,
+                        "authorization_endpoint": format!("{}/authorize", st.base_url),
+                        "token_endpoint": format!("{}/token", st.base_url),
+                        "registration_endpoint": format!("{}/register", st.base_url)
+                    }),
+                )
+            }),
+        )
+        .route(
+            "/register",
+            post(|State(st): State<RedirState>| async move {
+                if st.redirect_dcr.load(Ordering::SeqCst) {
+                    return Response::builder()
+                        .status(StatusCode::TEMPORARY_REDIRECT)
+                        .header(header::LOCATION, st.sink_url)
+                        .body(Body::empty())
+                        .unwrap();
+                }
+                json_response(
+                    StatusCode::CREATED,
+                    json!({"client_id": "dcr-redir-1", "token_endpoint_auth_method": "none"}),
+                )
+            }),
+        )
+        .route(
+            "/authorize",
+            get(|Query(params): Query<HashMap<String, String>>| async move {
+                let redirect_uri = params.get("redirect_uri").cloned().unwrap_or_default();
+                let state_param = params.get("state").cloned().unwrap_or_default();
+                let location = format!("{redirect_uri}?code=redir-code-1&state={state_param}");
+                Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header(header::LOCATION, location)
+                    .body(Body::empty())
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/token",
+            post(|State(st): State<RedirState>| async move {
+                if st.redirect_token.load(Ordering::SeqCst) {
+                    return Response::builder()
+                        .status(StatusCode::TEMPORARY_REDIRECT)
+                        .header(header::LOCATION, st.sink_url)
+                        .body(Body::empty())
+                        .unwrap();
+                }
+                json_response(
+                    StatusCode::OK,
+                    json!({
+                        "access_token": "tok-redir-1",
+                        "token_type": "Bearer",
+                        "refresh_token": "rt-redir-1",
+                        "expires_in": 3600
+                    }),
+                )
+            }),
+        )
+        .route("/mcp", post(|| async { StatusCode::BAD_REQUEST }))
+        .with_state(state);
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let env = TestEnv::new();
+    env.registry
+        .create(remote_config(
+            "no-redir",
+            format!("{base_url}/mcp"),
+            None,
+            AuthConfig::OAuthDcr,
+        ))
+        .unwrap();
+    let oauth = env.oauth_manager();
+    let input = OAuthStartInput {
+        origin_client: OAuthOrigin::Desktop,
+        local_port: 8765,
+        public_base_url: None,
+        cimd_client_id_url: None,
+    };
+
+    // 1) POST /register com 307 não pode seguir redirect.
+    let dcr_err = oauth.start("no-redir", input.clone()).await.unwrap_err();
+    assert!(matches!(dcr_err, OAuthError::RegistrationFailed(_)));
+    assert_eq!(sink_hits.load(Ordering::SeqCst), 0);
+
+    // 2) POST /token (exchange) com 307 não pode seguir redirect.
+    redirect_dcr.store(false, Ordering::SeqCst);
+    let OAuthStartOutcome::OpenUrl { authorize_url, .. } =
+        oauth.start("no-redir", input.clone()).await.unwrap()
+    else {
+        panic!("esperava OpenUrl");
+    };
+    let (code, state_param) = simulate_browser_authorize(&authorize_url).await;
+    let exchange_err = oauth
+        .handle_callback(&state_param, Some(&code), None, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(exchange_err, OAuthError::Network(_)));
+    assert_eq!(sink_hits.load(Ordering::SeqCst), 0);
+
+    // 3) POST /token (refresh) com 307 também não pode seguir redirect.
+    redirect_token.store(false, Ordering::SeqCst);
+    let OAuthStartOutcome::OpenUrl { authorize_url, .. } =
+        oauth.start("no-redir", input).await.unwrap()
+    else {
+        panic!("esperava OpenUrl");
+    };
+    let (code_ok, state_ok) = simulate_browser_authorize(&authorize_url).await;
+    oauth
+        .handle_callback(&state_ok, Some(&code_ok), None, None)
+        .await
+        .unwrap();
+
+    redirect_token.store(true, Ordering::SeqCst);
+    let refresh_err = oauth.refresh_access_token("no-redir").await.unwrap_err();
+    assert!(matches!(refresh_err, OAuthError::Network(_)));
+    assert_eq!(sink_hits.load(Ordering::SeqCst), 0);
+
+    server_handle.abort();
+    sink_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_manual_client_id_is_trimmed_consistently_in_start_callback_and_refresh() {
+    let (addr, state, server_handle) = spawn_mock_oauth_server(MockOAuthConfig::default()).await;
+    state
+        .add_static_client(
+            "manual-trim",
+            Some("manual-secret"),
+            vec![format!("http://127.0.0.1:8765{OAUTH_CALLBACK_PATH}")],
+        )
+        .await;
+
+    let env = TestEnv::new();
+    let stored = env
+        .registry
+        .create(remote_config(
+            "manual-trim-test",
+            format!("http://{addr}/mcp"),
+            Some("google-gmail"),
+            AuthConfig::OAuthManualClient {
+                client_id: "  manual-trim  ".to_owned(),
+                scopes: vec!["openid".to_owned()],
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        stored.auth,
+        AuthConfig::OAuthManualClient {
+            client_id: "manual-trim".to_owned(),
+            scopes: vec!["openid".to_owned()],
+        }
+    );
+
+    env.secrets
+        .set(
+            "manual-trim-test",
+            IntegrationSecrets {
+                client_secret: Some(Zeroizing::new("manual-secret".to_owned())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let oauth = env.oauth_manager();
+    let OAuthStartOutcome::OpenUrl { authorize_url, .. } = oauth
+        .start(
+            "manual-trim-test",
+            OAuthStartInput {
+                origin_client: OAuthOrigin::Desktop,
+                local_port: 8765,
+                public_base_url: None,
+                cimd_client_id_url: None,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("esperava OpenUrl");
+    };
+    assert_eq!(
+        query_params(&authorize_url).get("client_id"),
+        Some(&"manual-trim".to_owned())
+    );
+
+    let (code, state_param) = simulate_browser_authorize(&authorize_url).await;
+    oauth
+        .handle_callback(&state_param, Some(&code), None, None)
+        .await
+        .unwrap();
+    let renewed = oauth.refresh_access_token("manual-trim-test").await.unwrap();
+    assert!(renewed.starts_with("access-token-"));
 
     server_handle.abort();
 }

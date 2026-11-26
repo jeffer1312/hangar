@@ -33,7 +33,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, watch};
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
-use crate::model::{AuthConfig, IntegrationConfig, Transport};
+use crate::model::{AuthConfig, IntegrationConfig, Transport, config_fingerprint};
 use crate::registry::{IntegrationRegistry, RegistryError};
 use crate::secrets::{IntegrationSecrets, SecretStore, SecretStoreError};
 use crate::tools_cache::{DiscoveredTool, ToolsCache};
@@ -150,13 +150,20 @@ struct ManagerInner {
     shutdown_watch: watch::Sender<bool>,
 }
 
+#[derive(Clone)]
+struct OAuthOverride {
+    config_fingerprint: [u8; 32],
+    stale_token: Zeroizing<String>,
+    fresh_token: Zeroizing<String>,
+}
+
 #[derive(Default)]
 struct Slot {
     connect_lock: AsyncMutex<()>,
     refresh_lock: AsyncMutex<()>,
     active: StdMutex<Option<Arc<ActiveSession>>>,
-    /// Par `(token_antigo_falho, token_renovado)` usado caso o renovador não tenha atualizado `secrets.bin`.
-    oauth_override: StdMutex<Option<(Zeroizing<String>, Zeroizing<String>)>>,
+    /// Token renovado vinculado ao fingerprint da config caso o renovador não tenha atualizado `secrets.bin`.
+    oauth_override: StdMutex<Option<OAuthOverride>>,
     /// Incrementado a cada refresh OAuth bem-sucedido para deduplicar retries concorrentes.
     refresh_epoch: AtomicU64,
     next_generation: AtomicU64,
@@ -359,6 +366,8 @@ impl McpClientManager {
         &self,
         integration_id: &str,
     ) -> Result<Vec<DiscoveredTool>, ClientError> {
+        // Registra a geração antes da descoberta para não regravar cache após invalidação concorrente.
+        let expected_gen = self.inner.tools_cache.generation(integration_id);
         let tools = self
             .execute_with_oauth_retry(integration_id, |session, _config| async move {
                 let raw_tools = list_all_tools_paginated(&session.peer).await?;
@@ -368,7 +377,10 @@ impl McpClientManager {
                     .collect::<Vec<_>>())
             })
             .await?;
-        self.inner.tools_cache.set(integration_id, tools.clone());
+        let _ = self
+            .inner
+            .tools_cache
+            .set_if_generation(integration_id, expected_gen, tools.clone());
         Ok(tools)
     }
 
@@ -426,17 +438,17 @@ impl McpClientManager {
     {
         let slot = self.slot(integration_id);
         let first_attempt = self
-            .run_single_attempt(&slot, integration_id, None, &operation)
+            .run_single_attempt(&slot, integration_id, None, None, &operation)
             .await;
 
-        let (reason, maybe_auth, failed_attempt) = match first_attempt {
+        let (reason, maybe_auth, maybe_fp, failed_attempt) = match first_attempt {
             Ok(value) => return Ok(value),
-            Err((OpError::Unauthorized(reason), maybe_auth, attempt)) => {
-                (reason, maybe_auth, attempt)
+            Err((OpError::Unauthorized(reason), maybe_auth, maybe_fp, attempt)) => {
+                (reason, maybe_auth, maybe_fp, attempt)
             }
-            Err((OpError::Timeout(msg), _, _)) => return Err(ClientError::Timeout(msg)),
-            Err((OpError::FatalTransport(msg), _, _)) => return Err(ClientError::Transport(msg)),
-            Err((OpError::Client(err), _, _)) => return Err(err),
+            Err((OpError::Timeout(msg), _, _, _)) => return Err(ClientError::Timeout(msg)),
+            Err((OpError::FatalTransport(msg), _, _, _)) => return Err(ClientError::Transport(msg)),
+            Err((OpError::Client(err), _, _, _)) => return Err(err),
         };
 
         let auth = match maybe_auth {
@@ -451,8 +463,25 @@ impl McpClientManager {
             return Err(ClientError::AuthExpired(reason));
         };
 
-        let new_token = {
+        let (new_token, refresh_fp) = {
             let _refresh_guard = slot.refresh_lock.lock().await;
+            let refresh_cfg = self.load_enabled_config(integration_id)?;
+            let refresh_fp = config_fingerprint(&refresh_cfg);
+            if let Some(failed_fp) = maybe_fp
+                && failed_fp != refresh_fp
+            {
+                *slot
+                    .oauth_override
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = None;
+                return Err(ClientError::AuthExpired(
+                    "configuração da integração alterada durante tentativa OAuth".into(),
+                ));
+            }
+            if !is_oauth_auth(&refresh_cfg.auth) {
+                return Err(ClientError::AuthRequired(reason));
+            }
+
             let current_epoch = slot.refresh_epoch.load(Ordering::Acquire);
             let current_secrets = self
                 .inner
@@ -460,8 +489,13 @@ impl McpClientManager {
                 .get(integration_id)
                 .await?
                 .unwrap_or_default();
-            let current_effective =
-                resolve_effective_oauth_token(&slot, &auth, &current_secrets, None);
+            let current_effective = resolve_effective_oauth_token(
+                &slot,
+                refresh_fp,
+                &refresh_cfg.auth,
+                &current_secrets,
+                None,
+            );
 
             let already_refreshed = failed_attempt.as_ref().is_some_and(|attempt| {
                 current_epoch != attempt.epoch
@@ -477,7 +511,7 @@ impl McpClientManager {
                 let Some(reusable) = current_effective else {
                     return Err(ClientError::AuthRequired(reason));
                 };
-                reusable
+                (reusable, refresh_fp)
             } else {
                 let stale_token = current_secrets
                     .oauth
@@ -495,6 +529,18 @@ impl McpClientManager {
                     return Err(ClientError::AuthExpired("token renovado vazio".into()));
                 }
 
+                // Se URL ou auth mudaram durante o refresh em voo, descarta o token antigo sem tentar o novo destino.
+                let post_refresh_cfg = self.load_enabled_config(integration_id)?;
+                if config_fingerprint(&post_refresh_cfg) != refresh_fp {
+                    *slot
+                        .oauth_override
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = None;
+                    return Err(ClientError::AuthExpired(
+                        "configuração da integração alterada durante renovação OAuth".into(),
+                    ));
+                }
+
                 let refreshed_secrets = self
                     .inner
                     .secrets
@@ -510,35 +556,44 @@ impl McpClientManager {
                     *slot
                         .oauth_override
                         .lock()
-                        .unwrap_or_else(PoisonError::into_inner) =
-                        Some((stale_token, Zeroizing::new(refreshed.clone())));
+                        .unwrap_or_else(PoisonError::into_inner) = Some(OAuthOverride {
+                        config_fingerprint: refresh_fp,
+                        stale_token,
+                        fresh_token: Zeroizing::new(refreshed.clone()),
+                    });
                 }
                 slot.refresh_epoch.fetch_add(1, Ordering::AcqRel);
-                Zeroizing::new(refreshed)
+                (Zeroizing::new(refreshed), refresh_fp)
             }
         };
 
         match self
-            .run_single_attempt(&slot, integration_id, Some(new_token.as_str()), &operation)
+            .run_single_attempt(
+                &slot,
+                integration_id,
+                Some(new_token.as_str()),
+                Some(refresh_fp),
+                &operation,
+            )
             .await
         {
             Ok(value) => Ok(value),
-            Err((OpError::Unauthorized(reason), _, _)) => {
+            Err((OpError::Unauthorized(reason), _, _, _)) => {
                 let mut guard = slot
                     .oauth_override
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 if guard
                     .as_ref()
-                    .is_some_and(|(_, fresh)| fresh.as_str() == new_token.as_str())
+                    .is_some_and(|entry| entry.fresh_token.as_str() == new_token.as_str())
                 {
                     *guard = None;
                 }
                 Err(ClientError::AuthExpired(reason))
             }
-            Err((OpError::Timeout(msg), _, _)) => Err(ClientError::Timeout(msg)),
-            Err((OpError::FatalTransport(msg), _, _)) => Err(ClientError::Transport(msg)),
-            Err((OpError::Client(err), _, _)) => Err(err),
+            Err((OpError::Timeout(msg), _, _, _)) => Err(ClientError::Timeout(msg)),
+            Err((OpError::FatalTransport(msg), _, _, _)) => Err(ClientError::Transport(msg)),
+            Err((OpError::Client(err), _, _, _)) => Err(err),
         }
     }
 
@@ -547,28 +602,35 @@ impl McpClientManager {
         slot: &Arc<Slot>,
         integration_id: &str,
         override_oauth_token: Option<&str>,
+        expected_config_fp: Option<[u8; 32]>,
         operation: &F,
-    ) -> Result<T, (OpError, Option<AuthConfig>, Option<OAuthAttempt>)>
+    ) -> Result<T, (OpError, Option<AuthConfig>, Option<[u8; 32]>, Option<OAuthAttempt>)>
     where
         F: Fn(Arc<ActiveSession>, IntegrationConfig) -> Fut,
         Fut: Future<Output = Result<T, OpError>>,
     {
         let (config, session, _in_flight, oauth_attempt) = match self
-            .ensure_connected(slot, integration_id, override_oauth_token)
+            .ensure_connected(
+                slot,
+                integration_id,
+                override_oauth_token,
+                expected_config_fp,
+            )
             .await
         {
             Ok(tuple) => tuple,
-            Err((ConnectFailure::Http401(reason), auth, attempt)) => {
-                return Err((OpError::Unauthorized(reason), auth, attempt));
+            Err((ConnectFailure::Http401(reason), auth, fp, attempt)) => {
+                return Err((OpError::Unauthorized(reason), auth, fp, attempt));
             }
-            Err((ConnectFailure::Other(err), auth, attempt)) => {
-                return Err((OpError::Client(err), auth, attempt));
+            Err((ConnectFailure::Other(err), auth, fp, attempt)) => {
+                return Err((OpError::Client(err), auth, fp, attempt));
             }
         };
 
         let mut cancel_rx = session.cancel.subscribe();
         let call_timeout = self.inner.config.call_timeout;
         let auth = config.auth.clone();
+        let config_fp = config_fingerprint(&config);
 
         let outcome = if *cancel_rx.borrow_and_update() {
             Err(OpError::FatalTransport(
@@ -607,7 +669,7 @@ impl McpClientManager {
                     }
                     OpError::Client(_) => {}
                 }
-                Err((err, Some(auth), Some(oauth_attempt)))
+                Err((err, Some(auth), Some(config_fp), Some(oauth_attempt)))
             }
         }
     }
@@ -682,6 +744,7 @@ impl McpClientManager {
         slot: &Arc<Slot>,
         integration_id: &str,
         override_oauth_token: Option<&str>,
+        expected_config_fp: Option<[u8; 32]>,
     ) -> Result<
         (
             IntegrationConfig,
@@ -689,7 +752,12 @@ impl McpClientManager {
             InFlightGuard,
             OAuthAttempt,
         ),
-        (ConnectFailure, Option<AuthConfig>, Option<OAuthAttempt>),
+        (
+            ConnectFailure,
+            Option<AuthConfig>,
+            Option<[u8; 32]>,
+            Option<OAuthAttempt>,
+        ),
     > {
         if self.inner.shutting_down.load(Ordering::Acquire) {
             return Err((
@@ -698,12 +766,28 @@ impl McpClientManager {
                 )),
                 None,
                 None,
+                None,
             ));
         }
 
         let config = self
             .load_enabled_config(integration_id)
-            .map_err(|err| (ConnectFailure::Other(err), None, None))?;
+            .map_err(|err| (ConnectFailure::Other(err), None, None, None))?;
+        let config_fp = config_fingerprint(&config);
+        if expected_config_fp.is_some_and(|fp| fp != config_fp) {
+            *slot
+                .oauth_override
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = None;
+            return Err((
+                ConnectFailure::Other(ClientError::AuthExpired(
+                    "configuração da integração alterada durante retry OAuth".into(),
+                )),
+                Some(config.auth),
+                Some(config_fp),
+                None,
+            ));
+        }
         let secrets = self
             .inner
             .secrets
@@ -713,12 +797,13 @@ impl McpClientManager {
                 (
                     ConnectFailure::Other(ClientError::Secrets(err)),
                     Some(config.auth.clone()),
+                    Some(config_fp),
                     None,
                 )
             })?
             .unwrap_or_default();
         let effective_oauth =
-            resolve_effective_oauth_override(slot, &secrets, override_oauth_token);
+            resolve_effective_oauth_override(slot, config_fp, &secrets, override_oauth_token);
         let effective_oauth_str = effective_oauth.as_deref().map(String::as_str);
         let fingerprint = SessionFingerprint::compute(&config, &secrets, effective_oauth_str);
 
@@ -744,6 +829,7 @@ impl McpClientManager {
                     "gerenciador de clientes encerrado".into(),
                 )),
                 Some(config.auth),
+                Some(config_fp),
                 None,
             ));
         }
@@ -751,7 +837,22 @@ impl McpClientManager {
         // Re-lê config e segredos após adquirir a trava para refletir edições concorrentes.
         let config = self
             .load_enabled_config(integration_id)
-            .map_err(|err| (ConnectFailure::Other(err), None, None))?;
+            .map_err(|err| (ConnectFailure::Other(err), None, None, None))?;
+        let config_fp = config_fingerprint(&config);
+        if expected_config_fp.is_some_and(|fp| fp != config_fp) {
+            *slot
+                .oauth_override
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = None;
+            return Err((
+                ConnectFailure::Other(ClientError::AuthExpired(
+                    "configuração da integração alterada durante retry OAuth".into(),
+                )),
+                Some(config.auth),
+                Some(config_fp),
+                None,
+            ));
+        }
         let secrets = self
             .inner
             .secrets
@@ -761,12 +862,13 @@ impl McpClientManager {
                 (
                     ConnectFailure::Other(ClientError::Secrets(err)),
                     Some(config.auth.clone()),
+                    Some(config_fp),
                     None,
                 )
             })?
             .unwrap_or_default();
         let effective_oauth =
-            resolve_effective_oauth_override(slot, &secrets, override_oauth_token);
+            resolve_effective_oauth_override(slot, config_fp, &secrets, override_oauth_token);
         let effective_oauth_str = effective_oauth.as_deref().map(String::as_str);
         let fingerprint = SessionFingerprint::compute(&config, &secrets, effective_oauth_str);
 
@@ -791,8 +893,13 @@ impl McpClientManager {
         }
 
         let oauth_epoch = slot.refresh_epoch.load(Ordering::Acquire);
-        let used_oauth_token =
-            resolve_effective_oauth_token(slot, &config.auth, &secrets, override_oauth_token);
+        let used_oauth_token = resolve_effective_oauth_token(
+            slot,
+            config_fp,
+            &config.auth,
+            &secrets,
+            override_oauth_token,
+        );
         let session = self
             .open_session(
                 slot,
@@ -808,6 +915,7 @@ impl McpClientManager {
                 (
                     err,
                     Some(config.auth.clone()),
+                    Some(config_fp),
                     Some(OAuthAttempt {
                         epoch: oauth_epoch,
                         token: used_oauth_token.clone(),
@@ -1099,6 +1207,11 @@ async fn finish_stdio_owned(mut owned: StdioOwned, grace: Duration, force_kill: 
     let _ = owned.child.wait().await;
 }
 
+fn update_len_prefixed(ctx: &mut DigestContext, bytes: &[u8]) {
+    ctx.update(&(bytes.len() as u64).to_le_bytes());
+    ctx.update(bytes);
+}
+
 impl SessionFingerprint {
     fn compute(
         config: &IntegrationConfig,
@@ -1106,28 +1219,76 @@ impl SessionFingerprint {
         override_oauth_token: Option<&str>,
     ) -> Self {
         let mut ctx = DigestContext::new(&SHA256);
-        if let Some(bearer) = &secrets.bearer_token {
-            ctx.update(b"bearer:");
-            ctx.update(bearer.as_bytes());
+        match &config.transport {
+            Transport::RemoteHttp { url, header_names } => {
+                update_len_prefixed(&mut ctx, b"remote_http");
+                update_len_prefixed(&mut ctx, url.as_bytes());
+                ctx.update(&(header_names.len() as u64).to_le_bytes());
+                for name in header_names {
+                    update_len_prefixed(&mut ctx, name.as_bytes());
+                }
+            }
+            Transport::LocalStdio {
+                command,
+                cwd,
+                env_keys,
+            } => {
+                update_len_prefixed(&mut ctx, b"local_stdio");
+                ctx.update(&(command.len() as u64).to_le_bytes());
+                for arg in command {
+                    update_len_prefixed(&mut ctx, arg.as_bytes());
+                }
+                match cwd {
+                    Some(dir) => {
+                        ctx.update(&[1]);
+                        update_len_prefixed(&mut ctx, dir.as_os_str().as_encoded_bytes());
+                    }
+                    None => ctx.update(&[0]),
+                }
+                ctx.update(&(env_keys.len() as u64).to_le_bytes());
+                for key in env_keys {
+                    update_len_prefixed(&mut ctx, key.as_bytes());
+                }
+            }
+        }
+        match &config.auth {
+            AuthConfig::None => update_len_prefixed(&mut ctx, b"auth_none"),
+            AuthConfig::Bearer => update_len_prefixed(&mut ctx, b"auth_bearer"),
+            AuthConfig::OAuthDcr => update_len_prefixed(&mut ctx, b"auth_oauth_dcr"),
+            AuthConfig::OAuthManualClient { client_id, scopes } => {
+                update_len_prefixed(&mut ctx, b"auth_oauth_manual");
+                update_len_prefixed(&mut ctx, client_id.trim().as_bytes());
+                ctx.update(&(scopes.len() as u64).to_le_bytes());
+                for scope in scopes {
+                    update_len_prefixed(&mut ctx, scope.as_bytes());
+                }
+            }
+        }
+        match &secrets.bearer_token {
+            Some(bearer) => {
+                ctx.update(&[1]);
+                update_len_prefixed(&mut ctx, bearer.as_bytes());
+            }
+            None => ctx.update(&[0]),
         }
         if let Some(token) = override_oauth_token {
-            ctx.update(b"oauth:");
-            ctx.update(token.as_bytes());
+            ctx.update(&[1]);
+            update_len_prefixed(&mut ctx, token.as_bytes());
         } else if let Some(oauth) = &secrets.oauth {
-            ctx.update(b"oauth:");
-            ctx.update(oauth.access_token.as_bytes());
+            ctx.update(&[2]);
+            update_len_prefixed(&mut ctx, oauth.access_token.as_bytes());
+        } else {
+            ctx.update(&[0]);
         }
+        ctx.update(&(secrets.headers.len() as u64).to_le_bytes());
         for (k, v) in &secrets.headers {
-            ctx.update(b"hdr:");
-            ctx.update(k.as_bytes());
-            ctx.update(b"=");
-            ctx.update(v.as_bytes());
+            update_len_prefixed(&mut ctx, k.as_bytes());
+            update_len_prefixed(&mut ctx, v.as_bytes());
         }
+        ctx.update(&(secrets.env.len() as u64).to_le_bytes());
         for (k, v) in &secrets.env {
-            ctx.update(b"env:");
-            ctx.update(k.as_bytes());
-            ctx.update(b"=");
-            ctx.update(v.as_bytes());
+            update_len_prefixed(&mut ctx, k.as_bytes());
+            update_len_prefixed(&mut ctx, v.as_bytes());
         }
         let digest = ctx.finish();
         let mut bytes = [0u8; 32];
@@ -1149,6 +1310,7 @@ fn client_info() -> McpClientInfo {
 
 fn resolve_effective_oauth_override(
     slot: &Slot,
+    config_fp: [u8; 32],
     secrets: &IntegrationSecrets,
     explicit_override: Option<&str>,
 ) -> Option<Zeroizing<String>> {
@@ -1164,11 +1326,11 @@ fn resolve_effective_oauth_override(
         .oauth_override
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    if let Some((stale, fresh)) = guard.as_ref() {
-        if stale.as_str() == current_secret {
-            return Some(fresh.clone());
+    if let Some(entry) = guard.as_ref() {
+        if entry.config_fingerprint == config_fp && entry.stale_token.as_str() == current_secret {
+            return Some(entry.fresh_token.clone());
         }
-        // O segredo em disco mudou (ex.: novo login ou persistência do refresher); descarta o override antigo.
+        // O segredo em disco ou a configuração da integração mudou; descarta o override antigo.
         *guard = None;
     }
     None
@@ -1176,6 +1338,7 @@ fn resolve_effective_oauth_override(
 
 fn resolve_effective_oauth_token(
     slot: &Slot,
+    config_fp: [u8; 32],
     auth: &AuthConfig,
     secrets: &IntegrationSecrets,
     explicit_override: Option<&str>,
@@ -1183,7 +1346,9 @@ fn resolve_effective_oauth_token(
     if !is_oauth_auth(auth) {
         return None;
     }
-    if let Some(override_tok) = resolve_effective_oauth_override(slot, secrets, explicit_override) {
+    if let Some(override_tok) =
+        resolve_effective_oauth_override(slot, config_fp, secrets, explicit_override)
+    {
         return Some(override_tok);
     }
     secrets
@@ -1612,4 +1777,75 @@ fn is_http_401_error(error: &(dyn std::error::Error + 'static)) -> bool {
         current = err.source();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    use zeroize::Zeroizing;
+
+    use super::SessionFingerprint;
+    use crate::model::{AuthConfig, IntegrationConfig, PermissionPolicy, Transport};
+    use crate::secrets::IntegrationSecrets;
+
+    fn base_stdio_config(cmd: Vec<&str>, cwd: Option<&str>) -> IntegrationConfig {
+        IntegrationConfig {
+            id: "fp-test".to_owned(),
+            name: "FP Test".to_owned(),
+            preset: None,
+            enabled: true,
+            transport: Transport::LocalStdio {
+                command: cmd.into_iter().map(str::to_owned).collect(),
+                cwd: cwd.map(PathBuf::from),
+                env_keys: vec!["A".to_owned(), "B".to_owned()],
+            },
+            auth: AuthConfig::None,
+            policy: PermissionPolicy::AllowAll,
+            pinned: false,
+            projects: vec![],
+            allowed_tools: BTreeSet::new(),
+            created_at: 1.0,
+            updated_at: 1.0,
+        }
+    }
+
+    #[test]
+    fn session_fingerprint_length_prefixes_variable_fields_against_boundary_collisions() {
+        let cfg = base_stdio_config(vec!["node", "srv.js"], Some("/tmp/a"));
+        let sec_a = IntegrationSecrets {
+            env: BTreeMap::from([
+                ("a".to_owned(), Zeroizing::new("xenv:b=y".to_owned())),
+                ("b".to_owned(), Zeroizing::new("z".to_owned())),
+            ]),
+            headers: BTreeMap::from([
+                ("x-a".to_owned(), Zeroizing::new("vhdr:x-b=1".to_owned())),
+                ("x-b".to_owned(), Zeroizing::new("2".to_owned())),
+            ]),
+            bearer_token: Some(Zeroizing::new("tok-1".to_owned())),
+            ..Default::default()
+        };
+        let sec_b = IntegrationSecrets {
+            env: BTreeMap::from([
+                ("a".to_owned(), Zeroizing::new("x".to_owned())),
+                ("b".to_owned(), Zeroizing::new("yenv:b=z".to_owned())),
+            ]),
+            headers: BTreeMap::from([
+                ("x-a".to_owned(), Zeroizing::new("v".to_owned())),
+                ("x-b".to_owned(), Zeroizing::new("1hdr:x-b=2".to_owned())),
+            ]),
+            bearer_token: Some(Zeroizing::new("tok-1".to_owned())),
+            ..Default::default()
+        };
+        assert!(SessionFingerprint::compute(&cfg, &sec_a, None) == SessionFingerprint::compute(&cfg, &sec_a, None));
+        assert!(SessionFingerprint::compute(&cfg, &sec_a, None) != SessionFingerprint::compute(&cfg, &sec_b, None));
+
+        let cmd_a = base_stdio_config(vec!["ab", "c"], None);
+        let cmd_b = base_stdio_config(vec!["a", "bc"], None);
+        assert!(
+            SessionFingerprint::compute(&cmd_a, &IntegrationSecrets::default(), None)
+                != SessionFingerprint::compute(&cmd_b, &IntegrationSecrets::default(), None)
+        );
+    }
 }

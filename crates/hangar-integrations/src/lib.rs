@@ -25,7 +25,7 @@ pub use client::{
 pub use guard::{MAX_RESPONSE_BYTES, TRUNCATION_NOTICE, truncate_utf8, wrap_external_result};
 pub use model::{
     ApprovalDecision, AuthConfig, IntegrationConfig, IntegrationStatus, PermissionPolicy,
-    ToolAccess, ToolSummary, Transport, ValidationError,
+    ToolAccess, ToolSummary, Transport, ValidationError, config_fingerprint,
 };
 pub use oauth::{
     DEFAULT_STATE_TTL, OAUTH_CALLBACK_PATH, OAuthCallbackResult, OAuthError, OAuthManager,

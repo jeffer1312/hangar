@@ -115,6 +115,40 @@ impl IntegrationRequests {
         self.cards.len()
     }
 
+    pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+        self.cards.clear();
+        self.api = None;
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_api(&self) -> bool {
+        self.api.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(runtime: Arc<Runtime>, api: Option<Api>, cx: &mut App) -> Entity<Self> {
+        let entity = cx.new(|_| Self {
+            api: None,
+            runtime,
+            machine: String::new(),
+            cards: Vec::new(),
+        });
+        let list = vec![Request {
+            id: "req-test".into(),
+            interaction_id: "int-test".into(),
+            origin: "casa::s".into(),
+            integration_id: "github".into(),
+            integration_name: "GitHub".into(),
+            tool: "create_issue".into(),
+            arguments_preview: String::new(),
+            reason: String::new(),
+            expires_at: 1700000000.0,
+        }];
+        entity.update(cx, |requests, cx| requests.apply(api, "casa".into(), list, cx));
+        entity
+    }
+
     fn render_where(
         &self,
         keep: &dyn Fn(&str) -> bool,
@@ -338,6 +372,19 @@ impl Render for IntegrationRequests {
     }
 }
 
+/// Tira a máquina `key` do mapa e limpa cartões e `Api` antes, para diálogo ainda aberto não agir com estado antigo.
+pub(super) fn drop_requests(
+    map: &mut HashMap<String, Entity<IntegrationRequests>>,
+    key: &str,
+    cx: &mut App,
+) -> bool {
+    let Some(requests) = map.remove(key) else {
+        return false;
+    };
+    requests.update(cx, |requests, cx| requests.clear(cx));
+    true
+}
+
 impl Hangar {
     /// Atualiza pedidos de aprovação das integrações para uma máquina (`None` na queda do stream).
     pub(super) fn set_integration_requests(
@@ -359,7 +406,7 @@ impl Hangar {
             },
         };
         if list.is_empty() {
-            return self.integrations.remove(key).is_some();
+            return drop_requests(&mut self.integrations, key, cx);
         }
         let (api, machine) = (self.machine_api(key), self.vault_machine_label(key, cx));
         let runtime = self.runtime.clone();
@@ -381,7 +428,7 @@ impl Hangar {
     }
 
     fn integration_origin_matches(&self, key: &str, origin: &str) -> bool {
-        if self.files_expanded() {
+        if self.page_open() || self.files_expanded() {
             return false;
         }
         let Some(name) = self.selected.as_ref().map(|s| s.name.as_str()) else {
@@ -424,10 +471,14 @@ impl Hangar {
         let cards = self.integration_cards(true, cx);
         (!cards.is_empty()).then(|| {
             div()
-                .flex_shrink_0()
+                .id("integration-session")
+                .flex_shrink_1()
+                .min_h_0()
                 .w_full()
                 .max_w(px(760.))
                 .mx_auto()
+                .max_h(px(320.))
+                .overflow_y_scroll()
                 .flex()
                 .flex_col()
                 .children(cards)
@@ -447,6 +498,16 @@ impl Hangar {
         extra_right: f32,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        self.render_integration_float_from(52., extra_right, cx)
+    }
+
+    /// Versão com posição vertical configurável, usada na raiz quando outra página cobre a conversa.
+    pub(super) fn render_integration_float_from(
+        &self,
+        top: f32,
+        extra_right: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let cards = self.integration_cards(false, cx);
         if cards.is_empty() {
             return None;
@@ -462,7 +523,7 @@ impl Hangar {
         Some(
             div()
                 .absolute()
-                .top(px(52.))
+                .top(px(top))
                 .right(px(16. + extra_right))
                 .occlude()
                 .child(chrome::popover(cards.into_any_element(), true))
@@ -567,5 +628,40 @@ mod tests {
             })),
             None
         );
+    }
+
+    #[::gpui::test]
+    fn drop_requests_clears_cards_and_api_even_when_a_dialog_holds_the_entity(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let runtime = Arc::new(Runtime::new().unwrap());
+        let entity = cx.new(|_| IntegrationRequests {
+            api: None,
+            runtime,
+            machine: String::new(),
+            cards: Vec::new(),
+        });
+        let list = parse(&json!({
+            "requests": [{
+                "id": "req-1",
+                "interaction_id": "int-1",
+                "origin": "casa::sessao-1",
+                "integration_id": "github",
+                "integration_name": "GitHub",
+                "tool": "create_issue",
+                "expires_at": 1700000000.0
+            }]
+        }))
+        .unwrap();
+        let api = Api::new("http://127.0.0.1:8765", "tok").unwrap();
+        entity.update(cx, |requests, cx| requests.apply(Some(api), "casa".into(), list, cx));
+        let mut map = HashMap::from([("casa".to_owned(), entity.clone())]);
+
+        assert!(cx.update(|cx| drop_requests(&mut map, "casa", cx)));
+        assert!(map.is_empty());
+        entity.update(cx, |requests, _| {
+            assert_eq!(requests.count(), 0);
+            assert!(requests.api.is_none());
+        });
+        assert!(!cx.update(|cx| drop_requests(&mut map, "casa", cx)));
     }
 }

@@ -40,16 +40,6 @@ pub struct ApprovalConfig {
     pub retention: Duration,
 }
 
-impl Default for ApprovalConfig {
-    fn default() -> Self {
-        Self {
-            expires: APPROVAL_EXPIRES,
-            cooldown: COOLDOWN,
-            retention: DEFAULT_RETENTION,
-        }
-    }
-}
-
 /// Cartão público de pedido de aprovação exibido na lista SSE do dono.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ApprovalCard {
@@ -91,26 +81,6 @@ pub enum ApprovalError {
     TooMany,
     Cooldown,
 }
-
-impl fmt::Display for ApprovalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Invalid(reason) => write!(f, "pedido de aprovação inválido: {reason}"),
-            Self::Lost => write!(f, "pedido de aprovação não encontrado ou expirado"),
-            Self::Stale => write!(f, "o cartão de aprovação foi atualizado; tente novamente"),
-            Self::Answered => write!(f, "este pedido de aprovação já foi respondido"),
-            Self::TooMany => write!(f, "muitos pedidos de aprovação aguardando resposta"),
-            Self::Cooldown => {
-                write!(
-                    f,
-                    "o dono acabou de negar um pedido desta sessão; aguarde antes de tentar de novo"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for ApprovalError {}
 
 /// Parâmetros de entrada para abrir um pedido de aprovação de escrita.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,12 +144,6 @@ pub struct ApprovalStore {
     inner: Arc<StoreInner>,
 }
 
-impl Default for ApprovalStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Alça de espera vinculada a um cartão aberto; cancela o cartão no `Drop` se ainda pendente.
 pub struct ApprovalWaiter {
     inner: Weak<StoreInner>,
@@ -224,14 +188,19 @@ impl ApprovalStore {
     ///
     /// # Errors
     ///
-    /// Retorna [`ApprovalError::Invalid`] quando algum campo viola o contrato,
-    /// [`ApprovalError::TooMany`] se o teto global ou por sessão foi atingido, ou
-    /// [`ApprovalError::Cooldown`] se a sessão acabou de ter uma negação explícita.
+    /// Retorna [`ApprovalError::Invalid`] quando algum campo viola o contrato ou não há
+    /// runtime Tokio ativo para agendar a expiração, [`ApprovalError::TooMany`] se o teto global
+    /// ou por sessão foi atingido, ou [`ApprovalError::Cooldown`] se a sessão acabou de ter uma
+    /// negação explícita.
     pub fn open_request(
         &self,
         params: OpenApprovalRequest,
     ) -> Result<ApprovalWaiter, ApprovalError> {
         validate_request(&params)?;
+        // Garante runtime Tokio antes de publicar o cartão para nunca deixar pedido sem expiração.
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            ApprovalError::Invalid("runtime Tokio indisponível para agendar expiração".into())
+        })?;
 
         let id = random_hex(16);
         let interaction_id = random_hex(16);
@@ -245,7 +214,8 @@ impl ApprovalStore {
             origin: params.origin.trim().to_owned(),
             integration_id: params.integration_id.trim().to_owned(),
             integration_name: params.integration_name.trim().to_owned(),
-            tool: params.tool.trim().to_owned(),
+            // Preserva o nome exato da ferramenta para coincidir com `AllowAlways` na persistência.
+            tool: params.tool,
             arguments_preview: truncate_preview_chars(
                 &params.arguments_preview.replace('\0', ""),
                 MAX_ARGUMENTS_PREVIEW_CHARS,
@@ -301,10 +271,8 @@ impl ApprovalStore {
             publish(&self.inner.feed, &state);
         }
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let inner = Arc::clone(&self.inner);
-            handle.spawn(run_deadline(inner, id));
-        }
+        let inner = Arc::clone(&self.inner);
+        handle.spawn(run_deadline(inner, id));
 
         Ok(ApprovalWaiter {
             inner: Arc::downgrade(&self.inner),
@@ -321,8 +289,8 @@ impl ApprovalStore {
     ///
     /// # Errors
     ///
-    /// Retorna [`ApprovalError::Lost`] se o pedido sumiu ou foi cancelado,
-    /// [`ApprovalError::Answered`] se já foi respondido, expirou ou possui outra resposta em voo, e
+    /// Retorna [`ApprovalError::Lost`] se o pedido sumiu, foi cancelado ou já expirou,
+    /// [`ApprovalError::Answered`] se já foi respondido ou possui outra resposta em voo, e
     /// [`ApprovalError::Stale`] se o `interaction_id` não confere com o cartão atual.
     pub fn claim_answer(
         &self,
@@ -336,6 +304,10 @@ impl ApprovalStore {
         };
         if req.outcome.is_some() || req.claimed {
             return Err(ApprovalError::Answered);
+        }
+        // Recusa resposta se o prazo venceu mesmo antes da task `run_deadline` marcar `TimedOut`.
+        if Instant::now() >= req.deadline {
+            return Err(ApprovalError::Lost);
         }
         if req.card.interaction_id != interaction_id {
             return Err(ApprovalError::Stale);
@@ -356,8 +328,8 @@ impl ApprovalStore {
     ///
     /// # Errors
     ///
-    /// Retorna [`ApprovalError::Lost`] se o pedido sumiu ou foi cancelado,
-    /// [`ApprovalError::Answered`] se já foi respondido, expirou ou possui outra resposta em voo, e
+    /// Retorna [`ApprovalError::Lost`] se o pedido sumiu, foi cancelado ou já expirou,
+    /// [`ApprovalError::Answered`] se já foi respondido ou possui outra resposta em voo, e
     /// [`ApprovalError::Stale`] se o `interaction_id` não confere com o cartão atual.
     pub fn answer(
         &self,
@@ -395,6 +367,42 @@ impl ApprovalStore {
         publish(&self.inner.feed, &state);
     }
 }
+
+impl Default for ApprovalStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for ApprovalConfig {
+    fn default() -> Self {
+        Self {
+            expires: APPROVAL_EXPIRES,
+            cooldown: COOLDOWN,
+            retention: DEFAULT_RETENTION,
+        }
+    }
+}
+
+impl fmt::Display for ApprovalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(reason) => write!(f, "pedido de aprovação inválido: {reason}"),
+            Self::Lost => write!(f, "pedido de aprovação não encontrado ou expirado"),
+            Self::Stale => write!(f, "o cartão de aprovação foi atualizado; tente novamente"),
+            Self::Answered => write!(f, "este pedido de aprovação já foi respondido"),
+            Self::TooMany => write!(f, "muitos pedidos de aprovação aguardando resposta"),
+            Self::Cooldown => {
+                write!(
+                    f,
+                    "o dono acabou de negar um pedido desta sessão; aguarde antes de tentar de novo"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ApprovalError {}
 
 impl ClaimedApproval {
     /// Identificador da integração do pedido reservado.
@@ -734,11 +742,11 @@ mod tests {
         assert_eq!(w2.wait().await, ApprovalResolution::AllowOnce);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn deny_resolves_waiter_and_triggers_session_cooldown() {
         let store = ApprovalStore::with_config(ApprovalConfig {
             expires: Duration::from_secs(60),
-            cooldown: Duration::from_millis(80),
+            cooldown: Duration::from_secs(30),
             retention: Duration::from_secs(5),
         });
         let waiter = store
@@ -760,7 +768,7 @@ mod tests {
             .expect("outra sessão segue livre");
         drop(other);
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::advance(Duration::from_secs(31)).await;
         let recovered = store
             .open_request(sample_request("sess-cooldown", "delete_repo"))
             .expect("após cooldown a sessão pode pedir novamente");
@@ -835,12 +843,12 @@ mod tests {
         assert!(store.feed().borrow().requests.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn expires_after_configured_ttl_and_clears_feed() {
         let store = ApprovalStore::with_config(ApprovalConfig {
-            expires: Duration::from_millis(40),
+            expires: Duration::from_secs(10),
             cooldown: Duration::from_secs(30),
-            retention: Duration::from_millis(20),
+            retention: Duration::from_secs(5),
         });
         let feed = store.feed();
         let waiter = store
@@ -978,12 +986,12 @@ mod tests {
         assert_eq!(wait_handle.await.unwrap(), ApprovalResolution::AllowAlways);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn claim_answer_does_not_timeout_while_claimed_and_times_out_after_rollback() {
         let store = ApprovalStore::with_config(ApprovalConfig {
-            expires: Duration::from_millis(30),
+            expires: Duration::from_secs(10),
             cooldown: Duration::from_secs(30),
-            retention: Duration::from_millis(15),
+            retention: Duration::from_secs(5),
         });
         let feed = store.feed();
         let waiter = store
@@ -997,8 +1005,9 @@ mod tests {
             .claim_answer(&card.id, &card.interaction_id, ApprovalDecision::AllowAlways)
             .unwrap_or_else(|err| panic!("reserva deve funcionar: {err}"));
 
-        // Aguarda além do prazo enquanto a reserva está ativa: não pode expirar no meio da gravação.
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        // Avança além do prazo enquanto a reserva está ativa: não pode expirar no meio da gravação.
+        tokio::time::advance(Duration::from_secs(20)).await;
+        tokio::task::yield_now().await;
         assert_eq!(feed.borrow().requests.len(), 1);
         assert!(!wait_handle.is_finished());
 
@@ -1012,12 +1021,12 @@ mod tests {
         assert!(feed.borrow().requests.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn immediate_answer_before_deadline_task_runs_still_cleans_up_requests() {
         let store = ApprovalStore::with_config(ApprovalConfig {
             expires: Duration::from_secs(60),
             cooldown: Duration::from_secs(30),
-            retention: Duration::from_millis(15),
+            retention: Duration::from_secs(5),
         });
         let waiter = store
             .open_request(sample_request("sess-leak", "write_file"))
@@ -1032,16 +1041,86 @@ mod tests {
         assert_eq!(waiter.wait().await, ApprovalResolution::AllowOnce);
 
         // Após a janela de retenção, `run_deadline` deve remover o registro de `state.requests`.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-        loop {
-            if lock_state(&store.inner.state).requests.is_empty() {
-                break;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "run_deadline vazou pedido respondido antes do primeiro poll"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            lock_state(&store.inner.state).requests.is_empty(),
+            "run_deadline vazou pedido respondido antes do primeiro poll"
+        );
+    }
+
+    #[test]
+    fn open_request_outside_tokio_runtime_fails_without_inserting_or_publishing() {
+        let store = ApprovalStore::new();
+        let feed = store.feed();
+        let err = match store.open_request(sample_request("sess-no-rt", "create_issue")) {
+            Ok(_) => panic!("deve falhar sem runtime Tokio"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ApprovalError::Invalid(_)), "{err:?}");
+        assert_eq!(store.open_count(), 0);
+        assert!(feed.borrow().requests.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn claim_answer_rejects_expired_before_deadline_task_while_prior_claim_commits() {
+        let store = ApprovalStore::with_config(ApprovalConfig {
+            expires: Duration::from_secs(10),
+            cooldown: Duration::from_secs(30),
+            retention: Duration::from_secs(5),
+        });
+        let waiter_a = store
+            .open_request(sample_request("sess-exp-1", "write_a"))
+            .expect("deve abrir A");
+        let card_a = waiter_a.card().clone();
+        let waiter_b = store
+            .open_request(sample_request("sess-exp-2", "write_b"))
+            .expect("deve abrir B");
+        let card_b = waiter_b.card().clone();
+        tokio::task::yield_now().await;
+
+        // Reserva B antes do vencimento.
+        let claim_b = store
+            .claim_answer(&card_b.id, &card_b.interaction_id, ApprovalDecision::AllowAlways)
+            .expect("reserva de B antes do prazo deve suceder");
+
+        // Simula A já vencido enquanto `run_deadline` ainda não acordou para marcar `TimedOut`.
+        {
+            let mut state = lock_state(&store.inner.state);
+            let req_a = state.requests.get_mut(&card_a.id).expect("A ainda na fila");
+            req_a.deadline = Instant::now();
         }
+        assert_eq!(
+            store
+                .claim_answer(&card_a.id, &card_a.interaction_id, ApprovalDecision::AllowOnce)
+                .err(),
+            Some(ApprovalError::Lost),
+            "claim_answer após o prazo deve falhar com Lost mesmo antes do run_deadline"
+        );
+
+        // Avança o relógio além do prazo original de B: a reserva prévia ainda pode confirmar.
+        tokio::time::advance(Duration::from_secs(15)).await;
+        let answered_b = claim_b
+            .commit()
+            .expect("reserva feita antes do prazo deve confirmar mesmo após o prazo");
+        assert_eq!(answered_b.decision, ApprovalDecision::AllowAlways);
+        assert_eq!(waiter_b.wait().await, ApprovalResolution::AllowAlways);
+        assert_eq!(waiter_a.wait().await, ApprovalResolution::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn open_request_preserves_exact_tool_name_with_surrounding_spaces() {
+        let store = ApprovalStore::new();
+        let waiter = store
+            .open_request(sample_request("sess-space", "publish "))
+            .expect("deve abrir pedido com espaço no nome");
+        let card = waiter.card().clone();
+        assert_eq!(card.tool, "publish ");
+
+        let answered = store
+            .answer(&card.id, &card.interaction_id, ApprovalDecision::AllowAlways)
+            .expect("deve responder");
+        assert_eq!(answered.tool, "publish ");
+        assert_eq!(waiter.wait().await, ApprovalResolution::AllowAlways);
     }
 }

@@ -100,6 +100,8 @@ export interface UpdateIntegrationInput {
   pinned?: boolean;
   projects?: string[];
   allowed_tools?: string[];
+  add_allowed_tools?: string[];
+  remove_allowed_tools?: string[];
   secrets?: IntegrationSecretsPatch | null;
 }
 
@@ -138,6 +140,249 @@ export interface IntegrationApprovalRequest {
 
 export interface IntegrationApprovalEvent {
   requests: IntegrationApprovalRequest[];
+}
+
+const MAX_URL_BYTES = 2048;
+const MAX_HEADER_NAME_BYTES = 256;
+// Cabeçalhos reservados pelo transporte MCP ou pelo fluxo de autenticação do Hangar.
+export const RESERVED_HTTP_HEADERS: ReadonlySet<string> = new Set([
+  'authorization',
+  'accept',
+  'mcp-session-id',
+  'mcp-protocol-version',
+  'last-event-id',
+]);
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+export type ParseHeadersErrorKind = 'invalid_line' | 'invalid_name' | 'reserved_name' | 'invalid_value';
+
+export type ParseHeadersResult =
+  | { ok: true; names: string[]; map: Record<string, string> }
+  | { ok: false; reason: ParseHeadersErrorKind; name?: string };
+
+export type ParseEnvErrorKind = 'invalid_line' | 'invalid_key' | 'invalid_value';
+
+export type ParseEnvResult =
+  | { ok: true; keys: string[]; map: Record<string, string> }
+  | { ok: false; reason: ParseEnvErrorKind; key?: string };
+
+export type ParseCommandArgsResult =
+  | { ok: true; args: string[] }
+  | { ok: false; unclosedQuote: '"' | "'" };
+
+export interface IntegrationUrlValidationResult {
+  valid: boolean;
+  insecure?: boolean;
+}
+
+/** Divide texto por linha, aparando bordas e descartando linhas vazias. */
+export function parseLines(raw: string): string[] {
+  return raw.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+/** Separa escopos OAuth por espaços ou vírgulas, ignorando itens vazios. */
+export function parseScopes(raw: string): string[] {
+  return raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** Valida nome de cabeçalho HTTP segundo RFC 9110 (`tchar`) e recusa os reservados do MCP. */
+export function isValidHeaderName(name: string): boolean {
+  return name.length > 0
+    && name.length <= MAX_HEADER_NAME_BYTES
+    && HEADER_NAME_RE.test(name)
+    && !RESERVED_HTTP_HEADERS.has(name.toLowerCase());
+}
+
+/** Lê linhas `Nome: Valor`, diferenciando linha malformada, nome inválido/reservado e valor inválido. */
+export function parseHeaders(raw: string): ParseHeadersResult {
+  const names: string[] = [];
+  const map: Record<string, string> = {};
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const sep = trimmed.indexOf(':');
+    if (sep <= 0) return { ok: false, reason: 'invalid_line' };
+    const name = trimmed.slice(0, sep).trim().toLowerCase();
+    if (!name) return { ok: false, reason: 'invalid_line' };
+    if (name.length > MAX_HEADER_NAME_BYTES || !HEADER_NAME_RE.test(name)) {
+      return { ok: false, reason: 'invalid_name', name };
+    }
+    if (RESERVED_HTTP_HEADERS.has(name)) {
+      return { ok: false, reason: 'reserved_name', name };
+    }
+    const val = trimmed.slice(sep + 1).trim();
+    if (!val || /[\x00-\x08\x0a-\x1f\x7f]/.test(val)) {
+      return { ok: false, reason: 'invalid_value', name };
+    }
+    if (!names.includes(name)) names.push(name);
+    map[name] = val;
+  }
+  return { ok: true, names, map };
+}
+
+/** Lê linhas `CHAVE=VALOR`, preservando espaços finais do valor e removendo só `\r` final. */
+export function parseEnvVars(raw: string): ParseEnvResult {
+  const keys: string[] = [];
+  const map: Record<string, string> = {};
+  for (const line of raw.split('\n')) {
+    // Só remove `\r` de quebra CRLF; espaços à direita do valor fazem parte da variável.
+    const cleanLine = line.endsWith('\r') ? line.slice(0, -1) : line;
+    if (!cleanLine.trim()) continue;
+    const sep = cleanLine.indexOf('=');
+    if (sep <= 0) return { ok: false, reason: 'invalid_line' };
+    const key = cleanLine.slice(0, sep).trim();
+    if (!key) return { ok: false, reason: 'invalid_line' };
+    const val = cleanLine.slice(sep + 1);
+    if (key.length > MAX_HEADER_NAME_BYTES || key.includes('=') || /[\s\x00-\x1f\x7f]/.test(key)) {
+      return { ok: false, reason: 'invalid_key', key };
+    }
+    if (val.includes('\0')) {
+      return { ok: false, reason: 'invalid_value', key };
+    }
+    if (!keys.includes(key)) keys.push(key);
+    map[key] = val;
+  }
+  return { ok: true, keys, map };
+}
+
+/** Formata `command` de forma reversível para edição em texto único sem quebrar argumentos com espaços ou aspas. */
+export function formatCommandArgs(command: string[]): string {
+  return command
+    .map((arg) => {
+      if (arg.length > 0 && !/[\s"'\\]/.test(arg)) return arg;
+      return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    })
+    .join(' ');
+}
+
+const isEscapedInDoubleQuotes = (text: string, idx: number): boolean =>
+  text[idx] === '\\' && idx + 1 < text.length && (text[idx + 1] === '"' || text[idx + 1] === '\\');
+
+function splitUnquotedLines(
+  trimmed: string,
+): { ok: true; lines: string[]; multiLine: boolean } | { ok: false; unclosedQuote: '"' | "'" } {
+  const lines: string[] = [];
+  let cur = '';
+  let quote: '"' | "'" | null = null;
+  let multiLine = false;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (quote === '"') {
+      if (isEscapedInDoubleQuotes(trimmed, i)) {
+        cur += ch + trimmed[++i];
+      } else {
+        if (ch === '"') quote = null;
+        cur += ch;
+      }
+    } else if (quote === "'") {
+      if (ch === "'") quote = null;
+      cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+    } else if (ch === '\\' && i + 1 < trimmed.length && /[ \t"'\\]/.test(trimmed[i + 1])) {
+      cur += ch + trimmed[++i];
+    } else if (ch === '\n') {
+      multiLine = true;
+      const line = cur.trim();
+      if (line) lines.push(line);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+
+  if (quote !== null) return { ok: false, unclosedQuote: quote };
+  const last = cur.trim();
+  if (last) lines.push(last);
+  return { ok: true, lines, multiLine };
+}
+
+function tokenizeSingleLineArgs(trimmed: string): string[] {
+  const args: string[] = [];
+  let cur = '';
+  let hasToken = false;
+  let quote: '"' | "'" | null = null;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (quote === '"') {
+      if (isEscapedInDoubleQuotes(trimmed, i)) {
+        cur += trimmed[++i];
+      } else if (ch === '"') {
+        quote = null;
+      } else {
+        cur += ch;
+      }
+    } else if (quote === "'") {
+      if (ch === "'") quote = null;
+      else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      hasToken = true;
+    } else if (ch === '\\' && i + 1 < trimmed.length && /[ \t"'\\]/.test(trimmed[i + 1])) {
+      // Só escapa separadores e aspas fora das aspas para não estragar caminhos Windows sem escape.
+      cur += trimmed[++i];
+      hasToken = true;
+    } else if (/\s/.test(ch)) {
+      if (hasToken) {
+        args.push(cur);
+        cur = '';
+        hasToken = false;
+      }
+    } else {
+      cur += ch;
+      hasToken = true;
+    }
+  }
+  if (hasToken) args.push(cur);
+  return args;
+}
+
+/** Separa comando e argumentos (uma linha por argumento ou linha única com aspas), recusando aspas sem fechamento. */
+export function parseCommandArgs(raw: string): ParseCommandArgsResult {
+  const trimmed = raw.trim();
+  if (!trimmed) return { ok: true, args: [] };
+  const split = splitUnquotedLines(trimmed);
+  if (!split.ok) return split;
+  if (split.multiLine) return { ok: true, args: split.lines };
+  return { ok: true, args: tokenizeSingleLineArgs(trimmed) };
+}
+
+/** Valida URL HTTP(S) de transporte remoto e exige TLS ou loopback quando há autenticação ou cabeçalhos. */
+export function isValidIntegrationUrl(
+  url: string,
+  opts: { hasAuthOrHeaders: boolean } = { hasAuthOrHeaders: false },
+): IntegrationUrlValidationResult {
+  const trimmed = url.trim();
+  const byteLen = typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(trimmed).length : trimmed.length;
+  if (!trimmed || byteLen > MAX_URL_BYTES || /[\s\x00-\x1f\x7f]/.test(trimmed)) {
+    return { valid: false };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { valid: false };
+  }
+  if (
+    (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+    || !parsed.hostname
+    || parsed.username
+    || parsed.password
+    || parsed.port === '0'
+  ) {
+    return { valid: false };
+  }
+  if (parsed.protocol === 'http:' && opts.hasAuthOrHeaders) {
+    const host = parsed.hostname.toLowerCase();
+    const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+    if (!isLoopback) {
+      return { valid: false, insecure: true };
+    }
+  }
+  return { valid: true };
 }
 
 const READ_MS = 15_000;

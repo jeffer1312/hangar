@@ -417,7 +417,16 @@ impl Tools {
     }
 
     /// `draft`: o andamento do `whatsapp_draft`, lido pelo cancelamento em `mod.rs`.
-    pub async fn call(&self, name: &str, raw: JsonObject, headers: &HeaderMap, draft: Option<Arc<outbox::Progress>>) -> CallToolResult {
+    /// `external_started`: sinaliza quando `clients.call_tool` já enviou a chamada ao MCP externo.
+    pub async fn call(
+        &self,
+        name: &str,
+        raw: JsonObject,
+        headers: &HeaderMap,
+        draft: Option<Arc<outbox::Progress>>,
+        external_started: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ) -> CallToolResult {
+        let external_started = external_started.unwrap_or_default();
         let outcome = match name {
             "who_am_i" => self.who_am_i(headers).await,
             "sessions" => self.sessions(headers).await,
@@ -470,7 +479,7 @@ impl Tools {
                 Err(e) => Err(e),
             },
             "integration_call" => match args::<mcp_integrations::IntegrationCallArgs>(name, raw) {
-                Ok(a) => mcp_integrations::integration_call(&self.st, &self.api, &self.server_id, headers, a).await,
+                Ok(a) => mcp_integrations::integration_call(&self.st, &self.api, &self.server_id, headers, a, &external_started).await,
                 Err(e) => Err(e),
             },
             other if other.starts_with("int__") => {
@@ -482,6 +491,7 @@ impl Tools {
                     headers,
                     other,
                     raw,
+                    &external_started,
                 ).await
             }
             _ => Err(format!("Unknown tool: {name}")),

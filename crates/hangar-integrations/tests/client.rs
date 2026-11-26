@@ -31,9 +31,6 @@ use tempfile::TempDir;
 use tokio::sync::{Barrier, Notify, RwLock};
 use zeroize::Zeroizing;
 
-/// Garante que nenhum teste `stdio` dê `spawn` enquanto o teste de sanitização altera o ambiente do processo pai.
-static ENV_SPAWN_LOCK: RwLock<()> = RwLock::const_new(());
-
 fn fixture_bin() -> String {
     env!("CARGO_BIN_EXE_hangar-fixture-mcp").to_owned()
 }
@@ -114,38 +111,6 @@ impl TestEnv {
             self.tools_cache.clone(),
             config,
         )
-    }
-}
-
-struct ParentEnvGuard {
-    saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-}
-
-impl ParentEnvGuard {
-    fn set(vars: &[(&'static str, &str)]) -> Self {
-        let mut saved = Vec::with_capacity(vars.len());
-        for (key, value) in vars {
-            saved.push((*key, std::env::var_os(key)));
-            // SAFETY: o teste adquire write lock exclusivo em `ENV_SPAWN_LOCK`, impedindo `spawn`/`getenv` concorrentes.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-        }
-        Self { saved }
-    }
-}
-
-impl Drop for ParentEnvGuard {
-    fn drop(&mut self) {
-        for (key, previous) in self.saved.drain(..) {
-            // SAFETY: restaura o ambiente sob o mesmo `ENV_SPAWN_LOCK` antes de liberar o lock.
-            unsafe {
-                match previous {
-                    Some(val) => std::env::set_var(key, val),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
     }
 }
 
@@ -342,7 +307,6 @@ impl TokenRefresher for MockRefresher {
 
 #[tokio::test]
 async fn lazy_start_lists_tools_populates_cache_and_classifies_access() {
-    let _env_guard = ENV_SPAWN_LOCK.read().await;
     let env = TestEnv::new();
     let mut config = stdio_config("fixture-a", PermissionPolicy::ReadFreeAskWrite, vec![]);
     config.allowed_tools.insert("write_action".to_owned());
@@ -475,13 +439,36 @@ async fn lazy_start_lists_tools_populates_cache_and_classifies_access() {
     assert!(manager.running_ids().is_empty());
 }
 
+#[test]
+fn stdio_sanitizes_private_env_and_injects_secrets_env() {
+    let exe = std::env::current_exe().expect("resolver executável do teste");
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args([
+        "--exact",
+        "stdio_sanitizes_private_env_child_probe",
+        "--nocapture",
+    ])
+    .env("HANGAR_TEST_SUBPROCESS", "1");
+    for key in PRIVATE_ENV_KEYS {
+        cmd.env(key, "segredo-pai-proibido");
+    }
+    let output = cmd.output().expect("executar subprocesso de sanitização");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "subprocesso de sanitização falhou: status={:?}\nstdout={stdout}\nstderr={stderr}",
+        output.status.code()
+    );
+}
+
 #[tokio::test]
-async fn stdio_sanitizes_private_env_and_injects_secrets_env() {
-    let _env_guard = ENV_SPAWN_LOCK.write().await;
-    let _parent_guard = ParentEnvGuard::set(&[
-        ("CP_AUTH_TOKEN", "segredo-servidor"),
-        ("HANGAR_INTERNAL_SECRET", "interno-servidor"),
-    ]);
+async fn stdio_sanitizes_private_env_child_probe() {
+    if std::env::var_os("HANGAR_TEST_SUBPROCESS").as_deref()
+        != Some(std::ffi::OsStr::new("1"))
+    {
+        return;
+    }
 
     let env = TestEnv::new();
     let config = stdio_config(
@@ -533,12 +520,12 @@ async fn stdio_sanitizes_private_env_and_injects_secrets_env() {
     assert_eq!(payload["fixture_secret_var"], "valor-secreto-ok");
 
     manager.shutdown().await;
+    wait_until_pid_dead(pid, Duration::from_secs(2)).await;
     assert!(!pid_alive(pid).unwrap());
 }
 
 #[tokio::test]
 async fn idle_ttl_terminates_stdio_process_and_respawns_on_next_call() {
-    let _env_guard = ENV_SPAWN_LOCK.read().await;
     let env = TestEnv::new();
     env.registry
         .create(stdio_config(
@@ -565,6 +552,7 @@ async fn idle_ttl_terminates_stdio_process_and_respawns_on_next_call() {
     assert_eq!(manager.running_ids(), vec!["idle-test".to_owned()]);
 
     wait_until_idle_stopped(&manager, "idle-test", Duration::from_secs(2)).await;
+    wait_until_pid_dead(pid1, Duration::from_secs(2)).await;
     assert!(
         !pid_alive(pid1).unwrap(),
         "processo ocioso deveria encerrar"
@@ -586,7 +574,6 @@ async fn idle_ttl_terminates_stdio_process_and_respawns_on_next_call() {
 
 #[tokio::test]
 async fn call_timeout_kills_stuck_stdio_without_blocking_other_integrations() {
-    let _env_guard = ENV_SPAWN_LOCK.read().await;
     let env = TestEnv::new();
     let started_signal = env._dir.path().join("slow_started.flag");
     env.registry
@@ -679,7 +666,6 @@ async fn call_timeout_kills_stuck_stdio_without_blocking_other_integrations() {
 
 #[tokio::test]
 async fn invalidate_and_shutdown_terminate_process_trees_immediately() {
-    let _env_guard = ENV_SPAWN_LOCK.read().await;
     let env = TestEnv::new();
     env.registry
         .create(stdio_config("int-1", PermissionPolicy::AllowAll, vec![]))
@@ -921,7 +907,6 @@ async fn remote_http_oauth_handles_401_without_www_authenticate_header() {
 
 #[tokio::test]
 async fn list_tools_paginates_and_handles_disabled_tool_not_found_and_is_error() {
-    let _env_guard = ENV_SPAWN_LOCK.read().await;
     let env = TestEnv::new();
 
     let mut paginated = stdio_config(
@@ -1160,7 +1145,6 @@ async fn concurrent_oauth_401_refreshes_once_without_cancelling_each_other() {
 
 #[tokio::test]
 async fn reaper_preserves_active_calls_and_invalidate_cancels_in_flight_call() {
-    let _env_guard = ENV_SPAWN_LOCK.read().await;
     let env = TestEnv::new();
     let started_signal = env._dir.path().join("invalidate_race_started.flag");
     env.registry
@@ -1214,6 +1198,7 @@ async fn reaper_preserves_active_calls_and_invalidate_cancels_in_flight_call() {
 
     // Depois de concluir e ficar ociosa, o reaper encerra normalmente.
     wait_until_idle_stopped(&manager, "active-race", Duration::from_secs(2)).await;
+    wait_until_pid_dead(pid1, Duration::from_secs(2)).await;
     assert!(!pid_alive(pid1).unwrap());
 
     // Segunda fase: `invalidate` durante uma chamada em voo cancela a chamada e mata o processo filho.
@@ -1253,7 +1238,6 @@ async fn reaper_preserves_active_calls_and_invalidate_cancels_in_flight_call() {
 
 #[tokio::test]
 async fn connect_timeout_and_external_cancel_kill_hanging_stdio_init() {
-    let _env_guard = ENV_SPAWN_LOCK.read().await;
     let env = TestEnv::new();
 
     // Parte A: `connect_timeout` derruba processo que trava no handshake `initialize`.
@@ -1365,7 +1349,6 @@ async fn connect_timeout_and_external_cancel_kill_hanging_stdio_init() {
 
 #[tokio::test]
 async fn rejects_reserved_http_headers_and_repeated_pagination_cursor() {
-    let _env_guard = ENV_SPAWN_LOCK.read().await;
     let env = TestEnv::new();
 
     // Parte A: cabeçalhos HTTP reservados em `secrets.headers` são recusados fail-closed.
@@ -1555,4 +1538,193 @@ async fn concurrent_cold_oauth_401_deduplicates_refresh_and_rejects_blank_token(
     manager.shutdown().await;
     blank_manager.shutdown().await;
     server_handle.abort();
+}
+
+#[tokio::test]
+async fn list_tools_generation_fencing_discards_write_after_invalidation() {
+    #[derive(Clone)]
+    struct GatedListHandler {
+        started: Arc<Notify>,
+        allow: Arc<Notify>,
+    }
+
+    impl ServerHandler for GatedListHandler {
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        }
+
+        async fn list_tools(
+            &self,
+            _request: Option<PaginatedRequestParams>,
+            _context: RequestContext<RoleServer>,
+        ) -> Result<ListToolsResult, ErrorData> {
+            self.started.notify_one();
+            let _ = tokio::time::timeout(Duration::from_secs(3), self.allow.notified()).await;
+            let schema = Arc::new(
+                json!({"type": "object"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            );
+            Ok(ListToolsResult::with_all_items(vec![Tool::new(
+                "stale_tool",
+                "Ferramenta obsoleta",
+                schema,
+            )]))
+        }
+    }
+
+    let started = Arc::new(Notify::new());
+    let allow = Arc::new(Notify::new());
+    let handler = GatedListHandler {
+        started: started.clone(),
+        allow: allow.clone(),
+    };
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().unwrap();
+    let config = StreamableHttpServerConfig::default().disable_allowed_hosts();
+    let service = StreamableHttpService::new(
+        move || Ok(handler.clone()),
+        Arc::new(LocalSessionManager::default()),
+        config,
+    );
+    let router = Router::new().route_service("/mcp", service);
+    let server_handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let env = TestEnv::new();
+    env.registry
+        .create(http_config(
+            "gated-tools",
+            format!("http://{addr}/mcp"),
+            AuthConfig::None,
+            vec![],
+        ))
+        .unwrap();
+
+    let manager = Arc::new(env.manager(ClientConfig::default()));
+    let mgr_task = manager.clone();
+    let list_task = tokio::spawn(async move { mgr_task.list_tools("gated-tools").await });
+
+    tokio::time::timeout(Duration::from_secs(2), started.notified())
+        .await
+        .expect("list_tools deve alcançar servidor");
+    // Invalida o cache enquanto `list_tools` ainda está em voo.
+    env.tools_cache.invalidate("gated-tools");
+    allow.notify_one();
+
+    let returned = list_task.await.unwrap().expect("list_tools deve concluir");
+    assert_eq!(returned.len(), 1);
+    assert!(
+        env.tools_cache.get("gated-tools").is_none(),
+        "resultado iniciado antes de invalidate não pode voltar para o cache"
+    );
+
+    manager.shutdown().await;
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_refresh_discards_token_if_integration_target_changed_during_refresh() {
+    struct TargetSwitchRefresher {
+        registry: Arc<IntegrationRegistry>,
+        new_url: String,
+    }
+
+    impl TokenRefresher for TargetSwitchRefresher {
+        fn refresh<'a>(
+            &'a self,
+            integration_id: &'a str,
+        ) -> BoxFuture<'a, Result<String, ClientError>> {
+            let new_url = self.new_url.clone();
+            Box::pin(async move {
+                self.registry
+                    .update(
+                        integration_id,
+                        hangar_integrations::IntegrationUpdate {
+                            transport: Some(Transport::RemoteHttp {
+                                url: new_url,
+                                header_names: vec![],
+                            }),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                Ok("token-do-servidor-a".to_owned())
+            })
+        }
+    }
+
+    let state_a = AuthGateState {
+        expected_token: Arc::new(RwLock::new("token-valido-a".to_owned())),
+        ..Default::default()
+    };
+    let (addr_a, handle_a) = spawn_http_mcp_server(state_a).await;
+
+    let hits_b = Arc::new(AtomicUsize::new(0));
+    let hits_b_clone = hits_b.clone();
+    let listener_b = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr_b = listener_b.local_addr().unwrap();
+    let app_b = Router::new().fallback(move || {
+        let hits = hits_b_clone.clone();
+        async move {
+            hits.fetch_add(1, Ordering::SeqCst);
+            StatusCode::UNAUTHORIZED
+        }
+    });
+    let handle_b = tokio::spawn(async move {
+        let _ = axum::serve(listener_b, app_b).await;
+    });
+
+    let env = TestEnv::new();
+    env.registry
+        .create(http_config(
+            "oauth-target-switch",
+            format!("http://{addr_a}/mcp"),
+            AuthConfig::OAuthDcr,
+            vec![],
+        ))
+        .unwrap();
+    env.secrets
+        .set(
+            "oauth-target-switch",
+            IntegrationSecrets {
+                oauth: Some(OAuthTokens {
+                    access_token: Zeroizing::new("token-expirado-a".to_owned()),
+                    ..OAuthTokens::default()
+                }),
+                ..IntegrationSecrets::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let refresher = Arc::new(TargetSwitchRefresher {
+        registry: env.registry.clone(),
+        new_url: format!("http://{addr_b}/mcp"),
+    });
+    let manager = env
+        .manager(ClientConfig::default())
+        .with_refresher(refresher);
+
+    let res = manager
+        .call_tool("oauth-target-switch", "read_echo", json!({"text": "oi"}))
+        .await;
+    assert!(
+        matches!(res, Err(ClientError::AuthExpired(_))),
+        "alteração de destino durante refresh deve abortar com AuthExpired, veio {res:?}"
+    );
+    assert_eq!(
+        hits_b.load(Ordering::SeqCst),
+        0,
+        "token renovado para o servidor A nunca pode ser enviado ao servidor B"
+    );
+
+    manager.shutdown().await;
+    handle_a.abort();
+    handle_b.abort();
 }

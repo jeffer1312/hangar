@@ -5,17 +5,19 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use hangar_core::fs::{atomic_write, chmod, lock_file, read_replaced};
+use hangar_core::fs::{chmod, lock_file, read_replaced, replace};
 
 use crate::model::{
     AuthConfig, IntegrationConfig, PermissionPolicy, Transport, ValidationError, valid_tool_name,
 };
 
 const FORMAT_VERSION: u32 = 1;
+static TEMP_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Erros de leitura e escrita do catálogo de integrações.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,7 +110,8 @@ impl IntegrationRegistry {
     ///
     /// Retorna [`RegistryError::Validation`] se o registro for inválido,
     /// [`RegistryError::AlreadyExists`] se o `id` já existir, ou erros de corrupção/E/S.
-    pub fn create(&self, config: IntegrationConfig) -> Result<IntegrationConfig, RegistryError> {
+    pub fn create(&self, mut config: IntegrationConfig) -> Result<IntegrationConfig, RegistryError> {
+        config.normalize();
         config.validate()?;
         self.mutate(|file| {
             if file.integrations.iter().any(|entry| entry.id == config.id) {
@@ -146,7 +149,9 @@ impl IntegrationRegistry {
             if let Some(enabled) = change.enabled {
                 next.enabled = enabled;
             }
+            let mut destination_changed = false;
             if let Some(transport) = change.transport {
+                destination_changed = transport_destination_changed(&entry.transport, &transport);
                 next.transport = transport;
             }
             if let Some(auth) = change.auth {
@@ -163,12 +168,57 @@ impl IntegrationRegistry {
             }
             if let Some(allowed_tools) = change.allowed_tools {
                 next.allowed_tools = allowed_tools;
+            } else if destination_changed {
+                // Troca de destino não herda liberações permanentes do servidor/comando anterior.
+                next.allowed_tools.clear();
             }
+            next.normalize();
             next.updated_at = change.updated_at.unwrap_or_else(now_secs);
             next.validate()?;
             let changed = *entry != next;
             *entry = next.clone();
             Ok((next, changed))
+        })
+    }
+
+    /// Aplica um delta atômico em `allowed_tools` sob a trava do catálogo.
+    ///
+    /// Remove primeiro os itens de `remove` e depois insere os de `add`, de forma determinística
+    /// caso uma mesma ferramenta apareça nas duas listas.
+    ///
+    /// # Errors
+    ///
+    /// Retorna [`RegistryError::Validation`] se algum nome em `add` for inválido,
+    /// [`RegistryError::NotFound`] se a integração não existir, ou erros de corrupção/E/S.
+    pub fn patch_allowed_tools(
+        &self,
+        id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> Result<IntegrationConfig, RegistryError> {
+        if add.iter().any(|tool| !valid_tool_name(tool)) {
+            return Err(RegistryError::Validation(
+                ValidationError::InvalidAllowedTool,
+            ));
+        }
+        self.mutate(|file| {
+            let entry = file
+                .integrations
+                .iter_mut()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| RegistryError::NotFound(id.to_owned()))?;
+            let before = entry.allowed_tools.clone();
+            for tool in remove {
+                entry.allowed_tools.remove(tool.as_str());
+            }
+            for tool in add {
+                entry.allowed_tools.insert(tool.clone());
+            }
+            let changed = entry.allowed_tools != before;
+            if changed {
+                entry.updated_at = now_secs();
+            }
+            Ok((entry.clone(), changed))
         })
     }
 
@@ -307,7 +357,7 @@ impl IntegrationRegistry {
                 .sort_by(|left, right| left.id.cmp(&right.id));
             let bytes = serde_json::to_vec_pretty(&file)
                 .map_err(|error| RegistryError::Io(format!("serialização: {error}")))?;
-            atomic_write(&self.path, &bytes).map_err(|error| {
+            write_private_atomic(&self.path, &bytes).map_err(|error| {
                 RegistryError::Io(format!("gravação atômica: {:?}", error.kind()))
             })?;
             chmod(&self.path, 0o600).map_err(|error| {
@@ -341,6 +391,71 @@ impl From<ValidationError> for RegistryError {
 /// Retorna `<hangar_dir>/integrations/config.json`.
 pub fn config_path(hangar_dir: &Path) -> PathBuf {
     hangar_dir.join("integrations").join("config.json")
+}
+
+fn transport_destination_changed(old: &Transport, new: &Transport) -> bool {
+    match (old, new) {
+        (
+            Transport::RemoteHttp { url: old_url, .. },
+            Transport::RemoteHttp { url: new_url, .. },
+        ) => old_url != new_url,
+        (
+            Transport::LocalStdio {
+                command: old_cmd,
+                cwd: old_cwd,
+                ..
+            },
+            Transport::LocalStdio {
+                command: new_cmd,
+                cwd: new_cwd,
+                ..
+            },
+        ) => old_cmd != new_cmd || old_cwd != new_cwd,
+        _ => true,
+    }
+}
+
+fn write_private_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "arquivo sem pasta pai"))?;
+    let tick = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = TEMP_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(".config-{}-{tick}-{seq}.tmp", std::process::id()));
+    let mut created = false;
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp)?;
+        created = true;
+        // Garante modo 0o600 no arquivo temporário antes do rename, preservando o arquivo atual em erro.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        io::Write::write_all(&mut file, bytes)?;
+        file.sync_all()?;
+        drop(file);
+        replace(&temp, path)?;
+        #[cfg(unix)]
+        {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if created {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 fn now_secs() -> f64 {

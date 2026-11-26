@@ -5,6 +5,7 @@ import {
   fold,
   listCatalog,
   listIntegrations,
+  registrarDiag,
   type IntegrationPreset,
   type IntegrationView,
 } from '@hangar/core';
@@ -38,30 +39,55 @@ export default function IntegrationsScreen() {
   const [editor, setEditor] = useState<EditorState | null>(null);
 
   const generation = useRef(0);
+  const hasLoadedRef = useRef(false);
   const serverRef = useRef(server);
   serverRef.current = server;
 
-  const load = useCallback(() => {
+  const load = useCallback((opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false;
     const now = ++generation.current;
     const current = serverRef.current;
     if (!current) return;
-    setLoading(true);
-    setError('');
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
     void Promise.all([listIntegrations(current), listCatalog(current)])
       .then(([list, catalog]) => {
-        if (now !== generation.current) return;
+        const active = serverRef.current;
+        if (now !== generation.current || !active || active.id !== current.id || active.baseUrl !== current.baseUrl) return;
+        hasLoadedRef.current = true;
+        setError('');
         setIntegrations(list);
         setPresets(catalog);
       })
       .catch((e: unknown) => {
-        if (now === generation.current) setError(integrationErrorText(e) || m.integrations_load_error());
+        const active = serverRef.current;
+        if (now !== generation.current || !active || active.id !== current.id || active.baseUrl !== current.baseUrl) return;
+        if (silent) {
+          const msg = integrationErrorText(e) || m.integrations_load_error();
+          // Atualização automática em segundo plano não derruba nem polui a lista já carregada.
+          registrarDiag({
+            evento: 'integrations.refresh_failed',
+            nivel: 'aviso',
+            tela: 'integrations',
+            codigo: typeof (e as { code?: unknown } | null)?.code === 'string'
+              ? (e as { code: string }).code
+              : e instanceof Error ? e.name : 'erro',
+            detalhe: msg.slice(0, 300),
+          }, current.baseUrl);
+          console.warn('integrations: silent refresh failed', e);
+          return;
+        }
+        setError(integrationErrorText(e) || m.integrations_load_error());
       })
       .finally(() => {
-        if (now === generation.current) setLoading(false);
+        if (!silent && now === generation.current) setLoading(false);
       });
   }, []);
 
   useEffect(() => {
+    hasLoadedRef.current = false;
     setIntegrations(null);
     setPresets([]);
     setError('');
@@ -76,7 +102,7 @@ export default function IntegrationsScreen() {
   // Ao voltar do navegador após concluir o OAuth, atualiza o estado das integrações.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') load();
+      if (state === 'active') load({ silent: hasLoadedRef.current });
     });
     return () => sub.remove();
   }, [load]);
@@ -109,10 +135,15 @@ export default function IntegrationsScreen() {
       ?? (fallbackSelected?.id === selectedId ? fallbackSelected : null);
   }, [selectedId, integrations, fallbackSelected]);
 
+  const sameServer = (target: { id: string; baseUrl: string }) => {
+    const active = serverRef.current;
+    return !!active && active.id === target.id && active.baseUrl === target.baseUrl;
+  };
+
   return (
     <Pagina
       refreshControl={
-        server ? <RefreshControl refreshing={loading && integrations !== null} onRefresh={load} /> : undefined
+        server ? <RefreshControl refreshing={loading && integrations !== null} onRefresh={() => load()} /> : undefined
       }
     >
       <Stack.Screen options={{ title: m.integrations_title() }} />
@@ -126,7 +157,7 @@ export default function IntegrationsScreen() {
         <>
           <Notice text={error} error />
           <MachineGroup>
-            <MachineRow title={m.integrations_retry()} action onPress={load} />
+            <MachineRow title={m.integrations_retry()} action onPress={() => load()} />
           </MachineGroup>
         </>
       ) : integrations ? (
@@ -170,7 +201,7 @@ export default function IntegrationsScreen() {
             <MachineRow
               title={m.integrations_refresh()}
               disabled={loading}
-              onPress={load}
+              onPress={() => load()}
             />
           </MachineGroup>
 
@@ -199,12 +230,16 @@ export default function IntegrationsScreen() {
           integration={selected}
           autoStartOAuth={autoStartOAuth}
           onClose={() => {
+            if (!sameServer(server)) return;
             setSelectedId(null);
             setFallbackSelected(null);
             setAutoStartOAuth(false);
           }}
-          onChanged={load}
+          onChanged={() => {
+            if (sameServer(server)) load();
+          }}
           onEdit={(item) => {
+            if (!sameServer(server)) return;
             setSelectedId(null);
             setFallbackSelected(null);
             setAutoStartOAuth(false);
@@ -225,8 +260,12 @@ export default function IntegrationsScreen() {
           }
           editing={editor.mode === 'edit' ? editor.integration : null}
           existingIds={existingIds}
-          onClose={() => setEditor(null)}
+          onClose={() => {
+            if (sameServer(server)) setEditor(null);
+          }}
           onSaved={(saved, { isNew }) => {
+            // Descarta gravação que concluiu depois da troca de máquina ativa.
+            if (!sameServer(server)) return;
             setIntegrations((cur) => {
               if (!cur) return [saved];
               const idx = cur.findIndex((x) => x.id === saved.id);

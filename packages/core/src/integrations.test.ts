@@ -1,16 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as m from './paraglide/messages';
 import {
+  RESERVED_HTTP_HEADERS,
   answerIntegrationApproval,
   cancelIntegrationApproval,
   createIntegration,
   deleteIntegration,
+  formatCommandArgs,
   integrationFailureText,
+  isValidHeaderName,
+  isValidIntegrationUrl,
   listCatalog,
   listIntegrationTools,
   listIntegrations,
   openIntegrationOAuthOnDesktop,
+  parseCommandArgs,
+  parseEnvVars,
+  parseHeaders,
   parseIntegrationApprovalEvent,
+  parseLines,
+  parseScopes,
   resolveMobilePublicBaseUrl,
   startIntegrationOAuth,
   testIntegration,
@@ -257,5 +266,165 @@ describe('integrationFailureText', () => {
     expect(integrationFailureText({ code: 'toString' })).toBeUndefined();
     expect(integrationFailureText({ code: 'unknown_code' })).toBeUndefined();
     expect(integrationFailureText(null)).toBeUndefined();
+  });
+});
+
+describe('updateIntegration delta de allowed_tools', () => {
+  it('envia add_allowed_tools e remove_allowed_tools mantendo allowed_tools opcional', async () => {
+    const view = sampleView();
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ integration: { ...view, allowed_tools: ['create_issue'] } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ integration: view })));
+
+    await updateIntegration(server, 'github', { add_allowed_tools: ['create_issue'] });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      add_allowed_tools: ['create_issue'],
+    });
+
+    await updateIntegration(server, 'github', { remove_allowed_tools: ['create_issue'] });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      remove_allowed_tools: ['create_issue'],
+    });
+  });
+});
+
+describe('parsers e validadores compartilhados de integrações', () => {
+  it('parseLines e parseScopes normalizam linhas e separadores', () => {
+    expect(parseLines('  proj-a \r\n\r\n  proj-b\n  ')).toEqual(['proj-a', 'proj-b']);
+    expect(parseLines('  \n \r\n ')).toEqual([]);
+
+    expect(parseScopes('openid, profile  email\nread:user , write:user')).toEqual([
+      'openid',
+      'profile',
+      'email',
+      'read:user',
+      'write:user',
+    ]);
+    expect(parseScopes(' , \n ')).toEqual([]);
+  });
+
+  it('isValidHeaderName segue tchar RFC 9110 e rejeita cabeçalhos reservados', () => {
+    expect(isValidHeaderName('X-Api-Key')).toBe(true);
+    expect(isValidHeaderName("x-custom_1!#$%&'*+-.^_`|~")).toBe(true);
+    expect(isValidHeaderName('')).toBe(false);
+    expect(isValidHeaderName('a'.repeat(257))).toBe(false);
+    expect(isValidHeaderName('X(Key)')).toBe(false);
+    expect(isValidHeaderName('X Key')).toBe(false);
+    expect(isValidHeaderName('X:Key')).toBe(false);
+    expect(isValidHeaderName('X-Café')).toBe(false);
+
+    for (const reserved of RESERVED_HTTP_HEADERS) {
+      expect(isValidHeaderName(reserved)).toBe(false);
+    }
+    expect(isValidHeaderName('Authorization')).toBe(false);
+    expect(isValidHeaderName('Mcp-Session-Id')).toBe(false);
+  });
+
+  it('parseHeaders diferencia linha malformada, nome inválido/reservado e valor inválido', () => {
+    expect(parseHeaders('')).toEqual({ ok: true, names: [], map: {} });
+    expect(parseHeaders('  X-Api-Key: secret-1 \r\nX-Tenant:  acme\t1 \nX-Api-Key: secret-2')).toEqual({
+      ok: true,
+      names: ['x-api-key', 'x-tenant'],
+      map: { 'x-api-key': 'secret-2', 'x-tenant': 'acme\t1' },
+    });
+
+    expect(parseHeaders('sem-separador')).toEqual({ ok: false, reason: 'invalid_line' });
+    expect(parseHeaders(': valor')).toEqual({ ok: false, reason: 'invalid_line' });
+    expect(parseHeaders('   : valor')).toEqual({ ok: false, reason: 'invalid_line' });
+    expect(parseHeaders('X(Key): valor')).toEqual({ ok: false, reason: 'invalid_name', name: 'x(key)' });
+    expect(parseHeaders('Authorization: Bearer x')).toEqual({ ok: false, reason: 'reserved_name', name: 'authorization' });
+    expect(parseHeaders('Mcp-Protocol-Version: 2025-03-26')).toEqual({
+      ok: false,
+      reason: 'reserved_name',
+      name: 'mcp-protocol-version',
+    });
+    expect(parseHeaders('X-Empty:   ')).toEqual({ ok: false, reason: 'invalid_value', name: 'x-empty' });
+    expect(parseHeaders('X-Ctrl: ok\u0000bad')).toEqual({ ok: false, reason: 'invalid_value', name: 'x-ctrl' });
+  });
+
+  it('parseEnvVars preserva espaços finais do valor e remove só \\r de CRLF', () => {
+    expect(parseEnvVars('  \n\r\n')).toEqual({ ok: true, keys: [], map: {} });
+    expect(parseEnvVars('LABEL=production \r\n  SPACED=  mid  \nEMPTY=\nEXPR=a=b=c')).toEqual({
+      ok: true,
+      keys: ['LABEL', 'SPACED', 'EMPTY', 'EXPR'],
+      map: {
+        LABEL: 'production ',
+        SPACED: '  mid  ',
+        EMPTY: '',
+        EXPR: 'a=b=c',
+      },
+    });
+
+    expect(parseEnvVars('SEM_IGUAL')).toEqual({ ok: false, reason: 'invalid_line' });
+    expect(parseEnvVars('=sem-chave')).toEqual({ ok: false, reason: 'invalid_line' });
+    expect(parseEnvVars('  =sem-chave')).toEqual({ ok: false, reason: 'invalid_line' });
+    expect(parseEnvVars('CHAVE INVALIDA=1')).toEqual({ ok: false, reason: 'invalid_key', key: 'CHAVE INVALIDA' });
+    expect(parseEnvVars('BAD=val\u0000x')).toEqual({ ok: false, reason: 'invalid_value', key: 'BAD' });
+  });
+
+  it('formatCommandArgs e parseCommandArgs fazem ida e volta sem perda e rejeitam aspas abertas', () => {
+    const roundTrips: string[][] = [
+      [],
+      ['npx', '-y', '@modelcontextprotocol/server-filesystem'],
+      ['/opt/My Tools/server'],
+      ['/opt/My Tools/server', '--label', 'hello world', 'a"b', "c'd"],
+      ['C:\\Program Files\\tool\\mcp.exe', 'C:\\foo\\bar', 'end\\'],
+      ['node', '-e', 'console.log("hi")'],
+      ['cmd', ''],
+      ['sh', '-c', 'line1\nline2'],
+    ];
+    for (const command of roundTrips) {
+      const formatted = formatCommandArgs(command);
+      expect(parseCommandArgs(formatted)).toEqual({ ok: true, args: command });
+    }
+
+    expect(parseCommandArgs('  ')).toEqual({ ok: true, args: [] });
+    expect(parseCommandArgs(`--flag="my val" 'single arg' escaped\\ space`)).toEqual({
+      ok: true,
+      args: ['--flag=my val', 'single arg', 'escaped space'],
+    });
+    expect(parseCommandArgs('C:\\tools\\mcp.exe --port 3000')).toEqual({
+      ok: true,
+      args: ['C:\\tools\\mcp.exe', '--port', '3000'],
+    });
+    expect(parseCommandArgs('/opt/My Tools/server\r\n--dir\r\n/Users/me/My Docs')).toEqual({
+      ok: true,
+      args: ['/opt/My Tools/server', '--dir', '/Users/me/My Docs'],
+    });
+    expect(parseCommandArgs('npx "unclosed')).toEqual({ ok: false, unclosedQuote: '"' });
+    expect(parseCommandArgs("npx 'unclosed")).toEqual({ ok: false, unclosedQuote: "'" });
+    expect(parseCommandArgs('npx "escaped\\"')).toEqual({ ok: false, unclosedQuote: '"' });
+    expect(parseCommandArgs('npx\n"unclosed')).toEqual({ ok: false, unclosedQuote: '"' });
+  });
+
+  it('isValidIntegrationUrl exige HTTPS ou loopback em HTTP quando há autenticação ou cabeçalhos', () => {
+    expect(isValidIntegrationUrl('https://mcp.example.com/mcp', { hasAuthOrHeaders: true })).toEqual({ valid: true });
+    expect(isValidIntegrationUrl('http://mcp.example.com/mcp', { hasAuthOrHeaders: false })).toEqual({ valid: true });
+
+    for (const loopback of [
+      'http://localhost/mcp',
+      'http://localhost:8080/mcp',
+      'http://127.0.0.1:3000/mcp',
+      'http://[::1]:3000/mcp',
+    ]) {
+      expect(isValidIntegrationUrl(loopback, { hasAuthOrHeaders: true })).toEqual({ valid: true });
+    }
+
+    expect(isValidIntegrationUrl('http://mcp.example.com/mcp', { hasAuthOrHeaders: true })).toEqual({
+      valid: false,
+      insecure: true,
+    });
+    expect(isValidIntegrationUrl('http://192.168.1.50:8080/mcp', { hasAuthOrHeaders: true })).toEqual({
+      valid: false,
+      insecure: true,
+    });
+
+    expect(isValidIntegrationUrl('', { hasAuthOrHeaders: false })).toEqual({ valid: false });
+    expect(isValidIntegrationUrl('ftp://mcp.example.com/mcp', { hasAuthOrHeaders: false })).toEqual({ valid: false });
+    expect(isValidIntegrationUrl('https://user:pass@mcp.example.com/mcp', { hasAuthOrHeaders: false })).toEqual({
+      valid: false,
+    });
+    expect(isValidIntegrationUrl('https://mcp.example.com/a b', { hasAuthOrHeaders: false })).toEqual({ valid: false });
+    expect(isValidIntegrationUrl('https://mcp.example.com:0/mcp', { hasAuthOrHeaders: false })).toEqual({ valid: false });
   });
 });

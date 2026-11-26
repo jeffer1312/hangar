@@ -7,12 +7,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hangar_integrations::{
     ApprovalConfig, ApprovalStore, ClientConfig, IntegrationRegistry, McpClientManager,
     OAuthManager, SecretKeyStore, SecretStore, ToolsCache,
 };
+
+const VOICE_CONFIRMATION_TTL: Duration = Duration::from_secs(120);
 
 /// Serviço compartilhado em [`crate::routes::AppState`] para gerenciar integrações MCP externas.
 pub struct IntegrationsService {
@@ -26,6 +28,10 @@ pub struct IntegrationsService {
     local_port: AtomicU16,
     /// Última falha operacional em memória por integração (limpa ao reconectar/atualizar/testar).
     last_errors: Mutex<HashMap<String, String>>,
+    /// Travas por integração para serializar mutações administrativas (`create`, `patch`, `delete`).
+    locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Confirmações de uso único emitidas para chamadas de escrita pela voz, indexadas por `(id, tool, args_hash)`.
+    voice_confirmations: Mutex<HashMap<(String, String, String), Instant>>,
 }
 
 impl IntegrationsService {
@@ -78,6 +84,8 @@ impl IntegrationsService {
             approvals,
             local_port: AtomicU16::new(0),
             last_errors: Mutex::new(HashMap::new()),
+            locks: Mutex::new(HashMap::new()),
+            voice_confirmations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -89,6 +97,66 @@ impl IntegrationsService {
     /// Retorna a porta local real registrada (ou `0` se ainda não vinculada).
     pub fn local_port(&self) -> u16 {
         self.local_port.load(Ordering::Relaxed)
+    }
+
+    /// Serializa mutações administrativas (`create`, `patch`, `delete`) por identificador.
+    pub async fn lock_integration(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut guard = self.locks.lock().unwrap_or_else(PoisonError::into_inner);
+            guard
+                .entry(id.to_owned())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        lock.lock_owned().await
+    }
+
+    /// Registra autorização pendente de voz para `(integration_id, tool_name, args_hash)` com TTL curto.
+    pub fn record_voice_confirmation(
+        &self,
+        integration_id: &str,
+        tool_name: &str,
+        args_hash: String,
+    ) {
+        let now = Instant::now();
+        let mut guard = self
+            .voice_confirmations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.retain(|_, expires_at| *expires_at > now);
+        guard.insert(
+            (integration_id.to_owned(), tool_name.to_owned(), args_hash),
+            now + VOICE_CONFIRMATION_TTL,
+        );
+    }
+
+    /// Consome atomicamente uma confirmação de voz prévia se presente e dentro do prazo.
+    pub fn consume_voice_confirmation(
+        &self,
+        integration_id: &str,
+        tool_name: &str,
+        args_hash: &str,
+    ) -> bool {
+        let now = Instant::now();
+        let mut guard = self
+            .voice_confirmations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.retain(|_, expires_at| *expires_at > now);
+        let key = (
+            integration_id.to_owned(),
+            tool_name.to_owned(),
+            args_hash.to_owned(),
+        );
+        guard.remove(&key).is_some()
+    }
+
+    /// Remove confirmações de voz pendentes da integração após alteração sensível ou exclusão.
+    pub fn clear_voice_confirmations(&self, integration_id: &str) {
+        self.voice_confirmations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(id, _, _), _| id != integration_id);
     }
 
     /// Registra a última mensagem de falha operacional em memória (sem segredos).

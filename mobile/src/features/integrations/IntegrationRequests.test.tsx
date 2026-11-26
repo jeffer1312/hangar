@@ -28,9 +28,11 @@ const mocks = vi.hoisted(() => ({
   openIntegrationOAuthOnDesktop: vi.fn(),
   testIntegration: vi.fn(),
   listIntegrationTools: vi.fn(),
+  registrarDiag: vi.fn(),
   openURL: vi.fn(),
   toastOk: vi.fn(),
   toastErro: vi.fn(),
+  appStateListener: null as ((state: string) => void) | null,
   useIdentities: vi.fn(() => ({ identities: new Map([['a', 'a']]), loading: new Set<string>() })),
 }));
 
@@ -38,6 +40,13 @@ vi.mock('react-native', async (original) => {
   const native = await original<typeof import('react-native')>();
   return {
     ...native,
+    AppState: {
+      currentState: 'active',
+      addEventListener: (_event: string, cb: (state: string) => void) => {
+        mocks.appStateListener = cb;
+        return { remove: () => { if (mocks.appStateListener === cb) mocks.appStateListener = null; } };
+      },
+    },
     RefreshControl: () => null,
     TextInput: ({ value, onChangeText, accessibilityLabel, editable, placeholder }: {
       value?: string; onChangeText?: (value: string) => void; accessibilityLabel?: string; editable?: boolean; placeholder?: string;
@@ -65,6 +74,7 @@ vi.mock('@hangar/core', async (original) => ({
   openIntegrationOAuthOnDesktop: mocks.openIntegrationOAuthOnDesktop,
   testIntegration: mocks.testIntegration,
   listIntegrationTools: mocks.listIntegrationTools,
+  registrarDiag: mocks.registrarDiag,
 }));
 vi.mock('../machines/parts', () => ({
   MachineSheet: ({ title, children }: { title: string; children: ReactNode }) =>
@@ -112,6 +122,7 @@ const title = (label: string, count = 1) => m.integrations_approval_requests_tit
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
+  mocks.appStateListener = null;
   mocks.listCatalog.mockResolvedValue([]);
   mocks.listIntegrations.mockResolvedValue([]);
   mocks.useIdentities.mockImplementation(() => ({ identities: new Map([['a', 'a']]), loading: new Set<string>() }));
@@ -331,7 +342,7 @@ it('testIntegration trata 424 auth_expired na folha e libera ferramentas ao apro
   expect(allowBtn).not.toBeNull();
   await act(async () => { allowBtn!.click(); });
 
-  expect(mocks.updateIntegration).toHaveBeenCalledWith(srv, 'notion', { allowed_tools: ['create_issue'] });
+  expect(mocks.updateIntegration).toHaveBeenCalledWith(srv, 'notion', { add_allowed_tools: ['create_issue'] });
 });
 
 it('editor de preset Google exibe guia curto e nota dos 7 dias em Testing', async () => {
@@ -484,23 +495,23 @@ it('editor rejeita cabeçalhos e variáveis de ambiente malformados ou cabeçalh
   await setField(m.integrations_field_name(), 'Custom MCP');
   await setField(m.integrations_field_url(), 'https://mcp.example.com/mcp');
 
-  for (const [badHeader, expectedToken] of [
+  for (const [badHeader, expectedError] of [
     ['sem-separador', m.integrations_field_headers()],
     [': valor-sem-nome', m.integrations_field_headers()],
-    ['X-Empty:   ', 'x-empty'],
-    ['Authorization: Bearer segredo', 'authorization'],
-    ['Accept: text/plain', 'accept'],
-    ['Mcp-Session-Id: 123', 'mcp-session-id'],
-    ['Mcp-Protocol-Version: 2025-03-26', 'mcp-protocol-version'],
-    ['Last-Event-Id: 9', 'last-event-id'],
+    ['X-Empty:   ', `${m.integrations_field_headers()}: x-empty`],
+    ['X(Key): valor', m.integrations_validation_header_name({ name: 'x(key)' })],
+    ['Authorization: Bearer segredo', m.integrations_validation_header_name({ name: 'authorization' })],
+    ['Accept: text/plain', m.integrations_validation_header_name({ name: 'accept' })],
+    ['Mcp-Session-Id: 123', m.integrations_validation_header_name({ name: 'mcp-session-id' })],
+    ['Mcp-Protocol-Version: 2025-03-26', m.integrations_validation_header_name({ name: 'mcp-protocol-version' })],
+    ['Last-Event-Id: 9', m.integrations_validation_header_name({ name: 'last-event-id' })],
   ] as const) {
     await setField(m.integrations_field_headers(), badHeader);
     await act(async () => {
       container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_connect()}"]`)!.click();
     });
     expect(mocks.createIntegration).not.toHaveBeenCalled();
-    expect(container.textContent).toContain(m.integrations_field_headers());
-    expect(container.textContent).toContain(expectedToken);
+    expect(container.textContent).toContain(expectedError);
   }
 
   // Troca para stdio e testa env malformada.
@@ -613,4 +624,292 @@ it('edição mostra cabeçalhos e variáveis salvos e envia null em secrets ao r
     transport: { kind: 'local_stdio', command: ['npx', 'fs-mcp'], cwd: null, env_keys: ['MODE', 'NEW_VAR'] },
     secrets: { env: { API_KEY: null, NEW_VAR: 'ok' } },
   }));
+});
+
+it('folha de aprovação não sequestra modal trocado de máquina ou fechado durante envio lento', async () => {
+  let resolveA!: (value: { ok: boolean; decision: 'allow_once' }) => void;
+  mocks.answerIntegrationApproval.mockImplementationOnce(() => new Promise((resolve) => { resolveA = resolve; }));
+
+  useSessions.setState({
+    byServer: [bucket('a'), bucket('b')],
+    integrationApprovals: {
+      a: makeEvent('req-a'),
+      b: {
+        requests: [{
+          id: 'req-b',
+          interaction_id: 'int-b',
+          origin: 'b::sessao',
+          integration_id: 'notion',
+          integration_name: 'Notion',
+          tool: 'create_page',
+          arguments_preview: '{}',
+          reason: 'Criar página',
+          expires_at: 9999999,
+        }],
+      },
+    },
+  });
+  openIntegrationApproval({ serverId: 'a', requestId: 'req-a' });
+  await act(async () => { root.render(<IntegrationRequestSheet />); });
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_approval_allow_once()}"]`)!.click();
+  });
+
+  // Usuário troca a folha para a máquina B enquanto a resposta da máquina A ainda está em voo.
+  await act(async () => { openIntegrationApproval({ serverId: 'b', requestId: 'req-b' }); });
+  expect(container.textContent).toContain('Notion');
+
+  await act(async () => { resolveA({ ok: true, decision: 'allow_once' }); });
+  expect(useIntegrationApprovalTarget.getState().target).toEqual({ serverId: 'b', requestId: 'req-b' });
+  expect(container.textContent).toContain('Notion');
+
+  // Mesmo cenário ao fechar a folha antes de erro terminal da máquina B: não reabre a folha.
+  let rejectB!: (err: unknown) => void;
+  mocks.answerIntegrationApproval.mockImplementationOnce(() => new Promise((_, reject) => { rejectB = reject; }));
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_approval_allow_once()}"]`)!.click();
+  });
+  await act(async () => { openIntegrationApproval(null); });
+  await act(async () => { rejectB(Object.assign(new Error('409'), { status: 409, code: 'approval_answered' })); });
+  expect(useIntegrationApprovalTarget.getState().target).toBeNull();
+});
+
+it('editor valida aspas abertas, URL HTTP com credenciais, preserva comando com espaços e omite transport inalterado no PATCH', async () => {
+  const srv = bucket('a').server;
+  await act(async () => {
+    root.render(
+      <IntegrationEditorSheet
+        server={srv}
+        existingIds={[]}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+  });
+
+  await setField(m.integrations_field_id(), 'http-insecure');
+  await setField(m.integrations_field_name(), 'HTTP Inseguro');
+  await setField(m.integrations_field_url(), 'http://mcp.example.com/mcp');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_connect()}"]`)!.click();
+  });
+  expect(mocks.createIntegration).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(m.integrations_validation_url_insecure());
+
+  // Sem autenticação e sem cabeçalhos, HTTP é permitido; com cabeçalho extra, HTTP não-loopback é bloqueado.
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_auth_none()}"]`)!.click();
+  });
+  await setField(m.integrations_field_headers(), 'X-Custom: segredo');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+  expect(mocks.createIntegration).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(m.integrations_validation_url_insecure());
+
+  // Loopback HTTP com auth continua aceito.
+  await setField(m.integrations_field_url(), 'http://127.0.0.1:8080/mcp');
+  mocks.createIntegration.mockResolvedValueOnce(oauthView({ id: 'http-insecure', auth: { kind: 'none' } }));
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+  expect(mocks.createIntegration).toHaveBeenCalledTimes(1);
+
+  // Local stdio: aspas sem fechamento bloqueiam envio.
+  await act(async () => {
+    root.render(
+      <IntegrationEditorSheet
+        key="unclosed-cmd"
+        server={srv}
+        existingIds={[]}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+  });
+  await setField(m.integrations_field_id(), 'local-cmd');
+  await setField(m.integrations_field_name(), 'Local CMD');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_transport_local()}"]`)!.click();
+  });
+  await setField(m.integrations_field_command(), 'npx "unclosed');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+  expect(mocks.createIntegration).toHaveBeenCalledTimes(1);
+  expect(container.textContent).toContain(m.integrations_validation_command_quotes());
+
+  // Edição stdio: mudar apenas o nome omite transport; mudar apenas cwd reutiliza command original com espaços/aspas.
+  const stdioSpaces: IntegrationView = {
+    ...oauthView({ id: 'local-spaces', name: 'Original', auth: { kind: 'none' } }),
+    transport: {
+      kind: 'local_stdio',
+      command: ['/opt/My Tools/server', '--label', 'say "hi"'],
+      cwd: '/tmp/old',
+      env_keys: ['ENV_A'],
+    },
+  };
+  mocks.updateIntegration.mockResolvedValue({ ...stdioSpaces, name: 'Renomeada' });
+  await act(async () => {
+    root.render(
+      <IntegrationEditorSheet
+        key="edit-spaces-name"
+        server={srv}
+        editing={stdioSpaces}
+        existingIds={['local-spaces']}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+  });
+  await setField(m.integrations_field_name(), 'Renomeada');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+  const firstPatch = mocks.updateIntegration.mock.calls.at(-1)![2];
+  expect(firstPatch.name).toBe('Renomeada');
+  expect('transport' in firstPatch).toBe(false);
+
+  // Muda só cwd e env com espaço final: reutiliza command original e preserva espaço final.
+  await act(async () => {
+    root.render(
+      <IntegrationEditorSheet
+        key="edit-spaces-cwd"
+        server={srv}
+        editing={stdioSpaces}
+        existingIds={['local-spaces']}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+  });
+  await setField(m.integrations_field_cwd(), '/tmp/new');
+  await setField(m.integrations_field_env(), 'LABEL=production ');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+  expect(mocks.updateIntegration).toHaveBeenLastCalledWith(srv, 'local-spaces', expect.objectContaining({
+    transport: {
+      kind: 'local_stdio',
+      command: ['/opt/My Tools/server', '--label', 'say "hi"'],
+      cwd: '/tmp/new',
+      env_keys: ['ENV_A', 'LABEL'],
+    },
+    secrets: { env: { LABEL: 'production ' } },
+  }));
+
+  // Edição remote_http: atualizar valor de segredo sem mudar url nem header_names omite transport.
+  const remoteItem = oauthView({
+    id: 'remote-keep',
+    name: 'Remote Keep',
+    transport: { kind: 'remote_http', url: 'https://mcp.example.com/mcp', header_names: ['x-tenant'] },
+    auth: { kind: 'none' },
+  });
+  mocks.updateIntegration.mockResolvedValueOnce(remoteItem);
+  await act(async () => {
+    root.render(
+      <IntegrationEditorSheet
+        key="edit-remote-secret"
+        server={srv}
+        editing={remoteItem}
+        existingIds={['remote-keep']}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+  });
+  await setField(m.integrations_field_headers(), 'X-Tenant: novo-segredo');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+  const remotePatch = mocks.updateIntegration.mock.calls.at(-1)![2];
+  expect('transport' in remotePatch).toBe(false);
+  expect(remotePatch.secrets).toEqual({ headers: { 'x-tenant': 'novo-segredo' } });
+});
+
+it('listagem de ferramentas antiga não sobrescreve ferramentas retornadas por testIntegration', async () => {
+  const srv = bucket('a').server;
+  let resolveStaleTools!: (tools: IntegrationToolSummary[]) => void;
+  mocks.listIntegrationTools.mockImplementationOnce(() => new Promise((resolve) => { resolveStaleTools = resolve; }));
+  mocks.testIntegration.mockResolvedValueOnce({
+    status: 'ready',
+    tools: [{ name: 'fresh_tool', description: 'Nova', input_schema: {}, read_only_hint: true, effective_access: 'read' }],
+  });
+
+  await act(async () => {
+    root.render(
+      <IntegrationDetailSheet
+        server={srv}
+        integration={oauthView({ status: 'ready' })}
+        onClose={vi.fn()}
+        onChanged={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+  });
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_test()}"]`)!.click();
+  });
+  expect(container.textContent).toContain('fresh_tool');
+
+  await act(async () => {
+    resolveStaleTools([{ name: 'stale_tool', description: 'Antiga', input_schema: {}, read_only_hint: true, effective_access: 'read' }]);
+  });
+  expect(container.textContent).toContain('fresh_tool');
+  expect(container.textContent).not.toContain('stale_tool');
+});
+
+it('tela de integrações faz refresh silencioso no AppState active e descarta onSaved após troca de servidor', async () => {
+  const srvA = bucket('a').server;
+  const srvB = bucket('b').server;
+  const itemA = oauthView({ id: 'srv-a-item', name: 'Item Servidor A', auth: { kind: 'none' } });
+  mocks.listIntegrations.mockResolvedValueOnce([itemA]);
+  mocks.listCatalog.mockResolvedValueOnce([]);
+  useServers.setState({ servers: [srvA, srvB], activeId: 'a', ready: true, vaultReadable: true });
+
+  await act(async () => { root.render(<IntegrationsScreen />); });
+  expect(container.textContent).toContain('Item Servidor A');
+  expect(mocks.appStateListener).not.toBeNull();
+
+  // Volta ao app com erro transitório: preserva a lista, não exibe erro na tela e registra no diário.
+  mocks.listIntegrations.mockRejectedValueOnce(new Error('offline transitório'));
+  mocks.listCatalog.mockResolvedValueOnce([]);
+  await act(async () => { mocks.appStateListener?.('active'); });
+  expect(container.textContent).toContain('Item Servidor A');
+  expect(container.textContent).not.toContain('offline transitório');
+  expect(mocks.registrarDiag).toHaveBeenCalledWith(
+    expect.objectContaining({ evento: 'integrations.refresh_failed', nivel: 'aviso', tela: 'integrations' }),
+    srvA.baseUrl,
+  );
+
+  // Abre editor na máquina A, dispara criação lenta, troca para máquina B e resolve depois: não vaza item na máquina B.
+  let resolveCreate!: (v: IntegrationView) => void;
+  mocks.createIntegration.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_add_custom()}"]`)!.click();
+  });
+  await setField(m.integrations_field_id(), 'vazamento-a');
+  await setField(m.integrations_field_name(), 'Vazamento A');
+  await setField(m.integrations_field_url(), 'https://a.example.com/mcp');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_auth_none()}"]`)!.click();
+  });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+
+  mocks.listIntegrations.mockResolvedValueOnce([]);
+  mocks.listCatalog.mockResolvedValueOnce([]);
+  await act(async () => {
+    useServers.setState({ activeId: 'b' });
+  });
+  expect(container.textContent).toContain(m.integrations_empty());
+
+  await act(async () => {
+    resolveCreate(oauthView({ id: 'vazamento-a', name: 'Vazamento A', auth: { kind: 'none' } }));
+  });
+  expect(container.textContent).not.toContain('Vazamento A');
+  expect(container.textContent).toContain(m.integrations_empty());
 });

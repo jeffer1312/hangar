@@ -9,8 +9,6 @@ use hangar_integrations::secrets::SecretKeyStore;
 
 const INTEGRATIONS_KIND: &str = "integrations-key";
 const LINUX_LABEL: &str = "Hangar — Integrações MCP";
-#[cfg(windows)]
-const WINDOWS_TARGET_PREFIX: &str = "hangar";
 
 /// Atributos Secret Service exclusivos das integrações MCP no Linux.
 pub(crate) fn linux_attributes() -> HashMap<&'static str, &'static str> {
@@ -395,58 +393,73 @@ mod credman {
     };
     use zeroize::{Zeroize, Zeroizing};
 
-    use super::{INTEGRATIONS_KIND, WINDOWS_TARGET_PREFIX};
-
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-    pub(super) struct CredentialManager {
-        prefix: String,
-    }
-
-    impl Default for CredentialManager {
-        fn default() -> Self {
-            Self {
-                prefix: WINDOWS_TARGET_PREFIX.to_owned(),
-            }
-        }
-    }
+    #[derive(Default)]
+    pub(super) struct CredentialManager;
 
     impl CredentialManager {
-        fn target(&self) -> Vec<u16> {
-            wide(&format!("{}/{}", self.prefix, INTEGRATIONS_KIND))
+        pub(super) fn target(&self) -> Vec<u16> {
+            wide(super::windows_target())
         }
     }
 
     type Job = Box<dyn FnOnce() + Send>;
 
+    struct QueueState {
+        epoch: u64,
+        tx: Option<std::sync::mpsc::Sender<Job>>,
+    }
+
     async fn blocking<T: Send + 'static>(
         job: impl FnOnce() -> Result<T, SecretKeyError> + Send + 'static,
     ) -> Result<T, SecretKeyError> {
-        static QUEUE: std::sync::OnceLock<std::sync::mpsc::Sender<Job>> =
-            std::sync::OnceLock::new();
-        let queue = QUEUE.get_or_init(|| {
-            let (tx, rx) = std::sync::mpsc::channel::<Job>();
-            let worker = move || {
-                for job in rx {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
-                }
-            };
-            if let Err(error) = std::thread::Builder::new()
-                .name("hangar-integrations-credman".into())
-                .spawn(worker)
-            {
-                tracing::warn!(
-                    code = "integrations_key_credman_thread",
-                    kind = ?error.kind(),
-                    "a fila do Gerenciador de Credenciais das integrações não subiu"
-                );
-            }
-            tx
+        static QUEUE: std::sync::Mutex<QueueState> = std::sync::Mutex::new(QueueState {
+            epoch: 0,
+            tx: None,
         });
+        let (tx_epoch, queue) = {
+            let mut state = QUEUE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(tx) = state.tx.as_ref() {
+                (state.epoch, tx.clone())
+            } else {
+                let (tx, rx) = std::sync::mpsc::channel::<Job>();
+                let worker = move || {
+                    for job in rx {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                    }
+                };
+                // Só armazena o canal após o spawn ter sucesso para permitir nova tentativa se falhar.
+                if let Err(error) = std::thread::Builder::new()
+                    .name("hangar-integrations-credman".into())
+                    .spawn(worker)
+                {
+                    tracing::warn!(
+                        code = "integrations_key_credman_thread",
+                        kind = ?error.kind(),
+                        "a fila do Gerenciador de Credenciais das integrações não subiu"
+                    );
+                    return Err(SecretKeyError::Bus);
+                }
+                state.epoch = state.epoch.wrapping_add(1);
+                state.tx = Some(tx.clone());
+                (state.epoch, tx)
+            }
+        };
         let (done, answer) = tokio::sync::oneshot::channel();
         let sent = queue.send(Box::new(move || {
             let _ = done.send(job());
         }));
+        if sent.is_err() {
+            let mut state = QUEUE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.epoch == tx_epoch {
+                state.tx = None;
+            }
+        }
         let answer = match sent {
             Ok(()) => tokio::time::timeout(LIMIT, answer).await.ok().and_then(Result::ok),
             Err(_) => None,
@@ -598,6 +611,14 @@ mod tests {
         assert_eq!(linux_attrs.get("kind").copied(), Some("integrations-key"));
         assert_eq!(linux_label(), "Hangar — Integrações MCP");
         assert_eq!(windows_target(), "hangar/integrations-key");
+        #[cfg(windows)]
+        assert_eq!(
+            credman::CredentialManager::default().target(),
+            windows_target()
+                .encode_utf16()
+                .chain(Some(0))
+                .collect::<Vec<u16>>()
+        );
         assert!(!windows_target().contains("vault"));
         assert_ne!(linux_attrs.get("kind").copied(), Some("vault-key"));
         let source = include_str!("keyring.rs");

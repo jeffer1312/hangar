@@ -2,8 +2,10 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::net::Ipv6Addr;
 use std::path::PathBuf;
 
+use ring::digest::{Context as DigestContext, SHA256};
 use serde::{Deserialize, Serialize};
 
 use hangar_core::ids::valid_slug;
@@ -141,6 +143,17 @@ pub enum ApprovalDecision {
 }
 
 impl IntegrationConfig {
+    /// Normaliza campos normalizáveis da configuração antes de validar ou persistir.
+    pub fn normalize(&mut self) {
+        self.auth.normalize();
+    }
+
+    /// Consome a configuração e retorna a cópia normalizada.
+    pub fn normalized(mut self) -> Self {
+        self.normalize();
+        self
+    }
+
     /// Valida todos os campos de configuração antes de persistir em `config.json`.
     ///
     /// # Errors
@@ -148,7 +161,9 @@ impl IntegrationConfig {
     /// Retorna [`ValidationError`] quando o `id`, nome, preset, transporte, autenticação,
     /// projetos, ferramentas liberadas ou timestamps violarem os limites do domínio.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        if !valid_slug(&self.id, MAX_SLUG_BYTES) {
+        if !valid_slug(&self.id, MAX_SLUG_BYTES)
+            || matches!(self.id.as_str(), "catalog" | "oauth" | "approvals")
+        {
             return Err(ValidationError::InvalidId);
         }
         if !valid_bounded_text(&self.name, MAX_NAME_BYTES) {
@@ -161,6 +176,15 @@ impl IntegrationConfig {
         }
         self.transport.validate()?;
         self.auth.validate()?;
+        if let Transport::RemoteHttp { url, header_names } = &self.transport
+            && is_plaintext_non_loopback_http(url)
+            && (!matches!(self.auth, AuthConfig::None) || !header_names.is_empty())
+        {
+            return Err(ValidationError::InvalidTransport(
+                "URL http:// fora de loopback (localhost, 127.0.0.1, ::1) não permite autenticação nem cabeçalhos extras; use https://"
+                    .into(),
+            ));
+        }
         if self
             .projects
             .iter()
@@ -237,6 +261,16 @@ impl Transport {
 }
 
 impl AuthConfig {
+    /// Normaliza campos textuais da configuração de autenticação (remove espaços nas bordas de `client_id`).
+    pub fn normalize(&mut self) {
+        if let Self::OAuthManualClient { client_id, .. } = self {
+            let trimmed = client_id.trim();
+            if trimmed.len() != client_id.len() {
+                *client_id = trimmed.to_owned();
+            }
+        }
+    }
+
     /// Valida a configuração pública de autenticação.
     ///
     /// # Errors
@@ -283,8 +317,60 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
+/// Calcula a impressão digital SHA-256 de destino e autenticação da integração.
+///
+/// Cobre transporte (`RemoteHttp.url` canônica ou `LocalStdio.command`/`cwd`) e `auth`
+/// (normalizando `client_id` com `.trim()`), permitindo detectar edição de endpoint/credencial
+/// durante fluxos OAuth ou refreshes concorrentes.
+pub fn config_fingerprint(config: &IntegrationConfig) -> [u8; 32] {
+    let mut ctx = DigestContext::new(&SHA256);
+    match &config.transport {
+        Transport::RemoteHttp { url, .. } => {
+            update_len_prefixed(&mut ctx, b"remote_http");
+            let canonical = canonicalize_url_for_fingerprint(url);
+            update_len_prefixed(&mut ctx, canonical.as_bytes());
+        }
+        Transport::LocalStdio { command, cwd, .. } => {
+            update_len_prefixed(&mut ctx, b"local_stdio");
+            ctx.update(&(command.len() as u64).to_le_bytes());
+            for part in command {
+                update_len_prefixed(&mut ctx, part.as_bytes());
+            }
+            match cwd {
+                Some(dir) => {
+                    ctx.update(&[1]);
+                    update_len_prefixed(&mut ctx, dir.as_os_str().as_encoded_bytes());
+                }
+                None => ctx.update(&[0]),
+            }
+        }
+    }
+    match &config.auth {
+        AuthConfig::None => update_len_prefixed(&mut ctx, b"none"),
+        AuthConfig::Bearer => update_len_prefixed(&mut ctx, b"bearer"),
+        AuthConfig::OAuthDcr => update_len_prefixed(&mut ctx, b"oauth_dcr"),
+        AuthConfig::OAuthManualClient { client_id, scopes } => {
+            update_len_prefixed(&mut ctx, b"oauth_manual_client");
+            update_len_prefixed(&mut ctx, client_id.trim().as_bytes());
+            ctx.update(&(scopes.len() as u64).to_le_bytes());
+            for scope in scopes {
+                update_len_prefixed(&mut ctx, scope.as_bytes());
+            }
+        }
+    }
+    let digest = ctx.finish();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(digest.as_ref());
+    out
+}
+
 pub(crate) fn valid_tool_name(name: &str) -> bool {
     valid_bounded_text(name, MAX_TOOL_NAME_BYTES)
+}
+
+fn update_len_prefixed(ctx: &mut DigestContext, bytes: &[u8]) {
+    ctx.update(&(bytes.len() as u64).to_le_bytes());
+    ctx.update(bytes);
 }
 
 fn default_enabled() -> bool {
@@ -298,10 +384,28 @@ fn valid_bounded_text(value: &str, max_bytes: usize) -> bool {
 fn valid_header_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_HEADER_NAME_BYTES
-        && name.is_ascii()
-        && !name
-            .chars()
-            .any(|ch| ch.is_whitespace() || ch.is_control() || ch == ':')
+        && name.bytes().all(is_rfc9110_tchar)
+}
+
+fn is_rfc9110_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
 }
 
 fn valid_env_key(key: &str) -> bool {
@@ -312,39 +416,114 @@ fn valid_env_key(key: &str) -> bool {
 }
 
 fn valid_http_url(url: &str) -> bool {
+    parse_http_parts(url).is_some()
+}
+
+fn is_plaintext_non_loopback_http(url: &str) -> bool {
+    let Some((scheme, host, is_ipv6)) = parse_http_parts(url) else {
+        return false;
+    };
+    if scheme != "http" {
+        return false;
+    }
+    let is_loopback = if is_ipv6 {
+        host.parse::<Ipv6Addr>()
+            .is_ok_and(|ip| ip == Ipv6Addr::LOCALHOST)
+    } else {
+        host == "localhost" || host == "127.0.0.1"
+    };
+    !is_loopback
+}
+
+fn parse_http_parts(url: &str) -> Option<(String, String, bool)> {
     if url.is_empty()
         || url.len() > MAX_URL_BYTES
         || url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
     {
-        return false;
+        return None;
     }
-    let Some(rest) = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-    else {
-        return false;
+    let (scheme, rest) = if url.len() >= 8 && url[..8].eq_ignore_ascii_case("https://") {
+        ("https".to_owned(), &url[8..])
+    } else if url.len() >= 7 && url[..7].eq_ignore_ascii_case("http://") {
+        ("http".to_owned(), &url[7..])
+    } else {
+        return None;
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     // Impede userinfo embutida (`user:pass@host`) para evitar segredos na URL persistida.
     if authority.is_empty() || authority.contains('@') {
-        return false;
+        return None;
     }
     if let Some(after_open) = authority.strip_prefix('[') {
-        let Some((host, tail)) = after_open.split_once(']') else {
-            return false;
-        };
+        let (host, tail) = after_open.split_once(']')?;
         if host.is_empty()
             || !host
                 .chars()
                 .all(|ch| ch.is_ascii_hexdigit() || ch == ':' || ch == '.')
+            || host.parse::<Ipv6Addr>().is_err()
         {
-            return false;
+            return None;
         }
-        return valid_optional_port(tail);
+        if !valid_optional_port(tail) {
+            return None;
+        }
+        return Some((scheme, host.to_ascii_lowercase(), true));
     }
-    match authority.split_once(':') {
-        Some((host, port)) => valid_hostname(host) && valid_port(port),
-        None => valid_hostname(authority),
+    let host = match authority.split_once(':') {
+        Some((host, port)) => {
+            if !valid_hostname(host) || !valid_port(port) {
+                return None;
+            }
+            host
+        }
+        None => {
+            if !valid_hostname(authority) {
+                return None;
+            }
+            authority
+        }
+    };
+    Some((scheme, host.to_ascii_lowercase(), false))
+}
+
+fn canonicalize_url_for_fingerprint(raw: &str) -> String {
+    let without_fragment = raw.trim().split('#').next().unwrap_or("");
+    let Ok(uri) = without_fragment.parse::<http::Uri>() else {
+        return without_fragment.to_owned();
+    };
+    let Some(scheme) = uri.scheme_str().map(str::to_ascii_lowercase) else {
+        return without_fragment.to_owned();
+    };
+    let Some(authority) = uri.authority() else {
+        return without_fragment.to_owned();
+    };
+    let default_port = if scheme == "https" { "443" } else { "80" };
+    let lower_auth = authority.as_str().to_ascii_lowercase();
+    let norm_auth = if let Some(after_bracket) = lower_auth.strip_prefix('[')
+        && let Some((ipv6, tail)) = after_bracket.split_once(']')
+    {
+        if tail
+            .strip_prefix(':')
+            .is_some_and(|port| port == default_port)
+        {
+            format!("[{ipv6}]")
+        } else {
+            lower_auth
+        }
+    } else if let Some((host, port)) = lower_auth.rsplit_once(':')
+        && port == default_port
+    {
+        host.to_owned()
+    } else {
+        lower_auth
+    };
+    let path = match uri.path() {
+        "" | "/" => "",
+        other => other.trim_end_matches('/'),
+    };
+    match uri.query() {
+        Some(q) if !q.is_empty() => format!("{scheme}://{norm_auth}{path}?{q}"),
+        _ => format!("{scheme}://{norm_auth}{path}"),
     }
 }
 

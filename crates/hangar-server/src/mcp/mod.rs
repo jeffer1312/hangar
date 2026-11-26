@@ -9,6 +9,7 @@ mod tools;
 mod whatsapp;
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use axum::Router;
@@ -125,7 +126,10 @@ impl ServerHandler for Handler {
         let name = OLD_NAMES.iter().find(|(old, _)| *old == request.name).map_or(&*request.name, |(_, new)| new);
         let args = request.arguments.unwrap_or_default();
         let draft = (name == "whatsapp_draft").then(|| Arc::new(hangar_whatsapp::outbox::Progress::default()));
-        let call = self.tools.call(name, args, &headers, draft.clone());
+        let is_integration = matches!(name, "integrations_list" | "integration_tools" | "integration_call")
+            || name.starts_with("int__");
+        let external_started = is_integration.then(|| Arc::new(AtomicBool::new(false)));
+        let call = self.tools.call(name, args, &headers, draft.clone(), external_started.clone());
         // O rmcp só cancela o token no `notifications/cancelled`: largar o futuro é o que cancela o pedido na dona do cofre
         // e o que recusa o rascunho do WhatsApp, que mora no binário. O `select!` larga o futuro antes do braço rodar.
         if name == "request_secret" || name.starts_with("vault_") || draft.is_some() {
@@ -138,13 +142,24 @@ impl ServerHandler for Handler {
             }));
         }
         // O cancelamento MCP dropa o futuro e o `ApprovalWaiter::drop` remove o cartão pendente na UI.
-        if matches!(name, "integrations_list" | "integration_tools" | "integration_call") || name.starts_with("int__") {
+        if let Some(external_started) = external_started {
             return Ok(CallToolResponse::Complete(tokio::select! {
                 result = call => result,
-                () = context.ct.cancelled() => CallToolResult::error(vec![ContentBlock::text("integration_approval_cancelled: a chamada foi cancelada")]),
+                () = context.ct.cancelled() => {
+                    let msg = integration_cancel_message(external_started.load(Ordering::SeqCst));
+                    CallToolResult::error(vec![ContentBlock::text(msg)])
+                }
             }));
         }
         Ok(CallToolResponse::Complete(call.await))
+    }
+}
+
+fn integration_cancel_message(external_started: bool) -> &'static str {
+    if external_started {
+        "integration_call_cancelled_in_flight: a chamada externa já havia sido enviada e o efeito remoto é desconhecido; confira antes de repetir"
+    } else {
+        "integration_approval_cancelled: a chamada foi cancelada"
     }
 }
 
@@ -229,6 +244,15 @@ mod tests {
         for signature in ["who_am_i()", "send(alvo, texto, …)", "close_session(alvo)", "new_session(nome, cwd, …)", "pair(…)"] {
             assert!(text.contains(signature), "faltou {signature} em: {text}");
         }
+    }
+
+    #[test]
+    fn integration_cancel_message_distinguishes_in_flight_from_approval_wait() {
+        let before_send = integration_cancel_message(false);
+        let in_flight = integration_cancel_message(true);
+        assert!(before_send.starts_with("integration_approval_cancelled:"), "{before_send}");
+        assert!(in_flight.starts_with("integration_call_cancelled_in_flight:"), "{in_flight}");
+        assert!(in_flight.contains("desconhecido"), "{in_flight}");
     }
 }
 

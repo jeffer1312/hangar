@@ -113,17 +113,19 @@ impl SecretKeyStore for FailingSecretKeys {
     }
 }
 
+struct ServerTask(tokio::task::JoinHandle<()>);
+
+impl Drop for ServerTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 struct TestServer {
     _dir: TempDir,
     addr: SocketAddr,
     state: Arc<AppState>,
-    task: tokio::task::JoinHandle<()>,
-}
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
+    task: ServerTask,
 }
 
 fn fake_login_browser(launched_urls: Arc<StdMutex<Vec<String>>>) -> Arc<LoginBrowser> {
@@ -188,9 +190,9 @@ async fn spawn_test_server_in_dir(
     let state = Arc::new(state);
     let app = hangar_server::routes::router(state.clone())
         .into_make_service_with_connect_info::<SocketAddr>();
-    let task = tokio::spawn(async move {
+    let task = ServerTask(tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
-    });
+    }));
     TestServer {
         _dir: dir,
         addr,
@@ -230,11 +232,21 @@ async fn call_raw(
     (status, text, headers)
 }
 
-async fn call_owner(addr: SocketAddr, method: Method, path: &str, body: Option<Value>) -> (u16, Value, String) {
+async fn call_owner_with_headers(
+    addr: SocketAddr,
+    method: Method,
+    path: &str,
+    extra_headers: &[(&str, &str)],
+    body: Option<Value>,
+) -> (u16, Value, String) {
     let text = body.map(|v| v.to_string());
-    let (status, raw, _) = call_raw(addr, method, path, Some(OWNER), &[], text.as_deref()).await;
+    let (status, raw, _) = call_raw(addr, method, path, Some(OWNER), extra_headers, text.as_deref()).await;
     let json = serde_json::from_str(&raw).unwrap_or(Value::Null);
     (status, json, raw)
+}
+
+async fn call_owner(addr: SocketAddr, method: Method, path: &str, body: Option<Value>) -> (u16, Value, String) {
+    call_owner_with_headers(addr, method, path, &[], body).await
 }
 
 /// Repete apenas em falha de conexão até o prazo; resposta HTTP != 200 falha na hora.
@@ -1112,12 +1124,15 @@ async fn oauth_flow_uses_bound_local_port_handoff_browser_callback_test_and_expi
     .await;
     assert_eq!(st_nopend, 409, "{raw_nopend}");
 
-    // Celular sem HTTPS -> mode = handoff_desktop com porta real vinculada (não :0).
+    // Celular sem HTTPS -> mode = handoff_desktop com porta real vinculada (não :0), mesmo com Host divergente.
     let expected_redirect = format!("http://127.0.0.1:{}/api/integrations/oauth/callback", owner_addr.port());
-    let (st_mob, mob_body, raw_mob) = call_owner(
+    let bogus_port = owner_addr.port().checked_add(1).filter(|p| *p > 0).unwrap_or(1);
+    let bogus_host = format!("127.0.0.1:{bogus_port}");
+    let (st_mob, mob_body, raw_mob) = call_owner_with_headers(
         owner_addr,
         Method::POST,
         "/api/integrations/mock-oauth/oauth/start",
+        &[("host", &bogus_host)],
         Some(json!({ "origin_client": "mobile" })),
     )
     .await;
@@ -1162,7 +1177,7 @@ async fn oauth_flow_uses_bound_local_port_handoff_browser_callback_test_and_expi
     assert_eq!(open_body["ok"], true);
     assert_eq!(launched_urls.lock().unwrap().as_slice(), &[authorize_url.clone()]);
 
-    // Primeiro verifica escape de XSS quando o provedor devolve erro no callback usando o state pendente do fluxo mobile.
+    // Primeiro verifica que `error_description` cru não reflete no HTML nem em texto escapado quando o provedor devolve erro no callback.
     let mob_auth_url = mob_body["authorize_url"].as_str().unwrap();
     let (_, mob_state) = simulate_oauth_authorize(mob_auth_url).await;
     let (st_xss, raw_xss, _) = call_raw(
@@ -1176,7 +1191,9 @@ async fn oauth_flow_uses_bound_local_port_handoff_browser_callback_test_and_expi
     .await;
     assert!(matches!(st_xss, 400 | 422), "{st_xss}: {raw_xss}");
     assert!(!raw_xss.contains("<script>"), "callback não pode refletir HTML cru: {raw_xss}");
-    assert!(raw_xss.contains("&lt;script&gt;"), "{raw_xss}");
+    assert!(!raw_xss.contains("&lt;script&gt;"), "error_description externo não deve ser ecoado: {raw_xss}");
+    assert!(!raw_xss.contains("alert(1)"), "error_description externo não deve ser ecoado: {raw_xss}");
+    assert!(raw_xss.contains("access_denied"), "{raw_xss}");
 
     // Callback OAuth na porta do convidado falha com 401/403 mesmo quando há fluxo pendente.
     let (st_cb_guest, _, _) = call_raw(
@@ -1654,15 +1671,23 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
         .unwrap();
     assert_eq!(card["tool"], "create_issue");
 
-    // Convidado recebe `sessions`, mas nunca `integrations_approvals`.
-    let _ = crate::fake::next_named(&mut guest_sse, "sessions").await;
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(350);
+    // Convidado recebe `sessions`, mas nunca `integrations_approvals` (inclusive antes de `sessions`).
+    let mut deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut saw_sessions = false;
     while let Ok(Some(Ok(ev))) = tokio::time::timeout_at(deadline, guest_sse.next()).await {
         assert_ne!(
             ev.event, "integrations_approvals",
             "convidado nunca pode receber eventos integrations_approvals"
         );
+        if !saw_sessions && ev.event == "sessions" {
+            saw_sessions = true;
+            let post_sessions = tokio::time::Instant::now() + Duration::from_millis(350);
+            if post_sessions < deadline {
+                deadline = post_sessions;
+            }
+        }
     }
+    assert!(saw_sessions, "convidado deve receber sessions dentro da janela");
 
     // Limpa pedido aberto.
     let (st_del, _, _) = call_owner(
@@ -2085,4 +2110,253 @@ async fn patch_and_delete_clear_tools_cache_and_cancel_pending_oauth() {
     })
     .await
     .expect("prazo de patch_and_delete_clear_tools_cache excedido");
+}
+
+#[tokio::test]
+async fn delete_cleans_up_orphan_secret_after_partial_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = [0x42u8; 32];
+
+    let seed_srv = spawn_test_server_in_dir(dir, Arc::new(MemoryKeyStore::with_key(key))).await;
+    let (st_c, _, raw_c) = call_owner(
+        seed_srv.addr,
+        Method::POST,
+        "/api/integrations",
+        Some(json!({
+            "id": "orphan-api",
+            "name": "Orphan API",
+            "transport": { "kind": "remote_http", "url": "https://mcp.example.com/mcp", "header_names": [] },
+            "auth": { "kind": "bearer" },
+            "secrets": { "bearer_token": "tok-orfao-1" }
+        })),
+    )
+    .await;
+    assert_eq!(st_c, 201, "{raw_c}");
+    let dir = seed_srv._dir;
+
+    // Novo servidor sem a chave no chaveiro: DELETE remove config.json, mas falha ao apagar secrets.bin.
+    let fail_srv = spawn_test_server_in_dir(dir, FailingSecretKeys::failing_read(SecretKeyError::Bus)).await;
+    let (st_del_fail, _, raw_del_fail) =
+        call_owner(fail_srv.addr, Method::DELETE, "/api/integrations/orphan-api", None).await;
+    assert_eq!(st_del_fail, 503, "{raw_del_fail}");
+    assert!(fail_srv.state.integrations.registry.get("orphan-api").unwrap().is_none());
+    let dir = fail_srv._dir;
+
+    // Com o chaveiro recuperado, repetir DELETE remove o segredo órfão com 200 OK; depois retorna 404.
+    let rec_srv = spawn_test_server_in_dir(dir, Arc::new(MemoryKeyStore::with_key(key))).await;
+    assert!(rec_srv.state.integrations.secrets.get("orphan-api").await.unwrap().is_some());
+    let (st_del_ok, del_body, raw_del_ok) =
+        call_owner(rec_srv.addr, Method::DELETE, "/api/integrations/orphan-api", None).await;
+    assert_eq!(st_del_ok, 200, "{raw_del_ok}");
+    assert_eq!(del_body, json!({"ok": true, "id": "orphan-api"}));
+    assert!(rec_srv.state.integrations.secrets.get("orphan-api").await.unwrap().is_none());
+
+    let (st_del_404, _, _) =
+        call_owner(rec_srv.addr, Method::DELETE, "/api/integrations/orphan-api", None).await;
+    assert_eq!(st_del_404, 404);
+}
+
+#[tokio::test]
+async fn patch_url_change_clears_endpoint_secrets_and_supports_atomic_allowed_tool_deltas() {
+    let key = [0x55u8; 32];
+    let srv = spawn_test_server(Arc::new(MemoryKeyStore::with_key(key))).await;
+
+    let (st_c, _, raw_c) = call_owner(
+        srv.addr,
+        Method::POST,
+        "/api/integrations",
+        Some(json!({
+            "id": "patch-sec",
+            "name": "Patch Sec",
+            "transport": {
+                "kind": "remote_http",
+                "url": "https://a.example.com/mcp",
+                "header_names": ["x-old", "x-keep"]
+            },
+            "auth": { "kind": "bearer" },
+            "allowed_tools": ["legacy_tool"],
+            "secrets": {
+                "bearer_token": "tok-old-1",
+                "headers": { "x-old": "v-old", "x-keep": "v-keep" }
+            }
+        })),
+    )
+    .await;
+    assert_eq!(st_c, 201, "{raw_c}");
+
+    // Popula credencial OAuth adicional para confirmar que troca de URL limpa Bearer, OAuth e headers.
+    srv.state
+        .integrations
+        .secrets
+        .update_with("patch-sec", |slot| {
+            let entry = slot.get_or_insert_with(Default::default);
+            entry.oauth = Some(hangar_integrations::OAuthTokens {
+                access_token: Zeroizing::new("oauth-old".into()),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    // 1. Alterar URL sem enviar `secrets` limpa bearer, oauth e headers do servidor antigo.
+    let (st_u1, u1_body, raw_u1) = call_owner(
+        srv.addr,
+        Method::PATCH,
+        "/api/integrations/patch-sec",
+        Some(json!({
+            "transport": {
+                "kind": "remote_http",
+                "url": "https://b.example.com/mcp",
+                "header_names": ["x-old", "x-keep"]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(st_u1, 200, "{raw_u1}");
+    assert_eq!(u1_body["integration"]["status"], "auth_required");
+    assert_eq!(u1_body["integration"]["allowed_tools"], json!([]));
+    assert!(
+        srv.state.integrations.secrets.get("patch-sec").await.unwrap().is_none(),
+        "troca de URL sem novos secrets deve apagar credenciais HTTP antigas"
+    );
+
+    // 2. PATCH com mesma URL preserva Bearer e headers; PATCH de URL com novos secrets mantém só os novos.
+    let (st_seed, _, _) = call_owner(
+        srv.addr,
+        Method::PATCH,
+        "/api/integrations/patch-sec",
+        Some(json!({
+            "secrets": {
+                "bearer_token": "tok-b-1",
+                "headers": { "x-old": "v-old-b" }
+            }
+        })),
+    )
+    .await;
+    assert_eq!(st_seed, 200);
+
+    let (st_same_url, _, _) = call_owner(
+        srv.addr,
+        Method::PATCH,
+        "/api/integrations/patch-sec",
+        Some(json!({
+            "transport": {
+                "kind": "remote_http",
+                "url": "https://b.example.com/mcp",
+                "header_names": ["x-old", "x-new"]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(st_same_url, 200);
+    let kept = srv.state.integrations.secrets.get("patch-sec").await.unwrap().unwrap();
+    assert_eq!(kept.bearer_token.as_deref().map(String::as_str), Some("tok-b-1"));
+
+    let (st_u2, _, raw_u2) = call_owner(
+        srv.addr,
+        Method::PATCH,
+        "/api/integrations/patch-sec",
+        Some(json!({
+            "transport": {
+                "kind": "remote_http",
+                "url": "https://c.example.com/mcp",
+                "header_names": ["x-new"]
+            },
+            "secrets": {
+                "bearer_token": "tok-c-1",
+                "headers": { "x-new": "v-new" }
+            }
+        })),
+    )
+    .await;
+    assert_eq!(st_u2, 200, "{raw_u2}");
+    let replaced = srv.state.integrations.secrets.get("patch-sec").await.unwrap().unwrap();
+    assert_eq!(replaced.bearer_token.as_deref().map(String::as_str), Some("tok-c-1"));
+    assert!(replaced.oauth.is_none());
+    assert_eq!(replaced.headers.len(), 1);
+    assert_eq!(replaced.headers.get("x-new").map(|v| v.as_str()), Some("v-new"));
+
+    // 3. Deltas atômicos de `allowed_tools` e rejeição quando misturados com `allowed_tools`.
+    let (st_mix, _, _) = call_owner(
+        srv.addr,
+        Method::PATCH,
+        "/api/integrations/patch-sec",
+        Some(json!({
+            "allowed_tools": ["x"],
+            "add_allowed_tools": ["y"]
+        })),
+    )
+    .await;
+    assert_eq!(st_mix, 422);
+
+    let (st_add, add_body, raw_add) = call_owner(
+        srv.addr,
+        Method::PATCH,
+        "/api/integrations/patch-sec",
+        Some(json!({ "add_allowed_tools": ["tool_a", "tool_b"] })),
+    )
+    .await;
+    assert_eq!(st_add, 200, "{raw_add}");
+    assert_eq!(add_body["integration"]["allowed_tools"], json!(["tool_a", "tool_b"]));
+
+    let (st_delta, delta_body, raw_delta) = call_owner(
+        srv.addr,
+        Method::PATCH,
+        "/api/integrations/patch-sec",
+        Some(json!({
+            "remove_allowed_tools": ["tool_a"],
+            "add_allowed_tools": ["tool_c"]
+        })),
+    )
+    .await;
+    assert_eq!(st_delta, 200, "{raw_delta}");
+    assert_eq!(delta_body["integration"]["allowed_tools"], json!(["tool_b", "tool_c"]));
+
+    // Falha de validação no delta desfaz mutação de outros campos no mesmo PATCH.
+    let (st_bad_delta, _, _) = call_owner(
+        srv.addr,
+        Method::PATCH,
+        "/api/integrations/patch-sec",
+        Some(json!({
+            "name": "Nome Que Deve Voltar",
+            "add_allowed_tools": [""]
+        })),
+    )
+    .await;
+    assert_eq!(st_bad_delta, 422);
+    assert_eq!(
+        srv.state.integrations.registry.get("patch-sec").unwrap().unwrap().name,
+        "Patch Sec"
+    );
+
+    // 4. Falha no SecretStore ao trocar URL faz rollback completo de config e allowed_tools.
+    let dir = srv._dir;
+    let fail_srv = spawn_test_server_in_dir(dir, FailingSecretKeys::failing_read(SecretKeyError::Bus)).await;
+    let (st_rb, _, _) = call_owner(
+        fail_srv.addr,
+        Method::PATCH,
+        "/api/integrations/patch-sec",
+        Some(json!({
+            "transport": {
+                "kind": "remote_http",
+                "url": "https://d.example.com/mcp",
+                "header_names": ["x-new"]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(st_rb, 503);
+    let after_rb = fail_srv.state.integrations.registry.get("patch-sec").unwrap().unwrap();
+    assert_eq!(
+        after_rb.transport,
+        hangar_integrations::Transport::RemoteHttp {
+            url: "https://c.example.com/mcp".into(),
+            header_names: vec!["x-new".into()],
+        }
+    );
+    assert_eq!(
+        after_rb.allowed_tools,
+        BTreeSet::from(["tool_b".to_owned(), "tool_c".to_owned()])
+    );
 }

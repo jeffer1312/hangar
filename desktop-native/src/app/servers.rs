@@ -30,12 +30,33 @@ pub(crate) struct ServerEntry {
 
 pub(crate) enum RemoteUpdate { Sessions(Result<Vec<SessionInfo>, Failure>), Stream(Update) }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct RemoteScope {
+    address: String,
+    token: String,
+    invite: bool,
+    connect: Option<api::route::ConnectRoute>,
+    connect_refused: bool,
+}
+
+impl RemoteScope {
+    fn from_entry(entry: &ServerEntry) -> Self {
+        Self {
+            address: entry.address.clone(),
+            token: entry.token.clone(),
+            invite: entry.invite,
+            connect: entry.connect.clone(),
+            connect_refused: entry.connect_refused,
+        }
+    }
+}
+
 /// A lista de uma máquina que não é a ativa. Fora do ar, fica a última lista boa, como no web.
 /// `api` é a conexão guardada da máquina: as ações das linhas dela não montam um cliente HTTP a cada gesto.
 /// `live_terms`: os terminais de atalho vivos dela (evento `shortcut_terminals`); some quando o stream cai.
 /// `unreachable`: a última falha foi sem resposta nenhuma (rede ou prazo); erro HTTP, como login recusado, não conta.
 #[derive(Default)]
-pub(crate) struct RemoteList { pub sessions: Vec<SessionInfo>, pub loaded: bool, pub online: bool, pub error: Option<String>, pub api: Option<Api>, pub(super) live_terms: Vec<super::terminal::LiveTerm>, pub(super) unreachable: bool }
+pub(crate) struct RemoteList { pub sessions: Vec<SessionInfo>, pub loaded: bool, pub online: bool, pub error: Option<String>, pub api: Option<Api>, pub(super) live_terms: Vec<super::terminal::LiveTerm>, pub(super) unreachable: bool, pub(super) scope: Option<RemoteScope> }
 
 /// Mesma máquina escrita de dois jeitos (barra final, maiúsculas) é o mesmo servidor.
 pub(crate) fn norm(address: &str) -> String { address.trim().trim_end_matches('/').to_ascii_lowercase() }
@@ -85,6 +106,27 @@ fn leaving<T>(map: &HashMap<String, T>, keep: impl Fn(&str) -> bool) -> Vec<Stri
     map.keys().filter(|key| !keep(key)).cloned().collect()
 }
 
+/// Remove e invalida aprovações de máquinas removidas, desativadas ou com credenciais/escopo alterados.
+fn drop_stale_remote_integrations(
+    remote: &HashMap<String, RemoteList>,
+    integrations: &mut HashMap<String, Entity<super::integration_requests::IntegrationRequests>>,
+    active: &str,
+    wanted: &[ServerEntry],
+    cx: &mut App,
+) {
+    for key in leaving(integrations, |key| key == active || wanted.iter().any(|s| norm(&s.address) == key)) {
+        super::integration_requests::drop_requests(integrations, &key, cx);
+    }
+    for entry in wanted {
+        let key = norm(&entry.address);
+        let scope = RemoteScope::from_entry(entry);
+        let changed = remote.get(&key).and_then(|list| list.scope.as_ref()) != Some(&scope);
+        if changed {
+            super::integration_requests::drop_requests(integrations, &key, cx);
+        }
+    }
+}
+
 async fn run_list(api: Api, key: String, generation: u64, tx: async_channel::Sender<Envelope>) {
     let send = |update| Envelope { connection: 0, selection: None, payload: Payload::Remote(generation, key.clone(), update) };
     api::route::ensure(&api).await;
@@ -111,7 +153,8 @@ impl Hangar {
         // Máquina desligada ou removida não deixa o aviso do chaveiro para trás.
         self.keyring.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
         self.vault.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
-        self.integrations.retain(|key, _| *key == active || wanted.iter().any(|s| &norm(&s.address) == key));
+        // Invalida também quando a credencial ou o escopo de acesso muda antes de a nova lista abrir SSE.
+        drop_stale_remote_integrations(&self.remote, &mut self.integrations, &active, &wanted, cx);
         // Tirar do mapa não basta: o diálogo aberto segura um clone e seguiria com o cartão e o relógio.
         for key in leaving(&self.whatsapp_outbox, |key| key == active || wanted.iter().any(|s| norm(&s.address) == key)) {
             super::whatsapp_outbox::drop_outbox(&mut self.whatsapp_outbox, &key, cx);
@@ -120,13 +163,21 @@ impl Hangar {
         for s in &self.servers { api::route::seed(&s.address, s.invite, s.lan.as_ref(), s.connect.as_ref(), s.connect_refused); }
         for entry in wanted {
             let key = norm(&entry.address);
+            let scope = RemoteScope::from_entry(&entry);
             let list = self.remote.entry(key.clone()).or_default();
             let api = match Api::new(&entry.address, &entry.token) {
                 Ok(api) => api,
                 // A conexão antiga não pode seguir servindo as ações de uma entrada que já não abre.
-                Err(error) => { list.error = Some(Self::failure(&error)); list.api = None; continue; }
+                Err(error) => {
+                    list.error = Some(Self::failure(&error));
+                    list.api = None;
+                    list.scope = Some(scope);
+                    super::integration_requests::drop_requests(&mut self.integrations, &key, cx);
+                    continue;
+                }
             };
             list.api = Some(api.clone());
+            list.scope = Some(scope);
             self.remote_tasks.push(self.runtime.spawn(run_list(api, key, self.remote_gen, self.tx.clone())));
         }
         // Máquina nova ou reconectada já conta como "No PC" sem esperar o próximo sinal.
@@ -564,5 +615,102 @@ mod tests {
         assert!(!has_section(&entry(true, true, false)), "a entrada só do par fica fora da barra");
         assert!(has_section(&entry(true, false, false)), "convite de compartilhar segue com a seção dele");
         assert!(has_section(&entry(false, false, false)) && !has_section(&entry(false, false, true)));
+    }
+
+    #[::gpui::test]
+    fn credential_or_scope_change_drops_remote_integration_requests(cx: &mut gpui::TestAppContext) {
+        let runtime = Arc::new(Runtime::new().unwrap());
+        let entry_unchanged = ServerEntry {
+            id: "s1".into(),
+            address: "https://unchanged.invalid".into(),
+            token: "tok-1".into(),
+            ..Default::default()
+        };
+        let entry_reauthed = ServerEntry {
+            id: "s2".into(),
+            address: "https://reauthed.invalid".into(),
+            token: "tok-new".into(),
+            ..Default::default()
+        };
+        let entry_scope_changed = ServerEntry {
+            id: "s3".into(),
+            address: "https://scope.invalid".into(),
+            token: "tok-3".into(),
+            invite: true,
+            ..Default::default()
+        };
+
+        let key_unchanged = norm(&entry_unchanged.address);
+        let key_reauthed = norm(&entry_reauthed.address);
+        let key_scope = norm(&entry_scope_changed.address);
+        let key_removed = norm("https://removed.invalid");
+
+        let remote = HashMap::from([
+            (
+                key_unchanged.clone(),
+                RemoteList {
+                    scope: Some(RemoteScope::from_entry(&entry_unchanged)),
+                    ..Default::default()
+                },
+            ),
+            (
+                key_reauthed.clone(),
+                RemoteList {
+                    scope: Some(RemoteScope {
+                        address: entry_reauthed.address.clone(),
+                        token: "tok-old".into(),
+                        invite: false,
+                        connect: None,
+                        connect_refused: false,
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                key_scope.clone(),
+                RemoteList {
+                    scope: Some(RemoteScope {
+                        address: entry_scope_changed.address.clone(),
+                        token: "tok-3".into(),
+                        invite: false,
+                        connect: None,
+                        connect_refused: false,
+                    }),
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        let api = Api::new("http://127.0.0.1:8765", "tok").unwrap();
+        let req_unchanged = cx.update(|cx| super::integration_requests::IntegrationRequests::for_test(runtime.clone(), Some(api.clone()), cx));
+        let req_reauthed = cx.update(|cx| super::integration_requests::IntegrationRequests::for_test(runtime.clone(), Some(api.clone()), cx));
+        let req_scope = cx.update(|cx| super::integration_requests::IntegrationRequests::for_test(runtime.clone(), Some(api.clone()), cx));
+        let req_removed = cx.update(|cx| super::integration_requests::IntegrationRequests::for_test(runtime, Some(api), cx));
+
+        let mut integrations = HashMap::from([
+            (key_unchanged.clone(), req_unchanged.clone()),
+            (key_reauthed.clone(), req_reauthed.clone()),
+            (key_scope.clone(), req_scope.clone()),
+            (key_removed.clone(), req_removed.clone()),
+        ]);
+
+        let wanted = vec![entry_unchanged, entry_reauthed, entry_scope_changed];
+        cx.update(|cx| drop_stale_remote_integrations(&remote, &mut integrations, "", &wanted, cx));
+
+        assert!(integrations.contains_key(&key_unchanged));
+        assert!(!integrations.contains_key(&key_reauthed));
+        assert!(!integrations.contains_key(&key_scope));
+        assert!(!integrations.contains_key(&key_removed));
+
+        req_unchanged.update(cx, |r, _| {
+            assert_eq!(r.count(), 1);
+            assert!(r.has_api());
+        });
+        for dropped in [&req_reauthed, &req_scope, &req_removed] {
+            dropped.update(cx, |r, _| {
+                assert_eq!(r.count(), 0);
+                assert!(!r.has_api());
+            });
+        }
     }
 }

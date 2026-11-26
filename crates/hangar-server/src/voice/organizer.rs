@@ -582,7 +582,7 @@ const HANGAR_MCP_NOTE: &str = "\n\nO MCP hangar também é seu, inteiro, depois 
     integration_tools e integration_call. Você não é sessão: \
     em group, pair, unpair, browser* e html_render passe sessao com o nome da sessão em nome de quem agir (em pair, sessao e alvo \
     são as duas). Fechar sessão é sempre pelo seu close_session, com o sim falado. \
-    Integrações MCP externas: integrations_list lista integrações conectadas e elegíveis; integration_tools lista ferramentas \
+    Integrações MCP externas: integrations_list lista integrações habilitadas e elegíveis (verifique `status` de cada item antes de afirmar que está conectada); integration_tools lista ferramentas \
     de uma integração (indicando leitura ou escrita); integration_call chama uma ferramenta da integração (passe session se \
     a integração for filtrada por projeto). Leituras rodam direto; se uma escrita devolver voice_confirmation_required, NUNCA \
     confirme sozinha — resuma claramente em voz a integração, ferramenta e argumentos principais, peça o sim falado do dono e \
@@ -3646,6 +3646,8 @@ mod tests {
         ] {
             assert!(HANGAR_MCP_NOTE.contains(required), "faltou {required} em HANGAR_MCP_NOTE");
         }
+        assert!(HANGAR_MCP_NOTE.contains("habilitadas e elegíveis") && HANGAR_MCP_NOTE.contains("status"));
+        assert!(!HANGAR_MCP_NOTE.contains("conectadas e elegíveis"));
         assert!(HANGAR_MCP_NOTE.contains("NUNCA confirme sozinha") && HANGAR_MCP_NOTE.contains("close_session"));
 
         let entry = json!({"enabled": true, "url": "http://127.0.0.1:8765/mcp/"});

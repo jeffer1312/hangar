@@ -13,10 +13,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use hangar_core::http::{detail, json_response};
 use hangar_integrations::{
-    ApprovalDecision, ApprovalError, ClientError, IntegrationConfig, IntegrationSecrets,
-    IntegrationStatus, IntegrationUpdate, OAuthError, OAuthOrigin, OAuthStartInput,
-    OAuthStartOutcome, PermissionPolicy, RegistryError, SecretKeyError, SecretStoreError,
-    ToolSummary, Transport, AuthConfig,
+    ApprovalDecision, ApprovalError, AuthConfig, ClientError, IntegrationConfig,
+    IntegrationSecrets, IntegrationStatus, IntegrationUpdate, OAuthError, OAuthOrigin,
+    OAuthStartInput, OAuthStartOutcome, PermissionPolicy, RegistryError, SecretKeyError,
+    SecretStoreError, ToolsCache, Transport,
 };
 use http_body_util::BodyExt;
 use serde::de::DeserializeOwned;
@@ -307,6 +307,10 @@ struct PatchIntegrationBody {
     projects: Option<Vec<String>>,
     #[serde(default)]
     allowed_tools: Option<BTreeSet<String>>,
+    #[serde(default)]
+    add_allowed_tools: Option<Vec<String>>,
+    #[serde(default)]
+    remove_allowed_tools: Option<Vec<String>>,
     #[serde(default, deserialize_with = "present")]
     secrets: Option<Option<SecretsPatch>>,
 }
@@ -535,6 +539,9 @@ async fn create_integration(state: &AppState, request: Request) -> Response {
         return registry_error(RegistryError::Validation(err));
     }
 
+    let lock_id = config.id.clone();
+    let _guard = state.integrations.lock_integration(&lock_id).await;
+
     let created = match state.integrations.registry.create(config) {
         Ok(cfg) => cfg,
         Err(err) => return registry_error(err),
@@ -561,37 +568,46 @@ async fn create_integration(state: &AppState, request: Request) -> Response {
     json_response(StatusCode::CREATED, json!({"integration": view}))
 }
 
+fn remote_url(transport: &Transport) -> Option<&str> {
+    match transport {
+        Transport::RemoteHttp { url, .. } => Some(url.as_str()),
+        Transport::LocalStdio { .. } => None,
+    }
+}
+
+fn clear_remote_endpoint_secrets(slot: &mut Option<IntegrationSecrets>) {
+    if let Some(entry) = slot.as_mut() {
+        entry.bearer_token = None;
+        entry.oauth = None;
+        entry.headers.clear();
+        if entry.is_empty() {
+            *slot = None;
+        }
+    }
+}
+
+async fn invalidate_integration_runtime(state: &AppState, id: &str) {
+    state.integrations.clients.invalidate(id).await;
+    state.integrations.tools_cache.invalidate(id);
+    state.integrations.oauth.cancel_pending_for(id);
+    state.integrations.approvals.cancel_for_integration(id);
+    state.integrations.clear_voice_confirmations(id);
+    state.integrations.clear_error(id);
+}
+
 async fn patch_integration(state: &AppState, id: &str, request: Request) -> Response {
     let body: PatchIntegrationBody = match read_json_body(request).await {
         Ok(parsed) => parsed,
         Err(resp) => return resp,
     };
 
-    let existing = match state.integrations.registry.get(id) {
-        Ok(Some(cfg)) => cfg,
-        Ok(None) => return not_found_integration(id),
-        Err(err) => return registry_error(err),
-    };
+    if body.allowed_tools.is_some()
+        && (body.add_allowed_tools.is_some() || body.remove_allowed_tools.is_some())
+    {
+        return invalid_body();
+    }
 
-    let transport_or_auth_changed = body.transport.is_some() || body.auth.is_some();
-    let should_invalidate = body.enabled == Some(false)
-        || transport_or_auth_changed
-        || body.secrets.is_some();
-
-    let rollback_update = IntegrationUpdate {
-        name: Some(existing.name.clone()),
-        preset: Some(existing.preset.clone()),
-        enabled: Some(existing.enabled),
-        transport: Some(existing.transport.clone()),
-        auth: Some(existing.auth.clone()),
-        policy: Some(existing.policy),
-        pinned: Some(existing.pinned),
-        projects: Some(existing.projects.clone()),
-        allowed_tools: Some(existing.allowed_tools.clone()),
-        updated_at: Some(existing.updated_at),
-    };
-
-    // Valida previamente uma amostra de patch de segredos antes de mutar o config.json.
+    // Valida previamente uma amostra de patch de segredos antes de travar ou mutar o config.json.
     if let Some(Some(ref patch)) = body.secrets {
         let mut probe = IntegrationSecrets::default();
         let probe_patch = SecretsPatch {
@@ -606,32 +622,114 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         }
     }
 
-    let update = IntegrationUpdate {
-        name: body.name,
-        preset: body.preset,
-        enabled: body.enabled,
-        transport: body.transport,
-        auth: body.auth,
-        policy: body.policy,
-        pinned: body.pinned,
-        projects: body.projects,
-        allowed_tools: body.allowed_tools,
-        updated_at: None,
-    };
+    let _guard = state.integrations.lock_integration(id).await;
 
-    let updated = match state.integrations.registry.update(id, update) {
-        Ok(cfg) => cfg,
+    let existing = match state.integrations.registry.get(id) {
+        Ok(Some(cfg)) => cfg,
+        Ok(None) => return not_found_integration(id),
         Err(err) => return registry_error(err),
     };
 
+    let transport_or_auth_changed = body.transport.is_some() || body.auth.is_some();
+    let should_invalidate = body.enabled == Some(false)
+        || transport_or_auth_changed
+        || body.secrets.is_some();
+    let has_field_updates = body.name.is_some()
+        || body.preset.is_some()
+        || body.enabled.is_some()
+        || body.transport.is_some()
+        || body.auth.is_some()
+        || body.policy.is_some()
+        || body.pinned.is_some()
+        || body.projects.is_some()
+        || body.allowed_tools.is_some();
+    let has_allowed_delta =
+        body.add_allowed_tools.is_some() || body.remove_allowed_tools.is_some();
+    let add_tools = body.add_allowed_tools.unwrap_or_default();
+    let remove_tools = body.remove_allowed_tools.unwrap_or_default();
+
+    let rollback_update = IntegrationUpdate {
+        name: Some(existing.name.clone()),
+        preset: Some(existing.preset.clone()),
+        enabled: Some(existing.enabled),
+        transport: Some(existing.transport.clone()),
+        auth: Some(existing.auth.clone()),
+        policy: Some(existing.policy),
+        pinned: Some(existing.pinned),
+        projects: Some(existing.projects.clone()),
+        allowed_tools: Some(existing.allowed_tools.clone()),
+        updated_at: Some(existing.updated_at),
+    };
+
+    let mut did_registry_update = false;
+    let mut updated = if !has_field_updates && has_allowed_delta {
+        existing.clone()
+    } else {
+        let update = IntegrationUpdate {
+            name: body.name,
+            preset: body.preset,
+            enabled: body.enabled,
+            transport: body.transport,
+            auth: body.auth,
+            policy: body.policy,
+            pinned: body.pinned,
+            projects: body.projects,
+            allowed_tools: body.allowed_tools,
+            updated_at: None,
+        };
+        match state.integrations.registry.update(id, update) {
+            Ok(cfg) => {
+                did_registry_update = true;
+                cfg
+            }
+            Err(err) => return registry_error(err),
+        }
+    };
+
+    if has_allowed_delta {
+        match state
+            .integrations
+            .registry
+            .patch_allowed_tools(id, &add_tools, &remove_tools)
+        {
+            Ok(cfg) => updated = cfg,
+            Err(err) => {
+                if did_registry_update {
+                    let _ = state.integrations.registry.update(id, rollback_update);
+                }
+                return registry_error(err);
+            }
+        }
+    }
+
+    // Troca de URL/transporte remoto nunca pode reaproveitar credenciais HTTP ou OAuth do destino anterior.
+    let remote_url_changed = remote_url(&existing.transport) != remote_url(&updated.transport);
+
     let secrets_after = match body.secrets {
-        None => match state.integrations.secrets.get(id).await {
+        None if !remote_url_changed => match state.integrations.secrets.get(id).await {
             Ok(sec) => sec,
             Err(err) => {
                 let _ = state.integrations.registry.update(id, rollback_update);
                 return secret_store_error(err);
             }
         },
+        None => {
+            match state
+                .integrations
+                .secrets
+                .update_with(id, move |slot| {
+                    clear_remote_endpoint_secrets(slot);
+                    Ok(slot.clone())
+                })
+                .await
+            {
+                Ok(sec) => sec,
+                Err(err) => {
+                    let _ = state.integrations.registry.update(id, rollback_update);
+                    return secret_store_error(err);
+                }
+            }
+        }
         Some(None) => {
             if let Err(err) = state.integrations.secrets.delete(id).await {
                 let _ = state.integrations.registry.update(id, rollback_update);
@@ -646,6 +744,9 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
                 .secrets
                 .update_with(id, move |slot| {
                     let patch = patch_slot.take().unwrap_or_default();
+                    if remote_url_changed {
+                        clear_remote_endpoint_secrets(slot);
+                    }
                     let entry = slot.get_or_insert_with(IntegrationSecrets::default);
                     if apply_secrets_patch(entry, patch).is_err() {
                         return Err(SecretStoreError::InvalidId);
@@ -673,7 +774,8 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
     state.integrations.clear_error(id);
     if should_invalidate {
         state.integrations.clients.invalidate(id).await;
-        state.integrations.tools_cache.remove(id);
+        state.integrations.tools_cache.invalidate(id);
+        state.integrations.clear_voice_confirmations(id);
     }
     if transport_or_auth_changed {
         state.integrations.oauth.cancel_pending_for(id);
@@ -684,21 +786,30 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
 }
 
 async fn delete_integration(state: &AppState, id: &str) -> Response {
-    state.integrations.clients.invalidate(id).await;
-    state.integrations.tools_cache.remove(id);
-    state.integrations.oauth.cancel_pending_for(id);
-    state.integrations.approvals.cancel_for_integration(id);
-    state.integrations.clear_error(id);
+    let _guard = state.integrations.lock_integration(id).await;
 
-    if let Err(err) = state.integrations.registry.delete(id) {
-        return registry_error(err);
+    match state.integrations.registry.delete(id) {
+        Ok(_) => {
+            invalidate_integration_runtime(state, id).await;
+            if let Err(err) = state.integrations.secrets.delete(id).await {
+                return secret_store_error(err);
+            }
+            json_response(StatusCode::OK, json!({"ok": true, "id": id}))
+        }
+        // Permite concluir DELETE anterior que removeu config.json mas falhou ao apagar o segredo.
+        Err(RegistryError::NotFound(_)) => match state.integrations.secrets.get(id).await {
+            Ok(Some(_)) => {
+                invalidate_integration_runtime(state, id).await;
+                if let Err(err) = state.integrations.secrets.delete(id).await {
+                    return secret_store_error(err);
+                }
+                json_response(StatusCode::OK, json!({"ok": true, "id": id}))
+            }
+            Ok(None) => not_found_integration(id),
+            Err(err) => secret_store_error(err),
+        },
+        Err(err) => registry_error(err),
     }
-
-    if let Err(err) = state.integrations.secrets.delete(id).await {
-        return secret_store_error(err);
-    }
-
-    json_response(StatusCode::OK, json!({"ok": true, "id": id}))
 }
 
 async fn oauth_start(state: &AppState, id: &str, request: Request) -> Response {
@@ -898,8 +1009,7 @@ async fn test_integration(state: &AppState, id: &str) -> Response {
     match state.integrations.clients.list_tools(id).await {
         Ok(tools) => {
             state.integrations.clear_error(id);
-            let summaries: Vec<ToolSummary> =
-                tools.iter().map(|tool| tool.to_summary(&config)).collect();
+            let summaries = ToolsCache::into_tool_summaries(&config, tools);
             json_response(
                 StatusCode::OK,
                 json!({
@@ -918,8 +1028,11 @@ fn list_tools(state: &AppState, id: &str) -> Response {
         Ok(None) => return not_found_integration(id),
         Err(err) => return registry_error(err),
     };
-    let tools = state.integrations.tools_cache.get(id).unwrap_or_default();
-    let summaries: Vec<ToolSummary> = tools.iter().map(|tool| tool.to_summary(&config)).collect();
+    let summaries = state
+        .integrations
+        .tools_cache
+        .summaries(&config)
+        .unwrap_or_default();
     json_response(StatusCode::OK, json!({"tools": summaries}))
 }
 
@@ -1222,4 +1335,17 @@ fn now_unix_secs() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_html;
+
+    #[test]
+    fn escape_html_neutralizes_tags_quotes_and_ampersands() {
+        assert_eq!(
+            escape_html("<script>\"'&</script>"),
+            "&lt;script&gt;&quot;&#x27;&amp;&lt;/script&gt;"
+        );
+    }
 }

@@ -12731,5 +12731,9 @@
   "integrations_err_already_exists": "An integration with that identifier already exists.",
   "integrations_err_keyring": "Integrations secret keyring unavailable.",
   "integrations_err_stale": "This card changed on the server.",
-  "integrations_err_answered": "This request was already answered."
+  "integrations_err_answered": "This request was already answered.",
+  "integrations_tools_load_error": "Couldn't load tools ({reason}).",
+  "integrations_validation_command_quotes": "Close every quote in the command before saving.",
+  "integrations_validation_header_name": "Invalid header name: {name}.",
+  "integrations_validation_url_insecure": "Use HTTPS (or localhost) when sending tokens or headers."
 }

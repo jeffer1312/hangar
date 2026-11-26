@@ -2,8 +2,9 @@
 //! e ferramentas fixadas `int__<id>__<tool>`), com guarda de sessão compartilhada, filtro por
 //! projeto, aprovações com cancelamento, ramo de voz e envelope de conteúdo externo.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -313,6 +314,27 @@ pub(super) async fn integrations_list(
     Ok(json!({ "integrations": out }))
 }
 
+async fn discover_tools_checked(
+    st: &AppState,
+    api: &Router,
+    integration_id: &str,
+    target_session: Option<&str>,
+) -> Result<Vec<DiscoveredTool>, String> {
+    match st.integrations.clients.list_tools(integration_id).await {
+        Ok(tools) => {
+            st.integrations.clear_error(integration_id);
+            Ok(tools)
+        }
+        Err(err) => {
+            if let Some(session_name) = target_session {
+                shared_guard::ensure_unshared(st, api, session_name, shared_guard::INTEGRATIONS)
+                    .await?;
+            }
+            Err(map_client_error(st, integration_id, err))
+        }
+    }
+}
+
 pub(super) async fn integration_tools(
     st: &AppState,
     api: &Router,
@@ -338,17 +360,14 @@ pub(super) async fn integration_tools(
         Some(tools) => tools,
         None => {
             check_local_auth_state(st, &config).await?;
-            let tools = st
-                .integrations
-                .clients
-                .list_tools(&config.id)
-                .await
-                .map_err(|err| map_client_error(st, &config.id, err))?;
-            st.integrations.clear_error(&config.id);
-            tools
+            discover_tools_checked(st, api, &config.id, target_session).await?
         }
     };
-    let summaries = ToolsCache::to_tool_summaries(&config, &discovered);
+    // Revalida o compartilhamento após qualquer espera assíncrona antes de expor metadados externos.
+    if let Some(session_name) = target_session {
+        shared_guard::ensure_unshared(st, api, session_name, shared_guard::INTEGRATIONS).await?;
+    }
+    let summaries = ToolsCache::into_tool_summaries(&config, discovered);
     Ok(json!({ "tools": summaries }))
 }
 
@@ -358,6 +377,7 @@ pub(super) async fn integration_call(
     server_id: &str,
     headers: &HeaderMap,
     args: IntegrationCallArgs,
+    external_started: &AtomicBool,
 ) -> Result<CallToolResult, String> {
     let args_value = match args.arguments {
         None | Some(Value::Null) => Value::Object(Map::new()),
@@ -394,6 +414,7 @@ pub(super) async fn integration_call(
         args_value,
         args.reason,
         args.confirmed,
+        external_started,
     )
     .await
 }
@@ -406,6 +427,7 @@ pub(super) async fn call_pinned_tool(
     headers: &HeaderMap,
     mcp_name: &str,
     raw_args: JsonObject,
+    external_started: &AtomicBool,
 ) -> Result<CallToolResult, String> {
     let (caller_name, origin) = resolve_caller(st, headers).await?;
     let target_session = if origin == Origin::Voice {
@@ -418,7 +440,7 @@ pub(super) async fn call_pinned_tool(
     }
 
     let (config, original_tool) =
-        resolve_pinned_target(st, index, target_session, mcp_name).await?;
+        resolve_pinned_target(st, api, index, target_session, mcp_name).await?;
 
     execute_checked_call(
         st,
@@ -433,18 +455,23 @@ pub(super) async fn call_pinned_tool(
         Value::Object(raw_args),
         None,
         None,
+        external_started,
     )
     .await
 }
 
 async fn resolve_pinned_target(
     st: &AppState,
+    api: &Router,
     index: &PinnedToolIndex,
     target_session: Option<&str>,
     mcp_name: &str,
 ) -> Result<(IntegrationConfig, String), String> {
     if let Some((integration_id, original_tool)) = index.get(mcp_name) {
         let config = load_integration(st, &integration_id)?;
+        if !config.pinned {
+            return Err(format!("Unknown tool: {mcp_name}"));
+        }
         ensure_project_allowed(st, &config, target_session).await?;
         if !config.enabled {
             return Err(format!(
@@ -462,6 +489,9 @@ async fn resolve_pinned_target(
     if let Some((id, tool_part)) = rest.split_once("__")
         && let Some(config) = st.integrations.registry.get(id).map_err(map_registry_error)?
     {
+        if !config.pinned {
+            return Err(format!("Unknown tool: {mcp_name}"));
+        }
         ensure_project_allowed(st, &config, target_session).await?;
         if !config.enabled {
             return Err(format!(
@@ -473,14 +503,7 @@ async fn resolve_pinned_target(
             Some(tools) => tools,
             None => {
                 check_local_auth_state(st, &config).await?;
-                let tools = st
-                    .integrations
-                    .clients
-                    .list_tools(&config.id)
-                    .await
-                    .map_err(|err| map_client_error(st, &config.id, err))?;
-                st.integrations.clear_error(&config.id);
-                tools
+                discover_tools_checked(st, api, &config.id, target_session).await?
             }
         };
         let pairs = build_pairs_for_integration(&config.id, &tools);
@@ -497,7 +520,7 @@ async fn resolve_pinned_target(
     // Caso o `id` (>55 bytes) tenha sido truncado com hash antes do separador `__`, varre o catálogo.
     let configs = st.integrations.registry.list().map_err(map_registry_error)?;
     for config in configs {
-        if !config.enabled {
+        if !config.enabled || !config.pinned {
             continue;
         }
         let safe_id = sanitize_segment(&config.id);
@@ -542,23 +565,18 @@ async fn execute_checked_call(
     caller_name: &str,
     origin: Origin,
     target_session: Option<&str>,
-    config: IntegrationConfig,
+    mut config: IntegrationConfig,
     tool_name: &str,
     args_value: Value,
     reason: Option<String>,
     confirmed: Option<bool>,
+    external_started: &AtomicBool,
 ) -> Result<CallToolResult, String> {
     let discovered = match st.integrations.tools_cache.get_tool(&config.id, tool_name) {
         Some(found) => found,
         None => {
             check_local_auth_state(st, &config).await?;
-            let tools = st
-                .integrations
-                .clients
-                .list_tools(&config.id)
-                .await
-                .map_err(|err| map_client_error(st, &config.id, err))?;
-            st.integrations.clear_error(&config.id);
+            let tools = discover_tools_checked(st, api, &config.id, target_session).await?;
             tools.into_iter().find(|t| t.name == tool_name).ok_or_else(|| {
                 format!(
                     "integration_tool_not_found: ferramenta '{tool_name}' não encontrada na integração '{}'",
@@ -586,7 +604,19 @@ async fn execute_checked_call(
         ToolAccess::Read | ToolAccess::AllowedAlways => {}
         ToolAccess::AskWrite => {
             if origin == Origin::Voice {
-                if confirmed != Some(true) {
+                let args_hash = canonical_args_hash(&args_value);
+                if confirmed != Some(true)
+                    || !st.integrations.consume_voice_confirmation(
+                        &config.id,
+                        &discovered.name,
+                        &args_hash,
+                    )
+                {
+                    st.integrations.record_voice_confirmation(
+                        &config.id,
+                        &discovered.name,
+                        args_hash,
+                    );
                     let preview = format_arguments_preview(&args_value);
                     return Ok(dict_result(json!({
                         "status": "voice_confirmation_required",
@@ -634,32 +664,7 @@ async fn execute_checked_call(
                     .map_err(map_approval_error)?;
 
                 match waiter.wait().await {
-                    ApprovalResolution::AllowOnce => {}
-                    ApprovalResolution::AllowAlways => {
-                        let registry = st.integrations.registry.clone();
-                        let integration_id = config.id.clone();
-                        let tool_name = discovered.name.clone();
-                        let added = tokio::task::spawn_blocking(move || {
-                            registry.add_allowed_tool(&integration_id, &tool_name)
-                        })
-                        .await
-                        .map_err(|_| {
-                            format!(
-                                "integration_registry_io: falha interna ao salvar liberação permanente de '{}'",
-                                config.id
-                            )
-                        })?;
-                        match added {
-                            Ok(_) => {}
-                            Err(RegistryError::NotFound(_)) => {
-                                return Err(format!(
-                                    "integration_not_found: integração '{}' não encontrada",
-                                    config.id
-                                ));
-                            }
-                            Err(err) => return Err(map_registry_error(err)),
-                        }
-                    }
+                    ApprovalResolution::AllowOnce | ApprovalResolution::AllowAlways => {}
                     ApprovalResolution::Denied => {
                         return Err(format!(
                             "integration_denied: o dono negou a execução de '{}' na integração '{}'",
@@ -684,18 +689,51 @@ async fn execute_checked_call(
         }
     }
 
-    // Se convite/par abriu durante a espera pela aprovação, bloqueia antes de acionar o servidor externo.
-    if waited_for_approval && let Some(session_name) = target_session {
-        shared_guard::ensure_unshared(st, api, session_name, shared_guard::INTEGRATIONS).await?;
+    // Se convite/par abriu ou a configuração foi endurecida durante a aprovação, bloqueia antes do envio externo.
+    if waited_for_approval {
+        if let Some(session_name) = target_session {
+            shared_guard::ensure_unshared(st, api, session_name, shared_guard::INTEGRATIONS)
+                .await?;
+        }
+        config = load_integration(st, &config.id)?;
+        if !config.enabled {
+            return Err(format!(
+                "integration_disabled: integração '{}' está desabilitada",
+                config.id
+            ));
+        }
+        ensure_project_allowed(st, &config, target_session).await?;
+        if classify_tool_access(
+            config.policy,
+            &config.allowed_tools,
+            discovered.read_only_hint,
+            &discovered.name,
+        ) == ToolAccess::Blocked
+        {
+            return Err(format!(
+                "integration_read_only: a integração '{}' está em modo somente leitura e bloqueia a ferramenta '{}'",
+                config.id, discovered.name
+            ));
+        }
     }
 
     check_local_auth_state(st, &config).await?;
-    let output = st
+    external_started.store(true, Ordering::SeqCst);
+    let output = match st
         .integrations
         .clients
         .call_tool(&config.id, &discovered.name, args_value)
         .await
-        .map_err(|err| map_client_error(st, &config.id, err))?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            if let Some(session_name) = target_session {
+                shared_guard::ensure_unshared(st, api, session_name, shared_guard::INTEGRATIONS)
+                    .await?;
+            }
+            return Err(map_client_error(st, &config.id, err));
+        }
+    };
     st.integrations.clear_error(&config.id);
 
     // Se convite/par abriu enquanto a chamada externa rodava, nunca devolve a resposta.
@@ -773,15 +811,27 @@ pub(super) async fn list_pinned_tools(
     });
     let discovered_lists = futures_util::future::join_all(discovery_futures).await;
 
+    // Se convite/par abriu durante a descoberta, omite as tools int__* preservando o catálogo fixo.
+    if shared_guard::ensure_unshared(st, api, &me, shared_guard::INTEGRATIONS)
+        .await
+        .is_err()
+    {
+        return Vec::new();
+    }
+
     let mut used_names = HashSet::new();
     let mut out = Vec::new();
     for (cfg, maybe_tools) in pinned.into_iter().zip(discovered_lists) {
         let Some(tools) = maybe_tools else {
             continue;
         };
+        let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        let mcp_names = assign_mcp_tool_names(&cfg.id, &tool_names);
         let mut pairs = Vec::with_capacity(tools.len());
-        for tool in tools {
-            let mcp_name = build_mcp_tool_name(&cfg.id, &tool.name, &mut used_names);
+        for (mcp_name, tool) in mcp_names.into_iter().zip(tools) {
+            if !used_names.insert(mcp_name.clone()) {
+                continue;
+            }
             pairs.push((mcp_name.clone(), tool.name.clone()));
             out.push(to_rmcp_tool(mcp_name, &cfg, tool));
         }
@@ -794,44 +844,113 @@ fn build_pairs_for_integration(
     integration_id: &str,
     tools: &[DiscoveredTool],
 ) -> Vec<(String, String)> {
-    let mut used = HashSet::new();
-    tools
-        .iter()
-        .map(|t| {
-            let mcp_name = build_mcp_tool_name(integration_id, &t.name, &mut used);
-            (mcp_name, t.name.clone())
-        })
+    let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    assign_mcp_tool_names(integration_id, &tool_names)
+        .into_iter()
+        .zip(tools.iter().map(|t| t.name.clone()))
         .collect()
 }
 
-pub(super) fn build_mcp_tool_name(
-    integration_id: &str,
-    tool_name: &str,
-    used: &mut HashSet<String>,
-) -> String {
+/// Resolve nomes `int__<id>__<tool>` independentemente da ordem em que o servidor listar as tools.
+pub(super) fn assign_mcp_tool_names(integration_id: &str, tool_names: &[&str]) -> Vec<String> {
     let safe_id = sanitize_segment(integration_id);
-    let safe_tool = sanitize_segment(tool_name);
-    let candidate = format!("int__{safe_id}__{safe_tool}");
-    if candidate.len() <= MAX_MCP_TOOL_NAME_BYTES && used.insert(candidate.clone()) {
-        return candidate;
+    let candidates: Vec<String> = tool_names
+        .iter()
+        .map(|name| format!("int__{safe_id}__{}", sanitize_segment(name)))
+        .collect();
+    let mut counts: HashMap<&str, usize> = HashMap::with_capacity(candidates.len());
+    for cand in &candidates {
+        *counts.entry(cand.as_str()).or_insert(0) += 1;
     }
-    let hash = short_tool_hash(integration_id, tool_name);
-    let prefix_budget = MAX_MCP_TOOL_NAME_BYTES - 1 - hash.len();
-    let prefix = &candidate[..candidate.len().min(prefix_budget)];
-    let hashed = format!("{prefix}_{hash}");
-    if used.insert(hashed.clone()) {
-        return hashed;
-    }
-    for n in 2u32.. {
-        let suffix = format!("_{hash}_{n}");
-        let budget = MAX_MCP_TOOL_NAME_BYTES.saturating_sub(suffix.len());
-        let prefix = &candidate[..candidate.len().min(budget)];
-        let alt = format!("{prefix}{suffix}");
-        if used.insert(alt.clone()) {
-            return alt;
+
+    let mut used = HashSet::with_capacity(tool_names.len());
+    let mut out = vec![String::new(); tool_names.len()];
+    let mut need_hash = Vec::new();
+
+    for (idx, cand) in candidates.iter().enumerate() {
+        if cand.len() <= MAX_MCP_TOOL_NAME_BYTES && counts[cand.as_str()] == 1 {
+            used.insert(cand.clone());
+            out[idx] = cand.clone();
+        } else {
+            need_hash.push(idx);
         }
     }
-    unreachable!()
+
+    // Ordena colisões pelo nome bruto antes de atribuir sufixos para manter estabilidade entre descobertas.
+    need_hash.sort_by(|&a, &b| tool_names[a].cmp(tool_names[b]));
+    for idx in need_hash {
+        let raw_name = tool_names[idx];
+        let cand = &candidates[idx];
+        let hash = short_tool_hash(integration_id, raw_name);
+        let prefix_budget = MAX_MCP_TOOL_NAME_BYTES - 1 - hash.len();
+        let prefix = &cand[..cand.len().min(prefix_budget)];
+        let hashed = format!("{prefix}_{hash}");
+        if used.insert(hashed.clone()) {
+            out[idx] = hashed;
+            continue;
+        }
+        for n in 2u32.. {
+            let suffix = format!("_{hash}_{n}");
+            let budget = MAX_MCP_TOOL_NAME_BYTES.saturating_sub(suffix.len());
+            let prefix = &cand[..cand.len().min(budget)];
+            let alt = format!("{prefix}{suffix}");
+            if used.insert(alt.clone()) {
+                out[idx] = alt;
+                break;
+            }
+        }
+    }
+
+    out
+}
+
+fn hash_canonical_value(ctx: &mut ring::digest::Context, val: &Value) {
+    match val {
+        Value::Null => ctx.update(b"n"),
+        Value::Bool(b) => {
+            ctx.update(b"b");
+            ctx.update(&[u8::from(*b)]);
+        }
+        Value::Number(num) => {
+            ctx.update(b"d");
+            let text = num.to_string();
+            ctx.update(&(text.len() as u64).to_le_bytes());
+            ctx.update(text.as_bytes());
+        }
+        Value::String(s) => {
+            ctx.update(b"s");
+            ctx.update(&(s.len() as u64).to_le_bytes());
+            ctx.update(s.as_bytes());
+        }
+        Value::Array(items) => {
+            ctx.update(b"a");
+            ctx.update(&(items.len() as u64).to_le_bytes());
+            for item in items {
+                hash_canonical_value(ctx, item);
+            }
+        }
+        Value::Object(map) => {
+            ctx.update(b"o");
+            ctx.update(&(map.len() as u64).to_le_bytes());
+            let ordered: BTreeMap<&str, &Value> =
+                map.iter().map(|(k, v)| (k.as_str(), v)).collect();
+            for (k, v) in ordered {
+                ctx.update(&(k.len() as u64).to_le_bytes());
+                ctx.update(k.as_bytes());
+                hash_canonical_value(ctx, v);
+            }
+        }
+    }
+}
+
+fn canonical_args_hash(val: &Value) -> String {
+    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    hash_canonical_value(&mut ctx, val);
+    ctx.finish()
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn sanitize_segment(raw: &str) -> String {
@@ -994,9 +1113,15 @@ fn map_client_error(st: &AppState, id: &str, err: ClientError) -> String {
             format!("integration_tool_not_found: ferramenta '{name}' não encontrada na integração '{id}'")
         }
         ClientError::RemoteError { code, message } => {
-            let msg = format!("erro remoto MCP ({code}): {message}");
-            st.integrations.record_error(id, msg.clone());
-            format!("integration_upstream_error: {msg}")
+            let summary = format!(
+                "erro remoto MCP ({code}): {}",
+                truncate_preview_chars(&message, 256)
+            );
+            st.integrations.record_error(id, summary);
+            format!(
+                "integration_upstream_error: erro remoto MCP ({code}):\n{}",
+                wrap_external_result(id, &message)
+            )
         }
         ClientError::Registry(e) => map_registry_error(e),
         ClientError::Secrets(e) => map_secret_store_error(e),
@@ -1043,28 +1168,30 @@ mod tests {
 
     #[test]
     fn mcp_tool_names_are_deterministic_sanitized_capped_at_64_and_collision_free() {
-        let mut used = HashSet::new();
-        assert_eq!(
-            build_mcp_tool_name("github", "get_issue", &mut used),
-            "int__github__get_issue"
-        );
-        assert_eq!(
-            build_mcp_tool_name("github", "issues.create", &mut used),
-            "int__github__issues_create"
-        );
-        // Colisão após sanitização recebe hash determinístico diferente.
-        let collided = build_mcp_tool_name("github", "issues:create", &mut used);
-        assert_ne!(collided, "int__github__issues_create");
-        assert!(collided.len() <= MAX_MCP_TOOL_NAME_BYTES);
+        let order_a = assign_mcp_tool_names("github", &["get_issue", "issues.create", "issues:create"]);
+        let order_b = assign_mcp_tool_names("github", &["issues:create", "issues.create", "get_issue"]);
+        assert_eq!(order_a[0], "int__github__get_issue");
+        assert_eq!(order_b[2], "int__github__get_issue");
+
+        // Colisão pós-sanitização recebe hash em todas as envolvidas, independente da ordem da lista.
+        assert_ne!(order_a[1], "int__github__issues_create");
+        assert_ne!(order_a[2], "int__github__issues_create");
+        assert_ne!(order_a[1], order_a[2]);
+        assert_eq!(order_a[1], order_b[1]);
+        assert_eq!(order_a[2], order_b[0]);
+        assert!(order_a[1].len() <= MAX_MCP_TOOL_NAME_BYTES);
+        assert!(order_a[2].len() <= MAX_MCP_TOOL_NAME_BYTES);
 
         let long_name = "tool_with_a_very_long_name_that_certainly_exceeds_sixty_four_bytes_total";
-        let mut used_a = HashSet::new();
-        let mut used_b = HashSet::new();
-        let out_a = build_mcp_tool_name("my-integration", long_name, &mut used_a);
-        let out_b = build_mcp_tool_name("my-integration", long_name, &mut used_b);
+        let out_a = assign_mcp_tool_names("my-integration", &[long_name]);
+        let out_b = assign_mcp_tool_names("my-integration", &[long_name]);
         assert_eq!(out_a, out_b);
-        assert_eq!(out_a.len(), MAX_MCP_TOOL_NAME_BYTES);
-        assert!(out_a.starts_with("int__my-integration__"));
-        assert!(out_a.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+        assert_eq!(out_a[0].len(), MAX_MCP_TOOL_NAME_BYTES);
+        assert!(out_a[0].starts_with("int__my-integration__"));
+        assert!(
+            out_a[0]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        );
     }
 }

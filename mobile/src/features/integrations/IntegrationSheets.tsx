@@ -58,6 +58,14 @@ export function IntegrationDetailSheet({
   const [error, setError] = useState('');
   const alive = useRef(true);
   const autoStartedFor = useRef<string | null>(null);
+  const toolsVersionRef = useRef(0);
+  const currentTargetRef = useRef({ serverId: server.id, baseUrl: server.baseUrl, id: integration.id });
+  currentTargetRef.current = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
+
+  const isSameTarget = (snap: { serverId: string; baseUrl: string; id: string }) => {
+    const cur = currentTargetRef.current;
+    return alive.current && cur.serverId === snap.serverId && cur.baseUrl === snap.baseUrl && cur.id === snap.id;
+  };
 
   useEffect(() => {
     alive.current = true;
@@ -65,21 +73,26 @@ export function IntegrationDetailSheet({
   }, []);
 
   const refreshTools = useCallback(async () => {
+    const version = ++toolsVersionRef.current;
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
     try {
       const list = await listIntegrationTools(server, integration.id);
-      if (alive.current) setTools(list);
+      if (isSameTarget(snap) && version === toolsVersionRef.current) setTools(list);
     } catch {
       /* Cache vazio ou servidor sem suporte mantém lista vazia até o primeiro Testar. */
     }
   }, [server, integration.id]);
 
   useEffect(() => {
+    toolsVersionRef.current += 1;
+    setTools([]);
     setError('');
     setTestSummary('');
     setOauthStarted(false);
     setHandoff(null);
     setDesktopOpened(false);
     void refreshTools();
+    return () => { toolsVersionRef.current += 1; };
   }, [refreshTools]);
 
   const supportsOAuth = integration.transport.kind === 'remote_http'
@@ -87,6 +100,7 @@ export function IntegrationDetailSheet({
 
   const startOAuth = useCallback(async () => {
     if (busy || !supportsOAuth) return;
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
     setBusy(true);
     setOauthOpening(true);
     setOauthStarted(false);
@@ -98,24 +112,24 @@ export function IntegrationDetailSheet({
         origin_client: 'mobile',
         public_base_url: resolveMobilePublicBaseUrl(server),
       });
-      if (!alive.current) return;
+      if (!isSameTarget(snap)) return;
       if (result.mode === 'open_url') {
         const parsed = new URL(result.authorize_url);
         if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
           throw new Error(m.integrations_validation_url());
         }
         await Linking.openURL(parsed.href);
-        if (alive.current) setOauthStarted(true);
+        if (isSameTarget(snap)) setOauthStarted(true);
       } else {
         setHandoff(result);
       }
     } catch (e) {
-      if (alive.current) {
+      if (isSameTarget(snap)) {
         setError(integrationErrorText(e));
         haptic.error();
       }
     } finally {
-      if (alive.current) {
+      if (isSameTarget(snap)) {
         setOauthOpening(false);
         setBusy(false);
       }
@@ -131,33 +145,37 @@ export function IntegrationDetailSheet({
 
   const openOnDesktop = async () => {
     if (busy || !handoff) return;
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
     setBusy(true);
     setError('');
     try {
       await openIntegrationOAuthOnDesktop(server, integration.id, handoff.authorize_url);
-      if (!alive.current) return;
+      if (!isSameTarget(snap)) return;
       setDesktopOpened(true);
       toast.ok(m.integrations_oauth_desktop_opened());
     } catch (e) {
-      if (alive.current) {
+      if (isSameTarget(snap)) {
         setError(integrationErrorText(e));
         haptic.error();
       }
     } finally {
-      if (alive.current) setBusy(false);
+      if (isSameTarget(snap)) setBusy(false);
     }
   };
 
   const runTest = async () => {
     if (busy) return;
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
     setBusy(true);
     setTesting(true);
     setError('');
     setTestSummary('');
     try {
       const res = await testIntegration(server, integration.id);
-      if (!alive.current) return;
+      if (!isSameTarget(snap)) return;
       if (res.status === 'ready') {
+        // Invalida leituras de cache mais antigas para não sobrescrever as ferramentas deste teste.
+        toolsVersionRef.current += 1;
         setTools(res.tools);
         const msg = m.integrations_test_ok({ n: res.tools.length });
         setTestSummary(msg);
@@ -171,12 +189,12 @@ export function IntegrationDetailSheet({
       }
       onChanged();
     } catch (e) {
-      if (alive.current) {
+      if (isSameTarget(snap)) {
         setError(integrationErrorText(e));
         haptic.error();
       }
     } finally {
-      if (alive.current) {
+      if (isSameTarget(snap)) {
         setTesting(false);
         setBusy(false);
       }
@@ -185,21 +203,22 @@ export function IntegrationDetailSheet({
 
   const patch = async (change: Parameters<typeof updateIntegration>[2], reloadTools = false) => {
     if (busy) return;
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
     setBusy(true);
     setError('');
     try {
       await updateIntegration(server, integration.id, change);
-      if (!alive.current) return;
+      if (!isSameTarget(snap)) return;
       if (reloadTools) await refreshTools();
       toast.ok(m.integrations_saved());
       onChanged();
     } catch (e) {
-      if (alive.current) {
+      if (isSameTarget(snap)) {
         setError(integrationErrorText(e));
         haptic.error();
       }
     } finally {
-      if (alive.current) setBusy(false);
+      if (isSameTarget(snap)) setBusy(false);
     }
   };
 
@@ -209,11 +228,11 @@ export function IntegrationDetailSheet({
   };
 
   const allowToolAlways = (toolName: string) => {
-    const allowed_tools = Array.from(new Set([...integration.allowed_tools, toolName]));
-    void patch({ allowed_tools }, true);
+    void patch({ add_allowed_tools: [toolName] }, true);
   };
 
   const confirmRemove = () => {
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
     Alert.alert(m.integrations_remove_confirm({ name: integration.name }), undefined, [
       { text: m.integrations_cancel(), style: 'cancel' },
       {
@@ -224,18 +243,19 @@ export function IntegrationDetailSheet({
           setError('');
           void deleteIntegration(server, integration.id)
             .then(() => {
+              if (!isSameTarget(snap)) return;
               toast.ok(m.integrations_removed());
               onChanged();
               onClose();
             })
             .catch((e: unknown) => {
-              if (alive.current) {
+              if (isSameTarget(snap)) {
                 setError(integrationErrorText(e));
                 haptic.error();
               }
             })
             .finally(() => {
-              if (alive.current) setBusy(false);
+              if (isSameTarget(snap)) setBusy(false);
             });
         },
       },

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
@@ -157,7 +157,11 @@ function ApprovalSheet({ server, ready, requests, requestId }: {
     if (ready && !requestId && !request) close();
   }, [ready, requestId, request]);
   const next = () => {
-    if (server) openIntegrationApproval({ serverId: server.id, requestId: null });
+    if (!server) return;
+    const current = useIntegrationApprovalTarget.getState().target;
+    // Só avança se a folha ainda estiver na máquina e no pedido desta operação.
+    if (!current || current.serverId !== server.id || current.requestId !== requestId) return;
+    openIntegrationApproval({ serverId: server.id, requestId: null });
   };
 
   return (
@@ -189,9 +193,11 @@ function ApprovalCard({ server, request, onDone }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const inFlight = useRef(false);
 
   const send = async (decision: IntegrationApprovalDecision, doneText: string) => {
-    if (busy) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError('');
     try {
@@ -213,6 +219,7 @@ function ApprovalCard({ server, request, onDone }: {
       setError(integrationErrorText(e));
       haptic.error();
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };

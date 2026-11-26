@@ -14,6 +14,7 @@ use hangar_integrations::secrets::{
     IntegrationSecrets, MemoryKeyStore, OAuthTokens, SECRETS_FORMAT_VERSION, SecretKey,
     SecretKeyError, SecretKeyStore, SecretStore, SecretStoreError,
 };
+use hangar_integrations::tools_cache::{DiscoveredTool, ToolsCache};
 use serde_json::json;
 use tempfile::tempdir;
 use zeroize::Zeroizing;
@@ -109,20 +110,71 @@ fn domain_types_serialize_as_snake_case_and_validate_boundaries() {
     let summary_json = serde_json::to_value(&summary).unwrap();
     assert_eq!(summary_json["effective_access"], json!("read"));
 
-    // URLs http locais e customizadas válidas passam; esquemas não HTTP e espaços falham.
-    for ok_url in [
+    // URLs HTTPS e HTTP em loopback aceitam autenticação/cabeçalhos; HTTP não loopback exige AuthConfig::None sem headers.
+    for ok_loopback_url in [
         "https://mcp.example.com/v1",
+        "HTTPS://mcp.example.com/v1",
         "http://127.0.0.1:8080/mcp",
         "http://localhost:3000",
+        "http://LOCALHOST:3000/mcp",
         "http://[::1]:9000/sse",
-        "http://mcp.internal.local/rpc",
+        "http://[0:0:0:0:0:0:0:1]:9000/sse",
     ] {
         let mut cfg = valid.clone();
         cfg.transport = Transport::RemoteHttp {
-            url: ok_url.to_owned(),
-            header_names: vec![],
+            url: ok_loopback_url.to_owned(),
+            header_names: vec!["X-Workspace-Id".to_owned()],
         };
-        assert!(cfg.validate().is_ok(), "url válida recusada: {ok_url}");
+        assert!(
+            cfg.validate().is_ok(),
+            "url válida recusada: {ok_loopback_url}"
+        );
+    }
+
+    let mut plain_no_auth = valid.clone();
+    plain_no_auth.transport = Transport::RemoteHttp {
+        url: "http://mcp.internal.local/rpc".to_owned(),
+        header_names: vec![],
+    };
+    plain_no_auth.auth = AuthConfig::None;
+    assert!(plain_no_auth.validate().is_ok());
+
+    for bad_plaintext_url in [
+        "http://mcp.internal.local/rpc",
+        "HTTP://mcp.internal.local/rpc",
+        "http://127.0.0.2:8080/mcp",
+        "http://localhost.evil.com/mcp",
+        "http://[::ffff:127.0.0.1]:9000/mcp",
+    ] {
+        for bad_auth in [
+            AuthConfig::Bearer,
+            AuthConfig::OAuthDcr,
+            AuthConfig::OAuthManualClient {
+                client_id: "cid".to_owned(),
+                scopes: vec![],
+            },
+        ] {
+            let mut cfg = valid.clone();
+            cfg.transport = Transport::RemoteHttp {
+                url: bad_plaintext_url.to_owned(),
+                header_names: vec![],
+            };
+            cfg.auth = bad_auth;
+            assert!(
+                matches!(cfg.validate(), Err(ValidationError::InvalidTransport(_))),
+                "http não loopback com auth deveria falhar: {bad_plaintext_url}"
+            );
+        }
+        let mut cfg_hdr = valid.clone();
+        cfg_hdr.transport = Transport::RemoteHttp {
+            url: bad_plaintext_url.to_owned(),
+            header_names: vec!["X-Secret".to_owned()],
+        };
+        cfg_hdr.auth = AuthConfig::None;
+        assert!(
+            matches!(cfg_hdr.validate(), Err(ValidationError::InvalidTransport(_))),
+            "http não loopback com header extra deveria falhar: {bad_plaintext_url}"
+        );
     }
 
     for bad_url in [
@@ -147,8 +199,25 @@ fn domain_types_serialize_as_snake_case_and_validate_boundaries() {
         );
     }
 
-    // header_names com ':' ou não-ASCII falham.
-    for bad_header in ["X-Bad:Header", "X-Café", ""] {
+    // header_names seguem estritamente RFC 9110 tchar.
+    let mut ok_tchar = valid.clone();
+    ok_tchar.transport = Transport::RemoteHttp {
+        url: "https://mcp.example.com/v1".to_owned(),
+        header_names: vec!["X_1!#$%&'*+-.^_`|~".to_owned()],
+    };
+    assert!(ok_tchar.validate().is_ok());
+
+    for bad_header in [
+        "X-Bad:Header",
+        "X-Café",
+        "",
+        "X(Key)",
+        "X)Key",
+        "X Key",
+        "X;Key",
+        "X=Key",
+        "X/Key",
+    ] {
         let mut cfg = valid.clone();
         cfg.transport = Transport::RemoteHttp {
             url: "https://mcp.example.com/v1".to_owned(),
@@ -158,6 +227,13 @@ fn domain_types_serialize_as_snake_case_and_validate_boundaries() {
             matches!(cfg.validate(), Err(ValidationError::InvalidTransport(_))),
             "header_name inválido deveria falhar: {bad_header:?}"
         );
+    }
+
+    // IDs reservados de rota são rejeitados na validação.
+    for reserved in ["catalog", "oauth", "approvals"] {
+        let mut cfg = valid.clone();
+        cfg.id = reserved.to_owned();
+        assert_eq!(cfg.validate(), Err(ValidationError::InvalidId));
     }
 
     // env_keys com '=' falham.
@@ -702,7 +778,8 @@ async fn secret_store_propagates_locked_key_error_without_overwriting() {
 
     let dir = tempdir().expect("criar tempdir");
     let keys = Arc::new(MemoryKeyStore::new());
-    SecretStore::new(dir.path(), keys)
+    let writer = SecretStore::new(dir.path(), keys);
+    writer
         .set(
             "gmail-pessoal",
             IntegrationSecrets {
@@ -712,11 +789,30 @@ async fn secret_store_propagates_locked_key_error_without_overwriting() {
         )
         .await
         .unwrap();
+    let original_bytes = std::fs::read(writer.path()).expect("ler secrets.bin original");
 
     let store = SecretStore::new(dir.path(), Arc::new(LockedKeys));
     assert_eq!(
         store.get("gmail-pessoal").await.err(),
         Some(SecretStoreError::Key(SecretKeyError::Locked))
+    );
+    assert_eq!(
+        store
+            .set(
+                "gmail-pessoal",
+                IntegrationSecrets {
+                    bearer_token: Some(Zeroizing::new("sobrescrita-proibida".to_owned())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .err(),
+        Some(SecretStoreError::Key(SecretKeyError::Locked))
+    );
+    assert_eq!(
+        std::fs::read(store.path()).expect("ler secrets.bin após Locked"),
+        original_bytes,
+        "gravação com chaveiro trancado não pode alterar secrets.bin"
     );
 }
 
@@ -861,4 +957,179 @@ fn guard_truncates_100kib_multibyte_text_on_valid_utf8_boundary_within_limit() {
     assert!(!body.is_empty());
     assert!(body.len() <= MAX_RESPONSE_BYTES);
     assert!(std::str::from_utf8(body.as_bytes()).is_ok());
+}
+
+#[test]
+fn registry_normalizes_client_id_clears_allowed_tools_on_destination_change_and_patches_atomically()
+{
+    let dir = tempdir().expect("criar tempdir");
+    let registry = IntegrationRegistry::new(dir.path());
+
+    let mut cfg = gmail_instance("gmail-norm", "Gmail Norm", "https://mcp.a.example.com/mcp");
+    cfg.auth = AuthConfig::OAuthManualClient {
+        client_id: "  cid-com-espacos  ".to_owned(),
+        scopes: vec![],
+    };
+    cfg.allowed_tools = BTreeSet::from(["send_email".to_owned(), "delete_draft".to_owned()]);
+    let created = registry.create(cfg).expect("criar integração");
+    assert_eq!(
+        created.auth,
+        AuthConfig::OAuthManualClient {
+            client_id: "cid-com-espacos".to_owned(),
+            scopes: vec![],
+        }
+    );
+
+    // Alteração apenas de header_names preserva allowed_tools; troca de URL limpa allowed_tools.
+    let same_url = registry
+        .update(
+            "gmail-norm",
+            IntegrationUpdate {
+                transport: Some(Transport::RemoteHttp {
+                    url: "https://mcp.a.example.com/mcp".to_owned(),
+                    header_names: vec!["X-Novo".to_owned()],
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        same_url.allowed_tools,
+        BTreeSet::from(["send_email".to_owned(), "delete_draft".to_owned()])
+    );
+
+    let new_url = registry
+        .update(
+            "gmail-norm",
+            IntegrationUpdate {
+                transport: Some(Transport::RemoteHttp {
+                    url: "https://mcp.b.example.com/mcp".to_owned(),
+                    header_names: vec![],
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        new_url.allowed_tools.is_empty(),
+        "mudança de URL sem allowed_tools explícito deve limpar aprovações antigas"
+    );
+
+    // Troca de destino com allowed_tools explícito usa o novo conjunto enviado.
+    let with_explicit = registry
+        .update(
+            "gmail-norm",
+            IntegrationUpdate {
+                transport: Some(Transport::LocalStdio {
+                    command: vec!["node".to_owned(), "a.js".to_owned()],
+                    cwd: Some(PathBuf::from("/tmp/a")),
+                    env_keys: vec![],
+                }),
+                auth: Some(AuthConfig::None),
+                allowed_tools: Some(BTreeSet::from(["tool_a".to_owned()])),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(with_explicit.allowed_tools, BTreeSet::from(["tool_a".to_owned()]));
+
+    // Mudar command ou cwd limpa allowed_tools; mudar apenas env_keys preserva.
+    let same_stdio = registry
+        .update(
+            "gmail-norm",
+            IntegrationUpdate {
+                transport: Some(Transport::LocalStdio {
+                    command: vec!["node".to_owned(), "a.js".to_owned()],
+                    cwd: Some(PathBuf::from("/tmp/a")),
+                    env_keys: vec!["TOKEN".to_owned()],
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(same_stdio.allowed_tools, BTreeSet::from(["tool_a".to_owned()]));
+
+    let new_cwd = registry
+        .update(
+            "gmail-norm",
+            IntegrationUpdate {
+                transport: Some(Transport::LocalStdio {
+                    command: vec!["node".to_owned(), "a.js".to_owned()],
+                    cwd: Some(PathBuf::from("/tmp/b")),
+                    env_keys: vec![],
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(new_cwd.allowed_tools.is_empty());
+
+    // patch_allowed_tools aplica delta atômico (remove antes de add em caso de sobreposição).
+    let patched = registry
+        .patch_allowed_tools(
+            "gmail-norm",
+            &["tool_1".to_owned(), "tool_2".to_owned()],
+            &[],
+        )
+        .unwrap();
+    assert_eq!(
+        patched.allowed_tools,
+        BTreeSet::from(["tool_1".to_owned(), "tool_2".to_owned()])
+    );
+
+    let overlapped = registry
+        .patch_allowed_tools(
+            "gmail-norm",
+            &["tool_2".to_owned(), "tool_3".to_owned()],
+            &["tool_1".to_owned(), "tool_2".to_owned()],
+        )
+        .unwrap();
+    assert_eq!(
+        overlapped.allowed_tools,
+        BTreeSet::from(["tool_2".to_owned(), "tool_3".to_owned()])
+    );
+
+    assert!(matches!(
+        registry.patch_allowed_tools("gmail-norm", &["".to_owned()], &[]),
+        Err(RegistryError::Validation(ValidationError::InvalidAllowedTool))
+    ));
+    assert!(matches!(
+        registry.patch_allowed_tools("inexistente", &["a".to_owned()], &[]),
+        Err(RegistryError::NotFound(_))
+    ));
+}
+
+#[test]
+fn tools_cache_tracks_monotonic_generations_and_converts_owned_summaries() {
+    let cache = ToolsCache::new();
+    let gen0 = cache.generation("integ-1");
+    let tool = DiscoveredTool {
+        name: "create_issue".to_owned(),
+        description: Some("Cria issue".to_owned()),
+        input_schema: json!({"type": "object"}),
+        read_only_hint: Some(false),
+    };
+    assert!(cache.set_if_generation("integ-1", gen0, vec![tool.clone()]));
+    assert!(cache.invalidate("integ-1").is_some());
+    assert!(cache.generation("integ-1") > gen0);
+    assert!(
+        !cache.set_if_generation("integ-1", gen0, vec![tool.clone()]),
+        "escrita com geração vencida após invalidate deve ser descartada"
+    );
+    assert!(cache.get("integ-1").is_none());
+
+    let gen1 = cache.generation("integ-1");
+    let gen_other = cache.generation("integ-2");
+    cache.clear();
+    assert!(cache.generation("integ-1") > gen1);
+    assert!(cache.generation("integ-2") > gen_other);
+    assert!(!cache.set_if_generation("integ-2", gen_other, vec![tool.clone()]));
+
+    let mut cfg = gmail_instance("integ-1", "Integ 1", "https://mcp.example.com/mcp");
+    cfg.allowed_tools.insert("create_issue".to_owned());
+    cache.set("integ-1", vec![tool]);
+    let summaries = cache.summaries(&cfg).expect("summaries no cache");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].effective_access, ToolAccess::AllowedAlways);
+    assert_eq!(summaries[0].input_schema, json!({"type": "object"}));
 }

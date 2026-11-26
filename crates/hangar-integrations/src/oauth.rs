@@ -19,7 +19,9 @@ use hangar_core::net::http_client;
 
 use crate::catalog::find_preset;
 use crate::client::{ClientError, TokenRefresher};
-use crate::model::{AuthConfig, IntegrationConfig, IntegrationStatus, Transport};
+use crate::model::{
+    AuthConfig, IntegrationConfig, IntegrationStatus, Transport, config_fingerprint,
+};
 use crate::registry::{IntegrationRegistry, RegistryError};
 use crate::secrets::{IntegrationSecrets, OAuthTokens, SecretStore, SecretStoreError};
 
@@ -32,6 +34,7 @@ pub const DEFAULT_STATE_TTL: Duration = Duration::from_secs(600);
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_URL_BYTES: usize = 4096;
+const MAX_OAUTH_RESPONSE_BYTES: usize = 256 * 1024;
 
 /// Origem do cliente que iniciou o fluxo OAuth (define política de `redirect_uri` e handoff).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +103,7 @@ pub struct OAuthManager {
     registry: Arc<IntegrationRegistry>,
     secrets: Arc<SecretStore>,
     http: reqwest::Client,
+    no_redirect_http: reqwest::Client,
     pending: StdMutex<HashMap<String, PendingAuth>>,
     refresh_locks: StdMutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     state_ttl: Duration,
@@ -108,6 +112,8 @@ pub struct OAuthManager {
 /// Tentativa pendente em memória; não implementa `Debug` para proteger `code_verifier` e `client_secret`.
 struct PendingAuth {
     integration_id: String,
+    config_fingerprint: [u8; 32],
+    resource_uri: String,
     authorize_url: String,
     code_verifier: Zeroizing<String>,
     redirect_uri: String,
@@ -133,11 +139,15 @@ struct DiscoveredMetadata {
 #[derive(Default, Deserialize)]
 struct ProtectedResourceMetadata {
     #[serde(default)]
+    resource: Option<String>,
+    #[serde(default)]
     authorization_servers: Vec<String>,
 }
 
 #[derive(Deserialize)]
 struct AuthorizationServerMetadata {
+    #[serde(default)]
+    issuer: Option<String>,
     authorization_endpoint: String,
     token_endpoint: String,
     #[serde(default)]
@@ -171,8 +181,6 @@ struct TokenResponse {
 #[derive(Deserialize)]
 struct OAuthErrorPayload {
     error: String,
-    #[serde(default)]
-    error_description: Option<String>,
 }
 
 struct ParsedHttpUrl {
@@ -200,7 +208,8 @@ impl OAuthManager {
         Self {
             registry,
             secrets,
-            http: build_http_client(),
+            http: build_http_client(reqwest::redirect::Policy::limited(5)),
+            no_redirect_http: build_http_client(reqwest::redirect::Policy::none()),
             pending: StdMutex::new(HashMap::new()),
             refresh_locks: StdMutex::new(HashMap::new()),
             state_ttl: DEFAULT_STATE_TTL,
@@ -267,6 +276,8 @@ impl OAuthManager {
             return Err(OAuthError::UnsupportedAuth);
         }
 
+        let config_fp = config_fingerprint(&config);
+        let resource_uri = canonical_resource_uri(mcp_url, false)?;
         let redirect = resolve_redirect(&config, &input)?;
         let metadata = self.discover_metadata(mcp_url).await?;
         let existing_secrets = self.secrets.get(integration_id).await?;
@@ -292,6 +303,7 @@ impl OAuthManager {
             ("state", &state),
             ("code_challenge", &code_challenge),
             ("code_challenge_method", "S256"),
+            ("resource", &resource_uri),
         ];
         if let Some(scope) = scope_str.as_deref() {
             query_params.push(("scope", scope));
@@ -304,6 +316,8 @@ impl OAuthManager {
 
         let entry = PendingAuth {
             integration_id: integration_id.to_owned(),
+            config_fingerprint: config_fp,
+            resource_uri,
             authorize_url: authorize_url.clone(),
             code_verifier,
             redirect_uri: redirect.redirect_uri.clone(),
@@ -348,7 +362,7 @@ impl OAuthManager {
         state: &str,
         code: Option<&str>,
         error: Option<&str>,
-        error_description: Option<&str>,
+        _error_description: Option<&str>,
     ) -> Result<OAuthCallbackResult, OAuthError> {
         if state.trim().is_empty() {
             return Err(OAuthError::InvalidState);
@@ -369,12 +383,11 @@ impl OAuthManager {
         }
 
         if let Some(err_code) = error.map(str::trim).filter(|e| !e.is_empty()) {
+            // Nunca ecoa `error_description` nem códigos desconhecidos recebidos no callback.
+            let (safe_code, safe_msg) = map_oauth_error_code(err_code, None);
             return Err(OAuthError::ProviderError {
-                error: err_code.to_owned(),
-                description: error_description
-                    .map(str::trim)
-                    .filter(|d| !d.is_empty())
-                    .map(str::to_owned),
+                error: safe_code,
+                description: Some(safe_msg),
             });
         }
 
@@ -383,8 +396,8 @@ impl OAuthManager {
             .filter(|c| !c.is_empty())
             .ok_or_else(|| OAuthError::Validation("código de autorização ausente".into()))?;
 
-        // Evita trocar o código se a integração já foi removida ou mudou para outro método.
-        self.ensure_oauth_integration(&entry.integration_id)?;
+        // Evita trocar o código se a integração já foi removida ou alterada desde o início do login.
+        self.ensure_oauth_integration(&entry.integration_id, entry.config_fingerprint)?;
 
         let mut form_params: Vec<(&str, &str)> = vec![
             ("grant_type", "authorization_code"),
@@ -392,6 +405,7 @@ impl OAuthManager {
             ("redirect_uri", &entry.redirect_uri),
             ("client_id", &entry.client_id),
             ("code_verifier", &entry.code_verifier),
+            ("resource", &entry.resource_uri),
         ];
         if let Some(secret) = entry.client_secret.as_ref() {
             form_params.push(("client_secret", secret.as_str()));
@@ -408,6 +422,7 @@ impl OAuthManager {
             .filter(|s| !s.trim().is_empty())
             .or(fallback_scope);
         let integration_id = entry.integration_id.clone();
+        let expected_fp = entry.config_fingerprint;
         let token_endpoint = entry.token_endpoint;
         let persist_client_id = entry.persist_client_id;
         let is_dcr = entry.is_dcr;
@@ -415,11 +430,22 @@ impl OAuthManager {
         let client_secret = entry.client_secret;
         let redirect_uri = entry.redirect_uri;
 
-        // Revalida antes de persistir para impedir segredo órfão se DELETE/PATCH ocorrer durante o `/token`.
-        self.ensure_oauth_integration(&integration_id)?;
+        // Revalida antes e sob a escrita de segredos para impedir gravação órfã ou em destino alterado.
+        self.ensure_oauth_integration(&integration_id, expected_fp)?;
 
-        self.secrets
+        let registry = Arc::clone(&self.registry);
+        let check_id = integration_id.clone();
+        let persist_res = self
+            .secrets
             .update_with(&integration_id, move |slot| {
+                let current_cfg = match registry.get(&check_id) {
+                    Ok(Some(cfg)) => cfg,
+                    Ok(None) => return Ok(Err(OAuthError::NotFound(check_id))),
+                    Err(err) => return Ok(Err(OAuthError::Registry(err))),
+                };
+                if let Err(err) = ensure_oauth_config_matches(&current_cfg, expected_fp) {
+                    return Ok(Err(err));
+                }
                 let secrets = slot.get_or_insert_with(IntegrationSecrets::default);
                 secrets.oauth = Some(OAuthTokens {
                     access_token: Zeroizing::new(token.access_token),
@@ -436,9 +462,10 @@ impl OAuthManager {
                     token_endpoint: Some(token_endpoint),
                     auth_expired: false,
                 });
-                Ok(())
+                Ok(Ok(()))
             })
             .await?;
+        persist_res?;
 
         Ok(OAuthCallbackResult {
             integration_id,
@@ -464,16 +491,21 @@ impl OAuthManager {
             Transport::RemoteHttp { url, .. } => url.as_str(),
             Transport::LocalStdio { .. } => return Err(OAuthError::UnsupportedAuth),
         };
+        if !matches!(
+            config.auth,
+            AuthConfig::OAuthDcr | AuthConfig::OAuthManualClient { .. }
+        ) {
+            return Err(OAuthError::UnsupportedAuth);
+        }
 
+        let initial_fp = config_fingerprint(&config);
+        let resource_uri = canonical_resource_uri(mcp_url, false)?;
         let mcp_is_https = parse_http_url(mcp_url, false)?.scheme == "https";
         let existing_secrets = self.secrets.get(integration_id).await?;
         let Some(oauth) = existing_secrets.as_ref().and_then(|s| s.oauth.as_ref()) else {
-            return match &config.auth {
-                AuthConfig::OAuthDcr | AuthConfig::OAuthManualClient { .. } => Err(
-                    OAuthError::InvalidGrant("credenciais OAuth não configuradas".into()),
-                ),
-                AuthConfig::None | AuthConfig::Bearer => Err(OAuthError::UnsupportedAuth),
-            };
+            return Err(OAuthError::InvalidGrant(
+                "credenciais OAuth não configuradas".into(),
+            ));
         };
 
         let expected_access = oauth.access_token.clone();
@@ -481,13 +513,21 @@ impl OAuthManager {
 
         let (client_id, client_secret) = match &config.auth {
             AuthConfig::None | AuthConfig::Bearer => return Err(OAuthError::UnsupportedAuth),
-            AuthConfig::OAuthManualClient { client_id, .. } => (
-                client_id.clone(),
-                existing_secrets
-                    .as_ref()
-                    .and_then(|s| s.client_secret.clone())
-                    .filter(|v| !v.trim().is_empty()),
-            ),
+            AuthConfig::OAuthManualClient { client_id, .. } => {
+                let cid = client_id.trim();
+                if cid.is_empty() {
+                    return Err(OAuthError::Validation(
+                        "client_id manual não pode estar vazio".into(),
+                    ));
+                }
+                (
+                    cid.to_owned(),
+                    existing_secrets
+                        .as_ref()
+                        .and_then(|s| s.client_secret.clone())
+                        .filter(|v| !v.trim().is_empty()),
+                )
+            }
             AuthConfig::OAuthDcr => {
                 let Some(cid) = oauth
                     .registered_client_id
@@ -543,6 +583,7 @@ impl OAuthManager {
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token.as_str()),
             ("client_id", &client_id),
+            ("resource", resource_uri.as_str()),
         ];
         if let Some(secret) = client_secret.as_ref() {
             form_params.push(("client_secret", secret.as_str()));
@@ -554,16 +595,24 @@ impl OAuthManager {
         {
             Ok(tok) => tok,
             Err(OAuthError::InvalidGrant(reason)) => {
-                self.mark_auth_expired_if_unchanged(
-                    integration_id,
-                    &expected_access,
-                    expected_refresh.as_ref(),
-                )
-                .await?;
+                // Só marca a integração como expirada se ela ainda apontar para a mesma configuração.
+                if self
+                    .ensure_oauth_integration(integration_id, initial_fp)
+                    .is_ok()
+                {
+                    self.mark_auth_expired_if_unchanged(
+                        integration_id,
+                        &expected_access,
+                        expected_refresh.as_ref(),
+                    )
+                    .await?;
+                }
                 return Err(OAuthError::InvalidGrant(reason));
             }
             Err(err) => return Err(err),
         };
+
+        self.ensure_oauth_integration(integration_id, initial_fp)?;
 
         let fresh_access = token.access_token;
         let fresh_refresh = token
@@ -574,19 +623,29 @@ impl OAuthManager {
         let new_token_type = token.token_type;
         let new_scope = token.scope;
 
+        let registry = Arc::clone(&self.registry);
+        let check_id = integration_id.to_owned();
         let returned_access = self
             .secrets
             .update_with(integration_id, move |slot| {
+                let current_cfg = match registry.get(&check_id) {
+                    Ok(Some(cfg)) => cfg,
+                    Ok(None) => return Ok(Err(OAuthError::NotFound(check_id))),
+                    Err(err) => return Ok(Err(OAuthError::Registry(err))),
+                };
+                if let Err(err) = ensure_oauth_config_matches(&current_cfg, initial_fp) {
+                    return Ok(Err(err));
+                }
                 let Some(secrets) = slot.as_mut() else {
-                    return Ok(fresh_access);
+                    return Ok(Ok(fresh_access));
                 };
                 let current_oauth = secrets.oauth.get_or_insert_with(OAuthTokens::default);
                 // Reconexão manual paralela via `handle_callback` vence o refresh antigo em voo.
                 if !oauth_tokens_match(current_oauth, &expected_access, expected_refresh.as_ref()) {
                     if !current_oauth.access_token.trim().is_empty() {
-                        return Ok(current_oauth.access_token.as_str().to_owned());
+                        return Ok(Ok(current_oauth.access_token.as_str().to_owned()));
                     }
-                    return Ok(fresh_access);
+                    return Ok(Ok(fresh_access));
                 }
                 current_oauth.access_token = Zeroizing::new(fresh_access.clone());
                 // Preserva o refresh_token atual quando o servidor não rotaciona na resposta.
@@ -602,9 +661,9 @@ impl OAuthManager {
                 }
                 current_oauth.token_endpoint = Some(token_endpoint);
                 current_oauth.auth_expired = false;
-                Ok(fresh_access)
+                Ok(Ok(fresh_access))
             })
-            .await?;
+            .await??;
 
         Ok(returned_access)
     }
@@ -620,20 +679,16 @@ impl OAuthManager {
             .clone()
     }
 
-    fn ensure_oauth_integration(&self, integration_id: &str) -> Result<(), OAuthError> {
+    fn ensure_oauth_integration(
+        &self,
+        integration_id: &str,
+        expected_fingerprint: [u8; 32],
+    ) -> Result<(), OAuthError> {
         let config = self
             .registry
             .get(integration_id)?
             .ok_or_else(|| OAuthError::NotFound(integration_id.to_owned()))?;
-        if !matches!(config.transport, Transport::RemoteHttp { .. })
-            || !matches!(
-                config.auth,
-                AuthConfig::OAuthDcr | AuthConfig::OAuthManualClient { .. }
-            )
-        {
-            return Err(OAuthError::UnsupportedAuth);
-        }
-        Ok(())
+        ensure_oauth_config_matches(&config, expected_fingerprint)
     }
 
     async fn mark_auth_expired_if_unchanged(
@@ -665,6 +720,7 @@ impl OAuthManager {
     async fn discover_metadata(&self, mcp_url: &str) -> Result<DiscoveredMetadata, OAuthError> {
         let parsed_mcp = parse_http_url(mcp_url, false)?;
         let require_https = parsed_mcp.scheme == "https";
+        let expected_resource = parsed_mcp.canonical_uri();
 
         let (prm_hint_url, www_scope) = self.probe_www_authenticate(mcp_url, require_https).await?;
         let mut prm_candidates = Vec::new();
@@ -684,7 +740,9 @@ impl OAuthManager {
 
         let mut discovered_issuer = None;
         for candidate in prm_candidates {
-            if let Some(prm) = self.fetch_protected_resource_metadata(&candidate).await?
+            if let Some(prm) = self
+                .fetch_protected_resource_metadata(&candidate, &expected_resource, require_https)
+                .await?
                 && let Some(first_server) = prm
                     .authorization_servers
                     .into_iter()
@@ -702,11 +760,12 @@ impl OAuthManager {
 
         let issuer_url = discovered_issuer.unwrap_or_else(|| parsed_mcp.origin.clone());
         let parsed_issuer = validate_discovered_url("issuer", &issuer_url, require_https)?;
+        let expected_issuer = parsed_issuer.canonical_uri();
         let as_candidates = build_auth_server_metadata_urls(&parsed_issuer);
 
         for candidate in as_candidates {
             if let Some(as_meta) = self.fetch_auth_server_metadata(&candidate).await? {
-                validate_discovered_as_metadata(&as_meta, require_https)?;
+                validate_discovered_as_metadata(&as_meta, &expected_issuer, require_https)?;
                 return Ok(DiscoveredMetadata {
                     authorization_endpoint: as_meta.authorization_endpoint,
                     token_endpoint: as_meta.token_endpoint,
@@ -785,6 +844,8 @@ impl OAuthManager {
     async fn fetch_protected_resource_metadata(
         &self,
         url: &str,
+        expected_resource: &str,
+        require_https: bool,
     ) -> Result<Option<ProtectedResourceMetadata>, OAuthError> {
         let Ok(resp) = self
             .http
@@ -798,10 +859,23 @@ impl OAuthManager {
         if !resp.status().is_success() {
             return Ok(None);
         }
-        let Ok(bytes) = resp.bytes().await else {
-            return Ok(None);
-        };
-        Ok(serde_json::from_slice::<ProtectedResourceMetadata>(&bytes).ok())
+        let bytes = read_bounded_body(resp, MAX_OAUTH_RESPONSE_BYTES)
+            .await
+            .map_err(|reason| {
+                OAuthError::DiscoveryFailed(format!(
+                    "falha ao ler metadados do recurso protegido: {reason}"
+                ))
+            })?;
+        let prm = serde_json::from_slice::<ProtectedResourceMetadata>(&bytes).map_err(|_| {
+            OAuthError::DiscoveryFailed("JSON de metadados do recurso protegido inválido".into())
+        })?;
+        // RFC 9728 exige que o documento identifique exatamente o recurso consultado antes de confiar em authorization_servers.
+        if !prm_resource_matches(prm.resource.as_deref(), expected_resource, require_https) {
+            return Err(OAuthError::DiscoveryFailed(
+                "campo resource nos metadados do recurso ausente ou divergente".into(),
+            ));
+        }
+        Ok(Some(prm))
     }
 
     async fn fetch_auth_server_metadata(
@@ -828,9 +902,11 @@ impl OAuthManager {
                 resp.status().as_u16()
             )));
         }
-        let bytes = resp.bytes().await.map_err(|err| {
-            OAuthError::DiscoveryFailed(format!("falha ao ler metadados OAuth: {err}"))
-        })?;
+        let bytes = read_bounded_body(resp, MAX_OAUTH_RESPONSE_BYTES)
+            .await
+            .map_err(|reason| {
+                OAuthError::DiscoveryFailed(format!("falha ao ler metadados OAuth: {reason}"))
+            })?;
         let parsed =
             serde_json::from_slice::<AuthorizationServerMetadata>(&bytes).map_err(|_| {
                 OAuthError::DiscoveryFailed("JSON de metadados do servidor OAuth inválido".into())
@@ -971,7 +1047,7 @@ impl OAuthManager {
             .map_err(|err| OAuthError::RegistrationFailed(format!("serialização DCR: {err}")))?;
 
         let resp = self
-            .http
+            .no_redirect_http
             .post(registration_endpoint)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(reqwest::header::ACCEPT, "application/json")
@@ -983,15 +1059,14 @@ impl OAuthManager {
             })?;
 
         let status = resp.status();
-        let bytes = resp.bytes().await.map_err(|err| {
-            OAuthError::RegistrationFailed(format!("falha ao ler resposta DCR: {err}"))
-        })?;
+        let bytes = read_bounded_body(resp, MAX_OAUTH_RESPONSE_BYTES)
+            .await
+            .map_err(|reason| {
+                OAuthError::RegistrationFailed(format!("falha ao ler resposta DCR: {reason}"))
+            })?;
         if !status.is_success() {
-            let reason = extract_safe_oauth_error(&bytes)
-                .map(|(err, desc)| match desc {
-                    Some(d) => format!("HTTP {} ({err}: {d})", status.as_u16()),
-                    None => format!("HTTP {} ({err})", status.as_u16()),
-                })
+            let reason = extract_safe_oauth_error(&bytes, status.as_u16())
+                .map(|(err, msg)| format!("HTTP {} ({err}: {msg})", status.as_u16()))
                 .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
             return Err(OAuthError::RegistrationFailed(reason));
         }
@@ -1020,7 +1095,7 @@ impl OAuthManager {
         let body = encode_form_body(params);
 
         let resp = self
-            .http
+            .no_redirect_http
             .post(token_endpoint)
             .header(
                 reqwest::header::CONTENT_TYPE,
@@ -1033,15 +1108,12 @@ impl OAuthManager {
             .map_err(|err| OAuthError::Network(format!("requisição de token falhou: {err}")))?;
 
         let status = resp.status();
-        let bytes = Zeroizing::new(
-            resp.bytes()
-                .await
-                .map_err(|err| OAuthError::Network(format!("falha ao ler token: {err}")))?
-                .to_vec(),
-        );
+        let bytes = read_bounded_body(resp, MAX_OAUTH_RESPONSE_BYTES)
+            .await
+            .map_err(|reason| OAuthError::Network(format!("falha ao ler token: {reason}")))?;
 
         if !status.is_success() {
-            if let Some((err_code, description)) = extract_safe_oauth_error(&bytes) {
+            if let Some((err_code, safe_msg)) = extract_safe_oauth_error(&bytes, status.as_u16()) {
                 if (status == reqwest::StatusCode::BAD_REQUEST
                     || status == reqwest::StatusCode::UNAUTHORIZED)
                     && matches!(
@@ -1053,15 +1125,11 @@ impl OAuthManager {
                     )
                     && (treat_invalid_grant_on_error || err_code == "invalid_grant")
                 {
-                    let detail = match description {
-                        Some(desc) => format!("{err_code}: {desc}"),
-                        None => err_code,
-                    };
-                    return Err(OAuthError::InvalidGrant(detail));
+                    return Err(OAuthError::InvalidGrant(format!("{err_code}: {safe_msg}")));
                 }
                 return Err(OAuthError::ProviderError {
                     error: err_code,
-                    description,
+                    description: Some(safe_msg),
                 });
             }
             return Err(OAuthError::Network(format!(
@@ -1098,11 +1166,8 @@ impl TokenRefresher for OAuthManager {
                         ClientError::AuthExpired("integração não usa autenticação OAuth".into())
                     }
                     OAuthError::ProviderError { error, description } => {
-                        let detail = match description {
-                            Some(desc) => format!("{error}: {desc}"),
-                            None => error,
-                        };
-                        ClientError::AuthExpired(detail)
+                        let (safe_code, safe_msg) = sanitize_provider_error(&error, description.as_deref());
+                        ClientError::AuthExpired(format!("{safe_code}: {safe_msg}"))
                     }
                     OAuthError::InvalidState | OAuthError::ExpiredState => {
                         ClientError::AuthExpired("estado OAuth inválido".into())
@@ -1126,10 +1191,10 @@ impl fmt::Display for OAuthError {
             Self::RegistrationFailed(reason) => write!(f, "falha no registro OAuth: {reason}"),
             Self::InvalidState => write!(f, "parâmetro state OAuth inválido ou já utilizado"),
             Self::ExpiredState => write!(f, "tentativa de login OAuth expirada"),
-            Self::ProviderError { error, description } => match description {
-                Some(desc) => write!(f, "erro do provedor OAuth ({error}): {desc}"),
-                None => write!(f, "erro do provedor OAuth ({error})"),
-            },
+            Self::ProviderError { error, description } => {
+                let (safe_code, safe_msg) = sanitize_provider_error(error, description.as_deref());
+                write!(f, "erro do provedor OAuth ({safe_code}): {safe_msg}")
+            }
             Self::InvalidGrant(reason) => write!(f, "sessão OAuth expirada: {reason}"),
             Self::Network(reason) => write!(f, "erro de comunicação OAuth: {reason}"),
             Self::Registry(err) => write!(f, "{err}"),
@@ -1188,10 +1253,37 @@ pub fn compute_status(
     }
 }
 
-fn build_http_client() -> reqwest::Client {
+impl ParsedHttpUrl {
+    fn canonical_uri(&self) -> String {
+        format!("{}{}", self.origin, self.path)
+    }
+}
+
+fn ensure_oauth_config_matches(
+    config: &IntegrationConfig,
+    expected_fingerprint: [u8; 32],
+) -> Result<(), OAuthError> {
+    if !matches!(config.transport, Transport::RemoteHttp { .. })
+        || !matches!(
+            config.auth,
+            AuthConfig::OAuthDcr | AuthConfig::OAuthManualClient { .. }
+        )
+    {
+        return Err(OAuthError::UnsupportedAuth);
+    }
+    if config_fingerprint(config) != expected_fingerprint {
+        return Err(OAuthError::Validation(
+            "configuração da integração foi alterada durante o login OAuth; inicie a conexão novamente"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn build_http_client(redirect_policy: reqwest::redirect::Policy) -> reqwest::Client {
     http_client()
         .timeout(DEFAULT_HTTP_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(redirect_policy)
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
@@ -1261,6 +1353,32 @@ fn resolve_redirect(
     }
 }
 
+fn canonical_resource_uri(raw: &str, require_https: bool) -> Result<String, OAuthError> {
+    Ok(parse_http_url(raw, require_https)?.canonical_uri())
+}
+
+fn normalize_authority(raw_authority: &str, scheme: &str) -> String {
+    let default_port = if scheme == "https" { "443" } else { "80" };
+    let lower = raw_authority.to_ascii_lowercase();
+    if let Some(after_bracket) = lower.strip_prefix('[')
+        && let Some((ipv6, tail)) = after_bracket.split_once(']')
+    {
+        if tail
+            .strip_prefix(':')
+            .is_some_and(|port| port == default_port)
+        {
+            return format!("[{ipv6}]");
+        }
+        return lower;
+    }
+    if let Some((host, port)) = lower.rsplit_once(':')
+        && port == default_port
+    {
+        return host.to_owned();
+    }
+    lower
+}
+
 fn parse_http_url(raw: &str, require_https: bool) -> Result<ParsedHttpUrl, OAuthError> {
     if raw.is_empty()
         || raw.len() > MAX_URL_BYTES
@@ -1295,7 +1413,10 @@ fn parse_http_url(raw: &str, require_https: bool) -> Result<ParsedHttpUrl, OAuth
             "URL OAuth não pode conter credenciais embutidas".into(),
         ));
     }
-    let origin = format!("{scheme}://{}", authority.as_str());
+    let origin = format!(
+        "{scheme}://{}",
+        normalize_authority(authority.as_str(), &scheme)
+    );
     let path = match uri.path() {
         "" | "/" => String::new(),
         other => other.trim_end_matches('/').to_owned(),
@@ -1305,6 +1426,22 @@ fn parse_http_url(raw: &str, require_https: bool) -> Result<ParsedHttpUrl, OAuth
         origin,
         path,
     })
+}
+
+fn prm_resource_matches(
+    prm_resource: Option<&str>,
+    expected_canonical: &str,
+    require_https: bool,
+) -> bool {
+    let Some(raw) = prm_resource.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    // RFC 9728 proíbe query e fragmento no identificador de recurso protegido.
+    if raw.contains('?') || raw.contains('#') {
+        return false;
+    }
+    canonical_resource_uri(raw, require_https)
+        .is_ok_and(|actual| actual == expected_canonical)
 }
 
 fn validate_discovered_url(
@@ -1318,8 +1455,29 @@ fn validate_discovered_url(
 
 fn validate_discovered_as_metadata(
     as_meta: &AuthorizationServerMetadata,
+    expected_issuer: &str,
     require_https: bool,
 ) -> Result<(), OAuthError> {
+    let raw_issuer = as_meta
+        .issuer
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            OAuthError::DiscoveryFailed("metadados do servidor OAuth sem campo issuer".into())
+        })?;
+    if raw_issuer.contains('?') {
+        return Err(OAuthError::DiscoveryFailed(
+            "campo issuer dos metadados OAuth não pode conter query".into(),
+        ));
+    }
+    let parsed_issuer = validate_discovered_url("issuer", raw_issuer, require_https)?;
+    if parsed_issuer.canonical_uri() != expected_issuer {
+        return Err(OAuthError::DiscoveryFailed(
+            "campo issuer dos metadados OAuth diverge do emissor esperado".into(),
+        ));
+    }
+
     validate_discovered_url(
         "authorization_endpoint",
         &as_meta.authorization_endpoint,
@@ -1337,6 +1495,34 @@ fn validate_discovered_as_metadata(
         ));
     }
     Ok(())
+}
+
+async fn read_bounded_body(
+    mut resp: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Zeroizing<Vec<u8>>, String> {
+    if let Some(len) = resp.content_length()
+        && len > max_bytes as u64
+    {
+        return Err(format!("resposta excede o limite de {max_bytes} bytes"));
+    }
+    let initial = resp
+        .content_length()
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(4096)
+        .min(max_bytes);
+    let mut buf = Zeroizing::new(Vec::with_capacity(initial));
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|err| format!("falha ao ler corpo HTTP: {err}"))?
+    {
+        if buf.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(format!("resposta excede o limite de {max_bytes} bytes"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 fn oauth_tokens_match(
@@ -1481,17 +1667,79 @@ fn is_google_accounts_url(url: &str) -> bool {
     parse_http_url(url, false).is_ok_and(|parsed| parsed.origin == "https://accounts.google.com")
 }
 
-fn extract_safe_oauth_error(bytes: &[u8]) -> Option<(String, Option<String>)> {
+fn map_oauth_error_code(raw_code: &str, status: Option<u16>) -> (String, String) {
+    let normalized = raw_code.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "invalid_grant" => (
+            normalized,
+            "autorização expirada ou revogada pelo provedor".to_owned(),
+        ),
+        "invalid_token" => (
+            normalized,
+            "token OAuth expirado ou inválido".to_owned(),
+        ),
+        "invalid_client" => (
+            normalized,
+            "credenciais do cliente OAuth recusadas pelo provedor".to_owned(),
+        ),
+        "invalid_scope" => (
+            normalized,
+            "escopo OAuth recusado ou inválido".to_owned(),
+        ),
+        "access_denied" => (
+            normalized,
+            "acesso negado pelo usuário ou provedor".to_owned(),
+        ),
+        "unauthorized_client" => (
+            normalized,
+            "cliente OAuth não autorizado para este fluxo".to_owned(),
+        ),
+        "unsupported_grant_type" => (
+            normalized,
+            "tipo de concessão OAuth não suportado pelo provedor".to_owned(),
+        ),
+        "invalid_request" => (
+            normalized,
+            "requisição OAuth recusada como inválida".to_owned(),
+        ),
+        "server_error" => (
+            normalized,
+            "erro interno no provedor OAuth".to_owned(),
+        ),
+        "temporarily_unavailable" => (
+            normalized,
+            "provedor OAuth temporariamente indisponível".to_owned(),
+        ),
+        _ => {
+            let msg = match status {
+                Some(code) => format!("erro do provedor OAuth (HTTP {code})"),
+                None => "erro retornado pelo provedor OAuth".to_owned(),
+            };
+            ("unknown_error".to_owned(), msg)
+        }
+    }
+}
+
+fn sanitize_provider_error(raw_code: &str, description: Option<&str>) -> (String, String) {
+    let (safe_code, default_msg) = map_oauth_error_code(raw_code, None);
+    if safe_code == "unknown_error"
+        && let Some(desc) = description
+        && let Some(rest) = desc.strip_prefix("erro do provedor OAuth (HTTP ")
+        && let Some(code_str) = rest.strip_suffix(')')
+        && code_str.bytes().all(|b| b.is_ascii_digit())
+    {
+        return (safe_code, desc.to_owned());
+    }
+    (safe_code, default_msg)
+}
+
+fn extract_safe_oauth_error(bytes: &[u8], status: u16) -> Option<(String, String)> {
     let payload: OAuthErrorPayload = serde_json::from_slice(bytes).ok()?;
     let error = payload.error.trim();
     if error.is_empty() {
         return None;
     }
-    let description = payload
-        .error_description
-        .map(|d| d.trim().to_owned())
-        .filter(|d| !d.is_empty());
-    Some((error.to_owned(), description))
+    Some(map_oauth_error_code(error, Some(status)))
 }
 
 fn compute_expires_at(expires_in: Option<f64>) -> Option<f64> {
@@ -1632,18 +1880,21 @@ mod tests {
             .unwrap()
             .scheme
             == "https";
+        let expected_issuer = "https://auth.example.com";
         let meta = super::AuthorizationServerMetadata {
+            issuer: Some(expected_issuer.to_owned()),
             authorization_endpoint: "http://auth.example.com/authorize".to_owned(),
             token_endpoint: "https://auth.example.com/token".to_owned(),
             registration_endpoint: None,
             client_id_metadata_document_supported: None,
             code_challenge_methods_supported: None,
         };
-        let err = validate_discovered_as_metadata(&meta, mcp_is_https)
+        let err = validate_discovered_as_metadata(&meta, expected_issuer, mcp_is_https)
             .expect_err("MCP https:// deve rejeitar authorization_endpoint http://");
         assert!(matches!(err, OAuthError::DiscoveryFailed(_)), "{err:?}");
 
         let meta_http_token = super::AuthorizationServerMetadata {
+            issuer: Some(expected_issuer.to_owned()),
             authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
             token_endpoint: "http://auth.example.com/token".to_owned(),
             registration_endpoint: None,
@@ -1651,11 +1902,12 @@ mod tests {
             code_challenge_methods_supported: None,
         };
         assert!(matches!(
-            validate_discovered_as_metadata(&meta_http_token, mcp_is_https),
+            validate_discovered_as_metadata(&meta_http_token, expected_issuer, mcp_is_https),
             Err(OAuthError::DiscoveryFailed(_))
         ));
 
         let meta_http_reg = super::AuthorizationServerMetadata {
+            issuer: Some(expected_issuer.to_owned()),
             authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
             token_endpoint: "https://auth.example.com/token".to_owned(),
             registration_endpoint: Some("http://auth.example.com/register".to_owned()),
@@ -1663,9 +1915,41 @@ mod tests {
             code_challenge_methods_supported: None,
         };
         assert!(matches!(
-            validate_discovered_as_metadata(&meta_http_reg, mcp_is_https),
+            validate_discovered_as_metadata(&meta_http_reg, expected_issuer, mcp_is_https),
             Err(OAuthError::DiscoveryFailed(_))
         ));
+
+        // Emissor divergente ou ausente também deve ser recusado (RFC 8414).
+        let meta_wrong_issuer = super::AuthorizationServerMetadata {
+            issuer: Some("https://auth.example.com/tenant-a".to_owned()),
+            authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
+            token_endpoint: "https://auth.example.com/token".to_owned(),
+            registration_endpoint: None,
+            client_id_metadata_document_supported: None,
+            code_challenge_methods_supported: None,
+        };
+        assert!(matches!(
+            validate_discovered_as_metadata(
+                &meta_wrong_issuer,
+                "https://auth.example.com/tenant-b",
+                mcp_is_https
+            ),
+            Err(OAuthError::DiscoveryFailed(_))
+        ));
+
+        let meta_missing_issuer = super::AuthorizationServerMetadata {
+            issuer: None,
+            authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
+            token_endpoint: "https://auth.example.com/token".to_owned(),
+            registration_endpoint: None,
+            client_id_metadata_document_supported: None,
+            code_challenge_methods_supported: None,
+        };
+        assert!(matches!(
+            validate_discovered_as_metadata(&meta_missing_issuer, expected_issuer, mcp_is_https),
+            Err(OAuthError::DiscoveryFailed(_))
+        ));
+
         assert!(matches!(
             validate_discovered_url("resource_metadata", "http://evil.example/prm", mcp_is_https),
             Err(OAuthError::DiscoveryFailed(_))
@@ -1678,8 +1962,16 @@ mod tests {
             ),
             Err(OAuthError::DiscoveryFailed(_))
         ));
+        let meta_local = super::AuthorizationServerMetadata {
+            issuer: Some("http://auth.example.com".to_owned()),
+            authorization_endpoint: "http://auth.example.com/authorize".to_owned(),
+            token_endpoint: "http://auth.example.com/token".to_owned(),
+            registration_endpoint: None,
+            client_id_metadata_document_supported: None,
+            code_challenge_methods_supported: None,
+        };
         assert!(
-            validate_discovered_as_metadata(&meta, false).is_ok(),
+            validate_discovered_as_metadata(&meta_local, "http://auth.example.com", false).is_ok(),
             "MCP http:// local deve continuar aceitando endpoints http://"
         );
     }
@@ -1691,6 +1983,8 @@ mod tests {
         authorize_url: &str,
         token_endpoint: &str,
     ) {
+        let mut cfg = sample_cfg(true, AuthConfig::OAuthDcr);
+        cfg.id = integration_id.to_owned();
         let mut guard = oauth
             .pending
             .lock()
@@ -1699,6 +1993,8 @@ mod tests {
             state.to_owned(),
             super::PendingAuth {
                 integration_id: integration_id.to_owned(),
+                config_fingerprint: crate::model::config_fingerprint(&cfg),
+                resource_uri: "https://mcp.example.com/mcp".to_owned(),
                 authorize_url: authorize_url.to_owned(),
                 code_verifier: Zeroizing::new("verifier-teste-123".to_owned()),
                 redirect_uri: "http://127.0.0.1:8765/api/integrations/oauth/callback".to_owned(),

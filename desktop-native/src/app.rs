@@ -1660,6 +1660,9 @@ impl Hangar {
         let same_server = self.server.as_deref().map(servers::norm) == Some(servers::norm(&api.identity()));
         let connect = same_server.then(|| std::mem::take(&mut self.connect).carry_over());
         self.drop_connection(window, cx);
+        if !same_server {
+            integration_requests::drop_requests(&mut self.integrations, &servers::norm(&api.identity()), cx);
+        }
         if let Some(connect) = connect { self.connect = connect; }
         self.active_token = token;
         self.api = Some(api.clone());
@@ -1753,7 +1756,7 @@ impl Hangar {
         self.vault.remove(&self.active_key());
         // O diálogo aberto pelo botão segura a entidade: esvaziada, ele não segue com o cartão e a Api antigos.
         let key = self.active_key();
-        self.integrations.remove(&key);
+        integration_requests::drop_requests(&mut self.integrations, &key, cx);
         self.integrations_page = None;
         whatsapp_outbox::drop_outbox(&mut self.whatsapp_outbox, &key, cx);
         self.close_terminal(false, window, cx);
@@ -2233,9 +2236,14 @@ impl Hangar {
                         },
                         _ => (None, None),
                     };
-                    // Pedidos de aprovação das integrações MCP dela, com a mesma regra da queda.
+                    // Pedidos de aprovação das integrações MCP dela, com a mesma regra da queda (inclui falha fatal antes do SSE).
                     let integrations = match &update {
                         servers::RemoteUpdate::Stream(Update::Offline(_)) => Some(None),
+                        servers::RemoteUpdate::Sessions(Err(error))
+                            if matches!(error.status, Some(401 | 403 | 410)) =>
+                        {
+                            Some(None)
+                        }
                         servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "integrations_approvals" => Some(Some(frame.data.clone())),
                         _ => None,
                     };
@@ -2319,6 +2327,10 @@ impl Hangar {
             Payload::Sessions(Err(error)) => {
                 self.pending_open = None;
                 if self.auth_lost(&error) {
+                    let key = self.active_key();
+                    if self.set_integration_requests(&key, None, cx) {
+                        self.redraw(panes::Area::Nav, cx);
+                    }
                     self.open_connection(window, cx);
                     self.error = Some(Self::failure(&error));
                 }
@@ -9205,12 +9217,31 @@ impl Render for Hangar {
         let vault = self.render_vault_session(cx);
         let integration = self.render_integration_session(cx);
         let session_requests = (vault.is_some() || integration.is_some()).then(|| {
-            let band = div().flex_shrink_0().w_full().flex().flex_col().children(vault).children(integration);
-            div().relative().flex_shrink_0().w_full().flex().flex_col().child(band).child(self.cap_measure(&self.panes.vault_height))
+            let column = self.panes.column_height.get();
+            let reserved = SESSION_HEADER_HEIGHT + self.panes.bottom_height.get() + queue_step + term;
+            let band = div()
+                .id("session-requests-band")
+                .flex_shrink_1()
+                .min_h_0()
+                .w_full()
+                .when(column > 0., |el| el.max_h(px((column - reserved).max(120.))))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .children(vault)
+                .children(integration);
+            div().relative().flex_shrink_1().min_h_0().w_full().flex().flex_col().child(band).child(self.cap_measure(&self.panes.vault_height))
         });
         if session_requests.is_none() && self.panes.vault_height.replace(0.) > 0. { self.redraw(panes::Area::Bottom, cx); }
+        let page_open = self.page_open();
         let vault_float = self.render_vault_float(cx);
-        let integration_float = self.render_integration_float_at(if vault_float.is_some() { 392. } else { 0. }, cx);
+        let integration_float = (!page_open)
+            .then(|| self.render_integration_float_at(if vault_float.is_some() { 392. } else { 0. }, cx))
+            .flatten();
+        // Quando outra página cobre a conversa, mantém um ponto flutuante na raiz para aprovações pendentes.
+        let root_integration_float = (!self.connection_dialog && page_open)
+            .then(|| self.render_integration_float_from(topbar::height() + 12., 0., cx))
+            .flatten();
         let content = div().relative().flex_1().min_w_0().h_full().flex().flex_col()
             .when(!beside_sidebar, |el| chat_fill(el, self, window))
             .child(self.cap_measure(&self.panes.column_height))
@@ -9582,6 +9613,7 @@ impl Render for Hangar {
                     }),
             }))
             .children(live)
+            .children(root_integration_float)
             .children(self.render_landing_ghost(cx))
             // O painel aberto pelo compositor da prévia (modelo, histórico, comandos) é desenhado com a conversa dela.
             .children(if preview_popup { None } else { self.render_popup(window, cx) })

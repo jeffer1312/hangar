@@ -3,6 +3,13 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   createIntegration,
+  formatCommandArgs,
+  isValidIntegrationUrl,
+  parseCommandArgs,
+  parseEnvVars,
+  parseHeaders,
+  parseLines,
+  parseScopes,
   updateIntegration,
   type CreateIntegrationInput,
   type IntegrationAuthConfig,
@@ -10,6 +17,8 @@ import {
   type IntegrationSecretsPatch,
   type IntegrationTransportInput,
   type IntegrationView,
+  type ParseEnvResult,
+  type ParseHeadersResult,
   type PermissionPolicy,
   type Server,
   type UpdateIntegrationInput,
@@ -29,14 +38,6 @@ type TransportKind = 'remote_http' | 'local_stdio';
 type AuthKind = IntegrationAuthConfig['kind'];
 
 const SLUG_RE = /^[a-z][a-z0-9-]{0,63}$/;
-const RESERVED_HTTP_HEADERS = new Set([
-  'authorization',
-  'accept',
-  'mcp-session-id',
-  'mcp-protocol-version',
-  'last-event-id',
-]);
-const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9a-z]+$/;
 
 function suggestPresetSlug(baseId: string, existingIds: string[]): string {
   const used = new Set(existingIds);
@@ -48,107 +49,22 @@ function suggestPresetSlug(baseId: string, existingIds: string[]): string {
   return baseId;
 }
 
-function isValidHttpUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw.trim());
-    return (u.protocol === 'https:' || u.protocol === 'http:') && !!u.hostname && !u.username && !u.password;
-  } catch {
-    return false;
+function headerErrorText(res: Extract<ParseHeadersResult, { ok: false }>): string {
+  if (res.reason === 'invalid_name' || res.reason === 'reserved_name') {
+    return m.integrations_validation_header_name({ name: res.name ?? '' });
   }
-}
-
-function parseCommandArgs(raw: string): string[] {
-  const trimmed = raw.trim();
-  if (!trimmed) return [];
-  if (trimmed.includes('\n')) {
-    return trimmed.split('\n').map((s) => s.trim()).filter(Boolean);
+  if (res.reason === 'invalid_value' && res.name) {
+    return `${m.integrations_field_headers()}: ${res.name}`;
   }
-  const out: string[] = [];
-  let cur = '';
-  let quote: '"' | "'" | null = null;
-  for (const ch of trimmed) {
-    if (quote) {
-      if (ch === quote) quote = null;
-      else cur += ch;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (/\s/.test(ch)) {
-      if (cur) { out.push(cur); cur = ''; }
-    } else {
-      cur += ch;
-    }
-  }
-  if (cur) out.push(cur);
-  return out;
+  return m.integrations_field_headers();
 }
 
-type ParseHeadersResult =
-  | { ok: true; names: string[]; map: Record<string, string> }
-  | { ok: false; error: string };
-
-type ParseEnvResult =
-  | { ok: true; keys: string[]; map: Record<string, string> }
-  | { ok: false; error: string };
-
-function parseHeaders(raw: string): ParseHeadersResult {
-  const names: string[] = [];
-  const map: Record<string, string> = {};
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const sep = trimmed.indexOf(':');
-    if (sep <= 0) return { ok: false, error: m.integrations_field_headers() };
-    const name = trimmed.slice(0, sep).trim().toLowerCase();
-    const val = trimmed.slice(sep + 1).trim();
-    // Cabeçalhos reservados de protocolo/auth e valores vazios são recusados antes de chegar ao PATCH.
-    if (
-      !name
-      || name.length > 256
-      || !HEADER_NAME_RE.test(name)
-      || RESERVED_HTTP_HEADERS.has(name)
-      || !val
-      || /[\x00-\x08\x0a-\x1f\x7f]/.test(val)
-    ) {
-      return {
-        ok: false,
-        error: name ? `${m.integrations_field_headers()}: ${name}` : m.integrations_field_headers(),
-      };
-    }
-    if (!names.includes(name)) names.push(name);
-    map[name] = val;
-  }
-  return { ok: true, names, map };
+function envErrorText(res: Extract<ParseEnvResult, { ok: false }>): string {
+  return res.key ? `${m.integrations_field_env()}: ${res.key}` : m.integrations_field_env();
 }
 
-function parseEnvVars(raw: string): ParseEnvResult {
-  const keys: string[] = [];
-  const map: Record<string, string> = {};
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const sep = trimmed.indexOf('=');
-    if (sep <= 0) return { ok: false, error: m.integrations_field_env() };
-    const key = trimmed.slice(0, sep).trim();
-    const val = trimmed.slice(sep + 1);
-    if (!key || key.length > 256 || key.includes('=') || /[\s\x00-\x1f\x7f]/.test(key) || val.includes('\0')) {
-      return {
-        ok: false,
-        error: key ? `${m.integrations_field_env()}: ${key}` : m.integrations_field_env(),
-      };
-    }
-    if (!keys.includes(key)) keys.push(key);
-    map[key] = val;
-  }
-  return { ok: true, keys, map };
-}
-
-function parseLines(raw: string): string[] {
-  return raw.split('\n').map((s) => s.trim()).filter(Boolean);
-}
-
-function parseScopes(raw: string): string[] {
-  return raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-}
+const sameList = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
 
 function defaultAuthForPreset(preset?: IntegrationPreset | null): AuthKind {
   if (!preset) return 'oauth_dcr';
@@ -175,6 +91,12 @@ export function IntegrationEditorSheet({
     () => (editing ? editing.id : preset ? suggestPresetSlug(preset.id, existingIds) : ''),
     [editing, preset, existingIds],
   );
+  const [originalCommand] = useState<string[] | null>(() => (
+    editing?.transport.kind === 'local_stdio' ? editing.transport.command : null
+  ));
+  const [initialCommandText] = useState(() => (
+    originalCommand ? formatCommandArgs(originalCommand) : ''
+  ));
   const [id, setId] = useState(initialSlug);
   const [name, setName] = useState(editing?.name ?? preset?.name ?? '');
   const [transportKind, setTransportKind] = useState<TransportKind>(
@@ -184,9 +106,7 @@ export function IntegrationEditorSheet({
     editing?.transport.kind === 'remote_http' ? editing.transport.url : preset?.url ?? '',
   );
   const [headersText, setHeadersText] = useState('');
-  const [commandText, setCommandText] = useState(
-    editing?.transport.kind === 'local_stdio' ? editing.transport.command.join('\n') : '',
-  );
+  const [commandText, setCommandText] = useState(initialCommandText);
   const [cwd, setCwd] = useState(
     editing?.transport.kind === 'local_stdio' ? editing.transport.cwd ?? '' : '',
   );
@@ -250,17 +170,38 @@ export function IntegrationEditorSheet({
     }
   };
 
+  const keptHeaders = existingHeaderNames.filter((h) => !removedHeaders.includes(h));
+  const keptEnvKeys = existingEnvKeys.filter((k) => !removedEnvKeys.includes(k));
+  const commandUnchanged = !!originalCommand && commandText.trim() === initialCommandText.trim();
+
   const validate = (): string | null => {
     if (!editing && !SLUG_RE.test(id.trim())) return m.integrations_validation_id();
     if (!name.trim()) return m.integrations_validation_name();
     if (transportKind === 'remote_http') {
-      if (!isValidHttpUrl(url)) return m.integrations_validation_url();
+      const urlCheck = isValidIntegrationUrl(url, {
+        hasAuthOrHeaders: effectiveAuth !== 'none' || keptHeaders.length > 0,
+      });
+      if (!urlCheck.valid) {
+        return urlCheck.insecure ? m.integrations_validation_url_insecure() : m.integrations_validation_url();
+      }
       const headersResult = parseHeaders(headersText);
-      if (!headersResult.ok) return headersResult.error;
+      if (!headersResult.ok) return headerErrorText(headersResult);
+      if (headersResult.names.length > 0) {
+        const withNewHeaders = isValidIntegrationUrl(url, { hasAuthOrHeaders: true });
+        if (!withNewHeaders.valid) {
+          return withNewHeaders.insecure ? m.integrations_validation_url_insecure() : m.integrations_validation_url();
+        }
+      }
     } else {
-      if (parseCommandArgs(commandText).length === 0) return m.integrations_validation_command();
+      if (commandUnchanged) {
+        if (originalCommand.length === 0) return m.integrations_validation_command();
+      } else {
+        const parsedCmd = parseCommandArgs(commandText);
+        if (!parsedCmd.ok) return m.integrations_validation_command_quotes();
+        if (parsedCmd.args.length === 0) return m.integrations_validation_command();
+      }
       const envResult = parseEnvVars(envText);
-      if (!envResult.ok) return envResult.error;
+      if (!envResult.ok) return envErrorText(envResult);
     }
     if (effectiveAuth === 'oauth_manual_client' && !clientId.trim()) {
       return m.integrations_validation_client_id();
@@ -281,7 +222,7 @@ export function IntegrationEditorSheet({
       ? parseHeaders(headersText)
       : { ok: true as const, names: [], map: {} };
     if (!parsedHeaders.ok) {
-      setError(parsedHeaders.error);
+      setError(headerErrorText(parsedHeaders));
       haptic.error();
       return;
     }
@@ -289,17 +230,30 @@ export function IntegrationEditorSheet({
       ? parseEnvVars(envText)
       : { ok: true as const, keys: [], map: {} };
     if (!parsedEnv.ok) {
-      setError(parsedEnv.error);
+      setError(envErrorText(parsedEnv));
       haptic.error();
       return;
+    }
+
+    let nextCommand: string[] = [];
+    if (transportKind === 'local_stdio') {
+      if (commandUnchanged && originalCommand) {
+        // Preserva o vetor salvo quando só cwd ou env mudaram sem editar o comando.
+        nextCommand = originalCommand;
+      } else {
+        const parsedCmd = parseCommandArgs(commandText);
+        if (!parsedCmd.ok) {
+          setError(m.integrations_validation_command_quotes());
+          haptic.error();
+          return;
+        }
+        nextCommand = parsedCmd.args;
+      }
     }
 
     setBusy(true);
     setError('');
     try {
-      const keptHeaders = existingHeaderNames.filter((h) => !removedHeaders.includes(h));
-      const keptEnvKeys = existingEnvKeys.filter((k) => !removedEnvKeys.includes(k));
-
       const transport: IntegrationTransportInput = transportKind === 'remote_http'
         ? {
           kind: 'remote_http',
@@ -308,7 +262,7 @@ export function IntegrationEditorSheet({
         }
         : {
           kind: 'local_stdio',
-          command: parseCommandArgs(commandText),
+          command: nextCommand,
           cwd: cwd.trim() || null,
           env_keys: Array.from(new Set([...keptEnvKeys, ...parsedEnv.keys])),
         };
@@ -344,9 +298,19 @@ export function IntegrationEditorSheet({
       const projects = parseLines(projectsText);
 
       if (editing) {
+        const transportChanged = editing.transport.kind !== transport.kind
+          || (editing.transport.kind === 'remote_http' && transport.kind === 'remote_http'
+            && (transport.url !== editing.transport.url
+              || !sameList(transport.header_names ?? [], editing.transport.header_names)))
+          || (editing.transport.kind === 'local_stdio' && transport.kind === 'local_stdio'
+            && (!sameList(transport.command, editing.transport.command)
+              || (transport.cwd ?? null) !== (editing.transport.cwd ?? null)
+              || !sameList(transport.env_keys ?? [], editing.transport.env_keys)));
+
         const patch: UpdateIntegrationInput = {
           name: name.trim(),
-          transport,
+          // Omitir transporte inalterado evita invalidar sessões ou aprovações no servidor.
+          ...(transportChanged ? { transport } : {}),
           auth,
           policy,
           pinned,

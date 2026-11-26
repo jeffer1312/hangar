@@ -22,10 +22,6 @@ const RESERVED_HTTP_HEADERS: [&str; 5] = [
     "last-event-id",
 ];
 
-fn default_true() -> bool {
-    true
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(super) enum PresetAuthKind {
     #[serde(rename = "oauth_dcr")]
@@ -240,481 +236,10 @@ pub(super) struct FormDraft {
     pub policy: PermissionPolicy,
     pub pinned: bool,
     pub projects_raw: String,
-}
-
-/// Traduz códigos de erro HTTP das rotas `/api/integrations/*`.
-pub(super) fn integrations_failure(error: &Failure) -> String {
-    match error.code.as_deref() {
-        Some("auth_required") => tr_shared("integrations_err_auth_required", &[]),
-        Some("auth_expired") => tr_shared("integrations_err_auth_expired", &[]),
-        Some("integration_owner_only") => tr_shared("integrations_err_owner_only", &[]),
-        Some("integration_disabled") => tr_shared("integrations_err_disabled", &[]),
-        Some("integration_already_exists") => tr_shared("integrations_err_already_exists", &[]),
-        Some("integration_secrets_key_lost" | "integration_secrets_unavailable") => {
-            tr_shared("integrations_err_keyring", &[])
-        }
-        Some("approval_not_found") => tr_shared("integrations_approval_lost", &[]),
-        Some("approval_conflict") => {
-            let lower = error.detail.to_ascii_lowercase();
-            if lower.contains("atualizado") || lower.contains("stale") {
-                tr_shared("integrations_err_stale", &[])
-            } else {
-                tr_shared("integrations_err_answered", &[])
-            }
-        }
-        _ => Hangar::fetch_failure(error),
-    }
-}
-
-pub(super) fn status_presentation(status: IntegrationStatus) -> (String, Hsla, Hsla) {
-    match status {
-        IntegrationStatus::Ready => (
-            tr_shared("integrations_status_ready", &[]),
-            theme::success_text(),
-            theme::success().opacity(0.14),
-        ),
-        IntegrationStatus::AuthRequired => (
-            tr_shared("integrations_status_auth_required", &[]),
-            theme::warning_text(),
-            theme::warning().opacity(0.14),
-        ),
-        IntegrationStatus::AuthExpired => (
-            tr_shared("integrations_status_auth_expired", &[]),
-            theme::warning_text(),
-            theme::warning().opacity(0.14),
-        ),
-        IntegrationStatus::Disabled => (
-            tr_shared("integrations_status_disabled", &[]),
-            theme::muted(),
-            theme::inset(),
-        ),
-        IntegrationStatus::Error => (
-            tr_shared("integrations_status_error", &[]),
-            theme::danger_text(),
-            theme::danger().opacity(0.14),
-        ),
-    }
-}
-
-pub(super) fn policy_label(policy: PermissionPolicy, short: bool) -> String {
-    match policy {
-        PermissionPolicy::ReadFreeAskWrite => tr_shared(
-            if short {
-                "integrations_policy_read_free_ask_write_short"
-            } else {
-                "integrations_policy_read_free_ask_write"
-            },
-            &[],
-        ),
-        PermissionPolicy::AllowAll => tr_shared("integrations_policy_allow_all", &[]),
-        PermissionPolicy::ReadOnly => tr_shared("integrations_policy_read_only", &[]),
-    }
-}
-
-pub(super) fn tool_access_label(access: ToolAccess) -> (String, Hsla) {
-    match access {
-        ToolAccess::Read => (tr_shared("integrations_tool_access_read", &[]), theme::success_text()),
-        ToolAccess::AllowedAlways => (
-            tr_shared("integrations_tool_access_allowed_always", &[]),
-            theme::accent_text(),
-        ),
-        ToolAccess::AskWrite => (
-            tr_shared("integrations_tool_access_ask_write", &[]),
-            theme::warning_text(),
-        ),
-        ToolAccess::Blocked => (tr_shared("integrations_tool_access_blocked", &[]), theme::danger_text()),
-    }
-}
-
-pub(super) fn auth_choice_label(choice: AuthKindChoice) -> String {
-    match choice {
-        AuthKindChoice::OAuthDcr => tr_shared("integrations_auth_oauth_dcr", &[]),
-        AuthKindChoice::OAuthManualClient => tr_shared("integrations_auth_oauth_manual", &[]),
-        AuthKindChoice::Bearer => tr_shared("integrations_auth_bearer", &[]),
-        AuthKindChoice::None => tr_shared("integrations_auth_none", &[]),
-    }
-}
-
-pub(super) fn preset_auth_summary(kind: PresetAuthKind) -> String {
-    match kind {
-        PresetAuthKind::OAuthDcr => tr_shared("integrations_auth_oauth_dcr", &[]),
-        PresetAuthKind::OAuthManualClient => tr_shared("integrations_auth_oauth_manual", &[]),
-        PresetAuthKind::OAuthDcrOrBearer => format!(
-            "{} · {}",
-            tr_shared("integrations_auth_oauth_dcr", &[]),
-            tr_shared("integrations_auth_bearer", &[])
-        ),
-    }
-}
-
-pub(super) fn suggest_preset_id(preset_id: &str, existing: &[IntegrationItem]) -> String {
-    let taken = |candidate: &str| existing.iter().any(|item| item.id == candidate);
-    if !taken(preset_id) {
-        return preset_id.to_owned();
-    }
-    for suffix in 2..=99 {
-        let candidate = format!("{preset_id}-{suffix}");
-        if !taken(&candidate) {
-            return candidate;
-        }
-    }
-    format!("{preset_id}-new")
-}
-
-pub(super) fn validate_slug(value: &str) -> bool {
-    let mut bytes = value.bytes();
-    !value.is_empty()
-        && value.len() <= MAX_SLUG_BYTES
-        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
-        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-pub(super) fn validate_http_url(url: &str) -> bool {
-    if url.is_empty()
-        || url.len() > MAX_URL_BYTES
-        || url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
-    {
-        return false;
-    }
-    let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) else {
-        return false;
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if authority.is_empty() || authority.contains('@') {
-        return false;
-    }
-    if let Some(after_open) = authority.strip_prefix('[') {
-        let Some((host, tail)) = after_open.split_once(']') else {
-            return false;
-        };
-        if host.is_empty()
-            || !host.chars().all(|ch| ch.is_ascii_hexdigit() || ch == ':' || ch == '.')
-        {
-            return false;
-        }
-        return valid_optional_port(tail);
-    }
-    match authority.split_once(':') {
-        Some((host, port)) => valid_hostname(host) && valid_port(port),
-        None => valid_hostname(authority),
-    }
-}
-
-fn valid_hostname(host: &str) -> bool {
-    !host.is_empty()
-        && !host.starts_with('.')
-        && !host.ends_with('.')
-        && !host.contains("..")
-        && host.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-')
-}
-
-fn valid_optional_port(tail: &str) -> bool {
-    if tail.is_empty() {
-        return true;
-    }
-    tail.strip_prefix(':').is_some_and(valid_port)
-}
-
-fn valid_port(port: &str) -> bool {
-    !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()) && port.parse::<u16>().is_ok_and(|p| p > 0)
-}
-
-pub(super) fn safe_authorize_url(url: &str) -> Option<String> {
-    let trimmed = url.trim();
-    validate_http_url(trimmed)
-        .then(|| url::Url::parse(trimmed).ok())
-        .flatten()
-        .filter(|parsed| matches!(parsed.scheme(), "http" | "https"))
-        .map(|parsed| parsed.to_string())
-}
-
-pub(super) fn oauth_start_body(api: &Api) -> Value {
-    if api.is_loopback() {
-        return json!({ "origin_client": "desktop" });
-    }
-    let route = api.route();
-    let public_base_url = (route.scheme() == "https"
-        && route.has_host()
-        && route.username().is_empty()
-        && route.password().is_none())
-    .then(|| format!("{}{}", route.origin().ascii_serialization(), route.path().trim_end_matches('/')));
-    match public_base_url {
-        Some(url) => json!({ "origin_client": "remote_desktop", "public_base_url": url }),
-        None => json!({ "origin_client": "remote_desktop" }),
-    }
-}
-
-/// Divide o comando local em argumentos: várias linhas = 1 argumento por linha; linha única = espaço com aspas simples/duplas.
-pub(super) fn parse_command_args(raw: &str) -> Vec<String> {
-    let lines: Vec<String> = raw
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect();
-    if lines.len() > 1 {
-        return lines;
-    }
-    let Some(single) = lines.into_iter().next() else {
-        return Vec::new();
-    };
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    for ch in single.chars() {
-        match quote {
-            Some(q) if ch == q => quote = None,
-            Some(_) => current.push(ch),
-            None if ch == '\'' || ch == '"' => quote = Some(ch),
-            None if ch.is_whitespace() => {
-                if !current.is_empty() {
-                    args.push(std::mem::take(&mut current));
-                }
-            }
-            None => current.push(ch),
-        }
-    }
-    if !current.is_empty() {
-        args.push(current);
-    }
-    args
-}
-
-fn format_command_for_input(command: &[String]) -> String {
-    if command.iter().any(|part| part.chars().any(char::is_whitespace)) {
-        command.join("\n")
-    } else {
-        command.join(" ")
-    }
-}
-
-fn parse_scopes(raw: &str) -> Vec<String> {
-    raw.split(|ch: char| ch == ',' || ch.is_whitespace())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-fn parse_projects(raw: &str) -> Vec<String> {
-    raw.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-fn parse_headers_input(raw: &str) -> Result<BTreeMap<String, String>, String> {
-    let mut map = BTreeMap::new();
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Some((name, value)) = trimmed.split_once(':') else {
-            return Err(tr_shared("integrations_field_headers", &[]));
-        };
-        let key = name.trim().to_ascii_lowercase();
-        let val = value.trim();
-        if key.is_empty()
-            || key.len() > 256
-            || !key.is_ascii()
-            || key.chars().any(|c| c.is_whitespace() || c.is_control() || c == ':')
-            || RESERVED_HTTP_HEADERS.contains(&key.as_str())
-            || val.contains('\0')
-            || val.is_empty()
-        {
-            return Err(tr_shared("integrations_field_headers", &[]));
-        }
-        map.insert(key, val.to_owned());
-    }
-    Ok(map)
-}
-
-fn parse_env_input(raw: &str) -> Result<BTreeMap<String, String>, String> {
-    let mut map = BTreeMap::new();
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = trimmed.split_once('=') else {
-            return Err(tr_shared("integrations_field_env", &[]));
-        };
-        let key = key.trim();
-        if key.is_empty()
-            || key.len() > 256
-            || key.contains('=')
-            || key.chars().any(|c| c.is_whitespace() || c.is_control())
-            || value.contains('\0')
-        {
-            return Err(tr_shared("integrations_field_env", &[]));
-        }
-        map.insert(key.to_owned(), value.to_owned());
-    }
-    Ok(map)
-}
-
-pub(super) fn validate_draft(draft: &FormDraft) -> Result<(), String> {
-    if !draft.is_edit && !validate_slug(draft.id.trim()) {
-        return Err(tr_shared("integrations_validation_id", &[]));
-    }
-    let name = draft.name.trim();
-    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.contains('\0') {
-        return Err(tr_shared("integrations_validation_name", &[]));
-    }
-    match draft.transport {
-        TransportKind::RemoteHttp => {
-            if !validate_http_url(draft.url.trim()) {
-                return Err(tr_shared("integrations_validation_url", &[]));
-            }
-            let _ = parse_headers_input(&draft.new_headers_raw)?;
-        }
-        TransportKind::LocalStdio => {
-            if parse_command_args(&draft.command_raw).is_empty() {
-                return Err(tr_shared("integrations_validation_command", &[]));
-            }
-            let _ = parse_env_input(&draft.new_env_raw)?;
-        }
-    }
-    if draft.transport == TransportKind::RemoteHttp
-        && draft.auth_kind == AuthKindChoice::OAuthManualClient
-        && draft.client_id.trim().is_empty()
-    {
-        return Err(tr_shared("integrations_validation_client_id", &[]));
-    }
-    Ok(())
-}
-
-fn build_transport_and_secrets(
-    draft: &FormDraft,
-) -> Result<(Transport, serde_json::Map<String, Value>), String> {
-    let mut secrets = serde_json::Map::new();
-    let transport = match draft.transport {
-        TransportKind::RemoteHttp => {
-            let new_headers = parse_headers_input(&draft.new_headers_raw)?;
-            let mut header_names: BTreeSet<String> = draft
-                .existing_headers
-                .iter()
-                .filter(|name| !draft.removed_headers.contains(*name))
-                .cloned()
-                .collect();
-            let mut headers_patch = serde_json::Map::new();
-            for removed in &draft.removed_headers {
-                headers_patch.insert(removed.clone(), Value::Null);
-            }
-            for (k, v) in new_headers {
-                header_names.insert(k.clone());
-                headers_patch.insert(k, Value::String(v));
-            }
-            if !headers_patch.is_empty() {
-                secrets.insert("headers".into(), Value::Object(headers_patch));
-            }
-            Transport::RemoteHttp {
-                url: draft.url.trim().to_owned(),
-                header_names: header_names.into_iter().collect(),
-            }
-        }
-        TransportKind::LocalStdio => {
-            let new_env = parse_env_input(&draft.new_env_raw)?;
-            let mut env_keys: BTreeSet<String> = draft
-                .existing_env_keys
-                .iter()
-                .filter(|key| !draft.removed_env_keys.contains(*key))
-                .cloned()
-                .collect();
-            let mut env_patch = serde_json::Map::new();
-            for removed in &draft.removed_env_keys {
-                env_patch.insert(removed.clone(), Value::Null);
-            }
-            for (k, v) in new_env {
-                env_keys.insert(k.clone());
-                env_patch.insert(k, Value::String(v));
-            }
-            if !env_patch.is_empty() {
-                secrets.insert("env".into(), Value::Object(env_patch));
-            }
-            let cwd = draft.cwd.trim();
-            Transport::LocalStdio {
-                command: parse_command_args(&draft.command_raw),
-                cwd: (!cwd.is_empty()).then(|| cwd.to_owned()),
-                env_keys: env_keys.into_iter().collect(),
-            }
-        }
-    };
-
-    match draft.auth_kind {
-        AuthKindChoice::Bearer if draft.transport == TransportKind::RemoteHttp => {
-            let tok = draft.bearer_token.trim();
-            if !tok.is_empty() {
-                secrets.insert("bearer_token".into(), Value::String(tok.to_owned()));
-            }
-        }
-        AuthKindChoice::OAuthManualClient if draft.transport == TransportKind::RemoteHttp => {
-            let sec = draft.client_secret.trim();
-            if !sec.is_empty() {
-                secrets.insert("oauth_client_secret".into(), Value::String(sec.to_owned()));
-            }
-        }
-        _ => {}
-    }
-
-    Ok((transport, secrets))
-}
-
-fn build_auth_config(draft: &FormDraft) -> AuthConfig {
-    if draft.transport == TransportKind::LocalStdio {
-        return AuthConfig::None;
-    }
-    match draft.auth_kind {
-        AuthKindChoice::None => AuthConfig::None,
-        AuthKindChoice::Bearer => AuthConfig::Bearer,
-        AuthKindChoice::OAuthDcr => AuthConfig::OAuthDcr,
-        AuthKindChoice::OAuthManualClient => AuthConfig::OAuthManualClient {
-            client_id: draft.client_id.trim().to_owned(),
-            scopes: parse_scopes(&draft.scopes_raw),
-        },
-    }
-}
-
-pub(super) fn build_create_body(draft: &FormDraft) -> Result<Value, String> {
-    validate_draft(draft)?;
-    let (transport, secrets) = build_transport_and_secrets(draft)?;
-    let auth = build_auth_config(draft);
-    let mut body = json!({
-        "id": draft.id.trim(),
-        "name": draft.name.trim(),
-        "preset": draft.preset,
-        "enabled": draft.enabled,
-        "transport": transport,
-        "auth": auth,
-        "policy": draft.policy,
-        "pinned": draft.pinned,
-        "projects": parse_projects(&draft.projects_raw),
-    });
-    if !secrets.is_empty() {
-        body["secrets"] = Value::Object(secrets);
-    }
-    Ok(body)
-}
-
-pub(super) fn build_patch_body(draft: &FormDraft) -> Result<Value, String> {
-    validate_draft(draft)?;
-    let (transport, secrets) = build_transport_and_secrets(draft)?;
-    let auth = build_auth_config(draft);
-    let mut body = json!({
-        "name": draft.name.trim(),
-        "enabled": draft.enabled,
-        "transport": transport,
-        "auth": auth,
-        "policy": draft.policy,
-        "pinned": draft.pinned,
-        "projects": parse_projects(&draft.projects_raw),
-    });
-    if !secrets.is_empty() {
-        body["secrets"] = Value::Object(secrets);
-    }
-    Ok(body)
+    /// Comando formatado na abertura da edição junto do vetor original, para preservar argumentos com espaços/quebras sem reedição.
+    pub original_command: Option<(String, Vec<String>)>,
+    /// Transporte salvo ao abrir a edição, para omitir `transport` do PATCH quando nada nele mudar.
+    pub original_transport: Option<Transport>,
 }
 
 enum FormMode {
@@ -724,7 +249,8 @@ enum FormMode {
 }
 
 struct PendingHandoff {
-    id: String,
+    handoff_id: u64,
+    integration_id: String,
     authorize_url: String,
     reason: String,
 }
@@ -734,16 +260,82 @@ pub(super) struct IntegrationsPage {
     runtime: Arc<Runtime>,
     hangar: WeakEntity<Hangar>,
     seq: u64,
+    tools_epoch: u64,
+    tools_seq: HashMap<String, u64>,
+    handoff_seq: u64,
     items: Option<Result<Vec<IntegrationItem>, String>>,
     catalog: Option<Result<Vec<CatalogPreset>, String>>,
     tools: HashMap<String, Vec<ToolSummary>>,
+    tools_errors: HashMap<String, String>,
     loading_tools: HashSet<String>,
+    pending_tools_reload: HashSet<String>,
     open_tools: HashSet<String>,
     busy: HashSet<String>,
     testing: HashSet<String>,
     error: Option<String>,
     notice: Option<String>,
     handoff: Option<PendingHandoff>,
+}
+
+struct IntegrationForm {
+    api: Api,
+    runtime: Arc<Runtime>,
+    page: WeakEntity<IntegrationsPage>,
+    is_edit: bool,
+    preset: Option<String>,
+    url_editable: bool,
+    preset_auth: Option<PresetAuthKind>,
+    setup_guide: Option<SetupGuide>,
+    enabled: bool,
+    transport: TransportKind,
+    auth_kind: AuthKindChoice,
+    policy: PermissionPolicy,
+    pinned: bool,
+    id_input: Entity<InputState>,
+    name_input: Entity<InputState>,
+    url_input: Entity<InputState>,
+    existing_headers: Vec<String>,
+    removed_headers: BTreeSet<String>,
+    headers_input: Entity<TextareaState>,
+    command_input: Entity<TextareaState>,
+    cwd_input: Entity<InputState>,
+    existing_env_keys: Vec<String>,
+    removed_env_keys: BTreeSet<String>,
+    env_input: Entity<TextareaState>,
+    client_id_input: Entity<InputState>,
+    client_secret_input: Entity<InputState>,
+    scopes_input: Entity<InputState>,
+    bearer_input: Entity<InputState>,
+    projects_input: Entity<TextareaState>,
+    original_command: Option<(String, Vec<String>)>,
+    original_transport: Option<Transport>,
+    saving: bool,
+    error: Option<String>,
+}
+
+struct InitialFormValues {
+    is_edit: bool,
+    id: String,
+    name: String,
+    preset: Option<String>,
+    url_editable: bool,
+    preset_auth: Option<PresetAuthKind>,
+    setup_guide: Option<SetupGuide>,
+    enabled: bool,
+    transport: TransportKind,
+    url: String,
+    existing_headers: Vec<String>,
+    command: String,
+    cwd: String,
+    existing_env_keys: Vec<String>,
+    auth_kind: AuthKindChoice,
+    client_id: String,
+    scopes: String,
+    policy: PermissionPolicy,
+    pinned: bool,
+    projects: String,
+    original_command: Option<(String, Vec<String>)>,
+    original_transport: Option<Transport>,
 }
 
 impl IntegrationsPage {
@@ -759,10 +351,15 @@ impl IntegrationsPage {
             runtime,
             hangar,
             seq: 0,
+            tools_epoch: 0,
+            tools_seq: HashMap::new(),
+            handoff_seq: 0,
             items: None,
             catalog: None,
             tools: HashMap::new(),
+            tools_errors: HashMap::new(),
             loading_tools: HashSet::new(),
+            pending_tools_reload: HashSet::new(),
             open_tools: HashSet::new(),
             busy: HashSet::new(),
             testing: HashSet::new(),
@@ -776,9 +373,13 @@ impl IntegrationsPage {
 
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.seq += 1;
+        self.tools_epoch += 1;
         let seq = self.seq;
         self.items = None;
         self.catalog = None;
+        self.tools_errors.clear();
+        self.pending_tools_reload.clear();
+        self.tools_seq.clear();
         self.error = None;
         let api_list = self.api.clone();
         run(
@@ -847,6 +448,20 @@ impl IntegrationsPage {
         );
     }
 
+    fn next_tools_seq(&mut self, id: &str) -> u64 {
+        let entry = self.tools_seq.entry(id.to_owned()).or_insert(0);
+        *entry += 1;
+        *entry
+    }
+
+    fn current_tools_seq(&self, id: &str) -> u64 {
+        self.tools_seq.get(id).copied().unwrap_or(0)
+    }
+
+    fn bump_tools_seq(&mut self, id: &str) {
+        let _ = self.next_tools_seq(id);
+    }
+
     fn preset_for(&self, preset_id: Option<&str>) -> Option<CatalogPreset> {
         let id = preset_id?;
         self.catalog
@@ -889,6 +504,8 @@ impl IntegrationsPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Invalida leituras de lista anteriores à gravação confirmada.
+        self.seq += 1;
         self.error = None;
         self.notice = Some(tr_shared(
             if created { "integrations_created" } else { "integrations_saved" },
@@ -901,6 +518,8 @@ impl IntegrationsPage {
                 list.push(item.clone());
             }
         }
+        self.tools_errors.remove(&item.id);
+        self.tools.remove(&item.id);
         self.load_tools(&item.id, window, cx);
         cx.notify();
     }
@@ -923,6 +542,8 @@ impl IntegrationsPage {
                 this.busy.remove(&id);
                 match result {
                     Ok(value) => {
+                        // Evita que um reload_items iniciado antes do PATCH sobrescreva o item atualizado.
+                        this.seq += 1;
                         if let Some(updated) = value
                             .get("integration")
                             .cloned()
@@ -934,6 +555,10 @@ impl IntegrationsPage {
                         }
                         if this.open_tools.contains(&id) {
                             this.load_tools(&id, window, cx);
+                        } else {
+                            this.bump_tools_seq(&id);
+                            this.tools.remove(&id);
+                            this.tools_errors.remove(&id);
                         }
                     }
                     Err(error) => this.error = Some(integrations_failure(&error)),
@@ -963,22 +588,7 @@ impl IntegrationsPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(current) = self
-            .items
-            .as_ref()
-            .and_then(|r| r.as_ref().ok())
-            .and_then(|list| list.iter().find(|item| item.id == id))
-            .map(|item| item.allowed_tools.clone())
-        else {
-            return;
-        };
-        let mut next = current;
-        if allow {
-            next.insert(tool_name);
-        } else {
-            next.remove(&tool_name);
-        }
-        self.patch_field(id, json!({ "allowed_tools": next }), window, cx);
+        self.patch_field(id, build_tool_toggle_patch(&tool_name, allow), window, cx);
     }
 
     fn test_connection(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -1005,13 +615,17 @@ impl IntegrationsPage {
                             .and_then(|v| serde_json::from_value::<Vec<ToolSummary>>(v).ok())
                             .unwrap_or_default();
                         let count = tools.len().to_string();
+                        this.tools_errors.remove(&id);
+                        this.bump_tools_seq(&id);
                         this.tools.insert(id.clone(), tools);
                         this.open_tools.insert(id.clone());
                         this.notice = Some(tr_shared("integrations_test_ok", &[("n", &count)]));
+                        this.seq += 1;
                         this.reload_items(window, cx);
                     }
                     Err(error) => {
                         this.error = Some(integrations_failure(&error));
+                        this.seq += 1;
                         this.reload_items(window, cx);
                     }
                 }
@@ -1061,8 +675,10 @@ impl IntegrationsPage {
                             ..
                         }) => {
                             this.notice = None;
+                            this.handoff_seq += 1;
                             this.handoff = Some(PendingHandoff {
-                                id,
+                                handoff_id: this.handoff_seq,
+                                integration_id: id,
                                 authorize_url,
                                 reason,
                             });
@@ -1086,7 +702,11 @@ impl IntegrationsPage {
         let Some(handoff) = self.handoff.as_ref() else {
             return;
         };
-        let (id, authorize_url) = (handoff.id.clone(), handoff.authorize_url.clone());
+        let (handoff_id, id, authorize_url) = (
+            handoff.handoff_id,
+            handoff.integration_id.clone(),
+            handoff.authorize_url.clone(),
+        );
         if !self.busy.insert(id.clone()) {
             return;
         }
@@ -1107,12 +727,25 @@ impl IntegrationsPage {
             cx,
             move |this: &mut Self, result, _, _| {
                 this.busy.remove(&id);
+                let same_handoff = this
+                    .handoff
+                    .as_ref()
+                    .is_some_and(|h| h.handoff_id == handoff_id);
                 match result {
                     Ok(_) => {
-                        this.handoff = None;
-                        this.notice = Some(tr_shared("integrations_oauth_desktop_opened", &[]));
+                        // Não apaga o handoff de outra integração aberta enquanto esta chamada estava em voo.
+                        if same_handoff {
+                            this.handoff = None;
+                        }
+                        if same_handoff || this.handoff.is_none() {
+                            this.notice = Some(tr_shared("integrations_oauth_desktop_opened", &[]));
+                        }
                     }
-                    Err(error) => this.error = Some(integrations_failure(&error)),
+                    Err(error) => {
+                        if same_handoff || this.handoff.is_none() {
+                            this.error = Some(integrations_failure(&error));
+                        }
+                    }
                 }
             },
         );
@@ -1134,23 +767,45 @@ impl IntegrationsPage {
     fn load_tools(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let id = id.to_owned();
         if !self.loading_tools.insert(id.clone()) {
+            // Nova leitura pedida após mudança de política: reexecuta assim que o GET em voo voltar.
+            self.pending_tools_reload.insert(id);
             return;
         }
-        let (api, path, seq) = (self.api.clone(), id.clone(), self.seq);
+        self.tools_errors.remove(&id);
+        let seq = self.next_tools_seq(&id);
+        let epoch = self.tools_epoch;
+        let (api, path) = (self.api.clone(), id.clone());
         run(
             &self.runtime,
             async move { api.server_read(&["integrations", &path, "tools"], &[], READ_SECONDS).await },
             window,
             cx,
-            move |this: &mut Self, result, _, _| {
+            move |this: &mut Self, result, window, cx| {
                 this.loading_tools.remove(&id);
-                if seq != this.seq {
+                if epoch != this.tools_epoch {
+                    this.pending_tools_reload.remove(&id);
                     return;
                 }
-                if let Ok(value) = result
-                    && let Ok(parsed) = serde_json::from_value::<ToolsResponse>(value)
-                {
-                    this.tools.insert(id, parsed.tools);
+                if this.pending_tools_reload.remove(&id) {
+                    this.load_tools(&id, window, cx);
+                    return;
+                }
+                if seq != this.current_tools_seq(&id) {
+                    return;
+                }
+                match result {
+                    Ok(value) => match serde_json::from_value::<ToolsResponse>(value) {
+                        Ok(parsed) => {
+                            this.tools_errors.remove(&id);
+                            this.tools.insert(id, parsed.tools);
+                        }
+                        Err(_) => {
+                            this.tools_errors.insert(id, tr("invalid_response"));
+                        }
+                    },
+                    Err(error) => {
+                        this.tools_errors.insert(id, integrations_failure(&error));
+                    }
                 }
             },
         );
@@ -1194,8 +849,15 @@ impl IntegrationsPage {
                 this.busy.remove(&id);
                 match result {
                     Ok(_) => {
+                        this.seq += 1;
                         this.open_tools.remove(&id);
                         this.tools.remove(&id);
+                        this.tools_errors.remove(&id);
+                        this.pending_tools_reload.remove(&id);
+                        this.bump_tools_seq(&id);
+                        if this.handoff.as_ref().is_some_and(|h| h.integration_id == id) {
+                            this.handoff = None;
+                        }
                         if let Some(Ok(list)) = this.items.as_mut() {
                             list.retain(|item| item.id != id);
                         }
@@ -1517,6 +1179,30 @@ impl IntegrationsPage {
         let busy = self.busy.contains(&id);
         let body = if loading && !self.tools.contains_key(&id) {
             muted(tr_shared("integrations_loading", &[])).into_any_element()
+        } else if let Some(reason) = self.tools_errors.get(&id) {
+            let retry_id = id.clone();
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(alert(
+                    SharedString::from(format!("integrations-tools-err-{id}")),
+                    tr_shared("integrations_tools_load_error", &[("reason", reason)]),
+                ))
+                .child(
+                    div().child(
+                        Button::new(SharedString::from(format!("integrations-tools-retry-{id}")))
+                            .outline()
+                            .xsmall()
+                            .disabled(loading || busy)
+                            .label(tr_shared("integrations_retry", &[]))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.load_tools(&retry_id, window, cx);
+                                cx.notify();
+                            })),
+                    ),
+                )
+                .into_any_element()
         } else {
             match self.tools.get(&id) {
                 None => muted(tr_shared("integrations_tools_empty", &[])).into_any_element(),
@@ -1735,6 +1421,399 @@ impl IntegrationsPage {
     }
 }
 
+impl InitialFormValues {
+    fn from_mode(mode: FormMode, existing: &[IntegrationItem]) -> Self {
+        match mode {
+            FormMode::Preset(p) => {
+                let auth_kind = match p.auth_kind {
+                    PresetAuthKind::OAuthDcr | PresetAuthKind::OAuthDcrOrBearer => {
+                        AuthKindChoice::OAuthDcr
+                    }
+                    PresetAuthKind::OAuthManualClient => AuthKindChoice::OAuthManualClient,
+                };
+                Self {
+                    is_edit: false,
+                    id: suggest_preset_id(&p.id, existing),
+                    name: p.name,
+                    preset: Some(p.id),
+                    url_editable: p.url_editable,
+                    preset_auth: Some(p.auth_kind),
+                    setup_guide: p.setup_guide,
+                    enabled: true,
+                    transport: TransportKind::RemoteHttp,
+                    url: p.url,
+                    existing_headers: Vec::new(),
+                    command: String::new(),
+                    cwd: String::new(),
+                    existing_env_keys: Vec::new(),
+                    auth_kind,
+                    client_id: String::new(),
+                    scopes: p.default_scopes.join(", "),
+                    policy: PermissionPolicy::ReadFreeAskWrite,
+                    pinned: false,
+                    projects: String::new(),
+                    original_command: None,
+                    original_transport: None,
+                }
+            }
+            FormMode::Custom => Self {
+                is_edit: false,
+                id: String::new(),
+                name: String::new(),
+                preset: None,
+                url_editable: true,
+                preset_auth: None,
+                setup_guide: None,
+                enabled: true,
+                transport: TransportKind::RemoteHttp,
+                url: String::new(),
+                existing_headers: Vec::new(),
+                command: String::new(),
+                cwd: String::new(),
+                existing_env_keys: Vec::new(),
+                auth_kind: AuthKindChoice::OAuthDcr,
+                client_id: String::new(),
+                scopes: String::new(),
+                policy: PermissionPolicy::ReadFreeAskWrite,
+                pinned: false,
+                projects: String::new(),
+                original_command: None,
+                original_transport: None,
+            },
+            FormMode::Edit(item, preset_meta) => {
+                let original_transport = Some(item.transport.clone());
+                let (transport, url, existing_headers, command, cwd, existing_env_keys, original_command) =
+                    match &item.transport {
+                        Transport::RemoteHttp { url, header_names } => (
+                            TransportKind::RemoteHttp,
+                            url.clone(),
+                            header_names.clone(),
+                            String::new(),
+                            String::new(),
+                            Vec::new(),
+                            None,
+                        ),
+                        Transport::LocalStdio {
+                            command,
+                            cwd,
+                            env_keys,
+                        } => {
+                            let formatted = format_command_for_input(command);
+                            (
+                                TransportKind::LocalStdio,
+                                String::new(),
+                                Vec::new(),
+                                formatted.clone(),
+                                cwd.clone().unwrap_or_default(),
+                                env_keys.clone(),
+                                Some((formatted, command.clone())),
+                            )
+                        }
+                    };
+                let (auth_kind, client_id, scopes) = match &item.auth {
+                    AuthConfig::None => (AuthKindChoice::None, String::new(), String::new()),
+                    AuthConfig::Bearer => (AuthKindChoice::Bearer, String::new(), String::new()),
+                    AuthConfig::OAuthDcr => (AuthKindChoice::OAuthDcr, String::new(), String::new()),
+                    AuthConfig::OAuthManualClient { client_id, scopes } => (
+                        AuthKindChoice::OAuthManualClient,
+                        client_id.clone(),
+                        scopes.join(", "),
+                    ),
+                };
+                Self {
+                    is_edit: true,
+                    id: item.id,
+                    name: item.name,
+                    preset: item.preset,
+                    url_editable: preset_meta.as_ref().is_none_or(|p| p.url_editable),
+                    preset_auth: preset_meta.as_ref().map(|p| p.auth_kind),
+                    setup_guide: preset_meta.and_then(|p| p.setup_guide),
+                    enabled: item.enabled,
+                    transport,
+                    url,
+                    existing_headers,
+                    command,
+                    cwd,
+                    existing_env_keys,
+                    auth_kind,
+                    client_id,
+                    scopes,
+                    policy: item.policy,
+                    pinned: item.pinned,
+                    projects: item.projects.join("\n"),
+                    original_command,
+                    original_transport,
+                }
+            }
+        }
+    }
+}
+
+impl IntegrationForm {
+    fn new(
+        api: Api,
+        runtime: Arc<Runtime>,
+        page: WeakEntity<IntegrationsPage>,
+        mode: FormMode,
+        existing: &[IntegrationItem],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let initial = InitialFormValues::from_mode(mode, existing);
+        let input = |val: String, hint: String, window: &mut Window, cx: &mut Context<Self>| {
+            cx.new(|cx| InputState::new(window, cx).default_value(val).placeholder(hint))
+        };
+        let masked_input = |hint: String, window: &mut Window, cx: &mut Context<Self>| {
+            cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(hint))
+        };
+        let area = |val: String, hint: String, rows: usize, window: &mut Window, cx: &mut Context<Self>| {
+            cx.new(|cx| {
+                TextareaState::new(window, cx)
+                    .rows(rows)
+                    .default_value(val)
+                    .placeholder(hint)
+            })
+        };
+
+        let secret_hint = if initial.is_edit {
+            tr_shared("integrations_secret_kept_hint", &[])
+        } else {
+            String::new()
+        };
+
+        let id_input = input(initial.id, tr_shared("integrations_field_id_hint", &[]), window, cx);
+        let name_input = input(
+            initial.name,
+            tr_shared("integrations_field_name_placeholder", &[]),
+            window,
+            cx,
+        );
+        let url_input = input(initial.url, "https://...".into(), window, cx);
+        let headers_input = area(String::new(), secret_hint.clone(), 2, window, cx);
+        let command_input = area(
+            initial.command,
+            tr_shared("integrations_field_command_hint", &[]),
+            3,
+            window,
+            cx,
+        );
+        let cwd_input = input(initial.cwd, tr_shared("integrations_optional", &[]), window, cx);
+        let env_input = area(
+            String::new(),
+            if initial.is_edit {
+                secret_hint.clone()
+            } else {
+                tr_shared("integrations_field_env_hint", &[])
+            },
+            3,
+            window,
+            cx,
+        );
+        let client_id_input = input(initial.client_id, String::new(), window, cx);
+        let client_secret_input = masked_input(secret_hint.clone(), window, cx);
+        let scopes_input = input(initial.scopes, tr_shared("integrations_optional", &[]), window, cx);
+        let bearer_input = masked_input(secret_hint, window, cx);
+        let projects_input = area(
+            initial.projects,
+            tr_shared("integrations_field_projects_hint", &[]),
+            2,
+            window,
+            cx,
+        );
+
+        Self {
+            api,
+            runtime,
+            page,
+            is_edit: initial.is_edit,
+            preset: initial.preset,
+            url_editable: initial.url_editable,
+            preset_auth: initial.preset_auth,
+            setup_guide: initial.setup_guide,
+            enabled: initial.enabled,
+            transport: initial.transport,
+            auth_kind: initial.auth_kind,
+            policy: initial.policy,
+            pinned: initial.pinned,
+            id_input,
+            name_input,
+            url_input,
+            existing_headers: initial.existing_headers,
+            removed_headers: BTreeSet::new(),
+            headers_input,
+            command_input,
+            cwd_input,
+            existing_env_keys: initial.existing_env_keys,
+            removed_env_keys: BTreeSet::new(),
+            env_input,
+            client_id_input,
+            client_secret_input,
+            scopes_input,
+            bearer_input,
+            projects_input,
+            original_command: initial.original_command,
+            original_transport: initial.original_transport,
+            saving: false,
+            error: None,
+        }
+    }
+
+    fn initial_focus(&self) -> &Entity<InputState> {
+        if self.is_edit {
+            &self.name_input
+        } else {
+            &self.id_input
+        }
+    }
+
+    fn draft(&self, cx: &App) -> FormDraft {
+        FormDraft {
+            is_edit: self.is_edit,
+            id: self.id_input.read(cx).value().to_string(),
+            name: self.name_input.read(cx).value().to_string(),
+            preset: self.preset.clone(),
+            enabled: self.enabled,
+            transport: self.transport,
+            url: self.url_input.read(cx).value().to_string(),
+            existing_headers: self.existing_headers.clone(),
+            removed_headers: self.removed_headers.clone(),
+            new_headers_raw: self.headers_input.read(cx).value().to_string(),
+            command_raw: self.command_input.read(cx).value().to_string(),
+            cwd: self.cwd_input.read(cx).value().to_string(),
+            existing_env_keys: self.existing_env_keys.clone(),
+            removed_env_keys: self.removed_env_keys.clone(),
+            new_env_raw: self.env_input.read(cx).value().to_string(),
+            auth_kind: self.auth_kind,
+            client_id: self.client_id_input.read(cx).value().to_string(),
+            client_secret: self.client_secret_input.read(cx).value().to_string(),
+            scopes_raw: self.scopes_input.read(cx).value().to_string(),
+            bearer_token: self.bearer_input.read(cx).value().to_string(),
+            policy: self.policy,
+            pinned: self.pinned,
+            projects_raw: self.projects_input.read(cx).value().to_string(),
+            original_command: self.original_command.clone(),
+            original_transport: self.original_transport.clone(),
+        }
+    }
+
+    fn clear_secrets(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.bearer_input.update(cx, |input, cx| input.set_value("", window, cx));
+        self.client_secret_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.headers_input.update(cx, |input, cx| input.set_value("", window, cx));
+        self.env_input.update(cx, |input, cx| input.set_value("", window, cx));
+    }
+
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
+        let draft = self.draft(cx);
+        let payload = if self.is_edit {
+            build_patch_body(&draft)
+        } else {
+            build_create_body(&draft)
+        };
+        let body = match payload {
+            Ok(body) => body,
+            Err(err) => {
+                self.error = Some(err);
+                cx.notify();
+                return;
+            }
+        };
+
+        (self.saving, self.error) = (true, None);
+        let (api, is_edit, id) = (self.api.clone(), self.is_edit, draft.id.trim().to_owned());
+        run(
+            &self.runtime,
+            async move {
+                if is_edit {
+                    api.server_send(reqwest::Method::PATCH, &["integrations", &id], Some(body), MUTATION_SECONDS)
+                        .await
+                } else {
+                    api.server_send(reqwest::Method::POST, &["integrations"], Some(body), MUTATION_SECONDS)
+                        .await
+                }
+            },
+            window,
+            cx,
+            move |this: &mut Self, result, window, cx| {
+                this.saving = false;
+                match result {
+                    Ok(value) => {
+                        this.clear_secrets(window, cx);
+                        if let Some(item) = value
+                            .get("integration")
+                            .cloned()
+                            .and_then(|v| serde_json::from_value::<IntegrationItem>(v).ok())
+                        {
+                            let created = !this.is_edit;
+                            let _ = this.page.update(cx, |page, cx| {
+                                page.saved(created, item, window, cx);
+                            });
+                        }
+                        window.close_dialog(cx);
+                    }
+                    Err(error) => this.error = Some(integrations_failure(&error)),
+                }
+            },
+        );
+        cx.notify();
+    }
+
+    fn auth_options(&self) -> Vec<AuthKindChoice> {
+        if self.transport == TransportKind::LocalStdio {
+            return Vec::new();
+        }
+        match self.preset_auth {
+            Some(PresetAuthKind::OAuthDcr) => vec![AuthKindChoice::OAuthDcr],
+            Some(PresetAuthKind::OAuthManualClient) => vec![AuthKindChoice::OAuthManualClient],
+            Some(PresetAuthKind::OAuthDcrOrBearer) => {
+                vec![AuthKindChoice::OAuthDcr, AuthKindChoice::Bearer]
+            }
+            None => vec![
+                AuthKindChoice::OAuthDcr,
+                AuthKindChoice::OAuthManualClient,
+                AuthKindChoice::Bearer,
+                AuthKindChoice::None,
+            ],
+        }
+    }
+}
+
+impl Hangar {
+    /// A página é refeita a cada abertura e a cada conexão: nenhum rascunho ou dado de formulário sobrevive à saída.
+    pub(super) fn render_integrations(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(api) = self.api.clone() else {
+            return div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_xl()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(tr_shared("integrations_title", &[])),
+                )
+                .child(div().mt(px(6.)).text_color(theme::muted()).child(tr("settings_offline")))
+                .into_any_element();
+        };
+        if self
+            .integrations_page
+            .as_ref()
+            .is_none_or(|(connection, _)| *connection != self.connection)
+        {
+            let (runtime, hangar) = (self.runtime.clone(), cx.entity().downgrade());
+            let page = cx.new(|cx| IntegrationsPage::new(api, runtime, hangar, window, cx));
+            self.integrations_page = Some((self.connection, page));
+        }
+        self.integrations_page
+            .as_ref()
+            .map(|(_, page)| page.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element())
+    }
+}
+
 impl Render for IntegrationsPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let custom_btn = self.mark_section(
@@ -1883,408 +1962,6 @@ impl Render for IntegrationsPage {
 
         page.child(self.render_configured(items, cx))
             .child(self.render_catalog(items, cx))
-    }
-}
-
-struct IntegrationForm {
-    api: Api,
-    runtime: Arc<Runtime>,
-    page: WeakEntity<IntegrationsPage>,
-    is_edit: bool,
-    preset: Option<String>,
-    url_editable: bool,
-    preset_auth: Option<PresetAuthKind>,
-    setup_guide: Option<SetupGuide>,
-    enabled: bool,
-    transport: TransportKind,
-    auth_kind: AuthKindChoice,
-    policy: PermissionPolicy,
-    pinned: bool,
-    id_input: Entity<InputState>,
-    name_input: Entity<InputState>,
-    url_input: Entity<InputState>,
-    existing_headers: Vec<String>,
-    removed_headers: BTreeSet<String>,
-    headers_input: Entity<TextareaState>,
-    command_input: Entity<TextareaState>,
-    cwd_input: Entity<InputState>,
-    existing_env_keys: Vec<String>,
-    removed_env_keys: BTreeSet<String>,
-    env_input: Entity<TextareaState>,
-    client_id_input: Entity<InputState>,
-    client_secret_input: Entity<InputState>,
-    scopes_input: Entity<InputState>,
-    bearer_input: Entity<InputState>,
-    projects_input: Entity<TextareaState>,
-    saving: bool,
-    error: Option<String>,
-}
-
-struct InitialFormValues {
-    is_edit: bool,
-    id: String,
-    name: String,
-    preset: Option<String>,
-    url_editable: bool,
-    preset_auth: Option<PresetAuthKind>,
-    setup_guide: Option<SetupGuide>,
-    enabled: bool,
-    transport: TransportKind,
-    url: String,
-    existing_headers: Vec<String>,
-    command: String,
-    cwd: String,
-    existing_env_keys: Vec<String>,
-    auth_kind: AuthKindChoice,
-    client_id: String,
-    scopes: String,
-    policy: PermissionPolicy,
-    pinned: bool,
-    projects: String,
-}
-
-impl InitialFormValues {
-    fn from_mode(mode: FormMode, existing: &[IntegrationItem]) -> Self {
-        match mode {
-            FormMode::Preset(p) => {
-                let auth_kind = match p.auth_kind {
-                    PresetAuthKind::OAuthDcr | PresetAuthKind::OAuthDcrOrBearer => {
-                        AuthKindChoice::OAuthDcr
-                    }
-                    PresetAuthKind::OAuthManualClient => AuthKindChoice::OAuthManualClient,
-                };
-                Self {
-                    is_edit: false,
-                    id: suggest_preset_id(&p.id, existing),
-                    name: p.name,
-                    preset: Some(p.id),
-                    url_editable: p.url_editable,
-                    preset_auth: Some(p.auth_kind),
-                    setup_guide: p.setup_guide,
-                    enabled: true,
-                    transport: TransportKind::RemoteHttp,
-                    url: p.url,
-                    existing_headers: Vec::new(),
-                    command: String::new(),
-                    cwd: String::new(),
-                    existing_env_keys: Vec::new(),
-                    auth_kind,
-                    client_id: String::new(),
-                    scopes: p.default_scopes.join(", "),
-                    policy: PermissionPolicy::ReadFreeAskWrite,
-                    pinned: false,
-                    projects: String::new(),
-                }
-            }
-            FormMode::Custom => Self {
-                is_edit: false,
-                id: String::new(),
-                name: String::new(),
-                preset: None,
-                url_editable: true,
-                preset_auth: None,
-                setup_guide: None,
-                enabled: true,
-                transport: TransportKind::RemoteHttp,
-                url: String::new(),
-                existing_headers: Vec::new(),
-                command: String::new(),
-                cwd: String::new(),
-                existing_env_keys: Vec::new(),
-                auth_kind: AuthKindChoice::OAuthDcr,
-                client_id: String::new(),
-                scopes: String::new(),
-                policy: PermissionPolicy::ReadFreeAskWrite,
-                pinned: false,
-                projects: String::new(),
-            },
-            FormMode::Edit(item, preset_meta) => {
-                let (transport, url, existing_headers, command, cwd, existing_env_keys) =
-                    match &item.transport {
-                        Transport::RemoteHttp { url, header_names } => (
-                            TransportKind::RemoteHttp,
-                            url.clone(),
-                            header_names.clone(),
-                            String::new(),
-                            String::new(),
-                            Vec::new(),
-                        ),
-                        Transport::LocalStdio {
-                            command,
-                            cwd,
-                            env_keys,
-                        } => (
-                            TransportKind::LocalStdio,
-                            String::new(),
-                            Vec::new(),
-                            format_command_for_input(command),
-                            cwd.clone().unwrap_or_default(),
-                            env_keys.clone(),
-                        ),
-                    };
-                let (auth_kind, client_id, scopes) = match &item.auth {
-                    AuthConfig::None => (AuthKindChoice::None, String::new(), String::new()),
-                    AuthConfig::Bearer => (AuthKindChoice::Bearer, String::new(), String::new()),
-                    AuthConfig::OAuthDcr => (AuthKindChoice::OAuthDcr, String::new(), String::new()),
-                    AuthConfig::OAuthManualClient { client_id, scopes } => (
-                        AuthKindChoice::OAuthManualClient,
-                        client_id.clone(),
-                        scopes.join(", "),
-                    ),
-                };
-                Self {
-                    is_edit: true,
-                    id: item.id,
-                    name: item.name,
-                    preset: item.preset,
-                    url_editable: preset_meta.as_ref().is_none_or(|p| p.url_editable),
-                    preset_auth: preset_meta.as_ref().map(|p| p.auth_kind),
-                    setup_guide: preset_meta.and_then(|p| p.setup_guide),
-                    enabled: item.enabled,
-                    transport,
-                    url,
-                    existing_headers,
-                    command,
-                    cwd,
-                    existing_env_keys,
-                    auth_kind,
-                    client_id,
-                    scopes,
-                    policy: item.policy,
-                    pinned: item.pinned,
-                    projects: item.projects.join("\n"),
-                }
-            }
-        }
-    }
-}
-
-impl IntegrationForm {
-    fn new(
-        api: Api,
-        runtime: Arc<Runtime>,
-        page: WeakEntity<IntegrationsPage>,
-        mode: FormMode,
-        existing: &[IntegrationItem],
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let initial = InitialFormValues::from_mode(mode, existing);
-        let input = |val: String, hint: String, window: &mut Window, cx: &mut Context<Self>| {
-            cx.new(|cx| InputState::new(window, cx).default_value(val).placeholder(hint))
-        };
-        let masked_input = |hint: String, window: &mut Window, cx: &mut Context<Self>| {
-            cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(hint))
-        };
-        let area = |val: String, hint: String, rows: usize, window: &mut Window, cx: &mut Context<Self>| {
-            cx.new(|cx| {
-                TextareaState::new(window, cx)
-                    .rows(rows)
-                    .default_value(val)
-                    .placeholder(hint)
-            })
-        };
-
-        let secret_hint = if initial.is_edit {
-            tr_shared("integrations_secret_kept_hint", &[])
-        } else {
-            String::new()
-        };
-
-        let id_input = input(initial.id, tr_shared("integrations_field_id_hint", &[]), window, cx);
-        let name_input = input(
-            initial.name,
-            tr_shared("integrations_field_name_placeholder", &[]),
-            window,
-            cx,
-        );
-        let url_input = input(initial.url, "https://...".into(), window, cx);
-        let headers_input = area(String::new(), secret_hint.clone(), 2, window, cx);
-        let command_input = area(
-            initial.command,
-            tr_shared("integrations_field_command_hint", &[]),
-            3,
-            window,
-            cx,
-        );
-        let cwd_input = input(initial.cwd, tr_shared("integrations_optional", &[]), window, cx);
-        let env_input = area(
-            String::new(),
-            if initial.is_edit {
-                secret_hint.clone()
-            } else {
-                tr_shared("integrations_field_env_hint", &[])
-            },
-            3,
-            window,
-            cx,
-        );
-        let client_id_input = input(initial.client_id, String::new(), window, cx);
-        let client_secret_input = masked_input(secret_hint.clone(), window, cx);
-        let scopes_input = input(initial.scopes, tr_shared("integrations_optional", &[]), window, cx);
-        let bearer_input = masked_input(secret_hint, window, cx);
-        let projects_input = area(
-            initial.projects,
-            tr_shared("integrations_field_projects_hint", &[]),
-            2,
-            window,
-            cx,
-        );
-
-        Self {
-            api,
-            runtime,
-            page,
-            is_edit: initial.is_edit,
-            preset: initial.preset,
-            url_editable: initial.url_editable,
-            preset_auth: initial.preset_auth,
-            setup_guide: initial.setup_guide,
-            enabled: initial.enabled,
-            transport: initial.transport,
-            auth_kind: initial.auth_kind,
-            policy: initial.policy,
-            pinned: initial.pinned,
-            id_input,
-            name_input,
-            url_input,
-            existing_headers: initial.existing_headers,
-            removed_headers: BTreeSet::new(),
-            headers_input,
-            command_input,
-            cwd_input,
-            existing_env_keys: initial.existing_env_keys,
-            removed_env_keys: BTreeSet::new(),
-            env_input,
-            client_id_input,
-            client_secret_input,
-            scopes_input,
-            bearer_input,
-            projects_input,
-            saving: false,
-            error: None,
-        }
-    }
-
-    fn initial_focus(&self) -> &Entity<InputState> {
-        if self.is_edit {
-            &self.name_input
-        } else {
-            &self.id_input
-        }
-    }
-
-    fn draft(&self, cx: &App) -> FormDraft {
-        FormDraft {
-            is_edit: self.is_edit,
-            id: self.id_input.read(cx).value().to_string(),
-            name: self.name_input.read(cx).value().to_string(),
-            preset: self.preset.clone(),
-            enabled: self.enabled,
-            transport: self.transport,
-            url: self.url_input.read(cx).value().to_string(),
-            existing_headers: self.existing_headers.clone(),
-            removed_headers: self.removed_headers.clone(),
-            new_headers_raw: self.headers_input.read(cx).value().to_string(),
-            command_raw: self.command_input.read(cx).value().to_string(),
-            cwd: self.cwd_input.read(cx).value().to_string(),
-            existing_env_keys: self.existing_env_keys.clone(),
-            removed_env_keys: self.removed_env_keys.clone(),
-            new_env_raw: self.env_input.read(cx).value().to_string(),
-            auth_kind: self.auth_kind,
-            client_id: self.client_id_input.read(cx).value().to_string(),
-            client_secret: self.client_secret_input.read(cx).value().to_string(),
-            scopes_raw: self.scopes_input.read(cx).value().to_string(),
-            bearer_token: self.bearer_input.read(cx).value().to_string(),
-            policy: self.policy,
-            pinned: self.pinned,
-            projects_raw: self.projects_input.read(cx).value().to_string(),
-        }
-    }
-
-    fn clear_secrets(&self, window: &mut Window, cx: &mut Context<Self>) {
-        self.bearer_input.update(cx, |input, cx| input.set_value("", window, cx));
-        self.client_secret_input
-            .update(cx, |input, cx| input.set_value("", window, cx));
-        self.headers_input.update(cx, |input, cx| input.set_value("", window, cx));
-        self.env_input.update(cx, |input, cx| input.set_value("", window, cx));
-    }
-
-    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.saving {
-            return;
-        }
-        let draft = self.draft(cx);
-        let payload = if self.is_edit {
-            build_patch_body(&draft)
-        } else {
-            build_create_body(&draft)
-        };
-        let body = match payload {
-            Ok(body) => body,
-            Err(err) => {
-                self.error = Some(err);
-                cx.notify();
-                return;
-            }
-        };
-
-        (self.saving, self.error) = (true, None);
-        let (api, is_edit, id) = (self.api.clone(), self.is_edit, draft.id.trim().to_owned());
-        run(
-            &self.runtime,
-            async move {
-                if is_edit {
-                    api.server_send(reqwest::Method::PATCH, &["integrations", &id], Some(body), MUTATION_SECONDS)
-                        .await
-                } else {
-                    api.server_send(reqwest::Method::POST, &["integrations"], Some(body), MUTATION_SECONDS)
-                        .await
-                }
-            },
-            window,
-            cx,
-            move |this: &mut Self, result, window, cx| {
-                this.saving = false;
-                match result {
-                    Ok(value) => {
-                        this.clear_secrets(window, cx);
-                        if let Some(item) = value
-                            .get("integration")
-                            .cloned()
-                            .and_then(|v| serde_json::from_value::<IntegrationItem>(v).ok())
-                        {
-                            let created = !this.is_edit;
-                            let _ = this.page.update(cx, |page, cx| {
-                                page.saved(created, item, window, cx);
-                            });
-                        }
-                        window.close_dialog(cx);
-                    }
-                    Err(error) => this.error = Some(integrations_failure(&error)),
-                }
-            },
-        );
-        cx.notify();
-    }
-
-    fn auth_options(&self) -> Vec<AuthKindChoice> {
-        if self.transport == TransportKind::LocalStdio {
-            return Vec::new();
-        }
-        match self.preset_auth {
-            Some(PresetAuthKind::OAuthDcr) => vec![AuthKindChoice::OAuthDcr],
-            Some(PresetAuthKind::OAuthManualClient) => vec![AuthKindChoice::OAuthManualClient],
-            Some(PresetAuthKind::OAuthDcrOrBearer) => {
-                vec![AuthKindChoice::OAuthDcr, AuthKindChoice::Bearer]
-            }
-            None => vec![
-                AuthKindChoice::OAuthDcr,
-                AuthKindChoice::OAuthManualClient,
-                AuthKindChoice::Bearer,
-                AuthKindChoice::None,
-            ],
-        }
     }
 }
 
@@ -2719,35 +2396,630 @@ impl Render for IntegrationForm {
     }
 }
 
-impl Hangar {
-    /// A página é refeita a cada abertura e a cada conexão: nenhum rascunho ou dado de formulário sobrevive à saída.
-    pub(super) fn render_integrations(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let Some(api) = self.api.clone() else {
-            return div()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .text_xl()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(tr_shared("integrations_title", &[])),
-                )
-                .child(div().mt(px(6.)).text_color(theme::muted()).child(tr("settings_offline")))
-                .into_any_element();
-        };
-        if self
-            .integrations_page
-            .as_ref()
-            .is_none_or(|(connection, _)| *connection != self.connection)
-        {
-            let (runtime, hangar) = (self.runtime.clone(), cx.entity().downgrade());
-            let page = cx.new(|cx| IntegrationsPage::new(api, runtime, hangar, window, cx));
-            self.integrations_page = Some((self.connection, page));
+/// Traduz códigos de erro HTTP das rotas `/api/integrations/*`.
+pub(super) fn integrations_failure(error: &Failure) -> String {
+    match error.code.as_deref() {
+        Some("auth_required") => tr_shared("integrations_err_auth_required", &[]),
+        Some("auth_expired") => tr_shared("integrations_err_auth_expired", &[]),
+        Some("integration_owner_only") => tr_shared("integrations_err_owner_only", &[]),
+        Some("integration_disabled") => tr_shared("integrations_err_disabled", &[]),
+        Some("integration_already_exists") => tr_shared("integrations_err_already_exists", &[]),
+        Some("integration_secrets_key_lost" | "integration_secrets_unavailable") => {
+            tr_shared("integrations_err_keyring", &[])
         }
-        self.integrations_page
-            .as_ref()
-            .map(|(_, page)| page.clone().into_any_element())
-            .unwrap_or_else(|| div().into_any_element())
+        Some("approval_not_found") => tr_shared("integrations_approval_lost", &[]),
+        Some("approval_conflict") => {
+            let lower = error.detail.to_ascii_lowercase();
+            if lower.contains("atualizado") || lower.contains("stale") {
+                tr_shared("integrations_err_stale", &[])
+            } else {
+                tr_shared("integrations_err_answered", &[])
+            }
+        }
+        _ => Hangar::fetch_failure(error),
+    }
+}
+
+pub(super) fn status_presentation(status: IntegrationStatus) -> (String, Hsla, Hsla) {
+    match status {
+        IntegrationStatus::Ready => (
+            tr_shared("integrations_status_ready", &[]),
+            theme::success_text(),
+            theme::success().opacity(0.14),
+        ),
+        IntegrationStatus::AuthRequired => (
+            tr_shared("integrations_status_auth_required", &[]),
+            theme::warning_text(),
+            theme::warning().opacity(0.14),
+        ),
+        IntegrationStatus::AuthExpired => (
+            tr_shared("integrations_status_auth_expired", &[]),
+            theme::warning_text(),
+            theme::warning().opacity(0.14),
+        ),
+        IntegrationStatus::Disabled => (
+            tr_shared("integrations_status_disabled", &[]),
+            theme::muted(),
+            theme::inset(),
+        ),
+        IntegrationStatus::Error => (
+            tr_shared("integrations_status_error", &[]),
+            theme::danger_text(),
+            theme::danger().opacity(0.14),
+        ),
+    }
+}
+
+pub(super) fn policy_label(policy: PermissionPolicy, short: bool) -> String {
+    match policy {
+        PermissionPolicy::ReadFreeAskWrite => tr_shared(
+            if short {
+                "integrations_policy_read_free_ask_write_short"
+            } else {
+                "integrations_policy_read_free_ask_write"
+            },
+            &[],
+        ),
+        PermissionPolicy::AllowAll => tr_shared("integrations_policy_allow_all", &[]),
+        PermissionPolicy::ReadOnly => tr_shared("integrations_policy_read_only", &[]),
+    }
+}
+
+pub(super) fn tool_access_label(access: ToolAccess) -> (String, Hsla) {
+    match access {
+        ToolAccess::Read => (tr_shared("integrations_tool_access_read", &[]), theme::success_text()),
+        ToolAccess::AllowedAlways => (
+            tr_shared("integrations_tool_access_allowed_always", &[]),
+            theme::accent_text(),
+        ),
+        ToolAccess::AskWrite => (
+            tr_shared("integrations_tool_access_ask_write", &[]),
+            theme::warning_text(),
+        ),
+        ToolAccess::Blocked => (tr_shared("integrations_tool_access_blocked", &[]), theme::danger_text()),
+    }
+}
+
+pub(super) fn auth_choice_label(choice: AuthKindChoice) -> String {
+    match choice {
+        AuthKindChoice::OAuthDcr => tr_shared("integrations_auth_oauth_dcr", &[]),
+        AuthKindChoice::OAuthManualClient => tr_shared("integrations_auth_oauth_manual", &[]),
+        AuthKindChoice::Bearer => tr_shared("integrations_auth_bearer", &[]),
+        AuthKindChoice::None => tr_shared("integrations_auth_none", &[]),
+    }
+}
+
+pub(super) fn preset_auth_summary(kind: PresetAuthKind) -> String {
+    match kind {
+        PresetAuthKind::OAuthDcr => tr_shared("integrations_auth_oauth_dcr", &[]),
+        PresetAuthKind::OAuthManualClient => tr_shared("integrations_auth_oauth_manual", &[]),
+        PresetAuthKind::OAuthDcrOrBearer => format!(
+            "{} · {}",
+            tr_shared("integrations_auth_oauth_dcr", &[]),
+            tr_shared("integrations_auth_bearer", &[])
+        ),
+    }
+}
+
+pub(super) fn suggest_preset_id(preset_id: &str, existing: &[IntegrationItem]) -> String {
+    let taken = |candidate: &str| existing.iter().any(|item| item.id == candidate);
+    if !taken(preset_id) {
+        return preset_id.to_owned();
+    }
+    for suffix in 2..=99 {
+        let candidate = format!("{preset_id}-{suffix}");
+        if !taken(&candidate) {
+            return candidate;
+        }
+    }
+    format!("{preset_id}-new")
+}
+
+pub(super) fn validate_slug(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    !value.is_empty()
+        && value.len() <= MAX_SLUG_BYTES
+        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+pub(super) fn validate_http_url(url: &str) -> bool {
+    if url.is_empty()
+        || url.len() > MAX_URL_BYTES
+        || url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return false;
+    }
+    let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    if let Some(after_open) = authority.strip_prefix('[') {
+        let Some((host, tail)) = after_open.split_once(']') else {
+            return false;
+        };
+        if host.is_empty()
+            || !host.chars().all(|ch| ch.is_ascii_hexdigit() || ch == ':' || ch == '.')
+        {
+            return false;
+        }
+        return valid_optional_port(tail);
+    }
+    match authority.split_once(':') {
+        Some((host, port)) => valid_hostname(host) && valid_port(port),
+        None => valid_hostname(authority),
+    }
+}
+
+pub(super) fn safe_authorize_url(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    validate_http_url(trimmed)
+        .then(|| url::Url::parse(trimmed).ok())
+        .flatten()
+        .filter(|parsed| matches!(parsed.scheme(), "http" | "https"))
+        .map(|parsed| parsed.to_string())
+}
+
+pub(super) fn oauth_start_body(api: &Api) -> Value {
+    if api.is_loopback() {
+        return json!({ "origin_client": "desktop" });
+    }
+    let route = api.route();
+    let public_base_url = (route.scheme() == "https"
+        && route.has_host()
+        && route.username().is_empty()
+        && route.password().is_none())
+    .then(|| format!("{}{}", route.origin().ascii_serialization(), route.path().trim_end_matches('/')));
+    match public_base_url {
+        Some(url) => json!({ "origin_client": "remote_desktop", "public_base_url": url }),
+        None => json!({ "origin_client": "remote_desktop" }),
+    }
+}
+
+/// Divide o comando local em argumentos: várias linhas = 1 argumento por linha; linha única = espaço com aspas simples/duplas.
+pub(super) fn parse_command_args(raw: &str) -> Result<Vec<String>, String> {
+    let lines: Vec<String> = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if lines.len() > 1 {
+        return Ok(lines);
+    }
+    let Some(single) = lines.into_iter().next() else {
+        return Ok(Vec::new());
+    };
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut quote: Option<char> = None;
+    let mut chars = single.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some('"') => match ch {
+                '\\' if matches!(chars.peek(), Some('"' | '\\')) => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                }
+                '"' => quote = None,
+                _ => current.push(ch),
+            },
+            Some(q) => {
+                if ch == q {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None if ch == '\'' || ch == '"' => {
+                quote = Some(ch);
+                in_token = true;
+            }
+            None if ch.is_whitespace() => {
+                if in_token {
+                    args.push(std::mem::take(&mut current));
+                    in_token = false;
+                }
+            }
+            None => {
+                current.push(ch);
+                in_token = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err(tr_shared("integrations_validation_command_quotes", &[]));
+    }
+    if in_token {
+        args.push(current);
+    }
+    Ok(args)
+}
+
+pub(super) fn validate_draft(draft: &FormDraft) -> Result<(), String> {
+    if !draft.is_edit && !validate_slug(draft.id.trim()) {
+        return Err(tr_shared("integrations_validation_id", &[]));
+    }
+    let name = draft.name.trim();
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.contains('\0') {
+        return Err(tr_shared("integrations_validation_name", &[]));
+    }
+    match draft.transport {
+        TransportKind::RemoteHttp => {
+            let url = draft.url.trim();
+            if !validate_http_url(url) {
+                return Err(tr_shared("integrations_validation_url", &[]));
+            }
+            let new_headers = parse_headers_input(&draft.new_headers_raw)?;
+            let has_kept_headers = draft
+                .existing_headers
+                .iter()
+                .any(|header| !draft.removed_headers.contains(header.as_str()));
+            let sends_credentials = draft.auth_kind != AuthKindChoice::None
+                || has_kept_headers
+                || !new_headers.is_empty();
+            if sends_credentials && url.starts_with("http://") && !is_loopback_http_url(url) {
+                return Err(tr_shared("integrations_validation_url_insecure", &[]));
+            }
+        }
+        TransportKind::LocalStdio => {
+            let args = resolve_draft_command(draft)?;
+            if args.is_empty()
+                || args[0].trim().is_empty()
+                || args.iter().any(|part| part.is_empty() || part.contains('\0'))
+            {
+                return Err(tr_shared("integrations_validation_command", &[]));
+            }
+            let _ = parse_env_input(&draft.new_env_raw)?;
+        }
+    }
+    if draft.transport == TransportKind::RemoteHttp
+        && draft.auth_kind == AuthKindChoice::OAuthManualClient
+        && draft.client_id.trim().is_empty()
+    {
+        return Err(tr_shared("integrations_validation_client_id", &[]));
+    }
+    Ok(())
+}
+
+pub(super) fn build_create_body(draft: &FormDraft) -> Result<Value, String> {
+    validate_draft(draft)?;
+    let (transport, secrets) = build_transport_and_secrets(draft)?;
+    let auth = build_auth_config(draft);
+    let mut body = json!({
+        "id": draft.id.trim(),
+        "name": draft.name.trim(),
+        "preset": draft.preset,
+        "enabled": draft.enabled,
+        "transport": transport,
+        "auth": auth,
+        "policy": draft.policy,
+        "pinned": draft.pinned,
+        "projects": parse_projects(&draft.projects_raw),
+    });
+    if !secrets.is_empty() {
+        body["secrets"] = Value::Object(secrets);
+    }
+    Ok(body)
+}
+
+pub(super) fn build_patch_body(draft: &FormDraft) -> Result<Value, String> {
+    validate_draft(draft)?;
+    let (transport, secrets) = build_transport_and_secrets(draft)?;
+    let auth = build_auth_config(draft);
+    let mut body = json!({
+        "name": draft.name.trim(),
+        "enabled": draft.enabled,
+        "auth": auth,
+        "policy": draft.policy,
+        "pinned": draft.pinned,
+        "projects": parse_projects(&draft.projects_raw),
+    });
+    // Só envia `transport` se algo nele mudou; evita reiniciar o cliente MCP ou limpar aprovações sem necessidade.
+    let transport_unchanged = draft
+        .original_transport
+        .as_ref()
+        .is_some_and(|orig| transport_matches(orig, &transport));
+    if !transport_unchanged {
+        body["transport"] = json!(transport);
+    }
+    if !secrets.is_empty() {
+        body["secrets"] = Value::Object(secrets);
+    }
+    Ok(body)
+}
+
+pub(super) fn build_tool_toggle_patch(tool_name: &str, allow: bool) -> Value {
+    if allow {
+        json!({ "add_allowed_tools": [tool_name] })
+    } else {
+        json!({ "remove_allowed_tools": [tool_name] })
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn valid_hostname(host: &str) -> bool {
+    !host.is_empty()
+        && !host.starts_with('.')
+        && !host.ends_with('.')
+        && !host.contains("..")
+        && host.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-')
+}
+
+fn valid_optional_port(tail: &str) -> bool {
+    if tail.is_empty() {
+        return true;
+    }
+    tail.strip_prefix(':').is_some_and(valid_port)
+}
+
+fn valid_port(port: &str) -> bool {
+    !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()) && port.parse::<u16>().is_ok_and(|p| p > 0)
+}
+
+fn is_loopback_http_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    match parsed.host() {
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+fn is_http_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+        )
+}
+
+fn quote_command_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && !arg
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '\'' | '"' | '\\'))
+    {
+        return arg.to_owned();
+    }
+    if !arg.contains('"') && !arg.contains('\\') {
+        return format!("\"{arg}\"");
+    }
+    if !arg.contains('\'') {
+        return format!("'{arg}'");
+    }
+    let escaped = arg.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+fn format_command_for_input(command: &[String]) -> String {
+    command
+        .iter()
+        .map(|part| quote_command_arg(part))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn resolve_draft_command(draft: &FormDraft) -> Result<Vec<String>, String> {
+    if let Some((initial_raw, original)) = &draft.original_command
+        && draft.command_raw == *initial_raw
+    {
+        return Ok(original.clone());
+    }
+    parse_command_args(&draft.command_raw)
+}
+
+fn parse_scopes(raw: &str) -> Vec<String> {
+    raw.split(|ch: char| ch == ',' || ch.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn parse_projects(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn parse_headers_input(raw: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut map = BTreeMap::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = trimmed.split_once(':') else {
+            return Err(tr_shared("integrations_field_headers", &[]));
+        };
+        let raw_name = name.trim();
+        let key = raw_name.to_ascii_lowercase();
+        let val = value.trim();
+        if raw_name.is_empty() {
+            return Err(tr_shared("integrations_field_headers", &[]));
+        }
+        if key.len() > 256
+            || !key.bytes().all(is_http_tchar)
+            || RESERVED_HTTP_HEADERS.contains(&key.as_str())
+        {
+            return Err(tr_shared(
+                "integrations_validation_header_name",
+                &[("name", raw_name)],
+            ));
+        }
+        if val.is_empty() || val.chars().any(|c| c == '\0' || (c.is_control() && c != '\t')) {
+            return Err(tr_shared("integrations_field_headers", &[]));
+        }
+        map.insert(key, val.to_owned());
+    }
+    Ok(map)
+}
+
+fn parse_env_input(raw: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut map = BTreeMap::new();
+    for line in raw.lines() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(tr_shared("integrations_field_env", &[]));
+        };
+        let key = key.trim();
+        if key.is_empty()
+            || key.len() > 256
+            || key.contains('=')
+            || key.chars().any(|c| c.is_whitespace() || c.is_control())
+            || value.contains('\0')
+        {
+            return Err(tr_shared("integrations_field_env", &[]));
+        }
+        map.insert(key.to_owned(), value.to_owned());
+    }
+    Ok(map)
+}
+
+fn transport_matches(a: &Transport, b: &Transport) -> bool {
+    match (a, b) {
+        (
+            Transport::RemoteHttp {
+                url: url_a,
+                header_names: hdr_a,
+            },
+            Transport::RemoteHttp {
+                url: url_b,
+                header_names: hdr_b,
+            },
+        ) => {
+            let set_a: BTreeSet<String> = hdr_a.iter().map(|h| h.to_ascii_lowercase()).collect();
+            let set_b: BTreeSet<String> = hdr_b.iter().map(|h| h.to_ascii_lowercase()).collect();
+            url_a.trim() == url_b.trim() && set_a == set_b
+        }
+        (
+            Transport::LocalStdio {
+                command: cmd_a,
+                cwd: cwd_a,
+                env_keys: env_a,
+            },
+            Transport::LocalStdio {
+                command: cmd_b,
+                cwd: cwd_b,
+                env_keys: env_b,
+            },
+        ) => {
+            fn norm_cwd(c: &Option<String>) -> Option<&str> {
+                c.as_deref().map(str::trim).filter(|s| !s.is_empty())
+            }
+            let set_a: BTreeSet<&str> = env_a.iter().map(String::as_str).collect();
+            let set_b: BTreeSet<&str> = env_b.iter().map(String::as_str).collect();
+            cmd_a == cmd_b && norm_cwd(cwd_a) == norm_cwd(cwd_b) && set_a == set_b
+        }
+        _ => false,
+    }
+}
+
+fn build_transport_and_secrets(
+    draft: &FormDraft,
+) -> Result<(Transport, serde_json::Map<String, Value>), String> {
+    let mut secrets = serde_json::Map::new();
+    let transport = match draft.transport {
+        TransportKind::RemoteHttp => {
+            let new_headers = parse_headers_input(&draft.new_headers_raw)?;
+            let mut header_names: BTreeSet<String> = draft
+                .existing_headers
+                .iter()
+                .filter(|name| !draft.removed_headers.contains(name.as_str()))
+                .cloned()
+                .collect();
+            let mut headers_patch = serde_json::Map::new();
+            for removed in &draft.removed_headers {
+                headers_patch.insert(removed.clone(), Value::Null);
+            }
+            for (k, v) in new_headers {
+                header_names.insert(k.clone());
+                headers_patch.insert(k, Value::String(v));
+            }
+            if !headers_patch.is_empty() {
+                secrets.insert("headers".into(), Value::Object(headers_patch));
+            }
+            Transport::RemoteHttp {
+                url: draft.url.trim().to_owned(),
+                header_names: header_names.into_iter().collect(),
+            }
+        }
+        TransportKind::LocalStdio => {
+            let new_env = parse_env_input(&draft.new_env_raw)?;
+            let mut env_keys: BTreeSet<String> = draft
+                .existing_env_keys
+                .iter()
+                .filter(|key| !draft.removed_env_keys.contains(key.as_str()))
+                .cloned()
+                .collect();
+            let mut env_patch = serde_json::Map::new();
+            for removed in &draft.removed_env_keys {
+                env_patch.insert(removed.clone(), Value::Null);
+            }
+            for (k, v) in new_env {
+                env_keys.insert(k.clone());
+                env_patch.insert(k, Value::String(v));
+            }
+            if !env_patch.is_empty() {
+                secrets.insert("env".into(), Value::Object(env_patch));
+            }
+            let cwd = draft.cwd.trim();
+            Transport::LocalStdio {
+                command: resolve_draft_command(draft)?,
+                cwd: (!cwd.is_empty()).then(|| cwd.to_owned()),
+                env_keys: env_keys.into_iter().collect(),
+            }
+        }
+    };
+
+    match draft.auth_kind {
+        AuthKindChoice::Bearer if draft.transport == TransportKind::RemoteHttp => {
+            let tok = draft.bearer_token.trim();
+            if !tok.is_empty() {
+                secrets.insert("bearer_token".into(), Value::String(tok.to_owned()));
+            }
+        }
+        AuthKindChoice::OAuthManualClient if draft.transport == TransportKind::RemoteHttp => {
+            let sec = draft.client_secret.trim();
+            if !sec.is_empty() {
+                secrets.insert("oauth_client_secret".into(), Value::String(sec.to_owned()));
+            }
+        }
+        _ => {}
+    }
+
+    Ok((transport, secrets))
+}
+
+fn build_auth_config(draft: &FormDraft) -> AuthConfig {
+    if draft.transport == TransportKind::LocalStdio {
+        return AuthConfig::None;
+    }
+    match draft.auth_kind {
+        AuthKindChoice::None => AuthConfig::None,
+        AuthKindChoice::Bearer => AuthConfig::Bearer,
+        AuthKindChoice::OAuthDcr => AuthConfig::OAuthDcr,
+        AuthKindChoice::OAuthManualClient => AuthConfig::OAuthManualClient {
+            client_id: draft.client_id.trim().to_owned(),
+            scopes: parse_scopes(&draft.scopes_raw),
+        },
     }
 }
 
@@ -2781,6 +3053,8 @@ mod tests {
             policy: PermissionPolicy::ReadFreeAskWrite,
             pinned: true,
             projects_raw: "/home/user/proj-a\n/home/user/proj-b".into(),
+            original_command: None,
+            original_transport: None,
         }
     }
 
@@ -2800,12 +3074,20 @@ mod tests {
         assert!(!validate_http_url("not a url"));
 
         assert_eq!(
-            parse_command_args("npx -y @pkg/mcp-server \"/tmp/my dir\""),
+            parse_command_args("npx -y @pkg/mcp-server \"/tmp/my dir\"").unwrap(),
             vec!["npx", "-y", "@pkg/mcp-server", "/tmp/my dir"]
         );
         assert_eq!(
-            parse_command_args("node\n/opt/mcp/server.js\n--port\n3000"),
+            parse_command_args("node\n/opt/mcp/server.js\n--port\n3000").unwrap(),
             vec!["node", "/opt/mcp/server.js", "--port", "3000"]
+        );
+        assert_eq!(
+            parse_command_args("npx \"unclosed"),
+            Err(tr_shared("integrations_validation_command_quotes", &[]))
+        );
+        assert_eq!(
+            parse_command_args("npx 'unclosed"),
+            Err(tr_shared("integrations_validation_command_quotes", &[]))
         );
 
         let mut bad_slug = sample_draft();
@@ -2826,6 +3108,83 @@ mod tests {
         local_empty.auth_kind = AuthKindChoice::None;
         local_empty.command_raw = "   ".into();
         assert!(validate_draft(&local_empty).is_err());
+    }
+
+    #[test]
+    fn command_formatting_round_trips_spaces_quotes_and_backslashes() {
+        for command in [
+            vec!["/opt/My Tools/server".to_owned()],
+            vec![
+                "node".to_owned(),
+                "/opt/My Tools/server.js".to_owned(),
+                "--label".to_owned(),
+                "a \"b\" and 'c' \\ d".to_owned(),
+            ],
+            vec![
+                "C:\\Program Files\\MCP\\server.exe".to_owned(),
+                "--dir".to_owned(),
+                "C:\\Users\\Alice".to_owned(),
+            ],
+        ] {
+            let formatted = format_command_for_input(&command);
+            let reparsed = parse_command_args(&formatted).expect("comando formatado válido");
+            assert_eq!(reparsed, command);
+        }
+    }
+
+    #[test]
+    fn env_and_header_parsers_and_url_security_match_server_rules() {
+        let env = parse_env_input("  \n  LABEL =production \r\nFOO= bar  ").unwrap();
+        assert_eq!(env.get("LABEL").map(String::as_str), Some("production "));
+        assert_eq!(env.get("FOO").map(String::as_str), Some(" bar  "));
+
+        assert_eq!(
+            parse_headers_input("X(Key): secret"),
+            Err(tr_shared("integrations_validation_header_name", &[("name", "X(Key)")]))
+        );
+        assert_eq!(
+            parse_headers_input("Authorization: Bearer abc"),
+            Err(tr_shared("integrations_validation_header_name", &[("name", "Authorization")]))
+        );
+        assert_eq!(
+            parse_headers_input("X-Api-Key: secret").unwrap().get("x-api-key").map(String::as_str),
+            Some("secret")
+        );
+
+        let mut insecure_bearer = sample_draft();
+        insecure_bearer.preset = None;
+        insecure_bearer.auth_kind = AuthKindChoice::Bearer;
+        insecure_bearer.url = "http://mcp.example.com/mcp".into();
+        assert_eq!(
+            validate_draft(&insecure_bearer),
+            Err(tr_shared("integrations_validation_url_insecure", &[]))
+        );
+
+        let mut insecure_headers = sample_draft();
+        insecure_headers.preset = None;
+        insecure_headers.auth_kind = AuthKindChoice::None;
+        insecure_headers.url = "http://mcp.example.com/mcp".into();
+        insecure_headers.new_headers_raw = "X-Api-Key: secret".into();
+        assert_eq!(
+            validate_draft(&insecure_headers),
+            Err(tr_shared("integrations_validation_url_insecure", &[]))
+        );
+
+        for loopback in [
+            "http://localhost:8080/mcp",
+            "http://127.0.0.1:8765/mcp",
+            "http://[::1]:8765/mcp",
+        ] {
+            let mut local_http = insecure_bearer.clone();
+            local_http.url = loopback.into();
+            assert!(validate_draft(&local_http).is_ok(), "{loopback} deve aceitar HTTP");
+        }
+
+        let mut open_http = sample_draft();
+        open_http.preset = None;
+        open_http.auth_kind = AuthKindChoice::None;
+        open_http.url = "http://192.168.1.50:3000/mcp".into();
+        assert!(validate_draft(&open_http).is_ok(), "http sem credenciais nem cabeçalhos fica liberado");
     }
 
     #[test]
@@ -2870,6 +3229,83 @@ mod tests {
                 url: "https://gmailmcp.googleapis.com/mcp/v1".into(),
                 header_names: vec!["x-tenant".into()]
             }
+        );
+    }
+
+    #[test]
+    fn edit_patch_omits_unchanged_transport_and_preserves_original_command_on_cwd_or_env_change() {
+        let orig_cmd = vec!["/opt/My Tools/server".to_owned(), "--flag".to_owned()];
+        let item = IntegrationItem {
+            id: "local-mcp".into(),
+            name: "Local MCP".into(),
+            preset: None,
+            enabled: true,
+            transport: Transport::LocalStdio {
+                command: orig_cmd.clone(),
+                cwd: Some("/work/a".into()),
+                env_keys: vec!["API_KEY".into()],
+            },
+            auth: AuthConfig::None,
+            policy: PermissionPolicy::ReadFreeAskWrite,
+            pinned: false,
+            projects: vec![],
+            allowed_tools: BTreeSet::new(),
+            created_at: 1.0,
+            updated_at: 1.0,
+            status: IntegrationStatus::Ready,
+            last_error: None,
+        };
+        let initial = InitialFormValues::from_mode(FormMode::Edit(item, None), &[]);
+        let base_draft = FormDraft {
+            is_edit: initial.is_edit,
+            id: initial.id,
+            name: "Local MCP v2".into(),
+            preset: initial.preset,
+            enabled: initial.enabled,
+            transport: initial.transport,
+            url: initial.url,
+            existing_headers: initial.existing_headers,
+            removed_headers: BTreeSet::new(),
+            new_headers_raw: String::new(),
+            command_raw: initial.command,
+            cwd: initial.cwd,
+            existing_env_keys: initial.existing_env_keys,
+            removed_env_keys: BTreeSet::new(),
+            new_env_raw: String::new(),
+            auth_kind: initial.auth_kind,
+            client_id: initial.client_id,
+            client_secret: String::new(),
+            scopes_raw: initial.scopes,
+            bearer_token: String::new(),
+            policy: initial.policy,
+            pinned: initial.pinned,
+            projects_raw: initial.projects,
+            original_command: initial.original_command,
+            original_transport: initial.original_transport,
+        };
+
+        let no_transport_change = build_patch_body(&base_draft).expect("patch válido");
+        assert!(no_transport_change.get("transport").is_none());
+
+        let mut cwd_change = base_draft.clone();
+        cwd_change.cwd = "/work/b".into();
+        let patch_cwd = build_patch_body(&cwd_change).expect("patch cwd válido");
+        assert_eq!(patch_cwd["transport"]["command"], json!(orig_cmd));
+        assert_eq!(patch_cwd["transport"]["cwd"], "/work/b");
+
+        let mut secret_value_only = base_draft;
+        secret_value_only.new_env_raw = "API_KEY=rotated ".into();
+        let patch_env_secret = build_patch_body(&secret_value_only).expect("patch env válido");
+        assert!(patch_env_secret.get("transport").is_none());
+        assert_eq!(patch_env_secret["secrets"]["env"]["API_KEY"], "rotated ");
+
+        assert_eq!(
+            build_tool_toggle_patch("create_issue", true),
+            json!({ "add_allowed_tools": ["create_issue"] })
+        );
+        assert_eq!(
+            build_tool_toggle_patch("create_issue", false),
+            json!({ "remove_allowed_tools": ["create_issue"] })
         );
     }
 

@@ -108,6 +108,7 @@ pub(super) async fn ensure_unshared(
         None if st.share_unavailable => return Err(messages.failed("estado de compartilhamento indisponível")),
         // Sem configuração de convites não há convite nem par a conferir.
         None => {}
+        Some(share) if share.store.unreadable() => return Err(messages.failed("arquivo de convites ilegível")),
         Some(share) if share.pairs.unreadable() => return Err(messages.failed("arquivo de pares externos ilegível")),
         Some(share) if shared_here(&share.store, &share.pairs, me, link.as_ref()) => {
             return Err(messages.shared_refusal.into());
