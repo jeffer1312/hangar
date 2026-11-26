@@ -213,7 +213,7 @@ impl Hangar {
                 // Sem o cronômetro da conversa aberta: o que o registro não cobriu sai com o fim do turno.
                 if state.state!="working" {
                     self.chat.live_thinking.clear();
-                    if self.chat.preview.vivo {self.chat.clear_preview();self.visible_preview=Preview::default();}
+                    self.chat.drop_unawaited_preview();
                 }
                 self.chat.update_state(state);if self.chat.ask.is_none() {self.ask_form=AskForm::default();}
             }

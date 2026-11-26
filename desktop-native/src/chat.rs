@@ -307,6 +307,11 @@ impl Chat {
         }
     }
 
+    /// Fim do turno sem cronômetro (prévia das abas): sai a prévia do motor que não espera resposta gravada.
+    pub fn drop_unawaited_preview(&mut self) {
+        if self.preview.vivo && !self.preview_ended { self.clear_preview(); }
+    }
+
     pub fn clear_preview(&mut self) {
         self.preview_ended = false;
         self.preview = Preview::default();
@@ -684,6 +689,13 @@ mod tests {
         chat.update_preview(live(""));
         assert!(chat.update_preview(live("Vou")), "depois do fim do bloco, o quadro curto é o bloco seguinte");
         assert_eq!(chat.preview.text, "Vou");
+        chat.drop_unawaited_preview();
+        assert!(chat.preview.text.is_empty(), "bloco sem aviso de fim não espera resposta gravada");
+
+        chat.update_preview(live("Pronto."));
+        chat.update_preview(live(""));
+        chat.drop_unawaited_preview();
+        assert_eq!(chat.preview.text, "Pronto.", "o último bloco espera a resposta gravada");
     }
 
     #[test]
