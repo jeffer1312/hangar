@@ -226,6 +226,19 @@ mod tests {
         assert!(std::net::TcpListener::bind(("0.0.0.0", port)).is_err());
         assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok());
     }
+
+    #[tokio::test]
+    async fn the_public_port_refuses_a_more_specific_address_and_keeps_the_dual_stack_guard() {
+        let any = std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, 0));
+        let socket = hangar_server::routes::listen_socket(any).unwrap();
+        socket.bind(any).unwrap();
+        let public = socket.listen(1024).unwrap();
+        let port = public.local_addr().unwrap().port();
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_err(), "outro programa abriu 127.0.0.1 por cima da porta pública");
+        let _guard = super::dual_stack(port).unwrap();
+        assert!(dual_bind(port).is_err());
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok());
+    }
 }
 
 #[tokio::main]
@@ -295,7 +308,7 @@ async fn run(notifier: hangar_boot::notify::Notifier) {
             tracing::warn!(kind = ?error.kind(), "raiz da instalação não anotada; o comando de terminal instalado não acha o .env");
         }
     }
-    let listener = match tokio::net::TcpListener::bind(cfg.listen).await {
+    let listener = match hangar_server::routes::listen_socket(cfg.listen).and_then(|socket| { socket.bind(cfg.listen)?; socket.listen(1024) }) {
         Ok(l) => l,
         Err(e) => {
             tracing::error!(listen = %cfg.listen, "porta pública indisponível: {e}");

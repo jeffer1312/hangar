@@ -46,6 +46,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   (Node, `python -m http.server`), e quem chega por IPv6 cai nele. Só IPv4 + dual-stack bloqueia os
   dois tipos; quem abre só IPv6 ainda passa. Falha da guarda é aviso no log, nunca queda do servidor.
   Medição em [Porta pública dividida com outro processo](#porta-pública-dividida-com-outro-processo-13102026).
+  A porta pública (o endereço de `CP_LISTEN`, qualquer que seja), a ponte do plugin em `127.0.0.1`, a
+  porta do front, a do convidado e as de loopback do Connect e da prévia abrem com
+  `SO_EXCLUSIVEADDRUSE` (`routes::listen_socket`): sem ele outro programa abre `127.0.0.1` ou o IP da
+  rede no mesmo número e recebe as conexões daquele endereço, a saúde do lançador inclusive. A guarda
+  `[::]` dual-stack fica sem: exclusiva também, ela não abre. Medição em [Programa em `127.0.0.1` por cima da porta pública](#programa-em-127001-por-cima-da-porta-pública-25112026).
 - **Código de retorno no Windows não se lê como falha** (`taskkill` sem processo devolve 128).
   Separe "comando não existe" de "comando falhou"; stderr vem na codepage do console.
 - **Captura avulsa do pane (`state/capture.rs`) decide pela saída, não pelo código.** Saída com
@@ -259,6 +264,42 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **O Supervisor confere se o filho Rust vive por `proc.poll()`, nunca por `psutil` `status()` ou
   `num_threads()`**: no Windows cada uma lista todos os processos da máquina, e a conferência roda a
   toda volta do Supervisor. Medição em [Supervisor confere o filho Rust por `poll()`](#supervisor-confere-o-filho-rust-por-poll-14112026).
+
+## Programa em `127.0.0.1` por cima da porta pública (25/11/2026)
+
+Relatório `efigd7ss` (0.1.0.11593): por volta de 08:34 outro programa passou a
+responder em `127.0.0.1:8765` (GET 404, POST 501, o jeito do `http.server` do Python), enquanto quem
+chegava pela rede ainda caía no Hangar. O lançador leu a saúde como travamento e matou o servidor às
+08:35:59 (`lancador.travado server_hung`); o app ficou recebendo 404/501 até 08:43. Medido na DELPHI-02
+com sockets .NET, o Hangar segurando a porta e outro processo tentando abri-la (`10013` = acesso
+negado, `10048` = em uso):
+
+| Hangar segura | `127.0.0.1` | IP da rede | `[::]` dual-stack | `[::1]` |
+|---|---|---|---|---|
+| `0.0.0.0` + `[::]` dual-stack (antes) | abre | — | 10048 | abre |
+| `0.0.0.0` exclusivo + `[::]` dual-stack | 10013 | 10013 | 10048 | abre |
+
+Os dois exclusivos não servem: o `[::]` do Hangar não abre depois do `0.0.0.0` (10048) e o
+dual-stack de outro processo passa; com o `[::]` exclusivo primeiro, é o `0.0.0.0` que não abre
+(10013). A tabela de 13/10 não tinha a coluna do endereço específico, por isso o exclusivo não mudava
+nada nela. Reabrir o `0.0.0.0` exclusivo logo depois de fechá-lo abriu, com a conexão aceita em
+TIME_WAIT e também com ela ainda aberta.
+
+## Reinício da atualização recusado pela leitura do Windows (25/11/2026)
+
+- **WMI lento** (`dddienpk`, `24exbqad`, uma máquina): toda atualização desde 19/11 voltou atrás com
+  "WMI nao respondeu". O `Get-HangarProcessTable` esperava 5 s pelo Job, que abre um PowerShell novo;
+  o diagnóstico dessa máquina mostra "Preparando módulos para primeiro uso" a cada PowerShell. O prazo
+  passou a 30 s. Causa tirada do relatório, não reproduzida.
+- **PID 0 como dono da porta** (`qw7yzbiy`): a lista de portas deu o System Idle (PID 0) como
+  dono da 8765 com o servidor vivo; o diagnóstico depois da volta dizia "ninguém escutando" com a porta
+  aceitando conexão. O reinício recusava antes de parar qualquer coisa. Na conferência de antes da
+  parada, PID 0 em `0.0.0.0`, `::` ou `127.0.0.1` com a saúde do `hangar-server` respondendo em
+  `127.0.0.1` e um `hangar-server` (ou o Python dele) na lista de parada não conta como outro programa
+  (quem abrisse `127.0.0.1` responderia a saúde no lugar dele; um servidor aberto à mão não seria
+  parado); sem isso, recusa como antes, sem parar nada. Depois da parada PID 0 não segura a porta (quem a
+  segura de fato faz o bind exclusivo do servidor novo falhar, e a espera da versão nova acusa) nem
+  prova a subida, que com só PID 0 na lista depende da saúde.
 
 ## Queda do servidor sem religada no Windows (16/11/2026)
 

@@ -5,7 +5,8 @@ function Get-HangarProcessTable {
             Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate
     }
     try {
-        if (-not (Wait-Job $job -Timeout 5)) { throw 'WMI nao respondeu; nenhuma instancia sera encerrada ou iniciada' }
+        # O Job abre um PowerShell novo, que em maquina lenta gasta segundos preparando modulos antes da consulta.
+        if (-not (Wait-Job $job -Timeout 30)) { throw 'WMI nao respondeu em 30 s; nenhuma instancia sera encerrada ou iniciada' }
         $rows = @(Receive-Job $job -ErrorAction Stop)
         if (-not $rows.Count) { throw 'Tabela de processos vazia; nao e seguro recuperar a tarefa' }
         return $rows
@@ -116,7 +117,8 @@ function Test-HangarHealth([int]$port) {
     } catch { return $false }
 }
 function Test-HangarPortOpen([int]$port) {
-    if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) { return $true }
+    # PID 0 e a leitura errada da lista: so a saude prova a subida.
+    if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Where-Object { [int]$_.OwningProcess -ne 0 }) { return $true }
     return (Test-HangarHealth $port)
 }
 
@@ -201,11 +203,19 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         # Por ultimo: parado o servidor, o lancador sai sozinho; parado o lancador, o Job leva o resto.
         $candidates = @($candidates) + @(Get-HangarBackendLaunchers $rows $candidates $name)
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+        # So o servidor que esta parada derruba pode ser o dono escondido: a saude de um aberto a mao, nao.
+        $servidorNaParada = [bool]@($candidates | Where-Object { $_.Name -match '^(hangar-server|python(?:\d+(?:\.\d+)*)?|uv)\.exe$' }).Count
         foreach ($listener in $listeners) {
+            # O Windows ja deu o PID 0 como dono da porta do servidor vivo: num endereco que o hangar-server
+            # abre, com a saude dele respondendo em 127.0.0.1 e ele na parada, nao e outro programa (quem
+            # abrisse ali responderia a saude no lugar dele).
+            if ([int]$listener.OwningProcess -eq 0 -and $servidorNaParada -and "$($listener.LocalAddress)" -in @('0.0.0.0', '::', '127.0.0.1') -and (Test-HangarHealth $port)) { continue }
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {
                 if (Test-HangarServedFront $rows $name @($listener)) { continue }
                 $quem = Format-HangarPortOwner $rows $listener
-                throw "Porta $port ocupada por outro processo ($quem); $name nao sera reiniciada. Se nao for seu, encerre: Stop-Process -Id $($listener.OwningProcess) -Force"
+                $dica = if ([int]$listener.OwningProcess -eq 0) { 'O Windows nao informa o dono; confira com netstat -ano' }
+                        else { "Se nao for seu, encerre: Stop-Process -Id $($listener.OwningProcess) -Force" }
+                throw "Porta $port ocupada por outro processo ($quem); $name nao sera reiniciada. $dica"
             }
         }
         if ($task.State -eq 'Running' -and -not $candidates.Count) {
@@ -240,7 +250,10 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         }
         $held = @()
         foreach ($attempt in 1..10) {
-            $held = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+            # PID 0 depois da parada e a mesma leitura errada de antes dela: quem segura a porta de fato
+            # faz o bind exclusivo do servidor novo falhar, e a espera da versao nova acusa a falha.
+            $held = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue |
+                Where-Object { [int]$_.OwningProcess -ne 0 })
             if (-not $held.Count) { break }
             Start-Sleep -Milliseconds 500
         }

@@ -571,7 +571,7 @@ where F: FnMut(SocketAddr) -> Fut, Fut: std::future::Future<Output = std::io::Re
 async fn bind_when_free(addr: SocketAddr) -> TcpListener {
     let mut warned = false;
     loop {
-        match TcpListener::bind(addr).await {
+        match listen_socket(addr).and_then(|socket| { socket.bind(addr)?; socket.listen(1024) }) {
             Ok(listener) => return listener,
             Err(e) => {
                 if !warned { tracing::warn!(listen = %addr, "porta do front ocupada, tentando de novo: {e}"); warned = true; }
@@ -644,10 +644,27 @@ async fn bind_guest(addr: SocketAddr) -> TcpListener {
     }
 }
 
-fn guest_socket(addr: SocketAddr) -> std::io::Result<TcpListener> {
+/// Socket de escuta das portas do servidor. No Windows a porta é exclusiva: sem isso outro programa abre
+/// `127.0.0.1` (ou o IP da rede) no mesmo número por cima do `0.0.0.0` e passa a receber as conexões
+/// daquele endereço, inclusive a saúde que o lançador confere.
+pub fn listen_socket(addr: SocketAddr) -> std::io::Result<tokio::net::TcpSocket> {
     let socket = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
     #[cfg(unix)]
     socket.set_reuseaddr(true)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Networking::WinSock::{SO_EXCLUSIVEADDRUSE, SOCKET_ERROR, SOL_SOCKET, setsockopt};
+        let on: i32 = 1;
+        // SAFETY: socket aberto acima; `optval` aponta para um i32 vivo do tamanho informado.
+        let rc = unsafe { setsockopt(socket.as_raw_socket() as usize, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (&raw const on).cast(), size_of::<i32>() as i32) };
+        if rc == SOCKET_ERROR { return Err(std::io::Error::last_os_error()); }
+    }
+    Ok(socket)
+}
+
+fn guest_socket(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = listen_socket(addr)?;
     // ponytail: `GuestConn` e `ConnectConn` só casam com `TcpListener` puro (sem `tap_io`); a conexão aceita herda
     // o TCP_NODELAY do listener. Sistema que não herdar precisa de laço de accept próprio.
     socket.set_nodelay(true)?;
@@ -1912,7 +1929,8 @@ mod tests {
     use std::io::Read;
 
     /// B-08: a porta do convidado (e as do Connect) abre com `SO_REUSEADDR` só fora do Windows; lá a
-    /// opção deixaria uma segunda escuta pegar a mesma porta.
+    /// opção deixaria uma segunda escuta pegar a mesma porta. No Windows ela abre exclusiva
+    /// (`listen_socket`, provado em `main.rs`).
     #[tokio::test]
     async fn guest_socket_reuses_the_address_only_outside_windows() {
         let listener = guest_socket("127.0.0.1:0".parse().unwrap()).unwrap();
