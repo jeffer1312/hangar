@@ -1,5 +1,5 @@
 //! Registro sozinho do MCP: com máquina-alvo e o binário do pacote, a entrada nasce ligada em todas as
-//! contas; desligada à mão (ausente no principal e guardada) fica desligada. Entrada ativa com outro
+//! contas; no Windows sem alvo, o primeiro registro cria o alvo local `windows`; desligada à mão (ausente no principal e guardada) fica desligada. Entrada ativa com outro
 //! programa (checkout, `uvx`, `servidor_mcp.py`) passa para o binário do pacote com o mesmo env.
 use std::path::Path;
 
@@ -29,7 +29,7 @@ pub fn register(
     jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
     diary: Option<&Path>,
 ) -> Result<Registered, Error> {
-    let outcome = register_on(paths, crate::supported(), hyprland, jev);
+    let outcome = register_on(paths, crate::supported(), cfg!(windows), hyprland, jev);
     if let Err(error) = &outcome {
         tracing::warn!(code = FAILED, erro = error.code, msg = %error.msg, "Computer Use: registro do MCP falhou");
         let line = json!({"evento": "computer_control.registrar", "nivel": "erro", "codigo": FAILED,
@@ -42,6 +42,7 @@ pub fn register(
 fn register_on(
     paths: &Paths,
     supported: bool,
+    local_auto: bool,
     hyprland: impl FnOnce() -> bool,
     jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
 ) -> Result<Registered, Error> {
@@ -50,7 +51,10 @@ fn register_on(
     }
     // O alvo `linux` automático do Hyprland não tem arquivo: alvo padrão vazio. A sonda pode levar
     // segundos, e o Claude Code espera a trava do `.claude.json` só 1 s: roda antes dela.
-    let target = first_target(paths);
+    let target = match first_target(paths) {
+        None if local_auto && never_registered(paths)? => Some(local_target(paths)?),
+        found => found,
+    };
     let hyprland = target.is_none() && hyprland();
     // Desligar no meio daqui até a trava: a decisão abaixo, toda sob a trava, já o vê.
     #[cfg(test)]
@@ -60,6 +64,31 @@ fn register_on(
         Some(false) => Registered::Unchanged,
         Some(true) => Registered::Written,
     })
+}
+
+/// Nem ligado pelo Hangar nem desligado à mão: a máquina que acabou de instalar.
+fn never_registered(paths: &Paths) -> Result<bool, Error> {
+    Ok(crate::files::parked_entry(paths)?.is_none() && !paths.registered_marker().exists())
+}
+
+/// O alvo `windows` desta máquina, o mesmo que a tela cria em "este computador". O Linux não precisa:
+/// sob Hyprland o hcu tem o alvo `linux` automático, e fora dele o agente local não roda.
+fn local_target(paths: &Paths) -> Result<String, Error> {
+    let request = targets::TargetRequest {
+        project_dir: String::new(),
+        name: "windows".into(),
+        transport: targets::Transport::Local,
+        host: String::new(),
+        proxy_command: String::new(),
+        request_timeout: None,
+    };
+    match targets::create_target(paths, &request) {
+        Ok(()) => {}
+        // Outra passada criou no meio: o arquivo é o mesmo.
+        Err(error) if error.status == 409 => {}
+        Err(error) => return Err(error),
+    }
+    Ok(paths.targets_dir().join("windows-agent.json").to_string_lossy().into_owned())
 }
 
 fn first_target(paths: &Paths) -> Option<String> {
@@ -156,6 +185,26 @@ mod tests {
 
     fn jev() -> Map<String, Value> {
         Map::from_iter([("TYPESAFE_API_KEY".to_owned(), json!("fixture-key"))])
+    }
+
+    /// Windows sem alvo e nunca registrado: nasce o alvo local `windows` e o MCP liga com ele.
+    #[test]
+    fn windows_without_target_creates_the_local_one() {
+        let home = Home::new();
+        assert_eq!(register_on(&home.paths, true, true, || false, || Ok(jev())).unwrap(), Registered::Written);
+        let file = home.paths.targets_dir().join("windows-agent.json");
+        let cfg: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(cfg["transport"], json!("local"));
+        assert_eq!(home.main_entry().unwrap()["env"]["HCC_AGENT_CONFIG"], json!(file.to_string_lossy()));
+    }
+
+    /// Desligado pela tela antes: nenhum alvo nasce.
+    #[test]
+    fn windows_turned_off_creates_no_target() {
+        let home = Home::new();
+        crate::remove_entry(&home.paths).unwrap();
+        assert_eq!(register_on(&home.paths, true, true, || false, || Ok(jev())).unwrap(), Registered::Skipped);
+        assert!(crate::targets::target_files(&home.paths).is_empty());
     }
 
     /// D4.1: sem alvo e sem Hyprland, nada.
@@ -302,7 +351,7 @@ mod tests {
     fn an_unsupported_platform_never_registers() {
         let home = Home::new();
         home.target("a");
-        assert_eq!(register_on(&home.paths, false, || true, || Ok(jev())).unwrap(), Registered::Skipped);
+        assert_eq!(register_on(&home.paths, false, false, || true, || Ok(jev())).unwrap(), Registered::Skipped);
         assert!(!home.paths.main_file().exists());
     }
 

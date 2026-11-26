@@ -811,7 +811,7 @@ de `docs/decisoes/instalacao.md`**. Ali está a atualização real obrigatória 
   Python. O hcu se instala sozinho da release e se atualiza só por tag
   semver mais nova, trocando mesmo com sessão aberta; `/install` responde 410
   `erro_computer_control_update_app`. Com máquina-alvo, o MCP se registra sozinho em todas as
-  contas; desligado à mão (tela ou fora do Hangar) fica desligado. A entrada do MCP tem um escritor
+  contas; no Windows sem alvo, o primeiro registro cria o alvo local `windows`; desligado à mão (tela ou fora do Hangar) fica desligado. A entrada do MCP tem um escritor
   só, no crate. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#computer-use-e-transferência-de-atalhos-são-do-rust-13112026).
 - **CLIProxyAPI é instalado e configurado pelo Hangar (`hangar-cliproxy-setup`), sem a pessoa
