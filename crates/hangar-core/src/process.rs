@@ -50,7 +50,8 @@ pub fn with_installed_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
 
 fn append_missing(path: &std::ffi::OsStr, installed: Option<std::ffi::OsString>) -> std::ffi::OsString {
     let mut joined = path.to_owned();
-    let Some(installed) = installed else { return joined };
+    // PATH vazio é "nenhum programa", como no resolve_program: o registro não o preenche.
+    let Some(installed) = installed.filter(|_| !path.is_empty()) else { return joined };
     let key = |dir: &Path| {
         let dir = dir.to_string_lossy().trim_end_matches(['\\', '/']).to_owned();
         if cfg!(windows) { dir.to_lowercase() } else { dir }
@@ -169,6 +170,8 @@ mod tests {
         let installed = Some(std::ffi::OsString::from(r"c:\B\;C:\c;;"));
         assert_eq!(append_missing(path, installed), std::ffi::OsString::from(r"C:\a;C:\b;C:\c"));
         assert_eq!(append_missing(path, None), path.to_owned());
+        let installed = Some(std::ffi::OsString::from(r"C:\c"));
+        assert_eq!(append_missing(std::ffi::OsStr::new(""), installed), std::ffi::OsString::new(), "PATH vazio continua sem programa");
     }
 
     #[test]
