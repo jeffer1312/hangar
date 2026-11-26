@@ -257,11 +257,13 @@ async fn overview(wa: &WhatsApp) -> Response {
         }
     };
     let qr_svg = status["qr"].as_str().filter(|q| !q.is_empty()).and_then(|q| wa.qr_svg(q));
+    let check = install::read_update_check(paths);
     json_response(StatusCode::OK, json!({
         "installed": installed, "accepted_at": install::accepted_at(paths), "service": service,
         "job": wa.installer.job(), "status": status, "qr_svg": qr_svg, "status_error": status_error,
         "installed_tag": current.as_ref().map(|c| c.tag.as_str()),
-        "update": available_update(current.as_ref(), install::read_update_check(paths)),
+        "update_checked_at": check.as_ref().map(|c| c.checked_at.as_str()),
+        "update": available_update(current.as_ref(), check.clone()),
     }))
 }
 
