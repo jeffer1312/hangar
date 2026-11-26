@@ -12315,6 +12315,8 @@
   "native_whatsapp_schema_newer_latest_body": "O hangar-whatsapp já está na versão mais recente. Só uma versão posterior abre estes dados; enquanto ela não sair, o serviço fica parado.",
   "native_whatsapp_check_again": "Procurar versão nova",
   "native_whatsapp_job_err_update_restored": "a versão nova não subiu; os dados voltaram para a cópia de antes e a anterior voltou a rodar. Mensagens recebidas durante a tentativa podem não ter voltado.",
+  "native_whatsapp_job_err_backup_failed": "não houve espaço ou permissão para guardar a cópia do arquivo de mensagens; nada foi convertido.",
+  "native_whatsapp_status_err_backup_failed": "O serviço parou antes de converter as mensagens: não houve espaço ou permissão para guardar a cópia do arquivo. Nada foi convertido.",
   "native_whatsapp_version_label": "hangar-whatsapp",
   "native_whatsapp_version_current": "Em dia · procurado {ago}",
   "native_whatsapp_version_checked": "Procurado {ago}",
