@@ -545,7 +545,7 @@ pub fn kimi(body: &Value) -> Result<Vec<Value>, ()> {
         windows.extend(kimi_window(&item["detail"], &label));
     }
     windows.extend(kimi_window(&body["usage"], "7d"));
-    // Plano mensal do Kimi Code 2.7: fração usada, não limite e restante.
+    // Plano mensal: vem como fração usada, não como limite e restante.
     if let Some(month) = body["usages"]["limit_month_total"].as_object() {
         if let Some(ratio) = month.get("used_ratio").and_then(num) {
             windows.extend(window("30d", ratio * 100.0, month.get("reset_time").and_then(py_iso)));
@@ -781,7 +781,7 @@ pub async fn read(client: &reqwest::Client, reader: &Reader, endpoints: &Endpoin
 mod tests {
     use super::*;
 
-    /// Resposta real do `/usages` do Kimi Code 2.7: a janela de 5 h vem em `limits[]`; o plano mensal, em `usages`.
+    /// Resposta real do `/usages`: a janela de 5 h vem em `limits[]`; o plano mensal, em `usages`.
     #[test]
     fn kimi_reads_the_monthly_plan_window() {
         let body = json!({"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"100","used":"71","remaining":"29","resetTime":"2026-11-26T19:10:20.711209Z"}}],
