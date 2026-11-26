@@ -515,7 +515,7 @@ impl Engine {
                     }
                     acp::Event::TextDelta(piece) => {
                         // O agy seguiu depois da falha: o turno não terminou nela.
-                        self.turn_failure = None;
+                        if !piece.trim().is_empty() { self.turn_failure = None; }
                         if let Some(text) = self.preview.append(&piece,now) { self.publish("preview",text,effects); }
                     }
                     acp::Event::TurnFailed(detail) => self.turn_failure = Some(detail),
