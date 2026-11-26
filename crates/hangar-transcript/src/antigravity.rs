@@ -146,10 +146,7 @@ impl AgyStream {
         }
         // Subagente que morreu (cota, rede) não manda relatório: só o sistema avisa o principal.
         if sender == "system" {
-            if let Some(id) = SUBAGENT_FAILED.captures(&text).map(|found| found[1].to_owned())
-                .filter(|id| hangar_antigravity::paths::valid_conversation_id(id)) {
-                events.push(ChatEvent { is_error: Some(true), ..finish(&id) });
-            }
+            if let Some(id) = failed_subagent_in(&text) { events.push(ChatEvent { is_error: Some(true), ..finish(&id) }); }
             return;
         }
         if !hangar_antigravity::paths::valid_conversation_id(sender) { return; }
@@ -167,6 +164,17 @@ impl AgyStream {
         }
         if !parent { events.push(finish(sender)); }
     }
+}
+
+fn failed_subagent_in(text: &str) -> Option<String> {
+    SUBAGENT_FAILED.captures(text).map(|found| found[1].to_owned()).filter(|id| hangar_antigravity::paths::valid_conversation_id(id))
+}
+
+/// O subagente que o sistema avisa ter morrido, no `content` de um `SYSTEM_MESSAGE` do principal.
+pub fn failed_subagent(content: &str) -> Option<String> {
+    let found = MESSAGE.captures(content)?;
+    if &found[1] != "system" { return None; }
+    failed_subagent_in(found[2].trim())
 }
 
 /// Os subagentes que uma chamada `manage_subagents` com `kill` encerra.
