@@ -18,6 +18,9 @@ impl Screens {
         Self { frames: Mutex::new(names.iter().map(|name| screen(name)).collect()), keys: Mutex::default() }
     }
     fn keys(&self) -> Vec<String> { self.keys.lock().unwrap().clone() }
+    fn texts(texts: &[&str]) -> Self {
+        Self { frames: Mutex::new(texts.iter().map(|text| (*text).to_owned()).collect()), keys: Mutex::default() }
+    }
 }
 impl OtherIo for Screens {
     fn prove<'a>(&'a self, _: &'a OtherTarget) -> BoxFuture<'a, Result<bool, RuntimeError>> { Box::pin(async { Ok(true) }) }
@@ -130,4 +133,20 @@ async fn the_terms_card_unchecks_the_data_box_and_presses_done_only_for_the_chos
     let reply = control(&target, &io, &store, "op", "select", &json!({"option": 2, "interaction_id": id}), None).await.unwrap().reply;
     assert_eq!(reply.disposition, RuntimeDisposition::Accepted, "{}", reply.payload);
     assert_eq!(io.keys(), ["Enter", "Down", "Right", "Enter"]);
+}
+
+/// O quadro guardado pode ser de antes de a mensagem entrar na fila da TUI do Kimi: o Ctrl+S espera a dica aparecer.
+#[tokio::test(start_paused = true)]
+async fn kimi_steer_waits_for_the_queued_hint_before_giving_up() {
+    let mut kimi = super::tests::target();
+    kimi.provider = hangar_transcript::Provider::Kimi;
+    let io = Screens::texts(&[
+        "  ⠋ Working for 6s\n ╭──╮\n │ > │\n ╰──╯\n",
+        "  ⠋ Working for 6s\n   ❯ pare\n   ↑ to edit · ctrl-s to steer immediately\n ╭──╮\n │ > │\n ╰──╯\n",
+        "  🌕 · Tip\n ❯ pare\n ╭──╮\n │ > │\n ╰──╯\n",
+    ]);
+    let store = InteractionStore::default();
+    let reply = control(&kimi, &io, &store, "op", "steer_queue", &json!({}), None).await.unwrap().reply;
+    assert_eq!(reply.payload["steered"], true, "{}", reply.payload);
+    assert_eq!(io.keys(), ["C-s"]);
 }

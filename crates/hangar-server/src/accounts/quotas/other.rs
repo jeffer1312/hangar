@@ -168,7 +168,7 @@ pub struct Config {
     pub kimi_text: Option<String>,
 }
 
-fn kimi_providers(text: Option<&str>, problems: &mut Vec<&'static str>) -> Vec<(String, String, String)> {
+fn kimi_providers(text: Option<&str>, home: &Path, problems: &mut Vec<&'static str>) -> Vec<(String, String, String)> {
     let Some(text) = text else { return vec![] };
     // O `tomllib` recusa o arquivo com BOM.
     let table = match text.parse::<toml::Table>() {
@@ -187,10 +187,23 @@ fn kimi_providers(text: Option<&str>, problems: &mut Vec<&'static str>) -> Vec<(
             if provider.get("type").and_then(toml::Value::as_str) != Some("kimi") {
                 return None;
             }
-            // Provider por OAuth não tem chave aqui: adivinhar o armazenamento dele seria inventar.
-            Some((name.clone(), filled(provider.get("api_key"))?, filled(provider.get("base_url"))?))
+            // Provider por OAuth: o `api_key` daqui envelhece; o token em uso fica no arquivo que o `oauth.key` nomeia.
+            let key = kimi_oauth_token(provider, home).or_else(|| filled(provider.get("api_key")))?;
+            Some((name.clone(), key, filled(provider.get("base_url"))?))
         })
         .collect()
+}
+
+/// O token do provedor OAuth com `storage = "file"`: `credentials/<nome do oauth.key>.json` na pasta do Kimi.
+fn kimi_oauth_token(provider: &toml::Table, home: &Path) -> Option<String> {
+    let oauth = provider.get("oauth")?.as_table()?;
+    if oauth.get("storage").and_then(toml::Value::as_str) != Some("file") {
+        return None;
+    }
+    let name = Path::new(oauth.get("key")?.as_str()?).file_name()?.to_str()?;
+    let bytes = std::fs::read(home.join("credentials").join(format!("{name}.json"))).ok()?;
+    let token = parse_json(&bytes)?.get("access_token")?.as_str()?.to_owned();
+    (!token.is_empty()).then_some(token)
 }
 
 /// `^[a-z0-9][a-z0-9_-]{0,31}$` do Python, cujo `$` também casa antes de uma quebra final.
@@ -245,7 +258,7 @@ pub fn load(env: &AccountEnvironment) -> Config {
     let engines = engines(env, &mut problems);
 
     let mut sources = vec![];
-    for (name, key, base) in kimi_providers(kimi_text.as_deref(), &mut problems) {
+    for (name, key, base) in kimi_providers(kimi_text.as_deref(), kimi_config(env).parent().unwrap_or(Path::new(".")), &mut problems) {
         let reader = if base.contains("commandcode.ai") { Reader::CommandCode { key } } else { Reader::Kimi { key, base } };
         sources.push(Source { id: format!("kimi:{name}"), label: json!(name), provider: reader.kind(), reader });
     }
@@ -532,6 +545,12 @@ pub fn kimi(body: &Value) -> Result<Vec<Value>, ()> {
         windows.extend(kimi_window(&item["detail"], &label));
     }
     windows.extend(kimi_window(&body["usage"], "7d"));
+    // Plano mensal: vem como fração usada, não como limite e restante.
+    if let Some(month) = body["usages"]["limit_month_total"].as_object() {
+        if let Some(ratio) = month.get("used_ratio").and_then(num) {
+            windows.extend(window("30d", ratio * 100.0, month.get("reset_time").and_then(py_iso)));
+        }
+    }
     Ok(windows)
 }
 
@@ -761,6 +780,34 @@ pub async fn read(client: &reqwest::Client, reader: &Reader, endpoints: &Endpoin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Resposta real do `/usages`: a janela de 5 h vem em `limits[]`; o plano mensal, em `usages`.
+    #[test]
+    fn kimi_reads_the_monthly_plan_window() {
+        let body = json!({"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"100","used":"71","remaining":"29","resetTime":"2026-11-26T19:10:20.711209Z"}}],
+            "usages":{"limit_5h":{"used_ratio":0.7063,"reset_time":"2026-11-26T19:10:19Z"},"limit_month_total":{"used_ratio":0.047,"reset_time":"2026-12-21T00:00:00Z"},"limit_month_code":{"used_ratio":0.047,"reset_time":"2026-12-21T00:00:00Z"}}});
+        let windows = kimi(&body).unwrap();
+        let labels: Vec<_> = windows.iter().map(|w| w["rotulo"].as_str().unwrap()).collect();
+        assert_eq!(labels, ["5h", "30d"]);
+        assert!((windows[1]["pct"].as_f64().unwrap() - 4.7).abs() < 0.01);
+        assert_eq!(windows[1]["reset_ts"].as_f64(), Some(1_797_811_200.0));
+    }
+
+    /// Provedor por OAuth (`managed:kimi-code`): o `api_key` do `config.toml` fica velho; o token em uso está no arquivo de credenciais.
+    #[test]
+    fn kimi_oauth_provider_uses_the_live_token_from_credentials() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        std::fs::create_dir_all(home.join("credentials")).unwrap();
+        std::fs::write(home.join("credentials/kimi-code-env-1.json"), r#"{"access_token":"vivo","expires_at":1}"#).unwrap();
+        let text = "[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"velho\"\nbase_url = \"https://api.kimi.ai/coding/v1\"\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code-env-1\"\n";
+        let mut problems = vec![];
+        let found = kimi_providers(Some(text), home, &mut problems);
+        assert_eq!(found, [("managed:kimi-code".to_owned(), "vivo".to_owned(), "https://api.kimi.ai/coding/v1".to_owned())]);
+        std::fs::remove_file(home.join("credentials/kimi-code-env-1.json")).unwrap();
+        assert_eq!(kimi_providers(Some(text), home, &mut problems)[0].1, "velho");
+        assert!(problems.is_empty());
+    }
 
     /// Entrada externa qualquer não derruba os leitores: bytes soltos, JSON mutado e HTML mutado.
     #[test]
