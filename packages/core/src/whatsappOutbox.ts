@@ -278,6 +278,9 @@ const REFUSAL: Record<string, () => string> = {
   whatsapp_send_unsupported: m.whatsapp_draft_err_outdated,
   // Serviço antes da edição (api < 3): o Hangar recusa sem chamar, e o cartão fica.
   whatsapp_edit_unsupported: m.whatsapp_draft_err_edit_unsupported,
+  // A troca de versão segura a vez: nada saiu, e a frase do servidor vem só em português.
+  whatsapp_updating: m.native_whatsapp_send_updating,
+  whatsapp_busy: m.native_whatsapp_update_busy,
 };
 
 /** Frase da recusa de `send`/`decline` pelo código `whatsapp_*`. `lockedUntil`: o `reachout_locked_until` do
