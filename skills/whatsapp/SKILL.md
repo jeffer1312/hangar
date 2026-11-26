@@ -87,8 +87,6 @@ só pelas ferramentas do MCP `hangar`:
   `whatsapp_request_media` com o aviso de que o pedido pode ter chegado ao celular, não peça de novo.
 - `whatsapp_send_unsupported` ou `whatsapp_outdated`: diga ao usuário para atualizar o
   hangar-whatsapp.
-- `whatsapp_account_changed`: o WhatsApp pareado é outro número, não o dono do arquivo. Nada sai; diga ao
-  usuário que, para enviar, ele apaga os dados do WhatsApp e pareia de novo. Não crie outro rascunho.
 - `whatsapp_untrusted`: a resposta do serviço não veio assinada. Não use o conteúdo e avise o
   usuário.
 - Outro código: mostre o `msg` ao usuário.

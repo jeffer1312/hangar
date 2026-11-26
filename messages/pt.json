@@ -1414,7 +1414,6 @@
   "whatsapp_draft_err_rate_limited": "Limite de envios atingido (por minuto ou por dia). Nada foi enviado; tente daqui a pouco.",
   "whatsapp_draft_err_not_paired": "O WhatsApp desta máquina não está conectado. Nada foi enviado.",
   "whatsapp_draft_err_outdated": "Atualize o hangar-whatsapp para enviar. Nada foi enviado.",
-  "whatsapp_draft_err_account_changed": "O WhatsApp pareado é outro número, não o dono do arquivo. Nada foi enviado; para enviar, apague os dados do WhatsApp e pareie de novo.",
   "whatsapp_draft_requests_title": "{label}: rascunhos de WhatsApp ({count})",
   "whatsapp_draft_session_notice": "Esta sessão quer enviar no WhatsApp: {name}",
   "whatsapp_draft_open": "Toque para responder",

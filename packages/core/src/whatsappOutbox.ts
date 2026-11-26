@@ -179,7 +179,6 @@ const REFUSAL: Record<string, () => string> = {
   whatsapp_rate_limited: m.whatsapp_draft_err_rate_limited,
   whatsapp_not_paired: m.whatsapp_draft_err_not_paired,
   whatsapp_outdated: m.whatsapp_draft_err_outdated,
-  whatsapp_account_changed: m.whatsapp_draft_err_account_changed,
   // Serviço sem envio (api 1): o remédio é o mesmo.
   whatsapp_send_unsupported: m.whatsapp_draft_err_outdated,
 };

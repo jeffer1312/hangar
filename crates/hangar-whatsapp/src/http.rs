@@ -28,7 +28,6 @@ const SEARCH: &[&str] = &["q", "chat", "limit"];
 const OUTBOX: &[&str] = &["state"];
 const UNSUPPORTED_MSG: &str = "o hangar-whatsapp instalado não envia mensagens; atualize o hangar-whatsapp";
 const OUTDATED_MSG: &str = "o WhatsApp recusou a versão do hangar-whatsapp; atualize o hangar-whatsapp";
-const ACCOUNT_CHANGED_MSG: &str = "o WhatsApp pareado é outro número, não o dono do arquivo; para enviar, apague os dados do WhatsApp e pareie de novo";
 
 /// O WhatsApp de uma máquina: instalação, aceite e o cliente do serviço.
 pub struct WhatsApp {
@@ -455,12 +454,8 @@ fn relay(reply: Reply) -> Response {
     }
     let parsed: Value = serde_json::from_slice(&reply.body).unwrap_or(Value::Null);
     let code = c2_code(&reply.body).map_or_else(|| "whatsapp_error".to_owned(), |code| format!("whatsapp_{code}"));
-    // Quem resolve é a pessoa (atualizar o binário, apagar e parear de novo), e a frase diz como.
-    let msg = match code.as_str() {
-        "whatsapp_outdated" => OUTDATED_MSG,
-        "whatsapp_account_changed" => ACCOUNT_CHANGED_MSG,
-        _ => parsed["detail"]["msg"].as_str().unwrap_or("o serviço do WhatsApp recusou o pedido"),
-    };
+    // `outdated`: quem resolve é atualizar o binário, e a frase diz isso.
+    let msg = if code == "whatsapp_outdated" { OUTDATED_MSG } else { parsed["detail"]["msg"].as_str().unwrap_or("o serviço do WhatsApp recusou o pedido") };
     // 401 do binário é a assinatura do Hangar recusada (chave ou relógio), não o token de quem pediu.
     let status = if status == StatusCode::UNAUTHORIZED { StatusCode::BAD_GATEWAY } else { status };
     detail(status, &code, msg, json!({}))
