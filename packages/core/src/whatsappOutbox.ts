@@ -172,7 +172,8 @@ export function draftInitial(draft: Pick<WhatsAppDraft, 'chat_name' | 'chat_numb
 
 const KIND_WORD: Partial<Record<WhatsAppRecentKind, () => string>> = {
   image: m.whatsapp_draft_kind_image, video: m.whatsapp_draft_kind_video, audio: m.whatsapp_draft_kind_audio,
-  sticker: m.whatsapp_draft_kind_sticker, document: m.whatsapp_draft_kind_document,
+  // Entre aspas: `document` solto é o global do DOM para a trava de boundary.test.ts.
+  sticker: m.whatsapp_draft_kind_sticker, 'document': m.whatsapp_draft_kind_document,
 };
 
 /** Quem falou numa mensagem dele, embaixo do balão; a mesma regra do nativo (`Draft::speaker`). No grupo, só o remetente
