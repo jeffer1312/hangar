@@ -128,11 +128,12 @@ function epochSeconds(at: string | null | undefined): number | null {
 }
 
 /** A atualização registrada que falhou (a automática, ou uma do dono que o servidor não guarda mais em memória).
- * Com a faixa do job do dono na tela, ela já diz o mesmo. */
+ * Com a faixa do job do dono na tela, ela já diz o mesmo. Só com o serviço de pé: a faixa diz que a instalada
+ * continua rodando, e parado a vista do parado já explica. */
 export function autoUpdateFailure(state: WhatsAppState): { tag: string; code: string; installed: string; migration: boolean } | null {
   const update = state.update;
   const failed = update?.failed;
-  if (!update || !failed || !state.installed_tag || jobRunning(state) || failedJob(state)) return null;
+  if (!update || !failed || !state.installed_tag || state.service !== 'running' || jobRunning(state) || failedJob(state)) return null;
   return { tag: failed.tag, code: failed.code, installed: state.installed_tag, migration: update.migration };
 }
 

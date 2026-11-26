@@ -222,6 +222,13 @@ describe('atualização do programa', () => {
     expect(autoUpdateFailure(auto)).not.toBeNull();
   });
 
+  it('com o serviço parado a faixa some: a instalada não está rodando', () => {
+    const failed = { tag: 'v0.3.1', code: 'whatsapp_update_data_migrated' };
+    for (const service of ['stopped', 'absent'] as const) {
+      expect(autoUpdateFailure({ ...connected({ update: newer(true, failed) }), service, status: null })).toBeNull();
+    }
+  });
+
   it('a passada automática em curso mostra a vista de atualizando', () => {
     const s = connected({ job: { kind: 'auto_update', step: 'service', done: false, error: null } });
     expect(viewOf(s)).toBe('working');
