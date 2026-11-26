@@ -22,6 +22,8 @@ pub enum Stage { Initialize, Authenticate, Open, Prompt, SetModel, SetMode, Logo
 pub enum Event {
     Ready { session_id: String, resumed: bool, models: Vec<Choice>, model: Option<String>, modes: Vec<Choice>, mode: Option<String>, tier: Option<String> },
     TextDelta(String),
+    /// O agy manda a falha do modelo (cota, rede) como texto da resposta e encerra o turno como se fosse normal.
+    TurnFailed(String),
     ThoughtDelta(String),
     ToolStarted { id: String, name: Option<String>, title: Option<String>, kind: Option<String>, input: Option<Value> },
     ToolUpdated { id: String, status: Option<String>, output: Option<String> },
@@ -34,6 +36,21 @@ pub enum Event {
     Title(String),
     ContextUsage { used: u64, size: u64 },
     Failed { stage: Stage, code: Option<i64>, message: String },
+}
+
+const MODEL_FAILURE: &str = "⚠ agent executor error:";
+
+/// O texto que vai à tela: cota com o prazo de volta, rede com a causa final, o resto como veio.
+fn model_failure(text: &str) -> Option<String> {
+    let message = text.trim().strip_prefix(MODEL_FAILURE)?.trim();
+    if message.contains("RESOURCE_EXHAUSTED") || message.contains("HTTP 429") {
+        let resets = message.split("Resets in ").nth(1).and_then(|rest| rest.split('.').next()).filter(|s| !s.is_empty());
+        return Some(resets.map_or_else(|| "Cota do Antigravity esgotada".to_owned(), |r| format!("Cota do Antigravity esgotada; volta em {r}")));
+    }
+    if message.contains("request failed:") {
+        return Some(format!("O Antigravity não alcançou o Google: {}", message.rsplit(": ").next().unwrap_or(message)));
+    }
+    Some(message.chars().take(300).collect())
 }
 
 #[derive(Debug, PartialEq)]
@@ -211,7 +228,8 @@ impl Session {
 
     fn update(&mut self, update: &Value) -> Vec<Out> {
         let event = match update["sessionUpdate"].as_str() {
-            Some("agent_message_chunk") => update["content"]["text"].as_str().map(|t| Event::TextDelta(t.to_owned())),
+            Some("agent_message_chunk") => update["content"]["text"].as_str()
+                .map(|t| model_failure(t).map_or_else(|| Event::TextDelta(t.to_owned()), Event::TurnFailed)),
             Some("agent_thought_chunk") => update["content"]["text"].as_str().map(|t| Event::ThoughtDelta(t.to_owned())),
             Some("tool_call") => text_of(&update["toolCallId"]).map(|id| Event::ToolStarted {
                 id,
@@ -311,6 +329,22 @@ mod tests {
         assert_eq!(options.iter().map(|o| (o.id.as_str(), o.kind.as_str())).collect::<Vec<_>>(), [("allow", "allow_once"), ("deny", "reject_once")]);
         assert!(events.iter().any(|e| matches!(e, Event::ToolUpdated { status: Some(s), .. } if s == "failed")));
         assert!(matches!(events.last(), Some(Event::TurnEnded { stop_reason, .. }) if stop_reason == "end_turn"));
+    }
+
+    fn answer_chunk(text: &str) -> String {
+        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}}}).to_string()
+    }
+
+    #[test]
+    fn a_model_failure_in_the_answer_is_a_turn_failure_and_not_text() {
+        let mut session = Session::new("/w", None);
+        let quota = "\n⚠ agent executor error: generating and executing: transport error (ResourceExhausted, HTTP 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h5m1s.: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h5m1s.\n";
+        assert_eq!(session.feed(&answer_chunk(quota)), [Out::Event(Event::TurnFailed("Cota do Antigravity esgotada; volta em 3h5m1s".into()))]);
+        let gateway = "\n⚠ agent executor error: generating and executing: request failed: Post \"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse\": Bad Gateway\n";
+        assert_eq!(session.feed(&answer_chunk(gateway)), [Out::Event(Event::TurnFailed("O Antigravity não alcançou o Google: Bad Gateway".into()))]);
+        let dns = "\n⚠ agent executor error: generating and executing: request failed: Post \"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse\": dial tcp: lookup daily-cloudcode-pa.googleapis.com: Temporary failure in name resolution\n";
+        assert_eq!(session.feed(&answer_chunk(dns)), [Out::Event(Event::TurnFailed("O Antigravity não alcançou o Google: Temporary failure in name resolution".into()))]);
+        assert_eq!(session.feed(&answer_chunk("⚠ cuidado com o rm")), [Out::Event(Event::TextDelta("⚠ cuidado com o rm".into()))]);
     }
 
     #[test]
