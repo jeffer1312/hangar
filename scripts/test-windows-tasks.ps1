@@ -62,6 +62,7 @@ function Reset-State {
     $script:lateOwner = $null
     $script:frontOwner = $null
     $script:slowRelease = 0
+    $script:idleOwner = $false
     $script:ignoredStarts = 0
     $script:frozenLastRun = $false
     $script:listening = $false
@@ -92,6 +93,7 @@ function Get-ScheduledTaskInfo { param($TaskName, $ErrorAction) return @{ LastRu
 function Set-ScheduledTask { param($TaskName, $Settings, $ErrorAction) $script:events += "settings:$($Settings.RestartCount)" }
 function Get-NetTCPConnection { param($State, $LocalPort, $ErrorAction)
     if ($LocalPort -eq 8765 -and $script:listening) { return @{ OwningProcess = 500 } }
+    if ($LocalPort -eq 8765 -and $script:idleOwner -and -not $script:events.Count) { return @{ OwningProcess = 0 } }
     if ($LocalPort -eq 5173 -and $script:frontOwner) { return @{ OwningProcess = $script:frontOwner } }
     if ($script:events.Count -and $script:lateOwner) { return @{ OwningProcess = $script:lateOwner } }
     if ($script:events.Count -and $script:slowRelease -gt 0) { $script:slowRelease--; return @{ OwningProcess = 777 } }
@@ -217,6 +219,13 @@ try {
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
     Assert ('start' -in $script:events) 'Porta que soltou logo depois barrou o reinicio'
     Assert ($script:tableReads -eq 1) 'Espera da porta voltou a depender do WMI depois da parada'
+    # A lista de portas do Windows ja deu o PID 0 (System Idle) como dono da porta do servidor vivo.
+    Reset-State
+    $script:owner = $null
+    $script:idleOwner = $true
+    $failed = $null
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null } catch { $failed = "$_" }
+    Assert (-not $failed -and 'start' -in $script:events) "PID 0 na lista de portas barrou o reinicio: $failed"
     # Maquina migrada: o hangar-server novo abre a porta do front entre as duas conferencias.
     $frontRows = @(
         (Row 70 1 'node.exe' 'C:\repo\frontend\node_modules\vite\bin\vite.js preview'),

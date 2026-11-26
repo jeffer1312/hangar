@@ -5,7 +5,8 @@ function Get-HangarProcessTable {
             Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate
     }
     try {
-        if (-not (Wait-Job $job -Timeout 5)) { throw 'WMI nao respondeu; nenhuma instancia sera encerrada ou iniciada' }
+        # O Job abre um PowerShell novo, que em maquina lenta gasta segundos preparando modulos antes da consulta.
+        if (-not (Wait-Job $job -Timeout 30)) { throw 'WMI nao respondeu em 30 s; nenhuma instancia sera encerrada ou iniciada' }
         $rows = @(Receive-Job $job -ErrorAction Stop)
         if (-not $rows.Count) { throw 'Tabela de processos vazia; nao e seguro recuperar a tarefa' }
         return $rows
@@ -202,6 +203,9 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         $candidates = @($candidates) + @(Get-HangarBackendLaunchers $rows $candidates $name)
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
         foreach ($listener in $listeners) {
+            # PID 0 nao e dono: o Windows ja deu assim a porta do servidor vivo. Quem ocupa de fato
+            # reaparece na espera da liberacao, depois da parada.
+            if ([int]$listener.OwningProcess -eq 0) { continue }
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {
                 if (Test-HangarServedFront $rows $name @($listener)) { continue }
                 $quem = Format-HangarPortOwner $rows $listener
