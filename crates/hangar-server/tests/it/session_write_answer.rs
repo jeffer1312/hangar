@@ -128,7 +128,7 @@ fn text_fallback_answers_like_the_python() {
 fn text_during_the_clear_barrier_is_refused_with_its_own_wait_code() {
     use hangar_server::session_write::input::{Params, classify, input_answer};
     // Fora da fila: a troca de conversa do `/clear` a esvaziaria calada. O app guarda o texto e mostra o motivo.
-    let params = Params { text: "Olá", steer: false, terminal: true, codex: false, operation_id: "op" };
+    let params = Params { text: "Olá", steer: false, terminal: true, codex: false, kimi: false, operation_id: "op" };
     let (sent, _) = classify(&params, &Err(RuntimeError::new("runtime_clear_barrier", "operação terminal conservada no diário")));
     let (status, body) = input_answer(&sent, false);
     assert_eq!((status.as_u16(), body["detail"]["code"].clone()), (400, json!("erro_aguarde_clear")));

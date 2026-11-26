@@ -40,7 +40,7 @@ fn input_answers_match_the_python_golden() {
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let params = Params { text: case["text"].as_str().unwrap(), steer: case["steer"].as_bool().unwrap(),
-            terminal: case["terminal"].as_bool().unwrap(), codex: case["provider"] == "codex", operation_id: OP };
+            terminal: case["terminal"].as_bool().unwrap(), codex: case["provider"] == "codex", kimi: case["provider"] == "kimi", operation_id: OP };
         let (sent, diary) = classify(&params, &reply(&case["reply"]));
         // O golden antigo não fornece o resultado do controle terminal por entrada.
         let steered = wants_steer_queue(&params, &sent) && !case["queue"].is_null() && was_steered(OP, &reply(&case["queue"]));
@@ -64,7 +64,7 @@ fn input_answers_match_the_python_golden() {
 fn codex_slash_command_rides_the_queue_and_a_sibling_message_steers_the_turn() {
     // No Codex a barra entra na fila como qualquer texto (`_send_one_codex_locked`): adiada, ela sai depois
     // sozinha, então "mande de novo" faria a skill rodar duas vezes.
-    let codex = |text: &'static str, steer: bool| Params { text, steer, terminal: true, codex: true, operation_id: OP };
+    let codex = |text: &'static str, steer: bool| Params { text, steer, terminal: true, codex: true, kimi: false, operation_id: OP };
     let reply = |disposition: &str| Ok(RuntimeReply { operation_id: OP.into(), disposition: serde_json::from_value(json!(disposition)).unwrap(), payload: json!({}) });
     for disposition in ["deferred", "unknown"] {
         let (sent, _) = classify(&codex("/skill revisar", false), &reply(disposition));

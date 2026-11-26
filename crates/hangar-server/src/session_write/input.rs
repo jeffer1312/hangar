@@ -31,6 +31,8 @@ pub struct Params<'a> {
     pub terminal: bool,
     /// No Codex a barra também tem linha na fila (o ator anexa toda entrada), como no `_send_one_codex_locked`.
     pub codex: bool,
+    /// O Kimi recebe a mensagem digitada na fila da própria TUI: entregue ainda espera o turno acabar.
+    pub kimi: bool,
     pub operation_id: &'a str,
 }
 
@@ -95,9 +97,10 @@ pub fn classify(p: &Params, sent: &Result<RuntimeReply, RuntimeError>) -> (Sent,
     }
 }
 
-/// A orientação afeta só a entrada criada por este pedido, em qualquer modo do Claude e Codex.
+/// A orientação afeta só a entrada criada por este pedido, em qualquer modo do Claude e Codex. No Kimi a entregue
+/// está na fila da TUI, à espera do fim do turno: é ela que o Ctrl+S orienta.
 pub fn wants_steer_queue(p: &Params, sent: &Sent) -> bool {
-    p.steer && matches!(sent, Sent::Done { entry: true, delivered: false, .. })
+    p.steer && matches!(sent, Sent::Done { entry: true, delivered, .. } if !*delivered || p.kimi)
 }
 
 pub fn was_steered(operation_id: &str, promoted: &Result<RuntimeReply, RuntimeError>) -> bool {
@@ -326,7 +329,7 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
     // mensagem marcada mesmo com o Claude trabalhando.
     let claude_terminal = matches!(target.handle, crate::runtime::gateway::EntryHandle::Terminal { .. });
     let steer = steer || (conversation && !claude_terminal);
-    let params = Params { text, steer, terminal: target.terminal, codex: target.provider == "codex", operation_id: &operation_id };
+    let params = Params { text, steer, terminal: target.terminal, codex: target.provider == "codex", kimi: target.provider == "kimi", operation_id: &operation_id };
     let mut payload = json!({"text": text, "pre_transcript": false});
     if conversation { payload["conversation"] = json!(true); }
     let sent = target.handle.command(RuntimeCommand { operation_id: operation_id.clone(), kind: OperationKind::Input, payload }).await;
@@ -788,6 +791,18 @@ mod broadcast_tests {
             assert_eq!(body["delivered"], delivered);
             assert_eq!(body["steered"], steered);
         }
+    }
+
+    #[test]
+    fn kimi_steers_the_message_already_typed_in_its_own_queue() {
+        let params = |kimi| Params { text: "oi", steer: true, terminal: true, codex: false, kimi, operation_id: "op" };
+        let typed = Sent::Done { delivered: true, native: false, entry: true };
+        assert!(wants_steer_queue(&params(true), &typed));
+        assert!(!wants_steer_queue(&params(false), &typed));
+        let waiting = Sent::Done { delivered: false, native: false, entry: true };
+        assert!(wants_steer_queue(&params(false), &waiting));
+        let unasked = Params { steer: false, ..params(true) };
+        assert!(!wants_steer_queue(&unasked, &typed));
     }
 
     #[test]
