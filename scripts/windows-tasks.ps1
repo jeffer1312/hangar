@@ -203,9 +203,9 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         $candidates = @($candidates) + @(Get-HangarBackendLaunchers $rows $candidates $name)
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
         foreach ($listener in $listeners) {
-            # PID 0 nao e dono: o Windows ja deu assim a porta do servidor vivo. Quem ocupa de fato
-            # reaparece na espera da liberacao, depois da parada.
-            if ([int]$listener.OwningProcess -eq 0) { continue }
+            # O Windows ja deu o PID 0 como dono da porta do servidor vivo: com a saude do hangar-server
+            # respondendo nela, nao e outro programa.
+            if ([int]$listener.OwningProcess -eq 0 -and (Test-HangarHealth $port)) { continue }
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {
                 if (Test-HangarServedFront $rows $name @($listener)) { continue }
                 $quem = Format-HangarPortOwner $rows $listener

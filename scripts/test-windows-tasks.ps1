@@ -223,9 +223,18 @@ try {
     Reset-State
     $script:owner = $null
     $script:idleOwner = $true
+    $script:healthy = $true
     $failed = $null
     try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null } catch { $failed = "$_" }
     Assert (-not $failed -and 'start' -in $script:events) "PID 0 na lista de portas barrou o reinicio: $failed"
+    # PID 0 sem a saude do hangar-server na porta pode ser outro programa: recusa antes de parar.
+    Reset-State
+    $script:owner = $null
+    $script:idleOwner = $true
+    $script:healthy = $false
+    $failed = $null
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null } catch { $failed = "$_" }
+    Assert ($failed -match 'ocupada por outro processo' -and -not $script:events.Count) "PID 0 sem o hangar-server parou o servidor: $failed $($script:events -join ',')"
     # Maquina migrada: o hangar-server novo abre a porta do front entre as duas conferencias.
     $frontRows = @(
         (Row 70 1 'node.exe' 'C:\repo\frontend\node_modules\vite\bin\vite.js preview'),

@@ -281,9 +281,9 @@ TIME_WAIT e também com ela ainda aberta.
   passou a 30 s. Causa tirada do relatório, não reproduzida.
 - **PID 0 como dono da porta** (`qw7yzbiy`): a lista de portas deu o System Idle (PID 0) como
   dono da 8765 com o servidor vivo; o diagnóstico depois da volta dizia "ninguém escutando" com a porta
-  aceitando conexão. O reinício recusava antes de parar qualquer coisa. PID 0 não conta como dono na
-  conferência de antes da parada; a espera da liberação, depois dela, continua barrando quem segura a
-  porta de fato.
+  aceitando conexão. O reinício recusava antes de parar qualquer coisa. Na conferência de antes da
+  parada, PID 0 com a saúde do `hangar-server` respondendo na porta não conta como outro programa; sem
+  a saúde, recusa como antes, sem parar nada.
 
 ## Queda do servidor sem religada no Windows (16/11/2026)
 
