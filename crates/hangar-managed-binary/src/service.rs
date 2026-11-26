@@ -276,6 +276,57 @@ pub async fn start(home: &Path, id: &ServiceId) -> Result<(), Error> {
     run("systemctl restart", "systemctl", &["--user", "restart", id.unit]).await
 }
 
+/// Para o programa sem tirar o serviço: ele continua registrado e volta no próximo logon ou no [`start`] e no
+/// [`register`]. Serve para mexer nos dados do programa parado sem o gerenciador religá-lo no meio. Quem
+/// precisa da parada confirmada pergunta ao [`process_running`] depois: o launchd não diz se descarregou.
+///
+/// # Errors
+///
+/// O gerenciador recusou a parada. Serviço sem unit, plist ou tarefa já está parado e não é erro.
+pub async fn stop(home: &Path, managed_dir: &Path, id: &ServiceId) -> Result<(), Error> {
+    if cfg!(target_os = "macos") {
+        return launchd_stop(home, id, "launchctl").await;
+    }
+    if cfg!(windows) {
+        return powershell("Stop-ScheduledTask", &windows_stop_script(id, &windows_vbs_path(home, id), managed_dir)).await;
+    }
+    systemd_stop(home, id, "systemctl").await
+}
+
+/// Só o `ps_stop` do registro: o `Stop-ScheduledTask` sozinho deixaria o laço do `.vbs` religando o programa.
+pub fn windows_stop_script(id: &ServiceId, vbs: &Path, managed_dir: &Path) -> String {
+    format!("$ErrorActionPreference = 'Stop'\n{}", ps_stop(id, vbs, managed_dir))
+}
+
+/// `stop`, e não `disable`: a unit segue habilitada para o próximo logon. Parada explícita não dispara o
+/// `Restart=always`.
+fn systemd_stop_args(id: &ServiceId) -> [&'static str; 3] {
+    ["--user", "stop", id.unit]
+}
+
+/// `unload` sem `-w`: descarrega sem marcar o serviço como desligado, e o plist volta a carregar no logon.
+fn launchd_stop_args(plist: &str) -> [&str; 2] {
+    ["unload", plist]
+}
+
+async fn systemd_stop(home: &Path, id: &ServiceId, systemctl: &str) -> Result<(), Error> {
+    if !systemd_unit_path(home, id).is_file() {
+        return Ok(());
+    }
+    run("systemctl stop", systemctl, &systemd_stop_args(id)).await
+}
+
+async fn launchd_stop(home: &Path, id: &ServiceId, launchctl: &str) -> Result<(), Error> {
+    let plist = launchd_plist_path(home, id);
+    if !plist.is_file() {
+        return Ok(());
+    }
+    let path = plist.to_string_lossy().into_owned();
+    // Descarregar o que não estava carregado falha e não importa; o que segue carregado aparece no `process_running`.
+    let _ = run("launchctl unload", launchctl, &launchd_stop_args(&path)).await;
+    Ok(())
+}
+
 /// Grava o serviço apontando para `s.executable` e o (re)inicia: serve para instalar e para atualizar.
 pub async fn register(home: &Path, managed_dir: &Path, s: &Service) -> Result<(), Error> {
     // No Windows, registrar e ligar vão num script só: uma chamada ao PowerShell em vez de duas.
@@ -532,7 +583,7 @@ mod tests {
     #[test]
     fn stopping_kills_the_relaunch_loop_before_the_program() {
         let (vbs, dir) = (Path::new(r"C:\Users\a\AppData\Local\hangar\hangar-whatsapp.vbs"), Path::new(r"C:\h\w"));
-        let scripts = [windows_script(&WHATSAPP, vbs, dir, true), windows_unregister_script(&WHATSAPP, vbs, dir)];
+        let scripts = [windows_script(&WHATSAPP, vbs, dir, true), windows_unregister_script(&WHATSAPP, vbs, dir), windows_stop_script(&WHATSAPP, vbs, dir)];
         for script in scripts {
             let task = script.find("Stop-ScheduledTask -TaskName 'hangar-whatsapp'").unwrap_or_else(|| panic!("{script}"));
             let wsh = script.find("Get-CimInstance Win32_Process -Filter \"Name = 'wscript.exe'\" | Where-Object").unwrap_or_else(|| panic!("consulta que não engole erro: {script}"));
@@ -542,6 +593,34 @@ mod tests {
                 "só o .vbs desta conta, nunca o de outro usuário: {script}");
             assert!(script.contains("ForEach-Object { $id = $_.ProcessId; try { Stop-Process -Id $id -Force -ErrorAction Stop } catch { if ((Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName -eq 'wscript') { throw } } }"), "só o laço que já saiu é ignorado, nem um PID reaproveitado: {script}");
         }
+    }
+
+    /// Parar não tira o serviço: nada de `disable`, `-w` nem `Unregister`, e ele volta no próximo logon.
+    #[test]
+    fn stopping_keeps_the_service_registered() {
+        assert_eq!(systemd_stop_args(&WHATSAPP), ["--user", "stop", "hangar-whatsapp.service"]);
+        assert_eq!(launchd_stop_args("/Users/a/Library/LaunchAgents/dev.hangar.whatsapp.plist"),
+            ["unload", "/Users/a/Library/LaunchAgents/dev.hangar.whatsapp.plist"]);
+        let (vbs, dir) = (Path::new(r"C:\Users\a\AppData\Local\hangar\hangar-whatsapp.vbs"), Path::new(r"C:\h\w"));
+        let stop = windows_stop_script(&WHATSAPP, vbs, dir);
+        assert!(stop.starts_with("$ErrorActionPreference = 'Stop'\nStop-ScheduledTask -TaskName 'hangar-whatsapp' "), "{stop}");
+        for kept in ["Register-ScheduledTask", "Unregister-ScheduledTask", "Start-ScheduledTask"] {
+            assert!(!stop.contains(kept), "{kept}: {stop}");
+        }
+    }
+
+    /// Sem a unit no disco não se pergunta ao `systemctl`; o que sai com erro é erro.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stopping_without_a_unit_is_done_and_a_refused_stop_an_error() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(systemd_stop(home.path(), &WHATSAPP, "/nao/existe/systemctl").await, Ok(()), "sem unit");
+        let unit = systemd_unit_path(home.path(), &WHATSAPP);
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        std::fs::write(&unit, "[Unit]\n").unwrap();
+        assert_eq!(systemd_stop(home.path(), &WHATSAPP, "false").await.unwrap_err().step, "systemctl stop");
+        assert_eq!(systemd_stop(home.path(), &WHATSAPP, "true").await, Ok(()));
+        assert_eq!(launchd_stop(home.path(), &WHATSAPP, "/nao/existe/launchctl").await, Ok(()), "sem plist");
     }
 
     #[test]
