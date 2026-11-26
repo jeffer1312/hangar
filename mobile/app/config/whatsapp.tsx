@@ -14,10 +14,10 @@ import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { Chip, Muted } from '../../src/features/config/ServerConfigParts';
 import { useSettingsColors } from '../../src/features/config/colors';
 import {
-  PAIR_GRACE_MS, POLL_MS, asksAccept, failedJob, installAccepted, isWhatsAppState, phoneDigits, phrase, readErrorShows, shouldPoll, viewOf,
-  type WhatsAppView,
+  PAIR_GRACE_MS, POLL_MS, asksAccept, autoUpdateFailure, failedJob, installAccepted, isWhatsAppState, jobRunning, ownUpdateEnd, phoneDigits, phrase,
+  readErrorShows, shouldPoll, stoppedByBackup, versionLine, viewOf, type WhatsAppView,
 } from '../../src/features/config/whatsapp';
-import { AcceptRisks, Button, Check, Connected, Off, Pair, Problem, Working, styles, type Act } from '../../src/features/config/WhatsAppParts';
+import { AcceptRisks, Button, Check, Connected, Off, Pair, Problem, Version, Working, styles, type Act } from '../../src/features/config/WhatsAppParts';
 import { useWhatsAppSeen } from '../../src/features/config/whatsappSeen';
 import { superficie } from '../../src/theme/superficie';
 import { Sheet } from '../../src/ui/Sheet';
@@ -26,7 +26,7 @@ import { useServers } from '../../src/stores/servers';
 import * as m from '../../src/paraglide/messages';
 
 type Load = { status: 'loading' } | { status: 'error'; error: string; code?: string } | { status: 'ready'; data: WhatsAppState };
-type Confirm = 'logout' | 'wipe' | 'remove';
+type Confirm = 'logout' | 'wipe' | 'remove' | 'migrate';
 
 const ERR: Record<string, () => string> = {
   accept_required: m.native_whatsapp_err_accept_required,
@@ -77,6 +77,9 @@ const JOB_ERR: Record<string, () => string> = {
   not_started: m.native_whatsapp_job_err_not_started,
   job_crashed: m.native_whatsapp_job_err_job_crashed,
   update_no_rollback: m.native_whatsapp_job_err_update_no_rollback,
+  update_data_migrated: m.native_whatsapp_job_err_update_data_migrated,
+  update_restored: m.native_whatsapp_job_err_update_restored,
+  backup_failed: m.native_whatsapp_job_err_backup_failed,
   record_failed: m.native_whatsapp_job_err_record_failed,
   accept_write_failed: m.native_whatsapp_job_err_accept_write_failed,
 };
@@ -100,6 +103,10 @@ export default function WhatsApp() {
   // Apagou com o serviço parado: o aparelho continua na lista do celular.
   const [unlinkOnPhone, setUnlinkOnPhone] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  // A atualização que esta tela pediu: só ela, ao parar por mudar o formato dos dados, abre a confirmação sozinha.
+  const ownUpdate = useRef(false);
+  // O 409 de um envio em curso: a próxima leitura diz se havia job a acompanhar ou se o aviso aparece.
+  const updateBusy = useRef(false);
   // Troca de servidor no meio de uma chamada: a resposta do anterior não pinta esta tela.
   const gen = useRef(0);
   const writeSeq = useRef(0);
@@ -160,6 +167,8 @@ export default function WhatsApp() {
     setLastPhone('');
     setUnlinkOnPhone(false);
     setConfirm(null);
+    ownUpdate.current = false;
+    updateBusy.current = false;
     read();
     return () => { gen.current++; };
   }, [read, resetPairing, server?.id, server?.baseUrl, server?.token]);
@@ -176,6 +185,19 @@ export default function WhatsApp() {
 
   const data = load.status === 'ready' ? load.data : null;
   const view: WhatsAppView | null = data ? viewOf(data) : null;
+  // As duas versões da confirmação da mudança de formato; sem elas a folha não tem o que dizer.
+  const migration = data?.update && data.installed_tag ? { tag: data.update.latest, installed: data.installed_tag } : null;
+
+  useEffect(() => {
+    if (!data) return;
+    if (updateBusy.current) {
+      updateBusy.current = false;
+      if (!jobRunning(data)) { setWriteError(m.native_whatsapp_update_busy()); haptic.error(); }
+    }
+    const end = ownUpdateEnd(data, ownUpdate.current);
+    if (end) ownUpdate.current = false;
+    if (end === 'confirm') setConfirm('migrate');
+  }, [data]);
 
   // Conectou: o pedido de pareamento acabou.
   useEffect(() => {
@@ -206,12 +228,16 @@ export default function WhatsApp() {
         if (!live()) return;
         if (kind === 'wipe') setUnlinkOnPhone((r as { logout?: unknown } | undefined)?.logout === 'not_done');
         if (kind === 'pair') setAwaitUntil(Date.now() + PAIR_GRACE_MS);
+        if (kind === 'update') ownUpdate.current = true;
         if (kind === 'logout' || kind === 'wipe' || kind === 'uninstall') haptic.success();
       })
       .catch((e: unknown) => {
         if (!live()) return;
-        // Outro job já em curso: a página passa a acompanhar esse.
-        if ((kind === 'install' || kind === 'update') && errorCode(e) === 'whatsapp_busy') return;
+        // Outro job já em curso: a página passa a acompanhar esse. Sem job, quem segura a vez é um envio.
+        if ((kind === 'install' || kind === 'update') && errorCode(e) === 'whatsapp_busy') {
+          if (kind === 'update') updateBusy.current = true;
+          return;
+        }
         setWriteError(errorText(e));
         haptic.error();
       })
@@ -250,9 +276,11 @@ export default function WhatsApp() {
     resetPairing();
   };
 
+  const update = () => act('update', (s) => updateWhatsApp(s));
   const confirmed = (kind: Confirm, logoutFirst: boolean) => {
     setConfirm(null);
-    if (kind === 'logout') act('logout', logoutWhatsApp);
+    if (kind === 'migrate') act('update', (s) => updateWhatsApp(s, true));
+    else if (kind === 'logout') act('logout', logoutWhatsApp);
     else if (kind === 'wipe') act('wipe', wipeWhatsApp);
     else act('uninstall', (s) => uninstallWhatsApp(s, logoutFirst));
   };
@@ -264,6 +292,8 @@ export default function WhatsApp() {
     action={m.native_server_retry()} onPress={() => { setLoad({ status: 'loading' }); read(); }} />;
   else if (data && view) {
     const failed = view === 'working' ? null : failedJob(data);
+    const auto = autoUpdateFailure(data);
+    const line = versionLine(data);
     body = <>
       {failed ? <Problem tone="error" icon="CircleAlert"
         text={(failed.kind === 'update' ? m.native_whatsapp_update_failed : m.native_whatsapp_install_failed)({
@@ -271,28 +301,35 @@ export default function WhatsApp() {
         // Reinstalar exige o aceite, o gravado no servidor ou o marcado agora.
         action={m.native_server_retry()} busy={!!busy || (failed.kind !== 'update' && !accepted && !data.accepted_at)}
         loading={busy === (failed.kind === 'update' ? 'update' : 'install')}
-        onPress={() => (failed.kind === 'update' ? act('update', updateWhatsApp) : install())} /> : null}
+        onPress={() => (failed.kind === 'update' ? update() : install())} /> : null}
+      {auto ? <Problem tone="error" icon="CircleAlert"
+        text={m.native_whatsapp_auto_update_failed({ tag: auto.tag, installed: auto.installed,
+          reason: phrase(JOB_ERR, auto.code, m.native_whatsapp_job_err_unknown) })}
+        action={m.native_server_retry()} busy={!!busy} loading={busy === 'update'}
+        onPress={() => (auto.migration ? setConfirm('migrate') : update())} /> : null}
       {view === 'off' ? <Off accepted={accepted} busy={busy} onToggle={toggleAccepted} onInstall={install} />
         : view === 'working' ? <Working state={data} />
         // Sem aceite gravado (a migração instala sem gravá-lo), religar pede o mesmo aceite do desligado.
         : view === 'stopped' ? <>
-          <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_stopped_title()} text={m.native_whatsapp_stopped_body()}
+          <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_stopped_title()}
+            text={stoppedByBackup(data) ? m.native_whatsapp_status_err_backup_failed() : m.native_whatsapp_stopped_body()}
             action={m.native_server_retry()} busy={!!busy || !installAccepted(data, accepted)} loading={busy === 'install'} onPress={install} />
           {asksAccept(data) ? <AcceptRisks accepted={accepted} busy={busy} onToggle={toggleAccepted} /> : null}
         </>
         : view === 'schema_newer' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_schema_newer_title()}
           text={m.native_whatsapp_schema_newer_body()}
-          action={m.native_whatsapp_update()} primary busy={!!busy} loading={busy === 'update'} onPress={() => act('update', updateWhatsApp)} />
+          action={m.native_whatsapp_update()} primary busy={!!busy} loading={busy === 'update'} onPress={() => update()} />
         // Botão secundário: só procura de novo, porque a versão posterior pode sair com o job ainda na memória.
         : view === 'schema_newer_latest' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_schema_newer_title()}
           text={m.native_whatsapp_schema_newer_latest_body()}
-          action={m.native_whatsapp_check_again()} busy={!!busy} loading={busy === 'update'} onPress={() => act('update', updateWhatsApp)} />
+          action={m.native_whatsapp_check_again()} busy={!!busy} loading={busy === 'update'} onPress={() => update()} />
         : view === 'unreachable' || view === 'unknown' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_unreachable_title()}
           text={view === 'unreachable' ? m.native_whatsapp_unreachable_body() : m.native_invalid_response()}
           action={m.native_server_retry()} busy={!!busy} onPress={read} />
         : view === 'outdated' ? <Problem tone="warning" icon="TriangleAlert" title={m.native_whatsapp_outdated_title()} text={m.native_whatsapp_outdated_body()}
-          action={m.native_whatsapp_update()} primary busy={!!busy} loading={busy === 'update'} onPress={() => act('update', updateWhatsApp)} />
-        : view === 'connected' ? <Connected state={data} />
+          action={m.native_whatsapp_update()} primary busy={!!busy} loading={busy === 'update'} onPress={() => update()} />
+        : view === 'connected' ? <Connected state={data} version={line
+          ? <Version line={line} busy={busy} onCheck={update} onUpdate={update} onAsk={() => setConfirm('migrate')} /> : null} />
         : <Pair state={data} view={view} busy={busy} qrWanted={qrWanted} asked={asked} phone={phone} phoneError={phoneError}
           awaiting={awaitUntil !== null && Date.now() < awaitUntil}
           onPhone={(t) => { setPhone(t); setPhoneError(''); }} onRequestCode={() => requestCode()} onShowQr={showQr}
@@ -318,8 +355,8 @@ export default function WhatsApp() {
         {unlinkOnPhone ? <Problem tone="warning" icon="TriangleAlert" text={m.native_whatsapp_unlink_on_phone()} /> : null}
         {body}
       </Pagina>
-      {confirm && data ? <ConfirmSheet kind={confirm} running={data.service === 'running'} connected={view === 'connected'}
-        onConfirm={confirmed} onClose={() => setConfirm(null)} /> : null}
+      {confirm && data && (confirm !== 'migrate' || migration) ? <ConfirmSheet kind={confirm} running={data.service === 'running'}
+        connected={view === 'connected'} migration={migration} onConfirm={confirmed} onClose={() => setConfirm(null)} /> : null}
     </KeyboardAvoidingView>
   );
 }
@@ -336,13 +373,16 @@ function Loading() {
 }
 
 /** Folha de confirmação: Remover oferece desconectar antes, porque depois só o celular tira o aparelho da lista. */
-function ConfirmSheet({ kind, running, connected, onConfirm, onClose }: {
-  kind: Confirm; running: boolean; connected: boolean; onConfirm: (kind: Confirm, logoutFirst: boolean) => void; onClose: () => void;
+function ConfirmSheet({ kind, running, connected, migration, onConfirm, onClose }: {
+  kind: Confirm; running: boolean; connected: boolean; migration: { tag: string; installed: string } | null;
+  onConfirm: (kind: Confirm, logoutFirst: boolean) => void; onClose: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const c = useSettingsColors();
   const [logoutFirst, setLogoutFirst] = useState(connected);
-  const [title, text, ok] = kind === 'logout'
+  const [title, text, ok] = kind === 'migrate' && migration
+    ? [m.native_whatsapp_migration_title({ tag: migration.tag }), m.native_whatsapp_migration_body(migration), m.native_whatsapp_update()]
+    : kind === 'logout'
     ? [m.native_whatsapp_disconnect_title(), m.native_whatsapp_disconnect_body(), m.native_whatsapp_disconnect()]
     : kind === 'wipe'
       ? [m.native_whatsapp_wipe_title(), running ? m.native_whatsapp_wipe_body() : m.native_whatsapp_wipe_body_stopped(), m.native_whatsapp_wipe_ok()]
@@ -351,9 +391,11 @@ function ConfirmSheet({ kind, running, connected, onConfirm, onClose }: {
     <ScrollView contentContainerStyle={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
       <Text accessibilityRole="header" style={[styles.sheetTitle, { color: c.text }]}>{title}</Text>
       <Text style={[styles.body, { color: c.muted }]}>{text}</Text>
+      {kind === 'migrate' && migration
+        ? <Text style={[styles.body, { color: c.muted }]}>{m.native_whatsapp_migration_backup({ installed: migration.installed })}</Text> : null}
       {kind === 'remove' && connected ? <Check checked={logoutFirst} label={m.native_whatsapp_remove_logout()}
         onToggle={() => { haptic.selection(); setLogoutFirst((v) => !v); }} /> : null}
-      <Button kind={kind === 'logout' ? 'primary' : 'danger'} label={ok} onPress={() => onConfirm(kind, kind === 'remove' && connected && logoutFirst)} />
+      <Button kind={kind === 'logout' || kind === 'migrate' ? 'primary' : 'danger'} label={ok} onPress={() => onConfirm(kind, kind === 'remove' && connected && logoutFirst)} />
       <Button kind="ghost" label={m.native_cancel()} onPress={onClose} />
     </ScrollView>
   </Sheet>;

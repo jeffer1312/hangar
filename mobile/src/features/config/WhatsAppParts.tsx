@@ -5,7 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { intlLocale, relativeTime, type WhatsAppState, type WhatsAppTotals } from '@hangar/core';
 import { BlockHead, Muted, useInputStyle } from './ServerConfigParts';
 import { useSettingsColors, withAlpha } from './colors';
-import { STEPS, codeOf, minutesLeft, phrase, stepIndex, type WhatsAppView } from './whatsapp';
+import { STEPS, codeOf, minutesLeft, phrase, stepIndex, type VersionLine, type WhatsAppView } from './whatsapp';
 import { InstallItems } from '../accounts/InstallItems';
 import { superficie } from '../../theme/superficie';
 import { Icon, type IconName } from '../../ui/Icon';
@@ -136,7 +136,8 @@ export function AcceptRisks({ accepted, busy, onToggle }: { accepted: boolean; b
 
 export function Working({ state }: { state: WhatsAppState }) {
   const c = useSettingsColors();
-  const update = state.job?.kind === 'update';
+  // A passada automática também troca o programa de verdade.
+  const update = state.job?.kind === 'update' || state.job?.kind === 'auto_update';
   const current = stepIndex(state.job?.step);
   return <>
     <Muted>{update ? m.native_whatsapp_updating_title() : m.native_whatsapp_installing_title()}</Muted>
@@ -213,7 +214,8 @@ export function Pair({ state, view, busy, qrWanted, asked, phone, phoneError, aw
   </>;
 }
 
-export function Connected({ state }: { state: WhatsAppState }) {
+/** `version`: o cartão da versão, logo abaixo dos números; a miniatura da novidade não o desenha. */
+export function Connected({ state, version }: { state: WhatsAppState; version?: ReactNode }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
   const status = state.status;
@@ -243,6 +245,7 @@ export function Connected({ state }: { state: WhatsAppState }) {
       <Stat value={grouped(t.chats)} label={m.native_whatsapp_total_chats({ groups: grouped(t.groups) })} />
       <Stat value={grouped(t.media_saved)} label={m.native_whatsapp_total_media()} />
     </View>
+    {version}
     <BlockHead title={m.native_whatsapp_media_title()} help={m.native_whatsapp_media_desc()} />
     <Card>
       <View style={[styles.bar, { backgroundColor: c.inset }]} accessible={false}>
@@ -263,6 +266,30 @@ export function Connected({ state }: { state: WhatsAppState }) {
       <Text style={[styles.small, { color: c.muted }]}>{m.native_whatsapp_usage_skill_hint()}</Text>
     </Card>
   </>;
+}
+
+/** A versão instalada e o botão que procura, atualiza ou pede a confirmação da mudança de formato. */
+export function Version({ line, busy, onCheck, onUpdate, onAsk }: {
+  line: VersionLine; busy: Act | null; onCheck: () => void; onUpdate: () => void; onAsk: () => void;
+}) {
+  const { theme } = useUnistyles();
+  const c = useSettingsColors();
+  const newer = line.kind === 'available' || line.kind === 'migration' ? line.latest : null;
+  const detail = line.kind === 'migration' ? m.native_whatsapp_update_migration()
+    : line.kind === 'available' ? m.native_whatsapp_update_quick()
+    : line.checkedAt === null ? m.native_whatsapp_version_never()
+    : (line.kind === 'current' ? m.native_whatsapp_version_current : m.native_whatsapp_version_checked)({ ago: relativeTime(line.checkedAt) });
+  const [kind, label, onPress]: ['primary' | 'ghost', string, () => void] = line.kind === 'migration' ? ['primary', m.native_whatsapp_update_ask(), onAsk]
+    : line.kind === 'available' ? ['primary', m.native_whatsapp_update(), onUpdate]
+    : ['ghost', m.native_whatsapp_check_update(), onCheck];
+  return <Card>
+    <Text style={[styles.body, { color: c.text }]}>
+      {m.native_whatsapp_version_label()} <Text style={styles.strong}>{line.tag}</Text>
+      {newer ? <Text>{' · '}<Text style={{ color: theme.tokens.status.success }}>{m.native_whatsapp_update_available({ tag: newer })}</Text></Text> : null}
+    </Text>
+    <Text style={[styles.small, { color: line.kind === 'migration' ? theme.tokens.status.warning : c.muted }]}>{detail}</Text>
+    <Button kind={kind} label={label} onPress={onPress} disabled={!!busy} loading={busy === 'update'} />
+  </Card>;
 }
 
 function Stat({ value, label }: { value: string; label: string }) {

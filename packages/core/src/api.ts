@@ -5040,7 +5040,8 @@ export type WhatsAppLinkState = 'unpaired' | 'pairing' | 'connected' | 'logged_o
 
 /** `error` aceito como texto ou `{code}`: o servidor já mandou dos dois jeitos. */
 export interface WhatsAppJob {
-  kind: 'install' | 'update' | string;
+  /** `auto_update`: a passada de hora em hora do servidor, não um clique do dono. */
+  kind: 'install' | 'update' | 'auto_update' | string;
   /** Ausente ou `null` conta como a primeira etapa. */
   step?: string | null;
   done: boolean;
@@ -5084,6 +5085,22 @@ export interface WhatsAppState {
   qr_svg: string | null;
   /** De pé: por que o `status` não veio. Parado: `whatsapp_schema_newer` quando os dados são de um binário mais novo. */
   status_error?: string | null;
+  installed_tag?: string | null;
+  /** Hora (RFC 3339, UTC) da última procura de versão nova, achando ou não. */
+  update_checked_at?: string | null;
+  /** `null` quando não há versão mais nova que a instalada. */
+  update?: WhatsAppUpdate | null;
+}
+
+export interface WhatsAppUpdate {
+  latest: string;
+  /** Trocar muda o formato do arquivo de mensagens (ou não se sabe): só entra com a confirmação do dono. */
+  migration: boolean;
+  checked_at: string;
+  /** A última tentativa de chegar a `latest` que falhou depois de mexer no serviço; a passada automática não a repete. */
+  failed: { tag: string; code: string } | null;
+  /** Falha antes de mexer no serviço (download etc.): a passada seguinte tenta de novo sozinha. */
+  last_error?: { tag: string; code: string } | null;
 }
 
 export function getWhatsApp(s: Server): Promise<WhatsAppState> {
@@ -5105,8 +5122,9 @@ export function installWhatsApp(s: Server): Promise<{ job: WhatsAppJob }> {
   return postWhatsApp(s, 'install', { accept: true });
 }
 
-export function updateWhatsApp(s: Server): Promise<{ job: WhatsAppJob }> {
-  return postWhatsApp(s, 'update');
+/** Sem `confirmMigration`, versão que muda o formato dos dados para em `needs_confirm`. */
+export function updateWhatsApp(s: Server, confirmMigration = false): Promise<{ job: WhatsAppJob }> {
+  return postWhatsApp(s, 'update', confirmMigration ? { confirm_migration: true } : undefined);
 }
 
 /** Com `phone` (só algarismos, com o código do país) o celular recebe um código; sem ele, o servidor gera o QR. */

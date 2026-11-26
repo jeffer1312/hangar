@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { WhatsAppState } from '@hangar/core';
-import { asksAccept, codeOf, failedJob, installAccepted, isWhatsAppState, minutesLeft, phoneDigits, phrase, readErrorShows, shouldPoll, stepIndex, viewOf } from './whatsapp';
+import {
+  asksAccept, autoUpdateFailure, codeOf, failedJob, installAccepted, isWhatsAppState, jobRunning, minutesLeft, ownUpdateEnd, phoneDigits, phrase,
+  readErrorShows, shouldPoll, stepIndex, stoppedByBackup, versionLine, viewOf,
+} from './whatsapp';
 
 const base = (service: WhatsAppState['service'], status: Partial<NonNullable<WhatsAppState['status']>> | null): WhatsAppState => ({
   installed: true, accepted_at: '2026-11-22T10:00:00Z', service, job: null, qr_svg: null,
@@ -175,5 +178,83 @@ describe('tempo', () => {
     expect(minutesLeft('2026-11-22T14:02:30Z', now)).toBe(3);
     expect(minutesLeft('2026-11-22T13:59:00Z', now)).toBeNull();
     expect(minutesLeft(undefined, now)).toBeNull();
+  });
+});
+
+describe('atualização do programa', () => {
+  const connected = (extra: Partial<WhatsAppState> = {}): WhatsAppState => ({ ...base('running', { state: 'connected' }), installed_tag: 'v0.3.0', ...extra });
+  const newer = (migration: boolean, failed: { tag: string; code: string } | null = null) =>
+    ({ latest: 'v0.3.1', migration, checked_at: '2026-11-26T13:48:00Z', failed });
+
+  it('a linha da versão: em dia, sem procura, versão nova, muda o formato e depois de uma falha', () => {
+    expect(versionLine(connected({ update: null, update_checked_at: '2026-11-26T13:48:00Z' })))
+      .toEqual({ kind: 'current', tag: 'v0.3.0', checkedAt: Date.parse('2026-11-26T13:48:00Z') / 1000 });
+    expect(versionLine(connected())).toEqual({ kind: 'current', tag: 'v0.3.0', checkedAt: null });
+    expect(versionLine(connected({ update_checked_at: 'ontem' }))).toEqual({ kind: 'current', tag: 'v0.3.0', checkedAt: null });
+    expect(versionLine(connected({ update: newer(false) }))).toEqual({ kind: 'available', tag: 'v0.3.0', latest: 'v0.3.1' });
+    expect(versionLine(connected({ update: newer(true) }))).toEqual({ kind: 'migration', tag: 'v0.3.0', latest: 'v0.3.1' });
+    // A faixa do topo oferece a versão de novo: a linha só diz quando procurou.
+    expect(versionLine(connected({ update: newer(false, { tag: 'v0.3.1', code: 'whatsapp_not_started' }) })))
+      .toEqual({ kind: 'checked', tag: 'v0.3.0', checkedAt: Date.parse('2026-11-26T13:48:00Z') / 1000 });
+  });
+
+  it('a linha só aparece conectado e com a versão instalada conhecida', () => {
+    expect(versionLine(connected({ installed_tag: null }))).toBeNull();
+    expect(versionLine({ ...connected(), status: { ...connected().status!, state: 'pairing' } })).toBeNull();
+    expect(versionLine({ ...connected(), service: 'stopped', status: null })).toBeNull();
+    expect(versionLine({ ...connected(), job: { kind: 'auto_update', step: 'service', done: false, error: null } })).toBeNull();
+  });
+
+  it('a falha registrada vira a faixa do topo, salvo com job andando ou a faixa do job do dono', () => {
+    const failed = { tag: 'v0.3.1', code: 'whatsapp_not_started' };
+    expect(autoUpdateFailure(connected({ update: newer(true, failed) })))
+      .toEqual({ tag: 'v0.3.1', code: 'whatsapp_not_started', installed: 'v0.3.0', migration: true });
+    expect(autoUpdateFailure(connected({ update: newer(false) }))).toBeNull();
+    expect(autoUpdateFailure(connected({ update: null }))).toBeNull();
+    // Falha antes de mexer no serviço se repete sozinha: não abre faixa.
+    expect(autoUpdateFailure(connected({ update: { ...newer(false), last_error: failed } }))).toBeNull();
+    expect(autoUpdateFailure(connected({ update: newer(false, failed), job: { kind: 'auto_update', step: 'download', done: false, error: null } }))).toBeNull();
+    expect(autoUpdateFailure(connected({ update: newer(false, failed), job: { kind: 'update', step: 'start', done: true, error: 'whatsapp_not_started' } })))
+      .toBeNull();
+    // A passada automática que terminou não tem faixa de job: a falha aparece por aqui.
+    const auto = connected({ update: newer(false, failed), job: { kind: 'auto_update', step: 'start', done: true, error: 'whatsapp_not_started' } });
+    expect(failedJob(auto)).toBeNull();
+    expect(autoUpdateFailure(auto)).not.toBeNull();
+  });
+
+  it('a passada automática em curso mostra a vista de atualizando', () => {
+    const s = connected({ job: { kind: 'auto_update', step: 'service', done: false, error: null } });
+    expect(viewOf(s)).toBe('working');
+    expect(jobRunning(s)).toBe(true);
+    expect(jobRunning(connected())).toBe(false);
+  });
+
+  it('a confirmação abre sozinha só quando a atualização desta tela parou por mudar o formato', () => {
+    const stopped = connected({ update: newer(true), job: { kind: 'update', step: 'download', done: true, error: null, outcome: 'needs_confirm' } });
+    expect(ownUpdateEnd(stopped, true)).toBe('confirm');
+    expect(ownUpdateEnd(stopped, false)).toBeNull();
+    expect(ownUpdateEnd({ ...stopped, job: { ...stopped.job!, kind: 'auto_update' } }, true)).toBe('ended');
+    expect(ownUpdateEnd({ ...stopped, job: { ...stopped.job!, outcome: 'updated' } }, true)).toBe('ended');
+    expect(ownUpdateEnd({ ...stopped, job: { ...stopped.job!, done: false } }, true)).toBeNull();
+    expect(ownUpdateEnd({ ...stopped, job: null }, true)).toBe('ended');
+    // Sem as duas versões a folha não tem o que dizer.
+    expect(ownUpdateEnd({ ...stopped, update: null }, true)).toBe('ended');
+  });
+
+  it('parado porque a cópia antes de converter falhou: o parado comum com outro texto', () => {
+    const s = { ...base('stopped', null), status_error: 'whatsapp_backup_failed' };
+    expect(viewOf(s)).toBe('stopped');
+    expect(stoppedByBackup(s)).toBe(true);
+    expect(stoppedByBackup(base('stopped', null))).toBe(false);
+    expect(stoppedByBackup({ ...base('running', null), status_error: 'whatsapp_backup_failed' })).toBe(false);
+  });
+
+  it('confere installed_tag, update_checked_at e update', () => {
+    expect(isWhatsAppState(connected({ update: newer(true, { tag: 'v0.3.1', code: 'x' }), update_checked_at: 'x' }))).toBe(true);
+    expect(isWhatsAppState(connected({ update: { ...newer(false), last_error: { tag: 'v0.3.1', code: 'x' } } }))).toBe(true);
+    expect(isWhatsAppState({ ...connected(), installed_tag: 3 })).toBe(false);
+    expect(isWhatsAppState({ ...connected(), update: { ...newer(false), migration: 'yes' } })).toBe(false);
+    expect(isWhatsAppState({ ...connected(), update: { ...newer(false), failed: { tag: 'v0.3.1' } } })).toBe(false);
+    expect(isWhatsAppState({ ...connected(), update: { ...newer(false), last_error: 'x' } })).toBe(false);
   });
 });
