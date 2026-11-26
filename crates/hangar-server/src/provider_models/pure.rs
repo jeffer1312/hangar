@@ -300,6 +300,16 @@ pub fn parse_thinking_row(pane: &str) -> Option<Value> {
     None
 }
 
+/// O nome da linha marcada pelo cursor no picker do `/model` do Kimi, sem a coluna do provedor.
+pub fn kimi_picker_cursor(pane: &str) -> Option<String> {
+    let start = pane.find("Select a model")?;
+    pane[start..].lines().find_map(|line| {
+        let rest = line.trim_start().strip_prefix('❯')?;
+        let name = rest.trim().split("  ").next()?.trim();
+        (!name.is_empty()).then(|| name.to_owned())
+    })
+}
+
 pub fn new_line_matches(
     line: Option<&Value>,
     before: Option<&Value>,

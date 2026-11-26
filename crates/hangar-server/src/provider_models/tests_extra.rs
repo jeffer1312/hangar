@@ -383,7 +383,7 @@ fn route_state(
     );
     write(
         &root.join("picker"),
-        "Select a model\nThinking (←→ to switch)\nLow [ High ]\n",
+        "Select a model\n   ❯ One   p\nThinking (←→ to switch)\nLow [ High ]\n",
     );
     write(
         &root.join("result"),
@@ -756,7 +756,7 @@ async fn public_post_success_routes_keep_python_response_and_keyboard_effects() 
         if provider == "pi" {
             assert!(keys.find("/cp-model p one").unwrap() < keys.find("/cp-think high").unwrap());
         } else {
-            assert!(keys.contains("p/one"));
+            assert!(keys.contains("One") && !keys.contains("p/one"), "{keys}");
             assert!(keys.contains("M-s"));
         }
     }

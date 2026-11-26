@@ -429,7 +429,7 @@ async fn session(st: &Arc<AppState>, request: Request) -> Result<Value, ModelErr
    let target=body["model"].as_str().filter(|v|!v.is_empty()).map(|m|pure::check_kimi(&catalog,m)).transpose()?;
    let effort=body["effort"].as_str().filter(|v|!v.is_empty()).map(|e|if let Some(target)=target.as_ref(){pure::check_effort(target,e)}else{pure::clean(e,"alias").map(|v|v.to_lowercase())}).transpose()?;
    if target.is_none()&&effort.is_none(){return Err(coded(422,"erro_model_effort_faltando","informe model e/ou effort"));}
-   driver::prepare(&io,timing).await?;let result=driver::kimi_switch(&io,target.as_ref().and_then(|t|t["alias"].as_str()),target.as_ref().and_then(|t|t["name"].as_str()),effort.as_deref(),timing).await?;
+   driver::prepare(&io,timing).await?;let result=driver::kimi_switch(&io,target.as_ref().and_then(|t|t["name"].as_str()),effort.as_deref(),timing).await?;
    Ok(json!({"ok":true,"current":target.as_ref().map(|t|json!({"alias":t["alias"],"name":t["name"]})),"effort":effort,"result":result["result"]}))
   }
  }).await.map_err(|_|coded(503,"provider_model_driver_failed","o controle de modelo falhou"))?
