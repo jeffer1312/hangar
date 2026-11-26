@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
+use std::future::Future as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -16,9 +17,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hangar_integrations::{
     AuthConfig, ClientConfig, IntegrationConfig, IntegrationRegistry, IntegrationSecrets,
     IntegrationStatus, IntegrationUpdate, McpClientManager, MemoryKeyStore, OAUTH_CALLBACK_PATH,
-    OAuthError, OAuthManager, OAuthOrigin, OAuthStartInput, OAuthStartOutcome, PermissionPolicy,
-    PresetAuthKind, SecretStore, TokenRefresher, ToolsCache, Transport, catalog, compute_status,
-    find_preset,
+    OAuthError, OAuthManager, OAuthOrigin, OAuthStartInput, OAuthStartOutcome, OAuthTokens,
+    PermissionPolicy, PresetAuthKind, SecretStore, TokenRefresher, ToolsCache, Transport, catalog,
+    compute_status, find_preset,
 };
 use ring::digest::{SHA256, digest};
 use rmcp::model::{
@@ -1539,23 +1540,37 @@ async fn concurrent_refresh_mcp_401_retry_and_invalid_grant_reconnect_flow() {
         .await
         .expect("primeira tarefa deve entrar no /token");
 
-    let b_started = Arc::new(Notify::new());
-    let b_started_tx = Arc::clone(&b_started);
-    let oauth_b = oauth.clone();
-    let task_b = tokio::spawn(async move {
-        b_started_tx.notify_one();
-        oauth_b.refresh_access_token("figma-rot").await
-    });
-    tokio::time::timeout(Duration::from_secs(2), b_started.notified())
-        .await
-        .expect("task_b deve iniciar tentativa de refresh");
-    // Cede controle após task_b sinalizar início para dar chance de alcançar a trava de refresh.
-    for _ in 0..8 {
-        tokio::task::yield_now().await;
+    // Polling determinístico: o primeiro `.await` de `refresh_access_token` é `lock.lock().await`,
+    // então um único `poll` enquanto A segura `refresh_gate` coloca B na fila da trava de refresh.
+    struct LockProbeWaker {
+        woken: AtomicBool,
+        notify: Notify,
     }
+    impl std::task::Wake for LockProbeWaker {
+        fn wake(self: Arc<Self>) {
+            self.woken.store(true, Ordering::SeqCst);
+            self.notify.notify_one();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.woken.store(true, Ordering::SeqCst);
+            self.notify.notify_one();
+        }
+    }
+
+    let probe = Arc::new(LockProbeWaker {
+        woken: AtomicBool::new(false),
+        notify: Notify::new(),
+    });
+    let waker = std::task::Waker::from(Arc::clone(&probe));
+    let mut cx = std::task::Context::from_waker(&waker);
+    let mut fut_b = Box::pin(oauth.refresh_access_token("figma-rot"));
     assert!(
-        !task_b.is_finished(),
-        "task_b deveria aguardar a trava de refresh enquanto task_a segura o gate"
+        fut_b.as_mut().poll(&mut cx).is_pending(),
+        "task_b deve suspender na aquisição da trava de refresh enquanto task_a segura o gate"
+    );
+    assert!(
+        !probe.woken.load(Ordering::SeqCst),
+        "task_b não pode ser acordada antes de task_a liberar a trava de refresh"
     );
     assert_eq!(
         server_state.refresh_calls.load(Ordering::SeqCst),
@@ -1564,11 +1579,14 @@ async fn concurrent_refresh_mcp_401_retry_and_invalid_grant_reconnect_flow() {
     );
     allow_first.notify_one();
 
-    let (res_a, res_b) = tokio::join!(task_a, task_b);
+    let res_a = task_a.await;
+    tokio::time::timeout(Duration::from_secs(2), probe.notify.notified())
+        .await
+        .expect("soltura da trava por task_a deve acordar task_b");
+    assert!(probe.woken.load(Ordering::SeqCst));
+    let res_b = fut_b.await;
     let tok_a = res_a.unwrap().expect("refresh A deve suceder");
-    let tok_b = res_b
-        .unwrap()
-        .expect("refresh B deve suceder sem invalid_grant");
+    let tok_b = res_b.expect("refresh B deve suceder sem invalid_grant");
     assert_eq!(tok_a, "access-token-v2");
     assert_eq!(tok_b, "access-token-v3");
     assert_eq!(
@@ -2731,7 +2749,7 @@ async fn oauth_streams_and_rejects_oversized_chunked_response_without_content_le
     }
 
     fn chunked_over_limit_open(eof_gate: Arc<Notify>) -> Response {
-        // Envia >256 KiB de JSON válido em andamento e mantém o stream aberto até `eof_gate`.
+        // Envia JSON válido acima do limite de resposta e mantém o stream aberto até `eof_gate`.
         let stream = futures_util::stream::unfold((0usize, eof_gate), |(step, gate)| async move {
             match step {
                 0 => Some((
@@ -2777,7 +2795,7 @@ async fn oauth_streams_and_rejects_oversized_chunked_response_without_content_le
                 if st.oversize_prm.load(Ordering::SeqCst) {
                     chunked_over_limit_open(st.eof_gate.clone())
                 } else {
-                    // Controle: JSON válido abaixo de 256 KiB (com preenchimento de ~128 KiB).
+                    // Controle: JSON válido abaixo do limite.
                     json_response(
                         StatusCode::OK,
                         json!({
@@ -3325,6 +3343,60 @@ async fn oauth_manual_client_id_is_trimmed_consistently_in_start_callback_and_re
         .unwrap();
     let renewed = oauth.refresh_access_token("manual-trim-test").await.unwrap();
     assert!(renewed.starts_with("access-token-"));
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_refresh_rejects_mismatched_config_fingerprint_before_posting() {
+    let (addr, server_state, server_handle) =
+        spawn_mock_oauth_server(MockOAuthConfig::default()).await;
+
+    let env = TestEnv::new();
+    let cfg_a = remote_config(
+        "fp-check",
+        format!("http://{addr}/mcp"),
+        None,
+        AuthConfig::OAuthDcr,
+    );
+    let cfg_b = remote_config(
+        "fp-check",
+        format!("http://{addr}/mcp/"),
+        None,
+        AuthConfig::OAuthDcr,
+    );
+    env.registry.create(cfg_b.clone()).unwrap();
+    env.secrets
+        .set(
+            "fp-check",
+            IntegrationSecrets {
+                oauth: Some(OAuthTokens {
+                    access_token: Zeroizing::new("tok-from-a".into()),
+                    refresh_token: Some(Zeroizing::new("ref-from-a".into())),
+                    expires_at: Some(1.0),
+                    token_type: Some("Bearer".into()),
+                    registered_client_id: Some("cid-a".into()),
+                    token_endpoint: Some(format!("http://{addr}/token")),
+                    config_fingerprint: Some(hangar_integrations::config_fingerprint(&cfg_a)),
+                    ..OAuthTokens::default()
+                }),
+                ..IntegrationSecrets::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let oauth = env.oauth_manager();
+    let err = oauth
+        .refresh_access_token("fp-check")
+        .await
+        .expect_err("refresh com token vinculado a outra configuração deve falhar antes do POST");
+    assert!(matches!(err, OAuthError::InvalidGrant(_)), "{err:?}");
+    assert_eq!(
+        server_state.refresh_calls.load(Ordering::SeqCst),
+        0,
+        "nenhum POST /token pode ser enviado quando o config_fingerprint diverge"
+    );
 
     server_handle.abort();
 }

@@ -1109,7 +1109,7 @@ async fn mcp_pinned_fallback_works_after_restart_without_prior_list_tools() {
         let mock = MockMcpServer::start(MockMcpHooks::default()).await;
         let shared_dir = crate::physical_tempdir();
 
-        // Primeiro boot: descobre o nome exato truncado >64 bytes da tool longa.
+        // Primeiro boot: descobre o nome exato truncado da tool longa.
         let scene_a = SceneBuilder::with_dir(shared_dir).build().await;
         scene_a.register(IntegrationConfig {
             id: "gh-restart".into(),

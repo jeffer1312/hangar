@@ -16,11 +16,13 @@ use http::{HeaderName, HeaderValue};
 use ring::digest::{Context as DigestContext, SHA256};
 use rmcp::ServiceExt;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig as McpClientInfo,
-    ContentBlock, Implementation, PaginatedRequestParams, ResourceContents, Tool,
+    CallToolRequest, CallToolRequestParams, CallToolResult, ClientCapabilities,
+    ClientConfig as McpClientInfo, ClientRequest, ContentBlock, Implementation,
+    PaginatedRequestParams, ResourceContents, ServerResult, Tool,
 };
 use rmcp::service::{
-    ClientCacheConfig, ClientInitializeError, Peer, RoleClient, RunningService, ServiceError,
+    ClientCacheConfig, ClientInitializeError, Peer, PeerRequestOptions, RoleClient,
+    RunningService, ServiceError,
 };
 use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::transport::streamable_http_client::{
@@ -433,8 +435,9 @@ impl McpClientManager {
     }
 
     /// Igual a [`Self::call_tool_tracked`], mas executa `before_dispatch` após a conexão estar pronta e
-    /// imediatamente antes de enviar `tools/call` ao transporte (fechando corridas durante `ensure_connected`).
-    pub async fn call_tool_guarded<G, GFut>(
+    /// segura a guarda devolvida até a requisição ser admitida na fila do transporte (liberando-a antes
+    /// de aguardar a resposta remota).
+    pub async fn call_tool_guarded<G, GFut, Guard>(
         &self,
         integration_id: &str,
         tool_name: &str,
@@ -445,7 +448,7 @@ impl McpClientManager {
     ) -> Result<McpCallOutput, ClientError>
     where
         G: Fn() -> GFut,
-        GFut: Future<Output = Result<(), ClientError>>,
+        GFut: Future<Output = Result<Guard, ClientError>>,
     {
         let params = build_call_tool_params(tool_name, arguments)?;
         let tool_owned = tool_name.to_owned();
@@ -458,15 +461,34 @@ impl McpClientManager {
                 let external_dispatched = external_dispatched.clone();
                 let guard_fut = before_dispatch();
                 async move {
-                    guard_fut.await.map_err(OpError::Client)?;
+                    let admission_guard = guard_fut.await.map_err(OpError::Client)?;
                     if let Some(flag) = external_dispatched.as_ref() {
                         flag.store(true, Ordering::SeqCst);
                     }
-                    let result = session
+                    let handle = session
                         .peer
-                        .call_tool(params)
+                        .send_cancellable_request(
+                            ClientRequest::CallToolRequest(CallToolRequest::new(params)),
+                            PeerRequestOptions::no_options(),
+                        )
                         .await
                         .map_err(|err| map_service_error(err, Some(&tool_name)))?;
+                    // Solta a sincronização logo após a admissão no transporte para não bloquear mutações
+                    // enquanto o servidor remoto processa a ferramenta.
+                    drop(admission_guard);
+                    let response = handle
+                        .await_response()
+                        .await
+                        .map_err(|err| map_service_error(err, Some(&tool_name)))?;
+                    let result = match response {
+                        ServerResult::CallToolResult(res) => res,
+                        _ => {
+                            return Err(map_service_error(
+                                ServiceError::UnexpectedResponse,
+                                Some(&tool_name),
+                            ));
+                        }
+                    };
                     Ok(extract_call_output(result))
                 }
             },
@@ -1828,16 +1850,62 @@ fn extract_call_output(result: CallToolResult) -> McpCallOutput {
     }
 }
 
+fn sanitize_url_queries(input: &str) -> String {
+    // Oculta query strings em URLs HTTP(S) de mensagens de transporte para não vazar tokens/chaves em logs.
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find("http://").or_else(|| rest.find("https://")) {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos..];
+        let end = after
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | ']' | '"' | '\'' | ',' | ';'))
+            .unwrap_or(after.len());
+        let url_slice = &after[..end];
+        if let Some(q_idx) = url_slice.find('?') {
+            out.push_str(&url_slice[..q_idx]);
+            out.push_str("?<redacted>");
+        } else {
+            out.push_str(url_slice);
+        }
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn sanitize_transport_error(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(err) = current {
+        if let Some(http_err) = err.downcast_ref::<StreamableHttpError<reqwest::Error>>() {
+            if let StreamableHttpError::Client(req_err) = http_err {
+                // `without_url` impede que reqwest ecoe URL e query strings no erro de transporte.
+                let mut stripped = req_err.to_string();
+                if let Some(url) = req_err.url() {
+                    stripped = stripped.replace(url.as_str(), "<url>");
+                }
+                return sanitize_url_queries(&stripped);
+            }
+        }
+        if let Some(req_err) = err.downcast_ref::<reqwest::Error>() {
+            let mut stripped = req_err.to_string();
+            if let Some(url) = req_err.url() {
+                stripped = stripped.replace(url.as_str(), "<url>");
+            }
+            return sanitize_url_queries(&stripped);
+        }
+        current = err.source();
+    }
+    sanitize_url_queries(&error.to_string())
+}
+
 fn map_init_error(error: ClientInitializeError) -> ConnectFailure {
     match error {
         ClientInitializeError::TransportError { error, context } => {
+            let clean = sanitize_transport_error(error.error.as_ref());
             if is_http_401_error(error.error.as_ref()) {
-                ConnectFailure::Http401(format!("{context}: {}", error.error))
+                ConnectFailure::Http401(format!("{context}: {clean}"))
             } else {
-                ConnectFailure::Other(ClientError::Transport(format!(
-                    "{context}: {}",
-                    error.error
-                )))
+                ConnectFailure::Other(ClientError::Transport(format!("{context}: {clean}")))
             }
         }
         ClientInitializeError::JsonRpcError(data) => {
@@ -1847,13 +1915,15 @@ fn map_init_error(error: ClientInitializeError) -> ConnectFailure {
             })
         }
         ClientInitializeError::ConnectionClosed(msg) => {
-            ConnectFailure::Other(ClientError::Transport(msg))
+            ConnectFailure::Other(ClientError::Transport(sanitize_url_queries(&msg)))
         }
         ClientInitializeError::Cancelled => {
             ConnectFailure::Other(ClientError::Transport("inicialização cancelada".into()))
         }
         ClientInitializeError::LegacyFallbackFailed { fallback, .. } => map_init_error(*fallback),
-        other => ConnectFailure::Other(ClientError::Protocol(other.to_string())),
+        other => ConnectFailure::Other(ClientError::Protocol(sanitize_url_queries(
+            &other.to_string(),
+        ))),
     }
 }
 
@@ -1874,10 +1944,11 @@ fn map_service_error(error: ServiceError, tool_name: Option<&str>) -> OpError {
             })
         }
         ServiceError::TransportSend(dyn_err) => {
+            let clean = sanitize_transport_error(dyn_err.error.as_ref());
             if is_http_401_error(dyn_err.error.as_ref()) {
-                OpError::Unauthorized(dyn_err.to_string())
+                OpError::Unauthorized(clean)
             } else {
-                OpError::FatalTransport(dyn_err.to_string())
+                OpError::FatalTransport(clean)
             }
         }
         ServiceError::TransportClosed => {
@@ -1886,10 +1957,14 @@ fn map_service_error(error: ServiceError, tool_name: Option<&str>) -> OpError {
         ServiceError::Timeout { timeout } => {
             OpError::Timeout(format!("tempo esgotado após {:?}", timeout))
         }
-        ServiceError::Cancelled { reason } => {
-            OpError::FatalTransport(reason.unwrap_or_else(|| "operação cancelada".into()))
-        }
-        other => OpError::Client(ClientError::Protocol(other.to_string())),
+        ServiceError::Cancelled { reason } => OpError::FatalTransport(
+            reason
+                .map(|r| sanitize_url_queries(&r))
+                .unwrap_or_else(|| "operação cancelada".into()),
+        ),
+        other => OpError::Client(ClientError::Protocol(sanitize_url_queries(
+            &other.to_string(),
+        ))),
     }
 }
 

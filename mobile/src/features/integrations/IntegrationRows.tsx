@@ -132,8 +132,9 @@ export function CatalogPresetRow({ preset, connectedCount, onPress }: {
   );
 }
 
-export function ToolSummaryRow({ tool, busy, onAllowAlways, onRevokeAlways }: {
+export function ToolSummaryRow({ tool, policy, busy, onAllowAlways, onRevokeAlways }: {
   tool: IntegrationToolSummary;
+  policy?: PermissionPolicy;
   busy?: boolean;
   onAllowAlways?: (name: string) => void;
   onRevokeAlways?: (name: string) => void;
@@ -176,7 +177,7 @@ export function ToolSummaryRow({ tool, busy, onAllowAlways, onRevokeAlways }: {
         >
           <Text style={[styles.allowText, { color: c.accentText }]}>{m.integrations_tool_allow_always()}</Text>
         </Pressable>
-      ) : tool.effective_access === 'allowed_always' && onRevokeAlways ? (
+      ) : tool.effective_access === 'allowed_always' && policy === 'read_free_ask_write' && onRevokeAlways ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`${m.integrations_remove()} ${tool.name}`}

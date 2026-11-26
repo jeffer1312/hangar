@@ -563,14 +563,16 @@ fn canonicalize_url_for_fingerprint(raw: &str) -> String {
     } else {
         lower_auth
     };
-    let path = match uri.path() {
-        "" | "/" => "",
-        other => other.trim_end_matches('/'),
-    };
-    match uri.query() {
-        Some(q) if !q.is_empty() => format!("{scheme}://{norm_auth}{path}?{q}"),
-        _ => format!("{scheme}://{norm_auth}{path}"),
-    }
+    // Preserva o caminho e a barra final exatamente como informados (distingue `/mcp` de `/mcp/`).
+    let after_scheme = without_fragment
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
+    let after_authority = after_scheme
+        .find(['/', '?'])
+        .map(|idx| &after_scheme[idx..])
+        .unwrap_or("");
+    format!("{scheme}://{norm_auth}{after_authority}")
 }
 
 fn valid_hostname(host: &str) -> bool {

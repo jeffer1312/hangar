@@ -602,11 +602,23 @@ fn remote_url(transport: &Transport) -> Option<&str> {
     }
 }
 
-fn clear_remote_endpoint_secrets(slot: &mut Option<IntegrationSecrets>) {
+fn clear_remote_endpoint_secrets(
+    slot: &mut Option<IntegrationSecrets>,
+    keep_oauth_fp: Option<[u8; 32]>,
+) {
     if let Some(entry) = slot.as_mut() {
         entry.bearer_token = None;
         entry.client_secret = None;
-        entry.oauth = None;
+        let keep_oauth = keep_oauth_fp.is_some_and(|expected| {
+            entry
+                .oauth
+                .as_ref()
+                .and_then(|tok| tok.config_fingerprint)
+                == Some(expected)
+        });
+        if !keep_oauth {
+            entry.oauth = None;
+        }
         entry.headers.clear();
         if entry.is_empty() {
             *slot = None;
@@ -728,7 +740,7 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         None => {
             let mut next = previous_secrets.clone();
             if remote_url_changed {
-                clear_remote_endpoint_secrets(&mut next);
+                clear_remote_endpoint_secrets(&mut next, None);
             }
             next
         }
@@ -736,7 +748,7 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         Some(Some(patch)) => {
             let mut next = previous_secrets.clone();
             if remote_url_changed {
-                clear_remote_endpoint_secrets(&mut next);
+                clear_remote_endpoint_secrets(&mut next, None);
             }
             let clone_patch = SecretsPatch {
                 bearer_token: patch.bearer_token.clone(),
@@ -784,7 +796,7 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
             .integrations
             .secrets
             .update_with(id, move |slot| {
-                clear_remote_endpoint_secrets(slot);
+                clear_remote_endpoint_secrets(slot, None);
                 Ok(())
             })
             .await
@@ -878,12 +890,13 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
     let secrets_after = match body.secrets {
         None => {
             if remote_url_changed {
-                // Segunda limpeza pós-publicação elimina tokens gravados por callback OAuth em voo antes da troca.
+                // Segunda limpeza pós-publicação remove segredos antigos preservando eventual OAuth já emitido para a nova configuração.
+                let published_fp = config_fingerprint(&updated);
                 match state
                     .integrations
                     .secrets
                     .update_with(id, move |slot| {
-                        clear_remote_endpoint_secrets(slot);
+                        clear_remote_endpoint_secrets(slot, Some(published_fp));
                         Ok(slot.clone())
                     })
                     .await
@@ -917,13 +930,14 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         }
         Some(Some(patch)) => {
             let mut patch_slot = Some(patch);
+            let published_fp = config_fingerprint(&updated);
             let res = state
                 .integrations
                 .secrets
                 .update_with(id, move |slot| {
                     let patch = patch_slot.take().unwrap_or_default();
                     if remote_url_changed {
-                        clear_remote_endpoint_secrets(slot);
+                        clear_remote_endpoint_secrets(slot, Some(published_fp));
                     }
                     let entry = slot.get_or_insert_with(IntegrationSecrets::default);
                     if apply_secrets_patch(entry, patch).is_err() {
@@ -1484,14 +1498,33 @@ fn client_error(state: &AppState, id: &str, err: ClientError) -> Response {
             state.integrations.record_error(id, reason.clone());
             detail(StatusCode::GATEWAY_TIMEOUT, "integration_timeout", &reason, json!({}))
         }
-        ClientError::Transport(reason)
-        | ClientError::Protocol(reason)
-        | ClientError::ToolNotFound(reason) => {
-            state.integrations.record_error(id, reason.clone());
+        ClientError::Transport(_) => {
+            let msg = "falha de transporte ao comunicar com o servidor MCP";
+            state.integrations.record_error(id, msg);
             detail(
                 StatusCode::BAD_GATEWAY,
                 "integration_upstream_error",
-                &reason,
+                msg,
+                json!({}),
+            )
+        }
+        ClientError::Protocol(_) => {
+            let msg = "falha de protocolo ao comunicar com o servidor MCP";
+            state.integrations.record_error(id, msg);
+            detail(
+                StatusCode::BAD_GATEWAY,
+                "integration_upstream_error",
+                msg,
+                json!({}),
+            )
+        }
+        ClientError::ToolNotFound(tool) => {
+            let msg = format!("ferramenta '{tool}' não encontrada no servidor MCP");
+            state.integrations.record_error(id, msg.clone());
+            detail(
+                StatusCode::BAD_GATEWAY,
+                "integration_upstream_error",
+                &msg,
                 json!({}),
             )
         }

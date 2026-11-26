@@ -408,17 +408,8 @@ impl IntegrationsPage {
                             .map(|r| r.integrations)
                             .map_err(|_| tr("invalid_response"))
                     });
-                if let Ok(list) = &parsed {
-                    let alive: HashSet<String> = list.iter().map(|it| it.id.clone()).collect();
-                    // Invalida cache das seções fechadas e revalida `effective_access` nas seções abertas.
-                    this.tools.clear();
-                    this.tools_errors.retain(|id, _| alive.contains(id));
-                    this.open_tools.retain(|id| alive.contains(id));
-                    let open_ids: Vec<String> = this.open_tools.iter().cloned().collect();
-                    this.items = Some(parsed);
-                    for id in open_ids {
-                        this.load_tools(&id, window, cx);
-                    }
+                if let Ok(list) = parsed {
+                    this.reconcile_loaded_items(list, window, cx);
                     return;
                 }
                 this.items = Some(parsed);
@@ -448,7 +439,25 @@ impl IntegrationsPage {
         cx.notify();
     }
 
-    fn reload_items(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn reconcile_loaded_items(
+        &mut self,
+        list: Vec<IntegrationItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let alive: HashSet<String> = list.iter().map(|it| it.id.clone()).collect();
+        // Invalida cache das seções fechadas e revalida `effective_access` nas seções abertas.
+        self.tools.clear();
+        self.tools_errors.retain(|id, _| alive.contains(id));
+        self.open_tools.retain(|id| alive.contains(id));
+        let open_ids: Vec<String> = self.open_tools.iter().cloned().collect();
+        self.items = Some(Ok(list));
+        for id in open_ids {
+            self.load_tools(&id, window, cx);
+        }
+    }
+
+    fn reload_items(&mut self, reconcile_tools: bool, window: &mut Window, cx: &mut Context<Self>) {
         let seq = self.seq;
         let api = self.api.clone();
         run(
@@ -456,7 +465,7 @@ impl IntegrationsPage {
             async move { api.server_read(&["integrations"], &[], READ_SECONDS).await },
             window,
             cx,
-            move |this: &mut Self, result, _, _| {
+            move |this: &mut Self, result, window, cx| {
                 if seq != this.seq {
                     return;
                 }
@@ -467,6 +476,7 @@ impl IntegrationsPage {
                             .map(|r| r.integrations)
                             .map_err(|_| tr("invalid_response"))
                     }) {
+                    Ok(list) if reconcile_tools => this.reconcile_loaded_items(list, window, cx),
                     Ok(list) => this.items = Some(Ok(list)),
                     Err(msg) if this.items.is_none() => this.items = Some(Err(msg)),
                     Err(_) => {}
@@ -545,34 +555,16 @@ impl IntegrationsPage {
                 list.push(item.clone());
             }
         } else {
-            // Se ainda não havia lista utilizável (ex.: POST terminou antes do primeiro GET), busca a lista novamente.
-            let seq = self.seq;
-            let api = self.api.clone();
+            // Se ainda não havia lista utilizável (ex.: POST terminou antes do primeiro GET), busca e reconcilia a lista.
             self.items = None;
-            run(
-                &self.runtime,
-                async move { api.server_read(&["integrations"], &[], READ_SECONDS).await },
-                window,
-                cx,
-                move |this: &mut Self, result, _, _| {
-                    if seq != this.seq {
-                        return;
-                    }
-                    this.items = Some(
-                        result
-                            .map_err(|e| integrations_failure(&e))
-                            .and_then(|v| {
-                                serde_json::from_value::<IntegrationsListResponse>(v)
-                                    .map(|r| r.integrations)
-                                    .map_err(|_| tr("invalid_response"))
-                            }),
-                    );
-                },
-            );
+            self.reload_items(true, window, cx);
         }
         self.tools_errors.remove(&item.id);
         self.tools.remove(&item.id);
         self.load_tools(&item.id, window, cx);
+        if should_auto_start_oauth(created, &item) {
+            self.start_oauth(item.id.clone(), window, cx);
+        }
         cx.notify();
     }
 
@@ -606,7 +598,7 @@ impl IntegrationsPage {
                             *slot = updated;
                         } else if this.items.is_none() {
                             // Se Atualizar estava em voo e foi invalidado por `this.seq += 1`, dispara leitura substituta.
-                            this.reload_items(window, cx);
+                            this.reload_items(true, window, cx);
                         }
                         if this.open_tools.contains(&id) {
                             this.load_tools(&id, window, cx);
@@ -676,12 +668,12 @@ impl IntegrationsPage {
                         this.open_tools.insert(id.clone());
                         this.notice = Some(tr_shared("integrations_test_ok", &[("n", &count)]));
                         this.seq += 1;
-                        this.reload_items(window, cx);
+                        this.reload_items(false, window, cx);
                     }
                     Err(error) => {
                         this.error = Some(integrations_failure(&error));
                         this.seq += 1;
-                        this.reload_items(window, cx);
+                        this.reload_items(false, window, cx);
                     }
                 }
             },
@@ -930,7 +922,7 @@ impl IntegrationsPage {
                             list.retain(|item| item.id != id);
                         } else if this.items.is_none() {
                             // Se Atualizar estava em voo e foi invalidado por `this.seq += 1`, dispara leitura substituta.
-                            this.reload_items(window, cx);
+                            this.reload_items(true, window, cx);
                         }
                         this.notice = Some(tr_shared("integrations_removed", &[]));
                     }
@@ -1403,6 +1395,11 @@ impl IntegrationsPage {
                 .px_4()
                 .py(px(14.))
                 .child(alert("integrations-catalog-error", err.clone()))
+                .into_any_element(),
+            Some(Ok(presets)) if presets.is_empty() => settings_box()
+                .px_4()
+                .py(px(14.))
+                .child(muted(tr_shared("integrations_catalog_empty", &[])))
                 .into_any_element(),
             Some(Ok(presets)) => settings_box()
                 .id("integrations-catalog")
@@ -2591,6 +2588,16 @@ pub(super) fn suggest_preset_id(preset_id: &str, existing: &[IntegrationItem]) -
     format!("{preset_id}-new")
 }
 
+fn should_auto_start_oauth(created: bool, item: &IntegrationItem) -> bool {
+    created
+        && item.enabled
+        && matches!(item.transport, Transport::RemoteHttp { .. })
+        && matches!(
+            item.auth,
+            AuthConfig::OAuthDcr | AuthConfig::OAuthManualClient { .. }
+        )
+}
+
 pub(super) fn validate_slug(value: &str) -> bool {
     let mut bytes = value.bytes();
     !value.is_empty()
@@ -3505,5 +3512,51 @@ mod tests {
             oauth_start_body(&remote_lan),
             json!({ "origin_client": "remote_desktop" })
         );
+    }
+
+    #[test]
+    fn should_auto_start_oauth_matches_newly_created_oauth_remote_integrations() {
+        let mk = |auth: AuthConfig, transport: Transport, enabled: bool| IntegrationItem {
+            id: "figma".into(),
+            name: "Figma".into(),
+            preset: Some("figma".into()),
+            enabled,
+            transport,
+            auth,
+            policy: PermissionPolicy::ReadFreeAskWrite,
+            pinned: false,
+            projects: vec![],
+            allowed_tools: BTreeSet::new(),
+            created_at: 0.0,
+            updated_at: 0.0,
+            status: IntegrationStatus::AuthRequired,
+            last_error: None,
+        };
+        let remote = Transport::RemoteHttp {
+            url: "https://mcp.figma.com/mcp".into(),
+            header_names: vec![],
+        };
+        let stdio = Transport::LocalStdio {
+            command: vec!["npx".into()],
+            cwd: None,
+            env_keys: vec![],
+        };
+
+        assert!(should_auto_start_oauth(true, &mk(AuthConfig::OAuthDcr, remote.clone(), true)));
+        assert!(should_auto_start_oauth(
+            true,
+            &mk(
+                AuthConfig::OAuthManualClient {
+                    client_id: "cid".into(),
+                    scopes: vec![],
+                },
+                remote.clone(),
+                true
+            )
+        ));
+        assert!(!should_auto_start_oauth(false, &mk(AuthConfig::OAuthDcr, remote.clone(), true)));
+        assert!(!should_auto_start_oauth(true, &mk(AuthConfig::Bearer, remote.clone(), true)));
+        assert!(!should_auto_start_oauth(true, &mk(AuthConfig::OAuthDcr, remote, false)));
+        assert!(!should_auto_start_oauth(true, &mk(AuthConfig::OAuthDcr, stdio, true)));
     }
 }

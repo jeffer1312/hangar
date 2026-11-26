@@ -112,7 +112,7 @@ export function IntegrationDetailSheet({
         codigo: typeof (e as { code?: unknown } | null)?.code === 'string'
           ? (e as { code: string }).code
           : e instanceof Error ? e.name : 'erro',
-        detalhe: `${integration.id}: ${msg}`.slice(0, 300),
+        detalhe: integration.id,
       }, server.baseUrl);
     } finally {
       if (isSameTarget(snap) && version === toolsVersionRef.current) {
@@ -262,7 +262,12 @@ export function IntegrationDetailSheet({
       if (!isSameTarget(snap)) return;
       // Aplica o estado retornado antes de reabilitar as chaves para evitar PATCH repetido com valor velho.
       setLocalIntegration(updated);
-      if (change.policy !== undefined) {
+      if (
+        change.policy !== undefined
+        || (change.remove_allowed_tools?.length ?? 0) > 0
+        || (change.add_allowed_tools?.length ?? 0) > 0
+        || change.allowed_tools !== undefined
+      ) {
         // Descarta permissões antigas até a leitura pós-PATCH confirmar o novo acesso de cada ferramenta.
         toolsVersionRef.current += 1;
         setTools([]);
@@ -434,6 +439,7 @@ export function IntegrationDetailSheet({
             <ToolSummaryRow
               key={tool.name}
               tool={tool}
+              policy={view.policy}
               busy={busy}
               onAllowAlways={allowToolAlways}
               onRevokeAlways={revokeToolAlways}

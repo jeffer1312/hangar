@@ -601,6 +601,23 @@ async fn execute_checked_call(
     from_pinned_alias: bool,
     external_started: Arc<AtomicBool>,
 ) -> Result<CallToolResult, String> {
+    // Sincroniza leitura inicial com mutações administrativas (ex.: `AllowAlways` provisório antes de commit).
+    config = {
+        let _admin_guard = st.integrations.lock_integration(&config.id).await;
+        load_integration(st, &config.id)?
+    };
+    if !config.enabled {
+        return Err(format!(
+            "integration_disabled: integração '{}' está desabilitada",
+            config.id
+        ));
+    }
+    if from_pinned_alias && !config.pinned {
+        return Err(format!(
+            "integration_unpinned: integração '{}' foi desafixada; use integration_call",
+            config.id
+        ));
+    }
     let expected_config_fp = config_fingerprint(&config);
     let discovered = match st.integrations.tools_cache.get_tool(&config.id, tool_name) {
         Some(found) => found,
@@ -808,9 +825,14 @@ async fn execute_checked_call(
                 let guard_id = guard_id.clone();
                 let guard_tool = guard_tool.clone();
                 async move {
-                    let check: Result<(), String> = async {
-                        // Revalida compartilhamento e política imediatamente antes de `peer.call_tool`,
-                        // fechando a janela em que `ensure_connected` aguardava a conexão.
+                    let check: Result<tokio::sync::OwnedMutexGuard<()>, String> = async {
+                        // Sincroniza a admissão com mutações administrativas (`PATCH`/`DELETE`/`AllowAlways`)
+                        // mantendo a trava até a requisição entrar na fila do transporte.
+                        let admin_guard = st.integrations.lock_integration(&guard_id).await;
+                        let fresh_pre = load_integration(st, &guard_id)?;
+                        ensure_project_allowed(st, &fresh_pre, target_session).await?;
+                        // Revalida compartilhamento após `ensure_project_allowed` e relê a política de forma
+                        // síncrona após o último await antes do envio externo.
                         if let Some(session_name) = target_session {
                             shared_guard::ensure_unshared(
                                 st,
@@ -839,7 +861,6 @@ async fn execute_checked_call(
                                 fresh.id
                             ));
                         }
-                        ensure_project_allowed(st, &fresh, target_session).await?;
                         match classify_tool_access(
                             fresh.policy,
                             &fresh.allowed_tools,
@@ -854,16 +875,20 @@ async fn execute_checked_call(
                                 "integration_approval_required: a permissão de '{}' na integração '{}' mudou e exige nova aprovação",
                                 guard_tool.name, fresh.id
                             )),
-                            ToolAccess::Read | ToolAccess::AllowedAlways | ToolAccess::AskWrite => Ok(()),
+                            ToolAccess::Read | ToolAccess::AllowedAlways | ToolAccess::AskWrite => {
+                                Ok(admin_guard)
+                            }
                         }
                     }
                     .await;
-                    if let Err(msg) = check {
-                        *guard_rejection.lock().unwrap_or_else(PoisonError::into_inner) =
-                            Some(msg.clone());
-                        return Err(ClientError::Protocol(msg));
+                    match check {
+                        Ok(admin_guard) => Ok(admin_guard),
+                        Err(msg) => {
+                            *guard_rejection.lock().unwrap_or_else(PoisonError::into_inner) =
+                                Some(msg.clone());
+                            Err(ClientError::Protocol(msg))
+                        }
                     }
-                    Ok(())
                 }
             },
         )
@@ -1258,9 +1283,15 @@ fn map_client_error(st: &AppState, id: &str, err: ClientError) -> String {
             st.integrations.record_error(id, reason.clone());
             format!("integration_timeout: {reason}")
         }
-        ClientError::Transport(reason) | ClientError::Protocol(reason) => {
-            st.integrations.record_error(id, reason.clone());
-            format!("integration_upstream_error: {reason}")
+        ClientError::Transport(_) => {
+            let msg = "falha de transporte ao comunicar com o servidor MCP";
+            st.integrations.record_error(id, msg);
+            format!("integration_upstream_error: {msg}")
+        }
+        ClientError::Protocol(_) => {
+            let msg = "falha de protocolo ao comunicar com o servidor MCP";
+            st.integrations.record_error(id, msg);
+            format!("integration_upstream_error: {msg}")
         }
         ClientError::ToolNotFound(name) => {
             format!("integration_tool_not_found: ferramenta '{name}' não encontrada na integração '{id}'")

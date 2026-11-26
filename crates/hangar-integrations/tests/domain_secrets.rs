@@ -1133,3 +1133,21 @@ fn tools_cache_tracks_monotonic_generations_and_converts_owned_summaries() {
     assert_eq!(summaries[0].effective_access, ToolAccess::AllowedAlways);
     assert_eq!(summaries[0].input_schema, json!({"type": "object"}));
 }
+
+#[test]
+fn config_fingerprint_distinguishes_trailing_slash_in_mcp_path() {
+    let base = gmail_instance("fp-1", "FP 1", "https://mcp.example.com/mcp");
+    let same_canonical_host = gmail_instance("fp-1", "FP 1", "https://MCP.EXAMPLE.COM:443/mcp");
+    let trailing_slash = gmail_instance("fp-1", "FP 1", "https://mcp.example.com/mcp/");
+
+    assert_eq!(
+        hangar_integrations::config_fingerprint(&base),
+        hangar_integrations::config_fingerprint(&same_canonical_host),
+        "mesmo host/porta padrão/caminho deve manter o mesmo fingerprint"
+    );
+    assert_ne!(
+        hangar_integrations::config_fingerprint(&base),
+        hangar_integrations::config_fingerprint(&trailing_slash),
+        "caminhos `/mcp` e `/mcp/` devem gerar fingerprints distintos"
+    );
+}

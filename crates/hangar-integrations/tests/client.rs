@@ -1235,7 +1235,7 @@ async fn reaper_preserves_active_calls_and_invalidate_cancels_in_flight_call() {
         .unwrap() as u32;
     assert!(pid_alive(pid1).unwrap());
 
-    // Chamada demora >3x o `idle_ttl`, então o reaper NÃO pode encerrar a sessão ativa.
+    // Chamada mais longa que `idle_ttl`; o reaper não pode encerrar a sessão ativa.
     let active_out = manager
         .call_tool("active-race", "slow_tool", json!({"delay_ms": 220}))
         .await

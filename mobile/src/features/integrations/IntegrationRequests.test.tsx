@@ -1035,7 +1035,7 @@ it('folha de detalhe aplica estado do PATCH antes de liberar controles, invalida
     srv.baseUrl,
   );
 
-  // Tentar novamente carrega ferramenta allowed_always e permite revogar via remove_allowed_tools.
+  // Sob allow_all, ferramenta allowed_always não deve oferecer "Remover" (pois a política libera tudo).
   const allowedTool: IntegrationToolSummary = {
     name: 'create_issue',
     description: 'Cria issue',
@@ -1043,16 +1043,32 @@ it('folha de detalhe aplica estado do PATCH antes de liberar controles, invalida
     read_only_hint: false,
     effective_access: 'allowed_always',
   };
+  mocks.updateIntegration.mockResolvedValueOnce(oauthView({ status: 'ready', policy: 'allow_all' }));
   mocks.listIntegrationTools.mockResolvedValueOnce([allowedTool]);
   await act(async () => {
-    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_retry()}"]`)!.click();
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_policy_allow_all()}"]`)!.click();
+  });
+  expect(container.querySelector(`button[aria-label="${m.integrations_remove()} create_issue"]`)).toBeNull();
+
+  // Em read_free_ask_write, concessão individual exibe "Remover", envia remove_allowed_tools e invalida tools se a recarga falhar.
+  mocks.updateIntegration.mockResolvedValueOnce(oauthView({ status: 'ready', policy: 'read_free_ask_write', allowed_tools: ['create_issue'] }));
+  mocks.listIntegrationTools.mockResolvedValueOnce([allowedTool]);
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_policy_read_free_ask_write()}"]`)!.click();
   });
   const revokeBtn = container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_remove()} create_issue"]`);
   expect(revokeBtn).not.toBeNull();
-  mocks.updateIntegration.mockResolvedValueOnce(oauthView({ status: 'ready', allowed_tools: [] }));
-  mocks.listIntegrationTools.mockResolvedValueOnce([{ ...allowedTool, effective_access: 'ask_write' }]);
+  mocks.updateIntegration.mockResolvedValueOnce(oauthView({ status: 'ready', policy: 'read_free_ask_write', allowed_tools: [] }));
+  mocks.listIntegrationTools.mockRejectedValueOnce(new Error('falha pós-remoção'));
   await act(async () => { revokeBtn!.click(); });
   expect(mocks.updateIntegration).toHaveBeenLastCalledWith(srv, 'notion', { remove_allowed_tools: ['create_issue'] });
+  expect(container.querySelector(`button[aria-label="${m.integrations_remove()} create_issue"]`)).toBeNull();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('falha pós-remoção');
+  mocks.listIntegrationTools.mockResolvedValueOnce([{ ...allowedTool, effective_access: 'ask_write' }]);
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_retry()}"]`)!.click();
+  });
+  expect(container.querySelector(`button[aria-label="${m.integrations_tool_allow_always()} create_issue"]`)).not.toBeNull();
 
   // Abrir OAuth em auth_required mostra faixa e registra no diário; quando status vira ready, limpa faixa e handoff.
   mocks.listIntegrationTools.mockResolvedValue([]);

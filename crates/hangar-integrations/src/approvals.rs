@@ -445,12 +445,12 @@ impl fmt::Display for ApprovalError {
 impl std::error::Error for ApprovalError {}
 
 impl ClaimedApproval {
-    /// Identificador da integração do pedido reservado.
+    /// Usado pelo chamador para rotear a confirmação à integração correta.
     pub fn integration_id(&self) -> &str {
         &self.integration_id
     }
 
-    /// Nome da ferramenta do pedido reservado.
+    /// Preserva o nome exato da ferramenta para coincidir com `AllowAlways` na persistência.
     pub fn tool(&self) -> &str {
         &self.tool
     }

@@ -513,6 +513,14 @@ impl OAuthManager {
 
         let expected_access = oauth.access_token.clone();
         let expected_refresh = oauth.refresh_token.clone();
+        if oauth
+            .config_fingerprint
+            .is_some_and(|fp| fp != initial_fp)
+        {
+            return Err(OAuthError::InvalidGrant(
+                "credenciais OAuth vinculadas a outra configuração".into(),
+            ));
+        }
 
         let (client_id, client_secret) = match &config.auth {
             AuthConfig::None | AuthConfig::Bearer => return Err(OAuthError::UnsupportedAuth),
@@ -1473,13 +1481,8 @@ fn parse_http_url(raw: &str, require_https: bool) -> Result<ParsedHttpUrl, OAuth
         "" | "/" => String::new(),
         other => other.trim_end_matches('/').to_owned(),
     };
-    // Preserva barra da raiz e barra final exatamente como informadas (ex.: `/?a=1` != `?a=1`).
-    let after_scheme = raw.split_once("://").map(|(_, rest)| rest).unwrap_or("");
-    let after_authority = after_scheme
-        .find(['/', '?'])
-        .map(|idx| &after_scheme[idx..])
-        .unwrap_or("");
-    let exact_uri = format!("{origin}{after_authority}");
+    // RFC 9728 §3.3 exige comparação exata do identificador de recurso sem normalizar autoridade nem porta.
+    let exact_uri = raw.to_owned();
     let query = uri.query().map(str::to_owned);
     Ok(ParsedHttpUrl {
         scheme,
@@ -1973,6 +1976,18 @@ mod tests {
             parse_http_url("https://example.com", true)
                 .unwrap()
                 .exact_uri(),
+            true,
+        ));
+        // RFC 9728 §3.3: porta padrão explícita não coincide com a URL sem porta.
+        let mcp_no_port = parse_http_url("https://mcp.example.com/mcp", true).unwrap();
+        assert!(!super::prm_resource_matches(
+            Some("https://mcp.example.com:443/mcp"),
+            mcp_no_port.exact_uri(),
+            true,
+        ));
+        assert!(super::prm_resource_matches(
+            Some("https://mcp.example.com/mcp"),
+            mcp_no_port.exact_uri(),
             true,
         ));
     }

@@ -107,7 +107,6 @@ export default function IntegrationsScreen() {
       .catch((e: unknown) => {
         if (now !== generation.current || serverKeyRef.current !== currentKey) return;
         if (silent) {
-          const msg = integrationErrorText(e) || m.integrations_load_error();
           // Atualização automática em segundo plano não derruba nem polui a lista já carregada.
           registrarDiag({
             evento: 'integrations.refresh_failed',
@@ -116,9 +115,8 @@ export default function IntegrationsScreen() {
             codigo: typeof (e as { code?: unknown } | null)?.code === 'string'
               ? (e as { code: string }).code
               : e instanceof Error ? e.name : 'erro',
-            detalhe: msg.slice(0, 300),
+            detalhe: 'silent_refresh_failed',
           }, current.baseUrl);
-          console.warn('integrations: silent refresh failed', e);
           return;
         }
         setError(integrationErrorText(e) || m.integrations_load_error());
@@ -256,7 +254,9 @@ export default function IntegrationsScreen() {
 
           <MachineHelp>{m.integrations_catalog_heading()}</MachineHelp>
           <InfoNotice text={m.integrations_catalog_hint()} />
-          {presetsShown.length === 0 ? (
+          {presets.length === 0 ? (
+            <InfoNotice text={m.integrations_catalog_empty()} />
+          ) : presetsShown.length === 0 ? (
             <InfoNotice text={m.native_settings_search_none()} />
           ) : (
             <MachineGroup>
