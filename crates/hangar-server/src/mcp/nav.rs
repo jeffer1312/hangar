@@ -11,8 +11,9 @@ use zeroize::Zeroizing;
 pub const VERB_TIMEOUT: Duration = Duration::from_secs(45);
 pub const PAUSED: &str = "o usuario pausou o navegador; espere ele clicar em Retomar no painel e tente de novo";
 /// Repetir sem o app não muda nada: a frase diz o que fazer no lugar da tentativa seguinte.
-const NOT_OPEN: &str = "o app desktop do Hangar não está aberto nesta máquina. Repetir não adianta: avise o usuário uma vez que ele \
-    precisa abrir o app; até lá, siga sem o navegador embutido (o agent-browser serve)";
+const NOT_OPEN: &str = "o app desktop do Hangar não está aberto nesta máquina. Se ele estava reiniciando (atualização), tente uma vez \
+    daqui a 15 s; falhou de novo, repetir não adianta: avise o usuário uma vez que ele precisa abrir o app e siga sem o navegador \
+    embutido (o agent-browser serve)";
 const NO_HOST: &str = "o app desktop não está aberto nesta máquina e nenhum app de outra máquina está com esta sessão aberta. \
     Repetir não adianta: avise o usuário uma vez que ele precisa abrir a sessão no app desktop; até lá, siga sem o navegador embutido \
     (o agent-browser serve)";
@@ -209,7 +210,7 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
     }
     if !app_seen { return Err(Unavailable(NOT_OPEN.into())); }
     let detail = if last.is_empty() { String::new() } else { format!(" ({last})") };
-    Err(Unavailable(format!("o app desktop recebeu o pedido, mas o navegador não ficou pronto em 20s{detail}. Tente uma vez de novo; \
+    Err(Unavailable(format!("o navegador não ficou pronto em 20s{detail}, com o app desktop aparentemente aberto. Tente uma vez de novo; \
         falhou de novo, avise o usuário")))
 }
 

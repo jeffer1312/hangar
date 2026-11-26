@@ -116,7 +116,7 @@ try {
     srv.close();
     assert.notEqual(r.code, 0);
     assert.doesNotMatch(r.stderr, /outra máquina/);
-    assert.doesNotMatch(r.stderr, /nao esta rodando nesta maquina/, 'sem pid não é "app fora"');
+    assert.doesNotMatch(r.stderr, /nao esta rodando nesta maquina|estava reiniciando/, 'sem pid não é "app fora"');
     assert.deepEqual(srv.verbs, ['host'], 'nada vai ao app de outra máquina');
     console.log('ok: registro sem pid: o verbo fica no app daqui');
   }

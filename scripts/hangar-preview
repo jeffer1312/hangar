@@ -504,7 +504,7 @@ if (cmd === 'open') {
   let pausaConferida = false;
   while (Date.now() < prazo) {
     // App daqui caído e sem voltar: dizer que está fora, em vez de esperar o prazo e sugerir outra tentativa.
-    if (Date.now() - desde >= APP_VOLTA_MS && localAppDead()) erro(MSG_SHELL_FORA);
+    if (Date.now() - desde >= APP_VOLTA_MS && (!localApp() || localAppDead())) erro(MSG_SHELL_FORA);
     const sc = lerSidecars().find(doNome);
     // Pausado pelo usuário, o app não navega: dizer na hora em vez de esgotar o prazo. Uma pergunta basta.
     if (sc && !pausaConferida) {
@@ -527,7 +527,7 @@ if (cmd === 'open') {
     }
     await new Promise((r) => setTimeout(r, 150));
   }
-  erro(`o app desktop recebeu o pedido, mas o navegador de "${nome}" nao ficou pronto em ${PRONTO_MS / 1000}s${ultimo ? ` (${semToken(ultimo)})` : ''}. Tente uma vez de novo; falhou de novo, avise o usuario`);
+  erro(`o navegador de "${nome}" nao ficou pronto em ${PRONTO_MS / 1000}s${ultimo ? ` (${semToken(ultimo)})` : ''}, com o app desktop aparentemente aberto. Tente uma vez de novo; falhou de novo, avise o usuario`);
 }
 
 if (cmd === 'list' && remote) {

@@ -82,10 +82,14 @@ const FOCUS: &str = "(()=>{let a=document.activeElement;while(a&&a.shadowRoot&&a
 const PROBE_READ: &str = "(typeof window.__hangarSonda===\"undefined\"?2:window.__hangarSonda)";
 /// Lista nativa do `<select>` aberta: ela consome a tecla e o documento não vê o keydown.
 /// Acha o alvo que não é `@eN`: `css=`/seletor ou texto visível. Devolve o nó, ou "nenhum", "varios:N:lista" ou o erro.
-const FIND: &str = r#"/*__hangarAlvo*/((q)=>{const vis=e=>{const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return false;const s=getComputedStyle(e);return s.visibility!=='hidden'&&s.display!=='none'};const norm=t=>(t||'').replace(/s+/g,' ').trim().toLowerCase();let css=null,txt=null;if(q.startsWith('css='))css=q.slice(4);else if(q.startsWith('text='))txt=q.slice(5);else if(/^[#.[]/.test(q)||/^[a-z][a-z0-9-]*[[#.:]/i.test(q))css=q;else txt=q;let found;if(css!==null){try{found=[...document.querySelectorAll(css)].filter(vis)}catch(e){return 'seletor css invalido: '+css}}else{const n=norm(txt.replace(/^["'“]|["'”]$/g,''));const label=e=>norm(e.getAttribute('aria-label')||e.innerText||e.value||e.placeholder||e.title||e.alt);const all=[...document.querySelectorAll('a,button,input,select,textarea,summary,label,option,[role],[onclick],[tabindex],[contenteditable]')].filter(vis);found=all.filter(e=>label(e)===n);if(!found.length)found=[...document.querySelectorAll('body *')].filter(e=>vis(e)&&norm(e.innerText)===n);if(!found.length)found=all.filter(e=>label(e).includes(n));found=found.filter(e=>!found.some(o=>o!==e&&e.contains(o)))}if(found.length===1)return found[0];if(!found.length)return 'nenhum';const show=t=>(t||'').replace(/\s+/g,' ').trim();return 'varios:'+found.length+':'+found.slice(0,3).map(e=>e.tagName.toLowerCase()+' “'+show(e.innerText||e.value||e.getAttribute('aria-label')).slice(0,40)+'”').join(', ')})"#;
+const FIND: &str = r#"/*__hangarAlvo*/((q)=>{const vis=e=>{const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return false;const s=getComputedStyle(e);return s.visibility!=='hidden'&&s.display!=='none'};const own=e=>e.type==='password'?'':(e.value||'');const norm=t=>(t||'').replace(/\s+/g,' ').trim().toLowerCase();const show=t=>(t||'').replace(/\s+/g,' ').trim();let css=null,txt=null;if(q.startsWith('css='))css=q.slice(4);else if(q.startsWith('text='))txt=q.slice(5);else if(/^[#.][A-Za-z_-]|^\[[A-Za-z_-]/.test(q))css=q;else txt=q;let found;if(css!==null){try{found=[...document.querySelectorAll(css)].filter(vis)}catch(e){return 'seletor css invalido: '+css+' (texto que parece seletor: use text=)'}}else{const n=norm(txt.replace(/^["'“]|["'”]$/g,''));const label=e=>norm(e.getAttribute('aria-label')||e.innerText||own(e)||e.placeholder||e.title||e.alt);const all=[...document.querySelectorAll('a,button,input,select,textarea,summary,label,option,[role],[onclick],[tabindex],[contenteditable]')].filter(vis);found=all.filter(e=>label(e)===n);if(!found.length)found=[...document.querySelectorAll('body *')].filter(e=>vis(e)&&norm(e.innerText)===n);if(!found.length)found=all.filter(e=>label(e).includes(n));found=found.filter(e=>!found.some(o=>o!==e&&e.contains(o)))}if(found.length===1)return found[0];if(!found.length)return 'nenhum';return 'varios:'+found.length+':'+found.slice(0,3).map(e=>e.tagName.toLowerCase()+' “'+show(e.innerText||own(e)||e.getAttribute('aria-label')).slice(0,40)+'”').join(', ')})"#;
 /// Conta mutações do DOM a partir de agora; `QUIET` espera elas pararem.
-/// Também conta fetch e XHR em voo: tela parada em "carregando" ainda espera a resposta. O original volta no fim.
-const QUIET_ARM: &str = "(()=>{const p=window.__hangarQuieto;if(p){p.o.disconnect();if(p.f)window.fetch=p.f;if(p.x)XMLHttpRequest.prototype.send=p.x}const s=window.__hangarQuieto={n:0,p:0,t:performance.now()};const bump=d=>{s.n++;s.p+=d;s.t=performance.now()};s.o=new MutationObserver(()=>bump(0));s.o.observe(document,{subtree:true,childList:true,attributes:true,characterData:true});const f=window.fetch;if(f){s.f=f;window.fetch=function(...a){bump(1);return f.apply(this,a).finally(()=>bump(-1))}}const x=XMLHttpRequest.prototype.send;s.x=x;XMLHttpRequest.prototype.send=function(...a){bump(1);this.addEventListener('loadend',()=>bump(-1),{once:true});return x.apply(this,a)};return 1})()";
+/// Conta mudanças do DOM, a saída da página e, com `net`, fetch e XHR em voo a partir de agora. O `eval` não embrulha a
+/// rede: o js dele leria o embrulho no lugar do `fetch` da página. `drop` desfaz, e só devolve
+/// `fetch`/`send` que ainda forem os nossos: a página ou o agente podem tê-los trocado no meio.
+const QUIET_ARM: &str = "((net)=>{const p=window.__hangarQuieto;if(p)p.drop();let s;s=window.__hangarQuieto={n:0,p:0,t:performance.now(),saindo:0};const bump=d=>{s.n++;s.p+=d;s.t=performance.now()};s.o=new MutationObserver(()=>bump(0));s.o.observe(document,{subtree:true,childList:true,attributes:true,characterData:true});const sai=()=>{s.saindo=1};addEventListener('beforeunload',sai,true);const f=window.fetch;const wf=net&&f&&function(...a){bump(1);return f.apply(this,a).finally(()=>bump(-1))};if(wf)window.fetch=wf;const P=XMLHttpRequest.prototype,x=P.send;const wx=net&&function(...a){bump(1);this.addEventListener('loadend',()=>bump(-1),{once:true});return x.apply(this,a)};if(wx)P.send=wx;s.drop=()=>{s.o.disconnect();removeEventListener('beforeunload',sai,true);if(wf&&window.fetch===wf)window.fetch=f;if(wx&&P.send===wx)P.send=x;if(window.__hangarQuieto===s)delete window.__hangarQuieto};return 1})";
+/// Desfaz o que o `QUIET_ARM` pôs na página, quando a ação não chega ao `calm`.
+const QUIET_DROP: &str = "(()=>{const s=window.__hangarQuieto;if(s)s.drop();return 1})()";
 /// Texto da página com os iframes do mesmo site; os de outro site o navegador não deixa ler.
 const TEXT_ALL: &str = "/*__hangarTexto*/(()=>{const out=[];let cross=0;const walk=d=>{out.push(d.body?d.body.innerText:'');for(const f of d.querySelectorAll('iframe,frame')){let c=null;try{c=f.contentDocument}catch(e){}if(c&&c.body)walk(c);else if(!c)cross++}};walk(document);return {t:out.join('\\n'),cross}})()";
 const OPEN_LIST: &str = "(()=>{const a=document.activeElement;try{return !!a&&a.tagName==='SELECT'&&a.matches(':open')}catch(e){return false}})()";
@@ -102,6 +106,10 @@ pub const PICKING: &str = "erro: o usuário está escolhendo um elemento no pain
 const SETTLE_MS: u64 = 150;
 /// Teto da espera da página assentar depois de uma ação.
 const QUIET_MAX_MS: u64 = 3_000;
+/// DOM mudando sem rede (relógio, animação): até aqui, não até o teto.
+const QUIET_DOM_MS: u64 = 1_500;
+/// Navegação causada por uma ação: o resto do `VERB_MS` depois da espera.
+const NAV_IN_ACTION_MS: u64 = 12_000;
 /// Teto de um verbo cuja página não responde: sem ele uma chamada CDP presa segurava a vez para sempre, e todo verbo
 /// seguinte esgotava o prazo com a página viva.
 const VERB_MS: u64 = 20_000;
@@ -730,36 +738,70 @@ impl<P: Page> Controller<P> {
         } else if let Some(rest) = said.strip_prefix("varios:") {
             let (n, list) = rest.split_once(':').unwrap_or((rest, ""));
             format!("erro: {verb}: “{r}” casa com {n} elementos visíveis ({list}): use o @eN do snapshot --refs ou um texto mais exato")
-        } else {
+        } else if !said.is_empty() {
             format!("erro: {verb}: {said}")
+        } else {
+            format!("erro: {verb}: a busca de “{r}” voltou sem resposta da página ({result})")
         }))
     }
 
-    /// Começa a contar as mudanças do DOM antes da ação; devolve as navegações até aqui.
-    async fn arm_quiet(&self) -> u64 {
+    /// Começa a contar as mudanças da página antes da ação; devolve as navegações até aqui e se armou.
+    async fn arm_quiet(&self, net: bool) -> (u64, bool) {
         let before = self.state.borrow().navs;
-        let _ = within(&self.page, 1_000, self.value(QUIET_ARM)).await;
-        before
+        let armed = matches!(within(&self.page, 1_000, self.value(&format!("{QUIET_ARM}({net})"))).await, Some(Ok(v)) if v == 1);
+        (before, armed)
     }
 
-    /// Depois da ação: navegou, espera o documento novo; senão espera o DOM parar de mudar (até `QUIET_MAX_MS`). Sem
-    /// mudança nenhuma, volta em `min_ms`. O texto é o que se acrescenta à resposta.
-    async fn calm(&self, verb: &str, before: u64, min_ms: u64) -> String {
-        if self.state.borrow().navs == before {
-            let js = format!("new Promise(r=>{{const s=window.__hangarQuieto;if(!s)return r(0);const t0=performance.now();const tick=()=>{{const now=performance.now();if((s.n===0&&now-t0>={min_ms})||(s.n>0&&s.p<=0&&now-s.t>=300)||now-t0>={QUIET_MAX_MS}){{s.o.disconnect();if(s.f)window.fetch=s.f;if(s.x)XMLHttpRequest.prototype.send=s.x;delete window.__hangarQuieto;return r(s.n)}}setTimeout(tick,50)}};tick()}})");
-            let _ = within(&self.page, QUIET_MAX_MS + 1_000, self.call("Runtime.evaluate", json!({"expression": js, "awaitPromise": true, "returnByValue": true}))).await;
+    async fn drop_quiet(&self) { let _ = within(&self.page, 1_000, self.value(QUIET_DROP)).await; }
+
+    /// Depois da ação: espera o DOM e a rede da página pararem (`min_ms` sem nada = volta), ou o documento novo quando
+    /// ela navegou. O texto é o que se acrescenta à resposta: só diz algo quando a espera não confirmou.
+    async fn calm(&self, verb: &str, (before, armed): (u64, bool), min_ms: u64) -> String {
+        if !armed { return " (não deu para acompanhar a página depois da ação: confira com wait --text ou snapshot)".into(); }
+        let mut said = String::new();
+        if !self.state.borrow().navigated {
+            let js = format!("new Promise(r=>{{const s=window.__hangarQuieto;if(!s)return r('sem');const t0=performance.now();const end=w=>{{s.drop();r(w)}};const tick=()=>{{const now=performance.now(),t=now-t0;if(s.saindo)return end('saindo');if(s.n===0&&t>={min_ms})return end('ok');if(s.p<=0&&s.n>0&&now-s.t>=300)return end('ok');if(s.p<=0&&t>={QUIET_DOM_MS})return end('mudando');if(t>={QUIET_MAX_MS})return end(s.p>0?'rede':'mudando');setTimeout(tick,50)}};tick()}})");
+            let answer = within(&self.page, QUIET_MAX_MS + 1_000, self.call("Runtime.evaluate", json!({"expression": js, "awaitPromise": true, "returnByValue": true}))).await;
+            said = match answer {
+                Some(Ok(r)) => match r["result"]["value"].as_str() {
+                    Some("ok") => String::new(),
+                    Some("mudando") => " (a página ainda mudava; para esperar algo, wait --text)".into(),
+                    Some("rede") => format!(" (a página ainda esperava a rede depois de {} s)", QUIET_MAX_MS / 1000),
+                    Some("saindo") => self.leaving(before).await,
+                    // Documento trocado no meio: a navegação abaixo diz.
+                    _ => String::new(),
+                },
+                // Contexto destruído = o documento trocou; o resto não confirmou a espera.
+                Some(Err(e)) if e.contains("context") => String::new(),
+                Some(Err(e)) => format!(" (a espera da página falhou: {e})"),
+                None => " (a página não respondeu à espera)".into(),
+            };
         }
-        if self.state.borrow().navs == before { return String::new(); }
+        if self.state.borrow().navs == before { return said; }
         // Rota de SPA não troca o documento: as refs seguem valendo, e não há carga a esperar.
         if !self.state.borrow().navigated {
-            let url = self.value("location.href").await.ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
-            return format!(" — a página foi para {url}");
+            return match self.value("location.href").await.ok().and_then(|v| v.as_str().map(str::to_owned)) {
+                Some(url) => format!(" — a página foi para {url}{said}"),
+                None => format!(" — a página mudou de rota{said}"),
+            };
         }
-        match self.settle(verb, before).await {
-            Ok(t) if t.starts_with("ok:") => format!(" — a página navegou para {}", t.trim_start_matches(&format!("ok: {verb} "))),
-            Ok(t) => format!(" — a página navegou, mas {}", t.trim_start_matches("erro: ")),
-            Err(e) => format!(" — a página navegou, mas a carga não foi conferida ({e})"),
+        match within(&self.page, NAV_IN_ACTION_MS, self.settle(verb, before)).await {
+            Some(Ok(t)) if t.starts_with("ok:") => format!(" — a página navegou para {}", t.trim_start_matches(&format!("ok: {verb} "))),
+            Some(Ok(t)) => format!(" — a página navegou, mas {}", t.trim_start_matches("erro: ")),
+            Some(Err(e)) => format!(" — a página navegou, mas a carga não foi conferida ({e})"),
+            None => format!(" — a página está navegando e não terminou de carregar em {} s: confira com wait --url", NAV_IN_ACTION_MS / 1000),
         }
+    }
+
+    /// A página avisou que vai sair (link ou formulário com resposta lenta): espera a navegação começar.
+    async fn leaving(&self, before: u64) -> String {
+        let mut waited = 0;
+        while waited < NAV_IN_ACTION_MS {
+            if self.state.borrow().navs != before { return String::new(); }
+            self.page.sleep(POLL_MS).await;
+            waited += POLL_MS;
+        }
+        format!(" (a página começou a sair, mas não navegou em {} s)", NAV_IN_ACTION_MS / 1000)
     }
 
     async fn page_text(&self) -> Result<String, String> {
@@ -778,7 +820,8 @@ impl<P: Page> Controller<P> {
         // A medida esperou a página: o modo de escolha pode ter ligado nesse meio-tempo.
         if let Some(why) = self.blocked() { self.unmark().await; return Ok(why.into()); }
         let base = |t: &str| json!({"type": t, "x": x, "y": y, "button": "left", "clickCount": 1});
-        let before = self.arm_quiet().await;
+        // O `fill` digita logo depois: esperar a página só no clique de verdade.
+        let quiet = if verb == "click" { Some(self.arm_quiet(true).await) } else { None };
         let ok = self.arrived(&["pointerdown", "mousedown"], async || {
             // Antes de apertar: o pedido pode chegar à página mesmo sem a resposta voltar.
             *self.pressed.borrow_mut() = Some(("Input.dispatchMouseEvent", base("mouseReleased")));
@@ -787,10 +830,12 @@ impl<P: Page> Controller<P> {
             self.pressed.borrow_mut().take();
             released.map(|_| ())
         }).await;
-        let ok = ok?;
+        let ok = match ok {
+            Ok(true) => true,
+            other => { if quiet.is_some() { self.drop_quiet().await; } other? }
+        };
         if !ok { return Ok(format!("erro: click {r}: o evento nao chegou na pagina (aba escondida sem quadro) — tire um shot e repita")); }
-        // O `fill` digita logo depois: esperar a página só no clique de verdade.
-        let after = if verb == "click" { self.calm(verb, before, 150).await } else { String::new() };
+        let after = match quiet { Some(q) => self.calm(verb, q, 150).await, None => String::new() };
         Ok(format!("ok: click {r}{after}"))
     }
 
@@ -904,7 +949,7 @@ impl<P: Page> Controller<P> {
         // Aba escondida engole a tecla mesmo com a lista aberta: lá a sonda continua sendo a prova.
         let hidden = self.state.borrow().hidden;
         let open_list = !hidden && self.value(OPEN_LIST).await.is_ok_and(|v| v == true);
-        let before = self.arm_quiet().await;
+        let quiet = self.arm_quiet(true).await;
         let ok = self.arrived(&["keydown"], async || {
             let mut d = down.clone();
             d["type"] = "keyDown".into();
@@ -917,8 +962,12 @@ impl<P: Page> Controller<P> {
             let released = self.call("Input.dispatchKeyEvent", u).await;
             self.pressed.borrow_mut().take();
             released.map(|_| ())
-        }).await?;
-        Ok(if ok { format!("ok: press {key}{}", self.calm("press", before, 150).await) }
+        }).await;
+        let ok = match ok {
+            Ok(true) => true,
+            other => { self.drop_quiet().await; other? }
+        };
+        Ok(if ok { format!("ok: press {key}{}", self.calm("press", quiet, 150).await) }
         else if open_list { format!("ok: press {key} (foi para a lista aberta do select, que nao avisa a pagina; confira com snapshot)") }
         else { format!("erro: press {key}: o evento nao chegou na pagina (aba escondida sem quadro) — tire um shot e repita") })
     }
@@ -934,10 +983,13 @@ impl<P: Page> Controller<P> {
     }
 
     async fn eval(&self, js: &str) -> Result<String, String> {
-        let before = self.arm_quiet().await;
-        let answer = self.eval_raw(js).await?;
+        let quiet = self.arm_quiet(false).await;
+        let answer = match self.eval_raw(js).await {
+            Ok(answer) if answer.starts_with("ok:") => answer,
+            other => { self.drop_quiet().await; return other; }
+        };
         // Eval que só lê não mexe no DOM e volta na hora; o que clica espera a página responder.
-        Ok(if answer.starts_with("ok:") { format!("{answer}{}", self.calm("eval", before, 0).await) } else { answer })
+        Ok(format!("{answer}{}", self.calm("eval", quiet, 0).await))
     }
 
     async fn eval_raw(&self, js: &str) -> Result<String, String> {
@@ -1294,7 +1346,17 @@ mod tests {
     /// `panel`/`held`: o lado do motor do painel, que guarda o tamanho aplicado e obedece ao layout pedido.
     struct Fake { calls: RefCell<Vec<(String, Value)>>, answer: Box<dyn Fn(&str, &Value) -> Result<Value, String>>, stuck: &'static str,
         panel: Cell<Option<(u32, u32, f32)>>, held: Cell<bool> }
+    /// A espera depois da ação responde como numa página que assentou, salvo quando o teste responde ela mesma.
     fn fake(answer: impl Fn(&str, &Value) -> Result<Value, String> + 'static, stuck: &'static str) -> Fake {
+        let answer = move |m: &str, p: &Value| {
+            let said = answer(m, p)?;
+            let quiet = p["expression"].as_str().filter(|e| e.contains("__hangarQuieto"));
+            Ok(match quiet {
+                Some(e) if said == json!({}) || said == json!({"result": {}}) =>
+                    json!({"result": {"value": if e.starts_with("new Promise") { json!("ok") } else { json!(1) }}}),
+                _ => said,
+            })
+        };
         Fake { calls: RefCell::default(), answer: Box::new(answer), stuck, panel: Cell::new(None), held: Cell::new(false) }
     }
     impl Page for Fake {
@@ -1662,6 +1724,50 @@ fn finder(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contai
             "erro: click: “Salvar” casa com 3 elementos visíveis (button “Salvar”, a “Salvar”, span “Salvar”): use o @eN do snapshot --refs ou um texto mais exato");
     }
 
+    fn quiet_answer(arm: Value, wait: &'static str) -> Controller<Fake> {
+        ctl(move |m, p| Ok(match m {
+            "Accessibility.getFullAXTree" => tree(),
+            "DOM.getBoxModel" => json!({"model": {"content": [0, 0, 20, 0, 20, 10, 0, 10]}}),
+            "Runtime.evaluate" => match p["expression"].as_str().unwrap_or("") {
+                e if e.starts_with("(typeof window.__hangarSonda") => json!({"result": {"value": 1}}),
+                e if e.starts_with("new Promise(r=>{const s=window.__hangarQuieto") => json!({"result": {"value": wait}}),
+                e if e.contains("window.__hangarQuieto={") => arm.clone(),
+                _ => json!({}),
+            },
+            _ => json!({}),
+        }))
+    }
+
+    /// A espera depois do clique só fala quando não confirmou que a página assentou.
+    #[test]
+    fn click_says_when_the_page_did_not_settle() {
+        let c = quiet_answer(json!({"result": {"value": 1}}), "mudando");
+        block_on(c.run("snapshot", &[]));
+        assert_eq!(text(block_on(c.run("click", &s(&["@e1"])))), "ok: click @e1 (a página ainda mudava; para esperar algo, wait --text)");
+        let c = quiet_answer(json!({"result": {"value": 1}}), "rede");
+        block_on(c.run("snapshot", &[]));
+        assert_eq!(text(block_on(c.run("click", &s(&["@e1"])))), "ok: click @e1 (a página ainda esperava a rede depois de 3 s)");
+        let c = quiet_answer(json!({"exceptionDetails": {"exception": {"description": "TypeError: x"}}}), "ok");
+        block_on(c.run("snapshot", &[]));
+        assert_eq!(text(block_on(c.run("click", &s(&["@e1"])))),
+            "ok: click @e1 (não deu para acompanhar a página depois da ação: confira com wait --text ou snapshot)");
+    }
+
+    /// Clique que não chega desfaz o que a espera pôs na página.
+    #[test]
+    fn a_click_that_never_arrives_drops_the_watch() {
+        let c = ctl(|m, p| Ok(match m {
+            "Accessibility.getFullAXTree" => tree(),
+            "DOM.getBoxModel" => json!({"model": {"content": [0, 0, 20, 0, 20, 10, 0, 10]}}),
+            "Runtime.evaluate" if p["expression"].as_str().is_some_and(|e| e.starts_with("(typeof window.__hangarSonda")) => json!({"result": {"value": 0}}),
+            _ => json!({}),
+        }));
+        block_on(c.run("snapshot", &[]));
+        assert!(text(block_on(c.run("click", &s(&["@e1"])))).starts_with("erro: click @e1: o evento nao chegou"));
+        let dropped = c.page.calls.borrow().iter().any(|(_, p)| p["expression"].as_str() == Some(QUIET_DROP));
+        assert!(dropped, "o fetch e o observador da página voltam ao que eram");
+    }
+
     #[test]
     fn wait_with_fixed_time_points_to_the_signal() {
         let c = ctl(|_, _| Ok(json!({})));
@@ -1903,9 +2009,11 @@ fn finder(p: &Value) -> bool { p["expression"].as_str().is_some_and(|e| e.contai
 
     #[test]
     fn runs_are_serialized() {
-        let c = ctl(|_, p| Ok(if p["expression"].as_str().is_some_and(|e| e.contains("__hangarTexto")) {
-            json!({"result": {"value": {"t": "x", "cross": 0}}})
-        } else { json!({"result": {"value": "x"}}) }));
+        let c = ctl(|_, p| Ok(match p["expression"].as_str().unwrap_or("") {
+            e if e.contains("__hangarTexto") => json!({"result": {"value": {"t": "x", "cross": 0}}}),
+            e if e.contains("__hangarQuieto") => json!({}),
+            _ => json!({"result": {"value": "x"}}),
+        }));
         let (a, b) = block_on(futures::future::join(c.run("eval", &s(&["1"])), c.run("text", &[])));
         assert_eq!((text(a), text(b)), ("ok: \"x\"".into(), "x".into()));
         let read: Vec<bool> = c.page.calls.borrow().iter().filter(|(m, _)| m == "Runtime.evaluate")
