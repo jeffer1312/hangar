@@ -10,6 +10,9 @@ const calls = vi.hoisted(() => ({
   agy: vi.fn(),
   login: null as { server: unknown; accountId?: string } | null,
   agyLogin: null as { server: unknown; accountId?: string } | null,
+  agyLoginDone: null as null | (() => void),
+  terms: null as null | { onDone: () => void; onSignIn: () => void; onOpenTerminal: () => void; onClose: () => void },
+  createSession: vi.fn(),
 }));
 
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
@@ -24,6 +27,7 @@ vi.mock('@hangar/core', async (original) => ({
   getCredentialsForServer: calls.credentials,
   getEnginesForServer: calls.engines,
   getAntigravityAccountsForServer: calls.agy,
+  createSessionForServer: calls.createSession,
 }));
 const stored = vi.hoisted(() => new Map<string, string>());
 vi.mock('../../stores/prefs', () => ({ prefs: {
@@ -44,9 +48,16 @@ vi.mock('./CodexContaLogin', () => ({
   },
 }));
 vi.mock('./AntigravityContaLogin', () => ({
-  AntigravityContaLogin: (props: { server: unknown; accountId?: string }) => {
+  AntigravityContaLogin: (props: { server: unknown; accountId?: string; onComplete: () => void }) => {
     calls.agyLogin = { server: props.server, accountId: props.accountId };
+    calls.agyLoginDone = props.onComplete;
     return createElement('div', { 'data-testid': 'agy-login' }, props.accountId ?? 'new');
+  },
+}));
+vi.mock('./AntigravityTermos', () => ({
+  AntigravityTermos: (props: NonNullable<typeof calls.terms>) => {
+    calls.terms = props;
+    return createElement('div', { 'data-testid': 'agy-terms' });
   },
 }));
 vi.mock('./Pagina', () => ({ Pagina: ({ children }: { children: ReactNode }) => createElement('main', null, children) }));
@@ -111,6 +122,9 @@ describe('contas Codex', () => {
     calls.agy.mockResolvedValue({ instalado: false, contas: [] });
     calls.login = null;
     calls.agyLogin = null;
+    calls.agyLoginDone = null;
+    calls.terms = null;
+    calls.createSession.mockReset();
     calls.list.mockResolvedValue([
       { id: 'default', credential_id: 'codex:/default', name: 'Padrão', home: '/default', is_default: true, auth: { method: 'oauth', status: 'connected', email: 'a@example.com', plan: 'Plus' }, sync: { status: 'ready', trust_pending: false, issues: [] } },
       { id: 'work', credential_id: 'codex:/work', name: 'Trabalho', home: '/work', is_default: false, auth: { method: 'oauth', status: 'disconnected', email: null, plan: null }, sync: { status: 'ready', trust_pending: false, issues: [] } },
@@ -251,7 +265,7 @@ describe('contas Codex', () => {
     expect(container.textContent).not.toContain('trabalho');
     expect(container.textContent).toContain(m.mobile_antigravity_terms_pending());
     expect(container.textContent).toContain(m.mobile_antigravity_no_quota());
-    // Termos pendentes na padrão: a ação abre a sessão do agy, e o texto diz que quem aceita é a pessoa.
+    // Termos pendentes na padrão: a ação existe, e o texto diz que quem aceita é a pessoa.
     expect(container.textContent).toContain(m.mobile_antigravity_accept_terms());
     expect(container.textContent).toContain(m.mobile_antigravity_accept_terms_hint());
     const buttons = () => [...container.querySelectorAll('button')];
@@ -261,6 +275,78 @@ describe('contas Codex', () => {
     expect(buttons().some((b) => b.textContent === m.mobile_accounts_antigravity_add())).toBe(false);
     await act(async () => buttons().find((b) => b.textContent === 'Entrar')!.click());
     expect(calls.agyLogin).toEqual({ server, accountId: 'default' });
+    root.unmount();
+  });
+
+  it('Aceitar os Termos abre o painel; Entrar leva ao login, e o login concluído com Termos pendentes volta ao painel', async () => {
+    const pending = { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: true, termos_aceitos: false, em_uso: false };
+    calls.list.mockResolvedValue([]);
+    calls.credentials.mockResolvedValue([
+      { id: 'antigravity:/h/.gemini', tipo: 'antigravity', auth_method: 'oauth', nome: 'Google (padrão)', nome_natural: 'Google (padrão)',
+        ativa: false, usos: [], login: { estado: 'ok', loggedIn: true } },
+    ]);
+    calls.agy.mockResolvedValue({ instalado: true, contas: [pending] });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(Contas)));
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+    const terms = () => container.querySelector('[data-testid="agy-terms"]');
+    const login = () => container.querySelector('[data-testid="agy-login"]');
+
+    expect(terms()).toBeNull();
+    await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent === m.mobile_antigravity_accept_terms())!.click());
+    expect(terms()).toBeTruthy();
+    expect(calls.createSession).not.toHaveBeenCalled();
+
+    await act(async () => calls.terms!.onSignIn());
+    expect(terms()).toBeNull();
+    expect(calls.agyLogin).toEqual({ server, accountId: 'default' });
+
+    await act(async () => calls.agyLoginDone!());
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+    expect(login()).toBeNull();
+    expect(terms()).toBeTruthy();
+    root.unmount();
+  });
+
+  it('login concluído com os Termos já aceitos não abre o painel', async () => {
+    calls.list.mockResolvedValue([]);
+    calls.credentials.mockResolvedValue([]);
+    calls.agy.mockResolvedValue({ instalado: true, contas: [] });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(Contas)));
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+    await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent === m.mobile_accounts_antigravity_add())!.click());
+    calls.agy.mockResolvedValue({ instalado: true, contas: [
+      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: true, termos_aceitos: true, em_uso: false },
+    ] });
+    await act(async () => calls.agyLoginDone!());
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+    expect(container.querySelector('[data-testid="agy-terms"]')).toBeNull();
+    root.unmount();
+  });
+
+  it('Abrir no terminal, depois de o painel falhar, abre a sessão agy-termos na casa da máquina', async () => {
+    calls.list.mockResolvedValue([]);
+    calls.credentials.mockResolvedValue([]);
+    calls.agy.mockResolvedValue({ instalado: true, contas: [
+      { id: 'default', padrao: true, pasta: '/h/.gemini', credencial: 'antigravity:/h/.gemini', logado: true, termos_aceitos: false, em_uso: false },
+    ] });
+    calls.createSession.mockResolvedValue({ name: 'agy-termos' });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(Contas)));
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+    await act(async () => [...container.querySelectorAll('button')].find((b) => b.textContent === m.mobile_antigravity_accept_terms())!.click());
+    await act(async () => calls.terms!.onOpenTerminal());
+    expect(calls.createSession).toHaveBeenCalledWith(server, { name: 'agy-termos', cwd: '/h', provider: 'antigravity', headless: false });
+    expect(container.querySelector('[data-testid="agy-terms"]')).toBeNull();
     root.unmount();
   });
 

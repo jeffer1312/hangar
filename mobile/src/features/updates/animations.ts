@@ -9,6 +9,7 @@ import { SpeedChoiceAnimation } from './SpeedChoiceAnimation';
 import { ProxyUpdateAnimation } from './ProxyUpdateAnimation';
 import { AdoptProxyAnimation } from './AdoptProxyAnimation';
 import { AntigravityAnimation } from './AntigravityAnimation';
+import { AntigravityTermsAnimation } from './AntigravityTermsAnimation';
 import { NoticeActionsAnimation } from './NoticeActionsAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { CompactIdleAnimation } from './CompactIdleAnimation';
@@ -40,6 +41,7 @@ import { PortsAnimation } from './PortsAnimation';
 const animations: Record<string, ComponentType<{ width: number }>> = {
   'ajustes-sessao-abas': SessionSettingsAnimation,
   antigravity: AntigravityAnimation,
+  'termos-antigravity': AntigravityTermsAnimation,
   'provedores-do-claude': ClaudeProvidersAnimation,
   'revisoes-mobile': ReviewsAnimation,
   'scheduled-tasks': ScheduledTasksAnimation,

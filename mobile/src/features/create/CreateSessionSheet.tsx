@@ -1027,7 +1027,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
         </Pressable>
       </View> : null}
       {provider === 'antigravity' && contaAgy && contaAgy.logado !== false && !contaAgy.termos_aceitos
-        ? <Text style={styles.hint}>{m.mobile_antigravity_terms_hint()}</Text> : null}
+        ? <Text style={styles.hint}>{m.mobile_antigravity_terms_create_hint()}</Text> : null}
       {projectWarning ? <Text style={styles.error} accessibilityRole="alert">{projectWarning}</Text> : null}
       {error ? <Text style={styles.error} accessibilityRole="alert">{error}</Text> : null}
       {catalogError ? <Text style={styles.error} accessibilityRole="alert">{catalogError}</Text> : null}

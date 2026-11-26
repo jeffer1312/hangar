@@ -6,6 +6,7 @@
 //! instalar o CLIProxyAPI, conectar a conta e criar o modelo dele, em `cliproxy`; as contas Google do Antigravity, em
 //! `antigravity`.
 mod actions;
+mod agy_terms;
 mod antigravity;
 mod cliproxy;
 mod codex;
@@ -16,6 +17,8 @@ mod usage;
 use super::*;
 use super::device::Remote;
 use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
+use agy_terms::{AgyTermsFlow, TermsReply};
+pub(crate) use agy_terms::{TermsAction as AgyTermsAction, TermsStage as AgyTermsStage, terms_buttons as agy_terms_buttons, terms_panel as agy_terms_panel};
 use antigravity::{AgyFlow, AgyReply};
 use cliproxy::{CliproxyReply, CliproxyWizard};
 use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
@@ -261,6 +264,10 @@ pub(super) struct Accounts {
     antigravity: Option<AgyFlow>,
     /// Login e Termos das contas Antigravity, lidos só com a página aberta.
     agy: Remote<antigravity::AgyList>,
+    /// Painel dos Termos do Google do agy, no lugar da lista.
+    terms: Option<AgyTermsFlow>,
+    /// Login da conta padrão concluído: a próxima lista do agy com os Termos pendentes abre o painel deles.
+    terms_after_login: bool,
     /// Assistente do CLIProxyAPI aberto no lugar da lista.
     cliproxy: Option<CliproxyWizard>,
     /// Versão nova do proxy instalado pelo Hangar e a atualização dele.
@@ -295,6 +302,7 @@ pub(super) enum AccountsReply {
     Keys(KeysReply),
     Codex(CodexReply),
     Antigravity(AgyReply),
+    AgyTerms(TermsReply),
     Cliproxy(CliproxyReply),
     ProxyUpdate(proxy_update::UpdateReply),
 }
@@ -532,7 +540,7 @@ fn build_row_with(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_co
                 None => {}
             }
             if c.agy.as_ref().is_some_and(|a| !a.terms) {
-                subtitle.push((tr("accounts_agy_terms_pending"), Tone::Warn));
+                subtitle.push((agy_terms::terms_tr("pending"), Tone::Warn));
                 // A sessão abre na casa (a pasta-mãe do `~/.gemini`): com terminal o agy só usa a conta padrão.
                 agy_terms = c.agy.as_ref().filter(|a| a.default).and(c.path.as_deref().and_then(server_parent));
             }
@@ -1021,8 +1029,8 @@ impl Hangar {
     }
 
     pub(super) fn receive_accounts(&mut self, reply: AccountsReply, window: &mut Window, cx: &mut Context<Self>) {
-        // As contas decidem passos do tour (`account_kinds`).
-        self.tour_dirty = true;
+        // As contas decidem passos do tour (`account_kinds`); os Termos não mexem nelas.
+        if !matches!(reply, AccountsReply::AgyTerms(_)) { self.tour_dirty = true; }
         let accounts = &mut self.accounts;
         match reply {
             AccountsReply::List(seq, result) => {
@@ -1092,6 +1100,8 @@ impl Hangar {
             AccountsReply::Keys(reply) => self.receive_keys(reply, window, cx),
             AccountsReply::Codex(reply) => self.receive_codex(reply, window, cx),
             AccountsReply::Antigravity(reply) => self.receive_agy(reply, window, cx),
+            // Nem a lista muda: só o painel, e só quando a etapa mudou.
+            AccountsReply::AgyTerms(reply) => { if self.receive_agy_terms(reply, window, cx) { cx.notify(); } return; }
             AccountsReply::Cliproxy(reply) => self.receive_cliproxy(reply, window, cx),
             AccountsReply::ProxyUpdate(reply) => self.receive_proxy_update(reply, window, cx),
         }
@@ -1130,6 +1140,7 @@ impl Hangar {
         if let Some(panel) = self.render_engine_form(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_codex(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_agy(cx) { return page.child(top(None)).child(panel).into_any_element(); }
+        if let Some(panel) = self.render_agy_terms(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_cliproxy_wizard(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {
             (None, _) => return page.child(top(None)).child(settings_box().mt(px(20.))
@@ -1528,10 +1539,10 @@ impl Hangar {
                 .when(row.sign_out.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-out-{}", row.id))).outline().small()
                     .label(tr("accounts_agy_sign_out")).disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(id.clone(), ChangeKind::SignOut, window, cx)))))
-                .children(row.agy_terms.clone().map(|home| Button::new(SharedString::from(format!("accounts-agy-terms-{}", row.id))).outline().small()
+                .when(row.agy_terms.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-terms-{}", row.id))).outline().small()
                     .label(tr("accounts_agy_accept_terms")).tooltip(tr("accounts_agy_accept_terms_hint"))
                     .accessibility_label(tr("accounts_agy_accept_terms_hint")).disabled(busy)
-                    .on_click(cx.listener(move |this, _, window, cx| this.start_agy_terms(home.clone(), window, cx)))))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_agy_terms(cx)))))
                 .when(!signed && row.remove.is_some(), |el| el.child(Button::new(SharedString::from(format!("accounts-agy-remove-{}", row.id)))
                     .outline().small().label(tr("accounts_agy_remove")).disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| this.confirm_change(remove_id.clone(), ChangeKind::Remove, window, cx)))))
@@ -1906,7 +1917,7 @@ mod tests {
         assert_eq!(extra.agy, Some(("trabalho".to_owned(), false)));
         assert!(extra.sign_out.is_none());
         assert_eq!(extra.remove.as_ref().map(|r| r.0.clone()), Some(vec!["antigravity-contas".to_owned(), "trabalho".to_owned()]));
-        assert!(extra.subtitle.0.contains(&tr("accounts_agy_terms_pending")));
+        assert!(extra.subtitle.0.contains(&super::agy_terms::terms_tr("pending")));
         assert_eq!(default.agy_terms, None, "Termos aceitos não oferecem a sessão");
         assert_eq!(extra.agy_terms, None, "a adicional não abre com terminal");
         let pending: Vec<super::antigravity::AgyAccount> = serde_json::from_value(json!([

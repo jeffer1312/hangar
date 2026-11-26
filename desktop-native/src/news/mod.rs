@@ -2,6 +2,7 @@
 
 mod account_tags;
 mod agent_fix;
+mod agy_terms;
 mod antigravity;
 mod auto_report;
 mod claude_notices;
@@ -119,6 +120,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "entrar-pelo-connect" => Some(connect_sign_in::render),
         "portas-da-sessao" => Some(session_ports::render),
         "antigravity" => Some(antigravity::render),
+        "termos-antigravity" => Some(agy_terms::render),
         _ => None,
     }
 }

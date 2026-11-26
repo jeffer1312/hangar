@@ -1,4 +1,5 @@
 use super::*;
+use crate::session_open::terminal::MuxOutput;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

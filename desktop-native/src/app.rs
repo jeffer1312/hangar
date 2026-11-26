@@ -115,7 +115,7 @@ pub(crate) use media_panel::{media_cell, media_cell_side, media_day_title, media
 pub(crate) use settings::{memory_dream, news_group_heading, news_kind_icon, news_kind_pill, news_markdown_block, setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
-pub(crate) use accounts::{CLIPROXY_INSTALL_ITEMS, CliproxyBrand, CliproxyItem, cliproxy_account_row, cliproxy_default_name, cliproxy_fast_field,
+pub(crate) use accounts::{AgyTermsAction, AgyTermsStage, agy_terms_buttons, agy_terms_panel, CLIPROXY_INSTALL_ITEMS, CliproxyBrand, CliproxyItem, cliproxy_account_row, cliproxy_default_name, cliproxy_fast_field,
     cliproxy_install_item, cliproxy_name_preview, cliproxy_steps, cliproxy_update_available_banner, cliproxy_update_button,
     cliproxy_update_done_banner, cliproxy_update_running_banner, CliproxyCardView, cliproxy_adopt_button, cliproxy_adopt_done_banner,
     cliproxy_adopt_running_banner, cliproxy_card_note, cliproxy_card_view, cliproxy_connect_button, login_heading, target_row};
