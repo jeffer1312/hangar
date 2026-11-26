@@ -790,15 +790,82 @@ async fn execute_checked_call(
         started: external_started.clone(),
         armed: true,
     };
+    let guard_rejection = Arc::new(std::sync::Mutex::new(None::<String>));
+    let guard_rejection_cb = Arc::clone(&guard_rejection);
+    let guard_id = config.id.clone();
+    let guard_tool = discovered.clone();
     let call_result = st
         .integrations
         .clients
-        .call_tool_tracked(
+        .call_tool_guarded(
             &config.id,
             &discovered.name,
             args_value,
             Some(expected_config_fp),
             Some(external_started),
+            move || {
+                let guard_rejection = Arc::clone(&guard_rejection_cb);
+                let guard_id = guard_id.clone();
+                let guard_tool = guard_tool.clone();
+                async move {
+                    let check: Result<(), String> = async {
+                        // Revalida compartilhamento e política imediatamente antes de `peer.call_tool`,
+                        // fechando a janela em que `ensure_connected` aguardava a conexão.
+                        if let Some(session_name) = target_session {
+                            shared_guard::ensure_unshared(
+                                st,
+                                api,
+                                session_name,
+                                shared_guard::INTEGRATIONS,
+                            )
+                            .await?;
+                        }
+                        let fresh = load_integration(st, &guard_id)?;
+                        if !fresh.enabled {
+                            return Err(format!(
+                                "integration_disabled: integração '{}' está desabilitada",
+                                fresh.id
+                            ));
+                        }
+                        if from_pinned_alias && !fresh.pinned {
+                            return Err(format!(
+                                "integration_unpinned: integração '{}' foi desafixada; use integration_call",
+                                fresh.id
+                            ));
+                        }
+                        if config_fingerprint(&fresh) != expected_config_fp {
+                            return Err(format!(
+                                "integration_config_changed: o destino ou autenticação da integração '{}' mudou; tente novamente",
+                                fresh.id
+                            ));
+                        }
+                        ensure_project_allowed(st, &fresh, target_session).await?;
+                        match classify_tool_access(
+                            fresh.policy,
+                            &fresh.allowed_tools,
+                            guard_tool.read_only_hint,
+                            &guard_tool.name,
+                        ) {
+                            ToolAccess::Blocked => Err(format!(
+                                "integration_read_only: a ferramenta '{}' da integração '{}' exige escrita e a política atual é somente leitura",
+                                guard_tool.name, fresh.id
+                            )),
+                            ToolAccess::AskWrite if !waited_for_approval => Err(format!(
+                                "integration_approval_required: a permissão de '{}' na integração '{}' mudou e exige nova aprovação",
+                                guard_tool.name, fresh.id
+                            )),
+                            ToolAccess::Read | ToolAccess::AllowedAlways | ToolAccess::AskWrite => Ok(()),
+                        }
+                    }
+                    .await;
+                    if let Err(msg) = check {
+                        *guard_rejection.lock().unwrap_or_else(PoisonError::into_inner) =
+                            Some(msg.clone());
+                        return Err(ClientError::Protocol(msg));
+                    }
+                    Ok(())
+                }
+            },
         )
         .await;
     cancel_guard.armed = false;
@@ -806,6 +873,13 @@ async fn execute_checked_call(
     let output = match call_result {
         Ok(output) => output,
         Err(err) => {
+            if let Some(msg) = guard_rejection
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+            {
+                return Err(msg);
+            }
             if let Some(session_name) = target_session {
                 shared_guard::ensure_unshared(st, api, session_name, shared_guard::INTEGRATIONS)
                     .await?;

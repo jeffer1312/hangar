@@ -421,6 +421,32 @@ impl McpClientManager {
         expected_config_fp: Option<[u8; 32]>,
         external_dispatched: Option<Arc<AtomicBool>>,
     ) -> Result<McpCallOutput, ClientError> {
+        self.call_tool_guarded(
+            integration_id,
+            tool_name,
+            arguments,
+            expected_config_fp,
+            external_dispatched,
+            || async { Ok(()) },
+        )
+        .await
+    }
+
+    /// Igual a [`Self::call_tool_tracked`], mas executa `before_dispatch` após a conexão estar pronta e
+    /// imediatamente antes de enviar `tools/call` ao transporte (fechando corridas durante `ensure_connected`).
+    pub async fn call_tool_guarded<G, GFut>(
+        &self,
+        integration_id: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+        expected_config_fp: Option<[u8; 32]>,
+        external_dispatched: Option<Arc<AtomicBool>>,
+        before_dispatch: G,
+    ) -> Result<McpCallOutput, ClientError>
+    where
+        G: Fn() -> GFut,
+        GFut: Future<Output = Result<(), ClientError>>,
+    {
         let params = build_call_tool_params(tool_name, arguments)?;
         let tool_owned = tool_name.to_owned();
         self.execute_with_oauth_retry_for(
@@ -430,7 +456,9 @@ impl McpClientManager {
                 let params = params.clone();
                 let tool_name = tool_owned.clone();
                 let external_dispatched = external_dispatched.clone();
+                let guard_fut = before_dispatch();
                 async move {
+                    guard_fut.await.map_err(OpError::Client)?;
                     if let Some(flag) = external_dispatched.as_ref() {
                         flag.store(true, Ordering::SeqCst);
                     }
@@ -1460,7 +1488,10 @@ fn resolve_effective_oauth_token(
     secrets
         .oauth
         .as_ref()
-        .filter(|o| !o.access_token.is_empty())
+        .filter(|o| {
+            !o.access_token.is_empty()
+                && o.config_fingerprint.is_none_or(|fp| fp == config_fp)
+        })
         .map(|o| o.access_token.clone())
 }
 
@@ -1481,7 +1512,8 @@ async fn connect_transport(
             connect_stdio(command, cwd.as_deref(), secrets, pending_stdio).await
         }
         Transport::RemoteHttp { url, .. } => {
-            connect_http(url, &config.auth, secrets, override_oauth_token).await
+            let config_fp = config_fingerprint(config);
+            connect_http(url, &config.auth, config_fp, secrets, override_oauth_token).await
         }
     }
 }
@@ -1573,6 +1605,7 @@ async fn connect_stdio(
 async fn connect_http(
     url: &str,
     auth: &AuthConfig,
+    config_fp: [u8; 32],
     secrets: &IntegrationSecrets,
     override_oauth_token: Option<&str>,
 ) -> Result<
@@ -1582,7 +1615,7 @@ async fn connect_http(
     ),
     ConnectFailure,
 > {
-    let auth_header = resolve_http_auth_header(auth, secrets, override_oauth_token)
+    let auth_header = resolve_http_auth_header(auth, config_fp, secrets, override_oauth_token)
         .map_err(ConnectFailure::Other)?;
     let custom_headers = build_custom_headers(secrets).map_err(ConnectFailure::Other)?;
 
@@ -1609,6 +1642,7 @@ fn is_oauth_auth(auth: &AuthConfig) -> bool {
 
 fn resolve_http_auth_header(
     auth: &AuthConfig,
+    config_fp: [u8; 32],
     secrets: &IntegrationSecrets,
     override_oauth_token: Option<&str>,
 ) -> Result<Option<String>, ClientError> {
@@ -1635,6 +1669,12 @@ fn resolve_http_auth_header(
                     "autenticação OAuth necessária".into(),
                 ));
             };
+            // Rejeita token OAuth vinculado a outro destino/auth mesmo antes da limpeza pós-PATCH.
+            if oauth.config_fingerprint.is_some_and(|fp| fp != config_fp) {
+                return Err(ClientError::AuthRequired(
+                    "token OAuth pertence a outra configuração da integração".into(),
+                ));
+            }
             Ok(Some(oauth.access_token.as_str().to_owned()))
         }
     }

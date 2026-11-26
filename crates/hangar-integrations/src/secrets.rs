@@ -65,6 +65,8 @@ pub struct OAuthTokens {
     pub registered_redirect_uri: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_fingerprint: Option<[u8; 32]>,
     #[serde(default)]
     pub auth_expired: bool,
 }

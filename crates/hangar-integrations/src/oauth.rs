@@ -187,7 +187,7 @@ struct ParsedHttpUrl {
     scheme: String,
     origin: String,
     path: String,
-    exact_path: String,
+    exact_uri: String,
     query: Option<String>,
 }
 
@@ -462,6 +462,7 @@ impl OAuthManager {
                     registered_client_secret: if is_dcr { client_secret } else { None },
                     registered_redirect_uri: is_dcr.then_some(redirect_uri),
                     token_endpoint: Some(token_endpoint),
+                    config_fingerprint: Some(expected_fp),
                     auth_expired: false,
                 });
                 Ok(Ok(()))
@@ -648,6 +649,14 @@ impl OAuthManager {
                         "credenciais OAuth removidas durante o refresh".into(),
                     )));
                 };
+                if current_oauth
+                    .config_fingerprint
+                    .is_some_and(|fp| fp != initial_fp)
+                {
+                    return Ok(Err(OAuthError::InvalidGrant(
+                        "credenciais OAuth vinculadas a outra configuração".into(),
+                    )));
+                }
                 // Reconexão manual paralela via `handle_callback` vence o refresh antigo em voo.
                 if !oauth_tokens_match(current_oauth, &expected_access, expected_refresh.as_ref()) {
                     if !current_oauth.access_token.trim().is_empty() {
@@ -670,6 +679,7 @@ impl OAuthManager {
                     current_oauth.scope = Some(sc);
                 }
                 current_oauth.token_endpoint = Some(token_endpoint);
+                current_oauth.config_fingerprint = Some(initial_fp);
                 current_oauth.auth_expired = false;
                 Ok(Ok(fresh_access))
             })
@@ -1266,6 +1276,12 @@ pub fn compute_status(
             let Some(oauth) = secrets.and_then(|s| s.oauth.as_ref()) else {
                 return IntegrationStatus::AuthRequired;
             };
+            if oauth
+                .config_fingerprint
+                .is_some_and(|fp| fp != config_fingerprint(config))
+            {
+                return IntegrationStatus::AuthRequired;
+            }
             if oauth.auth_expired {
                 IntegrationStatus::AuthExpired
             } else if oauth.access_token.trim().is_empty() {
@@ -1285,11 +1301,8 @@ impl ParsedHttpUrl {
         }
     }
 
-    fn exact_uri(&self) -> String {
-        match &self.query {
-            Some(query) => format!("{}{}?{query}", self.origin, self.exact_path),
-            None => format!("{}{}", self.origin, self.exact_path),
-        }
+    fn exact_uri(&self) -> &str {
+        &self.exact_uri
     }
 }
 
@@ -1460,16 +1473,19 @@ fn parse_http_url(raw: &str, require_https: bool) -> Result<ParsedHttpUrl, OAuth
         "" | "/" => String::new(),
         other => other.trim_end_matches('/').to_owned(),
     };
-    let exact_path = match uri.path() {
-        "" | "/" => String::new(),
-        other => other.to_owned(),
-    };
+    // Preserva barra da raiz e barra final exatamente como informadas (ex.: `/?a=1` != `?a=1`).
+    let after_scheme = raw.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+    let after_authority = after_scheme
+        .find(['/', '?'])
+        .map(|idx| &after_scheme[idx..])
+        .unwrap_or("");
+    let exact_uri = format!("{origin}{after_authority}");
     let query = uri.query().map(str::to_owned);
     Ok(ParsedHttpUrl {
         scheme,
         origin,
         path,
-        exact_path,
+        exact_uri,
         query,
     })
 }
@@ -1939,6 +1955,26 @@ mod tests {
         assert!(parse_http_url("ftp://mcp.example.com/auth", false).is_err());
         assert!(parse_http_url("http://mcp.example.com/auth", true).is_err());
         assert!(parse_http_url("https://mcp.example.com/auth#frag", false).is_err());
+
+        // RFC 9728: barra da raiz com query (`/?a=1`) deve divergir da forma sem barra (`?a=1`).
+        let root_slash = parse_http_url("https://example.com/?project_ref=abc", true).unwrap();
+        assert!(super::prm_resource_matches(
+            Some("https://example.com/?project_ref=abc"),
+            root_slash.exact_uri(),
+            true,
+        ));
+        assert!(!super::prm_resource_matches(
+            Some("https://example.com?project_ref=abc"),
+            root_slash.exact_uri(),
+            true,
+        ));
+        assert!(!super::prm_resource_matches(
+            Some("https://example.com/"),
+            parse_http_url("https://example.com", true)
+                .unwrap()
+                .exact_uri(),
+            true,
+        ));
     }
 
     #[test]

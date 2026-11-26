@@ -1250,6 +1250,7 @@ async fn mcp_integrations_list_tools_and_error_states_preserve_auth_and_secrets_
                         registered_client_secret: None,
                         registered_redirect_uri: None,
                         token_endpoint: None,
+                        config_fingerprint: None,
                         auth_expired: true,
                     }),
                     ..Default::default()
@@ -1292,6 +1293,7 @@ async fn mcp_integrations_list_tools_and_error_states_preserve_auth_and_secrets_
                         registered_client_secret: None,
                         registered_redirect_uri: Some("http://127.0.0.1/cb".into()),
                         token_endpoint: Some(format!("{}/token", expired_oauth.base_url())),
+                        config_fingerprint: None,
                         auth_expired: false,
                     }),
                     ..Default::default()
