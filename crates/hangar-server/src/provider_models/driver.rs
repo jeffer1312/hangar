@@ -212,7 +212,7 @@ pub async fn kimi_switch(
     let mut opened = false;
     while Instant::now() < until {
         io.wait(timing.settle).await;
-        if io.capture().await?.contains(KIMI_PICKER) {
+        if pure::kimi_picker_open(&io.capture().await?) {
             opened = true;
             break;
         }
@@ -313,29 +313,37 @@ pub async fn kimi_switch(
     }
 }
 
-const KIMI_PICKER: &str = "Select a model";
 /// A busca deixa o modelo pedido entre outros parecidos ("K3" também acha "K3-256k"): desce até a linha exata.
+/// Sem linha marcada a lista pode ainda não ter redesenhado: espera até o prazo, salvo com "No matches" na tela.
 async fn kimi_walk_to(io: &dyn Io, name: &str, timing: Timing) -> Result<bool, ModelError> {
-    for _ in 0..12 {
-        match pure::kimi_picker_cursor(&io.capture().await?) {
+    let until = Instant::now() + timing.result;
+    let mut moves = 0;
+    loop {
+        let pane = io.capture().await?;
+        match pure::kimi_picker_cursor(&pane) {
             Some(cursor) if cursor == name => return Ok(true),
-            Some(_) => {
+            Some(_) if moves < 12 => {
                 io.key("Down", false).await?;
                 io.wait(timing.nav).await;
+                moves += 1;
             }
-            None => return Ok(false),
+            Some(_) => return Ok(false),
+            None if pane.contains("No matches") || Instant::now() >= until => return Ok(false),
+            None => io.wait(timing.settle).await,
         }
     }
-    Ok(false)
 }
 /// Com busca digitada, o primeiro Esc só a limpa: insiste até o picker sumir, senão a sessão fica num menu aberto.
 async fn kimi_close_picker(io: &dyn Io, timing: Timing) -> Result<(), ModelError> {
     for _ in 0..3 {
-        if !io.capture().await?.contains(KIMI_PICKER) {
-            break;
+        if !pure::kimi_picker_open(&io.capture().await?) {
+            return Ok(());
         }
         io.key("Escape", false).await?;
         io.wait(timing.settle).await;
+    }
+    if pure::kimi_picker_open(&io.capture().await?) {
+        tracing::warn!("o picker do /model do Kimi continuou aberto depois de 3 Esc");
     }
     Ok(())
 }

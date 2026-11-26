@@ -77,7 +77,7 @@ fn result(result: Result<Value, ModelError>) -> Value {
     }
 }
 #[tokio::test(start_paused = true)]
-async fn python_kimi_driver_contract() {
+async fn kimi_driver_cases() {
     let fixture: Value = serde_json::from_str(include_str!("fixtures/driver.json")).unwrap();
     for case in fixture["cases"].as_array().unwrap() {
         let io = FakeIo::frames(&case["frames"]);
@@ -168,6 +168,37 @@ fn kimi_name_twins_lists_other_aliases_with_the_same_shown_name() {
     let catalog = json!({"models":[{"alias":"p/k3","name":"K3"},{"alias":"q/k3","name":"K3"},{"alias":"p/k4","name":"K4"}]});
     assert_eq!(pure::kimi_name_twins(&catalog, &catalog["models"][1]), ["p/k3"]);
     assert!(pure::kimi_name_twins(&catalog, &catalog["models"][2]).is_empty());
+}
+#[test]
+fn kimi_search_name_refuses_a_missing_or_repeated_shown_name() {
+    let catalog = json!({"models":[{"alias":"p/k3","name":"K3"},{"alias":"q/k3","name":"K3"},{"alias":"k9","name":""},{"alias":"p/n","name":3},{"alias":"p/k4","name":"K4"}]});
+    let code = |i: usize| pure::kimi_search_name(&catalog, &catalog["models"][i]).unwrap_err().detail["code"].clone();
+    assert_eq!(code(0), json!("kimi_model_name_duplicate"));
+    assert_eq!(code(2), json!("kimi_model_name_missing"));
+    assert_eq!(code(3), json!("kimi_model_name_missing"));
+    assert_eq!(pure::kimi_search_name(&catalog, &catalog["models"][4]).unwrap(), "K4");
+}
+#[test]
+fn kimi_picker_is_its_title_line_not_a_quote_of_it() {
+    assert!(!pure::kimi_picker_open("• o Kimi abre Select a model no /model\n> \n"));
+    assert!(pure::kimi_picker_open(KIMI_PICKER_SEARCH));
+    let quoted_above = format!("Select a model\n   ❯ Old   x\n{KIMI_PICKER_SEARCH}");
+    assert_eq!(pure::kimi_picker_cursor(&quoted_above).as_deref(), Some("K3"));
+}
+#[tokio::test(start_paused = true)]
+async fn kimi_switch_waits_for_the_search_results_to_draw() {
+    let drawing = "  Select a model\n  Search: K3\n";
+    let io = FakeIo::frames(&json!([
+        "prompt vazio\n",
+        drawing,
+        drawing,
+        KIMI_PICKER_SEARCH,
+        "Switched to K3 with thinking high for this session only."
+    ]));
+    let got = driver::kimi_switch(&io, Some("K3"), None, Timing::default()).await;
+    assert!(got.is_ok(), "{:?}", got.err().map(|e| e.detail));
+    let keys: Vec<_> = io.keys.lock().unwrap().iter().map(|k| k["key"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(keys, ["/model", "Enter", "K3", "M-s"]);
 }
 #[tokio::test(start_paused = true)]
 async fn kimi_identical_baseline_after_the_exact_row_is_rejected() {

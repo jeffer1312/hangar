@@ -103,6 +103,12 @@ pub fn wants_steer_queue(p: &Params, sent: &Sent) -> bool {
     p.steer && matches!(sent, Sent::Done { entry: true, delivered, .. } if !*delivered || p.kimi)
 }
 
+/// O Ctrl+S do Kimi orienta toda a fila da TUI, inclusive o que uma escolha anterior mandou esperar: lá a escolha
+/// automática não orienta.
+pub fn choice_for(provider: &str, direct: bool, note: &'static str) -> (bool, &'static str) {
+    if direct && provider == "kimi" { (false, "queue") } else { (direct, note) }
+}
+
 pub fn was_steered(operation_id: &str, promoted: &Result<RuntimeReply, RuntimeError>) -> bool {
     matches!(promoted, Ok(reply) if reply.disposition == Disposition::Accepted
         && reply.payload["ids"].as_array().is_some_and(|ids| ids.iter().any(|id| id == operation_id)))
@@ -374,7 +380,8 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     }
     let (steer, note, expected_turn) = if let Some((task, message)) = task.filter(|_| !text.trim_start().starts_with('/')) {
         let before = ctx.target.handle.snapshot().await.ok();
-        let (mut direct, mut note) = super::delivery_timing::decide(&ctx.st, &ctx.name, &message, &task).await;
+        let (direct, note) = super::delivery_timing::decide(&ctx.st, &ctx.name, &message, &task).await;
+        let (mut direct, mut note) = choice_for(&ctx.target.provider, direct, note);
         if direct {
             let after = ctx.target.handle.snapshot().await.ok();
             if !super::delivery_timing::same_work(before.as_ref(), after.as_ref()) { direct = false; note = "work_changed"; }
@@ -803,6 +810,13 @@ mod broadcast_tests {
         assert!(wants_steer_queue(&params(false), &waiting));
         let unasked = Params { steer: false, ..params(true) };
         assert!(!wants_steer_queue(&unasked, &typed));
+    }
+
+    #[test]
+    fn the_automatic_choice_never_steers_the_kimi_whole_queue() {
+        assert_eq!(choice_for("kimi", true, "direct"), (false, "queue"));
+        assert_eq!(choice_for("kimi", false, "uncertain"), (false, "uncertain"));
+        assert_eq!(choice_for("claude", true, "direct"), (true, "direct"));
     }
 
     #[test]

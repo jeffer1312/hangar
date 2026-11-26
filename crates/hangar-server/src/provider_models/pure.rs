@@ -217,6 +217,23 @@ pub fn kimi_name_twins(catalog: &Value, entry: &Value) -> Vec<String> {
         .filter_map(|m| m["alias"].as_str().map(str::to_owned))
         .collect()
 }
+/// O texto que a troca digita na busca do picker, que só casa com o nome exibido. Sem nome não há o que buscar, e um
+/// vizinho com o mesmo nome receberia a troca.
+pub fn kimi_search_name(catalog: &Value, entry: &Value) -> Result<String, ModelError> {
+    let alias = entry["alias"].as_str().unwrap_or_default();
+    let Some(name) = entry["name"].as_str().filter(|n| !n.trim().is_empty()) else {
+        return Err(ModelError::coded(409, "kimi_model_name_missing",
+            &format!("o modelo {alias} não tem nome exibido (display_name) no config.toml: o picker do Kimi só busca por ele"),
+            json!({"alias": alias})));
+    };
+    let twins = kimi_name_twins(catalog, entry);
+    if !twins.is_empty() {
+        return Err(ModelError::coded(409, "kimi_model_name_duplicate",
+            &format!("outro modelo do Kimi também se chama {name} ({}): o picker não distingue os dois; dê nomes diferentes no config.toml", twins.join(", ")),
+            json!({"aliases": twins})));
+    }
+    Ok(name.to_owned())
+}
 pub fn check_effort(entry: &Value, level: &str) -> Result<String, ModelError> {
     let normalized = level.trim_matches(space).to_lowercase();
     let levels: Vec<String> = entry["efforts"]
@@ -310,9 +327,23 @@ pub fn parse_thinking_row(pane: &str) -> Option<Value> {
     None
 }
 
+/// Onde começa o picker do `/model` do Kimi: a última linha que abre com o título. Conversa que só cita o título não conta.
+fn kimi_picker_start(pane: &str) -> Option<usize> {
+    let (mut start, mut offset) = (None, 0);
+    for line in pane.split_inclusive('\n') {
+        if line.trim_start().starts_with("Select a model") {
+            start = Some(offset);
+        }
+        offset += line.len();
+    }
+    start
+}
+pub fn kimi_picker_open(pane: &str) -> bool {
+    kimi_picker_start(pane).is_some()
+}
 /// O nome da linha marcada pelo cursor no picker do `/model` do Kimi, sem a coluna do provedor.
 pub fn kimi_picker_cursor(pane: &str) -> Option<String> {
-    let start = pane.find("Select a model")?;
+    let start = kimi_picker_start(pane)?;
     pane[start..].lines().find_map(|line| {
         let rest = line.trim_start().strip_prefix('❯')?;
         let name = rest.trim().split("  ").next()?.trim();
