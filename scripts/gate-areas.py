@@ -27,7 +27,8 @@ RUST_READS = ("backend/tests/fixtures/", "resources/", "messages/", "packages/co
               "docs/atualizacoes/", "scripts/shell/", "scripts/omp/", "scripts/hangar-codex", "scripts/tests/",
               "examples/connectors/")
 SERVER = ("crates/",) + RUST_READS
-NATIVE = ("desktop-native/", "crates/Cargo.toml", "packages/core/src/contextRefs.fixtures.json")
+NATIVE = ("desktop-native/", "crates/Cargo.toml", "packages/core/src/contextRefs.fixtures.json",
+          "packages/core/src/whatsappInvisible.fixtures.json")
 MOBILE = ("mobile/", "packages/core/", "messages/", "project.inlang/", "scripts/i18n-compile.mjs",
           "scripts/verificar-app.mjs", ".node-version", "package.json", "package-lock.json")
 

@@ -1,4 +1,5 @@
-//! WhatsApp só leitura no servidor conectado: aceite do risco, instalação, pareamento do celular e o que já foi guardado.
+//! WhatsApp no servidor conectado (leitura e envio de rascunho aprovado pelo dono): aceite do risco, instalação, pareamento do
+//! celular e o que já foi guardado.
 //! Fala só com `/api/whatsapp*` (rotas do dono); o serviço e os dados ficam no servidor.
 use super::*;
 use super::accounts::{step_item, step_states};
@@ -17,7 +18,7 @@ const POLL_EVERY: Duration = Duration::from_secs(1);
 /// Logo depois de pedir o código o estado ainda pode vir `unpaired`; a releitura continua por este tempo.
 const PAIR_GRACE: Duration = Duration::from_secs(10);
 /// As ferramentas que as sessões usam: nomes do catálogo MCP, iguais nos dois idiomas.
-const TOOLS: &str = "whatsapp_chats · whatsapp_read · whatsapp_search · whatsapp_request_media";
+const TOOLS: &str = "whatsapp_chats · whatsapp_read · whatsapp_search · whatsapp_request_media · whatsapp_draft";
 
 /// Já aberta neste aparelho: lido do disco uma vez, no primeiro desenho da navegação.
 static PAGE_SEEN: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
@@ -621,7 +622,7 @@ impl Hangar {
 
 /// O aviso dos riscos com a caixa do aceite, que quem chama monta (com ou sem clique).
 pub(crate) fn risk_box(accept: Checkbox) -> Stateful<Div> {
-    let risks = [("whatsapp_risk_unofficial_title", "whatsapp_risk_unofficial"), ("whatsapp_risk_readonly_title", "whatsapp_risk_readonly"),
+    let risks = [("whatsapp_risk_unofficial_title", "whatsapp_risk_unofficial"), ("whatsapp_risk_send_title", "whatsapp_risk_send"),
         ("whatsapp_risk_local_title", "whatsapp_risk_local"), ("whatsapp_risk_who_title", "whatsapp_risk_who")];
     let warning = theme::warning();
     div().id("whatsapp-risk").p_4().rounded(px(14.)).border_1().border_color(warning.alpha(0.3)).bg(warning.alpha(0.08))

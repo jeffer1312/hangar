@@ -75,6 +75,8 @@ pub struct Engine {
     wires:BTreeMap<String,Wire>,
     policies:BTreeMap<RequestId,String>,
     cancel_due:Option<f64>,
+    /// Falha do modelo que o agy manda como texto: vira o aviso do turno quando ele termina.
+    turn_failure:Option<String>,
     /// A abertura já pediu o modo uma vez nesta vida: recusado, segue sem ele (com nota).
     boot_mode_tried:bool,
     last_event:f64,
@@ -98,7 +100,7 @@ impl Engine {
             state:StateEvent { session:metadata["name"].as_str().unwrap_or("").into(),state:"idle".into(),headless:true,..StateEvent::default() },
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool:None,
             rpc:BTreeMap::new(),server_requests:Vec::new(),request_epochs:BTreeMap::new(),answering:BTreeSet::new(),
-            wires:BTreeMap::new(),policies:BTreeMap::new(),cancel_due:None,boot_mode_tried:false,last_event:clock.monotonic_s,
+            wires:BTreeMap::new(),policies:BTreeMap::new(),cancel_due:None,turn_failure:None,boot_mode_tried:false,last_event:clock.monotonic_s,
             decoder:acp::Session::new(String::new(),None),conversation }
     }
 
@@ -375,7 +377,7 @@ impl Engine {
                 let params = json!({"sessionId":self.conversation,"prompt":prompt});
                 let id = self.send(Some(operation_id.clone()),None,Call::Prompt,"session/prompt",params,&mut effects);
                 if let Some(wire) = self.wires.get_mut(&operation_id) { wire.kind = WireKind::Prompt { steer }; }
-                if !steer { self.turn_id = Some(id); }
+                if !steer { self.turn_id = Some(id); self.turn_failure = None; }
                 self.in_progress = true;
                 self.last_event = clock.monotonic_s;
                 effects.push(Effect::StateChanged);
@@ -511,9 +513,15 @@ impl Engine {
                         self.server_requests.push((id,line.clone()));
                         effects.push(Effect::StateChanged);
                     }
-                    acp::Event::TextDelta(piece) => if let Some(text) = self.preview.append(&piece,now) { self.publish("preview",text,effects); },
+                    acp::Event::TextDelta(piece) => {
+                        // O agy seguiu depois da falha: o turno não terminou nela.
+                        if !piece.trim().is_empty() { self.turn_failure = None; }
+                        if let Some(text) = self.preview.append(&piece,now) { self.publish("preview",text,effects); }
+                    }
+                    acp::Event::TurnFailed(detail) => self.turn_failure = Some(detail),
                     acp::Event::ThoughtDelta(piece) => if let Some(text) = self.thinking.append(&piece,now) { self.publish("thinking",text,effects); },
                     acp::Event::ToolStarted { title,name,input,.. } => {
+                        self.turn_failure = None;
                         // Texto depois de uma ferramenta é outra mensagem; o definitivo vem do transcript.
                         if let Some(text) = self.preview.clear() { self.publish("preview",text,effects); }
                         let (tool_name,input) = match name {
@@ -655,7 +663,8 @@ impl Engine {
         self.clear_live(effects);
         // O agy encerra as permissões do turno junto com ele.
         for (id,_) in std::mem::take(&mut self.server_requests) { self.request_epochs.remove(&id); self.answering.remove(&id); }
-        if let Some(detail) = line.get("error").filter(|e|!e.is_null()).map(|e|e["message"].as_str().unwrap_or("o turno falhou").to_owned()) {
+        let failure = line.get("error").filter(|e|!e.is_null()).map(|e|e["message"].as_str().unwrap_or("o turno falhou").to_owned());
+        if let Some(detail) = failure.or_else(||self.turn_failure.take()) {
             self.put_problem("headless_turno_erro",Some(detail.chars().take(300).collect()));
         } else {
             if self.state.problema.as_deref() == Some("headless_turno_erro") { self.state.problema = None; self.state.problema_detalhe = None; }
@@ -981,6 +990,31 @@ mod tests {
         assert!(!published.trim().is_empty(),"a prévia saiu");
         let end = feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),10.0);
         assert!(end.iter().any(|e|matches!(e,Effect::Publish { channel,data } if channel == "preview" && data["text"] == "")),"a prévia some no fim");
+    }
+
+    #[test]
+    fn a_model_failure_ends_the_turn_with_the_error_on_screen_until_a_turn_goes_well() {
+        let mut engine = opened(json!({}));
+        command(&mut engine,"in1",OperationKind::Input,json!({"text":"a"})).unwrap();
+        written(&mut engine,"in1");
+        let quota = "\n⚠ agent executor error: generating and executing: transport error (ResourceExhausted, HTTP 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h5m1s.: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h5m1s.\n";
+        let chunk = json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":OPENED,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":quota}}}});
+        let during = feed(&mut engine,chunk.clone(),2.0);
+        assert!(!during.iter().any(|e|matches!(e,Effect::Publish { channel,data } if channel == "preview" && data["text"].as_str().is_some_and(|t|t.contains("executor")))));
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),3.0);
+        let view = engine.view();
+        assert_eq!((view["state"].as_str(),view["problema"].as_str()),(Some("idle"),Some("headless_turno_erro")));
+        assert_eq!(view["problema_detalhe"],"Cota do Antigravity esgotada; volta em 3h5m1s");
+        command(&mut engine,"in2",OperationKind::Input,json!({"text":"b"})).unwrap();
+        written(&mut engine,"in2");
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),4.0);
+        assert!(engine.view()["problema"].is_null());
+        command(&mut engine,"in3",OperationKind::Input,json!({"text":"c"})).unwrap();
+        written(&mut engine,"in3");
+        feed(&mut engine,chunk,5.0);
+        feed(&mut engine,json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":OPENED,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"voltei"}}}}),5.5);
+        feed(&mut engine,json!({"jsonrpc":"2.0","id":0,"result":{"stopReason":"end_turn"}}),6.0);
+        assert!(engine.view()["problema"].is_null(),"seguiu depois da falha: sem aviso");
     }
 
     #[test]

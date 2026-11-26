@@ -141,3 +141,29 @@ mod external {
         }
     }
 }
+
+/// O aviso do rascunho de WhatsApp é a frase fixa: nada da conversa, do número nem do texto.
+#[test]
+fn the_whatsapp_draft_push_says_only_that_a_draft_waits() {
+    let entry = json!({"serverId": "casa", "locale": "pt"});
+    let p = Outgoing::whatsapp_draft("s0", "casa".into(), "d1".into()).payload(&entry).unwrap();
+    assert_eq!(p["body"], json!("Rascunho de WhatsApp aguardando aprovação"));
+    assert_eq!(p["title"], json!("claude · WhatsApp"));
+    assert_eq!(p["url"], json!("/"));
+    assert_eq!((&p["server_id"], &p["whatsapp_draft_id"]), (&json!("casa"), &json!("d1")), "o app abre a folha pelo aviso");
+    let en = Outgoing::whatsapp_draft("s0", "casa".into(), "d1".into()).payload(&json!({"locale": "en"})).unwrap();
+    assert_eq!(en["body"], json!("WhatsApp draft awaiting approval"));
+}
+
+/// O cofre abre a folha pela `url` e pelo `request_id`, com o id que a inscrição conhece para esta máquina.
+#[test]
+fn the_vault_push_opens_its_sheet_by_the_subscription_server() {
+    let out = || Outgoing::vault_request("s0", "casa".into(), "r1".into(), "s0".into(), "GitHub".into());
+    let p = out().payload(&json!({"serverId": "notebook"})).unwrap();
+    assert_eq!(p["url"], json!("/?server=notebook&vault_request=r1"));
+    assert_eq!((&p["server_id"], &p["request_id"]), (&json!("notebook"), &json!("r1")));
+    assert!(p.get("whatsapp_draft_id").is_none());
+    let unnamed = out().payload(&json!({})).unwrap();
+    assert_eq!((&unnamed["server_id"], &unnamed["url"]), (&json!("casa"), &json!("/?server=casa&vault_request=r1")),
+        "sem id na inscrição, o da máquina");
+}

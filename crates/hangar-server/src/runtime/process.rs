@@ -279,7 +279,8 @@ fn prepared(spec: &LaunchSpec, bin: PathBuf, prefix: Vec<std::ffi::OsString>, ex
     let exe = resolve_program(program, spec.env.iter().map(|(k, v)| (k, v)))
         .ok_or_else(|| ProcessError::Spawn(format!("binário não encontrado: {program}")))?;
     let program=std::iter::once(exe.into_os_string()).chain(spec.program[1..].iter().map(std::ffi::OsString::from)).collect();
-    let env=spec.env.iter().map(|(k,v)|(k.into(),v.into())).collect();
+    // O exe pode ter vindo do PATH do registro: o filho precisa dele também, senão o shim não acha o node.
+    let env=spec.env.iter().map(|(k,v)|(k.into(),if cfg!(windows)&&k.eq_ignore_ascii_case("PATH") {hangar_core::process::with_installed_path(v.as_ref())} else {v.into()})).collect();
     Ok(PreparedRecipe {bin,prefix,program,env,cwd:spec.cwd.clone(),key:spec.key.clone(),sidecar_dir:spec.sidecar_dir.clone(),extra})
 }
 

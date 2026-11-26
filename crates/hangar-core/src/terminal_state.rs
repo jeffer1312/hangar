@@ -601,6 +601,42 @@ pub enum AgyTermsFocus { Checkbox, Previous, Done }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AgyTerms { pub checked: bool, pub focus: AgyTermsFocus }
 
+/// A próxima tecla na tela dos Termos para chegar à opção tocada (`AGY_TERMS_OPTIONS`, 1 = primeira).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgyTermsKey { Up, Down, Left, Right, Enter }
+
+impl AgyTermsKey {
+    /// O nome da tecla no `send-keys`.
+    pub fn name(self) -> &'static str {
+        match self { Self::Up => "Up", Self::Down => "Down", Self::Left => "Left", Self::Right => "Right", Self::Enter => "Enter" }
+    }
+}
+
+/// Uma volta: acerta a caixa de dados como a pessoa escolheu e leva o foco ao botão. `Enter` fora do checkbox é o
+/// aperto final do botão; no checkbox, só troca a caixa.
+pub fn agy_terms_key(terms: AgyTerms, option: usize) -> Option<AgyTermsKey> {
+    use AgyTermsFocus::{Checkbox, Done, Previous};
+    let (checked, button) = match option { 1 => (Some(true), Done), 2 => (Some(false), Done), 3 => (None, Previous), _ => return None };
+    Some(if checked.is_some_and(|want| want != terms.checked) {
+        if terms.focus == Checkbox { AgyTermsKey::Enter } else { AgyTermsKey::Up }
+    } else if terms.focus == button {
+        AgyTermsKey::Enter
+    } else {
+        match (terms.focus, button) {
+            (Checkbox, _) => AgyTermsKey::Down,
+            (Previous, Done) => AgyTermsKey::Right,
+            _ => AgyTermsKey::Left,
+        }
+    })
+}
+
+/// A tela de entrar do `agy` sem login: o aviso de que não há conta e a lista dos jeitos de entrar.
+pub fn agy_login_screen(screen: &str) -> bool {
+    let lines = lines(screen);
+    let Some(notice) = lines.iter().position(|l| trim(l).ends_with("You are currently not signed in.")) else { return false };
+    lines[notice..].iter().any(|l| trim(l) == "Select login method:")
+}
+
 pub fn agy_terms(pane: &str) -> Option<AgyTerms> {
     let lines = lines(pane);
     lines.iter().position(|l| trim(l) == AGY_TERMS_TITLE)?;

@@ -363,7 +363,7 @@ impl Hangar {
             .on_click(cx.listener(move |this, _, _, cx| {
                 // Volta a "Carregando" até a nova resposta: sem isso o clique não muda nada na tela.
                 if let Some(list) = this.remote.get_mut(&retrying) { list.error = None; list.loaded = false; }
-                this.start_remote_lists();
+                this.start_remote_lists(cx);
                 this.redraw(panes::Area::Nav, cx);
                 cx.notify();
             })));

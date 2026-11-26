@@ -27,6 +27,7 @@ use crate::groups::peers::PeerClient;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
 use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
+use hangar_whatsapp::outbox;
 use zeroize::Zeroizing;
 
 const VOICE_CLOSE_REFUSED: &str = "recusado: a voz fecha sessão pela própria ferramenta close_session, que pede o sim \
@@ -320,6 +321,9 @@ struct WhatsAppSearch { query: String, chat: Option<String>, limit: Option<u32> 
 #[derive(Deserialize)]
 struct WhatsAppMedia { chat: String, id: Option<String>, since: Option<String> }
 
+#[derive(Deserialize)]
+struct WhatsAppDraft { chat: String, text: String, file: Option<String>, reply_to: Option<String> }
+
 // A rota de cada tool do WhatsApp, a mesma no despacho e no teste.
 impl WhatsAppChats {
     fn path(&self) -> String { hangar_whatsapp::api_path("chats", &[("q", opt(&self.query)), ("limit", &limit_text(self.limit))]) }
@@ -335,6 +339,17 @@ impl WhatsAppRead {
 impl WhatsAppSearch {
     fn path(&self) -> String {
         hangar_whatsapp::api_path("search", &[("q", &self.query), ("chat", opt(&self.chat)), ("limit", &limit_text(self.limit))])
+    }
+}
+
+impl WhatsAppDraft {
+    /// O corpo do `POST /api/whatsapp/outbox`: `origin` e `origin_cwd` vêm da sessão, nunca do modelo.
+    fn body(self, origin: String, cwd: Option<String>) -> Value {
+        let mut body = json!({"chat": self.chat, "text": self.text, "origin": origin});
+        for (field, value) in [("file", self.file), ("reply_to", self.reply_to), ("origin_cwd", cwd)] {
+            if let Some(value) = value.filter(|v| !v.is_empty()) { body[field] = json!(value); }
+        }
+        body
     }
 }
 
@@ -385,7 +400,8 @@ impl Tools {
         Self { st, api, http, server_id, nav_locks: Mutex::default() }
     }
 
-    pub async fn call(&self, name: &str, raw: JsonObject, headers: &HeaderMap) -> CallToolResult {
+    /// `draft`: o andamento do `whatsapp_draft`, lido pelo cancelamento em `mod.rs`.
+    pub async fn call(&self, name: &str, raw: JsonObject, headers: &HeaderMap, draft: Option<Arc<outbox::Progress>>) -> CallToolResult {
         let outcome = match name {
             "who_am_i" => self.who_am_i(headers).await,
             "sessions" => self.sessions(headers).await,
@@ -425,6 +441,10 @@ impl Tools {
                 Ok(a) => self.whatsapp(headers, Method::POST, "/api/whatsapp/media/request", Some(a.body()), Trim::None).await,
                 Err(e) => Err(e),
             },
+            "whatsapp_draft" => match args::<WhatsAppDraft>(name, raw) {
+                Ok(a) => self.whatsapp_draft(headers, a, draft.unwrap_or_default()).await,
+                Err(e) => Err(e),
+            },
             _ => Err(format!("Unknown tool: {name}")),
         };
         outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]))
@@ -460,18 +480,7 @@ impl Tools {
     /// `caller`: a sessão que chamou a tool. Vai no `user-agent`, que o diário grava como `cliente`:
     /// sem ele, fechar ou mandar pelo MCP fica igual a um clique do dono.
     async fn route_from(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
-        let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), mcp_agent);
-        let mut request = Request::builder().method(method).uri(path).header("user-agent", agent)
-            .header("authorization", format!("Bearer {}", self.st.cfg.auth_token));
-        if body.is_some() { request = request.header("content-type", "application/json"); }
-        let Ok(mut request) = request.body(body.map_or_else(Body::empty, |b| Body::from(b.to_string()))) else {
-            return (500, json!({"detail": "caminho inválido"}));
-        };
-        request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-        let Ok(response) = self.api.clone().call(request).await;
-        let status = response.status().as_u16();
-        let raw = axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await.unwrap_or_default();
-        (status, serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"detail": String::from_utf8_lossy(&raw)})))
+        call_route(self.api.clone(), &self.st.cfg.auth_token, caller, method, path, body).await
     }
 
     /// Corpo de sucesso da rota, ou a frase do erro.
@@ -567,6 +576,37 @@ impl Tools {
             Some(false) => Ok(()),
             Some(true) => Err(whatsapp::SHARED_REFUSAL.into()),
             None => Err(unshared_failed(&format!("a dona '{}' não disse quem está no grupo", fed.owner))),
+        }
+    }
+
+    /// Rascunho de WhatsApp: cria pela rota do dono e espera a resposta dele no cartão, dentro do prazo da chamada. Só
+    /// a sessão sem convidado e com o prazo longo do MCP pede; erro depois da criação leva o id.
+    async fn whatsapp_draft(&self, headers: &HeaderMap, a: WhatsAppDraft, progress: Arc<outbox::Progress>) -> Outcome {
+        let deadline = chrono::Utc::now() + outbox::TOOL_DEADLINE;
+        let (me, voice) = self.caller(headers).await?;
+        if voice { return Err(whatsapp::DRAFT_NEEDS_SESSION.into()); }
+        self.whatsapp_unshared(&me).await?;
+        let cwd = whatsapp::draft_cwd(&exec::agent(&self.st, &me).await?)?;
+        let body = a.body(format!("{}::{me}", self.vault_origin()), cwd);
+        // Assinada antes de criar: a resposta do dono que chegar antes de a espera começar ainda a acorda.
+        let wa = self.st.whatsapp.get().cloned();
+        let feed = wa.as_ref().map(|wa| wa.outbox().feed());
+        // A criação corre numa tarefa própria: a chamada largada no meio dela (cópia de um anexo grande) não a corta, e a
+        // guarda que ela devolve cai com o resultado não lido e recusa o rascunho que nasceu.
+        let creation = tokio::spawn(create_draft(self.api.clone(), self.st.cfg.auth_token.clone(), me.clone(), body, wa, deadline, progress.clone()));
+        let (created, id, _decline) = creation.await
+            .map_err(|e| format!("whatsapp_draft_failed: a criação do rascunho parou ({e}); {}", outbox::DRAFT_MAYBE_CREATED))??;
+        let mut port = DraftRoute { tools: self, me, feed };
+        outbox::wait_draft(&mut port, &progress, &id, created, deadline).await.map(dict)
+    }
+
+    async fn draft_read(&self, me: &str, id: &str) -> outbox::Read {
+        let (status, value) = self.route_from(Some(me), Method::GET, &whatsapp::draft_path(id, ""), None).await;
+        match (status, value["detail"]["code"].as_str()) {
+            (200, _) => outbox::Read::Found(value),
+            // Os dados do WhatsApp foram apagados: o rascunho não volta.
+            (404, Some("whatsapp_not_found")) => outbox::Read::Gone,
+            _ => outbox::Read::Failed(coded(status, &value)),
         }
     }
 
@@ -997,6 +1037,64 @@ impl Tools {
     }
 }
 
+/// A espera do `whatsapp_draft` pelas rotas do dono, com o relógio de verdade.
+struct DraftRoute<'a> {
+    tools: &'a Tools,
+    me: String,
+    /// A lista dos pendentes: a resposta do dono a muda e acorda a pausa.
+    feed: Option<tokio::sync::watch::Receiver<Option<Arc<outbox::Feed>>>>,
+}
+
+/// A criação do rascunho pela rota do dono, com a guarda que o recusa se ninguém ler o resultado, e o prazo da chamada
+/// guardado para o cartão.
+async fn create_draft(api: Router, token: String, me: String, body: Value, wa: Option<Arc<hangar_whatsapp::WhatsApp>>,
+    deadline: chrono::DateTime<chrono::Utc>, progress: Arc<outbox::Progress>) -> Result<(Value, String, whatsapp::DeclineOnDrop), String> {
+    let (status, created) = call_route(api.clone(), &token, Some(&me), Method::POST, "/api/whatsapp/outbox", Some(body)).await;
+    if !(200..300).contains(&status) {
+        let error = coded(status, &created);
+        return Err(if whatsapp::reply_lost(&error) { format!("{error}; {}", outbox::DRAFT_MAYBE_CREATED) } else { error });
+    }
+    let id = created["id"].as_str().filter(|id| outbox::id_ok(id)).map(str::to_owned)
+        .ok_or_else(|| format!("whatsapp_bad_reply: o serviço criou o rascunho sem id; {}", outbox::DRAFT_MAYBE_CREATED))?;
+    let decline = whatsapp::DeclineOnDrop::new(api, token, me, id.clone(), progress);
+    if let Some(wa) = wa { wa.outbox().track(&id, deadline); }
+    Ok((created, id, decline))
+}
+
+/// O que falta até `by`; já passado, nada.
+fn left(by: chrono::DateTime<chrono::Utc>) -> Duration {
+    (by - chrono::Utc::now()).to_std().unwrap_or_default()
+}
+
+impl outbox::DraftPort for DraftRoute<'_> {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> { chrono::Utc::now() }
+
+    async fn read(&mut self, id: &str, by: chrono::DateTime<chrono::Utc>) -> Option<outbox::Read> {
+        tokio::time::timeout(left(by), self.tools.draft_read(&self.me, id)).await.ok()
+    }
+
+    async fn decline(&mut self, id: &str, by: chrono::DateTime<chrono::Utc>) -> Option<Result<outbox::Declined, String>> {
+        let path = whatsapp::draft_path(id, "/decline");
+        let (status, value) = tokio::time::timeout(left(by), self.tools.route_from(Some(&self.me), Method::POST, &path, None)).await.ok()?;
+        Some(match outbox::Declined::of(status, &value, None) {
+            outbox::Declined::Unconfirmed => Err(coded(status, &value)),
+            declined => Ok(declined),
+        })
+    }
+
+    async fn pause(&mut self, until: chrono::DateTime<chrono::Utc>) {
+        let wait = (until - chrono::Utc::now()).to_std().unwrap_or_default();
+        let changed = async {
+            if let Some(feed) = self.feed.as_mut() && feed.changed().await.is_ok() { return; }
+            std::future::pending::<()>().await;
+        };
+        tokio::select! {
+            () = tokio::time::sleep(wait) => {}
+            () = changed => {}
+        }
+    }
+}
+
 /// O cofre (`vault/exec.rs`): o valor nunca entra no resultado nem no erro.
 impl Tools {
     /// A sessão pela chave dela, nunca pelo pane nem pelo nome: é a chave que a dona prende à
@@ -1212,6 +1310,14 @@ fn host_fill_refusal(refusal: hangar_browser_host::Refusal) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_route_body_past_the_limit_is_an_error_not_an_empty_answer() {
+        let api = Router::new().route("/big", axum::routing::get(|| async { vec![b'x'; ROUTE_BODY_LIMIT + 1] }));
+        let (status, value) = call_route(api, "t", None, Method::GET, "/big", None).await;
+        assert_eq!(status, 502, "{value}");
+        assert!(value["detail"].as_str().is_some_and(|d| !d.is_empty()), "{value}");
+    }
 
     /// Trava da abertura única: todo campo da tabela de abertura existe no `new_session` (catálogo e
     /// argumentos) e chega ao corpo do `POST /api/sessions` com a chave do pedido.
@@ -1481,6 +1587,25 @@ mod tests {
         }
         assert!(resumed(&json!({"name": "s", "avisos": []}), None).structured_content.unwrap().get("avisos").is_none());
     }
+}
+
+/// A rota pública como o dono, fora de uma tool: a recusa do rascunho na chamada largada também passa por aqui.
+pub(super) async fn call_route(mut api: Router, token: &str, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
+    let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), mcp_agent);
+    let mut request = Request::builder().method(method).uri(path).header("user-agent", agent)
+        .header("authorization", format!("Bearer {token}"));
+    if body.is_some() { request = request.header("content-type", "application/json"); }
+    let Ok(mut request) = request.body(body.map_or_else(Body::empty, |b| Body::from(b.to_string()))) else {
+        return (500, json!({"detail": "caminho inválido"}));
+    };
+    request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+    let Ok(response) = api.call(request).await;
+    let status = response.status().as_u16();
+    let raw = match axum::body::to_bytes(response.into_body(), ROUTE_BODY_LIMIT).await {
+        Ok(raw) => raw,
+        Err(error) => return (502, json!({"detail": format!("resposta da rota {path} ilegível ({status}): {error}")})),
+    };
+    (status, serde_json::from_slice(&raw).unwrap_or_else(|_| json!({"detail": String::from_utf8_lossy(&raw)})))
 }
 
 fn unshared_failed(why: &str) -> String {

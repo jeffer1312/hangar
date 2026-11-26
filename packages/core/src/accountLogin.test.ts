@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi } from './apiEnv';
 import { _limparEsfriamentoParaTestes } from './esfriamento';
-import { antigravityLoginLink, cancelAntigravityLoginForServer, cancelClaudeAccountLoginForServer, createAntigravityAccountForServer,
+import { answerAntigravityTermsForServer, antigravityLoginLink, cancelAntigravityLoginForServer, cancelAntigravityTermsForServer,
+  getAntigravityTermsForServer, startAntigravityTermsForServer, cancelClaudeAccountLoginForServer, createAntigravityAccountForServer,
   deleteAntigravityAccountForServer, getAntigravityAccountsForServer, getAntigravityLoginForServer, getClaudeAccountLoginStepForServer,
   modelOptionsForServer, rotaGenerica, signOutAntigravityAccountForServer, startAntigravityLoginForServer,
   startClaudeAccountLoginForServer, submitAntigravityLoginCodeForServer, submitClaudeAccountLoginCodeForServer } from './index';
@@ -258,6 +259,29 @@ describe('contas Google do Antigravity por servidor', () => {
     fetcher = ok({ ok: true });
     await signOutAntigravityAccountForServer(server, 'trabalho');
     expect(call(fetcher)).toMatchObject({ url: 'https://b.test/api/antigravity-contas/trabalho/logout', init: { method: 'POST' } });
+  });
+
+  it('termos: inicia, consulta e cancela pela tentativa, e manda a opção tocada com ela', async () => {
+    let fetcher = ok({ attempt_id: 't1', estado: 'iniciando' });
+    await expect(startAntigravityTermsForServer(server, 'default')).resolves.toEqual({ attempt_id: 't1', estado: 'iniciando' });
+    expect(call(fetcher)).toMatchObject({ url: 'https://b.test/api/antigravity-contas/default/termos', init: { method: 'POST' } });
+    fetcher.mockRestore();
+
+    const terms = { estado: 'termos', texto: 'Termos https://policies.google.com/terms' };
+    fetcher = ok(terms);
+    await expect(getAntigravityTermsForServer(server, 'default', 't 1')).resolves.toEqual(terms);
+    expect(call(fetcher).url).toBe('https://b.test/api/antigravity-contas/default/termos?attempt_id=t%201');
+    fetcher.mockRestore();
+
+    fetcher = ok({ ok: true });
+    await answerAntigravityTermsForServer(server, 'default', 't1', 2);
+    expect(call(fetcher)).toMatchObject({ url: 'https://b.test/api/antigravity-contas/default/termos/resposta',
+      init: { method: 'POST', body: '{"attempt_id":"t1","opcao":2}' } });
+    fetcher.mockRestore();
+
+    fetcher = ok({ ok: true });
+    await cancelAntigravityTermsForServer(server, 'default', 't1');
+    expect(call(fetcher)).toMatchObject({ url: 'https://b.test/api/antigravity-contas/default/termos?attempt_id=t1', init: { method: 'DELETE' } });
   });
 
   it('código recusado chega com o código do servidor, e o 401 de B não derruba A', async () => {

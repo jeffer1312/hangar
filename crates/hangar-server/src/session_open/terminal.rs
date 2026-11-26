@@ -414,6 +414,11 @@ impl Mux for ProcessMux {
             command.args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);
             #[cfg(windows)]
             if creation_flags(args) != 0 { command.creation_flags(creation_flags(args)); }
+            // O pane do psmux herda o PATH deste cliente, copiado na subida do servidor.
+            #[cfg(windows)]
+            if args.first().is_some_and(|arg| arg == "new-session") && let Some(path) = std::env::var_os("PATH") {
+                command.env("PATH", hangar_core::process::with_installed_path(&path));
+            }
             let (out, failure) = match tokio::time::timeout(self.timeout, command.output()).await {
                 Ok(Ok(out)) => (MuxOutput { code: out.status.code(), stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
                     stderr: String::from_utf8_lossy(&out.stderr).into_owned() }, None),
