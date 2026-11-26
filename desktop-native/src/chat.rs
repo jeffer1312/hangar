@@ -76,14 +76,14 @@ impl Chat {
         if let Some(&i) = self.index.get(&event.id) {
             if self.events[i] == event { return; }
             if event.kind == "assistant_msg" && self.events[i].text != event.text
-                && event.text.as_deref().is_some_and(|text| preview_matches(&self.preview.text, text)) {
+                && event.text.as_deref().is_some_and(|text| self.records_preview(text)) {
                 self.clear_preview();
             }
             self.changed_at(i);
             self.events[i] = event;
             return;
         }
-        if event.kind == "assistant_msg" && event.text.as_deref().is_some_and(|text| preview_matches(&self.preview.text, text)) {
+        if event.kind == "assistant_msg" && event.text.as_deref().is_some_and(|text| self.records_preview(text)) {
             self.clear_preview();
         }
         if event.kind == "user_msg" && event.queued() {
@@ -146,7 +146,8 @@ impl Chat {
 
     /// Returns false for a late frame of a thought that is already recorded.
     pub fn update_live_thinking(&mut self, text: String) -> bool {
-        if thought_covers(&self.settled_thinking, &text) { return false; }
+        // Vazio é o bloco fechado: o ao vivo fica até o registro tomar o lugar dele, outro pensamento ou o fim do turno.
+        if text.is_empty() || thought_covers(&self.settled_thinking, &text) { return false; }
         self.live_thinking = text;
         true
     }
@@ -201,12 +202,9 @@ impl Chat {
     }
 
     pub fn update_preview(&mut self, next: Preview) -> bool {
-        // Vazio vindo do motor (`vivo`) é a ordem de limpar: o bloco já foi gravado. Do pane, é só a tela piscando.
-        if next.text.is_empty() {
-            if !next.vivo || self.preview.text.is_empty() { return false; }
-            self.clear_preview();
-            return true;
-        }
+        // Vazio é o fim do bloco (motor) ou a tela piscando (pane): a prévia fica até a resposta gravada tomar o lugar
+        // dela, outra prévia ou o fim do turno. Apagar aqui deixava a linha vazia até o transcript chegar.
+        if next.text.is_empty() { return false; }
         if self.preview.md == next.md && self.preview.full == next.full && self.preview.vivo == next.vivo
             && next.text.len() < self.preview.text.len() && self.preview.text.starts_with(&next.text) {
             return false;
@@ -219,6 +217,12 @@ impl Chat {
         }
         self.preview = next;
         true
+    }
+
+    // A prévia do motor é o texto exato da resposta: começo dela, mesmo curto, é a mesma resposta.
+    fn records_preview(&self, committed: &str) -> bool {
+        let preview = flatten(&self.preview.text);
+        preview_matches(&self.preview.text, committed) || self.preview.vivo && !preview.is_empty() && flatten(committed).starts_with(&preview)
     }
 
     fn recently_committed(&self, preview: &str) -> bool {
@@ -641,6 +645,31 @@ mod tests {
         chat.update_preview(Preview { text: "long pane preview".into(), ..Default::default() });
         chat.update_preview(Preview { text: "long".into(), md: true, full: true, vivo: true, ..Default::default() });
         assert_eq!(chat.preview.text, "long");
+    }
+
+    #[test]
+    fn engine_block_end_keeps_the_preview_until_the_recorded_answer() {
+        let mut chat = Chat::default();
+        let live = |text: &str| Preview { text: text.into(), md: true, full: true, vivo: true, ..Default::default() };
+        assert!(chat.update_preview(live("Comp")));
+        assert!(!chat.update_preview(live("")), "o fim do bloco não apaga a prévia");
+        assert_eq!(chat.preview.text, "Comp");
+        chat.apply(event("assistant_msg", "a", "Compilei o projeto e os testes passaram."));
+        assert!(chat.preview.text.is_empty(), "a resposta gravada que começa pela prévia toma o lugar dela");
+
+        chat.update_preview(Preview { text: "Comp".into(), ..Default::default() });
+        chat.apply(event("assistant_msg", "b", "Compilei de novo."));
+        assert_eq!(chat.preview.text, "Comp", "prévia curta do pane não é a resposta");
+    }
+
+    #[test]
+    fn block_end_keeps_the_live_thought_until_it_is_recorded() {
+        let mut chat = Chat::default();
+        assert!(chat.update_live_thinking("Checking the timing gap".into()));
+        assert!(!chat.update_live_thinking(String::new()));
+        assert_eq!(chat.live_thinking, "Checking the timing gap");
+        chat.apply(event("thinking", "t", "Checking the timing gap between the two events."));
+        assert!(chat.live_thinking.is_empty());
     }
 
     #[test]
