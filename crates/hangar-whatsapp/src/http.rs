@@ -15,7 +15,7 @@ use hangar_managed_binary::service::{Error as ServiceError, ProcessState};
 use serde_json::{Map, Value, json};
 
 use crate::client::{CallError, Client, Reply};
-use crate::install::{self, Busy, Context, Installer};
+use crate::install::{self, Busy, Context, Installed, Installer, UpdateCheck};
 use crate::outbox::{self, Outbox};
 
 const MAX_BODY: usize = 64 * 1024;
@@ -31,6 +31,10 @@ const SEND_UNSUPPORTED: (&str, &str) = ("whatsapp_send_unsupported", "o hangar-w
 const EDIT_UNSUPPORTED: (&str, &str) = ("whatsapp_edit_unsupported",
     "o hangar-whatsapp instalado não envia texto editado; atualize o hangar-whatsapp. Nada foi enviado");
 const OUTDATED_MSG: &str = "o WhatsApp recusou a versão do hangar-whatsapp; atualize o hangar-whatsapp";
+/// Frase do envio recusado porque uma troca de versão, do dono ou do relógio, segura a vez.
+const UPDATING_MSG: &str = "o WhatsApp está atualizando; tente de novo em instantes";
+/// A tarefa da passada do relógio: as telas reagem só a `update`, que é a do dono.
+pub const AUTO_UPDATE_KIND: &str = "auto_update";
 
 /// O WhatsApp de uma máquina: instalação, aceite e o cliente do serviço.
 pub struct WhatsApp {
@@ -40,6 +44,20 @@ pub struct WhatsApp {
     /// O último texto do QR e o desenho dele: o resumo relido com o mesmo QR não o desenha de novo.
     qr: Mutex<Option<(String, Option<String>)>>,
     outbox: Outbox,
+    /// Um envio por vez segura a vez do instalador: dois envios seguidos não se recusam como "atualizando".
+    sending: tokio::sync::Mutex<()>,
+    /// Avisa quando um envio fica esperando outro: a prova da fila não depende de relógio.
+    #[cfg(test)]
+    send_waiting: tokio::sync::Notify,
+}
+
+/// Uma passada da atualização automática: `from` é a tag instalada antes; `to`, a instalada depois quando trocou
+/// (`Updated`), senão a `latest` da última procura (ou `from`, sem procura gravada).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutoUpdate {
+    pub from: String,
+    pub to: String,
+    pub result: Result<install::Outcome, install::Failure>,
 }
 
 struct Http {
@@ -66,7 +84,37 @@ impl WhatsApp {
     /// `outbox` com a subida desta vida já marcada ([`Outbox::started_at`]).
     pub fn with_outbox(ctx: Context, outbox: Outbox) -> Arc<Self> {
         let client = Client::new(ctx.paths.data.clone());
-        Arc::new(Self { ctx, installer: Installer::default(), client, qr: Mutex::default(), outbox })
+        Arc::new(Self {
+            ctx, installer: Installer::default(), client, qr: Mutex::default(), outbox, sending: tokio::sync::Mutex::default(),
+            #[cfg(test)]
+            send_waiting: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// A atualização do relógio ([`install::Mode::Auto`]) na vez do instalador, como tarefa que o `GET` mostra.
+    /// `None`: WhatsApp não instalado, ou outra tarefa, operação ou envio segurando a vez.
+    pub async fn auto_update(&self) -> Option<AutoUpdate> {
+        let from = install::current(&self.ctx.paths)?.tag;
+        let reservation = self.installer.reserve(AUTO_UPDATE_KIND, install::Step::Download).ok()?;
+        Some(self.run_auto_update(reservation, from).await)
+    }
+
+    /// A passada na vez já guardada; `from` é a tag instalada antes dela.
+    async fn run_auto_update(&self, reservation: install::Reservation, from: String) -> AutoUpdate {
+        let (sent, got) = tokio::sync::oneshot::channel();
+        let ctx = self.ctx.clone();
+        reservation.start(move |progress| async move {
+            let result = install::update(&ctx, install::Mode::Auto, &*progress).await;
+            let _ = sent.send(result.clone());
+            result
+        }).await;
+        // Sem resultado, a tarefa caiu no meio: o `Jobs` já gravou a queda para a tela.
+        let result = got.await.unwrap_or_else(|_| Err(install::Failure::new("whatsapp_job_crashed", "a atualização automática parou no meio")));
+        let to = match &result {
+            Ok(install::Outcome::Updated) => install::current(&self.ctx.paths).map(|c| c.tag),
+            _ => install::read_update_check(&self.ctx.paths).map(|c| c.latest),
+        };
+        AutoUpdate { to: to.unwrap_or_else(|| from.clone()), from, result }
     }
 
     /// Os rascunhos pendentes (evento `whatsapp_outbox`).
@@ -146,7 +194,10 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
             Ok(body) => start_install(wa, &body),
             Err(response) => response,
         },
-        (Method::POST, "/update") => start_update(wa),
+        (Method::POST, "/update") => match body(request).await {
+            Ok(body) => start_update(wa, &body),
+            Err(response) => response,
+        },
         (Method::POST, "/pair") => match body(request).await {
             Ok(body) => pair(wa, &body).await,
             Err(response) => response,
@@ -182,7 +233,8 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
     }
 }
 
-/// `GET /api/whatsapp`: instalação, aceite, serviço, tarefa e o `status` do C2 com o QR em SVG.
+/// `GET /api/whatsapp`: instalação, aceite, serviço, tarefa, o `status` do C2 com o QR em SVG, a tag instalada e a
+/// versão nova da última procura.
 async fn overview(wa: &WhatsApp) -> Response {
     let paths = &wa.ctx.paths;
     let current = install::current(paths);
@@ -208,7 +260,19 @@ async fn overview(wa: &WhatsApp) -> Response {
     json_response(StatusCode::OK, json!({
         "installed": installed, "accepted_at": install::accepted_at(paths), "service": service,
         "job": wa.installer.job(), "status": status, "qr_svg": qr_svg, "status_error": status_error,
+        "installed_tag": current.as_ref().map(|c| c.tag.as_str()),
+        "update": available_update(current.as_ref(), install::read_update_check(paths)),
     }))
+}
+
+/// A última procura (contrato C-D) só vale como versão nova quando a `latest` dela passa da instalada.
+fn available_update(current: Option<&Installed>, check: Option<UpdateCheck>) -> Value {
+    match (current, check) {
+        (Some(current), Some(check)) if crate::release::newer(&check.latest, &current.tag) => {
+            serde_json::to_value(check).unwrap_or(Value::Null)
+        }
+        _ => Value::Null,
+    }
 }
 
 /// Com o serviço parado, `whatsapp_schema_newer` quando o último processo saiu porque os dados são de uma
@@ -249,15 +313,28 @@ fn start_install(wa: &WhatsApp, body: &Value) -> Response {
         tracing::warn!(code = failure.code, detail = %failure.detail, "whatsapp: aceite não gravado");
         return refused(StatusCode::INTERNAL_SERVER_ERROR, failure.code, "não consegui gravar o aceite");
     }
-    install::begin(reservation, wa.ctx.clone());
+    install::begin(reservation, wa.ctx.clone(), install::Mode::Manual);
     started(wa, Ok(()))
 }
 
-fn start_update(wa: &WhatsApp) -> Response {
+fn start_update(wa: &WhatsApp, body: &Value) -> Response {
+    let mode = match update_mode(body) {
+        Ok(mode) => mode,
+        Err(response) => return response,
+    };
     if install::current(&wa.ctx.paths).is_none() {
         return refused(StatusCode::CONFLICT, "whatsapp_not_installed", "o WhatsApp não está instalado");
     }
-    started(wa, install::spawn(&wa.installer, "update", wa.ctx.clone()))
+    started(wa, install::spawn(&wa.installer, "update", wa.ctx.clone(), mode))
+}
+
+/// `confirm_migration` ausente ou `false` é o botão de sempre; `true`, o dono confirmou a mudança de formato dos dados.
+fn update_mode(body: &Value) -> Result<install::Mode, Response> {
+    match &body["confirm_migration"] {
+        Value::Null | Value::Bool(false) => Ok(install::Mode::Manual),
+        Value::Bool(true) => Ok(install::Mode::Confirmed),
+        _ => Err(refused(StatusCode::BAD_REQUEST, "whatsapp_bad_request", "confirm_migration deve ser true ou false")),
+    }
 }
 
 fn started(wa: &WhatsApp, result: Result<(), Busy>) -> Response {
@@ -418,6 +495,16 @@ async fn draft(wa: &WhatsApp, method: Method, rest: &str, request: Request) -> R
                 };
                 out["text"] = json!(text);
             }
+            // Uma troca de versão no meio cortaria o envio (fica `unconfirmed`): ele segura a vez do instalador.
+            let _turn = match wa.sending.try_lock() {
+                Ok(turn) => turn,
+                Err(_) => {
+                    #[cfg(test)]
+                    wa.send_waiting.notify_one();
+                    wa.sending.lock().await
+                }
+            };
+            let Ok(_guard) = wa.installer.inline() else { return send_busy(wa) };
             let response = match wa.client.call(Method::POST, &format!("{path}/{action}"), &[], Some(&out)).await {
                 // O 404 que não é de rascunho é a rota que não existe (binário antigo que se anuncia novo): vira a mesma
                 // recusa do `api` antigo, nunca sucesso.
@@ -514,6 +601,13 @@ pub(crate) fn call_failure(error: &CallError) -> (StatusCode, &'static str, &'st
         CallError::Untrusted(_) => (StatusCode::BAD_GATEWAY, "whatsapp_untrusted", "a resposta do serviço do WhatsApp não tem a assinatura dele"),
         CallError::Transport(_) => (StatusCode::BAD_GATEWAY, "whatsapp_unreachable", "o serviço do WhatsApp não respondeu"),
     }
+}
+
+/// Envio recusado com a vez ocupada: "atualizando" só com uma troca de versão em curso; o resto é a operação de sempre.
+fn send_busy(wa: &WhatsApp) -> Response {
+    let job = wa.installer.job();
+    let updating = job["done"] == false && matches!(job["kind"].as_str(), Some(kind) if kind == "update" || kind == AUTO_UPDATE_KIND);
+    if updating { refused(StatusCode::CONFLICT, "whatsapp_busy", UPDATING_MSG) } else { busy() }
 }
 
 fn busy() -> Response {

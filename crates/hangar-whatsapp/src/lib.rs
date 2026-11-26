@@ -8,4 +8,4 @@ pub mod install;
 pub mod outbox;
 pub mod release;
 
-pub use http::{WhatsApp, api_path, router};
+pub use http::{AUTO_UPDATE_KIND, AutoUpdate, WhatsApp, api_path, router};
