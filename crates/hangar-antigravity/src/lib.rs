@@ -5,6 +5,7 @@
 pub mod acp;
 pub mod env;
 pub mod hooks;
+pub mod inbox;
 pub mod login;
 pub mod paths;
 pub mod probe;

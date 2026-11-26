@@ -86,8 +86,14 @@ fn prepare_with(payload: &Value, provider: &str, shrink: bool) -> Result<Value, 
             let name = trimmed.starts_with('/').then(|| trimmed.split(py_space).next().unwrap_or("")[1..].to_owned());
             Ok(json!({"input": [{"type": "text", "text": text}], "skill_name": name}))
         }
-        // Bloco de texto do ACP; imagem anexada ainda vai só como o caminho no texto.
-        "antigravity" => Ok(json!({"prompt": [{"type": "text", "text": text}]})),
+        // Imagem anexada vai como bloco de imagem do ACP (o agy anuncia `promptCapabilities.image`), além do caminho no texto.
+        "antigravity" => {
+            let (content, notices) = prompt_blocks(text, shrink);
+            let prompt: Vec<Value> = content.into_iter().map(|block| if block["type"] == "image" {
+                json!({"type": "image", "mimeType": block["source"]["media_type"], "data": block["source"]["data"]})
+            } else { block }).collect();
+            Ok(json!({"prompt": prompt, "notices": notices}))
+        }
         _ => Err(error("policy_provider")),
     }
 }
@@ -156,6 +162,16 @@ mod batch_tests {
         let unset = stamp_in(home.path(), Some(&server), None).unwrap();
         std::fs::write(other.join(".claude.json"), r#"{"mcpServers":{"y":{}}}"#).unwrap();
         assert_ne!(stamp_in(home.path(), Some(&server), None).unwrap(), unset, "sem conta, a pasta do servidor");
+    }
+
+    #[test]
+    fn an_image_for_antigravity_goes_as_an_acp_image_block() {
+        use base64::Engine;
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("tela.png");std::fs::write(&path,b"png").unwrap();
+        let text=format!("olha \u{1f4ce} imagem: {}",path.display());
+        let prepared=prepare_prompt(&json!({"text":text}),"antigravity").unwrap();
+        assert_eq!(prepared["prompt"][0],json!({"type":"text","text":text}));
+        assert_eq!(prepared["prompt"][1],json!({"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(b"png")}));
     }
 
     #[test]
