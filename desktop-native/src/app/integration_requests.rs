@@ -208,7 +208,19 @@ impl IntegrationRequests {
                     // O evento da dona limpa em definitivo; aqui removemos logo após o 200.
                     Ok(_) => this.cards.retain(|c| c.request.id != id),
                     Err(error) => {
-                        if let Some(card) = this.cards.iter_mut().find(|c| c.request.id == id) {
+                        let gone = matches!(
+                            error.code.as_deref(),
+                            Some(
+                                "approval_stale"
+                                    | "approval_answered"
+                                    | "approval_lost"
+                                    | "approval_not_found"
+                                    | "approval_conflict"
+                            )
+                        );
+                        if gone {
+                            this.cards.retain(|c| c.request.id != id);
+                        } else if let Some(card) = this.cards.iter_mut().find(|c| c.request.id == id) {
                             (card.sending, card.error) = (false, Some(integrations_failure(&error)));
                         }
                     }

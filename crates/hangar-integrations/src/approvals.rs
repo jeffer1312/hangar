@@ -13,13 +13,13 @@ use hangar_core::ids::random_hex;
 
 use crate::model::{ApprovalDecision, valid_tool_name};
 
-/// Prazo padrão para o dono responder a um pedido de aprovação (10 minutos).
+/// Prazo padrão para o dono responder a um pedido de aprovação.
 pub const APPROVAL_EXPIRES: Duration = Duration::from_secs(600);
 /// Limite global de pedidos abertos simultaneamente em memória.
 pub const MAX_OPEN: usize = 32;
 /// Limite de pedidos abertos simultaneamente por sessão.
 pub const MAX_OPEN_PER_SESSION: usize = 3;
-/// Cooldown aplicado à sessão após uma negação explícita do dono (30 segundos).
+/// Cooldown aplicado à sessão após uma negação explícita do dono.
 pub const COOLDOWN: Duration = Duration::from_secs(30);
 /// Tamanho máximo em caracteres de `arguments_preview`.
 pub const MAX_ARGUMENTS_PREVIEW_CHARS: usize = 2000;

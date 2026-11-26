@@ -28,7 +28,7 @@ use crate::secrets::{IntegrationSecrets, OAuthTokens, SecretStore, SecretStoreEr
 /// Caminho padrão de callback OAuth atendido localmente pelo servidor do Hangar.
 pub const OAUTH_CALLBACK_PATH: &str = "/api/integrations/oauth/callback";
 
-/// Tempo padrão de validade de uma tentativa OAuth (`state`) em memória (10 minutos).
+/// Tempo padrão de validade de uma tentativa OAuth (`state`) em memória.
 pub const DEFAULT_STATE_TTL: Duration = Duration::from_secs(600);
 
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -187,6 +187,7 @@ struct ParsedHttpUrl {
     scheme: String,
     origin: String,
     path: String,
+    exact_path: String,
     query: Option<String>,
 }
 
@@ -642,13 +643,19 @@ impl OAuthManager {
                         "credenciais OAuth removidas durante o refresh".into(),
                     )));
                 };
-                let current_oauth = secrets.oauth.get_or_insert_with(OAuthTokens::default);
+                let Some(current_oauth) = secrets.oauth.as_mut() else {
+                    return Ok(Err(OAuthError::InvalidGrant(
+                        "credenciais OAuth removidas durante o refresh".into(),
+                    )));
+                };
                 // Reconexão manual paralela via `handle_callback` vence o refresh antigo em voo.
                 if !oauth_tokens_match(current_oauth, &expected_access, expected_refresh.as_ref()) {
                     if !current_oauth.access_token.trim().is_empty() {
                         return Ok(Ok(current_oauth.access_token.as_str().to_owned()));
                     }
-                    return Ok(Ok(fresh_access));
+                    return Ok(Err(OAuthError::InvalidGrant(
+                        "credenciais OAuth substituídas sem token ativo".into(),
+                    )));
                 }
                 current_oauth.access_token = Zeroizing::new(fresh_access.clone());
                 // Preserva o refresh_token atual quando o servidor não rotaciona na resposta.
@@ -723,7 +730,7 @@ impl OAuthManager {
     async fn discover_metadata(&self, mcp_url: &str) -> Result<DiscoveredMetadata, OAuthError> {
         let parsed_mcp = parse_http_url(mcp_url, false)?;
         let require_https = parsed_mcp.scheme == "https";
-        let expected_resource = parsed_mcp.canonical_uri();
+        let expected_prm_resource = parsed_mcp.exact_uri();
 
         let (prm_hint_url, www_scope) = self.probe_www_authenticate(mcp_url, require_https).await?;
         let mut prm_candidates = Vec::new();
@@ -755,12 +762,16 @@ impl OAuthManager {
         let mut discovered_issuer = None;
         for candidate in prm_candidates {
             if let Some(prm) = self
-                .fetch_protected_resource_metadata(&candidate, &expected_resource, require_https)
+                .fetch_protected_resource_metadata(
+                    &candidate,
+                    &expected_prm_resource,
+                    require_https,
+                )
                 .await?
                 && let Some(first_server) = prm
                     .authorization_servers
                     .into_iter()
-                    .find(|s| !s.trim().is_empty())
+                    .find(|s| !s.is_empty())
             {
                 validate_discovered_url(
                     "authorization_server em metadados do recurso",
@@ -772,8 +783,7 @@ impl OAuthManager {
             }
         }
 
-        let issuer_url = discovered_issuer.unwrap_or_else(|| parsed_mcp.origin.clone());
-        let expected_issuer = issuer_url.trim().to_owned();
+        let expected_issuer = discovered_issuer.unwrap_or_else(|| parsed_mcp.origin.clone());
         let parsed_issuer = validate_discovered_url("issuer", &expected_issuer, require_https)?;
         let as_candidates = build_auth_server_metadata_urls(&parsed_issuer);
 
@@ -1274,6 +1284,13 @@ impl ParsedHttpUrl {
             None => format!("{}{}", self.origin, self.path),
         }
     }
+
+    fn exact_uri(&self) -> String {
+        match &self.query {
+            Some(query) => format!("{}{}?{query}", self.origin, self.exact_path),
+            None => format!("{}{}", self.origin, self.exact_path),
+        }
+    }
 }
 
 fn ensure_oauth_config_matches(
@@ -1443,11 +1460,16 @@ fn parse_http_url(raw: &str, require_https: bool) -> Result<ParsedHttpUrl, OAuth
         "" | "/" => String::new(),
         other => other.trim_end_matches('/').to_owned(),
     };
+    let exact_path = match uri.path() {
+        "" | "/" => String::new(),
+        other => other.to_owned(),
+    };
     let query = uri.query().map(str::to_owned);
     Ok(ParsedHttpUrl {
         scheme,
         origin,
         path,
+        exact_path,
         query,
     })
 }
@@ -1469,18 +1491,18 @@ fn is_loopback_origin(origin: &str) -> bool {
 
 fn prm_resource_matches(
     prm_resource: Option<&str>,
-    expected_canonical: &str,
+    expected_exact: &str,
     require_https: bool,
 ) -> bool {
-    let Some(raw) = prm_resource.map(str::trim).filter(|s| !s.is_empty()) else {
+    let Some(raw) = prm_resource.filter(|s| !s.is_empty()) else {
         return false;
     };
-    // RFC 9728 proíbe fragmentos no identificador de recurso protegido, mas permite query (ex.: Supabase).
+    // RFC 9728 proíbe fragmentos no identificador de recurso protegido, mas permite query e diferencia barra final.
     if raw.contains('#') {
         return false;
     }
-    canonical_resource_uri(raw, require_https)
-        .is_ok_and(|actual| actual == expected_canonical)
+    parse_http_url(raw, require_https)
+        .is_ok_and(|actual| actual.exact_uri() == expected_exact)
 }
 
 fn validate_discovered_url(
@@ -1500,7 +1522,6 @@ fn validate_discovered_as_metadata(
     let raw_issuer = as_meta
         .issuer
         .as_deref()
-        .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             OAuthError::DiscoveryFailed("metadados do servidor OAuth sem campo issuer".into())
@@ -1511,7 +1532,7 @@ fn validate_discovered_as_metadata(
         ));
     }
     let _ = validate_discovered_url("issuer", raw_issuer, require_https)?;
-    // RFC 8414 exige correspondência exata com o emissor esperado, sem normalizar barra final.
+    // RFC 8414 exige correspondência exata com o emissor esperado, sem aparar espaços nem normalizar barra final.
     if raw_issuer != expected_issuer {
         return Err(OAuthError::DiscoveryFailed(
             "campo issuer dos metadados OAuth diverge do emissor esperado".into(),

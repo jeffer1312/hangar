@@ -554,7 +554,14 @@ async fn create_integration(state: &AppState, request: Request) -> Response {
     let lock_id = config.id.clone();
     let _guard = state.integrations.lock_integration(&lock_id).await;
 
-    // Nunca herda segredos órfãos de um DELETE parcial anterior ao recriar o mesmo ID sem `secrets`.
+    // Confere duplicidade sob a trava antes de tocar em segredos para nunca apagar credenciais de um ID existente.
+    match state.integrations.registry.get(&lock_id) {
+        Ok(Some(_)) => return registry_error(RegistryError::AlreadyExists(lock_id)),
+        Ok(None) => {}
+        Err(err) => return registry_error(err),
+    }
+
+    // Nunca herda segredos órfãos de um DELETE parcial anterior ao recriar um ID livre sem `secrets`.
     if initial_secrets.is_empty()
         && let Err(err) = state.integrations.secrets.delete(&lock_id).await
     {
@@ -583,6 +590,7 @@ async fn create_integration(state: &AppState, request: Request) -> Response {
     };
 
     state.integrations.clear_error(&created.id);
+    state.integrations.clear_cancel_warning(&created.id);
     let view = build_view(created, stored_secrets.as_ref(), None);
     json_response(StatusCode::CREATED, json!({"integration": view}))
 }
@@ -597,6 +605,7 @@ fn remote_url(transport: &Transport) -> Option<&str> {
 fn clear_remote_endpoint_secrets(slot: &mut Option<IntegrationSecrets>) {
     if let Some(entry) = slot.as_mut() {
         entry.bearer_token = None;
+        entry.client_secret = None;
         entry.oauth = None;
         entry.headers.clear();
         if entry.is_empty() {
@@ -612,6 +621,7 @@ async fn invalidate_integration_runtime(state: &AppState, id: &str) {
     state.integrations.approvals.cancel_for_integration(id);
     state.integrations.clear_voice_confirmations(id);
     state.integrations.clear_error(id);
+    state.integrations.clear_cancel_warning(id);
 }
 
 async fn patch_integration(state: &AppState, id: &str, request: Request) -> Response {
@@ -793,8 +803,8 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         policy: Some(existing.policy),
         pinned: Some(existing.pinned),
         projects: Some(existing.projects.clone()),
-        // Só restaura `allowed_tools` se o próprio PATCH substituiu ou limpou a lista (evita apagar `AllowAlways`).
-        allowed_tools: if explicit_allowed_tools || destination_changed {
+        // Restaura `allowed_tools` quando o PATCH substituiu, limpou ou aplicou delta na lista (sob `lock_integration`).
+        allowed_tools: if explicit_allowed_tools || destination_changed || has_allowed_delta {
             Some(existing.allowed_tools.clone())
         } else {
             None
@@ -849,7 +859,10 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
             .registry
             .patch_allowed_tools(id, &add_tools, &remove_tools)
         {
-            Ok(cfg) => updated = cfg,
+            Ok(cfg) => {
+                did_registry_update = true;
+                updated = cfg;
+            }
             Err(err) => {
                 if did_registry_update {
                     let _ = state.integrations.registry.update(id, rollback_update);
@@ -863,7 +876,33 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
     }
 
     let secrets_after = match body.secrets {
-        None => candidate_secrets,
+        None => {
+            if remote_url_changed {
+                // Segunda limpeza pós-publicação elimina tokens gravados por callback OAuth em voo antes da troca.
+                match state
+                    .integrations
+                    .secrets
+                    .update_with(id, move |slot| {
+                        clear_remote_endpoint_secrets(slot);
+                        Ok(slot.clone())
+                    })
+                    .await
+                {
+                    Ok(sec) => sec,
+                    Err(err) => {
+                        if did_registry_update {
+                            let _ = state.integrations.registry.update(id, rollback_update);
+                        }
+                        if cleared_old_remote_secrets {
+                            restore_secrets(state, id.to_owned(), previous_secrets).await;
+                        }
+                        return secret_store_error(err);
+                    }
+                }
+            } else {
+                candidate_secrets
+            }
+        }
         Some(None) => {
             if let Err(err) = state.integrations.secrets.delete(id).await {
                 if did_registry_update {
@@ -928,6 +967,7 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
     }
     if destination_changed {
         state.integrations.oauth.cancel_pending_for(id);
+        state.integrations.clear_cancel_warning(id);
     }
 
     let view = build_view(updated, secrets_after.as_ref(), None);
@@ -1227,16 +1267,30 @@ async fn answer_approval(state: &AppState, request_id: &str, request: Request) -
         }
     }
 
+    let mut added_allow_always_tool: Option<String> = None;
     if claim.decision() == ApprovalDecision::AllowAlways {
+        let already_allowed = state
+            .integrations
+            .registry
+            .get(&integration_id)
+            .ok()
+            .flatten()
+            .is_some_and(|cfg| cfg.allowed_tools.contains(claim.tool()));
         let registry = state.integrations.registry.clone();
         let target_id = integration_id.clone();
         let tool = claim.tool().to_owned();
+        let tool_for_rollback = tool.clone();
         let persisted = tokio::task::spawn_blocking(move || {
             registry.add_allowed_tool(&target_id, &tool)
         })
         .await;
         match persisted {
-            Ok(Ok(_)) | Ok(Err(RegistryError::NotFound(_))) => {}
+            Ok(Ok(_)) => {
+                if !already_allowed {
+                    added_allow_always_tool = Some(tool_for_rollback);
+                }
+            }
+            Ok(Err(RegistryError::NotFound(_))) => {}
             Ok(Err(err)) => {
                 drop(claim);
                 return registry_error(err);
@@ -1252,7 +1306,18 @@ async fn answer_approval(state: &AppState, request_id: &str, request: Request) -
 
     let answered = match claim.commit() {
         Ok(ans) => ans,
-        Err(err) => return approval_error(err),
+        Err(err) => {
+            // Se o chamador caiu durante a gravação de `AllowAlways`, desfaz a liberação para alinhar estado e resposta.
+            if let Some(tool) = added_allow_always_tool {
+                let registry = state.integrations.registry.clone();
+                let target_id = integration_id.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    registry.patch_allowed_tools(&target_id, &[], &[tool])
+                })
+                .await;
+            }
+            return approval_error(err);
+        }
     };
 
     json_response(

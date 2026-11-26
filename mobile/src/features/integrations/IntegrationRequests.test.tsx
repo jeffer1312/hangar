@@ -1022,26 +1022,46 @@ it('folha de detalhe aplica estado do PATCH antes de liberar controles, invalida
   expect(mocks.updateIntegration).toHaveBeenNthCalledWith(1, srv, 'notion', { enabled: false });
   expect(mocks.updateIntegration).toHaveBeenNthCalledWith(2, srv, 'notion', { enabled: true });
 
-  // Mudar política quando listIntegrationTools falha deve remover ações antigas de ask_write.
+  // Mudar política quando listIntegrationTools falha deve remover ações antigas de ask_write e mostrar estado de erro com retry.
   mocks.updateIntegration.mockResolvedValueOnce(oauthView({ status: 'ready', policy: 'read_only' }));
   mocks.listIntegrationTools.mockRejectedValueOnce(new Error('falha de rede'));
   await act(async () => {
     container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_policy_read_only()}"]`)!.click();
   });
   expect(container.querySelector(`button[aria-label="${m.integrations_tool_allow_always()} create_issue"]`)).toBeNull();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('falha de rede');
   expect(mocks.registrarDiag).toHaveBeenCalledWith(
     expect.objectContaining({ evento: 'integrations.tools_refresh_failed', tela: 'integrations' }),
     srv.baseUrl,
   );
 
-  // Abrir OAuth em auth_required mostra faixa e registra no diário; quando status vira ready, a faixa some.
+  // Tentar novamente carrega ferramenta allowed_always e permite revogar via remove_allowed_tools.
+  const allowedTool: IntegrationToolSummary = {
+    name: 'create_issue',
+    description: 'Cria issue',
+    input_schema: {},
+    read_only_hint: false,
+    effective_access: 'allowed_always',
+  };
+  mocks.listIntegrationTools.mockResolvedValueOnce([allowedTool]);
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_retry()}"]`)!.click();
+  });
+  const revokeBtn = container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_remove()} create_issue"]`);
+  expect(revokeBtn).not.toBeNull();
+  mocks.updateIntegration.mockResolvedValueOnce(oauthView({ status: 'ready', allowed_tools: [] }));
+  mocks.listIntegrationTools.mockResolvedValueOnce([{ ...allowedTool, effective_access: 'ask_write' }]);
+  await act(async () => { revokeBtn!.click(); });
+  expect(mocks.updateIntegration).toHaveBeenLastCalledWith(srv, 'notion', { remove_allowed_tools: ['create_issue'] });
+
+  // Abrir OAuth em auth_required mostra faixa e registra no diário; quando status vira ready, limpa faixa e handoff.
   mocks.listIntegrationTools.mockResolvedValue([]);
   mocks.startIntegrationOAuth.mockResolvedValueOnce({
-    mode: 'open_url',
-    authorize_url: 'https://mcp.notion.com/authorize?state=ok',
-    redirect_uri: 'https://a.test/api/integrations/oauth/callback',
+    mode: 'handoff_desktop',
+    authorize_url: 'https://mcp.notion.com/authorize?state=handoff',
+    redirect_uri: 'http://127.0.0.1:8765/api/integrations/oauth/callback',
+    reason: 'exige loopback',
   });
-  mocks.openURL.mockResolvedValueOnce(undefined);
   await act(async () => {
     root.render(
       <IntegrationDetailSheet
@@ -1057,11 +1077,7 @@ it('folha de detalhe aplica estado do PATCH antes de liberar controles, invalida
   await act(async () => {
     container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_authorize()}"]`)!.click();
   });
-  expect(container.textContent).toContain(m.integrations_oauth_started());
-  expect(mocks.registrarDiag).toHaveBeenCalledWith(
-    expect.objectContaining({ evento: 'integrations.oauth_browser_opened', tela: 'integrations' }),
-    srv.baseUrl,
-  );
+  expect(container.textContent).toContain('exige loopback');
   await act(async () => {
     root.render(
       <IntegrationDetailSheet
@@ -1074,6 +1090,7 @@ it('folha de detalhe aplica estado do PATCH antes de liberar controles, invalida
       />,
     );
   });
+  expect(container.textContent).not.toContain('exige loopback');
   expect(container.textContent).not.toContain(m.integrations_oauth_started());
 });
 

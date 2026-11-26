@@ -460,11 +460,16 @@ impl IntegrationsPage {
                 if seq != this.seq {
                     return;
                 }
-                if let Ok(resp) = result.and_then(|v| {
-                    serde_json::from_value::<IntegrationsListResponse>(v)
-                        .map_err(|_| Failure::local("invalid_response"))
-                }) {
-                    this.items = Some(Ok(resp.integrations));
+                match result
+                    .map_err(|e| integrations_failure(&e))
+                    .and_then(|v| {
+                        serde_json::from_value::<IntegrationsListResponse>(v)
+                            .map(|r| r.integrations)
+                            .map_err(|_| tr("invalid_response"))
+                    }) {
+                    Ok(list) => this.items = Some(Ok(list)),
+                    Err(msg) if this.items.is_none() => this.items = Some(Err(msg)),
+                    Err(_) => {}
                 }
             },
         );
@@ -599,6 +604,9 @@ impl IntegrationsPage {
                             && let Some(slot) = list.iter_mut().find(|item| item.id == updated.id)
                         {
                             *slot = updated;
+                        } else if this.items.is_none() {
+                            // Se Atualizar estava em voo e foi invalidado por `this.seq += 1`, dispara leitura substituta.
+                            this.reload_items(window, cx);
                         }
                         if this.open_tools.contains(&id) {
                             this.load_tools(&id, window, cx);
@@ -905,7 +913,7 @@ impl IntegrationsPage {
             },
             window,
             cx,
-            move |this: &mut Self, result, _, _| {
+            move |this: &mut Self, result, window, cx| {
                 this.busy.remove(&id);
                 match result {
                     Ok(_) => {
@@ -920,6 +928,9 @@ impl IntegrationsPage {
                         }
                         if let Some(Ok(list)) = this.items.as_mut() {
                             list.retain(|item| item.id != id);
+                        } else if this.items.is_none() {
+                            // Se Atualizar estava em voo e foi invalidado por `this.seq += 1`, dispara leitura substituta.
+                            this.reload_items(window, cx);
                         }
                         this.notice = Some(tr_shared("integrations_removed", &[]));
                     }
@@ -2658,15 +2669,32 @@ pub(super) fn parse_command_args(raw: &str) -> Result<Vec<String>, String> {
     let Some(single) = lines.into_iter().next() else {
         return Ok(Vec::new());
     };
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Quote {
+        Single,
+        Double,
+        AnsiSingle,
+    }
+
     let mut args = Vec::new();
     let mut current = String::new();
     let mut in_token = false;
-    let mut quote: Option<char> = None;
+    let mut quote: Option<Quote> = None;
     let mut chars = single.chars().peekable();
     while let Some(ch) = chars.next() {
         match quote {
-            Some('"') => match ch {
-                '\\' if matches!(chars.peek(), Some('"' | '\\' | 'n' | 'r')) => {
+            Some(Quote::Double) => match ch {
+                // Em aspas duplas comuns, só escapa `"` e `\` para preservar caminhos Windows (`"C:\nodejs\npx.cmd"`).
+                '\\' if matches!(chars.peek(), Some('"' | '\\')) => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                }
+                '"' => quote = None,
+                _ => current.push(ch),
+            },
+            Some(Quote::AnsiSingle) => match ch {
+                '\\' if matches!(chars.peek(), Some('\'' | '\\' | 'n' | 'r')) => {
                     if let Some(next) = chars.next() {
                         match next {
                             'n' => current.push('\n'),
@@ -2675,18 +2703,27 @@ pub(super) fn parse_command_args(raw: &str) -> Result<Vec<String>, String> {
                         }
                     }
                 }
-                '"' => quote = None,
+                '\'' => quote = None,
                 _ => current.push(ch),
             },
-            Some(q) => {
-                if ch == q {
+            Some(Quote::Single) => {
+                if ch == '\'' {
                     quote = None;
                 } else {
                     current.push(ch);
                 }
             }
-            None if ch == '\'' || ch == '"' => {
-                quote = Some(ch);
+            None if ch == '$' && chars.peek() == Some(&'\'') => {
+                let _ = chars.next();
+                quote = Some(Quote::AnsiSingle);
+                in_token = true;
+            }
+            None if ch == '\'' => {
+                quote = Some(Quote::Single);
+                in_token = true;
+            }
+            None if ch == '"' => {
+                quote = Some(Quote::Double);
                 in_token = true;
             }
             None if ch.is_whitespace() => {
@@ -2865,14 +2902,14 @@ fn quote_command_arg(arg: &str) -> String {
     {
         return arg.to_owned();
     }
-    // Quebras de linha são escapadas em aspas duplas para manter uma linha única inequívoca no editor.
+    // Quebras de linha usam ANSI-C quoting ($'...') para manter linha única sem colidir com caminhos Windows em "...".
     if arg.contains('\n') || arg.contains('\r') {
         let escaped = arg
             .replace('\\', "\\\\")
-            .replace('"', "\\\"")
+            .replace('\'', "\\'")
             .replace('\n', "\\n")
             .replace('\r', "\\r");
-        return format!("\"{escaped}\"");
+        return format!("$'{escaped}'");
     }
     if !arg.contains('"') && !arg.contains('\\') {
         return format!("\"{arg}\"");
@@ -3383,6 +3420,10 @@ mod tests {
         assert_eq!(
             parse_command_args(&edited_multiline).unwrap(),
             vec!["mcp-server", "--label", "linha 1\nlinha 2", "--verbose"]
+        );
+        assert_eq!(
+            parse_command_args(r#""C:\nodejs\npx.cmd" --yes pacote"#).unwrap(),
+            vec![r"C:\nodejs\npx.cmd", "--yes", "pacote"]
         );
 
         let mut cwd_change = base_draft.clone();

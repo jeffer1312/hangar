@@ -402,6 +402,8 @@ describe('parsers e validadores compartilhados de integrações', () => {
     expect(parseCommandArgs('srv arg\\ ')).toEqual({ ok: true, args: ['srv', 'arg '] });
     expect(parseCommandArgs('srv arg   ')).toEqual({ ok: true, args: ['srv', 'arg'] });
     expect(parseCommandArgs('srv "arg "')).toEqual({ ok: true, args: ['srv', 'arg '] });
+    expect(parseCommandArgs('npx -y server\n')).toEqual({ ok: true, args: ['npx', '-y', 'server'] });
+    expect(parseCommandArgs('\n  npx -y server \n')).toEqual({ ok: true, args: ['npx', '-y', 'server'] });
     expect(parseCommandArgs('C:\\tools\\mcp.exe --port 3000')).toEqual({
       ok: true,
       args: ['C:\\tools\\mcp.exe', '--port', '3000'],

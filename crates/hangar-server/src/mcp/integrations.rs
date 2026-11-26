@@ -529,7 +529,7 @@ async fn resolve_pinned_target(
         ));
     }
 
-    // Caso o `id` (>55 bytes) tenha sido truncado com hash antes do separador `__`, varre o catálogo.
+    // Caso o `id` longo tenha sido truncado com hash antes do separador `__`, varre o catálogo.
     let configs = st.integrations.registry.list().map_err(map_registry_error)?;
     for config in configs {
         if !config.enabled || !config.pinned {
@@ -797,6 +797,7 @@ async fn execute_checked_call(
             &config.id,
             &discovered.name,
             args_value,
+            Some(expected_config_fp),
             Some(external_started),
         )
         .await;
@@ -865,7 +866,7 @@ pub(super) async fn list_pinned_tools(
         return Vec::new();
     }
 
-    // Descobre integrações prontas ainda ausentes do cache com teto curto de 3 s em paralelo.
+    // Descobre integrações prontas ainda ausentes do cache em paralelo com teto curto.
     let discovery_futures = pinned.iter().map(|cfg| async move {
         if let Some(cached) = st.integrations.tools_cache.get(&cfg.id) {
             return Some(cached);

@@ -158,6 +158,7 @@ export function IntegrationRequestSheet() {
   return (
     <ApprovalSheet
       server={bucket?.server ?? null}
+      error={bucket?.error ?? null}
       ready={!!bucket?.loaded && !bucket.error && !!approvals[target.serverId]}
       requests={pending(approvals[target.serverId]?.requests ?? [])}
       requestId={target.requestId}
@@ -165,8 +166,9 @@ export function IntegrationRequestSheet() {
   );
 }
 
-function ApprovalSheet({ server, ready, requests, requestId }: {
+function ApprovalSheet({ server, error, ready, requests, requestId }: {
   server: Server | null;
+  error: string | null;
   ready: boolean;
   requests: IntegrationApprovalRequest[];
   requestId: string | null;
@@ -188,6 +190,8 @@ function ApprovalSheet({ server, ready, requests, requestId }: {
     <MachineSheet title={m.integrations_approval_title()} onClose={close}>
       {!server ? (
         <Notice text={m.integrations_approval_no_server()} error />
+      ) : error ? (
+        <Notice text={error} error />
       ) : !ready ? (
         <InfoNotice text={m.integrations_loading()} />
       ) : !request ? (

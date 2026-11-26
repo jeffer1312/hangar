@@ -1,4 +1,4 @@
-//! Testes de integração JSON-RPC reais de `/mcp/` para integrações MCP externas (T5 + T6).
+//! Testes de integração JSON-RPC reais de `/mcp/` para integrações MCP externas.
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -238,7 +238,7 @@ impl ServerHandler for MockMcpHandler {
                 CallToolResult::success(vec![ContentBlock::text(format!("issue:{payload}"))])
             }
             "big_payload" => {
-                // Posiciona `🦀` (4 bytes) exatamente cruzando a marca de 64 KiB.
+                // Posiciona `🦀` exatamente cruzando o limite de truncamento.
                 let mut text = "a".repeat(MAX_RESPONSE_BYTES - 2);
                 text.push_str("🦀🦀");
                 text.push_str(&"b".repeat(512));

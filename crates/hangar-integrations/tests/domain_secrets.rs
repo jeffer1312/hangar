@@ -266,7 +266,7 @@ fn domain_types_serialize_as_snake_case_and_validate_boundaries() {
     nan_ts.created_at = f64::NAN;
     assert_eq!(nan_ts.validate(), Err(ValidationError::InvalidTimestamp));
 
-    // Nome > 200 bytes ou com NUL falha; command vazio ou com NUL falha.
+    // Nome acima do limite ou com NUL falha; command vazio ou com NUL falha.
     let mut bad_name = valid.clone();
     bad_name.name = "a".repeat(201);
     assert_eq!(bad_name.validate(), Err(ValidationError::InvalidName));
@@ -913,7 +913,7 @@ fn guard_wraps_short_text_without_truncation_marker() {
     assert!(wrapped.contains("Assunto: Bom dia\nCorpo: Tudo certo?"));
     assert!(!wrapped.contains(TRUNCATION_NOTICE));
 
-    // Texto no limite exato de 64 KiB também não recebe marcador de truncamento.
+    // Texto no limite exato não recebe marcador de truncamento.
     let exact = "x".repeat(MAX_RESPONSE_BYTES);
     let exact_wrapped = wrap_external_result("gmail-pessoal", &exact);
     assert!(!exact_wrapped.contains(TRUNCATION_NOTICE));
@@ -922,7 +922,7 @@ fn guard_wraps_short_text_without_truncation_marker() {
 
 #[test]
 fn guard_truncates_100kib_multibyte_text_on_valid_utf8_boundary_within_limit() {
-    // 100 KiB com acentos e emoji de 4 bytes ('é'=2B, 'ç'=2B, '🚀'=4B).
+    // Texto com acentos e emoji multibyte acima do limite para testar fronteira UTF-8.
     let chunk = "Atenção promoção 🚀 ";
     let target_bytes = 100 * 1024;
     let repeats = (target_bytes / chunk.len()) + 10;
@@ -935,8 +935,8 @@ fn guard_truncates_100kib_multibyte_text_on_valid_utf8_boundary_within_limit() {
     assert!(slice.len() >= MAX_RESPONSE_BYTES - 4);
     assert!(std::str::from_utf8(slice.as_bytes()).is_ok());
 
-    // Testa fronteira no meio de emoji de 4 bytes.
-    let emoji_text = "ab🚀cd"; // a(1), b(1), 🚀(4 bytes: índices 2..6), c(1), d(1)
+    // Testa fronteira no meio de emoji multibyte.
+    let emoji_text = "ab🚀cd";
     assert_eq!(truncate_utf8(emoji_text, 4), ("ab", true));
     assert_eq!(truncate_utf8(emoji_text, 5), ("ab", true));
     assert_eq!(truncate_utf8(emoji_text, 6), ("ab🚀", true));

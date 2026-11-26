@@ -185,13 +185,12 @@ impl IntegrationsService {
             .insert(id.to_owned(), message.into());
     }
 
-    /// Limpa o erro e eventual aviso de cancelamento em memória registrados para `id`.
+    /// Limpa o erro operacional em memória registrado para `id` (sem apagar aviso de cancelamento em voo).
     pub fn clear_error(&self, id: &str) {
         self.last_errors
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(id);
-        self.clear_cancel_warning(id);
     }
 
     /// Retorna uma cópia instantânea dos erros em memória por integração.

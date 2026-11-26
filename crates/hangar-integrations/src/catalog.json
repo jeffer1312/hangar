@@ -109,7 +109,7 @@
       "title": "Configurar Slack App com suporte MCP",
       "steps": [
         "Acesse api.slack.com/apps, crie um novo App no seu workspace e habilite o suporte a MCP (is_mcp_enabled) com PKCE no manifesto.",
-        "Em OAuth & Permissions, cadastre a URI de redirecionamento http://localhost:<porta>/api/integrations/oauth/callback e adicione em User Token Scopes os escopos necessários para leitura e busca: search:read, channels:history, groups:history, im:history, mpim:history, channels:read e users:read.",
+        "Em OAuth & Permissions, cadastre a URI de redirecionamento http://localhost:<porta>/api/integrations/oauth/callback e adicione em User Token Scopes os escopos necessários para leitura e busca: search:read.public, search:read.private, search:read.mpim, search:read.im, channels:history, groups:history, im:history, mpim:history, channels:read e users:read.",
         "Copie o Client ID (e Client Secret, se exigido pelo app) para os campos abaixo e conclua o login no navegador."
       ],
       "docs_hint": "api.slack.com/apps -> Basic Information & OAuth -> Redirect URLs"

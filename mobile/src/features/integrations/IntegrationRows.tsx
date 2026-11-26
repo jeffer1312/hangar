@@ -132,10 +132,11 @@ export function CatalogPresetRow({ preset, connectedCount, onPress }: {
   );
 }
 
-export function ToolSummaryRow({ tool, busy, onAllowAlways }: {
+export function ToolSummaryRow({ tool, busy, onAllowAlways, onRevokeAlways }: {
   tool: IntegrationToolSummary;
   busy?: boolean;
   onAllowAlways?: (name: string) => void;
+  onRevokeAlways?: (name: string) => void;
 }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
@@ -174,6 +175,24 @@ export function ToolSummaryRow({ tool, busy, onAllowAlways }: {
           ]}
         >
           <Text style={[styles.allowText, { color: c.accentText }]}>{m.integrations_tool_allow_always()}</Text>
+        </Pressable>
+      ) : tool.effective_access === 'allowed_always' && onRevokeAlways ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${m.integrations_remove()} ${tool.name}`}
+          accessibilityState={{ disabled: busy }}
+          disabled={busy}
+          onPress={() => onRevokeAlways(tool.name)}
+          style={({ pressed }) => [
+            styles.allowBtn,
+            {
+              borderColor: c.borderStrong,
+              backgroundColor: pressed ? c.hover : 'transparent',
+              opacity: busy ? 0.5 : 1,
+            },
+          ]}
+        >
+          <Text style={[styles.allowText, { color: theme.tokens.status.error }]}>{m.integrations_remove()}</Text>
         </Pressable>
       ) : null}
     </View>

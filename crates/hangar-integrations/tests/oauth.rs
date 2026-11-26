@@ -116,6 +116,7 @@ struct PendingMockAuth {
 struct MockOAuthConfig {
     use_www_authenticate_discovery: bool,
     auth_server_path_prefix: String,
+    prm_resource_path: String,
     oidc_fallback_only: bool,
     dcr_supported: bool,
     dcr_issues_secret: bool,
@@ -128,6 +129,7 @@ impl Default for MockOAuthConfig {
         Self {
             use_www_authenticate_discovery: false,
             auth_server_path_prefix: String::new(),
+            prm_resource_path: "/mcp".to_owned(),
             oidc_fallback_only: false,
             dcr_supported: true,
             dcr_issues_secret: false,
@@ -288,6 +290,13 @@ async fn mcp_auth_middleware(
     next.run(req).await
 }
 
+fn build_prm_resource(base: &str, cfg: &MockOAuthConfig, uri: &axum::http::Uri) -> String {
+    match uri.query() {
+        Some(q) if !q.is_empty() => format!("{base}{}?{q}", cfg.prm_resource_path),
+        _ => format!("{base}{}", cfg.prm_resource_path),
+    }
+}
+
 async fn protected_resource_metadata(
     State(state): State<MockOAuthServerState>,
     uri: axum::http::Uri,
@@ -297,10 +306,7 @@ async fn protected_resource_metadata(
     }
     let base = state.base_url.read().await.clone();
     let issuer = format!("{base}{}", state.cfg.auth_server_path_prefix);
-    let resource = match uri.query() {
-        Some(q) if !q.is_empty() => format!("{base}/mcp?{q}"),
-        _ => format!("{base}/mcp"),
-    };
+    let resource = build_prm_resource(&base, &state.cfg, &uri);
     json_response(
         StatusCode::OK,
         json!({
@@ -311,13 +317,17 @@ async fn protected_resource_metadata(
     )
 }
 
-async fn custom_protected_resource_metadata(State(state): State<MockOAuthServerState>) -> Response {
+async fn custom_protected_resource_metadata(
+    State(state): State<MockOAuthServerState>,
+    uri: axum::http::Uri,
+) -> Response {
     let base = state.base_url.read().await.clone();
     let issuer = format!("{base}{}", state.cfg.auth_server_path_prefix);
+    let resource = build_prm_resource(&base, &state.cfg, &uri);
     json_response(
         StatusCode::OK,
         json!({
-            "resource": format!("{base}/mcp"),
+            "resource": resource,
             "authorization_servers": [issuer]
         }),
     )
@@ -874,8 +884,27 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
             }
             if id == "slack" {
                 assert!(joined.contains("is_mcp_enabled") && joined.contains("PKCE"));
-                for scope in [
-                    "search:read",
+                let tokens: Vec<&str> = joined
+                    .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')'))
+                    .map(|t| t.trim_end_matches('.'))
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                for search_scope in [
+                    "search:read.public",
+                    "search:read.private",
+                    "search:read.mpim",
+                    "search:read.im",
+                ] {
+                    assert!(
+                        tokens.contains(&search_scope),
+                        "guia Slack deve listar o escopo de busca completo {search_scope}"
+                    );
+                }
+                assert!(
+                    !tokens.contains(&"search:read"),
+                    "guia Slack não deve instruir o escopo legado search:read"
+                );
+                for history_scope in [
                     "channels:history",
                     "groups:history",
                     "im:history",
@@ -884,8 +913,8 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
                     "users:read",
                 ] {
                     assert!(
-                        joined.contains(scope),
-                        "guia Slack deve listar o User Token Scope {scope}"
+                        tokens.contains(&history_scope),
+                        "guia Slack deve listar o escopo de histórico {history_scope}"
                     );
                 }
             }
@@ -1354,7 +1383,7 @@ async fn state_security_single_use_entropy_expiry_and_provider_error() {
     };
 
     let state_param = query_params(&authorize_url).remove("state").unwrap();
-    // 32 bytes em base64url sem padding têm sempre 43 caracteres.
+    // Base64url sem padding mantém comprimento fixo para a entropia esperada.
     assert_eq!(state_param.len(), 43, "state deve ter 32 bytes base64url");
     assert_eq!(
         URL_SAFE_NO_PAD.decode(&state_param).unwrap().len(),
@@ -1510,10 +1539,24 @@ async fn concurrent_refresh_mcp_401_retry_and_invalid_grant_reconnect_flow() {
         .await
         .expect("primeira tarefa deve entrar no /token");
 
+    let b_started = Arc::new(Notify::new());
+    let b_started_tx = Arc::clone(&b_started);
     let oauth_b = oauth.clone();
-    let task_b = tokio::spawn(async move { oauth_b.refresh_access_token("figma-rot").await });
-    // Confirma em janela limitada que task_b fica bloqueada no lock sem entrar em /token antes de A liberar.
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    let task_b = tokio::spawn(async move {
+        b_started_tx.notify_one();
+        oauth_b.refresh_access_token("figma-rot").await
+    });
+    tokio::time::timeout(Duration::from_secs(2), b_started.notified())
+        .await
+        .expect("task_b deve iniciar tentativa de refresh");
+    // Cede controle após task_b sinalizar início para dar chance de alcançar a trava de refresh.
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !task_b.is_finished(),
+        "task_b deveria aguardar a trava de refresh enquanto task_a segura o gate"
+    );
     assert_eq!(
         server_state.refresh_calls.load(Ordering::SeqCst),
         1,
@@ -2326,7 +2369,42 @@ async fn pending_authorize_url_helpers_track_latest_and_clear_on_callback_or_exp
 
 #[tokio::test]
 async fn oauth_sends_canonical_rfc8707_resource_across_authorize_exchange_and_refresh() {
-    let (addr, state, server_handle) = spawn_mock_oauth_server(MockOAuthConfig::default()).await;
+    // Primeiro confirma que PRM sem barra final é rejeitado para sonda em `/mcp/?project_ref=abc` (RFC 9728).
+    let (mismatch_addr, _, mismatch_handle) =
+        spawn_mock_oauth_server(MockOAuthConfig::default()).await;
+    let mismatch_env = TestEnv::new();
+    mismatch_env
+        .registry
+        .create(remote_config(
+            "res-mismatch",
+            format!("http://{mismatch_addr}/mcp/?project_ref=abc"),
+            None,
+            AuthConfig::OAuthDcr,
+        ))
+        .unwrap();
+    let mismatch_err = mismatch_env
+        .oauth_manager()
+        .start(
+            "res-mismatch",
+            OAuthStartInput {
+                origin_client: OAuthOrigin::Desktop,
+                local_port: 8765,
+                public_base_url: None,
+                cimd_client_id_url: None,
+            },
+        )
+        .await
+        .expect_err("PRM sem barra final deve divergir da URL consultada com barra final");
+    assert!(matches!(mismatch_err, OAuthError::DiscoveryFailed(_)));
+    mismatch_handle.abort();
+
+    // Agora testa descoberta via desafio WWW-Authenticate com barra final + query preservadas.
+    let (addr, state, server_handle) = spawn_mock_oauth_server(MockOAuthConfig {
+        use_www_authenticate_discovery: true,
+        prm_resource_path: "/mcp/".to_owned(),
+        ..MockOAuthConfig::default()
+    })
+    .await;
     let expected_resource = format!("http://{addr}/mcp?project_ref=abc");
 
     let env = TestEnv::new();

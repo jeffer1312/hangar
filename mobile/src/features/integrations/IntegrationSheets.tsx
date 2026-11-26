@@ -50,6 +50,8 @@ export function IntegrationDetailSheet({
 }) {
   const [localIntegration, setLocalIntegration] = useState(integration);
   const [tools, setTools] = useState<IntegrationToolSummary[]>([]);
+  const [toolsLoading, setToolsLoading] = useState(true);
+  const [toolsError, setToolsError] = useState('');
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [oauthOpening, setOauthOpening] = useState(false);
@@ -70,7 +72,11 @@ export function IntegrationDetailSheet({
   }, [integration]);
 
   useEffect(() => {
-    if (view.status === 'ready') setOauthStarted(false);
+    if (view.status === 'ready') {
+      setOauthStarted(false);
+      setHandoff(null);
+      setDesktopOpened(false);
+    }
   }, [view.status]);
 
   const isSameTarget = (snap: { serverId: string; baseUrl: string; id: string }) => {
@@ -86,12 +92,19 @@ export function IntegrationDetailSheet({
   const refreshTools = useCallback(async () => {
     const version = ++toolsVersionRef.current;
     const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
+    setToolsLoading(true);
+    setToolsError('');
     try {
       const list = await listIntegrationTools(server, integration.id);
-      if (isSameTarget(snap) && version === toolsVersionRef.current) setTools(list);
+      if (isSameTarget(snap) && version === toolsVersionRef.current) {
+        setTools(list);
+        setToolsError('');
+      }
     } catch (e) {
-      // Cache vazio ou leitura pós-PATCH com falha mantém a lista vazia até nova leitura bem-sucedida.
       const msg = integrationErrorText(e);
+      if (isSameTarget(snap) && version === toolsVersionRef.current) {
+        setToolsError(msg || m.integrations_load_error());
+      }
       registrarDiag({
         evento: 'integrations.tools_refresh_failed',
         nivel: 'aviso',
@@ -101,12 +114,18 @@ export function IntegrationDetailSheet({
           : e instanceof Error ? e.name : 'erro',
         detalhe: `${integration.id}: ${msg}`.slice(0, 300),
       }, server.baseUrl);
+    } finally {
+      if (isSameTarget(snap) && version === toolsVersionRef.current) {
+        setToolsLoading(false);
+      }
     }
   }, [server, integration.id]);
 
   useEffect(() => {
     toolsVersionRef.current += 1;
     setTools([]);
+    setToolsLoading(true);
+    setToolsError('');
     setError('');
     setTestSummary('');
     setOauthStarted(false);
@@ -142,7 +161,7 @@ export function IntegrationDetailSheet({
         await Linking.openURL(parsed.href);
         registrarDiag({
           evento: 'integrations.oauth_browser_opened',
-          nivel: 'info',
+          nivel: 'ok',
           tela: 'integrations',
           detalhe: view.id,
         }, server.baseUrl);
@@ -204,8 +223,11 @@ export function IntegrationDetailSheet({
         // Invalida leituras de cache mais antigas para não sobrescrever as ferramentas deste teste.
         toolsVersionRef.current += 1;
         setTools(res.tools);
+        setToolsLoading(false);
+        setToolsError('');
         setOauthStarted(false);
         setHandoff(null);
+        setDesktopOpened(false);
         const msg = m.integrations_test_ok({ n: res.tools.length });
         setTestSummary(msg);
         toast.ok(msg);
@@ -265,6 +287,10 @@ export function IntegrationDetailSheet({
 
   const allowToolAlways = (toolName: string) => {
     void patch({ add_allowed_tools: [toolName] }, true);
+  };
+
+  const revokeToolAlways = (toolName: string) => {
+    void patch({ remove_allowed_tools: [toolName] }, true);
   };
 
   const confirmRemove = () => {
@@ -386,7 +412,21 @@ export function IntegrationDetailSheet({
       </MachineGroup>
 
       <MachineHelp>{m.integrations_tools_heading()}</MachineHelp>
-      {tools.length === 0 ? (
+      {toolsLoading && tools.length === 0 ? (
+        <InfoNotice text={m.integrations_loading()} />
+      ) : toolsError && tools.length === 0 ? (
+        <>
+          <Notice text={toolsError} error />
+          <MachineGroup>
+            <MachineRow
+              title={m.integrations_retry()}
+              action
+              disabled={busy}
+              onPress={() => void refreshTools()}
+            />
+          </MachineGroup>
+        </>
+      ) : tools.length === 0 ? (
         <InfoNotice text={m.integrations_tools_empty()} />
       ) : (
         <MachineGroup>
@@ -396,6 +436,7 @@ export function IntegrationDetailSheet({
               tool={tool}
               busy={busy}
               onAllowAlways={allowToolAlways}
+              onRevokeAlways={revokeToolAlways}
             />
           ))}
         </MachineGroup>

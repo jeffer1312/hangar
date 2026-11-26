@@ -405,36 +405,44 @@ impl McpClientManager {
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<McpCallOutput, ClientError> {
-        self.call_tool_tracked(integration_id, tool_name, arguments, None)
+        self.call_tool_tracked(integration_id, tool_name, arguments, None, None)
             .await
     }
 
     /// Invoca uma ferramenta sinalizando `external_dispatched` somente no momento exato do envio ao transporte.
+    ///
+    /// Quando `expected_config_fp` é informado, rejeita o envio se o destino ou autenticação da integração
+    /// mudou entre a admissão e a conexão/envio (inclusive em retry após renovação OAuth).
     pub async fn call_tool_tracked(
         &self,
         integration_id: &str,
         tool_name: &str,
         arguments: serde_json::Value,
+        expected_config_fp: Option<[u8; 32]>,
         external_dispatched: Option<Arc<AtomicBool>>,
     ) -> Result<McpCallOutput, ClientError> {
         let params = build_call_tool_params(tool_name, arguments)?;
         let tool_owned = tool_name.to_owned();
-        self.execute_with_oauth_retry(integration_id, move |session, _config| {
-            let params = params.clone();
-            let tool_name = tool_owned.clone();
-            let external_dispatched = external_dispatched.clone();
-            async move {
-                if let Some(flag) = external_dispatched.as_ref() {
-                    flag.store(true, Ordering::SeqCst);
+        self.execute_with_oauth_retry_for(
+            integration_id,
+            expected_config_fp,
+            move |session, _config| {
+                let params = params.clone();
+                let tool_name = tool_owned.clone();
+                let external_dispatched = external_dispatched.clone();
+                async move {
+                    if let Some(flag) = external_dispatched.as_ref() {
+                        flag.store(true, Ordering::SeqCst);
+                    }
+                    let result = session
+                        .peer
+                        .call_tool(params)
+                        .await
+                        .map_err(|err| map_service_error(err, Some(&tool_name)))?;
+                    Ok(extract_call_output(result))
                 }
-                let result = session
-                    .peer
-                    .call_tool(params)
-                    .await
-                    .map_err(|err| map_service_error(err, Some(&tool_name)))?;
-                Ok(extract_call_output(result))
-            }
-        })
+            },
+        )
         .await
     }
 
@@ -466,9 +474,23 @@ impl McpClientManager {
         F: Fn(Arc<ActiveSession>, IntegrationConfig) -> Fut,
         Fut: Future<Output = Result<T, OpError>>,
     {
+        self.execute_with_oauth_retry_for(integration_id, None, operation)
+            .await
+    }
+
+    async fn execute_with_oauth_retry_for<T, F, Fut>(
+        &self,
+        integration_id: &str,
+        admitted_config_fp: Option<[u8; 32]>,
+        operation: F,
+    ) -> Result<T, ClientError>
+    where
+        F: Fn(Arc<ActiveSession>, IntegrationConfig) -> Fut,
+        Fut: Future<Output = Result<T, OpError>>,
+    {
         let slot = self.slot(integration_id);
         let first_attempt = self
-            .run_single_attempt(&slot, integration_id, None, None, &operation)
+            .run_single_attempt(&slot, integration_id, None, admitted_config_fp, &operation)
             .await;
 
         let (reason, maybe_auth, maybe_fp, failed_attempt) = match first_attempt {
@@ -497,8 +519,9 @@ impl McpClientManager {
             let _refresh_guard = slot.refresh_lock.lock().await;
             let refresh_cfg = self.load_enabled_config(integration_id)?;
             let refresh_fp = config_fingerprint(&refresh_cfg);
-            if let Some(failed_fp) = maybe_fp
-                && failed_fp != refresh_fp
+            let expected_fp = admitted_config_fp.or(maybe_fp);
+            if let Some(expected_fp) = expected_fp
+                && expected_fp != refresh_fp
             {
                 *slot
                     .oauth_override

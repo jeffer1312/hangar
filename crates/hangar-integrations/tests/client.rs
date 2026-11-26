@@ -622,14 +622,7 @@ async fn call_timeout_kills_stuck_stdio_without_blocking_other_integrations() {
         .unwrap() as u32;
     assert!(pid_alive(slow_pid).unwrap());
 
-    // Pré-aquece `fast-int` para o spawn a frio não competir com a janela de timeout de `slow-int`.
-    let warmup = manager
-        .call_tool("fast-int", "read_echo", json!({"text": "warmup"}))
-        .await
-        .unwrap();
-    assert_eq!(warmup.text, "warmup");
-
-    // Subcaso A: independência entre integrações coordenada por arquivo-sinal (sem prazo de 150 ms).
+    // Subcaso A: independência entre integrações coordenada por arquivo-sinal.
     let release_signal = env._dir.path().join("slow_release.flag");
     env.registry
         .create(stdio_config(
@@ -666,6 +659,12 @@ async fn call_timeout_kills_stuck_stdio_without_blocking_other_integrations() {
         exit_grace: Duration::from_millis(100),
         ..ClientConfig::default()
     }));
+    // Aquece `fast-int` no mesmo gerenciador do subcaso A antes de iniciar a chamada lenta.
+    let warmup = indep_manager
+        .call_tool("fast-int", "read_echo", json!({"text": "warmup"}))
+        .await
+        .unwrap();
+    assert_eq!(warmup.text, "warmup");
     let m_gated = Arc::clone(&indep_manager);
     let gated_task = tokio::spawn(async move {
         m_gated

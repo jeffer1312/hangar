@@ -138,6 +138,16 @@ function isCurrent(attempt: ConnectionAttempt) {
   return foreground && refs > 0 && attempt.generation === generation && !attempt.abort.signal.aborted && hasServer(attempt.server);
 }
 
+function clearServerIntegrationApprovals(id: string) {
+  integrationApprovalsRaw.delete(id);
+  const current = useSessions.getState().integrationApprovals;
+  if (id in current) {
+    const rest = { ...current };
+    delete rest[id];
+    useSessions.setState({ integrationApprovals: rest });
+  }
+}
+
 function disconnect(id: string, abortPending = true) {
   const stream = streams.get(id);
   streams.delete(id);
@@ -147,6 +157,7 @@ function disconnect(id: string, abortPending = true) {
   const attempt = connecting.get(id);
   if (!abortPending && attempt && !attempt.routing) connecting.delete(id);
   if (abortPending) attempt?.abort.abort();
+  clearServerIntegrationApprovals(id);
   esquecerRota(id);
 }
 

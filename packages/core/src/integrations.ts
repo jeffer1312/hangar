@@ -346,7 +346,8 @@ export function parseCommandArgs(raw: string): ParseCommandArgsResult {
   // Não remove espaços finais antes da tokenização para preservar espaço final escapado (`arg\ `).
   const split = splitUnquotedLines(raw);
   if (!split.ok) return split;
-  if (split.multiLine) return { ok: true, args: split.lines };
+  // Só ativa modo multilinha quando há mais de uma linha não-vazia, ignorando quebras externas (`npx -y server\n`).
+  if (split.lines.length > 1) return { ok: true, args: split.lines };
   return { ok: true, args: tokenizeSingleLineArgs(raw) };
 }
 
