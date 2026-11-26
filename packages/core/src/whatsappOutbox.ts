@@ -87,7 +87,7 @@ function draftOf(raw: unknown): WhatsAppDraft | null {
     if (!x || typeof x !== 'object') return [];
     const e = x as Record<string, unknown>;
     if (typeof e.text !== 'string' || e.kind === 'reaction') return [];
-    // Rascunho da 0.2.0 não tem `kind`: era texto. Tipo que este cliente não conhece mostra só o texto.
+    // Sem `kind`, é texto. Tipo que este cliente não conhece mostra só o texto.
     const kind = e.kind == null ? 'text' : KINDS.find((k) => k === e.kind) ?? 'other';
     return [{ from_me: e.from_me === true, sender: str(e.sender), at: str(e.at), text: e.text, kind, file_name: str(e.file_name) }];
   }) : [];
@@ -136,11 +136,15 @@ export function draftField(raw: string): DraftField {
   return { text, count: draftCharCount(text) };
 }
 
+// Espaço como o serviço (Go `strings.TrimSpace`) e o nativo (`str::trim`) contam; o `trim()` do JS também corta U+FEFF, e o
+// serviço aceitaria um texto que o cartão recusasse.
+const BLANK = /^[\t\n\v\f\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]*$/;
+
 /** Frase do texto que o serviço recusaria (as regras da criação: até 4096 caracteres, vazio só com anexo); `undefined` quando
  *  pode sair. */
 export function draftTextError(field: DraftField, hasFile: boolean): string | undefined {
   if (field.count > DRAFT_TEXT_MAX) return m.whatsapp_draft_err_text_long();
-  if (!field.text.trim() && !hasFile) return m.whatsapp_draft_err_text_empty();
+  if (BLANK.test(field.text) && !hasFile) return m.whatsapp_draft_err_text_empty();
   return undefined;
 }
 
@@ -170,6 +174,13 @@ const KIND_WORD: Partial<Record<WhatsAppRecentKind, () => string>> = {
   image: m.whatsapp_draft_kind_image, video: m.whatsapp_draft_kind_video, audio: m.whatsapp_draft_kind_audio,
   sticker: m.whatsapp_draft_kind_sticker, document: m.whatsapp_draft_kind_document,
 };
+
+/** Quem falou numa mensagem dele, embaixo do balão; a mesma regra do nativo (`Draft::speaker`). No grupo, só o remetente
+ *  (vazio: o balão fica só com a hora); na conversa individual, o nome da conversa, senão o remetente, senão o número. */
+export function recentSpeaker(draft: Pick<WhatsAppDraft, 'chat_kind' | 'chat_name' | 'chat_number'>, recent: Pick<WhatsAppDraftRecent, 'sender'>): string {
+  if (draft.chat_kind === 'group') return recent.sender;
+  return draft.chat_name || recent.sender || draft.chat_number;
+}
 
 /** Balão de uma mensagem recente: a etiqueta do tipo em maiúsculas (`null` em texto e em `other`) e o texto, que é a
  *  legenda, o nome do documento quando ela vem vazia ou, sem nenhum dos dois, a palavra do tipo. */

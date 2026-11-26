@@ -70,3 +70,8 @@ it('o rascunho de exemplo usa número fictício e o anexo dentro da pasta da ses
   expect(draft.chat_avatar?.startsWith('/9j/')).toBe(true);
   expect(draft.recent.map((r) => [r.from_me, r.kind])).toEqual([[true, 'text'], [false, 'image'], [false, 'text']]);
 });
+
+it('as horas do exemplo são 14:02 e 14:03 no fuso de quem vê', () => {
+  const local = (at: string) => { const t = new Date(at); return [t.getHours(), t.getMinutes()]; };
+  expect(sampleDraft().recent.map((r) => local(r.at))).toEqual([[14, 2], [14, 3], [14, 3]]);
+});

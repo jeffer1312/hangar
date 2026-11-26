@@ -35,6 +35,9 @@ const noop = () => {};
 // Pessoa desenhada (JPEG 96×96), não é foto de ninguém.
 const AVATAR = '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';
 
+/** Hora local de exemplo: o cartão mostra a hora local, e a animação diz 14:02 em qualquer fuso, como no nativo. */
+const at = (hour: number, minute: number) => new Date(2026, 10, 24, hour, minute).toISOString();
+
 /** O rascunho de exemplo no formato do evento `whatsapp_outbox`: o cartão lê dele como lê o de verdade. */
 export function sampleDraft(): WhatsAppDraft {
   const file = m.whatsapp_draft_news_file();
@@ -45,9 +48,9 @@ export function sampleDraft(): WhatsAppDraft {
     id: 'news', origin: `${m.native_vault_news_machine()}::site`, chat: `${NUMBER}@s.whatsapp.net`, chat_kind: 'contact',
     chat_number: NUMBER, chat_name: contact, chat_name_source: 'contact', chat_avatar: AVATAR,
     recent: [
-      said(true, '2026-11-24T14:02:00Z', m.whatsapp_draft_news_recent_mine()),
-      said(false, '2026-11-24T14:03:00Z', '', 'image'),
-      said(false, '2026-11-24T14:03:00Z', m.whatsapp_draft_news_recent_theirs()),
+      said(true, at(14, 2), m.whatsapp_draft_news_recent_mine()),
+      said(false, at(14, 3), '', 'image'),
+      said(false, at(14, 3), m.whatsapp_draft_news_recent_theirs()),
     ],
     text: m.whatsapp_draft_news_text(),
     reply_to: '', quoted_text: '', file: { name: file, size: 2_516_582, sha256: '', source: `/home/ana/site/${file}`, outside_cwd: false },

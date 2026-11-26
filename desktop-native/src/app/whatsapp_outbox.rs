@@ -14,7 +14,7 @@ pub(super) struct Recent {
     at: Option<String>,
     #[serde(default)]
     text: Option<String>,
-    /// `text`, `image`, `video`, `audio`, `document`, `sticker` ou `other`; ausente no rascunho da 0.2.0, que é texto.
+    /// `text`, `image`, `video`, `audio`, `document`, `sticker` ou `other`; ausente, é texto.
     #[serde(default)]
     kind: Option<String>,
     /// Nome do arquivo de um documento, de terceiro como o texto.
@@ -37,6 +37,9 @@ pub(super) struct DraftFile {
 pub(crate) struct Draft {
     id: String,
     origin: String,
+    /// `group` ou `contact`; ausente, conversa individual.
+    #[serde(default)]
+    chat_kind: Option<String>,
     chat_number: String,
     #[serde(default)]
     chat_name: Option<String>,
@@ -63,21 +66,29 @@ impl Draft {
     /// Quem fala quando a mensagem não diz, e o nome da foto: o nome do contato, ou o número sem ele.
     fn contact(&self) -> &str { self.chat_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(&self.chat_number) }
 
+    /// Quem falou numa mensagem dele, a mesma regra do Expo (`recentSpeaker` do core): no grupo, só o remetente (vazio fica
+    /// só a hora); na conversa individual, o nome da conversa, senão o remetente, senão o número.
+    fn speaker<'a>(&'a self, r: &'a Recent) -> &'a str {
+        let sender = r.sender.as_deref().filter(|s| !s.is_empty());
+        if self.chat_kind.as_deref() == Some("group") { return sender.unwrap_or_default(); }
+        self.chat_name.as_deref().filter(|name| !name.is_empty()).or(sender).unwrap_or(&self.chat_number)
+    }
+
     /// Os balões das últimas mensagens, prontos para desenhar.
     pub(crate) fn bubbles(&self) -> Vec<RecentBubble> {
-        let contact = self.contact();
         self.recent.iter().flatten().map(|r| {
             let (tag, text) = recent_body(r);
             let at = r.at.as_deref().map(clock).unwrap_or_default();
-            let who = if r.from_me { "" } else { r.sender.as_deref().filter(|s| !s.is_empty()).unwrap_or(contact) };
+            let who = if r.from_me { "" } else { self.speaker(r) };
             let meta = [who, at.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
             RecentBubble { from_me: r.from_me, tag, text, meta }
         }).collect()
     }
 }
 
-/// Uma das últimas mensagens já resolvida: etiqueta do tipo, texto marcado e a linha de baixo (quem, nas dele, e a hora).
-pub(crate) struct RecentBubble { from_me: bool, tag: Option<String>, text: MarkedText, meta: String }
+/// Uma das últimas mensagens já resolvida: a chave da etiqueta do tipo, o texto marcado (`None`: a palavra do tipo) e a linha
+/// de baixo (quem, nas dele, e a hora). As palavras do tipo saem no desenho, para acompanhar a troca de idioma.
+pub(crate) struct RecentBubble { from_me: bool, tag: Option<&'static str>, text: Option<MarkedText>, meta: String }
 
 /// Rascunhos pendentes do evento; `None` = corpo que não se lê (o anterior fica). Rascunho torto ou que não está mais
 /// pendente sai da lista: só `pending` aceita resposta. Lê cada rascunho direto do evento, sem copiar o JSON.
@@ -146,17 +157,16 @@ fn kind_key(kind: Option<&str>) -> Option<&'static str> {
     })
 }
 
-/// O que o balão mostra: a etiqueta do tipo em maiúsculas e o texto já marcado. O texto é a legenda; em documento sem
-/// legenda, o nome do arquivo; sem nenhum, a palavra do tipo.
-pub(super) fn recent_body(r: &Recent) -> (Option<String>, MarkedText) {
+/// O que o balão mostra: a chave da etiqueta do tipo e o texto já marcado. O texto é a legenda; em documento sem legenda, o
+/// nome do arquivo; sem nenhum, `None`, e o balão mostra a palavra do tipo.
+pub(super) fn recent_body(r: &Recent) -> (Option<&'static str>, Option<MarkedText>) {
     let text = r.text.as_deref().unwrap_or_default();
-    let Some(key) = kind_key(r.kind.as_deref()) else { return (None, mark_invisibles(text)) };
-    let word = tr_shared(key, &[]);
+    let Some(key) = kind_key(r.kind.as_deref()) else { return (None, Some(mark_invisibles(text))) };
     let file = r.file_name.as_deref().filter(|_| r.kind.as_deref() == Some("document")).unwrap_or_default();
-    let shown = if !text.trim().is_empty() { mark_invisibles(text) }
-        else if !file.trim().is_empty() { mark_invisibles(file) }
-        else { (word.clone().into(), Vec::new()) };
-    (Some(word.to_uppercase()), shown)
+    let shown = if !text.trim().is_empty() { Some(mark_invisibles(text)) }
+        else if !file.trim().is_empty() { Some(mark_invisibles(file)) }
+        else { None };
+    (Some(key), shown)
 }
 
 // A mesma lista do `whatsappOutbox.ts` do core, conferida pelos casos de `whatsappInvisible.fixtures.json`: o que não
@@ -319,7 +329,8 @@ impl WhatsAppOutbox {
                         card.text = mark_invisibles(&draft.text);
                         if let Some(editor) = &mut card.editor { editor.original = normalize_newlines(&draft.text); }
                     }
-                    if (&card.draft.recent, &card.draft.chat_name, &card.draft.chat_number) != (&draft.recent, &draft.chat_name, &draft.chat_number) {
+                    if (&card.draft.recent, &card.draft.chat_kind, &card.draft.chat_name, &card.draft.chat_number)
+                        != (&draft.recent, &draft.chat_kind, &draft.chat_name, &draft.chat_number) {
                         card.bubbles = draft.bubbles();
                     }
                     if card.draft.chat_avatar != draft.chat_avatar
@@ -579,11 +590,15 @@ fn warn_line(text: String) -> Div { div().text_color(theme::warning()).whitespac
 /// Uma das últimas mensagens como balão: as minhas à direita, as dele à esquerda; embaixo, a hora (e quem, nas dele). Mídia
 /// ganha a etiqueta do tipo antes do texto.
 fn bubble(b: &RecentBubble, mark: HighlightStyle) -> AnyElement {
-    let (shown, marks) = &b.text;
-    let text = div().min_w_0().whitespace_normal().child(StyledText::new(shown.clone()).with_highlights(marks.iter().map(|range| (range.clone(), mark))));
-    let content = match b.tag.clone() {
-        Some(tag) => div().flex().items_start().gap(px(5.)).text_color(theme::muted())
-            .child(div().flex_shrink_0().px(px(4.)).rounded(px(4.)).bg(theme::hover()).text_size(px(10.)).child(tag))
+    let word = b.tag.map(|key| tr_shared(key, &[]));
+    let (shown, marks) = match &b.text {
+        Some((shown, marks)) => (shown.clone(), marks.as_slice()),
+        None => (word.clone().unwrap_or_default().into(), &[][..]),
+    };
+    let text = div().min_w_0().whitespace_normal().child(StyledText::new(shown).with_highlights(marks.iter().map(|range| (range.clone(), mark))));
+    let content = match word {
+        Some(word) => div().flex().items_start().gap(px(5.)).text_color(theme::muted())
+            .child(div().flex_shrink_0().px(px(4.)).rounded(px(4.)).bg(theme::hover()).text_size(px(10.)).child(word.to_uppercase()))
             .child(text),
         None => text,
     };
@@ -784,11 +799,11 @@ mod tests {
         assert_eq!(list[0].chat_avatar.as_deref(), Some("/9j/AAAA"));
         let recent = list[0].recent.clone().unwrap();
         assert_eq!((recent[0].kind.as_deref(), recent[0].file_name.as_deref()), (Some("document"), Some("nota.pdf")));
-        // Rascunho da 0.2.0: sem foto e sem tipo, a recente é texto.
+        // Rascunho sem foto e sem tipo: a recente é texto.
         let old = parse(&json!({"drafts": [draft("d2", "pending")]})).unwrap();
         assert_eq!(old[0].chat_avatar, None);
-        let (tag, (shown, _)) = recent_body(&old[0].recent.clone().unwrap()[0]);
-        assert_eq!((tag, shown.to_string()), (None, "oi".to_owned()));
+        let (tag, shown) = recent_body(&old[0].recent.clone().unwrap()[0]);
+        assert_eq!((tag, shown.map(|(shown, _)| shown.to_string())), (None, Some("oi".to_owned())));
         let mut no_photo = draft("d3", "pending");
         no_photo["chat_avatar"] = Value::Null;
         assert_eq!(parse(&json!({"drafts": [no_photo]})).unwrap()[0].chat_avatar, None);
@@ -814,9 +829,12 @@ mod tests {
 
     fn recent(value: Value) -> Recent { serde_json::from_value(value).unwrap() }
 
+    /// O balão como aparece no idioma da hora: a etiqueta traduzida em maiúsculas e o texto, ou a palavra do tipo.
     fn body(value: Value) -> (Option<String>, String) {
-        let (tag, (shown, _)) = recent_body(&recent(value));
-        (tag, shown.to_string())
+        let (tag, shown) = recent_body(&recent(value));
+        let word = tag.map(|key| tr_shared(key, &[]));
+        let shown = shown.map(|(shown, _)| shown.to_string()).or_else(|| word.clone()).unwrap_or_default();
+        (word.map(|word| word.to_uppercase()), shown)
     }
 
     #[test]
@@ -876,8 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn bubbles_say_who_spoke_and_fall_back_to_the_contact_then_the_number() {
-        crate::i18n::english_in_this_thread(false);
+    fn bubbles_say_who_spoke_by_the_kind_of_chat() {
         let mut d = draft("d1", "pending");
         d["recent"] = json!([
             {"from_me": false, "sender": "Ana", "text": "oi"},
@@ -885,12 +902,23 @@ mod tests {
             {"from_me": true, "sender": "eu", "kind": "image", "text": ""},
         ]);
         let bubbles = |d: &Value| parse(&json!({"drafts": [d]})).unwrap()[0].bubbles();
+        let metas = |d: &Value| bubbles(d).iter().map(|b| b.meta.clone()).collect::<Vec<_>>();
+        // Conversa individual: o nome da conversa, senão o remetente, senão o número.
         let got = bubbles(&d);
-        assert_eq!(got.iter().map(|b| (b.from_me, b.meta.as_str(), b.tag.as_deref())).collect::<Vec<_>>(),
-            [(false, "Ana", None), (false, "Carlos", None), (true, "", Some("FOTO"))]);
-        assert_eq!(got[1].text.0.to_string(), "tudo?");
+        assert_eq!(got.iter().map(|b| (b.from_me, b.meta.as_str(), b.tag)).collect::<Vec<_>>(),
+            [(false, "Carlos", None), (false, "Carlos", None), (true, "", Some("whatsapp_draft_kind_image"))]);
+        assert_eq!(got[1].text.as_ref().map(|(shown, _)| shown.to_string()), Some("tudo?".to_owned()));
+        assert!(got[2].text.is_none(), "foto sem legenda mostra a palavra do tipo, traduzida no desenho");
         d["chat_name"] = json!("");
-        assert_eq!(bubbles(&d)[1].meta, "5511987654321");
+        assert_eq!(metas(&d), ["Ana", "5511987654321", ""]);
+        d["chat_kind"] = Value::Null;
+        assert_eq!(metas(&d), ["Ana", "5511987654321", ""], "sem chat_kind, conversa individual");
+        // Grupo: só o remetente; sem ele, a linha fica só com a hora.
+        d["chat_kind"] = json!("group");
+        d["chat_name"] = json!("Família");
+        d["recent"][1]["at"] = json!("2026-11-24T14:02:00Z");
+        let clock = clock("2026-11-24T14:02:00Z");
+        assert_eq!(metas(&d), ["Ana".to_owned(), clock, String::new()]);
         d["recent"] = Value::Null;
         assert!(bubbles(&d).is_empty());
     }

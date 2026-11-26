@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   answerWhatsAppDraft, draftAvatarUri, draftCharCount, draftClock, draftField, draftInitial, draftRefusalEndsCard, draftSecondsLeft,
-  draftTextError, fmtBytes, formatCountdown, getWhatsApp, invisibleMark, markInvisibles, normalizeDraftText, recentBubble,
+  draftTextError, fmtBytes, formatCountdown, getWhatsApp, invisibleMark, markInvisibles, normalizeDraftText, recentBubble, recentSpeaker,
   sendEditedWhatsAppDraft, sentTextMatches, whatsappDraftRefusalText,
   type Server, type WhatsAppDraft, type WhatsAppDraftAnswer, type WhatsAppDraftRecent, type WhatsAppOutboxEvent,
 } from '@hangar/core';
@@ -142,8 +142,6 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
     setField(draft.text);
     setEditing(!editing);
   };
-  // Nome de quem escreveu, embaixo do balão dele: em grupo o remetente, na conversa o nome do contato.
-  const theirName = (r: WhatsAppDraftRecent) => (draft.chat_kind === 'group' ? r.sender : draft.chat_name || r.sender);
   return <>
     <MachineGroup>
       <Block label={m.whatsapp_draft_to()}>
@@ -162,7 +160,7 @@ export function DraftCardView({ draft, edit = false, now, busy, error, onAnswer 
     {draft.recent.length || draft.quoted_text ? <MachineGroup>
       {draft.recent.length ? <Block label={m.whatsapp_draft_recent()}>
         <View style={[styles.chat, { backgroundColor: c.inset }]}>
-          {draft.recent.map((r, i) => <Bubble key={i} recent={r} name={theirName(r)} />)}
+          {draft.recent.map((r, i) => <Bubble key={i} recent={r} name={recentSpeaker(draft, r)} />)}
         </View>
       </Block> : null}
       {draft.quoted_text ? <Block label={m.whatsapp_draft_quoted()} accent={c.accent}>
@@ -209,7 +207,7 @@ const LINK_SLOP = { top: 13, bottom: 13, left: 8, right: 8 };
 const Avatar = memo(function Avatar({ draft }: { draft: WhatsAppDraft }) {
   const c = useSettingsColors();
   const [broken, setBroken] = useState(false);
-  // Fonte estável: o base64 de até 24 KB não vira objeto novo a cada desenho do cartão.
+  // Fonte estável: o base64 da foto não vira objeto novo a cada desenho do cartão.
   const source = useMemo(() => (draft.chat_avatar ? { uri: draftAvatarUri(draft.chat_avatar) } : null), [draft.chat_avatar]);
   if (source && !broken) {
     return <Image source={source} alt={m.whatsapp_draft_avatar({ name: draft.chat_name || draft.chat_number })}

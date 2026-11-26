@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   answerWhatsAppDraft, draftAvatarUri, draftCharCount, draftField, draftInitial, draftRefusalEndsCard, draftSecondsLeft, draftTextError,
-  invisibleMark, markInvisibles, normalizeDraftText, parseWhatsAppOutboxEvent, recentBubble, sendEditedWhatsAppDraft, sentTextMatches,
+  invisibleMark, markInvisibles, normalizeDraftText, parseWhatsAppOutboxEvent, recentBubble, recentSpeaker, sendEditedWhatsAppDraft, sentTextMatches,
   whatsappDraftRefusalText,
 } from './whatsappOutbox';
 import { formatCountdown } from './format';
@@ -174,6 +174,16 @@ describe('balões e foto', () => {
     expect(recentBubble({ kind: 'sticker', text: '', file_name: '' }).tag).toBe(upper(m.whatsapp_draft_kind_sticker()));
   });
 
+  it('quem falou: no grupo só o remetente; na conversa, o nome dela, senão o remetente, senão o número', () => {
+    const contact = { chat_kind: 'contact' as const, chat_name: 'Carlos', chat_number: '5511987654321' };
+    expect(recentSpeaker(contact, { sender: 'Ana' })).toBe('Carlos');
+    expect(recentSpeaker({ ...contact, chat_name: '' }, { sender: 'Ana' })).toBe('Ana');
+    expect(recentSpeaker({ ...contact, chat_name: '' }, { sender: '' })).toBe('5511987654321');
+    const group = { chat_kind: 'group' as const, chat_name: 'Família', chat_number: '120363@g.us' };
+    expect(recentSpeaker(group, { sender: 'Ana' })).toBe('Ana');
+    expect(recentSpeaker(group, { sender: '' })).toBe('');
+  });
+
   it('texto e other mostram só o texto', () => {
     expect(recentBubble({ kind: 'text', text: 'oi', file_name: '' })).toEqual({ tag: null, text: 'oi' });
     expect(recentBubble({ kind: 'other', text: 'enquete', file_name: '' })).toEqual({ tag: null, text: 'enquete' });
@@ -205,6 +215,9 @@ describe('texto editado', () => {
     expect(draftTextError(draftField('a'.repeat(4095) + '\r\n'), false)).toBeUndefined();
     expect(draftTextError(draftField(' \n '), false)).toBe(m.whatsapp_draft_err_text_empty());
     expect(draftTextError(draftField(''), true)).toBeUndefined();
+    // Espaço é o do serviço (Go `strings.TrimSpace`): U+FEFF não é espaço, U+3000 e U+0085 são.
+    expect(draftTextError(draftField('\uFEFF'), false)).toBeUndefined();
+    expect(draftTextError(draftField('\u3000\u0085\u00A0\u202F'), false)).toBe(m.whatsapp_draft_err_text_empty());
   });
 
   it('envio editado vai na rota própria com o via e o texto normalizado, e devolve o 202', async () => {

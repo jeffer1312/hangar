@@ -266,6 +266,25 @@ it('últimas mensagens em balões: as minhas à direita, as dele à esquerda com
   expect(container.textContent).toContain('escuta⟨U+200B⟩');
 });
 
+it('embaixo do balão dele: no grupo só o remetente; na conversa sem nome, o remetente e depois o número', async () => {
+  const bubble = (text: string) => [...container.querySelectorAll<HTMLElement>('[aria-label]')]
+    .find((e) => e.tagName === 'DIV' && e.textContent?.startsWith(text))!;
+  await openDraft('g1', event(draft('g1', { chat_kind: 'group', chat_name: 'Família', chat_number: '120363@g.us', recent: [
+    recent({ sender: 'Ana', text: 'oi' }),
+    recent({ sender: '', text: 'tudo?' }),
+  ] })));
+  expect(bubble('oi').textContent).toContain('Ana · ');
+  expect(bubble('oi').textContent).not.toContain('Família');
+  expect(bubble('tudo?').textContent).not.toContain(' · ');
+
+  await openDraft('g2', event(draft('g2', { chat_name: '', recent: [
+    recent({ sender: 'Ana', text: 'oi' }),
+    recent({ sender: '', text: 'tudo?' }),
+  ] })));
+  expect(bubble('oi').textContent).toContain('Ana · ');
+  expect(bubble('tudo?').textContent).toContain('5511987654321 · ');
+});
+
 it('Editar só aparece quando a máquina diz que o serviço aceita a edição', async () => {
   await openDraft('e1', event(draft('e1')));
   expect(button(m.whatsapp_draft_edit())).toBeNull();
