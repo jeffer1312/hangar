@@ -5,6 +5,7 @@ import {
   deleteIntegration,
   listIntegrationTools,
   openIntegrationOAuthOnDesktop,
+  registrarDiag,
   resolveMobilePublicBaseUrl,
   startIntegrationOAuth,
   testIntegration,
@@ -44,9 +45,10 @@ export function IntegrationDetailSheet({
   integration: IntegrationView;
   autoStartOAuth?: boolean;
   onClose: () => void;
-  onChanged: () => void;
+  onChanged: (updated?: IntegrationView) => void;
   onEdit: (integration: IntegrationView) => void;
 }) {
+  const [localIntegration, setLocalIntegration] = useState(integration);
   const [tools, setTools] = useState<IntegrationToolSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -59,8 +61,17 @@ export function IntegrationDetailSheet({
   const alive = useRef(true);
   const autoStartedFor = useRef<string | null>(null);
   const toolsVersionRef = useRef(0);
+  const view = localIntegration.id === integration.id ? localIntegration : integration;
   const currentTargetRef = useRef({ serverId: server.id, baseUrl: server.baseUrl, id: integration.id });
   currentTargetRef.current = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
+
+  useEffect(() => {
+    setLocalIntegration(integration);
+  }, [integration]);
+
+  useEffect(() => {
+    if (view.status === 'ready') setOauthStarted(false);
+  }, [view.status]);
 
   const isSameTarget = (snap: { serverId: string; baseUrl: string; id: string }) => {
     const cur = currentTargetRef.current;
@@ -78,8 +89,18 @@ export function IntegrationDetailSheet({
     try {
       const list = await listIntegrationTools(server, integration.id);
       if (isSameTarget(snap) && version === toolsVersionRef.current) setTools(list);
-    } catch {
-      /* Cache vazio ou servidor sem suporte mantém lista vazia até o primeiro Testar. */
+    } catch (e) {
+      // Cache vazio ou leitura pós-PATCH com falha mantém a lista vazia até nova leitura bem-sucedida.
+      const msg = integrationErrorText(e);
+      registrarDiag({
+        evento: 'integrations.tools_refresh_failed',
+        nivel: 'aviso',
+        tela: 'integrations',
+        codigo: typeof (e as { code?: unknown } | null)?.code === 'string'
+          ? (e as { code: string }).code
+          : e instanceof Error ? e.name : 'erro',
+        detalhe: `${integration.id}: ${msg}`.slice(0, 300),
+      }, server.baseUrl);
     }
   }, [server, integration.id]);
 
@@ -95,12 +116,12 @@ export function IntegrationDetailSheet({
     return () => { toolsVersionRef.current += 1; };
   }, [refreshTools]);
 
-  const supportsOAuth = integration.transport.kind === 'remote_http'
-    && (integration.auth.kind === 'oauth_dcr' || integration.auth.kind === 'oauth_manual_client');
+  const supportsOAuth = view.transport.kind === 'remote_http'
+    && (view.auth.kind === 'oauth_dcr' || view.auth.kind === 'oauth_manual_client');
 
   const startOAuth = useCallback(async () => {
     if (busy || !supportsOAuth) return;
-    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: view.id };
     setBusy(true);
     setOauthOpening(true);
     setOauthStarted(false);
@@ -108,7 +129,7 @@ export function IntegrationDetailSheet({
     setDesktopOpened(false);
     setError('');
     try {
-      const result = await startIntegrationOAuth(server, integration.id, {
+      const result = await startIntegrationOAuth(server, view.id, {
         origin_client: 'mobile',
         public_base_url: resolveMobilePublicBaseUrl(server),
       });
@@ -119,7 +140,13 @@ export function IntegrationDetailSheet({
           throw new Error(m.integrations_validation_url());
         }
         await Linking.openURL(parsed.href);
-        if (isSameTarget(snap)) setOauthStarted(true);
+        registrarDiag({
+          evento: 'integrations.oauth_browser_opened',
+          nivel: 'info',
+          tela: 'integrations',
+          detalhe: view.id,
+        }, server.baseUrl);
+        if (isSameTarget(snap) && view.status !== 'ready') setOauthStarted(true);
       } else {
         setHandoff(result);
       }
@@ -134,22 +161,22 @@ export function IntegrationDetailSheet({
         setBusy(false);
       }
     }
-  }, [busy, supportsOAuth, server, integration.id]);
+  }, [busy, supportsOAuth, server, view.id, view.status]);
 
   useEffect(() => {
     if (!autoStartOAuth || !supportsOAuth) return;
-    if (autoStartedFor.current === integration.id) return;
-    autoStartedFor.current = integration.id;
+    if (autoStartedFor.current === view.id) return;
+    autoStartedFor.current = view.id;
     void startOAuth();
-  }, [autoStartOAuth, supportsOAuth, integration.id, startOAuth]);
+  }, [autoStartOAuth, supportsOAuth, view.id, startOAuth]);
 
   const openOnDesktop = async () => {
     if (busy || !handoff) return;
-    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: view.id };
     setBusy(true);
     setError('');
     try {
-      await openIntegrationOAuthOnDesktop(server, integration.id, handoff.authorize_url);
+      await openIntegrationOAuthOnDesktop(server, view.id, handoff.authorize_url);
       if (!isSameTarget(snap)) return;
       setDesktopOpened(true);
       toast.ok(m.integrations_oauth_desktop_opened());
@@ -165,18 +192,20 @@ export function IntegrationDetailSheet({
 
   const runTest = async () => {
     if (busy) return;
-    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: view.id };
     setBusy(true);
     setTesting(true);
     setError('');
     setTestSummary('');
     try {
-      const res = await testIntegration(server, integration.id);
+      const res = await testIntegration(server, view.id);
       if (!isSameTarget(snap)) return;
       if (res.status === 'ready') {
         // Invalida leituras de cache mais antigas para não sobrescrever as ferramentas deste teste.
         toolsVersionRef.current += 1;
         setTools(res.tools);
+        setOauthStarted(false);
+        setHandoff(null);
         const msg = m.integrations_test_ok({ n: res.tools.length });
         setTestSummary(msg);
         toast.ok(msg);
@@ -203,15 +232,22 @@ export function IntegrationDetailSheet({
 
   const patch = async (change: Parameters<typeof updateIntegration>[2], reloadTools = false) => {
     if (busy) return;
-    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: view.id };
     setBusy(true);
     setError('');
     try {
-      await updateIntegration(server, integration.id, change);
+      const updated = await updateIntegration(server, view.id, change);
       if (!isSameTarget(snap)) return;
+      // Aplica o estado retornado antes de reabilitar as chaves para evitar PATCH repetido com valor velho.
+      setLocalIntegration(updated);
+      if (change.policy !== undefined) {
+        // Descarta permissões antigas até a leitura pós-PATCH confirmar o novo acesso de cada ferramenta.
+        toolsVersionRef.current += 1;
+        setTools([]);
+      }
       if (reloadTools) await refreshTools();
       toast.ok(m.integrations_saved());
-      onChanged();
+      onChanged(updated);
     } catch (e) {
       if (isSameTarget(snap)) {
         setError(integrationErrorText(e));
@@ -223,7 +259,7 @@ export function IntegrationDetailSheet({
   };
 
   const changePolicy = (policy: PermissionPolicy) => {
-    if (policy === integration.policy) return;
+    if (policy === view.policy) return;
     void patch({ policy }, true);
   };
 
@@ -232,8 +268,8 @@ export function IntegrationDetailSheet({
   };
 
   const confirmRemove = () => {
-    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: integration.id };
-    Alert.alert(m.integrations_remove_confirm({ name: integration.name }), undefined, [
+    const snap = { serverId: server.id, baseUrl: server.baseUrl, id: view.id };
+    Alert.alert(m.integrations_remove_confirm({ name: view.name }), undefined, [
       { text: m.integrations_cancel(), style: 'cancel' },
       {
         text: m.integrations_remove(),
@@ -241,7 +277,7 @@ export function IntegrationDetailSheet({
         onPress: () => {
           setBusy(true);
           setError('');
-          void deleteIntegration(server, integration.id)
+          void deleteIntegration(server, view.id)
             .then(() => {
               if (!isSameTarget(snap)) return;
               toast.ok(m.integrations_removed());
@@ -262,50 +298,50 @@ export function IntegrationDetailSheet({
     ]);
   };
 
-  const oauthActionTitle = integration.status === 'auth_required'
+  const oauthActionTitle = view.status === 'auth_required'
     ? m.integrations_authorize()
     : m.integrations_reconnect();
 
   return (
-    <MachineSheet title={integration.name} onClose={onClose}>
+    <MachineSheet title={view.name} onClose={onClose}>
       <MachineGroup>
         <MachineRow
-          title={integration.id}
-          description={integrationTransportSummary(integration)}
-          value={integrationStatusLabel(integration.status)}
-          valueTone={integrationStatusTone(integration.status)}
+          title={view.id}
+          description={integrationTransportSummary(view)}
+          value={integrationStatusLabel(view.status)}
+          valueTone={integrationStatusTone(view.status)}
         />
         <MachineRow
           title={m.integrations_enabled()}
-          value={integration.enabled ? m.integrations_yes() : m.integrations_no()}
-          checked={integration.enabled}
+          value={view.enabled ? m.integrations_yes() : m.integrations_no()}
+          checked={view.enabled}
           disabled={busy}
           onPress={() => {
             haptic.selection();
-            void patch({ enabled: !integration.enabled });
+            void patch({ enabled: !view.enabled });
           }}
         />
         <MachineRow
           title={m.integrations_field_pinned()}
           description={m.integrations_field_pinned_hint()}
-          value={integration.pinned ? m.integrations_yes() : m.integrations_no()}
-          checked={integration.pinned}
+          value={view.pinned ? m.integrations_yes() : m.integrations_no()}
+          checked={view.pinned}
           disabled={busy}
           onPress={() => {
             haptic.selection();
-            void patch({ pinned: !integration.pinned });
+            void patch({ pinned: !view.pinned });
           }}
         />
         <MachineRow
           title={m.integrations_field_projects()}
-          value={integrationProjectsLabel(integration.projects)}
+          value={integrationProjectsLabel(view.projects)}
           disabled={busy}
-          onPress={() => onEdit(integration)}
+          onPress={() => onEdit(view)}
         />
       </MachineGroup>
 
-      {integration.last_error ? <Notice text={integration.last_error} error /> : null}
-      {integration.preset?.startsWith('google-') && integration.status === 'auth_expired'
+      {view.last_error ? <Notice text={view.last_error} error /> : null}
+      {view.preset?.startsWith('google-') && view.status === 'auth_expired'
         ? <InfoNotice text={m.integrations_google_testing_hint()} />
         : null}
 
@@ -314,19 +350,19 @@ export function IntegrationDetailSheet({
           <MachineRow
             title={oauthOpening ? m.integrations_oauth_opening() : oauthActionTitle}
             action
-            disabled={busy || !integration.enabled}
+            disabled={busy || !view.enabled}
             onPress={() => void startOAuth()}
           />
         ) : null}
         <MachineRow
           title={testing ? m.integrations_testing() : m.integrations_test()}
           action
-          disabled={busy || !integration.enabled}
+          disabled={busy || !view.enabled}
           onPress={() => void runTest()}
         />
       </MachineGroup>
 
-      {oauthStarted ? <InfoNotice text={m.integrations_oauth_started()} /> : null}
+      {oauthStarted && view.status !== 'ready' ? <InfoNotice text={m.integrations_oauth_started()} /> : null}
       {handoff ? (
         <>
           <InfoNotice text={handoff.reason ? `${m.integrations_oauth_handoff_title()}: ${handoff.reason}` : m.integrations_oauth_handoff_title()} />
@@ -346,7 +382,7 @@ export function IntegrationDetailSheet({
 
       <MachineHelp>{m.integrations_field_policy()}</MachineHelp>
       <MachineGroup>
-        <IntegrationPolicyRows value={integration.policy} onChange={changePolicy} disabled={busy} />
+        <IntegrationPolicyRows value={view.policy} onChange={changePolicy} disabled={busy} />
       </MachineGroup>
 
       <MachineHelp>{m.integrations_tools_heading()}</MachineHelp>
@@ -366,7 +402,7 @@ export function IntegrationDetailSheet({
       )}
 
       <MachineGroup>
-        <MachineRow title={m.integrations_edit()} action disabled={busy} onPress={() => onEdit(integration)} />
+        <MachineRow title={m.integrations_edit()} action disabled={busy} onPress={() => onEdit(view)} />
         <MachineRow title={m.integrations_remove()} danger disabled={busy} onPress={confirmRemove} />
       </MachineGroup>
     </MachineSheet>

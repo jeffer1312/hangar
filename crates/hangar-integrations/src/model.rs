@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use hangar_core::ids::valid_slug;
 
+use crate::secrets::IntegrationSecrets;
+
 const MAX_SLUG_BYTES: usize = 64;
 const MAX_NAME_BYTES: usize = 200;
 const MAX_PRESET_BYTES: usize = 128;
@@ -317,6 +319,44 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
+/// Valida em conjunto a configuração pública e os segredos da integração.
+///
+/// Rejeita qualquer configuração inválida ou URL `http://` não-loopback que carregue
+/// credenciais (`bearer_token`, `oauth`) ou cabeçalhos secretos (`secrets.headers`),
+/// garantindo regra fail-closed única entre a API HTTP e o cliente MCP.
+///
+/// # Errors
+///
+/// Retorna mensagem legível em português quando a validação da configuração ou dos segredos falha.
+pub fn validate_config_and_secrets(
+    config: &IntegrationConfig,
+    secrets: &IntegrationSecrets,
+) -> Result<(), String> {
+    config.validate().map_err(|err| err.to_string())?;
+    if let Transport::RemoteHttp { url, .. } = &config.transport
+        && is_plaintext_non_loopback_http(url)
+        && (!secrets.headers.is_empty()
+            || secrets
+                .bearer_token
+                .as_ref()
+                .is_some_and(|tok| !tok.trim().is_empty())
+            || secrets.oauth.as_ref().is_some_and(|oauth| {
+                !oauth.access_token.trim().is_empty()
+                    || oauth
+                        .refresh_token
+                        .as_ref()
+                        .is_some_and(|rt| !rt.trim().is_empty())
+                    || oauth.registered_client_secret.is_some()
+            }))
+    {
+        return Err(
+            "URL http:// fora de loopback (localhost, 127.0.0.1, ::1) não permite autenticação nem cabeçalhos extras; use https://"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// Calcula a impressão digital SHA-256 de destino e autenticação da integração.
 ///
 /// Cobre transporte (`RemoteHttp.url` canônica ou `LocalStdio.command`/`cwd`) e `auth`
@@ -442,10 +482,16 @@ fn parse_http_parts(url: &str) -> Option<(String, String, bool)> {
     {
         return None;
     }
-    let (scheme, rest) = if url.len() >= 8 && url[..8].eq_ignore_ascii_case("https://") {
-        ("https".to_owned(), &url[8..])
-    } else if url.len() >= 7 && url[..7].eq_ignore_ascii_case("http://") {
-        ("http".to_owned(), &url[7..])
+    let (scheme, rest) = if url
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
+    {
+        ("https".to_owned(), url.get(8..)?)
+    } else if url
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+    {
+        ("http".to_owned(), url.get(7..)?)
     } else {
         return None;
     };

@@ -21,49 +21,91 @@ import { integrationErrorText } from '../../src/features/integrations/errors';
 import { useServers } from '../../src/stores/servers';
 import * as m from '../../src/paraglide/messages';
 
-type EditorState =
+type EditorDraft =
   | { mode: 'custom' }
   | { mode: 'preset'; preset: IntegrationPreset }
   | { mode: 'edit'; integration: IntegrationView };
 
+type EditorState = EditorDraft & {
+  serverKey: string;
+  instance: number;
+};
+
+type SelectionState = {
+  serverKey: string;
+  id: string;
+  /** Usado apenas durante a transição de criação antes da lista refletir o item novo. */
+  pendingNew?: IntegrationView;
+  autoStartOAuth: boolean;
+};
+
+const serverScopeKey = (srv: { id: string; baseUrl: string; token?: string | null } | null | undefined) =>
+  srv ? `${srv.id}::${srv.baseUrl}::${srv.token ?? ''}` : null;
+
 export default function IntegrationsScreen() {
   const server = useServers((s) => s.active());
+  const serverKey = serverScopeKey(server);
   const [integrations, setIntegrations] = useState<IntegrationView[] | null>(null);
   const [presets, setPresets] = useState<IntegrationPreset[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [fallbackSelected, setFallbackSelected] = useState<IntegrationView | null>(null);
-  const [autoStartOAuth, setAutoStartOAuth] = useState(false);
+  const [selection, setSelection] = useState<SelectionState | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
 
   const generation = useRef(0);
   const hasLoadedRef = useRef(false);
+  const manualLoadingRef = useRef(false);
+  const editorSeqRef = useRef(0);
+  const activeEditorInstanceRef = useRef<number | null>(null);
   const serverRef = useRef(server);
   serverRef.current = server;
+  const serverKeyRef = useRef(serverKey);
+  serverKeyRef.current = serverKey;
+
+  const openEditor = useCallback((draft: EditorDraft) => {
+    const key = serverKeyRef.current;
+    if (!key) return;
+    const instance = ++editorSeqRef.current;
+    activeEditorInstanceRef.current = instance;
+    setEditor({ ...draft, serverKey: key, instance });
+  }, []);
+
+  const closeEditor = useCallback((instance?: number) => {
+    if (instance !== undefined && activeEditorInstanceRef.current !== instance) return;
+    activeEditorInstanceRef.current = null;
+    setEditor(null);
+  }, []);
 
   const load = useCallback((opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
     const now = ++generation.current;
     const current = serverRef.current;
-    if (!current) return;
+    const currentKey = serverKeyRef.current;
+    if (!current || !currentKey) return;
     if (!silent) {
+      manualLoadingRef.current = true;
       setLoading(true);
       setError('');
     }
     void Promise.all([listIntegrations(current), listCatalog(current)])
       .then(([list, catalog]) => {
-        const active = serverRef.current;
-        if (now !== generation.current || !active || active.id !== current.id || active.baseUrl !== current.baseUrl) return;
+        if (now !== generation.current || serverKeyRef.current !== currentKey) return;
         hasLoadedRef.current = true;
         setError('');
         setIntegrations(list);
         setPresets(catalog);
+        setSelection((cur) => {
+          if (!cur || cur.serverKey !== currentKey) return cur;
+          if (list.some((item) => item.id === cur.id)) {
+            return cur.pendingNew ? { ...cur, pendingNew: undefined } : cur;
+          }
+          // Recarga válida confirmou que o item não existe mais neste servidor.
+          return null;
+        });
       })
       .catch((e: unknown) => {
-        const active = serverRef.current;
-        if (now !== generation.current || !active || active.id !== current.id || active.baseUrl !== current.baseUrl) return;
+        if (now !== generation.current || serverKeyRef.current !== currentKey) return;
         if (silent) {
           const msg = integrationErrorText(e) || m.integrations_load_error();
           // Atualização automática em segundo plano não derruba nem polui a lista já carregada.
@@ -82,22 +124,31 @@ export default function IntegrationsScreen() {
         setError(integrationErrorText(e) || m.integrations_load_error());
       })
       .finally(() => {
-        if (!silent && now === generation.current) setLoading(false);
+        // Se uma carga silenciosa assumiu uma carga manual em andamento, ela encerra o indicador ao concluir.
+        if (now === generation.current && serverKeyRef.current === currentKey && (!silent || manualLoadingRef.current)) {
+          manualLoadingRef.current = false;
+          setLoading(false);
+        }
       });
   }, []);
 
   useEffect(() => {
     hasLoadedRef.current = false;
+    manualLoadingRef.current = false;
+    activeEditorInstanceRef.current = null;
+    setLoading(false);
     setIntegrations(null);
     setPresets([]);
     setError('');
-    setSelectedId(null);
-    setFallbackSelected(null);
-    setAutoStartOAuth(false);
+    setSelection(null);
     setEditor(null);
     load();
-    return () => { generation.current++; };
-  }, [load, server?.id, server?.baseUrl, server?.token]);
+    return () => {
+      generation.current++;
+      manualLoadingRef.current = false;
+      activeEditorInstanceRef.current = null;
+    };
+  }, [load, serverKey]);
 
   // Ao voltar do navegador após concluir o OAuth, atualiza o estado das integrações.
   useEffect(() => {
@@ -129,16 +180,15 @@ export default function IntegrationsScreen() {
 
   const existingIds = useMemo(() => (integrations ?? []).map((i) => i.id), [integrations]);
 
-  const selected = useMemo(() => {
-    if (!selectedId) return null;
-    return integrations?.find((i) => i.id === selectedId)
-      ?? (fallbackSelected?.id === selectedId ? fallbackSelected : null);
-  }, [selectedId, integrations, fallbackSelected]);
+  const activeSelection = selection && serverKey && selection.serverKey === serverKey ? selection : null;
+  const activeEditor = editor && serverKey && editor.serverKey === serverKey ? editor : null;
 
-  const sameServer = (target: { id: string; baseUrl: string }) => {
-    const active = serverRef.current;
-    return !!active && active.id === target.id && active.baseUrl === target.baseUrl;
-  };
+  const selected = useMemo(() => {
+    if (!activeSelection) return null;
+    return integrations?.find((i) => i.id === activeSelection.id) ?? activeSelection.pendingNew ?? null;
+  }, [activeSelection, integrations]);
+
+  const sameServerScope = (ownerKey: string) => serverKeyRef.current === ownerKey;
 
   return (
     <Pagina
@@ -183,9 +233,8 @@ export default function IntegrationsScreen() {
                   key={item.id}
                   integration={item}
                   onPress={(picked) => {
-                    setAutoStartOAuth(false);
-                    setFallbackSelected(picked);
-                    setSelectedId(picked.id);
+                    if (!serverKey) return;
+                    setSelection({ serverKey, id: picked.id, autoStartOAuth: false });
                   }}
                 />
               ))}
@@ -196,7 +245,7 @@ export default function IntegrationsScreen() {
             <MachineRow
               title={m.integrations_add_custom()}
               action
-              onPress={() => setEditor({ mode: 'custom' })}
+              onPress={() => openEditor({ mode: 'custom' })}
             />
             <MachineRow
               title={m.integrations_refresh()}
@@ -216,7 +265,7 @@ export default function IntegrationsScreen() {
                   key={preset.id}
                   preset={preset}
                   connectedCount={countByPreset.get(preset.id) ?? 0}
-                  onPress={(picked) => setEditor({ mode: 'preset', preset: picked })}
+                  onPress={(picked) => openEditor({ mode: 'preset', preset: picked })}
                 />
               ))}
             </MachineGroup>
@@ -224,59 +273,67 @@ export default function IntegrationsScreen() {
         </>
       ) : null}
 
-      {server && selected ? (
+      {server && serverKey && activeSelection && selected ? (
         <IntegrationDetailSheet
           server={server}
           integration={selected}
-          autoStartOAuth={autoStartOAuth}
+          autoStartOAuth={activeSelection.autoStartOAuth}
           onClose={() => {
-            if (!sameServer(server)) return;
-            setSelectedId(null);
-            setFallbackSelected(null);
-            setAutoStartOAuth(false);
+            if (!sameServerScope(activeSelection.serverKey)) return;
+            setSelection(null);
           }}
-          onChanged={() => {
-            if (sameServer(server)) load();
+          onChanged={(updated) => {
+            if (!sameServerScope(activeSelection.serverKey)) return;
+            if (updated) {
+              setIntegrations((cur) => (cur ? cur.map((item) => (item.id === updated.id ? updated : item)) : cur));
+            }
+            load();
           }}
           onEdit={(item) => {
-            if (!sameServer(server)) return;
-            setSelectedId(null);
-            setFallbackSelected(null);
-            setAutoStartOAuth(false);
-            setEditor({ mode: 'edit', integration: item });
+            if (!sameServerScope(activeSelection.serverKey)) return;
+            setSelection(null);
+            openEditor({ mode: 'edit', integration: item });
           }}
         />
       ) : null}
 
-      {server && editor ? (
+      {server && activeEditor ? (
         <IntegrationEditorSheet
+          key={activeEditor.instance}
           server={server}
           preset={
-            editor.mode === 'preset'
-              ? editor.preset
-              : editor.mode === 'edit'
-                ? (presets.find((p) => p.id === editor.integration.preset) ?? null)
+            activeEditor.mode === 'preset'
+              ? activeEditor.preset
+              : activeEditor.mode === 'edit'
+                ? (presets.find((p) => p.id === activeEditor.integration.preset) ?? null)
                 : null
           }
-          editing={editor.mode === 'edit' ? editor.integration : null}
+          editing={activeEditor.mode === 'edit' ? activeEditor.integration : null}
           existingIds={existingIds}
           onClose={() => {
-            if (sameServer(server)) setEditor(null);
+            if (!sameServerScope(activeEditor.serverKey)) return;
+            closeEditor(activeEditor.instance);
           }}
           onSaved={(saved, { isNew }) => {
-            // Descarta gravação que concluiu depois da troca de máquina ativa.
-            if (!sameServer(server)) return;
+            // Descarta gravação que concluiu depois da troca de escopo (máquina, URL ou token).
+            if (!sameServerScope(activeEditor.serverKey)) return;
             setIntegrations((cur) => {
               if (!cur) return [saved];
               const idx = cur.findIndex((x) => x.id === saved.id);
               if (idx >= 0) return cur.map((x) => (x.id === saved.id ? saved : x));
               return [...cur, saved];
             });
-            const isOAuth = saved.auth.kind === 'oauth_dcr' || saved.auth.kind === 'oauth_manual_client';
-            if (isNew && isOAuth) {
-              setFallbackSelected(saved);
-              setAutoStartOAuth(true);
-              setSelectedId(saved.id);
+            // Só abre detalhe/OAuth se esta gravação ainda pertencer à instância ativa do editor.
+            if (activeEditorInstanceRef.current === activeEditor.instance) {
+              const isOAuth = saved.auth.kind === 'oauth_dcr' || saved.auth.kind === 'oauth_manual_client';
+              if (isNew && isOAuth) {
+                setSelection({
+                  serverKey: activeEditor.serverKey,
+                  id: saved.id,
+                  pendingNew: saved,
+                  autoStartOAuth: true,
+                });
+              }
             }
             load();
           }}

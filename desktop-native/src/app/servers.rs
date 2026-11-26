@@ -262,6 +262,12 @@ impl Hangar {
                         if changed { self.work_reviews_changed(&key, cx); }
                         stored.is_some()
                     }
+                    // Valida o snapshot de aprovações antes de confirmar `applied`, espelhando a conexão ativa.
+                    "integrations_approvals" => {
+                        let valid = super::integration_requests::parse(&frame.data).is_some();
+                        changed = valid && self.set_integration_requests(&key, Some(&frame.data), cx);
+                        valid
+                    }
                     // `nav` é aberto por quem chama, que tem a janela: a lista não muda.
                     _ => { changed = false; true }
                 };

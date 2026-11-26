@@ -448,7 +448,13 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         replace(&temp, path)?;
         #[cfg(unix)]
         {
-            std::fs::File::open(parent)?.sync_all()?;
+            if let Err(error) = std::fs::File::open(parent).and_then(|dir| dir.sync_all()) {
+                tracing::warn!(
+                    path = %path.display(),
+                    kind = ?error.kind(),
+                    "integrações: falha ao sincronizar pasta pai após gravação atômica de config.json"
+                );
+            }
         }
         Ok(())
     })();

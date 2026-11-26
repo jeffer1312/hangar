@@ -78,8 +78,18 @@ pub enum ApprovalError {
     Lost,
     Stale,
     Answered,
+    /// Outra resposta para o mesmo cartão está em curso (ex.: persistindo `AllowAlways`).
+    Claimed,
     TooMany,
     Cooldown,
+}
+
+/// Resultado da tentativa de cancelar um cartão pendente.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancelOutcome {
+    Cancelled,
+    InProgress,
+    NotFound,
 }
 
 /// Parâmetros de entrada para abrir um pedido de aprovação de escrita.
@@ -109,6 +119,7 @@ pub struct ClaimedApproval {
     integration_id: String,
     tool: String,
     decision: ApprovalDecision,
+    config_fingerprint: Option<[u8; 32]>,
     armed: bool,
 }
 
@@ -116,9 +127,12 @@ struct PendingRequest {
     card: ApprovalCard,
     seq: u64,
     session_key: String,
+    config_fingerprint: Option<[u8; 32]>,
     deadline: Instant,
-    /// Reserva em curso durante a gravação de `AllowAlways`; segunda resposta recebe `Answered`.
+    /// Reserva em curso durante a gravação de `AllowAlways`; segunda resposta recebe `Claimed`.
     claimed: bool,
+    /// Marcado quando `ApprovalWaiter` é descartado enquanto há uma reserva em curso.
+    waiter_dropped: bool,
     outcome: Option<ApprovalResolution>,
     tx: watch::Sender<Option<ApprovalResolution>>,
     /// Acorda `run_deadline` ao confirmar ou liberar uma reserva sem mexer em `tx`.
@@ -186,6 +200,9 @@ impl ApprovalStore {
 
     /// Abre um cartão na fila e devolve a alça que aguarda o desfecho.
     ///
+    /// Pré-requisito: deve ser chamado dentro de um runtime Tokio com driver de tempo habilitado
+    /// (`enable_time` / `enable_all`) para agendar a expiração do cartão.
+    ///
     /// # Errors
     ///
     /// Retorna [`ApprovalError::Invalid`] quando algum campo viola o contrato ou não há
@@ -195,6 +212,17 @@ impl ApprovalStore {
     pub fn open_request(
         &self,
         params: OpenApprovalRequest,
+    ) -> Result<ApprovalWaiter, ApprovalError> {
+        self.open_request_for_config(params, None)
+    }
+
+    /// Abre um cartão vinculado ao `config_fingerprint` do destino apresentado ao dono.
+    ///
+    /// Pré-requisito: exige runtime Tokio ativo com driver de tempo habilitado (`enable_time`).
+    pub fn open_request_for_config(
+        &self,
+        params: OpenApprovalRequest,
+        config_fingerprint: Option<[u8; 32]>,
     ) -> Result<ApprovalWaiter, ApprovalError> {
         validate_request(&params)?;
         // Garante runtime Tokio antes de publicar o cartão para nunca deixar pedido sem expiração.
@@ -261,8 +289,10 @@ impl ApprovalStore {
                     card: card.clone(),
                     seq,
                     session_key: params.session_key,
+                    config_fingerprint,
                     deadline,
                     claimed: false,
+                    waiter_dropped: false,
                     outcome: None,
                     tx,
                     state_tx,
@@ -290,8 +320,8 @@ impl ApprovalStore {
     /// # Errors
     ///
     /// Retorna [`ApprovalError::Lost`] se o pedido sumiu, foi cancelado ou já expirou,
-    /// [`ApprovalError::Answered`] se já foi respondido ou possui outra resposta em voo, e
-    /// [`ApprovalError::Stale`] se o `interaction_id` não confere com o cartão atual.
+    /// [`ApprovalError::Answered`] se já foi respondido, [`ApprovalError::Claimed`] se há outra
+    /// resposta em andamento e [`ApprovalError::Stale`] se o `interaction_id` não confere.
     pub fn claim_answer(
         &self,
         request_id: &str,
@@ -302,11 +332,14 @@ impl ApprovalStore {
         let Some(req) = state.requests.get_mut(request_id) else {
             return Err(ApprovalError::Lost);
         };
-        if req.outcome.is_some() || req.claimed {
+        if req.outcome.is_some() {
             return Err(ApprovalError::Answered);
         }
-        // Recusa resposta se o prazo venceu mesmo antes da task `run_deadline` marcar `TimedOut`.
-        if Instant::now() >= req.deadline {
+        if req.claimed {
+            return Err(ApprovalError::Claimed);
+        }
+        // Recusa resposta se o prazo venceu ou o chamador desistiu antes da task de limpeza rodar.
+        if req.waiter_dropped || Instant::now() >= req.deadline {
             return Err(ApprovalError::Lost);
         }
         if req.card.interaction_id != interaction_id {
@@ -320,6 +353,7 @@ impl ApprovalStore {
             integration_id: req.card.integration_id.clone(),
             tool: req.card.tool.clone(),
             decision,
+            config_fingerprint: req.config_fingerprint,
             armed: true,
         })
     }
@@ -329,8 +363,8 @@ impl ApprovalStore {
     /// # Errors
     ///
     /// Retorna [`ApprovalError::Lost`] se o pedido sumiu, foi cancelado ou já expirou,
-    /// [`ApprovalError::Answered`] se já foi respondido ou possui outra resposta em voo, e
-    /// [`ApprovalError::Stale`] se o `interaction_id` não confere com o cartão atual.
+    /// [`ApprovalError::Answered`] se já foi respondido, [`ApprovalError::Claimed`] se há outra
+    /// resposta em andamento e [`ApprovalError::Stale`] se o `interaction_id` não confere.
     pub fn answer(
         &self,
         request_id: &str,
@@ -341,9 +375,14 @@ impl ApprovalStore {
             .commit()
     }
 
+    /// Tenta cancelar um pedido ainda aberto, distinguindo reserva em andamento de ausência.
+    pub fn try_cancel(&self, request_id: &str) -> CancelOutcome {
+        cancel_pending(&self.inner, request_id)
+    }
+
     /// Cancela um pedido ainda aberto e remove o cartão da fila.
     pub fn cancel(&self, request_id: &str) -> bool {
-        cancel_pending(&self.inner, request_id)
+        self.try_cancel(request_id) == CancelOutcome::Cancelled
     }
 
     /// Cancela todos os pedidos abertos vinculados a uma integração removida.
@@ -391,6 +430,7 @@ impl fmt::Display for ApprovalError {
             Self::Lost => write!(f, "pedido de aprovação não encontrado ou expirado"),
             Self::Stale => write!(f, "o cartão de aprovação foi atualizado; tente novamente"),
             Self::Answered => write!(f, "este pedido de aprovação já foi respondido"),
+            Self::Claimed => write!(f, "outra resposta para este pedido está em andamento"),
             Self::TooMany => write!(f, "muitos pedidos de aprovação aguardando resposta"),
             Self::Cooldown => {
                 write!(
@@ -420,6 +460,20 @@ impl ClaimedApproval {
         self.decision
     }
 
+    /// Impressão digital do destino da integração vinculada ao cartão (quando fornecida na abertura).
+    pub fn config_fingerprint(&self) -> Option<[u8; 32]> {
+        self.config_fingerprint
+    }
+
+    /// Informa se o cartão continua ativo e o chamador ainda aguarda a resposta (sem cancelamento).
+    pub fn is_live(&self) -> bool {
+        let state = lock_state(&self.inner.state);
+        state
+            .requests
+            .get(&self.request_id)
+            .is_some_and(|req| req.outcome.is_none() && !req.waiter_dropped)
+    }
+
     /// Confirma a resposta reservada, aplica cooldown, acorda o chamador e atualiza o feed.
     ///
     /// # Errors
@@ -435,6 +489,14 @@ impl ClaimedApproval {
         if req.outcome.is_some() {
             req.claimed = false;
             return Err(ApprovalError::Answered);
+        }
+        if req.waiter_dropped {
+            if let Some(mut removed) = state.requests.remove(&self.request_id) {
+                removed.outcome = Some(ApprovalResolution::Cancelled);
+                let _ = removed.tx.send_replace(Some(ApprovalResolution::Cancelled));
+                publish(&self.inner.feed, &state);
+            }
+            return Err(ApprovalError::Lost);
         }
 
         let resolution = match self.decision {
@@ -472,6 +534,18 @@ impl Drop for ClaimedApproval {
         }
         self.armed = false;
         let mut state = lock_state(&self.inner.state);
+        let waiter_dropped = state
+            .requests
+            .get(&self.request_id)
+            .is_some_and(|req| req.waiter_dropped);
+        if waiter_dropped {
+            if let Some(mut removed) = state.requests.remove(&self.request_id) {
+                removed.outcome = Some(ApprovalResolution::Cancelled);
+                let _ = removed.tx.send_replace(Some(ApprovalResolution::Cancelled));
+                publish(&self.inner.feed, &state);
+            }
+            return;
+        }
         if let Some(req) = state.requests.get_mut(&self.request_id) {
             req.claimed = false;
             let _ = req.state_tx.send_replace(());
@@ -512,7 +586,7 @@ impl Drop for ApprovalWaiter {
         }
         self.disarmed = true;
         if let Some(inner) = self.inner.upgrade() {
-            cancel_pending(&inner, &self.card.id);
+            cancel_on_waiter_drop(&inner, &self.card.id);
         }
     }
 }
@@ -584,21 +658,44 @@ fn valid_text(text: &str, max_chars: usize) -> bool {
     !text.trim().is_empty() && !text.contains('\0') && text.chars().count() <= max_chars
 }
 
-fn cancel_pending(inner: &StoreInner, request_id: &str) -> bool {
+fn cancel_pending(inner: &StoreInner, request_id: &str) -> CancelOutcome {
     let mut state = lock_state(&inner.state);
     let Some(entry) = state.requests.get(request_id) else {
-        return false;
+        return CancelOutcome::NotFound;
     };
     if entry.outcome.is_some() {
-        return false;
+        return CancelOutcome::NotFound;
+    }
+    if entry.claimed {
+        return CancelOutcome::InProgress;
     }
     if let Some(mut req) = state.requests.remove(request_id) {
         req.outcome = Some(ApprovalResolution::Cancelled);
         let _ = req.tx.send_replace(Some(ApprovalResolution::Cancelled));
         publish(&inner.feed, &state);
-        return true;
+        return CancelOutcome::Cancelled;
     }
-    false
+    CancelOutcome::NotFound
+}
+
+fn cancel_on_waiter_drop(inner: &StoreInner, request_id: &str) {
+    let mut state = lock_state(&inner.state);
+    let Some(entry) = state.requests.get_mut(request_id) else {
+        return;
+    };
+    if entry.outcome.is_some() {
+        return;
+    }
+    if entry.claimed {
+        // Chamador cancelou durante gravação em curso: sinaliza para impedir commit de `AllowAlways`.
+        entry.waiter_dropped = true;
+        return;
+    }
+    if let Some(mut req) = state.requests.remove(request_id) {
+        req.outcome = Some(ApprovalResolution::Cancelled);
+        let _ = req.tx.send_replace(Some(ApprovalResolution::Cancelled));
+        publish(&inner.feed, &state);
+    }
 }
 
 fn publish(feed: &watch::Sender<Arc<ApprovalFeed>>, state: &StoreState) {
@@ -960,8 +1057,9 @@ mod tests {
             store
                 .claim_answer(&card.id, &card.interaction_id, ApprovalDecision::AllowAlways)
                 .err(),
-            Some(ApprovalError::Answered)
+            Some(ApprovalError::Claimed)
         );
+        assert_eq!(store.try_cancel(&card.id), CancelOutcome::InProgress);
         tokio::task::yield_now().await;
         assert!(
             !wait_handle.is_finished(),

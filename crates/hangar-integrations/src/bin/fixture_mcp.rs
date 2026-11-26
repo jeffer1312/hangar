@@ -146,8 +146,18 @@ impl ServerHandler for FixtureMcpServer {
                     .get("delay_ms")
                     .and_then(Value::as_u64)
                     .unwrap_or(30_000);
-                // Dorme ignorando cancelamento para comprovar que o gerenciador encerra a árvore presa.
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                if let Ok(release_path) = std::env::var("FIXTURE_SLOW_RELEASE_FILE") {
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(delay_ms);
+                    while tokio::time::Instant::now() < deadline {
+                        if tokio::fs::try_exists(&release_path).await.unwrap_or(false) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                } else {
+                    // Dorme ignorando cancelamento para comprovar que o gerenciador encerra a árvore presa.
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
                 Ok(CallToolResponse::Complete(CallToolResult::success(vec![
                     ContentBlock::text("slow-done"),
                 ])))

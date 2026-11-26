@@ -117,9 +117,19 @@ pub(super) async fn ensure_unshared(
     }
     let (guests, record) = tokio::join!(
         guest_unseen(st, members, messages),
-        owner_record_unshared(st, api, link, messages),
+        owner_record_unshared(st, api, link.clone(), messages),
     );
-    guests.and(record)
+    guests.and(record)?;
+    if let Some(groups) = &st.groups {
+        let current_link = groups
+            .link_strict(me)
+            .await
+            .map_err(|_| messages.failed("grupo da sessão ilegível"))?;
+        if current_link != link {
+            return Err(messages.failed("estado do grupo alterado durante verificação"));
+        }
+    }
+    Ok(())
 }
 
 /// Nenhum convidado com login vê a sessão nem um membro do grupo dela nesta máquina (nome e vida de cada um).

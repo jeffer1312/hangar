@@ -27,8 +27,8 @@
     "id": "google-drive",
     "name": "Google Drive",
     "category": "productivity",
-    "description": "Busca e leitura de arquivos, documentos e pastas no Google Drive via servidor MCP oficial do Google.",
-    "url": "https://drivemcp.googleapis.com/mcp/v1",
+    "description": "Busca e leitura de arquivos, documentos e pastas no Google Drive via servidor MCP oficial do Google (endpoint /mcp/v1self da própria conta, sem formulários interativos).",
+    "url": "https://drivemcp.googleapis.com/mcp/v1self",
     "url_editable": false,
     "auth_kind": "oauth_manual_client",
     "default_scopes": [
@@ -42,7 +42,7 @@
         "Configure a tela de consentimento OAuth: em conta pessoal (@gmail.com) use Externo em modo Testing; em Google Workspace prefira Interno para não expirar semanalmente.",
         "Se escolheu Externo em modo Testing, acesse Público-alvo → Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail do Google antes de conectar a integração.",
         "Crie um ID do cliente OAuth marcando a opção \"Use this client for an AI-powered agent\" (is_agentic) e cadastre http://127.0.0.1:<porta>/api/integrations/oauth/callback como URI de redirecionamento autorizada.",
-        "Copie o Client ID e o Client Secret abaixo. Em contas @gmail.com em modo Testing, a autorização expira após 7 dias (use Reconectar quando solicitado)."
+        "Copie o Client ID e o Client Secret abaixo. Em contas @gmail.com em modo Testing, a autorização expira após 7 dias (use Reconectar quando solicitado). Observação: o endpoint /mcp/v1self atua diretamente na conta conectada, sem suporte a formulários interativos (elicitation)."
       ],
       "docs_hint": "Google Cloud Console -> APIs e Serviços -> Credenciais -> Criar ID do cliente OAuth"
     }
@@ -51,8 +51,8 @@
     "id": "google-calendar",
     "name": "Google Agenda",
     "category": "productivity",
-    "description": "Consulta e gerenciamento de compromissos no Google Agenda via servidor MCP oficial do Google.",
-    "url": "https://calendarmcp.googleapis.com/mcp/v1",
+    "description": "Consulta de compromissos no Google Agenda via servidor MCP oficial do Google (somente leitura com calendar.readonly; endpoint /mcp/v1self da própria conta, sem formulários interativos).",
+    "url": "https://calendarmcp.googleapis.com/mcp/v1self",
     "url_editable": false,
     "auth_kind": "oauth_manual_client",
     "default_scopes": [
@@ -66,7 +66,7 @@
         "Configure a tela de consentimento OAuth: conta pessoal (@gmail.com) usa Externo em modo Testing; Google Workspace pode usar Interno.",
         "Se escolheu Externo em modo Testing, acesse Público-alvo → Usuários de teste → Adicionar usuários e cadastre o seu próprio e-mail do Google antes de conectar a integração.",
         "Crie um ID do cliente OAuth marcando a opção \"Use this client for an AI-powered agent\" (is_agentic) com URI de redirecionamento http://127.0.0.1:<porta>/api/integrations/oauth/callback.",
-        "Informe o Client ID e o Client Secret abaixo. Em contas @gmail.com pessoais em modo Testing, o acesso expira a cada 7 dias e pede Reconectar."
+        "Informe o Client ID e o Client Secret abaixo. Em contas @gmail.com pessoais em modo Testing, o acesso expira a cada 7 dias e pede Reconectar. Observação: o endpoint /mcp/v1self atua diretamente na conta conectada, sem suporte a formulários interativos (elicitation)."
       ],
       "docs_hint": "Google Cloud Console -> APIs e Serviços -> Credenciais -> Criar ID do cliente OAuth"
     }
@@ -109,7 +109,7 @@
       "title": "Configurar Slack App com suporte MCP",
       "steps": [
         "Acesse api.slack.com/apps, crie um novo App no seu workspace e habilite o suporte a MCP (is_mcp_enabled) com PKCE no manifesto.",
-        "Em OAuth & Permissions, cadastre a URI de redirecionamento http://127.0.0.1:<porta>/api/integrations/oauth/callback e adicione em User Token Scopes os escopos necessários para leitura e busca: search:read, channels:history, groups:history, im:history, mpim:history, channels:read e users:read.",
+        "Em OAuth & Permissions, cadastre a URI de redirecionamento http://localhost:<porta>/api/integrations/oauth/callback e adicione em User Token Scopes os escopos necessários para leitura e busca: search:read, channels:history, groups:history, im:history, mpim:history, channels:read e users:read.",
         "Copie o Client ID (e Client Secret, se exigido pelo app) para os campos abaixo e conclua o login no navegador."
       ],
       "docs_hint": "api.slack.com/apps -> Basic Information & OAuth -> Redirect URLs"

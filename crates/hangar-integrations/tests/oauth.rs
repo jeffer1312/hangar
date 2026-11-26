@@ -201,17 +201,6 @@ impl MockOAuthServerState {
     }
 }
 
-fn json_response(status: StatusCode, value: Value) -> Response {
-    let body = serde_json::to_vec(&value).expect("serializar JSON");
-    (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
-}
-
-fn verify_pkce_s256(verifier: &str, expected_challenge: &str) -> bool {
-    let hashed = digest(&SHA256, verifier.as_bytes());
-    let computed = URL_SAFE_NO_PAD.encode(hashed.as_ref());
-    computed == expected_challenge
-}
-
 #[derive(Clone)]
 struct MockMcpHandler;
 
@@ -253,6 +242,17 @@ impl ServerHandler for MockMcpHandler {
     }
 }
 
+fn json_response(status: StatusCode, value: Value) -> Response {
+    let body = serde_json::to_vec(&value).expect("serializar JSON");
+    (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
+}
+
+fn verify_pkce_s256(verifier: &str, expected_challenge: &str) -> bool {
+    let hashed = digest(&SHA256, verifier.as_bytes());
+    let computed = URL_SAFE_NO_PAD.encode(hashed.as_ref());
+    computed == expected_challenge
+}
+
 async fn mcp_auth_middleware(
     State(state): State<MockOAuthServerState>,
     req: Request,
@@ -266,10 +266,16 @@ async fn mcp_auth_middleware(
         .and_then(|v| v.to_str().ok());
     if active.is_empty() || supplied != Some(expected.as_str()) {
         let base = state.base_url.read().await.clone();
+        let query_suffix = req
+            .uri()
+            .query()
+            .filter(|q| !q.is_empty())
+            .map(|q| format!("?{q}"))
+            .unwrap_or_default();
         let meta_url = if state.cfg.use_www_authenticate_discovery {
-            format!("{base}/custom-prm.json")
+            format!("{base}/custom-prm.json{query_suffix}")
         } else {
-            format!("{base}/.well-known/oauth-protected-resource")
+            format!("{base}/.well-known/oauth-protected-resource{query_suffix}")
         };
         let mut resp = (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
         let header_val = format!(r#"Bearer resource_metadata="{meta_url}""#);
@@ -282,16 +288,23 @@ async fn mcp_auth_middleware(
     next.run(req).await
 }
 
-async fn protected_resource_metadata(State(state): State<MockOAuthServerState>) -> Response {
+async fn protected_resource_metadata(
+    State(state): State<MockOAuthServerState>,
+    uri: axum::http::Uri,
+) -> Response {
     if state.cfg.use_www_authenticate_discovery {
         return StatusCode::NOT_FOUND.into_response();
     }
     let base = state.base_url.read().await.clone();
     let issuer = format!("{base}{}", state.cfg.auth_server_path_prefix);
+    let resource = match uri.query() {
+        Some(q) if !q.is_empty() => format!("{base}/mcp?{q}"),
+        _ => format!("{base}/mcp"),
+    };
     json_response(
         StatusCode::OK,
         json!({
-            "resource": format!("{base}/mcp"),
+            "resource": resource,
             "authorization_servers": [issuer],
             "scopes_supported": ["read", "write"]
         }),
@@ -578,7 +591,13 @@ async fn token_handler(State(state): State<MockOAuthServerState>, body: Bytes) -
             let maybe_gate = state.refresh_gate.lock().await.take();
             if let Some((started, allow)) = maybe_gate {
                 started.notify_one();
-                let _ = tokio::time::timeout(Duration::from_secs(3), allow.notified()).await;
+                if tokio::time::timeout(Duration::from_secs(3), allow.notified())
+                    .await
+                    .is_err()
+                {
+                    state.in_flight_refresh.fetch_sub(1, Ordering::SeqCst);
+                    panic!("refresh_gate expirou antes de o teste liberar allow");
+                }
             }
             state.in_flight_refresh.fetch_sub(1, Ordering::SeqCst);
             result
@@ -707,7 +726,7 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
         ),
         (
             "google-drive",
-            "https://drivemcp.googleapis.com/mcp/v1",
+            "https://drivemcp.googleapis.com/mcp/v1self",
             PresetAuthKind::OAuthManualClient,
             false,
             true,
@@ -715,7 +734,7 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
         ),
         (
             "google-calendar",
-            "https://calendarmcp.googleapis.com/mcp/v1",
+            "https://calendarmcp.googleapis.com/mcp/v1self",
             PresetAuthKind::OAuthManualClient,
             false,
             true,
@@ -826,10 +845,23 @@ fn catalog_exposes_all_12_presets_with_expected_urls_auth_and_guides() {
             assert!(!guide.title.trim().is_empty());
             assert!(!guide.steps.is_empty());
             let joined = guide.steps.join(" ");
-            assert!(
-                joined.contains("127.0.0.1") && joined.contains(OAUTH_CALLBACK_PATH),
-                "guia de {id} deve orientar URI loopback"
-            );
+            if id == "slack" {
+                assert!(
+                    joined.contains("http://localhost:") && joined.contains(OAUTH_CALLBACK_PATH),
+                    "guia do Slack deve orientar URI http://localhost (não IP literal 127.0.0.1)"
+                );
+            } else {
+                assert!(
+                    joined.contains("127.0.0.1") && joined.contains(OAUTH_CALLBACK_PATH),
+                    "guia de {id} deve orientar URI loopback"
+                );
+            }
+            if id == "google-calendar" {
+                assert!(
+                    !preset.description.to_lowercase().contains("gerenciamento"),
+                    "descrição do Google Agenda com calendar.readonly deve ser somente leitura"
+                );
+            }
             if id.starts_with("google-") {
                 assert!(joined.contains("is_agentic") && joined.contains("@gmail.com"));
                 assert!(joined.contains("7 dias"));
@@ -1480,8 +1512,13 @@ async fn concurrent_refresh_mcp_401_retry_and_invalid_grant_reconnect_flow() {
 
     let oauth_b = oauth.clone();
     let task_b = tokio::spawn(async move { oauth_b.refresh_access_token("figma-rot").await });
-    // Dá oportunidade para task_b tentar adquirir o lock antes de task_a concluir.
-    tokio::task::yield_now().await;
+    // Confirma em janela limitada que task_b fica bloqueada no lock sem entrar em /token antes de A liberar.
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(
+        server_state.refresh_calls.load(Ordering::SeqCst),
+        1,
+        "sem serialização, task_b teria entrado em /token enquanto task_a segurava o gate"
+    );
     allow_first.notify_one();
 
     let (res_a, res_b) = tokio::join!(task_a, task_b);
@@ -2290,7 +2327,7 @@ async fn pending_authorize_url_helpers_track_latest_and_clear_on_callback_or_exp
 #[tokio::test]
 async fn oauth_sends_canonical_rfc8707_resource_across_authorize_exchange_and_refresh() {
     let (addr, state, server_handle) = spawn_mock_oauth_server(MockOAuthConfig::default()).await;
-    let expected_resource = format!("http://{addr}/mcp");
+    let expected_resource = format!("http://{addr}/mcp?project_ref=abc");
 
     let env = TestEnv::new();
     env.registry
@@ -2612,41 +2649,63 @@ async fn oauth_streams_and_rejects_oversized_chunked_response_without_content_le
     struct BigState {
         base_url: String,
         oversize_prm: Arc<AtomicBool>,
+        eof_gate: Arc<Notify>,
+    }
+
+    fn chunked_over_limit_open(eof_gate: Arc<Notify>) -> Response {
+        // Envia >256 KiB de JSON válido em andamento e mantém o stream aberto até `eof_gate`.
+        let stream = futures_util::stream::unfold((0usize, eof_gate), |(step, gate)| async move {
+            match step {
+                0 => Some((
+                    Ok::<_, std::convert::Infallible>(Bytes::from_static(b"{\"pad\":\"")),
+                    (1, gate),
+                )),
+                1..=35 => Some((
+                    Ok::<_, std::convert::Infallible>(Bytes::from(vec![b'a'; 8 * 1024])),
+                    (step + 1, gate),
+                )),
+                36 => {
+                    gate.notified().await;
+                    Some((
+                        Ok::<_, std::convert::Infallible>(Bytes::from_static(b"\"}")),
+                        (37, gate),
+                    ))
+                }
+                _ => None,
+            }
+        });
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from_stream(stream))
+            .unwrap()
     }
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let base_url = format!("http://{addr}");
     let oversize_prm = Arc::new(AtomicBool::new(true));
+    let eof_gate = Arc::new(Notify::new());
     let state = BigState {
         base_url: base_url.clone(),
         oversize_prm: oversize_prm.clone(),
+        eof_gate: eof_gate.clone(),
     };
-
-    fn chunked_320k() -> Response {
-        // Gera >256 KiB em streaming sem Content-Length para provar corte incremental.
-        let body = Body::from_stream(futures_util::stream::iter((0..40).map(|_| {
-            Ok::<_, std::convert::Infallible>(Bytes::from(vec![b'a'; 8 * 1024]))
-        })));
-        Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(body)
-            .unwrap()
-    }
 
     let app = Router::new()
         .route(
             "/.well-known/oauth-protected-resource",
             get(|State(st): State<BigState>| async move {
                 if st.oversize_prm.load(Ordering::SeqCst) {
-                    chunked_320k()
+                    chunked_over_limit_open(st.eof_gate.clone())
                 } else {
+                    // Controle: JSON válido abaixo de 256 KiB (com preenchimento de ~128 KiB).
                     json_response(
                         StatusCode::OK,
                         json!({
                             "resource": format!("{}/mcp", st.base_url),
-                            "authorization_servers": [st.base_url]
+                            "authorization_servers": [st.base_url],
+                            "pad": "b".repeat(128 * 1024)
                         }),
                     )
                 }
@@ -2678,7 +2737,12 @@ async fn oauth_streams_and_rejects_oversized_chunked_response_without_content_le
                     .unwrap()
             }),
         )
-        .route("/token", post(|| async { chunked_320k() }))
+        .route(
+            "/token",
+            post(|State(st): State<BigState>| async move {
+                chunked_over_limit_open(st.eof_gate.clone())
+            }),
+        )
         .route("/mcp", post(|| async { StatusCode::BAD_REQUEST }))
         .with_state(state);
     let server_handle = tokio::spawn(async move {
@@ -2705,25 +2769,39 @@ async fn oauth_streams_and_rejects_oversized_chunked_response_without_content_le
         cimd_client_id_url: None,
     };
 
-    let prm_err = oauth
-        .start("oversize-test", start_input.clone())
-        .await
-        .expect_err("PRM em streaming >256 KiB deve abortar");
-    assert!(matches!(prm_err, OAuthError::DiscoveryFailed(_)));
+    // O erro deve chegar ANTES de `eof_gate` liberar o fim do stream, provando corte incremental.
+    let prm_err = tokio::time::timeout(
+        Duration::from_secs(3),
+        oauth.start("oversize-test", start_input.clone()),
+    )
+    .await
+    .expect("corte incremental do PRM não pode aguardar EOF")
+    .expect_err("PRM em streaming >256 KiB deve abortar");
+    assert!(
+        matches!(prm_err, OAuthError::DiscoveryFailed(ref m) if m.contains("limite")),
+        "esperava erro de limite no PRM, veio {prm_err:?}"
+    );
 
     oversize_prm.store(false, Ordering::SeqCst);
     let OAuthStartOutcome::OpenUrl { authorize_url, .. } =
         oauth.start("oversize-test", start_input).await.unwrap()
     else {
-        panic!("esperava OpenUrl");
+        panic!("esperava OpenUrl com controle JSON <256 KiB");
     };
     let (code, state_param) = simulate_browser_authorize(&authorize_url).await;
-    let token_err = oauth
-        .handle_callback(&state_param, Some(&code), None, None)
-        .await
-        .expect_err("resposta /token em streaming >256 KiB deve abortar");
-    assert!(matches!(token_err, OAuthError::Network(_)));
+    let token_err = tokio::time::timeout(
+        Duration::from_secs(3),
+        oauth.handle_callback(&state_param, Some(&code), None, None),
+    )
+    .await
+    .expect("corte incremental do /token não pode aguardar EOF")
+    .expect_err("resposta /token em streaming >256 KiB deve abortar");
+    assert!(
+        matches!(token_err, OAuthError::Network(ref m) if m.contains("limite")),
+        "esperava erro de limite no /token, veio {token_err:?}"
+    );
 
+    eof_gate.notify_waiters();
     server_handle.abort();
 }
 

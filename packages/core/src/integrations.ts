@@ -180,9 +180,9 @@ export function parseLines(raw: string): string[] {
   return raw.split('\n').map((s) => s.trim()).filter(Boolean);
 }
 
-/** Separa escopos OAuth por espaços ou vírgulas, ignorando itens vazios. */
+/** Separa escopos OAuth por espaços (RFC 6749), preservando vírgulas internas a um token. */
 export function parseScopes(raw: string): string[] {
-  return raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  return raw.split(/\s+/).map((s) => s.trim()).filter(Boolean);
 }
 
 /** Valida nome de cabeçalho HTTP segundo RFC 9110 (`tchar`) e recusa os reservados do MCP. */
@@ -196,7 +196,7 @@ export function isValidHeaderName(name: string): boolean {
 /** Lê linhas `Nome: Valor`, diferenciando linha malformada, nome inválido/reservado e valor inválido. */
 export function parseHeaders(raw: string): ParseHeadersResult {
   const names: string[] = [];
-  const map: Record<string, string> = {};
+  const map = Object.create(null) as Record<string, string>;
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -223,7 +223,7 @@ export function parseHeaders(raw: string): ParseHeadersResult {
 /** Lê linhas `CHAVE=VALOR`, preservando espaços finais do valor e removendo só `\r` final. */
 export function parseEnvVars(raw: string): ParseEnvResult {
   const keys: string[] = [];
-  const map: Record<string, string> = {};
+  const map = Object.create(null) as Record<string, string>;
   for (const line of raw.split('\n')) {
     // Só remove `\r` de quebra CRLF; espaços à direita do valor fazem parte da variável.
     const cleanLine = line.endsWith('\r') ? line.slice(0, -1) : line;
@@ -342,12 +342,12 @@ function tokenizeSingleLineArgs(trimmed: string): string[] {
 
 /** Separa comando e argumentos (uma linha por argumento ou linha única com aspas), recusando aspas sem fechamento. */
 export function parseCommandArgs(raw: string): ParseCommandArgsResult {
-  const trimmed = raw.trim();
-  if (!trimmed) return { ok: true, args: [] };
-  const split = splitUnquotedLines(trimmed);
+  if (!/\S/.test(raw)) return { ok: true, args: [] };
+  // Não remove espaços finais antes da tokenização para preservar espaço final escapado (`arg\ `).
+  const split = splitUnquotedLines(raw);
   if (!split.ok) return split;
   if (split.multiLine) return { ok: true, args: split.lines };
-  return { ok: true, args: tokenizeSingleLineArgs(trimmed) };
+  return { ok: true, args: tokenizeSingleLineArgs(raw) };
 }
 
 /** Valida URL HTTP(S) de transporte remoto e exige TLS ou loopback quando há autenticação ou cabeçalhos. */

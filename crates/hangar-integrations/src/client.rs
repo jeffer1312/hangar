@@ -146,6 +146,7 @@ struct ManagerInner {
     config: ClientConfig,
     refresher: Option<Arc<dyn TokenRefresher>>,
     slots: StdMutex<HashMap<String, Arc<Slot>>>,
+    retired_cleanups: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
     shutting_down: AtomicBool,
     shutdown_watch: watch::Sender<bool>,
 }
@@ -277,6 +278,7 @@ impl McpClientManager {
                 config,
                 refresher: None,
                 slots: StdMutex::new(HashMap::new()),
+                retired_cleanups: StdMutex::new(Vec::new()),
                 shutting_down: AtomicBool::new(false),
                 shutdown_watch,
             }),
@@ -359,6 +361,18 @@ impl McpClientManager {
             }
         }))
         .await;
+        // Aguarda tarefas de encerramento de sessões aposentadas em 401 antes de concluir `shutdown`.
+        let pending_cleanups = {
+            let mut cleanups = self
+                .inner
+                .retired_cleanups
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            std::mem::take(&mut *cleanups)
+        };
+        for handle in pending_cleanups {
+            let _ = handle.await;
+        }
     }
 
     /// Descobre todas as ferramentas da integração (com paginação) e atualiza o cache.
@@ -391,12 +405,28 @@ impl McpClientManager {
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<McpCallOutput, ClientError> {
+        self.call_tool_tracked(integration_id, tool_name, arguments, None)
+            .await
+    }
+
+    /// Invoca uma ferramenta sinalizando `external_dispatched` somente no momento exato do envio ao transporte.
+    pub async fn call_tool_tracked(
+        &self,
+        integration_id: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+        external_dispatched: Option<Arc<AtomicBool>>,
+    ) -> Result<McpCallOutput, ClientError> {
         let params = build_call_tool_params(tool_name, arguments)?;
         let tool_owned = tool_name.to_owned();
         self.execute_with_oauth_retry(integration_id, move |session, _config| {
             let params = params.clone();
             let tool_name = tool_owned.clone();
+            let external_dispatched = external_dispatched.clone();
             async move {
+                if let Some(flag) = external_dispatched.as_ref() {
+                    flag.store(true, Ordering::SeqCst);
+                }
                 let result = session
                     .peer
                     .call_tool(params)
@@ -704,7 +734,7 @@ impl McpClientManager {
         }
         // Drena chamadas irmãs antes de fechar o transporte para não abortar outro 401 concorrente.
         let mut shutdown_rx = self.inner.shutdown_watch.subscribe();
-        tokio::spawn(async move {
+        let cleanup_handle = tokio::spawn(async move {
             if !*shutdown_rx.borrow_and_update() {
                 loop {
                     let idle_notified = session.idle_notify.notified();
@@ -725,6 +755,13 @@ impl McpClientManager {
             }
             session.shutdown(grace, false).await;
         });
+        let mut cleanups = self
+            .inner
+            .retired_cleanups
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        cleanups.retain(|h| !h.is_finished());
+        cleanups.push(cleanup_handle);
     }
 
     fn load_enabled_config(&self, integration_id: &str) -> Result<IntegrationConfig, ClientError> {
@@ -802,6 +839,29 @@ impl McpClientManager {
                 )
             })?
             .unwrap_or_default();
+        // Confirma que a configuração não trocou de destino entre as leituras de config e segredos.
+        let confirmed_cfg = self
+            .load_enabled_config(integration_id)
+            .map_err(|err| (ConnectFailure::Other(err), None, None, None))?;
+        let confirmed_fp = config_fingerprint(&confirmed_cfg);
+        if confirmed_fp != config_fp {
+            return Err((
+                ConnectFailure::Other(ClientError::Transport(
+                    "configuração da integração alterada durante conexão; tente novamente".into(),
+                )),
+                Some(confirmed_cfg.auth),
+                Some(confirmed_fp),
+                None,
+            ));
+        }
+        crate::model::validate_config_and_secrets(&config, &secrets).map_err(|msg| {
+            (
+                ConnectFailure::Other(ClientError::Protocol(msg)),
+                Some(config.auth.clone()),
+                Some(config_fp),
+                None,
+            )
+        })?;
         let effective_oauth =
             resolve_effective_oauth_override(slot, config_fp, &secrets, override_oauth_token);
         let effective_oauth_str = effective_oauth.as_deref().map(String::as_str);
@@ -867,6 +927,29 @@ impl McpClientManager {
                 )
             })?
             .unwrap_or_default();
+        // Confirma que a configuração não trocou de destino entre as leituras de config e segredos.
+        let confirmed_cfg = self
+            .load_enabled_config(integration_id)
+            .map_err(|err| (ConnectFailure::Other(err), None, None, None))?;
+        let confirmed_fp = config_fingerprint(&confirmed_cfg);
+        if confirmed_fp != config_fp {
+            return Err((
+                ConnectFailure::Other(ClientError::Transport(
+                    "configuração da integração alterada durante conexão; tente novamente".into(),
+                )),
+                Some(confirmed_cfg.auth),
+                Some(confirmed_fp),
+                None,
+            ));
+        }
+        crate::model::validate_config_and_secrets(&config, &secrets).map_err(|msg| {
+            (
+                ConnectFailure::Other(ClientError::Protocol(msg)),
+                Some(config.auth.clone()),
+                Some(config_fp),
+                None,
+            )
+        })?;
         let effective_oauth =
             resolve_effective_oauth_override(slot, config_fp, &secrets, override_oauth_token);
         let effective_oauth_str = effective_oauth.as_deref().map(String::as_str);

@@ -240,6 +240,8 @@ pub(super) struct FormDraft {
     pub original_command: Option<(String, Vec<String>)>,
     /// Transporte salvo ao abrir a edição, para omitir `transport` do PATCH quando nada nele mudar.
     pub original_transport: Option<Transport>,
+    /// Política salva ao abrir a edição, para omitir `policy` do PATCH quando não for alterada.
+    pub original_policy: Option<PermissionPolicy>,
 }
 
 enum FormMode {
@@ -260,6 +262,8 @@ pub(super) struct IntegrationsPage {
     runtime: Arc<Runtime>,
     hangar: WeakEntity<Hangar>,
     seq: u64,
+    catalog_seq: u64,
+    oauth_start_seq: u64,
     tools_epoch: u64,
     tools_seq: HashMap<String, u64>,
     handoff_seq: u64,
@@ -309,6 +313,7 @@ struct IntegrationForm {
     projects_input: Entity<TextareaState>,
     original_command: Option<(String, Vec<String>)>,
     original_transport: Option<Transport>,
+    original_policy: Option<PermissionPolicy>,
     saving: bool,
     error: Option<String>,
 }
@@ -336,6 +341,7 @@ struct InitialFormValues {
     projects: String,
     original_command: Option<(String, Vec<String>)>,
     original_transport: Option<Transport>,
+    original_policy: Option<PermissionPolicy>,
 }
 
 impl IntegrationsPage {
@@ -351,6 +357,8 @@ impl IntegrationsPage {
             runtime,
             hangar,
             seq: 0,
+            catalog_seq: 0,
+            oauth_start_seq: 0,
             tools_epoch: 0,
             tools_seq: HashMap::new(),
             handoff_seq: 0,
@@ -373,8 +381,10 @@ impl IntegrationsPage {
 
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.seq += 1;
+        self.catalog_seq += 1;
         self.tools_epoch += 1;
         let seq = self.seq;
+        let catalog_seq = self.catalog_seq;
         self.items = None;
         self.catalog = None;
         self.tools_errors.clear();
@@ -387,19 +397,31 @@ impl IntegrationsPage {
             async move { api_list.server_read(&["integrations"], &[], READ_SECONDS).await },
             window,
             cx,
-            move |this: &mut Self, result, _, _| {
+            move |this: &mut Self, result, window, cx| {
                 if seq != this.seq {
                     return;
                 }
-                this.items = Some(
-                    result
-                        .map_err(|e| integrations_failure(&e))
-                        .and_then(|v| {
-                            serde_json::from_value::<IntegrationsListResponse>(v)
-                                .map(|r| r.integrations)
-                                .map_err(|_| tr("invalid_response"))
-                        }),
-                );
+                let parsed = result
+                    .map_err(|e| integrations_failure(&e))
+                    .and_then(|v| {
+                        serde_json::from_value::<IntegrationsListResponse>(v)
+                            .map(|r| r.integrations)
+                            .map_err(|_| tr("invalid_response"))
+                    });
+                if let Ok(list) = &parsed {
+                    let alive: HashSet<String> = list.iter().map(|it| it.id.clone()).collect();
+                    // Invalida cache das seções fechadas e revalida `effective_access` nas seções abertas.
+                    this.tools.clear();
+                    this.tools_errors.retain(|id, _| alive.contains(id));
+                    this.open_tools.retain(|id| alive.contains(id));
+                    let open_ids: Vec<String> = this.open_tools.iter().cloned().collect();
+                    this.items = Some(parsed);
+                    for id in open_ids {
+                        this.load_tools(&id, window, cx);
+                    }
+                    return;
+                }
+                this.items = Some(parsed);
             },
         );
         let api_cat = self.api.clone();
@@ -409,7 +431,7 @@ impl IntegrationsPage {
             window,
             cx,
             move |this: &mut Self, result, _, _| {
-                if seq != this.seq {
+                if catalog_seq != this.catalog_seq {
                     return;
                 }
                 this.catalog = Some(
@@ -517,6 +539,31 @@ impl IntegrationsPage {
             } else {
                 list.push(item.clone());
             }
+        } else {
+            // Se ainda não havia lista utilizável (ex.: POST terminou antes do primeiro GET), busca a lista novamente.
+            let seq = self.seq;
+            let api = self.api.clone();
+            self.items = None;
+            run(
+                &self.runtime,
+                async move { api.server_read(&["integrations"], &[], READ_SECONDS).await },
+                window,
+                cx,
+                move |this: &mut Self, result, _, _| {
+                    if seq != this.seq {
+                        return;
+                    }
+                    this.items = Some(
+                        result
+                            .map_err(|e| integrations_failure(&e))
+                            .and_then(|v| {
+                                serde_json::from_value::<IntegrationsListResponse>(v)
+                                    .map(|r| r.integrations)
+                                    .map_err(|_| tr("invalid_response"))
+                            }),
+                    );
+                },
+            );
         }
         self.tools_errors.remove(&item.id);
         self.tools.remove(&item.id);
@@ -638,6 +685,8 @@ impl IntegrationsPage {
         if !self.busy.insert(id.clone()) {
             return;
         }
+        self.oauth_start_seq += 1;
+        let start_seq = self.oauth_start_seq;
         self.error = None;
         self.notice = Some(tr_shared("integrations_oauth_opening", &[]));
         self.handoff = None;
@@ -658,6 +707,9 @@ impl IntegrationsPage {
             cx,
             move |this: &mut Self, result, _, cx| {
                 this.busy.remove(&id);
+                if start_seq != this.oauth_start_seq {
+                    return;
+                }
                 match result {
                     Ok(value) => match serde_json::from_value::<OAuthStartResponse>(value) {
                         Ok(OAuthStartResponse::OpenUrl { authorize_url, .. }) => {
@@ -783,7 +835,15 @@ impl IntegrationsPage {
             move |this: &mut Self, result, window, cx| {
                 this.loading_tools.remove(&id);
                 if epoch != this.tools_epoch {
-                    this.pending_tools_reload.remove(&id);
+                    // Descarta o resultado obsoleto sem perder eventual releitura pedida após Atualizar.
+                    if this.pending_tools_reload.remove(&id)
+                        && this
+                            .items
+                            .as_ref()
+                            .is_some_and(|res| res.as_ref().is_ok_and(|list| list.iter().any(|it| it.id == id)))
+                    {
+                        this.load_tools(&id, window, cx);
+                    }
                     return;
                 }
                 if this.pending_tools_reload.remove(&id) {
@@ -1454,6 +1514,7 @@ impl InitialFormValues {
                     projects: String::new(),
                     original_command: None,
                     original_transport: None,
+                    original_policy: None,
                 }
             }
             FormMode::Custom => Self {
@@ -1479,6 +1540,7 @@ impl InitialFormValues {
                 projects: String::new(),
                 original_command: None,
                 original_transport: None,
+                original_policy: None,
             },
             FormMode::Edit(item, preset_meta) => {
                 let original_transport = Some(item.transport.clone());
@@ -1543,6 +1605,7 @@ impl InitialFormValues {
                     projects: item.projects.join("\n"),
                     original_command,
                     original_transport,
+                    original_policy: Some(item.policy),
                 }
             }
         }
@@ -1653,6 +1716,7 @@ impl IntegrationForm {
             projects_input,
             original_command: initial.original_command,
             original_transport: initial.original_transport,
+            original_policy: initial.original_policy,
             saving: false,
             error: None,
         }
@@ -1693,6 +1757,7 @@ impl IntegrationForm {
             projects_raw: self.projects_input.read(cx).value().to_string(),
             original_command: self.original_command.clone(),
             original_transport: self.original_transport.clone(),
+            original_policy: self.original_policy,
         }
     }
 
@@ -2601,9 +2666,13 @@ pub(super) fn parse_command_args(raw: &str) -> Result<Vec<String>, String> {
     while let Some(ch) = chars.next() {
         match quote {
             Some('"') => match ch {
-                '\\' if matches!(chars.peek(), Some('"' | '\\')) => {
+                '\\' if matches!(chars.peek(), Some('"' | '\\' | 'n' | 'r')) => {
                     if let Some(next) = chars.next() {
-                        current.push(next);
+                        match next {
+                            'n' => current.push('\n'),
+                            'r' => current.push('\r'),
+                            other => current.push(other),
+                        }
                     }
                 }
                 '"' => quote = None,
@@ -2716,10 +2785,13 @@ pub(super) fn build_patch_body(draft: &FormDraft) -> Result<Value, String> {
         "name": draft.name.trim(),
         "enabled": draft.enabled,
         "auth": auth,
-        "policy": draft.policy,
         "pinned": draft.pinned,
         "projects": parse_projects(&draft.projects_raw),
     });
+    // Só envia `policy` quando alterada para não reverter mudanças concorrentes feitas em outro cliente.
+    if draft.original_policy != Some(draft.policy) {
+        body["policy"] = json!(draft.policy);
+    }
     // Só envia `transport` se algo nele mudou; evita reiniciar o cliente MCP ou limpar aprovações sem necessidade.
     let transport_unchanged = draft
         .original_transport
@@ -2792,6 +2864,15 @@ fn quote_command_arg(arg: &str) -> String {
             .any(|c| c.is_whitespace() || matches!(c, '\'' | '"' | '\\'))
     {
         return arg.to_owned();
+    }
+    // Quebras de linha são escapadas em aspas duplas para manter uma linha única inequívoca no editor.
+    if arg.contains('\n') || arg.contains('\r') {
+        let escaped = arg
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r");
+        return format!("\"{escaped}\"");
     }
     if !arg.contains('"') && !arg.contains('\\') {
         return format!("\"{arg}\"");
@@ -3055,6 +3136,7 @@ mod tests {
             projects_raw: "/home/user/proj-a\n/home/user/proj-b".into(),
             original_command: None,
             original_transport: None,
+            original_policy: None,
         }
     }
 
@@ -3282,10 +3364,26 @@ mod tests {
             projects_raw: initial.projects,
             original_command: initial.original_command,
             original_transport: initial.original_transport,
+            original_policy: initial.original_policy,
         };
 
         let no_transport_change = build_patch_body(&base_draft).expect("patch válido");
         assert!(no_transport_change.get("transport").is_none());
+        assert!(
+            no_transport_change.get("policy").is_none(),
+            "editar sem mudar policy deve omitir policy no PATCH"
+        );
+        let multiline = format_command_for_input(&[
+            "mcp-server".into(),
+            "--label".into(),
+            "linha 1\nlinha 2".into(),
+            "--quiet".into(),
+        ]);
+        let edited_multiline = multiline.replace("--quiet", "--verbose");
+        assert_eq!(
+            parse_command_args(&edited_multiline).unwrap(),
+            vec!["mcp-server", "--label", "linha 1\nlinha 2", "--verbose"]
+        );
 
         let mut cwd_change = base_draft.clone();
         cwd_change.cwd = "/work/b".into();

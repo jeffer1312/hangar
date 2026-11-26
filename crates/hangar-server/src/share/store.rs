@@ -482,12 +482,18 @@ fn peek_in<'a>(state: &'a State, code: &str, kind: Kind, now: f64) -> Result<&'a
 }
 
 fn load(path: &std::path::Path, now: f64) -> (State, bool) {
-    let parsed = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
-        serde_json::from_slice::<Vec<Share>>(&bytes).map_err(|e| e.to_string())
-    });
-    match parsed {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (State::new(), false),
+        Err(error) => {
+            // Qualquer falha diferente de arquivo ausente (ex.: permissão negada no diretório pai)
+            // mantém `unreadable = true` para nunca presumir ausência de compartilhamentos.
+            tracing::warn!("[share] {} ilegivel, comecando vazio: {error}", path.display());
+            return (State::new(), true);
+        }
+    };
+    match serde_json::from_slice::<Vec<Share>>(&bytes) {
         Ok(records) => (records.into_iter().map(|s| (s.id.clone(), s)).collect(), false),
-        Err(_) if !path.exists() => (State::new(), false),
         Err(error) => {
             // Ilegível vira "nenhum convite": perde acessos, mas não derruba o servidor. Vai pro
             // lado, senão a próxima gravação o apagaria de vez.

@@ -187,6 +187,7 @@ struct ParsedHttpUrl {
     scheme: String,
     origin: String,
     path: String,
+    query: Option<String>,
 }
 
 struct ResolvedRedirect {
@@ -637,7 +638,9 @@ impl OAuthManager {
                     return Ok(Err(err));
                 }
                 let Some(secrets) = slot.as_mut() else {
-                    return Ok(Ok(fresh_access));
+                    return Ok(Err(OAuthError::InvalidGrant(
+                        "credenciais OAuth removidas durante o refresh".into(),
+                    )));
                 };
                 let current_oauth = secrets.oauth.get_or_insert_with(OAuthTokens::default);
                 // Reconexão manual paralela via `handle_callback` vence o refresh antigo em voo.
@@ -728,9 +731,20 @@ impl OAuthManager {
             prm_candidates.push(hint);
         }
         if !parsed_mcp.path.is_empty() {
+            if let Some(query) = parsed_mcp.query.as_deref() {
+                prm_candidates.push(format!(
+                    "{}/.well-known/oauth-protected-resource{}?{query}",
+                    parsed_mcp.origin, parsed_mcp.path
+                ));
+            }
             prm_candidates.push(format!(
                 "{}/.well-known/oauth-protected-resource{}",
                 parsed_mcp.origin, parsed_mcp.path
+            ));
+        } else if let Some(query) = parsed_mcp.query.as_deref() {
+            prm_candidates.push(format!(
+                "{}/.well-known/oauth-protected-resource?{query}",
+                parsed_mcp.origin
             ));
         }
         prm_candidates.push(format!(
@@ -759,8 +773,8 @@ impl OAuthManager {
         }
 
         let issuer_url = discovered_issuer.unwrap_or_else(|| parsed_mcp.origin.clone());
-        let parsed_issuer = validate_discovered_url("issuer", &issuer_url, require_https)?;
-        let expected_issuer = parsed_issuer.canonical_uri();
+        let expected_issuer = issuer_url.trim().to_owned();
+        let parsed_issuer = validate_discovered_url("issuer", &expected_issuer, require_https)?;
         let as_candidates = build_auth_server_metadata_urls(&parsed_issuer);
 
         for candidate in as_candidates {
@@ -1255,7 +1269,10 @@ pub fn compute_status(
 
 impl ParsedHttpUrl {
     fn canonical_uri(&self) -> String {
-        format!("{}{}", self.origin, self.path)
+        match &self.query {
+            Some(query) => format!("{}{}?{query}", self.origin, self.path),
+            None => format!("{}{}", self.origin, self.path),
+        }
     }
 }
 
@@ -1297,7 +1314,13 @@ fn resolve_redirect(
             "porta local inválida para callback OAuth".into(),
         ));
     }
-    let loopback_uri = format!("http://127.0.0.1:{}{OAUTH_CALLBACK_PATH}", input.local_port);
+    let loopback_host = if config.preset.as_deref() == Some("slack") {
+        // Slack permite HTTP no redirecionamento apenas em `localhost` (recusa IP literal `127.0.0.1`).
+        "localhost"
+    } else {
+        "127.0.0.1"
+    };
+    let loopback_uri = format!("http://{loopback_host}:{}{OAUTH_CALLBACK_PATH}", input.local_port);
 
     let requires_loopback = config
         .preset
@@ -1314,10 +1337,9 @@ fn resolve_redirect(
             if requires_loopback {
                 return Ok(ResolvedRedirect {
                     redirect_uri: loopback_uri,
-                    handoff_reason: Some(
-                        "este provedor exige redirecionamento em localhost (127.0.0.1); conclua o login no navegador do computador servidor"
-                            .into(),
-                    ),
+                    handoff_reason: Some(format!(
+                        "este provedor exige redirecionamento em {loopback_host}; conclua o login no navegador do computador servidor"
+                    )),
                 });
             }
             let Some(raw_base) = input
@@ -1421,11 +1443,28 @@ fn parse_http_url(raw: &str, require_https: bool) -> Result<ParsedHttpUrl, OAuth
         "" | "/" => String::new(),
         other => other.trim_end_matches('/').to_owned(),
     };
+    let query = uri.query().map(str::to_owned);
     Ok(ParsedHttpUrl {
         scheme,
         origin,
         path,
+        query,
     })
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let Some((_, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    if let Some(after_open) = authority.strip_prefix('[')
+        && let Some((host, _)) = after_open.split_once(']')
+    {
+        return host
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|ip| ip == std::net::Ipv6Addr::LOCALHOST);
+    }
+    let host = authority.split(':').next().unwrap_or("");
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1"
 }
 
 fn prm_resource_matches(
@@ -1436,8 +1475,8 @@ fn prm_resource_matches(
     let Some(raw) = prm_resource.map(str::trim).filter(|s| !s.is_empty()) else {
         return false;
     };
-    // RFC 9728 proíbe query e fragmento no identificador de recurso protegido.
-    if raw.contains('?') || raw.contains('#') {
+    // RFC 9728 proíbe fragmentos no identificador de recurso protegido, mas permite query (ex.: Supabase).
+    if raw.contains('#') {
         return false;
     }
     canonical_resource_uri(raw, require_https)
@@ -1471,8 +1510,9 @@ fn validate_discovered_as_metadata(
             "campo issuer dos metadados OAuth não pode conter query".into(),
         ));
     }
-    let parsed_issuer = validate_discovered_url("issuer", raw_issuer, require_https)?;
-    if parsed_issuer.canonical_uri() != expected_issuer {
+    let _ = validate_discovered_url("issuer", raw_issuer, require_https)?;
+    // RFC 8414 exige correspondência exata com o emissor esperado, sem normalizar barra final.
+    if raw_issuer != expected_issuer {
         return Err(OAuthError::DiscoveryFailed(
             "campo issuer dos metadados OAuth diverge do emissor esperado".into(),
         ));
@@ -1483,7 +1523,13 @@ fn validate_discovered_as_metadata(
         &as_meta.authorization_endpoint,
         require_https,
     )?;
-    validate_discovered_url("token_endpoint", &as_meta.token_endpoint, require_https)?;
+    let parsed_token = validate_discovered_url("token_endpoint", &as_meta.token_endpoint, false)?;
+    if parsed_token.scheme != "https" && (require_https || !is_loopback_origin(&parsed_token.origin))
+    {
+        return Err(OAuthError::DiscoveryFailed(
+            "token_endpoint OAuth exige https:// (exceção apenas para loopback local)".into(),
+        ));
+    }
     if let Some(reg_ep) = as_meta.registration_endpoint.as_deref() {
         validate_discovered_url("registration_endpoint", reg_ep, require_https)?;
     }
@@ -1962,18 +2008,71 @@ mod tests {
             ),
             Err(OAuthError::DiscoveryFailed(_))
         ));
-        let meta_local = super::AuthorizationServerMetadata {
-            issuer: Some("http://auth.example.com".to_owned()),
-            authorization_endpoint: "http://auth.example.com/authorize".to_owned(),
+        let meta_remote_http_token = super::AuthorizationServerMetadata {
+            issuer: Some("http://127.0.0.1:9000".to_owned()),
+            authorization_endpoint: "http://127.0.0.1:9000/authorize".to_owned(),
             token_endpoint: "http://auth.example.com/token".to_owned(),
             registration_endpoint: None,
             client_id_metadata_document_supported: None,
             code_challenge_methods_supported: None,
         };
         assert!(
-            validate_discovered_as_metadata(&meta_local, "http://auth.example.com", false).is_ok(),
-            "MCP http:// local deve continuar aceitando endpoints http://"
+            matches!(
+                validate_discovered_as_metadata(
+                    &meta_remote_http_token,
+                    "http://127.0.0.1:9000",
+                    false
+                ),
+                Err(OAuthError::DiscoveryFailed(_))
+            ),
+            "MCP local não pode aceitar token_endpoint remoto por HTTP em texto claro"
         );
+        let meta_local_loopback = super::AuthorizationServerMetadata {
+            issuer: Some("http://127.0.0.1:9000".to_owned()),
+            authorization_endpoint: "http://127.0.0.1:9000/authorize".to_owned(),
+            token_endpoint: "http://127.0.0.1:9000/token".to_owned(),
+            registration_endpoint: None,
+            client_id_metadata_document_supported: None,
+            code_challenge_methods_supported: None,
+        };
+        assert!(
+            validate_discovered_as_metadata(&meta_local_loopback, "http://127.0.0.1:9000", false)
+                .is_ok(),
+            "MCP http:// local deve aceitar token_endpoint em loopback"
+        );
+        let meta_issuer_slash = super::AuthorizationServerMetadata {
+            issuer: Some("https://auth.example.com/tenant".to_owned()),
+            authorization_endpoint: "https://auth.example.com/authorize".to_owned(),
+            token_endpoint: "https://auth.example.com/token".to_owned(),
+            registration_endpoint: None,
+            client_id_metadata_document_supported: None,
+            code_challenge_methods_supported: None,
+        };
+        assert!(
+            matches!(
+                validate_discovered_as_metadata(
+                    &meta_issuer_slash,
+                    "https://auth.example.com/tenant/",
+                    true
+                ),
+                Err(OAuthError::DiscoveryFailed(_))
+            ),
+            "RFC 8414 exige correspondência exata do issuer sem normalizar barra final"
+        );
+        assert!(
+            super::prm_resource_matches(
+                Some("https://mcp.supabase.com/mcp?project_ref=demo"),
+                &super::canonical_resource_uri("https://mcp.supabase.com/mcp?project_ref=demo", true)
+                    .unwrap(),
+                true
+            ),
+            "RFC 9728 deve preservar query no identificador de recurso"
+        );
+        assert!(!super::prm_resource_matches(
+            Some("https://mcp.supabase.com/mcp?project_ref=demo#frag"),
+            "https://mcp.supabase.com/mcp?project_ref=demo",
+            true
+        ));
     }
 
     fn insert_pending_for_test(

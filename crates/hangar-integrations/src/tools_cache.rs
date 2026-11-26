@@ -64,16 +64,17 @@ pub fn classify_tool_access(
     tool_name: &str,
 ) -> ToolAccess {
     if read_only_hint == Some(true) {
-        return ToolAccess::Read;
-    }
-    match policy {
-        PermissionPolicy::ReadOnly => ToolAccess::Blocked,
-        PermissionPolicy::AllowAll => ToolAccess::AllowedAlways,
-        PermissionPolicy::ReadFreeAskWrite => {
-            if allowed_tools.contains(tool_name) {
-                ToolAccess::AllowedAlways
-            } else {
-                ToolAccess::AskWrite
+        ToolAccess::Read
+    } else {
+        match policy {
+            PermissionPolicy::ReadOnly => ToolAccess::Blocked,
+            PermissionPolicy::AllowAll => ToolAccess::AllowedAlways,
+            PermissionPolicy::ReadFreeAskWrite => {
+                if allowed_tools.contains(tool_name) {
+                    ToolAccess::AllowedAlways
+                } else {
+                    ToolAccess::AskWrite
+                }
             }
         }
     }

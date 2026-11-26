@@ -1672,18 +1672,26 @@ async fn approvals_sse_publishes_to_owner_only_and_never_to_share_guest() {
     assert_eq!(card["tool"], "create_issue");
 
     // Convidado recebe `sessions`, mas nunca `integrations_approvals` (inclusive antes de `sessions`).
+    // O prazo é o único fim esperado da janela de silêncio: EOF ou erro de parse falham explicitamente.
     let mut deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     let mut saw_sessions = false;
-    while let Ok(Some(Ok(ev))) = tokio::time::timeout_at(deadline, guest_sse.next()).await {
-        assert_ne!(
-            ev.event, "integrations_approvals",
-            "convidado nunca pode receber eventos integrations_approvals"
-        );
-        if !saw_sessions && ev.event == "sessions" {
-            saw_sessions = true;
-            let post_sessions = tokio::time::Instant::now() + Duration::from_millis(350);
-            if post_sessions < deadline {
-                deadline = post_sessions;
+    loop {
+        match tokio::time::timeout_at(deadline, guest_sse.next()).await {
+            Err(_) => break,
+            Ok(None) => panic!("stream SSE do convidado encerrou inesperadamente (EOF)"),
+            Ok(Some(Err(err))) => panic!("erro de parse no stream SSE do convidado: {err:?}"),
+            Ok(Some(Ok(ev))) => {
+                assert_ne!(
+                    ev.event, "integrations_approvals",
+                    "convidado nunca pode receber eventos integrations_approvals"
+                );
+                if !saw_sessions && ev.event == "sessions" {
+                    saw_sessions = true;
+                    let post_sessions = tokio::time::Instant::now() + Duration::from_millis(350);
+                    if post_sessions < deadline {
+                        deadline = post_sessions;
+                    }
+                }
             }
         }
     }

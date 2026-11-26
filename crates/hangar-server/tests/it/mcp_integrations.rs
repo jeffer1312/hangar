@@ -701,14 +701,16 @@ impl SceneBuilder {
             }
         }
 
-        if self.groups {
+        state.groups = if self.groups {
             let pair = PairDir::new(home.join(".claude/.hangar-pair"), root.join("arquivo"));
-            state.groups = Some(Arc::new(GroupService::new(
+            Some(Arc::new(GroupService::new(
                 pair,
                 Arc::new(OrqVault::from_state(&state)),
                 "local-test".into(),
-            )));
-        }
+            )))
+        } else {
+            None
+        };
 
         let state = Arc::new(state);
         let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
@@ -2616,8 +2618,9 @@ async fn mcp_post_approval_policy_or_disabled_change_blocks_call() {
         let scene = SceneBuilder::new().build().await;
         scene.register_http("reval-ro", &mock.url());
         scene.register_http("reval-dis", &mock.url());
+        scene.register_pinned_http("reval-pin", &mock.url());
 
-        let mut mcp = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
+        let mcp = McpClient::open(scene.addr, &[("x-hangar-key", &pane_key("s0"))]).await;
         let mut feed = scene.state.integrations.approvals.feed();
 
         // 1. Política alterada para `read_only` enquanto cartão aguarda -> bloqueia após allow_once.
@@ -2648,16 +2651,16 @@ async fn mcp_post_approval_policy_or_disabled_change_blocks_call() {
         );
         assert_eq!(mock.tool_calls().len(), calls_before);
 
-        // 2. Integração desabilitada enquanto cartão aguarda -> bloqueia após allow_once.
+        // 2a. Desabilitar via PATCH cancela cartões pendentes imediatamente e impede execução.
         feed.wait_for(|f| f.requests.is_empty()).await.unwrap();
-        let call_dis = spawn_call(
+        let call_dis_patch = spawn_call(
             &mcp,
             911,
             "integration_call",
-            json!({"integration": "reval-dis", "tool": "write_action", "reason": "Desabilitar"}),
+            json!({"integration": "reval-dis", "tool": "write_action", "reason": "Desabilitar via PATCH"}),
         );
         feed.wait_for(|f| !f.requests.is_empty()).await.unwrap();
-        let card_dis = feed.borrow().requests[0].clone();
+        let card_dis_patch = feed.borrow().requests[0].clone();
         let patch_dis = client()
             .patch(format!("http://{}/api/integrations/reval-dis", scene.addr))
             .bearer_auth(OWNER)
@@ -2666,6 +2669,62 @@ async fn mcp_post_approval_policy_or_disabled_change_blocks_call() {
             .await
             .unwrap();
         assert_eq!(patch_dis.status(), 200);
+        feed.wait_for(|f| f.requests.is_empty()).await.unwrap();
+        let stale_answer = client()
+            .post(format!(
+                "http://{}/api/integrations/approvals/{}",
+                scene.addr, card_dis_patch.id
+            ))
+            .bearer_auth(OWNER)
+            .json(&json!({
+                "interaction_id": card_dis_patch.interaction_id,
+                "decision": "allow_once",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(stale_answer.status(), 404);
+        let res_dis_patch = call_dis_patch.await.unwrap();
+        assert!(
+            is_error(&res_dis_patch)
+                && first_text(&res_dis_patch).starts_with("integration_approval_cancelled:"),
+            "{res_dis_patch}"
+        );
+        assert_eq!(mock.tool_calls().len(), calls_before);
+
+        // 2b. Mesmo sem cancelamento prévio, a revalidação pós-aprovação bloqueia integração desabilitada.
+        scene
+            .state
+            .integrations
+            .registry
+            .update(
+                "reval-dis",
+                hangar_integrations::IntegrationUpdate {
+                    enabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let call_dis = spawn_call(
+            &mcp,
+            912,
+            "integration_call",
+            json!({"integration": "reval-dis", "tool": "write_action", "reason": "Desabilitar no registry"}),
+        );
+        feed.wait_for(|f| !f.requests.is_empty()).await.unwrap();
+        let card_dis = feed.borrow().requests[0].clone();
+        scene
+            .state
+            .integrations
+            .registry
+            .update(
+                "reval-dis",
+                hangar_integrations::IntegrationUpdate {
+                    enabled: Some(false),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         scene
             .answer_approval(&card_dis.id, &card_dis.interaction_id, "allow_once")
             .await;
@@ -2673,6 +2732,34 @@ async fn mcp_post_approval_policy_or_disabled_change_blocks_call() {
         assert!(
             is_error(&res_dis) && first_text(&res_dis).starts_with("integration_disabled:"),
             "{res_dis}"
+        );
+        assert_eq!(mock.tool_calls().len(), calls_before);
+
+        // 3. Alias fixado `int__*` desafixado durante espera de aprovação é recusado pós-aprovação.
+        feed.wait_for(|f| f.requests.is_empty()).await.unwrap();
+        let call_pin = spawn_call(
+            &mcp,
+            913,
+            "int__reval-pin__write_action",
+            json!({"reason": "Desafixar durante espera"}),
+        );
+        feed.wait_for(|f| !f.requests.is_empty()).await.unwrap();
+        let card_pin = feed.borrow().requests[0].clone();
+        let patch_unpin = client()
+            .patch(format!("http://{}/api/integrations/reval-pin", scene.addr))
+            .bearer_auth(OWNER)
+            .json(&json!({ "pinned": false }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(patch_unpin.status(), 200);
+        scene
+            .answer_approval(&card_pin.id, &card_pin.interaction_id, "allow_once")
+            .await;
+        let res_pin = call_pin.await.unwrap();
+        assert!(
+            is_error(&res_pin) && first_text(&res_pin).starts_with("integration_unpinned:"),
+            "{res_pin}"
         );
         assert_eq!(mock.tool_calls().len(), calls_before);
 
@@ -2744,6 +2831,22 @@ async fn mcp_cancelled_in_flight_returns_unknown_effect_error() {
             "chamada externa já havia sido enviada antes do cancelamento"
         );
         release.notify_one();
+
+        // Mesmo quando o `rmcp` descarta a resposta do pedido cancelado, o aviso sobrevive consultável em `integrations_list`.
+        let list_after = structured(&mcp.call("integrations_list", json!({})).await);
+        let item = list_after["integrations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|it| it["id"] == "flight-cancel")
+            .expect("flight-cancel presente na lista");
+        let warning = item["last_warning"]
+            .as_str()
+            .expect("last_warning deve registrar efeito remoto desconhecido após cancelamento em voo");
+        assert!(
+            warning.contains("integration_call_cancelled_in_flight"),
+            "{warning}"
+        );
 
         scene.shutdown().await;
     })

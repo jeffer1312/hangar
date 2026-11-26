@@ -16,6 +16,8 @@ use hangar_integrations::{
 
 const VOICE_CONFIRMATION_TTL: Duration = Duration::from_secs(120);
 
+type VoiceConfirmationKey = (String, Option<String>, String, String, String);
+
 /// Serviço compartilhado em [`crate::routes::AppState`] para gerenciar integrações MCP externas.
 pub struct IntegrationsService {
     pub registry: Arc<IntegrationRegistry>,
@@ -28,10 +30,13 @@ pub struct IntegrationsService {
     local_port: AtomicU16,
     /// Última falha operacional em memória por integração (limpa ao reconectar/atualizar/testar).
     last_errors: Mutex<HashMap<String, String>>,
-    /// Travas por integração para serializar mutações administrativas (`create`, `patch`, `delete`).
+    /// Último aviso de cancelamento em voo por integração (ex.: chamada cujo efeito remoto é desconhecido).
+    last_cancel_warnings: Mutex<HashMap<String, String>>,
+    /// Travas por integração para serializar mutações administrativas (`create`, `patch`, `delete`, `AllowAlways`).
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    /// Confirmações de uso único emitidas para chamadas de escrita pela voz, indexadas por `(id, tool, args_hash)`.
-    voice_confirmations: Mutex<HashMap<(String, String, String), Instant>>,
+    /// Confirmações de uso único emitidas para chamadas de escrita pela voz, indexadas por
+    /// `(voice_token, target_session, integration_id, tool_name, args_hash)`.
+    voice_confirmations: Mutex<HashMap<VoiceConfirmationKey, Instant>>,
 }
 
 impl IntegrationsService {
@@ -84,6 +89,7 @@ impl IntegrationsService {
             approvals,
             local_port: AtomicU16::new(0),
             last_errors: Mutex::new(HashMap::new()),
+            last_cancel_warnings: Mutex::new(HashMap::new()),
             locks: Mutex::new(HashMap::new()),
             voice_confirmations: Mutex::new(HashMap::new()),
         }
@@ -99,7 +105,7 @@ impl IntegrationsService {
         self.local_port.load(Ordering::Relaxed)
     }
 
-    /// Serializa mutações administrativas (`create`, `patch`, `delete`) por identificador.
+    /// Serializa mutações administrativas (`create`, `patch`, `delete`, `AllowAlways`) por identificador.
     pub async fn lock_integration(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
         let lock = {
             let mut guard = self.locks.lock().unwrap_or_else(PoisonError::into_inner);
@@ -111,9 +117,11 @@ impl IntegrationsService {
         lock.lock_owned().await
     }
 
-    /// Registra autorização pendente de voz para `(integration_id, tool_name, args_hash)` com TTL curto.
+    /// Registra autorização pendente de voz vinculada ao token de voz, sessão alvo, integração, ferramenta e argumentos.
     pub fn record_voice_confirmation(
         &self,
+        voice_token: &str,
+        target_session: Option<&str>,
         integration_id: &str,
         tool_name: &str,
         args_hash: String,
@@ -125,14 +133,22 @@ impl IntegrationsService {
             .unwrap_or_else(PoisonError::into_inner);
         guard.retain(|_, expires_at| *expires_at > now);
         guard.insert(
-            (integration_id.to_owned(), tool_name.to_owned(), args_hash),
+            (
+                voice_token.to_owned(),
+                target_session.map(str::to_owned),
+                integration_id.to_owned(),
+                tool_name.to_owned(),
+                args_hash,
+            ),
             now + VOICE_CONFIRMATION_TTL,
         );
     }
 
-    /// Consome atomicamente uma confirmação de voz prévia se presente e dentro do prazo.
+    /// Consome atomicamente uma confirmação de voz prévia se presente para o mesmo escopo e dentro do prazo.
     pub fn consume_voice_confirmation(
         &self,
+        voice_token: &str,
+        target_session: Option<&str>,
         integration_id: &str,
         tool_name: &str,
         args_hash: &str,
@@ -144,6 +160,8 @@ impl IntegrationsService {
             .unwrap_or_else(PoisonError::into_inner);
         guard.retain(|_, expires_at| *expires_at > now);
         let key = (
+            voice_token.to_owned(),
+            target_session.map(str::to_owned),
             integration_id.to_owned(),
             tool_name.to_owned(),
             args_hash.to_owned(),
@@ -156,7 +174,7 @@ impl IntegrationsService {
         self.voice_confirmations
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .retain(|(id, _, _), _| id != integration_id);
+            .retain(|(_, _, id, _, _), _| id != integration_id);
     }
 
     /// Registra a última mensagem de falha operacional em memória (sem segredos).
@@ -167,17 +185,45 @@ impl IntegrationsService {
             .insert(id.to_owned(), message.into());
     }
 
-    /// Limpa o erro em memória registrado para `id`.
+    /// Limpa o erro e eventual aviso de cancelamento em memória registrados para `id`.
     pub fn clear_error(&self, id: &str) {
         self.last_errors
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(id);
+        self.clear_cancel_warning(id);
     }
 
     /// Retorna uma cópia instantânea dos erros em memória por integração.
     pub fn last_errors_snapshot(&self) -> HashMap<String, String> {
         self.last_errors
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Registra aviso de chamada externa cancelada em voo com efeito remoto desconhecido.
+    pub fn record_cancel_warning(&self, id: &str, tool: &str) {
+        let msg = format!(
+            "integration_call_cancelled_in_flight: a última chamada externa ('{tool}') foi cancelada em voo e o efeito remoto é desconhecido; confira antes de repetir"
+        );
+        self.last_cancel_warnings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.to_owned(), msg);
+    }
+
+    /// Limpa o aviso de cancelamento em voo registrado para `id`.
+    pub fn clear_cancel_warning(&self, id: &str) {
+        self.last_cancel_warnings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(id);
+    }
+
+    /// Retorna uma cópia instantânea dos avisos de cancelamento em voo por integração.
+    pub fn cancel_warnings_snapshot(&self) -> HashMap<String, String> {
+        self.last_cancel_warnings
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()

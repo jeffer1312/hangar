@@ -13,10 +13,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use hangar_core::http::{detail, json_response};
 use hangar_integrations::{
-    ApprovalDecision, ApprovalError, AuthConfig, ClientError, IntegrationConfig,
+    ApprovalDecision, ApprovalError, AuthConfig, CancelOutcome, ClientError, IntegrationConfig,
     IntegrationSecrets, IntegrationStatus, IntegrationUpdate, OAuthError, OAuthOrigin,
     OAuthStartInput, OAuthStartOutcome, PermissionPolicy, RegistryError, SecretKeyError,
-    SecretStoreError, ToolsCache, Transport,
+    SecretStoreError, ToolsCache, Transport, config_fingerprint, validate_config_and_secrets,
 };
 use http_body_util::BodyExt;
 use serde::de::DeserializeOwned;
@@ -35,28 +35,77 @@ const RESERVED_HTTP_HEADERS: [&str; 5] = [
     "last-event-id",
 ];
 
+enum Route {
+    Collection,
+    Catalog,
+    OAuthCallback,
+    Approval(String),
+    Item(String),
+    OAuthStart(String),
+    OAuthOpenOnDesktop(String),
+    Test(String),
+    Tools(String),
+}
+
+impl Route {
+    fn accepts(&self, method: &Method) -> bool {
+        match self {
+            Self::Collection => matches!(*method, Method::GET | Method::POST),
+            Self::Catalog | Self::OAuthCallback | Self::Tools(_) => *method == Method::GET,
+            Self::Approval(_) => matches!(*method, Method::POST | Method::DELETE),
+            Self::Item(_) => matches!(*method, Method::PATCH | Method::DELETE),
+            Self::OAuthStart(_) | Self::OAuthOpenOnDesktop(_) | Self::Test(_) => {
+                *method == Method::POST
+            }
+        }
+    }
+}
+
+/// Classifica o caminho das rotas de integrações usando a mesma regra na borda e no despacho.
+/// Divide os segmentos antes de decodificar `%XX` para impedir que `%2F` crie segmentos extras.
+fn classify_path(path: &str) -> Option<Route> {
+    let segments: Vec<String> = path
+        .trim_start_matches('/')
+        .split('/')
+        .map(|part| {
+            percent_encoding::percent_decode_str(part)
+                .decode_utf8_lossy()
+                .into_owned()
+        })
+        .collect();
+    let segs: Vec<&str> = segments.iter().map(String::as_str).collect();
+    let reserved = |id: &str| matches!(id, "catalog" | "oauth" | "approvals");
+    match segs.as_slice() {
+        ["api", "integrations"] => Some(Route::Collection),
+        ["api", "integrations", "catalog"] => Some(Route::Catalog),
+        ["api", "integrations", "oauth", "callback"] => Some(Route::OAuthCallback),
+        ["api", "integrations", "approvals", id] if !id.is_empty() => {
+            Some(Route::Approval((*id).to_owned()))
+        }
+        ["api", "integrations", id] if !id.is_empty() && !reserved(id) => {
+            Some(Route::Item((*id).to_owned()))
+        }
+        ["api", "integrations", id, "oauth", "start"] if !id.is_empty() && !reserved(id) => {
+            Some(Route::OAuthStart((*id).to_owned()))
+        }
+        ["api", "integrations", id, "oauth", "open-on-desktop"]
+            if !id.is_empty() && !reserved(id) =>
+        {
+            Some(Route::OAuthOpenOnDesktop((*id).to_owned()))
+        }
+        ["api", "integrations", id, "test"] if !id.is_empty() && !reserved(id) => {
+            Some(Route::Test((*id).to_owned()))
+        }
+        ["api", "integrations", id, "tools"] if !id.is_empty() && !reserved(id) => {
+            Some(Route::Tools((*id).to_owned()))
+        }
+        _ => None,
+    }
+}
+
 /// Indica se o método e caminho pertencem às rotas nativas de integrações do Rust.
 pub fn matches(method: &Method, path: &str) -> bool {
-    if path == "/api/integrations" {
-        return matches!(*method, Method::GET | Method::POST);
-    }
-    let Some(rest) = path.strip_prefix("/api/integrations/") else {
-        return false;
-    };
-    let reserved = |id: &str| matches!(id, "catalog" | "oauth" | "approvals");
-    match rest.split('/').collect::<Vec<_>>().as_slice() {
-        ["catalog"] => *method == Method::GET,
-        ["oauth", "callback"] => *method == Method::GET,
-        ["approvals", id] if !id.is_empty() => matches!(*method, Method::POST | Method::DELETE),
-        [id] if !id.is_empty() && !reserved(id) => matches!(*method, Method::PATCH | Method::DELETE),
-        [id, "oauth", "start"] if !id.is_empty() && !reserved(id) => *method == Method::POST,
-        [id, "oauth", "open-on-desktop"] if !id.is_empty() && !reserved(id) => {
-            *method == Method::POST
-        }
-        [id, "test"] if !id.is_empty() && !reserved(id) => *method == Method::POST,
-        [id, "tools"] if !id.is_empty() && !reserved(id) => *method == Method::GET,
-        _ => false,
-    }
+    classify_path(path).is_some_and(|route| route.accepts(method))
 }
 
 /// Roteador público das rotas de integrações MCP.
@@ -105,18 +154,10 @@ async fn reply(state: &AppState, peer: Option<SocketAddr>, request: Request) -> 
         );
     }
 
-    // Divide antes de decodificar para impedir que `%2F` crie segmentos extras na rota.
-    let segments: Vec<String> = request
-        .uri()
-        .path()
-        .trim_start_matches('/')
-        .split('/')
-        .map(|part| percent_encoding::percent_decode_str(part).decode_utf8_lossy().into_owned())
-        .collect();
-    let segs: Vec<&str> = segments.iter().map(String::as_str).collect();
+    let route = classify_path(request.uri().path());
     let method = request.method().clone();
 
-    if method == Method::GET && matches!(segs.as_slice(), ["api", "integrations", "oauth", "callback"]) {
+    if method == Method::GET && matches!(route, Some(Route::OAuthCallback)) {
         return handle_oauth_callback(state, request).await;
     }
 
@@ -133,80 +174,43 @@ async fn reply(state: &AppState, peer: Option<SocketAddr>, request: Request) -> 
         return response;
     }
 
-    let reserved = |id: &str| matches!(id, "catalog" | "oauth" | "approvals");
-    match (method, segs.as_slice()) {
-        (Method::GET, ["api", "integrations", "catalog"]) => {
+    let Some(route) = route else {
+        return detail(StatusCode::NOT_FOUND, "not_found", "rota desconhecida", json!({}));
+    };
+    if !route.accepts(&method) {
+        return detail(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "método não aceito nesta rota",
+            json!({}),
+        );
+    }
+
+    match (method, route) {
+        (Method::GET, Route::Catalog) => {
             json_response(StatusCode::OK, json!({"presets": hangar_integrations::catalog()}))
         }
-        (Method::GET, ["api", "integrations"]) => list_integrations(state).await,
-        (Method::POST, ["api", "integrations"]) => create_integration(state, request).await,
-        (Method::PATCH, ["api", "integrations", id]) if !id.is_empty() && !reserved(id) => {
-            let id = (*id).to_owned();
-            patch_integration(state, &id, request).await
-        }
-        (Method::DELETE, ["api", "integrations", id]) if !id.is_empty() && !reserved(id) => {
-            let id = (*id).to_owned();
-            delete_integration(state, &id).await
-        }
-        (Method::POST, ["api", "integrations", id, "oauth", "start"])
-            if !id.is_empty() && !reserved(id) =>
-        {
-            let id = (*id).to_owned();
-            oauth_start(state, &id, request).await
-        }
-        (Method::POST, ["api", "integrations", id, "oauth", "open-on-desktop"])
-            if !id.is_empty() && !reserved(id) =>
-        {
-            let id = (*id).to_owned();
+        (Method::GET, Route::Collection) => list_integrations(state).await,
+        (Method::POST, Route::Collection) => create_integration(state, request).await,
+        (Method::PATCH, Route::Item(id)) => patch_integration(state, &id, request).await,
+        (Method::DELETE, Route::Item(id)) => delete_integration(state, &id).await,
+        (Method::POST, Route::OAuthStart(id)) => oauth_start(state, &id, request).await,
+        (Method::POST, Route::OAuthOpenOnDesktop(id)) => {
             oauth_open_on_desktop(state, &id, request).await
         }
-        (Method::POST, ["api", "integrations", id, "test"])
-            if !id.is_empty() && !reserved(id) =>
-        {
-            let id = (*id).to_owned();
-            test_integration(state, &id).await
-        }
-        (Method::GET, ["api", "integrations", id, "tools"])
-            if !id.is_empty() && !reserved(id) =>
-        {
-            let id = (*id).to_owned();
-            list_tools(state, &id)
-        }
-        (Method::POST, ["api", "integrations", "approvals", request_id]) if !request_id.is_empty() => {
-            let request_id = (*request_id).to_owned();
+        (Method::POST, Route::Test(id)) => test_integration(state, &id).await,
+        (Method::GET, Route::Tools(id)) => list_tools(state, &id),
+        (Method::POST, Route::Approval(request_id)) => {
             answer_approval(state, &request_id, request).await
         }
-        (Method::DELETE, ["api", "integrations", "approvals", request_id]) if !request_id.is_empty() => {
-            let request_id = (*request_id).to_owned();
-            cancel_approval(state, &request_id)
-        }
-        _ if path_known_any_method(&segs) => detail(
+        (Method::DELETE, Route::Approval(request_id)) => cancel_approval(state, &request_id),
+        _ => detail(
             StatusCode::METHOD_NOT_ALLOWED,
             "method_not_allowed",
             "método não aceito nesta rota",
             json!({}),
         ),
-        _ => detail(StatusCode::NOT_FOUND, "not_found", "rota desconhecida", json!({})),
     }
-}
-
-fn path_known_any_method(segs: &[&str]) -> bool {
-    let reserved = |id: &str| matches!(id, "catalog" | "oauth" | "approvals");
-    matches!(
-        segs,
-        ["api", "integrations"]
-            | ["api", "integrations", "catalog"]
-            | ["api", "integrations", "oauth", "callback"]
-    ) || matches!(segs, ["api", "integrations", "approvals", id] if !id.is_empty())
-        || matches!(segs, ["api", "integrations", id] if !id.is_empty() && !reserved(id))
-        || matches!(
-            segs,
-            ["api", "integrations", id, "oauth", "start"]
-                | ["api", "integrations", id, "oauth", "open-on-desktop"]
-                | ["api", "integrations", id, "test"]
-                | ["api", "integrations", id, "tools"]
-            if !id.is_empty() && !reserved(id)
-        )
 }
 
 // ---------------------------------------------------------------------------
@@ -538,9 +542,24 @@ async fn create_integration(state: &AppState, request: Request) -> Response {
     if let Err(err) = config.validate() {
         return registry_error(RegistryError::Validation(err));
     }
+    if let Err(msg) = validate_config_and_secrets(&config, &initial_secrets) {
+        return detail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "erro_corpo_invalido",
+            &msg,
+            json!({}),
+        );
+    }
 
     let lock_id = config.id.clone();
     let _guard = state.integrations.lock_integration(&lock_id).await;
+
+    // Nunca herda segredos órfãos de um DELETE parcial anterior ao recriar o mesmo ID sem `secrets`.
+    if initial_secrets.is_empty()
+        && let Err(err) = state.integrations.secrets.delete(&lock_id).await
+    {
+        return secret_store_error(err);
+    }
 
     let created = match state.integrations.registry.create(config) {
         Ok(cfg) => cfg,
@@ -630,10 +649,11 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         Err(err) => return registry_error(err),
     };
 
-    let transport_or_auth_changed = body.transport.is_some() || body.auth.is_some();
-    let should_invalidate = body.enabled == Some(false)
-        || transport_or_auth_changed
-        || body.secrets.is_some();
+    let previous_secrets = match state.integrations.secrets.get(id).await {
+        Ok(sec) => sec,
+        Err(err) => return secret_store_error(err),
+    };
+
     let has_field_updates = body.name.is_some()
         || body.preset.is_some()
         || body.enabled.is_some()
@@ -647,6 +667,122 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         body.add_allowed_tools.is_some() || body.remove_allowed_tools.is_some();
     let add_tools = body.add_allowed_tools.unwrap_or_default();
     let remove_tools = body.remove_allowed_tools.unwrap_or_default();
+    let explicit_allowed_tools = body.allowed_tools.is_some();
+
+    // Pré-valida a configuração efetiva e os segredos resultantes antes de gravar no disco.
+    let mut candidate_config = existing.clone();
+    if let Some(ref name) = body.name {
+        candidate_config.name = name.clone();
+    }
+    if let Some(ref preset) = body.preset {
+        candidate_config.preset = preset.clone();
+    }
+    if let Some(enabled) = body.enabled {
+        candidate_config.enabled = enabled;
+    }
+    if let Some(ref transport) = body.transport {
+        if &candidate_config.transport != transport && body.allowed_tools.is_none() {
+            candidate_config.allowed_tools.clear();
+        }
+        candidate_config.transport = transport.clone();
+    }
+    if let Some(ref auth) = body.auth {
+        candidate_config.auth = auth.clone();
+    }
+    if let Some(policy) = body.policy {
+        candidate_config.policy = policy;
+    }
+    if let Some(pinned) = body.pinned {
+        candidate_config.pinned = pinned;
+    }
+    if let Some(ref projects) = body.projects {
+        candidate_config.projects = projects.clone();
+    }
+    if let Some(ref allowed) = body.allowed_tools {
+        candidate_config.allowed_tools = allowed.clone();
+    }
+    for tool in &add_tools {
+        candidate_config.allowed_tools.insert(tool.clone());
+    }
+    for tool in &remove_tools {
+        candidate_config.allowed_tools.remove(tool);
+    }
+
+    let remote_url_changed = remote_url(&existing.transport) != remote_url(&candidate_config.transport);
+    let destination_changed = existing.transport != candidate_config.transport
+        || existing.auth != candidate_config.auth;
+    let should_invalidate =
+        body.enabled == Some(false) || destination_changed || body.secrets.is_some();
+
+    let candidate_secrets = match &body.secrets {
+        None => {
+            let mut next = previous_secrets.clone();
+            if remote_url_changed {
+                clear_remote_endpoint_secrets(&mut next);
+            }
+            next
+        }
+        Some(None) => None,
+        Some(Some(patch)) => {
+            let mut next = previous_secrets.clone();
+            if remote_url_changed {
+                clear_remote_endpoint_secrets(&mut next);
+            }
+            let clone_patch = SecretsPatch {
+                bearer_token: patch.bearer_token.clone(),
+                headers: patch.headers.clone(),
+                oauth_client_secret: patch.oauth_client_secret.clone(),
+                client_secret: patch.client_secret.clone(),
+                env: patch.env.clone(),
+            };
+            let entry = next.get_or_insert_with(IntegrationSecrets::default);
+            if let Err(resp) = apply_secrets_patch(entry, clone_patch) {
+                return resp;
+            }
+            if entry.is_empty() {
+                next = None;
+            }
+            next
+        }
+    };
+    if let Err(msg) = validate_config_and_secrets(
+        &candidate_config,
+        &candidate_secrets.clone().unwrap_or_default(),
+    ) {
+        return detail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "erro_corpo_invalido",
+            &msg,
+            json!({}),
+        );
+    }
+
+    // Invalida conexões e cartões antes de publicar novo destino/auth para impedir reutilização cruzada.
+    if destination_changed || body.enabled == Some(false) {
+        state.integrations.clients.invalidate(id).await;
+        state.integrations.tools_cache.invalidate(id);
+        state.integrations.oauth.cancel_pending_for(id);
+        state.integrations.approvals.cancel_for_integration(id);
+        state.integrations.clear_voice_confirmations(id);
+    }
+
+    // Troca de URL/destino limpa segredos remotos ANTES de gravar o novo destino em config.json,
+    // impedindo que `ensure_connected` combine URL nova com credenciais do servidor anterior.
+    let mut cleared_old_remote_secrets = false;
+    if remote_url_changed && previous_secrets.is_some() {
+        if let Err(err) = state
+            .integrations
+            .secrets
+            .update_with(id, move |slot| {
+                clear_remote_endpoint_secrets(slot);
+                Ok(())
+            })
+            .await
+        {
+            return secret_store_error(err);
+        }
+        cleared_old_remote_secrets = true;
+    }
 
     let rollback_update = IntegrationUpdate {
         name: Some(existing.name.clone()),
@@ -657,9 +793,25 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         policy: Some(existing.policy),
         pinned: Some(existing.pinned),
         projects: Some(existing.projects.clone()),
-        allowed_tools: Some(existing.allowed_tools.clone()),
+        // Só restaura `allowed_tools` se o próprio PATCH substituiu ou limpou a lista (evita apagar `AllowAlways`).
+        allowed_tools: if explicit_allowed_tools || destination_changed {
+            Some(existing.allowed_tools.clone())
+        } else {
+            None
+        },
         updated_at: Some(existing.updated_at),
     };
+
+    async fn restore_secrets(state: &AppState, id: String, prev: Option<IntegrationSecrets>) {
+        match prev {
+            Some(sec) => {
+                let _ = state.integrations.secrets.set(&id, sec).await;
+            }
+            None => {
+                let _ = state.integrations.secrets.delete(&id).await;
+            }
+        }
+    }
 
     let mut did_registry_update = false;
     let mut updated = if !has_field_updates && has_allowed_delta {
@@ -682,7 +834,12 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
                 did_registry_update = true;
                 cfg
             }
-            Err(err) => return registry_error(err),
+            Err(err) => {
+                if cleared_old_remote_secrets {
+                    restore_secrets(state, id.to_owned(), previous_secrets).await;
+                }
+                return registry_error(err);
+            }
         }
     };
 
@@ -697,42 +854,24 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
                 if did_registry_update {
                     let _ = state.integrations.registry.update(id, rollback_update);
                 }
+                if cleared_old_remote_secrets {
+                    restore_secrets(state, id.to_owned(), previous_secrets).await;
+                }
                 return registry_error(err);
             }
         }
     }
 
-    // Troca de URL/transporte remoto nunca pode reaproveitar credenciais HTTP ou OAuth do destino anterior.
-    let remote_url_changed = remote_url(&existing.transport) != remote_url(&updated.transport);
-
     let secrets_after = match body.secrets {
-        None if !remote_url_changed => match state.integrations.secrets.get(id).await {
-            Ok(sec) => sec,
-            Err(err) => {
-                let _ = state.integrations.registry.update(id, rollback_update);
-                return secret_store_error(err);
-            }
-        },
-        None => {
-            match state
-                .integrations
-                .secrets
-                .update_with(id, move |slot| {
-                    clear_remote_endpoint_secrets(slot);
-                    Ok(slot.clone())
-                })
-                .await
-            {
-                Ok(sec) => sec,
-                Err(err) => {
-                    let _ = state.integrations.registry.update(id, rollback_update);
-                    return secret_store_error(err);
-                }
-            }
-        }
+        None => candidate_secrets,
         Some(None) => {
             if let Err(err) = state.integrations.secrets.delete(id).await {
-                let _ = state.integrations.registry.update(id, rollback_update);
+                if did_registry_update {
+                    let _ = state.integrations.registry.update(id, rollback_update);
+                }
+                if cleared_old_remote_secrets {
+                    restore_secrets(state, id.to_owned(), previous_secrets).await;
+                }
                 return secret_store_error(err);
             }
             None
@@ -760,11 +899,21 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
             match res {
                 Ok(sec) => sec,
                 Err(SecretStoreError::InvalidId) => {
-                    let _ = state.integrations.registry.update(id, rollback_update);
+                    if did_registry_update {
+                        let _ = state.integrations.registry.update(id, rollback_update);
+                    }
+                    if cleared_old_remote_secrets {
+                        restore_secrets(state, id.to_owned(), previous_secrets).await;
+                    }
                     return invalid_body();
                 }
                 Err(err) => {
-                    let _ = state.integrations.registry.update(id, rollback_update);
+                    if did_registry_update {
+                        let _ = state.integrations.registry.update(id, rollback_update);
+                    }
+                    if cleared_old_remote_secrets {
+                        restore_secrets(state, id.to_owned(), previous_secrets).await;
+                    }
                     return secret_store_error(err);
                 }
             }
@@ -777,7 +926,7 @@ async fn patch_integration(state: &AppState, id: &str, request: Request) -> Resp
         state.integrations.tools_cache.invalidate(id);
         state.integrations.clear_voice_confirmations(id);
     }
-    if transport_or_auth_changed {
+    if destination_changed {
         state.integrations.oauth.cancel_pending_for(id);
     }
 
@@ -1051,12 +1200,39 @@ async fn answer_approval(state: &AppState, request_id: &str, request: Request) -
         Err(err) => return approval_error(err),
     };
 
+    let integration_id = claim.integration_id().to_owned();
+    // Serializa gravação de `AllowAlways` com PATCH/DELETE da mesma integração.
+    let _guard = state.integrations.lock_integration(&integration_id).await;
+
+    if !claim.is_live() {
+        drop(claim);
+        return approval_error(ApprovalError::Lost);
+    }
+
+    if let Some(expected_fp) = claim.config_fingerprint() {
+        match state.integrations.registry.get(&integration_id) {
+            Ok(Some(cfg)) if config_fingerprint(&cfg) == expected_fp => {}
+            Ok(_) => {
+                drop(claim);
+                state
+                    .integrations
+                    .approvals
+                    .cancel_for_integration(&integration_id);
+                return approval_error(ApprovalError::Lost);
+            }
+            Err(err) => {
+                drop(claim);
+                return registry_error(err);
+            }
+        }
+    }
+
     if claim.decision() == ApprovalDecision::AllowAlways {
         let registry = state.integrations.registry.clone();
-        let integration_id = claim.integration_id().to_owned();
+        let target_id = integration_id.clone();
         let tool = claim.tool().to_owned();
         let persisted = tokio::task::spawn_blocking(move || {
-            registry.add_allowed_tool(&integration_id, &tool)
+            registry.add_allowed_tool(&target_id, &tool)
         })
         .await;
         match persisted {
@@ -1089,15 +1265,20 @@ async fn answer_approval(state: &AppState, request_id: &str, request: Request) -
 }
 
 fn cancel_approval(state: &AppState, request_id: &str) -> Response {
-    if state.integrations.approvals.cancel(request_id) {
-        json_response(StatusCode::OK, json!({"ok": true}))
-    } else {
-        detail(
+    match state.integrations.approvals.try_cancel(request_id) {
+        CancelOutcome::Cancelled => json_response(StatusCode::OK, json!({"ok": true})),
+        CancelOutcome::InProgress => detail(
+            StatusCode::CONFLICT,
+            "approval_in_progress",
+            "uma resposta para este pedido está em andamento",
+            json!({}),
+        ),
+        CancelOutcome::NotFound => detail(
             StatusCode::NOT_FOUND,
             "approval_not_found",
             "pedido de aprovação não encontrado ou já encerrado",
             json!({}),
-        )
+        ),
     }
 }
 
@@ -1249,8 +1430,9 @@ fn client_error(state: &AppState, id: &str, err: ClientError) -> Response {
                 json!({}),
             )
         }
-        ClientError::RemoteError { code, message } => {
-            let msg = format!("erro remoto MCP ({code}): {message}");
+        ClientError::RemoteError { code, .. } => {
+            // Não armazena nem devolve texto bruto do servidor remoto em `last_error`/`/test` para evitar eco de segredos.
+            let msg = format!("erro remoto MCP ({code}) retornado pelo servidor externo");
             state.integrations.record_error(id, msg.clone());
             detail(
                 StatusCode::BAD_GATEWAY,
@@ -1269,6 +1451,12 @@ fn approval_error(err: ApprovalError) -> Response {
         ApprovalError::Lost => detail(
             StatusCode::NOT_FOUND,
             "approval_not_found",
+            &err.to_string(),
+            json!({}),
+        ),
+        ApprovalError::Claimed => detail(
+            StatusCode::CONFLICT,
+            "approval_in_progress",
             &err.to_string(),
             json!({}),
         ),

@@ -408,7 +408,13 @@ impl Hangar {
         if list.is_empty() {
             return drop_requests(&mut self.integrations, key, cx);
         }
-        let (api, machine) = (self.machine_api(key), self.vault_machine_label(key, cx));
+        // Para pedidos remotos usa a API da própria RemoteList (nunca `open_api`, que pode guardar token antigo).
+        let api = if self.is_active_key(key) {
+            self.api.clone()
+        } else {
+            self.remote.get(key).and_then(|list| list.api.clone())
+        };
+        let machine = self.vault_machine_label(key, cx);
         let runtime = self.runtime.clone();
         let entity = self
             .integrations
@@ -488,17 +494,18 @@ impl Hangar {
 
     /// Cartões de outras sessões ou quando a conversa está coberta: flutuam sobre a janela.
     #[allow(dead_code)]
-    pub(super) fn render_integration_float(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.render_integration_float_at(0., cx)
+    pub(super) fn render_integration_float(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.render_integration_float_at(0., window, cx)
     }
 
     /// Versão com deslocamento horizontal quando o popover do cofre também está aberto no mesmo canto.
     pub(super) fn render_integration_float_at(
         &self,
         extra_right: f32,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        self.render_integration_float_from(52., extra_right, cx)
+        self.render_integration_float_from(52., extra_right, window, cx)
     }
 
     /// Versão com posição vertical configurável, usada na raiz quando outra página cobre a conversa.
@@ -506,15 +513,18 @@ impl Hangar {
         &self,
         top: f32,
         extra_right: f32,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let cards = self.integration_cards(false, cx);
         if cards.is_empty() {
             return None;
         }
+        // Limita a altura rolável à área visível abaixo de `top`, evitando cartões fora da janela.
+        let max_h = (window.viewport_size().height - px(top + 24.)).max(px(140.)).min(px(520.));
         let cards = div()
             .id("integrations-float")
-            .max_h(px(520.))
+            .max_h(max_h)
             .overflow_y_scroll()
             .py_1()
             .flex()

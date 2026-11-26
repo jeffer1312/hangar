@@ -289,18 +289,18 @@ describe('updateIntegration delta de allowed_tools', () => {
 });
 
 describe('parsers e validadores compartilhados de integrações', () => {
-  it('parseLines e parseScopes normalizam linhas e separadores', () => {
+  it('parseLines e parseScopes normalizam linhas e preservam vírgulas em escopos OAuth', () => {
     expect(parseLines('  proj-a \r\n\r\n  proj-b\n  ')).toEqual(['proj-a', 'proj-b']);
     expect(parseLines('  \n \r\n ')).toEqual([]);
 
-    expect(parseScopes('openid, profile  email\nread:user , write:user')).toEqual([
+    expect(parseScopes('openid  profile\temail\nread:user reports,read')).toEqual([
       'openid',
       'profile',
       'email',
       'read:user',
-      'write:user',
+      'reports,read',
     ]);
-    expect(parseScopes(' , \n ')).toEqual([]);
+    expect(parseScopes('  \t \n ')).toEqual([]);
   });
 
   it('isValidHeaderName segue tchar RFC 9110 e rejeita cabeçalhos reservados', () => {
@@ -340,6 +340,14 @@ describe('parsers e validadores compartilhados de integrações', () => {
     });
     expect(parseHeaders('X-Empty:   ')).toEqual({ ok: false, reason: 'invalid_value', name: 'x-empty' });
     expect(parseHeaders('X-Ctrl: ok\u0000bad')).toEqual({ ok: false, reason: 'invalid_value', name: 'x-ctrl' });
+
+    const protoHeader = parseHeaders('__proto__: segredo\nX-Normal: ok');
+    expect(protoHeader.ok).toBe(true);
+    if (protoHeader.ok) {
+      expect(Object.getPrototypeOf(protoHeader.map)).toBeNull();
+      expect(protoHeader.names).toEqual(['__proto__', 'x-normal']);
+      expect(JSON.stringify(protoHeader.map)).toBe('{"__proto__":"segredo","x-normal":"ok"}');
+    }
   });
 
   it('parseEnvVars preserva espaços finais do valor e remove só \\r de CRLF', () => {
@@ -354,6 +362,14 @@ describe('parsers e validadores compartilhados de integrações', () => {
         EXPR: 'a=b=c',
       },
     });
+
+    const protoEnv = parseEnvVars('__proto__=valor\nNORMAL=1');
+    expect(protoEnv.ok).toBe(true);
+    if (protoEnv.ok) {
+      expect(Object.getPrototypeOf(protoEnv.map)).toBeNull();
+      expect(protoEnv.keys).toEqual(['__proto__', 'NORMAL']);
+      expect(JSON.stringify(protoEnv.map)).toBe('{"__proto__":"valor","NORMAL":"1"}');
+    }
 
     expect(parseEnvVars('SEM_IGUAL')).toEqual({ ok: false, reason: 'invalid_line' });
     expect(parseEnvVars('=sem-chave')).toEqual({ ok: false, reason: 'invalid_line' });
@@ -383,6 +399,9 @@ describe('parsers e validadores compartilhados de integrações', () => {
       ok: true,
       args: ['--flag=my val', 'single arg', 'escaped space'],
     });
+    expect(parseCommandArgs('srv arg\\ ')).toEqual({ ok: true, args: ['srv', 'arg '] });
+    expect(parseCommandArgs('srv arg   ')).toEqual({ ok: true, args: ['srv', 'arg'] });
+    expect(parseCommandArgs('srv "arg "')).toEqual({ ok: true, args: ['srv', 'arg '] });
     expect(parseCommandArgs('C:\\tools\\mcp.exe --port 3000')).toEqual({
       ok: true,
       args: ['C:\\tools\\mcp.exe', '--port', '3000'],

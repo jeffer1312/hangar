@@ -23,14 +23,26 @@ import { haptic } from '../../ui/haptics';
 import { superficie } from '../../theme/superficie';
 import * as m from '../../paraglide/messages';
 
-// Pedido respondido sai da folha na hora; o próximo evento `integrations_approvals` confirma.
+// Pedido respondido sai da fila local na hora; o próximo evento `integrations_approvals` confirma.
 const answered = new Set<string>();
 const pending = (requests: IntegrationApprovalRequest[]) => requests.filter((r) => !answered.has(r.id));
+function markRemovedLocally(serverId: string, requestId: string) {
+  answered.add(requestId);
+  const current = useSessions.getState().integrationApprovals;
+  const entry = current[serverId];
+  if (!entry) return;
+  const remaining = entry.requests.filter((r) => r.id !== requestId);
+  if (remaining.length === entry.requests.length) return;
+  useSessions.setState({
+    integrationApprovals: { ...current, [serverId]: { ...entry, requests: remaining } },
+  });
+}
 // Estado de teste montado sem o campo `integrationApprovals` não derruba a lista.
 const NONE: Record<string, IntegrationApprovalEvent> = {};
 const EMPTY_BUCKETS: ServerBucket[] = [];
 const EMPTY_SERVERS: Server[] = [];
 
+// `approval_in_progress` indica reserva concorrente ainda aberta; nunca encerra o pedido localmente.
 const GONE_CODES = new Set(['approval_stale', 'approval_answered', 'approval_lost', 'approval_not_found', 'approval_conflict']);
 
 function ApprovalNotice({ title, onPress }: { title: string; onPress: () => void }) {
@@ -115,16 +127,24 @@ export function SessionIntegrationRequests({ serverId, name }: { serverId: strin
   const mine = Object.entries(approvals).flatMap(([owner, event]) =>
     pending(event.requests).filter((r) => fromHere(owner, r.origin)).map((r) => ({ owner, r })),
   );
+  if (mine.length === 0) return null;
+  const first = mine[0];
+  // Mostra um único aviso no chat (agregado quando há vários pedidos) para não comprimir a conversa com o teclado aberto.
+  const serverLabel = servers.find((s) => s.id === first.owner)?.label ?? first.owner;
+  const title = mine.length === 1
+    ? m.integrations_approval_session_notice({
+      integration: first.r.integration_name || first.r.integration_id,
+      tool: first.r.tool,
+    })
+    : m.integrations_approval_requests_title({ label: serverLabel, count: mine.length });
   return (
-    <>
-      {mine.map(({ owner, r }) => (
-        <ApprovalNotice
-          key={r.id}
-          title={m.integrations_approval_session_notice({ integration: r.integration_name || r.integration_id, tool: r.tool })}
-          onPress={() => openIntegrationApproval({ serverId: owner, requestId: r.id })}
-        />
-      ))}
-    </>
+    <ApprovalNotice
+      title={title}
+      onPress={() => openIntegrationApproval({
+        serverId: first.owner,
+        requestId: mine.length === 1 ? first.r.id : null,
+      })}
+    />
   );
 }
 
@@ -205,13 +225,13 @@ function ApprovalCard({ server, request, onDone }: {
         interaction_id: request.interaction_id,
         decision,
       });
-      answered.add(request.id);
+      markRemovedLocally(server.id, request.id);
       toast.ok(doneText);
       onDone();
     } catch (e) {
       const code = (e as { code?: unknown } | null)?.code;
       if (typeof code === 'string' && GONE_CODES.has(code)) {
-        answered.add(request.id);
+        markRemovedLocally(server.id, request.id);
         toast.erro(integrationErrorText(e));
         onDone();
         return;

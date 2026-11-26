@@ -142,6 +142,9 @@ impl ServerHandler for Handler {
             }));
         }
         // O cancelamento MCP dropa o futuro e o `ApprovalWaiter::drop` remove o cartão pendente na UI.
+        // Quando o envio externo já começou, `CancelWarningGuard` grava o aviso de efeito desconhecido
+        // consultável via `integrations_list` (`last_warning`), mesmo se o `rmcp` descartar este `CallToolResponse`
+        // após `notifications/cancelled`.
         if let Some(external_started) = external_started {
             return Ok(CallToolResponse::Complete(tokio::select! {
                 result = call => result,

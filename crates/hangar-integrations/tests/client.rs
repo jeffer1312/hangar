@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::Router;
@@ -30,6 +30,38 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::sync::{Barrier, Notify, RwLock};
 use zeroize::Zeroizing;
+
+struct TestEnv {
+    _dir: TempDir,
+    registry: Arc<IntegrationRegistry>,
+    secrets: Arc<SecretStore>,
+    tools_cache: Arc<ToolsCache>,
+}
+
+impl TestEnv {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("criar diretório temporário");
+        let registry = Arc::new(IntegrationRegistry::new(dir.path()));
+        let key_store = Arc::new(MemoryKeyStore::new());
+        let secrets = Arc::new(SecretStore::new(dir.path(), key_store));
+        let tools_cache = Arc::new(ToolsCache::new());
+        Self {
+            _dir: dir,
+            registry,
+            secrets,
+            tools_cache,
+        }
+    }
+
+    fn manager(&self, config: ClientConfig) -> McpClientManager {
+        McpClientManager::new(
+            self.registry.clone(),
+            self.secrets.clone(),
+            self.tools_cache.clone(),
+            config,
+        )
+    }
+}
 
 fn fixture_bin() -> String {
     env!("CARGO_BIN_EXE_hangar-fixture-mcp").to_owned()
@@ -79,38 +111,6 @@ fn http_config(
         allowed_tools: BTreeSet::new(),
         created_at: 1.0,
         updated_at: 1.0,
-    }
-}
-
-struct TestEnv {
-    _dir: TempDir,
-    registry: Arc<IntegrationRegistry>,
-    secrets: Arc<SecretStore>,
-    tools_cache: Arc<ToolsCache>,
-}
-
-impl TestEnv {
-    fn new() -> Self {
-        let dir = tempfile::tempdir().expect("criar diretório temporário");
-        let registry = Arc::new(IntegrationRegistry::new(dir.path()));
-        let key_store = Arc::new(MemoryKeyStore::new());
-        let secrets = Arc::new(SecretStore::new(dir.path(), key_store));
-        let tools_cache = Arc::new(ToolsCache::new());
-        Self {
-            _dir: dir,
-            registry,
-            secrets,
-            tools_cache,
-        }
-    }
-
-    fn manager(&self, config: ClientConfig) -> McpClientManager {
-        McpClientManager::new(
-            self.registry.clone(),
-            self.secrets.clone(),
-            self.tools_cache.clone(),
-            config,
-        )
     }
 }
 
@@ -223,6 +223,7 @@ struct AuthGateState {
     required_custom_header: Option<(&'static str, &'static str)>,
     include_www_authenticate: bool,
     sync_401_barrier: Option<Arc<Barrier>>,
+    barrier_timed_out: Arc<AtomicBool>,
     notify_on_401_at: Option<(Arc<AtomicUsize>, usize, Arc<Notify>)>,
 }
 
@@ -235,13 +236,18 @@ async fn auth_gate(State(state): State<AuthGateState>, req: Request, next: Next)
         .and_then(|v| v.to_str().ok())
         == Some(expected_header.as_str());
     if !auth_ok {
-        if let Some(barrier) = &state.sync_401_barrier {
-            let _ = tokio::time::timeout(Duration::from_secs(2), barrier.wait()).await;
+        if let Some(barrier) = &state.sync_401_barrier
+            && tokio::time::timeout(Duration::from_secs(2), barrier.wait())
+                .await
+                .is_err()
+        {
+            state.barrier_timed_out.store(true, Ordering::SeqCst);
         }
         if let Some((counter, target, notify)) = &state.notify_on_401_at
             && counter.fetch_add(1, Ordering::SeqCst) + 1 == *target
         {
-            notify.notify_waiters();
+            // `notify_one` preserva o sinal mesmo se a espera for criada após o segundo 401.
+            notify.notify_one();
         }
         let mut resp = (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
         if state.include_www_authenticate {
@@ -623,39 +629,79 @@ async fn call_timeout_kills_stuck_stdio_without_blocking_other_integrations() {
         .unwrap();
     assert_eq!(warmup.text, "warmup");
 
+    // Subcaso A: independência entre integrações coordenada por arquivo-sinal (sem prazo de 150 ms).
+    let release_signal = env._dir.path().join("slow_release.flag");
+    env.registry
+        .create(stdio_config(
+            "gated-slow",
+            PermissionPolicy::AllowAll,
+            vec![
+                "FIXTURE_SLOW_STARTED_FILE".to_owned(),
+                "FIXTURE_SLOW_RELEASE_FILE".to_owned(),
+            ],
+        ))
+        .unwrap();
+    let gated_started = env._dir.path().join("gated_slow_started.flag");
+    env.secrets
+        .set(
+            "gated-slow",
+            IntegrationSecrets {
+                env: BTreeMap::from([
+                    (
+                        "FIXTURE_SLOW_STARTED_FILE".to_owned(),
+                        Zeroizing::new(gated_started.display().to_string()),
+                    ),
+                    (
+                        "FIXTURE_SLOW_RELEASE_FILE".to_owned(),
+                        Zeroizing::new(release_signal.display().to_string()),
+                    ),
+                ]),
+                ..IntegrationSecrets::default()
+            },
+        )
+        .await
+        .unwrap();
+    let indep_manager = Arc::new(env.manager(ClientConfig {
+        call_timeout: Duration::from_secs(5),
+        exit_grace: Duration::from_millis(100),
+        ..ClientConfig::default()
+    }));
+    let m_gated = Arc::clone(&indep_manager);
+    let gated_task = tokio::spawn(async move {
+        m_gated
+            .call_tool("gated-slow", "slow_tool", json!({"delay_ms": 5_000}))
+            .await
+    });
+    wait_for_file(&gated_started, Duration::from_secs(3)).await;
+    let fast_out = indep_manager
+        .call_tool("fast-int", "read_echo", json!({"text": "paralelo"}))
+        .await
+        .unwrap();
+    assert_eq!(fast_out.text, "paralelo");
+    assert!(
+        !gated_task.is_finished(),
+        "chamada lenta ainda deveria aguardar o sinal quando fast-int respondeu"
+    );
+    tokio::fs::write(&release_signal, b"go").await.unwrap();
+    let gated_res = gated_task.await.unwrap().unwrap();
+    assert_eq!(gated_res.text, "slow-done");
+    indep_manager.shutdown().await;
+
+    // Subcaso B: encerramento por timeout mata a árvore do processo preso.
     let m_slow = manager.clone();
     let slow_task = tokio::spawn(async move {
         m_slow
             .call_tool("slow-int", "slow_tool", json!({"delay_ms": 10_000}))
             .await
     });
-
-    // Aguarda sinal explícito de que `slow_tool` iniciou no processo filho antes de chamar `fast-int`.
     wait_for_file(&started_signal, Duration::from_secs(2)).await;
-    let fast_started = Instant::now();
-    let fast_out = manager
-        .call_tool("fast-int", "read_echo", json!({"text": "paralelo"}))
-        .await
-        .unwrap();
-    assert_eq!(fast_out.text, "paralelo");
-    assert!(
-        fast_started.elapsed() < Duration::from_millis(150),
-        "chamada à outra integração não pode ser bloqueada pela integração travada"
-    );
-    assert!(
-        !slow_task.is_finished(),
-        "chamada lenta ainda deveria estar em execução quando fast-int respondeu"
-    );
 
     let slow_res = slow_task.await.unwrap();
     assert!(
         matches!(slow_res, Err(ClientError::Timeout(_))),
         "esperado Timeout, veio {slow_res:?}"
     );
-    assert!(
-        !pid_alive(slow_pid).unwrap(),
-        "processo filho travado no timeout deve morrer"
-    );
+    wait_until_pid_dead(slow_pid, Duration::from_secs(2)).await;
     assert!(
         !manager.running_ids().iter().any(|id| id == "slow-int"),
         "slow-int deve ter sido removida de running_ids"
@@ -1066,11 +1112,13 @@ async fn remote_http_oauth_refreshes_on_mid_session_401_and_requires_refresher()
 async fn concurrent_oauth_401_refreshes_once_without_cancelling_each_other() {
     let expected_token_gate = Arc::new(RwLock::new("token-inicial-v1".to_owned()));
     let barrier = Arc::new(Barrier::new(2));
+    let barrier_timed_out = Arc::new(AtomicBool::new(false));
     let state = AuthGateState {
         expected_token: expected_token_gate.clone(),
         required_custom_header: None,
         include_www_authenticate: false,
         sync_401_barrier: Some(barrier),
+        barrier_timed_out: barrier_timed_out.clone(),
         ..Default::default()
     };
     let (addr, server_handle) = spawn_http_mcp_server(state).await;
@@ -1133,6 +1181,10 @@ async fn concurrent_oauth_401_refreshes_once_without_cancelling_each_other() {
     let out_b = res_b.expect("chamada B não deveria ser cancelada pela A");
     assert_eq!(out_a.text, "call-a|auth=Bearer token-renovado-v2|ws=");
     assert_eq!(out_b.text, "call-b|auth=Bearer token-renovado-v2|ws=");
+    assert!(
+        !barrier_timed_out.load(Ordering::SeqCst),
+        "ambas as chamadas concorrentes devem alcançar a barreira de 401 sem timeout"
+    );
     assert_eq!(
         refresher.calls.load(Ordering::SeqCst),
         1,
@@ -1272,26 +1324,25 @@ async fn connect_timeout_and_external_cancel_kill_hanging_stdio_init() {
         .await
         .unwrap();
 
-    let timeout_manager = env.manager(ClientConfig {
-        connect_timeout: Duration::from_millis(200),
+    let timeout_manager = Arc::new(env.manager(ClientConfig {
+        connect_timeout: Duration::from_millis(800),
         exit_grace: Duration::from_millis(50),
         ..ClientConfig::default()
-    });
-    let timeout_res = timeout_manager.list_tools("hang-init-timeout").await;
+    }));
+    let m_timeout = Arc::clone(&timeout_manager);
+    let timeout_task = tokio::spawn(async move { m_timeout.list_tools("hang-init-timeout").await });
+    // Garante que o processo filho iniciou e gravou o PID antes de aguardar o encerramento por timeout.
+    let pid_timeout: u32 = wait_for_file(&pid_file_timeout, Duration::from_secs(3))
+        .await
+        .trim()
+        .parse()
+        .unwrap();
+    let timeout_res = timeout_task.await.unwrap();
     assert!(
         matches!(timeout_res, Err(ClientError::Timeout(_))),
         "handshake travado deve falhar com Timeout, veio {timeout_res:?}"
     );
-    let pid_timeout: u32 = tokio::fs::read_to_string(&pid_file_timeout)
-        .await
-        .expect("fixture gravou PID antes de travar")
-        .trim()
-        .parse()
-        .unwrap();
-    assert!(
-        !pid_alive(pid_timeout).unwrap(),
-        "connect_timeout deve encerrar o processo travado no initialize"
-    );
+    wait_until_pid_dead(pid_timeout, Duration::from_secs(2)).await;
     assert!(timeout_manager.running_ids().is_empty());
     timeout_manager.shutdown().await;
 
@@ -1437,9 +1488,9 @@ async fn concurrent_cold_oauth_401_deduplicates_refresh_and_rejects_blank_token(
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 // Segura o primeiro refresh até a segunda chamada fria também falhar com 401 no handshake.
-                let _ =
-                    tokio::time::timeout(Duration::from_secs(2), self.second_401_ready.notified())
-                        .await;
+                tokio::time::timeout(Duration::from_secs(3), self.second_401_ready.notified())
+                    .await
+                    .expect("segunda chamada fria deveria atingir 401 antes de renovar o token");
                 *self.expected_token_gate.write().await = self.next_token.clone();
                 Ok(self.next_token.clone())
             })
@@ -1559,7 +1610,9 @@ async fn list_tools_generation_fencing_discards_write_after_invalidation() {
             _context: RequestContext<RoleServer>,
         ) -> Result<ListToolsResult, ErrorData> {
             self.started.notify_one();
-            let _ = tokio::time::timeout(Duration::from_secs(3), self.allow.notified()).await;
+            tokio::time::timeout(Duration::from_secs(3), self.allow.notified())
+                .await
+                .map_err(|_| ErrorData::internal_error("allow timeout", None))?;
             let schema = Arc::new(
                 json!({"type": "object"})
                     .as_object()

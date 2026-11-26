@@ -79,7 +79,7 @@ vi.mock('@hangar/core', async (original) => ({
 vi.mock('../machines/parts', () => ({
   MachineSheet: ({ title, children }: { title: string; children: ReactNode }) =>
     createElement('section', { 'aria-label': title }, children),
-  Notice: ({ text }: { text: string }) => text || null,
+  Notice: ({ text }: { text: string }) => (text ? createElement('div', { role: 'alert' }, text) : null),
 }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {}, deleteItemAsync: async () => {} }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {}, remove: () => {} }) }));
@@ -205,6 +205,7 @@ it.each([
     { interaction_id: `int-${id}`, decision },
   );
   expect(mocks.toastOk).toHaveBeenCalledWith(toastLabel());
+  expect(useSessions.getState().integrationApprovals.a?.requests.map((r) => r.id) ?? []).not.toContain(id);
 });
 
 it('pedido expirado ou respondido fora (approval_conflict / approval_lost) descarta cartão e mostra erro', async () => {
@@ -217,6 +218,32 @@ it('pedido expirado ou respondido fora (approval_conflict / approval_lost) desca
   await act(async () => { button!.click(); });
 
   expect(mocks.toastErro).toHaveBeenCalledWith(m.integrations_err_answered());
+  expect(useSessions.getState().integrationApprovals.a?.requests.map((r) => r.id) ?? []).not.toContain('stale-1');
+});
+
+it('approval_in_progress mantém cartão na fila local e múltiplos pedidos no chat viram um único aviso agregado', async () => {
+  const twoCards: IntegrationApprovalEvent = {
+    requests: [
+      makeEvent('p1').requests[0],
+      { ...makeEvent('p2').requests[0], tool: 'add_comment' },
+    ],
+  };
+  useSessions.setState({ byServer: [bucket('a')], integrationApprovals: { a: twoCards } });
+  mocks.answerIntegrationApproval.mockRejectedValueOnce(
+    Object.assign(new Error('409: em andamento'), { status: 409, code: 'approval_in_progress' }),
+  );
+
+  await act(async () => { root.render(<><SessionIntegrationRequests serverId="a" name="sessao" /><IntegrationRequestSheet /></>); });
+  const chatButtons = [...container.querySelectorAll('button')];
+  expect(chatButtons).toHaveLength(1);
+  expect(chatButtons[0].getAttribute('aria-label')).toBe(title('a', 2));
+
+  await act(async () => { chatButtons[0].click(); });
+  expect(useIntegrationApprovalTarget.getState().target).toEqual({ serverId: 'a', requestId: null });
+
+  const allowBtn = container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_approval_allow_once()}"]`);
+  await act(async () => { allowBtn!.click(); });
+  expect(useSessions.getState().integrationApprovals.a?.requests.map((r) => r.id)).toEqual(['p1', 'p2']);
 });
 
 const oauthView = (extra: Partial<IntegrationView> = {}): IntegrationView => ({
@@ -511,7 +538,7 @@ it('editor rejeita cabeçalhos e variáveis de ambiente malformados ou cabeçalh
       container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_connect()}"]`)!.click();
     });
     expect(mocks.createIntegration).not.toHaveBeenCalled();
-    expect(container.textContent).toContain(expectedError);
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(expectedError);
   }
 
   // Troca para stdio e testa env malformada.
@@ -525,7 +552,7 @@ it('editor rejeita cabeçalhos e variáveis de ambiente malformados ou cabeçalh
       container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
     });
     expect(mocks.createIntegration).not.toHaveBeenCalled();
-    expect(container.textContent).toContain(m.integrations_field_env());
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(m.integrations_field_env());
   }
 });
 
@@ -912,4 +939,189 @@ it('tela de integrações faz refresh silencioso no AppState active e descarta o
   });
   expect(container.textContent).not.toContain('Vazamento A');
   expect(container.textContent).toContain(m.integrations_empty());
+});
+
+it('editor omite policy/projects inalterados, preserva escopos com vírgula, limpa erro de validação e preserva __proto__', async () => {
+  const srv = bucket('a').server;
+  const existing: IntegrationView = oauthView({
+    id: 'oauth-comma',
+    name: 'OAuth Comma',
+    preset: null,
+    transport: { kind: 'remote_http', url: 'https://mcp.example.com/mcp', header_names: ['__proto__'] },
+    auth: { kind: 'oauth_manual_client', client_id: 'cid-1', scopes: ['reports,read', 'openid'] },
+    policy: 'read_only',
+    projects: ['/repo/a'],
+  });
+  mocks.updateIntegration.mockResolvedValueOnce({ ...existing, name: 'Novo Nome' });
+
+  await act(async () => {
+    root.render(
+      <IntegrationEditorSheet
+        server={srv}
+        editing={existing}
+        existingIds={['oauth-comma']}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+  });
+
+  // Erro de validação limpa ao editar URL; erro real de API permanece ao editar campo.
+  await setField(m.integrations_field_url(), 'ftp://invalido');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(m.integrations_validation_url());
+  await setField(m.integrations_field_url(), 'https://mcp.example.com/mcp');
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+
+  await setField(m.integrations_field_name(), 'Novo Nome');
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_remove()} __proto__"]`)!.click();
+  });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_save()}"]`)!.click();
+  });
+
+  const patch = mocks.updateIntegration.mock.calls[0][2];
+  expect('policy' in patch).toBe(false);
+  expect('projects' in patch).toBe(false);
+  expect(patch.auth).toEqual({ kind: 'oauth_manual_client', client_id: 'cid-1', scopes: ['reports,read', 'openid'] });
+  expect(JSON.stringify(patch.secrets?.headers)).toBe('{"__proto__":null}');
+});
+
+it('folha de detalhe aplica estado do PATCH antes de liberar controles, invalida tools em erro pós-política e limpa faixa OAuth ao ficar ready', async () => {
+  const srv = bucket('a').server;
+  const askTool: IntegrationToolSummary = {
+    name: 'create_issue',
+    description: 'Cria issue',
+    input_schema: {},
+    read_only_hint: false,
+    effective_access: 'ask_write',
+  };
+  mocks.listIntegrationTools.mockResolvedValueOnce([askTool]);
+  mocks.updateIntegration.mockResolvedValueOnce(oauthView({ status: 'ready', enabled: false }));
+  mocks.updateIntegration.mockResolvedValueOnce(oauthView({ status: 'ready', enabled: true }));
+
+  await act(async () => {
+    root.render(
+      <IntegrationDetailSheet
+        server={srv}
+        integration={oauthView({ status: 'ready', enabled: true })}
+        onClose={vi.fn()}
+        onChanged={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+  });
+
+  // Desativar e tocar novamente na chave antes de o pai recarregar deve enviar false e depois true.
+  const toggle = () => container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_enabled()}"]`)!;
+  await act(async () => { toggle().click(); });
+  await act(async () => { toggle().click(); });
+  expect(mocks.updateIntegration).toHaveBeenNthCalledWith(1, srv, 'notion', { enabled: false });
+  expect(mocks.updateIntegration).toHaveBeenNthCalledWith(2, srv, 'notion', { enabled: true });
+
+  // Mudar política quando listIntegrationTools falha deve remover ações antigas de ask_write.
+  mocks.updateIntegration.mockResolvedValueOnce(oauthView({ status: 'ready', policy: 'read_only' }));
+  mocks.listIntegrationTools.mockRejectedValueOnce(new Error('falha de rede'));
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_policy_read_only()}"]`)!.click();
+  });
+  expect(container.querySelector(`button[aria-label="${m.integrations_tool_allow_always()} create_issue"]`)).toBeNull();
+  expect(mocks.registrarDiag).toHaveBeenCalledWith(
+    expect.objectContaining({ evento: 'integrations.tools_refresh_failed', tela: 'integrations' }),
+    srv.baseUrl,
+  );
+
+  // Abrir OAuth em auth_required mostra faixa e registra no diário; quando status vira ready, a faixa some.
+  mocks.listIntegrationTools.mockResolvedValue([]);
+  mocks.startIntegrationOAuth.mockResolvedValueOnce({
+    mode: 'open_url',
+    authorize_url: 'https://mcp.notion.com/authorize?state=ok',
+    redirect_uri: 'https://a.test/api/integrations/oauth/callback',
+  });
+  mocks.openURL.mockResolvedValueOnce(undefined);
+  await act(async () => {
+    root.render(
+      <IntegrationDetailSheet
+        key="oauth-ready-clear"
+        server={srv}
+        integration={oauthView({ status: 'auth_required' })}
+        onClose={vi.fn()}
+        onChanged={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+  });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_authorize()}"]`)!.click();
+  });
+  expect(container.textContent).toContain(m.integrations_oauth_started());
+  expect(mocks.registrarDiag).toHaveBeenCalledWith(
+    expect.objectContaining({ evento: 'integrations.oauth_browser_opened', tela: 'integrations' }),
+    srv.baseUrl,
+  );
+  await act(async () => {
+    root.render(
+      <IntegrationDetailSheet
+        key="oauth-ready-clear"
+        server={srv}
+        integration={oauthView({ status: 'ready' })}
+        onClose={vi.fn()}
+        onChanged={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+  });
+  expect(container.textContent).not.toContain(m.integrations_oauth_started());
+});
+
+it('tela encerra loading quando silencioso substitui manual, fecha detalhe removido e isola troca de servidor', async () => {
+  const srvA = bucket('a').server;
+  const srvB = bucket('b').server;
+  const itemA = oauthView({ id: 'only-a', name: 'Só em A', auth: { kind: 'none' } });
+  mocks.listIntegrations.mockResolvedValueOnce([itemA]);
+  mocks.listCatalog.mockResolvedValueOnce([]);
+  mocks.listIntegrationTools.mockResolvedValue([]);
+  useServers.setState({ servers: [srvA, srvB], activeId: 'a', ready: true, vaultReadable: true });
+
+  await act(async () => { root.render(<IntegrationsScreen />); });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('button[aria-label="Só em A"]')!.click();
+  });
+  expect(container.querySelector('section[aria-label="Só em A"]')).not.toBeNull();
+
+  // Refresh manual seguido de refresh silencioso: o silencioso encerra o loading e fecha detalhe se o item sumiu.
+  let resolveManual!: (v: IntegrationView[]) => void;
+  let resolveSilent!: (v: IntegrationView[]) => void;
+  mocks.listIntegrations
+    .mockImplementationOnce(() => new Promise((r) => { resolveManual = r; }))
+    .mockImplementationOnce(() => new Promise((r) => { resolveSilent = r; }));
+  mocks.listCatalog.mockResolvedValue([]);
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_refresh()}"]`)!.click();
+  });
+  const refreshBtn = () => container.querySelector<HTMLButtonElement>(`button[aria-label="${m.integrations_refresh()}"]`)!;
+  expect(refreshBtn().disabled).toBe(true);
+
+  await act(async () => { mocks.appStateListener?.('active'); });
+  await act(async () => { resolveManual([itemA]); });
+  await act(async () => { resolveSilent([]); });
+  expect(refreshBtn().disabled).toBe(false);
+  expect(container.querySelector('section[aria-label="Só em A"]')).toBeNull();
+
+  // Reabre detalhe em A e troca para B: nunca chama listIntegrationTools(srvB, 'only-a').
+  mocks.listIntegrations.mockResolvedValueOnce([itemA]);
+  mocks.listCatalog.mockResolvedValueOnce([]);
+  await act(async () => { refreshBtn().click(); });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('button[aria-label="Só em A"]')!.click();
+  });
+  mocks.listIntegrationTools.mockClear();
+  mocks.listIntegrations.mockResolvedValueOnce([]);
+  mocks.listCatalog.mockResolvedValueOnce([]);
+  await act(async () => { useServers.setState({ activeId: 'b' }); });
+  expect(mocks.listIntegrationTools).not.toHaveBeenCalledWith(srvB, 'only-a');
 });

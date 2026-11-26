@@ -119,11 +119,13 @@ export function IntegrationEditorSheet({
     editing?.auth.kind === 'oauth_manual_client' ? editing.auth.client_id : '',
   );
   const [clientSecret, setClientSecret] = useState('');
-  const [scopesText, setScopesText] = useState(
-    editing?.auth.kind === 'oauth_manual_client'
-      ? editing.auth.scopes.join(' ')
-      : preset?.default_scopes.join(' ') ?? '',
-  );
+  const [originalScopes] = useState<string[] | null>(() => (
+    editing?.auth.kind === 'oauth_manual_client' ? editing.auth.scopes : null
+  ));
+  const [initialScopesText] = useState(() => (
+    originalScopes ? originalScopes.join(' ') : preset?.default_scopes.join(' ') ?? ''
+  ));
+  const [scopesText, setScopesText] = useState(initialScopesText);
   const [bearerToken, setBearerToken] = useState('');
 
   const [policy, setPolicy] = useState<PermissionPolicy>(editing?.policy ?? 'read_free_ask_write');
@@ -132,7 +134,10 @@ export function IntegrationEditorSheet({
   const [removedHeaders, setRemovedHeaders] = useState<string[]>([]);
   const [removedEnvKeys, setRemovedEnvKeys] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [validationError, setValidationError] = useState('');
+  const [apiError, setApiError] = useState('');
+
+  const clearValidation = () => setValidationError((cur) => (cur ? '' : cur));
 
   const existingHeaderNames = useMemo(
     () => (editing?.transport.kind === 'remote_http' ? editing.transport.header_names : []),
@@ -145,6 +150,7 @@ export function IntegrationEditorSheet({
 
   const toggleRemoved = (setter: Dispatch<SetStateAction<string[]>>, key: string) => {
     haptic.selection();
+    clearValidation();
     setter((cur) => (cur.includes(key) ? cur.filter((item) => item !== key) : [...cur, key]));
   };
 
@@ -173,6 +179,7 @@ export function IntegrationEditorSheet({
   const keptHeaders = existingHeaderNames.filter((h) => !removedHeaders.includes(h));
   const keptEnvKeys = existingEnvKeys.filter((k) => !removedEnvKeys.includes(k));
   const commandUnchanged = !!originalCommand && commandText.trim() === initialCommandText.trim();
+  const scopesUnchanged = !!originalScopes && scopesText === initialScopesText;
 
   const validate = (): string | null => {
     if (!editing && !SLUG_RE.test(id.trim())) return m.integrations_validation_id();
@@ -213,24 +220,24 @@ export function IntegrationEditorSheet({
     if (busy) return;
     const invalid = validate();
     if (invalid) {
-      setError(invalid);
+      setValidationError(invalid);
       haptic.error();
       return;
     }
 
     const parsedHeaders = transportKind === 'remote_http'
       ? parseHeaders(headersText)
-      : { ok: true as const, names: [], map: {} };
+      : { ok: true as const, names: [], map: Object.create(null) as Record<string, string> };
     if (!parsedHeaders.ok) {
-      setError(headerErrorText(parsedHeaders));
+      setValidationError(headerErrorText(parsedHeaders));
       haptic.error();
       return;
     }
     const parsedEnv = transportKind === 'local_stdio'
       ? parseEnvVars(envText)
-      : { ok: true as const, keys: [], map: {} };
+      : { ok: true as const, keys: [], map: Object.create(null) as Record<string, string> };
     if (!parsedEnv.ok) {
-      setError(envErrorText(parsedEnv));
+      setValidationError(envErrorText(parsedEnv));
       haptic.error();
       return;
     }
@@ -243,7 +250,7 @@ export function IntegrationEditorSheet({
       } else {
         const parsedCmd = parseCommandArgs(commandText);
         if (!parsedCmd.ok) {
-          setError(m.integrations_validation_command_quotes());
+          setValidationError(m.integrations_validation_command_quotes());
           haptic.error();
           return;
         }
@@ -252,7 +259,8 @@ export function IntegrationEditorSheet({
     }
 
     setBusy(true);
-    setError('');
+    setValidationError('');
+    setApiError('');
     try {
       const transport: IntegrationTransportInput = transportKind === 'remote_http'
         ? {
@@ -268,7 +276,12 @@ export function IntegrationEditorSheet({
         };
 
       const auth: IntegrationAuthConfig = effectiveAuth === 'oauth_manual_client'
-        ? { kind: 'oauth_manual_client', client_id: clientId.trim(), scopes: parseScopes(scopesText) }
+        ? {
+          kind: 'oauth_manual_client',
+          client_id: clientId.trim(),
+          // Preserva o vetor original enquanto o campo não for editado (tokens OAuth podem conter vírgula).
+          scopes: scopesUnchanged ? originalScopes : parseScopes(scopesText),
+        }
         : effectiveAuth === 'oauth_dcr'
           ? { kind: 'oauth_dcr' }
           : effectiveAuth === 'bearer'
@@ -283,13 +296,13 @@ export function IntegrationEditorSheet({
         secrets.oauth_client_secret = clientSecret.trim();
       }
       if (transportKind === 'remote_http') {
-        const headersPatch: Record<string, string | null> = {};
+        const headersPatch = Object.create(null) as Record<string, string | null>;
         for (const removed of removedHeaders) headersPatch[removed] = null;
         for (const [k, v] of Object.entries(parsedHeaders.map)) headersPatch[k] = v;
         if (Object.keys(headersPatch).length > 0) secrets.headers = headersPatch;
       }
       if (transportKind === 'local_stdio') {
-        const envPatch: Record<string, string | null> = {};
+        const envPatch = Object.create(null) as Record<string, string | null>;
         for (const removed of removedEnvKeys) envPatch[removed] = null;
         for (const [k, v] of Object.entries(parsedEnv.map)) envPatch[k] = v;
         if (Object.keys(envPatch).length > 0) secrets.env = envPatch;
@@ -312,9 +325,10 @@ export function IntegrationEditorSheet({
           // Omitir transporte inalterado evita invalidar sessões ou aprovações no servidor.
           ...(transportChanged ? { transport } : {}),
           auth,
-          policy,
+          // Enviar política e projetos só quando alterados evita regravar valores mais recentes do servidor.
+          ...(policy !== editing.policy ? { policy } : {}),
           pinned,
-          projects,
+          ...(sameList(projects, editing.projects) ? {} : { projects }),
           ...(hasSecrets ? { secrets } : {}),
         };
         const updated = await updateIntegration(server, editing.id, patch);
@@ -339,7 +353,7 @@ export function IntegrationEditorSheet({
         onClose();
       }
     } catch (e) {
-      setError(integrationErrorText(e));
+      setApiError(integrationErrorText(e));
       haptic.error();
     } finally {
       setBusy(false);
@@ -362,7 +376,10 @@ export function IntegrationEditorSheet({
           <MachineField
             label={m.integrations_field_id()}
             value={id}
-            onChangeText={(t) => setId(t.toLowerCase())}
+            onChangeText={(t) => {
+              clearValidation();
+              setId(t.toLowerCase());
+            }}
             editable={!busy}
             placeholder={preset?.id ?? 'gmail-pessoal'}
           />
@@ -370,7 +387,10 @@ export function IntegrationEditorSheet({
         <MachineField
           label={m.integrations_field_name()}
           value={name}
-          onChangeText={setName}
+          onChangeText={(t) => {
+            clearValidation();
+            setName(t);
+          }}
           editable={!busy}
           autoCapitalize="words"
           placeholder={m.integrations_field_name_placeholder()}
@@ -388,6 +408,7 @@ export function IntegrationEditorSheet({
             minHeight={44}
             onChange={(next) => {
               haptic.selection();
+              clearValidation();
               setTransportKind(next);
             }}
             options={[
@@ -403,7 +424,10 @@ export function IntegrationEditorSheet({
           <MachineField
             label={m.integrations_field_url()}
             value={url}
-            onChangeText={setUrl}
+            onChangeText={(t) => {
+              clearValidation();
+              setUrl(t);
+            }}
             editable={!busy && urlEditable}
             keyboardType="url"
             placeholder="https://..."
@@ -411,7 +435,10 @@ export function IntegrationEditorSheet({
           <MachineField
             label={m.integrations_field_headers()}
             value={headersText}
-            onChangeText={setHeadersText}
+            onChangeText={(t) => {
+              clearValidation();
+              setHeadersText(t);
+            }}
             editable={!busy}
             stacked
             multiline
@@ -423,7 +450,10 @@ export function IntegrationEditorSheet({
           <MachineField
             label={m.integrations_field_command()}
             value={commandText}
-            onChangeText={setCommandText}
+            onChangeText={(t) => {
+              clearValidation();
+              setCommandText(t);
+            }}
             editable={!busy}
             stacked
             multiline
@@ -439,7 +469,10 @@ export function IntegrationEditorSheet({
           <MachineField
             label={m.integrations_field_env()}
             value={envText}
-            onChangeText={setEnvText}
+            onChangeText={(t) => {
+              clearValidation();
+              setEnvText(t);
+            }}
             editable={!busy}
             stacked
             multiline
@@ -488,6 +521,7 @@ export function IntegrationEditorSheet({
             onPress={() => {
               if (authChoices.length > 1) {
                 haptic.selection();
+                clearValidation();
                 setAuthKind(kind);
               }
             }}
@@ -500,7 +534,10 @@ export function IntegrationEditorSheet({
           <MachineField
             label={m.integrations_field_client_id()}
             value={clientId}
-            onChangeText={setClientId}
+            onChangeText={(t) => {
+              clearValidation();
+              setClientId(t);
+            }}
             editable={!busy}
           />
           <MachineField
@@ -567,7 +604,7 @@ export function IntegrationEditorSheet({
       </MachineGroup>
       <MachineHelp>{m.integrations_field_projects_hint()}</MachineHelp>
 
-      <Notice text={error} error />
+      <Notice text={validationError || apiError} error />
 
       <MachineGroup>
         <MachineRow

@@ -2236,7 +2236,7 @@ impl Hangar {
                         },
                         _ => (None, None),
                     };
-                    // Pedidos de aprovação das integrações MCP dela, com a mesma regra da queda (inclui falha fatal antes do SSE).
+                    // Pedidos de aprovação das integrações MCP dela (quedas e 401/403/410; o frame `integrations_approvals` é validado e aplicado em `receive_remote`).
                     let integrations = match &update {
                         servers::RemoteUpdate::Stream(Update::Offline(_)) => Some(None),
                         servers::RemoteUpdate::Sessions(Err(error))
@@ -2244,7 +2244,6 @@ impl Hangar {
                         {
                             Some(None)
                         }
-                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "integrations_approvals" => Some(Some(frame.data.clone())),
                         _ => None,
                     };
                     // Pedido de navegador de uma sessão desta máquina chega pela lista dela, seja ela a ativa ou não.
@@ -9236,11 +9235,11 @@ impl Render for Hangar {
         let page_open = self.page_open();
         let vault_float = self.render_vault_float(cx);
         let integration_float = (!page_open)
-            .then(|| self.render_integration_float_at(if vault_float.is_some() { 392. } else { 0. }, cx))
+            .then(|| self.render_integration_float_at(if vault_float.is_some() { 392. } else { 0. }, window, cx))
             .flatten();
         // Quando outra página cobre a conversa, mantém um ponto flutuante na raiz para aprovações pendentes.
         let root_integration_float = (!self.connection_dialog && page_open)
-            .then(|| self.render_integration_float_from(topbar::height() + 12., 0., cx))
+            .then(|| self.render_integration_float_from(topbar::height() + 12., 0., window, cx))
             .flatten();
         let content = div().relative().flex_1().min_w_0().h_full().flex().flex_col()
             .when(!beside_sidebar, |el| chat_fill(el, self, window))

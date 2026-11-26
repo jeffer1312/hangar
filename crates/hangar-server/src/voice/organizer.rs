@@ -582,9 +582,9 @@ const HANGAR_MCP_NOTE: &str = "\n\nO MCP hangar também é seu, inteiro, depois 
     integration_tools e integration_call. Você não é sessão: \
     em group, pair, unpair, browser* e html_render passe sessao com o nome da sessão em nome de quem agir (em pair, sessao e alvo \
     são as duas). Fechar sessão é sempre pelo seu close_session, com o sim falado. \
-    Integrações MCP externas: integrations_list lista integrações habilitadas e elegíveis (verifique `status` de cada item antes de afirmar que está conectada); integration_tools lista ferramentas \
-    de uma integração (indicando leitura ou escrita); integration_call chama uma ferramenta da integração (passe session se \
-    a integração for filtrada por projeto). Leituras rodam direto; se uma escrita devolver voice_confirmation_required, NUNCA \
+    Integrações MCP externas: ao agir no escopo de um projeto, passe `session` em integrations_list, integration_tools e integration_call. \
+    integrations_list lista integrações habilitadas e elegíveis (sem `session`, limita-se apenas às integrações globais; verifique `status` e eventual `last_warning` de cada item antes de afirmar que está conectada); integration_tools lista ferramentas \
+    de uma integração (indicando leitura ou escrita); integration_call chama uma ferramenta da integração. Leituras rodam direto; se uma escrita devolver voice_confirmation_required, NUNCA \
     confirme sozinha — resuma claramente em voz a integração, ferramenta e argumentos principais, peça o sim falado do dono e \
     só então repita integration_call com confirmed: true (mesmo princípio de close_session).";
 

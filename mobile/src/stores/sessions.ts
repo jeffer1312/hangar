@@ -596,6 +596,15 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     };
     // Cofre: estado e pedidos abertos.
     listenKeyed('vault', vaultRaw, parseVaultEvent, 'vault');
+    // Remove aprovações da conexão anterior antes de reconectar ou ao cair o stream.
+    const dropIntegrationApprovals = () => {
+      integrationApprovalsRaw.delete(s.id);
+      if (s.id in get().integrationApprovals) {
+        const { [s.id]: _dropped, ...integrationApprovals } = get().integrationApprovals;
+        set({ integrationApprovals });
+      }
+    };
+    dropIntegrationApprovals();
     // Aprovações de integrações MCP.
     listenKeyed('integrations_approvals', integrationApprovalsRaw, parseIntegrationApprovalEvent, 'integrationApprovals');
     // Rascunhos de WhatsApp pendentes.
@@ -631,6 +640,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     });
     es.onerror = (event) => {
       if (!active()) return;
+      dropIntegrationApprovals();
       const status = (event as { xhrStatus?: number } | null)?.xhrStatus ?? 0;
       const http = Number.isInteger(status) && status >= 100 && status <= 599;
       lastFailureHttp.set(s.id, http);
@@ -648,6 +658,11 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     streams.set(s.id, es);
   } catch (error) {
     if (!isCurrent(attempt)) return;
+    integrationApprovalsRaw.delete(s.id);
+    if (s.id in get().integrationApprovals) {
+      const { [s.id]: _dropped, ...integrationApprovals } = get().integrationApprovals;
+      set({ integrationApprovals });
+    }
     lastFailureHttp.set(s.id, false);
     registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'conexao',
       detalhe: error instanceof Error ? error.name : 'erro' }, s.baseUrl);

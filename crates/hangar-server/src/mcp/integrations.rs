@@ -14,7 +14,8 @@ use hangar_integrations::{
     ApprovalError, ApprovalResolution, ClientError, DiscoveredTool, IntegrationConfig,
     IntegrationStatus, MAX_REASON_CHARS, OpenApprovalRequest, RegistryError, SecretKeyError,
     SecretStoreError, ToolAccess, ToolsCache, classify_tool_access, compute_status,
-    format_arguments_preview, format_origin, guard::wrap_external_result, truncate_preview_chars,
+    config_fingerprint, format_arguments_preview, format_origin, guard::wrap_external_result,
+    truncate_preview_chars,
 };
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool, ToolAnnotations};
 use serde::Deserialize;
@@ -280,6 +281,7 @@ pub(super) async fn integrations_list(
     };
 
     let last_errors = st.integrations.last_errors_snapshot();
+    let cancel_warnings = st.integrations.cancel_warnings_snapshot();
     let mut out = Vec::new();
     for cfg in enabled {
         if !cfg.projects.is_empty()
@@ -302,14 +304,22 @@ pub(super) async fn integrations_list(
             .tools_cache
             .get(&cfg.id)
             .map_or(0, |tools| tools.len());
-        out.push(json!({
+        let mut item = json!({
             "id": cfg.id,
             "name": cfg.name,
             "status": status,
             "policy": cfg.policy,
             "pinned": cfg.pinned,
             "tools_count": tools_count,
-        }));
+        });
+        if let Some(warning) = cancel_warnings.get(&cfg.id) {
+            item["last_warning"] = json!(warning);
+        }
+        out.push(item);
+    }
+    // Revalida o compartilhamento antes de retornar metadados caso um convite tenha aberto durante as leituras.
+    if let Some(session_name) = target_session {
+        shared_guard::ensure_unshared(st, api, session_name, shared_guard::INTEGRATIONS).await?;
     }
     Ok(json!({ "integrations": out }))
 }
@@ -377,7 +387,7 @@ pub(super) async fn integration_call(
     server_id: &str,
     headers: &HeaderMap,
     args: IntegrationCallArgs,
-    external_started: &AtomicBool,
+    external_started: Arc<AtomicBool>,
 ) -> Result<CallToolResult, String> {
     let args_value = match args.arguments {
         None | Some(Value::Null) => Value::Object(Map::new()),
@@ -414,6 +424,7 @@ pub(super) async fn integration_call(
         args_value,
         args.reason,
         args.confirmed,
+        false,
         external_started,
     )
     .await
@@ -427,7 +438,7 @@ pub(super) async fn call_pinned_tool(
     headers: &HeaderMap,
     mcp_name: &str,
     raw_args: JsonObject,
-    external_started: &AtomicBool,
+    external_started: Arc<AtomicBool>,
 ) -> Result<CallToolResult, String> {
     let (caller_name, origin) = resolve_caller(st, headers).await?;
     let target_session = if origin == Origin::Voice {
@@ -455,6 +466,7 @@ pub(super) async fn call_pinned_tool(
         Value::Object(raw_args),
         None,
         None,
+        true,
         external_started,
     )
     .await
@@ -531,20 +543,18 @@ async fn resolve_pinned_target(
         if ensure_project_allowed(st, &config, target_session).await.is_err() {
             continue;
         }
-        let Some(tools) = st.integrations.tools_cache.get(&config.id) else {
-            if check_local_auth_state(st, &config).await.is_err() {
-                continue;
+        let tools = match st.integrations.tools_cache.get(&config.id) {
+            Some(cached) => cached,
+            None => {
+                if check_local_auth_state(st, &config).await.is_err() {
+                    continue;
+                }
+                let Ok(discovered) = st.integrations.clients.list_tools(&config.id).await else {
+                    continue;
+                };
+                st.integrations.clear_error(&config.id);
+                discovered
             }
-            let Ok(discovered) = st.integrations.clients.list_tools(&config.id).await else {
-                continue;
-            };
-            st.integrations.clear_error(&config.id);
-            let pairs = build_pairs_for_integration(&config.id, &discovered);
-            index.replace_for_integration(&config.id, &pairs);
-            if let Some((_, original)) = pairs.into_iter().find(|(mcp, _)| mcp == mcp_name) {
-                return Ok((config, original));
-            }
-            continue;
         };
         let pairs = build_pairs_for_integration(&config.id, &tools);
         index.replace_for_integration(&config.id, &pairs);
@@ -554,6 +564,24 @@ async fn resolve_pinned_target(
     }
 
     Err(format!("Unknown tool: {mcp_name}"))
+}
+
+struct CancelWarningGuard<'a> {
+    st: &'a AppState,
+    integration_id: String,
+    tool: String,
+    started: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl Drop for CancelWarningGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed && self.started.load(Ordering::SeqCst) {
+            self.st
+                .integrations
+                .record_cancel_warning(&self.integration_id, &self.tool);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -570,8 +598,10 @@ async fn execute_checked_call(
     args_value: Value,
     reason: Option<String>,
     confirmed: Option<bool>,
-    external_started: &AtomicBool,
+    from_pinned_alias: bool,
+    external_started: Arc<AtomicBool>,
 ) -> Result<CallToolResult, String> {
+    let expected_config_fp = config_fingerprint(&config);
     let discovered = match st.integrations.tools_cache.get_tool(&config.id, tool_name) {
         Some(found) => found,
         None => {
@@ -604,19 +634,30 @@ async fn execute_checked_call(
         ToolAccess::Read | ToolAccess::AllowedAlways => {}
         ToolAccess::AskWrite => {
             if origin == Origin::Voice {
+                let voice_token = headers
+                    .get("x-hangar-voice")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default();
                 let args_hash = canonical_args_hash(&args_value);
                 if confirmed != Some(true)
                     || !st.integrations.consume_voice_confirmation(
+                        voice_token,
+                        target_session,
                         &config.id,
                         &discovered.name,
                         &args_hash,
                     )
                 {
-                    st.integrations.record_voice_confirmation(
-                        &config.id,
-                        &discovered.name,
-                        args_hash,
-                    );
+                    // Chamada `confirmed: true` sem desafio prévio nunca arma nova confirmação reutilizável.
+                    if confirmed != Some(true) {
+                        st.integrations.record_voice_confirmation(
+                            voice_token,
+                            target_session,
+                            &config.id,
+                            &discovered.name,
+                            args_hash,
+                        );
+                    }
                     let preview = format_arguments_preview(&args_value);
                     return Ok(dict_result(json!({
                         "status": "voice_confirmation_required",
@@ -629,6 +670,7 @@ async fn execute_checked_call(
                         ),
                     })));
                 }
+                waited_for_approval = true;
             } else {
                 check_local_auth_state(st, &config).await?;
                 let origin_label = truncate_preview_chars(
@@ -652,15 +694,18 @@ async fn execute_checked_call(
                 let waiter = st
                     .integrations
                     .approvals
-                    .open_request(OpenApprovalRequest {
-                        origin: origin_label,
-                        session_key,
-                        integration_id: config.id.clone(),
-                        integration_name: config.name.clone(),
-                        tool: discovered.name.clone(),
-                        arguments_preview: format_arguments_preview(&args_value),
-                        reason: effective_reason,
-                    })
+                    .open_request_for_config(
+                        OpenApprovalRequest {
+                            origin: origin_label,
+                            session_key,
+                            integration_id: config.id.clone(),
+                            integration_name: config.name.clone(),
+                            tool: discovered.name.clone(),
+                            arguments_preview: format_arguments_preview(&args_value),
+                            reason: effective_reason,
+                        },
+                        Some(expected_config_fp),
+                    )
                     .map_err(map_approval_error)?;
 
                 match waiter.wait().await {
@@ -689,42 +734,75 @@ async fn execute_checked_call(
         }
     }
 
-    // Se convite/par abriu ou a configuração foi endurecida durante a aprovação, bloqueia antes do envio externo.
-    if waited_for_approval {
-        if let Some(session_name) = target_session {
-            shared_guard::ensure_unshared(st, api, session_name, shared_guard::INTEGRATIONS)
-                .await?;
-        }
-        config = load_integration(st, &config.id)?;
-        if !config.enabled {
-            return Err(format!(
-                "integration_disabled: integração '{}' está desabilitada",
-                config.id
-            ));
-        }
-        ensure_project_allowed(st, &config, target_session).await?;
-        if classify_tool_access(
-            config.policy,
-            &config.allowed_tools,
-            discovered.read_only_hint,
-            &discovered.name,
-        ) == ToolAccess::Blocked
-        {
+    check_local_auth_state(st, &config).await?;
+
+    // Revalidação obrigatória na admissão de todo envio (com ou sem cartão): impede TOCTOU de
+    // compartilhamento, destino alterado, integração desafixada/desabilitada ou `AllowAlways` revogado.
+    if let Some(session_name) = target_session {
+        shared_guard::ensure_unshared(st, api, session_name, shared_guard::INTEGRATIONS).await?;
+    }
+    config = load_integration(st, &config.id)?;
+    if !config.enabled {
+        return Err(format!(
+            "integration_disabled: integração '{}' está desabilitada",
+            config.id
+        ));
+    }
+    if from_pinned_alias && !config.pinned {
+        return Err(format!(
+            "integration_unpinned: integração '{}' foi desafixada; use integration_call",
+            config.id
+        ));
+    }
+    if config_fingerprint(&config) != expected_config_fp {
+        return Err(format!(
+            "integration_config_changed: o destino ou autenticação da integração '{}' mudou; tente novamente",
+            config.id
+        ));
+    }
+    ensure_project_allowed(st, &config, target_session).await?;
+    let admitted_access = classify_tool_access(
+        config.policy,
+        &config.allowed_tools,
+        discovered.read_only_hint,
+        &discovered.name,
+    );
+    match admitted_access {
+        ToolAccess::Blocked => {
             return Err(format!(
                 "integration_read_only: a integração '{}' está em modo somente leitura e bloqueia a ferramenta '{}'",
                 config.id, discovered.name
             ));
         }
+        ToolAccess::AskWrite if !waited_for_approval => {
+            return Err(format!(
+                "integration_approval_required: a permissão de '{}' na integração '{}' mudou e exige nova aprovação",
+                discovered.name, config.id
+            ));
+        }
+        ToolAccess::Read | ToolAccess::AllowedAlways | ToolAccess::AskWrite => {}
     }
 
-    check_local_auth_state(st, &config).await?;
-    external_started.store(true, Ordering::SeqCst);
-    let output = match st
+    let mut cancel_guard = CancelWarningGuard {
+        st,
+        integration_id: config.id.clone(),
+        tool: discovered.name.clone(),
+        started: external_started.clone(),
+        armed: true,
+    };
+    let call_result = st
         .integrations
         .clients
-        .call_tool(&config.id, &discovered.name, args_value)
-        .await
-    {
+        .call_tool_tracked(
+            &config.id,
+            &discovered.name,
+            args_value,
+            Some(external_started),
+        )
+        .await;
+    cancel_guard.armed = false;
+
+    let output = match call_result {
         Ok(output) => output,
         Err(err) => {
             if let Some(session_name) = target_session {
@@ -1113,10 +1191,8 @@ fn map_client_error(st: &AppState, id: &str, err: ClientError) -> String {
             format!("integration_tool_not_found: ferramenta '{name}' não encontrada na integração '{id}'")
         }
         ClientError::RemoteError { code, message } => {
-            let summary = format!(
-                "erro remoto MCP ({code}): {}",
-                truncate_preview_chars(&message, 256)
-            );
+            // Não persiste texto bruto remoto em `last_error` para nunca armazenar eco de segredo.
+            let summary = format!("erro remoto MCP ({code}) retornado pelo servidor externo");
             st.integrations.record_error(id, summary);
             format!(
                 "integration_upstream_error: erro remoto MCP ({code}):\n{}",
@@ -1137,7 +1213,10 @@ fn map_approval_error(err: ApprovalError) -> String {
         ApprovalError::Cooldown => {
             "integration_approval_cooldown: o dono acabou de negar um pedido desta sessão; aguarde antes de tentar de novo".into()
         }
-        ApprovalError::Lost | ApprovalError::Stale | ApprovalError::Answered => {
+        ApprovalError::Lost
+        | ApprovalError::Stale
+        | ApprovalError::Answered
+        | ApprovalError::Claimed => {
             format!("integration_approval_cancelled: {err}")
         }
     }

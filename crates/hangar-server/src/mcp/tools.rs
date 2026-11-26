@@ -479,7 +479,7 @@ impl Tools {
                 Err(e) => Err(e),
             },
             "integration_call" => match args::<mcp_integrations::IntegrationCallArgs>(name, raw) {
-                Ok(a) => mcp_integrations::integration_call(&self.st, &self.api, &self.server_id, headers, a, &external_started).await,
+                Ok(a) => mcp_integrations::integration_call(&self.st, &self.api, &self.server_id, headers, a, external_started).await,
                 Err(e) => Err(e),
             },
             other if other.starts_with("int__") => {
@@ -491,7 +491,7 @@ impl Tools {
                     headers,
                     other,
                     raw,
-                    &external_started,
+                    external_started,
                 ).await
             }
             _ => Err(format!("Unknown tool: {name}")),
